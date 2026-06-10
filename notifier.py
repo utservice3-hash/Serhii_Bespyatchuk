@@ -8,6 +8,21 @@ TG_TOKEN = os.getenv("TG_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 TG_THREAD_ID = os.getenv("TG_THREAD_ID", "")
 
+# JSON: {"3379102": "@username", ...}
+_MANAGER_MAP: dict[str, str] = {}
+try:
+    import json as _json
+    _raw = os.getenv("MANAGER_MAP", "")
+    if _raw:
+        _MANAGER_MAP = _json.loads(_raw)
+except Exception:
+    pass
+
+
+def get_manager_tag(user_id: int) -> str:
+    tag = _MANAGER_MAP.get(str(user_id), "")
+    return f" ({tag})" if tag else ""
+
 
 def send_message(text: str) -> bool:
     if not TG_TOKEN or not TG_CHAT_ID:
