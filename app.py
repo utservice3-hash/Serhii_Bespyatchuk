@@ -40,6 +40,22 @@ def _parse_status(data: dict) -> dict | None:
     return None
 
 
+def _parse_responsible(data: dict) -> dict | None:
+    """Extract responsible change event (Отв-й сделки изменен)."""
+    lead_id = data.get("leads[responsible][0][id]")
+    responsible_id = data.get("leads[responsible][0][responsible_user_id]")
+    pipeline_id = data.get("leads[responsible][0][pipeline_id]")
+    status_id = data.get("leads[responsible][0][status_id]")
+    if lead_id:
+        return {
+            "id": int(lead_id),
+            "responsible_user_id": int(responsible_id) if responsible_id else 0,
+            "pipeline_id": int(pipeline_id) if pipeline_id else 0,
+            "status_id": int(status_id) if status_id else 0,
+        }
+    return None
+
+
 def _parse_note(data: dict) -> dict | None:
     """Extract call note info (note_type 10=call_in, 11=call_out)."""
     note_type = data.get("leads[note][0][note_type]")
@@ -68,6 +84,14 @@ def webhook():
     note = _parse_note(data)
     if note and note["note_type"] in ("10", "11"):
         _handle_call(note)
+        return jsonify({"ok": True})
+
+    # ── Responsible changed ───────────────────────────────────────
+    resp_change = _parse_responsible(data)
+    if resp_change:
+        if (resp_change["pipeline_id"] == QUAL_PIPELINE_ID and
+                resp_change["status_id"] == NEW_FROM_LIDOGEN):
+            _handle_new_lead(resp_change["id"], resp_change["responsible_user_id"])
         return jsonify({"ok": True})
 
     # ── Status change ─────────────────────────────────────────────
