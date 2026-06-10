@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "")
+SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_ID", "") or os.getenv("SPREADSHEET_ID", "")
 SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
 _gc = None
