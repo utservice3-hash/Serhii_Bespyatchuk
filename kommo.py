@@ -103,9 +103,9 @@ def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int
 
 def get_lidogen_stats(days: int = 1) -> dict[int, int]:
     """
-    Count leads received from lidogen per manager for the last N days.
-    Queries leads directly in NEW_FROM_LIDOGEN status created within the period.
-    Returns {responsible_user_id: count}
+    Count leads where lidogen changed responsible_user in NEW_FROM_LIDOGEN status
+    for the last N days. Uses events API filtering lead_responsible_changed events.
+    Returns {new_responsible_user_id: count}
     """
     from datetime import datetime, timezone, timedelta
     NEW_FROM_LIDOGEN = 69716164
@@ -118,28 +118,51 @@ def get_lidogen_stats(days: int = 1) -> dict[int, int]:
         page = 1
         while True:
             resp = requests.get(
-                f"{KOMMO_BASE}/api/v4/leads",
+                f"{KOMMO_BASE}/api/v4/events",
                 headers=HEADERS,
                 params={
-                    "filter[pipeline_id]": QUAL_PIPELINE_ID,
+                    "filter[type]": "lead_responsible_changed",
+                    "filter[entity]": "lead",
                     "filter[created_at][from]": since,
-                    "limit": 250,
+                    "limit": 100,
                     "page": page,
                 },
                 timeout=15,
             )
             if not resp.ok:
+                logger.error("get_lidogen_stats events API: %s %s", resp.status_code, resp.text[:200])
                 break
-            leads = resp.json().get("_embedded", {}).get("leads", [])
-            if not leads:
+            events = resp.json().get("_embedded", {}).get("events", [])
+            if not events:
                 break
 
-            for lead in leads:
-                uid = lead.get("responsible_user_id")
-                if uid:
-                    counts[int(uid)] = counts.get(int(uid), 0) + 1
+            for event in events:
+                entity = event.get("entity_type")
+                if entity != "lead":
+                    continue
+                lead_id = event.get("entity_id")
+                if not lead_id:
+                    continue
 
-            if len(leads) < 250:
+                # Check if the lead is in QUAL_PIPELINE and NEW_FROM_LIDOGEN status
+                lead = get_lead(lead_id)
+                if not lead:
+                    continue
+                if lead.get("pipeline_id") != QUAL_PIPELINE_ID:
+                    continue
+                if lead.get("status_id") != NEW_FROM_LIDOGEN:
+                    continue
+
+                # new responsible is in value_after
+                value_after = event.get("value_after", [])
+                if isinstance(value_after, list):
+                    for v in value_after:
+                        uid = v.get("responsible_user", {}).get("id") if isinstance(v, dict) else None
+                        if uid:
+                            counts[int(uid)] = counts.get(int(uid), 0) + 1
+                            break
+
+            if len(events) < 100:
                 break
             page += 1
             if page > 20:
