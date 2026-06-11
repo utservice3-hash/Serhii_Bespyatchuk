@@ -70,6 +70,9 @@ scheduler.start()
 # In-memory: lead_id -> {transferred_at, manager, lead_name}
 pending: dict[int, dict] = {}
 
+# Stats log: list of {ts: datetime, manager_id: int}
+_stats_log: list[dict] = []
+
 
 def _parse_status(data: dict) -> dict | None:
     """Extract status change info. Returns dict with id/status_id/pipeline_id/responsible_user_id."""
@@ -192,6 +195,8 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
         "responsible_id": responsible_id,
         "reminded": False,
     }
+    if responsible_id:
+        _stats_log.append({"ts": now, "manager_id": responsible_id})
 
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
     tg_tag = notifier.get_manager_tag(responsible_id)
@@ -271,7 +276,13 @@ def _handle_call(note: dict):
 
 
 def _build_stats_text(days: int, label: str) -> str:
-    counts = kommo.get_lidogen_stats(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    counts: dict[int, int] = {}
+    for entry in _stats_log:
+        if entry["ts"] >= cutoff:
+            uid = entry["manager_id"]
+            counts[uid] = counts.get(uid, 0) + 1
+
     if not counts:
         return f"📊 <b>Статистика ({label})</b>\nДаних немає"
 
