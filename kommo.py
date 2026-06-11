@@ -103,12 +103,13 @@ def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int
 
 def get_lidogen_stats(days: int = 1) -> dict[int, int]:
     """
-    Count leads automatically created in NEW_FROM_LIDOGEN status within the last N days.
-    Filters by pipeline_id + status_id + created_at to capture only lidogen-generated leads.
-    Returns {responsible_user_id: count}
+    Count leads transferred by lidogen per manager for the last N days.
+    Logic: find lead_responsible_changed events where the lead was freshly created
+    in QUAL_PIPELINE (i.e. created_at >= since), meaning lidogen created it and
+    then changed the responsible to a real manager.
+    Returns {new_responsible_user_id: count}
     """
     from datetime import datetime, timezone, timedelta
-    NEW_FROM_LIDOGEN = 69716164
     QUAL_PIPELINE_ID = 8921928
 
     since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
@@ -118,30 +119,50 @@ def get_lidogen_stats(days: int = 1) -> dict[int, int]:
         page = 1
         while True:
             resp = requests.get(
-                f"{KOMMO_BASE}/api/v4/leads",
+                f"{KOMMO_BASE}/api/v4/events",
                 headers=HEADERS,
                 params={
-                    "filter[pipeline_id]": QUAL_PIPELINE_ID,
-                    "filter[status_id]": NEW_FROM_LIDOGEN,
+                    "filter[type][]": "lead_responsible_changed",
                     "filter[created_at][from]": since,
-                    "limit": 250,
+                    "limit": 100,
                     "page": page,
                 },
                 timeout=15,
             )
             if not resp.ok:
-                logger.error("get_lidogen_stats: %s %s", resp.status_code, resp.text[:200])
-                break
-            leads = resp.json().get("_embedded", {}).get("leads", [])
-            if not leads:
+                logger.error("get_lidogen_stats events: %s %s", resp.status_code, resp.text[:200])
                 break
 
-            for lead in leads:
-                uid = lead.get("responsible_user_id")
-                if uid:
-                    counts[int(uid)] = counts.get(int(uid), 0) + 1
+            events = resp.json().get("_embedded", {}).get("events", [])
+            if not events:
+                break
 
-            if len(leads) < 250:
+            for event in events:
+                if event.get("entity_type") != "lead":
+                    continue
+                lead_id = event.get("entity_id")
+                if not lead_id:
+                    continue
+
+                lead = get_lead(lead_id)
+                if not lead:
+                    continue
+                # Only count leads in qual pipeline that were created within the period
+                # (i.e. freshly created by lidogen, not old leads being re-assigned)
+                if lead.get("pipeline_id") != QUAL_PIPELINE_ID:
+                    continue
+                if lead.get("created_at", 0) < since:
+                    continue
+
+                # Extract new responsible from value_after
+                value_after = event.get("value_after") or []
+                for v in value_after:
+                    uid = (v.get("responsible_user") or {}).get("id")
+                    if uid:
+                        counts[int(uid)] = counts.get(int(uid), 0) + 1
+                        break
+
+            if len(events) < 100:
                 break
             page += 1
             if page > 20:
