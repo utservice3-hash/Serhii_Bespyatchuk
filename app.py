@@ -63,9 +63,37 @@ def _check_overdue_leads():
         logger.info("Reminder sent for lead %s (%.0f min)", lead_id, age_min)
 
 
+def _write_daily_snapshot():
+    """Runs at 21:55 UTC (≈ 23:55 Kyiv) — saves daily stats to Google Sheets."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Aggregate from in-memory stats log
+    counts: dict[int, int] = {}
+    for entry in _stats_log:
+        if entry["ts"] >= cutoff:
+            uid = entry["manager_id"]
+            counts[uid] = counts.get(uid, 0) + 1
+
+    if not counts:
+        return
+
+    stats = []
+    for uid, cnt in sorted(counts.items(), key=lambda x: x[1], reverse=True):
+        stats.append({
+            "manager": kommo.get_user_name(uid),
+            "team": sheets.get_team(uid),
+            "count": cnt,
+        })
+    sheets.write_daily_snapshot(today, stats)
+    logger.info("Daily snapshot written: %d managers", len(stats))
+
+
 scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
+scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
 scheduler.start()
+sheets.ensure_headers()
 
 # In-memory: lead_id -> {transferred_at, manager, lead_name}
 pending: dict[int, dict] = {}
@@ -207,7 +235,7 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     notifier.send_message(msg, with_stats_buttons=True)
-    sheets.append_transfer(lead_id, lead_name, manager_name, now)
+    sheets.append_transfer(lead_id, lead_name, manager_name, now, manager_id=responsible_id)
     logger.info("New lead: %s → %s", lead_id, manager_name)
 
 
