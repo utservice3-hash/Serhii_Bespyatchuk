@@ -155,7 +155,7 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
         f"🏷 Назва: {lead_name}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
-    notifier.send_message(msg)
+    notifier.send_message(msg, with_stats_buttons=True)
     sheets.append_transfer(lead_id, lead_name, manager_name, now)
     logger.info("New lead: %s → %s", lead_id, manager_name)
 
@@ -222,6 +222,59 @@ def _handle_call(note: dict):
 
     notifier.send_message(msg)
     logger.info("Call note: lead %s type %s by %s", lead_id, note_type, manager_name)
+
+
+def _build_stats_text(days: int, label: str) -> str:
+    counts = kommo.get_lidogen_stats(days=days)
+    if not counts:
+        return f"📊 <b>Статистика ({label})</b>\nДаних немає"
+
+    lines = [f"📊 <b>Статистика лідів від лідогенератора ({label})</b>\n"]
+    sorted_counts = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    for i, (uid, cnt) in enumerate(sorted_counts, 1):
+        name = kommo.get_user_name(uid)
+        tag = notifier.get_manager_tag(uid)
+        lines.append(f"{i}. {name}{tag} — <b>{cnt}</b> лід{'ів' if cnt > 4 else 'и' if cnt > 1 else ''}")
+
+    return "\n".join(lines)
+
+
+@app.route("/tg-update", methods=["POST"])
+def tg_update():
+    """Telegram bot webhook — handles callback_query (button clicks)."""
+    data = request.get_json(force=True, silent=True) or {}
+    logger.info("TG update: %s", data)
+
+    callback = data.get("callback_query")
+    if not callback:
+        return jsonify({"ok": True})
+
+    cb_id = callback["id"]
+    cb_data = callback.get("data", "")
+    chat_id = callback["message"]["chat"]["id"]
+    message_id = callback["message"]["message_id"]
+
+    notifier.answer_callback(cb_id)
+
+    if cb_data == "stats_today":
+        text = _build_stats_text(days=1, label="сьогодні")
+    elif cb_data == "stats_week":
+        text = _build_stats_text(days=7, label="7 днів")
+    elif cb_data == "stats_month":
+        text = _build_stats_text(days=30, label="30 днів")
+    else:
+        return jsonify({"ok": True})
+
+    notifier.send_stats_message(chat_id, text, message_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/setup-tg-webhook", methods=["GET"])
+def setup_tg_webhook():
+    """Register Telegram bot webhook. Call once after deploy."""
+    base_url = request.host_url.rstrip("/")
+    result = notifier.set_webhook(f"{base_url}/tg-update")
+    return jsonify(result)
 
 
 @app.route("/health", methods=["GET"])

@@ -99,3 +99,56 @@ def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int
     except Exception as e:
         logger.error("get_pipeline_leads: %s", e)
     return []
+
+
+def get_lidogen_stats(days: int = 1) -> dict[int, int]:
+    """
+    Count leads received from lidogen per manager for the last N days.
+    Uses events API to find status changes to NEW_FROM_LIDOGEN.
+    Returns {responsible_user_id: count}
+    """
+    from datetime import datetime, timezone, timedelta
+    NEW_FROM_LIDOGEN = 69716164
+    QUAL_PIPELINE_ID = 8921928
+
+    since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+    counts: dict[int, int] = {}
+
+    try:
+        page = 1
+        while True:
+            resp = requests.get(
+                f"{KOMMO_BASE}/api/v4/events",
+                headers=HEADERS,
+                params={
+                    "filter[type]": "lead_status_changed",
+                    "filter[created_at][from]": since,
+                    "limit": 250,
+                    "page": page,
+                },
+                timeout=15,
+            )
+            if not resp.ok:
+                break
+            events = resp.json().get("_embedded", {}).get("events", [])
+            if not events:
+                break
+
+            for e in events:
+                after = e.get("value_after", [{}])
+                if isinstance(after, list):
+                    after = after[0] if after else {}
+                if after.get("lead_status", {}).get("id") == NEW_FROM_LIDOGEN:
+                    uid = e.get("created_by") or e.get("entity", {}).get("responsible_user_id")
+                    if uid:
+                        counts[int(uid)] = counts.get(int(uid), 0) + 1
+
+            if len(events) < 250:
+                break
+            page += 1
+            if page > 10:
+                break
+    except Exception as ex:
+        logger.error("get_lidogen_stats: %s", ex)
+
+    return counts
