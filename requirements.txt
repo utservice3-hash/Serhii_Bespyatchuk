@@ -3,3 +3,4 @@ requests==2.32.3
 gspread==6.1.2
 google-auth==2.30.0
 gunicorn==22.0.0
+apscheduler==3.10.4

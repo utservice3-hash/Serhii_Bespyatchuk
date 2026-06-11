@@ -1,7 +1,8 @@
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import kommo
 import notifier
@@ -15,6 +16,7 @@ app = Flask(__name__)
 QUAL_PIPELINE_ID = 8921928
 NEW_FROM_LIDOGEN = 69716164   # "НОВА ЗАЯВКА ВІД ЛІДОГЕНЕРАТОРА"
 TAKEN_TO_WORK = 69693652      # "Лід взятий у роботу"
+REMINDER_MINUTES = 20
 
 # Етапи з яких повторна передача НЕ викликає сповіщення
 SKIP_FROM_STATUSES = {
@@ -22,6 +24,48 @@ SKIP_FROM_STATUSES = {
     69693656,  # Дзвінки
     69693660,  # Дзвінки з сайту
 }
+
+# Керівник для конкретних менеджерів: {manager_id: supervisor_tg}
+SUPERVISOR_MAP = {
+    2013613: "@dmytro_yatsyk",   # Антипенко Олег
+    7347414: "@dmytro_yatsyk",   # Свіржевський Артем
+    10022700: "@dmytro_yatsyk",  # Мокляк Олександр
+    11739992: "@dmytro_yatsyk",  # Хомік Вікторія
+}
+
+
+def _check_overdue_leads():
+    """Runs every 5 min — reminds about leads not called within 20 min."""
+    now = datetime.now(timezone.utc)
+    for lead_id, info in list(pending.items()):
+        if info.get("reminded"):
+            continue
+        age_min = (now - info["transferred_at"]).total_seconds() / 60
+        if age_min < REMINDER_MINUTES:
+            continue
+
+        responsible_id = info.get("responsible_id", 0)
+        manager_tag = notifier.get_manager_tag(responsible_id) or f"ID {responsible_id}"
+        supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+        lead_name = info.get("lead_name", f"Лід #{lead_id}")
+        kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+
+        sup_part = f" {supervisor_tag}" if supervisor_tag else ""
+        msg = (
+            f"⚠️ <b>Ліd не опрацьований {REMINDER_MINUTES} хв!</b>\n"
+            f"👤 Менеджер: {manager_tag}{sup_part}\n"
+            f"🏷 Назва: {lead_name}\n"
+            f"⏱ Пройшло: <b>{age_min:.0f} хв</b>\n"
+            f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+        )
+        notifier.send_message(msg)
+        pending[lead_id]["reminded"] = True
+        logger.info("Reminder sent for lead %s (%.0f min)", lead_id, age_min)
+
+
+scheduler = BackgroundScheduler(timezone="UTC")
+scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
+scheduler.start()
 
 # In-memory: lead_id -> {transferred_at, manager, lead_name}
 pending: dict[int, dict] = {}
@@ -145,6 +189,8 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
         "transferred_at": now,
         "manager": manager_name,
         "lead_name": lead_name,
+        "responsible_id": responsible_id,
+        "reminded": False,
     }
 
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
