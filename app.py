@@ -16,6 +16,13 @@ QUAL_PIPELINE_ID = 8921928
 NEW_FROM_LIDOGEN = 69716164   # "НОВА ЗАЯВКА ВІД ЛІДОГЕНЕРАТОРА"
 TAKEN_TO_WORK = 69693652      # "Лід взятий у роботу"
 
+# Етапи з яких повторна передача НЕ викликає сповіщення
+SKIP_FROM_STATUSES = {
+    69693652,  # Лід взятий у роботу
+    69693656,  # Дзвінки
+    69693660,  # Дзвінки з сайту
+}
+
 # In-memory: lead_id -> {transferred_at, manager, lead_name}
 pending: dict[int, dict] = {}
 
@@ -34,6 +41,7 @@ def _parse_status(data: dict) -> dict | None:
         return {
             "id": int(lead_id),
             "status_id": int(data.get("leads[status][0][status_id]", 0)),
+            "old_status_id": int(data.get("leads[status][0][old_status_id]", 0)),
             "pipeline_id": int(data.get("leads[status][0][pipeline_id]", 0)),
             "responsible_user_id": int(data.get("leads[status][0][responsible_user_id]", 0)),
         }
@@ -91,7 +99,13 @@ def webhook():
     if resp_change:
         if (resp_change["pipeline_id"] == QUAL_PIPELINE_ID and
                 resp_change["status_id"] == NEW_FROM_LIDOGEN):
-            _handle_new_lead(resp_change["id"], resp_change["responsible_user_id"])
+            # Перевіряємо чи ліd не з "робочих" етапів
+            lead = kommo.get_lead(resp_change["id"])
+            old_status = lead.get("old_status_id", 0) if lead else 0
+            if old_status not in SKIP_FROM_STATUSES:
+                _handle_new_lead(resp_change["id"], resp_change["responsible_user_id"])
+            else:
+                logger.info("Skipped lead %s — came from excluded status %s", resp_change["id"], old_status)
         return jsonify({"ok": True})
 
     # ── Status change ─────────────────────────────────────────────
@@ -102,6 +116,7 @@ def webhook():
 
     lead_id = int(item.get("id", 0))
     status_id = int(item.get("status_id", 0))
+    old_status_id = int(item.get("old_status_id", 0))
     pipeline_id = int(item.get("pipeline_id", 0))
     responsible_id = int(item.get("responsible_user_id", 0))
 
@@ -109,7 +124,10 @@ def webhook():
         return jsonify({"ok": True})
 
     if status_id == NEW_FROM_LIDOGEN:
-        _handle_new_lead(lead_id, responsible_id)
+        if old_status_id in SKIP_FROM_STATUSES:
+            logger.info("Skipped lead %s — came from excluded status %s", lead_id, old_status_id)
+        else:
+            _handle_new_lead(lead_id, responsible_id)
 
     elif status_id == TAKEN_TO_WORK:
         _handle_taken(lead_id, responsible_id)
