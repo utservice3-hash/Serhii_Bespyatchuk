@@ -75,13 +75,17 @@ SUPERVISOR_MAP = {
 
 
 def _check_overdue_leads():
-    """Runs every 5 min — reminds about leads not called within 20 min."""
+    """Runs every 5 min — reminds about leads not called within 20 min, then every 20 min until taken."""
     now = datetime.now(timezone.utc)
     for lead_id, info in list(pending.items()):
-        if info.get("reminded"):
-            continue
         age_min = (now - info["transferred_at"]).total_seconds() / 60
         if age_min < REMINDER_MINUTES:
+            continue
+
+        # Fire every 20 min: at 20, 40, 60, 80... minutes
+        reminder_count = int(age_min // REMINDER_MINUTES)
+        last_reminded = info.get("last_reminded_count", 0)
+        if reminder_count <= last_reminded:
             continue
 
         responsible_id = info.get("responsible_id", 0)
@@ -92,15 +96,15 @@ def _check_overdue_leads():
 
         sup_part = f" {supervisor_tag}" if supervisor_tag else ""
         msg = (
-            f"⚠️ <b>Ліd не опрацьований {REMINDER_MINUTES} хв!</b>\n"
+            f"🚨 <b>Лід не опрацьований {age_min:.0f} хв!</b>\n"
             f"👤 Менеджер: {manager_tag}{sup_part}\n"
             f"🏷 Назва: {lead_name}\n"
-            f"⏱ Пройшло: <b>{age_min:.0f} хв</b>\n"
+            f"❓ Чому не опрацьований лід?\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
         notifier.send_message(msg)
-        pending[lead_id]["reminded"] = True
-        logger.info("Reminder sent for lead %s (%.0f min)", lead_id, age_min)
+        pending[lead_id]["last_reminded_count"] = reminder_count
+        logger.info("Reminder #%d sent for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
 
 def _write_daily_snapshot():
