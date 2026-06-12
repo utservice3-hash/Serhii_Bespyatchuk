@@ -75,8 +75,16 @@ SUPERVISOR_MAP = {
 
 
 def _check_overdue_leads():
-    """Runs every 5 min — reminds about leads not called within 20 min, then every 20 min until taken."""
+    """Runs every 5 min — reminds about leads not called within 20 min, then every 20 min until taken.
+    Only sends between 09:00 and 18:30 Kyiv time (UTC+3)."""
     now = datetime.now(timezone.utc)
+    kyiv_hour = (now + timedelta(hours=3)).hour
+    kyiv_minute = (now + timedelta(hours=3)).minute
+    in_working_hours = (kyiv_hour > 9 or (kyiv_hour == 9 and kyiv_minute >= 0)) and \
+                       (kyiv_hour < 18 or (kyiv_hour == 18 and kyiv_minute <= 30))
+    if not in_working_hours:
+        return
+
     for lead_id, info in list(pending.items()):
         age_min = (now - info["transferred_at"]).total_seconds() / 60
         if age_min < REMINDER_MINUTES:
