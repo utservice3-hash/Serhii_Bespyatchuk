@@ -258,8 +258,31 @@ def webhook():
 
     elif status_id == TAKEN_TO_WORK:
         _handle_taken(lead_id, responsible_id)
+        _handle_rnk_event(lead_id, responsible_id, "🟢 Лід взятий у роботу")
+
+    elif status_id == 69693656:  # Дзвінки
+        _handle_rnk_event(lead_id, responsible_id, "📞 Дзвінки")
+
+    elif status_id == 69693660:  # Дзвінки з сайту
+        _handle_rnk_event(lead_id, responsible_id, "🌐 Дзвінки з сайту")
 
     return jsonify({"ok": True})
+
+
+def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):
+    lead = kommo.get_lead(lead_id)
+    lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
+    manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
+    tg_tag = notifier.get_manager_tag(responsible_id)
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+    msg = (
+        f"{label}\n"
+        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
+        f"🏷 Назва: {lead_name}\n"
+        f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+    )
+    notifier.send_to_rnk(msg)
+    logger.info("RNK event: %s lead %s by %s", label, lead_id, manager_name)
 
 
 def _handle_new_lead(lead_id: int, responsible_id: int):

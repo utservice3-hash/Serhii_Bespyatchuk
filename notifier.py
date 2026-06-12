@@ -9,6 +9,10 @@ TG_TOKEN = os.getenv("TG_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 TG_THREAD_ID = os.getenv("TG_THREAD_ID", "")
 
+# Група РНК (ЛІД ВЗЯТИЙ У РОБОТУ / ДЗВІНКИ / ДЗВІНКИ З САЙТУ)
+TG_CHAT_ID_RNK = os.getenv("TG_CHAT_ID_RNK", "-1003779373880")
+TG_THREAD_ID_RNK = os.getenv("TG_THREAD_ID_RNK", "")
+
 # Hardcoded map — overridden by MANAGER_MAP env var if set
 _DEFAULT_MANAGER_MAP: dict[str, str] = {
     # Команда Яцика
@@ -80,16 +84,37 @@ def get_manager_name_by_id(user_id: int) -> str:
     return tag if tag else f"ID {user_id}"
 
 
-def _base_payload(text: str) -> dict:
+def _base_payload(text: str, chat_id: str = "", thread_id: str = "") -> dict:
     payload = {
-        "chat_id": TG_CHAT_ID,
+        "chat_id": chat_id or TG_CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    if TG_THREAD_ID:
-        payload["message_thread_id"] = int(TG_THREAD_ID)
+    tid = thread_id or TG_THREAD_ID
+    if tid:
+        payload["message_thread_id"] = int(tid)
     return payload
+
+
+def send_to_rnk(text: str) -> bool:
+    """Send message to РНК group (ЛІД ВЗЯТИЙ У РОБОТУ / ДЗВІНКИ events)."""
+    if not TG_TOKEN or not TG_CHAT_ID_RNK:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=TG_CHAT_ID_RNK, thread_id=TG_THREAD_ID_RNK)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram RNK error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_rnk exception: %s", e)
+        return False
 
 
 def send_message(text: str, with_stats_buttons: bool = False) -> bool:
