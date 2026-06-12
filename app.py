@@ -18,6 +18,19 @@ NEW_FROM_LIDOGEN = 69716164   # "НОВА ЗАЯВКА ВІД ЛІДОГЕНЕР
 TAKEN_TO_WORK = 69693652      # "Лід взятий у роботу"
 REMINDER_MINUTES = 20
 
+PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
+CLOSED_NOT_REALIZED = 143        # ЗАКРИТО І НЕ РЕАЛІЗОВАНО
+
+# Менеджери команд Дарини і Андрія
+DARINA_ANDRIY_TEAMS = {
+    # Команда Михальчевської
+    12782896, 13461608, 13803600, 14083284, 14431884,
+    14926076, 15227544, 15227596, 15279220, 12812476,
+    # Команда Безпам'ятного
+    12644448, 13689696, 11293904, 15192136, 15354656,
+    15354672, 15355168, 15380780, 15391908,
+}
+
 # Етапи з яких повторна передача НЕ викликає сповіщення
 SKIP_FROM_STATUSES = {
     69693652,  # Лід взятий у роботу
@@ -247,6 +260,11 @@ def webhook():
     pipeline_id = int(item.get("pipeline_id", 0))
     responsible_id = int(item.get("responsible_user_id", 0))
 
+    if pipeline_id == PEREVOZY_PIPELINE_ID:
+        if status_id == CLOSED_NOT_REALIZED and responsible_id in DARINA_ANDRIY_TEAMS:
+            _handle_closed_not_realized(lead_id, responsible_id)
+        return jsonify({"ok": True})
+
     if pipeline_id != QUAL_PIPELINE_ID:
         return jsonify({"ok": True})
 
@@ -268,6 +286,24 @@ def webhook():
         _handle_rnk_event(lead_id, responsible_id, "🌐 Дзвінки з сайту")
 
     return jsonify({"ok": True})
+
+
+def _handle_closed_not_realized(lead_id: int, responsible_id: int):
+    lead = kommo.get_lead(lead_id)
+    lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
+    manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
+    tg_tag = notifier.get_manager_tag(responsible_id)
+    supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+    sup_part = f" {supervisor_tag}" if supervisor_tag else ""
+    msg = (
+        f"❌ <b>Закрито і не реалізовано</b>\n"
+        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
+        f"🏷 Назва: {lead_name}\n"
+        f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
+    )
+    notifier.send_to_rnk(msg)
+    logger.info("Closed not realized: lead %s by %s", lead_id, manager_name)
 
 
 def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):
