@@ -21,6 +21,21 @@ REMINDER_MINUTES = 20
 PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
 CLOSED_NOT_REALIZED = 143        # ЗАКРИТО І НЕ РЕАЛІЗОВАНО
 
+# Етапи з нерозібраними заявками (без відповідального)
+UNASSIGNED_STATUSES = {
+    69693648: "Неразобранное",
+    69693656: "Дзвінки",
+    69693660: "Дзвінки з сайту",
+    69716160: "Дзвінок по пропущеному (реклама)",
+}
+ADMIN_USER_ID = 904923  # Admin — означає немає реального відповідального
+
+# Всі керівники для тегу в нерозібраних заявках
+ALL_SUPERVISORS = "@dmytro_yatsyk @Logist_dmytruk @Andry_UTS @darina_mx @lillly_aaa"
+
+# In-memory: lead_id -> {arrived_at, status_name, lead_name, last_reminded_count}
+unassigned: dict[int, dict] = {}
+
 # Менеджери команд Дарини і Андрія
 DARINA_ANDRIY_TEAMS = {
     # Команда Михальчевської
@@ -128,6 +143,39 @@ def _check_overdue_leads():
         logger.info("Reminder #%d sent for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
 
+def _check_unassigned_leads():
+    """Runs every 15 min — reminds about unassigned leads in Кваліфікація."""
+    now = datetime.now(timezone.utc)
+    kyiv_hour = (now + timedelta(hours=3)).hour
+    kyiv_minute = (now + timedelta(hours=3)).minute
+    in_working_hours = (kyiv_hour > 9 or (kyiv_hour == 9 and kyiv_minute >= 0)) and \
+                       (kyiv_hour < 18 or (kyiv_hour == 18 and kyiv_minute <= 30))
+    if not in_working_hours:
+        return
+
+    for lead_id, info in list(unassigned.items()):
+        age_min = (now - info["arrived_at"]).total_seconds() / 60
+        if age_min < 15:
+            continue
+
+        reminder_count = int(age_min // 15)
+        if reminder_count <= info.get("last_reminded_count", 0):
+            continue
+
+        kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+        msg = (
+            f"📬 <b>Нерозібрана заявка!</b>\n"
+            f"🏷 Назва: {info['lead_name']}\n"
+            f"📍 Етап: {info['status_name']}\n"
+            f"⏱ Очікує: <b>{age_min:.0f} хв</b>\n"
+            f"👥 {ALL_SUPERVISORS}\n"
+            f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+        )
+        notifier.send_to_rnk(msg)
+        unassigned[lead_id]["last_reminded_count"] = reminder_count
+        logger.info("Unassigned reminder for lead %s (%.0f min)", lead_id, age_min)
+
+
 def _write_daily_snapshot():
     """Runs at 21:55 UTC (≈ 23:55 Kyiv) — saves daily stats to Google Sheets."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -156,6 +204,7 @@ def _write_daily_snapshot():
 
 scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
+scheduler.add_job(_check_unassigned_leads, "interval", minutes=15)
 scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
 scheduler.start()
 sheets.ensure_headers()
@@ -260,6 +309,11 @@ def webhook():
     pipeline_id = int(item.get("pipeline_id", 0))
     responsible_id = int(item.get("responsible_user_id", 0))
 
+    # Нерозібрані заявки — лід отримав реального відповідального → прибираємо з черги
+    if lead_id in unassigned and responsible_id and responsible_id != ADMIN_USER_ID:
+        unassigned.pop(lead_id, None)
+        logger.info("Lead %s assigned — removed from unassigned queue", lead_id)
+
     if pipeline_id == PEREVOZY_PIPELINE_ID:
         if status_id == CLOSED_NOT_REALIZED and responsible_id in DARINA_ANDRIY_TEAMS:
             _handle_closed_not_realized(lead_id, responsible_id)
@@ -267,6 +321,10 @@ def webhook():
 
     if pipeline_id != QUAL_PIPELINE_ID:
         return jsonify({"ok": True})
+
+    # Нерозібрана заявка — лід без відповідального в одному з цих етапів
+    if status_id in UNASSIGNED_STATUSES and (not responsible_id or responsible_id == ADMIN_USER_ID):
+        _handle_unassigned(lead_id, status_id)
 
     if status_id == NEW_FROM_LIDOGEN:
         if old_status_id in SKIP_FROM_STATUSES:
@@ -286,6 +344,37 @@ def webhook():
         _handle_rnk_event(lead_id, responsible_id, "🌐 Дзвінки з сайту")
 
     return jsonify({"ok": True})
+
+
+def _handle_unassigned(lead_id: int, status_id: int):
+    now = datetime.now(timezone.utc)
+    if lead_id in unassigned:
+        return  # вже в черзі
+
+    lead = kommo.get_lead(lead_id)
+    lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
+    source = kommo.get_lead_source(lead) if lead else ""
+    status_name = UNASSIGNED_STATUSES.get(status_id, "—")
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+
+    source_line = f"\n🌐 Джерело: {source}" if source else ""
+    msg = (
+        f"📬 <b>Нерозібрана заявка!</b>\n"
+        f"🏷 Назва: {lead_name}\n"
+        f"📍 Етап: {status_name}{source_line}\n"
+        f"⏱ Щойно надійшла\n"
+        f"👥 {ALL_SUPERVISORS}\n"
+        f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+    )
+    notifier.send_to_rnk(msg)
+
+    unassigned[lead_id] = {
+        "arrived_at": now,
+        "status_name": status_name,
+        "lead_name": lead_name,
+        "last_reminded_count": 0,
+    }
+    logger.info("Unassigned lead %s in status %s", lead_id, status_name)
 
 
 def _handle_closed_not_realized(lead_id: int, responsible_id: int):
