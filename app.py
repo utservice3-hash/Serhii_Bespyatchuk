@@ -278,12 +278,14 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
     if responsible_id:
         _stats_log.append({"ts": now, "manager_id": responsible_id})
 
+    source = kommo.get_lead_source(lead) if lead else ""
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
     tg_tag = notifier.get_manager_tag(responsible_id)
+    source_line = f"\n🌐 Джерело: {source}" if source else ""
     msg = (
         f"📥 <b>Нова заявка від лідогенератора</b>\n"
         f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
-        f"🏷 Назва: {lead_name}\n"
+        f"🏷 Назва: {lead_name}{source_line}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     notifier.send_message(msg, with_stats_buttons=True)

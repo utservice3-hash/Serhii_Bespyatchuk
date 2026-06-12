@@ -32,11 +32,15 @@ def get_user_name(user_id: int) -> str:
     return f"ID {user_id}"
 
 
+SOURCE_FIELD_ID = 2098035  # "Источник клиента"
+
+
 def get_lead(lead_id: int) -> dict | None:
     try:
         resp = requests.get(
             f"{KOMMO_BASE}/api/v4/leads/{lead_id}",
             headers=HEADERS,
+            params={"with": "custom_fields"},
             timeout=10,
         )
         if resp.ok:
@@ -44,6 +48,16 @@ def get_lead(lead_id: int) -> dict | None:
     except Exception as e:
         logger.error("get_lead(%s): %s", lead_id, e)
     return None
+
+
+def get_lead_source(lead: dict) -> str:
+    """Extract 'Источник клиента' value from lead custom fields."""
+    for cf in lead.get("custom_fields_values") or []:
+        if cf.get("field_id") == SOURCE_FIELD_ID:
+            values = cf.get("values") or []
+            if values:
+                return values[0].get("value", "")
+    return ""
 
 
 def get_lead_events(lead_id: int, limit: int = 50) -> list:
