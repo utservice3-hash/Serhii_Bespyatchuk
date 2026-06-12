@@ -32,7 +32,27 @@ def get_user_name(user_id: int) -> str:
     return f"ID {user_id}"
 
 
-SOURCE_FIELD_ID = 2098035  # "Источник клиента"
+SOURCE_FIELD_ID = 2098035    # "Источник клиента"
+REJECT_REASON_FIELD_ID = 2097265  # "Причина отказа"
+
+# Назви етапів воронки Перевозки
+PEREVOZY_STATUSES = {
+    69693664: "Incoming leads",
+    69693668: "Взято на прорахунок",
+    69693672: "Пропозицію зроблено",
+    69716252: "Відкладений запит",
+    69693676: "Умови узгоджені",
+    69716256: "Документи підписані",
+    69716260: "Контроль перед завантаженням",
+    100274340: "Виставлення рахунку",
+    69716300: "Авто працює",
+    98470988: "Перевезення завершено",
+    69716304: "Дзвінок після розвантаження",
+    69716312: "Очікуємо оплату",
+    69716460: "Оплата отримана",
+    142: "Успішна угода",
+    143: "Закрито і не реалізовано",
+}
 
 
 def get_lead(lead_id: int) -> dict | None:
@@ -48,6 +68,67 @@ def get_lead(lead_id: int) -> dict | None:
     except Exception as e:
         logger.error("get_lead(%s): %s", lead_id, e)
     return None
+
+
+def get_lead_details(lead_id: int) -> dict:
+    """
+    Returns enriched lead info for closed-not-realized notification:
+    name, created_at, reject_reason, last_status_name, notes_count, calls_count
+    """
+    from datetime import datetime, timezone
+
+    result = {
+        "name": f"Угода #{lead_id}",
+        "days_in_work": None,
+        "reject_reason": "",
+        "last_status": "",
+        "notes_count": 0,
+        "calls_count": 0,
+    }
+
+    # Lead basic info + custom fields
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/leads/{lead_id}",
+            headers=HEADERS,
+            params={"with": "custom_fields"},
+            timeout=10,
+        )
+        if resp.ok:
+            lead = resp.json()
+            result["name"] = lead.get("name", result["name"])
+            created_at = lead.get("created_at", 0)
+            if created_at:
+                days = (datetime.now(timezone.utc).timestamp() - created_at) / 86400
+                result["days_in_work"] = int(days)
+            old_status_id = lead.get("status_id", 0)
+            result["last_status"] = PEREVOZY_STATUSES.get(old_status_id, "")
+
+            for cf in lead.get("custom_fields_values") or []:
+                if cf.get("field_id") == REJECT_REASON_FIELD_ID:
+                    vals = cf.get("values") or []
+                    if vals:
+                        result["reject_reason"] = vals[0].get("value", "")
+    except Exception as e:
+        logger.error("get_lead_details lead: %s", e)
+
+    # Notes + calls count
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/leads/{lead_id}/notes",
+            headers=HEADERS,
+            params={"limit": 100},
+            timeout=10,
+        )
+        if resp.ok:
+            notes = resp.json().get("_embedded", {}).get("notes", [])
+            calls = [n for n in notes if n.get("note_type") in (10, 11)]
+            result["notes_count"] = len(notes)
+            result["calls_count"] = len(calls)
+    except Exception as e:
+        logger.error("get_lead_details notes: %s", e)
+
+    return result
 
 
 def get_lead_source(lead: dict) -> str:

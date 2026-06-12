@@ -289,17 +289,30 @@ def webhook():
 
 
 def _handle_closed_not_realized(lead_id: int, responsible_id: int):
-    lead = kommo.get_lead(lead_id)
-    lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
+    details = kommo.get_lead_details(lead_id)
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
     tg_tag = notifier.get_manager_tag(responsible_id)
     supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+
     sup_part = f" {supervisor_tag}" if supervisor_tag else ""
+    days = f"{details['days_in_work']} дн." if details["days_in_work"] is not None else "—"
+    reason = details["reject_reason"] or "не вказана"
+    last_status = details["last_status"] or "—"
+    notes = details["notes_count"]
+    calls = details["calls_count"]
+
+    activity = "✅ Була активність" if (notes > 0 or calls > 0) else "🚫 Активності не було"
+
     msg = (
         f"❌ <b>Закрито і не реалізовано</b>\n"
         f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
-        f"🏷 Назва: {lead_name}\n"
+        f"🏷 Назва: {details['name']}\n"
+        f"📋 Причина: {reason}\n"
+        f"🔀 Закрито з етапу: {last_status}\n"
+        f"📞 Дзвінків: <b>{calls}</b> | Нотаток: <b>{notes}</b>\n"
+        f"📅 Днів в роботі: <b>{days}</b>\n"
+        f"{activity}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
     notifier.send_to_rnk(msg)
