@@ -258,7 +258,8 @@ def webhook():
 
     elif status_id == TAKEN_TO_WORK:
         _handle_taken(lead_id, responsible_id)
-        _handle_rnk_event(lead_id, responsible_id, "🟢 Лід взятий у роботу")
+        if old_status_id != NEW_FROM_LIDOGEN:
+            _handle_rnk_event(lead_id, responsible_id, "🟢 Лід взятий у роботу")
 
     elif status_id == 69693656:  # Дзвінки
         _handle_rnk_event(lead_id, responsible_id, "📞 Дзвінки")
