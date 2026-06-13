@@ -11,7 +11,7 @@ TG_THREAD_ID = os.getenv("TG_THREAD_ID", "")
 
 # Група РНК (ЛІД ВЗЯТИЙ У РОБОТУ / ДЗВІНКИ / ДЗВІНКИ З САЙТУ)
 TG_CHAT_ID_RNK = os.getenv("TG_CHAT_ID_RNK", "-1003779373880")
-TG_THREAD_ID_RNK = os.getenv("TG_THREAD_ID_RNK", "51")
+TG_THREAD_ID_RNK = "51"
 
 # Hardcoded map — overridden by MANAGER_MAP env var if set
 _DEFAULT_MANAGER_MAP: dict[str, str] = {
