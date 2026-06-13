@@ -798,12 +798,28 @@ def _scan_unassigned_leads():
                 if lid in unassigned:
                     continue
                 lead_name = lead.get("name", f"Лід #{lid}")
+                source = kommo.get_lead_source(lead)
+                # Використовуємо updated_at як реальний час появи в черзі
+                updated_at = lead.get("updated_at", 0)
+                arrived = datetime.fromtimestamp(updated_at, tz=timezone.utc) if updated_at else now
                 unassigned[lid] = {
-                    "arrived_at": now,
+                    "arrived_at": arrived,
                     "status_name": status_name,
                     "lead_name": lead_name,
                     "last_reminded_count": 0,
                 }
+                # Одразу сповіщаємо про нерозібрану заявку
+                kommo_url = f"https://utsercice.kommo.com/leads/detail/{lid}"
+                source_line = f"\n🌐 Джерело: {source}" if source else ""
+                msg = (
+                    f"📬 <b>Нерозібрана заявка!</b>\n"
+                    f"🏷 Назва: {lead_name}\n"
+                    f"📍 Етап: {status_name}{source_line}\n"
+                    f"⏱ Щойно виявлено сканером\n"
+                    f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
+                    f"🔗 <a href='{kommo_url}'>Відкрити лід #{lid}</a>"
+                )
+                notifier.send_to_rnk(msg)
                 logger.info("Scan found unassigned lead %s in %s", lid, status_name)
         except Exception as e:
             logger.error("_scan_unassigned_leads: %s", e)
