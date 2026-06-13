@@ -217,6 +217,19 @@ SUPERVISOR_MAP = {
 }
 
 
+def _format_duration(minutes: float) -> str:
+    """Форматує тривалість: 1 д. 3 год. 25 хв → замість 1405 хв."""
+    total_min = int(minutes)
+    days = total_min // (60 * 24)
+    hours = (total_min % (60 * 24)) // 60
+    mins = total_min % 60
+    parts = []
+    if days: parts.append(f"{days} д.")
+    if hours: parts.append(f"{hours} год.")
+    if mins or not parts: parts.append(f"{mins} хв.")
+    return " ".join(parts)
+
+
 def _is_working_hours() -> bool:
     """Пн–Пт, 09:00–18:30 за Києвом (UTC+3)."""
     now_kyiv = datetime.now(timezone.utc) + timedelta(hours=3)
@@ -270,7 +283,7 @@ def _check_overdue_leads():
 
         sup_part = f" {supervisor_tag}" if supervisor_tag else ""
         msg = (
-            f"🚨 <b>Лід не опрацьований {age_min:.0f} хв!</b>\n"
+            f"🚨 <b>Лід не опрацьований {_format_duration(age_min)}!</b>\n"
             f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
             f"🏷 Назва: {lead_name}\n"
             f"❓ Чому не опрацьований лід?\n"
@@ -767,7 +780,7 @@ def _check_unassigned_leads():
                 f"🔴 <b>Заявка не опрацьована більше 45 хв!</b>\n"
                 f"🏷 Назва: {info['lead_name']}\n"
                 f"📍 Етап: {info['status_name']}\n"
-                f"⏱ Очікує: <b>{age_min:.0f} хв</b>\n"
+                f"⏱ Очікує: <b>{_format_duration(age_min)}</b>\n"
                 f"👥 {ALL_SUPERVISORS}\n"
                 f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
             )
