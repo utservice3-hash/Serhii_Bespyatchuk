@@ -363,7 +363,7 @@ def _check_plan_completion(responsible_id: int) -> None:
 
     def fetch_all(status_id: int, date_filter: bool = True) -> list:
         all_leads = []
-        for page in range(1, 20):
+        for page in range(1, 50):
             batch = kommo.get_pipeline_leads(
                 PEREVOZY_PIPELINE_ID, status_id=status_id, page=page,
                 with_custom_fields=True,
@@ -493,8 +493,10 @@ def _send_daily_plan_report() -> None:
     month_start = int(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
 
     def fetch_all_leads(status_id: int, date_filter: bool = True) -> list:
+        """Kommo повертає _total_items=0 для деяких статусів, але дані є.
+        Тому перебираємо сторінки поки є результати."""
         all_leads = []
-        for page in range(1, 20):
+        for page in range(1, 50):
             batch = kommo.get_pipeline_leads(
                 PEREVOZY_PIPELINE_ID, status_id=status_id, page=page,
                 with_custom_fields=True,
