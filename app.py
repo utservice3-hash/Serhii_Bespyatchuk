@@ -216,6 +216,7 @@ def _check_overdue_leads():
     if not _is_working_hours():
         return
 
+    now = datetime.now(timezone.utc)
     for lead_id, info in list(pending.items()):
         age_min = (now - info["transferred_at"]).total_seconds() / 60
         if age_min < REMINDER_MINUTES:
@@ -290,18 +291,19 @@ def _send_daily_plan_report() -> None:
     tempo_pct = day_of_month / days_in_month
     month_start = int(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
 
-    def fetch_leads(status_id: int, date_filter: bool = True) -> list:
-        params: dict = {
-            "filter[statuses][0][pipeline_id]": PEREVOZY_PIPELINE_ID,
-            "filter[statuses][0][status_id]": status_id,
-            "limit": 250,
-        }
-        if date_filter:
-            params["filter[closed_at][from]"] = month_start
-        return kommo.get_pipeline_leads(PEREVOZY_PIPELINE_ID, status_id=status_id, with_custom_fields=True) or []
+    def fetch_all_leads(status_id: int) -> list:
+        all_leads = []
+        for page in range(1, 20):
+            batch = kommo.get_pipeline_leads(
+                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page, with_custom_fields=True
+            ) or []
+            all_leads.extend(batch)
+            if len(batch) < 250:
+                break
+        return all_leads
 
-    won_leads = fetch_leads(WON_STATUS_ID)
-    pay_leads = fetch_leads(69716460, date_filter=False)
+    won_leads = fetch_all_leads(WON_STATUS_ID)
+    pay_leads = fetch_all_leads(69716460)
 
     def deal_amount(lead: dict) -> int:
         """Повертає суму з урахуванням знаку. Фіктивні = 0, мінусові = від'ємна."""
