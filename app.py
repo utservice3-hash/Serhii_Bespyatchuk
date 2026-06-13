@@ -623,8 +623,8 @@ def _send_daily_plan_report() -> None:
 
             cont = "   │" if not is_last else "    "
             line = f"{prefix} {tempo(total, mgr_plan)} {name}{tl_mark}: <b>{total:,} грн</b> ({pct})  🚛 {tc} маш.{avg_str}"
-            if w: line += f"\n{cont}    ✓ Успішно: {w:,} грн / {wc} маш."
-            if p: line += f"\n{cont}    ⏳ Оплата: {p:,} грн / {pc} маш."
+            if w: line += f"\n{cont}    ✓ Успішно реалізовано: {w:,} грн / {wc} маш."
+            if p: line += f"\n{cont}    ⏳ Оплата отримана: {p:,} грн / {pc} маш."
             if prev_mgr:
                 d_f = total - p_fact
                 d_t = tc - p_trucks
