@@ -13,6 +13,10 @@ TG_THREAD_ID = os.getenv("TG_THREAD_ID", "")
 TG_CHAT_ID_RNK = os.getenv("TG_CHAT_ID_RNK", "-1003779373880")
 TG_THREAD_ID_RNK = "51"
 
+# Група лідогенераторів (нові заявки від лідогена)
+TG_CHAT_ID_LIDOGEN = "-1004391044886"
+TG_THREAD_ID_LIDOGEN = "3"
+
 # Hardcoded map — overridden by MANAGER_MAP env var if set
 _DEFAULT_MANAGER_MAP: dict[str, str] = {
     # Команда Яцика
@@ -95,6 +99,26 @@ def _base_payload(text: str, chat_id: str = "", thread_id: str = "") -> dict:
     if tid:
         payload["message_thread_id"] = int(tid)
     return payload
+
+
+def send_to_lidogen(text: str) -> bool:
+    """Send message to лідогенератори group."""
+    if not TG_TOKEN or not TG_CHAT_ID_LIDOGEN:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=TG_CHAT_ID_LIDOGEN, thread_id=TG_THREAD_ID_LIDOGEN)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram Lidogen error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_lidogen exception: %s", e)
+        return False
 
 
 def send_to_rnk(text: str) -> bool:

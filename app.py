@@ -1160,7 +1160,7 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     if _is_working_hours():
-        notifier.send_message(msg, with_stats_buttons=True)
+        notifier.send_to_lidogen(msg)
     sheets.append_transfer(lead_id, lead_name, manager_name, now, manager_id=responsible_id)
     logger.info("New lead: %s → %s", lead_id, manager_name)
 
