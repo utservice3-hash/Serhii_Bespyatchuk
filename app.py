@@ -105,10 +105,27 @@ SUPERVISOR_MAP = {
 def _is_working_hours() -> bool:
     """Пн–Пт, 09:00–18:30 за Києвом (UTC+3)."""
     now_kyiv = datetime.now(timezone.utc) + timedelta(hours=3)
-    if now_kyiv.weekday() >= 5:  # субота=5, неділя=6
+    if now_kyiv.weekday() >= 5:
         return False
     h, m = now_kyiv.hour, now_kyiv.minute
     return (h > 9 or (h == 9 and m >= 0)) and (h < 18 or (h == 18 and m <= 30))
+
+
+def _is_unassigned_hours() -> bool:
+    """Пн–Нд, 09:00–18:30 за Києвом — для нерозібраних заявок."""
+    now_kyiv = datetime.now(timezone.utc) + timedelta(hours=3)
+    h, m = now_kyiv.hour, now_kyiv.minute
+    return (h > 9 or (h == 9 and m >= 0)) and (h < 18 or (h == 18 and m <= 30))
+
+
+def _weekend_duty_supervisor() -> str:
+    """Повертає тег чергового тімліда у вихідні: сб→Дарина, нд→Андрій."""
+    weekday = (datetime.now(timezone.utc) + timedelta(hours=3)).weekday()
+    if weekday == 5:
+        return "@darina_mx"
+    if weekday == 6:
+        return "@Andry_UTS"
+    return ""
 
 
 def _check_overdue_leads():
@@ -175,12 +192,15 @@ def _scan_unassigned_leads():
 
 def _check_unassigned_leads():
     """Runs every 15 min — scans CRM for unassigned leads, then sends reminders."""
-    if not _is_working_hours():
+    if not _is_unassigned_hours():
         return
 
     _scan_unassigned_leads()
 
     now = datetime.now(timezone.utc)
+    duty = _weekend_duty_supervisor()
+    tag_line = duty if duty else ALL_SUPERVISORS
+
     for lead_id, info in list(unassigned.items()):
         age_min = (now - info["arrived_at"]).total_seconds() / 60
         if age_min < 15:
@@ -196,7 +216,7 @@ def _check_unassigned_leads():
             f"🏷 Назва: {info['lead_name']}\n"
             f"📍 Етап: {info['status_name']}\n"
             f"⏱ Очікує: <b>{age_min:.0f} хв</b>\n"
-            f"👥 {ALL_SUPERVISORS}\n"
+            f"👥 {tag_line}\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
         notifier.send_to_rnk(msg)
@@ -392,7 +412,7 @@ def _handle_unassigned(lead_id: int, status_id: int):
         f"🏷 Назва: {lead_name}\n"
         f"📍 Етап: {status_name}{source_line}\n"
         f"⏱ Щойно надійшла\n"
-        f"👥 {ALL_SUPERVISORS}\n"
+        f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     notifier.send_to_rnk(msg)
