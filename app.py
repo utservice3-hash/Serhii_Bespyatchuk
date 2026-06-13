@@ -280,8 +280,28 @@ def _build_progress_bar(fact: int, plan: int) -> str:
     return f"{bar}  {int(pct * 100)}%"
 
 
+_CONGRATS_HEADERS = [
+    "🔥 Місяць закритий — план виконано!",
+    "💎 Ціль досягнута, результат є!",
+    "🚀 Ще один місяць у плюсі!",
+    "⚡️ Фінішна пряма пройдена!",
+    "🏁 Місяць зроблено — план закритий!",
+    "🎯 Влучно в ціль — план виконано!",
+]
+
+_CONGRATS_FOOTERS = [
+    "Так тримати — команда пишається! 💪",
+    "Відмінна робота, продовжуй у тому ж темпі! 🔝",
+    "Результат говорить сам за себе. Молодець! 👏",
+    "Місяць зроблено — тепер цілимося вище! 🎯",
+    "Команда бачить твій результат. Дякуємо! 🤝",
+    "Сильний фінал — саме так і треба! 🔥",
+]
+
+
 def _check_plan_completion(responsible_id: int) -> None:
     """Перевіряє чи менеджер виконав план місяця. Якщо так — привітання в РНК."""
+    import random
     global _plan_congrats_month, _plan_congrats_sent
 
     plan = MANAGER_PLANS.get(responsible_id, 0)
@@ -297,7 +317,6 @@ def _check_plan_completion(responsible_id: int) -> None:
     if responsible_id in _plan_congrats_sent:
         return
 
-    # Рахуємо факт місяця з Kommo API
     def fetch_all(status_id: int) -> list:
         all_leads = []
         for page in range(1, 20):
@@ -336,16 +355,27 @@ def _check_plan_completion(responsible_id: int) -> None:
         supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
         team = MANAGER_TEAM.get(responsible_id, "")
         pct = int(total / plan * 100)
+        over = total - plan
 
-        tag_line = f"{manager_tag}" if manager_tag else manager_name
-        sup_line = f"\n👏 {supervisor_tag}" if supervisor_tag else ""
+        header = random.choice(_CONGRATS_HEADERS)
+        footer = random.choice(_CONGRATS_FOOTERS)
+
+        over_line = f"\n📈 Перевиконання: +{over:,} грн" if over > 0 else ""
+        record_line = "\n🏆 Новий рекорд — більше 110% плану!" if pct >= 110 else ""
+        sup_line = f"\n\n👔 {supervisor_tag} — твій менеджер закрив місяць ✅" if supervisor_tag else ""
+        mgr_tag_line = f" {manager_tag}" if manager_tag else ""
 
         msg = (
-            f"🎉 <b>ПЛАН ВИКОНАНО!</b>\n"
-            f"👤 Менеджер: <b>{manager_name}</b> {manager_tag}\n"
-            f"🏆 Факт: <b>{total:,} грн</b> ({pct}% плану)\n"
-            f"🎯 План: {plan:,} грн\n"
-            f"🏢 Команда: {team}{sup_line}"
+            f"{header}\n\n"
+            f"👤 <b>{manager_name}</b>{mgr_tag_line}\n"
+            f"🏢 Команда: {team}\n\n"
+            f"┌─────────────────────┐\n"
+            f"│ 💰 Факт: {total:,} грн\n"
+            f"│ 🎯 План: {plan:,} грн\n"
+            f"│ 📊 {_build_progress_bar(total, plan)}{over_line}{record_line}\n"
+            f"└─────────────────────┘\n\n"
+            f"{footer}"
+            f"{sup_line}"
         )
         notifier.send_to_rnk(msg)
         logger.info("Plan completion congrats sent for manager %s (%s)", responsible_id, manager_name)
