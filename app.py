@@ -407,11 +407,51 @@ def _check_plan_completion(responsible_id: int) -> None:
         logger.error("_check_plan_completion(%s): %s", responsible_id, e)
 
 
+_BIG_DEAL_PHRASES = [
+    "Класний результат! Команда тебе бачить і захоплюється! 🔥",
+    "Ось це угода! Продовжуй у тому ж дусі! 💪",
+    "Молодець! Саме так і робляться великі місяці! 🚀",
+    "Сильна робота! Так тримати — ти в топі! ⭐️",
+    "Відмінний результат! Команда пишається! 👏",
+    "Це і є той рівень! Дякуємо за результат! 🏆",
+]
+
+BIG_DEAL_THRESHOLD = 10_000  # грн
+
+
+def _handle_big_deal_notification(lead_id: int, responsible_id: int, amount: int) -> None:
+    import random
+    if amount < BIG_DEAL_THRESHOLD:
+        return
+
+    manager_name = kommo.get_user_name(responsible_id)
+    manager_tag = notifier.get_manager_tag(responsible_id).strip(" ()")
+    supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+    team = MANAGER_TEAM.get(responsible_id, "")
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+
+    phrase = random.choice(_BIG_DEAL_PHRASES)
+    mgr_tag_line = f" {manager_tag}" if manager_tag else ""
+    sup_line = f"  {supervisor_tag}" if supervisor_tag else ""
+
+    msg = (
+        f"💥 <b>Велика угода закрита!</b>\n\n"
+        f"👤 <b>{manager_name}</b>{mgr_tag_line}{sup_line}\n"
+        f"🏢 Команда: {team}\n\n"
+        f"💰 <b>{amount:,} грн</b>\n\n"
+        f"{phrase}\n"
+        f"🔗 <a href='{kommo_url}'>Угода #{lead_id}</a>"
+    )
+    notifier.send_to_rnk(msg)
+    logger.info("Big deal notification: lead %s amount %d by %s", lead_id, amount, manager_name)
+
+
 def _handle_won_deal(lead_id: int, responsible_id: int, amount: int) -> None:
     now = datetime.now(timezone.utc)
     _won_log.append({"lead_id": lead_id, "manager_id": responsible_id,
                      "amount": amount, "closed_at": now})
     logger.info("Won deal logged: lead %s by manager %s amount %d", lead_id, responsible_id, amount)
+    _handle_big_deal_notification(lead_id, responsible_id, amount)
     if responsible_id in MANAGER_PLANS:
         _check_plan_completion(responsible_id)
 
