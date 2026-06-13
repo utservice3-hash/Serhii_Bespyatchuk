@@ -339,11 +339,15 @@ def _check_plan_completion(responsible_id: int) -> None:
             return -amt if kommo.is_minus_deal(lead) else amt
 
         total = 0
+        trucks = 0
         for lead in won + pay:
             if lead.get("responsible_user_id") == responsible_id:
-                total += deal_amount(lead)
+                amt = deal_amount(lead)
+                total += amt
+                if amt != 0:
+                    trucks += 1
 
-        logger.info("Plan check for %s: fact=%d plan=%d", responsible_id, total, plan)
+        logger.info("Plan check for %s: fact=%d plan=%d trucks=%d", responsible_id, total, plan, trucks)
 
         if total < plan:
             return
@@ -360,8 +364,8 @@ def _check_plan_completion(responsible_id: int) -> None:
         header = random.choice(_CONGRATS_HEADERS)
         footer = random.choice(_CONGRATS_FOOTERS)
 
-        over_line = f"\n📈 Перевиконання: +{over:,} грн" if over > 0 else ""
-        record_line = "\n🏆 Новий рекорд — більше 110% плану!" if pct >= 110 else ""
+        over_line = f"\n│ 📈 Перевиконання: +{over:,} грн" if over > 0 else ""
+        record_line = "\n│ 🏆 Більше 110% — новий рекорд!" if pct >= 110 else ""
         sup_line = f"\n\n👔 {supervisor_tag} — твій менеджер закрив місяць ✅" if supervisor_tag else ""
         mgr_tag_line = f" {manager_tag}" if manager_tag else ""
 
@@ -372,6 +376,7 @@ def _check_plan_completion(responsible_id: int) -> None:
             f"┌─────────────────────┐\n"
             f"│ 💰 Факт: {total:,} грн\n"
             f"│ 🎯 План: {plan:,} грн\n"
+            f"│ 🚛 Відправлено машин: {trucks}\n"
             f"│ 📊 {_build_progress_bar(total, plan)}{over_line}{record_line}\n"
             f"└─────────────────────┘\n\n"
             f"{footer}"
@@ -426,23 +431,29 @@ def _send_daily_plan_report() -> None:
     for l in won_leads:
         uid = l.get("responsible_user_id", 0); amt = deal_amount(l)
         mgr_won[uid] = mgr_won.get(uid, 0) + amt
-        mgr_wc[uid] = mgr_wc.get(uid, 0) + 1
+        if amt != 0:
+            mgr_wc[uid] = mgr_wc.get(uid, 0) + 1
     for l in pay_leads:
         uid = l.get("responsible_user_id", 0); amt = deal_amount(l)
         mgr_pay[uid] = mgr_pay.get(uid, 0) + amt
-        mgr_pc[uid] = mgr_pc.get(uid, 0) + 1
+        if amt != 0:
+            mgr_pc[uid] = mgr_pc.get(uid, 0) + 1
 
     all_mgrs = set(mgr_won) | set(mgr_pay)
     mgr_tot = {uid: mgr_won.get(uid, 0) + mgr_pay.get(uid, 0) for uid in all_mgrs}
+    mgr_trucks = {uid: mgr_wc.get(uid, 0) + mgr_pc.get(uid, 0) for uid in all_mgrs}
 
     team_facts: dict[str, int] = {}
+    team_trucks: dict[str, int] = {}
     for uid, amt in mgr_tot.items():
         team = MANAGER_TEAM.get(uid)
         if team:
             team_facts[team] = team_facts.get(team, 0) + amt
+            team_trucks[team] = team_trucks.get(team, 0) + mgr_trucks.get(uid, 0)
 
     total_fact = sum(v for uid, v in mgr_tot.items() if uid in MANAGER_TEAM)
     total_plan = sum(TEAM_PLANS.values())
+    total_trucks = sum(v for uid, v in mgr_trucks.items() if uid in MANAGER_TEAM)
 
     def tempo(fact: int, plan: int) -> str:
         if not plan: return ""
@@ -458,8 +469,9 @@ def _send_daily_plan_report() -> None:
     ]
     for team, plan in TEAM_PLANS.items():
         fact = team_facts.get(team, 0)
+        trucks = team_trucks.get(team, 0)
         lines.append(f"  {tempo(fact, plan)} {team}: {_build_progress_bar(fact, plan)}")
-        lines.append(f"     💰 {fact:,} / {plan:,} грн")
+        lines.append(f"     💰 {fact:,} / {plan:,} грн  🚛 {trucks} маш.")
 
     lines.append("\n👤 <b>По менеджерах:</b>")
     for uid, total in sorted(mgr_tot.items(), key=lambda x: x[1], reverse=True):
@@ -470,13 +482,15 @@ def _send_daily_plan_report() -> None:
         pct = f"{int(total / plan * 100)}%" if plan else "—"
         w = mgr_won.get(uid, 0); wc = mgr_wc.get(uid, 0)
         p = mgr_pay.get(uid, 0); pc = mgr_pc.get(uid, 0)
-        line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})"
-        if w: line += f"\n     ✓ Успішно реалізовано: {w:,} грн / {wc} уг."
-        if p: line += f"\n     ⏳ Оплата отримана: {p:,} грн / {pc} уг."
+        tc = mgr_trucks.get(uid, 0)
+        line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})  🚛 {tc} маш."
+        if w: line += f"\n     ✓ Успішно реалізовано: {w:,} грн / {wc} маш."
+        if p: line += f"\n     ⏳ Оплата отримана: {p:,} грн / {pc} маш."
         lines.append(line)
 
     lines.append(
         f"\n📈 <b>Факт місяця: {total_fact:,} / {total_plan:,} грн</b>\n"
+        f"🚛 <b>Всього машин відправлено: {total_trucks}</b>\n"
         f"📊 {_build_progress_bar(total_fact, total_plan)}"
     )
 
