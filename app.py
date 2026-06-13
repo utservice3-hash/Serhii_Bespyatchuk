@@ -129,7 +129,8 @@ def _check_overdue_leads():
             continue
 
         responsible_id = info.get("responsible_id", 0)
-        manager_tag = notifier.get_manager_tag(responsible_id) or f"ID {responsible_id}"
+        manager_name = info.get("manager", kommo.get_user_name(responsible_id))
+        tg_tag = notifier.get_manager_tag(responsible_id)
         supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
         lead_name = info.get("lead_name", f"Лід #{lead_id}")
         kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
@@ -137,7 +138,7 @@ def _check_overdue_leads():
         sup_part = f" {supervisor_tag}" if supervisor_tag else ""
         msg = (
             f"🚨 <b>Лід не опрацьований {age_min:.0f} хв!</b>\n"
-            f"👤 Менеджер: {manager_tag}{sup_part}\n"
+            f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
             f"🏷 Назва: {lead_name}\n"
             f"❓ Чому не опрацьований лід?\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
@@ -332,8 +333,9 @@ def webhook():
             _handle_new_lead(lead_id, responsible_id)
 
     elif status_id == TAKEN_TO_WORK:
+        is_lidogen = lead_id in pending
         _handle_taken(lead_id, responsible_id)
-        if old_status_id != NEW_FROM_LIDOGEN:
+        if not is_lidogen:
             _handle_rnk_event(lead_id, responsible_id, "🟢 Лід взятий у роботу")
 
     elif status_id == 69693656:  # Дзвінки
