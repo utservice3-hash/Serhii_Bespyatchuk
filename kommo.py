@@ -178,9 +178,12 @@ def get_lead_notes(lead_id: int) -> list:
 
 
 def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int = 1) -> list:
-    params: dict = {"filter[pipeline_id]": pipeline_id, "limit": 250, "page": page}
+    params: dict = {"limit": 250, "page": page}
     if status_id:
-        params["filter[status_id]"] = status_id
+        params["filter[statuses][0][pipeline_id]"] = pipeline_id
+        params["filter[statuses][0][status_id]"] = status_id
+    else:
+        params["filter[pipeline_id]"] = pipeline_id
     try:
         resp = requests.get(
             f"{KOMMO_BASE}/api/v4/leads",
