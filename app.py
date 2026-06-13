@@ -273,33 +273,7 @@ def _handle_won_deal(lead_id: int, responsible_id: int, amount: int) -> None:
     now = datetime.now(timezone.utc)
     _won_log.append({"lead_id": lead_id, "manager_id": responsible_id,
                      "amount": amount, "closed_at": now})
-
-    manager_name = kommo.get_user_name(responsible_id)
-    tg_tag = notifier.get_manager_tag(responsible_id)
-    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
-
-    # Місячний факт по менеджеру
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    mgr_fact = sum(e["amount"] for e in _won_log
-                   if e["manager_id"] == responsible_id and e["closed_at"] >= month_start)
-    mgr_plan = MANAGER_PLANS.get(responsible_id, 0)
-    bar = _build_progress_bar(mgr_fact, mgr_plan) if mgr_plan else "—"
-
-    lead = kommo.get_lead(lead_id)
-    lead_name = lead.get("name", f"Угода #{lead_id}") if lead else f"Угода #{lead_id}"
-
-    msg = (
-        f"🏆 <b>Угода закрита успішно!</b>\n"
-        f"🏷 Назва: {lead_name}\n"
-        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
-        f"💰 Сума: <b>+{amount:,} грн</b>\n\n"
-        f"📊 Виконання плану менеджера:\n"
-        f"{bar}\n"
-        f"💰 Факт: <b>{mgr_fact:,}</b> / {mgr_plan:,} грн"
-        f"\n🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
-    )
-    _send_plan_message(msg)
-    logger.info("Won deal: lead %s by %s amount %d", lead_id, manager_name, amount)
+    logger.info("Won deal logged: lead %s by manager %s amount %d", lead_id, responsible_id, amount)
 
 
 def _send_daily_plan_report() -> None:
