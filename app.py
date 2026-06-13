@@ -1270,6 +1270,15 @@ def daily():
     return jsonify({"ok": sent, "pending": len(pending)})
 
 
+@app.route("/test-groups", methods=["GET"])
+def test_groups():
+    """Send test messages to РНК and lidogen groups."""
+    results = {}
+    results["rnk"] = notifier.send_to_rnk("✅ Тест групи РНК — гілка 51")
+    results["lidogen"] = notifier.send_to_lidogen("✅ Тест групи лідогенераторів — гілка 3")
+    return jsonify(results)
+
+
 @app.route("/test-plan-thread", methods=["GET"])
 def test_plan_thread():
     """Send a test message to plan thread to verify bot access."""
