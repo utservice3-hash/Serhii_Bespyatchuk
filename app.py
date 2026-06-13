@@ -353,8 +353,8 @@ def _send_daily_plan_report() -> None:
         w = mgr_won.get(uid, 0); wc = mgr_wc.get(uid, 0)
         p = mgr_pay.get(uid, 0); pc = mgr_pc.get(uid, 0)
         line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})"
-        if w: line += f"\n     ✓ Успіх: {w:,} грн / {wc} уг."
-        if p: line += f"\n     ⏳ Оплата: {p:,} грн / {pc} уг."
+        if w: line += f"\n     ✓ Успішно реалізовано: {w:,} грн / {wc} уг."
+        if p: line += f"\n     ⏳ Оплата отримана: {p:,} грн / {pc} уг."
         lines.append(line)
 
     lines.append(
