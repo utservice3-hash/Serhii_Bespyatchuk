@@ -1508,6 +1508,10 @@ def backfill_closed_rnk():
             manager_name = kommo.get_user_name(responsible_id)
             amount = int(lead.get("price", 0))
 
+            skip_ai = request.args.get("skip_ai") == "1"
+            ai_rec = "" if skip_ai else ai_analyzer.analyze_closed_deal({
+                **details, "manager": manager_name, "amount": amount
+            })
             deal_data = {
                 "lead_id": lead_id,
                 "name": details["name"],
@@ -1520,9 +1524,7 @@ def backfill_closed_rnk():
                 "notes_count": details["notes_count"],
                 "amount": amount,
                 "closed_at": datetime.fromtimestamp(closed_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
-                "ai_recommendation": ai_analyzer.analyze_closed_deal({
-                    **details, "manager": manager_name, "amount": amount
-                }),
+                "ai_recommendation": ai_rec,
             }
             sheets.log_closed_deal(deal_data)
             processed += 1
