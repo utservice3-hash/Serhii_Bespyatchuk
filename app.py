@@ -577,9 +577,11 @@ def _send_daily_plan_report() -> None:
         w = mgr_won.get(uid, 0); wc = mgr_wc.get(uid, 0)
         p = mgr_pay.get(uid, 0); pc = mgr_pc.get(uid, 0)
         tc = mgr_trucks.get(uid, 0)
+        avg = int(total / tc) if tc else 0
+        avg_str = f"  ∅ {avg:,} грн" if avg else ""
         p_fact = prev_mgr.get(str(uid), {}).get("fact", 0)
         p_trucks = prev_mgr.get(str(uid), {}).get("trucks", 0)
-        line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})  🚛 {tc} маш."
+        line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})  🚛 {tc} маш.{avg_str}"
         if w: line += f"\n     ✓ Успішно реалізовано: {w:,} грн / {wc} маш."
         if p: line += f"\n     ⏳ Оплата отримана: {p:,} грн / {pc} маш."
         if prev_mgr:
