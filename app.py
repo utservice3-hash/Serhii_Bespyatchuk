@@ -578,7 +578,7 @@ def _send_daily_plan_report() -> None:
         p = mgr_pay.get(uid, 0); pc = mgr_pc.get(uid, 0)
         tc = mgr_trucks.get(uid, 0)
         avg = int(total / tc) if tc else 0
-        avg_str = f"  ∅ {avg:,} грн" if avg else ""
+        avg_str = f"  ср. чек {avg:,} грн" if avg else ""
         p_fact = prev_mgr.get(str(uid), {}).get("fact", 0)
         p_trucks = prev_mgr.get(str(uid), {}).get("trucks", 0)
         line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})  🚛 {tc} маш.{avg_str}"
