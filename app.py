@@ -303,14 +303,22 @@ def _send_daily_plan_report() -> None:
     won_leads = fetch_leads(WON_STATUS_ID)
     pay_leads = fetch_leads(69716460, date_filter=False)
 
+    def deal_amount(lead: dict) -> int:
+        """Повертає суму з урахуванням знаку: МІНУС в назві = від'ємна."""
+        name = (lead.get("name") or "").upper()
+        if "ФІКТИВНИЙ" in name:
+            return 0
+        amt = lead.get("price", 0) or 0
+        return -amt if "МІНУС" in name else amt
+
     mgr_won: dict[int, int] = {}; mgr_wc: dict[int, int] = {}
     mgr_pay: dict[int, int] = {}; mgr_pc: dict[int, int] = {}
     for l in won_leads:
-        uid = l.get("responsible_user_id", 0); amt = l.get("price", 0) or 0
+        uid = l.get("responsible_user_id", 0); amt = deal_amount(l)
         mgr_won[uid] = mgr_won.get(uid, 0) + amt
         mgr_wc[uid] = mgr_wc.get(uid, 0) + 1
     for l in pay_leads:
-        uid = l.get("responsible_user_id", 0); amt = l.get("price", 0) or 0
+        uid = l.get("responsible_user_id", 0); amt = deal_amount(l)
         mgr_pay[uid] = mgr_pay.get(uid, 0) + amt
         mgr_pc[uid] = mgr_pc.get(uid, 0) + 1
 
