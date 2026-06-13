@@ -122,7 +122,7 @@ def get_lead_details(lead_id: int) -> dict:
         )
         if resp.ok:
             notes = resp.json().get("_embedded", {}).get("notes", [])
-            calls = [n for n in notes if n.get("note_type") in (10, 11)]
+            calls = [n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")]
             result["notes_count"] = len(notes)
             result["calls_count"] = len(calls)
     except Exception as e:

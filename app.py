@@ -278,7 +278,7 @@ def webhook():
 
     # ── Call note (Ringostat) ──────────────────────────────────────
     note = _parse_note(data)
-    if note and note["note_type"] in ("10", "11"):
+    if note and note["note_type"] in ("10", "11", "call_in", "call_out"):
         _handle_call(note)
         return jsonify({"ok": True})
 
