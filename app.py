@@ -1193,6 +1193,9 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
     )
     if _is_working_hours():
         notifier.send_to_rpk(msg)
+        # Якщо менеджер з РНК команди — дублюємо і в РНК
+        if MANAGER_TEAM.get(responsible_id, "") in RNK_TEAMS:
+            notifier.send_to_rnk(msg)
     sheets.append_transfer(lead_id, lead_name, manager_name, now, manager_id=responsible_id)
     logger.info("New lead: %s → %s", lead_id, manager_name)
 
