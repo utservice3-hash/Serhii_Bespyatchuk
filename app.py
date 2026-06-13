@@ -942,7 +942,7 @@ def _send_rnk_ai_report() -> None:
         "Безпам'ятний": ("@Andry_UTS", notifier.send_to_rnk),
     }
     for team, (tl_tag, send_fn) in TL_TAGS.items():
-        deals = sheets.get_today_closed_deals(team)
+        deals = sheets.get_today_closed_deals(team, cutoff_hour_utc=14)
         if not deals:
             continue
 

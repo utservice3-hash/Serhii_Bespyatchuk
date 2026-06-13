@@ -216,16 +216,21 @@ def log_closed_deal(deal: dict) -> None:
         logger.error("sheets log_closed_deal: %s", e)
 
 
-def get_today_closed_deals(team: str) -> list[dict]:
-    """Повертає всі відмови команди за сьогодні з вкладки команди."""
+def get_today_closed_deals(team: str, cutoff_hour_utc: int = 14) -> list[dict]:
+    """Повертає відмови команди з 00:00 до cutoff_hour_utc UTC поточного дня."""
     from datetime import datetime, timezone
     ws = _get_or_create_worksheet(_team_sheet_name(team), rows=2000, cols=13)
     if not ws:
         return []
     try:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = datetime.now(timezone.utc)
+        day_start = now.strftime("%Y-%m-%d") + " 00:00"
+        cutoff = now.replace(hour=cutoff_hour_utc, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
         records = ws.get_all_records()
-        return [r for r in records if str(r.get("Дата", "")).startswith(today)]
+        return [
+            r for r in records
+            if day_start <= str(r.get("Дата", "")) < cutoff
+        ]
     except Exception as e:
         logger.error("sheets get_today_closed_deals: %s", e)
         return []
