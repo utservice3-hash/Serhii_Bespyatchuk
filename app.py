@@ -361,12 +361,13 @@ def _check_plan_completion(responsible_id: int) -> None:
 
     month_start_ts = int(datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
 
-    def fetch_all(status_id: int) -> list:
+    def fetch_all(status_id: int, date_filter: bool = True) -> list:
         all_leads = []
         for page in range(1, 20):
             batch = kommo.get_pipeline_leads(
                 PEREVOZY_PIPELINE_ID, status_id=status_id, page=page,
-                with_custom_fields=True, closed_at_from=month_start_ts
+                with_custom_fields=True,
+                closed_at_from=month_start_ts if date_filter else None
             ) or []
             all_leads.extend(batch)
             if len(batch) < 250:
@@ -374,8 +375,8 @@ def _check_plan_completion(responsible_id: int) -> None:
         return all_leads
 
     try:
-        won = fetch_all(WON_STATUS_ID)
-        pay = fetch_all(69716460)
+        won = fetch_all(WON_STATUS_ID, date_filter=True)
+        pay = fetch_all(69716460, date_filter=False)
 
         def deal_amount(lead: dict) -> int:
             if kommo.is_fictive_deal(lead):
@@ -491,20 +492,23 @@ def _send_daily_plan_report() -> None:
     tempo_pct = day_of_month / days_in_month
     month_start = int(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
 
-    def fetch_all_leads(status_id: int) -> list:
+    def fetch_all_leads(status_id: int, date_filter: bool = True) -> list:
         all_leads = []
         for page in range(1, 20):
             batch = kommo.get_pipeline_leads(
                 PEREVOZY_PIPELINE_ID, status_id=status_id, page=page,
-                with_custom_fields=True, closed_at_from=month_start
+                with_custom_fields=True,
+                closed_at_from=month_start if date_filter else None
             ) or []
             all_leads.extend(batch)
             if len(batch) < 250:
                 break
         return all_leads
 
-    won_leads = fetch_all_leads(WON_STATUS_ID)
-    pay_leads = fetch_all_leads(69716460)
+    # WON — тільки угоди закриті в поточному місяці
+    # Оплата отримана — всі угоди в цьому етапі (без фільтру по даті)
+    won_leads = fetch_all_leads(WON_STATUS_ID, date_filter=True)
+    pay_leads = fetch_all_leads(69716460, date_filter=False)
 
     def deal_amount(lead: dict) -> int:
         """Повертає суму з урахуванням знаку. Фіктивні = 0, мінусові = від'ємна."""
