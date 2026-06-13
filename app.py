@@ -1249,12 +1249,24 @@ def daily():
 @app.route("/send-plan-report", methods=["GET"])
 def send_plan_report():
     """Manually trigger daily plan report."""
+    import traceback
+    log_lines = []
+    original_info = logger.info
+
+    def capture_info(msg, *args):
+        log_lines.append(msg % args if args else msg)
+        original_info(msg, *args)
+
+    logger.info = capture_info
     try:
         _send_daily_plan_report()
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "log": log_lines})
     except Exception as e:
+        tb = traceback.format_exc()
         logger.error("send_plan_report: %s", e)
-        return jsonify({"ok": False, "error": str(e)})
+        return jsonify({"ok": False, "error": str(e), "traceback": tb, "log": log_lines})
+    finally:
+        logger.info = original_info
 
 
 if __name__ == "__main__":
