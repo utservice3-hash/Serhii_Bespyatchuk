@@ -148,11 +148,39 @@ def _check_overdue_leads():
         logger.info("Reminder #%d sent for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
 
+def _scan_unassigned_leads():
+    """Scans Kommo API for unassigned leads in Кваліфікація and adds new ones to queue."""
+    now = datetime.now(timezone.utc)
+    for status_id, status_name in UNASSIGNED_STATUSES.items():
+        try:
+            leads = kommo.get_pipeline_leads(QUAL_PIPELINE_ID, status_id=status_id)
+            for lead in leads:
+                lid = lead.get("id")
+                uid = lead.get("responsible_user_id", 0)
+                if not lid or (uid and uid != ADMIN_USER_ID):
+                    continue
+                if lid in unassigned:
+                    continue
+                lead_name = lead.get("name", f"Лід #{lid}")
+                unassigned[lid] = {
+                    "arrived_at": now,
+                    "status_name": status_name,
+                    "lead_name": lead_name,
+                    "last_reminded_count": 0,
+                }
+                logger.info("Scan found unassigned lead %s in %s", lid, status_name)
+        except Exception as e:
+            logger.error("_scan_unassigned_leads: %s", e)
+
+
 def _check_unassigned_leads():
-    """Runs every 15 min — reminds about unassigned leads in Кваліфікація."""
+    """Runs every 15 min — scans CRM for unassigned leads, then sends reminders."""
     if not _is_working_hours():
         return
 
+    _scan_unassigned_leads()
+
+    now = datetime.now(timezone.utc)
     for lead_id, info in list(unassigned.items()):
         age_min = (now - info["arrived_at"]).total_seconds() / 60
         if age_min < 15:
