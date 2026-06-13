@@ -128,6 +128,20 @@ MANAGER_TEAM: dict[int, str] = {
     7181916: "Тендерний",
 }
 
+# РНК — Михальчевська, Безпам'ятний
+# РПК — Яцик, Дмитрук, Шаврова, Тендерний
+RNK_TEAMS = {"Михальчевська", "Безпам'ятний"}
+RPK_TEAMS = {"Яцик", "Дмитрук", "Шаврова", "Тендерний"}
+
+
+def send_to_team_group(manager_id: int, text: str) -> bool:
+    """Відправляє сповіщення в правильну групу (РНК або РПК) залежно від команди менеджера."""
+    team = MANAGER_TEAM.get(manager_id, "")
+    if team in RNK_TEAMS:
+        return notifier.send_to_rnk(text)
+    else:
+        return notifier.send_to_rpk(text)
+
 # In-memory: список успішних угод поточного місяця
 # {lead_id, manager_id, amount, closed_at}
 _won_log: list[dict] = []
@@ -453,7 +467,7 @@ def _check_plan_completion(responsible_id: int) -> None:
             f"{footer}"
             f"{sup_line}"
         )
-        notifier.send_to_rnk(msg)
+        send_to_team_group(responsible_id, msg)
         logger.info("Plan completion congrats sent for manager %s (%s)", responsible_id, manager_name)
     except Exception as e:
         logger.error("_check_plan_completion(%s): %s", responsible_id, e)
@@ -494,7 +508,7 @@ def _handle_big_deal_notification(lead_id: int, responsible_id: int, amount: int
         f"💰 <b>{amount:,} грн</b>\n\n"
         f"{phrase}"
     )
-    notifier.send_to_rnk(msg)
+    send_to_team_group(responsible_id, msg)
     logger.info("Big deal notification: lead %s amount %d by %s", lead_id, amount, manager_name)
 
 
@@ -820,6 +834,7 @@ def _scan_unassigned_leads():
                     f"🔗 <a href='{kommo_url}'>Відкрити лід #{lid}</a>"
                 )
                 notifier.send_to_rnk(msg)
+                notifier.send_to_rpk(msg)
                 logger.info("Scan found unassigned lead %s in %s", lid, status_name)
         except Exception as e:
             logger.error("_scan_unassigned_leads: %s", e)
@@ -853,6 +868,7 @@ def _check_unassigned_leads():
                 f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
             )
             notifier.send_to_rnk(msg)
+            notifier.send_to_rpk(msg)
             unassigned[lead_id]["last_reminded_count"] = 99
             logger.info("Escalation for lead %s (%.0f min)", lead_id, age_min)
             continue
@@ -874,6 +890,7 @@ def _check_unassigned_leads():
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
         notifier.send_to_rnk(msg)
+        notifier.send_to_rpk(msg)
         unassigned[lead_id]["last_reminded_count"] = reminder_count
         logger.info("Unassigned reminder #%d for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
@@ -1028,7 +1045,7 @@ def webhook():
             f"⏱ Час очікування: <b>{waited_min} хв</b>\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
-        notifier.send_to_rnk(msg)
+        send_to_team_group(responsible_id, msg)
         logger.info("Lead %s assigned to %s after %d min", lead_id, manager_name, waited_min)
 
     if pipeline_id == PEREVOZY_PIPELINE_ID:
@@ -1094,6 +1111,7 @@ def _handle_unassigned(lead_id: int, status_id: int):
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     notifier.send_to_rnk(msg)
+    notifier.send_to_rpk(msg)
 
     unassigned[lead_id] = {
         "arrived_at": now,
@@ -1131,7 +1149,7 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
         f"{activity}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
-    notifier.send_to_rnk(msg)
+    send_to_team_group(responsible_id, msg)
     logger.info("Closed not realized: lead %s by %s", lead_id, manager_name)
 
 
@@ -1147,8 +1165,8 @@ def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):
         f"🏷 Назва: {lead_name}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
-    notifier.send_to_rnk(msg)
-    logger.info("RNK event: %s lead %s by %s", label, lead_id, manager_name)
+    send_to_team_group(responsible_id, msg)
+    logger.info("Team event: %s lead %s by %s", label, lead_id, manager_name)
 
 
 def _handle_new_lead(lead_id: int, responsible_id: int):
