@@ -102,15 +102,19 @@ SUPERVISOR_MAP = {
 }
 
 
+def _is_working_hours() -> bool:
+    """Пн–Пт, 09:00–18:30 за Києвом (UTC+3)."""
+    now_kyiv = datetime.now(timezone.utc) + timedelta(hours=3)
+    if now_kyiv.weekday() >= 5:  # субота=5, неділя=6
+        return False
+    h, m = now_kyiv.hour, now_kyiv.minute
+    return (h > 9 or (h == 9 and m >= 0)) and (h < 18 or (h == 18 and m <= 30))
+
+
 def _check_overdue_leads():
     """Runs every 5 min — reminds about leads not called within 20 min, then every 20 min until taken.
-    Only sends between 09:00 and 18:30 Kyiv time (UTC+3)."""
-    now = datetime.now(timezone.utc)
-    kyiv_hour = (now + timedelta(hours=3)).hour
-    kyiv_minute = (now + timedelta(hours=3)).minute
-    in_working_hours = (kyiv_hour > 9 or (kyiv_hour == 9 and kyiv_minute >= 0)) and \
-                       (kyiv_hour < 18 or (kyiv_hour == 18 and kyiv_minute <= 30))
-    if not in_working_hours:
+    Only sends between 09:00 and 18:30 Kyiv time, Mon–Fri."""
+    if not _is_working_hours():
         return
 
     for lead_id, info in list(pending.items()):
@@ -145,12 +149,7 @@ def _check_overdue_leads():
 
 def _check_unassigned_leads():
     """Runs every 15 min — reminds about unassigned leads in Кваліфікація."""
-    now = datetime.now(timezone.utc)
-    kyiv_hour = (now + timedelta(hours=3)).hour
-    kyiv_minute = (now + timedelta(hours=3)).minute
-    in_working_hours = (kyiv_hour > 9 or (kyiv_hour == 9 and kyiv_minute >= 0)) and \
-                       (kyiv_hour < 18 or (kyiv_hour == 18 and kyiv_minute <= 30))
-    if not in_working_hours:
+    if not _is_working_hours():
         return
 
     for lead_id, info in list(unassigned.items()):
@@ -450,7 +449,8 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
         f"🏷 Назва: {lead_name}{source_line}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
-    notifier.send_message(msg, with_stats_buttons=True)
+    if _is_working_hours():
+        notifier.send_message(msg, with_stats_buttons=True)
     sheets.append_transfer(lead_id, lead_name, manager_name, now, manager_id=responsible_id)
     logger.info("New lead: %s → %s", lead_id, manager_name)
 
@@ -470,16 +470,9 @@ def _handle_taken(lead_id: int, responsible_id: int):
             f"🏷 Назва: {lead_name}\n"
             f"⏱ Час реакції: <b>{delta_min:.0f} хв</b>"
         )
-    else:
-        lead = kommo.get_lead(lead_id)
-        lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
-        msg = (
-            f"✅ <b>Лід взятий у роботу</b>\n"
-            f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
-            f"🏷 Назва: {lead_name}"
-        )
+        if _is_working_hours():
+            notifier.send_message(msg)
 
-    notifier.send_message(msg)
     sheets.update_taken(lead_id, now)
     logger.info("Taken to work: lead %s by %s", lead_id, manager_name)
 
@@ -506,16 +499,8 @@ def _handle_call(note: dict):
         )
         sheets.update_first_call(lead_id, now)
         pending.pop(lead_id, None)
-    else:
-        lead = kommo.get_lead(lead_id)
-        lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
-        msg = (
-            f"📞 <b>Дзвінок ({call_type})</b>\n"
-            f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
-            f"🏷 Назва: {lead_name}"
-        )
-
-    notifier.send_message(msg)
+        if _is_working_hours():
+            notifier.send_message(msg)
     logger.info("Call note: lead %s type %s by %s", lead_id, note_type, manager_name)
 
 
