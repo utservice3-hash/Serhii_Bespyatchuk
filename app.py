@@ -1270,6 +1270,20 @@ def daily():
     return jsonify({"ok": sent, "pending": len(pending)})
 
 
+@app.route("/test-plan-thread", methods=["GET"])
+def test_plan_thread():
+    """Send a test message to plan thread to verify bot access."""
+    import requests as req
+    tg_token = os.getenv("TG_TOKEN", "")
+    tg_chat = os.getenv("TG_CHAT_ID", "")
+    r = req.post(
+        f"https://api.telegram.org/bot{tg_token}/sendMessage",
+        json={"chat_id": tg_chat, "text": "✅ Тест гілки плану", "message_thread_id": TG_PLAN_THREAD_ID},
+        timeout=10,
+    )
+    return jsonify({"tg_chat": tg_chat, "thread": TG_PLAN_THREAD_ID, "response": r.json()})
+
+
 @app.route("/send-plan-report", methods=["GET"])
 def send_plan_report():
     """Manually trigger daily plan report."""
