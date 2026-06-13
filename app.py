@@ -320,10 +320,17 @@ def _send_daily_plan_report() -> None:
         pct = int(fact / plan * 100) if plan else 0
         lines.append(f"  {name}{tag}: {fact:,} грн" + (f" ({pct}%)" if plan else ""))
 
+    # Оплата отримана — очікують перенесення в успіх
+    payment_leads = kommo.get_pipeline_leads(PEREVOZY_PIPELINE_ID, status_id=69716460)
+    payment_count = len(payment_leads)
+    payment_sum = sum(l.get("price", 0) or 0 for l in payment_leads)
+
     lines.append(
         f"\n💰 За сьогодні: <b>+{today_total:,} грн</b>\n"
         f"📈 Місяць загалом: <b>{month_total:,} / {total_plan:,} грн</b> "
-        f"({int(month_total / total_plan * 100) if total_plan else 0}%)"
+        f"({int(month_total / total_plan * 100) if total_plan else 0}%)\n\n"
+        f"⏳ <b>Оплата отримана</b> (очікують успіх): "
+        f"<b>{payment_count} угод / {payment_sum:,} грн</b>"
     )
 
     _send_plan_message("\n".join(lines))
