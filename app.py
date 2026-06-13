@@ -103,6 +103,10 @@ MANAGER_TEAM: dict[int, str] = {
 # {lead_id, manager_id, amount, closed_at}
 _won_log: list[dict] = []
 
+# Менеджери, яких вже привітали з виконанням плану цього місяця
+_plan_congrats_sent: set[int] = set()
+_plan_congrats_month: int = datetime.now(timezone.utc).month
+
 # Етапи з нерозібраними заявками (без відповідального)
 UNASSIGNED_STATUSES = {
     69693648: "Неразобранное",
@@ -276,11 +280,86 @@ def _build_progress_bar(fact: int, plan: int) -> str:
     return f"{bar}  {int(pct * 100)}%"
 
 
+def _check_plan_completion(responsible_id: int) -> None:
+    """Перевіряє чи менеджер виконав план місяця. Якщо так — привітання в РНК."""
+    global _plan_congrats_month, _plan_congrats_sent
+
+    plan = MANAGER_PLANS.get(responsible_id, 0)
+    if not plan:
+        return
+
+    # Скидаємо лічильник на початку нового місяця
+    current_month = datetime.now(timezone.utc).month
+    if current_month != _plan_congrats_month:
+        _plan_congrats_sent = set()
+        _plan_congrats_month = current_month
+
+    if responsible_id in _plan_congrats_sent:
+        return
+
+    # Рахуємо факт місяця з Kommo API
+    def fetch_all(status_id: int) -> list:
+        all_leads = []
+        for page in range(1, 20):
+            batch = kommo.get_pipeline_leads(
+                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page, with_custom_fields=True
+            ) or []
+            all_leads.extend(batch)
+            if len(batch) < 250:
+                break
+        return all_leads
+
+    try:
+        won = fetch_all(WON_STATUS_ID)
+        pay = fetch_all(69716460)
+
+        def deal_amount(lead: dict) -> int:
+            if kommo.is_fictive_deal(lead):
+                return 0
+            amt = lead.get("price", 0) or 0
+            return -amt if kommo.is_minus_deal(lead) else amt
+
+        total = 0
+        for lead in won + pay:
+            if lead.get("responsible_user_id") == responsible_id:
+                total += deal_amount(lead)
+
+        logger.info("Plan check for %s: fact=%d plan=%d", responsible_id, total, plan)
+
+        if total < plan:
+            return
+
+        _plan_congrats_sent.add(responsible_id)
+
+        manager_name = kommo.get_user_name(responsible_id)
+        manager_tag = notifier.get_manager_tag(responsible_id).strip(" ()")
+        supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+        team = MANAGER_TEAM.get(responsible_id, "")
+        pct = int(total / plan * 100)
+
+        tag_line = f"{manager_tag}" if manager_tag else manager_name
+        sup_line = f"\n👏 {supervisor_tag}" if supervisor_tag else ""
+
+        msg = (
+            f"🎉 <b>ПЛАН ВИКОНАНО!</b>\n"
+            f"👤 Менеджер: <b>{manager_name}</b> {manager_tag}\n"
+            f"🏆 Факт: <b>{total:,} грн</b> ({pct}% плану)\n"
+            f"🎯 План: {plan:,} грн\n"
+            f"🏢 Команда: {team}{sup_line}"
+        )
+        notifier.send_to_rnk(msg)
+        logger.info("Plan completion congrats sent for manager %s (%s)", responsible_id, manager_name)
+    except Exception as e:
+        logger.error("_check_plan_completion(%s): %s", responsible_id, e)
+
+
 def _handle_won_deal(lead_id: int, responsible_id: int, amount: int) -> None:
     now = datetime.now(timezone.utc)
     _won_log.append({"lead_id": lead_id, "manager_id": responsible_id,
                      "amount": amount, "closed_at": now})
     logger.info("Won deal logged: lead %s by manager %s amount %d", lead_id, responsible_id, amount)
+    if responsible_id in MANAGER_PLANS:
+        _check_plan_completion(responsible_id)
 
 
 def _send_daily_plan_report() -> None:
@@ -612,6 +691,9 @@ def webhook():
             lead = kommo.get_lead(lead_id)
             amount = int(lead.get("price", 0)) if lead else 0
             _handle_won_deal(lead_id, responsible_id, amount)
+        elif status_id == 69716460:  # Оплата отримана
+            if responsible_id in MANAGER_PLANS:
+                _check_plan_completion(responsible_id)
         return jsonify({"ok": True})
 
     if pipeline_id != QUAL_PIPELINE_ID:
