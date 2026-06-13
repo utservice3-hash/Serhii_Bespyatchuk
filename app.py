@@ -191,7 +191,8 @@ def _scan_unassigned_leads():
 
 
 def _check_unassigned_leads():
-    """Runs every 15 min — scans CRM for unassigned leads, then sends reminders."""
+    """Runs every 15 min — scans CRM for unassigned leads, then sends reminders.
+    Schedule: notify at 15, 30 min → escalate at 45 min → stop."""
     if not _is_unassigned_hours():
         return
 
@@ -203,14 +204,32 @@ def _check_unassigned_leads():
 
     for lead_id, info in list(unassigned.items()):
         age_min = (now - info["arrived_at"]).total_seconds() / 60
-        if age_min < 15:
+        last = info.get("last_reminded_count", 0)
+        kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+
+        # Ескалація на 45 хв (одноразово, позначається як count=99)
+        if age_min >= 45 and last < 99:
+            msg = (
+                f"🔴 <b>Заявка не опрацьована більше 45 хв!</b>\n"
+                f"🏷 Назва: {info['lead_name']}\n"
+                f"📍 Етап: {info['status_name']}\n"
+                f"⏱ Очікує: <b>{age_min:.0f} хв</b>\n"
+                f"👥 {ALL_SUPERVISORS}\n"
+                f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+            )
+            notifier.send_to_rnk(msg)
+            unassigned[lead_id]["last_reminded_count"] = 99
+            logger.info("Escalation for lead %s (%.0f min)", lead_id, age_min)
+            continue
+
+        # Нагадування на 15 і 30 хв (максимум 2 рази)
+        if age_min < 15 or last >= 2 or last >= 99:
             continue
 
         reminder_count = int(age_min // 15)
-        if reminder_count <= info.get("last_reminded_count", 0):
+        if reminder_count <= last:
             continue
 
-        kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
         msg = (
             f"📬 <b>Нерозібрана заявка!</b>\n"
             f"🏷 Назва: {info['lead_name']}\n"
@@ -221,7 +240,7 @@ def _check_unassigned_leads():
         )
         notifier.send_to_rnk(msg)
         unassigned[lead_id]["last_reminded_count"] = reminder_count
-        logger.info("Unassigned reminder for lead %s (%.0f min)", lead_id, age_min)
+        logger.info("Unassigned reminder #%d for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
 
 def _write_daily_snapshot():
@@ -357,10 +376,23 @@ def webhook():
     pipeline_id = int(item.get("pipeline_id", 0))
     responsible_id = int(item.get("responsible_user_id", 0))
 
-    # Нерозібрані заявки — лід отримав реального відповідального → прибираємо з черги
+    # Нерозібрані заявки — лід отримав реального відповідального → сповістити і прибрати з черги
     if lead_id in unassigned and responsible_id and responsible_id != ADMIN_USER_ID:
-        unassigned.pop(lead_id, None)
-        logger.info("Lead %s assigned — removed from unassigned queue", lead_id)
+        info = unassigned.pop(lead_id, {})
+        manager_name = kommo.get_user_name(responsible_id)
+        tg_tag = notifier.get_manager_tag(responsible_id)
+        waited_min = int((datetime.now(timezone.utc) - info["arrived_at"]).total_seconds() / 60) if info.get("arrived_at") else 0
+        kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+        msg = (
+            f"✅ <b>Заявку взято в роботу</b>\n"
+            f"🏷 Назва: {info.get('lead_name', f'Лід #{lead_id}')}\n"
+            f"📍 Етап: {info.get('status_name', '—')}\n"
+            f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
+            f"⏱ Час очікування: <b>{waited_min} хв</b>\n"
+            f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+        )
+        notifier.send_to_rnk(msg)
+        logger.info("Lead %s assigned to %s after %d min", lead_id, manager_name, waited_min)
 
     if pipeline_id == PEREVOZY_PIPELINE_ID:
         if status_id == CLOSED_NOT_REALIZED and responsible_id in DARINA_ANDRIY_TEAMS:
