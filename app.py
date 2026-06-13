@@ -295,21 +295,44 @@ def _check_overdue_leads():
 
 
 def _send_plan_message(text: str) -> None:
-    """Send message to plan thread."""
+    """Send message to plan thread. Splits if over Telegram 4096 char limit."""
     import requests as req
     tg_token = os.getenv("TG_TOKEN", "")
     tg_chat = os.getenv("TG_CHAT_ID", "")
     if not tg_token or not tg_chat:
+        logger.error("_send_plan_message: TG_TOKEN or TG_CHAT_ID not set")
         return
-    try:
-        req.post(
-            f"https://api.telegram.org/bot{tg_token}/sendMessage",
-            json={"chat_id": tg_chat, "text": text, "parse_mode": "HTML",
-                  "message_thread_id": TG_PLAN_THREAD_ID,
-                  "disable_web_page_preview": True},
-            timeout=10,
-        )
-    except Exception as e:
+
+    chunks = []
+    if len(text) <= 4000:
+        chunks = [text]
+    else:
+        # Розбиваємо по рядках, зберігаємо цілісність блоків
+        lines = text.split("\n")
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 4000:
+                chunks.append(chunk)
+                chunk = line
+            else:
+                chunk += ("\n" if chunk else "") + line
+        if chunk:
+            chunks.append(chunk)
+
+    for chunk in chunks:
+        try:
+            r = req.post(
+                f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                json={"chat_id": tg_chat, "text": chunk, "parse_mode": "HTML",
+                      "message_thread_id": TG_PLAN_THREAD_ID,
+                      "disable_web_page_preview": True},
+                timeout=15,
+            )
+            data = r.json()
+            if not data.get("ok"):
+                logger.error("_send_plan_message TG error: %s", data.get("description"))
+        except Exception as e:
+            logger.error("_send_plan_message: %s", e)
         logger.error("_send_plan_message: %s", e)
 
 
