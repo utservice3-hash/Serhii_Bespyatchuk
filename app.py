@@ -499,6 +499,98 @@ def _send_daily_plan_report() -> None:
     logger.info("Daily plan report sent")
 
 
+def _send_month_end_report() -> None:
+    """Щогодинний звіт в останній день місяця — тільки факт/план по Успішно реалізовано."""
+    import calendar
+    now = datetime.now(timezone.utc)
+    kyiv_now = now + timedelta(hours=3)
+
+    # Запускаємо тільки в останній день місяця, з 9:00 до 21:00 Київ
+    last_day = calendar.monthrange(kyiv_now.year, kyiv_now.month)[1]
+    if kyiv_now.day != last_day:
+        return
+    if not (9 <= kyiv_now.hour <= 21):
+        return
+
+    def fetch_all(status_id: int) -> list:
+        all_leads = []
+        for page in range(1, 20):
+            batch = kommo.get_pipeline_leads(
+                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page, with_custom_fields=True
+            ) or []
+            all_leads.extend(batch)
+            if len(batch) < 250:
+                break
+        return all_leads
+
+    def deal_amount(lead: dict) -> int:
+        if kommo.is_fictive_deal(lead):
+            return 0
+        amt = lead.get("price", 0) or 0
+        return -amt if kommo.is_minus_deal(lead) else amt
+
+    won_leads = fetch_all(WON_STATUS_ID)
+
+    mgr_fact: dict[int, int] = {}
+    mgr_trucks: dict[int, int] = {}
+    for l in won_leads:
+        uid = l.get("responsible_user_id", 0)
+        amt = deal_amount(l)
+        mgr_fact[uid] = mgr_fact.get(uid, 0) + amt
+        if amt != 0:
+            mgr_trucks[uid] = mgr_trucks.get(uid, 0) + 1
+
+    team_facts: dict[str, int] = {}
+    team_trucks: dict[str, int] = {}
+    for uid, amt in mgr_fact.items():
+        team = MANAGER_TEAM.get(uid)
+        if team:
+            team_facts[team] = team_facts.get(team, 0) + amt
+            team_trucks[team] = team_trucks.get(team, 0) + mgr_trucks.get(uid, 0)
+
+    total_fact = sum(v for uid, v in mgr_fact.items() if uid in MANAGER_TEAM)
+    total_plan = sum(TEAM_PLANS.values())
+    total_trucks = sum(v for uid, v in mgr_trucks.items() if uid in MANAGER_TEAM)
+    total_pct = int(total_fact / total_plan * 100) if total_plan else 0
+
+    lines = [
+        f"🏁 <b>ОСТАННІЙ ДЕНЬ МІСЯЦЯ — {kyiv_now.strftime('%d.%m.%Y')}</b>",
+        f"🕐 Оновлення: {kyiv_now.strftime('%H:%M')}\n",
+        f"<i>Тільки Успішно реалізовано</i>\n",
+        "👥 <b>По командах:</b>",
+    ]
+
+    for team, plan in TEAM_PLANS.items():
+        fact = team_facts.get(team, 0)
+        trucks = team_trucks.get(team, 0)
+        pct = int(fact / plan * 100) if plan else 0
+        gap = plan - fact
+        gap_line = f" (ще {gap:,} грн)" if gap > 0 else " ✅ план виконано!"
+        lines.append(f"  {'✅' if fact >= plan else '🔴'} <b>{team}</b>: {fact:,} / {plan:,} грн ({pct}%){gap_line}  🚛 {trucks} маш.")
+
+    lines.append("\n👤 <b>По менеджерах:</b>")
+    for uid, fact in sorted(mgr_fact.items(), key=lambda x: x[1], reverse=True):
+        if uid not in MANAGER_TEAM:
+            continue
+        plan = MANAGER_PLANS.get(uid, 0)
+        name = kommo.get_user_name(uid)
+        trucks = mgr_trucks.get(uid, 0)
+        pct = int(fact / plan * 100) if plan else 0
+        done = "✅" if fact >= plan else "🔴"
+        gap = plan - fact
+        gap_str = f"+{abs(gap):,}" if fact >= plan else f"-{gap:,}"
+        lines.append(f"  {done} {name}: <b>{fact:,} грн</b> ({pct}%)  {gap_str} грн  🚛 {trucks} маш.")
+
+    lines.append(
+        f"\n📈 <b>Загальний факт: {total_fact:,} / {total_plan:,} грн ({total_pct}%)</b>\n"
+        f"🚛 <b>Машин відправлено: {total_trucks}</b>\n"
+        f"📊 {_build_progress_bar(total_fact, total_plan)}"
+    )
+
+    _send_plan_message("\n".join(lines))
+    logger.info("Month-end hourly report sent at %s", kyiv_now.strftime("%H:%M"))
+
+
 def _scan_unassigned_leads():
     """Scans Kommo API for unassigned leads in Кваліфікація and adds new ones to queue."""
     now = datetime.now(timezone.utc)
@@ -607,7 +699,8 @@ scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
 scheduler.add_job(_check_unassigned_leads, "interval", minutes=15)
 scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
-scheduler.add_job(_send_daily_plan_report, "cron", hour=15, minute=0)  # 18:00 Kyiv = 15:00 UTC
+scheduler.add_job(_send_daily_plan_report, "cron", hour=15, minute=0)   # 18:00 Kyiv = 15:00 UTC
+scheduler.add_job(_send_month_end_report, "interval", hours=1)           # останній день місяця — щогодини
 scheduler.start()
 sheets.ensure_headers()
 
