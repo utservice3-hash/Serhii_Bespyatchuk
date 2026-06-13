@@ -464,18 +464,7 @@ def _handle_taken(lead_id: int, responsible_id: int):
     tg_tag = notifier.get_manager_tag(responsible_id)
 
     if info:
-        delta_min = (now - info["transferred_at"]).total_seconds() / 60
-        lead_name = info["lead_name"]
-        msg = (
-            f"✅ <b>Лід взятий у роботу</b>\n"
-            f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
-            f"🏷 Назва: {lead_name}\n"
-            f"⏱ Час реакції: <b>{delta_min:.0f} хв</b>"
-        )
-        if _is_working_hours():
-            notifier.send_message(msg)
-
-    sheets.update_taken(lead_id, now)
+        sheets.update_taken(lead_id, now)
     logger.info("Taken to work: lead %s by %s", lead_id, manager_name)
 
 
@@ -491,18 +480,8 @@ def _handle_call(note: dict):
     call_type = "вхідний" if note_type == "10" else "вихідний"
 
     if info:
-        delta_min = (now - info["transferred_at"]).total_seconds() / 60
-        lead_name = info["lead_name"]
-        msg = (
-            f"📞 <b>Перший дзвінок ({call_type})</b>\n"
-            f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
-            f"🏷 Назва: {lead_name}\n"
-            f"⏱ Від передачі: <b>{delta_min:.0f} хв</b>"
-        )
         sheets.update_first_call(lead_id, now)
         pending.pop(lead_id, None)
-        if _is_working_hours():
-            notifier.send_message(msg)
     logger.info("Call note: lead %s type %s by %s", lead_id, note_type, manager_name)
 
 
