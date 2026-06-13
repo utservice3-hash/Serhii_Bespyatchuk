@@ -160,8 +160,10 @@ UNASSIGNED_STATUSES = {
 }
 ADMIN_USER_ID = 904923  # Admin — означає немає реального відповідального
 
-# Всі керівники для тегу в нерозібраних заявках
-ALL_SUPERVISORS = "@dmytro_yatsyk @Logist_dmytruk @Andry_UTS @darina_mx @lillly_aaa"
+# Тімліди РНК — для нерозібраних заявок (без відповідального)
+ALL_SUPERVISORS = "@Andry_UTS @darina_mx"
+# Всі тімліди (для інших сповіщень)
+ALL_SUPERVISORS_ALL = "@dmytro_yatsyk @Logist_dmytruk @Andry_UTS @darina_mx @lillly_aaa"
 
 # In-memory: lead_id -> {arrived_at, status_name, lead_name, last_reminded_count}
 unassigned: dict[int, dict] = {}
