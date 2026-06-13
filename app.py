@@ -464,7 +464,8 @@ def _send_daily_plan_report() -> None:
 
     lines = [
         f"📊 <b>Звіт по плану — {now.strftime('%d.%m.%Y')} ({day_of_month}-й день)</b>",
-        f"🎯 Місячний темп: <b>{int(tempo_pct * 100)}%</b> пройдено\n",
+        f"🎯 Місячний темп: <b>{int(tempo_pct * 100)}%</b> пройдено",
+        f"📌 ✅ в темпі  🟡 трохи відстає  🔴 критично відстає\n",
         "👥 <b>По командах:</b>",
     ]
     for team, plan in TEAM_PLANS.items():
