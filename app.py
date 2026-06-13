@@ -569,64 +569,86 @@ def _send_daily_plan_report() -> None:
         sign = "+" if d > 0 else ""
         return f"{sign}{d:,} {unit}"
 
+    # Тімліди команд {team: user_id}
+    TEAM_LEAD: dict[str, int] = {
+        "Безпам'ятний": 12644448,
+        "Михальчевська": 12782896,
+        "Дмитрук": 6062482,
+        "Шаврова": 12066792,
+        "Яцик": 3379102,
+        "Тендерний": 7181916,
+    }
+
     lines = [
         f"📊 <b>Звіт по плану — {now.strftime('%d.%m.%Y')} ({day_of_month}-й день)</b>",
         f"🎯 Місячний темп: <b>{int(tempo_pct * 100)}%</b> пройдено",
         f"📌 ✅ в темпі  🟡 трохи відстає  🔴 критично відстає\n",
-        "👥 <b>По командах:</b>",
     ]
-    for team, plan in TEAM_PLANS.items():
+
+    for team, team_plan in TEAM_PLANS.items():
         fact = team_facts.get(team, 0)
         trucks = team_trucks.get(team, 0)
         p_fact = prev_team.get(team, {}).get("fact", 0)
         p_trucks = prev_team.get(team, {}).get("trucks", 0)
         d_fact = fact - p_fact
         d_trucks = trucks - p_trucks
-        day_line = ""
+
+        # Заголовок команди
+        lines.append(f"👥 <b>Команда {TEAM_GENITIVE.get(team, team)}</b>  {tempo(fact, team_plan)}")
+        lines.append(f"   {_build_progress_bar(fact, team_plan)}  💰 {fact:,} / {team_plan:,} грн  🚛 {trucks} маш.")
         if prev_team:
             fact_part = f"+{d_fact:,} грн" if d_fact > 0 else ("без змін" if d_fact == 0 else f"{d_fact:,} грн")
-            truck_part = (f"  +{d_trucks} маш." if d_trucks > 0 else "") if d_trucks != 0 else ""
-            day_line = f"\n     📈 За день: {fact_part}{truck_part}"
-        lines.append(f"  {tempo(fact, plan)} {team}: {_build_progress_bar(fact, plan)}")
-        lines.append(f"     💰 {fact:,} / {plan:,} грн  🚛 {trucks} маш.{day_line}")
+            truck_part = f"  +{d_trucks} маш." if d_trucks > 0 else ""
+            lines.append(f"   📈 За день: {fact_part}{truck_part}")
 
-    lines.append("\n👤 <b>По менеджерах:</b>")
-    for uid, total in sorted(mgr_tot.items(), key=lambda x: x[1], reverse=True):
-        if uid not in MANAGER_TEAM:
-            continue
-        plan = MANAGER_PLANS.get(uid, 0)
-        name = kommo.get_user_name(uid)
-        pct = f"{int(total / plan * 100)}%" if plan else "—"
-        w = mgr_won.get(uid, 0); wc = mgr_wc.get(uid, 0)
-        p = mgr_pay.get(uid, 0); pc = mgr_pc.get(uid, 0)
-        tc = mgr_trucks.get(uid, 0)
-        avg = int(total / tc) if tc else 0
-        avg_str = f"  ср. чек {avg:,} грн" if avg else ""
-        p_fact = prev_mgr.get(str(uid), {}).get("fact", 0)
-        p_trucks = prev_mgr.get(str(uid), {}).get("trucks", 0)
-        line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})  🚛 {tc} маш.{avg_str}"
-        if w: line += f"\n     ✓ Успішно реалізовано: {w:,} грн / {wc} маш."
-        if p: line += f"\n     ⏳ Оплата отримана: {p:,} грн / {pc} маш."
-        if prev_mgr:
-            d_f = total - p_fact
-            d_t = tc - p_trucks
-            fact_part = f"+{d_f:,} грн" if d_f > 0 else ("без змін" if d_f == 0 else f"{d_f:,} грн")
-            truck_part = (f"  +{d_t} маш." if d_t > 0 else "") if d_t != 0 else ""
-            line += f"\n     📈 За день: {fact_part}{truck_part}"
-        lines.append(line)
+        # Менеджери команди — тімлід першим, решта за сумою
+        team_lead_id = TEAM_LEAD.get(team)
+        team_members = [(uid, mgr_tot.get(uid, 0)) for uid, t in MANAGER_TEAM.items() if t == team]
+        team_members.sort(key=lambda x: (0 if x[0] == team_lead_id else 1, -x[1]))
 
+        for i, (uid, total) in enumerate(team_members):
+            is_last = (i == len(team_members) - 1)
+            prefix = "   └" if is_last else "   ├"
+            mgr_plan = MANAGER_PLANS.get(uid, 0)
+            name = kommo.get_user_name(uid)
+            tl_mark = " <b>(TL)</b>" if uid == team_lead_id else ""
+            pct = f"{int(total / mgr_plan * 100)}%" if mgr_plan else "—"
+            w = mgr_won.get(uid, 0); wc = mgr_wc.get(uid, 0)
+            p = mgr_pay.get(uid, 0); pc = mgr_pc.get(uid, 0)
+            tc = mgr_trucks.get(uid, 0)
+            avg = int(total / tc) if tc else 0
+            avg_str = f"  ср. чек {avg:,} грн" if avg else ""
+            p_fact = prev_mgr.get(str(uid), {}).get("fact", 0)
+            p_trucks = prev_mgr.get(str(uid), {}).get("trucks", 0)
+
+            cont = "   │" if not is_last else "    "
+            line = f"{prefix} {tempo(total, mgr_plan)} {name}{tl_mark}: <b>{total:,} грн</b> ({pct})  🚛 {tc} маш.{avg_str}"
+            if w: line += f"\n{cont}    ✓ Успішно: {w:,} грн / {wc} маш."
+            if p: line += f"\n{cont}    ⏳ Оплата: {p:,} грн / {pc} маш."
+            if prev_mgr:
+                d_f = total - p_fact
+                d_t = tc - p_trucks
+                f_part = f"+{d_f:,} грн" if d_f > 0 else ("без змін" if d_f == 0 else f"{d_f:,} грн")
+                t_part = f"  +{d_t} маш." if d_t > 0 else ""
+                line += f"\n{cont}    📈 За день: {f_part}{t_part}"
+            lines.append(line)
+        lines.append("")
+
+    # Підсумок компанії
     d_total_fact = total_fact - prev_total_fact
     d_total_trucks = total_trucks - prev_total_trucks
     day_company = ""
     if prev_total_fact:
         f_part = f"+{d_total_fact:,} грн" if d_total_fact >= 0 else f"{d_total_fact:,} грн"
         t_part = f"  +{d_total_trucks} маш." if d_total_trucks > 0 else ""
-        day_company = f"\n📈 <b>За день по компанії: {f_part}{t_part}</b>"
+        day_company = f"\n📈 За день: {f_part}{t_part}"
 
+    total_pct = int(total_fact / total_plan * 100) if total_plan else 0
     lines.append(
-        f"\n📈 <b>Факт місяця: {total_fact:,} / {total_plan:,} грн</b>\n"
-        f"🚛 <b>Всього машин відправлено: {total_trucks}</b>\n"
-        f"📊 {_build_progress_bar(total_fact, total_plan)}"
+        f"🏢 <b>Компанія загалом</b>\n"
+        f"   {_build_progress_bar(total_fact, total_plan)}\n"
+        f"   💰 <b>{total_fact:,} / {total_plan:,} грн ({total_pct}%)</b>\n"
+        f"   🚛 <b>Машин відправлено: {total_trucks}</b>"
         f"{day_company}"
     )
 
