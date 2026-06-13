@@ -1160,7 +1160,7 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     if _is_working_hours():
-        notifier.send_to_lidogen(msg)
+        notifier.send_to_rpk(msg)
     sheets.append_transfer(lead_id, lead_name, manager_name, now, manager_id=responsible_id)
     logger.info("New lead: %s → %s", lead_id, manager_name)
 
@@ -1275,7 +1275,7 @@ def test_groups():
     """Send test messages to РНК and lidogen groups."""
     results = {}
     results["rnk"] = notifier.send_to_rnk("✅ Тест групи РНК — гілка 51")
-    results["lidogen"] = notifier.send_to_lidogen("✅ Тест групи лідогенераторів — гілка 3")
+    results["rpk"] = notifier.send_to_rpk("✅ Тест групи РПК — гілка 3")
     return jsonify(results)
 
 
