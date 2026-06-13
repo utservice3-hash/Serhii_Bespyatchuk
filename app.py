@@ -921,6 +921,20 @@ def _write_daily_snapshot():
     logger.info("Daily snapshot written: %d managers", len(stats))
 
 
+def _send_rnk_daily_reminder() -> None:
+    """О 17:00 Київ — сповіщення тімлідам РНК що реєстр відмов готовий до перегляду."""
+    sheet_id = os.getenv("GOOGLE_SHEETS_ID", "") or os.getenv("SPREADSHEET_ID", "")
+    sheet_link = f"https://docs.google.com/spreadsheets/d/{sheet_id}" if sheet_id else ""
+    link_part = f"\n📎 <a href='{sheet_link}'>Відкрити реєстр відмов</a>" if sheet_link else ""
+    msg = (
+        f"📋 <b>Реєстр закритих угод оновлено</b>\n"
+        f"Перевірте угоди «Закрито не реалізовано» за сьогодні.\n"
+        f"👥 @darina_mx @Andry_UTS"
+        f"{link_part}"
+    )
+    notifier.send_to_rnk(msg)
+
+
 def _send_rnk_ai_report() -> None:
     """Щоденний AI звіт по відмовах РНК командам — о 18:00 Київ."""
     TL_TAGS = {
@@ -958,6 +972,7 @@ scheduler.add_job(_check_unassigned_leads, "interval", minutes=15)
 scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
 scheduler.add_job(_send_daily_plan_report, "cron", hour=15, minute=0)   # 18:00 Kyiv = 15:00 UTC
 scheduler.add_job(_send_month_end_report, "interval", hours=1)           # останній день місяця — щогодини
+scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=14, minute=0)  # 17:00 Kyiv = 14:00 UTC
 scheduler.add_job(_send_rnk_ai_report, "cron", hour=15, minute=5)       # 18:05 Kyiv = 15:05 UTC
 scheduler.start()
 sheets.ensure_headers()
@@ -1413,6 +1428,13 @@ def send_plan_report():
         return jsonify({"ok": False, "error": str(e), "traceback": tb, "log": log_lines})
     finally:
         logger.info = original_info
+
+
+@app.route("/send-rnk-daily-reminder", methods=["GET"])
+def send_rnk_daily_reminder():
+    """Manually trigger RNK daily reminder about closed deals registry."""
+    _send_rnk_daily_reminder()
+    return jsonify({"ok": True})
 
 
 @app.route("/send-rnk-ai-report", methods=["GET"])
