@@ -451,8 +451,7 @@ def _handle_big_deal_notification(lead_id: int, responsible_id: int, amount: int
         f"👤 <b>{manager_name}</b>{mgr_tag_line}{sup_line}\n"
         f"🏢 Команда {team_gen}\n\n"
         f"💰 <b>{amount:,} грн</b>\n\n"
-        f"{phrase}\n"
-        f"🔗 <a href='{kommo_url}'>Угода #{lead_id}</a>"
+        f"{phrase}"
     )
     notifier.send_to_rnk(msg)
     logger.info("Big deal notification: lead %s amount %d by %s", lead_id, amount, manager_name)
