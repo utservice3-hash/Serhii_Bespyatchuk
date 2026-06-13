@@ -1270,6 +1270,13 @@ def daily():
     return jsonify({"ok": sent, "pending": len(pending)})
 
 
+@app.route("/scan-now", methods=["GET"])
+def scan_now():
+    """Manually trigger unassigned leads scan and reminders."""
+    _check_unassigned_leads()
+    return jsonify({"ok": True, "unassigned_count": len(unassigned)})
+
+
 @app.route("/test-groups", methods=["GET"])
 def test_groups():
     """Send test messages to РНК and lidogen groups."""
