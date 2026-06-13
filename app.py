@@ -346,11 +346,14 @@ def _check_plan_completion(responsible_id: int) -> None:
     if responsible_id in _plan_congrats_sent:
         return
 
+    month_start_ts = int(datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
+
     def fetch_all(status_id: int) -> list:
         all_leads = []
         for page in range(1, 20):
             batch = kommo.get_pipeline_leads(
-                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page, with_custom_fields=True
+                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page,
+                with_custom_fields=True, closed_at_from=month_start_ts
             ) or []
             all_leads.extend(batch)
             if len(batch) < 250:
@@ -479,7 +482,8 @@ def _send_daily_plan_report() -> None:
         all_leads = []
         for page in range(1, 20):
             batch = kommo.get_pipeline_leads(
-                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page, with_custom_fields=True
+                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page,
+                with_custom_fields=True, closed_at_from=month_start
             ) or []
             all_leads.extend(batch)
             if len(batch) < 250:
@@ -633,11 +637,14 @@ def _send_month_end_report() -> None:
     if not (9 <= kyiv_now.hour <= 21):
         return
 
+    month_start_end = int(kyiv_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
+
     def fetch_all(status_id: int) -> list:
         all_leads = []
         for page in range(1, 20):
             batch = kommo.get_pipeline_leads(
-                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page, with_custom_fields=True
+                PEREVOZY_PIPELINE_ID, status_id=status_id, page=page,
+                with_custom_fields=True, closed_at_from=month_start_end
             ) or []
             all_leads.extend(batch)
             if len(batch) < 250:
@@ -1196,6 +1203,17 @@ def daily():
     msg = f"📊 <b>Щоденний звіт</b> за {datetime.now(timezone.utc).strftime('%d.%m.%Y')}\nОчікує обробки: {len(pending)} лідів"
     sent = notifier.send_message(msg)
     return jsonify({"ok": sent, "pending": len(pending)})
+
+
+@app.route("/send-plan-report", methods=["GET"])
+def send_plan_report():
+    """Manually trigger daily plan report."""
+    try:
+        _send_daily_plan_report()
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.error("send_plan_report: %s", e)
+        return jsonify({"ok": False, "error": str(e)})
 
 
 if __name__ == "__main__":

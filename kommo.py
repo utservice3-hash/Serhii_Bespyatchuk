@@ -199,7 +199,7 @@ def get_lead_notes(lead_id: int) -> list:
     return []
 
 
-def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int = 1, with_custom_fields: bool = False) -> list:
+def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int = 1, with_custom_fields: bool = False, closed_at_from: int | None = None) -> list:
     params: dict = {"limit": 250, "page": page}
     if status_id:
         params["filter[statuses][0][pipeline_id]"] = pipeline_id
@@ -208,6 +208,8 @@ def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int
         params["filter[pipeline_id]"] = pipeline_id
     if with_custom_fields:
         params["with"] = "custom_fields"
+    if closed_at_from:
+        params["filter[closed_at][from]"] = closed_at_from
     try:
         resp = requests.get(
             f"{KOMMO_BASE}/api/v4/leads",
