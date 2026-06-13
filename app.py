@@ -1062,11 +1062,13 @@ def webhook():
         if not is_lidogen:
             _handle_rnk_event(lead_id, responsible_id, "🟢 Лід взятий у роботу")
 
-    elif status_id == 69693656:  # Дзвінки
-        _handle_rnk_event(lead_id, responsible_id, "📞 Дзвінки")
+    elif status_id == 69693656:  # Дзвінки — тільки без відповідального (Admin)
+        if not responsible_id or responsible_id == ADMIN_USER_ID:
+            _handle_rnk_event(lead_id, responsible_id, "📞 Дзвінки")
 
-    elif status_id == 69693660:  # Дзвінки з сайту
-        _handle_rnk_event(lead_id, responsible_id, "🌐 Дзвінки з сайту")
+    elif status_id == 69693660:  # Дзвінки з сайту — тільки без відповідального (Admin)
+        if not responsible_id or responsible_id == ADMIN_USER_ID:
+            _handle_rnk_event(lead_id, responsible_id, "🌐 Дзвінки з сайту")
 
     return jsonify({"ok": True})
 
