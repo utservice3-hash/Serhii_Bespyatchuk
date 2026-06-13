@@ -32,7 +32,11 @@ MANAGER_PLANS: dict[int, int] = {
     13689696: 60000,   # Чукін Євген
     11293904: 60000,   # Крицька Діана
     15192136: 40000,   # Палій Тарас
-    # 3 нових менеджери — додати пізніше
+    15354672: 20000,   # Борівець Олеся
+    15354656: 20000,   # Шендера Анастасія
+    15355168: 20000,   # Голоміна Олександра
+    15380780: 15000,   # Ворошилова Вікторія
+    15391908: 15000,   # Коваль Катерина
 
     # Команда Михальчевської (РНК) — план 549,000
     12782896: 20000,   # Михальчевська Дарина
@@ -69,7 +73,7 @@ MANAGER_PLANS: dict[int, int] = {
 }
 
 TEAM_PLANS: dict[str, int] = {
-    "Безпам'ятний": 260000,
+    "Безпам'ятний": 275000,
     "Михальчевська": 549000,
     "Дмитрук": 810000,
     "Шаврова": 185000,
@@ -80,6 +84,8 @@ TEAM_PLANS: dict[str, int] = {
 MANAGER_TEAM: dict[int, str] = {
     12644448: "Безпам'ятний", 13689696: "Безпам'ятний",
     11293904: "Безпам'ятний", 15192136: "Безпам'ятний",
+    15354672: "Безпам'ятний", 15354656: "Безпам'ятний",
+    15355168: "Безпам'ятний", 15380780: "Безпам'ятний", 15391908: "Безпам'ятний",
     12782896: "Михальчевська", 14926076: "Михальчевська",
     13803600: "Михальчевська", 14083284: "Михальчевська",
     14431884: "Михальчевська", 13461608: "Михальчевська",
@@ -277,60 +283,83 @@ def _handle_won_deal(lead_id: int, responsible_id: int, amount: int) -> None:
 
 
 def _send_daily_plan_report() -> None:
-    """Щоденний звіт о 18:00 Київ — факт по менеджерах і командах."""
+    """Щоденний звіт о 18:00 Київ — факт (Успіх + Оплата отримана) по менеджерах і командах."""
     now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_of_month = now.day
+    days_in_month = 30
+    tempo_pct = day_of_month / days_in_month
+    month_start = int(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
 
-    today_entries = [e for e in _won_log if e["closed_at"] >= today_start]
-    month_entries = [e for e in _won_log if e["closed_at"] >= month_start]
+    def fetch_leads(status_id: int, date_filter: bool = True) -> list:
+        params: dict = {
+            "filter[statuses][0][pipeline_id]": PEREVOZY_PIPELINE_ID,
+            "filter[statuses][0][status_id]": status_id,
+            "limit": 250,
+        }
+        if date_filter:
+            params["filter[closed_at][from]"] = month_start
+        return kommo.get_pipeline_leads(PEREVOZY_PIPELINE_ID, status_id=status_id) or []
 
-    if not month_entries:
-        return
+    won_leads = fetch_leads(WON_STATUS_ID)
+    pay_leads = fetch_leads(69716460, date_filter=False)
 
-    # По менеджерах
-    mgr_facts: dict[int, int] = {}
-    for e in month_entries:
-        mgr_facts[e["manager_id"]] = mgr_facts.get(e["manager_id"], 0) + e["amount"]
+    mgr_won: dict[int, int] = {}; mgr_wc: dict[int, int] = {}
+    mgr_pay: dict[int, int] = {}; mgr_pc: dict[int, int] = {}
+    for l in won_leads:
+        uid = l.get("responsible_user_id", 0); amt = l.get("price", 0) or 0
+        mgr_won[uid] = mgr_won.get(uid, 0) + amt
+        mgr_wc[uid] = mgr_wc.get(uid, 0) + 1
+    for l in pay_leads:
+        uid = l.get("responsible_user_id", 0); amt = l.get("price", 0) or 0
+        mgr_pay[uid] = mgr_pay.get(uid, 0) + amt
+        mgr_pc[uid] = mgr_pc.get(uid, 0) + 1
 
-    # По командах
+    all_mgrs = set(mgr_won) | set(mgr_pay)
+    mgr_tot = {uid: mgr_won.get(uid, 0) + mgr_pay.get(uid, 0) for uid in all_mgrs}
+
     team_facts: dict[str, int] = {}
-    for uid, amt in mgr_facts.items():
+    for uid, amt in mgr_tot.items():
         team = MANAGER_TEAM.get(uid)
         if team:
             team_facts[team] = team_facts.get(team, 0) + amt
 
-    today_total = sum(e["amount"] for e in today_entries)
-    month_total = sum(e["amount"] for e in month_entries)
+    total_fact = sum(v for uid, v in mgr_tot.items() if uid in MANAGER_TEAM)
     total_plan = sum(TEAM_PLANS.values())
 
-    lines = [f"📊 <b>Звіт по плану — {now.strftime('%d.%m.%Y')}</b>\n"]
+    def tempo(fact: int, plan: int) -> str:
+        if not plan: return ""
+        pct = fact / plan
+        if pct >= tempo_pct: return "✅"
+        elif pct >= tempo_pct * 0.7: return "🟡"
+        return "🔴"
 
-    lines.append("👥 <b>По командах:</b>")
+    lines = [
+        f"📊 <b>Звіт по плану — {now.strftime('%d.%m.%Y')} ({day_of_month}-й день)</b>",
+        f"🎯 Місячний темп: <b>{int(tempo_pct * 100)}%</b> пройдено\n",
+        "👥 <b>По командах:</b>",
+    ]
     for team, plan in TEAM_PLANS.items():
         fact = team_facts.get(team, 0)
-        bar = _build_progress_bar(fact, plan)
-        lines.append(f"  {team}: {bar}  {fact:,} / {plan:,} грн")
+        lines.append(f"  {tempo(fact, plan)} {team}: {_build_progress_bar(fact, plan)}")
+        lines.append(f"     💰 {fact:,} / {plan:,} грн")
 
-    lines.append("\n👤 <b>По менеджерах (місяць):</b>")
-    for uid, fact in sorted(mgr_facts.items(), key=lambda x: x[1], reverse=True):
+    lines.append("\n👤 <b>По менеджерах:</b>")
+    for uid, total in sorted(mgr_tot.items(), key=lambda x: x[1], reverse=True):
+        if uid not in MANAGER_TEAM:
+            continue
         plan = MANAGER_PLANS.get(uid, 0)
         name = kommo.get_user_name(uid)
-        tag = notifier.get_manager_tag(uid)
-        pct = int(fact / plan * 100) if plan else 0
-        lines.append(f"  {name}{tag}: {fact:,} грн" + (f" ({pct}%)" if plan else ""))
-
-    # Оплата отримана — очікують перенесення в успіх
-    payment_leads = kommo.get_pipeline_leads(PEREVOZY_PIPELINE_ID, status_id=69716460)
-    payment_count = len(payment_leads)
-    payment_sum = sum(l.get("price", 0) or 0 for l in payment_leads)
+        pct = f"{int(total / plan * 100)}%" if plan else "—"
+        w = mgr_won.get(uid, 0); wc = mgr_wc.get(uid, 0)
+        p = mgr_pay.get(uid, 0); pc = mgr_pc.get(uid, 0)
+        line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})"
+        if w: line += f"\n     ✓ Успіх: {w:,} грн / {wc} уг."
+        if p: line += f"\n     ⏳ Оплата: {p:,} грн / {pc} уг."
+        lines.append(line)
 
     lines.append(
-        f"\n💰 За сьогодні: <b>+{today_total:,} грн</b>\n"
-        f"📈 Місяць загалом: <b>{month_total:,} / {total_plan:,} грн</b> "
-        f"({int(month_total / total_plan * 100) if total_plan else 0}%)\n\n"
-        f"⏳ <b>Оплата отримана</b> (очікують успіх): "
-        f"<b>{payment_count} угод / {payment_sum:,} грн</b>"
+        f"\n📈 <b>Факт місяця: {total_fact:,} / {total_plan:,} грн</b>\n"
+        f"📊 {_build_progress_bar(total_fact, total_plan)}"
     )
 
     _send_plan_message("\n".join(lines))
