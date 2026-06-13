@@ -131,6 +131,28 @@ def get_lead_details(lead_id: int) -> dict:
     return result
 
 
+MINUS_DEAL_FIELD_ID = 2098529   # "Мінусова угода" — значення "Мінус"
+FICTIVE_KEYWORD = "ФІКТИВНИЙ"
+
+
+def is_minus_deal(lead: dict) -> bool:
+    """Повертає True якщо угода мінусова (поле 2098529 = 'Мінус' або назва містить МІНУС)."""
+    name = (lead.get("name") or "").upper()
+    if FICTIVE_KEYWORD in name:
+        return False  # фіктивні — окрема логіка, не мінус
+    for cf in lead.get("custom_fields_values") or []:
+        if cf.get("field_id") == MINUS_DEAL_FIELD_ID:
+            vals = cf.get("values") or []
+            if vals and str(vals[0].get("value", "")).strip():
+                return True
+    return "МІНУС" in name
+
+
+def is_fictive_deal(lead: dict) -> bool:
+    """Повертає True якщо угода фіктивна."""
+    return FICTIVE_KEYWORD in (lead.get("name") or "").upper()
+
+
 def get_lead_source(lead: dict) -> str:
     """Extract 'Источник клиента' value from lead custom fields."""
     for cf in lead.get("custom_fields_values") or []:
@@ -177,13 +199,15 @@ def get_lead_notes(lead_id: int) -> list:
     return []
 
 
-def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int = 1) -> list:
+def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int = 1, with_custom_fields: bool = False) -> list:
     params: dict = {"limit": 250, "page": page}
     if status_id:
         params["filter[statuses][0][pipeline_id]"] = pipeline_id
         params["filter[statuses][0][status_id]"] = status_id
     else:
         params["filter[pipeline_id]"] = pipeline_id
+    if with_custom_fields:
+        params["with"] = "custom_fields"
     try:
         resp = requests.get(
             f"{KOMMO_BASE}/api/v4/leads",

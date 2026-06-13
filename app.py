@@ -298,18 +298,17 @@ def _send_daily_plan_report() -> None:
         }
         if date_filter:
             params["filter[closed_at][from]"] = month_start
-        return kommo.get_pipeline_leads(PEREVOZY_PIPELINE_ID, status_id=status_id) or []
+        return kommo.get_pipeline_leads(PEREVOZY_PIPELINE_ID, status_id=status_id, with_custom_fields=True) or []
 
     won_leads = fetch_leads(WON_STATUS_ID)
     pay_leads = fetch_leads(69716460, date_filter=False)
 
     def deal_amount(lead: dict) -> int:
-        """Повертає суму з урахуванням знаку: МІНУС в назві = від'ємна."""
-        name = (lead.get("name") or "").upper()
-        if "ФІКТИВНИЙ" in name:
+        """Повертає суму з урахуванням знаку. Фіктивні = 0, мінусові = від'ємна."""
+        if kommo.is_fictive_deal(lead):
             return 0
         amt = lead.get("price", 0) or 0
-        return -amt if "МІНУС" in name else amt
+        return -amt if kommo.is_minus_deal(lead) else amt
 
     mgr_won: dict[int, int] = {}; mgr_wc: dict[int, int] = {}
     mgr_pay: dict[int, int] = {}; mgr_pc: dict[int, int] = {}
