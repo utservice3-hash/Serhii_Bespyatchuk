@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
@@ -7,6 +8,24 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import kommo
 import notifier
 import sheets
+
+SNAPSHOT_FILE = "/tmp/plan_snapshot.json"
+
+
+def _load_snapshot() -> dict:
+    try:
+        with open(SNAPSHOT_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_snapshot(data: dict) -> None:
+    try:
+        with open(SNAPSHOT_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error("_save_snapshot: %s", e)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -462,6 +481,20 @@ def _send_daily_plan_report() -> None:
         elif pct >= tempo_pct * 0.7: return "🟡"
         return "🔴"
 
+    # Завантажуємо знімок попереднього дня
+    prev = _load_snapshot()
+    prev_mgr: dict[str, dict] = prev.get("managers", {})
+    prev_team: dict[str, dict] = prev.get("teams", {})
+    prev_total_fact: int = prev.get("total_fact", 0)
+    prev_total_trucks: int = prev.get("total_trucks", 0)
+
+    def delta_str(cur: int, prev_val: int, unit: str = "грн") -> str:
+        d = cur - prev_val
+        if d == 0:
+            return "без змін"
+        sign = "+" if d > 0 else ""
+        return f"{sign}{d:,} {unit}"
+
     lines = [
         f"📊 <b>Звіт по плану — {now.strftime('%d.%m.%Y')} ({day_of_month}-й день)</b>",
         f"🎯 Місячний темп: <b>{int(tempo_pct * 100)}%</b> пройдено",
@@ -471,8 +504,17 @@ def _send_daily_plan_report() -> None:
     for team, plan in TEAM_PLANS.items():
         fact = team_facts.get(team, 0)
         trucks = team_trucks.get(team, 0)
+        p_fact = prev_team.get(team, {}).get("fact", 0)
+        p_trucks = prev_team.get(team, {}).get("trucks", 0)
+        d_fact = fact - p_fact
+        d_trucks = trucks - p_trucks
+        day_line = ""
+        if prev_team:
+            fact_part = f"+{d_fact:,} грн" if d_fact > 0 else ("без змін" if d_fact == 0 else f"{d_fact:,} грн")
+            truck_part = (f"  +{d_trucks} маш." if d_trucks > 0 else "") if d_trucks != 0 else ""
+            day_line = f"\n     📈 За день: {fact_part}{truck_part}"
         lines.append(f"  {tempo(fact, plan)} {team}: {_build_progress_bar(fact, plan)}")
-        lines.append(f"     💰 {fact:,} / {plan:,} грн  🚛 {trucks} маш.")
+        lines.append(f"     💰 {fact:,} / {plan:,} грн  🚛 {trucks} маш.{day_line}")
 
     lines.append("\n👤 <b>По менеджерах:</b>")
     for uid, total in sorted(mgr_tot.items(), key=lambda x: x[1], reverse=True):
@@ -484,19 +526,45 @@ def _send_daily_plan_report() -> None:
         w = mgr_won.get(uid, 0); wc = mgr_wc.get(uid, 0)
         p = mgr_pay.get(uid, 0); pc = mgr_pc.get(uid, 0)
         tc = mgr_trucks.get(uid, 0)
+        p_fact = prev_mgr.get(str(uid), {}).get("fact", 0)
+        p_trucks = prev_mgr.get(str(uid), {}).get("trucks", 0)
         line = f"  {tempo(total, plan)} {name}: <b>{total:,} грн</b> ({pct})  🚛 {tc} маш."
         if w: line += f"\n     ✓ Успішно реалізовано: {w:,} грн / {wc} маш."
         if p: line += f"\n     ⏳ Оплата отримана: {p:,} грн / {pc} маш."
+        if prev_mgr:
+            d_f = total - p_fact
+            d_t = tc - p_trucks
+            fact_part = f"+{d_f:,} грн" if d_f > 0 else ("без змін" if d_f == 0 else f"{d_f:,} грн")
+            truck_part = (f"  +{d_t} маш." if d_t > 0 else "") if d_t != 0 else ""
+            line += f"\n     📈 За день: {fact_part}{truck_part}"
         lines.append(line)
+
+    d_total_fact = total_fact - prev_total_fact
+    d_total_trucks = total_trucks - prev_total_trucks
+    day_company = ""
+    if prev_total_fact:
+        f_part = f"+{d_total_fact:,} грн" if d_total_fact >= 0 else f"{d_total_fact:,} грн"
+        t_part = f"  +{d_total_trucks} маш." if d_total_trucks > 0 else ""
+        day_company = f"\n📈 <b>За день по компанії: {f_part}{t_part}</b>"
 
     lines.append(
         f"\n📈 <b>Факт місяця: {total_fact:,} / {total_plan:,} грн</b>\n"
         f"🚛 <b>Всього машин відправлено: {total_trucks}</b>\n"
         f"📊 {_build_progress_bar(total_fact, total_plan)}"
+        f"{day_company}"
     )
 
     _send_plan_message("\n".join(lines))
     logger.info("Daily plan report sent")
+
+    # Зберігаємо знімок поточного дня
+    _save_snapshot({
+        "date": now.strftime("%Y-%m-%d"),
+        "total_fact": total_fact,
+        "total_trucks": total_trucks,
+        "teams": {t: {"fact": team_facts.get(t, 0), "trucks": team_trucks.get(t, 0)} for t in TEAM_PLANS},
+        "managers": {str(uid): {"fact": mgr_tot.get(uid, 0), "trucks": mgr_trucks.get(uid, 0)} for uid in MANAGER_PLANS},
+    })
 
 
 def _send_month_end_report() -> None:
