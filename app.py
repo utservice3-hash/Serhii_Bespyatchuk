@@ -1466,13 +1466,32 @@ def backfill_closed_rnk():
         day_start = int(day.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
         day_end = int(day.replace(hour=23, minute=59, second=59, microsecond=0).timestamp())
 
-        QUAL_PIPELINE_ID = 8921928
         CLOSED_STATUS_ID = 143
 
-        leads = kommo.get_pipeline_leads(
-            QUAL_PIPELINE_ID, status_id=CLOSED_STATUS_ID,
-            with_custom_fields=True, closed_at_from=day_start
-        )
+        # Kommo закриті угоди — окремий ендпоінт без pipeline_id
+        leads = []
+        try:
+            import requests as req
+            token = os.getenv("KOMMO_TOKEN", "")
+            base = os.getenv("KOMMO_BASE", "https://utsercice.kommo.com")
+            headers = {"Authorization": f"Bearer {token}"}
+            page = 1
+            while True:
+                resp = req.get(f"{base}/api/v4/leads", headers=headers, params={
+                    "filter[statuses][0][pipeline_id]": 8921928,
+                    "filter[statuses][0][status_id]": CLOSED_STATUS_ID,
+                    "filter[closed_at][from]": day_start,
+                    "filter[closed_at][to]": day_end,
+                    "with": "custom_fields",
+                    "limit": 250, "page": page,
+                }, timeout=15)
+                batch = resp.json().get("_embedded", {}).get("leads", []) if resp.ok else []
+                leads.extend(batch)
+                if len(batch) < 250:
+                    break
+                page += 1
+        except Exception as ex:
+            return jsonify({"ok": False, "error": f"kommo fetch: {ex}"})
 
         processed = 0
         for lead in leads:
