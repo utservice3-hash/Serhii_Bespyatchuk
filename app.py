@@ -20,6 +20,82 @@ REMINDER_MINUTES = 20
 
 PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
 CLOSED_NOT_REALIZED = 143        # ЗАКРИТО І НЕ РЕАЛІЗОВАНО
+WON_STATUS_ID = 142              # УСПІШНА УГОДА
+
+# Telegram — гілка для звітів по плану
+TG_PLAN_THREAD_ID = 175862
+
+# Плани на червень 2026 {user_id: plan_amount}
+MANAGER_PLANS: dict[int, int] = {
+    # Команда Безпам'ятного (РНК) — план 260,000
+    12644448: 25000,   # Безпам'ятний Андрій
+    13689696: 60000,   # Чукін Євген
+    11293904: 60000,   # Крицька Діана
+    15192136: 40000,   # Палій Тарас
+    # 3 нових менеджери — додати пізніше
+
+    # Команда Михальчевської (РНК) — план 549,000
+    12782896: 20000,   # Михальчевська Дарина
+    14926076: 70000,   # Панасюк Святослав
+    13803600: 100000,  # Цалко Олександр
+    14083284: 70000,   # Гофман Іван
+    14431884: 45000,   # Янчевський Едуард
+    13461608: 160000,  # Андрусенко Богдана
+    15227596: 27000,   # Пехньо Ксенія
+    15279220: 27000,   # Сугак Денис
+    15227544: 30000,   # Герелевич Аліна
+
+    # Команда Дмитрука (РПК) — план 810,000
+    6062482:  225000,  # Дмитрук Василь
+    7863771:  150000,  # Возович Антон
+    11338832: 110000,  # Федоровський Іван
+    11295244: 325000,  # Самохвалов Сергій
+
+    # Команда Шаврової (РПК) — план 185,000
+    12066792: 110000,  # Шаврова Лілія
+    15200560: 30000,   # Сенів Тетяна
+    15040472: 45000,   # Мацалак Андрій
+
+    # Команда Яцика (РПК) — план 845,000
+    3379102:  0,       # Яцик Дмитро
+    10022700: 100000,  # Мокляк Олександр
+    7347414:  110000,  # Свіржевський Артем
+    12163420: 350000,  # Семенюк Дмитро
+    2013613:  185000,  # Антипенко Олег
+    11739992: 100000,  # Хомік Вікторія
+
+    # Тендерний відділ — план 200,000
+    7181916:  200000,  # Шевчук Назар
+}
+
+TEAM_PLANS: dict[str, int] = {
+    "Безпам'ятний": 260000,
+    "Михальчевська": 549000,
+    "Дмитрук": 810000,
+    "Шаврова": 185000,
+    "Яцик": 845000,
+    "Тендерний": 200000,
+}
+
+MANAGER_TEAM: dict[int, str] = {
+    12644448: "Безпам'ятний", 13689696: "Безпам'ятний",
+    11293904: "Безпам'ятний", 15192136: "Безпам'ятний",
+    12782896: "Михальчевська", 14926076: "Михальчевська",
+    13803600: "Михальчевська", 14083284: "Михальчевська",
+    14431884: "Михальчевська", 13461608: "Михальчевська",
+    15227596: "Михальчевська", 15279220: "Михальчевська",
+    15227544: "Михальчевська",
+    6062482: "Дмитрук", 7863771: "Дмитрук",
+    11338832: "Дмитрук", 11295244: "Дмитрук",
+    12066792: "Шаврова", 15200560: "Шаврова", 15040472: "Шаврова",
+    3379102: "Яцик", 10022700: "Яцик", 7347414: "Яцик",
+    12163420: "Яцик", 2013613: "Яцик", 11739992: "Яцик",
+    7181916: "Тендерний",
+}
+
+# In-memory: список успішних угод поточного місяця
+# {lead_id, manager_id, amount, closed_at}
+_won_log: list[dict] = []
 
 # Етапи з нерозібраними заявками (без відповідального)
 UNASSIGNED_STATUSES = {
@@ -165,6 +241,121 @@ def _check_overdue_leads():
         logger.info("Reminder #%d sent for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
 
+def _send_plan_message(text: str) -> None:
+    """Send message to plan thread."""
+    import requests as req
+    tg_token = os.getenv("TG_TOKEN", "")
+    tg_chat = os.getenv("TG_CHAT_ID", "")
+    if not tg_token or not tg_chat:
+        return
+    try:
+        req.post(
+            f"https://api.telegram.org/bot{tg_token}/sendMessage",
+            json={"chat_id": tg_chat, "text": text, "parse_mode": "HTML",
+                  "message_thread_id": TG_PLAN_THREAD_ID,
+                  "disable_web_page_preview": True},
+            timeout=10,
+        )
+    except Exception as e:
+        logger.error("_send_plan_message: %s", e)
+
+
+def _build_progress_bar(fact: int, plan: int) -> str:
+    if plan <= 0:
+        return "—"
+    pct = min(fact / plan, 1.0)
+    filled = int(pct * 10)
+    bar = "▓" * filled + "░" * (10 - filled)
+    return f"{bar}  {int(pct * 100)}%"
+
+
+def _handle_won_deal(lead_id: int, responsible_id: int, amount: int) -> None:
+    now = datetime.now(timezone.utc)
+    _won_log.append({"lead_id": lead_id, "manager_id": responsible_id,
+                     "amount": amount, "closed_at": now})
+
+    manager_name = kommo.get_user_name(responsible_id)
+    tg_tag = notifier.get_manager_tag(responsible_id)
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+
+    # Місячний факт по менеджеру
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    mgr_fact = sum(e["amount"] for e in _won_log
+                   if e["manager_id"] == responsible_id and e["closed_at"] >= month_start)
+    mgr_plan = MANAGER_PLANS.get(responsible_id, 0)
+    bar = _build_progress_bar(mgr_fact, mgr_plan) if mgr_plan else "—"
+
+    lead = kommo.get_lead(lead_id)
+    lead_name = lead.get("name", f"Угода #{lead_id}") if lead else f"Угода #{lead_id}"
+
+    msg = (
+        f"🏆 <b>Угода закрита успішно!</b>\n"
+        f"🏷 Назва: {lead_name}\n"
+        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
+        f"💰 Сума: <b>+{amount:,} грн</b>\n\n"
+        f"📊 Виконання плану менеджера:\n"
+        f"{bar}\n"
+        f"💰 Факт: <b>{mgr_fact:,}</b> / {mgr_plan:,} грн"
+        f"\n🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
+    )
+    _send_plan_message(msg)
+    logger.info("Won deal: lead %s by %s amount %d", lead_id, manager_name, amount)
+
+
+def _send_daily_plan_report() -> None:
+    """Щоденний звіт о 18:00 Київ — факт по менеджерах і командах."""
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    today_entries = [e for e in _won_log if e["closed_at"] >= today_start]
+    month_entries = [e for e in _won_log if e["closed_at"] >= month_start]
+
+    if not month_entries:
+        return
+
+    # По менеджерах
+    mgr_facts: dict[int, int] = {}
+    for e in month_entries:
+        mgr_facts[e["manager_id"]] = mgr_facts.get(e["manager_id"], 0) + e["amount"]
+
+    # По командах
+    team_facts: dict[str, int] = {}
+    for uid, amt in mgr_facts.items():
+        team = MANAGER_TEAM.get(uid)
+        if team:
+            team_facts[team] = team_facts.get(team, 0) + amt
+
+    today_total = sum(e["amount"] for e in today_entries)
+    month_total = sum(e["amount"] for e in month_entries)
+    total_plan = sum(TEAM_PLANS.values())
+
+    lines = [f"📊 <b>Звіт по плану — {now.strftime('%d.%m.%Y')}</b>\n"]
+
+    lines.append("👥 <b>По командах:</b>")
+    for team, plan in TEAM_PLANS.items():
+        fact = team_facts.get(team, 0)
+        bar = _build_progress_bar(fact, plan)
+        lines.append(f"  {team}: {bar}  {fact:,} / {plan:,} грн")
+
+    lines.append("\n👤 <b>По менеджерах (місяць):</b>")
+    for uid, fact in sorted(mgr_facts.items(), key=lambda x: x[1], reverse=True):
+        plan = MANAGER_PLANS.get(uid, 0)
+        name = kommo.get_user_name(uid)
+        tag = notifier.get_manager_tag(uid)
+        pct = int(fact / plan * 100) if plan else 0
+        lines.append(f"  {name}{tag}: {fact:,} грн" + (f" ({pct}%)" if plan else ""))
+
+    lines.append(
+        f"\n💰 За сьогодні: <b>+{today_total:,} грн</b>\n"
+        f"📈 Місяць загалом: <b>{month_total:,} / {total_plan:,} грн</b> "
+        f"({int(month_total / total_plan * 100) if total_plan else 0}%)"
+    )
+
+    _send_plan_message("\n".join(lines))
+    logger.info("Daily plan report sent")
+
+
 def _scan_unassigned_leads():
     """Scans Kommo API for unassigned leads in Кваліфікація and adds new ones to queue."""
     now = datetime.now(timezone.utc)
@@ -273,6 +464,7 @@ scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
 scheduler.add_job(_check_unassigned_leads, "interval", minutes=15)
 scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
+scheduler.add_job(_send_daily_plan_report, "cron", hour=15, minute=0)  # 18:00 Kyiv = 15:00 UTC
 scheduler.start()
 sheets.ensure_headers()
 
@@ -397,6 +589,10 @@ def webhook():
     if pipeline_id == PEREVOZY_PIPELINE_ID:
         if status_id == CLOSED_NOT_REALIZED and responsible_id in DARINA_ANDRIY_TEAMS:
             _handle_closed_not_realized(lead_id, responsible_id)
+        elif status_id == WON_STATUS_ID:
+            lead = kommo.get_lead(lead_id)
+            amount = int(lead.get("price", 0)) if lead else 0
+            _handle_won_deal(lead_id, responsible_id, amount)
         return jsonify({"ok": True})
 
     if pipeline_id != QUAL_PIPELINE_ID:
