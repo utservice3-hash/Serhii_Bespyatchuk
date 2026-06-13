@@ -330,10 +330,11 @@ def _send_plan_message(text: str) -> None:
             )
             data = r.json()
             if not data.get("ok"):
-                logger.error("_send_plan_message TG error: %s", data.get("description"))
+                logger.error("_send_plan_message TG error: %s | chunk_len=%d", data.get("description"), len(chunk))
+            else:
+                logger.info("_send_plan_message ok, msg_id=%s", data.get("result", {}).get("message_id"))
         except Exception as e:
             logger.error("_send_plan_message: %s", e)
-        logger.error("_send_plan_message: %s", e)
 
 
 def _build_progress_bar(fact: int, plan: int) -> str:
@@ -852,7 +853,7 @@ def _check_unassigned_leads():
             f"📬 <b>Нерозібрана заявка!</b>\n"
             f"🏷 Назва: {info['lead_name']}\n"
             f"📍 Етап: {info['status_name']}\n"
-            f"⏱ Очікує: <b>{age_min:.0f} хв</b>\n"
+            f"⏱ Очікує: <b>{_format_duration(age_min)}</b>\n"
             f"👥 {tag_line}\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
