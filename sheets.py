@@ -173,6 +173,56 @@ def update_first_call(lead_id: int, call_at: datetime):
         logger.error("sheets update_first_call: %s", e)
 
 
+def log_closed_deal(deal: dict) -> None:
+    """
+    Записує закриту угоду РНК в реєстр відмов.
+    deal = {lead_id, name, manager, team, reject_reason, last_status,
+            days_in_work, calls_count, notes_count, amount, closed_at, ai_recommendation}
+    """
+    ws = _get_or_create_worksheet("Реєстр відмов РНК", rows=2000, cols=12)
+    if not ws:
+        return
+    try:
+        if ws.cell(1, 1).value != "Дата":
+            ws.insert_row([
+                "Дата", "ID угоди", "Назва", "Менеджер", "Команда",
+                "Причина відмови", "Закрито з етапу", "Днів в роботі",
+                "Дзвінків", "Нотаток", "Сума (грн)", "Рекомендація AI"
+            ], 1)
+        ws.append_row([
+            deal.get("closed_at", ""),
+            deal.get("lead_id", ""),
+            deal.get("name", ""),
+            deal.get("manager", ""),
+            deal.get("team", ""),
+            deal.get("reject_reason", ""),
+            deal.get("last_status", ""),
+            deal.get("days_in_work", ""),
+            deal.get("calls_count", 0),
+            deal.get("notes_count", 0),
+            deal.get("amount", 0),
+            deal.get("ai_recommendation", ""),
+        ])
+        logger.info("sheets: logged closed deal %s", deal.get("lead_id"))
+    except Exception as e:
+        logger.error("sheets log_closed_deal: %s", e)
+
+
+def get_today_closed_deals(team: str) -> list[dict]:
+    """Повертає всі відмови команди за сьогодні з реєстру."""
+    from datetime import datetime, timezone
+    ws = _get_or_create_worksheet("Реєстр відмов РНК", rows=2000, cols=12)
+    if not ws:
+        return []
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        records = ws.get_all_records()
+        return [r for r in records if r.get("Команда") == team and str(r.get("Дата", "")).startswith(today)]
+    except Exception as e:
+        logger.error("sheets get_today_closed_deals: %s", e)
+        return []
+
+
 def write_daily_snapshot(date_str: str, stats: list[dict]):
     """
     Write daily snapshot to 'Щоденний звіт' sheet.

@@ -8,6 +8,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import kommo
 import notifier
 import sheets
+import ai_analyzer
 
 SNAPSHOT_FILE = "/tmp/plan_snapshot.json"
 
@@ -918,12 +919,44 @@ def _write_daily_snapshot():
     logger.info("Daily snapshot written: %d managers", len(stats))
 
 
+def _send_rnk_ai_report() -> None:
+    """Щоденний AI звіт по відмовах РНК командам — о 18:00 Київ."""
+    TL_TAGS = {
+        "Михальчевська": ("@darina_mx", notifier.send_to_rnk),
+        "Безпам'ятний": ("@Andry_UTS", notifier.send_to_rnk),
+    }
+    for team, (tl_tag, send_fn) in TL_TAGS.items():
+        deals = sheets.get_today_closed_deals(team)
+        if not deals:
+            continue
+
+        analysis = ai_analyzer.analyze_team_deals(team, deals)
+        if not analysis:
+            continue
+
+        lines = [
+            f"🤖 <b>AI-аналіз відмов — команда {team}</b>",
+            f"👔 {tl_tag}\n",
+            f"📊 Закрито сьогодні: <b>{len(deals)}</b> угод\n",
+        ]
+        for d in deals:
+            lines.append(
+                f"• <b>{d.get('Менеджер', '—')}</b>: {d.get('Причина відмови') or 'без причини'} "
+                f"({d.get('Дзвінків', 0)} дзв., {d.get('Днів в роботі', '?')} дн.)"
+            )
+
+        lines.append(f"\n💡 <b>Рекомендації:</b>\n{analysis}")
+        send_fn("\n".join(lines))
+        logger.info("AI report sent for team %s (%d deals)", team, len(deals))
+
+
 scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
 scheduler.add_job(_check_unassigned_leads, "interval", minutes=15)
 scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
 scheduler.add_job(_send_daily_plan_report, "cron", hour=15, minute=0)   # 18:00 Kyiv = 15:00 UTC
 scheduler.add_job(_send_month_end_report, "interval", hours=1)           # останній день місяця — щогодини
+scheduler.add_job(_send_rnk_ai_report, "cron", hour=15, minute=5)       # 18:05 Kyiv = 15:05 UTC
 scheduler.start()
 sheets.ensure_headers()
 
@@ -1148,6 +1181,28 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
     send_to_team_group(responsible_id, msg)
     logger.info("Closed not realized: lead %s by %s", lead_id, manager_name)
 
+    # Логуємо в Google Sheets реєстр відмов РНК
+    if MANAGER_TEAM.get(responsible_id, "") in RNK_TEAMS:
+        lead = kommo.get_lead(lead_id)
+        amount = int(lead.get("price", 0)) if lead else 0
+        deal_data = {
+            "lead_id": lead_id,
+            "name": details["name"],
+            "manager": manager_name,
+            "team": MANAGER_TEAM.get(responsible_id, ""),
+            "reject_reason": details["reject_reason"],
+            "last_status": details["last_status"],
+            "days_in_work": details["days_in_work"],
+            "calls_count": details["calls_count"],
+            "notes_count": details["notes_count"],
+            "amount": amount,
+            "closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+            "ai_recommendation": ai_analyzer.analyze_closed_deal({
+                **details, "manager": manager_name, "amount": amount
+            }),
+        }
+        sheets.log_closed_deal(deal_data)
+
 
 def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):
     lead = kommo.get_lead(lead_id)
@@ -1356,6 +1411,17 @@ def send_plan_report():
         return jsonify({"ok": False, "error": str(e), "traceback": tb, "log": log_lines})
     finally:
         logger.info = original_info
+
+
+@app.route("/send-rnk-ai-report", methods=["GET"])
+def send_rnk_ai_report():
+    """Manually trigger RNK AI deals analysis report."""
+    import traceback
+    try:
+        _send_rnk_ai_report()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
 if __name__ == "__main__":
