@@ -100,6 +100,16 @@ TEAM_PLANS: dict[str, int] = {
     "Тендерний": 200000,
 }
 
+# Назва команди у родовому відмінку для повідомлень
+TEAM_GENITIVE: dict[str, str] = {
+    "Безпам'ятний": "Безпам'ятного",
+    "Михальчевська": "Михальчевської",
+    "Дмитрук": "Дмитрука",
+    "Шаврова": "Шаврової",
+    "Яцик": "Яцика",
+    "Тендерний": "Тендерного відділу",
+}
+
 MANAGER_TEAM: dict[int, str] = {
     12644448: "Безпам'ятний", 13689696: "Безпам'ятний",
     11293904: "Безпам'ятний", 15192136: "Безпам'ятний",
@@ -388,10 +398,11 @@ def _check_plan_completion(responsible_id: int) -> None:
         sup_line = f"\n\n👔 {supervisor_tag} — твій менеджер закрив місяць ✅" if supervisor_tag else ""
         mgr_tag_line = f" {manager_tag}" if manager_tag else ""
 
+        team_gen = TEAM_GENITIVE.get(team, team)
         msg = (
             f"{header}\n\n"
             f"👤 <b>{manager_name}</b>{mgr_tag_line}\n"
-            f"🏢 Команда: {team}\n\n"
+            f"🏢 Команда {team_gen}\n\n"
             f"┌─────────────────────┐\n"
             f"│ 💰 Факт: {total:,} грн\n"
             f"│ 🎯 План: {plan:,} грн\n"
@@ -434,10 +445,11 @@ def _handle_big_deal_notification(lead_id: int, responsible_id: int, amount: int
     mgr_tag_line = f" {manager_tag}" if manager_tag else ""
     sup_line = f"  {supervisor_tag}" if supervisor_tag else ""
 
+    team_gen = TEAM_GENITIVE.get(team, team)
     msg = (
         f"💥 <b>Велика угода закрита!</b>\n\n"
         f"👤 <b>{manager_name}</b>{mgr_tag_line}{sup_line}\n"
-        f"🏢 Команда: {team}\n\n"
+        f"🏢 Команда {team_gen}\n\n"
         f"💰 <b>{amount:,} грн</b>\n\n"
         f"{phrase}\n"
         f"🔗 <a href='{kommo_url}'>Угода #{lead_id}</a>"
