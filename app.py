@@ -1448,5 +1448,70 @@ def send_rnk_ai_report():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/backfill-closed-rnk", methods=["GET"])
+def backfill_closed_rnk():
+    """
+    Retroactively process closed-not-realized leads for RNK teams.
+    ?date=2026-06-12  (default: yesterday)
+    """
+    from datetime import datetime, timezone, timedelta
+    import traceback
+    try:
+        date_str = request.args.get("date")
+        if date_str:
+            day = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        else:
+            day = datetime.now(timezone.utc) - timedelta(days=1)
+
+        day_start = int(day.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        day_end = int(day.replace(hour=23, minute=59, second=59, microsecond=0).timestamp())
+
+        QUAL_PIPELINE_ID = 8921928
+        CLOSED_STATUS_ID = 143
+
+        leads = kommo.get_pipeline_leads(
+            QUAL_PIPELINE_ID, status_id=CLOSED_STATUS_ID,
+            with_custom_fields=True, closed_at_from=day_start
+        )
+
+        processed = 0
+        for lead in leads:
+            closed_at = lead.get("closed_at") or lead.get("updated_at", 0)
+            if not (day_start <= closed_at <= day_end):
+                continue
+
+            responsible_id = lead.get("responsible_user_id", 0)
+            if MANAGER_TEAM.get(responsible_id, "") not in RNK_TEAMS:
+                continue
+
+            lead_id = lead["id"]
+            details = kommo.get_lead_details(lead_id)
+            manager_name = kommo.get_user_name(responsible_id)
+            amount = int(lead.get("price", 0))
+
+            deal_data = {
+                "lead_id": lead_id,
+                "name": details["name"],
+                "manager": manager_name,
+                "team": MANAGER_TEAM.get(responsible_id, ""),
+                "reject_reason": details["reject_reason"],
+                "last_status": details["last_status"],
+                "days_in_work": details["days_in_work"],
+                "calls_count": details["calls_count"],
+                "notes_count": details["notes_count"],
+                "amount": amount,
+                "closed_at": datetime.fromtimestamp(closed_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                "ai_recommendation": ai_analyzer.analyze_closed_deal({
+                    **details, "manager": manager_name, "amount": amount
+                }),
+            }
+            sheets.log_closed_deal(deal_data)
+            processed += 1
+
+        return jsonify({"ok": True, "date": day.strftime("%Y-%m-%d"), "processed": processed})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 if __name__ == "__main__":
     app.run(debug=False)
