@@ -196,7 +196,7 @@ def log_closed_deal(deal: dict) -> None:
                 "Дзвінків", "Нотаток", "Сума (грн)", "Рекомендація AI",
                 "Коментар тімліда", "Статус розбору"
             ], 1)
-        ws.append_row([
+        ws.insert_row([
             deal.get("closed_at", ""),
             deal.get("lead_id", ""),
             deal.get("name", ""),
@@ -208,9 +208,9 @@ def log_closed_deal(deal: dict) -> None:
             deal.get("notes_count", 0),
             deal.get("amount", 0),
             deal.get("ai_recommendation", ""),
-            "",  # Коментар тімліда — заповнює вручну
-            "",  # Статус розбору — заповнює вручну
-        ])
+            "",  # Коментар тімліда
+            "",  # Статус розбору
+        ], 2)
         logger.info("sheets: logged closed deal %s -> %s", deal.get("lead_id"), sheet_name)
     except Exception as e:
         logger.error("sheets log_closed_deal: %s", e)
