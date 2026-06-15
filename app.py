@@ -160,6 +160,9 @@ UNASSIGNED_STATUSES = {
 }
 ADMIN_USER_ID = 904923  # Admin — означає немає реального відповідального
 
+# Ringostat SIP → Kommo manager ID (заповнити після першого тестового дзвінка)
+SIP_MAP: dict[str, int] = {}
+
 # Тімліди РНК — для нерозібраних заявок (без відповідального)
 ALL_SUPERVISORS = "@Andry_UTS @darina_mx"
 # Всі тімліди (для інших сповіщень)
@@ -1535,6 +1538,56 @@ def backfill_closed_rnk():
         return jsonify({"ok": True, "date": day.strftime("%Y-%m-%d"), "processed": processed})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
+@app.route("/ringostat-webhook", methods=["POST"])
+def ringostat_webhook():
+    """Receives call data from Ringostat after each call."""
+    data = request.get_json(silent=True) or {}
+    logger.info("Ringostat webhook: %s", data)
+
+    cdr_id = data.get("cdr_id", "")
+    call_type = data.get("call_type", "")
+    sip = data.get("sip", "")
+    duration = data.get("duration", 0)
+    record_url = data.get("record", "")
+    calldate = data.get("calldate", "")
+    src_num = data.get("src_num", "")
+    dst_num = data.get("dst_num", "")
+
+    # Знаходимо менеджера по SIP
+    manager_id = _sip_to_manager_id(sip)
+    if not manager_id:
+        return jsonify({"ok": True, "skipped": "unknown sip"})
+
+    team = MANAGER_TEAM.get(manager_id, "")
+    if team not in RNK_TEAMS:
+        return jsonify({"ok": True, "skipped": "not RNK team"})
+
+    duration_sec = int(duration) if str(duration).isdigit() else 0
+    if duration_sec < 10:
+        return jsonify({"ok": True, "skipped": "too short"})
+
+    manager_name = kommo.get_user_name(manager_id)
+    tg_tag = notifier.get_manager_tag(manager_id)
+
+    msg = (
+        f"📞 <b>Дзвінок завершено</b>\n"
+        f"👤 {manager_name}{tg_tag}\n"
+        f"📱 {src_num} → {dst_num}\n"
+        f"⏱ Тривалість: <b>{duration_sec // 60}хв {duration_sec % 60}с</b>\n"
+        f"🗓 {calldate}"
+    )
+    if record_url:
+        msg += f"\n🎙 <a href='{record_url}'>Запис дзвінка</a>"
+
+    notifier.send_to_rnk(msg)
+    return jsonify({"ok": True})
+
+
+def _sip_to_manager_id(sip: str) -> int:
+    """Map Ringostat SIP account to Kommo manager ID."""
+    return SIP_MAP.get(sip, 0)
 
 
 if __name__ == "__main__":
