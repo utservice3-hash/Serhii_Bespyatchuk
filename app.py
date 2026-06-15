@@ -1548,7 +1548,7 @@ def ringostat_webhook():
 
     cdr_id = data.get("cdr_id", "")
     call_type = data.get("call_type", "")
-    sip = data.get("sip", "")
+    sip = data.get("connected_with", "") or data.get("sip", "")
     duration = data.get("duration", 0)
     record_url = data.get("record", "")
     calldate = data.get("calldate", "")
