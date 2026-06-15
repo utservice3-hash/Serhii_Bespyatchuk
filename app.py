@@ -1555,27 +1555,27 @@ def ringostat_webhook():
     src_num = data.get("src_num", "")
     dst_num = data.get("dst_num", "")
 
-    # Знаходимо менеджера по SIP
-    manager_id = _sip_to_manager_id(sip)
-    if not manager_id:
-        return jsonify({"ok": True, "skipped": "unknown sip"})
-
-    team = MANAGER_TEAM.get(manager_id, "")
-    if team not in RNK_TEAMS:
-        return jsonify({"ok": True, "skipped": "not RNK team"})
-
     duration_sec = int(duration) if str(duration).isdigit() else 0
     if duration_sec < 10:
         return jsonify({"ok": True, "skipped": "too short"})
 
-    manager_name = kommo.get_user_name(manager_id)
-    tg_tag = notifier.get_manager_tag(manager_id)
+    # Шукаємо менеджера по SIP — якщо не знайдено, показуємо sip як є
+    manager_id = _sip_to_manager_id(sip)
+    if manager_id:
+        manager_name = kommo.get_user_name(manager_id)
+        tg_tag = notifier.get_manager_tag(manager_id)
+        team = MANAGER_TEAM.get(manager_id, "")
+        manager_line = f"👤 {manager_name}{tg_tag}"
+    else:
+        team = ""
+        manager_line = f"👤 SIP: <code>{sip}</code>"
+
+    call_type_label = {"in": "Вхідний", "out": "Вихідний", "transitin": "Транзит"}.get(call_type, call_type)
 
     msg = (
         f"📞 <b>Дзвінок завершено</b>\n"
-        f"👤 {manager_name}{tg_tag}\n"
-        f"📱 {src_num} → {dst_num}\n"
-        f"⏱ Тривалість: <b>{duration_sec // 60}хв {duration_sec % 60}с</b>\n"
+        f"{manager_line}\n"
+        f"📲 {call_type_label} | ⏱ <b>{duration_sec // 60}хв {duration_sec % 60}с</b>\n"
         f"🗓 {calldate}"
     )
     if record_url:
