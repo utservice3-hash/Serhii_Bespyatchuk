@@ -470,7 +470,7 @@ def _check_plan_completion(responsible_id: int) -> None:
             f"{footer}"
             f"{sup_line}"
         )
-        send_to_team_group(responsible_id, msg)
+        notifier.send_message(msg)
         logger.info("Plan completion congrats sent for manager %s (%s)", responsible_id, manager_name)
     except Exception as e:
         logger.error("_check_plan_completion(%s): %s", responsible_id, e)
@@ -511,7 +511,7 @@ def _handle_big_deal_notification(lead_id: int, responsible_id: int, amount: int
         f"💰 <b>{amount:,} грн</b>\n\n"
         f"{phrase}"
     )
-    send_to_team_group(responsible_id, msg)
+    notifier.send_message(msg)
     logger.info("Big deal notification: lead %s amount %d by %s", lead_id, amount, manager_name)
 
 
