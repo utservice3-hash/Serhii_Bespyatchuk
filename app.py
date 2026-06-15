@@ -1195,7 +1195,10 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
         f"{activity}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
-    send_to_team_group(responsible_id, msg)
+    if MANAGER_TEAM.get(responsible_id, "") in RNK_TEAMS:
+        notifier.send_to_rnk_closed(msg)
+    else:
+        notifier.send_to_rpk(msg)
     logger.info("Closed not realized: lead %s by %s", lead_id, manager_name)
 
     # Логуємо в Google Sheets реєстр відмов РНК

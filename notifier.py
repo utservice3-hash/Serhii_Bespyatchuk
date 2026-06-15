@@ -13,6 +13,9 @@ TG_THREAD_ID = os.getenv("TG_THREAD_ID", "")
 TG_CHAT_ID_RNK = os.getenv("TG_CHAT_ID_RNK", "-1003779373880")
 TG_THREAD_ID_RNK = "51"
 
+# Група РНК — гілка для закритих угод (ЗАКРИТО - НЕ РЕАЛІЗОВАНО)
+TG_THREAD_ID_RNK_CLOSED = "294"
+
 # Група РПК (нові заявки від лідогена)
 TG_CHAT_ID_RPK = "-1004391044886"
 TG_THREAD_ID_RPK = "3"
@@ -99,6 +102,26 @@ def _base_payload(text: str, chat_id: str = "", thread_id: str = "") -> dict:
     if tid:
         payload["message_thread_id"] = int(tid)
     return payload
+
+
+def send_to_rnk_closed(text: str) -> bool:
+    """Send closed-not-realized notification to RNK closed deals thread (294)."""
+    if not TG_TOKEN or not TG_CHAT_ID_RNK:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=TG_CHAT_ID_RNK, thread_id=TG_THREAD_ID_RNK_CLOSED)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram RNK closed error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_rnk_closed exception: %s", e)
+        return False
 
 
 def send_to_rpk(text: str) -> bool:
