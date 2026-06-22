@@ -199,6 +199,21 @@ def get_lead_notes(lead_id: int) -> list:
     return []
 
 
+def update_lead_status(lead_id: int, status_id: int) -> bool:
+    """Переводить лід на вказаний етап (в межах тієї ж воронки)."""
+    try:
+        resp = requests.patch(
+            f"{KOMMO_BASE}/api/v4/leads/{lead_id}",
+            headers=HEADERS,
+            json={"status_id": status_id},
+            timeout=10,
+        )
+        return resp.ok
+    except Exception as e:
+        logger.error("update_lead_status(%s, %s): %s", lead_id, status_id, e)
+        return False
+
+
 def get_note(lead_id: int, note_id: int) -> dict:
     """Повертає конкретну нотатку ліда (для точного зіставлення з вебхуком)."""
     try:

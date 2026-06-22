@@ -39,6 +39,7 @@ app = Flask(__name__)
 QUAL_PIPELINE_ID = 8921928
 NEW_FROM_LIDOGEN = 69716164   # "НОВА ЗАЯВКА ВІД ЛІДОГЕНЕРАТОРА"
 TAKEN_TO_WORK = 69693652      # "Лід взятий у роботу"
+NON_TARGET_STATUS = 143       # "Не цільові"
 REMINDER_MINUTES = 20
 
 PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
@@ -1144,6 +1145,13 @@ def webhook():
         if not responsible_id or responsible_id == ADMIN_USER_ID:
             _handle_rnk_event(lead_id, responsible_id, "🌐 Дзвінки з сайту")
 
+    elif status_id == NON_TARGET_STATUS:
+        threading.Thread(
+            target=_check_non_target_lead,
+            args=(lead_id, responsible_id),
+            daemon=True,
+        ).start()
+
     return jsonify({"ok": True})
 
 
@@ -1232,6 +1240,53 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
             }),
         }
         sheets.log_closed_deal(deal_data)
+
+
+def _check_non_target_lead(lead_id: int, responsible_id: int):
+    """Перевіряє ліда, закритого як 'Не цільові', через AI за розшифровками дзвінків.
+    Якщо клієнту дійсно потрібне вантажне перевезення — повертає лід у роботу і сповіщає тімліда."""
+    lead = kommo.get_lead(lead_id)
+    if not lead:
+        return
+    lead_name = lead.get("name", f"Лід #{lead_id}")
+
+    notes = kommo.get_lead_notes(lead_id)
+    call_notes = [n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")]
+    transcripts = []
+    for n in call_notes:
+        note_id = n.get("id")
+        if not note_id:
+            continue
+        full_note = kommo.get_note(lead_id, note_id)
+        params = full_note.get("params") or {}
+        link = params.get("link", "") or params.get("LINK", "")
+        if link:
+            transcripts.append(transcriber.transcribe_call(link))
+
+    if not transcripts:
+        return
+
+    result = ai_analyzer.check_target_lead(transcripts, lead_name)
+    if not result.get("is_target"):
+        return
+
+    kommo.update_lead_status(lead_id, TAKEN_TO_WORK)
+
+    manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
+    tg_tag = notifier.get_manager_tag(responsible_id)
+    supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+    sup_part = f" {supervisor_tag}" if supervisor_tag else ""
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+
+    msg = (
+        f"♻️ <b>Лід повернуто з 'Не цільові'</b>\n"
+        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
+        f"🏷 Назва: {lead_name}\n"
+        f"📋 Причина повернення: {result.get('reason', '')}\n"
+        f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
+    )
+    notifier.send_to_nontarget(msg)
+    logger.info("Non-target lead %s returned to work: %s", lead_id, result.get("reason"))
 
 
 def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):

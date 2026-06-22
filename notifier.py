@@ -19,6 +19,9 @@ TG_THREAD_ID_RNK_CLOSED = "294"
 # Група РНК — гілка "Відділ якості" (термінові сигнали ризику по угоді)
 TG_THREAD_ID_QUALITY = "1571"
 
+# Група РНК — гілка "Нецільові угоди"
+TG_THREAD_ID_NONTARGET = "310"
+
 # Група РПК (нові заявки від лідогена)
 TG_CHAT_ID_RPK = "-1004391044886"
 TG_THREAD_ID_RPK = "3"
@@ -144,6 +147,26 @@ def send_to_quality(text: str) -> bool:
         return True
     except Exception as e:
         logger.error("send_to_quality exception: %s", e)
+        return False
+
+
+def send_to_nontarget(text: str) -> bool:
+    """Send notification to the 'Нецільові угоди' thread (310)."""
+    if not TG_TOKEN or not TG_CHAT_ID_RNK:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=TG_CHAT_ID_RNK, thread_id=TG_THREAD_ID_NONTARGET)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram nontarget error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_nontarget exception: %s", e)
         return False
 
 

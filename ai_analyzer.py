@@ -102,6 +102,58 @@ def analyze_deal_calls(calls: list[dict], manager: str, lead_name: str = "") -> 
         return ""
 
 
+def check_target_lead(transcripts: list[str], lead_name: str = "") -> dict:
+    """
+    Перевіряє, чи лід, закритий як 'Не цільові', дійсно нецільовий, чи клієнту
+    потрібне вантажне перевезення (помилково закрито).
+    Повертає {"is_target": bool, "reason": str}.
+    """
+    if not ANTHROPIC_API_KEY or not transcripts:
+        return {"is_target": False, "reason": ""}
+
+    calls_text = "\n\n".join(f"--- Дзвінок {i+1} ---\n{t[:1500]}" for i, t in enumerate(transcripts) if t)
+    if not calls_text:
+        return {"is_target": False, "reason": ""}
+
+    prompt = f"""КВП логістики. Угода: {lead_name or '—'} закрита менеджером як "Не цільові" (нецільовий лід).
+Розшифровки дзвінків:
+{calls_text}
+
+Перевір за змістом розмови: клієнту дійсно потрібне вантажне перевезення (нецільовий = неправильно закрито) чи це справді нецільове звернення (не про перевезення, спам, помилковий номер, не клієнт)?
+Відповідь рівно у форматі (без markdown):
+TARGET: ТАК - <1 речення чому потрібне перевезення>
+або
+TARGET: НІ - <1 речення чому нецільовий>
+Українська."""
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": MODEL,
+                "max_tokens": 150,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        data = resp.json()
+        if not resp.ok:
+            logger.error("Claude API check_target_lead error: %s", data)
+            return {"is_target": False, "reason": ""}
+        text = data["content"][0]["text"].strip()
+        is_target = text.upper().startswith("TARGET: ТАК") or "TARGET: ТАК" in text.upper()
+        reason = text.split("-", 1)[1].strip() if "-" in text else text
+        return {"is_target": is_target, "reason": reason}
+    except Exception as e:
+        logger.error("check_target_lead: %s", e)
+        return {"is_target": False, "reason": ""}
+
+
 def analyze_team_deals(team: str, deals: list[dict]) -> str:
     """
     Аналізує всі відмови команди за день і дає зведену рекомендацію тімліду.
