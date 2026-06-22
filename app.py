@@ -1301,13 +1301,52 @@ def _handle_call(note: dict):
 
     info = pending.get(lead_id)
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
-    tg_tag = notifier.get_manager_tag(responsible_id)
     call_type = "вхідний" if note_type == "10" else "вихідний"
 
     if info:
         sheets.update_first_call(lead_id, now)
         pending.pop(lead_id, None)
     logger.info("Call note: lead %s type %s by %s", lead_id, note_type, manager_name)
+
+    # РНК: аналізуємо дзвінки по угодах з реклами (Кваліфікація), тривалістю від 40с
+    if MANAGER_TEAM.get(responsible_id, "") not in RNK_TEAMS:
+        return
+    lead = kommo.get_lead(lead_id)
+    if not lead or lead.get("pipeline_id") != QUAL_PIPELINE_ID:
+        return
+
+    call_info = kommo.get_latest_call_note(lead_id)
+    duration = call_info.get("duration", 0)
+    record_url = call_info.get("link", "")
+    if duration < 40:
+        return
+
+    threading.Thread(
+        target=_process_rnk_deal_call,
+        args=(lead_id, lead.get("name", f"Угода #{lead_id}"), manager_name, call_type, duration, record_url),
+        daemon=True,
+    ).start()
+
+
+def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call_type: str, duration: int, record_url: str) -> None:
+    """Розшифровує дзвінок, накопичує в реєстрі по угоді й надсилає AI-аналіз усієї історії дзвінків."""
+    transcript = transcriber.transcribe_call(record_url) if record_url else ""
+    sheets.append_call(lead_id, manager_name, call_type, duration, transcript, datetime.now(timezone.utc))
+
+    calls = sheets.get_calls_for_lead(lead_id)
+    analysis = ai_analyzer.analyze_deal_calls(calls, manager_name, lead_name)
+    if not analysis:
+        return
+
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+    msg = (
+        f"🤖 <b>AI-аналіз дзвінків по угоді</b>\n"
+        f"👤 {manager_name}\n"
+        f"🏷 {lead_name} | 📞 дзвінків: {len(calls)}\n\n"
+        f"{analysis}\n\n"
+        f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
+    )
+    notifier.send_to_rnk(msg)
 
 
 def _build_stats_text(days: int, label: str) -> str:
@@ -1586,37 +1625,12 @@ def ringostat_webhook():
         msg += f"\n🎙 <a href='{record_url}'>Запис дзвінка</a>"
 
     notifier.send_to_rnk(msg)
-
-    if record_url:
-        manager_label = manager_name if manager_id else sip
-        threading.Thread(
-            target=_transcribe_and_analyze_call,
-            args=(record_url, manager_label),
-            daemon=True,
-        ).start()
-
     return jsonify({"ok": True})
 
 
 def _sip_to_manager_id(sip: str) -> int:
     """Map Ringostat SIP account to Kommo manager ID."""
     return SIP_MAP.get(sip, 0)
-
-
-def _transcribe_and_analyze_call(record_url: str, manager_label: str) -> None:
-    """Розшифровує запис дзвінка (Groq Whisper) і надсилає AI-оцінку в РНК."""
-    transcript = transcriber.transcribe_call(record_url)
-    if not transcript:
-        return
-    analysis = ai_analyzer.analyze_call_transcript(transcript, manager_label)
-    if not analysis:
-        return
-    msg = (
-        f"🤖 <b>AI-аналіз дзвінка</b>\n"
-        f"👤 {manager_label}\n\n"
-        f"{analysis}"
-    )
-    notifier.send_to_rnk(msg)
 
 
 if __name__ == "__main__":

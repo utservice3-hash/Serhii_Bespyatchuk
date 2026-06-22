@@ -199,6 +199,22 @@ def get_lead_notes(lead_id: int) -> list:
     return []
 
 
+def get_latest_call_note(lead_id: int) -> dict:
+    """Повертає параметри останньої дзвінкової нотатки ліда: duration, link, phone."""
+    notes = get_lead_notes(lead_id)
+    calls = [n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")]
+    if not calls:
+        return {}
+    latest = max(calls, key=lambda n: n.get("created_at", 0))
+    params = latest.get("params") or {}
+    return {
+        "duration": int(params.get("duration", 0) or 0),
+        "link": params.get("link", "") or params.get("LINK", ""),
+        "phone": params.get("phone", "") or params.get("PHONE", ""),
+        "created_at": latest.get("created_at", 0),
+    }
+
+
 def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int = 1, with_custom_fields: bool = False, closed_at_from: int | None = None) -> list:
     params: dict = {"limit": 250, "page": page}
     if status_id:

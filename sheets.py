@@ -173,6 +173,40 @@ def update_first_call(lead_id: int, call_at: datetime):
         logger.error("sheets update_first_call: %s", e)
 
 
+def append_call(lead_id: int, manager: str, call_type: str, duration: int, transcript: str, call_at: datetime) -> None:
+    """Додає дзвінок до реєстру 'Дзвінки РНК' (накопичується по угоді)."""
+    ws = _get_or_create_worksheet("Дзвінки РНК", rows=5000, cols=6)
+    if not ws:
+        return
+    try:
+        if ws.cell(1, 1).value != "Lead ID":
+            ws.insert_row(["Lead ID", "Дата", "Менеджер", "Тип", "Тривалість (с)", "Транскрипт"], 1)
+        ws.append_row([
+            lead_id,
+            call_at.strftime("%Y-%m-%d %H:%M:%S"),
+            manager,
+            call_type,
+            duration,
+            transcript,
+        ])
+        logger.info("sheets: appended call for lead %s (%ss)", lead_id, duration)
+    except Exception as e:
+        logger.error("sheets append_call: %s", e)
+
+
+def get_calls_for_lead(lead_id: int) -> list[dict]:
+    """Повертає всі дзвінки угоди (накопичені), найстаріший спочатку."""
+    ws = _get_or_create_worksheet("Дзвінки РНК", rows=5000, cols=6)
+    if not ws:
+        return []
+    try:
+        records = ws.get_all_records()
+        return [r for r in records if str(r.get("Lead ID", "")) == str(lead_id)]
+    except Exception as e:
+        logger.error("sheets get_calls_for_lead: %s", e)
+        return []
+
+
 def _team_sheet_name(team: str) -> str:
     return f"РНК {team}"
 

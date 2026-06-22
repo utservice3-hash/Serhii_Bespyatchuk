@@ -48,15 +48,23 @@ def analyze_closed_deal(deal: dict) -> str:
         return ""
 
 
-def analyze_call_transcript(transcript: str, manager: str = "") -> str:
-    """Коротко оцінює розмову менеджера з клієнтом за транскриптом."""
-    if not ANTHROPIC_API_KEY or not transcript:
+
+def analyze_deal_calls(calls: list[dict], manager: str, lead_name: str = "") -> str:
+    """Аналізує всю історію дзвінків по угоді (накопичену), а не лише один дзвінок."""
+    if not ANTHROPIC_API_KEY or not calls:
         return ""
 
-    prompt = f"""КВП логістики. Менеджер: {manager or '—'}.
-Розшифровка дзвінка:
-\"\"\"{transcript[:3000]}\"\"\"
-Дай коротку оцінку (2-3 речення): чи менеджер правильно опрацював клієнта, головне заперечення/запит клієнта, що варто покращити. Українська."""
+    history = ""
+    for i, c in enumerate(calls, 1):
+        transcript = (c.get("Транскрипт") or "")[:1500]
+        history += (
+            f"\n--- Дзвінок {i} ({c.get('Тип','')}, {c.get('Тривалість (с)','?')}с) ---\n{transcript}"
+        )
+
+    prompt = f"""КВП логістики. Угода: {lead_name or '—'} | Менеджер: {manager or '—'}.
+Історія всіх дзвінків по угоді ({len(calls)} шт.):{history}
+
+Дай зведену оцінку (3-4 речення): як менеджер веде клієнта по всій історії спілкування, головні заперечення клієнта, чи прогрес у переговорах, що варто покращити. Українська."""
 
     try:
         resp = requests.post(
@@ -68,7 +76,7 @@ def analyze_call_transcript(transcript: str, manager: str = "") -> str:
             },
             json={
                 "model": MODEL,
-                "max_tokens": 200,
+                "max_tokens": 300,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=30,
@@ -77,10 +85,10 @@ def analyze_call_transcript(transcript: str, manager: str = "") -> str:
         if resp.ok:
             return data["content"][0]["text"].strip()
         else:
-            logger.error("Claude API call analysis error: %s", data)
+            logger.error("Claude API deal calls analysis error: %s", data)
             return ""
     except Exception as e:
-        logger.error("analyze_call_transcript: %s", e)
+        logger.error("analyze_deal_calls: %s", e)
         return ""
 
 
