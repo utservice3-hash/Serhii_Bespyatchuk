@@ -161,7 +161,9 @@ UNASSIGNED_STATUSES = {
 ADMIN_USER_ID = 904923  # Admin — означає немає реального відповідального
 
 # Ringostat SIP → Kommo manager ID (заповнити після першого тестового дзвінка)
-SIP_MAP: dict[str, int] = {}
+SIP_MAP: dict[str, int] = {
+    "utsua_103": 15355168,  # Голоміна Олександра Євгеніївна (Безпам'ятний)
+}
 
 # Тімліди РНК — для нерозібраних заявок (без відповідального)
 ALL_SUPERVISORS = "@Andry_UTS @darina_mx"
