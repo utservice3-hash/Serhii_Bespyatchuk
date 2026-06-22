@@ -1034,11 +1034,13 @@ def _parse_note(data: dict) -> dict | None:
     note_type = data.get("leads[note][0][note_type]")
     lead_id = data.get("leads[note][0][element_id]")
     user_id = data.get("leads[note][0][main_user_id]")
+    note_id = data.get("leads[note][0][id]")
     if note_type and lead_id:
         return {
             "note_type": str(note_type),
             "lead_id": int(lead_id),
             "responsible_user_id": int(user_id) if user_id else 0,
+            "note_id": int(note_id) if note_id else 0,
         }
     return None
 
@@ -1298,6 +1300,7 @@ def _handle_call(note: dict):
     lead_id = note["lead_id"]
     responsible_id = note["responsible_user_id"]
     note_type = note["note_type"]
+    note_id = note.get("note_id", 0)
     now = datetime.now(timezone.utc)
 
     info = pending.get(lead_id)
@@ -1316,9 +1319,15 @@ def _handle_call(note: dict):
     if not lead:
         return
 
-    call_info = kommo.get_latest_call_note(lead_id)
-    duration = call_info.get("duration", 0)
-    record_url = call_info.get("link", "")
+    if note_id:
+        call_note = kommo.get_note(lead_id, note_id)
+        params = call_note.get("params") or {}
+        duration = int(params.get("duration", 0) or 0)
+        record_url = params.get("link", "") or params.get("LINK", "")
+    else:
+        call_info = kommo.get_latest_call_note(lead_id)
+        duration = call_info.get("duration", 0)
+        record_url = call_info.get("link", "")
     if duration < 40:
         return
 

@@ -199,6 +199,21 @@ def get_lead_notes(lead_id: int) -> list:
     return []
 
 
+def get_note(lead_id: int, note_id: int) -> dict:
+    """Повертає конкретну нотатку ліда (для точного зіставлення з вебхуком)."""
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/leads/{lead_id}/notes/{note_id}",
+            headers=HEADERS,
+            timeout=10,
+        )
+        if resp.ok:
+            return resp.json()
+    except Exception as e:
+        logger.error("get_note(%s, %s): %s", lead_id, note_id, e)
+    return {}
+
+
 def get_latest_call_note(lead_id: int) -> dict:
     """Повертає параметри останньої дзвінкової нотатки ліда: duration, link, phone."""
     notes = get_lead_notes(lead_id)
