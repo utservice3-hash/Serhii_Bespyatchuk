@@ -1362,7 +1362,7 @@ def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call
     notifier.send_to_rnk(msg)
 
     if risk_match:
-        reason = risk_match.group(1).strip() or "виявлено ризик втрати угоди"
+        reason = re.sub(r"[*#]+", "", risk_match.group(1)).strip() or "виявлено ризик втрати угоди"
         urgent_msg = (
             f"🔴 <b>ТЕРМІНОВО — ризик втрати угоди</b>\n"
             f"👤 Менеджер: {manager_name}\n"
