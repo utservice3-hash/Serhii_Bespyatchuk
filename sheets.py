@@ -173,14 +173,14 @@ def update_first_call(lead_id: int, call_at: datetime):
         logger.error("sheets update_first_call: %s", e)
 
 
-def append_call(lead_id: int, manager: str, call_type: str, duration: int, transcript: str, call_at: datetime) -> None:
-    """Додає дзвінок до реєстру 'Дзвінки РНК' (накопичується по угоді)."""
-    ws = _get_or_create_worksheet("Дзвінки РНК", rows=5000, cols=6)
+def append_call(lead_id: int, manager: str, call_type: str, duration: int, transcript: str, call_at: datetime) -> int:
+    """Додає дзвінок до реєстру 'Дзвінки РНК' (накопичується по угоді). Повертає номер рядка."""
+    ws = _get_or_create_worksheet("Дзвінки РНК", rows=5000, cols=8)
     if not ws:
-        return
+        return 0
     try:
         if ws.cell(1, 1).value != "Lead ID":
-            ws.insert_row(["Lead ID", "Дата", "Менеджер", "Тип", "Тривалість (с)", "Транскрипт"], 1)
+            ws.insert_row(["Lead ID", "Дата", "Менеджер", "Тип", "Тривалість (с)", "Транскрипт", "AI-аналіз", "Ризик"], 1)
         ws.append_row([
             lead_id,
             call_at.strftime("%Y-%m-%d %H:%M:%S"),
@@ -188,10 +188,28 @@ def append_call(lead_id: int, manager: str, call_type: str, duration: int, trans
             call_type,
             duration,
             transcript,
+            "",  # AI-аналіз
+            "",  # Ризик
         ])
         logger.info("sheets: appended call for lead %s (%ss)", lead_id, duration)
+        return len(ws.get_all_values())
     except Exception as e:
         logger.error("sheets append_call: %s", e)
+        return 0
+
+
+def update_call_analysis(row: int, analysis: str, risk: str) -> None:
+    """Записує AI-аналіз і ризик у відповідний рядок реєстру 'Дзвінки РНК'."""
+    if not row:
+        return
+    ws = _get_or_create_worksheet("Дзвінки РНК", rows=5000, cols=8)
+    if not ws:
+        return
+    try:
+        ws.update_cell(row, 7, analysis)
+        ws.update_cell(row, 8, risk)
+    except Exception as e:
+        logger.error("sheets update_call_analysis: %s", e)
 
 
 def get_calls_for_lead(lead_id: int) -> list[dict]:

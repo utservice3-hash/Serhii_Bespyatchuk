@@ -1341,7 +1341,7 @@ def _handle_call(note: dict):
 def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call_type: str, duration: int, record_url: str) -> None:
     """Розшифровує дзвінок, накопичує в реєстрі по угоді й надсилає AI-аналіз усієї історії дзвінків."""
     transcript = transcriber.transcribe_call(record_url) if record_url else ""
-    sheets.append_call(lead_id, manager_name, call_type, duration, transcript, datetime.now(timezone.utc))
+    row = sheets.append_call(lead_id, manager_name, call_type, duration, transcript, datetime.now(timezone.utc))
 
     calls = sheets.get_calls_for_lead(lead_id)
     analysis = ai_analyzer.analyze_deal_calls(calls, manager_name, lead_name)
@@ -1350,6 +1350,9 @@ def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call
 
     risk_match = re.search(r"RISK:\s*ТАК\s*-?\s*(.*)", analysis)
     analysis_clean = re.sub(r"\n?RISK:.*", "", analysis).strip()
+    risk_label = ("Ризик: " + re.sub(r"[*#]+", "", risk_match.group(1)).strip()) if risk_match else "Немає"
+
+    sheets.update_call_analysis(row, analysis_clean, risk_label)
 
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
     msg = (
@@ -1362,7 +1365,7 @@ def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call
     notifier.send_to_rnk(msg)
 
     if risk_match:
-        reason = re.sub(r"[*#]+", "", risk_match.group(1)).strip() or "виявлено ризик втрати угоди"
+        reason = risk_label.removeprefix("Ризик: ") or "виявлено ризик втрати угоди"
         urgent_msg = (
             f"🔴 <b>ТЕРМІНОВО — ризик втрати угоди</b>\n"
             f"👤 Менеджер: {manager_name}\n"
