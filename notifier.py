@@ -16,6 +16,9 @@ TG_THREAD_ID_RNK = "51"
 # Група РНК — гілка для закритих угод (ЗАКРИТО - НЕ РЕАЛІЗОВАНО)
 TG_THREAD_ID_RNK_CLOSED = "294"
 
+# Група РНК — гілка "Відділ якості" (термінові сигнали ризику по угоді)
+TG_THREAD_ID_QUALITY = "1571"
+
 # Група РПК (нові заявки від лідогена)
 TG_CHAT_ID_RPK = "-1004391044886"
 TG_THREAD_ID_RPK = "3"
@@ -121,6 +124,26 @@ def send_to_rnk_closed(text: str) -> bool:
         return True
     except Exception as e:
         logger.error("send_to_rnk_closed exception: %s", e)
+        return False
+
+
+def send_to_quality(text: str) -> bool:
+    """Send urgent risk alert to the 'Відділ якості' thread (1571)."""
+    if not TG_TOKEN or not TG_CHAT_ID_RNK:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=TG_CHAT_ID_RNK, thread_id=TG_THREAD_ID_QUALITY)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram quality error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_quality exception: %s", e)
         return False
 
 

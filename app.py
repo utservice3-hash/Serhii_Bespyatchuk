@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
@@ -1338,15 +1339,29 @@ def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call
     if not analysis:
         return
 
+    risk_match = re.search(r"RISK:\s*ТАК\s*-?\s*(.*)", analysis)
+    analysis_clean = re.sub(r"\n?RISK:.*", "", analysis).strip()
+
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
     msg = (
         f"🤖 <b>AI-аналіз дзвінків по угоді</b>\n"
         f"👤 {manager_name}\n"
         f"🏷 {lead_name} | 📞 дзвінків: {len(calls)}\n\n"
-        f"{analysis}\n\n"
+        f"{analysis_clean}\n\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
     notifier.send_to_rnk(msg)
+
+    if risk_match:
+        reason = risk_match.group(1).strip() or "виявлено ризик втрати угоди"
+        urgent_msg = (
+            f"🔴 <b>ТЕРМІНОВО — ризик втрати угоди</b>\n"
+            f"👤 Менеджер: {manager_name}\n"
+            f"🏷 Угода: {lead_name}\n"
+            f"⚠️ {reason}\n\n"
+            f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
+        )
+        notifier.send_to_quality(urgent_msg)
 
 
 def _build_stats_text(days: int, label: str) -> str:
