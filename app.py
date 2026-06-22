@@ -1521,6 +1521,35 @@ def send_rnk_ai_report():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/test-call-analysis", methods=["GET"])
+def test_call_analysis():
+    """Manually run the RNK call-analysis pipeline for a specific lead/note (debug)."""
+    import traceback
+    try:
+        lead_id = int(request.args.get("lead_id", 0))
+        note_id = int(request.args.get("note_id", 0))
+        if not lead_id or not note_id:
+            return jsonify({"ok": False, "error": "lead_id and note_id required"})
+
+        lead = kommo.get_lead(lead_id)
+        if not lead:
+            return jsonify({"ok": False, "error": "lead not found"})
+
+        responsible_id = lead.get("responsible_user_id", 0)
+        manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
+
+        call_note = kommo.get_note(lead_id, note_id)
+        params = call_note.get("params") or {}
+        duration = int(params.get("duration", 0) or 0)
+        record_url = params.get("link", "") or params.get("LINK", "")
+        call_type = "вхідний" if call_note.get("note_type") in (10, "call_in") else "вихідний"
+
+        _process_rnk_deal_call(lead_id, lead.get("name", f"Угода #{lead_id}"), manager_name, call_type, duration, record_url)
+        return jsonify({"ok": True, "duration": duration, "record_url": record_url, "manager": manager_name})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/backfill-closed-rnk", methods=["GET"])
 def backfill_closed_rnk():
     """
