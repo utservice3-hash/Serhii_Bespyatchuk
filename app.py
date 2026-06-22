@@ -1309,11 +1309,11 @@ def _handle_call(note: dict):
         pending.pop(lead_id, None)
     logger.info("Call note: lead %s type %s by %s", lead_id, note_type, manager_name)
 
-    # РНК: аналізуємо дзвінки по угодах з реклами (Кваліфікація), тривалістю від 40с
+    # РНК: аналізуємо дзвінки по угодах команд РНК, тривалістю від 40с
     if MANAGER_TEAM.get(responsible_id, "") not in RNK_TEAMS:
         return
     lead = kommo.get_lead(lead_id)
-    if not lead or lead.get("pipeline_id") != QUAL_PIPELINE_ID:
+    if not lead:
         return
 
     call_info = kommo.get_latest_call_note(lead_id)
