@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -9,6 +10,7 @@ import kommo
 import notifier
 import sheets
 import ai_analyzer
+import transcriber
 
 SNAPSHOT_FILE = "/tmp/plan_snapshot.json"
 
@@ -1584,12 +1586,37 @@ def ringostat_webhook():
         msg += f"\n🎙 <a href='{record_url}'>Запис дзвінка</a>"
 
     notifier.send_to_rnk(msg)
+
+    if record_url:
+        manager_label = manager_name if manager_id else sip
+        threading.Thread(
+            target=_transcribe_and_analyze_call,
+            args=(record_url, manager_label),
+            daemon=True,
+        ).start()
+
     return jsonify({"ok": True})
 
 
 def _sip_to_manager_id(sip: str) -> int:
     """Map Ringostat SIP account to Kommo manager ID."""
     return SIP_MAP.get(sip, 0)
+
+
+def _transcribe_and_analyze_call(record_url: str, manager_label: str) -> None:
+    """Розшифровує запис дзвінка (Groq Whisper) і надсилає AI-оцінку в РНК."""
+    transcript = transcriber.transcribe_call(record_url)
+    if not transcript:
+        return
+    analysis = ai_analyzer.analyze_call_transcript(transcript, manager_label)
+    if not analysis:
+        return
+    msg = (
+        f"🤖 <b>AI-аналіз дзвінка</b>\n"
+        f"👤 {manager_label}\n\n"
+        f"{analysis}"
+    )
+    notifier.send_to_rnk(msg)
 
 
 if __name__ == "__main__":

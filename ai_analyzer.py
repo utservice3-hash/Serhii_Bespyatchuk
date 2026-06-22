@@ -48,6 +48,42 @@ def analyze_closed_deal(deal: dict) -> str:
         return ""
 
 
+def analyze_call_transcript(transcript: str, manager: str = "") -> str:
+    """Коротко оцінює розмову менеджера з клієнтом за транскриптом."""
+    if not ANTHROPIC_API_KEY or not transcript:
+        return ""
+
+    prompt = f"""КВП логістики. Менеджер: {manager or '—'}.
+Розшифровка дзвінка:
+\"\"\"{transcript[:3000]}\"\"\"
+Дай коротку оцінку (2-3 речення): чи менеджер правильно опрацював клієнта, головне заперечення/запит клієнта, що варто покращити. Українська."""
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": MODEL,
+                "max_tokens": 200,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        data = resp.json()
+        if resp.ok:
+            return data["content"][0]["text"].strip()
+        else:
+            logger.error("Claude API call analysis error: %s", data)
+            return ""
+    except Exception as e:
+        logger.error("analyze_call_transcript: %s", e)
+        return ""
+
+
 def analyze_team_deals(team: str, deals: list[dict]) -> str:
     """
     Аналізує всі відмови команди за день і дає зведену рекомендацію тімліду.
