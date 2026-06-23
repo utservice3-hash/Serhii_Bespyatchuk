@@ -1881,6 +1881,41 @@ def test_ai_deal():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/dedupe-closed-deals", methods=["GET"])
+def dedupe_closed_deals():
+    """Видаляє дублікати рядків для одного lead_id у вкладці 'РНК <команда>',
+    залишаючи рядок з найбільш повним AI-аналізом. ?team=Команда"""
+    import traceback
+    try:
+        team = request.args.get("team", "")
+        if not team:
+            return jsonify({"ok": False, "error": "team required"})
+
+        ws = sheets._get_or_create_worksheet(sheets._team_sheet_name(team), rows=2000, cols=15)
+        if not ws:
+            return jsonify({"ok": False, "error": "worksheet not found"})
+
+        records = ws.get_all_records()
+        by_lead: dict[str, list[int]] = {}
+        for i, r in enumerate(records, start=2):
+            lead_id = str(r.get("ID угоди", ""))
+            by_lead.setdefault(lead_id, []).append(i)
+
+        rows_to_delete = []
+        for lead_id, rows in by_lead.items():
+            if len(rows) <= 1:
+                continue
+            best_row = max(rows, key=lambda r: len(str(records[r - 2].get("Рекомендація AI", ""))))
+            rows_to_delete.extend(r for r in rows if r != best_row)
+
+        for row in sorted(rows_to_delete, reverse=True):
+            ws.delete_rows(row)
+
+        return jsonify({"ok": True, "team": team, "deleted_rows": sorted(rows_to_delete, reverse=True)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/test-non-target", methods=["GET"])
 def test_non_target():
     """Manually run the non-target lead verification pipeline for a specific lead (debug).
