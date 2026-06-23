@@ -13,14 +13,29 @@ TG_THREAD_ID = os.getenv("TG_THREAD_ID", "")
 TG_CHAT_ID_RNK = os.getenv("TG_CHAT_ID_RNK", "-1003779373880")
 TG_THREAD_ID_RNK = "51"
 
-# Група РНК — гілка для закритих угод (ЗАКРИТО - НЕ РЕАЛІЗОВАНО)
+# Група РНК — гілка для закритих угод (ЗАКРИТО - НЕ РЕАЛІЗОВАНО) — фолбек, якщо команда невідома
 TG_THREAD_ID_RNK_CLOSED = "294"
 
 # Група РНК — гілка "Відділ якості" (термінові сигнали ризику по угоді)
 TG_THREAD_ID_QUALITY = "1571"
 
-# Група РНК — гілка "Нецільові угоди"
+# Група РНК — гілка "Нецільові угоди" — фолбек, якщо команда невідома
 TG_THREAD_ID_NONTARGET = "310"
+
+# Окремі групи РНК на кожну команду: "закрито не реалізовано" і "нецільові угоди"
+# в різних чатах/гілках для Михальчевської і Безпам'ятного.
+_RNK_TEAM_ROUTES: dict[str, dict[str, str]] = {
+    "Михальчевська": {
+        "chat_id": "-1002925017503",
+        "closed_thread": "2",
+        "nontarget_thread": "1550",
+    },
+    "Безпам'ятний": {
+        "chat_id": "-1002258732695",
+        "closed_thread": "5341",
+        "nontarget_thread": "13446",
+    },
+}
 
 # Група РПК (нові заявки від лідогена)
 TG_CHAT_ID_RPK = "-1004391044886"
@@ -110,12 +125,15 @@ def _base_payload(text: str, chat_id: str = "", thread_id: str = "") -> dict:
     return payload
 
 
-def send_to_rnk_closed(text: str) -> bool:
-    """Send closed-not-realized notification to RNK closed deals thread (294)."""
-    if not TG_TOKEN or not TG_CHAT_ID_RNK:
+def send_to_rnk_closed(text: str, team: str = "") -> bool:
+    """Send closed-not-realized notification to the team's own RNK group/thread."""
+    route = _RNK_TEAM_ROUTES.get(team)
+    chat_id = route["chat_id"] if route else TG_CHAT_ID_RNK
+    thread_id = route["closed_thread"] if route else TG_THREAD_ID_RNK_CLOSED
+    if not TG_TOKEN or not chat_id:
         return False
     try:
-        payload = _base_payload(text, chat_id=TG_CHAT_ID_RNK, thread_id=TG_THREAD_ID_RNK_CLOSED)
+        payload = _base_payload(text, chat_id=chat_id, thread_id=thread_id)
         resp = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
             json=payload, timeout=10
@@ -150,12 +168,15 @@ def send_to_quality(text: str) -> bool:
         return False
 
 
-def send_to_nontarget(text: str) -> bool:
-    """Send notification to the 'Нецільові угоди' thread (310)."""
-    if not TG_TOKEN or not TG_CHAT_ID_RNK:
+def send_to_nontarget(text: str, team: str = "") -> bool:
+    """Send notification to the team's own 'Нецільові угоди' group/thread."""
+    route = _RNK_TEAM_ROUTES.get(team)
+    chat_id = route["chat_id"] if route else TG_CHAT_ID_RNK
+    thread_id = route["nontarget_thread"] if route else TG_THREAD_ID_NONTARGET
+    if not TG_TOKEN or not chat_id:
         return False
     try:
-        payload = _base_payload(text, chat_id=TG_CHAT_ID_RNK, thread_id=TG_THREAD_ID_NONTARGET)
+        payload = _base_payload(text, chat_id=chat_id, thread_id=thread_id)
         resp = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
             json=payload, timeout=10

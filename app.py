@@ -1199,6 +1199,7 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
     tg_tag = notifier.get_manager_tag(responsible_id)
     supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+    team = MANAGER_TEAM.get(responsible_id, "")
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
 
     sup_part = f" {supervisor_tag}" if supervisor_tag else ""
@@ -1210,25 +1211,16 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
 
     activity = "✅ Була активність" if (notes > 0 or calls > 0) else "🚫 Активності не було"
 
-    msg = (
-        f"❌ <b>Закрито і не реалізовано</b>\n"
-        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
-        f"🏷 Назва: {details['name']}\n"
-        f"📋 Причина: {reason}\n"
-        f"🔀 Закрито з етапу: {last_status}\n"
-        f"📞 Дзвінків: <b>{calls}</b> | Нотаток: <b>{notes}</b>\n"
-        f"📅 Днів в роботі: <b>{days}</b>\n"
-        f"{activity}\n"
-        f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
-    )
-    if MANAGER_TEAM.get(responsible_id, "") in RNK_TEAMS:
-        notifier.send_to_rnk_closed(msg)
-    else:
-        notifier.send_to_rpk(msg)
-    logger.info("Closed not realized: lead %s by %s", lead_id, manager_name)
+    # Для РНК-команд рахуємо AI-вердикт ДО відправки сповіщення, щоб одразу
+    # показати короткий аналіз і, якщо правила продажу не дотримані, повернути
+    # угоду менеджеру в роботу.
+    verdict = ""
+    category = ""
+    verdict_reason = ""
+    recommendation_clean = ""
+    returned = False
 
-    # Логуємо в Google Sheets реєстр відмов РНК
-    if MANAGER_TEAM.get(responsible_id, "") in RNK_TEAMS:
+    if team in RNK_TEAMS:
         lead = kommo.get_lead(lead_id)
         amount = int(lead.get("price", 0)) if lead else 0
         recommendation = ai_analyzer.analyze_closed_deal({
@@ -1250,7 +1242,7 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
             "lead_id": lead_id,
             "name": details["name"],
             "manager": manager_name,
-            "team": MANAGER_TEAM.get(responsible_id, ""),
+            "team": team,
             "reject_reason": details["reject_reason"],
             "last_status": details["last_status"],
             "days_in_work": details["days_in_work"],
@@ -1265,15 +1257,37 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
         sheets.log_closed_deal(deal_data)
 
         if verdict == "ПЕРЕДЧАСНЕ":
-            alert_msg = (
-                f"🔴 <b>AI: угоду закрито передчасно</b>\n"
-                f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
-                f"🏷 {details['name']}\n"
-                f"📋 Категорія: {category or '—'}\n"
-                f"⚠️ {verdict_reason}\n"
-                f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
-            )
-            notifier.send_to_rnk_closed(alert_msg)
+            kommo.update_lead_status(lead_id, TAKEN_TO_WORK)
+            returned = True
+
+    verdict_block = ""
+    if verdict == "ПЕРЕДЧАСНЕ":
+        verdict_block = (
+            f"\n🔴 <b>AI: угоду закрито передчасно</b>{sup_part}\n"
+            f"📋 Категорія: {category or '—'}\n"
+            f"⚠️ {verdict_reason}\n"
+            f"♻️ Угоду автоматично повернуто менеджеру в роботу.\n"
+        )
+    elif verdict == "ОБ'ЄКТИВНЕ":
+        verdict_block = f"\n🟢 <b>AI: закриття обґрунтоване</b>\n{verdict_reason}\n"
+
+    msg = (
+        f"❌ <b>Закрито і не реалізовано</b>\n"
+        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
+        f"🏷 Назва: {details['name']}\n"
+        f"📋 Причина: {reason}\n"
+        f"🔀 Закрито з етапу: {last_status}\n"
+        f"📞 Дзвінків: <b>{calls}</b> | Нотаток: <b>{notes}</b>\n"
+        f"📅 Днів в роботі: <b>{days}</b>\n"
+        f"{activity}\n"
+        f"{verdict_block}"
+        f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
+    )
+    if team in RNK_TEAMS:
+        notifier.send_to_rnk_closed(msg, team)
+    else:
+        notifier.send_to_rpk(msg)
+    logger.info("Closed not realized: lead %s by %s (verdict=%s, returned=%s)", lead_id, manager_name, verdict, returned)
 
 
 def _check_non_target_lead(lead_id: int, responsible_id: int):
@@ -1314,6 +1328,7 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
     tg_tag = notifier.get_manager_tag(responsible_id)
     supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+    team = MANAGER_TEAM.get(responsible_id, "")
     sup_part = f" {supervisor_tag}" if supervisor_tag else ""
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
 
@@ -1325,10 +1340,10 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
         f"♻️ <b>Лід повернуто з 'Не цільові'</b>\n"
         f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
         f"🏷 Назва: {lead_name}\n"
-        f"📋 Причина повернення: {result.get('reason', '')}{warning_line}\n"
+        f"📋 АІ-аналіз (правила продажу не дотримані — лід стосувався перевезення): {result.get('reason', '')}{warning_line}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
-    notifier.send_to_nontarget(msg)
+    notifier.send_to_nontarget(msg, team)
     logger.info("Non-target lead %s returned to work: %s", lead_id, result.get("reason"))
 
 
