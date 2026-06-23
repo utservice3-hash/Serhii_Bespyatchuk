@@ -1599,11 +1599,31 @@ def _build_stats_text(days: int, label: str) -> str:
     return "\n".join(lines)
 
 
+def _build_personal_stats_text(kommo_id: int, days: int, label: str) -> str:
+    name = kommo.get_user_name(kommo_id)
+    stats = kommo.get_manager_deal_stats(kommo_id, days)
+    return (
+        f"📊 <b>Моя статистика ({label})</b>\n"
+        f"👤 {name}\n\n"
+        f"📥 Взято від лідогена/реклами: <b>{stats['taken']}</b>\n"
+        f"🟢 Успіх: <b>{stats['won']}</b>\n"
+        f"🔴 Закрито не реалізовано: <b>{stats['lost']}</b>\n"
+        f"📈 Конверсія (успіх/закрито угод): <b>{stats['conversion']}%</b>"
+    )
+
+
 @app.route("/tg-update", methods=["POST"])
 def tg_update():
-    """Telegram bot webhook — handles callback_query (button clicks)."""
+    """Telegram bot webhook — handles callback_query (button clicks) і приватні команди."""
     data = request.get_json(force=True, silent=True) or {}
     logger.info("TG update: %s", data)
+
+    message = data.get("message")
+    if message and message.get("chat", {}).get("type") == "private":
+        text = (message.get("text") or "").strip()
+        if text in ("/mystats", "/моястатистика", "/start"):
+            notifier.send_personal_stats_buttons(message["chat"]["id"], message["message_id"])
+        return jsonify({"ok": True})
 
     callback = data.get("callback_query")
     if not callback:
@@ -1618,14 +1638,29 @@ def tg_update():
 
     if cb_data == "stats_today":
         text = _build_stats_text(days=1, label="сьогодні")
+        notifier.send_stats_message(chat_id, text, message_id)
     elif cb_data == "stats_week":
         text = _build_stats_text(days=7, label="7 днів")
+        notifier.send_stats_message(chat_id, text, message_id)
     elif cb_data == "stats_month":
         text = _build_stats_text(days=30, label="30 днів")
-    else:
-        return jsonify({"ok": True})
+        notifier.send_stats_message(chat_id, text, message_id)
+    elif cb_data.startswith("mystats_"):
+        days = int(cb_data.split("_", 1)[1])
+        label = {1: "сьогодні", 7: "7 днів", 30: "30 днів"}.get(days, f"{days} днів")
+        username = callback.get("from", {}).get("username", "")
+        kommo_id = notifier.get_kommo_id_by_username(username)
+        if not kommo_id:
+            notifier.send_dm_message(
+                chat_id,
+                "⚠️ Не знайшов вас у списку менеджерів за вашим Telegram-юзернеймом. "
+                "Зверніться до адміністратора, щоб додати відповідність.",
+                message_id,
+            )
+        else:
+            text = _build_personal_stats_text(kommo_id, days, label)
+            notifier.send_dm_message(chat_id, text, message_id)
 
-    notifier.send_stats_message(chat_id, text, message_id)
     return jsonify({"ok": True})
 
 

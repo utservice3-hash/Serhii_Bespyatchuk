@@ -318,6 +318,64 @@ def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int
     return []
 
 
+WON_STATUS_ID = 142
+CLOSED_NOT_REALIZED_STATUS_ID = 143
+PEREVOZY_PIPELINE_ID = 8921932
+
+
+def get_manager_deal_stats(user_id: int, days: int) -> dict:
+    """
+    Особиста статистика менеджера за period: скільки лідів отримав від лідогена,
+    скільки угод виграно/закрито-нереалізовано (Перевозки), і конверсія %.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+
+    def _count_status(status_id: int) -> int:
+        total = 0
+        page = 1
+        while True:
+            try:
+                resp = requests.get(
+                    f"{KOMMO_BASE}/api/v4/leads",
+                    headers=HEADERS,
+                    params={
+                        "filter[statuses][0][pipeline_id]": PEREVOZY_PIPELINE_ID,
+                        "filter[statuses][0][status_id]": status_id,
+                        "filter[responsible_user_id][0]": user_id,
+                        "filter[closed_at][from]": since,
+                        "limit": 250,
+                        "page": page,
+                    },
+                    timeout=15,
+                )
+                if not resp.ok:
+                    break
+                leads = resp.json().get("_embedded", {}).get("leads", [])
+            except Exception as e:
+                logger.error("get_manager_deal_stats(%s, status=%s): %s", user_id, status_id, e)
+                break
+            total += len(leads)
+            if len(leads) < 250:
+                break
+            page += 1
+        return total
+
+    won = _count_status(WON_STATUS_ID)
+    lost = _count_status(CLOSED_NOT_REALIZED_STATUS_ID)
+    taken = get_lidogen_stats(days).get(user_id, 0)
+    closed_total = won + lost
+    conversion = round(won / closed_total * 100, 1) if closed_total else 0.0
+
+    return {
+        "taken": taken,
+        "won": won,
+        "lost": lost,
+        "conversion": conversion,
+    }
+
+
 def get_lidogen_stats(days: int = 1) -> dict[int, int]:
     """
     Count leads transferred by lidogen per manager for the last N days.

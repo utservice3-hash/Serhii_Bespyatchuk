@@ -114,6 +114,41 @@ def get_manager_name_by_id(user_id: int) -> str:
     return tag if tag else f"ID {user_id}"
 
 
+def get_kommo_id_by_username(username: str) -> int | None:
+    """Зворотний пошук: telegram @username -> kommo user_id (для особистих команд у DM)."""
+    if not username:
+        return None
+    target = username.lower().lstrip("@")
+    for kommo_id, tag in _MANAGER_MAP.items():
+        if tag.lower().lstrip("@") == target:
+            return int(kommo_id)
+    return None
+
+
+def send_personal_stats_buttons(chat_id: int, message_id: int | None = None) -> None:
+    """Особисте меню статистики менеджера (взято/успіх/закрито/конверсія) в DM з ботом."""
+    payload: dict = {
+        "chat_id": chat_id,
+        "text": "📊 Моя статистика — обери період:",
+        "reply_markup": {
+            "inline_keyboard": [[
+                {"text": "Сьогодні", "callback_data": "mystats_1"},
+                {"text": "7 днів", "callback_data": "mystats_7"},
+                {"text": "30 днів", "callback_data": "mystats_30"},
+            ]]
+        },
+    }
+    if message_id:
+        payload["reply_to_message_id"] = message_id
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+    except Exception as e:
+        logger.error("send_personal_stats_buttons error: %s", e)
+
+
 def _base_payload(text: str, chat_id: str = "", thread_id: str = "") -> dict:
     payload = {
         "chat_id": chat_id or TG_CHAT_ID,
@@ -325,6 +360,20 @@ def send_message(text: str, with_stats_buttons: bool = False) -> bool:
     except Exception as e:
         logger.error("Telegram send exception: %s", e)
         return False
+
+
+def send_dm_message(chat_id: int, text: str, message_id: int | None = None) -> None:
+    """Надсилає звичайне повідомлення в приватний чат з ботом (без гілок групи)."""
+    payload: dict = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if message_id:
+        payload["reply_to_message_id"] = message_id
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+    except Exception as e:
+        logger.error("send_dm_message error: %s", e)
 
 
 def answer_callback(callback_query_id: str, text: str = "") -> None:
