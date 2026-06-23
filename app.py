@@ -1981,33 +1981,6 @@ def test_new_lead():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
-@app.route("/test-rnk-groups", methods=["GET"])
-def test_rnk_groups():
-    """Надсилає тестове повідомлення в усі 4 гілки (закрито/нецільові x 2 команди),
-    з сирою відповіддю Telegram API для діагностики помилок."""
-    import requests as _rq
-    results = {}
-    for team in ("Михальчевська", "Безпам'ятний"):
-        for label, route_key in (("закрито не реалізовано", "closed_thread"), ("нецільові", "nontarget_thread"), ("трекінг роботи", "tracking_thread")):
-            route = notifier._RNK_TEAM_ROUTES.get(team, {})
-            chat_id = route.get("chat_id")
-            thread_id = route.get(route_key)
-            try:
-                resp = _rq.post(
-                    f"https://api.telegram.org/bot{notifier.TG_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "message_thread_id": int(thread_id),
-                        "text": f"🔧 Тестове повідомлення — {label} ({team})",
-                    },
-                    timeout=10,
-                )
-                results[f"{team} — {label}"] = {"chat_id": chat_id, "thread_id": thread_id, "response": resp.json()}
-            except Exception as e:
-                results[f"{team} — {label}"] = {"chat_id": chat_id, "thread_id": thread_id, "error": str(e)}
-    return jsonify({"ok": True, "results": results})
-
-
 @app.route("/test-non-target", methods=["GET"])
 def test_non_target():
     """Manually run the non-target lead verification pipeline for a specific lead (debug).
