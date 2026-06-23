@@ -13,6 +13,35 @@ HEADERS = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
 _user_cache: dict[int, str] = {}
 
 
+def get_webhooks() -> list[dict]:
+    try:
+        resp = requests.get(f"{KOMMO_BASE}/api/v4/webhooks", headers=HEADERS, timeout=10)
+        if resp.ok:
+            return resp.json().get("_embedded", {}).get("webhooks", [])
+    except Exception as e:
+        logger.error("get_webhooks exception: %s", e)
+    return []
+
+
+def reenable_webhook(destination: str, settings: list[str]) -> bool:
+    """Kommo has no PATCH for webhooks — Kommo auto-disables a webhook after repeated
+    delivery failures, and the only way to clear that flag is to delete and recreate
+    the subscription."""
+    try:
+        requests.delete(
+            f"{KOMMO_BASE}/api/v4/webhooks", headers=HEADERS,
+            json={"destination": destination}, timeout=10,
+        )
+        resp = requests.post(
+            f"{KOMMO_BASE}/api/v4/webhooks", headers=HEADERS,
+            json={"destination": destination, "settings": settings}, timeout=10,
+        )
+        return resp.status_code == 201
+    except Exception as e:
+        logger.error("reenable_webhook exception: %s", e)
+        return False
+
+
 def get_user_name(user_id: int) -> str:
     if user_id in _user_cache:
         return _user_cache[user_id]

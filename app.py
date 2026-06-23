@@ -973,7 +973,32 @@ def _send_rnk_ai_report() -> None:
         logger.info("AI report sent for team %s (%d deals)", team, len(deals))
 
 
+WEBHOOK_URL = "https://my-bot-8nib.onrender.com/webhook"
+WEBHOOK_SETTINGS = ["note_lead", "status_lead", "update_lead", "responsible_lead"]
+
+
+def _check_webhook_health():
+    """Kommo сам відключає вебхук після серії помилок доставки (saw this happen
+    silently — leads kept closing but no events ever reached the bot). Перевіряємо
+    раз на 20 хв і автоматично перевидаємо підписку, якщо вона вимкнена."""
+    webhooks = kommo.get_webhooks()
+    hook = next((w for w in webhooks if w.get("destination") == WEBHOOK_URL), None)
+    if hook is None:
+        notifier.send_message(f"⚠️ Вебхук бота ({WEBHOOK_URL}) відсутній у Kommo! Сповіщення не приходитимуть.")
+        logger.error("Webhook health check: subscription not found")
+        return
+    if hook.get("disabled"):
+        ok = kommo.reenable_webhook(WEBHOOK_URL, WEBHOOK_SETTINGS)
+        if ok:
+            notifier.send_message("🔧 Kommo автоматично вимкнув вебхук бота (помилки доставки) — перевидано, знову активний.")
+            logger.warning("Webhook health check: was disabled, re-created successfully")
+        else:
+            notifier.send_message("🔴 Вебхук бота вимкнений Kommo, автовідновлення не вдалось! Потрібна ручна перевірка.")
+            logger.error("Webhook health check: was disabled, re-creation FAILED")
+
+
 scheduler = BackgroundScheduler(timezone="UTC")
+scheduler.add_job(_check_webhook_health, "interval", minutes=20)
 scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
 scheduler.add_job(_check_unassigned_leads, "interval", minutes=15)
 scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
@@ -1733,6 +1758,15 @@ def health():
 def test_tg():
     result = notifier.test_bot()
     return jsonify(result)
+
+
+@app.route("/check-webhook-health", methods=["GET"])
+def check_webhook_health_endpoint():
+    """Manually trigger the webhook health check (normally runs every 20 min)."""
+    webhooks = kommo.get_webhooks()
+    hook = next((w for w in webhooks if w.get("destination") == WEBHOOK_URL), None)
+    _check_webhook_health()
+    return jsonify({"ok": True, "hook_before_check": hook})
 
 
 @app.route("/recent-webhooks", methods=["GET"])
