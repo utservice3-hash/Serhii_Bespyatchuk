@@ -1273,26 +1273,32 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
     category = ""
     verdict_reason = ""
     recommendation_clean = ""
+    teamlead_tip = ""
     returned = False
 
+    lead = kommo.get_lead(lead_id)
+    amount = int(lead.get("price", 0)) if lead else 0
+    recommendation = ai_analyzer.analyze_closed_deal({
+        **details, "manager": manager_name, "amount": amount
+    })
+
     if team in RNK_TEAMS:
-        lead = kommo.get_lead(lead_id)
-        amount = int(lead.get("price", 0)) if lead else 0
-        recommendation = ai_analyzer.analyze_closed_deal({
-            **details, "manager": manager_name, "amount": amount
-        })
         calls_analysis = _analyze_rnk_closed_deal_calls(lead_id, details["name"], manager_name)
         if calls_analysis:
             recommendation = f"{recommendation}\n\n📞 Аналіз прослуханих дзвінків:\n{calls_analysis}"
 
-        closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ'ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
-        category_match = re.search(r"CATEGORY:\s*(.+)", recommendation)
-        verdict = closure_match.group(1) if closure_match else ""
-        verdict_reason = closure_match.group(2).strip() if closure_match else ""
-        category = category_match.group(1).strip() if category_match else ""
-        recommendation_clean = re.sub(r"\n?CLOSURE:.*", "", recommendation)
-        recommendation_clean = re.sub(r"\n?CATEGORY:.*", "", recommendation_clean).strip()
+    closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ'ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
+    category_match = re.search(r"CATEGORY:\s*(.+)", recommendation)
+    verdict = closure_match.group(1) if closure_match else ""
+    verdict_reason = closure_match.group(2).strip() if closure_match else ""
+    category = category_match.group(1).strip() if category_match else ""
+    recommendation_clean = re.sub(r"\n?CLOSURE:.*", "", recommendation)
+    recommendation_clean = re.sub(r"\n?CATEGORY:.*", "", recommendation_clean).strip()
 
+    tip_match = re.search(r"→\s*тімліду:\s*(.+)", recommendation_clean)
+    teamlead_tip = tip_match.group(1).strip() if tip_match else ""
+
+    if team in RNK_TEAMS:
         deal_data = {
             "lead_id": lead_id,
             "name": details["name"],
@@ -1321,10 +1327,14 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
             f"\n🔴 <b>AI: угоду закрито передчасно</b>{sup_part}\n"
             f"📋 Категорія: {category or '—'}\n"
             f"⚠️ {verdict_reason}\n"
-            f"♻️ Угоду автоматично повернуто менеджеру в роботу.\n"
         )
+        if team in RNK_TEAMS:
+            verdict_block += "♻️ Угоду автоматично повернуто менеджеру в роботу.\n"
     elif verdict == "ОБ'ЄКТИВНЕ":
         verdict_block = f"\n🟢 <b>AI: закриття обґрунтоване</b>\n{verdict_reason}\n"
+
+    if teamlead_tip:
+        verdict_block += f"🧠 Коротко для тімліда: {teamlead_tip}\n"
 
     msg = (
         f"❌ <b>Закрито і не реалізовано</b>\n"
