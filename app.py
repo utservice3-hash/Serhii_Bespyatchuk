@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import threading
+from collections import deque
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -1140,6 +1141,9 @@ def _process_status_change(item: dict):
         ).start()
 
 
+_recent_webhooks: deque = deque(maxlen=30)
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     content_type = request.content_type or ""
@@ -1147,6 +1151,8 @@ def webhook():
         data = request.get_json(force=True, silent=True) or {}
     else:
         data = request.form.to_dict()
+
+    _recent_webhooks.append({"ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "data": data})
 
     logger.info("Webhook received: %s", data)
 
@@ -1727,6 +1733,17 @@ def health():
 def test_tg():
     result = notifier.test_bot()
     return jsonify(result)
+
+
+@app.route("/recent-webhooks", methods=["GET"])
+def recent_webhooks():
+    """Read-only: inspect the last 30 raw webhook payloads received from Kommo.
+    ?lead_id=12345 to filter to webhooks mentioning that lead id."""
+    lead_id = request.args.get("lead_id", "")
+    items = list(_recent_webhooks)
+    if lead_id:
+        items = [w for w in items if lead_id in json.dumps(w["data"], ensure_ascii=False)]
+    return jsonify({"ok": True, "count": len(items), "webhooks": items})
 
 
 @app.route("/test-team-route", methods=["GET"])
