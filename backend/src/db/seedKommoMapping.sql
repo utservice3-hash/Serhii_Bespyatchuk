@@ -1,8 +1,11 @@
 -- Teams
+-- Note: "КВП" (керівник відділу продажу) is not a deals team — it's a
+-- company-wide overview role. No managers/deals are assigned to it; the head
+-- of sales gets the 'admin' user role instead, which sees all teams unfiltered.
 INSERT INTO teams (name) VALUES ('РНК') ON CONFLICT (name) DO NOTHING;
 INSERT INTO teams (name) VALUES ('РПК') ON CONFLICT (name) DO NOTHING;
 INSERT INTO teams (name) VALUES ('Лідогенератори') ON CONFLICT (name) DO NOTHING;
-INSERT INTO teams (name) VALUES ('КВП') ON CONFLICT (name) DO NOTHING;
+INSERT INTO teams (name) VALUES ('Тендери') ON CONFLICT (name) DO NOTHING;
 
 -- Managers (kommo_user_id -> team). Relies on managers already being
 -- populated by the Kommo sync job (which inserts one row per Kommo user).
@@ -10,10 +13,16 @@ UPDATE managers SET team_id = (SELECT id FROM teams WHERE name = 'РНК')
   WHERE kommo_user_id IN (12782896, 12644448); -- Михальчевська, Безпамятний
 
 UPDATE managers SET team_id = (SELECT id FROM teams WHERE name = 'РПК')
-  WHERE kommo_user_id IN (12066792, 3379102, 6062482); -- Шаврова, Яцик, Дмитрук
+  WHERE kommo_user_id IN (12066792, 6062482); -- Шаврова, Дмитрук
 
 UPDATE managers SET team_id = (SELECT id FROM teams WHERE name = 'Лідогенератори')
   WHERE kommo_user_id IN (8458577, 12812476); -- Ковтонюк, Сердюк
+
+UPDATE managers SET team_id = (SELECT id FROM teams WHERE name = 'Тендери')
+  WHERE kommo_user_id IN (7181916, 15336060, 3379102); -- Шевчук, Дяков, Яцик (тім-лід)
+
+UPDATE managers SET is_team_lead = true
+  WHERE kommo_user_id = 3379102; -- Яцик Дмитро — тім-лід Тендерів
 
 -- Pipeline -> funnel stage mapping
 -- 8921932 "Перевозки (Продажі повний цикл) (New)" — used by РНК, РПК, Тендери

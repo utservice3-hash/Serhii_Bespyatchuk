@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS managers (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   team_id INTEGER REFERENCES teams(id),
-  kommo_user_id BIGINT UNIQUE
+  kommo_user_id BIGINT UNIQUE,
+  is_team_lead BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -41,6 +42,8 @@ CREATE TABLE IF NOT EXISTS deals (
   closed_at_kommo TIMESTAMPTZ,
   synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_team_lead BOOLEAN NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_deals_manager ON deals(manager_id);
 CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(pipeline_id, status_id);

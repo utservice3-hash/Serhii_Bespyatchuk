@@ -30,3 +30,33 @@ export async function fetchFunnel(params: {
   const { data } = await api.get<{ stages: FunnelStage[] }>("/dashboard/funnel", { params });
   return data.stages;
 }
+
+export interface TimeseriesPoint {
+  period: string;
+  funnel_stage: string;
+  deal_count: string;
+  total_amount: string;
+}
+
+export async function fetchTimeseries(params: {
+  granularity: "day" | "month";
+  managerId?: number;
+  teamId?: number;
+  from?: string;
+  to?: string;
+}): Promise<TimeseriesPoint[]> {
+  const { data } = await api.get<{ points: TimeseriesPoint[] }>("/dashboard/timeseries", {
+    params,
+  });
+  return data.points;
+}
+
+export interface Team {
+  id: number;
+  name: string;
+}
+
+export async function fetchTeams(): Promise<Team[]> {
+  const { data } = await api.get<{ teams: Team[] }>("/teams");
+  return data.teams;
+}

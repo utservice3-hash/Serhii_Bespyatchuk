@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { authRouter } from "./routes/auth.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { plansRouter } from "./routes/plans.js";
+import { teamsRouter } from "./routes/teams.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 
 const app = express();
@@ -14,6 +15,7 @@ app.use(express.json());
 app.use("/api/auth", authRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/plans", plansRouter);
+app.use("/api/teams", teamsRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
