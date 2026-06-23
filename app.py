@@ -1955,6 +1955,20 @@ def dedupe_closed_deals():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/test-rnk-groups", methods=["GET"])
+def test_rnk_groups():
+    """Надсилає тестове повідомлення в усі 4 гілки (закрито/нецільові x 2 команди)."""
+    results = {}
+    for team in ("Михальчевська", "Безпам'ятний"):
+        results[f"{team} — закрито не реалізовано"] = notifier.send_to_rnk_closed(
+            f"🔧 Тестове повідомлення — гілка 'Закрито не реалізовано' ({team})", team
+        )
+        results[f"{team} — нецільові"] = notifier.send_to_nontarget(
+            f"🔧 Тестове повідомлення — гілка 'Нецільові угоди' ({team})", team
+        )
+    return jsonify({"ok": True, "results": results})
+
+
 @app.route("/test-non-target", methods=["GET"])
 def test_non_target():
     """Manually run the non-target lead verification pipeline for a specific lead (debug).
