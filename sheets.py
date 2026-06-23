@@ -251,7 +251,7 @@ def log_closed_deal(deal: dict) -> None:
                 "Категорія причини", "Рекомендація AI",
                 "Коментар тімліда", "Статус розбору"
             ], 1)
-        ws.insert_row([
+        row_values = [
             deal.get("closed_at", ""),
             deal.get("lead_id", ""),
             deal.get("name", ""),
@@ -267,10 +267,30 @@ def log_closed_deal(deal: dict) -> None:
             deal.get("ai_recommendation", ""),
             "",  # Коментар тімліда
             "",  # Статус розбору
-        ], 2)
+        ]
+
+        # Якщо запис для цього lead_id вже існує (повторний webhook/тест) — оновлюємо
+        # його замість додавання дубліката, зберігаючи коментар/статус тімліда.
+        existing_row = None
+        try:
+            cell = ws.find(str(deal.get("lead_id", "")))
+            if cell:
+                existing_row = cell.row
+        except Exception:
+            existing_row = None
+
+        if existing_row:
+            ws.update(f"A{existing_row}:M{existing_row}", [row_values[:13]])
+            target_row = existing_row
+        else:
+            ws.insert_row(row_values, 2)
+            target_row = 2
+
         if deal.get("verdict") == "ПЕРЕДЧАСНЕ":
-            ws.format("A2:O2", {"backgroundColor": {"red": 0.96, "green": 0.78, "blue": 0.78}})
-        logger.info("sheets: logged closed deal %s -> %s", deal.get("lead_id"), sheet_name)
+            ws.format(f"A{target_row}:O{target_row}", {"backgroundColor": {"red": 0.96, "green": 0.78, "blue": 0.78}})
+        else:
+            ws.format(f"A{target_row}:O{target_row}", {"backgroundColor": {"red": 1, "green": 1, "blue": 1}})
+        logger.info("sheets: logged closed deal %s -> %s (row %s)", deal.get("lead_id"), sheet_name, target_row)
     except Exception as e:
         logger.error("sheets log_closed_deal: %s", e)
 

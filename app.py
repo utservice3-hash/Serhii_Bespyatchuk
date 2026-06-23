@@ -1819,6 +1819,36 @@ def test_closed_deal():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/test-ai", methods=["GET"])
+def test_ai():
+    """Перевіряє напряму, чому ai_analyzer повертає пусто (ключ/квота/помилка API)."""
+    import traceback
+    import requests as _rq
+    try:
+        key_present = bool(ai_analyzer.ANTHROPIC_API_KEY)
+        if not key_present:
+            return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY not set on Render"})
+
+        resp = _rq.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ai_analyzer.ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": ai_analyzer.MODEL,
+                "max_tokens": 50,
+                "messages": [{"role": "user", "content": "Скажи 'тест ок' українською."}],
+            },
+            timeout=30,
+        )
+        data = resp.json()
+        return jsonify({"ok": resp.ok, "status_code": resp.status_code, "response": data, "key_present": key_present})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/test-non-target", methods=["GET"])
 def test_non_target():
     """Manually run the non-target lead verification pipeline for a specific lead (debug).
