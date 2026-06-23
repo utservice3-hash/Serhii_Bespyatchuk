@@ -1963,7 +1963,7 @@ def test_rnk_groups():
     import requests as _rq
     results = {}
     for team in ("Михальчевська", "Безпам'ятний"):
-        for label, route_key in (("закрито не реалізовано", "closed_thread"), ("нецільові", "nontarget_thread")):
+        for label, route_key in (("закрито не реалізовано", "closed_thread"), ("нецільові", "nontarget_thread"), ("трекінг роботи", "tracking_thread")):
             route = notifier._RNK_TEAM_ROUTES.get(team, {})
             chat_id = route.get("chat_id")
             thread_id = route.get(route_key)
