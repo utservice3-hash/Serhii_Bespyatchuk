@@ -1729,6 +1729,33 @@ def test_tg():
     return jsonify(result)
 
 
+@app.route("/test-team-route", methods=["GET"])
+def test_team_route():
+    """Send exactly ONE test message to a single team's tracking group/thread and
+    return Telegram's raw response (to verify the bot can reach that chat).
+    ?team=Яцик"""
+    import requests as _rq
+    team = request.args.get("team", "")
+    route = notifier._RNK_TEAM_ROUTES.get(team) or notifier._RPK_TEAM_ROUTES.get(team)
+    if not route:
+        return jsonify({"ok": False, "error": f"no route for team '{team}'"})
+    chat_id = route["chat_id"]
+    thread_id = route.get("tracking_thread")
+    try:
+        resp = _rq.post(
+            f"https://api.telegram.org/bot{notifier.TG_TOKEN}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "message_thread_id": int(thread_id),
+                "text": f"🔧 Тест маршруту трекінгу — {team}",
+            },
+            timeout=10,
+        )
+        return jsonify({"ok": True, "team": team, "chat_id": chat_id, "thread_id": thread_id, "response": resp.json()})
+    except Exception as e:
+        return jsonify({"ok": False, "team": team, "chat_id": chat_id, "thread_id": thread_id, "error": str(e)})
+
+
 @app.route("/daily", methods=["GET"])
 def daily():
     msg = f"📊 <b>Щоденний звіт</b> за {datetime.now(timezone.utc).strftime('%d.%m.%Y')}\nОчікує обробки: {len(pending)} лідів"
