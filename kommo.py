@@ -34,7 +34,14 @@ def get_user_name(user_id: int) -> str:
 
 SOURCE_FIELD_ID = 2098035    # "Источник клиента"
 REJECT_REASON_FIELD_ID = 2097265  # "Причина отказа"
-UTM_CAMPAIGN_FIELD_ID = 481997  # "utm_campaign" — присутнє тільки в угодах, що прийшли по таргету
+# Угода вважається "по таргету", якщо заповнене будь-яке з цих полів —
+# різні рекламні канали пишуть кампанію в різні поля (Facebook -> utm_campaign,
+# Google Ads -> ADV_CAMP/TRAF_SRC).
+AD_CAMPAIGN_FIELD_IDS = (
+    481997,   # utm_campaign
+    2098331,  # ADV_CAMP
+    2098327,  # TRAF_SRC
+)
 
 # Назви етапів воронки Перевозки
 PEREVOZY_STATUSES = {
@@ -155,9 +162,9 @@ def is_fictive_deal(lead: dict) -> bool:
 
 
 def has_utm_campaign(lead: dict) -> bool:
-    """Перевіряє, чи угода прийшла по таргету (заповнене поле utm_campaign)."""
+    """Перевіряє, чи угода прийшла по таргету (заповнене одне з полів рекламної кампанії)."""
     for cf in lead.get("custom_fields_values") or []:
-        if cf.get("field_id") == UTM_CAMPAIGN_FIELD_ID:
+        if cf.get("field_id") in AD_CAMPAIGN_FIELD_IDS:
             vals = cf.get("values") or []
             if vals and str(vals[0].get("value", "")).strip():
                 return True
