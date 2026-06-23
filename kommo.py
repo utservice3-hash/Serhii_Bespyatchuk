@@ -34,6 +34,7 @@ def get_user_name(user_id: int) -> str:
 
 SOURCE_FIELD_ID = 2098035    # "Источник клиента"
 REJECT_REASON_FIELD_ID = 2097265  # "Причина отказа"
+UTM_CAMPAIGN_FIELD_ID = 481997  # "utm_campaign" — присутнє тільки в угодах, що прийшли по таргету
 
 # Назви етапів воронки Перевозки
 PEREVOZY_STATUSES = {
@@ -151,6 +152,16 @@ def is_minus_deal(lead: dict) -> bool:
 def is_fictive_deal(lead: dict) -> bool:
     """Повертає True якщо угода фіктивна."""
     return FICTIVE_KEYWORD in (lead.get("name") or "").upper()
+
+
+def has_utm_campaign(lead: dict) -> bool:
+    """Перевіряє, чи угода прийшла по таргету (заповнене поле utm_campaign)."""
+    for cf in lead.get("custom_fields_values") or []:
+        if cf.get("field_id") == UTM_CAMPAIGN_FIELD_ID:
+            vals = cf.get("values") or []
+            if vals and str(vals[0].get("value", "")).strip():
+                return True
+    return False
 
 
 def get_lead_source(lead: dict) -> str:

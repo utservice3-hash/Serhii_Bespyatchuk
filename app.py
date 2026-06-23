@@ -1248,6 +1248,8 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     lead = kommo.get_lead(lead_id)
     if not lead:
         return
+    if not kommo.has_utm_campaign(lead):
+        return  # відстежуємо лише угоди, що прийшли по таргету (utm_campaign)
     lead_name = lead.get("name", f"Лід #{lead_id}")
 
     notes = kommo.get_lead_notes(lead_id)
