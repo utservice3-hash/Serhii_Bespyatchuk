@@ -993,95 +993,77 @@ _stats_log: list[dict] = []
 _nontarget_returns: dict[int, int] = {}
 
 
-def _parse_status(data: dict) -> dict | None:
-    """Extract status change info. Returns dict with id/status_id/pipeline_id/responsible_user_id."""
+def _parse_statuses(data: dict) -> list[dict]:
+    """Extract status change info for every lead in this webhook call.
+    Kommo can batch several lead status changes into a single webhook request
+    (leads[status][0], leads[status][1], ...) — processing only index 0 silently
+    drops every other lead in the batch."""
     # JSON format
     if isinstance(data.get("leads"), dict):
         items = data["leads"].get("status", []) or data["leads"].get("add", [])
         if items and isinstance(items, list):
-            return items[0]
+            return items
 
     # Form-encoded format
-    lead_id = data.get("leads[status][0][id]") or data.get("leads[add][0][id]")
-    if lead_id:
-        return {
+    result = []
+    i = 0
+    while True:
+        lead_id = data.get(f"leads[status][{i}][id]") or data.get(f"leads[add][{i}][id]")
+        if not lead_id:
+            break
+        result.append({
             "id": int(lead_id),
-            "status_id": int(data.get("leads[status][0][status_id]", 0)),
-            "old_status_id": int(data.get("leads[status][0][old_status_id]", 0)),
-            "pipeline_id": int(data.get("leads[status][0][pipeline_id]", 0)),
-            "responsible_user_id": int(data.get("leads[status][0][responsible_user_id]", 0)),
-        }
-    return None
+            "status_id": int(data.get(f"leads[status][{i}][status_id]", 0) or 0),
+            "old_status_id": int(data.get(f"leads[status][{i}][old_status_id]", 0) or 0),
+            "pipeline_id": int(data.get(f"leads[status][{i}][pipeline_id]", 0) or 0),
+            "responsible_user_id": int(data.get(f"leads[status][{i}][responsible_user_id]", 0) or 0),
+        })
+        i += 1
+    return result
 
 
-def _parse_responsible(data: dict) -> dict | None:
-    """Extract responsible change event (Отв-й сделки изменен)."""
-    lead_id = data.get("leads[responsible][0][id]")
-    responsible_id = data.get("leads[responsible][0][responsible_user_id]")
-    pipeline_id = data.get("leads[responsible][0][pipeline_id]")
-    status_id = data.get("leads[responsible][0][status_id]")
-    if lead_id:
-        return {
+def _parse_responsible_changes(data: dict) -> list[dict]:
+    """Extract responsible-changed events (Отв-й сделки изменен) for every lead in
+    this webhook call (see _parse_statuses for why batching matters)."""
+    result = []
+    i = 0
+    while True:
+        lead_id = data.get(f"leads[responsible][{i}][id]")
+        if not lead_id:
+            break
+        result.append({
             "id": int(lead_id),
-            "responsible_user_id": int(responsible_id) if responsible_id else 0,
-            "pipeline_id": int(pipeline_id) if pipeline_id else 0,
-            "status_id": int(status_id) if status_id else 0,
-        }
-    return None
+            "responsible_user_id": int(data.get(f"leads[responsible][{i}][responsible_user_id]", 0) or 0),
+            "pipeline_id": int(data.get(f"leads[responsible][{i}][pipeline_id]", 0) or 0),
+            "status_id": int(data.get(f"leads[responsible][{i}][status_id]", 0) or 0),
+        })
+        i += 1
+    return result
 
 
-def _parse_note(data: dict) -> dict | None:
-    """Extract call note info (note_type 10=call_in, 11=call_out)."""
-    note_type = data.get("leads[note][0][note_type]")
-    lead_id = data.get("leads[note][0][element_id]")
-    user_id = data.get("leads[note][0][main_user_id]")
-    note_id = data.get("leads[note][0][id]")
-    if note_type and lead_id:
-        return {
+def _parse_notes(data: dict) -> list[dict]:
+    """Extract call note info (note_type 10=call_in, 11=call_out) for every note in
+    this webhook call (see _parse_statuses for why batching matters)."""
+    result = []
+    i = 0
+    while True:
+        note_type = data.get(f"leads[note][{i}][note_type]")
+        lead_id = data.get(f"leads[note][{i}][element_id]")
+        if not (note_type and lead_id):
+            break
+        result.append({
             "note_type": str(note_type),
             "lead_id": int(lead_id),
-            "responsible_user_id": int(user_id) if user_id else 0,
-            "note_id": int(note_id) if note_id else 0,
-        }
-    return None
+            "responsible_user_id": int(data.get(f"leads[note][{i}][main_user_id]", 0) or 0),
+            "note_id": int(data.get(f"leads[note][{i}][id]", 0) or 0),
+        })
+        i += 1
+    return result
 
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    content_type = request.content_type or ""
-    if "application/json" in content_type:
-        data = request.get_json(force=True, silent=True) or {}
-    else:
-        data = request.form.to_dict()
-
-    logger.info("Webhook received: %s", data)
-
-    # ── Call note (Ringostat) ──────────────────────────────────────
-    note = _parse_note(data)
-    if note and note["note_type"] in ("10", "11", "call_in", "call_out"):
-        _handle_call(note)
-        return jsonify({"ok": True})
-
-    # ── Responsible changed ───────────────────────────────────────
-    resp_change = _parse_responsible(data)
-    if resp_change:
-        if (resp_change["pipeline_id"] == QUAL_PIPELINE_ID and
-                resp_change["status_id"] == NEW_FROM_LIDOGEN):
-            # Перевіряємо чи ліd не з "робочих" етапів
-            lead = kommo.get_lead(resp_change["id"])
-            old_status = lead.get("old_status_id", 0) if lead else 0
-            if old_status not in SKIP_FROM_STATUSES:
-                _handle_new_lead(resp_change["id"], resp_change["responsible_user_id"])
-            else:
-                logger.info("Skipped lead %s — came from excluded status %s", resp_change["id"], old_status)
-        return jsonify({"ok": True})
-
-    # ── Status change ─────────────────────────────────────────────
-    item = _parse_status(data)
-    if not item:
-        logger.warning("Could not parse webhook payload")
-        return jsonify({"ok": True})
-
+def _process_status_change(item: dict):
+    """Handle a single lead status-change event (one of possibly several batched
+    into one webhook call)."""
     lead_id = int(item.get("id", 0))
     status_id = int(item.get("status_id", 0))
     old_status_id = int(item.get("old_status_id", 0))
@@ -1121,10 +1103,10 @@ def webhook():
         elif status_id == 69716460:  # Оплата отримана
             if responsible_id in MANAGER_PLANS:
                 _check_plan_completion(responsible_id)
-        return jsonify({"ok": True})
+        return
 
     if pipeline_id != QUAL_PIPELINE_ID:
-        return jsonify({"ok": True})
+        return
 
     # Нерозібрана заявка — лід без відповідального в одному з цих етапів
     if status_id in UNASSIGNED_STATUSES and (not responsible_id or responsible_id == ADMIN_USER_ID):
@@ -1156,6 +1138,51 @@ def webhook():
             args=(lead_id, responsible_id),
             daemon=True,
         ).start()
+
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    content_type = request.content_type or ""
+    if "application/json" in content_type:
+        data = request.get_json(force=True, silent=True) or {}
+    else:
+        data = request.form.to_dict()
+
+    logger.info("Webhook received: %s", data)
+
+    # ── Call notes (Ringostat) ──────────────────────────────────────
+    notes = _parse_notes(data)
+    handled_notes = False
+    for note in notes:
+        if note["note_type"] in ("10", "11", "call_in", "call_out"):
+            _handle_call(note)
+            handled_notes = True
+    if handled_notes:
+        return jsonify({"ok": True})
+
+    # ── Responsible changed ───────────────────────────────────────
+    resp_changes = _parse_responsible_changes(data)
+    if resp_changes:
+        for resp_change in resp_changes:
+            if (resp_change["pipeline_id"] == QUAL_PIPELINE_ID and
+                    resp_change["status_id"] == NEW_FROM_LIDOGEN):
+                # Перевіряємо чи ліd не з "робочих" етапів
+                lead = kommo.get_lead(resp_change["id"])
+                old_status = lead.get("old_status_id", 0) if lead else 0
+                if old_status not in SKIP_FROM_STATUSES:
+                    _handle_new_lead(resp_change["id"], resp_change["responsible_user_id"])
+                else:
+                    logger.info("Skipped lead %s — came from excluded status %s", resp_change["id"], old_status)
+        return jsonify({"ok": True})
+
+    # ── Status changes ─────────────────────────────────────────────
+    items = _parse_statuses(data)
+    if not items:
+        logger.warning("Could not parse webhook payload")
+        return jsonify({"ok": True})
+
+    for item in items:
+        _process_status_change(item)
 
     return jsonify({"ok": True})
 
