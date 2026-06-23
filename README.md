@@ -16,7 +16,7 @@ npm install
 npm run migrate         # створити таблиці
 npm run sync             # синхронізація користувачів/угод з Kommo (створює managers)
 npm run migrate:mapping  # прив'язати менеджерів до команд + маппінг етапів воронки
-SEED_ADMIN_PASSWORD=... npm run db:seed  # admin-користувач (опційно)
+SEED_ADMIN_PASSWORD=... npm run db:seed  # перший admin-користувач (опційно)
 npm run dev
 ```
 
@@ -48,6 +48,19 @@ npm run dev
 - Ручне введення планових показників (`/api/plans`)
 - Дешборд воронки продажів: графік по етапах + динаміка по днях/місяцях
   (`/api/dashboard/timeseries`) з фільтром по команді
+
+## Створення користувачів
+
+```bash
+# Керівник відділу продажу (КВП) — повний огляд по всій компанії
+npm run create-user -- --email=head@company.com --role=admin
+
+# Тім-лід команди — бачить тільки свою команду
+npm run create-user -- --email=yatsyk@company.com --role=team_lead --team="Тендери"
+```
+
+Якщо `--password` не вказати, згенерується випадковий пароль і буде показаний
+один раз у консолі — його варто одразу передати користувачу.
 
 ## Що залишилось
 
