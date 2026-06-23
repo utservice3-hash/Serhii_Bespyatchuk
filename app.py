@@ -1108,7 +1108,11 @@ def webhook():
 
     if pipeline_id == PEREVOZY_PIPELINE_ID:
         if status_id == CLOSED_NOT_REALIZED and responsible_id in DARINA_ANDRIY_TEAMS:
-            _handle_closed_not_realized(lead_id, responsible_id)
+            threading.Thread(
+                target=_handle_closed_not_realized,
+                args=(lead_id, responsible_id),
+                daemon=True,
+            ).start()
         elif status_id == WON_STATUS_ID:
             lead = kommo.get_lead(lead_id)
             amount = int(lead.get("price", 0)) if lead else 0
@@ -1223,6 +1227,12 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
     if MANAGER_TEAM.get(responsible_id, "") in RNK_TEAMS:
         lead = kommo.get_lead(lead_id)
         amount = int(lead.get("price", 0)) if lead else 0
+        recommendation = ai_analyzer.analyze_closed_deal({
+            **details, "manager": manager_name, "amount": amount
+        })
+        calls_analysis = _analyze_rnk_closed_deal_calls(lead_id, details["name"], manager_name)
+        if calls_analysis:
+            recommendation = f"{recommendation}\n\n📞 Аналіз прослуханих дзвінків:\n{calls_analysis}"
         deal_data = {
             "lead_id": lead_id,
             "name": details["name"],
@@ -1235,9 +1245,7 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
             "notes_count": details["notes_count"],
             "amount": amount,
             "closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
-            "ai_recommendation": ai_analyzer.analyze_closed_deal({
-                **details, "manager": manager_name, "amount": amount
-            }),
+            "ai_recommendation": recommendation,
         }
         sheets.log_closed_deal(deal_data)
 
@@ -1368,31 +1376,40 @@ def _handle_call(note: dict):
         sheets.update_first_call(lead_id, now)
         pending.pop(lead_id, None)
     logger.info("Call note: lead %s type %s by %s", lead_id, note_type, manager_name)
+    # Дзвінки РНК аналізуються постфактум, лише коли угода закривається як
+    # "Закрито і не реалізовано" — див. _handle_closed_not_realized.
 
-    # РНК: аналізуємо дзвінки по угодах команд РНК, тривалістю від 40с
-    if MANAGER_TEAM.get(responsible_id, "") not in RNK_TEAMS:
-        return
-    lead = kommo.get_lead(lead_id)
-    if not lead:
-        return
 
-    if note_id:
-        call_note = kommo.get_note(lead_id, note_id)
-        params = call_note.get("params") or {}
+def _analyze_rnk_closed_deal_calls(lead_id: int, lead_name: str, manager_name: str) -> str:
+    """Розшифровує і аналізує всі дзвінки (≥40с) закритої-не реалізованої угоди РНК.
+    Повертає текст аналізу для додавання до рекомендації AI (або "")."""
+    notes = kommo.get_lead_notes(lead_id)
+    call_notes = sorted(
+        (n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")),
+        key=lambda n: n.get("created_at", 0),
+    )
+    for n in call_notes:
+        note_id = n.get("id")
+        full_note = kommo.get_note(lead_id, note_id) if note_id else n
+        params = full_note.get("params") or {}
         duration = int(params.get("duration", 0) or 0)
+        if duration < 40:
+            continue
         record_url = params.get("link", "") or params.get("LINK", "")
-    else:
-        call_info = kommo.get_latest_call_note(lead_id)
-        duration = call_info.get("duration", 0)
-        record_url = call_info.get("link", "")
-    if duration < 40:
-        return
+        call_type = "вхідний" if full_note.get("note_type") in (10, "call_in") else "вихідний"
+        transcript = transcriber.transcribe_call(record_url) if record_url else ""
+        created_at = full_note.get("created_at", 0)
+        call_at = datetime.fromtimestamp(created_at, tz=timezone.utc) if created_at else datetime.now(timezone.utc)
+        sheets.append_call(lead_id, manager_name, call_type, duration, transcript, call_at)
 
-    threading.Thread(
-        target=_process_rnk_deal_call,
-        args=(lead_id, lead.get("name", f"Угода #{lead_id}"), manager_name, call_type, duration, record_url),
-        daemon=True,
-    ).start()
+    calls = sheets.get_calls_for_lead(lead_id)
+    if not calls:
+        return ""
+
+    analysis = ai_analyzer.analyze_deal_calls(calls, manager_name, lead_name)
+    if not analysis:
+        return ""
+    return re.sub(r"\n?RISK:.*", "", analysis).strip()
 
 
 def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call_type: str, duration: int, record_url: str) -> None:
