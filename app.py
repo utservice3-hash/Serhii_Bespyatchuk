@@ -1798,6 +1798,27 @@ def test_call_analysis():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/test-closed-deal", methods=["GET"])
+def test_closed_deal():
+    """Manually run the closed-not-realized AI review pipeline for a specific lead (debug).
+    ?lead_id=12345"""
+    import traceback
+    try:
+        lead_id = int(request.args.get("lead_id", 0))
+        if not lead_id:
+            return jsonify({"ok": False, "error": "lead_id required"})
+
+        lead = kommo.get_lead(lead_id)
+        if not lead:
+            return jsonify({"ok": False, "error": "lead not found"})
+
+        responsible_id = lead.get("responsible_user_id", 0)
+        _handle_closed_not_realized(lead_id, responsible_id)
+        return jsonify({"ok": True, "lead_id": lead_id, "responsible_id": responsible_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/test-non-target", methods=["GET"])
 def test_non_target():
     """Manually run the non-target lead verification pipeline for a specific lead (debug).
