@@ -1418,7 +1418,25 @@ def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):
     logger.info("Team event: %s lead %s by %s", label, lead_id, manager_name)
 
 
+_notified_new_leads: dict[int, datetime] = {}
+_NEW_LEAD_DEDUP_SECONDS = 300
+
+
 def _handle_new_lead(lead_id: int, responsible_id: int):
+    now_check = datetime.now(timezone.utc)
+    last_sent = _notified_new_leads.get(lead_id)
+    if last_sent and (now_check - last_sent).total_seconds() < _NEW_LEAD_DEDUP_SECONDS:
+        # Kommo надсилає окремі вебхуки "Статус сделки изменен" і "Отв-й сделки изменен"
+        # для одного й того ж переведення ліда лідогеном — без дедупу одна заявка
+        # дублюється в групі двічі.
+        logger.info("Skipped duplicate new-lead notification for %s", lead_id)
+        return
+    _notified_new_leads[lead_id] = now_check
+    if len(_notified_new_leads) > 500:
+        cutoff = now_check - timedelta(seconds=_NEW_LEAD_DEDUP_SECONDS)
+        for k in [k for k, v in _notified_new_leads.items() if v < cutoff]:
+            _notified_new_leads.pop(k, None)
+
     lead = kommo.get_lead(lead_id)
     lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
