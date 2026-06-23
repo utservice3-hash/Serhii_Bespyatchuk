@@ -4,7 +4,7 @@ import logging
 import re
 import threading
 from datetime import datetime, timezone, timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string, redirect, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import kommo
@@ -1531,6 +1531,145 @@ def tg_update():
 
     notifier.send_stats_message(chat_id, text, message_id)
     return jsonify({"ok": True})
+
+
+_DASHBOARD_BASE_CSS = """
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #f4f5f7; margin: 0; padding: 24px; color: #1f2430; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #6b7280; margin-bottom: 24px; font-size: 14px; }
+  .teams { display: flex; gap: 12px; margin-bottom: 24px; }
+  .teams a { padding: 10px 18px; background: #fff; border-radius: 10px; text-decoration: none; color: #1f2430; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .teams a.active { background: #2563eb; color: #fff; }
+  .day-group { margin-bottom: 28px; }
+  .day-title { font-size: 15px; font-weight: 700; color: #374151; margin-bottom: 10px; padding-left: 4px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-left: 5px solid #d1d5db; }
+  .card.premature { border-left: 5px solid #dc2626; background: #fff5f5; }
+  .card-top { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+  .deal-name { font-weight: 700; font-size: 15px; }
+  .manager { color: #2563eb; font-weight: 600; font-size: 13px; }
+  .meta { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0; font-size: 12.5px; color: #4b5563; }
+  .meta span b { color: #1f2430; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 11.5px; font-weight: 700; }
+  .badge.premature { background: #fee2e2; color: #b91c1c; }
+  .badge.objective { background: #dcfce7; color: #166534; }
+  .category { font-size: 12px; color: #6b7280; margin-top: 2px; }
+  .ai-text { white-space: pre-wrap; font-size: 13px; line-height: 1.5; background: #f9fafb; border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+  .feedback { margin-top: 12px; border-top: 1px solid #eee; padding-top: 10px; }
+  .feedback textarea { width: 100%; min-height: 50px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; font-size: 13px; resize: vertical; }
+  .feedback-row { display: flex; gap: 8px; margin-top: 6px; align-items: center; }
+  .feedback select { border: 1px solid #e5e7eb; border-radius: 8px; padding: 6px 8px; font-size: 13px; }
+  .feedback button { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .saved-note { font-size: 12.5px; color: #166534; margin-top: 6px; }
+  .empty { color: #9ca3af; padding: 40px; text-align: center; }
+</style>
+"""
+
+_DASHBOARD_TEMPLATE = """
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Відділ якості — {{ team }}</title>
+""" + _DASHBOARD_BASE_CSS + """
+</head>
+<body>
+<h1>📋 Відділ якості — закриті угоди</h1>
+<div class="sub">Останні {{ limit_days }} днів, групування по даті закриття</div>
+<div class="teams">
+  {% for t in teams %}
+    <a href="{{ url_for('dashboard_team', team=t) }}" class="{{ 'active' if t == team else '' }}">{{ t }}</a>
+  {% endfor %}
+</div>
+
+{% if not days %}
+  <div class="empty">Немає закритих угод за цей період.</div>
+{% endif %}
+
+{% for day, deals in days %}
+  <div class="day-group">
+    <div class="day-title">📅 {{ day }} ({{ deals|length }} угод{{ 'а' if deals|length == 1 else '' }})</div>
+    {% for d in deals %}
+      <div class="card {{ 'premature' if d['Вердикт AI'] == 'ПЕРЕДЧАСНЕ' else '' }}">
+        <div class="card-top">
+          <div class="deal-name">{{ d['Назва'] or ('Угода #' + d['ID угоди']|string) }} <span style="color:#9ca3af;font-weight:400;">#{{ d['ID угоди'] }}</span></div>
+          <div class="manager">{{ d['Менеджер'] }}</div>
+        </div>
+        <div class="meta">
+          <span>Причина: <b>{{ d['Причина відмови'] or '—' }}</b></span>
+          <span>Етап: <b>{{ d['Закрито з етапу'] or '—' }}</b></span>
+          <span>Днів: <b>{{ d['Днів в роботі'] }}</b></span>
+          <span>Дзвінків: <b>{{ d['Дзвінків'] }}</b></span>
+          <span>Нотаток: <b>{{ d['Нотаток'] }}</b></span>
+          <span>Сума: <b>{{ d['Сума (грн)'] }} грн</b></span>
+        </div>
+        {% if d['Вердикт AI'] %}
+          <span class="badge {{ 'premature' if d['Вердикт AI'] == 'ПЕРЕДЧАСНЕ' else 'objective' }}">
+            {{ '🔴 Закрито передчасно' if d['Вердикт AI'] == 'ПЕРЕДЧАСНЕ' else '🟢 Закриття об\\'єктивне' }}
+          </span>
+          {% if d['Категорія причини'] %}<div class="category">Категорія: {{ d['Категорія причини'] }}</div>{% endif %}
+        {% endif %}
+        {% if d['Рекомендація AI'] %}<div class="ai-text">{{ d['Рекомендація AI'] }}</div>{% endif %}
+
+        <div class="feedback">
+          <form method="post" action="{{ url_for('dashboard_comment', team=team) }}">
+            <input type="hidden" name="row" value="{{ d['_row'] }}">
+            <textarea name="comment" placeholder="Коментар тімліда...">{{ d['Коментар тімліда'] or '' }}</textarea>
+            <div class="feedback-row">
+              <select name="status">
+                <option value="" {{ 'selected' if not d['Статус розбору'] else '' }}>Без статусу</option>
+                <option value="Розглянуто" {{ 'selected' if d['Статус розбору'] == 'Розглянуто' else '' }}>✅ Розглянуто</option>
+                <option value="Обговорено з менеджером" {{ 'selected' if d['Статус розбору'] == 'Обговорено з менеджером' else '' }}>🗣 Обговорено з менеджером</option>
+                <option value="AI помилився" {{ 'selected' if d['Статус розбору'] == 'AI помилився' else '' }}>⚠️ AI помилився</option>
+              </select>
+              <button type="submit">Зберегти</button>
+            </div>
+            {% if d['Коментар тімліда'] %}<div class="saved-note">💾 Збережено</div>{% endif %}
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% endfor %}
+</body>
+</html>
+"""
+
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard_index():
+    teams = sorted(RNK_TEAMS)
+    return redirect(url_for("dashboard_team", team=teams[0]))
+
+
+@app.route("/dashboard/<team>", methods=["GET"])
+def dashboard_team(team: str):
+    teams = sorted(RNK_TEAMS)
+    if team not in teams:
+        return redirect(url_for("dashboard_team", team=teams[0]))
+
+    deals = sheets.get_closed_deals_with_rows(team, limit_days=30)
+
+    grouped: dict[str, list] = {}
+    for d in deals:
+        day = str(d.get("Дата", ""))[:10] or "Без дати"
+        grouped.setdefault(day, []).append(d)
+    days = sorted(grouped.items(), key=lambda kv: kv[0], reverse=True)
+
+    return render_template_string(
+        _DASHBOARD_TEMPLATE, team=team, teams=teams, days=days, limit_days=30
+    )
+
+
+@app.route("/dashboard/<team>/comment", methods=["POST"])
+def dashboard_comment(team: str):
+    row = int(request.form.get("row", 0))
+    comment = request.form.get("comment", "").strip()
+    status = request.form.get("status", "").strip()
+    if row:
+        sheets.update_teamlead_feedback(team, row, comment, status)
+    return redirect(url_for("dashboard_team", team=team))
 
 
 @app.route("/setup-tg-webhook", methods=["GET"])

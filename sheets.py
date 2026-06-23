@@ -275,6 +275,46 @@ def log_closed_deal(deal: dict) -> None:
         logger.error("sheets log_closed_deal: %s", e)
 
 
+def get_closed_deals_with_rows(team: str, limit_days: int = 30) -> list[dict]:
+    """
+    Повертає відмови команди для веб-дашборду, кожен запис із номером рядка ('_row')
+    для подальшого запису коментаря тімліда. Обмежено останніми limit_days днями.
+    """
+    from datetime import datetime, timezone, timedelta
+    ws = _get_or_create_worksheet(_team_sheet_name(team), rows=2000, cols=15)
+    if not ws:
+        return []
+    try:
+        records = ws.get_all_records()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=limit_days)).strftime("%Y-%m-%d")
+        result = []
+        for i, r in enumerate(records, start=2):
+            date_str = str(r.get("Дата", ""))
+            if date_str and date_str[:10] < cutoff:
+                continue
+            r["_row"] = i
+            result.append(r)
+        result.reverse()  # найновіші спочатку
+        return result
+    except Exception as e:
+        logger.error("sheets get_closed_deals_with_rows: %s", e)
+        return []
+
+
+def update_teamlead_feedback(team: str, row: int, comment: str, status: str) -> bool:
+    """Записує коментар тімліда і статус розбору у відповідний рядок реєстру відмов."""
+    ws = _get_or_create_worksheet(_team_sheet_name(team), rows=2000, cols=15)
+    if not ws:
+        return False
+    try:
+        ws.update_cell(row, 14, comment)
+        ws.update_cell(row, 15, status)
+        return True
+    except Exception as e:
+        logger.error("sheets update_teamlead_feedback: %s", e)
+        return False
+
+
 def get_today_closed_deals(team: str, cutoff_hour_utc: int = 14) -> list[dict]:
     """Повертає відмови команди з 00:00 до cutoff_hour_utc UTC поточного дня."""
     from datetime import datetime, timezone
