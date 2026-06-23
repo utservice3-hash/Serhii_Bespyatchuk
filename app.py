@@ -1908,6 +1908,14 @@ def dedupe_closed_deals():
             best_row = max(rows, key=lambda r: len(str(records[r - 2].get("Рекомендація AI", ""))))
             rows_to_delete.extend(r for r in rows if r != best_row)
 
+        dry_run = request.args.get("dry_run", "") == "1"
+        if dry_run:
+            return jsonify({
+                "ok": True, "team": team, "total_rows": len(records),
+                "duplicate_groups": {k: v for k, v in by_lead.items() if len(v) > 1},
+                "rows_that_would_be_deleted": sorted(rows_to_delete, reverse=True),
+            })
+
         for row in sorted(rows_to_delete, reverse=True):
             ws.delete_rows(row)
 
