@@ -1866,6 +1866,35 @@ def test_ai():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/check-logged", methods=["GET"])
+def check_logged():
+    """Read-only check: was this lead already logged in its team's РНК sheet?
+    ?lead_id=12345"""
+    import traceback
+    try:
+        lead_id = int(request.args.get("lead_id", 0))
+        if not lead_id:
+            return jsonify({"ok": False, "error": "lead_id required"})
+        lead = kommo.get_lead(lead_id)
+        if not lead:
+            return jsonify({"ok": False, "error": "lead not found"})
+        responsible_id = lead.get("responsible_user_id", 0)
+        team = MANAGER_TEAM.get(responsible_id, "")
+        if team not in RNK_TEAMS:
+            return jsonify({"ok": True, "lead_id": lead_id, "team": team, "logged": None,
+                             "note": "not an RNK team — closed deals aren't logged to a РНК sheet for this manager"})
+        ws = sheets._get_or_create_worksheet(sheets._team_sheet_name(team), rows=2000, cols=15)
+        records = ws.get_all_records() if ws else []
+        row = next((r for r in records if str(r.get("ID угоди", "")) == str(lead_id)), None)
+        return jsonify({
+            "ok": True, "lead_id": lead_id, "team": team,
+            "logged": row is not None,
+            "row": row,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/test-ai-deal", methods=["GET"])
 def test_ai_deal():
     """Прогонить analyze_closed_deal() для реального ліда і повертає сирий текст відповіді AI."""
