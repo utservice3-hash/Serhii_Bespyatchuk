@@ -992,6 +992,9 @@ pending: dict[int, dict] = {}
 # Stats log: list of {ts: datetime, manager_id: int}
 _stats_log: list[dict] = []
 
+# Антигеймінг: manager_id -> кількість угод, повернутих AI з "Не цільові" (з моменту останнього деплою)
+_nontarget_returns: dict[int, int] = {}
+
 
 def _parse_status(data: dict) -> dict | None:
     """Extract status change info. Returns dict with id/status_id/pipeline_id/responsible_user_id."""
@@ -1233,6 +1236,15 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
         calls_analysis = _analyze_rnk_closed_deal_calls(lead_id, details["name"], manager_name)
         if calls_analysis:
             recommendation = f"{recommendation}\n\n📞 Аналіз прослуханих дзвінків:\n{calls_analysis}"
+
+        closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ'ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
+        category_match = re.search(r"CATEGORY:\s*(.+)", recommendation)
+        verdict = closure_match.group(1) if closure_match else ""
+        verdict_reason = closure_match.group(2).strip() if closure_match else ""
+        category = category_match.group(1).strip() if category_match else ""
+        recommendation_clean = re.sub(r"\n?CLOSURE:.*", "", recommendation)
+        recommendation_clean = re.sub(r"\n?CATEGORY:.*", "", recommendation_clean).strip()
+
         deal_data = {
             "lead_id": lead_id,
             "name": details["name"],
@@ -1245,9 +1257,22 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int):
             "notes_count": details["notes_count"],
             "amount": amount,
             "closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
-            "ai_recommendation": recommendation,
+            "ai_recommendation": recommendation_clean,
+            "verdict": verdict,
+            "category": category,
         }
         sheets.log_closed_deal(deal_data)
+
+        if verdict == "ПЕРЕДЧАСНЕ":
+            alert_msg = (
+                f"🔴 <b>AI: угоду закрито передчасно</b>\n"
+                f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
+                f"🏷 {details['name']}\n"
+                f"📋 Категорія: {category or '—'}\n"
+                f"⚠️ {verdict_reason}\n"
+                f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
+            )
+            notifier.send_to_rnk_closed(alert_msg)
 
 
 def _check_non_target_lead(lead_id: int, responsible_id: int):
@@ -1282,17 +1307,24 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
 
     kommo.update_lead_status(lead_id, TAKEN_TO_WORK)
 
+    _nontarget_returns[responsible_id] = _nontarget_returns.get(responsible_id, 0) + 1
+    return_count = _nontarget_returns[responsible_id]
+
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
     tg_tag = notifier.get_manager_tag(responsible_id)
     supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
     sup_part = f" {supervisor_tag}" if supervisor_tag else ""
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
 
+    warning_line = ""
+    if return_count >= 3:
+        warning_line = f"\n⚠️ Це вже {return_count}-й випадок для цього менеджера — можлива системна проблема з кваліфікацією лідів."
+
     msg = (
         f"♻️ <b>Лід повернуто з 'Не цільові'</b>\n"
         f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
         f"🏷 Назва: {lead_name}\n"
-        f"📋 Причина повернення: {result.get('reason', '')}\n"
+        f"📋 Причина повернення: {result.get('reason', '')}{warning_line}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
     notifier.send_to_nontarget(msg)

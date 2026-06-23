@@ -233,11 +233,13 @@ def log_closed_deal(deal: dict) -> None:
     """
     Записує закриту угоду РНК в реєстр відмов (окрема вкладка на кожну команду).
     deal = {lead_id, name, manager, team, reject_reason, last_status,
-            days_in_work, calls_count, notes_count, amount, closed_at, ai_recommendation}
+            days_in_work, calls_count, notes_count, amount, closed_at,
+            ai_recommendation, verdict, category}
+    Якщо verdict == "ПЕРЕДЧАСНЕ" — рядок підсвічується червоним для тімліда.
     """
     team = deal.get("team", "")
     sheet_name = _team_sheet_name(team)
-    ws = _get_or_create_worksheet(sheet_name, rows=2000, cols=13)
+    ws = _get_or_create_worksheet(sheet_name, rows=2000, cols=15)
     if not ws:
         return
     try:
@@ -245,7 +247,8 @@ def log_closed_deal(deal: dict) -> None:
             ws.insert_row([
                 "Дата", "ID угоди", "Назва", "Менеджер",
                 "Причина відмови", "Закрито з етапу", "Днів в роботі",
-                "Дзвінків", "Нотаток", "Сума (грн)", "Рекомендація AI",
+                "Дзвінків", "Нотаток", "Сума (грн)", "Вердикт AI",
+                "Категорія причини", "Рекомендація AI",
                 "Коментар тімліда", "Статус розбору"
             ], 1)
         ws.insert_row([
@@ -259,10 +262,14 @@ def log_closed_deal(deal: dict) -> None:
             deal.get("calls_count", 0),
             deal.get("notes_count", 0),
             deal.get("amount", 0),
+            deal.get("verdict", ""),
+            deal.get("category", ""),
             deal.get("ai_recommendation", ""),
             "",  # Коментар тімліда
             "",  # Статус розбору
         ], 2)
+        if deal.get("verdict") == "ПЕРЕДЧАСНЕ":
+            ws.format("A2:O2", {"backgroundColor": {"red": 0.96, "green": 0.78, "blue": 0.78}})
         logger.info("sheets: logged closed deal %s -> %s", deal.get("lead_id"), sheet_name)
     except Exception as e:
         logger.error("sheets log_closed_deal: %s", e)
