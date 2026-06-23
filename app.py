@@ -1110,7 +1110,8 @@ def webhook():
         logger.info("Lead %s assigned to %s after %d min", lead_id, manager_name, waited_min)
 
     if pipeline_id == PEREVOZY_PIPELINE_ID:
-        if status_id == CLOSED_NOT_REALIZED and responsible_id in DARINA_ANDRIY_TEAMS:
+        if (status_id == CLOSED_NOT_REALIZED and old_status_id != status_id
+                and responsible_id in DARINA_ANDRIY_TEAMS):
             threading.Thread(
                 target=_handle_closed_not_realized,
                 args=(lead_id, responsible_id),
@@ -1152,7 +1153,7 @@ def webhook():
         if not responsible_id or responsible_id == ADMIN_USER_ID:
             _handle_rnk_event(lead_id, responsible_id, "🌐 Дзвінки з сайту")
 
-    elif status_id == NON_TARGET_STATUS:
+    elif status_id == NON_TARGET_STATUS and old_status_id != status_id:
         threading.Thread(
             target=_check_non_target_lead,
             args=(lead_id, responsible_id),
