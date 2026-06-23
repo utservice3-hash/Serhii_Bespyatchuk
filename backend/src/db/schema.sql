@@ -48,6 +48,12 @@ ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_team_lead BOOLEAN NOT NULL DEFA
 CREATE INDEX IF NOT EXISTS idx_deals_manager ON deals(manager_id);
 CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(pipeline_id, status_id);
 
+CREATE TABLE IF NOT EXISTS sync_state (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  last_synced_at TIMESTAMPTZ,
+  CONSTRAINT single_row CHECK (id = 1)
+);
+
 CREATE TABLE IF NOT EXISTS plans (
   id SERIAL PRIMARY KEY,
   manager_id INTEGER NOT NULL REFERENCES managers(id),

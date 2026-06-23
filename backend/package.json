@@ -11,13 +11,16 @@
     "migrate:mapping": "tsx src/db/migrate.ts --with-kommo-mapping",
     "db:seed": "tsx src/db/seed.ts",
     "create-user": "tsx src/db/createUser.ts",
-    "sync": "tsx src/jobs/syncKommo.ts"
+    "sync": "tsx src/jobs/syncKommo.ts",
+    "sync:users": "tsx src/jobs/syncUsersOnly.ts",
+    "bot": "tsx src/bot/index.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "grammy": "^1.44.0",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.3",
     "pg": "^8.11.5",

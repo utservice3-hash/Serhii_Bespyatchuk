@@ -13,6 +13,9 @@ async function kommoRequest<T>(path: string): Promise<T> {
       "Content-Type": "application/json",
     },
   });
+  if (res.status === 204) {
+    return {} as T;
+  }
   if (!res.ok) {
     throw new Error(`Kommo API error ${res.status}: ${await res.text()}`);
   }
@@ -31,19 +34,41 @@ export interface KommoDeal {
   closed_at: number | null;
 }
 
-export async function fetchAllDeals(): Promise<KommoDeal[]> {
-  const deals: KommoDeal[] = [];
-  let page = 1;
-  const limit = 250;
+/**
+ * Fetches leads updated since `updatedAfter` (unix seconds). Pass undefined
+ * only for a deliberate full historical import — on a large, long-lived
+ * account this can mean tens of thousands of leads across many pages.
+ */
+async function fetchLeadsPage(page: number, limit: number, filter: string): Promise<KommoDeal[]> {
+  const data = await kommoRequest<KommoListResponse<KommoDeal>>(
+    `/api/v4/leads?page=${page}&limit=${limit}${filter}`
+  );
+  return data._embedded?.leads ?? [];
+}
 
-  while (true) {
-    const data = await kommoRequest<KommoListResponse<KommoDeal>>(
-      `/api/v4/leads?page=${page}&limit=${limit}`
+const PAGE_FETCH_CONCURRENCY = 10;
+
+export async function fetchAllDeals(updatedAfter?: number): Promise<KommoDeal[]> {
+  const deals: KommoDeal[] = [];
+  const limit = 250;
+  const filter = updatedAfter
+    ? `&${encodeURIComponent("filter[updated_at][from]")}=${updatedAfter}`
+    : "";
+
+  let page = 1;
+  let exhausted = false;
+  while (!exhausted) {
+    const pageNumbers = Array.from({ length: PAGE_FETCH_CONCURRENCY }, (_, i) => page + i);
+    const batches = await Promise.all(
+      pageNumbers.map((p) => fetchLeadsPage(p, limit, filter))
     );
-    const batch = data._embedded?.leads ?? [];
-    deals.push(...batch);
-    if (batch.length < limit) break;
-    page += 1;
+    for (const batch of batches) {
+      deals.push(...batch);
+      if (batch.length < limit) {
+        exhausted = true;
+      }
+    }
+    page += PAGE_FETCH_CONCURRENCY;
   }
 
   return deals;

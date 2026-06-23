@@ -5,10 +5,8 @@ function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
 }
 
-export async function syncKommo(): Promise<void> {
-  const [deals, users] = await Promise.all([fetchAllDeals(), fetchUsers()]);
-
-  // Ensure every Kommo user has a corresponding manager row.
+export async function syncManagers(): Promise<number> {
+  const users = await fetchUsers();
   for (const user of users) {
     await pool.query(
       `INSERT INTO managers (name, kommo_user_id)
@@ -17,16 +15,63 @@ export async function syncKommo(): Promise<void> {
       [user.name, user.id]
     );
   }
+  return users.length;
+}
 
-  for (const deal of deals) {
-    const managerRes = await pool.query<{ id: number }>(
-      `SELECT id FROM managers WHERE kommo_user_id = $1`,
-      [deal.responsible_user_id]
-    );
-    const managerId = managerRes.rows[0]?.id ?? null;
+const FULL_SYNC_LOOKBACK_DAYS = 180;
 
-    await pool.query(
-      `INSERT INTO deals (
+async function getSyncWindowStart(): Promise<number> {
+  const result = await pool.query<{ last_synced_at: Date | null }>(
+    `SELECT last_synced_at FROM sync_state WHERE id = 1`
+  );
+  const lastSyncedAt = result.rows[0]?.last_synced_at;
+  if (lastSyncedAt) {
+    return Math.floor(lastSyncedAt.getTime() / 1000);
+  }
+  // First-ever sync: only pull recent history to avoid an unbounded
+  // full-account import (some Kommo accounts have years of leads).
+  return Math.floor(Date.now() / 1000) - FULL_SYNC_LOOKBACK_DAYS * 24 * 60 * 60;
+}
+
+export async function syncKommo(): Promise<void> {
+  const syncStartedAt = new Date();
+  const windowStart = await getSyncWindowStart();
+
+  const [deals, managerCount] = await Promise.all([
+    fetchAllDeals(windowStart),
+    syncManagers(),
+  ]);
+
+  const managerRows = await pool.query<{ id: number; kommo_user_id: string }>(
+    `SELECT id, kommo_user_id FROM managers WHERE kommo_user_id IS NOT NULL`
+  );
+  const managerIdByKommoUserId = new Map(
+    managerRows.rows.map((row) => [Number(row.kommo_user_id), row.id])
+  );
+
+  const CONCURRENCY = 20;
+  for (let i = 0; i < deals.length; i += CONCURRENCY) {
+    const batch = deals.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map((deal) => upsertDeal(deal, managerIdByKommoUserId)));
+  }
+
+  await pool.query(
+    `INSERT INTO sync_state (id, last_synced_at) VALUES (1, $1)
+     ON CONFLICT (id) DO UPDATE SET last_synced_at = EXCLUDED.last_synced_at`,
+    [syncStartedAt]
+  );
+
+  console.log(`Synced ${managerCount} users and ${deals.length} deals.`);
+}
+
+async function upsertDeal(
+  deal: Awaited<ReturnType<typeof fetchAllDeals>>[number],
+  managerIdByKommoUserId: Map<number, number>
+): Promise<void> {
+  const managerId = managerIdByKommoUserId.get(deal.responsible_user_id) ?? null;
+
+  await pool.query(
+    `INSERT INTO deals (
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
@@ -52,9 +97,6 @@ export async function syncKommo(): Promise<void> {
         toTimestamp(deal.closed_at),
       ]
     );
-  }
-
-  console.log(`Synced ${users.length} users and ${deals.length} deals.`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

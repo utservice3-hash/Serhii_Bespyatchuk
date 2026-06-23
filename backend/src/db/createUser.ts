@@ -1,6 +1,5 @@
-import { randomBytes } from "crypto";
-import bcrypt from "bcryptjs";
 import { pool } from "./pool.js";
+import { createOrUpdateUser, type Role } from "./userService.js";
 
 /**
  * Usage:
@@ -22,43 +21,20 @@ function parseArgs(): Record<string, string> {
 
 async function main() {
   const args = parseArgs();
-  const email = args.email;
-  const role = args.role as "admin" | "team_lead" | "manager" | undefined;
-  const teamName = args.team;
-
-  if (!email || !role) {
-    throw new Error("Usage: --email=... --role=admin|team_lead|manager [--team=\"Team Name\"]");
-  }
-  if (role === "team_lead" && !teamName) {
-    throw new Error("--team is required for role=team_lead");
+  if (!args.email || !args.role) {
+    throw new Error('Usage: --email=... --role=admin|team_lead|manager [--team="Team Name"]');
   }
 
-  let teamId: number | null = null;
-  if (teamName) {
-    const teamRes = await pool.query<{ id: number }>(
-      `SELECT id FROM teams WHERE name = $1`,
-      [teamName]
-    );
-    if (!teamRes.rows[0]) throw new Error(`Team not found: ${teamName}`);
-    teamId = teamRes.rows[0].id;
-  }
+  const result = await createOrUpdateUser({
+    email: args.email,
+    role: args.role as Role,
+    teamName: args.team,
+    password: args.password,
+  });
 
-  const password = args.password ?? randomBytes(9).toString("base64url");
-  const passwordHash = await bcrypt.hash(password, 10);
-
-  await pool.query(
-    `INSERT INTO users (email, password_hash, role, team_id)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (email) DO UPDATE SET
-       password_hash = EXCLUDED.password_hash,
-       role = EXCLUDED.role,
-       team_id = EXCLUDED.team_id`,
-    [email, passwordHash, role, teamId]
-  );
-
-  console.log(`User created: ${email} (role=${role}${teamName ? `, team=${teamName}` : ""})`);
+  console.log(`User created: ${result.email} (role=${args.role}${args.team ? `, team=${args.team}` : ""})`);
   if (!args.password) {
-    console.log(`Generated password (save it now, it won't be shown again): ${password}`);
+    console.log(`Generated password (save it now, it won't be shown again): ${result.password}`);
   }
 
   await pool.end();
