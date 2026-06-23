@@ -218,6 +218,43 @@ def send_to_rnk_tracking(text: str, team: str = "") -> bool:
         return False
 
 
+# Окремі групи РПК на кожну команду лідогенераторів для трекінгу роботи
+# (нова заявка / лід взято в роботу / дзвінки). Тендерний — без власної гілки,
+# фолбек на спільну групу РПК.
+_RPK_TEAM_ROUTES: dict[str, dict[str, str]] = {
+    "Шаврова": {"chat_id": "-1003239776842", "tracking_thread": "688"},
+    "Дмитрук": {"chat_id": "-1002370766882", "tracking_thread": "6825"},
+    "Яцик":    {"chat_id": "-1002363672295", "tracking_thread": "2354"},
+}
+
+
+def send_to_team_tracking(text: str, team: str = "") -> bool:
+    """Routes 'трекінг роботи' (нова заявка / лід взято в роботу / дзвінки) to the
+    manager's own team group/thread for both РНК and РПК teams. Falls back to the
+    shared РПК group for teams without a dedicated route (e.g. Тендерний)."""
+    route = _RNK_TEAM_ROUTES.get(team) or _RPK_TEAM_ROUTES.get(team)
+    if not route:
+        return send_to_rpk(text)
+    chat_id = route["chat_id"]
+    thread_id = route["tracking_thread"]
+    if not TG_TOKEN or not chat_id:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=chat_id, thread_id=thread_id)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram team tracking error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_team_tracking exception: %s", e)
+        return False
+
+
 def send_to_rpk(text: str) -> bool:
     """Send message to РПК group."""
     if not TG_TOKEN or not TG_CHAT_ID_RPK:

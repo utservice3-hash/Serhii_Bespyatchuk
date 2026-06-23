@@ -142,10 +142,7 @@ RPK_TEAMS = {"Яцик", "Дмитрук", "Шаврова", "Тендерний
 def send_to_team_group(manager_id: int, text: str) -> bool:
     """Відправляє сповіщення в правильну групу (РНК або РПК) залежно від команди менеджера."""
     team = MANAGER_TEAM.get(manager_id, "")
-    if team in RNK_TEAMS:
-        return notifier.send_to_rnk_tracking(text, team)
-    else:
-        return notifier.send_to_rpk(text)
+    return notifier.send_to_team_tracking(text, team)
 
 # In-memory: список успішних угод поточного місяця
 # {lead_id, manager_id, amount, closed_at}
@@ -1391,10 +1388,7 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
     )
     if _is_working_hours():
         team = MANAGER_TEAM.get(responsible_id, "")
-        if team in RNK_TEAMS:
-            notifier.send_to_rnk_tracking(msg, team)
-        else:
-            notifier.send_to_rpk(msg)
+        notifier.send_to_team_tracking(msg, team)
     sheets.append_transfer(lead_id, lead_name, manager_name, now, manager_id=responsible_id)
     logger.info("New lead: %s → %s", lead_id, manager_name)
 
@@ -2158,7 +2152,7 @@ def ringostat_webhook():
     if record_url:
         msg += f"\n🎙 <a href='{record_url}'>Запис дзвінка</a>"
 
-    notifier.send_to_rnk_tracking(msg, team)
+    notifier.send_to_team_tracking(msg, team)
     return jsonify({"ok": True})
 
 
