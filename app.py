@@ -1916,8 +1916,23 @@ def dedupe_closed_deals():
                 "rows_that_would_be_deleted": sorted(rows_to_delete, reverse=True),
             })
 
-        for row in sorted(rows_to_delete, reverse=True):
-            ws.delete_rows(row)
+        if rows_to_delete:
+            # Один пакетний запит замість N окремих delete_rows — щоб не вибивати
+            # ліміт записів/хв у Google Sheets API на великій кількості дублікатів.
+            requests_body = [
+                {
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "dimension": "ROWS",
+                            "startIndex": row - 1,
+                            "endIndex": row,
+                        }
+                    }
+                }
+                for row in sorted(rows_to_delete, reverse=True)
+            ]
+            ws.spreadsheet.batch_update({"requests": requests_body})
 
         return jsonify({"ok": True, "team": team, "deleted_rows": sorted(rows_to_delete, reverse=True)})
     except Exception as e:
