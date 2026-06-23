@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",
+    "migrate:mapping": "tsx src/db/migrate.ts --with-kommo-mapping",
     "db:seed": "tsx src/db/seed.ts",
     "sync": "tsx src/jobs/syncKommo.ts"
   },

@@ -9,6 +9,16 @@ async function main() {
   const sql = readFileSync(path.join(__dirname, "schema.sql"), "utf-8");
   await pool.query(sql);
   console.log("Migration applied.");
+
+  if (process.argv.includes("--with-kommo-mapping")) {
+    const mappingSql = readFileSync(
+      path.join(__dirname, "seedKommoMapping.sql"),
+      "utf-8"
+    );
+    await pool.query(mappingSql);
+    console.log("Kommo team/pipeline mapping applied.");
+  }
+
   await pool.end();
 }
 
