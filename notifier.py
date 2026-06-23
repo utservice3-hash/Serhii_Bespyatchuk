@@ -29,11 +29,13 @@ _RNK_TEAM_ROUTES: dict[str, dict[str, str]] = {
         "chat_id": "-1002925017503",
         "closed_thread": "2",
         "nontarget_thread": "1550",
+        "tracking_thread": "6892",
     },
     "Безпам'ятний": {
         "chat_id": "-1002258732695",
         "closed_thread": "5341",
         "nontarget_thread": "13446",
+        "tracking_thread": "13459",
     },
 }
 
@@ -188,6 +190,31 @@ def send_to_nontarget(text: str, team: str = "") -> bool:
         return True
     except Exception as e:
         logger.error("send_to_nontarget exception: %s", e)
+        return False
+
+
+def send_to_rnk_tracking(text: str, team: str = "") -> bool:
+    """Send work-tracking notification (нова заявка / лід взято в роботу / дзвінки)
+    to the team's own group/thread. Falls back to the shared РНК thread (51) for
+    unknown teams."""
+    route = _RNK_TEAM_ROUTES.get(team)
+    chat_id = route["chat_id"] if route else TG_CHAT_ID_RNK
+    thread_id = route["tracking_thread"] if route else TG_THREAD_ID_RNK
+    if not TG_TOKEN or not chat_id:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=chat_id, thread_id=thread_id)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram RNK tracking error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_rnk_tracking exception: %s", e)
         return False
 
 
