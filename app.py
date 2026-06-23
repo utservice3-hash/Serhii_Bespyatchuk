@@ -1956,6 +1956,31 @@ def dedupe_closed_deals():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/test-new-lead", methods=["GET"])
+def test_new_lead():
+    """Manually run _handle_new_lead for a specific lead (debug РПК tracking issue).
+    ?lead_id=12345"""
+    import traceback
+    try:
+        lead_id = int(request.args.get("lead_id", 0))
+        if not lead_id:
+            return jsonify({"ok": False, "error": "lead_id required"})
+        lead = kommo.get_lead(lead_id)
+        if not lead:
+            return jsonify({"ok": False, "error": "lead not found"})
+        responsible_id = lead.get("responsible_user_id", 0)
+        team = MANAGER_TEAM.get(responsible_id, "")
+        is_working = _is_working_hours()
+        _handle_new_lead(lead_id, responsible_id)
+        return jsonify({
+            "ok": True, "lead_id": lead_id, "responsible_id": responsible_id,
+            "team": team, "is_working_hours": is_working,
+            "pipeline_id": lead.get("pipeline_id"), "status_id": lead.get("status_id"),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/test-rnk-groups", methods=["GET"])
 def test_rnk_groups():
     """Надсилає тестове повідомлення в усі 4 гілки (закрито/нецільові x 2 команди),
