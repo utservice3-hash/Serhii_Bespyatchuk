@@ -1849,6 +1849,38 @@ def test_ai():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/test-ai-deal", methods=["GET"])
+def test_ai_deal():
+    """Прогонить analyze_closed_deal() для реального ліда і повертає сирий текст відповіді AI."""
+    import traceback
+    try:
+        lead_id = int(request.args.get("lead_id", 0))
+        if not lead_id:
+            return jsonify({"ok": False, "error": "lead_id required"})
+
+        details = kommo.get_lead_details(lead_id)
+        lead = kommo.get_lead(lead_id)
+        responsible_id = lead.get("responsible_user_id", 0) if lead else 0
+        manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
+        amount = int(lead.get("price", 0)) if lead else 0
+
+        deal_payload = {**details, "manager": manager_name, "amount": amount}
+        recommendation = ai_analyzer.analyze_closed_deal(deal_payload)
+
+        calls_analysis = _analyze_rnk_closed_deal_calls(lead_id, details["name"], manager_name)
+
+        return jsonify({
+            "ok": True,
+            "lead_id": lead_id,
+            "deal_payload": deal_payload,
+            "analyze_closed_deal_result": recommendation,
+            "analyze_closed_deal_len": len(recommendation),
+            "calls_analysis_result": calls_analysis,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/test-non-target", methods=["GET"])
 def test_non_target():
     """Manually run the non-target lead verification pipeline for a specific lead (debug).
