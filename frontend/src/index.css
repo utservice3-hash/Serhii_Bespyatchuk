@@ -227,6 +227,10 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
+.manager-card {
+  margin-bottom: 16px;
+}
+
 @media (max-width: 1024px) {
   .kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

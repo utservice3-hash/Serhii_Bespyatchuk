@@ -11,7 +11,15 @@ import {
   CartesianGrid,
   ResponsiveContainer,
 } from "recharts";
-import { fetchFunnel, fetchTeams, fetchTimeseries, type FunnelStage, type Team } from "../api";
+import {
+  fetchFunnel,
+  fetchManagerBreakdown,
+  fetchTeams,
+  fetchTimeseries,
+  type FunnelStage,
+  type ManagerBreakdown,
+  type Team,
+} from "../api";
 import { Layout, type NavKey } from "../components/Layout";
 
 const STAGE_LABELS: Record<string, string> = {
@@ -21,6 +29,17 @@ const STAGE_LABELS: Record<string, string> = {
   invoiced: "Рахунок виставлено",
   paid: "Оплачено",
 };
+
+const METRIC_LABELS: Record<string, string> = {
+  ...STAGE_LABELS,
+  payment_amount: "Сума оплат, ₴",
+};
+
+const METRIC_ORDER = ["lead_taken", "quote_requested", "approved", "invoiced", "paid", "payment_amount"];
+
+function currentMonth(): string {
+  return new Date().toISOString().slice(0, 7);
+}
 
 const STAGE_COLORS: Record<string, string> = {
   lead_taken: "#94a3b8",
@@ -47,9 +66,30 @@ export function Dashboard() {
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [managerTeamId, setManagerTeamId] = useState<number | "">("");
+  const [month, setMonth] = useState(currentMonth());
+  const [managerRows, setManagerRows] = useState<ManagerBreakdown[]>([]);
+  const [managersLoading, setManagersLoading] = useState(false);
+
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
+
+  useEffect(() => {
+    if (section !== "managers") return;
+    if (!managerTeamId && teams.length > 1) {
+      // Admin viewing without picking a team yet — nothing to load.
+      setManagerRows([]);
+      return;
+    }
+    const teamIdToUse = managerTeamId || teams[0]?.id;
+    if (!teamIdToUse) return;
+    setManagersLoading(true);
+    fetchManagerBreakdown({ teamId: teamIdToUse, month })
+      .then(setManagerRows)
+      .catch(() => setManagerRows([]))
+      .finally(() => setManagersLoading(false));
+  }, [section, managerTeamId, month, teams]);
 
   useEffect(() => {
     setLoading(true);
@@ -213,10 +253,66 @@ export function Dashboard() {
         <>
           <div className="page-header">
             <h1 className="page-title">Менеджери</h1>
+            <div className="page-filters">
+              {teams.length > 1 && (
+                <select
+                  value={managerTeamId}
+                  onChange={(e) => setManagerTeamId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  <option value="">Оберіть команду</option>
+                  {teams.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            </div>
           </div>
-          <div className="chart-card">
-            <p className="loading-text">Розділ у розробці.</p>
-          </div>
+
+          {managersLoading ? (
+            <p className="loading-text">Завантаження...</p>
+          ) : managerRows.length === 0 ? (
+            <div className="chart-card">
+              <p className="loading-text">
+                {teams.length > 1 && !managerTeamId
+                  ? "Оберіть команду, щоб побачити дані."
+                  : "Немає даних за цей місяць."}
+              </p>
+            </div>
+          ) : (
+            managerRows.map((manager) => (
+              <div className="chart-card manager-card" key={manager.id}>
+                <h2 className="chart-title">{manager.name}</h2>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Показник</th>
+                      <th>План</th>
+                      <th>Факт</th>
+                      <th>% виконання</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {METRIC_ORDER.map((metric) => {
+                      const totals = manager.totals[metric] ?? { plan: 0, fact: 0 };
+                      const pct = totals.plan > 0 ? Math.round((totals.fact / totals.plan) * 100) : 0;
+                      const isAmount = metric === "payment_amount";
+                      return (
+                        <tr key={metric}>
+                          <td>{METRIC_LABELS[metric] ?? metric}</td>
+                          <td>{isAmount ? formatAmount(totals.plan) : totals.plan}</td>
+                          <td>{isAmount ? formatAmount(totals.fact) : totals.fact}</td>
+                          <td>{totals.plan > 0 ? `${pct}%` : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ))
+          )}
         </>
       )}
     </Layout>

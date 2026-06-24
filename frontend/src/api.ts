@@ -60,3 +60,27 @@ export async function fetchTeams(): Promise<Team[]> {
   const { data } = await api.get<{ teams: Team[] }>("/teams");
   return data.teams;
 }
+
+export interface ManagerWeekRow {
+  weekStart: string;
+  metric: string;
+  plan: number;
+  fact: number;
+}
+
+export interface ManagerBreakdown {
+  id: number;
+  name: string;
+  weeks: ManagerWeekRow[];
+  totals: Record<string, { plan: number; fact: number }>;
+}
+
+export async function fetchManagerBreakdown(params: {
+  teamId?: number;
+  month?: string;
+}): Promise<ManagerBreakdown[]> {
+  const { data } = await api.get<{ managers: ManagerBreakdown[] }>("/dashboard/managers", {
+    params,
+  });
+  return data.managers;
+}
