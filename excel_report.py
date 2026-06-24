@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.chart import LineChart, Reference
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,13 @@ def _fmt_ts(ts) -> str:
         return ""
 
 
-def build_ad_report_excel(report: dict, days: int) -> bytes:
+def build_ad_report_excel(report: dict, days: int, trend: list[dict] | None = None) -> bytes:
     """
-    Будує xlsx із двома листами:
+    Будує xlsx із листами:
     - "Зведення по кампаніях" — агреговані метрики по кожній рекламній кампанії
     - "Деталізація угод" — повний список угод, що прийшли з реклами за період
+    - "Тренд (12 тижнів)" (якщо передано trend) — потижнева динаміка лідів/виручки
+      за останні ~3 місяці з лінійним графіком
     """
     wb = Workbook()
 
@@ -47,7 +50,7 @@ def build_ad_report_excel(report: dict, days: int) -> bytes:
     summary_headers = [
         "Кампанія", "Всього угод", "Успіх", "Закрито не реалізовано",
         "Не цільові", "В роботі", "Конверсія %",
-        "Витрати (оцінка), грн", "Виручка, грн", "Маржа, грн", "CPL, грн",
+        "Витрати (оцінка), грн", "Виручка, грн", "Маржа, грн", "CPL, грн", "ROAS %",
     ]
     summary_ws.append(summary_headers)
     _style_header(summary_ws)
@@ -57,7 +60,7 @@ def build_ad_report_excel(report: dict, days: int) -> bytes:
     for name, c in sorted(campaigns.items(), key=lambda x: x[1]["total"], reverse=True):
         summary_ws.append([
             name, c["total"], c["won"], c["lost"], c["non_target"], c["in_progress"], c["conversion"],
-            c.get("spend"), c.get("revenue"), c.get("margin"), c.get("cpl"),
+            c.get("spend"), c.get("revenue"), c.get("margin"), c.get("cpl"), c.get("roas"),
         ])
 
     total_row = [
@@ -70,6 +73,7 @@ def build_ad_report_excel(report: dict, days: int) -> bytes:
         sum(c["spend"] for c in campaigns.values() if c.get("spend") is not None) if has_spend else "",
         sum(c["revenue"] for c in campaigns.values()) if has_spend else "",
         sum(c["margin"] for c in campaigns.values() if c.get("margin") is not None) if has_spend else "",
+        "",
         "",
     ]
     summary_ws.append(total_row)
@@ -95,6 +99,30 @@ def build_ad_report_excel(report: dict, days: int) -> bytes:
     detail_ws.freeze_panes = "A2"
     detail_ws.auto_filter.ref = detail_ws.dimensions
     _autosize(detail_ws)
+
+    if trend:
+        trend_ws = wb.create_sheet("Тренд (12 тижнів)")
+        trend_ws.append(["Тиждень з", "Всього угод", "Успіх", "Конверсія %", "Виручка, грн"])
+        _style_header(trend_ws)
+        for w in trend:
+            trend_ws.append([w["week_start"], w["total"], w["won"], w["conversion"], w["revenue"]])
+        _autosize(trend_ws)
+
+        chart = LineChart()
+        chart.title = "Динаміка лідів і виручки за 12 тижнів"
+        chart.style = 12
+        chart.y_axis.title = "Угоди / тис. грн"
+        chart.x_axis.title = "Тиждень з"
+        max_row = trend_ws.max_row
+
+        leads_ref = Reference(trend_ws, min_col=2, max_col=2, min_row=1, max_row=max_row)
+        chart.add_data(leads_ref, titles_from_data=True)
+        revenue_ref = Reference(trend_ws, min_col=5, max_col=5, min_row=1, max_row=max_row)
+        chart.add_data(revenue_ref, titles_from_data=True)
+        cats = Reference(trend_ws, min_col=1, min_row=2, max_row=max_row)
+        chart.set_categories(cats)
+        chart.width, chart.height = 24, 12
+        trend_ws.add_chart(chart, "G2")
 
     buf = io.BytesIO()
     wb.save(buf)

@@ -1074,13 +1074,47 @@ def _enrich_campaigns_with_spend(report: dict, days: int) -> None:
             c["spend"] = spend
             c["margin"] = round(revenue - spend, 2)
             c["cpl"] = round(spend / c["total"], 2) if c["total"] else 0.0
+            c["roas"] = round(revenue / spend * 100, 1) if spend else None
         else:
             c["spend"] = None
             c["margin"] = None
             c["cpl"] = None
+            c["roas"] = None
 
 
-def _build_ad_report_text(report: dict, days: int = 7) -> str:
+def _pct_change(current: float, previous: float) -> str:
+    """Знак+відсоток зміни для WoW-порівняння, напр. '+12.5%' / '-8.0%' / '0%'."""
+    if not previous:
+        return "—" if not current else "нове"
+    delta = (current - previous) / previous * 100
+    sign = "+" if delta >= 0 else ""
+    return f"{sign}{delta:.1f}%"
+
+
+def _build_wow_comparison(report: dict, prev_report: dict) -> list[str]:
+    """Порівняння ключових метрик з попереднім рівновеликим періодом (WoW)."""
+    total = report["total"]
+    prev_total = prev_report["total"]
+    if not prev_total:
+        return []
+
+    conv = lambda r: round(
+        sum(c["won"] for c in r["campaigns"].values())
+        / max(sum(c["won"] + c["lost"] for c in r["campaigns"].values()), 1) * 100, 1
+    )
+    revenue = lambda r: sum(c.get("revenue", 0) for c in r["campaigns"].values())
+
+    lines = ["\n📊 <b>Порівняння з попереднім періодом (WoW):</b>"]
+    lines.append(f"• Угод: {total} ({_pct_change(total, prev_total)})")
+    lines.append(f"• Конверсія: {conv(report)}% (попередньо {conv(prev_report)}%)")
+    if any(c.get("revenue") is not None for c in report["campaigns"].values()):
+        lines.append(
+            f"• Виручка: {revenue(report):,.0f} грн ({_pct_change(revenue(report), revenue(prev_report))})".replace(",", " ")
+        )
+    return lines
+
+
+def _build_ad_report_text(report: dict, days: int = 7, prev_report: dict | None = None) -> str:
     total = report["total"]
     non_target_total = report.get("non_target_total", 0)
     campaigns = report["campaigns"]
@@ -1146,26 +1180,35 @@ def _build_ad_report_text(report: dict, days: int = 7) -> str:
         by_margin = sorted(with_spend, key=lambda x: x[1]["margin"], reverse=True)
         lines.append("\n💹 <b>Маржинальність по кампаніях:</b>")
         for name, c in by_margin[:5]:
+            roas_part = f", ROAS {c['roas']:.0f}%" if c.get("roas") is not None else ""
             lines.append(
                 (f"• {name} — витрати ~{c['spend']:,.0f} грн, виручка {c['revenue']:,.0f} грн, "
-                 f"маржа <b>{c['margin']:,.0f} грн</b>, CPL ~{c['cpl']:.0f} грн").replace(",", " ")
+                 f"маржа <b>{c['margin']:,.0f} грн</b>, CPL ~{c['cpl']:.0f} грн{roas_part}").replace(",", " ")
             )
     else:
         lines.append("\n💰 Дані по витратах на рекламу недоступні (немає збігу кампаній з таблицею маркетингу).")
+
+    if prev_report and prev_report.get("total"):
+        lines.extend(_build_wow_comparison(report, prev_report))
 
     return "\n".join(lines)
 
 
 def _send_weekly_ad_report() -> None:
-    """Щоп'ятничний звіт по рекламних кампаніях за тиждень: текст + xlsx з деталізацією."""
+    """Щоп'ятничний звіт по рекламних кампаніях за тиждень: текст + xlsx з деталізацією,
+    WoW-порівняння з попереднім тижнем і тренд за останні 3 місяці (12 тижнів)."""
     days = 7
     report = kommo.get_weekly_ad_campaign_report(days)
+    prev_report = kommo.get_weekly_ad_campaign_report(days, offset_days=days)
     if report["total"] > 0:
         _enrich_campaigns_with_spend(report, days)
-    text = _build_ad_report_text(report, days)
+    if prev_report["total"] > 0:
+        _enrich_campaigns_with_spend(prev_report, days)
+    text = _build_ad_report_text(report, days, prev_report)
     notifier.send_ad_report(text)
     if report["total"] > 0:
-        excel_bytes = excel_report.build_ad_report_excel(report, days)
+        trend = kommo.get_campaign_trend(weeks=12)
+        excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend)
         filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
         notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
     logger.info("Weekly ad report sent")
@@ -1177,15 +1220,19 @@ def send_ad_report_endpoint():
     ?days=7 (default) ?dry=1 щоб лише показати текст (без xlsx) ?excel=1 щоб теж надіслати xlsx."""
     days = int(request.args.get("days", 7))
     report = kommo.get_weekly_ad_campaign_report(days)
+    prev_report = kommo.get_weekly_ad_campaign_report(days, offset_days=days)
     if report["total"] > 0:
         _enrich_campaigns_with_spend(report, days)
-    text = _build_ad_report_text(report, days)
+    if prev_report["total"] > 0:
+        _enrich_campaigns_with_spend(prev_report, days)
+    text = _build_ad_report_text(report, days, prev_report)
     if request.args.get("dry") == "1":
         return jsonify({"ok": True, "text": text, "leads_count": len(report["leads"])})
     notifier.send_ad_report(text)
     excel_sent = False
     if request.args.get("excel") == "1" and report["total"] > 0:
-        excel_bytes = excel_report.build_ad_report_excel(report, days)
+        trend = kommo.get_campaign_trend(weeks=12)
+        excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend)
         filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
         excel_sent = notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
     return jsonify({"ok": True, "sent": True, "excel_sent": excel_sent, "text": text})

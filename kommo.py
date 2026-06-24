@@ -414,12 +414,12 @@ def get_campaign_name(lead: dict) -> str:
     return ""
 
 
-def get_weekly_ad_campaign_report(days: int = 7) -> dict:
+def get_weekly_ad_campaign_report(days: int = 7, offset_days: int = 0) -> dict:
     """
     Зведення по угодах, що прийшли з реклами (заповнене поле кампанії) за
-    останні `days` днів: скільки прийшло, скільки з них нецільові, по кожній
-    кампанії — скільки угод, скільки виграно, закрито не реалізовано,
-    нецільових, конверсія.
+    період `days` днів, що закінчується `offset_days` днів тому (offset_days=0 —
+    період закінчується зараз; offset_days=days дає попередній рівновеликий
+    період — зручно для порівняння тиждень-до-тижня).
 
     status_id в Kommo унікальний лише в межах pipeline — те саме число 143
     означає "Закрито не реалізовано" в pipeline "Перевозки" і "Не цільові" в
@@ -427,8 +427,9 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
     """
     from datetime import datetime, timezone, timedelta
 
-    since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
-    until = int(datetime.now(timezone.utc).timestamp())
+    until_dt = datetime.now(timezone.utc) - timedelta(days=offset_days)
+    since = int((until_dt - timedelta(days=days)).timestamp())
+    until = int(until_dt.timestamp())
 
     leads = []
     page = 1
@@ -526,6 +527,64 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
         "campaigns": campaigns,
         "leads": leads_detail,
     }
+
+
+def get_campaign_trend(weeks: int = 12) -> list[dict]:
+    """
+    Потижнева динаміка по угодах з реклами за останні `weeks` тижнів (один
+    запит до Kommo, далі групуємо локально по тижнях) — для графіка в звіті
+    і порівняння тренду за останні ~3 місяці. Витрати/маржа сюди не входять,
+    бо таблиця маркетингу дає лише накопичений підсумок поточного місяця, без
+    історії по тижнях.
+
+    Повертає список тижнів від найстарішого до найновішого:
+    [{"week_start": "YYYY-MM-DD", "total": int, "won": int, "lost": int,
+      "non_target": int, "conversion": float, "revenue": int}, ...]
+    """
+    from datetime import datetime, timezone, timedelta
+
+    days = weeks * 7
+    report = get_weekly_ad_campaign_report(days=days)
+
+    now = datetime.now(timezone.utc)
+    buckets: dict[int, dict] = {}
+    for lead in report["leads"]:
+        created = lead.get("created_at", 0)
+        if not created:
+            continue
+        created_dt = datetime.fromtimestamp(created, tz=timezone.utc)
+        week_index = int((now - created_dt).days // 7)
+        if week_index >= weeks:
+            continue
+        b = buckets.setdefault(week_index, {
+            "total": 0, "won": 0, "lost": 0, "non_target": 0, "revenue": 0,
+        })
+        b["total"] += 1
+        status_label = lead.get("status_label")
+        if status_label == "Успіх":
+            b["won"] += 1
+        elif status_label == "Закрито не реалізовано":
+            b["lost"] += 1
+        elif status_label == "Не цільові":
+            b["non_target"] += 1
+        if lead.get("revenue_eligible"):
+            b["revenue"] += lead.get("amount", 0) or 0
+
+    trend = []
+    for week_index in range(weeks - 1, -1, -1):
+        b = buckets.get(week_index, {"total": 0, "won": 0, "lost": 0, "non_target": 0, "revenue": 0})
+        closed = b["won"] + b["lost"]
+        week_start = (now - timedelta(days=(week_index + 1) * 7)).strftime("%Y-%m-%d")
+        trend.append({
+            "week_start": week_start,
+            "total": b["total"],
+            "won": b["won"],
+            "lost": b["lost"],
+            "non_target": b["non_target"],
+            "conversion": round(b["won"] / closed * 100, 1) if closed else 0.0,
+            "revenue": b["revenue"],
+        })
+    return trend
 
 
 def get_lidogen_stats(days: int = 1) -> dict[int, int]:
