@@ -2234,7 +2234,7 @@ def debug_ad_campaign_fields():
     matches = []
     page = 1
     while True:
-        resp = requests.get(
+        resp = kommo.requests.get(
             f"{kommo.KOMMO_BASE}/api/v4/leads",
             headers=kommo.HEADERS,
             params={
