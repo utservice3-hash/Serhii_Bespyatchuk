@@ -1114,7 +1114,27 @@ def _build_wow_comparison(report: dict, prev_report: dict) -> list[str]:
     return lines
 
 
-def _build_ad_report_text(report: dict, days: int = 7, prev_report: dict | None = None) -> str:
+def _build_repeat_customers_block(repeat_info: dict) -> list[str]:
+    lines = ["\n🔁 <b>Повторні клієнти з реклами:</b>"]
+    repeat_count = repeat_info.get("repeat_count", 0)
+    new_count = repeat_info.get("new_count", 0)
+    total = repeat_count + new_count
+    if total == 0:
+        lines.append("— немає успішних угод з реклами за період")
+        return lines
+    lines.append(f"• Повторних (2+ замовлення): <b>{repeat_count}</b> з {total}")
+    lines.append(f"• Нових: {new_count} з {total}")
+    for c in repeat_info.get("repeat_customers", [])[:5]:
+        lines.append(f"• {c['name']} ({c['campaign']}, {c['manager_name']}) — всього замовлень: {c['total_orders']}")
+    return lines
+
+
+def _build_ad_report_text(
+    report: dict,
+    days: int = 7,
+    prev_report: dict | None = None,
+    repeat_info: dict | None = None,
+) -> str:
     total = report["total"]
     non_target_total = report.get("non_target_total", 0)
     campaigns = report["campaigns"]
@@ -1188,6 +1208,9 @@ def _build_ad_report_text(report: dict, days: int = 7, prev_report: dict | None 
     else:
         lines.append("\n💰 Дані по витратах на рекламу недоступні (немає збігу кампаній з таблицею маркетингу).")
 
+    if repeat_info is not None:
+        lines.extend(_build_repeat_customers_block(repeat_info))
+
     if prev_report and prev_report.get("total"):
         lines.extend(_build_wow_comparison(report, prev_report))
 
@@ -1204,11 +1227,12 @@ def _send_weekly_ad_report() -> None:
         _enrich_campaigns_with_spend(report, days)
     if prev_report["total"] > 0:
         _enrich_campaigns_with_spend(prev_report, days)
-    text = _build_ad_report_text(report, days, prev_report)
+    repeat_info = kommo.get_repeat_customers(report) if report["total"] > 0 else None
+    text = _build_ad_report_text(report, days, prev_report, repeat_info)
     notifier.send_ad_report(text)
     if report["total"] > 0:
         trend = kommo.get_campaign_trend(weeks=12)
-        excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend)
+        excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend, repeat_info=repeat_info)
         filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
         notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
     logger.info("Weekly ad report sent")
@@ -1234,7 +1258,8 @@ def send_ad_report_endpoint():
         _enrich_campaigns_with_spend(report, days)
     if prev_report["total"] > 0:
         _enrich_campaigns_with_spend(prev_report, days)
-    text = _build_ad_report_text(report, days, prev_report)
+    repeat_info = kommo.get_repeat_customers(report) if report["total"] > 0 else None
+    text = _build_ad_report_text(report, days, prev_report, repeat_info)
     if request.args.get("dry") == "1":
         return jsonify({"ok": True, "text": text, "leads_count": len(report["leads"])})
     notifier.send_ad_report(text)
@@ -1245,7 +1270,7 @@ def send_ad_report_endpoint():
         def _build_and_send_excel():
             try:
                 trend = kommo.get_campaign_trend(weeks=12)
-                excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend)
+                excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend, repeat_info=repeat_info)
                 filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
                 ok = notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
                 _last_ad_report_error["error"] = None if ok else "send_ad_report_file returned False"

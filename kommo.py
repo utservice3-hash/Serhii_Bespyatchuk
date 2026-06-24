@@ -441,7 +441,7 @@ def get_weekly_ad_campaign_report(days: int = 7, offset_days: int = 0) -> dict:
                 params={
                     "filter[created_at][from]": since,
                     "filter[created_at][to]": until,
-                    "with": "custom_fields",
+                    "with": "custom_fields,contacts",
                     "limit": 250,
                     "page": page,
                 },
@@ -503,6 +503,8 @@ def get_weekly_ad_campaign_report(days: int = 7, offset_days: int = 0) -> dict:
             non_target_total += 1
 
         responsible_id = lead.get("responsible_user_id", 0)
+        contacts = lead.get("_embedded", {}).get("contacts") or []
+        contact_id = contacts[0]["id"] if contacts else 0
         leads_detail.append({
             "lead_id": lead.get("id"),
             "name": lead.get("name") or "",
@@ -515,6 +517,7 @@ def get_weekly_ad_campaign_report(days: int = 7, offset_days: int = 0) -> dict:
             "created_at": lead.get("created_at", 0),
             "closed_at": lead.get("closed_at", 0),
             "revenue_eligible": pipeline_id == PEREVOZY_PIPELINE_ID and status_id in REVENUE_STATUS_IDS,
+            "contact_id": contact_id,
         })
 
     for c in campaigns.values():
@@ -526,6 +529,95 @@ def get_weekly_ad_campaign_report(days: int = 7, offset_days: int = 0) -> dict:
         "non_target_total": non_target_total,
         "campaigns": campaigns,
         "leads": leads_detail,
+    }
+
+
+def _count_contact_won_deals(contact_id: int) -> int:
+    """Скільки всього виграних угод (Перевозки/Успіх) за весь час пов'язано з
+    цим контактом — щоб визначити, чи клієнт із реклами зробив повторне
+    замовлення (>=2), чи це його перше замовлення.
+
+    `filter[contacts][0]=<id>` на /api/v4/leads на практиці ігнорується Kommo
+    (перевірено: навіть вигаданий contact_id повертає однаковий результат),
+    тому йдемо через /api/v4/contacts/{id}?with=leads, щоб отримати ID угод,
+    пов'язаних саме з цим контактом, а потім запитуємо ці угоди пакетно через
+    filter[id][] і рахуємо ті, що в потрібному пайплайні й статусі."""
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/contacts/{contact_id}",
+            headers=HEADERS,
+            params={"with": "leads"},
+            timeout=15,
+        )
+        if not resp.ok:
+            return 0
+        lead_ids = [l["id"] for l in resp.json().get("_embedded", {}).get("leads", [])]
+    except Exception as e:
+        logger.error("_count_contact_won_deals(%s) contact lookup: %s", contact_id, e)
+        return 0
+
+    if not lead_ids:
+        return 0
+
+    won = 0
+    for i in range(0, len(lead_ids), 250):
+        chunk = lead_ids[i:i + 250]
+        try:
+            resp = requests.get(
+                f"{KOMMO_BASE}/api/v4/leads",
+                headers=HEADERS,
+                params=[("filter[id][]", lid) for lid in chunk] + [("limit", 250)],
+                timeout=15,
+            )
+            if not resp.ok:
+                continue
+            batch = resp.json().get("_embedded", {}).get("leads", [])
+        except Exception as e:
+            logger.error("_count_contact_won_deals(%s) leads lookup: %s", contact_id, e)
+            continue
+        won += sum(
+            1 for lead in batch
+            if lead.get("pipeline_id") == PEREVOZY_PIPELINE_ID and lead.get("status_id") == WON_STATUS_ID
+        )
+    return won
+
+
+def get_repeat_customers(report: dict) -> dict:
+    """
+    Серед клієнтів, що прийшли з реклами і закрили угоду успіхом у цьому
+    звіті, визначає скільки з них — повторні клієнти (вже мали виграну угоду
+    раніше, тобто це не перше замовлення), а скільки — нові.
+
+    Повертає {"repeat_count": int, "new_count": int,
+              "repeat_customers": [{"lead_id", "name", "campaign", "manager_name", "total_orders"}]}.
+    """
+    won_ad_leads = [
+        l for l in report.get("leads", [])
+        if l.get("status_label") == "Успіх" and l.get("contact_id")
+    ]
+    seen_contacts: dict[int, dict] = {}
+    for lead in won_ad_leads:
+        seen_contacts.setdefault(lead["contact_id"], lead)
+
+    repeat_customers = []
+    new_count = 0
+    for contact_id, lead in seen_contacts.items():
+        total_orders = _count_contact_won_deals(contact_id)
+        if total_orders >= 2:
+            repeat_customers.append({
+                "lead_id": lead["lead_id"],
+                "name": lead["name"],
+                "campaign": lead["campaign"],
+                "manager_name": lead["manager_name"],
+                "total_orders": total_orders,
+            })
+        else:
+            new_count += 1
+
+    return {
+        "repeat_count": len(repeat_customers),
+        "new_count": new_count,
+        "repeat_customers": sorted(repeat_customers, key=lambda c: c["total_orders"], reverse=True),
     }
 
 

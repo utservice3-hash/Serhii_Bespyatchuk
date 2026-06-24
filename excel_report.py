@@ -35,7 +35,12 @@ def _fmt_ts(ts) -> str:
         return ""
 
 
-def build_ad_report_excel(report: dict, days: int, trend: list[dict] | None = None) -> bytes:
+def build_ad_report_excel(
+    report: dict,
+    days: int,
+    trend: list[dict] | None = None,
+    repeat_info: dict | None = None,
+) -> bytes:
     """
     Будує xlsx із листами:
     - "Зведення по кампаніях" — агреговані метрики по кожній рекламній кампанії
@@ -99,6 +104,23 @@ def build_ad_report_excel(report: dict, days: int, trend: list[dict] | None = No
     detail_ws.freeze_panes = "A2"
     detail_ws.auto_filter.ref = detail_ws.dimensions
     _autosize(detail_ws)
+
+    if repeat_info is not None:
+        repeat_ws = wb.create_sheet("Повторні клієнти")
+        repeat_ws.append(["Показник", "Значення"])
+        _style_header(repeat_ws)
+        repeat_count = repeat_info.get("repeat_count", 0)
+        new_count = repeat_info.get("new_count", 0)
+        repeat_ws.append(["Повторних клієнтів (2+ замовлення)", repeat_count])
+        repeat_ws.append(["Нових клієнтів", new_count])
+        repeat_ws.append(["Всього успішних угод з реклами", repeat_count + new_count])
+        repeat_ws.append([])
+        repeat_ws.append(["ID угоди", "Клієнт", "Кампанія", "Менеджер", "Всього замовлень"])
+        for cell in repeat_ws[repeat_ws.max_row]:
+            cell.font = Font(bold=True)
+        for c in repeat_info.get("repeat_customers", []):
+            repeat_ws.append([c["lead_id"], c["name"], c["campaign"], c["manager_name"], c["total_orders"]])
+        _autosize(repeat_ws)
 
     if trend:
         trend_ws = wb.create_sheet("Тренд (12 тижнів)")
