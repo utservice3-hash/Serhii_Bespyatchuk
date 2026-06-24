@@ -2248,6 +2248,20 @@ def dedupe_closed_deals():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/debug-service-account-email", methods=["GET"])
+def debug_service_account_email():
+    """Показує лише client_email сервісного акаунта Google (без приватного ключа) —
+    щоб дати йому доступ 'Viewer' до нової Google-таблиці з витратами на рекламу."""
+    sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    if not sa_json:
+        return jsonify({"ok": False, "error": "GOOGLE_SERVICE_ACCOUNT_JSON not set"})
+    try:
+        data = json.loads(sa_json)
+        return jsonify({"ok": True, "client_email": data.get("client_email", "")})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/debug-ad-campaign-fields", methods=["GET"])
 def debug_ad_campaign_fields():
     """Тимчасовий дебаг: показує сирі custom_fields_values для лідів з кампанією, що
