@@ -1673,11 +1673,21 @@ def _build_personal_stats_text(kommo_id: int, days: int, label: str) -> str:
     )
 
 
+_recent_tg_updates: deque = deque(maxlen=20)
+
+
+@app.route("/recent-tg-updates", methods=["GET"])
+def recent_tg_updates():
+    """Read-only: останні 20 апдейтів від Telegram (для пошуку chat_id нової групи)."""
+    return jsonify({"ok": True, "updates": list(_recent_tg_updates)})
+
+
 @app.route("/tg-update", methods=["POST"])
 def tg_update():
     """Telegram bot webhook — handles callback_query (button clicks) і приватні команди."""
     data = request.get_json(force=True, silent=True) or {}
     logger.info("TG update: %s", data)
+    _recent_tg_updates.append(data)
 
     message = data.get("message")
     if message and message.get("chat", {}).get("type") == "private":
