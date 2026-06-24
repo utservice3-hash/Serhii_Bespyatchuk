@@ -1,13 +1,23 @@
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 
-const NAV_ITEMS = [
+export const NAV_ITEMS = [
   { key: "overview", label: "Огляд", icon: "📊" },
   { key: "teams", label: "Команди", icon: "👥" },
   { key: "managers", label: "Менеджери", icon: "🧑‍💼" },
-];
+] as const;
 
-export function Layout({ children }: { children: React.ReactNode }) {
+export type NavKey = (typeof NAV_ITEMS)[number]["key"];
+
+export function Layout({
+  children,
+  active,
+  onSelect,
+}: {
+  children: React.ReactNode;
+  active: NavKey;
+  onSelect: (key: NavKey) => void;
+}) {
   const navigate = useNavigate();
 
   function logout() {
@@ -23,8 +33,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <span>UTS</span>
         </div>
         <nav className="sidebar-nav">
-          {NAV_ITEMS.map((item, i) => (
-            <button key={item.key} className={`sidebar-nav-item ${i === 0 ? "active" : ""}`}>
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
+              onClick={() => onSelect(item.key)}
+            >
               <span className="sidebar-nav-icon">{item.icon}</span>
               {item.label}
             </button>

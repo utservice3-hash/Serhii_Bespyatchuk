@@ -12,7 +12,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { fetchFunnel, fetchTeams, fetchTimeseries, type FunnelStage, type Team } from "../api";
-import { Layout } from "../components/Layout";
+import { Layout, type NavKey } from "../components/Layout";
 
 const STAGE_LABELS: Record<string, string> = {
   lead_taken: "Ліди в роботі",
@@ -39,6 +39,7 @@ function formatAmount(value: number): string {
 }
 
 export function Dashboard() {
+  const [section, setSection] = useState<NavKey>("overview");
   const [stages, setStages] = useState<FunnelStage[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [teamId, setTeamId] = useState<number | "">("");
@@ -102,78 +103,121 @@ export function Dashboard() {
   ];
 
   return (
-    <Layout>
-      <div className="page-header">
-        <h1 className="page-title">Огляд продажів</h1>
-        <div className="page-filters">
-          <select
-            value={teamId}
-            onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
-          >
-            <option value="">Усі команди</option>
-            {teams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-
-          <select value={granularity} onChange={(e) => setGranularity(e.target.value as "day" | "month")}>
-            <option value="day">По днях</option>
-            <option value="month">По місяцях</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="kpi-grid">
-        {kpis.map((kpi) => (
-          <div className="kpi-card" key={kpi.label}>
-            <span className="kpi-label">{kpi.label}</span>
-            <span className="kpi-value">{kpi.value}</span>
-          </div>
-        ))}
-      </div>
-
-      {loading ? (
-        <p className="loading-text">Завантаження...</p>
-      ) : (
-        <div className="chart-grid">
-          <div className="chart-card">
-            <h2 className="chart-title">Воронка продажів</h2>
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="count" fill="#c5141c" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="chart-card">
-            <h2 className="chart-title">Динаміка по етапах</h2>
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={timeseries}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="period" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                {STAGE_ORDER.map((stage) => (
-                  <Line
-                    key={stage}
-                    type="monotone"
-                    dataKey={stage}
-                    name={STAGE_LABELS[stage]}
-                    stroke={STAGE_COLORS[stage]}
-                    connectNulls
-                  />
+    <Layout active={section} onSelect={setSection}>
+      {section === "overview" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Огляд продажів</h1>
+            <div className="page-filters">
+              <select
+                value={teamId}
+                onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
+              >
+                <option value="">Усі команди</option>
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
                 ))}
-              </LineChart>
-            </ResponsiveContainer>
+              </select>
+
+              <select value={granularity} onChange={(e) => setGranularity(e.target.value as "day" | "month")}>
+                <option value="day">По днях</option>
+                <option value="month">По місяцях</option>
+              </select>
+            </div>
           </div>
-        </div>
+
+          <div className="kpi-grid">
+            {kpis.map((kpi) => (
+              <div className="kpi-card" key={kpi.label}>
+                <span className="kpi-label">{kpi.label}</span>
+                <span className="kpi-value">{kpi.value}</span>
+              </div>
+            ))}
+          </div>
+
+          {loading ? (
+            <p className="loading-text">Завантаження...</p>
+          ) : (
+            <div className="chart-grid">
+              <div className="chart-card">
+                <h2 className="chart-title">Воронка продажів</h2>
+                <ResponsiveContainer width="100%" height={320}>
+                  <BarChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="count" fill="#c5141c" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="chart-card">
+                <h2 className="chart-title">Динаміка по етапах</h2>
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={timeseries}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="period" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    {STAGE_ORDER.map((stage) => (
+                      <Line
+                        key={stage}
+                        type="monotone"
+                        dataKey={stage}
+                        name={STAGE_LABELS[stage]}
+                        stroke={STAGE_COLORS[stage]}
+                        connectNulls
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {section === "teams" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Команди</h1>
+          </div>
+          <div className="chart-card">
+            {teams.length === 0 ? (
+              <p className="loading-text">Команди не знайдено.</p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Команда</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teams.map((t) => (
+                    <tr key={t.id}>
+                      <td>{t.name}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+
+      {section === "managers" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Менеджери</h1>
+          </div>
+          <div className="chart-card">
+            <p className="loading-text">Розділ у розробці.</p>
+          </div>
+        </>
       )}
     </Layout>
   );
