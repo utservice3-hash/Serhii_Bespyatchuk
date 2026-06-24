@@ -9,10 +9,9 @@ TG_TOKEN = os.getenv("TG_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 TG_THREAD_ID = os.getenv("TG_THREAD_ID", "")
 
-# Група для щотижневого звіту по рекламних кампаніях (п'ятниця). Поки немає
-# окремої групи — фолбек на основний чат TG_CHAT_ID; задайте TG_CHAT_ID_ADS /
-# TG_THREAD_ID_ADS в Render, коли бот буде додано в потрібну групу.
-TG_CHAT_ID_ADS = os.getenv("TG_CHAT_ID_ADS", "")
+# Група "UTS | Контекст" — щотижневий звіт по рекламних кампаніях (п'ятниця).
+# Звичайна група, без гілок-форумів — thread_id не потрібен.
+TG_CHAT_ID_ADS = os.getenv("TG_CHAT_ID_ADS", "-453895294")
 TG_THREAD_ID_ADS = os.getenv("TG_THREAD_ID_ADS", "")
 
 # Група РНК (ЛІД ВЗЯТИЙ У РОБОТУ / ДЗВІНКИ / ДЗВІНКИ З САЙТУ)
