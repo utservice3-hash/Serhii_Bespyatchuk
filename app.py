@@ -1229,13 +1229,19 @@ def send_ad_report_endpoint():
     if request.args.get("dry") == "1":
         return jsonify({"ok": True, "text": text, "leads_count": len(report["leads"])})
     notifier.send_ad_report(text)
-    excel_sent = False
+    excel_queued = False
     if request.args.get("excel") == "1" and report["total"] > 0:
-        trend = kommo.get_campaign_trend(weeks=12)
-        excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend)
-        filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
-        excel_sent = notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
-    return jsonify({"ok": True, "sent": True, "excel_sent": excel_sent, "text": text})
+        # Тренд за 12 тижнів — окремий важкий запит до Kommo (~60-90с), не
+        # тримаємо HTTP-запит відкритим — будуємо й надсилаємо xlsx у фоні.
+        def _build_and_send_excel():
+            trend = kommo.get_campaign_trend(weeks=12)
+            excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend)
+            filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
+            notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
+
+        threading.Thread(target=_build_and_send_excel, daemon=True).start()
+        excel_queued = True
+    return jsonify({"ok": True, "sent": True, "excel_queued": excel_queued, "text": text})
 
 
 WEBHOOK_URL = "https://my-bot-8nib.onrender.com/webhook"
