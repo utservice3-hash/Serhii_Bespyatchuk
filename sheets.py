@@ -89,6 +89,36 @@ def _get_sheet():
         return None
 
 
+_external_sheets_cache: dict[str, "object"] = {}
+
+
+def _get_external_sheet(spreadsheet_id: str):
+    """Відкриває довільну Google-таблицю за ID (не основну бот-таблицю), напр.
+    таблицю з витратами на рекламу, яку веде маркетинг."""
+    if spreadsheet_id in _external_sheets_cache:
+        return _external_sheets_cache[spreadsheet_id]
+    if not SERVICE_ACCOUNT_JSON:
+        logger.warning("Google Sheets not configured (no service account)")
+        return None
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        creds_dict = json.loads(SERVICE_ACCOUNT_JSON)
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(spreadsheet_id)
+        _external_sheets_cache[spreadsheet_id] = sh
+        return sh
+    except Exception as e:
+        logger.error("_get_external_sheet(%s) error: %s", spreadsheet_id, e)
+        return None
+
+
 def _get_or_create_worksheet(name: str, rows: int = 1000, cols: int = 20):
     sh = _get_sheet()
     if not sh:

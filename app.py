@@ -2248,6 +2248,28 @@ def dedupe_closed_deals():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+AD_SPEND_SPREADSHEET_ID = "1krromIuWfmyCR5BAup6kuVnCGaYdK3sA2AJt5Ksn3V0"
+
+
+@app.route("/debug-ad-spend-sheet", methods=["GET"])
+def debug_ad_spend_sheet():
+    """Тимчасовий дебаг: показує вкладки таблиці витрат на рекламу і сирі рядки
+    обраної вкладки (?tab=...&rows=50), щоб розпарсити структуру помісячних блоків."""
+    sh = sheets._get_external_sheet(AD_SPEND_SPREADSHEET_ID)
+    if not sh:
+        return jsonify({"ok": False, "error": "cannot open spreadsheet (check service account access)"})
+    tab = request.args.get("tab")
+    if not tab:
+        return jsonify({"ok": True, "worksheets": [ws.title for ws in sh.worksheets()]})
+    try:
+        ws = sh.worksheet(tab)
+        n = int(request.args.get("rows", 50))
+        values = ws.get_all_values()[:n]
+        return jsonify({"ok": True, "tab": tab, "rows": values})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/debug-service-account-email", methods=["GET"])
 def debug_service_account_email():
     """Показує лише client_email сервісного акаунта Google (без приватного ключа) —
