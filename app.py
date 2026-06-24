@@ -1214,6 +1214,15 @@ def _send_weekly_ad_report() -> None:
     logger.info("Weekly ad report sent")
 
 
+_last_ad_report_error: dict = {"error": None}
+
+
+@app.route("/last-ad-report-error", methods=["GET"])
+def last_ad_report_error_endpoint():
+    """Діагностика: результат останньої спроби побудувати/надіслати xlsx у фоні."""
+    return jsonify(_last_ad_report_error)
+
+
 @app.route("/send-ad-report", methods=["GET"])
 def send_ad_report_endpoint():
     """Ручний запуск/перевірка тижневого звіту по рекламі.
@@ -1234,10 +1243,15 @@ def send_ad_report_endpoint():
         # Тренд за 12 тижнів — окремий важкий запит до Kommo (~60-90с), не
         # тримаємо HTTP-запит відкритим — будуємо й надсилаємо xlsx у фоні.
         def _build_and_send_excel():
-            trend = kommo.get_campaign_trend(weeks=12)
-            excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend)
-            filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
-            notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
+            try:
+                trend = kommo.get_campaign_trend(weeks=12)
+                excel_bytes = excel_report.build_ad_report_excel(report, days, trend=trend)
+                filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
+                ok = notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
+                _last_ad_report_error["error"] = None if ok else "send_ad_report_file returned False"
+            except Exception as e:
+                logger.error("_build_and_send_excel failed: %s", e, exc_info=True)
+                _last_ad_report_error["error"] = repr(e)
 
         threading.Thread(target=_build_and_send_excel, daemon=True).start()
         excel_queued = True
