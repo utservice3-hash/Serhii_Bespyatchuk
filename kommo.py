@@ -321,6 +321,8 @@ def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int
 WON_STATUS_ID = 142
 CLOSED_NOT_REALIZED_STATUS_ID = 143
 PEREVOZY_PIPELINE_ID = 8921932
+QUAL_PIPELINE_ID = 8921928
+NON_TARGET_STATUS_ID = 143  # "Не цільові" — те саме числове status_id, але в іншому pipeline
 
 
 def get_manager_deal_stats(user_id: int, days: int) -> dict:
@@ -403,8 +405,13 @@ def get_campaign_name(lead: dict) -> str:
 def get_weekly_ad_campaign_report(days: int = 7) -> dict:
     """
     Зведення по угодах, що прийшли з реклами (заповнене поле кампанії) за
-    останні `days` днів: скільки прийшло, по кожній кампанії — скільки
-    угод, скільки виграно, скільки закрито не реалізовано, конверсія.
+    останні `days` днів: скільки прийшло, скільки з них нецільові, по кожній
+    кампанії — скільки угод, скільки виграно, закрито не реалізовано,
+    нецільових, конверсія.
+
+    status_id в Kommo унікальний лише в межах pipeline — те саме число 143
+    означає "Закрито не реалізовано" в pipeline "Перевозки" і "Не цільові" в
+    pipeline "Кваліфікація", тож класифікація статусу враховує pipeline_id.
     """
     from datetime import datetime, timezone, timedelta
 
@@ -441,28 +448,34 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
         if page > 40:
             break
 
-    STATUS_LABELS = {
-        WON_STATUS_ID: "Успіх",
-        CLOSED_NOT_REALIZED_STATUS_ID: "Закрито не реалізовано",
-    }
+    def _classify(pipeline_id, status_id):
+        if pipeline_id == PEREVOZY_PIPELINE_ID and status_id == WON_STATUS_ID:
+            return "won", "Успіх"
+        if pipeline_id == PEREVOZY_PIPELINE_ID and status_id == CLOSED_NOT_REALIZED_STATUS_ID:
+            return "lost", "Закрито не реалізовано"
+        if pipeline_id == QUAL_PIPELINE_ID and status_id == NON_TARGET_STATUS_ID:
+            return "non_target", "Не цільові"
+        return "in_progress", "В роботі"
 
     campaigns: dict[str, dict] = {}
     leads_detail: list[dict] = []
     total = 0
+    non_target_total = 0
     for lead in leads:
         campaign = get_campaign_name(lead)
         if not campaign:
             continue
         total += 1
-        c = campaigns.setdefault(campaign, {"total": 0, "won": 0, "lost": 0, "in_progress": 0})
+        c = campaigns.setdefault(
+            campaign, {"total": 0, "won": 0, "lost": 0, "non_target": 0, "in_progress": 0}
+        )
         c["total"] += 1
         status_id = lead.get("status_id", 0)
-        if status_id == WON_STATUS_ID:
-            c["won"] += 1
-        elif status_id == CLOSED_NOT_REALIZED_STATUS_ID:
-            c["lost"] += 1
-        else:
-            c["in_progress"] += 1
+        pipeline_id = lead.get("pipeline_id", 0)
+        bucket, status_label = _classify(pipeline_id, status_id)
+        c[bucket] += 1
+        if bucket == "non_target":
+            non_target_total += 1
 
         responsible_id = lead.get("responsible_user_id", 0)
         leads_detail.append({
@@ -472,7 +485,7 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
             "manager_id": responsible_id,
             "manager_name": get_user_name(responsible_id) if responsible_id else "—",
             "status_id": status_id,
-            "status_label": STATUS_LABELS.get(status_id, "В роботі"),
+            "status_label": status_label,
             "amount": lead.get("price", 0) or 0,
             "created_at": lead.get("created_at", 0),
             "closed_at": lead.get("closed_at", 0),
@@ -482,7 +495,12 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
         closed = c["won"] + c["lost"]
         c["conversion"] = round(c["won"] / closed * 100, 1) if closed else 0.0
 
-    return {"total": total, "campaigns": campaigns, "leads": leads_detail}
+    return {
+        "total": total,
+        "non_target_total": non_target_total,
+        "campaigns": campaigns,
+        "leads": leads_detail,
+    }
 
 
 def get_lidogen_stats(days: int = 1) -> dict[int, int]:

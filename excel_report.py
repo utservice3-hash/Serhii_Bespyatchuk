@@ -46,7 +46,7 @@ def build_ad_report_excel(report: dict, days: int) -> bytes:
     summary_ws.title = "Зведення по кампаніях"
     summary_headers = [
         "Кампанія", "Всього угод", "Успіх", "Закрито не реалізовано",
-        "В роботі", "Конверсія %",
+        "Не цільові", "В роботі", "Конверсія %",
     ]
     summary_ws.append(summary_headers)
     _style_header(summary_ws)
@@ -54,8 +54,20 @@ def build_ad_report_excel(report: dict, days: int) -> bytes:
     campaigns = report.get("campaigns", {})
     for name, c in sorted(campaigns.items(), key=lambda x: x[1]["total"], reverse=True):
         summary_ws.append([
-            name, c["total"], c["won"], c["lost"], c["in_progress"], c["conversion"],
+            name, c["total"], c["won"], c["lost"], c["non_target"], c["in_progress"], c["conversion"],
         ])
+
+    total_row = [
+        "Всього", report.get("total", 0),
+        sum(c["won"] for c in campaigns.values()),
+        sum(c["lost"] for c in campaigns.values()),
+        report.get("non_target_total", 0),
+        sum(c["in_progress"] for c in campaigns.values()),
+        "",
+    ]
+    summary_ws.append(total_row)
+    for cell in summary_ws[summary_ws.max_row]:
+        cell.font = Font(bold=True)
     summary_ws.freeze_panes = "A2"
     _autosize(summary_ws)
 

@@ -976,6 +976,7 @@ def _send_rnk_ai_report() -> None:
 
 def _build_ad_report_text(report: dict, days: int = 7) -> str:
     total = report["total"]
+    non_target_total = report.get("non_target_total", 0)
     campaigns = report["campaigns"]
 
     if total == 0:
@@ -986,10 +987,14 @@ def _build_ad_report_text(report: dict, days: int = 7) -> str:
     ranked = [(name, c) for name, c in campaigns.items() if c["total"] >= MIN_DEALS_FOR_RANKING]
     by_conversion = sorted(ranked, key=lambda x: x[1]["conversion"], reverse=True)
     by_lost = sorted(campaigns.items(), key=lambda x: x[1]["lost"], reverse=True)
+    by_non_target = sorted(campaigns.items(), key=lambda x: x[1]["non_target"], reverse=True)
+
+    non_target_pct = round(non_target_total / total * 100, 1) if total else 0.0
 
     lines = [
         f"📢 <b>Тижневий звіт по рекламі</b> (останні {days} днів)",
-        f"📥 Всього угод з реклами: <b>{total}</b>\n",
+        f"📥 Всього угод з реклами: <b>{total}</b>",
+        f"🚫 З них нецільові: <b>{non_target_total}</b> ({non_target_pct}%)\n",
     ]
 
     lines.append("🏆 <b>Найуспішніші/найефективніші кампанії:</b>")
@@ -1008,6 +1013,14 @@ def _build_ad_report_text(report: dict, days: int = 7) -> str:
             lines.append(f"• {name} — {c['lost']} закрито з {c['total']} угод")
     else:
         lines.append("— закритих не реалізовано угод немає")
+
+    lines.append("\n🚫 <b>Найбільше нецільових лідів по кампаніях:</b>")
+    top_non_target = [(name, c) for name, c in by_non_target if c["non_target"] > 0][:5]
+    if top_non_target:
+        for name, c in top_non_target:
+            lines.append(f"• {name} — {c['non_target']} нецільових з {c['total']} лідів")
+    else:
+        lines.append("— нецільових лідів немає")
 
     in_progress_total = sum(c["in_progress"] for c in campaigns.values())
     lines.append(f"\n⏳ Ще в роботі: <b>{in_progress_total}</b>")
