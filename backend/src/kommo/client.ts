@@ -6,7 +6,9 @@ interface KommoListResponse<T> {
   _links?: { next?: { href: string } };
 }
 
-async function kommoRequest<T>(path: string): Promise<T> {
+const MAX_RETRIES = 5;
+
+async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
   const res = await fetch(`${config.kommo.baseUrl}${path}`, {
     headers: {
       Authorization: `Bearer ${config.kommo.token}`,
@@ -15,6 +17,11 @@ async function kommoRequest<T>(path: string): Promise<T> {
   });
   if (res.status === 204) {
     return {} as T;
+  }
+  if (res.status === 429 && attempt < MAX_RETRIES) {
+    const delayMs = 1000 * 2 ** attempt;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return kommoRequest<T>(path, attempt + 1);
   }
   if (!res.ok) {
     throw new Error(`Kommo API error ${res.status}: ${await res.text()}`);
@@ -46,7 +53,7 @@ async function fetchLeadsPage(page: number, limit: number, filter: string): Prom
   return data._embedded?.leads ?? [];
 }
 
-const PAGE_FETCH_CONCURRENCY = 10;
+const PAGE_FETCH_CONCURRENCY = 3;
 
 export async function fetchAllDeals(updatedAfter?: number): Promise<KommoDeal[]> {
   const deals: KommoDeal[] = [];
