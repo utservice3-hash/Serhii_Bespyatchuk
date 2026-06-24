@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { login } from "../api";
+import { Logo } from "../components/Logo";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -21,26 +22,29 @@ export function Login() {
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ maxWidth: 320, margin: "80px auto" }}>
-      <h2>Вхід</h2>
-      <input
-        type="email"
-        placeholder="Email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        required
-        style={{ display: "block", width: "100%", marginBottom: 8 }}
-      />
-      <input
-        type="password"
-        placeholder="Пароль"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        required
-        style={{ display: "block", width: "100%", marginBottom: 8 }}
-      />
-      {error && <p style={{ color: "red" }}>{error}</p>}
-      <button type="submit">Увійти</button>
-    </form>
+    <div className="login-screen">
+      <form onSubmit={handleSubmit} className="login-card">
+        <div className="login-brand">
+          <Logo size={40} />
+          <span>UTS Dashboard</span>
+        </div>
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
+        <input
+          type="password"
+          placeholder="Пароль"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
+        {error && <p className="login-error">{error}</p>}
+        <button type="submit">Увійти</button>
+      </form>
+    </div>
   );
 }
