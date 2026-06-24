@@ -1570,6 +1570,14 @@ _NEW_LEAD_DEDUP_SECONDS = 300
 
 
 def _handle_new_lead(lead_id: int, responsible_id: int):
+    if lead_id in pending:
+        # Лід вже в очікуванні (сповіщення надіслано, дзвінок ще не зафіксований) —
+        # Kommo іноді повторно надсилає той самий вебхук "Отв-й сделки изменен"
+        # (підтверджено: ідентичний payload двічі для одного ліда), а 5-хвилинний
+        # дедуп нижче не рятує, якщо процес встиг перезапуститись між доставками.
+        logger.info("Skipped duplicate new-lead notification for %s (already pending)", lead_id)
+        return
+
     now_check = datetime.now(timezone.utc)
     last_sent = _notified_new_leads.get(lead_id)
     if last_sent and (now_check - last_sent).total_seconds() < _NEW_LEAD_DEDUP_SECONDS:
