@@ -84,9 +84,13 @@ export async function fetchAllDeals(updatedAfter?: number): Promise<KommoDeal[]>
 export interface KommoUser {
   id: number;
   name: string;
+  is_active: boolean;
 }
 
 export async function fetchUsers(): Promise<KommoUser[]> {
-  const data = await kommoRequest<KommoListResponse<KommoUser>>("/api/v4/users");
-  return data._embedded?.users ?? [];
+  const data = await kommoRequest<KommoListResponse<KommoUser>>(
+    "/api/v4/users?limit=250"
+  );
+  const users = data._embedded?.users ?? [];
+  return users.filter((user) => user.is_active);
 }

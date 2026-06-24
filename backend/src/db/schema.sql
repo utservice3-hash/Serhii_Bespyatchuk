@@ -8,8 +8,11 @@ CREATE TABLE IF NOT EXISTS managers (
   name TEXT NOT NULL,
   team_id INTEGER REFERENCES teams(id),
   kommo_user_id BIGINT UNIQUE,
-  is_team_lead BOOLEAN NOT NULL DEFAULT false
+  is_team_lead BOOLEAN NOT NULL DEFAULT false,
+  is_active BOOLEAN NOT NULL DEFAULT true
 );
+
+ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
 
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,

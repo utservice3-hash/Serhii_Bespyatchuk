@@ -9,12 +9,20 @@ export async function syncManagers(): Promise<number> {
   const users = await fetchUsers();
   for (const user of users) {
     await pool.query(
-      `INSERT INTO managers (name, kommo_user_id)
-       VALUES ($1, $2)
-       ON CONFLICT (kommo_user_id) DO UPDATE SET name = EXCLUDED.name`,
+      `INSERT INTO managers (name, kommo_user_id, is_active)
+       VALUES ($1, $2, true)
+       ON CONFLICT (kommo_user_id) DO UPDATE SET name = EXCLUDED.name, is_active = true`,
       [user.name, user.id]
     );
   }
+
+  const activeKommoIds = users.map((user) => user.id);
+  await pool.query(
+    `UPDATE managers SET is_active = false
+     WHERE kommo_user_id IS NOT NULL AND NOT (kommo_user_id = ANY($1))`,
+    [activeKommoIds]
+  );
+
   return users.length;
 }
 
