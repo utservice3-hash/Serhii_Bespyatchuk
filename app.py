@@ -974,6 +974,31 @@ def _send_rnk_ai_report() -> None:
         logger.info("AI report sent for team %s (%d deals)", team, len(deals))
 
 
+def _enrich_campaigns_with_spend(report: dict, days: int) -> None:
+    """Додає до кожної кампанії в report['campaigns'] оцінку витрат, виручку
+    (по виграних угодах), маржу і CPL — джерело витрат: Google Sheets маркетингу
+    (sheets.get_ad_spend_by_campaign), зіставлення назв через normalize_campaign_name."""
+    spend_map = sheets.get_ad_spend_by_campaign(days)
+    revenue_by_campaign: dict[str, int] = {}
+    for lead in report.get("leads", []):
+        if lead["status_label"] == "Успіх":
+            revenue_by_campaign[lead["campaign"]] = revenue_by_campaign.get(lead["campaign"], 0) + lead["amount"]
+
+    for name, c in report["campaigns"].items():
+        spend_entry = spend_map.get(sheets.normalize_campaign_name(name))
+        revenue = revenue_by_campaign.get(name, 0)
+        c["revenue"] = revenue
+        if spend_entry:
+            spend = spend_entry["estimated_period_cost"]
+            c["spend"] = spend
+            c["margin"] = round(revenue - spend, 2)
+            c["cpl"] = round(spend / c["total"], 2) if c["total"] else 0.0
+        else:
+            c["spend"] = None
+            c["margin"] = None
+            c["cpl"] = None
+
+
 def _build_ad_report_text(report: dict, days: int = 7) -> str:
     total = report["total"]
     non_target_total = report.get("non_target_total", 0)
@@ -1025,6 +1050,28 @@ def _build_ad_report_text(report: dict, days: int = 7) -> str:
     in_progress_total = sum(c["in_progress"] for c in campaigns.values())
     lines.append(f"\n⏳ Ще в роботі: <b>{in_progress_total}</b>")
 
+    with_spend = [(name, c) for name, c in campaigns.items() if c.get("spend") is not None]
+    if with_spend:
+        total_spend = sum(c["spend"] for _, c in with_spend)
+        total_revenue = sum(c["revenue"] for _, c in with_spend)
+        total_margin = round(total_revenue - total_spend, 2)
+        lines.append(
+            f"\n💰 <b>Витрати на рекламу (оцінка, Google):</b> {total_spend:,.0f} грн".replace(",", " ")
+        )
+        lines.append(
+            (f"📈 Виручка по успішних угодах: {total_revenue:,.0f} грн | "
+             f"Маржа: <b>{total_margin:,.0f} грн</b>").replace(",", " ")
+        )
+        by_margin = sorted(with_spend, key=lambda x: x[1]["margin"], reverse=True)
+        lines.append("\n💹 <b>Маржинальність по кампаніях:</b>")
+        for name, c in by_margin[:5]:
+            lines.append(
+                (f"• {name} — витрати ~{c['spend']:,.0f} грн, виручка {c['revenue']:,.0f} грн, "
+                 f"маржа <b>{c['margin']:,.0f} грн</b>, CPL ~{c['cpl']:.0f} грн").replace(",", " ")
+            )
+    else:
+        lines.append("\n💰 Дані по витратах на рекламу недоступні (немає збігу кампаній з таблицею маркетингу).")
+
     return "\n".join(lines)
 
 
@@ -1032,6 +1079,8 @@ def _send_weekly_ad_report() -> None:
     """Щоп'ятничний звіт по рекламних кампаніях за тиждень: текст + xlsx з деталізацією."""
     days = 7
     report = kommo.get_weekly_ad_campaign_report(days)
+    if report["total"] > 0:
+        _enrich_campaigns_with_spend(report, days)
     text = _build_ad_report_text(report, days)
     notifier.send_ad_report(text)
     if report["total"] > 0:
@@ -1047,6 +1096,8 @@ def send_ad_report_endpoint():
     ?days=7 (default) ?dry=1 щоб лише показати текст (без xlsx) ?excel=1 щоб теж надіслати xlsx."""
     days = int(request.args.get("days", 7))
     report = kommo.get_weekly_ad_campaign_report(days)
+    if report["total"] > 0:
+        _enrich_campaigns_with_spend(report, days)
     text = _build_ad_report_text(report, days)
     if request.args.get("dry") == "1":
         return jsonify({"ok": True, "text": text, "leads_count": len(report["leads"])})

@@ -119,6 +119,76 @@ def _get_external_sheet(spreadsheet_id: str):
         return None
 
 
+AD_SPEND_SPREADSHEET_ID = "1krromIuWfmyCR5BAup6kuVnCGaYdK3sA2AJt5Ksn3V0"
+AD_SPEND_MONTH_TAB = "Campain_Month"
+
+
+def normalize_campaign_name(name: str) -> str:
+    """
+    Зводить назву кампанії до спільного вигляду для зіставлення таблиці маркетингу
+    (де додані суфікси типу " 11.01" / " 19/06") з utm_campaign з Kommo.
+    """
+    import re
+    name = re.sub(r"\s+\d[\d./-]*\s*$", "", name or "").strip()
+    name = re.sub(r"_+", "_", name.replace(" ", "_"))
+    return name.lower()
+
+
+def get_ad_spend_by_campaign(days: int = 7) -> dict[str, dict]:
+    """
+    Оцінка витрат на рекламу по кампаніях за останні `days` днів.
+    Джерело — таблиця маркетингу (вкладка Campain_Month), яка дає накопичений
+    підсумок з початку поточного місяця по кампанії. Тижнева оцінка =
+    місячний підсумок / кількість днів, що минули в місяці * days
+    (припускаючи рівномірний денний темп витрат).
+
+    Повертає {normalize_campaign_name(назва): {"monthly_cost": float, "estimated_period_cost": float}}.
+    """
+    import re
+
+    sh = _get_external_sheet(AD_SPEND_SPREADSHEET_ID)
+    if not sh:
+        return {}
+    try:
+        ws = sh.worksheet(AD_SPEND_MONTH_TAB)
+        values = ws.get_all_values()
+    except Exception as e:
+        logger.error("get_ad_spend_by_campaign: %s", e)
+        return {}
+
+    now = datetime.now(timezone.utc)
+    month_label = now.strftime("%B %Y")
+    days_elapsed = max(now.day, 1)
+
+    spend: dict[str, dict] = {}
+    i = 0
+    while i < len(values):
+        if values[i] and (values[i][0] or "").strip() == month_label:
+            i += 2  # skip month header row + metric header row
+            while i < len(values):
+                row = values[i]
+                name = (row[0] or "").strip()
+                if not name or name == "TOTAL":
+                    break
+                cost_str = re.sub(r"\s+", "", row[1] if len(row) > 1 else "") or "0"
+                try:
+                    monthly_cost = float(cost_str)
+                except ValueError:
+                    monthly_cost = 0.0
+                period_cost = round(monthly_cost / days_elapsed * days, 2)
+                spend[normalize_campaign_name(name)] = {
+                    "monthly_cost": monthly_cost,
+                    "estimated_period_cost": period_cost,
+                }
+                i += 1
+            break
+        i += 1
+    else:
+        logger.warning("get_ad_spend_by_campaign: month block '%s' not found", month_label)
+
+    return spend
+
+
 def _get_or_create_worksheet(name: str, rows: int = 1000, cols: int = 20):
     sh = _get_sheet()
     if not sh:

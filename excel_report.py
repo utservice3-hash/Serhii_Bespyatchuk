@@ -47,14 +47,17 @@ def build_ad_report_excel(report: dict, days: int) -> bytes:
     summary_headers = [
         "Кампанія", "Всього угод", "Успіх", "Закрито не реалізовано",
         "Не цільові", "В роботі", "Конверсія %",
+        "Витрати (оцінка), грн", "Виручка, грн", "Маржа, грн", "CPL, грн",
     ]
     summary_ws.append(summary_headers)
     _style_header(summary_ws)
 
     campaigns = report.get("campaigns", {})
+    has_spend = any(c.get("spend") is not None for c in campaigns.values())
     for name, c in sorted(campaigns.items(), key=lambda x: x[1]["total"], reverse=True):
         summary_ws.append([
             name, c["total"], c["won"], c["lost"], c["non_target"], c["in_progress"], c["conversion"],
+            c.get("spend"), c.get("revenue"), c.get("margin"), c.get("cpl"),
         ])
 
     total_row = [
@@ -63,6 +66,10 @@ def build_ad_report_excel(report: dict, days: int) -> bytes:
         sum(c["lost"] for c in campaigns.values()),
         report.get("non_target_total", 0),
         sum(c["in_progress"] for c in campaigns.values()),
+        "",
+        sum(c["spend"] for c in campaigns.values() if c.get("spend") is not None) if has_spend else "",
+        sum(c["revenue"] for c in campaigns.values()) if has_spend else "",
+        sum(c["margin"] for c in campaigns.values() if c.get("margin") is not None) if has_spend else "",
         "",
     ]
     summary_ws.append(total_row)
