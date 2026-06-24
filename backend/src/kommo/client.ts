@@ -84,7 +84,7 @@ export async function fetchAllDeals(updatedAfter?: number): Promise<KommoDeal[]>
 export interface KommoUser {
   id: number;
   name: string;
-  is_active: boolean;
+  rights: { is_active: boolean };
 }
 
 export async function fetchUsers(): Promise<KommoUser[]> {
@@ -92,5 +92,5 @@ export async function fetchUsers(): Promise<KommoUser[]> {
     "/api/v4/users?limit=250&with=group"
   );
   const users = data._embedded?.users ?? [];
-  return users.filter((user) => user.is_active);
+  return users.filter((user) => user.rights?.is_active);
 }
