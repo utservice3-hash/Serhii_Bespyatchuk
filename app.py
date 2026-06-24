@@ -2222,6 +2222,48 @@ def dedupe_closed_deals():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/debug-ad-campaign-fields", methods=["GET"])
+def debug_ad_campaign_fields():
+    """Тимчасовий дебаг: показує сирі custom_fields_values для лідів з кампанією, що
+    збігається з ?name=... (для пошуку, з якого саме поля береться значення)."""
+    name = request.args.get("name", "")
+    days = int(request.args.get("days", 7))
+    from datetime import datetime, timezone, timedelta
+    since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+    until = int(datetime.now(timezone.utc).timestamp())
+    matches = []
+    page = 1
+    while True:
+        resp = requests.get(
+            f"{kommo.KOMMO_BASE}/api/v4/leads",
+            headers=kommo.HEADERS,
+            params={
+                "filter[created_at][from]": since,
+                "filter[created_at][to]": until,
+                "with": "custom_fields",
+                "limit": 250,
+                "page": page,
+            },
+            timeout=15,
+        )
+        if not resp.ok:
+            break
+        batch = resp.json().get("_embedded", {}).get("leads", [])
+        for lead in batch:
+            if kommo.get_campaign_name(lead) == name:
+                relevant = [
+                    cf for cf in (lead.get("custom_fields_values") or [])
+                    if cf.get("field_id") in kommo.AD_CAMPAIGN_FIELD_IDS
+                ]
+                matches.append({"lead_id": lead.get("id"), "fields": relevant})
+                if len(matches) >= 5:
+                    break
+        if len(matches) >= 5 or len(batch) < 250:
+            break
+        page += 1
+    return jsonify({"ok": True, "matches": matches})
+
+
 @app.route("/test-new-lead", methods=["GET"])
 def test_new_lead():
     """Manually run _handle_new_lead for a specific lead (debug РПК tracking issue).
