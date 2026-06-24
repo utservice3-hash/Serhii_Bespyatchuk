@@ -377,14 +377,26 @@ def get_manager_deal_stats(user_id: int, days: int) -> dict:
 
 
 def get_campaign_name(lead: dict) -> str:
-    """Назва рекламної кампанії ліда (перше заповнене з полів-кандидатів)."""
-    for cf in lead.get("custom_fields_values") or []:
-        if cf.get("field_id") in AD_CAMPAIGN_FIELD_IDS:
-            vals = cf.get("values") or []
-            if vals:
-                value = str(vals[0].get("value", "")).strip()
-                if value:
-                    return value
+    """
+    Назва рекламної кампанії ліда. Перевіряє поля-кандидати у фіксованому
+    порядку пріоритету (utm_campaign -> ADV_CAMP -> TRAF_SRC), а не в тому
+    порядку, в якому вони прийшли з Kommo API — інакше менш інформативне
+    поле (наприклад TRAF_SRC з доменом-реферером типу "chatgpt.com") може
+    випадково перекрити заповнений utm_campaign.
+    """
+    by_field_id = {
+        cf.get("field_id"): cf
+        for cf in (lead.get("custom_fields_values") or [])
+    }
+    for field_id in AD_CAMPAIGN_FIELD_IDS:
+        cf = by_field_id.get(field_id)
+        if not cf:
+            continue
+        vals = cf.get("values") or []
+        if vals:
+            value = str(vals[0].get("value", "")).strip()
+            if value:
+                return value
     return ""
 
 
