@@ -854,6 +854,7 @@ def _scan_unassigned_leads():
                     f"🔗 <a href='{kommo_url}'>Відкрити лід #{lid}</a>"
                 )
                 notifier.send_to_rnk(msg)
+                notifier.send_to_all_rnk_tracking(msg)
                 logger.info("Scan found unassigned lead %s in %s", lid, status_name)
         except Exception as e:
             logger.error("_scan_unassigned_leads: %s", e)
@@ -887,6 +888,7 @@ def _check_unassigned_leads():
                 f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
             )
             notifier.send_to_rnk(msg)
+            notifier.send_to_all_rnk_tracking(msg)
             unassigned[lead_id]["last_reminded_count"] = 99
             logger.info("Escalation for lead %s (%.0f min)", lead_id, age_min)
             continue
@@ -908,6 +910,7 @@ def _check_unassigned_leads():
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
         notifier.send_to_rnk(msg)
+        notifier.send_to_all_rnk_tracking(msg)
         unassigned[lead_id]["last_reminded_count"] = reminder_count
         logger.info("Unassigned reminder #%d for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
@@ -1460,6 +1463,7 @@ def _handle_unassigned(lead_id: int, status_id: int):
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     notifier.send_to_rnk(msg)
+    notifier.send_to_all_rnk_tracking(msg)
 
     unassigned[lead_id] = {
         "arrived_at": now,
