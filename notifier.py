@@ -405,6 +405,35 @@ def send_ad_report(text: str) -> bool:
         return False
 
 
+def send_ad_report_file(filename: str, file_bytes: bytes, caption: str = "") -> bool:
+    """Надсилає xlsx-файл з деталізацією тижневого звіту по рекламі в ту саму
+    групу/гілку, що й текстовий звіт (TG_CHAT_ID_ADS/TG_THREAD_ID_ADS)."""
+    chat_id = TG_CHAT_ID_ADS or TG_CHAT_ID
+    thread_id = TG_THREAD_ID_ADS if TG_CHAT_ID_ADS else TG_THREAD_ID
+    if not TG_TOKEN or not chat_id:
+        logger.error("send_ad_report_file: TG_TOKEN or chat_id not set")
+        return False
+    try:
+        data = {"chat_id": chat_id, "parse_mode": "HTML"}
+        if caption:
+            data["caption"] = caption
+        if thread_id:
+            data["message_thread_id"] = thread_id
+        files = {"document": (filename, file_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument",
+            data=data, files=files, timeout=30,
+        )
+        result = resp.json()
+        if not result.get("ok"):
+            logger.error("send_ad_report_file error: %s", result)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_ad_report_file exception: %s", e)
+        return False
+
+
 def answer_callback(callback_query_id: str, text: str = "") -> None:
     try:
         requests.post(

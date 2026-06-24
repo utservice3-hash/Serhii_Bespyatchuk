@@ -441,7 +441,13 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
         if page > 40:
             break
 
+    STATUS_LABELS = {
+        WON_STATUS_ID: "Успіх",
+        CLOSED_NOT_REALIZED_STATUS_ID: "Закрито не реалізовано",
+    }
+
     campaigns: dict[str, dict] = {}
+    leads_detail: list[dict] = []
     total = 0
     for lead in leads:
         campaign = get_campaign_name(lead)
@@ -458,11 +464,25 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
         else:
             c["in_progress"] += 1
 
+        responsible_id = lead.get("responsible_user_id", 0)
+        leads_detail.append({
+            "lead_id": lead.get("id"),
+            "name": lead.get("name") or "",
+            "campaign": campaign,
+            "manager_id": responsible_id,
+            "manager_name": get_user_name(responsible_id) if responsible_id else "—",
+            "status_id": status_id,
+            "status_label": STATUS_LABELS.get(status_id, "В роботі"),
+            "amount": lead.get("price", 0) or 0,
+            "created_at": lead.get("created_at", 0),
+            "closed_at": lead.get("closed_at", 0),
+        })
+
     for c in campaigns.values():
         closed = c["won"] + c["lost"]
         c["conversion"] = round(c["won"] / closed * 100, 1) if closed else 0.0
 
-    return {"total": total, "campaigns": campaigns}
+    return {"total": total, "campaigns": campaigns, "leads": leads_detail}
 
 
 def get_lidogen_stats(days: int = 1) -> dict[int, int]:

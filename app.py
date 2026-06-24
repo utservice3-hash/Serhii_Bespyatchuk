@@ -13,6 +13,7 @@ import notifier
 import sheets
 import ai_analyzer
 import transcriber
+import excel_report
 
 SNAPSHOT_FILE = "/tmp/plan_snapshot.json"
 
@@ -973,8 +974,7 @@ def _send_rnk_ai_report() -> None:
         logger.info("AI report sent for team %s (%d deals)", team, len(deals))
 
 
-def _build_ad_report_text(days: int = 7) -> str:
-    report = kommo.get_weekly_ad_campaign_report(days)
+def _build_ad_report_text(report: dict, days: int = 7) -> str:
     total = report["total"]
     campaigns = report["campaigns"]
 
@@ -1016,21 +1016,34 @@ def _build_ad_report_text(days: int = 7) -> str:
 
 
 def _send_weekly_ad_report() -> None:
-    """Щоп'ятничний звіт по рекламних кампаніях за тиждень."""
-    text = _build_ad_report_text(days=7)
+    """Щоп'ятничний звіт по рекламних кампаніях за тиждень: текст + xlsx з деталізацією."""
+    days = 7
+    report = kommo.get_weekly_ad_campaign_report(days)
+    text = _build_ad_report_text(report, days)
     notifier.send_ad_report(text)
+    if report["total"] > 0:
+        excel_bytes = excel_report.build_ad_report_excel(report, days)
+        filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
+        notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
     logger.info("Weekly ad report sent")
 
 
 @app.route("/send-ad-report", methods=["GET"])
 def send_ad_report_endpoint():
-    """Ручний запуск/перевірка тижневого звіту по рекламі. ?days=7 (default) ?dry=1 щоб лише показати текст."""
+    """Ручний запуск/перевірка тижневого звіту по рекламі.
+    ?days=7 (default) ?dry=1 щоб лише показати текст (без xlsx) ?excel=1 щоб теж надіслати xlsx."""
     days = int(request.args.get("days", 7))
-    text = _build_ad_report_text(days)
+    report = kommo.get_weekly_ad_campaign_report(days)
+    text = _build_ad_report_text(report, days)
     if request.args.get("dry") == "1":
-        return jsonify({"ok": True, "text": text})
+        return jsonify({"ok": True, "text": text, "leads_count": len(report["leads"])})
     notifier.send_ad_report(text)
-    return jsonify({"ok": True, "sent": True, "text": text})
+    excel_sent = False
+    if request.args.get("excel") == "1" and report["total"] > 0:
+        excel_bytes = excel_report.build_ad_report_excel(report, days)
+        filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
+        excel_sent = notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
+    return jsonify({"ok": True, "sent": True, "excel_sent": excel_sent, "text": text})
 
 
 WEBHOOK_URL = "https://my-bot-8nib.onrender.com/webhook"
