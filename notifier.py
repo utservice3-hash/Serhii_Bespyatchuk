@@ -9,6 +9,12 @@ TG_TOKEN = os.getenv("TG_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 TG_THREAD_ID = os.getenv("TG_THREAD_ID", "")
 
+# Група для щотижневого звіту по рекламних кампаніях (п'ятниця). Поки немає
+# окремої групи — фолбек на основний чат TG_CHAT_ID; задайте TG_CHAT_ID_ADS /
+# TG_THREAD_ID_ADS в Render, коли бот буде додано в потрібну групу.
+TG_CHAT_ID_ADS = os.getenv("TG_CHAT_ID_ADS", "")
+TG_THREAD_ID_ADS = os.getenv("TG_THREAD_ID_ADS", "")
+
 # Група РНК (ЛІД ВЗЯТИЙ У РОБОТУ / ДЗВІНКИ / ДЗВІНКИ З САЙТУ)
 TG_CHAT_ID_RNK = os.getenv("TG_CHAT_ID_RNK", "-1003779373880")
 TG_THREAD_ID_RNK = "51"
@@ -374,6 +380,30 @@ def send_dm_message(chat_id: int, text: str, message_id: int | None = None) -> N
         )
     except Exception as e:
         logger.error("send_dm_message error: %s", e)
+
+
+def send_ad_report(text: str) -> bool:
+    """Щотижневий звіт по рекламних кампаніях. Йде в TG_CHAT_ID_ADS/TG_THREAD_ID_ADS,
+    якщо налаштовано (бот доданий у потрібну групу), інакше у головний чат."""
+    chat_id = TG_CHAT_ID_ADS or TG_CHAT_ID
+    thread_id = TG_THREAD_ID_ADS if TG_CHAT_ID_ADS else TG_THREAD_ID
+    if not TG_TOKEN or not chat_id:
+        logger.error("send_ad_report: TG_TOKEN or chat_id not set")
+        return False
+    try:
+        payload = _base_payload(text, chat_id=chat_id, thread_id=thread_id)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("send_ad_report error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_ad_report exception: %s", e)
+        return False
 
 
 def answer_callback(callback_query_id: str, text: str = "") -> None:

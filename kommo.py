@@ -376,6 +376,83 @@ def get_manager_deal_stats(user_id: int, days: int) -> dict:
     }
 
 
+def get_campaign_name(lead: dict) -> str:
+    """Назва рекламної кампанії ліда (перше заповнене з полів-кандидатів)."""
+    for cf in lead.get("custom_fields_values") or []:
+        if cf.get("field_id") in AD_CAMPAIGN_FIELD_IDS:
+            vals = cf.get("values") or []
+            if vals:
+                value = str(vals[0].get("value", "")).strip()
+                if value:
+                    return value
+    return ""
+
+
+def get_weekly_ad_campaign_report(days: int = 7) -> dict:
+    """
+    Зведення по угодах, що прийшли з реклами (заповнене поле кампанії) за
+    останні `days` днів: скільки прийшло, по кожній кампанії — скільки
+    угод, скільки виграно, скільки закрито не реалізовано, конверсія.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+    until = int(datetime.now(timezone.utc).timestamp())
+
+    leads = []
+    page = 1
+    while True:
+        try:
+            resp = requests.get(
+                f"{KOMMO_BASE}/api/v4/leads",
+                headers=HEADERS,
+                params={
+                    "filter[created_at][from]": since,
+                    "filter[created_at][to]": until,
+                    "with": "custom_fields",
+                    "limit": 250,
+                    "page": page,
+                },
+                timeout=15,
+            )
+            if not resp.ok:
+                logger.error("get_weekly_ad_campaign_report: %s %s", resp.status_code, resp.text[:200])
+                break
+            batch = resp.json().get("_embedded", {}).get("leads", [])
+        except Exception as e:
+            logger.error("get_weekly_ad_campaign_report: %s", e)
+            break
+        leads.extend(batch)
+        if len(batch) < 250:
+            break
+        page += 1
+        if page > 40:
+            break
+
+    campaigns: dict[str, dict] = {}
+    total = 0
+    for lead in leads:
+        campaign = get_campaign_name(lead)
+        if not campaign:
+            continue
+        total += 1
+        c = campaigns.setdefault(campaign, {"total": 0, "won": 0, "lost": 0, "in_progress": 0})
+        c["total"] += 1
+        status_id = lead.get("status_id", 0)
+        if status_id == WON_STATUS_ID:
+            c["won"] += 1
+        elif status_id == CLOSED_NOT_REALIZED_STATUS_ID:
+            c["lost"] += 1
+        else:
+            c["in_progress"] += 1
+
+    for c in campaigns.values():
+        closed = c["won"] + c["lost"]
+        c["conversion"] = round(c["won"] / closed * 100, 1) if closed else 0.0
+
+    return {"total": total, "campaigns": campaigns}
+
+
 def get_lidogen_stats(days: int = 1) -> dict[int, int]:
     """
     Count leads transferred by lidogen per manager for the last N days.

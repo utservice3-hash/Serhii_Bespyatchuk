@@ -973,6 +973,66 @@ def _send_rnk_ai_report() -> None:
         logger.info("AI report sent for team %s (%d deals)", team, len(deals))
 
 
+def _build_ad_report_text(days: int = 7) -> str:
+    report = kommo.get_weekly_ad_campaign_report(days)
+    total = report["total"]
+    campaigns = report["campaigns"]
+
+    if total == 0:
+        return f"📢 <b>Звіт по рекламі за {days} днів</b>\nЦього тижня угод з реклами не надходило."
+
+    MIN_DEALS_FOR_RANKING = 3  # щоб 1 угода з 1 виграною не виглядала як "100% конверсія"
+
+    ranked = [(name, c) for name, c in campaigns.items() if c["total"] >= MIN_DEALS_FOR_RANKING]
+    by_conversion = sorted(ranked, key=lambda x: x[1]["conversion"], reverse=True)
+    by_lost = sorted(campaigns.items(), key=lambda x: x[1]["lost"], reverse=True)
+
+    lines = [
+        f"📢 <b>Тижневий звіт по рекламі</b> (останні {days} днів)",
+        f"📥 Всього угод з реклами: <b>{total}</b>\n",
+    ]
+
+    lines.append("🏆 <b>Найуспішніші/найефективніші кампанії:</b>")
+    if by_conversion:
+        for name, c in by_conversion[:5]:
+            lines.append(
+                f"• {name} — {c['won']}/{c['total']} угод у успіху, конверсія <b>{c['conversion']}%</b>"
+            )
+    else:
+        lines.append(f"— недостатньо даних (потрібно ≥{MIN_DEALS_FOR_RANKING} угод по кампанії)")
+
+    lines.append("\n🔴 <b>Найбільше закрито не реалізовано:</b>")
+    top_lost = [(name, c) for name, c in by_lost if c["lost"] > 0][:5]
+    if top_lost:
+        for name, c in top_lost:
+            lines.append(f"• {name} — {c['lost']} закрито з {c['total']} угод")
+    else:
+        lines.append("— закритих не реалізовано угод немає")
+
+    in_progress_total = sum(c["in_progress"] for c in campaigns.values())
+    lines.append(f"\n⏳ Ще в роботі: <b>{in_progress_total}</b>")
+
+    return "\n".join(lines)
+
+
+def _send_weekly_ad_report() -> None:
+    """Щоп'ятничний звіт по рекламних кампаніях за тиждень."""
+    text = _build_ad_report_text(days=7)
+    notifier.send_ad_report(text)
+    logger.info("Weekly ad report sent")
+
+
+@app.route("/send-ad-report", methods=["GET"])
+def send_ad_report_endpoint():
+    """Ручний запуск/перевірка тижневого звіту по рекламі. ?days=7 (default) ?dry=1 щоб лише показати текст."""
+    days = int(request.args.get("days", 7))
+    text = _build_ad_report_text(days)
+    if request.args.get("dry") == "1":
+        return jsonify({"ok": True, "text": text})
+    notifier.send_ad_report(text)
+    return jsonify({"ok": True, "sent": True, "text": text})
+
+
 WEBHOOK_URL = "https://my-bot-8nib.onrender.com/webhook"
 WEBHOOK_SETTINGS = ["note_lead", "status_lead", "update_lead", "responsible_lead"]
 
@@ -1006,6 +1066,7 @@ scheduler.add_job(_send_daily_plan_report, "cron", hour=15, minute=0)   # 18:00 
 scheduler.add_job(_send_month_end_report, "interval", hours=1)           # останній день місяця — щогодини
 scheduler.add_job(_send_rnk_ai_report, "cron", hour=13, minute=50)      # 16:50 Kyiv = 13:50 UTC
 scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=14, minute=0)  # 17:00 Kyiv = 14:00 UTC
+scheduler.add_job(_send_weekly_ad_report, "cron", day_of_week="fri", hour=14, minute=0)  # П'ятниця 17:00 Kyiv
 scheduler.start()
 sheets.ensure_headers()
 
