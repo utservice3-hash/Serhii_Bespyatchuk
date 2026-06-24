@@ -1333,7 +1333,11 @@ def _process_status_change(item: dict):
 
     if pipeline_id == PEREVOZY_PIPELINE_ID:
         if (status_id == CLOSED_NOT_REALIZED and old_status_id != status_id
-                and responsible_id in DARINA_ANDRIY_TEAMS):
+                and responsible_id and responsible_id != ADMIN_USER_ID):
+            # _handle_closed_not_realized сама маршрутизує в РНК (з AI-аналізом)
+            # чи РПК (просте сповіщення) залежно від команди — раніше тут
+            # помилково пускали лише DARINA_ANDRIY_TEAMS (РНК), тож РПК-команди
+            # не отримували сповіщень про "Закрито і не реалізовано" взагалі.
             threading.Thread(
                 target=_handle_closed_not_realized,
                 args=(lead_id, responsible_id),
