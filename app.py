@@ -1059,7 +1059,7 @@ def _enrich_campaigns_with_spend(report: dict, days: int) -> None:
     spend_map = sheets.get_ad_spend_by_campaign(days)
     revenue_by_campaign: dict[str, int] = {}
     for lead in report.get("leads", []):
-        if lead["status_label"] == "Успіх":
+        if lead.get("revenue_eligible"):
             revenue_by_campaign[lead["campaign"]] = revenue_by_campaign.get(lead["campaign"], 0) + lead["amount"]
 
     for name, c in report["campaigns"].items():

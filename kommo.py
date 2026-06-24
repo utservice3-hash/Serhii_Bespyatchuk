@@ -460,6 +460,18 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
         if page > 40:
             break
 
+    # Угода вважається фактично реалізованою (вантаж їде/доїхав) з етапу
+    # "АВТО ПРАЦЮЄ" і далі по воронці Перевозки — виручка/маржа рахуються з
+    # цього моменту, а не лише по формальному закриттю "Успіх".
+    REVENUE_STATUS_IDS = {
+        69716300,  # АВТО ПРАЦЮЄ
+        98470988,  # Первезення завершено
+        69716304,  # ДЗВІНОК ПІСЛЯ РОЗВАНТАЖЕННЯ - ВИСТАВЛЕНО РАХУНОК
+        69716312,  # ОЧІКУЄМО ОПЛАТУ ЗАМ (ПЕРЕВІЗНИК ОПЛАЧЕНИЙ)
+        69716460,  # ОПЛАТА ОТРИМАНА
+        WON_STATUS_ID,  # УСПІШНА УГОДА
+    }
+
     def _classify(pipeline_id, status_id):
         if pipeline_id == PEREVOZY_PIPELINE_ID and status_id == WON_STATUS_ID:
             return "won", "Успіх"
@@ -501,6 +513,7 @@ def get_weekly_ad_campaign_report(days: int = 7) -> dict:
             "amount": lead.get("price", 0) or 0,
             "created_at": lead.get("created_at", 0),
             "closed_at": lead.get("closed_at", 0),
+            "revenue_eligible": pipeline_id == PEREVOZY_PIPELINE_ID and status_id in REVENUE_STATUS_IDS,
         })
 
     for c in campaigns.values():
