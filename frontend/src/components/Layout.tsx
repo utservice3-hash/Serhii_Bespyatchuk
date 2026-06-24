@@ -5,6 +5,7 @@ export const NAV_ITEMS = [
   { key: "overview", label: "Огляд", icon: "📊" },
   { key: "teams", label: "Команди", icon: "👥" },
   { key: "managers", label: "Менеджери", icon: "🧑‍💼" },
+  { key: "tasks", label: "Задачник", icon: "📝" },
 ] as const;
 
 export type NavKey = (typeof NAV_ITEMS)[number]["key"];

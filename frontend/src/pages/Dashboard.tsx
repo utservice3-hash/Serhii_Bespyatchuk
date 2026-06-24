@@ -12,15 +12,60 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import {
+  createTask,
+  deleteTask,
   fetchFunnel,
   fetchManagerBreakdown,
+  fetchManagerOptions,
+  fetchTasks,
   fetchTeams,
   fetchTimeseries,
+  updateTask,
   type FunnelStage,
   type ManagerBreakdown,
+  type ManagerOption,
+  type Task,
+  type TaskPriority,
+  type TaskStatus,
   type Team,
 } from "../api";
 import { Layout, type NavKey } from "../components/Layout";
+
+const STATUS_LABELS: Record<TaskStatus, string> = {
+  todo_list: "To do list",
+  to_realize: "Взяти до реалізації",
+  planned: "Заплановано",
+  not_started: "Не почато",
+  deferred: "Відкладений запит",
+  in_progress: "В процесі",
+  ball_on_executor: "М'яч на стороні виконавця",
+  ready_for_approval: "Готово на затвердження",
+  done: "Готово",
+};
+
+const STATUS_GROUPS: { label: string; statuses: TaskStatus[] }[] = [
+  { label: "To-do", statuses: ["todo_list", "to_realize", "planned", "not_started"] },
+  { label: "In progress", statuses: ["deferred", "in_progress", "ball_on_executor"] },
+  { label: "Complete", statuses: ["ready_for_approval", "done"] },
+];
+
+const STATUS_DOT_COLORS: Record<TaskStatus, string> = {
+  todo_list: "#94a3b8",
+  to_realize: "#f59e0b",
+  planned: "#f59e0b",
+  not_started: "#94a3b8",
+  deferred: "#f59e0b",
+  in_progress: "#eab308",
+  ball_on_executor: "#60a5fa",
+  ready_for_approval: "#a78bfa",
+  done: "#34d399",
+};
+
+const PRIORITY_LABELS: Record<TaskPriority, string> = {
+  low: "Низький",
+  medium: "Середній",
+  high: "Високий",
+};
 
 const STAGE_LABELS: Record<string, string> = {
   lead_taken: "Ліди в роботі",
@@ -71,9 +116,56 @@ export function Dashboard() {
   const [managerRows, setManagerRows] = useState<ManagerBreakdown[]>([]);
   const [managersLoading, setManagersLoading] = useState(false);
 
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
+
+  useEffect(() => {
+    if (section !== "tasks") return;
+    setTasksLoading(true);
+    fetchTasks()
+      .then(setTasks)
+      .catch(() => setTasks([]))
+      .finally(() => setTasksLoading(false));
+    fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
+  }, [section]);
+
+  function patchTaskLocal(id: number, patch: Partial<Task>) {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+
+  async function handleAddTask() {
+    const title = newTaskTitle.trim();
+    if (!title) return;
+    const { id } = await createTask({ title });
+    setNewTaskTitle("");
+    setTasks((prev) => [
+      {
+        id,
+        title,
+        status: "not_started",
+        deadline: null,
+        assigneeId: null,
+        assigneeName: null,
+        priority: "medium",
+        comments: null,
+        department: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+  }
+
+  async function handleDeleteTask(id: number) {
+    await deleteTask(id);
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+  }
 
   useEffect(() => {
     if (section !== "managers") return;
@@ -312,6 +404,175 @@ export function Dashboard() {
                 </table>
               </div>
             ))
+          )}
+        </>
+      )}
+
+      {section === "tasks" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Задачник</h1>
+            <div className="page-filters">
+              <input
+                placeholder="Нова задача..."
+                value={newTaskTitle}
+                onChange={(e) => setNewTaskTitle(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddTask()}
+                style={{ width: 240 }}
+              />
+              <button className="btn-primary" onClick={handleAddTask}>
+                + Додати
+              </button>
+            </div>
+          </div>
+
+          {tasksLoading ? (
+            <p className="loading-text">Завантаження...</p>
+          ) : (
+            <div className="chart-card">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Задачі</th>
+                    <th>Статус</th>
+                    <th>Дедлайн</th>
+                    <th>Виконавець</th>
+                    <th>Пріоритет</th>
+                    <th>Коментарі</th>
+                    <th>Департамент</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tasks.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="loading-text">
+                        Задач немає.
+                      </td>
+                    </tr>
+                  ) : (
+                    tasks.map((task) => (
+                      <tr key={task.id}>
+                        <td>
+                          <input
+                            value={task.title}
+                            onChange={(e) => patchTaskLocal(task.id, { title: e.target.value })}
+                            onBlur={(e) => updateTask(task.id, { title: e.target.value })}
+                            style={{ border: "none", width: 220 }}
+                          />
+                        </td>
+                        <td>
+                          <span
+                            style={{
+                              display: "inline-block",
+                              width: 8,
+                              height: 8,
+                              borderRadius: "50%",
+                              background: STATUS_DOT_COLORS[task.status],
+                              marginRight: 6,
+                            }}
+                          />
+                          <select
+                            value={task.status}
+                            onChange={(e) => {
+                              const status = e.target.value as TaskStatus;
+                              patchTaskLocal(task.id, { status });
+                              updateTask(task.id, { status });
+                            }}
+                          >
+                            {STATUS_GROUPS.map((group) => (
+                              <optgroup key={group.label} label={group.label}>
+                                {group.statuses.map((s) => (
+                                  <option key={s} value={s}>
+                                    {STATUS_LABELS[s]}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            type="date"
+                            value={task.deadline ?? ""}
+                            onChange={(e) => {
+                              const deadline = e.target.value || null;
+                              patchTaskLocal(task.id, { deadline });
+                              updateTask(task.id, { deadline });
+                            }}
+                          />
+                        </td>
+                        <td>
+                          <select
+                            value={task.assigneeId ?? ""}
+                            onChange={(e) => {
+                              const assigneeId = e.target.value ? Number(e.target.value) : null;
+                              const assigneeName =
+                                managerOptions.find((m) => m.id === assigneeId)?.name ?? null;
+                              patchTaskLocal(task.id, { assigneeId, assigneeName });
+                              updateTask(task.id, { assigneeId });
+                            }}
+                          >
+                            <option value="">—</option>
+                            {managerOptions.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <select
+                            value={task.priority}
+                            onChange={(e) => {
+                              const priority = e.target.value as TaskPriority;
+                              patchTaskLocal(task.id, { priority });
+                              updateTask(task.id, { priority });
+                            }}
+                          >
+                            {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            value={task.comments ?? ""}
+                            placeholder="—"
+                            onChange={(e) => patchTaskLocal(task.id, { comments: e.target.value })}
+                            onBlur={(e) => updateTask(task.id, { comments: e.target.value })}
+                            style={{ border: "none", width: 160 }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={task.department ?? ""}
+                            placeholder="—"
+                            onChange={(e) => patchTaskLocal(task.id, { department: e.target.value })}
+                            onBlur={(e) => updateTask(task.id, { department: e.target.value })}
+                            style={{ border: "none", width: 140 }}
+                          />
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => handleDeleteTask(task.id)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              color: "var(--text-muted)",
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}

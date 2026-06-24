@@ -66,3 +66,22 @@ CREATE TABLE IF NOT EXISTS plans (
   planned_value NUMERIC NOT NULL,
   UNIQUE (manager_id, plan_date, metric)
 );
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'not_started' CHECK (status IN
+    ('todo_list', 'to_realize', 'planned', 'not_started',
+     'deferred', 'in_progress', 'ball_on_executor',
+     'ready_for_approval', 'done')),
+  deadline DATE,
+  assignee_id INTEGER REFERENCES managers(id),
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
+  comments TEXT,
+  department TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);

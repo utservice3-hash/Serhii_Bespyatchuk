@@ -61,6 +61,16 @@ export async function fetchTeams(): Promise<Team[]> {
   return data.teams;
 }
 
+export interface ManagerOption {
+  id: number;
+  name: string;
+}
+
+export async function fetchManagerOptions(): Promise<ManagerOption[]> {
+  const { data } = await api.get<{ managers: ManagerOption[] }>("/teams/managers");
+  return data.managers;
+}
+
 export interface ManagerWeekRow {
   weekStart: string;
   metric: string;
@@ -83,4 +93,68 @@ export async function fetchManagerBreakdown(params: {
     params,
   });
   return data.managers;
+}
+
+export type TaskStatus =
+  | "todo_list"
+  | "to_realize"
+  | "planned"
+  | "not_started"
+  | "deferred"
+  | "in_progress"
+  | "ball_on_executor"
+  | "ready_for_approval"
+  | "done";
+
+export type TaskPriority = "low" | "medium" | "high";
+
+export interface Task {
+  id: number;
+  title: string;
+  status: TaskStatus;
+  deadline: string | null;
+  assigneeId: number | null;
+  assigneeName: string | null;
+  priority: TaskPriority;
+  comments: string | null;
+  department: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchTasks(): Promise<Task[]> {
+  const { data } = await api.get<{ tasks: Task[] }>("/tasks");
+  return data.tasks;
+}
+
+export async function createTask(payload: {
+  title: string;
+  status?: TaskStatus;
+  deadline?: string | null;
+  assigneeId?: number | null;
+  priority?: TaskPriority;
+  comments?: string | null;
+  department?: string | null;
+}): Promise<{ id: number }> {
+  const { data } = await api.post<{ id: number }>("/tasks", payload);
+  return data;
+}
+
+export async function updateTask(
+  id: number,
+  payload: Partial<{
+    title: string;
+    status: TaskStatus;
+    deadline: string | null;
+    assigneeId: number | null;
+    priority: TaskPriority;
+    comments: string | null;
+    department: string | null;
+  }>
+): Promise<void> {
+  await api.patch(`/tasks/${id}`, payload);
+}
+
+export async function deleteTask(id: number): Promise<void> {
+  await api.delete(`/tasks/${id}`);
 }
