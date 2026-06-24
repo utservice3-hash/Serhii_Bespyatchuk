@@ -292,6 +292,18 @@ def get_latest_call_note(lead_id: int) -> dict:
     }
 
 
+def get_last_text_note(lead_id: int) -> str:
+    """Повертає текст останньої текстової нотатки ліда (наприклад, причина закриття,
+    яку менеджер вписав вручну) — порожній рядок, якщо такої нотатки немає."""
+    notes = get_lead_notes(lead_id)
+    text_notes = [n for n in notes if n.get("note_type") in (4, "common")]
+    if not text_notes:
+        return ""
+    latest = max(text_notes, key=lambda n: n.get("created_at", 0))
+    params = latest.get("params") or {}
+    return (params.get("text") or "").strip()
+
+
 def get_pipeline_leads(pipeline_id: int, status_id: int | None = None, page: int = 1, with_custom_fields: bool = False, closed_at_from: int | None = None) -> list:
     params: dict = {"limit": 250, "page": page}
     if status_id:

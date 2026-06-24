@@ -1518,7 +1518,8 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     if not transcripts:
         return
 
-    result = ai_analyzer.check_target_lead(transcripts, lead_name)
+    manager_note = kommo.get_last_text_note(lead_id)
+    result = ai_analyzer.check_target_lead(transcripts, lead_name, manager_note)
     if not result.get("is_target"):
         return
 
