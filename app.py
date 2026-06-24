@@ -146,6 +146,15 @@ def send_to_team_group(manager_id: int, text: str) -> bool:
     team = MANAGER_TEAM.get(manager_id, "")
     return notifier.send_to_team_tracking(text, team)
 
+
+def _route_tracking_message(responsible_id: int, text: str) -> bool:
+    """Трекінг роботи: якщо є реальний відповідальний — у групу його команди
+    (РНК або РПК) з тегом менеджера; якщо відповідального немає — у спільну
+    групу РНК (а не у фолбек РПК, як зробив би send_to_team_group(0, ...))."""
+    if responsible_id and responsible_id != ADMIN_USER_ID:
+        return send_to_team_group(responsible_id, text)
+    return notifier.send_to_rnk_tracking(text)
+
 # In-memory: список успішних угод поточного місяця
 # {lead_id, manager_id, amount, closed_at}
 _won_log: list[dict] = []
@@ -903,6 +912,75 @@ def _check_unassigned_leads():
         logger.info("Unassigned reminder #%d for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
 
+# Етапи Кваліфікації, де лід вважається "в роботі" — застрягання тут варто
+# нагадувати, навіть якщо вже призначений реальний менеджер. Виключені:
+# NEW_FROM_LIDOGEN (щойно прийшов, трекається через pending з точністю до хвилин),
+# 142 "КВАЛІФІКОВАНО" і 143 "Не цільові" (це вихід з вирки, не застрягання).
+ACTIVE_QUAL_STATUSES = [69693648, 69693652, 69693656, 69693660, 69716160, 69738660, 70419108]
+STALE_QUAL_DAYS = 2
+STALE_QUAL_REMINDER_HOURS = 24
+_stale_qual_reminders: dict[int, datetime] = {}
+
+
+def _check_stale_qualification_leads():
+    """Раз на годину (робочий час) — шукає лідів у Кваліфікації без руху
+    STALE_QUAL_DAYS+ днів, навіть якщо вже призначений реальний менеджер, і
+    нагадує в групу його команди (РНК/РПК) з тегом. Без відповідального такі
+    ліди вже трекаються через _check_unassigned_leads, тому тут пропускаються."""
+    if not _is_working_hours():
+        return
+
+    now = datetime.now(timezone.utc)
+    threshold = now - timedelta(days=STALE_QUAL_DAYS)
+    current_stale_ids = set()
+
+    for status_id in ACTIVE_QUAL_STATUSES:
+        try:
+            leads = kommo.get_pipeline_leads(QUAL_PIPELINE_ID, status_id=status_id)
+        except Exception as e:
+            logger.error("_check_stale_qualification_leads(%s): %s", status_id, e)
+            continue
+
+        for lead in leads:
+            lead_id = lead.get("id")
+            responsible_id = lead.get("responsible_user_id", 0)
+            if not lead_id or not responsible_id or responsible_id == ADMIN_USER_ID:
+                continue
+
+            updated_at = lead.get("updated_at", 0)
+            if not updated_at:
+                continue
+            updated_dt = datetime.fromtimestamp(updated_at, tz=timezone.utc)
+            if updated_dt > threshold:
+                continue
+
+            current_stale_ids.add(lead_id)
+            last_reminded = _stale_qual_reminders.get(lead_id)
+            if last_reminded and (now - last_reminded).total_seconds() < STALE_QUAL_REMINDER_HOURS * 3600:
+                continue
+
+            age_days = (now - updated_dt).total_seconds() / 86400
+            manager_name = kommo.get_user_name(responsible_id)
+            tg_tag = notifier.get_manager_tag(responsible_id)
+            supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+            sup_part = f" {supervisor_tag}" if supervisor_tag else ""
+            lead_name = lead.get("name", f"Лід #{lead_id}")
+            kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+            msg = (
+                f"🕒 <b>Лід без руху {int(age_days)} дн. у кваліфікації</b>\n"
+                f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
+                f"🏷 Назва: {lead_name}\n"
+                f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+            )
+            send_to_team_group(responsible_id, msg)
+            _stale_qual_reminders[lead_id] = now
+            logger.info("Stale qualification lead %s (%.1f days) reminded for %s", lead_id, age_days, manager_name)
+
+    for lead_id in list(_stale_qual_reminders.keys()):
+        if lead_id not in current_stale_ids:
+            _stale_qual_reminders.pop(lead_id, None)
+
+
 def _write_daily_snapshot():
     """Runs at 21:55 UTC (≈ 23:55 Kyiv) — saves daily stats to Google Sheets."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -1138,6 +1216,7 @@ scheduler = BackgroundScheduler(timezone="UTC")
 scheduler.add_job(_check_webhook_health, "interval", minutes=20)
 scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
 scheduler.add_job(_check_unassigned_leads, "interval", minutes=15)
+scheduler.add_job(_check_stale_qualification_leads, "interval", hours=1)
 scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
 scheduler.add_job(_send_daily_plan_report, "cron", hour=15, minute=0)   # 18:00 Kyiv = 15:00 UTC
 scheduler.add_job(_send_month_end_report, "interval", hours=1)           # останній день місяця — щогодини
@@ -1562,7 +1641,7 @@ def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):
         f"🏷 Назва: {lead_name}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
-    send_to_team_group(responsible_id, msg)
+    _route_tracking_message(responsible_id, msg)
     logger.info("Team event: %s lead %s by %s", label, lead_id, manager_name)
 
 
@@ -2534,6 +2613,26 @@ def ringostat_webhook():
     dst_num = data.get("dst_num", "")
 
     duration_sec = int(duration) if str(duration).isdigit() else 0
+    call_type_label = {"in": "Вхідний", "out": "Вихідний", "transitin": "Транзит"}.get(call_type, call_type)
+
+    if duration_sec == 0:
+        manager_id = _sip_to_manager_id(sip)
+        if manager_id:
+            manager_name = kommo.get_user_name(manager_id)
+            tg_tag = notifier.get_manager_tag(manager_id)
+            manager_line = f"👤 {manager_name}{tg_tag}"
+        else:
+            manager_line = f"👤 SIP: <code>{sip}</code>" if sip else "👤 Невідомо"
+        msg = (
+            f"🚫 <b>Пропущений дзвінок</b>\n"
+            f"{manager_line}\n"
+            f"📲 {call_type_label}\n"
+            f"☎️ {src_num or dst_num or '—'}\n"
+            f"🗓 {calldate}"
+        )
+        _route_tracking_message(manager_id, msg)
+        return jsonify({"ok": True, "missed": True})
+
     if duration_sec < 10:
         return jsonify({"ok": True, "skipped": "too short"})
 
@@ -2547,8 +2646,6 @@ def ringostat_webhook():
     else:
         team = ""
         manager_line = f"👤 SIP: <code>{sip}</code>"
-
-    call_type_label = {"in": "Вхідний", "out": "Вихідний", "transitin": "Транзит"}.get(call_type, call_type)
 
     msg = (
         f"📞 <b>Дзвінок завершено</b>\n"
