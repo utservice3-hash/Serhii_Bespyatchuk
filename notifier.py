@@ -447,6 +447,14 @@ def set_webhook(webhook_url: str) -> dict:
     return resp.json()
 
 
+def get_webhook_info() -> dict:
+    try:
+        resp = requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/getWebhookInfo", timeout=10)
+        return resp.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def test_bot() -> dict:
     if not TG_TOKEN:
         return {"ok": False, "error": "TG_TOKEN not set"}

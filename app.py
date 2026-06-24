@@ -1893,6 +1893,11 @@ def test_tg():
     return jsonify(result)
 
 
+@app.route("/tg-webhook-info", methods=["GET"])
+def tg_webhook_info():
+    return jsonify(notifier.get_webhook_info())
+
+
 @app.route("/check-webhook-health", methods=["GET"])
 def check_webhook_health_endpoint():
     """Manually trigger the webhook health check (normally runs every 20 min)."""
