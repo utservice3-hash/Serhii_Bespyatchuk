@@ -89,7 +89,7 @@ export interface KommoUser {
 
 export async function fetchUsers(): Promise<KommoUser[]> {
   const data = await kommoRequest<KommoListResponse<KommoUser>>(
-    "/api/v4/users?limit=250"
+    "/api/v4/users?limit=250&with=group"
   );
   const users = data._embedded?.users ?? [];
   return users.filter((user) => user.is_active);
