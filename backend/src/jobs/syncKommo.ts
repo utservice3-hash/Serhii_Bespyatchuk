@@ -26,7 +26,7 @@ export async function syncManagers(): Promise<number> {
     const group = user._embedded?.groups?.[0];
     const teamId = group ? teamIdByGroupId.get(group.id) ?? null : null;
     const role = user._embedded?.roles?.[0]?.name ?? "";
-    const isTeamLead = role.toLowerCase().includes("тимлід");
+    const isTeamLead = role.toLowerCase().includes("тимл");
 
     await pool.query(
       `INSERT INTO managers (name, kommo_user_id, team_id, is_team_lead, is_active)
