@@ -430,7 +430,17 @@ export function Dashboard() {
             <p className="loading-text">Завантаження...</p>
           ) : (
             <div className="chart-card">
-              <table className="data-table">
+              <table className="data-table tasks-table">
+                <colgroup>
+                  <col style={{ width: "22%" }} />
+                  <col style={{ width: "16%" }} />
+                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "4%" }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Задачі</th>
@@ -458,38 +468,34 @@ export function Dashboard() {
                             value={task.title}
                             onChange={(e) => patchTaskLocal(task.id, { title: e.target.value })}
                             onBlur={(e) => updateTask(task.id, { title: e.target.value })}
-                            style={{ border: "none", width: 220 }}
+                            style={{ border: "none", width: "100%" }}
                           />
                         </td>
                         <td>
-                          <span
-                            style={{
-                              display: "inline-block",
-                              width: 8,
-                              height: 8,
-                              borderRadius: "50%",
-                              background: STATUS_DOT_COLORS[task.status],
-                              marginRight: 6,
-                            }}
-                          />
-                          <select
-                            value={task.status}
-                            onChange={(e) => {
-                              const status = e.target.value as TaskStatus;
-                              patchTaskLocal(task.id, { status });
-                              updateTask(task.id, { status });
-                            }}
-                          >
-                            {STATUS_GROUPS.map((group) => (
-                              <optgroup key={group.label} label={group.label}>
-                                {group.statuses.map((s) => (
-                                  <option key={s} value={s}>
-                                    {STATUS_LABELS[s]}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            ))}
-                          </select>
+                          <div className="task-status-cell">
+                            <span
+                              className="task-status-dot"
+                              style={{ background: STATUS_DOT_COLORS[task.status] }}
+                            />
+                            <select
+                              value={task.status}
+                              onChange={(e) => {
+                                const status = e.target.value as TaskStatus;
+                                patchTaskLocal(task.id, { status });
+                                updateTask(task.id, { status });
+                              }}
+                            >
+                              {STATUS_GROUPS.map((group) => (
+                                <optgroup key={group.label} label={group.label}>
+                                  {group.statuses.map((s) => (
+                                    <option key={s} value={s}>
+                                      {STATUS_LABELS[s]}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              ))}
+                            </select>
+                          </div>
                         </td>
                         <td>
                           <input
@@ -543,7 +549,7 @@ export function Dashboard() {
                             placeholder="—"
                             onChange={(e) => patchTaskLocal(task.id, { comments: e.target.value })}
                             onBlur={(e) => updateTask(task.id, { comments: e.target.value })}
-                            style={{ border: "none", width: 160 }}
+                            style={{ border: "none", width: "100%" }}
                           />
                         </td>
                         <td>
@@ -552,7 +558,7 @@ export function Dashboard() {
                             placeholder="—"
                             onChange={(e) => patchTaskLocal(task.id, { department: e.target.value })}
                             onBlur={(e) => updateTask(task.id, { department: e.target.value })}
-                            style={{ border: "none", width: 140 }}
+                            style={{ border: "none", width: "100%" }}
                           />
                         </td>
                         <td>

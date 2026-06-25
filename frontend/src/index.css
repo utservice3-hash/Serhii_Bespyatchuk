@@ -244,6 +244,49 @@ button {
   background: var(--brand-dark);
 }
 
+/* Tasks table */
+
+.tasks-table {
+  table-layout: fixed;
+}
+
+.tasks-table th,
+.tasks-table td {
+  padding-right: 10px;
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.tasks-table select,
+.tasks-table input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+
+.tasks-table input[type="date"] {
+  padding: 5px 6px;
+}
+
+.task-status-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.task-status-cell select {
+  flex: 1;
+  min-width: 0;
+}
+
 @media (max-width: 1024px) {
   .kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
