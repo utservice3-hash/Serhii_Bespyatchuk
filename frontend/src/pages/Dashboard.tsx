@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -17,6 +17,7 @@ import {
   fetchFunnel,
   fetchManagerBreakdown,
   fetchManagerOptions,
+  fetchPersonalDashboard,
   fetchTasks,
   fetchTeams,
   fetchTimeseries,
@@ -24,12 +25,14 @@ import {
   type FunnelStage,
   type ManagerBreakdown,
   type ManagerOption,
+  type PersonalDashboard,
   type Task,
   type TaskPriority,
   type TaskStatus,
   type Team,
 } from "../api";
 import { Layout, type NavKey } from "../components/Layout";
+import { getAuthPayload } from "../auth";
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
   todo_list: "To do list",
@@ -102,7 +105,43 @@ function formatAmount(value: number): string {
   return `${value.toFixed(0)} ₴`;
 }
 
+const FORECAST_COLORS: Record<string, string> = {
+  on_track: "#22c55e",
+  at_risk: "#f59e0b",
+  behind: "#ef4444",
+  no_plan: "#94a3b8",
+};
+
+const FORECAST_LABELS: Record<string, string> = {
+  on_track: "В темпі плану",
+  at_risk: "Під загрозою",
+  behind: "Відставання",
+  no_plan: "Немає плану",
+};
+
+function ForecastBadge({ forecast }: { forecast: { status: string; projectedPct: number } }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "4px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 600,
+        color: "#fff",
+        background: FORECAST_COLORS[forecast.status] ?? "#94a3b8",
+      }}
+    >
+      {FORECAST_LABELS[forecast.status] ?? forecast.status}
+      {forecast.status !== "no_plan" && ` · ${Math.round(forecast.projectedPct * 100)}%`}
+    </span>
+  );
+}
+
 export function Dashboard() {
+  const auth = useMemo(() => getAuthPayload(), []);
   const [section, setSection] = useState<NavKey>("overview");
   const [stages, setStages] = useState<FunnelStage[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -115,6 +154,9 @@ export function Dashboard() {
   const [month, setMonth] = useState(currentMonth());
   const [managerRows, setManagerRows] = useState<ManagerBreakdown[]>([]);
   const [managersLoading, setManagersLoading] = useState(false);
+  const [selectedManagerId, setSelectedManagerId] = useState<number | null>(null);
+  const [personalData, setPersonalData] = useState<PersonalDashboard | null>(null);
+  const [personalLoading, setPersonalLoading] = useState(false);
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
@@ -169,6 +211,7 @@ export function Dashboard() {
 
   useEffect(() => {
     if (section !== "managers") return;
+    if (auth?.role === "manager") return;
     if (!managerTeamId && teams.length > 1) {
       // Admin viewing without picking a team yet — nothing to load.
       setManagerRows([]);
@@ -181,7 +224,21 @@ export function Dashboard() {
       .then(setManagerRows)
       .catch(() => setManagerRows([]))
       .finally(() => setManagersLoading(false));
-  }, [section, managerTeamId, month, teams]);
+  }, [section, managerTeamId, month, teams, auth]);
+
+  useEffect(() => {
+    if (section !== "managers") return;
+    const managerIdToLoad = auth?.role === "manager" ? auth.managerId ?? undefined : selectedManagerId ?? undefined;
+    if (!managerIdToLoad) {
+      setPersonalData(null);
+      return;
+    }
+    setPersonalLoading(true);
+    fetchPersonalDashboard({ managerId: managerIdToLoad, month })
+      .then(setPersonalData)
+      .catch(() => setPersonalData(null))
+      .finally(() => setPersonalLoading(false));
+  }, [section, selectedManagerId, month, auth]);
 
   useEffect(() => {
     setLoading(true);
@@ -344,9 +401,9 @@ export function Dashboard() {
       {section === "managers" && (
         <>
           <div className="page-header">
-            <h1 className="page-title">Менеджери</h1>
+            <h1 className="page-title">{auth?.role === "manager" ? "Мій кабінет" : "Менеджери"}</h1>
             <div className="page-filters">
-              {teams.length > 1 && (
+              {auth?.role !== "manager" && teams.length > 1 && (
                 <select
                   value={managerTeamId}
                   onChange={(e) => setManagerTeamId(e.target.value ? Number(e.target.value) : "")}
@@ -363,47 +420,166 @@ export function Dashboard() {
             </div>
           </div>
 
-          {managersLoading ? (
-            <p className="loading-text">Завантаження...</p>
-          ) : managerRows.length === 0 ? (
-            <div className="chart-card">
-              <p className="loading-text">
-                {teams.length > 1 && !managerTeamId
-                  ? "Оберіть команду, щоб побачити дані."
-                  : "Немає даних за цей місяць."}
-              </p>
-            </div>
-          ) : (
-            managerRows.map((manager) => (
-              <div className="chart-card manager-card" key={manager.id}>
-                <h2 className="chart-title">{manager.name}</h2>
+          {auth?.role !== "manager" && (
+            managersLoading ? (
+              <p className="loading-text">Завантаження...</p>
+            ) : managerRows.length === 0 ? (
+              <div className="chart-card">
+                <p className="loading-text">
+                  {teams.length > 1 && !managerTeamId
+                    ? "Оберіть команду, щоб побачити дані."
+                    : "Немає даних за цей місяць."}
+                </p>
+              </div>
+            ) : (
+              <div className="chart-card manager-card">
+                <h2 className="chart-title">Команда — світлофор по плану</h2>
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>Показник</th>
+                      <th>Менеджер</th>
                       <th>План</th>
                       <th>Факт</th>
-                      <th>% виконання</th>
+                      <th>Залишок</th>
+                      <th>Прогноз</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {METRIC_ORDER.map((metric) => {
-                      const totals = manager.totals[metric] ?? { plan: 0, fact: 0 };
-                      const pct = totals.plan > 0 ? Math.round((totals.fact / totals.plan) * 100) : 0;
-                      const isAmount = metric === "payment_amount";
+                    {managerRows.map((manager) => {
+                      const f = manager.forecast;
                       return (
-                        <tr key={metric}>
-                          <td>{METRIC_LABELS[metric] ?? metric}</td>
-                          <td>{isAmount ? formatAmount(totals.plan) : totals.plan}</td>
-                          <td>{isAmount ? formatAmount(totals.fact) : totals.fact}</td>
-                          <td>{totals.plan > 0 ? `${pct}%` : "—"}</td>
+                        <tr
+                          key={manager.id}
+                          onClick={() => setSelectedManagerId(manager.id)}
+                          style={{
+                            cursor: "pointer",
+                            background: selectedManagerId === manager.id ? "rgba(197,20,28,0.06)" : undefined,
+                          }}
+                        >
+                          <td>{manager.name}</td>
+                          <td>{formatAmount(f.plan)}</td>
+                          <td>{formatAmount(f.fact)}</td>
+                          <td>{formatAmount(f.remaining)}</td>
+                          <td>
+                            <ForecastBadge forecast={f} />
+                          </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
-            ))
+            )
+          )}
+
+          {auth?.role !== "manager" && !selectedManagerId && (
+            <div className="chart-card">
+              <p className="loading-text">Оберіть менеджера в таблиці вище, щоб побачити деталі.</p>
+            </div>
+          )}
+
+          {(auth?.role === "manager" || selectedManagerId) && (
+            personalLoading ? (
+              <p className="loading-text">Завантаження...</p>
+            ) : !personalData ? (
+              <div className="chart-card">
+                <p className="loading-text">Немає даних за цей місяць.</p>
+              </div>
+            ) : (
+              <>
+                <div className="chart-card manager-card">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: 12,
+                      marginBottom: 16,
+                    }}
+                  >
+                    <h2 className="chart-title" style={{ marginBottom: 0 }}>
+                      {personalData.manager.name} — {month}
+                    </h2>
+                    <ForecastBadge forecast={personalData.forecast} />
+                  </div>
+                  <div className="kpi-grid">
+                    <div className="kpi-card">
+                      <span className="kpi-label">План</span>
+                      <span className="kpi-value">{formatAmount(personalData.forecast.plan)}</span>
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">Факт</span>
+                      <span className="kpi-value">{formatAmount(personalData.forecast.fact)}</span>
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">Залишилось до плану</span>
+                      <span className="kpi-value">{formatAmount(personalData.forecast.remaining)}</span>
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">
+                        Прогноз на кінець місяця ({personalData.daysElapsed}/{personalData.daysInMonth} дн.)
+                      </span>
+                      <span className="kpi-value">{formatAmount(personalData.forecast.projected)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="chart-grid">
+                  <div className="chart-card">
+                    <h2 className="chart-title">Декомпозиція воронки за місяць</h2>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart
+                        data={STAGE_ORDER.map((stage) => ({
+                          name: STAGE_LABELS[stage],
+                          count: personalData!.totals[stage]?.fact ?? 0,
+                        }))}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="#c5141c" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="chart-card">
+                    <h2 className="chart-title">Динаміка по днях (оплати)</h2>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <LineChart data={personalData.daily}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="date" tickFormatter={(d) => d.slice(8, 10)} />
+                        <YAxis />
+                        <Tooltip />
+                        <Line
+                          type="monotone"
+                          dataKey="payment_amount"
+                          name="Сума оплат"
+                          stroke="#c5141c"
+                          connectNulls
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="chart-card">
+                  <h2 className="chart-title">Історія за 12 місяців: план vs факт оплат</h2>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={personalData.history}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="month" />
+                      <YAxis />
+                      <Tooltip formatter={(v: number) => formatAmount(v)} />
+                      <Legend />
+                      <Bar dataKey="planPaymentAmount" name="План" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="factPaymentAmount" name="Факт" fill="#c5141c" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </>
+            )
           )}
         </>
       )}

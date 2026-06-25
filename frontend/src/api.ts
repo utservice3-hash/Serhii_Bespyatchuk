@@ -83,6 +83,16 @@ export interface ManagerBreakdown {
   name: string;
   weeks: ManagerWeekRow[];
   totals: Record<string, { plan: number; fact: number }>;
+  forecast: Forecast;
+}
+
+export interface Forecast {
+  plan: number;
+  fact: number;
+  remaining: number;
+  projected: number;
+  projectedPct: number;
+  status: "no_plan" | "on_track" | "at_risk" | "behind";
 }
 
 export async function fetchManagerBreakdown(params: {
@@ -93,6 +103,30 @@ export async function fetchManagerBreakdown(params: {
     params,
   });
   return data.managers;
+}
+
+export interface PersonalDashboard {
+  manager: { id: number; name: string };
+  month: string;
+  daysInMonth: number;
+  daysElapsed: number;
+  totals: Record<string, { plan: number; fact: number }>;
+  forecast: Forecast;
+  daily: Record<string, number | string>[];
+  history: {
+    month: string;
+    factPaymentAmount: number;
+    factPaid: number;
+    planPaymentAmount: number;
+  }[];
+}
+
+export async function fetchPersonalDashboard(params: {
+  managerId?: number;
+  month?: string;
+}): Promise<PersonalDashboard> {
+  const { data } = await api.get<PersonalDashboard>("/dashboard/personal", { params });
+  return data;
 }
 
 export type TaskStatus =
