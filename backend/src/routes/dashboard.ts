@@ -373,14 +373,14 @@ dashboardRouter.get("/personal", async (req, res) => {
   const dailyByDate = new Map<string, Record<string, number>>();
   for (const r of dailyResult.rows) {
     const key = new Date(r.day).toISOString().slice(0, 10);
-    const row = dailyByDate.get(key) ?? { date: 0 };
+    const row = dailyByDate.get(key) ?? {};
     row[r.funnel_stage] = Number(r.deal_count);
     if (r.funnel_stage === "paid") row.payment_amount = Number(r.total_amount);
     dailyByDate.set(key, row);
   }
   const daily = Array.from(dailyByDate.entries())
     .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([date, row]) => ({ date, ...row }));
+    .map(([date, row]) => ({ ...row, date }));
 
   const historyFactResult = await pool.query<{
     month: string;
