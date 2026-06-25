@@ -7,12 +7,36 @@ function toTimestamp(unixSeconds: number | null): Date | null {
 
 export async function syncManagers(): Promise<number> {
   const users = await fetchUsers();
+
+  const teamIdByGroupId = new Map<number, number>();
   for (const user of users) {
+    const group = user._embedded?.groups?.[0];
+    if (!group || teamIdByGroupId.has(group.id)) continue;
+    const result = await pool.query<{ id: number }>(
+      `INSERT INTO teams (name, kommo_group_id)
+       VALUES ($1, $2)
+       ON CONFLICT (kommo_group_id) DO UPDATE SET name = EXCLUDED.name
+       RETURNING id`,
+      [group.name, group.id]
+    );
+    teamIdByGroupId.set(group.id, result.rows[0].id);
+  }
+
+  for (const user of users) {
+    const group = user._embedded?.groups?.[0];
+    const teamId = group ? teamIdByGroupId.get(group.id) ?? null : null;
+    const role = user._embedded?.roles?.[0]?.name ?? "";
+    const isTeamLead = role.toLowerCase().includes("тимлід");
+
     await pool.query(
-      `INSERT INTO managers (name, kommo_user_id, is_active)
-       VALUES ($1, $2, true)
-       ON CONFLICT (kommo_user_id) DO UPDATE SET name = EXCLUDED.name, is_active = true`,
-      [user.name, user.id]
+      `INSERT INTO managers (name, kommo_user_id, team_id, is_team_lead, is_active)
+       VALUES ($1, $2, $3, $4, true)
+       ON CONFLICT (kommo_user_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         team_id = EXCLUDED.team_id,
+         is_team_lead = EXCLUDED.is_team_lead,
+         is_active = true`,
+      [user.name, user.id, teamId, isTeamLead]
     );
   }
 

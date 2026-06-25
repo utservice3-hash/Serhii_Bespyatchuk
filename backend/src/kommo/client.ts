@@ -85,11 +85,15 @@ export interface KommoUser {
   id: number;
   name: string;
   rights: { is_active: boolean };
+  _embedded?: {
+    groups?: { id: number; name: string }[];
+    roles?: { id: number; name: string }[];
+  };
 }
 
 export async function fetchUsers(): Promise<KommoUser[]> {
   const data = await kommoRequest<KommoListResponse<KommoUser>>(
-    "/api/v4/users?limit=250&with=group"
+    "/api/v4/users?limit=250&with=group,role"
   );
   const users = data._embedded?.users ?? [];
   return users.filter((user) => user.rights?.is_active);
