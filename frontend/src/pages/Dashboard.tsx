@@ -78,13 +78,6 @@ const STAGE_LABELS: Record<string, string> = {
   paid: "Оплачено",
 };
 
-const METRIC_LABELS: Record<string, string> = {
-  ...STAGE_LABELS,
-  payment_amount: "Сума оплат, ₴",
-};
-
-const METRIC_ORDER = ["lead_taken", "quote_requested", "approved", "invoiced", "paid", "payment_amount"];
-
 function currentMonth(): string {
   return new Date().toISOString().slice(0, 7);
 }
@@ -571,7 +564,7 @@ export function Dashboard() {
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="month" />
                       <YAxis />
-                      <Tooltip formatter={(v: number) => formatAmount(v)} />
+                      <Tooltip formatter={(v) => formatAmount(Number(v))} />
                       <Legend />
                       <Bar dataKey="planPaymentAmount" name="План" fill="#94a3b8" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="factPaymentAmount" name="Факт" fill="#c5141c" radius={[4, 4, 0, 0]} />
