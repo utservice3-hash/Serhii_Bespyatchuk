@@ -372,7 +372,7 @@ dashboardRouter.get("/personal", async (req, res) => {
 
   const dailyByDate = new Map<string, Record<string, number>>();
   for (const r of dailyResult.rows) {
-    const key = r.day.slice(0, 10);
+    const key = new Date(r.day).toISOString().slice(0, 10);
     const row = dailyByDate.get(key) ?? { date: 0 };
     row[r.funnel_stage] = Number(r.deal_count);
     if (r.funnel_stage === "paid") row.payment_amount = Number(r.total_amount);
@@ -421,7 +421,7 @@ dashboardRouter.get("/personal", async (req, res) => {
     return row;
   }
   for (const r of historyFactResult.rows) {
-    const monthKey = r.month.slice(0, 7);
+    const monthKey = new Date(r.month).toISOString().slice(0, 7);
     if (r.funnel_stage === "paid") {
       const row = getHistoryRow(monthKey);
       row.factPaid = Number(r.deal_count);
@@ -430,7 +430,7 @@ dashboardRouter.get("/personal", async (req, res) => {
   }
   for (const r of historyPlanResult.rows) {
     if (r.metric === "payment_amount") {
-      const monthKey = r.month.slice(0, 7);
+      const monthKey = new Date(r.month).toISOString().slice(0, 7);
       getHistoryRow(monthKey).planPaymentAmount = Number(r.planned_value);
     }
   }
