@@ -205,11 +205,6 @@ export function Dashboard() {
   useEffect(() => {
     if (section !== "managers") return;
     if (auth?.role === "manager") return;
-    if (!managerTeamId && teams.length > 1) {
-      // Admin viewing without picking a team yet — nothing to load.
-      setManagerRows([]);
-      return;
-    }
     const teamIdToUse = managerTeamId || teams[0]?.id;
     if (!teamIdToUse) return;
     setManagersLoading(true);
@@ -418,11 +413,7 @@ export function Dashboard() {
               <p className="loading-text">Завантаження...</p>
             ) : managerRows.length === 0 ? (
               <div className="chart-card">
-                <p className="loading-text">
-                  {teams.length > 1 && !managerTeamId
-                    ? "Оберіть команду, щоб побачити дані."
-                    : "Немає даних за цей місяць."}
-                </p>
+                <p className="loading-text">Немає даних за цей місяць.</p>
               </div>
             ) : (
               <div className="chart-card manager-card">
