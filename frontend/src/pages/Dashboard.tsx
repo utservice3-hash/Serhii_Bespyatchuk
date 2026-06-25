@@ -15,6 +15,7 @@ import {
   createTask,
   deleteTask,
   fetchFunnel,
+  fetchLoyalty,
   fetchManagerBreakdown,
   fetchManagerOptions,
   fetchPersonalDashboard,
@@ -23,6 +24,7 @@ import {
   fetchTimeseries,
   updateTask,
   type FunnelStage,
+  type LoyaltyManager,
   type ManagerBreakdown,
   type ManagerOption,
   type PersonalDashboard,
@@ -156,6 +158,10 @@ export function Dashboard() {
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState("");
 
+  const [loyaltyTeamId, setLoyaltyTeamId] = useState<number | "">("");
+  const [loyaltyData, setLoyaltyData] = useState<LoyaltyManager[]>([]);
+  const [loyaltyLoading, setLoyaltyLoading] = useState(false);
+
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
@@ -227,6 +233,17 @@ export function Dashboard() {
       .catch(() => setPersonalData(null))
       .finally(() => setPersonalLoading(false));
   }, [section, selectedManagerId, month, auth]);
+
+  useEffect(() => {
+    if (section !== "loyalty") return;
+    const teamIdToUse = auth?.role === "manager" ? undefined : loyaltyTeamId || teams[0]?.id;
+    const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
+    setLoyaltyLoading(true);
+    fetchLoyalty({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
+      .then(setLoyaltyData)
+      .catch(() => setLoyaltyData([]))
+      .finally(() => setLoyaltyLoading(false));
+  }, [section, loyaltyTeamId, teams, auth]);
 
   useEffect(() => {
     setLoading(true);
@@ -564,6 +581,70 @@ export function Dashboard() {
                 </div>
               </>
             )
+          )}
+        </>
+      )}
+
+      {section === "loyalty" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Постійні клієнти</h1>
+            {auth?.role !== "manager" && (
+              <div className="page-filters">
+                <select
+                  value={loyaltyTeamId}
+                  onChange={(e) => setLoyaltyTeamId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  {teams.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {loyaltyLoading ? (
+            <p className="loading-text">Завантаження...</p>
+          ) : loyaltyData.length === 0 ? (
+            <p className="loading-text">Немає даних.</p>
+          ) : (
+            <div className="chart-grid">
+              {loyaltyData.map((m) => (
+                <div className="chart-card" key={m.managerId}>
+                  <h2 className="chart-title">{m.managerName}</h2>
+                  <div className="kpi-grid">
+                    <div className="kpi-card">
+                      <span className="kpi-label">Постійні (3+ за 3 міс.)</span>
+                      <span className="kpi-value">{m.loyalCount}</span>
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">At risk</span>
+                      <span className="kpi-value">{m.atRiskCount}</span>
+                    </div>
+                  </div>
+                  {m.atRiskCount > 0 && (
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Клієнт (at risk)</th>
+                          <th>Замовлень за 3 міс.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {m.atRisk.map((c) => (
+                          <tr key={c.clientKey}>
+                            <td>{c.clientName}</td>
+                            <td>{c.orders}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </>
       )}

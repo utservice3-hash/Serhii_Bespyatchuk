@@ -46,8 +46,14 @@ CREATE TABLE IF NOT EXISTS deals (
   created_at_kommo TIMESTAMPTZ,
   updated_at_kommo TIMESTAMPTZ,
   closed_at_kommo TIMESTAMPTZ,
-  synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  client_name TEXT,
+  client_key TEXT
 );
+
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_name TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_deals_client_key ON deals(client_key);
 
 ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_team_lead BOOLEAN NOT NULL DEFAULT false;
 

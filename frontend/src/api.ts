@@ -129,6 +129,32 @@ export async function fetchPersonalDashboard(params: {
   return data;
 }
 
+export interface LoyaltyClient {
+  clientKey: string;
+  clientName: string;
+  orders: number;
+}
+
+export interface LoyaltyManager {
+  managerId: number;
+  managerName: string;
+  loyal: LoyaltyClient[];
+  atRisk: LoyaltyClient[];
+  loyalCount: number;
+  atRiskCount: number;
+}
+
+export async function fetchLoyalty(params: {
+  managerId?: number;
+  teamId?: number;
+  asOf?: string;
+}): Promise<LoyaltyManager[]> {
+  const { data } = await api.get<{ managers: LoyaltyManager[] }>("/dashboard/loyalty", {
+    params,
+  });
+  return data.managers;
+}
+
 export type TaskStatus =
   | "todo_list"
   | "to_realize"

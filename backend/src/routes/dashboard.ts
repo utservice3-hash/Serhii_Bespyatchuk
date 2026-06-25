@@ -451,3 +451,99 @@ dashboardRouter.get("/personal", async (req, res) => {
     history,
   });
 });
+
+/**
+ * Loyal-client KPI per manager: a client is "loyal" if they have 3+ paid
+ * orders in the trailing 3-month window, and "at_risk" if they were loyal
+ * in the prior 3-month window but have dropped below that threshold now.
+ * Clients are identified by normalized `client_key` (legal-entity prefixes
+ * like ТОВ/ФОП stripped) so e.g. "Смартекс" and "ТОВ Смартекс" count as
+ * the same client.
+ */
+dashboardRouter.get("/loyalty", async (req, res) => {
+  const auth = req.auth!;
+  const asOf = (req.query.asOf as string) ?? new Date().toISOString().slice(0, 10);
+
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+
+  if (auth.role === "manager") {
+    managerId = auth.managerId;
+    teamId = null;
+  } else if (auth.role === "team_lead") {
+    teamId = auth.teamId;
+  }
+
+  const conditions: string[] = ["d.client_key IS NOT NULL"];
+  const params: unknown[] = [asOf];
+
+  if (managerId) {
+    params.push(managerId);
+    conditions.push(`d.manager_id = $${params.length}`);
+  }
+  if (teamId) {
+    params.push(teamId);
+    conditions.push(`m.team_id = $${params.length}`);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const result = await pool.query<{
+    manager_id: number;
+    manager_name: string;
+    client_key: string;
+    client_name: string;
+    current_count: string;
+    previous_count: string;
+  }>(
+    `SELECT d.manager_id,
+            m.name AS manager_name,
+            d.client_key,
+            (array_agg(d.client_name ORDER BY d.created_at_kommo DESC))[1] AS client_name,
+            COUNT(*) FILTER (
+              WHERE d.created_at_kommo >= $1::date - interval '3 months'
+                AND d.created_at_kommo < $1::date
+            ) AS current_count,
+            COUNT(*) FILTER (
+              WHERE d.created_at_kommo >= $1::date - interval '6 months'
+                AND d.created_at_kommo < $1::date - interval '3 months'
+            ) AS previous_count
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${where}
+       AND psm.funnel_stage = 'paid'
+       AND d.created_at_kommo >= $1::date - interval '6 months'
+       AND d.created_at_kommo < $1::date
+     GROUP BY d.manager_id, m.name, d.client_key`,
+    params
+  );
+
+  const byManager = new Map<
+    number,
+    { managerId: number; managerName: string; loyal: { clientKey: string; clientName: string; orders: number }[]; atRisk: { clientKey: string; clientName: string; orders: number }[] }
+  >();
+
+  for (const row of result.rows) {
+    const current = Number(row.current_count);
+    const previous = Number(row.previous_count);
+    let entry = byManager.get(row.manager_id);
+    if (!entry) {
+      entry = { managerId: row.manager_id, managerName: row.manager_name, loyal: [], atRisk: [] };
+      byManager.set(row.manager_id, entry);
+    }
+    if (current >= 3) {
+      entry.loyal.push({ clientKey: row.client_key, clientName: row.client_name, orders: current });
+    } else if (previous >= 3) {
+      entry.atRisk.push({ clientKey: row.client_key, clientName: row.client_name, orders: current });
+    }
+  }
+
+  const managers = Array.from(byManager.values()).map((entry) => ({
+    ...entry,
+    loyalCount: entry.loyal.length,
+    atRiskCount: entry.atRisk.length,
+  }));
+
+  res.json({ asOf, managers });
+});

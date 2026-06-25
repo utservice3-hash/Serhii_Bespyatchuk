@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
-import { fetchAllDeals, fetchUsers } from "../kommo/client.js";
+import { fetchAllDeals, fetchAllContacts, fetchAllCompanies, fetchUsers } from "../kommo/client.js";
+import { normalizeClientName } from "../utils/clientName.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -69,9 +70,11 @@ export async function syncKommo(): Promise<void> {
   const syncStartedAt = new Date();
   const windowStart = await getSyncWindowStart();
 
-  const [deals, managerCount] = await Promise.all([
+  const [deals, managerCount, contacts, companies] = await Promise.all([
     fetchAllDeals(windowStart),
     syncManagers(),
+    fetchAllContacts(),
+    fetchAllCompanies(),
   ]);
 
   const managerRows = await pool.query<{ id: number; kommo_user_id: string }>(
@@ -81,10 +84,17 @@ export async function syncKommo(): Promise<void> {
     managerRows.rows.map((row) => [Number(row.kommo_user_id), row.id])
   );
 
+  const contactNameById = new Map(contacts.map((c) => [c.id, c.name]));
+  const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
+
   const CONCURRENCY = 20;
   for (let i = 0; i < deals.length; i += CONCURRENCY) {
     const batch = deals.slice(i, i + CONCURRENCY);
-    await Promise.all(batch.map((deal) => upsertDeal(deal, managerIdByKommoUserId)));
+    await Promise.all(
+      batch.map((deal) =>
+        upsertDeal(deal, managerIdByKommoUserId, companyNameById, contactNameById)
+      )
+    );
   }
 
   await pool.query(
@@ -96,17 +106,44 @@ export async function syncKommo(): Promise<void> {
   console.log(`Synced ${managerCount} users and ${deals.length} deals.`);
 }
 
+function resolveClientName(
+  deal: Awaited<ReturnType<typeof fetchAllDeals>>[number],
+  companyNameById: Map<number, string>,
+  contactNameById: Map<number, string>
+): string | null {
+  const companies = deal._embedded?.companies ?? [];
+  const company = companies.find((c) => c.is_main) ?? companies[0];
+  if (company) {
+    const name = companyNameById.get(company.id);
+    if (name) return name;
+  }
+
+  const contacts = deal._embedded?.contacts ?? [];
+  const contact = contacts.find((c) => c.is_main) ?? contacts[0];
+  if (contact) {
+    const name = contactNameById.get(contact.id);
+    if (name) return name;
+  }
+
+  return null;
+}
+
 async function upsertDeal(
   deal: Awaited<ReturnType<typeof fetchAllDeals>>[number],
-  managerIdByKommoUserId: Map<number, number>
+  managerIdByKommoUserId: Map<number, number>,
+  companyNameById: Map<number, string>,
+  contactNameById: Map<number, string>
 ): Promise<void> {
   const managerId = managerIdByKommoUserId.get(deal.responsible_user_id) ?? null;
+  const clientName = resolveClientName(deal, companyNameById, contactNameById);
+  const clientKey = normalizeClientName(clientName);
 
   await pool.query(
     `INSERT INTO deals (
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
-         price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+         price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
+         client_name, client_key
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -115,7 +152,9 @@ async function upsertDeal(
          price = EXCLUDED.price,
          updated_at_kommo = EXCLUDED.updated_at_kommo,
          closed_at_kommo = EXCLUDED.closed_at_kommo,
-         synced_at = now()`,
+         synced_at = now(),
+         client_name = EXCLUDED.client_name,
+         client_key = EXCLUDED.client_key`,
       [
         deal.id,
         deal.name,
@@ -127,6 +166,8 @@ async function upsertDeal(
         toTimestamp(deal.created_at),
         toTimestamp(deal.updated_at),
         toTimestamp(deal.closed_at),
+        clientName,
+        clientKey,
       ]
     );
 }
