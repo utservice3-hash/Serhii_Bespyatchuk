@@ -13,6 +13,7 @@
     "create-user": "tsx src/db/createUser.ts",
     "sync": "tsx src/jobs/syncKommo.ts",
     "sync:users": "tsx src/jobs/syncUsersOnly.ts",
+    "backfill:client-keys": "tsx src/jobs/backfillClientKeys.ts",
     "bot": "tsx src/bot/index.ts"
   },
   "dependencies": {

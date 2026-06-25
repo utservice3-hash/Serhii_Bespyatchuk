@@ -59,12 +59,18 @@ async function fetchLeadsPage(page: number, limit: number, filter: string): Prom
 
 const PAGE_FETCH_CONCURRENCY = 3;
 
-export async function fetchAllDeals(updatedAfter?: number): Promise<KommoDeal[]> {
+export async function fetchAllDeals(
+  updatedAfter?: number,
+  createdAfter?: number
+): Promise<KommoDeal[]> {
   const deals: KommoDeal[] = [];
   const limit = 250;
-  const filter = updatedAfter
+  let filter = updatedAfter
     ? `&${encodeURIComponent("filter[updated_at][from]")}=${updatedAfter}`
     : "";
+  if (createdAfter) {
+    filter += `&${encodeURIComponent("filter[created_at][from]")}=${createdAfter}`;
+  }
 
   let page = 1;
   let exhausted = false;
@@ -103,9 +109,20 @@ export async function fetchUsers(): Promise<KommoUser[]> {
   return users.filter((user) => user.rights?.is_active);
 }
 
+interface KommoCustomFieldValue {
+  field_code: string | null;
+  values: { value: string }[];
+}
+
 export interface KommoContact {
   id: number;
   name: string;
+  custom_fields_values?: KommoCustomFieldValue[] | null;
+}
+
+export function extractPhone(contact: KommoContact): string | null {
+  const phoneField = contact.custom_fields_values?.find((f) => f.field_code === "PHONE");
+  return phoneField?.values?.[0]?.value ?? null;
 }
 
 async function fetchContactsPage(page: number, limit: number): Promise<KommoContact[]> {

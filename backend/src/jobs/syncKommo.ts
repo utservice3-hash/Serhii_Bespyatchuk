@@ -1,6 +1,12 @@
 import { pool } from "../db/pool.js";
-import { fetchAllDeals, fetchAllContacts, fetchAllCompanies, fetchUsers } from "../kommo/client.js";
-import { normalizeClientName } from "../utils/clientName.js";
+import {
+  extractPhone,
+  fetchAllDeals,
+  fetchAllContacts,
+  fetchAllCompanies,
+  fetchUsers,
+} from "../kommo/client.js";
+import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -84,16 +90,16 @@ export async function syncKommo(): Promise<void> {
     managerRows.rows.map((row) => [Number(row.kommo_user_id), row.id])
   );
 
-  const contactNameById = new Map(contacts.map((c) => [c.id, c.name]));
+  const contactById = new Map(
+    contacts.map((c) => [c.id, { name: c.name, phone: extractPhone(c) }])
+  );
   const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
 
   const CONCURRENCY = 20;
   for (let i = 0; i < deals.length; i += CONCURRENCY) {
     const batch = deals.slice(i, i + CONCURRENCY);
     await Promise.all(
-      batch.map((deal) =>
-        upsertDeal(deal, managerIdByKommoUserId, companyNameById, contactNameById)
-      )
+      batch.map((deal) => upsertDeal(deal, managerIdByKommoUserId, companyNameById, contactById))
     );
   }
 
@@ -106,37 +112,52 @@ export async function syncKommo(): Promise<void> {
   console.log(`Synced ${managerCount} users and ${deals.length} deals.`);
 }
 
-function resolveClientName(
+/**
+ * Resolves the actual client (not the carrier — Kommo leads in the
+ * "Перевозки" pipeline often have extra non-main contacts for the
+ * carrier/driver, which we ignore by only ever using the main
+ * company/contact) and a stable identity key for it. Companies are
+ * keyed by normalized name (e.g. "ТОВ Смартекс" == "Смартекс"). A bare
+ * contact (no company) whose name is a person (ПІБ, not a legal entity)
+ * is keyed by phone number instead, since personal names are not a
+ * reliable identity match across deals.
+ */
+function resolveClient(
   deal: Awaited<ReturnType<typeof fetchAllDeals>>[number],
   companyNameById: Map<number, string>,
-  contactNameById: Map<number, string>
-): string | null {
+  contactById: Map<number, { name: string; phone: string | null }>
+): { name: string | null; key: string | null } {
   const companies = deal._embedded?.companies ?? [];
   const company = companies.find((c) => c.is_main) ?? companies[0];
   if (company) {
     const name = companyNameById.get(company.id);
-    if (name) return name;
+    if (name) return { name, key: normalizeClientName(name) };
   }
 
   const contacts = deal._embedded?.contacts ?? [];
   const contact = contacts.find((c) => c.is_main) ?? contacts[0];
   if (contact) {
-    const name = contactNameById.get(contact.id);
-    if (name) return name;
+    const info = contactById.get(contact.id);
+    if (info?.name) {
+      if (isLegalEntityName(info.name)) {
+        return { name: info.name, key: normalizeClientName(info.name) };
+      }
+      const phoneKey = normalizePhone(info.phone);
+      return { name: info.name, key: phoneKey ?? normalizeClientName(info.name) };
+    }
   }
 
-  return null;
+  return { name: null, key: null };
 }
 
 async function upsertDeal(
   deal: Awaited<ReturnType<typeof fetchAllDeals>>[number],
   managerIdByKommoUserId: Map<number, number>,
   companyNameById: Map<number, string>,
-  contactNameById: Map<number, string>
+  contactById: Map<number, { name: string; phone: string | null }>
 ): Promise<void> {
   const managerId = managerIdByKommoUserId.get(deal.responsible_user_id) ?? null;
-  const clientName = resolveClientName(deal, companyNameById, contactNameById);
-  const clientKey = normalizeClientName(clientName);
+  const { name: clientName, key: clientKey } = resolveClient(deal, companyNameById, contactById);
 
   await pool.query(
     `INSERT INTO deals (
