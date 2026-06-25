@@ -15,7 +15,7 @@ export async function syncManagers(): Promise<number> {
     const result = await pool.query<{ id: number }>(
       `INSERT INTO teams (name, kommo_group_id)
        VALUES ($1, $2)
-       ON CONFLICT (kommo_group_id) DO UPDATE SET name = EXCLUDED.name
+       ON CONFLICT (name) DO UPDATE SET kommo_group_id = EXCLUDED.kommo_group_id
        RETURNING id`,
       [group.name, group.id]
     );
