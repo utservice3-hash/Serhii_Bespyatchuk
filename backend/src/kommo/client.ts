@@ -9,12 +9,24 @@ interface KommoListResponse<T> {
 const MAX_RETRIES = 5;
 
 async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
-  const res = await fetch(`${config.kommo.baseUrl}${path}`, {
-    headers: {
-      Authorization: `Bearer ${config.kommo.token}`,
-      "Content-Type": "application/json",
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${config.kommo.baseUrl}${path}`, {
+      headers: {
+        Authorization: `Bearer ${config.kommo.token}`,
+        "Content-Type": "application/json",
+      },
+    });
+  } catch (err) {
+    // Kommo occasionally drops the HTTP/2 connection mid-request; retry
+    // these transient network errors the same as a 429.
+    if (attempt < MAX_RETRIES) {
+      const delayMs = 1000 * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return kommoRequest<T>(path, attempt + 1);
+    }
+    throw err;
+  }
   if (res.status === 204) {
     return {} as T;
   }
