@@ -586,9 +586,12 @@ dashboardRouter.get("/receivables", async (req, res) => {
     client_key: string;
     client_name: string;
     amount: string;
+    limit_days: number | null;
+    overdue_days: number | null;
     synced_at: string;
   }>(
-    `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount, r.synced_at
+    `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount,
+            r.limit_days, r.overdue_days, r.synced_at
      FROM receivables r
      JOIN managers m ON m.id = r.manager_id
      ${where}
@@ -598,7 +601,18 @@ dashboardRouter.get("/receivables", async (req, res) => {
 
   const byManager = new Map<
     number,
-    { managerId: number; managerName: string; clients: { clientKey: string; clientName: string; amount: number }[]; total: number }
+    {
+      managerId: number;
+      managerName: string;
+      clients: {
+        clientKey: string;
+        clientName: string;
+        amount: number;
+        limitDays: number | null;
+        overdueDays: number | null;
+      }[];
+      total: number;
+    }
   >();
 
   let syncedAt: string | null = null;
@@ -610,7 +624,13 @@ dashboardRouter.get("/receivables", async (req, res) => {
       byManager.set(row.manager_id, entry);
     }
     const amount = Number(row.amount);
-    entry.clients.push({ clientKey: row.client_key, clientName: row.client_name, amount });
+    entry.clients.push({
+      clientKey: row.client_key,
+      clientName: row.client_name,
+      amount,
+      limitDays: row.limit_days,
+      overdueDays: row.overdue_days,
+    });
     entry.total += amount;
   }
 

@@ -102,8 +102,12 @@ CREATE TABLE IF NOT EXISTS receivables (
   manager_id INTEGER REFERENCES managers(id),
   manager_name_raw TEXT,
   amount NUMERIC NOT NULL DEFAULT 0,
+  limit_days INTEGER,
+  overdue_days INTEGER,
   synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_receivables_manager ON receivables(manager_id);
 CREATE INDEX IF NOT EXISTS idx_receivables_client_key ON receivables(client_key);
+ALTER TABLE receivables ADD COLUMN IF NOT EXISTS limit_days INTEGER;
+ALTER TABLE receivables ADD COLUMN IF NOT EXISTS overdue_days INTEGER;

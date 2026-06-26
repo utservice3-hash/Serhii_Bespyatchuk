@@ -159,6 +159,8 @@ export interface ReceivableClient {
   clientKey: string;
   clientName: string;
   amount: number;
+  limitDays: number | null;
+  overdueDays: number | null;
 }
 
 export interface ReceivableManager {

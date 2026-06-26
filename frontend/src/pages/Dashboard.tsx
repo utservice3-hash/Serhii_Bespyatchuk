@@ -715,6 +715,8 @@ export function Dashboard() {
                       <tr>
                         <th>Клієнт</th>
                         <th>Заборгованість</th>
+                        <th>Лімит днів</th>
+                        <th>Макс днів</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -722,6 +724,16 @@ export function Dashboard() {
                         <tr key={c.clientKey}>
                           <td>{c.clientName}</td>
                           <td>{formatAmount(c.amount)}</td>
+                          <td>{c.limitDays ?? "—"}</td>
+                          <td
+                            style={
+                              c.overdueDays != null && c.limitDays != null && c.overdueDays > c.limitDays
+                                ? { color: "#dc2626", fontWeight: 600 }
+                                : undefined
+                            }
+                          >
+                            {c.overdueDays ?? "—"}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

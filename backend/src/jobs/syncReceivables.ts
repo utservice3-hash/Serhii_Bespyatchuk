@@ -31,8 +31,61 @@ function parseRow(cells: string[]): ReceivableRow | null {
   return { clientKey, clientName: rawClientName, managerNameRaw, amount };
 }
 
+interface ClientLimit {
+  limitDays: number | null;
+  overdueDays: number | null;
+  amount: number;
+}
+
+/**
+ * "Лист20" tab: per-client agreed payment term ("Лимит дней") and how many
+ * days the balance is currently overdue ("Макс дней"). Columns: 0 Контрагент,
+ * 1 Менеджер, 2 Сумма, 3 Лимит компании, 4 Сумма (formatted), 5 Лимит дней,
+ * 6 Макс дней, 7 Тим лид, 8 Примітка юриста. A client can repeat across rows
+ * (one per invoice); we keep the figures from the row with the largest amount.
+ */
+function parseLimitRow(cells: string[]): { clientKey: string; limit: ClientLimit } | null {
+  const rawClientName = cells[0]?.trim();
+  if (!rawClientName) return null;
+  const clientKey = normalizeClientName(rawClientName);
+  if (!clientKey) return null;
+
+  const amount = Number(cells[2]?.replace(/[^\d.-]/g, "")) || 0;
+  const limitDays = cells[5]?.trim() ? Number(cells[5]) : null;
+  const overdueDays = cells[6]?.trim() ? Number(cells[6]) : null;
+
+  return {
+    clientKey,
+    limit: {
+      limitDays: Number.isFinite(limitDays) ? limitDays : null,
+      overdueDays: Number.isFinite(overdueDays) ? overdueDays : null,
+      amount,
+    },
+  };
+}
+
+async function fetchClientLimits(): Promise<Map<string, ClientLimit>> {
+  const res = await fetch(config.receivablesLimitsSheetUrl);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch receivables limits sheet: ${res.status}`);
+  }
+  const csvText = await res.text();
+  const limitsByKey = new Map<string, ClientLimit>();
+
+  for (const cells of parseCsv(csvText)) {
+    const parsed = parseLimitRow(cells);
+    if (!parsed) continue;
+    const existing = limitsByKey.get(parsed.clientKey);
+    if (!existing || parsed.limit.amount > existing.amount) {
+      limitsByKey.set(parsed.clientKey, parsed.limit);
+    }
+  }
+
+  return limitsByKey;
+}
+
 export async function syncReceivables(): Promise<void> {
-  const res = await fetch(config.receivablesSheetUrl);
+  const [res, limitsByKey] = await Promise.all([fetch(config.receivablesSheetUrl), fetchClientLimits()]);
   if (!res.ok) {
     throw new Error(`Failed to fetch receivables sheet: ${res.status}`);
   }
@@ -71,10 +124,19 @@ export async function syncReceivables(): Promise<void> {
     await client.query("TRUNCATE receivables");
     for (const [key, entry] of totalsByKey) {
       const clientKey = key.split("::")[0];
+      const limit = limitsByKey.get(clientKey);
       await client.query(
-        `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [clientKey, entry.clientName, entry.managerId, entry.managerNameRaw, entry.amount]
+        `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          clientKey,
+          entry.clientName,
+          entry.managerId,
+          entry.managerNameRaw,
+          entry.amount,
+          limit?.limitDays ?? null,
+          limit?.overdueDays ?? null,
+        ]
       );
     }
     await client.query("COMMIT");

@@ -22,4 +22,7 @@ export const config = {
   receivablesSheetUrl:
     process.env.RECEIVABLES_SHEET_URL ??
     "https://docs.google.com/spreadsheets/d/1FTHbWRYFa_rWNsF4GvwZrf_fL5Vj5zf4ihBRv3LZw2s/export?format=csv&gid=0",
+  receivablesLimitsSheetUrl:
+    process.env.RECEIVABLES_LIMITS_SHEET_URL ??
+    "https://docs.google.com/spreadsheets/d/1FTHbWRYFa_rWNsF4GvwZrf_fL5Vj5zf4ihBRv3LZw2s/export?format=csv&gid=1649291567",
 };
