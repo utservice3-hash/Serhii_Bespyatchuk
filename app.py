@@ -41,8 +41,71 @@ app = Flask(__name__)
 QUAL_PIPELINE_ID = 8921928
 NEW_FROM_LIDOGEN = 69716164   # "НОВА ЗАЯВКА ВІД ЛІДОГЕНЕРАТОРА"
 TAKEN_TO_WORK = 69693652      # "Лід взятий у роботу"
+DZVINKY_Z_SAITU = 69693660    # "Дзвінки з сайту"
 NON_TARGET_STATUS = 143       # "Не цільові"
 REMINDER_MINUTES = 20
+
+# Telegram-група "[Euro Logistic] - Дошка оголошень" — сюди прилітають заявки
+# із сайту eLogist (через бота Trans_NowBot), їх треба автоматично заводити
+# в Kommo на етапі "Дзвінки з сайту".
+ELOGIST_SOURCE_CHAT_ID = -1002141432610
+ELOGIST_TAG = "eLogist"
+ELOGIST_DEDUP_MINUTES = 30
+_elogist_recent_phones: dict[str, datetime] = {}
+
+
+def _parse_elogist_message(text: str) -> dict | None:
+    """Парсить повідомлення eLogist (два відомі формати) і повертає
+    {"phone", "route"} або None, якщо не вдалось знайти телефон."""
+    if not text or "elogist" not in text.lower():
+        return None
+
+    phone_match = re.search(r"\+?3?8?0\s*\(?\d{2,3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}", text)
+    if not phone_match:
+        return None
+    phone_digits = re.sub(r"\D", "", phone_match.group())
+    if not phone_digits.startswith("380"):
+        phone_digits = "380" + phone_digits[-9:]
+    phone = "+" + phone_digits
+
+    route = ""
+    route_match = re.match(r"eLogist:\s*(.+?)\n", text)
+    if route_match and "дзвінок з сайту" not in route_match.group(1).lower():
+        route = route_match.group(1).strip().replace("  ", " ")
+
+    return {"phone": phone, "route": route}
+
+
+def _handle_elogist_message(text: str):
+    parsed = _parse_elogist_message(text)
+    if not parsed:
+        logger.info("eLogist message did not contain a recognizable phone: %s", text[:80])
+        return
+
+    phone = parsed["phone"]
+    now = datetime.now(timezone.utc)
+    last_seen = _elogist_recent_phones.get(phone)
+    if last_seen and (now - last_seen).total_seconds() < ELOGIST_DEDUP_MINUTES * 60:
+        logger.info("Skipped duplicate eLogist lead for phone %s", phone)
+        return
+    _elogist_recent_phones[phone] = now
+    if len(_elogist_recent_phones) > 500:
+        cutoff = now - timedelta(minutes=ELOGIST_DEDUP_MINUTES)
+        for k in [k for k, v in _elogist_recent_phones.items() if v < cutoff]:
+            _elogist_recent_phones.pop(k, None)
+
+    name = f"eLogist — {parsed['route']}" if parsed["route"] else f"eLogist — {phone}"
+    lead_id = kommo.create_lead_with_phone(
+        name=name,
+        phone=phone,
+        pipeline_id=QUAL_PIPELINE_ID,
+        status_id=DZVINKY_Z_SAITU,
+        tag_name=ELOGIST_TAG,
+    )
+    if lead_id:
+        logger.info("Created eLogist lead %s for phone %s", lead_id, phone)
+    else:
+        logger.error("Failed to create eLogist lead for phone %s", phone)
 
 PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
 CLOSED_NOT_REALIZED = 143        # ЗАКРИТО І НЕ РЕАЛІЗОВАНО
@@ -1965,6 +2028,11 @@ def tg_update():
         text = (message.get("text") or "").strip()
         if text in ("/mystats", "/моястатистика", "/start"):
             notifier.send_personal_stats_buttons(message["chat"]["id"], message["message_id"])
+        return jsonify({"ok": True})
+
+    if message and message.get("chat", {}).get("id") == ELOGIST_SOURCE_CHAT_ID:
+        text = message.get("text") or ""
+        threading.Thread(target=_handle_elogist_message, args=(text,), daemon=True).start()
         return jsonify({"ok": True})
 
     callback = data.get("callback_query")

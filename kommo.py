@@ -735,3 +735,71 @@ def get_lidogen_stats(days: int = 1) -> dict[int, int]:
         logger.error("get_lidogen_stats: %s", ex)
 
     return counts
+
+
+def _create_contact_with_phone(name: str, phone: str) -> int | None:
+    """Створює контакт з телефоном. Kommo API не дозволяє створювати новий
+    контакт inline всередині запиту на створення ліда (вимагає вже існуючий
+    contact_id) — тому контакт створюється окремим запитом наперед."""
+    try:
+        resp = requests.post(
+            f"{KOMMO_BASE}/api/v4/contacts",
+            headers=HEADERS,
+            json=[{
+                "name": name,
+                "custom_fields_values": [
+                    {
+                        "field_code": "PHONE",
+                        "values": [{"value": phone, "enum_code": "WORK"}],
+                    }
+                ],
+            }],
+            timeout=15,
+        )
+        if not resp.ok:
+            logger.error("_create_contact_with_phone: %s %s", resp.status_code, resp.text)
+            return None
+        contacts = resp.json().get("_embedded", {}).get("contacts", [])
+        return contacts[0]["id"] if contacts else None
+    except Exception as e:
+        logger.error("_create_contact_with_phone: %s", e)
+        return None
+
+
+def create_lead_with_phone(
+    name: str,
+    phone: str,
+    pipeline_id: int,
+    status_id: int,
+    tag_name: str = "",
+) -> int | None:
+    """Створює лід з прив'язаним контактом (телефон) і тегом (якщо вказано).
+    Повертає lead_id або None, якщо створення не вдалось."""
+    contact_id = _create_contact_with_phone(name, phone)
+    if not contact_id:
+        return None
+
+    lead_payload = {
+        "name": name,
+        "pipeline_id": pipeline_id,
+        "status_id": status_id,
+        "_embedded": {"contacts": [{"id": contact_id}]},
+    }
+    if tag_name:
+        lead_payload["_embedded"]["tags"] = [{"name": tag_name}]
+
+    try:
+        resp = requests.post(
+            f"{KOMMO_BASE}/api/v4/leads",
+            headers=HEADERS,
+            json=[lead_payload],
+            timeout=15,
+        )
+        if not resp.ok:
+            logger.error("create_lead_with_phone: %s %s", resp.status_code, resp.text)
+            return None
+        leads = resp.json().get("_embedded", {}).get("leads", [])
+        return leads[0]["id"] if leads else None
+    except Exception as e:
+        logger.error("create_lead_with_phone: %s", e)
+        return None
