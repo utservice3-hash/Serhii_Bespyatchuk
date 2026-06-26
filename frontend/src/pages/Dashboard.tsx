@@ -19,6 +19,7 @@ import {
   fetchManagerBreakdown,
   fetchManagerOptions,
   fetchPersonalDashboard,
+  fetchReceivables,
   fetchTasks,
   fetchTeams,
   fetchTimeseries,
@@ -28,6 +29,7 @@ import {
   type ManagerBreakdown,
   type ManagerOption,
   type PersonalDashboard,
+  type ReceivableManager,
   type Task,
   type TaskPriority,
   type TaskStatus,
@@ -162,6 +164,11 @@ export function Dashboard() {
   const [loyaltyData, setLoyaltyData] = useState<LoyaltyManager[]>([]);
   const [loyaltyLoading, setLoyaltyLoading] = useState(false);
 
+  const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
+  const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
+  const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
+  const [receivablesLoading, setReceivablesLoading] = useState(false);
+
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
@@ -244,6 +251,20 @@ export function Dashboard() {
       .catch(() => setLoyaltyData([]))
       .finally(() => setLoyaltyLoading(false));
   }, [section, loyaltyTeamId, teams, auth]);
+
+  useEffect(() => {
+    if (section !== "receivables") return;
+    const teamIdToUse = auth?.role === "manager" ? undefined : receivablesTeamId || teams[0]?.id;
+    const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
+    setReceivablesLoading(true);
+    fetchReceivables({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
+      .then(({ syncedAt, managers }) => {
+        setReceivablesData(managers);
+        setReceivablesSyncedAt(syncedAt);
+      })
+      .catch(() => setReceivablesData([]))
+      .finally(() => setReceivablesLoading(false));
+  }, [section, receivablesTeamId, teams, auth]);
 
   useEffect(() => {
     setLoading(true);
@@ -642,6 +663,69 @@ export function Dashboard() {
                       </tbody>
                     </table>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {section === "receivables" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Дебіторська заборгованість</h1>
+            <div className="page-filters">
+              {auth?.role !== "manager" && (
+                <select
+                  value={receivablesTeamId}
+                  onChange={(e) => setReceivablesTeamId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  {teams.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {receivablesSyncedAt && (
+                <span className="loading-text" style={{ fontSize: 12 }}>
+                  Оновлено: {new Date(receivablesSyncedAt).toLocaleString("uk-UA")}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {receivablesLoading ? (
+            <p className="loading-text">Завантаження...</p>
+          ) : receivablesData.length === 0 ? (
+            <p className="loading-text">Немає даних.</p>
+          ) : (
+            <div className="chart-grid">
+              {receivablesData.map((m) => (
+                <div className="chart-card" key={m.managerId}>
+                  <h2 className="chart-title">{m.managerName}</h2>
+                  <div className="kpi-grid">
+                    <div className="kpi-card">
+                      <span className="kpi-label">Загальний борг</span>
+                      <span className="kpi-value">{formatAmount(m.total)}</span>
+                    </div>
+                  </div>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Клієнт</th>
+                        <th>Заборгованість</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {m.clients.map((c) => (
+                        <tr key={c.clientKey}>
+                          <td>{c.clientName}</td>
+                          <td>{formatAmount(c.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               ))}
             </div>

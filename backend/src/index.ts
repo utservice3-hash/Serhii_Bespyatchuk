@@ -8,6 +8,7 @@ import { plansRouter } from "./routes/plans.js";
 import { teamsRouter } from "./routes/teams.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
+import { syncReceivables } from "./jobs/syncReceivables.js";
 
 const app = express();
 app.use(cors());
@@ -25,6 +26,12 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 cron.schedule("*/15 * * * *", () => {
   syncKommo().catch((err) => console.error("Kommo sync failed:", err));
 });
+
+// Refresh receivables from the accounting Google Sheet every 30 minutes.
+cron.schedule("*/30 * * * *", () => {
+  syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
+});
+syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
 
 app.listen(config.port, () => {
   console.log(`Backend listening on port ${config.port}`);

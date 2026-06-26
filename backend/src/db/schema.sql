@@ -94,3 +94,16 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
+
+CREATE TABLE IF NOT EXISTS receivables (
+  id SERIAL PRIMARY KEY,
+  client_key TEXT NOT NULL,
+  client_name TEXT NOT NULL,
+  manager_id INTEGER REFERENCES managers(id),
+  manager_name_raw TEXT,
+  amount NUMERIC NOT NULL DEFAULT 0,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_receivables_manager ON receivables(manager_id);
+CREATE INDEX IF NOT EXISTS idx_receivables_client_key ON receivables(client_key);

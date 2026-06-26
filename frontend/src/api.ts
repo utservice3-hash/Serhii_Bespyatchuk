@@ -155,6 +155,30 @@ export async function fetchLoyalty(params: {
   return data.managers;
 }
 
+export interface ReceivableClient {
+  clientKey: string;
+  clientName: string;
+  amount: number;
+}
+
+export interface ReceivableManager {
+  managerId: number;
+  managerName: string;
+  clients: ReceivableClient[];
+  total: number;
+}
+
+export async function fetchReceivables(params: {
+  managerId?: number;
+  teamId?: number;
+}): Promise<{ syncedAt: string | null; managers: ReceivableManager[] }> {
+  const { data } = await api.get<{ syncedAt: string | null; managers: ReceivableManager[] }>(
+    "/dashboard/receivables",
+    { params }
+  );
+  return data;
+}
+
 export type TaskStatus =
   | "todo_list"
   | "to_realize"

@@ -19,4 +19,7 @@ export const config = {
     baseUrl: required("KOMMO_BASE_URL"),
     token: required("KOMMO_API_TOKEN"),
   },
+  receivablesSheetUrl:
+    process.env.RECEIVABLES_SHEET_URL ??
+    "https://docs.google.com/spreadsheets/d/1FTHbWRYFa_rWNsF4GvwZrf_fL5Vj5zf4ihBRv3LZw2s/export?format=csv&gid=0",
 };
