@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
+import { CommandPalette } from "./CommandPalette";
 
 export const NAV_ITEMS = [
   { key: "overview", label: "Огляд", icon: "📊" },
@@ -31,6 +32,12 @@ export function Layout({
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1"
   );
+  const [theme, setTheme] = useState(() => localStorage.getItem("theme") ?? "light");
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
 
   function toggleCollapsed() {
     setCollapsed((c) => {
@@ -78,6 +85,52 @@ export function Layout({
         </button>
       </aside>
       <main className="main-content">
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 10,
+            marginBottom: 12,
+          }}
+        >
+          <button
+            onClick={() =>
+              window.dispatchEvent(
+                new KeyboardEvent("keydown", { key: "k", ctrlKey: true })
+              )
+            }
+            title="Пошук (Ctrl+K)"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 12px",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              background: "var(--card-bg)",
+              color: "var(--text-muted)",
+              fontSize: 13,
+            }}
+          >
+            🔍 Пошук <span style={{ opacity: 0.6 }}>Ctrl K</span>
+          </button>
+          <button
+            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+            title="Змінити тему"
+            style={{
+              padding: "6px 10px",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              background: "var(--card-bg)",
+              color: "var(--text)",
+              fontSize: 15,
+            }}
+          >
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
+        </div>
+        <CommandPalette onSelect={onSelect} />
         {onBack && (
           <button
             className="back-button"
