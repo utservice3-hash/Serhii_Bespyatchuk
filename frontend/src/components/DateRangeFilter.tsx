@@ -10,7 +10,7 @@ interface DateRangeFilterProps {
   onChange: (range: DateRange) => void;
 }
 
-function getDateRange(preset: string): DateRange {
+export function getDateRange(preset: string): DateRange {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -51,12 +51,61 @@ function getDateRange(preset: string): DateRange {
     case "year":
       from.setFullYear(from.getFullYear() - 1);
       break;
+    case "alltime":
+      return { from: "", to: "" };
   }
 
   return {
     from: from.toISOString().split("T")[0],
     to: to.toISOString().split("T")[0],
   };
+}
+
+/** Compact, always-visible quick period buttons (not hidden in a dropdown). */
+export const QUICK_PERIODS = [
+  { id: "today", label: "Сьогодні" },
+  { id: "yesterday", label: "Вчора" },
+  { id: "thisWeek", label: "Поточний тиждень" },
+  { id: "lastWeek", label: "Минулий тиждень" },
+  { id: "thisMonth", label: "Поточний місяць" },
+  { id: "lastMonth", label: "Минулий місяць" },
+  { id: "quarter", label: "Квартал" },
+  { id: "year", label: "Рік" },
+  { id: "alltime", label: "Весь час" },
+];
+
+export function QuickPeriods({
+  active,
+  onSelect,
+}: {
+  active: string | null;
+  onSelect: (id: string, range: DateRange) => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+      {QUICK_PERIODS.map((p) => {
+        const isActive = active === p.id;
+        return (
+          <button
+            key={p.id}
+            onClick={() => onSelect(p.id, getDateRange(p.id))}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 16,
+              border: `1px solid ${isActive ? "#c5141c" : "#d0d5dd"}`,
+              background: isActive ? "#c5141c" : "#fff",
+              color: isActive ? "#fff" : "#344054",
+              cursor: "pointer",
+              fontSize: 13,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 const PRESETS = [

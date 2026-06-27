@@ -40,7 +40,7 @@ import {
   type Team,
 } from "../api";
 import { Layout, type NavKey } from "../components/Layout";
-import { DateRangeFilter } from "../components/DateRangeFilter";
+import { DateRangeFilter, QuickPeriods } from "../components/DateRangeFilter";
 import { getAuthPayload } from "../auth";
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -151,6 +151,7 @@ export function Dashboard() {
   const [teamId, setTeamId] = useState<number | "">("");
   const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
+  const [datePreset, setDatePreset] = useState<string | null>("alltime");
   const [conversionChannels, setConversionChannels] = useState<ConversionChannel[]>([]);
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
@@ -401,9 +402,23 @@ export function Dashboard() {
                 <option value="month">По місяцях</option>
               </select>
 
-              <DateRangeFilter value={dateRange} onChange={setDateRange} />
+              <DateRangeFilter
+                value={dateRange}
+                onChange={(r) => {
+                  setDateRange(r);
+                  setDatePreset(null);
+                }}
+              />
             </div>
           </div>
+
+          <QuickPeriods
+            active={datePreset}
+            onSelect={(id, range) => {
+              setDatePreset(id);
+              setDateRange(range);
+            }}
+          />
 
           <div className="kpi-grid">
             {kpis.map((kpi) => (
