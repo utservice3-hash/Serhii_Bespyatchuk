@@ -2,22 +2,45 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { CommandPalette } from "./CommandPalette";
+// NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
-export const NAV_ITEMS = [
-  { key: "overview", label: "Огляд", icon: "📊" },
-  { key: "statistics", label: "Статистика", icon: "📈" },
-  { key: "teams", label: "Команди", icon: "👥" },
-  { key: "managers", label: "Менеджери", icon: "🧑‍💼" },
-  { key: "loyalty", label: "Постійні клієнти", icon: "🔁" },
-  { key: "receivables", label: "Дебіторська заборгованість", icon: "💰" },
-  { key: "leadgen", label: "Лідогенерація", icon: "🎯" },
-  { key: "tasks", label: "Задачник", icon: "📝" },
-  { key: "training", label: "Навчання", icon: "📚" },
-  { key: "messenger", label: "Месенджер", icon: "💬" },
-  { key: "settings", label: "Налаштування", icon: "⚙️" },
+export const NAV_GROUPS = [
+  {
+    label: "Аналітика",
+    items: [
+      { key: "overview", label: "Огляд", icon: "📊" },
+      { key: "statistics", label: "Статистика", icon: "📈" },
+      { key: "teams", label: "Команди", icon: "👥" },
+      { key: "managers", label: "Менеджери", icon: "🧑‍💼" },
+    ],
+  },
+  {
+    label: "Клієнти",
+    items: [
+      { key: "loyalty", label: "Постійні клієнти", icon: "🔁" },
+      { key: "receivables", label: "Дебіторська заборгованість", icon: "💰" },
+      { key: "leadgen", label: "Лідогенерація", icon: "🎯" },
+    ],
+  },
+  {
+    label: "Робота",
+    items: [
+      { key: "tasks", label: "Задачник", icon: "📝" },
+      { key: "messenger", label: "Месенджер", icon: "💬" },
+      { key: "training", label: "Навчання", icon: "📚" },
+    ],
+  },
+  {
+    label: "Система",
+    items: [{ key: "settings", label: "Налаштування", icon: "⚙️" }],
+  },
 ] as const;
 
-export type NavKey = (typeof NAV_ITEMS)[number]["key"];
+export type NavKey = (typeof NAV_GROUPS)[number]["items"][number]["key"];
+
+export const NAV_ITEMS: { key: NavKey; label: string; icon: string }[] = NAV_GROUPS.flatMap(
+  (g) => g.items as readonly { key: NavKey; label: string; icon: string }[]
+);
 
 export function Layout({
   children,
@@ -70,16 +93,34 @@ export function Layout({
           {!collapsed && "Згорнути"}
         </button>
         <nav className="sidebar-nav">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
-              onClick={() => onSelect(item.key)}
-              title={item.label}
-            >
-              <span className="sidebar-nav-icon">{item.icon}</span>
-              {!collapsed && item.label}
-            </button>
+          {NAV_GROUPS.map((group) => (
+            <div key={group.label} style={{ marginBottom: 8 }}>
+              {!collapsed && (
+                <div
+                  style={{
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.5,
+                    opacity: 0.45,
+                    padding: "10px 16px 4px",
+                  }}
+                >
+                  {group.label}
+                </div>
+              )}
+              {collapsed && <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "6px 12px" }} />}
+              {group.items.map((item) => (
+                <button
+                  key={item.key}
+                  className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
+                  onClick={() => onSelect(item.key)}
+                  title={item.label}
+                >
+                  <span className="sidebar-nav-icon">{item.icon}</span>
+                  {!collapsed && item.label}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
         <button className="sidebar-logout" onClick={logout} title="Вийти">
