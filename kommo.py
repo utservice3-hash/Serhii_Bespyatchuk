@@ -72,6 +72,23 @@ AD_CAMPAIGN_FIELD_IDS = (
     2098327,  # TRAF_SRC
 )
 
+QUAL_PIPELINE_ID = 8921928
+PEREVOZY_PIPELINE_ID = 8921932
+
+# Назви етапів воронки Кваліфікація
+QUAL_STATUSES = {
+    69693648: "Неразобранное",
+    69693652: "Лід взятий у роботу",
+    69693656: "Дзвінки",
+    69693660: "Дзвінки з сайту",
+    69716160: "Дзвінок по пропущеному (реклама)",
+    69716164: "НОВА ЗАЯВКА ВІД ЛІДОГЕНЕРАТОРА",
+    69738660: "Реактивовано",
+    70419108: "Дзвінки на мобільні",
+    142: "КВАЛІФІКОВАНО / Успіх",
+    143: "Не цільові",
+}
+
 # Назви етапів воронки Перевозки
 PEREVOZY_STATUSES = {
     69693664: "Incoming leads",
@@ -107,10 +124,12 @@ def get_lead(lead_id: int) -> dict | None:
     return None
 
 
-def get_lead_details(lead_id: int) -> dict:
+def get_lead_details(lead_id: int, old_status_id: int = 0, pipeline_id: int = 0) -> dict:
     """
     Returns enriched lead info for closed-not-realized notification:
-    name, created_at, reject_reason, last_status_name, notes_count, calls_count
+    name, created_at, reject_reason, last_status_name, notes_count, calls_count.
+    If old_status_id and pipeline_id are provided, uses them to find the previous status.
+    Otherwise falls back to current status (for testing).
     """
     from datetime import datetime, timezone
 
@@ -138,8 +157,13 @@ def get_lead_details(lead_id: int) -> dict:
             if created_at:
                 days = (datetime.now(timezone.utc).timestamp() - created_at) / 86400
                 result["days_in_work"] = int(days)
-            old_status_id = lead.get("status_id", 0)
-            result["last_status"] = PEREVOZY_STATUSES.get(old_status_id, "")
+
+            if old_status_id and pipeline_id == PEREVOZY_PIPELINE_ID:
+                result["last_status"] = PEREVOZY_STATUSES.get(old_status_id, "")
+            elif old_status_id and pipeline_id == QUAL_PIPELINE_ID:
+                result["last_status"] = QUAL_STATUSES.get(old_status_id, "")
+            else:
+                result["last_status"] = PEREVOZY_STATUSES.get(lead.get("status_id", 0), "")
 
             for cf in lead.get("custom_fields_values") or []:
                 if cf.get("field_id") == REJECT_REASON_FIELD_ID:

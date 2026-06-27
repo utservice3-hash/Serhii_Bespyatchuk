@@ -1504,7 +1504,7 @@ def _process_status_change(item: dict):
             # не отримували сповіщень про "Закрито і не реалізовано" взагалі.
             threading.Thread(
                 target=_handle_closed_not_realized,
-                args=(lead_id, responsible_id),
+                args=(lead_id, responsible_id, old_status_id, pipeline_id),
                 daemon=True,
             ).start()
         elif status_id == WON_STATUS_ID:
@@ -1635,8 +1635,8 @@ def _handle_unassigned(lead_id: int, status_id: int):
     logger.info("Unassigned lead %s in status %s", lead_id, status_name)
 
 
-def _handle_closed_not_realized(lead_id: int, responsible_id: int):
-    details = kommo.get_lead_details(lead_id)
+def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id: int = 0, pipeline_id: int = 0):
+    details = kommo.get_lead_details(lead_id, old_status_id, pipeline_id)
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
     tg_tag = notifier.get_manager_tag(responsible_id)
     supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
