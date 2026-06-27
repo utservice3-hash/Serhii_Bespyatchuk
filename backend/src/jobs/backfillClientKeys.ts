@@ -38,7 +38,17 @@ function resolveClientKey(
 }
 
 export async function backfillClientKeys(): Promise<void> {
-  const yearStart = Math.floor(new Date(new Date().getFullYear(), 0, 1).getTime() / 1000);
+  // Default to the start of the current year, but allow a wider window so the
+  // full deal history can be keyed (needed for repeat-client segmentation).
+  // `--all` keys every deal ever; `--since=YYYY` starts from that year.
+  const sinceArg = process.argv.find((a) => a.startsWith("--since="));
+  const allTime = process.argv.includes("--all");
+  const startYear = sinceArg
+    ? Number(sinceArg.split("=")[1])
+    : new Date().getFullYear();
+  const yearStart = allTime
+    ? 0
+    : Math.floor(new Date(startYear, 0, 1).getTime() / 1000);
 
   const [deals, contacts, companies] = await Promise.all([
     fetchAllDeals(undefined, yearStart),
