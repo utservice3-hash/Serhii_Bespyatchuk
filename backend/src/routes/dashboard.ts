@@ -108,6 +108,7 @@ dashboardRouter.get("/leadgen", async (req, res) => {
   const result = await pool.query<{
     manager_id: number;
     manager_name: string;
+    team_name: string;
     client_source: string;
     leads: string;
     reached_paid: string;
@@ -120,13 +121,15 @@ dashboardRouter.get("/leadgen", async (req, res) => {
      )
      SELECT d.manager_id,
             m.name AS manager_name,
+            COALESCE(t.name, 'Без команди') AS team_name,
             COALESCE(NULLIF(d.client_source, ''), 'Не вказано') AS client_source,
             COUNT(*) AS leads,
             COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS reached_paid
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
+     LEFT JOIN teams t ON t.id = m.team_id
      ${where}
-     GROUP BY d.manager_id, m.name, COALESCE(NULLIF(d.client_source, ''), 'Не вказано')`,
+     GROUP BY d.manager_id, m.name, t.name, COALESCE(NULLIF(d.client_source, ''), 'Не вказано')`,
     params
   );
 
@@ -135,6 +138,7 @@ dashboardRouter.get("/leadgen", async (req, res) => {
     {
       managerId: number;
       managerName: string;
+      teamName: string;
       leads: number;
       reachedPaid: number;
       bySource: { source: string; leads: number; reachedPaid: number; conversion: number }[];
@@ -149,6 +153,7 @@ dashboardRouter.get("/leadgen", async (req, res) => {
       entry = {
         managerId: row.manager_id,
         managerName: row.manager_name,
+        teamName: row.team_name,
         leads: 0,
         reachedPaid: 0,
         bySource: [],
@@ -165,7 +170,7 @@ dashboardRouter.get("/leadgen", async (req, res) => {
     });
   }
 
-  const generators = Array.from(byManager.values())
+  const allGenerators = Array.from(byManager.values())
     .map((g) => ({
       ...g,
       conversion: g.leads > 0 ? Math.round((g.reachedPaid / g.leads) * 100) : 0,
@@ -173,7 +178,25 @@ dashboardRouter.get("/leadgen", async (req, res) => {
     }))
     .sort((a, b) => b.leads - a.leads);
 
-  res.json({ generators });
+  // Group by team so lead-gen teams are clearly separated from the commercial
+  // department people who merely touched a Продзвін/Реактивація deal.
+  const teamsMap = new Map<string, typeof allGenerators>();
+  for (const g of allGenerators) {
+    if (!teamsMap.has(g.teamName)) teamsMap.set(g.teamName, []);
+    teamsMap.get(g.teamName)!.push(g);
+  }
+  const isLeadgenTeam = (name: string) => /лідоген|лидоген/i.test(name);
+  const groups = Array.from(teamsMap.entries())
+    .map(([teamName, gens]) => ({
+      teamName,
+      isLeadgen: isLeadgenTeam(teamName),
+      leads: gens.reduce((s, g) => s + g.leads, 0),
+      reachedPaid: gens.reduce((s, g) => s + g.reachedPaid, 0),
+      generators: gens,
+    }))
+    .sort((a, b) => Number(b.isLeadgen) - Number(a.isLeadgen) || b.leads - a.leads);
+
+  res.json({ generators: allGenerators, groups });
 });
 
 /**

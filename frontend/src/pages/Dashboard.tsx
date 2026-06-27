@@ -45,7 +45,7 @@ import {
   type PersonalDashboard,
   type ConversionChannel,
   type ExecutiveOverview,
-  type LeadGenerator,
+  type LeadgenGroup,
   type LoyaltyDynamics,
   type AppSettings,
   type DashboardUser,
@@ -209,7 +209,7 @@ export function Dashboard() {
   const [receivablesLoading, setReceivablesLoading] = useState(false);
 
   const [leadgenTeamId, setLeadgenTeamId] = useState<number | "">("");
-  const [leadgenData, setLeadgenData] = useState<LeadGenerator[]>([]);
+  const [leadgenData, setLeadgenData] = useState<LeadgenGroup[]>([]);
   const [leadgenLoading, setLeadgenLoading] = useState(false);
 
   const [settingsForm, setSettingsForm] = useState<AppSettings | null>(null);
@@ -1311,47 +1311,69 @@ export function Dashboard() {
           ) : leadgenData.length === 0 ? (
             <p className="loading-text">Немає даних.</p>
           ) : (
-            <div className="chart-grid">
-              {leadgenData.map((g) => (
-                <div className="chart-card" key={g.managerId}>
-                  <h2 className="chart-title">{g.managerName}</h2>
-                  <div className="kpi-grid">
-                    <div className="kpi-card">
-                      <span className="kpi-label">Лідів</span>
-                      <span className="kpi-value">{g.leads.toLocaleString("uk-UA")}</span>
-                    </div>
-                    <div className="kpi-card">
-                      <span className="kpi-label">Дійшло до оплати</span>
-                      <span className="kpi-value">{g.reachedPaid.toLocaleString("uk-UA")}</span>
-                    </div>
-                    <div className="kpi-card">
-                      <span className="kpi-label">Конверсія</span>
-                      <span className="kpi-value">{g.conversion}%</span>
-                    </div>
+            <>
+              {leadgenData.map((group) => (
+                <div key={group.teamName} style={{ marginBottom: 24 }}>
+                  <h2
+                    style={{
+                      fontSize: 18,
+                      margin: "8px 0 12px",
+                      paddingBottom: 6,
+                      borderBottom: "2px solid var(--border)",
+                      color: group.isLeadgen ? "#c5141c" : "var(--text)",
+                    }}
+                  >
+                    {group.isLeadgen ? "🎯 " : "🏢 "}
+                    {group.teamName}
+                    {!group.isLeadgen && " (комерційний відділ)"}
+                    <span style={{ fontSize: 13, fontWeight: 400, color: "var(--text-muted)", marginLeft: 10 }}>
+                      {group.leads.toLocaleString("uk-UA")} лідів · {group.reachedPaid} оплат
+                    </span>
+                  </h2>
+                  <div className="chart-grid">
+                    {group.generators.map((g) => (
+                      <div className="chart-card" key={g.managerId}>
+                        <h2 className="chart-title">{g.managerName}</h2>
+                        <div className="kpi-grid">
+                          <div className="kpi-card">
+                            <span className="kpi-label">Лідів</span>
+                            <span className="kpi-value">{g.leads.toLocaleString("uk-UA")}</span>
+                          </div>
+                          <div className="kpi-card">
+                            <span className="kpi-label">Дійшло до оплати</span>
+                            <span className="kpi-value">{g.reachedPaid.toLocaleString("uk-UA")}</span>
+                          </div>
+                          <div className="kpi-card">
+                            <span className="kpi-label">Конверсія</span>
+                            <span className="kpi-value">{g.conversion}%</span>
+                          </div>
+                        </div>
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Джерело клієнта</th>
+                              <th>Лідів</th>
+                              <th>Оплат</th>
+                              <th>Конверсія</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {g.bySource.map((s) => (
+                              <tr key={s.source}>
+                                <td>{s.source}</td>
+                                <td>{s.leads}</td>
+                                <td>{s.reachedPaid}</td>
+                                <td>{s.conversion}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
                   </div>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Джерело клієнта</th>
-                        <th>Лідів</th>
-                        <th>Оплат</th>
-                        <th>Конверсія</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {g.bySource.map((s) => (
-                        <tr key={s.source}>
-                          <td>{s.source}</td>
-                          <td>{s.leads}</td>
-                          <td>{s.reachedPaid}</td>
-                          <td>{s.conversion}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </div>
               ))}
-            </div>
+            </>
           )}
         </>
       )}

@@ -99,10 +99,19 @@ export interface LeadgenSource {
 export interface LeadGenerator {
   managerId: number;
   managerName: string;
+  teamName: string;
   leads: number;
   reachedPaid: number;
   conversion: number;
   bySource: LeadgenSource[];
+}
+
+export interface LeadgenGroup {
+  teamName: string;
+  isLeadgen: boolean;
+  leads: number;
+  reachedPaid: number;
+  generators: LeadGenerator[];
 }
 
 export async function fetchLeadgen(params: {
@@ -110,11 +119,11 @@ export async function fetchLeadgen(params: {
   teamId?: number;
   from?: string;
   to?: string;
-}): Promise<LeadGenerator[]> {
-  const { data } = await api.get<{ generators: LeadGenerator[] }>("/dashboard/leadgen", {
+}): Promise<LeadgenGroup[]> {
+  const { data } = await api.get<{ groups: LeadgenGroup[] }>("/dashboard/leadgen", {
     params,
   });
-  return data.generators;
+  return data.groups;
 }
 
 export interface ExecutiveOverview {
