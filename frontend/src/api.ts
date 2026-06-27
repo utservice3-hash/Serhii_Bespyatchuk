@@ -222,10 +222,28 @@ export interface LoyaltyManager {
 
 export interface LoyaltyDynamics {
   months: { month: string; orders: number; amount: number }[];
+  currentMonth: string;
+  latestMonth: string | null;
   deltaOrders: number;
   deltaAmount: number;
   latestOrders: number;
   latestAmount: number;
+}
+
+export interface AppSettings {
+  loyaltyThreshold: number;
+  loyaltyWindowMonths: number;
+  sleepingWindowMonths: number;
+  receivablesOverdueWarnDays: number;
+}
+
+export async function fetchSettings(): Promise<AppSettings> {
+  const { data } = await api.get<{ settings: AppSettings }>("/settings");
+  return data.settings;
+}
+
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  await api.put("/settings", settings);
 }
 
 export async function fetchLoyalty(params: {

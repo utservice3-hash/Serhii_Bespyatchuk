@@ -9,6 +9,7 @@ export const NAV_ITEMS = [
   { key: "receivables", label: "Дебіторська заборгованість", icon: "💰" },
   { key: "leadgen", label: "Лідогенерація", icon: "🎯" },
   { key: "tasks", label: "Задачник", icon: "📝" },
+  { key: "settings", label: "Налаштування", icon: "⚙️" },
 ] as const;
 
 export type NavKey = (typeof NAV_ITEMS)[number]["key"];

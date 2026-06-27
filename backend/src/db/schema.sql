@@ -117,5 +117,13 @@ CREATE TABLE IF NOT EXISTS receivables (
 
 CREATE INDEX IF NOT EXISTS idx_receivables_manager ON receivables(manager_id);
 CREATE INDEX IF NOT EXISTS idx_receivables_client_key ON receivables(client_key);
+
+-- Configurable app settings (single JSON row), editable by admins from the UI.
+CREATE TABLE IF NOT EXISTS app_settings (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  data JSONB NOT NULL DEFAULT '{}',
+  CONSTRAINT single_settings_row CHECK (id = 1)
+);
+INSERT INTO app_settings (id, data) VALUES (1, '{}') ON CONFLICT (id) DO NOTHING;
 ALTER TABLE receivables ADD COLUMN IF NOT EXISTS limit_days INTEGER;
 ALTER TABLE receivables ADD COLUMN IF NOT EXISTS overdue_days INTEGER;

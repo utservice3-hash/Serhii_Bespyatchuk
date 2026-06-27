@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
+import { getSettings } from "./settings.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -688,6 +689,12 @@ dashboardRouter.get("/loyalty", async (req, res) => {
 
   const where = `WHERE ${conditions.join(" AND ")}`;
 
+  // Loyalty rules are admin-configurable; the window values are clamped ints.
+  const settings = await getSettings();
+  const recentMonths = settings.loyaltyWindowMonths;
+  const sleepingMonths = settings.sleepingWindowMonths;
+  const threshold = settings.loyaltyThreshold;
+
   // Aggregate every client's paid-order history (per manager) into time
   // windows so we can both flag regulars and segment everyone else for
   // reactivation work.
@@ -706,12 +713,12 @@ dashboardRouter.get("/loyalty", async (req, res) => {
             d.client_key,
             (array_agg(d.client_name ORDER BY d.created_at_kommo DESC))[1] AS client_name,
             COUNT(*) FILTER (
-              WHERE d.created_at_kommo >= $1::date - interval '2 months'
+              WHERE d.created_at_kommo >= $1::date - interval '${recentMonths} months'
                 AND d.created_at_kommo < $1::date
             ) AS p_recent,
             COUNT(*) FILTER (
-              WHERE d.created_at_kommo >= $1::date - interval '6 months'
-                AND d.created_at_kommo < $1::date - interval '2 months'
+              WHERE d.created_at_kommo >= $1::date - interval '${sleepingMonths} months'
+                AND d.created_at_kommo < $1::date - interval '${recentMonths} months'
             ) AS p_prior,
             COUNT(*) AS total_paid,
             MAX(d.created_at_kommo) AS last_paid
@@ -763,9 +770,9 @@ dashboardRouter.get("/loyalty", async (req, res) => {
       lastPaid: row.last_paid,
     };
 
-    if (recent >= 2) {
+    if (recent >= threshold) {
       entry.segments.regular.push(client);
-    } else if (recent === 1) {
+    } else if (recent >= 1) {
       entry.segments.occasional.push(client);
     } else if (prior >= 1) {
       entry.segments.sleeping.push(client);
@@ -825,15 +832,20 @@ dashboardRouter.get("/loyalty", async (req, res) => {
     amount: Number(r.amount),
   }));
 
-  // Growth = last fully-comparable month vs the one before it.
+  // Growth compares the last two COMPLETE months — the current calendar month
+  // is still partial, so including it would understate the trend.
   const pct = (cur: number, prev: number) =>
     prev > 0 ? Math.round(((cur - prev) / prev) * 100) : cur > 0 ? 100 : 0;
-  const last = months[months.length - 1];
-  const prev = months[months.length - 2];
+  const currentMonthKey = asOf.slice(0, 7);
+  const complete = months.filter((m) => m.month < currentMonthKey);
+  const last = complete[complete.length - 1];
+  const prev = complete[complete.length - 2];
   const dynamics = {
     months,
+    currentMonth: currentMonthKey,
     deltaOrders: last && prev ? pct(last.orders, prev.orders) : 0,
     deltaAmount: last && prev ? pct(last.amount, prev.amount) : 0,
+    latestMonth: last?.month ?? null,
     latestOrders: last?.orders ?? 0,
     latestAmount: last?.amount ?? 0,
   };

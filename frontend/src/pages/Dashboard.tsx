@@ -18,6 +18,8 @@ import {
   fetchFunnel,
   fetchLeadgen,
   fetchLoyalty,
+  fetchSettings,
+  saveSettings,
   fetchManagerBreakdown,
   fetchManagerOptions,
   fetchPersonalDashboard,
@@ -34,6 +36,7 @@ import {
   type ConversionChannel,
   type LeadGenerator,
   type LoyaltyDynamics,
+  type AppSettings,
   type ReceivableManager,
   type Task,
   type TaskPriority,
@@ -184,6 +187,10 @@ export function Dashboard() {
   const [leadgenData, setLeadgenData] = useState<LeadGenerator[]>([]);
   const [leadgenLoading, setLeadgenLoading] = useState(false);
 
+  const [settingsForm, setSettingsForm] = useState<AppSettings | null>(null);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
@@ -286,6 +293,23 @@ export function Dashboard() {
       .catch(() => setReceivablesData([]))
       .finally(() => setReceivablesLoading(false));
   }, [section, receivablesTeamId, teams, auth]);
+
+  useEffect(() => {
+    if (section !== "settings") return;
+    fetchSettings().then(setSettingsForm).catch(() => setSettingsForm(null));
+  }, [section]);
+
+  async function handleSaveSettings() {
+    if (!settingsForm) return;
+    setSettingsSaving(true);
+    setSettingsSaved(false);
+    try {
+      await saveSettings(settingsForm);
+      setSettingsSaved(true);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (section !== "leadgen") return;
@@ -1002,6 +1026,89 @@ export function Dashboard() {
                   </table>
                 </div>
               ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {section === "settings" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Налаштування</h1>
+          </div>
+          {!settingsForm ? (
+            <p className="loading-text">Завантаження...</p>
+          ) : (
+            <div className="chart-grid">
+              <div className="chart-card">
+                <h2 className="chart-title">Постійні клієнти</h2>
+                {(
+                  [
+                    { key: "loyaltyThreshold", label: "Поріг «постійного» (оплат)", hint: "Скільки оплат робить клієнта постійним" },
+                    { key: "loyaltyWindowMonths", label: "Вікно, місяців", hint: "За який період рахуються оплати" },
+                    { key: "sleepingWindowMonths", label: "Вікно «сплячих», місяців", hint: "Глибина пошуку клієнтів на реактивацію" },
+                  ] as const
+                ).map((f) => (
+                  <div key={f.key} style={{ marginBottom: 14 }}>
+                    <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>
+                      {f.label}
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={settingsForm[f.key]}
+                      onChange={(e) =>
+                        setSettingsForm({ ...settingsForm, [f.key]: Number(e.target.value) })
+                      }
+                      style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d0d5dd", width: 120 }}
+                    />
+                    <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>{f.hint}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="chart-card">
+                <h2 className="chart-title">Дебіторська заборгованість</h2>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>
+                    Підсвічувати прострочення понад (днів)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={settingsForm.receivablesOverdueWarnDays}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        receivablesOverdueWarnDays: Number(e.target.value),
+                      })
+                    }
+                    style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d0d5dd", width: 120 }}
+                  />
+                  <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>
+                    0 — підсвічувати, лише коли прострочення перевищує погоджений ліміт днів
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ gridColumn: "1 / -1", display: "flex", gap: 12, alignItems: "center" }}>
+                <button
+                  onClick={handleSaveSettings}
+                  disabled={settingsSaving}
+                  style={{
+                    padding: "10px 20px",
+                    borderRadius: 8,
+                    border: "none",
+                    background: "#c5141c",
+                    color: "#fff",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  {settingsSaving ? "Збереження..." : "Зберегти"}
+                </button>
+                {settingsSaved && <span style={{ color: "#16a34a" }}>✓ Збережено</span>}
+              </div>
             </div>
           )}
         </>

@@ -7,6 +7,7 @@ import { dashboardRouter } from "./routes/dashboard.js";
 import { plansRouter } from "./routes/plans.js";
 import { teamsRouter } from "./routes/teams.js";
 import { tasksRouter } from "./routes/tasks.js";
+import { settingsRouter } from "./routes/settings.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 
@@ -19,6 +20,7 @@ app.use("/api/dashboard", dashboardRouter);
 app.use("/api/plans", plansRouter);
 app.use("/api/teams", teamsRouter);
 app.use("/api/tasks", tasksRouter);
+app.use("/api/settings", settingsRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
