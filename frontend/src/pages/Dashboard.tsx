@@ -51,7 +51,7 @@ import {
   type Team,
 } from "../api";
 import { Layout, type NavKey } from "../components/Layout";
-import { DateRangeFilter, QuickPeriods } from "../components/DateRangeFilter";
+import { DateRangeFilter, QuickPeriods, getDateRange } from "../components/DateRangeFilter";
 import { getAuthPayload } from "../auth";
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -168,8 +168,9 @@ export function Dashboard() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [teamId, setTeamId] = useState<number | "">("");
   const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
-  const [dateRange, setDateRange] = useState({ from: "", to: "" });
-  const [datePreset, setDatePreset] = useState<string | null>("alltime");
+  // Default view is the current month so a fresh load shows the monthly picture.
+  const [dateRange, setDateRange] = useState(() => getDateRange("thisMonth"));
+  const [datePreset, setDatePreset] = useState<string | null>("thisMonth");
   const [conversionChannels, setConversionChannels] = useState<ConversionChannel[]>([]);
   const [paidDynamics, setPaidDynamics] = useState<
     { period: string; revenue: number; paidCount: number; avgCheck: number }[]
@@ -304,7 +305,8 @@ export function Dashboard() {
 
   useEffect(() => {
     if (section !== "receivables") return;
-    const teamIdToUse = auth?.role === "manager" ? undefined : receivablesTeamId || teams[0]?.id;
+    // Default to all teams (no filter) unless a specific team is picked.
+    const teamIdToUse = auth?.role === "manager" ? undefined : receivablesTeamId || undefined;
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setReceivablesLoading(true);
     fetchReceivables({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
@@ -1300,6 +1302,7 @@ export function Dashboard() {
                   value={receivablesTeamId}
                   onChange={(e) => setReceivablesTeamId(e.target.value ? Number(e.target.value) : "")}
                 >
+                  <option value="">Усі команди</option>
                   {teams.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
