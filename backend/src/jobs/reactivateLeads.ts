@@ -1,3 +1,4 @@
+import { config } from "../config.js";
 import { pool } from "../db/pool.js";
 import {
   extractPhone,
