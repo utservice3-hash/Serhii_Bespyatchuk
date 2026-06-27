@@ -150,15 +150,25 @@ export interface LoyaltyClient {
   clientKey: string;
   clientName: string;
   orders: number;
+  totalPaid: number;
+  lastPaid: string;
+}
+
+export interface LoyaltySegments {
+  regular: LoyaltyClient[];
+  occasional: LoyaltyClient[];
+  sleeping: LoyaltyClient[];
+  lost: LoyaltyClient[];
 }
 
 export interface LoyaltyManager {
   managerId: number;
   managerName: string;
-  loyal: LoyaltyClient[];
-  atRisk: LoyaltyClient[];
-  loyalCount: number;
-  atRiskCount: number;
+  segments: LoyaltySegments;
+  regularCount: number;
+  occasionalCount: number;
+  sleepingCount: number;
+  lostCount: number;
 }
 
 export async function fetchLoyalty(params: {

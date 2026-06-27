@@ -649,31 +649,60 @@ export function Dashboard() {
                   <h2 className="chart-title">{m.managerName}</h2>
                   <div className="kpi-grid">
                     <div className="kpi-card">
-                      <span className="kpi-label">Постійні (3+ за 3 міс.)</span>
-                      <span className="kpi-value">{m.loyalCount}</span>
+                      <span className="kpi-label">Постійні (2+ за 2 міс.)</span>
+                      <span className="kpi-value">{m.regularCount}</span>
                     </div>
                     <div className="kpi-card">
-                      <span className="kpi-label">At risk</span>
-                      <span className="kpi-value">{m.atRiskCount}</span>
+                      <span className="kpi-label">Разові (1 за 2 міс.)</span>
+                      <span className="kpi-value">{m.occasionalCount}</span>
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">Сплячі (реактивація)</span>
+                      <span className="kpi-value">{m.sleepingCount}</span>
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">Втрачені (&gt;6 міс.)</span>
+                      <span className="kpi-value">{m.lostCount}</span>
                     </div>
                   </div>
-                  {m.atRiskCount > 0 && (
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Клієнт (at risk)</th>
-                          <th>Замовлень за 3 міс.</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {m.atRisk.map((c) => (
-                          <tr key={c.clientKey}>
-                            <td>{c.clientName}</td>
-                            <td>{c.orders}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+
+                  {([
+                    { key: "regular", label: "Постійні клієнти", list: m.segments.regular },
+                    { key: "sleeping", label: "Сплячі — кандидати на реактивацію", list: m.segments.sleeping },
+                    { key: "lost", label: "Втрачені — давно не замовляли", list: m.segments.lost },
+                  ] as const).map(
+                    (group) =>
+                      group.list.length > 0 && (
+                        <details key={group.key} style={{ marginTop: 12 }}>
+                          <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                            {group.label} ({group.list.length})
+                          </summary>
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Клієнт</th>
+                                <th>За 2 міс.</th>
+                                <th>Всього оплат</th>
+                                <th>Остання оплата</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {group.list.slice(0, 100).map((c) => (
+                                <tr key={c.clientKey}>
+                                  <td>{c.clientName}</td>
+                                  <td>{c.orders}</td>
+                                  <td>{c.totalPaid}</td>
+                                  <td>
+                                    {c.lastPaid
+                                      ? new Date(c.lastPaid).toLocaleDateString("uk-UA")
+                                      : "—"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </details>
+                      )
                   )}
                 </div>
               ))}

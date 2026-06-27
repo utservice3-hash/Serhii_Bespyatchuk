@@ -491,64 +491,109 @@ dashboardRouter.get("/loyalty", async (req, res) => {
     conditions.push(`m.team_id = $${params.length}`);
   }
 
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const where = `WHERE ${conditions.join(" AND ")}`;
 
+  // Aggregate every client's paid-order history (per manager) into time
+  // windows so we can both flag regulars and segment everyone else for
+  // reactivation work.
   const result = await pool.query<{
     manager_id: number;
     manager_name: string;
     client_key: string;
     client_name: string;
-    current_count: string;
-    previous_count: string;
+    p_recent: string; // paid in last 2 months
+    p_prior: string; // paid in prior 2–6 months
+    total_paid: string; // all-time paid orders
+    last_paid: string;
   }>(
     `SELECT d.manager_id,
             m.name AS manager_name,
             d.client_key,
             (array_agg(d.client_name ORDER BY d.created_at_kommo DESC))[1] AS client_name,
             COUNT(*) FILTER (
-              WHERE d.created_at_kommo >= $1::date - interval '3 months'
+              WHERE d.created_at_kommo >= $1::date - interval '2 months'
                 AND d.created_at_kommo < $1::date
-            ) AS current_count,
+            ) AS p_recent,
             COUNT(*) FILTER (
               WHERE d.created_at_kommo >= $1::date - interval '6 months'
-                AND d.created_at_kommo < $1::date - interval '3 months'
-            ) AS previous_count
+                AND d.created_at_kommo < $1::date - interval '2 months'
+            ) AS p_prior,
+            COUNT(*) AS total_paid,
+            MAX(d.created_at_kommo) AS last_paid
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      ${where}
        AND psm.funnel_stage = 'paid'
-       AND d.created_at_kommo >= $1::date - interval '6 months'
-       AND d.created_at_kommo < $1::date
      GROUP BY d.manager_id, m.name, d.client_key`,
     params
   );
 
+  type Client = {
+    clientKey: string;
+    clientName: string;
+    orders: number;
+    totalPaid: number;
+    lastPaid: string;
+  };
+  type Segments = {
+    regular: Client[]; // 2+ paid in last 2 months
+    occasional: Client[]; // exactly 1 paid in last 2 months
+    sleeping: Client[]; // none recent, but bought in prior 2–6 months
+    lost: Client[]; // last purchase older than 6 months
+  };
+
   const byManager = new Map<
     number,
-    { managerId: number; managerName: string; loyal: { clientKey: string; clientName: string; orders: number }[]; atRisk: { clientKey: string; clientName: string; orders: number }[] }
+    { managerId: number; managerName: string; segments: Segments }
   >();
 
   for (const row of result.rows) {
-    const current = Number(row.current_count);
-    const previous = Number(row.previous_count);
+    const recent = Number(row.p_recent);
+    const prior = Number(row.p_prior);
     let entry = byManager.get(row.manager_id);
     if (!entry) {
-      entry = { managerId: row.manager_id, managerName: row.manager_name, loyal: [], atRisk: [] };
+      entry = {
+        managerId: row.manager_id,
+        managerName: row.manager_name,
+        segments: { regular: [], occasional: [], sleeping: [], lost: [] },
+      };
       byManager.set(row.manager_id, entry);
     }
-    if (current >= 3) {
-      entry.loyal.push({ clientKey: row.client_key, clientName: row.client_name, orders: current });
-    } else if (previous >= 3) {
-      entry.atRisk.push({ clientKey: row.client_key, clientName: row.client_name, orders: current });
+    const client: Client = {
+      clientKey: row.client_key,
+      clientName: row.client_name,
+      orders: recent,
+      totalPaid: Number(row.total_paid),
+      lastPaid: row.last_paid,
+    };
+
+    if (recent >= 2) {
+      entry.segments.regular.push(client);
+    } else if (recent === 1) {
+      entry.segments.occasional.push(client);
+    } else if (prior >= 1) {
+      entry.segments.sleeping.push(client);
+    } else {
+      entry.segments.lost.push(client);
     }
   }
 
-  const managers = Array.from(byManager.values()).map((entry) => ({
-    ...entry,
-    loyalCount: entry.loyal.length,
-    atRiskCount: entry.atRisk.length,
-  }));
+  const sortByLast = (a: Client, b: Client) => (a.lastPaid < b.lastPaid ? 1 : -1);
+
+  const managers = Array.from(byManager.values()).map((entry) => {
+    const s = entry.segments;
+    for (const list of [s.regular, s.occasional, s.sleeping, s.lost]) list.sort(sortByLast);
+    return {
+      managerId: entry.managerId,
+      managerName: entry.managerName,
+      segments: s,
+      regularCount: s.regular.length,
+      occasionalCount: s.occasional.length,
+      sleepingCount: s.sleeping.length,
+      lostCount: s.lost.length,
+    };
+  });
 
   res.json({ asOf, managers });
 });
