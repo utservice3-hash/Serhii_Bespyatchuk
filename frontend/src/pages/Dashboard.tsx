@@ -310,10 +310,14 @@ export function Dashboard() {
 
   const totalDeals = chartData.reduce((sum, s) => sum + s.count, 0);
   const totalAmount = chartData.reduce((sum, s) => sum + s.amount, 0);
-  const leadTaken = chartData.find((s) => s.name === STAGE_LABELS.lead_taken)?.count ?? 0;
-  const paid = chartData.find((s) => s.name === STAGE_LABELS.paid)?.count ?? 0;
-  const conversion = leadTaken > 0 ? Math.round((paid / leadTaken) * 100) : 0;
-  const avgDeal = totalDeals > 0 ? totalAmount / totalDeals : 0;
+  const paidStage = chartData.find((s) => s.name === STAGE_LABELS.paid);
+  const paid = paidStage?.count ?? 0;
+  const paidAmount = paidStage?.amount ?? 0;
+  // Each deal sits in exactly one funnel stage (current status snapshot), so
+  // conversion is the share of all deals that reached payment.
+  const conversion = totalDeals > 0 ? Math.round((paid / totalDeals) * 100) : 0;
+  // Average check = revenue per actually-paid deal, not per lead in the funnel.
+  const avgDeal = paid > 0 ? paidAmount / paid : 0;
 
   const kpis = [
     { label: "Угоди", value: totalDeals.toLocaleString("uk-UA") },
