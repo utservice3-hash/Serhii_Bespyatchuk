@@ -439,11 +439,15 @@ export function Dashboard() {
       .finally(() => setLoading(false));
   }, [teamId, granularity, dateRange]);
 
-  const chartData = stages.map((s) => ({
-    name: STAGE_LABELS[s.funnel_stage] ?? s.funnel_stage,
-    count: Number(s.deal_count),
-    amount: Number(s.total_amount),
-  }));
+  // Order the funnel stages by their real pipeline sequence, not by whatever
+  // order the SQL GROUP BY returned them in.
+  const chartData = [...stages]
+    .sort((a, b) => STAGE_ORDER.indexOf(a.funnel_stage) - STAGE_ORDER.indexOf(b.funnel_stage))
+    .map((s) => ({
+      name: STAGE_LABELS[s.funnel_stage] ?? s.funnel_stage,
+      count: Number(s.deal_count),
+      amount: Number(s.total_amount),
+    }));
 
   function renderStatChart(key: string, height: number) {
     if (key === "stages") {
@@ -638,10 +642,10 @@ export function Dashboard() {
             <div className="chart-grid">
               <div className="chart-card">
                 <h2 className="chart-title">Воронка продажів</h2>
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={chartData}>
+                <ResponsiveContainer width="100%" height={340}>
+                  <BarChart data={chartData} margin={{ bottom: 24 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" />
+                    <XAxis dataKey="name" interval={0} tick={{ fontSize: 12 }} angle={-15} textAnchor="end" height={50} />
                     <YAxis />
                     <Tooltip />
                     <Bar dataKey="count" fill="#c5141c" radius={[4, 4, 0, 0]} />
