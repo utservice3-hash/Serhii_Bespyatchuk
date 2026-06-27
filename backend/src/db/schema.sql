@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS news (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_news_category ON news(category, created_at DESC);
+ALTER TABLE news ADD COLUMN IF NOT EXISTS image_url TEXT;
 
 -- Daily approximate price per km by truck tonnage.
 CREATE TABLE IF NOT EXISTS km_prices (
@@ -155,6 +156,8 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   read_at TIMESTAMPTZ
 );
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_url TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_name TEXT;
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id, recipient_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id, read_at);
 

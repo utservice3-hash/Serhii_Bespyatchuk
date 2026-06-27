@@ -29,6 +29,7 @@ import {
   deleteNews,
   fetchKmPrices,
   saveKmPrices,
+  uploadFile,
   type NewsItem,
   type KmPrices,
   type ChatUser,
@@ -279,7 +280,7 @@ export function Dashboard() {
   const [newsCategory, setNewsCategory] = useState<"company" | "logistics" | "sales">("company");
   const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
   const [kmPrices, setKmPrices] = useState<KmPrices | null>(null);
-  const [newsForm, setNewsForm] = useState({ title: "", body: "" });
+  const [newsForm, setNewsForm] = useState<{ title: string; body: string; imageUrl?: string }>({ title: "", body: "" });
   const [kmForm, setKmForm] = useState({ t20: "", t10: "", t5: "", t2: "" });
 
   useEffect(() => {
@@ -416,6 +417,13 @@ export function Dashboard() {
     setChatMessages((prev) => [...prev, msg]);
   }
 
+  async function handleSendFile(file: File) {
+    if (!chatActive) return;
+    const up = await uploadFile(file);
+    const msg = await sendMessage(chatActive.id, "", up);
+    setChatMessages((prev) => [...prev, msg]);
+  }
+
   useEffect(() => {
     if (section !== "news") return;
     fetchNews(newsCategory).then(setNewsItems).catch(() => setNewsItems([]));
@@ -433,7 +441,7 @@ export function Dashboard() {
 
   async function handleAddNews() {
     if (!newsForm.title.trim()) return;
-    await addNews({ category: newsCategory, title: newsForm.title, body: newsForm.body });
+    await addNews({ category: newsCategory, title: newsForm.title, body: newsForm.body, imageUrl: newsForm.imageUrl });
     setNewsForm({ title: "", body: "" });
     setNewsItems(await fetchNews(newsCategory));
   }
@@ -1898,7 +1906,17 @@ export function Dashboard() {
                             maxWidth: "70%",
                           }}
                         >
-                          <div>{m.body}</div>
+                          {m.body && <div>{m.body}</div>}
+                          {m.attachment_url &&
+                            (/\.(png|jpe?g|gif|webp|bmp)$/i.test(m.attachment_url) ? (
+                              <a href={m.attachment_url} target="_blank" rel="noreferrer">
+                                <img src={m.attachment_url} alt={m.attachment_name ?? ""} style={{ maxWidth: 200, borderRadius: 8, display: "block" }} />
+                              </a>
+                            ) : (
+                              <a href={m.attachment_url} target="_blank" rel="noreferrer" style={{ color: mine ? "#fff" : "var(--brand)", textDecoration: "underline" }}>
+                                📎 {m.attachment_name ?? "файл"}
+                              </a>
+                            ))}
                           <div style={{ fontSize: 10, opacity: 0.7, textAlign: "right" }}>
                             {new Date(m.created_at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}
                           </div>
@@ -1906,7 +1924,19 @@ export function Dashboard() {
                       );
                     })}
                   </div>
-                  <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--border)" }}>
+                  <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--border)", alignItems: "center" }}>
+                    <label style={{ cursor: "pointer", fontSize: 20 }} title="Прикріпити файл">
+                      📎
+                      <input
+                        type="file"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleSendFile(f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
                     <input
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
@@ -1999,6 +2029,22 @@ export function Dashboard() {
                 onChange={(e) => setNewsForm({ ...newsForm, body: e.target.value })}
                 style={{ width: "100%", minHeight: 70, marginBottom: 8, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
               />
+              <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      const up = await uploadFile(f);
+                      setNewsForm((prev) => ({ ...prev, imageUrl: up.url }));
+                    }
+                  }}
+                />
+                {newsForm.imageUrl && (
+                  <img src={newsForm.imageUrl} alt="" style={{ height: 40, borderRadius: 6 }} />
+                )}
+              </div>
               <button onClick={handleAddNews} style={{ padding: "8px 18px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}>
                 Опублікувати
               </button>
@@ -2025,6 +2071,9 @@ export function Dashboard() {
                       </button>
                     )}
                   </div>
+                  {n.image_url && (
+                    <img src={n.image_url} alt="" style={{ maxWidth: "100%", borderRadius: 8, marginBottom: 8 }} />
+                  )}
                   {n.body && <p style={{ color: "var(--text)", whiteSpace: "pre-wrap" }}>{n.body}</p>}
                   <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
                     {new Date(n.created_at).toLocaleDateString("uk-UA")}

@@ -55,7 +55,7 @@ messagesRouter.get("/:userId", async (req, res) => {
   const me = req.auth!.userId;
   const other = Number(req.params.userId);
   const result = await pool.query(
-    `SELECT id, sender_id, recipient_id, body, created_at
+    `SELECT id, sender_id, recipient_id, body, attachment_url, attachment_name, created_at
      FROM messages
      WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)
      ORDER BY created_at`,
@@ -73,11 +73,14 @@ messagesRouter.post("/:userId", async (req, res) => {
   const me = req.auth!.userId;
   const other = Number(req.params.userId);
   const body = String(req.body?.body ?? "").trim();
-  if (!body) return res.status(400).json({ error: "Порожнє повідомлення" });
+  const attachmentUrl = req.body?.attachmentUrl ?? null;
+  const attachmentName = req.body?.attachmentName ?? null;
+  if (!body && !attachmentUrl) return res.status(400).json({ error: "Порожнє повідомлення" });
   const result = await pool.query(
-    `INSERT INTO messages (sender_id, recipient_id, body) VALUES ($1, $2, $3)
-     RETURNING id, sender_id, recipient_id, body, created_at`,
-    [me, other, body]
+    `INSERT INTO messages (sender_id, recipient_id, body, attachment_url, attachment_name)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, sender_id, recipient_id, body, attachment_url, attachment_name, created_at`,
+    [me, other, body, attachmentUrl, attachmentName]
   );
   res.json({ message: result.rows[0] });
 });

@@ -17,7 +17,7 @@ newsRouter.get("/", async (req, res) => {
     where = `WHERE category = $1`;
   }
   const result = await pool.query(
-    `SELECT id, category, title, body, author, created_at
+    `SELECT id, category, title, body, author, image_url, created_at
      FROM news ${where} ORDER BY created_at DESC LIMIT 100`,
     params
   );
@@ -26,7 +26,7 @@ newsRouter.get("/", async (req, res) => {
 
 newsRouter.post("/", async (req, res) => {
   if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
-  const { category, title, body } = req.body ?? {};
+  const { category, title, body, imageUrl } = req.body ?? {};
   if (!CATEGORIES.includes(category) || !String(title ?? "").trim()) {
     return res.status(400).json({ error: "Категорія і заголовок обов'язкові" });
   }
@@ -34,9 +34,9 @@ newsRouter.post("/", async (req, res) => {
     req.auth!.userId,
   ]);
   const result = await pool.query(
-    `INSERT INTO news (category, title, body, author) VALUES ($1, $2, $3, $4)
-     RETURNING id, category, title, body, author, created_at`,
-    [category, String(title).trim(), body ?? null, author.rows[0]?.email ?? null]
+    `INSERT INTO news (category, title, body, author, image_url) VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, category, title, body, author, image_url, created_at`,
+    [category, String(title).trim(), body ?? null, author.rows[0]?.email ?? null, imageUrl ?? null]
   );
   res.json({ news: result.rows[0] });
 });

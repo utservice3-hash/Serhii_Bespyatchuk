@@ -350,12 +350,29 @@ export async function fetchReceivables(params: {
   return data;
 }
 
+export const FILES_BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:4000/api").replace(/\/api$/, "");
+
+export async function uploadFile(file: File): Promise<{ url: string; name: string }> {
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const { data } = await api.post<{ url: string; name: string }>("/uploads", {
+    filename: file.name,
+    dataBase64,
+  });
+  return data;
+}
+
 export interface NewsItem {
   id: number;
   category: "company" | "logistics" | "sales";
   title: string;
   body: string | null;
   author: string | null;
+  image_url: string | null;
   created_at: string;
 }
 
@@ -372,7 +389,7 @@ export async function fetchNews(category?: string): Promise<NewsItem[]> {
   return data.news;
 }
 
-export async function addNews(payload: { category: string; title: string; body?: string }): Promise<void> {
+export async function addNews(payload: { category: string; title: string; body?: string; imageUrl?: string }): Promise<void> {
   await api.post("/news", payload);
 }
 
@@ -413,6 +430,8 @@ export interface ChatMessage {
   sender_id: number;
   recipient_id: number;
   body: string;
+  attachment_url: string | null;
+  attachment_name: string | null;
   created_at: string;
 }
 
@@ -431,8 +450,16 @@ export async function fetchConversation(userId: number): Promise<ChatMessage[]> 
   return data.messages;
 }
 
-export async function sendMessage(userId: number, body: string): Promise<ChatMessage> {
-  const { data } = await api.post<{ message: ChatMessage }>(`/messages/${userId}`, { body });
+export async function sendMessage(
+  userId: number,
+  body: string,
+  attachment?: { url: string; name: string }
+): Promise<ChatMessage> {
+  const { data } = await api.post<{ message: ChatMessage }>(`/messages/${userId}`, {
+    body,
+    attachmentUrl: attachment?.url,
+    attachmentName: attachment?.name,
+  });
   return data.message;
 }
 
