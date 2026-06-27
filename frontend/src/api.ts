@@ -68,6 +68,27 @@ export async function fetchTimeseries(params: {
   return data.points;
 }
 
+export interface ConversionChannel {
+  channel: string;
+  label: string;
+  leads: number;
+  paid: number;
+  paidAmount: number;
+  conversion: number;
+}
+
+export async function fetchConversion(params: {
+  managerId?: number;
+  teamId?: number;
+  from?: string;
+  to?: string;
+}): Promise<ConversionChannel[]> {
+  const { data } = await api.get<{ channels: ConversionChannel[] }>("/dashboard/conversion", {
+    params,
+  });
+  return data.channels;
+}
+
 export interface Team {
   id: number;
   name: string;

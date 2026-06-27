@@ -62,6 +62,87 @@ dashboardRouter.get("/funnel", async (req, res) => {
 });
 
 /**
+ * Conversion split by lead channel — paid ads/targeting vs. the lead-gen
+ * department vs. other — so each acquisition source can be tracked
+ * separately. Scoped by role/team and optional date range like /funnel.
+ */
+dashboardRouter.get("/conversion", async (req, res) => {
+  const auth = req.auth!;
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+
+  if (auth.role === "manager") {
+    managerId = auth.managerId;
+    teamId = null;
+  } else if (auth.role === "team_lead") {
+    teamId = auth.teamId;
+  }
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (managerId) {
+    params.push(managerId);
+    conditions.push(`d.manager_id = $${params.length}`);
+  }
+  if (teamId) {
+    params.push(teamId);
+    conditions.push(`m.team_id = $${params.length}`);
+  }
+  if (from) {
+    params.push(from);
+    conditions.push(`d.created_at_kommo >= $${params.length}`);
+  }
+  if (to) {
+    params.push(to);
+    conditions.push(`d.created_at_kommo <= $${params.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const result = await pool.query<{
+    lead_channel: string | null;
+    leads: string;
+    paid: string;
+    paid_amount: string;
+  }>(
+    `SELECT COALESCE(d.lead_channel, 'other') AS lead_channel,
+            COUNT(*) AS leads,
+            COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
+            COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS paid_amount
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     LEFT JOIN pipeline_stage_map psm
+       ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${where}
+     GROUP BY COALESCE(d.lead_channel, 'other')`,
+    params
+  );
+
+  const labels: Record<string, string> = {
+    ad: "Таргет / реклама",
+    leadgen: "Лідогенерація",
+    other: "Інше",
+  };
+
+  const channels = ["ad", "leadgen", "other"].map((ch) => {
+    const row = result.rows.find((r) => r.lead_channel === ch);
+    const leads = Number(row?.leads ?? 0);
+    const paid = Number(row?.paid ?? 0);
+    return {
+      channel: ch,
+      label: labels[ch],
+      leads,
+      paid,
+      paidAmount: Number(row?.paid_amount ?? 0),
+      conversion: leads > 0 ? Math.round((paid / leads) * 100) : 0,
+    };
+  });
+
+  res.json({ channels });
+});
+
+/**
  * Returns deal counts/amounts per funnel stage, bucketed by day or month,
  * for trend charts (used by the company-wide / head-of-sales overview).
  */

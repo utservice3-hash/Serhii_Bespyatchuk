@@ -1,5 +1,11 @@
 import { pool } from "../db/pool.js";
-import { extractPhone, fetchAllCompanies, fetchAllContacts, fetchAllDeals } from "../kommo/client.js";
+import {
+  extractLeadSource,
+  extractPhone,
+  fetchAllCompanies,
+  fetchAllContacts,
+  fetchAllDeals,
+} from "../kommo/client.js";
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 
 /**
@@ -68,10 +74,12 @@ export async function backfillClientKeys(): Promise<void> {
     await Promise.all(
       batch.map(async (deal) => {
         const { name, key } = resolveClientKey(deal, companyNameById, contactById);
-        if (!key) return;
+        const src = extractLeadSource(deal);
         const result = await pool.query(
-          `UPDATE deals SET client_name = $2, client_key = $3 WHERE kommo_id = $1`,
-          [deal.id, name, key]
+          `UPDATE deals SET client_name = $2, client_key = $3,
+                  utm_source = $4, lead_generator = $5, client_source = $6, lead_channel = $7
+             WHERE kommo_id = $1`,
+          [deal.id, name, key, src.utmSource, src.leadGenerator, src.clientSource, src.channel]
         );
         updated += result.rowCount ?? 0;
       })

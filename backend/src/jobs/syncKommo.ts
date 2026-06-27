@@ -1,6 +1,7 @@
 import { pool } from "../db/pool.js";
 import {
   extractPhone,
+  extractLeadSource,
   fetchAllDeals,
   fetchAllContacts,
   fetchAllCompanies,
@@ -158,13 +159,14 @@ async function upsertDeal(
 ): Promise<void> {
   const managerId = managerIdByKommoUserId.get(deal.responsible_user_id) ?? null;
   const { name: clientName, key: clientKey } = resolveClient(deal, companyNameById, contactById);
+  const source = extractLeadSource(deal);
 
   await pool.query(
     `INSERT INTO deals (
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
-         client_name, client_key
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12)
+         client_name, client_key, utm_source, lead_generator, client_source, lead_channel
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -175,7 +177,11 @@ async function upsertDeal(
          closed_at_kommo = EXCLUDED.closed_at_kommo,
          synced_at = now(),
          client_name = EXCLUDED.client_name,
-         client_key = EXCLUDED.client_key`,
+         client_key = EXCLUDED.client_key,
+         utm_source = EXCLUDED.utm_source,
+         lead_generator = EXCLUDED.lead_generator,
+         client_source = EXCLUDED.client_source,
+         lead_channel = EXCLUDED.lead_channel`,
       [
         deal.id,
         deal.name,
@@ -189,6 +195,10 @@ async function upsertDeal(
         toTimestamp(deal.closed_at),
         clientName,
         clientKey,
+        source.utmSource,
+        source.leadGenerator,
+        source.clientSource,
+        source.channel,
       ]
     );
 }

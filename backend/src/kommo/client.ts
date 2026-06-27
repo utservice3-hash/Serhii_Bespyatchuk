@@ -41,6 +41,12 @@ async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+interface KommoFieldValue {
+  field_id?: number;
+  field_code?: string | null;
+  values?: { value?: unknown }[];
+}
+
 export interface KommoDeal {
   id: number;
   name: string;
@@ -51,10 +57,54 @@ export interface KommoDeal {
   created_at: number;
   updated_at: number;
   closed_at: number | null;
+  custom_fields_values?: KommoFieldValue[] | null;
   _embedded?: {
     contacts?: { id: number; is_main?: boolean }[];
     companies?: { id: number; is_main?: boolean }[];
   };
+}
+
+// Kommo custom-field ids for lead-source attribution (leads/custom_fields).
+const FIELD_UTM_SOURCE = 481993;
+const FIELD_LEAD_GENERATOR = 2098037; // "Лидогенератор"
+const FIELD_CLIENT_SOURCE = 2098035; // "Источник клиента"
+// "Продзвін" pipelines are run by the lead-generation department.
+const LEADGEN_PIPELINES = new Set([8921936, 7337048]);
+// "Источник клиента" values that represent paid/marketing inbound traffic.
+const AD_CLIENT_SOURCES = new Set(["Google", "Реактивация ретаргетом"]);
+
+function fieldText(deal: KommoDeal, fieldId: number): string | null {
+  const f = deal.custom_fields_values?.find((v) => v.field_id === fieldId);
+  const raw = f?.values?.[0]?.value;
+  const text = raw == null ? "" : String(raw).trim();
+  return text.length ? text : null;
+}
+
+export interface LeadSource {
+  utmSource: string | null;
+  leadGenerator: string | null;
+  clientSource: string | null;
+  channel: "ad" | "leadgen" | "other";
+}
+
+/**
+ * Classifies a deal's lead origin into the two tracked channels the sales
+ * team cares about — paid ads/targeting vs. the lead-generation department —
+ * keeping the raw field values so the rule can be refined later in SQL.
+ */
+export function extractLeadSource(deal: KommoDeal): LeadSource {
+  const utmSource = fieldText(deal, FIELD_UTM_SOURCE);
+  const leadGenerator = fieldText(deal, FIELD_LEAD_GENERATOR);
+  const clientSource = fieldText(deal, FIELD_CLIENT_SOURCE);
+
+  let channel: LeadSource["channel"] = "other";
+  if (leadGenerator || LEADGEN_PIPELINES.has(deal.pipeline_id)) {
+    channel = "leadgen";
+  } else if (utmSource || (clientSource && AD_CLIENT_SOURCES.has(clientSource))) {
+    channel = "ad";
+  }
+
+  return { utmSource, leadGenerator, clientSource, channel };
 }
 
 /**

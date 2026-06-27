@@ -55,6 +55,14 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_name TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_deals_client_key ON deals(client_key);
 
+-- Lead source attribution (for conversion-by-source). Raw values are kept so
+-- the derived channel can be reclassified later without re-pulling from Kommo.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS utm_source TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS lead_generator TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_source TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS lead_channel TEXT; -- 'ad' | 'leadgen' | 'other'
+CREATE INDEX IF NOT EXISTS idx_deals_lead_channel ON deals(lead_channel);
+
 ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_team_lead BOOLEAN NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_deals_manager ON deals(manager_id);

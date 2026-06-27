@@ -14,6 +14,7 @@ import {
 import {
   createTask,
   deleteTask,
+  fetchConversion,
   fetchFunnel,
   fetchLoyalty,
   fetchManagerBreakdown,
@@ -29,6 +30,7 @@ import {
   type ManagerBreakdown,
   type ManagerOption,
   type PersonalDashboard,
+  type ConversionChannel,
   type ReceivableManager,
   type Task,
   type TaskPriority,
@@ -146,6 +148,7 @@ export function Dashboard() {
   const [teamId, setTeamId] = useState<number | "">("");
   const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
+  const [conversionChannels, setConversionChannels] = useState<ConversionChannel[]>([]);
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -275,6 +278,10 @@ export function Dashboard() {
     if (dateRange.from) params.from = dateRange.from;
     if (dateRange.to) params.to = dateRange.to;
 
+    fetchConversion(params)
+      .then(setConversionChannels)
+      .catch(() => setConversionChannels([]));
+
     Promise.all([
       fetchFunnel(params),
       fetchTimeseries({ granularity, ...params }),
@@ -363,6 +370,34 @@ export function Dashboard() {
               </div>
             ))}
           </div>
+
+          {conversionChannels.length > 0 && (
+            <div className="chart-card" style={{ marginBottom: 16 }}>
+              <h2 className="chart-title">Конверсія за джерелом</h2>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Джерело</th>
+                    <th>Лідів</th>
+                    <th>Оплачено</th>
+                    <th>Конверсія</th>
+                    <th>Сума оплат</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {conversionChannels.map((c) => (
+                    <tr key={c.channel}>
+                      <td>{c.label}</td>
+                      <td>{c.leads.toLocaleString("uk-UA")}</td>
+                      <td>{c.paid.toLocaleString("uk-UA")}</td>
+                      <td>{c.conversion}%</td>
+                      <td>{formatAmount(c.paidAmount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {loading ? (
             <p className="loading-text">Завантаження...</p>
