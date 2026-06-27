@@ -55,7 +55,7 @@ import {
   type TaskStatus,
   type Team,
 } from "../api";
-import { Layout, type NavKey } from "../components/Layout";
+import { Layout, NAV_ITEMS, type NavKey } from "../components/Layout";
 import { DateRangeFilter, QuickPeriods, getDateRange } from "../components/DateRangeFilter";
 import { getAuthPayload } from "../auth";
 
@@ -167,7 +167,14 @@ function ForecastBadge({ forecast }: { forecast: { status: string; projectedPct:
 
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
-  const [section, setSection] = useState<NavKey>("overview");
+  // Persist the open section so a page refresh (Ctrl+R) keeps you in place.
+  const [section, setSection] = useState<NavKey>(() => {
+    const saved = localStorage.getItem("section") as NavKey | null;
+    return saved && NAV_ITEMS.some((i) => i.key === saved) ? saved : "overview";
+  });
+  useEffect(() => {
+    localStorage.setItem("section", section);
+  }, [section]);
   const [navHistory, setNavHistory] = useState<NavKey[]>([]);
   const [stages, setStages] = useState<FunnelStage[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
