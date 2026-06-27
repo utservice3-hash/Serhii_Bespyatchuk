@@ -1,0 +1,64 @@
+import { Router } from "express";
+import { pool } from "../db/pool.js";
+import { requireAuth } from "../auth/middleware.js";
+
+export const messagesRouter = Router();
+messagesRouter.use(requireAuth);
+
+/** Other users you can message, with unread counts from each. */
+messagesRouter.get("/users", async (req, res) => {
+  const me = req.auth!.userId;
+  const result = await pool.query(
+    `SELECT u.id, COALESCE(m.name, u.email) AS name, u.email,
+            (SELECT COUNT(*) FROM messages msg
+              WHERE msg.sender_id = u.id AND msg.recipient_id = $1 AND msg.read_at IS NULL) AS unread
+     FROM users u
+     LEFT JOIN managers m ON m.id = u.manager_id
+     WHERE u.id <> $1 AND u.is_active = true
+     ORDER BY name`,
+    [me]
+  );
+  res.json({ users: result.rows });
+});
+
+/** Total unread messages (for the sidebar badge). */
+messagesRouter.get("/unread", async (req, res) => {
+  const me = req.auth!.userId;
+  const result = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM messages WHERE recipient_id = $1 AND read_at IS NULL`,
+    [me]
+  );
+  res.json({ unread: Number(result.rows[0]?.count ?? 0) });
+});
+
+/** Conversation with another user; marks their messages to me as read. */
+messagesRouter.get("/:userId", async (req, res) => {
+  const me = req.auth!.userId;
+  const other = Number(req.params.userId);
+  const result = await pool.query(
+    `SELECT id, sender_id, recipient_id, body, created_at
+     FROM messages
+     WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)
+     ORDER BY created_at`,
+    [me, other]
+  );
+  await pool.query(
+    `UPDATE messages SET read_at = now()
+     WHERE recipient_id = $1 AND sender_id = $2 AND read_at IS NULL`,
+    [me, other]
+  );
+  res.json({ messages: result.rows });
+});
+
+messagesRouter.post("/:userId", async (req, res) => {
+  const me = req.auth!.userId;
+  const other = Number(req.params.userId);
+  const body = String(req.body?.body ?? "").trim();
+  if (!body) return res.status(400).json({ error: "Порожнє повідомлення" });
+  const result = await pool.query(
+    `INSERT INTO messages (sender_id, recipient_id, body) VALUES ($1, $2, $3)
+     RETURNING id, sender_id, recipient_id, body, created_at`,
+    [me, other, body]
+  );
+  res.json({ message: result.rows[0] });
+});

@@ -124,6 +124,18 @@ CREATE TABLE IF NOT EXISTS receivables (
 CREATE INDEX IF NOT EXISTS idx_receivables_manager ON receivables(manager_id);
 CREATE INDEX IF NOT EXISTS idx_receivables_client_key ON receivables(client_key);
 
+-- Direct messages between dashboard users (internal messenger).
+CREATE TABLE IF NOT EXISTS messages (
+  id SERIAL PRIMARY KEY,
+  sender_id INTEGER NOT NULL REFERENCES users(id),
+  recipient_id INTEGER NOT NULL REFERENCES users(id),
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  read_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id, recipient_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id, read_at);
+
 -- Configurable app settings (single JSON row), editable by admins from the UI.
 CREATE TABLE IF NOT EXISTS app_settings (
   id INTEGER PRIMARY KEY DEFAULT 1,

@@ -21,6 +21,11 @@ import {
   fetchLoyalty,
   fetchSettings,
   saveSettings,
+  fetchChatUsers,
+  fetchConversation,
+  sendMessage,
+  type ChatUser,
+  type ChatMessage,
   fetchUsers as fetchDashboardUsers,
   provisionUsers,
   resetUserPassword,
@@ -214,6 +219,11 @@ export function Dashboard() {
   const [revealed, setRevealed] = useState<Record<number, string>>({});
   const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
 
+  const [chatUsers, setChatUsers] = useState<ChatUser[]>([]);
+  const [chatActive, setChatActive] = useState<ChatUser | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
@@ -317,6 +327,36 @@ export function Dashboard() {
       .catch(() => setReceivablesData([]))
       .finally(() => setReceivablesLoading(false));
   }, [section, receivablesTeamId, teams, auth]);
+
+  useEffect(() => {
+    if (section !== "messenger") return;
+    fetchChatUsers().then(setChatUsers).catch(() => setChatUsers([]));
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== "messenger" || !chatActive) return;
+    let stop = false;
+    const load = () =>
+      fetchConversation(chatActive.id)
+        .then((m) => {
+          if (!stop) setChatMessages(m);
+        })
+        .catch(() => {});
+    load();
+    const interval = setInterval(load, 5000);
+    return () => {
+      stop = true;
+      clearInterval(interval);
+    };
+  }, [section, chatActive]);
+
+  async function handleSendMessage() {
+    const body = chatInput.trim();
+    if (!body || !chatActive) return;
+    setChatInput("");
+    const msg = await sendMessage(chatActive.id, body);
+    setChatMessages((prev) => [...prev, msg]);
+  }
 
   useEffect(() => {
     if (section !== "settings") return;
@@ -1545,6 +1585,94 @@ export function Dashboard() {
               </table>
             </div>
           )}
+        </>
+      )}
+
+      {section === "messenger" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Месенджер</h1>
+          </div>
+          <div className="chart-card" style={{ display: "flex", gap: 0, padding: 0, height: "70vh", overflow: "hidden" }}>
+            <div style={{ width: 240, borderRight: "1px solid var(--border)", overflowY: "auto" }}>
+              {chatUsers.map((u) => (
+                <button
+                  key={u.id}
+                  onClick={() => setChatActive(u)}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "12px 16px",
+                    border: "none",
+                    borderBottom: "1px solid var(--border)",
+                    background: chatActive?.id === u.id ? "rgba(197,20,28,0.10)" : "transparent",
+                    color: "var(--text)",
+                  }}
+                >
+                  <span>{u.name}</span>
+                  {u.unread > 0 && (
+                    <span style={{ background: "#c5141c", color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 12 }}>
+                      {u.unread}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+              {!chatActive ? (
+                <div style={{ margin: "auto", color: "var(--text-muted)" }}>
+                  Оберіть співрозмовника
+                </div>
+              ) : (
+                <>
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", fontWeight: 600 }}>
+                    {chatActive.name}
+                  </div>
+                  <div style={{ flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+                    {chatMessages.map((m) => {
+                      const mine = m.sender_id !== chatActive.id;
+                      return (
+                        <div
+                          key={m.id}
+                          style={{
+                            alignSelf: mine ? "flex-end" : "flex-start",
+                            background: mine ? "#c5141c" : "var(--bg)",
+                            color: mine ? "#fff" : "var(--text)",
+                            padding: "8px 12px",
+                            borderRadius: 12,
+                            maxWidth: "70%",
+                          }}
+                        >
+                          <div>{m.body}</div>
+                          <div style={{ fontSize: 10, opacity: 0.7, textAlign: "right" }}>
+                            {new Date(m.created_at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--border)" }}>
+                    <input
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                      placeholder="Повідомлення…"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      onClick={handleSendMessage}
+                      style={{ padding: "8px 18px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}
+                    >
+                      Надіслати
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </>
       )}
 

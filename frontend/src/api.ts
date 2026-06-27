@@ -338,6 +338,41 @@ export async function fetchReceivables(params: {
   return data;
 }
 
+export interface ChatUser {
+  id: number;
+  name: string;
+  email: string;
+  unread: number;
+}
+
+export interface ChatMessage {
+  id: number;
+  sender_id: number;
+  recipient_id: number;
+  body: string;
+  created_at: string;
+}
+
+export async function fetchChatUsers(): Promise<ChatUser[]> {
+  const { data } = await api.get<{ users: ChatUser[] }>("/messages/users");
+  return data.users;
+}
+
+export async function fetchUnreadCount(): Promise<number> {
+  const { data } = await api.get<{ unread: number }>("/messages/unread");
+  return data.unread;
+}
+
+export async function fetchConversation(userId: number): Promise<ChatMessage[]> {
+  const { data } = await api.get<{ messages: ChatMessage[] }>(`/messages/${userId}`);
+  return data.messages;
+}
+
+export async function sendMessage(userId: number, body: string): Promise<ChatMessage> {
+  const { data } = await api.post<{ message: ChatMessage }>(`/messages/${userId}`, { body });
+  return data.message;
+}
+
 export type TaskStatus =
   | "todo_list"
   | "to_realize"
