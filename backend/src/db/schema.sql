@@ -125,6 +125,27 @@ CREATE TABLE IF NOT EXISTS receivables (
 CREATE INDEX IF NOT EXISTS idx_receivables_manager ON receivables(manager_id);
 CREATE INDEX IF NOT EXISTS idx_receivables_client_key ON receivables(client_key);
 
+-- Company / industry news shown to managers.
+CREATE TABLE IF NOT EXISTS news (
+  id SERIAL PRIMARY KEY,
+  category TEXT NOT NULL CHECK (category IN ('company', 'logistics', 'sales')),
+  title TEXT NOT NULL,
+  body TEXT,
+  author TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_news_category ON news(category, created_at DESC);
+
+-- Daily approximate price per km by truck tonnage.
+CREATE TABLE IF NOT EXISTS km_prices (
+  price_date DATE PRIMARY KEY DEFAULT current_date,
+  t20 NUMERIC,
+  t10 NUMERIC,
+  t5 NUMERIC,
+  t2 NUMERIC,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Direct messages between dashboard users (internal messenger).
 CREATE TABLE IF NOT EXISTS messages (
   id SERIAL PRIMARY KEY,

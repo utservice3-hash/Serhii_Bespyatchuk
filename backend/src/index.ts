@@ -9,6 +9,7 @@ import { teamsRouter } from "./routes/teams.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { settingsRouter } from "./routes/settings.js";
 import { messagesRouter } from "./routes/messages.js";
+import { newsRouter } from "./routes/news.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 
@@ -23,6 +24,7 @@ app.use("/api/teams", teamsRouter);
 app.use("/api/tasks", tasksRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/messages", messagesRouter);
+app.use("/api/news", newsRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 

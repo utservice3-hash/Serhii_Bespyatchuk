@@ -28,6 +28,7 @@ export const NAV_GROUPS = [
     items: [
       { key: "tasks", label: "Задачник", icon: "📝" },
       { key: "messenger", label: "Месенджер", icon: "💬" },
+      { key: "news", label: "Новини", icon: "📰" },
       { key: "training", label: "Навчання", icon: "📚" },
     ],
   },

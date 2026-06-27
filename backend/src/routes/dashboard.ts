@@ -315,10 +315,50 @@ dashboardRouter.get("/overview", async (req, res) => {
     recvParams
   );
 
+  // Plan vs Fact for the month containing the selected period (plans are
+  // monthly payment_amount targets). Scoped by team/manager.
+  const monthAnchor = to ?? new Date().toISOString().slice(0, 10);
+  const pfParams: unknown[] = [monthAnchor];
+  const planScope: string[] = [];
+  const factScope: string[] = ["psm.funnel_stage = 'paid'"];
+  if (managerId) {
+    pfParams.push(managerId);
+    planScope.push(`p.manager_id = $${pfParams.length}`);
+    factScope.push(`d.manager_id = $${pfParams.length}`);
+  }
+  if (teamId) {
+    pfParams.push(teamId);
+    planScope.push(`mp.team_id = $${pfParams.length}`);
+    factScope.push(`m.team_id = $${pfParams.length}`);
+  }
+  const planRes = await pool.query<{ plan: string }>(
+    `SELECT COALESCE(SUM(p.planned_value), 0) AS plan
+     FROM plans p JOIN managers mp ON mp.id = p.manager_id
+     WHERE p.metric = 'payment_amount'
+       AND p.plan_date >= date_trunc('month', $1::date)
+       AND p.plan_date < date_trunc('month', $1::date) + interval '1 month'
+       ${planScope.length ? "AND " + planScope.join(" AND ") : ""}`,
+    pfParams
+  );
+  const factRes = await pool.query<{ fact: string }>(
+    `SELECT COALESCE(SUM(d.price), 0) AS fact
+     FROM deals d JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${factScope.join(" AND ")}
+       AND d.created_at_kommo >= date_trunc('month', $1::date)
+       AND d.created_at_kommo < date_trunc('month', $1::date) + interval '1 month'`,
+    pfParams
+  );
+  const planTotal = Number(planRes.rows[0]?.plan ?? 0);
+  const factTotal = Number(factRes.rows[0]?.fact ?? 0);
+
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
 
   res.json({
+    plan: planTotal,
+    fact: factTotal,
+    planPct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : 0,
     byTeam: byTeam.rows.map((r) => ({
       teamId: r.team_id,
       teamName: r.team_name,

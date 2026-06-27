@@ -24,6 +24,13 @@ import {
   fetchChatUsers,
   fetchConversation,
   sendMessage,
+  fetchNews,
+  addNews,
+  deleteNews,
+  fetchKmPrices,
+  saveKmPrices,
+  type NewsItem,
+  type KmPrices,
   type ChatUser,
   type ChatMessage,
   fetchUsers as fetchDashboardUsers,
@@ -269,6 +276,12 @@ export function Dashboard() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
 
+  const [newsCategory, setNewsCategory] = useState<"company" | "logistics" | "sales">("company");
+  const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
+  const [kmPrices, setKmPrices] = useState<KmPrices | null>(null);
+  const [newsForm, setNewsForm] = useState({ title: "", body: "" });
+  const [kmForm, setKmForm] = useState({ t20: "", t10: "", t5: "", t2: "" });
+
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
@@ -401,6 +414,38 @@ export function Dashboard() {
     setChatInput("");
     const msg = await sendMessage(chatActive.id, body);
     setChatMessages((prev) => [...prev, msg]);
+  }
+
+  useEffect(() => {
+    if (section !== "news") return;
+    fetchNews(newsCategory).then(setNewsItems).catch(() => setNewsItems([]));
+  }, [section, newsCategory]);
+
+  useEffect(() => {
+    if (section !== "news") return;
+    fetchKmPrices()
+      .then((p) => {
+        setKmPrices(p);
+        if (p) setKmForm({ t20: String(p.t20 ?? ""), t10: String(p.t10 ?? ""), t5: String(p.t5 ?? ""), t2: String(p.t2 ?? "") });
+      })
+      .catch(() => setKmPrices(null));
+  }, [section]);
+
+  async function handleAddNews() {
+    if (!newsForm.title.trim()) return;
+    await addNews({ category: newsCategory, title: newsForm.title, body: newsForm.body });
+    setNewsForm({ title: "", body: "" });
+    setNewsItems(await fetchNews(newsCategory));
+  }
+
+  async function handleSaveKm() {
+    await saveKmPrices({
+      t20: kmForm.t20 ? Number(kmForm.t20) : null,
+      t10: kmForm.t10 ? Number(kmForm.t10) : null,
+      t5: kmForm.t5 ? Number(kmForm.t5) : null,
+      t2: kmForm.t2 ? Number(kmForm.t2) : null,
+    });
+    setKmPrices(await fetchKmPrices());
   }
 
   useEffect(() => {
@@ -791,6 +836,23 @@ export function Dashboard() {
           {overview && (
             <>
               <div className="kpi-grid">
+                <div className="kpi-card">
+                  <span className="kpi-label">План на місяць</span>
+                  <span className="kpi-value">{formatAmount(overview.plan)}</span>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Факт (місяць)</span>
+                  <span className="kpi-value">{formatAmount(overview.fact)}</span>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Виконання плану</span>
+                  <span
+                    className="kpi-value"
+                    style={{ color: overview.planPct >= 100 ? "#16a34a" : overview.planPct >= 70 ? "#d97706" : "#dc2626" }}
+                  >
+                    {overview.planPct}%
+                  </span>
+                </div>
                 <div className="kpi-card">
                   <span className="kpi-label">Дебіторська заборгованість</span>
                   <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
@@ -1863,6 +1925,114 @@ export function Dashboard() {
               )}
             </div>
           </div>
+        </>
+      )}
+
+      {section === "news" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Новини</h1>
+          </div>
+
+          <div className="chart-card" style={{ marginBottom: 16 }}>
+            <h2 className="chart-title">🚚 Орієнтовні ціни за 1 км (сьогодні)</h2>
+            <div className="kpi-grid">
+              {([["20 т", "t20"], ["10 т", "t10"], ["5 т", "t5"], ["2 т", "t2"]] as const).map(([label, key]) => (
+                <div className="kpi-card" key={key}>
+                  <span className="kpi-label">Вантажівка {label}</span>
+                  <span className="kpi-value">
+                    {kmPrices && kmPrices[key] != null ? `${kmPrices[key]} ₴/км` : "—"}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {auth?.role === "admin" && (
+              <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+                {(["t20", "t10", "t5", "t2"] as const).map((key) => (
+                  <input
+                    key={key}
+                    type="number"
+                    placeholder={key.replace("t", "") + "т ₴/км"}
+                    value={kmForm[key]}
+                    onChange={(e) => setKmForm({ ...kmForm, [key]: e.target.value })}
+                    style={{ width: 110 }}
+                  />
+                ))}
+                <button onClick={handleSaveKm} style={{ padding: "8px 16px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}>
+                  Зберегти ціни
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="page-filters" style={{ marginBottom: 12 }}>
+            {([["company", "Новини компанії"], ["logistics", "Світ логістики"], ["sales", "Продажі логістичних послуг"]] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setNewsCategory(key)}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 16,
+                  border: `1px solid ${newsCategory === key ? "#c5141c" : "var(--border)"}`,
+                  background: newsCategory === key ? "#c5141c" : "var(--card-bg)",
+                  color: newsCategory === key ? "#fff" : "var(--text)",
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {auth?.role === "admin" && (
+            <div className="chart-card" style={{ marginBottom: 16 }}>
+              <h2 className="chart-title">Додати новину ({newsCategory === "company" ? "компанія" : newsCategory === "logistics" ? "логістика" : "продажі"})</h2>
+              <input
+                placeholder="Заголовок"
+                value={newsForm.title}
+                onChange={(e) => setNewsForm({ ...newsForm, title: e.target.value })}
+                style={{ width: "100%", marginBottom: 8 }}
+              />
+              <textarea
+                placeholder="Текст новини"
+                value={newsForm.body}
+                onChange={(e) => setNewsForm({ ...newsForm, body: e.target.value })}
+                style={{ width: "100%", minHeight: 70, marginBottom: 8, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
+              />
+              <button onClick={handleAddNews} style={{ padding: "8px 18px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}>
+                Опублікувати
+              </button>
+            </div>
+          )}
+
+          {newsItems.length === 0 ? (
+            <p className="loading-text">Новин поки немає.</p>
+          ) : (
+            <div className="chart-grid">
+              {newsItems.map((n) => (
+                <div className="chart-card" key={n.id}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
+                    <h2 className="chart-title">{n.title}</h2>
+                    {auth?.role === "admin" && (
+                      <button
+                        onClick={async () => {
+                          await deleteNews(n.id);
+                          setNewsItems(await fetchNews(newsCategory));
+                        }}
+                        style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)" }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  {n.body && <p style={{ color: "var(--text)", whiteSpace: "pre-wrap" }}>{n.body}</p>}
+                  <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                    {new Date(n.created_at).toLocaleDateString("uk-UA")}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
 
