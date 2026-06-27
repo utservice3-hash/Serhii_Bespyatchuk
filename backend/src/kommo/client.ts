@@ -41,6 +41,26 @@ async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** POST/PATCH helper for Kommo writes (lead creation, notes, tags). */
+export async function kommoWrite<T>(
+  path: string,
+  body: unknown,
+  method: "POST" | "PATCH" = "POST"
+): Promise<T> {
+  const res = await fetch(`${config.kommo.baseUrl}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${config.kommo.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Kommo write ${method} ${path} failed ${res.status}: ${await res.text()}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 interface KommoFieldValue {
   field_id?: number;
   field_code?: string | null;
