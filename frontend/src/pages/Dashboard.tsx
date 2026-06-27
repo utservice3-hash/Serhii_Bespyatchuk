@@ -36,6 +36,7 @@ import {
   type Team,
 } from "../api";
 import { Layout, type NavKey } from "../components/Layout";
+import { DateRangeFilter } from "../components/DateRangeFilter";
 import { getAuthPayload } from "../auth";
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -144,6 +145,7 @@ export function Dashboard() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [teamId, setTeamId] = useState<number | "">("");
   const [granularity, setGranularity] = useState<"day" | "month">("day");
+  const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -268,7 +270,10 @@ export function Dashboard() {
 
   useEffect(() => {
     setLoading(true);
-    const params = teamId ? { teamId } : {};
+    const params: Record<string, any> = {};
+    if (teamId) params.teamId = teamId;
+    if (dateRange.from) params.from = dateRange.from;
+    if (dateRange.to) params.to = dateRange.to;
 
     Promise.all([
       fetchFunnel(params),
@@ -295,7 +300,7 @@ export function Dashboard() {
         );
       })
       .finally(() => setLoading(false));
-  }, [teamId, granularity]);
+  }, [teamId, granularity, dateRange]);
 
   const chartData = stages.map((s) => ({
     name: STAGE_LABELS[s.funnel_stage] ?? s.funnel_stage,
@@ -340,6 +345,8 @@ export function Dashboard() {
                 <option value="day">По днях</option>
                 <option value="month">По місяцях</option>
               </select>
+
+              <DateRangeFilter value={dateRange} onChange={setDateRange} />
             </div>
           </div>
 
