@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- admin (internal tool) and allow deactivating users when a manager leaves.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS initial_password TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS pipeline_stage_map (
   pipeline_id BIGINT NOT NULL,

@@ -351,7 +351,14 @@ export interface ChatUser {
   id: number;
   name: string;
   email: string;
+  team_name: string;
   unread: number;
+  revenue: number;
+  last_seen: string | null;
+}
+
+export async function heartbeat(): Promise<void> {
+  await api.post("/messages/heartbeat").catch(() => {});
 }
 
 export interface ChatMessage {

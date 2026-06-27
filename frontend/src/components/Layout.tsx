@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { CommandPalette } from "./CommandPalette";
+import { heartbeat } from "../api";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
 export const NAV_GROUPS = [
@@ -63,6 +64,13 @@ export function Layout({
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  // Presence: ping a heartbeat so others see us as online.
+  useEffect(() => {
+    heartbeat();
+    const t = setInterval(heartbeat, 30000);
+    return () => clearInterval(t);
+  }, []);
 
   function toggleCollapsed() {
     setCollapsed((c) => {

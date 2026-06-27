@@ -117,6 +117,26 @@ const STAGE_COLORS: Record<string, string> = {
 
 const STAGE_ORDER = Object.keys(STAGE_LABELS);
 
+// Automatic rank ladder by current-month paid revenue (₴). Badges escalate as
+// a manager hits each threshold; brand-new managers start as "духи".
+function getRank(revenue: number): { emoji: string; title: string } {
+  if (revenue >= 300000) return { emoji: "👑", title: "Король" };
+  if (revenue >= 200000) return { emoji: "🔥", title: "Профі" };
+  if (revenue >= 100000) return { emoji: "⭐", title: "Боєць" };
+  return { emoji: "👻", title: "Дух" };
+}
+
+function presence(lastSeen: string | null): { online: boolean; label: string } {
+  if (!lastSeen) return { online: false, label: "не заходив" };
+  const diffMs = Date.now() - new Date(lastSeen).getTime();
+  if (diffMs < 2 * 60 * 1000) return { online: true, label: "в мережі" };
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 60) return { online: false, label: `був ${mins} хв тому` };
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return { online: false, label: `був ${hours} год тому` };
+  return { online: false, label: `був ${new Date(lastSeen).toLocaleDateString("uk-UA")}` };
+}
+
 const STAT_CHARTS = [
   { key: "stages", title: "Динаміка по етапах" },
   { key: "revenue", title: "Динаміка виручки (оплачено)" },
@@ -1643,31 +1663,67 @@ export function Dashboard() {
             <h1 className="page-title">Месенджер</h1>
           </div>
           <div className="chart-card" style={{ display: "flex", gap: 0, padding: 0, height: "70vh", overflow: "hidden" }}>
-            <div style={{ width: 240, borderRight: "1px solid var(--border)", overflowY: "auto" }}>
-              {chatUsers.map((u) => (
-                <button
-                  key={u.id}
-                  onClick={() => setChatActive(u)}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "12px 16px",
-                    border: "none",
-                    borderBottom: "1px solid var(--border)",
-                    background: chatActive?.id === u.id ? "rgba(197,20,28,0.10)" : "transparent",
-                    color: "var(--text)",
-                  }}
-                >
-                  <span>{u.name}</span>
-                  {u.unread > 0 && (
-                    <span style={{ background: "#c5141c", color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 12 }}>
-                      {u.unread}
-                    </span>
-                  )}
-                </button>
+            <div style={{ width: 280, borderRight: "1px solid var(--border)", overflowY: "auto" }}>
+              {Array.from(
+                chatUsers.reduce((map, u) => {
+                  if (!map.has(u.team_name)) map.set(u.team_name, [] as ChatUser[]);
+                  map.get(u.team_name)!.push(u);
+                  return map;
+                }, new Map<string, ChatUser[]>())
+              ).map(([team, members]) => (
+                <div key={team}>
+                  <div
+                    style={{
+                      padding: "8px 16px 4px",
+                      fontSize: 11,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.4,
+                      color: "var(--text-muted)",
+                      background: "var(--bg)",
+                    }}
+                  >
+                    👥 {team}
+                  </div>
+                  {members.map((u) => {
+                    const rank = getRank(u.revenue);
+                    const pres = presence(u.last_seen);
+                    return (
+                      <button
+                        key={u.id}
+                        onClick={() => setChatActive(u)}
+                        title={`${rank.title} · ${pres.label}`}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "10px 16px",
+                          border: "none",
+                          borderBottom: "1px solid var(--border)",
+                          background: chatActive?.id === u.id ? "rgba(197,20,28,0.10)" : "transparent",
+                          color: "var(--text)",
+                        }}
+                      >
+                        <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <span>
+                            <span style={{ marginRight: 6 }}>{rank.emoji}</span>
+                            {u.name}
+                          </span>
+                          <span style={{ fontSize: 11, color: pres.online ? "#16a34a" : "var(--text-muted)" }}>
+                            {pres.online ? "🟢 " : "⚪ "}
+                            {pres.label}
+                          </span>
+                        </span>
+                        {u.unread > 0 && (
+                          <span style={{ background: "#c5141c", color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 12 }}>
+                            {u.unread}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               ))}
             </div>
             <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
