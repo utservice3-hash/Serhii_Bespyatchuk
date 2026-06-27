@@ -24,13 +24,17 @@ authRouter.post("/login", async (req, res) => {
     role: "admin" | "team_lead" | "manager";
     manager_id: number | null;
     team_id: number | null;
+    is_active: boolean;
   }>(
-    `SELECT id, password_hash, role, manager_id, team_id FROM users WHERE email = $1`,
+    `SELECT id, password_hash, role, manager_id, team_id, is_active FROM users WHERE email = $1`,
     [email]
   );
   const user = result.rows[0];
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: "Invalid credentials" });
+  }
+  if (!user.is_active) {
+    return res.status(403).json({ error: "Обліковий запис деактивовано" });
   }
 
   const token = signToken({

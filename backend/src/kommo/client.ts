@@ -156,6 +156,7 @@ export async function fetchAllDeals(
 export interface KommoUser {
   id: number;
   name: string;
+  email?: string;
   rights: { is_active: boolean };
   _embedded?: {
     groups?: { id: number; name: string }[];

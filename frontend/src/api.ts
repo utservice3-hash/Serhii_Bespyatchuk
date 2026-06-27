@@ -246,6 +246,40 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   await api.put("/settings", settings);
 }
 
+export interface DashboardUser {
+  id: number;
+  email: string;
+  role: "admin" | "team_lead" | "manager";
+  is_active: boolean;
+  initial_password: string | null;
+  manager_name: string | null;
+  team_name: string | null;
+}
+
+export async function fetchUsers(): Promise<DashboardUser[]> {
+  const { data } = await api.get<{ users: DashboardUser[] }>("/settings/users");
+  return data.users;
+}
+
+export async function provisionUsers(): Promise<{ email: string; password: string; name: string }[]> {
+  const { data } = await api.post<{ created: { email: string; password: string; name: string }[] }>(
+    "/settings/users/provision"
+  );
+  return data.created;
+}
+
+export async function resetUserPassword(id: number): Promise<string> {
+  const { data } = await api.post<{ password: string }>(`/settings/users/${id}/reset-password`);
+  return data.password;
+}
+
+export async function updateUser(
+  id: number,
+  patch: { role?: "team_lead" | "manager"; isActive?: boolean }
+): Promise<void> {
+  await api.patch(`/settings/users/${id}`, patch);
+}
+
 export async function fetchLoyalty(params: {
   managerId?: number;
   teamId?: number;

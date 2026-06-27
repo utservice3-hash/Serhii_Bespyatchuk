@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS managers (
 );
 
 ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE managers ADD COLUMN IF NOT EXISTS email TEXT;
 
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
@@ -26,6 +27,11 @@ CREATE TABLE IF NOT EXISTS users (
   team_id INTEGER REFERENCES teams(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Auto-provisioned manager logins: keep the generated password visible to the
+-- admin (internal tool) and allow deactivating users when a manager leaves.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS initial_password TEXT;
 
 CREATE TABLE IF NOT EXISTS pipeline_stage_map (
   pipeline_id BIGINT NOT NULL,

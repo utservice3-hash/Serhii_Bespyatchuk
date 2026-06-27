@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
+import { provisionUsers, resetPassword } from "../db/userProvisioning.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -55,4 +56,66 @@ settingsRouter.put("/", async (req, res) => {
     [JSON.stringify(next)]
   );
   res.json({ settings: next });
+});
+
+function requireAdmin(role: string, res: import("express").Response): boolean {
+  if (role !== "admin") {
+    res.status(403).json({ error: "Лише адміністратор" });
+    return false;
+  }
+  return true;
+}
+
+// --- User management (admin only) ---
+
+settingsRouter.get("/users", async (req, res) => {
+  if (!requireAdmin(req.auth!.role, res)) return;
+  const result = await pool.query(
+    `SELECT u.id, u.email, u.role, u.is_active, u.initial_password,
+            m.name AS manager_name, t.name AS team_name
+     FROM users u
+     LEFT JOIN managers m ON m.id = u.manager_id
+     LEFT JOIN teams t ON t.id = u.team_id
+     ORDER BY u.role = 'admin' DESC, t.name NULLS LAST, u.email`
+  );
+  res.json({ users: result.rows });
+});
+
+// Re-sync logins from the current CRM roster; returns any newly created creds.
+settingsRouter.post("/users/provision", async (req, res) => {
+  if (!requireAdmin(req.auth!.role, res)) return;
+  const created = await provisionUsers();
+  res.json({ created });
+});
+
+settingsRouter.post("/users/:id/reset-password", async (req, res) => {
+  if (!requireAdmin(req.auth!.role, res)) return;
+  const password = await resetPassword(Number(req.params.id));
+  res.json({ password });
+});
+
+// Toggle a user's role (team lead vs. manager) and active state.
+settingsRouter.patch("/users/:id", async (req, res) => {
+  if (!requireAdmin(req.auth!.role, res)) return;
+  const id = Number(req.params.id);
+  const current = await pool.query<{ role: string }>(`SELECT role FROM users WHERE id = $1`, [id]);
+  if (!current.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
+  if (current.rows[0].role === "admin") {
+    return res.status(400).json({ error: "Не можна змінювати адміністратора" });
+  }
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (req.body.role === "team_lead" || req.body.role === "manager") {
+    params.push(req.body.role);
+    sets.push(`role = $${params.length}`);
+  }
+  if (typeof req.body.isActive === "boolean") {
+    params.push(req.body.isActive);
+    sets.push(`is_active = $${params.length}`);
+  }
+  if (sets.length === 0) return res.json({ ok: true });
+  params.push(id);
+  await pool.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
+  res.json({ ok: true });
 });

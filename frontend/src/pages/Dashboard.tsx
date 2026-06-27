@@ -20,6 +20,10 @@ import {
   fetchLoyalty,
   fetchSettings,
   saveSettings,
+  fetchUsers as fetchDashboardUsers,
+  provisionUsers,
+  resetUserPassword,
+  updateUser,
   fetchManagerBreakdown,
   fetchManagerOptions,
   fetchPersonalDashboard,
@@ -37,6 +41,7 @@ import {
   type LeadGenerator,
   type LoyaltyDynamics,
   type AppSettings,
+  type DashboardUser,
   type ReceivableManager,
   type Task,
   type TaskPriority,
@@ -201,6 +206,9 @@ export function Dashboard() {
   const [settingsForm, setSettingsForm] = useState<AppSettings | null>(null);
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [users, setUsers] = useState<DashboardUser[]>([]);
+  const [revealed, setRevealed] = useState<Record<number, string>>({});
+  const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
@@ -308,7 +316,43 @@ export function Dashboard() {
   useEffect(() => {
     if (section !== "settings") return;
     fetchSettings().then(setSettingsForm).catch(() => setSettingsForm(null));
-  }, [section]);
+    if (auth?.role === "admin") {
+      fetchDashboardUsers().then(setUsers).catch(() => setUsers([]));
+    }
+  }, [section, auth]);
+
+  async function reloadUsers() {
+    try {
+      setUsers(await fetchDashboardUsers());
+    } catch {
+      setUsers([]);
+    }
+  }
+
+  async function handleProvision() {
+    const created = await provisionUsers();
+    setProvisionMsg(
+      created.length
+        ? `Створено логінів: ${created.length}`
+        : "Нових користувачів немає — усі вже створені"
+    );
+    await reloadUsers();
+  }
+
+  async function handleResetPassword(id: number) {
+    const password = await resetUserPassword(id);
+    setRevealed((r) => ({ ...r, [id]: password }));
+  }
+
+  async function handleToggleRole(u: DashboardUser) {
+    await updateUser(u.id, { role: u.role === "team_lead" ? "manager" : "team_lead" });
+    await reloadUsers();
+  }
+
+  async function handleToggleActive(u: DashboardUser) {
+    await updateUser(u.id, { isActive: !u.is_active });
+    await reloadUsers();
+  }
 
   async function handleSaveSettings() {
     if (!settingsForm) return;
@@ -1317,6 +1361,99 @@ export function Dashboard() {
                 </button>
                 {settingsSaved && <span style={{ color: "#16a34a" }}>✓ Збережено</span>}
               </div>
+            </div>
+          )}
+
+          {auth?.role === "admin" && (
+            <div className="chart-card" style={{ marginTop: 16 }}>
+              <div
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              >
+                <h2 className="chart-title">Користувачі та доступи</h2>
+                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                  {provisionMsg && <span style={{ color: "#16a34a", fontSize: 13 }}>{provisionMsg}</span>}
+                  <button
+                    onClick={handleProvision}
+                    style={{
+                      padding: "8px 16px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: "#c5141c",
+                      color: "#fff",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Синхронізувати з CRM
+                  </button>
+                </div>
+              </div>
+              <p style={{ fontSize: 12, color: "#667085", marginTop: 4 }}>
+                Логіни створюються автоматично для кожного менеджера з CRM. Тімлід бачить свою
+                команду. Пароль генерується автоматично — натисніть «Скинути», щоб побачити новий.
+              </p>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Ім'я</th>
+                    <th>E-mail</th>
+                    <th>Команда</th>
+                    <th>Роль</th>
+                    <th>Пароль</th>
+                    <th>Активний</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((u) => (
+                    <tr key={u.id} style={{ opacity: u.is_active ? 1 : 0.5 }}>
+                      <td>{u.manager_name ?? "—"}</td>
+                      <td>{u.email}</td>
+                      <td>{u.team_name ?? "—"}</td>
+                      <td>
+                        {u.role === "admin" ? (
+                          "Адмін"
+                        ) : (
+                          <button
+                            onClick={() => handleToggleRole(u)}
+                            style={{
+                              cursor: "pointer",
+                              border: "1px solid #d0d5dd",
+                              borderRadius: 12,
+                              padding: "2px 10px",
+                              background: u.role === "team_lead" ? "#fef3c7" : "#fff",
+                            }}
+                          >
+                            {u.role === "team_lead" ? "Тімлід" : "Менеджер"}
+                          </button>
+                        )}
+                      </td>
+                      <td style={{ fontFamily: "monospace" }}>
+                        {revealed[u.id] ?? (u.initial_password ? u.initial_password : "••••••")}
+                      </td>
+                      <td>{u.is_active ? "✓" : "—"}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {u.role !== "admin" && (
+                          <>
+                            <button
+                              onClick={() => handleResetPassword(u.id)}
+                              style={{ cursor: "pointer", marginRight: 6, fontSize: 12 }}
+                            >
+                              Скинути пароль
+                            </button>
+                            <button
+                              onClick={() => handleToggleActive(u)}
+                              style={{ cursor: "pointer", fontSize: 12 }}
+                            >
+                              {u.is_active ? "Деактивувати" : "Активувати"}
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </>

@@ -8,6 +8,7 @@ import {
   fetchUsers,
 } from "../kommo/client.js";
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
+import { provisionUsers } from "../db/userProvisioning.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -37,14 +38,15 @@ export async function syncManagers(): Promise<number> {
     const isTeamLead = role.toLowerCase().includes("тимл");
 
     await pool.query(
-      `INSERT INTO managers (name, kommo_user_id, team_id, is_team_lead, is_active)
-       VALUES ($1, $2, $3, $4, true)
+      `INSERT INTO managers (name, kommo_user_id, team_id, is_team_lead, is_active, email)
+       VALUES ($1, $2, $3, $4, true, $5)
        ON CONFLICT (kommo_user_id) DO UPDATE SET
          name = EXCLUDED.name,
          team_id = EXCLUDED.team_id,
          is_team_lead = EXCLUDED.is_team_lead,
-         is_active = true`,
-      [user.name, user.id, teamId, isTeamLead]
+         is_active = true,
+         email = COALESCE(EXCLUDED.email, managers.email)`,
+      [user.name, user.id, teamId, isTeamLead, user.email ?? null]
     );
   }
 
@@ -54,6 +56,9 @@ export async function syncManagers(): Promise<number> {
      WHERE kommo_user_id IS NOT NULL AND NOT (kommo_user_id = ANY($1))`,
     [activeKommoIds]
   );
+
+  // Keep dashboard logins in sync with the CRM roster automatically.
+  await provisionUsers();
 
   return users.length;
 }
