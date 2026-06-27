@@ -121,6 +121,29 @@ async function fetchLeadsPage(page: number, limit: number, filter: string): Prom
 
 const PAGE_FETCH_CONCURRENCY = 3;
 
+/**
+ * Streams leads page-by-page, invoking `onBatch` for each batch instead of
+ * accumulating everything in memory — required for full-history passes where
+ * holding all leads at once is too heavy.
+ */
+export async function forEachDealPage(
+  onBatch: (batch: KommoDeal[]) => Promise<void>,
+  createdAfter?: number
+): Promise<void> {
+  const limit = 250;
+  const filter = createdAfter
+    ? `&${encodeURIComponent("filter[created_at][from]")}=${createdAfter}`
+    : "";
+  let page = 1;
+  let exhausted = false;
+  while (!exhausted) {
+    const batch = await fetchLeadsPage(page, limit, filter);
+    if (batch.length > 0) await onBatch(batch);
+    if (batch.length < limit) exhausted = true;
+    page += 1;
+  }
+}
+
 export async function fetchAllDeals(
   updatedAfter?: number,
   createdAfter?: number

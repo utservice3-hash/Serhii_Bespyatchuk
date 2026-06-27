@@ -4,7 +4,8 @@ import {
   extractPhone,
   fetchAllCompanies,
   fetchAllContacts,
-  fetchAllDeals,
+  forEachDealPage,
+  type KommoDeal,
 } from "../kommo/client.js";
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 
@@ -16,7 +17,7 @@ import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils
  * persist client identity for them.
  */
 function resolveClientKey(
-  deal: Awaited<ReturnType<typeof fetchAllDeals>>[number],
+  deal: KommoDeal,
   companyNameById: Map<number, string>,
   contactById: Map<number, { name: string; phone: string | null }>
 ): { name: string | null; key: string | null } {
@@ -56,21 +57,19 @@ export async function backfillClientKeys(): Promise<void> {
     ? 0
     : Math.floor(new Date(startYear, 0, 1).getTime() / 1000);
 
-  const [deals, contacts, companies] = await Promise.all([
-    fetchAllDeals(undefined, yearStart),
-    fetchAllContacts(),
-    fetchAllCompanies(),
-  ]);
-
+  // Reference maps (id -> name/phone) are the only data we keep resident; the
+  // deals themselves are streamed page-by-page and written immediately so peak
+  // memory stays low and progress survives even if the process is interrupted.
+  const [contacts, companies] = await Promise.all([fetchAllContacts(), fetchAllCompanies()]);
   const contactById = new Map(
     contacts.map((c) => [c.id, { name: c.name, phone: extractPhone(c) }])
   );
   const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
+  console.log(`Loaded ${companyNameById.size} companies, ${contactById.size} contacts. Streaming deals...`);
 
   let updated = 0;
-  const CONCURRENCY = 20;
-  for (let i = 0; i < deals.length; i += CONCURRENCY) {
-    const batch = deals.slice(i, i + CONCURRENCY);
+  let seen = 0;
+  await forEachDealPage(async (batch) => {
     await Promise.all(
       batch.map(async (deal) => {
         const { name, key } = resolveClientKey(deal, companyNameById, contactById);
@@ -84,9 +83,11 @@ export async function backfillClientKeys(): Promise<void> {
         updated += result.rowCount ?? 0;
       })
     );
-  }
+    seen += batch.length;
+    if (seen % 2500 === 0) console.log(`  …processed ${seen} deals, updated ${updated}`);
+  }, yearStart);
 
-  console.log(`Backfilled client_name/client_key for ${updated} of ${deals.length} deals created since ${new Date(yearStart * 1000).toISOString()}.`);
+  console.log(`Backfilled ${updated} of ${seen} deals created since ${new Date(yearStart * 1000).toISOString()}.`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
