@@ -1507,6 +1507,11 @@ def _process_status_change(item: dict):
                 args=(lead_id, responsible_id, old_status_id, pipeline_id),
                 daemon=True,
             ).start()
+            threading.Thread(
+                target=_check_duplicate_reference,
+                args=(lead_id, responsible_id),
+                daemon=True,
+            ).start()
         elif status_id == WON_STATUS_ID:
             lead = kommo.get_lead(lead_id)
             amount = int(lead.get("price", 0)) if lead else 0
@@ -1546,6 +1551,11 @@ def _process_status_change(item: dict):
     elif status_id == NON_TARGET_STATUS and old_status_id != status_id:
         threading.Thread(
             target=_check_non_target_lead,
+            args=(lead_id, responsible_id),
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=_check_duplicate_reference,
             args=(lead_id, responsible_id),
             daemon=True,
         ).start()
@@ -1796,6 +1806,56 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     )
     notifier.send_to_nontarget(msg, team)
     logger.info("Non-target lead %s returned to work: %s", lead_id, result.get("reason"))
+
+
+# Маркери посилання на активну угоду в примітках до дубля: або #<id>, або
+# повний лінк Kommo (leads/detail/<id>). Шукаємо ID іншої (не цієї) угоди.
+_DUP_HASH_RE = re.compile(r"#(\d{5,9})")
+_DUP_URL_RE = re.compile(r"leads/detail/(\d{5,9})")
+
+
+def _check_duplicate_reference(lead_id: int, responsible_id: int):
+    """Якщо угоду закрито з причиною 'Дубль', менеджер має вказати в примітках
+    #ID активної угоди (або посилання на неї). Якщо ID немає — нагадуємо
+    менеджеру/тімліду додати його."""
+    lead = kommo.get_lead(lead_id)
+    if not lead:
+        return
+    reason = kommo.get_reject_reason(lead)
+    if "дубл" not in reason.lower():
+        return  # не дубль — нічого не перевіряємо
+
+    notes = kommo.get_lead_notes(lead_id)
+    text = " ".join(
+        (n.get("params") or {}).get("text", "") or ""
+        for n in notes
+        if n.get("note_type") in (4, "common")
+    )
+
+    referenced_ids = {
+        int(m) for m in (_DUP_HASH_RE.findall(text) + _DUP_URL_RE.findall(text))
+    }
+    referenced_ids.discard(lead_id)  # посилання на саму себе не рахується
+    if referenced_ids:
+        logger.info("Duplicate lead %s references active deal(s) %s — OK", lead_id, referenced_ids)
+        return
+
+    manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
+    tg_tag = notifier.get_manager_tag(responsible_id)
+    supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+    sup_part = f" {supervisor_tag}" if supervisor_tag else ""
+    lead_name = lead.get("name", f"Лід #{lead_id}")
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+
+    msg = (
+        f"⚠️ <b>Угоду закрито як дубль без ID активної угоди</b>\n"
+        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
+        f"🏷 Назва: {lead_name}\n"
+        f"📋 Вкажіть, будь ласка, в примітках #ID активної угоди (або посилання на неї).\n"
+        f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
+    )
+    send_to_team_group(responsible_id, msg)
+    logger.info("Duplicate lead %s closed without active-deal ID — reminded %s", lead_id, manager_name)
 
 
 def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):

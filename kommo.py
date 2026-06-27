@@ -234,6 +234,16 @@ def get_lead_source(lead: dict) -> str:
     return ""
 
 
+def get_reject_reason(lead: dict) -> str:
+    """Повертає значення поля 'Причина отказа' з угоди (порожній рядок, якщо немає)."""
+    for cf in lead.get("custom_fields_values") or []:
+        if cf.get("field_id") == REJECT_REASON_FIELD_ID:
+            values = cf.get("values") or []
+            if values:
+                return str(values[0].get("value", "") or "").strip()
+    return ""
+
+
 def get_lead_events(lead_id: int, limit: int = 50) -> list:
     try:
         resp = requests.get(
