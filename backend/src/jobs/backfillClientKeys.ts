@@ -57,23 +57,38 @@ export async function backfillClientKeys(): Promise<void> {
     ? 0
     : Math.floor(new Date(startYear, 0, 1).getTime() / 1000);
 
-  // Reference maps (id -> name/phone) are the only data we keep resident; the
-  // deals themselves are streamed page-by-page and written immediately so peak
-  // memory stays low and progress survives even if the process is interrupted.
-  const [contacts, companies] = await Promise.all([fetchAllContacts(), fetchAllCompanies()]);
-  const contactById = new Map(
-    contacts.map((c) => [c.id, { name: c.name, phone: extractPhone(c) }])
-  );
-  const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
-  console.log(`Loaded ${companyNameById.size} companies, ${contactById.size} contacts. Streaming deals...`);
+  // `--source-only` skips the heavy all-contacts/all-companies fetch (which is
+  // unreliable on this account — Kommo drops the connection on the ~50MB pull)
+  // and backfills just the lead-source fields from each deal's custom fields.
+  const sourceOnly = process.argv.includes("--source-only");
+
+  let contactById = new Map<number, { name: string; phone: string | null }>();
+  let companyNameById = new Map<number, string>();
+  if (!sourceOnly) {
+    const [contacts, companies] = await Promise.all([fetchAllContacts(), fetchAllCompanies()]);
+    contactById = new Map(contacts.map((c) => [c.id, { name: c.name, phone: extractPhone(c) }]));
+    companyNameById = new Map(companies.map((c) => [c.id, c.name]));
+    console.log(`Loaded ${companyNameById.size} companies, ${contactById.size} contacts. Streaming deals...`);
+  } else {
+    console.log("Source-only mode: skipping contacts/companies. Streaming deals...");
+  }
 
   let updated = 0;
   let seen = 0;
   await forEachDealPage(async (batch) => {
     await Promise.all(
       batch.map(async (deal) => {
-        const { name, key } = resolveClientKey(deal, companyNameById, contactById);
         const src = extractLeadSource(deal);
+        if (sourceOnly) {
+          const result = await pool.query(
+            `UPDATE deals SET utm_source = $2, lead_generator = $3, client_source = $4, lead_channel = $5
+               WHERE kommo_id = $1`,
+            [deal.id, src.utmSource, src.leadGenerator, src.clientSource, src.channel]
+          );
+          updated += result.rowCount ?? 0;
+          return;
+        }
+        const { name, key } = resolveClientKey(deal, companyNameById, contactById);
         const result = await pool.query(
           `UPDATE deals SET client_name = $2, client_key = $3,
                   utm_source = $4, lead_generator = $5, client_source = $6, lead_channel = $7
