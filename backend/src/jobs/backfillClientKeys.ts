@@ -4,6 +4,8 @@ import {
   extractPhone,
   fetchAllCompanies,
   fetchAllContacts,
+  fetchCompaniesByIds,
+  fetchContactsByIds,
   fetchLeadsByIds,
   forEachDealPage,
   type KommoDeal,
@@ -79,6 +81,55 @@ async function backfillSourceById(): Promise<void> {
   console.log(`Source backfill done: updated ${updated} of ${ids.length} deals.`);
 }
 
+/**
+ * Full client identity backfill via id batches: fetches our 2022+ deals by id
+ * (with embedded company/contact ids), then fetches just those companies and
+ * contacts by id to resolve names/phones — avoids the unreliable all-records
+ * pull. Reliable and bounded.
+ */
+async function backfillClientKeyById(): Promise<void> {
+  const idRows = await pool.query<{ kommo_id: string }>(
+    `SELECT kommo_id FROM deals WHERE created_at_kommo >= '2022-01-01' ORDER BY kommo_id`
+  );
+  const ids = idRows.rows.map((r) => Number(r.kommo_id));
+  console.log(`Client-key backfill: ${ids.length} deals (2022+) by id.`);
+
+  let updated = 0;
+  let seen = 0;
+  const BATCH = 250;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const leads = await fetchLeadsByIds(ids.slice(i, i + BATCH));
+
+    const companyIds = new Set<number>();
+    const contactIds = new Set<number>();
+    for (const lead of leads) {
+      for (const c of lead._embedded?.companies ?? []) companyIds.add(c.id);
+      for (const c of lead._embedded?.contacts ?? []) contactIds.add(c.id);
+    }
+    const [companies, contacts] = await Promise.all([
+      fetchCompaniesByIds([...companyIds]),
+      fetchContactsByIds([...contactIds]),
+    ]);
+    const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
+    const contactById = new Map(
+      contacts.map((c) => [c.id, { name: c.name, phone: extractPhone(c) }])
+    );
+
+    for (const deal of leads) {
+      const { name, key } = resolveClientKey(deal, companyNameById, contactById);
+      if (!key) continue;
+      const result = await pool.query(
+        `UPDATE deals SET client_name = $2, client_key = $3 WHERE kommo_id = $1`,
+        [deal.id, name, key]
+      );
+      updated += result.rowCount ?? 0;
+    }
+    seen += BATCH;
+    if (seen % 2500 < BATCH) console.log(`  …processed ~${Math.min(seen, ids.length)}/${ids.length}, keyed ${updated}`);
+  }
+  console.log(`Client-key backfill done: keyed ${updated} of ${ids.length}.`);
+}
+
 export async function backfillClientKeys(): Promise<void> {
   // Default to the start of the current year, but allow a wider window so the
   // full deal history can be keyed (needed for repeat-client segmentation).
@@ -98,6 +149,10 @@ export async function backfillClientKeys(): Promise<void> {
   const sourceOnly = process.argv.includes("--source-only");
   if (sourceOnly) {
     await backfillSourceById();
+    return;
+  }
+  if (process.argv.includes("--client-by-id")) {
+    await backfillClientKeyById();
     return;
   }
 

@@ -126,7 +126,7 @@ export async function fetchLeadsByIds(ids: number[]): Promise<KommoDeal[]> {
   if (ids.length === 0) return [];
   const idFilter = ids.map((id) => `filter[id][]=${id}`).join("&");
   const data = await kommoRequest<KommoListResponse<KommoDeal>>(
-    `/api/v4/leads?limit=250&${idFilter}`
+    `/api/v4/leads?limit=250&with=contacts,companies&${idFilter}`
   );
   return data._embedded?.leads ?? [];
 }
@@ -249,9 +249,29 @@ export async function fetchAllContacts(): Promise<KommoContact[]> {
   return contacts;
 }
 
+/** Fetches specific contacts by id (up to 250 per call). */
+export async function fetchContactsByIds(ids: number[]): Promise<KommoContact[]> {
+  if (ids.length === 0) return [];
+  const idFilter = ids.map((id) => `filter[id][]=${id}`).join("&");
+  const data = await kommoRequest<KommoListResponse<KommoContact>>(
+    `/api/v4/contacts?limit=250&${idFilter}`
+  );
+  return data._embedded?.contacts ?? [];
+}
+
 export interface KommoCompany {
   id: number;
   name: string;
+}
+
+/** Fetches specific companies by id (up to 250 per call). */
+export async function fetchCompaniesByIds(ids: number[]): Promise<KommoCompany[]> {
+  if (ids.length === 0) return [];
+  const idFilter = ids.map((id) => `filter[id][]=${id}`).join("&");
+  const data = await kommoRequest<KommoListResponse<KommoCompany>>(
+    `/api/v4/companies?limit=250&${idFilter}`
+  );
+  return data._embedded?.companies ?? [];
 }
 
 async function fetchCompaniesPage(page: number, limit: number): Promise<KommoCompany[]> {
