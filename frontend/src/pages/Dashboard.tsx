@@ -145,6 +145,7 @@ function ForecastBadge({ forecast }: { forecast: { status: string; projectedPct:
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
   const [section, setSection] = useState<NavKey>("overview");
+  const [navHistory, setNavHistory] = useState<NavKey[]>([]);
   const [stages, setStages] = useState<FunnelStage[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [teamId, setTeamId] = useState<number | "">("");
@@ -350,8 +351,33 @@ export function Dashboard() {
     { label: "Середній чек", value: formatAmount(avgDeal) },
   ];
 
+  function navigateTo(next: NavKey) {
+    if (next === section) return;
+    setNavHistory((h) => [...h, section]);
+    setSection(next);
+  }
+
+  function goBack() {
+    // Within the managers section, first step out of a manager's drill-down.
+    if (section === "managers" && selectedManagerId) {
+      setSelectedManagerId(null);
+      return;
+    }
+    setNavHistory((h) => {
+      if (h.length === 0) return h;
+      setSection(h[h.length - 1]);
+      return h.slice(0, -1);
+    });
+  }
+
+  const canGoBack = navHistory.length > 0 || (section === "managers" && !!selectedManagerId);
+
   return (
-    <Layout active={section} onSelect={setSection}>
+    <Layout
+      active={section}
+      onSelect={navigateTo}
+      onBack={canGoBack ? goBack : undefined}
+    >
       {section === "overview" && (
         <>
           <div className="page-header">

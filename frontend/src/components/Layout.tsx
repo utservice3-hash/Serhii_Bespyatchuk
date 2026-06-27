@@ -17,10 +17,12 @@ export function Layout({
   children,
   active,
   onSelect,
+  onBack,
 }: {
   children: React.ReactNode;
   active: NavKey;
   onSelect: (key: NavKey) => void;
+  onBack?: () => void;
 }) {
   const navigate = useNavigate();
 
@@ -52,7 +54,30 @@ export function Layout({
           Вийти
         </button>
       </aside>
-      <main className="main-content">{children}</main>
+      <main className="main-content">
+        {onBack && (
+          <button
+            className="back-button"
+            onClick={onBack}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              marginBottom: 12,
+              padding: "6px 12px",
+              border: "1px solid #d0d5dd",
+              borderRadius: 8,
+              background: "#fff",
+              cursor: "pointer",
+              fontSize: 14,
+              color: "#344054",
+            }}
+          >
+            ← Назад
+          </button>
+        )}
+        {children}
+      </main>
     </div>
   );
 }
