@@ -76,6 +76,11 @@ export async function reactivateLeads(): Promise<void> {
     // Resolve company/contact/phone from a representative deal.
     const [lead] = await fetchLeadsByIds([c.sample_deal]);
     const companyId = lead?._embedded?.companies?.[0]?.id ?? null;
+    // Only reactivate real companies — skip clients that are just a person's name.
+    if (!companyId) {
+      console.log(`SKIP (no company): ${c.client_name}`);
+      continue;
+    }
     const contactId =
       lead?._embedded?.contacts?.find((x) => x.is_main)?.id ?? lead?._embedded?.contacts?.[0]?.id ?? null;
     let phone: string | null = null;
