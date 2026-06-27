@@ -144,7 +144,7 @@ export function Dashboard() {
   const [stages, setStages] = useState<FunnelStage[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [teamId, setTeamId] = useState<number | "">("");
-  const [granularity, setGranularity] = useState<"day" | "month">("day");
+  const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
@@ -285,7 +285,7 @@ export function Dashboard() {
         const byPeriod = new Map<string, Record<string, number | string>>();
         for (const point of points) {
           const label = new Date(point.period).toLocaleDateString("uk-UA", {
-            day: granularity === "day" ? "2-digit" : undefined,
+            day: granularity === "month" ? undefined : "2-digit",
             month: "2-digit",
             year: granularity === "month" ? "numeric" : "2-digit",
           });
@@ -341,8 +341,9 @@ export function Dashboard() {
                 ))}
               </select>
 
-              <select value={granularity} onChange={(e) => setGranularity(e.target.value as "day" | "month")}>
+              <select value={granularity} onChange={(e) => setGranularity(e.target.value as "day" | "week" | "month")}>
                 <option value="day">По днях</option>
+                <option value="week">По тижнях</option>
                 <option value="month">По місяцях</option>
               </select>
 

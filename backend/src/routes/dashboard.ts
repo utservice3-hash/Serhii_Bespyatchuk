@@ -67,7 +67,12 @@ dashboardRouter.get("/funnel", async (req, res) => {
  */
 dashboardRouter.get("/timeseries", async (req, res) => {
   const auth = req.auth!;
-  const granularity = req.query.granularity === "month" ? "month" : "day";
+  const granularity =
+    req.query.granularity === "month"
+      ? "month"
+      : req.query.granularity === "week"
+        ? "week"
+        : "day";
   const managerIdParam = req.query.managerId ? Number(req.query.managerId) : null;
   const teamIdParam = req.query.teamId ? Number(req.query.teamId) : null;
   const from = (req.query.from as string) ?? null;

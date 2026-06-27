@@ -39,7 +39,7 @@ export interface TimeseriesPoint {
 }
 
 export async function fetchTimeseries(params: {
-  granularity: "day" | "month";
+  granularity: "day" | "week" | "month";
   managerId?: number;
   teamId?: number;
   from?: string;
