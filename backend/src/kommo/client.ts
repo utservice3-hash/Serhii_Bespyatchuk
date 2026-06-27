@@ -121,6 +121,16 @@ async function fetchLeadsPage(page: number, limit: number, filter: string): Prom
 
 const PAGE_FETCH_CONCURRENCY = 3;
 
+/** Fetches specific leads by id (up to 250 per call) with their custom fields. */
+export async function fetchLeadsByIds(ids: number[]): Promise<KommoDeal[]> {
+  if (ids.length === 0) return [];
+  const idFilter = ids.map((id) => `filter[id][]=${id}`).join("&");
+  const data = await kommoRequest<KommoListResponse<KommoDeal>>(
+    `/api/v4/leads?limit=250&${idFilter}`
+  );
+  return data._embedded?.leads ?? [];
+}
+
 /**
  * Streams leads page-by-page, invoking `onBatch` for each batch instead of
  * accumulating everything in memory — required for full-history passes where

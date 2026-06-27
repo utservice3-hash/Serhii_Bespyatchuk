@@ -4,6 +4,7 @@ import {
   extractPhone,
   fetchAllCompanies,
   fetchAllContacts,
+  fetchLeadsByIds,
   forEachDealPage,
   type KommoDeal,
 } from "../kommo/client.js";
@@ -44,6 +45,40 @@ function resolveClientKey(
   return { name: null, key: null };
 }
 
+/**
+ * Efficient lead-source backfill: pulls our own deals (created 2022+) by id in
+ * batches of 250 and updates lead_channel/source from their custom fields.
+ */
+async function backfillSourceById(): Promise<void> {
+  const idRows = await pool.query<{ kommo_id: string }>(
+    `SELECT kommo_id FROM deals WHERE created_at_kommo >= '2022-01-01' ORDER BY kommo_id`
+  );
+  const ids = idRows.rows.map((r) => Number(r.kommo_id));
+  console.log(`Source backfill: ${ids.length} deals (2022+) to refresh by id.`);
+
+  let updated = 0;
+  let seen = 0;
+  const BATCH = 250;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const batchIds = ids.slice(i, i + BATCH);
+    const leads = await fetchLeadsByIds(batchIds);
+    for (const deal of leads) {
+      const src = extractLeadSource(deal);
+      const result = await pool.query(
+        `UPDATE deals SET utm_source = $2, lead_generator = $3, client_source = $4, lead_channel = $5
+           WHERE kommo_id = $1`,
+        [deal.id, src.utmSource, src.leadGenerator, src.clientSource, src.channel]
+      );
+      updated += result.rowCount ?? 0;
+    }
+    seen += batchIds.length;
+    if (seen % 2500 === 0 || i + BATCH >= ids.length) {
+      console.log(`  …processed ${seen}/${ids.length}, updated ${updated}`);
+    }
+  }
+  console.log(`Source backfill done: updated ${updated} of ${ids.length} deals.`);
+}
+
 export async function backfillClientKeys(): Promise<void> {
   // Default to the start of the current year, but allow a wider window so the
   // full deal history can be keyed (needed for repeat-client segmentation).
@@ -57,10 +92,14 @@ export async function backfillClientKeys(): Promise<void> {
     ? 0
     : Math.floor(new Date(startYear, 0, 1).getTime() / 1000);
 
-  // `--source-only` skips the heavy all-contacts/all-companies fetch (which is
-  // unreliable on this account — Kommo drops the connection on the ~50MB pull)
-  // and backfills just the lead-source fields from each deal's custom fields.
+  // `--source-only` backfills just the lead-source fields. It fetches our own
+  // deals by id (in batches) rather than paging all of Kommo's history, so it
+  // only touches leads we actually have. We ignore leads older than 2022.
   const sourceOnly = process.argv.includes("--source-only");
+  if (sourceOnly) {
+    await backfillSourceById();
+    return;
+  }
 
   let contactById = new Map<number, { name: string; phone: string | null }>();
   let companyNameById = new Map<number, string>();
