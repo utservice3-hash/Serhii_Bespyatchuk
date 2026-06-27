@@ -124,13 +124,18 @@ export async function reactivateLeads(): Promise<void> {
       { note_type: "common", params: { text: noteText } },
     ]);
 
-    // Tag the company without clobbering existing tags.
+    // Tag the company without clobbering existing tags. Non-fatal: a tagging
+    // failure must not undo the created lead.
     if (companyId) {
-      await kommoWrite(
-        "/api/v4/companies",
-        [{ id: companyId, _embedded: { tags_to_add: [{ name: TAG_COMPANY }] } }],
-        "PATCH"
-      );
+      try {
+        await kommoWrite(
+          "/api/v4/companies",
+          [{ id: companyId, _embedded: { tags_to_add: [{ name: TAG_COMPANY }] } }],
+          "PATCH"
+        );
+      } catch (err) {
+        console.log(`  (company tag failed for ${companyId}: ${(err as Error).message})`);
+      }
     }
 
     console.log(`CREATED lead ${newLeadId} for ${c.client_name} → user ${responsible}`);
