@@ -237,15 +237,21 @@ dashboardRouter.get("/overview", async (req, res) => {
 
   // New vs repeat: a client whose first-ever paid deal falls in the period is
   // "new"; one who paid before the period is "repeat".
+  // With a date range, "new" = first-ever paid falls in the period. Without
+  // one (all-time view), "new" = one-time buyer, "repeat" = bought 2+ times.
   const newRepeat = await pool.query<{ bucket: string; clients: string; revenue: string }>(
     `WITH firsts AS (
-       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid, COUNT(*) AS cnt
        FROM deals d
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
        GROUP BY d.client_key
      )
-     SELECT CASE WHEN f.first_paid >= COALESCE($${params.length + 1}::date, '-infinity') THEN 'new' ELSE 'repeat' END AS bucket,
+     SELECT CASE
+              WHEN $${params.length + 1}::date IS NOT NULL THEN
+                CASE WHEN f.first_paid >= $${params.length + 1}::date THEN 'new' ELSE 'repeat' END
+              ELSE CASE WHEN f.cnt = 1 THEN 'new' ELSE 'repeat' END
+            END AS bucket,
             COUNT(DISTINCT d.client_key) AS clients,
             COALESCE(SUM(d.price), 0) AS revenue
      FROM deals d
