@@ -157,6 +157,9 @@ export function Dashboard() {
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const [datePreset, setDatePreset] = useState<string | null>("alltime");
   const [conversionChannels, setConversionChannels] = useState<ConversionChannel[]>([]);
+  const [paidDynamics, setPaidDynamics] = useState<
+    { period: string; revenue: number; paidCount: number; avgCheck: number }[]
+  >([]);
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -341,6 +344,11 @@ export function Dashboard() {
         setStages(funnelData);
 
         const byPeriod = new Map<string, Record<string, number | string>>();
+        // Parallel series of paid-deal metrics (revenue, count, avg check).
+        const paidByPeriod = new Map<
+          string,
+          { period: string; sort: string; revenue: number; paidCount: number }
+        >();
         for (const point of points) {
           const label = new Date(point.period).toLocaleDateString("uk-UA", {
             day: granularity === "month" ? undefined : "2-digit",
@@ -350,11 +358,30 @@ export function Dashboard() {
           const row = byPeriod.get(point.period) ?? { period: label };
           row[point.funnel_stage] = Number(point.deal_count);
           byPeriod.set(point.period, row);
+
+          if (point.funnel_stage === "paid") {
+            paidByPeriod.set(point.period, {
+              period: label,
+              sort: point.period,
+              revenue: Number(point.total_amount),
+              paidCount: Number(point.deal_count),
+            });
+          }
         }
         setTimeseries(
           Array.from(byPeriod.entries())
             .sort(([a], [b]) => (a < b ? -1 : 1))
             .map(([, row]) => row)
+        );
+        setPaidDynamics(
+          Array.from(paidByPeriod.values())
+            .sort((a, b) => (a.sort < b.sort ? -1 : 1))
+            .map((p) => ({
+              period: p.period,
+              revenue: p.revenue,
+              paidCount: p.paidCount,
+              avgCheck: p.paidCount > 0 ? Math.round(p.revenue / p.paidCount) : 0,
+            }))
         );
       })
       .finally(() => setLoading(false));
@@ -525,6 +552,45 @@ export function Dashboard() {
                         connectNulls
                       />
                     ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="chart-card">
+                <h2 className="chart-title">Динаміка виручки (оплачено)</h2>
+                <ResponsiveContainer width="100%" height={320}>
+                  <BarChart data={paidDynamics}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="period" />
+                    <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                    <Tooltip formatter={(v) => formatAmount(Number(v))} />
+                    <Bar dataKey="revenue" name="Виручка" fill="#c5141c" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="chart-card">
+                <h2 className="chart-title">Динаміка кількості оплат</h2>
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={paidDynamics}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="period" />
+                    <YAxis />
+                    <Tooltip />
+                    <Line type="monotone" dataKey="paidCount" name="Оплачено угод" stroke="#16a34a" connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="chart-card">
+                <h2 className="chart-title">Динаміка середнього чека</h2>
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={paidDynamics}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="period" />
+                    <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                    <Tooltip formatter={(v) => formatAmount(Number(v))} />
+                    <Line type="monotone" dataKey="avgCheck" name="Середній чек" stroke="#7c3aed" connectNulls />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
