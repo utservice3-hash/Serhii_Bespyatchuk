@@ -126,7 +126,7 @@ dashboardRouter.get("/leadgen", async (req, res) => {
             COUNT(*) AS leads,
             COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS reached_paid
      FROM deals d
-     JOIN managers m ON m.id = d.manager_id
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
      LEFT JOIN teams t ON t.id = m.team_id
      ${where}
      GROUP BY d.manager_id, m.name, t.name, COALESCE(NULLIF(d.client_source, ''), 'Не вказано')`,
@@ -261,7 +261,7 @@ dashboardRouter.get("/overview", async (req, res) => {
     `SELECT m.id AS manager_id, m.name,
             COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
      FROM deals d
-     JOIN managers m ON m.id = d.manager_id
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      ${paidWhere}
      GROUP BY m.id, m.name
@@ -887,7 +887,7 @@ dashboardRouter.get("/loyalty", async (req, res) => {
             COUNT(*) AS total_paid,
             MAX(d.created_at_kommo) AS last_paid
      FROM deals d
-     JOIN managers m ON m.id = d.manager_id
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      ${where}
        AND psm.funnel_stage = 'paid'
