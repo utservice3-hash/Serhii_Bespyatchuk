@@ -117,6 +117,21 @@ const STAGE_COLORS: Record<string, string> = {
 
 const STAGE_ORDER = Object.keys(STAGE_LABELS);
 
+/** The equal-length period immediately before [from, to]. */
+function previousRange(from: string, to: string): { from: string; to: string } {
+  const f = new Date(from);
+  const t = new Date(to);
+  const days = Math.round((t.getTime() - f.getTime()) / 86400000) + 1;
+  const prevTo = new Date(f);
+  prevTo.setDate(prevTo.getDate() - 1);
+  const prevFrom = new Date(prevTo);
+  prevFrom.setDate(prevFrom.getDate() - days + 1);
+  return {
+    from: prevFrom.toISOString().split("T")[0],
+    to: prevTo.toISOString().split("T")[0],
+  };
+}
+
 // Automatic rank ladder by current-month paid revenue (₴). Badges escalate as
 // a manager hits each threshold; brand-new managers start as "духи".
 function getRank(revenue: number): { emoji: string; title: string } {
@@ -209,6 +224,9 @@ export function Dashboard() {
   >([]);
   const [zoomChart, setZoomChart] = useState<string | null>(null);
   const [overview, setOverview] = useState<ExecutiveOverview | null>(null);
+  const [prevStages, setPrevStages] = useState<FunnelStage[]>([]);
+  const [prevOverview, setPrevOverview] = useState<ExecutiveOverview | null>(null);
+  const [kpiDetail, setKpiDetail] = useState<string | null>(null);
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -469,6 +487,19 @@ export function Dashboard() {
       .then(setOverview)
       .catch(() => setOverview(null));
 
+    // Same metrics for the immediately-preceding period of equal length, to
+    // show growth/decline deltas on the KPI cards.
+    const prev =
+      dateRange.from && dateRange.to ? previousRange(dateRange.from, dateRange.to) : null;
+    if (prev) {
+      const prevParams = { ...params, from: prev.from, to: prev.to };
+      fetchFunnel(prevParams).then(setPrevStages).catch(() => setPrevStages([]));
+      fetchOverview(prevParams).then(setPrevOverview).catch(() => setPrevOverview(null));
+    } else {
+      setPrevStages([]);
+      setPrevOverview(null);
+    }
+
     Promise.all([
       fetchFunnel(params),
       fetchTimeseries({ granularity, ...params }),
@@ -605,11 +636,27 @@ export function Dashboard() {
   // Average check = revenue per actually-paid deal, not per lead in the funnel.
   const avgDeal = paid > 0 ? paidAmount / paid : 0;
 
+  // Previous-period equivalents (for growth deltas + drill-down details).
+  const prevChart = [...prevStages].map((s) => ({
+    name: STAGE_LABELS[s.funnel_stage] ?? s.funnel_stage,
+    count: Number(s.deal_count),
+    amount: Number(s.total_amount),
+  }));
+  const prevDeals = prevChart.reduce((s, x) => s + x.count, 0);
+  const prevAmount = prevChart.reduce((s, x) => s + x.amount, 0);
+  const prevPaidStage = prevChart.find((s) => s.name === STAGE_LABELS.paid);
+  const prevPaid = prevPaidStage?.count ?? 0;
+  const prevConversion = prevDeals > 0 ? Math.round((prevPaid / prevDeals) * 100) : 0;
+  const prevAvg = prevPaid > 0 ? (prevPaidStage?.amount ?? 0) / prevPaid : 0;
+
   const kpis = [
-    { label: "Угоди", value: totalDeals.toLocaleString("uk-UA") },
-    { label: "Сума", value: formatAmount(totalAmount) },
-    { label: "Конверсія", value: `${conversion}%` },
-    { label: "Середній чек", value: formatAmount(avgDeal) },
+    { key: "deals", label: "Угоди", value: totalDeals.toLocaleString("uk-UA"), cur: totalDeals, prev: prevDeals },
+    { key: "sum", label: "Сума", value: formatAmount(totalAmount), cur: totalAmount, prev: prevAmount },
+    { key: "conv", label: "Конверсія", value: `${conversion}%`, cur: conversion, prev: prevConversion, unit: "%" },
+    { key: "avg", label: "Середній чек", value: formatAmount(avgDeal), cur: avgDeal, prev: prevAvg },
+    { key: "leads", label: "Створено лідів", value: (overview?.createdLeads ?? 0).toLocaleString("uk-UA"), cur: overview?.createdLeads ?? 0, prev: prevOverview?.createdLeads ?? 0 },
+    { key: "newc", label: "Нові клієнти", value: (overview?.newClients ?? 0).toLocaleString("uk-UA"), cur: overview?.newClients ?? 0, prev: prevOverview?.newClients ?? 0 },
+    { key: "repc", label: "Повторні клієнти", value: (overview?.repeatClients ?? 0).toLocaleString("uk-UA"), cur: overview?.repeatClients ?? 0, prev: prevOverview?.repeatClients ?? 0 },
   ];
 
   function navigateTo(next: NavKey) {
@@ -681,34 +728,72 @@ export function Dashboard() {
           />
 
           <div className="kpi-grid">
-            {kpis.map((kpi) => (
-              <div className="kpi-card" key={kpi.label}>
-                <span className="kpi-label">{kpi.label}</span>
-                <span className="kpi-value">{kpi.value}</span>
-              </div>
-            ))}
+            {kpis.map((kpi) => {
+              const hasPrev = prevStages.length > 0 || prevOverview !== null;
+              const diff = kpi.cur - kpi.prev;
+              const pct = kpi.prev > 0 ? Math.round((diff / kpi.prev) * 100) : kpi.cur > 0 ? 100 : 0;
+              const color = diff > 0 ? "#16a34a" : diff < 0 ? "#dc2626" : "#667085";
+              const arrow = diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
+              return (
+                <button
+                  className="kpi-card"
+                  key={kpi.key}
+                  onClick={() => setKpiDetail(kpi.key)}
+                  style={{ textAlign: "left", border: "none", cursor: "pointer", background: "var(--card-bg)" }}
+                  title="Натисніть для деталей"
+                >
+                  <span className="kpi-label">{kpi.label}</span>
+                  <span className="kpi-value">{kpi.value}</span>
+                  {hasPrev && (
+                    <span style={{ fontSize: 12, color, fontWeight: 600 }}>
+                      {arrow} {Math.abs(pct)}% до попер. періоду
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
+
+          {kpiDetail && (() => {
+            const kpi = kpis.find((k) => k.key === kpiDetail)!;
+            const diff = kpi.cur - kpi.prev;
+            const pct = kpi.prev > 0 ? Math.round((diff / kpi.prev) * 100) : kpi.cur > 0 ? 100 : 0;
+            const fmt = (n: number) =>
+              kpi.unit === "%" ? `${Math.round(n)}%` : kpi.key === "sum" || kpi.key === "avg" ? formatAmount(n) : n.toLocaleString("uk-UA");
+            const showTeams = kpi.key === "sum" || kpi.key === "deals";
+            return (
+              <div onClick={() => setKpiDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 24 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 24, width: "90vw", maxWidth: 640 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <h2 className="chart-title">{kpi.label} — деталі</h2>
+                    <button onClick={() => setKpiDetail(null)} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
+                  </div>
+                  <div className="kpi-grid" style={{ marginBottom: 16 }}>
+                    <div className="kpi-card"><span className="kpi-label">Поточний період</span><span className="kpi-value">{fmt(kpi.cur)}</span></div>
+                    <div className="kpi-card"><span className="kpi-label">Попередній період</span><span className="kpi-value">{fmt(kpi.prev)}</span></div>
+                    <div className="kpi-card"><span className="kpi-label">Зміна</span><span className="kpi-value" style={{ color: diff > 0 ? "#16a34a" : diff < 0 ? "#dc2626" : undefined }}>{diff > 0 ? "↑" : diff < 0 ? "↓" : "→"} {Math.abs(pct)}%</span></div>
+                  </div>
+                  {showTeams && overview && (
+                    <table className="data-table">
+                      <thead><tr><th>Команда</th><th>Виручка</th><th>Угод</th></tr></thead>
+                      <tbody>
+                        {overview.byTeam.map((t) => (
+                          <tr key={t.teamId}><td>{t.teamName}</td><td>{formatAmount(t.revenue)}</td><td>{t.deals}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {overview && (
             <>
               <div className="kpi-grid">
                 <div className="kpi-card">
-                  <span className="kpi-label">Створено лідів (період)</span>
-                  <span className="kpi-value">{overview.createdLeads.toLocaleString("uk-UA")}</span>
-                </div>
-                <div className="kpi-card">
                   <span className="kpi-label">Дебіторська заборгованість</span>
                   <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">Нові клієнти (період)</span>
-                  <span className="kpi-value">{overview.newClients.toLocaleString("uk-UA")}</span>
-                  <span style={{ fontSize: 12, color: "#667085" }}>{formatAmount(overview.newRevenue)}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">Повторні клієнти (період)</span>
-                  <span className="kpi-value">{overview.repeatClients.toLocaleString("uk-UA")}</span>
-                  <span style={{ fontSize: 12, color: "#667085" }}>{formatAmount(overview.repeatRevenue)}</span>
                 </div>
                 <div className="kpi-card">
                   <span className="kpi-label">Частка повторних (виручка)</span>
