@@ -105,6 +105,13 @@ const STAGE_COLORS: Record<string, string> = {
 
 const STAGE_ORDER = Object.keys(STAGE_LABELS);
 
+const STAT_CHARTS = [
+  { key: "stages", title: "Динаміка по етапах" },
+  { key: "revenue", title: "Динаміка виручки (оплачено)" },
+  { key: "count", title: "Динаміка кількості оплат" },
+  { key: "avgcheck", title: "Динаміка середнього чека" },
+];
+
 function formatAmount(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}М ₴`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(0)}тис ₴`;
@@ -160,6 +167,7 @@ export function Dashboard() {
   const [paidDynamics, setPaidDynamics] = useState<
     { period: string; revenue: number; paidCount: number; avgCheck: number }[]
   >([]);
+  const [zoomChart, setZoomChart] = useState<string | null>(null);
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -393,6 +401,70 @@ export function Dashboard() {
     amount: Number(s.total_amount),
   }));
 
+  function renderStatChart(key: string, height: number) {
+    if (key === "stages") {
+      return (
+        <ResponsiveContainer width="100%" height={height}>
+          <LineChart data={timeseries}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="period" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            {STAGE_ORDER.map((stage) => (
+              <Line
+                key={stage}
+                type="monotone"
+                dataKey={stage}
+                name={STAGE_LABELS[stage]}
+                stroke={STAGE_COLORS[stage]}
+                connectNulls
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      );
+    }
+    if (key === "revenue") {
+      return (
+        <ResponsiveContainer width="100%" height={height}>
+          <BarChart data={paidDynamics}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="period" />
+            <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+            <Tooltip formatter={(v) => formatAmount(Number(v))} />
+            <Bar dataKey="revenue" name="Виручка" fill="#c5141c" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      );
+    }
+    if (key === "count") {
+      return (
+        <ResponsiveContainer width="100%" height={height}>
+          <LineChart data={paidDynamics}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="period" />
+            <YAxis />
+            <Tooltip />
+            <Line type="monotone" dataKey="paidCount" name="Оплачено угод" stroke="#16a34a" connectNulls />
+          </LineChart>
+        </ResponsiveContainer>
+      );
+    }
+    // avgcheck
+    return (
+      <ResponsiveContainer width="100%" height={height}>
+        <LineChart data={paidDynamics}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="period" />
+          <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+          <Tooltip formatter={(v) => formatAmount(Number(v))} />
+          <Line type="monotone" dataKey="avgCheck" name="Середній чек" stroke="#7c3aed" connectNulls />
+        </LineChart>
+      </ResponsiveContainer>
+    );
+  }
+
   const totalDeals = chartData.reduce((sum, s) => sum + s.count, 0);
   const totalAmount = chartData.reduce((sum, s) => sum + s.amount, 0);
   const paidStage = chartData.find((s) => s.name === STAGE_LABELS.paid);
@@ -532,67 +604,137 @@ export function Dashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+            </div>
+          )}
+        </>
+      )}
 
-              <div className="chart-card">
-                <h2 className="chart-title">Динаміка по етапах</h2>
-                <ResponsiveContainer width="100%" height={320}>
-                  <LineChart data={timeseries}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="period" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    {STAGE_ORDER.map((stage) => (
-                      <Line
-                        key={stage}
-                        type="monotone"
-                        dataKey={stage}
-                        name={STAGE_LABELS[stage]}
-                        stroke={STAGE_COLORS[stage]}
-                        connectNulls
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+      {section === "statistics" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Статистика</h1>
+            <div className="page-filters">
+              <select
+                value={teamId}
+                onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
+              >
+                <option value="">Усі команди</option>
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={granularity}
+                onChange={(e) => setGranularity(e.target.value as "day" | "week" | "month")}
+              >
+                <option value="day">По днях</option>
+                <option value="week">По тижнях</option>
+                <option value="month">По місяцях</option>
+              </select>
+              <DateRangeFilter
+                value={dateRange}
+                onChange={(r) => {
+                  setDateRange(r);
+                  setDatePreset(null);
+                }}
+              />
+            </div>
+          </div>
 
-              <div className="chart-card">
-                <h2 className="chart-title">Динаміка виручки (оплачено)</h2>
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={paidDynamics}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="period" />
-                    <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-                    <Tooltip formatter={(v) => formatAmount(Number(v))} />
-                    <Bar dataKey="revenue" name="Виручка" fill="#c5141c" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+          <QuickPeriods
+            active={datePreset}
+            onSelect={(id, range) => {
+              setDatePreset(id);
+              setDateRange(range);
+            }}
+          />
 
-              <div className="chart-card">
-                <h2 className="chart-title">Динаміка кількості оплат</h2>
-                <ResponsiveContainer width="100%" height={320}>
-                  <LineChart data={paidDynamics}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="period" />
-                    <YAxis />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="paidCount" name="Оплачено угод" stroke="#16a34a" connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+          {loading ? (
+            <p className="loading-text">Завантаження...</p>
+          ) : (
+            <div className="chart-grid">
+              {STAT_CHARTS.map((c) => (
+                <div className="chart-card" key={c.key}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <h2 className="chart-title">{c.title}</h2>
+                    <button
+                      onClick={() => setZoomChart(c.key)}
+                      title="Збільшити"
+                      style={{
+                        border: "1px solid #d0d5dd",
+                        background: "#fff",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        padding: "2px 8px",
+                        fontSize: 16,
+                      }}
+                    >
+                      ⛶
+                    </button>
+                  </div>
+                  {renderStatChart(c.key, 300)}
+                </div>
+              ))}
+            </div>
+          )}
 
-              <div className="chart-card">
-                <h2 className="chart-title">Динаміка середнього чека</h2>
-                <ResponsiveContainer width="100%" height={320}>
-                  <LineChart data={paidDynamics}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="period" />
-                    <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-                    <Tooltip formatter={(v) => formatAmount(Number(v))} />
-                    <Line type="monotone" dataKey="avgCheck" name="Середній чек" stroke="#7c3aed" connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
+          {zoomChart && (
+            <div
+              onClick={() => setZoomChart(null)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(0,0,0,0.55)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 2000,
+                padding: 24,
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  background: "#fff",
+                  borderRadius: 12,
+                  padding: 24,
+                  width: "90vw",
+                  maxWidth: 1200,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 12,
+                  }}
+                >
+                  <h2 className="chart-title">
+                    {STAT_CHARTS.find((c) => c.key === zoomChart)?.title}
+                  </h2>
+                  <button
+                    onClick={() => setZoomChart(null)}
+                    style={{
+                      border: "1px solid #d0d5dd",
+                      background: "#fff",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      padding: "4px 12px",
+                    }}
+                  >
+                    ✕ Закрити
+                  </button>
+                </div>
+                {renderStatChart(zoomChart, 600)}
               </div>
             </div>
           )}

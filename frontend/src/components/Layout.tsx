@@ -3,6 +3,7 @@ import { Logo } from "./Logo";
 
 export const NAV_ITEMS = [
   { key: "overview", label: "Огляд", icon: "📊" },
+  { key: "statistics", label: "Статистика", icon: "📈" },
   { key: "teams", label: "Команди", icon: "👥" },
   { key: "managers", label: "Менеджери", icon: "🧑‍💼" },
   { key: "loyalty", label: "Постійні клієнти", icon: "🔁" },
