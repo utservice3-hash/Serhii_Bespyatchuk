@@ -16,6 +16,7 @@ import {
   deleteTask,
   fetchConversion,
   fetchFunnel,
+  fetchOverview,
   fetchLeadgen,
   fetchLoyalty,
   fetchSettings,
@@ -38,6 +39,7 @@ import {
   type ManagerOption,
   type PersonalDashboard,
   type ConversionChannel,
+  type ExecutiveOverview,
   type LeadGenerator,
   type LoyaltyDynamics,
   type AppSettings,
@@ -173,6 +175,7 @@ export function Dashboard() {
     { period: string; revenue: number; paidCount: number; avgCheck: number }[]
   >([]);
   const [zoomChart, setZoomChart] = useState<string | null>(null);
+  const [overview, setOverview] = useState<ExecutiveOverview | null>(null);
   const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -387,6 +390,10 @@ export function Dashboard() {
     fetchConversion(params)
       .then(setConversionChannels)
       .catch(() => setConversionChannels([]));
+
+    fetchOverview(params)
+      .then(setOverview)
+      .catch(() => setOverview(null));
 
     Promise.all([
       fetchFunnel(params),
@@ -607,6 +614,77 @@ export function Dashboard() {
               </div>
             ))}
           </div>
+
+          {overview && (
+            <>
+              <div className="kpi-grid">
+                <div className="kpi-card">
+                  <span className="kpi-label">Дебіторська заборгованість</span>
+                  <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Нові клієнти (період)</span>
+                  <span className="kpi-value">{overview.newClients.toLocaleString("uk-UA")}</span>
+                  <span style={{ fontSize: 12, color: "#667085" }}>{formatAmount(overview.newRevenue)}</span>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Повторні клієнти (період)</span>
+                  <span className="kpi-value">{overview.repeatClients.toLocaleString("uk-UA")}</span>
+                  <span style={{ fontSize: 12, color: "#667085" }}>{formatAmount(overview.repeatRevenue)}</span>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Частка повторних (виручка)</span>
+                  <span className="kpi-value">
+                    {overview.newRevenue + overview.repeatRevenue > 0
+                      ? Math.round(
+                          (overview.repeatRevenue / (overview.newRevenue + overview.repeatRevenue)) * 100
+                        )
+                      : 0}
+                    %
+                  </span>
+                </div>
+              </div>
+
+              <div className="chart-grid">
+                <div className="chart-card">
+                  <h2 className="chart-title">Виручка по командах</h2>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={overview.byTeam} margin={{ bottom: 24 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="teamName" interval={0} tick={{ fontSize: 11 }} angle={-15} textAnchor="end" height={50} />
+                      <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                      <Tooltip formatter={(v) => formatAmount(Number(v))} />
+                      <Bar dataKey="revenue" name="Виручка" fill="#c5141c" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="chart-card">
+                  <h2 className="chart-title">Топ-10 менеджерів за виручкою</h2>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Менеджер</th>
+                        <th>Виручка</th>
+                        <th>Угод</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {overview.topManagers.map((m, i) => (
+                        <tr key={m.managerId}>
+                          <td>{i + 1}</td>
+                          <td>{m.name}</td>
+                          <td>{formatAmount(m.revenue)}</td>
+                          <td>{m.deals}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
 
           {conversionChannels.length > 0 && (
             <div className="chart-card" style={{ marginBottom: 16 }}>

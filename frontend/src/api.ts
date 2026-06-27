@@ -117,6 +117,25 @@ export async function fetchLeadgen(params: {
   return data.generators;
 }
 
+export interface ExecutiveOverview {
+  byTeam: { teamId: number; teamName: string; revenue: number; deals: number }[];
+  topManagers: { managerId: number; name: string; revenue: number; deals: number }[];
+  receivablesTotal: number;
+  newClients: number;
+  newRevenue: number;
+  repeatClients: number;
+  repeatRevenue: number;
+}
+
+export async function fetchOverview(params: {
+  teamId?: number;
+  from?: string;
+  to?: string;
+}): Promise<ExecutiveOverview> {
+  const { data } = await api.get<ExecutiveOverview>("/dashboard/overview", { params });
+  return data;
+}
+
 export interface Team {
   id: number;
   name: string;

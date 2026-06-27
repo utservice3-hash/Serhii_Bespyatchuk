@@ -177,6 +177,128 @@ dashboardRouter.get("/leadgen", async (req, res) => {
 });
 
 /**
+ * Executive summary for the head of sales: revenue by team, the top managers
+ * by paid revenue, total outstanding receivables and a new-vs-repeat client
+ * split — everything scoped by role/team and the selected date range.
+ */
+dashboardRouter.get("/overview", async (req, res) => {
+  const auth = req.auth!;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+  if (auth.role === "team_lead") teamId = auth.teamId;
+  const managerId = auth.role === "manager" ? auth.managerId : null;
+
+  const paidConds = ["psm.funnel_stage = 'paid'"];
+  const params: unknown[] = [];
+  if (managerId) {
+    params.push(managerId);
+    paidConds.push(`d.manager_id = $${params.length}`);
+  }
+  if (teamId) {
+    params.push(teamId);
+    paidConds.push(`m.team_id = $${params.length}`);
+  }
+  if (from) {
+    params.push(from);
+    paidConds.push(`d.created_at_kommo >= $${params.length}`);
+  }
+  if (to) {
+    params.push(to);
+    paidConds.push(`d.created_at_kommo <= $${params.length}`);
+  }
+  const paidWhere = `WHERE ${paidConds.join(" AND ")}`;
+
+  const byTeam = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
+    `SELECT t.id AS team_id, t.name AS team_name,
+            COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN teams t ON t.id = m.team_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${paidWhere}
+     GROUP BY t.id, t.name
+     ORDER BY revenue DESC`,
+    params
+  );
+
+  const topManagers = await pool.query<{ manager_id: number; name: string; revenue: string; deals: string }>(
+    `SELECT m.id AS manager_id, m.name,
+            COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${paidWhere}
+     GROUP BY m.id, m.name
+     ORDER BY revenue DESC
+     LIMIT 10`,
+    params
+  );
+
+  // New vs repeat: a client whose first-ever paid deal falls in the period is
+  // "new"; one who paid before the period is "repeat".
+  const newRepeat = await pool.query<{ bucket: string; clients: string; revenue: string }>(
+    `WITH firsts AS (
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+       GROUP BY d.client_key
+     )
+     SELECT CASE WHEN f.first_paid >= COALESCE($${params.length + 1}::date, '-infinity') THEN 'new' ELSE 'repeat' END AS bucket,
+            COUNT(DISTINCT d.client_key) AS clients,
+            COALESCE(SUM(d.price), 0) AS revenue
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     JOIN firsts f ON f.client_key = d.client_key
+     ${paidWhere}
+     GROUP BY 1`,
+    [...params, from]
+  );
+
+  const recvConds: string[] = ["r.manager_id IS NOT NULL"];
+  const recvParams: unknown[] = [];
+  if (managerId) {
+    recvParams.push(managerId);
+    recvConds.push(`r.manager_id = $${recvParams.length}`);
+  }
+  if (teamId) {
+    recvParams.push(teamId);
+    recvConds.push(`m.team_id = $${recvParams.length}`);
+  }
+  const receivables = await pool.query<{ total: string }>(
+    `SELECT COALESCE(SUM(r.amount), 0) AS total
+     FROM receivables r JOIN managers m ON m.id = r.manager_id
+     WHERE ${recvConds.join(" AND ")}`,
+    recvParams
+  );
+
+  const newRow = newRepeat.rows.find((r) => r.bucket === "new");
+  const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
+
+  res.json({
+    byTeam: byTeam.rows.map((r) => ({
+      teamId: r.team_id,
+      teamName: r.team_name,
+      revenue: Number(r.revenue),
+      deals: Number(r.deals),
+    })),
+    topManagers: topManagers.rows.map((r) => ({
+      managerId: r.manager_id,
+      name: r.name,
+      revenue: Number(r.revenue),
+      deals: Number(r.deals),
+    })),
+    receivablesTotal: Number(receivables.rows[0]?.total ?? 0),
+    newClients: Number(newRow?.clients ?? 0),
+    newRevenue: Number(newRow?.revenue ?? 0),
+    repeatClients: Number(repeatRow?.clients ?? 0),
+    repeatRevenue: Number(repeatRow?.revenue ?? 0),
+  });
+});
+
+/**
  * Conversion split by lead channel — paid ads/targeting vs. the lead-gen
  * department vs. other — so each acquisition source can be tracked
  * separately. Scoped by role/team and optional date range like /funnel.
