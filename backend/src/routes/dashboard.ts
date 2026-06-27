@@ -209,6 +209,18 @@ dashboardRouter.get("/overview", async (req, res) => {
   }
   const paidWhere = `WHERE ${paidConds.join(" AND ")}`;
 
+  // Count of leads created in the period (any stage in the tracked sales
+  // pipelines), scoped the same way but without the paid-stage filter.
+  const leadConds = paidConds.filter((c) => !c.includes("funnel_stage"));
+  const createdLeadsResult = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) AS count
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${leadConds.length ? `WHERE ${leadConds.join(" AND ")}` : ""}`,
+    params
+  );
+
   const byTeam = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
     `SELECT t.id AS team_id, t.name AS team_name,
             COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
@@ -297,6 +309,7 @@ dashboardRouter.get("/overview", async (req, res) => {
       deals: Number(r.deals),
     })),
     receivablesTotal: Number(receivables.rows[0]?.total ?? 0),
+    createdLeads: Number(createdLeadsResult.rows[0]?.count ?? 0),
     newClients: Number(newRow?.clients ?? 0),
     newRevenue: Number(newRow?.revenue ?? 0),
     repeatClients: Number(repeatRow?.clients ?? 0),

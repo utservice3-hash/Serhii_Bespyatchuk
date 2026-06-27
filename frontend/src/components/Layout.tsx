@@ -12,6 +12,7 @@ export const NAV_ITEMS = [
   { key: "receivables", label: "Дебіторська заборгованість", icon: "💰" },
   { key: "leadgen", label: "Лідогенерація", icon: "🎯" },
   { key: "tasks", label: "Задачник", icon: "📝" },
+  { key: "training", label: "Навчання", icon: "📚" },
   { key: "settings", label: "Налаштування", icon: "⚙️" },
 ] as const;
 

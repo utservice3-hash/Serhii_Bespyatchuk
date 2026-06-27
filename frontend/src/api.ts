@@ -121,6 +121,7 @@ export interface ExecutiveOverview {
   byTeam: { teamId: number; teamName: string; revenue: number; deals: number }[];
   topManagers: { managerId: number; name: string; revenue: number; deals: number }[];
   receivablesTotal: number;
+  createdLeads: number;
   newClients: number;
   newRevenue: number;
   repeatClients: number;

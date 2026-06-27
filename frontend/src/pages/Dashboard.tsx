@@ -621,6 +621,10 @@ export function Dashboard() {
             <>
               <div className="kpi-grid">
                 <div className="kpi-card">
+                  <span className="kpi-label">Створено лідів (період)</span>
+                  <span className="kpi-value">{overview.createdLeads.toLocaleString("uk-UA")}</span>
+                </div>
+                <div className="kpi-card">
                   <span className="kpi-label">Дебіторська заборгованість</span>
                   <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
                 </div>
@@ -1541,6 +1545,34 @@ export function Dashboard() {
               </table>
             </div>
           )}
+        </>
+      )}
+
+      {section === "training" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Навчання</h1>
+          </div>
+          <div className="chart-grid">
+            <div className="chart-card">
+              <h2 className="chart-title">Як користуватись дашбордом</h2>
+              <ul style={{ lineHeight: 1.9, color: "var(--text)" }}>
+                <li><b>Огляд</b> — ключові показники компанії за обраний період (за замовчуванням — місяць).</li>
+                <li><b>Статистика</b> — діаграми динаміки з вибором періоду й масштабуванням (⛶).</li>
+                <li><b>Постійні клієнти</b> — сегменти й кандидати на реактивацію.</li>
+                <li><b>Дебіторська заборгованість</b> — борги по клієнтах, ліміт і прострочення днів.</li>
+                <li><b>Лідогенерація</b> — ефективність лідогенераторів по джерелах.</li>
+                <li>Швидкий перехід між розділами — <b>Ctrl + K</b>.</li>
+              </ul>
+            </div>
+            <div className="chart-card">
+              <h2 className="chart-title">Матеріали</h2>
+              <p style={{ color: "var(--text-muted)" }}>
+                Тут будуть навчальні відео та інструкції. Додавання матеріалів —
+                за потреби, скажіть які саме розмістити.
+              </p>
+            </div>
+          </div>
         </>
       )}
 
