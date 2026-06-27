@@ -416,11 +416,16 @@ export function Dashboard() {
     const teamIdToUse = auth?.role === "manager" ? undefined : leadgenTeamId || undefined;
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setLeadgenLoading(true);
-    fetchLeadgen({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
+    fetchLeadgen({
+      teamId: teamIdToUse || undefined,
+      managerId: managerIdToUse,
+      from: dateRange.from || undefined,
+      to: dateRange.to || undefined,
+    })
       .then(setLeadgenData)
       .catch(() => setLeadgenData([]))
       .finally(() => setLeadgenLoading(false));
-  }, [section, leadgenTeamId, auth]);
+  }, [section, leadgenTeamId, auth, dateRange]);
 
   useEffect(() => {
     setLoading(true);
@@ -1269,8 +1274,8 @@ export function Dashboard() {
         <>
           <div className="page-header">
             <h1 className="page-title">Лідогенерація</h1>
-            {auth?.role !== "manager" && (
-              <div className="page-filters">
+            <div className="page-filters">
+              {auth?.role !== "manager" && (
                 <select
                   value={leadgenTeamId}
                   onChange={(e) => setLeadgenTeamId(e.target.value ? Number(e.target.value) : "")}
@@ -1282,9 +1287,24 @@ export function Dashboard() {
                     </option>
                   ))}
                 </select>
-              </div>
-            )}
+              )}
+              <DateRangeFilter
+                value={dateRange}
+                onChange={(r) => {
+                  setDateRange(r);
+                  setDatePreset(null);
+                }}
+              />
+            </div>
           </div>
+
+          <QuickPeriods
+            active={datePreset}
+            onSelect={(id, range) => {
+              setDatePreset(id);
+              setDateRange(range);
+            }}
+          />
 
           {leadgenLoading ? (
             <p className="loading-text">Завантаження...</p>
