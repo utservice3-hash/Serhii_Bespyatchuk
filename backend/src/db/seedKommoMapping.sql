@@ -43,3 +43,24 @@ INSERT INTO pipeline_stage_map (pipeline_id, status_id, funnel_stage) VALUES
   (8921936, 69716492, 'quote_requested'),  -- ОТРИМАНО КОНТАКТИ ОПР
   (8921936, 142, 'quote_requested')        -- КВАЛІФІКОВАНО / ЗАЯВКУ НА ПРОРАХУНОК ОТРИМАНО
 ON CONFLICT (pipeline_id, status_id) DO UPDATE SET funnel_stage = EXCLUDED.funnel_stage;
+
+-- 155304 "Перевозки (Продажі повний цикл)" — the OLD full-cycle pipeline,
+-- direct predecessor of 8921932. Most historical paid orders (and thus
+-- repeat-client history) live here, so it must be mapped too. Mirrors the
+-- New pipeline's semantics; status 142 = won/paid as in 8921932.
+INSERT INTO pipeline_stage_map (pipeline_id, status_id, funnel_stage) VALUES
+  (155304, 26010520, 'lead_taken'),        -- Incoming leads
+  (155304, 11804491, 'lead_taken'),        -- Взято на прорахунок
+  (155304, 10847806, 'quote_requested'),   -- Пропозицію зроблено
+  (155304, 69500840, 'quote_requested'),   -- Відкладений запит
+  (155304, 10869081, 'approved'),          -- Умови узгоджені
+  (155304, 10883250, 'approved'),          -- Документи підписані
+  (155304, 62940064, 'approved'),          -- Контроль перед завантаженням
+  (155304, 10937178, 'approved'),          -- Авто працює
+  (155304, 42639144, 'invoiced'),          -- Виставлено рахунок (після розвантаження)
+  (155304, 42639147, 'invoiced'),          -- Документы получены
+  (155304, 25044997, 'invoiced'),          -- Очікуємо оплату (перевізник оплачений)
+  (155304, 62940068, 'invoiced'),          -- Очікуємо оплату (перевізник не оплачений)
+  (155304, 60412544, 'paid'),              -- Оплата отримана
+  (155304, 142, 'paid')                    -- Успішна угода
+ON CONFLICT (pipeline_id, status_id) DO UPDATE SET funnel_stage = EXCLUDED.funnel_stage;
