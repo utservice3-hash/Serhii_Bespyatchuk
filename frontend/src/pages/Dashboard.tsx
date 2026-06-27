@@ -16,6 +16,7 @@ import {
   deleteTask,
   fetchConversion,
   fetchFunnel,
+  fetchLeadgen,
   fetchLoyalty,
   fetchManagerBreakdown,
   fetchManagerOptions,
@@ -31,6 +32,7 @@ import {
   type ManagerOption,
   type PersonalDashboard,
   type ConversionChannel,
+  type LeadGenerator,
   type ReceivableManager,
   type Task,
   type TaskPriority,
@@ -174,6 +176,10 @@ export function Dashboard() {
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
   const [receivablesLoading, setReceivablesLoading] = useState(false);
 
+  const [leadgenTeamId, setLeadgenTeamId] = useState<number | "">("");
+  const [leadgenData, setLeadgenData] = useState<LeadGenerator[]>([]);
+  const [leadgenLoading, setLeadgenLoading] = useState(false);
+
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
@@ -270,6 +276,17 @@ export function Dashboard() {
       .catch(() => setReceivablesData([]))
       .finally(() => setReceivablesLoading(false));
   }, [section, receivablesTeamId, teams, auth]);
+
+  useEffect(() => {
+    if (section !== "leadgen") return;
+    const teamIdToUse = auth?.role === "manager" ? undefined : leadgenTeamId || undefined;
+    const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
+    setLeadgenLoading(true);
+    fetchLeadgen({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
+      .then(setLeadgenData)
+      .catch(() => setLeadgenData([]))
+      .finally(() => setLeadgenLoading(false));
+  }, [section, leadgenTeamId, auth]);
 
   useEffect(() => {
     setLoading(true);
@@ -739,6 +756,77 @@ export function Dashboard() {
                         </details>
                       )
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {section === "leadgen" && (
+        <>
+          <div className="page-header">
+            <h1 className="page-title">Лідогенерація</h1>
+            {auth?.role !== "manager" && (
+              <div className="page-filters">
+                <select
+                  value={leadgenTeamId}
+                  onChange={(e) => setLeadgenTeamId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  <option value="">Усі команди</option>
+                  {teams.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {leadgenLoading ? (
+            <p className="loading-text">Завантаження...</p>
+          ) : leadgenData.length === 0 ? (
+            <p className="loading-text">Немає даних.</p>
+          ) : (
+            <div className="chart-grid">
+              {leadgenData.map((g) => (
+                <div className="chart-card" key={g.managerId}>
+                  <h2 className="chart-title">{g.managerName}</h2>
+                  <div className="kpi-grid">
+                    <div className="kpi-card">
+                      <span className="kpi-label">Лідів</span>
+                      <span className="kpi-value">{g.leads.toLocaleString("uk-UA")}</span>
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">Дійшло до оплати</span>
+                      <span className="kpi-value">{g.reachedPaid.toLocaleString("uk-UA")}</span>
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">Конверсія</span>
+                      <span className="kpi-value">{g.conversion}%</span>
+                    </div>
+                  </div>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Джерело клієнта</th>
+                        <th>Лідів</th>
+                        <th>Оплат</th>
+                        <th>Конверсія</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {g.bySource.map((s) => (
+                        <tr key={s.source}>
+                          <td>{s.source}</td>
+                          <td>{s.leads}</td>
+                          <td>{s.reachedPaid}</td>
+                          <td>{s.conversion}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               ))}
             </div>

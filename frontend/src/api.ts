@@ -89,6 +89,34 @@ export async function fetchConversion(params: {
   return data.channels;
 }
 
+export interface LeadgenSource {
+  source: string;
+  leads: number;
+  reachedPaid: number;
+  conversion: number;
+}
+
+export interface LeadGenerator {
+  managerId: number;
+  managerName: string;
+  leads: number;
+  reachedPaid: number;
+  conversion: number;
+  bySource: LeadgenSource[];
+}
+
+export async function fetchLeadgen(params: {
+  managerId?: number;
+  teamId?: number;
+  from?: string;
+  to?: string;
+}): Promise<LeadGenerator[]> {
+  const { data } = await api.get<{ generators: LeadGenerator[] }>("/dashboard/leadgen", {
+    params,
+  });
+  return data.generators;
+}
+
 export interface Team {
   id: number;
   name: string;

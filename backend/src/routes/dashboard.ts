@@ -62,6 +62,120 @@ dashboardRouter.get("/funnel", async (req, res) => {
 });
 
 /**
+ * Lead-generation performance per lead generator. Their working pipelines are
+ * Продзвін (8921936 / 7337048) and Реактивація (8921948): each deal there is a
+ * lead they handled. "Reached payment" means that client later has a paid deal
+ * in the sales funnel (matched by client_key). Broken down by client source
+ * (Холодна база, Реактивація, Google, …) and optionally date-scoped.
+ */
+const LEADGEN_PIPELINES = [8921936, 7337048, 8921948];
+
+dashboardRouter.get("/leadgen", async (req, res) => {
+  const auth = req.auth!;
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+
+  if (auth.role === "manager") {
+    managerId = auth.managerId;
+    teamId = null;
+  } else if (auth.role === "team_lead") {
+    teamId = auth.teamId;
+  }
+
+  const conditions: string[] = [`d.pipeline_id = ANY($1)`];
+  const params: unknown[] = [LEADGEN_PIPELINES];
+  if (managerId) {
+    params.push(managerId);
+    conditions.push(`d.manager_id = $${params.length}`);
+  }
+  if (teamId) {
+    params.push(teamId);
+    conditions.push(`m.team_id = $${params.length}`);
+  }
+  if (from) {
+    params.push(from);
+    conditions.push(`d.created_at_kommo >= $${params.length}`);
+  }
+  if (to) {
+    params.push(to);
+    conditions.push(`d.created_at_kommo <= $${params.length}`);
+  }
+  const where = `WHERE ${conditions.join(" AND ")}`;
+
+  const result = await pool.query<{
+    manager_id: number;
+    manager_name: string;
+    client_source: string;
+    leads: string;
+    reached_paid: string;
+  }>(
+    `WITH paid_clients AS (
+       SELECT DISTINCT d.client_key
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+     )
+     SELECT d.manager_id,
+            m.name AS manager_name,
+            COALESCE(NULLIF(d.client_source, ''), 'Не вказано') AS client_source,
+            COUNT(*) AS leads,
+            COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS reached_paid
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     ${where}
+     GROUP BY d.manager_id, m.name, COALESCE(NULLIF(d.client_source, ''), 'Не вказано')`,
+    params
+  );
+
+  const byManager = new Map<
+    number,
+    {
+      managerId: number;
+      managerName: string;
+      leads: number;
+      reachedPaid: number;
+      bySource: { source: string; leads: number; reachedPaid: number; conversion: number }[];
+    }
+  >();
+
+  for (const row of result.rows) {
+    const leads = Number(row.leads);
+    const reached = Number(row.reached_paid);
+    let entry = byManager.get(row.manager_id);
+    if (!entry) {
+      entry = {
+        managerId: row.manager_id,
+        managerName: row.manager_name,
+        leads: 0,
+        reachedPaid: 0,
+        bySource: [],
+      };
+      byManager.set(row.manager_id, entry);
+    }
+    entry.leads += leads;
+    entry.reachedPaid += reached;
+    entry.bySource.push({
+      source: row.client_source,
+      leads,
+      reachedPaid: reached,
+      conversion: leads > 0 ? Math.round((reached / leads) * 100) : 0,
+    });
+  }
+
+  const generators = Array.from(byManager.values())
+    .map((g) => ({
+      ...g,
+      conversion: g.leads > 0 ? Math.round((g.reachedPaid / g.leads) * 100) : 0,
+      bySource: g.bySource.sort((a, b) => b.leads - a.leads),
+    }))
+    .sort((a, b) => b.leads - a.leads);
+
+  res.json({ generators });
+});
+
+/**
  * Conversion split by lead channel — paid ads/targeting vs. the lead-gen
  * department vs. other — so each acquisition source can be tracked
  * separately. Scoped by role/team and optional date range like /funnel.
