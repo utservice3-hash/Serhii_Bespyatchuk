@@ -10,6 +10,23 @@ api.interceptors.request.use((req) => {
   return req;
 });
 
+// When the token has expired (or is otherwise rejected), every authenticated
+// request 401s — which previously left the UI silently broken (empty team
+// dropdown, blank charts). Clear the stale token and send the user back to
+// login so they can re-authenticate.
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    if (error.response?.status === 401 && localStorage.getItem("token")) {
+      localStorage.removeItem("token");
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export interface FunnelStage {
   funnel_stage: string;
   deal_count: string;
