@@ -220,15 +220,24 @@ export interface LoyaltyManager {
   lostCount: number;
 }
 
+export interface LoyaltyDynamics {
+  months: { month: string; orders: number; amount: number }[];
+  deltaOrders: number;
+  deltaAmount: number;
+  latestOrders: number;
+  latestAmount: number;
+}
+
 export async function fetchLoyalty(params: {
   managerId?: number;
   teamId?: number;
   asOf?: string;
-}): Promise<LoyaltyManager[]> {
-  const { data } = await api.get<{ managers: LoyaltyManager[] }>("/dashboard/loyalty", {
-    params,
-  });
-  return data.managers;
+}): Promise<{ managers: LoyaltyManager[]; dynamics: LoyaltyDynamics }> {
+  const { data } = await api.get<{ managers: LoyaltyManager[]; dynamics: LoyaltyDynamics }>(
+    "/dashboard/loyalty",
+    { params }
+  );
+  return data;
 }
 
 export interface ReceivableClient {

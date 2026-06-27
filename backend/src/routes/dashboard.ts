@@ -790,7 +790,55 @@ dashboardRouter.get("/loyalty", async (req, res) => {
     };
   });
 
-  res.json({ asOf, managers });
+  // Monthly dynamics of repeat-business: paid orders and revenue over the last
+  // 12 months for the same scope, so we can see whether the regular-client base
+  // is growing or shrinking by both order count and amount.
+  const dynConditions = ["psm.funnel_stage = 'paid'"];
+  const dynParams: unknown[] = [asOf];
+  if (managerId) {
+    dynParams.push(managerId);
+    dynConditions.push(`d.manager_id = $${dynParams.length}`);
+  }
+  if (teamId) {
+    dynParams.push(teamId);
+    dynConditions.push(`m.team_id = $${dynParams.length}`);
+  }
+
+  const dynResult = await pool.query<{ month: string; orders: string; amount: string }>(
+    `SELECT to_char(date_trunc('month', d.created_at_kommo), 'YYYY-MM') AS month,
+            COUNT(*) AS orders,
+            COALESCE(SUM(d.price), 0) AS amount
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${dynConditions.join(" AND ")}
+       AND d.created_at_kommo >= date_trunc('month', $1::date) - interval '11 months'
+       AND d.created_at_kommo < date_trunc('month', $1::date) + interval '1 month'
+     GROUP BY 1
+     ORDER BY 1`,
+    dynParams
+  );
+
+  const months = dynResult.rows.map((r) => ({
+    month: r.month,
+    orders: Number(r.orders),
+    amount: Number(r.amount),
+  }));
+
+  // Growth = last fully-comparable month vs the one before it.
+  const pct = (cur: number, prev: number) =>
+    prev > 0 ? Math.round(((cur - prev) / prev) * 100) : cur > 0 ? 100 : 0;
+  const last = months[months.length - 1];
+  const prev = months[months.length - 2];
+  const dynamics = {
+    months,
+    deltaOrders: last && prev ? pct(last.orders, prev.orders) : 0,
+    deltaAmount: last && prev ? pct(last.amount, prev.amount) : 0,
+    latestOrders: last?.orders ?? 0,
+    latestAmount: last?.amount ?? 0,
+  };
+
+  res.json({ asOf, managers, dynamics });
 });
 
 /**

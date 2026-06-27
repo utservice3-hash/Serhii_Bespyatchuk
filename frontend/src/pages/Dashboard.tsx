@@ -33,6 +33,7 @@ import {
   type PersonalDashboard,
   type ConversionChannel,
   type LeadGenerator,
+  type LoyaltyDynamics,
   type ReceivableManager,
   type Task,
   type TaskPriority,
@@ -172,6 +173,7 @@ export function Dashboard() {
   const [loyaltyTeamId, setLoyaltyTeamId] = useState<number | "">("");
   const [loyaltyData, setLoyaltyData] = useState<LoyaltyManager[]>([]);
   const [loyaltyLoading, setLoyaltyLoading] = useState(false);
+  const [loyaltyDynamics, setLoyaltyDynamics] = useState<LoyaltyDynamics | null>(null);
 
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
@@ -260,8 +262,14 @@ export function Dashboard() {
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setLoyaltyLoading(true);
     fetchLoyalty({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
-      .then(setLoyaltyData)
-      .catch(() => setLoyaltyData([]))
+      .then(({ managers, dynamics }) => {
+        setLoyaltyData(managers);
+        setLoyaltyDynamics(dynamics);
+      })
+      .catch(() => {
+        setLoyaltyData([]);
+        setLoyaltyDynamics(null);
+      })
       .finally(() => setLoyaltyLoading(false));
   }, [section, loyaltyTeamId, teams, auth]);
 
@@ -730,6 +738,55 @@ export function Dashboard() {
               </div>
             )}
           </div>
+
+          {loyaltyDynamics && loyaltyDynamics.months.length > 0 && (
+            <div className="chart-card" style={{ marginBottom: 16 }}>
+              <h2 className="chart-title">Динаміка повторних оплат (12 міс.)</h2>
+              <div className="kpi-grid">
+                {(() => {
+                  const d = loyaltyDynamics;
+                  const arrow = (v: number) => (v > 0 ? "↑" : v < 0 ? "↓" : "→");
+                  const color = (v: number) => (v > 0 ? "#16a34a" : v < 0 ? "#dc2626" : "#667085");
+                  return (
+                    <>
+                      <div className="kpi-card">
+                        <span className="kpi-label">Замовлень (міс.)</span>
+                        <span className="kpi-value">{d.latestOrders.toLocaleString("uk-UA")}</span>
+                        <span style={{ color: color(d.deltaOrders), fontWeight: 600 }}>
+                          {arrow(d.deltaOrders)} {Math.abs(d.deltaOrders)}% до попер. міс.
+                        </span>
+                      </div>
+                      <div className="kpi-card">
+                        <span className="kpi-label">Сума (міс.)</span>
+                        <span className="kpi-value">{formatAmount(d.latestAmount)}</span>
+                        <span style={{ color: color(d.deltaAmount), fontWeight: 600 }}>
+                          {arrow(d.deltaAmount)} {Math.abs(d.deltaAmount)}% до попер. міс.
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={loyaltyDynamics.months}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="month" />
+                  <YAxis yAxisId="left" orientation="left" />
+                  <YAxis yAxisId="right" orientation="right" tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                  <Tooltip
+                    formatter={(value, name) =>
+                      name === "Сума"
+                        ? formatAmount(Number(value))
+                        : Number(value).toLocaleString("uk-UA")
+                    }
+                  />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="orders" name="Замовлень" fill="#60a5fa" radius={[4, 4, 0, 0]} />
+                  <Bar yAxisId="right" dataKey="amount" name="Сума" fill="#c5141c" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {loyaltyLoading ? (
             <p className="loading-text">Завантаження...</p>
