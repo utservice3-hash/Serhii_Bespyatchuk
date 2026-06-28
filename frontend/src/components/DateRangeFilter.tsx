@@ -30,13 +30,18 @@ export function getDateRange(preset: string): DateRange {
     case "last30":
       from.setDate(from.getDate() - 29);
       break;
-    case "thisWeek":
-      from.setDate(from.getDate() - from.getDay());
+    case "thisWeek": {
+      // Monday-start week (Ukrainian convention; getDay(): Sun=0..Sat=6).
+      const offset = (from.getDay() + 6) % 7;
+      from.setDate(from.getDate() - offset);
       break;
-    case "lastWeek":
-      from.setDate(from.getDate() - from.getDay() - 7);
-      to.setDate(to.getDate() - to.getDay() - 1);
+    }
+    case "lastWeek": {
+      const offset = (from.getDay() + 6) % 7;
+      from.setDate(from.getDate() - offset - 7);
+      to.setDate(to.getDate() - offset - 1);
       break;
+    }
     case "thisMonth":
       from.setDate(1);
       break;
