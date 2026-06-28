@@ -14,6 +14,7 @@ import sheets
 import ai_analyzer
 import transcriber
 import excel_report
+import elogist_userbot
 
 SNAPSHOT_FILE = "/tmp/plan_snapshot.json"
 
@@ -1388,6 +1389,11 @@ scheduler.add_job(_send_rnk_ai_report, "cron", hour=13, minute=50)      # 16:50 
 scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=14, minute=0)  # 17:00 Kyiv = 14:00 UTC
 scheduler.add_job(_send_weekly_ad_report, "cron", day_of_week="fri", hour=14, minute=0)  # П'ятниця 17:00 Kyiv
 scheduler.start()
+
+# eLogist userbot — читає групу "Дошка оголошень" під юзер-акаунтом (Telethon),
+# бо Bot API не віддає повідомлення від TransNowBot (бот не бачить інших ботів).
+# Стартує лише якщо задані TG_API_ID/TG_API_HASH/TG_SESSION, інакше тихо пропускає.
+elogist_userbot.start_listener(_handle_elogist_message)
 sheets.ensure_headers()
 
 # In-memory: lead_id -> {transferred_at, manager, lead_name}

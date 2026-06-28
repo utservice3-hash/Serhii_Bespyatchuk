@@ -120,6 +120,30 @@ eLogist: Київ - Валенсія
 Локація клієнта: UA - Киев
 ```
 
+### Доставка повідомлень — userbot (Telethon), а НЕ Bot API
+
+⚠️ Ключове: повідомлення в групі шле бот `TransNowBot`, а **Telegram Bot
+API за дизайном не доставляє боту повідомлення, надіслані іншим ботом**
+(навіть якщо наш `@utsuser01_bot` — адмін групи; адмінство знімає privacy
+mode лише для повідомлень людей). Тому шлях через `/tg-update` ловить лише
+випадки, коли повідомлення TransNowBot **переслала людина** (форвардом).
+
+Для автоматичного читання використовується **userbot на Telethon**
+(`elogist_userbot.py`) — звичайний юзер-акаунт, що є учасником групи й
+бачить усі повідомлення, включно з ботовими. Він викликає той самий
+`_handle_elogist_message()`.
+
+- Конфіг через env: `TG_API_ID`, `TG_API_HASH`, `TG_SESSION` (StringSession).
+  Без них слухач тихо не стартує (фолбек — лише `/tg-update`).
+- `TG_SESSION` генерується локально один раз: `scripts/elogist_login.py`
+  (логін під акаунтом, що Є В ГРУПІ; вивід вставити в Render env).
+- Слухач стартує на рівні модуля поряд зі scheduler
+  (`elogist_userbot.start_listener(_handle_elogist_message)`), у фоновому
+  треді з власним asyncio-loop і автоперепідключенням кожні 30 с.
+- Procfile: `--workers 1`, тож слухач один — дублів між воркерами немає.
+
+Обробка тексту (спільна для userbot і `/tg-update`):
+
 `/tg-update` (app.py) перевіряє `message.chat.id == ELOGIST_SOURCE_CHAT_ID`
 і передає текст у `_handle_elogist_message()`:
 1. `_parse_elogist_message()` — витягує телефон (regex) і, якщо є,
