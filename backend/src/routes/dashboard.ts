@@ -355,10 +355,49 @@ dashboardRouter.get("/overview", async (req, res) => {
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
 
+  // Last 3 complete months (deals / paid / revenue) for the drill-down trend.
+  const histScope: string[] = [];
+  if (managerId) histScope.push(`d.manager_id = ${Number(managerId)}`);
+  if (teamId) histScope.push(`m.team_id = ${Number(teamId)}`);
+  const histWhere = histScope.length ? "AND " + histScope.join(" AND ") : "";
+  const histRes = await pool.query<{
+    month: string;
+    deals: string;
+    paid: string;
+    revenue: string;
+  }>(
+    `SELECT to_char(date_trunc('month', d.created_at_kommo), 'YYYY-MM') AS month,
+            COUNT(*) AS deals,
+            COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
+            COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS revenue
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE d.created_at_kommo >= date_trunc('month', $1::date) - interval '2 months'
+       AND d.created_at_kommo < date_trunc('month', $1::date) + interval '1 month'
+       ${histWhere}
+     GROUP BY 1 ORDER BY 1`,
+    [monthAnchor]
+  );
+  const monthlyHistory = histRes.rows.map((r) => {
+    const deals = Number(r.deals);
+    const paid = Number(r.paid);
+    const revenue = Number(r.revenue);
+    return {
+      month: r.month,
+      deals,
+      paid,
+      revenue,
+      conversion: deals > 0 ? Math.round((paid / deals) * 100) : 0,
+      avgCheck: paid > 0 ? Math.round(revenue / paid) : 0,
+    };
+  });
+
   res.json({
     plan: planTotal,
     fact: factTotal,
     planPct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : 0,
+    monthlyHistory,
     byTeam: byTeam.rows.map((r) => ({
       teamId: r.team_id,
       teamName: r.team_name,

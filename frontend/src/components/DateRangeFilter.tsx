@@ -55,10 +55,10 @@ export function getDateRange(preset: string): DateRange {
       return { from: "", to: "" };
   }
 
-  return {
-    from: from.toISOString().split("T")[0],
-    to: to.toISOString().split("T")[0],
-  };
+  // Format in local time (avoid toISOString's UTC shift moving e.g. June 1 → May 31).
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return { from: fmt(from), to: fmt(to) };
 }
 
 /** Compact, always-visible quick period buttons (not hidden in a dropdown). */

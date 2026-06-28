@@ -707,7 +707,6 @@ export function Dashboard() {
     { key: "sum", label: "Сума", value: formatAmount(totalAmount), cur: totalAmount, prev: prevAmount },
     { key: "conv", label: "Конверсія", value: `${conversion}%`, cur: conversion, prev: prevConversion, unit: "%" },
     { key: "avg", label: "Середній чек", value: formatAmount(avgDeal), cur: avgDeal, prev: prevAvg },
-    { key: "leads", label: "Створено лідів", value: (overview?.createdLeads ?? 0).toLocaleString("uk-UA"), cur: overview?.createdLeads ?? 0, prev: prevOverview?.createdLeads ?? 0 },
     { key: "newc", label: "Нові клієнти", value: (overview?.newClients ?? 0).toLocaleString("uk-UA"), cur: overview?.newClients ?? 0, prev: prevOverview?.newClients ?? 0 },
     { key: "repc", label: "Повторні клієнти", value: (overview?.repeatClients ?? 0).toLocaleString("uk-UA"), cur: overview?.repeatClients ?? 0, prev: prevOverview?.repeatClients ?? 0 },
   ];
@@ -822,10 +821,37 @@ export function Dashboard() {
                     <button onClick={() => setKpiDetail(null)} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
                   </div>
                   <div className="kpi-grid" style={{ marginBottom: 16 }}>
-                    <div className="kpi-card"><span className="kpi-label">Поточний період</span><span className="kpi-value">{fmt(kpi.cur)}</span></div>
-                    <div className="kpi-card"><span className="kpi-label">Попередній період</span><span className="kpi-value">{fmt(kpi.prev)}</span></div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">Поточний період</span>
+                      <span className="kpi-value">{fmt(kpi.cur)}</span>
+                      {dateRange.from && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{dateRange.from} — {dateRange.to}</span>}
+                    </div>
+                    <div className="kpi-card">
+                      <span className="kpi-label">Попередній період</span>
+                      <span className="kpi-value">{fmt(kpi.prev)}</span>
+                      {dateRange.from && dateRange.to && (() => { const p = previousRange(dateRange.from, dateRange.to); return <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{p.from} — {p.to}</span>; })()}
+                    </div>
                     <div className="kpi-card"><span className="kpi-label">Зміна</span><span className="kpi-value" style={{ color: diff > 0 ? "#16a34a" : diff < 0 ? "#dc2626" : undefined }}>{diff > 0 ? "↑" : diff < 0 ? "↓" : "→"} {Math.abs(pct)}%</span></div>
                   </div>
+
+                  {overview && overview.monthlyHistory.length > 0 && ["deals", "sum", "conv", "avg"].includes(kpi.key) && (() => {
+                    const field = kpi.key === "deals" ? "deals" : kpi.key === "sum" ? "revenue" : kpi.key === "conv" ? "conversion" : "avgCheck";
+                    const isMoney = kpi.key === "sum" || kpi.key === "avg";
+                    return (
+                      <div style={{ marginBottom: 16 }}>
+                        <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>Історія за 3 місяці</h3>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <BarChart data={overview.monthlyHistory}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="month" />
+                            <YAxis tickFormatter={(v) => isMoney ? `${Math.round(v / 1000)}k` : String(v)} />
+                            <Tooltip formatter={(v) => isMoney ? formatAmount(Number(v)) : kpi.key === "conv" ? `${v}%` : Number(v).toLocaleString("uk-UA")} />
+                            <Bar dataKey={field} name={kpi.label} fill="#c5141c" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    );
+                  })()}
                   {showTeams && overview && (
                     <table className="data-table">
                       <thead><tr><th>Команда</th><th>Виручка</th><th>Угод</th></tr></thead>

@@ -130,6 +130,14 @@ export interface ExecutiveOverview {
   plan: number;
   fact: number;
   planPct: number;
+  monthlyHistory: {
+    month: string;
+    deals: number;
+    paid: number;
+    revenue: number;
+    conversion: number;
+    avgCheck: number;
+  }[];
   byTeam: { teamId: number; teamName: string; revenue: number; deals: number }[];
   topManagers: { managerId: number; name: string; revenue: number; deals: number }[];
   receivablesTotal: number;
