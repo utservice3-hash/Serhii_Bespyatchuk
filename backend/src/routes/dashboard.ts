@@ -352,6 +352,34 @@ dashboardRouter.get("/overview", async (req, res) => {
   const planTotal = Number(planRes.rows[0]?.plan ?? 0);
   const factTotal = Number(factRes.rows[0]?.fact ?? 0);
 
+  // Received money by CLOSE date (business measures "успішно реалізовано" by
+  // when the deal was closed-won, not when the lead was created).
+  const closedConds = ["psm.funnel_stage = 'paid'", "d.closed_at_kommo IS NOT NULL"];
+  const closedParams: unknown[] = [];
+  if (managerId) {
+    closedParams.push(managerId);
+    closedConds.push(`d.manager_id = $${closedParams.length}`);
+  }
+  if (teamId) {
+    closedParams.push(teamId);
+    closedConds.push(`m.team_id = $${closedParams.length}`);
+  }
+  if (from) {
+    closedParams.push(from);
+    closedConds.push(`d.closed_at_kommo >= $${closedParams.length}`);
+  }
+  if (to) {
+    closedParams.push(to);
+    closedConds.push(`d.closed_at_kommo <= $${closedParams.length}`);
+  }
+  const closedRes = await pool.query<{ revenue: string; deals: string }>(
+    `SELECT COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${closedConds.join(" AND ")}`,
+    closedParams
+  );
+
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
 
@@ -397,6 +425,8 @@ dashboardRouter.get("/overview", async (req, res) => {
     plan: planTotal,
     fact: factTotal,
     planPct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : 0,
+    closedRevenue: Number(closedRes.rows[0]?.revenue ?? 0),
+    closedDeals: Number(closedRes.rows[0]?.deals ?? 0),
     monthlyHistory,
     byTeam: byTeam.rows.map((r) => ({
       teamId: r.team_id,

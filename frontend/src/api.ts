@@ -130,6 +130,8 @@ export interface ExecutiveOverview {
   plan: number;
   fact: number;
   planPct: number;
+  closedRevenue: number;
+  closedDeals: number;
   monthlyHistory: {
     month: string;
     deals: number;

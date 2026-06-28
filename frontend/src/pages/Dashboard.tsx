@@ -679,7 +679,6 @@ export function Dashboard() {
   }
 
   const totalDeals = chartData.reduce((sum, s) => sum + s.count, 0);
-  const totalAmount = chartData.reduce((sum, s) => sum + s.amount, 0);
   const paidStage = chartData.find((s) => s.name === STAGE_LABELS.paid);
   const paid = paidStage?.count ?? 0;
   const paidAmount = paidStage?.amount ?? 0;
@@ -696,7 +695,6 @@ export function Dashboard() {
     amount: Number(s.total_amount),
   }));
   const prevDeals = prevChart.reduce((s, x) => s + x.count, 0);
-  const prevAmount = prevChart.reduce((s, x) => s + x.amount, 0);
   const prevPaidStage = prevChart.find((s) => s.name === STAGE_LABELS.paid);
   const prevPaid = prevPaidStage?.count ?? 0;
   const prevConversion = prevDeals > 0 ? Math.round((prevPaid / prevDeals) * 100) : 0;
@@ -704,7 +702,7 @@ export function Dashboard() {
 
   const kpis = [
     { key: "deals", label: "Угоди", value: totalDeals.toLocaleString("uk-UA"), cur: totalDeals, prev: prevDeals },
-    { key: "sum", label: "Сума", value: formatAmount(totalAmount), cur: totalAmount, prev: prevAmount },
+    { key: "sum", label: "Отримані кошти (закрито)", value: formatAmount(overview?.closedRevenue ?? 0), cur: overview?.closedRevenue ?? 0, prev: prevOverview?.closedRevenue ?? 0 },
     { key: "conv", label: "Конверсія", value: `${conversion}%`, cur: conversion, prev: prevConversion, unit: "%" },
     { key: "avg", label: "Середній чек", value: formatAmount(avgDeal), cur: avgDeal, prev: prevAvg },
     { key: "newc", label: "Нові клієнти", value: (overview?.newClients ?? 0).toLocaleString("uk-UA"), cur: overview?.newClients ?? 0, prev: prevOverview?.newClients ?? 0 },
@@ -815,7 +813,7 @@ export function Dashboard() {
             const showTeams = kpi.key === "sum" || kpi.key === "deals";
             return (
               <div onClick={() => setKpiDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 24 }}>
-                <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 24, width: "90vw", maxWidth: 640 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 24, width: "90vw", maxWidth: 640, maxHeight: "85vh", overflowY: "auto" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                     <h2 className="chart-title">{kpi.label} — деталі</h2>
                     <button onClick={() => setKpiDetail(null)} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
