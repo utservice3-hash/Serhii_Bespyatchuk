@@ -232,6 +232,28 @@ dashboardRouter.get("/overview", async (req, res) => {
   }
   const paidWhere = `WHERE ${paidConds.join(" AND ")}`;
 
+  // Money filter: paid deals by CLOSE date (revenue is recognised when the deal
+  // is won, not when the lead was created).
+  const closedConds = ["psm.funnel_stage = 'paid'", "d.closed_at_kommo IS NOT NULL"];
+  const closedParams: unknown[] = [];
+  if (managerId) {
+    closedParams.push(managerId);
+    closedConds.push(`d.manager_id = $${closedParams.length}`);
+  }
+  if (teamId) {
+    closedParams.push(teamId);
+    closedConds.push(`m.team_id = $${closedParams.length}`);
+  }
+  if (from) {
+    closedParams.push(from);
+    closedConds.push(`d.closed_at_kommo >= $${closedParams.length}`);
+  }
+  if (to) {
+    closedParams.push(to);
+    closedConds.push(`d.closed_at_kommo <= $${closedParams.length}`);
+  }
+  const closedWhere = `WHERE ${closedConds.join(" AND ")}`;
+
   // Count of leads created in the period (any stage in the tracked sales
   // pipelines), scoped the same way but without the paid-stage filter.
   const leadConds = paidConds.filter((c) => !c.includes("funnel_stage"));
@@ -251,10 +273,10 @@ dashboardRouter.get("/overview", async (req, res) => {
      JOIN managers m ON m.id = d.manager_id
      JOIN teams t ON t.id = m.team_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${paidWhere}
+     ${closedWhere}
      GROUP BY t.id, t.name
      ORDER BY revenue DESC`,
-    params
+    closedParams
   );
 
   const topManagers = await pool.query<{ manager_id: number; name: string; revenue: string; deals: string }>(
@@ -263,11 +285,11 @@ dashboardRouter.get("/overview", async (req, res) => {
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${paidWhere}
+     ${closedWhere}
      GROUP BY m.id, m.name
      ORDER BY revenue DESC
      LIMIT 10`,
-    params
+    closedParams
   );
 
   // New vs repeat: a client whose first-ever paid deal falls in the period is
@@ -340,43 +362,25 @@ dashboardRouter.get("/overview", async (req, res) => {
        ${planScope.length ? "AND " + planScope.join(" AND ") : ""}`,
     pfParams
   );
+  // Fact = money actually closed-won within the month (by close date).
   const factRes = await pool.query<{ fact: string }>(
     `SELECT COALESCE(SUM(d.price), 0) AS fact
      FROM deals d JOIN managers m ON m.id = d.manager_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE ${factScope.join(" AND ")}
-       AND d.created_at_kommo >= date_trunc('month', $1::date)
-       AND d.created_at_kommo < date_trunc('month', $1::date) + interval '1 month'`,
+       AND d.closed_at_kommo >= date_trunc('month', $1::date)
+       AND d.closed_at_kommo < date_trunc('month', $1::date) + interval '1 month'`,
     pfParams
   );
   const planTotal = Number(planRes.rows[0]?.plan ?? 0);
   const factTotal = Number(factRes.rows[0]?.fact ?? 0);
 
-  // Received money by CLOSE date (business measures "успішно реалізовано" by
-  // when the deal was closed-won, not when the lead was created).
-  const closedConds = ["psm.funnel_stage = 'paid'", "d.closed_at_kommo IS NOT NULL"];
-  const closedParams: unknown[] = [];
-  if (managerId) {
-    closedParams.push(managerId);
-    closedConds.push(`d.manager_id = $${closedParams.length}`);
-  }
-  if (teamId) {
-    closedParams.push(teamId);
-    closedConds.push(`m.team_id = $${closedParams.length}`);
-  }
-  if (from) {
-    closedParams.push(from);
-    closedConds.push(`d.closed_at_kommo >= $${closedParams.length}`);
-  }
-  if (to) {
-    closedParams.push(to);
-    closedConds.push(`d.closed_at_kommo <= $${closedParams.length}`);
-  }
+  // Received money by CLOSE date (reuses the closedWhere/closedParams above).
   const closedRes = await pool.query<{ revenue: string; deals: string }>(
     `SELECT COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
      FROM deals d JOIN managers m ON m.id = d.manager_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${closedConds.join(" AND ")}`,
+     ${closedWhere}`,
     closedParams
   );
 

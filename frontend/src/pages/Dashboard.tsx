@@ -36,6 +36,7 @@ import {
   type ChatMessage,
   fetchUsers as fetchDashboardUsers,
   provisionUsers,
+  createUser,
   resetUserPassword,
   updateUser,
   fetchManagerBreakdown,
@@ -271,6 +272,8 @@ export function Dashboard() {
   const [users, setUsers] = useState<DashboardUser[]>([]);
   const [revealed, setRevealed] = useState<Record<number, string>>({});
   const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
+  const [newUserForm, setNewUserForm] = useState({ email: "", password: "", role: "manager" as "manager" | "team_lead" | "admin", teamId: "" as number | "" });
+  const [newUserCreds, setNewUserCreds] = useState<string | null>(null);
 
   const [chatUsers, setChatUsers] = useState<ChatUser[]>([]);
   const [chatActive, setChatActive] = useState<ChatUser | null>(null);
@@ -472,6 +475,23 @@ export function Dashboard() {
     }
   }
 
+  async function handleCreateUser() {
+    if (!newUserForm.email.trim()) return;
+    try {
+      const res = await createUser({
+        email: newUserForm.email.trim(),
+        password: newUserForm.password || undefined,
+        role: newUserForm.role,
+        teamId: newUserForm.teamId || undefined,
+      });
+      setNewUserCreds(`${res.email} / ${res.password}`);
+      setNewUserForm({ email: "", password: "", role: "manager", teamId: "" });
+      await reloadUsers();
+    } catch (e: any) {
+      setNewUserCreds(e?.response?.data?.error ?? "Помилка створення");
+    }
+  }
+
   async function handleProvision() {
     const created = await provisionUsers();
     setProvisionMsg(
@@ -620,7 +640,7 @@ export function Dashboard() {
         <ResponsiveContainer width="100%" height={height}>
           <LineChart data={timeseries}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="period" />
+            <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
             <YAxis />
             <Tooltip />
             <Legend />
@@ -643,7 +663,7 @@ export function Dashboard() {
         <ResponsiveContainer width="100%" height={height}>
           <BarChart data={paidDynamics}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="period" />
+            <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
             <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
             <Tooltip formatter={(v) => formatAmount(Number(v))} />
             <Bar dataKey="revenue" name="Виручка" fill="#c5141c" radius={[4, 4, 0, 0]} />
@@ -656,7 +676,7 @@ export function Dashboard() {
         <ResponsiveContainer width="100%" height={height}>
           <LineChart data={paidDynamics}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="period" />
+            <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
             <YAxis />
             <Tooltip />
             <Line type="monotone" dataKey="paidCount" name="Оплачено угод" stroke="#16a34a" connectNulls />
@@ -669,7 +689,7 @@ export function Dashboard() {
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={paidDynamics}>
           <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="period" />
+          <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
           <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
           <Tooltip formatter={(v) => formatAmount(Number(v))} />
           <Line type="monotone" dataKey="avgCheck" name="Середній чек" stroke="#7c3aed" connectNulls />
@@ -1769,6 +1789,24 @@ export function Dashboard() {
                 Логіни створюються автоматично для кожного менеджера з CRM. Тімлід бачить свою
                 команду. Пароль генерується автоматично — натисніть «Скинути», щоб побачити новий.
               </p>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", margin: "12px 0", padding: 12, border: "1px solid var(--border)", borderRadius: 8 }}>
+                <b style={{ marginRight: 4 }}>Додати вручну:</b>
+                <input placeholder="e-mail" value={newUserForm.email} onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })} style={{ width: 180 }} />
+                <input placeholder="пароль (необов'язково)" value={newUserForm.password} onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })} style={{ width: 170 }} />
+                <select value={newUserForm.role} onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value as any })}>
+                  <option value="manager">Менеджер</option>
+                  <option value="team_lead">Тімлід</option>
+                  <option value="admin">Адмін</option>
+                </select>
+                <select value={newUserForm.teamId} onChange={(e) => setNewUserForm({ ...newUserForm, teamId: e.target.value ? Number(e.target.value) : "" })}>
+                  <option value="">Без команди</option>
+                  {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <button onClick={handleCreateUser} style={{ padding: "8px 16px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}>Створити</button>
+                {newUserCreds && <span style={{ color: "#16a34a", fontFamily: "monospace" }}>{newUserCreds}</span>}
+              </div>
+
               <table className="data-table">
                 <thead>
                   <tr>

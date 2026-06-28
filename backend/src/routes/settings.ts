@@ -1,7 +1,8 @@
 import { Router } from "express";
+import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
-import { provisionUsers, resetPassword } from "../db/userProvisioning.js";
+import { provisionUsers, resetPassword, generatePassword } from "../db/userProvisioning.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -79,6 +80,29 @@ settingsRouter.get("/users", async (req, res) => {
      ORDER BY u.role = 'admin' DESC, t.name NULLS LAST, u.email`
   );
   res.json({ users: result.rows });
+});
+
+// Manually create a login (email + password). Password optional — generated
+// and returned if omitted.
+settingsRouter.post("/users", async (req, res) => {
+  if (!requireAdmin(req.auth!.role, res)) return;
+  const email = String(req.body?.email ?? "").trim().toLowerCase();
+  const role = ["admin", "team_lead", "manager"].includes(req.body?.role) ? req.body.role : "manager";
+  const teamId = req.body?.teamId ? Number(req.body.teamId) : null;
+  if (!/^\S+@\S+\.\S+$/.test(email)) {
+    return res.status(400).json({ error: "Невірний e-mail" });
+  }
+  const exists = await pool.query(`SELECT 1 FROM users WHERE email = $1`, [email]);
+  if (exists.rowCount) return res.status(409).json({ error: "Користувач з таким e-mail вже існує" });
+
+  const password = String(req.body?.password ?? "").trim() || generatePassword();
+  const passwordHash = await bcrypt.hash(password, 10);
+  await pool.query(
+    `INSERT INTO users (email, password_hash, role, team_id, is_active, initial_password)
+     VALUES ($1, $2, $3, $4, true, $5)`,
+    [email, passwordHash, role, teamId, password]
+  );
+  res.json({ email, password });
 });
 
 // Re-sync logins from the current CRM roster; returns any newly created creds.

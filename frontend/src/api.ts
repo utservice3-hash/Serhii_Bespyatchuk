@@ -303,6 +303,16 @@ export async function fetchUsers(): Promise<DashboardUser[]> {
   return data.users;
 }
 
+export async function createUser(payload: {
+  email: string;
+  password?: string;
+  role: "manager" | "team_lead" | "admin";
+  teamId?: number;
+}): Promise<{ email: string; password: string }> {
+  const { data } = await api.post<{ email: string; password: string }>("/settings/users", payload);
+  return data;
+}
+
 export async function provisionUsers(): Promise<{ email: string; password: string; name: string }[]> {
   const { data } = await api.post<{ created: { email: string; password: string; name: string }[] }>(
     "/settings/users/provision"
