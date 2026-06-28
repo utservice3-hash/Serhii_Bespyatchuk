@@ -128,10 +128,12 @@ API за дизайном не доставляє боту повідомлен�
 mode лише для повідомлень людей). Тому шлях через `/tg-update` ловить лише
 випадки, коли повідомлення TransNowBot **переслала людина** (форвардом).
 
-Для автоматичного читання використовується **userbot на Telethon**
+Для автоматичного читання використовується **userbot на Pyrogram**
 (`elogist_userbot.py`) — звичайний юзер-акаунт, що є учасником групи й
 бачить усі повідомлення, включно з ботовими. Він викликає той самий
-`_handle_elogist_message()`.
+`_handle_elogist_message()`. (Pyrogram, а не Telethon, бо залежність
+Telethon `pyaes` не збирається на новому setuptools і ламає деплой Render;
+Pyrogram+TgCrypto ставляться з готових wheel.)
 
 - Конфіг через env: `TG_API_ID`, `TG_API_HASH`, `TG_SESSION` (StringSession).
   Без них слухач тихо не стартує (фолбек — лише `/tg-update`).

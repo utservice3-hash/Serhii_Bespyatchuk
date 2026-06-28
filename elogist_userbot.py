@@ -1,6 +1,6 @@
 """
 eLogist userbot — читає Telegram-групу "[Euro Logistic] - Дошка оголошень"
-під звичайним юзер-акаунтом (MTProto/Telethon), а не через Bot API.
+під звичайним юзер-акаунтом (MTProto через Pyrogram), а не через Bot API.
 
 Навіщо: Telegram Bot API за дизайном НЕ доставляє боту повідомлення,
 надіслані іншим ботом (TransNowBot), навіть якщо наш бот — адмін групи.
@@ -10,7 +10,7 @@ eLogist userbot — читає Telegram-групу "[Euro Logistic] - Дошка
 Конфігурація через env (усі три обовʼязкові, інакше слухач не стартує):
   TG_API_ID    — api_id з https://my.telegram.org
   TG_API_HASH  — api_hash з https://my.telegram.org
-  TG_SESSION   — StringSession (згенерувати локально: scripts/elogist_login.py)
+  TG_SESSION   — session_string (згенерувати: scripts/elogist_login.py)
 
 Опційно:
   ELOGIST_SOURCE_CHAT_ID — id групи (типово -1002141432610)
@@ -36,7 +36,7 @@ def is_configured() -> bool:
 
 
 def start_listener(on_message) -> None:
-    """Запускає Telethon-слухач у фоновому треді (один раз).
+    """Запускає Pyrogram-слухач у фоновому треді (один раз).
     on_message(text: str) викликається на кожне нове повідомлення у вихідній
     групі, включно з повідомленнями ботів (TransNowBot)."""
     global _started
@@ -54,21 +54,26 @@ def start_listener(on_message) -> None:
 
 def _run(on_message) -> None:
     try:
-        from telethon import TelegramClient, events
-        from telethon.sessions import StringSession
+        from pyrogram import Client, filters
     except ImportError:
-        logger.error("eLogist userbot: telethon не встановлено — слухач вимкнено")
+        logger.error("eLogist userbot: pyrogram не встановлено — слухач вимкнено")
         return
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     async def _amain() -> None:
-        client = TelegramClient(StringSession(SESSION), int(API_ID), API_HASH)
+        app = Client(
+            "elogist",
+            api_id=int(API_ID),
+            api_hash=API_HASH,
+            session_string=SESSION,
+            in_memory=True,
+        )
 
-        @client.on(events.NewMessage(chats=SOURCE_CHAT_ID))
-        async def _handler(event):  # noqa: ANN001
-            text = event.message.message or ""
+        @app.on_message(filters.chat(SOURCE_CHAT_ID))
+        async def _handler(client, message):  # noqa: ANN001
+            text = message.text or message.caption or ""
             if not text:
                 return
             try:
@@ -76,21 +81,16 @@ def _run(on_message) -> None:
             except Exception as e:  # noqa: BLE001
                 logger.error("eLogist userbot on_message: %s", e)
 
-        await client.connect()
-        if not await client.is_user_authorized():
-            logger.error(
-                "eLogist userbot: сесія не авторизована — згенеруйте валідний "
-                "TG_SESSION через scripts/elogist_login.py"
-            )
-            return
-        me = await client.get_me()
+        await app.start()
+        me = await app.get_me()
         logger.info(
             "eLogist userbot підключено як @%s, слухаю чат %s",
-            getattr(me, "username", "?"), SOURCE_CHAT_ID,
+            me.username or me.id, SOURCE_CHAT_ID,
         )
-        await client.run_until_disconnected()
+        # Тримаємо луп живим; Pyrogram отримує апдейти у фонових тасках.
+        await asyncio.Event().wait()
 
-    # Цикл перепідключення: якщо зʼєднання впало — пробуємо знову через 30 с.
+    # Цикл перепідключення: якщо зʼєднання впало фатально — пробуємо знову.
     while True:
         try:
             loop.run_until_complete(_amain())
