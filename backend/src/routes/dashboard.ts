@@ -292,31 +292,82 @@ dashboardRouter.get("/overview", async (req, res) => {
     return { leads, paid, conversion: leads > 0 ? Math.round((paid / leads) * 100) : 0 };
   };
 
-  const byTeam = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
-    `SELECT t.id AS team_id, t.name AS team_name,
-            COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id
-     JOIN teams t ON t.id = m.team_id
+  // Received money everywhere = Успішно реалізовано (status 142, by CLOSE date
+  // in period) + Оплата отримана (snapshot of the transient stage, no date).
+  // The same split shown in the "Отримані кошти" card, applied consistently to
+  // team / manager breakdowns and to the monthly fact.
+  const PAYMENT_RECEIVED_STATUSES = [69716460, 60412544];
+  const paySnapConds: string[] = ["d.status_id = ANY($1)"];
+  const paySnapParams: unknown[] = [PAYMENT_RECEIVED_STATUSES];
+  if (managerId) { paySnapParams.push(managerId); paySnapConds.push(`d.manager_id = $${paySnapParams.length}`); }
+  if (teamId) { paySnapParams.push(teamId); paySnapConds.push(`m.team_id = $${paySnapParams.length}`); }
+  const paySnapWhere = `WHERE ${paySnapConds.join(" AND ")}`;
+
+  // Success part (close date), by team / manager.
+  const successByTeam = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
+    `SELECT t.id AS team_id, t.name AS team_name, COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${closedWhere}
-     GROUP BY t.id, t.name
-     ORDER BY revenue DESC`,
+     ${closedWhere} AND d.status_id = 142
+     GROUP BY t.id, t.name`,
     closedParams
+  );
+  const paymentByTeam = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
+    `SELECT t.id AS team_id, t.name AS team_name, COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
+     ${paySnapWhere}
+     GROUP BY t.id, t.name`,
+    paySnapParams
+  );
+  const successByMgr = await pool.query<{ manager_id: number; name: string; revenue: string; deals: string }>(
+    `SELECT m.id AS manager_id, m.name, COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${closedWhere} AND d.status_id = 142
+     GROUP BY m.id, m.name`,
+    closedParams
+  );
+  const paymentByMgr = await pool.query<{ manager_id: number; name: string; revenue: string; deals: string }>(
+    `SELECT m.id AS manager_id, m.name, COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+     ${paySnapWhere}
+     GROUP BY m.id, m.name`,
+    paySnapParams
   );
 
-  const topManagers = await pool.query<{ manager_id: number; name: string; revenue: string; deals: string }>(
-    `SELECT m.id AS manager_id, m.name,
-            COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${closedWhere}
-     GROUP BY m.id, m.name
-     ORDER BY revenue DESC
-     LIMIT 10`,
-    closedParams
-  );
+  // Merge success + payment snapshot per key.
+  type MoneyRow = { revenue: string; deals: string; team_id?: number; team_name?: string; manager_id?: number; name?: string };
+  const mergeRows = (
+    rows: MoneyRow[],
+    keyOf: (r: MoneyRow) => number,
+    nameOf: (r: MoneyRow) => string
+  ) => {
+    const map = new Map<number, { id: number; name: string; revenue: number; deals: number }>();
+    for (const r of rows) {
+      const id = keyOf(r);
+      const cur = map.get(id) ?? { id, name: nameOf(r), revenue: 0, deals: 0 };
+      cur.revenue += Number(r.revenue);
+      cur.deals += Number(r.deals);
+      map.set(id, cur);
+    }
+    return [...map.values()].sort((a, b) => b.revenue - a.revenue);
+  };
+  const byTeam = {
+    rows: mergeRows(
+      [...successByTeam.rows, ...paymentByTeam.rows],
+      (r) => r.team_id!,
+      (r) => r.team_name!
+    ).map((x) => ({ team_id: x.id, team_name: x.name, revenue: String(x.revenue), deals: String(x.deals) })),
+  };
+  const topManagers = {
+    rows: mergeRows(
+      [...successByMgr.rows, ...paymentByMgr.rows],
+      (r) => r.manager_id!,
+      (r) => r.name!
+    )
+      .slice(0, 10)
+      .map((x) => ({ manager_id: x.id, name: x.name, revenue: String(x.revenue), deals: String(x.deals) })),
+  };
 
   // New vs repeat: a client whose first-ever paid deal falls in the period is
   // "new"; one who paid before the period is "repeat".
@@ -406,7 +457,6 @@ dashboardRouter.get("/overview", async (req, res) => {
   //  2) "Оплата отримана" (statuses 69716460 new / 60412544 old) — a SNAPSHOT
   //     of deals currently sitting in that stage (no date filter, per CRM
   //     methodology), scoped only by manager/team.
-  const PAYMENT_RECEIVED_STATUSES = [69716460, 60412544];
   const successRes = await pool.query<{ revenue: string; deals: string }>(
     `SELECT COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
      FROM deals d JOIN managers m ON m.id = d.manager_id
@@ -415,21 +465,12 @@ dashboardRouter.get("/overview", async (req, res) => {
     closedParams
   );
 
-  const payScope: string[] = [`d.status_id = ANY($1)`];
-  const payParams: unknown[] = [PAYMENT_RECEIVED_STATUSES];
-  if (managerId) {
-    payParams.push(managerId);
-    payScope.push(`d.manager_id = $${payParams.length}`);
-  }
-  if (teamId) {
-    payParams.push(teamId);
-    payScope.push(`m.team_id = $${payParams.length}`);
-  }
+  // Оплата отримана snapshot total (reuses the team/manager scope above).
   const paymentRes = await pool.query<{ revenue: string; deals: string }>(
     `SELECT COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
      FROM deals d JOIN managers m ON m.id = d.manager_id
-     WHERE ${payScope.join(" AND ")}`,
-    payParams
+     ${paySnapWhere}`,
+    paySnapParams
   );
 
   const successRevenue = Number(successRes.rows[0]?.revenue ?? 0);
@@ -544,8 +585,8 @@ dashboardRouter.get("/overview", async (req, res) => {
 
   res.json({
     plan: planTotal,
-    fact: factTotal,
-    planPct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : 0,
+    fact: factTotal + paymentRevenue,
+    planPct: planTotal > 0 ? Math.round(((factTotal + paymentRevenue) / planTotal) * 100) : 0,
     closedRevenue: Number(closedRes.rows[0]?.revenue ?? 0),
     closedDeals: Number(closedRes.rows[0]?.deals ?? 0),
     successRevenue,
