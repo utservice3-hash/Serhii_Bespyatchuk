@@ -251,6 +251,16 @@ export function Dashboard() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const emptyTaskForm = {
+    title: "",
+    deadline: "",
+    assigneeId: "" as number | "",
+    priority: "medium" as TaskPriority,
+    department: "",
+    comments: "",
+  };
+  const [taskForm, setTaskForm] = useState(emptyTaskForm);
 
   const [loyaltyTeamId, setLoyaltyTeamId] = useState<number | "">("");
   const [loyaltyData, setLoyaltyData] = useState<LoyaltyManager[]>([]);
@@ -304,27 +314,58 @@ export function Dashboard() {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }
 
-  async function handleAddTask() {
-    const title = newTaskTitle.trim();
+  async function addTask(payload: {
+    title: string;
+    deadline?: string | null;
+    assigneeId?: number | null;
+    priority?: TaskPriority;
+    department?: string | null;
+    comments?: string | null;
+  }) {
+    const title = payload.title.trim();
     if (!title) return;
-    const { id } = await createTask({ title });
-    setNewTaskTitle("");
+    const deadline = payload.deadline || null;
+    const assigneeId = payload.assigneeId ?? null;
+    const priority = payload.priority ?? "medium";
+    const department = payload.department?.trim() || null;
+    const comments = payload.comments?.trim() || null;
+    const { id } = await createTask({ title, deadline, assigneeId, priority, department, comments });
     setTasks((prev) => [
       {
         id,
         title,
         status: "not_started",
-        deadline: null,
-        assigneeId: null,
-        assigneeName: null,
-        priority: "medium",
-        comments: null,
-        department: null,
+        deadline,
+        assigneeId,
+        assigneeName: managerOptions.find((m) => m.id === assigneeId)?.name ?? null,
+        priority,
+        comments,
+        department,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
       ...prev,
     ]);
+  }
+
+  async function handleAddTask() {
+    if (!newTaskTitle.trim()) return;
+    await addTask({ title: newTaskTitle });
+    setNewTaskTitle("");
+  }
+
+  async function handleSubmitTaskModal() {
+    if (!taskForm.title.trim()) return;
+    await addTask({
+      title: taskForm.title,
+      deadline: taskForm.deadline,
+      assigneeId: taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId),
+      priority: taskForm.priority,
+      department: taskForm.department,
+      comments: taskForm.comments,
+    });
+    setTaskForm(emptyTaskForm);
+    setTaskModalOpen(false);
   }
 
   async function handleDeleteTask(id: number) {
@@ -2193,7 +2234,14 @@ export function Dashboard() {
                 onKeyDown={(e) => e.key === "Enter" && handleAddTask()}
                 style={{ width: 240 }}
               />
-              <button className="btn-primary" onClick={handleAddTask}>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  setTaskForm({ ...emptyTaskForm, title: newTaskTitle });
+                  setNewTaskTitle("");
+                  setTaskModalOpen(true);
+                }}
+              >
                 + Додати
               </button>
             </div>
@@ -2205,14 +2253,14 @@ export function Dashboard() {
             <div className="chart-card">
               <table className="data-table tasks-table">
                 <colgroup>
-                  <col style={{ width: "22%" }} />
-                  <col style={{ width: "16%" }} />
-                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "30%" }} />
                   <col style={{ width: "14%" }} />
-                  <col style={{ width: "10%" }} />
-                  <col style={{ width: "14%" }} />
-                  <col style={{ width: "10%" }} />
-                  <col style={{ width: "4%" }} />
+                  <col style={{ width: "11%" }} />
+                  <col style={{ width: "13%" }} />
+                  <col style={{ width: "9%" }} />
+                  <col style={{ width: "11%" }} />
+                  <col style={{ width: "9%" }} />
+                  <col style={{ width: "3%" }} />
                 </colgroup>
                 <thead>
                   <tr>
@@ -2236,12 +2284,21 @@ export function Dashboard() {
                   ) : (
                     tasks.map((task) => (
                       <tr key={task.id}>
-                        <td>
-                          <input
+                        <td style={{ verticalAlign: "top" }}>
+                          <textarea
                             value={task.title}
                             onChange={(e) => patchTaskLocal(task.id, { title: e.target.value })}
                             onBlur={(e) => updateTask(task.id, { title: e.target.value })}
-                            style={{ border: "none", width: "100%" }}
+                            rows={Math.max(1, Math.ceil((task.title?.length ?? 0) / 40))}
+                            style={{
+                              border: "none",
+                              width: "100%",
+                              resize: "vertical",
+                              font: "inherit",
+                              background: "transparent",
+                              lineHeight: 1.4,
+                              overflow: "hidden",
+                            }}
                           />
                         </td>
                         <td>
@@ -2351,6 +2408,121 @@ export function Dashboard() {
                   )}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {taskModalOpen && (
+            <div
+              onClick={() => setTaskModalOpen(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(0,0,0,0.45)",
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "center",
+                zIndex: 2000,
+                padding: "60px 16px",
+                overflowY: "auto",
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="chart-card"
+                style={{ width: "100%", maxWidth: 560, background: "var(--card-bg, #fff)" }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <h2 style={{ margin: 0, fontSize: 18 }}>Нова задача</h2>
+                  <button
+                    onClick={() => setTaskModalOpen(false)}
+                    style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)" }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                    Опис задачі
+                    <textarea
+                      autoFocus
+                      value={taskForm.title}
+                      onChange={(e) => setTaskForm((f) => ({ ...f, title: e.target.value }))}
+                      rows={4}
+                      placeholder="Опишіть задачу детально…"
+                      style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, lineHeight: 1.4 }}
+                    />
+                  </label>
+
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                      Дедлайн
+                      <input
+                        type="date"
+                        value={taskForm.deadline}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, deadline: e.target.value }))}
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                      Пріоритет
+                      <select
+                        value={taskForm.priority}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, priority: e.target.value as TaskPriority }))}
+                      >
+                        {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                      Виконавець
+                      <select
+                        value={taskForm.assigneeId}
+                        onChange={(e) =>
+                          setTaskForm((f) => ({ ...f, assigneeId: e.target.value === "" ? "" : Number(e.target.value) }))
+                        }
+                      >
+                        <option value="">—</option>
+                        {managerOptions.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                      Департамент
+                      <input
+                        value={taskForm.department}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, department: e.target.value }))}
+                        placeholder="напр. Продзвін"
+                      />
+                    </label>
+                  </div>
+
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                    Коментарі
+                    <textarea
+                      value={taskForm.comments}
+                      onChange={(e) => setTaskForm((f) => ({ ...f, comments: e.target.value }))}
+                      rows={2}
+                      style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, lineHeight: 1.4 }}
+                    />
+                  </label>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                    <button onClick={() => setTaskModalOpen(false)}>Скасувати</button>
+                    <button className="btn-primary" onClick={handleSubmitTaskModal} disabled={!taskForm.title.trim()}>
+                      Створити задачу
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </>
