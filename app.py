@@ -1388,6 +1388,7 @@ scheduler.add_job(_send_month_end_report, "interval", hours=1)           # ос�
 scheduler.add_job(_send_rnk_ai_report, "cron", hour=13, minute=50)      # 16:50 Kyiv = 13:50 UTC
 scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=14, minute=0)  # 17:00 Kyiv = 14:00 UTC
 scheduler.add_job(_send_weekly_ad_report, "cron", day_of_week="fri", hour=14, minute=0)  # П'ятниця 17:00 Kyiv
+scheduler.add_job(_send_first_touch_admin_report, "cron", hour=15, minute=0)  # 18:00 Kyiv = 15:00 UTC
 scheduler.start()
 
 # eLogist userbot — читає групу "Дошка оголошень" під юзер-акаунтом (Telethon),
@@ -1967,6 +1968,11 @@ def _handle_call(note: dict):
     logger.info("Call note: lead %s type %s by %s", lead_id, note_type, manager_name)
     # Дзвінки РНК аналізуються постфактум, лише коли угода закривається як
     # "Закрито і не реалізовано" — див. _handle_closed_not_realized.
+    # Окремо — перший дотик по рекламних лідах (Дарина/Андрій): транскрибація
+    # + AI-оцінка озвучення ціни. Сам гейтиться по команді/utm/першому дзвінку.
+    threading.Thread(
+        target=_handle_first_touch, args=(lead_id, responsible_id), daemon=True
+    ).start()
 
 
 def _analyze_rnk_closed_deal_calls(lead_id: int, lead_name: str, manager_name: str) -> str:
@@ -2037,6 +2043,125 @@ def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call
             f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
         )
         notifier.send_to_quality(urgent_msg)
+
+
+# ── Перший дотик по рекламних лідах (команди Дарини/Андрія) ──────────────────
+# Слухаємо лише дзвінки по рекламних лідах (has_utm_campaign). На ПЕРШОМУ
+# реальному дзвінку (≥40с) AI перевіряє: чи розмова про перевезення, чи
+# озвучено ціну, чи відпрацьовано заперечення. Сповіщення йде в гілку команди,
+# а раз на день о 18:00 — зведення в адмінську групу.
+FIRST_TOUCH_TEAMS = RNK_TEAMS
+FIRST_TOUCH_MIN_DURATION = 40
+_first_touch_log: list[dict] = []   # {date, manager_id, team, lead_id, price_voiced}
+_first_touch_done: set[int] = set()  # lead_id, по яких перший дотик уже оброблено
+
+
+def _handle_first_touch(lead_id: int, responsible_id: int):
+    if lead_id in _first_touch_done:
+        return
+    lead = kommo.get_lead(lead_id)
+    if not lead:
+        return
+    resp_id = lead.get("responsible_user_id", 0) or responsible_id
+    team = MANAGER_TEAM.get(resp_id, "")
+    if team not in FIRST_TOUCH_TEAMS:
+        return  # лише рекламні команди РНК (Дарина/Андрій)
+    if not kommo.has_utm_campaign(lead):
+        return  # лише ліди з реклами (геомітка/utm)
+
+    # Найперший дзвінок тривалістю ≥40с — це і є "перший дотик".
+    notes = kommo.get_lead_notes(lead_id)
+    call_notes = sorted(
+        (n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")),
+        key=lambda n: n.get("created_at", 0),
+    )
+    first = None
+    for n in call_notes:
+        params = n.get("params") or {}
+        if int(params.get("duration", 0) or 0) >= FIRST_TOUCH_MIN_DURATION:
+            first = n
+            break
+    if not first:
+        return  # реального дзвінка ще не було — почекаємо наступного
+    if lead_id in _first_touch_done:
+        return
+    _first_touch_done.add(lead_id)
+    if len(_first_touch_done) > 5000:
+        _first_touch_done.clear()
+
+    params = first.get("params") or {}
+    record_url = params.get("link", "") or params.get("LINK", "")
+    call_type = "вхідний" if first.get("note_type") in (10, "call_in") else "вихідний"
+    manager_name = kommo.get_user_name(resp_id) if resp_id else "—"
+    lead_name = lead.get("name", f"Лід #{lead_id}")
+    transcript = transcriber.transcribe_call(record_url) if record_url else ""
+
+    result = ai_analyzer.analyze_first_touch(transcript, lead_name, manager_name)
+    if transcript and not result.get("about_transport"):
+        logger.info("First touch lead %s: розмова не про перевезення — пропуск", lead_id)
+        return  # не рахуємо нерелевантні (спам/не про перевезення)
+
+    now = datetime.now(timezone.utc)
+    _first_touch_log.append({
+        "date": now.date().isoformat(),
+        "manager_id": resp_id,
+        "team": team,
+        "lead_id": lead_id,
+        "price_voiced": bool(result.get("price_voiced")),
+    })
+    # прибрати старі записи (>7 днів)
+    if len(_first_touch_log) > 2000:
+        cutoff = (now - timedelta(days=7)).date().isoformat()
+        _first_touch_log[:] = [e for e in _first_touch_log if e["date"] >= cutoff]
+
+    tg_tag = notifier.get_manager_tag(resp_id)
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+    if not transcript:
+        head = "📞 Перший дотик по рекламі"
+        body = "⚠️ Запис дзвінка недоступний — автоаналіз неможливий."
+    else:
+        price = "✅ ціну озвучено" if result["price_voiced"] else "❌ ціну НЕ озвучено"
+        obj = ("✅ заперечення відпрацьовано" if result["objections_handled"]
+               else "➖ заперечень не було / не відпрацьовано")
+        head = ("✅ Перший дотик: ціну озвучено" if result["price_voiced"]
+                else "❌ Перший дотик: ціну НЕ озвучено")
+        body = f"{price}\n{obj}\n🧠 {result['summary']}"
+    msg = (
+        f"{head}\n"
+        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
+        f"🏷 {lead_name} | 📞 {call_type}\n"
+        f"{body}\n"
+        f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+    )
+    notifier.send_to_first_touch(msg, team)
+    logger.info("First touch lead %s (%s): price=%s", lead_id, team, result.get("price_voiced"))
+
+
+def _send_first_touch_admin_report():
+    """О 18:00 Київ — адмінське зведення першого дотику по рекламі за день."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    todays = [e for e in _first_touch_log if e["date"] == today]
+    accepted = len(todays)
+    priced = sum(1 for e in todays if e["price_voiced"])
+
+    by_team: dict[str, dict[str, int]] = {}
+    for e in todays:
+        t = by_team.setdefault(e["team"], {"acc": 0, "price": 0})
+        t["acc"] += 1
+        t["price"] += 1 if e["price_voiced"] else 0
+    lines = "\n".join(
+        f"• {team}: прийнято {v['acc']}, озвучено ціну {v['price']}"
+        for team, v in by_team.items()
+    ) or "—"
+
+    msg = (
+        f"📊 <b>Перший дотик по рекламі за день</b>\n"
+        f"📥 Прийнято рекламних лідів (перший дотик): <b>{accepted}</b>\n"
+        f"💬 Озвучено ціну на першому дотику: <b>{priced}</b>\n"
+        f"{lines}"
+    )
+    notifier.send_to_admin_stats(msg)
+    logger.info("First-touch admin report: accepted=%d priced=%d", accepted, priced)
 
 
 def _build_stats_text(days: int, label: str) -> str:

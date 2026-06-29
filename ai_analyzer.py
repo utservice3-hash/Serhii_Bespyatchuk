@@ -108,6 +108,70 @@ def analyze_deal_calls(calls: list[dict], manager: str, lead_name: str = "") -> 
         return ""
 
 
+def analyze_first_touch(transcript: str, lead_name: str = "", manager: str = "") -> dict:
+    """Оцінює ПЕРШИЙ дзвінок з рекламним клієнтом: чи розмова про перевезення,
+    чи менеджер озвучив ціну (вартість перевезення) і чи відпрацював заперечення.
+    Повертає {"about_transport": bool, "price_voiced": bool,
+    "objections_handled": bool, "summary": str}."""
+    empty = {"about_transport": False, "price_voiced": False, "objections_handled": False, "summary": ""}
+    if not ANTHROPIC_API_KEY or not transcript:
+        return dict(empty)
+
+    prompt = f"""КВП логістики. Це ПЕРШИЙ дзвінок з клієнтом, що прийшов з реклами.
+Угода: {lead_name or '—'} | Менеджер: {manager or '—'}.
+Розшифровка дзвінка:
+{transcript[:3000]}
+
+Оціни строго за змістом розмови:
+0) Чи розмова взагалі про вантажне ПЕРЕВЕЗЕННЯ (логістику, доставку вантажу)? Якщо це спам, помилковий номер, не про перевезення — TRANSPORT: НІ.
+1) Чи менеджер озвучив клієнту ЦІНУ/вартість перевезення (конкретну суму, ставку або вилку цін)?
+2) Чи відпрацював заперечення клієнта (сумніви щодо ціни, термінів, надійності тощо)? Якщо заперечень не було взагалі — вважай це як "НЕ БУЛО".
+
+Відповідь рівно у форматі (без markdown):
+TRANSPORT: ТАК або НІ
+PRICE: ТАК або НІ
+OBJECTIONS: ТАК або НІ або НЕ БУЛО
+SUMMARY: <1-2 речення: що добре, що варто покращити в першому дотику>
+Українська."""
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": MODEL,
+                "max_tokens": 220,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        data = resp.json()
+        if not resp.ok:
+            logger.error("Claude API analyze_first_touch error: %s", data)
+            return dict(empty)
+        text = data["content"][0]["text"].strip()
+        up = text.upper()
+        import re as _re
+        about_transport = bool(_re.search(r"TRANSPORT:\s*ТАК", up))
+        price_voiced = bool(_re.search(r"PRICE:\s*ТАК", up))
+        objections_handled = bool(_re.search(r"OBJECTIONS:\s*ТАК", up))
+        sm = _re.search(r"SUMMARY:\s*(.+)", text, _re.DOTALL)
+        summary = sm.group(1).strip() if sm else text
+        return {
+            "about_transport": about_transport,
+            "price_voiced": price_voiced,
+            "objections_handled": objections_handled,
+            "summary": summary,
+        }
+    except Exception as e:
+        logger.error("analyze_first_touch: %s", e)
+        return dict(empty)
+
+
 def check_target_lead(transcripts: list[str], lead_name: str = "", manager_note: str = "") -> dict:
     """
     Перевіряє, чи лід, закритий як 'Не цільові', дійсно нецільовий, чи клієнту

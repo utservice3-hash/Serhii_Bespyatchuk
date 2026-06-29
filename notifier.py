@@ -306,6 +306,55 @@ def send_to_team_tracking(text: str, team: str = "") -> bool:
         return False
 
 
+# Гілки "Перший дотик по рекламі" — окремі для кожної команди РНК,
+# плюс адмінська група для щоденного зведення.
+_FIRST_TOUCH_ROUTES: dict[str, dict[str, str]] = {
+    "Михальчевська": {"chat_id": "-1002925017503", "thread": "7689"},
+    "Безпам'ятний": {"chat_id": "-1002258732695", "thread": "14232"},
+}
+TG_CHAT_ID_ADMIN_STATS = os.getenv("TG_CHAT_ID_ADMIN_STATS", "-1004407179676")
+TG_THREAD_ID_ADMIN_STATS = os.getenv("TG_THREAD_ID_ADMIN_STATS", "6")
+
+
+def send_to_first_touch(text: str, team: str = "") -> bool:
+    """Сповіщення про перший дотик по рекламному ліду — у гілку команди РНК."""
+    route = _FIRST_TOUCH_ROUTES.get(team)
+    if not route or not TG_TOKEN:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=route["chat_id"], thread_id=route["thread"])
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram first_touch error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_first_touch exception: %s", e)
+        return False
+
+
+def send_to_admin_stats(text: str) -> bool:
+    """Щоденне адмінське зведення (перший дотик по рекламі)."""
+    if not TG_TOKEN or not TG_CHAT_ID_ADMIN_STATS:
+        return False
+    try:
+        payload = _base_payload(text, chat_id=TG_CHAT_ID_ADMIN_STATS, thread_id=TG_THREAD_ID_ADMIN_STATS)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json=payload, timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error("Telegram admin_stats error: %s", data)
+            return False
+        return True
+    except Exception as e:
+        logger.error("send_to_admin_stats exception: %s", e)
+        return False
+
+
 def send_to_rpk(text: str) -> bool:
     """Send message to РПК group."""
     if not TG_TOKEN or not TG_CHAT_ID_RPK:
