@@ -1690,9 +1690,12 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
         if calls_analysis:
             recommendation = f"{recommendation}\n\n📞 Аналіз прослуханих дзвінків:\n{calls_analysis}"
 
-        closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ'ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
+        closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ['ʼ’]?ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
         category_match = re.search(r"CATEGORY:\s*(.+)", recommendation)
-        verdict = closure_match.group(1) if closure_match else ""
+        # нормалізуємо вердикт (різні апострофи в ОБ'ЄКТИВНЕ → канонічний)
+        verdict = ""
+        if closure_match:
+            verdict = "ПЕРЕДЧАСНЕ" if "ПЕРЕДЧАСНЕ" in closure_match.group(1) else "ОБ'ЄКТИВНЕ"
         verdict_reason = closure_match.group(2).strip() if closure_match else ""
         category = category_match.group(1).strip() if category_match else ""
         recommendation_clean = re.sub(r"\n?CLOSURE:.*", "", recommendation)
