@@ -75,12 +75,14 @@ const planSchema = z.object({
   // ISO dates (YYYY-MM-DD) the team-lead picked as working days.
   days: z.array(z.string()).min(1),
   adsCount: z.number().nonnegative().optional(),
+  leadgenCount: z.number().nonnegative().optional(),
   avgCheck: z.number().nonnegative().optional(),
   conversion: z.number().min(0).max(100).optional(),
 });
 
 const METRIC_LABELS: Record<string, string> = {
   ads_count: "Кількість прийнятої реклами",
+  leadgen_count: "Кількість прийнятих лідогенів",
   avg_check: "Середній чек",
   conversion: "Конверсія",
 };
@@ -92,7 +94,7 @@ tasksRouter.post("/plan", async (req, res) => {
   }
   const parsed = planSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { assigneeId, period, days, adsCount, avgCheck, conversion } = parsed.data;
+  const { assigneeId, period, days, adsCount, leadgenCount, avgCheck, conversion } = parsed.data;
 
   const sorted = [...days].sort();
   const periodStart = sorted[0];
@@ -104,22 +106,23 @@ tasksRouter.post("/plan", async (req, res) => {
   const kpiType = period === "week" ? "weekly_kpi" : "monthly_kpi";
   const createdIds: number[] = [];
 
-  // ads_count → parent KPI task + one auto daily sub-task per working day.
-  if (adsCount && adsCount > 0) {
+  // Count metrics → parent KPI task + one auto daily sub-task per working day.
+  for (const [metric, total] of [["ads_count", adsCount], ["leadgen_count", leadgenCount]] as const) {
+    if (!total || total <= 0) continue;
     const parent = await pool.query<{ id: number }>(
       `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, metric, target_value, period_start, period_end, auto)
-       VALUES ($1,'not_started',$2,$3,$4,'ads_count',$5,$6,$7,true) RETURNING id`,
-      [`План на ${periodLabel}: ${METRIC_LABELS.ads_count} — ${adsCount} (${mgrName})`,
-       assigneeId, auth.userId, kpiType, adsCount, periodStart, periodEnd]
+       VALUES ($1,'not_started',$2,$3,$4,$5,$6,$7,$8,true) RETURNING id`,
+      [`План на ${periodLabel}: ${METRIC_LABELS[metric]} — ${total} (${mgrName})`,
+       assigneeId, auth.userId, kpiType, metric, total, periodStart, periodEnd]
     );
     const parentId = parent.rows[0].id;
     createdIds.push(parentId);
-    const daily = Math.max(1, Math.round(adsCount / sorted.length));
+    const daily = Math.max(1, Math.round(total / sorted.length));
     for (const day of sorted) {
       await pool.query(
         `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, metric, target_value, plan_date, parent_id, deadline, auto)
-         VALUES ($1,'not_started',$2,$3,'daily_kpi','ads_count',$4,$5,$6,$5,true)`,
-        [`${METRIC_LABELS.ads_count}: ${daily}/день`, assigneeId, auth.userId, daily, day, parentId]
+         VALUES ($1,'not_started',$2,$3,'daily_kpi',$4,$5,$6,$7,$6,true)`,
+        [`${METRIC_LABELS[metric]}: ${daily}/день`, assigneeId, auth.userId, metric, daily, day, parentId]
       );
     }
   }

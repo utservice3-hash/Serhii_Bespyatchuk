@@ -265,6 +265,7 @@ export function Dashboard() {
     weekStart: "",
     weekdays: [true, true, true, true, true, false, false], // Mon..Sun
     adsCount: "",
+    leadgenCount: "",
     avgCheck: "",
     conversion: "",
   };
@@ -425,6 +426,7 @@ export function Dashboard() {
         period: taskForm.taskType === "weekly_kpi" ? "week" : "month",
         days,
         adsCount: taskForm.adsCount ? Number(taskForm.adsCount) : undefined,
+        leadgenCount: taskForm.leadgenCount ? Number(taskForm.leadgenCount) : undefined,
         avgCheck: taskForm.avgCheck ? Number(taskForm.avgCheck) : undefined,
         conversion: taskForm.conversion ? Number(taskForm.conversion) : undefined,
       });
@@ -2636,6 +2638,15 @@ export function Dashboard() {
                             value={taskForm.adsCount}
                             onChange={(e) => setTaskForm((f) => ({ ...f, adsCount: e.target.value }))}
                             placeholder="напр. 25"
+                          />
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                          К-сть лідогенів (РПК)
+                          <input
+                            type="number"
+                            value={taskForm.leadgenCount}
+                            onChange={(e) => setTaskForm((f) => ({ ...f, leadgenCount: e.target.value }))}
+                            placeholder="напр. 40"
                           />
                         </label>
                         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>

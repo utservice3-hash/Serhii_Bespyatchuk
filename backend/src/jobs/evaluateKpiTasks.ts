@@ -15,35 +15,37 @@ export async function evaluateKpiTasks(): Promise<void> {
        comments = $3, updated_at = now()
      WHERE id = $4`;
 
-  // 1) Daily ads_count sub-tasks for days that have already passed.
-  const daily = await pool.query<{ id: number; assignee_id: number; target_value: string; plan_date: string }>(
-    `SELECT id, assignee_id, target_value, plan_date FROM tasks
-     WHERE auto AND task_type = 'daily_kpi' AND metric = 'ads_count'
+  const channelOf = (metric: string) => (metric === "leadgen_count" ? "leadgen" : "ad");
+
+  // 1) Daily count sub-tasks (ads / leadgen) for days that have already passed.
+  const daily = await pool.query<{ id: number; assignee_id: number; metric: string; target_value: string; plan_date: string }>(
+    `SELECT id, assignee_id, metric, target_value, plan_date FROM tasks
+     WHERE auto AND task_type = 'daily_kpi' AND metric IN ('ads_count','leadgen_count')
        AND status <> 'done' AND plan_date <= (now()::date - 1)`
   );
   for (const t of daily.rows) {
     const r = await pool.query<{ c: string }>(
       `SELECT COUNT(*) c FROM deals
-       WHERE manager_id = $1 AND lead_channel = 'ad'
+       WHERE manager_id = $1 AND lead_channel = $3
          AND created_at_kommo >= $2::date AND created_at_kommo < $2::date + interval '1 day'`,
-      [t.assignee_id, t.plan_date]
+      [t.assignee_id, t.plan_date, channelOf(t.metric)]
     );
     const actual = Number(r.rows[0].c);
     const target = Number(t.target_value);
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual} / ціль ${target}`, t.id]);
   }
 
-  // 2) ads_count parent — total accepted ads over the whole period.
-  const parents = await pool.query<{ id: number; assignee_id: number; target_value: string; period_start: string; period_end: string }>(
-    `SELECT id, assignee_id, target_value, period_start, period_end FROM tasks
-     WHERE auto AND task_type IN ('weekly_kpi','monthly_kpi') AND metric = 'ads_count' AND status <> 'done'`
+  // 2) Count parents — total accepted ads / leadgen over the whole period.
+  const parents = await pool.query<{ id: number; assignee_id: number; metric: string; target_value: string; period_start: string; period_end: string }>(
+    `SELECT id, assignee_id, metric, target_value, period_start, period_end FROM tasks
+     WHERE auto AND task_type IN ('weekly_kpi','monthly_kpi') AND metric IN ('ads_count','leadgen_count') AND status <> 'done'`
   );
   for (const t of parents.rows) {
     const r = await pool.query<{ c: string }>(
       `SELECT COUNT(*) c FROM deals
-       WHERE manager_id = $1 AND lead_channel = 'ad'
+       WHERE manager_id = $1 AND lead_channel = $4
          AND created_at_kommo >= $2::date AND created_at_kommo < $3::date + interval '1 day'`,
-      [t.assignee_id, t.period_start, t.period_end]
+      [t.assignee_id, t.period_start, t.period_end, channelOf(t.metric)]
     );
     const actual = Number(r.rows[0].c);
     const target = Number(t.target_value);
