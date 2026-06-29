@@ -702,9 +702,6 @@ export function Dashboard() {
   const paidStage = chartData.find((s) => s.name === STAGE_LABELS.paid);
   const paid = paidStage?.count ?? 0;
   const paidAmount = paidStage?.amount ?? 0;
-  // Each deal sits in exactly one funnel stage (current status snapshot), so
-  // conversion is the share of all deals that reached payment.
-  const conversion = totalDeals > 0 ? Math.round((paid / totalDeals) * 100) : 0;
   // Average check = revenue per actually-paid deal, not per lead in the funnel.
   const avgDeal = paid > 0 ? paidAmount / paid : 0;
 
@@ -717,16 +714,25 @@ export function Dashboard() {
   const prevDeals = prevChart.reduce((s, x) => s + x.count, 0);
   const prevPaidStage = prevChart.find((s) => s.name === STAGE_LABELS.paid);
   const prevPaid = prevPaidStage?.count ?? 0;
-  const prevConversion = prevDeals > 0 ? Math.round((prevPaid / prevDeals) * 100) : 0;
   const prevAvg = prevPaid > 0 ? (prevPaidStage?.amount ?? 0) / prevPaid : 0;
 
+  // "Угоди" = deals that reached "Виставлено рахунок"…"Успішно реалізовано"
+  // (invoiced+paid), created in the period — comes from the overview endpoint.
+  const dealsCount = overview?.createdLeads ?? totalDeals;
+  const prevDealsCount = prevOverview?.createdLeads ?? prevDeals;
+  const adConv = overview?.adConversion?.conversion ?? 0;
+  const prevAdConv = prevOverview?.adConversion?.conversion ?? 0;
+  const lgConv = overview?.leadgenConversion?.conversion ?? 0;
+  const prevLgConv = prevOverview?.leadgenConversion?.conversion ?? 0;
+
   const kpis = [
-    { key: "deals", label: "Угоди", value: totalDeals.toLocaleString("uk-UA"), cur: totalDeals, prev: prevDeals },
-    { key: "sum", label: "Отримані кошти (закрито)", value: formatAmount(overview?.closedRevenue ?? 0), cur: overview?.closedRevenue ?? 0, prev: prevOverview?.closedRevenue ?? 0 },
-    { key: "conv", label: "Конверсія", value: `${conversion}%`, cur: conversion, prev: prevConversion, unit: "%" },
+    { key: "deals", label: "Угоди (рахунок→реалізовано)", value: dealsCount.toLocaleString("uk-UA"), cur: dealsCount, prev: prevDealsCount },
+    { key: "sum", label: "Отримані кошти (оплата+успішно)", value: formatAmount(overview?.closedRevenue ?? 0), cur: overview?.closedRevenue ?? 0, prev: prevOverview?.closedRevenue ?? 0 },
+    { key: "convAd", label: "Конверсія реклами", value: `${adConv}%`, cur: adConv, prev: prevAdConv, unit: "%" },
+    { key: "convLg", label: "Конверсія лідогену", value: `${lgConv}%`, cur: lgConv, prev: prevLgConv, unit: "%" },
     { key: "avg", label: "Середній чек", value: formatAmount(avgDeal), cur: avgDeal, prev: prevAvg },
-    { key: "newc", label: "Нові клієнти", value: (overview?.newClients ?? 0).toLocaleString("uk-UA"), cur: overview?.newClients ?? 0, prev: prevOverview?.newClients ?? 0 },
-    { key: "repc", label: "Повторні клієнти", value: (overview?.repeatClients ?? 0).toLocaleString("uk-UA"), cur: overview?.repeatClients ?? 0, prev: prevOverview?.repeatClients ?? 0 },
+    { key: "newc", label: "Нові клієнти (вперше)", value: (overview?.newClients ?? 0).toLocaleString("uk-UA"), cur: overview?.newClients ?? 0, prev: prevOverview?.newClients ?? 0 },
+    { key: "repc", label: "Постійні клієнти (2+)", value: (overview?.repeatClients ?? 0).toLocaleString("uk-UA"), cur: overview?.repeatClients ?? 0, prev: prevOverview?.repeatClients ?? 0 },
   ];
 
   function navigateTo(next: NavKey) {
@@ -852,8 +858,8 @@ export function Dashboard() {
                     <div className="kpi-card"><span className="kpi-label">Зміна</span><span className="kpi-value" style={{ color: diff > 0 ? "#16a34a" : diff < 0 ? "#dc2626" : undefined }}>{diff > 0 ? "↑" : diff < 0 ? "↓" : "→"} {Math.abs(pct)}%</span></div>
                   </div>
 
-                  {overview && overview.monthlyHistory.length > 0 && ["deals", "sum", "conv", "avg"].includes(kpi.key) && (() => {
-                    const field = kpi.key === "deals" ? "deals" : kpi.key === "sum" ? "revenue" : kpi.key === "conv" ? "conversion" : "avgCheck";
+                  {overview && overview.monthlyHistory.length > 0 && ["deals", "sum", "convAd", "convLg", "avg"].includes(kpi.key) && (() => {
+                    const field = kpi.key === "deals" ? "deals" : kpi.key === "sum" ? "revenue" : (kpi.key === "convAd" || kpi.key === "convLg") ? "conversion" : "avgCheck";
                     const isMoney = kpi.key === "sum" || kpi.key === "avg";
                     return (
                       <div style={{ marginBottom: 16 }}>
@@ -910,7 +916,7 @@ export function Dashboard() {
                   <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
                 </div>
                 <div className="kpi-card">
-                  <span className="kpi-label">Частка повторних (виручка)</span>
+                  <span className="kpi-label" title="Частка виручки від постійних (повторних) клієнтів у загальній виручці за період">Виручка від постійних клієнтів, %</span>
                   <span className="kpi-value">
                     {overview.newRevenue + overview.repeatRevenue > 0
                       ? Math.round(

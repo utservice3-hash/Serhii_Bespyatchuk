@@ -254,17 +254,43 @@ dashboardRouter.get("/overview", async (req, res) => {
   }
   const closedWhere = `WHERE ${closedConds.join(" AND ")}`;
 
-  // Count of leads created in the period (any stage in the tracked sales
-  // pipelines), scoped the same way but without the paid-stage filter.
-  const leadConds = paidConds.filter((c) => !c.includes("funnel_stage"));
+  // "Угоди" = deals that reached the money part of the funnel — from
+  // "Виставлено рахунок" (invoiced) through "Успішно реалізовано" (paid) —
+  // created within the period.
+  const dealConds = paidConds.map((c) =>
+    c.includes("funnel_stage") ? "psm.funnel_stage IN ('invoiced','paid')" : c
+  );
   const createdLeadsResult = await pool.query<{ count: string }>(
     `SELECT COUNT(*) AS count
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${leadConds.length ? `WHERE ${leadConds.join(" AND ")}` : ""}`,
+     WHERE ${dealConds.join(" AND ")}`,
     params
   );
+
+  // Conversion by acquisition channel (by created date): paid (= dispatched
+  // autos) over total leads in the channel. "ad" counts only deals carrying a
+  // Google utm tag; "leadgen" = leads worked by the lead-gen department.
+  const scopeConds = paidConds.filter((c) => !c.includes("funnel_stage"));
+  const scopeWhere = scopeConds.length ? `WHERE ${scopeConds.join(" AND ")}` : "";
+  const channelConvRes = await pool.query<{ lead_channel: string; leads: string; paid: string }>(
+    `SELECT COALESCE(d.lead_channel, 'other') AS lead_channel,
+            COUNT(*) AS leads,
+            COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${scopeWhere}
+     GROUP BY 1`,
+    params
+  );
+  const channelConv = (ch: string) => {
+    const r = channelConvRes.rows.find((x) => x.lead_channel === ch);
+    const leads = Number(r?.leads ?? 0);
+    const paid = Number(r?.paid ?? 0);
+    return { leads, paid, conversion: leads > 0 ? Math.round((paid / leads) * 100) : 0 };
+  };
 
   const byTeam = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
     `SELECT t.id AS team_id, t.name AS team_name,
@@ -431,6 +457,8 @@ dashboardRouter.get("/overview", async (req, res) => {
     planPct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : 0,
     closedRevenue: Number(closedRes.rows[0]?.revenue ?? 0),
     closedDeals: Number(closedRes.rows[0]?.deals ?? 0),
+    adConversion: channelConv("ad"),
+    leadgenConversion: channelConv("leadgen"),
     monthlyHistory,
     byTeam: byTeam.rows.map((r) => ({
       teamId: r.team_id,
