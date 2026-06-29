@@ -44,6 +44,7 @@ import {
   fetchManagerOptions,
   fetchPersonalDashboard,
   fetchReceivables,
+  saveReceivableNote,
   fetchTasks,
   fetchTeams,
   fetchTimeseries,
@@ -416,6 +417,22 @@ export function Dashboard() {
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
   const [receivablesLoading, setReceivablesLoading] = useState(false);
+  // Live refresh: bump a nonce every 5 min so data-loading effects re-fetch
+  // fresh CRM data without a manual page reload.
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setRefreshNonce((n) => n + 1), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+  const canEditReceivables = auth?.role === "admin" || auth?.role === "team_lead";
+  function patchReceivableNote(clientKey: string, patch: { comment?: string; dueDate?: string | null }) {
+    setReceivablesData((prev) =>
+      prev.map((m) => ({
+        ...m,
+        clients: m.clients.map((c) => (c.clientKey === clientKey ? { ...c, ...patch } : c)),
+      }))
+    );
+  }
 
   const [leadgenTeamId, setLeadgenTeamId] = useState<number | "">("");
   const [leadgenData, setLeadgenData] = useState<LeadgenGroup[]>([]);
@@ -582,7 +599,7 @@ export function Dashboard() {
       .then(setManagerRows)
       .catch(() => setManagerRows([]))
       .finally(() => setManagersLoading(false));
-  }, [section, managerTeamId, month, teams, auth]);
+  }, [section, managerTeamId, month, teams, auth, refreshNonce]);
 
   useEffect(() => {
     if (section !== "managers") return;
@@ -613,7 +630,7 @@ export function Dashboard() {
         setLoyaltyDynamics(null);
       })
       .finally(() => setLoyaltyLoading(false));
-  }, [section, loyaltyTeamId, teams, auth]);
+  }, [section, loyaltyTeamId, teams, auth, refreshNonce]);
 
   useEffect(() => {
     if (section !== "receivables") return;
@@ -628,7 +645,7 @@ export function Dashboard() {
       })
       .catch(() => setReceivablesData([]))
       .finally(() => setReceivablesLoading(false));
-  }, [section, receivablesTeamId, teams, auth]);
+  }, [section, receivablesTeamId, teams, auth, refreshNonce]);
 
   useEffect(() => {
     if (section !== "messenger") return;
@@ -862,7 +879,7 @@ export function Dashboard() {
         );
       })
       .finally(() => setLoading(false));
-  }, [teamId, granularity, dateRange]);
+  }, [teamId, granularity, dateRange, refreshNonce]);
 
   // Order the funnel stages by their real pipeline sequence, not by whatever
   // order the SQL GROUP BY returned them in.
@@ -1166,7 +1183,7 @@ export function Dashboard() {
                   plan={overview.plan}
                   fact={overview.fact}
                   pct={overview.planPct}
-                  contributors={overview.topManagers}
+                  contributors={overview.byTeam.map((t) => ({ name: t.teamName, revenue: t.revenue, deals: t.deals }))}
                 />
                 <HoverInfoCard
                   label="Очікувані оплати"
@@ -1924,6 +1941,8 @@ export function Dashboard() {
                         <th>Заборгованість</th>
                         <th>Лімит днів</th>
                         <th>Макс днів</th>
+                        <th>Дата оплати</th>
+                        <th>Коментар</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1940,6 +1959,32 @@ export function Dashboard() {
                             }
                           >
                             {c.overdueDays ?? "—"}
+                          </td>
+                          <td>
+                            {canEditReceivables ? (
+                              <input
+                                type="date"
+                                value={c.dueDate ?? ""}
+                                onChange={(e) => patchReceivableNote(c.clientKey, { dueDate: e.target.value || null })}
+                                onBlur={(e) => saveReceivableNote({ clientKey: c.clientKey, dueDate: e.target.value || null, comment: c.comment })}
+                                style={{ fontSize: 12 }}
+                              />
+                            ) : (
+                              c.dueDate ?? "—"
+                            )}
+                          </td>
+                          <td>
+                            {canEditReceivables ? (
+                              <input
+                                value={c.comment ?? ""}
+                                placeholder="—"
+                                onChange={(e) => patchReceivableNote(c.clientKey, { comment: e.target.value })}
+                                onBlur={(e) => saveReceivableNote({ clientKey: c.clientKey, comment: e.target.value, dueDate: c.dueDate })}
+                                style={{ border: "none", width: "100%", minWidth: 120 }}
+                              />
+                            ) : (
+                              c.comment ?? "—"
+                            )}
                           </td>
                         </tr>
                       ))}

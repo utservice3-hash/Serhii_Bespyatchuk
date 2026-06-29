@@ -140,6 +140,17 @@ CREATE TABLE IF NOT EXISTS receivables (
 CREATE INDEX IF NOT EXISTS idx_receivables_manager ON receivables(manager_id);
 CREATE INDEX IF NOT EXISTS idx_receivables_client_key ON receivables(client_key);
 
+-- Team-lead notes on receivables. Kept separate from `receivables` because that
+-- table is TRUNCATEd on every Google-Sheet sync; notes are keyed by client_key
+-- so they survive re-syncs.
+CREATE TABLE IF NOT EXISTS receivable_notes (
+  client_key TEXT PRIMARY KEY,
+  comment TEXT,
+  due_date DATE,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Company / industry news shown to managers.
 CREATE TABLE IF NOT EXISTS news (
   id SERIAL PRIMARY KEY,

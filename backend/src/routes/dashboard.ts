@@ -1346,11 +1346,15 @@ dashboardRouter.get("/receivables", async (req, res) => {
     limit_days: number | null;
     overdue_days: number | null;
     synced_at: string;
+    comment: string | null;
+    due_date: string | null;
   }>(
     `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount,
-            r.limit_days, r.overdue_days, r.synced_at
+            r.limit_days, r.overdue_days, r.synced_at,
+            n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date
      FROM receivables r
      JOIN managers m ON m.id = r.manager_id
+     LEFT JOIN receivable_notes n ON n.client_key = r.client_key
      ${where}
      ORDER BY r.amount DESC`,
     params
@@ -1367,6 +1371,8 @@ dashboardRouter.get("/receivables", async (req, res) => {
         amount: number;
         limitDays: number | null;
         overdueDays: number | null;
+        comment: string | null;
+        dueDate: string | null;
       }[];
       total: number;
     }
@@ -1387,9 +1393,33 @@ dashboardRouter.get("/receivables", async (req, res) => {
       amount,
       limitDays: row.limit_days,
       overdueDays: row.overdue_days,
+      comment: row.comment,
+      dueDate: row.due_date,
     });
     entry.total += amount;
   }
 
   res.json({ syncedAt, managers: Array.from(byManager.values()) });
+});
+
+// Team-lead / admin: save a comment + planned payment date for a receivable
+// client (keyed by client_key so it survives sheet re-syncs).
+dashboardRouter.put("/receivables/note", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
+    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  }
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const comment = req.body?.comment != null ? String(req.body.comment) : null;
+  const dueDate = req.body?.dueDate ? String(req.body.dueDate) : null;
+  await pool.query(
+    `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (client_key) DO UPDATE SET
+       comment = EXCLUDED.comment, due_date = EXCLUDED.due_date,
+       updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, comment, dueDate, auth.userId]
+  );
+  res.json({ ok: true });
 });

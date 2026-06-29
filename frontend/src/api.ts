@@ -366,6 +366,16 @@ export interface ReceivableClient {
   amount: number;
   limitDays: number | null;
   overdueDays: number | null;
+  comment: string | null;
+  dueDate: string | null;
+}
+
+export async function saveReceivableNote(payload: {
+  clientKey: string;
+  comment?: string | null;
+  dueDate?: string | null;
+}): Promise<void> {
+  await api.put("/dashboard/receivables/note", payload);
 }
 
 export interface ReceivableManager {
