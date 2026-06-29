@@ -14,6 +14,7 @@ import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncNews } from "./jobs/syncNews.js";
+import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 
 const app = express();
 app.use(cors());
@@ -46,6 +47,11 @@ syncReceivables().catch((err) => console.error("Receivables sync failed:", err))
 // Fetch 3 fresh logistics-industry news items daily at 08:00.
 cron.schedule("0 8 * * *", () => {
   syncNews().catch((err) => console.error("News sync failed:", err));
+});
+
+// Evaluate weekly/monthly KPI plan tasks (auto-complete on target) daily at 07:00.
+cron.schedule("0 7 * * *", () => {
+  evaluateKpiTasks().catch((err) => console.error("KPI task eval failed:", err));
 });
 
 app.listen(config.port, () => {

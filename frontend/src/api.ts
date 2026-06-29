@@ -512,8 +512,29 @@ export interface Task {
   priority: TaskPriority;
   comments: string | null;
   department: string | null;
+  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi";
+  metric: "ads_count" | "avg_check" | "conversion" | null;
+  targetValue: number | null;
+  actualValue: number | null;
+  planDate: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  parentId: number | null;
+  auto: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export async function createTaskPlan(payload: {
+  assigneeId: number;
+  period: "week" | "month";
+  days: string[];
+  adsCount?: number;
+  avgCheck?: number;
+  conversion?: number;
+}): Promise<{ created: number }> {
+  const { data } = await api.post<{ created: number }>("/tasks/plan", payload);
+  return data;
 }
 
 export async function fetchTasks(): Promise<Task[]> {

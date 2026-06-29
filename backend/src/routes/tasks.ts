@@ -52,6 +52,10 @@ tasksRouter.get("/", async (req, res) => {
   const result = await pool.query(
     `SELECT t.id, t.title, t.status, t.deadline, t.assignee_id AS "assigneeId",
             m.name AS "assigneeName", t.priority, t.comments, t.department,
+            t.task_type AS "taskType", t.metric, t.target_value AS "targetValue",
+            t.actual_value AS "actualValue", t.plan_date AS "planDate",
+            t.period_start AS "periodStart", t.period_end AS "periodEnd",
+            t.parent_id AS "parentId", t.auto,
             t.created_at AS "createdAt", t.updated_at AS "updatedAt"
      FROM tasks t
      LEFT JOIN managers m ON m.id = t.assignee_id
@@ -61,6 +65,83 @@ tasksRouter.get("/", async (req, res) => {
   );
 
   res.json({ tasks: result.rows });
+});
+
+// --- Weekly/monthly KPI plan (team-lead / admin) ---
+
+const planSchema = z.object({
+  assigneeId: z.number(),
+  period: z.enum(["week", "month"]),
+  // ISO dates (YYYY-MM-DD) the team-lead picked as working days.
+  days: z.array(z.string()).min(1),
+  adsCount: z.number().nonnegative().optional(),
+  avgCheck: z.number().nonnegative().optional(),
+  conversion: z.number().min(0).max(100).optional(),
+});
+
+const METRIC_LABELS: Record<string, string> = {
+  ads_count: "Кількість прийнятої реклами",
+  avg_check: "Середній чек",
+  conversion: "Конверсія",
+};
+
+tasksRouter.post("/plan", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
+    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  }
+  const parsed = planSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { assigneeId, period, days, adsCount, avgCheck, conversion } = parsed.data;
+
+  const sorted = [...days].sort();
+  const periodStart = sorted[0];
+  const periodEnd = sorted[sorted.length - 1];
+  const periodLabel = period === "week" ? "тиждень" : "місяць";
+
+  const mgr = await pool.query<{ name: string }>(`SELECT name FROM managers WHERE id = $1`, [assigneeId]);
+  const mgrName = mgr.rows[0]?.name ?? "";
+  const kpiType = period === "week" ? "weekly_kpi" : "monthly_kpi";
+  const createdIds: number[] = [];
+
+  // ads_count → parent KPI task + one auto daily sub-task per working day.
+  if (adsCount && adsCount > 0) {
+    const parent = await pool.query<{ id: number }>(
+      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, metric, target_value, period_start, period_end, auto)
+       VALUES ($1,'not_started',$2,$3,$4,'ads_count',$5,$6,$7,true) RETURNING id`,
+      [`План на ${periodLabel}: ${METRIC_LABELS.ads_count} — ${adsCount} (${mgrName})`,
+       assigneeId, auth.userId, kpiType, adsCount, periodStart, periodEnd]
+    );
+    const parentId = parent.rows[0].id;
+    createdIds.push(parentId);
+    const daily = Math.max(1, Math.round(adsCount / sorted.length));
+    for (const day of sorted) {
+      await pool.query(
+        `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, metric, target_value, plan_date, parent_id, deadline, auto)
+         VALUES ($1,'not_started',$2,$3,'daily_kpi','ads_count',$4,$5,$6,$5,true)`,
+        [`${METRIC_LABELS.ads_count}: ${daily}/день`, assigneeId, auth.userId, daily, day, parentId]
+      );
+    }
+  }
+
+  // avg_check / conversion → single period-aggregate task (no daily split).
+  for (const [metric, target] of [["avg_check", avgCheck], ["conversion", conversion]] as const) {
+    if (target && target > 0) {
+      const suffix = metric === "conversion" ? "%" : "₴";
+      const r = await pool.query<{ id: number }>(
+        `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, metric, target_value, period_start, period_end, auto)
+         VALUES ($1,'not_started',$2,$3,$4,$5,$6,$7,$8,true) RETURNING id`,
+        [`План на ${periodLabel}: ${METRIC_LABELS[metric]} ≥ ${target}${suffix} (${mgrName})`,
+         assigneeId, auth.userId, kpiType, metric, target, periodStart, periodEnd]
+      );
+      createdIds.push(r.rows[0].id);
+    }
+  }
+
+  if (createdIds.length === 0) {
+    return res.status(400).json({ error: "Вкажіть хоча б одну ціль (реклама, чек або конверсія)" });
+  }
+  res.status(201).json({ created: createdIds.length });
 });
 
 tasksRouter.post("/", async (req, res) => {

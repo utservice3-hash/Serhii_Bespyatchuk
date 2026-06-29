@@ -110,6 +110,21 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
 
+-- Weekly/monthly KPI plans. A team-lead sets a target for a manager; the
+-- "ads_count" metric is decomposed into per-day sub-tasks (auto), while
+-- "avg_check"/"conversion" are evaluated as a period aggregate. A daily job
+-- fills actual_value from CRM data and auto-completes tasks that hit target.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'simple';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS metric TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS target_value NUMERIC;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_value NUMERIC;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_date DATE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS period_start DATE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS period_end DATE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS idx_tasks_kpi ON tasks(metric, plan_date) WHERE auto;
+
 CREATE TABLE IF NOT EXISTS receivables (
   id SERIAL PRIMARY KEY,
   client_key TEXT NOT NULL,

@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import {
   createTask,
+  createTaskPlan,
   deleteTask,
   fetchConversion,
   fetchFunnel,
@@ -259,6 +260,13 @@ export function Dashboard() {
     priority: "medium" as TaskPriority,
     department: "",
     comments: "",
+    // KPI plan fields
+    taskType: "simple" as "simple" | "weekly_kpi" | "monthly_kpi",
+    weekStart: "",
+    weekdays: [true, true, true, true, true, false, false], // Mon..Sun
+    adsCount: "",
+    avgCheck: "",
+    conversion: "",
   };
   const [taskForm, setTaskForm] = useState(emptyTaskForm);
 
@@ -341,6 +349,15 @@ export function Dashboard() {
         priority,
         comments,
         department,
+        taskType: "simple",
+        metric: null,
+        targetValue: null,
+        actualValue: null,
+        planDate: null,
+        periodStart: null,
+        periodEnd: null,
+        parentId: null,
+        auto: false,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
@@ -354,16 +371,66 @@ export function Dashboard() {
     setNewTaskTitle("");
   }
 
+  // Builds the list of ISO working-day dates the team-lead picked, for a week
+  // (the week containing weekStart) or a month (all matching weekdays).
+  function buildPlanDays(): string[] {
+    if (!taskForm.weekStart) return [];
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const base = new Date(taskForm.weekStart + "T00:00:00");
+    const wd = (d: Date) => (d.getDay() + 6) % 7; // Mon=0..Sun=6
+    const days: string[] = [];
+    if (taskForm.taskType === "weekly_kpi") {
+      const monday = new Date(base);
+      monday.setDate(base.getDate() - wd(base));
+      for (let i = 0; i < 7; i++) {
+        if (!taskForm.weekdays[i]) continue;
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        days.push(fmt(d));
+      }
+    } else {
+      const d = new Date(base.getFullYear(), base.getMonth(), 1);
+      while (d.getMonth() === base.getMonth()) {
+        if (taskForm.weekdays[wd(d)]) days.push(fmt(d));
+        d.setDate(d.getDate() + 1);
+      }
+    }
+    return days;
+  }
+
   async function handleSubmitTaskModal() {
-    if (!taskForm.title.trim()) return;
-    await addTask({
-      title: taskForm.title,
-      deadline: taskForm.deadline,
-      assigneeId: taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId),
-      priority: taskForm.priority,
-      department: taskForm.department,
-      comments: taskForm.comments,
-    });
+    if (taskForm.taskType === "simple") {
+      if (!taskForm.title.trim()) return;
+      await addTask({
+        title: taskForm.title,
+        deadline: taskForm.deadline,
+        assigneeId: taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId),
+        priority: taskForm.priority,
+        department: taskForm.department,
+        comments: taskForm.comments,
+      });
+    } else {
+      if (taskForm.assigneeId === "") {
+        alert("Оберіть виконавця (менеджера) для плану");
+        return;
+      }
+      const days = buildPlanDays();
+      if (days.length === 0) {
+        alert("Оберіть дату початку та хоча б один робочий день");
+        return;
+      }
+      await createTaskPlan({
+        assigneeId: Number(taskForm.assigneeId),
+        period: taskForm.taskType === "weekly_kpi" ? "week" : "month",
+        days,
+        adsCount: taskForm.adsCount ? Number(taskForm.adsCount) : undefined,
+        avgCheck: taskForm.avgCheck ? Number(taskForm.avgCheck) : undefined,
+        conversion: taskForm.conversion ? Number(taskForm.conversion) : undefined,
+      });
+      const fresh = await fetchTasks();
+      setTasks(fresh);
+    }
     setTaskForm(emptyTaskForm);
     setTaskModalOpen(false);
   }
@@ -2318,6 +2385,19 @@ export function Dashboard() {
                               overflow: "hidden",
                             }}
                           />
+                          {task.auto && task.targetValue != null && (
+                            <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 2 }}>
+                              {task.planDate ? `📅 ${task.planDate} · ` : task.periodStart ? `📅 ${task.periodStart}…${task.periodEnd} · ` : ""}
+                              🎯 {task.targetValue}
+                              {task.metric === "conversion" ? "%" : task.metric === "avg_check" ? "₴" : ""}
+                              {task.actualValue != null && (
+                                <span style={{ color: Number(task.actualValue) >= Number(task.targetValue) ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
+                                  {" "}· факт {task.actualValue}
+                                  {task.metric === "conversion" ? "%" : task.metric === "avg_check" ? "₴" : ""}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td>
                           <div className="task-status-cell">
@@ -2461,44 +2541,132 @@ export function Dashboard() {
 
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                    Опис задачі
-                    <textarea
-                      autoFocus
-                      value={taskForm.title}
-                      onChange={(e) => setTaskForm((f) => ({ ...f, title: e.target.value }))}
-                      rows={4}
-                      placeholder="Опишіть задачу детально…"
-                      style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, lineHeight: 1.4 }}
-                    />
+                    Тип задачі
+                    <select
+                      value={taskForm.taskType}
+                      onChange={(e) => setTaskForm((f) => ({ ...f, taskType: e.target.value as typeof f.taskType }))}
+                    >
+                      <option value="simple">Звичайна</option>
+                      <option value="weekly_kpi">Тижневий план (KPI)</option>
+                      <option value="monthly_kpi">Місячний план (KPI)</option>
+                    </select>
                   </label>
 
-                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                      Дедлайн
-                      <input
-                        type="date"
-                        value={taskForm.deadline}
-                        onChange={(e) => setTaskForm((f) => ({ ...f, deadline: e.target.value }))}
-                      />
-                    </label>
-                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                      Пріоритет
-                      <select
-                        value={taskForm.priority}
-                        onChange={(e) => setTaskForm((f) => ({ ...f, priority: e.target.value as TaskPriority }))}
-                      >
-                        {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
+                  {taskForm.taskType === "simple" ? (
+                    <>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                        Опис задачі
+                        <textarea
+                          autoFocus
+                          value={taskForm.title}
+                          onChange={(e) => setTaskForm((f) => ({ ...f, title: e.target.value }))}
+                          rows={4}
+                          placeholder="Опишіть задачу детально…"
+                          style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, lineHeight: 1.4 }}
+                        />
+                      </label>
+
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                          Дедлайн
+                          <input
+                            type="date"
+                            value={taskForm.deadline}
+                            onChange={(e) => setTaskForm((f) => ({ ...f, deadline: e.target.value }))}
+                          />
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                          Пріоритет
+                          <select
+                            value={taskForm.priority}
+                            onChange={(e) => setTaskForm((f) => ({ ...f, priority: e.target.value as TaskPriority }))}
+                          >
+                            {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                        {taskForm.taskType === "weekly_kpi" ? "Дата (будь-який день тижня плану)" : "Дата (будь-який день місяця плану)"}
+                        <input
+                          type="date"
+                          value={taskForm.weekStart}
+                          onChange={(e) => setTaskForm((f) => ({ ...f, weekStart: e.target.value }))}
+                        />
+                      </label>
+                      <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Робочі дні (на них розкладається план):</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"].map((d, i) => (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() =>
+                              setTaskForm((f) => {
+                                const wd = [...f.weekdays];
+                                wd[i] = !wd[i];
+                                return { ...f, weekdays: wd };
+                              })
+                            }
+                            style={{
+                              padding: "5px 12px",
+                              borderRadius: 16,
+                              border: `1px solid ${taskForm.weekdays[i] ? "#c5141c" : "#d0d5dd"}`,
+                              background: taskForm.weekdays[i] ? "#c5141c" : "#fff",
+                              color: taskForm.weekdays[i] ? "#fff" : "#344054",
+                              cursor: "pointer",
+                              fontSize: 13,
+                            }}
+                          >
+                            {d}
+                          </button>
                         ))}
-                      </select>
-                    </label>
-                  </div>
+                      </div>
+                      <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}>Цілі (заповніть потрібні):</div>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                          К-сть реклами (за період)
+                          <input
+                            type="number"
+                            value={taskForm.adsCount}
+                            onChange={(e) => setTaskForm((f) => ({ ...f, adsCount: e.target.value }))}
+                            placeholder="напр. 25"
+                          />
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                          Середній чек, ₴
+                          <input
+                            type="number"
+                            value={taskForm.avgCheck}
+                            onChange={(e) => setTaskForm((f) => ({ ...f, avgCheck: e.target.value }))}
+                            placeholder="напр. 5000"
+                          />
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                          Конверсія, %
+                          <input
+                            type="number"
+                            value={taskForm.conversion}
+                            onChange={(e) => setTaskForm((f) => ({ ...f, conversion: e.target.value }))}
+                            placeholder="напр. 30"
+                          />
+                        </label>
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        К-сть реклами розкладеться по обраних днях у задачник менеджера й закриється автоматично за фактом.
+                        Чек і конверсія оцінюються підсумком за {taskForm.taskType === "weekly_kpi" ? "тиждень" : "місяць"}.
+                      </div>
+                    </>
+                  )}
 
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                      Виконавець
+                      Виконавець{taskForm.taskType !== "simple" ? " (менеджер)" : ""}
                       <select
                         value={taskForm.assigneeId}
                         onChange={(e) =>
@@ -2513,30 +2681,38 @@ export function Dashboard() {
                         ))}
                       </select>
                     </label>
-                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
-                      Департамент
-                      <input
-                        value={taskForm.department}
-                        onChange={(e) => setTaskForm((f) => ({ ...f, department: e.target.value }))}
-                        placeholder="напр. Продзвін"
-                      />
-                    </label>
+                    {taskForm.taskType === "simple" && (
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                        Департамент
+                        <input
+                          value={taskForm.department}
+                          onChange={(e) => setTaskForm((f) => ({ ...f, department: e.target.value }))}
+                          placeholder="напр. Продзвін"
+                        />
+                      </label>
+                    )}
                   </div>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                    Коментарі
-                    <textarea
-                      value={taskForm.comments}
-                      onChange={(e) => setTaskForm((f) => ({ ...f, comments: e.target.value }))}
-                      rows={2}
-                      style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, lineHeight: 1.4 }}
-                    />
-                  </label>
+                  {taskForm.taskType === "simple" && (
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                      Коментарі
+                      <textarea
+                        value={taskForm.comments}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, comments: e.target.value }))}
+                        rows={2}
+                        style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, lineHeight: 1.4 }}
+                      />
+                    </label>
+                  )}
 
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
                     <button onClick={() => setTaskModalOpen(false)}>Скасувати</button>
-                    <button className="btn-primary" onClick={handleSubmitTaskModal} disabled={!taskForm.title.trim()}>
-                      Створити задачу
+                    <button
+                      className="btn-primary"
+                      onClick={handleSubmitTaskModal}
+                      disabled={taskForm.taskType === "simple" && !taskForm.title.trim()}
+                    >
+                      {taskForm.taskType === "simple" ? "Створити задачу" : "Поставити план"}
                     </button>
                   </div>
                 </div>
