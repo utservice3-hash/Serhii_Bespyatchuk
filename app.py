@@ -2292,6 +2292,24 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/sheet-link", methods=["GET"])
+def sheet_link():
+    """Повертає посилання на основну Google-таблицю і пряме посилання на
+    вкладку 'Дзвінки РНК' (де лежать транскрипти дзвінків)."""
+    sheet_id = os.getenv("GOOGLE_SHEETS_ID", "") or os.getenv("SPREADSHEET_ID", "")
+    if not sheet_id:
+        return jsonify({"ok": False, "error": "GOOGLE_SHEETS_ID не заданий у env"})
+    base = f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+    calls_url = base
+    try:
+        ws = sheets._get_or_create_worksheet("Дзвінки РНК", rows=5000, cols=8)
+        if ws is not None:
+            calls_url = f"{base}/edit#gid={ws.id}"
+    except Exception as e:
+        logger.error("sheet-link: %s", e)
+    return jsonify({"ok": True, "spreadsheet": base, "calls_tab": calls_url})
+
+
 @app.route("/test-tg", methods=["GET"])
 def test_tg():
     result = notifier.test_bot()
