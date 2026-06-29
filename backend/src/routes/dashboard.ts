@@ -453,14 +453,38 @@ dashboardRouter.get("/overview", async (req, res) => {
     deals: string;
     paid: string;
     revenue: string;
+    ad_leads: string;
+    ad_paid: string;
+    lg_leads: string;
+    lg_paid: string;
+    new_clients: string;
+    repeat_clients: string;
   }>(
-    `SELECT to_char(date_trunc('month', d.created_at_kommo), 'YYYY-MM') AS month,
-            COUNT(*) AS deals,
+    `WITH firsts AS (
+       SELECT d2.client_key, MIN(d2.created_at_kommo) AS first_paid
+       FROM deals d2
+       JOIN pipeline_stage_map p2 ON p2.pipeline_id = d2.pipeline_id AND p2.status_id = d2.status_id
+       WHERE p2.funnel_stage = 'paid' AND d2.client_key IS NOT NULL
+       GROUP BY d2.client_key
+     )
+     SELECT to_char(date_trunc('month', d.created_at_kommo), 'YYYY-MM') AS month,
+            COUNT(*) FILTER (WHERE psm.funnel_stage IN ('invoiced','paid')) AS deals,
             COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
-            COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS revenue
+            COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS revenue,
+            COUNT(*) FILTER (WHERE d.lead_channel = 'ad') AS ad_leads,
+            COUNT(*) FILTER (WHERE d.lead_channel = 'ad' AND psm.funnel_stage = 'paid') AS ad_paid,
+            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_leads,
+            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen' AND psm.funnel_stage = 'paid') AS lg_paid,
+            COUNT(DISTINCT d.client_key) FILTER (
+              WHERE psm.funnel_stage = 'paid'
+                AND date_trunc('month', f.first_paid) = date_trunc('month', d.created_at_kommo)) AS new_clients,
+            COUNT(DISTINCT d.client_key) FILTER (
+              WHERE psm.funnel_stage = 'paid'
+                AND date_trunc('month', f.first_paid) < date_trunc('month', d.created_at_kommo)) AS repeat_clients
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     LEFT JOIN firsts f ON f.client_key = d.client_key
      WHERE d.created_at_kommo >= date_trunc('month', $1::date) - interval '2 months'
        AND d.created_at_kommo < date_trunc('month', $1::date) + interval '1 month'
        ${histWhere}
@@ -471,6 +495,8 @@ dashboardRouter.get("/overview", async (req, res) => {
     const deals = Number(r.deals);
     const paid = Number(r.paid);
     const revenue = Number(r.revenue);
+    const adLeads = Number(r.ad_leads);
+    const lgLeads = Number(r.lg_leads);
     return {
       month: r.month,
       deals,
@@ -478,6 +504,10 @@ dashboardRouter.get("/overview", async (req, res) => {
       revenue,
       conversion: deals > 0 ? Math.round((paid / deals) * 100) : 0,
       avgCheck: paid > 0 ? Math.round(revenue / paid) : 0,
+      adConversion: adLeads > 0 ? Math.round((Number(r.ad_paid) / adLeads) * 100) : 0,
+      leadgenConversion: lgLeads > 0 ? Math.round((Number(r.lg_paid) / lgLeads) * 100) : 0,
+      newClients: Number(r.new_clients),
+      repeatClients: Number(r.repeat_clients),
     };
   });
 

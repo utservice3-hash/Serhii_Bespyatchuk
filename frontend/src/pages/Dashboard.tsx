@@ -129,17 +129,29 @@ const STAGE_ORDER = Object.keys(STAGE_LABELS);
 
 /** The equal-length period immediately before [from, to]. */
 function previousRange(from: string, to: string): { from: string; to: string } {
-  const f = new Date(from);
-  const t = new Date(to);
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const f = new Date(from + "T00:00:00");
+  const t = new Date(to + "T00:00:00");
+
+  // Month-to-date (period starts on the 1st): compare against the SAME day
+  // span of the previous month — e.g. 1–29 червня → 1–29 травня, not a
+  // length-shifted window.
+  if (f.getDate() === 1) {
+    const prevFrom = new Date(f.getFullYear(), f.getMonth() - 1, 1);
+    const day = t.getDate();
+    const lastDayPrev = new Date(t.getFullYear(), t.getMonth(), 0).getDate();
+    const prevTo = new Date(t.getFullYear(), t.getMonth() - 1, Math.min(day, lastDayPrev));
+    return { from: fmt(prevFrom), to: fmt(prevTo) };
+  }
+
+  // Otherwise shift back by the period length (day/week/custom ranges).
   const days = Math.round((t.getTime() - f.getTime()) / 86400000) + 1;
   const prevTo = new Date(f);
   prevTo.setDate(prevTo.getDate() - 1);
   const prevFrom = new Date(prevTo);
   prevFrom.setDate(prevFrom.getDate() - days + 1);
-  return {
-    from: prevFrom.toISOString().split("T")[0],
-    to: prevTo.toISOString().split("T")[0],
-  };
+  return { from: fmt(prevFrom), to: fmt(prevTo) };
 }
 
 // Automatic rank ladder by current-month paid revenue (₴). Badges escalate as
@@ -986,8 +998,18 @@ export function Dashboard() {
                     </div>
                   )}
 
-                  {overview && overview.monthlyHistory.length > 0 && ["deals", "sum", "convAd", "convLg", "avg"].includes(kpi.key) && (() => {
-                    const field = kpi.key === "deals" ? "deals" : kpi.key === "sum" ? "revenue" : (kpi.key === "convAd" || kpi.key === "convLg") ? "conversion" : "avgCheck";
+                  {overview && overview.monthlyHistory.length > 0 && (() => {
+                    const fieldByKey: Record<string, string> = {
+                      deals: "deals",
+                      sum: "revenue",
+                      convAd: "adConversion",
+                      convLg: "leadgenConversion",
+                      avg: "avgCheck",
+                      newc: "newClients",
+                      repc: "repeatClients",
+                    };
+                    const field = fieldByKey[kpi.key];
+                    if (!field) return null;
                     const isMoney = kpi.key === "sum" || kpi.key === "avg";
                     return (
                       <div style={{ marginBottom: 16 }}>
@@ -997,7 +1019,7 @@ export function Dashboard() {
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="month" />
                             <YAxis tickFormatter={(v) => isMoney ? `${Math.round(v / 1000)}k` : String(v)} />
-                            <Tooltip formatter={(v) => isMoney ? formatAmount(Number(v)) : kpi.key === "conv" ? `${v}%` : Number(v).toLocaleString("uk-UA")} />
+                            <Tooltip formatter={(v) => isMoney ? formatAmount(Number(v)) : kpi.unit === "%" ? `${v}%` : Number(v).toLocaleString("uk-UA")} />
                             <Bar dataKey={field} name={kpi.label} fill="#c5141c" radius={[4, 4, 0, 0]} />
                           </BarChart>
                         </ResponsiveContainer>

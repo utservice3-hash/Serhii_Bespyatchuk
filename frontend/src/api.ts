@@ -145,6 +145,10 @@ export interface ExecutiveOverview {
     revenue: number;
     conversion: number;
     avgCheck: number;
+    adConversion: number;
+    leadgenConversion: number;
+    newClients: number;
+    repeatClients: number;
   }[];
   byTeam: { teamId: number; teamName: string; revenue: number; deals: number }[];
   topManagers: { managerId: number; name: string; revenue: number; deals: number }[];
