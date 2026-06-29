@@ -414,43 +414,45 @@ dashboardRouter.get("/overview", async (req, res) => {
     recvParams
   );
 
-  // Plan vs Fact for the month containing the selected period (plans are
-  // monthly payment_amount targets). Scoped by team/manager.
+  // Plan (monthly payment_amount targets) prorated to the SELECTED period by
+  // day-overlap, so the gauge responds to week/month/quarter just like the
+  // other stats. Fact = received money for the period (computed below as
+  // successRevenue + paymentRevenue, i.e. the same as "Отримані кошти").
   const monthAnchor = to ?? new Date().toISOString().slice(0, 10);
-  const pfParams: unknown[] = [monthAnchor];
   const planScope: string[] = [];
-  const factScope: string[] = ["psm.funnel_stage = 'paid'"];
-  if (managerId) {
-    pfParams.push(managerId);
-    planScope.push(`p.manager_id = $${pfParams.length}`);
-    factScope.push(`d.manager_id = $${pfParams.length}`);
-  }
-  if (teamId) {
-    pfParams.push(teamId);
-    planScope.push(`mp.team_id = $${pfParams.length}`);
-    factScope.push(`m.team_id = $${pfParams.length}`);
-  }
-  const planRes = await pool.query<{ plan: string }>(
-    `SELECT COALESCE(SUM(p.planned_value), 0) AS plan
+  const planParams: unknown[] = [];
+  if (managerId) { planParams.push(managerId); planScope.push(`p.manager_id = $${planParams.length}`); }
+  if (teamId) { planParams.push(teamId); planScope.push(`mp.team_id = $${planParams.length}`); }
+  const planMonthsRes = await pool.query<{ mon: string; plan: string }>(
+    `SELECT to_char(date_trunc('month', p.plan_date), 'YYYY-MM-DD') AS mon,
+            COALESCE(SUM(p.planned_value), 0) AS plan
      FROM plans p JOIN managers mp ON mp.id = p.manager_id
      WHERE p.metric = 'payment_amount'
-       AND p.plan_date >= date_trunc('month', $1::date)
-       AND p.plan_date < date_trunc('month', $1::date) + interval '1 month'
-       ${planScope.length ? "AND " + planScope.join(" AND ") : ""}`,
-    pfParams
+       ${planScope.length ? "AND " + planScope.join(" AND ") : ""}
+     GROUP BY 1`,
+    planParams
   );
-  // Fact = money actually closed-won within the month (by close date).
-  const factRes = await pool.query<{ fact: string }>(
-    `SELECT COALESCE(SUM(d.price), 0) AS fact
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${factScope.join(" AND ")}
-       AND d.closed_at_kommo >= date_trunc('month', $1::date)
-       AND d.closed_at_kommo < date_trunc('month', $1::date) + interval '1 month'`,
-    pfParams
-  );
-  const planTotal = Number(planRes.rows[0]?.plan ?? 0);
-  const factTotal = Number(factRes.rows[0]?.fact ?? 0);
+  // Prorate each month's plan by how many of its days fall inside [from, to].
+  const periodFrom = from ? new Date(from + "T00:00:00") : null;
+  const periodTo = to ? new Date(to + "T00:00:00") : null;
+  const anchorMonth = (to ?? monthAnchor).slice(0, 7);
+  let planTotal = 0;
+  for (const row of planMonthsRes.rows) {
+    const mStart = new Date(row.mon + "T00:00:00");
+    const daysInMonth = new Date(mStart.getFullYear(), mStart.getMonth() + 1, 0).getDate();
+    const planVal = Number(row.plan);
+    if (!periodFrom || !periodTo) {
+      // No date range (alltime): count only the current anchor month's plan.
+      if (row.mon.slice(0, 7) === anchorMonth) planTotal += planVal;
+      continue;
+    }
+    const mEnd = new Date(mStart.getFullYear(), mStart.getMonth() + 1, 0);
+    const ovStart = mStart > periodFrom ? mStart : periodFrom;
+    const ovEnd = mEnd < periodTo ? mEnd : periodTo;
+    const overlapDays = Math.max(0, Math.round((ovEnd.getTime() - ovStart.getTime()) / 86400000) + 1);
+    planTotal += planVal * (overlapDays / daysInMonth);
+  }
+  planTotal = Math.round(planTotal);
 
   // Received money has two parts, shown combined with a drill-down split:
   //  1) "Успішно реалізовано" (status 142) — counted by CLOSE date in period.
@@ -585,8 +587,8 @@ dashboardRouter.get("/overview", async (req, res) => {
 
   res.json({
     plan: planTotal,
-    fact: factTotal + paymentRevenue,
-    planPct: planTotal > 0 ? Math.round(((factTotal + paymentRevenue) / planTotal) * 100) : 0,
+    fact: successRevenue + paymentRevenue,
+    planPct: planTotal > 0 ? Math.round(((successRevenue + paymentRevenue) / planTotal) * 100) : 0,
     closedRevenue: Number(closedRes.rows[0]?.revenue ?? 0),
     closedDeals: Number(closedRes.rows[0]?.deals ?? 0),
     successRevenue,

@@ -177,7 +177,7 @@ function ProgressGauge({
       onMouseLeave={() => setHover(false)}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span className="kpi-label">План / Факт за місяць</span>
+        <span className="kpi-label">План / Факт за період</span>
         <span style={{ fontWeight: 700, color }}>{pct}%</span>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, margin: "6px 0 8px" }}>
