@@ -32,8 +32,8 @@ app.use("/api/uploads", uploadsRouter);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// Refresh CRM data every 15 minutes.
-cron.schedule("*/15 * * * *", () => {
+// Refresh CRM data every 5 minutes.
+cron.schedule("*/5 * * * *", () => {
   syncKommo().catch((err) => console.error("Kommo sync failed:", err));
 });
 

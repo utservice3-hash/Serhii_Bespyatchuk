@@ -132,6 +132,10 @@ export interface ExecutiveOverview {
   planPct: number;
   closedRevenue: number;
   closedDeals: number;
+  successRevenue: number;
+  successDeals: number;
+  paymentRevenue: number;
+  paymentDeals: number;
   adConversion: { leads: number; paid: number; conversion: number };
   leadgenConversion: { leads: number; paid: number; conversion: number };
   monthlyHistory: {

@@ -401,14 +401,44 @@ dashboardRouter.get("/overview", async (req, res) => {
   const planTotal = Number(planRes.rows[0]?.plan ?? 0);
   const factTotal = Number(factRes.rows[0]?.fact ?? 0);
 
-  // Received money by CLOSE date (reuses the closedWhere/closedParams above).
-  const closedRes = await pool.query<{ revenue: string; deals: string }>(
+  // Received money has two parts, shown combined with a drill-down split:
+  //  1) "Успішно реалізовано" (status 142) — counted by CLOSE date in period.
+  //  2) "Оплата отримана" (statuses 69716460 new / 60412544 old) — a SNAPSHOT
+  //     of deals currently sitting in that stage (no date filter, per CRM
+  //     methodology), scoped only by manager/team.
+  const PAYMENT_RECEIVED_STATUSES = [69716460, 60412544];
+  const successRes = await pool.query<{ revenue: string; deals: string }>(
     `SELECT COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
      FROM deals d JOIN managers m ON m.id = d.manager_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${closedWhere}`,
+     ${closedWhere} AND d.status_id = 142`,
     closedParams
   );
+
+  const payScope: string[] = [`d.status_id = ANY($1)`];
+  const payParams: unknown[] = [PAYMENT_RECEIVED_STATUSES];
+  if (managerId) {
+    payParams.push(managerId);
+    payScope.push(`d.manager_id = $${payParams.length}`);
+  }
+  if (teamId) {
+    payParams.push(teamId);
+    payScope.push(`m.team_id = $${payParams.length}`);
+  }
+  const paymentRes = await pool.query<{ revenue: string; deals: string }>(
+    `SELECT COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id
+     WHERE ${payScope.join(" AND ")}`,
+    payParams
+  );
+
+  const successRevenue = Number(successRes.rows[0]?.revenue ?? 0);
+  const successDeals = Number(successRes.rows[0]?.deals ?? 0);
+  const paymentRevenue = Number(paymentRes.rows[0]?.revenue ?? 0);
+  const paymentDeals = Number(paymentRes.rows[0]?.deals ?? 0);
+  const closedRes = {
+    rows: [{ revenue: String(successRevenue + paymentRevenue), deals: String(successDeals + paymentDeals) }],
+  };
 
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
@@ -457,6 +487,10 @@ dashboardRouter.get("/overview", async (req, res) => {
     planPct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : 0,
     closedRevenue: Number(closedRes.rows[0]?.revenue ?? 0),
     closedDeals: Number(closedRes.rows[0]?.deals ?? 0),
+    successRevenue,
+    successDeals,
+    paymentRevenue,
+    paymentDeals,
     adConversion: channelConv("ad"),
     leadgenConversion: channelConv("leadgen"),
     monthlyHistory,

@@ -899,6 +899,24 @@ export function Dashboard() {
                     <div className="kpi-card"><span className="kpi-label">Зміна</span><span className="kpi-value" style={{ color: diff > 0 ? "#16a34a" : diff < 0 ? "#dc2626" : undefined }}>{diff > 0 ? "↑" : diff < 0 ? "↓" : "→"} {Math.abs(pct)}%</span></div>
                   </div>
 
+                  {kpi.key === "sum" && overview && (
+                    <div style={{ marginBottom: 16 }}>
+                      <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>Розбивка отриманих коштів</h3>
+                      <div className="kpi-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                        <div className="kpi-card">
+                          <span className="kpi-label">Успішно реалізовано (закрито за період)</span>
+                          <span className="kpi-value">{formatAmount(overview.successRevenue)}</span>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{overview.successDeals} угод</span>
+                        </div>
+                        <div className="kpi-card">
+                          <span className="kpi-label">Оплата отримана (поточний етап)</span>
+                          <span className="kpi-value">{formatAmount(overview.paymentRevenue)}</span>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{overview.paymentDeals} угод</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {overview && overview.monthlyHistory.length > 0 && ["deals", "sum", "convAd", "convLg", "avg"].includes(kpi.key) && (() => {
                     const field = kpi.key === "deals" ? "deals" : kpi.key === "sum" ? "revenue" : (kpi.key === "convAd" || kpi.key === "convLg") ? "conversion" : "avgCheck";
                     const isMoney = kpi.key === "sum" || kpi.key === "avg";
