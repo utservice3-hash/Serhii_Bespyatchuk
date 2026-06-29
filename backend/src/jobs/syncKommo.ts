@@ -3,8 +3,8 @@ import {
   extractPhone,
   extractLeadSource,
   fetchAllDeals,
-  fetchAllContacts,
-  fetchAllCompanies,
+  fetchContactsByIds,
+  fetchCompaniesByIds,
   fetchUsers,
 } from "../kommo/client.js";
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
@@ -12,6 +12,18 @@ import { provisionUsers } from "../db/userProvisioning.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
+}
+
+/** Fetches records by id in chunks of 250 (Kommo's per-request id limit). */
+async function fetchByIdsBatched<T>(
+  fetcher: (ids: number[]) => Promise<T[]>,
+  ids: number[]
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += 250) {
+    out.push(...(await fetcher(ids.slice(i, i + 250))));
+  }
+  return out;
 }
 
 export async function syncManagers(): Promise<number> {
@@ -82,11 +94,23 @@ export async function syncKommo(): Promise<void> {
   const syncStartedAt = new Date();
   const windowStart = await getSyncWindowStart();
 
-  const [deals, managerCount, contacts, companies] = await Promise.all([
+  const [deals, managerCount] = await Promise.all([
     fetchAllDeals(windowStart),
     syncManagers(),
-    fetchAllContacts(),
-    fetchAllCompanies(),
+  ]);
+
+  // Fetch ONLY the contacts/companies referenced by the deals in this window,
+  // by id. Fetching every contact/company (fetchAllContacts/fetchAllCompanies)
+  // loads the whole CRM into memory and OOM-kills the job — see CLAUDE.md.
+  const contactIds = new Set<number>();
+  const companyIds = new Set<number>();
+  for (const deal of deals) {
+    for (const c of deal._embedded?.contacts ?? []) contactIds.add(c.id);
+    for (const c of deal._embedded?.companies ?? []) companyIds.add(c.id);
+  }
+  const [contacts, companies] = await Promise.all([
+    fetchByIdsBatched(fetchContactsByIds, [...contactIds]),
+    fetchByIdsBatched(fetchCompaniesByIds, [...companyIds]),
   ]);
 
   const managerRows = await pool.query<{ id: number; kommo_user_id: string }>(
