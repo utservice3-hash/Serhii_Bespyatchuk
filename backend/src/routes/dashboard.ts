@@ -1216,15 +1216,17 @@ dashboardRouter.get("/loyalty", async (req, res) => {
       };
       byManager.set(row.manager_id, entry);
     }
+    const totalPaid = Number(row.total_paid);
     const client: Client = {
       clientKey: row.client_key,
       clientName: row.client_name,
-      orders: recent,
-      totalPaid: Number(row.total_paid),
+      orders: totalPaid,
+      totalPaid,
       lastPaid: row.last_paid,
     };
 
-    if (recent >= threshold) {
+    // "Постійний клієнт" = ordered 2+ times (lifetime), not within a window.
+    if (totalPaid >= 2) {
       entry.segments.regular.push(client);
     } else if (recent >= 1) {
       entry.segments.occasional.push(client);
