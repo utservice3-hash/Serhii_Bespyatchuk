@@ -440,6 +440,37 @@ dashboardRouter.get("/overview", async (req, res) => {
     rows: [{ revenue: String(successRevenue + paymentRevenue), deals: String(successDeals + paymentDeals) }],
   };
 
+  // Deals currently awaiting payment (stage "invoiced" = Виставлено рахунок /
+  // Очікуємо оплату) — a snapshot of the pipeline, grouped by team.
+  const pendScope: string[] = ["psm.funnel_stage = 'invoiced'"];
+  const pendParams: unknown[] = [];
+  if (managerId) { pendParams.push(managerId); pendScope.push(`d.manager_id = $${pendParams.length}`); }
+  if (teamId) { pendParams.push(teamId); pendScope.push(`m.team_id = $${pendParams.length}`); }
+  const pendingRes = await pool.query<{ team_id: number; team_name: string; deals: string; revenue: string }>(
+    `SELECT t.id AS team_id, t.name AS team_name, COUNT(*) AS deals, COALESCE(SUM(d.price), 0) AS revenue
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN teams t ON t.id = m.team_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${pendScope.join(" AND ")}
+     GROUP BY t.id, t.name ORDER BY revenue DESC`,
+    pendParams
+  );
+
+  // All deals created in the Full-cycle funnel within the period (by create date).
+  const FULL_CYCLE_PIPELINES = [8921932, 155304];
+  const cfScope: string[] = ["d.pipeline_id = ANY($1)"];
+  const cfParams: unknown[] = [FULL_CYCLE_PIPELINES];
+  if (managerId) { cfParams.push(managerId); cfScope.push(`d.manager_id = $${cfParams.length}`); }
+  if (teamId) { cfParams.push(teamId); cfScope.push(`m.team_id = $${cfParams.length}`); }
+  if (from) { cfParams.push(from); cfScope.push(`d.created_at_kommo >= $${cfParams.length}`); }
+  if (to) { cfParams.push(to); cfScope.push(`d.created_at_kommo <= $${cfParams.length}`); }
+  const createdFullRes = await pool.query<{ c: string }>(
+    `SELECT COUNT(*) AS c FROM deals d JOIN managers m ON m.id = d.manager_id
+     WHERE ${cfScope.join(" AND ")}`,
+    cfParams
+  );
+
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
 
@@ -521,6 +552,17 @@ dashboardRouter.get("/overview", async (req, res) => {
     successDeals,
     paymentRevenue,
     paymentDeals,
+    pendingPayments: {
+      deals: pendingRes.rows.reduce((s, r) => s + Number(r.deals), 0),
+      revenue: pendingRes.rows.reduce((s, r) => s + Number(r.revenue), 0),
+      byTeam: pendingRes.rows.map((r) => ({
+        teamId: r.team_id,
+        teamName: r.team_name,
+        deals: Number(r.deals),
+        revenue: Number(r.revenue),
+      })),
+    },
+    createdFullCycle: Number(createdFullRes.rows[0]?.c ?? 0),
     adConversion: channelConv("ad"),
     leadgenConversion: channelConv("leadgen"),
     monthlyHistory,

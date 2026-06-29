@@ -136,6 +136,12 @@ export interface ExecutiveOverview {
   successDeals: number;
   paymentRevenue: number;
   paymentDeals: number;
+  pendingPayments: {
+    deals: number;
+    revenue: number;
+    byTeam: { teamId: number; teamName: string; deals: number; revenue: number }[];
+  };
+  createdFullCycle: number;
   adConversion: { leads: number; paid: number; conversion: number };
   leadgenConversion: { leads: number; paid: number; conversion: number };
   monthlyHistory: {

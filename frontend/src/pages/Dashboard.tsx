@@ -154,6 +154,130 @@ function previousRange(from: string, to: string): { from: string; to: string } {
   return { from: fmt(prevFrom), to: fmt(prevTo) };
 }
 
+/** Plan-vs-fact fill bar with a hover popover listing top contributors. */
+function ProgressGauge({
+  plan,
+  fact,
+  pct,
+  contributors,
+}: {
+  plan: number;
+  fact: number;
+  pct: number;
+  contributors: { name: string; revenue: number; deals: number }[];
+}) {
+  const [hover, setHover] = useState(false);
+  const color = pct >= 100 ? "#16a34a" : pct >= 70 ? "#d97706" : "#dc2626";
+  return (
+    <div
+      className="kpi-card"
+      style={{ gridColumn: "span 2", position: "relative", cursor: "pointer" }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span className="kpi-label">План / Факт за місяць</span>
+        <span style={{ fontWeight: 700, color }}>{pct}%</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, margin: "6px 0 8px" }}>
+        <span style={{ color: "var(--text-muted)" }}>Факт {formatAmount(fact)}</span>
+        <span style={{ color: "var(--text-muted)" }}>План {formatAmount(plan)}</span>
+      </div>
+      <div style={{ height: 14, borderRadius: 8, background: "var(--border, #eceff3)", overflow: "hidden" }}>
+        <div
+          style={{
+            width: `${Math.min(100, pct)}%`,
+            height: "100%",
+            background: color,
+            borderRadius: 8,
+            transition: "width .5s ease",
+          }}
+        />
+      </div>
+      {hover && contributors.length > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 12,
+            right: 12,
+            background: "var(--card-bg, #fff)",
+            border: "1px solid var(--border, #e0e4ea)",
+            borderRadius: 10,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
+            padding: 12,
+            zIndex: 50,
+          }}
+        >
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Найбільший вклад:</div>
+          {contributors.slice(0, 5).map((c) => (
+            <div key={c.name} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, padding: "2px 0" }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+              <span style={{ whiteSpace: "nowrap", fontWeight: 600 }}>
+                {formatAmount(c.revenue)}
+                <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                  {" "}· {fact > 0 ? Math.round((c.revenue / fact) * 100) : 0}%
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** KPI card that reveals a per-team breakdown popover on hover. */
+function HoverInfoCard({
+  label,
+  value,
+  rows,
+}: {
+  label: string;
+  value: string;
+  rows: { teamName: string; deals: number; revenue: number }[];
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      className="kpi-card"
+      style={{ position: "relative", cursor: "pointer" }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <span className="kpi-label">{label}</span>
+      <span className="kpi-value">{value}</span>
+      {hover && rows.length > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 12,
+            right: 12,
+            background: "var(--card-bg, #fff)",
+            border: "1px solid var(--border, #e0e4ea)",
+            borderRadius: 10,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
+            padding: 12,
+            zIndex: 50,
+          }}
+        >
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>По командах:</div>
+          {rows.map((r) => (
+            <div key={r.teamName} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, padding: "2px 0" }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.teamName}</span>
+              <span style={{ whiteSpace: "nowrap", fontWeight: 600 }}>
+                {formatAmount(r.revenue)}
+                <span style={{ color: "var(--text-muted)", fontWeight: 400 }}> · {r.deals} угод</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Automatic rank ladder by current-month paid revenue (₴). Badges escalate as
 // a manager hits each threshold; brand-new managers start as "духи".
 function getRank(revenue: number): { emoji: string; title: string } {
@@ -263,7 +387,7 @@ export function Dashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
-  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [taskSearch, setTaskSearch] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const emptyTaskForm = {
     title: "",
@@ -376,12 +500,6 @@ export function Dashboard() {
       },
       ...prev,
     ]);
-  }
-
-  async function handleAddTask() {
-    if (!newTaskTitle.trim()) return;
-    await addTask({ title: newTaskTitle });
-    setNewTaskTitle("");
   }
 
   // Builds the list of ISO working-day dates the team-lead picked, for a week
@@ -1044,22 +1162,20 @@ export function Dashboard() {
           {overview && (
             <>
               <div className="kpi-grid">
+                <ProgressGauge
+                  plan={overview.plan}
+                  fact={overview.fact}
+                  pct={overview.planPct}
+                  contributors={overview.topManagers}
+                />
+                <HoverInfoCard
+                  label="Очікувані оплати"
+                  value={`${overview.pendingPayments.deals} угод · ${formatAmount(overview.pendingPayments.revenue)}`}
+                  rows={overview.pendingPayments.byTeam}
+                />
                 <div className="kpi-card">
-                  <span className="kpi-label">План на місяць</span>
-                  <span className="kpi-value">{formatAmount(overview.plan)}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">Факт (місяць)</span>
-                  <span className="kpi-value">{formatAmount(overview.fact)}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">Виконання плану</span>
-                  <span
-                    className="kpi-value"
-                    style={{ color: overview.planPct >= 100 ? "#16a34a" : overview.planPct >= 70 ? "#d97706" : "#dc2626" }}
-                  >
-                    {overview.planPct}%
-                  </span>
+                  <span className="kpi-label">Створені угоди (Повний цикл)</span>
+                  <span className="kpi-value">{overview.createdFullCycle.toLocaleString("uk-UA")}</span>
                 </div>
                 <div className="kpi-card">
                   <span className="kpi-label">Дебіторська заборгованість</span>
@@ -2337,17 +2453,15 @@ export function Dashboard() {
             <h1 className="page-title">Задачник</h1>
             <div className="page-filters">
               <input
-                placeholder="Нова задача..."
-                value={newTaskTitle}
-                onChange={(e) => setNewTaskTitle(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddTask()}
+                placeholder="🔍 Пошук задач..."
+                value={taskSearch}
+                onChange={(e) => setTaskSearch(e.target.value)}
                 style={{ width: 240 }}
               />
               <button
                 className="btn-primary"
                 onClick={() => {
-                  setTaskForm({ ...emptyTaskForm, title: newTaskTitle });
-                  setNewTaskTitle("");
+                  setTaskForm(emptyTaskForm);
                   setTaskModalOpen(true);
                 }}
               >
@@ -2384,14 +2498,24 @@ export function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tasks.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="loading-text">
-                        Задач немає.
-                      </td>
-                    </tr>
-                  ) : (
-                    tasks.map((task) => (
+                  {(() => {
+                    const q = taskSearch.trim().toLowerCase();
+                    const visible = q
+                      ? tasks.filter((t) =>
+                          [t.title, t.comments, t.department, t.assigneeName]
+                            .some((v) => (v ?? "").toLowerCase().includes(q))
+                        )
+                      : tasks;
+                    if (visible.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={8} className="loading-text">
+                            {q ? "Нічого не знайдено." : "Задач немає."}
+                          </td>
+                        </tr>
+                      );
+                    }
+                    return visible.map((task) => (
                       <tr key={task.id}>
                         <td style={{ verticalAlign: "top" }}>
                           <textarea
@@ -2526,8 +2650,8 @@ export function Dashboard() {
                           </button>
                         </td>
                       </tr>
-                    ))
-                  )}
+                    ));
+                  })()}
                 </tbody>
               </table>
             </div>
