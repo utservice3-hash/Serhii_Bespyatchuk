@@ -1726,12 +1726,15 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
     verdict_block = ""
     if verdict == "ПЕРЕДЧАСНЕ":
         verdict_block = (
-            f"\n🔴 <b>AI: угоду закрито передчасно</b>{sup_part}\n"
+            f"\n🔴 <b>AI: угоду закрито передчасно</b>\n"
             f"📋 Категорія: {category or '—'}\n"
             f"⚠️ {verdict_reason}\n"
         )
         if team in RNK_TEAMS:
-            verdict_block += "♻️ Угоду автоматично повернуто менеджеру в роботу.\n"
+            verdict_block += (
+                f"🛠 <b>Угода йде на допрацювання</b> — повернуто менеджеру в роботу.\n"
+                f"👁 Тімлід на контроль:{sup_part or ' —'}\n"
+            )
     elif verdict == "ОБ'ЄКТИВНЕ":
         verdict_block = f"\n🟢 <b>AI: закриття обґрунтоване</b>\n{verdict_reason}\n"
 
