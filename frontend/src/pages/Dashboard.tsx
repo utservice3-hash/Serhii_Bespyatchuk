@@ -1195,6 +1195,10 @@ export function Dashboard() {
                   <span className="kpi-value">{overview.createdFullCycle.toLocaleString("uk-UA")}</span>
                 </div>
                 <div className="kpi-card">
+                  <span className="kpi-label">Виручка від нових клієнтів</span>
+                  <span className="kpi-value">{formatAmount(overview.newRevenue)}</span>
+                </div>
+                <div className="kpi-card">
                   <span className="kpi-label">Дебіторська заборгованість</span>
                   <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
                 </div>
