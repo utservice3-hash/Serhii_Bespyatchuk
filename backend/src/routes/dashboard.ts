@@ -1199,6 +1199,13 @@ dashboardRouter.get("/loyalty", async (req, res) => {
     lost: Client[]; // last purchase older than 6 months
   };
 
+  // Clients that currently have outstanding receivables (active debtors) are
+  // excluded from the reactivation (sleeping/lost) segments below.
+  const recvKeysRes = await pool.query<{ client_key: string }>(
+    `SELECT DISTINCT client_key FROM receivables WHERE client_key IS NOT NULL`
+  );
+  const receivableKeys = new Set(recvKeysRes.rows.map((r) => r.client_key));
+
   const byManager = new Map<
     number,
     { managerId: number; managerName: string; segments: Segments }
@@ -1226,9 +1233,12 @@ dashboardRouter.get("/loyalty", async (req, res) => {
     };
 
     // "Постійний клієнт" = ordered 2+ times (lifetime), not within a window.
+    // A client who currently sits in receivables (has open invoices) is an
+    // ACTIVE client — never put them in the reactivation segments.
+    const inReceivables = receivableKeys.has(row.client_key);
     if (totalPaid >= 2) {
       entry.segments.regular.push(client);
-    } else if (recent >= 1) {
+    } else if (recent >= 1 || inReceivables) {
       entry.segments.occasional.push(client);
     } else if (prior >= 1) {
       entry.segments.sleeping.push(client);

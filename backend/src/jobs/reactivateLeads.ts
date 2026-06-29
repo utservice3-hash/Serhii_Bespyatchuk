@@ -50,6 +50,10 @@ async function getCandidates(limit: number): Promise<Candidate[]> {
          SELECT DISTINCT client_key FROM deals
          WHERE pipeline_id IN (8921948, 8921936, 7337048) AND status_id NOT IN (142, 143) AND client_key IS NOT NULL
        )
+       -- Active debtors (in receivables) are still working with us — skip.
+       AND client_key NOT IN (
+         SELECT DISTINCT client_key FROM receivables WHERE client_key IS NOT NULL
+       )
      ORDER BY amount DESC
      LIMIT $1`,
     [limit]
