@@ -8,21 +8,11 @@ export function Logo({ size = 32 }: { size?: number }) {
       xmlns="http://www.w3.org/2000/svg"
       aria-label="UTS"
     >
-      <path
-        d="M18 28v32a14 14 0 0 0 14 14 14 14 0 0 0 14-14V46h40"
-        stroke="#c5141c"
-        strokeWidth="9"
-        strokeLinecap="square"
-        fill="none"
-      />
-      <path d="M50 46v36" stroke="#c5141c" strokeWidth="9" />
-      <path
-        d="M64 80c5 0 18 0 18-12s-18-10-18-18 13-12 18-12"
-        stroke="#c5141c"
-        strokeWidth="9"
-        strokeLinecap="square"
-        fill="none"
-      />
+      <g stroke="#c8102e" strokeWidth="9" fill="none" strokeLinecap="square">
+        <path d="M20 28v30a13 13 0 0 0 13 13 13 13 0 0 0 13-13V44h38" />
+        <path d="M50 44v38" />
+        <path d="M62 80c6 0 18 0 18-11s-18-9-18-17 12-12 18-12" />
+      </g>
     </svg>
   );
 }
