@@ -2606,6 +2606,38 @@ def test_call_analysis():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/debug-closed-verdict", methods=["GET"])
+def debug_closed_verdict():
+    """Безпечна діагностика: проганяє AI-оцінку закритої угоди й повертає сирий
+    текст + розпізнаний вердикт, БЕЗ надсилання в Telegram. ?lead_id=12345"""
+    import traceback
+    try:
+        lead_id = int(request.args.get("lead_id", 0))
+        if not lead_id:
+            return jsonify({"ok": False, "error": "lead_id required"})
+        lead = kommo.get_lead(lead_id)
+        if not lead:
+            return jsonify({"ok": False, "error": "lead not found"})
+        responsible_id = lead.get("responsible_user_id", 0)
+        details = kommo.get_lead_details(lead_id)
+        manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
+        team = MANAGER_TEAM.get(responsible_id, "")
+        amount = int(lead.get("price", 0))
+        recommendation = ai_analyzer.analyze_closed_deal({
+            **details, "manager": manager_name, "amount": amount
+        })
+        closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ['ʼ’]?ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
+        verdict = ""
+        if closure_match:
+            verdict = "ПЕРЕДЧАСНЕ" if "ПЕРЕДЧАСНЕ" in closure_match.group(1) else "ОБ'ЄКТИВНЕ"
+        return jsonify({
+            "ok": True, "lead_id": lead_id, "team": team, "is_rnk": team in RNK_TEAMS,
+            "verdict": verdict, "raw_recommendation": recommendation,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/test-closed-deal", methods=["GET"])
 def test_closed_deal():
     """Manually run the closed-not-realized AI review pipeline for a specific lead (debug).
