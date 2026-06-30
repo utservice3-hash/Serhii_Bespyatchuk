@@ -91,6 +91,25 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_error TEXT;
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_deal_count INTEGER;
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_duration_ms INTEGER;
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+-- Watermark for the lead_status_changed events feed (separate from the deal sync).
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_event_at TIMESTAMPTZ;
+
+-- Stage-transition history: when each deal ENTERED a status, sourced from Kommo's
+-- lead_status_changed events. Lets period metrics (notably "успіх") count deals
+-- by the date they entered the stage — matching CRM — instead of closed_at,
+-- which a watermark-based deal sync can't reconstruct for past months.
+CREATE TABLE IF NOT EXISTS deal_stage_events (
+  id BIGSERIAL PRIMARY KEY,
+  kommo_id BIGINT NOT NULL,
+  status_id BIGINT NOT NULL,
+  pipeline_id BIGINT,
+  funnel_stage TEXT,            -- mapped at insert time; NULL if status not in the map
+  changed_at TIMESTAMPTZ NOT NULL,
+  source TEXT NOT NULL DEFAULT 'kommo_events'
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_deal_stage_event ON deal_stage_events(kommo_id, status_id, changed_at);
+CREATE INDEX IF NOT EXISTS idx_dse_stage_time ON deal_stage_events(status_id, changed_at);
+CREATE INDEX IF NOT EXISTS idx_dse_pipeline_stage_time ON deal_stage_events(pipeline_id, status_id, changed_at);
 
 CREATE TABLE IF NOT EXISTS plans (
   id SERIAL PRIMARY KEY,

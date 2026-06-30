@@ -311,6 +311,63 @@ async function fetchCompaniesPage(page: number, limit: number): Promise<KommoCom
   return data._embedded?.companies ?? [];
 }
 
+export interface KommoStatusEvent {
+  entityId: number;
+  statusId: number;
+  pipelineId: number | null;
+  changedAt: number; // unix seconds — when the status actually changed
+}
+
+interface KommoEvent {
+  entity_id: number;
+  created_at: number;
+  value_after?: { lead_status?: { id: number; pipeline_id?: number } }[];
+}
+
+/**
+ * Streams `lead_status_changed` events in [fromUnix, toUnix], invoking `onPage`
+ * per page so a large backfill never holds the whole history in memory. This is
+ * the authoritative source of stage-entry timestamps (Kommo records every
+ * status move), used to count period metrics by entry date rather than close
+ * date. Returns the total number of events processed.
+ */
+export async function forEachStatusChangeEventPage(
+  fromUnix: number,
+  toUnix: number,
+  onPage: (events: KommoStatusEvent[]) => Promise<void>
+): Promise<number> {
+  const limit = 100;
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const data = await kommoRequest<KommoListResponse<KommoEvent>>(
+      `/api/v4/events?limit=${limit}&page=${page}` +
+        `&filter[type]=lead_status_changed` +
+        `&${encodeURIComponent("filter[created_at][from]")}=${fromUnix}` +
+        `&${encodeURIComponent("filter[created_at][to]")}=${toUnix}`
+    );
+    const raw = data._embedded?.events ?? [];
+    const events: KommoStatusEvent[] = [];
+    for (const e of raw) {
+      const st = e.value_after?.[0]?.lead_status;
+      if (!st) continue;
+      events.push({
+        entityId: e.entity_id,
+        statusId: st.id,
+        pipelineId: st.pipeline_id ?? null,
+        changedAt: e.created_at,
+      });
+    }
+    if (events.length) {
+      await onPage(events);
+      total += events.length;
+    }
+    if (raw.length < limit || !data._links?.next) break;
+    page += 1;
+  }
+  return total;
+}
+
 export async function fetchAllCompanies(): Promise<KommoCompany[]> {
   const companies: KommoCompany[] = [];
   const limit = 250;

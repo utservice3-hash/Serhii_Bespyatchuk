@@ -12,6 +12,7 @@ import { messagesRouter } from "./routes/messages.js";
 import { newsRouter } from "./routes/news.js";
 import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
 import { syncKommo } from "./jobs/syncKommo.js";
+import { syncStageEvents } from "./jobs/syncStageEvents.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
@@ -82,6 +83,12 @@ cron.schedule("0 4 * * *", () => {
     console.error("Kommo reconciliation failed:", err)
   );
 });
+
+// Stage-transition events (for entry-date metrics) every 10 minutes + on startup.
+cron.schedule("*/10 * * * *", () => {
+  syncStageEvents().catch((err) => console.error("Stage events sync failed:", err));
+});
+syncStageEvents().catch((err) => console.error("Stage events startup sync failed:", err));
 
 // Refresh receivables from the accounting Google Sheet every 30 minutes.
 cron.schedule("*/30 * * * *", () => {
