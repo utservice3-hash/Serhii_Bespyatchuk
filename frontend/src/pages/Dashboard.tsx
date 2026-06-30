@@ -22,6 +22,8 @@ import {
   fetchLoyalty,
   fetchSettings,
   saveSettings,
+  fetchSyncStatus,
+  type SyncStatus,
   fetchChatUsers,
   fetchConversation,
   sendMessage,
@@ -154,6 +156,7 @@ export function Dashboard() {
   const [leadgenData, setLeadgenData] = useState<LeadgenGroup[]>([]);
   const [leadgenLoading, setLeadgenLoading] = useState(false);
 
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [settingsForm, setSettingsForm] = useState<AppSettings | null>(null);
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -442,10 +445,11 @@ export function Dashboard() {
   useEffect(() => {
     if (section !== "settings") return;
     fetchSettings().then(setSettingsForm).catch(() => setSettingsForm(null));
+    fetchSyncStatus().then(setSyncStatus).catch(() => setSyncStatus(null));
     if (auth?.role === "admin") {
       fetchDashboardUsers().then(setUsers).catch(() => setUsers([]));
     }
-  }, [section, auth]);
+  }, [section, auth, refreshNonce]);
 
   async function reloadUsers() {
     try {
@@ -1062,6 +1066,41 @@ export function Dashboard() {
           <div className="page-header">
             <h1 className="page-title">Налаштування</h1>
           </div>
+
+          {syncStatus && (
+            <div
+              className="chart-card"
+              style={{
+                marginBottom: 16,
+                borderLeft: `4px solid ${syncStatus.stale ? "#dc2626" : "#16a34a"}`,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <h2 className="chart-title" style={{ marginBottom: 0 }}>
+                  Синхронізація з CRM
+                </h2>
+                <span style={{ fontWeight: 600, color: syncStatus.stale ? "#dc2626" : "#16a34a" }}>
+                  {syncStatus.stale ? "⚠️ Дані застаріли" : "🟢 Актуально"}
+                </span>
+              </div>
+              <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "8px 0 0" }}>
+                Останнє оновлення:{" "}
+                {syncStatus.lastSuccessAt
+                  ? `${new Date(syncStatus.lastSuccessAt).toLocaleString("uk-UA")} (${
+                      syncStatus.ageMinutes != null ? `${syncStatus.ageMinutes} хв тому` : "—"
+                    })`
+                  : "ще не було"}
+                {syncStatus.lastDealCount != null && ` · угод за прохід: ${syncStatus.lastDealCount}`}
+              </p>
+              {syncStatus.consecutiveFailures > 0 && (
+                <p style={{ fontSize: 13, color: "#dc2626", margin: "4px 0 0" }}>
+                  Помилок поспіль: {syncStatus.consecutiveFailures}
+                  {syncStatus.lastError ? ` — ${syncStatus.lastError.split("\n")[0]}` : ""}
+                </p>
+              )}
+            </div>
+          )}
+
           {!settingsForm ? (
             <p className="loading-text">Завантаження...</p>
           ) : (

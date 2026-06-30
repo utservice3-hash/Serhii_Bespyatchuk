@@ -1502,3 +1502,32 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   );
   res.json({ ok: true });
 });
+
+// Kommo-sync health for the admin Settings indicator: when the data was last
+// refreshed, whether it looks stalled, and the last error if any.
+dashboardRouter.get("/sync-status", async (_req, res) => {
+  const r = await pool.query<{
+    last_success_at: Date | null;
+    last_run_started_at: Date | null;
+    last_error: string | null;
+    last_deal_count: number | null;
+    consecutive_failures: number;
+  }>(
+    `SELECT last_success_at, last_run_started_at, last_error, last_deal_count, consecutive_failures
+     FROM sync_state WHERE id = 1`
+  );
+  const row = r.rows[0];
+  const lastSuccessAt = row?.last_success_at ?? null;
+  const ageMinutes = lastSuccessAt
+    ? Math.round((Date.now() - new Date(lastSuccessAt).getTime()) / 60000)
+    : null;
+  res.json({
+    lastSuccessAt,
+    lastRunStartedAt: row?.last_run_started_at ?? null,
+    ageMinutes,
+    stale: ageMinutes == null || ageMinutes > 15,
+    lastDealCount: row?.last_deal_count ?? null,
+    consecutiveFailures: row?.consecutive_failures ?? 0,
+    lastError: row?.last_error ?? null,
+  });
+});

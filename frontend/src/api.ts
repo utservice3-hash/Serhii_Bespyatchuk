@@ -304,6 +304,21 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   await api.put("/settings", settings);
 }
 
+export interface SyncStatus {
+  lastSuccessAt: string | null;
+  lastRunStartedAt: string | null;
+  ageMinutes: number | null;
+  stale: boolean;
+  lastDealCount: number | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
+export async function fetchSyncStatus(): Promise<SyncStatus> {
+  const { data } = await api.get<SyncStatus>("/dashboard/sync-status");
+  return data;
+}
+
 export interface DashboardUser {
   id: number;
   email: string;

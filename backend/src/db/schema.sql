@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS sync_state (
   CONSTRAINT single_row CHECK (id = 1)
 );
 
+-- Sync observability: surface the health of the Kommo sync so a stalled/failing
+-- job is visible (and alertable) instead of silently freezing the data.
+-- last_synced_at stays the incremental WATERMARK (only advanced on success);
+-- the columns below describe the latest run for monitoring.
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_run_started_at TIMESTAMPTZ;
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ;
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_deal_count INTEGER;
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_duration_ms INTEGER;
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS plans (
   id SERIAL PRIMARY KEY,
   manager_id INTEGER NOT NULL REFERENCES managers(id),

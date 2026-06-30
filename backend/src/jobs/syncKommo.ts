@@ -90,56 +90,112 @@ async function getSyncWindowStart(): Promise<number> {
   return Math.floor(Date.now() / 1000) - FULL_SYNC_LOOKBACK_DAYS * 24 * 60 * 60;
 }
 
-export async function syncKommo(): Promise<void> {
+// In-process guard: a single tick of the 5-min cron must never start while the
+// previous run is still going. Overlapping runs were a likely cause of the sync
+// "freezing" — heavy runs stacked up, exhausted resources and stopped advancing
+// the watermark. Reconciliation runs are gated by the same flag.
+let syncRunning = false;
+
+/**
+ * Pulls fresh CRM data into Postgres.
+ * @param opts.reconcileDays  When set, ignores the incremental watermark and
+ *   re-pulls everything updated in the last N days. Used by the nightly
+ *   reconciliation job to heal gaps left by missed incremental updates (a deal
+ *   whose status changed during a past outage is never re-fetched by the
+ *   watermark-based sync, because its updated_at is now older than the mark).
+ */
+export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<void> {
+  if (syncRunning) {
+    console.warn("syncKommo: previous run still in progress — skipping this tick.");
+    return;
+  }
+  syncRunning = true;
   const syncStartedAt = new Date();
-  const windowStart = await getSyncWindowStart();
+  const startMs = Date.now();
 
-  const [deals, managerCount] = await Promise.all([
-    fetchAllDeals(windowStart),
-    syncManagers(),
-  ]);
-
-  // Fetch ONLY the contacts/companies referenced by the deals in this window,
-  // by id. Fetching every contact/company (fetchAllContacts/fetchAllCompanies)
-  // loads the whole CRM into memory and OOM-kills the job — see CLAUDE.md.
-  const contactIds = new Set<number>();
-  const companyIds = new Set<number>();
-  for (const deal of deals) {
-    for (const c of deal._embedded?.contacts ?? []) contactIds.add(c.id);
-    for (const c of deal._embedded?.companies ?? []) companyIds.add(c.id);
-  }
-  const [contacts, companies] = await Promise.all([
-    fetchByIdsBatched(fetchContactsByIds, [...contactIds]),
-    fetchByIdsBatched(fetchCompaniesByIds, [...companyIds]),
-  ]);
-
-  const managerRows = await pool.query<{ id: number; kommo_user_id: string }>(
-    `SELECT id, kommo_user_id FROM managers WHERE kommo_user_id IS NOT NULL`
-  );
-  const managerIdByKommoUserId = new Map(
-    managerRows.rows.map((row) => [Number(row.kommo_user_id), row.id])
-  );
-
-  const contactById = new Map(
-    contacts.map((c) => [c.id, { name: c.name, phone: extractPhone(c) }])
-  );
-  const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
-
-  const CONCURRENCY = 20;
-  for (let i = 0; i < deals.length; i += CONCURRENCY) {
-    const batch = deals.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      batch.map((deal) => upsertDeal(deal, managerIdByKommoUserId, companyNameById, contactById))
-    );
-  }
-
+  // Mark the run as started so monitoring can detect an in-flight or hung sync.
   await pool.query(
-    `INSERT INTO sync_state (id, last_synced_at) VALUES (1, $1)
-     ON CONFLICT (id) DO UPDATE SET last_synced_at = EXCLUDED.last_synced_at`,
+    `INSERT INTO sync_state (id, last_run_started_at) VALUES (1, $1)
+     ON CONFLICT (id) DO UPDATE SET last_run_started_at = EXCLUDED.last_run_started_at`,
     [syncStartedAt]
   );
 
-  console.log(`Synced ${managerCount} users and ${deals.length} deals.`);
+  try {
+    const windowStart = opts.reconcileDays
+      ? Math.floor(Date.now() / 1000) - opts.reconcileDays * 24 * 60 * 60
+      : await getSyncWindowStart();
+
+    const [deals, managerCount] = await Promise.all([
+      fetchAllDeals(windowStart),
+      syncManagers(),
+    ]);
+
+    // Fetch ONLY the contacts/companies referenced by the deals in this window,
+    // by id. Fetching every contact/company (fetchAllContacts/fetchAllCompanies)
+    // loads the whole CRM into memory and OOM-kills the job — see CLAUDE.md.
+    const contactIds = new Set<number>();
+    const companyIds = new Set<number>();
+    for (const deal of deals) {
+      for (const c of deal._embedded?.contacts ?? []) contactIds.add(c.id);
+      for (const c of deal._embedded?.companies ?? []) companyIds.add(c.id);
+    }
+    const [contacts, companies] = await Promise.all([
+      fetchByIdsBatched(fetchContactsByIds, [...contactIds]),
+      fetchByIdsBatched(fetchCompaniesByIds, [...companyIds]),
+    ]);
+
+    const managerRows = await pool.query<{ id: number; kommo_user_id: string }>(
+      `SELECT id, kommo_user_id FROM managers WHERE kommo_user_id IS NOT NULL`
+    );
+    const managerIdByKommoUserId = new Map(
+      managerRows.rows.map((row) => [Number(row.kommo_user_id), row.id])
+    );
+
+    const contactById = new Map(
+      contacts.map((c) => [c.id, { name: c.name, phone: extractPhone(c) }])
+    );
+    const companyNameById = new Map(companies.map((c) => [c.id, c.name]));
+
+    const CONCURRENCY = 20;
+    for (let i = 0; i < deals.length; i += CONCURRENCY) {
+      const batch = deals.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        batch.map((deal) => upsertDeal(deal, managerIdByKommoUserId, companyNameById, contactById))
+      );
+    }
+
+    // Success: advance the watermark and record health for monitoring.
+    await pool.query(
+      `UPDATE sync_state SET
+         last_synced_at = $1,
+         last_success_at = now(),
+         last_deal_count = $2,
+         last_duration_ms = $3,
+         last_error = NULL,
+         consecutive_failures = 0
+       WHERE id = 1`,
+      [syncStartedAt, deals.length, Date.now() - startMs]
+    );
+
+    console.log(`Synced ${managerCount} users and ${deals.length} deals.`);
+  } catch (err) {
+    // Record the failure WITHOUT advancing the watermark, so the next run
+    // retries the same window instead of skipping the missed updates.
+    const message = err instanceof Error ? err.stack ?? err.message : String(err);
+    await pool
+      .query(
+        `UPDATE sync_state SET
+           last_error = $1,
+           last_duration_ms = $2,
+           consecutive_failures = consecutive_failures + 1
+         WHERE id = 1`,
+        [message.slice(0, 2000), Date.now() - startMs]
+      )
+      .catch(() => {});
+    throw err;
+  } finally {
+    syncRunning = false;
+  }
 }
 
 /**

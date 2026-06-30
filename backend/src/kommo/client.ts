@@ -7,19 +7,29 @@ interface KommoListResponse<T> {
 }
 
 const MAX_RETRIES = 5;
+// Hard ceiling per request: a silently-hung socket must not block a sync run
+// forever (that froze the whole 5-min job). On timeout we abort and retry.
+const REQUEST_TIMEOUT_MS = 60_000;
 
 async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${config.kommo.baseUrl}${path}`, {
-      headers: {
-        Authorization: `Bearer ${config.kommo.token}`,
-        "Content-Type": "application/json",
-      },
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      res = await fetch(`${config.kommo.baseUrl}${path}`, {
+        headers: {
+          Authorization: `Bearer ${config.kommo.token}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (err) {
-    // Kommo occasionally drops the HTTP/2 connection mid-request; retry
-    // these transient network errors the same as a 429.
+    // Kommo occasionally drops the HTTP/2 connection mid-request (or our abort
+    // timeout fires); retry these transient network errors the same as a 429.
     if (attempt < MAX_RETRIES) {
       const delayMs = 1000 * 2 ** attempt;
       await new Promise((resolve) => setTimeout(resolve, delayMs));

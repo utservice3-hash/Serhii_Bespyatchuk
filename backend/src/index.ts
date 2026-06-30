@@ -15,6 +15,7 @@ import { syncKommo } from "./jobs/syncKommo.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
+import { pool } from "./db/pool.js";
 
 const app = express();
 app.use(cors());
@@ -31,11 +32,55 @@ app.use("/api/messages", messagesRouter);
 app.use("/api/news", newsRouter);
 app.use("/api/uploads", uploadsRouter);
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+// Health check, enriched with Kommo-sync freshness so an external monitor (or
+// a quick curl) can detect a stalled sync instead of trusting a bare "ok".
+app.get("/api/health", async (_req, res) => {
+  try {
+    const r = await pool.query<{
+      last_success_at: Date | null;
+      last_error: string | null;
+      consecutive_failures: number;
+    }>(
+      `SELECT last_success_at, last_error, consecutive_failures FROM sync_state WHERE id = 1`
+    );
+    const row = r.rows[0];
+    const lastSuccessAt = row?.last_success_at ?? null;
+    const ageMinutes = lastSuccessAt
+      ? Math.round((Date.now() - new Date(lastSuccessAt).getTime()) / 60000)
+      : null;
+    // The 5-min cron should keep this well under ~15 min; flag a stall beyond that.
+    const stale = ageMinutes == null || ageMinutes > 15;
+    res.json({
+      ok: true,
+      sync: {
+        lastSuccessAt,
+        ageMinutes,
+        stale,
+        consecutiveFailures: row?.consecutive_failures ?? 0,
+        lastError: row?.last_error ?? null,
+      },
+    });
+  } catch {
+    res.json({ ok: true, sync: null });
+  }
+});
 
-// Refresh CRM data every 5 minutes.
+// Refresh CRM data every 5 minutes (incremental, by watermark).
 cron.schedule("*/5 * * * *", () => {
   syncKommo().catch((err) => console.error("Kommo sync failed:", err));
+});
+
+// Pull immediately on startup so a restart recovers stale data at once instead
+// of waiting up to 5 minutes for the first cron tick.
+syncKommo().catch((err) => console.error("Kommo startup sync failed:", err));
+
+// Nightly reconciliation: re-pull the last 45 days ignoring the watermark, to
+// heal gaps the incremental sync can't (a deal whose status changed during a
+// past outage is never re-fetched, since its updated_at predates the mark).
+cron.schedule("0 4 * * *", () => {
+  syncKommo({ reconcileDays: 45 }).catch((err) =>
+    console.error("Kommo reconciliation failed:", err)
+  );
 });
 
 // Refresh receivables from the accounting Google Sheet every 30 minutes.
