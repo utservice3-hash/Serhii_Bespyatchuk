@@ -2429,6 +2429,21 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/test-admin-stats", methods=["GET"])
+def test_admin_stats():
+    """Надсилає тестове повідомлення в адмінську групу першого дотику —
+    щоб перевірити, що бот доданий і гілка валідна."""
+    ok = notifier.send_to_admin_stats(
+        "🧪 Тест: бот успішно пише в адмінську групу (зведення першого дотику "
+        "приходитиме сюди о 18:00)."
+    )
+    return jsonify({
+        "ok": ok,
+        "chat_id": notifier.TG_CHAT_ID_ADMIN_STATS,
+        "thread_id": notifier.TG_THREAD_ID_ADMIN_STATS,
+    })
+
+
 @app.route("/sheet-link", methods=["GET"])
 def sheet_link():
     """Повертає посилання на основну Google-таблицю і пряме посилання на
