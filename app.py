@@ -1388,8 +1388,9 @@ scheduler.add_job(_send_month_end_report, "interval", hours=1)           # ос�
 scheduler.add_job(_send_rnk_ai_report, "cron", hour=13, minute=50)      # 16:50 Kyiv = 13:50 UTC
 scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=14, minute=0)  # 17:00 Kyiv = 14:00 UTC
 scheduler.add_job(_send_weekly_ad_report, "cron", day_of_week="fri", hour=14, minute=0)  # П'ятниця 17:00 Kyiv
-scheduler.add_job(_send_first_touch_admin_report, "cron", hour=15, minute=0)  # 18:00 Kyiv = 15:00 UTC
 scheduler.start()
+# Джоба першого дотику реєструється нижче, після визначення функції
+# (_send_first_touch_admin_report оголошена далі у файлі) — інакше NameError на старті.
 
 # eLogist userbot — читає групу "Дошка оголошень" під юзер-акаунтом (Telethon),
 # бо Bot API не віддає повідомлення від TransNowBot (бот не бачить інших ботів).
@@ -2168,6 +2169,11 @@ def _send_first_touch_admin_report():
     )
     notifier.send_to_admin_stats(msg)
     logger.info("First-touch admin report: accepted=%d priced=%d", accepted, priced)
+
+
+# Реєструємо джобу першого дотику тут — після визначення функції (scheduler
+# уже запущений вище; APScheduler дозволяє додавати джоби на льоту).
+scheduler.add_job(_send_first_touch_admin_report, "cron", hour=15, minute=0)  # 18:00 Kyiv = 15:00 UTC
 
 
 def _build_stats_text(days: int, label: str) -> str:
