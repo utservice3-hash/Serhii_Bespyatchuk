@@ -47,6 +47,8 @@ import {
   saveReceivableNote,
   fetchTasks,
   fetchTeams,
+  fetchTeamsRanking,
+  type TeamRanking,
   fetchTimeseries,
   updateTask,
   type FunnelStage,
@@ -413,6 +415,7 @@ export function Dashboard() {
   const [loyaltyLoading, setLoyaltyLoading] = useState(false);
   const [loyaltyDynamics, setLoyaltyDynamics] = useState<LoyaltyDynamics | null>(null);
 
+  const [teamsRanking, setTeamsRanking] = useState<TeamRanking[]>([]);
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
@@ -461,6 +464,13 @@ export function Dashboard() {
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => setTeams([]));
   }, []);
+
+  useEffect(() => {
+    if (section !== "teams") return;
+    fetchTeamsRanking({ from: dateRange.from || undefined, to: dateRange.to || undefined })
+      .then(setTeamsRanking)
+      .catch(() => setTeamsRanking([]));
+  }, [section, dateRange, refreshNonce]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -1440,22 +1450,35 @@ export function Dashboard() {
       {section === "teams" && (
         <>
           <div className="page-header">
-            <h1 className="page-title">Команди</h1>
+            <h1 className="page-title">Рейтинг команд</h1>
           </div>
+          <QuickPeriods active={datePreset} onSelect={(id, range) => { setDatePreset(id); setDateRange(range); }} />
           <div className="chart-card">
-            {teams.length === 0 ? (
-              <p className="loading-text">Команди не знайдено.</p>
+            {teamsRanking.length === 0 ? (
+              <p className="loading-text">Немає даних за період.</p>
             ) : (
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th>#</th>
                     <th>Команда</th>
+                    <th>Виручка</th>
+                    <th>Угод</th>
+                    <th>Сер. чек</th>
+                    <th>Конверсія</th>
+                    <th>Дебіторка</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {teams.map((t) => (
-                    <tr key={t.id}>
-                      <td>{t.name}</td>
+                  {teamsRanking.map((t, i) => (
+                    <tr key={t.teamId}>
+                      <td>{["🥇", "🥈", "🥉"][i] ?? i + 1}</td>
+                      <td>{t.teamName}</td>
+                      <td style={{ fontWeight: 600 }}>{formatAmount(t.revenue)}</td>
+                      <td>{t.deals}</td>
+                      <td>{formatAmount(t.avgCheck)}</td>
+                      <td>{t.conversion}%</td>
+                      <td style={t.receivables > 0 ? { color: "#dc2626" } : undefined}>{formatAmount(t.receivables)}</td>
                     </tr>
                   ))}
                 </tbody>

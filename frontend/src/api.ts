@@ -396,7 +396,22 @@ export async function fetchReceivables(params: {
   return data;
 }
 
-export const FILES_BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:4000/api").replace(/\/api$/, "");
+export interface TeamRanking {
+  teamId: number;
+  teamName: string;
+  revenue: number;
+  deals: number;
+  avgCheck: number;
+  conversion: number;
+  receivables: number;
+}
+
+export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
+  const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
+  return data.teams;
+}
+
+export const FILES_BASE =(import.meta.env.VITE_API_URL ?? "http://localhost:4000/api").replace(/\/api$/, "");
 
 export async function uploadFile(file: File): Promise<{ url: string; name: string }> {
   const dataBase64 = await new Promise<string>((resolve, reject) => {

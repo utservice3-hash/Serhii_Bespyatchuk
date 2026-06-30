@@ -1416,6 +1416,71 @@ dashboardRouter.get("/receivables", async (req, res) => {
   res.json({ syncedAt, managers: Array.from(byManager.values()) });
 });
 
+// Team ranking: per-team revenue (success+payment), deals, avg check,
+// conversion and receivables for the selected period.
+dashboardRouter.get("/teams", async (req, res) => {
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+
+  const sucCond = ["psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL"];
+  const sp: unknown[] = [];
+  if (from) { sp.push(from); sucCond.push(`d.closed_at_kommo >= $${sp.length}`); }
+  if (to) { sp.push(to); sucCond.push(`d.closed_at_kommo <= $${sp.length}`); }
+  const success = await pool.query<{ tid: number; tname: string; rev: string; deals: string }>(
+    `SELECT t.id AS tid, t.name AS tname, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${sucCond.join(" AND ")} GROUP BY t.id, t.name`,
+    sp
+  );
+  const pay = await pool.query<{ tid: number; rev: string; deals: string }>(
+    `SELECT t.id AS tid, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
+     WHERE d.status_id IN (69716460, 60412544) GROUP BY t.id`
+  );
+  const lc: string[] = [];
+  const lp: unknown[] = [];
+  if (from) { lp.push(from); lc.push(`d.created_at_kommo >= $${lp.length}`); }
+  if (to) { lp.push(to); lc.push(`d.created_at_kommo <= $${lp.length}`); }
+  const conv = await pool.query<{ tid: number; leads: string; paid: string }>(
+    `SELECT t.id AS tid, COUNT(*) AS leads, COUNT(*) FILTER (WHERE psm.funnel_stage='paid') AS paid
+     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${lc.length ? "WHERE " + lc.join(" AND ") : ""} GROUP BY t.id`,
+    lp
+  );
+  const recv = await pool.query<{ tid: number; debt: string }>(
+    `SELECT m.team_id AS tid, COALESCE(SUM(r.amount),0) AS debt
+     FROM receivables r JOIN managers m ON m.id = r.manager_id
+     WHERE m.team_id IS NOT NULL GROUP BY m.team_id`
+  );
+
+  const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number }>();
+  const get = (id: number, name?: string) => {
+    let e = map.get(id);
+    if (!e) { e = { teamId: id, teamName: name ?? "", revenue: 0, deals: 0, leads: 0, paid: 0, receivables: 0 }; map.set(id, e); }
+    if (name) e.teamName = name;
+    return e;
+  };
+  for (const r of success.rows) { const e = get(r.tid, r.tname); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
+  for (const r of pay.rows) { const e = get(r.tid); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
+  for (const r of conv.rows) { const e = get(r.tid); e.leads += Number(r.leads); e.paid += Number(r.paid); }
+  for (const r of recv.rows) { const e = get(r.tid); e.receivables += Number(r.debt); }
+
+  const teams = [...map.values()]
+    .map((e) => ({
+      teamId: e.teamId,
+      teamName: e.teamName,
+      revenue: e.revenue,
+      deals: e.deals,
+      avgCheck: e.deals > 0 ? Math.round(e.revenue / e.deals) : 0,
+      conversion: e.leads > 0 ? Math.round((e.paid / e.leads) * 100) : 0,
+      receivables: e.receivables,
+    }))
+    .sort((a, b) => b.revenue - a.revenue);
+  res.json({ teams });
+});
+
 // Team-lead / admin: save a comment + planned payment date for a receivable
 // client (keyed by client_key so it survives sheet re-syncs).
 dashboardRouter.put("/receivables/note", async (req, res) => {
