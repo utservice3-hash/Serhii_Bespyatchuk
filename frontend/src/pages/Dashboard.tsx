@@ -86,7 +86,6 @@ import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
 import { ReceivablesSection } from "./dashboard/sections/ReceivablesSection";
 import { TasksSection } from "./dashboard/sections/TasksSection";
 import { ReportSection } from "./dashboard/sections/ReportSection";
-import { FunnelReportSection } from "./dashboard/sections/FunnelReportSection";
 
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
@@ -143,7 +142,6 @@ export function Dashboard() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportGranularity, setReportGranularity] = useState<"day" | "week" | "month">("week");
   const [funnelReport, setFunnelReport] = useState<FunnelReport | null>(null);
-  const [funnelReportLoading, setFunnelReportLoading] = useState(false);
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
@@ -209,16 +207,11 @@ export function Dashboard() {
       .then(setReportData)
       .catch(() => setReportData(null))
       .finally(() => setReportLoading(false));
-  }, [section, reportGranularity, dateRange, refreshNonce]);
-
-  useEffect(() => {
-    if (section !== "funnel_report") return;
-    setFunnelReportLoading(true);
+    // The client funnel lives inside the same "Звіт" section.
     fetchFunnelReport({ from: dateRange.from || undefined, to: dateRange.to || undefined })
       .then(setFunnelReport)
-      .catch(() => setFunnelReport(null))
-      .finally(() => setFunnelReportLoading(false));
-  }, [section, dateRange, refreshNonce]);
+      .catch(() => setFunnelReport(null));
+  }, [section, reportGranularity, dateRange, refreshNonce]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -847,21 +840,10 @@ export function Dashboard() {
         <ReportSection
           title={auth?.role === "manager" ? "Мій звіт" : auth?.role === "team_lead" ? "Звіт тімліда" : "Звіт"}
           report={reportData}
+          funnelReport={funnelReport}
           loading={reportLoading}
           granularity={reportGranularity}
           setGranularity={setReportGranularity}
-          dateRange={dateRange}
-          setDateRange={setDateRange}
-          datePreset={datePreset}
-          setDatePreset={setDatePreset}
-        />
-      )}
-
-      {section === "funnel_report" && (
-        <FunnelReportSection
-          title={auth?.role === "manager" ? "Моя воронка клієнтів" : auth?.role === "team_lead" ? "Воронка клієнтів команди" : "Воронка клієнтів"}
-          report={funnelReport}
-          loading={funnelReportLoading}
           dateRange={dateRange}
           setDateRange={setDateRange}
           datePreset={datePreset}

@@ -10,15 +10,52 @@ import {
   LabelList,
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
-import type { ReportData } from "../../../api";
+import type { ReportData, FunnelReport, FunnelStageRow } from "../../../api";
 import { formatAmount } from "../format";
 
 type DateRange = { from: string; to: string };
 type Gran = "day" | "week" | "month";
 
+function convPct(n: number, base: number): string {
+  return base > 0 ? `${Math.round((n / base) * 100)}%` : "—";
+}
+
+function FunnelTable({ stages }: { stages: FunnelStageRow[] }) {
+  const first = stages[0]?.total ?? 0;
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>Етап</th>
+          <th>Нові</th>
+          <th>Постійні</th>
+          <th>Від лідогену</th>
+          <th>Разом</th>
+          <th>% від «Взято»</th>
+          <th>% переходу</th>
+        </tr>
+      </thead>
+      <tbody>
+        {stages.map((s, i) => (
+          <tr key={s.stage}>
+            <td>{s.label}</td>
+            <td>{s.new}</td>
+            <td>{s.regular}</td>
+            <td>{s.leadgen}</td>
+            <td style={{ fontWeight: 600 }}>{s.total}</td>
+            <td>{convPct(s.total, first)}</td>
+            <td>{i === 0 ? "—" : convPct(s.total, stages[i - 1].total)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export function ReportSection({
   title,
   report,
+  funnelReport,
   loading,
   granularity,
   setGranularity,
@@ -29,6 +66,7 @@ export function ReportSection({
 }: {
   title: string;
   report: ReportData | null;
+  funnelReport: FunnelReport | null;
   loading: boolean;
   granularity: Gran;
   setGranularity: Dispatch<SetStateAction<Gran>>;
@@ -85,6 +123,49 @@ export function ReportSection({
               </div>
             ))}
           </div>
+
+          {funnelReport && (
+            <>
+              <div className="chart-card">
+                <h2 className="chart-title">Воронка клієнтів (когорта створених угод, розріз по типу клієнта)</h2>
+                <FunnelTable stages={funnelReport.stages} />
+              </div>
+              {funnelReport.scope === "team" && funnelReport.byManager.length > 0 && (
+                <div className="chart-card">
+                  <h2 className="chart-title">Воронка по менеджерах</h2>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Менеджер</th>
+                        <th>Взято</th>
+                        <th>Запит</th>
+                        <th>Погоджено</th>
+                        <th>Рахунок</th>
+                        <th>Оплата</th>
+                        <th>Конв.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {funnelReport.byManager.map((m) => {
+                        const t = (i: number) => m.stages[i]?.total ?? 0;
+                        return (
+                          <tr key={m.managerId}>
+                            <td>{m.name}</td>
+                            <td>{t(0)}</td>
+                            <td>{t(1)}</td>
+                            <td>{t(2)}</td>
+                            <td>{t(3)}</td>
+                            <td style={{ fontWeight: 600 }}>{t(4)}</td>
+                            <td>{convPct(t(4), t(0))}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
 
           <div className="chart-card">
             <h2 className="chart-title">
