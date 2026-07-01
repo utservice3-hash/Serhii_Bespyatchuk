@@ -117,6 +117,11 @@ WON_STATUS_ID = 142              # УСПІШНА УГОДА
 RETURNED_QC_STATUS = 108361876
 RETURNED_QC_TAG = "Повернуто АІ"
 
+# Прапорець повернення угод AI-Відділом якості. Коли False — AI НЕ переводить
+# угоди в етап «Повернуто АІ» (ні передчасно закриті, ні помилково «не цільові»).
+# AI-аналіз і сповіщення лишаються (інформативні), але угода фізично не рухається.
+QC_RETURN_ENABLED = False
+
 # Telegram — гілка для звітів по плану
 TG_PLAN_THREAD_ID = 175862
 
@@ -1742,7 +1747,7 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
         # Дубль/Тест — легітимне закриття: НЕ повертаємо в роботу, навіть якщо
         # AI вважає закриття передчасним. Для дубля натомість вимагаємо
         # посилання на активну угоду в нотатках (нижче у verdict_block).
-        if verdict == "ПЕРЕДЧАСНЕ" and not no_return:
+        if verdict == "ПЕРЕДЧАСНЕ" and not no_return and QC_RETURN_ENABLED:
             # Переводимо у воронку "Продаж повний цикл" на етап
             # "Повернуто АІ Відділ якості" + тег, щоб тімлід вів далі повний цикл.
             returned = kommo.move_lead_to(
@@ -1789,11 +1794,12 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
             f"⚠️ {verdict_reason}\n"
         )
         if team in RNK_TEAMS:
-            verdict_block += (
-                f"🛠 <b>Угода йде на допрацювання</b> — переведено у воронку "
-                f"«Продаж повний цикл», етап «Повернуто АІ Відділ якості».\n"
-                f"👁 Тімлід на контроль:{sup_part or ' —'}\n"
-            )
+            if QC_RETURN_ENABLED:
+                verdict_block += (
+                    f"🛠 <b>Угода йде на допрацювання</b> — переведено у воронку "
+                    f"«Продаж повний цикл», етап «Повернуто АІ Відділ якості».\n"
+                )
+            verdict_block += f"👁 Тімлід на контроль:{sup_part or ' —'}\n"
     elif verdict == "ОБ'ЄКТИВНЕ":
         verdict_block = f"\n🟢 <b>AI: закриття обґрунтоване</b>\n{verdict_reason}\n"
 
@@ -1848,6 +1854,13 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     manager_note = kommo.get_last_text_note(lead_id)
     result = ai_analyzer.check_target_lead(transcripts, lead_name, manager_note)
     if not result.get("is_target"):
+        return
+
+    # Повернення угод AI-Відділом якості вимкнено — не переводимо в «Повернуто АІ»
+    # і не сповіщаємо (сповіщення без переведення лише вводило б в оману).
+    if not QC_RETURN_ENABLED:
+        logger.info("Non-target lead %s flagged by AI but QC return disabled: %s",
+                    lead_id, result.get("reason"))
         return
 
     # Переводимо у воронку "Продаж повний цикл" на етап "Повернуто АІ Відділ
