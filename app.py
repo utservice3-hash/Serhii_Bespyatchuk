@@ -1664,6 +1664,7 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
     sup_part = f" {supervisor_tag}" if supervisor_tag else ""
     days = f"{details['days_in_work']} дн." if details["days_in_work"] is not None else "—"
     reason = details["reject_reason"] or "не вказана"
+    is_duplicate = "дубл" in (details["reject_reason"] or "").lower()
     last_status = details["last_status"] or "—"
     notes = details["notes_count"]
     calls = details["calls_count"]
@@ -1723,12 +1724,29 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
         }
         sheets.log_closed_deal(deal_data)
 
-        if verdict == "ПЕРЕДЧАСНЕ":
+        # Дубль — легітимне закриття: НЕ повертаємо в роботу, навіть якщо AI
+        # вважає закриття передчасним. Натомість вимагаємо посилання на активну
+        # угоду в нотатках (нижче у verdict_block).
+        if verdict == "ПЕРЕДЧАСНЕ" and not is_duplicate:
             kommo.update_lead_status(lead_id, TAKEN_TO_WORK)
             returned = True
 
     verdict_block = ""
-    if verdict == "ПЕРЕДЧАСНЕ":
+    if verdict == "ПЕРЕДЧАСНЕ" and is_duplicate:
+        active_ref = _find_active_deal_ref(lead_id)
+        if active_ref:
+            ref_line = f"🔗 Активна угода: {active_ref}\n"
+        else:
+            ref_line = (
+                f"⚠️ <b>У нотатках немає посилання на активну угоду!</b> "
+                f"Вкажіть #ID або лінк активної угоди в примітках.\n"
+            )
+        verdict_block = (
+            f"\n🔁 <b>Дубль — угоду не повертаємо в роботу</b>\n"
+            f"{ref_line}"
+            f"👁 Тімлід на контроль:{sup_part or ' —'}\n"
+        )
+    elif verdict == "ПЕРЕДЧАСНЕ":
         verdict_block = (
             f"\n🔴 <b>AI: угоду закрито передчасно</b>\n"
             f"📋 Категорія: {category or '—'}\n"
@@ -1870,6 +1888,23 @@ def _check_duplicate_reference(lead_id: int, responsible_id: int):
     )
     send_to_team_group(responsible_id, msg)
     logger.info("Duplicate lead %s closed without active-deal ID — reminded %s", lead_id, manager_name)
+
+
+def _find_active_deal_ref(lead_id: int) -> str:
+    """Шукає в текстових нотатках угоди посилання на активну угоду (#ID або
+    leads/detail/ID, окрім самої себе). Повертає HTML-лінк або '' якщо немає."""
+    notes = kommo.get_lead_notes(lead_id)
+    text = " ".join(
+        (n.get("params") or {}).get("text", "") or ""
+        for n in notes
+        if n.get("note_type") in (4, "common")
+    )
+    ids = {int(m) for m in (_DUP_HASH_RE.findall(text) + _DUP_URL_RE.findall(text))}
+    ids.discard(lead_id)
+    if not ids:
+        return ""
+    ref_id = sorted(ids)[0]
+    return f"<a href='https://utsercice.kommo.com/leads/detail/{ref_id}'>#{ref_id}</a>"
 
 
 def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):
