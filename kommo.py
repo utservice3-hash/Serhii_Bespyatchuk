@@ -323,6 +323,25 @@ def move_lead_to(lead_id: int, pipeline_id: int, status_id: int, add_tag: str = 
         return False
 
 
+def add_note(lead_id: int, text: str) -> bool:
+    """Додає текстову нотатку (note_type=common) до угоди."""
+    if not text:
+        return False
+    try:
+        resp = requests.post(
+            f"{KOMMO_BASE}/api/v4/leads/{lead_id}/notes",
+            headers=HEADERS,
+            json=[{"note_type": "common", "params": {"text": text}}],
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.error("add_note(%s): %s %s", lead_id, resp.status_code, resp.text)
+        return resp.ok
+    except Exception as e:
+        logger.error("add_note(%s): %s", lead_id, e)
+        return False
+
+
 def get_note(lead_id: int, note_id: int) -> dict:
     """Повертає конкретну нотатку ліда (для точного зіставлення з вебхуком)."""
     try:

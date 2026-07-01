@@ -1705,8 +1705,13 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
             verdict = "ПЕРЕДЧАСНЕ" if "ПЕРЕДЧАСНЕ" in closure_match.group(1) else "ОБ'ЄКТИВНЕ"
         verdict_reason = closure_match.group(2).strip() if closure_match else ""
         category = category_match.group(1).strip() if category_match else ""
+        nextstep_match = re.search(r"NEXTSTEP:\s*(.+)", recommendation)
+        next_step = nextstep_match.group(1).strip() if nextstep_match else ""
+        if next_step in ("-", "—", ""):
+            next_step = ""
         recommendation_clean = re.sub(r"\n?CLOSURE:.*", "", recommendation)
-        recommendation_clean = re.sub(r"\n?CATEGORY:.*", "", recommendation_clean).strip()
+        recommendation_clean = re.sub(r"\n?CATEGORY:.*", "", recommendation_clean)
+        recommendation_clean = re.sub(r"\n?NEXTSTEP:.*", "", recommendation_clean).strip()
 
         tip_match = re.search(r"→\s*тімліду:\s*(.+)", recommendation_clean)
         teamlead_tip = tip_match.group(1).strip() if tip_match else ""
@@ -1738,6 +1743,20 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
             returned = kommo.move_lead_to(
                 lead_id, PEREVOZY_PIPELINE_ID, RETURNED_QC_STATUS, RETURNED_QC_TAG
             )
+            # Пишемо детальний розбір у нотатки угоди — щоб менеджер/тімлід
+            # бачили прямо в картці: чому повернуто, що не зроблено, що робити далі.
+            note = (
+                "🤖 AI Відділ якості — угоду повернуто на допрацювання\n\n"
+                f"❗ Чому повернуто: {verdict_reason or '—'}\n"
+                f"📋 Категорія: {category or '—'}\n"
+            )
+            if next_step:
+                note += f"➡️ Наступний крок: {next_step}\n"
+            if teamlead_tip:
+                note += f"👁 Тімліду звернути увагу: {teamlead_tip}\n"
+            if recommendation_clean:
+                note += f"\n📊 Детальний розбір:\n{recommendation_clean}"
+            kommo.add_note(lead_id, note)
 
     verdict_block = ""
     if verdict == "ПЕРЕДЧАСНЕ" and is_duplicate:
@@ -1825,6 +1844,14 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     # Переводимо у воронку "Продаж повний цикл" на етап "Повернуто АІ Відділ
     # якості" + тег, щоб тімлід міг вести угоду далі в повному циклі.
     kommo.move_lead_to(lead_id, PEREVOZY_PIPELINE_ID, RETURNED_QC_STATUS, RETURNED_QC_TAG)
+    kommo.add_note(lead_id, (
+        "🤖 AI Відділ якості — лід повернуто з «Не цільові»\n\n"
+        "❗ Чому: за змістом дзвінків клієнту потрібне вантажне перевезення — "
+        "закрито як нецільовий помилково.\n"
+        f"📋 Деталі: {result.get('reason', '')}\n"
+        "➡️ Наступний крок: зв'язатися з клієнтом, уточнити параметри вантажу "
+        "(маршрут, вага, дати) і відпрацювати запит на перевезення."
+    ))
 
     _nontarget_returns[responsible_id] = _nontarget_returns.get(responsible_id, 0) + 1
     return_count = _nontarget_returns[responsible_id]
