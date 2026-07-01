@@ -2503,6 +2503,53 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/debug-first-touch", methods=["GET"])
+def debug_first_touch():
+    """Діагностика першого дотику по ліду — показує, чому спрацювало/ні, БЕЗ
+    надсилання в групу. ?lead_id=12345"""
+    import traceback
+    try:
+        lead_id = int(request.args.get("lead_id", 0))
+        if not lead_id:
+            return jsonify({"ok": False, "error": "lead_id required"})
+        lead = kommo.get_lead(lead_id)
+        if not lead:
+            return jsonify({"ok": False, "error": "lead not found"})
+        resp_id = lead.get("responsible_user_id", 0)
+        team = MANAGER_TEAM.get(resp_id, "")
+        has_utm = kommo.has_utm_campaign(lead)
+        notes = kommo.get_lead_notes(lead_id)
+        call_notes = sorted(
+            (n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")),
+            key=lambda n: n.get("created_at", 0),
+        )
+        calls_info = [{
+            "note_type": n.get("note_type"),
+            "duration": int((n.get("params") or {}).get("duration", 0) or 0),
+            "has_link": bool((n.get("params") or {}).get("link") or (n.get("params") or {}).get("LINK")),
+        } for n in call_notes]
+        first = next((n for n in call_notes if int((n.get("params") or {}).get("duration", 0) or 0) >= FIRST_TOUCH_MIN_DURATION), None)
+        out = {
+            "ok": True, "lead_id": lead_id,
+            "responsible_id": resp_id, "team": team,
+            "team_ok": team in FIRST_TOUCH_TEAMS,
+            "has_utm_campaign": has_utm,
+            "groq_key_present": bool(transcriber.GROQ_API_KEY),
+            "call_notes": calls_info,
+            "first_qualifying_call": bool(first),
+            "already_done": lead_id in _first_touch_done,
+        }
+        if first and has_utm and team in FIRST_TOUCH_TEAMS:
+            params = first.get("params") or {}
+            url = params.get("link", "") or params.get("LINK", "")
+            transcript = transcriber.transcribe_call(url) if url else ""
+            out["transcript_len"] = len(transcript)
+            out["analysis"] = ai_analyzer.analyze_first_touch(transcript, lead.get("name", ""), "")
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/test-admin-stats", methods=["GET"])
 def test_admin_stats():
     """Надсилає тестове повідомлення в адмінську групу першого дотику —
