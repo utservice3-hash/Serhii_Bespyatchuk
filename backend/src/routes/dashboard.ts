@@ -271,18 +271,26 @@ dashboardRouter.get("/overview", async (req, res) => {
     params
   );
 
-  // Conversion by acquisition channel (by created date): paid (= dispatched
-  // autos) over total leads in the channel. "ad" counts only deals carrying a
-  // Google utm tag; "leadgen" = leads worked by the lead-gen department.
+  // Conversion by acquisition channel (leads created in period). A lead counts
+  // as "converted" when its CLIENT reaches a paid deal in the full-cycle funnel
+  // — matched by client_key. This is essential for "leadgen": those leads live
+  // in the Продзвін/Реактивація pipelines whose statuses never map to 'paid',
+  // so a same-deal check always yielded 0. "ad" deals are in the full-cycle
+  // funnel themselves, so the same client_key match works for them too.
   const scopeConds = paidConds.filter((c) => !c.includes("funnel_stage"));
   const scopeWhere = scopeConds.length ? `WHERE ${scopeConds.join(" AND ")}` : "";
   const channelConvRes = await pool.query<{ lead_channel: string; leads: string; paid: string }>(
-    `SELECT COALESCE(d.lead_channel, 'other') AS lead_channel,
+    `WITH paid_clients AS (
+       SELECT DISTINCT d.client_key
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+     )
+     SELECT COALESCE(d.lead_channel, 'other') AS lead_channel,
             COUNT(*) AS leads,
-            COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid
+            COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS paid
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
-     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      ${scopeWhere}
      GROUP BY 1`,
     params
@@ -682,15 +690,25 @@ dashboardRouter.get("/conversion", async (req, res) => {
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
+  // "paid" = leads whose CLIENT reached a paid full-cycle deal (client_key
+  // match), so leadgen leads (which live in non-paid pipelines) convert
+  // correctly. "paid_amount" stays the lead's own paid value (real for ad,
+  // ~0 for leadgen deals whose price is 0).
   const result = await pool.query<{
     lead_channel: string | null;
     leads: string;
     paid: string;
     paid_amount: string;
   }>(
-    `SELECT COALESCE(d.lead_channel, 'other') AS lead_channel,
+    `WITH paid_clients AS (
+       SELECT DISTINCT d.client_key
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+     )
+     SELECT COALESCE(d.lead_channel, 'other') AS lead_channel,
             COUNT(*) AS leads,
-            COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
+            COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS paid,
             COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS paid_amount
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
@@ -1481,6 +1499,9 @@ dashboardRouter.get("/teams", async (req, res) => {
   for (const r of recv.rows) { const e = get(r.tid); e.receivables += Number(r.debt); }
 
   const teams = [...map.values()]
+    // Drop teams with no activity in the period (they leak in via the payment /
+    // receivables snapshots) — they showed up as empty rows like "7 —".
+    .filter((e) => e.revenue > 0 || e.deals > 0 || e.leads > 0 || e.receivables > 0)
     .map((e) => ({
       teamId: e.teamId,
       teamName: e.teamName,

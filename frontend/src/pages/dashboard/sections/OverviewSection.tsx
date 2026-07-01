@@ -305,14 +305,15 @@ export function OverviewSection({
               <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
             </div>
             <div className="kpi-card">
-              <span className="kpi-label" title="Частка виручки від постійних (повторних) клієнтів у загальній виручці за період">Виручка від постійних клієнтів, %</span>
-              <span className="kpi-value">
+              <span className="kpi-label" title="Виручка від постійних (повторних) клієнтів за період, та її частка в загальній">Виручка від постійних клієнтів</span>
+              <span className="kpi-value">{formatAmount(overview.repeatRevenue)}</span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                 {overview.newRevenue + overview.repeatRevenue > 0
                   ? Math.round(
                       (overview.repeatRevenue / (overview.newRevenue + overview.repeatRevenue)) * 100
                     )
                   : 0}
-                %
+                % від загальної
               </span>
             </div>
           </div>
