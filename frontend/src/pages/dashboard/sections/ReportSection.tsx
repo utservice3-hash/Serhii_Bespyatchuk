@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -10,8 +10,16 @@ import {
   LabelList,
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
-import type { ReportData, FunnelReport, FunnelStageRow } from "../../../api";
+import { fetchFunnelPlan, saveFunnelPlan, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption } from "../../../api";
 import { formatAmount } from "../format";
+
+const FUNNEL_STAGES: { stage: string; label: string }[] = [
+  { stage: "lead_taken", label: "Взято в роботу лідів" },
+  { stage: "quote_requested", label: "Отримано заявку на прорахунок" },
+  { stage: "approved", label: "Договір/заявку погоджено" },
+  { stage: "invoiced", label: "Виставлено рахунок" },
+  { stage: "paid", label: "Оплата отримана" },
+];
 
 type DateRange = { from: string; to: string };
 type Gran = "day" | "week" | "month";
@@ -21,7 +29,7 @@ function convPct(n: number, base: number): string {
 }
 
 function FunnelTable({ stages }: { stages: FunnelStageRow[] }) {
-  const first = stages[0]?.total ?? 0;
+  const hasPlan = stages.some((s) => s.planMonth > 0);
   return (
     <table className="data-table">
       <thead>
@@ -29,26 +37,117 @@ function FunnelTable({ stages }: { stages: FunnelStageRow[] }) {
           <th>Етап</th>
           <th>Нові</th>
           <th>Постійні</th>
-          <th>Від лідогену</th>
-          <th>Разом</th>
-          <th>% від «Взято»</th>
+          <th>Лідоген</th>
+          <th>Факт</th>
+          {hasPlan && <th>План міс</th>}
+          {hasPlan && <th>План сьогодні</th>}
+          {hasPlan && <th>Викон. %</th>}
+          {hasPlan && <th>Відставання</th>}
           <th>% переходу</th>
         </tr>
       </thead>
       <tbody>
-        {stages.map((s, i) => (
-          <tr key={s.stage}>
-            <td>{s.label}</td>
-            <td>{s.new}</td>
-            <td>{s.regular}</td>
-            <td>{s.leadgen}</td>
-            <td style={{ fontWeight: 600 }}>{s.total}</td>
-            <td>{convPct(s.total, first)}</td>
-            <td>{i === 0 ? "—" : convPct(s.total, stages[i - 1].total)}</td>
-          </tr>
-        ))}
+        {stages.map((s, i) => {
+          const lag = s.planToDate - s.total; // >0 = behind pace
+          return (
+            <tr key={s.stage}>
+              <td>{s.label}</td>
+              <td>{s.new}</td>
+              <td>{s.regular}</td>
+              <td>{s.leadgen}</td>
+              <td style={{ fontWeight: 600 }}>{s.total}</td>
+              {hasPlan && <td>{s.planMonth || "—"}</td>}
+              {hasPlan && <td>{s.planToDate || "—"}</td>}
+              {hasPlan && (
+                <td style={{ color: s.planMonth > 0 && s.total >= s.planToDate ? "#16a34a" : s.planMonth > 0 ? "#dc2626" : undefined }}>
+                  {convPct(s.total, s.planMonth)}
+                </td>
+              )}
+              {hasPlan && <td style={{ color: lag > 0 ? "#dc2626" : undefined }}>{s.planMonth > 0 ? (lag > 0 ? lag : 0) : "—"}</td>}
+              <td>{i === 0 ? "—" : convPct(s.total, stages[i - 1].total)}</td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
+  );
+}
+
+function PlanEditor({
+  managerOptions,
+  month,
+  onClose,
+  onSaved,
+}: {
+  managerOptions: ManagerOption[];
+  month: string; // YYYY-MM
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [managerId, setManagerId] = useState<number | "">("");
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  async function pick(id: number) {
+    setManagerId(id);
+    try {
+      const { plans } = await fetchFunnelPlan(id, month);
+      const v: Record<string, string> = {};
+      for (const s of FUNNEL_STAGES) v[s.stage] = plans[s.stage] != null ? String(plans[s.stage]) : "";
+      setValues(v);
+    } catch {
+      setValues({});
+    }
+  }
+
+  async function save() {
+    if (managerId === "") return;
+    setSaving(true);
+    try {
+      const plans: Record<string, number> = {};
+      for (const s of FUNNEL_STAGES) plans[s.stage] = Number(values[s.stage] || 0);
+      await saveFunnelPlan({ managerId: Number(managerId), month, plans });
+      onSaved();
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 24, width: "90vw", maxWidth: 520 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>План на місяць ({month})</h2>
+          <button onClick={onClose} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
+        </div>
+        <select value={managerId} onChange={(e) => e.target.value && pick(Number(e.target.value))} style={{ width: "100%", marginBottom: 12 }}>
+          <option value="">Оберіть менеджера…</option>
+          {managerOptions.map((m) => (
+            <option key={m.id} value={m.id}>{m.name}</option>
+          ))}
+        </select>
+        {managerId !== "" && (
+          <>
+            {FUNNEL_STAGES.map((s) => (
+              <label key={s.stage} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8, fontSize: 13 }}>
+                {s.label}
+                <input
+                  type="number"
+                  value={values[s.stage] ?? ""}
+                  onChange={(e) => setValues((v) => ({ ...v, [s.stage]: e.target.value }))}
+                  style={{ width: 110 }}
+                />
+              </label>
+            ))}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+              <button onClick={onClose}>Скасувати</button>
+              <button className="btn-primary" onClick={save} disabled={saving}>{saving ? "Збереження…" : "Зберегти план"}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -63,6 +162,9 @@ export function ReportSection({
   setDateRange,
   datePreset,
   setDatePreset,
+  canEditPlan,
+  managerOptions,
+  onPlanSaved,
 }: {
   title: string;
   report: ReportData | null;
@@ -74,7 +176,11 @@ export function ReportSection({
   setDateRange: Dispatch<SetStateAction<DateRange>>;
   datePreset: string | null;
   setDatePreset: Dispatch<SetStateAction<string | null>>;
+  canEditPlan: boolean;
+  managerOptions: ManagerOption[];
+  onPlanSaved: () => void;
 }) {
+  const [planOpen, setPlanOpen] = useState(false);
   const s = report?.summary;
   const kpis = s
     ? [
@@ -127,9 +233,30 @@ export function ReportSection({
           {funnelReport && (
             <>
               <div className="chart-card">
-                <h2 className="chart-title">Воронка клієнтів (когорта створених угод, розріз по типу клієнта)</h2>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                  <h2 className="chart-title" style={{ marginBottom: 0 }}>Воронка клієнтів (когорта створених угод, розріз по типу клієнта)</h2>
+                  {canEditPlan && (
+                    <button
+                      onClick={() => setPlanOpen(true)}
+                      style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: "#c5141c", color: "#fff", fontWeight: 600, cursor: "pointer" }}
+                    >
+                      ✏️ План на місяць
+                    </button>
+                  )}
+                </div>
+                <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0 8px" }}>
+                  Робочих днів: {funnelReport.workingDays.elapsed} з {funnelReport.workingDays.total} (план на сьогодні пропорційний)
+                </p>
                 <FunnelTable stages={funnelReport.stages} />
               </div>
+              {planOpen && (
+                <PlanEditor
+                  managerOptions={managerOptions}
+                  month={funnelReport.month.slice(0, 7)}
+                  onClose={() => setPlanOpen(false)}
+                  onSaved={onPlanSaved}
+                />
+              )}
               {funnelReport.scope === "team" && funnelReport.byManager.length > 0 && (
                 <div className="chart-card">
                   <h2 className="chart-title">Воронка по менеджерах</h2>

@@ -211,7 +211,10 @@ export function Dashboard() {
     fetchFunnelReport({ from: dateRange.from || undefined, to: dateRange.to || undefined })
       .then(setFunnelReport)
       .catch(() => setFunnelReport(null));
-  }, [section, reportGranularity, dateRange, refreshNonce]);
+    if (auth?.role !== "manager") {
+      fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
+    }
+  }, [section, reportGranularity, dateRange, refreshNonce, auth]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -848,6 +851,9 @@ export function Dashboard() {
           setDateRange={setDateRange}
           datePreset={datePreset}
           setDatePreset={setDatePreset}
+          canEditPlan={auth?.role === "admin" || auth?.role === "team_lead"}
+          managerOptions={managerOptions}
+          onPlanSaved={() => setRefreshNonce((n) => n + 1)}
         />
       )}
 

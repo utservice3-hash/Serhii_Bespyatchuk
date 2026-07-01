@@ -1850,6 +1850,18 @@ const FUNNEL_LABELS: Record<string, string> = {
   invoiced: "Виставлено рахунок",
   paid: "Оплата отримана",
 };
+
+/** Working days (Mon–Fri) in [start, end] inclusive. */
+function workingDays(start: Date, end: Date): number {
+  let n = 0;
+  const d = new Date(start);
+  while (d <= end) {
+    const wd = d.getDay();
+    if (wd !== 0 && wd !== 6) n++;
+    d.setDate(d.getDate() + 1);
+  }
+  return n;
+}
 dashboardRouter.get("/funnel-report", async (req, res) => {
   const auth = req.auth!;
   const from = (req.query.from as string) ?? null;
@@ -1923,5 +1935,88 @@ dashboardRouter.get("/funnel-report", async (req, res) => {
         .filter((e) => e.stages[0].total > 0)
         .sort((a, b) => b.stages[FUNNEL_ORDER.length - 1].total - a.stages[FUNNEL_ORDER.length - 1].total);
 
-  res.json({ scope: managerId ? "manager" : "team", stages, byManager });
+  // Plan overlay: the month's plan per stage (funnel_plans), prorated to date by
+  // working days, so "план на сьогодні"/"відставання"/"темп" can be shown.
+  const planMonthDate = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
+  const planParams: unknown[] = [planMonthDate];
+  const planConds: string[] = ["fp.month = $1"];
+  if (managerId) { planParams.push(managerId); planConds.push(`fp.manager_id = $${planParams.length}`); }
+  if (teamId) { planParams.push(teamId); planConds.push(`m.team_id = $${planParams.length}`); }
+  const planRows = await pool.query<{ manager_id: number; stage: string; planned: string }>(
+    `SELECT fp.manager_id, fp.stage, fp.planned_value AS planned
+     FROM funnel_plans fp JOIN managers m ON m.id = fp.manager_id
+     WHERE ${planConds.join(" AND ")}`,
+    planParams
+  );
+  const mStart = new Date(planMonthDate + "T00:00:00");
+  const mEnd = new Date(mStart.getFullYear(), mStart.getMonth() + 1, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const toDate = to ? new Date(to + "T00:00:00") : today;
+  const elapsedEnd = toDate < today ? toDate : today;
+  const totalWd = workingDays(mStart, mEnd);
+  const elapsedWd = elapsedEnd >= mStart ? workingDays(mStart, elapsedEnd < mEnd ? elapsedEnd : mEnd) : 0;
+  const proratio = totalWd > 0 ? elapsedWd / totalWd : 0;
+
+  const overallPlan: Record<string, number> = {};
+  const mgrPlan = new Map<number, Record<string, number>>();
+  for (const r of planRows.rows) {
+    const p = Number(r.planned);
+    overallPlan[r.stage] = (overallPlan[r.stage] ?? 0) + p;
+    let mp = mgrPlan.get(r.manager_id);
+    if (!mp) { mp = {}; mgrPlan.set(r.manager_id, mp); }
+    mp[r.stage] = (mp[r.stage] ?? 0) + p;
+  }
+  const enrich = <T extends { stage: string }>(arr: T[], plan: Record<string, number>) =>
+    arr.map((s) => {
+      const pm = plan[s.stage] ?? 0;
+      return { ...s, planMonth: pm, planToDate: Math.round(pm * proratio) };
+    });
+
+  res.json({
+    scope: managerId ? "manager" : "team",
+    month: planMonthDate,
+    workingDays: { total: totalWd, elapsed: elapsedWd },
+    stages: enrich(stages, overallPlan),
+    byManager: byManager.map((m) => ({ ...m, stages: enrich(m.stages, mgrPlan.get(m.managerId) ?? {}) })),
+  });
+});
+
+/** Read a manager's monthly funnel plan (for the plan editor). */
+dashboardRouter.get("/funnel-plan", async (req, res) => {
+  const managerId = Number(req.query.managerId);
+  const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
+  if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
+  const r = await pool.query<{ stage: string; planned_value: string }>(
+    `SELECT stage, planned_value FROM funnel_plans WHERE manager_id = $1 AND month = $2`,
+    [managerId, month]
+  );
+  const plans: Record<string, number> = {};
+  for (const row of r.rows) plans[row.stage] = Number(row.planned_value);
+  res.json({ managerId, month, plans });
+});
+
+/** Set a manager's monthly funnel plan (team-lead / admin). */
+dashboardRouter.post("/funnel-plan", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
+    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  }
+  const managerId = Number(req.body?.managerId);
+  const monthRaw = String(req.body?.month ?? "").slice(0, 7);
+  const plans = req.body?.plans as Record<string, number> | undefined;
+  if (!managerId || !/^\d{4}-\d{2}$/.test(monthRaw) || !plans) {
+    return res.status(400).json({ error: "managerId, month (YYYY-MM) та plans обовʼязкові" });
+  }
+  const month = monthRaw + "-01";
+  for (const stage of FUNNEL_ORDER) {
+    const value = Number(plans[stage] ?? 0);
+    await pool.query(
+      `INSERT INTO funnel_plans (manager_id, month, stage, planned_value, updated_by, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (manager_id, month, stage) DO UPDATE SET
+         planned_value = EXCLUDED.planned_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [managerId, month, stage, value, auth.userId]
+    );
+  }
+  res.json({ ok: true });
 });

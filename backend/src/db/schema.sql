@@ -204,6 +204,18 @@ CREATE TABLE IF NOT EXISTS monthly_carryover (
   captured_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Monthly funnel plan per manager per stage (the "план на місяць" column of the
+-- managers' funnel report). Fact is computed from CRM; this is the manual target.
+CREATE TABLE IF NOT EXISTS funnel_plans (
+  manager_id INTEGER NOT NULL REFERENCES managers(id),
+  month DATE NOT NULL,        -- first day of the plan month
+  stage TEXT NOT NULL,        -- lead_taken | quote_requested | approved | invoiced | paid
+  planned_value NUMERIC NOT NULL DEFAULT 0,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (manager_id, month, stage)
+);
+
 -- Company / industry news shown to managers.
 CREATE TABLE IF NOT EXISTS news (
   id SERIAL PRIMARY KEY,

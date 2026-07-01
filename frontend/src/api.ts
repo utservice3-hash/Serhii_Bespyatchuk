@@ -472,9 +472,13 @@ export interface FunnelStageRow {
   regular: number;
   leadgen: number;
   total: number;
+  planMonth: number;
+  planToDate: number;
 }
 export interface FunnelReport {
   scope: "manager" | "team";
+  month: string;
+  workingDays: { total: number; elapsed: number };
   stages: FunnelStageRow[];
   byManager: { managerId: number; name: string; stages: FunnelStageRow[] }[];
 }
@@ -486,6 +490,14 @@ export async function fetchFunnelReport(params: {
 }): Promise<FunnelReport> {
   const { data } = await api.get<FunnelReport>("/dashboard/funnel-report", { params });
   return data;
+}
+
+export async function fetchFunnelPlan(managerId: number, month: string): Promise<{ plans: Record<string, number> }> {
+  const { data } = await api.get<{ plans: Record<string, number> }>("/dashboard/funnel-plan", { params: { managerId, month } });
+  return data;
+}
+export async function saveFunnelPlan(payload: { managerId: number; month: string; plans: Record<string, number> }): Promise<void> {
+  await api.post("/dashboard/funnel-plan", payload);
 }
 
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
