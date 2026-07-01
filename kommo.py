@@ -295,6 +295,34 @@ def update_lead_status(lead_id: int, status_id: int) -> bool:
         return False
 
 
+def move_lead_to(lead_id: int, pipeline_id: int, status_id: int, add_tag: str = "") -> bool:
+    """Переводить лід в іншу воронку (pipeline_id) на вказаний етап (status_id),
+    опційно додаючи тег БЕЗ видалення наявних. Одним PATCH-запитом."""
+    try:
+        lead = get_lead(lead_id) or {}
+        tags = [{"id": t["id"]} for t in (lead.get("_embedded", {}).get("tags") or []) if t.get("id")]
+        if add_tag and not any(
+            (t.get("name") or "").lower() == add_tag.lower()
+            for t in (lead.get("_embedded", {}).get("tags") or [])
+        ):
+            tags.append({"name": add_tag})
+        payload = {"pipeline_id": pipeline_id, "status_id": status_id}
+        if tags:
+            payload["_embedded"] = {"tags": tags}
+        resp = requests.patch(
+            f"{KOMMO_BASE}/api/v4/leads/{lead_id}",
+            headers=HEADERS,
+            json=payload,
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.error("move_lead_to(%s→%s/%s): %s %s", lead_id, pipeline_id, status_id, resp.status_code, resp.text)
+        return resp.ok
+    except Exception as e:
+        logger.error("move_lead_to(%s): %s", lead_id, e)
+        return False
+
+
 def get_note(lead_id: int, note_id: int) -> dict:
     """Повертає конкретну нотатку ліда (для точного зіставлення з вебхуком)."""
     try:

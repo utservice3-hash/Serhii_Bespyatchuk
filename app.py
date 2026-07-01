@@ -111,6 +111,11 @@ def _handle_elogist_message(text: str):
 PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
 CLOSED_NOT_REALIZED = 143        # ЗАКРИТО І НЕ РЕАЛІЗОВАНО
 WON_STATUS_ID = 142              # УСПІШНА УГОДА
+# Етап "Повернуто АІ Відділ якості (на допрацювання)" на початку воронки
+# Продаж повний цикл — сюди AI переводить угоди, закриті як "не цільові" чи
+# "закрито не реалізовано" передчасно, щоб тімлід далі вів їх у повному циклі.
+RETURNED_QC_STATUS = 108361876
+RETURNED_QC_TAG = "Повернуто АІ"
 
 # Telegram — гілка для звітів по плану
 TG_PLAN_THREAD_ID = 175862
@@ -1728,8 +1733,11 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
         # вважає закриття передчасним. Натомість вимагаємо посилання на активну
         # угоду в нотатках (нижче у verdict_block).
         if verdict == "ПЕРЕДЧАСНЕ" and not is_duplicate:
-            kommo.update_lead_status(lead_id, TAKEN_TO_WORK)
-            returned = True
+            # Переводимо у воронку "Продаж повний цикл" на етап
+            # "Повернуто АІ Відділ якості" + тег, щоб тімлід вів далі повний цикл.
+            returned = kommo.move_lead_to(
+                lead_id, PEREVOZY_PIPELINE_ID, RETURNED_QC_STATUS, RETURNED_QC_TAG
+            )
 
     verdict_block = ""
     if verdict == "ПЕРЕДЧАСНЕ" and is_duplicate:
@@ -1754,7 +1762,8 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
         )
         if team in RNK_TEAMS:
             verdict_block += (
-                f"🛠 <b>Угода йде на допрацювання</b> — повернуто менеджеру в роботу.\n"
+                f"🛠 <b>Угода йде на допрацювання</b> — переведено у воронку "
+                f"«Продаж повний цикл», етап «Повернуто АІ Відділ якості».\n"
                 f"👁 Тімлід на контроль:{sup_part or ' —'}\n"
             )
     elif verdict == "ОБ'ЄКТИВНЕ":
@@ -1813,7 +1822,9 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     if not result.get("is_target"):
         return
 
-    kommo.update_lead_status(lead_id, TAKEN_TO_WORK)
+    # Переводимо у воронку "Продаж повний цикл" на етап "Повернуто АІ Відділ
+    # якості" + тег, щоб тімлід міг вести угоду далі в повному циклі.
+    kommo.move_lead_to(lead_id, PEREVOZY_PIPELINE_ID, RETURNED_QC_STATUS, RETURNED_QC_TAG)
 
     _nontarget_returns[responsible_id] = _nontarget_returns.get(responsible_id, 0) + 1
     return_count = _nontarget_returns[responsible_id]
@@ -1834,6 +1845,7 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
         f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
         f"🏷 Назва: {lead_name}\n"
         f"📋 АІ-аналіз (правила продажу не дотримані — лід стосувався перевезення): {result.get('reason', '')}{warning_line}\n"
+        f"🛠 Переведено у воронку «Продаж повний цикл», етап «Повернуто АІ Відділ якості».\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
     notifier.send_to_nontarget(msg, team)
