@@ -429,6 +429,37 @@ export interface TeamRanking {
   receivables: number;
 }
 
+export interface ReportData {
+  granularity: "day" | "week" | "month";
+  scope: "manager" | "team";
+  summary: {
+    successRevenue: number;
+    successDeals: number;
+    paymentRevenue: number;
+    paymentDeals: number;
+    revenue: number;
+    deals: number;
+    avgCheck: number;
+    createdDeals: number;
+    newClients: number;
+    repeatClients: number;
+    receivables: number;
+  };
+  byPeriod: { period: string; revenue: number; deals: number; created: number; avgCheck: number }[];
+  byManager: { managerId: number; name: string; revenue: number; deals: number; avgCheck: number; receivables: number }[];
+}
+
+export async function fetchReport(params: {
+  granularity: "day" | "week" | "month";
+  from?: string;
+  to?: string;
+  managerId?: number;
+  teamId?: number;
+}): Promise<ReportData> {
+  const { data } = await api.get<ReportData>("/dashboard/report", { params });
+  return data;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;

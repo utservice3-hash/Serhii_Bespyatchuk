@@ -26,6 +26,8 @@ import {
   fetchSyncStatus,
   triggerSync,
   type SyncStatus,
+  fetchReport,
+  type ReportData,
   fetchChatUsers,
   fetchConversation,
   sendMessage,
@@ -81,6 +83,7 @@ import { ManagersSection } from "./dashboard/sections/ManagersSection";
 import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
 import { ReceivablesSection } from "./dashboard/sections/ReceivablesSection";
 import { TasksSection } from "./dashboard/sections/TasksSection";
+import { ReportSection } from "./dashboard/sections/ReportSection";
 
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
@@ -133,6 +136,9 @@ export function Dashboard() {
   const [loyaltyDynamics, setLoyaltyDynamics] = useState<LoyaltyDynamics | null>(null);
 
   const [teamsRanking, setTeamsRanking] = useState<TeamRanking[]>([]);
+  const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportGranularity, setReportGranularity] = useState<"day" | "week" | "month">("week");
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
@@ -190,6 +196,15 @@ export function Dashboard() {
       .then(setTeamsRanking)
       .catch(() => setTeamsRanking([]));
   }, [section, dateRange, refreshNonce]);
+
+  useEffect(() => {
+    if (section !== "report") return;
+    setReportLoading(true);
+    fetchReport({ granularity: reportGranularity, from: dateRange.from || undefined, to: dateRange.to || undefined })
+      .then(setReportData)
+      .catch(() => setReportData(null))
+      .finally(() => setReportLoading(false));
+  }, [section, reportGranularity, dateRange, refreshNonce]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -811,6 +826,20 @@ export function Dashboard() {
           syncing={syncing}
           canSync={auth?.role === "admin" || auth?.role === "team_lead"}
           onManualSync={handleManualSync}
+        />
+      )}
+
+      {section === "report" && (
+        <ReportSection
+          title={auth?.role === "manager" ? "Мій звіт" : auth?.role === "team_lead" ? "Звіт тімліда" : "Звіт"}
+          report={reportData}
+          loading={reportLoading}
+          granularity={reportGranularity}
+          setGranularity={setReportGranularity}
+          dateRange={dateRange}
+          setDateRange={setDateRange}
+          datePreset={datePreset}
+          setDatePreset={setDatePreset}
         />
       )}
 
