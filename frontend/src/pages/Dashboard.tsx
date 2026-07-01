@@ -23,6 +23,7 @@ import {
   fetchSettings,
   saveSettings,
   fetchSyncStatus,
+  triggerSync,
   type SyncStatus,
   fetchChatUsers,
   fetchConversation,
@@ -157,6 +158,7 @@ export function Dashboard() {
   const [leadgenLoading, setLeadgenLoading] = useState(false);
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [settingsForm, setSettingsForm] = useState<AppSettings | null>(null);
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -499,6 +501,30 @@ export function Dashboard() {
   async function handleToggleActive(u: DashboardUser) {
     await updateUser(u.id, { isActive: !u.is_active });
     await reloadUsers();
+  }
+
+  async function handleManualSync() {
+    setSyncing(true);
+    try {
+      await triggerSync();
+    } catch {
+      setSyncing(false);
+      return;
+    }
+    // Poll sync status until it reports fresh data, then refetch all metrics.
+    const startedAt = Date.now();
+    const poll = async () => {
+      const st = await fetchSyncStatus().catch(() => null);
+      if (st) setSyncStatus(st);
+      const fresh = st != null && st.ageMinutes != null && st.ageMinutes < 2;
+      if (fresh || Date.now() - startedAt > 300000) {
+        setRefreshNonce((n) => n + 1);
+        setSyncing(false);
+        return;
+      }
+      setTimeout(poll, 5000);
+    };
+    setTimeout(poll, 5000);
   }
 
   async function handleSaveSettings() {
@@ -1079,9 +1105,28 @@ export function Dashboard() {
                 <h2 className="chart-title" style={{ marginBottom: 0 }}>
                   Синхронізація з CRM
                 </h2>
-                <span style={{ fontWeight: 600, color: syncStatus.stale ? "#dc2626" : "#16a34a" }}>
-                  {syncStatus.stale ? "⚠️ Дані застаріли" : "🟢 Актуально"}
-                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{ fontWeight: 600, color: syncStatus.stale ? "#dc2626" : "#16a34a" }}>
+                    {syncStatus.stale ? "⚠️ Дані застаріли" : "🟢 Актуально"}
+                  </span>
+                  {(auth?.role === "admin" || auth?.role === "team_lead") && (
+                    <button
+                      onClick={handleManualSync}
+                      disabled={syncing}
+                      style={{
+                        padding: "6px 14px",
+                        borderRadius: 8,
+                        border: "none",
+                        background: syncing ? "#94a3b8" : "#c5141c",
+                        color: "#fff",
+                        fontWeight: 600,
+                        cursor: syncing ? "default" : "pointer",
+                      }}
+                    >
+                      {syncing ? "Синхронізація…" : "🔄 Синхронізувати зараз"}
+                    </button>
+                  )}
+                </div>
               </div>
               <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "8px 0 0" }}>
                 Останнє оновлення:{" "}

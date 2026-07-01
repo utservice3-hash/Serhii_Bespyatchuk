@@ -2,6 +2,8 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { getSettings } from "./settings.js";
+import { syncKommo } from "../jobs/syncKommo.js";
+import { syncStageEvents } from "../jobs/syncStageEvents.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -1530,4 +1532,18 @@ dashboardRouter.get("/sync-status", async (_req, res) => {
     consecutiveFailures: row?.consecutive_failures ?? 0,
     lastError: row?.last_error ?? null,
   });
+});
+
+// Manual "Синхронізувати зараз": kick a fresh Kommo pull + stage-events pull on
+// demand (a safety net over the automatic cron). Fire-and-forget — the jobs'
+// own in-process guards prevent overlap; the UI polls /sync-status for progress.
+dashboardRouter.post("/sync", (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
+    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  }
+  void syncKommo()
+    .then(() => syncStageEvents())
+    .catch((err) => console.error("Manual sync failed:", err));
+  res.json({ started: true });
 });

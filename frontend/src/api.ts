@@ -319,6 +319,11 @@ export async function fetchSyncStatus(): Promise<SyncStatus> {
   return data;
 }
 
+export async function triggerSync(): Promise<{ started: boolean }> {
+  const { data } = await api.post<{ started: boolean }>("/dashboard/sync");
+  return data;
+}
+
 export interface DashboardUser {
   id: number;
   email: string;
