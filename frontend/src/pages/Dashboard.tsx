@@ -447,11 +447,16 @@ export function Dashboard() {
   useEffect(() => {
     if (section !== "settings") return;
     fetchSettings().then(setSettingsForm).catch(() => setSettingsForm(null));
-    fetchSyncStatus().then(setSyncStatus).catch(() => setSyncStatus(null));
     if (auth?.role === "admin") {
       fetchDashboardUsers().then(setUsers).catch(() => setUsers([]));
     }
   }, [section, auth, refreshNonce]);
+
+  // Sync status drives both the Overview quick-sync control and the Settings card.
+  useEffect(() => {
+    if (section !== "overview" && section !== "settings") return;
+    fetchSyncStatus().then(setSyncStatus).catch(() => setSyncStatus(null));
+  }, [section, refreshNonce]);
 
   async function reloadUsers() {
     try {
@@ -792,6 +797,10 @@ export function Dashboard() {
           conversionChannels={conversionChannels}
           loading={loading}
           chartData={chartData}
+          syncStatus={syncStatus}
+          syncing={syncing}
+          canSync={auth?.role === "admin" || auth?.role === "team_lead"}
+          onManualSync={handleManualSync}
         />
       )}
 

@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
-import type { ConversionChannel, ExecutiveOverview, FunnelStage, Team } from "../../../api";
+import type { ConversionChannel, ExecutiveOverview, FunnelStage, SyncStatus, Team } from "../../../api";
 import { formatAmount, previousRange } from "../format";
 import { ProgressGauge, HoverInfoCard } from "../widgets";
 
@@ -43,6 +43,10 @@ export function OverviewSection({
   conversionChannels,
   loading,
   chartData,
+  syncStatus,
+  syncing,
+  canSync,
+  onManualSync,
 }: {
   teamId: number | "";
   setTeamId: Dispatch<SetStateAction<number | "">>;
@@ -62,12 +66,55 @@ export function OverviewSection({
   conversionChannels: ConversionChannel[];
   loading: boolean;
   chartData: { name: string; count: number; amount: number }[];
+  syncStatus: SyncStatus | null;
+  syncing: boolean;
+  canSync: boolean;
+  onManualSync: () => void;
 }) {
   return (
     <>
       <div className="page-header">
         <h1 className="page-title">Огляд продажів</h1>
         <div className="page-filters">
+          {syncStatus && (
+            <span
+              title={
+                syncStatus.lastSuccessAt
+                  ? `Оновлено: ${new Date(syncStatus.lastSuccessAt).toLocaleString("uk-UA")}`
+                  : "Ще не синхронізовано"
+              }
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12,
+                color: syncStatus.stale ? "#dc2626" : "#16a34a",
+                fontWeight: 600,
+              }}
+            >
+              {syncStatus.stale ? "⚠️" : "🟢"}
+              {syncStatus.ageMinutes != null ? `${syncStatus.ageMinutes} хв тому` : "—"}
+            </span>
+          )}
+          {canSync && (
+            <button
+              onClick={onManualSync}
+              disabled={syncing}
+              title="Підтягнути свіжі дані з CRM"
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: "none",
+                background: syncing ? "#94a3b8" : "#c5141c",
+                color: "#fff",
+                fontWeight: 600,
+                cursor: syncing ? "default" : "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {syncing ? "Синхронізація…" : "🔄 Синхронізувати"}
+            </button>
+          )}
           <select
             value={teamId}
             onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
