@@ -2503,6 +2503,19 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/test-first-touch-threads", methods=["GET"])
+def test_first_touch_threads():
+    """Надсилає тестове повідомлення в гілки першого дотику обох команд —
+    перевірка, що гілки 7689/14232 валідні й бот може писати."""
+    res = {}
+    for team in ("Михальчевська", "Безпам'ятний"):
+        res[team] = notifier.send_to_first_touch(
+            f"🧪 Тест: гілка першого дотику активна ({team}). Сюди приходитимуть "
+            f"результати першого дотику по рекламі.", team
+        )
+    return jsonify({"ok": True, "sent": res})
+
+
 @app.route("/debug-first-touch", methods=["GET"])
 def debug_first_touch():
     """Діагностика першого дотику по ліду — показує, чому спрацювало/ні, БЕЗ
