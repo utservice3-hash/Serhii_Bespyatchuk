@@ -1669,7 +1669,12 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
     sup_part = f" {supervisor_tag}" if supervisor_tag else ""
     days = f"{details['days_in_work']} дн." if details["days_in_work"] is not None else "—"
     reason = details["reject_reason"] or "не вказана"
-    is_duplicate = "дубл" in (details["reject_reason"] or "").lower()
+    reason_lower = (details["reject_reason"] or "").lower()
+    is_duplicate = "дубл" in reason_lower
+    is_test = "тест" in reason_lower
+    # Дубль і Тест — легітимні закриття: угоду НЕ повертаємо в роботу навіть
+    # при передчасному AI-вердикті.
+    no_return = is_duplicate or is_test
     last_status = details["last_status"] or "—"
     notes = details["notes_count"]
     calls = details["calls_count"]
@@ -1734,10 +1739,10 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
         }
         sheets.log_closed_deal(deal_data)
 
-        # Дубль — легітимне закриття: НЕ повертаємо в роботу, навіть якщо AI
-        # вважає закриття передчасним. Натомість вимагаємо посилання на активну
-        # угоду в нотатках (нижче у verdict_block).
-        if verdict == "ПЕРЕДЧАСНЕ" and not is_duplicate:
+        # Дубль/Тест — легітимне закриття: НЕ повертаємо в роботу, навіть якщо
+        # AI вважає закриття передчасним. Для дубля натомість вимагаємо
+        # посилання на активну угоду в нотатках (нижче у verdict_block).
+        if verdict == "ПЕРЕДЧАСНЕ" and not no_return:
             # Переводимо у воронку "Продаж повний цикл" на етап
             # "Повернуто АІ Відділ якості" + тег, щоб тімлід вів далі повний цикл.
             returned = kommo.move_lead_to(
@@ -1772,6 +1777,10 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
             f"\n🔁 <b>Дубль — угоду не повертаємо в роботу</b>\n"
             f"{ref_line}"
             f"👁 Тімлід на контроль:{sup_part or ' —'}\n"
+        )
+    elif verdict == "ПЕРЕДЧАСНЕ" and is_test:
+        verdict_block = (
+            f"\n🧪 <b>Тест — угоду не повертаємо в роботу</b>\n"
         )
     elif verdict == "ПЕРЕДЧАСНЕ":
         verdict_block = (
