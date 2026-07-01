@@ -2539,7 +2539,7 @@ def debug_first_touch():
             "first_qualifying_call": bool(first),
             "already_done": lead_id in _first_touch_done,
         }
-        if first and has_utm and team in FIRST_TOUCH_TEAMS:
+        if first and has_utm and team in FIRST_TOUCH_TEAMS and request.args.get("transcribe"):
             params = first.get("params") or {}
             url = params.get("link", "") or params.get("LINK", "")
             transcript = transcriber.transcribe_call(url) if url else ""
