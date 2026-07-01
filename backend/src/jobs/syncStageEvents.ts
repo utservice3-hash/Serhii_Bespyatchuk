@@ -80,6 +80,19 @@ export async function syncStageEvents(opts: { sinceUnix?: number; untilUnix?: nu
   }
 }
 
+/**
+ * Retention: drop stage events older than `retentionMonths` so the table can't
+ * grow unbounded (~20k rows/month). Recent history is all the period metrics
+ * ever need; old rows are only weight.
+ */
+export async function cleanupOldStageEvents(retentionMonths = 24): Promise<void> {
+  const r = await pool.query(
+    `DELETE FROM deal_stage_events WHERE changed_at < now() - make_interval(months => $1)`,
+    [retentionMonths]
+  );
+  console.log(`Stage events cleanup: removed ${r.rowCount ?? 0} rows older than ${retentionMonths} months.`);
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   // CLI: `node dist/jobs/syncStageEvents.js --months=6` backfills N months.
   const monthsArg = process.argv.find((a) => a.startsWith("--months="));

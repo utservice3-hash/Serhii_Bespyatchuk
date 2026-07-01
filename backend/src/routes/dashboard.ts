@@ -42,11 +42,11 @@ dashboardRouter.get("/funnel", async (req, res) => {
   }
   if (from) {
     params.push(from);
-    conditions.push(`d.created_at_kommo >= $${params.length}`);
+    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`);
   }
   if (to) {
     params.push(to);
-    conditions.push(`d.created_at_kommo <= $${params.length}`);
+    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -99,11 +99,11 @@ dashboardRouter.get("/leadgen", async (req, res) => {
   }
   if (from) {
     params.push(from);
-    conditions.push(`d.created_at_kommo >= $${params.length}`);
+    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`);
   }
   if (to) {
     params.push(to);
-    conditions.push(`d.created_at_kommo <= $${params.length}`);
+    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`);
   }
   const where = `WHERE ${conditions.join(" AND ")}`;
 
@@ -226,11 +226,11 @@ dashboardRouter.get("/overview", async (req, res) => {
   }
   if (from) {
     params.push(from);
-    paidConds.push(`d.created_at_kommo >= $${params.length}`);
+    paidConds.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`);
   }
   if (to) {
     params.push(to);
-    paidConds.push(`d.created_at_kommo <= $${params.length}`);
+    paidConds.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`);
   }
   const paidWhere = `WHERE ${paidConds.join(" AND ")}`;
 
@@ -248,11 +248,11 @@ dashboardRouter.get("/overview", async (req, res) => {
   }
   if (from) {
     closedParams.push(from);
-    closedConds.push(`d.closed_at_kommo >= $${closedParams.length}`);
+    closedConds.push(`(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${closedParams.length}`);
   }
   if (to) {
     closedParams.push(to);
-    closedConds.push(`d.closed_at_kommo <= $${closedParams.length}`);
+    closedConds.push(`(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${closedParams.length}`);
   }
   const closedWhere = `WHERE ${closedConds.join(" AND ")}`;
 
@@ -508,8 +508,8 @@ dashboardRouter.get("/overview", async (req, res) => {
   const cfParams: unknown[] = [FULL_CYCLE_PIPELINES];
   if (managerId) { cfParams.push(managerId); cfScope.push(`d.manager_id = $${cfParams.length}`); }
   if (teamId) { cfParams.push(teamId); cfScope.push(`m.team_id = $${cfParams.length}`); }
-  if (from) { cfParams.push(from); cfScope.push(`d.created_at_kommo >= $${cfParams.length}`); }
-  if (to) { cfParams.push(to); cfScope.push(`d.created_at_kommo <= $${cfParams.length}`); }
+  if (from) { cfParams.push(from); cfScope.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${cfParams.length}`); }
+  if (to) { cfParams.push(to); cfScope.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${cfParams.length}`); }
   const createdFullRes = await pool.query<{ c: string }>(
     `SELECT COUNT(*) AS c FROM deals d JOIN managers m ON m.id = d.manager_id
      WHERE ${cfScope.join(" AND ")}`,
@@ -663,11 +663,11 @@ dashboardRouter.get("/conversion", async (req, res) => {
   }
   if (from) {
     params.push(from);
-    conditions.push(`d.created_at_kommo >= $${params.length}`);
+    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`);
   }
   if (to) {
     params.push(to);
-    conditions.push(`d.created_at_kommo <= $${params.length}`);
+    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -755,11 +755,11 @@ dashboardRouter.get("/timeseries", async (req, res) => {
   }
   if (from) {
     params.push(from);
-    conditions.push(`d.created_at_kommo >= $${params.length}`);
+    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`);
   }
   if (to) {
     params.push(to);
-    conditions.push(`d.created_at_kommo <= $${params.length}`);
+    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1426,8 +1426,8 @@ dashboardRouter.get("/teams", async (req, res) => {
 
   const sucCond = ["psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL"];
   const sp: unknown[] = [];
-  if (from) { sp.push(from); sucCond.push(`d.closed_at_kommo >= $${sp.length}`); }
-  if (to) { sp.push(to); sucCond.push(`d.closed_at_kommo <= $${sp.length}`); }
+  if (from) { sp.push(from); sucCond.push(`(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${sp.length}`); }
+  if (to) { sp.push(to); sucCond.push(`(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${sp.length}`); }
   const success = await pool.query<{ tid: number; tname: string; rev: string; deals: string }>(
     `SELECT t.id AS tid, t.name AS tname, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
      FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
@@ -1442,8 +1442,8 @@ dashboardRouter.get("/teams", async (req, res) => {
   );
   const lc: string[] = [];
   const lp: unknown[] = [];
-  if (from) { lp.push(from); lc.push(`d.created_at_kommo >= $${lp.length}`); }
-  if (to) { lp.push(to); lc.push(`d.created_at_kommo <= $${lp.length}`); }
+  if (from) { lp.push(from); lc.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${lp.length}`); }
+  if (to) { lp.push(to); lc.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${lp.length}`); }
   const conv = await pool.query<{ tid: number; leads: string; paid: string }>(
     `SELECT t.id AS tid, COUNT(*) AS leads, COUNT(*) FILTER (WHERE psm.funnel_stage='paid') AS paid
      FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id

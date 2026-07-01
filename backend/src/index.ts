@@ -12,7 +12,7 @@ import { messagesRouter } from "./routes/messages.js";
 import { newsRouter } from "./routes/news.js";
 import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
 import { syncKommo } from "./jobs/syncKommo.js";
-import { syncStageEvents } from "./jobs/syncStageEvents.js";
+import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
@@ -89,6 +89,11 @@ cron.schedule("*/10 * * * *", () => {
   syncStageEvents().catch((err) => console.error("Stage events sync failed:", err));
 });
 syncStageEvents().catch((err) => console.error("Stage events startup sync failed:", err));
+
+// Prune stage events older than 24 months daily at 04:30 (bounded storage).
+cron.schedule("30 4 * * *", () => {
+  cleanupOldStageEvents(24).catch((err) => console.error("Stage events cleanup failed:", err));
+});
 
 // Refresh receivables from the accounting Google Sheet every 30 minutes.
 cron.schedule("*/30 * * * *", () => {
