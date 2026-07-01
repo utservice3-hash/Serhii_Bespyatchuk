@@ -181,6 +181,16 @@ CREATE TABLE IF NOT EXISTS receivable_notes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Monthly snapshot of "carried-over" deals: the value of deals still in
+-- progress (approved→invoiced→payment received, NOT yet closed as Успішна) as
+-- of the 1st of the month. Captured once per month (fixed figure).
+CREATE TABLE IF NOT EXISTS monthly_carryover (
+  month DATE PRIMARY KEY,
+  amount NUMERIC NOT NULL DEFAULT 0,
+  deals INTEGER NOT NULL DEFAULT 0,
+  captured_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Company / industry news shown to managers.
 CREATE TABLE IF NOT EXISTS news (
   id SERIAL PRIMARY KEY,

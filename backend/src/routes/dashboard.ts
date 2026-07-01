@@ -516,6 +516,16 @@ dashboardRouter.get("/overview", async (req, res) => {
     cfParams
   );
 
+  // Carried-over deals: the fixed start-of-month snapshot for the viewed month.
+  const carryMonth = (from ? from.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
+  const carryoverRes = await pool.query<{ amount: string; deals: string }>(
+    `SELECT amount, deals FROM monthly_carryover WHERE month = $1`,
+    [carryMonth]
+  );
+  const carryover = carryoverRes.rows[0]
+    ? { amount: Number(carryoverRes.rows[0].amount), deals: Number(carryoverRes.rows[0].deals) }
+    : null;
+
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
 
@@ -608,6 +618,7 @@ dashboardRouter.get("/overview", async (req, res) => {
       })),
     },
     createdFullCycle: Number(createdFullRes.rows[0]?.c ?? 0),
+    carryover,
     adConversion: channelConv("ad"),
     leadgenConversion: channelConv("leadgen"),
     monthlyHistory,

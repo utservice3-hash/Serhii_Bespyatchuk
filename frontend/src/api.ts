@@ -142,6 +142,7 @@ export interface ExecutiveOverview {
     byTeam: { teamId: number; teamName: string; deals: number; revenue: number }[];
   };
   createdFullCycle: number;
+  carryover: { amount: number; deals: number } | null;
   adConversion: { leads: number; paid: number; conversion: number };
   leadgenConversion: { leads: number; paid: number; conversion: number };
   monthlyHistory: {

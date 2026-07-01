@@ -13,6 +13,7 @@ import { newsRouter } from "./routes/news.js";
 import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
+import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
@@ -94,6 +95,13 @@ syncStageEvents().catch((err) => console.error("Stage events startup sync failed
 cron.schedule("30 4 * * *", () => {
   cleanupOldStageEvents(24).catch((err) => console.error("Stage events cleanup failed:", err));
 });
+
+// Snapshot carried-over (in-progress) deal value at the start of each month +
+// on startup (seeds the current month if it hasn't been captured yet).
+cron.schedule("0 0 1 * *", () => {
+  snapshotCarryover().catch((err) => console.error("Carryover snapshot failed:", err));
+});
+snapshotCarryover().catch((err) => console.error("Carryover startup snapshot failed:", err));
 
 // Refresh receivables from the accounting Google Sheet every 30 minutes.
 cron.schedule("*/30 * * * *", () => {

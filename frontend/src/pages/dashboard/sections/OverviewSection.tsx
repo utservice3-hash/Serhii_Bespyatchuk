@@ -238,6 +238,17 @@ export function OverviewSection({
               <span className="kpi-label">Створені угоди (Повний цикл)</span>
               <span className="kpi-value">{overview.createdFullCycle.toLocaleString("uk-UA")}</span>
             </div>
+            <div className="kpi-card" title="Угоди ще в роботі (погоджені → рахунок → оплата отримана, крім Успішна) — знімок на початок місяця, фіксується один раз">
+              <span className="kpi-label">Сума перенесених угод з минулого місяця</span>
+              <span className="kpi-value">
+                {overview.carryover ? formatAmount(overview.carryover.amount) : "—"}
+              </span>
+              {overview.carryover && (
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  {overview.carryover.deals.toLocaleString("uk-UA")} угод
+                </span>
+              )}
+            </div>
             <div className="kpi-card">
               <span className="kpi-label">Виручка від нових клієнтів</span>
               <span className="kpi-value">{formatAmount(overview.newRevenue)}</span>
