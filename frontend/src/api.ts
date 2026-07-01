@@ -465,6 +465,29 @@ export async function fetchReport(params: {
   return data;
 }
 
+export interface FunnelStageRow {
+  stage: string;
+  label: string;
+  new: number;
+  regular: number;
+  leadgen: number;
+  total: number;
+}
+export interface FunnelReport {
+  scope: "manager" | "team";
+  stages: FunnelStageRow[];
+  byManager: { managerId: number; name: string; stages: FunnelStageRow[] }[];
+}
+export async function fetchFunnelReport(params: {
+  from?: string;
+  to?: string;
+  managerId?: number;
+  teamId?: number;
+}): Promise<FunnelReport> {
+  const { data } = await api.get<FunnelReport>("/dashboard/funnel-report", { params });
+  return data;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;

@@ -1833,3 +1833,95 @@ dashboardRouter.get("/report", async (req, res) => {
 
   res.json({ granularity, scope: managerId ? "manager" : "team", summary, byPeriod, byManager });
 });
+
+/**
+ * Client-funnel report (auto version of the managers' manual "воронка клієнтів"
+ * sheet). For deals created in the period (full-cycle pipeline), counts how many
+ * reached each stage — Взято в роботу → Запит на прорахунок → Погоджено →
+ * Рахунок → Оплата — split by client type (Нові / Постійні / Від лідогенератора),
+ * per manager and summed for the team. Cumulative by creation cohort: a deal
+ * counts toward every stage up to and including the deepest it has reached.
+ */
+const FUNNEL_ORDER = ["lead_taken", "quote_requested", "approved", "invoiced", "paid"];
+const FUNNEL_LABELS: Record<string, string> = {
+  lead_taken: "Взято в роботу лідів",
+  quote_requested: "Отримано заявку на прорахунок",
+  approved: "Договір/заявку погоджено",
+  invoiced: "Виставлено рахунок",
+  paid: "Оплата отримана",
+};
+dashboardRouter.get("/funnel-report", async (req, res) => {
+  const auth = req.auth!;
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+  let managerId: number | null = null;
+  let teamId: number | null = null;
+  if (auth.role === "manager") managerId = auth.managerId;
+  else if (auth.role === "team_lead") teamId = auth.teamId;
+  else {
+    managerId = req.query.managerId ? Number(req.query.managerId) : null;
+    teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  }
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+
+  const params: unknown[] = [[8921932, 155304]];
+  const conds = ["d.pipeline_id = ANY($1)"];
+  if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (from) { params.push(from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (to) { params.push(to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+
+  const rows = await pool.query<{ manager_id: number; name: string; stage: string; bucket: string; c: string }>(
+    `WITH firsts AS (
+       SELECT d.client_key, COUNT(*) AS cnt
+       FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL GROUP BY d.client_key
+     )
+     SELECT m.id AS manager_id, m.name,
+            psm.funnel_stage AS stage,
+            CASE WHEN d.lead_channel = 'leadgen' THEN 'leadgen'
+                 WHEN COALESCE(f.cnt, 0) >= 2 THEN 'regular' ELSE 'new' END AS bucket,
+            COUNT(*) AS c
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     LEFT JOIN firsts f ON f.client_key = d.client_key
+     WHERE ${conds.join(" AND ")}
+     GROUP BY m.id, m.name, psm.funnel_stage, bucket`,
+    params
+  );
+
+  type Buckets = { new: number; regular: number; leadgen: number; total: number };
+  const emptyStage = (): Buckets => ({ new: 0, regular: 0, leadgen: 0, total: 0 });
+  const buildStages = (raw: { stage: string; bucket: string; c: number }[]) => {
+    const reached = FUNNEL_ORDER.map(() => emptyStage());
+    for (const r of raw) {
+      const idx = FUNNEL_ORDER.indexOf(r.stage);
+      if (idx < 0) continue;
+      const b = r.bucket as "new" | "regular" | "leadgen";
+      for (let i = 0; i <= idx; i++) {
+        reached[i][b] += r.c;
+        reached[i].total += r.c;
+      }
+    }
+    return FUNNEL_ORDER.map((stage, i) => ({ stage, label: FUNNEL_LABELS[stage], ...reached[i] }));
+  };
+
+  const allRaw = rows.rows.map((r) => ({ stage: r.stage, bucket: r.bucket, c: Number(r.c) }));
+  const stages = buildStages(allRaw);
+
+  const byMgrMap = new Map<number, { managerId: number; name: string; raw: { stage: string; bucket: string; c: number }[] }>();
+  for (const r of rows.rows) {
+    let e = byMgrMap.get(r.manager_id);
+    if (!e) { e = { managerId: r.manager_id, name: r.name, raw: [] }; byMgrMap.set(r.manager_id, e); }
+    e.raw.push({ stage: r.stage, bucket: r.bucket, c: Number(r.c) });
+  }
+  const byManager = managerId
+    ? []
+    : [...byMgrMap.values()]
+        .map((e) => ({ managerId: e.managerId, name: e.name, stages: buildStages(e.raw) }))
+        .filter((e) => e.stages[0].total > 0)
+        .sort((a, b) => b.stages[FUNNEL_ORDER.length - 1].total - a.stages[FUNNEL_ORDER.length - 1].total);
+
+  res.json({ scope: managerId ? "manager" : "team", stages, byManager });
+});
