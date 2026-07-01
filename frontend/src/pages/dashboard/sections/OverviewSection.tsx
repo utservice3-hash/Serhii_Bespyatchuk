@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -72,6 +72,7 @@ export function OverviewSection({
   canSync: boolean;
   onManualSync: () => void;
 }) {
+  const [showTransferred, setShowTransferred] = useState(false);
   return (
     <>
       <div className="page-header">
@@ -358,6 +359,20 @@ export function OverviewSection({
                 </span>
               )}
             </div>
+            <button
+              className="kpi-card"
+              onClick={() => setShowTransferred(true)}
+              title="Заявки, передані лідогеном менеджеру (взяв у роботу), і скільки з них успішно реалізовано. Натисніть для деталей по командах."
+              style={{ textAlign: "left", border: "none", cursor: "pointer", background: "var(--card-bg)" }}
+            >
+              <span className="kpi-label">Передані заявки → Успішно</span>
+              <span className="kpi-value">
+                {overview.transferred.total.toLocaleString("uk-UA")} → {overview.transferred.success.toLocaleString("uk-UA")}
+              </span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                різниця {(overview.transferred.total - overview.transferred.success).toLocaleString("uk-UA")}
+              </span>
+            </button>
             <div className="kpi-card">
               <span className="kpi-label">Виручка від нових клієнтів</span>
               <span className="kpi-value">{formatAmount(overview.newRevenue)}</span>
@@ -483,6 +498,42 @@ export function OverviewSection({
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {showTransferred && overview && (
+        <div onClick={() => setShowTransferred(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 24 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 24, width: "90vw", maxWidth: 680, maxHeight: "85vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <h2 className="chart-title">Передані заявки → Успішно реалізовано</h2>
+              <button onClick={() => setShowTransferred(false)} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
+            </div>
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
+              «Передано» = лідоген передав заявку, і менеджер взяв її в роботу (зміна відповідального в «Кваліфікація»). «Успішно» = закриті як «Успішна угода» за період.
+            </p>
+            <div className="kpi-grid" style={{ marginBottom: 12 }}>
+              <div className="kpi-card"><span className="kpi-label">Передано заявок</span><span className="kpi-value">{overview.transferred.total.toLocaleString("uk-UA")}</span></div>
+              <div className="kpi-card"><span className="kpi-label">Успішно реалізовано</span><span className="kpi-value">{overview.transferred.success.toLocaleString("uk-UA")}</span></div>
+              <div className="kpi-card"><span className="kpi-label">Різниця (не закрито)</span><span className="kpi-value">{(overview.transferred.total - overview.transferred.success).toLocaleString("uk-UA")}</span></div>
+            </div>
+            {overview.transferred.byTeam.length === 0 ? (
+              <p className="loading-text">Немає даних за період.</p>
+            ) : (
+              <table className="data-table">
+                <thead><tr><th>Команда</th><th>Передано</th><th>Успішно</th><th>Сума успішних</th></tr></thead>
+                <tbody>
+                  {overview.transferred.byTeam.map((t) => (
+                    <tr key={t.teamId}>
+                      <td>{t.teamName}</td>
+                      <td>{t.transferred}</td>
+                      <td>{t.success}</td>
+                      <td>{formatAmount(t.successRevenue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

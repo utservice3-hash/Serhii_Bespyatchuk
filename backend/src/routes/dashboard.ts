@@ -595,6 +595,37 @@ dashboardRouter.get("/overview", async (req, res) => {
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
 
+  // Передані заявки: lead-gen qualification leads taken by a sales manager
+  // (entity_responsible_changed on a Кваліфікація lead) in the period, by team,
+  // compared with successfully-realized deals for the drill-down.
+  const trParams: unknown[] = [];
+  const trConds: string[] = [];
+  if (managerId) { trParams.push(managerId); trConds.push(`d.manager_id = $${trParams.length}`); }
+  if (teamId) { trParams.push(teamId); trConds.push(`m.team_id = $${trParams.length}`); }
+  if (from) { trParams.push(from); trConds.push(`(lte.changed_at AT TIME ZONE 'Europe/Kyiv')::date >= $${trParams.length}`); }
+  if (to) { trParams.push(to); trConds.push(`(lte.changed_at AT TIME ZONE 'Europe/Kyiv')::date <= $${trParams.length}`); }
+  const transferredRes = await pool.query<{ team_id: number; team_name: string; transferred: string }>(
+    `SELECT t.id AS team_id, t.name AS team_name, COUNT(DISTINCT lte.kommo_id) AS transferred
+     FROM lead_transfer_events lte
+     JOIN deals d ON d.kommo_id = lte.kommo_id
+     JOIN managers m ON m.id = d.manager_id
+     JOIN teams t ON t.id = m.team_id
+     ${trConds.length ? "WHERE " + trConds.join(" AND ") : ""}
+     GROUP BY t.id, t.name`, trParams);
+  const trMap = new Map<number, { teamId: number; teamName: string; transferred: number; success: number; successRevenue: number }>();
+  const trGet = (id: number, name: string) => {
+    let e = trMap.get(id);
+    if (!e) { e = { teamId: id, teamName: name, transferred: 0, success: 0, successRevenue: 0 }; trMap.set(id, e); }
+    return e;
+  };
+  for (const r of transferredRes.rows) trGet(r.team_id, r.team_name).transferred += Number(r.transferred);
+  for (const r of successByTeam.rows) { const e = trGet(r.team_id!, r.team_name!); e.success += Number(r.deals); e.successRevenue += Number(r.revenue); }
+  const transferred = {
+    total: [...trMap.values()].reduce((s, e) => s + e.transferred, 0),
+    success: [...trMap.values()].reduce((s, e) => s + e.success, 0),
+    byTeam: [...trMap.values()].filter((e) => e.transferred > 0 || e.success > 0).sort((a, b) => b.transferred - a.transferred),
+  };
+
   // Last 3 complete months (deals / paid / revenue) for the drill-down trend.
   const histScope: string[] = [];
   if (managerId) histScope.push(`d.manager_id = ${Number(managerId)}`);
@@ -687,6 +718,7 @@ dashboardRouter.get("/overview", async (req, res) => {
     carryover,
     repeatClientsList,
     newClientsBySource,
+    transferred,
     adConversion: channelConv("ad"),
     leadgenConversion: channelConv("leadgen"),
     monthlyHistory,

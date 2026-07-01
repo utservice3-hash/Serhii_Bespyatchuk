@@ -368,6 +368,59 @@ export async function forEachStatusChangeEventPage(
   return total;
 }
 
+export interface KommoResponsibleEvent {
+  entityId: number;
+  toUserId: number | null;
+  changedAt: number; // unix seconds
+}
+
+interface KommoRespRaw {
+  entity_id: number;
+  entity_type: string;
+  created_at: number;
+  value_after?: { responsible_user?: { id: number } }[];
+}
+
+/**
+ * Streams entity_responsible_changed events (lead responsible reassignments) in
+ * [fromUnix, toUnix] per page. This is how a lead-gen lead being "taken" by a
+ * sales manager is detected — the same trigger as the Telegram alert.
+ */
+export async function forEachResponsibleChangeEventPage(
+  fromUnix: number,
+  toUnix: number,
+  onPage: (events: KommoResponsibleEvent[]) => Promise<void>
+): Promise<number> {
+  const limit = 100;
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const data = await kommoRequest<KommoListResponse<KommoRespRaw>>(
+      `/api/v4/events?limit=${limit}&page=${page}` +
+        `&filter[type]=entity_responsible_changed` +
+        `&${encodeURIComponent("filter[created_at][from]")}=${fromUnix}` +
+        `&${encodeURIComponent("filter[created_at][to]")}=${toUnix}`
+    );
+    const raw = data._embedded?.events ?? [];
+    const events: KommoResponsibleEvent[] = [];
+    for (const e of raw) {
+      if (e.entity_type !== "lead") continue;
+      events.push({
+        entityId: e.entity_id,
+        toUserId: e.value_after?.[0]?.responsible_user?.id ?? null,
+        changedAt: e.created_at,
+      });
+    }
+    if (events.length) {
+      await onPage(events);
+      total += events.length;
+    }
+    if (raw.length < limit || !data._links?.next) break;
+    page += 1;
+  }
+  return total;
+}
+
 export async function fetchAllCompanies(): Promise<KommoCompany[]> {
   const companies: KommoCompany[] = [];
   const limit = 250;

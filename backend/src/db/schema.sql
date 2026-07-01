@@ -111,6 +111,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_deal_stage_event ON deal_stage_events(kom
 CREATE INDEX IF NOT EXISTS idx_dse_stage_time ON deal_stage_events(status_id, changed_at);
 CREATE INDEX IF NOT EXISTS idx_dse_pipeline_stage_time ON deal_stage_events(pipeline_id, status_id, changed_at);
 
+-- "Передані заявки": a lead-gen qualification lead handed to a sales manager.
+-- The signal is Kommo's entity_responsible_changed event on a Кваліфікація-
+-- pipeline lead (the moment a manager "takes" the lead — the same trigger as
+-- the Telegram notification). Only such leads are stored here.
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_transfer_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS lead_transfer_events (
+  kommo_id BIGINT NOT NULL,
+  changed_at TIMESTAMPTZ NOT NULL,
+  to_user_id BIGINT,
+  PRIMARY KEY (kommo_id, changed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_lte_time ON lead_transfer_events(changed_at);
+
 CREATE TABLE IF NOT EXISTS plans (
   id SERIAL PRIMARY KEY,
   manager_id INTEGER NOT NULL REFERENCES managers(id),

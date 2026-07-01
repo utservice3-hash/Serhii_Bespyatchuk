@@ -145,6 +145,11 @@ export interface ExecutiveOverview {
   carryover: { amount: number; deals: number } | null;
   repeatClientsList: { clientName: string; orders: number; revenue: number }[];
   newClientsBySource: { ad: number; leadgen: number; other: number };
+  transferred: {
+    total: number;
+    success: number;
+    byTeam: { teamId: number; teamName: string; transferred: number; success: number; successRevenue: number }[];
+  };
   adConversion: { leads: number; paid: number; conversion: number };
   leadgenConversion: { leads: number; paid: number; conversion: number };
   monthlyHistory: {

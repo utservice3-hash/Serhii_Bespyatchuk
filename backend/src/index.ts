@@ -14,6 +14,7 @@ import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
+import { syncTransfers } from "./jobs/syncTransfers.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
@@ -90,6 +91,12 @@ cron.schedule("*/10 * * * *", () => {
   syncStageEvents().catch((err) => console.error("Stage events sync failed:", err));
 });
 syncStageEvents().catch((err) => console.error("Stage events startup sync failed:", err));
+
+// Lead-transfer events ("передані заявки") every 10 minutes + on startup.
+cron.schedule("*/10 * * * *", () => {
+  syncTransfers().catch((err) => console.error("Transfers sync failed:", err));
+});
+syncTransfers().catch((err) => console.error("Transfers startup sync failed:", err));
 
 // Prune stage events older than 24 months daily at 04:30 (bounded storage).
 cron.schedule("30 4 * * *", () => {
