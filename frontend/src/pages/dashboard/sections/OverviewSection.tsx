@@ -7,6 +7,7 @@ import {
   Tooltip,
   CartesianGrid,
   ResponsiveContainer,
+  LabelList,
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
 import type { ConversionChannel, ExecutiveOverview, FunnelStage, SyncStatus, Team } from "../../../api";
@@ -240,13 +241,21 @@ export function OverviewSection({
                 return (
                   <div style={{ marginBottom: 16 }}>
                     <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>Історія за 3 місяці</h3>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart data={overview.monthlyHistory}>
-                        <CartesianGrid strokeDasharray="3 3" />
+                    <ResponsiveContainer width="100%" height={220}>
+                      <BarChart data={overview.monthlyHistory} margin={{ top: 22 }}>
+                        <defs>
+                          <linearGradient id="brandBar" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#e11d2a" />
+                            <stop offset="100%" stopColor="#8f0f1c" />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.35} vertical={false} />
                         <XAxis dataKey="month" />
                         <YAxis tickFormatter={(v) => isMoney ? `${Math.round(v / 1000)}k` : String(v)} />
-                        <Tooltip formatter={(v) => isMoney ? formatAmount(Number(v)) : kpi.unit === "%" ? `${v}%` : Number(v).toLocaleString("uk-UA")} />
-                        <Bar dataKey={field} name={kpi.label} fill="#c5141c" radius={[4, 4, 0, 0]} />
+                        <Tooltip formatter={(v) => isMoney ? formatAmount(Number(v)) : kpi.unit === "%" ? `${v}%` : Number(v).toLocaleString("uk-UA")} cursor={{ fill: "rgba(197,20,28,0.06)" }} />
+                        <Bar dataKey={field} name={kpi.label} fill="url(#brandBar)" radius={[6, 6, 0, 0]} maxBarSize={56}>
+                          <LabelList dataKey={field} position="top" formatter={(v) => isMoney ? formatAmount(Number(v)) : kpi.unit === "%" ? `${v}%` : Number(v).toLocaleString("uk-UA")} style={{ fontSize: 11, fontWeight: 600, fill: "var(--text)" }} />
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -374,13 +383,21 @@ export function OverviewSection({
           <div className="chart-grid">
             <div className="chart-card">
               <h2 className="chart-title">Виручка по командах</h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={overview.byTeam} margin={{ bottom: 24 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={overview.byTeam} margin={{ bottom: 24, top: 22 }}>
+                  <defs>
+                    <linearGradient id="brandBar" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#e11d2a" />
+                      <stop offset="100%" stopColor="#8f0f1c" />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.35} vertical={false} />
                   <XAxis dataKey="teamName" interval={0} tick={{ fontSize: 11 }} angle={-15} textAnchor="end" height={50} />
                   <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-                  <Tooltip formatter={(v) => formatAmount(Number(v))} />
-                  <Bar dataKey="revenue" name="Виручка" fill="#c5141c" radius={[4, 4, 0, 0]} />
+                  <Tooltip formatter={(v) => formatAmount(Number(v))} cursor={{ fill: "rgba(197,20,28,0.06)" }} />
+                  <Bar dataKey="revenue" name="Виручка" fill="url(#brandBar)" radius={[6, 6, 0, 0]} maxBarSize={64}>
+                    <LabelList dataKey="revenue" position="top" formatter={(v) => formatAmount(Number(v))} style={{ fontSize: 11, fontWeight: 600, fill: "var(--text)" }} />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -446,13 +463,24 @@ export function OverviewSection({
         <div className="chart-grid">
           <div className="chart-card">
             <h2 className="chart-title">Воронка продажів</h2>
-            <ResponsiveContainer width="100%" height={340}>
-              <BarChart data={chartData} margin={{ bottom: 24 }}>
-                <CartesianGrid strokeDasharray="3 3" />
+            <ResponsiveContainer width="100%" height={360}>
+              <BarChart data={chartData} margin={{ bottom: 24, top: 22 }}>
+                <defs>
+                  <linearGradient id="brandBar" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#e11d2a" />
+                    <stop offset="100%" stopColor="#8f0f1c" />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.35} vertical={false} />
                 <XAxis dataKey="name" interval={0} tick={{ fontSize: 12 }} angle={-15} textAnchor="end" height={50} />
                 <YAxis />
-                <Tooltip />
-                <Bar dataKey="count" fill="#c5141c" radius={[4, 4, 0, 0]} />
+                <Tooltip
+                  cursor={{ fill: "rgba(197,20,28,0.06)" }}
+                  formatter={(v, _n, p) => [`${Number(v).toLocaleString("uk-UA")} угод · ${formatAmount(Number(p?.payload?.amount ?? 0))}`, "Етап"]}
+                />
+                <Bar dataKey="count" fill="url(#brandBar)" radius={[6, 6, 0, 0]} maxBarSize={72}>
+                  <LabelList dataKey="count" position="top" style={{ fontSize: 12, fontWeight: 600, fill: "var(--text)" }} />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>

@@ -10,6 +10,7 @@ import {
   Legend,
   CartesianGrid,
   ResponsiveContainer,
+  LabelList,
 } from "recharts";
 import {
   createTask,
@@ -666,6 +667,9 @@ export function Dashboard() {
                 dataKey={stage}
                 name={STAGE_LABELS[stage]}
                 stroke={STAGE_COLORS[stage]}
+                strokeWidth={2.5}
+                dot={false}
+                activeDot={{ r: 4 }}
                 connectNulls
               />
             ))}
@@ -676,12 +680,22 @@ export function Dashboard() {
     if (key === "revenue") {
       return (
         <ResponsiveContainer width="100%" height={height}>
-          <BarChart data={paidDynamics}>
-            <CartesianGrid strokeDasharray="3 3" />
+          <BarChart data={paidDynamics} margin={{ top: 12 }}>
+            <defs>
+              <linearGradient id="statBar" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#e11d2a" />
+                <stop offset="100%" stopColor="#8f0f1c" />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" opacity={0.35} vertical={false} />
             <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
             <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-            <Tooltip formatter={(v) => formatAmount(Number(v))} />
-            <Bar dataKey="revenue" name="Виручка" fill="#c5141c" radius={[4, 4, 0, 0]} />
+            <Tooltip formatter={(v) => formatAmount(Number(v))} cursor={{ fill: "rgba(197,20,28,0.06)" }} />
+            <Bar dataKey="revenue" name="Виручка" fill="url(#statBar)" radius={[4, 4, 0, 0]}>
+              {height >= 500 && (
+                <LabelList dataKey="revenue" position="top" formatter={(v) => formatAmount(Number(v))} style={{ fontSize: 10, fontWeight: 600, fill: "var(--text)" }} />
+              )}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       );
@@ -694,7 +708,7 @@ export function Dashboard() {
             <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
             <YAxis />
             <Tooltip />
-            <Line type="monotone" dataKey="paidCount" name="Оплачено угод" stroke="#16a34a" connectNulls />
+            <Line type="monotone" dataKey="paidCount" name="Оплачено угод" stroke="#16a34a" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} connectNulls />
           </LineChart>
         </ResponsiveContainer>
       );
@@ -707,7 +721,7 @@ export function Dashboard() {
           <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
           <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
           <Tooltip formatter={(v) => formatAmount(Number(v))} />
-          <Line type="monotone" dataKey="avgCheck" name="Середній чек" stroke="#7c3aed" connectNulls />
+          <Line type="monotone" dataKey="avgCheck" name="Середній чек" stroke="#7c3aed" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} connectNulls />
         </LineChart>
       </ResponsiveContainer>
     );
