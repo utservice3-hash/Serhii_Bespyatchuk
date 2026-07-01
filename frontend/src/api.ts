@@ -143,6 +143,8 @@ export interface ExecutiveOverview {
   };
   createdFullCycle: number;
   carryover: { amount: number; deals: number } | null;
+  repeatClientsList: { clientName: string; orders: number; revenue: number }[];
+  newClientsBySource: { ad: number; leadgen: number; other: number };
   adConversion: { leads: number; paid: number; conversion: number };
   leadgenConversion: { leads: number; paid: number; conversion: number };
   monthlyHistory: {

@@ -534,6 +534,64 @@ dashboardRouter.get("/overview", async (req, res) => {
     ? { amount: Number(carryoverRes.rows[0].amount), deals: Number(carryoverRes.rows[0].deals) }
     : null;
 
+  // Repeat clients active in the period (for the "Постійні клієнти" drill-down):
+  // their in-period order count and revenue. "Repeat" = first-ever paid before
+  // the period (or 2+ lifetime when no date range), matching the KPI logic.
+  const repeatListRes = await pool.query<{ name: string; orders: string; revenue: string }>(
+    `WITH firsts AS (
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid, COUNT(*) AS cnt
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+       GROUP BY d.client_key
+     )
+     SELECT COALESCE(MAX(d.client_name), 'Клієнт') AS name,
+            COUNT(*) AS orders,
+            COALESCE(SUM(d.price), 0) AS revenue
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     JOIN firsts f ON f.client_key = d.client_key
+     ${paidWhere}
+       AND ${from ? `f.first_paid < $${params.length + 1}::date` : `f.cnt >= 2`}
+     GROUP BY d.client_key
+     ORDER BY revenue DESC
+     LIMIT 300`,
+    from ? [...params, from] : params
+  );
+  const repeatClientsList = repeatListRes.rows.map((r) => ({
+    clientName: r.name,
+    orders: Number(r.orders),
+    revenue: Number(r.revenue),
+  }));
+
+  // New clients (first-ever paid in the period) split by acquisition channel:
+  // ad (context/target), leadgen, or other (manually-created / previously
+  // unseen client). For the "Нові клієнти" drill-down.
+  const newBySourceRes = await pool.query<{ ch: string; clients: string }>(
+    `WITH firsts AS (
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid, COUNT(*) AS cnt
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+       GROUP BY d.client_key
+     )
+     SELECT COALESCE(d.lead_channel, 'other') AS ch, COUNT(DISTINCT d.client_key) AS clients
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     JOIN firsts f ON f.client_key = d.client_key
+     ${paidWhere}
+       AND ${from ? `f.first_paid >= $${params.length + 1}::date` : `f.cnt = 1`}
+     GROUP BY 1`,
+    from ? [...params, from] : params
+  );
+  const newClientsBySource = { ad: 0, leadgen: 0, other: 0 } as { ad: number; leadgen: number; other: number };
+  for (const r of newBySourceRes.rows) {
+    if (r.ch === "ad" || r.ch === "leadgen") newClientsBySource[r.ch] = Number(r.clients);
+    else newClientsBySource.other += Number(r.clients);
+  }
+
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
 
@@ -627,6 +685,8 @@ dashboardRouter.get("/overview", async (req, res) => {
     },
     createdFullCycle: Number(createdFullRes.rows[0]?.c ?? 0),
     carryover,
+    repeatClientsList,
+    newClientsBySource,
     adConversion: channelConv("ad"),
     leadgenConversion: channelConv("leadgen"),
     monthlyHistory,

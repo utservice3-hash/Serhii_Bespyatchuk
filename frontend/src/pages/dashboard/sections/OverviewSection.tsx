@@ -262,6 +262,59 @@ export function OverviewSection({
                   </tbody>
                 </table>
               )}
+
+              {kpi.key === "avg" && overview && (
+                <table className="data-table">
+                  <thead><tr><th>Команда</th><th>Середній чек</th><th>Угод</th></tr></thead>
+                  <tbody>
+                    {overview.byTeam.map((t) => (
+                      <tr key={t.teamId}>
+                        <td>{t.teamName}</td>
+                        <td>{formatAmount(t.deals > 0 ? Math.round(t.revenue / t.deals) : 0)}</td>
+                        <td>{t.deals}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {kpi.key === "newc" && overview && (
+                <div>
+                  <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>Звідки прийшли нові клієнти</h3>
+                  <table className="data-table">
+                    <thead><tr><th>Джерело</th><th>Клієнтів</th></tr></thead>
+                    <tbody>
+                      <tr><td>🎯 Реклама / таргет</td><td>{overview.newClientsBySource.ad.toLocaleString("uk-UA")}</td></tr>
+                      <tr><td>📞 Лідогенерація</td><td>{overview.newClientsBySource.leadgen.toLocaleString("uk-UA")}</td></tr>
+                      <tr><td>✍️ Вручну / інше</td><td>{overview.newClientsBySource.other.toLocaleString("uk-UA")}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {kpi.key === "repc" && overview && (
+                <div>
+                  <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>
+                    Постійні клієнти, що замовляли ({overview.repeatClientsList.length})
+                  </h3>
+                  {overview.repeatClientsList.length === 0 ? (
+                    <p className="loading-text">Немає даних за період.</p>
+                  ) : (
+                    <table className="data-table">
+                      <thead><tr><th>Клієнт</th><th>Замовлень</th><th>Сума</th></tr></thead>
+                      <tbody>
+                        {overview.repeatClientsList.map((c, i) => (
+                          <tr key={i}>
+                            <td>{c.clientName}</td>
+                            <td>{c.orders}</td>
+                            <td>{formatAmount(c.revenue)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         );
