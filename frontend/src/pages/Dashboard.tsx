@@ -142,6 +142,7 @@ export function Dashboard() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportGranularity, setReportGranularity] = useState<"day" | "week" | "month">("week");
   const [reportManagerId, setReportManagerId] = useState<number | "">("");
+  const [reportTeamId, setReportTeamId] = useState<number | "">("");
   const [funnelReport, setFunnelReport] = useState<FunnelReport | null>(null);
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
@@ -203,20 +204,22 @@ export function Dashboard() {
 
   useEffect(() => {
     if (section !== "report") return;
+    // Manager pick takes precedence over team pick.
     const mgr = reportManagerId || undefined;
+    const team = mgr ? undefined : reportTeamId || undefined;
     setReportLoading(true);
-    fetchReport({ granularity: reportGranularity, from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr })
+    fetchReport({ granularity: reportGranularity, from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr, teamId: team })
       .then(setReportData)
       .catch(() => setReportData(null))
       .finally(() => setReportLoading(false));
     // The client funnel lives inside the same "Звіт" section.
-    fetchFunnelReport({ from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr })
+    fetchFunnelReport({ from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr, teamId: team })
       .then(setFunnelReport)
       .catch(() => setFunnelReport(null));
     if (auth?.role !== "manager") {
       fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
     }
-  }, [section, reportGranularity, reportManagerId, dateRange, refreshNonce, auth]);
+  }, [section, reportGranularity, reportManagerId, reportTeamId, dateRange, refreshNonce, auth]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -855,6 +858,10 @@ export function Dashboard() {
           setDatePreset={setDatePreset}
           canEditPlan={auth?.role === "admin" || auth?.role === "team_lead"}
           canPickManager={auth?.role !== "manager"}
+          canPickTeam={auth?.role === "admin"}
+          teams={teams}
+          reportTeamId={reportTeamId}
+          setReportTeamId={setReportTeamId}
           managerOptions={managerOptions}
           reportManagerId={reportManagerId}
           setReportManagerId={setReportManagerId}

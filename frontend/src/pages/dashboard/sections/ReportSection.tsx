@@ -10,7 +10,7 @@ import {
   LabelList,
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
-import { fetchFunnelPlan, saveFunnelPlan, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption } from "../../../api";
+import { fetchFunnelPlan, saveFunnelPlan, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team } from "../../../api";
 import { formatAmount } from "../format";
 
 const FUNNEL_STAGES: { stage: string; label: string }[] = [
@@ -167,6 +167,10 @@ export function ReportSection({
   managerOptions,
   reportManagerId,
   setReportManagerId,
+  canPickTeam,
+  teams,
+  reportTeamId,
+  setReportTeamId,
   onPlanSaved,
 }: {
   title: string;
@@ -184,6 +188,10 @@ export function ReportSection({
   managerOptions: ManagerOption[];
   reportManagerId: number | "";
   setReportManagerId: Dispatch<SetStateAction<number | "">>;
+  canPickTeam: boolean;
+  teams: Team[];
+  reportTeamId: number | "";
+  setReportTeamId: Dispatch<SetStateAction<number | "">>;
   onPlanSaved: () => void;
 }) {
   const [planOpen, setPlanOpen] = useState(false);
@@ -211,6 +219,18 @@ export function ReportSection({
       <div className="page-header">
         <h1 className="page-title">{title}</h1>
         <div className="page-filters">
+          {canPickTeam && (
+            <select
+              value={reportTeamId}
+              onChange={(e) => setReportTeamId(e.target.value ? Number(e.target.value) : "")}
+              title="Детально по команді"
+            >
+              <option value="">Усі команди</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          )}
           {canPickManager && (
             <select
               value={reportManagerId}
