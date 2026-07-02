@@ -141,6 +141,7 @@ export function Dashboard() {
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportGranularity, setReportGranularity] = useState<"day" | "week" | "month">("week");
+  const [reportManagerId, setReportManagerId] = useState<number | "">("");
   const [funnelReport, setFunnelReport] = useState<FunnelReport | null>(null);
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
@@ -202,19 +203,20 @@ export function Dashboard() {
 
   useEffect(() => {
     if (section !== "report") return;
+    const mgr = reportManagerId || undefined;
     setReportLoading(true);
-    fetchReport({ granularity: reportGranularity, from: dateRange.from || undefined, to: dateRange.to || undefined })
+    fetchReport({ granularity: reportGranularity, from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr })
       .then(setReportData)
       .catch(() => setReportData(null))
       .finally(() => setReportLoading(false));
     // The client funnel lives inside the same "Звіт" section.
-    fetchFunnelReport({ from: dateRange.from || undefined, to: dateRange.to || undefined })
+    fetchFunnelReport({ from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr })
       .then(setFunnelReport)
       .catch(() => setFunnelReport(null));
     if (auth?.role !== "manager") {
       fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
     }
-  }, [section, reportGranularity, dateRange, refreshNonce, auth]);
+  }, [section, reportGranularity, reportManagerId, dateRange, refreshNonce, auth]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -852,7 +854,10 @@ export function Dashboard() {
           datePreset={datePreset}
           setDatePreset={setDatePreset}
           canEditPlan={auth?.role === "admin" || auth?.role === "team_lead"}
+          canPickManager={auth?.role !== "manager"}
           managerOptions={managerOptions}
+          reportManagerId={reportManagerId}
+          setReportManagerId={setReportManagerId}
           onPlanSaved={() => setRefreshNonce((n) => n + 1)}
         />
       )}

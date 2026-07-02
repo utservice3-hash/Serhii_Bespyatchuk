@@ -1687,8 +1687,12 @@ dashboardRouter.get("/report", async (req, res) => {
   let managerId: number | null = null;
   let teamId: number | null = null;
   if (auth.role === "manager") managerId = auth.managerId;
-  else if (auth.role === "team_lead") teamId = auth.teamId;
-  else {
+  else if (auth.role === "team_lead") {
+    teamId = auth.teamId;
+    // Team-lead can drill into one of their managers; both filters apply, so a
+    // manager outside the team yields nothing (safe).
+    managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  } else {
     managerId = req.query.managerId ? Number(req.query.managerId) : null;
     teamId = req.query.teamId ? Number(req.query.teamId) : null;
   }
@@ -1869,8 +1873,10 @@ dashboardRouter.get("/funnel-report", async (req, res) => {
   let managerId: number | null = null;
   let teamId: number | null = null;
   if (auth.role === "manager") managerId = auth.managerId;
-  else if (auth.role === "team_lead") teamId = auth.teamId;
-  else {
+  else if (auth.role === "team_lead") {
+    teamId = auth.teamId;
+    managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  } else {
     managerId = req.query.managerId ? Number(req.query.managerId) : null;
     teamId = req.query.teamId ? Number(req.query.teamId) : null;
   }

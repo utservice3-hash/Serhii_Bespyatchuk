@@ -163,7 +163,10 @@ export function ReportSection({
   datePreset,
   setDatePreset,
   canEditPlan,
+  canPickManager,
   managerOptions,
+  reportManagerId,
+  setReportManagerId,
   onPlanSaved,
 }: {
   title: string;
@@ -177,7 +180,10 @@ export function ReportSection({
   datePreset: string | null;
   setDatePreset: Dispatch<SetStateAction<string | null>>;
   canEditPlan: boolean;
+  canPickManager: boolean;
   managerOptions: ManagerOption[];
+  reportManagerId: number | "";
+  setReportManagerId: Dispatch<SetStateAction<number | "">>;
   onPlanSaved: () => void;
 }) {
   const [planOpen, setPlanOpen] = useState(false);
@@ -200,6 +206,18 @@ export function ReportSection({
       <div className="page-header">
         <h1 className="page-title">{title}</h1>
         <div className="page-filters">
+          {canPickManager && (
+            <select
+              value={reportManagerId}
+              onChange={(e) => setReportManagerId(e.target.value ? Number(e.target.value) : "")}
+              title="Детально по менеджеру"
+            >
+              <option value="">Уся команда</option>
+              {managerOptions.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          )}
           <select value={granularity} onChange={(e) => setGranularity(e.target.value as Gran)}>
             <option value="day">По днях</option>
             <option value="week">По тижнях</option>
