@@ -174,8 +174,10 @@ Pyrogram+TgCrypto ставляться з готових wheel.)
 1. Команда відповідального ∈ `FIRST_TOUCH_TEAMS` (РНК) — інакше вихід.
 2. `kommo.has_utm_campaign(lead)` — лід з реклами (геомітка/utm),
    інакше вихід.
-3. Перший дзвінок (вх/вих) тривалістю ≥ `FIRST_TOUCH_MIN_DURATION` (40с) —
-   це і є "перший дотик". Дедуп по `_first_touch_done` (один раз на лід).
+3. Перший **ВХІДНИЙ** дзвінок (note_type 10/`call_in`) тривалістю
+   ≥ `FIRST_TOUCH_MIN_DURATION` (40с) — це і є "перший дотик". Вихідні
+   дзвінки менеджера НЕ рахуються (перший дотик = клієнт сам зателефонував
+   нам уперше). Дедуп по `_first_touch_done` (один раз на лід).
 4. Транскрибація (Groq) → `ai_analyzer.analyze_first_touch()` повертає
    `about_transport` / `price_voiced` / `objections_handled` / `summary`.
    Якщо розмова НЕ про перевезення (`about_transport=False`) — пропуск

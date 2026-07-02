@@ -2193,10 +2193,11 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
     if not kommo.has_utm_campaign(lead):
         return  # лише ліди з реклами (геомітка/utm)
 
-    # Найперший дзвінок тривалістю ≥40с — це і є "перший дотик".
+    # Перший дотик = найперший ВХІДНИЙ дзвінок тривалістю ≥40с (клієнт сам
+    # зателефонував нам уперше). Вихідні дзвінки менеджера не рахуються.
     notes = kommo.get_lead_notes(lead_id)
     call_notes = sorted(
-        (n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")),
+        (n for n in notes if n.get("note_type") in (10, "call_in")),
         key=lambda n: n.get("created_at", 0),
     )
     first = None
@@ -2584,7 +2585,10 @@ def debug_first_touch():
             "duration": int((n.get("params") or {}).get("duration", 0) or 0),
             "has_link": bool((n.get("params") or {}).get("link") or (n.get("params") or {}).get("LINK")),
         } for n in call_notes]
-        first = next((n for n in call_notes if int((n.get("params") or {}).get("duration", 0) or 0) >= FIRST_TOUCH_MIN_DURATION), None)
+        # Перший дотик — лише ВХІДНИЙ дзвінок (call_notes показує всі для діагностики).
+        first = next((n for n in call_notes
+                      if n.get("note_type") in (10, "call_in")
+                      and int((n.get("params") or {}).get("duration", 0) or 0) >= FIRST_TOUCH_MIN_DURATION), None)
         out = {
             "ok": True, "lead_id": lead_id,
             "responsible_id": resp_id, "team": team,
