@@ -2037,6 +2037,160 @@ dashboardRouter.get("/funnel-report", async (req, res) => {
   });
 });
 
+/**
+ * Weekly funnel matrix ("Звіт по воронці клієнтів") — the operational report the
+ * team-lead reviews Mon/Thu. Unlike /funnel-report (a creation cohort), FACT here
+ * counts STAGE-ENTRY events (deal_stage_events): how many deals entered each stage
+ * within each week of the month, regardless of when the deal was created — so
+ * "Отримано заявку" can exceed "Взято в роботу" in a given week. Plan comes from
+ * funnel_plans, prorated across weeks by working days. Returns overall + per manager.
+ */
+dashboardRouter.get("/funnel-weekly", async (req, res) => {
+  const auth = req.auth!;
+  let managerId: number | null = null;
+  let teamId: number | null = null;
+  if (auth.role === "manager") managerId = auth.managerId;
+  else if (auth.role === "team_lead") {
+    teamId = auth.teamId;
+    managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  } else {
+    managerId = req.query.managerId ? Number(req.query.managerId) : null;
+    teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  }
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  // Month is taken from ?month=YYYY-MM (or the `to` filter, or current month).
+  const monthQ = (req.query.month as string) || (req.query.to as string) || new Date().toISOString().slice(0, 7);
+  const planMonthDate = monthQ.slice(0, 7) + "-01";
+  const mStart = new Date(planMonthDate + "T00:00:00");
+  const mEnd = new Date(mStart.getFullYear(), mStart.getMonth() + 1, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const factUpper = today < mEnd ? today : mEnd; // cap facts at today for the current month
+
+  // Split the month into Mon–Sun weeks clipped to the month boundaries.
+  const weeks: { label: string; from: string; to: string; monday: string; wd: number }[] = [];
+  let cur = new Date(mStart);
+  while (cur <= mEnd) {
+    const daysToSun = (7 - cur.getDay()) % 7;
+    let wEnd = new Date(cur); wEnd.setDate(cur.getDate() + daysToSun);
+    if (wEnd > mEnd) wEnd = new Date(mEnd);
+    const mon = new Date(cur); mon.setDate(cur.getDate() - ((cur.getDay() + 6) % 7));
+    weeks.push({ label: `ТИЖДЕНЬ ${weeks.length + 1}`, from: fmt(cur), to: fmt(wEnd), monday: fmt(mon), wd: workingDays(cur, wEnd) });
+    cur = new Date(wEnd); cur.setDate(wEnd.getDate() + 1);
+  }
+  const totalWd = workingDays(mStart, mEnd);
+  const elapsedEnd = factUpper >= mStart ? factUpper : mStart;
+  const elapsedWd = factUpper >= mStart ? workingDays(mStart, elapsedEnd) : 0;
+  const proratio = totalWd > 0 ? elapsedWd / totalWd : 0;
+
+  // FACT: distinct deals that entered each stage, per manager, per ISO-week (Monday key).
+  const fParams: unknown[] = [[8921932, 155304], FUNNEL_ORDER, fmt(mStart), fmt(factUpper)];
+  const fConds = [
+    "d.pipeline_id = ANY($1)",
+    "dse.funnel_stage = ANY($2)",
+    `(dse.changed_at ${KYIV})::date BETWEEN $3 AND $4`,
+  ];
+  if (managerId) { fParams.push(managerId); fConds.push(`d.manager_id = $${fParams.length}`); }
+  if (teamId) { fParams.push(teamId); fConds.push(`m.team_id = $${fParams.length}`); }
+  const factRows = await pool.query<{ manager_id: number; name: string; stage: string; wk: string; c: string }>(
+    `SELECT d.manager_id, m.name, dse.funnel_stage AS stage,
+            to_char(date_trunc('week', (dse.changed_at ${KYIV})), 'YYYY-MM-DD') AS wk,
+            COUNT(DISTINCT dse.kommo_id) AS c
+     FROM deal_stage_events dse
+     JOIN deals d ON d.kommo_id = dse.kommo_id
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
+     WHERE ${fConds.join(" AND ")}
+     GROUP BY d.manager_id, m.name, dse.funnel_stage, wk`,
+    fParams
+  );
+
+  // PLAN: monthly funnel plan per stage (funnel_plans).
+  const pParams: unknown[] = [planMonthDate];
+  const pConds = ["fp.month = $1"];
+  if (managerId) { pParams.push(managerId); pConds.push(`fp.manager_id = $${pParams.length}`); }
+  if (teamId) { pParams.push(teamId); pConds.push(`m.team_id = $${pParams.length}`); }
+  const planRows = await pool.query<{ manager_id: number; stage: string; planned: string }>(
+    `SELECT fp.manager_id, fp.stage, fp.planned_value AS planned
+     FROM funnel_plans fp JOIN managers m ON m.id = fp.manager_id
+     WHERE ${pConds.join(" AND ")}`,
+    pParams
+  );
+
+  // Aggregate facts: overall + per manager, keyed stage → mondayWeek → count.
+  type WkMap = Record<string, Record<string, number>>;
+  const overallFacts: WkMap = {};
+  const mgrFacts = new Map<number, { name: string; facts: WkMap }>();
+  for (const r of factRows.rows) {
+    const c = Number(r.c);
+    (overallFacts[r.stage] ??= {})[r.wk] = ((overallFacts[r.stage] ??= {})[r.wk] ?? 0) + c;
+    let e = mgrFacts.get(r.manager_id);
+    if (!e) { e = { name: r.name, facts: {} }; mgrFacts.set(r.manager_id, e); }
+    (e.facts[r.stage] ??= {})[r.wk] = ((e.facts[r.stage] ??= {})[r.wk] ?? 0) + c;
+  }
+  const overallPlan: Record<string, number> = {};
+  const mgrPlan = new Map<number, Record<string, number>>();
+  const mgrName = new Map<number, string>();
+  for (const r of planRows.rows) {
+    const p = Number(r.planned);
+    overallPlan[r.stage] = (overallPlan[r.stage] ?? 0) + p;
+    let mp = mgrPlan.get(r.manager_id);
+    if (!mp) { mp = {}; mgrPlan.set(r.manager_id, mp); }
+    mp[r.stage] = (mp[r.stage] ?? 0) + p;
+  }
+  for (const [id, e] of mgrFacts) mgrName.set(id, e.name);
+
+  const buildStages = (facts: WkMap, plan: Record<string, number>) =>
+    FUNNEL_ORDER.map((stage) => {
+      const pm = plan[stage] ?? 0;
+      const wkOut = weeks.map((w) => ({
+        plan: Math.round(pm * (totalWd > 0 ? w.wd / totalWd : 0)),
+        fact: facts[stage]?.[w.monday] ?? 0,
+      }));
+      const factToday = wkOut.reduce((a, w) => a + w.fact, 0);
+      return {
+        stage,
+        label: FUNNEL_LABELS[stage],
+        planMonth: pm,
+        planToday: Math.round(pm * proratio),
+        factToday,
+        weeks: wkOut,
+      };
+    });
+
+  const managerIds = new Set<number>([...mgrFacts.keys(), ...mgrPlan.keys()]);
+  // Names for managers that appear only in the plan (no facts yet) need a lookup.
+  const missingNames = [...managerIds].filter((id) => !mgrName.has(id));
+  if (missingNames.length) {
+    const nr = await pool.query<{ id: number; name: string }>(
+      `SELECT id, name FROM managers WHERE id = ANY($1)`,
+      [missingNames]
+    );
+    for (const r of nr.rows) mgrName.set(r.id, r.name);
+  }
+  const byManager = managerId
+    ? []
+    : [...managerIds]
+        .map((id) => ({ managerId: id, name: mgrName.get(id) ?? `#${id}`, stages: buildStages(mgrFacts.get(id)?.facts ?? {}, mgrPlan.get(id) ?? {}) }))
+        .sort((a, b) => {
+          const pa = a.stages.reduce((s, x) => s + x.planMonth, 0);
+          const pb = b.stages.reduce((s, x) => s + x.planMonth, 0);
+          if (pb !== pa) return pb - pa;
+          return a.name.localeCompare(b.name, "uk");
+        });
+
+  res.json({
+    scope: managerId ? "manager" : "team",
+    month: planMonthDate,
+    today: fmt(today),
+    workingDays: { total: totalWd, elapsed: elapsedWd },
+    weeks: weeks.map((w) => ({ label: w.label, from: w.from, to: w.to })),
+    overall: { name: "ЗАГАЛЬНИЙ", stages: buildStages(overallFacts, overallPlan) },
+    byManager,
+  });
+});
+
 /** Read a manager's monthly funnel plan (for the plan editor). */
 dashboardRouter.get("/funnel-plan", async (req, res) => {
   const managerId = Number(req.query.managerId);

@@ -30,6 +30,8 @@ import {
   type ReportData,
   fetchFunnelReport,
   type FunnelReport,
+  fetchFunnelWeekly,
+  type FunnelWeeklyReport,
   fetchChatUsers,
   fetchConversation,
   sendMessage,
@@ -144,6 +146,7 @@ export function Dashboard() {
   const [reportManagerId, setReportManagerId] = useState<number | "">("");
   const [reportTeamId, setReportTeamId] = useState<number | "">("");
   const [funnelReport, setFunnelReport] = useState<FunnelReport | null>(null);
+  const [funnelWeekly, setFunnelWeekly] = useState<FunnelWeeklyReport | null>(null);
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
@@ -216,6 +219,10 @@ export function Dashboard() {
     fetchFunnelReport({ from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr, teamId: team })
       .then(setFunnelReport)
       .catch(() => setFunnelReport(null));
+    // Weekly funnel matrix (operational Mon/Thu report), keyed to the selected month.
+    fetchFunnelWeekly({ to: dateRange.to || undefined, managerId: mgr, teamId: team })
+      .then(setFunnelWeekly)
+      .catch(() => setFunnelWeekly(null));
     if (auth?.role !== "manager") {
       fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
     }
@@ -849,6 +856,7 @@ export function Dashboard() {
           title={auth?.role === "manager" ? "Мій звіт" : auth?.role === "team_lead" ? "Звіт тімліда" : "Звіт"}
           report={reportData}
           funnelReport={funnelReport}
+          funnelWeekly={funnelWeekly}
           loading={reportLoading}
           granularity={reportGranularity}
           setGranularity={setReportGranularity}

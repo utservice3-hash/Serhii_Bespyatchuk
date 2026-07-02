@@ -513,6 +513,37 @@ export async function fetchFunnelReport(params: {
   return data;
 }
 
+export interface WeeklyStageRow {
+  stage: string;
+  label: string;
+  planMonth: number;
+  planToday: number;
+  factToday: number;
+  weeks: { plan: number; fact: number }[];
+}
+export interface WeeklyBlock {
+  name: string;
+  stages: WeeklyStageRow[];
+}
+export interface FunnelWeeklyReport {
+  scope: "manager" | "team";
+  month: string;
+  today: string;
+  workingDays: { total: number; elapsed: number };
+  weeks: { label: string; from: string; to: string }[];
+  overall: WeeklyBlock;
+  byManager: (WeeklyBlock & { managerId: number })[];
+}
+export async function fetchFunnelWeekly(params: {
+  month?: string;
+  to?: string;
+  managerId?: number;
+  teamId?: number;
+}): Promise<FunnelWeeklyReport> {
+  const { data } = await api.get<FunnelWeeklyReport>("/dashboard/funnel-weekly", { params });
+  return data;
+}
+
 export async function fetchFunnelPlan(managerId: number, month: string): Promise<{ plans: Record<string, number> }> {
   const { data } = await api.get<{ plans: Record<string, number> }>("/dashboard/funnel-plan", { params: { managerId, month } });
   return data;

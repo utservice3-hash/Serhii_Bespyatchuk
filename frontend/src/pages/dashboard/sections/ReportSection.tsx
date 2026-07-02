@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -10,7 +10,7 @@ import {
   LabelList,
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
-import { fetchFunnelPlan, saveFunnelPlan, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team } from "../../../api";
+import { fetchFunnelPlan, saveFunnelPlan, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team, type FunnelWeeklyReport, type WeeklyBlock } from "../../../api";
 import { formatAmount } from "../format";
 
 const FUNNEL_STAGES: { stage: string; label: string }[] = [
@@ -70,6 +70,76 @@ function FunnelTable({ stages }: { stages: FunnelStageRow[] }) {
         })}
       </tbody>
     </table>
+  );
+}
+
+function ddmm(iso: string): string {
+  const [, m, d] = iso.split("-");
+  return `${d}.${m}`;
+}
+
+/** One "Звіт по воронці клієнтів" block: 5 stages × (month plan/fact block + weekly columns). */
+function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; weeks: FunnelWeeklyReport["weeks"]; highlight?: boolean }) {
+  return (
+    <div style={{ overflowX: "auto", marginBottom: 18 }}>
+      <table className="data-table" style={{ minWidth: 640 + weeks.length * 150, fontSize: 12 }}>
+        <thead>
+          <tr>
+            <th rowSpan={2} style={{ textAlign: "left", background: highlight ? "#c5141c" : undefined, color: highlight ? "#fff" : undefined }}>{block.name}</th>
+            <th rowSpan={2}>План<br />міс</th>
+            <th rowSpan={2}>План<br />сьогодні</th>
+            <th rowSpan={2}>Факт</th>
+            <th rowSpan={2}>Темп<br />плану %</th>
+            <th rowSpan={2}>Викон.<br />міс %</th>
+            <th rowSpan={2}>Відст.<br />шт</th>
+            {weeks.map((w) => (
+              <th key={w.label} colSpan={3} style={{ textAlign: "center", borderLeft: "2px solid var(--border)" }}>
+                {w.label}<br /><span style={{ fontWeight: 400, fontSize: 10 }}>{ddmm(w.from)}–{ddmm(w.to)}</span>
+              </th>
+            ))}
+          </tr>
+          <tr>
+            {weeks.map((w) => (
+              <Fragment key={w.label}>
+                <th style={{ borderLeft: "2px solid var(--border)" }}>план</th>
+                <th>факт</th>
+                <th>% конв</th>
+              </Fragment>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {block.stages.map((s, i) => {
+            const prev = i > 0 ? block.stages[i - 1] : null;
+            const tempo = s.planToday > 0 ? Math.round((s.factToday / s.planToday) * 100) : null;
+            const exec = s.planMonth > 0 ? (s.factToday / s.planMonth) * 100 : null;
+            const lag = Math.max(0, s.planToday - s.factToday);
+            return (
+              <tr key={s.stage}>
+                <td style={{ textAlign: "left", fontWeight: 600 }}>{s.label}</td>
+                <td>{s.planMonth || "—"}</td>
+                <td>{s.planToday || "—"}</td>
+                <td style={{ fontWeight: 700, color: "#c5141c" }}>{s.factToday}</td>
+                <td style={{ color: tempo != null ? (tempo >= 100 ? "#16a34a" : "#dc2626") : undefined }}>{tempo != null ? `${tempo}%` : "—"}</td>
+                <td>{exec != null ? `${exec.toFixed(1)}%` : "—"}</td>
+                <td style={{ color: s.planMonth > 0 && lag > 0 ? "#dc2626" : undefined }}>{s.planMonth > 0 ? lag : "—"}</td>
+                {s.weeks.map((w, wi) => {
+                  const base = prev?.weeks[wi].fact ?? 0;
+                  const conv = i > 0 && base > 0 ? `${Math.round((w.fact / base) * 100)}%` : i > 0 ? "—" : "";
+                  return (
+                    <Fragment key={wi}>
+                      <td style={{ borderLeft: "2px solid var(--border)", color: "var(--text-muted)" }}>{w.plan || "—"}</td>
+                      <td style={{ fontWeight: w.fact > 0 ? 700 : 400 }}>{w.fact}</td>
+                      <td style={{ fontSize: 11 }}>{conv}</td>
+                    </Fragment>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -155,6 +225,7 @@ export function ReportSection({
   title,
   report,
   funnelReport,
+  funnelWeekly,
   loading,
   granularity,
   setGranularity,
@@ -176,6 +247,7 @@ export function ReportSection({
   title: string;
   report: ReportData | null;
   funnelReport: FunnelReport | null;
+  funnelWeekly: FunnelWeeklyReport | null;
   loading: boolean;
   granularity: Gran;
   setGranularity: Dispatch<SetStateAction<Gran>>;
@@ -335,6 +407,20 @@ export function ReportSection({
                 </div>
               )}
             </>
+          )}
+
+          {funnelWeekly && (
+            <div className="chart-card">
+              <h2 className="chart-title" style={{ marginBottom: 4 }}>Звіт по воронці клієнтів (тижнева динаміка)</h2>
+              <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 12px" }}>
+                Факт = входи угод у етап за подіями CRM. Робочих днів: {funnelWeekly.workingDays.elapsed} з {funnelWeekly.workingDays.total}.
+                «Темп» = факт ÷ план на сьогодні; «Викон.» = факт ÷ план місяця; «% конв» тижня = етап ÷ попередній етап.
+              </p>
+              <WeeklyFunnelBlock block={funnelWeekly.overall} weeks={funnelWeekly.weeks} highlight />
+              {funnelWeekly.byManager.map((m) => (
+                <WeeklyFunnelBlock key={m.managerId} block={m} weeks={funnelWeekly.weeks} />
+              ))}
+            </div>
           )}
 
           <div className="chart-card">
