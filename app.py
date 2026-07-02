@@ -1839,6 +1839,21 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
         return
     if not kommo.has_utm_campaign(lead):
         return  # відстежуємо лише угоди, що прийшли по таргету (utm_campaign)
+
+    # Дубль/Тест — легітимне закриття: не повертаємо, навіть якщо в дзвінках
+    # обговорювалось перевезення (той самий виняток, що й у closed-not-realized).
+    reason = kommo.get_reject_reason(lead).lower()
+    if "дубл" in reason or "тест" in reason:
+        logger.info("Non-target lead %s closed as дубль/тест — не повертаємо", lead_id)
+        return
+
+    # Захист від зациклення: якщо угоду вже повертали (є тег «Повернуто АІ»),
+    # не повертаємо повторно — інакше AI воює з тімлідом, який рухає її назад.
+    tags = [t.get("name") for t in (lead.get("_embedded", {}).get("tags") or [])]
+    if RETURNED_QC_TAG in tags:
+        logger.info("Non-target lead %s already returned (tag present) — пропуск", lead_id)
+        return
+
     lead_name = lead.get("name", f"Лід #{lead_id}")
 
     notes = kommo.get_lead_notes(lead_id)
