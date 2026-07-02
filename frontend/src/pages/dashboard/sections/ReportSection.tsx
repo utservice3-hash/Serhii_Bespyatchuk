@@ -194,9 +194,14 @@ export function ReportSection({
         { label: "Успішно реалізовано", value: formatAmount(s.successRevenue), sub: `${s.successDeals} угод` },
         { label: "Оплата отримана", value: formatAmount(s.paymentRevenue), sub: `${s.paymentDeals} угод` },
         { label: "Середній чек", value: formatAmount(s.avgCheck), sub: "" },
+        { label: "Прийнято реклами", value: s.adLeads.toLocaleString("uk-UA"), sub: "" },
+        { label: "Передані заявки (лідоген)", value: s.transfers.toLocaleString("uk-UA"), sub: "" },
+        { label: "Отримано прорахунків", value: s.quotes.toLocaleString("uk-UA"), sub: "" },
+        { label: "Відправлено авто", value: s.dispatched.toLocaleString("uk-UA"), sub: formatAmount(s.dispatchedSum) },
         { label: "Створені угоди (Повний цикл)", value: s.createdDeals.toLocaleString("uk-UA"), sub: "" },
         { label: "Нові клієнти", value: s.newClients.toLocaleString("uk-UA"), sub: "" },
         { label: "Постійні клієнти", value: s.repeatClients.toLocaleString("uk-UA"), sub: "" },
+        { label: "Перенесені з мин. міс.", value: formatAmount(s.carryover), sub: `${s.carryoverDeals} угод` },
         { label: "Дебіторка", value: formatAmount(s.receivables), sub: "" },
       ]
     : [];
@@ -366,26 +371,38 @@ export function ReportSection({
           </div>
 
           {report.scope === "team" && report.byManager.length > 0 && (
-            <div className="chart-card">
-              <h2 className="chart-title">По менеджерах</h2>
-              <table className="data-table">
+            <div className="chart-card" style={{ overflowX: "auto" }}>
+              <h2 className="chart-title">По менеджерах (повний зріз)</h2>
+              <table className="data-table" style={{ minWidth: 920 }}>
                 <thead>
                   <tr>
-                    <th>#</th>
                     <th>Менеджер</th>
-                    <th>Отримані кошти</th>
-                    <th>Угод</th>
+                    <th>Реклама</th>
+                    <th>Передані</th>
+                    <th>Прорахунки</th>
+                    <th>Відпр. авто</th>
+                    <th>Сума відпр.</th>
+                    <th>Оплата отр. ₴</th>
+                    <th>Успішно ₴</th>
+                    <th>Успішно, шт</th>
                     <th>Сер. чек</th>
+                    <th>Перенесені ₴</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {report.byManager.map((m, i) => (
+                  {report.byManager.map((m) => (
                     <tr key={m.managerId}>
-                      <td>{["🥇", "🥈", "🥉"][i] ?? i + 1}</td>
                       <td>{m.name}</td>
-                      <td style={{ fontWeight: 600 }}>{formatAmount(m.revenue)}</td>
-                      <td>{m.deals}</td>
+                      <td>{m.adLeads}</td>
+                      <td>{m.transfers}</td>
+                      <td>{m.quotes}</td>
+                      <td>{m.dispatched}</td>
+                      <td>{formatAmount(m.dispatchedSum)}</td>
+                      <td>{formatAmount(m.paymentReceived)}</td>
+                      <td style={{ fontWeight: 600 }}>{formatAmount(m.successRevenue)}</td>
+                      <td>{m.successDeals}</td>
                       <td>{formatAmount(m.avgCheck)}</td>
+                      <td>{formatAmount(m.carryover)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -1788,6 +1788,83 @@ dashboardRouter.get("/report", async (req, res) => {
   const paymentDeals = Number(payTotal.rows[0]?.deals ?? 0);
   const revenue = successRevenue + paymentRevenue;
   const deals = successDeals + paymentDeals;
+  // Full per-manager scorecard (the metrics from the manual Excel report).
+  const DISPATCH = "(psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300, 98470988, 10937178))";
+  const actP: unknown[] = [[8921932, 155304]];
+  const actConds = ["d.pipeline_id = ANY($1)", ...scopeSql(actP), ...dateSql("created_at_kommo", actP)];
+  const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; dispatched: string; dispatched_sum: string; success: string; success_sum: string }>(
+    `SELECT m.id, m.name,
+       COUNT(*) FILTER (WHERE d.lead_channel = 'ad') AS ad_leads,
+       COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes,
+       COUNT(*) FILTER (WHERE ${DISPATCH}) AS dispatched,
+       COALESCE(SUM(d.price) FILTER (WHERE ${DISPATCH}), 0) AS dispatched_sum
+     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${actConds.join(" AND ")}
+     GROUP BY m.id, m.name`, actP);
+
+  // Success (142, closed in period) per manager.
+  const scP: unknown[] = [];
+  const scConds = ["psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL", ...scopeSql(scP), ...dateSql("closed_at_kommo", scP)];
+  const succByMgr = await pool.query<{ id: number; name: string; revenue: string; deals: string }>(
+    `SELECT m.id, m.name, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${scConds.join(" AND ")} GROUP BY m.id, m.name`, scP);
+
+  // Payment-received snapshot (₴) per manager.
+  const prP: unknown[] = [[69716460, 60412544]];
+  const prScope = scopeSql(prP);
+  const payByMgr = await pool.query<{ id: number; s: string }>(
+    `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s
+     FROM deals d JOIN managers m ON m.id = d.manager_id
+     WHERE d.status_id = ANY($1) ${prScope.length ? "AND " + prScope.join(" AND ") : ""}
+     GROUP BY d.manager_id`, prP);
+
+  // Передані заявки per manager (period).
+  const trP: unknown[] = [];
+  const trScope = scopeSql(trP);
+  const trDate: string[] = [];
+  if (from) { trP.push(from); trDate.push(`(lte.changed_at ${KYIV})::date >= $${trP.length}`); }
+  if (to) { trP.push(to); trDate.push(`(lte.changed_at ${KYIV})::date <= $${trP.length}`); }
+  const trConds = [...trScope, ...trDate];
+  const transfByMgr = await pool.query<{ id: number; c: string }>(
+    `SELECT d.manager_id AS id, COUNT(DISTINCT lte.kommo_id) AS c
+     FROM lead_transfer_events lte JOIN deals d ON d.kommo_id = lte.kommo_id JOIN managers m ON m.id = d.manager_id
+     ${trConds.length ? "WHERE " + trConds.join(" AND ") : ""}
+     GROUP BY d.manager_id`, trP);
+
+  // Перенесені (carryover) per manager for the report month.
+  const coMonth = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
+  const coP: unknown[] = [coMonth];
+  const coScope: string[] = [];
+  if (managerId) { coP.push(managerId); coScope.push(`cm.manager_id = $${coP.length}`); }
+  if (teamId) { coP.push(teamId); coScope.push(`m.team_id = $${coP.length}`); }
+  const carryByMgr = await pool.query<{ id: number; amount: string; deals: string }>(
+    `SELECT cm.manager_id AS id, cm.amount, cm.deals
+     FROM monthly_carryover_mgr cm JOIN managers m ON m.id = cm.manager_id
+     WHERE cm.month = $1 ${coScope.length ? "AND " + coScope.join(" AND ") : ""}`, coP);
+
+  type Score = {
+    managerId: number; name: string;
+    adLeads: number; quotes: number; dispatched: number; dispatchedSum: number;
+    successRevenue: number; successDeals: number; paymentReceived: number;
+    transfers: number; carryover: number; carryoverDeals: number;
+  };
+  const scoreMap = new Map<number, Score>();
+  const sc = (id: number, name = ""): Score => {
+    let e = scoreMap.get(id);
+    if (!e) { e = { managerId: id, name, adLeads: 0, quotes: 0, dispatched: 0, dispatchedSum: 0, successRevenue: 0, successDeals: 0, paymentReceived: 0, transfers: 0, carryover: 0, carryoverDeals: 0 }; scoreMap.set(id, e); }
+    if (name) e.name = name;
+    return e;
+  };
+  for (const r of actByMgr.rows) { const e = sc(r.id, r.name); e.adLeads = Number(r.ad_leads); e.quotes = Number(r.quotes); e.dispatched = Number(r.dispatched); e.dispatchedSum = Number(r.dispatched_sum); }
+  for (const r of succByMgr.rows) { const e = sc(r.id, r.name); e.successRevenue = Number(r.revenue); e.successDeals = Number(r.deals); }
+  for (const r of payByMgr.rows) sc(r.id).paymentReceived = Number(r.s);
+  for (const r of transfByMgr.rows) sc(r.id).transfers = Number(r.c);
+  for (const r of carryByMgr.rows) { const e = sc(r.id); e.carryover = Number(r.amount); e.carryoverDeals = Number(r.deals); }
+  const sumK = (k: keyof Score) => [...scoreMap.values()].reduce((s, e) => s + (e[k] as number), 0);
+
   const summary = {
     successRevenue, successDeals, paymentRevenue, paymentDeals,
     revenue, deals,
@@ -1795,45 +1872,18 @@ dashboardRouter.get("/report", async (req, res) => {
     createdDeals: createdTotal,
     newClients, repeatClients,
     receivables: Number(recvTotal.rows[0]?.total ?? 0),
+    adLeads: sumK("adLeads"), quotes: sumK("quotes"),
+    dispatched: sumK("dispatched"), dispatchedSum: sumK("dispatchedSum"),
+    transfers: sumK("transfers"),
+    carryover: sumK("carryover"), carryoverDeals: sumK("carryoverDeals"),
   };
 
-  // Per-manager breakdown (team-lead / admin viewing a team, not a single manager).
-  let byManager: {
-    managerId: number; name: string; revenue: number; deals: number; avgCheck: number; receivables: number;
-  }[] = [];
-  if (!managerId) {
-    const pm: unknown[] = [];
-    const mScope: string[] = [];
-    if (teamId) { pm.push(teamId); mScope.push(`m.team_id = $${pm.length}`); }
-    const mDate = dateSql("closed_at_kommo", pm);
-    const succByMgr = await pool.query<{ id: number; name: string; revenue: string; deals: string }>(
-      `SELECT m.id, m.name, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
-       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-       WHERE psm.funnel_stage = 'paid' AND d.status_id = 142 AND d.closed_at_kommo IS NOT NULL
-         ${mScope.length ? "AND " + mScope.join(" AND ") : ""} ${mDate.length ? "AND " + mDate.join(" AND ") : ""}
-       GROUP BY m.id, m.name`, pm);
-    const pmp: unknown[] = [[69716460, 60412544]];
-    const pmScope: string[] = [];
-    if (teamId) { pmp.push(teamId); pmScope.push(`m.team_id = $${pmp.length}`); }
-    const payByMgr = await pool.query<{ id: number; name: string; revenue: string; deals: string }>(
-      `SELECT m.id, m.name, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
-       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-       WHERE d.status_id = ANY($1) ${pmScope.length ? "AND " + pmScope.join(" AND ") : ""}
-       GROUP BY m.id, m.name`, pmp);
-    const mMap = new Map<number, { managerId: number; name: string; revenue: number; deals: number }>();
-    const gm = (id: number, name: string) => {
-      let e = mMap.get(id);
-      if (!e) { e = { managerId: id, name, revenue: 0, deals: 0 }; mMap.set(id, e); }
-      return e;
-    };
-    for (const r of succByMgr.rows) { const e = gm(r.id, r.name); e.revenue += Number(r.revenue); e.deals += Number(r.deals); }
-    for (const r of payByMgr.rows) { const e = gm(r.id, r.name); e.revenue += Number(r.revenue); e.deals += Number(r.deals); }
-    byManager = [...mMap.values()]
-      .filter((e) => e.revenue > 0 || e.deals > 0)
-      .map((e) => ({ ...e, avgCheck: e.deals > 0 ? Math.round(e.revenue / e.deals) : 0, receivables: 0 }))
-      .sort((a, b) => b.revenue - a.revenue);
-  }
+  const byManager = managerId
+    ? []
+    : [...scoreMap.values()]
+        .filter((e) => e.successRevenue > 0 || e.dispatched > 0 || e.quotes > 0 || e.paymentReceived > 0 || e.transfers > 0)
+        .map((e) => ({ ...e, avgCheck: e.successDeals > 0 ? Math.round(e.successRevenue / e.successDeals) : 0 }))
+        .sort((a, b) => b.successRevenue - a.successRevenue);
 
   res.json({ granularity, scope: managerId ? "manager" : "team", summary, byPeriod, byManager });
 });

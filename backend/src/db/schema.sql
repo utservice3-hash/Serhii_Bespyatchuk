@@ -204,6 +204,15 @@ CREATE TABLE IF NOT EXISTS monthly_carryover (
   captured_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Same carried-over snapshot, but per manager (for the manager report).
+CREATE TABLE IF NOT EXISTS monthly_carryover_mgr (
+  month DATE NOT NULL,
+  manager_id INTEGER NOT NULL,
+  amount NUMERIC NOT NULL DEFAULT 0,
+  deals INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (month, manager_id)
+);
+
 -- Monthly funnel plan per manager per stage (the "план на місяць" column of the
 -- managers' funnel report). Fact is computed from CRM; this is the manual target.
 CREATE TABLE IF NOT EXISTS funnel_plans (

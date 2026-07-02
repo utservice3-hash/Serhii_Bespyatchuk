@@ -449,9 +449,30 @@ export interface ReportData {
     newClients: number;
     repeatClients: number;
     receivables: number;
+    adLeads: number;
+    quotes: number;
+    dispatched: number;
+    dispatchedSum: number;
+    transfers: number;
+    carryover: number;
+    carryoverDeals: number;
   };
   byPeriod: { period: string; revenue: number; deals: number; created: number; avgCheck: number }[];
-  byManager: { managerId: number; name: string; revenue: number; deals: number; avgCheck: number; receivables: number }[];
+  byManager: {
+    managerId: number;
+    name: string;
+    adLeads: number;
+    quotes: number;
+    dispatched: number;
+    dispatchedSum: number;
+    successRevenue: number;
+    successDeals: number;
+    paymentReceived: number;
+    transfers: number;
+    carryover: number;
+    carryoverDeals: number;
+    avgCheck: number;
+  }[];
 }
 
 export async function fetchReport(params: {

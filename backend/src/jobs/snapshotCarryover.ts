@@ -23,6 +23,19 @@ export async function snapshotCarryover(): Promise<void> {
      ON CONFLICT (month) DO NOTHING`,
     [FULL_CYCLE, PAYMENT_RECEIVED]
   );
+  // Per-manager snapshot for the manager report (same definition).
+  await pool.query(
+    `INSERT INTO monthly_carryover_mgr (month, manager_id, amount, deals)
+     SELECT date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv'))::date,
+            d.manager_id, COALESCE(SUM(d.price), 0), COUNT(*)
+     FROM deals d
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE d.pipeline_id = ANY($1) AND d.manager_id IS NOT NULL
+       AND (psm.funnel_stage IN ('approved', 'invoiced') OR d.status_id = ANY($2))
+     GROUP BY d.manager_id
+     ON CONFLICT (month, manager_id) DO NOTHING`,
+    [FULL_CYCLE, PAYMENT_RECEIVED]
+  );
   console.log(
     `Carryover snapshot: ${r.rowCount ? "captured for current month" : "already captured this month"}.`
   );
