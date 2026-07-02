@@ -1472,15 +1472,21 @@ def _parse_notes(data: dict) -> list[dict]:
     result = []
     i = 0
     while True:
-        note_type = data.get(f"leads[note][{i}][note_type]")
-        lead_id = data.get(f"leads[note][{i}][element_id]")
+        # Kommo надсилає нотатки у двох форматах: пласкому
+        # (leads[note][i][note_type]) і вкладеному (leads[note][i][note][note_type]).
+        # Підтримуємо обидва — беремо перше непорожнє значення для кожного поля.
+        def field(name):
+            return (data.get(f"leads[note][{i}][note][{name}]")
+                    or data.get(f"leads[note][{i}][{name}]"))
+        note_type = field("note_type")
+        lead_id = field("element_id")
         if not (note_type and lead_id):
             break
         result.append({
             "note_type": str(note_type),
             "lead_id": int(lead_id),
-            "responsible_user_id": int(data.get(f"leads[note][{i}][main_user_id]", 0) or 0),
-            "note_id": int(data.get(f"leads[note][{i}][id]", 0) or 0),
+            "responsible_user_id": int(field("main_user_id") or 0),
+            "note_id": int(field("id") or 0),
         })
         i += 1
     return result
