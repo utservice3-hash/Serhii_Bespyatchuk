@@ -228,6 +228,23 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
+/* Weekly funnel matrix: compact, content-sized columns so it fits and stays
+   aligned instead of stretching to 100% width. */
+.data-table.weekly-funnel {
+  width: max-content;
+  max-width: 100%;
+}
+.data-table.weekly-funnel th,
+.data-table.weekly-funnel td {
+  padding: 7px 12px;
+  text-align: center;
+  white-space: nowrap;
+}
+.data-table.weekly-funnel th:first-child,
+.data-table.weekly-funnel td:first-child {
+  text-align: left;
+}
+
 .loading-text {
   color: var(--text-muted);
 }

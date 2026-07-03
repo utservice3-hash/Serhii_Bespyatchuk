@@ -82,7 +82,6 @@ function ddmm(iso: string): string {
 function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; weeks: FunnelWeeklyReport["weeks"]; highlight?: boolean }) {
   // First column is frozen (sticky) so stage labels stay visible while the
   // weekly columns scroll horizontally.
-  const stickyBg = highlight ? "#c5141c" : "var(--card-bg)";
   const stick: CSSProperties = { position: "sticky", left: 0, zIndex: 2, background: "var(--card-bg)" };
   // Plan columns are shown ONLY when a funnel plan is set for the month —
   // otherwise they are all "—" and just widen the table. Hiding them keeps the
@@ -90,7 +89,6 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
   const hasPlan = block.stages.some((s) => s.planMonth > 0);
   const perWeekCols = hasPlan ? 3 : 2;
   const tailCols = (hasPlan ? 3 : 0) + weeks.length * perWeekCols;
-  const minW = 200 + 70 + weeks.length * (hasPlan ? 150 : 104) + (hasPlan ? 260 : 0);
 
   const moneyRow = (label: string, value: number, color: string | undefined, first: boolean) => {
     const bt = first ? "2px solid var(--border)" : undefined;
@@ -111,10 +109,10 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
         <strong style={{ fontSize: 14, color: highlight ? "#c5141c" : "var(--text)" }}>{block.name}</strong>
       </div>
       <div style={{ overflowX: "auto" }}>
-      <table className="data-table" style={{ minWidth: minW, fontSize: 12 }}>
+      <table className="data-table weekly-funnel" style={{ fontSize: 12 }}>
         <thead>
           <tr>
-            <th rowSpan={2} style={{ ...stick, zIndex: 3, textAlign: "left", background: stickyBg, color: highlight ? "#fff" : undefined, minWidth: 200 }}>Етап</th>
+            <th rowSpan={2} style={{ ...stick, zIndex: 3, textAlign: "left", background: "var(--card-bg)", minWidth: 190 }}>Етап</th>
             {hasPlan && <th rowSpan={2}>План<br />міс</th>}
             {hasPlan && <th rowSpan={2}>План<br />сьогодні</th>}
             <th rowSpan={2}>Факт</th>
