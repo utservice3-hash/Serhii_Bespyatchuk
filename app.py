@@ -2250,7 +2250,13 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
                else "➖ заперечень не було / не відпрацьовано")
         head = ("✅ Перший дотик: ціну озвучено" if result["price_voiced"]
                 else "❌ Перший дотик: ціну НЕ озвучено")
-        body = f"{price}\n{obj}\n🧠 {result['summary']}"
+        body = f"{price}\n{obj}"
+        if result.get("weakness"):
+            body += f"\n⚠️ Слабка сторона: {result['weakness']}"
+        if result.get("reco"):
+            body += f"\n🔧 Наступного разу: {result['reco']}"
+        if not result.get("weakness") and not result.get("reco"):
+            body += f"\n🧠 {result.get('summary', '')}"
     msg = (
         f"{head}\n"
         f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"

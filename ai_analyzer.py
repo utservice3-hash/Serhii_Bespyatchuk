@@ -111,9 +111,11 @@ def analyze_deal_calls(calls: list[dict], manager: str, lead_name: str = "") -> 
 def analyze_first_touch(transcript: str, lead_name: str = "", manager: str = "") -> dict:
     """Оцінює ПЕРШИЙ дзвінок з рекламним клієнтом: чи розмова про перевезення,
     чи менеджер озвучив ціну (вартість перевезення) і чи відпрацював заперечення.
+    Дає конкретну слабку сторону + дію на майбутнє, щоб недоліки не повторювались.
     Повертає {"about_transport": bool, "price_voiced": bool,
-    "objections_handled": bool, "summary": str}."""
-    empty = {"about_transport": False, "price_voiced": False, "objections_handled": False, "summary": ""}
+    "objections_handled": bool, "weakness": str, "reco": str, "summary": str}."""
+    empty = {"about_transport": False, "price_voiced": False, "objections_handled": False,
+             "weakness": "", "reco": "", "summary": ""}
     if not ANTHROPIC_API_KEY or not transcript:
         return dict(empty)
 
@@ -122,17 +124,23 @@ def analyze_first_touch(transcript: str, lead_name: str = "", manager: str = "")
 Розшифровка дзвінка:
 {transcript[:3000]}
 
-Оціни строго за змістом розмови:
-0) Чи розмова взагалі про вантажне ПЕРЕВЕЗЕННЯ (логістику, доставку вантажу)? Якщо це спам, помилковий номер, не про перевезення — TRANSPORT: НІ.
+Оціни строго за змістом розмови. Головна мета — дати менеджеру КОНКРЕТНИЙ дієвий розбір, щоб та сама слабка сторона більше не повторювалась.
+
+0) Чи розмова взагалі про вантажне ПЕРЕВЕЗЕННЯ (логістику, доставку вантажу)? Якщо спам, помилковий номер, не про перевезення — TRANSPORT: НІ.
 1) Чи менеджер озвучив клієнту ЦІНУ/вартість перевезення (конкретну суму, ставку або вилку цін)?
-2) Чи відпрацював заперечення клієнта (сумніви щодо ціни, термінів, надійності тощо)? Якщо заперечень не було взагалі — вважай це як "НЕ БУЛО".
+2) Чи відпрацював заперечення клієнта (сумніви щодо ціни, термінів, надійності тощо)? Якщо заперечень не було — "НЕ БУЛО".
+
+Вимоги до розбору:
+- WEAKNESS — назви ОДНУ головну слабку сторону саме цього дзвінка предметно: що конкретно менеджер НЕ зробив або зробив погано (напр.: «не озвучив навіть орієнтовної ціни», «не взяв контакт для зворотного зв'язку», «не уточнив параметри вантажу», «не відпрацював сумнів щодо строків»). Якщо дзвінок сильний і критичних недоліків немає — напиши «критичних немає».
+- FIX — одна конкретна дія-інструкція, яку менеджеру треба зробити наступного разу, щоб ця слабкість НЕ повторювалась (формулюй як чітку пораду, а не загальні слова).
 
 Відповідь рівно у форматі (без markdown):
 TRANSPORT: ТАК або НІ
 PRICE: ТАК або НІ
 OBJECTIONS: ТАК або НІ або НЕ БУЛО
-SUMMARY: <1-2 речення: що добре, що варто покращити в першому дотику>
-Українська."""
+WEAKNESS: <одна конкретна слабка сторона або «критичних немає»>
+FIX: <одна конкретна дія на майбутнє>
+Українська, без води, максимум конкретики."""
 
     try:
         resp = requests.post(
@@ -144,7 +152,7 @@ SUMMARY: <1-2 речення: що добре, що варто покращит�
             },
             json={
                 "model": MODEL,
-                "max_tokens": 320,
+                "max_tokens": 400,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=30,
@@ -159,12 +167,23 @@ SUMMARY: <1-2 речення: що добре, що варто покращит�
         about_transport = bool(_re.search(r"TRANSPORT:\s*ТАК", up))
         price_voiced = bool(_re.search(r"PRICE:\s*ТАК", up))
         objections_handled = bool(_re.search(r"OBJECTIONS:\s*ТАК", up))
-        sm = _re.search(r"SUMMARY:\s*(.+)", text, _re.DOTALL)
-        summary = sm.group(1).strip() if sm else text
+        wm = _re.search(r"WEAKNESS:\s*(.+?)(?:\n[A-ZА-ЯЇІЄ]+:|\Z)", text, _re.DOTALL)
+        fm = _re.search(r"FIX:\s*(.+)", text, _re.DOTALL)
+        weakness = wm.group(1).strip() if wm else ""
+        reco = fm.group(1).strip() if fm else ""
+        # summary для зворотної сумісності: слабка сторона + дія
+        parts = []
+        if weakness:
+            parts.append(f"⚠️ Слабка сторона: {weakness}")
+        if reco:
+            parts.append(f"🔧 Наступного разу: {reco}")
+        summary = "\n".join(parts) if parts else text
         return {
             "about_transport": about_transport,
             "price_voiced": price_voiced,
             "objections_handled": objections_handled,
+            "weakness": weakness,
+            "reco": reco,
             "summary": summary,
         }
     except Exception as e:
