@@ -341,6 +341,7 @@ export function OverviewSection({
           <div className="kpi-grid">
             <ProgressGauge
               plan={overview.plan}
+              planMonth={overview.planMonthTotal}
               fact={overview.fact}
               pct={overview.planPct}
               contributors={overview.byTeam.map((t) => ({ name: t.teamName, revenue: t.revenue, deals: t.deals }))}

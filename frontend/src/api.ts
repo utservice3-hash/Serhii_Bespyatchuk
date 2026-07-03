@@ -128,6 +128,7 @@ export async function fetchLeadgen(params: {
 
 export interface ExecutiveOverview {
   plan: number;
+  planMonthTotal: number;
   fact: number;
   planPct: number;
   closedRevenue: number;

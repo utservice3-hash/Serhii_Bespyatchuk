@@ -228,21 +228,46 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
-/* Weekly funnel matrix: compact, content-sized columns so it fits and stays
-   aligned instead of stretching to 100% width. */
+/* Weekly funnel matrix: the first two columns (Етап + Факт) are frozen; the
+   weekly columns scroll horizontally. Content-sized so nothing is cut off. */
 .data-table.weekly-funnel {
   width: max-content;
   max-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 .data-table.weekly-funnel th,
 .data-table.weekly-funnel td {
   padding: 7px 12px;
   text-align: center;
   white-space: nowrap;
+  border-bottom: 1px solid var(--border);
 }
-.data-table.weekly-funnel th:first-child,
-.data-table.weekly-funnel td:first-child {
+/* Column 1 (Етап) — frozen, wraps so long labels are never cut. */
+.data-table.weekly-funnel tbody td:nth-child(1),
+.data-table.weekly-funnel thead tr:first-child th:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 2;
   text-align: left;
+  white-space: normal;
+  width: 190px;
+  min-width: 190px;
+  max-width: 190px;
+  background: var(--card-bg);
+}
+/* Column 2 (Факт) — frozen right after Етап, with a scroll-edge shadow. */
+.data-table.weekly-funnel tbody td:nth-child(2),
+.data-table.weekly-funnel thead tr:first-child th:nth-child(2) {
+  position: sticky;
+  left: 190px;
+  z-index: 2;
+  background: var(--card-bg);
+  box-shadow: 6px 0 8px -5px rgba(0, 0, 0, 0.25);
+}
+.data-table.weekly-funnel thead tr:first-child th:nth-child(1),
+.data-table.weekly-funnel thead tr:first-child th:nth-child(2) {
+  z-index: 3;
 }
 
 .loading-text {

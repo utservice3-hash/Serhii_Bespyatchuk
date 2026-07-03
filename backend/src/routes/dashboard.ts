@@ -463,6 +463,13 @@ dashboardRouter.get("/overview", async (req, res) => {
     planTotal += planVal * (overlapDays / daysInMonth);
   }
   planTotal = Math.round(planTotal);
+  // Full (un-prorated) plan for the anchor month — so the gauge can show the
+  // whole monthly target next to the period-prorated one.
+  const planMonthTotal = Math.round(
+    planMonthsRes.rows
+      .filter((r) => r.mon.slice(0, 7) === anchorMonth)
+      .reduce((s, r) => s + Number(r.plan), 0)
+  );
 
   // Received money has two parts, shown combined with a drill-down split:
   //  1) "Успішно реалізовано" (status 142) — counted by CLOSE date in period.
@@ -696,6 +703,7 @@ dashboardRouter.get("/overview", async (req, res) => {
 
   res.json({
     plan: planTotal,
+    planMonthTotal,
     fact: successRevenue + paymentRevenue,
     planPct: planTotal > 0 ? Math.round(((successRevenue + paymentRevenue) / planTotal) * 100) : 0,
     closedRevenue: Number(closedRes.rows[0]?.revenue ?? 0),

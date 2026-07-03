@@ -5,11 +5,13 @@ import { formatAmount } from "./format";
 /** Plan-vs-fact fill bar with a hover popover listing top contributors. */
 export function ProgressGauge({
   plan,
+  planMonth,
   fact,
   pct,
   contributors,
 }: {
   plan: number;
+  planMonth?: number;
   fact: number;
   pct: number;
   contributors: { name: string; revenue: number; deals: number }[];
@@ -31,6 +33,11 @@ export function ProgressGauge({
         <span style={{ color: "var(--text-muted)" }}>Факт {formatAmount(fact)}</span>
         <span style={{ color: "var(--text-muted)" }}>План {formatAmount(plan)}</span>
       </div>
+      {planMonth != null && planMonth !== plan && (
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 8 }}>
+          План на весь місяць: {formatAmount(planMonth)} (за період — пропорційно)
+        </div>
+      )}
       <div style={{ height: 14, borderRadius: 8, background: "var(--border, #eceff3)", overflow: "hidden" }}>
         <div
           style={{

@@ -1,4 +1,4 @@
-import { Fragment, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { Fragment, useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -78,26 +78,22 @@ function ddmm(iso: string): string {
   return `${d}.${m}`;
 }
 
-/** One "Звіт по воронці клієнтів" block: 5 stages × (month plan/fact block + weekly columns). */
+/** One "Звіт по воронці клієнтів" block. Columns Етап + Факт are frozen (via
+ *  CSS .weekly-funnel), the weekly columns scroll horizontally. */
 function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; weeks: FunnelWeeklyReport["weeks"]; highlight?: boolean }) {
-  // First column is frozen (sticky) so stage labels stay visible while the
-  // weekly columns scroll horizontally.
-  const stick: CSSProperties = { position: "sticky", left: 0, zIndex: 2, background: "var(--card-bg)" };
   // Plan columns are shown ONLY when a funnel plan is set for the month —
-  // otherwise they are all "—" and just widen the table. Hiding them keeps the
-  // weekly columns compact and aligned.
+  // otherwise they are all "—" and just widen the table.
   const hasPlan = block.stages.some((s) => s.planMonth > 0);
   const perWeekCols = hasPlan ? 3 : 2;
-  const tailCols = (hasPlan ? 3 : 0) + weeks.length * perWeekCols;
+  // Everything after the frozen "Факт" column (plan cols + weekly cols).
+  const tailCols = (hasPlan ? 5 : 0) + weeks.length * perWeekCols;
 
   const moneyRow = (label: string, value: number, color: string | undefined, first: boolean) => {
     const bt = first ? "2px solid var(--border)" : undefined;
     return (
-      <tr style={{ background: "rgba(127,127,127,0.05)" }}>
-        <td style={{ ...stick, textAlign: "left", fontWeight: 600, borderTop: bt }}>{label}</td>
-        {hasPlan && <td style={{ borderTop: bt }}>—</td>}
-        {hasPlan && <td style={{ borderTop: bt }}>—</td>}
-        <td style={{ fontWeight: 700, color: color ?? "var(--text)", whiteSpace: "nowrap", borderTop: bt }}>{formatAmount(value)}</td>
+      <tr>
+        <td style={{ fontWeight: 600, borderTop: bt }}>{label}</td>
+        <td style={{ fontWeight: 700, color: color ?? "var(--text)", borderTop: bt }}>{formatAmount(value)}</td>
         {tailCols > 0 && <td colSpan={tailCols} style={{ borderTop: bt }} />}
       </tr>
     );
@@ -112,10 +108,10 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
       <table className="data-table weekly-funnel" style={{ fontSize: 12 }}>
         <thead>
           <tr>
-            <th rowSpan={2} style={{ ...stick, zIndex: 3, textAlign: "left", background: "var(--card-bg)", minWidth: 190 }}>Етап</th>
+            <th rowSpan={2}>Етап</th>
+            <th rowSpan={2}>Факт</th>
             {hasPlan && <th rowSpan={2}>План<br />міс</th>}
             {hasPlan && <th rowSpan={2}>План<br />сьогодні</th>}
-            <th rowSpan={2}>Факт</th>
             {hasPlan && <th rowSpan={2}>Темп<br />плану %</th>}
             {hasPlan && <th rowSpan={2}>Викон.<br />міс %</th>}
             {hasPlan && <th rowSpan={2}>Відст.<br />шт</th>}
@@ -143,10 +139,10 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
             const lag = Math.max(0, s.planToday - s.factToday);
             return (
               <tr key={s.stage}>
-                <td style={{ ...stick, textAlign: "left", fontWeight: 600 }}>{s.label}</td>
+                <td style={{ fontWeight: 600 }}>{s.label}</td>
+                <td style={{ fontWeight: 700, color: "#c5141c" }}>{s.factToday}</td>
                 {hasPlan && <td>{s.planMonth || "—"}</td>}
                 {hasPlan && <td>{s.planToday || "—"}</td>}
-                <td style={{ fontWeight: 700, color: "#c5141c" }}>{s.factToday}</td>
                 {hasPlan && <td style={{ color: tempo != null ? (tempo >= 100 ? "#16a34a" : "#dc2626") : undefined }}>{tempo != null ? `${tempo}%` : "—"}</td>}
                 {hasPlan && <td>{exec != null ? `${exec.toFixed(1)}%` : "—"}</td>}
                 {hasPlan && <td style={{ color: s.planMonth > 0 && lag > 0 ? "#dc2626" : undefined }}>{s.planMonth > 0 ? lag : "—"}</td>}
