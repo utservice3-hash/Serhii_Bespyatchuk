@@ -1,4 +1,4 @@
-import { Fragment, useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -80,12 +80,35 @@ function ddmm(iso: string): string {
 
 /** One "Звіт по воронці клієнтів" block: 5 stages × (month plan/fact block + weekly columns). */
 function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; weeks: FunnelWeeklyReport["weeks"]; highlight?: boolean }) {
+  // First column is frozen (sticky) so stage labels stay visible while the
+  // weekly columns scroll horizontally.
+  const stickyBg = highlight ? "#c5141c" : "var(--card-bg)";
+  const stick: CSSProperties = { position: "sticky", left: 0, zIndex: 2, background: "var(--card-bg)" };
   return (
-    <div style={{ overflowX: "auto", marginBottom: 18 }}>
+    <div style={{ marginBottom: 8 }}>
+      <div
+        style={{
+          display: "flex", flexWrap: "wrap", gap: 16, alignItems: "baseline",
+          padding: "8px 12px", marginBottom: 4, borderRadius: 8,
+          background: highlight ? "rgba(197,20,28,0.08)" : "var(--hover-bg, rgba(127,127,127,0.06))",
+        }}
+      >
+        <strong style={{ fontSize: 14, color: highlight ? "#c5141c" : "var(--text)" }}>{block.name}</strong>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          Перенесені з мин. міс.: <b style={{ color: "var(--text)" }}>{formatAmount(block.money.carryover)}</b>
+        </span>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          Очікувані оплати: <b style={{ color: "var(--text)" }}>{formatAmount(block.money.expected)}</b>
+        </span>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          Оплата отримана: <b style={{ color: "#16a34a" }}>{formatAmount(block.money.received)}</b>
+        </span>
+      </div>
+      <div style={{ overflowX: "auto" }}>
       <table className="data-table" style={{ minWidth: 640 + weeks.length * 150, fontSize: 12 }}>
         <thead>
           <tr>
-            <th rowSpan={2} style={{ textAlign: "left", background: highlight ? "#c5141c" : undefined, color: highlight ? "#fff" : undefined }}>{block.name}</th>
+            <th rowSpan={2} style={{ ...stick, zIndex: 3, textAlign: "left", background: stickyBg, color: highlight ? "#fff" : undefined, minWidth: 210 }}>Етап</th>
             <th rowSpan={2}>План<br />міс</th>
             <th rowSpan={2}>План<br />сьогодні</th>
             <th rowSpan={2}>Факт</th>
@@ -116,7 +139,7 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
             const lag = Math.max(0, s.planToday - s.factToday);
             return (
               <tr key={s.stage}>
-                <td style={{ textAlign: "left", fontWeight: 600 }}>{s.label}</td>
+                <td style={{ ...stick, textAlign: "left", fontWeight: 600 }}>{s.label}</td>
                 <td>{s.planMonth || "—"}</td>
                 <td>{s.planToday || "—"}</td>
                 <td style={{ fontWeight: 700, color: "#c5141c" }}>{s.factToday}</td>
@@ -139,6 +162,7 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

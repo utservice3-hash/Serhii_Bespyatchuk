@@ -2118,6 +2118,43 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
     pParams
   );
 
+  // MONEY per manager (live sums, so they follow the deal's current budget):
+  //  • carryover = deals still "Авто працює"/in progress (not paid) that were
+  //    created BEFORE the 1st of this month — "перенесені з минулого місяця".
+  //  • expected  = ALL deals in progress not yet paid — expected payments this month.
+  //  • received  = paid: "Оплата отримана" snapshot (69716460/60412544) +
+  //    "Успішна угода" (142) closed within the month.
+  const IN_PROGRESS =
+    "(psm.funnel_stage IN ('approved','invoiced') OR d.status_id IN (69716300, 98470988, 10937178))";
+  const mParams: unknown[] = [[8921932, 155304], fmt(mStart), fmt(mStart), fmt(factUpper)];
+  const mConds = ["d.pipeline_id = ANY($1)"];
+  if (managerId) { mParams.push(managerId); mConds.push(`d.manager_id = $${mParams.length}`); }
+  if (teamId) { mParams.push(teamId); mConds.push(`m.team_id = $${mParams.length}`); }
+  const moneyRows = await pool.query<{ manager_id: number; carryover: string; expected: string; received: string }>(
+    `SELECT d.manager_id,
+       COALESCE(SUM(d.price) FILTER (WHERE ${IN_PROGRESS} AND (d.created_at_kommo ${KYIV})::date < $2), 0) AS carryover,
+       COALESCE(SUM(d.price) FILTER (WHERE ${IN_PROGRESS}), 0) AS expected,
+       COALESCE(SUM(d.price) FILTER (WHERE d.status_id IN (69716460, 60412544)), 0)
+       + COALESCE(SUM(d.price) FILTER (WHERE d.status_id = 142 AND (d.closed_at_kommo ${KYIV})::date BETWEEN $3 AND $4), 0) AS received
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
+     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${mConds.join(" AND ")}
+     GROUP BY d.manager_id`,
+    mParams
+  );
+  type Money = { carryover: number; expected: number; received: number };
+  const emptyMoney = (): Money => ({ carryover: 0, expected: 0, received: 0 });
+  const overallMoney = emptyMoney();
+  const mgrMoney = new Map<number, Money>();
+  for (const r of moneyRows.rows) {
+    const m: Money = { carryover: Number(r.carryover), expected: Number(r.expected), received: Number(r.received) };
+    mgrMoney.set(r.manager_id, m);
+    overallMoney.carryover += m.carryover;
+    overallMoney.expected += m.expected;
+    overallMoney.received += m.received;
+  }
+
   // Aggregate facts: overall + per manager, keyed stage → mondayWeek → count.
   type WkMap = Record<string, Record<string, number>>;
   const overallFacts: WkMap = {};
@@ -2159,7 +2196,7 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
       };
     });
 
-  const managerIds = new Set<number>([...mgrFacts.keys(), ...mgrPlan.keys()]);
+  const managerIds = new Set<number>([...mgrFacts.keys(), ...mgrPlan.keys(), ...mgrMoney.keys()]);
   // Names for managers that appear only in the plan (no facts yet) need a lookup.
   const missingNames = [...managerIds].filter((id) => !mgrName.has(id));
   if (missingNames.length) {
@@ -2172,10 +2209,11 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   const byManager = managerId
     ? []
     : [...managerIds]
-        .map((id) => ({ managerId: id, name: mgrName.get(id) ?? `#${id}`, stages: buildStages(mgrFacts.get(id)?.facts ?? {}, mgrPlan.get(id) ?? {}) }))
+        .map((id) => ({ managerId: id, name: mgrName.get(id) ?? `#${id}`, stages: buildStages(mgrFacts.get(id)?.facts ?? {}, mgrPlan.get(id) ?? {}), money: mgrMoney.get(id) ?? emptyMoney() }))
         .sort((a, b) => {
-          const pa = a.stages.reduce((s, x) => s + x.planMonth, 0);
-          const pb = b.stages.reduce((s, x) => s + x.planMonth, 0);
+          if (b.money.received !== a.money.received) return b.money.received - a.money.received;
+          const pa = a.stages.reduce((s, x) => s + x.factToday, 0);
+          const pb = b.stages.reduce((s, x) => s + x.factToday, 0);
           if (pb !== pa) return pb - pa;
           return a.name.localeCompare(b.name, "uk");
         });
@@ -2186,7 +2224,7 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
     today: fmt(today),
     workingDays: { total: totalWd, elapsed: elapsedWd },
     weeks: weeks.map((w) => ({ label: w.label, from: w.from, to: w.to })),
-    overall: { name: "ЗАГАЛЬНИЙ", stages: buildStages(overallFacts, overallPlan) },
+    overall: { name: "ЗАГАЛЬНИЙ", stages: buildStages(overallFacts, overallPlan), money: overallMoney },
     byManager,
   });
 });

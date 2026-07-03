@@ -524,6 +524,7 @@ export interface WeeklyStageRow {
 export interface WeeklyBlock {
   name: string;
   stages: WeeklyStageRow[];
+  money: { carryover: number; expected: number; received: number };
 }
 export interface FunnelWeeklyReport {
   scope: "manager" | "team";
