@@ -36,14 +36,25 @@ export const NAV_GROUPS = [
   {
     label: "Система",
     items: [
-      { key: "feedback", label: "Зворотний звʼязок", icon: "🐞" },
-      { key: "aiwork", label: "Робота з АІ", icon: "🤖" },
-      { key: "settings", label: "Налаштування", icon: "⚙️" },
+      { key: "feedback", label: "Зворотний звʼязок", icon: "🐞", roles: ["admin", "team_lead"] },
+      { key: "aiwork", label: "Робота з АІ", icon: "🤖", roles: ["admin"] },
+      { key: "settings", label: "Налаштування", icon: "⚙️", roles: ["admin"] },
     ],
   },
 ] as const;
 
+type NavItem = { key: string; label: string; icon: string; roles?: readonly string[] };
 export type NavKey = (typeof NAV_GROUPS)[number]["items"][number]["key"];
+
+/** Nav items visible to a given role (items without `roles` are visible to all). */
+export function navGroupsForRole(role: string | undefined) {
+  return NAV_GROUPS
+    .map((g) => ({
+      label: g.label,
+      items: (g.items as readonly NavItem[]).filter((it) => !it.roles || (role != null && it.roles.includes(role))),
+    }))
+    .filter((g) => g.items.length > 0);
+}
 
 export const NAV_ITEMS: { key: NavKey; label: string; icon: string }[] = NAV_GROUPS.flatMap(
   (g) => g.items as readonly { key: NavKey; label: string; icon: string }[]
@@ -54,13 +65,16 @@ export function Layout({
   active,
   onSelect,
   onBack,
+  role,
 }: {
   children: React.ReactNode;
   active: NavKey;
   onSelect: (key: NavKey) => void;
   onBack?: () => void;
+  role?: string;
 }) {
   const navigate = useNavigate();
+  const navGroups = navGroupsForRole(role);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1"
   );
@@ -107,7 +121,7 @@ export function Layout({
           {!collapsed && "Згорнути"}
         </button>
         <nav className="sidebar-nav">
-          {NAV_GROUPS.map((group) => (
+          {navGroups.map((group) => (
             <div key={group.label} style={{ marginBottom: 8 }}>
               {!collapsed && (
                 <div
@@ -127,7 +141,7 @@ export function Layout({
                 <button
                   key={item.key}
                   className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
-                  onClick={() => onSelect(item.key)}
+                  onClick={() => onSelect(item.key as NavKey)}
                   title={item.label}
                 >
                   <span className="sidebar-nav-icon">{item.icon}</span>

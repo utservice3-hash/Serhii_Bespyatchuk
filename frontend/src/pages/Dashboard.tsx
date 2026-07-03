@@ -825,6 +825,7 @@ export function Dashboard() {
       active={section}
       onSelect={navigateTo}
       onBack={canGoBack ? goBack : undefined}
+      role={auth?.role}
     >
       {section === "overview" && (
         <OverviewSection
