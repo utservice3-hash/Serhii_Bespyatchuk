@@ -826,6 +826,7 @@ export function Dashboard() {
     >
       {section === "overview" && (
         <OverviewSection
+          isManager={auth?.role === "manager"}
           teamId={teamId}
           setTeamId={setTeamId}
           teams={teams}

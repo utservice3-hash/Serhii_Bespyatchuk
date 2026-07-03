@@ -26,6 +26,7 @@ export type Kpi = {
 };
 
 export function OverviewSection({
+  isManager,
   teamId,
   setTeamId,
   teams,
@@ -49,6 +50,7 @@ export function OverviewSection({
   canSync,
   onManualSync,
 }: {
+  isManager: boolean;
   teamId: number | "";
   setTeamId: Dispatch<SetStateAction<number | "">>;
   teams: Team[];
@@ -117,17 +119,19 @@ export function OverviewSection({
               {syncing ? "Синхронізація…" : "🔄 Синхронізувати"}
             </button>
           )}
-          <select
-            value={teamId}
-            onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
-          >
-            <option value="">Усі команди</option>
-            {teams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
+          {!isManager && (
+            <select
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
+            >
+              <option value="">Усі команди</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          )}
 
           <select value={granularity} onChange={(e) => setGranularity(e.target.value as "day" | "week" | "month")}>
             <option value="day">По днях</option>
@@ -186,7 +190,7 @@ export function OverviewSection({
         const pct = kpi.prev > 0 ? Math.round((diff / kpi.prev) * 100) : kpi.cur > 0 ? 100 : 0;
         const fmt = (n: number) =>
           kpi.unit === "%" ? `${Math.round(n)}%` : kpi.key === "sum" || kpi.key === "avg" ? formatAmount(n) : n.toLocaleString("uk-UA");
-        const showTeams = kpi.key === "sum" || kpi.key === "deals";
+        const showTeams = !isManager && (kpi.key === "sum" || kpi.key === "deals");
         return (
           <div onClick={() => setKpiDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 24 }}>
             <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 24, width: "90vw", maxWidth: 640, maxHeight: "85vh", overflowY: "auto" }}>
@@ -273,7 +277,7 @@ export function OverviewSection({
                 </table>
               )}
 
-              {kpi.key === "avg" && overview && (
+              {kpi.key === "avg" && overview && !isManager && (
                 <table className="data-table">
                   <thead><tr><th>Команда</th><th>Середній чек</th><th>Угод</th></tr></thead>
                   <tbody>
@@ -395,6 +399,7 @@ export function OverviewSection({
             </div>
           </div>
 
+          {!isManager && (
           <div className="chart-grid">
             <div className="chart-card">
               <h2 className="chart-title">Виручка по командах</h2>
@@ -441,6 +446,7 @@ export function OverviewSection({
               </table>
             </div>
           </div>
+          )}
         </>
       )}
 
@@ -517,7 +523,7 @@ export function OverviewSection({
               <div className="kpi-card"><span className="kpi-label">Успішно реалізовано</span><span className="kpi-value">{overview.transferred.success.toLocaleString("uk-UA")}</span></div>
               <div className="kpi-card"><span className="kpi-label">Різниця (не закрито)</span><span className="kpi-value">{(overview.transferred.total - overview.transferred.success).toLocaleString("uk-UA")}</span></div>
             </div>
-            {overview.transferred.byTeam.length === 0 ? (
+            {isManager ? null : overview.transferred.byTeam.length === 0 ? (
               <p className="loading-text">Немає даних за період.</p>
             ) : (
               <table className="data-table">
