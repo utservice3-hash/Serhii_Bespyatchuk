@@ -246,6 +246,12 @@ async function upsertDeal(
   const { name: clientName, key: clientKey } = resolveClient(deal, companyNameById, contactById);
   const source = extractLeadSource(deal);
 
+  // "Мінусові" угоди: Kommo's calculator can't store a negative budget, so it
+  // shows it as positive. These deals are marked by the word "мінус" in the
+  // name — persist their budget as NEGATIVE so every money sum nets correctly.
+  const isMinusDeal = /мінус/i.test(deal.name ?? "");
+  const signedPrice = isMinusDeal ? -Math.abs(Number(deal.price) || 0) : deal.price;
+
   await pool.query(
     `INSERT INTO deals (
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
@@ -274,7 +280,7 @@ async function upsertDeal(
         deal.responsible_user_id,
         deal.pipeline_id,
         deal.status_id,
-        deal.price,
+        signedPrice,
         toTimestamp(deal.created_at),
         toTimestamp(deal.updated_at),
         toTimestamp(deal.closed_at),
