@@ -55,6 +55,47 @@ export function ReceivablesSection({
       ) : receivablesData.length === 0 ? (
         <p className="loading-text">Немає даних.</p>
       ) : (
+        <>
+        {(() => {
+          const all = receivablesData
+            .flatMap((m) => m.clients.map((c) => ({ ...c, managerName: m.managerName })))
+            .sort((a, b) => b.amount - a.amount);
+          const total = all.reduce((s, c) => s + c.amount, 0);
+          return (
+            <details className="chart-card" style={{ marginBottom: 16 }} open>
+              <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 16 }}>
+                Усі боржники — звід ({all.length}) · {formatAmount(total)}
+              </summary>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "6px 0 8px" }}>
+                Перелік усіх клієнтів із сумою боргу та кількістю днів без оплати. Червоним — прострочка понад ліміт.
+              </p>
+              <div style={{ overflowX: "auto" }}>
+                <table className="data-table">
+                  <thead>
+                    <tr><th>#</th><th>Клієнт</th><th>Менеджер</th><th>Сума боргу</th><th>Днів не оплачено</th><th>Ліміт днів</th><th>Дата оплати</th><th>Коментар</th></tr>
+                  </thead>
+                  <tbody>
+                    {all.map((c, i) => {
+                      const over = c.overdueDays != null && c.limitDays != null && c.overdueDays > c.limitDays;
+                      return (
+                        <tr key={`${c.clientKey}-${i}`}>
+                          <td>{i + 1}</td>
+                          <td>{c.clientName}</td>
+                          <td style={{ color: "var(--text-muted)" }}>{c.managerName}</td>
+                          <td style={{ fontWeight: 600 }}>{formatAmount(c.amount)}</td>
+                          <td style={over ? { color: "#dc2626", fontWeight: 700 } : undefined}>{c.overdueDays ?? "—"}</td>
+                          <td>{c.limitDays ?? "—"}</td>
+                          <td>{c.dueDate ?? "—"}</td>
+                          <td>{c.comment ?? "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          );
+        })()}
         <div className="chart-grid">
           {receivablesData.map((m) => (
             <div className="chart-card" key={m.managerId}>
@@ -124,6 +165,7 @@ export function ReceivablesSection({
             </div>
           ))}
         </div>
+        </>
       )}
     </>
   );
