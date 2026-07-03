@@ -1351,7 +1351,7 @@ export function Dashboard() {
                 <select value={newUserForm.role} onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value as any })}>
                   <option value="manager">Менеджер</option>
                   <option value="team_lead">Тімлід</option>
-                  <option value="admin">Адмін</option>
+                  <option value="admin">Керівник відділу продажу</option>
                 </select>
                 <select value={newUserForm.teamId} onChange={(e) => setNewUserForm({ ...newUserForm, teamId: e.target.value ? Number(e.target.value) : "" })}>
                   <option value="">Без команди</option>
@@ -1381,7 +1381,7 @@ export function Dashboard() {
                       <td>{u.team_name ?? "—"}</td>
                       <td>
                         {u.role === "admin" ? (
-                          "Адмін"
+                          "Керівник відділу продажу"
                         ) : (
                           <button
                             onClick={() => handleToggleRole(u)}
