@@ -1587,6 +1587,44 @@ dashboardRouter.get("/teams", async (req, res) => {
      WHERE m.team_id IS NOT NULL GROUP BY m.team_id`
   );
 
+  // Per-manager breakdown for the team drill-down: revenue (success+payment),
+  // deals, the month's plan and receivables — one row per active manager.
+  const planMonth = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
+  const mSuccess = await pool.query<{ id: number; name: string; tid: number; rev: string; deals: string }>(
+    `SELECT m.id, m.name, m.team_id AS tid, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${sucCond.join(" AND ")} GROUP BY m.id, m.name, m.team_id`,
+    sp
+  );
+  const mPay = await pool.query<{ id: number; name: string; tid: number; rev: string; deals: string }>(
+    `SELECT m.id, m.name, m.team_id AS tid, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
+     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+     WHERE d.status_id IN (69716460, 60412544) GROUP BY m.id, m.name, m.team_id`
+  );
+  const mPlan = await pool.query<{ id: number; name: string; tid: number; plan: string }>(
+    `SELECT m.id, m.name, m.team_id AS tid, SUM(p.planned_value) AS plan
+     FROM plans p JOIN managers m ON m.id = p.manager_id AND m.is_active
+     WHERE p.metric = 'payment_amount' AND p.plan_date = $1 GROUP BY m.id, m.name, m.team_id`,
+    [planMonth]
+  );
+  const mRecv = await pool.query<{ id: number; debt: string }>(
+    `SELECT r.manager_id AS id, COALESCE(SUM(r.amount),0) AS debt FROM receivables r GROUP BY r.manager_id`
+  );
+  type MgrRow = { id: number; name: string; teamId: number; revenue: number; deals: number; plan: number; receivables: number };
+  const mmap = new Map<number, MgrRow>();
+  const mget = (id: number, tid: number | null, name: string): MgrRow => {
+    let e = mmap.get(id);
+    if (!e) { e = { id, name, teamId: tid ?? 0, revenue: 0, deals: 0, plan: 0, receivables: 0 }; mmap.set(id, e); }
+    if (name) e.name = name;
+    if (tid) e.teamId = tid;
+    return e;
+  };
+  for (const r of mSuccess.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
+  for (const r of mPay.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
+  for (const r of mPlan.rows) { mget(r.id, r.tid, r.name).plan += Number(r.plan); }
+  for (const r of mRecv.rows) { const e = mmap.get(r.id); if (e) e.receivables += Number(r.debt); }
+
   const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number }>();
   const get = (id: number, name?: string) => {
     let e = map.get(id);
@@ -1611,6 +1649,19 @@ dashboardRouter.get("/teams", async (req, res) => {
       avgCheck: e.deals > 0 ? Math.round(e.revenue / e.deals) : 0,
       conversion: e.leads > 0 ? Math.round((e.paid / e.leads) * 100) : 0,
       receivables: e.receivables,
+      managers: [...mmap.values()]
+        .filter((m) => m.teamId === e.teamId && (m.revenue > 0 || m.deals > 0 || m.plan > 0 || m.receivables > 0))
+        .map((m) => ({
+          id: m.id,
+          name: m.name,
+          revenue: m.revenue,
+          deals: m.deals,
+          avgCheck: m.deals > 0 ? Math.round(m.revenue / m.deals) : 0,
+          plan: m.plan,
+          planPct: m.plan > 0 ? Math.round((m.revenue / m.plan) * 100) : 0,
+          receivables: m.receivables,
+        }))
+        .sort((a, b) => b.revenue - a.revenue),
     }))
     .sort((a, b) => b.revenue - a.revenue);
   res.json({ teams });

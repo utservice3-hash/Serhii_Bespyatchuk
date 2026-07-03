@@ -425,6 +425,16 @@ export async function fetchReceivables(params: {
   return data;
 }
 
+export interface TeamManagerRow {
+  id: number;
+  name: string;
+  revenue: number;
+  deals: number;
+  avgCheck: number;
+  plan: number;
+  planPct: number;
+  receivables: number;
+}
 export interface TeamRanking {
   teamId: number;
   teamName: string;
@@ -433,6 +443,7 @@ export interface TeamRanking {
   avgCheck: number;
   conversion: number;
   receivables: number;
+  managers: TeamManagerRow[];
 }
 
 export interface ReportData {
