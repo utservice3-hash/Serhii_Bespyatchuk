@@ -523,6 +523,31 @@ dashboardRouter.get("/overview", async (req, res) => {
      WHERE ${cfScope.join(" AND ")}`,
     cfParams
   );
+  // Where those created deals are now — breakdown by current funnel stage (for
+  // the "Створені угоди" drill-down: скільки угод на якому етапі).
+  const createdByStageRes = await pool.query<{ stage: string | null; c: string; amount: string }>(
+    `SELECT psm.funnel_stage AS stage, COUNT(*) AS c, COALESCE(SUM(d.price),0) AS amount
+     FROM deals d JOIN managers m ON m.id = d.manager_id
+     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${cfScope.join(" AND ")}
+     GROUP BY psm.funnel_stage`,
+    cfParams
+  );
+  const STAGE_ORDER = ["lead_taken", "quote_requested", "approved", "invoiced", "paid"];
+  const STAGE_LBL: Record<string, string> = {
+    lead_taken: "Взято в роботу", quote_requested: "Отримано заявку на прорахунок",
+    approved: "Договір/заявку погоджено", invoiced: "Виставлено рахунок", paid: "Оплачено / успішно",
+  };
+  const createdByStage = [
+    ...STAGE_ORDER.map((st) => {
+      const r = createdByStageRes.rows.find((x) => x.stage === st);
+      return { stage: st, label: STAGE_LBL[st], deals: Number(r?.c ?? 0), amount: Number(r?.amount ?? 0) };
+    }),
+    (() => {
+      const other = createdByStageRes.rows.filter((x) => !x.stage || !STAGE_ORDER.includes(x.stage));
+      return { stage: "other", label: "Інші етапи", deals: other.reduce((s, x) => s + Number(x.c), 0), amount: other.reduce((s, x) => s + Number(x.amount), 0) };
+    })(),
+  ].filter((s) => s.deals > 0);
 
   // Carried-over deals: the fixed start-of-month snapshot for the viewed month.
   const carryMonth = (from ? from.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
@@ -591,6 +616,36 @@ dashboardRouter.get("/overview", async (req, res) => {
     if (r.ch === "ad" || r.ch === "leadgen") newClientsBySource[r.ch] = Number(r.clients);
     else newClientsBySource.other += Number(r.clients);
   }
+
+  // New clients list (name + orders + revenue in the period) for the "Виручка
+  // від нових клієнтів" drill-down — same cohort as newClientsBySource.
+  const newListRes = await pool.query<{ name: string; orders: string; revenue: string }>(
+    `WITH firsts AS (
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid, COUNT(*) AS cnt
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+       GROUP BY d.client_key
+     )
+     SELECT COALESCE(MAX(d.client_name), 'Клієнт') AS name,
+            COUNT(*) AS orders,
+            COALESCE(SUM(d.price), 0) AS revenue
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     JOIN firsts f ON f.client_key = d.client_key
+     ${paidWhere}
+       AND ${from ? `f.first_paid >= $${params.length + 1}::date` : `f.cnt = 1`}
+     GROUP BY d.client_key
+     ORDER BY revenue DESC
+     LIMIT 300`,
+    from ? [...params, from] : params
+  );
+  const newClientsList = newListRes.rows.map((r) => ({
+    clientName: r.name,
+    orders: Number(r.orders),
+    revenue: Number(r.revenue),
+  }));
 
   const newRow = newRepeat.rows.find((r) => r.bucket === "new");
   const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
@@ -716,8 +771,10 @@ dashboardRouter.get("/overview", async (req, res) => {
       })),
     },
     createdFullCycle: Number(createdFullRes.rows[0]?.c ?? 0),
+    createdByStage,
     carryover,
     repeatClientsList,
+    newClientsList,
     newClientsBySource,
     transferred,
     adConversion,

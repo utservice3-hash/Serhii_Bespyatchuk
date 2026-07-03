@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -75,6 +75,8 @@ export function OverviewSection({
   onManualSync: () => void;
 }) {
   const [showTransferred, setShowTransferred] = useState(false);
+  const [cardDetail, setCardDetail] = useState<null | "created" | "newRev" | "repeatRev">(null);
+  const clickableCard: CSSProperties = { textAlign: "left", border: "none", cursor: "pointer", background: "var(--card-bg)" };
   return (
     <>
       <div className="page-header">
@@ -351,10 +353,10 @@ export function OverviewSection({
               value={`${overview.pendingPayments.deals} угод · ${formatAmount(overview.pendingPayments.revenue)}`}
               rows={overview.pendingPayments.byTeam}
             />
-            <div className="kpi-card">
+            <button className="kpi-card" style={clickableCard} onClick={() => setCardDetail("created")} title="Натисніть: скільки створених угод на якому етапі">
               <span className="kpi-label">Створені угоди (Повний цикл)</span>
               <span className="kpi-value">{overview.createdFullCycle.toLocaleString("uk-UA")}</span>
-            </div>
+            </button>
             <div className="kpi-card" title="Угоди ще в роботі (погоджені → рахунок → оплата отримана, крім Успішна) — знімок на початок місяця, фіксується один раз">
               <span className="kpi-label">Сума перенесених угод з минулого місяця</span>
               <span className="kpi-value">
@@ -380,16 +382,16 @@ export function OverviewSection({
                 різниця {(overview.transferred.total - overview.transferred.success).toLocaleString("uk-UA")}
               </span>
             </button>
-            <div className="kpi-card">
+            <button className="kpi-card" style={clickableCard} onClick={() => setCardDetail("newRev")} title="Натисніть: перелік нових клієнтів із сумою">
               <span className="kpi-label">Виручка від нових клієнтів</span>
               <span className="kpi-value">{formatAmount(overview.newRevenue)}</span>
-            </div>
+            </button>
             <div className="kpi-card">
               <span className="kpi-label">Дебіторська заборгованість</span>
               <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
             </div>
-            <div className="kpi-card">
-              <span className="kpi-label" title="Виручка від постійних (повторних) клієнтів за період, та її частка в загальній">Виручка від постійних клієнтів</span>
+            <button className="kpi-card" style={clickableCard} onClick={() => setCardDetail("repeatRev")} title="Натисніть: перелік постійних клієнтів (назва, к-сть замовлень, сума)">
+              <span className="kpi-label">Виручка від постійних клієнтів</span>
               <span className="kpi-value">{formatAmount(overview.repeatRevenue)}</span>
               <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                 {overview.newRevenue + overview.repeatRevenue > 0
@@ -399,7 +401,7 @@ export function OverviewSection({
                   : 0}
                 % від загальної
               </span>
-            </div>
+            </button>
           </div>
 
           {!isManager && (
@@ -546,6 +548,49 @@ export function OverviewSection({
           </div>
         </div>
       )}
+
+      {cardDetail && overview && (() => {
+        const title = cardDetail === "created" ? "Створені угоди — за етапами"
+          : cardDetail === "newRev" ? "Виручка від нових клієнтів"
+          : "Виручка від постійних клієнтів";
+        const list = cardDetail === "newRev" ? overview.newClientsList : cardDetail === "repeatRev" ? overview.repeatClientsList : [];
+        return (
+          <div onClick={() => setCardDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 24 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 24, width: "90vw", maxWidth: 680, maxHeight: "85vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <h2 className="chart-title" style={{ marginBottom: 0 }}>{title}</h2>
+                <button onClick={() => setCardDetail(null)} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
+              </div>
+              {cardDetail === "created" ? (
+                <table className="data-table">
+                  <thead><tr><th>Етап (де зараз)</th><th>Угод</th><th>Сума</th></tr></thead>
+                  <tbody>
+                    {overview.createdByStage.map((s) => (
+                      <tr key={s.stage}><td>{s.label}</td><td style={{ fontWeight: 600 }}>{s.deals.toLocaleString("uk-UA")}</td><td>{formatAmount(s.amount)}</td></tr>
+                    ))}
+                    <tr style={{ fontWeight: 700, borderTop: "2px solid var(--border)" }}>
+                      <td>Разом створено</td>
+                      <td>{overview.createdFullCycle.toLocaleString("uk-UA")}</td>
+                      <td>{formatAmount(overview.createdByStage.reduce((s, x) => s + x.amount, 0))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              ) : list.length === 0 ? (
+                <p className="loading-text">Немає даних за період.</p>
+              ) : (
+                <table className="data-table">
+                  <thead><tr><th>Клієнт</th><th>Замовлень (рахунків)</th><th>Сума</th></tr></thead>
+                  <tbody>
+                    {list.map((c, i) => (
+                      <tr key={i}><td>{c.clientName}</td><td>{c.orders}</td><td style={{ fontWeight: 600 }}>{formatAmount(c.revenue)}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </>
   );
 }
