@@ -84,39 +84,45 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
   // weekly columns scroll horizontally.
   const stickyBg = highlight ? "#c5141c" : "var(--card-bg)";
   const stick: CSSProperties = { position: "sticky", left: 0, zIndex: 2, background: "var(--card-bg)" };
+  // Plan columns are shown ONLY when a funnel plan is set for the month —
+  // otherwise they are all "—" and just widen the table. Hiding them keeps the
+  // weekly columns compact and aligned.
+  const hasPlan = block.stages.some((s) => s.planMonth > 0);
+  const perWeekCols = hasPlan ? 3 : 2;
+  const tailCols = (hasPlan ? 3 : 0) + weeks.length * perWeekCols;
+  const minW = 200 + 70 + weeks.length * (hasPlan ? 150 : 104) + (hasPlan ? 260 : 0);
+
+  const moneyRow = (label: string, value: number, color: string | undefined, first: boolean) => {
+    const bt = first ? "2px solid var(--border)" : undefined;
+    return (
+      <tr style={{ background: "rgba(127,127,127,0.05)" }}>
+        <td style={{ ...stick, textAlign: "left", fontWeight: 600, borderTop: bt }}>{label}</td>
+        {hasPlan && <td style={{ borderTop: bt }}>—</td>}
+        {hasPlan && <td style={{ borderTop: bt }}>—</td>}
+        <td style={{ fontWeight: 700, color: color ?? "var(--text)", whiteSpace: "nowrap", borderTop: bt }}>{formatAmount(value)}</td>
+        {tailCols > 0 && <td colSpan={tailCols} style={{ borderTop: bt }} />}
+      </tr>
+    );
+  };
+
   return (
-    <div style={{ marginBottom: 8 }}>
-      <div
-        style={{
-          display: "flex", flexWrap: "wrap", gap: 16, alignItems: "baseline",
-          padding: "8px 12px", marginBottom: 4, borderRadius: 8,
-          background: highlight ? "rgba(197,20,28,0.08)" : "var(--hover-bg, rgba(127,127,127,0.06))",
-        }}
-      >
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ padding: "6px 12px", marginBottom: 4, borderRadius: 8, background: highlight ? "rgba(197,20,28,0.08)" : "var(--hover-bg, rgba(127,127,127,0.06))" }}>
         <strong style={{ fontSize: 14, color: highlight ? "#c5141c" : "var(--text)" }}>{block.name}</strong>
-        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          Перенесені з мин. міс.: <b style={{ color: "var(--text)" }}>{formatAmount(block.money.carryover)}</b>
-        </span>
-        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          Очікувані оплати: <b style={{ color: "var(--text)" }}>{formatAmount(block.money.expected)}</b>
-        </span>
-        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          Оплата отримана: <b style={{ color: "#16a34a" }}>{formatAmount(block.money.received)}</b>
-        </span>
       </div>
       <div style={{ overflowX: "auto" }}>
-      <table className="data-table" style={{ minWidth: 640 + weeks.length * 150, fontSize: 12 }}>
+      <table className="data-table" style={{ minWidth: minW, fontSize: 12 }}>
         <thead>
           <tr>
-            <th rowSpan={2} style={{ ...stick, zIndex: 3, textAlign: "left", background: stickyBg, color: highlight ? "#fff" : undefined, minWidth: 210 }}>Етап</th>
-            <th rowSpan={2}>План<br />міс</th>
-            <th rowSpan={2}>План<br />сьогодні</th>
+            <th rowSpan={2} style={{ ...stick, zIndex: 3, textAlign: "left", background: stickyBg, color: highlight ? "#fff" : undefined, minWidth: 200 }}>Етап</th>
+            {hasPlan && <th rowSpan={2}>План<br />міс</th>}
+            {hasPlan && <th rowSpan={2}>План<br />сьогодні</th>}
             <th rowSpan={2}>Факт</th>
-            <th rowSpan={2}>Темп<br />плану %</th>
-            <th rowSpan={2}>Викон.<br />міс %</th>
-            <th rowSpan={2}>Відст.<br />шт</th>
+            {hasPlan && <th rowSpan={2}>Темп<br />плану %</th>}
+            {hasPlan && <th rowSpan={2}>Викон.<br />міс %</th>}
+            {hasPlan && <th rowSpan={2}>Відст.<br />шт</th>}
             {weeks.map((w) => (
-              <th key={w.label} colSpan={3} style={{ textAlign: "center", borderLeft: "2px solid var(--border)" }}>
+              <th key={w.label} colSpan={perWeekCols} style={{ textAlign: "center", borderLeft: "2px solid var(--border)" }}>
                 {w.label}<br /><span style={{ fontWeight: 400, fontSize: 10 }}>{ddmm(w.from)}–{ddmm(w.to)}</span>
               </th>
             ))}
@@ -124,8 +130,8 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
           <tr>
             {weeks.map((w) => (
               <Fragment key={w.label}>
-                <th style={{ borderLeft: "2px solid var(--border)" }}>план</th>
-                <th>факт</th>
+                {hasPlan && <th style={{ borderLeft: "2px solid var(--border)" }}>план</th>}
+                <th style={hasPlan ? undefined : { borderLeft: "2px solid var(--border)" }}>факт</th>
                 <th>% конв</th>
               </Fragment>
             ))}
@@ -140,19 +146,19 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
             return (
               <tr key={s.stage}>
                 <td style={{ ...stick, textAlign: "left", fontWeight: 600 }}>{s.label}</td>
-                <td>{s.planMonth || "—"}</td>
-                <td>{s.planToday || "—"}</td>
+                {hasPlan && <td>{s.planMonth || "—"}</td>}
+                {hasPlan && <td>{s.planToday || "—"}</td>}
                 <td style={{ fontWeight: 700, color: "#c5141c" }}>{s.factToday}</td>
-                <td style={{ color: tempo != null ? (tempo >= 100 ? "#16a34a" : "#dc2626") : undefined }}>{tempo != null ? `${tempo}%` : "—"}</td>
-                <td>{exec != null ? `${exec.toFixed(1)}%` : "—"}</td>
-                <td style={{ color: s.planMonth > 0 && lag > 0 ? "#dc2626" : undefined }}>{s.planMonth > 0 ? lag : "—"}</td>
+                {hasPlan && <td style={{ color: tempo != null ? (tempo >= 100 ? "#16a34a" : "#dc2626") : undefined }}>{tempo != null ? `${tempo}%` : "—"}</td>}
+                {hasPlan && <td>{exec != null ? `${exec.toFixed(1)}%` : "—"}</td>}
+                {hasPlan && <td style={{ color: s.planMonth > 0 && lag > 0 ? "#dc2626" : undefined }}>{s.planMonth > 0 ? lag : "—"}</td>}
                 {s.weeks.map((w, wi) => {
                   const base = prev?.weeks[wi].fact ?? 0;
                   const conv = i > 0 && base > 0 ? `${Math.round((w.fact / base) * 100)}%` : i > 0 ? "—" : "";
                   return (
                     <Fragment key={wi}>
-                      <td style={{ borderLeft: "2px solid var(--border)", color: "var(--text-muted)" }}>{w.plan || "—"}</td>
-                      <td style={{ fontWeight: w.fact > 0 ? 700 : 400 }}>{w.fact}</td>
+                      {hasPlan && <td style={{ borderLeft: "2px solid var(--border)", color: "var(--text-muted)" }}>{w.plan || "—"}</td>}
+                      <td style={{ fontWeight: w.fact > 0 ? 700 : 400, borderLeft: hasPlan ? undefined : "2px solid var(--border)" }}>{w.fact}</td>
                       <td style={{ fontSize: 11 }}>{conv}</td>
                     </Fragment>
                   );
@@ -160,6 +166,9 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
               </tr>
             );
           })}
+          {moneyRow("Оплата отримана, ₴", block.money.received, "#16a34a", true)}
+          {moneyRow("Перенесені з мин. міс., ₴", block.money.carryover, undefined, false)}
+          {moneyRow("Очікувані оплати, ₴", block.money.expected, undefined, false)}
         </tbody>
       </table>
       </div>
