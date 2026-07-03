@@ -5,9 +5,14 @@ export function currentMonth(): string {
 }
 
 export function formatAmount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}М ₴`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(0)}тис ₴`;
+  if (value <= -1_000_000 || value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}М ₴`;
+  if (value <= -1_000 || value >= 1_000) return `${(value / 1_000).toFixed(0)}тис ₴`;
   return `${value.toFixed(0)} ₴`;
+}
+
+/** Exact amount, grouped, no abbreviation — e.g. "12 345 ₴". */
+export function formatAmountFull(value: number): string {
+  return `${Math.round(value).toLocaleString("uk-UA")} ₴`;
 }
 
 /** The equal-length period immediately before [from, to]. */

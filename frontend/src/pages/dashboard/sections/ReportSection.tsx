@@ -105,7 +105,7 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
         <strong style={{ fontSize: 14, color: highlight ? "#c5141c" : "var(--text)" }}>{block.name}</strong>
       </div>
       <div style={{ overflowX: "auto" }}>
-      <table className="data-table weekly-funnel" style={{ fontSize: 12 }}>
+      <table className="data-table weekly-funnel" style={{ fontSize: 12, minWidth: 270 + weeks.length * (hasPlan ? 3 * 74 + 70 : 2 * 78) + (hasPlan ? 300 : 0) }}>
         <thead>
           <tr>
             <th rowSpan={2}>Етап</th>

@@ -78,7 +78,7 @@ import {
 import { Layout, NAV_ITEMS, type NavKey } from "../components/Layout";
 import { DateRangeFilter, QuickPeriods, getDateRange } from "../components/DateRangeFilter";
 import { getAuthPayload } from "../auth";
-import { currentMonth, formatAmount, previousRange, getRank, presence } from "./dashboard/format";
+import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_COLORS, STAGE_ORDER, STAT_CHARTS } from "./dashboard/constants";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
@@ -793,7 +793,7 @@ export function Dashboard() {
     { key: "sum", label: "Отримані кошти (оплата+успішно)", value: formatAmount(overview?.closedRevenue ?? 0), cur: overview?.closedRevenue ?? 0, prev: prevOverview?.closedRevenue ?? 0 },
     { key: "convAd", label: "Конверсія реклами", value: `${adConv}%`, cur: adConv, prev: prevAdConv, unit: "%" },
     { key: "convLg", label: "Конверсія лідогену", value: `${lgConv}%`, cur: lgConv, prev: prevLgConv, unit: "%" },
-    { key: "avg", label: "Середній чек", value: formatAmount(avgDeal), cur: avgDeal, prev: prevAvg },
+    { key: "avg", label: "Середній чек", value: formatAmountFull(avgDeal), cur: avgDeal, prev: prevAvg },
     { key: "newc", label: "Нові клієнти (вперше)", value: (overview?.newClients ?? 0).toLocaleString("uk-UA"), cur: overview?.newClients ?? 0, prev: prevOverview?.newClients ?? 0 },
     { key: "repc", label: "Постійні клієнти (2+)", value: (overview?.repeatClients ?? 0).toLocaleString("uk-UA"), cur: overview?.repeatClients ?? 0, prev: prevOverview?.repeatClients ?? 0 },
   ];

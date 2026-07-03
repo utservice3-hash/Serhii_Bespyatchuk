@@ -231,8 +231,7 @@ button {
 /* Weekly funnel matrix: the first two columns (Етап + Факт) are frozen; the
    weekly columns scroll horizontally. Content-sized so nothing is cut off. */
 .data-table.weekly-funnel {
-  width: max-content;
-  max-width: 100%;
+  width: 100%;
   border-collapse: separate;
   border-spacing: 0;
 }
