@@ -82,6 +82,7 @@ import { currentMonth, formatAmount, previousRange, getRank, presence } from "./
 import { STAGE_LABELS, STAGE_COLORS, STAGE_ORDER, STAT_CHARTS } from "./dashboard/constants";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
+import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
 import { TeamsSection } from "./dashboard/sections/TeamsSection";
 import { ManagersSection } from "./dashboard/sections/ManagersSection";
 import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
@@ -1168,6 +1169,12 @@ export function Dashboard() {
           canEditReceivables={canEditReceivables}
           patchReceivableNote={patchReceivableNote}
         />
+      )}
+
+      {section === "feedback" && (
+        auth?.role === "manager"
+          ? <div className="page-header"><h1 className="page-title">Зворотний звʼязок</h1><p className="loading-text">Доступно тімлідам та адміністратору.</p></div>
+          : <FeedbackSection isAdmin={auth?.role === "admin"} />
       )}
 
       {section === "settings" && (

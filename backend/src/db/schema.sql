@@ -270,3 +270,19 @@ CREATE TABLE IF NOT EXISTS app_settings (
 INSERT INTO app_settings (id, data) VALUES (1, '{}') ON CONFLICT (id) DO NOTHING;
 ALTER TABLE receivables ADD COLUMN IF NOT EXISTS limit_days INTEGER;
 ALTER TABLE receivables ADD COLUMN IF NOT EXISTS overdue_days INTEGER;
+
+-- Team-lead feedback / bug reports. Team-leads submit corrections; an admin
+-- approves or rejects each item, and the dev resolves the approved ones.
+CREATE TABLE IF NOT EXISTS feedback (
+  id SERIAL PRIMARY KEY,
+  author_user_id INTEGER NOT NULL REFERENCES users(id),
+  section TEXT,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','approved','rejected','resolved')),
+  admin_note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_author ON feedback(author_user_id, created_at DESC);

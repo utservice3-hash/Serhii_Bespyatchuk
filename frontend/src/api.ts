@@ -553,6 +553,31 @@ export async function saveFunnelPlan(payload: { managerId: number; month: string
   await api.post("/dashboard/funnel-plan", payload);
 }
 
+export type FeedbackStatus = "pending" | "approved" | "rejected" | "resolved";
+export interface FeedbackItem {
+  id: number;
+  section: string | null;
+  message: string;
+  status: FeedbackStatus;
+  adminNote: string | null;
+  createdAt: string;
+  updatedAt: string;
+  authorUserId: number;
+  authorName: string;
+}
+export async function fetchFeedback(): Promise<FeedbackItem[]> {
+  const { data } = await api.get<{ feedback: FeedbackItem[] }>("/feedback");
+  return data.feedback;
+}
+export async function submitFeedback(payload: { message: string; section?: string }): Promise<FeedbackItem> {
+  const { data } = await api.post<{ feedback: FeedbackItem }>("/feedback", payload);
+  return data.feedback;
+}
+export async function updateFeedback(id: number, payload: { status: FeedbackStatus; adminNote?: string }): Promise<FeedbackItem> {
+  const { data } = await api.patch<{ feedback: FeedbackItem }>(`/feedback/${id}`, payload);
+  return data.feedback;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;
