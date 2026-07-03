@@ -780,12 +780,16 @@ dashboardRouter.get("/conversion", async (req, res) => {
     params.push(to);
     conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`);
   }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  // Source conversion is about the FULL-CYCLE sales funnel only: every deal
+  // created in the period there is either "ad" (contextual/google-utm) or
+  // "other" = created manually by a manager. Leadgen leads live in their own
+  // pipelines and have a dedicated "Конверсія лідогену" card, so they are not
+  // part of this table.
+  conditions.push(`d.pipeline_id = ANY(ARRAY[8921932, 155304])`);
+  const where = `WHERE ${conditions.join(" AND ")}`;
 
   // "paid" = leads whose CLIENT reached a paid full-cycle deal (client_key
-  // match), so leadgen leads (which live in non-paid pipelines) convert
-  // correctly. "paid_amount" stays the lead's own paid value (real for ad,
-  // ~0 for leadgen deals whose price is 0).
+  // match). "paid_amount" is the lead's own paid value.
   const result = await pool.query<{
     lead_channel: string | null;
     leads: string;
@@ -798,7 +802,7 @@ dashboardRouter.get("/conversion", async (req, res) => {
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
      )
-     SELECT COALESCE(d.lead_channel, 'other') AS lead_channel,
+     SELECT CASE WHEN d.lead_channel = 'ad' THEN 'ad' ELSE 'other' END AS lead_channel,
             COUNT(*) AS leads,
             COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS paid,
             COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS paid_amount
@@ -807,17 +811,16 @@ dashboardRouter.get("/conversion", async (req, res) => {
      LEFT JOIN pipeline_stage_map psm
        ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      ${where}
-     GROUP BY COALESCE(d.lead_channel, 'other')`,
+     GROUP BY CASE WHEN d.lead_channel = 'ad' THEN 'ad' ELSE 'other' END`,
     params
   );
 
   const labels: Record<string, string> = {
-    ad: "Таргет / реклама",
-    leadgen: "Лідогенерація",
-    other: "Інше",
+    ad: "Таргет / реклама (контекст)",
+    other: "Створені вручну (інше)",
   };
 
-  const channels = ["ad", "leadgen", "other"].map((ch) => {
+  const channels = ["ad", "other"].map((ch) => {
     const row = result.rows.find((r) => r.lead_channel === ch);
     const leads = Number(row?.leads ?? 0);
     const paid = Number(row?.paid ?? 0);
