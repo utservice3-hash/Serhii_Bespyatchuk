@@ -278,29 +278,22 @@ dashboardRouter.get("/overview", async (req, res) => {
   // so a same-deal check always yielded 0. "ad" deals are in the full-cycle
   // funnel themselves, so the same client_key match works for them too.
   const scopeConds = paidConds.filter((c) => !c.includes("funnel_stage"));
-  const scopeWhere = scopeConds.length ? `WHERE ${scopeConds.join(" AND ")}` : "";
-  const channelConvRes = await pool.query<{ lead_channel: string; leads: string; paid: string }>(
-    `WITH paid_clients AS (
-       SELECT DISTINCT d.client_key
-       FROM deals d
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
-     )
-     SELECT COALESCE(d.lead_channel, 'other') AS lead_channel,
-            COUNT(*) AS leads,
-            COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS paid
+
+  // "Конверсія реклами" = TARGETED deals in the full-cycle funnel that reached
+  // payment — same-deal, not "client ever paid". adLeads = ad-channel full-cycle
+  // deals created in the period; adPaid = those now at the paid stage.
+  const adConvRes = await pool.query<{ ad_leads: string; ad_paid: string }>(
+    `SELECT COUNT(*) FILTER (WHERE d.lead_channel = 'ad') AS ad_leads,
+            COUNT(*) FILTER (WHERE d.lead_channel = 'ad' AND psm.funnel_stage = 'paid') AS ad_paid
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
-     ${scopeWhere}
-     GROUP BY 1`,
+     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE d.pipeline_id = ANY(ARRAY[8921932, 155304])${scopeConds.length ? " AND " + scopeConds.join(" AND ") : ""}`,
     params
   );
-  const channelConv = (ch: string) => {
-    const r = channelConvRes.rows.find((x) => x.lead_channel === ch);
-    const leads = Number(r?.leads ?? 0);
-    const paid = Number(r?.paid ?? 0);
-    return { leads, paid, conversion: leads > 0 ? Math.round((paid / leads) * 100) : 0 };
-  };
+  const adLeadsCnt = Number(adConvRes.rows[0]?.ad_leads ?? 0);
+  const adPaidCnt = Number(adConvRes.rows[0]?.ad_paid ?? 0);
+  const adConversion = { leads: adLeadsCnt, paid: adPaidCnt, conversion: adLeadsCnt > 0 ? Math.round((adPaidCnt / adLeadsCnt) * 100) : 0 };
 
   // Received money everywhere = Успішно реалізовано (status 142, by CLOSE date
   // in period) + Оплата отримана (snapshot of the transient stage, no date).
@@ -727,8 +720,13 @@ dashboardRouter.get("/overview", async (req, res) => {
     repeatClientsList,
     newClientsBySource,
     transferred,
-    adConversion: channelConv("ad"),
-    leadgenConversion: channelConv("leadgen"),
+    adConversion,
+    // Конверсія лідгену = передана заявка (прорахунок) → успішно реалізовано.
+    leadgenConversion: {
+      leads: transferred.total,
+      paid: transferred.success,
+      conversion: transferred.total > 0 ? Math.round((transferred.success / transferred.total) * 100) : 0,
+    },
     monthlyHistory,
     byTeam: byTeam.rows.map((r) => ({
       teamId: r.team_id,
