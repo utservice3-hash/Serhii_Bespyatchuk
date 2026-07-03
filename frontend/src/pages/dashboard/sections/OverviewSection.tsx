@@ -157,6 +157,7 @@ export function OverviewSection({
         }}
       />
 
+      <h2 className="section-heading">📊 Ключові показники</h2>
       <div className="kpi-grid">
         {kpis.map((kpi) => {
           const hasPrev = prevStages.length > 0 || prevOverview !== null;
@@ -336,6 +337,7 @@ export function OverviewSection({
 
       {overview && (
         <>
+          <h2 className="section-heading">💰 Гроші, план і клієнти</h2>
           <div className="kpi-grid">
             <ProgressGauge
               plan={overview.plan}

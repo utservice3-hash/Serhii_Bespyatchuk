@@ -217,6 +217,17 @@ button {
   margin-bottom: 12px;
 }
 
+.section-heading {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 22px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
 .loading-text {
   color: var(--text-muted);
 }
