@@ -33,14 +33,28 @@ export async function syncManagers(): Promise<number> {
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
     if (!group || teamIdByGroupId.has(group.id)) continue;
-    const result = await pool.query<{ id: number }>(
-      `INSERT INTO teams (name, kommo_group_id)
-       VALUES ($1, $2)
-       ON CONFLICT (name) DO UPDATE SET kommo_group_id = EXCLUDED.kommo_group_id
-       RETURNING id`,
-      [group.name, group.id]
+    // Match by the STABLE Kommo group id first, so a team renamed locally in
+    // the dashboard (e.g. "Тендери" → "Самостійний") keeps its custom name and
+    // the sync never tries to re-insert the old name (which would collide on
+    // the unique kommo_group_id and crash the whole job).
+    let teamId: number;
+    const existing = await pool.query<{ id: number }>(
+      `SELECT id FROM teams WHERE kommo_group_id = $1`,
+      [group.id]
     );
-    teamIdByGroupId.set(group.id, result.rows[0].id);
+    if (existing.rows.length) {
+      teamId = existing.rows[0].id;
+    } else {
+      const result = await pool.query<{ id: number }>(
+        `INSERT INTO teams (name, kommo_group_id)
+         VALUES ($1, $2)
+         ON CONFLICT (name) DO UPDATE SET kommo_group_id = EXCLUDED.kommo_group_id
+         RETURNING id`,
+        [group.name, group.id]
+      );
+      teamId = result.rows[0].id;
+    }
+    teamIdByGroupId.set(group.id, teamId);
   }
 
   for (const user of users) {

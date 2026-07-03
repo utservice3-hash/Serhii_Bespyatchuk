@@ -590,6 +590,23 @@ export async function updateFeedback(id: number, payload: { status: FeedbackStat
   return data.feedback;
 }
 
+export interface AiMessage {
+  id: number;
+  role: "user" | "assistant";
+  body: string;
+  status: string | null;
+  createdAt: string;
+  authorName: string;
+}
+export async function fetchAiMessages(): Promise<AiMessage[]> {
+  const { data } = await api.get<{ messages: AiMessage[] }>("/ai-work");
+  return data.messages;
+}
+export async function postAiMessage(body: string): Promise<AiMessage> {
+  const { data } = await api.post<{ message: AiMessage }>("/ai-work", { body });
+  return data.message;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;

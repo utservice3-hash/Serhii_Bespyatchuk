@@ -83,6 +83,7 @@ import { STAGE_LABELS, STAGE_COLORS, STAGE_ORDER, STAT_CHARTS } from "./dashboar
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
+import { AiWorkSection } from "./dashboard/sections/AiWorkSection";
 import { TeamsSection } from "./dashboard/sections/TeamsSection";
 import { ManagersSection } from "./dashboard/sections/ManagersSection";
 import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
@@ -1176,6 +1177,8 @@ export function Dashboard() {
           ? <div className="page-header"><h1 className="page-title">Зворотний звʼязок</h1><p className="loading-text">Доступно тімлідам та адміністратору.</p></div>
           : <FeedbackSection isAdmin={auth?.role === "admin"} />
       )}
+
+      {section === "aiwork" && <AiWorkSection />}
 
       {section === "settings" && (
         <>

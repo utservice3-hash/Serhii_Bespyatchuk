@@ -37,6 +37,7 @@ export const NAV_GROUPS = [
     label: "Система",
     items: [
       { key: "feedback", label: "Зворотний звʼязок", icon: "🐞" },
+      { key: "aiwork", label: "Робота з АІ", icon: "🤖" },
       { key: "settings", label: "Налаштування", icon: "⚙️" },
     ],
   },

@@ -12,6 +12,7 @@ import { messagesRouter } from "./routes/messages.js";
 import { newsRouter } from "./routes/news.js";
 import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
 import { feedbackRouter } from "./routes/feedback.js";
+import { aiWorkRouter } from "./routes/aiWork.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
@@ -36,6 +37,7 @@ app.use("/api/messages", messagesRouter);
 app.use("/api/news", newsRouter);
 app.use("/api/uploads", uploadsRouter);
 app.use("/api/feedback", feedbackRouter);
+app.use("/api/ai-work", aiWorkRouter);
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".

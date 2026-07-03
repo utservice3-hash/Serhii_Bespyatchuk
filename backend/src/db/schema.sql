@@ -286,3 +286,16 @@ CREATE TABLE IF NOT EXISTS feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feedback_author ON feedback(author_user_id, created_at DESC);
+
+-- "Робота з АІ": a shared chat/log where the admin (and a designated assistant
+-- account) post change requests + context for the AI to pick up and act on.
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id SERIAL PRIMARY KEY,
+  author_user_id INTEGER REFERENCES users(id),
+  author_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user','assistant')),
+  body TEXT NOT NULL,
+  status TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_messages_time ON ai_messages(created_at);
