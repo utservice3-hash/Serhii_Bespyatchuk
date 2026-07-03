@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import type { AuthPayload } from "../../../auth";
-import type { LoyaltyManager, LoyaltyDynamics, Team } from "../../../api";
+import { fetchRegularClients, type LoyaltyManager, type LoyaltyDynamics, type RegularClient, type Team } from "../../../api";
 import { formatAmount } from "../format";
 
 export function LoyaltySection({
@@ -30,6 +30,19 @@ export function LoyaltySection({
   loyaltyLoading: boolean;
   loyaltyData: LoyaltyManager[];
 }) {
+  const [allClients, setAllClients] = useState<RegularClient[] | null>(null);
+  const [allOpen, setAllOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<"revenue" | "orders">("revenue");
+  const toggleAll = () => {
+    const next = !allOpen;
+    setAllOpen(next);
+    if (next && allClients === null) {
+      fetchRegularClients().then(setAllClients).catch(() => setAllClients([]));
+    }
+  };
+  const sortedAll = allClients
+    ? [...allClients].sort((a, b) => (sortBy === "revenue" ? b.revenue - a.revenue : b.orders - a.orders))
+    : [];
   return (
     <>
       <div className="page-header">
@@ -49,6 +62,50 @@ export function LoyaltySection({
           </div>
         )}
       </div>
+
+      {auth?.role !== "manager" && (
+        <div className="chart-card" style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <button
+              onClick={toggleAll}
+              style={{ border: "none", background: "none", cursor: "pointer", fontSize: 16, fontWeight: 700, color: "var(--text)" }}
+            >
+              {allOpen ? "▾" : "▸"} Усі постійні клієнти (усі команди)
+            </button>
+            {allOpen && allClients && allClients.length > 0 && (
+              <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+                <span style={{ color: "var(--text-muted)" }}>Сортувати:</span>
+                <button onClick={() => setSortBy("revenue")} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid var(--border)", background: sortBy === "revenue" ? "#c5141c" : "var(--card-bg)", color: sortBy === "revenue" ? "#fff" : "var(--text)", cursor: "pointer" }}>за сумою</button>
+                <button onClick={() => setSortBy("orders")} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid var(--border)", background: sortBy === "orders" ? "#c5141c" : "var(--card-bg)", color: sortBy === "orders" ? "#fff" : "var(--text)", cursor: "pointer" }}>за к-стю</button>
+              </div>
+            )}
+          </div>
+          {allOpen && (
+            allClients === null ? (
+              <p className="loading-text">Завантаження…</p>
+            ) : allClients.length === 0 ? (
+              <p className="loading-text">Немає даних.</p>
+            ) : (
+              <table className="data-table" style={{ marginTop: 10 }}>
+                <thead>
+                  <tr><th>#</th><th>Клієнт</th><th>Замовлень (рахунків)</th><th>Сума (lifetime)</th><th>Остання оплата</th></tr>
+                </thead>
+                <tbody>
+                  {sortedAll.map((c, i) => (
+                    <tr key={i}>
+                      <td>{i + 1}</td>
+                      <td>{c.clientName}</td>
+                      <td>{c.orders}</td>
+                      <td style={{ fontWeight: 600 }}>{formatAmount(c.revenue)}</td>
+                      <td>{c.lastPaid ? new Date(c.lastPaid).toLocaleDateString("uk-UA") : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          )}
+        </div>
+      )}
 
       {loyaltyDynamics && loyaltyDynamics.months.length > 0 && (
         <div className="chart-card" style={{ marginBottom: 16 }}>

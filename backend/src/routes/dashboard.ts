@@ -1724,6 +1724,40 @@ dashboardRouter.get("/teams", async (req, res) => {
   res.json({ teams });
 });
 
+// All regular clients across teams (2+ lifetime paid orders), with lifetime
+// order count + revenue, sorted for the "усі постійні клієнти" drill-down.
+dashboardRouter.get("/regular-clients", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const params: unknown[] = [];
+  const conds = ["psm.funnel_stage = 'paid'", "d.client_key IS NOT NULL"];
+  if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
+  else if (req.query.teamId) { params.push(Number(req.query.teamId)); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ name: string; orders: string; revenue: string; last_paid: string | null }>(
+    `SELECT COALESCE(MAX(d.client_name), 'Клієнт') AS name,
+            COUNT(*) AS orders,
+            COALESCE(SUM(d.price), 0) AS revenue,
+            MAX(d.closed_at_kommo) AS last_paid
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${conds.join(" AND ")}
+     GROUP BY d.client_key
+     HAVING COUNT(*) >= 2
+     ORDER BY revenue DESC
+     LIMIT 500`,
+    params
+  );
+  res.json({
+    clients: r.rows.map((x) => ({
+      clientName: x.name,
+      orders: Number(x.orders),
+      revenue: Number(x.revenue),
+      lastPaid: x.last_paid,
+    })),
+  });
+});
+
 // Team-lead / admin: save a comment + planned payment date for a receivable
 // client (keyed by client_key so it survives sheet re-syncs).
 dashboardRouter.put("/receivables/note", async (req, res) => {

@@ -609,6 +609,17 @@ export async function postAiMessage(body: string): Promise<AiMessage> {
   return data.message;
 }
 
+export interface RegularClient {
+  clientName: string;
+  orders: number;
+  revenue: number;
+  lastPaid: string | null;
+}
+export async function fetchRegularClients(params?: { teamId?: number }): Promise<RegularClient[]> {
+  const { data } = await api.get<{ clients: RegularClient[] }>("/dashboard/regular-clients", { params });
+  return data.clients;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;
