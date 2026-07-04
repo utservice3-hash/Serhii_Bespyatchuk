@@ -55,10 +55,11 @@ tasksRouter.get("/", async (req, res) => {
             t.task_type AS "taskType", t.metric, t.target_value AS "targetValue",
             t.actual_value AS "actualValue", t.plan_date AS "planDate",
             t.period_start AS "periodStart", t.period_end AS "periodEnd",
-            t.parent_id AS "parentId", t.auto,
+            t.parent_id AS "parentId", t.auto, u.role AS "createdByRole",
             t.created_at AS "createdAt", t.updated_at AS "updatedAt"
      FROM tasks t
      LEFT JOIN managers m ON m.id = t.assignee_id
+     LEFT JOIN users u ON u.id = t.created_by
      ${where}
      ORDER BY t.created_at DESC`,
     params
@@ -152,7 +153,24 @@ tasksRouter.post("/", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
-  const { title, status, deadline, assigneeId, priority, comments, department } = parsed.data;
+  const { title, status, deadline, priority, comments, department } = parsed.data;
+  const auth = req.auth!;
+  let assigneeId = parsed.data.assigneeId ?? null;
+
+  // Who may assign to whom:
+  //  • manager  → only to themselves;
+  //  • team_lead → only to a manager in their own team;
+  //  • admin    → anyone.
+  if (auth.role === "manager") {
+    assigneeId = auth.managerId;
+  } else if (auth.role === "team_lead") {
+    if (!assigneeId) return res.status(400).json({ error: "Оберіть менеджера" });
+    const chk = await pool.query<{ ok: boolean }>(
+      `SELECT (m.team_id = $1) AS ok FROM managers m WHERE m.id = $2`,
+      [auth.teamId, assigneeId]
+    );
+    if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна ставити задачі лише своїй команді" });
+  }
 
   const result = await pool.query(
     `INSERT INTO tasks (title, status, deadline, assignee_id, priority, comments, department, created_by)
@@ -162,11 +180,11 @@ tasksRouter.post("/", async (req, res) => {
       title,
       status ?? null,
       deadline ?? null,
-      assigneeId ?? null,
+      assigneeId,
       priority ?? null,
       comments ?? null,
       department ?? null,
-      req.auth!.userId,
+      auth.userId,
     ]
   );
 

@@ -770,6 +770,7 @@ export interface Task {
   periodEnd: string | null;
   parentId: number | null;
   auto: boolean;
+  createdByRole?: "admin" | "team_lead" | "manager" | null;
   createdAt: string;
   updatedAt: string;
 }

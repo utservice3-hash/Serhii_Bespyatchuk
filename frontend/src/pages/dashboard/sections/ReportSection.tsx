@@ -1,4 +1,4 @@
-import { Fragment, useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -10,8 +10,48 @@ import {
   LabelList,
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
-import { fetchFunnelPlan, saveFunnelPlan, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team, type FunnelWeeklyReport, type WeeklyBlock } from "../../../api";
+import { fetchFunnelPlan, saveFunnelPlan, fetchTasks, updateTask, type Task, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team, type FunnelWeeklyReport, type WeeklyBlock } from "../../../api";
 import { formatAmount } from "../format";
+
+/** Manager's task list inside the report — tasks set by themselves or the team-lead. */
+function MyTasksBlock() {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  useEffect(() => { fetchTasks().then(setTasks).catch(() => setTasks([])); }, []);
+  const open = tasks.filter((t) => !t.auto && t.status !== "done");
+  const move = (id: number, status: Task["status"]) => {
+    setTasks((p) => p.map((t) => (t.id === id ? { ...t, status } : t)));
+    updateTask(id, { status }).catch(() => {});
+  };
+  if (open.length === 0) return null;
+  const overdue = (d: string | null) => d != null && new Date(d) < new Date(new Date().toDateString());
+  return (
+    <div className="chart-card" style={{ marginBottom: 16 }}>
+      <h2 className="chart-title">Мої задачі ({open.length})</h2>
+      <table className="data-table">
+        <thead><tr><th>Задача</th><th>Джерело</th><th>Дедлайн</th><th>Пріоритет</th><th>Статус</th></tr></thead>
+        <tbody>
+          {open.map((t) => (
+            <tr key={t.id}>
+              <td>{t.title}{t.comments ? <span style={{ color: "var(--text-muted)", fontSize: 12 }}> — {t.comments}</span> : null}</td>
+              <td>{t.createdByRole === "team_lead" || t.createdByRole === "admin"
+                ? <span style={{ fontSize: 11, fontWeight: 700, color: "#b45309", background: "rgba(245,158,11,0.15)", padding: "2px 8px", borderRadius: 999 }}>від тімліда</span>
+                : <span style={{ fontSize: 11, color: "var(--text-muted)" }}>власна</span>}</td>
+              <td style={overdue(t.deadline) ? { color: "#dc2626", fontWeight: 600 } : undefined}>{t.deadline ?? "—"}</td>
+              <td>{t.priority === "high" ? "🔴 високий" : t.priority === "low" ? "🟢 низький" : "🟡 середній"}</td>
+              <td>
+                <select value={t.status} onChange={(e) => move(t.id, e.target.value as Task["status"])} style={{ fontSize: 12 }}>
+                  <option value="not_started">Заплановано</option>
+                  <option value="in_progress">В роботі</option>
+                  <option value="done">Готово</option>
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 const FUNNEL_STAGES: { stage: string; label: string }[] = [
   { stage: "lead_taken", label: "Взято в роботу лідів" },
@@ -356,6 +396,8 @@ export function ReportSection({
 
       <QuickPeriods active={datePreset} onSelect={(id, range) => { setDatePreset(id); setDateRange(range); }} />
 
+      {!canPickManager && <MyTasksBlock />}
+
       {loading ? (
         <p className="loading-text">Завантаження...</p>
       ) : !report ? (
@@ -407,7 +449,7 @@ export function ReportSection({
                       <tr>
                         <th>Менеджер</th>
                         <th>Взято</th>
-                        <th>Запит</th>
+                        <th>Прорахунок</th>
                         <th>Погоджено</th>
                         <th>Рахунок</th>
                         <th>Оплата</th>
