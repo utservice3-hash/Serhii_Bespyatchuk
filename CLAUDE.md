@@ -64,6 +64,7 @@ Bash-tool падає по таймауту на `git pull && npm run build` (>2�
 - `syncStageEvents` — **кожні 10хв + старт** (події `lead_status_changed` → `deal_stage_events`, дати входу в етапи). Backfill: `--months=N`. Ретеншн 24 міс (04:30). ⚠️ Kommo events API капить пагінацію ~20тис/запит — глибокий backfill неповний.
 - `syncTransfers` — **кожні 10хв + старт** (події `entity_responsible_changed` на лідах Кваліфікації `8921928`/`7336928` → `lead_transfer_events` = «передані заявки»). Backfill `--months=N`.
 - `snapshotCarryover` — **1-го числа 00:00 + старт** (знімок «перенесених» угод у роботі → `monthly_carryover`, фіксується раз/міс).
+- `backupDb` — **щодня 03:00** (незалежний бекап: кожна таблиця → gzip-CSV через `COPY` у `dashboard/backups/uts_*`, ретенція 14). Ручний: `npm run backup`. БД на **Neon** (PITR — основний бекап). Деталі й відновлення — `docs/BACKUP_RECOVERY.md`. ⚠️ на проді деплой — `npm install` БЕЗ `--omit=dev` (потрібен tsc для build).
 - Фронт **автооновлюється кожні 5хв** (`refreshNonce` у Dashboard.tsx) — без перезавантаження.
 
 ## Надійність та моніторинг синку
