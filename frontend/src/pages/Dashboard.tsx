@@ -106,9 +106,20 @@ export function Dashboard() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [teamId, setTeamId] = useState<number | "">("");
   const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
-  // Default view is the current month so a fresh load shows the monthly picture.
-  const [dateRange, setDateRange] = useState(() => getDateRange("thisMonth"));
-  const [datePreset, setDatePreset] = useState<string | null>("thisMonth");
+  // Default view is the current month; the last-picked period survives a reload.
+  const [dateRange, setDateRange] = useState(() => {
+    const s = localStorage.getItem("dateRange");
+    if (s) { try { return JSON.parse(s) as { from: string; to: string }; } catch { /* ignore */ } }
+    return getDateRange("thisMonth");
+  });
+  const [datePreset, setDatePreset] = useState<string | null>(() =>
+    localStorage.getItem("dateRange") ? localStorage.getItem("datePreset") : "thisMonth"
+  );
+  useEffect(() => { localStorage.setItem("dateRange", JSON.stringify(dateRange)); }, [dateRange]);
+  useEffect(() => {
+    if (datePreset) localStorage.setItem("datePreset", datePreset);
+    else localStorage.removeItem("datePreset");
+  }, [datePreset]);
   const [conversionChannels, setConversionChannels] = useState<ConversionChannel[]>([]);
   const [paidDynamics, setPaidDynamics] = useState<
     { period: string; revenue: number; paidCount: number; avgCheck: number }[]
@@ -144,9 +155,18 @@ export function Dashboard() {
   const [teamsRanking, setTeamsRanking] = useState<TeamRanking[]>([]);
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
-  const [reportGranularity, setReportGranularity] = useState<"day" | "week" | "month">("week");
-  const [reportManagerId, setReportManagerId] = useState<number | "">("");
-  const [reportTeamId, setReportTeamId] = useState<number | "">("");
+  const [reportGranularity, setReportGranularity] = useState<"day" | "week" | "month">(
+    () => (localStorage.getItem("reportGranularity") as "day" | "week" | "month") || "week"
+  );
+  const [reportManagerId, setReportManagerId] = useState<number | "">(() => {
+    const s = localStorage.getItem("reportManagerId"); return s ? Number(s) : "";
+  });
+  const [reportTeamId, setReportTeamId] = useState<number | "">(() => {
+    const s = localStorage.getItem("reportTeamId"); return s ? Number(s) : "";
+  });
+  useEffect(() => { localStorage.setItem("reportGranularity", reportGranularity); }, [reportGranularity]);
+  useEffect(() => { localStorage.setItem("reportManagerId", reportManagerId === "" ? "" : String(reportManagerId)); }, [reportManagerId]);
+  useEffect(() => { localStorage.setItem("reportTeamId", reportTeamId === "" ? "" : String(reportTeamId)); }, [reportTeamId]);
   const [funnelReport, setFunnelReport] = useState<FunnelReport | null>(null);
   const [funnelWeekly, setFunnelWeekly] = useState<FunnelWeeklyReport | null>(null);
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");

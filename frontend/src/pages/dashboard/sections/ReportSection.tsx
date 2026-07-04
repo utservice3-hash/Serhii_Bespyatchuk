@@ -14,6 +14,91 @@ import { fetchFunnelPlan, saveFunnelPlan, fetchTasks, updateTask, type Task, typ
 import { formatAmount } from "../format";
 import { DailyProductivityCard } from "./DailyProductivityCard";
 
+const STATUS_LBL: Record<string, string> = {
+  not_started: "Заплановано", todo_list: "Заплановано", to_realize: "До реалізації", planned: "Заплановано",
+  deferred: "Відкладено", in_progress: "В роботі", ball_on_executor: "На виконавці",
+  ready_for_approval: "На перевірці", done: "Готово",
+};
+const METRIC_LBL: Record<string, string> = {
+  ads_count: "Реклама (шт)", leadgen_count: "Лідоген (шт)", avg_check: "Середній чек", conversion: "Конверсія",
+};
+
+/** Manager drill-down: План/Факт + його задачі (тижневі KPI, в роботі тощо). */
+function ManagerDetailModal({ m, onClose }: { m: ReportData["byManager"][number]; onClose: () => void }) {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  useEffect(() => {
+    fetchTasks().then((all) => setTasks(all.filter((t) => t.assigneeId === m.managerId))).catch(() => setTasks([]));
+  }, [m.managerId]);
+  const fact = m.successRevenue + m.paymentReceived;
+  const pct = m.plan > 0 ? Math.round((fact / m.plan) * 100) : null;
+  const pctColor = pct == null ? "var(--text-muted)" : pct >= 100 ? "#16a34a" : pct >= 70 ? "#d97706" : "#dc2626";
+  const kpi = tasks.filter((t) => t.taskType !== "simple");
+  const manual = tasks.filter((t) => t.taskType === "simple" && t.status !== "done");
+  const done = tasks.filter((t) => t.status === "done");
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 24, width: "90vw", maxWidth: 640, maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>{m.name}</h2>
+          <button onClick={onClose} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
+        </div>
+
+        <h3 style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", margin: "0 0 8px" }}>План / Факт (місяць)</h3>
+        <div className="kpi-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", marginBottom: 8 }}>
+          <div className="kpi-card"><span className="kpi-label">Факт (отримано)</span><span className="kpi-value">{formatAmount(fact)}</span></div>
+          <div className="kpi-card"><span className="kpi-label">План на місяць</span><span className="kpi-value">{m.plan > 0 ? formatAmount(m.plan) : "—"}</span></div>
+          <div className="kpi-card"><span className="kpi-label">Виконання</span><span className="kpi-value" style={{ color: pctColor }}>{pct != null ? `${pct}%` : "—"}</span></div>
+        </div>
+        {m.plan > 0 && (
+          <div style={{ height: 8, borderRadius: 999, background: "var(--border)", overflow: "hidden", marginBottom: 16 }}>
+            <div style={{ height: "100%", width: `${Math.min(100, pct ?? 0)}%`, background: pctColor, borderRadius: 999 }} />
+          </div>
+        )}
+
+        {kpi.length > 0 && (
+          <>
+            <h3 style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", margin: "8px 0 8px" }}>KPI-план ({kpi.length})</h3>
+            <table className="data-table" style={{ marginBottom: 14 }}>
+              <thead><tr><th>Метрика / період</th><th>Ціль</th><th>Факт</th><th>Статус</th></tr></thead>
+              <tbody>
+                {kpi.map((t) => (
+                  <tr key={t.id}>
+                    <td>{METRIC_LBL[t.metric ?? ""] ?? t.title}{t.periodStart ? <span style={{ color: "var(--text-muted)", fontSize: 11 }}> · {t.periodStart}…{t.periodEnd}</span> : null}</td>
+                    <td>{t.targetValue ?? "—"}</td>
+                    <td style={{ fontWeight: 600 }}>{t.actualValue ?? "—"}</td>
+                    <td>{STATUS_LBL[t.status] ?? t.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+
+        <h3 style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", margin: "8px 0 8px" }}>Задачі в роботі ({manual.length})</h3>
+        {manual.length === 0 ? (
+          <p className="loading-text" style={{ margin: 0 }}>Немає відкритих задач.</p>
+        ) : (
+          <table className="data-table">
+            <thead><tr><th>Задача</th><th>Джерело</th><th>Дедлайн</th><th>Статус</th></tr></thead>
+            <tbody>
+              {manual.map((t) => (
+                <tr key={t.id}>
+                  <td>{t.title}</td>
+                  <td>{t.createdByRole === "team_lead" || t.createdByRole === "admin" ? "від тімліда" : "власна"}</td>
+                  <td>{t.deadline ?? "—"}</td>
+                  <td>{STATUS_LBL[t.status] ?? t.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {done.length > 0 && <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>✔ Виконано за час: {done.length}</p>}
+      </div>
+    </div>
+  );
+}
+
 /** Manager's task list inside the report — tasks set by themselves or the team-lead. */
 function MyTasksBlock() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -335,6 +420,7 @@ export function ReportSection({
   onPlanSaved: () => void;
 }) {
   const [planOpen, setPlanOpen] = useState(false);
+  const [detailMgr, setDetailMgr] = useState<ReportData["byManager"][number] | null>(null);
   const s = report?.summary;
   const kpis = s
     ? [
@@ -551,10 +637,12 @@ export function ReportSection({
           {report.scope === "team" && report.byManager.length > 0 && (
             <div className="chart-card" style={{ overflowX: "auto" }}>
               <h2 className="chart-title">По менеджерах (повний зріз)</h2>
-              <table className="data-table" style={{ minWidth: 920 }}>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>Натисніть на менеджера — План/Факт і задачі.</p>
+              <table className="data-table" style={{ minWidth: 1000 }}>
                 <thead>
                   <tr>
                     <th>Менеджер</th>
+                    <th>План/Факт</th>
                     <th>Реклама</th>
                     <th>Передані</th>
                     <th>Прорахунки</th>
@@ -568,27 +656,35 @@ export function ReportSection({
                   </tr>
                 </thead>
                 <tbody>
-                  {report.byManager.map((m) => (
-                    <tr key={m.managerId}>
-                      <td>{m.name}</td>
-                      <td>{m.adLeads}</td>
-                      <td>{m.transfers}</td>
-                      <td>{m.quotes}</td>
-                      <td>{m.dispatched}</td>
-                      <td>{formatAmount(m.dispatchedSum)}</td>
-                      <td>{formatAmount(m.paymentReceived)}</td>
-                      <td style={{ fontWeight: 600 }}>{formatAmount(m.successRevenue)}</td>
-                      <td>{m.successDeals}</td>
-                      <td>{formatAmount(m.avgCheck)}</td>
-                      <td>{formatAmount(m.carryover)}</td>
-                    </tr>
-                  ))}
+                  {report.byManager.map((m) => {
+                    const fact = m.successRevenue + m.paymentReceived;
+                    const pct = m.plan > 0 ? Math.round((fact / m.plan) * 100) : null;
+                    const pc = pct == null ? "var(--text-muted)" : pct >= 100 ? "#16a34a" : pct >= 70 ? "#d97706" : "#dc2626";
+                    return (
+                      <tr key={m.managerId} onClick={() => setDetailMgr(m)} style={{ cursor: "pointer" }} title="Деталі: План/Факт і задачі">
+                        <td style={{ fontWeight: 600 }}>{m.name}</td>
+                        <td style={{ color: pc, fontWeight: 600, whiteSpace: "nowrap" }}>{pct != null ? `${pct}%` : "—"}</td>
+                        <td>{m.adLeads}</td>
+                        <td>{m.transfers}</td>
+                        <td>{m.quotes}</td>
+                        <td>{m.dispatched}</td>
+                        <td>{formatAmount(m.dispatchedSum)}</td>
+                        <td>{formatAmount(m.paymentReceived)}</td>
+                        <td style={{ fontWeight: 600 }}>{formatAmount(m.successRevenue)}</td>
+                        <td>{m.successDeals}</td>
+                        <td>{formatAmount(m.avgCheck)}</td>
+                        <td>{formatAmount(m.carryover)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </>
       )}
+
+      {detailMgr && <ManagerDetailModal m={detailMgr} onClose={() => setDetailMgr(null)} />}
     </>
   );
 }

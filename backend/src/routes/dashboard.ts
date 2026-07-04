@@ -2000,12 +2000,12 @@ dashboardRouter.get("/report", async (req, res) => {
     managerId: number; name: string;
     adLeads: number; quotes: number; dispatched: number; dispatchedSum: number;
     successRevenue: number; successDeals: number; paymentReceived: number;
-    transfers: number; carryover: number; carryoverDeals: number;
+    transfers: number; carryover: number; carryoverDeals: number; plan: number;
   };
   const scoreMap = new Map<number, Score>();
   const sc = (id: number, name = ""): Score => {
     let e = scoreMap.get(id);
-    if (!e) { e = { managerId: id, name, adLeads: 0, quotes: 0, dispatched: 0, dispatchedSum: 0, successRevenue: 0, successDeals: 0, paymentReceived: 0, transfers: 0, carryover: 0, carryoverDeals: 0 }; scoreMap.set(id, e); }
+    if (!e) { e = { managerId: id, name, adLeads: 0, quotes: 0, dispatched: 0, dispatchedSum: 0, successRevenue: 0, successDeals: 0, paymentReceived: 0, transfers: 0, carryover: 0, carryoverDeals: 0, plan: 0 }; scoreMap.set(id, e); }
     if (name) e.name = name;
     return e;
   };
@@ -2014,6 +2014,18 @@ dashboardRouter.get("/report", async (req, res) => {
   for (const r of payByMgr.rows) sc(r.id).paymentReceived = Number(r.s);
   for (const r of transfByMgr.rows) sc(r.id).transfers = Number(r.c);
   for (const r of carryByMgr.rows) { const e = sc(r.id); e.carryover = Number(r.amount); e.carryoverDeals = Number(r.deals); }
+  // Monthly payment_amount plan per manager (for the План/Факт drill-down).
+  const planMonthR = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
+  const planScoreP: unknown[] = [planMonthR];
+  const planScoreC = ["p.plan_date = $1", "p.metric = 'payment_amount'"];
+  if (teamId) { planScoreP.push(teamId); planScoreC.push(`m.team_id = $${planScoreP.length}`); }
+  const planByMgr = await pool.query<{ id: number; plan: string }>(
+    `SELECT p.manager_id AS id, SUM(p.planned_value) AS plan
+     FROM plans p JOIN managers m ON m.id = p.manager_id
+     WHERE ${planScoreC.join(" AND ")} GROUP BY p.manager_id`,
+    planScoreP
+  );
+  for (const r of planByMgr.rows) sc(r.id).plan = Number(r.plan);
   const sumK = (k: keyof Score) => [...scoreMap.values()].reduce((s, e) => s + (e[k] as number), 0);
 
   const summary = {

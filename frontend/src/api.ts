@@ -486,6 +486,7 @@ export interface ReportData {
     carryover: number;
     carryoverDeals: number;
     avgCheck: number;
+    plan: number;
   }[];
 }
 
