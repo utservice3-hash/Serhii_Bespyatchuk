@@ -20,6 +20,7 @@ import { syncTransfers } from "./jobs/syncTransfers.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
+import { backupDb } from "./jobs/backupDb.js";
 import { pool } from "./db/pool.js";
 
 const app = express();
@@ -128,6 +129,12 @@ cron.schedule("0 8 * * *", () => {
 // Evaluate weekly/monthly KPI plan tasks (auto-complete on target) daily at 07:00.
 cron.schedule("0 7 * * *", () => {
   evaluateKpiTasks().catch((err) => console.error("KPI task eval failed:", err));
+});
+
+// Independent nightly DB backup (gzipped CSV per table) at 03:00, kept 14 days.
+// Neon's own PITR is primary; this is a second, portable copy on our server.
+cron.schedule("0 3 * * *", () => {
+  backupDb().catch((err) => console.error("DB backup failed:", err));
 });
 
 app.listen(config.port, () => {

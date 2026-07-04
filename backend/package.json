@@ -12,6 +12,7 @@
     "db:seed": "tsx src/db/seed.ts",
     "create-user": "tsx src/db/createUser.ts",
     "sync": "tsx src/jobs/syncKommo.ts",
+    "backup": "tsx src/jobs/backupDb.ts",
     "sync:users": "tsx src/jobs/syncUsersOnly.ts",
     "backfill:client-keys": "tsx src/jobs/backfillClientKeys.ts",
     "bot": "tsx src/bot/index.ts"
@@ -25,6 +26,7 @@
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.3",
     "pg": "^8.11.5",
+    "pg-copy-streams": "^6.0.6",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -35,6 +37,7 @@
     "@types/node": "^20.14.0",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.11.6",
+    "@types/pg-copy-streams": "^1.2.5",
     "tsx": "^4.15.6",
     "typescript": "^5.5.2"
   }
