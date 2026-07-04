@@ -362,7 +362,7 @@ export function ReportSection({
           {canPickTeam && (
             <select
               value={reportTeamId}
-              onChange={(e) => setReportTeamId(e.target.value ? Number(e.target.value) : "")}
+              onChange={(e) => { setReportTeamId(e.target.value ? Number(e.target.value) : ""); setReportManagerId(""); }}
               title="Детально по команді"
             >
               <option value="">Усі команди</option>

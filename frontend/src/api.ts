@@ -201,8 +201,8 @@ export interface ManagerOption {
   name: string;
 }
 
-export async function fetchManagerOptions(): Promise<ManagerOption[]> {
-  const { data } = await api.get<{ managers: ManagerOption[] }>("/teams/managers");
+export async function fetchManagerOptions(teamId?: number): Promise<ManagerOption[]> {
+  const { data } = await api.get<{ managers: ManagerOption[] }>("/teams/managers", { params: teamId ? { teamId } : undefined });
   return data.managers;
 }
 

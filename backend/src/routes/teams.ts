@@ -18,6 +18,7 @@ teamsRouter.get("/managers", async (req, res) => {
   const conds = ["is_active = true"];
   if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`team_id = $${params.length}`); }
   else if (auth.role === "manager") { params.push(auth.managerId); conds.push(`id = $${params.length}`); }
+  else if (req.query.teamId) { params.push(Number(req.query.teamId)); conds.push(`team_id = $${params.length}`); } // admin picked a team
   const result = await pool.query(
     `SELECT id, name FROM managers WHERE ${conds.join(" AND ")} ORDER BY name`,
     params

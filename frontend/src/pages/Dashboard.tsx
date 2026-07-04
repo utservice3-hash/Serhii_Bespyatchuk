@@ -226,7 +226,8 @@ export function Dashboard() {
       .then(setFunnelWeekly)
       .catch(() => setFunnelWeekly(null));
     if (auth?.role !== "manager") {
-      fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
+      // When a team is picked, the manager list narrows to that team.
+      fetchManagerOptions(reportTeamId || undefined).then(setManagerOptions).catch(() => setManagerOptions([]));
     }
   }, [section, reportGranularity, reportManagerId, reportTeamId, dateRange, refreshNonce, auth]);
 
