@@ -2399,6 +2399,108 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   });
 });
 
+/**
+ * A single manager's daily productivity for the picked day: leads taken,
+ * dispatched ("Авто працює"), payments received (count + ₴), the pro-rated
+ * daily plan, plus a 14-day payment-sum trend. Manager sees themselves; a
+ * team-lead any manager in their team; admin/КВП anyone.
+ */
+dashboardRouter.get("/daily", async (req, res) => {
+  const auth = req.auth!;
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  if (auth.role === "manager") managerId = auth.managerId;
+  else if (auth.role === "team_lead") {
+    if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  }
+  if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
+
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const day = (req.query.date as string) || new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const AVTO = "dse.status_id IN (69716300, 98470988, 10937178)";
+  const GROUP_CASE = `CASE
+    WHEN ${AVTO} THEN 'avto'
+    WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'taken'
+    WHEN psm.funnel_stage = 'invoiced' THEN 'invoiced'
+    WHEN psm.funnel_stage = 'paid' THEN 'paid' END`;
+
+  // Distinct deals entering each grouped stage on the day.
+  const grpRes = await pool.query<{ g: string; c: string }>(
+    `SELECT ${GROUP_CASE} AS g, COUNT(DISTINCT dse.kommo_id) AS c
+     FROM deal_stage_events dse
+     JOIN deals d ON d.kommo_id = dse.kommo_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
+     WHERE d.manager_id = $1 AND (dse.changed_at ${KYIV})::date = $2
+     GROUP BY 1`,
+    [managerId, day]
+  );
+  const grp = (g: string) => Number(grpRes.rows.find((r) => r.g === g)?.c ?? 0);
+
+  // Payment sum on the day (distinct paid-stage entries).
+  const paidSumRes = await pool.query<{ s: string }>(
+    `SELECT COALESCE(SUM(x.price), 0) AS s FROM (
+       SELECT DISTINCT dse.kommo_id, d.price
+       FROM deal_stage_events dse
+       JOIN deals d ON d.kommo_id = dse.kommo_id
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
+       WHERE d.manager_id = $1 AND psm.funnel_stage = 'paid' AND (dse.changed_at ${KYIV})::date = $2
+     ) x`,
+    [managerId, day]
+  );
+
+  // 14-day payment-sum trend (ending on the picked day).
+  const from14 = new Date(day + "T00:00:00"); from14.setDate(from14.getDate() - 13);
+  const fmtd = (d: Date) => d.toLocaleDateString("en-CA");
+  const trendRes = await pool.query<{ day: string; s: string }>(
+    `SELECT day, SUM(price) AS s FROM (
+       SELECT DISTINCT (dse.changed_at ${KYIV})::date AS day, dse.kommo_id, d.price
+       FROM deal_stage_events dse
+       JOIN deals d ON d.kommo_id = dse.kommo_id
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
+       WHERE d.manager_id = $1 AND psm.funnel_stage = 'paid'
+         AND (dse.changed_at ${KYIV})::date BETWEEN $2 AND $3
+     ) x GROUP BY day`,
+    [managerId, fmtd(from14), day]
+  );
+  const trendMap = new Map(trendRes.rows.map((r) => [String(r.day).slice(0, 10), Number(r.s)]));
+  const trend: { day: string; amount: number }[] = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(from14); d.setDate(from14.getDate() + i);
+    trend.push({ day: fmtd(d), amount: trendMap.get(fmtd(d)) ?? 0 });
+  }
+
+  // Per-day plan = month's payment_amount plan / working days in the month.
+  const monthStart = new Date(day + "T00:00:00"); monthStart.setDate(1);
+  const planRes = await pool.query<{ p: string }>(
+    `SELECT COALESCE(SUM(planned_value), 0) AS p FROM plans
+     WHERE manager_id = $1 AND metric = 'payment_amount' AND plan_date = $2`,
+    [managerId, fmtd(monthStart)]
+  );
+  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
+  const totalWd = workingDays(monthStart, monthEnd);
+  const monthPlan = Number(planRes.rows[0]?.p ?? 0);
+  const planDay = totalWd > 0 ? Math.round(monthPlan / totalWd) : 0;
+  const paidSum = Number(paidSumRes.rows[0]?.s ?? 0);
+
+  const nameRes = await pool.query<{ name: string; team: string | null }>(
+    `SELECT m.name, t.name AS team FROM managers m LEFT JOIN teams t ON t.id = m.team_id WHERE m.id = $1`,
+    [managerId]
+  );
+  res.json({
+    date: day,
+    managerName: nameRes.rows[0]?.name ?? "",
+    teamName: nameRes.rows[0]?.team ?? null,
+    taken: grp("taken"),
+    avto: grp("avto"),
+    paidCount: grp("paid"),
+    paidSum,
+    planDay,
+    planPct: planDay > 0 ? Math.round((paidSum / planDay) * 100) : null,
+    trend,
+  });
+});
+
 /** Read a manager's monthly funnel plan (for the plan editor). */
 dashboardRouter.get("/funnel-plan", async (req, res) => {
   const managerId = Number(req.query.managerId);

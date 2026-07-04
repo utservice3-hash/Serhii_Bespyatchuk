@@ -620,6 +620,23 @@ export async function fetchRegularClients(params?: { teamId?: number }): Promise
   return data.clients;
 }
 
+export interface DailyProductivity {
+  date: string;
+  managerName: string;
+  teamName: string | null;
+  taken: number;
+  avto: number;
+  paidCount: number;
+  paidSum: number;
+  planDay: number;
+  planPct: number | null;
+  trend: { day: string; amount: number }[];
+}
+export async function fetchDailyProductivity(params: { managerId?: number; date?: string }): Promise<DailyProductivity> {
+  const { data } = await api.get<DailyProductivity>("/dashboard/daily", { params });
+  return data;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;

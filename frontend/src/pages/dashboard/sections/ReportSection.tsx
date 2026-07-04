@@ -12,6 +12,7 @@ import {
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
 import { fetchFunnelPlan, saveFunnelPlan, fetchTasks, updateTask, type Task, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team, type FunnelWeeklyReport, type WeeklyBlock } from "../../../api";
 import { formatAmount } from "../format";
+import { DailyProductivityCard } from "./DailyProductivityCard";
 
 /** Manager's task list inside the report — tasks set by themselves or the team-lead. */
 function MyTasksBlock() {
@@ -396,6 +397,8 @@ export function ReportSection({
 
       <QuickPeriods active={datePreset} onSelect={(id, range) => { setDatePreset(id); setDateRange(range); }} />
 
+      {!canPickManager && <DailyProductivityCard />}
+      {canPickManager && reportManagerId !== "" && <DailyProductivityCard managerId={Number(reportManagerId)} />}
       {!canPickManager && <MyTasksBlock />}
 
       {loading ? (
