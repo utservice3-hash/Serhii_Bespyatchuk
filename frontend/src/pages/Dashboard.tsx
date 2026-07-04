@@ -427,6 +427,9 @@ export function Dashboard() {
       fetchConversation(chatActive.id)
         .then((m) => {
           if (!stop) setChatMessages(m);
+          // The conversation fetch marks incoming messages read; refresh the
+          // user list so unread badges reflect the true server state.
+          if (!stop) fetchChatUsers().then(setChatUsers).catch(() => {});
         })
         .catch(() => {});
     load();
@@ -1462,7 +1465,12 @@ export function Dashboard() {
                     return (
                       <button
                         key={u.id}
-                        onClick={() => setChatActive(u)}
+                        onClick={() => {
+                          setChatActive(u);
+                          // Opening the chat marks its messages read on the server;
+                          // clear the unread badge immediately so it doesn't linger.
+                          setChatUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, unread: 0 } : x)));
+                        }}
                         title={`${rank.title} · ${pres.label}`}
                         style={{
                           display: "flex",
