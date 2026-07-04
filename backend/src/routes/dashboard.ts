@@ -2236,24 +2236,36 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   const elapsedWd = factUpper >= mStart ? workingDays(mStart, elapsedEnd) : 0;
   const proratio = totalWd > 0 ? elapsedWd / totalWd : 0;
 
-  // FACT: distinct deals that entered each stage, per manager, per ISO-week (Monday key).
-  const fParams: unknown[] = [[8921932, 155304], FUNNEL_ORDER, fmt(mStart), fmt(factUpper)];
+  // Unified 4-stage funnel (РНК = РПК = Самостійний). Stages are resolved from
+  // the LIVE pipeline_stage_map (so newly-mapped statuses count immediately) and
+  // grouped: "Взято в роботу" = усе до «Авто працює» (lead_taken + quote +
+  // approved, крім avto); "Авто працює" = avto-статуси; далі рахунок і оплата.
+  const AVTO = "dse.status_id IN (69716300, 98470988, 10937178)";
+  const WK_STAGE_CASE = `CASE
+    WHEN ${AVTO} THEN 'avto'
+    WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'taken'
+    WHEN psm.funnel_stage = 'invoiced' THEN 'invoiced'
+    WHEN psm.funnel_stage = 'paid' THEN 'paid' END`;
+
+  // FACT: distinct deals that entered each grouped stage, per manager, per ISO-week.
+  const fParams: unknown[] = [[8921932, 155304], fmt(mStart), fmt(factUpper)];
   const fConds = [
     "d.pipeline_id = ANY($1)",
-    "dse.funnel_stage = ANY($2)",
-    `(dse.changed_at ${KYIV})::date BETWEEN $3 AND $4`,
+    "psm.funnel_stage IS NOT NULL",
+    `(dse.changed_at ${KYIV})::date BETWEEN $2 AND $3`,
   ];
   if (managerId) { fParams.push(managerId); fConds.push(`d.manager_id = $${fParams.length}`); }
   if (teamId) { fParams.push(teamId); fConds.push(`m.team_id = $${fParams.length}`); }
   const factRows = await pool.query<{ manager_id: number; name: string; stage: string; wk: string; c: string }>(
-    `SELECT d.manager_id, m.name, dse.funnel_stage AS stage,
+    `SELECT d.manager_id, m.name, ${WK_STAGE_CASE} AS stage,
             to_char(date_trunc('week', (dse.changed_at ${KYIV})), 'YYYY-MM-DD') AS wk,
             COUNT(DISTINCT dse.kommo_id) AS c
      FROM deal_stage_events dse
      JOIN deals d ON d.kommo_id = dse.kommo_id
      JOIN managers m ON m.id = d.manager_id AND m.is_active
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
      WHERE ${fConds.join(" AND ")}
-     GROUP BY d.manager_id, m.name, dse.funnel_stage, wk`,
+     GROUP BY d.manager_id, m.name, ${WK_STAGE_CASE}, wk`,
     fParams
   );
 
@@ -2329,8 +2341,15 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   }
   for (const [id, e] of mgrFacts) mgrName.set(id, e.name);
 
+  const WK_STAGES = ["taken", "avto", "invoiced", "paid"];
+  const WK_LABELS: Record<string, string> = {
+    taken: "Взято в роботу ліди",
+    avto: "Авто працює (ліди в роботі)",
+    invoiced: "Виставлено рахунок",
+    paid: "Оплата отримана",
+  };
   const buildStages = (facts: WkMap, plan: Record<string, number>) =>
-    FUNNEL_ORDER.map((stage) => {
+    WK_STAGES.map((stage) => {
       const pm = plan[stage] ?? 0;
       const wkOut = weeks.map((w) => ({
         plan: Math.round(pm * (totalWd > 0 ? w.wd / totalWd : 0)),
@@ -2339,7 +2358,7 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
       const factToday = wkOut.reduce((a, w) => a + w.fact, 0);
       return {
         stage,
-        label: FUNNEL_LABELS[stage],
+        label: WK_LABELS[stage],
         planMonth: pm,
         planToday: Math.round(pm * proratio),
         factToday,
