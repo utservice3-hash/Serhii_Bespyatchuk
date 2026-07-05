@@ -124,6 +124,18 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_transfer_at TIMESTAMPTZ;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_activity_note_at TIMESTAMPTZ;
 
+-- Daily ad spend/results pulled from the Google Ads budget sheet (syncAdBudget).
+-- Accumulates history: each run refreshes the current month's rows; past months
+-- stay. Used by the КВП report (Реклама → рекламний бюджет план/факт).
+CREATE TABLE IF NOT EXISTS ad_budget_daily (
+  day DATE PRIMARY KEY,
+  budget_plan NUMERIC DEFAULT 0,
+  budget_fact NUMERIC DEFAULT 0,
+  conversions INTEGER DEFAULT 0,
+  clicks INTEGER DEFAULT 0,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS lead_transfer_events (
   kommo_id BIGINT NOT NULL,
   changed_at TIMESTAMPTZ NOT NULL,

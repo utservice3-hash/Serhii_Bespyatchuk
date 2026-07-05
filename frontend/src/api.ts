@@ -197,6 +197,9 @@ export async function fetchOverview(params: {
 export interface LeadQuality {
   targetLeads: number;
   nonTargetLeads: number;
+  adBudgetPlan: number;
+  adBudgetFact: number;
+  adBudgetLeads: number;
 }
 
 export async function fetchLeadQuality(params: {

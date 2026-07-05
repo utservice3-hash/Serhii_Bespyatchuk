@@ -2647,11 +2647,28 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
     );
     return Number(r.rows[0]?.n ?? 0);
   };
-  const [targetLeads, nonTargetLeads] = await Promise.all([
+  const adParams: unknown[] = [];
+  const adConds: string[] = [];
+  if (from) { adParams.push(from); adConds.push(`day >= $${adParams.length}`); }
+  if (to) { adParams.push(to); adConds.push(`day <= $${adParams.length}`); }
+  const adWhere = adConds.length ? `WHERE ${adConds.join(" AND ")}` : "";
+  const [targetLeads, nonTargetLeads, adRes] = await Promise.all([
     countFor("d.pipeline_id = 8921932"),
     countFor("d.pipeline_id = 8921928 AND d.status_id = 143"),
+    pool.query<{ plan: string; fact: string; conv: string }>(
+      `SELECT COALESCE(SUM(budget_plan),0) AS plan, COALESCE(SUM(budget_fact),0) AS fact,
+              COALESCE(SUM(conversions),0) AS conv
+         FROM ad_budget_daily ${adWhere}`,
+      adParams
+    ),
   ]);
-  res.json({ targetLeads, nonTargetLeads });
+  res.json({
+    targetLeads,
+    nonTargetLeads,
+    adBudgetPlan: Math.round(Number(adRes.rows[0]?.plan ?? 0)),
+    adBudgetFact: Math.round(Number(adRes.rows[0]?.fact ?? 0)),
+    adBudgetLeads: Number(adRes.rows[0]?.conv ?? 0),
+  });
 });
 
 /** Read a manager's monthly funnel plan (for the plan editor). */
