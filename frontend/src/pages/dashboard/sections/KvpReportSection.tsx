@@ -190,6 +190,60 @@ function WeeklyBreakdown({ weeks, blocks }: { weeks: Range[]; blocks: Block[] })
   );
 }
 
+/** Plan decomposition: from the revenue plan + current avg check we derive how
+ *  many cars must be dispatched and (via conversion) how many leads are needed,
+ *  and show what's still left to reach the plan. Whole-department for now. */
+function Decomposition({ b }: { b: Block }) {
+  const o = b.ov;
+  const plan = o.planMonthTotal || o.plan;
+  const avg = avgCheck(o);
+  const carsDone = o.successDeals + o.paymentDeals;
+  const carsNeeded = avg > 0 ? Math.ceil(plan / avg) : 0;
+  const carsLeft = Math.max(0, carsNeeded - carsDone);
+  const conv = o.adConversion.conversion; // %
+  const leadsDone = o.adConversion.leads;
+  const leadsNeeded = conv > 0 ? Math.ceil(carsNeeded / (conv / 100)) : 0;
+  const leadsLeft = Math.max(0, leadsNeeded - leadsDone);
+  const revLeft = Math.max(0, plan - o.fact);
+
+  const rows: { label: string; need: string; done: string; left: string }[] = [
+    { label: "Дохід (грн)", need: formatAmount(plan), done: formatAmount(o.fact), left: formatAmount(revLeft) },
+    { label: "Авто (угод)", need: carsNeeded ? carsNeeded.toLocaleString("uk-UA") : "—", done: carsDone.toLocaleString("uk-UA"), left: carsLeft.toLocaleString("uk-UA") },
+    { label: "Ліди (реклама)", need: leadsNeeded ? leadsNeeded.toLocaleString("uk-UA") : "—", done: leadsDone.toLocaleString("uk-UA"), left: leadsLeft.toLocaleString("uk-UA") },
+  ];
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 4px" }}>🎯 Декомпозиція плану (місяць, по відділу)</h3>
+      <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 8px" }}>
+        Поточний ср. чек {formatAmount(avg)} · конверсія реклами {conv}%. Треба авто = план ÷ ср.чек; треба лідів = авто ÷ конверсія.
+      </p>
+      <div style={{ overflowX: "auto" }}>
+        <table className="data-table compact" style={{ minWidth: 420 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left" }}>Метрика</th>
+              <th style={{ textAlign: "right" }}>Треба (план)</th>
+              <th style={{ textAlign: "right" }}>Вже</th>
+              <th style={{ textAlign: "right" }}>Лишилось</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.label}>
+                <td style={{ textAlign: "left" }}>{r.label}</td>
+                <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{r.need}</td>
+                <td style={{ textAlign: "right", fontWeight: 600 }}>{r.done}</td>
+                <td style={{ textAlign: "right", fontWeight: 700, color: "#d97706" }}>{r.left}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function TeamTable({ prev, cur }: { prev: ExecutiveOverview; cur: ExecutiveOverview }) {
   const prevByTeam = new Map(prev.byTeam.map((t) => [t.teamId, t]));
   if (cur.byTeam.length === 0) return null;
@@ -285,6 +339,7 @@ export function KvpReportSection() {
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">📅 За місяць (поточний vs минулий)</h2>
             <ComparisonTable prev={data.monthPrev} cur={data.monthCur} prevRange={setup.monthPrev} curRange={setup.monthCur} isMonth />
+            <Decomposition b={data.monthCur} />
             <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "16px 0 4px" }}>По командах</h3>
             <TeamTable prev={data.monthPrev.ov} cur={data.monthCur.ov} />
           </div>
