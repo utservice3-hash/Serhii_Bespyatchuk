@@ -968,8 +968,8 @@ def _check_unassigned_leads():
                 f"👥 {ALL_SUPERVISORS}\n"
                 f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
             )
-            unassigned[lead_id].setdefault("msg_refs", []).extend(
-                notifier.send_unassigned_tracked(msg))
+            # Оновлюємо те саме повідомлення (без нового спаму)
+            notifier.edit_tracked(unassigned[lead_id].get("msg_refs", []), msg)
             unassigned[lead_id]["last_reminded_count"] = 99
             logger.info("Escalation for lead %s (%.0f min)", lead_id, age_min)
             continue
@@ -990,8 +990,8 @@ def _check_unassigned_leads():
             f"👥 {tag_line}\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
-        unassigned[lead_id].setdefault("msg_refs", []).extend(
-            notifier.send_unassigned_tracked(msg))
+        # Оновлюємо те саме повідомлення (без нового спаму)
+        notifier.edit_tracked(unassigned[lead_id].get("msg_refs", []), msg)
         unassigned[lead_id]["last_reminded_count"] = reminder_count
         logger.info("Unassigned reminder #%d for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
@@ -1504,25 +1504,28 @@ def _process_status_change(item: dict):
     pipeline_id = int(item.get("pipeline_id", 0))
     responsible_id = int(item.get("responsible_user_id", 0))
 
-    # Нерозібрані заявки — лід отримав реального відповідального → сповістити і прибрати з черги
+    # Нерозібрані заявки — лід отримав реального відповідального → редагуємо
+    # те саме повідомлення на «Взято в роботу» (без нового спаму) і прибираємо з черги
     if lead_id in unassigned and responsible_id and responsible_id != ADMIN_USER_ID:
         info = unassigned.pop(lead_id, {})
-        # Заявку взяли в роботу — прибираємо всі сповіщення «Нерозібрана заявка»
-        # (початкове + нагадування + ескалацію) з усіх гілок Telegram.
-        notifier.delete_tracked(info.get("msg_refs", []))
         manager_name = kommo.get_user_name(responsible_id)
         tg_tag = notifier.get_manager_tag(responsible_id)
         waited_min = int((datetime.now(timezone.utc) - info["arrived_at"]).total_seconds() / 60) if info.get("arrived_at") else 0
         kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
         msg = (
-            f"✅ <b>Заявку взято в роботу</b>\n"
+            f"✅ <b>Взято в роботу</b>\n"
             f"🏷 Назва: {info.get('lead_name', f'Лід #{lead_id}')}\n"
             f"📍 Етап: {info.get('status_name', '—')}\n"
             f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
             f"⏱ Час очікування: <b>{waited_min} хв</b>\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
-        send_to_team_group(responsible_id, msg)
+        # Редагуємо початкове сповіщення по місцю; якщо рефів немає (напр. після
+        # рестарту) — фолбек на звичайне повідомлення в групу команди.
+        if info.get("msg_refs"):
+            notifier.edit_tracked(info["msg_refs"], msg)
+        else:
+            send_to_team_group(responsible_id, msg)
         logger.info("Lead %s assigned to %s after %d min", lead_id, manager_name, waited_min)
 
     if pipeline_id == PEREVOZY_PIPELINE_ID:

@@ -318,6 +318,28 @@ def delete_tracked(refs: list[dict]) -> None:
             logger.error("delete_tracked exception: %s", e)
 
 
+def edit_tracked(refs: list[dict], new_text: str) -> None:
+    """Редагує раніше надіслані повідомлення (список {chat_id, message_id}) на
+    новий текст — щоб оновлювати статус заявки в одному повідомленні без спаму."""
+    if not TG_TOKEN or not refs:
+        return
+    for ref in refs:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
+                json={
+                    "chat_id": ref["chat_id"],
+                    "message_id": ref["message_id"],
+                    "text": new_text,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=10,
+            )
+        except Exception as e:
+            logger.error("edit_tracked exception: %s", e)
+
+
 # Окремі групи РПК на кожну команду лідогенераторів для трекінгу роботи
 # (нова заявка / лід взято в роботу / дзвінки). Тендерний — без власної гілки,
 # фолбек на спільну групу РПК.
