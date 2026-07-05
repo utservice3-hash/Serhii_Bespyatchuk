@@ -933,8 +933,9 @@ def _scan_unassigned_leads():
                     f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
                     f"🔗 <a href='{kommo_url}'>Відкрити лід #{lid}</a>"
                 )
-                notifier.send_to_rnk(msg)
-                notifier.send_to_all_rnk_tracking(msg)
+                # Шлемо з відстеженням message_id — щоб видалити ці сповіщення,
+                # коли заявку візьмуть у роботу.
+                unassigned[lid]["msg_refs"] = notifier.send_unassigned_tracked(msg)
                 logger.info("Scan found unassigned lead %s in %s", lid, status_name)
         except Exception as e:
             logger.error("_scan_unassigned_leads: %s", e)
@@ -967,8 +968,8 @@ def _check_unassigned_leads():
                 f"👥 {ALL_SUPERVISORS}\n"
                 f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
             )
-            notifier.send_to_rnk(msg)
-            notifier.send_to_all_rnk_tracking(msg)
+            unassigned[lead_id].setdefault("msg_refs", []).extend(
+                notifier.send_unassigned_tracked(msg))
             unassigned[lead_id]["last_reminded_count"] = 99
             logger.info("Escalation for lead %s (%.0f min)", lead_id, age_min)
             continue
@@ -989,8 +990,8 @@ def _check_unassigned_leads():
             f"👥 {tag_line}\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
-        notifier.send_to_rnk(msg)
-        notifier.send_to_all_rnk_tracking(msg)
+        unassigned[lead_id].setdefault("msg_refs", []).extend(
+            notifier.send_unassigned_tracked(msg))
         unassigned[lead_id]["last_reminded_count"] = reminder_count
         logger.info("Unassigned reminder #%d for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
@@ -1506,6 +1507,9 @@ def _process_status_change(item: dict):
     # Нерозібрані заявки — лід отримав реального відповідального → сповістити і прибрати з черги
     if lead_id in unassigned and responsible_id and responsible_id != ADMIN_USER_ID:
         info = unassigned.pop(lead_id, {})
+        # Заявку взяли в роботу — прибираємо всі сповіщення «Нерозібрана заявка»
+        # (початкове + нагадування + ескалацію) з усіх гілок Telegram.
+        notifier.delete_tracked(info.get("msg_refs", []))
         manager_name = kommo.get_user_name(responsible_id)
         tg_tag = notifier.get_manager_tag(responsible_id)
         waited_min = int((datetime.now(timezone.utc) - info["arrived_at"]).total_seconds() / 60) if info.get("arrived_at") else 0
@@ -1659,14 +1663,14 @@ def _handle_unassigned(lead_id: int, status_id: int):
         f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
-    notifier.send_to_rnk(msg)
-    notifier.send_to_all_rnk_tracking(msg)
+    msg_refs = notifier.send_unassigned_tracked(msg)
 
     unassigned[lead_id] = {
         "arrived_at": now,
         "status_name": status_name,
         "lead_name": lead_name,
         "last_reminded_count": 0,
+        "msg_refs": msg_refs,
     }
     logger.info("Unassigned lead %s in status %s", lead_id, status_name)
 

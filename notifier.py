@@ -269,6 +269,55 @@ def send_to_all_rnk_tracking(text: str) -> bool:
     return ok
 
 
+def _send_tracked(text: str, chat_id, thread_id) -> dict | None:
+    """Шле повідомлення й повертає {chat_id, message_id} для подальшого видалення."""
+    if not TG_TOKEN or not chat_id:
+        return None
+    try:
+        payload = _base_payload(text, chat_id=chat_id, thread_id=thread_id)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json=payload, timeout=10
+        )
+        data = resp.json()
+        if data.get("ok"):
+            return {"chat_id": str(chat_id), "message_id": data["result"]["message_id"]}
+        logger.error("_send_tracked error: %s", data)
+    except Exception as e:
+        logger.error("_send_tracked exception: %s", e)
+    return None
+
+
+def send_unassigned_tracked(text: str) -> list[dict]:
+    """Шле сповіщення про нерозібрану заявку в РНК-групу + гілки трекінгу ВСІХ
+    команд РНК (як send_to_rnk + send_to_all_rnk_tracking), але повертає список
+    рефів {chat_id, message_id} — щоб видалити ці повідомлення, коли заявку
+    візьмуть у роботу."""
+    refs = []
+    r = _send_tracked(text, TG_CHAT_ID_RNK, TG_THREAD_ID_RNK)
+    if r:
+        refs.append(r)
+    for team, route in _RNK_TEAM_ROUTES.items():
+        r = _send_tracked(text, route["chat_id"], route["tracking_thread"])
+        if r:
+            refs.append(r)
+    return refs
+
+
+def delete_tracked(refs: list[dict]) -> None:
+    """Видаляє раніше надіслані повідомлення (список {chat_id, message_id})."""
+    if not TG_TOKEN or not refs:
+        return
+    for ref in refs:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/deleteMessage",
+                json={"chat_id": ref["chat_id"], "message_id": ref["message_id"]},
+                timeout=10,
+            )
+        except Exception as e:
+            logger.error("delete_tracked exception: %s", e)
+
+
 # Окремі групи РПК на кожну команду лідогенераторів для трекінгу роботи
 # (нова заявка / лід взято в роботу / дзвінки). Тендерний — без власної гілки,
 # фолбек на спільну групу РПК.
