@@ -2614,6 +2614,41 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
   });
 });
 
+/**
+ * Lead quality for the КВП report — target vs non-target leads created in the
+ * period (Kyiv dates, both ends inclusive):
+ *   target      = full-cycle pipeline 8921932 (a real transport deal was opened)
+ *   non-target  = Кваліфікація 8921928 closed as lost (status 143) — rejected.
+ * Both counts come from our synced `deals` (syncKommo pulls all pipelines).
+ */
+dashboardRouter.get("/lead-quality", async (req, res) => {
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+  const teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  const dateScope = (alias: string, params: unknown[]) => {
+    const c: string[] = [];
+    if (from) { params.push(from); c.push(`(${alias}.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`); }
+    if (to) { params.push(to); c.push(`(${alias}.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`); }
+    return c;
+  };
+  const teamJoin = teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const countFor = async (extra: string): Promise<number> => {
+    const params: unknown[] = [];
+    const conds = [extra, ...dateScope("d", params)];
+    if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+    const r = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::int AS n FROM deals d ${teamJoin} WHERE ${conds.join(" AND ")}`,
+      params
+    );
+    return Number(r.rows[0]?.n ?? 0);
+  };
+  const [targetLeads, nonTargetLeads] = await Promise.all([
+    countFor("d.pipeline_id = 8921932"),
+    countFor("d.pipeline_id = 8921928 AND d.status_id = 143"),
+  ]);
+  res.json({ targetLeads, nonTargetLeads });
+});
+
 /** Read a manager's monthly funnel plan (for the plan editor). */
 dashboardRouter.get("/funnel-plan", async (req, res) => {
   const managerId = Number(req.query.managerId);

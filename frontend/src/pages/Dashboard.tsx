@@ -90,6 +90,7 @@ import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
 import { ReceivablesSection } from "./dashboard/sections/ReceivablesSection";
 import { TasksSection } from "./dashboard/sections/TasksSection";
 import { ReportSection } from "./dashboard/sections/ReportSection";
+import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
@@ -904,6 +905,8 @@ export function Dashboard() {
           onPlanSaved={() => setRefreshNonce((n) => n + 1)}
         />
       )}
+
+      {section === "kvp" && auth?.role === "admin" && <KvpReportSection />}
 
       {section === "statistics" && (
         <>

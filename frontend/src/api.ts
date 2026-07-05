@@ -194,6 +194,20 @@ export async function fetchOverview(params: {
   return data;
 }
 
+export interface LeadQuality {
+  targetLeads: number;
+  nonTargetLeads: number;
+}
+
+export async function fetchLeadQuality(params: {
+  from?: string;
+  to?: string;
+  teamId?: number;
+}): Promise<LeadQuality> {
+  const { data } = await api.get<LeadQuality>("/dashboard/lead-quality", { params });
+  return data;
+}
+
 export interface Team {
   id: number;
   name: string;
