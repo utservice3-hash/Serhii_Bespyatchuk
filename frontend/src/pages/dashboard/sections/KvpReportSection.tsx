@@ -10,33 +10,28 @@ const ymd = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const dmy = (iso: string) => iso.split("-").reverse().join(".");
 
-function monthRange(offset: number): Range {
-  const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-  const to = new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
-  return { from: ymd(from), to: ymd(to) };
+/** Full calendar range of month m0 (0-based) in year y. */
+function fullMonthRange(y: number, m0: number): Range {
+  return { from: ymd(new Date(y, m0, 1)), to: ymd(new Date(y, m0 + 1, 0)) };
 }
 
 /** Fixed 7-day blocks from the 1st: [1-7],[8-14],[15-21],[22-28],[29-end].
  *  Matches how the manager sheet splits a month into "тижні". */
-function monthWeekBlocks(offset: number): Range[] {
-  const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth() + offset;
-  const last = new Date(y, m + 1, 0).getDate();
-  const starts = [1, 8, 15, 22, 29];
-  return starts
+function weekBlocksFor(y: number, m0: number): Range[] {
+  const last = new Date(y, m0 + 1, 0).getDate();
+  return [1, 8, 15, 22, 29]
     .filter((s) => s <= last)
     .map((s, i) => ({
-      from: ymd(new Date(y, m, s)),
-      to: ymd(new Date(y, m, Math.min(s + 6, last))),
+      from: ymd(new Date(y, m0, s)),
+      to: ymd(new Date(y, m0, Math.min(s + 6, last))),
       label: `Тиждень ${i + 1}`,
     }));
 }
 
-/** Index (0..4) of the fixed 7-day block that today falls into. */
-function currentBlockIndex(): number {
-  return Math.min(4, Math.floor((new Date().getDate() - 1) / 7));
-}
+/** Index (0..4) of the fixed 7-day block that a given day-of-month falls into. */
+const blockIndexOf = (dayOfMonth: number) => Math.min(4, Math.floor((dayOfMonth - 1) / 7));
+
+const MONTH_NAMES = ["січень", "лютий", "березень", "квітень", "травень", "червень", "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"];
 
 const avgCheck = (o: ExecutiveOverview) => {
   const n = o.successDeals + o.paymentDeals;
@@ -280,40 +275,65 @@ function TeamTable({ prev, cur }: { prev: ExecutiveOverview; cur: ExecutiveOverv
 
 /** Звіт КВП — department-head scorecard. Admin/КВП only. Auto-filled from CRM +
  *  Google Ads sheet. Dynamics is always vs the analogous period a month earlier. */
+const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
+
 export function KvpReportSection() {
+  const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("kvpMonth") || curMonthStr());
+
   const setup = useMemo(() => {
-    const monthPrev = monthRange(-1);
-    const monthCur = { ...monthRange(0), to: ymd(new Date()) }; // MTD
-    const prevWeeks = monthWeekBlocks(-1);
-    const curWeeksFull = monthWeekBlocks(0);
-    const idx = Math.min(currentBlockIndex(), curWeeksFull.length - 1);
-    const today = ymd(new Date());
-    const curWeekFull = curWeeksFull[idx];
-    const curWeek: Range = { ...curWeekFull, to: today < curWeekFull.to ? today : curWeekFull.to };
-    const analogWeek = prevWeeks[Math.min(idx, prevWeeks.length - 1)];
-    return { monthPrev, monthCur, prevWeeks, curWeek, analogWeek, idx };
-  }, []);
+    const [selY, selM] = monthSel.split("-").map(Number);
+    const y = selY, m0 = selM - 1;
+    const now = new Date();
+    const isCurrentMonth = y === now.getFullYear() && m0 === now.getMonth();
+    const today = ymd(now);
+
+    const monthPrev = fullMonthRange(m0 === 0 ? y - 1 : y, m0 === 0 ? 11 : m0 - 1);
+    const full = fullMonthRange(y, m0);
+    const monthCur: Range = isCurrentMonth ? { ...full, to: today } : full; // MTD for current
+    const selWeeks = weekBlocksFor(y, m0);
+
+    // "Поточний тиждень" only makes sense for the current month.
+    let curWeek: Range | null = null;
+    let analogWeek: Range | null = null;
+    if (isCurrentMonth) {
+      const idx = Math.min(blockIndexOf(now.getDate()), selWeeks.length - 1);
+      const wf = selWeeks[idx];
+      curWeek = { ...wf, to: today < wf.to ? today : wf.to };
+      const prevWeeks = weekBlocksFor(m0 === 0 ? y - 1 : y, m0 === 0 ? 11 : m0 - 1);
+      analogWeek = prevWeeks[Math.min(idx, prevWeeks.length - 1)];
+    }
+    const monthLabel = `${MONTH_NAMES[m0]} ${y}`;
+    return { monthPrev, monthCur, selWeeks, curWeek, analogWeek, isCurrentMonth, monthLabel };
+  }, [monthSel]);
 
   const [data, setData] = useState<{
-    monthPrev: Block; monthCur: Block; prevWeeks: Block[]; curWeek: Block; analogWeek: Block;
+    monthPrev: Block; monthCur: Block; selWeeks: Block[]; curWeek: Block | null; analogWeek: Block | null;
   } | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
+    setData(null);
+    setErr(null);
     const load = async (r: Range): Promise<Block> => {
       const [ov, lq] = await Promise.all([fetchOverview(r), fetchLeadQuality(r)]);
       return { ov, lq };
     };
     (async () => {
       try {
-        const [monthPrev, monthCur, curWeek, ...prevWeeks] = await Promise.all([
-          load(setup.monthPrev), load(setup.monthCur), load(setup.curWeek),
-          ...setup.prevWeeks.map(load),
+        const extra = setup.curWeek && setup.analogWeek ? [setup.curWeek, setup.analogWeek] : [];
+        const results = await Promise.all([
+          load(setup.monthPrev), load(setup.monthCur),
+          ...setup.selWeeks.map(load),
+          ...extra.map(load),
         ]);
         if (!alive) return;
-        const analogWeek = prevWeeks[Math.min(setup.idx, prevWeeks.length - 1)];
-        setData({ monthPrev, monthCur, prevWeeks, curWeek, analogWeek });
+        const monthPrev = results[0];
+        const monthCur = results[1];
+        const selWeeks = results.slice(2, 2 + setup.selWeeks.length);
+        const curWeek = extra.length ? results[2 + setup.selWeeks.length] : null;
+        const analogWeek = extra.length ? results[2 + setup.selWeeks.length + 1] : null;
+        setData({ monthPrev, monthCur, selWeeks, curWeek, analogWeek });
       } catch {
         if (alive) setErr("Не вдалося завантажити звіт.");
       }
@@ -321,10 +341,32 @@ export function KvpReportSection() {
     return () => { alive = false; };
   }, [setup]);
 
+  const shiftMonth = (delta: number) => {
+    const [y, m] = monthSel.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    const next = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    if (next > curMonthStr()) return; // не даємо йти в майбутнє
+    setMonthSel(next);
+    localStorage.setItem("kvpMonth", next);
+  };
+  const pickMonth = (v: string) => {
+    if (!v || v > curMonthStr()) return;
+    setMonthSel(v);
+    localStorage.setItem("kvpMonth", v);
+  };
+
   return (
     <>
       <div className="page-header">
         <h1 className="page-title">🏆 Звіт КВП</h1>
+        <div className="page-filters" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={() => shiftMonth(-1)} title="Попередній місяць"
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>←</button>
+          <input type="month" value={monthSel} max={curMonthStr()} onChange={(e) => pickMonth(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+          <button onClick={() => shiftMonth(1)} disabled={monthSel >= curMonthStr()} title="Наступний місяць"
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: monthSel >= curMonthStr() ? "default" : "pointer", opacity: monthSel >= curMonthStr() ? 0.5 : 1 }}>→</button>
+        </div>
       </div>
       <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 760 }}>
         Зведення керівника відділу продажу — автоматично з CRM та Google-таблиці реклами.
@@ -337,24 +379,26 @@ export function KvpReportSection() {
       {data && (
         <>
           <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title">📅 За місяць (поточний vs минулий)</h2>
+            <h2 className="chart-title">📅 {setup.monthLabel} (vs попередній місяць)</h2>
             <ComparisonTable prev={data.monthPrev} cur={data.monthCur} prevRange={setup.monthPrev} curRange={setup.monthCur} isMonth />
             <Decomposition b={data.monthCur} />
             <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "16px 0 4px" }}>По командах</h3>
             <TeamTable prev={data.monthPrev.ov} cur={data.monthCur.ov} />
           </div>
 
-          <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title">🗓️ Поточний тиждень (vs той самий тиждень минулого місяця)</h2>
-            <ComparisonTable prev={data.analogWeek} cur={data.curWeek} prevRange={setup.analogWeek} curRange={setup.curWeek} isMonth={false} />
-          </div>
+          {data.curWeek && data.analogWeek && setup.curWeek && setup.analogWeek && (
+            <div className="chart-card" style={{ marginBottom: 16 }}>
+              <h2 className="chart-title">🗓️ Поточний тиждень (vs той самий тиждень минулого місяця)</h2>
+              <ComparisonTable prev={data.analogWeek} cur={data.curWeek} prevRange={setup.analogWeek} curRange={setup.curWeek} isMonth={false} />
+            </div>
+          )}
 
           <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title">📊 Минулий місяць по тижнях</h2>
+            <h2 className="chart-title">📊 {setup.monthLabel} по тижнях</h2>
             <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 10px" }}>
               Тижні = фіксовані 7-денні блоки від 1-го числа (1–7, 8–14, 15–21, 22–28, 29–кінець).
             </p>
-            <WeeklyBreakdown weeks={setup.prevWeeks} blocks={data.prevWeeks} />
+            <WeeklyBreakdown weeks={setup.selWeeks} blocks={data.selWeeks} />
           </div>
         </>
       )}
