@@ -441,3 +441,54 @@ export async function fetchAllCompanies(): Promise<KommoCompany[]> {
   }
   return companies;
 }
+
+export interface KommoLeadNote {
+  entityId: number;
+  createdBy: number; // Kommo user id; 0 = system/Salesbot
+  createdAt: number; // unix seconds
+  noteType: string;
+}
+
+interface KommoNoteRaw {
+  entity_id: number;
+  created_by: number;
+  created_at: number;
+  note_type: string;
+}
+
+/**
+ * Streams lead notes (calls, texts, manual notes) updated in [fromUnix, toUnix]
+ * per page. This is the real-activity signal for "stuck deals": a note made by
+ * an actual user (created_by != 0) means a human worked the deal, independent of
+ * whatever Salesbot does to the lead's updated_at. Returns total notes seen.
+ */
+export async function forEachLeadNotePage(
+  fromUnix: number,
+  toUnix: number,
+  onPage: (notes: KommoLeadNote[]) => Promise<void>
+): Promise<number> {
+  const limit = 250;
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const data = await kommoRequest<KommoListResponse<KommoNoteRaw>>(
+      `/api/v4/leads/notes?limit=${limit}&page=${page}` +
+        `&${encodeURIComponent("filter[updated_at][from]")}=${fromUnix}` +
+        `&${encodeURIComponent("filter[updated_at][to]")}=${toUnix}`
+    );
+    const raw = data._embedded?.notes ?? [];
+    const notes: KommoLeadNote[] = raw.map((n) => ({
+      entityId: n.entity_id,
+      createdBy: n.created_by,
+      createdAt: n.created_at,
+      noteType: n.note_type,
+    }));
+    if (notes.length) {
+      await onPage(notes);
+      total += notes.length;
+    }
+    if (raw.length < limit || !data._links?.next) break;
+    page += 1;
+  }
+  return total;
+}

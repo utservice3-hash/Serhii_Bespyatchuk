@@ -96,6 +96,10 @@ function ManagerDetailModal({ m, onClose }: { m: ReportData["byManager"][number]
           </table>
         )}
         {done.length > 0 && <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>✔ Виконано за час: {done.length}</p>}
+
+        <div style={{ marginTop: 16 }}>
+          <StuckDealsCard managerId={m.managerId} />
+        </div>
       </div>
     </div>
   );

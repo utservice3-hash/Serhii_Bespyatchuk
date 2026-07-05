@@ -116,6 +116,14 @@ CREATE INDEX IF NOT EXISTS idx_dse_pipeline_stage_time ON deal_stage_events(pipe
 -- pipeline lead (the moment a manager "takes" the lead — the same trigger as
 -- the Telegram notification). Only such leads are stored here.
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_transfer_at TIMESTAMPTZ;
+
+-- Real (human) activity per deal — max created_at of a lead note made by an
+-- actual user (created_by <> 0), i.e. a call/text/manual note. Independent of
+-- Salesbot, which bumps a lead's updated_at without any manager working it.
+-- Used by "stuck deals": a deal with no human activity for a while is stuck.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_activity_note_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS lead_transfer_events (
   kommo_id BIGINT NOT NULL,
   changed_at TIMESTAMPTZ NOT NULL,

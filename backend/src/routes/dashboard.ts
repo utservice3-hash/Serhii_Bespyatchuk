@@ -2563,14 +2563,16 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
   const minDays = Math.max(1, Number(req.query.minDays) || 7);
   const AVTO = "d.status_id IN (69716300, 98470988, 10937178)";
 
-  // "Stuck" = no activity inside the deal for a while. In Kommo a lead's
-  // updated_at bumps on ANY activity (call, note, task, field edit, stage move),
-  // so COALESCE(updated_at_kommo, created_at) is our "last activity" timestamp:
-  // recent calls/notes → not stuck. Stage-aware threshold: money-in-progress
-  // (Авто працює / Рахунок) is stuck after minDays; the early "Взято в роботу"
-  // churns naturally, so it needs 3×.
+  // "Stuck" = no REAL (human) activity inside the deal for a while. We use
+  // deals.last_activity_at — the latest call/text/manual note made by an actual
+  // user (created_by <> 0), synced from Kommo notes. This is independent of
+  // Salesbot: automation bumping the lead's updated_at never resets the timer.
+  // Fallback to created_at only (never updated_at) keeps it Salesbot-proof for
+  // deals that simply have no human activity yet. Stage-aware threshold:
+  // money-in-progress (Авто працює / Рахунок) is stuck after minDays; the early
+  // "Взято в роботу" churns naturally, so it needs 3×.
   const minDaysEarly = minDays * 3;
-  const ACT = "COALESCE(d.updated_at_kommo, d.created_at_kommo)";
+  const ACT = "COALESCE(d.last_activity_at, d.created_at_kommo)";
   const params: unknown[] = [[8921932, 155304], minDays, minDaysEarly];
   const conds = [
     "d.pipeline_id = ANY($1)",

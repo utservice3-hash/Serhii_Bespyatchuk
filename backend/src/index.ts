@@ -17,6 +17,7 @@ import { syncKommo } from "./jobs/syncKommo.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
+import { syncDealActivity } from "./jobs/syncDealActivity.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
@@ -102,6 +103,13 @@ cron.schedule("*/10 * * * *", () => {
   syncTransfers().catch((err) => console.error("Transfers sync failed:", err));
 });
 syncTransfers().catch((err) => console.error("Transfers startup sync failed:", err));
+
+// Real (human) deal activity from lead notes every 10 minutes + on startup —
+// feeds "stuck deals" so Salesbot activity никогда не скидає таймер.
+cron.schedule("*/10 * * * *", () => {
+  syncDealActivity().catch((err) => console.error("Deal activity sync failed:", err));
+});
+syncDealActivity().catch((err) => console.error("Deal activity startup sync failed:", err));
 
 // Prune stage events older than 24 months daily at 04:30 (bounded storage).
 cron.schedule("30 4 * * *", () => {
