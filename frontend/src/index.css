@@ -427,3 +427,59 @@ button {
   font-size: 13px;
   margin: 0;
 }
+
+/* ── Info hint (ⓘ) — data-source explanation on hover/tap ───────────────── */
+.info-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  vertical-align: middle;
+  cursor: help;
+}
+.info-hint-icon {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.info-hint:hover .info-hint-icon {
+  opacity: 1;
+  color: var(--brand);
+}
+.info-hint-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 260px;
+  background: var(--card-bg, #fff);
+  color: var(--text, #1a1a1a);
+  border: 1px solid var(--border, #e0e4ea);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  z-index: 100;
+  pointer-events: none;
+}
+/* Flip below when the card is near the top of the viewport (first grid row) */
+.kpi-grid > *:nth-child(-n + 4) .info-hint-pop,
+.section-heading + * .info-hint-pop {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+@media (max-width: 640px) {
+  .info-hint-pop {
+    max-width: 200px;
+    left: auto;
+    right: 0;
+    transform: none;
+  }
+}

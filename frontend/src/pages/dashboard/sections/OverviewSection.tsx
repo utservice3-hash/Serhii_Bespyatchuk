@@ -12,9 +12,47 @@ import {
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
 import type { ConversionChannel, ExecutiveOverview, FunnelStage, SyncStatus, Team } from "../../../api";
 import { formatAmount, previousRange } from "../format";
-import { ProgressGauge, HoverInfoCard } from "../widgets";
+import { ProgressGauge, HoverInfoCard, InfoHint } from "../widgets";
 
 type DateRange = { from: string; to: string };
+
+/** Data-source explanations for primary KPI cards, keyed by kpi.key. Shown as a
+ *  ⓘ tooltip so managers/team-leads understand where each number comes from. */
+const KPI_HINTS: Record<string, string> = {
+  deals:
+    "Угоди повного циклу зі стадією «Виставлено рахунок» або «Оплата отримана», за датою СТВОРЕННЯ в періоді. Це шлях «рахунок → реалізовано».",
+  sum:
+    "Отримані кошти = «Успішно реалізовано» (статус 142, за датою закриття угоди в періоді) + «Оплата отримана» (поточний етап, знімок без фільтра дати).",
+  convAd:
+    "Конверсія реклами: таргетовані угоди повного циклу (лід із google-utm), що дійшли до оплати ÷ усі такі ліди за період.",
+  convLg:
+    "Конверсія лідогену: передані заявки-прорахунки від лідогена, чий клієнт дійшов до оплаченої угоди повного циклу ÷ усі передані заявки.",
+  avg:
+    "Середній чек = отримані кошти ÷ кількість угод (не етап воронки).",
+  newc:
+    "Нові клієнти: клієнти, чия ПЕРША оплата за всю історію припала на обраний період.",
+  repc:
+    "Постійні клієнти: клієнти з 2+ оплаченими перевезеннями за весь час (lifetime), що замовляли в періоді.",
+};
+
+const CARD_HINTS = {
+  pending:
+    "Угоди на етапі «Виставлено рахунок» — знімок поточного стану (скільки грошей очікуємо). Без фільтра дати.",
+  created:
+    "Кількість створених угод повного циклу (пайплайни New 8921932 + старий 155304) за датою створення в періоді.",
+  carryover:
+    "Знімок угод, що були ще в роботі на 1-ше число місяця (погоджені → рахунок → оплата, крім «Успішна»). Фіксується раз на місяць.",
+  transferred:
+    "«Передано» = лідоген передав заявку і менеджер взяв її в роботу (зміна відповідального в «Кваліфікації»). «Успішно» = з них закриті як «Успішна угода» за період.",
+  newRev:
+    "Сума отриманих коштів від клієнтів, чия перша оплата за всю історію припала на період.",
+  receivables:
+    "Загальна сума неоплаченої дебіторки з Google-таблиці (оновлюється кожні 30 хв).",
+  repeatRev:
+    "Сума отриманих коштів від постійних клієнтів (2+ оплачених перевезень lifetime). Підрядком — їх частка від загальної виручки.",
+  projection:
+    "Прогноз виручки на кінець місяця за поточним темпом: успішні угоди екстрапольовано по робочих днях + поточний знімок оплат.",
+};
 
 export type Kpi = {
   key: string;
@@ -175,7 +213,10 @@ export function OverviewSection({
               style={{ textAlign: "left", border: "none", cursor: "pointer", background: "var(--card-bg)" }}
               title="Натисніть для деталей"
             >
-              <span className="kpi-label">{kpi.label}</span>
+              <span className="kpi-label">
+                {kpi.label}
+                {KPI_HINTS[kpi.key] && <InfoHint text={KPI_HINTS[kpi.key]} />}
+              </span>
               <span className="kpi-value">{kpi.value}</span>
               {hasPrev && (
                 <span style={{ fontSize: 12, color, fontWeight: 600 }}>
@@ -353,8 +394,8 @@ export function OverviewSection({
               const pct = p.projectedPct;
               const color = pct == null ? "var(--text-muted)" : pct >= 100 ? "#16a34a" : pct >= 85 ? "#d97706" : "#dc2626";
               return (
-                <div className="kpi-card" title="Прогноз виручки на кінець місяця за поточним темпом (успішні угоди екстрапольовано по робочих днях + поточний знімок оплат)">
-                  <span className="kpi-label">Прогноз на місяць (за темпом)</span>
+                <div className="kpi-card">
+                  <span className="kpi-label">Прогноз на місяць (за темпом)<InfoHint text={CARD_HINTS.projection} /></span>
                   <span className="kpi-value" style={{ color }}>{formatAmount(p.projected)}</span>
                   <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                     {p.plan > 0 ? `${pct}% плану · ` : ""}факт {formatAmount(p.monthFact)} · дні {p.elapsedWorkingDays}/{p.totalWorkingDays}
@@ -371,13 +412,14 @@ export function OverviewSection({
               label="Очікувані оплати"
               value={`${overview.pendingPayments.deals} угод · ${formatAmount(overview.pendingPayments.revenue)}`}
               rows={overview.pendingPayments.byTeam}
+              hint={CARD_HINTS.pending}
             />
             <button className="kpi-card" style={clickableCard} onClick={() => setCardDetail("created")} title="Натисніть: скільки створених угод на якому етапі">
-              <span className="kpi-label">Створені угоди (Повний цикл)</span>
+              <span className="kpi-label">Створені угоди (Повний цикл)<InfoHint text={CARD_HINTS.created} /></span>
               <span className="kpi-value">{overview.createdFullCycle.toLocaleString("uk-UA")}</span>
             </button>
-            <div className="kpi-card" title="Угоди ще в роботі (погоджені → рахунок → оплата отримана, крім Успішна) — знімок на початок місяця, фіксується один раз">
-              <span className="kpi-label">Сума перенесених угод з минулого місяця</span>
+            <div className="kpi-card">
+              <span className="kpi-label">Сума перенесених угод з минулого місяця<InfoHint text={CARD_HINTS.carryover} /></span>
               <span className="kpi-value">
                 {overview.carryover ? formatAmount(overview.carryover.amount) : "—"}
               </span>
@@ -393,7 +435,7 @@ export function OverviewSection({
               title="Заявки, передані лідогеном менеджеру (взяв у роботу), і скільки з них успішно реалізовано. Натисніть для деталей по командах."
               style={{ textAlign: "left", border: "none", cursor: "pointer", background: "var(--card-bg)" }}
             >
-              <span className="kpi-label">Передані заявки → Успішно</span>
+              <span className="kpi-label">Передані заявки → Успішно<InfoHint text={CARD_HINTS.transferred} /></span>
               <span className="kpi-value">
                 {overview.transferred.total.toLocaleString("uk-UA")} → {overview.transferred.success.toLocaleString("uk-UA")}
               </span>
@@ -402,15 +444,15 @@ export function OverviewSection({
               </span>
             </button>
             <button className="kpi-card" style={clickableCard} onClick={() => setCardDetail("newRev")} title="Натисніть: перелік нових клієнтів із сумою">
-              <span className="kpi-label">Виручка від нових клієнтів</span>
+              <span className="kpi-label">Виручка від нових клієнтів<InfoHint text={CARD_HINTS.newRev} /></span>
               <span className="kpi-value">{formatAmount(overview.newRevenue)}</span>
             </button>
             <div className="kpi-card">
-              <span className="kpi-label">Дебіторська заборгованість</span>
+              <span className="kpi-label">Дебіторська заборгованість<InfoHint text={CARD_HINTS.receivables} /></span>
               <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
             </div>
             <button className="kpi-card" style={clickableCard} onClick={() => setCardDetail("repeatRev")} title="Натисніть: перелік постійних клієнтів (назва, к-сть замовлень, сума)">
-              <span className="kpi-label">Виручка від постійних клієнтів</span>
+              <span className="kpi-label">Виручка від постійних клієнтів<InfoHint text={CARD_HINTS.repeatRev} /></span>
               <span className="kpi-value">{formatAmount(overview.repeatRevenue)}</span>
               <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                 {overview.newRevenue + overview.repeatRevenue > 0
@@ -476,7 +518,7 @@ export function OverviewSection({
 
       {conversionChannels.length > 0 && (
         <div className="chart-card" style={{ marginBottom: 16 }}>
-          <h2 className="chart-title">Конверсія за джерелом</h2>
+          <h2 className="chart-title">Конверсія за джерелом<InfoHint text="Реклама = ліди з google-utm (таргет). Лідоген = передані заявки-прорахунки. «Оплачено» — скільки з лідів каналу дійшли до оплаченої угоди повного циклу; конверсія = оплачено ÷ ліди." /></h2>
           <table className="data-table">
             <thead>
               <tr>

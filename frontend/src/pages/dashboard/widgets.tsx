@@ -87,10 +87,12 @@ export function HoverInfoCard({
   label,
   value,
   rows,
+  hint,
 }: {
   label: string;
   value: string;
   rows: { teamName: string; deals: number; revenue: number }[];
+  hint?: string;
 }) {
   const [hover, setHover] = useState(false);
   return (
@@ -100,7 +102,7 @@ export function HoverInfoCard({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <span className="kpi-label">{label}</span>
+      <span className="kpi-label">{label}{hint && <InfoHint text={hint} />}</span>
       <span className="kpi-value">{value}</span>
       {hover && rows.length > 0 && (
         <div
@@ -146,6 +148,32 @@ const FORECAST_LABELS: Record<string, string> = {
   behind: "Відставання",
   no_plan: "Немає плану",
 };
+
+/** Small ⓘ icon that reveals a data-source explanation on hover (desktop) or
+ *  tap (mobile). Safe to embed inside clickable KPI <button> cards — clicks are
+ *  stopped so opening the hint doesn't trigger the card's own modal. */
+export function InfoHint({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span
+      className="info-hint"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen((v) => !v);
+      }}
+    >
+      <span className="info-hint-icon" aria-label="Звідки дані">ⓘ</span>
+      {open && (
+        <span className="info-hint-pop" onClick={(e) => e.stopPropagation()}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export function ForecastBadge({ forecast }: { forecast: { status: string; projectedPct: number } }) {
   return (

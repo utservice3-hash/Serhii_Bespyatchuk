@@ -12,6 +12,7 @@ import {
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
 import { fetchFunnelPlan, saveFunnelPlan, fetchTasks, updateTask, type Task, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team, type FunnelWeeklyReport, type WeeklyBlock } from "../../../api";
 import { formatAmount } from "../format";
+import { InfoHint } from "../widgets";
 import { DailyProductivityCard } from "./DailyProductivityCard";
 import { StuckDealsCard } from "./StuckDealsCard";
 
@@ -425,19 +426,19 @@ export function ReportSection({
   const s = report?.summary;
   const kpis = s
     ? [
-        { label: "Отримані кошти", value: formatAmount(s.revenue), sub: `${s.deals} угод` },
-        { label: "Успішно реалізовано", value: formatAmount(s.successRevenue), sub: `${s.successDeals} угод` },
-        { label: "Оплата отримана", value: formatAmount(s.paymentRevenue), sub: `${s.paymentDeals} угод` },
-        { label: "Середній чек", value: formatAmount(s.avgCheck), sub: "" },
-        { label: "Прийнято реклами", value: s.adLeads.toLocaleString("uk-UA"), sub: "" },
-        { label: "Передані заявки (лідоген)", value: s.transfers.toLocaleString("uk-UA"), sub: "" },
-        { label: "Отримано прорахунків", value: s.quotes.toLocaleString("uk-UA"), sub: "" },
-        { label: "Відправлено авто", value: s.dispatched.toLocaleString("uk-UA"), sub: formatAmount(s.dispatchedSum) },
-        { label: "Створені угоди (Повний цикл)", value: s.createdDeals.toLocaleString("uk-UA"), sub: "" },
-        { label: "Нові клієнти", value: s.newClients.toLocaleString("uk-UA"), sub: "" },
-        { label: "Постійні клієнти", value: s.repeatClients.toLocaleString("uk-UA"), sub: "" },
-        { label: "Перенесені з мин. міс.", value: formatAmount(s.carryover), sub: `${s.carryoverDeals} угод` },
-        { label: "Дебіторка", value: formatAmount(s.receivables), sub: "" },
+        { label: "Отримані кошти", value: formatAmount(s.revenue), sub: `${s.deals} угод`, hint: "«Успішно реалізовано» (статус 142, за датою закриття в періоді) + «Оплата отримана» (поточний етап, знімок)." },
+        { label: "Успішно реалізовано", value: formatAmount(s.successRevenue), sub: `${s.successDeals} угод`, hint: "Угоди в статусі «Успішна угода» (142), за датою закриття угоди в періоді." },
+        { label: "Оплата отримана", value: formatAmount(s.paymentRevenue), sub: `${s.paymentDeals} угод`, hint: "Угоди, що ЗАРАЗ на етапі «Оплата отримана» (знімок поточного стану, без фільтра дати)." },
+        { label: "Середній чек", value: formatAmount(s.avgCheck), sub: "", hint: "Отримані кошти ÷ кількість угод." },
+        { label: "Прийнято реклами", value: s.adLeads.toLocaleString("uk-UA"), sub: "", hint: "Кількість лідів із реклами (google-utm) за період." },
+        { label: "Передані заявки (лідоген)", value: s.transfers.toLocaleString("uk-UA"), sub: "", hint: "Заявки, які лідоген передав менеджеру (зміна відповідального в «Кваліфікації») за період." },
+        { label: "Отримано прорахунків", value: s.quotes.toLocaleString("uk-UA"), sub: "", hint: "Ліди, що дійшли до етапу «Прорахунок» (запит КП) за період." },
+        { label: "Відправлено авто", value: s.dispatched.toLocaleString("uk-UA"), sub: formatAmount(s.dispatchedSum), hint: "Угоди, що перейшли на етап «Авто працює» (машина в рейсі) за період." },
+        { label: "Створені угоди (Повний цикл)", value: s.createdDeals.toLocaleString("uk-UA"), sub: "", hint: "Створені угоди повного циклу (пайплайни New + старий) за датою створення в періоді." },
+        { label: "Нові клієнти", value: s.newClients.toLocaleString("uk-UA"), sub: "", hint: "Клієнти, чия перша оплата за всю історію припала на період." },
+        { label: "Постійні клієнти", value: s.repeatClients.toLocaleString("uk-UA"), sub: "", hint: "Клієнти з 2+ оплаченими перевезеннями lifetime, що замовляли в періоді." },
+        { label: "Перенесені з мин. міс.", value: formatAmount(s.carryover), sub: `${s.carryoverDeals} угод`, hint: "Знімок угод, ще в роботі на 1-ше число місяця (рахунок → оплата, крім «Успішна»)." },
+        { label: "Дебіторка", value: formatAmount(s.receivables), sub: "", hint: "Сума неоплаченої дебіторки з Google-таблиці (оновлюється кожні 30 хв)." },
       ]
     : [];
 
@@ -504,7 +505,7 @@ export function ReportSection({
           <div className="kpi-grid">
             {kpis.map((k) => (
               <div className="kpi-card" key={k.label}>
-                <span className="kpi-label">{k.label}</span>
+                <span className="kpi-label">{k.label}{k.hint && <InfoHint text={k.hint} />}</span>
                 <span className="kpi-value">{k.value}</span>
                 {k.sub && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{k.sub}</span>}
               </div>
