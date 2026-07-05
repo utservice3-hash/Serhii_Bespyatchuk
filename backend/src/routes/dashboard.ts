@@ -749,9 +749,45 @@ dashboardRouter.get("/overview", async (req, res) => {
     };
   });
 
+  // Current-month projection (independent of the selected period): extrapolate
+  // the success-money FLOW linearly by working days elapsed, then add the
+  // payment-received SNAPSHOT (already "in hand") — "за темпом вийде ₴X".
+  const nowK = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const mStartP = nowK.slice(0, 7) + "-01";
+  const projParams: unknown[] = [mStartP, nowK];
+  const projConds = [
+    "psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL",
+    `(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1 AND $2`,
+  ];
+  if (managerId) { projParams.push(managerId); projConds.push(`d.manager_id = $${projParams.length}`); }
+  if (teamId) { projParams.push(teamId); projConds.push(`m.team_id = $${projParams.length}`); }
+  const successMTDRes = await pool.query<{ s: string }>(
+    `SELECT COALESCE(SUM(d.price), 0) AS s FROM deals d JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${projConds.join(" AND ")}`,
+    projParams
+  );
+  const successMTD = Number(successMTDRes.rows[0]?.s ?? 0);
+  const mS = new Date(mStartP + "T00:00:00");
+  const mE = new Date(mS.getFullYear(), mS.getMonth() + 1, 0);
+  const tD = new Date(nowK + "T00:00:00");
+  const totalWdP = workingDays(mS, mE);
+  const elapsedWdP = workingDays(mS, tD < mE ? tD : mE);
+  const monthFactP = Math.round(successMTD + paymentRevenue);
+  const projected = elapsedWdP > 0 ? Math.round(successMTD * (totalWdP / elapsedWdP) + paymentRevenue) : monthFactP;
+  const projection = {
+    monthFact: monthFactP,
+    projected,
+    plan: planMonthTotal,
+    projectedPct: planMonthTotal > 0 ? Math.round((projected / planMonthTotal) * 100) : null,
+    elapsedWorkingDays: elapsedWdP,
+    totalWorkingDays: totalWdP,
+  };
+
   res.json({
     plan: planTotal,
     planMonthTotal,
+    projection,
     fact: successRevenue + paymentRevenue,
     planPct: planTotal > 0 ? Math.round(((successRevenue + paymentRevenue) / planTotal) * 100) : 0,
     closedRevenue: Number(closedRes.rows[0]?.revenue ?? 0),

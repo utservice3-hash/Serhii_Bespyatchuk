@@ -348,6 +348,25 @@ export function OverviewSection({
               pct={overview.planPct}
               contributors={overview.byTeam.map((t) => ({ name: t.teamName, revenue: t.revenue, deals: t.deals }))}
             />
+            {(() => {
+              const p = overview.projection;
+              const pct = p.projectedPct;
+              const color = pct == null ? "var(--text-muted)" : pct >= 100 ? "#16a34a" : pct >= 85 ? "#d97706" : "#dc2626";
+              return (
+                <div className="kpi-card" title="Прогноз виручки на кінець місяця за поточним темпом (успішні угоди екстрапольовано по робочих днях + поточний знімок оплат)">
+                  <span className="kpi-label">Прогноз на місяць (за темпом)</span>
+                  <span className="kpi-value" style={{ color }}>{formatAmount(p.projected)}</span>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    {p.plan > 0 ? `${pct}% плану · ` : ""}факт {formatAmount(p.monthFact)} · дні {p.elapsedWorkingDays}/{p.totalWorkingDays}
+                  </span>
+                  {p.plan > 0 && (
+                    <div style={{ height: 6, borderRadius: 999, background: "var(--border, #eceff3)", overflow: "hidden", marginTop: 6 }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, pct ?? 0)}%`, background: color, borderRadius: 999 }} />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <HoverInfoCard
               label="Очікувані оплати"
               value={`${overview.pendingPayments.deals} угод · ${formatAmount(overview.pendingPayments.revenue)}`}
