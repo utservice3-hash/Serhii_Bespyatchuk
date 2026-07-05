@@ -2513,6 +2513,66 @@ dashboardRouter.get("/daily", async (req, res) => {
   });
 });
 
+/**
+ * "Застряглі угоди" — active full-cycle deals that haven't moved to a new stage
+ * for ≥ minDays (default 7). Days-in-stage = now − last stage-change event (or
+ * creation if no events). Excludes closed deals (paid/won/lost). Role-scoped.
+ */
+dashboardRouter.get("/stuck-deals", async (req, res) => {
+  const auth = req.auth!;
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") { teamId = auth.teamId; managerId = req.query.managerId ? Number(req.query.managerId) : null; }
+  const minDays = Math.max(1, Number(req.query.minDays) || 7);
+  const AVTO = "d.status_id IN (69716300, 98470988, 10937178)";
+
+  // Stage-aware threshold: money-in-progress (Авто працює / Рахунок) is "stuck"
+  // after minDays; the early "Взято в роботу" churns naturally, so it needs 3×.
+  const minDaysEarly = minDays * 3;
+  const params: unknown[] = [[8921932, 155304], minDays, minDaysEarly];
+  const conds = [
+    "d.pipeline_id = ANY($1)",
+    "psm.funnel_stage <> 'paid'",            // active only (paid/won excluded; lost 143 unmapped → excluded by join)
+    `now() - COALESCE(ev.last_change, d.created_at_kommo) >=
+       (CASE WHEN (${AVTO} OR psm.funnel_stage = 'invoiced') THEN $2 ELSE $3 END || ' days')::interval`,
+    // Only deals still relevant this half-year — старі покинуті ліди (роками в
+    // «Взято в роботу») це не «застрягли», це мертві, тому їх не показуємо.
+    "d.created_at_kommo >= now() - interval '180 days'",
+  ];
+  if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+
+  const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; stage: string; days: string }>(
+    `SELECT d.kommo_id, d.name, d.client_name AS client, m.name AS manager, d.price,
+            CASE WHEN ${AVTO} THEN 'Авто працює'
+                 WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
+                 WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
+            EXTRACT(DAY FROM now() - COALESCE(ev.last_change, d.created_at_kommo))::int AS days
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     LEFT JOIN (SELECT kommo_id, MAX(changed_at) AS last_change FROM deal_stage_events GROUP BY kommo_id) ev
+            ON ev.kommo_id = d.kommo_id
+     WHERE ${conds.join(" AND ")}
+     ORDER BY days DESC
+     LIMIT 50`,
+    params
+  );
+  res.json({
+    minDays,
+    deals: r.rows.map((x) => ({
+      kommoId: Number(x.kommo_id),
+      name: x.name,
+      client: x.client,
+      manager: x.manager,
+      price: Number(x.price),
+      stage: x.stage,
+      days: Number(x.days),
+    })),
+  });
+});
+
 /** Read a manager's monthly funnel plan (for the plan editor). */
 dashboardRouter.get("/funnel-plan", async (req, res) => {
   const managerId = Number(req.query.managerId);

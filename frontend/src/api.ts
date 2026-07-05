@@ -638,6 +638,20 @@ export async function fetchDailyProductivity(params: { managerId?: number; date?
   return data;
 }
 
+export interface StuckDeal {
+  kommoId: number;
+  name: string;
+  client: string | null;
+  manager: string;
+  price: number;
+  stage: string;
+  days: number;
+}
+export async function fetchStuckDeals(params: { managerId?: number; teamId?: number; minDays?: number }): Promise<{ minDays: number; deals: StuckDeal[] }> {
+  const { data } = await api.get<{ minDays: number; deals: StuckDeal[] }>("/dashboard/stuck-deals", { params });
+  return data;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;

@@ -13,6 +13,7 @@ import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilt
 import { fetchFunnelPlan, saveFunnelPlan, fetchTasks, updateTask, type Task, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team, type FunnelWeeklyReport, type WeeklyBlock } from "../../../api";
 import { formatAmount } from "../format";
 import { DailyProductivityCard } from "./DailyProductivityCard";
+import { StuckDealsCard } from "./StuckDealsCard";
 
 const STATUS_LBL: Record<string, string> = {
   not_started: "Заплановано", todo_list: "Заплановано", to_realize: "До реалізації", planned: "Заплановано",
@@ -486,6 +487,13 @@ export function ReportSection({
       {!canPickManager && <DailyProductivityCard />}
       {canPickManager && reportManagerId !== "" && <DailyProductivityCard managerId={Number(reportManagerId)} />}
       {!canPickManager && <MyTasksBlock />}
+      {!canPickManager && <StuckDealsCard />}
+      {canPickManager && (
+        <StuckDealsCard
+          managerId={reportManagerId ? Number(reportManagerId) : undefined}
+          teamId={reportTeamId ? Number(reportTeamId) : undefined}
+        />
+      )}
 
       {loading ? (
         <p className="loading-text">Завантаження...</p>
