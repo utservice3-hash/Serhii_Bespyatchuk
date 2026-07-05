@@ -2563,14 +2563,19 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
   const minDays = Math.max(1, Number(req.query.minDays) || 7);
   const AVTO = "d.status_id IN (69716300, 98470988, 10937178)";
 
-  // Stage-aware threshold: money-in-progress (Авто працює / Рахунок) is "stuck"
-  // after minDays; the early "Взято в роботу" churns naturally, so it needs 3×.
+  // "Stuck" = no activity inside the deal for a while. In Kommo a lead's
+  // updated_at bumps on ANY activity (call, note, task, field edit, stage move),
+  // so COALESCE(updated_at_kommo, created_at) is our "last activity" timestamp:
+  // recent calls/notes → not stuck. Stage-aware threshold: money-in-progress
+  // (Авто працює / Рахунок) is stuck after minDays; the early "Взято в роботу"
+  // churns naturally, so it needs 3×.
   const minDaysEarly = minDays * 3;
+  const ACT = "COALESCE(d.updated_at_kommo, d.created_at_kommo)";
   const params: unknown[] = [[8921932, 155304], minDays, minDaysEarly];
   const conds = [
     "d.pipeline_id = ANY($1)",
     "psm.funnel_stage <> 'paid'",            // active only (paid/won excluded; lost 143 unmapped → excluded by join)
-    `now() - COALESCE(ev.last_change, d.created_at_kommo) >=
+    `now() - ${ACT} >=
        (CASE WHEN (${AVTO} OR psm.funnel_stage = 'invoiced') THEN $2 ELSE $3 END || ' days')::interval`,
     // Only deals still relevant this half-year — старі покинуті ліди (роками в
     // «Взято в роботу») це не «застрягли», це мертві, тому їх не показуємо.
@@ -2584,12 +2589,10 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
             CASE WHEN ${AVTO} THEN 'Авто працює'
                  WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
                  WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
-            EXTRACT(DAY FROM now() - COALESCE(ev.last_change, d.created_at_kommo))::int AS days
+            EXTRACT(DAY FROM now() - ${ACT})::int AS days
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     LEFT JOIN (SELECT kommo_id, MAX(changed_at) AS last_change FROM deal_stage_events GROUP BY kommo_id) ev
-            ON ev.kommo_id = d.kommo_id
      WHERE ${conds.join(" AND ")}
      ORDER BY days DESC
      LIMIT 50`,

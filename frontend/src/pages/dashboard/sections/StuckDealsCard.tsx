@@ -64,29 +64,30 @@ export function StuckDealsCard({ managerId, teamId }: { managerId?: number; team
       {open && (
         <>
           <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "10px 0" }}>
-            Активні угоди без руху: «Авто працює»/«Рахунок» ≥ {minDays} дн., «Взято в роботу» ≥ {minDays * 3} дн. Найдовші — вгорі.
+            Угоди без жодної активності (дзвінки, нотатки, зміна етапу) у самій угоді: «Авто працює»/«Рахунок» ≥ {minDays} дн., «Взято в роботу» ≥ {minDays * 3} дн. Найдовші — вгорі.
           </p>
           <div style={{ overflowX: "auto" }}>
-            <table className="data-table" style={{ minWidth: 620 }}>
+            <table className="data-table compact">
               <thead>
                 <tr>
-                  <th>Днів без руху</th>
+                  <th>Днів</th>
                   <th>Етап</th>
-                  <th>Угода</th>
-                  <th>Клієнт</th>
+                  <th>Угода / клієнт</th>
                   <th>Менеджер</th>
-                  <th>Сума</th>
+                  <th style={{ textAlign: "right" }}>Сума</th>
                 </tr>
               </thead>
               <tbody>
                 {deals.map((d) => (
                   <tr key={d.kommoId}>
-                    <td style={{ fontWeight: 700, color: dayColor(d.days), whiteSpace: "nowrap" }}>{d.days} дн.</td>
-                    <td><span style={{ fontSize: 12, fontWeight: 600, color: stageColor[d.stage] ?? "var(--text)" }}>{d.stage}</span></td>
-                    <td style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.name}>{d.name || "—"}</td>
-                    <td>{d.client || "—"}</td>
-                    <td style={{ color: "var(--text-muted)" }}>{d.manager}</td>
-                    <td style={{ fontWeight: 600 }}>{formatAmount(d.price)}</td>
+                    <td style={{ fontWeight: 700, color: dayColor(d.days), whiteSpace: "nowrap" }}>{d.days}</td>
+                    <td><span style={{ fontSize: 12, fontWeight: 600, color: stageColor[d.stage] ?? "var(--text)", whiteSpace: "nowrap" }}>{d.stage}</span></td>
+                    <td style={{ maxWidth: 280 }}>
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.name}>{d.name || "—"}</div>
+                      {d.client && <div style={{ fontSize: 11, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.client}</div>}
+                    </td>
+                    <td style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{d.manager}</td>
+                    <td style={{ fontWeight: 600, textAlign: "right", whiteSpace: "nowrap" }}>{formatAmount(d.price)}</td>
                   </tr>
                 ))}
               </tbody>

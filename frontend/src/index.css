@@ -278,6 +278,16 @@ button {
   border-collapse: collapse;
 }
 
+/* Compact variant — columns hug their content (no stretched gaps) */
+.data-table.compact {
+  width: auto;
+  font-size: 13px;
+}
+.data-table.compact th,
+.data-table.compact td {
+  padding: 5px 10px;
+}
+
 .data-table th {
   text-align: left;
   font-size: 13px;
