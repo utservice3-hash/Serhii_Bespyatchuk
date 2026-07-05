@@ -2671,6 +2671,70 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
   });
 });
 
+/**
+ * Plan grid for the plan editor — every active manager (grouped by team) with
+ * their monthly payment_amount plan for the chosen month, plus the calendar so
+ * the frontend can decompose the plan by week (fixed 7-day blocks) and per
+ * working day. Team-lead sees only their team; admin sees all (optional teamId).
+ */
+dashboardRouter.get("/plans-grid", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
+    return res.status(403).json({ error: "Доступ лише для тімліда/адміна" });
+  }
+  const monthStr = (req.query.month as string) || new Date().toISOString().slice(0, 7);
+  const planDate = `${monthStr}-01`;
+  let teamId: number | null = auth.role === "team_lead" ? auth.teamId ?? null : (req.query.teamId ? Number(req.query.teamId) : null);
+
+  const params: unknown[] = [planDate];
+  let teamCond = "";
+  if (teamId != null) { params.push(teamId); teamCond = `AND m.team_id = $${params.length}`; }
+
+  const r = await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null; plan: string }>(
+    `SELECT m.id, m.name, m.team_id, t.name AS team_name, COALESCE(p.planned_value, 0) AS plan
+       FROM managers m
+       LEFT JOIN teams t ON t.id = m.team_id
+       LEFT JOIN plans p ON p.manager_id = m.id AND p.metric = 'payment_amount' AND p.plan_date = $1
+      WHERE m.is_active ${teamCond}
+      ORDER BY t.name NULLS LAST, m.name`,
+    params
+  );
+
+  const [y, mo] = monthStr.split("-").map(Number);
+  const daysInMonth = new Date(y, mo, 0).getDate();
+  let workingDays = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = new Date(y, mo - 1, d).getDay();
+    if (dow !== 0 && dow !== 6) workingDays++;
+  }
+  const weekStarts = [1, 8, 15, 22, 29].filter((s) => s <= daysInMonth);
+  const weeks = weekStarts.map((s, i) => {
+    const end = Math.min(s + 6, daysInMonth);
+    return { label: `Тиждень ${i + 1}`, from: s, to: end, days: end - s + 1 };
+  });
+
+  const teamsMap = new Map<number, { teamId: number; teamName: string; teamPlan: number; managers: { managerId: number; name: string; plan: number }[] }>();
+  let totalPlan = 0;
+  for (const row of r.rows) {
+    const tid = row.team_id ?? 0;
+    if (!teamsMap.has(tid)) teamsMap.set(tid, { teamId: tid, teamName: row.team_name ?? "Без команди", teamPlan: 0, managers: [] });
+    const plan = Number(row.plan);
+    const t = teamsMap.get(tid)!;
+    t.managers.push({ managerId: row.id, name: row.name, plan });
+    t.teamPlan += plan;
+    totalPlan += plan;
+  }
+
+  res.json({
+    month: monthStr,
+    daysInMonth,
+    workingDays,
+    weeks,
+    teams: Array.from(teamsMap.values()),
+    totalPlan,
+  });
+});
+
 /** Read a manager's monthly funnel plan (for the plan editor). */
 dashboardRouter.get("/funnel-plan", async (req, res) => {
   const managerId = Number(req.query.managerId);

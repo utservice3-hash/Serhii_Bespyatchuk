@@ -202,6 +202,24 @@ export interface LeadQuality {
   adBudgetLeads: number;
 }
 
+export interface PlansGrid {
+  month: string;
+  daysInMonth: number;
+  workingDays: number;
+  weeks: { label: string; from: number; to: number; days: number }[];
+  teams: { teamId: number; teamName: string; teamPlan: number; managers: { managerId: number; name: string; plan: number }[] }[];
+  totalPlan: number;
+}
+
+export async function fetchPlansGrid(month: string, teamId?: number): Promise<PlansGrid> {
+  const { data } = await api.get<PlansGrid>("/dashboard/plans-grid", { params: teamId ? { month, teamId } : { month } });
+  return data;
+}
+
+export async function savePlan(managerId: number, month: string, plannedValue: number): Promise<void> {
+  await api.post("/plans", { managerId, planDate: `${month}-01`, metric: "payment_amount", plannedValue });
+}
+
 export async function fetchLeadQuality(params: {
   from?: string;
   to?: string;

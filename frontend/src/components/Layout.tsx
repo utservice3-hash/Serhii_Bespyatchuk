@@ -12,6 +12,7 @@ export const NAV_GROUPS = [
       { key: "overview", label: "Огляд", icon: "📊" },
       { key: "report", label: "Звіт", icon: "🧾" },
       { key: "kvp", label: "Звіт КВП", icon: "🏆", roles: ["admin"] },
+      { key: "plans", label: "Плани", icon: "💵", roles: ["admin", "team_lead"] },
       { key: "statistics", label: "Статистика", icon: "📈" },
       { key: "teams", label: "Команди", icon: "👥" },
       { key: "managers", label: "Менеджери", icon: "🧑‍💼" },
