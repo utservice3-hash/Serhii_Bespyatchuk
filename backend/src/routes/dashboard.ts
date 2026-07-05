@@ -2582,6 +2582,11 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
     // Only deals still relevant this half-year — старі покинуті ліди (роками в
     // «Взято в роботу») це не «застрягли», це мертві, тому їх не показуємо.
     "d.created_at_kommo >= now() - interval '180 days'",
+    // Money stages (Авто працює / Рахунок) завжди важливі. А рання стадія
+    // рахується «застряглою» лише якщо угоду ВЖЕ вели (була активність) і вона
+    // затихла — «взяті, але жодного разу не опрацьовані» ліди це не «застрягли»,
+    // а нерозібрані (інша проблема), тому їх сюди не тягнемо.
+    `(${AVTO} OR psm.funnel_stage = 'invoiced' OR d.last_activity_at IS NOT NULL)`,
   ];
   if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
