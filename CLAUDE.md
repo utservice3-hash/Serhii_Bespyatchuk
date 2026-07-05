@@ -3,6 +3,8 @@
 Аналітичний дашборд для відділу продажів логістичних послуг (CRM = Kommo).
 Стек: Node/Express + Postgres (backend), React + Vite + recharts (frontend).
 
+> 🧭 **Нова сесія / продовження роботи → почни з `docs/HANDOFF.md`** (точка входу: стан, черга, деплой, граблі). Відновлення даних — `docs/BACKUP_RECOVERY.md`. Інфраструктура/готові рішення — `docs/INFRASTRUCTURE.md`.
+
 ## Деплой (продакшн)
 
 Relay PHP: `POST https://dashboard.uts.ua/relay-d7bb7c59.php`

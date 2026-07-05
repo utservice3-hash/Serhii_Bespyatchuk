@@ -1,0 +1,80 @@
+# HANDOFF — точка входу для продовження роботи (UTS Dashboard)
+
+> **Якщо ти нова сесія Claude / новий розробник — почни звідси.** За 5 хв матимеш повний контекст і зможеш продовжити.
+
+## 0. Порядок читання
+1. **Цей файл** — де що лежить, поточний стан, черга.
+2. **`CLAUDE.md`** (корінь) — усі **бізнес-правила** й деталі (Claude Code читає його автоматично). Головна «памʼять проєкту».
+3. **`docs/BACKUP_RECOVERY.md`** — бекапи й відновлення даних.
+4. **`docs/INFRASTRUCTURE.md`** — готові рішення (Metabase/моніторинг), дорожня карта, Telegram-пропозиції.
+
+---
+
+## 1. Що це і ціль
+Аналітичний дашборд відділу продажів логістики. Джерело істини — **Kommo CRM**, синк кожні 5 хв. Ціль: ясна картина воронки «Перевезення повний цикл», план/факт по менеджерах/командах, задачі, дебіторка, лояльність — усе автоматично з CRM, без ручного Excel.
+
+## 2. Репозиторій і гілки
+- **Дев:** `claude/dashboard-development-54e8ng` — тут розробка.
+- **Прод:** `claude/friendly-galileo-8pijhl` — це тягне продакшн.
+- **Правило:** розробляй на дев → ff-merge у прод → пуш обох. Тримати в синхроні.
+
+## 3. Деплой (продакшн)
+Сервер **evraziat** (shared, CloudLinux). Керується через **relay-PHP**:
+`POST https://dashboard.uts.ua/relay-d7bb7c59.php`, заголовок `X-Relay-Token: <токен>`, форма `cmd=<shell>`. Токен — у `CLAUDE.md` (⚠️ **світився — треба ротувати**). Cwd: `/home/evraziat/uts.ua/dashboard`. Завжди префікс `export PATH=/usr/local/node26/bin:$PATH`.
+
+**Цикл деплою:**
+```
+git pull origin claude/friendly-galileo-8pijhl
+cd backend && npm install && npm run build && npm run migrate   # migrate лише при зміні schema.sql
+cd ../frontend && npm run build && cp -r dist/* ../
+pkill -f 'node.*dashboard/backend/dist/index'                   # рестарт лише при зміні backend; exit 15 = норм
+curl https://dashboard.uts.ua/api/health                        # {"ok":true}
+```
+Бекенд авто-респавниться супервізором після pkill.
+
+## 4. Стек і структура
+- **Frontend:** React 19 + Vite + recharts. Контейнер `frontend/src/pages/Dashboard.tsx` (весь стейт/ефекти), секції в `pages/dashboard/sections/*`, спільне — `pages/dashboard/{format.ts, widgets.tsx, …}`, API-клієнт `src/api.ts`, нав — `components/Layout.tsx`.
+- **Backend:** Node/Express + `pg`, `node-cron`, `grammy` (ТГ). Основна аналітика — `backend/src/routes/dashboard.ts`. Джоби — `backend/src/jobs/*`.
+
+## 5. База даних
+- **Neon** (managed Postgres, `…aws.neon.tech`, база `neondb`). `DATABASE_URL` — у `backend/.env`.
+- Структура — `backend/src/db/schema.sql`. Мапінг етапів Kommo — `backend/src/db/seedKommoMapping.sql`.
+- Міграція: `npm run migrate` (schema) / `npm run migrate:mapping` (+ мапінг).
+- Діагностика проду: base64-mjs через relay, `import { pool } from './dist/db/pool.js'`.
+
+## 6. Джоби (`backend/src/jobs`, cron у `index.ts`)
+syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncReceivables (30хв) · syncNews (08:00) · evaluateKpiTasks (07:00) · snapshotCarryover (1-ше) · реконсиляція (04:00) · **backupDb (03:00)**.
+
+## 7. Бізнес-логіка
+**Уся** — у `CLAUDE.md` (гроші, воронка, мінус-угоди, передані заявки, знімки оплат, РПК/РНК, задачі, план/факт). Не дублюю — читай там перед будь-якою правкою метрик.
+
+---
+
+## 8. ПОТОЧНИЙ СТАН (оновлювати!)
+
+### ✅ Зроблено й у проді
+Рефакторинг секцій · надійність синку (guard/timeout/watermark/реконсиляція) · Kyiv-дати скрізь · мінус-угоди (відʼємний price) · **повна мапа етапів + єдина 4-етапна тижнева воронка** (Взято→Авто працює→Рахунок→Оплата) · клікабельні картки Огляду (нові/постійні/створені) · звід усіх боржників · усі постійні клієнти · конверсії реклама(same-deal)/лідоген(передані→успішно) · розкриття команд з планами · **задачі тімлід↔менеджер + «Мої задачі» у звіті** · клік по менеджеру → План/Факт+задачі · **денна продуктивність** (картка+тренд) · роль «Керівник відділу продажу» · приховані адмін-розділи від менеджерів · «Робота з АІ» · форма зворотного звʼязку · фікс месенджера · **фільтри переживають оновлення** (localStorage) · **бекапи (03:00) + docs** · плани липня залиті.
+
+### 📋 Черга (узгоджено, у процесі)
+1. **Застряглі угоди** — підсвітка в огляді менеджера угод, що довго стоять на етапі (дані є: `deal_stage_events`, час входу).
+2. **Проєкція на місяць** на Огляді («за темпом вийде ₴X»).
+3. **Експорт** звіту (Excel/PDF).
+4. **Мобільна версія** (адаптив).
+5. **Telegram-сповіщення** — тригери в `INFRASTRUCTURE.md` §5 (обрати).
+6. Безпека: **ротація relay-токена**. Опційно: UptimeRobot, Metabase.
+
+---
+
+## 9. Граблі (важливо)
+- Деплой: `npm install` **без** `--omit=dev` (потрібен tsc для build), інакше build падає.
+- `pkill` → `exit 15` (SIGTERM) — це **норма**, бекенд респавниться.
+- Bash-tool іноді падає по таймауту на важких `git pull && build` — команда на сервері все одно доходить, перевіряй результат окремим запитом.
+- Публічний `/api/health` через relay буває лагає під час рестарту — перевіряй `http://127.0.0.1:4000/api/health` локально на сервері.
+- **Дати** — завжди `(col AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $from AND $to` (обидва кінці включно).
+- `fetchAllContacts/fetchAllCompanies` — **не повертати** (OOM-вбивали синк); тягнути по id вікна.
+
+## 10. Відновлення даних
+Див. `docs/BACKUP_RECOVERY.md`. Коротко: Neon PITR (основне) + нічний CSV-дамп у `dashboard/backups/` (14 днів). Багато даних відновлюється й синком з Kommo.
+
+## 11. Доступи (значення НЕ тут — тільки де шукати)
+- Neon: console.neon.tech · relay-токен: `CLAUDE.md` (ротувати) · `.env`: `backend/.env` (DATABASE_URL, KOMMO_API_TOKEN, JWT_SECRET) · Kommo API-токен: `.env`.
