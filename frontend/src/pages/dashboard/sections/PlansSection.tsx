@@ -74,16 +74,19 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
       if (passed) elapsedWD++;
     }
     const totalWD = grid.workingDays;
-    return (plan: number, fact: number, carryover: number) => {
+    return (plan: number, fact: number, carryover: number, expected = 0) => {
       const remaining = Math.max(0, plan - fact);
       // План на сьогодні (декомпозований по тижнях/днях до поточного моменту).
       const planToDate = totalWD > 0 ? Math.round((plan * elapsedWD) / totalWD) : 0;
       // Відставання = план на сьогодні − (факт + перенесені). >0 — позаду темпу.
       const lag = Math.round(planToDate - (fact + carryover));
+      // Реалістичне = ще й мінус очікувані (майже оплачені рахунки).
+      const lagReal = Math.round(planToDate - (fact + carryover + expected));
       return {
         remaining,
         planToDate,
         lag,
+        lagReal,
         perDay: remWD > 0 ? Math.round(remaining / remWD) : 0,
         perWeek: grid.weeks.map((w) => (remWD > 0 ? Math.round((remaining * futureWDInWeek(w)) / remWD) : 0)),
       };
@@ -112,7 +115,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
       <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 820 }}>
         Місячний план виручки по менеджеру (редагується). <b>Тижні/день — динамічні</b>: залишок (план − факт) розкидається на робочі дні, що ще залишилися, тож цілі <b>автоматично зменшуються</b> у міру виконання.
         Факт = «Успішно» + «Оплата отримана». Очікувані = снапшот угод з етапу «Виставлено рахунок».
-        <b> Відставання</b> = декомпозований план на сьогодні − (факт + перенесені); «✓» — темп витримано.
+        <b> Відставання</b> = план на сьогодні − (факт + перенесені); <b>Реаліст.</b> = ще й мінус очікувані (майже оплачені рахунки). «✓» — темп витримано.
       </p>
 
       {err && <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>}
@@ -124,7 +127,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
         return (
         <div className="chart-card" style={{ marginBottom: 16 }}>
           <div style={{ overflowX: "auto" }}>
-            <table className="data-table compact" style={{ minWidth: 1080 }}>
+            <table className="data-table compact" style={{ minWidth: 1160 }}>
               <thead>
                 <tr>
                   <th style={{ textAlign: "left" }}>Менеджер</th>
@@ -134,6 +137,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
                   <th style={{ textAlign: "right" }}>Очікувані<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>з рахунку</div></th>
                   <th style={{ textAlign: "right" }}>Залишок</th>
                   <th style={{ textAlign: "right" }}>Відставання<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>план сьогодні − факт+перен.</div></th>
+                  <th style={{ textAlign: "right" }}>Реаліст.<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>ще − очікувані</div></th>
                   {grid.weeks.map((w) => (
                     <th key={w.label} style={{ textAlign: "right" }}>{w.label}<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>{w.from}–{w.to}</div></th>
                   ))}
@@ -142,7 +146,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
               </thead>
               <tbody>
                 {grid.teams.map((team) => {
-                  const td = decomp(team.teamPlan, team.teamFact, team.teamCarryover);
+                  const td = decomp(team.teamPlan, team.teamFact, team.teamCarryover, team.teamExpected);
                   return (
                   <Fragment key={team.teamId}>
                     <tr>
@@ -153,13 +157,14 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
                       <td style={{ textAlign: "right", background: sub }}>{formatAmount(team.teamExpected)}</td>
                       <td style={{ fontWeight: 700, textAlign: "right", background: sub, color: "#d97706" }}>{formatAmount(td.remaining)}</td>
                       <td style={{ fontWeight: 700, textAlign: "right", background: sub, color: td.lag > 0 ? "#dc2626" : "#16a34a" }}>{td.lag > 0 ? formatAmount(td.lag) : "✓"}</td>
+                      <td style={{ fontWeight: 700, textAlign: "right", background: sub, color: td.lagReal > 0 ? "#d97706" : "#16a34a" }}>{td.lagReal > 0 ? formatAmount(td.lagReal) : "✓"}</td>
                       {td.perWeek.map((v, i) => (
                         <td key={i} style={{ textAlign: "right", fontWeight: 600, background: sub }}>{formatAmount(v)}</td>
                       ))}
                       <td style={{ textAlign: "right", fontWeight: 600, background: sub }}>{formatAmount(td.perDay)}</td>
                     </tr>
                     {team.managers.map((m) => {
-                      const d = decomp(m.plan, m.fact, m.carryover);
+                      const d = decomp(m.plan, m.fact, m.carryover, m.expected);
                       const draft = drafts[m.managerId];
                       const dirty = draft != null && Number(draft.replace(/[^\d.-]/g, "")) !== m.plan;
                       return (
@@ -185,6 +190,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
                           <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{formatAmount(m.expected)}</td>
                           <td style={{ textAlign: "right", color: "#d97706", fontWeight: 600 }}>{formatAmount(d.remaining)}</td>
                           <td style={{ textAlign: "right", fontWeight: 600, color: d.lag > 0 ? "#dc2626" : "#16a34a" }}>{d.lag > 0 ? formatAmount(d.lag) : "✓"}</td>
+                          <td style={{ textAlign: "right", fontWeight: 600, color: d.lagReal > 0 ? "#d97706" : "#16a34a" }}>{d.lagReal > 0 ? formatAmount(d.lagReal) : "✓"}</td>
                           {d.perWeek.map((v, i) => (
                             <td key={i} style={{ textAlign: "right", color: "var(--text-muted)" }}>{formatAmount(v)}</td>
                           ))}
@@ -195,7 +201,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
                   </Fragment>
                   );
                 })}
-                {(() => { const gd = decomp(grid.totalPlan, grid.totalFact, grid.totalCarryover); return (
+                {(() => { const gd = decomp(grid.totalPlan, grid.totalFact, grid.totalCarryover, grid.totalExpected); return (
                 <tr style={{ borderTop: "2px solid var(--border)" }}>
                   <td style={{ fontWeight: 800 }}>Разом по відділу</td>
                   <td style={{ fontWeight: 800, textAlign: "right" }}>{formatAmount(grid.totalPlan)}</td>
@@ -204,6 +210,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
                   <td style={{ fontWeight: 800, textAlign: "right" }}>{formatAmount(grid.totalExpected)}</td>
                   <td style={{ fontWeight: 800, textAlign: "right", color: "#d97706" }}>{formatAmount(gd.remaining)}</td>
                   <td style={{ fontWeight: 800, textAlign: "right", color: gd.lag > 0 ? "#dc2626" : "#16a34a" }}>{gd.lag > 0 ? formatAmount(gd.lag) : "✓"}</td>
+                  <td style={{ fontWeight: 800, textAlign: "right", color: gd.lagReal > 0 ? "#d97706" : "#16a34a" }}>{gd.lagReal > 0 ? formatAmount(gd.lagReal) : "✓"}</td>
                   {gd.perWeek.map((v, i) => (
                     <td key={i} style={{ fontWeight: 800, textAlign: "right" }}>{formatAmount(v)}</td>
                   ))}
