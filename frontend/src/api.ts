@@ -45,7 +45,9 @@ export async function fetchFunnel(params: {
   to?: string;
 }): Promise<FunnelStage[]> {
   const { data } = await api.get<{ stages: FunnelStage[] }>("/dashboard/funnel", { params });
-  return data.stages;
+  // Empty/aborted responses (e.g. a malformed date range → 200 with empty body)
+  // must not yield `undefined` — a non-iterable value crashes the whole app.
+  return data?.stages ?? [];
 }
 
 export interface TimeseriesPoint {
@@ -65,7 +67,7 @@ export async function fetchTimeseries(params: {
   const { data } = await api.get<{ points: TimeseriesPoint[] }>("/dashboard/timeseries", {
     params,
   });
-  return data.points;
+  return data?.points ?? [];
 }
 
 export interface ConversionChannel {

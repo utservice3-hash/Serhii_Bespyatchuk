@@ -702,6 +702,7 @@ export function Dashboard() {
             }))
         );
       })
+      .catch(() => { setStages([]); setTimeseries([]); setPaidDynamics([]); })
       .finally(() => setLoading(false));
   }, [teamId, granularity, dateRange, refreshNonce]);
 
