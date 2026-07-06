@@ -1644,6 +1644,8 @@ dashboardRouter.get("/receivables", async (req, res) => {
 // Team ranking: per-team revenue (success+payment), deals, avg check,
 // conversion and receivables for the selected period.
 dashboardRouter.get("/teams", async (req, res) => {
+  // Team ranking compares teams — a manager must never see other teams.
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
   const from = (req.query.from as string) ?? null;
   const to = (req.query.to as string) ?? null;
 
@@ -2702,9 +2704,12 @@ dashboardRouter.get("/data-quality", async (req, res) => {
  * Both counts come from our synced `deals` (syncKommo pulls all pipelines).
  */
 dashboardRouter.get("/lead-quality", async (req, res) => {
+  const auth = req.auth!;
+  // Company-wide lead-quality is a КВП/lead metric — managers never see it.
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
   const from = (req.query.from as string) ?? null;
   const to = (req.query.to as string) ?? null;
-  const teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  const teamId = auth.role === "team_lead" ? auth.teamId ?? null : (req.query.teamId ? Number(req.query.teamId) : null);
   const dateScope = (alias: string, params: unknown[]) => {
     const c: string[] = [];
     if (from) { params.push(from); c.push(`(${alias}.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`); }
@@ -2848,11 +2853,18 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
   });
 });
 
-/** Read a manager's monthly funnel plan (for the plan editor). */
+/** Read a manager's monthly funnel plan (for the plan editor). Admin/team-lead
+ *  only; a team-lead may read only their own team's managers. */
 dashboardRouter.get("/funnel-plan", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
   const managerId = Number(req.query.managerId);
   const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  }
   const r = await pool.query<{ stage: string; planned_value: string }>(
     `SELECT stage, planned_value FROM funnel_plans WHERE manager_id = $1 AND month = $2`,
     [managerId, month]

@@ -73,7 +73,8 @@ settingsRouter.get("/users", async (req, res) => {
   if (!requireAdmin(req.auth!.role, res)) return;
   const result = await pool.query(
     `SELECT u.id, u.email, u.role, u.is_active, u.initial_password,
-            m.name AS manager_name, t.name AS team_name
+            COALESCE(m.name, CASE WHEN u.role = 'admin' THEN 'Операційний директор' END) AS manager_name,
+            t.name AS team_name
      FROM users u
      LEFT JOIN managers m ON m.id = u.manager_id
      LEFT JOIN teams t ON t.id = u.team_id

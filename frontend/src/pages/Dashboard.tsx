@@ -922,17 +922,19 @@ export function Dashboard() {
           <div className="page-header">
             <h1 className="page-title">Статистика</h1>
             <div className="page-filters">
-              <select
-                value={teamId}
-                onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
-              >
-                <option value="">Усі команди</option>
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
+              {auth?.role !== "manager" && (
+                <select
+                  value={teamId}
+                  onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  <option value="">{auth?.role === "team_lead" ? "Моя команда" : "Усі команди"}</option>
+                  {teams.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <select
                 value={granularity}
                 onChange={(e) => setGranularity(e.target.value as "day" | "week" | "month")}
@@ -1049,7 +1051,7 @@ export function Dashboard() {
         </>
       )}
 
-      {section === "teams" && (
+      {section === "teams" && auth?.role !== "manager" && (
         <TeamsSection
           datePreset={datePreset}
           setDatePreset={setDatePreset}
@@ -1058,7 +1060,7 @@ export function Dashboard() {
         />
       )}
 
-      {section === "managers" && (
+      {section === "managers" && auth?.role !== "manager" && (
         <ManagersSection
           auth={auth}
           teams={teams}
