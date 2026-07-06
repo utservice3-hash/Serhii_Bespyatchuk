@@ -2620,6 +2620,81 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
 });
 
 /**
+ * Data-quality control (ТЗ §7) — surfaces records that silently distort every
+ * other metric: deals with no manager, no amount, an unmapped status, negative
+ * amounts that aren't real "minus" deals, and probable duplicates. Admin/lead.
+ */
+dashboardRouter.get("/data-quality", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
+    return res.status(403).json({ error: "Доступ лише для тімліда/адміна" });
+  }
+  const teamAnd = auth.role === "team_lead" && auth.teamId ? `AND m.team_id = ${auth.teamId}` : "";
+  const FC = "d.pipeline_id IN (8921932, 155304)";
+  const AVTO = "d.status_id IN (69716300, 98470988, 10937178)";
+  const MONEY = `(${AVTO} OR psm.funnel_stage IN ('invoiced','paid'))`;
+  const ACTIVE = "psm.funnel_stage <> 'paid'";
+  const recent = "d.created_at_kommo >= now() - interval '180 days'";
+
+  const sample = (rows: { kommo_id: string; name: string | null; manager: string | null; extra?: string | null }[]) =>
+    rows.map((x) => ({ kommoId: Number(x.kommo_id), name: x.name, manager: x.manager, extra: x.extra ?? null }));
+
+  // 1) Full-cycle deals with no manager assigned.
+  const noManager = await pool.query<{ kommo_id: string; name: string; manager: null; extra: string }>(
+    `SELECT d.kommo_id, d.name, NULL::text AS manager, to_char(d.created_at_kommo,'YYYY-MM-DD') AS extra
+       FROM deals d WHERE ${FC} AND d.manager_id IS NULL AND ${recent}
+       ORDER BY d.created_at_kommo DESC LIMIT 100`);
+
+  // 2) Money-stage deals with no amount (price ≤ 0), excluding real "minus" deals.
+  const noAmount = await pool.query<{ kommo_id: string; name: string; manager: string; extra: string }>(
+    `SELECT d.kommo_id, d.name, m.name AS manager, psm.funnel_stage AS extra
+       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE ${FC} AND ${MONEY} AND ${ACTIVE} AND COALESCE(d.price,0) <= 0
+        AND (d.name IS NULL OR d.name NOT ILIKE '%мінус%') AND ${recent} ${teamAnd}
+      ORDER BY d.created_at_kommo DESC LIMIT 100`);
+
+  // 3) Full-cycle deals whose (pipeline,status) is not mapped → invisible to funnel analytics.
+  const unmapped = await pool.query<{ kommo_id: string; name: string; manager: string; extra: string }>(
+    `SELECT d.kommo_id, d.name, m.name AS manager, d.status_id::text AS extra
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+       LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE ${FC} AND psm.funnel_stage IS NULL AND ${recent}
+      ORDER BY d.created_at_kommo DESC LIMIT 100`);
+
+  // 4) Negative price without the "minus" marker → likely a data-entry error.
+  const negatives = await pool.query<{ kommo_id: string; name: string; manager: string; extra: string }>(
+    `SELECT d.kommo_id, d.name, m.name AS manager, d.price::text AS extra
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE ${FC} AND d.price < 0 AND (d.name IS NULL OR d.name NOT ILIKE '%мінус%') AND ${recent}
+      ORDER BY d.created_at_kommo DESC LIMIT 100`);
+
+  // 5) Probable duplicates — same client with 2+ active full-cycle deals.
+  const duplicates = await pool.query<{ kommo_id: string; name: string; manager: string; extra: string }>(
+    `WITH dup AS (
+        SELECT client_key FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE ${FC} AND ${ACTIVE} AND d.client_key IS NOT NULL AND ${recent}
+        GROUP BY client_key HAVING COUNT(*) >= 2)
+     SELECT d.kommo_id, d.name, m.name AS manager, d.client_name AS extra
+       FROM deals d JOIN dup ON dup.client_key = d.client_key
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE ${FC} AND ${ACTIVE} ${teamAnd}
+      ORDER BY d.client_key, d.created_at_kommo DESC LIMIT 120`);
+
+  res.json({
+    checks: [
+      { key: "noManager", label: "Угоди без менеджера", count: noManager.rowCount ?? 0, sample: sample(noManager.rows) },
+      { key: "noAmount", label: "Угоди без суми (грошові етапи)", count: noAmount.rowCount ?? 0, sample: sample(noAmount.rows) },
+      { key: "unmapped", label: "Угоди без статусу (не змаплено)", count: unmapped.rowCount ?? 0, sample: sample(unmapped.rows) },
+      { key: "negatives", label: "Відʼємна сума без позначки «мінус»", count: negatives.rowCount ?? 0, sample: sample(negatives.rows) },
+      { key: "duplicates", label: "Можливі дублі (клієнт з 2+ активними угодами)", count: duplicates.rowCount ?? 0, sample: sample(duplicates.rows) },
+    ],
+  });
+});
+
+/**
  * Lead quality for the КВП report — target vs non-target leads created in the
  * period (Kyiv dates, both ends inclusive):
  *   target      = full-cycle pipeline 8921932 (a real transport deal was opened)

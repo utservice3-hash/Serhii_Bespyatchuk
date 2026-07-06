@@ -92,6 +92,7 @@ import { TasksSection } from "./dashboard/sections/TasksSection";
 import { ReportSection } from "./dashboard/sections/ReportSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansSection } from "./dashboard/sections/PlansSection";
+import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
 
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
@@ -913,6 +914,8 @@ export function Dashboard() {
       {section === "plans" && (auth?.role === "admin" || auth?.role === "team_lead") && (
         <PlansSection canPickTeam={auth?.role === "admin"} teams={teams} />
       )}
+
+      {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
 
       {section === "statistics" && (
         <>

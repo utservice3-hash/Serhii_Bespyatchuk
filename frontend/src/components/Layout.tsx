@@ -38,6 +38,7 @@ export const NAV_GROUPS = [
   {
     label: "Система",
     items: [
+      { key: "dataquality", label: "Якість даних", icon: "🔍", roles: ["admin", "team_lead"] },
       { key: "feedback", label: "Зворотний звʼязок", icon: "🐞", roles: ["admin", "team_lead"] },
       { key: "aiwork", label: "Робота з АІ", icon: "🤖", roles: ["admin"] },
       { key: "settings", label: "Налаштування", icon: "⚙️", roles: ["admin"] },

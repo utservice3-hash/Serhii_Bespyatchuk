@@ -196,6 +196,17 @@ export async function fetchOverview(params: {
   return data;
 }
 
+export interface DataQualityCheck {
+  key: string;
+  label: string;
+  count: number;
+  sample: { kommoId: number; name: string | null; manager: string | null; extra: string | null }[];
+}
+export async function fetchDataQuality(): Promise<{ checks: DataQualityCheck[] }> {
+  const { data } = await api.get<{ checks: DataQualityCheck[] }>("/dashboard/data-quality");
+  return data;
+}
+
 export interface LeadQuality {
   targetLeads: number;
   nonTargetLeads: number;
