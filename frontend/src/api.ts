@@ -946,7 +946,7 @@ export interface Task {
   priority: TaskPriority;
   comments: string | null;
   department: string | null;
-  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi";
+  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "reactivation";
   metric: "ads_count" | "avg_check" | "conversion" | null;
   targetValue: number | null;
   actualValue: number | null;
@@ -959,8 +959,19 @@ export interface Task {
   createdById?: number | null;
   assigneeTeamId?: number | null;
   metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;
+  checklistJson?: ChecklistItem[] | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ChecklistItem {
+  clientKey: string;
+  clientName: string;
+  orders?: number;
+  revenue?: number;
+  lastPaid?: string | null;
+  category?: string;
+  done?: boolean;
 }
 
 export interface ReactivationCandidate {
@@ -972,6 +983,12 @@ export interface ReactivationCandidate {
   revenue: number;
   lastPaid: string | null;
   lastActivity: string | null;
+  category: "lapsed" | "oneshot_bg";
+}
+
+export async function createReactivationTask(assigneeId: number, clients: ChecklistItem[]): Promise<{ id: number }> {
+  const { data } = await api.post<{ id: number }>("/tasks/reactivation", { assigneeId, clients });
+  return data;
 }
 export interface ReactivationManager {
   managerId: number;
@@ -1025,6 +1042,7 @@ export async function updateTask(
     priority: TaskPriority;
     comments: string | null;
     department: string | null;
+    checklistJson: ChecklistItem[] | null;
   }>
 ): Promise<void> {
   await api.patch(`/tasks/${id}`, payload);

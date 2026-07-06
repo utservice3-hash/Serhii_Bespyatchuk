@@ -30,7 +30,19 @@ const upsertSchema = z.object({
   department: z.string().nullable().optional(),
 });
 
-const patchSchema = upsertSchema.partial();
+const checklistItem = z.object({
+  clientKey: z.string(),
+  clientName: z.string(),
+  orders: z.number().optional(),
+  revenue: z.number().optional(),
+  lastPaid: z.string().nullable().optional(),
+  category: z.string().optional(),
+  done: z.boolean().optional(),
+});
+
+const patchSchema = upsertSchema.partial().extend({
+  checklistJson: z.array(checklistItem).nullable().optional(),
+});
 
 tasksRouter.get("/", async (req, res) => {
   const auth = req.auth!;
@@ -62,7 +74,7 @@ tasksRouter.get("/", async (req, res) => {
             to_char(t.period_start, 'YYYY-MM-DD') AS "periodStart", to_char(t.period_end, 'YYYY-MM-DD') AS "periodEnd",
             t.parent_id AS "parentId", t.auto, u.role AS "createdByRole",
             t.created_by AS "createdById", m.team_id AS "assigneeTeamId",
-            t.metrics_json AS "metricsJson",
+            t.metrics_json AS "metricsJson", t.checklist_json AS "checklistJson",
             t.created_at AS "createdAt", t.updated_at AS "updatedAt"
      FROM tasks t
      LEFT JOIN managers m ON m.id = t.assignee_id
@@ -110,8 +122,12 @@ tasksRouter.post("/plan", async (req, res) => {
   const periodStart = sorted[0];
   const periodEnd = sorted[sorted.length - 1];
 
-  const mgr = await pool.query<{ name: string }>(`SELECT name FROM managers WHERE id = $1`, [assigneeId]);
+  const mgr = await pool.query<{ name: string; team_name: string | null }>(
+    `SELECT m.name, tm.name AS team_name FROM managers m LEFT JOIN teams tm ON tm.id = m.team_id WHERE m.id = $1`,
+    [assigneeId]
+  );
   const mgrName = mgr.rows[0]?.name ?? "";
+  const deptName = mgr.rows[0]?.team_name ?? null;
 
   // Daily revenue target ("сума") from the manager's monthly payment plan
   // (plan ÷ working days of the plan's month), if such a plan exists.
@@ -148,14 +164,46 @@ tasksRouter.post("/plan", async (req, res) => {
   for (const day of sorted) {
     const metrics = dailyMetrics.map((m) => ({ ...m, actual: null as number | null, done: false }));
     const r = await pool.query<{ id: number }>(
-      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, plan_date, period_start, period_end, deadline, auto, metrics_json)
-       VALUES ($1,'not_started',$2,$3,'daily_kpi',$4,$4,$4,$4,true,$5) RETURNING id`,
+      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, plan_date, period_start, period_end, deadline, auto, metrics_json, department)
+       VALUES ($1,'not_started',$2,$3,'daily_kpi',$4,$4,$4,$4,true,$5,$6) RETURNING id`,
       [`План на день ${day} — ${dailyMetrics.length} показник(и) (${mgrName})`,
-       assigneeId, auth.userId, day, JSON.stringify(metrics)]
+       assigneeId, auth.userId, day, JSON.stringify(metrics), deptName]
     );
     createdIds.push(r.rows[0].id);
   }
   res.status(201).json({ created: createdIds.length });
+});
+
+// One reactivation task per manager, bundling the picked clients as a checklist
+// the manager ticks off. Team-lead → own team only; admin → anyone.
+const reactivationSchema = z.object({
+  assigneeId: z.number(),
+  clients: z.array(checklistItem).min(1),
+});
+tasksRouter.post("/reactivation", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
+    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  }
+  const parsed = reactivationSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { assigneeId, clients } = parsed.data;
+
+  const mgr = await pool.query<{ name: string; team_id: number | null }>(
+    `SELECT name, team_id FROM managers WHERE id = $1`, [assigneeId]
+  );
+  if (!mgr.rows[0]) return res.status(400).json({ error: "Менеджера не знайдено" });
+  if (auth.role === "team_lead" && mgr.rows[0].team_id !== auth.teamId) {
+    return res.status(403).json({ error: "Лише своя команда" });
+  }
+
+  const checklist = clients.map((c) => ({ ...c, done: false }));
+  const r = await pool.query<{ id: number }>(
+    `INSERT INTO tasks (title, status, assignee_id, created_by, priority, department, task_type, checklist_json)
+     VALUES ($1,'not_started',$2,$3,'high','Реактивація','reactivation',$4) RETURNING id`,
+    [`🔄 Реактивація клієнтів (${clients.length}) — ${mgr.rows[0].name}`, assigneeId, auth.userId, JSON.stringify(checklist)]
+  );
+  res.status(201).json({ id: r.rows[0].id });
 });
 
 tasksRouter.post("/", async (req, res) => {
@@ -182,6 +230,16 @@ tasksRouter.post("/", async (req, res) => {
     if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна ставити задачі лише своїй команді" });
   }
 
+  // Department is auto-assigned from the assignee's team when not set explicitly.
+  let dept = department ?? null;
+  if (!dept && assigneeId) {
+    const t = await pool.query<{ name: string | null }>(
+      `SELECT tm.name FROM managers m LEFT JOIN teams tm ON tm.id = m.team_id WHERE m.id = $1`,
+      [assigneeId]
+    );
+    dept = t.rows[0]?.name ?? null;
+  }
+
   const result = await pool.query(
     `INSERT INTO tasks (title, status, deadline, assignee_id, priority, comments, department, created_by)
      VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8)
@@ -193,7 +251,7 @@ tasksRouter.post("/", async (req, res) => {
       assigneeId,
       priority ?? null,
       comments ?? null,
-      department ?? null,
+      dept,
       auth.userId,
     ]
   );
@@ -218,10 +276,11 @@ tasksRouter.patch("/:id", async (req, res) => {
     priority: "priority",
     comments: "comments",
     department: "department",
+    checklistJson: "checklist_json",
   };
 
   for (const [key, value] of Object.entries(parsed.data)) {
-    params.push(value);
+    params.push(key === "checklistJson" ? JSON.stringify(value) : value);
     fields.push(`${columnByKey[key]} = $${params.length}`);
   }
   if (fields.length === 0) {

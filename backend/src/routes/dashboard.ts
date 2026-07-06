@@ -1933,7 +1933,7 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
   let teamAnd = "";
   if (teamId != null) { params.push(teamId); teamAnd = `AND m.team_id = $${params.length}`; }
 
-  const r = await pool.query<{ manager_id: number; manager_name: string; client_key: string; name: string; orders: string; revenue: string; last_paid: string; last_activity: string | null }>(
+  const r = await pool.query<{ manager_id: number; manager_name: string; client_key: string; name: string; orders: string; revenue: string; last_paid: string; last_activity: string | null; category: string }>(
     `WITH scoped AS (
        SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price
        FROM deals d
@@ -1955,31 +1955,37 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
        ) z WHERE rn = 1
      )
      SELECT pm.manager_id, mm.name AS manager_name, a.client_key, a.name, a.orders, a.revenue, a.last_paid,
-            (SELECT MAX(last_activity_at) FROM deals dd WHERE dd.client_key = a.client_key) AS last_activity
+            (SELECT MAX(last_activity_at) FROM deals dd WHERE dd.client_key = a.client_key) AS last_activity,
+            CASE WHEN a.orders = 1 THEN 'oneshot_bg' ELSE 'lapsed' END AS category
      FROM agg a
      JOIN primary_mgr pm ON pm.client_key = a.client_key
      JOIN managers mm ON mm.id = pm.manager_id
-     WHERE a.orders >= 3
-       AND a.last_paid < now() - interval '${activeMonths} months'
+     -- ЛИШЕ компанії (ключ по назві). Фізосіб (ключ по телефону) не пропонуємо.
+     WHERE a.client_key !~ '^\\d{9,}$'
        AND a.client_key NOT IN (SELECT client_key FROM receivables WHERE client_key IS NOT NULL)
+       AND (
+         -- давні хороші клієнти (3+ перевезень), що замовкли
+         (a.orders >= 3 AND a.last_paid < now() - interval '${activeMonths} months')
+         -- або компанія з рівно 1 перевезенням (розрахунок б/г)
+         OR a.orders = 1
+       )
      ORDER BY a.revenue DESC`,
     params
   );
 
-  const isPhoneKey = (k: string) => /^\d{9,}$/.test(k);
   const byMgr = new Map<number, { managerId: number; managerName: string; clients: unknown[] }>();
   for (const x of r.rows) {
     if (!byMgr.has(x.manager_id)) byMgr.set(x.manager_id, { managerId: x.manager_id, managerName: x.manager_name, clients: [] });
-    const individual = isPhoneKey(x.client_key);
     byMgr.get(x.manager_id)!.clients.push({
       clientKey: x.client_key,
       clientName: x.name,
-      isCompany: !individual,
-      identifier: individual ? x.client_key : null,
+      isCompany: true,
+      identifier: null,
       orders: Number(x.orders),
       revenue: Number(x.revenue),
       lastPaid: x.last_paid,
       lastActivity: x.last_activity,
+      category: x.category, // 'lapsed' | 'oneshot_bg'
     });
   }
   res.json({ managers: Array.from(byMgr.values()) });

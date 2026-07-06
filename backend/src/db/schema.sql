@@ -132,6 +132,9 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_activity_note_at TIMESTAMPT
 -- [{metric,target,actual,done}]. Lets a weekly plan land as N daily tasks
 -- (one per day) instead of N×metrics rows. evaluateKpiTasks fills actual/done.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS metrics_json JSONB;
+-- Reactivation tasks bundle a list of clients as a checklist the manager ticks
+-- off: [{clientKey, clientName, orders, revenue, lastPaid, category, done}].
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS checklist_json JSONB;
 
 CREATE TABLE IF NOT EXISTS ad_budget_daily (
   day DATE PRIMARY KEY,

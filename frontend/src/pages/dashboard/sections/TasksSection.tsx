@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import {
   updateTask,
-  createTask,
+  createReactivationTask,
   fetchReactivationCandidates,
   type ManagerOption,
   type ReactivationManager,
@@ -303,6 +303,30 @@ export function TasksSection({
                           {task.metricsJson.map((m) => `${METRIC_LBL[m.metric] ?? m.metric} ${m.actual ?? "—"}/${m.target}`).join(" · ")}
                         </div>
                       )}
+                      {task.checklistJson && task.checklistJson.length > 0 && (() => {
+                        const list = task.checklistJson;
+                        const doneN = list.filter((c) => c.done).length;
+                        return (
+                          <div style={{ paddingLeft: 22, marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
+                            {list.map((c, i) => (
+                              <label key={c.clientKey} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                                <input type="checkbox" checked={!!c.done} onChange={() => {
+                                  const next = list.map((x, j) => (j === i ? { ...x, done: !x.done } : x));
+                                  patchTaskLocal(task.id, { checklistJson: next });
+                                  updateTask(task.id, { checklistJson: next });
+                                }} />
+                                <span style={{ flex: 1, textDecoration: c.done ? "line-through" : "none", opacity: c.done ? 0.55 : 1 }}>🏢 {c.clientName}</span>
+                                <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                                  {c.category === "oneshot_bg" ? "1 перевез. (б/г)" : "замовклий"}{c.orders != null ? ` · ${c.orders} перевез.` : ""}
+                                </span>
+                              </label>
+                            ))}
+                            <span style={{ fontSize: 11, color: doneN === list.length ? "#16a34a" : "var(--text-muted)", fontWeight: 600 }}>
+                              Опрацьовано {doneN}/{list.length}
+                            </span>
+                          </div>
+                        );
+                      })()}
                       {task.auto && task.targetValue != null && (
                         <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 2 }}>
                           {task.planDate ? `📅 ${task.planDate} · ` : task.periodStart ? `📅 ${task.periodStart}…${task.periodEnd} · ` : ""}
@@ -823,20 +847,16 @@ function ReactivationPlanner({ teams, canPickTeam, onDone }: {
     if (!data || picked.size === 0) return;
     setBusy(true);
     try {
+      // ONE task per manager, bundling their picked clients as a checklist.
       let created = 0;
       for (const mgr of data) {
-        for (const c of mgr.clients) {
-          if (!picked.has(c.clientKey)) continue;
-          const last = c.lastPaid ? new Date(c.lastPaid).toLocaleDateString("uk-UA") : "—";
-          await createTask({
-            title: `🔄 Реактивація: ${c.clientName}`,
-            assigneeId: mgr.managerId,
-            priority: "high",
-            department: "Реактивація",
-            comments: `Постійний клієнт, що замовк. Перевезень: ${c.orders}, напрацював ${formatAmount(c.revenue)}. Остання оплата: ${last}. Звʼязатися й повернути в роботу.`,
-          });
-          created++;
-        }
+        const clients = mgr.clients.filter((c) => picked.has(c.clientKey));
+        if (clients.length === 0) continue;
+        await createReactivationTask(mgr.managerId, clients.map((c) => ({
+          clientKey: c.clientKey, clientName: c.clientName, orders: c.orders,
+          revenue: c.revenue, lastPaid: c.lastPaid, category: c.category,
+        })));
+        created++;
       }
       setDone(created);
       await onDone();
@@ -871,11 +891,15 @@ function ReactivationPlanner({ teams, canPickTeam, onDone }: {
                 <div style={{ fontWeight: 700, fontSize: 13, margin: "4px 0" }}>{m.managerName} <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>({m.clients.length})</span></div>
                 {m.clients.map((c) => {
                   const ds = daysSince(c.lastPaid);
+                  const oneshot = c.category === "oneshot_bg";
                   return (
                     <label key={c.clientKey} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "3px 0", cursor: "pointer" }}>
                       <input type="checkbox" checked={picked.has(c.clientKey)} onChange={() => toggle(c.clientKey)} />
-                      <span style={{ flex: 1 }}>{c.isCompany ? "🏢" : "👤"} {c.clientName}</span>
-                      <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{c.orders} перевез. · {formatAmount(c.revenue)} · без замовлень {ds ?? "?"} дн.</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 10, whiteSpace: "nowrap", background: oneshot ? "#dbeafe" : "#fef3c7", color: oneshot ? "#1d4ed8" : "#b45309" }}>
+                        {oneshot ? "1 перевез. (б/г)" : "замовклий 3+"}
+                      </span>
+                      <span style={{ flex: 1 }}>🏢 {c.clientName}</span>
+                      <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{c.orders} перевез. · {formatAmount(c.revenue)}{oneshot ? "" : ` · без замовлень ${ds ?? "?"} дн.`}</span>
                     </label>
                   );
                 })}
