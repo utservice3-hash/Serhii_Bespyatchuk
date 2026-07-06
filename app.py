@@ -51,6 +51,9 @@ REMINDER_MINUTES = 20
 # в Kommo на етапі "Дзвінки з сайту".
 ELOGIST_SOURCE_CHAT_ID = -1002141432610
 ELOGIST_TAG = "eLogist"
+# Окремий етап у воронці Кваліфікація під заявки з сайту eLogist (щоб їх було
+# видно окремо й відстежувати конверсію по тегу eLogist).
+ELOGIST_STATUS = 108581472   # "Заявки eLogist (сайт)"
 ELOGIST_DEDUP_MINUTES = 30
 _elogist_recent_phones: dict[str, datetime] = {}
 
@@ -100,7 +103,7 @@ def _create_elogist_lead(phone: str, route: str = "") -> tuple[int | None, str]:
     name = f"eLogist — {route}" if route else f"eLogist — {phone}"
     lead_id = kommo.create_lead_with_phone(
         name=name, phone=phone,
-        pipeline_id=QUAL_PIPELINE_ID, status_id=DZVINKY_Z_SAITU, tag_name=ELOGIST_TAG,
+        pipeline_id=QUAL_PIPELINE_ID, status_id=ELOGIST_STATUS, tag_name=ELOGIST_TAG,
     )
     if lead_id:
         logger.info("Created eLogist lead %s for phone %s", lead_id, phone)
@@ -257,6 +260,7 @@ UNASSIGNED_STATUSES = {
     69716160: "Дзвінок по пропущеному (реклама)",
     69716164: "Нова заявка від лідогенератора",
     69738660: "Реактивовано",
+    108581472: "Заявки eLogist (сайт)",
 }
 ADMIN_USER_ID = 904923  # Admin — означає немає реального відповідального
 
