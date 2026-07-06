@@ -848,6 +848,7 @@ export interface Task {
   createdByRole?: "admin" | "team_lead" | "manager" | null;
   createdById?: number | null;
   assigneeTeamId?: number | null;
+  metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;
   createdAt: string;
   updatedAt: string;
 }

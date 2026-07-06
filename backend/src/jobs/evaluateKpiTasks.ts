@@ -85,7 +85,64 @@ export async function evaluateKpiTasks(): Promise<void> {
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual}${suffix} / ціль ${target}${suffix}`, t.id]);
   }
 
-  console.log(`KPI tasks evaluated: ${daily.rowCount} daily, ${parents.rowCount} ads, ${aggs.rowCount} aggregate.`);
+  // 4) Composite daily tasks (metrics_json bundle: sum/ads/leadgen/avg/conv for
+  //    one day). Fill each metric's actual/done; the task is done when ALL met.
+  const composite = await pool.query<{ id: number; assignee_id: number; plan_date: string; metrics_json: { metric: string; target: number }[] }>(
+    `SELECT id, assignee_id, plan_date, metrics_json FROM tasks
+     WHERE auto AND task_type = 'daily_kpi' AND metrics_json IS NOT NULL
+       AND status <> 'done' AND plan_date <= (now()::date - 1)`
+  );
+  for (const t of composite.rows) {
+    const out: { metric: string; target: number; actual: number; done: boolean }[] = [];
+    for (const m of t.metrics_json) {
+      let actual = 0;
+      if (m.metric === "ads_count" || m.metric === "leadgen_count") {
+        const r = await pool.query<{ c: string }>(
+          `SELECT COUNT(*) c FROM deals WHERE manager_id = $1 AND lead_channel = $3
+             AND created_at_kommo >= $2::date AND created_at_kommo < $2::date + interval '1 day'`,
+          [t.assignee_id, t.plan_date, channelOf(m.metric)]
+        );
+        actual = Number(r.rows[0].c);
+      } else if (m.metric === "avg_check") {
+        const r = await pool.query<{ v: string }>(
+          `SELECT COALESCE(AVG(d.price),0) v FROM deals d
+             JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+             WHERE psm.funnel_stage = 'paid' AND d.manager_id = $1
+               AND d.closed_at_kommo >= $2::date AND d.closed_at_kommo < $2::date + interval '1 day'`,
+          [t.assignee_id, t.plan_date]
+        );
+        actual = Math.round(Number(r.rows[0].v));
+      } else if (m.metric === "conversion") {
+        const r = await pool.query<{ paid: string; total: string }>(
+          `SELECT COUNT(*) FILTER (WHERE psm.funnel_stage='paid') paid, COUNT(*) total FROM deals d
+             JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+             WHERE d.manager_id = $1 AND d.created_at_kommo >= $2::date AND d.created_at_kommo < $2::date + interval '1 day'`,
+          [t.assignee_id, t.plan_date]
+        );
+        const total = Number(r.rows[0].total);
+        actual = total > 0 ? Math.round((Number(r.rows[0].paid) / total) * 100) : 0;
+      } else if (m.metric === "payment_amount") {
+        const r = await pool.query<{ v: string }>(
+          `SELECT COALESCE(SUM(d.price),0) v FROM deals d
+             JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+             WHERE psm.funnel_stage = 'paid' AND d.manager_id = $1
+               AND d.closed_at_kommo >= $2::date AND d.closed_at_kommo < $2::date + interval '1 day'`,
+          [t.assignee_id, t.plan_date]
+        );
+        actual = Math.round(Number(r.rows[0].v));
+      }
+      out.push({ metric: m.metric, target: m.target, actual, done: actual >= m.target });
+    }
+    const allDone = out.length > 0 && out.every((x) => x.done);
+    await pool.query(
+      `UPDATE tasks SET metrics_json = $1,
+         status = CASE WHEN $2 THEN 'done' ELSE status END, updated_at = now()
+       WHERE id = $3`,
+      [JSON.stringify(out), allDone, t.id]
+    );
+  }
+
+  console.log(`KPI tasks evaluated: ${daily.rowCount} daily, ${parents.rowCount} ads, ${aggs.rowCount} aggregate, ${composite.rowCount} composite.`);
 }
 
 if (process.argv[1]?.endsWith("evaluateKpiTasks.js")) {

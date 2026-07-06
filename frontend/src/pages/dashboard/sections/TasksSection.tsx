@@ -9,6 +9,15 @@ import {
 import { STATUS_DOT_COLORS, STATUS_GROUPS, STATUS_LABELS, PRIORITY_LABELS } from "../constants";
 import type { TaskForm } from "../taskForm";
 
+const METRIC_LBL: Record<string, string> = {
+  ads_count: "Реклама",
+  leadgen_count: "Лідоген",
+  avg_check: "Сер. чек",
+  conversion: "Конверсія",
+  payment_amount: "Сума",
+};
+const METRIC_UNIT: Record<string, string> = { avg_check: "₴", payment_amount: "₴", conversion: "%" };
+
 export function TasksSection({
   taskSearch,
   setTaskSearch,
@@ -46,6 +55,8 @@ export function TasksSection({
   const [adminTab, setAdminTab] = useState<"mine" | "all">("mine");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
+  const [openTaskId, setOpenTaskId] = useState<number | null>(null);
+  const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
 
   const tabBtn = (active: boolean): React.CSSProperties => ({
     padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer",
@@ -151,21 +162,34 @@ export function TasksSection({
                 return visible.map((task) => (
                   <tr key={task.id}>
                     <td style={{ verticalAlign: "top" }}>
-                      <textarea
-                        value={task.title}
-                        onChange={(e) => patchTaskLocal(task.id, { title: e.target.value })}
-                        onBlur={(e) => updateTask(task.id, { title: e.target.value })}
-                        rows={Math.max(1, Math.ceil((task.title?.length ?? 0) / 40))}
-                        style={{
-                          border: "none",
-                          width: "100%",
-                          resize: "vertical",
-                          font: "inherit",
-                          background: "transparent",
-                          lineHeight: 1.4,
-                          overflow: "hidden",
-                        }}
-                      />
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
+                        <button
+                          onClick={() => setOpenTaskId(task.id)}
+                          title="Відкрити картку задачі"
+                          style={{ flexShrink: 0, background: "none", border: "none", cursor: "pointer", fontSize: 15, lineHeight: 1.4, padding: 0, opacity: 0.6 }}
+                        >📄</button>
+                        <textarea
+                          value={task.title}
+                          onChange={(e) => patchTaskLocal(task.id, { title: e.target.value })}
+                          onBlur={(e) => updateTask(task.id, { title: e.target.value })}
+                          rows={Math.max(1, Math.ceil((task.title?.length ?? 0) / 40))}
+                          style={{
+                            border: "none",
+                            width: "100%",
+                            resize: "vertical",
+                            font: "inherit",
+                            background: "transparent",
+                            lineHeight: 1.4,
+                            overflow: "hidden",
+                          }}
+                        />
+                      </div>
+                      {task.metricsJson && task.metricsJson.length > 0 && (
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 22 }}>
+                          {task.planDate ? `📅 ${task.planDate} · ` : ""}
+                          {task.metricsJson.map((m) => `${METRIC_LBL[m.metric] ?? m.metric} ${m.actual ?? "—"}/${m.target}`).join(" · ")}
+                        </div>
+                      )}
                       {task.auto && task.targetValue != null && (
                         <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 2 }}>
                           {task.planDate ? `📅 ${task.planDate} · ` : task.periodStart ? `📅 ${task.periodStart}…${task.periodEnd} · ` : ""}
@@ -252,13 +276,14 @@ export function TasksSection({
                         ))}
                       </select>
                     </td>
-                    <td>
-                      <input
+                    <td style={{ verticalAlign: "top" }}>
+                      <textarea
                         value={task.comments ?? ""}
                         placeholder="—"
                         onChange={(e) => patchTaskLocal(task.id, { comments: e.target.value })}
                         onBlur={(e) => updateTask(task.id, { comments: e.target.value })}
-                        style={{ border: "none", width: "100%" }}
+                        rows={Math.max(1, Math.ceil((task.comments?.length ?? 0) / 28))}
+                        style={{ border: "none", width: "100%", resize: "vertical", font: "inherit", background: "transparent", lineHeight: 1.4, overflow: "hidden" }}
                       />
                     </td>
                     <td>
@@ -287,6 +312,104 @@ export function TasksSection({
               })()}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {openTask && (
+        <div onClick={() => setOpenTaskId(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 2500 }}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "fixed", top: 0, right: 0, height: "100vh", width: "min(460px, 100vw)",
+              background: "var(--card-bg, #fff)", color: "var(--text)", boxShadow: "-8px 0 32px rgba(0,0,0,0.22)",
+              overflowY: "auto", padding: 24, zIndex: 2600,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 18 }}>
+              <textarea
+                value={openTask.title}
+                onChange={(e) => patchTaskLocal(openTask.id, { title: e.target.value })}
+                onBlur={(e) => updateTask(openTask.id, { title: e.target.value })}
+                rows={Math.max(1, Math.ceil((openTask.title?.length ?? 0) / 34))}
+                style={{ border: "none", width: "100%", resize: "vertical", font: "inherit", fontSize: 20, fontWeight: 700, background: "transparent", lineHeight: 1.3 }}
+              />
+              <button onClick={() => setOpenTaskId(null)} style={{ flexShrink: 0, background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 10px", cursor: "pointer", color: "var(--text)" }}>✕</button>
+            </div>
+
+            {(() => {
+              const F = ({ icon, label, children }: { icon: string; label: string; children: React.ReactNode }) => (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--border)" }}>
+                  <span style={{ width: 130, flexShrink: 0, color: "var(--text-muted)", fontSize: 13 }}>{icon} {label}</span>
+                  <div style={{ flex: 1 }}>{children}</div>
+                </div>
+              );
+              return (
+                <>
+                  <F icon="👤" label="Виконавець">
+                    <select value={openTask.assigneeId ?? ""} onChange={(e) => { const assigneeId = e.target.value ? Number(e.target.value) : null; const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(openTask.id, { assigneeId, assigneeName }); updateTask(openTask.id, { assigneeId }); }} style={{ width: "100%" }}>
+                      <option value="">— (моя / без виконавця)</option>
+                      {managerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </select>
+                  </F>
+                  <F icon="📅" label="Дедлайн">
+                    <input type="date" value={openTask.deadline ?? ""} onChange={(e) => { const deadline = e.target.value || null; patchTaskLocal(openTask.id, { deadline }); updateTask(openTask.id, { deadline }); }} />
+                  </F>
+                  <F icon="🏷️" label="Департамент">
+                    <input value={openTask.department ?? ""} placeholder="—" onChange={(e) => patchTaskLocal(openTask.id, { department: e.target.value })} onBlur={(e) => updateTask(openTask.id, { department: e.target.value })} style={{ width: "100%", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", background: "var(--card-bg)", color: "var(--text)" }} />
+                  </F>
+                  <F icon="⚑" label="Пріоритет">
+                    <select value={openTask.priority} onChange={(e) => { const priority = e.target.value as TaskPriority; patchTaskLocal(openTask.id, { priority }); updateTask(openTask.id, { priority }); }} style={{ width: "100%" }}>
+                      {Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                  </F>
+                  <F icon="◔" label="Статус">
+                    <select value={openTask.status} onChange={(e) => { const status = e.target.value as TaskStatus; patchTaskLocal(openTask.id, { status }); updateTask(openTask.id, { status }); }} style={{ width: "100%" }}>
+                      {STATUS_GROUPS.map((group) => <optgroup key={group.label} label={group.label}>{group.statuses.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</optgroup>)}
+                    </select>
+                  </F>
+                </>
+              );
+            })()}
+
+            {openTask.metricsJson && openTask.metricsJson.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>🎯 Факт по показниках {openTask.planDate ? `(${openTask.planDate})` : ""}</h3>
+                <table className="data-table compact" style={{ width: "100%" }}>
+                  <thead><tr><th style={{ textAlign: "left" }}>Показник</th><th style={{ textAlign: "right" }}>Ціль</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ textAlign: "center" }}>✓</th></tr></thead>
+                  <tbody>
+                    {openTask.metricsJson.map((m) => {
+                      const u = METRIC_UNIT[m.metric] ?? "";
+                      return (
+                        <tr key={m.metric}>
+                          <td style={{ textAlign: "left" }}>{METRIC_LBL[m.metric] ?? m.metric}</td>
+                          <td style={{ textAlign: "right" }}>{m.target}{u}</td>
+                          <td style={{ textAlign: "right", fontWeight: 600 }}>{m.actual == null ? "—" : `${m.actual}${u}`}</td>
+                          <td style={{ textAlign: "center" }}>{m.actual == null ? "⏳" : m.done ? "✅" : "❌"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>Факт підтягується автоматично з CRM після завершення дня. Задача закривається сама, коли всі показники виконані.</p>
+              </div>
+            )}
+
+            <div style={{ marginTop: 18 }}>
+              <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 6px" }}>💬 Коментарі</h3>
+              <textarea
+                value={openTask.comments ?? ""}
+                placeholder="Додати коментар…"
+                onChange={(e) => patchTaskLocal(openTask.id, { comments: e.target.value })}
+                onBlur={(e) => updateTask(openTask.id, { comments: e.target.value })}
+                rows={5}
+                style={{ width: "100%", resize: "vertical", font: "inherit", padding: 10, lineHeight: 1.5, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
+              />
+            </div>
+
+            <div style={{ marginTop: 18, textAlign: "right" }}>
+              <button onClick={() => { handleDeleteTask(openTask.id); setOpenTaskId(null); }} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "6px 12px", color: "#dc2626", cursor: "pointer" }}>🗑 Видалити</button>
+            </div>
+          </div>
         </div>
       )}
 

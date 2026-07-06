@@ -62,6 +62,7 @@ tasksRouter.get("/", async (req, res) => {
             t.period_start AS "periodStart", t.period_end AS "periodEnd",
             t.parent_id AS "parentId", t.auto, u.role AS "createdByRole",
             t.created_by AS "createdById", m.team_id AS "assigneeTeamId",
+            t.metrics_json AS "metricsJson",
             t.created_at AS "createdAt", t.updated_at AS "updatedAt"
      FROM tasks t
      LEFT JOIN managers m ON m.id = t.assignee_id
@@ -106,50 +107,50 @@ tasksRouter.post("/plan", async (req, res) => {
   const sorted = [...days].sort();
   const periodStart = sorted[0];
   const periodEnd = sorted[sorted.length - 1];
-  const periodLabel = period === "week" ? "тиждень" : "місяць";
 
   const mgr = await pool.query<{ name: string }>(`SELECT name FROM managers WHERE id = $1`, [assigneeId]);
   const mgrName = mgr.rows[0]?.name ?? "";
-  const kpiType = period === "week" ? "weekly_kpi" : "monthly_kpi";
+
+  // Daily revenue target ("сума") from the manager's monthly payment plan
+  // (plan ÷ working days of the plan's month), if such a plan exists.
+  const monthAnchor = `${periodStart.slice(0, 7)}-01`;
+  const payPlanRes = await pool.query<{ v: string }>(
+    `SELECT planned_value v FROM plans WHERE manager_id = $1 AND metric = 'payment_amount' AND plan_date = $2`,
+    [assigneeId, monthAnchor]
+  );
+  let dailyPayment = 0;
+  if (payPlanRes.rows[0]) {
+    const [y, mo] = monthAnchor.split("-").map(Number);
+    const dim = new Date(y, mo, 0).getDate();
+    let wd = 0;
+    for (let d = 1; d <= dim; d++) { const dow = new Date(y, mo - 1, d).getDay(); if (dow !== 0 && dow !== 6) wd++; }
+    dailyPayment = wd > 0 ? Math.round(Number(payPlanRes.rows[0].v) / wd) : 0;
+  }
+
+  // Build the per-day metric bundle. Count metrics split evenly across days;
+  // avg_check / conversion / payment apply as a daily target each day.
+  const dailyMetrics: { metric: string; target: number }[] = [];
+  if (adsCount && adsCount > 0) dailyMetrics.push({ metric: "ads_count", target: Math.max(1, Math.round(adsCount / sorted.length)) });
+  if (leadgenCount && leadgenCount > 0) dailyMetrics.push({ metric: "leadgen_count", target: Math.max(1, Math.round(leadgenCount / sorted.length)) });
+  if (avgCheck && avgCheck > 0) dailyMetrics.push({ metric: "avg_check", target: avgCheck });
+  if (conversion && conversion > 0) dailyMetrics.push({ metric: "conversion", target: conversion });
+  if (dailyPayment > 0) dailyMetrics.push({ metric: "payment_amount", target: dailyPayment });
+
+  if (dailyMetrics.length === 0) {
+    return res.status(400).json({ error: "Вкажіть хоча б одну ціль (реклама, лідоген, чек або конверсія), або задайте місячний план виручки для «суми»" });
+  }
+
+  // One composite daily_kpi task per working day, bundling all the day's targets.
   const createdIds: number[] = [];
-
-  // Count metrics → parent KPI task + one auto daily sub-task per working day.
-  for (const [metric, total] of [["ads_count", adsCount], ["leadgen_count", leadgenCount]] as const) {
-    if (!total || total <= 0) continue;
-    const parent = await pool.query<{ id: number }>(
-      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, metric, target_value, period_start, period_end, auto)
-       VALUES ($1,'not_started',$2,$3,$4,$5,$6,$7,$8,true) RETURNING id`,
-      [`План на ${periodLabel}: ${METRIC_LABELS[metric]} — ${total} (${mgrName})`,
-       assigneeId, auth.userId, kpiType, metric, total, periodStart, periodEnd]
+  for (const day of sorted) {
+    const metrics = dailyMetrics.map((m) => ({ ...m, actual: null as number | null, done: false }));
+    const r = await pool.query<{ id: number }>(
+      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, plan_date, period_start, period_end, deadline, auto, metrics_json)
+       VALUES ($1,'not_started',$2,$3,'daily_kpi',$4,$4,$4,$4,true,$5) RETURNING id`,
+      [`План на день ${day} — ${dailyMetrics.length} показник(и) (${mgrName})`,
+       assigneeId, auth.userId, day, JSON.stringify(metrics)]
     );
-    const parentId = parent.rows[0].id;
-    createdIds.push(parentId);
-    const daily = Math.max(1, Math.round(total / sorted.length));
-    for (const day of sorted) {
-      await pool.query(
-        `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, metric, target_value, plan_date, parent_id, deadline, auto)
-         VALUES ($1,'not_started',$2,$3,'daily_kpi',$4,$5,$6,$7,$6,true)`,
-        [`${METRIC_LABELS[metric]}: ${daily}/день`, assigneeId, auth.userId, metric, daily, day, parentId]
-      );
-    }
-  }
-
-  // avg_check / conversion → single period-aggregate task (no daily split).
-  for (const [metric, target] of [["avg_check", avgCheck], ["conversion", conversion]] as const) {
-    if (target && target > 0) {
-      const suffix = metric === "conversion" ? "%" : "₴";
-      const r = await pool.query<{ id: number }>(
-        `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, metric, target_value, period_start, period_end, auto)
-         VALUES ($1,'not_started',$2,$3,$4,$5,$6,$7,$8,true) RETURNING id`,
-        [`План на ${periodLabel}: ${METRIC_LABELS[metric]} ≥ ${target}${suffix} (${mgrName})`,
-         assigneeId, auth.userId, kpiType, metric, target, periodStart, periodEnd]
-      );
-      createdIds.push(r.rows[0].id);
-    }
-  }
-
-  if (createdIds.length === 0) {
-    return res.status(400).json({ error: "Вкажіть хоча б одну ціль (реклама, чек або конверсія)" });
+    createdIds.push(r.rows[0].id);
   }
   res.status(201).json({ created: createdIds.length });
 });
