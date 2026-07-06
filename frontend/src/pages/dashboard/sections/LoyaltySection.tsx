@@ -12,6 +12,7 @@ import {
 import type { AuthPayload } from "../../../auth";
 import { fetchRegularClients, type LoyaltyManager, type LoyaltyDynamics, type RegularClient, type Team } from "../../../api";
 import { formatAmount } from "../format";
+import { RepeatPlanGrid } from "./RepeatPlanGrid";
 
 /** Badge distinguishing a company regular (🏢, by name) from an individual
  * (👤, identified by phone) — so the list reads unambiguously and de-duped. */
@@ -75,6 +76,10 @@ export function LoyaltySection({
           </div>
         )}
       </div>
+
+      {(auth?.role === "admin" || auth?.role === "team_lead") && (
+        <RepeatPlanGrid canPickTeam={auth?.role === "admin"} teams={teams} />
+      )}
 
       {auth?.role !== "manager" && (
         <div className="chart-card" style={{ marginBottom: 16 }}>

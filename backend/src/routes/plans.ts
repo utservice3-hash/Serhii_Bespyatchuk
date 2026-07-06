@@ -9,7 +9,7 @@ plansRouter.use(requireAuth);
 const upsertSchema = z.object({
   managerId: z.number(),
   planDate: z.string(),
-  metric: z.enum(["lead_taken", "quote_requested", "approved", "invoiced", "paid", "payment_amount"]),
+  metric: z.enum(["lead_taken", "quote_requested", "approved", "invoiced", "paid", "payment_amount", "repeat_payment_amount"]),
   plannedValue: z.number(),
 });
 

@@ -240,6 +240,30 @@ export async function savePlan(managerId: number, month: string, plannedValue: n
   await api.post("/plans", { managerId, planDate: `${month}-01`, metric: "payment_amount", plannedValue });
 }
 
+// Repeat-client revenue plan (target earned from постійні клієнти), set monthly
+// per manager, decomposed by weeks with auto-filled fact.
+export interface RepeatPlansGrid {
+  month: string;
+  daysInMonth: number;
+  workingDays: number;
+  weeks: { label: string; from: number; to: number; days: number }[];
+  teams: {
+    teamId: number; teamName: string; teamPlan: number; teamFact: number;
+    managers: { managerId: number; name: string; plan: number; fact: number }[];
+  }[];
+  totalPlan: number;
+  totalFact: number;
+}
+
+export async function fetchRepeatPlansGrid(month: string, teamId?: number): Promise<RepeatPlansGrid> {
+  const { data } = await api.get<RepeatPlansGrid>("/dashboard/repeat-plans-grid", { params: teamId ? { month, teamId } : { month } });
+  return data;
+}
+
+export async function saveRepeatPlan(managerId: number, month: string, plannedValue: number): Promise<void> {
+  await api.post("/plans", { managerId, planDate: `${month}-01`, metric: "repeat_payment_amount", plannedValue });
+}
+
 export async function fetchLeadQuality(params: {
   from?: string;
   to?: string;
