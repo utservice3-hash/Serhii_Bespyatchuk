@@ -1917,6 +1917,74 @@ dashboardRouter.get("/regular-clients", async (req, res) => {
   });
 });
 
+/**
+ * Reactivation candidates for the task planner: former good clients (2+ paid
+ * lifetime) who went quiet (last order older than the active window) and are NOT
+ * current debtors — grouped by their primary manager, best clients first. The
+ * team lead picks whom to assign for reactivation.
+ */
+dashboardRouter.get("/reactivation-candidates", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  const teamId: number | null = auth.role === "team_lead" ? (auth.teamId ?? null) : (req.query.teamId ? Number(req.query.teamId) : null);
+  const activeMonths = (await getSettings()).sleepingWindowMonths;
+
+  const params: unknown[] = [];
+  let teamAnd = "";
+  if (teamId != null) { params.push(teamId); teamAnd = `AND m.team_id = $${params.length}`; }
+
+  const r = await pool.query<{ manager_id: number; manager_name: string; client_key: string; name: string; orders: string; revenue: string; last_paid: string; last_activity: string | null }>(
+    `WITH scoped AS (
+       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price
+       FROM deals d
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE d.client_key IS NOT NULL AND psm.funnel_stage = 'paid' ${teamAnd}
+     ),
+     agg AS (
+       SELECT client_key,
+              (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS name,
+              COUNT(*) AS orders, COALESCE(SUM(price),0) AS revenue, MAX(created_at_kommo) AS last_paid
+       FROM scoped GROUP BY client_key
+     ),
+     primary_mgr AS (
+       SELECT client_key, manager_id FROM (
+         SELECT client_key, manager_id,
+                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(created_at_kommo) DESC) AS rn
+         FROM scoped GROUP BY client_key, manager_id
+       ) z WHERE rn = 1
+     )
+     SELECT pm.manager_id, mm.name AS manager_name, a.client_key, a.name, a.orders, a.revenue, a.last_paid,
+            (SELECT MAX(last_activity_at) FROM deals dd WHERE dd.client_key = a.client_key) AS last_activity
+     FROM agg a
+     JOIN primary_mgr pm ON pm.client_key = a.client_key
+     JOIN managers mm ON mm.id = pm.manager_id
+     WHERE a.orders >= 3
+       AND a.last_paid < now() - interval '${activeMonths} months'
+       AND a.client_key NOT IN (SELECT client_key FROM receivables WHERE client_key IS NOT NULL)
+     ORDER BY a.revenue DESC`,
+    params
+  );
+
+  const isPhoneKey = (k: string) => /^\d{9,}$/.test(k);
+  const byMgr = new Map<number, { managerId: number; managerName: string; clients: unknown[] }>();
+  for (const x of r.rows) {
+    if (!byMgr.has(x.manager_id)) byMgr.set(x.manager_id, { managerId: x.manager_id, managerName: x.manager_name, clients: [] });
+    const individual = isPhoneKey(x.client_key);
+    byMgr.get(x.manager_id)!.clients.push({
+      clientKey: x.client_key,
+      clientName: x.name,
+      isCompany: !individual,
+      identifier: individual ? x.client_key : null,
+      orders: Number(x.orders),
+      revenue: Number(x.revenue),
+      lastPaid: x.last_paid,
+      lastActivity: x.last_activity,
+    });
+  }
+  res.json({ managers: Array.from(byMgr.values()) });
+});
+
 // Team-lead / admin: save a comment + planned payment date for a receivable
 // client (keyed by client_key so it survives sheet re-syncs).
 dashboardRouter.put("/receivables/note", async (req, res) => {

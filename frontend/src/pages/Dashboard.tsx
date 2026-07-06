@@ -1792,6 +1792,7 @@ export function Dashboard() {
           patchTaskLocal={patchTaskLocal}
           handleDeleteTask={handleDeleteTask}
           handleSubmitTaskModal={handleSubmitTaskModal}
+          refreshTasks={async () => { const fresh = await fetchTasks(); setTasks(fresh); }}
           role={auth?.role}
           currentUserId={auth?.userId}
           currentManagerId={auth?.managerId}

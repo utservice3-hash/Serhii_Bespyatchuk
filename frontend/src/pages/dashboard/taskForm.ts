@@ -10,7 +10,7 @@ export type TaskForm = {
   department: string;
   comments: string;
   // KPI plan fields
-  taskType: "simple" | "weekly_kpi" | "monthly_kpi";
+  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "reactivation";
   weekStart: string;
   rangeFrom: string; // weekly plan: custom range start (from calendar)
   rangeTo: string;   // weekly plan: custom range end

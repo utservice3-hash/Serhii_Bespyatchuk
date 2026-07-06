@@ -963,6 +963,26 @@ export interface Task {
   updatedAt: string;
 }
 
+export interface ReactivationCandidate {
+  clientKey: string;
+  clientName: string;
+  isCompany: boolean;
+  identifier: string | null;
+  orders: number;
+  revenue: number;
+  lastPaid: string | null;
+  lastActivity: string | null;
+}
+export interface ReactivationManager {
+  managerId: number;
+  managerName: string;
+  clients: ReactivationCandidate[];
+}
+export async function fetchReactivationCandidates(teamId?: number): Promise<ReactivationManager[]> {
+  const { data } = await api.get<{ managers: ReactivationManager[] }>("/dashboard/reactivation-candidates", { params: teamId ? { teamId } : {} });
+  return data.managers;
+}
+
 export async function createTaskPlan(payload: {
   assigneeId: number;
   period: "week" | "month";

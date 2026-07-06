@@ -1,13 +1,17 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import {
   updateTask,
+  createTask,
+  fetchReactivationCandidates,
   type ManagerOption,
+  type ReactivationManager,
   type Task,
   type TaskPriority,
   type TaskStatus,
   type Team,
 } from "../../../api";
 import { STATUS_DOT_COLORS, STATUS_GROUPS, STATUS_LABELS, PRIORITY_LABELS } from "../constants";
+import { formatAmount } from "../format";
 import type { TaskForm } from "../taskForm";
 
 const METRIC_LBL: Record<string, string> = {
@@ -90,6 +94,7 @@ export function TasksSection({
   patchTaskLocal,
   handleDeleteTask,
   handleSubmitTaskModal,
+  refreshTasks,
   role,
   currentUserId,
   currentManagerId,
@@ -108,6 +113,7 @@ export function TasksSection({
   patchTaskLocal: (id: number, patch: Partial<Task>) => void;
   handleDeleteTask: (id: number) => void;
   handleSubmitTaskModal: () => void;
+  refreshTasks?: () => Promise<void>;
   role?: string;
   currentUserId?: number;
   currentManagerId?: number | null;
@@ -568,10 +574,17 @@ export function TasksSection({
                   <option value="simple">Звичайна</option>
                   <option value="weekly_kpi">Тижневий план (KPI)</option>
                   <option value="monthly_kpi">Місячний план (KPI)</option>
+                  {(role === "admin" || role === "team_lead") && <option value="reactivation">🔄 Реактивація клієнтів</option>}
                 </select>
               </label>
 
-              {taskForm.taskType === "simple" ? (
+              {taskForm.taskType === "reactivation" ? (
+                <ReactivationPlanner
+                  teams={teams}
+                  canPickTeam={role === "admin"}
+                  onDone={async () => { await refreshTasks?.(); setTaskForm(emptyTaskForm); setTaskModalOpen(false); }}
+                />
+              ) : taskForm.taskType === "simple" ? (
                 <>
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
                     Опис задачі
@@ -716,6 +729,7 @@ export function TasksSection({
                 </>
               )}
 
+              {taskForm.taskType !== "reactivation" && (<>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                   Виконавець{taskForm.taskType !== "simple" ? " (менеджер)" : ""}
@@ -772,10 +786,110 @@ export function TasksSection({
                   {taskForm.taskType === "simple" ? "Створити задачу" : "Поставити план"}
                 </button>
               </div>
+              </>)}
             </div>
           </div>
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Reactivation planner (team-lead/admin): the dashboard proposes former good
+ * clients (3+ paid) who went quiet, grouped by their manager; the team lead
+ * ticks whom to reactivate and each becomes a task assigned to that manager.
+ */
+function ReactivationPlanner({ teams, canPickTeam, onDone }: {
+  teams?: Team[]; canPickTeam: boolean; onDone: () => Promise<void>;
+}) {
+  const [teamId, setTeamId] = useState<number | "">("");
+  const [data, setData] = useState<ReactivationManager[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<number | null>(null);
+
+  useEffect(() => {
+    setData(null);
+    fetchReactivationCandidates(teamId ? Number(teamId) : undefined)
+      .then(setData)
+      .catch(() => setData([]));
+  }, [teamId]);
+
+  const toggle = (key: string) => setPicked((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  const daysSince = (d: string | null) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : null);
+
+  const createTasks = async () => {
+    if (!data || picked.size === 0) return;
+    setBusy(true);
+    try {
+      let created = 0;
+      for (const mgr of data) {
+        for (const c of mgr.clients) {
+          if (!picked.has(c.clientKey)) continue;
+          const last = c.lastPaid ? new Date(c.lastPaid).toLocaleDateString("uk-UA") : "—";
+          await createTask({
+            title: `🔄 Реактивація: ${c.clientName}`,
+            assigneeId: mgr.managerId,
+            priority: "high",
+            department: "Реактивація",
+            comments: `Постійний клієнт, що замовк. Перевезень: ${c.orders}, напрацював ${formatAmount(c.revenue)}. Остання оплата: ${last}. Звʼязатися й повернути в роботу.`,
+          });
+          created++;
+        }
+      }
+      setDone(created);
+      await onDone();
+    } finally { setBusy(false); }
+  };
+
+  const totalCandidates = data?.reduce((s, m) => s + m.clients.length, 0) ?? 0;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: 0 }}>
+        Дашборд пропонує колишніх хороших клієнтів (<b>3+ перевезень</b>), які <b>давно не замовляли</b> і <b>не є боржниками</b>, по кожному менеджеру. Відзначте, кого віддати в реактивацію — кожен стане окремою задачею для менеджера.
+      </p>
+      {canPickTeam && (
+        <select value={teamId} onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
+          style={{ alignSelf: "flex-start", padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)" }}>
+          <option value="">Усі команди</option>
+          {(teams ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      )}
+      {done != null ? (
+        <p style={{ color: "#16a34a", fontWeight: 600 }}>✓ Створено {done} задач(і) на реактивацію.</p>
+      ) : data === null ? (
+        <p className="loading-text">Пошук кандидатів…</p>
+      ) : totalCandidates === 0 ? (
+        <p className="loading-text">Немає кандидатів на реактивацію (усі активні або в дебіторці).</p>
+      ) : (
+        <>
+          <div style={{ maxHeight: 340, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8, padding: 8 }}>
+            {data.filter((m) => m.clients.length > 0).map((m) => (
+              <div key={m.managerId} style={{ marginBottom: 10 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, margin: "4px 0" }}>{m.managerName} <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>({m.clients.length})</span></div>
+                {m.clients.map((c) => {
+                  const ds = daysSince(c.lastPaid);
+                  return (
+                    <label key={c.clientKey} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "3px 0", cursor: "pointer" }}>
+                      <input type="checkbox" checked={picked.has(c.clientKey)} onChange={() => toggle(c.clientKey)} />
+                      <span style={{ flex: 1 }}>{c.isCompany ? "🏢" : "👤"} {c.clientName}</span>
+                      <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{c.orders} перевез. · {formatAmount(c.revenue)} · без замовлень {ds ?? "?"} дн.</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <span style={{ alignSelf: "center", fontSize: 12, color: "var(--text-muted)" }}>Обрано: {picked.size}</span>
+            <button className="btn-primary" onClick={createTasks} disabled={busy || picked.size === 0}>
+              {busy ? "Створення…" : `Створити задачі (${picked.size})`}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
