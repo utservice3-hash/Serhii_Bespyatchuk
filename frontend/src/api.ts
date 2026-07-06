@@ -251,11 +251,47 @@ export interface RepeatPlansGrid {
     teamId: number; teamName: string; teamPlan: number; teamFact: number;
     managers: {
       managerId: number; name: string; plan: number; fact: number;
-      clients: { clientName: string; isCompany: boolean; identifier: string | null; orders: number; revenue: number; lastPaid: string }[];
+      clients: RepeatClientPlan[];
     }[];
   }[];
   totalPlan: number;
   totalFact: number;
+}
+
+export interface RepeatClientPlan {
+  clientKey: string;
+  clientName: string;
+  isCompany: boolean;
+  identifier: string | null;
+  orders: number;
+  revenue: number;
+  lastPaid: string;
+  plan: number;
+  fact: number;
+  weekFact: number[];
+  forecast: string | null; // 'same' | 'down' | 'up'
+  realizationPct: number | null;
+  international: boolean | null;
+  weDo: boolean | null;
+  callLink: string | null;
+  comment: string | null;
+}
+
+export interface RepeatClientPlanInput {
+  clientKey: string;
+  month: string; // YYYY-MM
+  managerId: number;
+  plan: number;
+  forecast: string | null;
+  realizationPct: number | null;
+  international: boolean | null;
+  weDo: boolean | null;
+  callLink: string | null;
+  comment: string | null;
+}
+
+export async function saveRepeatClientPlan(input: RepeatClientPlanInput): Promise<void> {
+  await api.post("/dashboard/repeat-client-plan", input);
 }
 
 export async function fetchRepeatPlansGrid(month: string, teamId?: number): Promise<RepeatPlansGrid> {

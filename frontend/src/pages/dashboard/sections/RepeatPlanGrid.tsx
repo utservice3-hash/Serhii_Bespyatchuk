@@ -1,8 +1,104 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fetchRepeatPlansGrid, saveRepeatPlan, type RepeatPlansGrid, type Team } from "../../../api";
+import { fetchRepeatPlansGrid, saveRepeatPlan, saveRepeatClientPlan, type RepeatPlansGrid, type RepeatClientPlan, type Team } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 
 const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
+
+const FORECASTS = [
+  { value: "", label: "—" },
+  { value: "same", label: "такий самий" },
+  { value: "up", label: "збільшиться" },
+  { value: "down", label: "зменшиться" },
+];
+const cellInput: React.CSSProperties = { width: "100%", padding: "3px 6px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 12 };
+
+/** One editable per-client plan row (matches the КВП sheet): monthly plan (auto
+ * weekly split), auto fact, and metadata (forecast, realization %, international,
+ * we-do, call link, comment). The whole row is sent on save so nothing is lost. */
+function ClientPlanRow({ client, month, managerId, weekPlan, onSaved }: {
+  client: RepeatClientPlan; month: string; managerId: number; weekPlan: number[]; onSaved: () => void;
+}) {
+  const [d, setD] = useState({
+    plan: client.plan ? String(client.plan) : "",
+    forecast: client.forecast ?? "",
+    realizationPct: client.realizationPct != null ? String(client.realizationPct) : "",
+    international: client.international,
+    weDo: client.weDo,
+    callLink: client.callLink ?? "",
+    comment: client.comment ?? "",
+  });
+  const [saving, setSaving] = useState(false);
+  const planNum = Number(d.plan.replace(/[^\d.-]/g, "")) || 0;
+  const dirty =
+    planNum !== client.plan ||
+    (d.forecast || null) !== (client.forecast || null) ||
+    (d.realizationPct === "" ? null : Number(d.realizationPct)) !== client.realizationPct ||
+    d.international !== client.international ||
+    d.weDo !== client.weDo ||
+    (d.callLink || null) !== (client.callLink || null) ||
+    (d.comment || null) !== (client.comment || null);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await saveRepeatClientPlan({
+        clientKey: client.clientKey, month, managerId,
+        plan: planNum,
+        forecast: d.forecast || null,
+        realizationPct: d.realizationPct === "" ? null : Number(d.realizationPct),
+        international: d.international,
+        weDo: d.weDo,
+        callLink: d.callLink || null,
+        comment: d.comment || null,
+      });
+      onSaved();
+    } finally { setSaving(false); }
+  };
+
+  const remaining = Math.max(0, planNum - client.fact);
+  const tri = (v: boolean | null, set: (x: boolean | null) => void) => (
+    <select value={v == null ? "" : v ? "yes" : "no"} onChange={(e) => set(e.target.value === "" ? null : e.target.value === "yes")} style={cellInput}>
+      <option value="">—</option><option value="yes">так</option><option value="no">ні</option>
+    </select>
+  );
+  return (
+    <tr>
+      <td style={{ textAlign: "left", whiteSpace: "nowrap" }}>{client.clientName}</td>
+      <td style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{client.isCompany ? "🏢" : `👤${client.identifier ? " " + client.identifier : ""}`}</td>
+      <td><input value={d.plan} onChange={(e) => setD((s) => ({ ...s, plan: e.target.value }))} inputMode="numeric" placeholder="0" style={{ ...cellInput, textAlign: "right", width: 80 }} /></td>
+      <td style={{ textAlign: "right", color: "#16a34a", fontWeight: 600 }} title={formatAmountFull(client.fact)}>{formatAmount(client.fact)}</td>
+      <td style={{ textAlign: "right", color: "#d97706" }}>{formatAmount(remaining)}</td>
+      {weekPlan.map((wp, i) => (
+        <Fragment key={i}>
+          <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{formatAmount(wp)}</td>
+          <td style={{ textAlign: "right", color: "#16a34a" }} title={formatAmountFull(client.weekFact[i] ?? 0)}>{formatAmount(client.weekFact[i] ?? 0)}</td>
+        </Fragment>
+      ))}
+      <td style={{ minWidth: 110 }}>
+        <select value={d.forecast} onChange={(e) => setD((s) => ({ ...s, forecast: e.target.value }))} style={cellInput}>
+          {FORECASTS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+        </select>
+      </td>
+      <td style={{ width: 60 }}><input value={d.realizationPct} onChange={(e) => setD((s) => ({ ...s, realizationPct: e.target.value }))} inputMode="numeric" placeholder="%" style={{ ...cellInput, textAlign: "right" }} /></td>
+      <td style={{ width: 60 }}>{tri(d.international, (x) => setD((s) => ({ ...s, international: x })))}</td>
+      <td style={{ width: 60 }}>{tri(d.weDo, (x) => setD((s) => ({ ...s, weDo: x })))}</td>
+      <td style={{ minWidth: 120 }}>
+        {d.callLink && /^https?:\/\//.test(d.callLink)
+          ? <a href={d.callLink} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>🔗</a> : null}
+        <input value={d.callLink} onChange={(e) => setD((s) => ({ ...s, callLink: e.target.value }))} placeholder="лінк" style={cellInput} />
+      </td>
+      <td style={{ minWidth: 160 }}><input value={d.comment} onChange={(e) => setD((s) => ({ ...s, comment: e.target.value }))} placeholder="коментар" style={cellInput} /></td>
+      <td style={{ width: 44 }}>
+        {dirty && (
+          <button onClick={save} disabled={saving} title="Зберегти"
+            style={{ padding: "3px 8px", borderRadius: 6, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+            {saving ? "…" : "✓"}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
 
 /**
  * Repeat-client revenue plan: each month a team lead sets, per manager, the sum
@@ -203,22 +299,51 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                               {isOpen && m.clients.length > 0 && (
                                 <tr>
                                   <td colSpan={colSpan} style={{ background: "var(--bg-subtle, rgba(127,127,127,0.05))", padding: "6px 10px 10px 26px" }}>
-                                    <table className="data-table compact" style={{ fontSize: 12, minWidth: 560 }}>
-                                      <thead>
-                                        <tr><th style={{ textAlign: "left" }}>Постійний клієнт</th><th>Тип</th><th style={{ textAlign: "right" }}>Оплат</th><th style={{ textAlign: "right" }}>Сума (lifetime)</th><th style={{ textAlign: "right" }}>Остання</th></tr>
-                                      </thead>
-                                      <tbody>
-                                        {m.clients.map((c, i) => (
-                                          <tr key={i}>
-                                            <td style={{ textAlign: "left" }}>{c.clientName}</td>
-                                            <td style={{ color: "var(--text-muted)" }}>{c.isCompany ? "🏢 Компанія" : `👤 Фізособа${c.identifier ? " · " + c.identifier : ""}`}</td>
-                                            <td style={{ textAlign: "right" }}>{c.orders}</td>
-                                            <td style={{ textAlign: "right", fontWeight: 600 }}>{formatAmount(c.revenue)}</td>
-                                            <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{c.lastPaid ? new Date(c.lastPaid).toLocaleDateString("uk-UA") : "—"}</td>
+                                    <div style={{ overflowX: "auto" }}>
+                                      <table className="data-table compact" style={{ fontSize: 12, minWidth: 1100 }}>
+                                        <thead>
+                                          <tr>
+                                            <th style={{ textAlign: "left" }}>Постійний клієнт</th>
+                                            <th>Тип</th>
+                                            <th style={{ textAlign: "right" }}>План</th>
+                                            <th style={{ textAlign: "right" }}>Факт</th>
+                                            <th style={{ textAlign: "right" }}>Залишок</th>
+                                            {grid.weeks.map((w) => (
+                                              <th key={w.label} colSpan={2} style={{ textAlign: "center" }}>{w.label}<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>{w.from}–{w.to}</div></th>
+                                            ))}
+                                            <th>Прогноз обʼєму</th>
+                                            <th style={{ textAlign: "right" }}>Реаліз.%</th>
+                                            <th>Міжнар.</th>
+                                            <th>Возимо</th>
+                                            <th>Запис розмови</th>
+                                            <th>Коментар</th>
+                                            <th></th>
                                           </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
+                                          <tr>
+                                            <th></th><th></th><th></th><th></th><th></th>
+                                            {grid.weeks.map((w) => (
+                                              <Fragment key={w.label}>
+                                                <th style={{ textAlign: "right", fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>план</th>
+                                                <th style={{ textAlign: "right", fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>факт</th>
+                                              </Fragment>
+                                            ))}
+                                            <th></th><th></th><th></th><th></th><th></th><th></th><th></th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {m.clients.map((c) => (
+                                            <ClientPlanRow
+                                              key={c.clientKey}
+                                              client={c}
+                                              month={grid.month}
+                                              managerId={m.managerId}
+                                              weekPlan={decomp(c.plan, c.fact).perWeek}
+                                              onSaved={() => setReload((n) => n + 1)}
+                                            />
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
                                   </td>
                                 </tr>
                               )}

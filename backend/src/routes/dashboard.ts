@@ -3046,18 +3046,67 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
      ORDER BY a.revenue DESC`
   );
   const isPhoneKey = (k: string) => /^\d{9,}$/.test(k);
-  type RepeatClient = { clientName: string; isCompany: boolean; identifier: string | null; orders: number; revenue: number; lastPaid: string };
+  const clientKeys = clientsRes.rows.map((c) => c.client_key);
+
+  // Per-client month plan + metadata (team-lead editable), and auto fact:
+  //  weekFact = «Успішно» (142) closed in that week; monthFact = Σ weekFact +
+  //  «Оплата отримана» снапшот для клієнта (снапшот недатований → лише в місяць).
+  const [plansRes, factRes, snapRes] = await Promise.all([
+    clientKeys.length ? pool.query<{ client_key: string; plan: string; forecast: string | null; realization_pct: string | null; international: boolean | null; we_do: boolean | null; call_link: string | null; comment: string | null }>(
+      `SELECT client_key, plan, forecast, realization_pct, international, we_do, call_link, comment
+         FROM repeat_client_plans WHERE month = $1 AND client_key = ANY($2)`, [planDate, clientKeys]) : { rows: [] as never[] },
+    clientKeys.length ? pool.query<{ client_key: string; cday: number; s: string }>(
+      `SELECT d.client_key, EXTRACT(DAY FROM (d.closed_at_kommo ${KYIV}))::int AS cday, COALESCE(SUM(d.price),0) AS s
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage='paid' AND d.status_id=142 AND d.closed_at_kommo IS NOT NULL
+          AND (d.closed_at_kommo ${KYIV})::date BETWEEN $1 AND $2 AND d.client_key = ANY($3)
+        GROUP BY d.client_key, cday`, [planDate, monthEnd, clientKeys]) : { rows: [] as never[] },
+    clientKeys.length ? pool.query<{ client_key: string; s: string }>(
+      `SELECT d.client_key, COALESCE(SUM(d.price),0) AS s FROM deals d
+        WHERE d.status_id IN (69716460,60412544) AND d.client_key = ANY($1)
+        GROUP BY d.client_key`, [clientKeys]) : { rows: [] as never[] },
+  ]);
+  const planByKey = new Map(plansRes.rows.map((p) => [p.client_key, p]));
+  const snapByKey = new Map(snapRes.rows.map((x) => [x.client_key, Number(x.s)]));
+  const weekIdxOfDay = (day: number) => { for (let i = 0; i < weeks.length; i++) if (day >= weeks[i].from && day <= weeks[i].to) return i; return weeks.length - 1; };
+  const weekFactByKey = new Map<string, number[]>();
+  for (const f of factRes.rows) {
+    const arr = weekFactByKey.get(f.client_key) ?? weeks.map(() => 0);
+    arr[weekIdxOfDay(Number(f.cday))] += Number(f.s);
+    weekFactByKey.set(f.client_key, arr);
+  }
+
+  type RepeatClient = {
+    clientKey: string; clientName: string; isCompany: boolean; identifier: string | null;
+    orders: number; revenue: number; lastPaid: string;
+    plan: number; fact: number; weekFact: number[];
+    forecast: string | null; realizationPct: number | null; international: boolean | null;
+    weDo: boolean | null; callLink: string | null; comment: string | null;
+  };
   const clientsByMgr = new Map<number, RepeatClient[]>();
   for (const c of clientsRes.rows) {
     const individual = isPhoneKey(c.client_key);
+    const weekFact = weekFactByKey.get(c.client_key) ?? weeks.map(() => 0);
+    const p = planByKey.get(c.client_key);
     const list = clientsByMgr.get(c.manager_id) ?? [];
     list.push({
+      clientKey: c.client_key,
       clientName: c.name,
       isCompany: !individual,
       identifier: individual ? c.client_key : null,
       orders: Number(c.orders),
       revenue: Number(c.revenue),
       lastPaid: c.last_paid,
+      plan: p ? Number(p.plan) : 0,
+      fact: weekFact.reduce((s, v) => s + v, 0) + (snapByKey.get(c.client_key) ?? 0),
+      weekFact,
+      forecast: p?.forecast ?? null,
+      realizationPct: p?.realization_pct != null ? Number(p.realization_pct) : null,
+      international: p?.international ?? null,
+      weDo: p?.we_do ?? null,
+      callLink: p?.call_link ?? null,
+      comment: p?.comment ?? null,
     });
     clientsByMgr.set(c.manager_id, list);
   }
@@ -3083,6 +3132,40 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
     teams: Array.from(teamsMap.values()),
     totalPlan, totalFact,
   });
+});
+
+/**
+ * Save a per-client repeat-plan row (monthly plan + metadata from the КВП sheet:
+ * forecast volume, realization %, international y/n, we-do y/n, call link,
+ * comment). Admin/team-lead; a team-lead may edit only their own team's clients.
+ * The frontend sends the FULL row so the upsert never nulls untouched fields.
+ */
+dashboardRouter.post("/repeat-client-plan", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  const b = req.body ?? {};
+  const clientKey = String(b.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const month = ((b.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
+  const managerId = b.managerId != null ? Number(b.managerId) : null;
+  if (auth.role === "team_lead" && managerId != null) {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  }
+  const num = (v: unknown) => (v === "" || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const bool = (v: unknown) => (typeof v === "boolean" ? v : null);
+  const str = (v: unknown) => (v == null || String(v).trim() === "" ? null : String(v));
+  await pool.query(
+    `INSERT INTO repeat_client_plans
+       (client_key, month, manager_id, plan, forecast, realization_pct, international, we_do, call_link, comment, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+     ON CONFLICT (client_key, month) DO UPDATE SET
+       manager_id = EXCLUDED.manager_id, plan = EXCLUDED.plan, forecast = EXCLUDED.forecast,
+       realization_pct = EXCLUDED.realization_pct, international = EXCLUDED.international, we_do = EXCLUDED.we_do,
+       call_link = EXCLUDED.call_link, comment = EXCLUDED.comment, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, month, managerId, num(b.plan) ?? 0, str(b.forecast), num(b.realizationPct), bool(b.international), bool(b.weDo), str(b.callLink), str(b.comment), auth.userId]
+  );
+  res.json({ ok: true });
 });
 
 /** Read a manager's monthly funnel plan (for the plan editor). Admin/team-lead

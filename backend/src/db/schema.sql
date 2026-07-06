@@ -220,6 +220,27 @@ CREATE TABLE IF NOT EXISTS receivable_notes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Per-regular-client monthly plan (the team-lead's "план по постійних клієнтах"
+-- replicated from the manual sheet). Plan is a monthly target per client that the
+-- frontend decomposes by week; fact is auto-filled from CRM. The metadata columns
+-- (forecast / realization % / international / call link / comment) are filled by
+-- the team lead. One row per client per month.
+CREATE TABLE IF NOT EXISTS repeat_client_plans (
+  client_key TEXT NOT NULL,
+  month DATE NOT NULL,
+  manager_id INTEGER REFERENCES managers(id),
+  plan NUMERIC NOT NULL DEFAULT 0,
+  forecast TEXT,            -- 'same' | 'down' | 'up'
+  realization_pct NUMERIC,
+  international BOOLEAN,     -- чи є міжнародні перевезення
+  we_do BOOLEAN,            -- чи здійснюємо ми їх
+  call_link TEXT,           -- лінк на запис розмови
+  comment TEXT,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (client_key, month)
+);
+
 -- Monthly snapshot of "carried-over" deals: the value of deals still in
 -- progress (approved→invoiced→payment received, NOT yet closed as Успішна) as
 -- of the 1st of the month. Captured once per month (fixed figure).
