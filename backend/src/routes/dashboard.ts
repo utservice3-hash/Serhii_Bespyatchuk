@@ -2713,16 +2713,54 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
     return { label: `Тиждень ${i + 1}`, from: s, to: end, days: end - s + 1 };
   });
 
-  const teamsMap = new Map<number, { teamId: number; teamName: string; teamPlan: number; managers: { managerId: number; name: string; plan: number }[] }>();
-  let totalPlan = 0;
+  // Per-manager money for the month (teamId is a validated number → safe to inline):
+  //  fact = «Успішно» (142, закрито в місяці) + «Оплата отримана» (снапшот);
+  //  carryover = перенесені з мин. міс. (monthly_carryover_mgr);
+  //  expected = очікувані кошти = снапшот угод з етапу «Виставлено рахунок» (invoiced).
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
+  const teamAnd = teamId != null ? `AND m.team_id = ${teamId}` : "";
+  const [succ, pay, exp, carry] = await Promise.all([
+    pool.query<{ id: string; s: string }>(
+      `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d
+         JOIN managers m ON m.id = d.manager_id AND m.is_active
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage='paid' AND d.status_id=142 AND d.closed_at_kommo IS NOT NULL
+          AND (d.closed_at_kommo ${KYIV})::date BETWEEN $1 AND $2 ${teamAnd}
+        GROUP BY d.manager_id`, [planDate, monthEnd]),
+    pool.query<{ id: string; s: string }>(
+      `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d
+         JOIN managers m ON m.id = d.manager_id AND m.is_active
+        WHERE d.status_id IN (69716460,60412544) ${teamAnd}
+        GROUP BY d.manager_id`),
+    pool.query<{ id: string; s: string }>(
+      `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d
+         JOIN managers m ON m.id = d.manager_id AND m.is_active
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage='invoiced' ${teamAnd}
+        GROUP BY d.manager_id`),
+    pool.query<{ id: string; amount: string }>(
+      `SELECT cm.manager_id AS id, cm.amount FROM monthly_carryover_mgr cm
+         JOIN managers m ON m.id = cm.manager_id
+        WHERE cm.month = $1 ${teamAnd}`, [planDate]),
+  ]);
+  const numMap = (rows: { id: string; s: string }[]) => new Map(rows.map((x) => [Number(x.id), Number(x.s)]));
+  const succM = numMap(succ.rows), payM = numMap(pay.rows), expM = numMap(exp.rows);
+  const carryM = new Map(carry.rows.map((x) => [Number(x.id), Number(x.amount)]));
+
+  const teamsMap = new Map<number, { teamId: number; teamName: string; teamPlan: number; teamFact: number; teamCarryover: number; teamExpected: number; managers: { managerId: number; name: string; plan: number; fact: number; carryover: number; expected: number }[] }>();
+  let totalPlan = 0, totalFact = 0, totalCarryover = 0, totalExpected = 0;
   for (const row of r.rows) {
     const tid = row.team_id ?? 0;
-    if (!teamsMap.has(tid)) teamsMap.set(tid, { teamId: tid, teamName: row.team_name ?? "Без команди", teamPlan: 0, managers: [] });
+    if (!teamsMap.has(tid)) teamsMap.set(tid, { teamId: tid, teamName: row.team_name ?? "Без команди", teamPlan: 0, teamFact: 0, teamCarryover: 0, teamExpected: 0, managers: [] });
     const plan = Number(row.plan);
+    const fact = (succM.get(row.id) ?? 0) + (payM.get(row.id) ?? 0);
+    const carryover = carryM.get(row.id) ?? 0;
+    const expected = expM.get(row.id) ?? 0;
     const t = teamsMap.get(tid)!;
-    t.managers.push({ managerId: row.id, name: row.name, plan });
-    t.teamPlan += plan;
-    totalPlan += plan;
+    t.managers.push({ managerId: row.id, name: row.name, plan, fact, carryover, expected });
+    t.teamPlan += plan; t.teamFact += fact; t.teamCarryover += carryover; t.teamExpected += expected;
+    totalPlan += plan; totalFact += fact; totalCarryover += carryover; totalExpected += expected;
   }
 
   res.json({
@@ -2731,7 +2769,7 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
     workingDays,
     weeks,
     teams: Array.from(teamsMap.values()),
-    totalPlan,
+    totalPlan, totalFact, totalCarryover, totalExpected,
   });
 });
 

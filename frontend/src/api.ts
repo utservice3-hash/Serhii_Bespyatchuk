@@ -209,8 +209,15 @@ export interface PlansGrid {
   daysInMonth: number;
   workingDays: number;
   weeks: { label: string; from: number; to: number; days: number }[];
-  teams: { teamId: number; teamName: string; teamPlan: number; managers: { managerId: number; name: string; plan: number }[] }[];
+  teams: {
+    teamId: number; teamName: string;
+    teamPlan: number; teamFact: number; teamCarryover: number; teamExpected: number;
+    managers: { managerId: number; name: string; plan: number; fact: number; carryover: number; expected: number }[];
+  }[];
   totalPlan: number;
+  totalFact: number;
+  totalCarryover: number;
+  totalExpected: number;
 }
 
 export async function fetchPlansGrid(month: string, teamId?: number): Promise<PlansGrid> {
