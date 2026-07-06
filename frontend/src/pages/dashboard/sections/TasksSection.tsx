@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import {
   updateTask,
   type ManagerOption,
@@ -17,6 +17,35 @@ const METRIC_LBL: Record<string, string> = {
   payment_amount: "Сума",
 };
 const METRIC_UNIT: Record<string, string> = { avg_check: "₴", payment_amount: "₴", conversion: "%" };
+
+/** Textarea that grows to fit its full content — never clips, no matter how
+ *  narrow the column. onLocal updates the row live; onCommit persists on blur. */
+function AutoTextarea({ value, onLocal, onCommit, style, placeholder }: {
+  value: string;
+  onLocal: (v: string) => void;
+  onCommit: (v: string) => void;
+  style?: CSSProperties;
+  placeholder?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onLocal(e.target.value)}
+      onBlur={(e) => onCommit(e.target.value)}
+      rows={1}
+      style={{ border: "none", width: "100%", resize: "none", font: "inherit", background: "transparent", lineHeight: 1.4, overflow: "hidden", ...style }}
+    />
+  );
+}
 
 export function TasksSection({
   taskSearch,
@@ -55,6 +84,7 @@ export function TasksSection({
   const [adminTab, setAdminTab] = useState<"mine" | "all">("mine");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
+  const [sortBy, setSortBy] = useState<"created" | "deadline" | "priority" | "status" | "assignee" | "title">("created");
   const [openTaskId, setOpenTaskId] = useState<number | null>(null);
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
 
@@ -85,6 +115,14 @@ export function TasksSection({
               {managerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           )}
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)} title="Сортування">
+            <option value="created">↕ За створенням</option>
+            <option value="deadline">↕ За дедлайном</option>
+            <option value="priority">↕ За пріоритетом</option>
+            <option value="status">↕ За статусом</option>
+            <option value="assignee">↕ За виконавцем</option>
+            <option value="title">↕ За назвою</option>
+          </select>
           <button
             className="btn-primary"
             onClick={() => {
@@ -110,12 +148,12 @@ export function TasksSection({
         <div className="chart-card">
           <table className="data-table tasks-table">
             <colgroup>
-              <col style={{ width: "30%" }} />
-              <col style={{ width: "14%" }} />
-              <col style={{ width: "11%" }} />
-              <col style={{ width: "13%" }} />
+              <col style={{ width: "26%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "12%" }} />
               <col style={{ width: "9%" }} />
-              <col style={{ width: "11%" }} />
+              <col style={{ width: "19%" }} />
               <col style={{ width: "9%" }} />
               <col style={{ width: "3%" }} />
             </colgroup>
@@ -144,12 +182,26 @@ export function TasksSection({
                 if (assigneeFilter !== "") base = base.filter((t) => t.assigneeId === assigneeFilter);
                 if (statusFilter === "active") base = base.filter((t) => t.status !== "done");
                 else if (statusFilter === "done") base = base.filter((t) => t.status === "done");
-                const visible = q
+                const filtered = q
                   ? base.filter((t) =>
                       [t.title, t.comments, t.department, t.assigneeName]
                         .some((v) => (v ?? "").toLowerCase().includes(q))
                     )
                   : base;
+                const prioRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
+                const visible = [...filtered].sort((a, b) => {
+                  // Done tasks always sink to the bottom.
+                  const ad = a.status === "done" ? 1 : 0, bd = b.status === "done" ? 1 : 0;
+                  if (ad !== bd) return ad - bd;
+                  switch (sortBy) {
+                    case "deadline": return (a.deadline ?? "9999-99-99").localeCompare(b.deadline ?? "9999-99-99");
+                    case "priority": return (prioRank[a.priority] ?? 9) - (prioRank[b.priority] ?? 9);
+                    case "status": return a.status.localeCompare(b.status);
+                    case "assignee": return (a.assigneeName ?? "").localeCompare(b.assigneeName ?? "", "uk");
+                    case "title": return (a.title ?? "").localeCompare(b.title ?? "", "uk");
+                    default: return (b.createdAt ?? "").localeCompare(a.createdAt ?? ""); // newest first
+                  }
+                });
                 if (visible.length === 0) {
                   return (
                     <tr>
@@ -168,20 +220,10 @@ export function TasksSection({
                           title="Відкрити картку задачі"
                           style={{ flexShrink: 0, background: "none", border: "none", cursor: "pointer", fontSize: 15, lineHeight: 1.4, padding: 0, opacity: 0.6 }}
                         >📄</button>
-                        <textarea
+                        <AutoTextarea
                           value={task.title}
-                          onChange={(e) => patchTaskLocal(task.id, { title: e.target.value })}
-                          onBlur={(e) => updateTask(task.id, { title: e.target.value })}
-                          rows={Math.max(1, Math.ceil((task.title?.length ?? 0) / 40))}
-                          style={{
-                            border: "none",
-                            width: "100%",
-                            resize: "vertical",
-                            font: "inherit",
-                            background: "transparent",
-                            lineHeight: 1.4,
-                            overflow: "hidden",
-                          }}
+                          onLocal={(v) => patchTaskLocal(task.id, { title: v })}
+                          onCommit={(v) => updateTask(task.id, { title: v })}
                         />
                       </div>
                       {task.metricsJson && task.metricsJson.length > 0 && (
@@ -277,13 +319,11 @@ export function TasksSection({
                       </select>
                     </td>
                     <td style={{ verticalAlign: "top" }}>
-                      <textarea
+                      <AutoTextarea
                         value={task.comments ?? ""}
                         placeholder="—"
-                        onChange={(e) => patchTaskLocal(task.id, { comments: e.target.value })}
-                        onBlur={(e) => updateTask(task.id, { comments: e.target.value })}
-                        rows={Math.max(1, Math.ceil((task.comments?.length ?? 0) / 28))}
-                        style={{ border: "none", width: "100%", resize: "vertical", font: "inherit", background: "transparent", lineHeight: 1.4, overflow: "hidden" }}
+                        onLocal={(v) => patchTaskLocal(task.id, { comments: v })}
+                        onCommit={(v) => updateTask(task.id, { comments: v })}
                       />
                     </td>
                     <td>
