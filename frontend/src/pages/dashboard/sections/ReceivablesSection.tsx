@@ -1,7 +1,7 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction, Fragment } from "react";
 import type { AuthPayload } from "../../../auth";
-import { saveReceivableNote, type ReceivableManager, type Team } from "../../../api";
-import { formatAmount } from "../format";
+import { saveReceivableNote, fetchReceivableInvoices, type ReceivableInvoice, type ReceivableManager, type Team } from "../../../api";
+import { formatAmount, formatAmountFull } from "../format";
 
 export function ReceivablesSection({
   auth,
@@ -24,6 +24,54 @@ export function ReceivablesSection({
   canEditReceivables: boolean;
   patchReceivableNote: (clientKey: string, patch: { comment?: string; dueDate?: string | null }) => void;
 }) {
+  // Lazy per-client invoice drill-down ("выгрузка" detail behind the balance).
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [invCache, setInvCache] = useState<Record<string, ReceivableInvoice[] | "loading">>({});
+  const toggleClient = (clientKey: string) => {
+    setOpenKey((cur) => (cur === clientKey ? null : clientKey));
+    if (invCache[clientKey] === undefined) {
+      setInvCache((c) => ({ ...c, [clientKey]: "loading" }));
+      fetchReceivableInvoices(clientKey)
+        .then((inv) => setInvCache((c) => ({ ...c, [clientKey]: inv })))
+        .catch(() => setInvCache((c) => ({ ...c, [clientKey]: [] })));
+    }
+  };
+  const renderInvoices = (clientKey: string, colSpan: number) => {
+    if (openKey !== clientKey) return null;
+    const inv = invCache[clientKey];
+    return (
+      <tr>
+        <td colSpan={colSpan} style={{ background: "var(--bg-subtle, rgba(127,127,127,0.05))", padding: "8px 12px 12px 24px" }}>
+          {inv === "loading" || inv === undefined ? (
+            <span className="loading-text">Завантаження рахунків…</span>
+          ) : inv.length === 0 ? (
+            <span className="loading-text">Деталізації рахунків немає.</span>
+          ) : (
+            <table className="data-table compact" style={{ fontSize: 12, minWidth: 480 }}>
+              <thead>
+                <tr><th style={{ textAlign: "left" }}>Рахунок №</th><th>Дата</th><th style={{ textAlign: "right" }}>Сума</th><th>Сервіс</th></tr>
+              </thead>
+              <tbody>
+                {inv.map((x, i) => (
+                  <tr key={i}>
+                    <td style={{ textAlign: "left" }}>{x.invoiceNo ?? "—"}</td>
+                    <td>{x.invoiceDate ? new Date(x.invoiceDate).toLocaleDateString("uk-UA") : "—"}</td>
+                    <td style={{ textAlign: "right", fontWeight: 600 }} title={formatAmountFull(x.amount)}>{formatAmount(x.amount)}</td>
+                    <td>{x.serviceUrl ? <a href={x.serviceUrl} target="_blank" rel="noreferrer">🔗 рахунок</a> : "—"}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Разом: {inv.length} рах.</td><td></td>
+                  <td style={{ textAlign: "right", fontWeight: 700 }}>{formatAmount(inv.reduce((s, x) => s + x.amount, 0))}</td><td></td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </td>
+      </tr>
+    );
+  };
+  const caret = (clientKey: string) => (openKey === clientKey ? "▾ " : "▸ ");
   return (
     <>
       <div className="page-header">
@@ -78,9 +126,15 @@ export function ReceivablesSection({
                     {all.map((c, i) => {
                       const over = c.overdueDays != null && c.limitDays != null && c.overdueDays > c.limitDays;
                       return (
-                        <tr key={`${c.clientKey}-${i}`}>
+                        <Fragment key={`${c.clientKey}-${i}`}>
+                        <tr>
                           <td>{i + 1}</td>
-                          <td>{c.clientName}</td>
+                          <td>
+                            <button onClick={() => toggleClient(c.clientKey)} title="Показати неоплачені рахунки"
+                              style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", padding: 0, textAlign: "left" }}>
+                              {caret(c.clientKey)}{c.clientName}
+                            </button>
+                          </td>
                           <td style={{ color: "var(--text-muted)" }}>{c.managerName}</td>
                           <td style={{ fontWeight: 600 }}>{formatAmount(c.amount)}</td>
                           <td style={over ? { color: "#dc2626", fontWeight: 700 } : undefined}>{c.overdueDays ?? "—"}</td>
@@ -88,6 +142,8 @@ export function ReceivablesSection({
                           <td>{c.dueDate ?? "—"}</td>
                           <td>{c.comment ?? "—"}</td>
                         </tr>
+                        {renderInvoices(c.clientKey, 8)}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -119,8 +175,14 @@ export function ReceivablesSection({
                 </thead>
                 <tbody>
                   {m.clients.map((c) => (
-                    <tr key={c.clientKey}>
-                      <td>{c.clientName}</td>
+                    <Fragment key={c.clientKey}>
+                    <tr>
+                      <td>
+                        <button onClick={() => toggleClient(c.clientKey)} title="Показати неоплачені рахунки"
+                          style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", padding: 0, textAlign: "left" }}>
+                          {caret(c.clientKey)}{c.clientName}
+                        </button>
+                      </td>
                       <td>{formatAmount(c.amount)}</td>
                       <td>{c.limitDays ?? "—"}</td>
                       <td
@@ -159,6 +221,8 @@ export function ReceivablesSection({
                         )}
                       </td>
                     </tr>
+                    {renderInvoices(c.clientKey, 6)}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

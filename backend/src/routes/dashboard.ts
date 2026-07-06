@@ -1712,6 +1712,41 @@ dashboardRouter.get("/receivables", async (req, res) => {
   res.json({ syncedAt, managers: Array.from(byManager.values()) });
 });
 
+/**
+ * Per-invoice breakdown behind a client's receivable balance (the "выгрузка"
+ * detail): every unpaid invoice with its number, date, amount and service link.
+ * Role-scoped like /receivables — a manager only sees their own clients.
+ */
+dashboardRouter.get("/receivables/invoices", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+
+  const conds = ["ri.client_key = $1"];
+  const params: unknown[] = [clientKey];
+  if (auth.role === "manager") { params.push(auth.managerId); conds.push(`ri.manager_id = $${params.length}`); }
+  else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
+
+  const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null }>(
+    `SELECT ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
+            ri.amount, ri.service_url, ri.note
+     FROM receivable_invoices ri
+     LEFT JOIN managers m ON m.id = ri.manager_id
+     WHERE ${conds.join(" AND ")}
+     ORDER BY ri.invoice_date DESC NULLS LAST, ri.amount DESC`,
+    params
+  );
+  res.json({
+    invoices: r.rows.map((x) => ({
+      invoiceNo: x.invoice_no,
+      invoiceDate: x.invoice_date,
+      amount: Number(x.amount),
+      serviceUrl: x.service_url,
+      note: x.note,
+    })),
+  });
+});
+
 // Team ranking: per-team revenue (success+payment), deals, avg check,
 // conversion and receivables for the selected period.
 dashboardRouter.get("/teams", async (req, res) => {

@@ -220,6 +220,24 @@ CREATE TABLE IF NOT EXISTS receivable_notes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Per-invoice detail behind each client's receivable balance (the "выгрузка"
+-- tab of the debt sheet). Refreshed wholesale each sync like `receivables`.
+CREATE TABLE IF NOT EXISTS receivable_invoices (
+  id SERIAL PRIMARY KEY,
+  client_key TEXT NOT NULL,
+  client_name TEXT NOT NULL,
+  manager_id INTEGER REFERENCES managers(id),
+  manager_name_raw TEXT,
+  invoice_no TEXT,
+  invoice_date DATE,
+  amount NUMERIC NOT NULL DEFAULT 0,
+  edrpou TEXT,
+  service_url TEXT,
+  note TEXT,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_receivable_invoices_client ON receivable_invoices(client_key);
+
 -- Per-regular-client monthly plan (the team-lead's "план по постійних клієнтах"
 -- replicated from the manual sheet). Plan is a monthly target per client that the
 -- frontend decomposes by week; fact is auto-filled from CRM. The metadata columns

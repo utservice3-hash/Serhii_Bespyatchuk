@@ -8,6 +8,21 @@ interface ReceivableRow {
   clientName: string;
   managerNameRaw: string;
   amount: number;
+  invoiceNo: string | null;
+  invoiceDate: string | null; // ISO YYYY-MM-DD
+  edrpou: string | null;
+  serviceUrl: string | null;
+  note: string | null;
+}
+
+/** Extracts the invoice number and date from the "Счет" cell, e.g.
+ *  "Счет на оплату покупателю 000005176 від 06.07.2026 14:54:08". */
+function parseInvoice(cell: string | undefined): { no: string | null; date: string | null } {
+  if (!cell) return { no: null, date: null };
+  const noMatch = cell.match(/(\d{5,})/);
+  const dateMatch = cell.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+  const date = dateMatch ? `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}` : null;
+  return { no: noMatch ? noMatch[1] : null, date };
 }
 
 /**
@@ -28,7 +43,14 @@ function parseRow(cells: string[]): ReceivableRow | null {
   const clientKey = normalizeClientName(rawClientName);
   if (!clientKey) return null;
 
-  return { clientKey, clientName: rawClientName, managerNameRaw, amount };
+  const inv = parseInvoice(cells[1]?.trim());
+  return {
+    clientKey, clientName: rawClientName, managerNameRaw, amount,
+    invoiceNo: inv.no, invoiceDate: inv.date,
+    edrpou: cells[4]?.trim() || null,
+    serviceUrl: cells[5]?.trim() || null,
+    note: cells[7]?.trim() || null,
+  };
 }
 
 interface ClientLimit {
@@ -122,6 +144,17 @@ export async function syncReceivables(): Promise<void> {
   try {
     await client.query("BEGIN");
     await client.query("TRUNCATE receivables");
+    await client.query("TRUNCATE receivable_invoices");
+    // Per-invoice detail rows (the "выгрузка" breakdown behind each balance).
+    for (const row of rows) {
+      const managerId = managerIdByName.get(row.managerNameRaw) ?? null;
+      await client.query(
+        `INSERT INTO receivable_invoices
+           (client_key, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [row.clientKey, row.clientName, managerId, row.managerNameRaw, row.invoiceNo, row.invoiceDate, row.amount, row.edrpou, row.serviceUrl, row.note]
+      );
+    }
     for (const [key, entry] of totalsByKey) {
       const clientKey = key.split("::")[0];
       const limit = limitsByKey.get(clientKey);

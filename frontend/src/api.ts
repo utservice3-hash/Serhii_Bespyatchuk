@@ -541,6 +541,19 @@ export async function saveReceivableNote(payload: {
   await api.put("/dashboard/receivables/note", payload);
 }
 
+export interface ReceivableInvoice {
+  invoiceNo: string | null;
+  invoiceDate: string | null;
+  amount: number;
+  serviceUrl: string | null;
+  note: string | null;
+}
+
+export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoice[]> {
+  const { data } = await api.get<{ invoices: ReceivableInvoice[] }>("/dashboard/receivables/invoices", { params: { clientKey } });
+  return data.invoices;
+}
+
 export interface ReceivableManager {
   managerId: number;
   managerName: string;
