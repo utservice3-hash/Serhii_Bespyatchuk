@@ -1786,6 +1786,7 @@ export function Dashboard() {
           role={auth?.role}
           currentUserId={auth?.userId}
           currentManagerId={auth?.managerId}
+          teams={teams}
         />
       )}
     </Layout>

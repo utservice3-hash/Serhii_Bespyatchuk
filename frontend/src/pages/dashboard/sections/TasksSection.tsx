@@ -5,6 +5,7 @@ import {
   type Task,
   type TaskPriority,
   type TaskStatus,
+  type Team,
 } from "../../../api";
 import { STATUS_DOT_COLORS, STATUS_GROUPS, STATUS_LABELS, PRIORITY_LABELS } from "../constants";
 import type { TaskForm } from "../taskForm";
@@ -29,10 +30,15 @@ const statusPillStyle = (s: TaskStatus): CSSProperties => ({
   color: "var(--text)", border: "none", borderRadius: 999, padding: "3px 12px",
   fontWeight: 600, fontSize: 12, appearance: "none", WebkitAppearance: "none", cursor: "pointer", maxWidth: "100%",
 });
-const pillInputStyle: CSSProperties = {
-  background: "rgba(244,114,182,0.14)", color: "var(--text)", border: "none", borderRadius: 999,
-  padding: "3px 12px", fontSize: 12, fontWeight: 500, width: "100%",
-};
+// Fixed departments (roles/відділи) — teams from the DB are appended at runtime.
+const DEPARTMENTS = ["Операційний директор", "HR", "Асистент", "Офіс-менеджер", "Комерційний відділ", "Лідогенерація", "Фінанси", "Відділ якості"];
+const DEPT_PALETTE = ["#60a5fa", "#a78bfa", "#f472b6", "#f59e0b", "#34d399", "#22d3ee", "#fb7185", "#818cf8", "#94a3b8"];
+const deptColor = (s: string) => DEPT_PALETTE[[...s].reduce((h, c) => h + c.charCodeAt(0), 0) % DEPT_PALETTE.length];
+const deptPillStyle = (s: string): CSSProperties => ({
+  background: hexA(deptColor(s), 0.16), color: "var(--text)", border: "none", borderRadius: 999,
+  padding: "3px 12px", fontWeight: 500, fontSize: 12, appearance: "none", WebkitAppearance: "none", cursor: "pointer", maxWidth: "100%",
+});
+
 const PRIORITY_COLOR: Record<TaskPriority, string> = { high: "#dc2626", medium: "#eab308", low: "#16a34a" };
 const priorityPillStyle = (p: TaskPriority): CSSProperties => ({
   background: hexA(PRIORITY_COLOR[p] ?? "#94a3b8", 0.16), color: "var(--text)", border: "none",
@@ -86,6 +92,7 @@ export function TasksSection({
   role,
   currentUserId,
   currentManagerId,
+  teams,
 }: {
   taskSearch: string;
   setTaskSearch: Dispatch<SetStateAction<string>>;
@@ -103,8 +110,11 @@ export function TasksSection({
   role?: string;
   currentUserId?: number;
   currentManagerId?: number | null;
+  teams?: Team[];
 }) {
   const isAdmin = role === "admin";
+  // Department dropdown = fixed відділи + all team names, de-duplicated.
+  const deptOptions = Array.from(new Set([...DEPARTMENTS, ...(teams ?? []).map((t) => t.name)]));
   const [adminTab, setAdminTab] = useState<"mine" | "all">("mine");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
@@ -377,13 +387,21 @@ export function TasksSection({
                       />
                     </td>
                     <td>
-                      <input
+                      <select
                         value={task.department ?? ""}
-                        placeholder="—"
-                        onChange={(e) => patchTaskLocal(task.id, { department: e.target.value })}
-                        onBlur={(e) => updateTask(task.id, { department: e.target.value })}
-                        style={task.department ? pillInputStyle : { border: "none", width: "100%", background: "transparent", color: "var(--text)" }}
-                      />
+                        onChange={(e) => {
+                          const department = e.target.value || null;
+                          patchTaskLocal(task.id, { department });
+                          updateTask(task.id, { department });
+                        }}
+                        style={task.department ? deptPillStyle(task.department) : { border: "none", background: "transparent", color: "var(--text-muted)", cursor: "pointer", maxWidth: "100%" }}
+                      >
+                        <option value="">—</option>
+                        {task.department && !deptOptions.includes(task.department) && (
+                          <option value={task.department}>{task.department}</option>
+                        )}
+                        {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
                     </td>
                     <td>
                       <button
@@ -445,7 +463,13 @@ export function TasksSection({
                     <input type="date" value={openTask.deadline ?? ""} onChange={(e) => { const deadline = e.target.value || null; patchTaskLocal(openTask.id, { deadline }); updateTask(openTask.id, { deadline }); }} />
                   </F>
                   <F icon="🏷️" label="Департамент">
-                    <input value={openTask.department ?? ""} placeholder="—" onChange={(e) => patchTaskLocal(openTask.id, { department: e.target.value })} onBlur={(e) => updateTask(openTask.id, { department: e.target.value })} style={{ width: "100%", border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", background: "var(--card-bg)", color: "var(--text)" }} />
+                    <select value={openTask.department ?? ""} onChange={(e) => { const department = e.target.value || null; patchTaskLocal(openTask.id, { department }); updateTask(openTask.id, { department }); }} style={{ width: "100%" }}>
+                      <option value="">—</option>
+                      {openTask.department && !deptOptions.includes(openTask.department) && (
+                        <option value={openTask.department}>{openTask.department}</option>
+                      )}
+                      {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
                   </F>
                   <F icon="⚑" label="Пріоритет">
                     <select value={openTask.priority} onChange={(e) => { const priority = e.target.value as TaskPriority; patchTaskLocal(openTask.id, { priority }); updateTask(openTask.id, { priority }); }} style={{ width: "100%" }}>
@@ -687,11 +711,16 @@ export function TasksSection({
                 {taskForm.taskType === "simple" && (
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                     Департамент
-                    <input
+                    <select
                       value={taskForm.department}
                       onChange={(e) => setTaskForm((f) => ({ ...f, department: e.target.value }))}
-                      placeholder="напр. Продзвін"
-                    />
+                    >
+                      <option value="">—</option>
+                      {taskForm.department && !deptOptions.includes(taskForm.department) && (
+                        <option value={taskForm.department}>{taskForm.department}</option>
+                      )}
+                      {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
                   </label>
                 )}
               </div>
