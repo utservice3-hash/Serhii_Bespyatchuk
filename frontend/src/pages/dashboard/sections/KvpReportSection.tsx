@@ -1,6 +1,32 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchOverview, fetchLeadQuality, type ExecutiveOverview, type LeadQuality } from "../../../api";
-import { formatAmount } from "../format";
+import { formatAmount, previousRange } from "../format";
+import { InfoHint } from "../widgets";
+
+/** Пояснення джерела даних кожного показника (звідки береться з CRM). */
+const METRIC_HINTS: Record<string, string> = {
+  received: "«Успішно реалізовано» (статус 142, за датою закриття в періоді) + «Оплата отримана» (статуси 69716460/60412544, знімок поточного етапу).",
+  success: "Угоди в статусі «Успішна угода» (142), за датою закриття угоди в періоді.",
+  payment: "Угоди, що ЗАРАЗ на етапі «Оплата отримана» (знімок, без фільтра дати).",
+  avg: "Отримані кошти ÷ кількість угод.",
+  repeatRev: "Отримані кошти від постійних клієнтів (2+ оплачені перевезення lifetime).",
+  newRev: "Отримані кошти від нових клієнтів (перша оплата за всю історію в періоді).",
+  carryover: "Знімок угод, ще в роботі на 1-ше число місяця (рахунок→оплата, крім «Успішна»).",
+  created: "Створені угоди повного циклу (пайплайни 8921932 + 155304) за датою створення в періоді.",
+  newClients: "Клієнти, чия перша оплата за всю історію припала на період.",
+  repeatClients: "Клієнти з 2+ оплаченими перевезеннями lifetime, що замовляли в періоді.",
+  receivables: "Сума неоплаченої дебіторки з Google-таблиці (оновлюється кожні 30 хв).",
+  adBudget: "Витрати на рекламу з Google-таблиці (сума денних Cost за період).",
+  adGaLeads: "Заявки з Google Ads (конверсії) з тієї ж таблиці.",
+  adLeads: "Ліди з реклами (google-utm) в CRM за період.",
+  adPaid: "Скільки рекламних лідів дійшли до оплаченої угоди повного циклу.",
+  adConv: "Оплачено з реклами ÷ ліди з реклами × 100%.",
+  target: "Цільові = пайплайн повного циклу 8921932, створені в періоді.",
+  nonTarget: "Не цільові = Кваліфікація 8921928, статус 143 (відмова), створені в періоді.",
+  transferred: "Заявки, які лідоген передав менеджеру (зміна відповідального в «Кваліфікації»).",
+  transferSuccess: "З переданих заявок — скільки закрито як «Успішна угода» в періоді.",
+  leadgenConv: "Передані заявки, чий клієнт дійшов до оплаченої угоди ÷ усі передані × 100%.",
+};
 
 type Range = { from: string; to: string; label?: string };
 type Unit = "money" | "num" | "pct";
@@ -115,9 +141,9 @@ function ComparisonTable({ prev, cur, prevRange, curRange, isMonth }: { prev: Bl
             <th style={{ textAlign: "left" }}>Показник</th>
             <th style={{ textAlign: "right" }}>{dmy(prevRange.from)}–{dmy(prevRange.to)}</th>
             <th style={{ textAlign: "right" }}>{dmy(curRange.from)}–{dmy(curRange.to)}</th>
-            <th style={{ textAlign: "right" }}>Динаміка*</th>
+            <th style={{ textAlign: "right" }}>Динаміка*<InfoHint text="(поточний − попередній) ÷ попередній × 100%. ↑ зелений — ріст, ↓ червоний — падіння до попереднього рівного періоду." /></th>
             <th style={{ textAlign: "right" }}>План</th>
-            <th style={{ textAlign: "right" }}>Викон.</th>
+            <th style={{ textAlign: "right" }}>Викон.<InfoHint text="Факт ÷ план × 100%. План є лише для «Отриманих коштів» і «Рекламного бюджету»; для решти — «—»." /></th>
           </tr>
         </thead>
         <tbody>
@@ -133,7 +159,7 @@ function ComparisonTable({ prev, cur, prevRange, curRange, isMonth }: { prev: Bl
                 const pctColor = pct == null ? "var(--text-muted)" : pct >= 100 ? "#16a34a" : pct >= 70 ? "#d97706" : "#dc2626";
                 return (
                   <tr key={mt.key}>
-                    <td style={{ textAlign: "left" }}>{mt.label}</td>
+                    <td style={{ textAlign: "left" }}>{mt.label}{METRIC_HINTS[mt.key] && <InfoHint text={METRIC_HINTS[mt.key]} />}</td>
                     <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{fmtVal(pv, mt.unit)}</td>
                     <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtVal(cv, mt.unit)}</td>
                     <td style={{ textAlign: "right" }}><Delta prev={pv} cur={cv} /></td>
@@ -282,6 +308,13 @@ const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${S
 
 export function KvpReportSection() {
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("kvpMonth") || curMonthStr());
+  // Довільний період (календар). Активний, коли обидві дати заповнені —
+  // тоді звіт рахується за ним (vs попередній рівний період), інакше — місяць.
+  const [range, setRange] = useState<{ from: string; to: string }>(() => {
+    try { const v = JSON.parse(localStorage.getItem("kvpRange") || "null"); return v && v.from && v.to ? v : { from: "", to: "" }; } catch { return { from: "", to: "" }; }
+  });
+  const rangeMode = !!(range.from && range.to);
+  const rangePrev = rangeMode ? previousRange(range.from, range.to) : null;
 
   const setup = useMemo(() => {
     const [selY, selM] = monthSel.split("-").map(Number);
@@ -312,6 +345,7 @@ export function KvpReportSection() {
   const [data, setData] = useState<{
     monthPrev: Block; monthCur: Block; selWeeks: Block[]; curWeek: Block | null; analogWeek: Block | null;
   } | null>(null);
+  const [rangeData, setRangeData] = useState<{ cur: Block; prev: Block } | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const loadBlock = async (r: Range): Promise<Block> => {
@@ -319,7 +353,23 @@ export function KvpReportSection() {
     return { ov, lq };
   };
 
+  // Custom-range mode: chosen dates vs previous equal-length period.
   useEffect(() => {
+    if (!rangeMode || !rangePrev) return;
+    let alive = true;
+    setRangeData(null);
+    setErr(null);
+    (async () => {
+      try {
+        const [cur, prev] = await Promise.all([loadBlock(range), loadBlock(rangePrev)]);
+        if (alive) setRangeData({ cur, prev });
+      } catch { if (alive) setErr("Не вдалося завантажити звіт."); }
+    })();
+    return () => { alive = false; };
+  }, [rangeMode, range.from, range.to]);
+
+  useEffect(() => {
+    if (rangeMode) return;
     let alive = true;
     setData(null);
     setErr(null);
@@ -344,7 +394,9 @@ export function KvpReportSection() {
       }
     })();
     return () => { alive = false; };
-  }, [setup]);
+  }, [setup, rangeMode]);
+
+  const setRangeP = (r: { from: string; to: string }) => { setRange(r); localStorage.setItem("kvpRange", JSON.stringify(r)); };
 
   const shiftMonth = (delta: number) => {
     const [y, m] = monthSel.split("-").map(Number);
@@ -371,17 +423,40 @@ export function KvpReportSection() {
             style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
           <button onClick={() => shiftMonth(1)} disabled={monthSel >= curMonthStr()} title="Наступний місяць"
             style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: monthSel >= curMonthStr() ? "default" : "pointer", opacity: monthSel >= curMonthStr() ? 0.5 : 1 }}>→</button>
+          <span style={{ color: "var(--text-muted)", margin: "0 2px" }}>або період:</span>
+          <input type="date" value={range.from} max={range.to || undefined} onChange={(e) => setRangeP({ ...range, from: e.target.value })}
+            style={{ padding: "6px 8px", borderRadius: 8, border: `1px solid ${rangeMode ? "#c5141c" : "var(--border)"}`, background: "var(--card-bg)", color: "var(--text)" }} />
+          <span style={{ color: "var(--text-muted)" }}>—</span>
+          <input type="date" value={range.to} min={range.from || undefined} max={ymd(new Date())} onChange={(e) => setRangeP({ ...range, to: e.target.value })}
+            style={{ padding: "6px 8px", borderRadius: 8, border: `1px solid ${rangeMode ? "#c5141c" : "var(--border)"}`, background: "var(--card-bg)", color: "var(--text)" }} />
+          {(range.from || range.to) && (
+            <button onClick={() => setRangeP({ from: "", to: "" })} title="Очистити період (повернутись до місяця)"
+              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>✕</button>
+          )}
         </div>
       </div>
-      <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 760 }}>
-        Зведення керівника відділу продажу — автоматично з CRM та Google-таблиці реклами.
-        <b> Динаміка (*)</b> — до аналогічного періоду минулого місяця (місяць→минулий місяць, тиждень→той самий тиждень минулого місяця).
+      <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 820 }}>
+        Зведення керівника відділу продажу — автоматично з CRM та Google-таблиці реклами. Оберіть <b>місяць</b> або задайте <b>довільний період</b> у календарі.
+        <br /><b>Динаміка (*)</b> = наскільки поточний період більший/менший за попередній: <code>(поточний − попередній) ÷ попередній × 100%</code>.
+        Для місяця порівняння — до <b>минулого місяця</b>; для довільного періоду — до <b>попереднього рівного за довжиною</b> (напр. 01–06.07 → 25–30.06).
+        Колонка <b>«Викон.»</b> = факт ÷ план × 100%.
       </p>
 
       {err && <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>}
-      {!data && !err && <p className="loading-text">Завантаження…</p>}
 
-      {data && (
+      {rangeMode && !rangeData && !err && <p className="loading-text">Завантаження…</p>}
+      {rangeMode && rangeData && rangePrev && (
+        <div className="chart-card" style={{ marginBottom: 16 }}>
+          <h2 className="chart-title">📆 {dmy(range.from)}–{dmy(range.to)} (vs {dmy(rangePrev.from)}–{dmy(rangePrev.to)})</h2>
+          <ComparisonTable prev={rangeData.prev} cur={rangeData.cur} prevRange={rangePrev} curRange={range} isMonth={false} />
+          <Decomposition b={rangeData.cur} periodPlan />
+          <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "16px 0 4px" }}>По командах</h3>
+          <TeamTable prev={rangeData.prev.ov} cur={rangeData.cur.ov} />
+        </div>
+      )}
+
+      {!rangeMode && !data && !err && <p className="loading-text">Завантаження…</p>}
+      {!rangeMode && data && (
         <>
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">📅 {setup.monthLabel} (vs попередній місяць)</h2>
