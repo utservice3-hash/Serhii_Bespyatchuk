@@ -42,10 +42,15 @@ tasksRouter.get("/", async (req, res) => {
     params.push(auth.managerId);
     conditions.push(`t.assignee_id = $${params.length}`);
   } else if (auth.role === "team_lead") {
+    // Team-lead sees their own team's tasks + anything they created themselves.
+    // NOT the admin's personal tasks (those have no assignee — the old
+    // `assignee_id IS NULL` clause leaked them into every team-lead's view).
     params.push(auth.teamId);
-    conditions.push(`(m.team_id = $${params.length} OR t.assignee_id IS NULL)`);
+    const teamP = params.length;
+    params.push(auth.userId);
+    conditions.push(`(m.team_id = $${teamP} OR t.created_by = $${params.length})`);
   }
-  // admin sees everything.
+  // admin sees everything (frontend splits into «Мої» / «Усі» tabs).
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -56,6 +61,7 @@ tasksRouter.get("/", async (req, res) => {
             t.actual_value AS "actualValue", t.plan_date AS "planDate",
             t.period_start AS "periodStart", t.period_end AS "periodEnd",
             t.parent_id AS "parentId", t.auto, u.role AS "createdByRole",
+            t.created_by AS "createdById", m.team_id AS "assigneeTeamId",
             t.created_at AS "createdAt", t.updated_at AS "updatedAt"
      FROM tasks t
      LEFT JOIN managers m ON m.id = t.assignee_id

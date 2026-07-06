@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import {
   updateTask,
   type ManagerOption,
@@ -23,6 +23,8 @@ export function TasksSection({
   patchTaskLocal,
   handleDeleteTask,
   handleSubmitTaskModal,
+  role,
+  currentUserId,
 }: {
   taskSearch: string;
   setTaskSearch: Dispatch<SetStateAction<string>>;
@@ -37,18 +39,41 @@ export function TasksSection({
   patchTaskLocal: (id: number, patch: Partial<Task>) => void;
   handleDeleteTask: (id: number) => void;
   handleSubmitTaskModal: () => void;
+  role?: string;
+  currentUserId?: number;
 }) {
+  const isAdmin = role === "admin";
+  const [adminTab, setAdminTab] = useState<"mine" | "all">("mine");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
+
+  const tabBtn = (active: boolean): React.CSSProperties => ({
+    padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer",
+    background: active ? "#c5141c" : "var(--card-bg)", color: active ? "#fff" : "var(--text)", fontWeight: 600,
+  });
+
   return (
     <>
       <div className="page-header">
         <h1 className="page-title">Задачник</h1>
-        <div className="page-filters">
+        <div className="page-filters" style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <input
             placeholder="🔍 Пошук задач..."
             value={taskSearch}
             onChange={(e) => setTaskSearch(e.target.value)}
-            style={{ width: 240 }}
+            style={{ width: 200 }}
           />
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "active" | "done")}>
+            <option value="all">Усі статуси</option>
+            <option value="active">Активні</option>
+            <option value="done">Виконані</option>
+          </select>
+          {role !== "manager" && (
+            <select value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">Усі виконавці</option>
+              {managerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          )}
           <button
             className="btn-primary"
             onClick={() => {
@@ -60,6 +85,13 @@ export function TasksSection({
           </button>
         </div>
       </div>
+
+      {isAdmin && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <button style={tabBtn(adminTab === "mine")} onClick={() => setAdminTab("mine")}>👤 Мої задачі</button>
+          <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>🗂️ Усі задачі</button>
+        </div>
+      )}
 
       {tasksLoading ? (
         <p className="loading-text">Завантаження...</p>
@@ -91,12 +123,22 @@ export function TasksSection({
             <tbody>
               {(() => {
                 const q = taskSearch.trim().toLowerCase();
+                let base = tasks;
+                // Admin tab: «Мої» = personal tasks (created by me, no assignee); «Усі» = everything.
+                if (isAdmin) {
+                  base = adminTab === "mine"
+                    ? tasks.filter((t) => t.createdById === currentUserId && t.assigneeId == null)
+                    : tasks;
+                }
+                if (assigneeFilter !== "") base = base.filter((t) => t.assigneeId === assigneeFilter);
+                if (statusFilter === "active") base = base.filter((t) => t.status !== "done");
+                else if (statusFilter === "done") base = base.filter((t) => t.status === "done");
                 const visible = q
-                  ? tasks.filter((t) =>
+                  ? base.filter((t) =>
                       [t.title, t.comments, t.department, t.assigneeName]
                         .some((v) => (v ?? "").toLowerCase().includes(q))
                     )
-                  : tasks;
+                  : base;
                 if (visible.length === 0) {
                   return (
                     <tr>

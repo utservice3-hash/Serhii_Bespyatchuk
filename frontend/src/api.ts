@@ -846,6 +846,8 @@ export interface Task {
   parentId: number | null;
   auto: boolean;
   createdByRole?: "admin" | "team_lead" | "manager" | null;
+  createdById?: number | null;
+  assigneeTeamId?: number | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -1782,6 +1782,8 @@ export function Dashboard() {
           patchTaskLocal={patchTaskLocal}
           handleDeleteTask={handleDeleteTask}
           handleSubmitTaskModal={handleSubmitTaskModal}
+          role={auth?.role}
+          currentUserId={auth?.userId}
         />
       )}
     </Layout>
