@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchPlansGrid, savePlan, type PlansGrid, type Team } from "../../../api";
 import { formatAmount } from "../format";
+import { DatePicker } from "../../../components/DatePicker";
 
 const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 
@@ -105,11 +106,10 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
             </select>
           )}
           <button onClick={() => shiftMonth(-1)} title="Попередній місяць"
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>←</button>
-          <input type="month" value={month} onChange={(e) => setMonthP(e.target.value)}
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+            style={{ padding: "6px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>←</button>
+          <DatePicker mode="month" value={month} onChange={(v) => v && setMonthP(v)} minWidth={140} />
           <button onClick={() => shiftMonth(1)} title="Наступний місяць"
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>→</button>
+            style={{ padding: "6px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>→</button>
         </div>
       </div>
       <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 820 }}>

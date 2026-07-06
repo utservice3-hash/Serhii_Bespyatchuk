@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchOverview, fetchLeadQuality, type ExecutiveOverview, type LeadQuality } from "../../../api";
 import { formatAmount, formatAmountFull, previousRange } from "../format";
+import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 
 /** Пояснення джерела даних кожного показника (звідки береться з CRM). */
@@ -419,17 +420,14 @@ export function KvpReportSection() {
         <h1 className="page-title">🏆 Звіт КВП</h1>
         <div className="page-filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button onClick={() => shiftMonth(-1)} title="Попередній місяць"
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>←</button>
-          <input type="month" value={monthSel} max={curMonthStr()} onChange={(e) => pickMonth(e.target.value)}
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+            style={{ padding: "6px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>←</button>
+          <DatePicker mode="month" value={monthSel} onChange={(v) => v && pickMonth(v)} minWidth={150} />
           <button onClick={() => shiftMonth(1)} disabled={monthSel >= curMonthStr()} title="Наступний місяць"
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: monthSel >= curMonthStr() ? "default" : "pointer", opacity: monthSel >= curMonthStr() ? 0.5 : 1 }}>→</button>
+            style={{ padding: "6px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: monthSel >= curMonthStr() ? "default" : "pointer", opacity: monthSel >= curMonthStr() ? 0.5 : 1 }}>→</button>
           <span style={{ color: "var(--text-muted)", margin: "0 2px" }}>або період:</span>
-          <input type="date" value={range.from} max={range.to || undefined} onChange={(e) => setRangeP({ ...range, from: e.target.value })}
-            style={{ padding: "6px 8px", borderRadius: 8, border: `1px solid ${rangeMode ? "#c5141c" : "var(--border)"}`, background: "var(--card-bg)", color: "var(--text)" }} />
+          <DatePicker value={range.from} onChange={(v) => setRangeP({ ...range, from: v })} placeholder="від" minWidth={130} />
           <span style={{ color: "var(--text-muted)" }}>—</span>
-          <input type="date" value={range.to} min={range.from || undefined} max={ymd(new Date())} onChange={(e) => setRangeP({ ...range, to: e.target.value })}
-            style={{ padding: "6px 8px", borderRadius: 8, border: `1px solid ${rangeMode ? "#c5141c" : "var(--border)"}`, background: "var(--card-bg)", color: "var(--text)" }} />
+          <DatePicker value={range.to} onChange={(v) => setRangeP({ ...range, to: v })} placeholder="до" minWidth={130} />
           {(range.from || range.to) && (
             <button onClick={() => setRangeP({ from: "", to: "" })} title="Очистити період (повернутись до місяця)"
               style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>✕</button>
