@@ -13,6 +13,19 @@ import type { AuthPayload } from "../../../auth";
 import { fetchRegularClients, type LoyaltyManager, type LoyaltyDynamics, type RegularClient, type Team } from "../../../api";
 import { formatAmount } from "../format";
 
+/** Badge distinguishing a company regular (🏢, by name) from an individual
+ * (👤, identified by phone) — so the list reads unambiguously and de-duped. */
+function ClientType({ isCompany, identifier }: { isCompany: boolean; identifier: string | null }) {
+  if (isCompany) {
+    return <span style={{ fontSize: 12, color: "var(--text-muted)" }}>🏢 Компанія</span>;
+  }
+  return (
+    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+      👤 Фізособа{identifier ? ` · ${identifier}` : ""}
+    </span>
+  );
+}
+
 export function LoyaltySection({
   auth,
   teams,
@@ -88,13 +101,14 @@ export function LoyaltySection({
             ) : (
               <table className="data-table" style={{ marginTop: 10 }}>
                 <thead>
-                  <tr><th>#</th><th>Клієнт</th><th>Замовлень (рахунків)</th><th>Сума (lifetime)</th><th>Остання оплата</th></tr>
+                  <tr><th>#</th><th>Клієнт</th><th>Тип</th><th>Замовлень (рахунків)</th><th>Сума (lifetime)</th><th>Остання оплата</th></tr>
                 </thead>
                 <tbody>
                   {sortedAll.map((c, i) => (
                     <tr key={i}>
                       <td>{i + 1}</td>
                       <td>{c.clientName}</td>
+                      <td><ClientType isCompany={c.isCompany} identifier={c.identifier} /></td>
                       <td>{c.orders}</td>
                       <td style={{ fontWeight: 600 }}>{formatAmount(c.revenue)}</td>
                       <td>{c.lastPaid ? new Date(c.lastPaid).toLocaleDateString("uk-UA") : "—"}</td>
@@ -199,6 +213,7 @@ export function LoyaltySection({
                         <thead>
                           <tr>
                             <th>Клієнт</th>
+                            <th>Тип</th>
                             <th>За 2 міс.</th>
                             <th>Всього оплат</th>
                             <th>Остання оплата</th>
@@ -208,6 +223,7 @@ export function LoyaltySection({
                           {group.list.slice(0, 100).map((c) => (
                             <tr key={c.clientKey}>
                               <td>{c.clientName}</td>
+                              <td><ClientType isCompany={c.isCompany} identifier={c.identifier} /></td>
                               <td>{c.orders}</td>
                               <td>{c.totalPaid}</td>
                               <td>

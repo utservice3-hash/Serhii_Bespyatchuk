@@ -1419,46 +1419,69 @@ dashboardRouter.get("/loyalty", async (req, res) => {
   // Aggregate every client's paid-order history (per manager) into time
   // windows so we can both flag regulars and segment everyone else for
   // reactivation work.
+  // Each client is counted ONCE and attributed to a single PRIMARY manager (the
+  // one with the most paid orders for that client), so a client handled by two
+  // managers no longer shows as two rows. Windows/totals are per client_key.
   const result = await pool.query<{
     manager_id: number;
     manager_name: string;
     client_key: string;
     client_name: string;
-    p_recent: string; // paid in last 2 months
-    p_prior: string; // paid in prior 2–6 months
+    p_recent: string; // paid in last `recentMonths`
+    p_prior: string; // paid in prior `recentMonths`–`sleepingMonths`
     total_paid: string; // all-time paid orders
     last_paid: string;
   }>(
-    `SELECT d.manager_id,
-            m.name AS manager_name,
-            d.client_key,
-            (array_agg(d.client_name ORDER BY d.created_at_kommo DESC))[1] AS client_name,
-            COUNT(*) FILTER (
-              WHERE d.created_at_kommo >= $1::date - interval '${recentMonths} months'
-                AND d.created_at_kommo < $1::date
-            ) AS p_recent,
-            COUNT(*) FILTER (
-              WHERE d.created_at_kommo >= $1::date - interval '${sleepingMonths} months'
-                AND d.created_at_kommo < $1::date - interval '${recentMonths} months'
-            ) AS p_prior,
-            COUNT(*) AS total_paid,
-            MAX(d.created_at_kommo) AS last_paid
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${where}
-       AND psm.funnel_stage = 'paid'
-     GROUP BY d.manager_id, m.name, d.client_key`,
+    `WITH scoped AS (
+       SELECT d.client_key, d.manager_id, m.name AS manager_name,
+              d.client_name, d.created_at_kommo
+       FROM deals d
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       ${where}
+         AND psm.funnel_stage = 'paid'
+     ),
+     primary_mgr AS (
+       SELECT client_key, manager_id, manager_name FROM (
+         SELECT client_key, manager_id, manager_name,
+                ROW_NUMBER() OVER (
+                  PARTITION BY client_key
+                  ORDER BY COUNT(*) DESC, MAX(created_at_kommo) DESC
+                ) AS rn
+         FROM scoped GROUP BY client_key, manager_id, manager_name
+       ) z WHERE rn = 1
+     ),
+     agg AS (
+       SELECT client_key,
+              (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS client_name,
+              COUNT(*) FILTER (
+                WHERE created_at_kommo >= $1::date - interval '${recentMonths} months'
+                  AND created_at_kommo < $1::date
+              ) AS p_recent,
+              COUNT(*) FILTER (
+                WHERE created_at_kommo >= $1::date - interval '${sleepingMonths} months'
+                  AND created_at_kommo < $1::date - interval '${recentMonths} months'
+              ) AS p_prior,
+              COUNT(*) AS total_paid,
+              MAX(created_at_kommo) AS last_paid
+       FROM scoped GROUP BY client_key
+     )
+     SELECT pm.manager_id, pm.manager_name, a.client_key, a.client_name,
+            a.p_recent, a.p_prior, a.total_paid, a.last_paid
+     FROM agg a JOIN primary_mgr pm ON pm.client_key = a.client_key`,
     params
   );
 
   type Client = {
     clientKey: string;
     clientName: string;
+    isCompany: boolean; // company (name key) vs фізособа (phone key)
+    identifier: string | null; // phone identifier for individuals
     orders: number;
     totalPaid: number;
     lastPaid: string;
   };
+  const isPhoneKey = (k: string) => /^\d{9,}$/.test(k);
   type Segments = {
     regular: Client[]; // 2+ paid in last 2 months
     occasional: Client[]; // exactly 1 paid in last 2 months
@@ -1491,9 +1514,12 @@ dashboardRouter.get("/loyalty", async (req, res) => {
       byManager.set(row.manager_id, entry);
     }
     const totalPaid = Number(row.total_paid);
+    const individual = isPhoneKey(row.client_key);
     const client: Client = {
       clientKey: row.client_key,
       clientName: row.client_name,
+      isCompany: !individual,
+      identifier: individual ? row.client_key : null,
       orders: totalPaid,
       totalPaid,
       lastPaid: row.last_paid,
@@ -1816,8 +1842,16 @@ dashboardRouter.get("/regular-clients", async (req, res) => {
   const conds = ["psm.funnel_stage = 'paid'", "d.client_key IS NOT NULL"];
   if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
   else if (req.query.teamId) { params.push(Number(req.query.teamId)); conds.push(`m.team_id = $${params.length}`); }
-  const r = await pool.query<{ name: string; orders: string; revenue: string; last_paid: string | null }>(
-    `SELECT COALESCE(MAX(d.client_name), 'Клієнт') AS name,
+  // "Постійний" = 2+ paid orders AND still active (ordered within the sleeping
+  // window) — a client who stopped ordering >6 міс тому is not a current
+  // regular. Grouping is by client_key, so each client appears ONCE (no
+  // per-manager duplication). Type is derived from the key: a numeric key is a
+  // phone (фізособа, identified by phone); anything else is a named company.
+  const settings = await getSettings();
+  const activeMonths = settings.sleepingWindowMonths;
+  const r = await pool.query<{ client_key: string; name: string; orders: string; revenue: string; last_paid: string | null }>(
+    `SELECT d.client_key,
+            COALESCE((array_agg(d.client_name ORDER BY d.created_at_kommo DESC))[1], 'Клієнт') AS name,
             COUNT(*) AS orders,
             COALESCE(SUM(d.price), 0) AS revenue,
             MAX(d.closed_at_kommo) AS last_paid
@@ -1827,17 +1861,24 @@ dashboardRouter.get("/regular-clients", async (req, res) => {
      WHERE ${conds.join(" AND ")}
      GROUP BY d.client_key
      HAVING COUNT(*) >= 2
+        AND MAX(d.created_at_kommo) >= now() - interval '${activeMonths} months'
      ORDER BY revenue DESC
      LIMIT 500`,
     params
   );
+  const isPhoneKey = (k: string) => /^\d{9,}$/.test(k);
   res.json({
-    clients: r.rows.map((x) => ({
-      clientName: x.name,
-      orders: Number(x.orders),
-      revenue: Number(x.revenue),
-      lastPaid: x.last_paid,
-    })),
+    clients: r.rows.map((x) => {
+      const individual = isPhoneKey(x.client_key);
+      return {
+        clientName: x.name,
+        isCompany: !individual,
+        identifier: individual ? x.client_key : null,
+        orders: Number(x.orders),
+        revenue: Number(x.revenue),
+        lastPaid: x.last_paid,
+      };
+    }),
   });
 });
 

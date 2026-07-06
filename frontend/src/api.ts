@@ -330,6 +330,8 @@ export async function fetchPersonalDashboard(params: {
 export interface LoyaltyClient {
   clientKey: string;
   clientName: string;
+  isCompany: boolean;
+  identifier: string | null;
   orders: number;
   totalPaid: number;
   lastPaid: string;
@@ -675,6 +677,8 @@ export async function postAiMessage(body: string): Promise<AiMessage> {
 
 export interface RegularClient {
   clientName: string;
+  isCompany: boolean;
+  identifier: string | null;
   orders: number;
   revenue: number;
   lastPaid: string | null;
