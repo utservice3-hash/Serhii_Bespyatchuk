@@ -266,6 +266,7 @@ export interface RepeatClientPlan {
   orders: number;
   revenue: number;
   lastPaid: string;
+  lastActivity: string | null;
   inactive: boolean;
   plan: number;
   fact: number;

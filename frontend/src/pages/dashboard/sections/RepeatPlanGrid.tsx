@@ -69,6 +69,7 @@ function ClientPlanRow({ client, month, managerId, weekPlan, onSaved }: {
       <td style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{client.isCompany ? "🏢" : `👤${client.identifier ? " " + client.identifier : ""}`}</td>
       <td style={{ textAlign: "right" }}>{client.orders}</td>
       <td style={{ textAlign: "right", fontWeight: 600 }} title={`Остання оплата: ${client.lastPaid ? new Date(client.lastPaid).toLocaleDateString("uk-UA") : "—"} · ${formatAmountFull(client.revenue)}`}>{formatAmount(client.revenue)}</td>
+      <td style={{ whiteSpace: "nowrap", color: "var(--text-muted)" }} title="Остання реальна активність (дзвінок/нотатка)">{client.lastActivity ? new Date(client.lastActivity).toLocaleDateString("uk-UA") : "—"}</td>
       <td><input value={d.plan} onChange={(e) => setD((s) => ({ ...s, plan: e.target.value }))} inputMode="numeric" placeholder="0" style={{ ...cellInput, textAlign: "right", width: 80 }} /></td>
       <td style={{ textAlign: "right", color: "#16a34a", fontWeight: 600 }} title={formatAmountFull(client.fact)}>{formatAmount(client.fact)}</td>
       <td style={{ textAlign: "right", color: "#d97706" }}>{formatAmount(remaining)}</td>
@@ -316,6 +317,7 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                                             <th>Тип</th>
                                             <th style={{ textAlign: "right" }}>Поїздок<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>всього</div></th>
                                             <th style={{ textAlign: "right" }}>Напрацював<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>сума lifetime</div></th>
+                                            <th>Ост. активність</th>
                                             <th style={{ textAlign: "right" }}>План</th>
                                             <th style={{ textAlign: "right" }}>Факт</th>
                                             <th style={{ textAlign: "right" }}>Залишок</th>
@@ -331,7 +333,7 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                                             <th></th>
                                           </tr>
                                           <tr>
-                                            <th></th><th></th><th></th><th></th><th></th><th></th><th></th>
+                                            <th></th><th></th><th></th><th></th><th></th><th></th><th></th><th></th>
                                             {grid.weeks.map((w) => (
                                               <Fragment key={w.label}>
                                                 <th style={{ textAlign: "right", fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>план</th>

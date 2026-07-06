@@ -3089,7 +3089,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   // Per-client month plan + metadata (team-lead editable), and auto fact:
   //  weekFact = «Успішно» (142) closed in that week; monthFact = Σ weekFact +
   //  «Оплата отримана» снапшот для клієнта (снапшот недатований → лише в місяць).
-  const [plansRes, factRes, snapRes] = await Promise.all([
+  const [plansRes, factRes, snapRes, actRes] = await Promise.all([
     clientKeys.length ? pool.query<{ client_key: string; plan: string; forecast: string | null; realization_pct: string | null; international: boolean | null; we_do: boolean | null; call_link: string | null; comment: string | null }>(
       `SELECT client_key, plan, forecast, realization_pct, international, we_do, call_link, comment
          FROM repeat_client_plans WHERE month = $1 AND client_key = ANY($2)`, [planDate, clientKeys]) : { rows: [] as never[] },
@@ -3104,9 +3104,14 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
       `SELECT d.client_key, COALESCE(SUM(d.price),0) AS s FROM deals d
         WHERE d.status_id IN (69716460,60412544) AND d.client_key = ANY($1)
         GROUP BY d.client_key`, [clientKeys]) : { rows: [] as never[] },
+    // Last real human activity (call/note from syncDealActivity) per client.
+    clientKeys.length ? pool.query<{ client_key: string; la: string | null }>(
+      `SELECT client_key, MAX(last_activity_at) AS la FROM deals
+        WHERE client_key = ANY($1) GROUP BY client_key`, [clientKeys]) : { rows: [] as never[] },
   ]);
   const planByKey = new Map(plansRes.rows.map((p) => [p.client_key, p]));
   const snapByKey = new Map(snapRes.rows.map((x) => [x.client_key, Number(x.s)]));
+  const actByKey = new Map((actRes.rows as { client_key: string; la: string | null }[]).map((x) => [x.client_key, x.la]));
   const weekIdxOfDay = (day: number) => { for (let i = 0; i < weeks.length; i++) if (day >= weeks[i].from && day <= weeks[i].to) return i; return weeks.length - 1; };
   const weekFactByKey = new Map<string, number[]>();
   for (const f of factRes.rows) {
@@ -3117,7 +3122,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
 
   type RepeatClient = {
     clientKey: string; clientName: string; isCompany: boolean; identifier: string | null;
-    orders: number; revenue: number; lastPaid: string; inactive: boolean;
+    orders: number; revenue: number; lastPaid: string; lastActivity: string | null; inactive: boolean;
     plan: number; fact: number; weekFact: number[];
     forecast: string | null; realizationPct: number | null; international: boolean | null;
     weDo: boolean | null; callLink: string | null; comment: string | null;
@@ -3137,6 +3142,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
       orders: Number(c.orders),
       revenue: Number(c.revenue),
       lastPaid: c.last_paid,
+      lastActivity: actByKey.get(c.client_key) ?? null,
       inactive: c.last_paid ? new Date(c.last_paid).getTime() < activeCutoffMs : true,
       plan: p ? Number(p.plan) : 0,
       fact: weekFact.reduce((s, v) => s + v, 0) + (snapByKey.get(c.client_key) ?? 0),
