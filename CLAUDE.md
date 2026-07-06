@@ -126,7 +126,9 @@ overview · **report** · statistics · teams · managers · loyalty · receivab
 
 ## Задачник KPI (тиждень/місяць)
 
-Тімлід ставить план менеджеру (`POST /tasks/plan`): метрики `ads_count` (реклама google), `leadgen_count` (РПК), `avg_check`, `conversion`. Реклама/лідоген декомпозуються на денні підзадачі по обраних робочих днях; чек/конверсія — підсумок за період. `evaluateKpiTasks` автозакриває за фактом. Колонки в `tasks`: `task_type, metric, target_value, actual_value, plan_date, period_start/end, parent_id, auto`. Пошук задач — поле зверху фільтрує таблицю.
+Тімлід ставить план менеджеру (`POST /tasks/plan`): метрики `ads_count` (реклама google), `leadgen_count` (РПК), `avg_check`, `conversion`. **План розкладається в ОДНУ композитну задачу на кожен робочий день** (`task_type='daily_kpi'`, `metric=NULL`, `metrics_json=[{metric,target,actual,done}]`) — 5 роб.днів = 5 задач, кожна бундлить усі показники дня. **«Сума» на день** = місячний план виручки (`plans.payment_amount`) ÷ робочі дні місяця (додається авто, якщо є план). `evaluateKpiTasks` заповнює факт по кожному показнику й закриває задачу, коли ВСІ виконані. Колонки в `tasks`: `task_type, metric, target_value, actual_value, plan_date, period_start/end, parent_id, auto, metrics_json`.
+- **Бокова картка задачі** (drawer, клік 📄): усі поля (виконавець/дедлайн/департамент/пріоритет/статус, редаговані), повні коментарі (textarea), і для KPI — таблиця «Факт по показниках». Коментар у таблиці — textarea на повний текст.
+- **Видимість**: менеджер — свої; тімлід — своя команда + власні (`created_by`, НЕ безхазяйні); адмін — вкладки «Мої» (створені мною, без виконавця) / «Усі». Фільтри: статус, виконавець, пошук.
 
 ## Дебіторка-нотатки
 
