@@ -318,6 +318,20 @@ def delete_tracked(refs: list[dict]) -> None:
             logger.error("delete_tracked exception: %s", e)
 
 
+def send_raw(text: str, chat_id, thread_id=None) -> dict:
+    """Надсилає довільний текст у вказаний чат/тред, повертає відповідь Telegram."""
+    if not TG_TOKEN or not chat_id:
+        return {"ok": False, "error": "no token/chat"}
+    try:
+        payload = _base_payload(text, chat_id=chat_id, thread_id=thread_id)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json=payload, timeout=10
+        )
+        return resp.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def edit_tracked(refs: list[dict], new_text: str) -> None:
     """Редагує раніше надіслані повідомлення (список {chat_id, message_id}) на
     новий текст — щоб оновлювати статус заявки в одному повідомленні без спаму."""
