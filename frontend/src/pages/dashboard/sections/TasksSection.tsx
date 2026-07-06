@@ -18,6 +18,28 @@ const METRIC_LBL: Record<string, string> = {
 };
 const METRIC_UNIT: Record<string, string> = { avg_check: "₴", payment_amount: "₴", conversion: "%" };
 
+/** hex → rgba with alpha, for soft Notion-style pill backgrounds. */
+const hexA = (hex: string, a: number) => {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+};
+/** Colored pill styling for a status <select> (kept editable, looks like Notion). */
+const statusPillStyle = (s: TaskStatus): CSSProperties => ({
+  background: hexA(STATUS_DOT_COLORS[s] ?? "#94a3b8", 0.16),
+  color: "var(--text)", border: "none", borderRadius: 999, padding: "3px 12px",
+  fontWeight: 600, fontSize: 12, appearance: "none", WebkitAppearance: "none", cursor: "pointer", maxWidth: "100%",
+});
+const pillInputStyle: CSSProperties = {
+  background: "rgba(244,114,182,0.14)", color: "var(--text)", border: "none", borderRadius: 999,
+  padding: "3px 12px", fontSize: 12, fontWeight: 500, width: "100%",
+};
+const PRIORITY_COLOR: Record<TaskPriority, string> = { high: "#dc2626", medium: "#eab308", low: "#16a34a" };
+const priorityPillStyle = (p: TaskPriority): CSSProperties => ({
+  background: hexA(PRIORITY_COLOR[p] ?? "#94a3b8", 0.16), color: "var(--text)", border: "none",
+  borderRadius: 999, padding: "3px 12px", fontWeight: 600, fontSize: 12,
+  appearance: "none", WebkitAppearance: "none", cursor: "pointer",
+});
+
 /** Textarea that grows to fit its full content — never clips, no matter how
  *  narrow the column. onLocal updates the row live; onCommit persists on blur. */
 function AutoTextarea({ value, onLocal, onCommit, style, placeholder }: {
@@ -87,6 +109,8 @@ export function TasksSection({
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
   const [sortBy, setSortBy] = useState<"created" | "deadline" | "priority" | "status" | "assignee" | "title">("created");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [openTaskId, setOpenTaskId] = useState<number | null>(null);
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
 
@@ -117,14 +141,38 @@ export function TasksSection({
               {managerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           )}
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)} title="Сортування">
-            <option value="created">↕ За створенням</option>
-            <option value="deadline">↕ За дедлайном</option>
-            <option value="priority">↕ За пріоритетом</option>
-            <option value="status">↕ За статусом</option>
-            <option value="assignee">↕ За виконавцем</option>
-            <option value="title">↕ За назвою</option>
-          </select>
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setSettingsOpen((v) => !v)}
+              title="Сортування та налаштування"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: settingsOpen ? "rgba(127,127,127,0.12)" : "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 600 }}
+            >
+              ⇅ Сортування
+            </button>
+            {settingsOpen && (
+              <>
+                <div onClick={() => setSettingsOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
+                <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, width: 250, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "0 12px 32px rgba(0,0,0,0.18)", padding: 14, zIndex: 50 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Сортування</div>
+                  <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Поле</label>
+                  <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)} style={{ width: "100%", marginBottom: 12 }}>
+                    <option value="created">За створенням</option>
+                    <option value="deadline">За дедлайном</option>
+                    <option value="priority">За пріоритетом</option>
+                    <option value="status">За статусом</option>
+                    <option value="assignee">За виконавцем</option>
+                    <option value="title">За назвою</option>
+                  </select>
+                  <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Напрямок</label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setSortDir("asc")} style={{ flex: 1, padding: "6px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer", background: sortDir === "asc" ? "#c5141c" : "var(--card-bg)", color: sortDir === "asc" ? "#fff" : "var(--text)", fontWeight: 600 }}>↑ Зрост.</button>
+                    <button onClick={() => setSortDir("desc")} style={{ flex: 1, padding: "6px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer", background: sortDir === "desc" ? "#c5141c" : "var(--card-bg)", color: sortDir === "desc" ? "#fff" : "var(--text)", fontWeight: 600 }}>↓ Спад.</button>
+                  </div>
+                  <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "10px 0 0" }}>Виконані задачі завжди в кінці списку.</p>
+                </div>
+              </>
+            )}
+          </div>
           <button
             className="btn-primary"
             onClick={() => {
@@ -192,18 +240,21 @@ export function TasksSection({
                     )
                   : base;
                 const prioRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
+                const dir = sortDir === "asc" ? 1 : -1;
                 const visible = [...filtered].sort((a, b) => {
-                  // Done tasks always sink to the bottom.
+                  // Done tasks always sink to the bottom, regardless of sort.
                   const ad = a.status === "done" ? 1 : 0, bd = b.status === "done" ? 1 : 0;
                   if (ad !== bd) return ad - bd;
+                  let cmp: number;
                   switch (sortBy) {
-                    case "deadline": return (a.deadline ?? "9999-99-99").localeCompare(b.deadline ?? "9999-99-99");
-                    case "priority": return (prioRank[a.priority] ?? 9) - (prioRank[b.priority] ?? 9);
-                    case "status": return a.status.localeCompare(b.status);
-                    case "assignee": return (a.assigneeName ?? "").localeCompare(b.assigneeName ?? "", "uk");
-                    case "title": return (a.title ?? "").localeCompare(b.title ?? "", "uk");
-                    default: return (b.createdAt ?? "").localeCompare(a.createdAt ?? ""); // newest first
+                    case "deadline": cmp = (a.deadline ?? "9999-99-99").localeCompare(b.deadline ?? "9999-99-99"); break;
+                    case "priority": cmp = (prioRank[a.priority] ?? 9) - (prioRank[b.priority] ?? 9); break;
+                    case "status": cmp = a.status.localeCompare(b.status); break;
+                    case "assignee": cmp = (a.assigneeName ?? "").localeCompare(b.assigneeName ?? "", "uk"); break;
+                    case "title": cmp = (a.title ?? "").localeCompare(b.title ?? "", "uk"); break;
+                    default: cmp = (a.createdAt ?? "").localeCompare(b.createdAt ?? ""); break;
                   }
+                  return cmp * dir;
                 });
                 if (visible.length === 0) {
                   return (
@@ -250,30 +301,25 @@ export function TasksSection({
                       )}
                     </td>
                     <td>
-                      <div className="task-status-cell">
-                        <span
-                          className="task-status-dot"
-                          style={{ background: STATUS_DOT_COLORS[task.status] }}
-                        />
-                        <select
-                          value={task.status}
-                          onChange={(e) => {
-                            const status = e.target.value as TaskStatus;
-                            patchTaskLocal(task.id, { status });
-                            updateTask(task.id, { status });
-                          }}
-                        >
-                          {STATUS_GROUPS.map((group) => (
-                            <optgroup key={group.label} label={group.label}>
-                              {group.statuses.map((s) => (
-                                <option key={s} value={s}>
-                                  {STATUS_LABELS[s]}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-                      </div>
+                      <select
+                        value={task.status}
+                        onChange={(e) => {
+                          const status = e.target.value as TaskStatus;
+                          patchTaskLocal(task.id, { status });
+                          updateTask(task.id, { status });
+                        }}
+                        style={statusPillStyle(task.status)}
+                      >
+                        {STATUS_GROUPS.map((group) => (
+                          <optgroup key={group.label} label={group.label}>
+                            {group.statuses.map((s) => (
+                              <option key={s} value={s}>
+                                {STATUS_LABELS[s]}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
                     </td>
                     <td>
                       <input
@@ -313,6 +359,7 @@ export function TasksSection({
                           patchTaskLocal(task.id, { priority });
                           updateTask(task.id, { priority });
                         }}
+                        style={priorityPillStyle(task.priority)}
                       >
                         {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
                           <option key={value} value={value}>
@@ -335,7 +382,7 @@ export function TasksSection({
                         placeholder="—"
                         onChange={(e) => patchTaskLocal(task.id, { department: e.target.value })}
                         onBlur={(e) => updateTask(task.id, { department: e.target.value })}
-                        style={{ border: "none", width: "100%" }}
+                        style={task.department ? pillInputStyle : { border: "none", width: "100%", background: "transparent", color: "var(--text)" }}
                       />
                     </td>
                     <td>

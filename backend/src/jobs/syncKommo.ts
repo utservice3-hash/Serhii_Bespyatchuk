@@ -57,11 +57,18 @@ export async function syncManagers(): Promise<number> {
     teamIdByGroupId.set(group.id, teamId);
   }
 
+  // Display-name overrides keyed by Kommo user id — survive syncs (the CRM name
+  // would otherwise overwrite any manual DB rename every 5 min).
+  const NAME_OVERRIDES: Record<string, string> = {
+    "904923": "Операційний директор", // was "Admin"
+  };
+
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
     const teamId = group ? teamIdByGroupId.get(group.id) ?? null : null;
     const role = user._embedded?.roles?.[0]?.name ?? "";
     const isTeamLead = role.toLowerCase().includes("тимл");
+    const displayName = NAME_OVERRIDES[String(user.id)] ?? user.name;
 
     await pool.query(
       `INSERT INTO managers (name, kommo_user_id, team_id, is_team_lead, is_active, email)
@@ -72,7 +79,7 @@ export async function syncManagers(): Promise<number> {
          is_team_lead = EXCLUDED.is_team_lead,
          is_active = true,
          email = COALESCE(EXCLUDED.email, managers.email)`,
-      [user.name, user.id, teamId, isTeamLead, user.email ?? null]
+      [displayName, user.id, teamId, isTeamLead, user.email ?? null]
     );
   }
 
