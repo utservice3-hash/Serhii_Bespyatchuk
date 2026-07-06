@@ -2983,12 +2983,14 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
  */
 dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
-    return res.status(403).json({ error: "Доступ лише для тімліда/адміна" });
-  }
   const monthStr = (req.query.month as string) || new Date().toISOString().slice(0, 7);
   const planDate = `${monthStr}-01`;
-  const teamId: number | null = auth.role === "team_lead" ? auth.teamId ?? null : (req.query.teamId ? Number(req.query.teamId) : null);
+  // Managers see only their own row (they propose their clients' plans); team
+  // leads see their team; admin sees all (optional teamId).
+  const teamId: number | null = auth.role === "manager" ? (auth.teamId ?? null)
+    : auth.role === "team_lead" ? (auth.teamId ?? null)
+    : (req.query.teamId ? Number(req.query.teamId) : null);
+  const managerFilter: number | null = auth.role === "manager" ? (auth.managerId ?? null) : null;
   // includeInactive=1 → also show regulars who stopped ordering long ago
   // (замовклі) for reactivation planning; default shows only active regulars.
   const includeInactive = req.query.includeInactive === "1" || req.query.includeInactive === "true";
@@ -2996,6 +2998,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   const params: unknown[] = [planDate];
   let teamCond = "";
   if (teamId != null) { params.push(teamId); teamCond = `AND m.team_id = $${params.length}`; }
+  if (managerFilter != null) { params.push(managerFilter); teamCond += ` AND m.id = $${params.length}`; }
 
   const r = await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null; plan: string }>(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name, COALESCE(p.planned_value, 0) AS plan
@@ -3090,8 +3093,8 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   //  weekFact = «Успішно» (142) closed in that week; monthFact = Σ weekFact +
   //  «Оплата отримана» снапшот для клієнта (снапшот недатований → лише в місяць).
   const [plansRes, factRes, snapRes, actRes] = await Promise.all([
-    clientKeys.length ? pool.query<{ client_key: string; plan: string; forecast: string | null; realization_pct: string | null; international: boolean | null; we_do: boolean | null; call_link: string | null; comment: string | null }>(
-      `SELECT client_key, plan, forecast, realization_pct, international, we_do, call_link, comment
+    clientKeys.length ? pool.query<{ client_key: string; plan: string; forecast: string | null; realization_pct: string | null; international: boolean | null; we_do: boolean | null; call_link: string | null; comment: string | null; status: string }>(
+      `SELECT client_key, plan, forecast, realization_pct, international, we_do, call_link, comment, status
          FROM repeat_client_plans WHERE month = $1 AND client_key = ANY($2)`, [planDate, clientKeys]) : { rows: [] as never[] },
     clientKeys.length ? pool.query<{ client_key: string; cday: number; s: string }>(
       `SELECT d.client_key, EXTRACT(DAY FROM (d.closed_at_kommo ${KYIV}))::int AS cday, COALESCE(SUM(d.price),0) AS s
@@ -3123,7 +3126,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   type RepeatClient = {
     clientKey: string; clientName: string; isCompany: boolean; identifier: string | null;
     orders: number; revenue: number; lastPaid: string; lastActivity: string | null; inactive: boolean;
-    plan: number; fact: number; weekFact: number[];
+    plan: number; fact: number; weekFact: number[]; status: string;
     forecast: string | null; realizationPct: number | null; international: boolean | null;
     weDo: boolean | null; callLink: string | null; comment: string | null;
   };
@@ -3147,6 +3150,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
       plan: p ? Number(p.plan) : 0,
       fact: weekFact.reduce((s, v) => s + v, 0) + (snapByKey.get(c.client_key) ?? 0),
       weekFact,
+      status: p?.status ?? "none",
       forecast: p?.forecast ?? null,
       realizationPct: p?.realization_pct != null ? Number(p.realization_pct) : null,
       international: p?.international ?? null,
@@ -3188,30 +3192,64 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
  */
 dashboardRouter.post("/repeat-client-plan", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
   const b = req.body ?? {};
   const clientKey = String(b.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
   const month = ((b.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   const managerId = b.managerId != null ? Number(b.managerId) : null;
-  if (auth.role === "team_lead" && managerId != null) {
-    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
-    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  // Scope: a manager may edit only their own clients (and their submission needs
+  // approval); a team lead only their team; admin anyone.
+  if (auth.role === "manager") {
+    if (managerId !== auth.managerId) return res.status(403).json({ error: "Лише свої клієнти" });
+  } else if (auth.role === "team_lead") {
+    if (managerId != null) {
+      const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+      if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+    }
+  } else if (auth.role !== "admin") {
+    return res.status(403).json({ error: "Forbidden" });
   }
+  // Manager submission → pending (awaits team-lead approval); team-lead/admin → approved.
+  const status = auth.role === "manager" ? "pending" : "approved";
   const num = (v: unknown) => (v === "" || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
   const bool = (v: unknown) => (typeof v === "boolean" ? v : null);
   const str = (v: unknown) => (v == null || String(v).trim() === "" ? null : String(v));
   await pool.query(
     `INSERT INTO repeat_client_plans
-       (client_key, month, manager_id, plan, forecast, realization_pct, international, we_do, call_link, comment, updated_by, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+       (client_key, month, manager_id, plan, forecast, realization_pct, international, we_do, call_link, comment, status, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
      ON CONFLICT (client_key, month) DO UPDATE SET
        manager_id = EXCLUDED.manager_id, plan = EXCLUDED.plan, forecast = EXCLUDED.forecast,
        realization_pct = EXCLUDED.realization_pct, international = EXCLUDED.international, we_do = EXCLUDED.we_do,
-       call_link = EXCLUDED.call_link, comment = EXCLUDED.comment, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, month, managerId, num(b.plan) ?? 0, str(b.forecast), num(b.realizationPct), bool(b.international), bool(b.weDo), str(b.callLink), str(b.comment), auth.userId]
+       call_link = EXCLUDED.call_link, comment = EXCLUDED.comment, status = EXCLUDED.status,
+       updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, month, managerId, num(b.plan) ?? 0, str(b.forecast), num(b.realizationPct), bool(b.international), bool(b.weDo), str(b.callLink), str(b.comment), status, auth.userId]
   );
-  res.json({ ok: true });
+  res.json({ ok: true, status });
+});
+
+/** Team-lead/admin approves (or rejects) a manager-submitted client plan. */
+dashboardRouter.post("/repeat-client-plan/approve", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  const b = req.body ?? {};
+  const clientKey = String(b.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const month = ((b.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
+  const status = b.status === "pending" ? "pending" : "approved";
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(
+      `SELECT m.team_id FROM repeat_client_plans p LEFT JOIN managers m ON m.id = p.manager_id WHERE p.client_key = $1 AND p.month = $2`,
+      [clientKey, month]
+    );
+    if (chk.rows[0] && chk.rows[0].team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  }
+  await pool.query(
+    `UPDATE repeat_client_plans SET status = $3, approved_by = $4, approved_at = now()
+     WHERE client_key = $1 AND month = $2`,
+    [clientKey, month, status, auth.userId]
+  );
+  res.json({ ok: true, status });
 });
 
 /** Read a manager's monthly funnel plan (for the plan editor). Admin/team-lead

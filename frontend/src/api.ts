@@ -271,6 +271,7 @@ export interface RepeatClientPlan {
   plan: number;
   fact: number;
   weekFact: number[];
+  status: string; // 'none' | 'pending' | 'approved'
   forecast: string | null; // 'same' | 'down' | 'up'
   realizationPct: number | null;
   international: boolean | null;
@@ -294,6 +295,10 @@ export interface RepeatClientPlanInput {
 
 export async function saveRepeatClientPlan(input: RepeatClientPlanInput): Promise<void> {
   await api.post("/dashboard/repeat-client-plan", input);
+}
+
+export async function approveRepeatClientPlan(clientKey: string, month: string, status: "approved" | "pending" = "approved"): Promise<void> {
+  await api.post("/dashboard/repeat-client-plan/approve", { clientKey, month, status });
 }
 
 export async function fetchRepeatPlansGrid(month: string, teamId?: number, includeInactive?: boolean): Promise<RepeatPlansGrid> {

@@ -77,8 +77,8 @@ export function LoyaltySection({
         )}
       </div>
 
-      {(auth?.role === "admin" || auth?.role === "team_lead") && (
-        <RepeatPlanGrid canPickTeam={auth?.role === "admin"} teams={teams} />
+      {auth && (
+        <RepeatPlanGrid canPickTeam={auth.role === "admin"} teams={teams} role={auth.role} />
       )}
 
       {auth?.role !== "manager" && (

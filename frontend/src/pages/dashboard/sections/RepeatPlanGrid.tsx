@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fetchRepeatPlansGrid, saveRepeatPlan, saveRepeatClientPlan, type RepeatPlansGrid, type RepeatClientPlan, type Team } from "../../../api";
+import { fetchRepeatPlansGrid, saveRepeatPlan, saveRepeatClientPlan, approveRepeatClientPlan, type RepeatPlansGrid, type RepeatClientPlan, type Team } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 
 const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
@@ -15,9 +15,22 @@ const cellInput: React.CSSProperties = { width: "100%", padding: "3px 6px", bord
 /** One editable per-client plan row (matches the КВП sheet): monthly plan (auto
  * weekly split), auto fact, and metadata (forecast, realization %, international,
  * we-do, call link, comment). The whole row is sent on save so nothing is lost. */
-function ClientPlanRow({ client, month, managerId, weekPlan, onSaved }: {
-  client: RepeatClientPlan; month: string; managerId: number; weekPlan: number[]; onSaved: () => void;
+const STATUS_BADGE: Record<string, { label: string; color: string }> = {
+  pending: { label: "⏳ на затвердженні", color: "#d97706" },
+  approved: { label: "✓ затверджено", color: "#16a34a" },
+  none: { label: "— без плану", color: "var(--text-muted)" },
+};
+
+function ClientPlanRow({ client, month, managerId, weekPlan, role, onSaved }: {
+  client: RepeatClientPlan; month: string; managerId: number; weekPlan: number[]; role: string; onSaved: () => void;
 }) {
+  const canApprove = role === "admin" || role === "team_lead";
+  const [approving, setApproving] = useState(false);
+  const approve = async () => {
+    setApproving(true);
+    try { await approveRepeatClientPlan(client.clientKey, month, "approved"); onSaved(); }
+    finally { setApproving(false); }
+  };
   const [d, setD] = useState({
     plan: client.plan ? String(client.plan) : "",
     forecast: client.forecast ?? "",
@@ -93,12 +106,22 @@ function ClientPlanRow({ client, month, managerId, weekPlan, onSaved }: {
         <input value={d.callLink} onChange={(e) => setD((s) => ({ ...s, callLink: e.target.value }))} placeholder="лінк" style={cellInput} />
       </td>
       <td style={{ minWidth: 160 }}><input value={d.comment} onChange={(e) => setD((s) => ({ ...s, comment: e.target.value }))} placeholder="коментар" style={cellInput} /></td>
-      <td style={{ width: 44 }}>
-        {dirty && (
-          <button onClick={save} disabled={saving} title="Зберегти"
+      <td style={{ minWidth: 130, whiteSpace: "nowrap" }}>
+        {dirty ? (
+          <button onClick={save} disabled={saving} title={role === "manager" ? "Надіслати на затвердження" : "Зберегти"}
             style={{ padding: "3px 8px", borderRadius: 6, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontSize: 12 }}>
-            {saving ? "…" : "✓"}
+            {saving ? "…" : role === "manager" ? "Надіслати" : "Зберегти"}
           </button>
+        ) : (
+          <>
+            <span style={{ fontSize: 11, color: STATUS_BADGE[client.status]?.color ?? "var(--text-muted)" }}>{STATUS_BADGE[client.status]?.label ?? ""}</span>
+            {canApprove && client.status === "pending" && (
+              <button onClick={approve} disabled={approving} title="Затвердити план"
+                style={{ marginLeft: 6, padding: "3px 8px", borderRadius: 6, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+                {approving ? "…" : "Затвердити"}
+              </button>
+            )}
+          </>
         )}
       </td>
     </tr>
@@ -112,7 +135,7 @@ function ClientPlanRow({ client, month, managerId, weekPlan, onSaved }: {
  * target (план − факт) is decomposed dynamically across the month's remaining
  * working days, so weekly/daily goals shrink as the manager earns.
  */
-export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; teams: Team[] }) {
+export function RepeatPlanGrid({ canPickTeam, teams, role }: { canPickTeam: boolean; teams: Team[]; role: string }) {
   const [month, setMonth] = useState<string>(() => localStorage.getItem("repeatPlansMonth") || curMonthStr());
   const [teamId, setTeamId] = useState<number | "">(() => {
     const v = localStorage.getItem("repeatPlansTeam");
@@ -228,8 +251,8 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
 
       {open && (
         <>
-          <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "8px 0 12px", maxWidth: 820 }}>
-            Тімлід ставить місячний план виручки <b>з постійних клієнтів</b> по кожному менеджеру. <b>Факт</b> заповнюється авто з CRM: отримані кошти (успішно 142 + оплата отримана) від клієнтів, які мають 2+ оплачених перевезень за весь час. <b>Тижні/день — динамічні</b>: залишок (план − факт) розкидається на майбутні робочі дні.
+          <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "8px 0 12px", maxWidth: 860 }}>
+            План по кожному постійному клієнту ставить <b>менеджер</b> (розкрий себе → «Надіслати»), а <b>тімлід затверджує</b> (кнопка «Затвердити» у статусі ⏳). <b>Факт</b> заповнюється авто з CRM: отримані кошти (успішно 142 + оплата отримана) від клієнтів із 2+ оплаченими перевезеннями. <b>Тижні/день — динамічні</b>: залишок (план − факт) розкидається на майбутні робочі дні. Клієнт зʼявляється <b>автоматично</b>, щойно має 2+ оплати.
           </p>
           {err && <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>}
           {!grid && !err && <p className="loading-text">Завантаження…</p>}
@@ -284,18 +307,24 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                                   </button>
                                 </td>
                                 <td style={{ textAlign: "right" }}>
-                                  <input
-                                    value={draft ?? String(m.plan)}
-                                    onChange={(e) => setDrafts((p) => ({ ...p, [m.managerId]: e.target.value }))}
-                                    onKeyDown={(e) => { if (e.key === "Enter") save(m.managerId); }}
-                                    inputMode="numeric"
-                                    style={{ width: 96, textAlign: "right", padding: "3px 6px", borderRadius: 6, border: `1px solid ${dirty ? "#d97706" : "var(--border)"}`, background: "var(--card-bg)", color: "var(--text)" }}
-                                  />
-                                  {dirty && (
-                                    <button onClick={() => save(m.managerId)} disabled={savingId === m.managerId}
-                                      style={{ marginLeft: 4, padding: "3px 8px", borderRadius: 6, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontSize: 12 }}>
-                                      {savingId === m.managerId ? "…" : "✓"}
-                                    </button>
+                                  {role === "manager" ? (
+                                    <span style={{ fontWeight: 600 }}>{formatAmount(m.plan)}</span>
+                                  ) : (
+                                    <>
+                                      <input
+                                        value={draft ?? String(m.plan)}
+                                        onChange={(e) => setDrafts((p) => ({ ...p, [m.managerId]: e.target.value }))}
+                                        onKeyDown={(e) => { if (e.key === "Enter") save(m.managerId); }}
+                                        inputMode="numeric"
+                                        style={{ width: 96, textAlign: "right", padding: "3px 6px", borderRadius: 6, border: `1px solid ${dirty ? "#d97706" : "var(--border)"}`, background: "var(--card-bg)", color: "var(--text)" }}
+                                      />
+                                      {dirty && (
+                                        <button onClick={() => save(m.managerId)} disabled={savingId === m.managerId}
+                                          style={{ marginLeft: 4, padding: "3px 8px", borderRadius: 6, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+                                          {savingId === m.managerId ? "…" : "✓"}
+                                        </button>
+                                      )}
+                                    </>
                                   )}
                                 </td>
                                 <td style={{ textAlign: "right", color: "#16a34a", fontWeight: 600 }} title={formatAmountFull(m.fact)}>{formatAmount(m.fact)}</td>
@@ -330,7 +359,7 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                                             <th>Возимо</th>
                                             <th>Запис розмови</th>
                                             <th>Коментар</th>
-                                            <th></th>
+                                            <th>Статус / дії</th>
                                           </tr>
                                           <tr>
                                             <th></th><th></th><th></th><th></th><th></th><th></th><th></th><th></th>
@@ -351,6 +380,7 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                                               month={grid.month}
                                               managerId={m.managerId}
                                               weekPlan={decomp(c.plan, c.fact).perWeek}
+                                              role={role}
                                               onSaved={() => setReload((n) => n + 1)}
                                             />
                                           ))}

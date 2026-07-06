@@ -258,6 +258,11 @@ CREATE TABLE IF NOT EXISTS repeat_client_plans (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (client_key, month)
 );
+-- Approval workflow: the manager proposes the plan (status='pending'), the team
+-- lead approves it (status='approved'). Team-lead/admin edits land approved.
+ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved';
+ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCES users(id);
+ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 
 -- Monthly snapshot of "carried-over" deals: the value of deals still in
 -- progress (approved→invoiced→payment received, NOT yet closed as Успішна) as
