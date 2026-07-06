@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchOverview, fetchLeadQuality, type ExecutiveOverview, type LeadQuality } from "../../../api";
-import { formatAmount } from "../format";
+import { formatAmount, previousRange } from "../format";
 
 type Range = { from: string; to: string; label?: string };
 type Unit = "money" | "num" | "pct";
@@ -188,9 +188,9 @@ function WeeklyBreakdown({ weeks, blocks }: { weeks: Range[]; blocks: Block[] })
 /** Plan decomposition: from the revenue plan + current avg check we derive how
  *  many cars must be dispatched and (via conversion) how many leads are needed,
  *  and show what's still left to reach the plan. Whole-department for now. */
-function Decomposition({ b }: { b: Block }) {
+function Decomposition({ b, periodPlan }: { b: Block; periodPlan?: boolean }) {
   const o = b.ov;
-  const plan = o.planMonthTotal || o.plan;
+  const plan = periodPlan ? o.plan : (o.planMonthTotal || o.plan);
   const avg = avgCheck(o);
   const carsDone = o.successDeals + o.paymentDeals;
   const carsNeeded = avg > 0 ? Math.ceil(plan / avg) : 0;
@@ -212,7 +212,7 @@ function Decomposition({ b }: { b: Block }) {
 
   return (
     <div style={{ marginTop: 16 }}>
-      <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 4px" }}>🎯 Декомпозиція плану (місяць, по відділу)</h3>
+      <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 4px" }}>🎯 Декомпозиція плану ({periodPlan ? "обраний період" : "місяць"}, по відділу)</h3>
       <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 8px" }}>
         Поточний ср. чек {formatAmount(avg)} · конверсія реклами {conv}%. Треба авто = план ÷ ср.чек; треба лідів = авто ÷ конверсія. «Вже» по доходу = отримано цього місяця + перенесені з минулого{carry > 0 ? ` (${formatAmount(carry)})` : ""}.
       </p>
@@ -282,6 +282,11 @@ const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${S
 
 export function KvpReportSection() {
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("kvpMonth") || curMonthStr());
+  const [mode, setMode] = useState<"month" | "range">(() => (localStorage.getItem("kvpMode") as "month" | "range") || "month");
+  const [range, setRange] = useState<{ from: string; to: string }>(() => {
+    try { const v = JSON.parse(localStorage.getItem("kvpRange") || "null"); return v && v.from ? v : { from: "", to: "" }; } catch { return { from: "", to: "" }; }
+  });
+  const rangePrev = range.from && range.to ? previousRange(range.from, range.to) : null;
 
   const setup = useMemo(() => {
     const [selY, selM] = monthSel.split("-").map(Number);
@@ -312,16 +317,37 @@ export function KvpReportSection() {
   const [data, setData] = useState<{
     monthPrev: Block; monthCur: Block; selWeeks: Block[]; curWeek: Block | null; analogWeek: Block | null;
   } | null>(null);
+  const [rangeData, setRangeData] = useState<{ cur: Block; prev: Block } | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  const loadBlock = async (r: Range): Promise<Block> => {
+    const [ov, lq] = await Promise.all([fetchOverview(r), fetchLeadQuality(r)]);
+    return { ov, lq };
+  };
+
+  // Custom date-range mode: chosen range vs the previous equal-length period.
   useEffect(() => {
+    if (mode !== "range" || !range.from || !range.to || !rangePrev) return;
+    let alive = true;
+    setRangeData(null);
+    setErr(null);
+    (async () => {
+      try {
+        const [cur, prev] = await Promise.all([loadBlock(range), loadBlock(rangePrev)]);
+        if (alive) setRangeData({ cur, prev });
+      } catch {
+        if (alive) setErr("Не вдалося завантажити звіт.");
+      }
+    })();
+    return () => { alive = false; };
+  }, [mode, range.from, range.to]);
+
+  useEffect(() => {
+    if (mode !== "month") return;
     let alive = true;
     setData(null);
     setErr(null);
-    const load = async (r: Range): Promise<Block> => {
-      const [ov, lq] = await Promise.all([fetchOverview(r), fetchLeadQuality(r)]);
-      return { ov, lq };
-    };
+    const load = loadBlock;
     (async () => {
       try {
         const extra = setup.curWeek && setup.analogWeek ? [setup.curWeek, setup.analogWeek] : [];
@@ -342,7 +368,7 @@ export function KvpReportSection() {
       }
     })();
     return () => { alive = false; };
-  }, [setup]);
+  }, [setup, mode]);
 
   const shiftMonth = (delta: number) => {
     const [y, m] = monthSel.split("-").map(Number);
@@ -362,24 +388,62 @@ export function KvpReportSection() {
     <>
       <div className="page-header">
         <h1 className="page-title">🏆 Звіт КВП</h1>
-        <div className="page-filters" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <button onClick={() => shiftMonth(-1)} title="Попередній місяць"
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>←</button>
-          <input type="month" value={monthSel} max={curMonthStr()} onChange={(e) => pickMonth(e.target.value)}
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
-          <button onClick={() => shiftMonth(1)} disabled={monthSel >= curMonthStr()} title="Наступний місяць"
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: monthSel >= curMonthStr() ? "default" : "pointer", opacity: monthSel >= curMonthStr() ? 0.5 : 1 }}>→</button>
+        <div className="page-filters" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {(() => {
+            const tab = (m: "month" | "range", label: string) => (
+              <button key={m} onClick={() => { setMode(m); localStorage.setItem("kvpMode", m); }}
+                style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer", fontWeight: 600, background: mode === m ? "#c5141c" : "var(--card-bg)", color: mode === m ? "#fff" : "var(--text)" }}>{label}</button>
+            );
+            return <>{tab("month", "Місяць")}{tab("range", "Період")}</>;
+          })()}
+          {mode === "month" ? (
+            <>
+              <button onClick={() => shiftMonth(-1)} title="Попередній місяць"
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>←</button>
+              <input type="month" value={monthSel} max={curMonthStr()} onChange={(e) => pickMonth(e.target.value)}
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+              <button onClick={() => shiftMonth(1)} disabled={monthSel >= curMonthStr()} title="Наступний місяць"
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: monthSel >= curMonthStr() ? "default" : "pointer", opacity: monthSel >= curMonthStr() ? 0.5 : 1 }}>→</button>
+            </>
+          ) : (
+            <>
+              <input type="date" value={range.from} onChange={(e) => { const r = { ...range, from: e.target.value }; setRange(r); localStorage.setItem("kvpRange", JSON.stringify(r)); }}
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+              <span style={{ color: "var(--text-muted)" }}>—</span>
+              <input type="date" value={range.to} onChange={(e) => { const r = { ...range, to: e.target.value }; setRange(r); localStorage.setItem("kvpRange", JSON.stringify(r)); }}
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+            </>
+          )}
         </div>
       </div>
       <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 760 }}>
         Зведення керівника відділу продажу — автоматично з CRM та Google-таблиці реклами.
-        <b> Динаміка (*)</b> скрізь рахується до аналогічного періоду минулого місяця (місяць→минулий місяць, тиждень→той самий тиждень минулого місяця).
+        {mode === "month"
+          ? <> <b>Динаміка (*)</b> — до аналогічного періоду минулого місяця (місяць→минулий місяць, тиждень→той самий тиждень минулого місяця).</>
+          : <> <b>Динаміка (*)</b> — до попереднього рівного за довжиною періоду (напр., 01–30.06 → 01–31.05).</>}
       </p>
 
       {err && <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>}
-      {!data && !err && <p className="loading-text">Завантаження…</p>}
 
-      {data && (
+      {mode === "range" && (
+        <>
+          {(!range.from || !range.to) && <p className="loading-text">Оберіть діапазон дат — звіт перерахується для нього.</p>}
+          {range.from && range.to && !rangeData && !err && <p className="loading-text">Завантаження…</p>}
+          {rangeData && rangePrev && (
+            <div className="chart-card" style={{ marginBottom: 16 }}>
+              <h2 className="chart-title">📆 {dmy(range.from)}–{dmy(range.to)} (vs {dmy(rangePrev.from)}–{dmy(rangePrev.to)})</h2>
+              <ComparisonTable prev={rangeData.prev} cur={rangeData.cur} prevRange={rangePrev} curRange={range} isMonth={false} />
+              <Decomposition b={rangeData.cur} periodPlan />
+              <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "16px 0 4px" }}>По командах</h3>
+              <TeamTable prev={rangeData.prev.ov} cur={rangeData.cur.ov} />
+            </div>
+          )}
+        </>
+      )}
+
+      {mode === "month" && !data && !err && <p className="loading-text">Завантаження…</p>}
+
+      {mode === "month" && data && (
         <>
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">📅 {setup.monthLabel} (vs попередній місяць)</h2>
