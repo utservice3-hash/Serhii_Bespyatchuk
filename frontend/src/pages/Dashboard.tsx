@@ -1784,6 +1784,7 @@ export function Dashboard() {
           handleSubmitTaskModal={handleSubmitTaskModal}
           role={auth?.role}
           currentUserId={auth?.userId}
+          currentManagerId={auth?.managerId}
         />
       )}
     </Layout>

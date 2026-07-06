@@ -63,6 +63,7 @@ export function TasksSection({
   handleSubmitTaskModal,
   role,
   currentUserId,
+  currentManagerId,
 }: {
   taskSearch: string;
   setTaskSearch: Dispatch<SetStateAction<string>>;
@@ -79,6 +80,7 @@ export function TasksSection({
   handleSubmitTaskModal: () => void;
   role?: string;
   currentUserId?: number;
+  currentManagerId?: number | null;
 }) {
   const isAdmin = role === "admin";
   const [adminTab, setAdminTab] = useState<"mine" | "all">("mine");
@@ -126,7 +128,8 @@ export function TasksSection({
           <button
             className="btn-primary"
             onClick={() => {
-              setTaskForm(emptyTaskForm);
+              // Default assignee = the creator themselves (still changeable).
+              setTaskForm({ ...emptyTaskForm, assigneeId: currentManagerId ?? "" });
               setTaskModalOpen(true);
             }}
           >
