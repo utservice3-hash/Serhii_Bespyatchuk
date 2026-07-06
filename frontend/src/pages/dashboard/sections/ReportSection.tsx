@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
 import { fetchFunnelPlan, saveFunnelPlan, fetchTasks, updateTask, type Task, type ReportData, type FunnelReport, type FunnelStageRow, type ManagerOption, type Team, type FunnelWeeklyReport, type WeeklyBlock } from "../../../api";
-import { formatAmount } from "../format";
+import { formatAmount, formatAmountFull } from "../format";
 import { InfoHint } from "../widgets";
 import { DailyProductivityCard } from "./DailyProductivityCard";
 import { StuckDealsCard } from "./StuckDealsCard";
@@ -433,7 +433,7 @@ export function ReportSection({
         { label: "Отримані кошти", value: formatAmount(s.revenue), sub: `${s.deals} угод`, hint: "«Успішно реалізовано» (статус 142, за датою закриття в періоді) + «Оплата отримана» (поточний етап, знімок)." },
         { label: "Успішно реалізовано", value: formatAmount(s.successRevenue), sub: `${s.successDeals} угод`, hint: "Угоди в статусі «Успішна угода» (142), за датою закриття угоди в періоді." },
         { label: "Оплата отримана", value: formatAmount(s.paymentRevenue), sub: `${s.paymentDeals} угод`, hint: "Угоди, що ЗАРАЗ на етапі «Оплата отримана» (знімок поточного стану, без фільтра дати)." },
-        { label: "Середній чек", value: formatAmount(s.avgCheck), sub: "", hint: "Отримані кошти ÷ кількість угод." },
+        { label: "Середній чек", value: formatAmountFull(s.avgCheck), sub: "", hint: "Отримані кошти ÷ кількість угод." },
         { label: "Прийнято реклами", value: s.adLeads.toLocaleString("uk-UA"), sub: "", hint: "Кількість лідів із реклами (google-utm) за період." },
         { label: "Передані заявки (лідоген)", value: s.transfers.toLocaleString("uk-UA"), sub: "", hint: "Заявки, які лідоген передав менеджеру (зміна відповідального в «Кваліфікації») за період." },
         { label: "Отримано прорахунків", value: s.quotes.toLocaleString("uk-UA"), sub: "", hint: "Ліди, що дійшли до етапу «Прорахунок» (запит КП) за період." },
@@ -639,7 +639,7 @@ export function ReportSection({
                     <td>{p.period}</td>
                     <td style={{ fontWeight: 600 }}>{formatAmount(p.revenue)}</td>
                     <td>{p.deals}</td>
-                    <td>{formatAmount(p.avgCheck)}</td>
+                    <td>{formatAmountFull(p.avgCheck)}</td>
                     <td>{p.created}</td>
                   </tr>
                 ))}
@@ -685,7 +685,7 @@ export function ReportSection({
                         <td>{formatAmount(m.paymentReceived)}</td>
                         <td style={{ fontWeight: 600 }}>{formatAmount(m.successRevenue)}</td>
                         <td>{m.successDeals}</td>
-                        <td>{formatAmount(m.avgCheck)}</td>
+                        <td>{formatAmountFull(m.avgCheck)}</td>
                         <td>{formatAmount(m.carryover)}</td>
                       </tr>
                     );

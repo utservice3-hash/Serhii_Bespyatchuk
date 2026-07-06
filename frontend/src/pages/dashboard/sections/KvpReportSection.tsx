@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchOverview, fetchLeadQuality, type ExecutiveOverview, type LeadQuality } from "../../../api";
-import { formatAmount, previousRange } from "../format";
+import { formatAmount, formatAmountFull, previousRange } from "../format";
 import { InfoHint } from "../widgets";
 
 /** Пояснення джерела даних кожного показника (звідки береться з CRM). */
@@ -29,7 +29,7 @@ const METRIC_HINTS: Record<string, string> = {
 };
 
 type Range = { from: string; to: string; label?: string };
-type Unit = "money" | "num" | "pct";
+type Unit = "money" | "moneyFull" | "num" | "pct";
 type Block = { ov: ExecutiveOverview; lq: LeadQuality };
 
 const ymd = (d: Date) =>
@@ -80,7 +80,7 @@ const METRIC_GROUPS: { group: string; metrics: Metric[] }[] = [
       { key: "received", label: "Отримані кошти (успішно + оплата)", unit: "money", get: (b) => b.ov.fact, plan: (b, m) => (m ? b.ov.planMonthTotal : b.ov.plan), sumInWeekly: true },
       { key: "success", label: "Успішно закрито", unit: "money", get: (b) => b.ov.successRevenue, sumInWeekly: true },
       { key: "payment", label: "Оплата отримана", unit: "money", get: (b) => b.ov.paymentRevenue },
-      { key: "avg", label: "Середній чек", unit: "money", get: (b) => avgCheck(b.ov) },
+      { key: "avg", label: "Середній чек", unit: "moneyFull", get: (b) => avgCheck(b.ov) },
       { key: "repeatRev", label: "Виручка від постійних", unit: "money", get: (b) => b.ov.repeatRevenue, sumInWeekly: true },
       { key: "newRev", label: "Виручка від нових", unit: "money", get: (b) => b.ov.newRevenue, sumInWeekly: true },
       { key: "carryover", label: "Перенесено з мин. місяця", unit: "money", get: (b) => b.ov.carryover?.amount ?? 0 },
@@ -119,6 +119,7 @@ const METRIC_GROUPS: { group: string; metrics: Metric[] }[] = [
 
 function fmtVal(v: number, unit: Unit) {
   if (unit === "money") return formatAmount(v);
+  if (unit === "moneyFull") return formatAmountFull(v);
   if (unit === "pct") return `${v}%`;
   return v.toLocaleString("uk-UA");
 }
@@ -240,7 +241,7 @@ function Decomposition({ b, periodPlan }: { b: Block; periodPlan?: boolean }) {
     <div style={{ marginTop: 16 }}>
       <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 4px" }}>🎯 Декомпозиція плану ({periodPlan ? "обраний період" : "місяць"}, по відділу)</h3>
       <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 8px" }}>
-        Поточний ср. чек {formatAmount(avg)} · конверсія реклами {conv}%. Треба авто = план ÷ ср.чек; треба лідів = авто ÷ конверсія. «Вже» по доходу = отримано цього місяця + перенесені з минулого{carry > 0 ? ` (${formatAmount(carry)})` : ""}.
+        Поточний ср. чек {formatAmountFull(avg)} · конверсія реклами {conv}%. Треба авто = план ÷ ср.чек; треба лідів = авто ÷ конверсія. «Вже» по доходу = отримано цього місяця + перенесені з минулого{carry > 0 ? ` (${formatAmount(carry)})` : ""}.
       </p>
       <div style={{ overflowX: "auto" }}>
         <table className="data-table compact" style={{ minWidth: 420 }}>

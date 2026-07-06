@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
 import type { ConversionChannel, ExecutiveOverview, FunnelStage, SyncStatus, Team } from "../../../api";
-import { formatAmount, previousRange } from "../format";
+import { formatAmount, formatAmountFull, previousRange } from "../format";
 import { ProgressGauge, HoverInfoCard, InfoHint } from "../widgets";
 
 type DateRange = { from: string; to: string };
@@ -287,6 +287,8 @@ export function OverviewSection({
                 const field = fieldByKey[kpi.key];
                 if (!field) return null;
                 const isMoney = kpi.key === "sum" || kpi.key === "avg";
+                // Avg check is shown in full (no тис/М abbreviation) per request.
+                const moneyFmt = kpi.key === "avg" ? formatAmountFull : formatAmount;
                 return (
                   <div style={{ marginBottom: 16 }}>
                     <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>Історія за 3 місяці</h3>
@@ -301,9 +303,9 @@ export function OverviewSection({
                         <CartesianGrid strokeDasharray="3 3" opacity={0.35} vertical={false} />
                         <XAxis dataKey="month" />
                         <YAxis tickFormatter={(v) => isMoney ? `${Math.round(v / 1000)}k` : String(v)} />
-                        <Tooltip formatter={(v) => isMoney ? formatAmount(Number(v)) : kpi.unit === "%" ? `${v}%` : Number(v).toLocaleString("uk-UA")} cursor={{ fill: "rgba(197,20,28,0.06)" }} />
+                        <Tooltip formatter={(v) => isMoney ? moneyFmt(Number(v)) : kpi.unit === "%" ? `${v}%` : Number(v).toLocaleString("uk-UA")} cursor={{ fill: "rgba(197,20,28,0.06)" }} />
                         <Bar dataKey={field} name={kpi.label} fill="url(#brandBar)" radius={[6, 6, 0, 0]} maxBarSize={56}>
-                          <LabelList dataKey={field} position="top" formatter={(v) => isMoney ? formatAmount(Number(v)) : kpi.unit === "%" ? `${v}%` : Number(v).toLocaleString("uk-UA")} style={{ fontSize: 11, fontWeight: 600, fill: "var(--text)" }} />
+                          <LabelList dataKey={field} position="top" formatter={(v) => isMoney ? moneyFmt(Number(v)) : kpi.unit === "%" ? `${v}%` : Number(v).toLocaleString("uk-UA")} style={{ fontSize: 11, fontWeight: 600, fill: "var(--text)" }} />
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -328,7 +330,7 @@ export function OverviewSection({
                     {overview.byTeam.map((t) => (
                       <tr key={t.teamId}>
                         <td>{t.teamName}</td>
-                        <td>{formatAmount(t.deals > 0 ? Math.round(t.revenue / t.deals) : 0)}</td>
+                        <td>{formatAmountFull(t.deals > 0 ? Math.round(t.revenue / t.deals) : 0)}</td>
                         <td>{t.deals}</td>
                       </tr>
                     ))}

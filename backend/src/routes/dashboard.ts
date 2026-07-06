@@ -1457,11 +1457,14 @@ dashboardRouter.get("/loyalty", async (req, res) => {
       lastPaid: row.last_paid,
     };
 
-    // "Постійний клієнт" = ordered 2+ times (lifetime), not within a window.
-    // A client who currently sits in receivables (has open invoices) is an
-    // ACTIVE client — never put them in the reactivation segments.
+    // "Постійний клієнт" = ordered `threshold`+ times AND is still ACTIVE
+    // (ordered within the last `sleepingMonths`, i.e. recent OR prior window),
+    // OR currently sits in receivables (has open invoices → active client).
+    // A client who ordered 2+ times back in 2023 and went quiet is NOT a
+    // regular anymore — they fall through to sleeping/lost for reactivation.
     const inReceivables = receivableKeys.has(row.client_key);
-    if (totalPaid >= 2) {
+    const isActive = recent >= 1 || prior >= 1 || inReceivables;
+    if (totalPaid >= threshold && isActive) {
       entry.segments.regular.push(client);
     } else if (recent >= 1 || inReceivables) {
       entry.segments.occasional.push(client);

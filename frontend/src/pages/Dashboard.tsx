@@ -787,7 +787,7 @@ export function Dashboard() {
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
           <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-          <Tooltip formatter={(v) => formatAmount(Number(v))} />
+          <Tooltip formatter={(v) => formatAmountFull(Number(v))} />
           <Line type="monotone" dataKey="avgCheck" name="Середній чек" stroke="#7c3aed" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} connectNulls />
         </LineChart>
       </ResponsiveContainer>

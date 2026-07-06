@@ -1,7 +1,7 @@
 import { Fragment, useState, type Dispatch, type SetStateAction } from "react";
 import { QuickPeriods } from "../../../components/DateRangeFilter";
 import type { TeamRanking } from "../../../api";
-import { formatAmount } from "../format";
+import { formatAmount, formatAmountFull } from "../format";
 
 type DateRange = { from: string; to: string };
 
@@ -53,7 +53,7 @@ export function TeamsSection({
                       <td style={{ fontWeight: 600 }}>{open ? "▾ " : "▸ "}{t.teamName}</td>
                       <td style={{ fontWeight: 600 }}>{formatAmount(t.revenue)}</td>
                       <td>{t.deals}</td>
-                      <td>{formatAmount(t.avgCheck)}</td>
+                      <td>{formatAmountFull(t.avgCheck)}</td>
                       <td>{t.conversion}%</td>
                       <td style={t.receivables > 0 ? { color: "#dc2626" } : undefined}>{formatAmount(t.receivables)}</td>
                     </tr>
@@ -85,7 +85,7 @@ export function TeamsSection({
                                       {m.plan > 0 ? `${m.planPct}%` : "—"}
                                     </td>
                                     <td>{m.deals}</td>
-                                    <td>{formatAmount(m.avgCheck)}</td>
+                                    <td>{formatAmountFull(m.avgCheck)}</td>
                                     <td style={m.receivables > 0 ? { color: "#dc2626" } : undefined}>{formatAmount(m.receivables)}</td>
                                   </tr>
                                 ))}
