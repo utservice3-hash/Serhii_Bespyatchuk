@@ -54,6 +54,12 @@ ELOGIST_TAG = "eLogist"
 ELOGIST_DEDUP_MINUTES = 30
 _elogist_recent_phones: dict[str, datetime] = {}
 
+# Секрет у URL прямого веб-хука eLogist (щоб сторонні не спамили ліди)
+ELOGIST_HOOK_TOKEN = "uts-elg-9Kx27Qm4tR"
+ELOGIST_PHONE_RE = re.compile(
+    r"\+?3?8?0\s*\(?\d{2,3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}"
+)
+
 
 def _parse_elogist_message(text: str) -> dict | None:
     """Парсить повідомлення eLogist (два відомі формати) і повертає
@@ -77,36 +83,38 @@ def _parse_elogist_message(text: str) -> dict | None:
     return {"phone": phone, "route": route}
 
 
-def _handle_elogist_message(text: str):
-    parsed = _parse_elogist_message(text)
-    if not parsed:
-        logger.info("eLogist message did not contain a recognizable phone: %s", text[:80])
-        return
-
-    phone = parsed["phone"]
+def _create_elogist_lead(phone: str, route: str = "") -> tuple[int | None, str]:
+    """Дедуп + створення ліда eLogist у кваліфікації (етап «Дзвінки з сайту»).
+    Спільна логіка для Telegram-userbot і прямого веб-хука. Повертає (lead_id, статус)."""
     now = datetime.now(timezone.utc)
     last_seen = _elogist_recent_phones.get(phone)
     if last_seen and (now - last_seen).total_seconds() < ELOGIST_DEDUP_MINUTES * 60:
         logger.info("Skipped duplicate eLogist lead for phone %s", phone)
-        return
+        return None, "duplicate"
     _elogist_recent_phones[phone] = now
     if len(_elogist_recent_phones) > 500:
         cutoff = now - timedelta(minutes=ELOGIST_DEDUP_MINUTES)
         for k in [k for k, v in _elogist_recent_phones.items() if v < cutoff]:
             _elogist_recent_phones.pop(k, None)
 
-    name = f"eLogist — {parsed['route']}" if parsed["route"] else f"eLogist — {phone}"
+    name = f"eLogist — {route}" if route else f"eLogist — {phone}"
     lead_id = kommo.create_lead_with_phone(
-        name=name,
-        phone=phone,
-        pipeline_id=QUAL_PIPELINE_ID,
-        status_id=DZVINKY_Z_SAITU,
-        tag_name=ELOGIST_TAG,
+        name=name, phone=phone,
+        pipeline_id=QUAL_PIPELINE_ID, status_id=DZVINKY_Z_SAITU, tag_name=ELOGIST_TAG,
     )
     if lead_id:
         logger.info("Created eLogist lead %s for phone %s", lead_id, phone)
-    else:
-        logger.error("Failed to create eLogist lead for phone %s", phone)
+        return lead_id, "created"
+    logger.error("Failed to create eLogist lead for phone %s", phone)
+    return None, "create_failed"
+
+
+def _handle_elogist_message(text: str):
+    parsed = _parse_elogist_message(text)
+    if not parsed:
+        logger.info("eLogist message did not contain a recognizable phone: %s", text[:80])
+        return
+    _create_elogist_lead(parsed["phone"], parsed["route"])
 
 PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
 CLOSED_NOT_REALIZED = 143        # ЗАКРИТО І НЕ РЕАЛІЗОВАНО
@@ -2623,6 +2631,47 @@ def debug_first_touch():
         return jsonify(out)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
+@app.route("/elogist-hook", methods=["GET", "POST"])
+def elogist_hook():
+    """Прямий веб-хук для заявок eLogist (замість Telegram-userbot). Лендинг/eLogist
+    шле сюди дані заявки (JSON, form або query) → створюємо лід у кваліфікації на
+    етапі «Дзвінки з сайту» з тегом eLogist. Захист — токен у URL (?token=...)."""
+    if request.args.get("token") != ELOGIST_HOOK_TOKEN:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    payload: dict = {}
+    j = request.get_json(silent=True)
+    if isinstance(j, dict):
+        payload.update(j)
+    payload.update(request.form.to_dict())
+    payload.update({k: v for k, v in request.args.to_dict().items() if k != "token"})
+
+    def pick(*keys):
+        for want in keys:
+            for k, v in payload.items():
+                if k.lower() == want and str(v).strip():
+                    return str(v).strip()
+        return ""
+
+    phone_raw = pick("phone", "tel", "telephone", "phone_number", "number",
+                     "contact_phone", "телефон", "номер")
+    blob = phone_raw or " ".join(str(v) for v in payload.values())
+    m = ELOGIST_PHONE_RE.search(blob)
+    if not m:
+        return jsonify({"ok": False, "error": "no phone found", "received": payload})
+    digits = re.sub(r"\D", "", m.group())
+    if not digits.startswith("380"):
+        digits = "380" + digits[-9:]
+    phone = "+" + digits
+
+    route = pick("route", "маршрут", "from_to", "напрямок", "name", "title")
+    lead_id, status = _create_elogist_lead(phone, route)
+    return jsonify({
+        "ok": status in ("created", "duplicate"),
+        "status": status, "lead_id": lead_id, "phone": phone,
+    })
 
 
 @app.route("/test-admin-stats", methods=["GET"])
