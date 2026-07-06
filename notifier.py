@@ -319,11 +319,21 @@ def delete_tracked(refs: list[dict]) -> None:
 
 
 def send_raw(text: str, chat_id, thread_id=None) -> dict:
-    """Надсилає довільний текст у вказаний чат/тред, повертає відповідь Telegram."""
+    """Надсилає довільний текст у вказаний чат/тред, повертає відповідь Telegram.
+    Порожній thread_id → загальна тема (без message_thread_id), БЕЗ фолбеку
+    на дефолтний TG_THREAD_ID (на відміну від _base_payload)."""
     if not TG_TOKEN or not chat_id:
         return {"ok": False, "error": "no token/chat"}
+    payload = {
+        "chat_id": chat_id, "text": text,
+        "parse_mode": "HTML", "disable_web_page_preview": True,
+    }
+    if thread_id:
+        try:
+            payload["message_thread_id"] = int(thread_id)
+        except (ValueError, TypeError):
+            pass
     try:
-        payload = _base_payload(text, chat_id=chat_id, thread_id=thread_id)
         resp = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json=payload, timeout=10
         )
