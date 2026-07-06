@@ -849,7 +849,7 @@ function ReactivationPlanner({ teams, canPickTeam, onDone }: {
         if (clients.length === 0) continue;
         await createReactivationTask(mgr.managerId, clients.map((c) => ({
           clientKey: c.clientKey, clientName: c.clientName, orders: c.orders,
-          revenue: c.revenue, lastPaid: c.lastPaid, category: c.category,
+          revenue: c.revenue, lastPaid: c.lastPaid, category: c.category, paymentType: c.paymentType,
         })));
         created++;
       }
@@ -887,11 +887,12 @@ function ReactivationPlanner({ teams, canPickTeam, onDone }: {
                 {m.clients.map((c) => {
                   const ds = daysSince(c.lastPaid);
                   const oneshot = c.category === "oneshot_bg";
+                  const bgLabel = oneshot ? (/без/i.test(c.paymentType ?? "") ? "1 перевез. · б/г без ПДВ" : /НДС|ПДВ/i.test(c.paymentType ?? "") ? "1 перевез. · б/г з ПДВ" : "1 перевез. (б/г)") : "замовклий 3+";
                   return (
                     <label key={c.clientKey} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "3px 0", cursor: "pointer" }}>
                       <input type="checkbox" checked={picked.has(c.clientKey)} onChange={() => toggle(c.clientKey)} />
                       <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 10, whiteSpace: "nowrap", background: oneshot ? "#dbeafe" : "#fef3c7", color: oneshot ? "#1d4ed8" : "#b45309" }}>
-                        {oneshot ? "1 перевез. (б/г)" : "замовклий 3+"}
+                        {bgLabel}
                       </span>
                       <span style={{ flex: 1 }}>🏢 {c.clientName}</span>
                       <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{c.orders} перевез. · {formatAmount(c.revenue)}{oneshot ? "" : ` · без замовлень ${ds ?? "?"} дн.`}</span>

@@ -971,6 +971,7 @@ export interface ChecklistItem {
   revenue?: number;
   lastPaid?: string | null;
   category?: string;
+  paymentType?: string | null;
   done?: boolean;
 }
 
@@ -984,6 +985,7 @@ export interface ReactivationCandidate {
   lastPaid: string | null;
   lastActivity: string | null;
   category: "lapsed" | "oneshot_bg";
+  paymentType: string | null;
 }
 
 export async function createReactivationTask(assigneeId: number, clients: ChecklistItem[]): Promise<{ id: number }> {

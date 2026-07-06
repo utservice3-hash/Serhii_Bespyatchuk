@@ -68,6 +68,7 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS utm_source TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS lead_generator TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_source TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS lead_channel TEXT; -- 'ad' | 'leadgen' | 'other'
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS payment_type TEXT; -- «форма расчета»: Безнал с НДС / без НДС / Наличные / ВАЛЮТА
 CREATE INDEX IF NOT EXISTS idx_deals_lead_channel ON deals(lead_channel);
 
 ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_team_lead BOOLEAN NOT NULL DEFAULT false;

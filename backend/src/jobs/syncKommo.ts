@@ -2,6 +2,7 @@ import { pool } from "../db/pool.js";
 import {
   extractPhone,
   extractLeadSource,
+  extractPaymentType,
   fetchAllDeals,
   fetchContactsByIds,
   fetchCompaniesByIds,
@@ -277,8 +278,8 @@ async function upsertDeal(
     `INSERT INTO deals (
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
-         client_name, client_key, utm_source, lead_generator, client_source, lead_channel
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16)
+         client_name, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -293,7 +294,8 @@ async function upsertDeal(
          utm_source = EXCLUDED.utm_source,
          lead_generator = EXCLUDED.lead_generator,
          client_source = EXCLUDED.client_source,
-         lead_channel = EXCLUDED.lead_channel`,
+         lead_channel = EXCLUDED.lead_channel,
+         payment_type = EXCLUDED.payment_type`,
       [
         deal.id,
         deal.name,
@@ -311,6 +313,7 @@ async function upsertDeal(
         source.leadGenerator,
         source.clientSource,
         source.channel,
+        extractPaymentType(deal),
       ]
     );
 }

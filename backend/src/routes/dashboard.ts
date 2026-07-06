@@ -1933,9 +1933,9 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
   let teamAnd = "";
   if (teamId != null) { params.push(teamId); teamAnd = `AND m.team_id = $${params.length}`; }
 
-  const r = await pool.query<{ manager_id: number; manager_name: string; client_key: string; name: string; orders: string; revenue: string; last_paid: string; last_activity: string | null; category: string }>(
+  const r = await pool.query<{ manager_id: number; manager_name: string; client_key: string; name: string; orders: string; revenue: string; last_paid: string; last_activity: string | null; category: string; payment_type: string | null }>(
     `WITH scoped AS (
-       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price
+       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price, d.payment_type
        FROM deals d
        JOIN managers m ON m.id = d.manager_id AND m.is_active
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -1944,7 +1944,8 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
      agg AS (
        SELECT client_key,
               (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS name,
-              COUNT(*) AS orders, COALESCE(SUM(price),0) AS revenue, MAX(created_at_kommo) AS last_paid
+              COUNT(*) AS orders, COALESCE(SUM(price),0) AS revenue, MAX(created_at_kommo) AS last_paid,
+              (array_agg(payment_type ORDER BY created_at_kommo DESC))[1] AS payment_type
        FROM scoped GROUP BY client_key
      ),
      primary_mgr AS (
@@ -1955,6 +1956,7 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
        ) z WHERE rn = 1
      )
      SELECT pm.manager_id, mm.name AS manager_name, a.client_key, a.name, a.orders, a.revenue, a.last_paid,
+            a.payment_type,
             (SELECT MAX(last_activity_at) FROM deals dd WHERE dd.client_key = a.client_key) AS last_activity,
             CASE WHEN a.orders = 1 THEN 'oneshot_bg' ELSE 'lapsed' END AS category
      FROM agg a
@@ -1966,8 +1968,8 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
        AND (
          -- давні хороші клієнти (3+ перевезень), що замовкли
          (a.orders >= 3 AND a.last_paid < now() - interval '${activeMonths} months')
-         -- або компанія з рівно 1 перевезенням (розрахунок б/г)
-         OR a.orders = 1
+         -- або компанія з 1 перевезенням, оплаченим БЕЗНАЛОМ (форма расчета б/г)
+         OR (a.orders = 1 AND a.payment_type ILIKE 'безнал%')
        )
      ORDER BY a.revenue DESC`,
     params
@@ -1986,6 +1988,7 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
       lastPaid: x.last_paid,
       lastActivity: x.last_activity,
       category: x.category, // 'lapsed' | 'oneshot_bg'
+      paymentType: x.payment_type, // «форма расчета» для oneshot: Безнал с/без НДС
     });
   }
   res.json({ managers: Array.from(byMgr.values()) });

@@ -98,6 +98,13 @@ export interface KommoDeal {
 const FIELD_UTM_SOURCE = 481993;
 const FIELD_LEAD_GENERATOR = 2098037; // "Лидогенератор"
 const FIELD_CLIENT_SOURCE = 2098035; // "Источник клиента"
+// "Приход 1 Тип оплаты": Наличные / Безнал с НДС / Безнал без НДС / ВАЛЮТА.
+const FIELD_PAYMENT_TYPE = 2097629;
+
+/** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */
+export function extractPaymentType(deal: KommoDeal): string | null {
+  return fieldText(deal, FIELD_PAYMENT_TYPE);
+}
 // "Продзвін" pipelines are run by the lead-generation department.
 const LEADGEN_PIPELINES = new Set([8921936, 7337048]);
 // "Источник клиента" values that represent paid/marketing inbound traffic.

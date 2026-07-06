@@ -37,6 +37,7 @@ const checklistItem = z.object({
   revenue: z.number().optional(),
   lastPaid: z.string().nullable().optional(),
   category: z.string().optional(),
+  paymentType: z.string().nullable().optional(),
   done: z.boolean().optional(),
 });
 
