@@ -266,6 +266,7 @@ export interface RepeatClientPlan {
   orders: number;
   revenue: number;
   lastPaid: string;
+  inactive: boolean;
   plan: number;
   fact: number;
   weekFact: number[];
@@ -294,8 +295,11 @@ export async function saveRepeatClientPlan(input: RepeatClientPlanInput): Promis
   await api.post("/dashboard/repeat-client-plan", input);
 }
 
-export async function fetchRepeatPlansGrid(month: string, teamId?: number): Promise<RepeatPlansGrid> {
-  const { data } = await api.get<RepeatPlansGrid>("/dashboard/repeat-plans-grid", { params: teamId ? { month, teamId } : { month } });
+export async function fetchRepeatPlansGrid(month: string, teamId?: number, includeInactive?: boolean): Promise<RepeatPlansGrid> {
+  const params: Record<string, string | number> = { month };
+  if (teamId) params.teamId = teamId;
+  if (includeInactive) params.includeInactive = 1;
+  const { data } = await api.get<RepeatPlansGrid>("/dashboard/repeat-plans-grid", { params });
   return data;
 }
 

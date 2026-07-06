@@ -2954,6 +2954,9 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   const monthStr = (req.query.month as string) || new Date().toISOString().slice(0, 7);
   const planDate = `${monthStr}-01`;
   const teamId: number | null = auth.role === "team_lead" ? auth.teamId ?? null : (req.query.teamId ? Number(req.query.teamId) : null);
+  // includeInactive=1 → also show regulars who stopped ordering long ago
+  // (замовклі) for reactivation planning; default shows only active regulars.
+  const includeInactive = req.query.includeInactive === "1" || req.query.includeInactive === "true";
 
   const params: unknown[] = [planDate];
   let teamCond = "";
@@ -3042,7 +3045,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
      )
      SELECT pm.manager_id, a.client_key, a.name, a.orders, a.revenue, a.last_paid
      FROM agg a JOIN primary_mgr pm ON pm.client_key = a.client_key
-     WHERE a.orders >= 2 AND a.last_paid >= now() - interval '${activeMonths} months'
+     WHERE a.orders >= 2 ${includeInactive ? "" : `AND a.last_paid >= now() - interval '${activeMonths} months'`}
      ORDER BY a.revenue DESC`
   );
   const isPhoneKey = (k: string) => /^\d{9,}$/.test(k);
@@ -3079,11 +3082,12 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
 
   type RepeatClient = {
     clientKey: string; clientName: string; isCompany: boolean; identifier: string | null;
-    orders: number; revenue: number; lastPaid: string;
+    orders: number; revenue: number; lastPaid: string; inactive: boolean;
     plan: number; fact: number; weekFact: number[];
     forecast: string | null; realizationPct: number | null; international: boolean | null;
     weDo: boolean | null; callLink: string | null; comment: string | null;
   };
+  const activeCutoffMs = Date.now() - activeMonths * 30 * 24 * 3600 * 1000;
   const clientsByMgr = new Map<number, RepeatClient[]>();
   for (const c of clientsRes.rows) {
     const individual = isPhoneKey(c.client_key);
@@ -3098,6 +3102,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
       orders: Number(c.orders),
       revenue: Number(c.revenue),
       lastPaid: c.last_paid,
+      inactive: c.last_paid ? new Date(c.last_paid).getTime() < activeCutoffMs : true,
       plan: p ? Number(p.plan) : 0,
       fact: weekFact.reduce((s, v) => s + v, 0) + (snapByKey.get(c.client_key) ?? 0),
       weekFact,

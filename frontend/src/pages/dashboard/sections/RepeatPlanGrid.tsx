@@ -63,8 +63,12 @@ function ClientPlanRow({ client, month, managerId, weekPlan, onSaved }: {
   );
   return (
     <tr>
-      <td style={{ textAlign: "left", whiteSpace: "nowrap" }}>{client.clientName}</td>
+      <td style={{ textAlign: "left", whiteSpace: "nowrap", opacity: client.inactive ? 0.6 : 1 }}>
+        {client.inactive && <span title="Давно не замовляв (замовклий)">💤 </span>}{client.clientName}
+      </td>
       <td style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{client.isCompany ? "🏢" : `👤${client.identifier ? " " + client.identifier : ""}`}</td>
+      <td style={{ textAlign: "right" }}>{client.orders}</td>
+      <td style={{ textAlign: "right", fontWeight: 600 }} title={`Остання оплата: ${client.lastPaid ? new Date(client.lastPaid).toLocaleDateString("uk-UA") : "—"} · ${formatAmountFull(client.revenue)}`}>{formatAmount(client.revenue)}</td>
       <td><input value={d.plan} onChange={(e) => setD((s) => ({ ...s, plan: e.target.value }))} inputMode="numeric" placeholder="0" style={{ ...cellInput, textAlign: "right", width: 80 }} /></td>
       <td style={{ textAlign: "right", color: "#16a34a", fontWeight: 600 }} title={formatAmountFull(client.fact)}>{formatAmount(client.fact)}</td>
       <td style={{ textAlign: "right", color: "#d97706" }}>{formatAmount(remaining)}</td>
@@ -119,6 +123,7 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
   const [err, setErr] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [open, setOpen] = useState(false);
+  const [includeInactive, setIncludeInactive] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const toggleMgr = (id: number) => setExpanded((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -126,11 +131,11 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
     if (!open) return;
     let alive = true;
     setGrid(null);
-    fetchRepeatPlansGrid(month, teamId ? Number(teamId) : undefined)
+    fetchRepeatPlansGrid(month, teamId ? Number(teamId) : undefined, includeInactive)
       .then((g) => { if (alive) { setGrid(g); setDrafts({}); } })
       .catch(() => { if (alive) setErr("Не вдалося завантажити плани."); });
     return () => { alive = false; };
-  }, [month, teamId, reload, open]);
+  }, [month, teamId, reload, open, includeInactive]);
 
   const setMonthP = (v: string) => { if (!v) return; setMonth(v); localStorage.setItem("repeatPlansMonth", v); };
   const shiftMonth = (d: number) => {
@@ -199,6 +204,10 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
         </button>
         {open && (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-muted)", cursor: "pointer", whiteSpace: "nowrap" }} title="Показати клієнтів, що давно не замовляли (замовклі)">
+              <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
+              💤 замовклі
+            </label>
             {canPickTeam && (
               <select value={teamId} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : ""; setTeamId(v); localStorage.setItem("repeatPlansTeam", v ? String(v) : ""); }}
                 style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
@@ -305,6 +314,8 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                                           <tr>
                                             <th style={{ textAlign: "left" }}>Постійний клієнт</th>
                                             <th>Тип</th>
+                                            <th style={{ textAlign: "right" }}>Поїздок<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>всього</div></th>
+                                            <th style={{ textAlign: "right" }}>Напрацював<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>сума lifetime</div></th>
                                             <th style={{ textAlign: "right" }}>План</th>
                                             <th style={{ textAlign: "right" }}>Факт</th>
                                             <th style={{ textAlign: "right" }}>Залишок</th>
@@ -320,7 +331,7 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                                             <th></th>
                                           </tr>
                                           <tr>
-                                            <th></th><th></th><th></th><th></th><th></th>
+                                            <th></th><th></th><th></th><th></th><th></th><th></th><th></th>
                                             {grid.weeks.map((w) => (
                                               <Fragment key={w.label}>
                                                 <th style={{ textAlign: "right", fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>план</th>
