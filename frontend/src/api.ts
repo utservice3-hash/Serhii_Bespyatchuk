@@ -249,7 +249,10 @@ export interface RepeatPlansGrid {
   weeks: { label: string; from: number; to: number; days: number }[];
   teams: {
     teamId: number; teamName: string; teamPlan: number; teamFact: number;
-    managers: { managerId: number; name: string; plan: number; fact: number }[];
+    managers: {
+      managerId: number; name: string; plan: number; fact: number;
+      clients: { clientName: string; isCompany: boolean; identifier: string | null; orders: number; revenue: number; lastPaid: string }[];
+    }[];
   }[];
   totalPlan: number;
   totalFact: number;

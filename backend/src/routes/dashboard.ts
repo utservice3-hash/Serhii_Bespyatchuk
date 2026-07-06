@@ -3014,7 +3014,55 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   const numMap = (rows: { id: string; s: string }[]) => new Map(rows.map((x) => [Number(x.id), Number(x.s)]));
   const succM = numMap(succ.rows), payM = numMap(pay.rows);
 
-  const teamsMap = new Map<number, { teamId: number; teamName: string; teamPlan: number; teamFact: number; managers: { managerId: number; name: string; plan: number; fact: number }[] }>();
+  // Each manager's active regular clients (2+ lifetime paid AND ordered within
+  // the active window), attributed to a single PRIMARY manager (most paid) so a
+  // client shows under exactly one manager — same identity rule as /loyalty.
+  const activeMonths = (await getSettings()).sleepingWindowMonths;
+  const clientsRes = await pool.query<{ manager_id: number; client_key: string; name: string; orders: string; revenue: string; last_paid: string }>(
+    `WITH scoped AS (
+       SELECT d.client_key, d.manager_id, d.client_name, d.created_at_kommo, d.price
+       FROM deals d
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE d.client_key IS NOT NULL AND psm.funnel_stage = 'paid' ${teamAnd}
+     ),
+     agg AS (
+       SELECT client_key,
+              (array_agg(client_name ORDER BY created_at_kommo DESC))[1] AS name,
+              COUNT(*) AS orders, COALESCE(SUM(price),0) AS revenue,
+              MAX(created_at_kommo) AS last_paid
+       FROM scoped GROUP BY client_key
+     ),
+     primary_mgr AS (
+       SELECT client_key, manager_id FROM (
+         SELECT client_key, manager_id,
+                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(created_at_kommo) DESC) AS rn
+         FROM scoped GROUP BY client_key, manager_id
+       ) z WHERE rn = 1
+     )
+     SELECT pm.manager_id, a.client_key, a.name, a.orders, a.revenue, a.last_paid
+     FROM agg a JOIN primary_mgr pm ON pm.client_key = a.client_key
+     WHERE a.orders >= 2 AND a.last_paid >= now() - interval '${activeMonths} months'
+     ORDER BY a.revenue DESC`
+  );
+  const isPhoneKey = (k: string) => /^\d{9,}$/.test(k);
+  type RepeatClient = { clientName: string; isCompany: boolean; identifier: string | null; orders: number; revenue: number; lastPaid: string };
+  const clientsByMgr = new Map<number, RepeatClient[]>();
+  for (const c of clientsRes.rows) {
+    const individual = isPhoneKey(c.client_key);
+    const list = clientsByMgr.get(c.manager_id) ?? [];
+    list.push({
+      clientName: c.name,
+      isCompany: !individual,
+      identifier: individual ? c.client_key : null,
+      orders: Number(c.orders),
+      revenue: Number(c.revenue),
+      lastPaid: c.last_paid,
+    });
+    clientsByMgr.set(c.manager_id, list);
+  }
+
+  const teamsMap = new Map<number, { teamId: number; teamName: string; teamPlan: number; teamFact: number; managers: { managerId: number; name: string; plan: number; fact: number; clients: RepeatClient[] }[] }>();
   let totalPlan = 0, totalFact = 0;
   for (const row of r.rows) {
     const tid = row.team_id ?? 0;
@@ -3022,7 +3070,7 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
     const plan = Number(row.plan);
     const fact = (succM.get(row.id) ?? 0) + (payM.get(row.id) ?? 0);
     const t = teamsMap.get(tid)!;
-    t.managers.push({ managerId: row.id, name: row.name, plan, fact });
+    t.managers.push({ managerId: row.id, name: row.name, plan, fact, clients: clientsByMgr.get(row.id) ?? [] });
     t.teamPlan += plan; t.teamFact += fact;
     totalPlan += plan; totalFact += fact;
   }

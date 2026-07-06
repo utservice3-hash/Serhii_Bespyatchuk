@@ -23,6 +23,8 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
   const [err, setErr] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggleMgr = (id: number) => setExpanded((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   useEffect(() => {
     if (!open) return;
@@ -163,9 +165,18 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                             const d = decomp(m.plan, m.fact);
                             const draft = drafts[m.managerId];
                             const dirty = draft != null && Number(draft.replace(/[^\d.-]/g, "")) !== m.plan;
+                            const isOpen = expanded.has(m.managerId);
+                            const colSpan = 6 + grid.weeks.length;
                             return (
-                              <tr key={m.managerId}>
-                                <td style={{ textAlign: "left", paddingLeft: 18 }}>{m.name}</td>
+                              <Fragment key={m.managerId}>
+                              <tr>
+                                <td style={{ textAlign: "left", paddingLeft: 18 }}>
+                                  <button onClick={() => toggleMgr(m.managerId)} title="Показати постійних клієнтів"
+                                    style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", padding: 0 }}>
+                                    {m.clients.length > 0 ? (isOpen ? "▾ " : "▸ ") : ""}{m.name}
+                                    {m.clients.length > 0 && <span style={{ color: "var(--text-muted)", fontSize: 12 }}> ({m.clients.length})</span>}
+                                  </button>
+                                </td>
                                 <td style={{ textAlign: "right" }}>
                                   <input
                                     value={draft ?? String(m.plan)}
@@ -189,6 +200,29 @@ export function RepeatPlanGrid({ canPickTeam, teams }: { canPickTeam: boolean; t
                                 ))}
                                 <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{formatAmount(d.perDay)}</td>
                               </tr>
+                              {isOpen && m.clients.length > 0 && (
+                                <tr>
+                                  <td colSpan={colSpan} style={{ background: "var(--bg-subtle, rgba(127,127,127,0.05))", padding: "6px 10px 10px 26px" }}>
+                                    <table className="data-table compact" style={{ fontSize: 12, minWidth: 560 }}>
+                                      <thead>
+                                        <tr><th style={{ textAlign: "left" }}>Постійний клієнт</th><th>Тип</th><th style={{ textAlign: "right" }}>Оплат</th><th style={{ textAlign: "right" }}>Сума (lifetime)</th><th style={{ textAlign: "right" }}>Остання</th></tr>
+                                      </thead>
+                                      <tbody>
+                                        {m.clients.map((c, i) => (
+                                          <tr key={i}>
+                                            <td style={{ textAlign: "left" }}>{c.clientName}</td>
+                                            <td style={{ color: "var(--text-muted)" }}>{c.isCompany ? "🏢 Компанія" : `👤 Фізособа${c.identifier ? " · " + c.identifier : ""}`}</td>
+                                            <td style={{ textAlign: "right" }}>{c.orders}</td>
+                                            <td style={{ textAlign: "right", fontWeight: 600 }}>{formatAmount(c.revenue)}</td>
+                                            <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{c.lastPaid ? new Date(c.lastPaid).toLocaleDateString("uk-UA") : "—"}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </td>
+                                </tr>
+                              )}
+                              </Fragment>
                             );
                           })}
                         </Fragment>
