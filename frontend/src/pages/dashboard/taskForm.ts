@@ -12,9 +12,12 @@ export type TaskForm = {
   // KPI plan fields
   taskType: "simple" | "weekly_kpi" | "monthly_kpi";
   weekStart: string;
+  rangeFrom: string; // weekly plan: custom range start (from calendar)
+  rangeTo: string;   // weekly plan: custom range end
   weekdays: boolean[]; // Mon..Sun
   adsCount: string;
   leadgenCount: string;
+  dispatchCount: string; // к-сть авто (поставити)
   avgCheck: string;
   conversion: string;
 };
@@ -28,9 +31,12 @@ export const emptyTaskForm: TaskForm = {
   comments: "",
   taskType: "simple",
   weekStart: "",
+  rangeFrom: "",
+  rangeTo: "",
   weekdays: [true, true, true, true, true, false, false], // Mon..Sun
   adsCount: "",
   leadgenCount: "",
+  dispatchCount: "",
   avgCheck: "",
   conversion: "",
 };

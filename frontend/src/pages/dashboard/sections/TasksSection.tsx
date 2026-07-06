@@ -13,6 +13,7 @@ import type { TaskForm } from "../taskForm";
 const METRIC_LBL: Record<string, string> = {
   ads_count: "Реклама",
   leadgen_count: "Лідоген",
+  dispatch_count: "Авто",
   avg_check: "Сер. чек",
   conversion: "Конверсія",
   payment_amount: "Сума",
@@ -610,14 +611,29 @@ export function TasksSection({
                 </>
               ) : (
                 <>
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                    {taskForm.taskType === "weekly_kpi" ? "Дата (будь-який день тижня плану)" : "Дата (будь-який день місяця плану)"}
-                    <input
-                      type="date"
-                      value={taskForm.weekStart}
-                      onChange={(e) => setTaskForm((f) => ({ ...f, weekStart: e.target.value }))}
-                    />
-                  </label>
+                  {taskForm.taskType === "weekly_kpi" ? (
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                        Період: від
+                        <input type="date" value={taskForm.rangeFrom}
+                          onChange={(e) => setTaskForm((f) => ({ ...f, rangeFrom: e.target.value }))} />
+                      </label>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                        до
+                        <input type="date" value={taskForm.rangeTo}
+                          onChange={(e) => setTaskForm((f) => ({ ...f, rangeTo: e.target.value }))} />
+                      </label>
+                    </div>
+                  ) : (
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                      Дата (будь-який день місяця плану)
+                      <input
+                        type="date"
+                        value={taskForm.weekStart}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, weekStart: e.target.value }))}
+                      />
+                    </label>
+                  )}
                   <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Робочі дні (на них розкладається план):</div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"].map((d, i) => (
@@ -663,6 +679,15 @@ export function TasksSection({
                         value={taskForm.leadgenCount}
                         onChange={(e) => setTaskForm((f) => ({ ...f, leadgenCount: e.target.value }))}
                         placeholder="напр. 40"
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                      К-сть авто (поставити)
+                      <input
+                        type="number"
+                        value={taskForm.dispatchCount}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, dispatchCount: e.target.value }))}
+                        placeholder="напр. 5"
                       />
                     </label>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>

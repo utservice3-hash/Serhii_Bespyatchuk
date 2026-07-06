@@ -969,6 +969,7 @@ export async function createTaskPlan(payload: {
   days: string[];
   adsCount?: number;
   leadgenCount?: number;
+  dispatchCount?: number;
   avgCheck?: number;
   conversion?: number;
 }): Promise<{ created: number }> {

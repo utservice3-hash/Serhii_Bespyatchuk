@@ -130,6 +130,17 @@ export async function evaluateKpiTasks(): Promise<void> {
           [t.assignee_id, t.plan_date]
         );
         actual = Math.round(Number(r.rows[0].v));
+      } else if (m.metric === "dispatch_count") {
+        // Cars placed = the manager's deals that ENTERED an "Авто працює" stage
+        // that day (stage-entry events; distinct deals to avoid re-entries).
+        const r = await pool.query<{ c: string }>(
+          `SELECT COUNT(DISTINCT dse.kommo_id) c FROM deal_stage_events dse
+             JOIN deals d ON d.kommo_id = dse.kommo_id
+             WHERE d.manager_id = $1 AND dse.status_id IN (69716300, 98470988, 10937178)
+               AND (dse.changed_at AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
+          [t.assignee_id, t.plan_date]
+        );
+        actual = Number(r.rows[0].c);
       }
       out.push({ metric: m.metric, target: m.target, actual, done: actual >= m.target });
     }

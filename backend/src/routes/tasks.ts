@@ -55,11 +55,11 @@ tasksRouter.get("/", async (req, res) => {
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
   const result = await pool.query(
-    `SELECT t.id, t.title, t.status, t.deadline, t.assignee_id AS "assigneeId",
+    `SELECT t.id, t.title, t.status, to_char(t.deadline, 'YYYY-MM-DD') AS deadline, t.assignee_id AS "assigneeId",
             m.name AS "assigneeName", t.priority, t.comments, t.department,
             t.task_type AS "taskType", t.metric, t.target_value AS "targetValue",
-            t.actual_value AS "actualValue", t.plan_date AS "planDate",
-            t.period_start AS "periodStart", t.period_end AS "periodEnd",
+            t.actual_value AS "actualValue", to_char(t.plan_date, 'YYYY-MM-DD') AS "planDate",
+            to_char(t.period_start, 'YYYY-MM-DD') AS "periodStart", to_char(t.period_end, 'YYYY-MM-DD') AS "periodEnd",
             t.parent_id AS "parentId", t.auto, u.role AS "createdByRole",
             t.created_by AS "createdById", m.team_id AS "assigneeTeamId",
             t.metrics_json AS "metricsJson",
@@ -84,6 +84,7 @@ const planSchema = z.object({
   days: z.array(z.string()).min(1),
   adsCount: z.number().nonnegative().optional(),
   leadgenCount: z.number().nonnegative().optional(),
+  dispatchCount: z.number().nonnegative().optional(),
   avgCheck: z.number().nonnegative().optional(),
   conversion: z.number().min(0).max(100).optional(),
 });
@@ -91,6 +92,7 @@ const planSchema = z.object({
 const METRIC_LABELS: Record<string, string> = {
   ads_count: "Кількість прийнятої реклами",
   leadgen_count: "Кількість прийнятих лідогенів",
+  dispatch_count: "Кількість поставлених авто",
   avg_check: "Середній чек",
   conversion: "Конверсія",
 };
@@ -102,7 +104,7 @@ tasksRouter.post("/plan", async (req, res) => {
   }
   const parsed = planSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { assigneeId, period, days, adsCount, leadgenCount, avgCheck, conversion } = parsed.data;
+  const { assigneeId, period, days, adsCount, leadgenCount, dispatchCount, avgCheck, conversion } = parsed.data;
 
   const sorted = [...days].sort();
   const periodStart = sorted[0];
@@ -132,12 +134,13 @@ tasksRouter.post("/plan", async (req, res) => {
   const dailyMetrics: { metric: string; target: number }[] = [];
   if (adsCount && adsCount > 0) dailyMetrics.push({ metric: "ads_count", target: Math.max(1, Math.round(adsCount / sorted.length)) });
   if (leadgenCount && leadgenCount > 0) dailyMetrics.push({ metric: "leadgen_count", target: Math.max(1, Math.round(leadgenCount / sorted.length)) });
+  if (dispatchCount && dispatchCount > 0) dailyMetrics.push({ metric: "dispatch_count", target: Math.max(1, Math.round(dispatchCount / sorted.length)) });
   if (avgCheck && avgCheck > 0) dailyMetrics.push({ metric: "avg_check", target: avgCheck });
   if (conversion && conversion > 0) dailyMetrics.push({ metric: "conversion", target: conversion });
   if (dailyPayment > 0) dailyMetrics.push({ metric: "payment_amount", target: dailyPayment });
 
   if (dailyMetrics.length === 0) {
-    return res.status(400).json({ error: "Вкажіть хоча б одну ціль (реклама, лідоген, чек або конверсія), або задайте місячний план виручки для «суми»" });
+    return res.status(400).json({ error: "Вкажіть хоча б одну ціль (реклама, лідоген, авто, чек або конверсія), або задайте місячний план виручки для «суми»" });
   }
 
   // One composite daily_kpi task per working day, bundling all the day's targets.

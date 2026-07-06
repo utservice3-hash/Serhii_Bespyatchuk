@@ -314,22 +314,25 @@ export function Dashboard() {
   // Builds the list of ISO working-day dates the team-lead picked, for a week
   // (the week containing weekStart) or a month (all matching weekdays).
   function buildPlanDays(): string[] {
-    if (!taskForm.weekStart) return [];
     const fmt = (d: Date) =>
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const base = new Date(taskForm.weekStart + "T00:00:00");
     const wd = (d: Date) => (d.getDay() + 6) % 7; // Mon=0..Sun=6
     const days: string[] = [];
     if (taskForm.taskType === "weekly_kpi") {
-      const monday = new Date(base);
-      monday.setDate(base.getDate() - wd(base));
-      for (let i = 0; i < 7; i++) {
-        if (!taskForm.weekdays[i]) continue;
-        const d = new Date(monday);
-        d.setDate(monday.getDate() + i);
-        days.push(fmt(d));
+      // Custom calendar range: every day between rangeFrom..rangeTo whose weekday
+      // is enabled. No more forcing the fixed Mon–Sun 7-day block.
+      if (!taskForm.rangeFrom || !taskForm.rangeTo) return [];
+      const from = new Date(taskForm.rangeFrom + "T00:00:00");
+      const to = new Date(taskForm.rangeTo + "T00:00:00");
+      if (to < from) return [];
+      const d = new Date(from);
+      while (d <= to) {
+        if (taskForm.weekdays[wd(d)]) days.push(fmt(d));
+        d.setDate(d.getDate() + 1);
       }
     } else {
+      if (!taskForm.weekStart) return [];
+      const base = new Date(taskForm.weekStart + "T00:00:00");
       const d = new Date(base.getFullYear(), base.getMonth(), 1);
       while (d.getMonth() === base.getMonth()) {
         if (taskForm.weekdays[wd(d)]) days.push(fmt(d));
@@ -366,6 +369,7 @@ export function Dashboard() {
         days,
         adsCount: taskForm.adsCount ? Number(taskForm.adsCount) : undefined,
         leadgenCount: taskForm.leadgenCount ? Number(taskForm.leadgenCount) : undefined,
+        dispatchCount: taskForm.dispatchCount ? Number(taskForm.dispatchCount) : undefined,
         avgCheck: taskForm.avgCheck ? Number(taskForm.avgCheck) : undefined,
         conversion: taskForm.conversion ? Number(taskForm.conversion) : undefined,
       });
