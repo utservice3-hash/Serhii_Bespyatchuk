@@ -199,10 +199,13 @@ function Decomposition({ b }: { b: Block }) {
   const leadsDone = o.adConversion.leads;
   const leadsNeeded = conv > 0 ? Math.ceil(carsNeeded / (conv / 100)) : 0;
   const leadsLeft = Math.max(0, leadsNeeded - leadsDone);
-  const revLeft = Math.max(0, plan - o.fact);
+  // «Вже» по доходу = отримано цього місяця + перенесені угоди з минулого місяця.
+  const carry = o.carryover?.amount ?? 0;
+  const revDone = o.fact + carry;
+  const revLeft = Math.max(0, plan - revDone);
 
   const rows: { label: string; need: string; done: string; left: string }[] = [
-    { label: "Дохід (грн)", need: formatAmount(plan), done: formatAmount(o.fact), left: formatAmount(revLeft) },
+    { label: "Дохід (грн)", need: formatAmount(plan), done: formatAmount(revDone), left: formatAmount(revLeft) },
     { label: "Авто (угод)", need: carsNeeded ? carsNeeded.toLocaleString("uk-UA") : "—", done: carsDone.toLocaleString("uk-UA"), left: carsLeft.toLocaleString("uk-UA") },
     { label: "Ліди (реклама)", need: leadsNeeded ? leadsNeeded.toLocaleString("uk-UA") : "—", done: leadsDone.toLocaleString("uk-UA"), left: leadsLeft.toLocaleString("uk-UA") },
   ];
@@ -211,7 +214,7 @@ function Decomposition({ b }: { b: Block }) {
     <div style={{ marginTop: 16 }}>
       <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 4px" }}>🎯 Декомпозиція плану (місяць, по відділу)</h3>
       <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 8px" }}>
-        Поточний ср. чек {formatAmount(avg)} · конверсія реклами {conv}%. Треба авто = план ÷ ср.чек; треба лідів = авто ÷ конверсія.
+        Поточний ср. чек {formatAmount(avg)} · конверсія реклами {conv}%. Треба авто = план ÷ ср.чек; треба лідів = авто ÷ конверсія. «Вже» по доходу = отримано цього місяця + перенесені з минулого{carry > 0 ? ` (${formatAmount(carry)})` : ""}.
       </p>
       <div style={{ overflowX: "auto" }}>
         <table className="data-table compact" style={{ minWidth: 420 }}>
