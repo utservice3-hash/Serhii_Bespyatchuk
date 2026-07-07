@@ -119,6 +119,21 @@ def _handle_elogist_message(text: str):
         return
     _create_elogist_lead(parsed["phone"], parsed["route"])
 
+
+def _detect_elogist(lead: dict | None, status_id: int = 0) -> bool:
+    """Чи лід прийшов з eLogist (за етапом, тегом або назвою)."""
+    if status_id == ELOGIST_STATUS:
+        return True
+    tags = [t.get("name") for t in ((lead or {}).get("_embedded", {}).get("tags") or [])]
+    if ELOGIST_TAG in tags:
+        return True
+    return str((lead or {}).get("name", "")).startswith("eLogist")
+
+
+def _source_badge(is_elogist: bool) -> str:
+    """Рядок-мітка джерела ліда для сповіщень: eLogist чи власний UTS."""
+    return "📨 Джерело ліда: <b>eLogist</b>" if is_elogist else "📨 Джерело ліда: <b>UTS</b>"
+
 PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
 CLOSED_NOT_REALIZED = 143        # ЗАКРИТО І НЕ РЕАЛІЗОВАНО
 WON_STATUS_ID = 142              # УСПІШНА УГОДА
@@ -928,17 +943,20 @@ def _scan_unassigned_leads():
                 # Використовуємо updated_at як реальний час появи в черзі
                 updated_at = lead.get("updated_at", 0)
                 arrived = datetime.fromtimestamp(updated_at, tz=timezone.utc) if updated_at else now
+                is_elogist = _detect_elogist(lead, status_id)
                 unassigned[lid] = {
                     "arrived_at": arrived,
                     "status_name": status_name,
                     "lead_name": lead_name,
                     "last_reminded_count": 0,
+                    "is_elogist": is_elogist,
                 }
                 # Одразу сповіщаємо про нерозібрану заявку
                 kommo_url = f"https://utsercice.kommo.com/leads/detail/{lid}"
                 source_line = f"\n🌐 Джерело: {source}" if source else ""
                 msg = (
                     f"📬 <b>Нерозібрана заявка!</b>\n"
+                    f"{_source_badge(is_elogist)}\n"
                     f"🏷 Назва: {lead_name}\n"
                     f"📍 Етап: {status_name}{source_line}\n"
                     f"⏱ Щойно виявлено сканером\n"
@@ -974,6 +992,7 @@ def _check_unassigned_leads():
         if age_min >= 45 and last < 99:
             msg = (
                 f"🔴 <b>Заявка не опрацьована більше 45 хв!</b>\n"
+                f"{_source_badge(info.get('is_elogist'))}\n"
                 f"🏷 Назва: {info['lead_name']}\n"
                 f"📍 Етап: {info['status_name']}\n"
                 f"⏱ Очікує: <b>{_format_duration(age_min)}</b>\n"
@@ -996,6 +1015,7 @@ def _check_unassigned_leads():
 
         msg = (
             f"📬 <b>Нерозібрана заявка!</b>\n"
+            f"{_source_badge(info.get('is_elogist'))}\n"
             f"🏷 Назва: {info['lead_name']}\n"
             f"📍 Етап: {info['status_name']}\n"
             f"⏱ Очікує: <b>{_format_duration(age_min)}</b>\n"
@@ -1526,6 +1546,7 @@ def _process_status_change(item: dict):
         kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
         msg = (
             f"✅ <b>Взято в роботу</b>\n"
+            f"{_source_badge(info.get('is_elogist'))}\n"
             f"🏷 Назва: {info.get('lead_name', f'Лід #{lead_id}')}\n"
             f"📍 Етап: {info.get('status_name', '—')}\n"
             f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
@@ -1667,11 +1688,13 @@ def _handle_unassigned(lead_id: int, status_id: int):
     lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
     source = kommo.get_lead_source(lead) if lead else ""
     status_name = UNASSIGNED_STATUSES.get(status_id, "—")
+    is_elogist = _detect_elogist(lead, status_id)
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
 
     source_line = f"\n🌐 Джерело: {source}" if source else ""
     msg = (
         f"📬 <b>Нерозібрана заявка!</b>\n"
+        f"{_source_badge(is_elogist)}\n"
         f"🏷 Назва: {lead_name}\n"
         f"📍 Етап: {status_name}{source_line}\n"
         f"⏱ Щойно надійшла\n"
@@ -1684,6 +1707,7 @@ def _handle_unassigned(lead_id: int, status_id: int):
         "arrived_at": now,
         "status_name": status_name,
         "lead_name": lead_name,
+        "is_elogist": is_elogist,
         "last_reminded_count": 0,
         "msg_refs": msg_refs,
     }
