@@ -1331,11 +1331,7 @@ export function Dashboard() {
         />
       )}
 
-      {section === "feedback" && (
-        auth?.role === "manager"
-          ? <div className="page-header"><h1 className="page-title">Зворотний звʼязок</h1><p className="loading-text">Доступно тімлідам та адміністратору.</p></div>
-          : <FeedbackSection isAdmin={auth?.role === "admin"} />
-      )}
+      {section === "feedback" && <FeedbackSection isAdmin={auth?.role === "admin"} />}
 
       {section === "aiwork" && <AiWorkSection />}
 

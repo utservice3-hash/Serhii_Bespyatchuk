@@ -7,12 +7,12 @@ import {
   type ReactivationManager,
   type Task,
   type TaskPriority,
-  type TaskStatus,
   type Team,
 } from "../../../api";
-import { STATUS_DOT_COLORS, STATUS_GROUPS, STATUS_LABELS, PRIORITY_LABELS } from "../constants";
+import { PRIORITY_LABELS } from "../constants";
 import { formatAmount } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
+import { StatusPicker } from "../../../components/StatusPicker";
 import type { TaskForm } from "../taskForm";
 
 const METRIC_LBL: Record<string, string> = {
@@ -30,12 +30,6 @@ const hexA = (hex: string, a: number) => {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 };
-/** Colored pill styling for a status <select> (kept editable, looks like Notion). */
-const statusPillStyle = (s: TaskStatus): CSSProperties => ({
-  background: hexA(STATUS_DOT_COLORS[s] ?? "#94a3b8", 0.16),
-  color: "var(--text)", border: "none", borderRadius: 999, padding: "3px 12px",
-  fontWeight: 600, fontSize: 12, appearance: "none", WebkitAppearance: "none", cursor: "pointer", maxWidth: "100%",
-});
 // Fixed departments (roles/відділи) — teams from the DB are appended at runtime.
 const DEPARTMENTS = ["Операційний директор", "HR", "Асистент", "Офіс-менеджер", "Комерційний відділ", "Лідогенерація", "Фінанси", "Відділ якості"];
 const DEPT_PALETTE = ["#60a5fa", "#a78bfa", "#f472b6", "#f59e0b", "#34d399", "#22d3ee", "#fb7185", "#818cf8", "#94a3b8"];
@@ -352,25 +346,13 @@ export function TasksSection({
                       )}
                     </td>
                     <td>
-                      <select
+                      <StatusPicker
                         value={task.status}
-                        onChange={(e) => {
-                          const status = e.target.value as TaskStatus;
+                        onChange={(status) => {
                           patchTaskLocal(task.id, { status });
                           updateTask(task.id, { status });
                         }}
-                        style={statusPillStyle(task.status)}
-                      >
-                        {STATUS_GROUPS.map((group) => (
-                          <optgroup key={group.label} label={group.label}>
-                            {group.statuses.map((s) => (
-                              <option key={s} value={s}>
-                                {STATUS_LABELS[s]}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))}
-                      </select>
+                      />
                     </td>
                     <td>
                       <input
@@ -518,9 +500,8 @@ export function TasksSection({
                     </select>
                   </F>
                   <F icon="◔" label="Статус">
-                    <select value={openTask.status} onChange={(e) => { const status = e.target.value as TaskStatus; patchTaskLocal(openTask.id, { status }); updateTask(openTask.id, { status }); }} style={{ width: "100%" }}>
-                      {STATUS_GROUPS.map((group) => <optgroup key={group.label} label={group.label}>{group.statuses.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</optgroup>)}
-                    </select>
+                    <StatusPicker value={openTask.status} fullWidth
+                      onChange={(status) => { patchTaskLocal(openTask.id, { status }); updateTask(openTask.id, { status }); }} />
                   </F>
                 </>
               );

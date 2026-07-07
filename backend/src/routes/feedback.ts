@@ -14,10 +14,9 @@ const SELECT = `
   JOIN users u ON u.id = f.author_user_id
   LEFT JOIN managers m ON m.id = u.manager_id`;
 
-/** List feedback: admin sees everything, a team-lead only their own items. */
+/** List feedback: admin sees everything, everyone else only their own items. */
 feedbackRouter.get("/", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
   const params: unknown[] = [];
   let where = "";
   if (auth.role !== "admin") {
@@ -28,8 +27,8 @@ feedbackRouter.get("/", async (req, res) => {
   res.json({ feedback: r.rows });
 });
 
-/** Submit a new feedback / bug report (team-lead or admin). */
-feedbackRouter.post("/", requireRole("admin", "team_lead"), async (req, res) => {
+/** Submit a new feedback / bug report — available to every authenticated user. */
+feedbackRouter.post("/", async (req, res) => {
   const auth = req.auth!;
   const message = String(req.body?.message ?? "").trim();
   const section = req.body?.section ? String(req.body.section).slice(0, 60) : null;
