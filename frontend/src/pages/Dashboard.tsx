@@ -90,6 +90,7 @@ import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
 import { ReceivablesSection } from "./dashboard/sections/ReceivablesSection";
 import { TasksSection } from "./dashboard/sections/TasksSection";
 import { GoalsSection } from "./dashboard/sections/GoalsSection";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ReportSection } from "./dashboard/sections/ReportSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansSection } from "./dashboard/sections/PlansSection";
@@ -860,6 +861,7 @@ export function Dashboard() {
       onBack={canGoBack ? goBack : undefined}
       role={auth?.role}
     >
+      <ErrorBoundary resetKey={`${section}:${teamId}:${selectedManagerId}:${dateRange.from}:${dateRange.to}`}>
       {section === "overview" && (
         <OverviewSection
           isManager={auth?.role === "manager"}
@@ -1794,6 +1796,7 @@ export function Dashboard() {
           handleDeleteTask={handleDeleteTask}
           handleSubmitTaskModal={handleSubmitTaskModal}
           refreshTasks={async () => { const fresh = await fetchTasks(); setTasks(fresh); }}
+          onOpenGoals={() => navigateTo("goals")}
           role={auth?.role}
           currentUserId={auth?.userId}
           currentManagerId={auth?.managerId}
@@ -1802,6 +1805,7 @@ export function Dashboard() {
       )}
 
       {section === "goals" && <GoalsSection role={auth?.role} teams={teams} />}
+      </ErrorBoundary>
     </Layout>
   );
 }

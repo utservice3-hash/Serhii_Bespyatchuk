@@ -96,6 +96,7 @@ export function TasksSection({
   handleDeleteTask,
   handleSubmitTaskModal,
   refreshTasks,
+  onOpenGoals,
   role,
   currentUserId,
   currentManagerId,
@@ -115,6 +116,7 @@ export function TasksSection({
   handleDeleteTask: (id: number) => void;
   handleSubmitTaskModal: () => void;
   refreshTasks?: () => Promise<void>;
+  onOpenGoals?: () => void;
   role?: string;
   currentUserId?: number;
   currentManagerId?: number | null;
@@ -201,6 +203,12 @@ export function TasksSection({
           >
             + Додати
           </button>
+          {(role === "admin" || role === "team_lead") && onOpenGoals && (
+            <button onClick={onOpenGoals} title="Місячні цілі"
+              style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 600 }}>
+              🎯 Місячні цілі
+            </button>
+          )}
         </div>
       </div>
 
