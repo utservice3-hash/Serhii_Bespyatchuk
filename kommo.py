@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import requests
 import logging
@@ -845,6 +846,32 @@ def _create_contact_with_phone(name: str, phone: str) -> int | None:
     except Exception as e:
         logger.error("_create_contact_with_phone: %s", e)
         return None
+
+
+def find_recent_lead_by_phone(phone: str, hours: int = 24) -> int | None:
+    """Шукає лід, створений за останні N годин, за телефоном контакту
+    (повнотекстовий пошук Kommo по query). Потрібно для дедуплікації заявок,
+    яка переживає рестарт сервісу (in-memory кеш при рестарті губиться).
+    Повертає lead_id першого збігу або None."""
+    digits = re.sub(r"\D", "", phone)[-9:]  # без коду країни — формат у CRM різний
+    if len(digits) < 9:
+        return None
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/leads",
+            headers=HEADERS,
+            params={"query": digits, "limit": 10},
+            timeout=15,
+        )
+        if resp.status_code == 204 or not resp.ok:
+            return None
+        cutoff = time.time() - hours * 3600
+        for lead in resp.json().get("_embedded", {}).get("leads", []):
+            if lead.get("created_at", 0) >= cutoff:
+                return lead["id"]
+    except Exception as e:
+        logger.error("find_recent_lead_by_phone(%s): %s", phone, e)
+    return None
 
 
 def create_lead_with_phone(

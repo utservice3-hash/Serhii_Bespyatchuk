@@ -94,6 +94,14 @@ def _create_elogist_lead(phone: str, route: str = "") -> tuple[int | None, str]:
     if last_seen and (now - last_seen).total_seconds() < ELOGIST_DEDUP_MINUTES * 60:
         logger.info("Skipped duplicate eLogist lead for phone %s", phone)
         return None, "duplicate"
+    # Дедуп через CRM: in-memory кеш губиться при рестарті Render, тож
+    # додатково перевіряємо, чи за останню добу вже не створено лід із цим
+    # телефоном — дубль заявки в СРМ має прийти лише один раз.
+    existing = kommo.find_recent_lead_by_phone(phone, hours=24)
+    if existing:
+        _elogist_recent_phones[phone] = now
+        logger.info("Skipped duplicate eLogist lead for phone %s (existing lead %s)", phone, existing)
+        return None, "duplicate"
     _elogist_recent_phones[phone] = now
     if len(_elogist_recent_phones) > 500:
         cutoff = now - timedelta(minutes=ELOGIST_DEDUP_MINUTES)
@@ -984,6 +992,20 @@ def _check_unassigned_leads():
     tag_line = duty if duty else ALL_SUPERVISORS
 
     for lead_id, info in list(unassigned.items()):
+        # Самозцілення черги: якщо вебхук про взяття загубився — звіряємо
+        # стан у CRM, щоб не нагадувати про вже опрацьований лід.
+        lead = kommo.get_lead(lead_id)
+        if lead:  # None = помилка API, тоді лишаємо в черзі як є
+            resp_uid = lead.get("responsible_user_id", 0)
+            if resp_uid and resp_uid != ADMIN_USER_ID:
+                _mark_lead_taken(lead_id, resp_uid)
+                continue
+            if lead.get("status_id") not in UNASSIGNED_STATUSES:
+                # Посунули по етапу без менеджера — просто прибираємо з черги
+                unassigned.pop(lead_id, None)
+                logger.info("Unassigned lead %s left queue (status moved)", lead_id)
+                continue
+
         age_min = (now - info["arrived_at"]).total_seconds() / 60
         last = info.get("last_reminded_count", 0)
         kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
@@ -1539,27 +1561,7 @@ def _process_status_change(item: dict):
     # Нерозібрані заявки — лід отримав реального відповідального → редагуємо
     # те саме повідомлення на «Взято в роботу» (без нового спаму) і прибираємо з черги
     if lead_id in unassigned and responsible_id and responsible_id != ADMIN_USER_ID:
-        info = unassigned.pop(lead_id, {})
-        manager_name = kommo.get_user_name(responsible_id)
-        tg_tag = notifier.get_manager_tag(responsible_id)
-        waited_min = int((datetime.now(timezone.utc) - info["arrived_at"]).total_seconds() / 60) if info.get("arrived_at") else 0
-        kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
-        msg = (
-            f"✅ <b>Взято в роботу</b>\n"
-            f"{_source_badge(info.get('is_elogist'))}\n"
-            f"🏷 Назва: {info.get('lead_name', f'Лід #{lead_id}')}\n"
-            f"📍 Етап: {info.get('status_name', '—')}\n"
-            f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
-            f"⏱ Час очікування: <b>{waited_min} хв</b>\n"
-            f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
-        )
-        # Редагуємо початкове сповіщення по місцю; якщо рефів немає (напр. після
-        # рестарту) — фолбек на звичайне повідомлення в групу команди.
-        if info.get("msg_refs"):
-            notifier.edit_tracked(info["msg_refs"], msg)
-        else:
-            send_to_team_group(responsible_id, msg)
-        logger.info("Lead %s assigned to %s after %d min", lead_id, manager_name, waited_min)
+        _mark_lead_taken(lead_id, responsible_id)
 
     if pipeline_id == PEREVOZY_PIPELINE_ID:
         if (status_id == CLOSED_NOT_REALIZED and old_status_id != status_id
@@ -1656,6 +1658,14 @@ def webhook():
     resp_changes = _parse_responsible_changes(data)
     if resp_changes:
         for resp_change in resp_changes:
+            # Лід із черги нерозібраних міг бути взятий зміною ЛИШЕ
+            # відповідального (без руху по етапу) — цей вебхук приходить
+            # окремо від зміни статусу, тож черга чистилась би тільки
+            # по статусу і нагадування сипались би на вже взятий лід.
+            new_resp = resp_change.get("responsible_user_id", 0)
+            if (resp_change["id"] in unassigned and new_resp
+                    and new_resp != ADMIN_USER_ID):
+                _mark_lead_taken(resp_change["id"], new_resp)
             if (resp_change["pipeline_id"] == QUAL_PIPELINE_ID and
                     resp_change["status_id"] == NEW_FROM_LIDOGEN):
                 # Перевіряємо чи ліd не з "робочих" етапів
@@ -1677,6 +1687,36 @@ def webhook():
         _process_status_change(item)
 
     return jsonify({"ok": True})
+
+
+def _mark_lead_taken(lead_id: int, responsible_id: int):
+    """Лід із черги нерозібраних отримав реального відповідального:
+    редагуємо сповіщення на «Взято в роботу» і прибираємо з черги.
+    Викликається і з вебхука зміни статусу, і з вебхука зміни
+    відповідального, і з самозцілення в _check_unassigned_leads."""
+    info = unassigned.pop(lead_id, None)
+    if info is None:
+        return
+    manager_name = kommo.get_user_name(responsible_id)
+    tg_tag = notifier.get_manager_tag(responsible_id)
+    waited_min = int((datetime.now(timezone.utc) - info["arrived_at"]).total_seconds() / 60) if info.get("arrived_at") else 0
+    kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+    msg = (
+        f"✅ <b>Взято в роботу</b>\n"
+        f"{_source_badge(info.get('is_elogist'))}\n"
+        f"🏷 Назва: {info.get('lead_name', f'Лід #{lead_id}')}\n"
+        f"📍 Етап: {info.get('status_name', '—')}\n"
+        f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}\n"
+        f"⏱ Час очікування: <b>{waited_min} хв</b>\n"
+        f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+    )
+    # Редагуємо початкове сповіщення по місцю; якщо рефів немає (напр. після
+    # рестарту) — фолбек на звичайне повідомлення в групу команди.
+    if info.get("msg_refs"):
+        notifier.edit_tracked(info["msg_refs"], msg)
+    else:
+        send_to_team_group(responsible_id, msg)
+    logger.info("Lead %s assigned to %s after %d min", lead_id, manager_name, waited_min)
 
 
 def _handle_unassigned(lead_id: int, status_id: int):
