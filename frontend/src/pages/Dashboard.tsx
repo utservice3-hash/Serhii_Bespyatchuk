@@ -84,6 +84,7 @@ import { STAGE_LABELS, STAGE_COLORS, STAGE_ORDER, STAT_CHARTS } from "./dashboar
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
+import { RatesSection } from "./dashboard/sections/RatesSection";
 import { AiWorkSection } from "./dashboard/sections/AiWorkSection";
 import { TeamsSection } from "./dashboard/sections/TeamsSection";
 import { ManagersSection } from "./dashboard/sections/ManagersSection";
@@ -1333,6 +1334,8 @@ export function Dashboard() {
       )}
 
       {section === "feedback" && <FeedbackSection isAdmin={auth?.role === "admin"} />}
+
+      {section === "rates" && <RatesSection />}
 
       {section === "aiwork" && <AiWorkSection />}
 

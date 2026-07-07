@@ -1110,3 +1110,55 @@ export async function updateTask(
 export async function deleteTask(id: number): Promise<void> {
   await api.delete(`/tasks/${id}`);
 }
+
+// ── Калькулятор ставок (Lardi) ──
+export interface Town { id: number; name: string; country: string | null; area: string; areaId: number | null; lat: number | null; lon: number | null; }
+export interface BodyType { id: number; name: string; }
+export interface RateSummary { n: number; min: number; median: number; avg: number; max: number; }
+export interface RateOffer {
+  id: number; cargo: string; mass: number | null; loadType: string;
+  total: number | null; perTon: number | null; perKm: number | null; isUah: boolean;
+  currency: string; negotiable: boolean; bodies: string[]; company: string; face: string;
+  phones: { n: string; m: unknown[] }[]; payform: string; from: string | null; to: string | null;
+  distKm: number | null; date: string; note: string;
+}
+export interface RateSide {
+  count: number; scope: string;
+  classes: { all: RateClass; full: RateClass; part: RateClass };
+  classCounts: { full: number; part: number; unknown: number };
+  topCargo: [string, number][]; topBody: [string, number][]; offers: RateOffer[];
+  error?: string; detail?: string;
+}
+export interface RateClass {
+  count: number; negotiable: number;
+  uah: RateSummary | null; uahPerTon: RateSummary | null; uahPerKm: RateSummary | null;
+  otherCurrencies: Record<string, RateSummary | null>; medianDistance: number | null;
+}
+export interface RateAnalysis {
+  route: { from: string; to: string; distanceKm: number | null };
+  cargo: RateSide; lorry: RateSide;
+  recommendation: {
+    distanceKm: number | null; cargoMedian?: number; lorryMedian?: number;
+    bandLow?: number; bandHigh?: number; perKm?: number; perKmSrc?: string; perKmTotal?: number;
+  };
+}
+
+export async function fetchTowns(q: string): Promise<Town[]> {
+  const { data } = await api.get<Town[]>("/rates/towns", { params: { q } });
+  return data;
+}
+export async function fetchBodyTypes(): Promise<BodyType[]> {
+  const { data } = await api.get<BodyType[]>("/rates/bodytypes");
+  return data;
+}
+export async function fetchRatesHealth(): Promise<{ ok: boolean; hasToken: boolean }> {
+  const { data } = await api.get<{ ok: boolean; hasToken: boolean }>("/rates/health");
+  return data;
+}
+export interface AnalyzePoint { townId: number; areaId: number | null; lat: number | null; lon: number | null; label: string; }
+export async function analyzeRates(body: {
+  frm: AnalyzePoint; to: AnalyzePoint; massMin: number | null; massMax: number | null; bodyTypeIds: number[];
+}): Promise<RateAnalysis> {
+  const { data } = await api.post<RateAnalysis>("/rates/analyze", body);
+  return data;
+}

@@ -19,6 +19,12 @@ export const config = {
     baseUrl: required("KOMMO_BASE_URL"),
     token: required("KOMMO_API_TOKEN"),
   },
+  lardi: {
+    // Lardi-Trans Extended API token (RAW, no Bearer). Optional — the rates
+    // calculator returns a clear error until it is set in .env on the server.
+    token: process.env.LARDI_API_TOKEN ?? "",
+    lang: process.env.LARDIWEB_LANG ?? "ru",
+  },
   receivablesSheetUrl:
     process.env.RECEIVABLES_SHEET_URL ??
     "https://docs.google.com/spreadsheets/d/1FTHbWRYFa_rWNsF4GvwZrf_fL5Vj5zf4ihBRv3LZw2s/export?format=csv&gid=0",
