@@ -150,6 +150,51 @@ def _source_badge(is_elogist: bool) -> str:
     """Рядок-мітка джерела ліда для сповіщень: eLogist чи власний UTS."""
     return "📨 Джерело ліда: <b>eLogist</b>" if is_elogist else "📨 Джерело ліда: <b>UTS</b>"
 
+
+# Персист черги нерозібраних через маркер-нотатки в CRM: стан черги живе в
+# пам'яті процесу і губиться при кожному рестарті Render (деплой). Без
+# персисту скан після рестарту пере-надсилав би «Нерозібрана заявка» вдруге,
+# а редагування на «Взято в роботу» втрачало б message_id старого повідомлення.
+UNASSIGNED_NOTE_MARKER = "🤖 Сповіщення про нерозібрану заявку надіслано в Telegram"
+UNASSIGNED_TAKEN_MARKER = "🤖 Нерозібрану заявку взято в роботу"
+
+
+def _restore_unassigned_refs(lead_id: int) -> tuple[list, int] | None:
+    """Шукає в нотатках ліда маркер надісланого сповіщення. Повертає
+    (msg_refs, created_at нотатки) або None, якщо сповіщення не надсилалось
+    чи заявку вже було взято в роботу після нього."""
+    refs_note = None
+    taken_ts = 0
+    for n in kommo.get_lead_notes(lead_id):
+        if n.get("note_type") not in (4, "common"):
+            continue
+        text = ((n.get("params") or {}).get("text") or "")
+        if UNASSIGNED_TAKEN_MARKER in text:
+            taken_ts = max(taken_ts, n.get("created_at", 0))
+        elif UNASSIGNED_NOTE_MARKER in text:
+            if not refs_note or n.get("created_at", 0) > refs_note.get("created_at", 0):
+                refs_note = n
+    if not refs_note or taken_ts >= refs_note.get("created_at", 0):
+        return None
+    refs = []
+    m = re.search(r"tg-refs:\s*(\[.*\])", ((refs_note.get("params") or {}).get("text") or ""), re.S)
+    if m:
+        try:
+            refs = json.loads(m.group(1))
+        except Exception:
+            refs = []
+    return refs, refs_note.get("created_at", 0)
+
+
+def _save_unassigned_refs(lead_id: int, msg_refs: list) -> None:
+    """Пише маркер-нотатку з tg-refs (chat_id/message_id надісланих
+    сповіщень), щоб після рестарту черга відновилась без дублів."""
+    try:
+        refs_json = json.dumps(msg_refs or [], ensure_ascii=False)
+    except Exception:
+        refs_json = "[]"
+    kommo.add_note(lead_id, f"{UNASSIGNED_NOTE_MARKER}\ntg-refs: {refs_json}")
+
 PEREVOZY_PIPELINE_ID = 8921932  # Перевозки (Продажі повний цикл)
 CLOSED_NOT_REALIZED = 143        # ЗАКРИТО І НЕ РЕАЛІЗОВАНО
 WON_STATUS_ID = 142              # УСПІШНА УГОДА
@@ -967,6 +1012,16 @@ def _scan_unassigned_leads():
                     "last_reminded_count": 0,
                     "is_elogist": is_elogist,
                 }
+                # Якщо сповіщення вже надсилалось до рестарту — відновлюємо
+                # msg_refs з CRM-нотатки і НЕ шлемо дубль у Telegram.
+                restored = _restore_unassigned_refs(lid)
+                if restored is not None:
+                    refs, noted_at = restored
+                    unassigned[lid]["msg_refs"] = refs
+                    if noted_at:
+                        unassigned[lid]["arrived_at"] = datetime.fromtimestamp(noted_at, tz=timezone.utc)
+                    logger.info("Restored unassigned lead %s from CRM note (no re-send)", lid)
+                    continue
                 # Одразу сповіщаємо про нерозібрану заявку
                 kommo_url = f"https://utsercice.kommo.com/leads/detail/{lid}"
                 source_line = f"\n🌐 Джерело: {source}" if source else ""
@@ -979,9 +1034,10 @@ def _scan_unassigned_leads():
                     f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
                     f"🔗 <a href='{kommo_url}'>Відкрити лід #{lid}</a>"
                 )
-                # Шлемо з відстеженням message_id — щоб видалити ці сповіщення,
+                # Шлемо з відстеженням message_id — щоб редагувати ці сповіщення,
                 # коли заявку візьмуть у роботу.
                 unassigned[lid]["msg_refs"] = notifier.send_unassigned_tracked(msg)
+                _save_unassigned_refs(lid, unassigned[lid]["msg_refs"])
                 logger.info("Scan found unassigned lead %s in %s", lid, status_name)
         except Exception as e:
             logger.error("_scan_unassigned_leads: %s", e)
@@ -1569,8 +1625,11 @@ def _process_status_change(item: dict):
     responsible_id = int(item.get("responsible_user_id", 0))
 
     # Нерозібрані заявки — лід отримав реального відповідального → редагуємо
-    # те саме повідомлення на «Взято в роботу» (без нового спаму) і прибираємо з черги
-    if lead_id in unassigned and responsible_id and responsible_id != ADMIN_USER_ID:
+    # те саме повідомлення на «Взято в роботу» (без нового спаму) і прибираємо
+    # з черги. Умова по old_status покриває випадок, коли черга обнулилась
+    # рестартом (тоді refs відновлюються з CRM-нотатки всередині).
+    if responsible_id and responsible_id != ADMIN_USER_ID and (
+            lead_id in unassigned or old_status_id in UNASSIGNED_STATUSES):
         _mark_lead_taken(lead_id, responsible_id)
 
     if pipeline_id == PEREVOZY_PIPELINE_ID:
@@ -1673,8 +1732,9 @@ def webhook():
             # окремо від зміни статусу, тож черга чистилась би тільки
             # по статусу і нагадування сипались би на вже взятий лід.
             new_resp = resp_change.get("responsible_user_id", 0)
-            if (resp_change["id"] in unassigned and new_resp
-                    and new_resp != ADMIN_USER_ID):
+            if (new_resp and new_resp != ADMIN_USER_ID
+                    and (resp_change["id"] in unassigned
+                         or resp_change.get("status_id") in UNASSIGNED_STATUSES)):
                 _mark_lead_taken(resp_change["id"], new_resp)
             if (resp_change["pipeline_id"] == QUAL_PIPELINE_ID and
                     resp_change["status_id"] == NEW_FROM_LIDOGEN):
@@ -1706,7 +1766,20 @@ def _mark_lead_taken(lead_id: int, responsible_id: int):
     відповідального, і з самозцілення в _check_unassigned_leads."""
     info = unassigned.pop(lead_id, None)
     if info is None:
-        return
+        # Черга могла обнулитись рестартом — пробуємо відновити refs з
+        # CRM-нотатки, щоб повідомлення в TG таки стало «Взято в роботу».
+        restored = _restore_unassigned_refs(lead_id)
+        if restored is None:
+            return
+        refs, noted_at = restored
+        lead = kommo.get_lead(lead_id)
+        info = {
+            "arrived_at": datetime.fromtimestamp(noted_at, tz=timezone.utc) if noted_at else None,
+            "lead_name": (lead or {}).get("name", f"Лід #{lead_id}"),
+            "status_name": UNASSIGNED_STATUSES.get((lead or {}).get("status_id", 0), "—"),
+            "is_elogist": _detect_elogist(lead),
+            "msg_refs": refs,
+        }
     manager_name = kommo.get_user_name(responsible_id)
     tg_tag = notifier.get_manager_tag(responsible_id)
     waited_min = int((datetime.now(timezone.utc) - info["arrived_at"]).total_seconds() / 60) if info.get("arrived_at") else 0
@@ -1726,6 +1799,10 @@ def _mark_lead_taken(lead_id: int, responsible_id: int):
         notifier.edit_tracked(info["msg_refs"], msg)
     else:
         send_to_team_group(responsible_id, msg)
+    # Маркер «взято» в CRM: щоб відновлення після рестарту не воскрешало
+    # вже опрацьовану заявку і не глушило сповіщення при повторному падінні
+    # ліда в нерозібрані.
+    kommo.add_note(lead_id, f"{UNASSIGNED_TAKEN_MARKER}: {manager_name}, очікування {waited_min} хв")
     logger.info("Lead %s assigned to %s after %d min", lead_id, manager_name, waited_min)
 
 
@@ -1741,6 +1818,22 @@ def _handle_unassigned(lead_id: int, status_id: int):
     is_elogist = _detect_elogist(lead, status_id)
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
 
+    # Сповіщення могло вже піти до рестарту (вебхук повторився / скан
+    # встиг раніше) — тоді відновлюємо msg_refs і не шлемо дубль.
+    restored = _restore_unassigned_refs(lead_id)
+    if restored is not None:
+        refs, noted_at = restored
+        unassigned[lead_id] = {
+            "arrived_at": datetime.fromtimestamp(noted_at, tz=timezone.utc) if noted_at else now,
+            "status_name": status_name,
+            "lead_name": lead_name,
+            "is_elogist": is_elogist,
+            "last_reminded_count": 0,
+            "msg_refs": refs,
+        }
+        logger.info("Restored unassigned lead %s from CRM note (no re-send)", lead_id)
+        return
+
     source_line = f"\n🌐 Джерело: {source}" if source else ""
     msg = (
         f"📬 <b>Нерозібрана заявка!</b>\n"
@@ -1752,6 +1845,7 @@ def _handle_unassigned(lead_id: int, status_id: int):
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     msg_refs = notifier.send_unassigned_tracked(msg)
+    _save_unassigned_refs(lead_id, msg_refs)
 
     unassigned[lead_id] = {
         "arrived_at": now,
@@ -2271,6 +2365,10 @@ def _process_rnk_deal_call(lead_id: int, lead_name: str, manager_name: str, call
 # а раз на день о 18:00 — зведення в адмінську групу.
 FIRST_TOUCH_TEAMS = RNK_TEAMS
 FIRST_TOUCH_MIN_DURATION = 40
+# Маркер у CRM-нотатці ліда — персистентний дедуп аналізу першого дотику.
+# In-memory set нижче губиться при кожному рестарті Render (деплой), і без
+# маркера бот повторно транскрибував би та аналізував той самий дзвінок.
+FIRST_TOUCH_MARKER = "🤖 AI: перший дотик проаналізовано"
 _first_touch_log: list[dict] = []   # {date, manager_id, team, lead_id, price_voiced}
 _first_touch_done: set[int] = set()  # lead_id, по яких перший дотик уже оброблено
 
@@ -2291,6 +2389,15 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
     # Перший дотик = найперший ВХІДНИЙ дзвінок тривалістю ≥40с (клієнт сам
     # зателефонував нам уперше). Вихідні дзвінки менеджера не рахуються.
     notes = kommo.get_lead_notes(lead_id)
+
+    # Персистентний дедуп: маркер-нотатка в CRM переживає рестарт сервісу
+    # (in-memory _first_touch_done — ні). Нотатки вже завантажені вище.
+    for n in notes:
+        if n.get("note_type") in (4, "common"):
+            if FIRST_TOUCH_MARKER in ((n.get("params") or {}).get("text") or ""):
+                _first_touch_done.add(lead_id)
+                return
+
     call_notes = sorted(
         (n for n in notes if n.get("note_type") in (10, "call_in")),
         key=lambda n: n.get("created_at", 0),
@@ -2319,6 +2426,7 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
     result = ai_analyzer.analyze_first_touch(transcript, lead_name, manager_name)
     if transcript and not result.get("about_transport"):
         logger.info("First touch lead %s: розмова не про перевезення — пропуск", lead_id)
+        kommo.add_note(lead_id, f"{FIRST_TOUCH_MARKER}\nРозмова не про перевезення — сповіщення не надсилалось.")
         return  # не рахуємо нерелевантні (спам/не про перевезення)
 
     now = datetime.now(timezone.utc)
@@ -2360,6 +2468,10 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     notifier.send_to_first_touch(msg, team)
+    # Маркер-нотатка в CRM: персистентний дедуп + результат аналізу видно
+    # тімліду прямо в угоді.
+    note_body = body.replace("<b>", "").replace("</b>", "")
+    kommo.add_note(lead_id, f"{FIRST_TOUCH_MARKER}\n{head}\n{note_body}")
     logger.info("First touch lead %s (%s): price=%s", lead_id, team, result.get("price_voiced"))
 
 
