@@ -100,6 +100,18 @@ const FIELD_LEAD_GENERATOR = 2098037; // "Лидогенератор"
 const FIELD_CLIENT_SOURCE = 2098035; // "Источник клиента"
 // "Приход 1 Тип оплаты": Наличные / Безнал с НДС / Безнал без НДС / ВАЛЮТА.
 const FIELD_PAYMENT_TYPE = 2097629;
+// "Розрахунок приходів" — the deal's total income (sum of all «Приход» lines),
+// the real revenue vs. the calculator budget (`price`). Fallback: «Приход 1».
+const FIELD_INCOME_TOTAL = 2097649;
+const FIELD_INCOME_1 = 2097627;
+
+/** Total income ("приход") of the deal — real revenue, not the budget. */
+export function extractIncomeAmount(deal: KommoDeal): number | null {
+  const total = Number(fieldText(deal, FIELD_INCOME_TOTAL) ?? "");
+  if (Number.isFinite(total) && total > 0) return total;
+  const first = Number(fieldText(deal, FIELD_INCOME_1) ?? "");
+  return Number.isFinite(first) && first > 0 ? first : null;
+}
 
 /** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */
 export function extractPaymentType(deal: KommoDeal): string | null {

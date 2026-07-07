@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
+import { fetchLeadsByIds, extractIncomeAmount } from "../kommo/client.js";
 import { normalizeClientName } from "../utils/clientName.js";
 import { parseCsv } from "../utils/csv.js";
 
@@ -43,7 +44,20 @@ async function insertCashReceivables(client: PoolClient): Promise<number> {
     if (deals.rowCount === 0) continue;
 
     const clientKey = cc.keys[0];
-    const total = deals.rows.reduce((s, r) => s + Number(r.price), 0);
+    // The debt amount is the deal's INCOME ("приход"), not the calculator budget
+    // (`price`) — the budget badly understates cash-client revenue. Pull приход
+    // from CRM; fall back to the stored budget if a deal has no приход field.
+    const incomeById = new Map<number, number>();
+    try {
+      const leads = await fetchLeadsByIds(deals.rows.map((r) => Number(r.kommo_id)));
+      for (const l of leads) { const inc = extractIncomeAmount(l); if (inc != null) incomeById.set(l.id, inc); }
+    } catch (err) {
+      console.warn(`insertCashReceivables: приход fetch failed for ${cc.label}, using budget`, err);
+    }
+    const amountOf = (r: { kommo_id: string; price: string }) =>
+      incomeById.get(Number(r.kommo_id)) ?? Number(r.price);
+
+    const total = deals.rows.reduce((s, r) => s + amountOf(r), 0);
     // Attribute to the manager who owns the most unpaid deals.
     const byMgr = new Map<number, number>();
     for (const r of deals.rows) if (r.manager_id != null) byMgr.set(r.manager_id, (byMgr.get(r.manager_id) ?? 0) + 1);
@@ -62,7 +76,7 @@ async function insertCashReceivables(client: PoolClient): Promise<number> {
         `INSERT INTO receivable_invoices
            (client_key, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note)
          VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9)`,
-        [clientKey, cc.label, managerId, managerName, String(r.kommo_id), r.created, Number(r.price),
+        [clientKey, cc.label, managerId, managerName, String(r.kommo_id), r.created, amountOf(r),
          `${config.kommo.baseUrl}/leads/detail/${r.kommo_id}`, r.name]
       );
     }
