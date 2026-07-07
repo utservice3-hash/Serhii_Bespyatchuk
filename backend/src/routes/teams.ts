@@ -15,12 +15,15 @@ teamsRouter.get("/managers", async (req, res) => {
   // A team-lead only sees (and can assign tasks to) their own team; admin/КВП
   // sees everyone; a manager only themselves.
   const params: unknown[] = [];
-  const conds = ["is_active = true"];
-  if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`team_id = $${params.length}`); }
-  else if (auth.role === "manager") { params.push(auth.managerId); conds.push(`id = $${params.length}`); }
-  else if (req.query.teamId) { params.push(Number(req.query.teamId)); conds.push(`team_id = $${params.length}`); } // admin picked a team
+  const conds = ["m.is_active = true"];
+  if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
+  else if (auth.role === "manager") { params.push(auth.managerId); conds.push(`m.id = $${params.length}`); }
+  else if (req.query.teamId) { params.push(Number(req.query.teamId)); conds.push(`m.team_id = $${params.length}`); } // admin picked a team
   const result = await pool.query(
-    `SELECT id, name FROM managers WHERE ${conds.join(" AND ")} ORDER BY name`,
+    `SELECT m.id, m.name, m.team_id AS "teamId", t.name AS "teamName"
+       FROM managers m LEFT JOIN teams t ON t.id = m.team_id
+      WHERE ${conds.join(" AND ")}
+      ORDER BY t.name NULLS LAST, m.name`,
     params
   );
   res.json({ managers: result.rows });

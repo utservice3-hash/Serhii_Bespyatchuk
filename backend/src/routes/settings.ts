@@ -71,6 +71,8 @@ function requireAdmin(role: string, res: import("express").Response): boolean {
 
 settingsRouter.get("/users", async (req, res) => {
   if (!requireAdmin(req.auth!.role, res)) return;
+  // Hide logins whose CRM manager is deactivated / no longer in CRM (manager
+  // linked but inactive). Admin (no manager link) and active managers stay.
   const result = await pool.query(
     `SELECT u.id, u.email, u.role, u.is_active, u.initial_password,
             COALESCE(m.name, CASE WHEN u.role = 'admin' THEN 'Операційний директор' END) AS manager_name,
@@ -78,6 +80,7 @@ settingsRouter.get("/users", async (req, res) => {
      FROM users u
      LEFT JOIN managers m ON m.id = u.manager_id
      LEFT JOIN teams t ON t.id = u.team_id
+     WHERE u.manager_id IS NULL OR m.is_active
      ORDER BY u.role = 'admin' DESC, t.name NULLS LAST, u.email`
   );
   res.json({ users: result.rows });

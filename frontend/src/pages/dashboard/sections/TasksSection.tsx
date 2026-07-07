@@ -768,11 +768,20 @@ export function TasksSection({
                     }
                   >
                     <option value="">—</option>
-                    {managerOptions.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
+                    {(() => {
+                      // Group managers by team: team names as <optgroup>, managers under.
+                      const byTeam = new Map<string, typeof managerOptions>();
+                      for (const m of managerOptions) {
+                        const key = m.teamName ?? "Без команди";
+                        if (!byTeam.has(key)) byTeam.set(key, []);
+                        byTeam.get(key)!.push(m);
+                      }
+                      return [...byTeam.entries()].map(([team, mgrs]) => (
+                        <optgroup key={team} label={team}>
+                          {mgrs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                        </optgroup>
+                      ));
+                    })()}
                   </select>
                 </label>
                 {taskForm.taskType === "simple" && (

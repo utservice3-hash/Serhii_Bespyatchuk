@@ -335,6 +335,8 @@ export async function fetchTeams(): Promise<Team[]> {
 export interface ManagerOption {
   id: number;
   name: string;
+  teamId: number | null;
+  teamName: string | null;
 }
 
 export async function fetchManagerOptions(teamId?: number): Promise<ManagerOption[]> {
@@ -1030,9 +1032,13 @@ export interface MonthlyGoal {
   status: "in_progress" | "done";
   comment: string | null;
   createdById: number | null;
+  authorName: string | null;
 }
-export async function fetchGoals(month: string, teamId?: number): Promise<MonthlyGoal[]> {
-  const { data } = await api.get<{ goals: MonthlyGoal[] }>("/goals", { params: teamId ? { month, teamId } : { month } });
+export async function fetchGoals(month: string, opts: { scope?: "mine" | "teams"; teamId?: number } = {}): Promise<MonthlyGoal[]> {
+  const params: Record<string, string | number> = { month };
+  if (opts.scope) params.scope = opts.scope;
+  if (opts.teamId) params.teamId = opts.teamId;
+  const { data } = await api.get<{ goals: MonthlyGoal[] }>("/goals", { params });
   return data.goals;
 }
 export async function createGoal(payload: { month: string; title: string; target?: string | null; teamId?: number | null }): Promise<{ id: number }> {

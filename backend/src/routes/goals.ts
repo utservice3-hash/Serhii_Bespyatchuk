@@ -24,12 +24,25 @@ goalsRouter.get("/", async (req, res) => {
   const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   const params: unknown[] = [month];
   let scope = "";
-  if (auth.role === "team_lead") { params.push(auth.teamId); scope = `AND g.team_id = $${params.length}`; }
-  else if (req.query.teamId) { params.push(Number(req.query.teamId)); scope = `AND g.team_id = $${params.length}`; }
+  // Visibility is by AUTHOR, so a team lead sees only their own goals and no one
+  // sees the КВП's goals. Admin has two views: «Мої» (created by me) and «Цілі
+  // команд» (everyone else's, optionally filtered by team).
+  if (auth.role === "team_lead") {
+    params.push(auth.userId); scope = `AND g.created_by = $${params.length}`;
+  } else if (req.query.scope === "teams") {
+    params.push(auth.userId); scope = `AND g.created_by <> $${params.length}`;
+    if (req.query.teamId) { params.push(Number(req.query.teamId)); scope += ` AND g.team_id = $${params.length}`; }
+  } else {
+    params.push(auth.userId); scope = `AND g.created_by = $${params.length}`;
+  }
   const r = await pool.query(
     `SELECT g.id, to_char(g.month, 'YYYY-MM') AS month, g.team_id AS "teamId", t.name AS "teamName",
-            g.title, g.target, g.status, g.comment, g.created_by AS "createdById"
-       FROM monthly_goals g LEFT JOIN teams t ON t.id = g.team_id
+            g.title, g.target, g.status, g.comment, g.created_by AS "createdById",
+            COALESCE(mm.name, u.email) AS "authorName"
+       FROM monthly_goals g
+       LEFT JOIN teams t ON t.id = g.team_id
+       LEFT JOIN users u ON u.id = g.created_by
+       LEFT JOIN managers mm ON mm.id = u.manager_id
       WHERE g.month = $1 ${scope}
       ORDER BY g.status = 'done', g.created_at`,
     params
@@ -57,9 +70,9 @@ goalsRouter.patch("/:id", requireRole("admin", "team_lead"), async (req, res) =>
   const id = Number(req.params.id);
   const auth = req.auth!;
   if (auth.role === "team_lead") {
-    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM monthly_goals WHERE id = $1`, [id]);
+    const chk = await pool.query<{ created_by: number | null }>(`SELECT created_by FROM monthly_goals WHERE id = $1`, [id]);
     if (!chk.rows[0]) return res.status(404).json({ error: "Not found" });
-    if (chk.rows[0].team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+    if (chk.rows[0].created_by !== auth.userId) return res.status(403).json({ error: "Лише свої цілі" });
   }
   const cols: Record<string, string> = { title: "title", target: "target", status: "status", comment: "comment" };
   const sets: string[] = [];
@@ -77,8 +90,8 @@ goalsRouter.delete("/:id", requireRole("admin", "team_lead"), async (req, res) =
   const id = Number(req.params.id);
   const auth = req.auth!;
   if (auth.role === "team_lead") {
-    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM monthly_goals WHERE id = $1`, [id]);
-    if (chk.rows[0] && chk.rows[0].team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+    const chk = await pool.query<{ created_by: number | null }>(`SELECT created_by FROM monthly_goals WHERE id = $1`, [id]);
+    if (chk.rows[0] && chk.rows[0].created_by !== auth.userId) return res.status(403).json({ error: "Лише свої цілі" });
   }
   await pool.query(`DELETE FROM monthly_goals WHERE id = $1`, [id]);
   res.status(204).send();
