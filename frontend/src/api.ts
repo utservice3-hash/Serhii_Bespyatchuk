@@ -796,6 +796,7 @@ export async function fetchDailyProductivity(params: { managerId?: number; date?
 
 export interface StuckDeal {
   kommoId: number;
+  crmUrl: string;
   name: string;
   client: string | null;
   manager: string;

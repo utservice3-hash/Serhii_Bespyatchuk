@@ -1,6 +1,20 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
+import { config } from "../config.js";
 import { requireAuth } from "../auth/middleware.js";
+
+/** Direct link to a deal (lead) card in Kommo/amoCRM. */
+const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
+
+/**
+ * «Очікування оплати» = deals from "Виставлено рахунок" through the pre-payment
+ * stages (Авто працює → Перевезення завершено → Очікуємо оплату), not yet won.
+ * ⚠️ In this account "Виставлення рахунку" (status 100274340) maps to funnel_stage
+ * 'approved' (coarse mapping) — so filtering by 'invoiced' alone returns 0. This
+ * matches the CRM board and the existing КВП "expected" figure.
+ */
+const EXPECTED_STAGES =
+  "(psm.funnel_stage IN ('approved','invoiced') OR d.status_id IN (69716300, 98470988, 10937178))";
 import { getSettings } from "./settings.js";
 import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
@@ -493,9 +507,9 @@ dashboardRouter.get("/overview", async (req, res) => {
     rows: [{ revenue: String(successRevenue + paymentRevenue), deals: String(successDeals + paymentDeals) }],
   };
 
-  // Deals currently awaiting payment (stage "invoiced" = Виставлено рахунок /
-  // Очікуємо оплату) — a snapshot of the pipeline, grouped by team.
-  const pendScope: string[] = ["psm.funnel_stage = 'invoiced'"];
+  // Deals currently awaiting payment (invoice issued → pre-payment stages) —
+  // a snapshot of the pipeline, grouped by team. See EXPECTED_STAGES.
+  const pendScope: string[] = [EXPECTED_STAGES];
   const pendParams: unknown[] = [];
   if (managerId) { pendParams.push(managerId); pendScope.push(`d.manager_id = $${pendParams.length}`); }
   if (teamId) { pendParams.push(teamId); pendScope.push(`m.team_id = $${pendParams.length}`); }
@@ -1182,12 +1196,12 @@ dashboardRouter.get("/managers", async (req, res) => {
     row.plan = Number(r.planned_value);
   }
 
-  // «Очікування» = live snapshot of money at the "Виставлено рахунок" (invoiced)
-  // stage per manager — bills issued, payment expected (not date-filtered).
+  // «Очікування» = live snapshot of in-progress money (invoice issued → awaiting
+  // payment) per manager — see EXPECTED_STAGES.
   const expRes = await pool.query<{ manager_id: number; s: string }>(
     `SELECT d.manager_id, COALESCE(SUM(d.price),0) AS s FROM deals d
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-      WHERE d.manager_id = ANY($1) AND psm.funnel_stage = 'invoiced'
+      WHERE d.manager_id = ANY($1) AND ${EXPECTED_STAGES}
       GROUP BY d.manager_id`,
     [managerIds]
   );
@@ -2017,7 +2031,7 @@ dashboardRouter.get("/expected-deals", async (req, res) => {
   if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
   else if (auth.role === "team_lead") { teamId = auth.teamId; }
 
-  const conds = ["psm.funnel_stage = 'invoiced'"];
+  const conds = [EXPECTED_STAGES];
   const params: unknown[] = [];
   if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
@@ -2265,7 +2279,7 @@ dashboardRouter.get("/report", async (req, res) => {
     `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s
      FROM deals d JOIN managers m ON m.id = d.manager_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE psm.funnel_stage = 'invoiced' ${expScope.length ? "AND " + expScope.join(" AND ") : ""}
+     WHERE ${EXPECTED_STAGES} ${expScope.length ? "AND " + expScope.join(" AND ") : ""}
      GROUP BY d.manager_id`, expP);
 
   // Передані заявки per manager (period).
@@ -2871,6 +2885,7 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
     minDays,
     deals: r.rows.map((x) => ({
       kommoId: Number(x.kommo_id),
+      crmUrl: kommoLeadUrl(Number(x.kommo_id)),
       name: x.name,
       client: x.client,
       manager: x.manager,
@@ -3077,7 +3092,7 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
       `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d
          JOIN managers m ON m.id = d.manager_id AND m.is_active
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE psm.funnel_stage='invoiced' ${teamAnd}
+        WHERE ${EXPECTED_STAGES} ${teamAnd}
         GROUP BY d.manager_id`),
     pool.query<{ id: string; amount: string }>(
       `SELECT cm.manager_id AS id, cm.amount FROM monthly_carryover_mgr cm

@@ -75,6 +75,7 @@ export function StuckDealsCard({ managerId, teamId }: { managerId?: number; team
                   <th>Угода / клієнт</th>
                   <th>Менеджер</th>
                   <th style={{ textAlign: "right" }}>Сума</th>
+                  <th>CRM</th>
                 </tr>
               </thead>
               <tbody>
@@ -83,11 +84,14 @@ export function StuckDealsCard({ managerId, teamId }: { managerId?: number; team
                     <td style={{ fontWeight: 700, color: dayColor(d.days), whiteSpace: "nowrap" }}>{d.days}</td>
                     <td><span style={{ fontSize: 12, fontWeight: 600, color: stageColor[d.stage] ?? "var(--text)", whiteSpace: "nowrap" }}>{d.stage}</span></td>
                     <td style={{ maxWidth: 280 }}>
-                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.name}>{d.name || "—"}</div>
+                      <a href={d.crmUrl} target="_blank" rel="noreferrer" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", color: "var(--text)" }} title={`Відкрити в CRM: ${d.name}`}>{d.name || "—"}</a>
                       {d.client && <div style={{ fontSize: 11, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.client}</div>}
                     </td>
                     <td style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{d.manager}</td>
                     <td style={{ fontWeight: 600, textAlign: "right", whiteSpace: "nowrap" }}>{formatAmount(d.price)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <a href={d.crmUrl} target="_blank" rel="noreferrer" title="Відкрити угоду в CRM" style={{ fontSize: 12 }}>🔗 #{d.kommoId}</a>
+                    </td>
                   </tr>
                 ))}
               </tbody>
