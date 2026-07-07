@@ -105,6 +105,90 @@ function ManagerDetailModal({ m, onClose }: { m: ReportData["byManager"][number]
   );
 }
 
+/**
+ * Selected manager's tasks for THIS week with the done/not-done fact — the KPI
+ * plan the team-lead set, decomposed per working day, plus any manual tasks due
+ * this week. Answers "які задачі стоять на тиждень і що виконано".
+ */
+function ManagerWeeklyTasks({ managerId }: { managerId: number }) {
+  const [tasks, setTasks] = useState<Task[] | null>(null);
+  useEffect(() => {
+    setTasks(null);
+    fetchTasks().then((all) => setTasks(all.filter((t) => t.assigneeId === managerId))).catch(() => setTasks([]));
+  }, [managerId]);
+
+  // Current week, Mon–Sun.
+  const now = new Date();
+  const monday = new Date(now); monday.setHours(0, 0, 0, 0);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const ws = iso(monday), we = iso(sunday);
+  const today = iso(now);
+  const inWeek = (d: string | null) => d != null && d >= ws && d <= we;
+  const WD = ["Нд", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+  const dayLabel = (d: string) => { const dt = new Date(d + "T00:00:00"); return `${WD[dt.getDay()]} ${String(dt.getDate()).padStart(2, "0")}.${String(dt.getMonth() + 1).padStart(2, "0")}`; };
+
+  if (tasks === null) return <div className="chart-card" style={{ marginBottom: 16 }}><p className="loading-text" style={{ margin: 0 }}>Завантаження задач…</p></div>;
+
+  const kpiDays = tasks.filter((t) => t.taskType === "daily_kpi" && inWeek(t.planDate)).sort((a, b) => (a.planDate ?? "").localeCompare(b.planDate ?? ""));
+  const manual = tasks.filter((t) => (t.taskType === "simple" || t.taskType === "reactivation") && inWeek(t.deadline));
+  // Fact icon for a dated task: done → ✅, past & not done → ❌ (не виконав), else ⏳.
+  const factIcon = (status: string, date: string | null) => status === "done" ? "✅" : (date && date < today ? "❌" : "⏳");
+
+  return (
+    <div className="chart-card" style={{ marginBottom: 16 }}>
+      <h2 className="chart-title" style={{ marginBottom: 4 }}>📋 Задачі на тиждень</h2>
+      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>{dayLabel(ws)} — {dayLabel(we)} · ✅ виконано · ❌ не виконано · ⏳ попереду</p>
+      {kpiDays.length === 0 && manual.length === 0 ? (
+        <p className="loading-text" style={{ margin: 0 }}>На цей тиждень задач не поставлено.</p>
+      ) : (
+        <>
+          {kpiDays.length > 0 && (
+            <table className="data-table" style={{ marginBottom: manual.length ? 14 : 0 }}>
+              <thead><tr><th>День</th><th>Показники (факт / ціль)</th><th style={{ textAlign: "center" }}>Факт</th></tr></thead>
+              <tbody>
+                {kpiDays.map((t) => (
+                  <tr key={t.id}>
+                    <td style={{ whiteSpace: "nowrap", fontWeight: t.planDate === today ? 700 : 400 }}>{t.planDate ? dayLabel(t.planDate) : "—"}</td>
+                    <td>
+                      {(t.metricsJson && t.metricsJson.length > 0)
+                        ? <span style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                            {t.metricsJson.map((m, i) => (
+                              <span key={i} style={{ fontSize: 12 }}>
+                                {METRIC_LBL[m.metric] ?? m.metric}: <b style={{ color: m.done ? "#16a34a" : "var(--text)" }}>{m.actual ?? "—"}</b>/{m.target}
+                              </span>
+                            ))}
+                          </span>
+                        : (METRIC_LBL[t.metric ?? ""] ?? t.title)}
+                    </td>
+                    <td style={{ textAlign: "center", whiteSpace: "nowrap" }} title={STATUS_LBL[t.status] ?? t.status}>{factIcon(t.status, t.planDate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {manual.length > 0 && (
+            <table className="data-table">
+              <thead><tr><th>Задача</th><th>Джерело</th><th>Дедлайн</th><th style={{ textAlign: "center" }}>Факт</th></tr></thead>
+              <tbody>
+                {manual.map((t) => (
+                  <tr key={t.id}>
+                    <td>{t.title}</td>
+                    <td style={{ fontSize: 12, color: "var(--text-muted)" }}>{t.createdByRole === "team_lead" || t.createdByRole === "admin" ? "від тімліда" : "власна"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{t.deadline ?? "—"}</td>
+                    <td style={{ textAlign: "center" }} title={STATUS_LBL[t.status] ?? t.status}>{factIcon(t.status, t.deadline)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Manager's task list inside the report — tasks set by themselves or the team-lead. */
 function MyTasksBlock() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -492,6 +576,7 @@ export function ReportSection({
 
       {!canPickManager && <DailyProductivityCard />}
       {canPickManager && reportManagerId !== "" && <DailyProductivityCard managerId={Number(reportManagerId)} />}
+      {canPickManager && reportManagerId !== "" && <ManagerWeeklyTasks managerId={Number(reportManagerId)} />}
       {!canPickManager && <MyTasksBlock />}
       {!canPickManager && <StuckDealsCard />}
       {canPickManager && (
