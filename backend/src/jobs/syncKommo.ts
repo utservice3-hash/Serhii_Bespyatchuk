@@ -64,11 +64,17 @@ export async function syncManagers(): Promise<number> {
     "904923": "Операційний директор", // was "Admin"
   };
 
+  // Team-lead overrides keyed by Kommo user id — forces is_team_lead=true when
+  // the CRM role is missing/misnamed. Яцик Дмитро (#3379102) leads team «Яцик»
+  // but has NO role assigned in Kommo, so the "тимл" role heuristic misses him;
+  // remove this once his CRM role is set to «Тимлид».
+  const TEAM_LEAD_OVERRIDES = new Set<string>(["3379102"]);
+
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
     const teamId = group ? teamIdByGroupId.get(group.id) ?? null : null;
     const role = user._embedded?.roles?.[0]?.name ?? "";
-    const isTeamLead = role.toLowerCase().includes("тимл");
+    const isTeamLead = role.toLowerCase().includes("тимл") || TEAM_LEAD_OVERRIDES.has(String(user.id));
     const displayName = NAME_OVERRIDES[String(user.id)] ?? user.name;
 
     await pool.query(
