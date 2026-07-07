@@ -1,7 +1,75 @@
+import type { PoolClient } from "pg";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
 import { normalizeClientName } from "../utils/clientName.js";
 import { parseCsv } from "../utils/csv.js";
+
+// Cash ("готівка") clients tracked directly from CRM rather than the accounting
+// sheet: they pay cash, so their debt isn't in the безнал receivables file. We
+// surface every deal where an invoice was issued but the money HAS NOT arrived
+// yet — i.e. anything before «Оплата отримана»/«Успішно». The row recomputes on
+// every sync, so a deal drops off automatically once it reaches a paid stage.
+// Keyed by every client_key variant the client appears under in CRM.
+const CASH_RECEIVABLE_CLIENTS: { label: string; keys: string[] }[] = [
+  { label: "МГЕР (готівка)", keys: ["мгер", "0668339283"] },
+];
+const FULL_CYCLE_PIPELINES = [8921932, 155304];
+const PAID_STATUSES = [142, 69716460, 60412544]; // Успішно + Оплата отримана
+const AVTO_STATUSES = [69716300, 98470988, 10937178];
+
+/**
+ * Inserts CRM cash clients' outstanding (invoice-issued, not-yet-paid) balances
+ * into the receivables tables, alongside the sheet-derived rows. Runs inside the
+ * sync transaction after the sheet load.
+ */
+async function insertCashReceivables(client: PoolClient): Promise<number> {
+  let inserted = 0;
+  for (const cc of CASH_RECEIVABLE_CLIENTS) {
+    const deals = await client.query<{
+      kommo_id: string; name: string | null; price: string; manager_id: number | null; created: string;
+    }>(
+      `SELECT d.kommo_id, d.name, d.price, d.manager_id,
+              to_char((d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date, 'YYYY-MM-DD') AS created
+         FROM deals d
+         LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE d.client_key = ANY($1)
+          AND d.pipeline_id = ANY($2)
+          AND NOT (d.status_id = ANY($3))
+          AND (psm.funnel_stage IN ('approved','invoiced') OR d.status_id = ANY($4))
+          AND d.price > 0
+        ORDER BY d.created_at_kommo`,
+      [cc.keys, FULL_CYCLE_PIPELINES, PAID_STATUSES, AVTO_STATUSES]
+    );
+    if (deals.rowCount === 0) continue;
+
+    const clientKey = cc.keys[0];
+    const total = deals.rows.reduce((s, r) => s + Number(r.price), 0);
+    // Attribute to the manager who owns the most unpaid deals.
+    const byMgr = new Map<number, number>();
+    for (const r of deals.rows) if (r.manager_id != null) byMgr.set(r.manager_id, (byMgr.get(r.manager_id) ?? 0) + 1);
+    const managerId = [...byMgr.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    const managerName = managerId != null
+      ? (await client.query<{ name: string }>(`SELECT name FROM managers WHERE id = $1`, [managerId])).rows[0]?.name ?? ""
+      : "";
+
+    await client.query(
+      `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
+       VALUES ($1, $2, $3, $4, $5, NULL, NULL)`,
+      [clientKey, cc.label, managerId, managerName, total]
+    );
+    for (const r of deals.rows) {
+      await client.query(
+        `INSERT INTO receivable_invoices
+           (client_key, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9)`,
+        [clientKey, cc.label, managerId, managerName, String(r.kommo_id), r.created, Number(r.price),
+         `${config.kommo.baseUrl}/leads/detail/${r.kommo_id}`, r.name]
+      );
+    }
+    inserted++;
+  }
+  return inserted;
+}
 
 interface ReceivableRow {
   clientKey: string;
@@ -172,15 +240,16 @@ export async function syncReceivables(): Promise<void> {
         ]
       );
     }
+    const cashClients = await insertCashReceivables(client);
     await client.query("COMMIT");
+    console.log(`Synced ${totalsByKey.size} sheet balances + ${cashClients} CRM cash clients from ${rows.length} sheet rows.`);
+    return;
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
   }
-
-  console.log(`Synced ${totalsByKey.size} receivable balances from ${rows.length} sheet rows.`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
