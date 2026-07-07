@@ -132,8 +132,10 @@ cron.schedule("0 0 1 * *", () => {
 });
 snapshotCarryover().catch((err) => console.error("Carryover startup snapshot failed:", err));
 
-// Refresh receivables from the accounting Google Sheet every 30 minutes.
-cron.schedule("*/30 * * * *", () => {
+// Refresh receivables from the accounting Google Sheet every 15 minutes so a
+// paid invoice removed from the file drops off the dashboard promptly (a manual
+// "🔄 Оновити з файлу" button in the UI forces it instantly).
+cron.schedule("*/15 * * * *", () => {
   syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
 });
 syncReceivables().catch((err) => console.error("Receivables sync failed:", err));

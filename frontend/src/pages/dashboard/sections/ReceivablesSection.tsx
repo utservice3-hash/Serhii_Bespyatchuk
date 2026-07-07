@@ -1,6 +1,6 @@
 import { useState, type Dispatch, type SetStateAction, Fragment } from "react";
 import type { AuthPayload } from "../../../auth";
-import { saveReceivableNote, fetchReceivableInvoices, type ReceivableInvoice, type ReceivableManager, type Team } from "../../../api";
+import { saveReceivableNote, fetchReceivableInvoices, triggerReceivablesSync, type ReceivableInvoice, type ReceivableManager, type Team } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 
 export function ReceivablesSection({
@@ -13,6 +13,7 @@ export function ReceivablesSection({
   receivablesData,
   canEditReceivables,
   patchReceivableNote,
+  onRefresh,
 }: {
   auth: AuthPayload | null;
   teams: Team[];
@@ -23,7 +24,14 @@ export function ReceivablesSection({
   receivablesData: ReceivableManager[];
   canEditReceivables: boolean;
   patchReceivableNote: (clientKey: string, patch: { comment?: string; dueDate?: string | null }) => void;
+  onRefresh?: () => void;
 }) {
+  const [syncing, setSyncing] = useState(false);
+  const refreshFromSheet = async () => {
+    setSyncing(true);
+    try { await triggerReceivablesSync(); onRefresh?.(); }
+    finally { setSyncing(false); }
+  };
   // Lazy per-client invoice drill-down ("выгрузка" detail behind the balance).
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [invCache, setInvCache] = useState<Record<string, ReceivableInvoice[] | "loading">>({});
@@ -89,6 +97,12 @@ export function ReceivablesSection({
                 </option>
               ))}
             </select>
+          )}
+          {canEditReceivables && (
+            <button onClick={refreshFromSheet} disabled={syncing} title="Перечитати файл дебіторки — сплачені (видалені з файлу) рахунки зникнуть одразу"
+              style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: syncing ? "default" : "pointer", fontWeight: 600, fontSize: 13 }}>
+              {syncing ? "Оновлення…" : "🔄 Оновити з файлу"}
+            </button>
           )}
           {receivablesSyncedAt && (
             <span className="loading-text" style={{ fontSize: 12 }}>

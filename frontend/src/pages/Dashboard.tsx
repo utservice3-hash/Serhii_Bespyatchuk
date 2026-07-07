@@ -1328,6 +1328,7 @@ export function Dashboard() {
           receivablesData={receivablesData}
           canEditReceivables={canEditReceivables}
           patchReceivableNote={patchReceivableNote}
+          onRefresh={() => setRefreshNonce((n) => n + 1)}
         />
       )}
 

@@ -18,6 +18,7 @@ const EXPECTED_STAGES =
 import { getSettings } from "./settings.js";
 import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
+import { syncReceivables } from "../jobs/syncReceivables.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -2121,6 +2122,23 @@ dashboardRouter.post("/sync", (req, res) => {
     .then(() => syncStageEvents())
     .catch((err) => console.error("Manual sync failed:", err));
   res.json({ started: true });
+});
+
+// Manual "Оновити дебіторку зараз": re-pull the receivables Google Sheet on
+// demand so a payment removed from the file (invoice paid) drops off the
+// dashboard immediately instead of waiting for the 30-min cron.
+dashboardRouter.post("/sync-receivables", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
+    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  }
+  try {
+    await syncReceivables();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Manual receivables sync failed:", err);
+    res.status(502).json({ error: "Не вдалося оновити дебіторку" });
+  }
 });
 
 /**

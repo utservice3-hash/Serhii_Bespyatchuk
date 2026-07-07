@@ -476,6 +476,13 @@ export async function triggerSync(): Promise<{ started: boolean }> {
   return data;
 }
 
+/** Re-pull the receivables sheet on demand (paid invoices removed from the file
+ *  drop off immediately). Resolves once the sync has finished. */
+export async function triggerReceivablesSync(): Promise<{ ok: boolean }> {
+  const { data } = await api.post<{ ok: boolean }>("/dashboard/sync-receivables");
+  return data;
+}
+
 export interface DashboardUser {
   id: number;
   email: string;
