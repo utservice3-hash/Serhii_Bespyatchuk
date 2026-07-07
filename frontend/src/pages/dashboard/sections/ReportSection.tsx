@@ -433,6 +433,7 @@ export function ReportSection({
         { label: "Отримані кошти", value: formatAmount(s.revenue), sub: `${s.deals} угод`, hint: "«Успішно реалізовано» (статус 142, за датою закриття в періоді) + «Оплата отримана» (поточний етап, знімок)." },
         { label: "Успішно реалізовано", value: formatAmount(s.successRevenue), sub: `${s.successDeals} угод`, hint: "Угоди в статусі «Успішна угода» (142), за датою закриття угоди в періоді." },
         { label: "Оплата отримана", value: formatAmount(s.paymentRevenue), sub: `${s.paymentDeals} угод`, hint: "Угоди, що ЗАРАЗ на етапі «Оплата отримана» (знімок поточного стану, без фільтра дати)." },
+        { label: "⏳ Очікування оплати", value: formatAmount(s.expected), sub: "виставлені рахунки", hint: "Гроші на етапі «Виставлено рахунок» (знімок поточного стану) — виставлені рахунки, що очікують оплати. Ще НЕ в «Отриманих коштах»." },
         { label: "Середній чек", value: formatAmountFull(s.avgCheck), sub: "", hint: "Отримані кошти ÷ кількість угод." },
         { label: "Прийнято реклами", value: s.adLeads.toLocaleString("uk-UA"), sub: "", hint: "Кількість лідів із реклами (google-utm) за період." },
         { label: "Передані заявки (лідоген)", value: s.transfers.toLocaleString("uk-UA"), sub: "", hint: "Заявки, які лідоген передав менеджеру (зміна відповідального в «Кваліфікації») за період." },
@@ -662,6 +663,7 @@ export function ReportSection({
                     <th>Відпр. авто</th>
                     <th>Сума відпр.</th>
                     <th>Оплата отр. ₴</th>
+                    <th title="Виставлені рахунки, що очікують оплати">Очікування ₴</th>
                     <th>Успішно ₴</th>
                     <th>Успішно, шт</th>
                     <th>Сер. чек</th>
@@ -683,6 +685,7 @@ export function ReportSection({
                         <td>{m.dispatched}</td>
                         <td>{formatAmount(m.dispatchedSum)}</td>
                         <td>{formatAmount(m.paymentReceived)}</td>
+                        <td style={{ color: "#d97706", fontWeight: 600 }}>{formatAmount(m.expected)}</td>
                         <td style={{ fontWeight: 600 }}>{formatAmount(m.successRevenue)}</td>
                         <td>{m.successDeals}</td>
                         <td>{formatAmountFull(m.avgCheck)}</td>

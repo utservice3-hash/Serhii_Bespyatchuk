@@ -258,8 +258,8 @@ export function OverviewSection({
 
               {kpi.key === "sum" && overview && (
                 <div style={{ marginBottom: 16 }}>
-                  <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>Розбивка отриманих коштів</h3>
-                  <div className="kpi-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                  <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>Розбивка отриманих коштів + очікування</h3>
+                  <div className="kpi-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
                     <div className="kpi-card">
                       <span className="kpi-label">Успішно реалізовано (закрито за період)</span>
                       <span className="kpi-value">{formatAmount(overview.successRevenue)}</span>
@@ -269,6 +269,11 @@ export function OverviewSection({
                       <span className="kpi-label">Оплата отримана (поточний етап)</span>
                       <span className="kpi-value">{formatAmount(overview.paymentRevenue)}</span>
                       <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{overview.paymentDeals} угод</span>
+                    </div>
+                    <div className="kpi-card" style={{ borderLeft: "3px solid #d97706" }}>
+                      <span className="kpi-label">⏳ Очікування оплати (виставлені рахунки)</span>
+                      <span className="kpi-value" style={{ color: "#d97706" }}>{formatAmount(overview.pendingPayments.revenue)}</span>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{overview.pendingPayments.deals} угод · ще не в отриманих</span>
                     </div>
                   </div>
                 </div>

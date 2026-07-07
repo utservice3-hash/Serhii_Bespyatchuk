@@ -1182,6 +1182,17 @@ dashboardRouter.get("/managers", async (req, res) => {
     row.plan = Number(r.planned_value);
   }
 
+  // «Очікування» = live snapshot of money at the "Виставлено рахунок" (invoiced)
+  // stage per manager — bills issued, payment expected (not date-filtered).
+  const expRes = await pool.query<{ manager_id: number; s: string }>(
+    `SELECT d.manager_id, COALESCE(SUM(d.price),0) AS s FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE d.manager_id = ANY($1) AND psm.funnel_stage = 'invoiced'
+      GROUP BY d.manager_id`,
+    [managerIds]
+  );
+  const expByMgr = new Map(expRes.rows.map((x) => [x.manager_id, Number(x.s)]));
+
   const managersOut = managers.map((m) => {
     const weeks = rowsByManager.get(m.id) ?? [];
     const totals: Record<string, { plan: number; fact: number }> = {};
@@ -1197,7 +1208,7 @@ dashboardRouter.get("/managers", async (req, res) => {
       totals.payment_amount.fact,
       month
     );
-    return { id: m.id, name: m.name, weeks, totals, forecast };
+    return { id: m.id, name: m.name, weeks, totals, forecast, expected: expByMgr.get(m.id) ?? 0 };
   });
 
   res.json({ managers: managersOut });
@@ -1994,6 +2005,45 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
   res.json({ managers: Array.from(byMgr.values()) });
 });
 
+/**
+ * «Очікування» — deals currently sitting at the "Виставлено рахунок" (invoiced)
+ * stage: bills issued, payment expected (not yet «Оплата отримана»/won). A live
+ * snapshot per manager. Role-scoped. Used in the Managers and Report tabs.
+ */
+dashboardRouter.get("/expected-deals", async (req, res) => {
+  const auth = req.auth!;
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") { teamId = auth.teamId; }
+
+  const conds = ["psm.funnel_stage = 'invoiced'"];
+  const params: unknown[] = [];
+  if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+
+  const r = await pool.query<{ kommo_id: string; manager_id: number; manager_name: string; client_name: string | null; price: string; created_at_kommo: string; invoiced_at: string | null }>(
+    `SELECT d.kommo_id, d.manager_id, m.name AS manager_name, d.client_name, d.price, d.created_at_kommo,
+            (SELECT MAX(changed_at) FROM deal_stage_events e WHERE e.kommo_id = d.kommo_id AND e.funnel_stage = 'invoiced') AS invoiced_at
+       FROM deals d
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE ${conds.join(" AND ")}
+      ORDER BY d.price DESC`,
+    params
+  );
+  const deals = r.rows.map((x) => ({
+    kommoId: Number(x.kommo_id),
+    managerId: x.manager_id,
+    managerName: x.manager_name,
+    clientName: x.client_name,
+    amount: Number(x.price),
+    createdAt: x.created_at_kommo,
+    invoicedAt: x.invoiced_at,
+  }));
+  res.json({ deals, total: deals.reduce((s, d) => s + d.amount, 0) });
+});
+
 // Team-lead / admin: save a comment + planned payment date for a receivable
 // client (keyed by client_key so it survives sheet re-syncs).
 dashboardRouter.put("/receivables/note", async (req, res) => {
@@ -2208,6 +2258,16 @@ dashboardRouter.get("/report", async (req, res) => {
      WHERE d.status_id = ANY($1) ${prScope.length ? "AND " + prScope.join(" AND ") : ""}
      GROUP BY d.manager_id`, prP);
 
+  // «Очікування» per manager — invoiced-stage snapshot (bills awaiting payment).
+  const expP: unknown[] = [];
+  const expScope = scopeSql(expP);
+  const expByMgr = await pool.query<{ id: number; s: string }>(
+    `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s
+     FROM deals d JOIN managers m ON m.id = d.manager_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE psm.funnel_stage = 'invoiced' ${expScope.length ? "AND " + expScope.join(" AND ") : ""}
+     GROUP BY d.manager_id`, expP);
+
   // Передані заявки per manager (period).
   const trP: unknown[] = [];
   const trScope = scopeSql(trP);
@@ -2236,18 +2296,19 @@ dashboardRouter.get("/report", async (req, res) => {
     managerId: number; name: string;
     adLeads: number; quotes: number; dispatched: number; dispatchedSum: number;
     successRevenue: number; successDeals: number; paymentReceived: number;
-    transfers: number; carryover: number; carryoverDeals: number; plan: number;
+    transfers: number; carryover: number; carryoverDeals: number; plan: number; expected: number;
   };
   const scoreMap = new Map<number, Score>();
   const sc = (id: number, name = ""): Score => {
     let e = scoreMap.get(id);
-    if (!e) { e = { managerId: id, name, adLeads: 0, quotes: 0, dispatched: 0, dispatchedSum: 0, successRevenue: 0, successDeals: 0, paymentReceived: 0, transfers: 0, carryover: 0, carryoverDeals: 0, plan: 0 }; scoreMap.set(id, e); }
+    if (!e) { e = { managerId: id, name, adLeads: 0, quotes: 0, dispatched: 0, dispatchedSum: 0, successRevenue: 0, successDeals: 0, paymentReceived: 0, transfers: 0, carryover: 0, carryoverDeals: 0, plan: 0, expected: 0 }; scoreMap.set(id, e); }
     if (name) e.name = name;
     return e;
   };
   for (const r of actByMgr.rows) { const e = sc(r.id, r.name); e.adLeads = Number(r.ad_leads); e.quotes = Number(r.quotes); e.dispatched = Number(r.dispatched); e.dispatchedSum = Number(r.dispatched_sum); }
   for (const r of succByMgr.rows) { const e = sc(r.id, r.name); e.successRevenue = Number(r.revenue); e.successDeals = Number(r.deals); }
   for (const r of payByMgr.rows) sc(r.id).paymentReceived = Number(r.s);
+  for (const r of expByMgr.rows) sc(r.id).expected = Number(r.s);
   for (const r of transfByMgr.rows) sc(r.id).transfers = Number(r.c);
   for (const r of carryByMgr.rows) { const e = sc(r.id); e.carryover = Number(r.amount); e.carryoverDeals = Number(r.deals); }
   // Monthly payment_amount plan per manager (for the План/Факт drill-down).
@@ -2275,6 +2336,7 @@ dashboardRouter.get("/report", async (req, res) => {
     dispatched: sumK("dispatched"), dispatchedSum: sumK("dispatchedSum"),
     transfers: sumK("transfers"),
     carryover: sumK("carryover"), carryoverDeals: sumK("carryoverDeals"),
+    expected: sumK("expected"),
   };
 
   const byManager = managerId

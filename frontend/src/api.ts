@@ -355,6 +355,7 @@ export interface ManagerBreakdown {
   weeks: ManagerWeekRow[];
   totals: Record<string, { plan: number; fact: number }>;
   forecast: Forecast;
+  expected: number; // «Очікування» — invoiced-stage snapshot
 }
 
 export interface Forecast {
@@ -621,6 +622,7 @@ export interface ReportData {
     transfers: number;
     carryover: number;
     carryoverDeals: number;
+    expected: number;
   };
   byPeriod: { period: string; revenue: number; deals: number; created: number; avgCheck: number }[];
   byManager: {
@@ -638,6 +640,7 @@ export interface ReportData {
     carryoverDeals: number;
     avgCheck: number;
     plan: number;
+    expected: number;
   }[];
 }
 
@@ -1040,6 +1043,20 @@ export async function updateGoal(id: number, patch: Partial<{ title: string; tar
 }
 export async function deleteGoal(id: number): Promise<void> {
   await api.delete(`/goals/${id}`);
+}
+
+export interface ExpectedDeal {
+  kommoId: number;
+  managerId: number;
+  managerName: string;
+  clientName: string | null;
+  amount: number;
+  createdAt: string;
+  invoicedAt: string | null;
+}
+export async function fetchExpectedDeals(params: { managerId?: number; teamId?: number } = {}): Promise<{ deals: ExpectedDeal[]; total: number }> {
+  const { data } = await api.get<{ deals: ExpectedDeal[]; total: number }>("/dashboard/expected-deals", { params });
+  return data;
 }
 
 export async function fetchTasks(): Promise<Task[]> {

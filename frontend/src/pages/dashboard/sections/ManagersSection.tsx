@@ -83,6 +83,7 @@ export function ManagersSection({
                   <th>План</th>
                   <th>Факт</th>
                   <th>Залишок</th>
+                  <th title="Гроші на етапі «Виставлено рахунок» — очікують оплати">Очікування</th>
                   <th>Прогноз</th>
                 </tr>
               </thead>
@@ -102,12 +103,23 @@ export function ManagersSection({
                       <td>{formatAmount(f.plan)}</td>
                       <td>{formatAmount(f.fact)}</td>
                       <td>{formatAmount(f.remaining)}</td>
+                      <td style={{ color: "#d97706", fontWeight: 600 }}>{formatAmount(manager.expected)}</td>
                       <td>
                         <ForecastBadge forecast={f} />
                       </td>
                     </tr>
                   );
                 })}
+                {managerRows.length > 1 && (
+                  <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 700 }}>
+                    <td>Разом</td>
+                    <td>{formatAmount(managerRows.reduce((s, m) => s + m.forecast.plan, 0))}</td>
+                    <td>{formatAmount(managerRows.reduce((s, m) => s + m.forecast.fact, 0))}</td>
+                    <td>{formatAmount(managerRows.reduce((s, m) => s + m.forecast.remaining, 0))}</td>
+                    <td style={{ color: "#d97706" }}>{formatAmount(managerRows.reduce((s, m) => s + m.expected, 0))}</td>
+                    <td></td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
