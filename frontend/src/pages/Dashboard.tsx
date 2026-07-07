@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -96,6 +96,29 @@ import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansSection } from "./dashboard/sections/PlansSection";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
 
+/** Short pleasant beep via Web Audio (no asset needed, CSP-safe). Double for "done". */
+function beep(success: boolean) {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const tone = (freq: number, at: number) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.type = "sine";
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + 0.32);
+      o.start(ctx.currentTime + at);
+      o.stop(ctx.currentTime + at + 0.34);
+    };
+    tone(success ? 880 : 620, 0);
+    if (success) tone(1180, 0.18);
+  } catch { /* audio not available — ignore */ }
+}
+
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
   // Persist the open section so a page refresh (Ctrl+R) keeps you in place.
@@ -147,6 +170,11 @@ export function Dashboard() {
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  // Task-status notifications (sound + toast) when MY task is taken into work /
+  // completed. prevStatus tracks last-seen status; init guards the first load.
+  const prevTaskStatus = useRef<Map<number, string>>(new Map());
+  const notifInit = useRef(false);
+  const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
@@ -265,6 +293,48 @@ export function Dashboard() {
       .finally(() => setTasksLoading(false));
     fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
   }, [section]);
+
+  // Ask for notification permission once, and poll tasks in the background (any
+  // section) so status-change alerts still fire when you're elsewhere.
+  useEffect(() => {
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+    const iv = setInterval(() => { fetchTasks().then(setTasks).catch(() => {}); }, 45000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Notify (sound + toast + browser notification) when MY task (created by me or
+  // assigned to me) is taken into work or completed. Skips the first load.
+  useEffect(() => {
+    const prev = prevTaskStatus.current;
+    if (notifInit.current) {
+      for (const t of tasks) {
+        const was = prev.get(t.id);
+        const mine = t.createdById === auth?.userId || (auth?.managerId != null && t.assigneeId === auth.managerId);
+        if (mine && was && was !== t.status && (t.status === "in_progress" || t.status === "done")) {
+          const who = t.assigneeName ? ` — ${t.assigneeName}` : "";
+          const text = `Задача ${t.status === "done" ? "виконана ✅" : "взята в роботу ▶️"}${who}: ${t.title.slice(0, 90)}`;
+          setToasts((cur) => [...cur, { id: Date.now() + t.id, text }]);
+          beep(t.status === "done");
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
+          }
+        }
+      }
+    }
+    const next = new Map<number, string>();
+    for (const t of tasks) next.set(t.id, t.status);
+    prevTaskStatus.current = next;
+    notifInit.current = true;
+  }, [tasks, auth]);
+
+  // Auto-dismiss the oldest toast after a few seconds.
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const t = setTimeout(() => setToasts((cur) => cur.slice(1)), 7000);
+    return () => clearTimeout(t);
+  }, [toasts]);
 
   function patchTaskLocal(id: number, patch: Partial<Task>) {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -855,6 +925,17 @@ export function Dashboard() {
   const canGoBack = navHistory.length > 0 || (section === "managers" && !!selectedManagerId);
 
   return (
+    <>
+    {toasts.length > 0 && (
+      <div style={{ position: "fixed", top: 16, right: 16, zIndex: 9999, display: "flex", flexDirection: "column", gap: 8, maxWidth: 360 }}>
+        {toasts.map((t) => (
+          <div key={t.id} onClick={() => setToasts((cur) => cur.filter((x) => x.id !== t.id))}
+            style={{ background: "var(--card-bg, #fff)", color: "var(--text)", border: "1px solid var(--border)", borderLeft: "4px solid #c8102e", borderRadius: 10, padding: "10px 14px", boxShadow: "0 8px 24px rgba(0,0,0,0.18)", fontSize: 13, cursor: "pointer" }}>
+            🔔 {t.text}
+          </div>
+        ))}
+      </div>
+    )}
     <Layout
       active={section}
       onSelect={navigateTo}
@@ -1807,5 +1888,6 @@ export function Dashboard() {
       {section === "goals" && <GoalsSection role={auth?.role} teams={teams} />}
       </ErrorBoundary>
     </Layout>
+    </>
   );
 }
