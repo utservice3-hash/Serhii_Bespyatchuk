@@ -20,7 +20,9 @@ export function normalizeClientName(rawName: string | null | undefined): string 
 
   const words = name.split(/\s+/).filter(Boolean);
   const filtered = words.filter((word) => !LEGAL_ENTITY_TOKENS.includes(word));
-  const key = (filtered.length > 0 ? filtered : words).join(" ").trim();
+  // Join WITHOUT spaces so spacing/apostrophe variants of the same company map to
+  // one key (e.g. «СМАР ТЕКС»/«СМАРТЕКС» → "смартекс", «Курʼєр»/«Кур єр» → "куреєр").
+  const key = (filtered.length > 0 ? filtered : words).join("").trim();
 
   return key.length > 0 ? key : null;
 }
