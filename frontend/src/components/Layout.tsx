@@ -70,12 +70,14 @@ export function Layout({
   onSelect,
   onBack,
   role,
+  messengerUnread = 0,
 }: {
   children: React.ReactNode;
   active: NavKey;
   onSelect: (key: NavKey) => void;
   onBack?: () => void;
   role?: string;
+  messengerUnread?: number;
 }) {
   const navigate = useNavigate();
   const navGroups = navGroupsForRole(role);
@@ -141,17 +143,43 @@ export function Layout({
                 </div>
               )}
               {collapsed && <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "6px 12px" }} />}
-              {group.items.map((item) => (
+              {group.items.map((item) => {
+                const badge = item.key === "messenger" && messengerUnread > 0 ? messengerUnread : 0;
+                return (
                 <button
                   key={item.key}
                   className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
                   onClick={() => onSelect(item.key as NavKey)}
-                  title={item.label}
+                  title={badge ? `${item.label} — ${badge} непрочитаних` : item.label}
+                  style={{ position: "relative" }}
                 >
                   <span className="sidebar-nav-icon">{item.icon}</span>
                   {!collapsed && item.label}
+                  {badge > 0 && (
+                    <span
+                      style={{
+                        position: collapsed ? "absolute" : "static",
+                        top: collapsed ? 4 : undefined,
+                        right: collapsed ? 8 : undefined,
+                        marginLeft: collapsed ? 0 : "auto",
+                        minWidth: 18,
+                        height: 18,
+                        padding: "0 5px",
+                        borderRadius: 9,
+                        background: "#c8102e",
+                        color: "#fff",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        lineHeight: "18px",
+                        textAlign: "center",
+                      }}
+                    >
+                      {badge > 99 ? "99+" : badge}
+                    </span>
+                  )}
                 </button>
-              ))}
+                );
+              })}
             </div>
           ))}
         </nav>

@@ -34,6 +34,7 @@ import {
   type FunnelWeeklyReport,
   fetchChatUsers,
   fetchConversation,
+  fetchUnreadCount,
   sendMessage,
   fetchNews,
   addNews,
@@ -242,6 +243,10 @@ export function Dashboard() {
   const [chatActive, setChatActive] = useState<ChatUser | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
+  // Total unread messages (sidebar badge). prevChatUnread guards the first poll
+  // so we only beep/toast on a genuine increase (a new incoming message).
+  const [chatUnread, setChatUnread] = useState(0);
+  const prevChatUnread = useRef<number | null>(null);
 
   const [newsCategory, setNewsCategory] = useState<"company" | "logistics" | "sales">("company");
   const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
@@ -303,6 +308,31 @@ export function Dashboard() {
     const iv = setInterval(() => { fetchTasks().then(setTasks).catch(() => {}); }, 45000);
     return () => clearInterval(iv);
   }, []);
+
+  // Poll unread messages in the background (any section) so the sidebar badge
+  // stays live and we sound/toast a new incoming message even when the user is
+  // elsewhere. Skips the first poll (baseline) so a page load never beeps.
+  useEffect(() => {
+    const poll = () =>
+      fetchUnreadCount()
+        .then((n) => {
+          const prev = prevChatUnread.current;
+          setChatUnread(n);
+          if (prev !== null && n > prev && section !== "messenger") {
+            const text = `Нове повідомлення 💬 (${n} непрочитан${n === 1 ? "е" : n < 5 ? "і" : "их"})`;
+            setToasts((cur) => [...cur, { id: Date.now(), text }]);
+            beep(false);
+            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+              try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
+            }
+          }
+          prevChatUnread.current = n;
+        })
+        .catch(() => {});
+    poll();
+    const iv = setInterval(poll, 15000);
+    return () => clearInterval(iv);
+  }, [section]);
 
   // Notify (sound + toast + browser notification) when MY task (created by me or
   // assigned to me) is taken into work or completed. Skips the first load.
@@ -528,8 +558,9 @@ export function Dashboard() {
         .then((m) => {
           if (!stop) setChatMessages(m);
           // The conversation fetch marks incoming messages read; refresh the
-          // user list so unread badges reflect the true server state.
+          // user list and the sidebar badge so both reflect the true state.
           if (!stop) fetchChatUsers().then(setChatUsers).catch(() => {});
+          if (!stop) fetchUnreadCount().then((n) => { prevChatUnread.current = n; setChatUnread(n); }).catch(() => {});
         })
         .catch(() => {});
     load();
@@ -941,6 +972,7 @@ export function Dashboard() {
       onSelect={navigateTo}
       onBack={canGoBack ? goBack : undefined}
       role={auth?.role}
+      messengerUnread={chatUnread}
     >
       <ErrorBoundary resetKey={`${section}:${teamId}:${selectedManagerId}:${dateRange.from}:${dateRange.to}`}>
       {section === "overview" && (
