@@ -260,11 +260,59 @@ tasksRouter.post("/", async (req, res) => {
   res.status(201).json({ id: result.rows[0].id });
 });
 
+/**
+ * Whether the caller may modify/delete this task — mirrors the GET visibility:
+ * manager → tasks assigned to them or created by them; team_lead → their
+ * team's tasks or their own; admin → everything.
+ */
+async function canTouchTask(
+  auth: { role: string; userId: number; managerId: number | null; teamId: number | null },
+  taskId: number
+): Promise<{ ok: boolean; found: boolean }> {
+  if (auth.role === "admin") {
+    const r = await pool.query(`SELECT 1 FROM tasks WHERE id = $1`, [taskId]);
+    return { ok: (r.rowCount ?? 0) > 0, found: (r.rowCount ?? 0) > 0 };
+  }
+  const r = await pool.query<{ assignee_id: number | null; created_by: number | null; team_id: number | null }>(
+    `SELECT t.assignee_id, t.created_by, m.team_id
+       FROM tasks t LEFT JOIN managers m ON m.id = t.assignee_id
+      WHERE t.id = $1`,
+    [taskId]
+  );
+  const t = r.rows[0];
+  if (!t) return { ok: false, found: false };
+  if (auth.role === "team_lead") {
+    return { ok: t.team_id === auth.teamId || t.created_by === auth.userId, found: true };
+  }
+  // manager
+  return { ok: t.assignee_id === auth.managerId || t.created_by === auth.userId, found: true };
+}
+
 tasksRouter.patch("/:id", async (req, res) => {
   const id = Number(req.params.id);
   const parsed = patchSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  const auth = req.auth!;
+  const scope = await canTouchTask(auth, id);
+  if (!scope.found) return res.status(404).json({ error: "Задачу не знайдено" });
+  if (!scope.ok) return res.status(403).json({ error: "Немає доступу до цієї задачі" });
+  // Reassignment is scoped like task creation: a manager only to themselves, a
+  // team-lead only within their team.
+  if (parsed.data.assigneeId !== undefined && auth.role !== "admin") {
+    const newAssignee = parsed.data.assigneeId;
+    if (auth.role === "manager" && newAssignee !== auth.managerId && newAssignee !== null) {
+      return res.status(403).json({ error: "Менеджер не може передавати задачі іншим" });
+    }
+    if (auth.role === "team_lead" && newAssignee != null) {
+      const chk = await pool.query<{ ok: boolean }>(
+        `SELECT (team_id = $1) AS ok FROM managers WHERE id = $2`,
+        [auth.teamId, newAssignee]
+      );
+      if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна призначати лише своїй команді" });
+    }
   }
 
   const fields: string[] = [];
@@ -298,6 +346,10 @@ tasksRouter.patch("/:id", async (req, res) => {
 });
 
 tasksRouter.delete("/:id", async (req, res) => {
-  await pool.query(`DELETE FROM tasks WHERE id = $1`, [Number(req.params.id)]);
+  const id = Number(req.params.id);
+  const scope = await canTouchTask(req.auth!, id);
+  if (!scope.found) return res.status(404).json({ error: "Задачу не знайдено" });
+  if (!scope.ok) return res.status(403).json({ error: "Немає доступу до цієї задачі" });
+  await pool.query(`DELETE FROM tasks WHERE id = $1`, [id]);
   res.status(204).send();
 });

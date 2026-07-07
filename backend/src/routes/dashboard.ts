@@ -1137,15 +1137,15 @@ dashboardRouter.get("/managers", async (req, res) => {
     total_amount: string;
   }>(
     `SELECT d.manager_id,
-            date_trunc('week', d.created_at_kommo) AS week_start,
+            date_trunc('week', d.created_at_kommo AT TIME ZONE 'Europe/Kyiv') AS week_start,
             psm.funnel_stage,
             COUNT(*) AS deal_count,
             COALESCE(SUM(d.price), 0) AS total_amount
      FROM deals d
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE d.manager_id = ANY($1)
-       AND d.created_at_kommo >= $2::date
-       AND d.created_at_kommo < ($2::date + interval '1 month')
+       AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $2::date
+       AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date < ($2::date + interval '1 month')
      GROUP BY d.manager_id, week_start, psm.funnel_stage`,
     [managerIds, monthStart]
   );
@@ -1268,8 +1268,8 @@ dashboardRouter.get("/personal", async (req, res) => {
      FROM deals d
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE d.manager_id = $1
-       AND d.created_at_kommo >= $2::date
-       AND d.created_at_kommo < ($2::date + interval '1 month')
+       AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $2::date
+       AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date < ($2::date + interval '1 month')
      GROUP BY psm.funnel_stage`,
     [managerId, monthStart]
   );
@@ -1304,15 +1304,15 @@ dashboardRouter.get("/personal", async (req, res) => {
     deal_count: string;
     total_amount: string;
   }>(
-    `SELECT date_trunc('day', d.created_at_kommo) AS day,
+    `SELECT date_trunc('day', d.created_at_kommo AT TIME ZONE 'Europe/Kyiv') AS day,
             psm.funnel_stage,
             COUNT(*) AS deal_count,
             COALESCE(SUM(d.price), 0) AS total_amount
      FROM deals d
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE d.manager_id = $1
-       AND d.created_at_kommo >= $2::date
-       AND d.created_at_kommo < ($2::date + interval '1 month')
+       AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $2::date
+       AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date < ($2::date + interval '1 month')
      GROUP BY day, psm.funnel_stage
      ORDER BY day`,
     [managerId, monthStart]
@@ -1336,15 +1336,15 @@ dashboardRouter.get("/personal", async (req, res) => {
     deal_count: string;
     total_amount: string;
   }>(
-    `SELECT date_trunc('month', d.created_at_kommo) AS month,
+    `SELECT date_trunc('month', d.created_at_kommo AT TIME ZONE 'Europe/Kyiv') AS month,
             psm.funnel_stage,
             COUNT(*) AS deal_count,
             COALESCE(SUM(d.price), 0) AS total_amount
      FROM deals d
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE d.manager_id = $1
-       AND d.created_at_kommo >= $2::date - interval '11 months'
-       AND d.created_at_kommo < ($2::date + interval '1 month')
+       AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $2::date - interval '11 months'
+       AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date < ($2::date + interval '1 month')
      GROUP BY month, psm.funnel_stage`,
     [managerId, monthStart]
   );
@@ -3456,6 +3456,10 @@ dashboardRouter.post("/funnel-plan", async (req, res) => {
   const plans = req.body?.plans as Record<string, number> | undefined;
   if (!managerId || !/^\d{4}-\d{2}$/.test(monthRaw) || !plans) {
     return res.status(400).json({ error: "managerId, month (YYYY-MM) та plans обовʼязкові" });
+  }
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
   }
   const month = monthRaw + "-01";
   for (const stage of FUNNEL_ORDER) {

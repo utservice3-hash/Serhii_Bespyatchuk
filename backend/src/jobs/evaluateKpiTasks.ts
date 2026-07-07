@@ -27,7 +27,7 @@ export async function evaluateKpiTasks(): Promise<void> {
     const r = await pool.query<{ c: string }>(
       `SELECT COUNT(*) c FROM deals
        WHERE manager_id = $1 AND lead_channel = $3
-         AND created_at_kommo >= $2::date AND created_at_kommo < $2::date + interval '1 day'`,
+         AND (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
       [t.assignee_id, t.plan_date, channelOf(t.metric)]
     );
     const actual = Number(r.rows[0].c);
@@ -44,7 +44,7 @@ export async function evaluateKpiTasks(): Promise<void> {
     const r = await pool.query<{ c: string }>(
       `SELECT COUNT(*) c FROM deals
        WHERE manager_id = $1 AND lead_channel = $4
-         AND created_at_kommo >= $2::date AND created_at_kommo < $3::date + interval '1 day'`,
+         AND (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
       [t.assignee_id, t.period_start, t.period_end, channelOf(t.metric)]
     );
     const actual = Number(r.rows[0].c);
@@ -65,7 +65,7 @@ export async function evaluateKpiTasks(): Promise<void> {
         `SELECT COALESCE(AVG(d.price), 0) v FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
          WHERE psm.funnel_stage = 'paid' AND d.manager_id = $1
-           AND d.closed_at_kommo >= $2::date AND d.closed_at_kommo < $3::date + interval '1 day'`,
+           AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
         [t.assignee_id, t.period_start, t.period_end]
       );
       actual = Math.round(Number(r.rows[0].v));
@@ -74,7 +74,7 @@ export async function evaluateKpiTasks(): Promise<void> {
         `SELECT COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') paid, COUNT(*) total FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
          WHERE d.manager_id = $1
-           AND d.created_at_kommo >= $2::date AND d.created_at_kommo < $3::date + interval '1 day'`,
+           AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
         [t.assignee_id, t.period_start, t.period_end]
       );
       const total = Number(r.rows[0].total);
@@ -99,7 +99,7 @@ export async function evaluateKpiTasks(): Promise<void> {
       if (m.metric === "ads_count" || m.metric === "leadgen_count") {
         const r = await pool.query<{ c: string }>(
           `SELECT COUNT(*) c FROM deals WHERE manager_id = $1 AND lead_channel = $3
-             AND created_at_kommo >= $2::date AND created_at_kommo < $2::date + interval '1 day'`,
+             AND (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
           [t.assignee_id, t.plan_date, channelOf(m.metric)]
         );
         actual = Number(r.rows[0].c);
@@ -108,7 +108,7 @@ export async function evaluateKpiTasks(): Promise<void> {
           `SELECT COALESCE(AVG(d.price),0) v FROM deals d
              JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
              WHERE psm.funnel_stage = 'paid' AND d.manager_id = $1
-               AND d.closed_at_kommo >= $2::date AND d.closed_at_kommo < $2::date + interval '1 day'`,
+               AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
           [t.assignee_id, t.plan_date]
         );
         actual = Math.round(Number(r.rows[0].v));
@@ -116,7 +116,7 @@ export async function evaluateKpiTasks(): Promise<void> {
         const r = await pool.query<{ paid: string; total: string }>(
           `SELECT COUNT(*) FILTER (WHERE psm.funnel_stage='paid') paid, COUNT(*) total FROM deals d
              JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-             WHERE d.manager_id = $1 AND d.created_at_kommo >= $2::date AND d.created_at_kommo < $2::date + interval '1 day'`,
+             WHERE d.manager_id = $1 AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
           [t.assignee_id, t.plan_date]
         );
         const total = Number(r.rows[0].total);
@@ -126,7 +126,7 @@ export async function evaluateKpiTasks(): Promise<void> {
           `SELECT COALESCE(SUM(d.price),0) v FROM deals d
              JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
              WHERE psm.funnel_stage = 'paid' AND d.manager_id = $1
-               AND d.closed_at_kommo >= $2::date AND d.closed_at_kommo < $2::date + interval '1 day'`,
+               AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
           [t.assignee_id, t.plan_date]
         );
         actual = Math.round(Number(r.rows[0].v));

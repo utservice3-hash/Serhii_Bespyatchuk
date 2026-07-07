@@ -20,6 +20,18 @@ plansRouter.post("/", requireRole("admin", "team_lead"), async (req, res) => {
   }
   const { managerId, planDate, metric, plannedValue } = parsed.data;
 
+  // A team-lead may only plan for managers of their own team.
+  const auth = req.auth!;
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(
+      `SELECT team_id FROM managers WHERE id = $1`,
+      [managerId]
+    );
+    if (chk.rows[0]?.team_id !== auth.teamId) {
+      return res.status(403).json({ error: "Лише своя команда" });
+    }
+  }
+
   await pool.query(
     `INSERT INTO plans (manager_id, plan_date, metric, planned_value)
      VALUES ($1, $2, $3, $4)
