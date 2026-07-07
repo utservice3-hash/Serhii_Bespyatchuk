@@ -327,13 +327,18 @@ button {
 .tasks-table th,
 .tasks-table td {
   padding-right: 10px;
-  vertical-align: middle;
+  padding-top: 10px;
+  /* Top-align so every control lines up with the task title even when a row is
+     tall (e.g. a reactivation task with a client checklist). */
+  vertical-align: top;
   overflow: hidden;
 }
 
 .tasks-table select,
 .tasks-table input {
   width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 6px 8px;
   font-size: 13px;
   border-radius: 6px;

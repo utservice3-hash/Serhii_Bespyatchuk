@@ -219,13 +219,13 @@ export function TasksSection({
         <div className="chart-card">
           <table className="data-table tasks-table">
             <colgroup>
-              <col style={{ width: "26%" }} />
+              <col style={{ width: "25%" }} />
               <col style={{ width: "12%" }} />
               <col style={{ width: "10%" }} />
+              <col style={{ width: "15%" }} />
+              <col style={{ width: "9%" }} />
               <col style={{ width: "12%" }} />
-              <col style={{ width: "9%" }} />
-              <col style={{ width: "19%" }} />
-              <col style={{ width: "9%" }} />
+              <col style={{ width: "14%" }} />
               <col style={{ width: "3%" }} />
             </colgroup>
             <thead>
