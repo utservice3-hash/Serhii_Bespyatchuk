@@ -1111,36 +1111,43 @@ export async function deleteTask(id: number): Promise<void> {
   await api.delete(`/tasks/${id}`);
 }
 
-// ── Калькулятор ставок (Lardi) ──
-export interface Town { id: number; name: string; country: string | null; area: string; areaId: number | null; lat: number | null; lon: number | null; }
+// ── Калькулятор ставок (Lardi, формат оригінального lardiweb) ──
+export interface Town { id: number; name: string; country: string | null; area: string; area_id: number | null; lat: number | null; lon: number | null; }
 export interface BodyType { id: number; name: string; }
-export interface RateSummary { n: number; min: number; median: number; avg: number; max: number; }
+export interface RateSummary { n: number; min: number; median: number; avg: number; max: number; dropped?: number; }
 export interface RateOffer {
-  id: number; cargo: string; mass: number | null; loadType: string;
-  total: number | null; perTon: number | null; perKm: number | null; isUah: boolean;
-  currency: string; negotiable: boolean; bodies: string[]; company: string; face: string;
-  phones: { n: string; m: unknown[] }[]; payform: string; from: string | null; to: string | null;
-  distKm: number | null; date: string; note: string;
+  id: number; cargo: string | null; mass: number | null; load_type: string;
+  total: number | null; per_ton: number | null; per_km: number | null; is_uah: boolean;
+  currency: string | null; negotiable: boolean; bodies: string[]; company: string | null; face: string | null;
+  phones: { n: string; m: string[] }[]; payform: string | null; from: string | null; to: string | null;
+  dist_km: number | null; date: string | null; note?: string; ts?: number;
+}
+export interface RateClass {
+  count: number; negotiable: number;
+  uah: RateSummary | null; uah_per_ton: RateSummary | null; uah_per_km: RateSummary | null;
+  other_currencies: Record<string, RateSummary | null>; median_distance: number | null;
 }
 export interface RateSide {
   count: number; scope: string;
   classes: { all: RateClass; full: RateClass; part: RateClass };
-  classCounts: { full: number; part: number; unknown: number };
-  topCargo: [string, number][]; topBody: [string, number][]; offers: RateOffer[];
+  class_counts: { full: number; part: number; unknown: number };
+  top_cargo: [string, number][]; top_body: [string, number][];
+  offers: RateOffer[]; history?: RateOffer[];
   error?: string; detail?: string;
 }
-export interface RateClass {
-  count: number; negotiable: number;
-  uah: RateSummary | null; uahPerTon: RateSummary | null; uahPerKm: RateSummary | null;
-  otherCurrencies: Record<string, RateSummary | null>; medianDistance: number | null;
-}
 export interface RateAnalysis {
-  route: { from: string; to: string; distanceKm: number | null };
+  route: { from: string; to: string; distance_km: number | null };
   cargo: RateSide; lorry: RateSide;
   recommendation: {
-    distanceKm: number | null; cargoMedian?: number; lorryMedian?: number;
-    bandLow?: number; bandHigh?: number; perKm?: number; perKmSrc?: string; perKmTotal?: number;
+    distance_km: number | null; cargo_median?: number; lorry_median?: number;
+    band_low?: number; band_high?: number; per_km?: number; per_km_src?: string; per_km_total?: number;
   };
+}
+export interface RatesUsageStats {
+  days: number; total_requests: number; total_users: number;
+  today_requests: number; today_users: number;
+  by_day: { date: string; requests: number; users: number }[];
+  top_routes: { route: string; count: number }[];
 }
 
 export async function fetchTowns(q: string): Promise<Town[]> {
@@ -1151,13 +1158,17 @@ export async function fetchBodyTypes(): Promise<BodyType[]> {
   const { data } = await api.get<BodyType[]>("/rates/bodytypes");
   return data;
 }
-export async function fetchRatesHealth(): Promise<{ ok: boolean; hasToken: boolean }> {
-  const { data } = await api.get<{ ok: boolean; hasToken: boolean }>("/rates/health");
+export async function fetchRatesHealth(): Promise<{ ok: boolean; has_token: boolean }> {
+  const { data } = await api.get<{ ok: boolean; has_token: boolean }>("/rates/health");
   return data;
 }
-export interface AnalyzePoint { townId: number; areaId: number | null; lat: number | null; lon: number | null; label: string; }
+export async function fetchRatesStats(days = 30): Promise<RatesUsageStats> {
+  const { data } = await api.get<RatesUsageStats>("/rates/stats", { params: { days } });
+  return data;
+}
+export interface AnalyzePoint { town_id: number; area_id: number | null; lat: number | null; lon: number | null; label: string; }
 export async function analyzeRates(body: {
-  frm: AnalyzePoint; to: AnalyzePoint; massMin: number | null; massMax: number | null; bodyTypeIds: number[];
+  frm: AnalyzePoint; to: AnalyzePoint; mass_min: number | null; mass_max: number | null; body_type_ids: number[];
 }): Promise<RateAnalysis> {
   const { data } = await api.post<RateAnalysis>("/rates/analyze", body);
   return data;

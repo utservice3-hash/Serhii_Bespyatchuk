@@ -390,3 +390,41 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_ai_messages_time ON ai_messages(created_at);
+
+-- «Калькулятор ставок» (порт lardiweb): власний архів цін Lardi — Lardi не
+-- віддає історію, тому накопичуємо самі. Дедуп за ID заявки на маршрут.
+CREATE TABLE IF NOT EXISTS lardi_offers (
+  side TEXT NOT NULL,
+  offer_id BIGINT NOT NULL,
+  from_id BIGINT NOT NULL,
+  to_id BIGINT NOT NULL,
+  first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cargo TEXT, mass NUMERIC, load_type TEXT,
+  total NUMERIC, per_ton NUMERIC, per_km NUMERIC,
+  is_uah BOOLEAN, currency TEXT, negotiable BOOLEAN,
+  bodies TEXT, company TEXT, face TEXT, phones JSONB,
+  frm TEXT, tox TEXT, dist_km NUMERIC, dt TEXT, payform TEXT,
+  PRIMARY KEY (side, offer_id, from_id, to_id)
+);
+CREATE INDEX IF NOT EXISTS idx_lardi_offers_route ON lardi_offers(from_id, to_id, side, first_seen);
+
+-- Маршрути, які запитували менеджери — їх переопитує збирач за розкладом.
+CREATE TABLE IF NOT EXISTS lardi_routes (
+  from_id BIGINT NOT NULL,
+  to_id BIGINT NOT NULL,
+  from_name TEXT, to_name TEXT,
+  from_area BIGINT, to_area BIGINT,
+  from_lat NUMERIC, from_lon NUMERIC, to_lat NUMERIC, to_lon NUMERIC,
+  last_query TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_id, to_id)
+);
+
+-- Статистика використання калькулятора (запити менеджерів).
+CREATE TABLE IF NOT EXISTS lardi_usage (
+  id SERIAL PRIMARY KEY,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id INTEGER,
+  ip TEXT,
+  frm TEXT, tox TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_lardi_usage_ts ON lardi_usage(ts);

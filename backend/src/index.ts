@@ -22,6 +22,7 @@ import { syncTransfers } from "./jobs/syncTransfers.js";
 import { syncDealActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
+import { collectLardi } from "./jobs/collectLardi.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 import { backupDb } from "./jobs/backupDb.js";
@@ -139,6 +140,11 @@ snapshotCarryover().catch((err) => console.error("Carryover startup snapshot fai
 // "🔄 Оновити з файлу" button in the UI forces it instantly).
 cron.schedule("*/15 * * * *", () => {
   syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
+});
+
+// Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
+cron.schedule("40 */3 * * *", () => {
+  collectLardi().catch((err) => console.error("Lardi collect failed:", err));
 });
 syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
 
