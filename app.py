@@ -304,6 +304,30 @@ RNK_TEAMS = {"Михальчевська", "Безпам'ятний"}
 RPK_TEAMS = {"Яцик", "Дмитрук", "Шаврова", "Тендерний"}
 
 
+def _refresh_plans_from_sheet() -> str:
+    """Підтягує плани з аркушів «Плани менеджерів» / «Плани команд»
+    (див. sheets.read_plans). Значення в коді — лише стартовий фолбек,
+    щомісячне оновлення робиться редагуванням таблиці, без деплою.
+    Мутуємо словники на місці, щоб усі, хто їх імпортував, бачили зміни."""
+    data = sheets.read_plans()
+    if data is None:
+        return "таблиця недоступна або аркуш не створено — лишаю значення з коду"
+    mgr_plans, mgr_team, team_plans = data
+    if mgr_plans:
+        MANAGER_PLANS.clear()
+        MANAGER_PLANS.update(mgr_plans)
+    if mgr_team:
+        # Тільки додаємо/оновлюємо: видалення рядка з таблиці не повинно
+        # ламати роутинг сповіщень по командах.
+        MANAGER_TEAM.update(mgr_team)
+    if team_plans:
+        TEAM_PLANS.clear()
+        TEAM_PLANS.update(team_plans)
+    result = f"ok: {len(mgr_plans)} менеджерів, {len(team_plans)} команд"
+    logger.info("Plans refreshed from sheet: %s", result)
+    return result
+
+
 def send_to_team_group(manager_id: int, text: str) -> bool:
     """Відправляє сповіщення в правильну групу (РНК або РПК) залежно від команди менеджера."""
     team = MANAGER_TEAM.get(manager_id, "")
@@ -1521,6 +1545,9 @@ scheduler.add_job(_send_month_end_report, "interval", hours=1)           # ос�
 scheduler.add_job(_send_rnk_ai_report, "cron", hour=16, minute=50)       # 16:50 Kyiv
 scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=17, minute=0)   # 17:00 Kyiv
 scheduler.add_job(_send_weekly_ad_report, "cron", day_of_week="fri", hour=17, minute=0)  # П'ятниця 17:00 Kyiv
+scheduler.add_job(_refresh_plans_from_sheet, "cron", hour=6, minute=0)   # плани з таблиці, 06:00 Kyiv
+# і одразу на старті (деплой міг статися після редагування таблиці)
+threading.Thread(target=_refresh_plans_from_sheet, daemon=True).start()
 scheduler.start()
 # Джоба першого дотику реєструється нижче, після визначення функції
 # (_send_first_touch_admin_report оголошена далі у файлі) — інакше NameError на старті.
@@ -2753,6 +2780,28 @@ def setup_tg_webhook():
     base_url = request.host_url.rstrip("/")
     result = notifier.set_webhook(f"{base_url}/tg-update")
     return jsonify(result)
+
+
+@app.route("/refresh-plans", methods=["GET"])
+def refresh_plans():
+    """Ручне підтягування планів з таблиці (не чекаючи 06:00)."""
+    return jsonify({"result": _refresh_plans_from_sheet(),
+                    "managers": len(MANAGER_PLANS), "teams": len(TEAM_PLANS)})
+
+
+@app.route("/seed-plans-sheet", methods=["GET"])
+def seed_plans_sheet():
+    """Одноразово створює аркуші «Плани менеджерів»/«Плани команд» у таблиці
+    і заповнює їх поточними значеннями з коду. Потребує ?confirm=1."""
+    if request.args.get("confirm") != "1":
+        return jsonify({"error": "додай ?confirm=1 — аркуші буде перезаписано"}), 400
+    manager_rows = [
+        [str(uid), kommo.get_user_name(uid), MANAGER_TEAM.get(uid, ""), plan]
+        for uid, plan in MANAGER_PLANS.items()
+    ]
+    team_rows = [[team, plan] for team, plan in TEAM_PLANS.items()]
+    ok = sheets.seed_plans(manager_rows, team_rows)
+    return jsonify({"ok": ok, "managers": len(manager_rows), "teams": len(team_rows)})
 
 
 @app.route("/health", methods=["GET"])

@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,74 @@ def _get_or_create_worksheet(name: str, rows: int = 1000, cols: int = 20):
         return sh.worksheet(name)
     except Exception:
         return sh.add_worksheet(title=name, rows=rows, cols=cols)
+
+
+# ── Плани менеджерів/команд з таблиці ─────────────────────────────────
+# Щоб не хардкодити плани в коді щомісяця: бот читає їх з двох аркушів
+# основної таблиці. Редагуєш таблицю — бот підхоплює сам (раз на день
+# о 06:00 Київ, на старті сервісу, або одразу через GET /refresh-plans).
+PLANS_MANAGER_WS = "Плани менеджерів"   # A: user_id | B: Менеджер | C: Команда | D: План
+PLANS_TEAM_WS = "Плани команд"          # A: Команда | B: План
+
+
+def _parse_amount(raw: str) -> int:
+    digits = re.sub(r"[^\d]", "", raw or "")
+    return int(digits) if digits else 0
+
+
+def read_plans() -> tuple[dict[int, int], dict[int, str], dict[str, int]] | None:
+    """Читає плани з аркушів. Повертає (manager_plans, manager_team,
+    team_plans) або None, якщо таблиця недоступна чи аркуша ще немає
+    (тоді лишаються значення, зашиті в коді)."""
+    sh = _get_sheet()
+    if not sh:
+        return None
+    try:
+        ws = sh.worksheet(PLANS_MANAGER_WS)
+    except Exception:
+        return None  # аркуш ще не створено (див. /seed-plans-sheet)
+    manager_plans: dict[int, int] = {}
+    manager_team: dict[int, str] = {}
+    try:
+        for row in ws.get_all_values()[1:]:
+            try:
+                uid = int((row[0] or "").strip())
+            except (ValueError, IndexError):
+                continue  # порожній рядок / людина без акаунта в Kommo
+            manager_plans[uid] = _parse_amount(row[3] if len(row) > 3 else "")
+            if len(row) > 2 and row[2].strip():
+                manager_team[uid] = row[2].strip()
+    except Exception as e:
+        logger.error("read_plans (менеджери): %s", e)
+        return None
+    team_plans: dict[str, int] = {}
+    try:
+        ws2 = sh.worksheet(PLANS_TEAM_WS)
+        for row in ws2.get_all_values()[1:]:
+            if row and row[0].strip():
+                team_plans[row[0].strip()] = _parse_amount(row[1] if len(row) > 1 else "")
+    except Exception as e:
+        logger.error("read_plans (команди): %s", e)
+    return manager_plans, manager_team, team_plans
+
+
+def seed_plans(manager_rows: list[list], team_rows: list[list]) -> bool:
+    """Одноразово створює аркуші планів і заповнює поточними значеннями
+    з коду (далі таблицю веде людина, код більше не перезаписує)."""
+    ws = _get_or_create_worksheet(PLANS_MANAGER_WS, rows=100, cols=6)
+    ws2 = _get_or_create_worksheet(PLANS_TEAM_WS, rows=30, cols=4)
+    if not ws or not ws2:
+        return False
+    try:
+        ws.clear()
+        ws.update([["user_id", "Менеджер", "Команда", "План (грн)"]] + manager_rows,
+                  value_input_option="RAW")
+        ws2.clear()
+        ws2.update([["Команда", "План (грн)"]] + team_rows, value_input_option="RAW")
+        return True
+    except Exception as e:
+        logger.error("seed_plans: %s", e)
+        return False
 
 
 def ensure_headers():
