@@ -1409,6 +1409,8 @@ export function Dashboard() {
                     { key: "loyaltyThreshold", label: "Поріг «постійного» (оплат)", hint: "Скільки оплат робить клієнта постійним" },
                     { key: "loyaltyWindowMonths", label: "Вікно, місяців", hint: "За який період рахуються оплати" },
                     { key: "sleepingWindowMonths", label: "Вікно «сплячих», місяців", hint: "Глибина пошуку клієнтів на реактивацію" },
+                    { key: "ratesFallbackFullPerKm", label: "Калькулятор: базовий тариф, грн/км (ціла машина)", hint: "Орієнтир, коли заявок по напрямку немає" },
+                    { key: "ratesFallbackPartPerKm", label: "Калькулятор: базовий тариф, грн/км (догруз)", hint: "Орієнтир для догруза без заявок" },
                   ] as const
                 ).map((f) => (
                   <div key={f.key} style={{ marginBottom: 14 }}>

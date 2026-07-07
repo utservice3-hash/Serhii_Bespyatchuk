@@ -12,6 +12,10 @@ export interface AppSettings {
   loyaltyWindowMonths: number; // window for the threshold
   sleepingWindowMonths: number; // lapsed-but-recoverable lookback
   receivablesOverdueWarnDays: number; // highlight debt overdue beyond this
+  // Базовий тариф калькулятора ставок (грн/км), коли заявок по напрямку немає:
+  // окремо ціла машина і догруз («зелена зона» з карти прорахунку).
+  ratesFallbackFullPerKm: number;
+  ratesFallbackPartPerKm: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -19,6 +23,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   loyaltyWindowMonths: 2,
   sleepingWindowMonths: 6,
   receivablesOverdueWarnDays: 0,
+  ratesFallbackFullPerKm: 25,
+  ratesFallbackPartPerKm: 15,
 };
 
 /** Reads the persisted settings merged over defaults. */
@@ -50,6 +56,8 @@ settingsRouter.put("/", async (req, res) => {
     loyaltyWindowMonths: clampInt(body.loyaltyWindowMonths, 1, 24, current.loyaltyWindowMonths),
     sleepingWindowMonths: clampInt(body.sleepingWindowMonths, 1, 36, current.sleepingWindowMonths),
     receivablesOverdueWarnDays: clampInt(body.receivablesOverdueWarnDays, 0, 365, current.receivablesOverdueWarnDays),
+    ratesFallbackFullPerKm: clampInt(body.ratesFallbackFullPerKm, 1, 500, current.ratesFallbackFullPerKm),
+    ratesFallbackPartPerKm: clampInt(body.ratesFallbackPartPerKm, 1, 500, current.ratesFallbackPartPerKm),
   };
 
   await pool.query(

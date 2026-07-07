@@ -445,6 +445,8 @@ export interface AppSettings {
   loyaltyWindowMonths: number;
   sleepingWindowMonths: number;
   receivablesOverdueWarnDays: number;
+  ratesFallbackFullPerKm: number;
+  ratesFallbackPartPerKm: number;
 }
 
 export async function fetchSettings(): Promise<AppSettings> {
@@ -1172,4 +1174,25 @@ export async function analyzeRates(body: {
 }): Promise<RateAnalysis> {
   const { data } = await api.post<RateAnalysis>("/rates/analyze", body);
   return data;
+}
+
+// ── «Ціни по місту» (скритник → дашборд) ──
+export type CityInfoCategory = "price" | "loaders" | "contact";
+export interface CityInfoEntry {
+  id: number; city: string; category: CityInfoCategory;
+  title: string | null; phone: string | null; price: string | null; comment: string | null;
+  authorUserId: number | null; authorName: string | null; updatedAt: string;
+}
+export async function fetchCityInfo(q?: string): Promise<CityInfoEntry[]> {
+  const { data } = await api.get<{ entries: CityInfoEntry[] }>("/rates/city-info", { params: q ? { q } : {} });
+  return data.entries;
+}
+export async function addCityInfo(body: {
+  city: string; category: CityInfoCategory;
+  title?: string; phone?: string; price?: string; comment?: string;
+}): Promise<void> {
+  await api.post("/rates/city-info", body);
+}
+export async function deleteCityInfo(id: number): Promise<void> {
+  await api.delete(`/rates/city-info/${id}`);
 }

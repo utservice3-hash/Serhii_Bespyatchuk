@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  fetchTowns, fetchBodyTypes, analyzeRates, fetchRatesHealth, fetchRatesStats,
+  fetchTowns, fetchBodyTypes, analyzeRates, fetchRatesHealth, fetchRatesStats, fetchSettings,
+  fetchCityInfo, addCityInfo, deleteCityInfo,
   type Town, type BodyType, type RateAnalysis, type RateSide, type RateOffer, type RatesUsageStats,
+  type AppSettings, type CityInfoEntry, type CityInfoCategory,
 } from "../../../api";
 
 // Точна репліка оригінального lardiweb UI (порт вбудованого HTML/JS з main.py):
@@ -71,11 +73,14 @@ export function RatesSection() {
   const [error, setError] = useState<string | null>(null);
   const [noToken, setNoToken] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [view, setView] = useState<"route" | "cities">("route");
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isAdmin] = useState(() => { try { const t = localStorage.getItem("token"); if (!t) return false; return JSON.parse(atob(t.split(".")[1] ?? "")).role === "admin"; } catch { return false; } });
 
   useEffect(() => {
     fetchRatesHealth().then((h) => setNoToken(!h.has_token)).catch(() => {});
     fetchBodyTypes().then(setBodyTypes).catch(() => setBodyTypes([]));
+    fetchSettings().then(setSettings).catch(() => {});
   }, []);
 
   const swap = () => {
@@ -184,6 +189,15 @@ export function RatesSection() {
   const massNote = mn || mx ? ` · вага ${mn ?? "…"}–${mx ?? "…"} т` : "";
   const strictInfo = data ? `тільки точні збіги: ${data.route.from} → ${data.route.to}${massNote} · замовники ${cs.n}, перевізники ${ls.n}` : "";
 
+  // Дублі клієнта: ЖИВІ заявки замовників на цьому маршруті під нашу вагу —
+  // клієнт часто дзвонить кільком експедиторам одразу. 5+ дублів → перевізники
+  // уникають вантажу; корисно виставити свою заявку найдорожчою.
+  const dupes = (data?.cargo?.offers ?? []).filter((o) => {
+    if (mn && (!o.mass || o.mass < mn - 1)) return false;
+    if (mx && (!o.mass || o.mass > mx + 1)) return false;
+    return true;
+  });
+
   const segBtn = (active: boolean): React.CSSProperties => ({
     padding: "7px 13px", borderRadius: 8, border: "1px solid var(--border)",
     background: active ? ACC : "var(--card-bg)", color: active ? "#fff" : "var(--text)",
@@ -194,18 +208,32 @@ export function RatesSection() {
     <>
       <div className="page-header">
         <h1 className="page-title">⚡ Ставки за напрямком</h1>
-        {isAdmin && (
-          <button onClick={() => setShowStats((v) => !v)}
-            style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
-            {showStats ? "← до інструмента" : "📊 статистика"}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={() => { setView("route"); setShowStats(false); }}
+            style={{ padding: "7px 14px", borderRadius: 10, border: "1px solid var(--border)", cursor: "pointer", fontWeight: 700, fontSize: 13,
+              background: view === "route" && !showStats ? ACC : "var(--card-bg)", color: view === "route" && !showStats ? "#fff" : "var(--text)" }}>
+            🛣 Маршрут
           </button>
-        )}
+          <button onClick={() => { setView("cities"); setShowStats(false); }}
+            style={{ padding: "7px 14px", borderRadius: 10, border: "1px solid var(--border)", cursor: "pointer", fontWeight: 700, fontSize: 13,
+              background: view === "cities" && !showStats ? ACC : "var(--card-bg)", color: view === "cities" && !showStats ? "#fff" : "var(--text)" }}>
+            🏙 Ціни по місту
+          </button>
+          {isAdmin && (
+            <button onClick={() => setShowStats((v) => !v)}
+              style={{ padding: "7px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
+              {showStats ? "← до інструмента" : "📊 статистика"}
+            </button>
+          )}
+        </div>
       </div>
       <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "-8px 0 16px" }}>
-        Маршрут → ціни замовників і перевізників: зведення, грн/т, грн/км і повний список пропозицій. Дані Lardi-Trans.
+        {view === "cities"
+          ? "База цін, вантажників і контактів по містах — ведеться менеджерами (заміна ТГ-скритника). Пошук за містом, додавайте свої записи."
+          : "Маршрут → ціни замовників і перевізників: зведення, грн/т, грн/км і повний список пропозицій. Дані Lardi-Trans."}
       </p>
 
-      {showStats ? <StatsView /> : (
+      {showStats ? <StatsView /> : view === "cities" ? <CityInfoView /> : (
         <>
           {noToken && (
             <div className="chart-card" style={{ marginBottom: 16, borderLeft: `4px solid ${ACC}` }}>
@@ -250,6 +278,26 @@ export function RatesSection() {
 
           {data && !loading && (
             <>
+              {/* Дублі клієнта на маршруті */}
+              {dupes.length > 0 && (
+                <div className="chart-card" style={{ marginBottom: 16, borderLeft: `4px solid ${dupes.length >= 5 ? "#dc2626" : dupes.length >= 2 ? "#d97706" : "#16a34a"}` }}>
+                  <b>📎 Заявки на цьому маршруті під вашу вагу: {dupes.length}</b>
+                  {dupes.length >= 5
+                    ? <span style={{ color: "#dc2626", fontWeight: 700 }}> — 5+ дублів! Перевізники уникають таких вантажів, клієнт малоцільовий.</span>
+                    : dupes.length >= 2
+                      ? <span style={{ color: "#b45309" }}> — можливі дублі (клієнт міг обдзвонити кількох експедиторів). Щоб перехопити перевізника — став свою заявку найдорожчою.</span>
+                      : null}
+                  <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-muted)" }}>
+                    {dupes.slice(0, 6).map((o, i) => (
+                      <span key={i} style={{ marginRight: 12 }}>
+                        {o.company || "—"}: {o.total ? `${fmt(o.total)} ${o.currency}` : "договірна"}{o.mass ? ` · ${o.mass} т` : ""}
+                      </span>
+                    ))}
+                    {dupes.length > 6 ? `… і ще ${dupes.length - 6}` : ""}
+                  </div>
+                </div>
+              )}
+
               {/* Період */}
               <div className="chart-card" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
                 <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Період:</span>
@@ -310,7 +358,23 @@ export function RatesSection() {
                     </div>
                   </>
                 ) : (
-                  <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Немає точних збігів для рекомендації ({strictInfo}). Повна статистика — нижче.</div>
+                  <>
+                    <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Немає точних збігів для рекомендації ({strictInfo}). Повна статистика — нижче.</div>
+                    {settings && dist ? (
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Заявок за вашим напрямком немає — орієнтуйтесь на базовий тариф:</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: ACC, marginTop: 4 }}>
+                          {fmt(settings.ratesFallbackFullPerKm)} грн/км ≈ {fmt(Math.round(settings.ratesFallbackFullPerKm * dist))} грн
+                          <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 400 }}> · ціла машина</span>
+                        </div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: "#9c2b20", marginTop: 2 }}>
+                          {fmt(settings.ratesFallbackPartPerKm)} грн/км ≈ {fmt(Math.round(settings.ratesFallbackPartPerKm * dist))} грн
+                          <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 400 }}> · догруз</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>базовий тариф UTS (редагується в Налаштуваннях) × ≈{fmt(dist)} км</div>
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </div>
 
@@ -560,6 +624,122 @@ function StatsView() {
             )) : <tr><td colSpan={2} style={{ color: "var(--text-muted)" }}>—</td></tr>}
           </tbody>
         </table>
+      </div>
+    </>
+  );
+}
+
+const CAT_META: Record<CityInfoCategory, { label: string; icon: string }> = {
+  price: { label: "Ціна", icon: "💰" },
+  loaders: { label: "Вантажники", icon: "💪" },
+  contact: { label: "Контакт", icon: "📇" },
+};
+
+/** «Ціни по місту» — редагована менеджерами база цін/вантажників/контактів. */
+function CityInfoView() {
+  const [q, setQ] = useState("");
+  const [entries, setEntries] = useState<CityInfoEntry[] | null>(null);
+  const [reload, setReload] = useState(0);
+  const [form, setForm] = useState({ city: "", category: "price" as CityInfoCategory, title: "", phone: "", price: "", comment: "" });
+  const [saving, setSaving] = useState(false);
+  const me = (() => { try { const t = localStorage.getItem("token"); if (!t) return { id: 0, admin: false }; const p = JSON.parse(atob(t.split(".")[1] ?? "")); return { id: p.userId as number, admin: p.role !== "manager" }; } catch { return { id: 0, admin: false }; } })();
+
+  useEffect(() => {
+    setEntries(null);
+    const t = setTimeout(() => { fetchCityInfo(q.trim() || undefined).then(setEntries).catch(() => setEntries([])); }, 250);
+    return () => clearTimeout(t);
+  }, [q, reload]);
+
+  const add = async () => {
+    if (!form.city.trim()) return;
+    setSaving(true);
+    try {
+      await addCityInfo({ city: form.city.trim(), category: form.category, title: form.title, phone: form.phone, price: form.price, comment: form.comment });
+      setForm({ ...form, title: "", phone: "", price: "", comment: "" });
+      setReload((n) => n + 1);
+    } finally { setSaving(false); }
+  };
+
+  const byCity = new Map<string, CityInfoEntry[]>();
+  for (const e of entries ?? []) { const k = e.city; (byCity.get(k) ?? byCity.set(k, []).get(k)!).push(e); }
+
+  return (
+    <>
+      <div className="chart-card" style={{ marginBottom: 16 }}>
+        <h2 className="chart-title">➕ Додати запис</h2>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 160px", minWidth: 150 }}>
+            <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Місто *</label>
+            <input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Харків" style={inp} />
+          </div>
+          <div style={{ flex: "0 1 150px", minWidth: 130 }}>
+            <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Категорія</label>
+            <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as CityInfoCategory })} style={inp}>
+              {Object.entries(CAT_META).map(([k, m]) => <option key={k} value={k}>{m.icon} {m.label}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: "1 1 170px", minWidth: 150 }}>
+            <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Назва/хто це</label>
+            <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="вивантаження / Іван (кран)" style={inp} />
+          </div>
+          <div style={{ flex: "1 1 150px", minWidth: 140 }}>
+            <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Телефон</label>
+            <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="067…" style={inp} />
+          </div>
+          <div style={{ flex: "1 1 140px", minWidth: 120 }}>
+            <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Ціна</label>
+            <input value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} placeholder="2000 грн / 25 грн/км" style={inp} />
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} placeholder="Коментар (необовʼязково)" style={{ ...inp, flex: 1, minWidth: 220 }} />
+          <button onClick={add} disabled={saving || !form.city.trim()}
+            style={{ background: !form.city.trim() || saving ? "#94a3b8" : ACC, color: "#fff", border: 0, borderRadius: 9, padding: "10px 20px", fontWeight: 600, cursor: !form.city.trim() || saving ? "default" : "pointer" }}>
+            {saving ? "Збереження…" : "Додати"}
+          </button>
+        </div>
+      </div>
+
+      <div className="chart-card">
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>🏙 База по містах</h2>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук міста…" style={{ ...inp, maxWidth: 260 }} />
+        </div>
+        {entries === null ? (
+          <p className="loading-text">Завантаження…</p>
+        ) : entries.length === 0 ? (
+          <p className="loading-text">{q ? "Нічого не знайдено за цим містом." : "База поки порожня — додайте перший запис вище."}</p>
+        ) : (
+          [...byCity.entries()].map(([city, list]) => (
+            <div key={city} style={{ marginBottom: 14 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 6 }}>{city}</div>
+              <div style={{ overflowX: "auto" }}>
+                <table className="data-table compact">
+                  <thead><tr><th></th><th>Назва</th><th>Телефон</th><th>Ціна</th><th>Коментар</th><th>Автор</th><th>Дата</th><th></th></tr></thead>
+                  <tbody>
+                    {list.map((e) => (
+                      <tr key={e.id}>
+                        <td style={{ whiteSpace: "nowrap" }}>{CAT_META[e.category].icon} {CAT_META[e.category].label}</td>
+                        <td>{e.title || "—"}</td>
+                        <td>{e.phone ? <a href={`tel:${e.phone}`} style={{ color: ACC, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>{e.phone}</a> : "—"}</td>
+                        <td style={{ fontWeight: 600 }}>{e.price || "—"}</td>
+                        <td style={{ color: "var(--text-muted)" }}>{e.comment || "—"}</td>
+                        <td style={{ color: "var(--text-muted)", fontSize: 12 }}>{e.authorName || "—"}</td>
+                        <td style={{ color: "var(--text-muted)", fontSize: 12, whiteSpace: "nowrap" }}>{e.updatedAt}</td>
+                        <td>
+                          {(me.admin || e.authorUserId === me.id) && (
+                            <button onClick={() => { deleteCityInfo(e.id).then(() => setReload((n) => n + 1)); }} title="Видалити"
+                              style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)" }}>✕</button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </>
   );

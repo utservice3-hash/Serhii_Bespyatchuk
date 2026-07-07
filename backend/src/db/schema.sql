@@ -428,3 +428,20 @@ CREATE TABLE IF NOT EXISTS lardi_usage (
   frm TEXT, tox TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_lardi_usage_ts ON lardi_usage(ts);
+
+-- «Ціни по місту» (заміна ТГ-скритника): менеджери самі ведуть базу цін,
+-- вантажників і контактів по містах — з пошуком у калькуляторі ставок.
+CREATE TABLE IF NOT EXISTS city_info (
+  id SERIAL PRIMARY KEY,
+  city TEXT NOT NULL,
+  city_key TEXT NOT NULL,
+  category TEXT NOT NULL CHECK (category IN ('price','loaders','contact')),
+  title TEXT,
+  phone TEXT,
+  price TEXT,
+  comment TEXT,
+  author_user_id INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_city_info_key ON city_info(city_key);

@@ -361,3 +361,58 @@ ratesRouter.get("/stats", async (req, res) => {
     res.status(500).json({ error: `stats error: ${String(e).slice(0, 120)}` });
   }
 });
+
+// ── «Ціни по місту» (заміна ТГ-скритника): ціни, вантажники, контакти ──
+import { pool } from "../db/pool.js";
+
+const CITY_CATEGORIES = new Set(["price", "loaders", "contact"]);
+const cityKey = (s: string) => s.trim().toLowerCase().replace(/[’'`ʼ]/g, "").replace(/\s+/g, " ");
+
+ratesRouter.get("/city-info", async (req, res) => {
+  const q = cityKey(String(req.query.q ?? ""));
+  const params: unknown[] = [];
+  let where = "";
+  if (q) { params.push(`%${q}%`); where = `WHERE e.city_key LIKE $1`; }
+  const r = await pool.query(
+    `SELECT e.id, e.city, e.category, e.title, e.phone, e.price, e.comment,
+            e.author_user_id AS "authorUserId",
+            COALESCE(m.name, u.email) AS "authorName",
+            to_char(e.updated_at AT TIME ZONE 'Europe/Kyiv', 'DD.MM.YYYY') AS "updatedAt"
+       FROM city_info e
+       LEFT JOIN users u ON u.id = e.author_user_id
+       LEFT JOIN managers m ON m.id = u.manager_id
+      ${where}
+      ORDER BY e.city_key, e.category, e.updated_at DESC
+      LIMIT 500`,
+    params
+  );
+  res.json({ entries: r.rows });
+});
+
+ratesRouter.post("/city-info", async (req, res) => {
+  const b = req.body ?? {};
+  const city = String(b.city ?? "").trim();
+  const category = String(b.category ?? "");
+  if (!city) return res.status(400).json({ error: "Вкажіть місто" });
+  if (!CITY_CATEGORIES.has(category)) return res.status(400).json({ error: "Невірна категорія" });
+  const val = (v: unknown) => { const s = String(v ?? "").trim(); return s ? s.slice(0, 300) : null; };
+  const r = await pool.query<{ id: number }>(
+    `INSERT INTO city_info (city, city_key, category, title, phone, price, comment, author_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [city, cityKey(city), category, val(b.title), val(b.phone), val(b.price), val(b.comment), req.auth!.userId]
+  );
+  res.status(201).json({ id: r.rows[0].id });
+});
+
+ratesRouter.delete("/city-info/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  const auth = req.auth!;
+  const chk = await pool.query<{ author_user_id: number | null }>(`SELECT author_user_id FROM city_info WHERE id = $1`, [id]);
+  if (!chk.rows[0]) return res.status(404).json({ error: "Не знайдено" });
+  // Видаляти може автор запису або тімлід/адмін.
+  if (auth.role === "manager" && chk.rows[0].author_user_id !== auth.userId) {
+    return res.status(403).json({ error: "Лише свої записи" });
+  }
+  await pool.query(`DELETE FROM city_info WHERE id = $1`, [id]);
+  res.status(204).send();
+});
