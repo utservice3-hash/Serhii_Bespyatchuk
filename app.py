@@ -5,8 +5,16 @@ import re
 import threading
 from collections import deque
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
+
+# Київський час з урахуванням переведення годинників (влітку UTC+3, взимку
+# UTC+2). Фіксований +3 взимку зсував би всі робочі години і звіти на годину.
+try:
+    KYIV_TZ = ZoneInfo("Europe/Kyiv")
+except Exception:  # старіші tzdata знають лише стару назву
+    KYIV_TZ = ZoneInfo("Europe/Kiev")
 
 import kommo
 import notifier
@@ -380,8 +388,8 @@ def _format_duration(minutes: float) -> str:
 
 
 def _is_working_hours() -> bool:
-    """Пн–Пт, 09:00–18:30 за Києвом (UTC+3)."""
-    now_kyiv = datetime.now(timezone.utc) + timedelta(hours=3)
+    """Пн–Пт, 09:00–18:30 за Києвом."""
+    now_kyiv = datetime.now(KYIV_TZ)
     if now_kyiv.weekday() >= 5:
         return False
     h, m = now_kyiv.hour, now_kyiv.minute
@@ -390,14 +398,14 @@ def _is_working_hours() -> bool:
 
 def _is_unassigned_hours() -> bool:
     """Пн–Нд, 09:00–18:30 за Києвом — для нерозібраних заявок."""
-    now_kyiv = datetime.now(timezone.utc) + timedelta(hours=3)
+    now_kyiv = datetime.now(KYIV_TZ)
     h, m = now_kyiv.hour, now_kyiv.minute
     return (h > 9 or (h == 9 and m >= 0)) and (h < 18 or (h == 18 and m <= 30))
 
 
 def _weekend_duty_supervisor() -> str:
     """Повертає тег чергового тімліда у вихідні: сб→Дарина, нд→Андрій."""
-    weekday = (datetime.now(timezone.utc) + timedelta(hours=3)).weekday()
+    weekday = datetime.now(KYIV_TZ).weekday()
     if weekday == 5:
         return "@darina_mx"
     if weekday == 6:
@@ -842,7 +850,7 @@ def _send_month_end_report() -> None:
     """Щогодинний звіт в останній день місяця — тільки факт/план по Успішно реалізовано."""
     import calendar
     now = datetime.now(timezone.utc)
-    kyiv_now = now + timedelta(hours=3)
+    kyiv_now = now.astimezone(KYIV_TZ)
 
     # Запускаємо тільки в останній день місяця, з 9:00 до 21:00 Київ
     last_day = calendar.monthrange(kyiv_now.year, kyiv_now.month)[1]
@@ -1122,7 +1130,7 @@ def _check_stale_qualification_leads():
 
 
 def _write_daily_snapshot():
-    """Runs at 21:55 UTC (≈ 23:55 Kyiv) — saves daily stats to Google Sheets."""
+    """Runs at 23:55 Kyiv — saves daily stats to Google Sheets."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -1444,17 +1452,19 @@ def _check_webhook_health():
             logger.error("Webhook health check: was disabled, re-creation FAILED")
 
 
-scheduler = BackgroundScheduler(timezone="UTC")
+# Cron-джоби задаються в КИЇВСЬКОМУ часі — pytz/tzdata самі враховують
+# переведення годинників (влітку UTC+3, взимку UTC+2).
+scheduler = BackgroundScheduler(timezone="Europe/Kyiv")
 scheduler.add_job(_check_webhook_health, "interval", minutes=20)
 scheduler.add_job(_check_overdue_leads, "interval", minutes=5)
 scheduler.add_job(_check_unassigned_leads, "interval", minutes=15)
 scheduler.add_job(_check_stale_qualification_leads, "interval", hours=1)
-scheduler.add_job(_write_daily_snapshot, "cron", hour=21, minute=55)
-scheduler.add_job(_send_daily_plan_report, "cron", hour=15, minute=0)   # 18:00 Kyiv = 15:00 UTC
+scheduler.add_job(_write_daily_snapshot, "cron", hour=23, minute=55)     # 23:55 Kyiv — денний зріз
+scheduler.add_job(_send_daily_plan_report, "cron", hour=18, minute=0)    # 18:00 Kyiv
 scheduler.add_job(_send_month_end_report, "interval", hours=1)           # останній день місяця — щогодини
-scheduler.add_job(_send_rnk_ai_report, "cron", hour=13, minute=50)      # 16:50 Kyiv = 13:50 UTC
-scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=14, minute=0)  # 17:00 Kyiv = 14:00 UTC
-scheduler.add_job(_send_weekly_ad_report, "cron", day_of_week="fri", hour=14, minute=0)  # П'ятниця 17:00 Kyiv
+scheduler.add_job(_send_rnk_ai_report, "cron", hour=16, minute=50)       # 16:50 Kyiv
+scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=17, minute=0)   # 17:00 Kyiv
+scheduler.add_job(_send_weekly_ad_report, "cron", day_of_week="fri", hour=17, minute=0)  # П'ятниця 17:00 Kyiv
 scheduler.start()
 # Джоба першого дотику реєструється нижче, після визначення функції
 # (_send_first_touch_admin_report оголошена далі у файлі) — інакше NameError на старті.
@@ -2382,7 +2392,7 @@ def _send_first_touch_admin_report():
 
 # Реєструємо джобу першого дотику тут — після визначення функції (scheduler
 # уже запущений вище; APScheduler дозволяє додавати джоби на льоту).
-scheduler.add_job(_send_first_touch_admin_report, "cron", hour=15, minute=0)  # 18:00 Kyiv = 15:00 UTC
+scheduler.add_job(_send_first_touch_admin_report, "cron", hour=18, minute=0)  # 18:00 Kyiv
 
 
 def _build_stats_text(days: int, label: str) -> str:
