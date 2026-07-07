@@ -89,6 +89,7 @@ import { ManagersSection } from "./dashboard/sections/ManagersSection";
 import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
 import { ReceivablesSection } from "./dashboard/sections/ReceivablesSection";
 import { TasksSection } from "./dashboard/sections/TasksSection";
+import { GoalsSection } from "./dashboard/sections/GoalsSection";
 import { ReportSection } from "./dashboard/sections/ReportSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansSection } from "./dashboard/sections/PlansSection";
@@ -1799,6 +1800,8 @@ export function Dashboard() {
           teams={teams}
         />
       )}
+
+      {section === "goals" && <GoalsSection role={auth?.role} teams={teams} />}
     </Layout>
   );
 }

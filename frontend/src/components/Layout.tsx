@@ -30,6 +30,7 @@ export const NAV_GROUPS = [
     label: "Робота",
     items: [
       { key: "tasks", label: "Задачник", icon: "📝" },
+      { key: "goals", label: "Місячні цілі", icon: "🎯", roles: ["admin", "team_lead"] },
       { key: "messenger", label: "Месенджер", icon: "💬" },
       { key: "news", label: "Новини", icon: "📰" },
       { key: "training", label: "Навчання", icon: "📚" },

@@ -1016,6 +1016,32 @@ export async function createTaskPlan(payload: {
   return data;
 }
 
+export interface MonthlyGoal {
+  id: number;
+  month: string;
+  teamId: number | null;
+  teamName: string | null;
+  title: string;
+  target: string | null;
+  status: "in_progress" | "done";
+  comment: string | null;
+  createdById: number | null;
+}
+export async function fetchGoals(month: string, teamId?: number): Promise<MonthlyGoal[]> {
+  const { data } = await api.get<{ goals: MonthlyGoal[] }>("/goals", { params: teamId ? { month, teamId } : { month } });
+  return data.goals;
+}
+export async function createGoal(payload: { month: string; title: string; target?: string | null; teamId?: number | null }): Promise<{ id: number }> {
+  const { data } = await api.post<{ id: number }>("/goals", payload);
+  return data;
+}
+export async function updateGoal(id: number, patch: Partial<{ title: string; target: string | null; status: "in_progress" | "done"; comment: string | null }>): Promise<void> {
+  await api.patch(`/goals/${id}`, patch);
+}
+export async function deleteGoal(id: number): Promise<void> {
+  await api.delete(`/goals/${id}`);
+}
+
 export async function fetchTasks(): Promise<Task[]> {
   const { data } = await api.get<{ tasks: Task[] }>("/tasks");
   return data.tasks;

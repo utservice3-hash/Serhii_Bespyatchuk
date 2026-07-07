@@ -224,6 +224,23 @@ CREATE TABLE IF NOT EXISTS receivable_notes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Monthly goals / objectives a team lead (or КВП) sets for a month — a
+-- high-level goals tracker separate from the numeric plans. Team-lead → own
+-- team (team_id), admin → team_id NULL (department-wide) or a chosen team.
+CREATE TABLE IF NOT EXISTS monthly_goals (
+  id SERIAL PRIMARY KEY,
+  month DATE NOT NULL,
+  team_id INTEGER REFERENCES teams(id),
+  title TEXT NOT NULL,
+  target TEXT,
+  status TEXT NOT NULL DEFAULT 'in_progress', -- 'in_progress' | 'done'
+  comment TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_monthly_goals_month ON monthly_goals(month);
+
 -- Per-invoice detail behind each client's receivable balance (the "выгрузка"
 -- tab of the debt sheet). Refreshed wholesale each sync like `receivables`.
 CREATE TABLE IF NOT EXISTS receivable_invoices (

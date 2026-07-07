@@ -242,10 +242,11 @@ export function TasksSection({
               {(() => {
                 const q = taskSearch.trim().toLowerCase();
                 let base = tasks;
-                // Admin tab: «Мої» = personal tasks (created by me, no assignee); «Усі» = everything.
+                // Admin tab: «Мої» = personal tasks — assigned to my own account OR
+                // created by me without an assignee; «Усі» = everything.
                 if (isAdmin) {
                   base = adminTab === "mine"
-                    ? tasks.filter((t) => t.createdById === currentUserId && t.assigneeId == null)
+                    ? tasks.filter((t) => t.assigneeId === currentManagerId || (t.createdById === currentUserId && t.assigneeId == null))
                     : tasks;
                 }
                 if (assigneeFilter !== "") base = base.filter((t) => t.assigneeId === assigneeFilter);
