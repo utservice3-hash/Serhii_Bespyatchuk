@@ -118,6 +118,47 @@ async function getSyncWindowStart(): Promise<number> {
   return Math.floor(Date.now() / 1000) - FULL_SYNC_LOOKBACK_DAYS * 24 * 60 * 60;
 }
 
+// Qualification ("Кваліфікація") pipelines — the marketing/inbound funnel.
+const QUALIFICATION_PIPELINES = [8921928, 7336928];
+// Stages in the Qualification pipelines that are NOT paid-ad traffic and so
+// must NOT reclassify a full-cycle deal as advertising:
+//   69716164 / 63019380  — «Нова заявка від лідогенератора» (lead-gen dept)
+//   69738660             — «Реактивовано» (reactivation, not fresh ads)
+//   69693648 / 60407144  — «Incoming leads» (raw, unattributed)
+//   142                  — «Кваліфіковано» (terminal, not a source)
+//   143                  — «Не цільові / Сміття» (junk)
+// Everything else in these pipelines (site/call/missed-call-ad stages) means the
+// client entered through advertising.
+const QUALIFICATION_NON_AD_STAGES = [69716164, 63019380, 69738660, 69693648, 60407144, 142, 143];
+
+/**
+ * Re-attributes full-cycle deals to the «ad» channel when the client came in
+ * through advertising. Many ad-sourced deals are created "manually" in the
+ * full-cycle pipeline (no utm on the deal itself), so the ad signal lives on the
+ * client's earlier Qualification lead. A full-cycle deal currently classified
+ * «other» is promoted to «ad» when the same client (client_key) has a
+ * Qualification lead sitting in an ad-source stage. «leadgen» deals are left
+ * untouched (that channel wins). Runs every sync — since the incremental upsert
+ * resets window deals back to «other», this keeps the attribution stable and
+ * also backfills all history on the first run.
+ */
+export async function reclassifyAdChannel(): Promise<number> {
+  const res = await pool.query(
+    `UPDATE deals d SET lead_channel = 'ad'
+       WHERE d.pipeline_id = ANY($1)
+         AND d.lead_channel = 'other'
+         AND d.client_key IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM deals q
+            WHERE q.client_key = d.client_key
+              AND q.pipeline_id = ANY($2)
+              AND NOT (q.status_id = ANY($3))
+         )`,
+    [[8921932, 155304], QUALIFICATION_PIPELINES, QUALIFICATION_NON_AD_STAGES]
+  );
+  return res.rowCount ?? 0;
+}
+
 // In-process guard: a single tick of the 5-min cron must never start while the
 // previous run is still going. Overlapping runs were a likely cause of the sync
 // "freezing" — heavy runs stacked up, exhausted resources and stopped advancing
@@ -192,6 +233,11 @@ export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<
       );
     }
 
+    // Re-attribute ad-sourced full-cycle deals (client came via a Qualification
+    // ad lead but the deal was created "manually"). Runs over the whole table so
+    // it stays correct despite the incremental upsert resetting window deals.
+    const reclassified = await reclassifyAdChannel();
+
     // Success: advance the watermark and record health for monitoring.
     await pool.query(
       `UPDATE sync_state SET
@@ -205,7 +251,7 @@ export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<
       [syncStartedAt, deals.length, Date.now() - startMs]
     );
 
-    console.log(`Synced ${managerCount} users and ${deals.length} deals.`);
+    console.log(`Synced ${managerCount} users and ${deals.length} deals. Reclassified ${reclassified} full-cycle deals to ad-channel.`);
   } catch (err) {
     // Record the failure WITHOUT advancing the watermark, so the next run
     // retries the same window instead of skipping the missed updates.
