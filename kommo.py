@@ -25,10 +25,29 @@ _rate_lock = threading.Lock()
 _last_request_ts = 0.0
 _current_interval = _BASE_INTERVAL
 
+# ⏸ ТИМЧАСОВА ПАУЗА СИНХРОНІЗАЦІЇ З KOMMO (на прохання, до ранку).
+# Поки увімкнено — ЖОДЕН вихідний запит до Kommo API не йде: сесія одразу
+# віддає синтетичний 503, і вся наявна логіка бачить це як «немає даних /
+# запит не вдався» (get_lead→None, PATCH→False, get_pipeline_leads→[]) без
+# винятків. Вебхуки Kommo при цьому теж не обробляються (див. app.py webhook()).
+# ВІДНОВЛЕННЯ: постав env KOMMO_SYNC_PAUSED=0 (Render перезапуститься сам) АБО
+# поміняй дефолт нижче на "0"/прибери цей блок і задеплой.
+SYNC_PAUSED = os.getenv("KOMMO_SYNC_PAUSED", "1") == "1"
+
+
+def _paused_response():
+    r = _requests_lib.models.Response()
+    r.status_code = 503
+    r._content = b'{"paused": true}'
+    r.reason = "Kommo sync paused"
+    return r
+
 
 class _ThrottledSession(_requests_lib.Session):
     def request(self, *args, **kwargs):
         global _last_request_ts, _current_interval
+        if SYNC_PAUSED:
+            return _paused_response()
         with _rate_lock:
             wait = _last_request_ts + _current_interval - time.monotonic()
             if wait > 0:

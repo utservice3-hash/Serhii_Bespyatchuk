@@ -1759,6 +1759,12 @@ _recent_webhooks: deque = deque(maxlen=30)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    # ⏸ Пауза синхронізації з Kommo: приймаємо 200 (щоб Kommo не ретраїв), але
+    # НЕ обробляємо подію й не робимо вихідних запитів. Відновлення — зняти
+    # kommo.SYNC_PAUSED (env KOMMO_SYNC_PAUSED=0 або деплой). Див. kommo.py.
+    if kommo.SYNC_PAUSED:
+        return jsonify({"ok": True, "paused": True})
+
     content_type = request.content_type or ""
     if "application/json" in content_type:
         data = request.get_json(force=True, silent=True) or {}
