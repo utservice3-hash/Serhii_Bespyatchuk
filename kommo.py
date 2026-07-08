@@ -14,20 +14,39 @@ logger = logging.getLogger(__name__)
 # мінімальний інтервал; всі виклики requests.get/post/... у цьому модулі
 # йдуть через неї (ім'я requests нижче навмисно вказує на сесію).
 _RATE_LIMIT_RPS = float(os.getenv("KOMMO_MAX_RPS", "2"))
-_MIN_INTERVAL = 1.0 / _RATE_LIMIT_RPS
+_BASE_INTERVAL = 1.0 / _RATE_LIMIT_RPS
+# Адаптивний backoff: при 429/403 (rate limit / блок акаунта) інтервал між
+# запитами росте ×2 до цієї стелі, при успіху плавно спадає назад до базового.
+# Так під тиском бот сам різко зменшує частоту й НЕ «добиває» заблокований
+# акаунт, але не морозить воркер надовго (макс. очікування на запит =
+# _MAX_INTERVAL сек). /health Kommo не чіпає, тож health-check лишається швидким.
+_MAX_INTERVAL = float(os.getenv("KOMMO_MAX_BACKOFF", "5"))
 _rate_lock = threading.Lock()
 _last_request_ts = 0.0
+_current_interval = _BASE_INTERVAL
 
 
 class _ThrottledSession(_requests_lib.Session):
     def request(self, *args, **kwargs):
-        global _last_request_ts
+        global _last_request_ts, _current_interval
         with _rate_lock:
-            wait = _last_request_ts + _MIN_INTERVAL - time.monotonic()
+            wait = _last_request_ts + _current_interval - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
             _last_request_ts = time.monotonic()
-        return super().request(*args, **kwargs)
+        resp = super().request(*args, **kwargs)
+        if getattr(resp, "status_code", 0) in (429, 403):
+            with _rate_lock:
+                _current_interval = min(_MAX_INTERVAL, _current_interval * 2)
+                slowed = _current_interval
+            logger.warning(
+                "Kommo API %s (rate limit / блок) — сповільнення до %.2f req/s",
+                resp.status_code, 1.0 / slowed,
+            )
+        elif _current_interval > _BASE_INTERVAL:
+            with _rate_lock:
+                _current_interval = max(_BASE_INTERVAL, _current_interval * 0.9)
+        return resp
 
 
 requests = _ThrottledSession()
