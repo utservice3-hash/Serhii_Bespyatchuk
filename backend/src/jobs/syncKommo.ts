@@ -124,53 +124,78 @@ const QUALIFICATION_PIPELINES = [8921928, 7336928];
 const QUAL_LEADGEN_STAGES = [69716164, 63019380];
 
 /**
- * Channel re-attribution for full-cycle deals (правило власника):
- *   • «лідоген» — клієнт кваліфікувався З ЕТАПУ «Нова заявка від лідогенератора»:
- *     його лід Кваліфікації зараз на цьому етапі, АБО входив у нього
- *     (deal_stage_events), АБО був переданий менеджеру (lead_transfer_events —
- *     передача відбувається саме з цього етапу).
- *   • «реклама» — усе інше, що перейшло з Кваліфікації в повний цикл (клієнт
- *     має лід Кваліфікації, крім «Сміття» 143).
- * Runs every sync — the incremental upsert resets window deals back to their
- * raw channel, so re-attribution is re-applied over the whole table each pass.
+ * Channel re-attribution for full-cycle deals — «останній дотик» ПО КОЖНІЙ
+ * угоді (правило власника, уточнене 08.07.2026): лідоген може реактивувати
+ * клієнта, що колись прийшов з реклами, і передати в прорахунок — тоді угоди,
+ * створені ПІСЛЯ передачі, рахуються лідогену, а старі рекламні лишаються
+ * рекламою. Дотики клієнта (по client_key), що передують створенню угоди
+ * (+3 дні слеку на порядок запису в CRM):
+ *   • лідоген-дотик — передача заявки (lead_transfer_events), вхід ліда
+ *     Кваліфікації в етап «Нова заявка від лідогенератора» (deal_stage_events)
+ *     або лід, що зараз стоїть на цьому етапі;
+ *   • рекламний дотик — створення ліда Кваліфікації БЕЗ лідоген-маркерів
+ *     (крім «Сміття» 143).
+ * Канал угоди = найсвіжіший дотик перед нею; поле «Лидогенератор» на самій
+ * угоді завжди перемагає; фолбек — utm/«Источник клиента». Ганяється щосинку
+ * по всій таблиці (ідемпотентно, вміє і знижувати канал назад).
  */
 export async function reclassifyAdChannel(): Promise<number> {
-  const FC = [8921932, 155304];
-  // 1) Лідоген: проходження етапу «Нова заявка від лідогенератора».
-  const lg = await pool.query(
-    `UPDATE deals d SET lead_channel = 'leadgen'
-       WHERE d.pipeline_id = ANY($1)
-         AND d.lead_channel IS DISTINCT FROM 'leadgen'
-         AND d.client_key IS NOT NULL
-         AND EXISTS (
-           SELECT 1 FROM deals q
-            WHERE q.client_key = d.client_key
-              AND q.pipeline_id = ANY($2)
-              AND (
-                q.status_id = ANY($3)
-                OR EXISTS (SELECT 1 FROM deal_stage_events dse
-                            WHERE dse.kommo_id = q.kommo_id AND dse.status_id = ANY($3))
-                OR EXISTS (SELECT 1 FROM lead_transfer_events lte
-                            WHERE lte.kommo_id = q.kommo_id)
-              )
-         )`,
-    [FC, QUALIFICATION_PIPELINES, QUAL_LEADGEN_STAGES]
+  const res = await pool.query(
+    `WITH fc AS (
+       SELECT d.kommo_id, d.client_key, d.created_at_kommo, d.lead_channel,
+              d.lead_generator, d.utm_source, d.client_source
+         FROM deals d
+        WHERE d.pipeline_id = ANY($1) AND d.client_key IS NOT NULL
+     ),
+     lg AS (
+       SELECT q.client_key, x.t
+         FROM deals q
+         JOIN LATERAL (
+           SELECT lte.changed_at AS t FROM lead_transfer_events lte WHERE lte.kommo_id = q.kommo_id
+           UNION ALL
+           SELECT dse.changed_at FROM deal_stage_events dse
+            WHERE dse.kommo_id = q.kommo_id AND dse.status_id = ANY($3)
+           UNION ALL
+           SELECT q.created_at_kommo WHERE q.status_id = ANY($3)
+         ) x ON true
+        WHERE q.pipeline_id = ANY($2)
+     ),
+     adq AS (
+       SELECT q.client_key, q.created_at_kommo AS t
+         FROM deals q
+        WHERE q.pipeline_id = ANY($2)
+          AND q.status_id <> 143
+          AND NOT (q.status_id = ANY($3))
+          AND NOT EXISTS (SELECT 1 FROM lead_transfer_events lte WHERE lte.kommo_id = q.kommo_id)
+          AND NOT EXISTS (SELECT 1 FROM deal_stage_events dse
+                           WHERE dse.kommo_id = q.kommo_id AND dse.status_id = ANY($3))
+     ),
+     calc AS (
+       SELECT f.kommo_id, f.lead_channel, f.lead_generator, f.utm_source, f.client_source,
+              (SELECT MAX(lg.t) FROM lg
+                WHERE lg.client_key = f.client_key
+                  AND lg.t <= f.created_at_kommo + interval '3 days') AS lg_t,
+              (SELECT MAX(a.t) FROM adq a
+                WHERE a.client_key = f.client_key
+                  AND a.t <= f.created_at_kommo + interval '3 days') AS ad_t
+         FROM fc f
+     )
+     UPDATE deals d SET lead_channel = c.target
+       FROM (
+         SELECT kommo_id, lead_channel,
+                CASE
+                  WHEN lead_generator IS NOT NULL THEN 'leadgen'
+                  WHEN lg_t IS NOT NULL AND (ad_t IS NULL OR lg_t >= ad_t) THEN 'leadgen'
+                  WHEN ad_t IS NOT NULL THEN 'ad'
+                  WHEN utm_source IS NOT NULL OR client_source IN ('Google','Реактивация ретаргетом') THEN 'ad'
+                  ELSE 'other'
+                END AS target
+           FROM calc
+       ) c
+      WHERE d.kommo_id = c.kommo_id AND d.lead_channel IS DISTINCT FROM c.target`,
+    [[8921932, 155304], QUALIFICATION_PIPELINES, QUAL_LEADGEN_STAGES]
   );
-  // 2) Реклама: решта клієнтів з Кваліфікації (крім «Сміття» 143).
-  const ad = await pool.query(
-    `UPDATE deals d SET lead_channel = 'ad'
-       WHERE d.pipeline_id = ANY($1)
-         AND d.lead_channel = 'other'
-         AND d.client_key IS NOT NULL
-         AND EXISTS (
-           SELECT 1 FROM deals q
-            WHERE q.client_key = d.client_key
-              AND q.pipeline_id = ANY($2)
-              AND q.status_id <> 143
-         )`,
-    [FC, QUALIFICATION_PIPELINES]
-  );
-  return (lg.rowCount ?? 0) + (ad.rowCount ?? 0);
+  return res.rowCount ?? 0;
 }
 
 // In-process guard: a single tick of the 5-min cron must never start while the
