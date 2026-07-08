@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
   fetchTowns, fetchBodyTypes, analyzeRates, fetchRatesHealth, fetchRatesStats, fetchSettings,
-  fetchCityInfo, addCityInfo, deleteCityInfo,
+  fetchCityInfo, addCityInfo, deleteCityInfo, fetchCarriers,
   type Town, type BodyType, type RateAnalysis, type RateSide, type RateOffer, type RatesUsageStats,
-  type AppSettings, type CityInfoEntry, type CityInfoCategory,
+  type AppSettings, type CityInfoEntry, type CityInfoCategory, type CrmCarrier,
 } from "../../../api";
 
 // Точна репліка оригінального lardiweb UI (порт вбудованого HTML/JS з main.py):
@@ -73,7 +73,7 @@ export function RatesSection() {
   const [error, setError] = useState<string | null>(null);
   const [noToken, setNoToken] = useState(false);
   const [showStats, setShowStats] = useState(false);
-  const [view, setView] = useState<"route" | "cities">("route");
+  const [view, setView] = useState<"route" | "cities" | "carriers">("route");
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isAdmin] = useState(() => { try { const t = localStorage.getItem("token"); if (!t) return false; return JSON.parse(atob(t.split(".")[1] ?? "")).role === "admin"; } catch { return false; } });
 
@@ -219,6 +219,11 @@ export function RatesSection() {
               background: view === "cities" && !showStats ? ACC : "var(--card-bg)", color: view === "cities" && !showStats ? "#fff" : "var(--text)" }}>
             🏙 Ціни по місту
           </button>
+          <button onClick={() => { setView("carriers"); setShowStats(false); }}
+            style={{ padding: "7px 14px", borderRadius: 10, border: "1px solid var(--border)", cursor: "pointer", fontWeight: 700, fontSize: 13,
+              background: view === "carriers" && !showStats ? ACC : "var(--card-bg)", color: view === "carriers" && !showStats ? "#fff" : "var(--text)" }}>
+            🚚 Перевізники
+          </button>
           {isAdmin && (
             <button onClick={() => setShowStats((v) => !v)}
               style={{ padding: "7px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
@@ -230,10 +235,12 @@ export function RatesSection() {
       <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "-8px 0 16px" }}>
         {view === "cities"
           ? "База цін, вантажників і контактів по містах — ведеться менеджерами (заміна ТГ-скритника). Пошук за містом, додавайте свої записи."
-          : "Маршрут → ціни замовників і перевізників: зведення, грн/т, грн/км і повний список пропозицій. Дані Lardi-Trans."}
+          : view === "carriers"
+            ? "Перевізники з нашої CRM: контакти з успішних угод за 12 міс (без гео/таргет-міток = не клієнт). Пошук по місту — за згадкою в маршруті угоди."
+            : "Маршрут → ціни замовників і перевізників: зведення, грн/т, грн/км і повний список пропозицій. Дані Lardi-Trans."}
       </p>
 
-      {showStats ? <StatsView /> : view === "cities" ? <CityInfoView /> : (
+      {showStats ? <StatsView /> : view === "cities" ? <CityInfoView /> : view === "carriers" ? <CarriersView /> : (
         <>
           {noToken && (
             <div className="chart-card" style={{ marginBottom: 16, borderLeft: `4px solid ${ACC}` }}>
@@ -742,5 +749,53 @@ function CityInfoView() {
         )}
       </div>
     </>
+  );
+}
+
+/** 🚚 Перевізники з CRM — пошук по місту (згадка в маршруті успішної угоди). */
+function CarriersView() {
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState<CrmCarrier[] | null>(null);
+  const [processed, setProcessed] = useState(0);
+  useEffect(() => {
+    const s = q.trim();
+    if (s.length < 2) { setRows(null); return; }
+    const t = setTimeout(() => {
+      fetchCarriers(s).then((r) => { setRows(r.carriers); setProcessed(r.processed); }).catch(() => setRows([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+  return (
+    <div className="chart-card">
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+        <h2 className="chart-title" style={{ marginBottom: 0 }}>🚚 Пошук перевізників по місту</h2>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Місто (напр. Київ)…" style={{ ...inp, maxWidth: 280 }} autoFocus />
+      </div>
+      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
+        Тип запиту: по місту — покажемо контакти перевізників з усіх успішних угод, де місто згадується в маршруті. {processed ? `Опрацьовано угод: ${processed.toLocaleString("uk-UA")}.` : "База наповнюється щогодини."}
+      </p>
+      {rows === null ? (
+        <p className="loading-text">Введіть місто (мін. 2 літери).</p>
+      ) : rows.length === 0 ? (
+        <p className="loading-text">Перевізників за цим містом (ще) не знайдено — база наповнюється поступово.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table compact">
+            <thead><tr><th>Перевізник</th><th>Телефон</th><th style={{ textAlign: "right" }}>Перевезень</th><th>Останнє</th><th>Маршрути (приклади)</th></tr></thead>
+            <tbody>
+              {rows.map((c, i) => (
+                <tr key={`${c.phone}-${i}`}>
+                  <td style={{ fontWeight: 600 }}>{c.name || "—"}</td>
+                  <td><a href={`tel:${c.phone}`} style={{ color: ACC, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>{c.phone}</a></td>
+                  <td style={{ textAlign: "right", fontWeight: 700 }}>{c.trips}</td>
+                  <td style={{ whiteSpace: "nowrap", color: "var(--text-muted)" }}>{c.lastTrip || "—"}</td>
+                  <td style={{ color: "var(--text-muted)", fontSize: 12 }}>{(c.routes || []).slice(0, 3).join(" · ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }

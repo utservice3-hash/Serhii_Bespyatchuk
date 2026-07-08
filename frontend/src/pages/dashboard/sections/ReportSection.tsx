@@ -380,6 +380,52 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
           {moneyRow("Оплата отримана, ₴", block.money.received, "#16a34a", true)}
           {moneyRow("Перенесені з мин. міс., ₴", block.money.carryover, undefined, false)}
           {moneyRow("Очікувані оплати, ₴", block.money.expected, undefined, false)}
+          {/* Отримані кошти по тижнях: план/факт/викон.%/відставання. План =
+              місячний план виручки пропорційно роб. дням тижня; факт тижня =
+              «Успішно» (142), закриті в тижні. */}
+          {(block.money.weeks?.some((w) => w.plan > 0 || w.fact > 0)) && (() => {
+            const mw = block.money.weeks;
+            const hasMoneyPlan = block.money.planMonth > 0;
+            const leadCols = 1 + (hasPlan ? 5 : 0); // клітинки після «Етап» до тижнів
+            const weekCell = (wi: number, content: React.ReactNode, extra?: React.CSSProperties) => (
+              <td key={wi} colSpan={perWeekCols} style={{ borderLeft: "2px solid var(--border)", textAlign: "center", ...extra }}>{content}</td>
+            );
+            return (
+              <>
+                {hasMoneyPlan && (
+                  <tr>
+                    <td style={{ fontWeight: 600, borderTop: "2px solid var(--border)" }}>💰 План, ₴</td>
+                    <td colSpan={leadCols} style={{ fontWeight: 700, borderTop: "2px solid var(--border)" }}>{formatAmount(block.money.planMonth)}</td>
+                    {mw.map((w, wi) => weekCell(wi, w.plan ? formatAmount(w.plan) : "—", { color: "var(--text-muted)", borderTop: "2px solid var(--border)" }))}
+                  </tr>
+                )}
+                <tr>
+                  <td style={{ fontWeight: 600, borderTop: hasMoneyPlan ? undefined : "2px solid var(--border)" }}>💰 Факт (успішно), ₴</td>
+                  <td colSpan={leadCols} style={{ fontWeight: 700, color: "#16a34a", borderTop: hasMoneyPlan ? undefined : "2px solid var(--border)" }}>
+                    {formatAmount(mw.reduce((s, w) => s + w.fact, 0))}
+                  </td>
+                  {mw.map((w, wi) => weekCell(wi, w.fact ? formatAmount(w.fact) : "—", { fontWeight: 700, borderTop: hasMoneyPlan ? undefined : "2px solid var(--border)" }))}
+                </tr>
+                {hasMoneyPlan && (
+                  <tr>
+                    <td style={{ fontWeight: 600 }}>💰 Викон. % · відставання</td>
+                    <td colSpan={leadCols} />
+                    {mw.map((w, wi) => {
+                      if (!w.plan) return weekCell(wi, "—");
+                      const pct = Math.round((w.fact / w.plan) * 100);
+                      const lag = Math.max(0, w.plan - w.fact);
+                      return weekCell(wi, (
+                        <span style={{ fontSize: 11 }}>
+                          <b style={{ color: pct >= 100 ? "#16a34a" : "#dc2626" }}>{pct}%</b>
+                          {lag > 0 ? <span style={{ color: "#dc2626" }}> · −{formatAmount(lag)}</span> : null}
+                        </span>
+                      ));
+                    })}
+                  </tr>
+                )}
+              </>
+            );
+          })()}
         </tbody>
       </table>
       </div>
@@ -682,9 +728,19 @@ export function ReportSection({
           )}
 
           <div className="chart-card">
-            <h2 className="chart-title">
-              Динаміка отриманих коштів ({granularity === "day" ? "по днях" : granularity === "week" ? "по тижнях" : "по місяцях"})
-            </h2>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <h2 className="chart-title" style={{ marginBottom: 0 }}>Динаміка отриманих коштів</h2>
+              <div style={{ display: "flex", gap: 6 }}>
+                {(["day", "week", "month"] as const).map((g) => (
+                  <button key={g} onClick={() => setGranularity(g)}
+                    style={{ padding: "5px 13px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: granularity === g ? 700 : 500,
+                      border: `1px solid ${granularity === g ? "#c5141c" : "var(--border)"}`,
+                      background: granularity === g ? "#c5141c" : "var(--card-bg)", color: granularity === g ? "#fff" : "var(--text)" }}>
+                    {g === "day" ? "Дні" : g === "week" ? "Тижні" : "Місяці"}
+                  </button>
+                ))}
+              </div>
+            </div>
             {report.byPeriod.length === 0 ? (
               <p className="loading-text">Немає даних за період.</p>
             ) : (

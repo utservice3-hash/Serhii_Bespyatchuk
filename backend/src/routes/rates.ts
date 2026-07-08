@@ -416,3 +416,28 @@ ratesRouter.delete("/city-info/:id", async (req, res) => {
   await pool.query(`DELETE FROM city_info WHERE id = $1`, [id]);
   res.status(204).send();
 });
+
+// ── Перевізники з CRM: пошук по місту (згадка в назві/маршруті угоди) ──
+ratesRouter.get("/carriers", async (req, res) => {
+  const q = String(req.query.city ?? "").trim();
+  if (q.length < 2) return res.json({ carriers: [], processed: 0 });
+  const r = await pool.query(
+    `SELECT phone, (array_agg(name ORDER BY deal_date DESC NULLS LAST))[1] AS name,
+            COUNT(DISTINCT deal_kommo_id) AS trips,
+            to_char(MAX(deal_date), 'DD.MM.YYYY') AS "lastTrip",
+            (array_agg(DISTINCT deal_name)) [1:4] AS routes
+       FROM carrier_trips
+      WHERE phone IS NOT NULL AND deal_name ILIKE $1
+      GROUP BY phone
+      ORDER BY trips DESC, MAX(deal_date) DESC NULLS LAST
+      LIMIT 100`,
+    [`%${q}%`]
+  );
+  const done = await pool.query<{ n: string }>(`SELECT count(*) n FROM carrier_sync_done`);
+  res.json({
+    carriers: r.rows.map((x) => ({
+      name: x.name, phone: x.phone, trips: Number(x.trips), lastTrip: x.lastTrip, routes: x.routes ?? [],
+    })),
+    processed: Number(done.rows[0]?.n ?? 0),
+  });
+});

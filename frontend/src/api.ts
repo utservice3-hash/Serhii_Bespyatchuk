@@ -704,7 +704,12 @@ export interface WeeklyStageRow {
 export interface WeeklyBlock {
   name: string;
   stages: WeeklyStageRow[];
-  money: { carryover: number; expected: number; received: number };
+  money: {
+    carryover: number; expected: number; received: number;
+    planMonth: number;
+    weeks: { plan: number; fact: number }[];
+    daily: { date: string; v: number }[];
+  };
 }
 export interface FunnelWeeklyReport {
   scope: "manager" | "team";
@@ -1195,4 +1200,11 @@ export async function addCityInfo(body: {
 }
 export async function deleteCityInfo(id: number): Promise<void> {
   await api.delete(`/rates/city-info/${id}`);
+}
+
+// ── Перевізники з CRM (пошук по місту в маршруті угоди) ──
+export interface CrmCarrier { name: string | null; phone: string; trips: number; lastTrip: string | null; routes: string[]; }
+export async function fetchCarriers(city: string): Promise<{ carriers: CrmCarrier[]; processed: number }> {
+  const { data } = await api.get<{ carriers: CrmCarrier[]; processed: number }>("/rates/carriers", { params: { city } });
+  return data;
 }

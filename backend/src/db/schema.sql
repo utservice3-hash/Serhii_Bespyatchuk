@@ -445,3 +445,24 @@ CREATE TABLE IF NOT EXISTS city_info (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_city_info_key ON city_info(city_key);
+
+-- Перевізники з CRM для калькулятора ставок: контакти успішних угод повного
+-- циклу, що НЕ схожі на клієнта (без гео/таргет-міток, не основний, без
+-- компанії). Пошук по місту = згадка міста в назві угоди (маршруті).
+CREATE TABLE IF NOT EXISTS carrier_trips (
+  contact_id BIGINT NOT NULL,
+  deal_kommo_id BIGINT NOT NULL,
+  name TEXT,
+  phone TEXT,
+  deal_name TEXT,
+  deal_date DATE,
+  PRIMARY KEY (contact_id, deal_kommo_id)
+);
+CREATE INDEX IF NOT EXISTS idx_carrier_trips_phone ON carrier_trips(phone);
+
+-- Угоди, які вже опрацьовані збирачем перевізників (навіть якщо перевізника
+-- в них не знайдено) — щоб не тягнути з Kommo повторно.
+CREATE TABLE IF NOT EXISTS carrier_sync_done (
+  deal_kommo_id BIGINT PRIMARY KEY,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

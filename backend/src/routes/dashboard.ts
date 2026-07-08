@@ -2648,17 +2648,76 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
      GROUP BY d.manager_id`,
     mParams
   );
-  type Money = { carryover: number; expected: number; received: number };
-  const emptyMoney = (): Money => ({ carryover: 0, expected: 0, received: 0 });
+  type MoneyWeek = { plan: number; fact: number };
+  type Money = {
+    carryover: number; expected: number; received: number;
+    planMonth: number; weeks: MoneyWeek[]; daily: { date: string; v: number }[];
+  };
+  const emptyMoney = (): Money => ({
+    carryover: 0, expected: 0, received: 0, planMonth: 0,
+    weeks: weeks.map(() => ({ plan: 0, fact: 0 })), daily: [],
+  });
   const overallMoney = emptyMoney();
   const mgrMoney = new Map<number, Money>();
+  const moneyOf = (id: number): Money => {
+    let m = mgrMoney.get(id);
+    if (!m) { m = emptyMoney(); mgrMoney.set(id, m); }
+    return m;
+  };
   for (const r of moneyRows.rows) {
-    const m: Money = { carryover: Number(r.carryover), expected: Number(r.expected), received: Number(r.received) };
-    mgrMoney.set(r.manager_id, m);
+    const m = moneyOf(r.manager_id);
+    m.carryover = Number(r.carryover); m.expected = Number(r.expected); m.received = Number(r.received);
     overallMoney.carryover += m.carryover;
     overallMoney.expected += m.expected;
     overallMoney.received += m.received;
   }
+
+  // Місячний план виручки (plans.payment_amount) → пропорційно на тижні за
+  // робочими днями; факт по тижнях/днях = «Успішно» (142), закриті в тижні/дні
+  // (снапшот «оплата отримана» по тижнях не ділиться — він у місячному received).
+  const rpParams: unknown[] = [planMonthDate];
+  const rpConds = ["p.plan_date = $1", "p.metric = 'payment_amount'"];
+  if (managerId) { rpParams.push(managerId); rpConds.push(`p.manager_id = $${rpParams.length}`); }
+  if (teamId) { rpParams.push(teamId); rpConds.push(`m.team_id = $${rpParams.length}`); }
+  const revPlanRows = await pool.query<{ manager_id: number; v: string }>(
+    `SELECT p.manager_id, SUM(p.planned_value) AS v
+       FROM plans p JOIN managers m ON m.id = p.manager_id
+      WHERE ${rpConds.join(" AND ")} GROUP BY p.manager_id`,
+    rpParams
+  );
+  for (const r of revPlanRows.rows) {
+    const v = Number(r.v);
+    moneyOf(r.manager_id).planMonth = v;
+    overallMoney.planMonth += v;
+  }
+  for (const m of [overallMoney, ...mgrMoney.values()]) {
+    m.weeks = weeks.map((w) => ({ plan: Math.round(m.planMonth * (totalWd > 0 ? w.wd / totalWd : 0)), fact: 0 }));
+  }
+
+  const rdParams: unknown[] = [[8921932, 155304], fmt(mStart), fmt(mEnd)];
+  const rdConds = [
+    "d.pipeline_id = ANY($1)", "d.status_id = 142",
+    `(d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3`,
+  ];
+  if (managerId) { rdParams.push(managerId); rdConds.push(`d.manager_id = $${rdParams.length}`); }
+  if (teamId) { rdParams.push(teamId); rdConds.push(`m.team_id = $${rdParams.length}`); }
+  const revDaily = await pool.query<{ manager_id: number; day: string; v: string }>(
+    `SELECT d.manager_id, to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM-DD') AS day, SUM(d.price) AS v
+       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+      WHERE ${rdConds.join(" AND ")} GROUP BY d.manager_id, day ORDER BY day`,
+    rdParams
+  );
+  const overallDaily = new Map<string, number>();
+  for (const r of revDaily.rows) {
+    const v = Number(r.v);
+    overallDaily.set(r.day, (overallDaily.get(r.day) ?? 0) + v);
+    const wi = weeks.findIndex((w) => r.day >= w.from && r.day <= w.to);
+    if (wi >= 0) {
+      moneyOf(r.manager_id).weeks[wi].fact += v;
+      overallMoney.weeks[wi].fact += v;
+    }
+  }
+  overallMoney.daily = [...overallDaily.entries()].map(([date, v]) => ({ date, v }));
 
   // Aggregate facts: overall + per manager, keyed stage → mondayWeek → count.
   type WkMap = Record<string, Record<string, number>>;
