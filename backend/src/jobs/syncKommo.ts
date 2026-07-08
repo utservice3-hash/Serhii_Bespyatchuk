@@ -120,30 +120,44 @@ async function getSyncWindowStart(): Promise<number> {
 
 // Qualification ("Кваліфікація") pipelines — the marketing/inbound funnel.
 const QUALIFICATION_PIPELINES = [8921928, 7336928];
-// Stages in the Qualification pipelines that are NOT paid-ad traffic and so
-// must NOT reclassify a full-cycle deal as advertising:
-//   69716164 / 63019380  — «Нова заявка від лідогенератора» (lead-gen dept)
-//   69738660             — «Реактивовано» (reactivation, not fresh ads)
-//   69693648 / 60407144  — «Incoming leads» (raw, unattributed)
-//   142                  — «Кваліфіковано» (terminal, not a source)
-//   143                  — «Не цільові / Сміття» (junk)
-// Everything else in these pipelines (site/call/missed-call-ad stages) means the
-// client entered through advertising.
-const QUALIFICATION_NON_AD_STAGES = [69716164, 63019380, 69738660, 69693648, 60407144, 142, 143];
+// «Нова заявка від лідогенератора» stages in the Qualification pipelines.
+const QUAL_LEADGEN_STAGES = [69716164, 63019380];
 
 /**
- * Re-attributes full-cycle deals to the «ad» channel when the client came in
- * through advertising. Many ad-sourced deals are created "manually" in the
- * full-cycle pipeline (no utm on the deal itself), so the ad signal lives on the
- * client's earlier Qualification lead. A full-cycle deal currently classified
- * «other» is promoted to «ad» when the same client (client_key) has a
- * Qualification lead sitting in an ad-source stage. «leadgen» deals are left
- * untouched (that channel wins). Runs every sync — since the incremental upsert
- * resets window deals back to «other», this keeps the attribution stable and
- * also backfills all history on the first run.
+ * Channel re-attribution for full-cycle deals (правило власника):
+ *   • «лідоген» — клієнт кваліфікувався З ЕТАПУ «Нова заявка від лідогенератора»:
+ *     його лід Кваліфікації зараз на цьому етапі, АБО входив у нього
+ *     (deal_stage_events), АБО був переданий менеджеру (lead_transfer_events —
+ *     передача відбувається саме з цього етапу).
+ *   • «реклама» — усе інше, що перейшло з Кваліфікації в повний цикл (клієнт
+ *     має лід Кваліфікації, крім «Сміття» 143).
+ * Runs every sync — the incremental upsert resets window deals back to their
+ * raw channel, so re-attribution is re-applied over the whole table each pass.
  */
 export async function reclassifyAdChannel(): Promise<number> {
-  const res = await pool.query(
+  const FC = [8921932, 155304];
+  // 1) Лідоген: проходження етапу «Нова заявка від лідогенератора».
+  const lg = await pool.query(
+    `UPDATE deals d SET lead_channel = 'leadgen'
+       WHERE d.pipeline_id = ANY($1)
+         AND d.lead_channel IS DISTINCT FROM 'leadgen'
+         AND d.client_key IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM deals q
+            WHERE q.client_key = d.client_key
+              AND q.pipeline_id = ANY($2)
+              AND (
+                q.status_id = ANY($3)
+                OR EXISTS (SELECT 1 FROM deal_stage_events dse
+                            WHERE dse.kommo_id = q.kommo_id AND dse.status_id = ANY($3))
+                OR EXISTS (SELECT 1 FROM lead_transfer_events lte
+                            WHERE lte.kommo_id = q.kommo_id)
+              )
+         )`,
+    [FC, QUALIFICATION_PIPELINES, QUAL_LEADGEN_STAGES]
+  );
+  // 2) Реклама: решта клієнтів з Кваліфікації (крім «Сміття» 143).
+  const ad = await pool.query(
     `UPDATE deals d SET lead_channel = 'ad'
        WHERE d.pipeline_id = ANY($1)
          AND d.lead_channel = 'other'
@@ -152,11 +166,11 @@ export async function reclassifyAdChannel(): Promise<number> {
            SELECT 1 FROM deals q
             WHERE q.client_key = d.client_key
               AND q.pipeline_id = ANY($2)
-              AND NOT (q.status_id = ANY($3))
+              AND q.status_id <> 143
          )`,
-    [[8921932, 155304], QUALIFICATION_PIPELINES, QUALIFICATION_NON_AD_STAGES]
+    [FC, QUALIFICATION_PIPELINES]
   );
-  return res.rowCount ?? 0;
+  return (lg.rowCount ?? 0) + (ad.rowCount ?? 0);
 }
 
 // In-process guard: a single tick of the 5-min cron must never start while the
