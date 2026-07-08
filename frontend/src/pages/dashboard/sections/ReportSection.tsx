@@ -155,11 +155,14 @@ function ManagerWeeklyTasks({ managerId }: { managerId: number }) {
                     <td>
                       {(t.metricsJson && t.metricsJson.length > 0)
                         ? <span style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                            {t.metricsJson.map((m, i) => (
-                              <span key={i} style={{ fontSize: 12 }}>
-                                {METRIC_LBL[m.metric] ?? m.metric}: <b style={{ color: m.done ? "#16a34a" : "var(--text)" }}>{m.actual ?? "—"}</b>/{m.target}
-                              </span>
-                            ))}
+                            {t.metricsJson.map((m, i) => {
+                              const icon = m.actual == null ? "⏳" : m.done ? "✅" : "❌";
+                              return (
+                                <span key={i} style={{ fontSize: 12 }} title={m.done ? "виконано" : m.actual == null ? "попереду" : "не виконано"}>
+                                  {icon} {METRIC_LBL[m.metric] ?? m.metric}: <b style={{ color: m.done ? "#16a34a" : m.actual == null ? "var(--text)" : "#dc2626" }}>{m.actual ?? "—"}</b>/{m.target}
+                                </span>
+                              );
+                            })}
                           </span>
                         : (METRIC_LBL[t.metric ?? ""] ?? t.title)}
                     </td>

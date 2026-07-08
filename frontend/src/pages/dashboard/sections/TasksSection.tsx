@@ -302,9 +302,17 @@ export function TasksSection({
                         />
                       </div>
                       {task.metricsJson && task.metricsJson.length > 0 && (
-                        <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 22 }}>
-                          {task.planDate ? `📅 ${task.planDate} · ` : ""}
-                          {task.metricsJson.map((m) => `${METRIC_LBL[m.metric] ?? m.metric} ${m.actual ?? "—"}/${m.target}`).join(" · ")}
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 22, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                          {task.planDate ? <span>📅 {task.planDate}</span> : null}
+                          {task.metricsJson.map((m, i) => {
+                            const icon = m.actual == null ? "⏳" : m.done ? "✅" : "❌";
+                            return (
+                              <span key={i} title={m.done ? "виконано" : m.actual == null ? "попереду" : "не виконано"}>
+                                {icon} {METRIC_LBL[m.metric] ?? m.metric}{" "}
+                                <b style={{ color: m.done ? "#16a34a" : m.actual == null ? "var(--text-muted)" : "#dc2626" }}>{m.actual ?? "—"}</b>/{m.target}
+                              </span>
+                            );
+                          })}
                         </div>
                       )}
                       {task.checklistJson && task.checklistJson.length > 0 && (() => {
