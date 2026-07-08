@@ -16,6 +16,7 @@ import { feedbackRouter } from "./routes/feedback.js";
 import { aiWorkRouter } from "./routes/aiWork.js";
 import { reportsRouter } from "./routes/reports.js";
 import { ratesRouter } from "./routes/rates.js";
+import { documentsRouter } from "./routes/documents.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
@@ -51,6 +52,7 @@ app.use("/api/feedback", feedbackRouter);
 app.use("/api/ai-work", aiWorkRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/rates", ratesRouter);
+app.use("/api/documents", documentsRouter);
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".

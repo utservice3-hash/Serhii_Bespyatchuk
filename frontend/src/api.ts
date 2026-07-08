@@ -1227,3 +1227,41 @@ export async function fetchCarriers(city: string): Promise<{ carriers: CrmCarrie
   const { data } = await api.get<{ carriers: CrmCarrier[]; processed: number }>("/rates/carriers", { params: { city } });
   return data;
 }
+
+// ── Регламенти та документи (файлова база відділу) ──
+export interface DocFolder { id: number; parent_id: number | null; name: string; created_at: string; }
+export interface DocFile {
+  id: number; folder_id: number | null; name: string; mime: string | null;
+  size_bytes: string | number | null; created_at: string; author?: string | null;
+}
+export async function fetchDocTree(): Promise<{ folders: DocFolder[]; files: DocFile[] }> {
+  const { data } = await api.get<{ folders: DocFolder[]; files: DocFile[] }>("/documents/tree");
+  return { folders: data?.folders ?? [], files: data?.files ?? [] };
+}
+export async function createDocFolder(name: string, parentId: number | null): Promise<DocFolder> {
+  const { data } = await api.post<DocFolder>("/documents/folder", { name, parentId });
+  return data;
+}
+export async function renameDocFolder(id: number, name: string): Promise<void> {
+  await api.patch(`/documents/folder/${id}`, { name });
+}
+export async function deleteDocFolder(id: number): Promise<void> {
+  await api.delete(`/documents/folder/${id}`);
+}
+export async function uploadDocFile(body: {
+  folderId: number | null; filename: string; mime: string | null; dataBase64: string;
+}): Promise<DocFile> {
+  const { data } = await api.post<DocFile>("/documents/file", body);
+  return data;
+}
+export async function renameDocFile(id: number, name: string): Promise<void> {
+  await api.patch(`/documents/file/${id}`, { name });
+}
+export async function deleteDocFile(id: number): Promise<void> {
+  await api.delete(`/documents/file/${id}`);
+}
+/** Тягне файл авторизованим стрімом (Bearer у інтерсепторі) як blob-URL. */
+export async function fetchDocFileBlobUrl(id: number): Promise<string> {
+  const { data } = await api.get(`/documents/file/${id}/download`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
+}

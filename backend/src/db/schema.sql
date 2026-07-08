@@ -485,3 +485,30 @@ CREATE TABLE IF NOT EXISTS carrier_sync_done (
   deal_kommo_id BIGINT PRIMARY KEY,
   processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ── Регламенти та документи ─────────────────────────────────────────────
+-- Файлова база відділу продажу: дерево папок + файли на диску (тека
+-- `uploads/documents`, персистить між деплоями, потрапляє в нічний бекап).
+-- Читають усі автентифіковані; керує (створення/перейменування/видалення/
+-- завантаження) лише КВП (роль admin). Каскад: видалення папки прибирає
+-- вкладені папки й файли (фізичні файли чистить роут перед DELETE).
+CREATE TABLE IF NOT EXISTS doc_folders (
+  id SERIAL PRIMARY KEY,
+  parent_id INTEGER REFERENCES doc_folders(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_folders_parent ON doc_folders(parent_id);
+
+CREATE TABLE IF NOT EXISTS doc_files (
+  id SERIAL PRIMARY KEY,
+  folder_id INTEGER REFERENCES doc_folders(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,          -- відображувана назва (оригінальне імʼя файла)
+  stored_name TEXT NOT NULL,   -- uuid-імʼя на диску
+  mime TEXT,
+  size_bytes BIGINT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_files_folder ON doc_files(folder_id);

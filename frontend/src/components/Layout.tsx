@@ -35,6 +35,7 @@ export const NAV_GROUPS = [
       { key: "goals", label: "Місячні цілі", icon: "🎯", roles: ["admin", "team_lead"] },
       { key: "messenger", label: "Месенджер", icon: "💬" },
       { key: "news", label: "Новини", icon: "📰" },
+      { key: "documents", label: "Регламенти та документи", icon: "📁" },
       { key: "training", label: "Навчання", icon: "📚" },
     ],
   },
