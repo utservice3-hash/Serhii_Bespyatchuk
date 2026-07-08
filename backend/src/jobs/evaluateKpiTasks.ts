@@ -156,7 +156,69 @@ export async function evaluateKpiTasks(): Promise<void> {
     );
   } catch (err) { console.error(`evaluateKpiTasks: composite task ${t.id} failed:`, err); }
 
-  console.log(`KPI tasks evaluated: ${daily.rowCount} daily, ${parents.rowCount} ads, ${aggs.rowCount} aggregate, ${composite.rowCount} composite.`);
+  // 5) Динамічна декомпозиція «Суми»: залишок МІСЯЧНОГО плану виручки
+  //    (plans.payment_amount) перерозподіляється на майбутні робочі дні місяця.
+  //    Недовиконав сьогодні → завтрашні цілі payment_amount у майбутніх
+  //    daily_kpi-задачах зростають; перевиконав → зменшуються (мін. 0).
+  //    Минулі дні не чіпаємо — історія ✅/❌ лишається чесною.
+  let retargeted = 0;
+  try {
+    const mgrs = await pool.query<{ assignee_id: number }>(
+      `SELECT DISTINCT assignee_id FROM tasks
+        WHERE auto AND task_type = 'daily_kpi' AND metrics_json IS NOT NULL
+          AND assignee_id IS NOT NULL
+          AND plan_date > (now() AT TIME ZONE 'Europe/Kyiv')::date
+          AND date_trunc('month', plan_date) = date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv')::date)
+          AND metrics_json::text LIKE '%payment_amount%'`
+    );
+    // Майбутні робочі дні (Пн–Пт) від завтра до кінця місяця — Київ.
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Kyiv" }));
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    let futureWorkdays = 0;
+    for (let d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); d <= monthEnd; d.setDate(d.getDate() + 1)) {
+      if (d.getDay() !== 0 && d.getDay() !== 6) futureWorkdays++;
+    }
+    for (const { assignee_id } of mgrs.rows) {
+      try {
+        const planR = await pool.query<{ v: string }>(
+          `SELECT COALESCE(SUM(planned_value),0) v FROM plans
+            WHERE manager_id = $1 AND metric = 'payment_amount'
+              AND plan_date = date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv')::date)::date`,
+          [assignee_id]
+        );
+        const plan = Number(planR.rows[0]?.v ?? 0);
+        if (!plan || !futureWorkdays) continue;
+        // Факт = отримані кошти місяця (успішно 142 закрито в міс + оплата снапшот).
+        const factR = await pool.query<{ v: string }>(
+          `SELECT COALESCE(SUM(d.price) FILTER (WHERE d.status_id IN (69716460, 60412544)), 0)
+                + COALESCE(SUM(d.price) FILTER (WHERE d.status_id = 142
+                    AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv')::date)::date), 0) AS v
+             FROM deals d
+            WHERE d.manager_id = $1 AND d.pipeline_id IN (8921932, 155304)`,
+          [assignee_id]
+        );
+        const fact = Number(factR.rows[0]?.v ?? 0);
+        const perDay = Math.max(0, Math.round((plan - fact) / futureWorkdays));
+        const future = await pool.query<{ id: number; metrics_json: { metric: string; target: number }[] }>(
+          `SELECT id, metrics_json FROM tasks
+            WHERE auto AND task_type = 'daily_kpi' AND assignee_id = $1 AND metrics_json IS NOT NULL
+              AND plan_date > (now() AT TIME ZONE 'Europe/Kyiv')::date
+              AND date_trunc('month', plan_date) = date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv')::date)`,
+          [assignee_id]
+        );
+        for (const t of future.rows) {
+          if (!Array.isArray(t.metrics_json)) continue;
+          const cur = t.metrics_json.find((m) => m.metric === "payment_amount");
+          if (!cur || cur.target === perDay) continue;
+          const next = t.metrics_json.map((m) => (m.metric === "payment_amount" ? { ...m, target: perDay } : m));
+          await pool.query(`UPDATE tasks SET metrics_json = $1, updated_at = now() WHERE id = $2`, [JSON.stringify(next), t.id]);
+          retargeted++;
+        }
+      } catch (err) { console.error(`evaluateKpiTasks: retarget manager ${assignee_id} failed:`, err); }
+    }
+  } catch (err) { console.error("evaluateKpiTasks: retarget step failed:", err); }
+
+  console.log(`KPI tasks evaluated: ${daily.rowCount} daily, ${parents.rowCount} ads, ${aggs.rowCount} aggregate, ${composite.rowCount} composite, ${retargeted} sum-retargeted.`);
 }
 
 if (process.argv[1]?.endsWith("evaluateKpiTasks.js")) {
