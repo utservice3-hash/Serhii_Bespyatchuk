@@ -506,6 +506,7 @@ CREATE TABLE IF NOT EXISTS doc_files (
   folder_id INTEGER REFERENCES doc_folders(id) ON DELETE CASCADE,
   name TEXT NOT NULL,          -- відображувана назва (оригінальне імʼя файла)
   stored_name TEXT NOT NULL,   -- uuid-імʼя на диску
+  category TEXT,               -- тег: Регламент / Шаблон / Інструкція / Інше
   mime TEXT,
   size_bytes BIGINT,
   created_by INTEGER REFERENCES users(id),

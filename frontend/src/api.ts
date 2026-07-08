@@ -1231,9 +1231,10 @@ export async function fetchCarriers(city: string): Promise<{ carriers: CrmCarrie
 // ── Регламенти та документи (файлова база відділу) ──
 export interface DocFolder { id: number; parent_id: number | null; name: string; created_at: string; }
 export interface DocFile {
-  id: number; folder_id: number | null; name: string; mime: string | null;
-  size_bytes: string | number | null; created_at: string; author?: string | null;
+  id: number; folder_id: number | null; name: string; category?: string | null;
+  mime: string | null; size_bytes: string | number | null; created_at: string; author?: string | null;
 }
+export const DOC_CATEGORIES = ["Регламент", "Шаблон", "Інструкція", "Інше"] as const;
 export async function fetchDocTree(): Promise<{ folders: DocFolder[]; files: DocFile[] }> {
   const { data } = await api.get<{ folders: DocFolder[]; files: DocFile[] }>("/documents/tree");
   return { folders: data?.folders ?? [], files: data?.files ?? [] };
@@ -1249,13 +1250,17 @@ export async function deleteDocFolder(id: number): Promise<void> {
   await api.delete(`/documents/folder/${id}`);
 }
 export async function uploadDocFile(body: {
-  folderId: number | null; filename: string; mime: string | null; dataBase64: string;
-}): Promise<DocFile> {
-  const { data } = await api.post<DocFile>("/documents/file", body);
+  folderId: number | null; filename: string; mime: string | null; category?: string | null; dataBase64: string;
+}, onProgress?: (pct: number) => void): Promise<DocFile> {
+  const { data } = await api.post<DocFile>("/documents/file", body, {
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
+    },
+  });
   return data;
 }
-export async function renameDocFile(id: number, name: string): Promise<void> {
-  await api.patch(`/documents/file/${id}`, { name });
+export async function updateDocFile(id: number, patch: { name?: string; category?: string | null }): Promise<void> {
+  await api.patch(`/documents/file/${id}`, patch);
 }
 export async function deleteDocFile(id: number): Promise<void> {
   await api.delete(`/documents/file/${id}`);

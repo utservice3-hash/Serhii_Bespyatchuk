@@ -1,12 +1,60 @@
 import { pool } from "../db/pool.js";
 
+// Пайплайни Кваліфікації (вхідний/маркетинговий потік) та їхні лідоген-стадії —
+// дзеркалять правила атрибуції каналу в syncKommo.reclassifyAdChannel, щоб
+// «прийняв рекламу» означало ТІ САМІ рекламні заявки, а не угоди повного циклу.
+const QUALIFICATION_PIPELINES = [8921928, 7336928];
+const QUAL_LEADGEN_STAGES = [69716164, 63019380];
+
+/**
+ * «Прийняв рекламу» = рекламні заявки, які менеджер узяв: ліди Кваліфікації
+ * рекламного джерела (не «Сміття» 143, без лідоген-маркерів — стадії/передачі),
+ * за якими менеджер відповідальний, СТВОРЕНІ в періоді. НЕ угоди повного циклу:
+ * їх створення рекламою не є (типовий баг — менеджер відкриває угоду давньому
+ * ад-клієнту, а лічильник реклами росте, хоча нової заявки він не приймав).
+ */
+async function countAcceptedAds(managerId: number, from: string, to: string): Promise<number> {
+  const r = await pool.query<{ c: string }>(
+    `SELECT COUNT(*) c FROM deals q
+       WHERE q.manager_id = $1
+         AND q.pipeline_id = ANY($4)
+         AND q.status_id <> 143
+         AND NOT (q.status_id = ANY($5))
+         AND NOT EXISTS (SELECT 1 FROM lead_transfer_events lte WHERE lte.kommo_id = q.kommo_id)
+         AND NOT EXISTS (SELECT 1 FROM deal_stage_events dse
+                          WHERE dse.kommo_id = q.kommo_id AND dse.status_id = ANY($5))
+         AND (q.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
+    [managerId, from, to, QUALIFICATION_PIPELINES, QUAL_LEADGEN_STAGES]
+  );
+  return Number(r.rows[0].c);
+}
+
+/** Лідоген-факт поки лишається за каналом угод повного циклу (не чіпаємо — власник флагнув лише рекламу). */
+async function countFullCycleByChannel(managerId: number, channel: string, from: string, to: string): Promise<number> {
+  const r = await pool.query<{ c: string }>(
+    `SELECT COUNT(*) c FROM deals
+       WHERE manager_id = $1 AND lead_channel = $4
+         AND (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
+    [managerId, from, to, channel]
+  );
+  return Number(r.rows[0].c);
+}
+
+/** Факт для KPI-показника «реклама/лідоген» за менеджером і періодом. */
+async function countKpiLeads(managerId: number, metric: string, from: string, to: string): Promise<number> {
+  return metric === "ads_count"
+    ? countAcceptedAds(managerId, from, to)
+    : countFullCycleByChannel(managerId, "leadgen", from, to);
+}
+
 /**
  * Fills actual_value for auto KPI tasks from CRM data and auto-completes any
  * that reached their target. Three shapes:
  *   - daily_kpi / ads_count    — one task per day; evaluated once the day passed.
  *   - weekly/monthly_kpi ads_count — parent rollup over the whole period.
  *   - weekly/monthly_kpi avg_check | conversion — period aggregate.
- * "Accepted ads" = deals with a Google-tagged channel (lead_channel='ad').
+ * "Accepted ads" = ad-sourced Qualification leads the manager took (see
+ *   countAcceptedAds) — NOT full-cycle deals, whose creation is not an ad.
  */
 export async function evaluateKpiTasks(): Promise<void> {
   const markDone =
@@ -15,8 +63,6 @@ export async function evaluateKpiTasks(): Promise<void> {
        comments = $3, updated_at = now()
      WHERE id = $4`;
 
-  const channelOf = (metric: string) => (metric === "leadgen_count" ? "leadgen" : "ad");
-
   // 1) Daily count sub-tasks (ads / leadgen) for days that have already passed.
   const daily = await pool.query<{ id: number; assignee_id: number; metric: string; target_value: string; plan_date: string }>(
     `SELECT id, assignee_id, metric, target_value, plan_date FROM tasks
@@ -24,13 +70,7 @@ export async function evaluateKpiTasks(): Promise<void> {
        AND status <> 'done' AND plan_date <= (now()::date - 1)`
   );
   for (const t of daily.rows) try {
-    const r = await pool.query<{ c: string }>(
-      `SELECT COUNT(*) c FROM deals
-       WHERE manager_id = $1 AND lead_channel = $3
-         AND (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
-      [t.assignee_id, t.plan_date, channelOf(t.metric)]
-    );
-    const actual = Number(r.rows[0].c);
+    const actual = await countKpiLeads(t.assignee_id, t.metric, t.plan_date, t.plan_date);
     const target = Number(t.target_value);
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual} / ціль ${target}`, t.id]);
   } catch (err) { console.error(`evaluateKpiTasks: daily task ${t.id} failed:`, err); }
@@ -41,13 +81,7 @@ export async function evaluateKpiTasks(): Promise<void> {
      WHERE auto AND task_type IN ('weekly_kpi','monthly_kpi') AND metric IN ('ads_count','leadgen_count') AND status <> 'done'`
   );
   for (const t of parents.rows) try {
-    const r = await pool.query<{ c: string }>(
-      `SELECT COUNT(*) c FROM deals
-       WHERE manager_id = $1 AND lead_channel = $4
-         AND (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
-      [t.assignee_id, t.period_start, t.period_end, channelOf(t.metric)]
-    );
-    const actual = Number(r.rows[0].c);
+    const actual = await countKpiLeads(t.assignee_id, t.metric, t.period_start, t.period_end);
     const target = Number(t.target_value);
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual} / ціль ${target}`, t.id]);
   } catch (err) { console.error(`evaluateKpiTasks: parent task ${t.id} failed:`, err); }
@@ -100,12 +134,7 @@ export async function evaluateKpiTasks(): Promise<void> {
     for (const m of t.metrics_json) {
       let actual = 0;
       if (m.metric === "ads_count" || m.metric === "leadgen_count") {
-        const r = await pool.query<{ c: string }>(
-          `SELECT COUNT(*) c FROM deals WHERE manager_id = $1 AND lead_channel = $3
-             AND (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
-          [t.assignee_id, t.plan_date, channelOf(m.metric)]
-        );
-        actual = Number(r.rows[0].c);
+        actual = await countKpiLeads(t.assignee_id, m.metric, t.plan_date, t.plan_date);
       } else if (m.metric === "avg_check") {
         const r = await pool.query<{ v: string }>(
           `SELECT COALESCE(AVG(d.price),0) v FROM deals d

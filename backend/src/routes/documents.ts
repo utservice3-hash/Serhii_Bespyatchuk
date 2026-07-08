@@ -29,7 +29,7 @@ documentsRouter.get("/tree", async (_req, res) => {
       `SELECT id, parent_id, name, created_at FROM doc_folders ORDER BY name`
     ),
     pool.query(
-      `SELECT f.id, f.folder_id, f.name, f.mime, f.size_bytes, f.created_at,
+      `SELECT f.id, f.folder_id, f.name, f.category, f.mime, f.size_bytes, f.created_at,
               COALESCE(u.name, u.email) AS author
          FROM doc_files f LEFT JOIN users u ON u.id = f.created_by
         ORDER BY f.name`
@@ -100,22 +100,34 @@ documentsRouter.post("/file", onlyAdmin, async (req, res) => {
   const storedName = `${randomUUID()}${ext}`;
   await mkdir(DOCS_DIR, { recursive: true });
   await writeFile(path.join(DOCS_DIR, storedName), buffer);
+  const category = req.body?.category ? String(req.body.category).trim().slice(0, 40) : null;
   const r = await pool.query(
-    `INSERT INTO doc_files (folder_id, name, stored_name, mime, size_bytes, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, folder_id, name, mime, size_bytes, created_at`,
-    [folderId, display, storedName, req.body?.mime ?? null, buffer.length, req.auth!.userId]
+    `INSERT INTO doc_files (folder_id, name, stored_name, category, mime, size_bytes, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, folder_id, name, category, mime, size_bytes, created_at`,
+    [folderId, display, storedName, category, req.body?.mime ?? null, buffer.length, req.auth!.userId]
   );
   res.json(r.rows[0]);
 });
 
-/** Перейменувати файл (лише відображувана назва). */
+/** Оновити файл: перейменувати та/або змінити категорію. */
 documentsRouter.patch("/file/:id", onlyAdmin, async (req, res) => {
-  const name = String(req.body?.name ?? "").trim();
-  if (!name) return res.status(400).json({ error: "Назва файла обовʼязкова" });
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (req.body?.name !== undefined) {
+    const name = String(req.body.name).trim();
+    if (!name) return res.status(400).json({ error: "Назва файла обовʼязкова" });
+    params.push(name); sets.push(`name = $${params.length}`);
+  }
+  if (req.body?.category !== undefined) {
+    const category = req.body.category ? String(req.body.category).trim().slice(0, 40) : null;
+    params.push(category); sets.push(`category = $${params.length}`);
+  }
+  if (!sets.length) return res.status(400).json({ error: "Нема що оновлювати" });
+  params.push(Number(req.params.id));
   const r = await pool.query(
-    `UPDATE doc_files SET name = $1 WHERE id = $2 RETURNING id`,
-    [name, Number(req.params.id)]
+    `UPDATE doc_files SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id`,
+    params
   );
   if (!r.rowCount) return res.status(404).json({ error: "Файл не знайдено" });
   res.json({ ok: true });
