@@ -16,6 +16,10 @@ export interface AppSettings {
   // окремо ціла машина і догруз («зелена зона» з карти прорахунку).
   ratesFallbackFullPerKm: number;
   ratesFallbackPartPerKm: number;
+  // Значення поля «Источник клиента» (2098035), що рахуються як «прийнята
+  // реклама» в повному циклі (KPI ads_count). Ручний метод КВП: 6 сайтових
+  // джерел. Admin-редаговане — можна додавати/прибирати без правок коду.
+  adSources: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -25,6 +29,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   receivablesOverdueWarnDays: 0,
   ratesFallbackFullPerKm: 25,
   ratesFallbackPartPerKm: 15,
+  adSources: [
+    "uts.ua", "Дзвінок з uts.ua", "Callback з uts.ua",
+    "yalogist.com.ua", "Дзвінок з yalogist.com.ua", "Callback з yalogist.com.ua",
+  ],
 };
 
 /** Reads the persisted settings merged over defaults. */
@@ -58,6 +66,9 @@ settingsRouter.put("/", async (req, res) => {
     receivablesOverdueWarnDays: clampInt(body.receivablesOverdueWarnDays, 0, 365, current.receivablesOverdueWarnDays),
     ratesFallbackFullPerKm: clampInt(body.ratesFallbackFullPerKm, 1, 500, current.ratesFallbackFullPerKm),
     ratesFallbackPartPerKm: clampInt(body.ratesFallbackPartPerKm, 1, 500, current.ratesFallbackPartPerKm),
+    adSources: Array.isArray(body.adSources)
+      ? [...new Set((body.adSources as unknown[]).map((s) => String(s).trim()).filter((s) => s.length > 0))]
+      : current.adSources,
   };
 
   await pool.query(

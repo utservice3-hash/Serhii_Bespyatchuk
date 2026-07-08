@@ -1,30 +1,29 @@
 import { pool } from "../db/pool.js";
+import { getSettings } from "../routes/settings.js";
 
-// Пайплайни Кваліфікації (вхідний/маркетинговий потік) та їхні лідоген-стадії —
-// дзеркалять правила атрибуції каналу в syncKommo.reclassifyAdChannel, щоб
-// «прийняв рекламу» означало ТІ САМІ рекламні заявки, а не угоди повного циклу.
-const QUALIFICATION_PIPELINES = [8921928, 7336928];
-const QUAL_LEADGEN_STAGES = [69716164, 63019380];
+// Пайплайни повного циклу («Перевезення повний цикл»): новий + старий.
+const FULL_CYCLE_PIPELINES = [8921932, 155304];
 
 /**
- * «Прийняв рекламу» = рекламні заявки, які менеджер узяв: ліди Кваліфікації
- * рекламного джерела (не «Сміття» 143, без лідоген-маркерів — стадії/передачі),
- * за якими менеджер відповідальний, СТВОРЕНІ в періоді. НЕ угоди повного циклу:
- * їх створення рекламою не є (типовий баг — менеджер відкриває угоду давньому
- * ад-клієнту, а лічильник реклами росте, хоча нової заявки він не приймав).
+ * «Прийняв рекламу» = угоди повного циклу, де «Источник клиента» (client_source,
+ * поле Kommo 2098035) ∈ перелік рекламних джерел із налаштувань (за замовч. 6
+ * сайтових: uts.ua / yalogist × сайт/дзвінок/callback), СТВОРЕНІ в періоді, за
+ * менеджером. Це ТОЧНО ручний метод КВП (фільтр воронки за полем джерела) —
+ * звірено з CRM (команда Михальчевської за тиждень = 80, Гофман = 14).
+ *
+ * ⚠️ НЕ рахуємо за lead_channel='ad' (стара вада: реатрибуція за ІСТОРІЄЮ
+ * клієнта чіпляла рекламу на угоди давнім/реактиваційним клієнтам — Возович
+ * «прийняв 6 реклам» без жодної). Джерело беремо з САМОЇ угоди, не з історії.
  */
-async function countAcceptedAds(managerId: number, from: string, to: string): Promise<number> {
+async function countAcceptedAds(managerId: number, from: string, to: string, adSources: string[]): Promise<number> {
+  if (!adSources.length) return 0;
   const r = await pool.query<{ c: string }>(
     `SELECT COUNT(*) c FROM deals q
        WHERE q.manager_id = $1
-         AND q.pipeline_id = ANY($4)
-         AND q.status_id <> 143
-         AND NOT (q.status_id = ANY($5))
-         AND NOT EXISTS (SELECT 1 FROM lead_transfer_events lte WHERE lte.kommo_id = q.kommo_id)
-         AND NOT EXISTS (SELECT 1 FROM deal_stage_events dse
-                          WHERE dse.kommo_id = q.kommo_id AND dse.status_id = ANY($5))
+         AND q.pipeline_id = ANY($5)
+         AND q.client_source = ANY($4)
          AND (q.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
-    [managerId, from, to, QUALIFICATION_PIPELINES, QUAL_LEADGEN_STAGES]
+    [managerId, from, to, adSources, FULL_CYCLE_PIPELINES]
   );
   return Number(r.rows[0].c);
 }
@@ -49,9 +48,9 @@ async function countAcceptedLeadgen(managerId: number, from: string, to: string)
 }
 
 /** Факт для KPI-показника «реклама/лідоген» за менеджером і періодом. */
-async function countKpiLeads(managerId: number, metric: string, from: string, to: string): Promise<number> {
+async function countKpiLeads(managerId: number, metric: string, from: string, to: string, adSources: string[]): Promise<number> {
   return metric === "ads_count"
-    ? countAcceptedAds(managerId, from, to)
+    ? countAcceptedAds(managerId, from, to, adSources)
     : countAcceptedLeadgen(managerId, from, to);
 }
 
@@ -61,8 +60,8 @@ async function countKpiLeads(managerId: number, metric: string, from: string, to
  *   - daily_kpi / ads_count    — one task per day; evaluated once the day passed.
  *   - weekly/monthly_kpi ads_count — parent rollup over the whole period.
  *   - weekly/monthly_kpi avg_check | conversion — period aggregate.
- * "Accepted ads" = ad-sourced Qualification leads the manager took (see
- *   countAcceptedAds) — NOT full-cycle deals, whose creation is not an ad.
+ * "Accepted ads" = full-cycle deals whose «Источник клиента» is in the
+ *   configured ad-source list (see countAcceptedAds) — the КВП manual method.
  */
 export async function evaluateKpiTasks(): Promise<void> {
   const markDone =
@@ -71,6 +70,9 @@ export async function evaluateKpiTasks(): Promise<void> {
        comments = $3, updated_at = now()
      WHERE id = $4`;
 
+  // Перелік рекламних джерел («Источник клиента») — admin-редагований.
+  const { adSources } = await getSettings();
+
   // 1) Daily count sub-tasks (ads / leadgen) for days that have already passed.
   const daily = await pool.query<{ id: number; assignee_id: number; metric: string; target_value: string; plan_date: string }>(
     `SELECT id, assignee_id, metric, target_value, plan_date FROM tasks
@@ -78,7 +80,7 @@ export async function evaluateKpiTasks(): Promise<void> {
        AND status <> 'done' AND plan_date <= (now()::date - 1)`
   );
   for (const t of daily.rows) try {
-    const actual = await countKpiLeads(t.assignee_id, t.metric, t.plan_date, t.plan_date);
+    const actual = await countKpiLeads(t.assignee_id, t.metric, t.plan_date, t.plan_date, adSources);
     const target = Number(t.target_value);
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual} / ціль ${target}`, t.id]);
   } catch (err) { console.error(`evaluateKpiTasks: daily task ${t.id} failed:`, err); }
@@ -89,7 +91,7 @@ export async function evaluateKpiTasks(): Promise<void> {
      WHERE auto AND task_type IN ('weekly_kpi','monthly_kpi') AND metric IN ('ads_count','leadgen_count') AND status <> 'done'`
   );
   for (const t of parents.rows) try {
-    const actual = await countKpiLeads(t.assignee_id, t.metric, t.period_start, t.period_end);
+    const actual = await countKpiLeads(t.assignee_id, t.metric, t.period_start, t.period_end, adSources);
     const target = Number(t.target_value);
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual} / ціль ${target}`, t.id]);
   } catch (err) { console.error(`evaluateKpiTasks: parent task ${t.id} failed:`, err); }
@@ -142,7 +144,7 @@ export async function evaluateKpiTasks(): Promise<void> {
     for (const m of t.metrics_json) {
       let actual = 0;
       if (m.metric === "ads_count" || m.metric === "leadgen_count") {
-        actual = await countKpiLeads(t.assignee_id, m.metric, t.plan_date, t.plan_date);
+        actual = await countKpiLeads(t.assignee_id, m.metric, t.plan_date, t.plan_date, adSources);
       } else if (m.metric === "avg_check") {
         const r = await pool.query<{ v: string }>(
           `SELECT COALESCE(AVG(d.price),0) v FROM deals d
