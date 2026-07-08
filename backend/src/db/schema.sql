@@ -513,3 +513,22 @@ CREATE TABLE IF NOT EXISTS doc_files (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_doc_files_folder ON doc_files(folder_id);
+
+-- «Реєстр» лідоген-бота (Google Sheet): кожен рядок = вхід ліда в статус
+-- «Нова заявка від лідогенератора» (69716164). Джерело правди для «переданих
+-- заявок» (наш lead_transfer_events рахував зміни відповідального — завищував).
+-- TRUNCATE+insert щосинку (як receivables). Дублі можливі (той самий lead_id з
+-- різним transferred_at) — рахуємо DISTINCT lead_id за період.
+CREATE TABLE IF NOT EXISTS leadgen_registry (
+  lead_id BIGINT NOT NULL,
+  lead_name TEXT,
+  manager_name TEXT,
+  team_name TEXT,
+  transferred_at TIMESTAMPTZ NOT NULL,
+  taken_at TIMESTAMPTZ,
+  first_call_at TIMESTAMPTZ,
+  reaction_min NUMERIC,
+  time_to_call_min NUMERIC,
+  PRIMARY KEY (lead_id, transferred_at)
+);
+CREATE INDEX IF NOT EXISTS idx_leadgen_registry_time ON leadgen_registry(transferred_at);

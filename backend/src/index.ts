@@ -25,6 +25,7 @@ import { syncTransfers } from "./jobs/syncTransfers.js";
 import { syncDealActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
+import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
@@ -160,6 +161,13 @@ snapshotCarryover().catch((err) => console.error("Carryover startup snapshot fai
 cron.schedule("*/15 * * * *", () => {
   syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
 });
+
+// «Реєстр» лідоген-бота (Google Sheet) — джерело правди для «переданих заявок».
+// Кожні 30 хв + на старті. TRUNCATE+insert.
+cron.schedule("*/30 * * * *", () => {
+  syncLeadgenRegistry().catch((err) => console.error("Leadgen registry sync failed:", err));
+});
+syncLeadgenRegistry().catch((err) => console.error("Leadgen registry startup sync failed:", err));
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {

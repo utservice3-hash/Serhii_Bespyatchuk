@@ -34,4 +34,9 @@ export const config = {
   adBudgetSheetUrl:
     process.env.AD_BUDGET_SHEET_URL ??
     "https://docs.google.com/spreadsheets/d/1krromIuWfmyCR5BAup6kuVnCGaYdK3sA2AJt5Ksn3V0/export?format=csv&gid=0",
+  // «Реєстр» лідоген-бота: кожен рядок = вхід ліда в «Нова заявка від
+  // лідогенератора» (status 69716164). Джерело правди для «переданих заявок».
+  leadgenRegistrySheetUrl:
+    process.env.LEADGEN_REGISTRY_SHEET_URL ??
+    "https://docs.google.com/spreadsheets/d/1l8qC5J9ELvvWIQIjZgBeE40ziOE_sD0QXRGAk3gMP6w/export?format=csv&gid=1481567112",
 };

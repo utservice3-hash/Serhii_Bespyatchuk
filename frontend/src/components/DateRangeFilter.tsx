@@ -113,28 +113,10 @@ export function QuickPeriods({
   );
 }
 
-const PRESETS = [
-  { id: "today", label: "За сьогодня" },
-  { id: "yesterday", label: "За вчера" },
-  { id: "last7", label: "За останні 7 днів" },
-  { id: "last30", label: "За останні 30 днів" },
-  { id: "thisWeek", label: "За цю неділю" },
-  { id: "lastWeek", label: "За минулу неділю" },
-  { id: "thisMonth", label: "За цей місяць" },
-  { id: "lastMonth", label: "За попередній місяць" },
-  { id: "quarter", label: "За квартал" },
-  { id: "year", label: "За цей рік" },
-];
-
 export function DateRangeFilter({ value, onChange }: DateRangeFilterProps) {
   const [showDropdown, setShowDropdown] = useState(false);
 
-  const handlePreset = (presetId: string) => {
-    onChange(getDateRange(presetId));
-    setShowDropdown(false);
-  };
-
-  const displayLabel = `${value.from} — ${value.to}`;
+  const displayLabel = value.from && value.to ? `${value.from} — ${value.to}` : "Обрати період";
 
   return (
     <div style={{ position: "relative", display: "inline-block" }}>
@@ -165,33 +147,12 @@ export function DateRangeFilter({ value, onChange }: DateRangeFilterProps) {
             borderRadius: "4px",
             boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
             zIndex: 1000,
-            minWidth: "200px",
+            minWidth: "220px",
           }}
         >
-          {PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              onClick={() => handlePreset(preset.id)}
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "10px 12px",
-                textAlign: "left",
-                border: "none",
-                backgroundColor: "transparent",
-                cursor: "pointer",
-                fontSize: "14px",
-                fontFamily: "inherit",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#f5f5f5")}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-            >
-              {preset.label}
-            </button>
-          ))}
-
-          <div style={{ borderTop: "1px solid #eee", padding: "8px 12px" }}>
-            <div style={{ display: "flex", gap: "8px", marginBottom: "4px" }}>
+          <div style={{ padding: "8px 12px" }}>
+            <div style={{ fontSize: 12, color: "#667085", marginBottom: 6 }}>Довільний період</div>
+            <div style={{ display: "flex", gap: "8px", marginBottom: "6px" }}>
               <input
                 type="date"
                 value={value.from}

@@ -2313,16 +2313,18 @@ dashboardRouter.get("/report", async (req, res) => {
      WHERE ${EXPECTED_STAGES} ${expScope.length ? "AND " + expScope.join(" AND ") : ""}
      GROUP BY d.manager_id`, expP);
 
-  // Передані заявки per manager (period).
+  // Передані заявки per manager (period) — з «Реєстру» лідоген-бота: один лід =
+  // один вхід у «Нова заявка від лідогенератора», DISTINCT lead_id за період.
+  // (Раніше lead_transfer_events рахував зміни відповідального → завищення в рази.)
   const trP: unknown[] = [];
   const trScope = scopeSql(trP);
   const trDate: string[] = [];
-  if (from) { trP.push(from); trDate.push(`(lte.changed_at ${KYIV})::date >= $${trP.length}`); }
-  if (to) { trP.push(to); trDate.push(`(lte.changed_at ${KYIV})::date <= $${trP.length}`); }
+  if (from) { trP.push(from); trDate.push(`(lr.transferred_at ${KYIV})::date >= $${trP.length}`); }
+  if (to) { trP.push(to); trDate.push(`(lr.transferred_at ${KYIV})::date <= $${trP.length}`); }
   const trConds = [...trScope, ...trDate];
   const transfByMgr = await pool.query<{ id: number; c: string }>(
-    `SELECT d.manager_id AS id, COUNT(DISTINCT lte.kommo_id) AS c
-     FROM lead_transfer_events lte JOIN deals d ON d.kommo_id = lte.kommo_id JOIN managers m ON m.id = d.manager_id
+    `SELECT d.manager_id AS id, COUNT(DISTINCT lr.lead_id) AS c
+     FROM leadgen_registry lr JOIN deals d ON d.kommo_id = lr.lead_id JOIN managers m ON m.id = d.manager_id
      ${trConds.length ? "WHERE " + trConds.join(" AND ") : ""}
      GROUP BY d.manager_id`, trP);
 

@@ -29,19 +29,18 @@ async function countAcceptedAds(managerId: number, from: string, to: string, adS
 }
 
 /**
- * «Прийняв лідогенераторів» = передані менеджеру заявки від лідогену
- * (lead_transfer_events — leadgen→продажі, «Передані заявки»), а НЕ угоди
- * повного циклу з каналом leadgen (та сама вада, що була з рекламою). Передача
- * приземляється на Kommo-користувача (to_user_id) → мапимо на менеджера через
- * managers.kommo_user_id. Distinct по ліду: один лід, переданий двічі, = 1.
+ * «Прийняв лідогенераторів» = передані менеджеру заявки з «Реєстру» лідоген-бота
+ * (leadgen_registry — вхід ліда в «Нова заявка від лідогенератора» 69716164,
+ * джерело правди). Distinct lead_id за період; атрибуція — поточний менеджер
+ * ліда (join deals по kommo_id). Раніше рахувались зміни відповідального
+ * (lead_transfer_events) — завищення в рази.
  */
 async function countAcceptedLeadgen(managerId: number, from: string, to: string): Promise<number> {
   const r = await pool.query<{ c: string }>(
-    `SELECT COUNT(DISTINCT lte.kommo_id) c
-       FROM lead_transfer_events lte
-       JOIN managers m ON m.kommo_user_id::bigint = lte.to_user_id
-      WHERE m.id = $1
-        AND (lte.changed_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
+    `SELECT COUNT(DISTINCT lr.lead_id) c
+       FROM leadgen_registry lr JOIN deals d ON d.kommo_id = lr.lead_id
+      WHERE d.manager_id = $1
+        AND (lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
     [managerId, from, to]
   );
   return Number(r.rows[0].c);
