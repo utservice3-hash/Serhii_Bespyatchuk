@@ -25,7 +25,11 @@ const KOMMO_HEADERS: Record<string, string> = {
 // was for exceeding it — several jobs paginating at once easily spike past
 // that. 350ms gap ≈ 3 req/s total (half the limit), applied before EVERY
 // request; do not lower without re-reading developers.kommo.com/docs/limitations.
-const MIN_REQUEST_GAP_MS = 350;
+// 800ms ≈ 1.25 req/s — навмисно ДУЖЕ повільно (не 3, а ~1/с). Після IP-бану
+// 08.07.2026 (WAF, зняли вручну) головна умова власника: тримати ОБСЯГ запитів
+// малим, щоб не забанили знову. Темп + рідший полінг (index.ts) + менше вікно
+// реконсиляції разом дають кратно менший потік. Довгостроково — вебхуки.
+const MIN_REQUEST_GAP_MS = 800;
 let throttleChain: Promise<void> = Promise.resolve();
 function throttle(): Promise<void> {
   const slot = throttleChain.then(
