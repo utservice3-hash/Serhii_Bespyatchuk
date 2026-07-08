@@ -172,12 +172,15 @@ export async function evaluateKpiTasks(): Promise<void> {
         );
         actual = Math.round(Number(r.rows[0].v));
       } else if (m.metric === "dispatch_count") {
-        // Cars placed = the manager's deals that ENTERED an "Авто працює" stage
-        // that day (stage-entry events; distinct deals to avoid re-entries).
+        // «Поставлені авто» = угоди, що ЗАЙШЛИ в «Виставлено рахунок» (invoiced)
+        // АБО «Авто працює» того дня — рахунок+авто = один етап (правило КВП, як
+        // у звіті «Відправлено авто»). Distinct — щоб не рахувати двічі угоду,
+        // що зайшла в обидва того ж дня.
         const r = await pool.query<{ c: string }>(
           `SELECT COUNT(DISTINCT dse.kommo_id) c FROM deal_stage_events dse
              JOIN deals d ON d.kommo_id = dse.kommo_id
-             WHERE d.manager_id = $1 AND dse.status_id IN (69716300, 98470988, 10937178)
+             WHERE d.manager_id = $1
+               AND (dse.funnel_stage = 'invoiced' OR dse.status_id IN (69716300, 98470988, 10937178))
                AND (dse.changed_at AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
           [t.assignee_id, t.plan_date]
         );
