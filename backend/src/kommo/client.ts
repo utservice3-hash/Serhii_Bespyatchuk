@@ -11,7 +11,22 @@ const MAX_RETRIES = 5;
 // forever (that froze the whole 5-min job). On timeout we abort and retry.
 const REQUEST_TIMEOUT_MS = 60_000;
 
+// Global politeness throttle across ALL jobs: min gap between Kommo requests.
+// Kommo's documented limit is 7 req/s, but its WAF bans the IP outright for
+// bursts (08.07.2026 ban) — several jobs paginating at once easily spike past
+// that. 200ms gap ≈ 5 req/s total, applied before every request.
+const MIN_REQUEST_GAP_MS = 200;
+let throttleChain: Promise<void> = Promise.resolve();
+function throttle(): Promise<void> {
+  const slot = throttleChain.then(
+    () => new Promise<void>((resolve) => setTimeout(resolve, MIN_REQUEST_GAP_MS))
+  );
+  throttleChain = slot;
+  return slot;
+}
+
 async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
+  await throttle();
   let res: Response;
   try {
     const controller = new AbortController();
@@ -57,6 +72,7 @@ export async function kommoWrite<T>(
   body: unknown,
   method: "POST" | "PATCH" = "POST"
 ): Promise<T> {
+  await throttle();
   const res = await fetch(`${config.kommo.baseUrl}${path}`, {
     method,
     headers: {

@@ -104,20 +104,31 @@ cron.schedule("0 4 * * *", () => {
 cron.schedule("*/10 * * * *", () => {
   syncStageEvents().catch((err) => console.error("Stage events sync failed:", err));
 });
-syncStageEvents().catch((err) => console.error("Stage events startup sync failed:", err));
 
 // Lead-transfer events ("передані заявки") every 10 minutes + on startup.
 cron.schedule("*/10 * * * *", () => {
   syncTransfers().catch((err) => console.error("Transfers sync failed:", err));
 });
-syncTransfers().catch((err) => console.error("Transfers startup sync failed:", err));
 
 // Real (human) deal activity from lead notes every 10 minutes + on startup —
 // feeds "stuck deals" so Salesbot activity никогда не скидає таймер.
 cron.schedule("*/10 * * * *", () => {
   syncDealActivity().catch((err) => console.error("Deal activity sync failed:", err));
 });
-syncDealActivity().catch((err) => console.error("Deal activity startup sync failed:", err));
+
+// Startup catch-up for the Kommo event feeds — STAGGERED, not simultaneous.
+// Firing deals+events+transfers+notes at once right after a restart is exactly
+// the burst that trips Kommo's WAF (the 08.07.2026 IP ban); spreading them a
+// couple of minutes apart keeps the recovery behaviour without the spike.
+setTimeout(() => {
+  syncStageEvents().catch((err) => console.error("Stage events startup sync failed:", err));
+}, 2 * 60 * 1000);
+setTimeout(() => {
+  syncTransfers().catch((err) => console.error("Transfers startup sync failed:", err));
+}, 4 * 60 * 1000);
+setTimeout(() => {
+  syncDealActivity().catch((err) => console.error("Deal activity startup sync failed:", err));
+}, 6 * 60 * 1000);
 
 // Ad budget (Google Ads sheet) hourly + on startup — feeds the КВП report.
 cron.schedule("15 * * * *", () => {
