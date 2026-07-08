@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # весь процес. Реалізація: сесія, яка перед КОЖНИМ запитом витримує
 # мінімальний інтервал; всі виклики requests.get/post/... у цьому модулі
 # йдуть через неї (ім'я requests нижче навмисно вказує на сесію).
-_RATE_LIMIT_RPS = 2
+_RATE_LIMIT_RPS = float(os.getenv("KOMMO_MAX_RPS", "2"))
 _MIN_INTERVAL = 1.0 / _RATE_LIMIT_RPS
 _rate_lock = threading.Lock()
 _last_request_ts = 0.0
@@ -38,6 +38,20 @@ KOMMO_BASE = os.getenv("KOMMO_BASE", "https://utsercice.kommo.com")
 HEADERS = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
 
 _user_cache: dict[int, str] = {}
+
+# Короткочасний кеш повних лідів (get_lead): повторні фетчі того самого ліда в
+# межах одного логічного потоку (get_lead_details + get_lead, кілька хендлерів
+# на один вебхук, скан+самозцілення) не б'ють Kommo API двічі. TTL короткий, а
+# будь-який наш PATCH ліда одразу інвалідовує запис — щоб loop-protection за
+# тегами й самозцілення черги бачили свіжий стан. 0 = кеш вимкнено (env).
+_LEAD_CACHE_TTL = float(os.getenv("KOMMO_LEAD_CACHE_TTL", "30"))
+_lead_cache: dict[int, tuple] = {}
+_lead_cache_lock = threading.Lock()
+
+
+def _invalidate_lead_cache(lead_id: int) -> None:
+    with _lead_cache_lock:
+        _lead_cache.pop(lead_id, None)
 
 
 def get_webhooks() -> list[dict]:
@@ -136,7 +150,12 @@ PEREVOZY_STATUSES = {
 }
 
 
-def get_lead(lead_id: int) -> dict | None:
+def get_lead(lead_id: int, use_cache: bool = True) -> dict | None:
+    if use_cache and _LEAD_CACHE_TTL > 0:
+        with _lead_cache_lock:
+            hit = _lead_cache.get(lead_id)
+            if hit and (time.monotonic() - hit[0]) < _LEAD_CACHE_TTL:
+                return hit[1]
     try:
         resp = requests.get(
             f"{KOMMO_BASE}/api/v4/leads/{lead_id}",
@@ -145,7 +164,15 @@ def get_lead(lead_id: int) -> dict | None:
             timeout=10,
         )
         if resp.ok:
-            return resp.json()
+            data = resp.json()
+            if _LEAD_CACHE_TTL > 0:
+                with _lead_cache_lock:
+                    _lead_cache[lead_id] = (time.monotonic(), data)
+                    if len(_lead_cache) > 500:
+                        cutoff = time.monotonic() - _LEAD_CACHE_TTL
+                        for k in [k for k, (ts, _v) in _lead_cache.items() if ts < cutoff]:
+                            _lead_cache.pop(k, None)
+            return data
     except Exception as e:
         logger.error("get_lead(%s): %s", lead_id, e)
     return None
@@ -169,16 +196,11 @@ def get_lead_details(lead_id: int, old_status_id: int = 0, pipeline_id: int = 0)
         "calls_count": 0,
     }
 
-    # Lead basic info + custom fields
+    # Lead basic info + custom fields — через get_lead (спільний кеш, не
+    # окремий GET того самого ліда).
     try:
-        resp = requests.get(
-            f"{KOMMO_BASE}/api/v4/leads/{lead_id}",
-            headers=HEADERS,
-            params={"with": "custom_fields"},
-            timeout=10,
-        )
-        if resp.ok:
-            lead = resp.json()
+        lead = get_lead(lead_id)
+        if lead:
             result["name"] = lead.get("name", result["name"])
             created_at = lead.get("created_at", 0)
             if created_at:
@@ -316,6 +338,8 @@ def update_lead_status(lead_id: int, status_id: int) -> bool:
             json={"status_id": status_id},
             timeout=10,
         )
+        if resp.ok:
+            _invalidate_lead_cache(lead_id)
         return resp.ok
     except Exception as e:
         logger.error("update_lead_status(%s, %s): %s", lead_id, status_id, e)
@@ -348,7 +372,9 @@ def move_lead_to(lead_id: int, pipeline_id: int, status_id: int, add_tag: str = 
             json=payload,
             timeout=10,
         )
-        if not resp.ok:
+        if resp.ok:
+            _invalidate_lead_cache(lead_id)
+        else:
             logger.error("move_lead_to(%s→%s/%s): %s %s", lead_id, pipeline_id, status_id, resp.status_code, resp.text)
         return resp.ok
     except Exception as e:
