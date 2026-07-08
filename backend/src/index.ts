@@ -89,8 +89,9 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
-// Refresh CRM data every 5 minutes (incremental, by watermark).
-cron.schedule("*/5 * * * *", () => {
+// Refresh CRM data (incremental, by watermark). Знижено 5→15 хв: постійний
+// полінг — головна причина WAF-банів Kommo. Довгострокове рішення — вебхуки.
+cron.schedule("*/15 * * * *", () => {
   syncKommo().catch((err) => console.error("Kommo sync failed:", err));
 });
 
@@ -107,19 +108,20 @@ cron.schedule("0 4 * * *", () => {
   );
 });
 
-// Stage-transition events (for entry-date metrics) every 10 minutes + on startup.
-cron.schedule("*/10 * * * *", () => {
+// Event feeds знижено 10→30 хв (менше навантаження на Kommo WAF). Staggered:
+// 30-хв слоти зі зсувом, щоб не бити всі одночасно.
+// Stage-transition events (for entry-date metrics).
+cron.schedule("2,32 * * * *", () => {
   syncStageEvents().catch((err) => console.error("Stage events sync failed:", err));
 });
 
-// Lead-transfer events ("передані заявки") every 10 minutes + on startup.
-cron.schedule("*/10 * * * *", () => {
+// Lead-transfer events (резерв; «передані заявки» тепер із «Реєстру»).
+cron.schedule("12,42 * * * *", () => {
   syncTransfers().catch((err) => console.error("Transfers sync failed:", err));
 });
 
-// Real (human) deal activity from lead notes every 10 minutes + on startup —
-// feeds "stuck deals" so Salesbot activity никогда не скидає таймер.
-cron.schedule("*/10 * * * *", () => {
+// Real (human) deal activity from lead notes — feeds "stuck deals".
+cron.schedule("22,52 * * * *", () => {
   syncDealActivity().catch((err) => console.error("Deal activity sync failed:", err));
 });
 

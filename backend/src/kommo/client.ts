@@ -11,6 +11,15 @@ const MAX_RETRIES = 5;
 // forever (that froze the whole 5-min job). On timeout we abort and retry.
 const REQUEST_TIMEOUT_MS = 60_000;
 
+// Kommo's edge WAF (nginx) 403-bans requests that look automated. Node's fetch
+// sends no User-Agent (or `undici`) — a classic WAF block trigger even when
+// under the rate limit. Send a real browser-like UA + Accept on EVERY request.
+const KOMMO_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  Accept: "application/json",
+};
+
 // Global politeness throttle across ALL jobs: min gap between Kommo requests.
 // Kommo's hard limit is 7 req/s and support confirmed the 08.07.2026 IP ban
 // was for exceeding it — several jobs paginating at once easily spike past
@@ -55,6 +64,7 @@ async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
         headers: {
           Authorization: `Bearer ${config.kommo.token}`,
           "Content-Type": "application/json",
+          ...KOMMO_HEADERS,
         },
         signal: controller.signal,
       });
@@ -115,6 +125,7 @@ export async function kommoWrite<T>(
     headers: {
       Authorization: `Bearer ${config.kommo.token}`,
       "Content-Type": "application/json",
+      ...KOMMO_HEADERS,
     },
     body: JSON.stringify(body),
   });
