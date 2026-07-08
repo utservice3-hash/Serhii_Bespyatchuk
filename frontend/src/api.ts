@@ -1280,3 +1280,31 @@ export async function fetchDocFileBlobUrl(id: number): Promise<string> {
   const { data } = await api.get(`/documents/file/${id}/download`, { responseType: "blob" });
   return URL.createObjectURL(data as Blob);
 }
+
+// ── Ван-ту-вани (1-on-1) ──
+export interface OneOnOneSubject {
+  id: number; name: string; team_id: number | null; team_name: string | null;
+  is_team_lead: boolean; overall: number | null; done: boolean; updated_at: string | null;
+}
+export type OneOnOneAnswers = Record<string, { score?: number; text?: string }>;
+export interface OneOnOneRecord {
+  subject_manager_id: number; month: string; answers: OneOnOneAnswers;
+  overall: number | null; conducted_by_name?: string | null; updated_at?: string;
+}
+export async function fetchOneOnOneSubjects(month: string): Promise<{ month: string; subjects: OneOnOneSubject[] }> {
+  const { data } = await api.get("/one-on-ones/subjects", { params: { month } });
+  return { month: data?.month ?? month, subjects: data?.subjects ?? [] };
+}
+export async function fetchOneOnOne(managerId: number, month: string): Promise<OneOnOneRecord> {
+  const { data } = await api.get<OneOnOneRecord>(`/one-on-ones/${managerId}`, { params: { month } });
+  return data;
+}
+export async function saveOneOnOne(subjectManagerId: number, month: string, answers: OneOnOneAnswers): Promise<{ overall: number | null }> {
+  const { data } = await api.post("/one-on-ones", { subjectManagerId, month, answers });
+  return { overall: data?.overall ?? null };
+}
+export interface OneOnOneStatRow { id: number; name: string; team_id: number | null; team_name: string | null; month: string; overall: number | null; answers: OneOnOneAnswers; }
+export async function fetchOneOnOneStats(months = 6): Promise<OneOnOneStatRow[]> {
+  const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores", { params: { months } });
+  return data?.rows ?? [];
+}

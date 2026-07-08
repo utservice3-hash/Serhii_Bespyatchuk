@@ -88,6 +88,7 @@ import { RatesSection } from "./dashboard/sections/RatesSection";
 import { AiWorkSection } from "./dashboard/sections/AiWorkSection";
 import { ReportsSection } from "./dashboard/sections/ReportsSection";
 import { DocumentsSection } from "./dashboard/sections/DocumentsSection";
+import { OneOnOneSection } from "./dashboard/sections/OneOnOneSection";
 import { TeamsSection } from "./dashboard/sections/TeamsSection";
 import { ManagersSection } from "./dashboard/sections/ManagersSection";
 import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
@@ -1346,6 +1347,8 @@ export function Dashboard() {
       {section === "reports" && <ReportsSection canDelete={auth?.role === "admin"} />}
 
       {section === "documents" && <DocumentsSection isAdmin={auth?.role === "admin"} />}
+
+      {section === "oneonone" && auth?.role !== "manager" && <OneOnOneSection role={auth?.role} />}
 
       {section === "settings" && (
         <>

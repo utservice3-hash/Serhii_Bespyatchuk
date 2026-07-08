@@ -17,6 +17,8 @@ import { aiWorkRouter } from "./routes/aiWork.js";
 import { reportsRouter } from "./routes/reports.js";
 import { ratesRouter } from "./routes/rates.js";
 import { documentsRouter } from "./routes/documents.js";
+import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
+import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { isKommoPaused } from "./kommo/pause.js";
@@ -55,6 +57,7 @@ app.use("/api/ai-work", aiWorkRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/rates", ratesRouter);
 app.use("/api/documents", documentsRouter);
+app.use("/api/one-on-ones", oneOnOnesRouter);
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".
@@ -146,6 +149,12 @@ cron.schedule("0 0 1 * *", () => {
   snapshotCarryover().catch((err) => console.error("Carryover snapshot failed:", err));
 });
 snapshotCarryover().catch((err) => console.error("Carryover startup snapshot failed:", err));
+
+// Ван-ту-ван нагадування: 1-го числа 06:00 + на старті (посіяти поточний місяць).
+cron.schedule("0 6 1 * *", () => {
+  createOneOnOneReminders().catch((err) => console.error("One-on-one reminders failed:", err));
+});
+createOneOnOneReminders().catch((err) => console.error("One-on-one reminders startup failed:", err));
 
 // Refresh receivables from the accounting Google Sheet every 15 minutes so a
 // paid invoice removed from the file drops off the dashboard promptly (a manual

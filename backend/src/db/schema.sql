@@ -546,3 +546,17 @@ CREATE TABLE IF NOT EXISTS kvp_plans (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (month, metric)
 );
+
+-- Ван-ту-вани (1-on-1): щомісячна зустріч із співробітником. Тімлід проводить
+-- зі своєю командою; операційний/КВП (admin) — з тімлідами й бачить усіх.
+-- Менеджери 1-on-1 НЕ бачать. answers = { questionKey: {score?:1..10, text?} }.
+CREATE TABLE IF NOT EXISTS one_on_ones (
+  subject_manager_id INTEGER NOT NULL REFERENCES managers(id),
+  month DATE NOT NULL,
+  conducted_by INTEGER REFERENCES users(id),
+  answers JSONB NOT NULL DEFAULT '{}',
+  overall NUMERIC,               -- середнє по scored-відповідях (кеш для статистики)
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (subject_manager_id, month)
+);
+CREATE INDEX IF NOT EXISTS idx_one_on_ones_month ON one_on_ones(month);
