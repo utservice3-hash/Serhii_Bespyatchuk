@@ -165,7 +165,7 @@ export function OverviewSection({
               onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
             >
               <option value="">Усі команди</option>
-              {teams.map((t) => (
+              {(teams ?? []).map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
@@ -272,14 +272,14 @@ export function OverviewSection({
                     </div>
                     <div className="kpi-card" style={{ borderLeft: "3px solid #d97706" }}>
                       <span className="kpi-label">⏳ Очікування оплати (виставлені рахунки)</span>
-                      <span className="kpi-value" style={{ color: "#d97706" }}>{formatAmount(overview.pendingPayments.revenue)}</span>
-                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{overview.pendingPayments.deals} угод · ще не в отриманих</span>
+                      <span className="kpi-value" style={{ color: "#d97706" }}>{formatAmount((overview.pendingPayments?.revenue ?? 0))}</span>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{(overview.pendingPayments?.deals ?? 0)} угод · ще не в отриманих</span>
                     </div>
                   </div>
                 </div>
               )}
 
-              {overview && overview.monthlyHistory.length > 0 && (() => {
+              {overview && (overview.monthlyHistory ?? []).length > 0 && (() => {
                 const fieldByKey: Record<string, string> = {
                   deals: "deals",
                   sum: "revenue",
@@ -298,7 +298,7 @@ export function OverviewSection({
                   <div style={{ marginBottom: 16 }}>
                     <h3 style={{ fontSize: 14, margin: "0 0 8px", color: "var(--text-muted)" }}>Історія за 3 місяці</h3>
                     <ResponsiveContainer width="100%" height={220}>
-                      <BarChart data={overview.monthlyHistory} margin={{ top: 22 }}>
+                      <BarChart data={overview.monthlyHistory ?? []} margin={{ top: 22 }}>
                         <defs>
                           <linearGradient id="brandBar" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="#e11d2a" />
@@ -321,7 +321,7 @@ export function OverviewSection({
                 <table className="data-table">
                   <thead><tr><th>Команда</th><th>Виручка</th><th>Угод</th></tr></thead>
                   <tbody>
-                    {overview.byTeam.map((t) => (
+                    {(overview.byTeam ?? []).map((t) => (
                       <tr key={t.teamId}><td>{t.teamName}</td><td>{formatAmount(t.revenue)}</td><td>{t.deals}</td></tr>
                     ))}
                   </tbody>
@@ -332,7 +332,7 @@ export function OverviewSection({
                 <table className="data-table">
                   <thead><tr><th>Команда</th><th>Середній чек</th><th>Угод</th></tr></thead>
                   <tbody>
-                    {overview.byTeam.map((t) => (
+                    {(overview.byTeam ?? []).map((t) => (
                       <tr key={t.teamId}>
                         <td>{t.teamName}</td>
                         <td>{formatAmountFull(t.deals > 0 ? Math.round(t.revenue / t.deals) : 0)}</td>
@@ -349,9 +349,9 @@ export function OverviewSection({
                   <table className="data-table">
                     <thead><tr><th>Джерело</th><th>Клієнтів</th></tr></thead>
                     <tbody>
-                      <tr><td>🎯 Реклама / таргет</td><td>{overview.newClientsBySource.ad.toLocaleString("uk-UA")}</td></tr>
-                      <tr><td>📞 Лідогенерація</td><td>{overview.newClientsBySource.leadgen.toLocaleString("uk-UA")}</td></tr>
-                      <tr><td>✍️ Вручну / інше</td><td>{overview.newClientsBySource.other.toLocaleString("uk-UA")}</td></tr>
+                      <tr><td>🎯 Реклама / таргет</td><td>{(overview.newClientsBySource ?? {ad:0,leadgen:0,other:0}).ad.toLocaleString("uk-UA")}</td></tr>
+                      <tr><td>📞 Лідогенерація</td><td>{(overview.newClientsBySource ?? {ad:0,leadgen:0,other:0}).leadgen.toLocaleString("uk-UA")}</td></tr>
+                      <tr><td>✍️ Вручну / інше</td><td>{(overview.newClientsBySource ?? {ad:0,leadgen:0,other:0}).other.toLocaleString("uk-UA")}</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -368,7 +368,7 @@ export function OverviewSection({
                     <table className="data-table">
                       <thead><tr><th>Клієнт</th><th>Замовлень</th><th>Сума</th></tr></thead>
                       <tbody>
-                        {overview.repeatClientsList.map((c, i) => (
+                        {(overview.repeatClientsList ?? []).map((c, i) => (
                           <tr key={i}>
                             <td>{c.clientName}</td>
                             <td>{c.orders}</td>
@@ -394,7 +394,7 @@ export function OverviewSection({
               planMonth={overview.planMonthTotal}
               fact={overview.fact}
               pct={overview.planPct}
-              contributors={overview.byTeam.map((t) => ({ name: t.teamName, revenue: t.revenue, deals: t.deals }))}
+              contributors={(overview.byTeam ?? []).map((t) => ({ name: t.teamName, revenue: t.revenue, deals: t.deals }))}
             />
             {(() => {
               const p = overview.projection;
@@ -417,7 +417,7 @@ export function OverviewSection({
             })()}
             <HoverInfoCard
               label="Очікувані оплати"
-              value={`${overview.pendingPayments.deals} угод · ${formatAmount(overview.pendingPayments.revenue)}`}
+              value={`${(overview.pendingPayments?.deals ?? 0)} угод · ${formatAmount((overview.pendingPayments?.revenue ?? 0))}`}
               rows={overview.pendingPayments.byTeam}
               hint={CARD_HINTS.pending}
             />
@@ -444,10 +444,10 @@ export function OverviewSection({
             >
               <span className="kpi-label">Передані заявки → Успішно<InfoHint text={CARD_HINTS.transferred} /></span>
               <span className="kpi-value">
-                {overview.transferred.total.toLocaleString("uk-UA")} → {overview.transferred.success.toLocaleString("uk-UA")}
+                {(overview.transferred?.total ?? 0).toLocaleString("uk-UA")} → {(overview.transferred?.success ?? 0).toLocaleString("uk-UA")}
               </span>
               <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                різниця {(overview.transferred.total - overview.transferred.success).toLocaleString("uk-UA")}
+                різниця {((overview.transferred?.total ?? 0) - (overview.transferred?.success ?? 0)).toLocaleString("uk-UA")}
               </span>
             </button>
             <button className="kpi-card" style={clickableCard} onClick={() => setCardDetail("newRev")} title="Натисніть: перелік нових клієнтів із сумою">
@@ -477,7 +477,7 @@ export function OverviewSection({
             <div className="chart-card">
               <h2 className="chart-title">Виручка по командах</h2>
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={overview.byTeam} margin={{ bottom: 24, top: 22 }}>
+                <BarChart data={overview.byTeam ?? []} margin={{ bottom: 24, top: 22 }}>
                   <defs>
                     <linearGradient id="brandBar" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#e11d2a" />
@@ -507,7 +507,7 @@ export function OverviewSection({
                   </tr>
                 </thead>
                 <tbody>
-                  {overview.topManagers.map((m, i) => (
+                  {(overview.topManagers ?? []).map((m, i) => (
                     <tr key={m.managerId}>
                       <td>{i + 1}</td>
                       <td>{m.name}</td>
@@ -558,7 +558,7 @@ export function OverviewSection({
           <div className="chart-card">
             <h2 className="chart-title">Воронка продажів</h2>
             <ResponsiveContainer width="100%" height={360}>
-              <BarChart data={chartData} margin={{ bottom: 24, top: 22 }}>
+              <BarChart data={chartData ?? []} margin={{ bottom: 24, top: 22 }}>
                 <defs>
                   <linearGradient id="brandBar" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#e11d2a" />
@@ -592,17 +592,17 @@ export function OverviewSection({
               «Передано» = лідоген передав заявку, і менеджер взяв її в роботу (зміна відповідального в «Кваліфікація»). «Успішно» = закриті як «Успішна угода» за період.
             </p>
             <div className="kpi-grid" style={{ marginBottom: 12 }}>
-              <div className="kpi-card"><span className="kpi-label">Передано заявок</span><span className="kpi-value">{overview.transferred.total.toLocaleString("uk-UA")}</span></div>
-              <div className="kpi-card"><span className="kpi-label">Успішно реалізовано</span><span className="kpi-value">{overview.transferred.success.toLocaleString("uk-UA")}</span></div>
-              <div className="kpi-card"><span className="kpi-label">Різниця (не закрито)</span><span className="kpi-value">{(overview.transferred.total - overview.transferred.success).toLocaleString("uk-UA")}</span></div>
+              <div className="kpi-card"><span className="kpi-label">Передано заявок</span><span className="kpi-value">{(overview.transferred?.total ?? 0).toLocaleString("uk-UA")}</span></div>
+              <div className="kpi-card"><span className="kpi-label">Успішно реалізовано</span><span className="kpi-value">{(overview.transferred?.success ?? 0).toLocaleString("uk-UA")}</span></div>
+              <div className="kpi-card"><span className="kpi-label">Різниця (не закрито)</span><span className="kpi-value">{((overview.transferred?.total ?? 0) - (overview.transferred?.success ?? 0)).toLocaleString("uk-UA")}</span></div>
             </div>
-            {isManager ? null : overview.transferred.byTeam.length === 0 ? (
+            {isManager ? null : (overview.transferred?.byTeam ?? []).length === 0 ? (
               <p className="loading-text">Немає даних за період.</p>
             ) : (
               <table className="data-table">
                 <thead><tr><th>Команда</th><th>Передано</th><th>Успішно</th><th>Сума успішних</th></tr></thead>
                 <tbody>
-                  {overview.transferred.byTeam.map((t) => (
+                  {(overview.transferred?.byTeam ?? []).map((t) => (
                     <tr key={t.teamId}>
                       <td>{t.teamName}</td>
                       <td>{t.transferred}</td>
@@ -633,13 +633,13 @@ export function OverviewSection({
                 <table className="data-table">
                   <thead><tr><th>Етап (де зараз)</th><th>Угод</th><th>Сума</th></tr></thead>
                   <tbody>
-                    {overview.createdByStage.map((s) => (
+                    {(overview.createdByStage ?? []).map((s) => (
                       <tr key={s.stage}><td>{s.label}</td><td style={{ fontWeight: 600 }}>{s.deals.toLocaleString("uk-UA")}</td><td>{formatAmount(s.amount)}</td></tr>
                     ))}
                     <tr style={{ fontWeight: 700, borderTop: "2px solid var(--border)" }}>
                       <td>Разом створено</td>
                       <td>{overview.createdFullCycle.toLocaleString("uk-UA")}</td>
-                      <td>{formatAmount(overview.createdByStage.reduce((s, x) => s + x.amount, 0))}</td>
+                      <td>{formatAmount((overview.createdByStage ?? []).reduce((s, x) => s + x.amount, 0))}</td>
                     </tr>
                   </tbody>
                 </table>
