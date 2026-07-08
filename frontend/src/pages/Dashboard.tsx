@@ -86,6 +86,7 @@ import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection"
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
 import { RatesSection } from "./dashboard/sections/RatesSection";
 import { AiWorkSection } from "./dashboard/sections/AiWorkSection";
+import { ReportsSection } from "./dashboard/sections/ReportsSection";
 import { TeamsSection } from "./dashboard/sections/TeamsSection";
 import { ManagersSection } from "./dashboard/sections/ManagersSection";
 import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
@@ -1340,6 +1341,8 @@ export function Dashboard() {
       {section === "rates" && <RatesSection />}
 
       {section === "aiwork" && <AiWorkSection />}
+
+      {section === "reports" && <ReportsSection canDelete={auth?.role === "admin"} />}
 
       {section === "settings" && (
         <>

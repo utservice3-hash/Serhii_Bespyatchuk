@@ -26,7 +26,25 @@ function throttle(): Promise<void> {
   return slot;
 }
 
+// Circuit breaker: after repeated 403s (Kommo WAF/account block) STOP sending —
+// continued 403 traffic is what keeps an IP flagged and burns the support's
+// patience. Back off for a cooldown, then let a few probe requests test the
+// water. Any success clears it. This makes a block cost a handful of requests
+// per COOLDOWN instead of a continuous stream.
+const BAN_THRESHOLD = 5;
+const BAN_COOLDOWN_MS = 15 * 60 * 1000;
+let consecutive403 = 0;
+let bannedUntil = 0;
+
+export function kommoCircuitState(): { paused: boolean; bannedUntil: number; consecutive403: number } {
+  return { paused: Date.now() < bannedUntil, bannedUntil, consecutive403 };
+}
+
 async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
+  if (Date.now() < bannedUntil) {
+    const mins = Math.ceil((bannedUntil - Date.now()) / 60000);
+    throw new Error(`Kommo circuit open: пауза ще ~${mins} хв після серії 403 (можлива блокування IP/акаунта)`);
+  }
   await throttle();
   let res: Response;
   try {
@@ -61,9 +79,21 @@ async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     return kommoRequest<T>(path, attempt + 1);
   }
+  if (res.status === 403) {
+    // WAF/account block. Trip the breaker after a short streak so we stop
+    // generating 403 traffic instead of hammering a blocked endpoint.
+    if (++consecutive403 >= BAN_THRESHOLD) {
+      bannedUntil = Date.now() + BAN_COOLDOWN_MS;
+      consecutive403 = 0;
+      console.error(`Kommo 403 streak → circuit open for ${BAN_COOLDOWN_MS / 60000} min`);
+    }
+    throw new Error(`Kommo API error 403: ${await res.text()}`);
+  }
   if (!res.ok) {
     throw new Error(`Kommo API error ${res.status}: ${await res.text()}`);
   }
+  consecutive403 = 0;
+  bannedUntil = 0;
   return res.json() as Promise<T>;
 }
 

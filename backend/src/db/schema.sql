@@ -390,6 +390,25 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_ai_messages_time ON ai_messages(created_at);
+-- Attached images/files on a chat message: JSON array of {url, name}.
+ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS attachments JSONB;
+
+-- «Мої звіти»: dashboard widgets the AI builds on request. Each widget is a
+-- read-only SQL query + a render config; the reports section runs the SQL live
+-- and draws it. Visibility scopes who sees it (admin / team leads / everyone).
+CREATE TABLE IF NOT EXISTS ai_widgets (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  chart_type TEXT NOT NULL DEFAULT 'table' CHECK (chart_type IN ('table','bar','line','kpi')),
+  sql TEXT NOT NULL,
+  config JSONB,
+  visibility TEXT NOT NULL DEFAULT 'admin' CHECK (visibility IN ('admin','leads','all')),
+  created_by INTEGER REFERENCES users(id),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_widgets_order ON ai_widgets(sort_order, id);
 
 -- «Калькулятор ставок» (порт lardiweb): власний архів цін Lardi — Lardi не
 -- віддає історію, тому накопичуємо самі. Дедуп за ID заявки на маршрут.

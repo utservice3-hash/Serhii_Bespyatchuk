@@ -763,11 +763,13 @@ export async function updateFeedback(id: number, payload: { status: FeedbackStat
   return data.feedback;
 }
 
+export interface AiAttachment { url: string; name: string }
 export interface AiMessage {
   id: number;
   role: "user" | "assistant";
   body: string;
   status: string | null;
+  attachments: AiAttachment[] | null;
   createdAt: string;
   authorName: string;
 }
@@ -775,9 +777,26 @@ export async function fetchAiMessages(): Promise<AiMessage[]> {
   const { data } = await api.get<{ messages: AiMessage[] }>("/ai-work");
   return data.messages;
 }
-export async function postAiMessage(body: string): Promise<AiMessage> {
-  const { data } = await api.post<{ message: AiMessage }>("/ai-work", { body });
+export async function postAiMessage(body: string, attachments?: AiAttachment[]): Promise<AiMessage> {
+  const { data } = await api.post<{ message: AiMessage }>("/ai-work", { body, attachments });
   return data.message;
+}
+
+export interface ReportWidget {
+  id: number;
+  title: string;
+  chartType: "table" | "bar" | "line" | "kpi";
+  config: Record<string, unknown> | null;
+  visibility: "admin" | "leads" | "all";
+  rows: Record<string, unknown>[];
+  error: string | null;
+}
+export async function fetchReports(): Promise<ReportWidget[]> {
+  const { data } = await api.get<{ widgets: ReportWidget[] }>("/reports");
+  return data.widgets;
+}
+export async function deleteReport(id: number): Promise<void> {
+  await api.delete(`/reports/${id}`);
 }
 
 export interface RegularClient {

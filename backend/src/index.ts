@@ -14,8 +14,10 @@ import { newsRouter } from "./routes/news.js";
 import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
 import { feedbackRouter } from "./routes/feedback.js";
 import { aiWorkRouter } from "./routes/aiWork.js";
+import { reportsRouter } from "./routes/reports.js";
 import { ratesRouter } from "./routes/rates.js";
 import { syncKommo } from "./jobs/syncKommo.js";
+import { kommoCircuitState } from "./kommo/client.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
@@ -47,6 +49,7 @@ app.use("/api/news", newsRouter);
 app.use("/api/uploads", uploadsRouter);
 app.use("/api/feedback", feedbackRouter);
 app.use("/api/ai-work", aiWorkRouter);
+app.use("/api/reports", reportsRouter);
 app.use("/api/rates", ratesRouter);
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
@@ -76,6 +79,7 @@ app.get("/api/health", async (_req, res) => {
         consecutiveFailures: row?.consecutive_failures ?? 0,
         lastError: row?.last_error ?? null,
       },
+      kommoCircuit: kommoCircuitState(),
     });
   } catch {
     res.json({ ok: true, sync: null });

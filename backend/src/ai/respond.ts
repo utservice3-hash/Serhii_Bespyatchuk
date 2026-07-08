@@ -1,24 +1,30 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { pool } from "../db/pool.js";
+import { runReadOnly } from "./readQuery.js";
 
 /**
- * АІ-відповідач для розділу «Робота з АІ»: читає історію чату ai_messages,
- * відповідає через Claude і вміє діставати статистику з БД дашборду
- * інструментом query_db (лише читання, read-only транзакція + таймаут).
+ * АІ-відповідач для розділу «Робота з АІ»: читає історію чату ai_messages
+ * (з вкладеними зображеннями), відповідає через Claude, вміє діставати
+ * статистику з БД (query_db, read-only) і будувати віджети в розділі
+ * «Мої звіти» (create_widget/list_widgets/update_widget/delete_widget).
  * Реплаї йдуть асинхронно після POST /ai-work — фронт добирає їх полінгом.
  */
 
 const MODEL = "claude-opus-4-8";
-const MAX_TOOL_ITERATIONS = 12;
+const MAX_TOOL_ITERATIONS = 14;
 const HISTORY_LIMIT = 40;
-const MAX_RESULT_ROWS = 200;
+
+// Absolute origin so Anthropic can fetch attached images (served publicly at
+// /api/files/*). Override with PUBLIC_BASE_URL if the domain changes.
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "https://dashboard.uts.ua").replace(/\/$/, "");
 
 const SYSTEM_PROMPT = `Ти — АІ-аналітик дашборду відділу продажів логістичної компанії UTS (Україна).
 Співрозмовники: операційний директор (КВП) та його асистент. Твоя робота — будувати статистику,
-відповідати на питання про продажі й дані CRM, пояснювати цифри. Відповідай українською, стисло і по суті.
+відповідати на питання про продажі й дані CRM, пояснювати цифри, а НА ЗАПИТ — створювати віджети
+(графіки/таблиці/KPI) у розділі дашборду «Мої звіти». Відповідай українською, стисло і по суті.
 Формат — звичайний текст (без markdown-таблиць з |, чат їх не рендерить): списки, короткі рядки «показник: значення».
 
-ДЖЕРЕЛО ДАНИХ: Postgres-БД дашборду (дзеркало CRM Kommo — єдиного джерела істини). У тебе є інструмент
+ДЖЕРЕЛО ДАНИХ: Postgres-БД дашборду (дзеркало CRM Kommo — єдиного джерела істини). Інструмент
 query_db: один SELECT/WITH-запит за виклик, read-only. Використовуй його для БУДЬ-ЯКИХ цифр — не вигадуй.
 Якщо не впевнений у колонках таблиці — спершу подивись information_schema.columns.
 
@@ -30,7 +36,6 @@ query_db: один SELECT/WITH-запит за виклик, read-only. Вико
   Реактивація 8921948. Кваліфікація: 8921928/7336928 (етап «Нова заявка від лідогенератора» 69716164/63019380).
 - funnel_stage угоди — через pipeline_stage_map (pipeline_id,status_id→lead_taken/quote_requested/approved/invoiced/paid).
   «Угоди (рахунок→реалізовано)» = funnel_stage IN ('invoiced','paid') за датою створення.
-  «Очікувані кошти» = знімок з етапу invoiced.
 - Канал ліда deals.lead_channel: 'ad' (реклама) / 'leadgen' (лідоген) / 'other'. Конверсія = оплачені/ліди по каналу.
 - Середній чек = отримані кошти ÷ кількість цих угод.
 - status_id=142 — успішно, 143 — закрито/сміття (не рахувати). Мінусові угоди мають відʼємний price — сумуй як є.
@@ -43,79 +48,171 @@ deals(kommo_id, name, manager_id→managers, pipeline_id, status_id, price, crea
   client_name, client_key, lead_channel, utm_source, lead_generator, client_source, payment_type, last_activity_at),
 managers(id, name, team_id, is_team_lead, is_active), teams(id, name),
 pipeline_stage_map(pipeline_id, status_id, funnel_stage), plans(manager_id, metric, target_value, plan_date),
-deal_stage_events(kommo_id, status_id, pipeline_id, funnel_stage, changed_at) — коли угода ВВІЙШЛА в етап,
-lead_transfer_events(kommo_id, changed_at, ...) — передані заявки лідоген→менеджер,
-receivables(client_key, client_name, manager_id, amount, ...) — дебіторка (знімок з файлу),
-receivable_invoices(client_key, invoice_no, invoice_date, amount, link), monthly_carryover(month, ...),
+deal_stage_events(kommo_id, status_id, pipeline_id, funnel_stage, changed_at),
+lead_transfer_events(kommo_id, changed_at, ...), receivables(client_key, client_name, manager_id, amount, ...),
 tasks(assignee_manager_id, task_type, metric, target_value, actual_value, status, deadline, metrics_json),
-funnel_plans, ad_budget_daily(day, budget_plan, budget_fact, conversions, clicks),
-lardi_offers/lardi_routes/city_info/carrier_trips — калькулятор ставок, sync_state — стан синку.
+ad_budget_daily(day, budget_plan, budget_fact, conversions, clicks), sync_state.
 
-ЯК ПРАЦЮВАТИ:
-- Розбивай складне питання на кілька query_db-запитів; перевіряй правдоподібність результату.
-- Показуй суми в гривнях округлено (наприклад «2.33 млн ₴»), кількості — точно.
-- Якщо даних нема або запит неоднозначний — скажи прямо і запропонуй уточнення.
-- Ти НЕ можеш змінювати дані чи код — лише читати й аналізувати. Прохання «зроби/вигрузи/зміни в CRM»
-  чемно переадресовуй розробнику (Claude Code) через власника.`;
+ВІДЖЕТИ «МОЇ ЗВІТИ» (create_widget): коли просять «додай графік/звіт/віджет у дашборд» — створюй віджет.
+- sql: ОДИН read-only SELECT/WITH. Колонки результату мають точно відповідати config.
+- chart_type + config:
+  • 'kpi' — одна цифра. Результат = 1 рядок. config: {"value":"<колонка>","label":"<підпис>","format":"money"|"number"}.
+  • 'bar' / 'line' — config: {"x":"<колонка-підпис>","series":[{"key":"<колонка>","label":"<легенда>"}],"format":"money"|"number"}.
+    Результат — рядки, впорядковані по осі X (напр. по тижнях/менеджерах).
+  • 'table' — config: {"columns":[{"key":"<колонка>","label":"<заголовок>","format":"money"|"number"|"text"}]}.
+- visibility: 'admin' (лише КВП/адміни, дефолт) / 'leads' (тімліди й адміни) / 'all' (усі користувачі).
+- ПЕРЕД створенням ЗАВЖДИ прожени sql через query_db, переконайся що колонки й цифри правильні, лише потім create_widget.
+- Після створення коротко підтвердь: назва + де зʼявиться («у розділі „Мої звіти"»).
+- Зміна наявного — update_widget за id (спершу list_widgets). Видалення — delete_widget.
 
-const QUERY_DB_TOOL: Anthropic.Tool = {
-  name: "query_db",
-  description:
-    "Виконати ОДИН read-only SQL-запит (SELECT або WITH) до Postgres-БД дашборду. " +
-    "Повертає до " + MAX_RESULT_ROWS + " рядків у JSON. Таймаут 20с.",
-  input_schema: {
-    type: "object",
-    properties: {
-      sql: { type: "string", description: "Один SELECT/WITH-запит без крапки з комою в кінці" },
+Ти можеш ЧИТАТИ дані й КЕРУВАТИ ВЛАСНИМИ віджетами. Змінювати код дашборду, писати в CRM чи деплоїти ти НЕ можеш —
+такі прохання чемно переадресовуй розробнику через власника. Якщо надіслали скрін — розглянь його й дай по суті.`;
+
+const TOOLS: Anthropic.Tool[] = [
+  {
+    name: "query_db",
+    description:
+      "Виконати ОДИН read-only SQL-запит (SELECT/WITH) до Postgres-БД дашборду. Повертає рядки в JSON. Таймаут 20с.",
+    input_schema: {
+      type: "object",
+      properties: { sql: { type: "string", description: "Один SELECT/WITH-запит без крапки з комою в кінці" } },
+      required: ["sql"],
     },
-    required: ["sql"],
   },
-};
+  {
+    name: "create_widget",
+    description:
+      "Створити віджет у розділі дашборду «Мої звіти» (графік/таблиця/KPI). Спершу перевір sql через query_db.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        chart_type: { type: "string", enum: ["table", "bar", "line", "kpi"] },
+        sql: { type: "string", description: "Один read-only SELECT/WITH; колонки мають відповідати config" },
+        config: { type: "object", description: "Опис рендеру: x/series/columns/value/label/format (див. системний промпт)" },
+        visibility: { type: "string", enum: ["admin", "leads", "all"], description: "Хто бачить (дефолт admin)" },
+      },
+      required: ["title", "chart_type", "sql"],
+    },
+  },
+  {
+    name: "list_widgets",
+    description: "Перелік наявних віджетів «Мої звіти» (id, назва, тип, видимість).",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "update_widget",
+    description: "Оновити наявний віджет за id (передавай лише поля, що змінюються).",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer" },
+        title: { type: "string" },
+        chart_type: { type: "string", enum: ["table", "bar", "line", "kpi"] },
+        sql: { type: "string" },
+        config: { type: "object" },
+        visibility: { type: "string", enum: ["admin", "leads", "all"] },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "delete_widget",
+    description: "Видалити віджет «Мої звіти» за id.",
+    input_schema: { type: "object", properties: { id: { type: "integer" } }, required: ["id"] },
+  },
+];
 
-/** Run a single read-only statement with a hard timeout and row cap. */
-async function runReadOnlyQuery(sql: string): Promise<string> {
-  const trimmed = sql.trim().replace(/;+\s*$/, "");
-  if (!/^(select|with)\b/i.test(trimmed)) {
-    return JSON.stringify({ error: "Дозволені лише SELECT/WITH-запити" });
-  }
-  if (/;/.test(trimmed)) {
-    return JSON.stringify({ error: "Лише один запит за виклик (крапка з комою всередині заборонена)" });
-  }
-  const client = await pool.connect();
+type ToolInput = Record<string, unknown>;
+
+async function execTool(name: string, input: ToolInput, userId: number | null): Promise<string> {
   try {
-    await client.query("BEGIN TRANSACTION READ ONLY");
-    await client.query("SET LOCAL statement_timeout = '20s'");
-    const res = await client.query(trimmed);
-    await client.query("COMMIT");
-    const rows = res.rows.slice(0, MAX_RESULT_ROWS);
-    return JSON.stringify({
-      rowCount: res.rowCount,
-      truncated: (res.rowCount ?? 0) > MAX_RESULT_ROWS,
-      rows,
-    });
+    switch (name) {
+      case "query_db": {
+        const r = await runReadOnly(String(input.sql ?? ""));
+        return JSON.stringify(r.ok ? { rowCount: r.rowCount, truncated: r.truncated, rows: r.rows } : { error: r.error });
+      }
+      case "create_widget": {
+        const sql = String(input.sql ?? "");
+        const check = await runReadOnly(sql);
+        if (!check.ok) return JSON.stringify({ error: `SQL не виконався: ${check.error}` });
+        const r = await pool.query<{ id: number }>(
+          `INSERT INTO ai_widgets (title, chart_type, sql, config, visibility, created_by,
+             sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6, COALESCE((SELECT MAX(sort_order)+1 FROM ai_widgets),0))
+           RETURNING id`,
+          [
+            String(input.title ?? "Звіт"),
+            String(input.chart_type ?? "table"),
+            sql,
+            input.config ? JSON.stringify(input.config) : null,
+            ["admin", "leads", "all"].includes(String(input.visibility)) ? String(input.visibility) : "admin",
+            userId,
+          ]
+        );
+        return JSON.stringify({ ok: true, id: r.rows[0].id, previewRows: check.rows.slice(0, 3) });
+      }
+      case "list_widgets": {
+        const r = await pool.query(
+          `SELECT id, title, chart_type, visibility, sort_order FROM ai_widgets ORDER BY sort_order, id`
+        );
+        return JSON.stringify({ widgets: r.rows });
+      }
+      case "update_widget": {
+        const id = Number(input.id);
+        if (!id) return JSON.stringify({ error: "Потрібен id" });
+        if (input.sql != null) {
+          const check = await runReadOnly(String(input.sql));
+          if (!check.ok) return JSON.stringify({ error: `SQL не виконався: ${check.error}` });
+        }
+        const sets: string[] = [];
+        const vals: unknown[] = [];
+        const add = (col: string, v: unknown) => { sets.push(`${col} = $${sets.length + 1}`); vals.push(v); };
+        if (input.title != null) add("title", String(input.title));
+        if (input.chart_type != null) add("chart_type", String(input.chart_type));
+        if (input.sql != null) add("sql", String(input.sql));
+        if (input.config !== undefined) add("config", input.config ? JSON.stringify(input.config) : null);
+        if (input.visibility != null && ["admin", "leads", "all"].includes(String(input.visibility)))
+          add("visibility", String(input.visibility));
+        if (!sets.length) return JSON.stringify({ error: "Нема що оновлювати" });
+        vals.push(id);
+        const r = await pool.query(
+          `UPDATE ai_widgets SET ${sets.join(", ")}, updated_at = now() WHERE id = $${vals.length} RETURNING id`,
+          vals
+        );
+        return JSON.stringify(r.rowCount ? { ok: true, id } : { error: "Віджет не знайдено" });
+      }
+      case "delete_widget": {
+        const r = await pool.query(`DELETE FROM ai_widgets WHERE id = $1`, [Number(input.id)]);
+        return JSON.stringify(r.rowCount ? { ok: true } : { error: "Віджет не знайдено" });
+      }
+      default:
+        return JSON.stringify({ error: `Невідомий інструмент ${name}` });
+    }
   } catch (err) {
-    await client.query("ROLLBACK").catch(() => undefined);
     return JSON.stringify({ error: err instanceof Error ? err.message : String(err) });
-  } finally {
-    client.release();
   }
 }
 
-type ChatRow = { role: "user" | "assistant"; body: string; author_name: string };
+type Attachment = { url?: string; name?: string };
+type ChatRow = { role: "user" | "assistant"; body: string; author_name: string; attachments: Attachment[] | null };
 
-/** Map chat history to API messages: prefix user turns with the author, merge
- *  consecutive same-role turns, drop a leading assistant turn. */
-function buildMessages(rows: ChatRow[]): Anthropic.MessageParam[] {
-  const messages: Anthropic.MessageParam[] = [];
-  for (const r of rows) {
-    const text = r.role === "user" ? `[${r.author_name}]: ${r.body}` : r.body;
-    const last = messages[messages.length - 1];
-    if (last && last.role === r.role && typeof last.content === "string") {
-      last.content += `\n\n${text}`;
-    } else {
-      messages.push({ role: r.role, content: text });
-    }
+/** Build one message's content: text + any image attachments (as URL blocks). */
+function toContent(r: ChatRow): string | Anthropic.ContentBlockParam[] {
+  const text = r.role === "user" ? `[${r.author_name}]: ${r.body}` : r.body;
+  const imgs = (r.attachments ?? []).filter((a) => a.url && /\.(png|jpe?g|gif|webp)$/i.test(a.url));
+  if (r.role !== "user" || !imgs.length) return text;
+  const blocks: Anthropic.ContentBlockParam[] = [{ type: "text", text }];
+  for (const a of imgs) {
+    const url = a.url!.startsWith("http") ? a.url! : `${PUBLIC_BASE_URL}${a.url}`;
+    blocks.push({ type: "image", source: { type: "url", url } });
   }
+  return blocks;
+}
+
+/** Map chat history to API messages; drop a leading non-user turn. */
+function buildMessages(rows: ChatRow[]): Anthropic.MessageParam[] {
+  const messages: Anthropic.MessageParam[] = rows.map((r) => ({ role: r.role, content: toContent(r) }));
   while (messages.length && messages[0].role !== "user") messages.shift();
   return messages;
 }
@@ -131,18 +228,27 @@ async function generateReply(): Promise<void> {
   if (!process.env.ANTHROPIC_API_KEY) {
     await insertAssistantMessage(
       "⚙️ АІ ще не підключений: на сервері немає ANTHROPIC_API_KEY. " +
-        "Додайте ключ (console.anthropic.com → API Keys) у backend/.env і перезапустіть бекенд — після цього я відповідатиму тут і будуватиму статистику з БД."
+        "Додайте ключ (console.anthropic.com → API Keys) у backend/.env і перезапустіть бекенд."
     );
     return;
   }
 
   const hist = await pool.query<ChatRow>(
-    `SELECT role, body, COALESCE(author_name, 'Користувач') AS author_name
+    `SELECT role, body, COALESCE(author_name, 'Користувач') AS author_name, attachments
        FROM ai_messages ORDER BY created_at DESC, id DESC LIMIT $1`,
     [HISTORY_LIMIT]
   );
+  const lastRow = hist.rows[0];
+  if (!lastRow || lastRow.role !== "user") return;
   const messages = buildMessages(hist.rows.reverse());
-  if (!messages.length || messages[messages.length - 1].role !== "user") return;
+  if (!messages.length) return;
+
+  const userId = await pool
+    .query<{ author_user_id: number | null }>(
+      `SELECT author_user_id FROM ai_messages WHERE role='user' ORDER BY created_at DESC, id DESC LIMIT 1`
+    )
+    .then((r) => r.rows[0]?.author_user_id ?? null)
+    .catch(() => null);
 
   const client = new Anthropic({ timeout: 10 * 60 * 1000 });
 
@@ -152,7 +258,7 @@ async function generateReply(): Promise<void> {
       max_tokens: 16000,
       thinking: { type: "adaptive" },
       system: SYSTEM_PROMPT,
-      tools: [QUERY_DB_TOOL],
+      tools: TOOLS,
       messages,
     });
 
@@ -161,9 +267,7 @@ async function generateReply(): Promise<void> {
       continue;
     }
 
-    const toolUses = response.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
-    );
+    const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
     if (response.stop_reason !== "tool_use" || !toolUses.length) {
       const text = response.content
         .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -177,20 +281,18 @@ async function generateReply(): Promise<void> {
     messages.push({ role: "assistant", content: response.content });
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
-      const sql = String((tu.input as { sql?: unknown })?.sql ?? "");
-      console.log(`[aiWork] query_db: ${sql.slice(0, 160).replace(/\s+/g, " ")}`);
-      results.push({ type: "tool_result", tool_use_id: tu.id, content: await runReadOnlyQuery(sql) });
+      console.log(`[aiWork] tool ${tu.name}: ${JSON.stringify(tu.input).slice(0, 200)}`);
+      results.push({ type: "tool_result", tool_use_id: tu.id, content: await execTool(tu.name, tu.input as ToolInput, userId) });
     }
     messages.push({ role: "user", content: results });
   }
 
   await insertAssistantMessage(
-    "Не встиг завершити аналіз (забагато кроків по БД). Спробуйте розбити питання на менші частини."
+    "Не встиг завершити (забагато кроків). Спробуйте розбити питання на менші частини."
   );
 }
 
-// Serialize replies: user messages posted back-to-back get answered in order,
-// one API run at a time (each run sees the full history anyway).
+// Serialize replies: back-to-back user messages get answered in order.
 let chain: Promise<void> = Promise.resolve();
 
 /** Fire-and-forget: schedule an AI reply to the latest chat state. */
@@ -211,8 +313,7 @@ export function scheduleAiReply(): void {
     });
 }
 
-/** On backend start: if the last chat message is an unanswered user message,
- *  answer it (covers messages posted while the server was down). */
+/** On backend start: answer a trailing unanswered user message. */
 export async function catchUpAiChat(): Promise<void> {
   try {
     const r = await pool.query<{ role: string }>(
