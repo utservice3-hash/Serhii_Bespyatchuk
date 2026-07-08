@@ -16,7 +16,18 @@ export function AiWorkSection() {
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  // АІ відповідає асинхронно на бекенді — добираємо його репліки полінгом.
+  useEffect(() => {
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, []);
+  const lastId = messages.length ? messages[messages.length - 1].id : 0;
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [lastId]);
+
+  // Останнє слово за користувачем і воно свіже → АІ, ймовірно, готує відповідь.
+  const last = messages[messages.length - 1];
+  const aiTyping = !!last && last.role === "user" &&
+    Date.now() - new Date(last.createdAt).getTime() < 5 * 60 * 1000;
 
   async function send() {
     if (!body.trim()) return;
@@ -46,7 +57,7 @@ export function AiWorkSection() {
       </div>
       <div className="chart-card" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 200px)", minHeight: 420 }}>
         <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 0 }}>
-          Пишіть сюди запити на зміни й контекст. Асистент (АІ) читає їх і виконує; відповіді/статуси зʼявляються тут же.
+          Чат з АІ-аналітиком дашборду: знає бізнес-логіку проєкту й уміє діставати статистику прямо з бази (продажі, менеджери, конверсії, дебіторка). Питайте — відповідь зʼявиться тут же.
         </p>
         <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, padding: "8px 0" }}>
           {loading ? (
@@ -69,6 +80,11 @@ export function AiWorkSection() {
                 </div>
               );
             })
+          )}
+          {aiTyping && (
+            <div style={{ alignSelf: "flex-start", fontSize: 12, color: "var(--text-muted)", padding: "4px 12px" }}>
+              🤖 АІ думає…
+            </div>
           )}
           <div ref={endRef} />
         </div>

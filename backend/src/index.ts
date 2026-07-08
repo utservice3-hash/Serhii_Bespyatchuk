@@ -27,6 +27,7 @@ import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 import { backupDb } from "./jobs/backupDb.js";
+import { catchUpAiChat } from "./ai/respond.js";
 import { pool } from "./db/pool.js";
 
 const app = express();
@@ -170,6 +171,9 @@ cron.schedule("*/30 * * * *", () => {
 cron.schedule("0 3 * * *", () => {
   backupDb().catch((err) => console.error("DB backup failed:", err));
 });
+
+// «Робота з АІ»: answer a user message that arrived while the server was down.
+catchUpAiChat().catch((err) => console.error("AI chat catch-up failed:", err));
 
 app.listen(config.port, () => {
   console.log(`Backend listening on port ${config.port}`);

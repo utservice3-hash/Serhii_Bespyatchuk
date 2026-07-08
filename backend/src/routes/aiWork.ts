@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
+import { scheduleAiReply } from "../ai/respond.js";
 
 export const aiWorkRouter = Router();
 aiWorkRouter.use(requireAuth);
@@ -44,4 +45,5 @@ aiWorkRouter.post("/", async (req, res) => {
   );
   const r = await pool.query(`${SELECT} WHERE a.id = $1`, [ins.rows[0].id]);
   res.status(201).json({ message: r.rows[0] });
+  scheduleAiReply();
 });
