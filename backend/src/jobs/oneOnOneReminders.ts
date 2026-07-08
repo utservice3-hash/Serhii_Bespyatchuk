@@ -28,7 +28,7 @@ export async function createOneOnOneReminders(): Promise<void> {
     if (exists.rowCount) continue;
     await pool.query(
       `INSERT INTO tasks (title, status, deadline, assignee_id, priority, department, task_type, created_by)
-       VALUES ($1, 'todo', $2, $3, 'high', 'Ван ту ван', 'simple', NULL)`,
+       VALUES ($1, 'not_started', $2, $3, 'high', 'Ван ту ван', 'simple', NULL)`,
       [`${titlePrefix} (${monthLabel})`, deadline, l.id]
     );
     created++;
