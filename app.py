@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import re
+import calendar
 import threading
 from collections import deque
 from datetime import datetime, timezone, timedelta
@@ -313,16 +314,23 @@ def _refresh_plans_from_sheet() -> str:
     if data is None:
         return "таблиця недоступна або аркуш не створено — лишаю значення з коду"
     mgr_plans, mgr_team, team_plans = data
+    # Оновлюємо на місці БЕЗ clear(): паралельний читач (звіт) не повинен
+    # застати порожній dict у вікні між clear() і update(). Прибираємо лише
+    # ключі, яких уже немає в таблиці, потім оновлюємо решту.
     if mgr_plans:
-        MANAGER_PLANS.clear()
-        MANAGER_PLANS.update(mgr_plans)
+        with _state_lock:
+            for k in [k for k in MANAGER_PLANS if k not in mgr_plans]:
+                MANAGER_PLANS.pop(k, None)
+            MANAGER_PLANS.update(mgr_plans)
     if mgr_team:
         # Тільки додаємо/оновлюємо: видалення рядка з таблиці не повинно
         # ламати роутинг сповіщень по командах.
         MANAGER_TEAM.update(mgr_team)
     if team_plans:
-        TEAM_PLANS.clear()
-        TEAM_PLANS.update(team_plans)
+        with _state_lock:
+            for k in [k for k in TEAM_PLANS if k not in team_plans]:
+                TEAM_PLANS.pop(k, None)
+            TEAM_PLANS.update(team_plans)
     result = f"ok: {len(mgr_plans)} менеджерів, {len(team_plans)} команд"
     logger.info("Plans refreshed from sheet: %s", result)
     return result
@@ -376,6 +384,13 @@ ALL_SUPERVISORS_ALL = "@dmytro_yatsyk @Logist_dmytruk @Andry_UTS @darina_mx @lil
 
 # In-memory: lead_id -> {arrived_at, status_name, lead_name, last_reminded_count}
 unassigned: dict[int, dict] = {}
+
+# Спільний лок для check-then-act над in-memory чергами (unassigned / pending /
+# _first_touch_done): вебхуки (Flask-треди), scheduler і фонові daemon-треди
+# мутують їх паралельно. Захищає лише короткі критичні секції «перевірити-і-
+# зайняти» (не мережеві виклики), щоб на одну заявку не пішло два сповіщення /
+# дві транскрибації.
+_state_lock = threading.RLock()
 
 # Менеджери команд Дарини і Андрія
 DARINA_ANDRIY_TEAMS = {
@@ -516,7 +531,10 @@ def _check_overdue_leads():
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
         notifier.send_message(msg)
-        pending[lead_id]["last_reminded_count"] = reminder_count
+        # Мутуємо через посилання info, а не pending[lead_id]: паралельний
+        # _handle_call міг уже зробити pop → реіндексація дала б KeyError і
+        # обірвала решту проходу циклу.
+        info["last_reminded_count"] = reminder_count
         logger.info("Reminder #%d sent for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
 
@@ -738,7 +756,7 @@ def _send_daily_plan_report() -> None:
     """Щоденний звіт о 18:00 Київ — факт (Успіх + Оплата отримана) по менеджерах і командах."""
     now = datetime.now(timezone.utc)
     day_of_month = now.day
-    days_in_month = 30
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
     tempo_pct = day_of_month / days_in_month
     month_start = int(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
 
@@ -1029,13 +1047,19 @@ def _scan_unassigned_leads():
                 updated_at = lead.get("updated_at", 0)
                 arrived = datetime.fromtimestamp(updated_at, tz=timezone.utc) if updated_at else now
                 is_elogist = _detect_elogist(lead, status_id)
-                unassigned[lid] = {
-                    "arrived_at": arrived,
-                    "status_name": status_name,
-                    "lead_name": lead_name,
-                    "last_reminded_count": 0,
-                    "is_elogist": is_elogist,
-                }
+                # Атомарно «займаємо» лід під локом: якщо вебхук
+                # (_handle_unassigned) або паралельний прохід уже додав його —
+                # пропускаємо, щоб не надіслати дубль сповіщення.
+                with _state_lock:
+                    if lid in unassigned:
+                        continue
+                    unassigned[lid] = {
+                        "arrived_at": arrived,
+                        "status_name": status_name,
+                        "lead_name": lead_name,
+                        "last_reminded_count": 0,
+                        "is_elogist": is_elogist,
+                    }
                 # Якщо сповіщення вже надсилалось до рестарту — відновлюємо
                 # msg_refs з CRM-нотатки і НЕ шлемо дубль у Telegram.
                 restored = _restore_unassigned_refs(lid)
@@ -1109,9 +1133,11 @@ def _check_unassigned_leads():
                 f"👥 {ALL_SUPERVISORS}\n"
                 f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
             )
-            # Оновлюємо те саме повідомлення (без нового спаму)
-            notifier.edit_tracked(unassigned[lead_id].get("msg_refs", []), msg)
-            unassigned[lead_id]["last_reminded_count"] = 99
+            # Оновлюємо те саме повідомлення (без нового спаму). Через info,
+            # не unassigned[lead_id] — паралельний _mark_lead_taken міг зробити
+            # pop, і реіндексація живого dict дала б KeyError.
+            notifier.edit_tracked(info.get("msg_refs", []), msg)
+            info["last_reminded_count"] = 99
             logger.info("Escalation for lead %s (%.0f min)", lead_id, age_min)
             continue
 
@@ -1132,9 +1158,10 @@ def _check_unassigned_leads():
             f"👥 {tag_line}\n"
             f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
-        # Оновлюємо те саме повідомлення (без нового спаму)
-        notifier.edit_tracked(unassigned[lead_id].get("msg_refs", []), msg)
-        unassigned[lead_id]["last_reminded_count"] = reminder_count
+        # Оновлюємо те саме повідомлення (без нового спаму) — через info,
+        # не unassigned[lead_id] (див. коментар про KeyError вище).
+        notifier.edit_tracked(info.get("msg_refs", []), msg)
+        info["last_reminded_count"] = reminder_count
         logger.info("Unassigned reminder #%d for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
 
@@ -1144,7 +1171,9 @@ def _check_unassigned_leads():
 # 142 "КВАЛІФІКОВАНО" і 143 "Не цільові" (це вихід з вирки, не застрягання),
 # 70419108 "Дзвінки на мобільні" (виключений з усіх сповіщень про нерозібрану
 # кваліфікацію за окремим правилом).
-ACTIVE_QUAL_STATUSES = [69693648, 69693652, 69693656, 69693660, 69716160, 69738660]
+# Включає ELOGIST_STATUS (108581472): eLogist-заявка, що зависла з реальним
+# відповідальним 2+ дні, теж має флагатись як застрягла.
+ACTIVE_QUAL_STATUSES = [69693648, 69693652, 69693656, 69693660, 69716160, 69738660, ELOGIST_STATUS]
 STALE_QUAL_DAYS = 2
 STALE_QUAL_REMINDER_HOURS = 24
 _stale_qual_reminders: dict[int, datetime] = {}
@@ -1250,7 +1279,7 @@ def _send_rnk_daily_reminder() -> None:
 
 
 def _send_rnk_ai_report() -> None:
-    """Щоденний AI звіт по відмовах РНК командам — о 18:00 Київ."""
+    """Щоденний AI звіт по відмовах РНК командам — о 16:50 Київ."""
     TL_TAGS = {
         "Михальчевська": ("@darina_mx", notifier.send_to_rnk),
         "Безпам'ятний": ("@Andry_UTS", notifier.send_to_rnk),
@@ -1765,13 +1794,12 @@ def webhook():
                 _mark_lead_taken(resp_change["id"], new_resp)
             if (resp_change["pipeline_id"] == QUAL_PIPELINE_ID and
                     resp_change["status_id"] == NEW_FROM_LIDOGEN):
-                # Перевіряємо чи ліd не з "робочих" етапів
-                lead = kommo.get_lead(resp_change["id"])
-                old_status = lead.get("old_status_id", 0) if lead else 0
-                if old_status not in SKIP_FROM_STATUSES:
-                    _handle_new_lead(resp_change["id"], resp_change["responsible_user_id"])
-                else:
-                    logger.info("Skipped lead %s — came from excluded status %s", resp_change["id"], old_status)
+                # old_status_id недоступний поза payload вебхука зміни статусу
+                # (GET /leads/{id} його не віддає, тож перевірка була мертвою і
+                # завжди читала 0). SKIP_FROM_STATUSES тут не оцінити; дедуп
+                # повторної передачі забезпечує сам _handle_new_lead
+                # (pending + _notified_new_leads).
+                _handle_new_lead(resp_change["id"], resp_change["responsible_user_id"])
         return jsonify({"ok": True})
 
     # ── Status changes ─────────────────────────────────────────────
@@ -1835,29 +1863,39 @@ def _mark_lead_taken(lead_id: int, responsible_id: int):
 
 def _handle_unassigned(lead_id: int, status_id: int):
     now = datetime.now(timezone.utc)
-    if lead_id in unassigned:
-        return  # вже в черзі
+    status_name = UNASSIGNED_STATUSES.get(status_id, "—")
+
+    # Атомарно «займаємо» слот під локом: скан (_scan_unassigned_leads) міг
+    # стартувати одночасно на іншому треді — так на один лід не піде два
+    # повідомлення. Поля, потрібні циклу нагадувань, заповнюємо одразу;
+    # lead_name/is_elogist уточнимо після GET (msg_refs — після надсилання).
+    with _state_lock:
+        if lead_id in unassigned:
+            return  # вже в черзі
+        unassigned[lead_id] = {
+            "arrived_at": now,
+            "status_name": status_name,
+            "lead_name": f"Лід #{lead_id}",
+            "last_reminded_count": 0,
+            "is_elogist": False,
+        }
 
     lead = kommo.get_lead(lead_id)
     lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
     source = kommo.get_lead_source(lead) if lead else ""
-    status_name = UNASSIGNED_STATUSES.get(status_id, "—")
     is_elogist = _detect_elogist(lead, status_id)
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
+    unassigned[lead_id]["lead_name"] = lead_name
+    unassigned[lead_id]["is_elogist"] = is_elogist
 
     # Сповіщення могло вже піти до рестарту (вебхук повторився / скан
     # встиг раніше) — тоді відновлюємо msg_refs і не шлемо дубль.
     restored = _restore_unassigned_refs(lead_id)
     if restored is not None:
         refs, noted_at = restored
-        unassigned[lead_id] = {
-            "arrived_at": datetime.fromtimestamp(noted_at, tz=timezone.utc) if noted_at else now,
-            "status_name": status_name,
-            "lead_name": lead_name,
-            "is_elogist": is_elogist,
-            "last_reminded_count": 0,
-            "msg_refs": refs,
-        }
+        unassigned[lead_id]["msg_refs"] = refs
+        if noted_at:
+            unassigned[lead_id]["arrived_at"] = datetime.fromtimestamp(noted_at, tz=timezone.utc)
         logger.info("Restored unassigned lead %s from CRM note (no re-send)", lead_id)
         return
 
@@ -1872,16 +1910,8 @@ def _handle_unassigned(lead_id: int, status_id: int):
         f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
     msg_refs = notifier.send_unassigned_tracked(msg)
+    unassigned[lead_id]["msg_refs"] = msg_refs
     _save_unassigned_refs(lead_id, msg_refs)
-
-    unassigned[lead_id] = {
-        "arrived_at": now,
-        "status_name": status_name,
-        "lead_name": lead_name,
-        "is_elogist": is_elogist,
-        "last_reminded_count": 0,
-        "msg_refs": msg_refs,
-    }
     logger.info("Unassigned lead %s in status %s", lead_id, status_name)
 
 
@@ -2437,11 +2467,14 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
             break
     if not first:
         return  # реального дзвінка ще не було — почекаємо наступного
-    if lead_id in _first_touch_done:
-        return
-    _first_touch_done.add(lead_id)
-    if len(_first_touch_done) > 5000:
-        _first_touch_done.clear()
+    # Атомарний claim під локом: два близькі дзвінкові вебхуки могли підняти
+    # два треди — так лише один транскрибує (платний Groq) і шле сповіщення.
+    with _state_lock:
+        if lead_id in _first_touch_done:
+            return
+        _first_touch_done.add(lead_id)
+        if len(_first_touch_done) > 5000:
+            _first_touch_done.clear()
 
     params = first.get("params") or {}
     record_url = params.get("link", "") or params.get("LINK", "")

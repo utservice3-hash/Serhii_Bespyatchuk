@@ -326,16 +326,22 @@ def move_lead_to(lead_id: int, pipeline_id: int, status_id: int, add_tag: str = 
     """Переводить лід в іншу воронку (pipeline_id) на вказаний етап (status_id),
     опційно додаючи тег БЕЗ видалення наявних. Одним PATCH-запитом."""
     try:
-        lead = get_lead(lead_id) or {}
-        tags = [{"id": t["id"]} for t in (lead.get("_embedded", {}).get("tags") or []) if t.get("id")]
-        if add_tag and not any(
-            (t.get("name") or "").lower() == add_tag.lower()
-            for t in (lead.get("_embedded", {}).get("tags") or [])
-        ):
-            tags.append({"name": add_tag})
+        lead = get_lead(lead_id)
         payload = {"pipeline_id": pipeline_id, "status_id": status_id}
-        if tags:
-            payload["_embedded"] = {"tags": tags}
+        if lead is None:
+            # GET впав (таймаут/5xx) — НЕ чіпаємо теги: _embedded.tags замінює
+            # ВЕСЬ набір, тож із порожнім baseline ми б стерли всі наявні теги
+            # клієнта. Переміщаємо без зміни тегів; тег додасться наступного разу.
+            logger.warning("move_lead_to(%s): GET failed, moving without tag change", lead_id)
+        else:
+            existing = lead.get("_embedded", {}).get("tags") or []
+            tags = [{"id": t["id"]} for t in existing if t.get("id")]
+            if add_tag and not any(
+                (t.get("name") or "").lower() == add_tag.lower() for t in existing
+            ):
+                tags.append({"name": add_tag})
+            if tags:
+                payload["_embedded"] = {"tags": tags}
         resp = requests.patch(
             f"{KOMMO_BASE}/api/v4/leads/{lead_id}",
             headers=HEADERS,
