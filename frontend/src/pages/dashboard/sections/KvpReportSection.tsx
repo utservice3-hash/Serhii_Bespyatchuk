@@ -65,6 +65,25 @@ const avgCheck = (o: ExecutiveOverview) => {
   return n > 0 ? Math.round(o.fact / n) : 0;
 };
 
+// Похідні плани з місячного плану виручки (2.7 млн): авто = план ÷ сер.чек;
+// створені угоди = авто ÷ заг.конверсія (оплачені/створені); ліди з реклами =
+// авто ÷ конверсія реклами. Всі коефіцієнти — поточні фактичні з CRM.
+const planCars = (o: ExecutiveOverview, plan: number) => {
+  const avg = avgCheck(o);
+  return avg > 0 ? Math.ceil(plan / avg) : null;
+};
+const planCreated = (o: ExecutiveOverview, plan: number) => {
+  const cars = planCars(o, plan);
+  const conv = o.createdFullCycle > 0 ? (o.successDeals + o.paymentDeals) / o.createdFullCycle : 0;
+  return cars != null && conv > 0 ? Math.ceil(cars / conv) : null;
+};
+const planAdLeads = (o: ExecutiveOverview, plan: number) => {
+  const cars = planCars(o, plan);
+  const conv = o.adConversion.conversion;
+  return cars != null && conv > 0 ? Math.ceil(cars / (conv / 100)) : null;
+};
+const monthPlanOf = (o: ExecutiveOverview, isMonth: boolean) => (isMonth ? o.planMonthTotal : o.plan);
+
 type Metric = {
   key: string;
   label: string;
@@ -90,7 +109,7 @@ const METRIC_GROUPS: { group: string; metrics: Metric[] }[] = [
   {
     group: "👥 Угоди та клієнти",
     metrics: [
-      { key: "created", label: "Створені угоди (повний цикл)", unit: "num", get: (b) => b.ov.createdFullCycle, sumInWeekly: true },
+      { key: "created", label: "Створені угоди (повний цикл)", unit: "num", get: (b) => b.ov.createdFullCycle, plan: (b, m) => planCreated(b.ov, monthPlanOf(b.ov, m)), sumInWeekly: true },
       { key: "newClients", label: "Нові клієнти", unit: "num", get: (b) => b.ov.newClients, sumInWeekly: true },
       { key: "repeatClients", label: "Постійні клієнти", unit: "num", get: (b) => b.ov.repeatClients },
       { key: "receivables", label: "Дебіторка (знімок)", unit: "money", get: (b) => b.ov.receivablesTotal },
@@ -101,7 +120,7 @@ const METRIC_GROUPS: { group: string; metrics: Metric[] }[] = [
     metrics: [
       { key: "adBudget", label: "Рекламний бюджет", unit: "money", get: (b) => b.lq.adBudgetFact, plan: (b) => b.lq.adBudgetPlan, sumInWeekly: true },
       { key: "adGaLeads", label: "Заявки з реклами (GA)", unit: "num", get: (b) => b.lq.adBudgetLeads, sumInWeekly: true },
-      { key: "adLeads", label: "Ліди з реклами (CRM)", unit: "num", get: (b) => b.ov.adConversion.leads, sumInWeekly: true },
+      { key: "adLeads", label: "Ліди з реклами (CRM)", unit: "num", get: (b) => b.ov.adConversion.leads, plan: (b, m) => planAdLeads(b.ov, monthPlanOf(b.ov, m)), sumInWeekly: true },
       { key: "adPaid", label: "Оплачено з реклами", unit: "num", get: (b) => b.ov.adConversion.paid },
       { key: "adConv", label: "Конверсія реклами", unit: "pct", get: (b) => b.ov.adConversion.conversion },
       { key: "target", label: "Цільові ліди (повний цикл)", unit: "num", get: (b) => b.lq.targetLeads, sumInWeekly: true },
@@ -145,7 +164,7 @@ function ComparisonTable({ prev, cur, prevRange, curRange, isMonth }: { prev: Bl
             <th style={{ textAlign: "right" }}>{dmy(curRange.from)}–{dmy(curRange.to)}</th>
             <th style={{ textAlign: "right" }}>Динаміка*<InfoHint text="(поточний − попередній) ÷ попередній × 100%. ↑ зелений — ріст, ↓ червоний — падіння до попереднього рівного періоду." /></th>
             <th style={{ textAlign: "right" }}>План</th>
-            <th style={{ textAlign: "right" }}>Викон.<InfoHint text="Факт ÷ план × 100%. План є лише для «Отриманих коштів» і «Рекламного бюджету»; для решти — «—»." /></th>
+            <th style={{ textAlign: "right" }}>Викон.<InfoHint text="Факт ÷ план × 100%. Плани: гроші й рекл. бюджет — з таблиці планів; «створені угоди» = план ÷ сер.чек ÷ заг.конверсія; «ліди з реклами» = авто ÷ конверсія реклами (розрахункові з поточних коефіцієнтів CRM)." /></th>
           </tr>
         </thead>
         <tbody>
@@ -231,27 +250,43 @@ function Decomposition({ b, periodPlan }: { b: Block; periodPlan?: boolean }) {
   const carry = o.carryover?.amount ?? 0;
   const revDone = o.fact + carry;
   const revLeft = Math.max(0, plan - revDone);
+  // Темп/прогноз і «на день»: залишок ÷ майбутні робочі дні місяця.
+  const pj = o.projection;
+  const daysLeft = Math.max(0, (pj?.totalWorkingDays ?? 0) - (pj?.elapsedWorkingDays ?? 0));
+  const perDay = (left: number) => (daysLeft > 0 ? Math.ceil(left / daysLeft) : null);
+  const planToday = o.plan; // пропорція плану на пройдені роб. дні
+  const tempo = planToday > 0 ? Math.round((o.fact / planToday) * 100) : null;
 
-  const rows: { label: string; need: string; done: string; left: string }[] = [
-    { label: "Дохід (грн)", need: formatAmount(plan), done: formatAmount(revDone), left: formatAmount(revLeft) },
-    { label: "Авто (угод)", need: carsNeeded ? carsNeeded.toLocaleString("uk-UA") : "—", done: carsDone.toLocaleString("uk-UA"), left: carsLeft.toLocaleString("uk-UA") },
-    { label: "Ліди (реклама)", need: leadsNeeded ? leadsNeeded.toLocaleString("uk-UA") : "—", done: leadsDone.toLocaleString("uk-UA"), left: leadsLeft.toLocaleString("uk-UA") },
+  const num = (v: number) => v.toLocaleString("uk-UA");
+  const rows: { label: string; need: string; done: string; left: string; day: string }[] = [
+    { label: "Дохід (грн)", need: formatAmount(plan), done: formatAmount(revDone), left: formatAmount(revLeft), day: perDay(revLeft) != null ? formatAmount(perDay(revLeft)!) : "—" },
+    { label: "Авто (угод)", need: carsNeeded ? num(carsNeeded) : "—", done: num(carsDone), left: num(carsLeft), day: carsNeeded && perDay(carsLeft) != null ? num(perDay(carsLeft)!) : "—" },
+    { label: "Ліди (реклама)", need: leadsNeeded ? num(leadsNeeded) : "—", done: num(leadsDone), left: num(leadsLeft), day: leadsNeeded && perDay(leadsLeft) != null ? num(perDay(leadsLeft)!) : "—" },
   ];
 
   return (
     <div style={{ marginTop: 16 }}>
       <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 4px" }}>🎯 Декомпозиція плану ({periodPlan ? "обраний період" : "місяць"}, по відділу)</h3>
       <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 8px" }}>
-        Поточний ср. чек {formatAmountFull(avg)} · конверсія реклами {conv}%. Треба авто = план ÷ ср.чек; треба лідів = авто ÷ конверсія. «Вже» по доходу = отримано цього місяця + перенесені з минулого{carry > 0 ? ` (${formatAmount(carry)})` : ""}.
+        Поточний ср. чек {formatAmountFull(avg)} · конверсія реклами {conv}%. Треба авто = план ÷ ср.чек; треба лідів = авто ÷ конверсія. «Вже» по доходу = отримано цього місяця + перенесені з минулого{carry > 0 ? ` (${formatAmount(carry)})` : ""}. «На день» = лишилось ÷ {daysLeft} роб. днів до кінця місяця.
       </p>
+      {!periodPlan && pj && (
+        <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", marginBottom: 10 }}>
+          <div className="kpi-card"><span className="kpi-label">План на сьогодні</span><span className="kpi-value">{formatAmount(planToday)}</span></div>
+          <div className="kpi-card"><span className="kpi-label">Темп</span><span className="kpi-value" style={{ color: tempo == null ? undefined : tempo >= 100 ? "#16a34a" : tempo >= 70 ? "#d97706" : "#dc2626" }}>{tempo != null ? `${tempo}%` : "—"}</span></div>
+          <div className="kpi-card"><span className="kpi-label">Прогноз місяця</span><span className="kpi-value">{formatAmount(pj.projected)}{pj.projectedPct != null && <span style={{ fontSize: 12, color: pj.projectedPct >= 100 ? "#16a34a" : "#dc2626", fontWeight: 600 }}> · {pj.projectedPct}%</span>}</span></div>
+          <div className="kpi-card"><span className="kpi-label">Роб. днів минуло</span><span className="kpi-value">{pj.elapsedWorkingDays}/{pj.totalWorkingDays}</span></div>
+        </div>
+      )}
       <div style={{ overflowX: "auto" }}>
-        <table className="data-table compact" style={{ minWidth: 420 }}>
+        <table className="data-table compact" style={{ minWidth: 500 }}>
           <thead>
             <tr>
               <th style={{ textAlign: "left" }}>Метрика</th>
               <th style={{ textAlign: "right" }}>Треба (план)</th>
               <th style={{ textAlign: "right" }}>Вже</th>
               <th style={{ textAlign: "right" }}>Лишилось</th>
+              <th style={{ textAlign: "right" }}>На день</th>
             </tr>
           </thead>
           <tbody>
@@ -261,6 +296,7 @@ function Decomposition({ b, periodPlan }: { b: Block; periodPlan?: boolean }) {
                 <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{r.need}</td>
                 <td style={{ textAlign: "right", fontWeight: 600 }}>{r.done}</td>
                 <td style={{ textAlign: "right", fontWeight: 700, color: "#d97706" }}>{r.left}</td>
+                <td style={{ textAlign: "right", fontWeight: 700, color: "#c5141c" }}>{r.day}</td>
               </tr>
             ))}
           </tbody>
