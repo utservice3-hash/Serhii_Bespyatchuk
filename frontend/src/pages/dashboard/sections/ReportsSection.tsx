@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ResponsiveContainer,
 } from "recharts";
-import { fetchReports, deleteReport, type ReportWidget } from "../../../api";
+import { fetchReports, deleteReport, postAiMessage, type ReportWidget } from "../../../api";
 import { formatAmount } from "../format";
 
 const COLORS = ["#c5141c", "#2f9e44", "#e8893a", "#1971c2", "#9c36b5", "#0c8599"];
@@ -104,6 +104,9 @@ function WidgetView({ w, onDelete, canDelete }: { w: ReportWidget; onDelete: (id
 export function ReportsSection({ canDelete }: { canDelete: boolean }) {
   const [widgets, setWidgets] = useState<ReportWidget[]>([]);
   const [loading, setLoading] = useState(true);
+  const [prompt, setPrompt] = useState("");
+  const [building, setBuilding] = useState(false);
+  const [sentNote, setSentNote] = useState<string | null>(null);
 
   const load = () => { fetchReports().then(setWidgets).finally(() => setLoading(false)); };
   useEffect(load, []);
@@ -114,12 +117,47 @@ export function ReportsSection({ canDelete }: { canDelete: boolean }) {
     setWidgets((p) => p.filter((w) => w.id !== id));
   }
 
+  async function build() {
+    const p = prompt.trim();
+    if (!p || building) return;
+    setBuilding(true); setSentNote(null);
+    try {
+      await postAiMessage(`Додай у «Мої звіти» віджет: ${p}`);
+      setPrompt("");
+      setSentNote("✅ Запит надіслано АІ. Віджет зʼявиться за ~1 хв — сторінка оновиться сама.");
+      // Віджет створюється асинхронно (АІ обробляє запит) — оновлюємо кілька разів.
+      [15000, 35000, 60000].forEach((ms) => setTimeout(load, ms));
+    } catch {
+      setSentNote("⚠️ Не вдалося надіслати запит (потрібен доступ до АІ).");
+    } finally { setBuilding(false); }
+  }
+
   return (
     <>
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 className="page-title">Мої звіти</h1>
         <button className="btn-secondary" onClick={load} style={{ padding: "6px 14px", borderRadius: 8, cursor: "pointer" }}>🔄 Оновити</button>
       </div>
+
+      {canDelete && (
+        <div className="chart-card" style={{ marginBottom: 16 }}>
+          <h2 className="chart-title" style={{ marginBottom: 8 }}>🤖 Побудувати звіт</h2>
+          <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
+            Опишіть, що показати — АІ побудує віджет (таблиця/графік/показник) із даних CRM і додасть сюди. Напр.: «графік отриманих коштів по командах за цей місяць» або «таблиця топ-10 постійних клієнтів за виручкою».
+          </p>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={2}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) build(); }}
+              placeholder="Опишіть звіт, який хочете побачити…"
+              style={{ flex: 1, resize: "vertical", font: "inherit", padding: 10, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+            <button onClick={build} disabled={building || !prompt.trim()}
+              style={{ padding: "10px 18px", borderRadius: 8, border: "none", background: "#c5141c", color: "#fff", fontWeight: 700, cursor: building || !prompt.trim() ? "default" : "pointer", opacity: building || !prompt.trim() ? 0.6 : 1, whiteSpace: "nowrap" }}>
+              {building ? "Надсилаю…" : "🤖 Побудувати"}
+            </button>
+          </div>
+          {sentNote && <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "8px 0 0" }}>{sentNote}</p>}
+        </div>
+      )}
       {loading ? (
         <p className="loading-text">Завантаження…</p>
       ) : widgets.length === 0 ? (

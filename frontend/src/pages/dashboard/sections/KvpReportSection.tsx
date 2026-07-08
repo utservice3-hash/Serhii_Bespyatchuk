@@ -12,6 +12,7 @@ const HINTS: Record<string, string> = {
   received: "«Успішно реалізовано» (142, за датою закриття в періоді) + «Оплата отримана» (69716460/60412544, знімок).",
   success: "Угоди в статусі «Успішна угода» (142), за датою закриття в періоді.",
   payment: "Угоди, що ЗАРАЗ на етапі «Оплата отримана» (знімок).",
+  pending: "Очікувані кошти = сума виставлених рахунків (етап «Виставлено рахунок»), знімок. Мінусові угоди (напр. Київтеплоенерго у Шевчука) віднімаються автоматично — їхній бюджет зберігається відʼємним.",
   avg: "Отримані кошти ÷ кількість угод.",
   repeatRev: "Отримані кошти від постійних клієнтів (2+ оплати lifetime).",
   newRev: "Отримані кошти від нових клієнтів (перша оплата в періоді).",
@@ -80,6 +81,7 @@ const METRICS: Metric[] = [
   { key: "received", label: "Отримані кошти", unit: "money", group: "💰 Дохід", get: (b) => b.ov.fact, planKind: "revenue", flow: true, hint: HINTS.received },
   { key: "success", label: "Успішно закрито", unit: "money", group: "💰 Дохід", get: (b) => b.ov.successRevenue, planKind: "success", flow: true, editable: true, hint: HINTS.success },
   { key: "payment", label: "Оплата отримана", unit: "money", group: "💰 Дохід", get: (b) => b.ov.paymentRevenue, planKind: null, flow: false, hint: HINTS.payment },
+  { key: "pending", label: "⏳ Очікувані оплати", unit: "money", group: "💰 Дохід", get: (b) => b.ov.pendingPayments?.revenue ?? 0, planKind: null, flow: false, hint: HINTS.pending },
   { key: "avg", label: "Середній чек", unit: "moneyFull", group: "💰 Дохід", get: (b) => avgCheck(b.ov), planKind: "avg_check", flow: false, editable: true, hint: HINTS.avg },
   { key: "newRev", label: "Виручка від нових", unit: "money", group: "💰 Дохід", get: (b) => b.ov.newRevenue, planKind: "new_revenue", flow: true, editable: true, hint: HINTS.newRev },
   { key: "repeatRev", label: "Виручка від постійних", unit: "money", group: "💰 Дохід", get: (b) => b.ov.repeatRevenue, planKind: "repeat_revenue", flow: true, editable: true, hint: HINTS.repeatRev },
@@ -149,9 +151,10 @@ function HeroStrip({ b, plans, ratio }: { b: Block; plans: KvpPlans; ratio: numb
   const o = b.ov;
   const hist = o.monthlyHistory ?? [];
   const revPlan = o.planMonthTotal || o.plan || null;
-  const tiles: { label: string; fact: number; unit: Unit; plan: number | null; flow: boolean; series: number[] }[] = [
+  const tiles: { label: string; fact: number; unit: Unit; plan: number | null; flow: boolean; series: number[]; sub?: string }[] = [
     { label: "Отримані кошти", fact: o.fact, unit: "money", plan: revPlan, flow: true, series: hist.map((m) => m.revenue) },
     { label: "Відправлені авто", fact: dispatchedFact(o), unit: "num", plan: plans.dispatched_cars ?? null, flow: true, series: hist.map((m) => m.paid) },
+    { label: "⏳ Очікувані оплати", fact: o.pendingPayments?.revenue ?? 0, unit: "money", plan: null, flow: false, series: [], sub: `${o.pendingPayments?.deals ?? 0} виставлених рахунків` },
     { label: "Конверсія реклами", fact: o.adConversion.conversion, unit: "pct", plan: plans.ad_conversion ?? null, flow: false, series: hist.map((m) => m.adConversion) },
     { label: "Середній чек", fact: avgCheck(o), unit: "moneyFull", plan: plans.avg_check ?? null, flow: false, series: hist.map((m) => m.avgCheck) },
   ];
@@ -180,7 +183,7 @@ function HeroStrip({ b, plans, ratio }: { b: Block; plans: KvpPlans; ratio: numb
                 </div>
               </>
             ) : (
-              <span style={{ fontSize: 11, color: MUTED }}>ціль не задана — постав у матриці ✏️</span>
+              <span style={{ fontSize: 11, color: MUTED }}>{t.sub ?? "ціль не задана — постав у матриці ✏️"}</span>
             )}
           </div>
         );
