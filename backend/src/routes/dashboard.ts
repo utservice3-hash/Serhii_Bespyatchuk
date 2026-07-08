@@ -294,17 +294,21 @@ dashboardRouter.get("/overview", async (req, res) => {
   // funnel themselves, so the same client_key match works for them too.
   const scopeConds = paidConds.filter((c) => !c.includes("funnel_stage"));
 
-  // "Конверсія реклами" = TARGETED deals in the full-cycle funnel that reached
-  // payment — same-deal, not "client ever paid". adLeads = ad-channel full-cycle
-  // deals created in the period; adPaid = those now at the paid stage.
+  // "Конверсія реклами" = full-cycle deals whose «Источник клиента» is in the
+  // configured ad-source list (SAME definition as the KPI «прийняв рекламу»),
+  // that reached payment — same-deal. Джерело з САМОЇ угоди, не з історії
+  // (раніше lead_channel='ad' → неузгодженість із «прийняв рекламу»).
+  const { adSources } = await getSettings();
+  const adConvParams = [...params, adSources];
+  const adSrcIdx = adConvParams.length;
   const adConvRes = await pool.query<{ ad_leads: string; ad_paid: string }>(
-    `SELECT COUNT(*) FILTER (WHERE d.lead_channel = 'ad') AS ad_leads,
-            COUNT(*) FILTER (WHERE d.lead_channel = 'ad' AND psm.funnel_stage = 'paid') AS ad_paid
+    `SELECT COUNT(*) FILTER (WHERE d.client_source = ANY($${adSrcIdx})) AS ad_leads,
+            COUNT(*) FILTER (WHERE d.client_source = ANY($${adSrcIdx}) AND psm.funnel_stage = 'paid') AS ad_paid
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE d.pipeline_id = ANY(ARRAY[8921932, 155304])${scopeConds.length ? " AND " + scopeConds.join(" AND ") : ""}`,
-    params
+    adConvParams
   );
   const adLeadsCnt = Number(adConvRes.rows[0]?.ad_leads ?? 0);
   const adPaidCnt = Number(adConvRes.rows[0]?.ad_paid ?? 0);
@@ -766,8 +770,8 @@ dashboardRouter.get("/overview", async (req, res) => {
             COUNT(*) FILTER (WHERE psm.funnel_stage IN ('invoiced','paid')) AS deals,
             COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
             COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS revenue,
-            COUNT(*) FILTER (WHERE d.lead_channel = 'ad') AS ad_leads,
-            COUNT(*) FILTER (WHERE d.lead_channel = 'ad' AND psm.funnel_stage = 'paid') AS ad_paid,
+            COUNT(*) FILTER (WHERE d.client_source = ANY($2)) AS ad_leads,
+            COUNT(*) FILTER (WHERE d.client_source = ANY($2) AND psm.funnel_stage = 'paid') AS ad_paid,
             COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_leads,
             COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen' AND psm.funnel_stage = 'paid') AS lg_paid,
             COUNT(DISTINCT d.client_key) FILTER (
@@ -784,7 +788,7 @@ dashboardRouter.get("/overview", async (req, res) => {
        AND d.created_at_kommo < date_trunc('month', $1::date) + interval '1 month'
        ${histWhere}
      GROUP BY 1 ORDER BY 1`,
-    [monthAnchor]
+    [monthAnchor, adSources]
   );
   const monthlyHistory = histRes.rows.map((r) => {
     const deals = Number(r.deals);
@@ -944,6 +948,12 @@ dashboardRouter.get("/conversion", async (req, res) => {
   conditions.push(`d.pipeline_id = ANY(ARRAY[8921932, 155304])`);
   const where = `WHERE ${conditions.join(" AND ")}`;
 
+  // «Реклама» = угоди повного циклу з рекламним «Источник клиента» (той самий
+  // перелік adSources, що й «прийняв рекламу») — не lead_channel='ad'.
+  const { adSources } = await getSettings();
+  params.push(adSources);
+  const adCase = `CASE WHEN d.client_source = ANY($${params.length}) THEN 'ad' ELSE 'other' END`;
+
   // "paid" = leads whose CLIENT reached a paid full-cycle deal (client_key
   // match). "paid_amount" is the lead's own paid value.
   const result = await pool.query<{
@@ -958,7 +968,7 @@ dashboardRouter.get("/conversion", async (req, res) => {
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
      )
-     SELECT CASE WHEN d.lead_channel = 'ad' THEN 'ad' ELSE 'other' END AS lead_channel,
+     SELECT ${adCase} AS lead_channel,
             COUNT(*) AS leads,
             COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS paid,
             COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS paid_amount
@@ -967,7 +977,7 @@ dashboardRouter.get("/conversion", async (req, res) => {
      LEFT JOIN pipeline_stage_map psm
        ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      ${where}
-     GROUP BY CASE WHEN d.lead_channel = 'ad' THEN 'ad' ELSE 'other' END`,
+     GROUP BY ${adCase}`,
     params
   );
 
@@ -2259,11 +2269,14 @@ dashboardRouter.get("/report", async (req, res) => {
   const deals = successDeals + paymentDeals;
   // Full per-manager scorecard (the metrics from the manual Excel report).
   const DISPATCH = "(psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300, 98470988, 10937178))";
+  const { adSources: reportAdSources } = await getSettings();
   const actP: unknown[] = [[8921932, 155304]];
   const actConds = ["d.pipeline_id = ANY($1)", ...scopeSql(actP), ...dateSql("created_at_kommo", actP)];
+  actP.push(reportAdSources);
+  const actAdIdx = actP.length;
   const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; dispatched: string; dispatched_sum: string; success: string; success_sum: string }>(
     `SELECT m.id, m.name,
-       COUNT(*) FILTER (WHERE d.lead_channel = 'ad') AS ad_leads,
+       COUNT(*) FILTER (WHERE d.client_source = ANY($${actAdIdx})) AS ad_leads,
        COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes,
        COUNT(*) FILTER (WHERE ${DISPATCH}) AS dispatched,
        COALESCE(SUM(d.price) FILTER (WHERE ${DISPATCH}), 0) AS dispatched_sum
