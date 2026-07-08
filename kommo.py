@@ -1,10 +1,36 @@
 import os
 import re
 import time
-import requests
+import threading
+import requests as _requests_lib
 import logging
 
 logger = logging.getLogger(__name__)
+
+# ── Глобальний ліміт запитів до Kommo: не більше 2/сек ──────────────────
+# Kommo дозволяє до 7 запитів/сек і банить за перевищення. Бот шле запити
+# з кількох тредів (вебхуки, скани, AI-аналіз), тому ліміт спільний на
+# весь процес. Реалізація: сесія, яка перед КОЖНИМ запитом витримує
+# мінімальний інтервал; всі виклики requests.get/post/... у цьому модулі
+# йдуть через неї (ім'я requests нижче навмисно вказує на сесію).
+_RATE_LIMIT_RPS = 2
+_MIN_INTERVAL = 1.0 / _RATE_LIMIT_RPS
+_rate_lock = threading.Lock()
+_last_request_ts = 0.0
+
+
+class _ThrottledSession(_requests_lib.Session):
+    def request(self, *args, **kwargs):
+        global _last_request_ts
+        with _rate_lock:
+            wait = _last_request_ts + _MIN_INTERVAL - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            _last_request_ts = time.monotonic()
+        return super().request(*args, **kwargs)
+
+
+requests = _ThrottledSession()
 
 KOMMO_TOKEN = os.getenv("KOMMO_TOKEN", "")
 KOMMO_BASE = os.getenv("KOMMO_BASE", "https://utsercice.kommo.com")
