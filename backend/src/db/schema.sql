@@ -532,3 +532,17 @@ CREATE TABLE IF NOT EXISTS leadgen_registry (
   PRIMARY KEY (lead_id, transferred_at)
 );
 CREATE INDEX IF NOT EXISTS idx_leadgen_registry_time ON leadgen_registry(transferred_at);
+
+-- Департаментні (top-down) плани КВП для Звіту КВП: цілі по відділу на місяць,
+-- НЕ привʼязані до менеджера (тому окремо від plans, де manager_id NOT NULL).
+-- Ключ (month, metric). Виручка лишається в plans (сума по менеджерах,
+-- read-only тут); сюди КВП ставить решту цілей (авто, ліди, конверсія, сер.чек,
+-- нові/постійні, лідоген тощо), щоб «Викон.%» був реальним для кожного рядка.
+CREATE TABLE IF NOT EXISTS kvp_plans (
+  month DATE NOT NULL,
+  metric TEXT NOT NULL,
+  planned_value NUMERIC NOT NULL,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (month, metric)
+);

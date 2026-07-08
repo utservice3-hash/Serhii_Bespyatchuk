@@ -322,6 +322,16 @@ export async function fetchLeadQuality(params: {
   return data;
 }
 
+// ── Департаментні плани КВП (Звіт КВП) ──
+export type KvpPlans = Record<string, number>;
+export async function fetchKvpPlan(month: string): Promise<KvpPlans> {
+  const { data } = await api.get<{ plans: KvpPlans }>("/dashboard/kvp-plan", { params: { month } });
+  return data?.plans ?? {};
+}
+export async function saveKvpPlan(month: string, plans: Record<string, number | null>): Promise<void> {
+  await api.post("/dashboard/kvp-plan", { month, plans });
+}
+
 export interface Team {
   id: number;
   name: string;

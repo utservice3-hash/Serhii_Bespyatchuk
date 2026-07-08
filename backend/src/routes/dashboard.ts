@@ -3548,3 +3548,55 @@ dashboardRouter.post("/funnel-plan", async (req, res) => {
   }
   res.json({ ok: true });
 });
+
+// ── Департаментні плани КВП (Звіт КВП) ──────────────────────────────────
+// Top-down цілі по відділу на місяць, editable лише КВП (admin). Виручку сюди
+// НЕ дублюємо (вона в plans, сума по менеджерах — read-only у звіті); тут решта
+// цілей, щоб «Викон.%» був реальним для кожного рядка матриці План/Факт.
+const KVP_PLAN_METRICS = [
+  "success", "avg_check", "new_revenue", "repeat_revenue",
+  "created_full_cycle", "dispatched_cars", "new_clients", "repeat_clients",
+  "ad_leads", "ad_conversion", "target_leads",
+  "transferred", "transfer_success", "leadgen_conversion",
+];
+
+dashboardRouter.get("/kvp-plan", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+  const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
+  const r = await pool.query<{ metric: string; planned_value: string }>(
+    `SELECT metric, planned_value FROM kvp_plans WHERE month = $1`,
+    [month]
+  );
+  const plans: Record<string, number> = {};
+  for (const row of r.rows) plans[row.metric] = Number(row.planned_value);
+  res.json({ month, plans });
+});
+
+/** Set department KVP targets for a month (admin/КВП only). Null/empty deletes. */
+dashboardRouter.post("/kvp-plan", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin") return res.status(403).json({ error: "Лише КВП (адміністратор)" });
+  const monthRaw = String(req.body?.month ?? "").slice(0, 7);
+  const plans = req.body?.plans as Record<string, unknown> | undefined;
+  if (!/^\d{4}-\d{2}$/.test(monthRaw) || !plans || typeof plans !== "object") {
+    return res.status(400).json({ error: "month (YYYY-MM) та plans обовʼязкові" });
+  }
+  const month = monthRaw + "-01";
+  for (const [metric, raw] of Object.entries(plans)) {
+    if (!KVP_PLAN_METRICS.includes(metric)) continue;
+    const value = raw === "" || raw == null ? null : Number(raw);
+    if (value == null || !Number.isFinite(value)) {
+      await pool.query(`DELETE FROM kvp_plans WHERE month = $1 AND metric = $2`, [month, metric]);
+      continue;
+    }
+    await pool.query(
+      `INSERT INTO kvp_plans (month, metric, planned_value, updated_by, updated_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (month, metric) DO UPDATE SET
+         planned_value = EXCLUDED.planned_value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [month, metric, value, auth.userId]
+    );
+  }
+  res.json({ ok: true });
+});
