@@ -19,6 +19,7 @@ import { ratesRouter } from "./routes/rates.js";
 import { documentsRouter } from "./routes/documents.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
+import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
@@ -98,13 +99,15 @@ app.get("/api/health", async (_req, res) => {
 // за вікно). Startup-синк ЗАЛИШЕНО (треба відновитись після розбану), але темп
 // повільний (800мс/запит), тож навіть бек­лог тече без сплеску.
 cron.schedule("*/30 * * * *", () => {
+  if (isKommoPaused()) return;
   syncKommo().catch((err) => console.error("Kommo sync failed:", err));
 });
-syncKommo().catch((err) => console.error("Kommo startup sync failed:", err));
+if (!isKommoPaused()) syncKommo().catch((err) => console.error("Kommo startup sync failed:", err));
 
 // Nightly reconciliation: вікно 45→10 днів (кратно менше сторінок пагінації —
 // це був найбільший разовий сплеск). Лікує гепи інкременту.
 cron.schedule("0 4 * * *", () => {
+  if (isKommoPaused()) return;
   syncKommo({ reconcileDays: 10 }).catch((err) =>
     console.error("Kommo reconciliation failed:", err)
   );
@@ -113,13 +116,16 @@ cron.schedule("0 4 * * *", () => {
 // Event feeds — рідко (кожні 3 год, staggered), БЕЗ стартових викликів (щоб
 // рестарт не давав сплеск). Терплять лаг.
 cron.schedule("10 */3 * * *", () => {
+  if (isKommoPaused()) return;
   syncStageEvents().catch((err) => console.error("Stage events sync failed:", err));
 });
 cron.schedule("40 */3 * * *", () => {
+  if (isKommoPaused()) return;
   syncDealActivity().catch((err) => console.error("Deal activity sync failed:", err));
 });
 // Lead-transfer events — раз на добу (резерв; «передані заявки» тепер із «Реєстру»).
 cron.schedule("20 5 * * *", () => {
+  if (isKommoPaused()) return;
   syncTransfers().catch((err) => console.error("Transfers sync failed:", err));
 });
 
@@ -163,6 +169,7 @@ cron.schedule("40 */3 * * *", () => {
 // Перевізники з CRM (контакти успішних угод) — раз на добу, порціями
 // (некритично для калькулятора; знижено з щогодини заради малого обсягу).
 cron.schedule("0 5 * * *", () => {
+  if (isKommoPaused()) return;
   syncCarriers().catch((err) => console.error("Carriers sync failed:", err));
 });
 syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
