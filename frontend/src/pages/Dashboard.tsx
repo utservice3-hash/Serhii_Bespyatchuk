@@ -422,6 +422,8 @@ export function Dashboard() {
     const wd = (d: Date) => (d.getDay() + 6) % 7; // Mon=0..Sun=6
     const days: string[] = [];
     if (taskForm.taskType === "weekly_kpi") {
+      // «Один день»: одна задача на обрану дату, дні тижня не фільтруємо.
+      if (taskForm.planScope === "day") return taskForm.rangeFrom ? [taskForm.rangeFrom] : [];
       // Custom calendar range: every day between rangeFrom..rangeTo whose weekday
       // is enabled. No more forcing the fixed Mon–Sun 7-day block.
       if (!taskForm.rangeFrom || !taskForm.rangeTo) return [];

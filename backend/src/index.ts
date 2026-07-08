@@ -153,8 +153,9 @@ cron.schedule("0 8 * * *", () => {
   syncNews().catch((err) => console.error("News sync failed:", err));
 });
 
-// Evaluate weekly/monthly KPI plan tasks (auto-complete on target) daily at 07:00.
-cron.schedule("0 7 * * *", () => {
+// Evaluate KPI plan tasks (auto-complete on target). Every 30 min so today's
+// composite facts are live intraday, not just after the 07:00 daily pass.
+cron.schedule("*/30 * * * *", () => {
   evaluateKpiTasks().catch((err) => console.error("KPI task eval failed:", err));
 });
 

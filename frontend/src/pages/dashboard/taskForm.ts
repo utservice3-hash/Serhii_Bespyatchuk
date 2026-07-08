@@ -11,6 +11,7 @@ export type TaskForm = {
   comments: string;
   // KPI plan fields
   taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "reactivation";
+  planScope: "range" | "day"; // weekly plan: a period or a single day
   weekStart: string;
   rangeFrom: string; // weekly plan: custom range start (from calendar)
   rangeTo: string;   // weekly plan: custom range end
@@ -30,6 +31,7 @@ export const emptyTaskForm: TaskForm = {
   department: "",
   comments: "",
   taskType: "simple",
+  planScope: "range",
   weekStart: "",
   rangeFrom: "",
   rangeTo: "",

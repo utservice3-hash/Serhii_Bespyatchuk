@@ -23,7 +23,7 @@ export async function evaluateKpiTasks(): Promise<void> {
      WHERE auto AND task_type = 'daily_kpi' AND metric IN ('ads_count','leadgen_count')
        AND status <> 'done' AND plan_date <= (now()::date - 1)`
   );
-  for (const t of daily.rows) {
+  for (const t of daily.rows) try {
     const r = await pool.query<{ c: string }>(
       `SELECT COUNT(*) c FROM deals
        WHERE manager_id = $1 AND lead_channel = $3
@@ -33,14 +33,14 @@ export async function evaluateKpiTasks(): Promise<void> {
     const actual = Number(r.rows[0].c);
     const target = Number(t.target_value);
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual} / ціль ${target}`, t.id]);
-  }
+  } catch (err) { console.error(`evaluateKpiTasks: daily task ${t.id} failed:`, err); }
 
   // 2) Count parents — total accepted ads / leadgen over the whole period.
   const parents = await pool.query<{ id: number; assignee_id: number; metric: string; target_value: string; period_start: string; period_end: string }>(
     `SELECT id, assignee_id, metric, target_value, period_start, period_end FROM tasks
      WHERE auto AND task_type IN ('weekly_kpi','monthly_kpi') AND metric IN ('ads_count','leadgen_count') AND status <> 'done'`
   );
-  for (const t of parents.rows) {
+  for (const t of parents.rows) try {
     const r = await pool.query<{ c: string }>(
       `SELECT COUNT(*) c FROM deals
        WHERE manager_id = $1 AND lead_channel = $4
@@ -50,7 +50,7 @@ export async function evaluateKpiTasks(): Promise<void> {
     const actual = Number(r.rows[0].c);
     const target = Number(t.target_value);
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual} / ціль ${target}`, t.id]);
-  }
+  } catch (err) { console.error(`evaluateKpiTasks: parent task ${t.id} failed:`, err); }
 
   // 3) avg_check / conversion period aggregates.
   const aggs = await pool.query<{ id: number; assignee_id: number; metric: string; target_value: string; period_start: string; period_end: string }>(
@@ -58,7 +58,7 @@ export async function evaluateKpiTasks(): Promise<void> {
      WHERE auto AND task_type IN ('weekly_kpi','monthly_kpi')
        AND metric IN ('avg_check','conversion') AND status <> 'done'`
   );
-  for (const t of aggs.rows) {
+  for (const t of aggs.rows) try {
     let actual = 0;
     if (t.metric === "avg_check") {
       const r = await pool.query<{ v: string }>(
@@ -83,16 +83,19 @@ export async function evaluateKpiTasks(): Promise<void> {
     const target = Number(t.target_value);
     const suffix = t.metric === "conversion" ? "%" : "₴";
     await pool.query(markDone, [actual, actual >= target, `Факт: ${actual}${suffix} / ціль ${target}${suffix}`, t.id]);
-  }
+  } catch (err) { console.error(`evaluateKpiTasks: aggregate task ${t.id} failed:`, err); }
 
   // 4) Composite daily tasks (metrics_json bundle: sum/ads/leadgen/avg/conv for
   //    one day). Fill each metric's actual/done; the task is done when ALL met.
+  //    Window: last 14 days INCLUDING today (live intraday fact) and including
+  //    manually-closed tasks — their facts keep refreshing, status never reverts.
   const composite = await pool.query<{ id: number; assignee_id: number; plan_date: string; metrics_json: { metric: string; target: number }[] }>(
-    `SELECT id, assignee_id, plan_date, metrics_json FROM tasks
+    `SELECT id, assignee_id, to_char(plan_date, 'YYYY-MM-DD') AS plan_date, metrics_json FROM tasks
      WHERE auto AND task_type = 'daily_kpi' AND metrics_json IS NOT NULL
-       AND status <> 'done' AND plan_date <= (now()::date - 1)`
+       AND plan_date BETWEEN (now() AT TIME ZONE 'Europe/Kyiv')::date - 14 AND (now() AT TIME ZONE 'Europe/Kyiv')::date`
   );
-  for (const t of composite.rows) {
+  for (const t of composite.rows) try {
+    if (!Array.isArray(t.metrics_json)) continue;
     const out: { metric: string; target: number; actual: number; done: boolean }[] = [];
     for (const m of t.metrics_json) {
       let actual = 0;
@@ -151,7 +154,7 @@ export async function evaluateKpiTasks(): Promise<void> {
        WHERE id = $3`,
       [JSON.stringify(out), allDone, t.id]
     );
-  }
+  } catch (err) { console.error(`evaluateKpiTasks: composite task ${t.id} failed:`, err); }
 
   console.log(`KPI tasks evaluated: ${daily.rowCount} daily, ${parents.rowCount} ads, ${aggs.rowCount} aggregate, ${composite.rowCount} composite.`);
 }

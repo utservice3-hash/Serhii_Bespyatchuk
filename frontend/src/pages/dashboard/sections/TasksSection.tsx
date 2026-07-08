@@ -641,14 +641,33 @@ export function TasksSection({
                 <>
                   {taskForm.taskType === "weekly_kpi" ? (
                     <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                        Період: від
-                        <DatePicker value={taskForm.rangeFrom} onChange={(v) => setTaskForm((f) => ({ ...f, rangeFrom: v }))} placeholder="від" minWidth={130} />
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {([["range", "📅 Період"], ["day", "🎯 Один день"]] as const).map(([k, lbl]) => (
+                          <button key={k} type="button" onClick={() => setTaskForm((f) => ({ ...f, planScope: k }))}
+                            style={{ padding: "6px 13px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: taskForm.planScope === k ? 700 : 500,
+                              border: `1px solid ${taskForm.planScope === k ? "#c5141c" : "#d0d5dd"}`,
+                              background: taskForm.planScope === k ? "#c5141c" : "var(--card-bg)", color: taskForm.planScope === k ? "#fff" : "var(--text)" }}>
+                            {lbl}
+                          </button>
+                        ))}
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                        до
-                        <DatePicker value={taskForm.rangeTo} onChange={(v) => setTaskForm((f) => ({ ...f, rangeTo: v }))} placeholder="до" minWidth={130} />
-                      </div>
+                      {taskForm.planScope === "day" ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                          День задачі
+                          <DatePicker value={taskForm.rangeFrom} onChange={(v) => setTaskForm((f) => ({ ...f, rangeFrom: v, rangeTo: v }))} placeholder="дата" minWidth={140} />
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                            Період: від
+                            <DatePicker value={taskForm.rangeFrom} onChange={(v) => setTaskForm((f) => ({ ...f, rangeFrom: v }))} placeholder="від" minWidth={130} />
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                            до
+                            <DatePicker value={taskForm.rangeTo} onChange={(v) => setTaskForm((f) => ({ ...f, rangeTo: v }))} placeholder="до" minWidth={130} />
+                          </div>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
@@ -656,6 +675,7 @@ export function TasksSection({
                       <DatePicker value={taskForm.weekStart} onChange={(v) => setTaskForm((f) => ({ ...f, weekStart: v }))} minWidth={150} />
                     </div>
                   )}
+                  {!(taskForm.taskType === "weekly_kpi" && taskForm.planScope === "day") && (<>
                   <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Робочі дні (на них розкладається план):</div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"].map((d, i) => (
@@ -683,6 +703,7 @@ export function TasksSection({
                       </button>
                     ))}
                   </div>
+                  </>)}
                   <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}>Цілі (заповніть потрібні):</div>
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
