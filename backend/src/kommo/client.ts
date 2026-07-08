@@ -12,10 +12,11 @@ const MAX_RETRIES = 5;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 // Global politeness throttle across ALL jobs: min gap between Kommo requests.
-// Kommo's documented limit is 7 req/s, but its WAF bans the IP outright for
-// bursts (08.07.2026 ban) — several jobs paginating at once easily spike past
-// that. 200ms gap ≈ 5 req/s total, applied before every request.
-const MIN_REQUEST_GAP_MS = 200;
+// Kommo's hard limit is 7 req/s and support confirmed the 08.07.2026 IP ban
+// was for exceeding it — several jobs paginating at once easily spike past
+// that. 350ms gap ≈ 3 req/s total (half the limit), applied before EVERY
+// request; do not lower without re-reading developers.kommo.com/docs/limitations.
+const MIN_REQUEST_GAP_MS = 350;
 let throttleChain: Promise<void> = Promise.resolve();
 function throttle(): Promise<void> {
   const slot = throttleChain.then(
@@ -64,6 +65,12 @@ async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
     throw new Error(`Kommo API error ${res.status}: ${await res.text()}`);
   }
   return res.json() as Promise<T>;
+}
+
+/** Throttled GET for one-off jobs that need raw paths — the ONLY sanctioned
+ *  way to read Kommo outside the fetch* helpers below (keeps the rate cap). */
+export async function kommoGet<T>(path: string): Promise<T> {
+  return kommoRequest<T>(path);
 }
 
 /** POST/PATCH helper for Kommo writes (lead creation, notes, tags). */
