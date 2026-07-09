@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  fetchOverview, fetchLeadQuality, fetchKvpPlan, saveKvpPlan, fetchKvpExtra, fetchPlansGrid,
-  type ExecutiveOverview, type LeadQuality, type KvpPlans, type KvpExtra, type PlansGrid,
+  fetchOverview, fetchLeadQuality, fetchKvpPlan, saveKvpPlan, fetchKvpExtra, fetchPlansGrid, fetchFunnelWeekly,
+  type ExecutiveOverview, type LeadQuality, type KvpPlans, type KvpExtra, type PlansGrid, type FunnelWeeklyReport,
 } from "../../../api";
 import { formatAmount, formatAmountFull, previousRange } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
@@ -400,21 +400,28 @@ function PlanFactMatrix({ prev, cur, prevRange, curRange, isMonth, plans, plansP
 
 // ── Команди (РПК/РНК) — план/факт із редагованими планами ─────────────
 // Клік по команді → тижнева розкладка плану/факту команди + цифри по менеджерах.
-function TeamWeeklyDetail({ teamId, month, weekRanges, weekBlocks, teamPlan }: {
-  teamId: number; month: string; weekRanges: Range[]; weekBlocks: Block[] | null; teamPlan: number | null;
+// Тижневий ФАКТ = кошти, що ВПЕРШЕ надійшли того тижня (перший вхід угоди в
+// «Успішно»/«Оплата отримана» за подіями CRM, з /funnel-weekly) — БЕЗ знімка,
+// який не має дати і дублювався б у кожному тижні.
+function TeamWeeklyDetail({ teamId, month, teamPlan }: {
+  teamId: number; month: string; teamPlan: number | null;
 }) {
   const [grid, setGrid] = useState<PlansGrid | null>(null);
-  useEffect(() => { fetchPlansGrid(month, teamId).then(setGrid).catch(() => setGrid(null)); }, [month, teamId]);
+  const [fw, setFw] = useState<FunnelWeeklyReport | null>(null);
+  useEffect(() => {
+    fetchPlansGrid(month, teamId).then(setGrid).catch(() => setGrid(null));
+    fetchFunnelWeekly({ month, teamId }).then(setFw).catch(() => setFw(null));
+  }, [month, teamId]);
 
   const [y, m] = month.split("-").map(Number);
   const monthFull = fullMonthRange(y, m - 1);
   const totalWd = wdCount(monthFull.from, monthFull.to);
-  const weekRows = weekRanges.map((w, i) => {
+  const weekRows = (fw?.weeks ?? []).map((w, i) => {
     const wd = wdCount(w.from, w.to);
     const plan = teamPlan != null && totalWd > 0 ? Math.round(teamPlan * (wd / totalWd)) : null;
-    const fact = weekBlocks?.[i]?.ov.byTeam.find((t) => t.teamId === teamId)?.revenue ?? 0;
+    const fact = fw?.overall.money.weeks?.[i]?.fact ?? 0;
     const pct = plan ? Math.round((fact / plan) * 100) : null;
-    return { label: w.label ?? `Тиждень ${i + 1}`, from: w.from, to: w.to, plan, fact, pct, left: plan != null ? Math.max(0, plan - fact) : null };
+    return { label: w.label, from: w.from, to: w.to, plan, fact, pct, left: plan != null ? Math.max(0, plan - fact) : null };
   });
   const team = grid?.teams.find((t) => t.teamId === teamId) ?? grid?.teams[0];
 
@@ -422,7 +429,8 @@ function TeamWeeklyDetail({ teamId, month, weekRanges, weekBlocks, teamPlan }: {
     <div style={{ padding: "6px 4px 10px" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
         <div>
-          <div style={{ fontSize: 12, fontWeight: 700, margin: "4px 0 6px" }}>🗓 План команди по тижнях <span style={{ color: MUTED, fontWeight: 400 }}>(місячний ÷ робочі дні)</span></div>
+          <div style={{ fontSize: 12, fontWeight: 700, margin: "4px 0 6px" }}>🗓 План команди по тижнях <span style={{ color: MUTED, fontWeight: 400 }}>(місячний ÷ робочі дні · факт = надійшло В тиждень)</span></div>
+          {!fw && <p className="loading-text" style={{ margin: 0 }}>Завантаження тижнів…</p>}
           <table className="data-table compact" style={{ fontSize: 12 }}>
             <thead><tr><th style={{ textAlign: "left" }}>Тиждень</th><th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ textAlign: "right" }}>Викон. %</th><th style={{ textAlign: "right" }}>Залишок</th></tr></thead>
             <tbody>
@@ -436,7 +444,7 @@ function TeamWeeklyDetail({ teamId, month, weekRanges, weekBlocks, teamPlan }: {
                 </tr>
               ))}
               <tr style={{ fontWeight: 700 }}>
-                <td style={{ textAlign: "left" }}>Разом</td>
+                <td style={{ textAlign: "left" }}>Разом<span style={{ fontWeight: 400, fontSize: 10, color: "var(--text-muted)" }} title="Сума тижнів = кошти, що надійшли в місяці. Місячний факт у рядку команди зверху додатково включає «зараз в оплаті» (знімок без дати)."> ⓘ</span></td>
                 <td style={{ textAlign: "right" }}>{teamPlan != null ? formatAmount(teamPlan) : "—"}</td>
                 <td style={{ textAlign: "right" }}>{formatAmount(weekRows.reduce((s, w) => s + w.fact, 0))}</td>
                 <td colSpan={2} />
@@ -482,12 +490,12 @@ function TeamWeeklyDetail({ teamId, month, weekRanges, weekBlocks, teamPlan }: {
   );
 }
 
-function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSavePrev, month, weekRanges, weekBlocks }: {
+function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSavePrev, month }: {
   prev: ExecutiveOverview; cur: ExecutiveOverview; plans: KvpPlans; plansPrev: KvpPlans;
   ratio: number | null; isMonth: boolean;
   onSave: (metric: string, v: number | null) => void;
   onSavePrev: (metric: string, v: number | null) => void;
-  month: string; weekRanges: Range[]; weekBlocks: Block[] | null;
+  month: string;
 }) {
   const prevByTeam = new Map(prev.byTeam.map((t) => [t.teamId, t]));
   const rows = [...cur.byTeam].sort((a, b) => b.revenue - a.revenue);
@@ -550,7 +558,7 @@ function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSav
                 {open && isMonth && (
                   <tr>
                     <td colSpan={nCols} style={{ background: "var(--bg-subtle, rgba(127,127,127,0.05))", padding: "4px 12px" }}>
-                      <TeamWeeklyDetail teamId={t.teamId} month={month} weekRanges={weekRanges} weekBlocks={weekBlocks} teamPlan={planCur} />
+                      <TeamWeeklyDetail teamId={t.teamId} month={month} teamPlan={planCur} />
                     </td>
                   </tr>
                 )}
@@ -1051,8 +1059,7 @@ export function KvpReportSection() {
             <h2 className="chart-title">🏅 Команди — план / факт (РПК · РНК)</h2>
             <p style={{ fontSize: 12, color: MUTED, margin: "0 0 8px" }}>Клік по команді — тижнева розкладка плану/факту + цифри по кожному менеджеру.</p>
             <TeamMatrix prev={activePrev.ov} cur={active.ov} plans={plans} plansPrev={plansPrev} ratio={ratio} isMonth={!rangeMode}
-              onSave={onSavePlan} onSavePrev={onSavePlanPrev}
-              month={monthSel} weekRanges={setup.selWeeks} weekBlocks={!rangeMode ? (data?.selWeeks ?? null) : null} />
+              onSave={onSavePlan} onSavePrev={onSavePlanPrev} month={monthSel} />
           </div>
 
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16, marginBottom: 16 }}>
