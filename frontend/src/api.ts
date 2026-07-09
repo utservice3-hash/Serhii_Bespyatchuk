@@ -953,6 +953,7 @@ export interface StuckDeal {
   price: number;
   stage: string;
   days: number;
+  activityDays: number | null;
 }
 export async function fetchStuckDeals(params: { managerId?: number; teamId?: number; minDays?: number }): Promise<{ minDays: number; deals: StuckDeal[] }> {
   const { data } = await api.get<{ minDays: number; deals: StuckDeal[] }>("/dashboard/stuck-deals", { params });

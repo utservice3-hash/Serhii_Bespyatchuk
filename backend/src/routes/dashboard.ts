@@ -3357,12 +3357,15 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
   if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
 
-  const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; stage: string; days: string }>(
+  const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; stage: string; days: string; activity_days: string | null }>(
     `SELECT d.kommo_id, d.name, d.client_name AS client, m.name AS manager, d.price,
             CASE WHEN ${AVTO} THEN 'Авто працює'
                  WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
                  WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
-            EXTRACT(DAY FROM now() - ${ACT})::int AS days
+            EXTRACT(DAY FROM now() - ${ACT})::int AS days,
+            -- Днів БЕЗ реальної людської активності (дзвінок/нотатка); NULL = угоду
+            -- ще жодного разу не вели (немає активності взагалі).
+            EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -3382,6 +3385,7 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
       price: Number(x.price),
       stage: x.stage,
       days: Number(x.days),
+      activityDays: x.activity_days == null ? null : Number(x.activity_days),
     })),
   });
 });

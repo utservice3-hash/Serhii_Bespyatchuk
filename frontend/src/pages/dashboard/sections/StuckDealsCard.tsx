@@ -70,7 +70,8 @@ export function StuckDealsCard({ managerId, teamId }: { managerId?: number; team
             <table className="data-table compact">
               <thead>
                 <tr>
-                  <th>Днів</th>
+                  <th title="Днів у поточному етапі">Днів</th>
+                  <th title="Днів без реальної активності (дзвінок/нотатка). «—» = угоду ще не вели">Без контакту</th>
                   <th>Етап</th>
                   <th>Угода / клієнт</th>
                   <th>Менеджер</th>
@@ -82,6 +83,7 @@ export function StuckDealsCard({ managerId, teamId }: { managerId?: number; team
                 {deals.map((d) => (
                   <tr key={d.kommoId}>
                     <td style={{ fontWeight: 700, color: dayColor(d.days), whiteSpace: "nowrap" }}>{d.days}</td>
+                    <td style={{ fontWeight: 700, color: dayColor(d.activityDays ?? 999), whiteSpace: "nowrap" }} title={d.activityDays == null ? "жодного дзвінка/нотатки" : `остання активність ${d.activityDays} дн. тому`}>{d.activityDays == null ? "не вели" : d.activityDays}</td>
                     <td><span style={{ fontSize: 12, fontWeight: 600, color: stageColor[d.stage] ?? "var(--text)", whiteSpace: "nowrap" }}>{d.stage}</span></td>
                     <td style={{ maxWidth: 280 }}>
                       <a href={d.crmUrl} target="_blank" rel="noreferrer" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", color: "var(--text)" }} title={`Відкрити в CRM: ${d.name}`}>{d.name || "—"}</a>
