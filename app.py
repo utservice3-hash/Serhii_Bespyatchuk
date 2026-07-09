@@ -2434,6 +2434,11 @@ FIRST_TOUCH_MIN_DURATION = 40
 FIRST_TOUCH_MARKER = "🤖 AI: перший дотик проаналізовано"
 _first_touch_log: list[dict] = []   # {date, manager_id, team, lead_id, price_voiced}
 _first_touch_done: set[int] = set()  # lead_id, по яких перший дотик уже оброблено
+_first_touch_contacts: set[int] = set()  # contact_id, по яких перший дотик уже був
+                                         # (одна аналітика на клієнта — повторні
+                                         # дзвінки того самого номеру не рахуємо,
+                                         # навіть на іншій угоді). Персист — маркер
+                                         # на контакті (kommo.contact_has_note_marker).
 
 
 def _handle_first_touch(lead_id: int, responsible_id: int):
@@ -2473,6 +2478,28 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
             break
     if not first:
         return  # реального дзвінка ще не було — почекаємо наступного
+
+    # Дедуп по КЛІЄНТУ (номеру): перший дотик аналізуємо лише раз на контакт.
+    # Повторні дзвінки того самого номеру — навіть якщо це вже інша угода — НЕ
+    # аналізуємо на озвучення ціни. Контакт стабільний по номеру. Перевірка до
+    # транскрибації (economія Groq): спершу in-memory, потім персистентний
+    # маркер на контакті (переживає рестарт, спільний для всіх угод контакту).
+    contact_id = kommo.get_lead_main_contact_id(lead_id)
+    if contact_id:
+        with _state_lock:
+            seen_contact = contact_id in _first_touch_contacts
+        if not seen_contact and kommo.contact_has_note_marker(contact_id, FIRST_TOUCH_MARKER):
+            seen_contact = True
+        if seen_contact:
+            with _state_lock:
+                _first_touch_contacts.add(contact_id)
+                _first_touch_done.add(lead_id)
+            logger.info(
+                "First touch lead %s: контакт %s уже аналізувався — пропуск (повторний дзвінок номеру)",
+                lead_id, contact_id,
+            )
+            return
+
     # Атомарний claim під локом: два близькі дзвінкові вебхуки могли підняти
     # два треди — так лише один транскрибує (платний Groq) і шле сповіщення.
     with _state_lock:
@@ -2538,6 +2565,16 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
     # тімліду прямо в угоді.
     note_body = body.replace("<b>", "").replace("</b>", "")
     kommo.add_note(lead_id, f"{FIRST_TOUCH_MARKER}\n{head}\n{note_body}")
+    # Персистентний дедуп по клієнту: маркер на контакті + in-memory set →
+    # повторні дзвінки того самого номеру (навіть на іншій угоді) більше не
+    # аналізуються. Позначаємо лише тут (реальний відправлений аналіз), а не
+    # на claim — щоб перший спам-дзвінок не заблокував майбутній реальний.
+    if contact_id:
+        with _state_lock:
+            _first_touch_contacts.add(contact_id)
+            if len(_first_touch_contacts) > 5000:
+                _first_touch_contacts.clear()
+        kommo.add_contact_note(contact_id, f"{FIRST_TOUCH_MARKER} (lead #{lead_id})")
     logger.info("First touch lead %s (%s): price=%s", lead_id, team, result.get("price_voiced"))
 
 

@@ -438,6 +438,68 @@ def add_note(lead_id: int, text: str) -> bool:
         return False
 
 
+def get_lead_main_contact_id(lead_id: int) -> int:
+    """ID головного контакту ліда (0, якщо немає). GET /leads/{id}?with=contacts.
+    Той самий номер = той самий контакт, тож контакт — стабільний ключ для
+    дедупу «перший дотик один раз на клієнта» через різні угоди."""
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/leads/{lead_id}",
+            headers=HEADERS,
+            params={"with": "contacts"},
+            timeout=10,
+        )
+        if resp.ok:
+            contacts = resp.json().get("_embedded", {}).get("contacts", []) or []
+            if not contacts:
+                return 0
+            main = next((c for c in contacts if c.get("is_main")), contacts[0])
+            return int(main.get("id", 0) or 0)
+    except Exception as e:
+        logger.error("get_lead_main_contact_id(%s): %s", lead_id, e)
+    return 0
+
+
+def contact_has_note_marker(contact_id: int, marker: str) -> bool:
+    """Чи є серед нотаток контакту текстова нотатка з маркером (персистентний
+    дедуп, що переживає рестарт і спільний для всіх угод контакту)."""
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/contacts/{contact_id}/notes",
+            headers=HEADERS,
+            params={"limit": 100},
+            timeout=10,
+        )
+        if resp.ok:
+            notes = resp.json().get("_embedded", {}).get("notes", []) or []
+            for n in notes:
+                if n.get("note_type") in (4, "common"):
+                    if marker in ((n.get("params") or {}).get("text") or ""):
+                        return True
+    except Exception as e:
+        logger.error("contact_has_note_marker(%s): %s", contact_id, e)
+    return False
+
+
+def add_contact_note(contact_id: int, text: str) -> bool:
+    """Додає текстову нотатку (note_type=common) до контакту."""
+    if not contact_id or not text:
+        return False
+    try:
+        resp = requests.post(
+            f"{KOMMO_BASE}/api/v4/contacts/{contact_id}/notes",
+            headers=HEADERS,
+            json=[{"note_type": "common", "params": {"text": text}}],
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.error("add_contact_note(%s): %s %s", contact_id, resp.status_code, resp.text)
+        return resp.ok
+    except Exception as e:
+        logger.error("add_contact_note(%s): %s", contact_id, e)
+        return False
+
+
 def get_note(lead_id: int, note_id: int) -> dict:
     """Повертає конкретну нотатку ліда (для точного зіставлення з вебхуком)."""
     try:
