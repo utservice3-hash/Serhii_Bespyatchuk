@@ -224,6 +224,43 @@ CREATE TABLE IF NOT EXISTS receivable_notes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Нотатки до КОНКРЕТНОГО рахунку дебіторки (дедлайн оплати + коментар менеджера).
+-- Окремо від receivable_invoices, бо той TRUNCATE-иться щосинку. Прострочений
+-- дедлайн → авто-задача менеджеру «отримати оплату» (task_created_at = анти-дубль).
+CREATE TABLE IF NOT EXISTS receivable_invoice_notes (
+  client_key TEXT NOT NULL,
+  invoice_no TEXT NOT NULL,
+  due_date DATE,
+  comment TEXT,
+  task_created_at TIMESTAMPTZ,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (client_key, invoice_no)
+);
+-- Анти-дубль авто-задачі і для КЛІЄНТСЬКОГО дедлайну (receivable_notes.due_date).
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS task_created_at TIMESTAMPTZ;
+
+-- Реактивація: сплячі/втрачені клієнти, яких тімлід передав менеджеру в роботу.
+-- Обовʼязкові робочі поля: план/факт, 1-й контакт → результат, 2-й контакт → результат.
+CREATE TABLE IF NOT EXISTS reactivation_clients (
+  client_key TEXT PRIMARY KEY,
+  client_name TEXT NOT NULL,
+  manager_id INTEGER NOT NULL REFERENCES managers(id),
+  category TEXT,                               -- sleeping | lost
+  plan NUMERIC NOT NULL DEFAULT 0,
+  contact1_date DATE,
+  contact1_result TEXT,
+  contact2_date DATE,
+  contact2_result TEXT,
+  status TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'reactivated', 'refused')),
+  comment TEXT,
+  added_by INTEGER REFERENCES users(id),
+  added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reactivation_manager ON reactivation_clients(manager_id);
+
 -- Monthly goals / objectives a team lead (or КВП) sets for a month — a
 -- high-level goals tracker separate from the numeric plans. Team-lead → own
 -- team (team_id), admin → team_id NULL (department-wide) or a chosen team.

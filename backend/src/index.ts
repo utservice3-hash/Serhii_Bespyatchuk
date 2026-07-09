@@ -19,6 +19,7 @@ import { ratesRouter } from "./routes/rates.js";
 import { documentsRouter } from "./routes/documents.js";
 import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
+import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { isKommoPaused } from "./kommo/pause.js";
@@ -155,6 +156,13 @@ cron.schedule("0 6 1 * *", () => {
   createOneOnOneReminders().catch((err) => console.error("One-on-one reminders failed:", err));
 });
 createOneOnOneReminders().catch((err) => console.error("One-on-one reminders startup failed:", err));
+
+// Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».
+// Щодня 08:20 + на старті (ідемпотентно через task_created_at).
+cron.schedule("20 8 * * *", () => {
+  createReceivableDeadlineTasks().catch((err) => console.error("Receivable deadline tasks failed:", err));
+});
+createReceivableDeadlineTasks().catch((err) => console.error("Receivable deadline tasks startup failed:", err));
 
 // Refresh receivables from the accounting Google Sheet every 15 minutes so a
 // paid invoice removed from the file drops off the dashboard promptly (a manual

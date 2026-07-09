@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
   Bar,
@@ -10,9 +10,13 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import type { AuthPayload } from "../../../auth";
-import { fetchRegularClients, type LoyaltyManager, type LoyaltyDynamics, type RegularClient, type Team } from "../../../api";
+import {
+  fetchRegularClients, fetchReactivation, addReactivationClient,
+  type LoyaltyManager, type LoyaltyDynamics, type RegularClient, type Team, type ReactivationClient,
+} from "../../../api";
 import { formatAmount } from "../format";
 import { RepeatPlanGrid } from "./RepeatPlanGrid";
+import { ReactivationGrid } from "./ReactivationGrid";
 
 /** Badge distinguishing a company regular (🏢, by name) from an individual
  * (👤, identified by phone) — so the list reads unambiguously and de-duped. */
@@ -57,10 +61,25 @@ export function LoyaltySection({
   const sortedAll = allClients
     ? [...allClients].sort((a, b) => (sortBy === "revenue" ? b.revenue - a.revenue : b.orders - a.orders))
     : [];
+
+  // Реактивація: список клієнтів у роботі (роль-скоуп на бекенді) + додавання
+  // сплячих/втрачених тімлідом. targetMgr — кому віддати (дефолт = менеджер картки).
+  const [reactClients, setReactClients] = useState<ReactivationClient[] | null>(null);
+  const reloadReact = () => { fetchReactivation().then(setReactClients).catch(() => setReactClients([])); };
+  useEffect(reloadReact, []);
+  const reactKeys = new Set((reactClients ?? []).map((c) => c.clientKey));
+  const canAssign = auth?.role === "team_lead" || auth?.role === "admin";
+  const [targetMgr, setTargetMgr] = useState<Record<number, number>>({}); // cardManagerId → обраний менеджер
+  const addToReactivation = (client: { clientKey: string; clientName: string }, cardManagerId: number, category: "sleeping" | "lost") => {
+    const managerId = targetMgr[cardManagerId] || cardManagerId;
+    addReactivationClient({ clientKey: client.clientKey, clientName: client.clientName, managerId, category })
+      .then(reloadReact)
+      .catch(() => {});
+  };
   return (
     <>
       <div className="page-header">
-        <h1 className="page-title">Постійні клієнти</h1>
+        <h1 className="page-title">Клієнти: постійні та реактивація</h1>
         {auth?.role !== "manager" && (
           <div className="page-filters">
             <select
@@ -76,6 +95,14 @@ export function LoyaltySection({
           </div>
         )}
       </div>
+
+      {auth && (
+        <ReactivationGrid
+          clients={reactClients}
+          onReload={reloadReact}
+          canDelete={canAssign}
+        />
+      )}
 
       {auth && (
         <RepeatPlanGrid canPickTeam={auth.role === "admin"} teams={teams} role={auth.role} />
@@ -207,13 +234,28 @@ export function LoyaltySection({
                 { key: "regular", label: "Постійні клієнти", list: m.segments.regular },
                 { key: "sleeping", label: "Сплячі — кандидати на реактивацію", list: m.segments.sleeping },
                 { key: "lost", label: "Втрачені — давно не замовляли", list: m.segments.lost },
-              ] as const).map(
-                (group) =>
+              ] as const).map((group) => {
+                const reactivatable = group.key === "sleeping" || group.key === "lost";
+                return (
                   group.list.length > 0 && (
                     <details key={group.key} style={{ marginTop: 12 }}>
                       <summary style={{ cursor: "pointer", fontWeight: 600 }}>
                         {group.label} ({group.list.length})
                       </summary>
+                      {reactivatable && canAssign && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, margin: "8px 0 4px", color: "var(--text-muted)" }}>
+                          ➕ додає в реактивацію менеджеру:
+                          <select
+                            value={targetMgr[m.managerId] || m.managerId}
+                            onChange={(e) => setTargetMgr((t) => ({ ...t, [m.managerId]: Number(e.target.value) }))}
+                            style={{ fontSize: 12 }}
+                          >
+                            {loyaltyData.map((mm) => (
+                              <option key={mm.managerId} value={mm.managerId}>{mm.managerName}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                       <table className="data-table">
                         <thead>
                           <tr>
@@ -222,6 +264,7 @@ export function LoyaltySection({
                             <th>За 2 міс.</th>
                             <th>Всього оплат</th>
                             <th>Остання оплата</th>
+                            {reactivatable && canAssign && <th>Реактивація</th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -236,13 +279,29 @@ export function LoyaltySection({
                                   ? new Date(c.lastPaid).toLocaleDateString("uk-UA")
                                   : "—"}
                               </td>
+                              {reactivatable && canAssign && (
+                                <td>
+                                  {reactKeys.has(c.clientKey) ? (
+                                    <span style={{ color: "#16a34a", fontSize: 12, fontWeight: 600 }}>✓ в роботі</span>
+                                  ) : (
+                                    <button
+                                      onClick={() => addToReactivation(c, m.managerId, group.key === "lost" ? "lost" : "sleeping")}
+                                      title="Віддати менеджеру в реактивацію"
+                                      style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}
+                                    >
+                                      ➕ в реактивацію
+                                    </button>
+                                  )}
+                                </td>
+                              )}
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </details>
                   )
-              )}
+                );
+              })}
             </div>
           ))}
         </div>

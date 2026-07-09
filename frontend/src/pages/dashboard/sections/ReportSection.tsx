@@ -15,6 +15,7 @@ import { formatAmount, formatAmountFull } from "../format";
 import { InfoHint } from "../widgets";
 import { DailyProductivityCard } from "./DailyProductivityCard";
 import { StuckDealsCard } from "./StuckDealsCard";
+import { ReactivationGrid } from "./ReactivationGrid";
 
 const STATUS_LBL: Record<string, string> = {
   not_started: "Заплановано", todo_list: "Заплановано", to_realize: "До реалізації", planned: "Заплановано",
@@ -639,6 +640,17 @@ export function ReportSection({
         <StuckDealsCard
           managerId={reportManagerId ? Number(reportManagerId) : undefined}
           teamId={reportTeamId ? Number(reportTeamId) : undefined}
+        />
+      )}
+
+      {/* Реактивація: менеджер бачить своїх, тімлід — команду / обраного менеджера. */}
+      {!canPickManager && <ReactivationGrid readOnly title="🔄 Мої клієнти в реактивації" />}
+      {canPickManager && (
+        <ReactivationGrid
+          readOnly
+          managerId={reportManagerId ? Number(reportManagerId) : undefined}
+          teamId={reportTeamId ? Number(reportTeamId) : undefined}
+          title={reportManagerId ? "🔄 Реактивація менеджера" : "🔄 Реактивація — по команді"}
         />
       )}
 

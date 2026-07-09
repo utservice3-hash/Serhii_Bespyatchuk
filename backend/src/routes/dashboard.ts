@@ -1763,11 +1763,14 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   if (auth.role === "manager") { params.push(auth.managerId); conds.push(`ri.manager_id = $${params.length}`); }
   else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
 
-  const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null }>(
+  const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; due_date: string | null; inv_comment: string | null }>(
     `SELECT ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
-            ri.amount, ri.service_url, ri.note
+            ri.amount, ri.service_url, ri.note,
+            to_char(nn.due_date, 'YYYY-MM-DD') AS due_date, nn.comment AS inv_comment
      FROM receivable_invoices ri
      LEFT JOIN managers m ON m.id = ri.manager_id
+     LEFT JOIN receivable_invoice_notes nn
+            ON nn.client_key = ri.client_key AND nn.invoice_no = COALESCE(ri.invoice_no, '')
      WHERE ${conds.join(" AND ")}
      ORDER BY ri.invoice_date DESC NULLS LAST, ri.amount DESC`,
     params
@@ -1779,8 +1782,198 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
       amount: Number(x.amount),
       serviceUrl: x.service_url,
       note: x.note,
+      dueDate: x.due_date,
+      comment: x.inv_comment,
     })),
   });
+});
+
+/**
+ * Дедлайн оплати + коментар до КОНКРЕТНОГО рахунку дебіторки. Менеджер ставить
+ * по СВОЇХ клієнтах, тімлід — по команді, адмін — по всіх. Якщо дедлайн минув,
+ * а рахунок досі неоплачений — щоденний джоб створює менеджеру задачу
+ * «отримати оплату» (див. jobs/receivableDeadlineTasks).
+ */
+dashboardRouter.put("/receivables/invoice-note", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const invoiceNo = String(req.body?.invoiceNo ?? "").trim();
+  if (!clientKey || !invoiceNo) return res.status(400).json({ error: "clientKey та invoiceNo обовʼязкові" });
+
+  // Право редагувати: рахунок має належати менеджеру / команді тімліда.
+  const conds = ["ri.client_key = $1", "COALESCE(ri.invoice_no,'') = $2"];
+  const p: unknown[] = [clientKey, invoiceNo];
+  if (auth.role === "manager") { p.push(auth.managerId); conds.push(`ri.manager_id = $${p.length}`); }
+  else if (auth.role === "team_lead") { p.push(auth.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const own = await pool.query(
+    `SELECT 1 FROM receivable_invoices ri LEFT JOIN managers m ON m.id = ri.manager_id
+     WHERE ${conds.join(" AND ")} LIMIT 1`, p);
+  if (!own.rowCount) return res.status(403).json({ error: "Немає доступу до цього рахунку" });
+
+  const dueDate = req.body?.dueDate ? String(req.body.dueDate).slice(0, 10) : null;
+  const comment = req.body?.comment != null ? String(req.body.comment) : null;
+  await pool.query(
+    `INSERT INTO receivable_invoice_notes (client_key, invoice_no, due_date, comment, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (client_key, invoice_no) DO UPDATE SET
+       due_date = EXCLUDED.due_date, comment = EXCLUDED.comment,
+       -- зміна дедлайну знімає анти-дубль, щоб нова прострочка знову створила задачу
+       task_created_at = CASE WHEN receivable_invoice_notes.due_date IS DISTINCT FROM EXCLUDED.due_date
+                              THEN NULL ELSE receivable_invoice_notes.task_created_at END,
+       updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, invoiceNo, dueDate, comment, auth.userId]
+  );
+  res.json({ ok: true });
+});
+
+// ── Реактивація клієнтів (сплячі/втрачені → в роботу менеджеру) ─────────────
+/** Роль-скоуп списку реактивації: менеджер — свої, тімлід — команда, адмін — усі. */
+dashboardRouter.get("/reactivation", async (req, res) => {
+  const auth = req.auth!;
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (auth.role === "manager") { params.push(auth.managerId); conds.push(`rc.manager_id = $${params.length}`); }
+  else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
+  else {
+    if (req.query.teamId) { params.push(Number(req.query.teamId)); conds.push(`m.team_id = $${params.length}`); }
+  }
+  if (req.query.managerId) { params.push(Number(req.query.managerId)); conds.push(`rc.manager_id = $${params.length}`); }
+
+  const r = await pool.query<{
+    client_key: string; client_name: string; manager_id: number; manager_name: string;
+    category: string | null; plan: string; contact1_date: string | null; contact1_result: string | null;
+    contact2_date: string | null; contact2_result: string | null; status: string; comment: string | null;
+    added_at: string; fact: string; fact_deals: string; last_paid: string | null;
+  }>(
+    `SELECT rc.client_key, rc.client_name, rc.manager_id, m.name AS manager_name,
+            rc.category, rc.plan,
+            to_char(rc.contact1_date, 'YYYY-MM-DD') AS contact1_date, rc.contact1_result,
+            to_char(rc.contact2_date, 'YYYY-MM-DD') AS contact2_date, rc.contact2_result,
+            rc.status, rc.comment, rc.added_at,
+            -- Факт = отримані кошти від клієнта ПІСЛЯ взяття в реактивацію:
+            -- «Успішно» (142), закриті після added_at + «Оплата отримана» (снапшот).
+            COALESCE(f.fact, 0) AS fact, COALESCE(f.fact_deals, 0) AS fact_deals,
+            to_char(lp.last_paid, 'YYYY-MM-DD') AS last_paid
+     FROM reactivation_clients rc
+     JOIN managers m ON m.id = rc.manager_id
+     LEFT JOIN LATERAL (
+       SELECT SUM(d.price) AS fact, COUNT(*) AS fact_deals
+       FROM deals d
+       WHERE d.client_key = rc.client_key
+         AND ((d.status_id = 142 AND d.closed_at_kommo >= rc.added_at)
+              OR d.status_id IN (69716460, 60412544))
+     ) f ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT MAX(d.created_at_kommo) AS last_paid
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE d.client_key = rc.client_key AND psm.funnel_stage = 'paid'
+     ) lp ON TRUE
+     ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
+     ORDER BY rc.status = 'in_progress' DESC, rc.added_at DESC`,
+    params
+  );
+  res.json({
+    clients: r.rows.map((x) => ({
+      clientKey: x.client_key, clientName: x.client_name,
+      managerId: x.manager_id, managerName: x.manager_name,
+      category: x.category, plan: Number(x.plan),
+      contact1Date: x.contact1_date, contact1Result: x.contact1_result,
+      contact2Date: x.contact2_date, contact2Result: x.contact2_result,
+      status: x.status, comment: x.comment, addedAt: x.added_at,
+      fact: Number(x.fact), factDeals: Number(x.fact_deals), lastPaid: x.last_paid,
+    })),
+  });
+});
+
+/** Додати клієнта в реактивацію (тімлід — менеджеру СВОЄЇ команди, адмін — будь-кому). */
+dashboardRouter.post("/reactivation", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "team_lead" && auth.role !== "admin") {
+    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  }
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const clientName = String(req.body?.clientName ?? "").trim();
+  const managerId = Number(req.body?.managerId);
+  const category = req.body?.category === "lost" ? "lost" : "sleeping";
+  if (!clientKey || !clientName || !managerId) {
+    return res.status(400).json({ error: "clientKey, clientName і managerId обовʼязкові" });
+  }
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Менеджер не з вашої команди" });
+  }
+  await pool.query(
+    `INSERT INTO reactivation_clients (client_key, client_name, manager_id, category, added_by)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (client_key) DO UPDATE SET
+       manager_id = EXCLUDED.manager_id, category = EXCLUDED.category,
+       updated_by = EXCLUDED.added_by, updated_at = now()`,
+    [clientKey, clientName, managerId, category, auth.userId]
+  );
+  res.json({ ok: true });
+});
+
+/** Оновити робочі поля реактивації (план, контакти→результати, статус, коментар). */
+dashboardRouter.put("/reactivation", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+
+  // Право: менеджер — свій клієнт; тімлід — команда; адмін — усі.
+  const conds = ["rc.client_key = $1"];
+  const p: unknown[] = [clientKey];
+  if (auth.role === "manager") { p.push(auth.managerId); conds.push(`rc.manager_id = $${p.length}`); }
+  else if (auth.role === "team_lead") { p.push(auth.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const own = await pool.query(
+    `SELECT 1 FROM reactivation_clients rc JOIN managers m ON m.id = rc.manager_id
+     WHERE ${conds.join(" AND ")} LIMIT 1`, p);
+  if (!own.rowCount) return res.status(403).json({ error: "Немає доступу до цього клієнта" });
+
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const set = (col: string, v: unknown) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+  const b = req.body ?? {};
+  if ("plan" in b) set("plan", Number(b.plan) || 0);
+  if ("contact1Date" in b) set("contact1_date", b.contact1Date ? String(b.contact1Date).slice(0, 10) : null);
+  if ("contact1Result" in b) set("contact1_result", b.contact1Result != null ? String(b.contact1Result) : null);
+  if ("contact2Date" in b) set("contact2_date", b.contact2Date ? String(b.contact2Date).slice(0, 10) : null);
+  if ("contact2Result" in b) set("contact2_result", b.contact2Result != null ? String(b.contact2Result) : null);
+  if ("status" in b && ["in_progress", "reactivated", "refused"].includes(String(b.status))) set("status", String(b.status));
+  if ("comment" in b) set("comment", b.comment != null ? String(b.comment) : null);
+  if ("managerId" in b && (auth.role === "team_lead" || auth.role === "admin")) {
+    const mid = Number(b.managerId);
+    if (auth.role === "team_lead") {
+      const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [mid]);
+      if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Менеджер не з вашої команди" });
+    }
+    set("manager_id", mid);
+  }
+  if (!sets.length) return res.status(400).json({ error: "Немає полів для оновлення" });
+  set("updated_by", auth.userId);
+  vals.push(clientKey);
+  await pool.query(
+    `UPDATE reactivation_clients SET ${sets.join(", ")}, updated_at = now() WHERE client_key = $${vals.length}`,
+    vals
+  );
+  res.json({ ok: true });
+});
+
+/** Прибрати клієнта з реактивації (тімлід — своєї команди, адмін — будь-кого). */
+dashboardRouter.delete("/reactivation/:clientKey", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "team_lead" && auth.role !== "admin") {
+    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  }
+  const clientKey = String(req.params.clientKey ?? "").trim();
+  if (auth.role === "team_lead") {
+    const chk = await pool.query(
+      `SELECT 1 FROM reactivation_clients rc JOIN managers m ON m.id = rc.manager_id
+       WHERE rc.client_key = $1 AND m.team_id = $2`, [clientKey, auth.teamId]);
+    if (!chk.rowCount) return res.status(403).json({ error: "Клієнт не у вашій команді" });
+  }
+  await pool.query(`DELETE FROM reactivation_clients WHERE client_key = $1`, [clientKey]);
+  res.json({ ok: true });
 });
 
 // Team ranking: per-team revenue (success+payment), deals, avg check,
@@ -2085,6 +2278,9 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
      VALUES ($1, $2, $3, $4, now())
      ON CONFLICT (client_key) DO UPDATE SET
        comment = EXCLUDED.comment, due_date = EXCLUDED.due_date,
+       -- зміна дедлайну знімає анти-дубль авто-задачі «отримати оплату»
+       task_created_at = CASE WHEN receivable_notes.due_date IS DISTINCT FROM EXCLUDED.due_date
+                              THEN NULL ELSE receivable_notes.task_created_at END,
        updated_by = EXCLUDED.updated_by, updated_at = now()`,
     [clientKey, comment, dueDate, auth.userId]
   );

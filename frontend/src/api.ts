@@ -587,11 +587,59 @@ export interface ReceivableInvoice {
   amount: number;
   serviceUrl: string | null;
   note: string | null;
+  dueDate: string | null;
+  comment: string | null;
 }
 
 export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoice[]> {
   const { data } = await api.get<{ invoices: ReceivableInvoice[] }>("/dashboard/receivables/invoices", { params: { clientKey } });
   return data.invoices;
+}
+
+/** Дедлайн оплати + коментар до конкретного рахунку (менеджер — свої клієнти). */
+export async function saveReceivableInvoiceNote(payload: {
+  clientKey: string; invoiceNo: string; dueDate?: string | null; comment?: string | null;
+}): Promise<void> {
+  await api.put("/dashboard/receivables/invoice-note", payload);
+}
+
+// ── Реактивація клієнтів (сплячі/втрачені → в роботу менеджеру) ──
+export interface ReactivationClient {
+  clientKey: string;
+  clientName: string;
+  managerId: number;
+  managerName: string;
+  category: string | null;      // sleeping | lost
+  plan: number;
+  fact: number;                 // отримані кошти після взяття в роботу
+  factDeals: number;
+  contact1Date: string | null;
+  contact1Result: string | null;
+  contact2Date: string | null;
+  contact2Result: string | null;
+  status: "in_progress" | "reactivated" | "refused";
+  comment: string | null;
+  addedAt: string;
+  lastPaid: string | null;
+}
+export async function fetchReactivation(params?: { teamId?: number; managerId?: number }): Promise<ReactivationClient[]> {
+  const { data } = await api.get<{ clients: ReactivationClient[] }>("/dashboard/reactivation", { params });
+  return data.clients;
+}
+export async function addReactivationClient(payload: {
+  clientKey: string; clientName: string; managerId: number; category?: "sleeping" | "lost";
+}): Promise<void> {
+  await api.post("/dashboard/reactivation", payload);
+}
+export async function updateReactivationClient(payload: { clientKey: string } & Partial<{
+  plan: number; contact1Date: string | null; contact1Result: string | null;
+  contact2Date: string | null; contact2Result: string | null;
+  status: string; comment: string | null; managerId: number;
+}>): Promise<void> {
+  await api.put("/dashboard/reactivation", payload);
+}
+export async function removeReactivationClient(clientKey: string): Promise<void> {
+  await api.delete(`/dashboard/reactivation/${encodeURIComponent(clientKey)}`);
 }
 
 export interface ReceivableManager {
