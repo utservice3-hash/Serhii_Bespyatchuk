@@ -6,6 +6,7 @@ import {
 import { formatAmount, formatAmountFull, previousRange } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
+import { LeadgenRegularsCard } from "./LeadgenRegularsCard";
 
 /** Пояснення джерела даних кожного показника (звідки береться з CRM). */
 const HINTS: Record<string, string> = {
@@ -858,6 +859,8 @@ export function KvpReportSection() {
             <div className="chart-card"><h2 className="chart-title">💎 Якість виручки</h2><RevenueQuality o={active.ov} /></div>
             <div className="chart-card"><h2 className="chart-title">🎯 Реклама — ефективність</h2><AdEfficiency b={active} /></div>
           </div>
+
+          <LeadgenRegularsCard />
 
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">🎯 Декомпозиція плану ({rangeMode ? "період" : "місяць"}, по відділу)</h2>

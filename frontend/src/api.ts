@@ -642,6 +642,26 @@ export async function removeReactivationClient(clientKey: string): Promise<void>
   await api.delete(`/dashboard/reactivation/${encodeURIComponent(clientKey)}`);
 }
 
+/** «Постійні від лідогену» — накопичений ефект за весь час. */
+export interface LeadgenRegulars {
+  touched: number;        // клієнтів з лідоген-дотиком
+  paidOnce: number;       // оплатили 1 раз після дотику
+  paidOnceSum: number;
+  regulars: number;       // стали постійними (2+ оплати після дотику)
+  regularsNew: number;    // з нуля (без оплат до)
+  regularsReact: number;  // реактивовані
+  revenueAfter: number;   // гроші постійних після дотику
+  revenueNew: number;
+  revenueReact: number;
+  lifetime: number;
+  avgPays: number;
+  avgCheck: number;
+}
+export async function fetchLeadgenRegulars(): Promise<LeadgenRegulars> {
+  const { data } = await api.get<LeadgenRegulars>("/dashboard/leadgen-regulars");
+  return data;
+}
+
 export interface ReceivableManager {
   managerId: number;
   managerName: string;

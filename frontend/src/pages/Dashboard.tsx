@@ -98,6 +98,7 @@ import { GoalsSection } from "./dashboard/sections/GoalsSection";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ReportSection } from "./dashboard/sections/ReportSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
+import { LeadgenRegularsCard } from "./dashboard/sections/LeadgenRegularsCard";
 import { PlansSection } from "./dashboard/sections/PlansSection";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
 
@@ -1253,6 +1254,8 @@ export function Dashboard() {
               setDateRange(range);
             }}
           />
+
+          <LeadgenRegularsCard />
 
           {leadgenLoading ? (
             <p className="loading-text">Завантаження...</p>

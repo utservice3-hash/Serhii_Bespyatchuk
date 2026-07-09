@@ -1959,6 +1959,80 @@ dashboardRouter.put("/reactivation", async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * «Постійні від лідогену» — накопичений ефект лідогенераторів за ВЕСЬ час:
+ * клієнти з лідоген-дотиком (угода повного циклу з каналом leadgen), які після
+ * першого дотику зробили 2+ оплачені угоди (= стали постійними), і скільки
+ * грошей принесли ПІСЛЯ дотику. Безіменні клієнти («Название не указано»)
+ * виключені — під одним ключем злипаються сотні різних клієнтів.
+ */
+dashboardRouter.get("/leadgen-regulars", async (_req, res) => {
+  const r = await pool.query<{
+    touched: string; paid_once: string; paid_once_sum: string;
+    regulars: string; regulars_new: string; regulars_react: string;
+    revenue_after: string; revenue_new: string; revenue_react: string;
+    lifetime: string; pays_after: string;
+  }>(
+    `WITH junk AS (
+       SELECT DISTINCT client_key FROM deals
+       WHERE client_name ILIKE '%название не указано%' OR client_name ILIKE '%назва не вказана%'
+     ),
+     lg_first AS (
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_lg
+       FROM deals d
+       WHERE d.pipeline_id IN (8921932, 155304) AND d.lead_channel = 'leadgen'
+         AND d.client_key IS NOT NULL
+         AND d.client_key NOT IN (SELECT client_key FROM junk)
+       GROUP BY d.client_key
+     ),
+     paid AS (
+       SELECT d.client_key, d.created_at_kommo, d.price
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE d.pipeline_id IN (8921932, 155304) AND psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+     ),
+     agg AS (
+       SELECT lf.client_key,
+         COUNT(p.*) FILTER (WHERE p.created_at_kommo < lf.first_lg)  AS before_n,
+         COUNT(p.*) FILTER (WHERE p.created_at_kommo >= lf.first_lg) AS after_n,
+         COALESCE(SUM(p.price) FILTER (WHERE p.created_at_kommo >= lf.first_lg), 0) AS after_sum,
+         COALESCE(SUM(p.price), 0) AS life_sum
+       FROM lg_first lf LEFT JOIN paid p ON p.client_key = lf.client_key
+       GROUP BY lf.client_key
+     )
+     SELECT COUNT(*) AS touched,
+       COUNT(*) FILTER (WHERE after_n = 1) AS paid_once,
+       COALESCE(SUM(after_sum) FILTER (WHERE after_n = 1), 0) AS paid_once_sum,
+       COUNT(*) FILTER (WHERE after_n >= 2) AS regulars,
+       COUNT(*) FILTER (WHERE after_n >= 2 AND before_n = 0) AS regulars_new,
+       COUNT(*) FILTER (WHERE after_n >= 2 AND before_n > 0) AS regulars_react,
+       COALESCE(SUM(after_sum) FILTER (WHERE after_n >= 2), 0) AS revenue_after,
+       COALESCE(SUM(after_sum) FILTER (WHERE after_n >= 2 AND before_n = 0), 0) AS revenue_new,
+       COALESCE(SUM(after_sum) FILTER (WHERE after_n >= 2 AND before_n > 0), 0) AS revenue_react,
+       COALESCE(SUM(life_sum) FILTER (WHERE after_n >= 2), 0) AS lifetime,
+       COALESCE(SUM(after_n) FILTER (WHERE after_n >= 2), 0) AS pays_after
+     FROM agg`
+  );
+  const x = r.rows[0];
+  const regulars = Number(x?.regulars ?? 0);
+  const paysAfter = Number(x?.pays_after ?? 0);
+  const revenueAfter = Number(x?.revenue_after ?? 0);
+  res.json({
+    touched: Number(x?.touched ?? 0),
+    paidOnce: Number(x?.paid_once ?? 0),
+    paidOnceSum: Number(x?.paid_once_sum ?? 0),
+    regulars,
+    regularsNew: Number(x?.regulars_new ?? 0),
+    regularsReact: Number(x?.regulars_react ?? 0),
+    revenueAfter,
+    revenueNew: Number(x?.revenue_new ?? 0),
+    revenueReact: Number(x?.revenue_react ?? 0),
+    lifetime: Number(x?.lifetime ?? 0),
+    avgPays: regulars > 0 ? Math.round((paysAfter / regulars) * 10) / 10 : 0,
+    avgCheck: paysAfter > 0 ? Math.round(revenueAfter / paysAfter) : 0,
+  });
+});
+
 /** Прибрати клієнта з реактивації (тімлід — своєї команди, адмін — будь-кого). */
 dashboardRouter.delete("/reactivation/:clientKey", async (req, res) => {
   const auth = req.auth!;
