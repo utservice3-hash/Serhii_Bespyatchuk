@@ -151,15 +151,16 @@ function paceRatio(pj: Pj): number | null {
   return null; // період завершено (минулий місяць) → без проекції
 }
 
-/** План на сьогодні / темп% / викон. плану міс% / залишок / прогноз для рядка. */
+/** План на сьогодні / темп% / викон. плану міс% / залишок / відставання / прогноз. */
 function computePace(fact: number, plan: number | null, flow: boolean, ratio: number | null) {
-  if (plan == null || plan <= 0) return { plan, planToday: null as number | null, pct: null as number | null, pctMonth: null as number | null, left: null as number | null, forecast: null as number | null };
+  if (plan == null || plan <= 0) return { plan, planToday: null as number | null, pct: null as number | null, pctMonth: null as number | null, left: null as number | null, lag: null as number | null, forecast: null as number | null };
   const planToday = flow && ratio != null ? Math.round(plan * ratio) : plan;
   const pct = planToday > 0 ? Math.round((fact / planToday) * 100) : null; // темп: факт ÷ план-на-сьогодні
   const pctMonth = Math.round((fact / plan) * 100);                        // виконання ПЛАНУ: факт ÷ повний план
-  const left = Math.max(0, plan - fact);                                   // залишок до плану
+  const left = Math.max(0, plan - fact);                                   // залишок до плану місяця
+  const lag = Math.max(0, planToday - fact);                               // ВІДСТАВАННЯ від графіка на сьогодні
   const forecast = flow && ratio != null ? Math.round(fact / ratio) : fact;
-  return { plan, planToday, pct, pctMonth, left, forecast };
+  return { plan, planToday, pct, pctMonth, left, lag, forecast };
 }
 
 function Delta({ prev, cur }: { prev: number; cur: number }) {
@@ -214,7 +215,12 @@ function HeroStrip({ b, plans, ratio }: { b: Block; plans: KvpPlans; ratio: numb
                 <div style={{ fontSize: 11, color: MUTED, display: "flex", flexWrap: "wrap", gap: 8 }}>
                   <span>план {fmtVal(t.plan, t.unit)}</span>
                   <span style={{ color: pctColor(p.pctMonth), fontWeight: 700 }}>{p.pctMonth}%</span>
-                  {p.left != null && p.left > 0 && <span style={{ color: RED, fontWeight: 600 }}>залишок {fmtVal(p.left, t.unit)}</span>}
+                  {t.flow && ratio != null && p.lag != null && (
+                    p.lag > 0
+                      ? <span style={{ color: RED, fontWeight: 700 }}>відстає на {fmtVal(p.lag, t.unit)}</span>
+                      : <span style={{ color: GREEN, fontWeight: 600 }}>✓ у графіку</span>
+                  )}
+                  {p.left != null && p.left > 0 && <span>до плану {fmtVal(p.left, t.unit)}</span>}
                   {p.forecast != null && t.flow && ratio != null && <span>прогноз {fmtVal(p.forecast, t.unit)}</span>}
                 </div>
               </>
@@ -308,7 +314,7 @@ function PlanFactMatrix({ prev, cur, prevRange, curRange, isMonth, plans, plansP
             {isMonth && <th style={{ textAlign: "right" }}>Викон.<br />плану %<InfoHint text="Факт ÷ ПЛАН МІСЯЦЯ × 100%. Зелений ≥100, жовтий ≥70, червоний <70." /></th>}
             {isMonth && <th style={{ textAlign: "right" }}>Залишок<br />до плану<InfoHint text="План − факт: скільки ще треба зробити до кінця місяця." /></th>}
             <th style={{ textAlign: "right" }}>Динаміка*<InfoHint text="(поточний − попередній) ÷ попередній × 100%." /></th>
-            {isMonth && <th style={{ textAlign: "right", color: MUTED }}>Темп<InfoHint text="Факт ÷ план-на-сьогодні (план × частка робочих днів, що минули). Показує, чи в графіку прямо зараз." /></th>}
+            {isMonth && <th style={{ textAlign: "right", color: MUTED }}>Темп · відставання<InfoHint text="Факт ÷ план-на-сьогодні (план × частка робочих днів, що минули). Якщо позаду графіка — червоним показано, СКІЛЬКИ саме бракує станом на сьогодні." /></th>}
             {isMonth && <th style={{ textAlign: "right", color: MUTED }}>Прогноз<InfoHint text="Лінійна екстраполяція за темпом: факт ÷ частку минулих робочих днів." /></th>}
           </tr>
         </thead>
@@ -349,7 +355,18 @@ function PlanFactMatrix({ prev, cur, prevRange, curRange, isMonth, plans, plansP
                       </td>
                     )}
                     <td style={{ textAlign: "right" }}><Delta prev={pv} cur={cv} /></td>
-                    {isMonth && <td style={{ textAlign: "right", color: pctColor(p.pct), fontSize: 12 }}>{p.pct != null && m.flow && ratio != null ? `${p.pct}%` : "—"}</td>}
+                    {isMonth && (
+                      <td style={{ textAlign: "right", fontSize: 12, whiteSpace: "nowrap" }}>
+                        {p.pct != null && m.flow && ratio != null ? (
+                          <>
+                            <span style={{ color: pctColor(p.pct), fontWeight: 600 }}>{p.pct}%</span>
+                            {p.lag != null && p.lag > 0
+                              ? <span style={{ color: RED }}> · −{fmtVal(p.lag, m.unit)}</span>
+                              : <span style={{ color: GREEN }}> ✓</span>}
+                          </>
+                        ) : "—"}
+                      </td>
+                    )}
                     {isMonth && <td style={{ textAlign: "right", color: MUTED }}>{p.forecast != null && m.flow && ratio != null ? fmtVal(p.forecast, m.unit) : "—"}</td>}
                   </tr>
                 );
@@ -750,6 +767,39 @@ export function KvpReportSection() {
     saveKvpPlan(setup.prevMonthStr, { [metric]: v }).catch(() => {});
   };
 
+  // «Плани з факту минулого місяця +N%»: для метрик БЕЗ ручного плану ставимо
+  // факт минулого місяця, збільшений на N% (гроші округлюємо до сотень).
+  // Ручні плани і авто-плани (виручка з планів менеджерів, реклбюджет) не чіпаємо.
+  const [seeding, setSeeding] = useState(false);
+  const seedPlans = async () => {
+    if (!data) return;
+    const pctStr = window.prompt("На скільки % збільшити показники минулого місяця? (2–5)", "3");
+    if (pctStr == null) return;
+    const k = 1 + (Math.max(0, Number(pctStr.replace(",", "."))) || 0) / 100;
+    const upd: Record<string, number> = {};
+    for (const m of METRICS) {
+      if (!m.planKind || m.planKind === "revenue" || m.planKind === "ad_budget") continue;
+      if (plans[m.planKind] != null) continue; // ручний план уже стоїть — не перезаписуємо
+      const fv = m.get(data.monthPrev);
+      if (!fv || fv <= 0) continue;
+      upd[m.planKind] = m.unit === "num" || m.unit === "pct"
+        ? Math.ceil(fv * k)
+        : Math.round((fv * k) / 100) * 100;
+    }
+    for (const t of data.monthPrev.ov.byTeam) {
+      const key = `team_revenue_${t.teamId}`;
+      if (plans[key] != null || !t.revenue) continue;
+      upd[key] = Math.round((t.revenue * k) / 100) * 100;
+    }
+    if (!Object.keys(upd).length) { window.alert("Усі плани вже заповнені — нічого доповнювати (ручні не перезаписуються)."); return; }
+    setSeeding(true);
+    try {
+      await saveKvpPlan(monthSel, upd);
+      setPlans((p) => ({ ...p, ...upd }));
+      window.alert(`Заповнено ${Object.keys(upd).length} планів = факт минулого місяця +${pctStr}%.`);
+    } finally { setSeeding(false); }
+  };
+
   useEffect(() => {
     if (!rangeMode || !rangePrev) return;
     let alive = true; setRangeData(null); setErr(null);
@@ -814,6 +864,13 @@ export function KvpReportSection() {
           <DatePicker value={range.to} onChange={(v) => setRangeP({ ...range, to: v })} placeholder="до" minWidth={130} />
           {(range.from || range.to) && (
             <button onClick={() => setRangeP({ from: "", to: "" })} title="Очистити період" style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>✕</button>
+          )}
+          {!rangeMode && (
+            <button onClick={seedPlans} disabled={seeding || !data}
+              title="Для показників БЕЗ плану: ставить факт минулого місяця +N% (ручні плани не перезаписуються)"
+              style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: "#c5141c", color: "#fff", fontWeight: 600, cursor: seeding || !data ? "default" : "pointer", opacity: seeding || !data ? 0.6 : 1 }}>
+              {seeding ? "Заповнюю…" : "📈 Плани з факту мин. міс."}
+            </button>
           )}
         </div>
       </div>
