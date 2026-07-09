@@ -3986,6 +3986,22 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
      WHERE m.is_active AND m.team_id IS NOT NULL AND COALESCE(t.name, '') NOT ILIKE '%лідоген%'`
   );
 
+  // ПОТІК грошей за період: угоди, в які оплата ВПЕРШЕ надійшла в періоді
+  // (перший вхід у 142/«Оплата отримана» за подіями). Для тижневих зрізів —
+  // знімкові формули вище дублювали б «зараз в оплаті» у кожному тижні.
+  const flow = await pool.query<{ s: string; ad_s: string; lg_s: string }>(
+    `WITH first_paid AS (
+       SELECT kommo_id, MIN(changed_at) AS t FROM deal_stage_events
+       WHERE status_id IN (142, 69716460, 60412544) GROUP BY kommo_id
+     )
+     SELECT COALESCE(SUM(d.price), 0) AS s,
+            COALESCE(SUM(d.price) FILTER (WHERE d.client_source = ANY($4)), 0) AS ad_s,
+            COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen'), 0) AS lg_s
+     FROM first_paid f JOIN deals d ON d.kommo_id = f.kommo_id
+     WHERE d.pipeline_id = ANY($1) AND (f.t ${KYIV})::date BETWEEN $2 AND $3`,
+    params
+  );
+
   const d = disp.rows[0];
   res.json({
     from, to,
@@ -3993,5 +4009,10 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
     ad: { revenue: Number(rev.rows[0]?.ad_rev ?? 0), dispatched: Number(d?.ad_c ?? 0), dispatchedSum: Number(d?.ad_s ?? 0) },
     leadgen: { revenue: Number(rev.rows[0]?.lg_rev ?? 0), dispatched: Number(d?.lg_c ?? 0), dispatchedSum: Number(d?.lg_s ?? 0) },
     managersCount: Number(mgr.rows[0]?.c ?? 0),
+    flow: {
+      received: Number(flow.rows[0]?.s ?? 0),
+      ad: Number(flow.rows[0]?.ad_s ?? 0),
+      leadgen: Number(flow.rows[0]?.lg_s ?? 0),
+    },
   });
 });

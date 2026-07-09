@@ -423,6 +423,12 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
                   <td colSpan={leadCols + weeks.length * perWeekCols} style={{ fontWeight: 700 }}>{avg > 0 ? formatAmount(avg) : "—"}</td>
                 </tr>
                 {wRow("⏳ Очікування (виставлено рахунків), ₴", expTotal, "#d97706", mw.map((w) => w.expected), true)}
+                {block.money.expected > 0 && (
+                  <tr>
+                    <td style={{ fontWeight: 600, color: "var(--text-muted)" }} title="Знімок: сума угод, що ЗАРАЗ на етапах погоджено/рахунок/авто працює — очікувані кошти менеджера">⏳ Зараз очікується (знімок), ₴</td>
+                    <td colSpan={leadCols + weeks.length * perWeekCols} style={{ fontWeight: 700, color: "#d97706" }}>{formatAmount(block.money.expected)}</td>
+                  </tr>
+                )}
                 {(block.money.carryover > 0) && (
                   <tr>
                     <td style={{ fontWeight: 600 }}>↪️ Перенесені з мин. міс., ₴</td>

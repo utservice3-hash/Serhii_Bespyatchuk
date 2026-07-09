@@ -338,6 +338,8 @@ export interface KvpExtra {
   ad: { revenue: number; dispatched: number; dispatchedSum: number };
   leadgen: { revenue: number; dispatched: number; dispatchedSum: number };
   managersCount: number;
+  /** Потік за період (надійшло В період, за подіями) — для тижневих зрізів. */
+  flow: { received: number; ad: number; leadgen: number };
 }
 export async function fetchKvpExtra(params: { from?: string; to?: string }): Promise<KvpExtra> {
   const { data } = await api.get<KvpExtra>("/dashboard/kvp-extra", { params });

@@ -100,12 +100,15 @@ type Metric = {
   flow: boolean;               // true = сумується/має темп; false = знімок
   editable?: boolean;          // редагований stored-план
   weekly?: boolean;            // false → не показувати в тижневому блоці (знімки)
+  weeklyGet?: (b: Block) => number; // потокове значення для ТИЖНЕВИХ зрізів (без знімка)
   hint?: string;
 };
+/** Значення метрики для тижневого зрізу: потік, якщо є (гроші), інакше звичайний get. */
+const wget = (m: Metric, b: Block) => (m.weeklyGet ?? m.get)(b);
 
 const METRICS: Metric[] = [
   // 💰 Дохід
-  { key: "received", label: "Отримані кошти", unit: "money", group: "💰 Дохід", get: (b) => b.ov.fact, planKind: "revenue", flow: true, hint: HINTS.received },
+  { key: "received", label: "Отримані кошти", unit: "money", group: "💰 Дохід", get: (b) => b.ov.fact, weeklyGet: (b) => b.ex.flow?.received ?? b.ov.fact, planKind: "revenue", flow: true, hint: HINTS.received },
   { key: "success", label: "Дохід успішно закритих угод", unit: "money", group: "💰 Дохід", get: (b) => b.ov.successRevenue, planKind: "success", flow: true, editable: true, hint: HINTS.success },
   { key: "payment", label: "Оплата отримана (знімок)", unit: "money", group: "💰 Дохід", get: (b) => b.ov.paymentRevenue, planKind: null, flow: false, weekly: false, hint: HINTS.payment },
   { key: "pending", label: "⏳ Очікувані оплати", unit: "money", group: "💰 Дохід", get: (b) => b.ov.pendingPayments?.revenue ?? 0, planKind: null, flow: false, weekly: false, hint: HINTS.pending },
@@ -129,7 +132,7 @@ const METRICS: Metric[] = [
   { key: "adGaLeads", label: "Заявки з реклами (GA)", unit: "num", group: "🎯 Реклама", get: (b) => b.lq.adBudgetLeads, planKind: null, flow: true, hint: HINTS.adGaLeads },
   { key: "adLeads", label: "К-ть лідів з реклами (CRM)", unit: "num", group: "🎯 Реклама", get: (b) => b.ov.adConversion.leads, planKind: "ad_leads", flow: true, editable: true, hint: HINTS.adLeads },
   { key: "nonTarget", label: "К-ть не цільових лідів", unit: "num", group: "🎯 Реклама", get: (b) => b.lq.nonTargetLeads, planKind: "nontarget_leads", flow: true, editable: true, hint: HINTS.nonTarget },
-  { key: "adRevenue", label: "Дохід з реклами", unit: "money", group: "🎯 Реклама", get: (b) => b.ex.ad.revenue, planKind: "ad_revenue", flow: true, editable: true, hint: HINTS.adRevenue },
+  { key: "adRevenue", label: "Дохід з реклами", unit: "money", group: "🎯 Реклама", get: (b) => b.ex.ad.revenue, weeklyGet: (b) => b.ex.flow?.ad ?? b.ex.ad.revenue, planKind: "ad_revenue", flow: true, editable: true, hint: HINTS.adRevenue },
   { key: "adDispatched", label: "Поставлені машини з реклами", unit: "num", group: "🎯 Реклама", get: (b) => b.ex.ad.dispatched, planKind: "ad_dispatched", flow: true, editable: true, hint: HINTS.adDispatched },
   { key: "adPaid", label: "Оплачено з реклами", unit: "num", group: "🎯 Реклама", get: (b) => b.ov.adConversion.paid, planKind: null, flow: true, hint: HINTS.adPaid },
   { key: "adAvg", label: "Середній чек реклами", unit: "moneyFull", group: "🎯 Реклама", get: (b) => (b.ov.adConversion.paid > 0 ? Math.round(b.ex.ad.revenue / b.ov.adConversion.paid) : 0), planKind: "ad_avg_check", flow: false, editable: true, hint: HINTS.adAvg },
@@ -138,7 +141,7 @@ const METRICS: Metric[] = [
   // 📞 Лідогенератори
   { key: "transferred", label: "Передані заявки", unit: "num", group: "📞 Лідогенератори", get: (b) => b.ov.transferred.total, planKind: "transferred", flow: true, editable: true, hint: HINTS.transferred },
   { key: "transferSuccess", label: "Успішно з переданих", unit: "num", group: "📞 Лідогенератори", get: (b) => b.ov.transferred.success, planKind: "transfer_success", flow: true, editable: true, hint: HINTS.transferSuccess },
-  { key: "lgRevenue", label: "Дохід з лідогену", unit: "money", group: "📞 Лідогенератори", get: (b) => b.ex.leadgen.revenue, planKind: "leadgen_revenue", flow: true, editable: true, hint: HINTS.lgRevenue },
+  { key: "lgRevenue", label: "Дохід з лідогену", unit: "money", group: "📞 Лідогенератори", get: (b) => b.ex.leadgen.revenue, weeklyGet: (b) => b.ex.flow?.leadgen ?? b.ex.leadgen.revenue, planKind: "leadgen_revenue", flow: true, editable: true, hint: HINTS.lgRevenue },
   { key: "lgDispatched", label: "Поставлені машини з лідогену", unit: "num", group: "📞 Лідогенератори", get: (b) => b.ex.leadgen.dispatched, planKind: "leadgen_dispatched", flow: true, editable: true, hint: HINTS.lgDispatched },
   { key: "leadgenConv", label: "Конверсія лідогену", unit: "pct", group: "📞 Лідогенератори", get: (b) => b.ov.leadgenConversion.conversion, planKind: "leadgen_conversion", flow: false, editable: true, hint: HINTS.leadgenConv },
 ];
@@ -479,18 +482,20 @@ function TeamWeeklyDetail({ teamId, month, teamPlan }: {
   );
 }
 
-function TeamMatrix({ prev, cur, plans, ratio, isMonth, onSave, month }: {
+function TeamMatrix({ prev, cur, plans, ratio, isMonth, onSave, month, teamWeekFact, teamWeekPlanOf }: {
   prev: ExecutiveOverview; cur: ExecutiveOverview; plans: KvpPlans;
   ratio: number | null; isMonth: boolean;
   onSave: (metric: string, v: number | null) => void;
   month: string;
+  teamWeekFact?: Map<number, number>;
+  teamWeekPlanOf?: (teamId: number) => number | null;
 }) {
   const prevByTeam = new Map(prev.byTeam.map((t) => [t.teamId, t]));
   const rows = [...cur.byTeam].sort((a, b) => b.revenue - a.revenue);
   const [openTeam, setOpenTeam] = useState<number | null>(null);
   if (rows.length === 0) return null;
   const maxRev = Math.max(...rows.map((t) => t.revenue), 1);
-  const nCols = isMonth ? 10 : 7;
+  const nCols = isMonth ? 11 : 7;
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="data-table compact" style={{ minWidth: isMonth ? 860 : 620 }}>
@@ -502,6 +507,7 @@ function TeamMatrix({ prev, cur, plans, ratio, isMonth, onSave, month }: {
           {isMonth && <th style={{ textAlign: "right" }}>План міс</th>}
           {isMonth && <th style={{ textAlign: "right" }}>Викон. %</th>}
           {isMonth && <th style={{ textAlign: "right" }}>Залишок</th>}
+          {isMonth && <th style={{ textAlign: "right" }}>🗓 Тиждень:<br />викон. %<InfoHint text="Факт поточного тижня (кошти, що надійшли В тиждень, за подіями CRM) ÷ тижневий план команди (місячний × частка робочих днів тижня). Головний операційний вимір." /></th>}
           <th style={{ textAlign: "right" }}>Динаміка*</th>
           <th style={{ textAlign: "right" }}>Угод</th><th style={{ textAlign: "right" }}>Сер. чек</th>
         </tr></thead>
@@ -538,6 +544,21 @@ function TeamMatrix({ prev, cur, plans, ratio, isMonth, onSave, month }: {
                         : <span style={{ color: AMBER }}>{formatAmount(p.left)}</span>}
                     </td>
                   )}
+                  {isMonth && (() => {
+                    const wf = teamWeekFact?.get(t.teamId) ?? 0;
+                    const wp = teamWeekPlanOf?.(t.teamId) ?? null;
+                    if (wp == null) return <td style={{ textAlign: "right", color: MUTED }}>—</td>;
+                    const wpct = Math.round((wf / wp) * 100);
+                    const wlag = Math.max(0, wp - wf);
+                    return (
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <span style={{ fontWeight: 700, color: pctColor(wpct) }}>{wpct}%</span>
+                        {wlag > 0
+                          ? <span style={{ color: RED, fontSize: 11 }}> · −{formatAmount(wlag)}</span>
+                          : <span style={{ color: GREEN }}> ✓</span>}
+                      </td>
+                    );
+                  })()}
                   <td style={{ textAlign: "right" }}><Delta prev={pv?.revenue ?? 0} cur={t.revenue} /></td>
                   <td style={{ textAlign: "right" }}>{t.deals}</td>
                   <td style={{ textAlign: "right" }}>{formatAmount(avg)}</td>
@@ -629,7 +650,8 @@ function WeeklyMatrix({ prevB, curB, prevRange, curRange, monthPlanOf, teamMonth
             <Fragment key={g}>
               <tr><td colSpan={7} style={{ fontWeight: 700, background: "var(--bg-subtle, rgba(127,127,127,0.08))", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em" }}>{g}</td></tr>
               {rows.filter((m) => m.group === g).map((m) =>
-                renderRow(m.label, m.unit, m.get(prevB), m.get(curB), weekPlan(m, "cur"), m.hint))}
+                renderRow(m.label, m.unit, wget(m, prevB), wget(m, curB), weekPlan(m, "cur"),
+                  m.weeklyGet ? "Потік тижня: кошти, що ВПЕРШЕ надійшли в цьому тижні (за подіями CRM, без знімка «зараз в оплаті»)." : m.hint))}
             </Fragment>
           ))}
           {teams.length > 0 && (
@@ -789,7 +811,7 @@ function WeeklyBreakdown({ weeks, blocks }: { weeks: Range[]; blocks: Block[] })
           <th style={{ textAlign: "right" }}>Разом</th></tr></thead>
         <tbody>
           {summable.map((m) => {
-            const vals = blocks.map((b) => m.get(b));
+            const vals = blocks.map((b) => wget(m, b));
             const total = vals.reduce((s, v) => s + v, 0);
             return (<tr key={m.key}><td style={{ textAlign: "left" }}>{m.label}</td>
               {vals.map((v, i) => (<td key={i} style={{ textAlign: "right" }}>{fmtVal(v, m.unit)}</td>))}
@@ -958,8 +980,35 @@ export function KvpReportSection() {
   const teamMonthPlan = (teamId: number, which: "cur" | "prev"): number | null =>
     (which === "cur" ? plans : plansPrev)[`team_revenue_${teamId}`] ?? null;
 
+  // Потік грошей по тижнях (відділ + по менеджерах) — з /funnel-weekly: кошти,
+  // що ВПЕРШЕ надійшли в тижні (без знімка). Мапа менеджер→команда — з plans-grid.
+  const [fwDept, setFwDept] = useState<FunnelWeeklyReport | null>(null);
+  const [gridAll, setGridAll] = useState<PlansGrid | null>(null);
+  useEffect(() => {
+    if (rangeMode) { setFwDept(null); return; }
+    let alive = true;
+    fetchFunnelWeekly({ month: monthSel }).then((r) => { if (alive) setFwDept(r); }).catch(() => { if (alive) setFwDept(null); });
+    fetchPlansGrid(monthSel).then((r) => { if (alive) setGridAll(r); }).catch(() => { if (alive) setGridAll(null); });
+    return () => { alive = false; };
+  }, [monthSel, rangeMode]);
+  const todayIso = ymd(new Date());
+  const fwIdx = fwDept ? fwDept.weeks.findIndex((w) => w.from <= todayIso && todayIso <= w.to) : -1;
+  // Факт поточного тижня по командах (сума потоків менеджерів команди).
+  const teamWeekFact = (() => {
+    const m2t = new Map<number, number>();
+    gridAll?.teams.forEach((t) => t.managers.forEach((mg) => m2t.set(mg.managerId, t.teamId)));
+    const out = new Map<number, number>();
+    if (fwDept && fwIdx >= 0) for (const bm of fwDept.byManager) {
+      const tid = m2t.get(bm.managerId);
+      if (tid == null) continue;
+      out.set(tid, (out.get(tid) ?? 0) + (bm.money.weeks[fwIdx]?.fact ?? 0));
+    }
+    return out;
+  })();
+
   // ГОЛОВНИЙ ВИМІР — ТИЖДЕНЬ: план тижня = місячний план × частка робочих днів
-  // (крос-місячні тижні беруть частки з обох місяців), факт тижня — з тижневого блоку.
+  // (крос-місячні тижні беруть частки з обох місяців). Факт грошей — чистий
+  // ПОТІК тижня (надійшло В тиждень), не знімок.
   const weekStats = (!rangeMode && data?.curWeek) ? (() => {
     const wr = setup.ratios.cur;
     const wp = (mp: number | null, pp: number | null) => {
@@ -969,10 +1018,18 @@ export function KvpReportSection() {
     const revCur = data.monthCur.ov.planMonthTotal || plans.received_total || null;
     const revPrev = data.monthPrev.ov.planMonthTotal || plansPrev.received_total || null;
     return {
-      received: { fact: data.curWeek.ov.fact, plan: wp(revCur, revPrev) },
+      received: { fact: data.curWeek.ex.flow?.received ?? data.curWeek.ov.fact, plan: wp(revCur, revPrev) },
       dispatched: { fact: data.curWeek.ex.dispatched.count, plan: wp(plans.dispatched_cars ?? null, plansPrev.dispatched_cars ?? null) },
     };
   })() : null;
+  // Тижневий план команди (крос-місячні частки з планів обох місяців).
+  const teamWeekPlanOf = (teamId: number): number | null => {
+    const wr = setup.ratios.cur;
+    const pc = plans[`team_revenue_${teamId}`] ?? null;
+    const pp = plansPrev[`team_revenue_${teamId}`] ?? null;
+    const v = (pc ?? 0) * wr.inCur + (pp ?? 0) * wr.inPrev;
+    return v > 0 ? Math.round(v) : null;
+  };
 
   return (
     <>
@@ -1041,7 +1098,7 @@ export function KvpReportSection() {
             <h2 className="chart-title">🏅 Команди — план / факт (РПК · РНК)</h2>
             <p style={{ fontSize: 12, color: MUTED, margin: "0 0 8px" }}>Клік по команді — тижнева розкладка плану/факту + цифри по кожному менеджеру.</p>
             <TeamMatrix prev={activePrev.ov} cur={active.ov} plans={plans} ratio={ratio} isMonth={!rangeMode}
-              onSave={onSavePlan} month={monthSel} />
+              onSave={onSavePlan} month={monthSel} teamWeekFact={teamWeekFact} teamWeekPlanOf={teamWeekPlanOf} />
           </div>
 
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16, marginBottom: 16 }}>
