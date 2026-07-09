@@ -15,6 +15,7 @@ import { formatAmount, formatAmountFull } from "../format";
 import { InfoHint } from "../widgets";
 import { DailyProductivityCard } from "./DailyProductivityCard";
 import { StuckDealsCard } from "./StuckDealsCard";
+import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ReactivationGrid } from "./ReactivationGrid";
 
 const STATUS_LBL: Record<string, string> = {
@@ -648,6 +649,13 @@ export function ReportSection({
           teamId={reportTeamId ? Number(reportTeamId) : undefined}
         />
       )}
+
+      <ResponseTimeCard
+        from={dateRange.from}
+        to={dateRange.to}
+        managerId={canPickManager && reportManagerId ? Number(reportManagerId) : undefined}
+        teamId={canPickManager && reportTeamId ? Number(reportTeamId) : undefined}
+      />
 
       {/* Реактивація: менеджер бачить своїх, тімлід — команду / обраного менеджера. */}
       {!canPickManager && <ReactivationGrid readOnly title="🔄 Мої клієнти в реактивації" />}

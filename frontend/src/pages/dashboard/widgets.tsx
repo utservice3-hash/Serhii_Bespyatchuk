@@ -175,7 +175,8 @@ export function InfoHint({ text }: { text: string }) {
   );
 }
 
-export function ForecastBadge({ forecast }: { forecast: { status: string; projectedPct: number } }) {
+export function ForecastBadge({ forecast }: { forecast?: { status: string; projectedPct: number } | null }) {
+  if (!forecast) return <span style={{ color: "var(--text-muted)", fontSize: 12 }}>—</span>;
   return (
     <span
       style={{

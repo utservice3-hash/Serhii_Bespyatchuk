@@ -2381,6 +2381,80 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
 });
 
 /**
+ * Середній час опрацювання заявки: від появи ліда в Кваліфікації (дата створення)
+ * до моменту, коли менеджер ВЗЯВ відповідального (перша подія
+ * entity_responsible_changed = lead_transfer_events). Розбито за часом ПРИХОДУ
+ * заявки (за Києвом): робочий 9–18, вечір 18–21, ніч 21–9, вихідний. Роль-скоуп.
+ */
+dashboardRouter.get("/response-time", async (req, res) => {
+  const auth = req.auth!;
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const from = (req.query.from as string) || new Date().toISOString().slice(0, 8) + "01";
+  const to = (req.query.to as string) || new Date().toISOString().slice(0, 10);
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") teamId = auth.teamId;
+
+  const params: unknown[] = [[8921928, 7336928], from, to];
+  const conds = ["d.pipeline_id = ANY($1)", `(d.created_at_kommo ${KYIV})::date BETWEEN $2 AND $3`];
+  if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+
+  const r = await pool.query<{ bucket: string; n: string; avg_min: string | null; median_min: string | null }>(
+    `WITH quals AS (
+       SELECT d.kommo_id, d.created_at_kommo
+       FROM deals d JOIN managers m ON m.id = d.manager_id
+       WHERE ${conds.join(" AND ")}
+     ),
+     taken AS (
+       SELECT kommo_id, MIN(changed_at) AS taken_at FROM lead_transfer_events GROUP BY kommo_id
+     ),
+     resp AS (
+       SELECT q.created_at_kommo,
+              EXTRACT(EPOCH FROM (t.taken_at - q.created_at_kommo)) / 60.0 AS minutes,
+              EXTRACT(DOW  FROM (q.created_at_kommo ${KYIV})) AS dow,
+              EXTRACT(HOUR FROM (q.created_at_kommo ${KYIV})) AS hr
+       FROM quals q JOIN taken t ON t.kommo_id = q.kommo_id
+       WHERE t.taken_at >= q.created_at_kommo
+     ),
+     bucketed AS (
+       SELECT CASE
+                WHEN dow IN (0, 6) THEN 'weekend'
+                WHEN hr >= 9 AND hr < 18 THEN 'work'
+                WHEN hr >= 18 AND hr < 21 THEN 'evening'
+                ELSE 'night' END AS bucket,
+              minutes
+       FROM resp
+     )
+     SELECT bucket, COUNT(*) AS n, AVG(minutes) AS avg_min,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min
+     FROM bucketed GROUP BY bucket`,
+    params
+  );
+  const LABELS: Record<string, { label: string; hint: string }> = {
+    work: { label: "🟢 Робочий (9–18)", hint: "Заявки, що надійшли в робочий час пн–пт 9:00–18:00" },
+    evening: { label: "🟡 Вечір (18–21)", hint: "Заявки пн–пт 18:00–21:00" },
+    night: { label: "🌙 Ніч (21–9)", hint: "Заявки пн–пт 21:00–09:00" },
+    weekend: { label: "🔴 Вихідний", hint: "Заявки в суботу/неділю" },
+  };
+  const map = new Map(r.rows.map((x) => [x.bucket, x]));
+  const buckets = ["work", "evening", "night", "weekend"].map((k) => {
+    const x = map.get(k);
+    return {
+      key: k, label: LABELS[k].label, hint: LABELS[k].hint,
+      count: x ? Number(x.n) : 0,
+      avgMin: x?.avg_min != null ? Math.round(Number(x.avg_min)) : null,
+      medianMin: x?.median_min != null ? Math.round(Number(x.median_min)) : null,
+    };
+  });
+  const totalN = buckets.reduce((s, b) => s + b.count, 0);
+  const overallAvg = totalN > 0
+    ? Math.round(buckets.reduce((s, b) => s + (b.avgMin ?? 0) * b.count, 0) / totalN) : null;
+  res.json({ from, to, buckets, totalCount: totalN, overallAvgMin: overallAvg });
+});
+
+/**
  * «Очікування» — deals currently sitting at the "Виставлено рахунок" (invoiced)
  * stage: bills issued, payment expected (not yet «Оплата отримана»/won). A live
  * snapshot per manager. Role-scoped. Used in the Managers and Report tabs.

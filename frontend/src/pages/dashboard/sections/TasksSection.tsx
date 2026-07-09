@@ -270,7 +270,7 @@ export function TasksSection({
                   switch (sortBy) {
                     case "deadline": cmp = (a.deadline ?? "9999-99-99").localeCompare(b.deadline ?? "9999-99-99"); break;
                     case "priority": cmp = (prioRank[a.priority] ?? 9) - (prioRank[b.priority] ?? 9); break;
-                    case "status": cmp = a.status.localeCompare(b.status); break;
+                    case "status": cmp = (a.status ?? "").localeCompare(b.status ?? ""); break;
                     case "assignee": cmp = (a.assigneeName ?? "").localeCompare(b.assigneeName ?? "", "uk"); break;
                     case "title": cmp = (a.title ?? "").localeCompare(b.title ?? "", "uk"); break;
                     default: cmp = (a.createdAt ?? "").localeCompare(b.createdAt ?? ""); break;

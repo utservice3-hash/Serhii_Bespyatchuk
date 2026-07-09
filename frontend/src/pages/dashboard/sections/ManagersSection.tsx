@@ -89,7 +89,7 @@ export function ManagersSection({
               </thead>
               <tbody>
                 {managerRows.map((manager) => {
-                  const f = manager.forecast;
+                  const f = manager.forecast ?? { plan: 0, fact: 0, remaining: 0, projected: 0, projectedPct: 0, status: "no_plan" as const };
                   return (
                     <tr
                       key={manager.id}
@@ -113,9 +113,9 @@ export function ManagersSection({
                 {managerRows.length > 1 && (
                   <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 700 }}>
                     <td>Разом</td>
-                    <td>{formatAmount(managerRows.reduce((s, m) => s + m.forecast.plan, 0))}</td>
-                    <td>{formatAmount(managerRows.reduce((s, m) => s + m.forecast.fact, 0))}</td>
-                    <td>{formatAmount(managerRows.reduce((s, m) => s + m.forecast.remaining, 0))}</td>
+                    <td>{formatAmount(managerRows.reduce((s, m) => s + (m.forecast?.plan ?? 0), 0))}</td>
+                    <td>{formatAmount(managerRows.reduce((s, m) => s + (m.forecast?.fact ?? 0), 0))}</td>
+                    <td>{formatAmount(managerRows.reduce((s, m) => s + (m.forecast?.remaining ?? 0), 0))}</td>
                     <td style={{ color: "#d97706" }}>{formatAmount(managerRows.reduce((s, m) => s + m.expected, 0))}</td>
                     <td></td>
                   </tr>

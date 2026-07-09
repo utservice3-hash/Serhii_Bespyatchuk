@@ -346,6 +346,31 @@ export async function fetchKvpExtra(params: { from?: string; to?: string }): Pro
   return data;
 }
 
+export interface ResponseTimeBucket {
+  key: string;
+  label: string;
+  hint: string;
+  count: number;
+  avgMin: number | null;
+  medianMin: number | null;
+}
+export interface ResponseTime {
+  from: string;
+  to: string;
+  buckets: ResponseTimeBucket[];
+  totalCount: number;
+  overallAvgMin: number | null;
+}
+export async function fetchResponseTime(params: {
+  from?: string;
+  to?: string;
+  managerId?: number;
+  teamId?: number;
+}): Promise<ResponseTime> {
+  const { data } = await api.get<ResponseTime>("/dashboard/response-time", { params });
+  return data;
+}
+
 export interface Team {
   id: number;
   name: string;

@@ -998,7 +998,7 @@ export function Dashboard() {
       role={auth?.role}
       messengerUnread={chatUnread}
     >
-      <ErrorBoundary resetKey={`${section}:${teamId}:${selectedManagerId}:${dateRange.from}:${dateRange.to}`}>
+      <ErrorBoundary resetKey={`${section}:${teamId}:${selectedManagerId}:${dateRange.from}:${dateRange.to}:${refreshNonce}`}>
       {section === "overview" && (
         <OverviewSection
           isManager={auth?.role === "manager"}
