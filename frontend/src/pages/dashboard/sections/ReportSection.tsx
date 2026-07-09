@@ -388,7 +388,18 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
             return (
               <>
                 {hasMoneyPlan && wRow("💰 План оплат, ₴", block.money.planMonth, "var(--text-muted)", mw.map((w) => w.plan), true, true)}
-                {wRow("💰 Сума оплат (факт), ₴", paidTotal, "#16a34a", mw.map((w) => w.fact), !hasMoneyPlan)}
+                <tr>
+                  <td style={{ fontWeight: 600, borderTop: !hasMoneyPlan ? "2px solid var(--border)" : undefined }}>💰 Сума оплат (факт), ₴</td>
+                  <td colSpan={leadCols} style={{ fontWeight: 700, color: "#16a34a", borderTop: !hasMoneyPlan ? "2px solid var(--border)" : undefined }}>
+                    {paidTotal ? formatAmount(paidTotal) : "—"}
+                    {block.money.received > paidTotal && (
+                      <span style={{ display: "block", fontWeight: 400, fontSize: 10, color: "var(--text-muted)" }} title="Знімок етапу «Оплата отримана» + «Успішно» зараз — включно з оплатами минулих місяців, що ще не закриті в «Успішно»">
+                        зараз в оплаті: {formatAmount(block.money.received)}
+                      </span>
+                    )}
+                  </td>
+                  {mw.map((w, wi) => weekCell(wi, w.fact ? formatAmount(w.fact) : "—", { fontWeight: w.fact ? 700 : 400, borderTop: !hasMoneyPlan ? "2px solid var(--border)" : undefined }))}
+                </tr>
                 {hasMoneyPlan && (
                   <tr>
                     <td style={{ fontWeight: 600 }}>💰 Викон. плану % · відставання</td>
