@@ -25,14 +25,13 @@ _rate_lock = threading.Lock()
 _last_request_ts = 0.0
 _current_interval = _BASE_INTERVAL
 
-# ⏸ ТИМЧАСОВА ПАУЗА СИНХРОНІЗАЦІЇ З KOMMO (на прохання, до ранку).
-# Поки увімкнено — ЖОДЕН вихідний запит до Kommo API не йде: сесія одразу
-# віддає синтетичний 503, і вся наявна логіка бачить це як «немає даних /
-# запит не вдався» (get_lead→None, PATCH→False, get_pipeline_leads→[]) без
-# винятків. Вебхуки Kommo при цьому теж не обробляються (див. app.py webhook()).
-# ВІДНОВЛЕННЯ: постав env KOMMO_SYNC_PAUSED=0 (Render перезапуститься сам) АБО
-# поміняй дефолт нижче на "0"/прибери цей блок і задеплой.
-SYNC_PAUSED = os.getenv("KOMMO_SYNC_PAUSED", "1") == "1"
+# 🔌 Kill-switch синхронізації з Kommo. За замовчуванням ВИМКНЕНО (SYNC_PAUSED
+# = False) — бот працює нормально. Щоб МИТТЄВО зупинити всю синхронізацію без
+# деплою, постав env KOMMO_SYNC_PAUSED=1: _ThrottledSession почне віддавати
+# синтетичний 503 замість реальних запитів, і вся логіка побачить це як «немає
+# даних» (get_lead→None, PATCH→False, get_pipeline_leads→[]) без винятків, а
+# вебхуки Kommo прийматимуться з 200 без обробки (див. app.py webhook()).
+SYNC_PAUSED = os.getenv("KOMMO_SYNC_PAUSED", "0") == "1"
 
 
 def _paused_response():
