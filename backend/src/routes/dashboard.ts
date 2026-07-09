@@ -685,8 +685,8 @@ dashboardRouter.get("/overview", async (req, res) => {
   const trConds: string[] = ["t.name NOT ILIKE '%лідоген%'"];
   if (managerId) { trParams.push(managerId); trConds.push(`d.manager_id = $${trParams.length}`); }
   if (teamId) { trParams.push(teamId); trConds.push(`m.team_id = $${trParams.length}`); }
-  if (from) { trParams.push(from); trConds.push(`(lte.changed_at AT TIME ZONE 'Europe/Kyiv')::date >= $${trParams.length}`); }
-  if (to) { trParams.push(to); trConds.push(`(lte.changed_at AT TIME ZONE 'Europe/Kyiv')::date <= $${trParams.length}`); }
+  if (from) { trParams.push(from); trConds.push(`(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date >= $${trParams.length}`); }
+  if (to) { trParams.push(to); trConds.push(`(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date <= $${trParams.length}`); }
   const trWhere = trConds.join(" AND ");
   // Counts: transferred leads and, of them, how many whose client won a full-cycle deal.
   const transferredRes = await pool.query<{ team_id: number; team_name: string; transferred: string; success: string }>(
@@ -697,9 +697,11 @@ dashboardRouter.get("/overview", async (req, res) => {
          AND (d.status_id = 142 OR psm.funnel_stage = 'paid')
      ),
      tl AS (
-       SELECT DISTINCT lte.kommo_id, d.client_key, t.id AS team_id, t.name AS team_name
-       FROM lead_transfer_events lte
-       JOIN deals d ON d.kommo_id = lte.kommo_id
+       -- «Реєстр» лідоген-бота — джерело правди для переданих (НЕ lead_transfer_events,
+       -- який рахує кожну зміну відповідального і завищує в рази).
+       SELECT DISTINCT lr.lead_id AS kommo_id, d.client_key, t.id AS team_id, t.name AS team_name
+       FROM leadgen_registry lr
+       JOIN deals d ON d.kommo_id = lr.lead_id
        JOIN managers m ON m.id = d.manager_id
        JOIN teams t ON t.id = m.team_id
        WHERE ${trWhere}
@@ -719,8 +721,8 @@ dashboardRouter.get("/overview", async (req, res) => {
      ),
      tlc AS (
        SELECT DISTINCT d.client_key, t.id AS team_id
-       FROM lead_transfer_events lte
-       JOIN deals d ON d.kommo_id = lte.kommo_id
+       FROM leadgen_registry lr
+       JOIN deals d ON d.kommo_id = lr.lead_id
        JOIN managers m ON m.id = d.manager_id
        JOIN teams t ON t.id = m.team_id
        WHERE ${trWhere} AND d.client_key IS NOT NULL
