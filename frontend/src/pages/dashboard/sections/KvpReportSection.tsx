@@ -185,13 +185,14 @@ function Spark({ values, w = 84, h = 24 }: { values: number[]; w?: number; h?: n
 }
 
 // ── HERO KPI-стрічка ──────────────────────────────────────────────────
-function HeroStrip({ b, plans, ratio }: { b: Block; plans: KvpPlans; ratio: number | null }) {
+type WeekStat = { fact: number; plan: number | null };
+function HeroStrip({ b, plans, ratio, weekStats }: { b: Block; plans: KvpPlans; ratio: number | null; weekStats?: { received: WeekStat; dispatched: WeekStat } | null }) {
   const o = b.ov;
   const hist = o.monthlyHistory ?? [];
   const revPlan = o.planMonthTotal || plans.received_total || o.plan || null;
-  const tiles: { label: string; fact: number; unit: Unit; plan: number | null; flow: boolean; series: number[]; sub?: string }[] = [
-    { label: "Отримані кошти", fact: o.fact, unit: "money", plan: revPlan, flow: true, series: hist.map((m) => m.revenue) },
-    { label: "Поставлені машини", fact: b.ex.dispatched.count, unit: "num", plan: plans.dispatched_cars ?? null, flow: true, series: hist.map((m) => m.paid) },
+  const tiles: { label: string; fact: number; unit: Unit; plan: number | null; flow: boolean; series: number[]; sub?: string; week?: WeekStat }[] = [
+    { label: "Отримані кошти", fact: o.fact, unit: "money", plan: revPlan, flow: true, series: hist.map((m) => m.revenue), week: weekStats?.received },
+    { label: "Поставлені машини", fact: b.ex.dispatched.count, unit: "num", plan: plans.dispatched_cars ?? null, flow: true, series: hist.map((m) => m.paid), week: weekStats?.dispatched },
     { label: "⏳ Очікувані оплати", fact: o.pendingPayments?.revenue ?? 0, unit: "money", plan: null, flow: false, series: [], sub: `${o.pendingPayments?.deals ?? 0} виставлених рахунків` },
     { label: "Конверсія реклами", fact: o.adConversion.conversion, unit: "pct", plan: plans.ad_conversion ?? null, flow: false, series: hist.map((m) => m.adConversion) },
     { label: "Середній чек", fact: avgCheck(o), unit: "moneyFull", plan: plans.avg_check ?? null, flow: false, series: hist.map((m) => m.avgCheck) },
@@ -227,6 +228,20 @@ function HeroStrip({ b, plans, ratio }: { b: Block; plans: KvpPlans; ratio: numb
             ) : (
               <span style={{ fontSize: 11, color: MUTED }}>{t.sub ?? "ціль не задана — постав у матриці ✏️"}</span>
             )}
+            {t.week && (
+              <div style={{ fontSize: 11, marginTop: 5, paddingTop: 5, borderTop: "1px dashed var(--border)", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "baseline" }}>
+                <span style={{ color: MUTED }}>🗓 тиждень:</span>
+                <b>{fmtVal(t.week.fact, t.unit)}</b>
+                {t.week.plan != null && (
+                  <>
+                    <span style={{ color: MUTED }}>із {fmtVal(t.week.plan, t.unit)}</span>
+                    {t.week.fact >= t.week.plan
+                      ? <span style={{ color: GREEN, fontWeight: 700 }}>✓</span>
+                      : <span style={{ color: RED, fontWeight: 700 }}>−{fmtVal(t.week.plan - t.week.fact, t.unit)}</span>}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
@@ -234,13 +249,17 @@ function HeroStrip({ b, plans, ratio }: { b: Block; plans: KvpPlans; ratio: numb
   );
 }
 
-// ── Смуга сигналів ────────────────────────────────────────────────────
-function AlertsBar({ o, planToday }: { o: ExecutiveOverview; planToday: number | null }) {
+// ── Смуга сигналів (головний вимір — ТИЖДЕНЬ) ─────────────────────────
+function AlertsBar({ o, planToday, week }: { o: ExecutiveOverview; planToday: number | null; week?: WeekStat | null }) {
   const chips: { text: string; color: string }[] = [];
+  if (week?.plan != null) {
+    if (week.fact < week.plan) chips.push({ text: `🗓 Тиждень позаду на ${formatAmount(week.plan - week.fact)}`, color: RED });
+    else chips.push({ text: `✅ Тижневий план виконується (+${formatAmount(week.fact - week.plan)})`, color: GREEN });
+  }
   if (o.receivablesTotal > 0) chips.push({ text: `💰 Дебіторка ${formatAmount(o.receivablesTotal)}`, color: RED });
   if ((o.pendingPayments?.revenue ?? 0) > 0) chips.push({ text: `⏳ Очікувані оплати ${formatAmount(o.pendingPayments.revenue)}`, color: AMBER });
-  if (planToday != null && o.fact < planToday) chips.push({ text: `📉 План позаду на ${formatAmount(planToday - o.fact)}`, color: RED });
-  else if (planToday != null && o.fact >= planToday) chips.push({ text: `✅ Темп у нормі`, color: GREEN });
+  if (planToday != null && o.fact < planToday) chips.push({ text: `📉 Місячний графік позаду на ${formatAmount(planToday - o.fact)}`, color: AMBER });
+  else if (planToday != null && o.fact >= planToday) chips.push({ text: `✅ Місячний темп у нормі`, color: GREEN });
   if ((o.carryover?.amount ?? 0) > 0) chips.push({ text: `↪️ Перенесено ${formatAmount(o.carryover?.amount ?? 0)}`, color: MUTED });
   if (chips.length === 0) return null;
   return (
@@ -850,6 +869,22 @@ export function KvpReportSection() {
   const teamMonthPlan = (teamId: number, which: "cur" | "prev"): number | null =>
     (which === "cur" ? plans : plansPrev)[`team_revenue_${teamId}`] ?? null;
 
+  // ГОЛОВНИЙ ВИМІР — ТИЖДЕНЬ: план тижня = місячний план × частка робочих днів
+  // (крос-місячні тижні беруть частки з обох місяців), факт тижня — з тижневого блоку.
+  const weekStats = (!rangeMode && data?.curWeek) ? (() => {
+    const wr = setup.ratios.cur;
+    const wp = (mp: number | null, pp: number | null) => {
+      const v = (mp ?? 0) * wr.inCur + (pp ?? 0) * wr.inPrev;
+      return v > 0 ? Math.round(v) : null;
+    };
+    const revCur = data.monthCur.ov.planMonthTotal || plans.received_total || null;
+    const revPrev = data.monthPrev.ov.planMonthTotal || plansPrev.received_total || null;
+    return {
+      received: { fact: data.curWeek.ov.fact, plan: wp(revCur, revPrev) },
+      dispatched: { fact: data.curWeek.ex.dispatched.count, plan: wp(plans.dispatched_cars ?? null, plansPrev.dispatched_cars ?? null) },
+    };
+  })() : null;
+
   return (
     <>
       <div className="page-header">
@@ -875,8 +910,9 @@ export function KvpReportSection() {
         </div>
       </div>
       <p style={{ fontSize: 13, color: MUTED, margin: "0 0 16px", maxWidth: 900 }}>
-        Структура ручного звіту КВП: факт і план минулого й поточного місяця, <b>Викон. плану %</b> = факт ÷ план місяця, <b>Залишок</b> — скільки ще до плану.
-        Плани, яких дашборд не знає, проставляй кліком по клітинці «✏️ план» (зберігаються по місяцях). <b>Динаміка (*)</b> — поточний vs попередній період.
+        <b>Головний вимір — тиждень:</b> місячний план розкладається на тижні за робочими днями, виконання й відставання міряються проти тижневого плану
+        (виконуєш тиждень → місяць складається сам). Місячна матриця нижче — стратегічний фон.
+        Плани, яких дашборд не знає, проставляй кліком «✏️ план» або кнопкою «📈 Плани з факту мин. міс.». <b>Динаміка (*)</b> — поточний vs попередній період.
       </p>
 
       {err && <p className="loading-text" style={{ color: RED }}>{err}</p>}
@@ -884,11 +920,25 @@ export function KvpReportSection() {
 
       {active && activePrev && (
         <>
-          <HeroStrip b={active} plans={plans} ratio={ratio} />
-          <AlertsBar o={active.ov} planToday={heroPlanToday} />
+          <HeroStrip b={active} plans={plans} ratio={ratio} weekStats={weekStats} />
+          <AlertsBar o={active.ov} planToday={heroPlanToday} week={weekStats?.received} />
+
+          {/* ГОЛОВНИЙ ВИМІР — тиждень: місячний план розкладено на тижні, міряємо тиждень
+              проти ТИЖНЕВОГО плану (а не проти великої місячної цілі). */}
+          {!rangeMode && data && data.curWeek && data.prevWeek && setup.curWeek && setup.prevWeek && (
+            <div className="chart-card" style={{ marginBottom: 16, borderTop: "3px solid #c5141c" }}>
+              <h2 className="chart-title">🎯 Тижневий вимір (головний): {dmy(setup.curWeek.from)}–{dmy(setup.curWeek.to)} vs {dmy(setup.prevWeek.from)}–{dmy(setup.prevWeek.to)}</h2>
+              <p style={{ fontSize: 12, color: MUTED, margin: "0 0 10px" }}>
+                Місячний план розкладено на тижні за робочими днями — виконання і відставання міряються ПРОТИ ТИЖНЕВОГО плану.
+                Виконуєш кожен тиждень → місяць складається сам. Календарні тижні Пн–Нд, як у ручному звіті.
+              </p>
+              <WeeklyMatrix prevB={data.prevWeek} curB={data.curWeek} prevRange={setup.prevWeek} curRange={setup.curWeek}
+                monthPlanOf={monthPlanOf} teamMonthPlan={teamMonthPlan} ratios={setup.ratios} />
+            </div>
+          )}
 
           <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title">📊 План / Факт — {rangeMode ? `${dmy(range.from)}–${dmy(range.to)}` : setup.monthLabel} {rangeMode ? `(vs ${dmy(rangePrev!.from)}–${dmy(rangePrev!.to)})` : "(vs минулий місяць)"}</h2>
+            <h2 className="chart-title">📊 Місяць (стратегічний фон) — {rangeMode ? `${dmy(range.from)}–${dmy(range.to)}` : setup.monthLabel} {rangeMode ? `(vs ${dmy(rangePrev!.from)}–${dmy(rangePrev!.to)})` : "(vs минулий місяць)"}</h2>
             <PlanFactMatrix
               prev={activePrev} cur={active}
               prevRange={rangeMode ? rangePrev! : setup.monthPrev}
@@ -902,15 +952,6 @@ export function KvpReportSection() {
             <h2 className="chart-title">🏅 Команди — план / факт (РПК · РНК)</h2>
             <TeamMatrix prev={activePrev.ov} cur={active.ov} plans={plans} plansPrev={plansPrev} ratio={ratio} isMonth={!rangeMode} onSave={onSavePlan} onSavePrev={onSavePlanPrev} />
           </div>
-
-          {!rangeMode && data && data.curWeek && data.prevWeek && setup.curWeek && setup.prevWeek && (
-            <div className="chart-card" style={{ marginBottom: 16 }}>
-              <h2 className="chart-title">🗓️ Тиждень: {dmy(setup.curWeek.from)}–{dmy(setup.curWeek.to)} vs {dmy(setup.prevWeek.from)}–{dmy(setup.prevWeek.to)}</h2>
-              <p style={{ fontSize: 12, color: MUTED, margin: "0 0 10px" }}>Календарні тижні Пн–Нд, як у ручному звіті. План тижня = місячний план × частка робочих днів тижня.</p>
-              <WeeklyMatrix prevB={data.prevWeek} curB={data.curWeek} prevRange={setup.prevWeek} curRange={setup.curWeek}
-                monthPlanOf={monthPlanOf} teamMonthPlan={teamMonthPlan} ratios={setup.ratios} />
-            </div>
-          )}
 
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16, marginBottom: 16 }}>
             <div className="chart-card"><h2 className="chart-title">💎 Якість виручки</h2><RevenueQuality o={active.ov} /></div>
