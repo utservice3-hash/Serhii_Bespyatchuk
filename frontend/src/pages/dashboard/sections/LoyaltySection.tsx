@@ -12,11 +12,34 @@ import {
 import type { AuthPayload } from "../../../auth";
 import {
   fetchRegularClients, fetchReactivation, addReactivationClient,
+  fetchLoyaltyOverrides, saveLoyaltyOverride, removeLoyaltyOverride, fetchManagerOptions,
   type LoyaltyManager, type LoyaltyDynamics, type RegularClient, type Team, type ReactivationClient,
+  type LoyaltyOverride, type ManagerOption,
 } from "../../../api";
 import { formatAmount } from "../format";
 import { RepeatPlanGrid } from "./RepeatPlanGrid";
 import { ReactivationGrid } from "./ReactivationGrid";
+
+/** Адмін-дії над постійним клієнтом: 🗑 прибрати · ↪ передати менеджеру. */
+function AdminClientActions({ clientKey, clientName, managers, onDone }: {
+  clientKey: string; clientName: string; managers: ManagerOption[]; onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const act = async (fn: () => Promise<void>) => { setBusy(true); try { await fn(); onDone(); } finally { setBusy(false); } };
+  return (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap" }}>
+      <button title="Прибрати з постійних" disabled={busy}
+        onClick={() => { if (confirm(`Прибрати «${clientName}» з постійних?`)) act(() => saveLoyaltyOverride({ clientKey, clientName, hidden: true })); }}
+        style={{ border: "none", background: "transparent", cursor: "pointer", color: "#dc2626", fontSize: 14 }}>🗑</button>
+      <select defaultValue="" disabled={busy} title="Передати іншому менеджеру"
+        onChange={(e) => { const v = e.target.value; if (v) act(() => saveLoyaltyOverride({ clientKey, clientName, pinnedManagerId: Number(v) })); e.target.value = ""; }}
+        style={{ fontSize: 11, maxWidth: 130 }}>
+        <option value="">↪ передати…</option>
+        {managers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+      </select>
+    </span>
+  );
+}
 
 /** Badge distinguishing a company regular (🏢, by name) from an individual
  * (👤, identified by phone) — so the list reads unambiguously and de-duped. */
@@ -67,6 +90,18 @@ export function LoyaltySection({
   const [reactClients, setReactClients] = useState<ReactivationClient[] | null>(null);
   const reloadReact = () => { fetchReactivation().then(setReactClients).catch(() => setReactClients([])); };
   useEffect(reloadReact, []);
+
+  // Адмін: ручні правки постійних (прибрати/передати) + список менеджерів для передачі.
+  const isAdmin = auth?.role === "admin";
+  const [overrides, setOverrides] = useState<LoyaltyOverride[]>([]);
+  const [allManagers, setAllManagers] = useState<ManagerOption[]>([]);
+  const reloadOverrides = () => { fetchLoyaltyOverrides().then(setOverrides).catch(() => setOverrides([])); };
+  useEffect(() => {
+    if (!isAdmin) return;
+    reloadOverrides();
+    fetchManagerOptions().then(setAllManagers).catch(() => setAllManagers([]));
+  }, [isAdmin]);
+  const bumpOverrides = () => { reloadOverrides(); /* дані оновляться на наступному 5-хв рефреші дашборду */ };
   const reactKeys = new Set((reactClients ?? []).map((c) => c.clientKey));
   const canAssign = auth?.role === "team_lead" || auth?.role === "admin";
   const [targetMgr, setTargetMgr] = useState<Record<number, number>>({}); // cardManagerId → обраний менеджер
@@ -95,6 +130,35 @@ export function LoyaltySection({
           </div>
         )}
       </div>
+
+      {isAdmin && overrides.length > 0 && (
+        <div className="chart-card" style={{ marginBottom: 16, borderLeft: "3px solid #d97706" }}>
+          <h2 className="chart-title" style={{ marginBottom: 6 }}>🔧 Ручні правки постійних ({overrides.length})</h2>
+          <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
+            Ручні зміни поверх авто-логіки. «Скасувати» повертає авто-визначення.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table className="data-table compact" style={{ fontSize: 12 }}>
+              <thead><tr><th style={{ textAlign: "left" }}>Клієнт</th><th>Дія</th><th style={{ textAlign: "left" }}>Деталі</th><th /></tr></thead>
+              <tbody>
+                {overrides.map((o) => (
+                  <tr key={o.clientKey}>
+                    <td style={{ textAlign: "left" }}>{o.clientName ?? o.clientKey}</td>
+                    <td>{o.hidden ? "🗑 прибрано" : o.pinnedManagerId ? "↪ передано" : o.forceRegular ? "➕ додано" : "—"}</td>
+                    <td style={{ textAlign: "left", color: "var(--text-muted)" }}>{o.pinnedManagerName ? `→ ${o.pinnedManagerName}` : ""}</td>
+                    <td>
+                      <button onClick={() => removeLoyaltyOverride(o.clientKey).then(reloadOverrides)}
+                        style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "2px 10px", cursor: "pointer", fontSize: 12 }}>
+                        Скасувати
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {auth && (
         <ReactivationGrid
@@ -133,7 +197,7 @@ export function LoyaltySection({
             ) : (
               <table className="data-table" style={{ marginTop: 10 }}>
                 <thead>
-                  <tr><th>#</th><th>Клієнт</th><th>Тип</th><th>Замовлень (рахунків)</th><th>Сума (lifetime)</th><th>Остання оплата</th></tr>
+                  <tr><th>#</th><th>Клієнт</th><th>Тип</th><th>Замовлень (рахунків)</th><th>Сума (lifetime)</th><th>Остання оплата</th>{isAdmin && <th>Адмін</th>}</tr>
                 </thead>
                 <tbody>
                   {sortedAll.map((c, i) => (
@@ -144,6 +208,11 @@ export function LoyaltySection({
                       <td>{c.orders}</td>
                       <td style={{ fontWeight: 600 }}>{formatAmount(c.revenue)}</td>
                       <td>{c.lastPaid ? new Date(c.lastPaid).toLocaleDateString("uk-UA") : "—"}</td>
+                      {isAdmin && (
+                        <td>{c.clientKey
+                          ? <AdminClientActions clientKey={c.clientKey} clientName={c.clientName} managers={allManagers} onDone={bumpOverrides} />
+                          : "—"}</td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -265,6 +334,7 @@ export function LoyaltySection({
                             <th>Всього оплат</th>
                             <th>Остання оплата</th>
                             {reactivatable && canAssign && <th>Реактивація</th>}
+                            {isAdmin && group.key === "regular" && <th>Адмін</th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -279,6 +349,11 @@ export function LoyaltySection({
                                   ? new Date(c.lastPaid).toLocaleDateString("uk-UA")
                                   : "—"}
                               </td>
+                              {isAdmin && group.key === "regular" && (
+                                <td>
+                                  <AdminClientActions clientKey={c.clientKey} clientName={c.clientName} managers={allManagers} onDone={bumpOverrides} />
+                                </td>
+                              )}
                               {reactivatable && canAssign && (
                                 <td>
                                   {reactKeys.has(c.clientKey) ? (

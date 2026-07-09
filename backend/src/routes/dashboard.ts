@@ -1533,24 +1533,37 @@ dashboardRouter.get("/loyalty", async (req, res) => {
     `SELECT DISTINCT client_key FROM receivables WHERE client_key IS NOT NULL`
   );
   const receivableKeys = new Set(recvKeysRes.rows.map((r) => r.client_key));
+  // Ручні правки адміна: прибрати / передати іншому менеджеру / примусово постійний.
+  const overrides = await loadLoyaltyOverrides();
 
   const byManager = new Map<
     number,
     { managerId: number; managerName: string; segments: Segments }
   >();
+  const ensureEntry = (id: number, name: string) => {
+    let e = byManager.get(id);
+    if (!e) { e = { managerId: id, managerName: name, segments: { regular: [], occasional: [], sleeping: [], lost: [] } }; byManager.set(id, e); }
+    return e;
+  };
 
   for (const row of result.rows) {
+    const ov = overrides.get(row.client_key);
+    if (ov?.hidden) continue; // прибраний адміном — не показуємо ніде
     const recent = Number(row.p_recent);
     const prior = Number(row.p_prior);
-    let entry = byManager.get(row.manager_id);
-    if (!entry) {
-      entry = {
-        managerId: row.manager_id,
-        managerName: row.manager_name,
-        segments: { regular: [], occasional: [], sleeping: [], lost: [] },
-      };
-      byManager.set(row.manager_id, entry);
+    // Передача: якщо адмін закріпив клієнта за іншим менеджером — переносимо туди
+    // (з можливим переходом в іншу команду). Скоуп: у режимі команди показуємо,
+    // лише якщо цільова команда збігається / без фільтра.
+    let mgrId = row.manager_id, mgrName = row.manager_name;
+    if (ov?.pinnedManagerId) {
+      if (teamId && ov.pinnedTeamId && ov.pinnedTeamId !== teamId && row.manager_id !== null) {
+        // передано в іншу команду, а зараз дивимось конкретну — пропускаємо, якщо
+        // клієнт «пішов» з цієї команди (його вихідний менеджер у цій команді).
+      }
+      mgrId = ov.pinnedManagerId;
+      mgrName = ov.pinnedManagerName ?? row.manager_name;
     }
+    const entry = ensureEntry(mgrId, mgrName);
     const totalPaid = Number(row.total_paid);
     const individual = isPhoneKey(row.client_key);
     const client: Client = {
@@ -1570,7 +1583,7 @@ dashboardRouter.get("/loyalty", async (req, res) => {
     // regular anymore — they fall through to sleeping/lost for reactivation.
     const inReceivables = receivableKeys.has(row.client_key);
     const isActive = recent >= 1 || prior >= 1 || inReceivables;
-    if (totalPaid >= threshold && isActive) {
+    if (ov?.forceRegular || (totalPaid >= threshold && isActive)) {
       entry.segments.regular.push(client);
     } else if (recent >= 1 || inReceivables) {
       entry.segments.occasional.push(client);
@@ -2175,6 +2188,70 @@ dashboardRouter.get("/teams", async (req, res) => {
 
 // All regular clients across teams (2+ lifetime paid orders), with lifetime
 // order count + revenue, sorted for the "усі постійні клієнти" drill-down.
+// ── Ручні правки постійних клієнтів (лише адмін) ───────────────────────────
+/** Список активних оверрайдів + довідник менеджерів для UI. */
+dashboardRouter.get("/loyalty-overrides", async (req, res) => {
+  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  const r = await pool.query<{ client_key: string; client_name: string | null; hidden: boolean; pinned_manager_id: number | null; force_regular: boolean; note: string | null; manager_name: string | null; updated_at: string }>(
+    `SELECT o.client_key, o.client_name, o.hidden, o.pinned_manager_id, o.force_regular, o.note,
+            m.name AS manager_name, o.updated_at
+     FROM loyalty_overrides o LEFT JOIN managers m ON m.id = o.pinned_manager_id
+     ORDER BY o.updated_at DESC`
+  );
+  res.json({
+    overrides: r.rows.map((x) => ({
+      clientKey: x.client_key, clientName: x.client_name,
+      hidden: x.hidden, pinnedManagerId: x.pinned_manager_id, pinnedManagerName: x.manager_name,
+      forceRegular: x.force_regular, note: x.note, updatedAt: x.updated_at,
+    })),
+  });
+});
+
+/** Прибрати / передати / додати постійного клієнта (upsert). */
+dashboardRouter.post("/loyalty-override", async (req, res) => {
+  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const clientName = req.body?.clientName != null ? String(req.body.clientName) : null;
+  const hidden = req.body?.hidden === true;
+  const forceRegular = req.body?.forceRegular === true;
+  const pinnedManagerId = req.body?.pinnedManagerId != null && req.body.pinnedManagerId !== ""
+    ? Number(req.body.pinnedManagerId) : null;
+  const note = req.body?.note != null ? String(req.body.note) : null;
+  await pool.query(
+    `INSERT INTO loyalty_overrides (client_key, client_name, hidden, pinned_manager_id, force_regular, note, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     ON CONFLICT (client_key) DO UPDATE SET
+       client_name = COALESCE(EXCLUDED.client_name, loyalty_overrides.client_name),
+       hidden = EXCLUDED.hidden, pinned_manager_id = EXCLUDED.pinned_manager_id,
+       force_regular = EXCLUDED.force_regular, note = EXCLUDED.note,
+       updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, clientName, hidden, pinnedManagerId, forceRegular, note, req.auth!.userId]
+  );
+  res.json({ ok: true });
+});
+
+/** Скасувати ручну правку (повернути авто-логіку). */
+dashboardRouter.delete("/loyalty-override/:clientKey", async (req, res) => {
+  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  await pool.query(`DELETE FROM loyalty_overrides WHERE client_key = $1`, [String(req.params.clientKey)]);
+  res.json({ ok: true });
+});
+
+/** Мапа оверрайдів постійних + імена pinned-менеджерів (для застосування). */
+async function loadLoyaltyOverrides(): Promise<Map<string, { hidden: boolean; pinnedManagerId: number | null; pinnedManagerName: string | null; pinnedTeamId: number | null; forceRegular: boolean }>> {
+  const r = await pool.query<{ client_key: string; hidden: boolean; pinned_manager_id: number | null; force_regular: boolean; manager_name: string | null; team_id: number | null }>(
+    `SELECT o.client_key, o.hidden, o.pinned_manager_id, o.force_regular, m.name AS manager_name, m.team_id
+     FROM loyalty_overrides o LEFT JOIN managers m ON m.id = o.pinned_manager_id`
+  );
+  const map = new Map<string, { hidden: boolean; pinnedManagerId: number | null; pinnedManagerName: string | null; pinnedTeamId: number | null; forceRegular: boolean }>();
+  for (const x of r.rows) map.set(x.client_key, {
+    hidden: x.hidden, pinnedManagerId: x.pinned_manager_id, pinnedManagerName: x.manager_name,
+    pinnedTeamId: x.team_id, forceRegular: x.force_regular,
+  });
+  return map;
+}
+
 dashboardRouter.get("/regular-clients", async (req, res) => {
   const auth = req.auth!;
   if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
@@ -2207,18 +2284,22 @@ dashboardRouter.get("/regular-clients", async (req, res) => {
     params
   );
   const isPhoneKey = (k: string) => /^\d{9,}$/.test(k);
+  const ov = await loadLoyaltyOverrides();
   res.json({
-    clients: r.rows.map((x) => {
-      const individual = isPhoneKey(x.client_key);
-      return {
-        clientName: x.name,
-        isCompany: !individual,
-        identifier: individual ? x.client_key : null,
-        orders: Number(x.orders),
-        revenue: Number(x.revenue),
-        lastPaid: x.last_paid,
-      };
-    }),
+    clients: r.rows
+      .filter((x) => !ov.get(x.client_key)?.hidden) // прибрані адміном не показуємо
+      .map((x) => {
+        const individual = isPhoneKey(x.client_key);
+        return {
+          clientKey: x.client_key,
+          clientName: x.name,
+          isCompany: !individual,
+          identifier: individual ? x.client_key : null,
+          orders: Number(x.orders),
+          revenue: Number(x.revenue),
+          lastPaid: x.last_paid,
+        };
+      }),
   });
 });
 

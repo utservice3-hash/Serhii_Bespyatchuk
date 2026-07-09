@@ -894,6 +894,7 @@ export async function deleteReport(id: number): Promise<void> {
 }
 
 export interface RegularClient {
+  clientKey?: string;
   clientName: string;
   isCompany: boolean;
   identifier: string | null;
@@ -904,6 +905,26 @@ export interface RegularClient {
 export async function fetchRegularClients(params?: { teamId?: number }): Promise<RegularClient[]> {
   const { data } = await api.get<{ clients: RegularClient[] }>("/dashboard/regular-clients", { params });
   return data.clients;
+}
+
+// ── Ручні правки постійних клієнтів (лише адмін) ──
+export interface LoyaltyOverride {
+  clientKey: string; clientName: string | null;
+  hidden: boolean; pinnedManagerId: number | null; pinnedManagerName: string | null;
+  forceRegular: boolean; note: string | null; updatedAt: string;
+}
+export async function fetchLoyaltyOverrides(): Promise<LoyaltyOverride[]> {
+  const { data } = await api.get<{ overrides: LoyaltyOverride[] }>("/dashboard/loyalty-overrides");
+  return data.overrides;
+}
+export async function saveLoyaltyOverride(payload: {
+  clientKey: string; clientName?: string | null;
+  hidden?: boolean; pinnedManagerId?: number | null; forceRegular?: boolean; note?: string | null;
+}): Promise<void> {
+  await api.post("/dashboard/loyalty-override", payload);
+}
+export async function removeLoyaltyOverride(clientKey: string): Promise<void> {
+  await api.delete(`/dashboard/loyalty-override/${encodeURIComponent(clientKey)}`);
 }
 
 export interface DailyProductivity {

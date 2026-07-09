@@ -261,6 +261,20 @@ CREATE TABLE IF NOT EXISTS reactivation_clients (
 );
 CREATE INDEX IF NOT EXISTS idx_reactivation_manager ON reactivation_clients(manager_id);
 
+-- Ручні правки списку постійних клієнтів (лише адмін): прибрати з постійних,
+-- передати іншому менеджеру/команді, або примусово додати. Список постійних
+-- рахується авто з CRM — ця таблиця його коригує, не змінюючи самі угоди.
+CREATE TABLE IF NOT EXISTS loyalty_overrides (
+  client_key TEXT PRIMARY KEY,
+  client_name TEXT,
+  hidden BOOLEAN NOT NULL DEFAULT false,        -- прибрати з постійних
+  pinned_manager_id INTEGER REFERENCES managers(id), -- передати цьому менеджеру
+  force_regular BOOLEAN NOT NULL DEFAULT false, -- примусово вважати постійним
+  note TEXT,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Monthly goals / objectives a team lead (or КВП) sets for a month — a
 -- high-level goals tracker separate from the numeric plans. Team-lead → own
 -- team (team_id), admin → team_id NULL (department-wide) or a chosen team.
