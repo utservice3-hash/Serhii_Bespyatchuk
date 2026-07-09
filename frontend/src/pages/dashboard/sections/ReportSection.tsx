@@ -380,9 +380,19 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
               </tr>
             );
           })}
-          {moneyRow("Оплата отримана, ₴", block.money.received, "#16a34a", true)}
-          {moneyRow("Перенесені з мин. міс., ₴", block.money.carryover, undefined, false)}
-          {moneyRow("Очікувані оплати, ₴", block.money.expected, undefined, false)}
+          {moneyRow("💰 Сума оплат (отримані кошти), ₴", block.money.received, "#16a34a", true)}
+          {(() => {
+            const avg = block.money.receivedDeals > 0 ? Math.round(block.money.received / block.money.receivedDeals) : 0;
+            return (
+              <tr>
+                <td style={{ fontWeight: 600, color: "var(--text-muted)" }}>Середній чек (факт), ₴</td>
+                <td style={{ fontWeight: 700 }}>{avg > 0 ? formatAmount(avg) : "—"}</td>
+                {tailCols > 0 && <td colSpan={tailCols} />}
+              </tr>
+            );
+          })()}
+          {moneyRow("⏳ Очікування (виставлені рахунки), ₴", block.money.expected, "#d97706", false)}
+          {moneyRow("↪️ Перенесені з мин. міс., ₴", block.money.carryover, undefined, false)}
           {/* Отримані кошти по тижнях: план/факт/викон.%/відставання. План =
               місячний план виручки пропорційно роб. дням тижня; факт тижня =
               «Успішно» (142), закриті в тижні. */}
@@ -519,6 +529,8 @@ export function ReportSection({
   report,
   funnelReport,
   funnelWeekly,
+  funnelWeeklyGran,
+  setFunnelWeeklyGran,
   loading,
   granularity,
   setGranularity,
@@ -541,6 +553,8 @@ export function ReportSection({
   report: ReportData | null;
   funnelReport: FunnelReport | null;
   funnelWeekly: FunnelWeeklyReport | null;
+  funnelWeeklyGran: "week" | "day";
+  setFunnelWeeklyGran: Dispatch<SetStateAction<"week" | "day">>;
   loading: boolean;
   granularity: Gran;
   setGranularity: Dispatch<SetStateAction<Gran>>;
@@ -718,11 +732,46 @@ export function ReportSection({
 
           {funnelWeekly && (
             <div className="chart-card">
-              <h2 className="chart-title" style={{ marginBottom: 4 }}>Звіт по воронці клієнтів (тижнева динаміка)</h2>
-              <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 12px" }}>
-                Факт = входи угод у етап за подіями CRM. Робочих днів: {funnelWeekly.workingDays.elapsed} з {funnelWeekly.workingDays.total}.
-                «Темп» = факт ÷ план на сьогодні; «Викон.» = факт ÷ план місяця; «% конв» тижня = етап ÷ попередній етап.
-              </p>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <h2 className="chart-title" style={{ marginBottom: 0 }}>
+                  Звіт по воронці клієнтів ({funnelWeeklyGran === "day" ? "щоденна" : "тижнева"} динаміка)
+                </h2>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {(["week", "day"] as const).map((g) => (
+                    <button key={g} onClick={() => setFunnelWeeklyGran(g)}
+                      style={{ padding: "5px 13px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: funnelWeeklyGran === g ? 700 : 500,
+                        border: `1px solid ${funnelWeeklyGran === g ? "#c5141c" : "var(--border)"}`,
+                        background: funnelWeeklyGran === g ? "#c5141c" : "var(--card-bg)", color: funnelWeeklyGran === g ? "#fff" : "var(--text)" }}>
+                      {g === "week" ? "По тижнях" : "По днях"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <details style={{ margin: "8px 0 12px" }}>
+                <summary style={{ fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+                  ℹ️ Як рахується кожен показник (натисніть) · робочих днів: {funnelWeekly.workingDays.elapsed} з {funnelWeekly.workingDays.total}
+                </summary>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.7, marginTop: 8, paddingLeft: 4 }}>
+                  <b style={{ color: "var(--text)" }}>Етапи воронки (факт)</b> — кількість угод повного циклу (пайплайни New + старий),
+                  що <b>увійшли</b> у відповідний етап у CRM за обраний період (по датах подій зміни статусу, {funnelWeeklyGran === "day" ? "по днях" : "по тижнях Пн–Нд"}):<br />
+                  • <b>Взято в роботу лідів</b> — вхід у стартовий етап (лід узятий менеджером).<br />
+                  • <b>Отримано заявку на прорахунок</b> — клієнт надав дані на прорахунок.<br />
+                  • <b>Договір/заявку погоджено</b> — умови узгоджено.<br />
+                  • <b>Виставлено рахунок</b> — рахунок виставлено клієнту.<br />
+                  • <b>Оплата отримана</b> — вхід у «оплата отримана»/«успішно».<br />
+                  <b style={{ color: "var(--text)" }}>План міс</b> — місячний план етапу (ставить тімлід кнопкою «Планування»).
+                  <b style={{ color: "var(--text)" }}> План сьогодні</b> = план міс × (робочі дні, що минули ÷ усі робочі дні місяця).
+                  <b style={{ color: "var(--text)" }}> Темп плану %</b> = факт ÷ план сьогодні (чи в графіку).
+                  <b style={{ color: "var(--text)" }}> Викон. міс %</b> = факт ÷ план міс.
+                  <b style={{ color: "var(--text)" }}> Відст. шт</b> = скільки не вистачає до плану на сьогодні.
+                  <b style={{ color: "var(--text)" }}> % конв</b> тижня/дня = етап ÷ попередній етап.<br />
+                  <b style={{ color: "var(--text)" }}>💰 Сума оплат</b> = «Успішно реалізовано» (статус 142, закриті в місяці) + «Оплата отримана» (знімок поточного етапу).
+                  Це <b>отримані кошти</b> за філософією CRM — включає гроші, що вже надійшли, але угоду ще не закрито в «Успішно».
+                  <b style={{ color: "var(--text)" }}> Середній чек</b> = сума оплат ÷ кількість оплачених угод.
+                  <b style={{ color: "var(--text)" }}> ⏳ Очікування</b> = знімок угод на етапах «Погоджено/Рахунок/Авто працює» (гроші, що очікуються).
+                  <b style={{ color: "var(--text)" }}> ↪️ Перенесені</b> = угоди в роботі, створені до 1-го числа місяця.
+                </div>
+              </details>
               <WeeklyFunnelBlock block={funnelWeekly.overall} weeks={funnelWeekly.weeks} highlight />
               {funnelWeekly.byManager.map((m) => (
                 <WeeklyFunnelBlock key={m.managerId} block={m} weeks={funnelWeekly.weeks} />

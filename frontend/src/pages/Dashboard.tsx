@@ -207,6 +207,7 @@ export function Dashboard() {
   useEffect(() => { localStorage.setItem("reportTeamId", reportTeamId === "" ? "" : String(reportTeamId)); }, [reportTeamId]);
   const [funnelReport, setFunnelReport] = useState<FunnelReport | null>(null);
   const [funnelWeekly, setFunnelWeekly] = useState<FunnelWeeklyReport | null>(null);
+  const [funnelWeeklyGran, setFunnelWeeklyGran] = useState<"week" | "day">("week");
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
@@ -284,14 +285,14 @@ export function Dashboard() {
       .then(setFunnelReport)
       .catch(() => setFunnelReport(null));
     // Weekly funnel matrix (operational Mon/Thu report), keyed to the selected month.
-    fetchFunnelWeekly({ to: dateRange.to || undefined, managerId: mgr, teamId: team })
+    fetchFunnelWeekly({ to: dateRange.to || undefined, managerId: mgr, teamId: team, granularity: funnelWeeklyGran })
       .then(setFunnelWeekly)
       .catch(() => setFunnelWeekly(null));
     if (auth?.role !== "manager") {
       // When a team is picked, the manager list narrows to that team.
       fetchManagerOptions(reportTeamId || undefined).then(setManagerOptions).catch(() => setManagerOptions([]));
     }
-  }, [section, reportGranularity, reportManagerId, reportTeamId, dateRange, refreshNonce, auth]);
+  }, [section, reportGranularity, reportManagerId, reportTeamId, dateRange, refreshNonce, auth, funnelWeeklyGran]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -1015,6 +1016,8 @@ export function Dashboard() {
           report={reportData}
           funnelReport={funnelReport}
           funnelWeekly={funnelWeekly}
+          funnelWeeklyGran={funnelWeeklyGran}
+          setFunnelWeeklyGran={setFunnelWeeklyGran}
           loading={reportLoading}
           granularity={reportGranularity}
           setGranularity={setReportGranularity}

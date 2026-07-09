@@ -2577,34 +2577,46 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const factUpper = today < mEnd ? today : mEnd; // cap facts at today for the current month
 
-  // Split the month into Mon–Sun weeks clipped to the month boundaries.
-  const weeks: { label: string; from: string; to: string; monday: string; wd: number }[] = [];
-  let cur = new Date(mStart);
-  while (cur <= mEnd) {
-    const daysToSun = (7 - cur.getDay()) % 7;
-    let wEnd = new Date(cur); wEnd.setDate(cur.getDate() + daysToSun);
-    if (wEnd > mEnd) wEnd = new Date(mEnd);
-    const mon = new Date(cur); mon.setDate(cur.getDate() - ((cur.getDay() + 6) % 7));
-    weeks.push({ label: `ТИЖДЕНЬ ${weeks.length + 1}`, from: fmt(cur), to: fmt(wEnd), monday: fmt(mon), wd: workingDays(cur, wEnd) });
-    cur = new Date(wEnd); cur.setDate(wEnd.getDate() + 1);
+  // Buckets = колонки звіту: тижні (Пн–Нд, кліпнуті до меж місяця) або дні
+  // (?granularity=day). `key` — ключ для мапінгу фактів (Пн тижня або сам день).
+  const granularity = String(req.query.granularity) === "day" ? "day" : "week";
+  const WEEKDAY = ["Нд", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+  const weeks: { label: string; from: string; to: string; key: string; wd: number }[] = [];
+  if (granularity === "week") {
+    let cur = new Date(mStart);
+    while (cur <= mEnd) {
+      const daysToSun = (7 - cur.getDay()) % 7;
+      let wEnd = new Date(cur); wEnd.setDate(cur.getDate() + daysToSun);
+      if (wEnd > mEnd) wEnd = new Date(mEnd);
+      const mon = new Date(cur); mon.setDate(cur.getDate() - ((cur.getDay() + 6) % 7));
+      weeks.push({ label: `ТИЖДЕНЬ ${weeks.length + 1}`, from: fmt(cur), to: fmt(wEnd), key: fmt(mon), wd: workingDays(cur, wEnd) });
+      cur = new Date(wEnd); cur.setDate(wEnd.getDate() + 1);
+    }
+  } else {
+    // Дні: поточний місяць — до сьогодні; минулий — весь місяць (кап через factUpper).
+    const dEnd = factUpper < mEnd ? factUpper : mEnd;
+    let cur = new Date(mStart);
+    while (cur <= dEnd) {
+      const iso = fmt(cur);
+      const wknd = cur.getDay() === 0 || cur.getDay() === 6;
+      weeks.push({ label: `${WEEKDAY[cur.getDay()]} ${String(cur.getDate()).padStart(2, "0")}.${String(cur.getMonth() + 1).padStart(2, "0")}`, from: iso, to: iso, key: iso, wd: wknd ? 0 : 1 });
+      cur = new Date(cur); cur.setDate(cur.getDate() + 1);
+    }
   }
   const totalWd = workingDays(mStart, mEnd);
   const elapsedEnd = factUpper >= mStart ? factUpper : mStart;
   const elapsedWd = factUpper >= mStart ? workingDays(mStart, elapsedEnd) : 0;
   const proratio = totalWd > 0 ? elapsedWd / totalWd : 0;
 
-  // Unified 4-stage funnel (РНК = РПК = Самостійний). Stages are resolved from
-  // the LIVE pipeline_stage_map (so newly-mapped statuses count immediately) and
-  // grouped: "Взято в роботу" = усе до «Авто працює» (lead_taken + quote +
-  // approved, крім avto); "Авто працює" = avto-статуси; далі рахунок і оплата.
-  const AVTO = "dse.status_id IN (69716300, 98470988, 10937178)";
-  const WK_STAGE_CASE = `CASE
-    WHEN ${AVTO} THEN 'avto'
-    WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'taken'
-    WHEN psm.funnel_stage = 'invoiced' THEN 'invoiced'
-    WHEN psm.funnel_stage = 'paid' THEN 'paid' END`;
+  // 5 класичних етапів воронки (як у ручному звіті менеджера): Взято в роботу →
+  // Прорахунок → Погоджено → Рахунок → Оплата. Беремо прямо з funnel_stage
+  // (LIVE pipeline_stage_map). «Авто працює» тут НЕ окремий етап — авто-статуси
+  // мапляться у свій funnel_stage (approved/invoiced), як у ручній воронці.
+  const bucketTrunc = granularity === "day"
+    ? `(dse.changed_at ${KYIV})::date`
+    : `date_trunc('week', (dse.changed_at ${KYIV}))::date`;
 
-  // FACT: distinct deals that entered each grouped stage, per manager, per ISO-week.
+  // FACT: distinct deals that entered each funnel stage, per manager, per bucket.
   const fParams: unknown[] = [[8921932, 155304], fmt(mStart), fmt(factUpper)];
   const fConds = [
     "d.pipeline_id = ANY($1)",
@@ -2614,15 +2626,15 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   if (managerId) { fParams.push(managerId); fConds.push(`d.manager_id = $${fParams.length}`); }
   if (teamId) { fParams.push(teamId); fConds.push(`m.team_id = $${fParams.length}`); }
   const factRows = await pool.query<{ manager_id: number; name: string; stage: string; wk: string; c: string }>(
-    `SELECT d.manager_id, m.name, ${WK_STAGE_CASE} AS stage,
-            to_char(date_trunc('week', (dse.changed_at ${KYIV})), 'YYYY-MM-DD') AS wk,
+    `SELECT d.manager_id, m.name, psm.funnel_stage AS stage,
+            to_char(${bucketTrunc}, 'YYYY-MM-DD') AS wk,
             COUNT(DISTINCT dse.kommo_id) AS c
      FROM deal_stage_events dse
      JOIN deals d ON d.kommo_id = dse.kommo_id
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
      WHERE ${fConds.join(" AND ")}
-     GROUP BY d.manager_id, m.name, ${WK_STAGE_CASE}, wk`,
+     GROUP BY d.manager_id, m.name, psm.funnel_stage, wk`,
     fParams
   );
 
@@ -2650,12 +2662,14 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   const mConds = ["d.pipeline_id = ANY($1)"];
   if (managerId) { mParams.push(managerId); mConds.push(`d.manager_id = $${mParams.length}`); }
   if (teamId) { mParams.push(teamId); mConds.push(`m.team_id = $${mParams.length}`); }
-  const moneyRows = await pool.query<{ manager_id: number; carryover: string; expected: string; received: string }>(
+  const moneyRows = await pool.query<{ manager_id: number; carryover: string; expected: string; received: string; received_deals: string }>(
     `SELECT d.manager_id,
        COALESCE(SUM(d.price) FILTER (WHERE ${IN_PROGRESS} AND (d.created_at_kommo ${KYIV})::date < $2), 0) AS carryover,
        COALESCE(SUM(d.price) FILTER (WHERE ${IN_PROGRESS}), 0) AS expected,
        COALESCE(SUM(d.price) FILTER (WHERE d.status_id IN (69716460, 60412544)), 0)
-       + COALESCE(SUM(d.price) FILTER (WHERE d.status_id = 142 AND (d.closed_at_kommo ${KYIV})::date BETWEEN $3 AND $4), 0) AS received
+       + COALESCE(SUM(d.price) FILTER (WHERE d.status_id = 142 AND (d.closed_at_kommo ${KYIV})::date BETWEEN $3 AND $4), 0) AS received,
+       COUNT(*) FILTER (WHERE d.status_id IN (69716460, 60412544))
+       + COUNT(*) FILTER (WHERE d.status_id = 142 AND (d.closed_at_kommo ${KYIV})::date BETWEEN $3 AND $4) AS received_deals
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -2665,11 +2679,11 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   );
   type MoneyWeek = { plan: number; fact: number };
   type Money = {
-    carryover: number; expected: number; received: number;
+    carryover: number; expected: number; received: number; receivedDeals: number;
     planMonth: number; weeks: MoneyWeek[]; daily: { date: string; v: number }[];
   };
   const emptyMoney = (): Money => ({
-    carryover: 0, expected: 0, received: 0, planMonth: 0,
+    carryover: 0, expected: 0, received: 0, receivedDeals: 0, planMonth: 0,
     weeks: weeks.map(() => ({ plan: 0, fact: 0 })), daily: [],
   });
   const overallMoney = emptyMoney();
@@ -2682,9 +2696,11 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   for (const r of moneyRows.rows) {
     const m = moneyOf(r.manager_id);
     m.carryover = Number(r.carryover); m.expected = Number(r.expected); m.received = Number(r.received);
+    m.receivedDeals = Number(r.received_deals);
     overallMoney.carryover += m.carryover;
     overallMoney.expected += m.expected;
     overallMoney.received += m.received;
+    overallMoney.receivedDeals += m.receivedDeals;
   }
 
   // Місячний план виручки (plans.payment_amount) → пропорційно на тижні за
@@ -2757,19 +2773,14 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   }
   for (const [id, e] of mgrFacts) mgrName.set(id, e.name);
 
-  const WK_STAGES = ["taken", "avto", "invoiced", "paid"];
-  const WK_LABELS: Record<string, string> = {
-    taken: "Взято в роботу ліди",
-    avto: "Авто працює (ліди в роботі)",
-    invoiced: "Виставлено рахунок",
-    paid: "Оплата отримана",
-  };
+  const WK_STAGES = FUNNEL_ORDER; // 5 класичних етапів
+  const WK_LABELS = FUNNEL_LABELS;
   const buildStages = (facts: WkMap, plan: Record<string, number>) =>
     WK_STAGES.map((stage) => {
       const pm = plan[stage] ?? 0;
       const wkOut = weeks.map((w) => ({
         plan: Math.round(pm * (totalWd > 0 ? w.wd / totalWd : 0)),
-        fact: facts[stage]?.[w.monday] ?? 0,
+        fact: facts[stage]?.[w.key] ?? 0,
       }));
       const factToday = wkOut.reduce((a, w) => a + w.fact, 0);
       return {
@@ -2806,6 +2817,7 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
 
   res.json({
     scope: managerId ? "manager" : "team",
+    granularity,
     month: planMonthDate,
     today: fmt(today),
     workingDays: { total: totalWd, elapsed: elapsedWd },

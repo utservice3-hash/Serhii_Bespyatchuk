@@ -715,7 +715,7 @@ export interface WeeklyBlock {
   name: string;
   stages: WeeklyStageRow[];
   money: {
-    carryover: number; expected: number; received: number;
+    carryover: number; expected: number; received: number; receivedDeals: number;
     planMonth: number;
     weeks: { plan: number; fact: number }[];
     daily: { date: string; v: number }[];
@@ -723,6 +723,7 @@ export interface WeeklyBlock {
 }
 export interface FunnelWeeklyReport {
   scope: "manager" | "team";
+  granularity: "week" | "day";
   month: string;
   today: string;
   workingDays: { total: number; elapsed: number };
@@ -735,6 +736,7 @@ export async function fetchFunnelWeekly(params: {
   to?: string;
   managerId?: number;
   teamId?: number;
+  granularity?: "week" | "day";
 }): Promise<FunnelWeeklyReport> {
   const { data } = await api.get<FunnelWeeklyReport>("/dashboard/funnel-weekly", { params });
   return data;
