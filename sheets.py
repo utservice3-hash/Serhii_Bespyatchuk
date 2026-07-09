@@ -342,6 +342,69 @@ def update_first_call(lead_id: int, call_at: datetime):
         logger.error("sheets update_first_call: %s", e)
 
 
+FIRST_TOUCH_SHEET = "Перший дотик"
+
+
+def append_first_touch(lead_id: int, manager: str, team: str, price_voiced: bool,
+                       at: datetime, objections: bool = False,
+                       about_transport: bool = True, has_transcript: bool = True) -> None:
+    """Один проаналізований перший дотик = один рядок аркуша «Перший дотик».
+    Персистентне джерело для звіту (щоб не сканувати Kommo API)."""
+    ws = _get_or_create_worksheet(FIRST_TOUCH_SHEET, rows=5000, cols=8)
+    if not ws:
+        return
+    try:
+        if ws.cell(1, 1).value != "Дата":
+            ws.insert_row([
+                "Дата", "Час", "Менеджер", "Команда", "Lead ID",
+                "Ціну озвучено", "Заперечення відпрацьовано", "Розмова про перевезення",
+            ], 1)
+        ws.append_row([
+            at.strftime("%Y-%m-%d"),
+            at.strftime("%H:%M:%S"),
+            manager,
+            team,
+            lead_id,
+            "так" if price_voiced else "ні",
+            "так" if objections else "ні",
+            "так" if about_transport else ("немає запису" if not has_transcript else "ні"),
+        ])
+        logger.info("sheets: appended first-touch lead %s (team %s, price=%s)", lead_id, team, price_voiced)
+    except Exception as e:
+        logger.error("sheets append_first_touch: %s", e)
+
+
+def read_first_touch(days: int = 7) -> dict | None:
+    """Агрегує аркуш «Перший дотик» за останні `days` днів (включно з сьогодні).
+    Повертає {days, total, priced, by_team:{team:{acc,price}}} або None, якщо
+    аркуш недоступний. Жодних запитів до Kommo — лише читання таблиці."""
+    from datetime import datetime, timezone, timedelta
+    ws = _get_or_create_worksheet(FIRST_TOUCH_SHEET, rows=5000, cols=8)
+    if not ws:
+        return None
+    try:
+        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+        records = ws.get_all_records()
+        total = 0
+        priced = 0
+        by_team: dict[str, dict[str, int]] = {}
+        for r in records:
+            d = str(r.get("Дата", "")).strip()
+            if not d or d < cutoff:
+                continue
+            team = str(r.get("Команда", "") or "—")
+            pv = str(r.get("Ціну озвучено", "")).strip().lower() in ("так", "1", "true", "✅", "yes")
+            total += 1
+            priced += 1 if pv else 0
+            t = by_team.setdefault(team, {"acc": 0, "price": 0})
+            t["acc"] += 1
+            t["price"] += 1 if pv else 0
+        return {"days": days, "total": total, "priced": priced, "by_team": by_team}
+    except Exception as e:
+        logger.error("sheets read_first_touch: %s", e)
+        return None
+
+
 def append_call(lead_id: int, manager: str, call_type: str, duration: int, transcript: str, call_at: datetime) -> int:
     """Додає дзвінок до реєстру 'Дзвінки РНК' (накопичується по угоді). Повертає номер рядка."""
     ws = _get_or_create_worksheet("Дзвінки РНК", rows=5000, cols=8)

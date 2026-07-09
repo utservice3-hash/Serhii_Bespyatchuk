@@ -2534,6 +2534,14 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
     if len(_first_touch_log) > 2000:
         cutoff = (now - timedelta(days=7)).date().isoformat()
         _first_touch_log[:] = [e for e in _first_touch_log if e["date"] >= cutoff]
+    # Персистентний запис у Google Sheets (аркуш «Перший дотик») — щоб звіт за
+    # будь-який період читався з таблиці без сканування Kommo API.
+    sheets.append_first_touch(
+        lead_id, manager_name, team, bool(result.get("price_voiced")), now,
+        objections=bool(result.get("objections_handled")),
+        about_transport=bool(result.get("about_transport", True)),
+        has_transcript=bool(transcript),
+    )
 
     tg_tag = notifier.get_manager_tag(resp_id)
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
@@ -3020,6 +3028,32 @@ def sheet_link():
     except Exception as e:
         logger.error("sheet-link: %s", e)
     return jsonify({"ok": True, "spreadsheet": base, "calls_tab": calls_url})
+
+
+@app.route("/first-touch-report", methods=["GET"])
+def first_touch_report():
+    """Звіт по першому дотику за N днів (дефолт 7) — читає аркуш «Перший дотик»
+    у Google Sheets. Жодних запитів до Kommo API."""
+    try:
+        days = int(request.args.get("days", 7))
+    except ValueError:
+        days = 7
+    days = max(1, min(days, 90))
+    data = sheets.read_first_touch(days)
+    if data is None:
+        return jsonify({"ok": False, "error": "аркуш «Перший дотик» недоступний"})
+    total = data["total"]
+    priced = data["priced"]
+    pct = round(100 * priced / total) if total else 0
+    lines = [
+        f"📊 Перший дотик по рекламі — за {days} дн.",
+        f"Прийнято рекламних лідів (перший дотик): {total}",
+        f"Озвучено ціну на першому дотику: {priced} ({pct}%)",
+    ]
+    for team, v in data["by_team"].items():
+        tp = round(100 * v["price"] / v["acc"]) if v["acc"] else 0
+        lines.append(f"• {team}: прийнято {v['acc']}, ціну озвучено {v['price']} ({tp}%)")
+    return jsonify({"ok": True, "text": "\n".join(lines), **data})
 
 
 @app.route("/test-tg", methods=["GET"])
