@@ -210,6 +210,7 @@ export function RatesSection() {
       <div style={{ marginTop: 10, textAlign: big ? "center" : "left", background: `${zc}0d`, border: `1px solid ${zc}55`, borderLeft: `4px solid ${zc}`, borderRadius: 8, padding: big ? "12px 14px" : "9px 12px" }}>
         <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
           🗺 Зонна карта: зона <b style={{ color: zc }}>{zr.zone_label}</b> <span title={zr.zone_src}>({zr.zone_src})</span> · {zr.tonnage}
+          {zr.short_haul && <b style={{ color: ACC }}> · ×1.5 коротке плече (≤100 км)</b>}
         </div>
         <div style={{ overflowX: "auto", marginTop: 6 }}>
           <table className="data-table compact" style={{ fontSize: big ? 13 : 12, margin: big ? "0 auto" : undefined, width: big ? "auto" : "100%" }}>
@@ -230,7 +231,7 @@ export function RatesSection() {
           </table>
         </div>
         <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 5 }}>
-          {zr.from_area ?? "?"} → {zr.to_area ?? "?"}{zr.distance_km ? ` · ≈${fmt(zr.distance_km)} км` : ""} · правило: тариф за зоною ВІДПРАВЛЕННЯ (з зеленої в червону — зелений тариф) · 🚚 = під вашу вагу
+          {zr.from_area ?? "?"} → {zr.to_area ?? "?"}{zr.distance_km ? ` · ≈${fmt(zr.distance_km)} км` : ""} · правило: тариф за зоною ВІДПРАВЛЕННЯ (з зеленої в червону — зелений тариф){zr.short_haul ? " · тариф ×1.5, бо плече ≤100 км" : ""} · 🚚 = під вашу вагу
         </div>
       </div>
     );

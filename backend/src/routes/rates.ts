@@ -237,15 +237,19 @@ function zoneRecommendation(frmArea: string | null, toArea: string | null, mass:
   const zone = zoneFrom ?? zoneTo;
   if (!zone) return null;
   const bracket = ZONE_RATES.find((b) => (mass ?? 20) <= b.maxMass)!;
+  // Коротке плече: до 100 км тариф × 1.5 (подача/завантаження зʼїдають день —
+  // грн/км на коротких рейсах завжди дорожчий).
+  const shortHaul = routeKm != null && routeKm <= 100;
+  const k = shortHaul ? 1.5 : 1;
   const [lo, hi] = bracket.rates[zone];
   // Пропозиція для ВСІХ типів авто (обраний за вагою тоннаж — selected).
   const options = ZONE_RATES.map((b) => {
     const [l, h] = b.rates[zone];
     return {
       tonnage: b.label,
-      per_km_min: l, per_km_max: h,
-      total_min: routeKm ? Math.round(l * routeKm) : null,
-      total_max: routeKm ? Math.round(h * routeKm) : null,
+      per_km_min: Math.round(l * k), per_km_max: Math.round(h * k),
+      total_min: routeKm ? Math.round(l * k * routeKm) : null,
+      total_max: routeKm ? Math.round(h * k * routeKm) : null,
       selected: b === bracket,
     };
   });
@@ -255,10 +259,11 @@ function zoneRecommendation(frmArea: string | null, toArea: string | null, mass:
     zone_src: zoneFrom ? "за областю відправлення" : "за областю призначення (відправлення не розпізнано)",
     from_area: frmArea, to_area: toArea,
     tonnage: bracket.label,
-    per_km_min: lo, per_km_max: hi,
-    total_min: routeKm ? Math.round(lo * routeKm) : null,
-    total_max: routeKm ? Math.round(hi * routeKm) : null,
+    per_km_min: Math.round(lo * k), per_km_max: Math.round(hi * k),
+    total_min: routeKm ? Math.round(lo * k * routeKm) : null,
+    total_max: routeKm ? Math.round(hi * k * routeKm) : null,
     distance_km: routeKm,
+    short_haul: shortHaul,
     options,
   };
 }
