@@ -217,7 +217,8 @@ const AREA_ZONES: [RegExp, Zone][] = [
   [/одес/i, "yellow"], [/полтав/i, "yellow"], [/миколаїв|николаев/i, "yellow"],
   [/черніг|черниг/i, "red"], [/сумс|суми/i, "red"], [/харків|харьков/i, "red"],
   [/черкас/i, "red"], [/кіровоград|кировоград|кропивни/i, "red"],
-  [/дніпр|днепр/i, "red"], [/запор/i, "red"], [/херсон/i, "red"],
+  [/дніпр|днепр/i, "green"], // Дніпро — зелена (правка КВП 09.07.2026), довкола — червоні
+  [/запор/i, "red"], [/херсон/i, "red"],
 ];
 const ZONE_RATES: { maxMass: number; label: string; rates: Record<Zone, [number, number]> }[] = [
   { maxMass: 2.5, label: "до 2,5 т", rates: { green: [25, 25], yellow: [30, 30], red: [35, 35] } },
@@ -237,6 +238,17 @@ function zoneRecommendation(frmArea: string | null, toArea: string | null, mass:
   if (!zone) return null;
   const bracket = ZONE_RATES.find((b) => (mass ?? 20) <= b.maxMass)!;
   const [lo, hi] = bracket.rates[zone];
+  // Пропозиція для ВСІХ типів авто (обраний за вагою тоннаж — selected).
+  const options = ZONE_RATES.map((b) => {
+    const [l, h] = b.rates[zone];
+    return {
+      tonnage: b.label,
+      per_km_min: l, per_km_max: h,
+      total_min: routeKm ? Math.round(l * routeKm) : null,
+      total_max: routeKm ? Math.round(h * routeKm) : null,
+      selected: b === bracket,
+    };
+  });
   return {
     zone,
     zone_label: ZONE_LABEL[zone],
@@ -247,6 +259,7 @@ function zoneRecommendation(frmArea: string | null, toArea: string | null, mass:
     total_min: routeKm ? Math.round(lo * routeKm) : null,
     total_max: routeKm ? Math.round(hi * routeKm) : null,
     distance_km: routeKm,
+    options,
   };
 }
 

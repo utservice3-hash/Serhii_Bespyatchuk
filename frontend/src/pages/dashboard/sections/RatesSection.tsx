@@ -211,12 +211,26 @@ export function RatesSection() {
         <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
           🗺 Зонна карта: зона <b style={{ color: zc }}>{zr.zone_label}</b> <span title={zr.zone_src}>({zr.zone_src})</span> · {zr.tonnage}
         </div>
-        <div style={{ fontSize: big ? 24 : 17, fontWeight: 800, color: zc, marginTop: 2 }}>
-          {zr.per_km_min === zr.per_km_max ? `${zr.per_km_min}` : `${zr.per_km_min}–${zr.per_km_max}`} грн/км
-          {zr.total_min ? <> ≈ {zr.total_min === zr.total_max ? `${fmt(zr.total_min)}` : `${fmt(zr.total_min)} – ${fmt(zr.total_max ?? zr.total_min)}`} грн за рейс</> : null}
+        <div style={{ overflowX: "auto", marginTop: 6 }}>
+          <table className="data-table compact" style={{ fontSize: big ? 13 : 12, margin: big ? "0 auto" : undefined, width: big ? "auto" : "100%" }}>
+            <thead><tr><th style={{ textAlign: "left" }}>Авто</th><th style={{ textAlign: "right" }}>грн/км</th><th style={{ textAlign: "right" }}>Ціна рейсу</th></tr></thead>
+            <tbody>
+              {(zr.options ?? []).map((o) => (
+                <tr key={o.tonnage} style={o.selected ? { background: `${zc}18`, fontWeight: 700 } : undefined}>
+                  <td style={{ textAlign: "left" }}>{o.selected ? "🚚 " : ""}{o.tonnage}</td>
+                  <td style={{ textAlign: "right", color: zc, fontWeight: o.selected ? 800 : 600 }}>
+                    {o.per_km_min === o.per_km_max ? o.per_km_min : `${o.per_km_min}–${o.per_km_max}`}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {o.total_min ? (o.total_min === o.total_max ? `${fmt(o.total_min)} грн` : `${fmt(o.total_min)} – ${fmt(o.total_max ?? o.total_min)} грн`) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3 }}>
-          {zr.from_area ?? "?"} → {zr.to_area ?? "?"}{zr.distance_km ? ` · ≈${fmt(zr.distance_km)} км` : ""} · правило: тариф за зоною ВІДПРАВЛЕННЯ (з зеленої в червону — зелений тариф)
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 5 }}>
+          {zr.from_area ?? "?"} → {zr.to_area ?? "?"}{zr.distance_km ? ` · ≈${fmt(zr.distance_km)} км` : ""} · правило: тариф за зоною ВІДПРАВЛЕННЯ (з зеленої в червону — зелений тариф) · 🚚 = під вашу вагу
         </div>
       </div>
     );

@@ -1268,6 +1268,7 @@ export interface RateAnalysis {
     from_area: string | null; to_area: string | null; tonnage: string;
     per_km_min: number; per_km_max: number;
     total_min: number | null; total_max: number | null; distance_km: number | null;
+    options: { tonnage: string; per_km_min: number; per_km_max: number; total_min: number | null; total_max: number | null; selected: boolean }[];
   } | null;
 }
 export interface RatesUsageStats {
