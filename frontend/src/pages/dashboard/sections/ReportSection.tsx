@@ -577,10 +577,10 @@ export function ReportSection({
   const s = report?.summary;
   const kpis = s
     ? [
-        { label: "Отримані кошти", value: formatAmount(s.revenue), sub: `${s.deals} угод`, hint: "«Успішно реалізовано» (статус 142, за датою закриття в періоді) + «Оплата отримана» (поточний етап, знімок)." },
-        { label: "Успішно реалізовано", value: formatAmount(s.successRevenue), sub: `${s.successDeals} угод`, hint: "Угоди в статусі «Успішна угода» (142), за датою закриття угоди в періоді." },
-        { label: "Оплата отримана", value: formatAmount(s.paymentRevenue), sub: `${s.paymentDeals} угод`, hint: "Угоди, що ЗАРАЗ на етапі «Оплата отримана» (знімок поточного стану, без фільтра дати)." },
-        { label: "⏳ Очікування оплати", value: formatAmount(s.expected), sub: "виставлені рахунки", hint: "Гроші на етапі «Виставлено рахунок» (знімок поточного стану) — виставлені рахунки, що очікують оплати. Ще НЕ в «Отриманих коштах»." },
+        { label: "Отримані кошти", value: formatAmount(s.revenue), sub: `${s.deals} угод`, color: "#16a34a", hint: "«Успішно реалізовано» (статус 142, за датою закриття в періоді) + «Оплата отримана» (поточний етап, знімок)." },
+        { label: "Успішно реалізовано", value: formatAmount(s.successRevenue), sub: `${s.successDeals} угод`, color: "#16a34a", hint: "Угоди в статусі «Успішна угода» (142), за датою закриття угоди в періоді." },
+        { label: "Оплата отримана", value: formatAmount(s.paymentRevenue), sub: `${s.paymentDeals} угод`, color: "#16a34a", hint: "Угоди, що ЗАРАЗ на етапі «Оплата отримана» (знімок поточного стану, без фільтра дати)." },
+        { label: "⏳ Очікування оплати", value: formatAmount(s.expected), sub: "виставлені рахунки", color: "#b45309", hint: "Гроші на етапі «Виставлено рахунок» (знімок поточного стану) — виставлені рахунки, що очікують оплати. Ще НЕ в «Отриманих коштах»." },
         { label: "Середній чек", value: formatAmountFull(s.avgCheck), sub: "", hint: "Отримані кошти ÷ кількість угод." },
         { label: "Прийнято реклами", value: s.adLeads.toLocaleString("uk-UA"), sub: "", hint: "Угоди повного циклу з рекламним «Источник клиента» (uts.ua/yalogist — сайт/дзвінок/callback), створені в періоді. Ручний метод КВП." },
         { label: "Передані заявки (лідоген)", value: s.transfers.toLocaleString("uk-UA"), sub: "", hint: "Заявки з «Реєстру» лідоген-бота: вхід ліда в «Нова заявка від лідогенератора», унікальні ліди за період." },
@@ -590,7 +590,7 @@ export function ReportSection({
         { label: "Нові клієнти", value: s.newClients.toLocaleString("uk-UA"), sub: "", hint: "Клієнти, чия перша оплата за всю історію припала на період." },
         { label: "Постійні клієнти", value: s.repeatClients.toLocaleString("uk-UA"), sub: "", hint: "Клієнти з 2+ оплаченими перевезеннями lifetime, що замовляли в періоді." },
         { label: "Перенесені з мин. міс.", value: formatAmount(s.carryover), sub: `${s.carryoverDeals} угод`, hint: "Знімок угод, ще в роботі на 1-ше число місяця (рахунок → оплата, крім «Успішна»)." },
-        { label: "Дебіторка", value: formatAmount(s.receivables), sub: "", hint: "Сума неоплаченої дебіторки з Google-таблиці (оновлюється кожні 30 хв)." },
+        { label: "Дебіторка", value: formatAmount(s.receivables), sub: "", color: s.receivables > 0 ? "#dc2626" : undefined, hint: "Сума неоплаченої дебіторки з Google-таблиці (оновлюється кожні 30 хв)." },
       ]
     : [];
 
@@ -666,11 +666,44 @@ export function ReportSection({
         <p className="loading-text">Немає даних.</p>
       ) : (
         <>
+          {s && (s.plan > 0 || s.revenue > 0 || s.expected > 0) && (() => {
+            // Плитка план/факт зі шкалою: оплачено (зелений) + очікувані (коричневий)
+            // на тлі плану; сірим — залишок. Показник кожен окремим кольором.
+            const paid = s.revenue, exp = s.expected, plan = s.plan;
+            const base = Math.max(plan, paid + exp, 1);
+            const pctPaid = Math.round((paid / base) * 100);
+            const pctExp = Math.round((exp / base) * 100);
+            const planPct = plan > 0 ? Math.round((paid / plan) * 100) : null;
+            const gap = plan > 0 ? Math.max(0, plan - paid - exp) : 0;
+            const who = reportManagerId ? (managerOptions.find((m) => m.id === Number(reportManagerId))?.name ?? "менеджер")
+              : reportTeamId ? (teams.find((t) => t.id === Number(reportTeamId))?.name ?? "команда") : "усі команди";
+            const pc = planPct == null ? "var(--text-muted)" : planPct >= 100 ? "#16a34a" : planPct >= 70 ? "#d97706" : "#dc2626";
+            return (
+              <div className="chart-card" style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+                  <h2 className="chart-title" style={{ marginBottom: 4 }}>🎯 План / Факт — {who}</h2>
+                  {plan > 0 && <span style={{ fontWeight: 800, fontSize: 18, color: pc }}>{planPct}% плану</span>}
+                </div>
+                <div style={{ display: "flex", height: 26, borderRadius: 8, overflow: "hidden", background: "var(--border)", margin: "6px 0 8px" }}>
+                  <div style={{ width: `${pctPaid}%`, background: "#16a34a" }} title={`Оплачено: ${formatAmount(paid)}`} />
+                  <div style={{ width: `${pctExp}%`, background: "#b45309" }} title={`Очікувані: ${formatAmount(exp)}`} />
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 16, fontSize: 13 }}>
+                  <span><span style={{ color: "#16a34a", fontWeight: 700 }}>■</span> Оплачено: <b>{formatAmount(paid)}</b></span>
+                  <span><span style={{ color: "#b45309", fontWeight: 700 }}>■</span> Очікувані: <b>{formatAmount(exp)}</b></span>
+                  {plan > 0 && <span><span style={{ color: "var(--text-muted)", fontWeight: 700 }}>■</span> Залишок до плану: <b>{formatAmount(gap)}</b></span>}
+                  {plan > 0 && <span style={{ color: "var(--text-muted)" }}>План: <b>{formatAmount(plan)}</b></span>}
+                  <span style={{ color: "var(--text-muted)" }}>Прогноз (оплачено+очікувані): <b>{formatAmount(paid + exp)}</b></span>
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="kpi-grid">
             {kpis.map((k) => (
-              <div className="kpi-card" key={k.label}>
+              <div className="kpi-card" key={k.label} style={k.color ? { borderLeft: `3px solid ${k.color}` } : undefined}>
                 <span className="kpi-label">{k.label}{k.hint && <InfoHint text={k.hint} />}</span>
-                <span className="kpi-value">{k.value}</span>
+                <span className="kpi-value" style={k.color ? { color: k.color } : undefined}>{k.value}</span>
                 {k.sub && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{k.sub}</span>}
               </div>
             ))}
@@ -774,7 +807,9 @@ export function ReportSection({
                   <b style={{ color: "var(--text)" }}> Темп плану %</b> = факт ÷ план сьогодні (чи в графіку).
                   <b style={{ color: "var(--text)" }}> Викон. міс %</b> = факт ÷ план міс.
                   <b style={{ color: "var(--text)" }}> Відст. шт</b> = скільки не вистачає до плану на сьогодні.
-                  <b style={{ color: "var(--text)" }}> % конв</b> тижня/дня = етап ÷ попередній етап.<br />
+                  <b style={{ color: "var(--text)" }}> % конв</b> тижня/дня = етап ÷ попередній етап у ЦЬОМУ тижні.
+                  ⚠️ Це <b>потік</b> (скільки угод УВІЙШЛО в етап того тижня), а не когорта — тому % може бути &gt;100%
+                  (угоди, що дійшли оплати цього тижня, бралися в роботу раніше). Так само рахує ручний Excel-звіт.<br />
                   <b style={{ color: "var(--text)" }}>💰 Сума оплат (факт)</b> — сума угод, у яких оплата <b>вперше надійшла</b> цього місяця
                   (перший вхід у «Успішно» 142 або «Оплата отримана»), розкладена по {funnelWeeklyGran === "day" ? "днях" : "тижнях"} → тижні сумуються в місячний факт
                   (як у ручному звіті). Ловить і «снапшот-платників» — гроші надійшли, хоч угоду ще не закрито в «Успішно».
@@ -862,6 +897,7 @@ export function ReportSection({
                   <tr>
                     <th>Менеджер</th>
                     <th>План/Факт</th>
+                    <th title="Успішні угоди ÷ прийнято реклами (або ÷ прорахунки)">Конверсія</th>
                     <th>Реклама</th>
                     <th>Передані</th>
                     <th>Прорахунки</th>
@@ -880,10 +916,12 @@ export function ReportSection({
                     const fact = m.successRevenue + m.paymentReceived;
                     const pct = m.plan > 0 ? Math.round((fact / m.plan) * 100) : null;
                     const pc = pct == null ? "var(--text-muted)" : pct >= 100 ? "#16a34a" : pct >= 70 ? "#d97706" : "#dc2626";
+                    const cc = m.conversion >= 20 ? "#16a34a" : m.conversion >= 10 ? "#d97706" : "#dc2626";
                     return (
                       <tr key={m.managerId} onClick={() => setDetailMgr(m)} style={{ cursor: "pointer" }} title="Деталі: План/Факт і задачі">
                         <td style={{ fontWeight: 600 }}>{m.name}</td>
                         <td style={{ color: pc, fontWeight: 600, whiteSpace: "nowrap" }}>{pct != null ? `${pct}%` : "—"}</td>
+                        <td style={{ color: cc, fontWeight: 700 }} title={`база: ${m.conversionBase}`}>{m.conversion ? `${m.conversion}%` : "—"}</td>
                         <td>{m.adLeads}</td>
                         <td>{m.transfers}</td>
                         <td>{m.quotes}</td>

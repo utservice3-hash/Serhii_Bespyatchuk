@@ -726,6 +726,7 @@ export interface ReportData {
     carryover: number;
     carryoverDeals: number;
     expected: number;
+    plan: number;
   };
   byPeriod: { period: string; revenue: number; deals: number; created: number; avgCheck: number }[];
   byManager: {
@@ -744,6 +745,8 @@ export interface ReportData {
     avgCheck: number;
     plan: number;
     expected: number;
+    conversion: number;
+    conversionBase: string;
   }[];
 }
 

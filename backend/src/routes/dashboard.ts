@@ -2737,13 +2737,22 @@ dashboardRouter.get("/report", async (req, res) => {
     transfers: sumK("transfers"),
     carryover: sumK("carryover"), carryoverDeals: sumK("carryoverDeals"),
     expected: sumK("expected"),
+    plan: sumK("plan"), // сума місячних планів виручки в скоупі (для плитки план/факт)
   };
 
   const byManager = managerId
     ? []
     : [...scoreMap.values()]
         .filter((e) => e.successRevenue > 0 || e.dispatched > 0 || e.quotes > 0 || e.paymentReceived > 0 || e.transfers > 0)
-        .map((e) => ({ ...e, avgCheck: e.successDeals > 0 ? Math.round(e.successRevenue / e.successDeals) : 0 }))
+        .map((e) => ({
+          ...e,
+          avgCheck: e.successDeals > 0 ? Math.round(e.successRevenue / e.successDeals) : 0,
+          // Конверсія менеджера = успішні угоди ÷ прийнято реклами (реальна, не
+          // потокова). Якщо реклами 0 — рахуємо від прорахунків як запасний база.
+          conversion: e.adLeads > 0 ? Math.round((e.successDeals / e.adLeads) * 100)
+                    : e.quotes > 0 ? Math.round((e.successDeals / e.quotes) * 100) : 0,
+          conversionBase: e.adLeads > 0 ? "реклама" : e.quotes > 0 ? "прорахунки" : "—",
+        }))
         .sort((a, b) => b.successRevenue - a.successRevenue);
 
   res.json({ granularity, scope: managerId ? "manager" : "team", summary, byPeriod, byManager });
