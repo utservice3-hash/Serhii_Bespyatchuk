@@ -1262,6 +1262,13 @@ export interface RateAnalysis {
     distance_km: number | null; cargo_median?: number; lorry_median?: number;
     band_low?: number; band_high?: number; per_km?: number; per_km_src?: string; per_km_total?: number;
   };
+  /** Рекомендація за зонною картою КВП (зона області відправлення). */
+  zone_recommendation?: {
+    zone: "green" | "yellow" | "red"; zone_label: string; zone_src: string;
+    from_area: string | null; to_area: string | null; tonnage: string;
+    per_km_min: number; per_km_max: number;
+    total_min: number | null; total_max: number | null; distance_km: number | null;
+  } | null;
 }
 export interface RatesUsageStats {
   days: number; total_requests: number; total_users: number;
@@ -1286,7 +1293,7 @@ export async function fetchRatesStats(days = 30): Promise<RatesUsageStats> {
   const { data } = await api.get<RatesUsageStats>("/rates/stats", { params: { days } });
   return data;
 }
-export interface AnalyzePoint { town_id: number; area_id: number | null; lat: number | null; lon: number | null; label: string; }
+export interface AnalyzePoint { town_id: number; area_id: number | null; lat: number | null; lon: number | null; label: string; area?: string | null; }
 export async function analyzeRates(body: {
   frm: AnalyzePoint; to: AnalyzePoint; mass_min: number | null; mass_max: number | null; body_type_ids: number[];
 }): Promise<RateAnalysis> {

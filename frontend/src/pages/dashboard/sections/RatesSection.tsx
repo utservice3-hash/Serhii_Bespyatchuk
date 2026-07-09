@@ -106,8 +106,8 @@ export function RatesSection() {
       if (!f || !t) { setError("Вкажіть місто відправлення і призначення (почніть вводити — зʼявляться підказки)."); return; }
       setFrm(f); setFrmText(f.name); setTo(t); setToText(t.name);
       const r = await analyzeRates({
-        frm: { town_id: f.id, area_id: f.area_id, lat: f.lat, lon: f.lon, label: f.name },
-        to: { town_id: t.id, area_id: t.area_id, lat: t.lat, lon: t.lon, label: t.name },
+        frm: { town_id: f.id, area_id: f.area_id, lat: f.lat, lon: f.lon, label: f.name, area: f.area },
+        to: { town_id: t.id, area_id: t.area_id, lat: t.lat, lon: t.lon, label: t.name, area: t.area },
         mass_min: massMin ? Number(massMin) : null,
         mass_max: massMax ? Number(massMax) : null,
         body_type_ids: bodyId ? [Number(bodyId)] : [],
@@ -197,6 +197,30 @@ export function RatesSection() {
     if (mx && (!o.mass || o.mass > mx + 1)) return false;
     return true;
   });
+
+  // 🗺 Зонна карта КВП: рекомендована ставка за зоною області ВІДПРАВЛЕННЯ
+  // (правило: з зеленої в червону — зелений тариф). Головний орієнтир, коли
+  // пропозицій у Ларді немає; інакше — додаткова довідка.
+  const zr = data?.zone_recommendation ?? null;
+  const zoneColors: Record<string, string> = { green: "#16a34a", yellow: "#d97706", red: "#c8102e" };
+  const ZoneBlock = ({ big }: { big?: boolean }) => {
+    if (!zr) return null;
+    const zc = zoneColors[zr.zone] ?? ACC;
+    return (
+      <div style={{ marginTop: 10, textAlign: big ? "center" : "left", background: `${zc}0d`, border: `1px solid ${zc}55`, borderLeft: `4px solid ${zc}`, borderRadius: 8, padding: big ? "12px 14px" : "9px 12px" }}>
+        <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+          🗺 Зонна карта: зона <b style={{ color: zc }}>{zr.zone_label}</b> <span title={zr.zone_src}>({zr.zone_src})</span> · {zr.tonnage}
+        </div>
+        <div style={{ fontSize: big ? 24 : 17, fontWeight: 800, color: zc, marginTop: 2 }}>
+          {zr.per_km_min === zr.per_km_max ? `${zr.per_km_min}` : `${zr.per_km_min}–${zr.per_km_max}`} грн/км
+          {zr.total_min ? <> ≈ {zr.total_min === zr.total_max ? `${fmt(zr.total_min)}` : `${fmt(zr.total_min)} – ${fmt(zr.total_max ?? zr.total_min)}`} грн за рейс</> : null}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3 }}>
+          {zr.from_area ?? "?"} → {zr.to_area ?? "?"}{zr.distance_km ? ` · ≈${fmt(zr.distance_km)} км` : ""} · правило: тариф за зоною ВІДПРАВЛЕННЯ (з зеленої в червону — зелений тариф)
+        </div>
+      </div>
+    );
+  };
 
   const segBtn = (active: boolean): React.CSSProperties => ({
     padding: "7px 13px", borderRadius: 8, border: "1px solid var(--border)",
@@ -363,10 +387,12 @@ export function RatesSection() {
                     <div style={{ textAlign: "left", fontSize: 13, lineHeight: 1.45, background: "var(--card-bg)", border: "1px solid rgba(200,16,46,0.25)", borderLeft: `3px solid ${ACC}`, borderRadius: 8, padding: "9px 12px", marginTop: 12 }}>
                       💡 <b style={{ color: ACC }}>Як читати:</b> «Замовники» — це здебільшого <b>експедиторські компанії</b>, які шукають перевізника за своєю (часто заниженою) ціною. За такою ставкою перевізника зазвичай <b>не знайти</b>. Тому орієнтуйся на <b>максимум</b> і на ставки перевізників, а клієнту став ціну <b>вище за максимум</b> — щоб під неї реально знайти транспорт і закласти свою маржу.
                     </div>
+                    <ZoneBlock />
                   </>
                 ) : (
                   <>
                     <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Немає точних збігів для рекомендації ({strictInfo}). Повна статистика — нижче.</div>
+                    <ZoneBlock big />
                     {settings && dist ? (
                       <div style={{ marginTop: 10 }}>
                         <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Заявок за вашим напрямком немає — орієнтуйтесь на базовий тариф:</div>

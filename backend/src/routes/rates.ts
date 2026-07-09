@@ -202,6 +202,54 @@ export async function lardiSearch(path: string, req: AnalyzeBody, useArea: boole
   return { code: 200, content: asArr(asObj(j).content), detail: "" };
 }
 
+// ── Зонна карта України (рекомендована ставка, коли в Ларді порожньо) ──────
+// Зона маршруту = зона області ВІДПРАВЛЕННЯ (правило КВП: веземо з зеленої в
+// червону → діапазон зеленої). Тарифи грн/км — з карти КВП (липень 2026).
+// Помаранчеві області карти (Закарпаття/Прикарпаття/Буковина) → жовтий тариф;
+// окуповані (Луганська/Донецька/Крим) зони не мають → фолбек на зону призначення.
+type Zone = "green" | "yellow" | "red";
+const ZONE_LABEL: Record<Zone, string> = { green: "🟢 зелена", yellow: "🟡 жовта", red: "🔴 червона" };
+const AREA_ZONES: [RegExp, Zone][] = [
+  [/волин/i, "green"], [/рівн|ровен/i, "green"], [/львів|львов/i, "green"],
+  [/терноп/i, "green"], [/хмельни/i, "green"], [/вінни|винни/i, "green"],
+  [/житомир/i, "green"], [/київ|киев/i, "green"],
+  [/закарпат/i, "yellow"], [/франків|франков/i, "yellow"], [/чернівец|черновиц/i, "yellow"],
+  [/одес/i, "yellow"], [/полтав/i, "yellow"], [/миколаїв|николаев/i, "yellow"],
+  [/черніг|черниг/i, "red"], [/сумс|суми/i, "red"], [/харків|харьков/i, "red"],
+  [/черкас/i, "red"], [/кіровоград|кировоград|кропивни/i, "red"],
+  [/дніпр|днепр/i, "red"], [/запор/i, "red"], [/херсон/i, "red"],
+];
+const ZONE_RATES: { maxMass: number; label: string; rates: Record<Zone, [number, number]> }[] = [
+  { maxMass: 2.5, label: "до 2,5 т", rates: { green: [25, 25], yellow: [30, 30], red: [35, 35] } },
+  { maxMass: 5, label: "до 5 т", rates: { green: [30, 35], yellow: [35, 40], red: [40, 50] } },
+  { maxMass: 10, label: "до 10 т", rates: { green: [38, 45], yellow: [45, 55], red: [55, 60] } },
+  { maxMass: Infinity, label: "20 т (фура)", rates: { green: [55, 67], yellow: [67, 73], red: [73, 85] } },
+];
+function zoneOfArea(area: string | null | undefined): Zone | null {
+  if (!area) return null;
+  for (const [re, z] of AREA_ZONES) if (re.test(area)) return z;
+  return null;
+}
+function zoneRecommendation(frmArea: string | null, toArea: string | null, mass: number | null, routeKm: number | null) {
+  const zoneFrom = zoneOfArea(frmArea);
+  const zoneTo = zoneOfArea(toArea);
+  const zone = zoneFrom ?? zoneTo;
+  if (!zone) return null;
+  const bracket = ZONE_RATES.find((b) => (mass ?? 20) <= b.maxMass)!;
+  const [lo, hi] = bracket.rates[zone];
+  return {
+    zone,
+    zone_label: ZONE_LABEL[zone],
+    zone_src: zoneFrom ? "за областю відправлення" : "за областю призначення (відправлення не розпізнано)",
+    from_area: frmArea, to_area: toArea,
+    tonnage: bracket.label,
+    per_km_min: lo, per_km_max: hi,
+    total_min: routeKm ? Math.round(lo * routeKm) : null,
+    total_max: routeKm ? Math.round(hi * routeKm) : null,
+    distance_km: routeKm,
+  };
+}
+
 function recommend(cargo: Any | null, lorry: Any | null, routeKm: number | null) {
   const cls = (x: Any | null) => asObj(asObj(x?.classes).all);
   const rec: Any = { distance_km: routeKm };
@@ -348,6 +396,17 @@ ratesRouter.post("/analyze", async (req, res) => {
   }
 
   result.recommendation = recommend(result.cargo as Any, result.lorry as Any, routeKm);
+
+  // Зонна рекомендація (карта КВП) — головний орієнтир, коли пропозицій у Ларді
+  // немає. Назва області: з тіла запиту (фронт шле town.area) або з довідника за id.
+  try {
+    const areas = await areasMap();
+    const areaOf = (p: Any): string | null =>
+      (typeof p?.area === "string" && p.area) || (p?.area_id ? areas[Number(p.area_id)] ?? null : null);
+    const massForZone = reqBody.mass_max ?? reqBody.mass_min ?? null;
+    result.zone_recommendation = zoneRecommendation(areaOf(frm as unknown as Any), areaOf(to as unknown as Any), massForZone, routeKm);
+  } catch { result.zone_recommendation = null; }
+
   res.json(result);
 });
 
