@@ -208,7 +208,7 @@ RETURNED_QC_TAG = "Повернуто АІ"
 # Прапорець повернення угод AI-Відділом якості. Коли False — AI НЕ переводить
 # угоди в етап «Повернуто АІ» (ні передчасно закриті, ні помилково «не цільові»).
 # AI-аналіз і сповіщення лишаються (інформативні), але угода фізично не рухається.
-QC_RETURN_ENABLED = False
+QC_RETURN_ENABLED = True
 
 # Telegram — гілка для звітів по плану
 TG_PLAN_THREAD_ID = 175862
@@ -1921,166 +1921,197 @@ def _handle_unassigned(lead_id: int, status_id: int):
     logger.info("Unassigned lead %s in status %s", lead_id, status_name)
 
 
+def _gather_deal_context(lead_id: int, manager_name: str):
+    """Збирає повний контекст угоди для AI-оцінки якості закриття:
+    тексти всіх нотаток CRM, транскрипти всіх дзвінків (беруться з аркуша
+    «Дзвінки РНК», а відсутні — дотранскрибовуються), і статистику спроб
+    контакту (к-сть дзвінків + у скільки різних днів). Повертає
+    (notes_text, calls_text, contact_summary)."""
+    notes = kommo.get_lead_notes(lead_id)
+    note_texts = [
+        ((n.get("params") or {}).get("text") or "").strip()
+        for n in notes
+        if n.get("note_type") in (4, "common") and (n.get("params") or {}).get("text")
+    ]
+    notes_text = "\n".join(f"- {t}" for t in note_texts)[:4000]
+
+    call_notes = sorted(
+        (n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")),
+        key=lambda n: n.get("created_at", 0),
+    )
+    attempts = len(call_notes)
+    days = set()
+    for n in call_notes:
+        ts = n.get("created_at", 0)
+        if ts:
+            days.add(datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat())
+
+    # Транскрипти: якщо вже накопичені в аркуші (транскрибовані за життя угоди) —
+    # беремо звідти (без повторної транскрибації); інакше транскрибуємо ≥40с
+    # дзвінки зараз (з обмеженням, щоб не перевантажувати).
+    calls = sheets.get_calls_for_lead(lead_id)
+    if not calls:
+        for n in call_notes[:15]:
+            nid = n.get("id")
+            full = kommo.get_note(lead_id, nid) if nid else n
+            params = full.get("params") or {}
+            dur = int(params.get("duration", 0) or 0)
+            if dur < 40:
+                continue
+            link = params.get("link", "") or params.get("LINK", "")
+            tr = transcriber.transcribe_call(link) if link else ""
+            ctype = "вхідний" if full.get("note_type") in (10, "call_in") else "вихідний"
+            ts = full.get("created_at", 0)
+            at = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(timezone.utc)
+            sheets.append_call(lead_id, manager_name, ctype, dur, tr, at)
+        calls = sheets.get_calls_for_lead(lead_id)
+
+    calls_text = ""
+    for i, c in enumerate(calls, 1):
+        tr = (c.get("Транскрипт") or "")[:1500]
+        calls_text += (
+            f"\n[Дзвінок {i} {c.get('Дата','')} {c.get('Тип','')} "
+            f"{c.get('Тривалість (с)','?')}с]\n{tr}"
+        )
+    calls_text = calls_text[:6000]
+
+    contact_summary = (
+        f"Спроби контакту: {attempts} дзвінк(ів) у {len(days)} різни(х) дн(ів)."
+    )
+    return notes_text, calls_text, contact_summary
+
+
 def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id: int = 0, pipeline_id: int = 0):
+    lead = kommo.get_lead(lead_id)
+
+    # Перевезення «По місту» (без маржі) — повний ігнор: без аналізу,
+    # повернення й сповіщень (бізнес-правило).
+    if lead and kommo.is_city_transport(lead):
+        logger.info("Closed lead %s — перевезення по місту, повний ігнор", lead_id)
+        return
+
     details = kommo.get_lead_details(lead_id, old_status_id, pipeline_id)
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
     tg_tag = notifier.get_manager_tag(responsible_id)
     supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
     team = MANAGER_TEAM.get(responsible_id, "")
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
-
     sup_part = f" {supervisor_tag}" if supervisor_tag else ""
-    days = f"{details['days_in_work']} дн." if details["days_in_work"] is not None else "—"
+
     reason = details["reject_reason"] or "не вказана"
     reason_lower = (details["reject_reason"] or "").lower()
     is_duplicate = "дубл" in reason_lower
     is_test = "тест" in reason_lower
-    # Дубль і Тест — легітимні закриття: угоду НЕ повертаємо в роботу навіть
-    # при передчасному AI-вердикті.
-    no_return = is_duplicate or is_test
+    no_return = is_duplicate or is_test  # легітимні закриття
     last_status = details["last_status"] or "—"
-    notes = details["notes_count"]
-    calls = details["calls_count"]
-
-    activity = "✅ Була активність" if (notes > 0 or calls > 0) else "🚫 Активності не було"
-
-    # Для РНК-команд рахуємо AI-вердикт ДО відправки сповіщення, щоб одразу
-    # показати короткий аналіз і, якщо правила продажу не дотримані, повернути
-    # угоду менеджеру в роботу.
-    verdict = ""
-    category = ""
-    verdict_reason = ""
-    recommendation_clean = ""
-    teamlead_tip = ""
-    returned = False
-
-    lead = kommo.get_lead(lead_id)
     amount = int(lead.get("price", 0)) if lead else 0
 
-    if team in RNK_TEAMS:
-        recommendation = ai_analyzer.analyze_closed_deal({
-            **details, "manager": manager_name, "amount": amount
-        })
-        calls_analysis = _analyze_rnk_closed_deal_calls(lead_id, details["name"], manager_name)
-        if calls_analysis:
-            recommendation = f"{recommendation}\n\n📞 Аналіз прослуханих дзвінків:\n{calls_analysis}"
+    # Анти-цикл / повага до правок тімліда: якщо угоду вже повертали (тег
+    # «Повернуто АІ») — не повертаємо повторно (рішення тімліда головніше за AI).
+    tags = [t.get("name") for t in (lead.get("_embedded", {}).get("tags") or [])] if lead else []
+    already_returned = RETURNED_QC_TAG in tags
 
-        closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ['ʼ’]?ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
-        category_match = re.search(r"CATEGORY:\s*(.+)", recommendation)
-        # нормалізуємо вердикт (різні апострофи в ОБ'ЄКТИВНЕ → канонічний)
-        verdict = ""
-        if closure_match:
-            verdict = "ПЕРЕДЧАСНЕ" if "ПЕРЕДЧАСНЕ" in closure_match.group(1) else "ОБ'ЄКТИВНЕ"
-        verdict_reason = closure_match.group(2).strip() if closure_match else ""
-        category = category_match.group(1).strip() if category_match else ""
-        nextstep_match = re.search(r"NEXTSTEP:\s*(.+)", recommendation)
-        next_step = nextstep_match.group(1).strip() if nextstep_match else ""
-        if next_step in ("-", "—", ""):
-            next_step = ""
-        recommendation_clean = re.sub(r"\n?CLOSURE:.*", "", recommendation)
-        recommendation_clean = re.sub(r"\n?CATEGORY:.*", "", recommendation_clean)
-        recommendation_clean = re.sub(r"\n?NEXTSTEP:.*", "", recommendation_clean).strip()
+    # Повна картина: усі нотатки + транскрипти всіх дзвінків + спроби контакту.
+    notes_text, calls_text, contact_summary = _gather_deal_context(lead_id, manager_name)
 
-        tip_match = re.search(r"→\s*тімліду:\s*(.+)", recommendation_clean)
-        teamlead_tip = tip_match.group(1).strip() if tip_match else ""
+    recommendation = ai_analyzer.analyze_closed_deal(
+        {**details, "manager": manager_name, "amount": amount},
+        notes_text=notes_text, calls_text=calls_text, contact_summary=contact_summary,
+    )
 
-        deal_data = {
-            "lead_id": lead_id,
-            "name": details["name"],
-            "manager": manager_name,
-            "team": team,
-            "reject_reason": details["reject_reason"],
-            "last_status": details["last_status"],
-            "days_in_work": details["days_in_work"],
-            "calls_count": details["calls_count"],
-            "notes_count": details["notes_count"],
-            "amount": amount,
-            "closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
-            "ai_recommendation": recommendation_clean,
-            "verdict": verdict,
-            "category": category,
-        }
-        sheets.log_closed_deal(deal_data)
+    closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ['ʼ’]?ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
+    verdict = ""
+    if closure_match:
+        verdict = "ПЕРЕДЧАСНЕ" if "ПЕРЕДЧАСНЕ" in closure_match.group(1) else "ОБ'ЄКТИВНЕ"
+    verdict_reason = closure_match.group(2).strip() if closure_match else ""
+    rule_match = re.search(r"RULE:\s*(.+)", recommendation)
+    rule = rule_match.group(1).strip() if rule_match else ""
+    if rule in ("-", "—"):
+        rule = ""
+    category_match = re.search(r"CATEGORY:\s*(.+)", recommendation)
+    category = category_match.group(1).strip() if category_match else ""
+    nextstep_match = re.search(r"NEXTSTEP:\s*(.+)", recommendation)
+    next_step = nextstep_match.group(1).strip() if nextstep_match else ""
+    if next_step in ("-", "—", ""):
+        next_step = ""
+    recommendation_clean = re.sub(r"\n?CLOSURE:.*", "", recommendation)
+    recommendation_clean = re.sub(r"\n?RULE:.*", "", recommendation_clean)
+    recommendation_clean = re.sub(r"\n?CATEGORY:.*", "", recommendation_clean)
+    recommendation_clean = re.sub(r"\n?NEXTSTEP:.*", "", recommendation_clean).strip()
+    tip_match = re.search(r"→\s*тімліду:\s*(.+)", recommendation_clean)
+    teamlead_tip = tip_match.group(1).strip() if tip_match else ""
 
-        # Дубль/Тест — легітимне закриття: НЕ повертаємо в роботу, навіть якщо
-        # AI вважає закриття передчасним. Для дубля натомість вимагаємо
-        # посилання на активну угоду в нотатках (нижче у verdict_block).
-        if verdict == "ПЕРЕДЧАСНЕ" and not no_return and QC_RETURN_ENABLED:
-            # Переводимо у воронку "Продаж повний цикл" на етап
-            # "Повернуто АІ Відділ якості" + тег, щоб тімлід вів далі повний цикл.
-            returned = kommo.move_lead_to(
-                lead_id, PEREVOZY_PIPELINE_ID, RETURNED_QC_STATUS, RETURNED_QC_TAG
-            )
-            # Пишемо детальний розбір у нотатки угоди — щоб менеджер/тімлід
-            # бачили прямо в картці: чому повернуто, що не зроблено, що робити далі.
-            note = (
-                "🤖 AI Відділ якості — угоду повернуто на допрацювання\n\n"
-                f"❗ Чому повернуто: {verdict_reason or '—'}\n"
-                f"📋 Категорія: {category or '—'}\n"
-            )
-            if next_step:
-                note += f"➡️ Наступний крок: {next_step}\n"
-            if teamlead_tip:
-                note += f"👁 Тімліду звернути увагу: {teamlead_tip}\n"
-            if recommendation_clean:
-                note += f"\n📊 Детальний розбір:\n{recommendation_clean}"
-            kommo.add_note(lead_id, note)
+    # Лог у аркуш закритих угод — завжди (тихий запис для аналітики), для всіх команд.
+    sheets.log_closed_deal({
+        "lead_id": lead_id,
+        "name": details["name"],
+        "manager": manager_name,
+        "team": team,
+        "reject_reason": details["reject_reason"],
+        "last_status": details["last_status"],
+        "days_in_work": details["days_in_work"],
+        "calls_count": details["calls_count"],
+        "notes_count": details["notes_count"],
+        "amount": amount,
+        "closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+        "ai_recommendation": recommendation_clean,
+        "verdict": verdict,
+        "category": category,
+    })
 
-    verdict_block = ""
-    if verdict == "ПЕРЕДЧАСНЕ" and is_duplicate:
-        active_ref = _find_active_deal_ref(lead_id)
-        if active_ref:
-            ref_line = f"🔗 Активна угода: {active_ref}\n"
-        else:
-            ref_line = (
-                f"⚠️ <b>У нотатках немає посилання на активну угоду!</b> "
-                f"Вкажіть #ID або лінк активної угоди в примітках.\n"
-            )
-        verdict_block = (
-            f"\n🔁 <b>Дубль — угоду не повертаємо в роботу</b>\n"
-            f"{ref_line}"
-            f"👁 Тімлід на контроль:{sup_part or ' —'}\n"
+    return_deal = (
+        verdict == "ПЕРЕДЧАСНЕ" and not no_return
+        and not already_returned and QC_RETURN_ENABLED
+    )
+
+    if not return_deal:
+        # Коректне закриття / дубль / тест / вже поверталось →
+        # ТИХО (без сповіщень і тегів). Бот не шумить на нормальні закриття.
+        logger.info(
+            "Closed lead %s by %s — тихо (verdict=%s, no_return=%s, already_returned=%s)",
+            lead_id, manager_name, verdict, no_return, already_returned,
         )
-    elif verdict == "ПЕРЕДЧАСНЕ" and is_test:
-        verdict_block = (
-            f"\n🧪 <b>Тест — угоду не повертаємо в роботу</b>\n"
-        )
-    elif verdict == "ПЕРЕДЧАСНЕ":
-        verdict_block = (
-            f"\n🔴 <b>AI: угоду закрито передчасно</b>\n"
-            f"📋 Категорія: {category or '—'}\n"
-            f"⚠️ {verdict_reason}\n"
-        )
-        if team in RNK_TEAMS:
-            if QC_RETURN_ENABLED:
-                verdict_block += (
-                    f"🛠 <b>Угода йде на допрацювання</b> — переведено у воронку "
-                    f"«Продаж повний цикл», етап «Повернуто АІ Відділ якості».\n"
-                )
-            verdict_block += f"👁 Тімлід на контроль:{sup_part or ' —'}\n"
-    elif verdict == "ОБ'ЄКТИВНЕ":
-        verdict_block = f"\n🟢 <b>AI: закриття обґрунтоване</b>\n{verdict_reason}\n"
+        return
 
+    # ── ПОВЕРНЕННЯ на допрацювання — єдиний випадок, коли бот сповіщає й тегує ──
+    returned = kommo.move_lead_to(lead_id, PEREVOZY_PIPELINE_ID, RETURNED_QC_STATUS, RETURNED_QC_TAG)
+    note = (
+        "🤖 AI Відділ якості — угоду повернуто на допрацювання\n\n"
+        f"❗ Чому повернуто: {verdict_reason or '—'}\n"
+        f"📏 Правило: {rule or '—'}\n"
+        f"📋 Категорія: {category or '—'}\n"
+    )
+    if next_step:
+        note += f"➡️ Наступний крок: {next_step}\n"
     if teamlead_tip:
-        verdict_block += f"🧠 Коротко для тімліда: {teamlead_tip}\n"
+        note += f"👁 Тімліду звернути увагу: {teamlead_tip}\n"
+    if recommendation_clean:
+        note += f"\n📊 Детальний розбір:\n{recommendation_clean}"
+    kommo.add_note(lead_id, note)
 
     msg = (
-        f"❌ <b>Закрито і не реалізовано</b>\n"
+        f"🔴 <b>Угоду повернуто на допрацювання</b>\n"
         f"👤 Менеджер: <b>{manager_name}</b>{tg_tag}{sup_part}\n"
         f"🏷 Назва: {details['name']}\n"
-        f"📋 Причина: {reason}\n"
-        f"🔀 Закрито з етапу: {last_status}\n"
-        f"📞 Дзвінків: <b>{calls}</b> | Нотаток: <b>{notes}</b>\n"
-        f"📅 Днів в роботі: <b>{days}</b>\n"
-        f"{activity}\n"
-        f"{verdict_block}"
+        f"📋 Причина закриття: {reason}\n"
+        f"🔀 Етап: {last_status} | 📞 {details['calls_count']} дзв. | 📝 {details['notes_count']} нот.\n"
+        f"⚠️ Чому повертаємо: {verdict_reason or '—'}\n"
+        f"📏 Правило: {rule or '—'}\n"
+        f"📋 Категорія: {category or '—'}\n"
+    )
+    if next_step:
+        msg += f"➡️ Наступний крок: {next_step}\n"
+    if teamlead_tip:
+        msg += f"🧠 Тімліду: {teamlead_tip}\n"
+    msg += (
+        f"🛠 Переведено у «Продаж повний цикл» → «Повернуто АІ Відділ якості».\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
     if team in RNK_TEAMS:
         notifier.send_to_rnk_closed(msg, team)
     else:
         notifier.send_to_rpk(msg)
-    logger.info("Closed not realized: lead %s by %s (verdict=%s, returned=%s)", lead_id, manager_name, verdict, returned)
+    logger.info("Closed not realized RETURNED: lead %s by %s (rule=%s, moved=%s)", lead_id, manager_name, rule, returned)
 
 
 def _check_non_target_lead(lead_id: int, responsible_id: int):
@@ -2089,6 +2120,9 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     lead = kommo.get_lead(lead_id)
     if not lead:
         return
+    if kommo.is_city_transport(lead):
+        logger.info("Non-target lead %s — перевезення по місту, повний ігнор", lead_id)
+        return  # перевезення по місту — повний ігнор (без аналізу/повернення/сповіщень)
     if not kommo.has_utm_campaign(lead):
         return  # відстежуємо лише угоди, що прийшли по таргету (utm_campaign)
 

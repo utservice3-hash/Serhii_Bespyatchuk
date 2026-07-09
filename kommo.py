@@ -317,6 +317,26 @@ def has_utm_campaign(lead: dict) -> bool:
     return False
 
 
+REQUEST_TYPE_FIELD_ID = 2097965      # поле "Тип запиту"
+CITY_TRANSPORT_ENUM_ID = 6345143     # значення "По місту"
+
+
+def is_city_transport(lead: dict) -> bool:
+    """True, якщо «Тип запиту» = «По місту». Такі угоди (перевезення по місту,
+    без маржі) повністю ігноруються AI Відділом якості — без аналізу, повернення
+    й сповіщень."""
+    if not lead:
+        return False
+    for cf in lead.get("custom_fields_values") or []:
+        if cf.get("field_id") == REQUEST_TYPE_FIELD_ID:
+            for v in (cf.get("values") or []):
+                if v.get("enum_id") == CITY_TRANSPORT_ENUM_ID:
+                    return True
+                if str(v.get("value", "")).strip().lower() == "по місту":
+                    return True
+    return False
+
+
 def get_lead_source(lead: dict) -> str:
     """Extract 'Источник клиента' value from lead custom fields."""
     for cf in lead.get("custom_fields_values") or []:
