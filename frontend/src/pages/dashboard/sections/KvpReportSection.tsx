@@ -301,22 +301,18 @@ function monthPlanOfBlock(m: Metric, b: Block | null | undefined, pl: KvpPlans):
 }
 
 // ── Матриця План/Факт (структура ручного звіту КВП) ───────────────────
-function PlanFactMatrix({ prev, cur, prevRange, curRange, isMonth, plans, plansPrev, ratio, onSave, onSavePrev }: {
+function PlanFactMatrix({ prev, cur, prevRange, curRange, isMonth, plans, ratio, onSave }: {
   prev: Block; cur: Block; prevRange: Range; curRange: Range; isMonth: boolean;
-  plans: KvpPlans; plansPrev: KvpPlans; ratio: number | null;
+  plans: KvpPlans; ratio: number | null;
   onSave: (metric: string, v: number | null) => void;
-  onSavePrev: (metric: string, v: number | null) => void;
 }) {
   const groups = [...new Set(METRICS.map((m) => m.group))];
-  const nCols = isMonth ? 10 : 4;
+  const nCols = isMonth ? 9 : 4;
   // План редагований: явно editable, АБО received без планів менеджерів (fallback received_total).
-  const canEdit = (m: Metric, which: "cur" | "prev") => {
+  const canEdit = (m: Metric) => {
     if (!isMonth) return false;
     if (m.editable) return true;
-    if (m.planKind === "revenue") {
-      const b = which === "cur" ? cur : prev;
-      return !b.ov.planMonthTotal; // немає суми планів менеджерів → ручний план
-    }
+    if (m.planKind === "revenue") return !cur.ov.planMonthTotal; // немає планів менеджерів → ручний
     return false;
   };
   const editKey = (m: Metric) => (m.planKind === "revenue" ? "received_total" : (m.planKind as string));
@@ -326,8 +322,8 @@ function PlanFactMatrix({ prev, cur, prevRange, curRange, isMonth, plans, plansP
         <thead>
           <tr>
             <th style={{ textAlign: "left" }}>Показник</th>
-            <th style={{ textAlign: "right", color: MUTED }}>Факт<br />{dmy(prevRange.from)}–{dmy(prevRange.to)}</th>
-            {isMonth && <th style={{ textAlign: "right", color: MUTED }}>План<br />мин. міс<InfoHint text="План минулого місяця — для порівняння. Редагується кліком." /></th>}
+            <th style={{ textAlign: "right", color: MUTED }}>Результат мин. тижня<br />{dmy(prevRange.from)}–{dmy(prevRange.to)}<InfoHint text="Довідково: що було минулого тижня. Не аналізуємо — просто результат для порівняння." /></th>
+
             <th style={{ textAlign: "right" }}>Факт<br />{dmy(curRange.from)}–{dmy(curRange.to)}</th>
             {isMonth && <th style={{ textAlign: "right" }}>План<br />поточ. міс<InfoHint text="Гроші — сума планів менеджерів (якщо є). Реклбюджет — з таблиці. Решта — плани КВП: клік по клітинці, щоб проставити вручну." /></th>}
             {isMonth && <th style={{ textAlign: "right" }}>Викон.<br />плану %<InfoHint text="Факт ÷ ПЛАН МІСЯЦЯ × 100%. Зелений ≥100, жовтий ≥70, червоний <70." /></th>}
@@ -344,23 +340,16 @@ function PlanFactMatrix({ prev, cur, prevRange, curRange, isMonth, plans, plansP
               {METRICS.filter((m) => m.group === g).map((m) => {
                 const pv = m.get(prev), cv = m.get(cur);
                 const planCur = monthPlanOfBlock(m, cur, plans);
-                const planPrev = monthPlanOfBlock(m, prev, plansPrev);
                 const p = computePace(cv, planCur, m.flow, ratio);
                 return (
                   <tr key={m.key}>
                     <td style={{ textAlign: "left" }}>{m.label}{m.hint && <InfoHint text={m.hint} />}</td>
                     <td style={{ textAlign: "right", color: MUTED }}>{fmtVal(pv, m.unit)}</td>
-                    {isMonth && (
-                      <td style={{ textAlign: "right" }}>
-                        {canEdit(m, "prev")
-                          ? <TargetCell value={planPrev} unit={m.unit} muted onSave={(v) => onSavePrev(editKey(m), v)} />
-                          : <span style={{ color: MUTED }}>{planPrev != null ? fmtVal(planPrev, m.unit) : "—"}</span>}
-                      </td>
-                    )}
+
                     <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtVal(cv, m.unit)}</td>
                     {isMonth && (
                       <td style={{ textAlign: "right" }}>
-                        {canEdit(m, "cur")
+                        {canEdit(m)
                           ? <TargetCell value={planCur} unit={m.unit} onSave={(v) => onSave(editKey(m), v)} />
                           : <span style={{ color: MUTED }}>{planCur != null ? fmtVal(planCur, m.unit) : "—"}</span>}
                       </td>
@@ -490,11 +479,10 @@ function TeamWeeklyDetail({ teamId, month, teamPlan }: {
   );
 }
 
-function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSavePrev, month }: {
-  prev: ExecutiveOverview; cur: ExecutiveOverview; plans: KvpPlans; plansPrev: KvpPlans;
+function TeamMatrix({ prev, cur, plans, ratio, isMonth, onSave, month }: {
+  prev: ExecutiveOverview; cur: ExecutiveOverview; plans: KvpPlans;
   ratio: number | null; isMonth: boolean;
   onSave: (metric: string, v: number | null) => void;
-  onSavePrev: (metric: string, v: number | null) => void;
   month: string;
 }) {
   const prevByTeam = new Map(prev.byTeam.map((t) => [t.teamId, t]));
@@ -502,14 +490,14 @@ function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSav
   const [openTeam, setOpenTeam] = useState<number | null>(null);
   if (rows.length === 0) return null;
   const maxRev = Math.max(...rows.map((t) => t.revenue), 1);
-  const nCols = isMonth ? 11 : 7;
+  const nCols = isMonth ? 10 : 7;
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="data-table compact" style={{ minWidth: isMonth ? 860 : 620 }}>
         <thead><tr>
           <th style={{ textAlign: "left" }}>#</th><th style={{ textAlign: "left" }}>Команда<InfoHint text={HINTS.teamPlan} /></th>
           <th style={{ textAlign: "right", color: MUTED }}>Факт мин. міс</th>
-          {isMonth && <th style={{ textAlign: "right", color: MUTED }}>План мин.</th>}
+
           <th style={{ textAlign: "right" }}>Факт</th>
           {isMonth && <th style={{ textAlign: "right" }}>План міс</th>}
           {isMonth && <th style={{ textAlign: "right" }}>Викон. %</th>}
@@ -523,7 +511,6 @@ function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSav
             const avg = t.deals > 0 ? Math.round(t.revenue / t.deals) : 0;
             const key = `team_revenue_${t.teamId}`;
             const planCur = plans[key] ?? null;
-            const planPrev = plansPrev[key] ?? null;
             const p = computePace(t.revenue, planCur, true, ratio);
             const open = openTeam === t.teamId;
             return (
@@ -540,7 +527,7 @@ function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSav
                     </div>
                   </td>
                   <td style={{ textAlign: "right", color: MUTED }}>{formatAmount(pv?.revenue ?? 0)}</td>
-                  {isMonth && <td style={{ textAlign: "right" }}><TargetCell value={planPrev} unit="money" muted onSave={(v) => onSavePrev(key, v)} /></td>}
+
                   <td style={{ textAlign: "right", fontWeight: 600 }}>{formatAmount(t.revenue)}</td>
                   {isMonth && <td style={{ textAlign: "right" }}><TargetCell value={planCur} unit="money" onSave={(v) => onSave(key, v)} /></td>}
                   {isMonth && <td style={{ textAlign: "right", fontWeight: 700, color: pctColor(p.pctMonth) }}>{p.pctMonth != null ? `${p.pctMonth}%` : "—"}</td>}
@@ -603,14 +590,13 @@ function WeeklyMatrix({ prevB, curB, prevRange, curRange, monthPlanOf, teamMonth
   const cell = (v: number | null, unit: Unit, muted = false) => (
     <td style={{ textAlign: "right", color: muted ? MUTED : undefined }}>{v != null ? fmtVal(v, unit) : "—"}</td>
   );
-  const renderRow = (label: string, unit: Unit, pv: number, cv: number, planPrev: number | null, planCur: number | null, hint?: string) => {
+  const renderRow = (label: string, unit: Unit, pv: number, cv: number, planCur: number | null, hint?: string) => {
     const pct = planCur != null && planCur > 0 ? Math.round((cv / planCur) * 100) : null;
     const left = planCur != null ? Math.max(0, planCur - cv) : null;
     return (
       <tr key={label}>
         <td style={{ textAlign: "left" }}>{label}{hint && <InfoHint text={hint} />}</td>
         {cell(pv, unit, true)}
-        {cell(planPrev, unit, true)}
         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtVal(cv, unit)}</td>
         {cell(planCur, unit)}
         <td style={{ textAlign: "right", fontWeight: 700, color: pctColor(pct) }}>{pct != null ? `${pct}%` : "—"}</td>
@@ -630,7 +616,7 @@ function WeeklyMatrix({ prevB, curB, prevRange, curRange, monthPlanOf, teamMonth
           <tr>
             <th style={{ textAlign: "left" }}>Показник</th>
             <th style={{ textAlign: "right", color: MUTED }}>Факт<br />{dmy(prevRange.from)}–{dmy(prevRange.to)}</th>
-            <th style={{ textAlign: "right", color: MUTED }}>План<br />мин. тижд<InfoHint text="Місячний план × частка робочих днів тижня в місяці (крос-місячні тижні — з обох місяців)." /></th>
+
             <th style={{ textAlign: "right" }}>Факт<br />{dmy(curRange.from)}–{dmy(curRange.to)}</th>
             <th style={{ textAlign: "right" }}>План<br />поточ. тижд</th>
             <th style={{ textAlign: "right" }}>Викон.<br />плану %</th>
@@ -641,16 +627,16 @@ function WeeklyMatrix({ prevB, curB, prevRange, curRange, monthPlanOf, teamMonth
         <tbody>
           {groups.map((g) => (
             <Fragment key={g}>
-              <tr><td colSpan={8} style={{ fontWeight: 700, background: "var(--bg-subtle, rgba(127,127,127,0.08))", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em" }}>{g}</td></tr>
+              <tr><td colSpan={7} style={{ fontWeight: 700, background: "var(--bg-subtle, rgba(127,127,127,0.08))", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em" }}>{g}</td></tr>
               {rows.filter((m) => m.group === g).map((m) =>
-                renderRow(m.label, m.unit, m.get(prevB), m.get(curB), weekPlan(m, "prev"), weekPlan(m, "cur"), m.hint))}
+                renderRow(m.label, m.unit, m.get(prevB), m.get(curB), weekPlan(m, "cur"), m.hint))}
             </Fragment>
           ))}
           {teams.length > 0 && (
             <>
-              <tr><td colSpan={8} style={{ fontWeight: 700, background: "var(--bg-subtle, rgba(127,127,127,0.08))", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em" }}>🏅 Команди (виручка)</td></tr>
+              <tr><td colSpan={7} style={{ fontWeight: 700, background: "var(--bg-subtle, rgba(127,127,127,0.08))", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em" }}>🏅 Команди (виручка)</td></tr>
               {teams.map((t) =>
-                renderRow(`Команда ${t.teamName}`, "money", prevTeams.get(t.teamId)?.revenue ?? 0, t.revenue, teamWeekPlan(t.teamId, "prev"), teamWeekPlan(t.teamId, "cur"), HINTS.teamPlan))}
+                renderRow(`Команда ${t.teamName}`, "money", prevTeams.get(t.teamId)?.revenue ?? 0, t.revenue, teamWeekPlan(t.teamId, "cur"), HINTS.teamPlan))}
             </>
           )}
         </tbody>
@@ -888,10 +874,6 @@ export function KvpReportSection() {
     setPlans((prev) => { const next = { ...prev }; if (v == null) delete next[metric]; else next[metric] = v; return next; });
     saveKvpPlan(monthSel, { [metric]: v }).catch(() => {});
   };
-  const onSavePlanPrev = (metric: string, v: number | null) => {
-    setPlansPrev((prev) => { const next = { ...prev }; if (v == null) delete next[metric]; else next[metric] = v; return next; });
-    saveKvpPlan(setup.prevMonthStr, { [metric]: v }).catch(() => {});
-  };
 
   // «Плани з факту минулого місяця +N%»: для метрик БЕЗ ручного плану ставимо
   // факт минулого місяця, збільшений на N% (гроші округлюємо до сотень).
@@ -1050,16 +1032,16 @@ export function KvpReportSection() {
               prev={activePrev} cur={active}
               prevRange={rangeMode ? rangePrev! : setup.monthPrev}
               curRange={rangeMode ? range : setup.monthCur}
-              isMonth={!rangeMode} plans={plans} plansPrev={plansPrev} ratio={ratio}
-              onSave={onSavePlan} onSavePrev={onSavePlanPrev}
+              isMonth={!rangeMode} plans={plans} ratio={ratio}
+              onSave={onSavePlan}
             />
           </div>
 
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">🏅 Команди — план / факт (РПК · РНК)</h2>
             <p style={{ fontSize: 12, color: MUTED, margin: "0 0 8px" }}>Клік по команді — тижнева розкладка плану/факту + цифри по кожному менеджеру.</p>
-            <TeamMatrix prev={activePrev.ov} cur={active.ov} plans={plans} plansPrev={plansPrev} ratio={ratio} isMonth={!rangeMode}
-              onSave={onSavePlan} onSavePrev={onSavePlanPrev} month={monthSel} />
+            <TeamMatrix prev={activePrev.ov} cur={active.ov} plans={plans} ratio={ratio} isMonth={!rangeMode}
+              onSave={onSavePlan} month={monthSel} />
           </div>
 
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16, marginBottom: 16 }}>
