@@ -3603,7 +3603,22 @@ const KVP_PLAN_METRICS = [
   "created_full_cycle", "dispatched_cars", "new_clients", "repeat_clients",
   "ad_leads", "ad_conversion", "target_leads",
   "transferred", "transfer_success", "leadgen_conversion",
+  // Рядки з ручного звіту КВП (структура файлу керівника):
+  "received_total",      // план «Отримані кошти», якщо немає суми планів менеджерів
+  "dispatched_sum",      // Відправлені авто, грн
+  "success_deals",       // Успішні угоди, шт
+  "paid_deals",          // Оплата отримана, шт
+  "managers_count",      // Менеджерів у продажу
+  "avg_per_manager",     // Середня сума на менеджера
+  "nontarget_leads",     // Не цільові ліди
+  "ad_revenue",          // Дохід з реклами, грн
+  "ad_dispatched",       // Відправлені авто з реклами, шт
+  "ad_avg_check",        // Середній чек реклами
+  "leadgen_revenue",     // Дохід з лідогену, грн
+  "leadgen_dispatched",  // Відправлені авто з лідогену, шт
 ];
+// Плани по командах — динамічні ключі team_revenue_<teamId>.
+const kvpMetricAllowed = (m: string) => KVP_PLAN_METRICS.includes(m) || /^team_revenue_\d+$/.test(m);
 
 dashboardRouter.get("/kvp-plan", async (req, res) => {
   const auth = req.auth!;
@@ -3629,7 +3644,7 @@ dashboardRouter.post("/kvp-plan", async (req, res) => {
   }
   const month = monthRaw + "-01";
   for (const [metric, raw] of Object.entries(plans)) {
-    if (!KVP_PLAN_METRICS.includes(metric)) continue;
+    if (!kvpMetricAllowed(metric)) continue;
     const value = raw === "" || raw == null ? null : Number(raw);
     if (value == null || !Number.isFinite(value)) {
       await pool.query(`DELETE FROM kvp_plans WHERE month = $1 AND metric = $2`, [month, metric]);
@@ -3644,4 +3659,67 @@ dashboardRouter.post("/kvp-plan", async (req, res) => {
     );
   }
   res.json({ ok: true });
+});
+
+/**
+ * Додаткові факти для Звіту КВП (рядки з ручного файлу керівника, яких немає
+ * в /overview): відправлені авто за період (перший вхід угоди в «Авто працює»
+ * за подіями CRM — кількість і сума, загалом та по каналах реклама/лідоген),
+ * отримані кошти по каналах (успішно 142 закриті в періоді + оплата-снапшот),
+ * кількість активних менеджерів продажу. Admin (КВП) only.
+ */
+dashboardRouter.get("/kvp-extra", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const from = (req.query.from as string) || today.slice(0, 7) + "-01";
+  const to = (req.query.to as string) || today;
+  const { adSources } = await getSettings();
+  const params: unknown[] = [[8921932, 155304], from, to, adSources];
+
+  // Відправлені авто: угоди, що ВПЕРШЕ увійшли в «Авто працює» у періоді.
+  const disp = await pool.query<{ c: string; s: string; ad_c: string; ad_s: string; lg_c: string; lg_s: string }>(
+    `WITH first_avto AS (
+       SELECT kommo_id, MIN(changed_at) AS t FROM deal_stage_events
+       WHERE status_id IN (69716300, 98470988, 10937178) GROUP BY kommo_id
+     )
+     SELECT COUNT(*) AS c, COALESCE(SUM(d.price), 0) AS s,
+            COUNT(*) FILTER (WHERE d.client_source = ANY($4)) AS ad_c,
+            COALESCE(SUM(d.price) FILTER (WHERE d.client_source = ANY($4)), 0) AS ad_s,
+            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_c,
+            COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen'), 0) AS lg_s
+     FROM first_avto f JOIN deals d ON d.kommo_id = f.kommo_id
+     WHERE d.pipeline_id = ANY($1) AND (f.t ${KYIV})::date BETWEEN $2 AND $3`,
+    params
+  );
+
+  // Отримані кошти по каналах — та сама формула, що «Отримані кошти» (142 закриті
+  // в періоді + оплата-снапшот), відфільтрована по каналу угоди.
+  const rev = await pool.query<{ ad_rev: string; lg_rev: string }>(
+    `SELECT
+       COALESCE(SUM(d.price) FILTER (WHERE d.client_source = ANY($4) AND d.status_id = 142
+         AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3), 0)
+       + COALESCE(SUM(d.price) FILTER (WHERE d.client_source = ANY($4) AND d.status_id IN (69716460, 60412544)), 0) AS ad_rev,
+       COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen' AND d.status_id = 142
+         AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3), 0)
+       + COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen' AND d.status_id IN (69716460, 60412544)), 0) AS lg_rev
+     FROM deals d WHERE d.pipeline_id = ANY($1)`,
+    params
+  );
+
+  // Активні менеджери продажу (з командою, без лідоген-команд).
+  const mgr = await pool.query<{ c: string }>(
+    `SELECT COUNT(*) AS c FROM managers m LEFT JOIN teams t ON t.id = m.team_id
+     WHERE m.is_active AND m.team_id IS NOT NULL AND COALESCE(t.name, '') NOT ILIKE '%лідоген%'`
+  );
+
+  const d = disp.rows[0];
+  res.json({
+    from, to,
+    dispatched: { count: Number(d?.c ?? 0), revenue: Number(d?.s ?? 0) },
+    ad: { revenue: Number(rev.rows[0]?.ad_rev ?? 0), dispatched: Number(d?.ad_c ?? 0), dispatchedSum: Number(d?.ad_s ?? 0) },
+    leadgen: { revenue: Number(rev.rows[0]?.lg_rev ?? 0), dispatched: Number(d?.lg_c ?? 0), dispatchedSum: Number(d?.lg_s ?? 0) },
+    managersCount: Number(mgr.rows[0]?.c ?? 0),
+  });
 });

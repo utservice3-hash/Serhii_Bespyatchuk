@@ -332,6 +332,18 @@ export async function saveKvpPlan(month: string, plans: Record<string, number | 
   await api.post("/dashboard/kvp-plan", { month, plans });
 }
 
+/** Додаткові факти Звіту КВП: відправлені авто (події), канали, менеджери. */
+export interface KvpExtra {
+  dispatched: { count: number; revenue: number };
+  ad: { revenue: number; dispatched: number; dispatchedSum: number };
+  leadgen: { revenue: number; dispatched: number; dispatchedSum: number };
+  managersCount: number;
+}
+export async function fetchKvpExtra(params: { from?: string; to?: string }): Promise<KvpExtra> {
+  const { data } = await api.get<KvpExtra>("/dashboard/kvp-extra", { params });
+  return data;
+}
+
 export interface Team {
   id: number;
   name: string;
