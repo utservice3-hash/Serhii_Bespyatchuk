@@ -214,7 +214,13 @@ export function RatesSection() {
         </div>
         <div style={{ overflowX: "auto", marginTop: 6 }}>
           <table className="data-table compact" style={{ fontSize: big ? 13 : 12, margin: big ? "0 auto" : undefined, width: big ? "auto" : "100%" }}>
-            <thead><tr><th style={{ textAlign: "left" }}>Авто</th><th style={{ textAlign: "right" }}>грн/км</th><th style={{ textAlign: "right" }}>Ціна рейсу</th></tr></thead>
+            <thead><tr>
+              <th style={{ textAlign: "left" }}>Авто</th>
+              <th style={{ textAlign: "right" }}>грн/км</th>
+              <th style={{ textAlign: "right" }}>Перевізнику</th>
+              <th style={{ textAlign: "right" }}>+ маржа</th>
+              <th style={{ textAlign: "right" }}>💰 Клієнту</th>
+            </tr></thead>
             <tbody>
               {(zr.options ?? []).map((o) => (
                 <tr key={o.tonnage} style={o.selected ? { background: `${zc}18`, fontWeight: 700 } : undefined}>
@@ -222,16 +228,36 @@ export function RatesSection() {
                   <td style={{ textAlign: "right", color: zc, fontWeight: o.selected ? 800 : 600 }}>
                     {o.per_km_min === o.per_km_max ? o.per_km_min : `${o.per_km_min}–${o.per_km_max}`}
                   </td>
-                  <td style={{ textAlign: "right" }}>
-                    {o.total_min ? (o.total_min === o.total_max ? `${fmt(o.total_min)} грн` : `${fmt(o.total_min)} – ${fmt(o.total_max ?? o.total_min)} грн`) : "—"}
+                  <td style={{ textAlign: "right", color: "var(--text-muted)" }}>
+                    {o.total_min ? (o.total_min === o.total_max ? `${fmt(o.total_min)}` : `${fmt(o.total_min)} – ${fmt(o.total_max ?? o.total_min)}`) : "—"}
+                  </td>
+                  <td style={{ textAlign: "right", color: "var(--text-muted)" }}>+{fmt(o.margin)}</td>
+                  <td style={{ textAlign: "right", color: "#16a34a", fontWeight: 800 }}>
+                    {o.client_min ? (o.client_min === o.client_max ? `${fmt(o.client_min)}` : `${fmt(o.client_min)} – ${fmt(o.client_max ?? o.client_min)}`) : "—"}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {(() => {
+          const sel = (zr.options ?? []).find((o) => o.selected);
+          if (!sel?.client_min) return null;
+          return (
+            <div style={{ marginTop: 8, textAlign: big ? "center" : "left", fontSize: big ? 15 : 13 }}>
+              💰 <b>Клієнту (авто {sel.tonnage}):</b>{" "}
+              <b style={{ color: "#16a34a", fontSize: big ? 20 : 16 }}>
+                {sel.client_min === sel.client_max ? `${fmt(sel.client_min)}` : `${fmt(sel.client_min)} – ${fmt(sel.client_max ?? sel.client_min)}`} грн
+              </b>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>
+                = перевізнику {sel.total_max ? fmt(sel.total_max) : "—"} грн + маржа UTS {fmt(sel.margin)} грн ·
+                ✅ це <b>ринкова</b> ставка перевізника — під неї реально знайти транспорт і закрити рейс.
+              </div>
+            </div>
+          );
+        })()}
         <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 5 }}>
-          {zr.from_area ?? "?"} → {zr.to_area ?? "?"}{zr.distance_km ? ` · ≈${fmt(zr.distance_km)} км` : ""} · правило: тариф за зоною ВІДПРАВЛЕННЯ (з зеленої в червону — зелений тариф){zr.short_haul ? " · тариф ×1.5, бо плече ≤100 км" : ""} · 🚚 = під вашу вагу
+          {zr.from_area ?? "?"} → {zr.to_area ?? "?"}{zr.distance_km ? ` · ≈${fmt(zr.distance_km)} км` : ""} · правило: тариф за зоною ПРИЗНАЧЕННЯ (веземо в червону — червоний тариф){zr.short_haul ? " · тариф ×1.5, бо плече ≤100 км" : ""} · 🚚 = під вашу вагу
         </div>
       </div>
     );
