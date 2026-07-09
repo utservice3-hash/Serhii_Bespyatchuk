@@ -6,6 +6,7 @@ export type TaskForm = {
   title: string;
   deadline: string;
   assigneeId: number | "";
+  assigneeId2: number | ""; // друга людина (задача одразу на двох менеджерів)
   priority: TaskPriority;
   department: string;
   comments: string;
@@ -21,12 +22,14 @@ export type TaskForm = {
   dispatchCount: string; // к-сть авто (поставити)
   avgCheck: string;
   conversion: string;
+  paymentAmount: string; // сума, яку менеджер має принести за період
 };
 
 export const emptyTaskForm: TaskForm = {
   title: "",
   deadline: "",
   assigneeId: "",
+  assigneeId2: "",
   priority: "medium",
   department: "",
   comments: "",
@@ -41,4 +44,5 @@ export const emptyTaskForm: TaskForm = {
   dispatchCount: "",
   avgCheck: "",
   conversion: "",
+  paymentAmount: "",
 };

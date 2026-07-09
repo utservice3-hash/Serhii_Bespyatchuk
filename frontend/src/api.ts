@@ -1166,6 +1166,7 @@ export async function createTaskPlan(payload: {
   dispatchCount?: number;
   avgCheck?: number;
   conversion?: number;
+  paymentAmount?: number;
 }): Promise<{ created: number }> {
   const { data } = await api.post<{ created: number }>("/tasks/plan", payload);
   return data;
@@ -1225,11 +1226,12 @@ export async function createTask(payload: {
   status?: TaskStatus;
   deadline?: string | null;
   assigneeId?: number | null;
+  assigneeIds?: number[];   // задача одразу на кількох менеджерів
   priority?: TaskPriority;
   comments?: string | null;
   department?: string | null;
-}): Promise<{ id: number }> {
-  const { data } = await api.post<{ id: number }>("/tasks", payload);
+}): Promise<{ id: number; ids?: number[] }> {
+  const { data } = await api.post<{ id: number; ids?: number[] }>("/tasks", payload);
   return data;
 }
 

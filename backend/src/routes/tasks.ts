@@ -25,6 +25,8 @@ const upsertSchema = z.object({
   status: z.enum(STATUSES).optional(),
   deadline: z.string().nullable().optional(),
   assigneeId: z.number().nullable().optional(),
+  // Одна задача на КІЛЬКОХ менеджерів (створюється копія кожному).
+  assigneeIds: z.array(z.number()).optional(),
   priority: z.enum(PRIORITIES).optional(),
   comments: z.string().nullable().optional(),
   department: z.string().nullable().optional(),
@@ -100,6 +102,9 @@ const planSchema = z.object({
   dispatchCount: z.number().nonnegative().optional(),
   avgCheck: z.number().nonnegative().optional(),
   conversion: z.number().min(0).max(100).optional(),
+  // Сума, яку менеджер має принести за період (розкладається по днях). Якщо не
+  // задано — береться з місячного плану виручки (plans.payment_amount).
+  paymentAmount: z.number().nonnegative().optional(),
 });
 
 const METRIC_LABELS: Record<string, string> = {
@@ -108,6 +113,7 @@ const METRIC_LABELS: Record<string, string> = {
   dispatch_count: "Кількість поставлених авто",
   avg_check: "Середній чек",
   conversion: "Конверсія",
+  payment_amount: "Сума до принесення, ₴",
 };
 
 tasksRouter.post("/plan", async (req, res) => {
@@ -117,7 +123,7 @@ tasksRouter.post("/plan", async (req, res) => {
   }
   const parsed = planSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { assigneeId, period, days, adsCount, leadgenCount, dispatchCount, avgCheck, conversion } = parsed.data;
+  const { assigneeId, period, days, adsCount, leadgenCount, dispatchCount, avgCheck, conversion, paymentAmount } = parsed.data;
 
   const sorted = [...days].sort();
   const periodStart = sorted[0];
@@ -138,7 +144,10 @@ tasksRouter.post("/plan", async (req, res) => {
     [assigneeId, monthAnchor]
   );
   let dailyPayment = 0;
-  if (payPlanRes.rows[0]) {
+  if (paymentAmount && paymentAmount > 0) {
+    // Явно задана сума за період → рівномірно по обраних днях плану.
+    dailyPayment = Math.round(paymentAmount / sorted.length);
+  } else if (payPlanRes.rows[0]) {
     const [y, mo] = monthAnchor.split("-").map(Number);
     const dim = new Date(y, mo, 0).getDate();
     let wd = 0;
@@ -214,50 +223,48 @@ tasksRouter.post("/", async (req, res) => {
   }
   const { title, status, deadline, priority, comments, department } = parsed.data;
   const auth = req.auth!;
-  let assigneeId = parsed.data.assigneeId ?? null;
 
-  // Who may assign to whom:
-  //  • manager  → only to themselves;
-  //  • team_lead → only to a manager in their own team;
-  //  • admin    → anyone.
+  // Список виконавців: assigneeIds (кілька) або один assigneeId. Менеджер завжди сам.
+  let assignees: (number | null)[];
   if (auth.role === "manager") {
-    assigneeId = auth.managerId;
-  } else if (auth.role === "team_lead") {
-    if (!assigneeId) return res.status(400).json({ error: "Оберіть менеджера" });
-    const chk = await pool.query<{ ok: boolean }>(
-      `SELECT (m.team_id = $1) AS ok FROM managers m WHERE m.id = $2`,
-      [auth.teamId, assigneeId]
-    );
-    if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна ставити задачі лише своїй команді" });
+    assignees = [auth.managerId];
+  } else {
+    const ids = parsed.data.assigneeIds?.length ? parsed.data.assigneeIds : (parsed.data.assigneeId != null ? [parsed.data.assigneeId] : []);
+    if (auth.role === "team_lead") {
+      if (!ids.length) return res.status(400).json({ error: "Оберіть менеджера" });
+      const chk = await pool.query<{ id: number }>(
+        `SELECT id FROM managers WHERE id = ANY($1) AND team_id = $2`, [ids, auth.teamId]);
+      const okIds = new Set(chk.rows.map((r) => r.id));
+      if (ids.some((id) => !okIds.has(id))) return res.status(403).json({ error: "Можна ставити задачі лише своїй команді" });
+      assignees = ids;
+    } else {
+      assignees = ids.length ? ids : [null]; // admin: без виконавця = особиста задача
+    }
   }
+  const uniqueAssignees = [...new Set(assignees)];
 
-  // Department is auto-assigned from the assignee's team when not set explicitly.
-  let dept = department ?? null;
-  if (!dept && assigneeId) {
+  // Департамент кожному — з його команди (якщо не заданий явно).
+  const deptOf = async (assigneeId: number | null): Promise<string | null> => {
+    if (department) return department;
+    if (!assigneeId) return null;
     const t = await pool.query<{ name: string | null }>(
-      `SELECT tm.name FROM managers m LEFT JOIN teams tm ON tm.id = m.team_id WHERE m.id = $1`,
-      [assigneeId]
+      `SELECT tm.name FROM managers m LEFT JOIN teams tm ON tm.id = m.team_id WHERE m.id = $1`, [assigneeId]);
+    return t.rows[0]?.name ?? null;
+  };
+
+  const ids: number[] = [];
+  for (const assigneeId of uniqueAssignees) {
+    const dept = await deptOf(assigneeId);
+    const result = await pool.query(
+      `INSERT INTO tasks (title, status, deadline, assignee_id, priority, comments, department, created_by)
+       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8)
+       RETURNING id`,
+      [title, status ?? null, deadline ?? null, assigneeId, priority ?? null, comments ?? null, dept, auth.userId]
     );
-    dept = t.rows[0]?.name ?? null;
+    ids.push(result.rows[0].id);
   }
 
-  const result = await pool.query(
-    `INSERT INTO tasks (title, status, deadline, assignee_id, priority, comments, department, created_by)
-     VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8)
-     RETURNING id`,
-    [
-      title,
-      status ?? null,
-      deadline ?? null,
-      assigneeId,
-      priority ?? null,
-      comments ?? null,
-      dept,
-      auth.userId,
-    ]
-  );
-
-  res.status(201).json({ id: result.rows[0].id });
+  res.status(201).json({ id: ids[0], ids });
 });
 
 /**

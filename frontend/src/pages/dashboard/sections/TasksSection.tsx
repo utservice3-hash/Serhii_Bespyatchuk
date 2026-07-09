@@ -751,6 +751,16 @@ export function TasksSection({
                       />
                     </label>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
+                      💰 Сума до принесення, ₴
+                      <input
+                        type="number"
+                        value={taskForm.paymentAmount}
+                        onChange={(e) => setTaskForm((f) => ({ ...f, paymentAmount: e.target.value }))}
+                        placeholder="за період; напр. 80000"
+                        title="Скільки менеджер має принести за період — розкладеться по днях. Якщо порожньо — береться з місячного плану виручки."
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
                       Конверсія, %
                       <input
                         type="number"
@@ -794,6 +804,32 @@ export function TasksSection({
                     })()}
                   </select>
                 </label>
+                {taskForm.taskType === "simple" && role !== "manager" && (
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                    2-й виконавець (необовʼязково)
+                    <select
+                      value={taskForm.assigneeId2}
+                      onChange={(e) => setTaskForm((f) => ({ ...f, assigneeId2: e.target.value === "" ? "" : Number(e.target.value) }))}
+                      title="Задача одразу для двох менеджерів — створиться копія кожному"
+                    >
+                      <option value="">— (одному)</option>
+                      {(() => {
+                        const byTeam = new Map<string, typeof managerOptions>();
+                        for (const m of managerOptions) {
+                          if (m.id === taskForm.assigneeId) continue;
+                          const key = m.teamName ?? "Без команди";
+                          if (!byTeam.has(key)) byTeam.set(key, []);
+                          byTeam.get(key)!.push(m);
+                        }
+                        return [...byTeam.entries()].map(([team, mgrs]) => (
+                          <optgroup key={team} label={team}>
+                            {mgrs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                          </optgroup>
+                        ));
+                      })()}
+                    </select>
+                  </label>
+                )}
                 {taskForm.taskType === "simple" && (
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                     Департамент

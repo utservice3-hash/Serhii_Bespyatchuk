@@ -455,14 +455,29 @@ export function Dashboard() {
   async function handleSubmitTaskModal() {
     if (taskForm.taskType === "simple") {
       if (!taskForm.title.trim()) return;
-      await addTask({
-        title: taskForm.title,
-        deadline: taskForm.deadline,
-        assigneeId: taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId),
-        priority: taskForm.priority,
-        department: taskForm.department,
-        comments: taskForm.comments,
-      });
+      const ids = [taskForm.assigneeId, taskForm.assigneeId2]
+        .filter((v) => v !== "").map(Number).filter((v, i, a) => a.indexOf(v) === i);
+      if (ids.length > 1) {
+        // Задача одразу на кількох менеджерів — створюємо копію кожному, refetch.
+        await createTask({
+          title: taskForm.title,
+          deadline: taskForm.deadline || null,
+          assigneeIds: ids,
+          priority: taskForm.priority,
+          department: taskForm.department?.trim() || null,
+          comments: taskForm.comments?.trim() || null,
+        });
+        setTasks(await fetchTasks());
+      } else {
+        await addTask({
+          title: taskForm.title,
+          deadline: taskForm.deadline,
+          assigneeId: taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId),
+          priority: taskForm.priority,
+          department: taskForm.department,
+          comments: taskForm.comments,
+        });
+      }
     } else {
       if (taskForm.assigneeId === "") {
         alert("Оберіть виконавця (менеджера) для плану");
@@ -482,6 +497,7 @@ export function Dashboard() {
         dispatchCount: taskForm.dispatchCount ? Number(taskForm.dispatchCount) : undefined,
         avgCheck: taskForm.avgCheck ? Number(taskForm.avgCheck) : undefined,
         conversion: taskForm.conversion ? Number(taskForm.conversion) : undefined,
+        paymentAmount: taskForm.paymentAmount ? Number(taskForm.paymentAmount) : undefined,
       });
       const fresh = await fetchTasks();
       setTasks(fresh);

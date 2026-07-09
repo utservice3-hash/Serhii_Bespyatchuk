@@ -29,9 +29,20 @@ export function StatusPicker({
 
   const place = () => {
     const r = btnRef.current?.getBoundingClientRect();
-    if (r) setPos({ top: r.bottom + 6, left: r.left });
+    if (!r) return;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const popW = 240, popH = popRef.current?.offsetHeight ?? 320;
+    // Не вилазимо за правий край; якщо знизу не влазить — відкриваємось вгору.
+    const left = Math.max(8, Math.min(r.left, vw - popW - 8));
+    const top = r.bottom + 6 + popH > vh - 8 && r.top - popH - 6 > 8
+      ? r.top - popH - 6
+      : Math.min(r.bottom + 6, vh - popH - 8);
+    setPos({ top: Math.max(8, top), left });
   };
+  // Дві фази: 1) відкрили — оцінка позиції; 2) поповер змонтувався (popRef є) —
+  // уточнюємо за реальною висотою, щоб не вилазив за низ/правий край екрана.
   useLayoutEffect(() => { if (open) place(); }, [open]);
+  useLayoutEffect(() => { if (open && pos && popRef.current) place(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, popRef.current]);
 
   useEffect(() => {
     if (!open) return;
