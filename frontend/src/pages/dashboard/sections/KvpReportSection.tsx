@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  fetchOverview, fetchLeadQuality, fetchKvpPlan, saveKvpPlan, fetchKvpExtra,
-  type ExecutiveOverview, type LeadQuality, type KvpPlans, type KvpExtra,
+  fetchOverview, fetchLeadQuality, fetchKvpPlan, saveKvpPlan, fetchKvpExtra, fetchPlansGrid,
+  type ExecutiveOverview, type LeadQuality, type KvpPlans, type KvpExtra, type PlansGrid,
 } from "../../../api";
 import { formatAmount, formatAmountFull, previousRange } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
@@ -399,16 +399,102 @@ function PlanFactMatrix({ prev, cur, prevRange, curRange, isMonth, plans, plansP
 }
 
 // ── Команди (РПК/РНК) — план/факт із редагованими планами ─────────────
-function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSavePrev }: {
+// Клік по команді → тижнева розкладка плану/факту команди + цифри по менеджерах.
+function TeamWeeklyDetail({ teamId, month, weekRanges, weekBlocks, teamPlan }: {
+  teamId: number; month: string; weekRanges: Range[]; weekBlocks: Block[] | null; teamPlan: number | null;
+}) {
+  const [grid, setGrid] = useState<PlansGrid | null>(null);
+  useEffect(() => { fetchPlansGrid(month, teamId).then(setGrid).catch(() => setGrid(null)); }, [month, teamId]);
+
+  const [y, m] = month.split("-").map(Number);
+  const monthFull = fullMonthRange(y, m - 1);
+  const totalWd = wdCount(monthFull.from, monthFull.to);
+  const weekRows = weekRanges.map((w, i) => {
+    const wd = wdCount(w.from, w.to);
+    const plan = teamPlan != null && totalWd > 0 ? Math.round(teamPlan * (wd / totalWd)) : null;
+    const fact = weekBlocks?.[i]?.ov.byTeam.find((t) => t.teamId === teamId)?.revenue ?? 0;
+    const pct = plan ? Math.round((fact / plan) * 100) : null;
+    return { label: w.label ?? `Тиждень ${i + 1}`, from: w.from, to: w.to, plan, fact, pct, left: plan != null ? Math.max(0, plan - fact) : null };
+  });
+  const team = grid?.teams.find((t) => t.teamId === teamId) ?? grid?.teams[0];
+
+  return (
+    <div style={{ padding: "6px 4px 10px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, margin: "4px 0 6px" }}>🗓 План команди по тижнях <span style={{ color: MUTED, fontWeight: 400 }}>(місячний ÷ робочі дні)</span></div>
+          <table className="data-table compact" style={{ fontSize: 12 }}>
+            <thead><tr><th style={{ textAlign: "left" }}>Тиждень</th><th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ textAlign: "right" }}>Викон. %</th><th style={{ textAlign: "right" }}>Залишок</th></tr></thead>
+            <tbody>
+              {weekRows.map((w) => (
+                <tr key={w.label}>
+                  <td style={{ textAlign: "left" }}>{w.label}<span style={{ color: MUTED, fontSize: 10 }}> {dmy(w.from)}–{dmy(w.to)}</span></td>
+                  <td style={{ textAlign: "right", color: MUTED }}>{w.plan != null ? formatAmount(w.plan) : "—"}</td>
+                  <td style={{ textAlign: "right", fontWeight: 600 }}>{w.fact ? formatAmount(w.fact) : "—"}</td>
+                  <td style={{ textAlign: "right", fontWeight: 700, color: pctColor(w.pct) }}>{w.pct != null ? `${w.pct}%` : "—"}</td>
+                  <td style={{ textAlign: "right", color: w.left ? AMBER : GREEN, fontWeight: 600 }}>{w.left == null ? "—" : w.left === 0 ? "✓" : formatAmount(w.left)}</td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 700 }}>
+                <td style={{ textAlign: "left" }}>Разом</td>
+                <td style={{ textAlign: "right" }}>{teamPlan != null ? formatAmount(teamPlan) : "—"}</td>
+                <td style={{ textAlign: "right" }}>{formatAmount(weekRows.reduce((s, w) => s + w.fact, 0))}</td>
+                <td colSpan={2} />
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, margin: "4px 0 6px" }}>👤 Менеджери команди <span style={{ color: MUTED, fontWeight: 400 }}>(план з розділу «Плани»)</span></div>
+          {!grid ? <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p> : !team || team.managers.length === 0 ? (
+            <p className="loading-text" style={{ margin: 0 }}>Немає менеджерів з планами.</p>
+          ) : (
+            <table className="data-table compact" style={{ fontSize: 12 }}>
+              <thead><tr><th style={{ textAlign: "left" }}>Менеджер</th><th style={{ textAlign: "right" }}>План міс</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ textAlign: "right" }}>Викон. %</th><th style={{ textAlign: "right" }}>Залишок</th><th style={{ textAlign: "right" }}>Очікув.</th></tr></thead>
+              <tbody>
+                {[...team.managers].sort((a, b) => b.fact - a.fact).map((mg) => {
+                  const pct = mg.plan > 0 ? Math.round((mg.fact / mg.plan) * 100) : null;
+                  const left = mg.plan > 0 ? Math.max(0, mg.plan - mg.fact) : null;
+                  return (
+                    <tr key={mg.managerId}>
+                      <td style={{ textAlign: "left" }}>{mg.name}</td>
+                      <td style={{ textAlign: "right", color: MUTED }}>{mg.plan ? formatAmount(mg.plan) : "—"}</td>
+                      <td style={{ textAlign: "right", fontWeight: 600 }}>{formatAmount(mg.fact)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 700, color: pctColor(pct) }}>{pct != null ? `${pct}%` : "—"}</td>
+                      <td style={{ textAlign: "right", color: left ? AMBER : GREEN, fontWeight: 600 }}>{left == null ? "—" : left === 0 ? "✓" : formatAmount(left)}</td>
+                      <td style={{ textAlign: "right", color: MUTED }}>{mg.expected ? formatAmount(mg.expected) : "—"}</td>
+                    </tr>
+                  );
+                })}
+                <tr style={{ fontWeight: 700 }}>
+                  <td style={{ textAlign: "left" }}>Разом</td>
+                  <td style={{ textAlign: "right" }}>{formatAmount(team.teamPlan)}</td>
+                  <td style={{ textAlign: "right" }}>{formatAmount(team.teamFact)}</td>
+                  <td colSpan={2} />
+                  <td style={{ textAlign: "right" }}>{formatAmount(team.teamExpected)}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSavePrev, month, weekRanges, weekBlocks }: {
   prev: ExecutiveOverview; cur: ExecutiveOverview; plans: KvpPlans; plansPrev: KvpPlans;
   ratio: number | null; isMonth: boolean;
   onSave: (metric: string, v: number | null) => void;
   onSavePrev: (metric: string, v: number | null) => void;
+  month: string; weekRanges: Range[]; weekBlocks: Block[] | null;
 }) {
   const prevByTeam = new Map(prev.byTeam.map((t) => [t.teamId, t]));
   const rows = [...cur.byTeam].sort((a, b) => b.revenue - a.revenue);
+  const [openTeam, setOpenTeam] = useState<number | null>(null);
   if (rows.length === 0) return null;
   const maxRev = Math.max(...rows.map((t) => t.revenue), 1);
+  const nCols = isMonth ? 11 : 7;
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="data-table compact" style={{ minWidth: isMonth ? 860 : 620 }}>
@@ -431,31 +517,44 @@ function TeamMatrix({ prev, cur, plans, plansPrev, ratio, isMonth, onSave, onSav
             const planCur = plans[key] ?? null;
             const planPrev = plansPrev[key] ?? null;
             const p = computePace(t.revenue, planCur, true, ratio);
+            const open = openTeam === t.teamId;
             return (
-              <tr key={t.teamId}>
-                <td style={{ textAlign: "left", fontWeight: 700, color: i === 0 ? "#c5141c" : MUTED }}>{i + 1}</td>
-                <td style={{ textAlign: "left" }}>
-                  {t.teamName}
-                  <div style={{ height: 4, marginTop: 3, background: "var(--border)", borderRadius: 2, overflow: "hidden" }}>
-                    <div style={{ width: `${(t.revenue / maxRev) * 100}%`, height: "100%", background: "linear-gradient(90deg,#e11d2a,#8f0f1c)" }} />
-                  </div>
-                </td>
-                <td style={{ textAlign: "right", color: MUTED }}>{formatAmount(pv?.revenue ?? 0)}</td>
-                {isMonth && <td style={{ textAlign: "right" }}><TargetCell value={planPrev} unit="money" muted onSave={(v) => onSavePrev(key, v)} /></td>}
-                <td style={{ textAlign: "right", fontWeight: 600 }}>{formatAmount(t.revenue)}</td>
-                {isMonth && <td style={{ textAlign: "right" }}><TargetCell value={planCur} unit="money" onSave={(v) => onSave(key, v)} /></td>}
-                {isMonth && <td style={{ textAlign: "right", fontWeight: 700, color: pctColor(p.pctMonth) }}>{p.pctMonth != null ? `${p.pctMonth}%` : "—"}</td>}
-                {isMonth && (
-                  <td style={{ textAlign: "right", fontWeight: 600 }}>
-                    {p.left == null ? <span style={{ color: MUTED }}>—</span>
-                      : p.left === 0 ? <span style={{ color: GREEN }}>✓</span>
-                      : <span style={{ color: AMBER }}>{formatAmount(p.left)}</span>}
+              <Fragment key={t.teamId}>
+                <tr>
+                  <td style={{ textAlign: "left", fontWeight: 700, color: i === 0 ? "#c5141c" : MUTED }}>{i + 1}</td>
+                  <td style={{ textAlign: "left" }}>
+                    <button onClick={() => setOpenTeam(open ? null : t.teamId)} title="Розкрити: тижні + менеджери"
+                      style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", fontWeight: 600, padding: 0, textAlign: "left" }}>
+                      {open ? "▾ " : "▸ "}{t.teamName}
+                    </button>
+                    <div style={{ height: 4, marginTop: 3, background: "var(--border)", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ width: `${(t.revenue / maxRev) * 100}%`, height: "100%", background: "linear-gradient(90deg,#e11d2a,#8f0f1c)" }} />
+                    </div>
                   </td>
+                  <td style={{ textAlign: "right", color: MUTED }}>{formatAmount(pv?.revenue ?? 0)}</td>
+                  {isMonth && <td style={{ textAlign: "right" }}><TargetCell value={planPrev} unit="money" muted onSave={(v) => onSavePrev(key, v)} /></td>}
+                  <td style={{ textAlign: "right", fontWeight: 600 }}>{formatAmount(t.revenue)}</td>
+                  {isMonth && <td style={{ textAlign: "right" }}><TargetCell value={planCur} unit="money" onSave={(v) => onSave(key, v)} /></td>}
+                  {isMonth && <td style={{ textAlign: "right", fontWeight: 700, color: pctColor(p.pctMonth) }}>{p.pctMonth != null ? `${p.pctMonth}%` : "—"}</td>}
+                  {isMonth && (
+                    <td style={{ textAlign: "right", fontWeight: 600 }}>
+                      {p.left == null ? <span style={{ color: MUTED }}>—</span>
+                        : p.left === 0 ? <span style={{ color: GREEN }}>✓</span>
+                        : <span style={{ color: AMBER }}>{formatAmount(p.left)}</span>}
+                    </td>
+                  )}
+                  <td style={{ textAlign: "right" }}><Delta prev={pv?.revenue ?? 0} cur={t.revenue} /></td>
+                  <td style={{ textAlign: "right" }}>{t.deals}</td>
+                  <td style={{ textAlign: "right" }}>{formatAmount(avg)}</td>
+                </tr>
+                {open && isMonth && (
+                  <tr>
+                    <td colSpan={nCols} style={{ background: "var(--bg-subtle, rgba(127,127,127,0.05))", padding: "4px 12px" }}>
+                      <TeamWeeklyDetail teamId={t.teamId} month={month} weekRanges={weekRanges} weekBlocks={weekBlocks} teamPlan={planCur} />
+                    </td>
+                  </tr>
                 )}
-                <td style={{ textAlign: "right" }}><Delta prev={pv?.revenue ?? 0} cur={t.revenue} /></td>
-                <td style={{ textAlign: "right" }}>{t.deals}</td>
-                <td style={{ textAlign: "right" }}>{formatAmount(avg)}</td>
-              </tr>
+              </Fragment>
             );
           })}
         </tbody>
@@ -950,7 +1049,10 @@ export function KvpReportSection() {
 
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title">🏅 Команди — план / факт (РПК · РНК)</h2>
-            <TeamMatrix prev={activePrev.ov} cur={active.ov} plans={plans} plansPrev={plansPrev} ratio={ratio} isMonth={!rangeMode} onSave={onSavePlan} onSavePrev={onSavePlanPrev} />
+            <p style={{ fontSize: 12, color: MUTED, margin: "0 0 8px" }}>Клік по команді — тижнева розкладка плану/факту + цифри по кожному менеджеру.</p>
+            <TeamMatrix prev={activePrev.ov} cur={active.ov} plans={plans} plansPrev={plansPrev} ratio={ratio} isMonth={!rangeMode}
+              onSave={onSavePlan} onSavePrev={onSavePlanPrev}
+              month={monthSel} weekRanges={setup.selWeeks} weekBlocks={!rangeMode ? (data?.selWeeks ?? null) : null} />
           </div>
 
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16, marginBottom: 16 }}>
