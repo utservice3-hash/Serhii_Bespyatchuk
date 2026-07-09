@@ -717,7 +717,7 @@ export interface WeeklyBlock {
   money: {
     carryover: number; expected: number; received: number; receivedDeals: number;
     planMonth: number;
-    weeks: { plan: number; fact: number }[];
+    weeks: { plan: number; fact: number; expected: number }[];
     daily: { date: string; v: number }[];
   };
 }

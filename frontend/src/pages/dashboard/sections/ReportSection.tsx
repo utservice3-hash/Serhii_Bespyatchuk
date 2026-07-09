@@ -305,19 +305,6 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
   // otherwise they are all "—" and just widen the table.
   const hasPlan = block.stages.some((s) => s.planMonth > 0);
   const perWeekCols = hasPlan ? 3 : 2;
-  // Everything after the frozen "Факт" column (plan cols + weekly cols).
-  const tailCols = (hasPlan ? 5 : 0) + weeks.length * perWeekCols;
-
-  const moneyRow = (label: string, value: number, color: string | undefined, first: boolean) => {
-    const bt = first ? "2px solid var(--border)" : undefined;
-    return (
-      <tr>
-        <td style={{ fontWeight: 600, borderTop: bt }}>{label}</td>
-        <td style={{ fontWeight: 700, color: color ?? "var(--text)", borderTop: bt }}>{formatAmount(value)}</td>
-        {tailCols > 0 && <td colSpan={tailCols} style={{ borderTop: bt }} />}
-      </tr>
-    );
-  };
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -380,48 +367,31 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
               </tr>
             );
           })}
-          {moneyRow("💰 Сума оплат (отримані кошти), ₴", block.money.received, "#16a34a", true)}
           {(() => {
-            const avg = block.money.receivedDeals > 0 ? Math.round(block.money.received / block.money.receivedDeals) : 0;
-            return (
-              <tr>
-                <td style={{ fontWeight: 600, color: "var(--text-muted)" }}>Середній чек (факт), ₴</td>
-                <td style={{ fontWeight: 700 }}>{avg > 0 ? formatAmount(avg) : "—"}</td>
-                {tailCols > 0 && <td colSpan={tailCols} />}
-              </tr>
-            );
-          })()}
-          {moneyRow("⏳ Очікування (виставлені рахунки), ₴", block.money.expected, "#d97706", false)}
-          {moneyRow("↪️ Перенесені з мин. міс., ₴", block.money.carryover, undefined, false)}
-          {/* Отримані кошти по тижнях: план/факт/викон.%/відставання. План =
-              місячний план виручки пропорційно роб. дням тижня; факт тижня =
-              «Успішно» (142), закриті в тижні. */}
-          {(block.money.weeks?.some((w) => w.plan > 0 || w.fact > 0)) && (() => {
-            const mw = block.money.weeks;
+            const mw = block.money.weeks ?? [];
             const hasMoneyPlan = block.money.planMonth > 0;
-            const leadCols = 1 + (hasPlan ? 5 : 0); // клітинки після «Етап» до тижнів
+            const leadCols = 1 + (hasPlan ? 5 : 0); // клітинки Факт+план-колонки перед тижнями
+            const paidTotal = mw.reduce((s, w) => s + w.fact, 0);
+            const expTotal = mw.reduce((s, w) => s + w.expected, 0);
+            const avg = block.money.receivedDeals > 0 ? Math.round(block.money.received / block.money.receivedDeals) : 0;
             const weekCell = (wi: number, content: React.ReactNode, extra?: React.CSSProperties) => (
               <td key={wi} colSpan={perWeekCols} style={{ borderLeft: "2px solid var(--border)", textAlign: "center", ...extra }}>{content}</td>
             );
+            // Рядок з місячним підсумком (colSpan через Факт+план-колонки) + тижневі клітинки.
+            const wRow = (label: string, total: number, color: string | undefined, vals: number[], top: boolean, muted = false) => (
+              <tr>
+                <td style={{ fontWeight: 600, borderTop: top ? "2px solid var(--border)" : undefined, color: muted ? "var(--text-muted)" : undefined }}>{label}</td>
+                <td colSpan={leadCols} style={{ fontWeight: 700, color, borderTop: top ? "2px solid var(--border)" : undefined }}>{total ? formatAmount(total) : "—"}</td>
+                {vals.map((v, wi) => weekCell(wi, v ? formatAmount(v) : "—", { fontWeight: v ? 700 : 400, color: muted ? "var(--text-muted)" : undefined, borderTop: top ? "2px solid var(--border)" : undefined }))}
+              </tr>
+            );
             return (
               <>
+                {hasMoneyPlan && wRow("💰 План оплат, ₴", block.money.planMonth, "var(--text-muted)", mw.map((w) => w.plan), true, true)}
+                {wRow("💰 Сума оплат (факт), ₴", paidTotal, "#16a34a", mw.map((w) => w.fact), !hasMoneyPlan)}
                 {hasMoneyPlan && (
                   <tr>
-                    <td style={{ fontWeight: 600, borderTop: "2px solid var(--border)" }}>💰 План, ₴</td>
-                    <td colSpan={leadCols} style={{ fontWeight: 700, borderTop: "2px solid var(--border)" }}>{formatAmount(block.money.planMonth)}</td>
-                    {mw.map((w, wi) => weekCell(wi, w.plan ? formatAmount(w.plan) : "—", { color: "var(--text-muted)", borderTop: "2px solid var(--border)" }))}
-                  </tr>
-                )}
-                <tr>
-                  <td style={{ fontWeight: 600, borderTop: hasMoneyPlan ? undefined : "2px solid var(--border)" }}>💰 Факт (успішно), ₴</td>
-                  <td colSpan={leadCols} style={{ fontWeight: 700, color: "#16a34a", borderTop: hasMoneyPlan ? undefined : "2px solid var(--border)" }}>
-                    {formatAmount(mw.reduce((s, w) => s + w.fact, 0))}
-                  </td>
-                  {mw.map((w, wi) => weekCell(wi, w.fact ? formatAmount(w.fact) : "—", { fontWeight: 700, borderTop: hasMoneyPlan ? undefined : "2px solid var(--border)" }))}
-                </tr>
-                {hasMoneyPlan && (
-                  <tr>
-                    <td style={{ fontWeight: 600 }}>💰 Викон. % · відставання</td>
+                    <td style={{ fontWeight: 600 }}>💰 Викон. плану % · відставання</td>
                     <td colSpan={leadCols} />
                     {mw.map((w, wi) => {
                       if (!w.plan) return weekCell(wi, "—");
@@ -434,6 +404,17 @@ function WeeklyFunnelBlock({ block, weeks, highlight }: { block: WeeklyBlock; we
                         </span>
                       ));
                     })}
+                  </tr>
+                )}
+                <tr>
+                  <td style={{ fontWeight: 600, color: "var(--text-muted)" }}>Середній чек (факт), ₴</td>
+                  <td colSpan={leadCols + weeks.length * perWeekCols} style={{ fontWeight: 700 }}>{avg > 0 ? formatAmount(avg) : "—"}</td>
+                </tr>
+                {wRow("⏳ Очікування (виставлено рахунків), ₴", expTotal, "#d97706", mw.map((w) => w.expected), true)}
+                {(block.money.carryover > 0) && (
+                  <tr>
+                    <td style={{ fontWeight: 600 }}>↪️ Перенесені з мин. міс., ₴</td>
+                    <td colSpan={leadCols + weeks.length * perWeekCols}>{formatAmount(block.money.carryover)}</td>
                   </tr>
                 )}
               </>
@@ -765,11 +746,12 @@ export function ReportSection({
                   <b style={{ color: "var(--text)" }}> Викон. міс %</b> = факт ÷ план міс.
                   <b style={{ color: "var(--text)" }}> Відст. шт</b> = скільки не вистачає до плану на сьогодні.
                   <b style={{ color: "var(--text)" }}> % конв</b> тижня/дня = етап ÷ попередній етап.<br />
-                  <b style={{ color: "var(--text)" }}>💰 Сума оплат</b> = «Успішно реалізовано» (статус 142, закриті в місяці) + «Оплата отримана» (знімок поточного етапу).
-                  Це <b>отримані кошти</b> за філософією CRM — включає гроші, що вже надійшли, але угоду ще не закрито в «Успішно».
-                  <b style={{ color: "var(--text)" }}> Середній чек</b> = сума оплат ÷ кількість оплачених угод.
-                  <b style={{ color: "var(--text)" }}> ⏳ Очікування</b> = знімок угод на етапах «Погоджено/Рахунок/Авто працює» (гроші, що очікуються).
-                  <b style={{ color: "var(--text)" }}> ↪️ Перенесені</b> = угоди в роботі, створені до 1-го числа місяця.
+                  <b style={{ color: "var(--text)" }}>💰 Сума оплат (факт)</b> — сума угод, у яких оплата <b>вперше надійшла</b> цього місяця
+                  (перший вхід у «Успішно» 142 або «Оплата отримана»), розкладена по {funnelWeeklyGran === "day" ? "днях" : "тижнях"} → тижні сумуються в місячний факт
+                  (як у ручному звіті). Ловить і «снапшот-платників» — гроші надійшли, хоч угоду ще не закрито в «Успішно».
+                  <b style={{ color: "var(--text)" }}> Середній чек</b> = отримані кошти ÷ кількість оплачених угод.
+                  <b style={{ color: "var(--text)" }}> ⏳ Очікування</b> = сума угод, у яких <b>виставлено рахунок</b> цього {funnelWeeklyGran === "day" ? "дня" : "тижня"} (по тижнях/днях, сумується в місяць).
+                  <b style={{ color: "var(--text)" }}> ↪️ Перенесені</b> = угоди в роботі, створені до 1-го числа місяця (знімок).
                 </div>
               </details>
               <WeeklyFunnelBlock block={funnelWeekly.overall} weeks={funnelWeekly.weeks} highlight />

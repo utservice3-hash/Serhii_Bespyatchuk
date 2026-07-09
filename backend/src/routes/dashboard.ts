@@ -2677,14 +2677,14 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
      GROUP BY d.manager_id`,
     mParams
   );
-  type MoneyWeek = { plan: number; fact: number };
+  type MoneyWeek = { plan: number; fact: number; expected: number };
   type Money = {
     carryover: number; expected: number; received: number; receivedDeals: number;
     planMonth: number; weeks: MoneyWeek[]; daily: { date: string; v: number }[];
   };
   const emptyMoney = (): Money => ({
     carryover: 0, expected: 0, received: 0, receivedDeals: 0, planMonth: 0,
-    weeks: weeks.map(() => ({ plan: 0, fact: 0 })), daily: [],
+    weeks: weeks.map(() => ({ plan: 0, fact: 0, expected: 0 })), daily: [],
   });
   const overallMoney = emptyMoney();
   const mgrMoney = new Map<number, Money>();
@@ -2722,24 +2722,29 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
     overallMoney.planMonth += v;
   }
   for (const m of [overallMoney, ...mgrMoney.values()]) {
-    m.weeks = weeks.map((w) => ({ plan: Math.round(m.planMonth * (totalWd > 0 ? w.wd / totalWd : 0)), fact: 0 }));
+    m.weeks = weeks.map((w) => ({ plan: Math.round(m.planMonth * (totalWd > 0 ? w.wd / totalWd : 0)), fact: 0, expected: 0 }));
   }
 
-  const rdParams: unknown[] = [[8921932, 155304], fmt(mStart), fmt(mEnd)];
-  const rdConds = [
-    "d.pipeline_id = ANY($1)", "d.status_id = 142",
-    `(d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3`,
-  ];
-  if (managerId) { rdParams.push(managerId); rdConds.push(`d.manager_id = $${rdParams.length}`); }
-  if (teamId) { rdParams.push(teamId); rdConds.push(`m.team_id = $${rdParams.length}`); }
-  const revDaily = await pool.query<{ manager_id: number; day: string; v: string }>(
-    `SELECT d.manager_id, to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM-DD') AS day, SUM(d.price) AS v
-       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-      WHERE ${rdConds.join(" AND ")} GROUP BY d.manager_id, day ORDER BY day`,
-    rdParams
+  // Тижневий/денний ФАКТ оплат = сума угод, у яких оплата ВПЕРШЕ надійшла в цьому
+  // бакеті (перший вхід у «Успішно» 142 або «Оплата отримана» 69716460/60412544,
+  // за подіями). Кожна оплачена угода рахується один раз — у тиждень першої оплати
+  // → тижні сумуються в місячний факт (як у ручному звіті менеджера). Це ширше за
+  // старе «142 закрито» і ловить снапшот-платників (гроші є, але угоду ще не закрито).
+  const paidP: unknown[] = [[8921932, 155304], fmt(mStart), fmt(mEnd)];
+  const paidC = ["d.pipeline_id = ANY($1)", `(x.first_paid ${KYIV})::date BETWEEN $2 AND $3`];
+  if (managerId) { paidP.push(managerId); paidC.push(`d.manager_id = $${paidP.length}`); }
+  if (teamId) { paidP.push(teamId); paidC.push(`m.team_id = $${paidP.length}`); }
+  const paidWeekly = await pool.query<{ manager_id: number; day: string; v: string }>(
+    `SELECT d.manager_id, to_char((x.first_paid ${KYIV})::date, 'YYYY-MM-DD') AS day, SUM(d.price) AS v
+       FROM (SELECT kommo_id, MIN(changed_at) AS first_paid FROM deal_stage_events
+             WHERE status_id IN (142, 69716460, 60412544) GROUP BY kommo_id) x
+       JOIN deals d ON d.kommo_id = x.kommo_id
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+      WHERE ${paidC.join(" AND ")} GROUP BY d.manager_id, day ORDER BY day`,
+    paidP
   );
   const overallDaily = new Map<string, number>();
-  for (const r of revDaily.rows) {
+  for (const r of paidWeekly.rows) {
     const v = Number(r.v);
     overallDaily.set(r.day, (overallDaily.get(r.day) ?? 0) + v);
     const wi = weeks.findIndex((w) => r.day >= w.from && r.day <= w.to);
@@ -2749,6 +2754,34 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
     }
   }
   overallMoney.daily = [...overallDaily.entries()].map(([date, v]) => ({ date, v }));
+
+  // Тижневе/денне ОЧІКУВАННЯ = сума угод, у яких рахунок ВПЕРШЕ виставлено в цьому
+  // бакеті (перший вхід у funnel_stage='invoiced' за подіями) — «виставлено рахунків
+  // на суму X цього тижня». Кожна угода один раз, у тиждень першого рахунку.
+  const expP: unknown[] = [[8921932, 155304], fmt(mStart), fmt(mEnd)];
+  const expC = ["d.pipeline_id = ANY($1)", `(x.first_inv ${KYIV})::date BETWEEN $2 AND $3`];
+  if (managerId) { expP.push(managerId); expC.push(`d.manager_id = $${expP.length}`); }
+  if (teamId) { expP.push(teamId); expC.push(`m.team_id = $${expP.length}`); }
+  const expWeekly = await pool.query<{ manager_id: number; day: string; v: string }>(
+    `SELECT d.manager_id, to_char((x.first_inv ${KYIV})::date, 'YYYY-MM-DD') AS day, SUM(d.price) AS v
+       FROM (SELECT dse.kommo_id, MIN(dse.changed_at) AS first_inv
+               FROM deal_stage_events dse
+               JOIN deals dd ON dd.kommo_id = dse.kommo_id
+               JOIN pipeline_stage_map psm ON psm.pipeline_id = dd.pipeline_id AND psm.status_id = dse.status_id
+              WHERE psm.funnel_stage = 'invoiced' GROUP BY dse.kommo_id) x
+       JOIN deals d ON d.kommo_id = x.kommo_id
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+      WHERE ${expC.join(" AND ")} GROUP BY d.manager_id, day`,
+    expP
+  );
+  for (const r of expWeekly.rows) {
+    const v = Number(r.v);
+    const wi = weeks.findIndex((w) => r.day >= w.from && r.day <= w.to);
+    if (wi >= 0) {
+      moneyOf(r.manager_id).weeks[wi].expected += v;
+      overallMoney.weeks[wi].expected += v;
+    }
+  }
 
   // Aggregate facts: overall + per manager, keyed stage → mondayWeek → count.
   type WkMap = Record<string, Record<string, number>>;
