@@ -2465,35 +2465,48 @@ dashboardRouter.get("/response-time", async (req, res) => {
   if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
 
-  const r = await pool.query<{ bucket: string; n: string; avg_min: string | null; median_min: string | null }>(
-    `WITH quals AS (
+  // «Час опрацювання ліда» = від СТВОРЕННЯ ліда в Кваліфікації до моменту, коли
+  // менеджер став відповідальним (взяв у роботу). Ключове:
+  //  • призначено ПРИ СТВОРЕННІ (взято по вхідному дзвінку) → 0 хв (LEFT JOIN до
+  //    подій: якщо події зміни відповідального нема, беремо момент створення);
+  //  • зʼявився й узятий пізніше → різниця (перша подія відповідального);
+  //  • рахуємо ВСІ взяті ліди (у яких є менеджер), а не лише перепризначені.
+  //  • для СЕРЕДНЬОГО «занедбані» >24год кліпимо до 24год (LEAST), щоб поодинокі
+  //    ліди, узяті через дні, не роздували середнє (медіана й так стійка).
+  const RESP_MIN = `GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(fe.taken_at, q.created_at_kommo) - q.created_at_kommo)) / 60.0)`;
+  const bucketCase = `CASE WHEN dow IN (0,6) THEN 'weekend' WHEN hr >= 9 AND hr < 18 THEN 'work' WHEN hr >= 18 AND hr < 21 THEN 'evening' ELSE 'night' END`;
+  const cte = `
+     WITH quals AS (
        SELECT d.kommo_id, d.created_at_kommo
        FROM deals d JOIN managers m ON m.id = d.manager_id
        WHERE ${conds.join(" AND ")}
      ),
-     taken AS (
-       SELECT kommo_id, MIN(changed_at) AS taken_at FROM lead_transfer_events GROUP BY kommo_id
-     ),
+     firstev AS (SELECT kommo_id, MIN(changed_at) AS taken_at FROM lead_transfer_events GROUP BY kommo_id),
      resp AS (
-       SELECT q.created_at_kommo,
-              EXTRACT(EPOCH FROM (t.taken_at - q.created_at_kommo)) / 60.0 AS minutes,
+       SELECT ${RESP_MIN} AS minutes,
               EXTRACT(DOW  FROM (q.created_at_kommo ${KYIV})) AS dow,
               EXTRACT(HOUR FROM (q.created_at_kommo ${KYIV})) AS hr
-       FROM quals q JOIN taken t ON t.kommo_id = q.kommo_id
-       WHERE t.taken_at >= q.created_at_kommo
-     ),
-     bucketed AS (
-       SELECT CASE
-                WHEN dow IN (0, 6) THEN 'weekend'
-                WHEN hr >= 9 AND hr < 18 THEN 'work'
-                WHEN hr >= 18 AND hr < 21 THEN 'evening'
-                ELSE 'night' END AS bucket,
-              minutes
-       FROM resp
-     )
-     SELECT bucket, COUNT(*) AS n, AVG(minutes) AS avg_min,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min
-     FROM bucketed GROUP BY bucket`,
+       FROM quals q LEFT JOIN firstev fe ON fe.kommo_id = q.kommo_id
+     )`;
+  const r = await pool.query<{ bucket: string; n: string; avg_min: string | null; median_min: string | null; le2: string; le15: string; gt240: string }>(
+    `${cte}, bucketed AS (SELECT ${bucketCase} AS bucket, minutes FROM resp)
+     SELECT bucket, COUNT(*) AS n,
+            AVG(LEAST(minutes, 1440)) AS avg_min,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min,
+            COUNT(*) FILTER (WHERE minutes <= 2) AS le2,
+            COUNT(*) FILTER (WHERE minutes <= 15) AS le15,
+            COUNT(*) FILTER (WHERE minutes > 240) AS gt240
+       FROM bucketed GROUP BY bucket`,
+    params
+  );
+  const ov = await pool.query<{ n: string; avg_min: string | null; median_min: string | null; le2: string; le15: string; gt1440: string }>(
+    `${cte}
+     SELECT COUNT(*) AS n, AVG(LEAST(minutes, 1440)) AS avg_min,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min,
+            COUNT(*) FILTER (WHERE minutes <= 2) AS le2,
+            COUNT(*) FILTER (WHERE minutes <= 15) AS le15,
+            COUNT(*) FILTER (WHERE minutes > 1440) AS gt1440
+       FROM resp`,
     params
   );
   const LABELS: Record<string, { label: string; hint: string }> = {
@@ -2505,17 +2518,25 @@ dashboardRouter.get("/response-time", async (req, res) => {
   const map = new Map(r.rows.map((x) => [x.bucket, x]));
   const buckets = ["work", "evening", "night", "weekend"].map((k) => {
     const x = map.get(k);
+    const n = x ? Number(x.n) : 0;
     return {
       key: k, label: LABELS[k].label, hint: LABELS[k].hint,
-      count: x ? Number(x.n) : 0,
+      count: n,
       avgMin: x?.avg_min != null ? Math.round(Number(x.avg_min)) : null,
       medianMin: x?.median_min != null ? Math.round(Number(x.median_min)) : null,
+      immediatePct: n > 0 ? Math.round((Number(x!.le2) / n) * 100) : 0,
     };
   });
-  const totalN = buckets.reduce((s, b) => s + b.count, 0);
-  const overallAvg = totalN > 0
-    ? Math.round(buckets.reduce((s, b) => s + (b.avgMin ?? 0) * b.count, 0) / totalN) : null;
-  res.json({ from, to, buckets, totalCount: totalN, overallAvgMin: overallAvg });
+  const o = ov.rows[0];
+  const totalN = o ? Number(o.n) : 0;
+  res.json({
+    from, to, buckets, totalCount: totalN,
+    overallMedianMin: o?.median_min != null ? Math.round(Number(o.median_min)) : null,
+    overallAvgMin: o?.avg_min != null ? Math.round(Number(o.avg_min)) : null,
+    taken2minPct: totalN > 0 ? Math.round((Number(o!.le2) / totalN) * 100) : 0,
+    taken15minPct: totalN > 0 ? Math.round((Number(o!.le15) / totalN) * 100) : 0,
+    neglectedOver24h: o ? Number(o.gt1440) : 0,
+  });
 });
 
 /**

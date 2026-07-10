@@ -397,13 +397,18 @@ export interface ResponseTimeBucket {
   count: number;
   avgMin: number | null;
   medianMin: number | null;
+  immediatePct: number;
 }
 export interface ResponseTime {
   from: string;
   to: string;
   buckets: ResponseTimeBucket[];
   totalCount: number;
+  overallMedianMin: number | null;
   overallAvgMin: number | null;
+  taken2minPct: number;
+  taken15minPct: number;
+  neglectedOver24h: number;
 }
 export async function fetchResponseTime(params: {
   from?: string;

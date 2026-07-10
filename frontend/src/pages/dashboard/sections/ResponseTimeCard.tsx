@@ -68,10 +68,11 @@ export function ResponseTimeCard({
         }}
       >
         <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span className="chart-title" style={{ marginBottom: 0 }}>⏱ Середній час опрацювання заявки</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: barColor(data.overallAvgMin), background: "rgba(99,102,241,0.12)", borderRadius: 999, padding: "2px 10px" }}>
-            {fmtMin(data.overallAvgMin)}
+          <span className="chart-title" style={{ marginBottom: 0 }}>⏱ Час опрацювання заявки</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: barColor(data.overallMedianMin), background: "rgba(99,102,241,0.12)", borderRadius: 999, padding: "2px 10px" }} title="Медіана — типова заявка (стійка до поодиноких довгих)">
+            медіана {fmtMin(data.overallMedianMin)}
           </span>
+          <span style={{ fontSize: 12, color: "#16a34a", fontWeight: 600 }}>{data.taken2minPct}% одразу (≤2хв)</span>
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{data.totalCount} заявок</span>
         </span>
         <span style={{ fontSize: 13, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
@@ -82,9 +83,16 @@ export function ResponseTimeCard({
       {open && (
         <>
           <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "10px 0" }}>
-            Від створення ліда в «Кваліфікації» до моменту, коли менеджер став відповідальним (узяв заявку).
-            Розбито за часом надходження заявки (київський час). Ціль — швидка реакція; повільна = втрачений клієнт.
+            Від створення ліда в «Кваліфікації» до моменту, коли менеджер став відповідальним (узяв у роботу).
+            <b> Взято по вхідному дзвінку одразу = 0 хв</b> (призначено при створенні). Рахуються ВСІ взяті ліди.
+            Розбито за часом надходження (київський час).
           </p>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, margin: "0 0 10px", padding: "8px 10px", background: "rgba(99,102,241,0.06)", borderRadius: 8 }}>
+            <span>⚡ Одразу (≤2хв): <b style={{ color: "#16a34a" }}>{data.taken2minPct}%</b></span>
+            <span>🟢 Швидко (≤15хв): <b style={{ color: "#16a34a" }}>{data.taken15minPct}%</b></span>
+            <span title="Час рахується до 24 год; далі — занедбані">Сер. (кліп 24год): <b style={{ color: barColor(data.overallAvgMin) }}>{fmtMin(data.overallAvgMin)}</b></span>
+            {data.neglectedOver24h > 0 && <span style={{ color: "#dc2626" }}>🔴 Занедбано &gt;24год: <b>{data.neglectedOver24h}</b></span>}
+          </div>
           <div style={{ display: "grid", gap: 10 }}>
             {data.buckets.map((b) => (
               <div key={b.key} title={b.hint}>
@@ -93,8 +101,9 @@ export function ResponseTimeCard({
                   <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
                     {b.count > 0 ? (
                       <>
-                        сер. <b style={{ color: barColor(b.avgMin) }}>{fmtMin(b.avgMin)}</b>
-                        {" · "}медіана {fmtMin(b.medianMin)}
+                        медіана <b style={{ color: barColor(b.medianMin) }}>{fmtMin(b.medianMin)}</b>
+                        {" · сер. "}{fmtMin(b.avgMin)}
+                        {" · "}<span style={{ color: "#16a34a" }}>{b.immediatePct}% одразу</span>
                         {" · "}{b.count} шт
                       </>
                     ) : (
