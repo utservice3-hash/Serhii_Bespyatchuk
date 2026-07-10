@@ -2757,7 +2757,7 @@ dashboardRouter.get("/report", async (req, res) => {
   const actAdIdx = actP.length;
   const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; dispatched: string; dispatched_sum: string; success: string; success_sum: string }>(
     `SELECT m.id, m.name,
-       COUNT(*) FILTER (WHERE d.client_source = ANY($${actAdIdx})) AS ad_leads,
+       COUNT(*) FILTER (WHERE (d.client_source = ANY($${actAdIdx}) OR d.lead_channel = 'ad') AND COALESCE(d.client_source,'') NOT ILIKE '%реактив%') AS ad_leads,
        COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes,
        COUNT(*) FILTER (WHERE ${DISPATCH}) AS dispatched,
        COALESCE(SUM(d.price) FILTER (WHERE ${DISPATCH}), 0) AS dispatched_sum

@@ -17,17 +17,20 @@ const FULL_CYCLE_PIPELINES = [8921932, 155304];
  */
 async function countAcceptedAds(managerId: number, from: string, to: string, adSources: string[]): Promise<number> {
   if (!adSources.length) return 0;
-  // «Прийнято реклами» = угоди повного циклу × «Источник клиента» ∈ adSources,
-  // СТВОРЕНІ в періоді — БЕЗ фільтра поточного статусу. Лід, прийнятий з реклами,
-  // рахується незалежно від того, де він ЗАРАЗ у воронці (у роботі, відкладений,
-  // закритий 143). Раніше був помилковий INNER JOIN на pipeline_stage_map (мапить
-  // лише 5 із 15 етапів пайплайну) → викидав ад-угоди в сервісних/закритих
-  // статусах і занижував факт (Янчевський 07.07: 2 замість 5 реальних ад-угод).
+  // «Прийнято реклами» = угоди повного циклу, СТВОРЕНІ в періоді, що є рекламними:
+  //   • «Источник клиента» ∈ adSources (явне рекламне джерело), АБО
+  //   • прийшли через КВАЛІФІКАЦІЮ без лідоген-маркерів (lead_channel='ad', яке
+  //     reclassifyAdChannel ставить саме за дотиком у Кваліфікації 8921928/7336928
+  //     і НЕ ставить для лідогенів) — рішення власника 10.07.
+  // Виключаємо РЕАКТИВАЦІЮ (джерело «Реактивація…») — це не реклама.
+  // БЕЗ фільтра поточного етапу: лід, прийнятий з реклами, рахується незалежно від
+  // того, де він зараз (у роботі/відкладений/закритий 143).
   const r = await pool.query<{ c: string }>(
     `SELECT COUNT(*) c FROM deals q
        WHERE q.manager_id = $1
          AND q.pipeline_id = ANY($5)
-         AND q.client_source = ANY($4)
+         AND (q.client_source = ANY($4) OR q.lead_channel = 'ad')
+         AND COALESCE(q.client_source, '') NOT ILIKE '%реактив%'
          AND (q.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date`,
     [managerId, from, to, adSources, FULL_CYCLE_PIPELINES]
   );
