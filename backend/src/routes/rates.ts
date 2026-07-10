@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../auth/middleware.js";
 import { lardiGet, lardiPost, LANG, hasLardiToken } from "../lardi/client.js";
-import { recordRoute, recordOffers, recordUsage, history, usageStats } from "../lardi/history.js";
+import { recordRoute, recordOffers, recordUsage, history, usageStats, learnedStats } from "../lardi/history.js";
 
 // «Калькулятор ставок» — точний порт Python-сервісу lardiweb у наш бекенд
 // (прод — shared cPanel без Python 3.10+). Формат відповіді збережено 1:1 з
@@ -290,6 +290,59 @@ function zoneRecommendation(frmArea: string | null, toArea: string | null, mass:
   };
 }
 
+/**
+ * Самонавчальна рекомендація: із НАКОПИЧЕНОГО архіву Ларді по цьому маршруту
+ * (реальні спостережені ціни) рахуємо орієнтир перевізника + ціну клієнту (маржа
+ * за тоннажем). Що більше зразків — то вища впевненість. Повертає null, якщо по
+ * маршруту ще немає історії (тоді орієнтуємось на зонну карту).
+ */
+async function learnedRecommendation(fromId: number, toId: number, routeKm: number | null, mass: number | null) {
+  const st = await learnedStats(fromId, toId, 120);
+  if (!st || (!st.perKm && !st.total)) return null;
+  const shortHaul = routeKm != null && routeKm <= 100;
+  const k = shortHaul ? 1.5 : 1;
+  // Ціна перевізника: пріоритет — медіана грн/км × відстань (× коеф. плеча);
+  // фолбек — медіана суми з архіву.
+  const perKm = st.perKm?.median ?? null;
+  const carrierFromPerKm = perKm != null && routeKm != null ? Math.round(perKm * k * routeKm) : null;
+  const carrier = carrierFromPerKm ?? st.total?.median ?? null;
+  const carrierLo = st.perKm && routeKm != null ? Math.round(st.perKm.p25 * k * routeKm) : carrier;
+  const carrierHi = st.perKm && routeKm != null ? Math.round(st.perKm.p75 * k * routeKm) : carrier;
+  const n = Math.max(st.perKm?.n ?? 0, st.total?.n ?? 0);
+  const confidence = n >= 15 ? "high" : n >= 5 ? "medium" : "low";
+
+  const options = ZONE_RATES.map((b) => {
+    const margin = marginFor(b.maxMass);
+    return {
+      tonnage: b.label,
+      margin,
+      client_min: carrierLo != null ? carrierLo + margin : null,
+      client_max: carrierHi != null ? carrierHi + margin : null,
+      selected: (mass ?? 20) <= b.maxMass && ZONE_RATES.find((z) => (mass ?? 20) <= z.maxMass) === b,
+    };
+  });
+  const margin = marginFor(mass ?? 20);
+  return {
+    source: "Ларді-архів (самонавчання)",
+    samples: st.samples,
+    price_samples: n,
+    since: st.since,
+    confidence,
+    per_km_median: perKm,
+    per_km_p25: st.perKm?.p25 ?? null,
+    per_km_p75: st.perKm?.p75 ?? null,
+    carrier_median: carrier,
+    carrier_min: carrierLo,
+    carrier_max: carrierHi,
+    short_haul: shortHaul,
+    margin,
+    client_min: carrierLo != null ? carrierLo + margin : null,
+    client_max: carrierHi != null ? carrierHi + margin : null,
+    distance_km: routeKm,
+    options,
+  };
+}
+
 function recommend(cargo: Any | null, lorry: Any | null, routeKm: number | null) {
   const cls = (x: Any | null) => asObj(asObj(x?.classes).all);
   const rec: Any = { distance_km: routeKm };
@@ -446,6 +499,12 @@ ratesRouter.post("/analyze", async (req, res) => {
     const massForZone = reqBody.mass_max ?? reqBody.mass_min ?? null;
     result.zone_recommendation = zoneRecommendation(areaOf(frm as unknown as Any), areaOf(to as unknown as Any), massForZone, routeKm);
   } catch { result.zone_recommendation = null; }
+
+  // Самонавчальна рекомендація з накопиченого архіву цін по маршруту.
+  try {
+    const massForZone = reqBody.mass_max ?? reqBody.mass_min ?? null;
+    result.learned_recommendation = await learnedRecommendation(frm.town_id, to.town_id, routeKm, massForZone);
+  } catch { result.learned_recommendation = null; }
 
   res.json(result);
 });

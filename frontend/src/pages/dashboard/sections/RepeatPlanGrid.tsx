@@ -1,7 +1,44 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fetchRepeatPlansGrid, saveRepeatPlan, saveRepeatClientPlan, approveRepeatClientPlan, type RepeatPlansGrid, type RepeatClientPlan, type Team } from "../../../api";
+import { fetchRepeatPlansGrid, saveRepeatPlan, saveRepeatClientPlan, approveRepeatClientPlan, approveAllRepeatClientPlans, fetchRepeatClientPlanHistory, type RepeatPlansGrid, type RepeatClientPlan, type RepeatClientPlanHistoryEntry, type Team } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
+
+/** Історія змін плану по одному клієнту (хто/коли/дія/план/статус). */
+function PlanHistoryModal({ clientKey, clientName, month, onClose }: { clientKey: string; clientName: string; month: string; onClose: () => void }) {
+  const [rows, setRows] = useState<RepeatClientPlanHistoryEntry[] | null>(null);
+  useEffect(() => { fetchRepeatClientPlanHistory(clientKey, month).then(setRows).catch(() => setRows([])); }, [clientKey, month]);
+  const actLabel: Record<string, string> = { save: "✏️ Зміна плану", approve: "✓ Затвердження" };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2100, padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 20, width: "90vw", maxWidth: 560, maxHeight: "80vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 className="chart-title" style={{ marginBottom: 0 }}>🕘 Історія плану · {clientName}</h3>
+          <button onClick={onClose} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
+        </div>
+        {rows === null ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? (
+          <p className="loading-text" style={{ margin: 0 }}>Змін ще не було.</p>
+        ) : (
+          <table className="data-table compact" style={{ fontSize: 12 }}>
+            <thead><tr><th style={{ textAlign: "left" }}>Коли</th><th style={{ textAlign: "left" }}>Хто</th><th>Дія</th><th style={{ textAlign: "right" }}>План</th><th>Статус</th></tr></thead>
+            <tbody>
+              {rows.map((h, i) => (
+                <tr key={i}>
+                  <td style={{ whiteSpace: "nowrap" }}>{new Date(h.changedAt).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{h.who ?? "—"}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{actLabel[h.action] ?? h.action}</td>
+                  <td style={{ textAlign: "right" }}>{h.plan != null ? formatAmount(h.plan) : "—"}</td>
+                  <td style={{ whiteSpace: "nowrap", color: h.status === "approved" ? "#16a34a" : h.status === "pending" ? "#d97706" : "var(--text-muted)" }}>
+                    {h.status === "approved" ? "✓ затв." : h.status === "pending" ? "⏳ надіслано" : h.status ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 
@@ -22,8 +59,8 @@ const STATUS_BADGE: Record<string, { label: string; color: string }> = {
   none: { label: "— без плану", color: "var(--text-muted)" },
 };
 
-function ClientPlanRow({ client, month, managerId, weekPlan, role, onSaved }: {
-  client: RepeatClientPlan; month: string; managerId: number; weekPlan: number[]; role: string; onSaved: () => void;
+function ClientPlanRow({ client, month, managerId, weekPlan, role, onSaved, onHistory }: {
+  client: RepeatClientPlan; month: string; managerId: number; weekPlan: number[]; role: string; onSaved: () => void; onHistory: (c: RepeatClientPlan) => void;
 }) {
   const canApprove = role === "admin" || role === "team_lead";
   const [approving, setApproving] = useState(false);
@@ -122,6 +159,12 @@ function ClientPlanRow({ client, month, managerId, weekPlan, role, onSaved }: {
                 {approving ? "…" : "Затвердити"}
               </button>
             )}
+            {canApprove && (
+              <button onClick={() => onHistory(client)} title="Історія змін плану"
+                style={{ marginLeft: 6, padding: "3px 6px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>
+                🕘
+              </button>
+            )}
           </>
         )}
       </td>
@@ -151,6 +194,29 @@ export function RepeatPlanGrid({ canPickTeam, teams, role }: { canPickTeam: bool
   const [includeInactive, setIncludeInactive] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const toggleMgr = (id: number) => setExpanded((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const [historyClient, setHistoryClient] = useState<RepeatClientPlan | null>(null);
+  const [approvingAll, setApprovingAll] = useState(false);
+  const canApprove = role === "admin" || role === "team_lead";
+
+  // Скільки планів очікують затвердження в поточному зрізі (для «схвалити всі»).
+  const pendingCount = useMemo(() => {
+    if (!grid) return 0;
+    let n = 0;
+    for (const t of grid.teams) for (const m of t.managers) for (const c of m.clients) if (c.status === "pending") n++;
+    return n;
+  }, [grid]);
+
+  const approveAll = async () => {
+    setApprovingAll(true);
+    try {
+      await approveAllRepeatClientPlans(month, teamId ? Number(teamId) : undefined);
+      setReload((n) => n + 1);
+    } catch {
+      setErr("Не вдалося затвердити всі плани.");
+    } finally {
+      setApprovingAll(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -229,6 +295,12 @@ export function RepeatPlanGrid({ canPickTeam, teams, role }: { canPickTeam: bool
         </button>
         {open && (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {canApprove && pendingCount > 0 && (
+              <button onClick={approveAll} disabled={approvingAll} title="Затвердити всі плани, що очікують"
+                style={{ padding: "6px 12px", borderRadius: 10, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 12, whiteSpace: "nowrap" }}>
+                {approvingAll ? "…" : `✓ Схвалити всі (${pendingCount})`}
+              </button>
+            )}
             <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-muted)", cursor: "pointer", whiteSpace: "nowrap" }} title="Показати клієнтів, що давно не замовляли (замовклі)">
               <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
               💤 замовклі
@@ -382,6 +454,7 @@ export function RepeatPlanGrid({ canPickTeam, teams, role }: { canPickTeam: bool
                                               weekPlan={decomp(c.plan, c.fact).perWeek}
                                               role={role}
                                               onSaved={() => setReload((n) => n + 1)}
+                                              onHistory={setHistoryClient}
                                             />
                                           ))}
                                         </tbody>
@@ -415,6 +488,14 @@ export function RepeatPlanGrid({ canPickTeam, teams, role }: { canPickTeam: bool
             );
           })()}
         </>
+      )}
+      {historyClient && grid && (
+        <PlanHistoryModal
+          clientKey={historyClient.clientKey}
+          clientName={historyClient.clientName}
+          month={grid.month}
+          onClose={() => setHistoryClient(null)}
+        />
       )}
     </div>
   );

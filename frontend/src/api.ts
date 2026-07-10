@@ -301,6 +301,44 @@ export async function approveRepeatClientPlan(clientKey: string, month: string, 
   await api.post("/dashboard/repeat-client-plan/approve", { clientKey, month, status });
 }
 
+export async function approveAllRepeatClientPlans(month: string, teamId?: number): Promise<number> {
+  const { data } = await api.post<{ ok: boolean; approved: number }>("/dashboard/repeat-client-plan/approve-all", { month, teamId });
+  return data.approved;
+}
+
+export interface RepeatClientPlanHistoryEntry {
+  changedAt: string;
+  action: string;
+  plan: number | null;
+  status: string | null;
+  comment: string | null;
+  who: string | null;
+}
+export async function fetchRepeatClientPlanHistory(clientKey: string, month: string): Promise<RepeatClientPlanHistoryEntry[]> {
+  const { data } = await api.get<{ history: RepeatClientPlanHistoryEntry[] }>("/dashboard/repeat-client-plan/history", { params: { clientKey, month } });
+  return data.history;
+}
+
+export interface ConversionTsPoint {
+  bucket: string;
+  leads: number;
+  paid: number;
+  conversion: number;
+  adLeads: number;
+  adPaid: number;
+  adConversion: number;
+}
+export async function fetchConversionTimeseries(params: {
+  from?: string;
+  to?: string;
+  granularity?: "day" | "week" | "month";
+  managerId?: number;
+  teamId?: number;
+}): Promise<{ from: string; to: string; granularity: string; points: ConversionTsPoint[] }> {
+  const { data } = await api.get<{ from: string; to: string; granularity: string; points: ConversionTsPoint[] }>("/dashboard/conversion-timeseries", { params });
+  return data;
+}
+
 export async function fetchRepeatPlansGrid(month: string, teamId?: number, includeInactive?: boolean): Promise<RepeatPlansGrid> {
   const params: Record<string, string | number> = { month };
   if (teamId) params.teamId = teamId;
@@ -1359,6 +1397,16 @@ export interface RateAnalysis {
     short_haul?: boolean;
     margin?: number; client_min?: number | null; client_max?: number | null;
     options: { tonnage: string; margin: number; per_km_min: number; per_km_max: number; total_min: number | null; total_max: number | null; client_min: number | null; client_max: number | null; selected: boolean }[];
+  } | null;
+  /** Самонавчальна рекомендація з накопиченого архіву цін Ларді по маршруту. */
+  learned_recommendation?: {
+    source: string; samples: number; price_samples: number; since: string | null;
+    confidence: "low" | "medium" | "high";
+    per_km_median: number | null; per_km_p25: number | null; per_km_p75: number | null;
+    carrier_median: number | null; carrier_min: number | null; carrier_max: number | null;
+    short_haul: boolean; margin: number; client_min: number | null; client_max: number | null;
+    distance_km: number | null;
+    options: { tonnage: string; margin: number; client_min: number | null; client_max: number | null; selected: boolean }[];
   } | null;
 }
 export interface RatesUsageStats {

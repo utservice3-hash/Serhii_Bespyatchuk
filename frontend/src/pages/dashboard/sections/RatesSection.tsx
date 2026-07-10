@@ -263,6 +263,45 @@ export function RatesSection() {
     );
   };
 
+  // 🧠 Самонавчальна рекомендація: з накопиченого архіву РЕАЛЬНИХ цін Ларді по
+  // цьому маршруту. Що більше зразків — то надійніша. Доповнює зонну карту.
+  const lr = data?.learned_recommendation ?? null;
+  const LearnedBlock = ({ big }: { big?: boolean }) => {
+    if (!lr || (lr.carrier_median == null && lr.per_km_median == null)) return null;
+    const confColor = lr.confidence === "high" ? "#16a34a" : lr.confidence === "medium" ? "#d97706" : "#94a3b8";
+    const confLabel = lr.confidence === "high" ? "висока впевненість" : lr.confidence === "medium" ? "середня впевненість" : "мало даних";
+    const sel = lr.options.find((o) => o.selected) ?? lr.options[lr.options.length - 1];
+    return (
+      <div style={{ marginTop: 10, textAlign: big ? "center" : "left", background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.35)", borderLeft: "4px solid #6366f1", borderRadius: 8, padding: big ? "12px 14px" : "9px 12px" }}>
+        <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+          🧠 <b style={{ color: "#6366f1" }}>Самонавчання</b> (архів Ларді по маршруту):{" "}
+          <span style={{ color: confColor, fontWeight: 700 }}>{confLabel}</span>
+          {" · "}{lr.price_samples} цін{lr.since ? ` з ${new Date(lr.since).toLocaleDateString("uk-UA")}` : ""}
+          {lr.short_haul && <b style={{ color: ACC }}> · ×1.5 коротке плече</b>}
+        </div>
+        {lr.per_km_median != null && (
+          <div style={{ fontSize: big ? 14 : 13, marginTop: 6 }}>
+            Медіана ринку: <b style={{ color: "#6366f1" }}>{fmt(lr.per_km_median)} грн/км</b>
+            {lr.per_km_p25 != null && lr.per_km_p75 != null && <span style={{ color: "var(--text-muted)" }}> ({fmt(lr.per_km_p25)}–{fmt(lr.per_km_p75)})</span>}
+            {" · перевізнику ≈ "}<b>{lr.carrier_min && lr.carrier_max ? `${fmt(lr.carrier_min)}–${fmt(lr.carrier_max)}` : fmt(lr.carrier_median)} грн</b>
+          </div>
+        )}
+        {sel?.client_min != null && (
+          <div style={{ marginTop: 6, fontSize: big ? 15 : 13 }}>
+            💰 <b>Клієнту (авто {sel.tonnage}):</b>{" "}
+            <b style={{ color: "#16a34a", fontSize: big ? 20 : 16 }}>
+              {sel.client_min === sel.client_max ? fmt(sel.client_min) : `${fmt(sel.client_min)} – ${fmt(sel.client_max ?? sel.client_min)}`} грн
+            </b>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}> = ринок + маржа {fmt(sel.margin)}</span>
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 5 }}>
+          Рахується з реальних спостережених цін по маршруту (оновлюється щоразу, коли хтось прораховує напрямок) — доповнює зонну карту.
+        </div>
+      </div>
+    );
+  };
+
   const segBtn = (active: boolean): React.CSSProperties => ({
     padding: "7px 13px", borderRadius: 8, border: "1px solid var(--border)",
     background: active ? ACC : "var(--card-bg)", color: active ? "#fff" : "var(--text)",
@@ -429,11 +468,13 @@ export function RatesSection() {
                       💡 <b style={{ color: ACC }}>Як читати:</b> «Замовники» — це здебільшого <b>експедиторські компанії</b>, які шукають перевізника за своєю (часто заниженою) ціною. За такою ставкою перевізника зазвичай <b>не знайти</b>. Тому орієнтуйся на <b>максимум</b> і на ставки перевізників, а клієнту став ціну <b>вище за максимум</b> — щоб під неї реально знайти транспорт і закласти свою маржу.
                     </div>
                     <ZoneBlock />
+                    <LearnedBlock />
                   </>
                 ) : (
                   <>
                     <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Немає точних збігів для рекомендації ({strictInfo}). Повна статистика — нижче.</div>
                     <ZoneBlock big />
+                    <LearnedBlock big />
                     {settings && dist ? (
                       <div style={{ marginTop: 10 }}>
                         <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Заявок за вашим напрямком немає — орієнтуйтесь на базовий тариф:</div>

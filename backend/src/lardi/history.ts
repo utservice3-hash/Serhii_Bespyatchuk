@@ -81,6 +81,51 @@ export async function history(fromId: number, toId: number, side: string, days =
   }));
 }
 
+/**
+ * Самонавчання: агрегує НАКОПИЧЕНИЙ архів пропозицій по маршруту (from→to,
+ * обидві сторони, лише UAH) за вікно `days` — медіана/квартилі грн/км і суми з
+ * РЕАЛЬНИХ спостережених цін Ларді. Що більше історії, то надійніша оцінка.
+ */
+export async function learnedStats(fromId: number, toId: number, days = 120): Promise<{
+  perKm: { n: number; median: number; p25: number; p75: number } | null;
+  total: { n: number; median: number } | null;
+  samples: number;
+  since: string | null;
+} | null> {
+  const r = await pool.query<{
+    n_perkm: string; med_perkm: string | null; p25_perkm: string | null; p75_perkm: string | null;
+    n_total: string; med_total: string | null; n_all: string; since: string | null;
+  }>(
+    `SELECT
+        COUNT(*) FILTER (WHERE is_uah AND per_km IS NOT NULL AND per_km > 0) AS n_perkm,
+        percentile_cont(0.5)  WITHIN GROUP (ORDER BY per_km) FILTER (WHERE is_uah AND per_km IS NOT NULL AND per_km > 0) AS med_perkm,
+        percentile_cont(0.25) WITHIN GROUP (ORDER BY per_km) FILTER (WHERE is_uah AND per_km IS NOT NULL AND per_km > 0) AS p25_perkm,
+        percentile_cont(0.75) WITHIN GROUP (ORDER BY per_km) FILTER (WHERE is_uah AND per_km IS NOT NULL AND per_km > 0) AS p75_perkm,
+        COUNT(*) FILTER (WHERE is_uah AND total IS NOT NULL AND total > 0) AS n_total,
+        percentile_cont(0.5)  WITHIN GROUP (ORDER BY total) FILTER (WHERE is_uah AND total IS NOT NULL AND total > 0) AS med_total,
+        COUNT(*) AS n_all,
+        to_char(MIN(first_seen), 'YYYY-MM-DD') AS since
+       FROM lardi_offers
+      WHERE from_id = $1 AND to_id = $2 AND first_seen >= now() - ($3 || ' days')::interval`,
+    [fromId, toId, days]
+  );
+  const x = r.rows[0];
+  if (!x || Number(x.n_all) === 0) return null;
+  const nPerKm = Number(x.n_perkm);
+  const nTotal = Number(x.n_total);
+  return {
+    perKm: nPerKm > 0 ? {
+      n: nPerKm,
+      median: Math.round(Number(x.med_perkm)),
+      p25: Math.round(Number(x.p25_perkm)),
+      p75: Math.round(Number(x.p75_perkm)),
+    } : null,
+    total: nTotal > 0 ? { n: nTotal, median: Math.round(Number(x.med_total)) } : null,
+    samples: Number(x.n_all),
+    since: x.since,
+  };
+}
+
 export async function listRoutes(maxAgeDays = 14): Promise<{ from_id: number; to_id: number; from_name: string | null; to_name: string | null; from_lat: number | null; from_lon: number | null; to_lat: number | null; to_lon: number | null }[]> {
   const r = await pool.query(
     `SELECT from_id, to_id, from_name, to_name, from_lat, from_lon, to_lat, to_lon

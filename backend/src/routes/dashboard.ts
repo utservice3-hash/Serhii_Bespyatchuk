@@ -1006,6 +1006,60 @@ dashboardRouter.get("/conversion", async (req, res) => {
 });
 
 /**
+ * Динаміка конверсії в часі (по днях/тижнях/місяцях) — для графіка тренду в Звіті.
+ * Когорта = угоди повного циклу, СТВОРЕНІ у бакеті; «конвертована» = клієнт угоди
+ * дійшов до оплаченої угоди повного циклу (крос-пайплайн, як у /conversion).
+ * Скоуп: manager/team (роль-обмежений). Опційно розріз реклама vs інше.
+ */
+dashboardRouter.get("/conversion-timeseries", async (req, res) => {
+  const auth = req.auth!;
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const gran = req.query.granularity === "month" ? "month" : req.query.granularity === "day" ? "day" : "week";
+  const from = (req.query.from as string) || new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1).toISOString().slice(0, 10);
+  const to = (req.query.to as string) || new Date().toISOString().slice(0, 10);
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") teamId = auth.teamId;
+
+  const { adSources } = await getSettings();
+  const params: unknown[] = [from, to, adSources];
+  const conds = [
+    "d.pipeline_id = ANY(ARRAY[8921932, 155304])",
+    `(d.created_at_kommo ${KYIV})::date BETWEEN $1 AND $2`,
+  ];
+  if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+
+  const r = await pool.query<{ bucket: string; leads: string; paid: string; ad_leads: string; ad_paid: string }>(
+    `WITH paid_clients AS (
+       SELECT DISTINCT d.client_key FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+     )
+     SELECT to_char(date_trunc('${gran}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket,
+            COUNT(*) AS leads,
+            COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS paid,
+            COUNT(*) FILTER (WHERE d.client_source = ANY($3)) AS ad_leads,
+            COUNT(*) FILTER (WHERE d.client_source = ANY($3) AND d.client_key IN (SELECT client_key FROM paid_clients)) AS ad_paid
+       FROM deals d JOIN managers m ON m.id = d.manager_id
+      WHERE ${conds.join(" AND ")}
+      GROUP BY 1 ORDER BY 1`,
+    params
+  );
+  const points = r.rows.map((x) => {
+    const leads = Number(x.leads), paid = Number(x.paid), adLeads = Number(x.ad_leads), adPaid = Number(x.ad_paid);
+    return {
+      bucket: x.bucket, leads, paid,
+      conversion: leads > 0 ? Math.round((paid / leads) * 100) : 0,
+      adLeads, adPaid,
+      adConversion: adLeads > 0 ? Math.round((adPaid / adLeads) * 100) : 0,
+    };
+  });
+  res.json({ from, to, granularity: gran, points });
+});
+
+/**
  * Returns deal counts/amounts per funnel stage, bucketed by day or month,
  * for trend charts (used by the company-wide / head-of-sales overview).
  */
@@ -3956,6 +4010,11 @@ dashboardRouter.post("/repeat-client-plan", async (req, res) => {
        updated_by = EXCLUDED.updated_by, updated_at = now()`,
     [clientKey, month, managerId, num(b.plan) ?? 0, str(b.forecast), num(b.realizationPct), bool(b.international), bool(b.weDo), str(b.callLink), str(b.comment), status, auth.userId]
   );
+  await pool.query(
+    `INSERT INTO repeat_client_plan_history (client_key, month, changed_by, action, plan, status, comment)
+     VALUES ($1, $2, $3, 'save', $4, $5, $6)`,
+    [clientKey, month, auth.userId, num(b.plan) ?? 0, status, str(b.comment)]
+  );
   res.json({ ok: true, status });
 });
 
@@ -3980,7 +4039,66 @@ dashboardRouter.post("/repeat-client-plan/approve", async (req, res) => {
      WHERE client_key = $1 AND month = $2`,
     [clientKey, month, status, auth.userId]
   );
+  await pool.query(
+    `INSERT INTO repeat_client_plan_history (client_key, month, changed_by, action, status)
+     VALUES ($1, $2, $3, 'approve', $4)`,
+    [clientKey, month, auth.userId, status]
+  );
   res.json({ ok: true, status });
+});
+
+/** Затвердити ВСІ pending-плани за місяць (тімлід — своя команда, адмін — усі
+ *  або обрана команда). Одним кліком закриває чергу на затвердження. */
+dashboardRouter.post("/repeat-client-plan/approve-all", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  const b = req.body ?? {};
+  const month = ((b.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
+  let teamId = b.teamId != null ? Number(b.teamId) : null;
+  if (auth.role === "team_lead") teamId = auth.teamId;
+
+  const params: unknown[] = [month, auth.userId];
+  const conds = ["p.month = $1", "p.status = 'pending'"];
+  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+
+  const upd = await pool.query<{ client_key: string }>(
+    `UPDATE repeat_client_plans p SET status = 'approved', approved_by = $2, approved_at = now()
+       FROM managers m
+      WHERE p.manager_id = m.id AND ${conds.join(" AND ")}
+      RETURNING p.client_key`,
+    params
+  );
+  for (const row of upd.rows) {
+    await pool.query(
+      `INSERT INTO repeat_client_plan_history (client_key, month, changed_by, action, status)
+       VALUES ($1, $2, $3, 'approve', 'approved')`,
+      [row.client_key, month, auth.userId]
+    );
+  }
+  res.json({ ok: true, approved: upd.rowCount });
+});
+
+/** Історія змін плану по клієнту (хто/коли/дія/план/статус). */
+dashboardRouter.get("/repeat-client-plan/history", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
+  const r = await pool.query<{ changed_at: string; action: string; plan: string | null; status: string | null; comment: string | null; who: string | null }>(
+    `SELECT h.changed_at, h.action, h.plan, h.status, h.comment, COALESCE(u.name, u.email) AS who
+       FROM repeat_client_plan_history h LEFT JOIN users u ON u.id = h.changed_by
+      WHERE h.client_key = $1 AND h.month = $2
+      ORDER BY h.changed_at DESC LIMIT 100`,
+    [clientKey, month]
+  );
+  res.json({
+    history: r.rows.map((x) => ({
+      changedAt: x.changed_at, action: x.action,
+      plan: x.plan != null ? Number(x.plan) : null,
+      status: x.status, comment: x.comment, who: x.who,
+    })),
+  });
 });
 
 /** Read a manager's monthly funnel plan (for the plan editor). Admin/team-lead

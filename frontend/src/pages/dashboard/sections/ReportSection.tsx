@@ -16,6 +16,7 @@ import { InfoHint } from "../widgets";
 import { DailyProductivityCard } from "./DailyProductivityCard";
 import { StuckDealsCard } from "./StuckDealsCard";
 import { ResponseTimeCard } from "./ResponseTimeCard";
+import { ConversionTrendCard } from "./ConversionTrendCard";
 import { ReactivationGrid } from "./ReactivationGrid";
 
 const STATUS_LBL: Record<string, string> = {
@@ -869,6 +870,14 @@ export function ReportSection({
               </ResponsiveContainer>
             )}
           </div>
+
+          <ConversionTrendCard
+            from={dateRange.from}
+            to={dateRange.to}
+            granularity={granularity}
+            managerId={canPickManager && reportManagerId ? Number(reportManagerId) : undefined}
+            teamId={canPickManager && reportTeamId ? Number(reportTeamId) : undefined}
+          />
 
           <div className="chart-card">
             <h2 className="chart-title">Розбивка по періодах</h2>

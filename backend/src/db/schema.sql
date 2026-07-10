@@ -629,3 +629,18 @@ CREATE TABLE IF NOT EXISTS duty_schedule (
 );
 CREATE INDEX IF NOT EXISTS idx_duty_date ON duty_schedule(duty_date);
 CREATE INDEX IF NOT EXISTS idx_duty_manager ON duty_schedule(manager_id, duty_date);
+
+-- Історія змін планів по постійних клієнтах: кожне збереження/затвердження пише
+-- рядок (хто, коли, дія, підсумковий план і статус). Для аудиту й «історії» в UI.
+CREATE TABLE IF NOT EXISTS repeat_client_plan_history (
+  id SERIAL PRIMARY KEY,
+  client_key TEXT NOT NULL,
+  month DATE NOT NULL,
+  changed_by INTEGER REFERENCES users(id),
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  action TEXT NOT NULL,             -- 'save' | 'approve'
+  plan NUMERIC,
+  status TEXT,
+  comment TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rcp_history ON repeat_client_plan_history(client_key, month, changed_at DESC);
