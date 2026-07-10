@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   BarChart,
   Bar,
@@ -129,14 +130,16 @@ function beep(success: boolean) {
 
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
-  // Persist the open section so a page refresh (Ctrl+R) keeps you in place.
-  const [section, setSection] = useState<NavKey>(() => {
-    const saved = localStorage.getItem("section") as NavKey | null;
-    return saved && NAV_ITEMS.some((i) => i.key === saved) ? saved : "overview";
-  });
-  useEffect(() => {
-    localStorage.setItem("section", section);
-  }, [section]);
+  // Розділ живе в URL (/report, /kvp, …) — посилання, «назад/вперед», закладки
+  // працюють, а F5 лишає тебе на місці. «/» = Огляд. Джерело правди — адреса.
+  const navigate = useNavigate();
+  const { section: rawSection } = useParams<{ section?: string }>();
+  const section: NavKey =
+    rawSection && NAV_ITEMS.some((i) => i.key === rawSection) ? (rawSection as NavKey) : "overview";
+  const setSection = useCallback(
+    (key: NavKey) => { navigate(key === "overview" ? "/" : `/${key}`); },
+    [navigate]
+  );
   const [navHistory, setNavHistory] = useState<NavKey[]>([]);
   const [stages, setStages] = useState<FunnelStage[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);

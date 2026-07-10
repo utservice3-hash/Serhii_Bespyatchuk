@@ -11,8 +11,18 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      {/* Розділ у URL (/report, /kvp, …) — щоб працювали посилання, «назад/вперед»,
+          закладки. «/» = Огляд. Обидва шляхи рендерять один Dashboard. */}
       <Route
         path="/"
+        element={
+          <RequireAuth>
+            <Dashboard />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/:section"
         element={
           <RequireAuth>
             <Dashboard />
