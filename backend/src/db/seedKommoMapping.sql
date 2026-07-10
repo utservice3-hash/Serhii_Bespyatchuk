@@ -28,6 +28,7 @@ UPDATE managers SET is_team_lead = true
 -- 8921932 "Перевозки (Продажі повний цикл) (New)" — used by РНК, РПК, Тендери
 -- (distinguished by responsible manager / team, not by pipeline)
 INSERT INTO pipeline_stage_map (pipeline_id, status_id, funnel_stage) VALUES
+  (8921932, 108361876, 'lead_taken'),      -- Повернуто АІ Відділ якості (на доопрацювання) — рання активна стадія доробки
   (8921932, 69693668, 'lead_taken'),       -- ВЗЯТО НА ПРОРАХУНОК
   (8921932, 69693672, 'quote_requested'),  -- ПРОПОЗИЦІЮ ЗРОБЛЕНО
   (8921932, 69716252, 'quote_requested'),  -- ВІДКЛАДЕНИЙ ЗАПИТ
