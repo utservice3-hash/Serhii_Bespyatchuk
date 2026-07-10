@@ -22,30 +22,38 @@ function isHumanActivity(n: KommoLeadNote): boolean {
 }
 
 async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
-  // Collapse to the latest human-activity timestamp per lead in this page.
+  // Collapse to the EARLIEST and LATEST human-activity timestamp per lead in this
+  // page. last_activity_at → «застряглі» (остання активність); first_activity_at
+  // → «час опрацювання» (перший контакт менеджера з лідом).
+  const earliest = new Map<number, number>();
   const latest = new Map<number, number>();
   for (const n of notes) {
     if (!isHumanActivity(n)) continue;
-    const cur = latest.get(n.entityId) ?? 0;
-    if (n.createdAt > cur) latest.set(n.entityId, n.createdAt);
+    const lo = earliest.get(n.entityId);
+    if (lo == null || n.createdAt < lo) earliest.set(n.entityId, n.createdAt);
+    const hi = latest.get(n.entityId) ?? 0;
+    if (n.createdAt > hi) latest.set(n.entityId, n.createdAt);
   }
   if (latest.size === 0) return;
 
   const ids: number[] = [];
-  const ts: Date[] = [];
-  for (const [id, unix] of latest) {
+  const tsHi: Date[] = [];
+  const tsLo: Date[] = [];
+  for (const [id, hi] of latest) {
     ids.push(id);
-    ts.push(new Date(unix * 1000));
+    tsHi.push(new Date(hi * 1000));
+    tsLo.push(new Date((earliest.get(id) ?? hi) * 1000));
   }
-  // Only ever move last_activity_at forward (GREATEST); an out-of-order page
-  // must not overwrite a newer timestamp. Update in place — a note always
-  // belongs to a deal we already synced.
+  // last_activity_at рухається лише вперед (GREATEST); first_activity_at — лише
+  // назад (LEAST), тож стабілізується на найпершому контакті, щойно вікно синку
+  // його покриє. Оновлюємо на місці — нотатка завжди належить уже синхронізованій угоді.
   await pool.query(
     `UPDATE deals d
-        SET last_activity_at = GREATEST(COALESCE(d.last_activity_at, 'epoch'::timestamptz), v.ts)
-       FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS ts) v
+        SET last_activity_at  = GREATEST(COALESCE(d.last_activity_at, 'epoch'::timestamptz), v.hi),
+            first_activity_at = LEAST(COALESCE(d.first_activity_at, 'infinity'::timestamptz), v.lo)
+       FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS hi, UNNEST($3::timestamptz[]) AS lo) v
       WHERE d.kommo_id = v.kommo_id`,
-    [ids, ts]
+    [ids, tsHi, tsLo]
   );
 }
 

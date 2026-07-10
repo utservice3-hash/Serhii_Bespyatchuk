@@ -2465,28 +2465,28 @@ dashboardRouter.get("/response-time", async (req, res) => {
   if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
 
-  // «Час опрацювання ліда» = від СТВОРЕННЯ ліда в Кваліфікації до моменту, коли
-  // менеджер став відповідальним (взяв у роботу). Ключове:
-  //  • призначено ПРИ СТВОРЕННІ (взято по вхідному дзвінку) → 0 хв (LEFT JOIN до
-  //    подій: якщо події зміни відповідального нема, беремо момент створення);
-  //  • зʼявився й узятий пізніше → різниця (перша подія відповідального);
-  //  • рахуємо ВСІ взяті ліди (у яких є менеджер), а не лише перепризначені.
-  //  • для СЕРЕДНЬОГО «занедбані» >24год кліпимо до 24год (LEAST), щоб поодинокі
-  //    ліди, узяті через дні, не роздували середнє (медіана й так стійка).
-  const RESP_MIN = `GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(fe.taken_at, q.created_at_kommo) - q.created_at_kommo)) / 60.0)`;
+  // «Час опрацювання ліда» = від СТВОРЕННЯ ліда в Кваліфікації до ПЕРШОГО РЕАЛЬНОГО
+  // КОНТАКТУ менеджера з ним (перший людський дзвінок/повідомлення/нотатка —
+  // `first_activity_at` із syncDealActivity, created_by<>0, без Salesbot). Ключове:
+  //  • взято по ВХІДНОМУ дзвінку → нотатка call_in ≈ момент створення → ~0 хв;
+  //  • лід у Кваліфікації, але з ним ВЕДЕТЬСЯ робота → рахуємо момент першого
+  //    контакту, а не зміну етапу/відповідального (угода може стояти в етапі, а
+  //    менеджер уже дзвонить);
+  //  • ліди БЕЗ жодного людського контакту (ще не опрацьовані) — не рахуємо.
+  //  • для СЕРЕДНЬОГО «занедбані» >24год кліпимо до 24год; медіана й так стійка.
+  const RESP_MIN = `GREATEST(0, EXTRACT(EPOCH FROM (q.first_activity_at - q.created_at_kommo)) / 60.0)`;
   const bucketCase = `CASE WHEN dow IN (0,6) THEN 'weekend' WHEN hr >= 9 AND hr < 18 THEN 'work' WHEN hr >= 18 AND hr < 21 THEN 'evening' ELSE 'night' END`;
   const cte = `
      WITH quals AS (
-       SELECT d.kommo_id, d.created_at_kommo
+       SELECT d.kommo_id, d.created_at_kommo, d.first_activity_at
        FROM deals d JOIN managers m ON m.id = d.manager_id
-       WHERE ${conds.join(" AND ")}
+       WHERE ${conds.join(" AND ")} AND d.first_activity_at IS NOT NULL
      ),
-     firstev AS (SELECT kommo_id, MIN(changed_at) AS taken_at FROM lead_transfer_events GROUP BY kommo_id),
      resp AS (
        SELECT ${RESP_MIN} AS minutes,
               EXTRACT(DOW  FROM (q.created_at_kommo ${KYIV})) AS dow,
               EXTRACT(HOUR FROM (q.created_at_kommo ${KYIV})) AS hr
-       FROM quals q LEFT JOIN firstev fe ON fe.kommo_id = q.kommo_id
+       FROM quals q
      )`;
   const r = await pool.query<{ bucket: string; n: string; avg_min: string | null; median_min: string | null; le2: string; le15: string; gt240: string }>(
     `${cte}, bucketed AS (SELECT ${bucketCase} AS bucket, minutes FROM resp)
