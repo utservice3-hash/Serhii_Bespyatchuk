@@ -371,6 +371,42 @@ export async function fetchResponseTime(params: {
   return data;
 }
 
+export interface DutyAssignment {
+  id: number;
+  date: string;
+  managerId: number;
+  managerName: string;
+  teamId: number | null;
+  teamName: string | null;
+  shift: string;
+  note: string | null;
+  mine: boolean;
+}
+export interface DutyManager {
+  id: number;
+  name: string;
+  team_id: number | null;
+  team_name: string | null;
+}
+export interface DutySchedule {
+  from: string;
+  to: string;
+  assignments: DutyAssignment[];
+  managers: DutyManager[];
+  canEdit: boolean;
+}
+export async function fetchDutySchedule(params: { from: string; to: string; teamId?: number }): Promise<DutySchedule> {
+  const { data } = await api.get<DutySchedule>("/duty", { params });
+  return data;
+}
+export async function assignDuty(body: { date: string; managerId: number; shift?: string; note?: string }): Promise<{ ok: boolean; id: number }> {
+  const { data } = await api.post<{ ok: boolean; id: number }>("/duty", body);
+  return data;
+}
+export async function removeDuty(id: number): Promise<void> {
+  await api.delete(`/duty/${id}`);
+}
+
 export interface Team {
   id: number;
   name: string;

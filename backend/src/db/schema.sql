@@ -611,3 +611,21 @@ CREATE TABLE IF NOT EXISTS one_on_ones (
   PRIMARY KEY (subject_manager_id, month)
 );
 CREATE INDEX IF NOT EXISTS idx_one_on_ones_month ON one_on_ones(month);
+
+-- Графік чергування: тімлід (РНК) / адмін призначає менеджерів на конкретні дні
+-- (закривати вхідні заявки у вечірні/вихідні «вікна», де реакція провисає).
+-- Один рядок = (день × менеджер × зміна). shift: 'day' | 'evening' | 'weekend'.
+-- team_id денормалізований для швидкого скоуп-фільтра. Менеджер бачить свої дні.
+CREATE TABLE IF NOT EXISTS duty_schedule (
+  id SERIAL PRIMARY KEY,
+  duty_date DATE NOT NULL,
+  manager_id INTEGER NOT NULL REFERENCES managers(id),
+  team_id INTEGER REFERENCES teams(id),
+  shift TEXT NOT NULL DEFAULT 'day',       -- day | evening | weekend
+  note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (duty_date, manager_id, shift)
+);
+CREATE INDEX IF NOT EXISTS idx_duty_date ON duty_schedule(duty_date);
+CREATE INDEX IF NOT EXISTS idx_duty_manager ON duty_schedule(manager_id, duty_date);

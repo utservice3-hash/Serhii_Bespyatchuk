@@ -19,6 +19,8 @@ import { ratesRouter } from "./routes/rates.js";
 import { documentsRouter } from "./routes/documents.js";
 import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
+import { dutyRouter } from "./routes/duty.js";
+import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
@@ -59,6 +61,7 @@ app.use("/api/reports", reportsRouter);
 app.use("/api/rates", ratesRouter);
 app.use("/api/documents", documentsRouter);
 app.use("/api/one-on-ones", oneOnOnesRouter);
+app.use("/api/duty", dutyRouter);
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".
@@ -156,6 +159,13 @@ cron.schedule("0 6 1 * *", () => {
   createOneOnOneReminders().catch((err) => console.error("One-on-one reminders failed:", err));
 });
 createOneOnOneReminders().catch((err) => console.error("One-on-one reminders startup failed:", err));
+
+// Чергування: щоранку 07:30 + на старті — задача «сьогодні ти черговий» тим,
+// хто в графіку на сьогодні (ідемпотентно по даті).
+cron.schedule("30 7 * * *", () => {
+  createDutyReminders().catch((err) => console.error("Duty reminders failed:", err));
+});
+createDutyReminders().catch((err) => console.error("Duty reminders startup failed:", err));
 
 // Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».
 // Щодня 08:20 + на старті (ідемпотентно через task_created_at).
