@@ -21,6 +21,7 @@ import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { dutyRouter } from "./routes/duty.js";
 import { createDutyReminders } from "./jobs/dutyReminders.js";
+import { trainingRouter } from "./routes/training.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
@@ -42,7 +43,7 @@ import { pool } from "./db/pool.js";
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "25mb" }));
+app.use(express.json({ limit: "60mb" }));
 app.use("/api/files", express.static(UPLOAD_DIR));
 
 app.use("/api/auth", authRouter);
@@ -62,6 +63,7 @@ app.use("/api/rates", ratesRouter);
 app.use("/api/documents", documentsRouter);
 app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
+app.use("/api/training", trainingRouter);
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".

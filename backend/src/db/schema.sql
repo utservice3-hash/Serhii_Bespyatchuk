@@ -644,3 +644,32 @@ CREATE TABLE IF NOT EXISTS repeat_client_plan_history (
   comment TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_rcp_history ON repeat_client_plan_history(client_key, month, changed_at DESC);
+
+-- Навчання: адмін (КВП) будує структуру папок і розміщує матеріали (відео через
+-- embed-URL YouTube/Vimeo/пряме, завантажені файли, посилання, текст). Читають
+-- усі автентифіковані. Файли — у `uploads/../training` (поза публічним static).
+CREATE TABLE IF NOT EXISTS training_folders (
+  id SERIAL PRIMARY KEY,
+  parent_id INTEGER REFERENCES training_folders(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_training_folders_parent ON training_folders(parent_id);
+
+CREATE TABLE IF NOT EXISTS training_materials (
+  id SERIAL PRIMARY KEY,
+  folder_id INTEGER REFERENCES training_folders(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL,             -- 'video_embed' | 'file' | 'link' | 'text'
+  url TEXT,                       -- embed/link URL
+  stored_name TEXT,               -- завантажений файл
+  mime TEXT,
+  size_bytes BIGINT,
+  content TEXT,                   -- опис / текстовий матеріал
+  position INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_training_materials_folder ON training_materials(folder_id);

@@ -1512,6 +1512,51 @@ export async function fetchDocFileBlobUrl(id: number): Promise<string> {
   return URL.createObjectURL(data as Blob);
 }
 
+// ── Навчання (training) ──
+export interface TrainingFolder {
+  id: number; parent_id: number | null; name: string; position: number; created_at: string;
+}
+export type TrainingKind = "video_embed" | "file" | "link" | "text";
+export interface TrainingMaterial {
+  id: number; folder_id: number | null; title: string; kind: TrainingKind;
+  url: string | null; mime: string | null; size_bytes: string | number | null;
+  content: string | null; position: number; created_at: string; author?: string | null;
+}
+export async function fetchTrainingTree(): Promise<{ folders: TrainingFolder[]; materials: TrainingMaterial[] }> {
+  const { data } = await api.get<{ folders: TrainingFolder[]; materials: TrainingMaterial[] }>("/training/tree");
+  return data;
+}
+export async function createTrainingFolder(name: string, parentId: number | null): Promise<TrainingFolder> {
+  const { data } = await api.post<TrainingFolder>("/training/folder", { name, parentId });
+  return data;
+}
+export async function updateTrainingFolder(id: number, patch: { name?: string; parentId?: number | null; position?: number }): Promise<void> {
+  await api.patch(`/training/folder/${id}`, patch);
+}
+export async function deleteTrainingFolder(id: number): Promise<void> {
+  await api.delete(`/training/folder/${id}`);
+}
+export async function createTrainingMaterial(body: {
+  folderId: number | null; title: string; kind: TrainingKind;
+  url?: string | null; content?: string | null;
+  filename?: string; mime?: string | null; dataBase64?: string;
+}, onProgress?: (pct: number) => void): Promise<TrainingMaterial> {
+  const { data } = await api.post<TrainingMaterial>("/training/material", body, {
+    onUploadProgress: (e) => { if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100)); },
+  });
+  return data;
+}
+export async function updateTrainingMaterial(id: number, patch: { title?: string; content?: string | null; url?: string | null; folderId?: number | null; position?: number }): Promise<void> {
+  await api.patch(`/training/material/${id}`, patch);
+}
+export async function deleteTrainingMaterial(id: number): Promise<void> {
+  await api.delete(`/training/material/${id}`);
+}
+export async function fetchTrainingFileBlobUrl(id: number): Promise<string> {
+  const { data } = await api.get(`/training/material/${id}/file`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
+}
+
 // ── Ван-ту-вани (1-on-1) ──
 export interface OneOnOneSubject {
   id: number; name: string; team_id: number | null; team_name: string | null;
