@@ -20,12 +20,15 @@ const FC = "d.pipeline_id IN (8921932, 155304)";
 export async function runDataReconciliation(): Promise<{ warnings: number; checks: DataCheck[] }> {
   const checks: DataCheck[] = [];
 
-  // 1) Частка угод повного циклу (30 днів) у НЕзамаплених статусах. Сплеск = зʼявився
-  //    новий етап, який ще не в pipeline_stage_map → метрики за етапом його не бачать
-  //    (саме такий баг ховав рекламу). Поріг 25%.
-  const unmapped = await pool.query<{ total: string; bad: string }>(
+  // 1) Частка угод повного циклу (30 днів) у ГЕНУЇННО незамаплених статусах —
+  //    тобто НЕ в pipeline_stage_map і НЕ статус 143 (закрито/нейтралізовано —
+  //    його правильно не мапити, це не активний етап). Сплеск = зʼявився НОВИЙ
+  //    робочий етап, ще не в мапі → метрики за етапом його не бачать (саме такий
+  //    баг ховав рекламу). Поріг 10%.
+  const unmapped = await pool.query<{ total: string; bad: string; statuses: number[] | null }>(
     `SELECT COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE psm.funnel_stage IS NULL) AS bad
+            COUNT(*) FILTER (WHERE psm.funnel_stage IS NULL AND d.status_id <> 143) AS bad,
+            array_agg(DISTINCT d.status_id) FILTER (WHERE psm.funnel_stage IS NULL AND d.status_id <> 143) AS statuses
        FROM deals d
        LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
       WHERE ${FC} AND d.created_at_kommo >= now() - interval '30 days'`
@@ -33,25 +36,29 @@ export async function runDataReconciliation(): Promise<{ warnings: number; check
   const total = Number(unmapped.rows[0].total) || 0;
   const bad = Number(unmapped.rows[0].bad) || 0;
   const pct = total > 0 ? Math.round((bad / total) * 100) : 0;
+  const statusList = (unmapped.rows[0].statuses || []).join(", ");
   checks.push({
-    key: "unmapped_stage_share", label: "Частка незамаплених статусів (повний цикл, 30 дн.)",
-    value: pct, threshold: 25, ok: pct <= 25,
-    detail: `${bad} з ${total} угод у статусах поза pipeline_stage_map. Високий % = метрики за етапом їх не бачать.`,
+    key: "unmapped_stage_share", label: "Частка НЕзамаплених робочих статусів (повний цикл, 30 дн.)",
+    value: pct, threshold: 10, ok: pct <= 10,
+    detail: `${bad} з ${total} угод у робочих статусах поза pipeline_stage_map (143 «закрито» не рахуємо).${statusList ? ` Статуси: ${statusList} — потребують мапінгу.` : ""}`,
   });
 
-  // 2) Дублі менеджерів, де є активний запис і ще один із тим самим імʼям (ризик
-  //    розщеплення даних/задач). Поріг 0.
+  // 2) РЕАЛЬНЕ розщеплення менеджерів: одне імʼя, під яким ДВА+ записи, і кожен
+  //    має угоди (тобто дані справді розщеплені й потрібен мердж). Порожні
+  //    історичні дублі (старий Kommo-логін без даних) НЕ рахуємо — вони невидимі
+  //    й нешкідливі. Поріг 0.
   const dupMgr = await pool.query<{ n: string; names: string[] }>(
     `SELECT COUNT(*) AS n, array_agg(name) AS names FROM (
-        SELECT name FROM managers GROUP BY name
-        HAVING COUNT(*) > 1 AND bool_or(is_active)
+        SELECT m.name FROM managers m
+         WHERE EXISTS (SELECT 1 FROM deals d WHERE d.manager_id = m.id)
+         GROUP BY m.name HAVING COUNT(*) > 1
      ) x`
   );
   const dupN = Number(dupMgr.rows[0].n) || 0;
   checks.push({
-    key: "duplicate_active_managers", label: "Дублі менеджерів з активним записом",
+    key: "duplicate_active_managers", label: "Менеджери з розщепленими даними (дублі)",
     value: dupN, threshold: 0, ok: dupN === 0,
-    detail: dupN > 0 ? `Однакові імена: ${(dupMgr.rows[0].names || []).slice(0, 8).join(", ")}. Дані/задачі можуть розщеплюватись.` : "Дублів немає.",
+    detail: dupN > 0 ? `Однакові імена з угодами на кількох записах: ${(dupMgr.rows[0].names || []).slice(0, 8).join(", ")}. Потрібен мердж.` : "Розщеплень немає (порожні історичні дублі не рахуються).",
   });
 
   // 3) Свіжість синку Kommo (хвилини від останнього успіху). Поріг 30 хв.
