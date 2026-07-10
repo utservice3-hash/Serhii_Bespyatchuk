@@ -2762,7 +2762,10 @@ dashboardRouter.get("/report", async (req, res) => {
        COUNT(*) FILTER (WHERE ${DISPATCH}) AS dispatched,
        COALESCE(SUM(d.price) FILTER (WHERE ${DISPATCH}), 0) AS dispatched_sum
      FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     -- LEFT JOIN: «Прийнято реклами» рахує ВСІ ад-угоди повного циклу незалежно від
+     -- поточного етапу (мапиться лише 5 із 15 статусів); quotes/dispatched і далі
+     -- фільтрують по funnel_stage, тож null-етап їх природно виключає.
+     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE ${actConds.join(" AND ")}
      GROUP BY m.id, m.name`, actP);
 
