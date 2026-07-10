@@ -8,8 +8,42 @@ import {
   type Task,
   type TaskPriority,
   type Team,
+  type Subtask,
 } from "../../../api";
 import { PRIORITY_LABELS } from "../constants";
+
+/** Підзадачі задачі — довільний чекліст, кожен пункт трекається виконано/ні.
+ *  Зберігається on-change у tasks.subtasks_json. */
+function SubtasksEditor({ task, patchTaskLocal }: { task: Task; patchTaskLocal: (id: number, patch: Partial<Task>) => void }) {
+  const list: Subtask[] = task.subtasksJson ?? [];
+  const [draft, setDraft] = useState("");
+  const save = (next: Subtask[]) => { patchTaskLocal(task.id, { subtasksJson: next }); updateTask(task.id, { subtasksJson: next }); };
+  const done = list.filter((s) => s.done).length;
+  const add = () => { const t = draft.trim(); if (!t) return; save([...list, { title: t, done: false }]); setDraft(""); };
+  return (
+    <div style={{ marginTop: 18 }}>
+      <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 6px" }}>
+        ✅ Підзадачі {list.length > 0 && <span style={{ color: done === list.length ? "#16a34a" : "var(--text-muted)" }}>({done}/{list.length})</span>}
+      </h3>
+      {list.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+          {list.map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <input type="checkbox" checked={!!s.done} onChange={() => save(list.map((x, j) => (j === i ? { ...x, done: !x.done } : x)))} />
+              <span style={{ flex: 1, textDecoration: s.done ? "line-through" : "none", opacity: s.done ? 0.6 : 1 }}>{s.title}</span>
+              <button onClick={() => save(list.filter((_, j) => j !== i))} title="Прибрати" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer" }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6 }}>
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+          placeholder="Нова підзадача…" style={{ flex: 1, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 13 }} />
+        <button onClick={add} disabled={!draft.trim()} style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: draft.trim() ? "#c5141c" : "var(--border)", color: "#fff", cursor: draft.trim() ? "pointer" : "default", fontSize: 13 }}>+ Додати</button>
+      </div>
+    </div>
+  );
+}
 import { formatAmount } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { StatusPicker } from "../../../components/StatusPicker";
@@ -354,6 +388,15 @@ export function TasksSection({
                           </div>
                         );
                       })()}
+                      {task.subtasksJson && task.subtasksJson.length > 0 && (() => {
+                        const sd = task.subtasksJson.filter((s) => s.done).length;
+                        const n = task.subtasksJson.length;
+                        return (
+                          <span style={{ fontSize: 11, fontWeight: 600, color: sd === n ? "#16a34a" : "var(--text-muted)", background: "rgba(127,127,127,0.1)", borderRadius: 999, padding: "1px 8px", marginLeft: 2 }} title={task.subtasksJson.map((s) => `${s.done ? "✅" : "⬜"} ${s.title}`).join("\n")}>
+                            ✅ {sd}/{n} підзадач
+                          </span>
+                        );
+                      })()}
                       {task.auto && task.targetValue != null && (
                         <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 2 }}>
                           {task.planDate ? `📅 ${task.planDate} · ` : task.periodStart ? `📅 ${task.periodStart}…${task.periodEnd} · ` : ""}
@@ -552,6 +595,8 @@ export function TasksSection({
                 <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>Факт підтягується автоматично з CRM після завершення дня. Задача закривається сама, коли всі показники виконані.</p>
               </div>
             )}
+
+            <SubtasksEditor task={openTask} patchTaskLocal={patchTaskLocal} />
 
             <div style={{ marginTop: 18 }}>
               <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 6px" }}>💬 Коментарі</h3>

@@ -1228,9 +1228,11 @@ export interface Task {
   assigneeTeamId?: number | null;
   metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;
   checklistJson?: ChecklistItem[] | null;
+  subtasksJson?: Subtask[] | null;
   createdAt: string;
   updatedAt: string;
 }
+export interface Subtask { title: string; done?: boolean }
 
 export interface ChecklistItem {
   clientKey: string;
@@ -1360,6 +1362,7 @@ export async function updateTask(
     comments: string | null;
     department: string | null;
     checklistJson: ChecklistItem[] | null;
+    subtasksJson: Subtask[] | null;
   }>
 ): Promise<void> {
   await api.patch(`/tasks/${id}`, payload);

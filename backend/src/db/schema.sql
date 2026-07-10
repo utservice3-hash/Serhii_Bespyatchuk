@@ -137,6 +137,9 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS metrics_json JSONB;
 -- Reactivation tasks bundle a list of clients as a checklist the manager ticks
 -- off: [{clientKey, clientName, orders, revenue, lastPaid, category, done}].
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS checklist_json JSONB;
+-- Довільні підзадачі будь-якої задачі, кожну можна відмітити виконаною:
+-- [{title, done}]. Прогрес X/N показується на картці/рядку.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS subtasks_json JSONB;
 
 CREATE TABLE IF NOT EXISTS ad_budget_daily (
   day DATE PRIMARY KEY,

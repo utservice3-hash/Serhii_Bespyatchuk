@@ -44,8 +44,14 @@ const checklistItem = z.object({
   comment: z.string().nullable().optional(),
 });
 
+const subtaskItem = z.object({
+  title: z.string(),
+  done: z.boolean().optional(),
+});
+
 const patchSchema = upsertSchema.partial().extend({
   checklistJson: z.array(checklistItem).nullable().optional(),
+  subtasksJson: z.array(subtaskItem).nullable().optional(),
 });
 
 tasksRouter.get("/", async (req, res) => {
@@ -79,6 +85,7 @@ tasksRouter.get("/", async (req, res) => {
             t.parent_id AS "parentId", t.auto, u.role AS "createdByRole",
             t.created_by AS "createdById", m.team_id AS "assigneeTeamId",
             t.metrics_json AS "metricsJson", t.checklist_json AS "checklistJson",
+            t.subtasks_json AS "subtasksJson",
             t.created_at AS "createdAt", t.updated_at AS "updatedAt"
      FROM tasks t
      LEFT JOIN managers m ON m.id = t.assignee_id
@@ -345,10 +352,11 @@ tasksRouter.patch("/:id", async (req, res) => {
     comments: "comments",
     department: "department",
     checklistJson: "checklist_json",
+    subtasksJson: "subtasks_json",
   };
 
   for (const [key, value] of Object.entries(parsed.data)) {
-    params.push(key === "checklistJson" ? JSON.stringify(value) : value);
+    params.push(key === "checklistJson" || key === "subtasksJson" ? JSON.stringify(value) : value);
     fields.push(`${columnByKey[key]} = $${params.length}`);
   }
   if (fields.length === 0) {
