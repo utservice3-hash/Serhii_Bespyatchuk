@@ -830,6 +830,7 @@ export interface ReportData {
     receivables: number;
     adLeads: number;
     quotes: number;
+    adPriceVoiced: number;
     dispatched: number;
     dispatchedSum: number;
     transfers: number;

@@ -2800,6 +2800,37 @@ dashboardRouter.get("/report", async (req, res) => {
      WHERE ${actConds.join(" AND ")}
      GROUP BY m.id, m.name`, actP);
 
+  // «Озвучено ціну в перший дотик» = рекламна угода повного циклу, у якій ЦІНУ
+  // ОЗВУЧЕНО (вхід у «Пропозицію зроблено» = funnel_stage 'quote_requested') У ТОЙ
+  // САМИЙ київський день, що й ПЕРШИЙ КОНТАКТ (first_activity_at). Тобто менеджер
+  // на першому ж дотику дав пропозицію з ціною. Знаменник — уся реклама періоду.
+  const voiceP: unknown[] = [[8921932, 155304]];
+  const voiceConds = ["d.pipeline_id = ANY($1)", ...scopeSql(voiceP), ...dateSql("created_at_kommo", voiceP)];
+  voiceP.push(reportAdSources);
+  const voiceAdIdx = voiceP.length;
+  const voiceRes = await pool.query<{ voiced: string }>(
+    `WITH ad AS (
+       SELECT d.kommo_id, d.first_activity_at
+         FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+        WHERE ${voiceConds.join(" AND ")} AND ${adDealSql(`$${voiceAdIdx}`)} AND d.first_activity_at IS NOT NULL
+     ),
+     fq AS (
+       SELECT dse.kommo_id, MIN(dse.changed_at) AS quoted_at
+         FROM deal_stage_events dse
+         JOIN deals dd ON dd.kommo_id = dse.kommo_id
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = dd.pipeline_id AND psm.status_id = dse.status_id
+        WHERE psm.funnel_stage = 'quote_requested'
+        GROUP BY dse.kommo_id
+     )
+     SELECT COUNT(*) FILTER (
+              WHERE fq.quoted_at IS NOT NULL
+                AND (fq.quoted_at AT TIME ZONE 'Europe/Kyiv')::date = (ad.first_activity_at AT TIME ZONE 'Europe/Kyiv')::date
+            ) AS voiced
+       FROM ad LEFT JOIN fq ON fq.kommo_id = ad.kommo_id`,
+    voiceP
+  );
+  const adPriceVoiced = Number(voiceRes.rows[0]?.voiced ?? 0);
+
   // Success (142, closed in period) per manager.
   const scP: unknown[] = [];
   const scConds = ["psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL", ...scopeSql(scP), ...dateSql("closed_at_kommo", scP)];
@@ -2899,6 +2930,7 @@ dashboardRouter.get("/report", async (req, res) => {
     newClients, repeatClients,
     receivables: Number(recvTotal.rows[0]?.total ?? 0),
     adLeads: sumK("adLeads"), quotes: sumK("quotes"),
+    adPriceVoiced, // озвучено ціну (пропозицію) в перший дотик — по рекламі
     dispatched: sumK("dispatched"), dispatchedSum: sumK("dispatchedSum"),
     transfers: sumK("transfers"),
     carryover: sumK("carryover"), carryoverDeals: sumK("carryoverDeals"),
