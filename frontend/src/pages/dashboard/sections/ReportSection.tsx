@@ -17,6 +17,7 @@ import { DailyProductivityCard } from "./DailyProductivityCard";
 import { StuckDealsCard } from "./StuckDealsCard";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ConversionTrendCard } from "./ConversionTrendCard";
+import { ReceivablesBreakdownCard } from "./ReceivablesBreakdownCard";
 import { ReactivationGrid } from "./ReactivationGrid";
 import { teamOptions } from "../teamColors";
 
@@ -708,13 +709,24 @@ export function ReportSection({
           })()}
 
           <div className="kpi-grid">
-            {kpis.map((k) => (
-              <div className="kpi-card" key={k.label} style={k.color ? { borderLeft: `3px solid ${k.color}` } : undefined}>
-                <span className="kpi-label">{k.label}{k.hint && <InfoHint text={k.hint} />}</span>
-                <span className="kpi-value" style={k.color ? { color: k.color } : undefined}>{k.value}</span>
-                {k.sub && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{k.sub}</span>}
-              </div>
-            ))}
+            {kpis.map((k) =>
+              k.label === "Дебіторка" ? (
+                <ReceivablesBreakdownCard
+                  key={k.label}
+                  label={k.label}
+                  value={k.value}
+                  hint={k.hint}
+                  managerId={canPickManager && reportManagerId ? Number(reportManagerId) : undefined}
+                  teamId={canPickManager && reportTeamId ? Number(reportTeamId) : undefined}
+                />
+              ) : (
+                <div className="kpi-card" key={k.label} style={k.color ? { borderLeft: `3px solid ${k.color}` } : undefined}>
+                  <span className="kpi-label">{k.label}{k.hint && <InfoHint text={k.hint} />}</span>
+                  <span className="kpi-value" style={k.color ? { color: k.color } : undefined}>{k.value}</span>
+                  {k.sub && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{k.sub}</span>}
+                </div>
+              )
+            )}
           </div>
 
           {funnelReport && (
