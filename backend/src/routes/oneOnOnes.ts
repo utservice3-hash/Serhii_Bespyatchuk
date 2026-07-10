@@ -54,8 +54,10 @@ oneOnOnesRouter.get("/:managerId", async (req, res) => {
   }
   const r = await pool.query(
     `SELECT o.subject_manager_id, o.month, o.answers, o.overall, o.updated_at,
-            COALESCE(u.name, u.email) AS conducted_by_name
-       FROM one_on_ones o LEFT JOIN users u ON u.id = o.conducted_by
+            COALESCE(mm.name, u.email) AS conducted_by_name
+       FROM one_on_ones o
+       LEFT JOIN users u ON u.id = o.conducted_by
+       LEFT JOIN managers mm ON mm.id = u.manager_id
       WHERE o.subject_manager_id = $1 AND o.month = $2`,
     [managerId, month]
   );

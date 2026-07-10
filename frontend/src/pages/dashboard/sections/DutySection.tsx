@@ -8,7 +8,7 @@ import {
   type DutyAssignment,
   type Team,
 } from "../../../api";
-import { teamOptions } from "../teamColors";
+import { teamOptions, teamKind } from "../teamColors";
 
 const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
@@ -196,8 +196,8 @@ export function DutySection({ role }: { role?: string }) {
         <div className="page-filters" style={{ alignItems: "center", gap: 8 }}>
           {isAdmin && teams.length > 0 && (
             <select value={teamId} onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}>
-              <option value="">Усі команди</option>
-              {teamOptions(teams)}
+              <option value="">Усі РНК-команди</option>
+              {teamOptions(teams.filter((t) => teamKind(t.name) === "rnk"))}
             </select>
           )}
           <button onClick={() => shiftMonth(-1)} style={navBtn}>‹</button>

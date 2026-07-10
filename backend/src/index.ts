@@ -221,6 +221,17 @@ cron.schedule("0 3 * * *", () => {
 // «Робота з АІ»: answer a user message that arrived while the server was down.
 catchUpAiChat().catch((err) => console.error("AI chat catch-up failed:", err));
 
+// Backstop: a rejected query inside an un-try/catched async route handler used to
+// take the WHOLE backend down (Node exits on unhandledRejection). Log and keep the
+// server alive so one bad request can't blank the dashboard for everyone. The
+// offending request still fails, but the process survives.
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION (kept alive):", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION (kept alive):", err);
+});
+
 app.listen(config.port, () => {
   console.log(`Backend listening on port ${config.port}`);
 });

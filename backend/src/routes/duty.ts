@@ -24,12 +24,16 @@ const defTo = () => {
 };
 const SHIFTS = new Set(["day", "evening", "weekend"]);
 
+// У чергуванні беруть участь ЛИШЕ команди РНК (робота з наявними клієнтами),
+// включно з їхніми тімлідами. Менеджерів РПК/інших до графіка не пропонуємо.
+const RNK_TEAM = "t.name ILIKE '%РНК%'";
+
 /** Менеджери, доступні для призначення тому, хто дивиться (лід → своя команда). */
 async function assignableManagers(auth: { role: string; teamId: number | null }, teamId: number | null) {
   let scope = teamId;
   if (auth.role === "team_lead") scope = auth.teamId;
   const params: unknown[] = [];
-  let where = "m.is_active";
+  let where = `m.is_active AND ${RNK_TEAM}`;
   if (scope) { params.push(scope); where += ` AND m.team_id = $${params.length}`; }
   const r = await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name
@@ -94,9 +98,13 @@ dutyRouter.post("/", async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !managerId) {
     return res.status(400).json({ error: "date (YYYY-MM-DD) та managerId обовʼязкові" });
   }
-  // Команда менеджера + гейт для тімліда (лише своя команда).
-  const mgr = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1 AND is_active`, [managerId]);
+  // Команда менеджера + гейт для тімліда (лише своя команда) + лише РНК-команди.
+  const mgr = await pool.query<{ team_id: number | null; is_rnk: boolean }>(
+    `SELECT m.team_id, (t.name ILIKE '%РНК%') AS is_rnk
+       FROM managers m LEFT JOIN teams t ON t.id = m.team_id
+      WHERE m.id = $1 AND m.is_active`, [managerId]);
   if (!mgr.rowCount) return res.status(404).json({ error: "Менеджера не знайдено" });
+  if (!mgr.rows[0].is_rnk) return res.status(400).json({ error: "У чергуванні беруть участь лише команди РНК" });
   const teamId = mgr.rows[0].team_id;
   if (auth.role === "team_lead" && teamId !== auth.teamId) {
     return res.status(403).json({ error: "Лише своя команда" });

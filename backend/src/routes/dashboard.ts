@@ -4086,8 +4086,10 @@ dashboardRouter.get("/repeat-client-plan/history", async (req, res) => {
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
   const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   const r = await pool.query<{ changed_at: string; action: string; plan: string | null; status: string | null; comment: string | null; who: string | null }>(
-    `SELECT h.changed_at, h.action, h.plan, h.status, h.comment, COALESCE(u.name, u.email) AS who
-       FROM repeat_client_plan_history h LEFT JOIN users u ON u.id = h.changed_by
+    `SELECT h.changed_at, h.action, h.plan, h.status, h.comment, COALESCE(mm.name, u.email) AS who
+       FROM repeat_client_plan_history h
+       LEFT JOIN users u ON u.id = h.changed_by
+       LEFT JOIN managers mm ON mm.id = u.manager_id
       WHERE h.client_key = $1 AND h.month = $2
       ORDER BY h.changed_at DESC LIMIT 100`,
     [clientKey, month]
