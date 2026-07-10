@@ -90,6 +90,7 @@ import { ReportsSection } from "./dashboard/sections/ReportsSection";
 import { DocumentsSection } from "./dashboard/sections/DocumentsSection";
 import { OneOnOneSection } from "./dashboard/sections/OneOnOneSection";
 import { DutySection } from "./dashboard/sections/DutySection";
+import { teamOptions } from "./dashboard/teamColors";
 import { TeamsSection } from "./dashboard/sections/TeamsSection";
 import { ManagersSection } from "./dashboard/sections/ManagersSection";
 import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
@@ -1075,11 +1076,7 @@ export function Dashboard() {
                   onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
                 >
                   <option value="">{auth?.role === "team_lead" ? "Моя команда" : "Усі команди"}</option>
-                  {teams.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
+                  {teamOptions(teams)}
                 </select>
               )}
               <select
@@ -1247,11 +1244,7 @@ export function Dashboard() {
                   onChange={(e) => setLeadgenTeamId(e.target.value ? Number(e.target.value) : "")}
                 >
                   <option value="">Усі команди</option>
-                  {teams.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
+                  {teamOptions(teams)}
                 </select>
               )}
               <DateRangeFilter
@@ -1552,7 +1545,7 @@ export function Dashboard() {
                 </select>
                 <select value={newUserForm.teamId} onChange={(e) => setNewUserForm({ ...newUserForm, teamId: e.target.value ? Number(e.target.value) : "" })}>
                   <option value="">Без команди</option>
-                  {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  {teamOptions(teams)}
                 </select>
                 <button onClick={handleCreateUser} style={{ padding: "8px 16px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}>Створити</button>
                 {newUserCreds && <span style={{ color: "#16a34a", fontFamily: "monospace" }}>{newUserCreds}</span>}

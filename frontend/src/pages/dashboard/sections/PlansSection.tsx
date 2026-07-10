@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchPlansGrid, savePlan, type PlansGrid, type Team } from "../../../api";
 import { formatAmount } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
+import { teamOptions } from "../teamColors";
 
 const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 
@@ -102,7 +103,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
           {canPickTeam && (
             <select value={teamId} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : ""; setTeamId(v); localStorage.setItem("plansTeam", v ? String(v) : ""); }}>
               <option value="">Усі команди</option>
-              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {teamOptions(teams)}
             </select>
           )}
           <button onClick={() => shiftMonth(-1)} title="Попередній місяць"

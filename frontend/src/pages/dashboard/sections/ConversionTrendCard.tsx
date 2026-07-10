@@ -55,7 +55,7 @@ export function ConversionTrendCard({
             <CartesianGrid strokeDasharray="3 3" opacity={0.35} vertical={false} />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
             <YAxis tickFormatter={(v) => `${v}%`} />
-            <Tooltip formatter={(v: number, n) => [`${v}%`, n === "adConversion" ? "Конверсія реклами" : "Загальна конверсія"]} />
+            <Tooltip formatter={(v, n) => [`${v}%`, n === "adConversion" ? "Конверсія реклами" : "Загальна конверсія"]} />
             <Legend />
             <Line type="monotone" dataKey="conversion" name="Загальна конверсія" stroke="#c5141c" strokeWidth={2} connectNulls dot={{ r: 3 }} />
             <Line type="monotone" dataKey="adConversion" name="Конверсія реклами" stroke="#6366f1" strokeWidth={2} connectNulls dot={{ r: 3 }} strokeDasharray="5 4" />

@@ -8,6 +8,7 @@ import {
   type DutyAssignment,
   type Team,
 } from "../../../api";
+import { teamOptions } from "../teamColors";
 
 const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
@@ -196,7 +197,7 @@ export function DutySection({ role }: { role?: string }) {
           {isAdmin && teams.length > 0 && (
             <select value={teamId} onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}>
               <option value="">Усі команди</option>
-              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {teamOptions(teams)}
             </select>
           )}
           <button onClick={() => shiftMonth(-1)} style={navBtn}>‹</button>

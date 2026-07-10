@@ -16,6 +16,7 @@ import type { ManagerBreakdown, PersonalDashboard, Team } from "../../../api";
 import { formatAmount } from "../format";
 import { STAGE_ORDER, STAGE_LABELS } from "../constants";
 import { ForecastBadge } from "../widgets";
+import { teamOptions } from "../teamColors";
 
 export function ManagersSection({
   auth,
@@ -55,11 +56,7 @@ export function ManagersSection({
               onChange={(e) => setManagerTeamId(e.target.value ? Number(e.target.value) : "")}
             >
               <option value="">Оберіть команду</option>
-              {teams.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
+              {teamOptions(teams)}
             </select>
           )}
           <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />

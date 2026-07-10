@@ -18,6 +18,7 @@ import { StuckDealsCard } from "./StuckDealsCard";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ConversionTrendCard } from "./ConversionTrendCard";
 import { ReactivationGrid } from "./ReactivationGrid";
+import { teamOptions } from "../teamColors";
 
 const STATUS_LBL: Record<string, string> = {
   not_started: "Заплановано", todo_list: "Заплановано", to_realize: "До реалізації", planned: "Заплановано",
@@ -608,9 +609,7 @@ export function ReportSection({
               title="Детально по команді"
             >
               <option value="">Усі команди</option>
-              {teams.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
+              {teamOptions(teams)}
             </select>
           )}
           {canPickManager && (

@@ -5,6 +5,7 @@ import {
   type ReceivableInvoice, type ReceivableManager, type Team,
 } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
+import { teamOptions } from "../teamColors";
 
 const inputStyle: React.CSSProperties = {
   font: "inherit", fontSize: 12, padding: "3px 6px", borderRadius: 6,
@@ -173,9 +174,7 @@ export function ReceivablesSection({
               onChange={(e) => setReceivablesTeamId(e.target.value ? Number(e.target.value) : "")}
             >
               <option value="">Усі команди</option>
-              {teams.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
+              {teamOptions(teams)}
             </select>
           )}
           {canEditReceivables && (

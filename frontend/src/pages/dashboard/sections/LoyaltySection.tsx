@@ -19,6 +19,7 @@ import {
 import { formatAmount } from "../format";
 import { RepeatPlanGrid } from "./RepeatPlanGrid";
 import { ReactivationGrid } from "./ReactivationGrid";
+import { teamOptions } from "../teamColors";
 
 /** Адмін-дії над постійним клієнтом: 🗑 прибрати · ↪ передати менеджеру. */
 function AdminClientActions({ clientKey, clientName, managers, onDone }: {
@@ -121,11 +122,7 @@ export function LoyaltySection({
               value={loyaltyTeamId}
               onChange={(e) => setLoyaltyTeamId(e.target.value ? Number(e.target.value) : "")}
             >
-              {teams.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
+              {teamOptions(teams)}
             </select>
           </div>
         )}

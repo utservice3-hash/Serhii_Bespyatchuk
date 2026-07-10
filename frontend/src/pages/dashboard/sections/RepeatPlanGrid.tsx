@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchRepeatPlansGrid, saveRepeatPlan, saveRepeatClientPlan, approveRepeatClientPlan, approveAllRepeatClientPlans, fetchRepeatClientPlanHistory, type RepeatPlansGrid, type RepeatClientPlan, type RepeatClientPlanHistoryEntry, type Team } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
+import { teamOptions } from "../teamColors";
 
 /** Історія змін плану по одному клієнту (хто/коли/дія/план/статус). */
 function PlanHistoryModal({ clientKey, clientName, month, onClose }: { clientKey: string; clientName: string; month: string; onClose: () => void }) {
@@ -309,7 +310,7 @@ export function RepeatPlanGrid({ canPickTeam, teams, role }: { canPickTeam: bool
               <select value={teamId} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : ""; setTeamId(v); localStorage.setItem("repeatPlansTeam", v ? String(v) : ""); }}
                 style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
                 <option value="">Усі команди</option>
-                {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                {teamOptions(teams)}
               </select>
             )}
             <button onClick={() => shiftMonth(-1)} title="Попередній місяць"
