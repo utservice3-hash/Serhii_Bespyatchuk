@@ -22,6 +22,7 @@ import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { dutyRouter } from "./routes/duty.js";
 import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { trainingRouter } from "./routes/training.js";
+import { runDataReconciliation } from "./jobs/dataReconciliation.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
@@ -83,6 +84,9 @@ app.get("/api/health", async (_req, res) => {
       : null;
     // The 5-min cron should keep this well under ~15 min; flag a stall beyond that.
     const stale = ageMinutes == null || ageMinutes > 15;
+    const dc = await pool.query<{ ran_at: Date; warnings: number }>(
+      `SELECT ran_at, warnings FROM data_check_state WHERE id = 1`
+    ).catch(() => ({ rows: [] as { ran_at: Date; warnings: number }[] }));
     res.json({
       ok: true,
       sync: {
@@ -93,6 +97,7 @@ app.get("/api/health", async (_req, res) => {
         lastError: row?.last_error ?? null,
       },
       kommoCircuit: kommoCircuitState(),
+      dataCheck: dc.rows[0] ? { ranAt: dc.rows[0].ran_at, warnings: Number(dc.rows[0].warnings) } : null,
     });
   } catch {
     res.json({ ok: true, sync: null });
@@ -168,6 +173,13 @@ cron.schedule("30 7 * * *", () => {
   createDutyReminders().catch((err) => console.error("Duty reminders failed:", err));
 });
 createDutyReminders().catch((err) => console.error("Duty reminders startup failed:", err));
+
+// Нічна авто-звірка даних із CRM: щодня 03:30 + на старті. Ловить «тихі» баги
+// (незамаплені статуси, дублі менеджерів, застій синку) і сигналить КВП задачею.
+cron.schedule("30 3 * * *", () => {
+  runDataReconciliation().catch((err) => console.error("Data reconciliation failed:", err));
+});
+runDataReconciliation().catch((err) => console.error("Data reconciliation startup failed:", err));
 
 // Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».
 // Щодня 08:20 + на старті (ідемпотентно через task_created_at).

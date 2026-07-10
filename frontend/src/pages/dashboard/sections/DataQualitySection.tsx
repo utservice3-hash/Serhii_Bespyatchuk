@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchDataQuality, type DataQualityCheck } from "../../../api";
+import { fetchDataQuality, type DataQualityCheck, type Reconciliation } from "../../../api";
 
 const HINT: Record<string, string> = {
   noManager: "Угоди повного циклу без відповідального. Випадають з усіх per-manager звітів.",
@@ -15,11 +15,12 @@ const KOMMO_BASE = "https://uts.kommo.com/leads/detail/";
  *  Джерело істини — CRM; тут підсвічуються розбіжності/аномалії. Admin/тімлід. */
 export function DataQualitySection() {
   const [data, setData] = useState<DataQualityCheck[] | null>(null);
+  const [recon, setRecon] = useState<Reconciliation | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchDataQuality().then((r) => setData(r.checks)).catch(() => setErr("Не вдалося завантажити."));
+    fetchDataQuality().then((r) => { setData(r.checks); setRecon(r.reconciliation); }).catch(() => setErr("Не вдалося завантажити."));
   }, []);
 
   return (
@@ -28,6 +29,28 @@ export function DataQualitySection() {
       <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 760 }}>
         CRM — єдине істинне джерело; тут підсвічені записи, що можуть спотворювати цифри дашборду. Клік по картці — перелік прикладів (клік по угоді відкриває її в Kommo).
       </p>
+
+      {/* Нічна авто-звірка — інваріанти-запобіжники (ловлять «тихі» баги). */}
+      {recon && (
+        <div className="chart-card" style={{ marginBottom: 16, borderLeft: `4px solid ${recon.warnings > 0 ? "#d97706" : "#16a34a"}` }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <h2 className="chart-title" style={{ marginBottom: 0 }}>
+              🛡 Авто-звірка з CRM {recon.warnings > 0 ? <span style={{ color: "#d97706" }}>· {recon.warnings} попередж.</span> : <span style={{ color: "#16a34a" }}>· усе гаразд ✓</span>}
+            </h2>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>прогін: {new Date(recon.ranAt).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 8, marginTop: 10 }}>
+            {recon.checks.map((c) => (
+              <div key={c.key} style={{ padding: "8px 10px", border: "1px solid var(--border)", borderLeft: `3px solid ${c.ok ? "#16a34a" : "#d97706"}`, borderRadius: 8 }} title={c.detail}>
+                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{c.label}</div>
+                <div style={{ fontWeight: 700, color: c.ok ? "#16a34a" : "#d97706" }}>
+                  {c.ok ? "✓ " : "⚠ "}{c.value}{c.threshold > 0 && !c.ok ? ` (поріг ${c.threshold})` : ""}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {err && <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>}
       {!data && !err && <p className="loading-text">Перевірка…</p>}
       {data && (

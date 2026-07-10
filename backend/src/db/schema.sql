@@ -673,3 +673,15 @@ CREATE TABLE IF NOT EXISTS training_materials (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_training_materials_folder ON training_materials(folder_id);
+
+-- Нічна авто-звірка даних із CRM: джоб рахує інваріанти-запобіжники (частка
+-- незамаплених статусів, дублі активних менеджерів, свіжість синку, внутрішня
+-- узгодженість грошей) і зберігає останній результат. Якщо є попередження —
+-- підсвічується в /api/health і створюється задача адміну. Один рядок (id=1).
+CREATE TABLE IF NOT EXISTS data_check_state (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  ran_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  warnings INTEGER NOT NULL DEFAULT 0,
+  checks JSONB NOT NULL DEFAULT '[]',
+  CONSTRAINT data_check_singleton CHECK (id = 1)
+);

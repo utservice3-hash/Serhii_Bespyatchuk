@@ -15,6 +15,16 @@ const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/,
  */
 const EXPECTED_STAGES =
   "(psm.funnel_stage IN ('approved','invoiced') OR d.status_id IN (69716300, 98470988, 10937178))";
+
+/**
+ * ЄДИНЕ правило «рекламна угода» (рішення власника 10.07) — ОДНА логіка скрізь:
+ * угода повного циклу рекламна, якщо «Источник клиента» ∈ adSources АБО вона
+ * прийшла через Кваліфікацію без лідоген-маркерів (lead_channel='ad'), і це НЕ
+ * реактивація (джерело «Реактивація…»). БЕЗ фільтра поточного етапу воронки.
+ * `srcRef` — посилання на параметр з масивом adSources (напр. "$4").
+ */
+const adDealSql = (srcRef: string) =>
+  `((d.client_source = ANY(${srcRef}) OR d.lead_channel = 'ad') AND COALESCE(d.client_source, '') NOT ILIKE '%реактив%')`;
 import { getSettings } from "./settings.js";
 import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
@@ -302,8 +312,8 @@ dashboardRouter.get("/overview", async (req, res) => {
   const adConvParams = [...params, adSources];
   const adSrcIdx = adConvParams.length;
   const adConvRes = await pool.query<{ ad_leads: string; ad_paid: string }>(
-    `SELECT COUNT(*) FILTER (WHERE d.client_source = ANY($${adSrcIdx})) AS ad_leads,
-            COUNT(*) FILTER (WHERE d.client_source = ANY($${adSrcIdx}) AND psm.funnel_stage = 'paid') AS ad_paid
+    `SELECT COUNT(*) FILTER (WHERE ${adDealSql(`$${adSrcIdx}`)}) AS ad_leads,
+            COUNT(*) FILTER (WHERE ${adDealSql(`$${adSrcIdx}`)} AND psm.funnel_stage = 'paid') AS ad_paid
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -772,8 +782,8 @@ dashboardRouter.get("/overview", async (req, res) => {
             COUNT(*) FILTER (WHERE psm.funnel_stage IN ('invoiced','paid')) AS deals,
             COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
             COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS revenue,
-            COUNT(*) FILTER (WHERE d.client_source = ANY($2)) AS ad_leads,
-            COUNT(*) FILTER (WHERE d.client_source = ANY($2) AND psm.funnel_stage = 'paid') AS ad_paid,
+            COUNT(*) FILTER (WHERE ${adDealSql("$2")}) AS ad_leads,
+            COUNT(*) FILTER (WHERE ${adDealSql("$2")} AND psm.funnel_stage = 'paid') AS ad_paid,
             COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_leads,
             COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen' AND psm.funnel_stage = 'paid') AS lg_paid,
             COUNT(DISTINCT d.client_key) FILTER (
@@ -954,7 +964,7 @@ dashboardRouter.get("/conversion", async (req, res) => {
   // перелік adSources, що й «прийняв рекламу») — не lead_channel='ad'.
   const { adSources } = await getSettings();
   params.push(adSources);
-  const adCase = `CASE WHEN d.client_source = ANY($${params.length}) THEN 'ad' ELSE 'other' END`;
+  const adCase = `CASE WHEN ${adDealSql(`$${params.length}`)} THEN 'ad' ELSE 'other' END`;
 
   // "paid" = leads whose CLIENT reached a paid full-cycle deal (client_key
   // match). "paid_amount" is the lead's own paid value.
@@ -1040,8 +1050,8 @@ dashboardRouter.get("/conversion-timeseries", async (req, res) => {
      SELECT to_char(date_trunc('${gran}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket,
             COUNT(*) AS leads,
             COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS paid,
-            COUNT(*) FILTER (WHERE d.client_source = ANY($3)) AS ad_leads,
-            COUNT(*) FILTER (WHERE d.client_source = ANY($3) AND d.client_key IN (SELECT client_key FROM paid_clients)) AS ad_paid
+            COUNT(*) FILTER (WHERE ${adDealSql("$3")}) AS ad_leads,
+            COUNT(*) FILTER (WHERE ${adDealSql("$3")} AND d.client_key IN (SELECT client_key FROM paid_clients)) AS ad_paid
        FROM deals d JOIN managers m ON m.id = d.manager_id
       WHERE ${conds.join(" AND ")}
       GROUP BY 1 ORDER BY 1`,
@@ -2757,7 +2767,7 @@ dashboardRouter.get("/report", async (req, res) => {
   const actAdIdx = actP.length;
   const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; dispatched: string; dispatched_sum: string; success: string; success_sum: string }>(
     `SELECT m.id, m.name,
-       COUNT(*) FILTER (WHERE (d.client_source = ANY($${actAdIdx}) OR d.lead_channel = 'ad') AND COALESCE(d.client_source,'') NOT ILIKE '%реактив%') AS ad_leads,
+       COUNT(*) FILTER (WHERE ${adDealSql(`$${actAdIdx}`)}) AS ad_leads,
        COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes,
        COUNT(*) FILTER (WHERE ${DISPATCH}) AS dispatched,
        COALESCE(SUM(d.price) FILTER (WHERE ${DISPATCH}), 0) AS dispatched_sum
@@ -3598,6 +3608,10 @@ dashboardRouter.get("/data-quality", async (req, res) => {
       WHERE ${FC} AND ${ACTIVE} ${teamAnd}
       ORDER BY d.client_key, d.created_at_kommo DESC LIMIT 120`);
 
+  // Нічна авто-звірка (data_check_state) — інваріанти-запобіжники з датою прогону.
+  const recon = await pool.query<{ ran_at: string; warnings: number; checks: unknown }>(
+    `SELECT ran_at, warnings, checks FROM data_check_state WHERE id = 1`
+  );
   res.json({
     checks: [
       { key: "noManager", label: "Угоди без менеджера", count: noManager.rowCount ?? 0, sample: sample(noManager.rows) },
@@ -3606,6 +3620,9 @@ dashboardRouter.get("/data-quality", async (req, res) => {
       { key: "negatives", label: "Відʼємна сума без позначки «мінус»", count: negatives.rowCount ?? 0, sample: sample(negatives.rows) },
       { key: "duplicates", label: "Можливі дублі (клієнт з 2+ активними угодами)", count: duplicates.rowCount ?? 0, sample: sample(duplicates.rows) },
     ],
+    reconciliation: recon.rows[0]
+      ? { ranAt: recon.rows[0].ran_at, warnings: recon.rows[0].warnings, checks: recon.rows[0].checks }
+      : null,
   });
 });
 
@@ -4252,8 +4269,8 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
        WHERE status_id IN (69716300, 98470988, 10937178) GROUP BY kommo_id
      )
      SELECT COUNT(*) AS c, COALESCE(SUM(d.price), 0) AS s,
-            COUNT(*) FILTER (WHERE d.client_source = ANY($4)) AS ad_c,
-            COALESCE(SUM(d.price) FILTER (WHERE d.client_source = ANY($4)), 0) AS ad_s,
+            COUNT(*) FILTER (WHERE ${adDealSql("$4")}) AS ad_c,
+            COALESCE(SUM(d.price) FILTER (WHERE ${adDealSql("$4")}), 0) AS ad_s,
             COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_c,
             COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen'), 0) AS lg_s
      FROM first_avto f JOIN deals d ON d.kommo_id = f.kommo_id
@@ -4265,9 +4282,9 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
   // в періоді + оплата-снапшот), відфільтрована по каналу угоди.
   const rev = await pool.query<{ ad_rev: string; lg_rev: string }>(
     `SELECT
-       COALESCE(SUM(d.price) FILTER (WHERE d.client_source = ANY($4) AND d.status_id = 142
+       COALESCE(SUM(d.price) FILTER (WHERE ${adDealSql("$4")} AND d.status_id = 142
          AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3), 0)
-       + COALESCE(SUM(d.price) FILTER (WHERE d.client_source = ANY($4) AND d.status_id IN (69716460, 60412544)), 0) AS ad_rev,
+       + COALESCE(SUM(d.price) FILTER (WHERE ${adDealSql("$4")} AND d.status_id IN (69716460, 60412544)), 0) AS ad_rev,
        COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen' AND d.status_id = 142
          AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3), 0)
        + COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen' AND d.status_id IN (69716460, 60412544)), 0) AS lg_rev
@@ -4290,7 +4307,7 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
        WHERE status_id IN (142, 69716460, 60412544) GROUP BY kommo_id
      )
      SELECT COALESCE(SUM(d.price), 0) AS s,
-            COALESCE(SUM(d.price) FILTER (WHERE d.client_source = ANY($4)), 0) AS ad_s,
+            COALESCE(SUM(d.price) FILTER (WHERE ${adDealSql("$4")}), 0) AS ad_s,
             COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen'), 0) AS lg_s
      FROM first_paid f JOIN deals d ON d.kommo_id = f.kommo_id
      WHERE d.pipeline_id = ANY($1) AND (f.t ${KYIV})::date BETWEEN $2 AND $3`,

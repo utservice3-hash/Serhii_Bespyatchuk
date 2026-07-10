@@ -202,8 +202,14 @@ export interface DataQualityCheck {
   count: number;
   sample: { kommoId: number; name: string | null; manager: string | null; extra: string | null }[];
 }
-export async function fetchDataQuality(): Promise<{ checks: DataQualityCheck[] }> {
-  const { data } = await api.get<{ checks: DataQualityCheck[] }>("/dashboard/data-quality");
+export interface ReconCheck {
+  key: string; label: string; value: number; threshold: number; ok: boolean; detail: string;
+}
+export interface Reconciliation {
+  ranAt: string; warnings: number; checks: ReconCheck[];
+}
+export async function fetchDataQuality(): Promise<{ checks: DataQualityCheck[]; reconciliation: Reconciliation | null }> {
+  const { data } = await api.get<{ checks: DataQualityCheck[]; reconciliation: Reconciliation | null }>("/dashboard/data-quality");
   return data;
 }
 
