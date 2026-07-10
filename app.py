@@ -1990,11 +1990,18 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
         logger.info("Closed lead %s — перевезення по місту, повний ігнор", lead_id)
         return
 
+    # AI-аналіз і повернення — ЛИШЕ для команд РНК. Угоди, які закриває РПК
+    # (та невідомі команди), цьому флоу НЕ піддаються: без аналізу, повернення
+    # й сповіщень. Виходимо до будь-яких важких запитів/транскрибації.
+    team = MANAGER_TEAM.get(responsible_id, "")
+    if team not in RNK_TEAMS:
+        logger.info("Closed lead %s — команда «%s» не РНК → без AI-аналізу й повернення (тихо)", lead_id, team or "—")
+        return
+
     details = kommo.get_lead_details(lead_id, old_status_id, pipeline_id)
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
     tg_tag = notifier.get_manager_tag(responsible_id)
     supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
-    team = MANAGER_TEAM.get(responsible_id, "")
     kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
     sup_part = f" {supervisor_tag}" if supervisor_tag else ""
 
@@ -2107,10 +2114,7 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
         f"🛠 Переведено у «Продаж повний цикл» → «Повернуто АІ Відділ якості».\n"
         f"🔗 <a href='{kommo_url}'>Відкрити угоду #{lead_id}</a>"
     )
-    if team in RNK_TEAMS:
-        notifier.send_to_rnk_closed(msg, team)
-    else:
-        notifier.send_to_rpk(msg)
+    notifier.send_to_rnk_closed(msg, team)  # сюди доходить лише РНК
     logger.info("Closed not realized RETURNED: lead %s by %s (rule=%s, moved=%s)", lead_id, manager_name, rule, returned)
 
 
@@ -2123,6 +2127,10 @@ def _check_non_target_lead(lead_id: int, responsible_id: int):
     if kommo.is_city_transport(lead):
         logger.info("Non-target lead %s — перевезення по місту, повний ігнор", lead_id)
         return  # перевезення по місту — повний ігнор (без аналізу/повернення/сповіщень)
+    # AI-повернення — лише для РНК. РПК (та невідомі команди) не піддаються.
+    if MANAGER_TEAM.get(responsible_id, "") not in RNK_TEAMS:
+        logger.info("Non-target lead %s — не РНК-команда, без повернення", lead_id)
+        return
     if not kommo.has_utm_campaign(lead):
         return  # відстежуємо лише угоди, що прийшли по таргету (utm_campaign)
 
