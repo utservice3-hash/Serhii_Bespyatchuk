@@ -39,4 +39,12 @@ export const config = {
   leadgenRegistrySheetUrl:
     process.env.LEADGEN_REGISTRY_SHEET_URL ??
     "https://docs.google.com/spreadsheets/d/1l8qC5J9ELvvWIQIjZgBeE40ziOE_sD0QXRGAk3gMP6w/export?format=csv&gid=1481567112",
+  // «Перший дотик»: результат AI-транскрибації дзвінка (Groq Whisper) + аналіз
+  // ішим LLM. Кожен рядок = перший контакт менеджера з лідом реклами. Колонка
+  // «Ціну озвучено» (так/ні) — джерело правди для показника «озвучення ціни в
+  // перший дотик». Пише його uts-bot (гілка uts-bot-logic-review) у той самий
+  // файл, що й реєстр лідогену, але в лист «Перший дотик».
+  firstTouchSheetUrl:
+    process.env.FIRST_TOUCH_SHEET_URL ??
+    "https://docs.google.com/spreadsheets/d/1l8qC5J9ELvvWIQIjZgBeE40ziOE_sD0QXRGAk3gMP6w/gviz/tq?tqx=out:csv&sheet=%D0%9F%D0%B5%D1%80%D1%88%D0%B8%D0%B9%20%D0%B4%D0%BE%D1%82%D0%B8%D0%BA",
 };

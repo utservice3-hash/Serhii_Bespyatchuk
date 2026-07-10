@@ -689,3 +689,18 @@ CREATE TABLE IF NOT EXISTS data_check_state (
   checks JSONB NOT NULL DEFAULT '[]',
   CONSTRAINT data_check_singleton CHECK (id = 1)
 );
+
+-- «Перший дотик»: аналіз першого дзвінка ад-ліда AI-ботом (my-bot, транскрипція
+-- Groq Whisper → LLM визначає, чи озвучено ціну). Джерело — аркуш «Перший дотик»
+-- Google-таблиці (той самий файл, що й лідоген-реєстр). Синкається щопівгодини
+-- (TRUNCATE+insert). Показник «Озвучено ціну в перший дотик» рахується звідси.
+CREATE TABLE IF NOT EXISTS first_touch_analysis (
+  lead_id BIGINT PRIMARY KEY,
+  analyzed_at DATE NOT NULL,
+  price_voiced BOOLEAN NOT NULL DEFAULT false,
+  objections_handled BOOLEAN NOT NULL DEFAULT false,
+  about_transport TEXT,
+  manager_name TEXT,
+  team_name TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_first_touch_date ON first_touch_analysis(analyzed_at);

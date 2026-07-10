@@ -34,6 +34,7 @@ import { syncDealActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
+import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
@@ -201,6 +202,13 @@ cron.schedule("*/30 * * * *", () => {
   syncLeadgenRegistry().catch((err) => console.error("Leadgen registry sync failed:", err));
 });
 syncLeadgenRegistry().catch((err) => console.error("Leadgen registry startup sync failed:", err));
+
+// «Перший дотик» (AI-транскрибація дзвінка) — джерело правди для показника
+// «озвучення ціни в перший дотик». Кожні 30 хв + на старті. TRUNCATE+insert.
+cron.schedule("*/30 * * * *", () => {
+  syncFirstTouch().catch((err) => console.error("First-touch sync failed:", err));
+});
+syncFirstTouch().catch((err) => console.error("First-touch startup sync failed:", err));
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {

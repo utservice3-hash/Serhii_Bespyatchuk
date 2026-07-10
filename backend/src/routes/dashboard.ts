@@ -2800,36 +2800,35 @@ dashboardRouter.get("/report", async (req, res) => {
      WHERE ${actConds.join(" AND ")}
      GROUP BY m.id, m.name`, actP);
 
-  // «Озвучено ціну в перший дотик» = рекламна угода повного циклу, у якій ЦІНУ
-  // ОЗВУЧЕНО (вхід у «Пропозицію зроблено» = funnel_stage 'quote_requested') У ТОЙ
-  // САМИЙ київський день, що й ПЕРШИЙ КОНТАКТ (first_activity_at). Тобто менеджер
-  // на першому ж дотику дав пропозицію з ціною. Знаменник — уся реклама періоду.
-  const voiceP: unknown[] = [[8921932, 155304]];
-  const voiceConds = ["d.pipeline_id = ANY($1)", ...scopeSql(voiceP), ...dateSql("created_at_kommo", voiceP)];
-  voiceP.push(reportAdSources);
-  const voiceAdIdx = voiceP.length;
-  const voiceRes = await pool.query<{ voiced: string }>(
-    `WITH ad AS (
-       SELECT d.kommo_id, d.first_activity_at
-         FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-        WHERE ${voiceConds.join(" AND ")} AND ${adDealSql(`$${voiceAdIdx}`)} AND d.first_activity_at IS NOT NULL
-     ),
-     fq AS (
-       SELECT dse.kommo_id, MIN(dse.changed_at) AS quoted_at
-         FROM deal_stage_events dse
-         JOIN deals dd ON dd.kommo_id = dse.kommo_id
-         JOIN pipeline_stage_map psm ON psm.pipeline_id = dd.pipeline_id AND psm.status_id = dse.status_id
-        WHERE psm.funnel_stage = 'quote_requested'
-        GROUP BY dse.kommo_id
-     )
-     SELECT COUNT(*) FILTER (
-              WHERE fq.quoted_at IS NOT NULL
-                AND (fq.quoted_at AT TIME ZONE 'Europe/Kyiv')::date = (ad.first_activity_at AT TIME ZONE 'Europe/Kyiv')::date
-            ) AS voiced
-       FROM ad LEFT JOIN fq ON fq.kommo_id = ad.kommo_id`,
-    voiceP
+  // «Озвучення ціни в перший дотик» — ДЖЕРЕЛО ПРАВДИ = автоматизація AI-
+  // транскрибації дзвінка (uts-bot): вона слухає перший дзвінок менеджера з
+  // лідом і шле пуш «ціну озвучено». Результат лягає в Google-лист «Перший
+  // дотик», який ми синкаємо в `first_touch_analysis` (job syncFirstTouch).
+  // Знаменник = усі проаналізовані перші дотики періоду; чисельник = ті, де
+  // ціну озвучено. Скоуп по менеджеру/команді — через lead_id → deals.kommo_id
+  // (manager_id авторитетний; лист теж має manager/team, але текст ненадійний).
+  const ftP: unknown[] = [];
+  const ftConds: string[] = [];
+  if (from) { ftP.push(from); ftConds.push(`fta.analyzed_at >= $${ftP.length}::date`); }
+  if (to) { ftP.push(to); ftConds.push(`fta.analyzed_at <= $${ftP.length}::date`); }
+  let ftJoin = "";
+  if (managerId) {
+    ftP.push(managerId);
+    ftJoin = "JOIN deals d ON d.kommo_id = fta.lead_id";
+    ftConds.push(`d.manager_id = $${ftP.length}`);
+  } else if (teamId) {
+    ftP.push(teamId);
+    ftJoin = "JOIN deals d ON d.kommo_id = fta.lead_id JOIN managers m ON m.id = d.manager_id";
+    ftConds.push(`m.team_id = $${ftP.length}`);
+  }
+  const ftRes = await pool.query<{ analyzed: string; voiced: string }>(
+    `SELECT COUNT(*) AS analyzed, COUNT(*) FILTER (WHERE fta.price_voiced) AS voiced
+       FROM first_touch_analysis fta ${ftJoin}
+       ${ftConds.length ? "WHERE " + ftConds.join(" AND ") : ""}`,
+    ftP
   );
-  const adPriceVoiced = Number(voiceRes.rows[0]?.voiced ?? 0);
+  const adPriceVoiced = Number(ftRes.rows[0]?.voiced ?? 0);
+  const adFirstTouchAnalyzed = Number(ftRes.rows[0]?.analyzed ?? 0);
 
   // Success (142, closed in period) per manager.
   const scP: unknown[] = [];
@@ -2930,7 +2929,8 @@ dashboardRouter.get("/report", async (req, res) => {
     newClients, repeatClients,
     receivables: Number(recvTotal.rows[0]?.total ?? 0),
     adLeads: sumK("adLeads"), quotes: sumK("quotes"),
-    adPriceVoiced, // озвучено ціну (пропозицію) в перший дотик — по рекламі
+    adPriceVoiced, // ціну озвучено в перший дотик (AI-транскрибація дзвінка)
+    adFirstTouchAnalyzed, // усього проаналізовано перших дотиків (знаменник)
     dispatched: sumK("dispatched"), dispatchedSum: sumK("dispatchedSum"),
     transfers: sumK("transfers"),
     carryover: sumK("carryover"), carryoverDeals: sumK("carryoverDeals"),

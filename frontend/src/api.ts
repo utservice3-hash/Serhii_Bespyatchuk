@@ -831,6 +831,7 @@ export interface ReportData {
     adLeads: number;
     quotes: number;
     adPriceVoiced: number;
+    adFirstTouchAnalyzed: number;
     dispatched: number;
     dispatchedSum: number;
     transfers: number;
