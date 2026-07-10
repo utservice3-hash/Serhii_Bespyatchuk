@@ -481,7 +481,9 @@ export function Dashboard() {
         });
       }
     } else {
-      if (taskForm.assigneeId === "") {
+      // Менеджер ставить план ЛИШЕ собі — виконавець форсується на себе.
+      const planAssignee = auth?.role === "manager" ? auth.managerId : (taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId));
+      if (planAssignee == null) {
         alert("Оберіть виконавця (менеджера) для плану");
         return;
       }
@@ -491,7 +493,7 @@ export function Dashboard() {
         return;
       }
       await createTaskPlan({
-        assigneeId: Number(taskForm.assigneeId),
+        assigneeId: planAssignee,
         period: taskForm.taskType === "weekly_kpi" ? "week" : "month",
         days,
         adsCount: taskForm.adsCount ? Number(taskForm.adsCount) : undefined,

@@ -17,8 +17,14 @@ const FULL_CYCLE_PIPELINES = [8921932, 155304];
  */
 async function countAcceptedAds(managerId: number, from: string, to: string, adSources: string[]): Promise<number> {
   if (!adSources.length) return 0;
+  // ⚠️ INNER JOIN pipeline_stage_map — ТОЧНО як картка «Прийнято реклами» у Звіті
+  // (звірена з CRM: Михальчевська≈80/тиж, Гофман≈14). Без цього джойна лічильник
+  // включав угоди повного циклу в НЕзамапленому статусі (сервісні/закриті) і
+  // завищував факт денної задачі на ~40% (343 vs 244 за тиждень). Джойн лишає
+  // лише угоди, чий статус мапиться у справжній етап воронки.
   const r = await pool.query<{ c: string }>(
     `SELECT COUNT(*) c FROM deals q
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = q.pipeline_id AND psm.status_id = q.status_id
        WHERE q.manager_id = $1
          AND q.pipeline_id = ANY($5)
          AND q.client_source = ANY($4)

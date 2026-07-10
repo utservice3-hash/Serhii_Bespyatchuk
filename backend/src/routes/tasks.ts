@@ -41,6 +41,7 @@ const checklistItem = z.object({
   category: z.string().optional(),
   paymentType: z.string().nullable().optional(),
   done: z.boolean().optional(),
+  comment: z.string().nullable().optional(),
 });
 
 const patchSchema = upsertSchema.partial().extend({
@@ -118,12 +119,23 @@ const METRIC_LABELS: Record<string, string> = {
 
 tasksRouter.post("/plan", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
-    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
-  }
   const parsed = planSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { assigneeId, period, days, adsCount, leadgenCount, dispatchCount, avgCheck, conversion, paymentAmount } = parsed.data;
+  const { period, days, adsCount, leadgenCount, dispatchCount, avgCheck, conversion, paymentAmount } = parsed.data;
+  // Хто кому може ставити план на день:
+  //  • менеджер — ЛИШЕ собі (assignee форсується на себе);
+  //  • тімлід — лише своїй команді;
+  //  • адмін — будь-кому.
+  let assigneeId = parsed.data.assigneeId;
+  if (auth.role === "manager") {
+    if (!auth.managerId) return res.status(403).json({ error: "Обліковий запис без менеджера" });
+    assigneeId = auth.managerId;
+  } else if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [assigneeId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  } else if (auth.role !== "admin") {
+    return res.status(403).json({ error: "Немає доступу" });
+  }
 
   const sorted = [...days].sort();
   const periodStart = sorted[0];

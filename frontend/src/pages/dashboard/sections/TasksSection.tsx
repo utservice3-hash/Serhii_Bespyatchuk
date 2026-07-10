@@ -319,19 +319,34 @@ export function TasksSection({
                         const list = task.checklistJson;
                         const doneN = list.filter((c) => c.done).length;
                         return (
-                          <div style={{ paddingLeft: 22, marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
+                          <div style={{ paddingLeft: 22, marginTop: 4, display: "flex", flexDirection: "column", gap: 6 }}>
                             {list.map((c, i) => (
-                              <label key={c.clientKey} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                                <input type="checkbox" checked={!!c.done} onChange={() => {
-                                  const next = list.map((x, j) => (j === i ? { ...x, done: !x.done } : x));
-                                  patchTaskLocal(task.id, { checklistJson: next });
-                                  updateTask(task.id, { checklistJson: next });
-                                }} />
-                                <span style={{ flex: 1, textDecoration: c.done ? "line-through" : "none", opacity: c.done ? 0.55 : 1 }}>🏢 {c.clientName}</span>
-                                <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                                  {c.category === "oneshot_bg" ? "1 перевез. (б/г)" : "замовклий"}{c.orders != null ? ` · ${c.orders} перевез.` : ""}
-                                </span>
-                              </label>
+                              <div key={c.clientKey} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                                  <input type="checkbox" checked={!!c.done} onChange={() => {
+                                    const next = list.map((x, j) => (j === i ? { ...x, done: !x.done } : x));
+                                    patchTaskLocal(task.id, { checklistJson: next });
+                                    updateTask(task.id, { checklistJson: next });
+                                  }} />
+                                  <span style={{ flex: 1, textDecoration: c.done ? "line-through" : "none", opacity: c.done ? 0.55 : 1 }}>🏢 {c.clientName}</span>
+                                  <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                                    {c.category === "oneshot_bg" ? "1 перевез. (б/г)" : "замовклий"}{c.orders != null ? ` · ${c.orders} перевез.` : ""}
+                                  </span>
+                                </label>
+                                {/* Коментар менеджера НАВПРОТИ КОЖНОГО клієнта (результат дзвінка). */}
+                                <input
+                                  defaultValue={c.comment ?? ""}
+                                  placeholder="Коментар по клієнту (результат дзвінка)…"
+                                  onBlur={(e) => {
+                                    const v = e.target.value.trim() || null;
+                                    if (v === (c.comment ?? null)) return;
+                                    const next = list.map((x, j) => (j === i ? { ...x, comment: v } : x));
+                                    patchTaskLocal(task.id, { checklistJson: next });
+                                    updateTask(task.id, { checklistJson: next });
+                                  }}
+                                  style={{ marginLeft: 22, padding: "3px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
+                                />
+                              </div>
                             ))}
                             <span style={{ fontSize: 11, color: doneN === list.length ? "#16a34a" : "var(--text-muted)", fontWeight: 600 }}>
                               Опрацьовано {doneN}/{list.length}
@@ -781,28 +796,35 @@ export function TasksSection({
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                   Виконавець{taskForm.taskType !== "simple" ? " (менеджер)" : ""}
-                  <select
-                    value={taskForm.assigneeId}
-                    onChange={(e) =>
-                      setTaskForm((f) => ({ ...f, assigneeId: e.target.value === "" ? "" : Number(e.target.value) }))
-                    }
-                  >
-                    <option value="">—</option>
-                    {(() => {
-                      // Group managers by team: team names as <optgroup>, managers under.
-                      const byTeam = new Map<string, typeof managerOptions>();
-                      for (const m of managerOptions) {
-                        const key = m.teamName ?? "Без команди";
-                        if (!byTeam.has(key)) byTeam.set(key, []);
-                        byTeam.get(key)!.push(m);
+                  {role === "manager" ? (
+                    // Менеджер ставить план/задачу ЛИШЕ собі — виконавець зафіксований.
+                    <div style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-subtle, rgba(127,127,127,0.06))", color: "var(--text-muted)" }}>
+                      Ви (собі)
+                    </div>
+                  ) : (
+                    <select
+                      value={taskForm.assigneeId}
+                      onChange={(e) =>
+                        setTaskForm((f) => ({ ...f, assigneeId: e.target.value === "" ? "" : Number(e.target.value) }))
                       }
-                      return [...byTeam.entries()].map(([team, mgrs]) => (
-                        <optgroup key={team} label={team}>
-                          {mgrs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                        </optgroup>
-                      ));
-                    })()}
-                  </select>
+                    >
+                      <option value="">—</option>
+                      {(() => {
+                        // Group managers by team: team names as <optgroup>, managers under.
+                        const byTeam = new Map<string, typeof managerOptions>();
+                        for (const m of managerOptions) {
+                          const key = m.teamName ?? "Без команди";
+                          if (!byTeam.has(key)) byTeam.set(key, []);
+                          byTeam.get(key)!.push(m);
+                        }
+                        return [...byTeam.entries()].map(([team, mgrs]) => (
+                          <optgroup key={team} label={team}>
+                            {mgrs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                          </optgroup>
+                        ));
+                      })()}
+                    </select>
+                  )}
                 </label>
                 {taskForm.taskType === "simple" && role !== "manager" && (
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>

@@ -1230,6 +1230,7 @@ export interface ChecklistItem {
   category?: string;
   paymentType?: string | null;
   done?: boolean;
+  comment?: string | null;
 }
 
 export interface ReactivationCandidate {
