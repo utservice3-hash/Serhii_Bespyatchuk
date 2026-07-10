@@ -88,7 +88,9 @@ syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncR
 - ✅ **Ad-count фікс** (денна KPI-задача: додано join `pipeline_stage_map` = збіг зі Звітом/CRM, було +40%).
 - ✅ **Менеджер сам ставить план на день** (лише собі); **коментар навпроти кожного клієнта** в реактивації.
 - 🛠 **Крах-фікс**: `/repeat-client-plan/history` тягнув неіснуючу `users.name` → Node падав і гасив увесь бекенд; виправлено (ім'я з `managers`) + процес-backstop unhandledRejection/uncaughtException. ⚠️ Залишок: async-помилка в необгорнутому хендлері тепер не валить сервер, але лишає запит без відповіді — бажано обгорнути хендлери (майбутнє).
-- ⏳ **ЛИШИЛОСЬ:** (1) URL-роутинг розділів (`/report`, `/kvp`…) — зараз SPA зі `section` у стейті + localStorage. (2) навчання: папки+матеріали (частково є `documents`).
+- ✅ **URL-роутинг розділів**: `section` тепер з URL (`/report`, `/kvp`, `/tasks`…) через `useParams`/`useNavigate`; `App.tsx` route `/:section`; `.htaccess` вже має SPA-fallback → deep-links працюють на F5/закладках.
+- ✅ **Навчання** (`training_folders`/`training_materials` + `/api/training` + `TrainingSection`): адмін будує папки (навігація/структура) і розміщує матеріали — **відео (embed YouTube/Vimeo/пряме .mp4), файли (≤45МБ), посилання, текст**; переглядач із вбудованим плеєром/preview. Файли в `uploads/../training`. `express.json` limit 25→60mb.
+- ⏸️ Відомий залишок (не критичний): async-помилка в необгорнутому route-хендлері не валить сервер (backstop), але лишає запит без відповіді — бажано обгорнути хендлери в try/catch (майбутнє hardening).
 
 ### ✅ Зроблено й у проді
 - **Вкладка «Регламенти та документи»** (`documents`, `DocumentsSection.tsx`, роут `/api/documents`): дерево папок+файли, пошук, drag&drop+прогрес, категорії-теги (Регламент/Шаблон/Інструкція/Інше у `doc_files.category`), автор/дата. Файли на диску в `backend/documents` (поза публічним static). Керує admin (КВП), решта — перегляд/скачування. Таблиці `doc_folders`/`doc_files`.
