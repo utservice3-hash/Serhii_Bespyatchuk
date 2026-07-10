@@ -739,12 +739,13 @@ export function TasksSection({
                       />
                     </label>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
-                      К-сть лідогенів (РПК)
+                      К-сть лідогенів (РПК/РНК)
                       <input
                         type="number"
                         value={taskForm.leadgenCount}
                         onChange={(e) => setTaskForm((f) => ({ ...f, leadgenCount: e.target.value }))}
                         placeholder="напр. 40"
+                        title="Прийнято заявок від лідогенераторів (переданих і взятих у роботу менеджером — з Реєстру лідоген-бота). Доступно і для РНК, і для РПК."
                       />
                     </label>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 140 }}>
