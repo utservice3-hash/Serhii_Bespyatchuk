@@ -2843,6 +2843,10 @@ dashboardRouter.get("/report", async (req, res) => {
   const planMonthR = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
   const planScoreP: unknown[] = [planMonthR];
   const planScoreC = ["p.plan_date = $1", "p.metric = 'payment_amount'"];
+  // ⚠️ Скоуп на обраного менеджера — інакше план сумується по ВСІЙ команді
+  // (навіть коли вибрано одного менеджера) і плитка «Виконання плану» показує
+  // командний план замість плану менеджера.
+  if (managerId) { planScoreP.push(managerId); planScoreC.push(`p.manager_id = $${planScoreP.length}`); }
   if (teamId) { planScoreP.push(teamId); planScoreC.push(`m.team_id = $${planScoreP.length}`); }
   const planByMgr = await pool.query<{ id: number; plan: string }>(
     `SELECT p.manager_id AS id, SUM(p.planned_value) AS plan
