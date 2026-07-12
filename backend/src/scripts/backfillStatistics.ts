@@ -264,6 +264,12 @@ async function reconcile(sheetSnapshot: Map<string, number>, auto: Map<string, n
 }
 
 async function main() {
+  // Бекфіл — повна перебудова історії, тож чистимо таблицю (ручних значень ще
+  // немає — розділ не в проді). Живий перерахунок (Крок 3) далі UPSERT-ить
+  // поточні періоди, ручний ввід (Крок 3, API) з'явиться пізніше.
+  console.log("→ Фаза 0: TRUNCATE statistics_values (чиста перебудова)");
+  await pool.query("TRUNCATE statistics_values");
+
   console.log("→ Фаза 1: імпорт історії з листа");
   const acc: Acc = new Map();
   const sheetSnapshot = new Map<string, number>();
