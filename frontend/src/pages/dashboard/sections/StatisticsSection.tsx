@@ -154,16 +154,18 @@ export default function StatisticsSection({ role }: { role?: string }) {
         return totalValue(ps, base);
       });
     }
-    const deptLevel = pivot.get(ps)?.get(ROW)?.get(met.key); // team_lead=NULL рядок
-    if (deptLevel && deptLevel.value !== null) return deptLevel.value;
+    // Пріоритет: розбивка по тімлідах (точніша). Якщо її нема — значення рівня
+    // відділу (team_lead=NULL, напр. calls з живого API, коли ще нема per-lead).
     let sum = 0, has = false, last: number | null = null;
     for (const lead of leads) {
       const c = pivot.get(ps)?.get(lead)?.get(met.key);
       if (!c || c.value === null) continue;
       has = true; last = c.value; sum += c.value;
     }
-    if (!has) return null;
-    return met.aggregation === "sum" ? sum : last; // avg/last: беремо останнє (грубо)
+    if (has) return met.aggregation === "sum" ? sum : last;
+    const deptLevel = pivot.get(ps)?.get(ROW)?.get(met.key);
+    if (deptLevel && deptLevel.value !== null) return deptLevel.value;
+    return null;
   }
 
   // План/факт (R4): лише sales revenue_won помісячно.
