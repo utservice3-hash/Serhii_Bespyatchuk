@@ -80,6 +80,8 @@ Bash-tool падає по таймауту на `git pull && npm run build` (>2�
 - `syncDealActivity` — **кожні 10хв + старт** (нотатки Kommo `/leads/notes` → `deals.last_activity_at` = остання РЕАЛЬНА людська активність: `call_in/out`, `sms_in/out`, `common`, `chat_message` з `created_by <> 0`). Salesbot (`created_by 0`) НЕ рахується. Watermark `sync_state.last_activity_note_at`. Backfill `--months=N`. Живить «застряглі угоди».
 - `syncAdBudget` — **щогодини (:15) + старт** (Google-таблиця реклами `AD_BUDGET_SHEET_URL`/дефолт у config → `ad_budget_daily`: `budget_plan`, `budget_fact`, `conversions`, `clicks` по днях). Парсить денні рядки з ключем YYYYMMDD (кол.1), план=кол.3, факт=кол.4, конверсії=кол.10. Накопичує історію (минулі місяці лишаються). Живить Реклама-бюджет у Звіті КВП. ⚠️ Таблиця має лише поточний місяць — минулі місяці зʼявляються з накопиченням.
 - `snapshotCarryover` — **1-го числа 00:00 + старт** (знімок «перенесених» угод у роботі → `monthly_carryover`, фіксується раз/міс).
+- `recomputeStatistics` — **щогодини (:25) + старт** (розділ «Статистики (відділи)»: sales auto-метрики поточного міс+тижня → `statistics_values`, UPSERT). Guard+таймаут. Статус у `/api/health.statistics`. Бекфіл історії — `scripts/backfillStatistics.ts` (вручну).
+- `syncFirstTouch` — **кожні 30хв + старт** (лист «Перший дотик» AI-транскрибації → `first_touch_analysis`, показник «озвучено ціну в перший дотик» у Звіті).
 - `backupDb` — **щодня 03:00** (незалежний бекап: кожна таблиця → gzip-CSV через `COPY` у `dashboard/backups/uts_*`, ретенція 14). Ручний: `npm run backup`. БД на **Neon** (PITR — основний бекап). Деталі й відновлення — `docs/BACKUP_RECOVERY.md`. ⚠️ на проді деплой — `npm install` БЕЗ `--omit=dev` (потрібен tsc для build).
 - Фронт **автооновлюється кожні 5хв** (`refreshNonce` у Dashboard.tsx) — без перезавантаження.
 
@@ -95,8 +97,20 @@ Bash-tool падає по таймауту на `git pull && npm run build` (>2�
 
 ## Розділи дашборду (frontend/src/pages/Dashboard.tsx, секції по `section`)
 
-overview · **report** · statistics · teams · managers · loyalty · receivables · leadgen · tasks · messenger · news · training · settings.
+overview · **report** · statistics · **depstats** · teams · managers · loyalty · receivables · leadgen · tasks · messenger · news · training · settings.
 Нав-групи в `components/Layout.tsx` (`NAV_GROUPS`, `NavKey` виводиться з них). Період-фільтр спільний (`dateRange`/`datePreset` + `QuickPeriods`).
+⚠️ Два різні розділи зі схожою назвою: `statistics` = старі CRM-графіки (інлайн у Dashboard.tsx); `depstats` = **«Статистики (відділи)»** — новий розділ показників по відділах (авто-заміна Google-таблиці, `StatisticsSection.tsx`).
+
+## Статистики (відділи) — `depstats`, авто-заміна Google-таблиці показників
+
+Заміна ручної таблиці «UTS Показники для статистик» (Sheet `1F_lTE7a…`). 6 відділів (виключено Міжнародку/Авіа-Море/Тендери — немає робочого пайплайну/закрито). Гібрид: sales-метрики з CRM (auto), решта — imported/manual. Специфікація — `docs/STATISTICS_SPEC.md` (§0-БІС = ухвалені рішення), звірка — `docs/STATISTICS_RECONCILIATION.md`.
+- **`statistics_values`** (EAV): `department, period_type(month|week), period_start, team_lead, metric_key, value, source(auto|manual|imported)`. UNIQUE по `(dept,ptype,period_start,coalesce(team_lead,''),metric)`. **R1**: тиждень→понеділок (лист=неділя, −6 днів). **R2**: «самостійні»+«Шевчук»→`team_lead='Шевчук Назар'` (sum сумуються, no-manager угоди→Шевчук).
+- **`backend/src/statistics/catalog.ts`** — ЄДИНЕ джерело правди структури (відділи/метрики/unit/source/aggregation/csv-індекси/формули derived). Фронт і бекенд беруть перелік ЛИШЕ звідси. Планів тут НЕМА (R4 — план із `plans`).
+- **Межа довіри `STATS_AUTO_FROM='2026-01-01'`**: до неї CRM-історія неповна → лишаємо imported (лист); від неї sales `revenue_won`/`machines_success`/`machines_dispatched` = auto (CRM). Готівка/оплата/рахунки — imported (payment_type/снапшот неповні). Опустити межу — після повного re-sync історії Kommo.
+- **`jobs/recomputeStatistics`** — щогодини (:25) + старт: перераховує sales auto за поточний міс+тиждень, UPSERT. Guard+60с таймаут. Статус у `/api/health.statistics`.
+- **`scripts/backfillStatistics.ts`** — одноразовий бекфіл (TRUNCATE+import листа+sales auto+звірка). Запуск вручну.
+- **API `/api/statistics`**: `GET /catalog`, `GET /?department&period_type&from&to` (non-admin бачить лише свій розріз sales по команді), `PUT /manual` (лише admin; auto/derived→400). Скоуп sales: `team_id→team_lead` через `SALES_TEAM_LEAD`.
+- Показник `calls` — джерело **Ringostat API** (RS-1, ще не підключено; історія з листа imported).
 
 ## Звіт (`report`) — авто-заміна ручного Excel-звіту менеджера
 

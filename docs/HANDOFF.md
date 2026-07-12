@@ -43,7 +43,10 @@ curl https://dashboard.uts.ua/api/health                        # {"ok":true}
 - Діагностика проду: base64-mjs через relay, `import { pool } from './dist/db/pool.js'`.
 
 ## 6. Джоби (`backend/src/jobs`, cron у `index.ts`)
-syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncReceivables (30хв) · syncNews (08:00) · evaluateKpiTasks (07:00) · snapshotCarryover (1-ше) · реконсиляція (04:00) · **backupDb (03:00)**.
+syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncReceivables (30хв) · syncFirstTouch (30хв) · **recomputeStatistics (щогодини :25)** · syncNews (08:00) · evaluateKpiTasks (07:00) · snapshotCarryover (1-ше) · реконсиляція (04:00) · **backupDb (03:00)**.
+
+## 6-БІС. Розділ «Статистики (відділи)» — `depstats` (нове)
+Авто-заміна Google-таблиці «UTS Показники для статистик» (6 відділів). Таблиця `statistics_values` (EAV), каталог метрик `backend/src/statistics/catalog.ts` (ЄДИНЕ джерело структури), API `/api/statistics`, фронт `StatisticsSection.tsx`. Гібрид: sales = auto з CRM від `STATS_AUTO_FROM=2026-01-01`, старіша історія + інші відділи = imported (лист) / manual (admin вводить). Специфікація й рішення — `docs/STATISTICS_SPEC.md`, звірка CRM↔лист — `docs/STATISTICS_RECONCILIATION.md`. **Відкрите:** (1) повний re-sync історії Kommo → опустити межу auto; (2) бекфіл `payment_type` → готівка стане auto; (3) Ringostat API для `calls` (RS-1); (4) план/факт-оверлей у таблиці (R4, ще не в UI); (5) auto для leadgen/marketing/logistics (звірити на Кроці 5).
 
 ## 7. Бізнес-логіка
 **Уся** — у `CLAUDE.md` (гроші, воронка, мінус-угоди, передані заявки, знімки оплат, РПК/РНК, задачі, план/факт). Не дублюю — читай там перед будь-якою правкою метрик.
