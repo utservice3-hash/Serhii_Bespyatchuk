@@ -1622,6 +1622,7 @@ export interface StatValueRow {
 export interface StatValuesResponse {
   department: string; periodType: "month" | "week";
   scopedTo: string | null; rows: StatValueRow[];
+  plans?: Record<string, number>; // `${period_start}|${team_lead}` → план (sales/month)
 }
 
 export async function fetchStatisticsCatalog(): Promise<StatCatalog> {

@@ -55,10 +55,36 @@ statisticsRouter.get("/", async (req, res) => {
       ORDER BY period_start DESC, team_lead NULLS FIRST, metric_key`,
     params
   );
+
+  // План/факт (R4): для sales-виручки помісячно — план із таблиці `plans`
+  // (metric='payment_amount', per-manager) агрегований по тімліду. Ключ
+  // `${month}|${team_lead}` → сума плану. Тиждень/інші відділи — плану немає.
+  const plans: Record<string, number> = {};
+  if (dept.key === "sales" && periodType === "month") {
+    const pp: unknown[] = [];
+    const pc: string[] = ["p.metric = 'payment_amount'"];
+    if (from) { pp.push(from); pc.push(`p.plan_date >= $${pp.length}`); }
+    if (to) { pp.push(to); pc.push(`p.plan_date <= $${pp.length}`); }
+    const pr = await pool.query<{ month: string; team_id: number | null; plan: string }>(
+      `SELECT to_char(p.plan_date,'YYYY-MM-DD') AS month, m.team_id, COALESCE(SUM(p.planned_value),0) AS plan
+         FROM plans p JOIN managers m ON m.id = p.manager_id
+        WHERE ${pc.join(" AND ")}
+        GROUP BY month, m.team_id`, pp);
+    const scopedLead = auth.role !== "admin" ? ownTeamLead(auth.teamId) : null;
+    for (const row of pr.rows) {
+      const lead = row.team_id != null && SALES_TEAM_LEAD[row.team_id]
+        ? canonTeamLead(SALES_TEAM_LEAD[row.team_id]) : "Шевчук Назар";
+      if (scopedLead && lead !== scopedLead) continue;
+      const k = `${row.month}|${lead}`;
+      plans[k] = (plans[k] ?? 0) + Number(row.plan);
+    }
+  }
+
   res.json({
     department, periodType,
     scopedTo: auth.role !== "admin" && dept.hasTeamLeadBreakdown ? ownTeamLead(auth.teamId) : null,
     rows: r.rows.map((x) => ({ ...x, value: x.value === null ? null : Number(x.value) })),
+    plans,
   });
 });
 

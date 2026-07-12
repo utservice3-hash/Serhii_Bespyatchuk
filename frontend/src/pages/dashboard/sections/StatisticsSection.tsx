@@ -67,6 +67,7 @@ export default function StatisticsSection({ role }: { role?: string }) {
   const [dept, setDept] = useState<string>("sales");
   const [ptype, setPtype] = useState<PeriodType>("month");
   const [rows, setRows] = useState<StatValueRow[]>([]);
+  const [plans, setPlans] = useState<Record<string, number>>({});
   const [scopedTo, setScopedTo] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [fullHistory, setFullHistory] = useState(false);
@@ -100,6 +101,7 @@ export default function StatisticsSection({ role }: { role?: string }) {
       })();
       const res = await fetchStatisticsValues({ department: dept, period_type: ptype, from });
       setRows(res.rows);
+      setPlans(res.plans ?? {});
       setScopedTo(res.scopedTo);
     } finally { setLoading(false); }
   }, [dept, ptype, fullHistory]);
@@ -162,6 +164,23 @@ export default function StatisticsSection({ role }: { role?: string }) {
     }
     if (!has) return null;
     return met.aggregation === "sum" ? sum : last; // avg/last: беремо останнє (грубо)
+  }
+
+  // План/факт (R4): лише sales revenue_won помісячно.
+  function sumPlanForMonth(ps: string): number {
+    let s = 0; for (const [k, v] of Object.entries(plans)) if (k.startsWith(ps + "|")) s += v; return s;
+  }
+  function PlanBadge({ ps, lead, met, fact }: { ps: string; lead: string; met: StatMetricDef; fact: number | null }) {
+    if (dept !== "sales" || ptype !== "month" || met.key !== "revenue_won") return null;
+    const plan = lead === ROW ? sumPlanForMonth(ps) : (plans[`${ps}|${lead}`] ?? 0);
+    if (!plan) return null;
+    const pct = fact != null && plan > 0 ? Math.round((fact / plan) * 100) : null;
+    return (
+      <sup style={{ color: pct != null && pct >= 100 ? "#16a34a" : "#6366f1", fontSize: 9, marginLeft: 4 }}
+        title={`План: ${Math.round(plan).toLocaleString("uk-UA")} грн`}>
+        {pct != null ? `${pct}% пл` : ""}
+      </sup>
+    );
   }
 
   async function saveEdit() {
@@ -303,7 +322,7 @@ export default function StatisticsSection({ role }: { role?: string }) {
                               ) : (
                                 <span>{fmt(value, met.unit)}{badge && source && source !== "derived" && (
                                   <sup style={{ color: badge.c, fontSize: 9, marginLeft: 3 }}>{badge.t}</sup>
-                                )}</span>
+                                )}<PlanBadge ps={ps} lead={lead} met={met} fact={value} /></span>
                               )}
                             </td>
                           );
@@ -313,9 +332,14 @@ export default function StatisticsSection({ role }: { role?: string }) {
                     {department.hasTeamLeadBreakdown && (
                       <tr key={ps + "_total"} style={{ background: "#f7f8fa", fontWeight: 600 }}>
                         <td>Разом</td>
-                        {department.metrics.map((met) => (
-                          <td key={met.key} style={{ whiteSpace: "nowrap" }}>{fmt(totalValue(ps, met), met.unit)}</td>
-                        ))}
+                        {department.metrics.map((met) => {
+                          const tv = totalValue(ps, met);
+                          return (
+                            <td key={met.key} style={{ whiteSpace: "nowrap" }}>
+                              {fmt(tv, met.unit)}<PlanBadge ps={ps} lead={ROW} met={met} fact={tv} />
+                            </td>
+                          );
+                        })}
                       </tr>
                     )}
                   </>
