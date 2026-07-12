@@ -1600,3 +1600,44 @@ export async function fetchOneOnOneStats(months = 6): Promise<OneOnOneStatRow[]>
   const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores", { params: { months } });
   return data?.rows ?? [];
 }
+
+// ── Статистики ───────────────────────────────────────────────────────────────
+export type StatUnit = "uah" | "count" | "percent";
+export type StatSource = "auto" | "manual" | "derived";
+export type StatAggregation = "sum" | "avg" | "last";
+export interface StatMetricDef {
+  key: string; label: string; unit: StatUnit; source: StatSource;
+  aggregation: StatAggregation; formula?: string; order: number; note?: string;
+  csvIndexMonth?: number; csvIndexWeek?: number;
+}
+export interface StatDepartmentDef {
+  key: string; label: string; tabMonth: string; tabWeek: string;
+  hasTeamLeadBreakdown: boolean; csvDateIndex: number; metrics: StatMetricDef[];
+}
+export interface StatCatalog { departments: StatDepartmentDef[]; autoFrom: string; }
+export interface StatValueRow {
+  period_start: string; team_lead: string | null; metric_key: string;
+  value: number | null; source: StatSource;
+}
+export interface StatValuesResponse {
+  department: string; periodType: "month" | "week";
+  scopedTo: string | null; rows: StatValueRow[];
+}
+
+export async function fetchStatisticsCatalog(): Promise<StatCatalog> {
+  const { data } = await api.get<StatCatalog>("/statistics/catalog");
+  return data;
+}
+export async function fetchStatisticsValues(params: {
+  department: string; period_type: "month" | "week"; from?: string; to?: string;
+}): Promise<StatValuesResponse> {
+  const { data } = await api.get<StatValuesResponse>("/statistics", { params });
+  return data;
+}
+export async function saveStatisticsManual(body: {
+  department: string; period_type: "month" | "week"; period_start: string;
+  team_lead?: string | null; values: Record<string, number | null>;
+}): Promise<{ ok: boolean; saved: number }> {
+  const { data } = await api.put<{ ok: boolean; saved: number }>("/statistics/manual", body);
+  return data;
+}

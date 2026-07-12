@@ -92,6 +92,7 @@ import { DocumentsSection } from "./dashboard/sections/DocumentsSection";
 import { OneOnOneSection } from "./dashboard/sections/OneOnOneSection";
 import { DutySection } from "./dashboard/sections/DutySection";
 import { TrainingSection } from "./dashboard/sections/TrainingSection";
+import StatisticsSection from "./dashboard/sections/StatisticsSection";
 import { teamOptions } from "./dashboard/teamColors";
 import { TeamsSection } from "./dashboard/sections/TeamsSection";
 import { ManagersSection } from "./dashboard/sections/ManagersSection";
@@ -1373,6 +1374,8 @@ export function Dashboard() {
       {section === "oneonone" && auth?.role !== "manager" && <OneOnOneSection role={auth?.role} />}
 
       {section === "duty" && <DutySection role={auth?.role} />}
+
+      {section === "depstats" && <StatisticsSection role={auth?.role} />}
 
       {section === "settings" && (
         <>

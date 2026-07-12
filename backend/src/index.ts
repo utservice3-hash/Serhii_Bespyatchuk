@@ -22,6 +22,7 @@ import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { dutyRouter } from "./routes/duty.js";
 import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { trainingRouter } from "./routes/training.js";
+import { statisticsRouter } from "./routes/statistics.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
@@ -35,6 +36,7 @@ import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
+import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
@@ -66,6 +68,7 @@ app.use("/api/documents", documentsRouter);
 app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
 app.use("/api/training", trainingRouter);
+app.use("/api/statistics", statisticsRouter);
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".
@@ -99,6 +102,7 @@ app.get("/api/health", async (_req, res) => {
       },
       kommoCircuit: kommoCircuitState(),
       dataCheck: dc.rows[0] ? { ranAt: dc.rows[0].ran_at, warnings: Number(dc.rows[0].warnings) } : null,
+      statistics: getStatisticsStatus(),
     });
   } catch {
     res.json({ ok: true, sync: null });
@@ -209,6 +213,13 @@ cron.schedule("*/30 * * * *", () => {
   syncFirstTouch().catch((err) => console.error("First-touch sync failed:", err));
 });
 syncFirstTouch().catch((err) => console.error("First-touch startup sync failed:", err));
+
+// Розділ «Статистики» — живий перерахунок auto-метрик (поточний місяць+тиждень).
+// Щогодини + на старті. Метрики агрегатні, частіше не потрібно. UPSERT.
+cron.schedule("25 * * * *", () => {
+  recomputeStatistics().catch((err) => console.error("Statistics recompute failed:", err));
+});
+recomputeStatistics().catch((err) => console.error("Statistics startup recompute failed:", err));
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {
