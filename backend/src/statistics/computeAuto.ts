@@ -1,0 +1,87 @@
+// Обчислення auto-метрик відділів leadgen/marketing/logistics із CRM (наша БД,
+// БЕЗ звернень до Kommo). Дзеркалить перевірені предикати з routes/dashboard.ts.
+// Використовується і бекфілом, і живим перерахунком. Усі метрики — рівня ВІДДІЛУ
+// (team_lead = NULL). Повертає Map<`${dept}|${ptype}|${period_start}|${metric}`→value>.
+//
+// Увімкнені лише ті, що пройшли звірку з листом (scripts/reconcileDeptAuto.ts).
+// Снапшот-метрики (repeat_clients_active, lg_count) рахуються лише для поточного
+// періоду окремо (тут не даємо — історію не відтворити).
+
+import { pool } from "../db/pool.js";
+import { getSettings } from "../routes/settings.js";
+
+const FULL_CYCLE = [8921932, 155304];
+const DISPATCH_SQL = "(psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178))";
+const adDealSql = (ref: string) =>
+  `((d.client_source = ANY(${ref}) OR d.lead_channel = 'ad') AND COALESCE(d.client_source,'') NOT ILIKE '%реактив%')`;
+
+type Row = { bucket: string; v: string };
+const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+
+/**
+ * @param since  ISO date — рахуємо лише бакети з period_start >= since.
+ */
+export async function computeDeptAuto(since: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const { adSources } = await getSettings();
+  const set = (dept: string, pt: string, ps: string, metric: string, v: number) => {
+    if (ps < since) return;
+    out.set(`${dept}|${pt}|${ps}|${metric}`, v);
+  };
+
+  for (const [ptype, trunc] of [["month", "month"], ["week", "week"]] as const) {
+    // ── marketing.ad_leads (full-cycle adDealSql, за створенням) ──
+    const adLeads = await pool.query<Row>(
+      `SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
+         FROM deals d
+        WHERE d.pipeline_id = ANY($1) AND ${adDealSql("$2")} AND d.created_at_kommo IS NOT NULL
+        GROUP BY bucket`, [FULL_CYCLE, adSources]);
+    for (const r of adLeads.rows) set("marketing", ptype, r.bucket, "ad_leads", Number(r.v));
+
+    // ── marketing.non_target_leads (Кваліфікація 8921928 статус 143, за створенням) ──
+    const nonTarget = await pool.query<Row>(
+      `SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
+         FROM deals d
+        WHERE d.pipeline_id = 8921928 AND d.status_id = 143 AND d.created_at_kommo IS NOT NULL
+        GROUP BY bucket`);
+    for (const r of nonTarget.rows) set("marketing", ptype, r.bucket, "non_target_leads", Number(r.v));
+
+    // ── marketing.ad_budget_total (ad_budget_daily.budget_fact) ──
+    const adBudget = await pool.query<Row>(
+      `SELECT to_char(date_trunc('${trunc}', day), 'YYYY-MM-DD') AS bucket, COALESCE(SUM(budget_fact),0) AS v
+         FROM ad_budget_daily GROUP BY bucket`);
+    for (const r of adBudget.rows) set("marketing", ptype, r.bucket, "ad_budget_total", Number(r.v));
+
+    // ── logistics.machines_dispatched_total (усі клієнти, dispatch-проксі, за створенням) ──
+    const dispTotal = await pool.query<Row>(
+      `SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
+         FROM deals d
+         LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE d.pipeline_id = ANY($1) AND ${DISPATCH_SQL} AND d.created_at_kommo IS NOT NULL
+        GROUP BY bucket`, [FULL_CYCLE]);
+    for (const r of dispTotal.rows) set("logistics", ptype, r.bucket, "machines_dispatched_total", Number(r.v));
+
+    // ── logistics.repeat_revenue / repeat_machines (постійні: перша оплата ДО періоду) ──
+    // «постійний» = клієнт, чия перша paid-угода була раніше за початок бакета.
+    const repeat = await pool.query<{ bucket: string; rev: string; cnt: string }>(
+      `WITH firsts AS (
+         SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid
+           FROM deals d
+           JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+          WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+          GROUP BY d.client_key
+       )
+       SELECT to_char(date_trunc('${trunc}', (d.closed_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket,
+              COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS cnt
+         FROM deals d
+         JOIN firsts f ON f.client_key = d.client_key
+        WHERE d.pipeline_id = ANY($1) AND d.status_id = 142 AND d.closed_at_kommo IS NOT NULL
+          AND f.first_paid < date_trunc('${trunc}', (d.closed_at_kommo ${KYIV}))
+        GROUP BY bucket`, [FULL_CYCLE]);
+    for (const r of repeat.rows) {
+      set("logistics", ptype, r.bucket, "repeat_revenue", Number(r.rev));
+      set("logistics", ptype, r.bucket, "repeat_machines", Number(r.cnt));
+    }
+  }
+  return out;
+}
