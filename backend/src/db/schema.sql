@@ -704,3 +704,27 @@ CREATE TABLE IF NOT EXISTS first_touch_analysis (
   team_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_first_touch_date ON first_touch_analysis(analyzed_at);
+
+-- Розділ «Статистики» — довгий (EAV) формат: одна метрика на рядок, бо набір
+-- показників різний по відділах. Джерело правди по структурі — catalog.ts.
+-- period_start: R1 = 1-ше число місяця / ПОНЕДІЛОК тижня (у листі тиждень = неділя
+-- → мінус 6 днів). team_lead: NULL = зведення по відділу; R2 «самостійні»→«Шевчук Назар».
+-- source: 'auto' (перерахунок із CRM) | 'manual' (ручний ввід) | 'imported' (одноразовий
+-- імпорт історії з Google-таблиці). Деталі — docs/STATISTICS_SPEC.md §0-БІС.
+CREATE TABLE IF NOT EXISTS statistics_values (
+  id BIGSERIAL PRIMARY KEY,
+  department TEXT NOT NULL,
+  period_type TEXT NOT NULL CHECK (period_type IN ('month','week')),
+  period_start DATE NOT NULL,
+  team_lead TEXT,
+  metric_key TEXT NOT NULL,
+  value NUMERIC,
+  source TEXT NOT NULL CHECK (source IN ('auto','manual','imported')),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by TEXT
+);
+-- COALESCE у ключі: team_lead IS NULL і '' трактуються однаково для унікальності.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_statistics_values
+  ON statistics_values(department, period_type, period_start, COALESCE(team_lead,''), metric_key);
+CREATE INDEX IF NOT EXISTS idx_statistics_values_lookup
+  ON statistics_values(department, period_type, period_start);
