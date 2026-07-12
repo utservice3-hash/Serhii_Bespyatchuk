@@ -7,8 +7,8 @@
 // team_lead неможливо. Тому пишемо calls на рівні відділу (team_lead = NULL);
 // у таблиці показник видно в рядку «Разом». Історія (лист) лишається imported.
 //
-// Що рахуємо: УСІ дзвінки відділу за період (будь-який call_type/disposition).
-// Щогодини + старт. Порожній Auth-key → джоба спить (лог, без помилки).
+// Що рахуємо: лише УСПІШНІ дзвінки відділу (disposition='ANSWERED', тобто з
+// розмовою) за період. Щогодини + старт. Порожній Auth-key → джоба спить.
 
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
@@ -49,16 +49,20 @@ function mondayOf(y: number, m: number, d: number, dow: number): string {
 
 async function countSalesCalls(from: string, to: string): Promise<number> {
   const url = `https://api.ringostat.net/calls/list?export_type=json`
-    + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&fields=calldate,department`;
+    + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&fields=calldate,department,disposition`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 30_000);
   try {
     const res = await fetch(url, { headers: { "Auth-key": config.ringostat.authKey }, signal: ctrl.signal });
     const txt = await res.text();
-    let arr: { department?: string }[];
+    let arr: { department?: string; disposition?: string }[];
     try { arr = JSON.parse(txt); } catch { throw new Error(`Ringostat non-JSON: ${txt.slice(0, 120)}`); }
     if (!Array.isArray(arr)) throw new Error(`Ringostat unexpected: ${txt.slice(0, 120)}`);
-    return arr.filter((c) => (c.department ?? "").trim() === config.ringostat.salesDepartment).length;
+    // Лише успішні (з розмовою): disposition = 'ANSWERED'.
+    return arr.filter((c) =>
+      (c.department ?? "").trim() === config.ringostat.salesDepartment &&
+      (c.disposition ?? "").trim().toUpperCase() === "ANSWERED"
+    ).length;
   } finally { clearTimeout(t); }
 }
 
