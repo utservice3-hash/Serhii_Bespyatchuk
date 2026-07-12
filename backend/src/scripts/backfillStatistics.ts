@@ -18,7 +18,7 @@
 
 import { pool } from "../db/pool.js";
 import { parseCsv } from "../utils/csv.js";
-import { CATALOG, canonTeamLead, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD } from "../statistics/catalog.js";
+import { CATALOG, canonTeamLead, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, STATS_AUTO_FROM, SALES_AUTO_METRICS } from "../statistics/catalog.js";
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number); // 5,6,13,14,15,4
@@ -208,7 +208,12 @@ async function flushAcc(acc: Acc) {
 }
 
 async function flushSalesAuto(auto: Map<string, number>) {
-  const rows = [...auto.entries()];
+  // Пишемо auto ЛИШЕ де CRM надійний: period_start >= STATS_AUTO_FROM і метрика
+  // з SALES_AUTO_METRICS. Старіша історія та cash_deals_amount лишаються imported.
+  const rows = [...auto.entries()].filter(([k]) => {
+    const [, ps, , metric] = k.split("|");
+    return ps >= STATS_AUTO_FROM && SALES_AUTO_METRICS.includes(metric);
+  });
   const CH = 500;
   for (let i = 0; i < rows.length; i += CH) {
     const batch = rows.slice(i, i + CH);

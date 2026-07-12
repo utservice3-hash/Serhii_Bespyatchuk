@@ -212,6 +212,16 @@ export function canonTeamLead(raw: string): string {
   return s;
 }
 
+// Межа довіри до auto-перерахунку sales: до цієї дати CRM-історія в нашій БД
+// НЕПОВНА (глибокі угоди не досинхронізовані — див. docs/STATISTICS_RECONCILIATION.md),
+// тож старіші періоди лишаємо imported (значення з листа). Від цієї дати CRM ≈ лист
+// (звірка: розбіжність revenue_won ≤5%), тому period_start >= цієї межі → auto.
+export const STATS_AUTO_FROM = "2026-01-01";
+// Метрики sales, які НЕ перезаписуємо auto навіть у межах довіри:
+//  cash_deals_amount — payment_type у БД заповнений неповно (auto недобирає ~60%),
+//  тож готівка лишається imported до бекфілу payment_type.
+export const SALES_AUTO_METRICS = ["revenue_won", "machines_success", "machines_dispatched"];
+
 export const DEPARTMENTS = CATALOG.map((d) => d.key);
 export function getDepartment(key: string): DepartmentDef | undefined {
   return CATALOG.find((d) => d.key === key);
