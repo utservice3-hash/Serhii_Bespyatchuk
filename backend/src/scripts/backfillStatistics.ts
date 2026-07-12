@@ -19,6 +19,7 @@
 import { pool } from "../db/pool.js";
 import { parseCsv } from "../utils/csv.js";
 import { CATALOG, canonTeamLead, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, STATS_AUTO_FROM, SALES_AUTO_METRICS } from "../statistics/catalog.js";
+import { computeDeptAuto } from "../statistics/computeAuto.js";
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number); // 5,6,13,14,15,4
@@ -234,6 +235,28 @@ async function flushSalesAuto(auto: Map<string, number>) {
   }
 }
 
+async function flushDeptAuto(dept: Map<string, number>) {
+  const rows = [...dept.entries()];
+  const CH = 500;
+  for (let i = 0; i < rows.length; i += CH) {
+    const batch = rows.slice(i, i + CH);
+    const vals: unknown[] = [];
+    const tuples = batch.map(([k, value], j) => {
+      const [department, pt, ps, metric] = k.split("|");
+      const b = j * 5;
+      vals.push(department, pt, ps, metric, value);
+      return `($${b + 1},$${b + 2},$${b + 3},NULL,$${b + 4},$${b + 5},'auto')`;
+    }).join(",");
+    await pool.query(
+      `INSERT INTO statistics_values (department, period_type, period_start, team_lead, metric_key, value, source)
+       VALUES ${tuples}
+       ON CONFLICT (department, period_type, period_start, COALESCE(team_lead,''), metric_key)
+       DO UPDATE SET value = EXCLUDED.value, source = 'auto', updated_at = now()`,
+      vals
+    );
+  }
+}
+
 // ── Звіт розбіжностей (sales, помісячно, department-total) ────────────────────
 async function reconcile(sheetSnapshot: Map<string, number>, auto: Map<string, number>) {
   // CRM department-total per month = сума по лідах з auto-мапи
@@ -280,9 +303,14 @@ async function main() {
   const auto = await computeSalesAuto();
   console.log(`  обчислено ${auto.size} auto-значень sales`);
 
+  console.log("→ Фаза 2b: dept auto (marketing/logistics) із CRM");
+  const deptAuto = await computeDeptAuto(STATS_AUTO_FROM);
+  console.log(`  обчислено ${deptAuto.size} dept auto-значень`);
+
   console.log("→ Запис у statistics_values");
   await flushAcc(acc);
   await flushSalesAuto(auto);
+  await flushDeptAuto(deptAuto);
   const total = await pool.query<{ n: string }>(`SELECT COUNT(*) n FROM statistics_values`);
   console.log(`  усього рядків у statistics_values: ${total.rows[0].n}`);
 

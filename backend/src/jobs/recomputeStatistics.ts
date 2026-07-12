@@ -11,6 +11,7 @@ import { pool } from "../db/pool.js";
 import {
   canonTeamLead, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, STATS_AUTO_FROM,
 } from "../statistics/catalog.js";
+import { computeDeptAuto } from "../statistics/computeAuto.js";
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number);
@@ -94,23 +95,49 @@ async function run(): Promise<void> {
   }
 
   const rows = [...out.entries()].filter(([k]) => k.split("|")[1] >= STATS_AUTO_FROM);
-  if (rows.length === 0) { status.lastUpserts = 0; return; }
-  const vals: unknown[] = [];
-  const tuples = rows.map(([k, value], j) => {
-    const [pt, ps, lead, metric] = k.split("|");
-    const b = j * 5;
-    vals.push(pt, ps, lead, metric, value);
-    return `('sales',$${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},'auto')`;
-  }).join(",");
-  await pool.query(
-    `INSERT INTO statistics_values (department, period_type, period_start, team_lead, metric_key, value, source)
-     VALUES ${tuples}
-     ON CONFLICT (department, period_type, period_start, COALESCE(team_lead,''), metric_key)
-     DO UPDATE SET value = EXCLUDED.value, source = 'auto', updated_at = now()`,
-    vals
-  );
-  status.lastUpserts = rows.length;
-  console.log(`recomputeStatistics: upserted ${rows.length} sales auto values.`);
+  let upserts = 0;
+  if (rows.length) {
+    const vals: unknown[] = [];
+    const tuples = rows.map(([k, value], j) => {
+      const [pt, ps, lead, metric] = k.split("|");
+      const b = j * 5;
+      vals.push(pt, ps, lead, metric, value);
+      return `('sales',$${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},'auto')`;
+    }).join(",");
+    await pool.query(
+      `INSERT INTO statistics_values (department, period_type, period_start, team_lead, metric_key, value, source)
+       VALUES ${tuples}
+       ON CONFLICT (department, period_type, period_start, COALESCE(team_lead,''), metric_key)
+       DO UPDATE SET value = EXCLUDED.value, source = 'auto', updated_at = now()`,
+      vals
+    );
+    upserts += rows.length;
+  }
+
+  // Відділові auto-метрики (marketing/logistics, рівень відділу, team_lead=NULL)
+  // за поточний період — межа ~40 днів покриває поточний+попередній бакет.
+  const since = new Date(Date.now() - 40 * 864e5).toISOString().slice(0, 10);
+  const dept = await computeDeptAuto(since < STATS_AUTO_FROM ? STATS_AUTO_FROM : since);
+  const dRows = [...dept.entries()];
+  if (dRows.length) {
+    const vals: unknown[] = [];
+    const tuples = dRows.map(([k, value], j) => {
+      const [department, pt, ps, metric] = k.split("|");
+      const b = j * 5;
+      vals.push(department, pt, ps, metric, value);
+      return `($${b + 1},$${b + 2},$${b + 3},NULL,$${b + 4},$${b + 5},'auto')`;
+    }).join(",");
+    await pool.query(
+      `INSERT INTO statistics_values (department, period_type, period_start, team_lead, metric_key, value, source)
+       VALUES ${tuples}
+       ON CONFLICT (department, period_type, period_start, COALESCE(team_lead,''), metric_key)
+       DO UPDATE SET value = EXCLUDED.value, source = 'auto', updated_at = now()`,
+      vals
+    );
+    upserts += dRows.length;
+  }
+  status.lastUpserts = upserts;
+  console.log(`recomputeStatistics: upserted ${upserts} auto values (sales ${rows.length} + dept ${dRows.length}).`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

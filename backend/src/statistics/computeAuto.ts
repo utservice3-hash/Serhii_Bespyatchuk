@@ -18,6 +18,17 @@ const adDealSql = (ref: string) =>
 type Row = { bucket: string; v: string };
 const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
 
+// Увімкнені auto-метрики (пройшли звірку з листом, avg |Δ%| ≤ ~11%, scripts/
+// reconcileDeptAuto.ts). Ключ `${dept}|${metric}`. Решта (ad_leads 30% —
+// різне визначення; канальні lg_*/ad_paid — ще не звірені) лишаються imported.
+export const DEPT_AUTO_ENABLED = new Set([
+  "marketing|non_target_leads",
+  "marketing|ad_budget_total",
+  "logistics|machines_dispatched_total",
+  "logistics|repeat_machines",
+  "logistics|repeat_revenue",
+]);
+
 /**
  * @param since  ISO date — рахуємо лише бакети з period_start >= since.
  */
@@ -26,6 +37,7 @@ export async function computeDeptAuto(since: string): Promise<Map<string, number
   const { adSources } = await getSettings();
   const set = (dept: string, pt: string, ps: string, metric: string, v: number) => {
     if (ps < since) return;
+    if (!DEPT_AUTO_ENABLED.has(`${dept}|${metric}`)) return; // лише звірені
     out.set(`${dept}|${pt}|${ps}|${metric}`, v);
   };
 
