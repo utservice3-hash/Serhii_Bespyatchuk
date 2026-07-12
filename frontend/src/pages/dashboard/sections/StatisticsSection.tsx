@@ -141,7 +141,9 @@ export default function StatisticsSection({ role }: { role?: string }) {
     return { value: met.unit === "percent" && c.value !== null ? pctNorm(c.value) : c.value, source: c.source };
   }
 
-  // «Разом» по відділу за період (сума sum-метрик по лідах; avg/last — перерахунок/останнє)
+  // «Разом» по відділу за період. Якщо метрика має значення на РІВНІ ВІДДІЛУ
+  // (team_lead=NULL, напр. calls з Ringostat — по менеджерах не розбити) —
+  // показуємо його; інакше сума sum-метрик по лідах (avg/last — останнє).
   function totalValue(ps: string, met: StatMetricDef): number | null {
     if (met.source === "derived" && met.formula) {
       return evalFormula(met.formula, (k) => {
@@ -150,6 +152,8 @@ export default function StatisticsSection({ role }: { role?: string }) {
         return totalValue(ps, base);
       });
     }
+    const deptLevel = pivot.get(ps)?.get(ROW)?.get(met.key); // team_lead=NULL рядок
+    if (deptLevel && deptLevel.value !== null) return deptLevel.value;
     let sum = 0, has = false, last: number | null = null;
     for (const lead of leads) {
       const c = pivot.get(ps)?.get(lead)?.get(met.key);

@@ -37,6 +37,7 @@ import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
+import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
@@ -103,6 +104,7 @@ app.get("/api/health", async (_req, res) => {
       kommoCircuit: kommoCircuitState(),
       dataCheck: dc.rows[0] ? { ranAt: dc.rows[0].ran_at, warnings: Number(dc.rows[0].warnings) } : null,
       statistics: getStatisticsStatus(),
+      ringostat: getRingostatStatus(),
     });
   } catch {
     res.json({ ok: true, sync: null });
@@ -220,6 +222,13 @@ cron.schedule("25 * * * *", () => {
   recomputeStatistics().catch((err) => console.error("Statistics recompute failed:", err));
 });
 recomputeStatistics().catch((err) => console.error("Statistics startup recompute failed:", err));
+
+// «Кількість дзвінків» із Ringostat API (відділ «Менеджери з продажу» → sales.calls).
+// Щогодини (:35) + старт. Порожній Auth-key → джоба сама себе пропускає.
+cron.schedule("35 * * * *", () => {
+  syncRingostatCalls().catch((err) => console.error("Ringostat calls sync failed:", err));
+});
+syncRingostatCalls().catch((err) => console.error("Ringostat startup calls sync failed:", err));
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {

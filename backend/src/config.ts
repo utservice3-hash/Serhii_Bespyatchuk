@@ -25,6 +25,13 @@ export const config = {
     token: process.env.LARDI_API_TOKEN ?? "",
     lang: process.env.LARDIWEB_LANG ?? "ru",
   },
+  ringostat: {
+    // Auth-key з Ringostat («Налаштування» → «Інтеграції» → «Ringostat API»).
+    // СЕКРЕТ — лише з env, у репо не тримати. Порожньо → джоба дзвінків спить.
+    authKey: process.env.RINGOSTAT_AUTH_KEY ?? "",
+    // Назва відділу в Ringostat, що відповідає нашому `sales` (звірено з API).
+    salesDepartment: process.env.RINGOSTAT_SALES_DEPT ?? "Менеджери з продажу",
+  },
   receivablesSheetUrl:
     process.env.RECEIVABLES_SHEET_URL ??
     "https://docs.google.com/spreadsheets/d/1FTHbWRYFa_rWNsF4GvwZrf_fL5Vj5zf4ihBRv3LZw2s/export?format=csv&gid=0",
