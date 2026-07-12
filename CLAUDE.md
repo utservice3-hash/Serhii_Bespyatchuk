@@ -110,7 +110,7 @@ overview · **report** · statistics · **depstats** · teams · managers · loy
 - **`jobs/recomputeStatistics`** — щогодини (:25) + старт: перераховує sales auto за поточний міс+тиждень, UPSERT. Guard+60с таймаут. Статус у `/api/health.statistics`.
 - **`scripts/backfillStatistics.ts`** — одноразовий бекфіл (TRUNCATE+import листа+sales auto+звірка). Запуск вручну.
 - **API `/api/statistics`**: `GET /catalog`, `GET /?department&period_type&from&to` (non-admin бачить лише свій розріз sales по команді), `PUT /manual` (лише admin; auto/derived→400). Скоуп sales: `team_id→team_lead` через `SALES_TEAM_LEAD`.
-- Показник `calls` — джерело **Ringostat API** (RS-1, ще не підключено; історія з листа imported).
+- Показник `calls` — джерело **Ringostat API** (`jobs/syncRingostatCalls`, щогодини :35 + старт; Auth-key у prod `.env` `RINGOSTAT_AUTH_KEY`, у репо НЕ тримати). Рахує УСІ дзвінки відділу «Менеджери з продажу» за поточний міс+тиждень → `sales.calls`. ⚠️ **ЛИШЕ рівень відділу** (team_lead=NULL, показано в «Разом»): у API поле оператора/розширення порожнє → по менеджерах не розбити. Історія (до поточного міс) — imported з листа (per-lead). Статус у `/api/health.ringostat`.
 
 ## Звіт (`report`) — авто-заміна ручного Excel-звіту менеджера
 
