@@ -70,7 +70,7 @@ export default function StatisticsSection({ role }: { role?: string }) {
   const [plans, setPlans] = useState<Record<string, number>>({});
   const [scopedTo, setScopedTo] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [fullHistory, setFullHistory] = useState(false);
+  const [range, setRange] = useState<string>("recent"); // recent | all | 2026 | 2025 | 2024
   const [chartMetric, setChartMetric] = useState<string>("revenue_won");
   const [editing, setEditing] = useState<{ ps: string; lead: string | null; key: string } | null>(null);
   const [editVal, setEditVal] = useState<string>("");
@@ -93,18 +93,22 @@ export default function StatisticsSection({ role }: { role?: string }) {
     if (!dept) return;
     setLoading(true);
     try {
-      const from = fullHistory ? undefined : (() => {
+      let from: string | undefined;
+      let to: string | undefined;
+      if (/^\d{4}$/.test(range)) { from = `${range}-01-01`; to = `${range}-12-31`; }
+      else if (range === "all") { from = undefined; }
+      else { // recent: last 12 months / 16 weeks
         const d = new Date();
         if (ptype === "month") d.setMonth(d.getMonth() - 12);
         else d.setDate(d.getDate() - 7 * 16);
-        return d.toISOString().slice(0, 10);
-      })();
-      const res = await fetchStatisticsValues({ department: dept, period_type: ptype, from });
+        from = d.toISOString().slice(0, 10);
+      }
+      const res = await fetchStatisticsValues({ department: dept, period_type: ptype, from, to });
       setRows(res.rows);
       setPlans(res.plans ?? {});
       setScopedTo(res.scopedTo);
     } finally { setLoading(false); }
-  }, [dept, ptype, fullHistory]);
+  }, [dept, ptype, range]);
   useEffect(() => { load(); }, [load]);
 
   // pivot: period_start → lead → metric_key → {value, source}
@@ -228,10 +232,13 @@ export default function StatisticsSection({ role }: { role?: string }) {
             <option value="month">По місяцях</option>
             <option value="week">По тижнях</option>
           </select>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
-            <input type="checkbox" checked={fullHistory} onChange={(e) => setFullHistory(e.target.checked)} />
-            вся історія
-          </label>
+          <select value={range} onChange={(e) => setRange(e.target.value)}>
+            <option value="recent">Останні 12 міс</option>
+            <option value="2026">2026 рік</option>
+            <option value="2025">2025 рік</option>
+            <option value="2024">2024 рік</option>
+            <option value="all">Вся історія</option>
+          </select>
         </div>
       </div>
 
