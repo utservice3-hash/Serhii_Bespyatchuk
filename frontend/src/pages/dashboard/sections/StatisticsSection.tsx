@@ -37,7 +37,7 @@ function evalFormula(formula: string, lookup: (k: string) => number | null): num
   const factor = (): number => {
     const t = eat();
     if (t === "(") { const v = expr(); eat(); return v; }
-    if (t !== undefined && /^[A-Za-z_]/.test(t)) { const v = lookup(t); if (v === null || v === undefined) { bad = true; return 0; } return v; }
+    if (t !== undefined && /^[A-Za-z_]/.test(t)) { const v = lookup(t); return v ?? 0; } // відсутній компонент = 0 (порожньо в листі)
     return Number(t);
   };
   const term = (): number => {

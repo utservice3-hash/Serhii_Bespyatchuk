@@ -14,7 +14,7 @@ const HINTS: Record<string, string> = {
   success: "Угоди в статусі «Успішна угода» (142), за датою закриття в періоді.",
   payment: "Угоди, що ЗАРАЗ на етапі «Оплата отримана» (знімок).",
   pending: "Очікувані кошти = сума виставлених рахунків (етап «Виставлено рахунок»), знімок. Мінусові угоди (напр. Київтеплоенерго у Шевчука) віднімаються автоматично.",
-  avg: "Отримані кошти ÷ кількість угод.",
+  avg: "(Отримані кошти + очікувані оплати) ÷ поставлені машини — єдиний стандарт.",
   repeatRev: "Отримані кошти від постійних клієнтів (2+ оплати lifetime).",
   newRev: "Отримані кошти від нових клієнтів (перша оплата в періоді).",
   carryover: "Знімок угод, ще в роботі на 1-ше число (рахунок→оплата, крім «Успішна»).",
@@ -78,8 +78,9 @@ function isect(aFrom: string, aTo: string, bFrom: string, bTo: string): [string,
   return f <= t ? [f, t] : null;
 }
 
-const paidDealsFact = (o: ExecutiveOverview) => o.successDeals + o.paymentDeals;
-const avgCheck = (o: ExecutiveOverview) => { const n = paidDealsFact(o); return n > 0 ? Math.round(o.fact / n) : 0; };
+// Стандарт власника: (отримані кошти [успішно+оплата] + очікувані) ÷ поставлені машини.
+const avgCheck = (o: ExecutiveOverview, cars: number) =>
+  cars > 0 ? Math.round((o.fact + (o.pendingPayments?.revenue ?? 0)) / cars) : 0;
 
 function fmtVal(v: number, unit: Unit) {
   if (unit === "money") return formatAmount(v);
@@ -116,7 +117,7 @@ const METRICS: Metric[] = [
   { key: "newRev", label: "Виручка від нових клієнтів", unit: "money", group: "💰 Дохід", get: (b) => b.ov.newRevenue, planKind: "new_revenue", flow: true, editable: true, hint: HINTS.newRev },
   { key: "repeatRev", label: "Виручка від постійних клієнтів", unit: "money", group: "💰 Дохід", get: (b) => b.ov.repeatRevenue, planKind: "repeat_revenue", flow: true, editable: true, hint: HINTS.repeatRev },
   { key: "carryover", label: "Перенесено з мин. міс.", unit: "money", group: "💰 Дохід", get: (b) => b.ov.carryover?.amount ?? 0, planKind: null, flow: false, weekly: false, hint: HINTS.carryover },
-  { key: "avg", label: "Середній чек", unit: "moneyFull", group: "💰 Дохід", get: (b) => avgCheck(b.ov), planKind: "avg_check", flow: false, editable: true, hint: HINTS.avg },
+  { key: "avg", label: "Середній чек", unit: "moneyFull", group: "💰 Дохід", get: (b) => avgCheck(b.ov, b.ex.dispatched.count), planKind: "avg_check", flow: false, editable: true, hint: HINTS.avg },
   { key: "managers", label: "Менеджерів у продажу", unit: "num", group: "💰 Дохід", get: (b) => b.ex.managersCount, planKind: "managers_count", flow: false, editable: true, hint: HINTS.managers },
   { key: "avgPerMgr", label: "Середня сума на менеджера", unit: "money", group: "💰 Дохід", get: (b) => (b.ex.managersCount > 0 ? Math.round(b.ov.fact / b.ex.managersCount) : 0), planKind: "avg_per_manager", flow: false, editable: true, hint: HINTS.avgPerMgr },
   // 👥 Угоди та клієнти
@@ -198,7 +199,7 @@ function HeroStrip({ b, plans, ratio, weekStats }: { b: Block; plans: KvpPlans; 
     { label: "Поставлені машини", fact: b.ex.dispatched.count, unit: "num", plan: plans.dispatched_cars ?? null, flow: true, series: hist.map((m) => m.paid), week: weekStats?.dispatched },
     { label: "⏳ Очікувані оплати", fact: o.pendingPayments?.revenue ?? 0, unit: "money", plan: null, flow: false, series: [], sub: `${o.pendingPayments?.deals ?? 0} виставлених рахунків` },
     { label: "Конверсія реклами", fact: o.adConversion.conversion, unit: "pct", plan: plans.ad_conversion ?? null, flow: false, series: hist.map((m) => m.adConversion) },
-    { label: "Середній чек", fact: avgCheck(o), unit: "moneyFull", plan: plans.avg_check ?? null, flow: false, series: hist.map((m) => m.avgCheck) },
+    { label: "Середній чек", fact: avgCheck(o, b.ex.dispatched.count), unit: "moneyFull", plan: plans.avg_check ?? null, flow: false, series: hist.map((m) => m.avgCheck) },
   ];
   return (
     <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", marginBottom: 16 }}>
@@ -747,8 +748,8 @@ function AdEfficiency({ b }: { b: Block }) {
 function Decomposition({ b, plans, periodPlan }: { b: Block; plans: KvpPlans; periodPlan?: boolean }) {
   const o = b.ov;
   const plan = periodPlan ? o.plan : (o.planMonthTotal || plans.received_total || o.plan);
-  const avg = avgCheck(o);
   const carsDone = b.ex.dispatched.count;
+  const avg = avgCheck(o, carsDone);
   const carsNeeded = plans.dispatched_cars ?? (avg > 0 ? Math.ceil(plan / avg) : 0);
   const carsLeft = Math.max(0, carsNeeded - carsDone);
   const conv = o.adConversion.conversion;

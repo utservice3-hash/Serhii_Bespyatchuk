@@ -153,6 +153,7 @@ export interface ExecutiveOverview {
     byTeam: { teamId: number; teamName: string; deals: number; revenue: number }[];
   };
   createdFullCycle: number;
+  dispatchedCount: number;
   createdByStage: { stage: string; label: string; deals: number; amount: number }[];
   carryover: { amount: number; deals: number } | null;
   repeatClientsList: { clientName: string; orders: number; revenue: number }[];
