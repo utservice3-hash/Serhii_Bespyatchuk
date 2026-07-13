@@ -705,9 +705,15 @@ export function Dashboard() {
     setRevealed((r) => ({ ...r, [id]: password }));
   }
 
-  async function handleToggleRole(u: DashboardUser) {
-    await updateUser(u.id, { role: u.role === "team_lead" ? "manager" : "team_lead" });
-    await reloadUsers();
+  async function handleSetRole(u: DashboardUser, role: "admin" | "team_lead" | "manager") {
+    if (role === u.role) return;
+    if (role === "admin" && !window.confirm(`Дати ПОВНИЙ доступ (адмін) користувачу ${u.email}? Він бачитиме й керуватиме всім.`)) return;
+    try {
+      await updateUser(u.id, { role });
+      await reloadUsers();
+    } catch (e) {
+      alert((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Не вдалося змінити роль");
+    }
   }
 
   async function handleToggleActive(u: DashboardUser) {
@@ -1579,44 +1585,38 @@ export function Dashboard() {
                       <td>{u.email}</td>
                       <td>{u.team_name ?? "—"}</td>
                       <td>
-                        {u.role === "admin" ? (
-                          "Керівник відділу продажу"
-                        ) : (
-                          <button
-                            onClick={() => handleToggleRole(u)}
-                            style={{
-                              cursor: "pointer",
-                              border: "1px solid #d0d5dd",
-                              borderRadius: 12,
-                              padding: "2px 10px",
-                              background: u.role === "team_lead" ? "#fef3c7" : "#fff",
-                            }}
-                          >
-                            {u.role === "team_lead" ? "Тімлід" : "Менеджер"}
-                          </button>
-                        )}
+                        <select
+                          value={u.role}
+                          onChange={(e) => handleSetRole(u, e.target.value as "admin" | "team_lead" | "manager")}
+                          title="Роль користувача. «Адмін» = повний доступ до всього."
+                          style={{
+                            cursor: "pointer", borderRadius: 8, padding: "3px 8px", fontSize: 13,
+                            border: "1px solid var(--border)", background: u.role === "admin" ? "#fde7ea" : u.role === "team_lead" ? "#fef3c7" : "var(--card-bg)",
+                            color: "var(--text)", fontWeight: u.role === "admin" ? 700 : 400,
+                          }}
+                        >
+                          <option value="manager">Менеджер</option>
+                          <option value="team_lead">Тімлід</option>
+                          <option value="admin">Адмін (повний доступ)</option>
+                        </select>
                       </td>
                       <td style={{ fontFamily: "monospace" }}>
                         {revealed[u.id] ?? (u.initial_password ? u.initial_password : "••••••")}
                       </td>
                       <td>{u.is_active ? "✓" : "—"}</td>
                       <td style={{ whiteSpace: "nowrap" }}>
-                        {u.role !== "admin" && (
-                          <>
-                            <button
-                              onClick={() => handleResetPassword(u.id)}
-                              style={{ cursor: "pointer", marginRight: 6, fontSize: 12 }}
-                            >
-                              Скинути пароль
-                            </button>
-                            <button
-                              onClick={() => handleToggleActive(u)}
-                              style={{ cursor: "pointer", fontSize: 12 }}
-                            >
-                              {u.is_active ? "Деактивувати" : "Активувати"}
-                            </button>
-                          </>
-                        )}
+                        <button
+                          onClick={() => handleResetPassword(u.id)}
+                          style={{ cursor: "pointer", marginRight: 6, fontSize: 12 }}
+                        >
+                          Скинути пароль
+                        </button>
+                        <button
+                          onClick={async () => { try { await handleToggleActive(u); } catch (e) { alert((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка"); } }}
+                          style={{ cursor: "pointer", fontSize: 12 }}
+                        >
+                          {u.is_active ? "Деактивувати" : "Активувати"}
+                        </button>
                       </td>
                     </tr>
                   ))}

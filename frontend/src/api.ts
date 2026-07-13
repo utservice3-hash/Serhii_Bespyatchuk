@@ -668,7 +668,7 @@ export async function resetUserPassword(id: number): Promise<string> {
 
 export async function updateUser(
   id: number,
-  patch: { role?: "team_lead" | "manager"; isActive?: boolean }
+  patch: { role?: "admin" | "team_lead" | "manager"; isActive?: boolean }
 ): Promise<void> {
   await api.patch(`/settings/users/${id}`, patch);
 }

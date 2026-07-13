@@ -141,25 +141,41 @@ settingsRouter.post("/users/:id/reset-password", async (req, res) => {
   res.json({ password });
 });
 
-// Toggle a user's role (team lead vs. manager) and active state.
+// Change a user's role (admin | team_lead | manager) and active state. Admin-only.
+// Дозволяємо ВИДАВАТИ admin-доступ; захист — не можна зняти/деактивувати
+// ОСТАННЬОГО активного адміністратора (щоб не втратити доступ до системи).
 settingsRouter.patch("/users/:id", async (req, res) => {
   if (!requireAdmin(req.auth!.role, res)) return;
   const id = Number(req.params.id);
-  const current = await pool.query<{ role: string }>(`SELECT role FROM users WHERE id = $1`, [id]);
-  if (!current.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
-  if (current.rows[0].role === "admin") {
-    return res.status(400).json({ error: "Не можна змінювати адміністратора" });
+  const cur = await pool.query<{ role: string; is_active: boolean }>(
+    `SELECT role, is_active FROM users WHERE id = $1`, [id]
+  );
+  if (!cur.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
+
+  const validRole = ["admin", "team_lead", "manager"].includes(req.body.role) ? (req.body.role as string) : null;
+  const newRole = validRole ?? cur.rows[0].role;
+  const newActive = typeof req.body.isActive === "boolean" ? req.body.isActive : cur.rows[0].is_active;
+
+  // Guard: не залишити систему без адміна.
+  const losingAdmin = cur.rows[0].role === "admin" && (newRole !== "admin" || newActive === false);
+  if (losingAdmin) {
+    const others = await pool.query<{ n: string }>(
+      `SELECT COUNT(*) n FROM users WHERE role = 'admin' AND is_active AND id <> $1`, [id]
+    );
+    if (Number(others.rows[0].n) === 0) {
+      return res.status(400).json({ error: "Не можна зняти останнього активного адміністратора" });
+    }
   }
 
   const sets: string[] = [];
   const params: unknown[] = [];
-  if (req.body.role === "team_lead" || req.body.role === "manager") {
-    params.push(req.body.role);
-    sets.push(`role = $${params.length}`);
+  if (validRole) {
+    params.push(newRole); sets.push(`role = $${params.length}`);
+    // Адмін бачить усе — команда йому не потрібна; знімаємо привʼязку.
+    if (newRole === "admin") sets.push(`team_id = NULL`);
   }
   if (typeof req.body.isActive === "boolean") {
-    params.push(req.body.isActive);
-    sets.push(`is_active = $${params.length}`);
+    params.push(newActive); sets.push(`is_active = $${params.length}`);
   }
   if (sets.length === 0) return res.json({ ok: true });
   params.push(id);
