@@ -29,17 +29,27 @@ export async function backfillActDates(opts: { fullCycleOnly?: boolean } = {}): 
   for (let i = 0; i < ids.length; i += 250) {
     const batch = ids.slice(i, i + 250);
     const deals = await fetchLeadsByIds(batch);
+    // Один батчевий UPDATE на пачку: по-рядкові update-и до Neon (~150мс RTT
+    // кожен) розтягували бекфіл 87 тис угод на години.
+    const values: unknown[] = [];
+    const tuples: string[] = [];
     for (const deal of deals) {
       const unloadAt = extractUnloadDate(deal);
       const loadAt = extractLoadDate(deal);
       if (unloadAt || loadAt) {
-        await pool.query(`UPDATE deals SET unload_at = $1, load_at = $2 WHERE kommo_id = $3`, [
-          unloadAt,
-          loadAt,
-          deal.id,
-        ]);
-        updated++;
+        const b = values.length;
+        values.push(deal.id, unloadAt, loadAt);
+        tuples.push(`($${b + 1}::bigint, $${b + 2}::timestamptz, $${b + 3}::timestamptz)`);
       }
+    }
+    if (tuples.length) {
+      await pool.query(
+        `UPDATE deals d SET unload_at = v.unload_at, load_at = v.load_at
+           FROM (VALUES ${tuples.join(",")}) AS v(kommo_id, unload_at, load_at)
+          WHERE d.kommo_id = v.kommo_id`,
+        values
+      );
+      updated += tuples.length;
     }
     processed += batch.length;
     console.log(`  …${processed}/${ids.length} (updated ${updated})`);
