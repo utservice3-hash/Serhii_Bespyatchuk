@@ -4047,6 +4047,34 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
 });
 
 /**
+ * Історія «отриманих коштів» по одному постійному клієнту, помісячно (успішно
+ * закриті 142 угоди повного циклу за датою закриття). Для плитки план-сітки:
+ * піки/падіння замовлень + база для «плану з викликом» (+10–15%).
+ * Повертає: history[{month, orders, revenue}] (13 міс), avgRecent (сер. по
+ * останніх 3 активних міс.), suggestedPlan (avgRecent × 1.12) для челендж-плану.
+ */
+dashboardRouter.get("/repeat-client-history", async (req, res) => {
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const r = await pool.query<{ month: string; orders: string; revenue: string }>(
+    `SELECT to_char(date_trunc('month', (d.closed_at_kommo ${KYIV})), 'YYYY-MM') AS month,
+            COUNT(*) AS orders, COALESCE(SUM(d.price), 0) AS revenue
+       FROM deals d
+      WHERE d.client_key = $1 AND d.pipeline_id = ANY($2) AND d.status_id = 142
+        AND d.closed_at_kommo IS NOT NULL
+        AND (d.closed_at_kommo ${KYIV})::date >= (CURRENT_DATE - INTERVAL '13 months')
+      GROUP BY 1 ORDER BY 1`,
+    [clientKey, [8921932, 155304]]
+  );
+  const history = r.rows.map((x) => ({ month: x.month, orders: Number(x.orders), revenue: Number(x.revenue) }));
+  // Середнє по останніх 3 місяцях, де були оплати (щоб пусті місяці не занижували).
+  const active = history.filter((h) => h.revenue > 0).slice(-3);
+  const avgRecent = active.length ? Math.round(active.reduce((s, h) => s + h.revenue, 0) / active.length) : 0;
+  res.json({ history, avgRecent, suggestedPlan: Math.round(avgRecent * 1.12) });
+});
+
+/**
  * Save a per-client repeat-plan row (monthly plan + metadata from the КВП sheet:
  * forecast volume, realization %, international y/n, we-do y/n, call link,
  * comment). Admin/team-lead; a team-lead may edit only their own team's clients.

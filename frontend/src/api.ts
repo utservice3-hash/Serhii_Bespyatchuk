@@ -325,6 +325,16 @@ export async function fetchRepeatClientPlanHistory(clientKey: string, month: str
   return data.history;
 }
 
+export interface RepeatClientHistory {
+  history: { month: string; orders: number; revenue: number }[];
+  avgRecent: number;
+  suggestedPlan: number;
+}
+export async function fetchRepeatClientHistory(clientKey: string): Promise<RepeatClientHistory> {
+  const { data } = await api.get<RepeatClientHistory>("/dashboard/repeat-client-history", { params: { clientKey } });
+  return data;
+}
+
 export interface ConversionTsPoint {
   bucket: string;
   leads: number;

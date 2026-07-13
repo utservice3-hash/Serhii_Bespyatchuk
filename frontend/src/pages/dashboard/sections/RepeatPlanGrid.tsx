@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fetchRepeatPlansGrid, saveRepeatPlan, saveRepeatClientPlan, approveRepeatClientPlan, approveAllRepeatClientPlans, fetchRepeatClientPlanHistory, type RepeatPlansGrid, type RepeatClientPlan, type RepeatClientPlanHistoryEntry, type Team } from "../../../api";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { fetchRepeatPlansGrid, saveRepeatPlan, saveRepeatClientPlan, approveRepeatClientPlan, approveAllRepeatClientPlans, fetchRepeatClientPlanHistory, fetchRepeatClientHistory, type RepeatPlansGrid, type RepeatClientPlan, type RepeatClientPlanHistoryEntry, type RepeatClientHistory, type Team } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { teamOptions } from "../teamColors";
+import { CommentField } from "../../../components/CommentField";
 
 /** Історія змін плану по одному клієнту (хто/коли/дія/план/статус). */
 function PlanHistoryModal({ clientKey, clientName, month, onClose }: { clientKey: string; clientName: string; month: string; onClose: () => void }) {
@@ -35,6 +37,66 @@ function PlanHistoryModal({ clientKey, clientName, month, onClose }: { clientKey
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Плитка клієнта: графік піків/падінь замовлень (виручка помісячно, 13 міс) +
+ * коротка історія + «план з викликом» (+12%), який можна одразу застосувати. */
+function ClientHistoryModal({ clientKey, clientName, onApply, onClose }: {
+  clientKey: string; clientName: string; onApply: (plan: number) => void; onClose: () => void;
+}) {
+  const [data, setData] = useState<RepeatClientHistory | null>(null);
+  useEffect(() => { fetchRepeatClientHistory(clientKey).then(setData).catch(() => setData({ history: [], avgRecent: 0, suggestedPlan: 0 })); }, [clientKey]);
+  const chart = (data?.history ?? []).map((h) => ({ ...h, label: h.month.slice(2) }));
+  const maxRev = Math.max(1, ...chart.map((h) => h.revenue));
+  const recent = (data?.history ?? []).filter((h) => h.revenue > 0).slice(-3);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2100, padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: 12, padding: 20, width: "92vw", maxWidth: 620, maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 className="chart-title" style={{ marginBottom: 0 }}>📊 Замовлення клієнта · {clientName}</h3>
+          <button onClick={onClose} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 12px" }}>✕</button>
+        </div>
+        {data === null ? <p className="loading-text">Завантаження…</p> : chart.length === 0 ? (
+          <p className="loading-text" style={{ margin: 0 }}>Немає оплат за останні 13 місяців.</p>
+        ) : (
+          <>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={chart} margin={{ top: 8, right: 8, bottom: 4, left: 4 }}>
+                <XAxis dataKey="label" fontSize={11} />
+                <YAxis fontSize={11} width={54} tickFormatter={(v) => formatAmount(v as number)} />
+                <Tooltip formatter={(v, n) => [n === "revenue" ? formatAmountFull(v as number) : v, n === "revenue" ? "Виручка" : "Замовлень"]} />
+                <Bar dataKey="revenue" radius={[3, 3, 0, 0]}>
+                  {chart.map((h, i) => (
+                    <Cell key={i} fill={h.revenue >= maxRev * 0.85 ? "#16a34a" : h.revenue <= maxRev * 0.3 ? "#dc2626" : "#c8102e"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "8px 0 4px" }}>
+              🟢 пік · 🔴 падіння. Останні місяці з оплатами:{" "}
+              {recent.map((h) => `${h.month.slice(2)}: ${formatAmount(h.revenue)} (${h.orders})`).join(" · ") || "—"}
+            </p>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 8, padding: "10px 12px", borderRadius: 8, background: "var(--bg-subtle, rgba(127,127,127,0.06))" }}>
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Середнє (3 міс)</div>
+                <div style={{ fontWeight: 700 }}>{formatAmount(data.avgRecent)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>💪 План з викликом (+12%)</div>
+                <div style={{ fontWeight: 700, color: "#16a34a" }}>{formatAmount(data.suggestedPlan)}</div>
+              </div>
+              {data.suggestedPlan > 0 && (
+                <button onClick={() => { onApply(data.suggestedPlan); onClose(); }}
+                  style={{ marginLeft: "auto", padding: "6px 14px", borderRadius: 8, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
+                  Застосувати план з викликом
+                </button>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -80,6 +142,7 @@ function ClientPlanRow({ client, month, managerId, weekPlan, role, onSaved, onHi
     comment: client.comment ?? "",
   });
   const [saving, setSaving] = useState(false);
+  const [histOpen, setHistOpen] = useState(false);
   const planNum = Number(d.plan.replace(/[^\d.-]/g, "")) || 0;
   const dirty =
     planNum !== client.plan ||
@@ -117,6 +180,12 @@ function ClientPlanRow({ client, month, managerId, weekPlan, role, onSaved, onHi
     <tr>
       <td style={{ textAlign: "left", whiteSpace: "nowrap", opacity: client.inactive ? 0.6 : 1 }}>
         {client.inactive && <span title="Давно не замовляв (замовклий)">💤 </span>}{client.clientName}
+        <button onClick={() => setHistOpen(true)} title="Історія замовлень (піки/падіння) + план з викликом"
+          style={{ marginLeft: 6, border: "none", background: "none", cursor: "pointer", fontSize: 13, padding: 0 }}>📊</button>
+        {histOpen && (
+          <ClientHistoryModal clientKey={client.clientKey} clientName={client.clientName}
+            onApply={(p) => setD((s) => ({ ...s, plan: String(p) }))} onClose={() => setHistOpen(false)} />
+        )}
       </td>
       <td style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{client.isCompany ? "🏢" : `👤${client.identifier ? " " + client.identifier : ""}`}</td>
       <td style={{ textAlign: "right" }}>{client.orders}</td>
@@ -144,7 +213,9 @@ function ClientPlanRow({ client, month, managerId, weekPlan, role, onSaved, onHi
           ? <a href={d.callLink} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>🔗</a> : null}
         <input value={d.callLink} onChange={(e) => setD((s) => ({ ...s, callLink: e.target.value }))} placeholder="лінк" style={cellInput} />
       </td>
-      <td style={{ minWidth: 160 }}><input value={d.comment} onChange={(e) => setD((s) => ({ ...s, comment: e.target.value }))} placeholder="коментар" style={cellInput} /></td>
+      <td style={{ minWidth: 180, verticalAlign: "top" }}>
+        <CommentField value={d.comment} onSave={(next) => setD((s) => ({ ...s, comment: next }))} />
+      </td>
       <td style={{ minWidth: 130, whiteSpace: "nowrap" }}>
         {dirty ? (
           <button onClick={save} disabled={saving} title={role === "manager" ? "Надіслати на затвердження" : "Зберегти"}
