@@ -4,6 +4,7 @@ import {
   type ReactivationClient,
 } from "../../../api";
 import { formatAmount } from "../format";
+import { CommentField } from "../../../components/CommentField";
 
 const STATUS_OPTS = [
   { v: "in_progress", label: "🔄 В роботі" },
@@ -174,11 +175,9 @@ export function ReactivationGrid({
                       )}
                     </td>
                     {!readOnly && (
-                      <td style={{ textAlign: "left" }}>
-                        <input value={draft[dkey(c.clientKey, "cm")] ?? c.comment ?? ""} placeholder="—"
-                          onChange={(e) => setDraft((d) => ({ ...d, [dkey(c.clientKey, "cm")]: e.target.value }))}
-                          onBlur={(e) => { if (e.target.value !== (c.comment ?? "")) save(c.clientKey, { comment: e.target.value || null }); }}
-                          style={{ ...inputStyle, width: 140 }} />
+                      <td style={{ textAlign: "left", verticalAlign: "top", minWidth: 180 }}>
+                        <CommentField value={c.comment}
+                          onSave={(next) => { if (next !== (c.comment ?? "")) save(c.clientKey, { comment: next || null }); }} />
                       </td>
                     )}
                     {canDelete && (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchGoals, createGoal, updateGoal, deleteGoal, type MonthlyGoal, type Team } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
+import { CommentField } from "../../../components/CommentField";
 
 const curMonth = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 
@@ -99,9 +100,10 @@ export function GoalsSection({ role, teams }: { role?: string; teams?: Team[] })
                     {teamsView
                       ? (g.comment && <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-muted)" }}>{g.comment}</div>)
                       : (
-                        <input defaultValue={g.comment ?? ""} placeholder="Коментар/прогрес…"
-                          onBlur={(e) => { if (e.target.value !== (g.comment ?? "")) updateGoal(g.id, { comment: e.target.value || null }); }}
-                          style={{ marginTop: 6, width: "100%", border: "none", borderBottom: "1px solid var(--border)", background: "transparent", color: "var(--text)", fontSize: 13, padding: "2px 0" }} />
+                        <div style={{ marginTop: 6 }}>
+                          <CommentField value={g.comment} placeholder="Коментар/прогрес…"
+                            onSave={(next) => updateGoal(g.id, { comment: next || null })} />
+                        </div>
                       )}
                   </div>
                   {!teamsView && (

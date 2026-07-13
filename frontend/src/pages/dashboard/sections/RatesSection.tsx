@@ -838,7 +838,7 @@ function CityInfoView() {
                         <td>{e.title || "—"}</td>
                         <td>{e.phone ? <a href={`tel:${e.phone}`} style={{ color: ACC, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>{e.phone}</a> : "—"}</td>
                         <td style={{ fontWeight: 600 }}>{e.price || "—"}</td>
-                        <td style={{ color: "var(--text-muted)" }}>{e.comment || "—"}</td>
+                        <td style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap", wordBreak: "break-word", maxWidth: 280 }}>{e.comment || "—"}</td>
                         <td style={{ color: "var(--text-muted)", fontSize: 12 }}>{e.authorName || "—"}</td>
                         <td style={{ color: "var(--text-muted)", fontSize: 12, whiteSpace: "nowrap" }}>{e.updatedAt}</td>
                         <td>

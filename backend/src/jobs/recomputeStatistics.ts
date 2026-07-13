@@ -94,6 +94,44 @@ async function run(): Promise<void> {
     for (const r of q2.rows) add(ptype, r.bucket, teamLeadOf(r.team_id), "machines_dispatched", Number(r.disp));
   }
 
+  // Снапшот-метрики (поточний стан, без фільтра дати) — пишемо в ПОТОЧНИЙ місяць
+  // і тиждень: payment_received (оплата отримана), invoiced_amount (вислані
+  // рахунки), managers_count (активні менеджери команди). Історія — imported.
+  const anchors = await pool.query<{ m: string; w: string }>(
+    `SELECT to_char(date_trunc('month', now() AT TIME ZONE 'Europe/Kyiv'),'YYYY-MM-DD') AS m,
+            to_char(date_trunc('week',  now() AT TIME ZONE 'Europe/Kyiv'),'YYYY-MM-DD') AS w`
+  );
+  const curMonth = anchors.rows[0].m, curWeek = anchors.rows[0].w;
+  const snap = await pool.query<{ team_id: number | null; pay: string; inv: string }>(
+    `SELECT m.team_id,
+            COALESCE(SUM(d.price) FILTER (WHERE d.status_id IN (69716460,60412544)),0) AS pay,
+            COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage='invoiced'),0) AS inv
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+       LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE d.pipeline_id = ANY($1) AND (m.team_id IS NULL OR m.team_id = ANY($2))
+      GROUP BY m.team_id`,
+    [FULL_CYCLE, SALES_TEAM_IDS]
+  );
+  for (const r of snap.rows) {
+    const lead = teamLeadOf(r.team_id);
+    for (const pt of ["month", "week"] as const) {
+      const ps = pt === "month" ? curMonth : curWeek;
+      add(pt, ps, lead, "payment_received", Number(r.pay));
+      add(pt, ps, lead, "invoiced_amount", Number(r.inv));
+    }
+  }
+  const mc = await pool.query<{ team_id: number; n: string }>(
+    `SELECT team_id, COUNT(*) n FROM managers WHERE is_active AND team_id = ANY($1) GROUP BY team_id`,
+    [SALES_TEAM_IDS]
+  );
+  for (const r of mc.rows) {
+    const lead = teamLeadOf(r.team_id);
+    for (const pt of ["month", "week"] as const) {
+      const ps = pt === "month" ? curMonth : curWeek;
+      add(pt, ps, lead, "managers_count", Number(r.n));
+    }
+  }
+
   const rows = [...out.entries()].filter(([k]) => k.split("|")[1] >= STATS_AUTO_FROM);
   let upserts = 0;
   if (rows.length) {
