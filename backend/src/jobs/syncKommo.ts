@@ -3,6 +3,8 @@ import {
   extractPhone,
   extractLeadSource,
   extractPaymentType,
+  extractUnloadDate,
+  extractLoadDate,
   fetchAllDeals,
   fetchContactsByIds,
   fetchCompaniesByIds,
@@ -369,8 +371,9 @@ async function upsertDeal(
     `INSERT INTO deals (
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
-         client_name, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17)
+         client_name, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
+         unload_at, load_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17, $18, $19)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -386,7 +389,9 @@ async function upsertDeal(
          lead_generator = EXCLUDED.lead_generator,
          client_source = EXCLUDED.client_source,
          lead_channel = EXCLUDED.lead_channel,
-         payment_type = EXCLUDED.payment_type`,
+         payment_type = EXCLUDED.payment_type,
+         unload_at = EXCLUDED.unload_at,
+         load_at = EXCLUDED.load_at`,
       [
         deal.id,
         deal.name,
@@ -405,6 +410,8 @@ async function upsertDeal(
         source.clientSource,
         source.channel,
         extractPaymentType(deal),
+        extractUnloadDate(deal),
+        extractLoadDate(deal),
       ]
     );
 }

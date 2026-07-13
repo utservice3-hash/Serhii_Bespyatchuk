@@ -71,6 +71,14 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS lead_channel TEXT; -- 'ad' | 'leadgen
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS payment_type TEXT; -- «форма расчета»: Безнал с НДС / без НДС / Наличные / ВАЛЮТА
 CREATE INDEX IF NOT EXISTS idx_deals_lead_channel ON deals(lead_channel);
 
+-- Два якорі (Правило №1 глосарію): unload_at = дата акту (Kommo 463253,
+-- «Дата выгрузки (Дата акта)») — ФІНАНСОВИЙ якір; load_at = «Дата загрузки»
+-- (473637) — операційне поле, не якір. Якір продажів — вхід у 142
+-- (deal_stage_events), не тут.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS unload_at TIMESTAMPTZ;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS load_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_deals_unload_at ON deals(unload_at);
+
 ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_team_lead BOOLEAN NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_deals_manager ON deals(manager_id);

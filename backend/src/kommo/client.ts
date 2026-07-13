@@ -172,6 +172,29 @@ const FIELD_PAYMENT_TYPE = 2097629;
 // the real revenue vs. the calculator budget (`price`). Fallback: «Приход 1».
 const FIELD_INCOME_TOTAL = 2097649;
 const FIELD_INCOME_1 = 2097627;
+// Фінансовий якір (Правило №1 глосарію): дата акту/розвантаження — коли
+// послугу фактично надано. Kommo віддає date-поля юнікс-секундами (рядком).
+const FIELD_UNLOAD_DATE = 463253; // «Дата выгрузки (Дата акта)»
+const FIELD_LOAD_DATE = 473637; // «Дата загрузки» — операційне поле, НЕ якір
+
+function fieldDate(deal: KommoDeal, fieldId: number): Date | null {
+  const raw = fieldText(deal, fieldId);
+  if (!raw) return null;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0) return new Date(n * 1000);
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** «Дата выгрузки (Дата акта)» — фінансовий якір угоди. */
+export function extractUnloadDate(deal: KommoDeal): Date | null {
+  return fieldDate(deal, FIELD_UNLOAD_DATE);
+}
+
+/** «Дата загрузки» — операційна дата початку перевезення. */
+export function extractLoadDate(deal: KommoDeal): Date | null {
+  return fieldDate(deal, FIELD_LOAD_DATE);
+}
 
 /** Total income ("приход") of the deal — real revenue, not the budget. */
 export function extractIncomeAmount(deal: KommoDeal): number | null {
