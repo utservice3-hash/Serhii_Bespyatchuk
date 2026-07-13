@@ -15,7 +15,6 @@ import { computeDeptAuto } from "../statistics/computeAuto.js";
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number);
-const DISPATCH_SQL = "(psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178))";
 const RECENT_DAYS = 75; // покриває поточний + попередній місяць
 
 export interface StatsRecomputeStatus {
@@ -77,21 +76,10 @@ async function run(): Promise<void> {
       const lead = teamLeadOf(r.team_id);
       add(ptype, r.bucket, lead, "revenue_won", Number(r.rev));
       add(ptype, r.bucket, lead, "machines_success", Number(r.succ));
+      // Правило №1 словника: «Поставлені машини» = перейшли в успіх у періоді
+      // (той самий якір, що й дохід). Снапшот-проксі видалено.
+      add(ptype, r.bucket, lead, "machines_dispatched", Number(r.succ));
     }
-    // Q2 created-based: machines_dispatched (снапшот-проксі)
-    const q2 = await pool.query<{ team_id: number | null; bucket: string; disp: string }>(
-      `SELECT m.team_id AS team_id,
-              to_char(date_trunc('${trunc}', (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket,
-              COUNT(*) AS disp
-         FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
-         LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE d.pipeline_id = ANY($1) AND ${DISPATCH_SQL} AND d.created_at_kommo IS NOT NULL
-          AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= (CURRENT_DATE - $3::int)
-          AND (m.team_id IS NULL OR m.team_id = ANY($2))
-        GROUP BY m.team_id, bucket`,
-      [FULL_CYCLE, SALES_TEAM_IDS, RECENT_DAYS]
-    );
-    for (const r of q2.rows) add(ptype, r.bucket, teamLeadOf(r.team_id), "machines_dispatched", Number(r.disp));
   }
 
   // Снапшот-метрики (поточний стан, без фільтра дати) — пишемо в ПОТОЧНИЙ місяць

@@ -552,17 +552,6 @@ dashboardRouter.get("/overview", async (req, res) => {
      WHERE ${cfScope.join(" AND ")}`,
     cfParams
   );
-  // Поставлені машини (снапшот-проксі, як у Звіті/Статистиках) — знаменник
-  // СЕРЕДНЬОГО ЧЕКА за стандартом власника 13.07.2026:
-  // (успішно + оплата отримана + очікувані оплати) ÷ поставлені машини.
-  const dispCntRes = await pool.query<{ c: string }>(
-    `SELECT COUNT(*) AS c FROM deals d JOIN managers m ON m.id = d.manager_id
-     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${cfScope.join(" AND ")}
-       AND (psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178))`,
-    cfParams
-  );
-
   // Where those created deals are now — breakdown by current funnel stage (for
   // the "Створені угоди" drill-down: скільки угод на якому етапі).
   const createdByStageRes = await pool.query<{ stage: string | null; c: string; amount: string }>(
@@ -896,7 +885,9 @@ dashboardRouter.get("/overview", async (req, res) => {
       })),
     },
     createdFullCycle: Number(createdFullRes.rows[0]?.c ?? 0),
-    dispatchedCount: Number(dispCntRes.rows[0]?.c ?? 0),
+    // Правило №1 (словник): «Поставлені машини» = угоди, що ПЕРЕЙШЛИ в «Успішно
+    // реалізовано» в періоді — той самий якір, що й дохід. Снапшот-проксі видалено.
+    dispatchedCount: successDeals,
     createdByStage,
     carryover,
     repeatClientsList,
@@ -2174,11 +2165,12 @@ dashboardRouter.get("/teams", async (req, res) => {
   const lp: unknown[] = [];
   if (from) { lp.push(from); lc.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${lp.length}`); }
   if (to) { lp.push(to); lc.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${lp.length}`); }
+  // Словник §2: знаменник БЕЗ INNER psm (немапнуті не зникають), база — повний цикл.
   const conv = await pool.query<{ tid: number; leads: string; paid: string }>(
     `SELECT t.id AS tid, COUNT(*) AS leads, COUNT(*) FILTER (WHERE psm.funnel_stage='paid') AS paid
      FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${lc.length ? "WHERE " + lc.join(" AND ") : ""} GROUP BY t.id`,
+     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE d.pipeline_id IN (8921932,155304) ${lc.length ? "AND " + lc.join(" AND ") : ""} GROUP BY t.id`,
     lp
   );
   const recv = await pool.query<{ tid: number; debt: string }>(
@@ -2194,28 +2186,13 @@ dashboardRouter.get("/teams", async (req, res) => {
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE psm.funnel_stage = 'invoiced' AND m.team_id IS NOT NULL GROUP BY m.team_id`
   );
-  const tDisp = await pool.query<{ tid: number; c: string }>(
-    `SELECT m.team_id AS tid, COUNT(*) AS c
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE d.pipeline_id IN (8921932,155304) AND m.team_id IS NOT NULL
-       AND (psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178))
-       ${lc.length ? "AND " + lc.join(" AND ") : ""} GROUP BY m.team_id`,
-    lp
-  );
+  // Правило №1: машини = перейшли в успіх у періоді → беремо з success-виборок нижче.
   const mExpQ = await pool.query<{ id: number; rev: string }>(
     `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS rev
      FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE psm.funnel_stage = 'invoiced' AND d.manager_id IS NOT NULL GROUP BY d.manager_id`
   );
-  const mDispQ = await pool.query<{ id: number; c: string }>(
-    `SELECT d.manager_id AS id, COUNT(*) AS c
-     FROM deals d LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE d.pipeline_id IN (8921932,155304) AND d.manager_id IS NOT NULL
-       AND (psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178))
-       ${lc.length ? "AND " + lc.join(" AND ") : ""} GROUP BY d.manager_id`,
-    lp
-  );
+
 
   // Per-manager breakdown for the team drill-down: revenue (success+payment),
   // deals, the month's plan and receivables — one row per active manager.
@@ -2250,12 +2227,11 @@ dashboardRouter.get("/teams", async (req, res) => {
     if (tid) e.teamId = tid;
     return e;
   };
-  for (const r of mSuccess.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
+  for (const r of mSuccess.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); e.dispatched += Number(r.deals); }
   for (const r of mPay.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
   for (const r of mPlan.rows) { mget(r.id, r.tid, r.name).plan += Number(r.plan); }
   for (const r of mRecv.rows) { const e = mmap.get(r.id); if (e) e.receivables += Number(r.debt); }
   for (const r of mExpQ.rows) { const e = mmap.get(r.id); if (e) e.expected += Number(r.rev); }
-  for (const r of mDispQ.rows) { const e = mmap.get(r.id); if (e) e.dispatched += Number(r.c); }
 
   const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; expected: number; dispatched: number }>();
   const get = (id: number, name?: string) => {
@@ -2264,12 +2240,11 @@ dashboardRouter.get("/teams", async (req, res) => {
     if (name) e.teamName = name;
     return e;
   };
-  for (const r of success.rows) { const e = get(r.tid, r.tname); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
+  for (const r of success.rows) { const e = get(r.tid, r.tname); e.revenue += Number(r.rev); e.deals += Number(r.deals); e.dispatched += Number(r.deals); }
   for (const r of pay.rows) { const e = get(r.tid); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
   for (const r of conv.rows) { const e = get(r.tid); e.leads += Number(r.leads); e.paid += Number(r.paid); }
   for (const r of recv.rows) { const e = get(r.tid); e.receivables += Number(r.debt); }
   for (const r of tExp.rows) { const e = get(r.tid); e.expected += Number(r.rev); }
-  for (const r of tDisp.rows) { const e = get(r.tid); e.dispatched += Number(r.c); }
 
   const teams = [...map.values()]
     // Drop teams with no activity in the period (they leak in via the payment /
@@ -2832,18 +2807,15 @@ dashboardRouter.get("/report", async (req, res) => {
   const revenue = successRevenue + paymentRevenue;
   const deals = successDeals + paymentDeals;
   // Full per-manager scorecard (the metrics from the manual Excel report).
-  const DISPATCH = "(psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300, 98470988, 10937178))";
   const { adSources: reportAdSources } = await getSettings();
   const actP: unknown[] = [[8921932, 155304]];
   const actConds = ["d.pipeline_id = ANY($1)", ...scopeSql(actP), ...dateSql("created_at_kommo", actP)];
   actP.push(reportAdSources);
   const actAdIdx = actP.length;
-  const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; dispatched: string; dispatched_sum: string; success: string; success_sum: string }>(
+  const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; success: string; success_sum: string }>(
     `SELECT m.id, m.name,
        COUNT(*) FILTER (WHERE ${adDealSql(`$${actAdIdx}`)}) AS ad_leads,
-       COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes,
-       COUNT(*) FILTER (WHERE ${DISPATCH}) AS dispatched,
-       COALESCE(SUM(d.price) FILTER (WHERE ${DISPATCH}), 0) AS dispatched_sum
+       COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes
      FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
      -- LEFT JOIN: «Прийнято реклами» рахує ВСІ ад-угоди повного циклу незалежно від
      -- поточного етапу (мапиться лише 5 із 15 статусів); quotes/dispatched і далі
@@ -2949,8 +2921,13 @@ dashboardRouter.get("/report", async (req, res) => {
     if (name) e.name = name;
     return e;
   };
-  for (const r of actByMgr.rows) { const e = sc(r.id, r.name); e.adLeads = Number(r.ad_leads); e.quotes = Number(r.quotes); e.dispatched = Number(r.dispatched); e.dispatchedSum = Number(r.dispatched_sum); }
-  for (const r of succByMgr.rows) { const e = sc(r.id, r.name); e.successRevenue = Number(r.revenue); e.successDeals = Number(r.deals); }
+  for (const r of actByMgr.rows) { const e = sc(r.id, r.name); e.adLeads = Number(r.ad_leads); e.quotes = Number(r.quotes); }
+  for (const r of succByMgr.rows) {
+    const e = sc(r.id, r.name);
+    e.successRevenue = Number(r.revenue); e.successDeals = Number(r.deals);
+    // Правило №1: «Поставлені машини» = перейшли в успіх у періоді (= успішні угоди).
+    e.dispatched = Number(r.deals); e.dispatchedSum = Number(r.revenue);
+  }
   for (const r of payByMgr.rows) sc(r.id).paymentReceived = Number(r.s);
   for (const r of expByMgr.rows) sc(r.id).expected = Number(r.s);
   for (const r of transfByMgr.rows) sc(r.id).transfers = Number(r.c);
@@ -2976,8 +2953,9 @@ dashboardRouter.get("/report", async (req, res) => {
   const summary = {
     successRevenue, successDeals, paymentRevenue, paymentDeals,
     revenue, deals,
-    // Стандарт власника: (успішно + оплата + очікувані) ÷ поставлені машини.
-    avgCheck: sumK("dispatched") > 0 ? Math.round((revenue + sumK("expected")) / sumK("dispatched")) : 0,
+    // Стандарт власника: (успішно + оплата + очікувані) ÷ поставлені машини,
+    // де машини = перейшли в успіх у періоді (Правило №1 словника).
+    avgCheck: successDeals > 0 ? Math.round((revenue + sumK("expected")) / successDeals) : 0,
     createdDeals: createdTotal,
     newClients, repeatClients,
     receivables: Number(recvTotal.rows[0]?.total ?? 0),

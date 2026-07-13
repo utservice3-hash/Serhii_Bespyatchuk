@@ -29,10 +29,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   receivablesOverdueWarnDays: 0,
   ratesFallbackFullPerKm: 25,
   ratesFallbackPartPerKm: 15,
-  adSources: [
-    "uts.ua", "Дзвінок з uts.ua", "Callback з uts.ua",
-    "yalogist.com.ua", "Дзвінок з yalogist.com.ua", "Callback з yalogist.com.ua",
-  ],
+  // §3b словника: adSources НЕ має дефолту в коді — список живе в БД
+  // (сид у schema.sql). Відсутність = помилка конфігурації, видима як [].
+  adSources: [] as string[],
 };
 
 /** Reads the persisted settings merged over defaults. */
@@ -40,7 +39,14 @@ export async function getSettings(): Promise<AppSettings> {
   const result = await pool.query<{ data: Partial<AppSettings> }>(
     `SELECT data FROM app_settings WHERE id = 1`
   );
-  return { ...DEFAULT_SETTINGS, ...(result.rows[0]?.data ?? {}) };
+  const merged = { ...DEFAULT_SETTINGS, ...(result.rows[0]?.data ?? {}) };
+  // §3b: adSources БЕЗ code-fallback. Порожній список = помилка конфігурації
+  // (метрики реклами видимо занулюються, а не тихо рахуються «якимось» списком).
+  if (!Array.isArray(merged.adSources) || merged.adSources.length === 0) {
+    console.error("КОНФІГ-ПОМИЛКА: adSources порожній у app_settings — рекламні метрики = 0. Прогони migrate (сид у schema.sql).");
+    merged.adSources = [];
+  }
+  return merged;
 }
 
 settingsRouter.get("/", async (_req, res) => {
@@ -71,10 +77,18 @@ settingsRouter.put("/", async (req, res) => {
       : current.adSources,
   };
 
+  // §3b словника: зміна adSources журналюється (хто/коли/було→стало).
+  const listChanged = JSON.stringify(current.adSources) !== JSON.stringify(next.adSources);
   await pool.query(
     `UPDATE app_settings SET data = $1 WHERE id = 1`,
     [JSON.stringify(next)]
   );
+  if (listChanged) {
+    await pool.query(
+      `INSERT INTO ad_sources_log (changed_by, old_list, new_list) VALUES ($1, $2, $3)`,
+      [`user:${req.auth!.userId}`, JSON.stringify(current.adSources), JSON.stringify(next.adSources)]
+    );
+  }
   res.json({ settings: next });
 });
 

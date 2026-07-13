@@ -181,15 +181,14 @@ export async function evaluateKpiTasks(): Promise<void> {
         );
         actual = Math.round(Number(r.rows[0].v));
       } else if (m.metric === "dispatch_count") {
-        // Cars placed = the manager's deals that ENTERED an "Авто працює" stage
-        // that day (stage-entry events; distinct deals to avoid re-entries).
-        // ⚠️ Задачник рахує ЛИШЕ «Авто працює» — правило «рахунок+авто = один
-        // етап» діє ТІЛЬКИ в статистиках (звіт), не тут (рішення власника).
+        // Правило №1 словника (13.07.2026): «Поставлені машини» = угоди, що
+        // ПЕРЕЙШЛИ в «Успішно реалізовано» того дня. Подієвий варіант
+        // (deal_stage_events, входи в АВТО) видалено — історично недобирав ×2.
         const r = await pool.query<{ c: string }>(
-          `SELECT COUNT(DISTINCT dse.kommo_id) c FROM deal_stage_events dse
-             JOIN deals d ON d.kommo_id = dse.kommo_id
-             WHERE d.manager_id = $1 AND dse.status_id IN (69716300, 98470988, 10937178)
-               AND (dse.changed_at AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
+          `SELECT COUNT(*) c FROM deals d
+             WHERE d.manager_id = $1 AND d.pipeline_id IN (8921932, 155304)
+               AND d.status_id = 142 AND d.closed_at_kommo IS NOT NULL
+               AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date = $2::date`,
           [t.assignee_id, t.plan_date]
         );
         actual = Number(r.rows[0].c);

@@ -11,7 +11,6 @@ import { pool } from "../db/pool.js";
 import { getSettings } from "../routes/settings.js";
 
 const FULL_CYCLE = [8921932, 155304];
-const DISPATCH_SQL = "(psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178))";
 const adDealSql = (ref: string) =>
   `((d.client_source = ANY(${ref}) OR d.lead_channel = 'ad') AND COALESCE(d.client_source,'') NOT ILIKE '%реактив%')`;
 
@@ -64,12 +63,11 @@ export async function computeDeptAuto(since: string): Promise<Map<string, number
          FROM ad_budget_daily GROUP BY bucket`);
     for (const r of adBudget.rows) set("marketing", ptype, r.bucket, "ad_budget_total", Number(r.v));
 
-    // ── logistics.machines_dispatched_total (усі клієнти, dispatch-проксі, за створенням) ──
+    // ── logistics.machines_dispatched_total — Правило №1: перейшли в успіх у періоді ──
     const dispTotal = await pool.query<Row>(
-      `SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
+      `SELECT to_char(date_trunc('${trunc}', (d.closed_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
          FROM deals d
-         LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE d.pipeline_id = ANY($1) AND ${DISPATCH_SQL} AND d.created_at_kommo IS NOT NULL
+        WHERE d.pipeline_id = ANY($1) AND d.status_id = 142 AND d.closed_at_kommo IS NOT NULL
         GROUP BY bucket`, [FULL_CYCLE]);
     for (const r of dispTotal.rows) set("logistics", ptype, r.bucket, "machines_dispatched_total", Number(r.v));
 

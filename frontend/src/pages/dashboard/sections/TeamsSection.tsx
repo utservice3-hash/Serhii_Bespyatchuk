@@ -35,7 +35,7 @@ export function TeamsSection({
                 <th>Отримані кошти</th>
                 <th>Угод</th>
                 <th>Сер. чек</th>
-                <th>Конверсія</th>
+                <th>Конверсія (повний цикл)</th>
                 <th>Дебіторка</th>
               </tr>
             </thead>

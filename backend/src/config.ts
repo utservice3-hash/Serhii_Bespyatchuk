@@ -28,9 +28,9 @@ export const config = {
   ringostat: {
     // Auth-key з Ringostat («Налаштування» → «Інтеграції» → «Ringostat API»).
     // СЕКРЕТ — лише з env, у репо не тримати. Порожньо → джоба дзвінків спить.
+    // Фільтр по department Ringostat ВИДАЛЕНО (словник, техборг): він ненадійний,
+    // мапимо тільки employee_fio → наша команда.
     authKey: process.env.RINGOSTAT_AUTH_KEY ?? "",
-    // Назва відділу в Ringostat, що відповідає нашому `sales` (звірено з API).
-    salesDepartment: process.env.RINGOSTAT_SALES_DEPT ?? "Менеджери з продажу",
   },
   receivablesSheetUrl:
     process.env.RECEIVABLES_SHEET_URL ??

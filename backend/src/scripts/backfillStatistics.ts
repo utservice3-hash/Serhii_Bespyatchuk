@@ -24,7 +24,6 @@ import { computeDeptAuto } from "../statistics/computeAuto.js";
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number); // 5,6,13,14,15,4
 const CASH_SQL = "d.payment_type ILIKE '%нал%' AND d.payment_type NOT ILIKE '%безнал%'";
-const DISPATCH_SQL = "(psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178))";
 
 let warnings = 0;
 const warn = (m: string) => { warnings++; console.warn("  ⚠️ " + m); };
@@ -164,22 +163,11 @@ async function computeSalesAuto(): Promise<Map<string, number>> {
       add("machines_success", Number(row.succ));
       add("cash_deals_amount", Number(row.cash));
     }
-    // Q2: created-based (machines_dispatched) — снапшот-проксі, за датою створення
-    const q2 = await pool.query<{ team_id: number | null; bucket: string; disp: string }>(
-      `SELECT m.team_id AS team_id,
-              to_char(date_trunc('${trunc}', (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket,
-              COUNT(*) AS disp
-         FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
-         LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE d.pipeline_id = ANY($1) AND ${DISPATCH_SQL} AND d.created_at_kommo IS NOT NULL
-          AND (m.team_id IS NULL OR m.team_id = ANY($2))
-        GROUP BY m.team_id, bucket`,
-      [FULL_CYCLE, SALES_TEAM_IDS]
-    );
-    for (const row of q2.rows) {
+    // Правило №1: machines_dispatched = machines_success (якір «успіх»).
+    for (const row of q1.rows) {
       const lead = teamLeadOf(row.team_id);
       const k = `${ptype}|${row.bucket}|${lead}|machines_dispatched`;
-      out.set(k, (out.get(k) ?? 0) + Number(row.disp));
+      out.set(k, (out.get(k) ?? 0) + Number(row.succ));
     }
   }
   return out;

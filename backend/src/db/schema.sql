@@ -728,3 +728,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_statistics_values
   ON statistics_values(department, period_type, period_start, COALESCE(team_lead,''), metric_key);
 CREATE INDEX IF NOT EXISTS idx_statistics_values_lookup
   ON statistics_values(department, period_type, period_start);
+
+-- §3b словника (13.07.2026): adSources живе В БД, а не в дефолтах коду.
+-- Мовчазний мердж дефолтів прибрано з getSettings(); зміни списку журналюються.
+CREATE TABLE IF NOT EXISTS ad_sources_log (
+  id BIGSERIAL PRIMARY KEY,
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  changed_by TEXT,
+  old_list JSONB,
+  new_list JSONB NOT NULL
+);
+-- Разовий сид: якщо adSources ще не збережений у налаштуваннях — записуємо
+-- поточний (колишній дефолтний) список явно.
+INSERT INTO app_settings (id, data) VALUES (1, '{}') ON CONFLICT (id) DO NOTHING;
+UPDATE app_settings SET data = data || '{"adSources":["uts.ua","Дзвінок з uts.ua","Callback з uts.ua","yalogist.com.ua","Дзвінок з yalogist.com.ua","Callback з yalogist.com.ua"]}'::jsonb
+ WHERE id = 1 AND NOT (data ? 'adSources');
+INSERT INTO ad_sources_log (changed_by, old_list, new_list)
+ SELECT 'migration:seed', NULL, data->'adSources' FROM app_settings WHERE id = 1
+   AND NOT EXISTS (SELECT 1 FROM ad_sources_log);
