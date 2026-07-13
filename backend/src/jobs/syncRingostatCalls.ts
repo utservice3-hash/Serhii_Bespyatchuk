@@ -1,16 +1,13 @@
-// «Кількість дзвінків» для розділу «Статистики» — джерело Ringostat API
-// (GET https://api.ringostat.net/calls/list, заголовок Auth-key). Рахує дзвінки
-// поточного місяця й тижня по відділу «Менеджери з продажу» → sales.calls.
+// «Кількість дзвінків» для розділу «Статистики» — Ringostat API (GET
+// https://api.ringostat.net/calls/list, заголовок Auth-key). LIVE per-manager:
+// поле `employee_fio` (ПІБ співробітника) → мапимо на нашого менеджера → тімліда
+// → sales.calls ПО ТІМЛІДАХ. Результативні = була розмова (`billsec > 0`), як
+// «Прийнятий» у ручному експорті.
 //
-// ⚠️ ГРАНУЛЯРНІСТЬ — ЛИШЕ ВІДДІЛ (не по менеджерах): у відповіді API поле
-// employee/extension (`additional_number`) порожнє, тож розбити дзвінки по
-// team_lead неможливо. Тому пишемо calls на рівні відділу (team_lead = NULL);
-// у таблиці показник видно в рядку «Разом». Історія (лист) лишається imported.
-//
-// Що рахуємо: результативні дзвінки відділу = БУЛА РОЗМОВА (`billsec > 0`), як у
-// експорті «Розбивка по менеджерах» («Прийнятий»=1 покриває ANSWERED/PROPER/
-// REPEATED). Суворий disposition='ANSWERED' недобирав PROPER/REPEATED (~20%).
-// Щогодини + старт. Порожній Auth-key → джоба спить.
+// ⚠️ Мапимо по НАШІЙ структурі команд, а НЕ по полю `department` Ringostat —
+// воно ненадійне (той самий менеджер може бути позначений іншим відділом).
+// Рахуємо тільки менеджерів команд продажу (Яцик/Дмитрук/Безпамятний/Шаврова/
+// Михальчевська/Самостійні→Шевчук). Щогодини + старт.
 
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
@@ -26,8 +23,7 @@ export function getRingostatStatus(): RingostatStatus { return { ...status }; }
 let running = false;
 
 const pad = (n: number) => String(n).padStart(2, "0");
-/** Частини поточного часу в Києві. */
-function kyivNow(): { y: number; m: number; d: number; hh: number; mm: number; ss: number; dow: number } {
+function kyivNow() {
   const now = new Date();
   const p = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit",
@@ -41,42 +37,83 @@ function kyivNow(): { y: number; m: number; d: number; hh: number; mm: number; s
     dow: dowMap[get("weekday")] ?? 0,
   };
 }
-/** period_start понеділка тижня, у який попадає (y,m,d). */
 function mondayOf(y: number, m: number, d: number, dow: number): string {
-  const back = (dow + 6) % 7; // Mon=0
   const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() - back);
+  dt.setUTCDate(dt.getUTCDate() - ((dow + 6) % 7));
   return dt.toISOString().slice(0, 10);
 }
 
-async function countSalesCalls(from: string, to: string): Promise<number> {
+const norm = (s: string) => s.toLowerCase().replace(/[ʼ'’`]/g, "'").replace(/\s+/g, "");
+function leadOfTeam(team: string | null): string | null {
+  if (!team) return null;
+  if (/Яцик/i.test(team)) return "Яцик";
+  if (/Дмитрук/i.test(team)) return "Дмитрук";
+  if (/Безпам/i.test(team)) return "Безпамятний";
+  if (/Шаврово/i.test(team)) return "Шаврова";
+  if (/Михальчевсь/i.test(team)) return "Михальчевська";
+  if (/Самост/i.test(team)) return "Шевчук Назар";
+  return null;
+}
+/** ПІБ (employee_fio) → тімлід. Ключі: «прізвищеімʼя» + прізвище (fallback). */
+async function buildLeadMap(): Promise<Map<string, string>> {
+  const r = await pool.query<{ name: string; team: string | null }>(
+    `SELECT m.name, t.name AS team FROM managers m LEFT JOIN teams t ON t.id = m.team_id WHERE m.is_active`
+  );
+  const map = new Map<string, string>();
+  for (const row of r.rows) {
+    const lead = leadOfTeam(row.team);
+    if (!lead) continue;
+    const toks = row.name.trim().split(/\s+/);
+    map.set(norm(toks.slice(0, 2).join("")), lead);
+    if (!map.has(norm(toks[0]))) map.set(norm(toks[0]), lead); // прізвище-fallback (перший виграє)
+  }
+  return map;
+}
+function resolveLead(fio: string, map: Map<string, string>): string | null {
+  const toks = (fio ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!toks.length) return null;
+  return map.get(norm(toks.slice(0, 2).join(""))) ?? map.get(norm(toks[0])) ?? null;
+}
+
+/** Результативні дзвінки (billsec>0) по тімлідах за період. */
+async function callsByLead(from: string, to: string, leadMap: Map<string, string>): Promise<Map<string, number>> {
   const url = `https://api.ringostat.net/calls/list?export_type=json`
-    + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&fields=calldate,department,billsec`;
+    + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&fields=calldate,employee_fio,billsec`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 30_000);
   try {
     const res = await fetch(url, { headers: { "Auth-key": config.ringostat.authKey }, signal: ctrl.signal });
     const txt = await res.text();
-    let arr: { department?: string; billsec?: number | string }[];
+    let arr: { employee_fio?: string; billsec?: number | string }[];
     try { arr = JSON.parse(txt); } catch { throw new Error(`Ringostat non-JSON: ${txt.slice(0, 120)}`); }
     if (!Array.isArray(arr)) throw new Error(`Ringostat unexpected: ${txt.slice(0, 120)}`);
-    // Результативні = була розмова (billsec > 0), як «Прийнятий» у експорті.
-    return arr.filter((c) =>
-      (c.department ?? "").trim() === config.ringostat.salesDepartment &&
-      Number(c.billsec) > 0
-    ).length;
+    const byLead = new Map<string, number>();
+    for (const c of arr) {
+      if (Number(c.billsec) <= 0) continue;
+      const lead = resolveLead(c.employee_fio ?? "", leadMap);
+      if (!lead) continue;
+      byLead.set(lead, (byLead.get(lead) ?? 0) + 1);
+    }
+    return byLead;
   } finally { clearTimeout(t); }
 }
 
-async function upsertCalls(periodType: "month" | "week", periodStart: string, value: number): Promise<void> {
+async function upsert(periodType: "month" | "week", periodStart: string, byLead: Map<string, number>): Promise<void> {
   if (periodStart < STATS_AUTO_FROM) return;
+  // Прибираємо старий відділовий рядок (team_lead=NULL) — тепер розбивка по тімлідах.
   await pool.query(
-    `INSERT INTO statistics_values (department, period_type, period_start, team_lead, metric_key, value, source)
-     VALUES ('sales',$1,$2,NULL,'calls',$3,'auto')
-     ON CONFLICT (department, period_type, period_start, COALESCE(team_lead,''), metric_key)
-     DO UPDATE SET value = EXCLUDED.value, source = 'auto', updated_at = now()`,
-    [periodType, periodStart, value]
+    `DELETE FROM statistics_values WHERE department='sales' AND metric_key='calls'
+       AND period_type=$1 AND period_start=$2 AND team_lead IS NULL`, [periodType, periodStart]
   );
+  for (const [lead, value] of byLead) {
+    await pool.query(
+      `INSERT INTO statistics_values (department, period_type, period_start, team_lead, metric_key, value, source)
+       VALUES ('sales',$1,$2,$3,'calls',$4,'auto')
+       ON CONFLICT (department, period_type, period_start, COALESCE(team_lead,''), metric_key)
+       DO UPDATE SET value = EXCLUDED.value, source = 'auto', updated_at = now()`,
+      [periodType, periodStart, lead, value]
+    );
+  }
 }
 
 export async function syncRingostatCalls(): Promise<void> {
@@ -85,19 +122,18 @@ export async function syncRingostatCalls(): Promise<void> {
   running = true; status.running = true;
   const startedAt = new Date();
   try {
+    const leadMap = await buildLeadMap();
     const n = kyivNow();
     const nowStr = `${n.y}-${pad(n.m)}-${pad(n.d)} ${pad(n.hh)}:${pad(n.mm)}:${pad(n.ss)}`;
-    // місяць
-    const monthStartDate = `${n.y}-${pad(n.m)}-01`;
-    const monthCalls = await countSalesCalls(`${monthStartDate} 00:00:00`, nowStr);
-    await upsertCalls("month", monthStartDate, monthCalls);
-    status.monthCalls = monthCalls;
-    // тиждень
-    const weekStartDate = mondayOf(n.y, n.m, n.d, n.dow);
-    const weekCalls = await countSalesCalls(`${weekStartDate} 00:00:00`, nowStr);
-    await upsertCalls("week", weekStartDate, weekCalls);
+    const monthStart = `${n.y}-${pad(n.m)}-01`;
+    const monthByLead = await callsByLead(`${monthStart} 00:00:00`, nowStr, leadMap);
+    await upsert("month", monthStart, monthByLead);
+    status.monthCalls = [...monthByLead.values()].reduce((s, v) => s + v, 0);
+    const weekStart = mondayOf(n.y, n.m, n.d, n.dow);
+    const weekByLead = await callsByLead(`${weekStart} 00:00:00`, nowStr, leadMap);
+    await upsert("week", weekStart, weekByLead);
     status.lastError = null;
-    console.log(`syncRingostatCalls: month=${monthCalls} week=${weekCalls} (sales calls).`);
+    console.log(`syncRingostatCalls: month ${status.monthCalls} (per-lead ${monthByLead.size}), week ${[...weekByLead.values()].reduce((s, v) => s + v, 0)}.`);
   } catch (err) {
     status.lastError = (err as Error).message;
     console.error("syncRingostatCalls failed:", err);
