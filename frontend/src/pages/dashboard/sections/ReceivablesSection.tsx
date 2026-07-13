@@ -6,6 +6,7 @@ import {
 } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { teamOptions } from "../teamColors";
+import { CommentField } from "../../../components/CommentField";
 
 const inputStyle: React.CSSProperties = {
   font: "inherit", fontSize: 12, padding: "3px 6px", borderRadius: 6,
@@ -127,12 +128,11 @@ export function ReceivablesSection({
                           />
                           {overdue && <span style={{ color: "#dc2626", fontSize: 10, display: "block" }}>прострочено</span>}
                         </td>
-                        <td style={{ textAlign: "left" }}>
-                          <input
-                            defaultValue={x.comment ?? ""}
-                            placeholder="коментар…"
-                            onBlur={(e) => { if (e.target.value !== (x.comment ?? "")) patchInvoice(clientKey, x.invoiceNo ?? "", { comment: e.target.value || null }); }}
-                            style={{ ...inputStyle, width: "100%", minWidth: 140 }}
+                        <td style={{ textAlign: "left", verticalAlign: "top", minWidth: 200 }}>
+                          <CommentField
+                            value={x.comment}
+                            editable={canEditReceivables}
+                            onSave={(next) => patchInvoice(clientKey, x.invoiceNo ?? "", { comment: next || null })}
                           />
                         </td>
                         <td>{x.serviceUrl ? <a href={x.serviceUrl} target="_blank" rel="noreferrer">🔗</a> : "—"}</td>
@@ -224,13 +224,13 @@ export function ReceivablesSection({
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>#</th>
+                    <th style={{ textAlign: "center", width: 36 }}>#</th>
                     <th style={{ textAlign: "left" }}>Клієнт</th>
                     <th style={{ textAlign: "left" }}>Менеджер</th>
                     <th style={{ textAlign: "right" }}>Сума боргу</th>
-                    <th>Днів без оплати</th>
-                    <th>Ліміт</th>
-                    <th>Дата оплати (клієнт)</th>
+                    <th style={{ textAlign: "center" }}>Днів без оплати</th>
+                    <th style={{ textAlign: "center" }}>Ліміт</th>
+                    <th style={{ textAlign: "center" }}>Дата оплати (клієнт)</th>
                     <th style={{ textAlign: "left" }}>Коментар</th>
                   </tr>
                 </thead>
@@ -240,18 +240,18 @@ export function ReceivablesSection({
                     return (
                       <Fragment key={`${c.clientKey}-${i}`}>
                         <tr style={over ? { background: "rgba(220,38,38,0.04)" } : undefined}>
-                          <td style={{ color: "var(--text-muted)" }}>{i + 1}</td>
-                          <td style={{ textAlign: "left" }}>
+                          <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "top" }}>{i + 1}</td>
+                          <td style={{ textAlign: "left", verticalAlign: "top" }}>
                             <button onClick={() => toggleClient(c.clientKey)} title="Показати неоплачені рахунки"
                               style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", fontWeight: 600, padding: 0, textAlign: "left" }}>
                               {caret(c.clientKey)}{c.clientName}
                             </button>
                           </td>
-                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12 }}>{c.managerName}</td>
-                          <td style={{ textAlign: "right", fontWeight: 700 }}>{formatAmount(c.amount)}</td>
-                          <td style={over ? { color: "#dc2626", fontWeight: 700 } : undefined}>{c.overdueDays ?? "—"}</td>
-                          <td style={{ color: "var(--text-muted)" }}>{c.limitDays ?? "—"}</td>
-                          <td>
+                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12, verticalAlign: "top" }}>{c.managerName}</td>
+                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top" }}>{formatAmount(c.amount)}</td>
+                          <td style={{ textAlign: "center", verticalAlign: "top", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>{c.overdueDays ?? "—"}</td>
+                          <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "top" }}>{c.limitDays ?? "—"}</td>
+                          <td style={{ textAlign: "center", verticalAlign: "top" }}>
                             {canEditReceivables ? (
                               <input
                                 type="date"
@@ -264,18 +264,12 @@ export function ReceivablesSection({
                               c.dueDate ? new Date(c.dueDate).toLocaleDateString("uk-UA") : "—"
                             )}
                           </td>
-                          <td style={{ textAlign: "left" }}>
-                            {canEditReceivables ? (
-                              <input
-                                value={c.comment ?? ""}
-                                placeholder="—"
-                                onChange={(e) => patchReceivableNote(c.clientKey, { comment: e.target.value })}
-                                onBlur={(e) => saveReceivableNote({ clientKey: c.clientKey, comment: e.target.value, dueDate: c.dueDate })}
-                                style={{ ...inputStyle, width: "100%", minWidth: 140 }}
-                              />
-                            ) : (
-                              c.comment ?? "—"
-                            )}
+                          <td style={{ textAlign: "left", verticalAlign: "top", minWidth: 220 }}>
+                            <CommentField
+                              value={c.comment}
+                              editable={canEditReceivables}
+                              onSave={(next) => { patchReceivableNote(c.clientKey, { comment: next }); saveReceivableNote({ clientKey: c.clientKey, comment: next, dueDate: c.dueDate }); }}
+                            />
                           </td>
                         </tr>
                         {renderInvoices(c.clientKey, 8)}

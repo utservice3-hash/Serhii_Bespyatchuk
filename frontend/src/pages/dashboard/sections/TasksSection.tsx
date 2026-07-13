@@ -11,6 +11,7 @@ import {
   type Subtask,
 } from "../../../api";
 import { PRIORITY_LABELS } from "../constants";
+import { CommentField } from "../../../components/CommentField";
 
 /** Підзадачі задачі — довільний чекліст, кожен пункт трекається виконано/ні.
  *  Зберігається on-change у tasks.subtasks_json. */
@@ -368,18 +369,19 @@ export function TasksSection({
                                   </span>
                                 </label>
                                 {/* Коментар менеджера НАВПРОТИ КОЖНОГО клієнта (результат дзвінка). */}
-                                <input
-                                  defaultValue={c.comment ?? ""}
-                                  placeholder="Коментар по клієнту (результат дзвінка)…"
-                                  onBlur={(e) => {
-                                    const v = e.target.value.trim() || null;
-                                    if (v === (c.comment ?? null)) return;
-                                    const next = list.map((x, j) => (j === i ? { ...x, comment: v } : x));
-                                    patchTaskLocal(task.id, { checklistJson: next });
-                                    updateTask(task.id, { checklistJson: next });
-                                  }}
-                                  style={{ marginLeft: 22, padding: "3px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
-                                />
+                                <div style={{ marginLeft: 22 }}>
+                                  <CommentField
+                                    value={c.comment}
+                                    placeholder="Коментар по клієнту (результат дзвінка)…"
+                                    onSave={(next) => {
+                                      const v = next.trim() || null;
+                                      if (v === (c.comment ?? null)) return;
+                                      const updated = list.map((x, j) => (j === i ? { ...x, comment: v } : x));
+                                      patchTaskLocal(task.id, { checklistJson: updated });
+                                      updateTask(task.id, { checklistJson: updated });
+                                    }}
+                                  />
+                                </div>
                               </div>
                             ))}
                             <span style={{ fontSize: 11, color: doneN === list.length ? "#16a34a" : "var(--text-muted)", fontWeight: 600 }}>
