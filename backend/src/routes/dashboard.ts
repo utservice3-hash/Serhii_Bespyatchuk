@@ -2218,29 +2218,29 @@ dashboardRouter.get("/teams", async (req, res) => {
   const mRecv = await pool.query<{ id: number; debt: string }>(
     `SELECT r.manager_id AS id, COALESCE(SUM(r.amount),0) AS debt FROM receivables r GROUP BY r.manager_id`
   );
-  type MgrRow = { id: number; name: string; teamId: number; revenue: number; deals: number; plan: number; receivables: number; expected: number; dispatched: number };
+  type MgrRow = { id: number; name: string; teamId: number; revenue: number; deals: number; plan: number; receivables: number; expected: number; dispatched: number; successRev: number };
   const mmap = new Map<number, MgrRow>();
   const mget = (id: number, tid: number | null, name: string): MgrRow => {
     let e = mmap.get(id);
-    if (!e) { e = { id, name, teamId: tid ?? 0, revenue: 0, deals: 0, plan: 0, receivables: 0, expected: 0, dispatched: 0 }; mmap.set(id, e); }
+    if (!e) { e = { id, name, teamId: tid ?? 0, revenue: 0, deals: 0, plan: 0, receivables: 0, expected: 0, dispatched: 0, successRev: 0 }; mmap.set(id, e); }
     if (name) e.name = name;
     if (tid) e.teamId = tid;
     return e;
   };
-  for (const r of mSuccess.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); e.dispatched += Number(r.deals); }
+  for (const r of mSuccess.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); e.dispatched += Number(r.deals); e.successRev += Number(r.rev); }
   for (const r of mPay.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
   for (const r of mPlan.rows) { mget(r.id, r.tid, r.name).plan += Number(r.plan); }
   for (const r of mRecv.rows) { const e = mmap.get(r.id); if (e) e.receivables += Number(r.debt); }
   for (const r of mExpQ.rows) { const e = mmap.get(r.id); if (e) e.expected += Number(r.rev); }
 
-  const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; expected: number; dispatched: number }>();
+  const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; expected: number; dispatched: number; successRev: number }>();
   const get = (id: number, name?: string) => {
     let e = map.get(id);
-    if (!e) { e = { teamId: id, teamName: name ?? "", revenue: 0, deals: 0, leads: 0, paid: 0, receivables: 0, expected: 0, dispatched: 0 }; map.set(id, e); }
+    if (!e) { e = { teamId: id, teamName: name ?? "", revenue: 0, deals: 0, leads: 0, paid: 0, receivables: 0, expected: 0, dispatched: 0, successRev: 0 }; map.set(id, e); }
     if (name) e.teamName = name;
     return e;
   };
-  for (const r of success.rows) { const e = get(r.tid, r.tname); e.revenue += Number(r.rev); e.deals += Number(r.deals); e.dispatched += Number(r.deals); }
+  for (const r of success.rows) { const e = get(r.tid, r.tname); e.revenue += Number(r.rev); e.deals += Number(r.deals); e.dispatched += Number(r.deals); e.successRev += Number(r.rev); }
   for (const r of pay.rows) { const e = get(r.tid); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
   for (const r of conv.rows) { const e = get(r.tid); e.leads += Number(r.leads); e.paid += Number(r.paid); }
   for (const r of recv.rows) { const e = get(r.tid); e.receivables += Number(r.debt); }
@@ -2255,8 +2255,8 @@ dashboardRouter.get("/teams", async (req, res) => {
       teamName: e.teamName,
       revenue: e.revenue,
       deals: e.deals,
-      // Стандарт: (успішно + оплата + очікувані) ÷ поставлені машини.
-      avgCheck: e.dispatched > 0 ? Math.round((e.revenue + e.expected) / e.dispatched) : 0,
+      // ПРОМТ 0.9: один якір — успішна виручка ÷ машини (без снапшотів).
+      avgCheck: e.dispatched > 0 ? Math.round(e.successRev / e.dispatched) : 0,
       conversion: e.leads > 0 ? Math.round((e.paid / e.leads) * 100) : 0,
       receivables: e.receivables,
       managers: [...mmap.values()]
@@ -2266,7 +2266,7 @@ dashboardRouter.get("/teams", async (req, res) => {
           name: m.name,
           revenue: m.revenue,
           deals: m.deals,
-          avgCheck: m.dispatched > 0 ? Math.round((m.revenue + m.expected) / m.dispatched) : 0,
+          avgCheck: m.dispatched > 0 ? Math.round(m.successRev / m.dispatched) : 0,
           plan: m.plan,
           planPct: m.plan > 0 ? Math.round((m.revenue / m.plan) * 100) : 0,
           receivables: m.receivables,
@@ -2953,9 +2953,10 @@ dashboardRouter.get("/report", async (req, res) => {
   const summary = {
     successRevenue, successDeals, paymentRevenue, paymentDeals,
     revenue, deals,
-    // Стандарт власника: (успішно + оплата + очікувані) ÷ поставлені машини,
-    // де машини = перейшли в успіх у періоді (Правило №1 словника).
-    avgCheck: successDeals > 0 ? Math.round((revenue + sumK("expected")) / successDeals) : 0,
+    // ПРОМТ 0.9: чисельник і знаменник — ОДИН якір (перехід в успіх у періоді).
+    // Додавання поточних снапшотів до чисельника мішало якорі (Правило №1.3)
+    // і роздувало чек удвічі (5313 замість ~2800 у листі).
+    avgCheck: successDeals > 0 ? Math.round(successRevenue / successDeals) : 0,
     createdDeals: createdTotal,
     newClients, repeatClients,
     receivables: Number(recvTotal.rows[0]?.total ?? 0),

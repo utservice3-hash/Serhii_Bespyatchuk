@@ -943,9 +943,9 @@ export function Dashboard() {
   const totalDeals = chartData.reduce((sum, s) => sum + s.count, 0);
   // Average check = received money per received-money deal — the same base as
   // the "Отримані кошти" card (успішно + оплата отримана), not per funnel lead.
-  // Стандарт власника: (успішно + оплата + очікувані оплати) ÷ поставлені машини.
+  // ПРОМТ 0.9: один якір — успішна виручка періоду ÷ машини періоду (без снапшотів).
   const avgDeal = overview && (overview.dispatchedCount ?? 0) > 0
-    ? (overview.closedRevenue + (overview.pendingPayments?.revenue ?? 0)) / overview.dispatchedCount : 0;
+    ? overview.successRevenue / overview.dispatchedCount : 0;
 
   // Previous-period equivalents (for growth deltas + drill-down details).
   const prevChart = [...prevStages].map((s) => ({
@@ -955,7 +955,7 @@ export function Dashboard() {
   }));
   const prevDeals = prevChart.reduce((s, x) => s + x.count, 0);
   const prevAvg = prevOverview && (prevOverview.dispatchedCount ?? 0) > 0
-    ? (prevOverview.closedRevenue + (prevOverview.pendingPayments?.revenue ?? 0)) / prevOverview.dispatchedCount : 0;
+    ? prevOverview.successRevenue / prevOverview.dispatchedCount : 0;
 
   // "Угоди" = deals that reached "Виставлено рахунок"…"Успішно реалізовано"
   // (invoiced+paid), created in the period — comes from the overview endpoint.

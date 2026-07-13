@@ -78,9 +78,9 @@ function isect(aFrom: string, aTo: string, bFrom: string, bTo: string): [string,
   return f <= t ? [f, t] : null;
 }
 
-// Стандарт власника: (отримані кошти [успішно+оплата] + очікувані) ÷ поставлені машини.
+// ПРОМТ 0.9: один якір (Правило №1) — успішна виручка періоду ÷ машини періоду.
 const avgCheck = (o: ExecutiveOverview, cars: number) =>
-  cars > 0 ? Math.round((o.fact + (o.pendingPayments?.revenue ?? 0)) / cars) : 0;
+  cars > 0 ? Math.round(o.successRevenue / cars) : 0;
 
 function fmtVal(v: number, unit: Unit) {
   if (unit === "money") return formatAmount(v);

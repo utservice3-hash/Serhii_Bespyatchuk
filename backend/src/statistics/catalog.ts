@@ -67,7 +67,7 @@ export const CATALOG: DepartmentDef[] = [
       { key: "revenue_won", label: "Успішно реалізовано, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 3, csvIndexWeek: 2, order: 1 },
       { key: "payment_received", label: "Оплата отримана (знімок), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 5, csvIndexWeek: 3, order: 2 },
       { key: "invoiced_amount", label: "Очікувані оплати (рахунки), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 7, csvIndexWeek: 4, order: 3 },
-      { key: "avg_check", label: "Середній чек, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "(revenue_won + payment_received + invoiced_amount) / machines_dispatched", csvIndexMonth: 9, csvIndexWeek: 5, order: 4, note: "Стандарт: (успішно+оплата+очікувані)÷поставлені; де знімків нема (історія) — компоненти = 0" },
+      { key: "avg_check", label: "Середній чек, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 9, csvIndexWeek: 5, order: 4, note: "Один якір (Правило №1): успішна виручка ÷ машини; уточнено 13.07 (ПРОМТ 0.9)" },
       { key: "calls", label: "Кількість дзвінків", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 11, csvIndexWeek: 6, order: 5, note: "Ringostat live: employee_fio→тімлід, результативні (billsec>0)" },
       { key: "managers_count", label: "К-ть менеджерів з продажів", unit: "count", source: "auto", aggregation: "last", csvIndexMonth: 13, csvIndexWeek: 7, order: 6 },
       { key: "machines_success", label: "Кількість успішних угод (авто)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 14, csvIndexWeek: 8, order: 7 },
