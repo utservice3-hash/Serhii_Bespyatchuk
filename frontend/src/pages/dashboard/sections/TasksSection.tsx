@@ -162,6 +162,8 @@ export function TasksSection({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openTaskId, setOpenTaskId] = useState<number | null>(null);
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
+  const [expandedKpi, setExpandedKpi] = useState<Set<number>>(new Set());
+  const toggleKpi = (id: number) => setExpandedKpi((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const tabBtn = (active: boolean): React.CSSProperties => ({
     padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer",
@@ -278,13 +280,17 @@ export function TasksSection({
             <tbody>
               {(() => {
                 const q = taskSearch.trim().toLowerCase();
-                let base = tasks;
+                // Діти KPI-періоду (parentId) НЕ показуємо окремими рядками —
+                // вони в розкривному списку своєї задачі-парасольки.
+                const childrenOf = (id: number) => tasks.filter((t) => t.parentId === id)
+                  .sort((a, b) => (a.planDate ?? "").localeCompare(b.planDate ?? ""));
+                let base = tasks.filter((t) => t.parentId == null);
                 // Admin tab: «Мої» = personal tasks — assigned to my own account OR
                 // created by me without an assignee; «Усі» = everything.
                 if (isAdmin) {
                   base = adminTab === "mine"
-                    ? tasks.filter((t) => t.assigneeId === currentManagerId || (t.createdById === currentUserId && t.assigneeId == null))
-                    : tasks;
+                    ? base.filter((t) => t.assigneeId === currentManagerId || (t.createdById === currentUserId && t.assigneeId == null))
+                    : base;
                 }
                 if (assigneeFilter !== "") base = base.filter((t) => t.assigneeId === assigneeFilter);
                 if (statusFilter === "active") base = base.filter((t) => t.status !== "done");
@@ -350,6 +356,41 @@ export function TasksSection({
                           })}
                         </div>
                       )}
+                      {task.taskType === "kpi_period" && (() => {
+                        const kids = childrenOf(task.id);
+                        if (kids.length === 0) return null;
+                        const open = expandedKpi.has(task.id);
+                        const doneN = kids.filter((k) => k.status === "done").length;
+                        return (
+                          <div style={{ paddingLeft: 22, marginTop: 4 }}>
+                            <button onClick={() => toggleKpi(task.id)}
+                              style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", fontSize: 12, fontWeight: 600, padding: 0 }}>
+                              {open ? "▾" : "▸"} Дні плану: {doneN}/{kids.length} виконано
+                            </button>
+                            {open && (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+                                {kids.map((k) => {
+                                  const allDone = k.status === "done";
+                                  return (
+                                    <div key={k.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, borderLeft: `3px solid ${allDone ? "#16a34a" : "var(--border)"}`, paddingLeft: 8 }}>
+                                      <span style={{ fontWeight: 600, minWidth: 84 }}>{allDone ? "✅" : "⬜"} {k.planDate}</span>
+                                      {(k.metricsJson ?? []).map((m, i) => {
+                                        const icon = m.actual == null ? "⏳" : m.done ? "✅" : "❌";
+                                        return (
+                                          <span key={i} title={m.done ? "виконано" : m.actual == null ? "попереду" : "не виконано"}>
+                                            {icon} {METRIC_LBL[m.metric] ?? m.metric}{" "}
+                                            <b style={{ color: m.done ? "#16a34a" : m.actual == null ? "var(--text-muted)" : "#dc2626" }}>{m.actual ?? "—"}</b>/{m.target}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {task.checklistJson && task.checklistJson.length > 0 && (() => {
                         const list = task.checklistJson;
                         const doneN = list.filter((c) => c.done).length;

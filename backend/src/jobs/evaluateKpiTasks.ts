@@ -267,6 +267,15 @@ export async function evaluateKpiTasks(): Promise<void> {
     }
   } catch (err) { console.error("evaluateKpiTasks: retarget step failed:", err); }
 
+  // 6) Rollup «парасольок» kpi_period: задача-період done, коли ВСІ її дні done.
+  //    (діти daily_kpi оцінюються вище; тут лише зводимо статус батька для списку).
+  await pool.query(
+    `UPDATE tasks p SET status = 'done', updated_at = now()
+      WHERE p.task_type = 'kpi_period' AND p.status <> 'done'
+        AND EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = p.id)
+        AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = p.id AND c.status <> 'done')`
+  );
+
   console.log(`KPI tasks evaluated: ${daily.rowCount} daily, ${parents.rowCount} ads, ${aggs.rowCount} aggregate, ${composite.rowCount} composite, ${retargeted} sum-retargeted.`);
 }
 

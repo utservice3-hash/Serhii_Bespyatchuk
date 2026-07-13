@@ -1226,7 +1226,7 @@ export interface Task {
   priority: TaskPriority;
   comments: string | null;
   department: string | null;
-  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "reactivation";
+  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation";
   metric: "ads_count" | "avg_check" | "conversion" | null;
   targetValue: number | null;
   actualValue: number | null;

@@ -188,19 +188,37 @@ tasksRouter.post("/plan", async (req, res) => {
     return res.status(400).json({ error: "Вкажіть хоча б одну ціль (реклама, лідоген, авто, чек або конверсія), або задайте місячний план виручки для «суми»" });
   }
 
-  // One composite daily_kpi task per working day, bundling all the day's targets.
-  const createdIds: number[] = [];
+  // ОДНА задача на період (тиждень/місяць) — «парасолька». Дні НЕ стають окремими
+  // задачами у списку: вони діти (parent_id), сховані в розкривному списку задачі,
+  // де видно прогрес виконано/не виконано по кожному дню. Оцінює/ретаргетить їх
+  // той самий движок (evaluateKpiTasks) — діти лишаються daily_kpi.
+  const periodLabel = period === "week" ? "тиждень" : "місяць";
+  // Підсумкові цілі періоду для згорнутого вигляду задачі.
+  const periodTargets: { metric: string; target: number; actual: number | null; done: boolean }[] = [];
+  if (adsCount && adsCount > 0) periodTargets.push({ metric: "ads_count", target: adsCount, actual: null, done: false });
+  if (leadgenCount && leadgenCount > 0) periodTargets.push({ metric: "leadgen_count", target: leadgenCount, actual: null, done: false });
+  if (dispatchCount && dispatchCount > 0) periodTargets.push({ metric: "dispatch_count", target: dispatchCount, actual: null, done: false });
+  if (avgCheck && avgCheck > 0) periodTargets.push({ metric: "avg_check", target: avgCheck, actual: null, done: false });
+  if (conversion && conversion > 0) periodTargets.push({ metric: "conversion", target: conversion, actual: null, done: false });
+  if (dailyPayment > 0) periodTargets.push({ metric: "payment_amount", target: paymentAmount && paymentAmount > 0 ? paymentAmount : dailyPayment * sorted.length, actual: null, done: false });
+
+  const parentRes = await pool.query<{ id: number }>(
+    `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, plan_date, period_start, period_end, deadline, auto, metrics_json, department)
+     VALUES ($1,'not_started',$2,$3,'kpi_period',$4,$4,$5,$5,true,$6,$7) RETURNING id`,
+    [`План на ${periodLabel} (${mgrName}) — ${dailyMetrics.length} показник(и), ${sorted.length} дн.`,
+     assigneeId, auth.userId, periodStart, periodEnd, JSON.stringify(periodTargets), deptName]
+  );
+  const parentId = parentRes.rows[0].id;
+
   for (const day of sorted) {
     const metrics = dailyMetrics.map((m) => ({ ...m, actual: null as number | null, done: false }));
-    const r = await pool.query<{ id: number }>(
-      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, plan_date, period_start, period_end, deadline, auto, metrics_json, department)
-       VALUES ($1,'not_started',$2,$3,'daily_kpi',$4,$4,$4,$4,true,$5,$6) RETURNING id`,
-      [`План на день ${day} — ${dailyMetrics.length} показник(и) (${mgrName})`,
-       assigneeId, auth.userId, day, JSON.stringify(metrics), deptName]
+    await pool.query(
+      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, plan_date, period_start, period_end, deadline, auto, metrics_json, department, parent_id)
+       VALUES ($1,'not_started',$2,$3,'daily_kpi',$4,$4,$4,$4,true,$5,$6,$7)`,
+      [`День ${day} (${mgrName})`, assigneeId, auth.userId, day, JSON.stringify(metrics), deptName, parentId]
     );
-    createdIds.push(r.rows[0].id);
   }
-  res.status(201).json({ created: createdIds.length });
+  res.status(201).json({ created: 1, parentId, days: sorted.length });
 });
 
 // One reactivation task per manager, bundling the picked clients as a checklist
