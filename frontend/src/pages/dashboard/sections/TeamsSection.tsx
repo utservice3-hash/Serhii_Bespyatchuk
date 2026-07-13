@@ -32,7 +32,7 @@ export function TeamsSection({
               <tr>
                 <th>#</th>
                 <th>Команда</th>
-                <th>Виручка</th>
+                <th>Отримані кошти</th>
                 <th>Угод</th>
                 <th>Сер. чек</th>
                 <th>Конверсія</th>
@@ -67,7 +67,7 @@ export function TeamsSection({
                               <thead>
                                 <tr>
                                   <th>Менеджер</th>
-                                  <th>Факт (виручка)</th>
+                                  <th>Факт (отримані кошти)</th>
                                   <th>План міс</th>
                                   <th>Викон.</th>
                                   <th>Угод</th>

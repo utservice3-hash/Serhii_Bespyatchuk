@@ -118,7 +118,7 @@ const planSchema = z.object({
 const METRIC_LABELS: Record<string, string> = {
   ads_count: "Кількість прийнятої реклами",
   leadgen_count: "Кількість прийнятих лідогенів",
-  dispatch_count: "Кількість поставлених авто",
+  dispatch_count: "Поставлені авто (за подіями)",
   avg_check: "Середній чек",
   conversion: "Конверсія",
   payment_amount: "Сума до принесення, ₴",

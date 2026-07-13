@@ -109,12 +109,12 @@ const wget = (m: Metric, b: Block) => (m.weeklyGet ?? m.get)(b);
 const METRICS: Metric[] = [
   // 💰 Дохід
   { key: "received", label: "Отримані кошти", unit: "money", group: "💰 Дохід", get: (b) => b.ov.fact, weeklyGet: (b) => b.ex.flow?.received ?? b.ov.fact, planKind: "revenue", flow: true, hint: HINTS.received },
-  { key: "success", label: "Дохід успішно закритих угод", unit: "money", group: "💰 Дохід", get: (b) => b.ov.successRevenue, planKind: "success", flow: true, editable: true, hint: HINTS.success },
+  { key: "success", label: "Успішно реалізовано", unit: "money", group: "💰 Дохід", get: (b) => b.ov.successRevenue, planKind: "success", flow: true, editable: true, hint: HINTS.success },
   { key: "payment", label: "Оплата отримана (знімок)", unit: "money", group: "💰 Дохід", get: (b) => b.ov.paymentRevenue, planKind: null, flow: false, weekly: false, hint: HINTS.payment },
   { key: "pending", label: "⏳ Очікувані оплати", unit: "money", group: "💰 Дохід", get: (b) => b.ov.pendingPayments?.revenue ?? 0, planKind: null, flow: false, weekly: false, hint: HINTS.pending },
   { key: "dispatchedSum", label: "Сума з поставлених машин", unit: "money", group: "💰 Дохід", get: (b) => b.ex.dispatched.revenue, planKind: "dispatched_sum", flow: true, editable: true, hint: HINTS.dispatchedSum },
-  { key: "newRev", label: "Виручка від нових (РНК)", unit: "money", group: "💰 Дохід", get: (b) => b.ov.newRevenue, planKind: "new_revenue", flow: true, editable: true, hint: HINTS.newRev },
-  { key: "repeatRev", label: "Виручка від постійних (РПК)", unit: "money", group: "💰 Дохід", get: (b) => b.ov.repeatRevenue, planKind: "repeat_revenue", flow: true, editable: true, hint: HINTS.repeatRev },
+  { key: "newRev", label: "Виручка від нових клієнтів", unit: "money", group: "💰 Дохід", get: (b) => b.ov.newRevenue, planKind: "new_revenue", flow: true, editable: true, hint: HINTS.newRev },
+  { key: "repeatRev", label: "Виручка від постійних клієнтів", unit: "money", group: "💰 Дохід", get: (b) => b.ov.repeatRevenue, planKind: "repeat_revenue", flow: true, editable: true, hint: HINTS.repeatRev },
   { key: "carryover", label: "Перенесено з мин. міс.", unit: "money", group: "💰 Дохід", get: (b) => b.ov.carryover?.amount ?? 0, planKind: null, flow: false, weekly: false, hint: HINTS.carryover },
   { key: "avg", label: "Середній чек", unit: "moneyFull", group: "💰 Дохід", get: (b) => avgCheck(b.ov), planKind: "avg_check", flow: false, editable: true, hint: HINTS.avg },
   { key: "managers", label: "Менеджерів у продажу", unit: "num", group: "💰 Дохід", get: (b) => b.ex.managersCount, planKind: "managers_count", flow: false, editable: true, hint: HINTS.managers },
@@ -122,7 +122,7 @@ const METRICS: Metric[] = [
   // 👥 Угоди та клієнти
   { key: "created", label: "Створені угоди (повний цикл)", unit: "num", group: "👥 Угоди та клієнти", get: (b) => b.ov.createdFullCycle, planKind: "created_full_cycle", flow: true, editable: true, hint: HINTS.created },
   { key: "dispatchedCars", label: "Кількість поставлених машин", unit: "num", group: "👥 Угоди та клієнти", get: (b) => b.ex.dispatched.count, planKind: "dispatched_cars", flow: true, editable: true, hint: HINTS.dispatchedCars },
-  { key: "successDeals", label: "Кількість успішних угод", unit: "num", group: "👥 Угоди та клієнти", get: (b) => b.ov.successDeals, planKind: "success_deals", flow: true, editable: true, hint: HINTS.successDeals },
+  { key: "successDeals", label: "Кількість успішних угод (авто)", unit: "num", group: "👥 Угоди та клієнти", get: (b) => b.ov.successDeals, planKind: "success_deals", flow: true, editable: true, hint: HINTS.successDeals },
   { key: "paidDeals", label: "Оплата отримана, шт (знімок)", unit: "num", group: "👥 Угоди та клієнти", get: (b) => b.ov.paymentDeals, planKind: "paid_deals", flow: false, weekly: false, editable: true, hint: HINTS.paidDeals },
   { key: "newClients", label: "Нові клієнти", unit: "num", group: "👥 Угоди та клієнти", get: (b) => b.ov.newClients, planKind: "new_clients", flow: true, editable: true, hint: HINTS.newClients },
   { key: "repeatClients", label: "Постійні клієнти", unit: "num", group: "👥 Угоди та клієнти", get: (b) => b.ov.repeatClients, planKind: "repeat_clients", flow: false, editable: true, hint: HINTS.repeatClients },
@@ -130,7 +130,7 @@ const METRICS: Metric[] = [
   // 🎯 Реклама
   { key: "adBudget", label: "Рекламний бюджет", unit: "money", group: "🎯 Реклама", get: (b) => b.lq.adBudgetFact, planKind: "ad_budget", flow: true, hint: HINTS.adBudget },
   { key: "adGaLeads", label: "Заявки з реклами (GA)", unit: "num", group: "🎯 Реклама", get: (b) => b.lq.adBudgetLeads, planKind: null, flow: true, hint: HINTS.adGaLeads },
-  { key: "adLeads", label: "К-ть лідів з реклами (CRM)", unit: "num", group: "🎯 Реклама", get: (b) => b.ov.adConversion.leads, planKind: "ad_leads", flow: true, editable: true, hint: HINTS.adLeads },
+  { key: "adLeads", label: "Прийнято реклами (CRM)", unit: "num", group: "🎯 Реклама", get: (b) => b.ov.adConversion.leads, planKind: "ad_leads", flow: true, editable: true, hint: HINTS.adLeads },
   { key: "nonTarget", label: "К-ть не цільових лідів", unit: "num", group: "🎯 Реклама", get: (b) => b.lq.nonTargetLeads, planKind: "nontarget_leads", flow: true, editable: true, hint: HINTS.nonTarget },
   { key: "adRevenue", label: "Дохід з реклами", unit: "money", group: "🎯 Реклама", get: (b) => b.ex.ad.revenue, weeklyGet: (b) => b.ex.flow?.ad ?? b.ex.ad.revenue, planKind: "ad_revenue", flow: true, editable: true, hint: HINTS.adRevenue },
   { key: "adDispatched", label: "Поставлені машини з реклами", unit: "num", group: "🎯 Реклама", get: (b) => b.ex.ad.dispatched, planKind: "ad_dispatched", flow: true, editable: true, hint: HINTS.adDispatched },

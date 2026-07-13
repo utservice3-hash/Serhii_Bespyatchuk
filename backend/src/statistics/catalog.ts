@@ -64,16 +64,16 @@ export const CATALOG: DepartmentDef[] = [
     // Тиждень CSV: 0 дата,1 тімлід,2 дохід,3 оплата,4 рахунки,5 сер.чек,6 дзвінки,
     //  7 менеджери,8 успішні машини,9 готівка,10 поставлені,11 дохід сер.чек
     metrics: [
-      { key: "revenue_won", label: "Дохід успішно закритих, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 3, csvIndexWeek: 2, order: 1 },
-      { key: "payment_received", label: "Оплата отримана, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 5, csvIndexWeek: 3, order: 2 },
-      { key: "invoiced_amount", label: "Вислані рахунки, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 7, csvIndexWeek: 4, order: 3 },
-      { key: "avg_check", label: "Середній чек, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_success", csvIndexMonth: 9, csvIndexWeek: 5, order: 4 },
-      { key: "calls", label: "Кількість дзвінків", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 11, csvIndexWeek: 6, order: 5, note: "Ringostat — наповнюється після підключення API (RS-1)" },
+      { key: "revenue_won", label: "Успішно реалізовано, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 3, csvIndexWeek: 2, order: 1 },
+      { key: "payment_received", label: "Оплата отримана (знімок), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 5, csvIndexWeek: 3, order: 2 },
+      { key: "invoiced_amount", label: "Очікувані оплати (рахунки), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 7, csvIndexWeek: 4, order: 3 },
+      { key: "avg_check", label: "Середній чек (успішні), грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_success", csvIndexMonth: 9, csvIndexWeek: 5, order: 4 },
+      { key: "calls", label: "Кількість дзвінків", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 11, csvIndexWeek: 6, order: 5, note: "Ringostat live: employee_fio→тімлід, результативні (billsec>0)" },
       { key: "managers_count", label: "К-ть менеджерів з продажів", unit: "count", source: "auto", aggregation: "last", csvIndexMonth: 13, csvIndexWeek: 7, order: 6 },
-      { key: "machines_success", label: "Кількість успішних авто", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 14, csvIndexWeek: 8, order: 7 },
-      { key: "cash_deals_amount", label: "Успішні угоди готівкою, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 15, csvIndexWeek: 9, order: 8 },
+      { key: "machines_success", label: "Кількість успішних угод (авто)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 14, csvIndexWeek: 8, order: 7 },
+      { key: "cash_deals_amount", label: "Успішні угоди готівкою (приход), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 15, csvIndexWeek: 9, order: 8 },
       { key: "machines_dispatched", label: "Кількість поставлених машин", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 16, csvIndexWeek: 10, order: 9 },
-      { key: "avg_check_income", label: "Дохід сер. чек, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 17, csvIndexWeek: 11, order: 10 },
+      { key: "avg_check_income", label: "Сер. чек на поставлену, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 17, csvIndexWeek: 11, order: 10 },
     ],
   },
   {
@@ -87,7 +87,7 @@ export const CATALOG: DepartmentDef[] = [
     metrics: [
       { key: "quotes", label: "Кількість прорахунків", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 1, csvIndexWeek: 1, order: 1 },
       { key: "new_clients", label: "Кількість нових клієнтів", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 2, csvIndexWeek: 2, order: 2 },
-      { key: "conversion", label: "Конверсія, %", unit: "percent", source: "derived", aggregation: "avg", formula: "new_clients / quotes * 100", csvIndexMonth: 3, csvIndexWeek: 3, order: 3 },
+      { key: "conversion", label: "Конверсія прорахунок→новий, %", unit: "percent", source: "derived", aggregation: "avg", formula: "new_clients / quotes * 100", csvIndexMonth: 3, csvIndexWeek: 3, order: 3 },
       { key: "revenue", label: "Дохід, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 4, csvIndexWeek: 4, order: 4 },
       { key: "avg_check", label: "Середній чек, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue / new_clients", csvIndexMonth: 5, csvIndexWeek: 5, order: 5 },
     ],
@@ -104,7 +104,7 @@ export const CATALOG: DepartmentDef[] = [
     //  12 нові з прорахунків,13 дохід нових Л,14 конв Л,15 бюджет лідогенів,16 сер.чек прорах,
     //  17 собів.ліда прорах,18 к-ть лідогенів,19 дохід усіх,20 сума продажів
     metrics: [
-      { key: "ad_leads", label: "Реклама: кількість лідів", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 1, csvIndexWeek: 1, order: 1 },
+      { key: "ad_leads", label: "Ліди з реклами (з листа)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 1, csvIndexWeek: 1, order: 1 },
       { key: "non_target_leads", label: "Кількість не цільових лідів", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 2, csvIndexWeek: 2, order: 2 },
       { key: "ad_paid_clients", label: "Оплачені авто (реклама)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 3, csvIndexWeek: 3, order: 3 },
       { key: "ad_new_revenue", label: "Дохід з нових клієнтів (Р), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 4, csvIndexWeek: 4, order: 4 },
@@ -187,7 +187,7 @@ export const CATALOG: DepartmentDef[] = [
       { key: "repeat_clients_active", label: "Постійні клієнти в роботі", unit: "count", source: "auto", aggregation: "last", csvIndexMonth: 1, csvIndexWeek: 1, order: 1 },
       { key: "repeat_machines", label: "Машини постійних клієнтів", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 2, csvIndexWeek: 2, order: 2 },
       { key: "repeat_revenue", label: "Сума від постійних, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 3, csvIndexWeek: 3, order: 3 },
-      { key: "avg_check", label: "Середній чек, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "repeat_revenue / repeat_machines", csvIndexMonth: 4, csvIndexWeek: 4, order: 4 },
+      { key: "avg_check", label: "Середній чек (постійні), грн", unit: "uah", source: "derived", aggregation: "avg", formula: "repeat_revenue / repeat_machines", csvIndexMonth: 4, csvIndexWeek: 4, order: 4 },
       { key: "machines_dispatched_total", label: "Поставлені машини (всі клієнти)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 5, csvIndexWeek: 5, order: 5 },
     ],
   },
