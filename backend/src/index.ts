@@ -38,6 +38,7 @@ import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
+import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
@@ -105,6 +106,7 @@ app.get("/api/health", async (_req, res) => {
       dataCheck: dc.rows[0] ? { ranAt: dc.rows[0].ran_at, warnings: Number(dc.rows[0].warnings) } : null,
       statistics: getStatisticsStatus(),
       ringostat: getRingostatStatus(),
+      cashIncome: getCashIncomeStatus(),
     });
   } catch {
     res.json({ ok: true, sync: null });
@@ -229,6 +231,14 @@ cron.schedule("35 * * * *", () => {
   syncRingostatCalls().catch((err) => console.error("Ringostat calls sync failed:", err));
 });
 syncRingostatCalls().catch((err) => console.error("Ringostat startup calls sync failed:", err));
+
+// Готівка = приход (не бюджет). Легкий фетч приходу по готівкових 142-угодах
+// поточного міс+тижня. Раз на 3 год + старт (готівка змінюється повільно, тримаємо
+// навантаження на Kommo низьким).
+cron.schedule("50 */3 * * *", () => {
+  syncCashIncome().catch((err) => console.error("Cash-income sync failed:", err));
+});
+syncCashIncome().catch((err) => console.error("Cash-income startup sync failed:", err));
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {
