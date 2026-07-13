@@ -7,8 +7,10 @@
 // team_lead неможливо. Тому пишемо calls на рівні відділу (team_lead = NULL);
 // у таблиці показник видно в рядку «Разом». Історія (лист) лишається imported.
 //
-// Що рахуємо: лише УСПІШНІ дзвінки відділу (disposition='ANSWERED', тобто з
-// розмовою) за період. Щогодини + старт. Порожній Auth-key → джоба спить.
+// Що рахуємо: результативні дзвінки відділу = БУЛА РОЗМОВА (`billsec > 0`), як у
+// експорті «Розбивка по менеджерах» («Прийнятий»=1 покриває ANSWERED/PROPER/
+// REPEATED). Суворий disposition='ANSWERED' недобирав PROPER/REPEATED (~20%).
+// Щогодини + старт. Порожній Auth-key → джоба спить.
 
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
@@ -49,19 +51,19 @@ function mondayOf(y: number, m: number, d: number, dow: number): string {
 
 async function countSalesCalls(from: string, to: string): Promise<number> {
   const url = `https://api.ringostat.net/calls/list?export_type=json`
-    + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&fields=calldate,department,disposition`;
+    + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&fields=calldate,department,billsec`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 30_000);
   try {
     const res = await fetch(url, { headers: { "Auth-key": config.ringostat.authKey }, signal: ctrl.signal });
     const txt = await res.text();
-    let arr: { department?: string; disposition?: string }[];
+    let arr: { department?: string; billsec?: number | string }[];
     try { arr = JSON.parse(txt); } catch { throw new Error(`Ringostat non-JSON: ${txt.slice(0, 120)}`); }
     if (!Array.isArray(arr)) throw new Error(`Ringostat unexpected: ${txt.slice(0, 120)}`);
-    // Лише успішні (з розмовою): disposition = 'ANSWERED'.
+    // Результативні = була розмова (billsec > 0), як «Прийнятий» у експорті.
     return arr.filter((c) =>
       (c.department ?? "").trim() === config.ringostat.salesDepartment &&
-      (c.disposition ?? "").trim().toUpperCase() === "ANSWERED"
+      Number(c.billsec) > 0
     ).length;
   } finally { clearTimeout(t); }
 }
