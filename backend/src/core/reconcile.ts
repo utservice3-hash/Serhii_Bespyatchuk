@@ -23,10 +23,15 @@ interface KommoWonLead {
   name: string;
   price: number;
   responsible_user_id: number;
+  closed_at: number | null;
 }
 
 const signedPrice = (name: string, price: number) =>
   /мінус/i.test(name || "") ? -Math.abs(price) : price;
+
+/** YYYY-MM у КИЇВСЬКОМУ часі — щоб бакетити Kommo так само, як наше (не по UTC). */
+const kyivMonth = (unix: number | null): string | null =>
+  unix ? new Date(unix * 1000).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" }).slice(0, 7) : null;
 
 /** Останні `n` календарних місяців (включно з поточним), київські межі + Kommo unix (UTC). */
 function lastMonths(n: number): { ym: string; from: string; to: string; fromUnix: number; toUnix: number }[] {
@@ -49,12 +54,14 @@ function lastMonths(n: number): { ym: string; from: string; to: string; fromUnix
   return out;
 }
 
-/** Kommo НАПРЯМУ: виграні ліди (статус 142) повного циклу, закриті в [fromUnix, toUnix). */
+/** Kommo НАПРЯМУ: виграні ліди (статус 142) повного циклу, closed_at у [from, to).
+ * Вікно розширене на ±1 добу — бо межі місяця в нас київські, а filter[closed_at]
+ * у Kommo — по unix (UTC); бакетимо потім по КИЇВСЬКІЙ даті (kyivMonth). */
 async function fetchWonLeads(fromUnix: number, toUnix: number): Promise<KommoWonLead[]> {
   const statusFilter = money.FC_PIPELINES
     .map((p, i) => `filter[statuses][${i}][pipeline_id]=${p}&filter[statuses][${i}][status_id]=142`)
     .join("&");
-  const dateFilter = `filter[closed_at][from]=${fromUnix}&filter[closed_at][to]=${toUnix - 1}`;
+  const dateFilter = `filter[closed_at][from]=${fromUnix - 86400}&filter[closed_at][to]=${toUnix + 86400}`;
   const out: KommoWonLead[] = [];
   for (let page = 1; page <= 400; page++) {
     const data = await kommoGet<{ _embedded?: { leads?: KommoWonLead[] } }>(
@@ -62,7 +69,7 @@ async function fetchWonLeads(fromUnix: number, toUnix: number): Promise<KommoWon
     );
     const leads = data?._embedded?.leads ?? [];
     for (const l of leads) {
-      out.push({ id: l.id, name: l.name ?? "", price: Number(l.price) || 0, responsible_user_id: l.responsible_user_id });
+      out.push({ id: l.id, name: l.name ?? "", price: Number(l.price) || 0, responsible_user_id: l.responsible_user_id, closed_at: l.closed_at ?? null });
     }
     if (leads.length < 250) break;
   }
@@ -143,6 +150,7 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
     const kMgr = new Map<number, { rev: number; n: number }>();
     const kTeam = new Map<number, { rev: number; n: number }>();
     for (const l of won) {
+      if (kyivMonth(l.closed_at) !== M.ym) continue; // бакет по київській даті (як наше)
       const mgr = byKommoUser.get(l.responsible_user_id);
       if (!mgr) continue; // ліди неактивних/несинкнутих користувачів — поза скоупом
       const price = signedPrice(l.name, l.price);
