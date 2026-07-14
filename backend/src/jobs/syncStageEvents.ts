@@ -37,6 +37,41 @@ async function insertEvents(events: KommoStatusEvent[], stageMap: Map<string, st
 
 let eventsRunning = false;
 
+// Максимальне вікно на ОДНУ під-порцію. Раніше вотермарк рухався ЛИШЕ після повного
+// проходу всього вікна («все або нічого»): один збій за 51 сторінку (5 днів × newest-
+// first) втрачав увесь прогрес, вікно росло щодня → само-підсилювана стагнація (вотермарк
+// застряг на 09.07, гроші поточного місяця тихо недораховувались). Тепер обробляємо
+// порціями ≤24 год і рухаємо вотермарк ПІСЛЯ КОЖНОЇ завершеної порції → збій втрачає
+// лише порцію, а не весь прохід; велика діра затягується за кілька порцій.
+const CHUNK_SECONDS = 24 * 60 * 60;
+
+/** Пройти [sinceUnix, untilUnix] під-порціями ≤24 год. Вотермарк рухається на кінець
+ *  КОЖНОЇ завершеної порції лише коли advanceWatermark=true (інкрементний шлях; бекфіл —
+ *  ні). Повертає скільки подій оброблено. Порція, що кинула, лишає вотермарк на попередній
+ *  (наступний прохід її повторить — ON CONFLICT ідемпотентний). */
+async function processWindow(
+  sinceUnix: number,
+  untilUnix: number,
+  stageMap: Map<string, string>,
+  advanceWatermark: boolean
+): Promise<number> {
+  let cursor = sinceUnix;
+  let total = 0;
+  while (cursor < untilUnix) {
+    const chunkUntil = Math.min(cursor + CHUNK_SECONDS, untilUnix);
+    total += await forEachStatusChangeEventPage(cursor, chunkUntil, (events) =>
+      insertEvents(events, stageMap)
+    );
+    if (advanceWatermark) {
+      await pool.query(`UPDATE sync_state SET last_event_at = $1 WHERE id = 1`, [
+        new Date(chunkUntil * 1000),
+      ]);
+    }
+    cursor = chunkUntil;
+  }
+  return total;
+}
+
 /**
  * Pulls Kommo lead_status_changed events into deal_stage_events.
  * @param opts.sinceUnix  Start of the window. Omit for an incremental run from
@@ -65,15 +100,9 @@ export async function syncStageEvents(opts: { sinceUnix?: number; untilUnix?: nu
     const untilUnix = opts.untilUnix ?? now;
 
     const stageMap = await loadStageMap();
-    const total = await forEachStatusChangeEventPage(sinceUnix, untilUnix, (events) =>
-      insertEvents(events, stageMap)
-    );
+    // Інкрементний шлях рухає вотермарк по порціях; бекфіл (--months / точковий) — ні.
+    const total = await processWindow(sinceUnix, untilUnix, stageMap, !isBackfill);
 
-    if (!isBackfill) {
-      await pool.query(`UPDATE sync_state SET last_event_at = $1 WHERE id = 1`, [
-        new Date(untilUnix * 1000),
-      ]);
-    }
     console.log(`Stage events synced: ${total} events (${sinceUnix}..${untilUnix}).`);
   } finally {
     eventsRunning = false;
