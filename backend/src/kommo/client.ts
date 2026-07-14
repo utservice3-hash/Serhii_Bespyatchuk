@@ -48,9 +48,19 @@ const BAN_THRESHOLD = 5;
 const BAN_COOLDOWN_MS = 15 * 60 * 1000;
 let consecutive403 = 0;
 let bannedUntil = 0;
+// Лічильник 429 (rate-limit від Kommo). Поки 0 — глобальний лімітер не потрібен
+// (домовленість: робимо його ЛИШЕ коли реально впремось у 429). Видно в /api/health.
+let total429 = 0;
+let last429At = 0;
 
-export function kommoCircuitState(): { paused: boolean; bannedUntil: number; consecutive403: number } {
-  return { paused: Date.now() < bannedUntil, bannedUntil, consecutive403 };
+export function kommoCircuitState(): {
+  paused: boolean;
+  bannedUntil: number;
+  consecutive403: number;
+  total429: number;
+  last429At: number;
+} {
+  return { paused: Date.now() < bannedUntil, bannedUntil, consecutive403, total429, last429At };
 }
 
 async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
@@ -88,10 +98,19 @@ async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
   if (res.status === 204) {
     return {} as T;
   }
-  if (res.status === 429 && attempt < MAX_RETRIES) {
-    const delayMs = 1000 * 2 ** attempt;
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-    return kommoRequest<T>(path, attempt + 1);
+  if (res.status === 429) {
+    // Rate-limit від Kommo. Логуємо ГУЧНО + рахуємо (домовленість: глобальний лімітер
+    // робимо лише коли реально почнемо впиратись у 429). Retry-After, якщо є, інакше
+    // експоненційний backoff.
+    total429 += 1;
+    last429At = Date.now();
+    const retryAfter = Number(res.headers.get("retry-after"));
+    const delayMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** attempt;
+    console.warn(`Kommo 429 (rate limit) на ${path} — total429=${total429}, чекаю ${delayMs}мс (attempt ${attempt}).`);
+    if (attempt < MAX_RETRIES) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return kommoRequest<T>(path, attempt + 1);
+    }
   }
   if (res.status === 403) {
     // WAF/account block. Trip the breaker after a short streak so we stop

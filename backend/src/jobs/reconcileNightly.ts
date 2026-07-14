@@ -3,6 +3,7 @@ import { runReconcile } from "../core/reconcile.js";
 import { healDealsByIds } from "./backfillMissingDeals.js";
 import { reclassifyAdChannel } from "./syncKommo.js";
 import { backfillClientKey } from "./backfillClientKey.js";
+import { withHeavyJobLock } from "./jobLock.js";
 import { sendAdminAlert } from "../bot/notify.js";
 
 /**
@@ -44,6 +45,9 @@ export async function reconcileNightly(months = 2): Promise<void> {
   }
   running = true;
   try {
+    // Замок job_locks на весь прохід (heartbeat) → syncKommo пропускає свої тіки,
+    // поки звірка+хіл тягнуть Kommo (щоб потоки не наклались і не пробили ліміт).
+    await withHeavyJobLock("reconcile", async () => {
     // 1) Звірка + виявлення дормантних.
     const before = await runReconcile(months);
 
@@ -124,6 +128,7 @@ export async function reconcileNightly(months = 2): Promise<void> {
     console.log(
       `reconcileNightly: ok=${res.ok}, healed=${healed}, integrity=${res.integrity.orphans}, sync_over=${res.rowsOverThreshold.length}, dash_over=${res.dashboardOver.length}, stillMissing=${stillMissing}`
     );
+    });
   } catch (e) {
     console.error("reconcileNightly failed:", e);
     await pool

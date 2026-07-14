@@ -775,3 +775,34 @@ ALTER TABLE reconciliation_runs ADD COLUMN IF NOT EXISTS dashboard_max_delta NUM
 -- AUTO-HEAL: скільки дормантних угод (виграні в Kommo, відсутні в deals) дотягнуто
 -- цієї ночі. ОБОВ'ЯЗКОВО логувати — інакше авто-хіл ховає дірку за зеленою звіркою.
 ALTER TABLE reconciliation_runs ADD COLUMN IF NOT EXISTS healed_count INT NOT NULL DEFAULT 0;
+
+-- КРОК 5 (варіант A): історія прив'язки менеджера до команди. Kommo НЕ веде історію
+-- зміни групи менеджера (events API — лише сутності; /users віддає тільки поточну
+-- групу) → за минуле відновити неможливо. З 14.07.2026 пишемо снапшот САМІ: рядок
+-- з'являється при КОЖНІЙ зміні team_id менеджера в синку (і при першій появі менеджера).
+-- Реконструкція команди на дату D: останній рядок з changed_at <= D. До baseline —
+-- лишається поточна прив'язка (відомий артефакт, позначений у UI командного розрізу).
+CREATE TABLE IF NOT EXISTS manager_team_history (
+  id BIGSERIAL PRIMARY KEY,
+  manager_id INT NOT NULL REFERENCES managers(id) ON DELETE CASCADE,
+  team_id INT,                       -- NULL = без команди
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mth_manager_time ON manager_team_history(manager_id, changed_at DESC);
+-- Baseline поточних прив'язок — РАЗ (guard: лише коли таблиця порожня).
+INSERT INTO manager_team_history (manager_id, team_id, changed_at)
+SELECT id, team_id, now() FROM managers
+WHERE NOT EXISTS (SELECT 1 FROM manager_team_history);
+
+-- КРОК 5: замок важких Kommo-джоб із heartbeat. Замість глобального лімітера —
+-- поки біжить важка джоба (звірка / бекфіл / auto-heal), syncKommo пропускає прохід,
+-- щоб важкий 12-міс потік не наклався на 30-хв синк і разом не перевищив ліміт Kommo.
+-- ⚠️ У БД (не in-process): важкі джоби часто біжать ОКРЕМИМ процесом (nohup), тож
+-- лічильник у пам'яті Express їх би не побачив. ⚠️ Heartbeat (раз на 30с): якщо джоба
+-- впала — замок протухає (>2 хв) і знімається САМ. Ні вічної паузи (як забутий
+-- KOMMO_PAUSED), ні сліпоти до зовнішніх процесів.
+CREATE TABLE IF NOT EXISTS job_locks (
+  name TEXT PRIMARY KEY,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

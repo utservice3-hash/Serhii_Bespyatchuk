@@ -12,6 +12,7 @@ import {
 } from "../kommo/client.js";
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 import { provisionUsers } from "../db/userProvisioning.js";
+import { isHeavyJobActive } from "./jobLock.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -72,6 +73,16 @@ export async function syncManagers(): Promise<number> {
   // remove this once his CRM role is set to «Тимлид».
   const TEAM_LEAD_OVERRIDES = new Set<string>(["3379102"]);
 
+  // Попередня прив'язка (до апдейту) — щоб зафіксувати ЗМІНУ команди в
+  // manager_team_history (варіант A: історію переходів пишемо самі, бо Kommo її не
+  // веде). Мапа kommo_user_id → {internal id, team_id ДО цього синку}.
+  const prevRows = await pool.query<{ id: number; kommo_user_id: string; team_id: number | null }>(
+    `SELECT id, kommo_user_id, team_id FROM managers WHERE kommo_user_id IS NOT NULL`
+  );
+  const prevByUser = new Map(
+    prevRows.rows.map((r) => [String(r.kommo_user_id), { id: r.id, teamId: r.team_id }])
+  );
+
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
     const teamId = group ? teamIdByGroupId.get(group.id) ?? null : null;
@@ -79,7 +90,7 @@ export async function syncManagers(): Promise<number> {
     const isTeamLead = role.toLowerCase().includes("тимл") || TEAM_LEAD_OVERRIDES.has(String(user.id));
     const displayName = NAME_OVERRIDES[String(user.id)] ?? user.name;
 
-    await pool.query(
+    const up = await pool.query<{ id: number }>(
       `INSERT INTO managers (name, kommo_user_id, team_id, is_team_lead, is_active, email)
        VALUES ($1, $2, $3, $4, true, $5)
        ON CONFLICT (kommo_user_id) DO UPDATE SET
@@ -87,9 +98,21 @@ export async function syncManagers(): Promise<number> {
          team_id = EXCLUDED.team_id,
          is_team_lead = EXCLUDED.is_team_lead,
          is_active = true,
-         email = COALESCE(EXCLUDED.email, managers.email)`,
+         email = COALESCE(EXCLUDED.email, managers.email)
+       RETURNING id`,
       [displayName, user.id, teamId, isTeamLead, user.email ?? null]
     );
+    const managerId = up.rows[0].id;
+
+    // Снапшот у manager_team_history: новий менеджер (немає prev) АБО team_id змінився.
+    // null!==null → false (без зайвого рядка); зміна null↔команда → рядок переходу.
+    const prev = prevByUser.get(String(user.id));
+    if (!prev || prev.teamId !== teamId) {
+      await pool.query(
+        `INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`,
+        [managerId, teamId]
+      );
+    }
   }
 
   const activeKommoIds = users.map((user) => user.id);
@@ -217,6 +240,13 @@ let syncRunning = false;
 export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<void> {
   if (syncRunning) {
     console.warn("syncKommo: previous run still in progress — skipping this tick.");
+    return;
+  }
+  // Поки біжить важка Kommo-джоба (звірка / бекфіл / auto-heal, у т.ч. окремим
+  // nohup-процесом) — пропускаємо прохід, щоб їхні потоки не наклались і разом не
+  // перевищили ліміт Kommo. Замок у БД з heartbeat → мертва джоба знімає його сама.
+  if (await isHeavyJobActive()) {
+    console.warn("syncKommo: важка Kommo-джоба активна (job_locks) — пропускаю прохід.");
     return;
   }
   syncRunning = true;

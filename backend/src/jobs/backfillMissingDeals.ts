@@ -7,6 +7,7 @@ import {
 } from "../kommo/client.js";
 import { upsertDeal, reclassifyAdChannel } from "./syncKommo.js";
 import { backfillClientKey } from "./backfillClientKey.js";
+import { withHeavyJobLock } from "./jobLock.js";
 
 /**
  * MASTER_PLAN КРОК 1.4 — бекфіл угод, які Є в Kommo і фігурують у
@@ -92,6 +93,9 @@ export async function healDealsByIds(ids: number[]): Promise<number> {
 }
 
 export async function backfillMissingDeals(fromDate = "2025-06-01"): Promise<void> {
+  // Замок job_locks (heartbeat) на весь бекфіл → syncKommo пропускає тіки, поки
+  // ми тягнемо Kommo батчами (навіть якщо бекфіл біжить окремим nohup-процесом).
+  return withHeavyJobLock("backfill", async () => {
   const idsRes = await pool.query<{ kommo_id: string }>(
     `SELECT DISTINCT e.kommo_id
        FROM deal_stage_events e
@@ -115,6 +119,7 @@ export async function backfillMissingDeals(fromDate = "2025-06-01"): Promise<voi
   console.log(`reclassifyAdChannel: перекваліфіковано канал у ${reclassified} угодах.`);
   await backfillClientKey();
   console.log(`backfillMissingDeals complete.`);
+  });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -23,6 +23,10 @@ export function TeamsSection({
         <h1 className="page-title">Рейтинг команд</h1>
       </div>
       <QuickPeriods active={datePreset} onSelect={(id, range) => { setDatePreset(id); setDateRange(range); }} />
+      <p className="loading-text" style={{ fontSize: 12, opacity: 0.7, margin: "4px 2px 8px" }}
+         title="Kommo не веде історію переходів менеджерів між командами, тож відновити її за минуле неможливо. Історію переходів ми почали записувати 14.07.2026 — з цієї дати командний розріз стає точним.">
+        ⓘ Командна прив'язка менеджерів — <b>станом на сьогодні</b>; історія переходів між командами не велась до 14.07.2026, тож за давніші періоди командний розріз наближений (загальні цифри по відділу і по менеджеру — точні).
+      </p>
       <div className="chart-card">
         {teamsRanking.length === 0 ? (
           <p className="loading-text">Немає даних за період.</p>
