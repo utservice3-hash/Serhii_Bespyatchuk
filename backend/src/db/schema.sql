@@ -769,3 +769,6 @@ CREATE TABLE IF NOT EXISTS reconciliation_runs (
   error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reconciliation_runs_ran_at ON reconciliation_runs(ran_at DESC);
+-- КРОК 4: третій рівень звірки (money.ts ↔ deals) — дашборд.
+ALTER TABLE reconciliation_runs ADD COLUMN IF NOT EXISTS dashboard_over INT NOT NULL DEFAULT 0;
+ALTER TABLE reconciliation_runs ADD COLUMN IF NOT EXISTS dashboard_max_delta NUMERIC;

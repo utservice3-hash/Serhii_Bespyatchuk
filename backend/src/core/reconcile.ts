@@ -16,7 +16,8 @@ import * as money from "./money.js";
  * (анкер по входу) окремо перевіряють юніт-тести + еталон Яцика.
  * ⚠️ Поточний (неповний) місяць виключено з pass/fail — синк лагає, це не дрейф.
  */
-export const RECONCILE_THRESHOLD = 0.005; // 0.5%
+export const RECONCILE_THRESHOLD = 0.005; // 0.5% — синк (deals ↔ Kommo)
+export const DASHBOARD_THRESHOLD = 0.02; // 2% — дашборд (money.ts ↔ deals)
 
 interface KommoWonLead {
   id: number;
@@ -110,9 +111,15 @@ export async function checkIntegrity(): Promise<IntegrityResult> {
 
 export interface ReconResult {
   months: number;
+  // Рівень СИНК: deals ↔ Kommo (status 142 + closed_at). ourRevenue=deals, kommoRevenue=Kommo.
   rows: ReconRow[];
   rowsOverThreshold: ReconRow[];
   maxDeltaPct: number;
+  // Рівень ДАШБОРД: money.ts (вхід у 142) ↔ deals (142, closed_at). ourRevenue=money.ts, kommoRevenue=deals.
+  dashRows: ReconRow[];
+  dashboardOver: ReconRow[];
+  dashboardMaxDelta: number;
+  // Рівень ЦІЛІСНІСТЬ: кожен deal_id з подій є в deals.
   integrity: IntegrityResult;
   ok: boolean;
 }
@@ -131,6 +138,7 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
   for (const t of teamsRes.rows) teamName.set(t.id, t.name);
 
   const rows: ReconRow[] = [];
+  const dashRows: ReconRow[] = [];
   for (const M of lastMonths(months)) {
     // НАШЕ — deals у статусі 142, closed_at у місяці (та сама дефініція, що Kommo).
     // deals.price уже збережено мінусом для мінус-угод → SUM уже нетто.
@@ -144,6 +152,16 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
     );
     const ourMgr = ourRes.rows.map((r) => ({ managerId: r.id, teamId: r.team_id, name: r.name, revenue: Number(r.rev), deals: Number(r.n) }));
     const ourByMgr = new Map(ourMgr.map((r) => [r.managerId, r]));
+
+    // ДАШБОРД — money.ts success (вхід у 142, анкер по події) по менеджеру.
+    const moneyMgr = await money.successByMgr({ from: M.from, to: M.to });
+    const moneyByMgr = new Map(moneyMgr.map((r) => [r.managerId, r]));
+    const moneyTeam = new Map<number, { rev: number; n: number }>();
+    for (const r of moneyMgr) {
+      if (r.teamId == null) continue;
+      const e = moneyTeam.get(r.teamId) ?? { rev: 0, n: 0 };
+      e.rev += r.revenue; e.n += r.deals; moneyTeam.set(r.teamId, e);
+    }
 
     // KOMMO НАПРЯМУ — виграні ліди, закриті в місяці, згруповані по менеджеру/команді.
     const won = await fetchWonLeads(M.fromUnix, M.toUnix);
@@ -183,6 +201,25 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
       const our = ourByMgr.get(mid);
       push("manager", mid, nm, our ? { rev: our.revenue, n: our.deals } : undefined, kMgr.get(mid));
     }
+
+    // ДАШБОРД-рядки: money.ts (a) ↔ deals (b). Мають майже збігатись у закритих
+    // місяцях (з успіху не повертаються — 1-2 виключення на всю історію).
+    const pushDash = (scope: "team" | "manager", id: number, name: string, a: { rev: number; n: number } | undefined, b: { rev: number; n: number } | undefined) => {
+      const aR = a?.rev ?? 0, bR = b?.rev ?? 0, aN = a?.n ?? 0, bN = b?.n ?? 0;
+      if (aR === 0 && bR === 0 && aN === 0 && bN === 0) return;
+      dashRows.push({ ym: M.ym, scope, id, name, ourRevenue: aR, kommoRevenue: bR, ourDeals: aN, kommoDeals: bN, deltaPct: Math.abs(aR - bR) / Math.max(Math.abs(bR), 1) });
+    };
+    const dTeamIds = new Set<number>([...moneyTeam.keys(), ...ourTeam.keys()]);
+    for (const tid of dTeamIds) {
+      const dl = ourTeam.get(tid);
+      pushDash("team", tid, teamName.get(tid) ?? String(tid), moneyTeam.get(tid), dl ? { rev: dl.rev, n: dl.n } : undefined);
+    }
+    const dMgrIds = new Set<number>([...moneyByMgr.keys(), ...ourByMgr.keys()]);
+    for (const mid of dMgrIds) {
+      const nm = moneyByMgr.get(mid)?.name ?? ourByMgr.get(mid)?.name ?? mgrNameById.get(mid) ?? String(mid);
+      const mny = moneyByMgr.get(mid), dl = ourByMgr.get(mid);
+      pushDash("manager", mid, nm, mny ? { rev: mny.revenue, n: mny.deals } : undefined, dl ? { rev: dl.revenue, n: dl.deals } : undefined);
+    }
   }
 
   const integrity = await checkIntegrity();
@@ -192,6 +229,9 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
   const completed = rows.filter((r) => r.ym !== currentYm);
   const rowsOverThreshold = completed.filter((r) => r.deltaPct > RECONCILE_THRESHOLD);
   const maxDeltaPct = completed.reduce((m, r) => Math.max(m, r.deltaPct), 0);
-  const ok = rowsOverThreshold.length === 0 && integrity.orphans === 0;
-  return { months, rows, rowsOverThreshold, maxDeltaPct, integrity, ok };
+  const completedDash = dashRows.filter((r) => r.ym !== currentYm);
+  const dashboardOver = completedDash.filter((r) => r.deltaPct > DASHBOARD_THRESHOLD);
+  const dashboardMaxDelta = completedDash.reduce((m, r) => Math.max(m, r.deltaPct), 0);
+  const ok = rowsOverThreshold.length === 0 && dashboardOver.length === 0 && integrity.orphans === 0;
+  return { months, rows, rowsOverThreshold, maxDeltaPct, dashRows, dashboardOver, dashboardMaxDelta, integrity, ok };
 }

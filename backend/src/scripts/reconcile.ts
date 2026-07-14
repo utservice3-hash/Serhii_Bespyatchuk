@@ -12,19 +12,22 @@ async function main() {
   const months = Number(process.argv.find((a) => a.startsWith("--months="))?.split("=")[1]) || 12;
   const res = await runReconcile(months);
 
-  console.log(`\nЗвірка НАШЕ↔Kommo за ${months} міс — метрика: успішно реалізовано (етап 142)`);
-  console.log(`Рядків перевірено: ${res.rows.length} · понад поріг 0.5%: ${res.rowsOverThreshold.length} · max Δ: ${(res.maxDeltaPct * 100).toFixed(2)}%`);
-  console.log(`Інваріант цілісності deal_stage_events↔deals: ${res.integrity.orphans} сиріт${res.integrity.orphans ? " [" + res.integrity.sample.join(",") + "…]" : " ✓"}`);
+  console.log(`\nЗвірка за ${months} міс (метрика: успішно реалізовано, 142). Три рівні:\n`);
 
-  if (res.rowsOverThreshold.length) {
-    console.log("\n🔴 РОЗБІЖНОСТІ >0.5% (топ 40):");
-    for (const r of [...res.rowsOverThreshold].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 40)) {
-      console.log(
-        `  ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 24).padEnd(24)} наше=${Math.round(r.ourRevenue)} kommo=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (угоди ${r.ourDeals}/${r.kommoDeals})`
-      );
-    }
-  }
-  console.log(res.ok ? "\n✅ ЗЕЛЕНО — наше збігається з Kommo, цілісність ціла." : "\n🔴 Є розбіжності — див. вище (НЕ підганяти поріг).");
+  // 1. Цілісність
+  console.log(`1) ЦІЛІСНІСТЬ  deal_stage_events↔deals: ${res.integrity.orphans} сиріт${res.integrity.orphans ? " [" + res.integrity.sample.join(",") + "…] 🔴" : " ✓"}`);
+
+  // 2. Синк: deals ↔ Kommo (0.5%)
+  console.log(`2) СИНК        deals↔Kommo (поріг 0.5%): перевірено ${res.rows.length} · понад ${res.rowsOverThreshold.length} · max Δ ${(res.maxDeltaPct * 100).toFixed(2)}%${res.rowsOverThreshold.length ? " 🔴" : " ✓"}`);
+  for (const r of [...res.rowsOverThreshold].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 20))
+    console.log(`     ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} deals=${Math.round(r.ourRevenue)} kommo=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (${r.ourDeals}/${r.kommoDeals})`);
+
+  // 3. Дашборд: money.ts ↔ deals (2%)
+  console.log(`3) ДАШБОРД     money.ts↔deals (поріг 2%): перевірено ${res.dashRows.length} · понад ${res.dashboardOver.length} · max Δ ${(res.dashboardMaxDelta * 100).toFixed(2)}%${res.dashboardOver.length ? " 🔴" : " ✓"}`);
+  for (const r of [...res.dashboardOver].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 20))
+    console.log(`     ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} money=${Math.round(r.ourRevenue)} deals=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (${r.ourDeals}/${r.kommoDeals})`);
+
+  console.log(res.ok ? "\n✅ ЗЕЛЕНО — усі три рівні збігаються." : "\n🔴 Є розбіжності — див. вище (НЕ підганяти поріг).");
   return res.ok;
 }
 

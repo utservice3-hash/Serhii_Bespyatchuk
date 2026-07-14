@@ -120,8 +120,10 @@ app.get("/api/health/reconciliation", async (_req, res) => {
     const r = await pool.query<{
       ran_at: Date; ok: boolean; rows_checked: number; rows_over_threshold: number;
       max_delta_pct: string | null; integrity_orphans: number; worst_json: unknown; error: string | null;
+      dashboard_over: number; dashboard_max_delta: string | null;
     }>(
-      `SELECT ran_at, ok, rows_checked, rows_over_threshold, max_delta_pct, integrity_orphans, worst_json, error
+      `SELECT ran_at, ok, rows_checked, rows_over_threshold, max_delta_pct, integrity_orphans, worst_json, error,
+              dashboard_over, dashboard_max_delta
        FROM reconciliation_runs ORDER BY ran_at DESC LIMIT 1`
     );
     const row = r.rows[0];
@@ -134,10 +136,13 @@ app.get("/api/health/reconciliation", async (_req, res) => {
         ageHours,
         passed: row.ok,
         stale: ageHours > 30, // мала б бути свіжою після 05:00
-        rowsChecked: row.rows_checked,
-        rowsOverThreshold: row.rows_over_threshold,
-        maxDeltaPct: row.max_delta_pct != null ? Number(row.max_delta_pct) : null,
+        // три рівні
         integrityOrphans: row.integrity_orphans,
+        syncOverThreshold: row.rows_over_threshold,
+        syncMaxDeltaPct: row.max_delta_pct != null ? Number(row.max_delta_pct) : null,
+        dashboardOverThreshold: row.dashboard_over,
+        dashboardMaxDeltaPct: row.dashboard_max_delta != null ? Number(row.dashboard_max_delta) : null,
+        rowsChecked: row.rows_checked,
         worst: row.worst_json ?? [],
         error: row.error,
       },
