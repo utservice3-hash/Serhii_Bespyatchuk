@@ -6,10 +6,15 @@ import * as money from "./money.js";
  * КРОК 4 (Звірка): регресійна звірка НАШЕ (`core/money.ts`) ↔ Kommo API НАПРЯМУ,
  * 12 міс × команди × менеджери, + інваріант цілісності `deal_stage_events`↔`deals`.
  *
- * Метрика звірки — «Успішно реалізовано» (етап 10, `142`), бо це найзовнішніше
- * перевірюване число: наше = вхід у 142 (події), Kommo = ліди в статусі 142
- * (пайплайни повного циклу), закриті в місяці. Мінусові угоди нетимо з ОБОХ боків
- * (`/мінус/` у назві → −abs), щоб порівняння було apples-to-apples.
+ * Метрика звірки — «Успішно реалізовано» (статус `142`), APPLES-TO-APPLES:
+ *   НАШЕ  = наша `deals` у статусі 142, closed_at у місяці (перевіряє, що синк
+ *           deals↔Kommo вірний: ті самі угоди, ті самі ціни, той самий менеджер —
+ *           САМЕ це зловило б дірку на 35 561 угоду).
+ *   KOMMO = ліди в статусі 142 (повний цикл), закриті в тому ж місяці, НАПРЯМУ з API.
+ * Обидві сторони — ОДНА дефініція (статус 142 + closed_at). Мінуси нетяться з обох
+ * (наше — `deals.price` уже мінусом; Kommo — `signedPrice`). Логіку `core/money.ts`
+ * (анкер по входу) окремо перевіряють юніт-тести + еталон Яцика.
+ * ⚠️ Поточний (неповний) місяць виключено з pass/fail — синк лагає, це не дрейф.
  */
 export const RECONCILE_THRESHOLD = 0.005; // 0.5%
 
@@ -120,8 +125,17 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
 
   const rows: ReconRow[] = [];
   for (const M of lastMonths(months)) {
-    // НАШЕ (core/money.ts) — success-only (вхід у 142), по менеджеру.
-    const ourMgr = await money.successByMgr({ from: M.from, to: M.to });
+    // НАШЕ — deals у статусі 142, closed_at у місяці (та сама дефініція, що Kommo).
+    // deals.price уже збережено мінусом для мінус-угод → SUM уже нетто.
+    const ourRes = await pool.query<{ id: number; team_id: number | null; name: string; rev: string; n: string }>(
+      `SELECT d.manager_id AS id, m.team_id, m.name, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS n
+       FROM deals d JOIN managers m ON m.id = d.manager_id
+       WHERE d.status_id = 142 AND d.pipeline_id = ANY($1)
+         AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2 AND $3
+       GROUP BY d.manager_id, m.team_id, m.name`,
+      [money.FC_PIPELINES, M.from, M.to]
+    );
+    const ourMgr = ourRes.rows.map((r) => ({ managerId: r.id, teamId: r.team_id, name: r.name, revenue: Number(r.rev), deals: Number(r.n) }));
     const ourByMgr = new Map(ourMgr.map((r) => [r.managerId, r]));
 
     // KOMMO НАПРЯМУ — виграні ліди, закриті в місяці, згруповані по менеджеру/команді.
@@ -164,8 +178,12 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
   }
 
   const integrity = await checkIntegrity();
-  const rowsOverThreshold = rows.filter((r) => r.deltaPct > RECONCILE_THRESHOLD);
-  const maxDeltaPct = rows.reduce((m, r) => Math.max(m, r.deltaPct), 0);
+  // Поточний (неповний) місяць — синк лагає, closed_at ще не всі синкнуті → не дрейф.
+  const now = new Date();
+  const currentYm = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const completed = rows.filter((r) => r.ym !== currentYm);
+  const rowsOverThreshold = completed.filter((r) => r.deltaPct > RECONCILE_THRESHOLD);
+  const maxDeltaPct = completed.reduce((m, r) => Math.max(m, r.deltaPct), 0);
   const ok = rowsOverThreshold.length === 0 && integrity.orphans === 0;
   return { months, rows, rowsOverThreshold, maxDeltaPct, integrity, ok };
 }
