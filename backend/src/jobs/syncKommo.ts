@@ -351,7 +351,7 @@ function resolveClient(
   return { name: null, key: null };
 }
 
-async function upsertDeal(
+export async function upsertDeal(
   deal: Awaited<ReturnType<typeof fetchAllDeals>>[number],
   managerIdByKommoUserId: Map<number, number>,
   companyNameById: Map<number, string>,
