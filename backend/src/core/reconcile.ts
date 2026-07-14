@@ -117,6 +117,45 @@ export async function checkIntegrity(): Promise<IntegrityResult> {
   return { orphans: Number(r.rows[0]?.n ?? 0), sample: r.rows[0]?.sample ?? [] };
 }
 
+/**
+ * Ч.2 (4-та перевірка) — СВІЖІСТЬ вотермарків. Застряглий вотермарк ТИХО ламає
+ * метрики (напр. `last_event_at` застряг 09.07 → липневі гроші недораховувались, а
+ * 3 рівні цього не бачили, бо поточний місяць виключено з pass/fail). Поріг = 2×
+ * частоти джоби. Має БУДИТИ (Telegram), не логуватись.
+ */
+export interface FreshnessRow {
+  key: string;
+  label: string;
+  ageMin: number | null; // null = вотермарк ніколи не ставився
+  thresholdMin: number;
+  stale: boolean;
+  critical: boolean; // money-критичний (last_event_at живить core/money.ts)
+}
+
+export async function checkFreshness(): Promise<FreshnessRow[]> {
+  const r = await pool.query<{ success: string | null; event: string | null; activity: string | null; transfer: string | null }>(
+    `SELECT EXTRACT(EPOCH FROM (now() - last_success_at)) / 60 AS success,
+            EXTRACT(EPOCH FROM (now() - last_event_at)) / 60 AS event,
+            EXTRACT(EPOCH FROM (now() - last_activity_note_at)) / 60 AS activity,
+            EXTRACT(EPOCH FROM (now() - last_transfer_at)) / 60 AS transfer
+       FROM sync_state WHERE id = 1`
+  );
+  const row = r.rows[0] ?? {};
+  const defs: { key: string; label: string; raw: string | null | undefined; thresholdMin: number; critical: boolean }[] = [
+    // Пороги = 2× частоти: syncKommo/syncStageEvents 30хв→60; syncDealActivity 3год→360; syncTransfers 24год→2880.
+    { key: "last_event_at", label: "syncStageEvents (💰 гроші)", raw: row.event, thresholdMin: 60, critical: true },
+    { key: "last_success_at", label: "syncKommo", raw: row.success, thresholdMin: 60, critical: false },
+    { key: "last_activity_note_at", label: "syncDealActivity", raw: row.activity, thresholdMin: 360, critical: false },
+    { key: "last_transfer_at", label: "syncTransfers", raw: row.transfer, thresholdMin: 2880, critical: false },
+  ];
+  return defs.map((d) => {
+    const ageMin = d.raw == null ? null : Math.round(Number(d.raw));
+    // NULL (ніколи не синкалось): критичні (гроші) → stale; решта → ні (щоб не шуміти на свіжій БД).
+    const stale = ageMin == null ? d.critical : ageMin > d.thresholdMin;
+    return { key: d.key, label: d.label, ageMin, thresholdMin: d.thresholdMin, stale, critical: d.critical };
+  });
+}
+
 export interface ReconResult {
   months: number;
   // Рівень СИНК: deals ↔ Kommo (status 142 + closed_at). ourRevenue=deals, kommoRevenue=Kommo.
@@ -135,6 +174,11 @@ export interface ReconResult {
   // але їх НЕМАЄ в `deals` (протік синк по updated_at). Ціль авто-хілу.
   missingWonIds: number[];
   missingWonByMonth: { ym: string; ids: number[] }[];
+  // Ч.2: свіжість вотермарків (окремий сигнал, НЕ входить у ok — його будить hourly-watch).
+  freshness: FreshnessRow[];
+  // Ч.3: ПОТОЧНИЙ місяць — НЕ фейлить (він неповний), але ПОПЕРЕДЖАЄ: матеріальні
+  // розбіжності синку/дашборду за поточний місяць. «warning», не «пропущено».
+  currentMonthWarnings: ReconRow[];
   ok: boolean;
 }
 
@@ -265,8 +309,20 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
   const dashboardOver = dashFlagged.filter(isMaterial);
   const dashMinor = dashFlagged.filter((r) => !isMaterial(r));
   const dashboardMaxDelta = completedDash.reduce((m, r) => Math.max(m, r.deltaPct), 0);
+
+  // Ч.3: ПОТОЧНИЙ місяць — попереджає, не фейлить. Матеріальні розбіжності синку/
+  // дашборду за поточний ym (той самий поріг+матеріальність, що й для закритих). Саме
+  // тут застряглий вотермарк проявився б дельтою — раніше він мовчки випадав із pass/fail.
+  const cur = (arr: ReconRow[], thr: number) =>
+    arr.filter((r) => r.ym === currentYm && r.deltaPct > thr && isMaterial(r));
+  const currentMonthWarnings = [...cur(rows, RECONCILE_THRESHOLD), ...cur(dashRows, DASHBOARD_THRESHOLD)];
+
+  const freshness = await checkFreshness();
+
   // ok = НЕМАЄ МАТЕРІАЛЬНИХ розбіжностей (дрібні дилки не валять звірку) + цілісність.
+  // Свіжість і поточний місяць у ok НЕ входять (окремі сигнали: свіжість будить hourly-watch,
+  // поточний місяць — «warning»), щоб ok лишався про Kommo-звірені ЗАКРИТІ факти.
   const ok = rowsOverThreshold.length === 0 && dashboardOver.length === 0 && integrity.orphans === 0;
   const missingWonIds = missingWonByMonth.flatMap((m) => m.ids);
-  return { months, rows, rowsOverThreshold, syncMinor, maxDeltaPct, dashRows, dashboardOver, dashMinor, dashboardMaxDelta, integrity, missingWonIds, missingWonByMonth, ok };
+  return { months, rows, rowsOverThreshold, syncMinor, maxDeltaPct, dashRows, dashboardOver, dashMinor, dashboardMaxDelta, integrity, missingWonIds, missingWonByMonth, freshness, currentMonthWarnings, ok };
 }

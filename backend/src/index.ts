@@ -25,9 +25,11 @@ import { trainingRouter } from "./routes/training.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
 import { reconcileNightly } from "./jobs/reconcileNightly.js";
+import { freshnessWatch } from "./jobs/freshnessWatch.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
+import { checkFreshness } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
@@ -127,7 +129,10 @@ app.get("/api/health/reconciliation", async (_req, res) => {
        FROM reconciliation_runs ORDER BY ran_at DESC LIMIT 1`
     );
     const row = r.rows[0];
-    if (!row) return res.json({ ok: true, reconciliation: null });
+    // Свіжість — ЖИВА (не з останнього нічного прогону): дешевий чек sync_state,
+    // саме він ловить застряглий вотермарк між нічними звірками.
+    const freshness = await checkFreshness();
+    if (!row) return res.json({ ok: true, reconciliation: null, freshness });
     const ageHours = Math.round((Date.now() - new Date(row.ran_at).getTime()) / 3600000);
     res.json({
       ok: true,
@@ -147,6 +152,8 @@ app.get("/api/health/reconciliation", async (_req, res) => {
         worst: row.worst_json ?? [],
         error: row.error,
       },
+      // Ч.2 — жива свіжість вотермарків (4-та перевірка).
+      freshness,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e).slice(0, 200) });
@@ -195,6 +202,14 @@ cron.schedule("35 2 1 * *", () => {
   if (isKommoPaused()) return;
   reconcileNightly(12).catch((err) => console.error("reconcileNightly(12) monthly failed:", err));
 });
+// Ч.2: щогодинний вартовий СВІЖОСТІ вотермарків (:50). Дешево (лише читання sync_state,
+// БЕЗ Kommo) → можна часто. Будить, коли last_event_at/last_success_at/last_activity_note_at/
+// last_transfer_at відстають >2× частоти джоби. Нічна звірка цього не ловила (поточний
+// місяць виключено), а застряглий вотермарк тихо ламає гроші. + на старті (одразу після рестарту).
+cron.schedule("50 * * * *", () => {
+  freshnessWatch().catch((err) => console.error("freshnessWatch failed:", err));
+});
+freshnessWatch().catch((err) => console.error("freshnessWatch startup failed:", err));
 
 // syncStageEvents — КОЖНІ 30 ХВ (:15/:45). 🔴 КРИТИЧНО ДЛЯ СВІЖОСТІ ГРОШЕЙ:
 // core/money.ts анкериться на deal_stage_events, тож актуальність «Отриманих коштів»

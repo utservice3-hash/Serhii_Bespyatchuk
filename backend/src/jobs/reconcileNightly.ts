@@ -86,6 +86,8 @@ export async function reconcileNightly(months = 2): Promise<void> {
           dashboard: [...res.dashboardOver].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 15),
           healedByMonth: before.missingWonByMonth.map((m) => ({ ym: m.ym, n: m.ids.length })),
           stillMissing,
+          freshness: res.freshness, // Ч.2
+          currentMonthWarnings: res.currentMonthWarnings.slice(0, 15), // Ч.3
         }),
         res.dashboardOver.length,
         res.dashboardMaxDelta,
@@ -104,6 +106,16 @@ export async function reconcileNightly(months = 2): Promise<void> {
           `Це НЕ крапельниця — синк тече десятками. Той самий клас, що дірка 35к.\n` +
           `По місяцях: ${byMonth}\n` +
           (stillMissing ? `⚠️ Після хілу лишилось ${stillMissing} недотягнутих.` : `Після хілу — 0 дормантних ✓`)
+      ).catch(() => {});
+    }
+
+    // Ч.3: ПОТОЧНИЙ місяць ПОПЕРЕДЖАЄ (не фейлить ok). Раніше він мовчки випадав із
+    // pass/fail — саме там застряглий вотермарк проявився б дельтою й лишився невидимим.
+    if (res.currentMonthWarnings.length > 0) {
+      const w = [...res.currentMonthWarnings].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 6);
+      await sendAdminAlert(
+        `⚠️ <b>Поточний місяць — розбіжності</b> (warning, НЕ фейл; місяць неповний):\n` +
+          w.map((r) => `• ${r.ym} ${r.scope} ${r.name}: наше ${Math.round(r.ourRevenue)} vs ${Math.round(r.kommoRevenue)} (Δ ${(r.deltaPct * 100).toFixed(1)}%, ${r.ourDeals}/${r.kommoDeals})`).join("\n")
       ).catch(() => {});
     }
 

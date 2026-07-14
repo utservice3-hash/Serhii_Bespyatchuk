@@ -33,6 +33,17 @@ async function main() {
   console.log(`\nДОРМАНТНІ (Kommo 142, немає в deals): ${res.missingWonIds.length}${res.missingWonIds.length ? " 🩹" : " ✓"}`);
   for (const m of res.missingWonByMonth) console.log(`   ${m.ym}: ${m.ids.length} [${m.ids.slice(0, 10).join(",")}${m.ids.length > 10 ? "…" : ""}]`);
 
+  // Ч.2: свіжість вотермарків (4-та перевірка).
+  const staleN = res.freshness.filter((f) => f.stale).length;
+  console.log(`\n4) СВІЖІСТЬ вотермарків: ${staleN ? staleN + " несвіжих 🔴" : "усі свіжі ✓"}`);
+  for (const f of res.freshness)
+    console.log(`   ${f.stale ? "🔴" : "  "} ${f.label.padEnd(26)} ${f.ageMin == null ? "НІКОЛИ" : f.ageMin + " хв"} (поріг ${f.thresholdMin})`);
+
+  // Ч.3: поточний місяць — попередження (не фейл).
+  console.log(`\nПОТОЧНИЙ МІСЯЦЬ (warning, не фейл): ${res.currentMonthWarnings.length}${res.currentMonthWarnings.length ? " ⚠️" : " ✓"}`);
+  for (const r of [...res.currentMonthWarnings].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 10))
+    console.log(`   ⚠️ ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} наше=${Math.round(r.ourRevenue)} vs=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(1)}% (${r.ourDeals}/${r.kommoDeals})`);
+
   console.log(res.ok ? "\n✅ ЗЕЛЕНО — усі три рівні збігаються." : "\n🔴 Є розбіжності — див. вище (НЕ підганяти поріг).");
   return res.ok;
 }
