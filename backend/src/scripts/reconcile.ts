@@ -17,15 +17,17 @@ async function main() {
   // 1. Цілісність
   console.log(`1) ЦІЛІСНІСТЬ  deal_stage_events↔deals: ${res.integrity.orphans} сиріт${res.integrity.orphans ? " [" + res.integrity.sample.join(",") + "…] 🔴" : " ✓"}`);
 
-  // 2. Синк: deals ↔ Kommo (0.5%)
-  console.log(`2) СИНК        deals↔Kommo (поріг 0.5%): перевірено ${res.rows.length} · понад ${res.rowsOverThreshold.length} · max Δ ${(res.maxDeltaPct * 100).toFixed(2)}%${res.rowsOverThreshold.length ? " 🔴" : " ✓"}`);
+  // 2. Синк: deals ↔ Kommo (0.5% + матеріальність)
+  console.log(`2) СИНК        deals↔Kommo (0.5% + >2 угод/>20к₴): матеріальних ${res.rowsOverThreshold.length}${res.rowsOverThreshold.length ? " 🔴" : " ✓"} · дрібних ${res.syncMinor.length} ℹ️ · max Δ ${(res.maxDeltaPct * 100).toFixed(2)}%`);
   for (const r of [...res.rowsOverThreshold].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 20))
-    console.log(`     ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} deals=${Math.round(r.ourRevenue)} kommo=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (${r.ourDeals}/${r.kommoDeals})`);
+    console.log(`   🔴 ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} deals=${Math.round(r.ourRevenue)} kommo=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (${r.ourDeals}/${r.kommoDeals})`);
+  for (const r of [...res.syncMinor].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 20))
+    console.log(`   ℹ️ ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} deals=${Math.round(r.ourRevenue)} kommo=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (${r.ourDeals}/${r.kommoDeals}) [дрібне]`);
 
-  // 3. Дашборд: money.ts ↔ deals (2%)
-  console.log(`3) ДАШБОРД     money.ts↔deals (поріг 2%): перевірено ${res.dashRows.length} · понад ${res.dashboardOver.length} · max Δ ${(res.dashboardMaxDelta * 100).toFixed(2)}%${res.dashboardOver.length ? " 🔴" : " ✓"}`);
+  // 3. Дашборд: money.ts ↔ deals (2% + матеріальність)
+  console.log(`3) ДАШБОРД     money.ts↔deals (2% + >2 угод/>20к₴): матеріальних ${res.dashboardOver.length}${res.dashboardOver.length ? " 🔴" : " ✓"} · дрібних ${res.dashMinor.length} ℹ️ · max Δ ${(res.dashboardMaxDelta * 100).toFixed(2)}%`);
   for (const r of [...res.dashboardOver].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 20))
-    console.log(`     ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} money=${Math.round(r.ourRevenue)} deals=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (${r.ourDeals}/${r.kommoDeals})`);
+    console.log(`   🔴 ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} money=${Math.round(r.ourRevenue)} deals=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (${r.ourDeals}/${r.kommoDeals})`);
 
   console.log(res.ok ? "\n✅ ЗЕЛЕНО — усі три рівні збігаються." : "\n🔴 Є розбіжності — див. вище (НЕ підганяти поріг).");
   return res.ok;

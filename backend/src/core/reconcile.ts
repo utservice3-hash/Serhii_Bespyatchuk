@@ -18,6 +18,14 @@ import * as money from "./money.js";
  */
 export const RECONCILE_THRESHOLD = 0.005; // 0.5% — синк (deals ↔ Kommo)
 export const DASHBOARD_THRESHOLD = 0.02; // 2% — дашборд (money.ts ↔ deals)
+// АБСОЛЮТНИЙ мінімум значущості: рядок «будить» алерт лише якщо дельта > %-порогу
+// І матеріальна (>2 угод АБО >20 000 ₴). Інакше один дил у малого менеджера
+// (3% від 48) червонив би алерт щоночі → за 2 тижні на нього перестануть дивитись.
+// НЕ піднімати %-поріг — саме матеріальність відсіює шум, не втрачаючи поломки.
+export const MATERIAL_DEALS = 2;
+export const MATERIAL_REVENUE = 20000;
+const isMaterial = (r: ReconRow) =>
+  Math.abs(r.ourDeals - r.kommoDeals) > MATERIAL_DEALS || Math.abs(r.ourRevenue - r.kommoRevenue) > MATERIAL_REVENUE;
 
 interface KommoWonLead {
   id: number;
@@ -113,11 +121,13 @@ export interface ReconResult {
   months: number;
   // Рівень СИНК: deals ↔ Kommo (status 142 + closed_at). ourRevenue=deals, kommoRevenue=Kommo.
   rows: ReconRow[];
-  rowsOverThreshold: ReconRow[];
+  rowsOverThreshold: ReconRow[]; // >0.5% І матеріальні → будять алерт
+  syncMinor: ReconRow[]; // >0.5% але НЕ матеріальні → лише логуються
   maxDeltaPct: number;
   // Рівень ДАШБОРД: money.ts (вхід у 142) ↔ deals (142, closed_at). ourRevenue=money.ts, kommoRevenue=deals.
   dashRows: ReconRow[];
-  dashboardOver: ReconRow[];
+  dashboardOver: ReconRow[]; // >2% І матеріальні
+  dashMinor: ReconRow[];
   dashboardMaxDelta: number;
   // Рівень ЦІЛІСНІСТЬ: кожен deal_id з подій є в deals.
   integrity: IntegrityResult;
@@ -227,11 +237,16 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
   const now = new Date();
   const currentYm = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
   const completed = rows.filter((r) => r.ym !== currentYm);
-  const rowsOverThreshold = completed.filter((r) => r.deltaPct > RECONCILE_THRESHOLD);
+  const syncFlagged = completed.filter((r) => r.deltaPct > RECONCILE_THRESHOLD);
+  const rowsOverThreshold = syncFlagged.filter(isMaterial); // будять
+  const syncMinor = syncFlagged.filter((r) => !isMaterial(r)); // логуються
   const maxDeltaPct = completed.reduce((m, r) => Math.max(m, r.deltaPct), 0);
   const completedDash = dashRows.filter((r) => r.ym !== currentYm);
-  const dashboardOver = completedDash.filter((r) => r.deltaPct > DASHBOARD_THRESHOLD);
+  const dashFlagged = completedDash.filter((r) => r.deltaPct > DASHBOARD_THRESHOLD);
+  const dashboardOver = dashFlagged.filter(isMaterial);
+  const dashMinor = dashFlagged.filter((r) => !isMaterial(r));
   const dashboardMaxDelta = completedDash.reduce((m, r) => Math.max(m, r.deltaPct), 0);
+  // ok = НЕМАЄ МАТЕРІАЛЬНИХ розбіжностей (дрібні дилки не валять звірку) + цілісність.
   const ok = rowsOverThreshold.length === 0 && dashboardOver.length === 0 && integrity.orphans === 0;
-  return { months, rows, rowsOverThreshold, maxDeltaPct, dashRows, dashboardOver, dashboardMaxDelta, integrity, ok };
+  return { months, rows, rowsOverThreshold, syncMinor, maxDeltaPct, dashRows, dashboardOver, dashMinor, dashboardMaxDelta, integrity, ok };
 }
