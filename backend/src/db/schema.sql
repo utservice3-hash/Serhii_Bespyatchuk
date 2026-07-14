@@ -754,3 +754,18 @@ UPDATE app_settings SET data = data || '{"adSources":["uts.ua","Дзвінок �
 INSERT INTO ad_sources_log (changed_by, old_list, new_list)
  SELECT 'migration:seed', NULL, data->'adSources' FROM app_settings WHERE id = 1
    AND NOT EXISTS (SELECT 1 FROM ad_sources_log);
+
+-- КРОК 4 (Звірка): результати нічної реконсиляції наше↔Kommo + інваріант цілісності.
+CREATE TABLE IF NOT EXISTS reconciliation_runs (
+  id BIGSERIAL PRIMARY KEY,
+  ran_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  months INT NOT NULL,
+  rows_checked INT NOT NULL DEFAULT 0,
+  rows_over_threshold INT NOT NULL DEFAULT 0,   -- скільки (місяць×менеджер) перевищили 0.5%
+  max_delta_pct NUMERIC,                        -- найбільша |дельта| по виручці
+  integrity_orphans INT NOT NULL DEFAULT 0,     -- deal_id з deal_stage_events без угоди в deals
+  ok BOOLEAN NOT NULL,
+  worst_json JSONB,                             -- топ розбіжностей для дебагу
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_runs_ran_at ON reconciliation_runs(ran_at DESC);

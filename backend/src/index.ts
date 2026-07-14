@@ -24,6 +24,7 @@ import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { trainingRouter } from "./routes/training.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
+import { reconcileNightly } from "./jobs/reconcileNightly.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
@@ -113,6 +114,39 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
+// КРОК 4 (Звірка): стан останньої нічної реконсиляції наше↔Kommo + цілісності.
+app.get("/api/health/reconciliation", async (_req, res) => {
+  try {
+    const r = await pool.query<{
+      ran_at: Date; ok: boolean; rows_checked: number; rows_over_threshold: number;
+      max_delta_pct: string | null; integrity_orphans: number; worst_json: unknown; error: string | null;
+    }>(
+      `SELECT ran_at, ok, rows_checked, rows_over_threshold, max_delta_pct, integrity_orphans, worst_json, error
+       FROM reconciliation_runs ORDER BY ran_at DESC LIMIT 1`
+    );
+    const row = r.rows[0];
+    if (!row) return res.json({ ok: true, reconciliation: null });
+    const ageHours = Math.round((Date.now() - new Date(row.ran_at).getTime()) / 3600000);
+    res.json({
+      ok: true,
+      reconciliation: {
+        ranAt: row.ran_at,
+        ageHours,
+        passed: row.ok,
+        stale: ageHours > 30, // мала б бути свіжою після 05:00
+        rowsChecked: row.rows_checked,
+        rowsOverThreshold: row.rows_over_threshold,
+        maxDeltaPct: row.max_delta_pct != null ? Number(row.max_delta_pct) : null,
+        integrityOrphans: row.integrity_orphans,
+        worst: row.worst_json ?? [],
+        error: row.error,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e).slice(0, 200) });
+  }
+});
+
 // ⚠️ НИЗЬКОНАВАНТАЖУВАЛЬНИЙ РЕЖИМ (умова власника після IP-бану 08.07.2026):
 // тримати ОБСЯГ запитів до Kommo малим, щоб WAF не забанив знову. Тому рідший
 // полінг, менше вікно реконсиляції, БЕЗ стартових сплесків. Свіжість даних
@@ -134,6 +168,13 @@ cron.schedule("0 4 * * *", () => {
   syncKommo({ reconcileDays: 10 }).catch((err) =>
     console.error("Kommo reconciliation failed:", err)
   );
+});
+
+// КРОК 4 (Звірка): нічна регресійна звірка наше↔Kommo + інваріант цілісності —
+// 05:00. Читає Kommo API (виграні ліди по місяцях) → guard по KOMMO_PAUSED.
+cron.schedule("0 5 * * *", () => {
+  if (isKommoPaused()) return;
+  reconcileNightly().catch((err) => console.error("reconcileNightly failed:", err));
 });
 
 // Event feeds — рідко (кожні 3 год, staggered), БЕЗ стартових викликів (щоб
