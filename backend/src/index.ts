@@ -196,9 +196,14 @@ cron.schedule("35 2 1 * *", () => {
   reconcileNightly(12).catch((err) => console.error("reconcileNightly(12) monthly failed:", err));
 });
 
-// Event feeds — рідко (кожні 3 год, staggered), БЕЗ стартових викликів (щоб
-// рестарт не давав сплеск). Терплять лаг.
-cron.schedule("10 */3 * * *", () => {
+// syncStageEvents — КОЖНІ 30 ХВ (:15/:45). 🔴 КРИТИЧНО ДЛЯ СВІЖОСТІ ГРОШЕЙ:
+// core/money.ts анкериться на deal_stage_events, тож актуальність «Отриманих коштів»
+// = частота ЦІЄЇ джоби. Було 3 год → «за сьогодні» відставало до 3 год (менеджер
+// закрив об 11:00 — у дашборді о 14:00). Тепер лаг ≤30 хв, збігається з syncKommo.
+// Вартість +~30 req/добу (у 30-хв вікні майже завжди <100 подій → 1 сторінка) —
+// тротл (1.25 req/с) цього не помічає. Зсув :15/:45 — щоб не пікувати з syncKommo(:00/:30).
+// БЕЗ стартового виклику (щоб рестарт не давав сплеск).
+cron.schedule("15,45 * * * *", () => {
   if (isKommoPaused()) return;
   syncStageEvents().catch((err) => console.error("Stage events sync failed:", err));
 });
