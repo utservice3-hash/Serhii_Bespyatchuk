@@ -28,6 +28,7 @@ const adDealSql = (srcRef: string) =>
 import { getSettings } from "./settings.js";
 import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
+import * as money from "../core/money.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 
 export const dashboardRouter = Router();
@@ -324,81 +325,37 @@ dashboardRouter.get("/overview", async (req, res) => {
   const adPaidCnt = Number(adConvRes.rows[0]?.ad_paid ?? 0);
   const adConversion = { leads: adLeadsCnt, paid: adPaidCnt, conversion: adLeadsCnt > 0 ? Math.round((adPaidCnt / adLeadsCnt) * 100) : 0 };
 
-  // Received money everywhere = Успішно реалізовано (status 142, by CLOSE date
-  // in period) + Оплата отримана (snapshot of the transient stage, no date).
-  // The same split shown in the "Отримані кошти" card, applied consistently to
-  // team / manager breakdowns and to the monthly fact.
-  const PAYMENT_RECEIVED_STATUSES = [69716460, 60412544];
-  const paySnapConds: string[] = ["d.status_id = ANY($1)"];
-  const paySnapParams: unknown[] = [PAYMENT_RECEIVED_STATUSES];
-  if (managerId) { paySnapParams.push(managerId); paySnapConds.push(`d.manager_id = $${paySnapParams.length}`); }
-  if (teamId) { paySnapParams.push(teamId); paySnapConds.push(`m.team_id = $${paySnapParams.length}`); }
-  const paySnapWhere = `WHERE ${paySnapConds.join(" AND ")}`;
+  // MASTER_PLAN КРОК 2: гроші анкеряться по ДАТІ ВХОДУ В ЕТАП (deal_stage_events),
+  // дедуп по угоді — знімки прибрано (недатований знімок мутував минулі місяці).
+  //   received  = «Отримані кошти» = увійшли в етап 9 (Оплата отримана) АБО 10
+  //               (Успішна) у періоді, РАЗ (9 і 10 — одні гроші).
+  //   success   = лише етап 10 (142) — знаменник avg_check_success_only.
+  //   paidOnly  = етап 9 без 142 у періоді → received = success ⊎ paidOnly (disjoint).
+  //   expected  = етап 8 «Очікуємо оплату» (НЕ «Виставлення рахунку»!).
+  const moneyScope: money.MoneyScope = { from, to, managerId, teamId };
+  const [receivedTot, successTot, paidOnlyTot, expectedTot,
+         receivedTeamAgg, receivedMgrAgg, expectedTeamAgg, awaitingNow] = await Promise.all([
+    money.receivedMoney(moneyScope),
+    money.successMoney(moneyScope),
+    money.paidOnlyMoney(moneyScope),
+    money.expectedMoney(moneyScope),
+    money.receivedByTeam(moneyScope),
+    money.receivedByMgr(moneyScope),
+    money.expectedByTeam(moneyScope),
+    money.awaitingNowSnapshot(moneyScope),
+  ]);
 
-  // Success part (close date), by team / manager.
-  const successByTeam = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
-    `SELECT t.id AS team_id, t.name AS team_name, COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${closedWhere} AND d.status_id = 142
-     GROUP BY t.id, t.name`,
-    closedParams
-  );
-  const paymentByTeam = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
-    `SELECT t.id AS team_id, t.name AS team_name, COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
-     ${paySnapWhere}
-     GROUP BY t.id, t.name`,
-    paySnapParams
-  );
-  const successByMgr = await pool.query<{ manager_id: number; name: string; revenue: string; deals: string }>(
-    `SELECT m.id AS manager_id, m.name, COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${closedWhere} AND d.status_id = 142
-     GROUP BY m.id, m.name`,
-    closedParams
-  );
-  const paymentByMgr = await pool.query<{ manager_id: number; name: string; revenue: string; deals: string }>(
-    `SELECT m.id AS manager_id, m.name, COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-     ${paySnapWhere}
-     GROUP BY m.id, m.name`,
-    paySnapParams
-  );
-
-  // Merge success + payment snapshot per key.
-  type MoneyRow = { revenue: string; deals: string; team_id?: number; team_name?: string; manager_id?: number; name?: string };
-  const mergeRows = (
-    rows: MoneyRow[],
-    keyOf: (r: MoneyRow) => number,
-    nameOf: (r: MoneyRow) => string
-  ) => {
-    const map = new Map<number, { id: number; name: string; revenue: number; deals: number }>();
-    for (const r of rows) {
-      const id = keyOf(r);
-      const cur = map.get(id) ?? { id, name: nameOf(r), revenue: 0, deals: 0 };
-      cur.revenue += Number(r.revenue);
-      cur.deals += Number(r.deals);
-      map.set(id, cur);
-    }
-    return [...map.values()].sort((a, b) => b.revenue - a.revenue);
-  };
+  // «Отримані кошти» по командах / менеджерах — анкеровані, дедуп (див. moneyScope).
   const byTeam = {
-    rows: mergeRows(
-      [...successByTeam.rows, ...paymentByTeam.rows],
-      (r) => r.team_id!,
-      (r) => r.team_name!
-    ).map((x) => ({ team_id: x.id, team_name: x.name, revenue: String(x.revenue), deals: String(x.deals) })),
+    rows: [...receivedTeamAgg]
+      .sort((a, b) => b.revenue - a.revenue)
+      .map((x) => ({ team_id: x.teamId, team_name: x.teamName, revenue: String(x.revenue), deals: String(x.deals) })),
   };
   const topManagers = {
-    rows: mergeRows(
-      [...successByMgr.rows, ...paymentByMgr.rows],
-      (r) => r.manager_id!,
-      (r) => r.name!
-    )
+    rows: [...receivedMgrAgg]
+      .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10)
-      .map((x) => ({ manager_id: x.id, name: x.name, revenue: String(x.revenue), deals: String(x.deals) })),
+      .map((x) => ({ manager_id: x.managerId, name: x.name, revenue: String(x.revenue), deals: String(x.deals) })),
   };
 
   // New vs repeat: a client whose first-ever paid deal falls in the period is
@@ -493,51 +450,23 @@ dashboardRouter.get("/overview", async (req, res) => {
       .reduce((s, r) => s + Number(r.plan), 0)
   );
 
-  // Received money has two parts, shown combined with a drill-down split:
-  //  1) "Успішно реалізовано" (status 142) — counted by CLOSE date in period.
-  //  2) "Оплата отримана" (statuses 69716460 new / 60412544 old) — a SNAPSHOT
-  //     of deals currently sitting in that stage (no date filter, per CRM
-  //     methodology), scoped only by manager/team.
-  const successRes = await pool.query<{ revenue: string; deals: string }>(
-    `SELECT COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${closedWhere} AND d.status_id = 142`,
-    closedParams
-  );
-
-  // Оплата отримана snapshot total (reuses the team/manager scope above).
-  const paymentRes = await pool.query<{ revenue: string; deals: string }>(
-    `SELECT COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     ${paySnapWhere}`,
-    paySnapParams
-  );
-
-  const successRevenue = Number(successRes.rows[0]?.revenue ?? 0);
-  const successDeals = Number(successRes.rows[0]?.deals ?? 0);
-  const paymentRevenue = Number(paymentRes.rows[0]?.revenue ?? 0);
-  const paymentDeals = Number(paymentRes.rows[0]?.deals ?? 0);
+  // «Отримані кошти» (анкер по даті входу + дедуп): received = success ⊎ paidOnly,
+  // тож successRevenue + paymentRevenue === receivedTot.revenue (без подвійного рахунку).
+  const successRevenue = successTot.revenue;
+  const successDeals = successTot.deals;
+  const paymentRevenue = paidOnlyTot.revenue; // «досі в оплаті» (етап 9, ще не 142)
+  const paymentDeals = paidOnlyTot.deals;
   const closedRes = {
-    rows: [{ revenue: String(successRevenue + paymentRevenue), deals: String(successDeals + paymentDeals) }],
+    rows: [{ revenue: String(receivedTot.revenue), deals: String(receivedTot.deals) }],
   };
 
-  // Deals currently awaiting payment (invoice issued → pre-payment stages) —
-  // a snapshot of the pipeline, grouped by team. See EXPECTED_STAGES.
-  const pendScope: string[] = [EXPECTED_STAGES];
-  const pendParams: unknown[] = [];
-  if (managerId) { pendParams.push(managerId); pendScope.push(`d.manager_id = $${pendParams.length}`); }
-  if (teamId) { pendParams.push(teamId); pendScope.push(`m.team_id = $${pendParams.length}`); }
-  const pendingRes = await pool.query<{ team_id: number; team_name: string; deals: string; revenue: string }>(
-    `SELECT t.id AS team_id, t.name AS team_name, COUNT(*) AS deals, COALESCE(SUM(d.price), 0) AS revenue
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id
-     JOIN teams t ON t.id = m.team_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${pendScope.join(" AND ")}
-     GROUP BY t.id, t.name ORDER BY revenue DESC`,
-    pendParams
-  );
+  // «Очікування оплат» за ПЕРІОД — анкер по входу в етап 8 «Очікуємо оплату»
+  // (НЕ знімок, НЕ «Виставлення рахунку»). Знаменник ОЧІКУВАНОГО чека.
+  const pendingRes = {
+    rows: [...expectedTeamAgg]
+      .sort((a, b) => b.revenue - a.revenue)
+      .map((x) => ({ team_id: x.teamId, team_name: x.teamName, deals: String(x.deals), revenue: String(x.revenue) })),
+  };
 
   // All deals created in the Full-cycle funnel within the period (by create date).
   const FULL_CYCLE_PIPELINES = [8921932, 155304];
@@ -832,27 +761,21 @@ dashboardRouter.get("/overview", async (req, res) => {
   // payment-received SNAPSHOT (already "in hand") — "за темпом вийде ₴X".
   const nowK = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const mStartP = nowK.slice(0, 7) + "-01";
-  const projParams: unknown[] = [mStartP, nowK];
-  const projConds = [
-    "psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL",
-    `(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1 AND $2`,
-  ];
-  if (managerId) { projParams.push(managerId); projConds.push(`d.manager_id = $${projParams.length}`); }
-  if (teamId) { projParams.push(teamId); projConds.push(`m.team_id = $${projParams.length}`); }
-  const successMTDRes = await pool.query<{ s: string }>(
-    `SELECT COALESCE(SUM(d.price), 0) AS s FROM deals d JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${projConds.join(" AND ")}`,
-    projParams
-  );
-  const successMTD = Number(successMTDRes.rows[0]?.s ?? 0);
+  // Анкеровані гроші поточного місяця (незалежно від обраного періоду).
+  const projScope: money.MoneyScope = { from: mStartP, to: nowK, managerId, teamId };
+  const [succMonth, recvMonth] = await Promise.all([
+    money.successMoney(projScope),
+    money.receivedMoney(projScope),
+  ]);
+  const successMTD = succMonth.revenue;
+  const paidOnlyMonth = recvMonth.revenue - succMonth.revenue;
   const mS = new Date(mStartP + "T00:00:00");
   const mE = new Date(mS.getFullYear(), mS.getMonth() + 1, 0);
   const tD = new Date(nowK + "T00:00:00");
   const totalWdP = workingDays(mS, mE);
   const elapsedWdP = workingDays(mS, tD < mE ? tD : mE);
-  const monthFactP = Math.round(successMTD + paymentRevenue);
-  const projected = elapsedWdP > 0 ? Math.round(successMTD * (totalWdP / elapsedWdP) + paymentRevenue) : monthFactP;
+  const monthFactP = Math.round(recvMonth.revenue);
+  const projected = elapsedWdP > 0 ? Math.round(successMTD * (totalWdP / elapsedWdP) + paidOnlyMonth) : monthFactP;
   const projection = {
     monthFact: monthFactP,
     projected,
@@ -874,6 +797,14 @@ dashboardRouter.get("/overview", async (req, res) => {
     successDeals,
     paymentRevenue,
     paymentDeals,
+    // ДВА середні чеки (складати заборонено): фактичний (received) і очікуваний
+    // (етап 8). avgCheckSuccessOnly — лише успіх, для звірки з листом (2600–2900).
+    avgCheckSuccessOnly: successDeals > 0 ? Math.round(successRevenue / successDeals) : 0,
+    avgCheckReceived: receivedTot.deals > 0 ? Math.round(receivedTot.revenue / receivedTot.deals) : 0,
+    avgCheckExpected: expectedTot.deals > 0 ? Math.round(expectedTot.revenue / expectedTot.deals) : 0,
+    expectedPayments: { deals: expectedTot.deals, revenue: expectedTot.revenue },
+    // Знімок «станом на зараз» (етапи 8+9 зараз) — прогноз, НІКОЛИ не у виручці періоду.
+    awaitingNow: { asOf: "now", deals: awaitingNow.deals, revenue: awaitingNow.revenue, byTeam: awaitingNow.byTeam },
     pendingPayments: {
       deals: pendingRes.rows.reduce((s, r) => s + Number(r.deals), 0),
       revenue: pendingRes.rows.reduce((s, r) => s + Number(r.revenue), 0),
