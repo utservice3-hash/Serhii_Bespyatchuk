@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { forEachLeadNotePage, type KommoLeadNote } from "../kommo/client.js";
+import { processInChunks } from "./chunkWindow.js";
 
 /**
  * Note types that count as real work in the deal. Calls and texts (in/out) and
@@ -84,13 +85,17 @@ export async function syncDealActivity(opts: { sinceUnix?: number; untilUnix?: n
     }
     const untilUnix = opts.untilUnix ?? now;
 
-    const total = await forEachLeadNotePage(sinceUnix, untilUnix, applyNotes);
-
-    if (!isBackfill) {
-      await pool.query(`UPDATE sync_state SET last_activity_note_at = $1 WHERE id = 1`, [
-        new Date(untilUnix * 1000),
-      ]);
-    }
+    // Порції ≤24 год + інкрементальний вотермарк (той самий фікс, що syncStageEvents):
+    // раніше «все або нічого» → last_activity_note_at застряг з IP-бану 08.07.
+    const total = await processInChunks(
+      sinceUnix,
+      untilUnix,
+      (from, to) => forEachLeadNotePage(from, to, applyNotes),
+      isBackfill
+        ? null
+        : (chunkUntil) =>
+            pool.query(`UPDATE sync_state SET last_activity_note_at = $1 WHERE id = 1`, [new Date(chunkUntil * 1000)]).then(() => {})
+    );
     console.log(`Deal activity synced: ${total} notes scanned (${sinceUnix}..${untilUnix}).`);
   } finally {
     running = false;

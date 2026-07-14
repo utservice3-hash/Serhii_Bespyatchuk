@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { forEachResponsibleChangeEventPage, type KommoResponsibleEvent } from "../kommo/client.js";
+import { processInChunks } from "./chunkWindow.js";
 
 // Кваліфікація pipelines — the "нова заявка від лідогенератора" duplicates live
 // here; a responsible change on one of these = a lead-gen lead handed to sales.
@@ -60,13 +61,17 @@ export async function syncTransfers(opts: { sinceUnix?: number; untilUnix?: numb
     }
     const untilUnix = opts.untilUnix ?? now;
 
-    const total = await forEachResponsibleChangeEventPage(sinceUnix, untilUnix, insertTransfers);
-
-    if (!isBackfill) {
-      await pool.query(`UPDATE sync_state SET last_transfer_at = $1 WHERE id = 1`, [
-        new Date(untilUnix * 1000),
-      ]);
-    }
+    // Порції ≤24 год + інкрементальний вотермарк (той самий фікс, що syncStageEvents):
+    // раніше «все або нічого» → last_transfer_at застряг з IP-бану 08.07.
+    const total = await processInChunks(
+      sinceUnix,
+      untilUnix,
+      (from, to) => forEachResponsibleChangeEventPage(from, to, insertTransfers),
+      isBackfill
+        ? null
+        : (chunkUntil) =>
+            pool.query(`UPDATE sync_state SET last_transfer_at = $1 WHERE id = 1`, [new Date(chunkUntil * 1000)]).then(() => {})
+    );
     console.log(`Transfers synced: scanned ${total} responsible-change events (${sinceUnix}..${untilUnix}).`);
   } finally {
     running = false;
