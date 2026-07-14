@@ -176,11 +176,21 @@ cron.schedule("0 4 * * *", () => {
   );
 });
 
-// КРОК 4 (Звірка): нічна регресійна звірка наше↔Kommo + інваріант цілісності —
-// 05:00. Читає Kommo API (виграні ліди по місяцях) → guard по KOMMO_PAUSED.
+// КРОК 4 (Звірка) + AUTO-HEAL. ЩОНОЧІ 05:00 — лише ОСТАННІ 2 МІСЯЦІ: швидко/дешево,
+// ловить свіжу дормантність (угода не встигає застаріти непоміченою). Читає Kommo API
+// → guard по KOMMO_PAUSED.
 cron.schedule("0 5 * * *", () => {
   if (isKommoPaused()) return;
-  reconcileNightly().catch((err) => console.error("reconcileNightly failed:", err));
+  reconcileNightly(2).catch((err) => console.error("reconcileNightly(2) failed:", err));
+});
+// РАЗ НА МІСЯЦЬ (1-го, 02:00) — ПОВНІ 12 МІСЯЦІВ: страховка на випадок, якщо нічна
+// кілька разів не спрацювала. Дірка 35к була разовим артефактом (1 дормантна/12 міс),
+// не течею → 12-міс скан щоночі надлишковий. ⚠️ Перед важким бекфілом — правило
+// Neon-квоти в CLAUDE.md; тут навантаження на Neon мале (SELECT-и; важкі upsert-и лише
+// при дормантних, а їх сплеск >10 сам алертиться).
+cron.schedule("0 2 1 * *", () => {
+  if (isKommoPaused()) return;
+  reconcileNightly(12).catch((err) => console.error("reconcileNightly(12) monthly failed:", err));
 });
 
 // Event feeds — рідко (кожні 3 год, staggered), БЕЗ стартових викликів (щоб

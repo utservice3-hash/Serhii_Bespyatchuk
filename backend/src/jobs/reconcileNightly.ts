@@ -6,10 +6,18 @@ import { backfillClientKey } from "./backfillClientKey.js";
 import { sendAdminAlert } from "../bot/notify.js";
 
 /**
- * КРОК 4 (Звірка) + AUTO-HEAL: нічна регресійна звірка (cron 05:00).
+ * КРОК 4 (Звірка) + AUTO-HEAL. Дві точки виклику (див. `index.ts`):
+ *   • ЩОНОЧІ 05:00 — `reconcileNightly(2)`: останні 2 місяці. Швидко/дешево,
+ *     ловить СВІЖУ дормантність (угода не встигне «застаріти» непоміченою).
+ *   • РАЗ НА МІСЯЦЬ (1-го, вночі) — `reconcileNightly(12)`: страховка на випадок,
+ *     якщо нічна кілька разів не спрацювала. ⚠️ Читає Kommo API по 12 міс (важко для
+ *     Kommo, легко для Neon — самі SELECT-и; важкі upsert-и лише при дормантних, а
+ *     їх сплеск сам алертиться). Правило Neon-квоти — в `CLAUDE.md`.
+ * Дірка на 35к (КРОК 1.4) була РАЗОВИМ артефактом (синк стартував пізно), не течею:
+ * прямий підрахунок дав 1 дормантну за 12 міс. Тому 12-міс скан щоночі — надлишковий.
  *
  * Потік:
- *   1) runReconcile(12) — три рівні + перелік ДОРМАНТНИХ угод (виграні в Kommo,
+ *   1) runReconcile(months) — три рівні + перелік ДОРМАНТНИХ угод (виграні в Kommo,
  *      яких немає в `deals` — протік синк по updated_at, той самий клас, що дірка 35к).
  *   2) Якщо дормантні знайдено — САМА їх дотягує (`healDealsByIds` = fetchLeadsByIds +
  *      upsertDeal), потім reclassifyAdChannel + backfillClientKey (лише коли є що).
@@ -29,7 +37,7 @@ let running = false;
 
 const HEAL_ALERT_THRESHOLD = 10; // >10 за ніч → алерт (поломка синку, не крапельниця)
 
-export async function reconcileNightly(): Promise<void> {
+export async function reconcileNightly(months = 2): Promise<void> {
   if (running) {
     console.warn("reconcileNightly: попередній запуск ще йде — пропускаю.");
     return;
@@ -37,7 +45,7 @@ export async function reconcileNightly(): Promise<void> {
   running = true;
   try {
     // 1) Звірка + виявлення дормантних.
-    const before = await runReconcile(12);
+    const before = await runReconcile(months);
 
     // 2) AUTO-HEAL — дотягнути виграні угоди, яких немає в `deals`.
     let healed = 0;
@@ -54,7 +62,7 @@ export async function reconcileNightly(): Promise<void> {
     }
 
     // 3) Перезапуск звірки — підтвердити, що дірку закрито.
-    const res = healed > 0 ? await runReconcile(12) : before;
+    const res = healed > 0 ? await runReconcile(months) : before;
     const stillMissing = res.missingWonIds.length;
 
     // 4) Персистенція (стан = фінальна звірка + скільки вилікувано).
@@ -119,7 +127,7 @@ export async function reconcileNightly(): Promise<void> {
   } catch (e) {
     console.error("reconcileNightly failed:", e);
     await pool
-      .query(`INSERT INTO reconciliation_runs (months, ok, error) VALUES (12, false, $1)`, [String(e).slice(0, 500)])
+      .query(`INSERT INTO reconciliation_runs (months, ok, error) VALUES ($1, false, $2)`, [months, String(e).slice(0, 500)])
       .catch(() => {});
     await sendAdminAlert(`🔴 Звірка дашборду впала з помилкою: ${String(e).slice(0, 200)}`).catch(() => {});
   } finally {
@@ -128,7 +136,9 @@ export async function reconcileNightly(): Promise<void> {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  reconcileNightly()
+  // node dist/jobs/reconcileNightly.js [--months=N]  (дефолт 2, як щонічний)
+  const months = Number(process.argv.find((a) => a.startsWith("--months="))?.split("=")[1]) || 2;
+  reconcileNightly(months)
     .then(() => pool.end())
     .catch((err) => {
       console.error(err);
