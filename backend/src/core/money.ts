@@ -107,7 +107,7 @@ async function agg(statusSet: number[], s: MoneyScope, excludeSet?: number[]): P
 }
 
 export interface TeamRow { teamId: number; teamName: string; revenue: number; deals: number }
-export interface MgrRow { managerId: number; name: string; revenue: number; deals: number }
+export interface MgrRow { managerId: number; name: string; teamId: number | null; revenue: number; deals: number }
 
 async function aggByTeam(statusSet: number[], s: MoneyScope, excludeSet?: number[]): Promise<TeamRow[]> {
   const { sql, params } = buildAnchorSql(
@@ -125,12 +125,12 @@ async function aggByMgr(statusSet: number[], s: MoneyScope, excludeSet?: number[
   const { sql, params } = buildAnchorSql(
     statusSet,
     { ...s, activeOnly: true },
-    "m.id AS manager_id, m.name, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals",
-    "GROUP BY m.id, m.name",
+    "m.id AS manager_id, m.name, m.team_id, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals",
+    "GROUP BY m.id, m.name, m.team_id",
     excludeSet
   );
-  const r = await pool.query<{ manager_id: number; name: string; revenue: string; deals: string }>(sql, params);
-  return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, revenue: Number(x.revenue), deals: Number(x.deals) }));
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; revenue: string; deals: string }>(sql, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
 
 // «Отримані кошти» (факт) — угоди, що ввійшли в етап 9 АБО 10 у періоді, дедуп.
@@ -152,6 +152,68 @@ export const paidOnlyByMgr = (s: MoneyScope) => aggByMgr(STAGE_PAID, s, STAGE_SU
 // «Очікування оплат» (етап 8), анкер по входу — знаменник ОЧІКУВАНОГО чека.
 export const expectedMoney = (s: MoneyScope) => agg(STAGE_EXPECTED, s);
 export const expectedByTeam = (s: MoneyScope) => aggByTeam(STAGE_EXPECTED, s);
+export const expectedByMgr = (s: MoneyScope) => aggByMgr(STAGE_EXPECTED, s);
+
+export interface BucketRow { bucket: string; revenue: number; deals: number }
+
+/**
+ * «Отримані кошти» по бакетах часу (day|week|month), анкер = ПЕРШИЙ вхід у грошову
+ * зону (9∪10) у періоді, дедуп по угоді. Бакет — за датою входу. Часовий ряд, що
+ * сумується у receivedMoney того ж періоду.
+ */
+export async function receivedByBucket(s: MoneyScope, granularity: "day" | "week" | "month"): Promise<BucketRow[]> {
+  const gran = granularity === "day" || granularity === "month" ? granularity : "week";
+  const p: unknown[] = [FC_PIPELINES, STAGE_RECEIVED];
+  const evConds: string[] = [];
+  if (s.from) { p.push(s.from); evConds.push(`(e.changed_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); evConds.push(`(e.changed_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
+  const scope: string[] = [];
+  if (s.managerId) { p.push(s.managerId); scope.push(`d.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); scope.push(`m.team_id = $${p.length}`); }
+  const r = await pool.query<{ bucket: string; revenue: string; deals: string }>(
+    `WITH a AS (
+       SELECT e.kommo_id, MIN(e.changed_at) AS anchor_at
+       FROM deal_stage_events e
+       WHERE e.pipeline_id = ANY($1) AND e.status_id = ANY($2)${evConds.length ? " AND " + evConds.join(" AND ") : ""}
+       GROUP BY e.kommo_id
+     )
+     SELECT to_char(date_trunc('${gran}', (a.anchor_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket,
+            COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
+     FROM a JOIN deals d ON d.kommo_id = a.kommo_id JOIN managers m ON m.id = d.manager_id
+     ${scope.length ? "WHERE " + scope.join(" AND ") : ""}
+     GROUP BY 1 ORDER BY 1`,
+    p
+  );
+  return r.rows.map((x) => ({ bucket: x.bucket, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+
+export interface MgrWeekRow { managerId: number; weekStart: string; revenue: number; deals: number }
+
+/**
+ * «Отримані кошти» по (менеджер × тиждень) за місяць — для тижневої сітки план/факт
+ * (/managers). Анкер = ПЕРШИЙ вхід у грошову зону в межах місяця; тиждень — за
+ * датою входу (не створення). Сума тижнів = місячний received менеджера.
+ */
+export async function receivedByManagerWeek(managerIds: number[], monthStart: string): Promise<MgrWeekRow[]> {
+  const r = await pool.query<{ manager_id: number; week_start: string; revenue: string; deals: string }>(
+    `WITH a AS (
+       SELECT e.kommo_id, MIN(e.changed_at) AS anchor_at
+       FROM deal_stage_events e
+       WHERE e.pipeline_id = ANY($1) AND e.status_id = ANY($2)
+         AND (e.changed_at AT TIME ZONE 'Europe/Kyiv')::date >= $3::date
+         AND (e.changed_at AT TIME ZONE 'Europe/Kyiv')::date < ($3::date + interval '1 month')
+       GROUP BY e.kommo_id
+     )
+     SELECT d.manager_id,
+            to_char(date_trunc('week', (a.anchor_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS week_start,
+            COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
+     FROM a JOIN deals d ON d.kommo_id = a.kommo_id
+     WHERE d.manager_id = ANY($4)
+     GROUP BY d.manager_id, week_start`,
+    [FC_PIPELINES, STAGE_RECEIVED, monthStart, managerIds]
+  );
+  return r.rows.map((x) => ({ managerId: x.manager_id, weekStart: x.week_start, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
 
 /**
  * ЗНІМОК «станом на зараз» — угоди, що ПРЯМО ЗАРАЗ стоять на етапі 8 (очікуємо

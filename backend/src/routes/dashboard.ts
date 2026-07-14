@@ -1202,26 +1202,23 @@ dashboardRouter.get("/managers", async (req, res) => {
       const row = getOrInit(r.manager_id, r.week_start, r.funnel_stage);
       row.fact = Number(r.deal_count);
     }
-    const amountRow = getOrInit(r.manager_id, r.week_start, "payment_amount");
-    if (r.funnel_stage === "paid") {
-      amountRow.fact += Number(r.total_amount);
-    }
   }
   for (const r of planResult.rows) {
     const row = getOrInit(r.manager_id, r.week_start, r.metric);
     row.plan = Number(r.planned_value);
   }
+  // КРОК 2: payment_amount ФАКТ = «Отримані кошти» по тижнях (анкер по даті входу в
+  // етап 9∪10 + дедуп), а НЕ created-cohort знімок funnel_stage='paid' (той мутував:
+  // минулі тижні росли, коли угоди доходили до оплати). Сума тижнів = місячний received.
+  const recvWeeks = await money.receivedByManagerWeek(managerIds, monthStart);
+  for (const r of recvWeeks) getOrInit(r.managerId, r.weekStart, "payment_amount").fact += r.revenue;
 
-  // «Очікування» = live snapshot of in-progress money (invoice issued → awaiting
-  // payment) per manager — see EXPECTED_STAGES.
-  const expRes = await pool.query<{ manager_id: number; s: string }>(
-    `SELECT d.manager_id, COALESCE(SUM(d.price),0) AS s FROM deals d
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-      WHERE d.manager_id = ANY($1) AND ${EXPECTED_STAGES}
-      GROUP BY d.manager_id`,
-    [managerIds]
-  );
-  const expByMgr = new Map(expRes.rows.map((x) => [x.manager_id, Number(x.s)]));
+  // «Очікування оплат» = вхід у етап 8 «Очікуємо оплату» в місяці (анкер по даті
+  // входу, НЕ знімок і НЕ «Виставлення рахунку»). Core/money.ts.
+  const [expY, expM] = month.split("-").map(Number);
+  const monthEnd = new Date(Date.UTC(expY, expM, 0)).toISOString().slice(0, 10);
+  const expList = await money.expectedByMgr({ teamId, from: monthStart, to: monthEnd });
+  const expByMgr = new Map(expList.map((x) => [x.managerId, x.revenue]));
 
   const managersOut = managers.map((m) => {
     const weeks = rowsByManager.get(m.id) ?? [];
@@ -2076,22 +2073,15 @@ dashboardRouter.get("/teams", async (req, res) => {
   const from = (req.query.from as string) ?? null;
   const to = (req.query.to as string) ?? null;
 
-  const sucCond = ["psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL"];
-  const sp: unknown[] = [];
-  if (from) { sp.push(from); sucCond.push(`(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${sp.length}`); }
-  if (to) { sp.push(to); sucCond.push(`(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${sp.length}`); }
-  const success = await pool.query<{ tid: number; tname: string; rev: string; deals: string }>(
-    `SELECT t.id AS tid, t.name AS tname, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${sucCond.join(" AND ")} GROUP BY t.id, t.name`,
-    sp
-  );
-  const pay = await pool.query<{ tid: number; rev: string; deals: string }>(
-    `SELECT t.id AS tid, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
-     WHERE d.status_id IN (69716460, 60412544) GROUP BY t.id`
-  );
+  // КРОК 2: гроші з core/money.ts (анкер по даті входу + дедуп). revenue = received
+  // (етап 9∪10); avgCheck — success-only (142). Знімки прибрано.
+  const teamScope: money.MoneyScope = { from, to };
+  const [recvTeamAgg, sucTeamAgg, recvMgrAgg, sucMgrAgg] = await Promise.all([
+    money.receivedByTeam(teamScope),
+    money.successByTeam(teamScope),
+    money.receivedByMgr(teamScope),
+    money.successByMgr(teamScope),
+  ]);
   const lc: string[] = [];
   const lp: unknown[] = [];
   if (from) { lp.push(from); lc.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${lp.length}`); }
@@ -2109,37 +2099,11 @@ dashboardRouter.get("/teams", async (req, res) => {
      FROM receivables r JOIN managers m ON m.id = r.manager_id
      WHERE m.team_id IS NOT NULL GROUP BY m.team_id`
   );
-  // Для стандартного середнього чека: очікувані оплати (знімок invoiced) і
-  // поставлені машини (снапшот-проксі, створені в періоді) по командах/менеджерах.
-  const tExp = await pool.query<{ tid: number; rev: string }>(
-    `SELECT m.team_id AS tid, COALESCE(SUM(d.price),0) AS rev
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE psm.funnel_stage = 'invoiced' AND m.team_id IS NOT NULL GROUP BY m.team_id`
-  );
-  // Правило №1: машини = перейшли в успіх у періоді → беремо з success-виборок нижче.
-  const mExpQ = await pool.query<{ id: number; rev: string }>(
-    `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS rev
-     FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE psm.funnel_stage = 'invoiced' AND d.manager_id IS NOT NULL GROUP BY d.manager_id`
-  );
 
 
   // Per-manager breakdown for the team drill-down: revenue (success+payment),
   // deals, the month's plan and receivables — one row per active manager.
   const planMonth = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
-  const mSuccess = await pool.query<{ id: number; name: string; tid: number; rev: string; deals: string }>(
-    `SELECT m.id, m.name, m.team_id AS tid, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${sucCond.join(" AND ")} GROUP BY m.id, m.name, m.team_id`,
-    sp
-  );
-  const mPay = await pool.query<{ id: number; name: string; tid: number; rev: string; deals: string }>(
-    `SELECT m.id, m.name, m.team_id AS tid, COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-     WHERE d.status_id IN (69716460, 60412544) GROUP BY m.id, m.name, m.team_id`
-  );
   const mPlan = await pool.query<{ id: number; name: string; tid: number; plan: string }>(
     `SELECT m.id, m.name, m.team_id AS tid, SUM(p.planned_value) AS plan
      FROM plans p JOIN managers m ON m.id = p.manager_id AND m.is_active
@@ -2158,11 +2122,11 @@ dashboardRouter.get("/teams", async (req, res) => {
     if (tid) e.teamId = tid;
     return e;
   };
-  for (const r of mSuccess.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); e.dispatched += Number(r.deals); e.successRev += Number(r.rev); }
-  for (const r of mPay.rows) { const e = mget(r.id, r.tid, r.name); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
+  // revenue/deals = received (анкер+дедуп); dispatched/successRev = success-only (avgCheck).
+  for (const r of recvMgrAgg) { const e = mget(r.managerId, r.teamId, r.name); e.revenue += r.revenue; e.deals += r.deals; }
+  for (const r of sucMgrAgg) { const e = mget(r.managerId, r.teamId, r.name); e.dispatched += r.deals; e.successRev += r.revenue; }
   for (const r of mPlan.rows) { mget(r.id, r.tid, r.name).plan += Number(r.plan); }
   for (const r of mRecv.rows) { const e = mmap.get(r.id); if (e) e.receivables += Number(r.debt); }
-  for (const r of mExpQ.rows) { const e = mmap.get(r.id); if (e) e.expected += Number(r.rev); }
 
   const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; expected: number; dispatched: number; successRev: number }>();
   const get = (id: number, name?: string) => {
@@ -2171,11 +2135,10 @@ dashboardRouter.get("/teams", async (req, res) => {
     if (name) e.teamName = name;
     return e;
   };
-  for (const r of success.rows) { const e = get(r.tid, r.tname); e.revenue += Number(r.rev); e.deals += Number(r.deals); e.dispatched += Number(r.deals); e.successRev += Number(r.rev); }
-  for (const r of pay.rows) { const e = get(r.tid); e.revenue += Number(r.rev); e.deals += Number(r.deals); }
+  for (const r of recvTeamAgg) { const e = get(r.teamId, r.teamName); e.revenue += r.revenue; e.deals += r.deals; }
+  for (const r of sucTeamAgg) { const e = get(r.teamId, r.teamName); e.dispatched += r.deals; e.successRev += r.revenue; }
   for (const r of conv.rows) { const e = get(r.tid); e.leads += Number(r.leads); e.paid += Number(r.paid); }
   for (const r of recv.rows) { const e = get(r.tid); e.receivables += Number(r.debt); }
-  for (const r of tExp.rows) { const e = get(r.tid); e.expected += Number(r.rev); }
 
   const teams = [...map.values()]
     // Drop teams with no activity in the period (they leak in via the payment /
@@ -2660,16 +2623,10 @@ dashboardRouter.get("/report", async (req, res) => {
     return c;
   };
 
-  // Success (status 142, closed in period) revenue + deals per time bucket.
-  const p1: unknown[] = [];
-  const succWhere = ["psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL",
-    ...scopeSql(p1), ...dateSql("closed_at_kommo", p1)].join(" AND ");
-  const succPeriod = await pool.query<{ bucket: string; revenue: string; deals: string }>(
-    `SELECT to_char(date_trunc('${granularity}', (d.closed_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket,
-            COALESCE(SUM(d.price), 0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${succWhere} GROUP BY 1 ORDER BY 1`, p1);
+  // КРОК 2: усі гроші звіту — з core/money.ts (анкер по даті входу + дедуп, без знімків).
+  const reportScope: money.MoneyScope = { from, to, managerId, teamId };
+  // Часовий ряд «Отримані кошти» по бакетах (received = етап 9∪10, дедуп по угоді).
+  const recvBuckets = await money.receivedByBucket(reportScope, granularity);
 
   // Created full-cycle deals per bucket (by create date).
   const p2: unknown[] = [[8921932, 155304]];
@@ -2684,23 +2641,18 @@ dashboardRouter.get("/report", async (req, res) => {
     if (!e) { e = { period: b, revenue: 0, deals: 0, created: 0 }; byPeriodMap.set(b, e); }
     return e;
   };
-  for (const r of succPeriod.rows) { const e = bp(r.bucket); e.revenue += Number(r.revenue); e.deals += Number(r.deals); }
+  for (const r of recvBuckets) { const e = bp(r.bucket); e.revenue += r.revenue; e.deals += r.deals; }
   for (const r of createdPeriod.rows) bp(r.bucket).created += Number(r.c);
   const byPeriod = [...byPeriodMap.values()]
     .sort((a, b) => (a.period < b.period ? -1 : 1))
     .map((e) => ({ ...e, avgCheck: e.deals > 0 ? Math.round(e.revenue / e.deals) : 0 }));
 
-  // Summary totals (period): success + payment snapshot, created, new/repeat, receivables.
-  const succTotal = await pool.query<{ revenue: string; deals: string }>(
-    `SELECT COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${succWhere}`, p1);
-  const p3: unknown[] = [[69716460, 60412544]];
-  const payWhere = ["d.status_id = ANY($1)", ...scopeSql(p3)].join(" AND ");
-  const payTotal = await pool.query<{ revenue: string; deals: string }>(
-    `SELECT COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id WHERE ${payWhere}`, p3);
+  // Summary totals (period): received = success ⊎ paidOnly (анкер+дедуп, знімки прибрано).
+  const [reportReceived, reportSuccess, reportPaidOnly] = await Promise.all([
+    money.receivedMoney(reportScope),
+    money.successMoney(reportScope),
+    money.paidOnlyMoney(reportScope),
+  ]);
   const createdTotal = byPeriod.reduce((s, e) => s + e.created, 0);
 
   const p4: unknown[] = [];
@@ -2731,12 +2683,12 @@ dashboardRouter.get("/report", async (req, res) => {
     `SELECT COALESCE(SUM(r.amount),0) AS total FROM receivables r JOIN managers m ON m.id = r.manager_id
      WHERE ${recvC.join(" AND ")}`, p5);
 
-  const successRevenue = Number(succTotal.rows[0]?.revenue ?? 0);
-  const successDeals = Number(succTotal.rows[0]?.deals ?? 0);
-  const paymentRevenue = Number(payTotal.rows[0]?.revenue ?? 0);
-  const paymentDeals = Number(payTotal.rows[0]?.deals ?? 0);
-  const revenue = successRevenue + paymentRevenue;
-  const deals = successDeals + paymentDeals;
+  const successRevenue = reportSuccess.revenue;
+  const successDeals = reportSuccess.deals;
+  const paymentRevenue = reportPaidOnly.revenue; // «досі в оплаті» (етап 9, ще не 142)
+  const paymentDeals = reportPaidOnly.deals;
+  const revenue = reportReceived.revenue;
+  const deals = reportReceived.deals;
   // Full per-manager scorecard (the metrics from the manual Excel report).
   const { adSources: reportAdSources } = await getSettings();
   const actP: unknown[] = [[8921932, 155304]];
@@ -2785,33 +2737,13 @@ dashboardRouter.get("/report", async (req, res) => {
   const adPriceVoiced = Number(ftRes.rows[0]?.voiced ?? 0);
   const adFirstTouchAnalyzed = Number(ftRes.rows[0]?.analyzed ?? 0);
 
-  // Success (142, closed in period) per manager.
-  const scP: unknown[] = [];
-  const scConds = ["psm.funnel_stage = 'paid'", "d.status_id = 142", "d.closed_at_kommo IS NOT NULL", ...scopeSql(scP), ...dateSql("closed_at_kommo", scP)];
-  const succByMgr = await pool.query<{ id: number; name: string; revenue: string; deals: string }>(
-    `SELECT m.id, m.name, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
-     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${scConds.join(" AND ")} GROUP BY m.id, m.name`, scP);
-
-  // Payment-received snapshot (₴) per manager.
-  const prP: unknown[] = [[69716460, 60412544]];
-  const prScope = scopeSql(prP);
-  const payByMgr = await pool.query<{ id: number; s: string }>(
-    `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     WHERE d.status_id = ANY($1) ${prScope.length ? "AND " + prScope.join(" AND ") : ""}
-     GROUP BY d.manager_id`, prP);
-
-  // «Очікування» per manager — invoiced-stage snapshot (bills awaiting payment).
-  const expP: unknown[] = [];
-  const expScope = scopeSql(expP);
-  const expByMgr = await pool.query<{ id: number; s: string }>(
-    `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s
-     FROM deals d JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${EXPECTED_STAGES} ${expScope.length ? "AND " + expScope.join(" AND ") : ""}
-     GROUP BY d.manager_id`, expP);
+  // Per-manager гроші — анкер+дедуп (core/money.ts). success=142; paidOnly=етап 9
+  // без 142; expected=етап 8. Сума менеджерів = received команди (consistency).
+  const [succByMgrAgg, paidByMgrAgg, expByMgrAgg] = await Promise.all([
+    money.successByMgr(reportScope),
+    money.paidOnlyByMgr(reportScope),
+    money.expectedByMgr(reportScope),
+  ]);
 
   // Передані заявки per manager (period) — з «Реєстру» лідоген-бота: один лід =
   // один вхід у «Нова заявка від лідогенератора», DISTINCT lead_id за період.
@@ -2853,14 +2785,14 @@ dashboardRouter.get("/report", async (req, res) => {
     return e;
   };
   for (const r of actByMgr.rows) { const e = sc(r.id, r.name); e.adLeads = Number(r.ad_leads); e.quotes = Number(r.quotes); }
-  for (const r of succByMgr.rows) {
-    const e = sc(r.id, r.name);
-    e.successRevenue = Number(r.revenue); e.successDeals = Number(r.deals);
+  for (const r of succByMgrAgg) {
+    const e = sc(r.managerId, r.name);
+    e.successRevenue = r.revenue; e.successDeals = r.deals;
     // Правило №1: «Поставлені машини» = перейшли в успіх у періоді (= успішні угоди).
-    e.dispatched = Number(r.deals); e.dispatchedSum = Number(r.revenue);
+    e.dispatched = r.deals; e.dispatchedSum = r.revenue;
   }
-  for (const r of payByMgr.rows) sc(r.id).paymentReceived = Number(r.s);
-  for (const r of expByMgr.rows) sc(r.id).expected = Number(r.s);
+  for (const r of paidByMgrAgg) sc(r.managerId).paymentReceived = r.revenue;
+  for (const r of expByMgrAgg) sc(r.managerId).expected = r.revenue;
   for (const r of transfByMgr.rows) sc(r.id).transfers = Number(r.c);
   for (const r of carryByMgr.rows) { const e = sc(r.id); e.carryover = Number(r.amount); e.carryoverDeals = Number(r.deals); }
   // Monthly payment_amount plan per manager (for the План/Факт drill-down).
