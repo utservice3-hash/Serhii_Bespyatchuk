@@ -29,6 +29,10 @@ async function main() {
   for (const r of [...res.dashboardOver].sort((a, b) => b.deltaPct - a.deltaPct).slice(0, 20))
     console.log(`   🔴 ${r.ym} ${r.scope.padEnd(7)} ${r.name.slice(0, 22).padEnd(22)} money=${Math.round(r.ourRevenue)} deals=${Math.round(r.kommoRevenue)} Δ=${(r.deltaPct * 100).toFixed(2)}% (${r.ourDeals}/${r.kommoDeals})`);
 
+  // Дормантні: виграні в Kommo, яких немає в deals (ціль авто-хілу вночі).
+  console.log(`\nДОРМАНТНІ (Kommo 142, немає в deals): ${res.missingWonIds.length}${res.missingWonIds.length ? " 🩹" : " ✓"}`);
+  for (const m of res.missingWonByMonth) console.log(`   ${m.ym}: ${m.ids.length} [${m.ids.slice(0, 10).join(",")}${m.ids.length > 10 ? "…" : ""}]`);
+
   console.log(res.ok ? "\n✅ ЗЕЛЕНО — усі три рівні збігаються." : "\n🔴 Є розбіжності — див. вище (НЕ підганяти поріг).");
   return res.ok;
 }

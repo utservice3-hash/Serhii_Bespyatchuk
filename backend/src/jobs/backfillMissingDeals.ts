@@ -37,23 +37,17 @@ import { backfillClientKey } from "./backfillClientKey.js";
  *
  * ⚠️ НЕ запускати паралельно з прод-синком: `touch KOMMO_PAUSED` перед стартом.
  */
-export async function backfillMissingDeals(fromDate = "2025-06-01"): Promise<void> {
-  const idsRes = await pool.query<{ kommo_id: string }>(
-    `SELECT DISTINCT e.kommo_id
-       FROM deal_stage_events e
-       LEFT JOIN deals d ON d.kommo_id = e.kommo_id
-      WHERE d.kommo_id IS NULL
-        AND (e.changed_at AT TIME ZONE 'Europe/Kyiv')::date >= $1::date
-      ORDER BY e.kommo_id`,
-    [fromDate]
-  );
-  const ids = idsRes.rows.map((r) => Number(r.kommo_id));
-  console.log(`backfillMissingDeals: ${ids.length} відсутніх угод до дотягування (from=${fromDate}).`);
-  if (ids.length === 0) {
-    console.log("Нічого дотягувати — діри немає.");
-    return;
-  }
-
+/**
+ * Дотягнути конкретні угоди по їхніх Kommo-id: `fetchLeadsByIds` батчами по 250
+ * (OOM-safe: контакти/компанії ЛИШЕ по id угод батчу) → `upsertDeal` (ON CONFLICT,
+ * ідемпотентно). Повертає, скільки угод реально upsert-нуто.
+ *
+ * ⚠️ НЕ запускає reclassifyAdChannel/backfillClientKey — це роблять виклики окремо
+ * (для повного бекфілу — раз наприкінці; для точкового авто-хілу — лише коли є що).
+ * Спільне ядро для backfillMissingDeals (масовий) та auto-heal у звірці (точковий).
+ */
+export async function healDealsByIds(ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
   const managerRows = await pool.query<{ id: number; kommo_user_id: string }>(
     `SELECT id, kommo_user_id FROM managers WHERE kommo_user_id IS NOT NULL`
   );
@@ -61,12 +55,10 @@ export async function backfillMissingDeals(fromDate = "2025-06-01"): Promise<voi
     managerRows.rows.map((row) => [Number(row.kommo_user_id), row.id])
   );
 
-  let fetched = 0,
-    upserted = 0;
+  let upserted = 0;
   for (let i = 0; i < ids.length; i += 250) {
     const batch = ids.slice(i, i + 250);
     const deals = await fetchLeadsByIds(batch);
-    fetched += deals.length;
 
     // Контакти/компанії ЛИШЕ по id угод батчу (ніколи fetchAll* — OOM).
     const contactIds = new Set<number>();
@@ -95,8 +87,28 @@ export async function backfillMissingDeals(fromDate = "2025-06-01"): Promise<voi
       await upsertDeal(deal, managerIdByKommoUserId, companyNameById, contactById);
       upserted += 1;
     }
-    console.log(`  …${Math.min(i + 250, ids.length)}/${ids.length} (fetched ${fetched}, upserted ${upserted})`);
   }
+  return upserted;
+}
+
+export async function backfillMissingDeals(fromDate = "2025-06-01"): Promise<void> {
+  const idsRes = await pool.query<{ kommo_id: string }>(
+    `SELECT DISTINCT e.kommo_id
+       FROM deal_stage_events e
+       LEFT JOIN deals d ON d.kommo_id = e.kommo_id
+      WHERE d.kommo_id IS NULL
+        AND (e.changed_at AT TIME ZONE 'Europe/Kyiv')::date >= $1::date
+      ORDER BY e.kommo_id`,
+    [fromDate]
+  );
+  const ids = idsRes.rows.map((r) => Number(r.kommo_id));
+  console.log(`backfillMissingDeals: ${ids.length} відсутніх угод до дотягування (from=${fromDate}).`);
+  if (ids.length === 0) {
+    console.log("Нічого дотягувати — діри немає.");
+    return;
+  }
+
+  const upserted = await healDealsByIds(ids);
 
   console.log(`backfillMissingDeals: дотягнуто ${upserted} угод. Запускаю reclassifyAdChannel + backfillClientKey…`);
   const reclassified = await reclassifyAdChannel();

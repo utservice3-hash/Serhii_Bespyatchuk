@@ -131,6 +131,10 @@ export interface ReconResult {
   dashboardMaxDelta: number;
   // Рівень ЦІЛІСНІСТЬ: кожен deal_id з подій є в deals.
   integrity: IntegrityResult;
+  // ДОРМАНТНІ УГОДИ: Kommo вважає виграними (142, повний цикл, closed у місяці),
+  // але їх НЕМАЄ в `deals` (протік синк по updated_at). Ціль авто-хілу.
+  missingWonIds: number[];
+  missingWonByMonth: { ym: string; ids: number[] }[];
   ok: boolean;
 }
 
@@ -149,6 +153,7 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
 
   const rows: ReconRow[] = [];
   const dashRows: ReconRow[] = [];
+  const missingWonByMonth: { ym: string; ids: number[] }[] = [];
   for (const M of lastMonths(months)) {
     // НАШЕ — deals у статусі 142, closed_at у місяці (та сама дефініція, що Kommo).
     // deals.price уже збережено мінусом для мінус-угод → SUM уже нетто.
@@ -175,6 +180,20 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
 
     // KOMMO НАПРЯМУ — виграні ліди, закриті в місяці, згруповані по менеджеру/команді.
     const won = await fetchWonLeads(M.fromUnix, M.toUnix);
+
+    // ДОРМАНТНІ — виграні в Kommo (київський бакет = цей місяць), яких немає в `deals`
+    // ВЗАГАЛІ (протікання синку по updated_at). Саме їх дотягує авто-хіл.
+    const wonThisMonthIds = won.filter((l) => kyivMonth(l.closed_at) === M.ym).map((l) => l.id);
+    if (wonThisMonthIds.length) {
+      const present = await pool.query<{ kommo_id: string }>(
+        `SELECT kommo_id FROM deals WHERE kommo_id = ANY($1::bigint[])`,
+        [wonThisMonthIds]
+      );
+      const presentSet = new Set(present.rows.map((r) => String(r.kommo_id)));
+      const missing = wonThisMonthIds.filter((id) => !presentSet.has(String(id)));
+      if (missing.length) missingWonByMonth.push({ ym: M.ym, ids: missing });
+    }
+
     const kMgr = new Map<number, { rev: number; n: number }>();
     const kTeam = new Map<number, { rev: number; n: number }>();
     for (const l of won) {
@@ -248,5 +267,6 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
   const dashboardMaxDelta = completedDash.reduce((m, r) => Math.max(m, r.deltaPct), 0);
   // ok = НЕМАЄ МАТЕРІАЛЬНИХ розбіжностей (дрібні дилки не валять звірку) + цілісність.
   const ok = rowsOverThreshold.length === 0 && dashboardOver.length === 0 && integrity.orphans === 0;
-  return { months, rows, rowsOverThreshold, syncMinor, maxDeltaPct, dashRows, dashboardOver, dashMinor, dashboardMaxDelta, integrity, ok };
+  const missingWonIds = missingWonByMonth.flatMap((m) => m.ids);
+  return { months, rows, rowsOverThreshold, syncMinor, maxDeltaPct, dashRows, dashboardOver, dashMinor, dashboardMaxDelta, integrity, missingWonIds, missingWonByMonth, ok };
 }
