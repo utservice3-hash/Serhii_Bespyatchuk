@@ -16,7 +16,18 @@ export const config = {
   // Fallback 4000 + host=undefined → у СТАРОМУ режимі (Supervisor+Apache proxy) слухаємо
   // 0.0.0.0:4000 як раніше; тому цей код безпечний і ДО, і ПІСЛЯ перемикання панелі.
   port: Number(process.env.PORT ?? 4000),
-  host: process.env.HOST || undefined,
+  // ⚠️ adm.tools інжектить HOST як ПОВНИЙ URL, напр. "http://127.1.9.113:3000" — не голий
+  // IP. app.listen(port, hostname) хоче саме hostname → парсимо URL і беремо .hostname
+  // (127.1.9.113). Голий IP/hostname лишаємо як є. Порожньо (старий режим/дев) → undefined.
+  host: (() => {
+    const raw = process.env.HOST;
+    if (!raw) return undefined;
+    try {
+      return /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? new URL(raw).hostname : raw;
+    } catch {
+      return raw;
+    }
+  })(),
   databaseUrl: required("DATABASE_URL"),
   jwtSecret: required("JWT_SECRET"),
   kommo: {
