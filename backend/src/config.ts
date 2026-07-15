@@ -12,7 +12,11 @@ function required(name: string): string {
 }
 
 export const config = {
+  // Node.js-режим adm.tools інжектить PORT (3000 у IP-режимі) і HOST (127.X.X.X).
+  // Fallback 4000 + host=undefined → у СТАРОМУ режимі (Supervisor+Apache proxy) слухаємо
+  // 0.0.0.0:4000 як раніше; тому цей код безпечний і ДО, і ПІСЛЯ перемикання панелі.
   port: Number(process.env.PORT ?? 4000),
+  host: process.env.HOST || undefined,
   databaseUrl: required("DATABASE_URL"),
   jwtSecret: required("JWT_SECRET"),
   kommo: {

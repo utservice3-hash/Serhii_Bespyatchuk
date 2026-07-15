@@ -19,6 +19,24 @@
 - **Правило:** розробляй на дев → ff-merge у прод → пуш обох. Тримати в синхроні.
 
 ## 3. Деплой (продакшн)
+
+> 🔴 **МІГРАЦІЯ ІНФРИ (з 15.07.2026) — перехід на офіційний Node.js-режим adm.tools.**
+> Shared-хост **вбиває будь-який процес, що слухає TCP-порт** (доведено тестом: голий
+> HTTP-listener гине ~40с, а idle-node без порту живе; акаунт займає 433 МБ / сервер
+> вільний на 208 ГБ — це НЕ памʼять). Тому Supervisor+Apache-proxy більше не тримає
+> бекенд живим (crash-loop). **Рішення (БЕЗ VPS):** `dashboard.uts.ua` → режим Node.js
+> (nginx проксує на `HOST:PORT`, які дає хост; процес стає «легальним» і не вбивається).
+> Код уже слухає `process.env.HOST`/`PORT` (fallback 4000, безпечно й у старому режимі) і
+> сам віддає фронт (`backend/src/index.ts`).
+>
+> 🔴 **ОБОВʼЯЗКОВА ЗАДАЧА ЗАКРИТТЯ — ПРИБРАТИ RELAY (не забути!).** На час міграції +
+> КРОК 9 + конверсій автономний деплой іде через **ТИМЧАСОВИЙ relay на `test.uts.ua`**
+> (`https://test.uts.ua/relay-<slug>.php`, свіжий ротований токен; старий `d7bb7c59…` на
+> `dashboard.uts.ua` перестане виконуватись після перемикання в Node-режим). Коли КРОК 9
+> і конверсії задеплоєні — **ВИДАЛИТИ обидва relay-файли** (`uts.ua/test/relay-*.php` та
+> `uts.ua/dashboard/relay-*.php`) разом із `api-proxy.php` і зачистити токен. Це
+> shell-backdoor — назавжди не лишати.
+
 Сервер **evraziat** (shared, CloudLinux). Керується через **relay-PHP**:
 `POST https://dashboard.uts.ua/relay-d7bb7c59.php`, заголовок `X-Relay-Token: <токен>`, форма `cmd=<shell>`. Токен — у `CLAUDE.md` (⚠️ **світився — треба ротувати**). Cwd: `/home/evraziat/uts.ua/dashboard`. Завжди префікс `export PATH=/usr/local/node26/bin:$PATH`.
 

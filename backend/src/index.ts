@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
+import path from "path";
+import { fileURLToPath } from "url";
 import { config } from "./config.js";
 import { authRouter } from "./routes/auth.js";
 import { dashboardRouter } from "./routes/dashboard.js";
@@ -49,6 +51,11 @@ import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 import { backupDb } from "./jobs/backupDb.js";
 import { catchUpAiChat } from "./ai/respond.js";
 import { pool } from "./db/pool.js";
+
+// dist/index.js → ../.. = корінь сайту (dashboard/), де лежить зібраний фронт
+// (index.html + assets/), який деплоїться поряд із backend/.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SITE_ROOT = path.join(__dirname, "..", "..");
 
 const app = express();
 app.use(cors());
@@ -359,9 +366,18 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
   });
 }
 
-app.listen(config.port, () => {
-  console.log(`Backend listening on port ${config.port}`);
-});
+// 🔴 NODE.JS-РЕЖИМ (adm.tools): nginx проксує ВЕСЬ домен на цей застосунок, а Apache/
+// .htaccess більше не віддає фронт. Тому Express сам віддає зібраний фронт (Vite build у
+// корені сайту) + SPA-fallback. Реєструється ПІСЛЯ всіх /api-роутів. Whitelist статики —
+// щоб НЕ виставити backend/, .env, docs/, .git, *.php (relay!). У старому режимі цей блок
+// нешкідливий (Apache віддає статику першим, node отримує лише /api через proxy).
+app.use("/assets", express.static(path.join(SITE_ROOT, "assets"), { immutable: true, maxAge: "1y" }));
+app.get(["/favicon.svg", "/icons.svg"], (req, res) => res.sendFile(path.join(SITE_ROOT, req.path)));
+app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(SITE_ROOT, "index.html")));
+
+const onListen = () => console.log(`Backend listening on ${config.host ?? "0.0.0.0"}:${config.port}`);
+if (config.host) app.listen(config.port, config.host, onListen);
+else app.listen(config.port, onListen);
 
 // 🔴 СТАРТ БЕЗ СПЛЕСКУ ПАМʼЯТІ (2 ГБ shared-акаунт adm.tools, crash-loop 15.07.2026).
 // Раніше вся батарея синків стартувала СИНХРОННО на буті → пік памʼяті → хостинг
