@@ -172,7 +172,7 @@ cron.schedule("*/30 * * * *", () => {
   if (isKommoPaused()) return;
   syncKommo().catch((err) => console.error("Kommo sync failed:", err));
 });
-if (!isKommoPaused()) syncKommo().catch((err) => console.error("Kommo startup sync failed:", err));
+// (startup-виклик syncKommo → відкладено, див. блок «СТАРТ БЕЗ СПЛЕСКУ» наприкінці)
 
 // Nightly reconciliation: вікно 45→10 днів (кратно менше сторінок пагінації —
 // це був найбільший разовий сплеск). Лікує гепи інкременту.
@@ -209,7 +209,6 @@ cron.schedule("35 2 1 * *", () => {
 cron.schedule("50 * * * *", () => {
   freshnessWatch().catch((err) => console.error("freshnessWatch failed:", err));
 });
-freshnessWatch().catch((err) => console.error("freshnessWatch startup failed:", err));
 
 // syncStageEvents — КОЖНІ 30 ХВ (:15/:45). 🔴 КРИТИЧНО ДЛЯ СВІЖОСТІ ГРОШЕЙ:
 // core/money.ts анкериться на deal_stage_events, тож актуальність «Отриманих коштів»
@@ -248,34 +247,29 @@ cron.schedule("30 4 * * *", () => {
 cron.schedule("0 0 1 * *", () => {
   snapshotCarryover().catch((err) => console.error("Carryover snapshot failed:", err));
 });
-snapshotCarryover().catch((err) => console.error("Carryover startup snapshot failed:", err));
 
 // Ван-ту-ван нагадування: 1-го числа 06:00 + на старті (посіяти поточний місяць).
 cron.schedule("0 6 1 * *", () => {
   createOneOnOneReminders().catch((err) => console.error("One-on-one reminders failed:", err));
 });
-createOneOnOneReminders().catch((err) => console.error("One-on-one reminders startup failed:", err));
 
 // Чергування: щоранку 07:30 + на старті — задача «сьогодні ти черговий» тим,
 // хто в графіку на сьогодні (ідемпотентно по даті).
 cron.schedule("30 7 * * *", () => {
   createDutyReminders().catch((err) => console.error("Duty reminders failed:", err));
 });
-createDutyReminders().catch((err) => console.error("Duty reminders startup failed:", err));
 
 // Нічна авто-звірка даних із CRM: щодня 03:30 + на старті. Ловить «тихі» баги
 // (незамаплені статуси, дублі менеджерів, застій синку) і сигналить КВП задачею.
 cron.schedule("30 3 * * *", () => {
   runDataReconciliation().catch((err) => console.error("Data reconciliation failed:", err));
 });
-runDataReconciliation().catch((err) => console.error("Data reconciliation startup failed:", err));
 
 // Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».
 // Щодня 08:20 + на старті (ідемпотентно через task_created_at).
 cron.schedule("20 8 * * *", () => {
   createReceivableDeadlineTasks().catch((err) => console.error("Receivable deadline tasks failed:", err));
 });
-createReceivableDeadlineTasks().catch((err) => console.error("Receivable deadline tasks startup failed:", err));
 
 // Refresh receivables from the accounting Google Sheet every 15 minutes so a
 // paid invoice removed from the file drops off the dashboard promptly (a manual
@@ -289,28 +283,24 @@ cron.schedule("*/15 * * * *", () => {
 cron.schedule("*/30 * * * *", () => {
   syncLeadgenRegistry().catch((err) => console.error("Leadgen registry sync failed:", err));
 });
-syncLeadgenRegistry().catch((err) => console.error("Leadgen registry startup sync failed:", err));
 
 // «Перший дотик» (AI-транскрибація дзвінка) — джерело правди для показника
 // «озвучення ціни в перший дотик». Кожні 30 хв + на старті. TRUNCATE+insert.
 cron.schedule("*/30 * * * *", () => {
   syncFirstTouch().catch((err) => console.error("First-touch sync failed:", err));
 });
-syncFirstTouch().catch((err) => console.error("First-touch startup sync failed:", err));
 
 // Розділ «Статистики» — живий перерахунок auto-метрик (поточний місяць+тиждень).
 // Щогодини + на старті. Метрики агрегатні, частіше не потрібно. UPSERT.
 cron.schedule("25 * * * *", () => {
   recomputeStatistics().catch((err) => console.error("Statistics recompute failed:", err));
 });
-recomputeStatistics().catch((err) => console.error("Statistics startup recompute failed:", err));
 
 // «Кількість дзвінків» із Ringostat API (відділ «Менеджери з продажу» → sales.calls).
 // Щогодини (:35) + старт. Порожній Auth-key → джоба сама себе пропускає.
 cron.schedule("35 * * * *", () => {
   syncRingostatCalls().catch((err) => console.error("Ringostat calls sync failed:", err));
 });
-syncRingostatCalls().catch((err) => console.error("Ringostat startup calls sync failed:", err));
 
 // Готівка = приход (не бюджет). Легкий фетч приходу по готівкових 142-угодах
 // поточного міс+тижня. Раз на 3 год + старт (готівка змінюється повільно, тримаємо
@@ -318,7 +308,6 @@ syncRingostatCalls().catch((err) => console.error("Ringostat startup calls sync 
 cron.schedule("50 */3 * * *", () => {
   syncCashIncome().catch((err) => console.error("Cash-income sync failed:", err));
 });
-syncCashIncome().catch((err) => console.error("Cash-income startup sync failed:", err));
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {
@@ -331,7 +320,6 @@ cron.schedule("0 5 * * *", () => {
   if (isKommoPaused()) return;
   syncCarriers().catch((err) => console.error("Carriers sync failed:", err));
 });
-syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
 
 // Fetch 3 fresh logistics-industry news items daily at 08:00.
 cron.schedule("0 8 * * *", () => {
@@ -350,9 +338,6 @@ cron.schedule("0 3 * * *", () => {
   backupDb().catch((err) => console.error("DB backup failed:", err));
 });
 
-// «Робота з АІ»: answer a user message that arrived while the server was down.
-catchUpAiChat().catch((err) => console.error("AI chat catch-up failed:", err));
-
 // Backstop: a rejected query inside an un-try/catched async route handler used to
 // take the WHOLE backend down (Node exits on unhandledRejection). Log and keep the
 // server alive so one bad request can't blank the dashboard for everyone. The
@@ -364,6 +349,48 @@ process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION (kept alive):", err);
 });
 
+// Мʼяке завершення: закрити пул до Neon перед виходом (SIGTERM від хостингу перед
+// SIGKILL) — щоб рестарт не лишав відкритих конекшенів. SIGKILL не перехопити, але
+// якщо ліміт бʼє через SIGTERM — цей шлях відпускає конекшени чисто.
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.once(sig, () => {
+    console.log(`${sig} received — closing DB pool and exiting.`);
+    pool.end().finally(() => process.exit(0));
+  });
+}
+
 app.listen(config.port, () => {
   console.log(`Backend listening on port ${config.port}`);
 });
+
+// 🔴 СТАРТ БЕЗ СПЛЕСКУ ПАМʼЯТІ (2 ГБ shared-акаунт adm.tools, crash-loop 15.07.2026).
+// Раніше вся батарея синків стартувала СИНХРОННО на буті → пік памʼяті → хостинг
+// убивав процес (SIGKILL, без стеку) → Supervisor рестартив → crash-loop (вотермарк
+// last_event_at застрягав, бо syncStageEvents не доживав до onChunkDone). Тепер на
+// буті процес ЛИШЕ піднімає Express і слухає порт; синки — ВІДКЛАДЕНО й СХОДАМИ
+// (перший через 2.5 хв, далі +45с), щоб дожити до стабільного idle на мінімумі памʼяті.
+// Cron-розклади незмінні — це лише разові стартові виклики. Порядок: легкі → важкі,
+// syncKommo (найважчий) останнім.
+const deferredStartup: Array<[string, () => Promise<unknown>]> = [
+  ["freshnessWatch", () => freshnessWatch()],
+  ["catchUpAiChat", () => catchUpAiChat()],
+  ["snapshotCarryover", () => snapshotCarryover()],
+  ["createOneOnOneReminders", () => createOneOnOneReminders()],
+  ["createDutyReminders", () => createDutyReminders()],
+  ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],
+  ["recomputeStatistics", () => recomputeStatistics()],
+  ["syncReceivables", () => syncReceivables()],
+  ["syncLeadgenRegistry", () => syncLeadgenRegistry()],
+  ["syncFirstTouch", () => syncFirstTouch()],
+  ["syncRingostatCalls", () => syncRingostatCalls()],
+  ["syncCashIncome", () => syncCashIncome()],
+  ["runDataReconciliation", () => runDataReconciliation()],
+  ["syncKommo", () => (isKommoPaused() ? Promise.resolve() : syncKommo())],
+];
+let startupDelayMs = 150_000; // перший синк через 2.5 хв — процес встигає стати idle
+for (const [name, fn] of deferredStartup) {
+  setTimeout(() => {
+    fn().catch((err) => console.error(`${name} startup failed:`, err));
+  }, startupDelayMs);
+  startupDelayMs += 45_000; // сходинки по 45с
+}
