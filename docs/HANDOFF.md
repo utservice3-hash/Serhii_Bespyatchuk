@@ -15,7 +15,8 @@
 
 ## 2. Репозиторій і гілки
 - **Дев:** `claude/dashboard-development-54e8ng` — тут розробка.
-- **Прод:** `claude/friendly-galileo-8pijhl` — це тягне продакшн.
+- **Прод:** `claude/friendly-galileo-8pijhl` — це тягне продакшн (зараз @ `ff282f6`).
+- **`krok9-phase1`** (@ `4dba582`): готовий рероут секцій на `core/` (КРОК 9 Фаза 1) — **НЕ в проді**, чекає деплою після фіксу інфри (див. §8).
 - **Правило:** розробляй на дев → ff-merge у прод → пуш обох. Тримати в синхроні.
 
 ## 3. Деплой (продакшн)
@@ -37,18 +38,19 @@
 > `uts.ua/dashboard/relay-*.php`) разом із `api-proxy.php` і зачистити токен. Це
 > shell-backdoor — назавжди не лишати.
 
-Сервер **evraziat** (shared, CloudLinux). Керується через **relay-PHP**:
-`POST https://dashboard.uts.ua/relay-d7bb7c59.php`, заголовок `X-Relay-Token: <токен>`, форма `cmd=<shell>`. Токен — у `CLAUDE.md` (⚠️ **світився — треба ротувати**). Cwd: `/home/evraziat/uts.ua/dashboard`. Завжди префікс `export PATH=/usr/local/node26/bin:$PATH`.
+Сервер **evraziat** (shared, CloudLinux, adm.tools). Деплой — через **relay-PHP** (виконує shell як `evraziat`, лише HTTPS; Claude Code **не має SSH** — sandbox блокує порт 22):
+`POST https://test.uts.ua/relay-<slug>.php`, заголовок `X-Relay-Token: <токен>`, форма `cmd=<shell>`. **Новий ротований токен/URL — у робочому scratchpad Claude Code** (у git/CLAUDE.md НЕ тримаємо; старий `dashboard.uts.ua/relay-d7bb7c59.php` світився й помре після Node-режиму). Cwd: `/home/evraziat/uts.ua/dashboard`. Node-джоби — через `bash -lc "…"` (login-PATH дає node26).
 
-**Цикл деплою:**
+**Цикл деплою (через relay):**
 ```
-git pull origin claude/friendly-galileo-8pijhl
-cd backend && npm install && npm run build && npm run migrate   # migrate лише при зміні schema.sql
-cd ../frontend && npm run build && cp -r dist/* ../
-pkill -f 'node.*dashboard/backend/dist/index'                   # рестарт лише при зміні backend; exit 15 = норм
-curl https://dashboard.uts.ua/api/health                        # {"ok":true}
+git fetch origin claude/friendly-galileo-8pijhl && git reset --hard origin/claude/friendly-galileo-8pijhl
+cd backend && npm run build            # npm install лише при зміні deps; npm run migrate лише при зміні schema.sql
+cd ../frontend && npm run build && rm -rf ../assets && cp -r dist/assets ../assets && cp dist/index.html ../index.html
+# РЕСТАРТ бекенду: (старий режим) pkill -f 'node.*dashboard/backend/dist/index' → супервізор респавнить (exit 15 = норм);
+#                 (Node-режим adm.tools) кнопка Restart у панелі АБО pkill → Node-менеджер респавнить із новим dist
+curl https://dashboard.uts.ua/api/health   # {"ok":true}
 ```
-Бекенд авто-респавниться супервізором після pkill.
+⚠️ **Верифікація БЕЗ relay:** публічні `GET /api/health` та `/api/health/reconciliation` (без авторизації) читаються по HTTPS із будь-де — використовувати після переходу в Node-режим (relay-shell лишається лише для деплою).
 
 ## 4. Стек і структура
 - **Frontend:** React 19 + Vite + recharts. Контейнер `frontend/src/pages/Dashboard.tsx` (весь стейт/ефекти), секції в `pages/dashboard/sections/*`, спільне — `pages/dashboard/{format.ts, widgets.tsx, …}`, API-клієнт `src/api.ts`, нав — `components/Layout.tsx`.
@@ -61,7 +63,8 @@ curl https://dashboard.uts.ua/api/health                        # {"ok":true}
 - Діагностика проду: base64-mjs через relay, `import { pool } from './dist/db/pool.js'`.
 
 ## 6. Джоби (`backend/src/jobs`, cron у `index.ts`)
-syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncReceivables (30хв) · syncFirstTouch (30хв) · **recomputeStatistics (щогодини :25)** · syncNews (08:00) · evaluateKpiTasks (07:00) · snapshotCarryover (1-ше) · реконсиляція (04:00) · **backupDb (03:00)**.
+⚠️ **Актуальні частоти — у `CLAUDE.md` §«Джоби» (нормативні).** Після IP-бану 08.07 темп свідомо знижено: `syncKommo` **30хв**, `syncStageEvents` **30хв** (:15/:45 — свіжість «отриманих коштів» = ЦЯ частота), `syncDealActivity` 3год, реконсиляція **03:35** (2міс) + 1-го **02:35** (12міс), `freshnessWatch` щогод :50. Не «5хв/10хв» зі старого тексту.
+🔴 **Стартові синки ВІДКЛАДЕНО й рознесено** (crash-fix 15.07, `index.ts`): на буті процес ЛИШЕ піднімає Express і слухає порт; батарея синків стартує сходами (перший ~2.5хв, далі +45с) — щоб не давати пік памʼяті на старті. Cron-розклади незмінні.
 
 ## 6-БІС. Розділ «Статистики (відділи)» — `depstats` (нове)
 Авто-заміна Google-таблиці «UTS Показники для статистик» (6 відділів). Таблиця `statistics_values` (EAV), каталог метрик `backend/src/statistics/catalog.ts` (ЄДИНЕ джерело структури), API `/api/statistics`, фронт `StatisticsSection.tsx`. Гібрид: sales = auto з CRM від `STATS_AUTO_FROM=2026-01-01`, старіша історія + інші відділи = imported (лист) / manual (admin вводить). Специфікація й рішення — `docs/STATISTICS_SPEC.md`, звірка CRM↔лист — `docs/STATISTICS_RECONCILIATION.md`. **Відкрите:** (1) повний re-sync історії Kommo → опустити межу auto; (2) бекфіл `payment_type` → готівка стане auto; (3) Ringostat API для `calls` (RS-1); (4) план/факт-оверлей у таблиці (R4, ще не в UI); (5) auto для leadgen/marketing/logistics (звірити на Кроці 5).
@@ -72,6 +75,30 @@ syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncR
 ---
 
 ## 8. ПОТОЧНИЙ СТАН (оновлювати!)
+
+### 🔴 НАЙНОВІШЕ — АВАРІЯ ІНФРИ + МІГРАЦІЯ НА NODE.JS-РЕЖИМ (15.07.2026, У ПРОЦЕСІ). Прод @ `ff282f6`.
+**Що сталося:** прод впав у crash-loop — процес помирав кожні ~40-60с. Довго діагностували (памʼять/версія Node/malloc-arenas — усе спростовано тестами). **Справжня причина (доведено):** shared-хост adm.tools **вбиває будь-який процес, що слухає TCP-порт** (тест: голий HTTP-listener гине ~43с, а idle-node без порту живе >2хв; акаунт їв 433 МБ / сервер вільний 208 ГБ — НЕ памʼять). Стара схема (Supervisor запускає `node` як самовільний listener + Apache-proxy) саме такий listener.
+**Рішення (БЕЗ VPS):** перевести `dashboard.uts.ua` у **офіційний Node.js-режим adm.tools** — тоді nginx проксує на `HOST:PORT` від хоста, процес легальний і не вбивається. Інструкція хостера: https://www.ukraine.com.ua/ru/wiki/hosting/nodejs/overview/
+
+**Статус міграції:**
+- ✅ **Код готовий і задеплоєний** (`ff282f6`): `index.ts` слухає `process.env.HOST`/`PORT` (fallback 4000 — безпечно й у старому режимі) і сам віддає фронт + SPA (whitelist `/assets`, favicon, icons, index.html). `config.ts` +`host`.
+- ✅ **Crash-fix** (`19da001`, у проді): стартові синки прибрано з бута → відкладені/сходами (перший ~2.5хв); пул `max=6`+idleTimeout; мʼяке завершення. (Само по собі crash-loop не лікує — лікує Node-режим — але корисне.)
+- ✅ **Deploy-канал переживе перехід:** relay перенесено на `test.uts.ua` (окремий PHP-домен того ж акаунта), **токен ротовано** (старий світився). Claude Code не має SSH (sandbox блокує порт 22) — деплой лише через relay-PHP по HTTPS.
+- ⏳ **ЧЕКАЄ ВЛАСНИКА:** увімкнути Node.js-режим у панелі (веб-сервер Node.js, версія **node26**, IP-based, корінь `.../dashboard/backend`, старт `npm start`) + **вимкнути старий Supervisor**. Кроки — узгоджені, передані.
+- ⏳ **Після ввімкнення:** верифікація через публічний `/api/health` (uptime>5хв, 200) + `/api/health/reconciliation` (свіжість вотермарків); прибрати `api-proxy.php`+`.htaccess` ТІЛЬКИ після підтвердження (відкат на Apache).
+- 🔴 **ЗАДАЧА ЗАКРИТТЯ:** прибрати обидва relay-файли (`test/relay-*.php`, `dashboard/relay-*.php`) + `api-proxy.php` наприкінці (див. §3).
+
+### ✅ КРОК 5 — `core/metrics.ts` (14–15.07.2026, ядро у проді)
+Канонічний SQL-шар НЕ-грошових метрик (як `money.ts` для грошей). **Обидві трійки готові й звірені з Kommo:** воронка · сегменти · ліди (ads_accepted) + дебіторка · застряглі · час опрацювання. Сегмент = **deal-grain** (ярлик на угоді: leadgen→repeat(prior-paid)→new), НЕ клієнтський layer лояльності (GLOSSARY §9). Дебіторка = **повна сума** з рядком «Без менеджера» (LEFT JOIN; +1.575 млн неатрибутованого боргу більше не ховається — рішення власника 15.07). Дедуп/скоуп-патерн `{from,to,managerId?,teamId?}`; знімки (дебіторка/застряглі) забороняють дати на рівні типу (`SnapshotScope`).
+
+### ⏸️ КРОК 9 Фаза 1 — рероут секцій на `core/` (ГОТОВИЙ, але НЕ в проді). Гілка `krok9-phase1` @ `4dba582`.
+Роути тепер кличуть `core/money.ts`+`core/metrics.ts` замість інлайн-SQL (форму добудовує роут). **Свідомі зміни:** сегменти воронки (`/funnel-report`) → deal-grain (розклад new/repeat зсувається, сума по стадії та сама); дебіторка → +1.575 млн («Без менеджера»). Решта — числа ідентичні. `adsAccepted` **відкладено до КРОК 6** (усі його call-sites сплетені з конверсією, яку не чіпаємо). Таблиця «було→стало» зібрана, звірка була зелена, білд чистий. **НЕ задеплоєно** — чекає: (1) фікс інфри (вище), (2) review власником + попередження команди, тоді деплой (Фаза 2), далі Фаза 3 (видалити стару логіку + grep, що бізнес-SQL лишився тільки в `core/`).
+
+### ▶️ НАСТУПНІ КРОКИ (у порядку)
+1. **Завершити міграцію інфри** (власник вмикає Node-режим → я верифікую → прибрати Apache-схему).
+2. **КРОК 9 Фаза 2** — задеплоїти рероут (`krok9-phase1` → прод), звірити прод із таблицею «було→стало».
+3. **КРОК 9 Фаза 3** — видалити стару інлайн-логіку метрик, grep-доказ.
+4. **КРОК 6** — три конверсії (`conversion_ads`/`_leadgen`/`_full_cycle`). ⚠️ Блок: відкриті питання В2/В3/В4 у `MASTER_PLAN` — спершу спитати власника, не вигадувати.
 
 ### 🚧 RESET ЯДРА — КРОК 1–2 виконано (13–14.07.2026, у проді). Гілка `claude/friendly-galileo-8pijhl` @ `aa4a1c0`.
 **Порядок робіт — `docs/MASTER_PLAN.md` (головний). Метрики — `docs/METRICS_GLOSSARY.md` (нормативний).**
@@ -162,10 +189,10 @@ syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncR
 - **P2**: прогнозування, фінаналітика, окремі модулі.
 - ✅ **Зроблено з ТЗ**: §7 «Контроль якості даних» (розділ «Якість даних»).
 
-**🔴 АКТИВНЕ (станом на 08.07.2026):**
-- **Kommo API заблокований** (WAF 403 з ~10:19 UTC, повторно після ранкового бану 07:49). Ми ДОКАЗОВО під лімітом (черга ≤3/с, circuit breaker на паузі) — блок на боці Kommo. **Дія власника: відповісти в підтримку Kommo (Микита) що фікс впроваджено → вони знімуть блок.** Після розблокування синк відновиться САМ (breaker пробує→успіх). Дані не губляться (watermark+реконсиляція 04:00). Carriers-backfill (`syncCarriers --loop`) чекає розбану.
-- **«Ван ту ван»** (1-on-1) — чекає відповідей власника на 3 питання (приватність/ритм/анкета); проєкт узгоджено, реалізація після.
-- **АІ-чат рівень 2** (за бажанням): збережені звіти/розсилки, авто-резюме тижня, АІ-коментарі до просідань. Ключ уже є.
+**Історичне (08.07.2026) — вирішено, лишено для контексту:**
+- ✅ ~~Kommo API заблокований (WAF 403)~~ — **вирішено 09.07** (справжня причина — валютний вебхук-цикл `www/api/amo/wh-amo.php`, див. нижче). Синк знято з паузи, `KOMMO_PAUSED` не активний.
+- ✅ ~~«Ван ту ван» чекає відповідей власника~~ — **зроблено** (розділ `oneonone`, див. блок «Нічна сесія 08.07»).
+- **АІ-чат рівень 2** (за бажанням, НЕ зроблено): збережені звіти/розсилки, авто-резюме тижня, АІ-коментарі до просідань. Ключ уже є.
 
 **Лишилось (стара черга):**
 1. **Декомпозиція РПК/РНК** — розбити декомпозицію й per-team рядки Звіту КВП на групи РПК/РНК (треба: групування команд + визначення «відправлене авто» = успішні угоди чи етап «Авто працює»).
@@ -173,7 +200,7 @@ syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncR
 3. **Мобільна версія** (адаптив).
 4. **Telegram-сповіщення** — тригери в `INFRASTRUCTURE.md` §5 (обрати).
 5. Звіт КВП: **ручні фінрядки** (CASH FLOW фінансиста тощо) — за потреби.
-6. Безпека: **ротація relay-токена**. Опційно: UptimeRobot, Metabase.
+6. Безпека: ✅ relay-токен ротовано (15.07, relay на `test.uts.ua`); 🔴 **ПРИБРАТИ relay** наприкінці міграції+КРОК 9 (обовʼязкова задача закриття, §3+§8). Опційно: UptimeRobot, Metabase.
 7. Звіт (Фаза C, з Excel): Логістика (перевізники), фінсуми по типах клієнтів, очікування наст.міс, цілі на день, чекліст заповнення.
 
 ---
@@ -190,4 +217,4 @@ syncKommo (5хв) · syncStageEvents (10хв) · syncTransfers (10хв) · syncR
 Див. `docs/BACKUP_RECOVERY.md`. Коротко: Neon PITR (основне) + нічний CSV-дамп у `dashboard/backups/` (14 днів). Багато даних відновлюється й синком з Kommo.
 
 ## 11. Доступи (значення НЕ тут — тільки де шукати)
-- Neon: console.neon.tech · relay-токен: `CLAUDE.md` (ротувати) · `.env`: `backend/.env` (DATABASE_URL, KOMMO_API_TOKEN, JWT_SECRET) · Kommo API-токен: `.env`.
+- Neon: console.neon.tech · relay-токен/URL: **робочий scratchpad Claude Code** (ротовано 15.07, relay на `test.uts.ua`; у git НЕ тримаємо) · `.env`: `backend/.env` (DATABASE_URL, KOMMO_API_TOKEN, JWT_SECRET) · Kommo API-токен: `.env`.
