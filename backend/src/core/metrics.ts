@@ -61,7 +61,7 @@ export const adDealSql = (srcRef: string): string =>
  * Вичерпний CASE → кожна угода рівно в один сегмент → Лідоген+Постійні+Нові=Загал.
  * «Попереднє» — за `created_at` (як існуючий `firsts` = MIN(created_at) по paid).
  */
-const SEGMENT_CASE = `
+export const SEGMENT_CASE = `
   CASE
     WHEN d.lead_channel = 'leadgen' THEN 'leadgen'
     WHEN d.client_key IS NOT NULL AND EXISTS (
@@ -198,6 +198,45 @@ export async function funnelCohort(s: MetricScope): Promise<FunnelCohortRow[]> {
   return FUNNEL_ORDER.map((stage, i) => ({ stage, ...reached[i] }));
 }
 
+export interface FunnelSegmentRow {
+  managerId: number;
+  name: string;
+  stage: string;
+  segment: "new" | "repeat" | "leadgen";
+  count: number;
+}
+
+/**
+ * RAW per-(manager, stage, segment) cohort counts для `/funnel-report`. НЕ накопичує —
+ * роут сам робить кумуляцію (buildStages) для overall і по кожному менеджеру, накладає
+ * план і формує відповідь (Fork 2: «core дає числа, роут добудовує форму»).
+ * 🔴 Це ЄДИНИЙ виправданий per-manager аґреґат (Fork 2 виняток): funnel-report малює
+ * матрицю менеджер×стадія×сегмент, якої жоден скалярний/overall аґреґат (funnelCohort)
+ * не дає. Сегмент — канонічний `SEGMENT_CASE` (deal-grain, prior-paid), що ЗАМІНЮЄ старий
+ * lifetime-ярлик `cnt>=2 → regular`: розподіл new/repeat зсувається (сума по стадії — та
+ * сама; GLOSSARY §9). Лише активні менеджери (як старий роут).
+ */
+export async function funnelSegmentRows(s: MetricScope): Promise<FunnelSegmentRow[]> {
+  const scope: MetricScope = { ...s, activeOnly: s.activeOnly ?? true };
+  const { where, params, activeJoin } = cohortScope(scope);
+  const r = await pool.query<{ manager_id: number; name: string; stage: string; segment: string; c: string }>(
+    `SELECT m.id AS manager_id, m.name, psm.funnel_stage AS stage, ${SEGMENT_CASE} AS segment, COUNT(*) AS c
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id ${activeJoin}
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${where}
+     GROUP BY m.id, m.name, psm.funnel_stage, segment`,
+    params
+  );
+  return r.rows.map((x) => ({
+    managerId: x.manager_id,
+    name: x.name,
+    stage: x.stage,
+    segment: (x.segment as "new" | "repeat" | "leadgen") ?? "new",
+    count: Number(x.c),
+  }));
+}
+
 export interface FunnelWeekRow {
   stage: string;
   bucket: string; // YYYY-MM-DD (початок тижня або день)
@@ -232,6 +271,49 @@ export async function funnelWeekly(s: MetricScope, granularity: "day" | "week" =
     params
   );
   return r.rows.map((x) => ({ stage: x.stage, bucket: x.bucket, deals: Number(x.deals) }));
+}
+
+export interface FunnelWeekMgrRow {
+  managerId: number;
+  name: string;
+  stage: string;
+  bucket: string; // YYYY-MM-DD (понеділок тижня або день, київський)
+  deals: number;
+}
+
+/**
+ * `/funnel-weekly` FACT по МЕНЕДЖЕРУ — той самий потік входів у стадію, що й
+ * `funnelWeekly`, але з розрізом по менеджеру (роут малює матрицю менеджер×тиждень).
+ * 🔴 Другий виправданий per-manager аґреґат (Fork 2 виняток): funnel-weekly показує
+ * рядок на кожного менеджера, чого overall `funnelWeekly` не дає. Числа FACT ІДЕНТИЧНІ
+ * старому інлайн-запиту роуту (той самий SQL, лише винесений) — форма (тижні, план,
+ * гроші) лишається в роуті. Лише активні менеджери.
+ */
+export async function funnelWeeklyByManager(s: MetricScope, granularity: "day" | "week" = "week"): Promise<FunnelWeekMgrRow[]> {
+  const bucket = granularity === "day"
+    ? `(dse.changed_at ${KYIV})::date`
+    : `date_trunc('week', (dse.changed_at ${KYIV}))::date`;
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "psm.funnel_stage IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const activeJoin = s.activeOnly ? "AND m.is_active" : "";
+  const r = await pool.query<{ manager_id: number; name: string; stage: string; bucket: string; deals: string }>(
+    `SELECT d.manager_id, m.name, psm.funnel_stage AS stage, to_char(${bucket}, 'YYYY-MM-DD') AS bucket,
+            COUNT(DISTINCT dse.kommo_id) AS deals
+     FROM deal_stage_events dse
+     JOIN deals d ON d.kommo_id = dse.kommo_id
+     JOIN managers m ON m.id = d.manager_id ${activeJoin}
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
+     WHERE ${conds.join(" AND ")}
+     GROUP BY d.manager_id, m.name, psm.funnel_stage, bucket`,
+    params
+  );
+  return r.rows.map((x) => ({
+    managerId: x.manager_id, name: x.name, stage: x.stage, bucket: x.bucket, deals: Number(x.deals),
+  }));
 }
 
 // ───────────────────────── ЛІДИ (ads_accepted) ─────────────────────────

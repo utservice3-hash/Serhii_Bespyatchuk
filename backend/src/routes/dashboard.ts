@@ -29,6 +29,7 @@ import { getSettings } from "./settings.js";
 import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
 import * as money from "../core/money.js";
+import * as metrics from "../core/metrics.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 
 export const dashboardRouter = Router();
@@ -55,39 +56,13 @@ dashboardRouter.get("/funnel", async (req, res) => {
     teamId = auth.teamId;
   }
 
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-
-  if (managerId) {
-    params.push(managerId);
-    conditions.push(`d.manager_id = $${params.length}`);
-  }
-  if (teamId) {
-    params.push(teamId);
-    conditions.push(`m.team_id = $${params.length}`);
-  }
-  if (from) {
-    params.push(from);
-    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`);
-  }
-  if (to) {
-    params.push(to);
-    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`);
-  }
-
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-
-  const result = await pool.query(
-    `SELECT psm.funnel_stage, COUNT(*) AS deal_count, COALESCE(SUM(d.price), 0) AS total_amount
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     ${where}
-     GROUP BY psm.funnel_stage`,
-    params
-  );
-
-  res.json({ stages: result.rows });
+  // КРОК 9: рероут на канонічне ядро (core/metrics). Той самий предикат/скоуп, що й
+  // раніше (усі пайплайни, INNER psm, БЕЗ фільтра is_active) — числа не змінюються.
+  // Роут лишає лише мапінг у старі wire-ключі (funnel_stage/deal_count/total_amount).
+  const rows = await metrics.funnelByStage({ from, to, managerId, teamId });
+  res.json({
+    stages: rows.map((r) => ({ funnel_stage: r.stage, deal_count: r.deals, total_amount: r.revenue })),
+  });
 });
 
 /**
@@ -386,22 +361,10 @@ dashboardRouter.get("/overview", async (req, res) => {
     [...params, from]
   );
 
-  const recvConds: string[] = ["r.manager_id IS NOT NULL"];
-  const recvParams: unknown[] = [];
-  if (managerId) {
-    recvParams.push(managerId);
-    recvConds.push(`r.manager_id = $${recvParams.length}`);
-  }
-  if (teamId) {
-    recvParams.push(teamId);
-    recvConds.push(`m.team_id = $${recvParams.length}`);
-  }
-  const receivables = await pool.query<{ total: string }>(
-    `SELECT COALESCE(SUM(r.amount), 0) AS total
-     FROM receivables r JOIN managers m ON m.id = r.manager_id
-     WHERE ${recvConds.join(" AND ")}`,
-    recvParams
-  );
+  // КРОК 9: загальний борг = core/metrics.receivablesTotal (LEFT JOIN — включає
+  // неатрибутований борг при адмін-розрізі; скоуп по менеджеру/команді природно
+  // виключає null-рядки, тож роль-скоуп не змінюється).
+  const receivablesTotalValue = await metrics.receivablesTotal({ managerId, teamId });
 
   // Plan (monthly payment_amount targets) prorated to the SELECTED period by
   // day-overlap, so the gauge responds to week/month/quarter just like the
@@ -845,7 +808,7 @@ dashboardRouter.get("/overview", async (req, res) => {
       revenue: Number(r.revenue),
       deals: Number(r.deals),
     })),
-    receivablesTotal: Number(receivables.rows[0]?.total ?? 0),
+    receivablesTotal: receivablesTotalValue,
     createdLeads: Number(createdLeadsResult.rows[0]?.count ?? 0),
     newClients: Number(newRow?.clients ?? 0),
     newRevenue: Number(newRow?.revenue ?? 0),
@@ -1684,80 +1647,42 @@ dashboardRouter.get("/receivables", async (req, res) => {
     teamId = auth.teamId;
   }
 
-  const conditions: string[] = ["r.manager_id IS NOT NULL"];
-  const params: unknown[] = [];
+  // КРОК 9: борг рахує core/metrics.receivablesByClient (LEFT JOIN — неатрибутований
+  // борг БІЛЬШЕ не ховається; при адмін-розрізі додається група «Без менеджера»,
+  // managerId=null — свідома зміна, рішення власника 15.07). Скоуп по менеджеру/
+  // команді природно виключає null-рядки. Роут добудовує форму (не метрику): нотатки
+  // тімліда (receivable_notes) + syncedAt + групування менеджер→клієнти.
+  const rows = await metrics.receivablesByClient({ managerId, teamId });
 
-  if (managerId) {
-    params.push(managerId);
-    conditions.push(`r.manager_id = $${params.length}`);
-  }
-  if (teamId) {
-    params.push(teamId);
-    conditions.push(`m.team_id = $${params.length}`);
-  }
-
-  const where = `WHERE ${conditions.join(" AND ")}`;
-
-  const result = await pool.query<{
-    manager_id: number;
-    manager_name: string;
-    client_key: string;
-    client_name: string;
-    amount: string;
-    limit_days: number | null;
-    overdue_days: number | null;
-    synced_at: string;
-    comment: string | null;
-    due_date: string | null;
-  }>(
-    `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount,
-            r.limit_days, r.overdue_days, r.synced_at,
-            n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date
-     FROM receivables r
-     JOIN managers m ON m.id = r.manager_id
-     LEFT JOIN receivable_notes n ON n.client_key = r.client_key
-     ${where}
-     ORDER BY r.amount DESC`,
-    params
+  const clientKeys = rows.map((r) => r.clientKey).filter((k): k is string => k != null);
+  const notesRes = clientKeys.length
+    ? await pool.query<{ client_key: string; comment: string | null; due_date: string | null }>(
+        `SELECT client_key, comment, to_char(due_date, 'YYYY-MM-DD') AS due_date
+           FROM receivable_notes WHERE client_key = ANY($1)`,
+        [clientKeys]
+      )
+    : { rows: [] as { client_key: string; comment: string | null; due_date: string | null }[] };
+  const notes = new Map(notesRes.rows.map((n) => [n.client_key, n]));
+  const syncRes = await pool.query<{ synced_at: string | null }>(
+    `SELECT MAX(synced_at) AS synced_at FROM receivables`
   );
+  const syncedAt = syncRes.rows[0]?.synced_at ?? null;
 
-  const byManager = new Map<
-    number,
-    {
-      managerId: number;
-      managerName: string;
-      clients: {
-        clientKey: string;
-        clientName: string;
-        amount: number;
-        limitDays: number | null;
-        overdueDays: number | null;
-        comment: string | null;
-        dueDate: string | null;
-      }[];
-      total: number;
-    }
-  >();
-
-  let syncedAt: string | null = null;
-  for (const row of result.rows) {
-    syncedAt = row.synced_at;
-    let entry = byManager.get(row.manager_id);
-    if (!entry) {
-      entry = { managerId: row.manager_id, managerName: row.manager_name, clients: [], total: 0 };
-      byManager.set(row.manager_id, entry);
-    }
-    const amount = Number(row.amount);
+  type Client = {
+    clientKey: string | null; clientName: string | null; amount: number;
+    limitDays: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
+  };
+  const byManager = new Map<number | null, { managerId: number | null; managerName: string; clients: Client[]; total: number }>();
+  for (const r of rows) {
+    let entry = byManager.get(r.managerId);
+    if (!entry) { entry = { managerId: r.managerId, managerName: r.managerName, clients: [], total: 0 }; byManager.set(r.managerId, entry); }
+    const n = r.clientKey ? notes.get(r.clientKey) : undefined;
     entry.clients.push({
-      clientKey: row.client_key,
-      clientName: row.client_name,
-      amount,
-      limitDays: row.limit_days,
-      overdueDays: row.overdue_days,
-      comment: row.comment,
-      dueDate: row.due_date,
+      clientKey: r.clientKey, clientName: r.clientName, amount: r.amount,
+      limitDays: r.limitDays, overdueDays: r.overdueDays,
+      comment: n?.comment ?? null, dueDate: n?.due_date ?? null,
     });
-    entry.total += amount;
+    entry.total += r.amount;
   }
 
   res.json({ syncedAt, managers: Array.from(byManager.values()) });
@@ -2381,82 +2306,27 @@ dashboardRouter.get("/response-time", async (req, res) => {
   if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
   else if (auth.role === "team_lead") teamId = auth.teamId;
 
-  const params: unknown[] = [[8921928, 7336928], from, to];
-  const conds = ["d.pipeline_id = ANY($1)", `(d.created_at_kommo ${KYIV})::date BETWEEN $2 AND $3`];
-  if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
-
-  // «Час опрацювання ліда» = від СТВОРЕННЯ ліда в Кваліфікації до ПЕРШОГО РЕАЛЬНОГО
-  // КОНТАКТУ менеджера з ним (перший людський дзвінок/повідомлення/нотатка —
-  // `first_activity_at` із syncDealActivity, created_by<>0, без Salesbot). Ключове:
-  //  • взято по ВХІДНОМУ дзвінку → нотатка call_in ≈ момент створення → ~0 хв;
-  //  • лід у Кваліфікації, але з ним ВЕДЕТЬСЯ робота → рахуємо момент першого
-  //    контакту, а не зміну етапу/відповідального (угода може стояти в етапі, а
-  //    менеджер уже дзвонить);
-  //  • ліди БЕЗ жодного людського контакту (ще не опрацьовані) — не рахуємо.
-  //  • для СЕРЕДНЬОГО «занедбані» >24год кліпимо до 24год; медіана й так стійка.
-  const RESP_MIN = `GREATEST(0, EXTRACT(EPOCH FROM (q.first_activity_at - q.created_at_kommo)) / 60.0)`;
-  const bucketCase = `CASE WHEN dow IN (0,6) THEN 'weekend' WHEN hr >= 9 AND hr < 18 THEN 'work' WHEN hr >= 18 AND hr < 21 THEN 'evening' ELSE 'night' END`;
-  const cte = `
-     WITH quals AS (
-       SELECT d.kommo_id, d.created_at_kommo, d.first_activity_at
-       FROM deals d JOIN managers m ON m.id = d.manager_id
-       WHERE ${conds.join(" AND ")} AND d.first_activity_at IS NOT NULL
-     ),
-     resp AS (
-       SELECT ${RESP_MIN} AS minutes,
-              EXTRACT(DOW  FROM (q.created_at_kommo ${KYIV})) AS dow,
-              EXTRACT(HOUR FROM (q.created_at_kommo ${KYIV})) AS hr
-       FROM quals q
-     )`;
-  const r = await pool.query<{ bucket: string; n: string; avg_min: string | null; median_min: string | null; le2: string; le15: string; gt240: string }>(
-    `${cte}, bucketed AS (SELECT ${bucketCase} AS bucket, minutes FROM resp)
-     SELECT bucket, COUNT(*) AS n,
-            AVG(LEAST(minutes, 1440)) AS avg_min,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min,
-            COUNT(*) FILTER (WHERE minutes <= 2) AS le2,
-            COUNT(*) FILTER (WHERE minutes <= 15) AS le15,
-            COUNT(*) FILTER (WHERE minutes > 240) AS gt240
-       FROM bucketed GROUP BY bucket`,
-    params
-  );
-  const ov = await pool.query<{ n: string; avg_min: string | null; median_min: string | null; le2: string; le15: string; gt1440: string }>(
-    `${cte}
-     SELECT COUNT(*) AS n, AVG(LEAST(minutes, 1440)) AS avg_min,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min,
-            COUNT(*) FILTER (WHERE minutes <= 2) AS le2,
-            COUNT(*) FILTER (WHERE minutes <= 15) AS le15,
-            COUNT(*) FILTER (WHERE minutes > 1440) AS gt1440
-       FROM resp`,
-    params
-  );
+  // КРОК 9: рероут на core/metrics.responseTime (означення й числа ідентичні). Роут
+  // лишає презентаційну форму: підписи/підказки бакетів + луна from/to у відповіді.
+  const rt = await metrics.responseTime({ from, to, managerId, teamId });
   const LABELS: Record<string, { label: string; hint: string }> = {
     work: { label: "🟢 Робочий (9–18)", hint: "Заявки, що надійшли в робочий час пн–пт 9:00–18:00" },
     evening: { label: "🟡 Вечір (18–21)", hint: "Заявки пн–пт 18:00–21:00" },
     night: { label: "🌙 Ніч (21–9)", hint: "Заявки пн–пт 21:00–09:00" },
     weekend: { label: "🔴 Вихідний", hint: "Заявки в суботу/неділю" },
   };
-  const map = new Map(r.rows.map((x) => [x.bucket, x]));
-  const buckets = ["work", "evening", "night", "weekend"].map((k) => {
-    const x = map.get(k);
-    const n = x ? Number(x.n) : 0;
-    return {
-      key: k, label: LABELS[k].label, hint: LABELS[k].hint,
-      count: n,
-      avgMin: x?.avg_min != null ? Math.round(Number(x.avg_min)) : null,
-      medianMin: x?.median_min != null ? Math.round(Number(x.median_min)) : null,
-      immediatePct: n > 0 ? Math.round((Number(x!.le2) / n) * 100) : 0,
-    };
-  });
-  const o = ov.rows[0];
-  const totalN = o ? Number(o.n) : 0;
   res.json({
-    from, to, buckets, totalCount: totalN,
-    overallMedianMin: o?.median_min != null ? Math.round(Number(o.median_min)) : null,
-    overallAvgMin: o?.avg_min != null ? Math.round(Number(o.avg_min)) : null,
-    taken2minPct: totalN > 0 ? Math.round((Number(o!.le2) / totalN) * 100) : 0,
-    taken15minPct: totalN > 0 ? Math.round((Number(o!.le15) / totalN) * 100) : 0,
-    neglectedOver24h: o ? Number(o.gt1440) : 0,
+    from, to,
+    buckets: rt.buckets.map((b) => ({
+      key: b.key, label: LABELS[b.key]?.label ?? b.key, hint: LABELS[b.key]?.hint ?? "",
+      count: b.count, avgMin: b.avgMin, medianMin: b.medianMin, immediatePct: b.immediatePct,
+    })),
+    totalCount: rt.totalCount,
+    overallMedianMin: rt.overallMedianMin,
+    overallAvgMin: rt.overallAvgMin,
+    taken2minPct: rt.taken2minPct,
+    taken15minPct: rt.taken15minPct,
+    neglectedOver24h: rt.neglectedOver24h,
   });
 });
 
@@ -2675,13 +2545,9 @@ dashboardRouter.get("/report", async (req, res) => {
   const newClients = Number(newRepeat.rows.find((r) => r.bucket === "new")?.clients ?? 0);
   const repeatClients = Number(newRepeat.rows.find((r) => r.bucket === "repeat")?.clients ?? 0);
 
-  const p5: unknown[] = [];
-  const recvC: string[] = ["r.manager_id IS NOT NULL"];
-  if (managerId) { p5.push(managerId); recvC.push(`r.manager_id = $${p5.length}`); }
-  if (teamId) { p5.push(teamId); recvC.push(`m.team_id = $${p5.length}`); }
-  const recvTotal = await pool.query<{ total: string }>(
-    `SELECT COALESCE(SUM(r.amount),0) AS total FROM receivables r JOIN managers m ON m.id = r.manager_id
-     WHERE ${recvC.join(" AND ")}`, p5);
+  // КРОК 9: борг = core/metrics.receivablesTotal (LEFT JOIN — повна сума; скоуп по
+  // менеджеру/команді виключає null-рядки, тож роль-скоуп звіту не змінюється).
+  const receivablesTotalValue = await metrics.receivablesTotal({ managerId, teamId });
 
   const successRevenue = reportSuccess.revenue;
   const successDeals = reportSuccess.deals;
@@ -2822,7 +2688,7 @@ dashboardRouter.get("/report", async (req, res) => {
     avgCheck: successDeals > 0 ? Math.round(successRevenue / successDeals) : 0,
     createdDeals: createdTotal,
     newClients, repeatClients,
-    receivables: Number(recvTotal.rows[0]?.total ?? 0),
+    receivables: receivablesTotalValue,
     adLeads: sumK("adLeads"), quotes: sumK("quotes"),
     adPriceVoiced, // ціну озвучено в перший дотик (AI-транскрибація дзвінка)
     adFirstTouchAnalyzed, // усього проаналізовано перших дотиків (знаменник)
@@ -2893,34 +2759,20 @@ dashboardRouter.get("/funnel-report", async (req, res) => {
     managerId = req.query.managerId ? Number(req.query.managerId) : null;
     teamId = req.query.teamId ? Number(req.query.teamId) : null;
   }
-  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
-
-  const params: unknown[] = [[8921932, 155304]];
-  const conds = ["d.pipeline_id = ANY($1)"];
-  if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
-  if (from) { params.push(from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
-  if (to) { params.push(to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
-
-  const rows = await pool.query<{ manager_id: number; name: string; stage: string; bucket: string; c: string }>(
-    `WITH firsts AS (
-       SELECT d.client_key, COUNT(*) AS cnt
-       FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL GROUP BY d.client_key
-     )
-     SELECT m.id AS manager_id, m.name,
-            psm.funnel_stage AS stage,
-            CASE WHEN d.lead_channel = 'leadgen' THEN 'leadgen'
-                 WHEN COALESCE(f.cnt, 0) >= 2 THEN 'regular' ELSE 'new' END AS bucket,
-            COUNT(*) AS c
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     LEFT JOIN firsts f ON f.client_key = d.client_key
-     WHERE ${conds.join(" AND ")}
-     GROUP BY m.id, m.name, psm.funnel_stage, bucket`,
-    params
-  );
+  // КРОК 9: сегментний розподіл рахує core/metrics.funnelSegmentRows (deal-grain,
+  // канонічний prior-paid). 🔴 ЗМІНА проти старого: сегмент був lifetime-ярлик
+  // `cnt>=2 → regular` (глобальна мітка клієнта); тепер «постійний» = у клієнта є
+  // ПОПЕРЕДНЯ оплачена угода, створена раніше за цю (GLOSSARY §9). Сума по стадії —
+  // ТА САМА (INNER psm, та сама когорта створення, лише активні менеджери); зсув лише
+  // у розкладі new↔regular. Роут добудовує форму: кумуляція, план, підписи, wire-ключ
+  // `regular` (core повертає `repeat`).
+  const segRows = (await metrics.funnelSegmentRows({ from, to, managerId, teamId })).map((r) => ({
+    manager_id: r.managerId,
+    name: r.name,
+    stage: r.stage,
+    bucket: r.segment === "repeat" ? "regular" : r.segment,
+    c: r.count,
+  }));
 
   type Buckets = { new: number; regular: number; leadgen: number; total: number };
   const emptyStage = (): Buckets => ({ new: 0, regular: 0, leadgen: 0, total: 0 });
@@ -2938,14 +2790,14 @@ dashboardRouter.get("/funnel-report", async (req, res) => {
     return FUNNEL_ORDER.map((stage, i) => ({ stage, label: FUNNEL_LABELS[stage], ...reached[i] }));
   };
 
-  const allRaw = rows.rows.map((r) => ({ stage: r.stage, bucket: r.bucket, c: Number(r.c) }));
+  const allRaw = segRows.map((r) => ({ stage: r.stage, bucket: r.bucket, c: r.c }));
   const stages = buildStages(allRaw);
 
   const byMgrMap = new Map<number, { managerId: number; name: string; raw: { stage: string; bucket: string; c: number }[] }>();
-  for (const r of rows.rows) {
+  for (const r of segRows) {
     let e = byMgrMap.get(r.manager_id);
     if (!e) { e = { managerId: r.manager_id, name: r.name, raw: [] }; byMgrMap.set(r.manager_id, e); }
-    e.raw.push({ stage: r.stage, bucket: r.bucket, c: Number(r.c) });
+    e.raw.push({ stage: r.stage, bucket: r.bucket, c: r.c });
   }
   const byManager = managerId
     ? []
@@ -3067,31 +2919,16 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   // Прорахунок → Погоджено → Рахунок → Оплата. Беремо прямо з funnel_stage
   // (LIVE pipeline_stage_map). «Авто працює» тут НЕ окремий етап — авто-статуси
   // мапляться у свій funnel_stage (approved/invoiced), як у ручній воронці.
-  const bucketTrunc = granularity === "day"
-    ? `(dse.changed_at ${KYIV})::date`
-    : `date_trunc('week', (dse.changed_at ${KYIV}))::date`;
-
   // FACT: distinct deals that entered each funnel stage, per manager, per bucket.
-  const fParams: unknown[] = [[8921932, 155304], fmt(mStart), fmt(factUpper)];
-  const fConds = [
-    "d.pipeline_id = ANY($1)",
-    "psm.funnel_stage IS NOT NULL",
-    `(dse.changed_at ${KYIV})::date BETWEEN $2 AND $3`,
-  ];
-  if (managerId) { fParams.push(managerId); fConds.push(`d.manager_id = $${fParams.length}`); }
-  if (teamId) { fParams.push(teamId); fConds.push(`m.team_id = $${fParams.length}`); }
-  const factRows = await pool.query<{ manager_id: number; name: string; stage: string; wk: string; c: string }>(
-    `SELECT d.manager_id, m.name, psm.funnel_stage AS stage,
-            to_char(${bucketTrunc}, 'YYYY-MM-DD') AS wk,
-            COUNT(DISTINCT dse.kommo_id) AS c
-     FROM deal_stage_events dse
-     JOIN deals d ON d.kommo_id = dse.kommo_id
-     JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
-     WHERE ${fConds.join(" AND ")}
-     GROUP BY d.manager_id, m.name, psm.funnel_stage, wk`,
-    fParams
-  );
+  // КРОК 9: рероут на core/metrics.funnelWeeklyByManager (той самий SQL, лише винесений
+  // — FACT-числа ідентичні). Форма (тижні/дні, план, гроші) лишається в роуті. Вікно
+  // фактів кліпнуте до сьогодні для поточного місяця (fmt(mStart)..fmt(factUpper)).
+  const factRows = {
+    rows: (await metrics.funnelWeeklyByManager(
+      { from: fmt(mStart), to: fmt(factUpper), managerId, teamId, activeOnly: true },
+      granularity
+    )).map((r) => ({ manager_id: r.managerId, name: r.name, stage: r.stage, wk: r.bucket, c: r.deals })),
+  };
 
   // PLAN: monthly funnel plan per stage (funnel_plans).
   const pParams: unknown[] = [planMonthDate];
@@ -3429,65 +3266,23 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
   if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
   else if (auth.role === "team_lead") { teamId = auth.teamId; managerId = req.query.managerId ? Number(req.query.managerId) : null; }
   const minDays = Math.max(1, Number(req.query.minDays) || 7);
-  const AVTO = "d.status_id IN (69716300, 98470988, 10937178)";
 
-  // "Stuck" = no REAL (human) activity inside the deal for a while. We use
-  // deals.last_activity_at — the latest call/text/manual note made by an actual
-  // user (created_by <> 0), synced from Kommo notes. This is independent of
-  // Salesbot: automation bumping the lead's updated_at never resets the timer.
-  // Fallback to created_at only (never updated_at) keeps it Salesbot-proof for
-  // deals that simply have no human activity yet. Stage-aware threshold:
-  // money-in-progress (Авто працює / Рахунок) is stuck after minDays; the early
-  // "Взято в роботу" churns naturally, so it needs 3×.
-  const minDaysEarly = minDays * 3;
-  const ACT = "COALESCE(d.last_activity_at, d.created_at_kommo)";
-  const params: unknown[] = [[8921932, 155304], minDays, minDaysEarly];
-  const conds = [
-    "d.pipeline_id = ANY($1)",
-    "psm.funnel_stage <> 'paid'",            // active only (paid/won excluded; lost 143 unmapped → excluded by join)
-    `now() - ${ACT} >=
-       (CASE WHEN (${AVTO} OR psm.funnel_stage = 'invoiced') THEN $2 ELSE $3 END || ' days')::interval`,
-    // Only deals still relevant this half-year — старі покинуті ліди (роками в
-    // «Взято в роботу») це не «застрягли», це мертві, тому їх не показуємо.
-    "d.created_at_kommo >= now() - interval '180 days'",
-    // Money stages (Авто працює / Рахунок) завжди важливі. А рання стадія
-    // рахується «застряглою» лише якщо угоду ВЖЕ вели (була активність) і вона
-    // затихла — «взяті, але жодного разу не опрацьовані» ліди це не «застрягли»,
-    // а нерозібрані (інша проблема), тому їх сюди не тягнемо.
-    `(${AVTO} OR psm.funnel_stage = 'invoiced' OR d.last_activity_at IS NOT NULL)`,
-  ];
-  if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
-
-  const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; stage: string; days: string; activity_days: string | null }>(
-    `SELECT d.kommo_id, d.name, d.client_name AS client, m.name AS manager, d.price,
-            CASE WHEN ${AVTO} THEN 'Авто працює'
-                 WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
-                 WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
-            EXTRACT(DAY FROM now() - ${ACT})::int AS days,
-            -- Днів БЕЗ реальної людської активності (дзвінок/нотатка); NULL = угоду
-            -- ще жодного разу не вели (немає активності взагалі).
-            EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id AND m.is_active
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${conds.join(" AND ")}
-     ORDER BY days DESC
-     LIMIT 50`,
-    params
-  );
+  // КРОК 9: рероут на core/metrics.stuckDeals (SQL/пороги ідентичні: minDays для
+  // грошових стадій, ×3 для ранньої, вікно 180 днів, годинник COALESCE(last_activity,
+  // created), LIMIT 50). Роут лишає крос-посилання в CRM (`crmUrl`).
+  const stuck = await metrics.stuckDeals({ managerId, teamId }, minDays);
   res.json({
     minDays,
-    deals: r.rows.map((x) => ({
-      kommoId: Number(x.kommo_id),
-      crmUrl: kommoLeadUrl(Number(x.kommo_id)),
-      name: x.name,
-      client: x.client,
-      manager: x.manager,
-      price: Number(x.price),
-      stage: x.stage,
-      days: Number(x.days),
-      activityDays: x.activity_days == null ? null : Number(x.activity_days),
+    deals: stuck.map((d) => ({
+      kommoId: d.kommoId,
+      crmUrl: kommoLeadUrl(d.kommoId),
+      name: d.name,
+      client: d.client,
+      manager: d.manager,
+      price: d.price,
+      stage: d.stage,
+      days: d.days,
+      activityDays: d.activityDays,
     })),
   });
 });
