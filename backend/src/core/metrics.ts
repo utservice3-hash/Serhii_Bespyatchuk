@@ -286,47 +286,61 @@ export async function adsAcceptedByMgr(s: MetricScope, adSources: string[]): Pro
 
 // ───────────────────────── ДЕБІТОРКА (знімок, БЕЗ дат) ─────────────────────────
 
-/** Спільний скоуп боргу: JOIN managers, `r.manager_id IS NOT NULL` + опц. manager/team.
- *  Джерело — таблиця `receivables` (писар `syncReceivables`): у ній ВЖЕ і безнал (файл),
- *  і готівка (`insertCashReceivables`, приход) → будь-який SUM покриває ОБИДВА джерела. */
-function debtWhere(s: SnapshotScope): { where: string; params: unknown[]; activeJoin: string } {
+/**
+ * Спільний скоуп боргу. 🔴 ЗМІНА ПОВЕДІНКИ (рішення власника 15.07): дебіторка =
+ * ПОВНА сума, неатрибутований борг (manager_id NULL) БІЛЬШЕ НЕ ховається. Тому
+ * **LEFT JOIN** managers і **БЕЗ** `manager_id IS NOT NULL`. Скоуп по менеджеру/команді
+ * природно виключає null-рядки (вони не в жодній команді) → «Без менеджера» видно лише
+ * в загальному/адмін-розрізі. Стара логіка (INNER + `IS NOT NULL`) ховала 1.575 млн
+ * (гол. ПВК АРСЕНАЛ 1.56 млн) — це знайдений прихований борг, а не помилка core.
+ * Тому звіряти core проти ДЖЕРЕЛА (`SUM(receivable_invoices)`), а не проти старої.
+ * Джерело `receivables` уже містить і безнал (файл), і готівку (`insertCashReceivables`).
+ */
+function debtWhere(s: SnapshotScope): { where: string; params: unknown[] } {
   const params: unknown[] = [];
-  const conds = ["r.manager_id IS NOT NULL"];
+  const conds: string[] = [];
   if (s.managerId) { params.push(s.managerId); conds.push(`r.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "" };
+  return { where: conds.length ? `WHERE ${conds.join(" AND ")}` : "", params };
 }
 
-/** Загальний борг «станом на зараз» = `SUM(receivables.amount)` (безнал + готівка). */
+/** Загальний борг «станом на зараз» = ПОВНИЙ `SUM(receivables.amount)` (безнал +
+ *  готівка + неатрибутований). = `SUM(receivable_invoices)`. */
 export async function receivablesTotal(s: SnapshotScope): Promise<number> {
-  const { where, params, activeJoin } = debtWhere(s);
+  const { where, params } = debtWhere(s);
   const r = await pool.query<{ total: string }>(
     `SELECT COALESCE(SUM(r.amount), 0) AS total
-     FROM receivables r JOIN managers m ON m.id = r.manager_id ${activeJoin}
-     WHERE ${where}`,
+     FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
+     ${where}`,
     params
   );
   return Number(r.rows[0]?.total ?? 0);
 }
 
-export interface ManagerDebt { managerId: number; name: string; teamId: number | null; debt: number }
+export interface ManagerDebt { managerId: number | null; name: string; teamId: number | null; debt: number }
 
-/** Борг по менеджеру (знімок). */
+/** Борг по менеджеру (знімок). Неатрибутований борг → окремий рядок «Без менеджера»
+ *  (managerId=null) — НЕ губиться (стара логіка відкидала його в JS). */
 export async function receivablesByManager(s: SnapshotScope): Promise<ManagerDebt[]> {
-  const { where, params, activeJoin } = debtWhere(s);
-  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; debt: string }>(
+  const { where, params } = debtWhere(s);
+  const r = await pool.query<{ manager_id: number | null; name: string | null; team_id: number | null; debt: string }>(
     `SELECT m.id AS manager_id, m.name, m.team_id, COALESCE(SUM(r.amount), 0) AS debt
-     FROM receivables r JOIN managers m ON m.id = r.manager_id ${activeJoin}
-     WHERE ${where}
+     FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
+     ${where}
      GROUP BY m.id, m.name, m.team_id
      ORDER BY debt DESC`,
     params
   );
-  return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, debt: Number(x.debt) }));
+  return r.rows.map((x) => ({
+    managerId: x.manager_id,
+    name: x.name ?? "Без менеджера",
+    teamId: x.team_id,
+    debt: Number(x.debt),
+  }));
 }
 
 export interface ClientDebt {
-  managerId: number;
+  managerId: number | null;
   managerName: string;
   clientKey: string | null;
   clientName: string | null;
@@ -335,19 +349,20 @@ export interface ClientDebt {
   overdueDays: number | null;
 }
 
-/** Борг по клієнту (знімок). Коментар/дедлайн тімліда (`receivable_notes`) — метадані,
- *  лишаються в роуті (це не метрика, а редаговане поле). */
+/** Борг по клієнту (знімок). Неатрибутовані клієнти теж показуються (managerName =
+ *  «Без менеджера»). Коментар/дедлайн тімліда (`receivable_notes`) — метадані, лишаються
+ *  в роуті (це не метрика, а редаговане поле). */
 export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[]> {
-  const { where, params, activeJoin } = debtWhere(s);
-  const r = await pool.query<{ manager_id: number; manager_name: string; client_key: string | null; client_name: string | null; amount: string; limit_days: number | null; overdue_days: number | null }>(
+  const { where, params } = debtWhere(s);
+  const r = await pool.query<{ manager_id: number | null; manager_name: string | null; client_key: string | null; client_name: string | null; amount: string; limit_days: number | null; overdue_days: number | null }>(
     `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount, r.limit_days, r.overdue_days
-     FROM receivables r JOIN managers m ON m.id = r.manager_id ${activeJoin}
-     WHERE ${where}
+     FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
+     ${where}
      ORDER BY r.amount DESC`,
     params
   );
   return r.rows.map((x) => ({
-    managerId: x.manager_id, managerName: x.manager_name, clientKey: x.client_key, clientName: x.client_name,
+    managerId: x.manager_id, managerName: x.manager_name ?? "Без менеджера", clientKey: x.client_key, clientName: x.client_name,
     amount: Number(x.amount), limitDays: x.limit_days, overdueDays: x.overdue_days,
   }));
 }
