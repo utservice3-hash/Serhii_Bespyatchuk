@@ -1,0 +1,9 @@
+{
+  "name": "uts-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Лаунчер для Node.js-режиму adm.tools: панель бере корінь застосунку = корінь сайту (dashboard/) і запускає npm start звідси. Скрипт заходить у backend/ і піднімає зібраний бекенд. Хост інжектить PORT (3000) і HOST (127.X.X.X) — код читає їх із process.env. dotenv (backend/.env) і node_modules резолвляться за розташуванням dist-файлів, тож cwd не критичний, але cd backend лишаємо явно.",
+  "scripts": {
+    "start": "cd backend && node dist/index.js"
+  }
+}
