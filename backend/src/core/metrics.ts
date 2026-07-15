@@ -25,6 +25,22 @@ export interface MetricAgg {
 }
 
 /**
+ * Скоуп для метрик-ЗНІМКІВ «станом на зараз» (дебіторка, застряглі) — БЕЗ періоду.
+ * 🔴 `from`/`to` заборонені НА РІВНІ ТИПУ (`never`), а не в коментарі: хто передасть
+ * дату — отримає помилку компіляції, а не тихий знімок. (`never` ловить і об'єктні
+ * літерали, і змінні типу `MetricScope` — бо `string|null` не присвоїться до `never`.)
+ * Причина: борг/застряглість — це «зараз», не період; тихий знімок при поданні дат
+ * — рівно той клас прихованих розбіжностей, який ми ловили весь reset.
+ */
+export interface SnapshotScope {
+  managerId?: number | null;
+  teamId?: number | null;
+  activeOnly?: boolean;
+  from?: never;
+  to?: never;
+}
+
+/**
  * ЄДИНЕ правило «рекламна угода» (рішення власника 10.07): повний цикл, де
  * «Источник клиента» ∈ adSources АБО дотик Кваліфікації без лідоген-маркерів
  * (`lead_channel='ad'`), і це НЕ реактивація. БЕЗ фільтра поточного етапу.
@@ -266,4 +282,222 @@ export async function adsAcceptedByMgr(s: MetricScope, adSources: string[]): Pro
     params
   );
   return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, count: Number(x.n) }));
+}
+
+// ───────────────────────── ДЕБІТОРКА (знімок, БЕЗ дат) ─────────────────────────
+
+/** Спільний скоуп боргу: JOIN managers, `r.manager_id IS NOT NULL` + опц. manager/team.
+ *  Джерело — таблиця `receivables` (писар `syncReceivables`): у ній ВЖЕ і безнал (файл),
+ *  і готівка (`insertCashReceivables`, приход) → будь-який SUM покриває ОБИДВА джерела. */
+function debtWhere(s: SnapshotScope): { where: string; params: unknown[]; activeJoin: string } {
+  const params: unknown[] = [];
+  const conds = ["r.manager_id IS NOT NULL"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`r.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "" };
+}
+
+/** Загальний борг «станом на зараз» = `SUM(receivables.amount)` (безнал + готівка). */
+export async function receivablesTotal(s: SnapshotScope): Promise<number> {
+  const { where, params, activeJoin } = debtWhere(s);
+  const r = await pool.query<{ total: string }>(
+    `SELECT COALESCE(SUM(r.amount), 0) AS total
+     FROM receivables r JOIN managers m ON m.id = r.manager_id ${activeJoin}
+     WHERE ${where}`,
+    params
+  );
+  return Number(r.rows[0]?.total ?? 0);
+}
+
+export interface ManagerDebt { managerId: number; name: string; teamId: number | null; debt: number }
+
+/** Борг по менеджеру (знімок). */
+export async function receivablesByManager(s: SnapshotScope): Promise<ManagerDebt[]> {
+  const { where, params, activeJoin } = debtWhere(s);
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; debt: string }>(
+    `SELECT m.id AS manager_id, m.name, m.team_id, COALESCE(SUM(r.amount), 0) AS debt
+     FROM receivables r JOIN managers m ON m.id = r.manager_id ${activeJoin}
+     WHERE ${where}
+     GROUP BY m.id, m.name, m.team_id
+     ORDER BY debt DESC`,
+    params
+  );
+  return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, debt: Number(x.debt) }));
+}
+
+export interface ClientDebt {
+  managerId: number;
+  managerName: string;
+  clientKey: string | null;
+  clientName: string | null;
+  amount: number;
+  limitDays: number | null;
+  overdueDays: number | null;
+}
+
+/** Борг по клієнту (знімок). Коментар/дедлайн тімліда (`receivable_notes`) — метадані,
+ *  лишаються в роуті (це не метрика, а редаговане поле). */
+export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[]> {
+  const { where, params, activeJoin } = debtWhere(s);
+  const r = await pool.query<{ manager_id: number; manager_name: string; client_key: string | null; client_name: string | null; amount: string; limit_days: number | null; overdue_days: number | null }>(
+    `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount, r.limit_days, r.overdue_days
+     FROM receivables r JOIN managers m ON m.id = r.manager_id ${activeJoin}
+     WHERE ${where}
+     ORDER BY r.amount DESC`,
+    params
+  );
+  return r.rows.map((x) => ({
+    managerId: x.manager_id, managerName: x.manager_name, clientKey: x.client_key, clientName: x.client_name,
+    amount: Number(x.amount), limitDays: x.limit_days, overdueDays: x.overdue_days,
+  }));
+}
+
+// ───────────────────────── ЗАСТРЯГЛІ УГОДИ (знімок, БЕЗ дат) ─────────────────────────
+
+const AVTO_STATUSES = [69716300, 98470988, 10937178];
+
+export interface StuckDeal {
+  kommoId: number;
+  name: string;
+  client: string | null;
+  manager: string;
+  price: number;
+  stage: string;
+  days: number; // днів від ОСТАННЬОЇ активності (або створення, якщо активності не було)
+  activityDays: number | null; // днів без РЕАЛЬНОЇ людської активності; null = ніколи не вели
+}
+
+/**
+ * Активні угоди повного циклу БЕЗ реальної людської активності понад поріг.
+ * Годинник — `COALESCE(last_activity_at, created_at_kommo)` (Salesbot-proof; НЕ `updated_at`).
+ * Пороги: грошові стадії (Авто працює / Виставлено рахунок) — `minDays` (деф. 7);
+ * рання «Взято в роботу» — `minDays×3` (природно «крутиться»). Вікно створення 180 днів
+ * (старіші покинуті = мертві, не «застряглі»). Рання стадія рахується лише якщо угоду
+ * ВЖЕ вели (`last_activity_at IS NOT NULL`). Порт `/stuck-deals` 1-в-1 (та сама к-сть/ID).
+ */
+export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Promise<StuckDeal[]> {
+  const md = Math.max(1, minDays);
+  const AVTO = `d.status_id = ANY($2)`;
+  const ACT = "COALESCE(d.last_activity_at, d.created_at_kommo)";
+  const params: unknown[] = [FC_PIPELINES, AVTO_STATUSES, md, md * 3];
+  const conds = [
+    "d.pipeline_id = ANY($1)",
+    "psm.funnel_stage <> 'paid'",
+    `now() - ${ACT} >= (CASE WHEN (${AVTO} OR psm.funnel_stage = 'invoiced') THEN $3 ELSE $4 END || ' days')::interval`,
+    "d.created_at_kommo >= now() - interval '180 days'",
+    `(${AVTO} OR psm.funnel_stage = 'invoiced' OR d.last_activity_at IS NOT NULL)`,
+  ];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  params.push(limit);
+  const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; stage: string; days: string; activity_days: string | null }>(
+    `SELECT d.kommo_id, d.name, d.client_name AS client, m.name AS manager, d.price,
+            CASE WHEN ${AVTO} THEN 'Авто працює'
+                 WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
+                 WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
+            EXTRACT(DAY FROM now() - ${ACT})::int AS days,
+            EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${conds.join(" AND ")}
+     ORDER BY days DESC
+     LIMIT $${params.length}`,
+    params
+  );
+  return r.rows.map((x) => ({
+    kommoId: Number(x.kommo_id), name: x.name, client: x.client, manager: x.manager, price: Number(x.price),
+    stage: x.stage, days: Number(x.days), activityDays: x.activity_days == null ? null : Number(x.activity_days),
+  }));
+}
+
+// ───────────────────────── ЧАС ОПРАЦЮВАННЯ (період по created_at) ─────────────────────────
+
+const QUALIFICATION_PIPELINES = [8921928, 7336928];
+
+export interface ResponseBucket {
+  key: string;
+  count: number;
+  avgMin: number | null;
+  medianMin: number | null;
+  immediatePct: number; // % ≤2 хв
+}
+export interface ResponseTimeResult {
+  buckets: ResponseBucket[]; // work / evening / night / weekend
+  totalCount: number;
+  overallMedianMin: number | null;
+  overallAvgMin: number | null;
+  taken2minPct: number;
+  taken15minPct: number;
+  neglectedOver24h: number;
+}
+
+/**
+ * «Час опрацювання ліда» = від СТВОРЕННЯ ліда Кваліфікації до ПЕРШОГО реального
+ * людського контакту (`first_activity_at`, created_by<>0). Розбито по київському часу
+ * надходження: work(9–18)/evening(18–21)/night(21–9)/weekend. Порт `/response-time` як є
+ * (означення не чіпаємо). Період — по `created_at` (дефолт: поточний місяць у роуті).
+ */
+export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> {
+  const KY = "AT TIME ZONE 'Europe/Kyiv'";
+  const params: unknown[] = [QUALIFICATION_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.first_activity_at IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KY})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KY})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const RESP_MIN = `GREATEST(0, EXTRACT(EPOCH FROM (q.first_activity_at - q.created_at_kommo)) / 60.0)`;
+  const bucketCase = `CASE WHEN dow IN (0,6) THEN 'weekend' WHEN hr >= 9 AND hr < 18 THEN 'work' WHEN hr >= 18 AND hr < 21 THEN 'evening' ELSE 'night' END`;
+  const cte = `
+     WITH quals AS (
+       SELECT d.kommo_id, d.created_at_kommo, d.first_activity_at
+       FROM deals d JOIN managers m ON m.id = d.manager_id
+       WHERE ${conds.join(" AND ")}
+     ),
+     resp AS (
+       SELECT ${RESP_MIN} AS minutes,
+              EXTRACT(DOW  FROM (q.created_at_kommo ${KY})) AS dow,
+              EXTRACT(HOUR FROM (q.created_at_kommo ${KY})) AS hr
+       FROM quals q
+     )`;
+  const r = await pool.query<{ bucket: string; n: string; avg_min: string | null; median_min: string | null; le2: string }>(
+    `${cte}, bucketed AS (SELECT ${bucketCase} AS bucket, minutes FROM resp)
+     SELECT bucket, COUNT(*) AS n, AVG(LEAST(minutes, 1440)) AS avg_min,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min,
+            COUNT(*) FILTER (WHERE minutes <= 2) AS le2
+       FROM bucketed GROUP BY bucket`,
+    params
+  );
+  const ov = await pool.query<{ n: string; avg_min: string | null; median_min: string | null; le2: string; le15: string; gt1440: string }>(
+    `${cte}
+     SELECT COUNT(*) AS n, AVG(LEAST(minutes, 1440)) AS avg_min,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min,
+            COUNT(*) FILTER (WHERE minutes <= 2) AS le2,
+            COUNT(*) FILTER (WHERE minutes <= 15) AS le15,
+            COUNT(*) FILTER (WHERE minutes > 1440) AS gt1440
+       FROM resp`,
+    params
+  );
+  const map = new Map(r.rows.map((x) => [x.bucket, x]));
+  const buckets: ResponseBucket[] = ["work", "evening", "night", "weekend"].map((k) => {
+    const x = map.get(k);
+    const n = x ? Number(x.n) : 0;
+    return {
+      key: k,
+      count: n,
+      avgMin: x?.avg_min != null ? Math.round(Number(x.avg_min)) : null,
+      medianMin: x?.median_min != null ? Math.round(Number(x.median_min)) : null,
+      immediatePct: n > 0 ? Math.round((Number(x!.le2) / n) * 100) : 0,
+    };
+  });
+  const o = ov.rows[0];
+  const totalN = o ? Number(o.n) : 0;
+  return {
+    buckets, totalCount: totalN,
+    overallMedianMin: o?.median_min != null ? Math.round(Number(o.median_min)) : null,
+    overallAvgMin: o?.avg_min != null ? Math.round(Number(o.avg_min)) : null,
+    taken2minPct: totalN > 0 ? Math.round((Number(o!.le2) / totalN) * 100) : 0,
+    taken15minPct: totalN > 0 ? Math.round((Number(o!.le15) / totalN) * 100) : 0,
+    neglectedOver24h: o ? Number(o.gt1440) : 0,
+  };
 }
