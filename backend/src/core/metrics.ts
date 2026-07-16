@@ -471,6 +471,121 @@ export async function conversionAdsByMonth(s: MetricScope, adSources: string[]):
   });
 }
 
+// ───────────────────────── КОНВЕРСІЯ ПРОДЗВОНУ (лідоген, холодна база) ─────────────────────────
+
+/**
+ * Продзвін — воронки холодного лідогену (NEW 8921936 / old 7337048).
+ * Реактивація (8921948) СВІДОМО НЕ входить — окремий білд (рішення 6.4).
+ */
+const PRODZVIN_PIPELINES = [8921936, 7337048];
+const PZ_TAKEN = 69693696; // «ВЗЯТО В РОБОТУ» — entry-анкер знаменника (подія)
+const STATUS_QUALIFIED = 142; // Продзвін-142 «КВАЛІФ/заявку на прорахунок отримано» + FC-142 «Успішна»
+
+export interface ConversionProdzvinRow {
+  ym: string;
+  entered: number;            // знаменник: DISTINCT client_key, що зайшли в 69693696 у місяці
+  handoffEventually: number;  // cohort: із них — дійшли до Продзвін-142 (прорахунок)
+  handoffCohortPct: number | null;
+  wonEventually: number;      // cohort: із них — client_key дійшов до FC-142 (гроші, наскрізь)
+  wonCohortPct: number | null;
+  handoffInMonth: number;     // period: отримали прорахунок у місяці
+  handoffPeriodPct: number | null;
+  wonInMonth: number;         // period: виграли у місяці
+  wonPeriodPct: number | null;
+  mature: boolean;
+}
+
+/**
+ * `conversion_prodzvin_handoff` + `conversion_prodzvin_won` помісячно, 12 міс
+ * (рішення 6.4). ДЕДУП по `client_key` — одиниця = клієнт, НЕ deal_id (угода
+ * Продзвіну і виграна FC-угода — РІЗНІ deal_id, спільний client_key). БЕЗ
+ * new-фільтра (продзвін чіпає й постійних), БЕЗ реактивації.
+ *  • handoff = зайшли в «ВЗЯТО В РОБОТУ» → дійшли до Продзвін-142 (прорахунок).
+ *  • won     = → `client_key` дійшов до 142 у Повному циклі (крос-пайплайн).
+ * Обидва чисельники беруться ПІСЛЯ входу (`changed_at >= entered_at`) — інакше
+ * стара виграна угода клієнта (до продзвону) хибно зараховувалась би лідогену.
+ * cohort: чисельник ⊆ знаменник → стеля ≤100%. period: може >100% (різні когорти).
+ * `client_key IS NULL` виключено (немає по чому дедупити/трекати наскрізь).
+ */
+export async function conversionProdzvinByMonth(s: MetricScope): Promise<ConversionProdzvinRow[]> {
+  const params: unknown[] = [PRODZVIN_PIPELINES, FC_PIPELINES, PZ_TAKEN, STATUS_QUALIFIED];
+  const scopeConds: string[] = [];
+  if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  const scopeJoin = s.teamId ? "LEFT JOIN managers m ON m.id = d.manager_id" : "";
+  const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+
+  const r = await pool.query<{
+    ym: string; entered: string; handoff_eventually: string; won_eventually: string;
+    handoff_in_month: string; won_in_month: string; mature: boolean;
+  }>(
+    `WITH entered AS (
+       SELECT d.client_key, MIN(e.changed_at) AS entered_at
+         FROM deal_stage_events e
+         JOIN deals d ON d.kommo_id = e.kommo_id ${scopeJoin}
+        WHERE e.status_id = $3 AND e.pipeline_id = ANY($1) AND d.client_key IS NOT NULL ${scopeWhere}
+        GROUP BY d.client_key
+     ),
+     handoff AS (
+       SELECT en.client_key, MIN(e.changed_at) AS handoff_at
+         FROM entered en
+         JOIN deals d ON d.client_key = en.client_key
+         JOIN deal_stage_events e ON e.kommo_id = d.kommo_id
+        WHERE e.status_id = $4 AND e.pipeline_id = ANY($1) AND e.changed_at >= en.entered_at
+        GROUP BY en.client_key
+     ),
+     won AS (
+       SELECT en.client_key, MIN(e.changed_at) AS won_at
+         FROM entered en
+         JOIN deals d ON d.client_key = en.client_key
+         JOIN deal_stage_events e ON e.kommo_id = d.kommo_id
+        WHERE e.status_id = $4 AND e.pipeline_id = ANY($2) AND e.changed_at >= en.entered_at
+        GROUP BY en.client_key
+     ),
+     pop AS (
+       SELECT en.client_key, en.entered_at, h.handoff_at, w.won_at
+         FROM entered en
+         LEFT JOIN handoff h ON h.client_key = en.client_key
+         LEFT JOIN won w ON w.client_key = en.client_key
+     ),
+     months AS (
+       SELECT generate_series(
+         date_trunc('month', (now() ${KYIV})) - INTERVAL '11 months',
+         date_trunc('month', (now() ${KYIV})),
+         INTERVAL '1 month') AS m
+     )
+     SELECT to_char(mo.m, 'YYYY-MM') AS ym,
+       COUNT(*) FILTER (WHERE p.entered_at IS NOT NULL
+                          AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS entered,
+       COUNT(*) FILTER (WHERE p.handoff_at IS NOT NULL
+                          AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS handoff_eventually,
+       COUNT(*) FILTER (WHERE p.won_at IS NOT NULL
+                          AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS won_eventually,
+       COUNT(*) FILTER (WHERE p.handoff_at IS NOT NULL
+                          AND date_trunc('month', (p.handoff_at ${KYIV})) = mo.m)::int AS handoff_in_month,
+       COUNT(*) FILTER (WHERE p.won_at IS NOT NULL
+                          AND date_trunc('month', (p.won_at ${KYIV})) = mo.m)::int AS won_in_month,
+       ((mo.m + INTERVAL '1 month') <= (now() ${KYIV}) - INTERVAL '90 days') AS mature
+     FROM months mo LEFT JOIN pop p ON TRUE
+     GROUP BY mo.m ORDER BY mo.m`,
+    params
+  );
+  const pct = (num: number, den: number): number | null => (den > 0 ? Math.round((num / den) * 1000) / 10 : null);
+  return r.rows.map((x) => {
+    const entered = Number(x.entered);
+    const he = Number(x.handoff_eventually), we = Number(x.won_eventually);
+    const hm = Number(x.handoff_in_month), wm = Number(x.won_in_month);
+    return {
+      ym: x.ym, entered,
+      handoffEventually: he, handoffCohortPct: pct(he, entered),
+      wonEventually: we, wonCohortPct: pct(we, entered),
+      handoffInMonth: hm, handoffPeriodPct: pct(hm, entered),
+      wonInMonth: wm, wonPeriodPct: pct(wm, entered),
+      mature: x.mature,
+    };
+  });
+}
+
 // ───────────────────────── ДЕБІТОРКА (знімок, БЕЗ дат) ─────────────────────────
 
 /**
