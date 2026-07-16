@@ -471,44 +471,47 @@ export async function conversionAdsByMonth(s: MetricScope, adSources: string[]):
   });
 }
 
-// ───────────────────────── КОНВЕРСІЯ ПРОДЗВОНУ (лідоген, холодна база) ─────────────────────────
+// ───────────────────────── КОНВЕРСІЯ ЛІДОГЕНУ (Продзвін + Реактивація) ─────────────────────────
 
-/**
- * Продзвін — воронки холодного лідогену (NEW 8921936 / old 7337048).
- * Реактивація (8921948) СВІДОМО НЕ входить — окремий білд (рішення 6.4).
- */
-const PRODZVIN_PIPELINES = [8921936, 7337048];
-const PZ_TAKEN = 69693696; // «ВЗЯТО В РОБОТУ» — entry-анкер знаменника (подія)
-const STATUS_QUALIFIED = 142; // Продзвін-142 «КВАЛІФ/заявку на прорахунок отримано» + FC-142 «Успішна»
+const PRODZVIN_PIPELINES = [8921936, 7337048]; // холодний лідоген (NEW / old)
+const PZ_TAKEN = 69693696;                     // Продзвін «ВЗЯТО В РОБОТУ» — entry-анкер
+const REACTIVATION_PIPELINES = [8921948];      // реактивація існуючих клієнтів
+const REACT_WARMING = 69693740;                // Реактивація «Клієнт підігрівається» — entry-анкер
+const STATUS_142 = 142;                        // handoff (Продзвін/Реактивація) + won (FC) «Успішна»
 
-export interface ConversionProdzvinRow {
+export interface LeadgenConversionRow {
   ym: string;
-  entered: number;            // знаменник: DISTINCT client_key, що зайшли в 69693696 у місяці
-  handoffEventually: number;  // cohort: із них — дійшли до Продзвін-142 (прорахунок)
+  entered: number;            // знаменник: DISTINCT client_key, що зайшли в entry-стадію у місяці
+  handoffEventually: number;  // cohort: із них — дійшли до 142 у СВОЇЙ воронці (прорахунок/передача)
   handoffCohortPct: number | null;
   wonEventually: number;      // cohort: із них — client_key дійшов до FC-142 (гроші, наскрізь)
   wonCohortPct: number | null;
-  handoffInMonth: number;     // period: отримали прорахунок у місяці
+  handoffInMonth: number;     // period: handoff у місяці
   handoffPeriodPct: number | null;
-  wonInMonth: number;         // period: виграли у місяці
+  wonInMonth: number;         // period: won у місяці
   wonPeriodPct: number | null;
   mature: boolean;
 }
 
 /**
- * `conversion_prodzvin_handoff` + `conversion_prodzvin_won` помісячно, 12 міс
- * (рішення 6.4). ДЕДУП по `client_key` — одиниця = клієнт, НЕ deal_id (угода
- * Продзвіну і виграна FC-угода — РІЗНІ deal_id, спільний client_key). БЕЗ
- * new-фільтра (продзвін чіпає й постійних), БЕЗ реактивації.
- *  • handoff = зайшли в «ВЗЯТО В РОБОТУ» → дійшли до Продзвін-142 (прорахунок).
+ * СПІЛЬНЕ ЯДРО конверсії лідогену (Продзвін і Реактивація мають ідентичну
+ * структуру, різняться лише воронкою + entry-стадією). ДЕДУП по `client_key` —
+ * одиниця = КЛІЄНТ, не deal_id (угода лідогену і виграна FC-угода — РІЗНІ
+ * deal_id, спільний client_key; доведено на даних КРОК 6.4/6.5). Категорії
+ * відмов НЕ фільтруємо, БЕЗ new-фільтра.
+ *  • handoff = зайшли в entry → дійшли до 142 у СВОЇЙ воронці (`entryPipelines`).
  *  • won     = → `client_key` дійшов до 142 у Повному циклі (крос-пайплайн).
- * Обидва чисельники беруться ПІСЛЯ входу (`changed_at >= entered_at`) — інакше
- * стара виграна угода клієнта (до продзвону) хибно зараховувалась би лідогену.
+ * Обидва чисельники — ПІСЛЯ входу (`changed_at >= entered_at`), інакше стара
+ * виграна угода клієнта (до дотику лідогену) хибно зараховувалась би йому.
  * cohort: чисельник ⊆ знаменник → стеля ≤100%. period: може >100% (різні когорти).
  * `client_key IS NULL` виключено (немає по чому дедупити/трекати наскрізь).
  */
-export async function conversionProdzvinByMonth(s: MetricScope): Promise<ConversionProdzvinRow[]> {
-  const params: unknown[] = [PRODZVIN_PIPELINES, FC_PIPELINES, PZ_TAKEN, STATUS_QUALIFIED];
+async function leadgenConversionByMonth(
+  s: MetricScope,
+  cfg: { entryPipelines: number[]; entryStatus: number }
+): Promise<LeadgenConversionRow[]> {
+  // $1 = entryPipelines (also handoff-142 lives here), $2 = FC (won), $3 = entryStatus, $4 = 142
+  const params: unknown[] = [cfg.entryPipelines, FC_PIPELINES, cfg.entryStatus, STATUS_142];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
@@ -585,6 +588,23 @@ export async function conversionProdzvinByMonth(s: MetricScope): Promise<Convers
     };
   });
 }
+
+/**
+ * `conversion_prodzvin_handoff` + `conversion_prodzvin_won` (рішення 6.4).
+ * Холодний Продзвін (8921936/7337048), entry «ВЗЯТО В РОБОТУ» 69693696 →
+ * handoff Продзвін-142 (прорахунок отримано) / won FC-142. Реактивація НЕ тут.
+ */
+export const conversionProdzvinByMonth = (s: MetricScope): Promise<LeadgenConversionRow[]> =>
+  leadgenConversionByMonth(s, { entryPipelines: PRODZVIN_PIPELINES, entryStatus: PZ_TAKEN });
+
+/**
+ * `conversion_reactivation_handoff` + `conversion_reactivation_won` (рішення 6.5).
+ * Реактивація (8921948), entry «Клієнт підігрівається» 69693740 (не мертвий
+ * «Дзвінок ВКЯ» 69693736) → handoff 142 «Відправлено у відділ продажів» / won
+ * FC-142 (client_key повіз знову). Категорії відмов не фільтруємо.
+ */
+export const conversionReactivationByMonth = (s: MetricScope): Promise<LeadgenConversionRow[]> =>
+  leadgenConversionByMonth(s, { entryPipelines: REACTIVATION_PIPELINES, entryStatus: REACT_WARMING });
 
 // ───────────────────────── ДЕБІТОРКА (знімок, БЕЗ дат) ─────────────────────────
 
