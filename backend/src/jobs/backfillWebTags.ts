@@ -3,11 +3,11 @@ import { fetchLeadsByIds, extractWebTags } from "../kommo/client.js";
 import { withHeavyJobLock } from "./jobLock.js";
 
 /**
- * КРОК 6.1 — one-off backfill of the four web/geo ad-tag columns
- * (`deals.utm_campaign` 481997, `adv_camp` 2098331, `traf_src` 2098327,
- * `traf_type` 2098329) for deals synced before the columns existed. Same
- * pattern as backfillActDates: fetch by id in batches of 250 (OOM-safe), one
- * batched UPDATE per batch.
+ * КРОК 6.1 — one-off backfill of the five web/geo ad-tag columns
+ * (`deals.utm_medium` 481995, `utm_campaign` 481997, `adv_camp` 2098331,
+ * `traf_src` 2098327, `traf_type` 2098329) for deals synced before the columns
+ * existed. Same pattern as backfillActDates: fetch by id in batches of 250
+ * (OOM-safe), one batched UPDATE per batch.
  *
  * Scoped to the **12-month data horizon** (CLAUDE.md rule) by
  * created_at_kommo (Kyiv). UPDATE-only → light on Neon; still wrapped in
@@ -19,16 +19,15 @@ import { withHeavyJobLock } from "./jobLock.js";
  */
 export async function backfillWebTags(opts: { allTime?: boolean } = {}): Promise<void> {
   await withHeavyJobLock("backfill", async () => {
+    // Definitive pass: scan the WHOLE window (no per-column null guard). The
+    // partial earlier run set the other 4 columns on ~9.8k rows but utm_medium
+    // didn't exist then — a column-null guard would skip those and never fill
+    // utm_medium. Full scan + idempotent UPDATE guarantees all 5 columns.
     const idsRes = await pool.query<{ kommo_id: string }>(
       opts.allTime
-        ? `SELECT kommo_id FROM deals
-            WHERE utm_campaign IS NULL AND adv_camp IS NULL
-              AND traf_src IS NULL AND traf_type IS NULL
-            ORDER BY kommo_id`
+        ? `SELECT kommo_id FROM deals ORDER BY kommo_id`
         : `SELECT kommo_id FROM deals
-            WHERE utm_campaign IS NULL AND adv_camp IS NULL
-              AND traf_src IS NULL AND traf_type IS NULL
-              AND (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date
+            WHERE (created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date
                     >= (now() AT TIME ZONE 'Europe/Kyiv')::date - INTERVAL '12 months'
             ORDER BY kommo_id`
     );
@@ -43,19 +42,19 @@ export async function backfillWebTags(opts: { allTime?: boolean } = {}): Promise
       const tuples: string[] = [];
       for (const deal of deals) {
         const t = extractWebTags(deal);
-        if (t.utmCampaign || t.advCamp || t.trafSrc || t.trafType) {
+        if (t.utmMedium || t.utmCampaign || t.advCamp || t.trafSrc || t.trafType) {
           const b = values.length;
-          values.push(deal.id, t.utmCampaign, t.advCamp, t.trafSrc, t.trafType);
+          values.push(deal.id, t.utmMedium, t.utmCampaign, t.advCamp, t.trafSrc, t.trafType);
           tuples.push(
-            `($${b + 1}::bigint, $${b + 2}::text, $${b + 3}::text, $${b + 4}::text, $${b + 5}::text)`
+            `($${b + 1}::bigint, $${b + 2}::text, $${b + 3}::text, $${b + 4}::text, $${b + 5}::text, $${b + 6}::text)`
           );
         }
       }
       if (tuples.length) {
         await pool.query(
-          `UPDATE deals d SET utm_campaign = v.utm_campaign, adv_camp = v.adv_camp,
-                              traf_src = v.traf_src, traf_type = v.traf_type
-             FROM (VALUES ${tuples.join(",")}) AS v(kommo_id, utm_campaign, adv_camp, traf_src, traf_type)
+          `UPDATE deals d SET utm_medium = v.utm_medium, utm_campaign = v.utm_campaign,
+                              adv_camp = v.adv_camp, traf_src = v.traf_src, traf_type = v.traf_type
+             FROM (VALUES ${tuples.join(",")}) AS v(kommo_id, utm_medium, utm_campaign, adv_camp, traf_src, traf_type)
             WHERE d.kommo_id = v.kommo_id`,
           values
         );

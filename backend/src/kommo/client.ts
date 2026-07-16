@@ -198,6 +198,7 @@ const FIELD_LOAD_DATE = 473637; // «Дата загрузки» — опера�
 // Web/гео-мітки реклами (КРОК 6 — конверсія реклами по каналах). field_id звірені
 // з docs/CRM_SCHEMA.md §трекінг. TRAF_SRC/TRAF_TYPE — text-поля Kommo (не
 // tracking_data), заповнюються і для органіки; TRAF_TYPE ∈ cpc/organic/referral/none.
+const FIELD_UTM_MEDIUM = 481995; // utm_medium (tracking_data: cpc) — платний сигнал utm-покоління
 const FIELD_UTM_CAMPAIGN = 481997; // utm_campaign (tracking_data)
 const FIELD_ADV_CAMP = 2098331; // ADV_CAMP (text)
 const FIELD_TRAF_SRC = 2098327; // TRAF_SRC (text)
@@ -274,6 +275,7 @@ export function extractLeadSource(deal: KommoDeal): LeadSource {
 }
 
 export interface WebTags {
+  utmMedium: string | null;
   utmCampaign: string | null;
   advCamp: string | null;
   trafSrc: string | null;
@@ -281,12 +283,15 @@ export interface WebTags {
 }
 
 /**
- * Web/гео-мітки реклами угоди (utm_campaign / ADV_CAMP / TRAF_SRC / TRAF_TYPE) —
- * сирі значення з Kommo для майбутньої конверсії реклами по каналах (КРОК 6).
- * Тут ЛИШЕ витягуємо й зберігаємо; бізнес-правило (як рахувати cpc/organic) — далі.
+ * Web/гео-мітки реклами угоди (utm_medium / utm_campaign / ADV_CAMP / TRAF_SRC /
+ * TRAF_TYPE) — сирі значення з Kommo для майбутньої конверсії реклами (КРОК 6).
+ * Два ВЗАЄМОВИКЛЮЧНІ покоління міток: utm-покоління (utm_*) і TRAF-покоління
+ * (ADV_CAMP/TRAF_*). Платний сигнал живе в РІЗНИХ полях: utm_medium='cpc' АБО
+ * traf_type='cpc'. Тут ЛИШЕ витягуємо; бізнес-правило (paid) — GLOSSARY.
  */
 export function extractWebTags(deal: KommoDeal): WebTags {
   return {
+    utmMedium: fieldText(deal, FIELD_UTM_MEDIUM),
     utmCampaign: fieldText(deal, FIELD_UTM_CAMPAIGN),
     advCamp: fieldText(deal, FIELD_ADV_CAMP),
     trafSrc: fieldText(deal, FIELD_TRAF_SRC),
