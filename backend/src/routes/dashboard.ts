@@ -963,7 +963,8 @@ dashboardRouter.get("/conversion", async (req, res) => {
       channel: ch,
       label: labels[ch],
       leads: ch === "ad" ? adAggConv.entered : leads,
-      paid,
+      // ad: paid = сира к-ть виграних когорти (щоб leads/paid узгоджувалось із cohort%).
+      paid: ch === "ad" ? adAggConv.wonCount : paid,
       paidAmount: Number(row?.paid_amount ?? 0),
       conversion: ch === "ad" ? adAggConv.wonCohort : (leads > 0 ? Math.round((paid / leads) * 100) : 0),
       conversionPeriod: ch === "ad" ? adAggConv.wonPeriod : undefined,
