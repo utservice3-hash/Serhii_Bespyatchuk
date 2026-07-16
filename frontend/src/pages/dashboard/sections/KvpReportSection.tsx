@@ -755,7 +755,7 @@ function Decomposition({ b, plans, periodPlan }: { b: Block; plans: KvpPlans; pe
   const avg = avgCheck(o, carsDone);
   const carsNeeded = plans.dispatched_cars ?? (avg > 0 ? Math.ceil(plan / avg) : 0);
   const carsLeft = Math.max(0, carsNeeded - carsDone);
-  const conv = o.adConversion.conversion;
+  const conv = o.adConversion.conversion ?? 0;
   const leadsDone = o.adConversion.leads;
   const leadsNeeded = plans.ad_leads ?? (conv > 0 ? Math.ceil(carsNeeded / (conv / 100)) : 0);
   const leadsLeft = Math.max(0, leadsNeeded - leadsDone);
