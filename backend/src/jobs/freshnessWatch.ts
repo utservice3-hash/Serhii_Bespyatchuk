@@ -1,4 +1,4 @@
-import { checkFreshness, type FreshnessRow } from "../core/reconcile.js";
+import { checkFreshness, checkAbandonedStages, type FreshnessRow, type AbandonedStageRow } from "../core/reconcile.js";
 import { sendAdminAlert } from "../bot/notify.js";
 
 /**
@@ -44,4 +44,39 @@ export async function freshnessWatch(): Promise<void> {
       `\nПеревір джобу; свіжість — у /api/health/reconciliation.`
   ).catch(() => {});
   console.warn(`freshnessWatch: АЛЕРТ по ${fresh_stale.map((f) => f.key).join(", ")}.`);
+}
+
+/**
+ * КРОК 6.6 — вартовий «ПОКИНУТИХ СТАДІЙ». Той самий клас, що застряглий вотермарк,
+ * але ловить ЗЛАМАНИЙ ПРОЦЕС: стадію перестали проставляти → метрика тихо ~0.
+ * Дедуп по епізоду (окремий Set, префікс `abandon:`), як у вотермарків.
+ */
+const abandonAlerted = new Set<string>();
+
+export async function abandonedStagesWatch(): Promise<void> {
+  let rows: AbandonedStageRow[];
+  try {
+    rows = await checkAbandonedStages();
+  } catch (e) {
+    console.error("abandonedStagesWatch: checkAbandonedStages failed:", e);
+    return;
+  }
+  const abandoned = rows.filter((r) => r.abandoned);
+  const keys = new Set(abandoned.map((r) => r.key));
+  for (const k of [...abandonAlerted]) if (!keys.has(k)) abandonAlerted.delete(k); // відновилось → скинути
+  const fresh = abandoned.filter((r) => !abandonAlerted.has(r.key));
+  if (fresh.length === 0) {
+    console.log(`abandonedStagesWatch: ok (abandoned=${abandoned.length}, вже-алертнуто=${abandonAlerted.size}).`);
+    return;
+  }
+  for (const r of fresh) abandonAlerted.add(r.key);
+  const line = (r: AbandonedStageRow) =>
+    `• ${r.label}: ${r.month} = ${r.current} (медіана 3 міс ${r.medianPrev3}, −${r.dropPct}%)`;
+  await sendAdminAlert(
+    `📉 <b>Покинута стадія — процес зламався, метрика мовчить</b>\n` +
+      `Обсяг подій стадії, що живить метрику, впав >80% від медіани 3 міс — це той самий клас, що застряглий вотермарк:\n` +
+      fresh.map(line).join("\n") +
+      `\nПеревір, чи стадію ще проставляють у CRM. Деталі — /api/health/reconciliation.`
+  ).catch(() => {});
+  console.warn(`abandonedStagesWatch: АЛЕРТ по ${fresh.map((r) => r.key).join(", ")}.`);
 }

@@ -27,11 +27,11 @@ import { trainingRouter } from "./routes/training.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
 import { reconcileNightly } from "./jobs/reconcileNightly.js";
-import { freshnessWatch } from "./jobs/freshnessWatch.js";
+import { freshnessWatch, abandonedStagesWatch } from "./jobs/freshnessWatch.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { kommoCircuitState } from "./kommo/client.js";
-import { checkFreshness } from "./core/reconcile.js";
+import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
@@ -139,7 +139,9 @@ app.get("/api/health/reconciliation", async (_req, res) => {
     // Свіжість — ЖИВА (не з останнього нічного прогону): дешевий чек sync_state,
     // саме він ловить застряглий вотермарк між нічними звірками.
     const freshness = await checkFreshness();
-    if (!row) return res.json({ ok: true, reconciliation: null, freshness });
+    // Ч.4 — «покинуті стадії» (КРОК 6.6): стадію перестали проставляти → метрика тихо ~0.
+    const abandonedStages = await checkAbandonedStages();
+    if (!row) return res.json({ ok: true, reconciliation: null, freshness, abandonedStages });
     const ageHours = Math.round((Date.now() - new Date(row.ran_at).getTime()) / 3600000);
     res.json({
       ok: true,
@@ -161,6 +163,8 @@ app.get("/api/health/reconciliation", async (_req, res) => {
       },
       // Ч.2 — жива свіжість вотермарків (4-та перевірка).
       freshness,
+      // Ч.4 — покинуті стадії (КРОК 6.6): раптове падіння обсягу подій ключової стадії.
+      abandonedStages,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e).slice(0, 200) });
@@ -215,6 +219,13 @@ cron.schedule("35 2 1 * *", () => {
 // місяць виключено), а застряглий вотермарк тихо ламає гроші. + на старті (одразу після рестарту).
 cron.schedule("50 * * * *", () => {
   freshnessWatch().catch((err) => console.error("freshnessWatch failed:", err));
+});
+// Ч.4 (КРОК 6.6): вартовий ПОКИНУТИХ СТАДІЙ — раз на добу (07:55). Гранулярність
+// місячна (порівнює останній ПОВНИЙ місяць з медіаною 3 попередніх), тож щогодини
+// не треба. Ловить зламаний CRM-процес (стадію перестали проставляти → метрика тихо
+// ~0) — той самий клас, що застряглий вотермарк. Дешево: лише deal_stage_events, БЕЗ Kommo.
+cron.schedule("55 7 * * *", () => {
+  abandonedStagesWatch().catch((err) => console.error("abandonedStagesWatch failed:", err));
 });
 
 // syncStageEvents — КОЖНІ 30 ХВ (:15/:45). 🔴 КРИТИЧНО ДЛЯ СВІЖОСТІ ГРОШЕЙ:

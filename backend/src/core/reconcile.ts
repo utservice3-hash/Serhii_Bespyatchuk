@@ -156,6 +156,78 @@ export async function checkFreshness(): Promise<FreshnessRow[]> {
   });
 }
 
+/**
+ * Ч.4 — «ПОКИНУТІ СТАДІЇ» (КРОК 6.6). Той самий клас, що застряглий вотермарк:
+ * процес у CRM ламається (стадію перестають проставляти), а метрика, що з неї
+ * живиться, ТИХО показує ~0. Доведено: Реактивація-142 «Відправлено у відділ
+ * продажів» впала з ~250/міс до 2–10 з 04.2026 → conversion_reactivation_handoff
+ * замовкла, і жоден рівень звірки цього не бачив.
+ *
+ * Легка перевірка (лише `deal_stage_events`, БЕЗ Kommo): для КЛЮЧОВИХ стадій
+ * (handoff-и лідогену + грошові етапи) беремо ОСТАННІЙ ПОВНИЙ місяць і медіану
+ * 3 місяців перед ним. Якщо обсяг подій впав **>80%** від медіани — стадію
+ * «покинуто». Поточний (неповний) місяць НЕ рахуємо (щоб не фолсити на 1-е число).
+ * Поріг матеріальності `ABANDON_MIN_BASELINE`: стадії з медіаною <20 подій/міс
+ * ігноруємо (дрібні й так шумлять).
+ */
+export interface AbandonedStageRow {
+  key: string;
+  label: string;
+  month: string;          // останній ПОВНИЙ місяць, що перевіряється
+  current: number;        // обсяг подій того місяця
+  medianPrev3: number;    // медіана 3 місяців перед ним
+  dropPct: number | null; // % падіння від медіани
+  abandoned: boolean;
+}
+
+const ABANDON_MIN_BASELINE = 20; // медіана нижче — стадія не «ключова», не шумимо
+const ABANDON_DROP = 0.8;        // падіння >80% від медіани = покинуто
+
+export async function checkAbandonedStages(): Promise<AbandonedStageRow[]> {
+  const FC = money.FC_PIPELINES;
+  const stages: { key: string; label: string; statusIds: number[]; pipelineIds: number[] }[] = [
+    { key: "react_handoff", label: "Реактивація-142 «Відправлено у відділ продажів»", statusIds: [142], pipelineIds: [8921948] },
+    { key: "prodzvin_handoff", label: "Продзвін-142 «заявку на прорахунок отримано»", statusIds: [142], pipelineIds: [8921936, 7337048] },
+    { key: "money_expected", label: "💰 Етап 8 «Очікуємо оплату»", statusIds: money.STAGE_EXPECTED, pipelineIds: FC },
+    { key: "money_paid", label: "💰 Етап 9 «Оплата отримана»", statusIds: money.STAGE_PAID, pipelineIds: FC },
+    { key: "money_success", label: "💰 Етап 10 «Успішна угода» (142)", statusIds: [142], pipelineIds: FC },
+  ];
+  const out: AbandonedStageRow[] = [];
+  for (const st of stages) {
+    // 4 повні місяці [M-4..M-1]; поточний неповний виключено (< поч. поточного місяця).
+    const r = await pool.query<{ ym: string; n: string }>(
+      `WITH months AS (
+         SELECT generate_series(
+           date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv')) - interval '4 months',
+           date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv')) - interval '1 month',
+           interval '1 month') m
+       ),
+       ev AS (
+         SELECT date_trunc('month', (changed_at AT TIME ZONE 'Europe/Kyiv')) m, count(DISTINCT kommo_id) n
+           FROM deal_stage_events
+          WHERE status_id = ANY($1) AND pipeline_id = ANY($2)
+          GROUP BY 1
+       )
+       SELECT to_char(mo.m, 'YYYY-MM') ym, COALESCE(ev.n, 0)::int n
+         FROM months mo LEFT JOIN ev ON ev.m = mo.m ORDER BY mo.m`,
+      [st.statusIds, st.pipelineIds]
+    );
+    const counts = r.rows.map((x) => Number(x.n)); // [M-4, M-3, M-2, M-1]
+    if (counts.length < 4) continue;
+    const current = counts[3];
+    const prev3 = counts.slice(0, 3).sort((a, b) => a - b);
+    const median = prev3[1];
+    const abandoned = median >= ABANDON_MIN_BASELINE && current < (1 - ABANDON_DROP) * median;
+    out.push({
+      key: st.key, label: st.label, month: r.rows[3].ym,
+      current, medianPrev3: median,
+      dropPct: median > 0 ? Math.round((1 - current / median) * 100) : null,
+      abandoned,
+    });
+  }
+  return out;
+}
+
 export interface ReconResult {
   months: number;
   // Рівень СИНК: deals ↔ Kommo (status 142 + closed_at). ourRevenue=deals, kommoRevenue=Kommo.
