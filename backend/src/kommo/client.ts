@@ -195,6 +195,13 @@ const FIELD_INCOME_1 = 2097627;
 // послугу фактично надано. Kommo віддає date-поля юнікс-секундами (рядком).
 const FIELD_UNLOAD_DATE = 463253; // «Дата выгрузки (Дата акта)»
 const FIELD_LOAD_DATE = 473637; // «Дата загрузки» — операційне поле, НЕ якір
+// Web/гео-мітки реклами (КРОК 6 — конверсія реклами по каналах). field_id звірені
+// з docs/CRM_SCHEMA.md §трекінг. TRAF_SRC/TRAF_TYPE — text-поля Kommo (не
+// tracking_data), заповнюються і для органіки; TRAF_TYPE ∈ cpc/organic/referral/none.
+const FIELD_UTM_CAMPAIGN = 481997; // utm_campaign (tracking_data)
+const FIELD_ADV_CAMP = 2098331; // ADV_CAMP (text)
+const FIELD_TRAF_SRC = 2098327; // TRAF_SRC (text)
+const FIELD_TRAF_TYPE = 2098329; // TRAF_TYPE (text: cpc/organic/referral/none)
 
 function fieldDate(deal: KommoDeal, fieldId: number): Date | null {
   const raw = fieldText(deal, fieldId);
@@ -264,6 +271,27 @@ export function extractLeadSource(deal: KommoDeal): LeadSource {
   }
 
   return { utmSource, leadGenerator, clientSource, channel };
+}
+
+export interface WebTags {
+  utmCampaign: string | null;
+  advCamp: string | null;
+  trafSrc: string | null;
+  trafType: string | null;
+}
+
+/**
+ * Web/гео-мітки реклами угоди (utm_campaign / ADV_CAMP / TRAF_SRC / TRAF_TYPE) —
+ * сирі значення з Kommo для майбутньої конверсії реклами по каналах (КРОК 6).
+ * Тут ЛИШЕ витягуємо й зберігаємо; бізнес-правило (як рахувати cpc/organic) — далі.
+ */
+export function extractWebTags(deal: KommoDeal): WebTags {
+  return {
+    utmCampaign: fieldText(deal, FIELD_UTM_CAMPAIGN),
+    advCamp: fieldText(deal, FIELD_ADV_CAMP),
+    trafSrc: fieldText(deal, FIELD_TRAF_SRC),
+    trafType: fieldText(deal, FIELD_TRAF_TYPE),
+  };
 }
 
 /**

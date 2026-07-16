@@ -71,6 +71,14 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS lead_channel TEXT; -- 'ad' | 'leadgen
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS payment_type TEXT; -- «форма расчета»: Безнал с НДС / без НДС / Наличные / ВАЛЮТА
 CREATE INDEX IF NOT EXISTS idx_deals_lead_channel ON deals(lead_channel);
 
+-- КРОК 6.1: web/гео-мітки реклами (Kommo 481997/2098331/2098327/2098329) — сира
+-- атрибуція для конверсії реклами по каналах. traf_type ∈ cpc/organic/referral/none.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS adv_camp TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS traf_src TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS traf_type TEXT;
+CREATE INDEX IF NOT EXISTS idx_deals_traf_type ON deals(traf_type);
+
 -- Два якорі (Правило №1 глосарію): unload_at = дата акту (Kommo 463253,
 -- «Дата выгрузки (Дата акта)») — ФІНАНСОВИЙ якір; load_at = «Дата загрузки»
 -- (473637) — операційне поле, не якір. Якір продажів — вхід у 142

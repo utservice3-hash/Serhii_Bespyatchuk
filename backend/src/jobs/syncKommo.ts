@@ -5,6 +5,7 @@ import {
   extractPaymentType,
   extractUnloadDate,
   extractLoadDate,
+  extractWebTags,
   fetchAllDeals,
   fetchContactsByIds,
   fetchCompaniesByIds,
@@ -390,6 +391,7 @@ export async function upsertDeal(
   const managerId = managerIdByKommoUserId.get(deal.responsible_user_id) ?? null;
   const { name: clientName, key: clientKey } = resolveClient(deal, companyNameById, contactById);
   const source = extractLeadSource(deal);
+  const webTags = extractWebTags(deal);
 
   // "Мінусові" угоди: Kommo's calculator can't store a negative budget, so it
   // shows it as positive. These deals are marked by the word "мінус" in the
@@ -402,8 +404,8 @@ export async function upsertDeal(
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
          client_name, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
-         unload_at, load_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17, $18, $19)
+         unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -421,7 +423,11 @@ export async function upsertDeal(
          lead_channel = EXCLUDED.lead_channel,
          payment_type = EXCLUDED.payment_type,
          unload_at = EXCLUDED.unload_at,
-         load_at = EXCLUDED.load_at`,
+         load_at = EXCLUDED.load_at,
+         utm_campaign = EXCLUDED.utm_campaign,
+         adv_camp = EXCLUDED.adv_camp,
+         traf_src = EXCLUDED.traf_src,
+         traf_type = EXCLUDED.traf_type`,
       [
         deal.id,
         deal.name,
@@ -442,6 +448,10 @@ export async function upsertDeal(
         extractPaymentType(deal),
         extractUnloadDate(deal),
         extractLoadDate(deal),
+        webTags.utmCampaign,
+        webTags.advCamp,
+        webTags.trafSrc,
+        webTags.trafType,
       ]
     );
 }
