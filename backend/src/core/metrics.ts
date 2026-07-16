@@ -471,6 +471,64 @@ export async function conversionAdsByMonth(s: MetricScope, adSources: string[]):
   });
 }
 
+export interface MgrConversion {
+  managerId: number;
+  name: string;
+  teamId: number | null;
+  entered: number;
+  won: number;
+  cohortPct: number | null; // null коли entered < 10 → UI показує «—» (не «0%»)
+}
+
+/**
+ * `conversion_ads` ПО МЕНЕДЖЕРУ, period-aggregate (для таблиці Звіту). Одним
+ * згрупованим запитом (не N викликів помісячної). Когорта: платні нові ліди,
+ * що зайшли в рекламну зону в [from,to] → з них дійшли до FC-142 (той самий
+ * deal_id). Стеля ≤100% (won ⊆ entered). entered<10 → cohortPct=null (нерекламні
+ * менеджери не плутаються з «0%»).
+ */
+export async function conversionAdsByManager(s: MetricScope, adSources: string[]): Promise<MgrConversion[]> {
+  const params: unknown[] = [ADZONE_TAKEN, FC_PIPELINES, adSources];
+  const scopeConds: string[] = [];
+  if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  const fromRef = (params.push(s.from ?? null), `$${params.length}`);
+  const toRef = (params.push(s.to ?? null), `$${params.length}`);
+  const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; entered: string; won: string }>(
+    `WITH adzone AS (
+       SELECT kommo_id, MIN(changed_at) AS entered_at
+         FROM deal_stage_events WHERE status_id = ANY($1) GROUP BY kommo_id
+     ),
+     won AS (
+       SELECT kommo_id, MIN(changed_at) AS won_at
+         FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = 142 GROUP BY kommo_id
+     ),
+     pop AS (
+       SELECT d.manager_id, (w.won_at IS NOT NULL) AS won
+         FROM adzone a
+         JOIN deals d ON d.kommo_id = a.kommo_id
+         LEFT JOIN managers m ON m.id = d.manager_id
+         LEFT JOIN won w ON w.kommo_id = a.kommo_id
+        WHERE ${paidAdSql("$3")} AND (${SEGMENT_CASE}) = 'new'
+          AND ((${fromRef})::date IS NULL OR (a.entered_at ${KYIV})::date >= (${fromRef})::date)
+          AND ((${toRef})::date IS NULL OR (a.entered_at ${KYIV})::date <= (${toRef})::date)
+          ${scopeWhere}
+     )
+     SELECT mm.id AS manager_id, mm.name, mm.team_id,
+            COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won)::int AS won
+       FROM pop JOIN managers mm ON mm.id = pop.manager_id
+      GROUP BY mm.id, mm.name, mm.team_id`,
+    params
+  );
+  return r.rows.map((x) => {
+    const entered = Number(x.entered), won = Number(x.won);
+    return { managerId: x.manager_id, name: x.name, teamId: x.team_id, entered, won,
+      cohortPct: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null };
+  });
+}
+
 // ───────────────────────── КОНВЕРСІЯ ЛІДОГЕНУ (Продзвін + Реактивація) ─────────────────────────
 
 const PRODZVIN_PIPELINES = [8921936, 7337048]; // холодний лідоген (NEW / old)

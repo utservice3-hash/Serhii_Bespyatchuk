@@ -32,6 +32,31 @@ export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
 
 /**
+ * КРОК 9-conv Фаза 1: агрегує ПОМІСЯЧНИЙ масив конверсії ядра (cohort+period) у
+ * період [from,to]. cohort — основне число (стеля ≤100% гарантована ядром);
+ * period — вторинний тренд. entered<10 → pct=null (UI показує «—», щоб не плутати
+ * «немає реклами» з «нульовою конверсією» — рішення власника).
+ */
+type ConvMonthly = {
+  ym: string; entered: number; mature: boolean;
+  wonEventually?: number; wonInMonth?: number; handoffEventually?: number; handoffInMonth?: number;
+};
+function sumConv(rows: ConvMonthly[], from?: string | null, to?: string | null) {
+  const fy = from ? String(from).slice(0, 7) : null;
+  const ty = to ? String(to).slice(0, 7) : null;
+  const sel = rows.filter((r) => (!fy || r.ym >= fy) && (!ty || r.ym <= ty));
+  const s = (k: keyof ConvMonthly) => sel.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const entered = s("entered");
+  const pct = (n: number) => (entered >= 10 ? Math.round((n / entered) * 1000) / 10 : null);
+  return {
+    entered,
+    mature: sel.length > 0 && sel[sel.length - 1].mature,
+    wonCohort: pct(s("wonEventually")), wonPeriod: pct(s("wonInMonth")),
+    handoffCohort: pct(s("handoffEventually")), handoffPeriod: pct(s("handoffInMonth")),
+  };
+}
+
+/**
  * Returns deal counts/amounts grouped by funnel stage (per pipeline_stage_map)
  * for a given manager or team, scoped by the caller's role.
  */
@@ -744,6 +769,30 @@ dashboardRouter.get("/overview", async (req, res) => {
     totalWorkingDays: totalWdP,
   };
 
+  // КРОК 9-conv Фаза 1: конверсія — з ЯДРА (core/metrics), стеля ≤100%.
+  //   Реклама → conversion_ads (cohort основне, period тренд).
+  //   Лідоген → ДВІ окремі: Продзвін + Реактивація (won велике, handoff дрібне).
+  // Стару adConversion/leadgenConversion-логіку не видалено (Фаза 3); тут лише
+  // перемикаємо, що ВІДДАЄ роут. entered<10 → «—».
+  const adsMonthlyOv = await metrics.conversionAdsByMonth({ managerId, teamId }, adSources);
+  const pzMonthlyOv = await metrics.conversionProdzvinByMonth({ managerId, teamId });
+  const reMonthlyOv = await metrics.conversionReactivationByMonth({ managerId, teamId });
+  const adAgg = sumConv(adsMonthlyOv, from, to);
+  const pzAgg = sumConv(pzMonthlyOv, from, to);
+  const reAgg = sumConv(reMonthlyOv, from, to);
+  const adConversionOut = { leads: adAgg.entered, conversion: adAgg.wonCohort, conversionPeriod: adAgg.wonPeriod, mature: adAgg.mature };
+  const prodzvinConversion = { entered: pzAgg.entered, won: pzAgg.wonCohort, wonPeriod: pzAgg.wonPeriod, handoff: pzAgg.handoffCohort, mature: pzAgg.mature };
+  const reactivationConversion = { entered: reAgg.entered, won: reAgg.wonCohort, wonPeriod: reAgg.wonPeriod, handoff: reAgg.handoffCohort, mature: reAgg.mature };
+  // Спарклайни: adConversion + won-лідоген по місяцях із ядра (перекриваємо старі).
+  const adByYm = new Map(adsMonthlyOv.map((r) => [r.ym, r.cohortPct]));
+  const pzByYm = new Map(pzMonthlyOv.map((r) => [r.ym, r.wonCohortPct]));
+  const reByYm = new Map(reMonthlyOv.map((r) => [r.ym, r.wonCohortPct]));
+  for (const h of monthlyHistory) {
+    h.adConversion = adByYm.get(h.month) ?? 0;
+    (h as Record<string, unknown>).prodzvinWon = pzByYm.get(h.month) ?? 0;
+    (h as Record<string, unknown>).reactivationWon = reByYm.get(h.month) ?? 0;
+  }
+
   res.json({
     plan: planTotal,
     planMonthTotal,
@@ -784,8 +833,12 @@ dashboardRouter.get("/overview", async (req, res) => {
     newClientsList,
     newClientsBySource,
     transferred,
-    adConversion,
-    // Конверсія лідгену = передана заявка (прорахунок) → успішно реалізовано.
+    // КРОК 9-conv Фаза 1: реклама з ядра (cohort, стеля ≤100%).
+    adConversion: adConversionOut,
+    // ДВІ лідоген-плитки з ядра (won велике, handoff дрібне; рішення власника).
+    prodzvinConversion,
+    reactivationConversion,
+    // Стара «конверсія лідогену» (передана заявка→успіх) — лишена для Фази 3.
     leadgenConversion: {
       leads: transferred.total,
       paid: transferred.success,
@@ -896,6 +949,10 @@ dashboardRouter.get("/conversion", async (req, res) => {
     other: "Створені вручну (інше)",
   };
 
+  // КРОК 9-conv Фаза 1: рядок «ad» — конверсія з ЯДРА (conversion_ads, cohort,
+  // стеля ≤100%). Рядок «other» (створені вручну) — на старому (не одна з 3 нових).
+  const adAggConv = sumConv(await metrics.conversionAdsByMonth({ managerId, teamId }, adSources), from, to);
+
   const channels = ["ad", "other"].map((ch) => {
     const row = result.rows.find((r) => r.lead_channel === ch);
     const leads = Number(row?.leads ?? 0);
@@ -903,10 +960,12 @@ dashboardRouter.get("/conversion", async (req, res) => {
     return {
       channel: ch,
       label: labels[ch],
-      leads,
+      leads: ch === "ad" ? adAggConv.entered : leads,
       paid,
       paidAmount: Number(row?.paid_amount ?? 0),
-      conversion: leads > 0 ? Math.round((paid / leads) * 100) : 0,
+      conversion: ch === "ad" ? adAggConv.wonCohort : (leads > 0 ? Math.round((paid / leads) * 100) : 0),
+      conversionPeriod: ch === "ad" ? adAggConv.wonPeriod : undefined,
+      mature: ch === "ad" ? adAggConv.mature : undefined,
     };
   });
 
@@ -955,13 +1014,20 @@ dashboardRouter.get("/conversion-timeseries", async (req, res) => {
       GROUP BY 1 ORDER BY 1`,
     params
   );
+  // КРОК 9-conv Фаза 1: лінія «Конверсія реклами» — з ЯДРА (conversion_ads,
+  // помісячний cohort, стеля ≤100%). Кожен бакет мапиться на cohort свого місяця
+  // (для day/week — сходинками по місяцю; це чесна помісячна роздільність когорти).
+  // Лінія «Загальна конверсія» (points.conversion) — на старому (full-cycle, В4).
+  const adsTsByYm = new Map(
+    (await metrics.conversionAdsByMonth({ managerId, teamId }, adSources)).map((m) => [m.ym, m.cohortPct])
+  );
   const points = r.rows.map((x) => {
     const leads = Number(x.leads), paid = Number(x.paid), adLeads = Number(x.ad_leads), adPaid = Number(x.ad_paid);
     return {
       bucket: x.bucket, leads, paid,
       conversion: leads > 0 ? Math.round((paid / leads) * 100) : 0,
       adLeads, adPaid,
-      adConversion: adLeads > 0 ? Math.round((adPaid / adLeads) * 100) : 0,
+      adConversion: adsTsByYm.get(x.bucket.slice(0, 7)) ?? null,
     };
   });
   res.json({ from, to, granularity: gran, points });
@@ -2695,19 +2761,27 @@ dashboardRouter.get("/report", async (req, res) => {
     plan: sumK("plan"), // сума місячних планів виручки в скоупі (для плитки план/факт)
   };
 
+  // КРОК 9-conv Фаза 1: конверсія по менеджеру — з ЯДРА (conversion_ads cohort,
+  // стеля ≤100%). Стара формула (successDeals(ВСІ виграші)/adLeads) давала >100%
+  // (до 2909% у РПК, бо ділила всі виграші на жменю ad-лідів). entered<10 →
+  // cohortPct=null → «—» (нерекламний менеджер, не «0%»). Стару лишено для Фази 3.
+  const adConvByMgr = new Map(
+    (await metrics.conversionAdsByManager({ teamId, from, to }, reportAdSources)).map((m) => [m.managerId, m])
+  );
   const byManager = managerId
     ? []
     : [...scoreMap.values()]
         .filter((e) => e.successRevenue > 0 || e.dispatched > 0 || e.quotes > 0 || e.paymentReceived > 0 || e.transfers > 0)
-        .map((e) => ({
-          ...e,
-          avgCheck: e.successDeals > 0 ? Math.round(e.successRevenue / e.successDeals) : 0,
-          // Конверсія менеджера = успішні угоди ÷ прийнято реклами (реальна, не
-          // потокова). Якщо реклами 0 — рахуємо від прорахунків як запасний база.
-          conversion: e.adLeads > 0 ? Math.round((e.successDeals / e.adLeads) * 100)
-                    : e.quotes > 0 ? Math.round((e.successDeals / e.quotes) * 100) : 0,
-          conversionBase: e.adLeads > 0 ? "реклама" : e.quotes > 0 ? "прорахунки" : "—",
-        }))
+        .map((e) => {
+          const ac = adConvByMgr.get(e.managerId);
+          return {
+            ...e,
+            avgCheck: e.successDeals > 0 ? Math.round(e.successRevenue / e.successDeals) : 0,
+            conversion: ac?.cohortPct ?? null,           // null → «—»
+            conversionEntered: ac?.entered ?? 0,
+            conversionBase: "реклама (cohort)",
+          };
+        })
         .sort((a, b) => b.successRevenue - a.successRevenue);
 
   res.json({ granularity, scope: managerId ? "manager" : "team", summary, byPeriod, byManager });
