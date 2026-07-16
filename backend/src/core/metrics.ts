@@ -366,6 +366,111 @@ export async function adsAcceptedByMgr(s: MetricScope, adSources: string[]): Pro
   return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, count: Number(x.n) }));
 }
 
+// ───────────────────────── КОНВЕРСІЯ РЕКЛАМИ (conversion_ads) ─────────────────────────
+
+/**
+ * Рекламна зона Кваліфікації — «взяті в роботу» (Варіант A, рішення власника
+ * КРОК 6.3). Анкер по ПОДІЯХ (`deal_stage_events`): «Лід взятий у роботу» +
+ * «Дзвінки» + «Дзвінки з сайту», ОБИДВІ воронки Кваліфікації (New 8921928 /
+ * old 7336928). Нерозібране (Incoming, type 1) і eLogist НЕ входять — ліди там
+ * СТВОРЮЮТЬСЯ, події входу немає (доведено: 0 подій), а Нерозібране — сирий
+ * прекваліфікаційний інбокс зі сміттям. Порядок: New(taken,call,web) + old.
+ */
+const ADZONE_TAKEN = [69693652, 69693656, 69693660, 68671948, 68065144, 67888780];
+
+/**
+ * ПЛАТНИЙ фільтр знаменника (CONVERSION_RULES §1 + рішення 6.3): веб-платний
+ * (`traf_type='cpc'` OR `utm_medium='cpc'` OR `utm_campaign` присутній) АБО
+ * рекламний коллтрекінг (`adDealSql`), але з коллтрекінгу ВИРІЗАНА органіка
+ * (`traf_type<>'organic'`) — інакше adDealSql змітав би ~1.7к органічних угод
+ * у знаменник (доведено 6.3). `srcRef` — плейсхолдер параметра з adSources.
+ */
+const paidAdSql = (srcRef: string): string =>
+  `((d.traf_type = 'cpc' OR d.utm_medium = 'cpc' OR d.utm_campaign IS NOT NULL)
+    OR (${adDealSql(srcRef)} AND COALESCE(lower(d.traf_type), '') <> 'organic'))`;
+
+export interface ConversionAdsRow {
+  ym: string;
+  entered: number;       // знаменник обох версій: платні нові, що зайшли в зону в місяці
+  wonEventually: number; // чисельник КОГОРТИ: із цих — скільки ЗРЕШТОЮ виграли (FC 142)
+  cohortPct: number | null;
+  wonInMonth: number;    // чисельник ПЕРІОДУ: виграли (FC 142) у цьому місяці
+  periodPct: number | null;
+  mature: boolean;       // когорта дозріла (≥90 днів від кінця місяця)
+}
+
+/**
+ * `conversion_ads` помісячно за 12 міс (GLOSSARY §2b): дві версії —
+ *  • `cohort`  = зайшли в зону в місяці → скільки з них ЗРЕШТОЮ виграли (наскрізь
+ *    до FC 142). Чисельник ⊆ знаменник → стеля ≤100% (математичний інваріант).
+ *  • `period`  = виграли у місяці ÷ зайшли в місяці (різні когорти) → може
+ *    перевищувати 100% при зростанні потоку (артефакт когорт, не баг коду).
+ * Знаменник: платні (paidAdSql) нові (SEGMENT_CASE='new', вже без лідогену)
+ * ліди, що зайшли в ADZONE_TAKEN. Чисельник: їхній `deal_id` має подію входу в
+ * 142 у Повному циклі. Скоуп — той самий MetricScope (manager/team).
+ */
+export async function conversionAdsByMonth(s: MetricScope, adSources: string[]): Promise<ConversionAdsRow[]> {
+  const params: unknown[] = [ADZONE_TAKEN, FC_PIPELINES, adSources];
+  const scopeConds: string[] = [];
+  if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+
+  const r = await pool.query<{
+    ym: string; entered: string; won_eventually: string; won_in_month: string; mature: boolean;
+  }>(
+    `WITH adzone AS (
+       SELECT kommo_id, MIN(changed_at) AS entered_at
+         FROM deal_stage_events WHERE status_id = ANY($1) GROUP BY kommo_id
+     ),
+     won AS (
+       SELECT kommo_id, MIN(changed_at) AS won_at
+         FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = 142 GROUP BY kommo_id
+     ),
+     pop AS (
+       SELECT a.entered_at, w.won_at
+         FROM adzone a
+         JOIN deals d ON d.kommo_id = a.kommo_id
+         LEFT JOIN managers m ON m.id = d.manager_id
+         LEFT JOIN won w ON w.kommo_id = a.kommo_id
+        WHERE ${paidAdSql("$3")}
+          AND (${SEGMENT_CASE}) = 'new'
+          ${scopeWhere}
+     ),
+     months AS (
+       SELECT generate_series(
+         date_trunc('month', (now() ${KYIV})) - INTERVAL '11 months',
+         date_trunc('month', (now() ${KYIV})),
+         INTERVAL '1 month') AS m
+     )
+     SELECT to_char(mo.m, 'YYYY-MM') AS ym,
+       COUNT(*) FILTER (WHERE p.entered_at IS NOT NULL
+                          AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS entered,
+       COUNT(*) FILTER (WHERE p.entered_at IS NOT NULL AND p.won_at IS NOT NULL
+                          AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS won_eventually,
+       COUNT(*) FILTER (WHERE p.won_at IS NOT NULL
+                          AND date_trunc('month', (p.won_at ${KYIV})) = mo.m)::int AS won_in_month,
+       ((mo.m + INTERVAL '1 month') <= (now() ${KYIV}) - INTERVAL '90 days') AS mature
+     FROM months mo LEFT JOIN pop p ON TRUE
+     GROUP BY mo.m ORDER BY mo.m`,
+    params
+  );
+  return r.rows.map((x) => {
+    const entered = Number(x.entered);
+    const wonEventually = Number(x.won_eventually);
+    const wonInMonth = Number(x.won_in_month);
+    return {
+      ym: x.ym,
+      entered,
+      wonEventually,
+      cohortPct: entered > 0 ? Math.round((wonEventually / entered) * 1000) / 10 : null,
+      wonInMonth,
+      periodPct: entered > 0 ? Math.round((wonInMonth / entered) * 1000) / 10 : null,
+      mature: x.mature,
+    };
+  });
+}
+
 // ───────────────────────── ДЕБІТОРКА (знімок, БЕЗ дат) ─────────────────────────
 
 /**
