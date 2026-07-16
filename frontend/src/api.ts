@@ -76,7 +76,9 @@ export interface ConversionChannel {
   leads: number;
   paid: number;
   paidAmount: number;
-  conversion: number;
+  conversion: number | null;   // ad → cohort (null коли entered<10); other → old %
+  conversionPeriod?: number | null;
+  mature?: boolean;
 }
 
 export async function fetchConversion(params: {
@@ -164,7 +166,13 @@ export interface ExecutiveOverview {
     success: number;
     byTeam: { teamId: number; teamName: string; transferred: number; success: number; successRevenue: number }[];
   };
-  adConversion: { leads: number; paid: number; conversion: number };
+  // КРОК 9-conv: конверсія з ядра. conversion=null → «—» (нерекламний/entered<10);
+  // mature=false → бейдж «дозріває» (когорта <90 днів).
+  adConversion: { leads: number; paid: number; conversion: number | null; conversionPeriod: number | null; mature: boolean };
+  // Дві лідоген-плитки: won велике, handoff дрібне.
+  prodzvinConversion: { entered: number; won: number | null; wonPeriod: number | null; handoff: number | null; mature: boolean };
+  reactivationConversion: { entered: number; won: number | null; wonPeriod: number | null; handoff: number | null; mature: boolean };
+  // Стара (Фаза 3 прибере) — лишена для сумісності.
   leadgenConversion: { leads: number; paid: number; conversion: number };
   monthlyHistory: {
     month: string;
@@ -173,7 +181,9 @@ export interface ExecutiveOverview {
     revenue: number;
     conversion: number;
     avgCheck: number;
-    adConversion: number;
+    adConversion: number | null;
+    prodzvinWon: number | null;
+    reactivationWon: number | null;
     leadgenConversion: number;
     newClients: number;
     repeatClients: number;
@@ -343,7 +353,7 @@ export interface ConversionTsPoint {
   conversion: number;
   adLeads: number;
   adPaid: number;
-  adConversion: number;
+  adConversion: number | null;
 }
 export async function fetchConversionTimeseries(params: {
   from?: string;
@@ -868,7 +878,8 @@ export interface ReportData {
     avgCheck: number;
     plan: number;
     expected: number;
-    conversion: number;
+    conversion: number | null;    // null → «—» (нерекламний менеджер / entered<10)
+    conversionEntered: number;
     conversionBase: string;
   }[];
 }

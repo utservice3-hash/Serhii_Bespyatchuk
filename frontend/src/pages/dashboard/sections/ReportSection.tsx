@@ -945,12 +945,12 @@ export function ReportSection({
                     const fact = m.successRevenue + m.paymentReceived;
                     const pct = m.plan > 0 ? Math.round((fact / m.plan) * 100) : null;
                     const pc = pct == null ? "var(--text-muted)" : pct >= 100 ? "#16a34a" : pct >= 70 ? "#d97706" : "#dc2626";
-                    const cc = m.conversion >= 20 ? "#16a34a" : m.conversion >= 10 ? "#d97706" : "#dc2626";
+                    const cc = m.conversion == null ? "#667085" : m.conversion >= 20 ? "#16a34a" : m.conversion >= 10 ? "#d97706" : "#dc2626";
                     return (
                       <tr key={m.managerId} onClick={() => setDetailMgr(m)} style={{ cursor: "pointer" }} title="Деталі: План/Факт і задачі">
                         <td style={{ fontWeight: 600 }}>{m.name}</td>
                         <td style={{ color: pc, fontWeight: 600, whiteSpace: "nowrap" }}>{pct != null ? `${pct}%` : "—"}</td>
-                        <td style={{ color: cc, fontWeight: 700 }} title={`база: ${m.conversionBase}`}>{m.conversion ? `${m.conversion}%` : "—"}</td>
+                        <td style={{ color: cc, fontWeight: 700 }} title={m.conversion == null ? `реклама cohort: замало рекламних лідів (${m.conversionEntered}) — не рекламний канал` : `база: ${m.conversionBase} (n=${m.conversionEntered})`}>{m.conversion == null ? "—" : `${m.conversion}%`}</td>
                         <td>{m.adLeads}</td>
                         <td>{m.transfers}</td>
                         <td>{m.quotes}</td>

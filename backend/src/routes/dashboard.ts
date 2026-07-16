@@ -50,6 +50,8 @@ function sumConv(rows: ConvMonthly[], from?: string | null, to?: string | null) 
   const pct = (n: number) => (entered >= 10 ? Math.round((n / entered) * 1000) / 10 : null);
   return {
     entered,
+    wonCount: s("wonEventually"),      // сира к-ть виграних (для сумісності: adConversion.paid)
+    handoffCount: s("handoffEventually"),
     mature: sel.length > 0 && sel[sel.length - 1].mature,
     wonCohort: pct(s("wonEventually")), wonPeriod: pct(s("wonInMonth")),
     handoffCohort: pct(s("handoffEventually")), handoffPeriod: pct(s("handoffInMonth")),
@@ -780,7 +782,7 @@ dashboardRouter.get("/overview", async (req, res) => {
   const adAgg = sumConv(adsMonthlyOv, from, to);
   const pzAgg = sumConv(pzMonthlyOv, from, to);
   const reAgg = sumConv(reMonthlyOv, from, to);
-  const adConversionOut = { leads: adAgg.entered, conversion: adAgg.wonCohort, conversionPeriod: adAgg.wonPeriod, mature: adAgg.mature };
+  const adConversionOut = { leads: adAgg.entered, paid: adAgg.wonCount, conversion: adAgg.wonCohort, conversionPeriod: adAgg.wonPeriod, mature: adAgg.mature };
   const prodzvinConversion = { entered: pzAgg.entered, won: pzAgg.wonCohort, wonPeriod: pzAgg.wonPeriod, handoff: pzAgg.handoffCohort, mature: pzAgg.mature };
   const reactivationConversion = { entered: reAgg.entered, won: reAgg.wonCohort, wonPeriod: reAgg.wonPeriod, handoff: reAgg.handoffCohort, mature: reAgg.mature };
   // Спарклайни: adConversion + won-лідоген по місяцях із ядра (перекриваємо старі).

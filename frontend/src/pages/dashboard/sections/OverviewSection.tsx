@@ -24,9 +24,11 @@ const KPI_HINTS: Record<string, string> = {
   sum:
     "Отримані кошти = «Успішно реалізовано» (статус 142, за датою закриття угоди в періоді) + «Оплата отримана» (поточний етап, знімок без фільтра дати).",
   convAd:
-    "Конверсія реклами: таргетовані угоди повного циклу (лід із google-utm), що дійшли до оплати ÷ усі такі ліди за період.",
-  convLg:
-    "Конверсія лідогену: передані заявки-прорахунки від лідогена, чий клієнт дійшов до оплаченої угоди повного циклу ÷ усі передані заявки.",
+    "Конверсія реклами (cohort): платні нові ліди, що зайшли в рекламну зону Кваліфікації в періоді → скільки з них зрештою дійшли до успішної угоди повного циклу. Стеля ≤100%; «дозріває» = когорта молодша 90 днів. «—» = замало рекламних лідів (не рекламний канал).",
+  convPz:
+    "Конверсія Продзвін (cohort): клієнти, взяті в роботу холодного продзвону → скільки повезли (успішна угода повного циклу, крос-пайплайн по клієнту). «передано» = дійшли до передачі в продаж.",
+  convRe:
+    "Конверсія Реактивація (cohort): клієнти на підігріві реактивації → скільки повезли знову. «передано» = відправлено у відділ продажів (стадію повертають у процес з 2026).",
   avg:
     "Середній чек = Успішно реалізовано ÷ Поставлені машини (один якір — перехід в успіх; уточнено 13.07, ПРОМТ 0.9).",
   newc:
@@ -61,6 +63,8 @@ export type Kpi = {
   cur: number;
   prev: number;
   unit?: string;
+  note?: string;       // напр. «дозріває» для незрілих когорт конверсії
+  subValue?: string;   // дрібний підпис під числом (напр. handoff у лідоген-плитках)
 };
 
 export function OverviewSection({
@@ -218,7 +222,13 @@ export function OverviewSection({
                 {KPI_HINTS[kpi.key] && <InfoHint text={KPI_HINTS[kpi.key]} />}
               </span>
               <span className="kpi-value">{kpi.value}</span>
-              {hasPrev && (
+              {kpi.subValue && (
+                <span style={{ fontSize: 11, color: "#667085" }}>{kpi.subValue}</span>
+              )}
+              {kpi.note && (
+                <span style={{ fontSize: 11, color: "#b45309", fontWeight: 600 }}>⏳ {kpi.note}</span>
+              )}
+              {hasPrev && kpi.value !== "—" && (
                 <span style={{ fontSize: 12, color, fontWeight: 600 }}>
                   {arrow} {Math.abs(pct)}% до попер. періоду
                 </span>
@@ -284,7 +294,8 @@ export function OverviewSection({
                   deals: "deals",
                   sum: "revenue",
                   convAd: "adConversion",
-                  convLg: "leadgenConversion",
+                  convPz: "prodzvinWon",
+                  convRe: "reactivationWon",
                   avg: "avgCheck",
                   newc: "newClients",
                   repc: "repeatClients",
@@ -542,7 +553,7 @@ export function OverviewSection({
                   <td>{c.label}</td>
                   <td>{c.leads.toLocaleString("uk-UA")}</td>
                   <td>{c.paid.toLocaleString("uk-UA")}</td>
-                  <td>{c.conversion}%</td>
+                  <td>{c.conversion == null ? "—" : `${c.conversion}%`}{c.mature === false ? " ⏳" : ""}</td>
                   <td>{formatAmount(c.paidAmount)}</td>
                 </tr>
               ))}

@@ -961,16 +961,20 @@ export function Dashboard() {
   // (invoiced+paid), created in the period — comes from the overview endpoint.
   const dealsCount = overview?.createdLeads ?? totalDeals;
   const prevDealsCount = prevOverview?.createdLeads ?? prevDeals;
-  const adConv = overview?.adConversion?.conversion ?? 0;
-  const prevAdConv = prevOverview?.adConversion?.conversion ?? 0;
-  const lgConv = overview?.leadgenConversion?.conversion ?? 0;
-  const prevLgConv = prevOverview?.leadgenConversion?.conversion ?? 0;
+  // КРОК 9-conv: конверсія з ядра. null → «—» (нерекламний/entered<10);
+  // !mature → бейдж «дозріває». Лідоген — ДВІ плитки (Продзвін/Реактивація),
+  // won велике число, handoff — дрібним підписом.
+  const pctStr = (v: number | null | undefined) => (v == null ? "—" : `${v}%`);
+  const adC = overview?.adConversion;
+  const pzC = overview?.prodzvinConversion;
+  const reC = overview?.reactivationConversion;
 
   const kpis: Kpi[] = [
     { key: "deals", label: "Угоди (рахунок→реалізовано)", value: dealsCount.toLocaleString("uk-UA"), cur: dealsCount, prev: prevDealsCount },
     { key: "sum", label: "Отримані кошти (оплата+успішно)", value: formatAmount(overview?.closedRevenue ?? 0), cur: overview?.closedRevenue ?? 0, prev: prevOverview?.closedRevenue ?? 0 },
-    { key: "convAd", label: "Конверсія реклами", value: `${adConv}%`, cur: adConv, prev: prevAdConv, unit: "%" },
-    { key: "convLg", label: "Конверсія лідогену", value: `${lgConv}%`, cur: lgConv, prev: prevLgConv, unit: "%" },
+    { key: "convAd", label: "Конверсія реклами", value: pctStr(adC?.conversion), cur: adC?.conversion ?? 0, prev: prevOverview?.adConversion?.conversion ?? 0, unit: "%", note: adC && !adC.mature ? "дозріває" : undefined },
+    { key: "convPz", label: "Конверсія Продзвін", value: pctStr(pzC?.won), cur: pzC?.won ?? 0, prev: 0, unit: "%", subValue: `передано ${pctStr(pzC?.handoff)}`, note: pzC && !pzC.mature ? "дозріває" : undefined },
+    { key: "convRe", label: "Конверсія Реактивація", value: pctStr(reC?.won), cur: reC?.won ?? 0, prev: 0, unit: "%", subValue: `передано ${pctStr(reC?.handoff)}`, note: reC && !reC.mature ? "дозріває" : undefined },
     { key: "avg", label: "Середній чек", value: formatAmountFull(avgDeal), cur: avgDeal, prev: prevAvg },
     { key: "newc", label: "Нові клієнти (вперше)", value: (overview?.newClients ?? 0).toLocaleString("uk-UA"), cur: overview?.newClients ?? 0, prev: prevOverview?.newClients ?? 0 },
     { key: "repc", label: "Постійні клієнти (2+)", value: (overview?.repeatClients ?? 0).toLocaleString("uk-UA"), cur: overview?.repeatClients ?? 0, prev: prevOverview?.repeatClients ?? 0 },

@@ -137,7 +137,7 @@ const METRICS: Metric[] = [
   { key: "adDispatched", label: "Поставлені машини з реклами", unit: "num", group: "🎯 Реклама", get: (b) => b.ex.ad.dispatched, planKind: "ad_dispatched", flow: true, editable: true, hint: HINTS.adDispatched },
   { key: "adPaid", label: "Оплачено з реклами", unit: "num", group: "🎯 Реклама", get: (b) => b.ov.adConversion.paid, planKind: null, flow: true, hint: HINTS.adPaid },
   { key: "adAvg", label: "Середній чек реклами", unit: "moneyFull", group: "🎯 Реклама", get: (b) => (b.ov.adConversion.paid > 0 ? Math.round(b.ex.ad.revenue / b.ov.adConversion.paid) : 0), planKind: "ad_avg_check", flow: false, editable: true, hint: HINTS.adAvg },
-  { key: "adConv", label: "Конверсія реклами", unit: "pct", group: "🎯 Реклама", get: (b) => b.ov.adConversion.conversion, planKind: "ad_conversion", flow: false, editable: true, hint: HINTS.adConv },
+  { key: "adConv", label: "Конверсія реклами", unit: "pct", group: "🎯 Реклама", get: (b) => b.ov.adConversion.conversion ?? 0, planKind: "ad_conversion", flow: false, editable: true, hint: HINTS.adConv },
   { key: "target", label: "Цільові ліди", unit: "num", group: "🎯 Реклама", get: (b) => b.lq.targetLeads, planKind: "target_leads", flow: true, editable: true, hint: HINTS.target },
   // 📞 Лідогенератори
   { key: "transferred", label: "Передані заявки", unit: "num", group: "📞 Лідогенератори", get: (b) => b.ov.transferred.total, planKind: "transferred", flow: true, editable: true, hint: HINTS.transferred },
@@ -198,7 +198,10 @@ function HeroStrip({ b, plans, ratio, weekStats }: { b: Block; plans: KvpPlans; 
     { label: "Отримані кошти", fact: o.fact, unit: "money", plan: revPlan, flow: true, series: hist.map((m) => m.revenue), week: weekStats?.received },
     { label: "Поставлені машини", fact: b.ov.successDeals, unit: "num", plan: plans.dispatched_cars ?? null, flow: true, series: hist.map((m) => m.paid), week: weekStats?.dispatched },
     { label: "⏳ Очікувані оплати", fact: o.pendingPayments?.revenue ?? 0, unit: "money", plan: null, flow: false, series: [], sub: `${o.pendingPayments?.deals ?? 0} виставлених рахунків` },
-    { label: "Конверсія реклами", fact: o.adConversion.conversion, unit: "pct", plan: plans.ad_conversion ?? null, flow: false, series: hist.map((m) => m.adConversion) },
+    { label: "Конверсія реклами", fact: o.adConversion.conversion ?? 0, unit: "pct", plan: plans.ad_conversion ?? null, flow: false, series: hist.map((m) => m.adConversion ?? 0) },
+    // КРОК 9-conv: дві лідоген-плитки (won велике; передано/handoff у підписі).
+    { label: "Конверсія Продзвін", fact: o.prodzvinConversion?.won ?? 0, unit: "pct", plan: null, flow: false, series: hist.map((m) => m.prodzvinWon ?? 0), sub: `передано ${o.prodzvinConversion?.handoff == null ? "—" : o.prodzvinConversion.handoff + "%"}${o.prodzvinConversion && !o.prodzvinConversion.mature ? " · ⏳ дозріває" : ""}` },
+    { label: "Конверсія Реактивація", fact: o.reactivationConversion?.won ?? 0, unit: "pct", plan: null, flow: false, series: hist.map((m) => m.reactivationWon ?? 0), sub: `передано ${o.reactivationConversion?.handoff == null ? "—" : o.reactivationConversion.handoff + "%"}${o.reactivationConversion && !o.reactivationConversion.mature ? " · ⏳ дозріває" : ""}` },
     { label: "Середній чек", fact: avgCheck(o, o.successDeals), unit: "moneyFull", plan: plans.avg_check ?? null, flow: false, series: hist.map((m) => m.avgCheck) },
   ];
   return (
@@ -714,7 +717,7 @@ function AdEfficiency({ b }: { b: Block }) {
     { label: "GA-заявки", val: lq.adBudgetLeads.toLocaleString("uk-UA") },
     { label: "CRM-ліди", val: ov.adConversion.leads.toLocaleString("uk-UA") },
     { label: "Оплачено", val: ov.adConversion.paid.toLocaleString("uk-UA") },
-    { label: "Конверсія", val: `${ov.adConversion.conversion}%` },
+    { label: "Конверсія", val: ov.adConversion.conversion == null ? "—" : `${ov.adConversion.conversion}%` },
   ];
   const kpis = [
     { label: "CPL (GA)", val: cpl != null ? formatAmount(cpl) : "—", hint: "Вартість заявки: бюджет ÷ GA-заявки." },
