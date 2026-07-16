@@ -90,6 +90,10 @@ CREATE INDEX IF NOT EXISTS idx_deals_utm_medium ON deals(utm_medium);
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS unload_at TIMESTAMPTZ;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS load_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_deals_unload_at ON deals(unload_at);
+-- Р2: «Запланована дата оплати» (Kommo 2097273) — обіцяна клієнтом дата оплати
+-- для суми очікування в грошовій зоні (виставлено рахунок → очікуємо оплату).
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS planned_payment_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_deals_planned_payment_at ON deals(planned_payment_at);
 
 ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_team_lead BOOLEAN NOT NULL DEFAULT false;
 

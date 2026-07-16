@@ -1007,3 +1007,68 @@ export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> 
     neglectedOver24h: o ? Number(o.gt1440) : 0,
   };
 }
+
+// ───────────────────────── СУМА ОЧІКУВАННЯ ПО ЗАПЛАНОВАНІЙ ДАТІ (Р2) ─────────────────────────
+
+/**
+ * Р2 — «Сума очікування» для звіту. ЗНІМОК поточної грошової зони (виставлено
+ * рахунок → очікуємо оплату, ще не оплачено), сума `price` (бюджет — рішення
+ * власника: безнал і готівка однаково, НЕ приход), розбивка по `planned_payment_at`
+ * (Kommo 2097273, «Запланована дата оплати»):
+ *   • thisMonth — планова дата в поточному місяці й НЕ в минулому;
+ *   • nextMonth — планова дата в наступному місяці;
+ *   • 🔴 overdue — планова дата В МИНУЛОМУ, а гроші ще не прийшли (сигнал
+ *     «застрягли після обіцяної дати») — ОКРЕМО, не змішувати з очікуванням;
+ *   • later — далі за наступний місяць; noDate — у зоні, але дата не заповнена.
+ * Знімок → SnapshotScope (дати заборонені на рівні типу).
+ */
+const EXPECT_ZONE = [100274340, 69716304, 69716312, 42639144, 42639147, 25044997, 62940068];
+
+export interface ExpectedBucket { deals: number; sum: number }
+export interface ExpectedPaymentsByPlanned {
+  thisMonth: ExpectedBucket;
+  nextMonth: ExpectedBucket;
+  overdue: ExpectedBucket;
+  later: ExpectedBucket;
+  noDate: ExpectedBucket;
+}
+
+export async function expectedPaymentsByPlanned(s: SnapshotScope): Promise<ExpectedPaymentsByPlanned> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const activeJoin = s.activeOnly ? "AND m.is_active" : "";
+  // Порівнюємо по-київськи; overdue має пріоритет (дата в минулому → overdue,
+  // навіть якщо місяць поточний). Далі серед майбутніх — cur/next/later по місяцю.
+  const P = `(d.planned_payment_at ${KYIV})::date`;
+  const today = `(now() ${KYIV})::date`;
+  const curYm = `to_char((now() ${KYIV}), 'YYYY-MM')`;
+  const nextYm = `to_char((now() ${KYIV}) + INTERVAL '1 month', 'YYYY-MM')`;
+  const pYm = `to_char((d.planned_payment_at ${KYIV}), 'YYYY-MM')`;
+  const r = await pool.query<Record<string, string>>(
+    `SELECT
+       count(*) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} < ${today})::int overdue_n,
+       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} < ${today}),0) overdue_s,
+       count(*) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} = ${curYm})::int this_n,
+       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} = ${curYm}),0) this_s,
+       count(*) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} = ${nextYm})::int next_n,
+       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} = ${nextYm}),0) next_s,
+       count(*) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} > ${nextYm})::int later_n,
+       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} > ${nextYm}),0) later_s,
+       count(*) FILTER (WHERE d.planned_payment_at IS NULL)::int nodate_n,
+       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NULL),0) nodate_s
+     FROM deals d LEFT JOIN managers m ON m.id = d.manager_id ${activeJoin}
+     WHERE ${conds.join(" AND ")}`,
+    params
+  );
+  const x = r.rows[0] ?? {};
+  const b = (n: string, sum: string): ExpectedBucket => ({ deals: Number(x[n] ?? 0), sum: Number(x[sum] ?? 0) });
+  return {
+    thisMonth: b("this_n", "this_s"),
+    nextMonth: b("next_n", "next_s"),
+    overdue: b("overdue_n", "overdue_s"),
+    later: b("later_n", "later_s"),
+    noDate: b("nodate_n", "nodate_s"),
+  };
+}

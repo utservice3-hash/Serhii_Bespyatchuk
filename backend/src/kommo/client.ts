@@ -195,6 +195,7 @@ const FIELD_INCOME_1 = 2097627;
 // послугу фактично надано. Kommo віддає date-поля юнікс-секундами (рядком).
 const FIELD_UNLOAD_DATE = 463253; // «Дата выгрузки (Дата акта)»
 const FIELD_LOAD_DATE = 473637; // «Дата загрузки» — операційне поле, НЕ якір
+const FIELD_PLANNED_PAYMENT = 2097273; // «Запланована дата оплати» (Р2 — сума очікування)
 // Web/гео-мітки реклами (КРОК 6 — конверсія реклами по каналах). field_id звірені
 // з docs/CRM_SCHEMA.md §трекінг. TRAF_SRC/TRAF_TYPE — text-поля Kommo (не
 // tracking_data), заповнюються і для органіки; TRAF_TYPE ∈ cpc/organic/referral/none.
@@ -216,6 +217,11 @@ function fieldDate(deal: KommoDeal, fieldId: number): Date | null {
 /** «Дата выгрузки (Дата акта)» — фінансовий якір угоди. */
 export function extractUnloadDate(deal: KommoDeal): Date | null {
   return fieldDate(deal, FIELD_UNLOAD_DATE);
+}
+
+/** «Запланована дата оплати» (2097273) — обіцяна клієнтом дата оплати (Р2). */
+export function extractPlannedPaymentDate(deal: KommoDeal): Date | null {
+  return fieldDate(deal, FIELD_PLANNED_PAYMENT);
 }
 
 /** «Дата загрузки» — операційна дата початку перевезення. */
