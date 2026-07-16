@@ -664,6 +664,117 @@ export const conversionProdzvinByMonth = (s: MetricScope): Promise<LeadgenConver
 export const conversionReactivationByMonth = (s: MetricScope): Promise<LeadgenConversionRow[]> =>
   leadgenConversionByMonth(s, { entryPipelines: REACTIVATION_PIPELINES, entryStatus: REACT_WARMING });
 
+// ───────────────────────── ЧЕСНА КОГОРТНА ВОРОНКА (Р1) ─────────────────────────
+
+/**
+ * ЧЕСНА когортна воронка продажів (Р1) — виправляє >100%/1600% у старій воронці.
+ * Той самий патерн, що conversion_ads: КОГОРТА = угоди, що зайшли в «Взято в
+ * роботу» (`funnel_stage='lead_taken'` у Повному циклі 8921932/155304) у бакеті.
+ * Трек уперед: рахуємо НАЙГЛИБШУ досягнуту стадію (за подіями, після входу).
+ * `reached[стадія]` = скільки з когорти дійшло ДО НЕЇ АБО ГЛИБШЕ → чисельник ⊆
+ * знаменник → **завжди ≤100%**, монотонно спадає. **Готівка пропускає «Рахунок»
+ * (invoiced)** — але, дійшовши до `paid`, зараховується і в invoiced (reached ≥
+ * стадії), тож пропуск не ламає монотонність.
+ * «Зайшли посередині» = угоди з подією стадії ≥ quote_requested у бакеті, що
+ * НЕ мають події `lead_taken` взагалі → окремий рядок, НЕ в знаменнику.
+ * Стадії Повного циклу — канонічний `pipeline_stage_map` (не вигадані id).
+ */
+export interface FunnelHonestRow {
+  bucket: string;               // YYYY-MM (month) або YYYY-MM-DD (week, понеділок)
+  cohort: number;               // зайшли в lead_taken у бакеті
+  reached: { lead_taken: number; quote_requested: number; approved: number; invoiced: number; paid: number };
+  pct: { lead_taken: number; quote_requested: number | null; approved: number | null; invoiced: number | null; paid: number | null };
+  midfunnel: number;            // «зайшли посередині» (не через lead_taken)
+  mature: boolean;              // когорта дозріла (≥90 днів)
+}
+
+export async function funnelCohortHonest(
+  s: MetricScope,
+  granularity: "month" | "week" = "month"
+): Promise<FunnelHonestRow[]> {
+  const gran = granularity === "week" ? "week" : "month";
+  const params: unknown[] = [FC_PIPELINES];
+  const scopeConds: string[] = [];
+  if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  const fromRef = (params.push(s.from ?? null), `$${params.length}`);
+  const toRef = (params.push(s.to ?? null), `$${params.length}`);
+  const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+  const inPeriod = (col: string) =>
+    `((${fromRef})::date IS NULL OR (${col} ${KYIV})::date >= (${fromRef})::date)
+     AND ((${toRef})::date IS NULL OR (${col} ${KYIV})::date <= (${toRef})::date)`;
+
+  const r = await pool.query<{
+    bucket: string; cohort: string; r1: string; r2: string; r3: string; r4: string; r5: string; midfunnel: string; mature: boolean;
+  }>(
+    `WITH ev AS (
+       SELECT e.kommo_id, e.changed_at,
+         CASE psm.funnel_stage
+           WHEN 'lead_taken' THEN 1 WHEN 'quote_requested' THEN 2 WHEN 'approved' THEN 3
+           WHEN 'invoiced' THEN 4 WHEN 'paid' THEN 5 END AS rk
+         FROM deal_stage_events e
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = e.pipeline_id AND psm.status_id = e.status_id
+        WHERE e.pipeline_id = ANY($1)
+     ),
+     coh AS (   -- зайшли в lead_taken у періоді (з урахуванням скоупу менеджера/команди)
+       SELECT ev.kommo_id, MIN(ev.changed_at) AS entered_at
+         FROM ev
+         JOIN deals d ON d.kommo_id = ev.kommo_id
+         LEFT JOIN managers m ON m.id = d.manager_id
+        WHERE ev.rk = 1 AND ${inPeriod("ev.changed_at")} ${scopeWhere}
+        GROUP BY ev.kommo_id
+     ),
+     depth AS (  -- найглибша стадія, досягнута ПІСЛЯ входу
+       SELECT c.kommo_id, c.entered_at, MAX(ev.rk) AS deepest
+         FROM coh c JOIN ev ON ev.kommo_id = c.kommo_id AND ev.changed_at >= c.entered_at
+        GROUP BY c.kommo_id, c.entered_at
+     ),
+     mid AS (   -- «зайшли посередині»: подія rk>=2 у періоді, БЕЗ жодного lead_taken
+       SELECT ev.kommo_id, MIN(ev.changed_at) AS first_at
+         FROM ev
+         JOIN deals d ON d.kommo_id = ev.kommo_id
+         LEFT JOIN managers m ON m.id = d.manager_id
+        WHERE ev.rk >= 2 AND ${inPeriod("ev.changed_at")} ${scopeWhere}
+          AND NOT EXISTS (SELECT 1 FROM ev e2 WHERE e2.kommo_id = ev.kommo_id AND e2.rk = 1)
+        GROUP BY ev.kommo_id
+     ),
+     buckets AS (
+       SELECT date_trunc('${gran}', (entered_at ${KYIV})) AS b,
+              count(*)::int cohort,
+              count(*) FILTER (WHERE deepest >= 1)::int r1,
+              count(*) FILTER (WHERE deepest >= 2)::int r2,
+              count(*) FILTER (WHERE deepest >= 3)::int r3,
+              count(*) FILTER (WHERE deepest >= 4)::int r4,
+              count(*) FILTER (WHERE deepest >= 5)::int r5
+         FROM depth GROUP BY 1
+     ),
+     midb AS (
+       SELECT date_trunc('${gran}', (first_at ${KYIV})) AS b, count(*)::int midfunnel FROM mid GROUP BY 1
+     )
+     SELECT to_char(COALESCE(bk.b, mb.b), 'YYYY-MM-DD') AS bucket,
+            COALESCE(bk.cohort,0) cohort, COALESCE(bk.r1,0) r1, COALESCE(bk.r2,0) r2,
+            COALESCE(bk.r3,0) r3, COALESCE(bk.r4,0) r4, COALESCE(bk.r5,0) r5,
+            COALESCE(mb.midfunnel,0) midfunnel,
+            ((COALESCE(bk.b, mb.b) + INTERVAL '1 ${gran}') <= (now() ${KYIV}) - INTERVAL '90 days') AS mature
+       FROM buckets bk FULL OUTER JOIN midb mb ON bk.b = mb.b
+      ORDER BY 1`,
+    params
+  );
+  return r.rows.map((x) => {
+    const cohort = Number(x.cohort);
+    const rc = { lead_taken: Number(x.r1), quote_requested: Number(x.r2), approved: Number(x.r3), invoiced: Number(x.r4), paid: Number(x.r5) };
+    const pc = (n: number) => (cohort > 0 ? Math.round((n / cohort) * 1000) / 10 : null);
+    return {
+      bucket: x.bucket,
+      cohort,
+      reached: rc,
+      pct: { lead_taken: cohort > 0 ? 100 : 0, quote_requested: pc(rc.quote_requested), approved: pc(rc.approved), invoiced: pc(rc.invoiced), paid: pc(rc.paid) },
+      midfunnel: Number(x.midfunnel),
+      mature: x.mature,
+    };
+  });
+}
+
 // ───────────────────────── ДЕБІТОРКА (знімок, БЕЗ дат) ─────────────────────────
 
 /**
