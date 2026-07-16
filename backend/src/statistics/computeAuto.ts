@@ -9,10 +9,10 @@
 
 import { pool } from "../db/pool.js";
 import { getSettings } from "../routes/settings.js";
+// КРОК 9 Фаза 3: `adDealSql` — єдине джерело `core/metrics.ts` (прибрано локальний дубль).
+import { adDealSql } from "../core/metrics.js";
 
 const FULL_CYCLE = [8921932, 155304];
-const adDealSql = (ref: string) =>
-  `((d.client_source = ANY(${ref}) OR d.lead_channel = 'ad') AND COALESCE(d.client_source,'') NOT ILIKE '%реактив%')`;
 
 type Row = { bucket: string; v: string };
 const KYIV = "AT TIME ZONE 'Europe/Kyiv'";

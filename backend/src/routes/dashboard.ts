@@ -16,15 +16,11 @@ const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/,
 const EXPECTED_STAGES =
   "(psm.funnel_stage IN ('approved','invoiced') OR d.status_id IN (69716300, 98470988, 10937178))";
 
-/**
- * ЄДИНЕ правило «рекламна угода» (рішення власника 10.07) — ОДНА логіка скрізь:
- * угода повного циклу рекламна, якщо «Источник клиента» ∈ adSources АБО вона
- * прийшла через Кваліфікацію без лідоген-маркерів (lead_channel='ad'), і це НЕ
- * реактивація (джерело «Реактивація…»). БЕЗ фільтра поточного етапу воронки.
- * `srcRef` — посилання на параметр з масивом adSources (напр. "$4").
- */
-const adDealSql = (srcRef: string) =>
-  `((d.client_source = ANY(${srcRef}) OR d.lead_channel = 'ad') AND COALESCE(d.client_source, '') NOT ILIKE '%реактив%')`;
+// КРОК 9 Фаза 3: `adDealSql` більше НЕ дублюється тут — єдине джерело `core/metrics.ts`
+// (`metrics.adDealSql`). Усі усе ще-інлайнові вжитки (конверсія /conversion,
+// /conversion-timeseries, /overview.adConversion, /report.adLeads, /kvp-extra) — це
+// свідомо-лишена КОНВЕРСІЯ (КРОК 6, блок В2/В3/В4) + денумератор реклами; логіку не
+// чіпаємо, лише централізуємо хелпер.
 import { getSettings } from "./settings.js";
 import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
@@ -288,8 +284,8 @@ dashboardRouter.get("/overview", async (req, res) => {
   const adConvParams = [...params, adSources];
   const adSrcIdx = adConvParams.length;
   const adConvRes = await pool.query<{ ad_leads: string; ad_paid: string }>(
-    `SELECT COUNT(*) FILTER (WHERE ${adDealSql(`$${adSrcIdx}`)}) AS ad_leads,
-            COUNT(*) FILTER (WHERE ${adDealSql(`$${adSrcIdx}`)} AND psm.funnel_stage = 'paid') AS ad_paid
+    `SELECT COUNT(*) FILTER (WHERE ${metrics.adDealSql(`$${adSrcIdx}`)}) AS ad_leads,
+            COUNT(*) FILTER (WHERE ${metrics.adDealSql(`$${adSrcIdx}`)} AND psm.funnel_stage = 'paid') AS ad_paid
      FROM deals d
      JOIN managers m ON m.id = d.manager_id
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -676,8 +672,8 @@ dashboardRouter.get("/overview", async (req, res) => {
             COUNT(*) FILTER (WHERE psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178)) AS dispatched,
             COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
             COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS revenue,
-            COUNT(*) FILTER (WHERE ${adDealSql("$2")}) AS ad_leads,
-            COUNT(*) FILTER (WHERE ${adDealSql("$2")} AND psm.funnel_stage = 'paid') AS ad_paid,
+            COUNT(*) FILTER (WHERE ${metrics.adDealSql("$2")}) AS ad_leads,
+            COUNT(*) FILTER (WHERE ${metrics.adDealSql("$2")} AND psm.funnel_stage = 'paid') AS ad_paid,
             COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_leads,
             COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen' AND psm.funnel_stage = 'paid') AS lg_paid,
             COUNT(DISTINCT d.client_key) FILTER (
@@ -866,7 +862,7 @@ dashboardRouter.get("/conversion", async (req, res) => {
   // перелік adSources, що й «прийняв рекламу») — не lead_channel='ad'.
   const { adSources } = await getSettings();
   params.push(adSources);
-  const adCase = `CASE WHEN ${adDealSql(`$${params.length}`)} THEN 'ad' ELSE 'other' END`;
+  const adCase = `CASE WHEN ${metrics.adDealSql(`$${params.length}`)} THEN 'ad' ELSE 'other' END`;
 
   // "paid" = leads whose CLIENT reached a paid full-cycle deal (client_key
   // match). "paid_amount" is the lead's own paid value.
@@ -952,8 +948,8 @@ dashboardRouter.get("/conversion-timeseries", async (req, res) => {
      SELECT to_char(date_trunc('${gran}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket,
             COUNT(*) AS leads,
             COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS paid,
-            COUNT(*) FILTER (WHERE ${adDealSql("$3")}) AS ad_leads,
-            COUNT(*) FILTER (WHERE ${adDealSql("$3")} AND d.client_key IN (SELECT client_key FROM paid_clients)) AS ad_paid
+            COUNT(*) FILTER (WHERE ${metrics.adDealSql("$3")}) AS ad_leads,
+            COUNT(*) FILTER (WHERE ${metrics.adDealSql("$3")} AND d.client_key IN (SELECT client_key FROM paid_clients)) AS ad_paid
        FROM deals d JOIN managers m ON m.id = d.manager_id
       WHERE ${conds.join(" AND ")}
       GROUP BY 1 ORDER BY 1`,
@@ -2019,11 +2015,14 @@ dashboardRouter.get("/teams", async (req, res) => {
      WHERE d.pipeline_id IN (8921932,155304) ${lc.length ? "AND " + lc.join(" AND ") : ""} GROUP BY t.id`,
     lp
   );
-  const recv = await pool.query<{ tid: number; debt: string }>(
-    `SELECT m.team_id AS tid, COALESCE(SUM(r.amount),0) AS debt
-     FROM receivables r JOIN managers m ON m.id = r.manager_id
-     WHERE m.team_id IS NOT NULL GROUP BY m.team_id`
-  );
+  // КРОК 9 Фаза 3: борг по командах і менеджерах — з core/metrics.receivablesByManager
+  // (єдине джерело; прибрано 2 інлайн SUM(receivables)). Неатрибутований борг (teamId/
+  // managerId = null) у /teams НЕ показується — так само, як стара логіка (немає команди
+  // → немає рядка), тож числа команд ідентичні; «Без менеджера» видно лише в /overview
+  // та /receivables.
+  const debtByMgr = await metrics.receivablesByManager({});
+  const teamDebt = new Map<number, number>();
+  for (const d of debtByMgr) if (d.teamId != null) teamDebt.set(d.teamId, (teamDebt.get(d.teamId) || 0) + d.debt);
 
 
   // Per-manager breakdown for the team drill-down: revenue (success+payment),
@@ -2034,9 +2033,6 @@ dashboardRouter.get("/teams", async (req, res) => {
      FROM plans p JOIN managers m ON m.id = p.manager_id AND m.is_active
      WHERE p.metric = 'payment_amount' AND p.plan_date = $1 GROUP BY m.id, m.name, m.team_id`,
     [planMonth]
-  );
-  const mRecv = await pool.query<{ id: number; debt: string }>(
-    `SELECT r.manager_id AS id, COALESCE(SUM(r.amount),0) AS debt FROM receivables r GROUP BY r.manager_id`
   );
   type MgrRow = { id: number; name: string; teamId: number; revenue: number; deals: number; plan: number; receivables: number; expected: number; dispatched: number; successRev: number };
   const mmap = new Map<number, MgrRow>();
@@ -2051,7 +2047,7 @@ dashboardRouter.get("/teams", async (req, res) => {
   for (const r of recvMgrAgg) { const e = mget(r.managerId, r.teamId, r.name); e.revenue += r.revenue; e.deals += r.deals; }
   for (const r of sucMgrAgg) { const e = mget(r.managerId, r.teamId, r.name); e.dispatched += r.deals; e.successRev += r.revenue; }
   for (const r of mPlan.rows) { mget(r.id, r.tid, r.name).plan += Number(r.plan); }
-  for (const r of mRecv.rows) { const e = mmap.get(r.id); if (e) e.receivables += Number(r.debt); }
+  for (const d of debtByMgr) { if (d.managerId != null) { const e = mmap.get(d.managerId); if (e) e.receivables += d.debt; } }
 
   const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; expected: number; dispatched: number; successRev: number }>();
   const get = (id: number, name?: string) => {
@@ -2063,7 +2059,7 @@ dashboardRouter.get("/teams", async (req, res) => {
   for (const r of recvTeamAgg) { const e = get(r.teamId, r.teamName); e.revenue += r.revenue; e.deals += r.deals; }
   for (const r of sucTeamAgg) { const e = get(r.teamId, r.teamName); e.dispatched += r.deals; e.successRev += r.revenue; }
   for (const r of conv.rows) { const e = get(r.tid); e.leads += Number(r.leads); e.paid += Number(r.paid); }
-  for (const r of recv.rows) { const e = get(r.tid); e.receivables += Number(r.debt); }
+  for (const [tid, debt] of teamDebt) { get(tid).receivables += debt; }
 
   const teams = [...map.values()]
     // Drop teams with no activity in the period (they leak in via the payment /
@@ -2563,7 +2559,7 @@ dashboardRouter.get("/report", async (req, res) => {
   const actAdIdx = actP.length;
   const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; success: string; success_sum: string }>(
     `SELECT m.id, m.name,
-       COUNT(*) FILTER (WHERE ${adDealSql(`$${actAdIdx}`)}) AS ad_leads,
+       COUNT(*) FILTER (WHERE ${metrics.adDealSql(`$${actAdIdx}`)}) AS ad_leads,
        COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes
      FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
      -- LEFT JOIN: «Прийнято реклами» рахує ВСІ ад-угоди повного циклу незалежно від
@@ -4040,8 +4036,8 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
        WHERE status_id IN (69716300, 98470988, 10937178) GROUP BY kommo_id
      )
      SELECT COUNT(*) AS c, COALESCE(SUM(d.price), 0) AS s,
-            COUNT(*) FILTER (WHERE ${adDealSql("$4")}) AS ad_c,
-            COALESCE(SUM(d.price) FILTER (WHERE ${adDealSql("$4")}), 0) AS ad_s,
+            COUNT(*) FILTER (WHERE ${metrics.adDealSql("$4")}) AS ad_c,
+            COALESCE(SUM(d.price) FILTER (WHERE ${metrics.adDealSql("$4")}), 0) AS ad_s,
             COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_c,
             COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen'), 0) AS lg_s
      FROM first_avto f JOIN deals d ON d.kommo_id = f.kommo_id
@@ -4053,9 +4049,9 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
   // в періоді + оплата-снапшот), відфільтрована по каналу угоди.
   const rev = await pool.query<{ ad_rev: string; lg_rev: string }>(
     `SELECT
-       COALESCE(SUM(d.price) FILTER (WHERE ${adDealSql("$4")} AND d.status_id = 142
+       COALESCE(SUM(d.price) FILTER (WHERE ${metrics.adDealSql("$4")} AND d.status_id = 142
          AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3), 0)
-       + COALESCE(SUM(d.price) FILTER (WHERE ${adDealSql("$4")} AND d.status_id IN (69716460, 60412544)), 0) AS ad_rev,
+       + COALESCE(SUM(d.price) FILTER (WHERE ${metrics.adDealSql("$4")} AND d.status_id IN (69716460, 60412544)), 0) AS ad_rev,
        COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen' AND d.status_id = 142
          AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3), 0)
        + COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen' AND d.status_id IN (69716460, 60412544)), 0) AS lg_rev
@@ -4078,7 +4074,7 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
        WHERE status_id IN (142, 69716460, 60412544) GROUP BY kommo_id
      )
      SELECT COALESCE(SUM(d.price), 0) AS s,
-            COALESCE(SUM(d.price) FILTER (WHERE ${adDealSql("$4")}), 0) AS ad_s,
+            COALESCE(SUM(d.price) FILTER (WHERE ${metrics.adDealSql("$4")}), 0) AS ad_s,
             COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen'), 0) AS lg_s
      FROM first_paid f JOIN deals d ON d.kommo_id = f.kommo_id
      WHERE d.pipeline_id = ANY($1) AND (f.t ${KYIV})::date BETWEEN $2 AND $3`,
