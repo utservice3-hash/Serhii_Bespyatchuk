@@ -4258,15 +4258,26 @@ dashboardRouter.get("/manager-report", async (req, res) => {
       fetchCarryover(pFrom),
     ]);
     const ad = sumConv(adsRows, pFrom, pTo), pz = sumConv(pzRows, pFrom, pTo), re = sumConv(reRows, pFrom, pTo);
-    const fact = proj.fact; // ЄДИНЕ джерело «факту» (= receivedMoney; = база прогнозу — збігаються за побудовою)
+    const fact = proj.fact; // ЄДИНЕ джерело «факту» (= receivedMoney)
+    // Прогноз = факт + пайплайн «цей місяць» (expected.thisMonth). Додаємо ЛИШЕ для
+    // поточного місяця, що ТРИВАЄ (місячна гранулярність, elapsed<total). Для минулого/
+    // завершеного місяця та тижня — прогноз = факт (пайплайн-снапшот завжди «зараз»,
+    // додавати його до чужого періоду хибно). Факт∩пайплайн диз'юнктні (доведено).
+    const monthInProgress = granularity === "month" && proj.elapsedWorkingDays < proj.totalWorkingDays;
+    const pipelineSum = monthInProgress ? expected.thisMonth.sum : 0;
+    const pipelineDeals = monthInProgress ? expected.thisMonth.deals : 0;
+    const projected = fact + pipelineSum;
     return {
       revenue: {
         plan, fact,
         pctComplete: plan > 0 ? Math.round((fact / plan) * 100) : null,
         remaining: Math.max(0, plan - fact),
         projection: {
-          projected: proj.projected,
-          projectedPct: plan > 0 ? Math.round((proj.projected / plan) * 100) : null,
+          projected,
+          projectedPct: plan > 0 ? Math.round((projected / plan) * 100) : null,
+          pipelineThisMonth: pipelineSum, pipelineDeals,
+          byPace: proj.byPace,
+          byPacePct: plan > 0 ? Math.round((proj.byPace / plan) * 100) : null,
           elapsedWorkingDays: proj.elapsedWorkingDays, totalWorkingDays: proj.totalWorkingDays,
         },
       },

@@ -195,31 +195,32 @@ function countWorkingDays(start: Date, end: Date): number {
 
 export interface RevenueProjection {
   fact: number;             // = receivedMoney (ТА САМА база, що «факт» у план/факті)
-  projected: number;        // екстраполяція потоку (success) по робочих днях + снапшот (paidOnly)
+  byPace: number;           // «по темпу дня» = факт ÷ минулі роб. дні × усі роб. дні (ЛИШЕ показ)
   elapsedWorkingDays: number;
   totalWorkingDays: number;
 }
 
 /**
- * Р4a — прогноз виручки. База «факту» — `receivedMoney` (та сама, що план/факт;
- * тому endpoint бере `projection.fact` як ЄДИНЕ джерело «факту», без розбіжності).
- * Прогноз = потік (`successMoney`, датований) екстрапольований по робочих днях
- * періоду + снапшот (`paidOnly` = received − success, недатований, уже «в руках»).
- * Коли період завершений (elapsed=total) → projected === fact (немає чого
- * екстраполювати). Період [from,to] — місяць або тиждень.
+ * Р4a — база прогнозу. `fact` = `receivedMoney` (та сама, що план/факт; endpoint
+ * бере `projection.fact` як ЄДИНЕ джерело «факту»). `byPace` = наївний run-rate по
+ * робочих днях («по темпу дня») — ЛИШЕ для звірки/показу, у прогноз-суму НЕ входить.
+ * 🔴 САМ ПРОГНОЗ рахується В РОУТІ (buildPeriod): прогноз = факт + пайплайн «цей
+ * місяць» (`expected.thisMonth`, планова дата в поточному місяці, ще не оплачені;
+ * НЕ протерміновані, НЕ наступний). Множини факт∩пайплайн диз'юнктні за поточним
+ * статусом (142/етап9 vs зона виставлення→очікуємо) — доведено, перетин=0.
+ * Період [from,to] — місяць або тиждень.
  */
 export async function revenueProjection(s: MoneyScope): Promise<RevenueProjection> {
-  const [succ, recv] = await Promise.all([successMoney(s), receivedMoney(s)]);
+  const recv = await receivedMoney(s);
   const fact = recv.revenue;
-  const paidOnly = recv.revenue - succ.revenue;
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const start = new Date((s.from ?? todayStr.slice(0, 7) + "-01") + "T00:00:00");
   const end = new Date((s.to ?? todayStr) + "T00:00:00");
   const today = new Date(todayStr + "T00:00:00");
   const total = countWorkingDays(start, end);
   const elapsed = countWorkingDays(start, today < end ? today : end);
-  const projected = elapsed > 0 ? Math.round(succ.revenue * (total / elapsed) + paidOnly) : Math.round(fact);
-  return { fact: Math.round(fact), projected, elapsedWorkingDays: elapsed, totalWorkingDays: total };
+  const byPace = elapsed > 0 ? Math.round(fact * (total / elapsed)) : Math.round(fact);
+  return { fact: Math.round(fact), byPace, elapsedWorkingDays: elapsed, totalWorkingDays: total };
 }
 
 // ───────────────────────── ТИЖНЕВА РОЗБИВКА (Р4a) ─────────────────────────

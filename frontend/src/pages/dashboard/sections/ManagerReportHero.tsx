@@ -30,11 +30,23 @@ export function ManagerReportHero({ revenue, compare }: Pick<ManagerReport, "rev
         <Stat label="План" value={uah(revenue.plan)} />
         <Stat label="Залишок до плану" value={uah(revenue.remaining)} color={revenue.remaining > 0 ? "#dc2626" : "#16a34a"} />
         <Stat
-          label={`Прогноз (${proj.elapsedWorkingDays}/${proj.totalWorkingDays} роб. днів)`}
+          label={proj.pipelineThisMonth > 0 ? "Прогноз (факт + пайплайн)" : "Прогноз"}
           value={uah(proj.projected)}
-          sub={proj.projectedPct != null ? `${proj.projectedPct}% плану` : undefined}
+          sub={
+            proj.pipelineThisMonth > 0
+              ? `${proj.projectedPct != null ? `${proj.projectedPct}% плану · ` : ""}+${uah(proj.pipelineThisMonth)} пайплайн (${proj.pipelineDeals})`
+              : proj.projectedPct != null ? `${proj.projectedPct}% плану` : undefined
+          }
           color={pctColor(proj.projectedPct)}
         />
+        {proj.pipelineThisMonth > 0 && (
+          <Stat
+            label={`По темпу дня (${proj.elapsedWorkingDays}/${proj.totalWorkingDays} роб. дн.)`}
+            value={uah(proj.byPace)}
+            sub={`${proj.byPacePct != null ? `${proj.byPacePct}% · ` : ""}для звірки, не в сумі`}
+            color="#94a3b8"
+          />
+        )}
       </div>
     </div>
   );
