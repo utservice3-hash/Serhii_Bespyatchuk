@@ -11,7 +11,8 @@ import { withHeavyJobLock } from "./jobLock.js";
  * на Neon). Той самий патерн, що backfillActDates; батчі по 250 (OOM-safe),
  * один батчевий UPDATE на пачку. Обгорнуто withHeavyJobLock — syncKommo скіпає.
  */
-const MONEY_ZONE = [100274340, 69716304, 69716312, 42639144, 42639147, 25044997, 62940068];
+// 5 стадій грошової зони (див. core/metrics.ts EXPECT_ZONE — той самий список).
+const MONEY_ZONE = [100274340, 69716300, 98470988, 69716304, 69716312, 10937178, 42639144, 42639147, 25044997, 62940068];
 
 export async function backfillPlannedPayment(opts: { allBase?: boolean } = {}): Promise<void> {
   await withHeavyJobLock("backfill", async () => {
