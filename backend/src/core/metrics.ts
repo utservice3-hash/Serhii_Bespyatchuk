@@ -781,22 +781,25 @@ export async function funnelCohortHonest(
  * Спільний скоуп боргу. Неатрибутований борг (manager_id NULL) НЕ ховається
  * (LEFT JOIN, без `IS NOT NULL`) — «Без менеджера» (гол. ПВК АРСЕНАЛ) Є в
  * гугл-таблиці, лише немапнутий у нас, тож лишається в тоталі.
- * 🔴 ЗМІНА (рішення власника): основний тотал дебіторки = ЛИШЕ `source='sheet'`
- * (1:1 з гугл-таблицею — ДЖЕРЕЛОМ ПРАВДИ). Готівка з CRM (`source='cash'`,
- * insertCashReceivables) виключена з тоталу — вона окремою позначкою
- * (`receivablesCash`), бо її НЕМАЄ в безнал-таблиці і вона роздувала дебіторку
- * над джерелом (доведено: dashboard − sheet = рівно готівка МГЕР 188 200).
+ * 🔴 ЗМІНА (рішення власника 17.07, РЕВЕРС 1:1-фіксу): тотал дебіторки = УСЕ, що є
+ * у безнал-таблиці (`source='sheet'`, вкл. «Без менеджера») + готівка МГЕР з CRM
+ * (`source='cash'`, insertCashReceivables). Source-фільтр прибрано → готівка входить
+ * і в тотал, і в усі розрізи (по клієнту/менеджеру/команді) окремим рядком
+ * «МГЕР (готівка)» → тотал == сумі видимих рядків. Готівка лишається доступною
+ * під-рядком через `receivablesCash` («з них готівка»). Очік. тотал: 11 502 569
+ * (безнал 11 314 369 + готівка МГЕР 188 200).
  */
 function debtWhere(s: SnapshotScope): { where: string; params: unknown[] } {
   const params: unknown[] = [];
-  const conds: string[] = ["r.source = 'sheet'"];
+  const conds: string[] = [];
   if (s.managerId) { params.push(s.managerId); conds.push(`r.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  return { where: `WHERE ${conds.join(" AND ")}`, params };
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  return { where, params };
 }
 
-/** Готівкова дебіторка з CRM (`source='cash'`) — ОКРЕМА позначка, НЕ в основному
- *  тоталі (той = 1:1 з безнал-таблицею). */
+/** Готівкова дебіторка з CRM (`source='cash'`) — під-рядок «з них готівка»
+ *  (МГЕР). ВХОДИТЬ у `receivablesTotal`; тут віддається окремо лише для підпису. */
 export async function receivablesCash(s: SnapshotScope): Promise<number> {
   const params: unknown[] = [];
   const conds: string[] = ["r.source = 'cash'"];
@@ -809,8 +812,9 @@ export async function receivablesCash(s: SnapshotScope): Promise<number> {
   return Number(r.rows[0]?.total ?? 0);
 }
 
-/** Загальний борг «станом на зараз» = `SUM(receivables.amount)` ЛИШЕ безнал-таблиці
- *  (`source='sheet'`, вкл. «Без менеджера») = тотал гугл-таблиці 1:1. Готівка окремо. */
+/** Загальний борг «станом на зараз» = `SUM(receivables.amount)` уся безнал-таблиця
+ *  (`source='sheet'`, вкл. «Без менеджера») + готівка МГЕР з CRM (`source='cash'`).
+ *  Готівка також доступна окремо через `receivablesCash` (під-рядок «з них готівка»). */
 export async function receivablesTotal(s: SnapshotScope): Promise<number> {
   const { where, params } = debtWhere(s);
   const r = await pool.query<{ total: string }>(

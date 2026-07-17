@@ -49,7 +49,7 @@ const CARD_HINTS = {
   newRev:
     "Сума отриманих коштів від клієнтів, чия перша оплата за всю історію припала на період.",
   receivables:
-    "Загальна сума неоплаченої дебіторки з Google-таблиці (оновлюється кожні 30 хв).",
+    "Загальна сума неоплаченої дебіторки: безнал з Google-таблиці (вкл. «Без менеджера») + готівка МГЕР з CRM. Оновлюється кожні 30 хв.",
   repeatRev:
     "Сума отриманих коштів від постійних клієнтів (2+ оплачених перевезень lifetime). Підрядком — їх частка від загальної виручки.",
   projection:
@@ -468,6 +468,11 @@ export function OverviewSection({
             <div className="kpi-card">
               <span className="kpi-label">Дебіторська заборгованість<InfoHint text={CARD_HINTS.receivables} /></span>
               <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
+              {overview.receivablesCash > 0 && (
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  з них готівка (МГЕР): {formatAmount(overview.receivablesCash)}
+                </span>
+              )}
             </div>
             <button className="kpi-card" style={clickableCard} onClick={() => setCardDetail("repeatRev")} title="Натисніть: перелік постійних клієнтів (назва, к-сть замовлень, сума)">
               <span className="kpi-label">Виручка від постійних клієнтів<InfoHint text={CARD_HINTS.repeatRev} /></span>
