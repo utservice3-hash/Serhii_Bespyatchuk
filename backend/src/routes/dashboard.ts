@@ -332,14 +332,13 @@ dashboardRouter.get("/overview", async (req, res) => {
   //   expected  = етап 8 «Очікуємо оплату» (НЕ «Виставлення рахунку»!).
   const moneyScope: money.MoneyScope = { from, to, managerId, teamId };
   const [receivedTot, successTot, paidOnlyTot, expectedTot,
-         receivedTeamAgg, receivedMgrAgg, expectedTeamAgg, awaitingNow] = await Promise.all([
+         receivedTeamAgg, receivedMgrAgg, awaitingNow] = await Promise.all([
     money.receivedMoney(moneyScope),
     money.successMoney(moneyScope),
     money.paidOnlyMoney(moneyScope),
     money.expectedMoney(moneyScope),
     money.receivedByTeam(moneyScope),
     money.receivedByMgr(moneyScope),
-    money.expectedByTeam(moneyScope),
     money.awaitingNowSnapshot(moneyScope),
   ]);
 
@@ -446,14 +445,6 @@ dashboardRouter.get("/overview", async (req, res) => {
   const paymentDeals = paidOnlyTot.deals;
   const closedRes = {
     rows: [{ revenue: String(receivedTot.revenue), deals: String(receivedTot.deals) }],
-  };
-
-  // «Очікування оплат» за ПЕРІОД — анкер по входу в етап 8 «Очікуємо оплату»
-  // (НЕ знімок, НЕ «Виставлення рахунку»). Знаменник ОЧІКУВАНОГО чека.
-  const pendingRes = {
-    rows: [...expectedTeamAgg]
-      .sort((a, b) => b.revenue - a.revenue)
-      .map((x) => ({ team_id: x.teamId, team_name: x.teamName, deals: String(x.deals), revenue: String(x.revenue) })),
   };
 
   // All deals created in the Full-cycle funnel within the period (by create date).
@@ -744,34 +735,36 @@ dashboardRouter.get("/overview", async (req, res) => {
     };
   });
 
-  // Current-month projection (independent of the selected period): extrapolate
-  // the success-money FLOW linearly by working days elapsed, then add the
-  // payment-received SNAPSHOT (already "in hand") — "за темпом вийде ₴X".
+  // Прогноз ПОТОЧНОГО МІСЯЦЯ (незалежно від обраного періоду) — ФОРМУЛА A через ЄДИНЕ
+  // ЯДРО metrics.buildProjection (та сама функція, що й Звіт 2.0 → число байт-у-байт
+  // збігається зі Звітом 2.0 на тому ж місяці). Легасі inline-D (successMTD×k+paidOnly)
+  // ВИДАЛЕНО: прогноз більше НЕ рахується у роуті. Період = весь поточний місяць
+  // [1-е … кінець], granularity='month' → buildProjection сам клампить elapsed до сьогодні.
   const nowK = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const mStartP = nowK.slice(0, 7) + "-01";
-  // Анкеровані гроші поточного місяця (незалежно від обраного періоду).
-  const projScope: money.MoneyScope = { from: mStartP, to: nowK, managerId, teamId };
-  const [succMonth, recvMonth] = await Promise.all([
-    money.successMoney(projScope),
-    money.receivedMoney(projScope),
-  ]);
-  const successMTD = succMonth.revenue;
-  const paidOnlyMonth = recvMonth.revenue - succMonth.revenue;
-  const mS = new Date(mStartP + "T00:00:00");
-  const mE = new Date(mS.getFullYear(), mS.getMonth() + 1, 0);
-  const tD = new Date(nowK + "T00:00:00");
-  const totalWdP = workingDays(mS, mE);
-  const elapsedWdP = workingDays(mS, tD < mE ? tD : mE);
-  const monthFactP = Math.round(recvMonth.revenue);
-  const projected = elapsedWdP > 0 ? Math.round(successMTD * (totalWdP / elapsedWdP) + paidOnlyMonth) : monthFactP;
+  const [mY, mM] = mStartP.split("-").map(Number);
+  const mEndP = `${mStartP.slice(0, 7)}-${String(new Date(mY, mM, 0).getDate()).padStart(2, "0")}`;
+  const proj = await metrics.buildProjection(
+    { from: mStartP, to: mEndP, managerId, teamId, granularity: "month" },
+    planMonthTotal
+  );
   const projection = {
-    monthFact: monthFactP,
-    projected,
+    monthFact: proj.fact,
+    projected: proj.projected,
     plan: planMonthTotal,
-    projectedPct: planMonthTotal > 0 ? Math.round((projected / planMonthTotal) * 100) : null,
-    elapsedWorkingDays: elapsedWdP,
-    totalWorkingDays: totalWdP,
+    projectedPct: proj.projectedPct,
+    elapsedWorkingDays: proj.elapsedWorkingDays,
+    totalWorkingDays: proj.totalWorkingDays,
   };
+
+  // «Очікування» плитки Огляду = ПОВНА грошова зона (expectedPaymentsByPlanned.total —
+  // усі 5 стадій за статусом), те саме джерело й число, що «Очікувані оплати» Звіту 2.0
+  // (НЕ вузький етап-8-знімок money.expectedMoney, який лишається лише для avgCheckExpected).
+  // byTeam — розріз ТІЄЇ САМОЇ зони (Σ рядків = total) для дрілдауну картки.
+  const [expectedZone, expectedZoneTeams] = await Promise.all([
+    metrics.expectedPaymentsByPlanned({ managerId, teamId }),
+    metrics.expectedZoneByScope({ managerId, teamId }, "team"),
+  ]);
 
   // КРОК 9-conv Фаза 1: конверсія — з ЯДРА (core/metrics), стеля ≤100%.
   //   Реклама → conversion_ads (cohort основне, period тренд).
@@ -818,13 +811,13 @@ dashboardRouter.get("/overview", async (req, res) => {
     // Знімок «станом на зараз» (етапи 8+9 зараз) — прогноз, НІКОЛИ не у виручці періоду.
     awaitingNow: { asOf: "now", deals: awaitingNow.deals, revenue: awaitingNow.revenue, byTeam: awaitingNow.byTeam },
     pendingPayments: {
-      deals: pendingRes.rows.reduce((s, r) => s + Number(r.deals), 0),
-      revenue: pendingRes.rows.reduce((s, r) => s + Number(r.revenue), 0),
-      byTeam: pendingRes.rows.map((r) => ({
-        teamId: r.team_id,
-        teamName: r.team_name,
-        deals: Number(r.deals),
-        revenue: Number(r.revenue),
+      deals: expectedZone.total.deals,
+      revenue: expectedZone.total.sum,
+      byTeam: expectedZoneTeams.map((r) => ({
+        teamId: r.teamId,
+        teamName: r.name,
+        deals: r.deals,
+        revenue: r.sum,
       })),
     },
     createdFullCycle: Number(createdFullRes.rows[0]?.c ?? 0),
@@ -4249,10 +4242,9 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   const vs = (v: number | null, target: number) => (v == null ? null : Math.round((v - target) * 10) / 10);
 
   async function buildPeriod(pFrom: string, pTo: string) {
-    const [proj, succFlow, plan, funnel, expected, adsRows, pzRows, reRows, carry] = await Promise.all([
-      money.revenueProjection({ from: pFrom, to: pTo, managerId, teamId }),
-      money.successMoney({ from: pFrom, to: pTo, managerId, teamId }),
+    const [plan, succFlow, funnel, expected, adsRows, pzRows, reRows, carry] = await Promise.all([
       fetchPlan(pFrom),
+      money.successMoney({ from: pFrom, to: pTo, managerId, teamId }),
       metrics.funnelCohortHonest({ from: pFrom, to: pTo, managerId, teamId }, granularity),
       metrics.expectedPaymentsByPlanned({ managerId, teamId }),
       metrics.conversionAdsByMonth({ managerId, teamId }, adSources),
@@ -4260,18 +4252,12 @@ dashboardRouter.get("/manager-report", async (req, res) => {
       metrics.conversionReactivationByMonth({ managerId, teamId }),
       fetchCarryover(pFrom),
     ]);
+    // 🔴 ПРОГНОЗ = ФОРМУЛА A через ЄДИНЕ ЯДРО metrics.buildProjection (та сама функція,
+    // що й плитка «Прогноз» Огляду — нуль дублювання). Композиція (факт + повна зона +
+    // добір, guard monthInProgress) живе ТІЛЬКИ там; тут лише читаємо результат.
+    const proj = await metrics.buildProjection({ from: pFrom, to: pTo, managerId, teamId, granularity }, plan);
     const ad = sumConv(adsRows, pFrom, pTo), pz = sumConv(pzRows, pFrom, pTo), re = sumConv(reRows, pFrom, pTo);
     const fact = proj.fact; // ЄДИНЕ джерело «факту» (= receivedMoney)
-    // 🔴 ПРОГНОЗ = ФОРМУЛА A (бектест: зміщення −3.9%, MAE 4.6%): факт + ПОВНА грошова
-    // зона (expected.total — усі 5 стадій за СТАТУСОМ, ~65% закривається до кінця міс,
-    // решту добирають угоди з ранніх стадій) + добір (новий бізнес, трейл-3м). Складові
-    // диз'юнктні. Додаємо ЛИШЕ для поточного місяця, що ТРИВАЄ (місячна гранулярність);
-    // минулий/завершений/тиждень → прогноз = факт (зона/добір — «зараз»-величини).
-    const monthInProgress = granularity === "month" && proj.elapsedWorkingDays < proj.totalWorkingDays;
-    const zoneFull = monthInProgress ? expected.total.sum : 0;
-    const zoneDeals = monthInProgress ? expected.total.deals : 0;
-    const dobir = monthInProgress ? await money.newBusinessDobir({ managerId, teamId }) : 0;
-    const projected = fact + zoneFull + dobir;
     return {
       revenue: {
         plan, fact,
@@ -4281,9 +4267,9 @@ dashboardRouter.get("/manager-report", async (req, res) => {
         pctComplete: plan > 0 ? Math.round((fact / plan) * 100) : null,
         remaining: Math.max(0, plan - fact),
         projection: {
-          projected,
-          projectedPct: plan > 0 ? Math.round((projected / plan) * 100) : null,
-          zoneFull, zoneDeals, dobir,
+          projected: proj.projected,
+          projectedPct: proj.projectedPct,
+          zoneFull: proj.zoneFull, zoneDeals: proj.zoneDeals, dobir: proj.dobir,
           byPace: proj.byPace,
           byPacePct: plan > 0 ? Math.round((proj.byPace / plan) * 100) : null,
           floor: proj.floor,

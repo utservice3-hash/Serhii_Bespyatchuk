@@ -181,15 +181,17 @@ async function run() {
     // факт — має збігатись
     const okFact = Math.round(ov.fact) === Math.round(mr.revenue.fact);
     rec("КРОС-ЕКРАН", "факт: Огляд = Звіт 2.0", okFact, `${uah(ov.fact)} vs ${uah(mr.revenue.fact)}`, okFact ? [] : await crossShots());
-    // прогноз — Огляд стара формула (success×k+paidOnly) vs Звіт 2.0 Formula A
+    // прогноз — обидва екрани кличуть ЄДИНЕ ядро metrics.buildProjection (Formula A) →
+    // на тому самому місяці число має збігатись БАЙТ-У-БАЙТ (не «в межах 2%»).
     const ovProj = ov.projection?.projected, rProj = mr.revenue.projection?.projected;
-    const okProj = Math.abs(ovProj - rProj) / Math.max(1, rProj) < 0.02;
-    rec("КРОС-ЕКРАН", "прогноз: Огляд = Звіт 2.0", okProj, `Огляд ${uah(ovProj)} (${ov.projection?.projectedPct}%) vs Звіт 2.0 ${uah(rProj)} — Огляд СТАРА формула (success×k+paidOnly=«підлога»); Звіт 2.0 = Formula A (факт+повна зона+добір)`, okProj ? [] : await crossShots());
-    // очікування — Огляд вузька etap-8 (pendingPayments) vs Звіт 2.0 5-стадійна зона
+    const okProj = Math.round(ovProj) === Math.round(rProj);
+    rec("КРОС-ЕКРАН", "прогноз: Огляд = Звіт 2.0", okProj, `Огляд ${uah(ovProj)} (${ov.projection?.projectedPct}%) vs Звіт 2.0 ${uah(rProj)} — спільне ядро metrics.buildProjection (Formula A); мають збігатись байт-у-байт`, okProj ? [] : await crossShots());
+    // очікування — обидва = ПОВНА 5-стадійна зона (expectedPaymentsByPlanned.total). Огляд
+    // читає той самий бакет total, що й Звіт 2.0 → байт-у-байт (не «цей місяць»).
     const ovExp = ov.pendingPayments?.revenue ?? ov.expectedPayments?.revenue;
-    const rExp = mr.expected.thisMonth.sum;
-    const okExp = Math.abs(ovExp - rExp) / Math.max(1, rExp) < 0.02;
-    rec("КРОС-ЕКРАН", "очікування: Огляд = Звіт 2.0", okExp, `Огляд ${uah(ovExp)} vs Звіт 2.0 «цей місяць» ${uah(rExp)} — Огляд СТАРА (лише етап-8 «Очікуємо оплату»); Звіт 2.0 = 5-стадійна зона`, okExp ? [] : await crossShots());
+    const rExp = mr.expected.total.sum;
+    const okExp = Math.round(ovExp) === Math.round(rExp);
+    rec("КРОС-ЕКРАН", "очікування: Огляд = Звіт 2.0", okExp, `Огляд ${uah(ovExp)} vs Звіт 2.0 total ${uah(rExp)} — спільна 5-стадійна зона (expectedPaymentsByPlanned.total); мають збігатись байт-у-байт`, okExp ? [] : await crossShots());
     // дебіторка — тільки на Огляді (Звіт 2.0 не віддає) → не крос-екран, лише нотатка
     rec("КРОС-ЕКРАН", "дебіторка присутня на Огляді", ov.receivablesTotal != null, `Огляд ${uah(ov.receivablesTotal)}; Звіт 2.0 не показує (не порівнюється)`);
   } catch (e) { rec("КРОС-ЕКРАН", "порівняння", false, String(e.message).slice(0, 120)); }

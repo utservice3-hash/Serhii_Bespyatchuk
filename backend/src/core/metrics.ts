@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 
 /**
  * ЄДИНЕ місце в проєкті з SQL по НЕ-грошових бізнес-метриках (гроші — `core/money.ts`).
@@ -1135,6 +1136,86 @@ export async function expectedThisMonthByScope(s: SnapshotScope, by: "team" | "m
     params
   );
   return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
+}
+
+/**
+ * Розріз ПОВНОЇ грошової зони очікувань (EXPECT_ZONE, усі 5 стадій за статусом, БЕЗ
+ * фільтра планової дати) по КОМАНДІ або МЕНЕДЖЕРУ — дрілдаун плитки «Очікування» Огляду.
+ * Те саме джерело, що `expectedPaymentsByPlanned.total` → Σ рядків = total (той самий
+ * інваріант матрьошки). `by`='team' → id/name = команда; 'manager' → id/name = менеджер.
+ */
+export async function expectedZoneByScope(s: SnapshotScope, by: "team" | "manager"): Promise<ExpectedScopeRow[]> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const sel = by === "team"
+    ? "t.id AS id, t.name AS name, NULL::int AS team_id"
+    : "m.id AS id, m.name AS name, m.team_id";
+  const grp = by === "team" ? "GROUP BY t.id, t.name" : "GROUP BY m.id, m.name, m.team_id";
+  const join = by === "team" ? "JOIN teams t ON t.id = m.team_id" : "";
+  const r = await pool.query<{ id: number; name: string; team_id: number | null; deals: string; sum: string }>(
+    `SELECT ${sel}, COUNT(*)::int deals, COALESCE(SUM(d.price),0) sum
+       FROM deals d JOIN managers m ON m.id = d.manager_id ${join}
+      WHERE ${conds.join(" AND ")} ${grp} ORDER BY sum DESC`,
+    params
+  );
+  return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
+}
+
+// ───────────────────────── ПРОГНОЗ ВИРУЧКИ — ЄДИНЕ ЯДРО (Формула A) ─────────────────────────
+
+export interface ProjectionScope {
+  from?: string | null;
+  to?: string | null;
+  managerId?: number | null;
+  teamId?: number | null;
+  granularity?: "month" | "week" | "day";
+}
+export interface Projection {
+  fact: number;              // = receivedMoney (ЄДИНЕ джерело «факту»)
+  projected: number;         // Формула A = факт + повна зона + добір (для міс, що триває)
+  projectedPct: number | null;
+  zoneFull: number;          // expectedPaymentsByPlanned.total.sum (0 поза активним місяцем)
+  zoneDeals: number;
+  dobir: number;             // newBusinessDobir (новий бізнес, трейл-3м)
+  byPace: number;            // наївний run-rate по факту (ЛИШЕ показ)
+  floor: number;             // стара модель D (ЛИШЕ показ, як низ)
+  elapsedWorkingDays: number;
+  totalWorkingDays: number;
+  monthInProgress: boolean;
+}
+
+/**
+ * 🔴 ЄДИНА КОМПОЗИЦІЯ ПРОГНОЗУ (Формула A) — і Звіт 2.0 (buildPeriod), і плитка «Прогноз»
+ * Огляду кличуть САМЕ ЦЮ функцію (нуль дублювання). Прогноз = факт (receivedMoney) +
+ * ПОВНА грошова зона (expectedPaymentsByPlanned.total — усі 5 стадій за статусом) + добір
+ * (newBusinessDobir, новий бізнес). Складові диз'юнктні (доведено). Зону/добір додаємо
+ * ЛИШЕ для поточного місяця, що ТРИВАЄ (місячна гранулярність, elapsed<total); минулий/
+ * завершений/тиждень → прогноз = факт. Бектест: зміщення −3.9%, MAE 4.6% (D давала −46%).
+ * ⚠️ Легасі inline-D (successMTD×k+paidOnly) з роутів ВИДАЛЕНО — прогноз рахується ЛИШЕ тут.
+ */
+export async function buildProjection(s: ProjectionScope, plan?: number | null): Promise<Projection> {
+  const scope: MoneyScope = { from: s.from, to: s.to, managerId: s.managerId, teamId: s.teamId };
+  const [proj, expected] = await Promise.all([
+    revenueProjection(scope),
+    expectedPaymentsByPlanned({ managerId: s.managerId, teamId: s.teamId }),
+  ]);
+  const fact = proj.fact;
+  const gran = s.granularity ?? "month";
+  const monthInProgress = gran === "month" && proj.elapsedWorkingDays < proj.totalWorkingDays;
+  const zoneFull = monthInProgress ? expected.total.sum : 0;
+  const zoneDeals = monthInProgress ? expected.total.deals : 0;
+  const dobir = monthInProgress ? await newBusinessDobir({ managerId: s.managerId, teamId: s.teamId }) : 0;
+  const projected = fact + zoneFull + dobir;
+  return {
+    fact, projected,
+    projectedPct: plan && plan > 0 ? Math.round((projected / plan) * 100) : null,
+    zoneFull, zoneDeals, dobir,
+    byPace: proj.byPace, floor: proj.floor,
+    elapsedWorkingDays: proj.elapsedWorkingDays, totalWorkingDays: proj.totalWorkingDays,
+    monthInProgress,
+  };
 }
 
 // ───────────────────────── ЦІЛЬОВІ КОНВЕРСІЇ (Р4a) ─────────────────────────
