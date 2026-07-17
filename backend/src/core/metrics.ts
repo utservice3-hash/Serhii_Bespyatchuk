@@ -1029,19 +1029,22 @@ export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> 
 // ───────────────────────── СУМА ОЧІКУВАННЯ ПО ЗАПЛАНОВАНІЙ ДАТІ (Р2) ─────────────────────────
 
 /**
- * Р2 — «Сума очікування» для звіту. ЗНІМОК поточної грошової зони (виставлено
- * рахунок → очікуємо оплату, ще не оплачено), сума `price` (бюджет — рішення
- * власника: безнал і готівка однаково, НЕ приход), розбивка по `planned_payment_at`
- * (Kommo 2097273, «Запланована дата оплати»):
- *   • thisMonth — планова дата в поточному місяці й НЕ в минулому;
+ * «Очікування надходжень» для звіту — САМОДОСТАТНІЙ блок із CRM, ПОВНІСТЮ окремий
+ * від дебіторки (жодного зв'язку/дублювання боргу; дебіторка — інше джерело).
+ * ЗНІМОК поточної грошової зони (виставлено рахунок → очікуємо оплату, ще не
+ * оплачено), сума `price` (бюджет — рішення власника: безнал і готівка однаково,
+ * НЕ приход). Бакети — суто за МІСЯЦЕМ поля `planned_payment_at` (Kommo 2097273,
+ * «Запланована дата оплати»), розбивка ПОКРИВАЄ всю зону без залишку:
+ *   • overdue   — планова дата в МИНУЛОМУ місяці (< поточного). Протерміновані:
+ *                 гроші ще не прийшли, але це ОЧІКУВАННЯ з CRM, НЕ борг. Видима картка.
+ *   • thisMonth — планова дата у ПОТОЧНОМУ місяці (ВЕСЬ календарний місяць, вкл. дні,
+ *                 що вже минули — «протерміновано на кілька днів» ≠ борг рівня минулих міс);
  *   • nextMonth — планова дата в наступному місяці;
- *   • overdue — планова дата В МИНУЛОМУ, гроші ще не прийшли. ⚠️ У ЗВІТІ (UI) НЕ
- *     показується: прострочене/борг — територія ДЕБІТОРКИ (окреме джерело, банки/1С),
- *     не дублювати тут, щоб не було двох правд про борг (рішення власника Р4b).
- *     Бакет лишається в core ІНЕРТНИМ (може знадобитись для звірки), але з очікування
- *     виключений — «очікування надходжень» = лише thisMonth + nextMonth;
- *   • later — далі за наступний місяць; noDate — у зоні, але дата не заповнена.
- * Знімок → SnapshotScope (дати заборонені на рівні типу).
+ *   • later     — планова дата далі за наступний місяць;
+ *   • noDate    — у зоні, але дата не заповнена.
+ * `total` = уся зона; за побудовою total = overdue+thisMonth+nextMonth+later+noDate
+ * (чотири видимі числа + noDate сходяться в загальне без залишку). Дедуп інерентний
+ * (1 рядок = 1 угода). Знімок → SnapshotScope (дати заборонені на рівні типу).
  */
 // Грошова зона = від «Виставлення рахунку» ДО «Оплата отримана» = 5 стадій (рішення
 // власника): New(8921932) Виставлення рахунку 100274340 · Авто працює 69716300 ·
@@ -1052,6 +1055,7 @@ const EXPECT_ZONE = [100274340, 69716300, 98470988, 69716304, 69716312, 10937178
 
 export interface ExpectedBucket { deals: number; sum: number }
 export interface ExpectedPaymentsByPlanned {
+  total: ExpectedBucket;
   thisMonth: ExpectedBucket;
   nextMonth: ExpectedBucket;
   overdue: ExpectedBucket;
@@ -1065,25 +1069,27 @@ export async function expectedPaymentsByPlanned(s: SnapshotScope): Promise<Expec
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  // Порівнюємо по-київськи; overdue має пріоритет (дата в минулому → overdue,
-  // навіть якщо місяць поточний). Далі серед майбутніх — cur/next/later по місяцю.
-  const P = `(d.planned_payment_at ${KYIV})::date`;
-  const today = `(now() ${KYIV})::date`;
+  // Бакети СУТО за МІСЯЦЕМ планової дати (по-київськи), взаємовиключні й покривають
+  // усю зону → total = сума бакетів без залишку. Дні, що минули В ПОТОЧНОМУ місяці,
+  // лишаються в thisMonth (не «борг»); overdue = лише МИНУЛІ місяці.
   const curYm = `to_char((now() ${KYIV}), 'YYYY-MM')`;
   const nextYm = `to_char((now() ${KYIV}) + INTERVAL '1 month', 'YYYY-MM')`;
   const pYm = `to_char((d.planned_payment_at ${KYIV}), 'YYYY-MM')`;
+  const HAS = "d.planned_payment_at IS NOT NULL";
   const r = await pool.query<Record<string, string>>(
     `SELECT
-       count(*) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} < ${today})::int overdue_n,
-       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} < ${today}),0) overdue_s,
-       count(*) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} = ${curYm})::int this_n,
-       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} = ${curYm}),0) this_s,
-       count(*) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} = ${nextYm})::int next_n,
-       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} = ${nextYm}),0) next_s,
-       count(*) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} > ${nextYm})::int later_n,
-       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NOT NULL AND ${P} >= ${today} AND ${pYm} > ${nextYm}),0) later_s,
+       count(*) FILTER (WHERE ${HAS} AND ${pYm} < ${curYm})::int overdue_n,
+       COALESCE(sum(d.price) FILTER (WHERE ${HAS} AND ${pYm} < ${curYm}),0) overdue_s,
+       count(*) FILTER (WHERE ${HAS} AND ${pYm} = ${curYm})::int this_n,
+       COALESCE(sum(d.price) FILTER (WHERE ${HAS} AND ${pYm} = ${curYm}),0) this_s,
+       count(*) FILTER (WHERE ${HAS} AND ${pYm} = ${nextYm})::int next_n,
+       COALESCE(sum(d.price) FILTER (WHERE ${HAS} AND ${pYm} = ${nextYm}),0) next_s,
+       count(*) FILTER (WHERE ${HAS} AND ${pYm} > ${nextYm})::int later_n,
+       COALESCE(sum(d.price) FILTER (WHERE ${HAS} AND ${pYm} > ${nextYm}),0) later_s,
        count(*) FILTER (WHERE d.planned_payment_at IS NULL)::int nodate_n,
-       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NULL),0) nodate_s
+       COALESCE(sum(d.price) FILTER (WHERE d.planned_payment_at IS NULL),0) nodate_s,
+       count(*)::int total_n,
+       COALESCE(sum(d.price),0) total_s
      FROM deals d LEFT JOIN managers m ON m.id = d.manager_id ${activeJoin}
      WHERE ${conds.join(" AND ")}`,
     params
@@ -1091,6 +1097,7 @@ export async function expectedPaymentsByPlanned(s: SnapshotScope): Promise<Expec
   const x = r.rows[0] ?? {};
   const b = (n: string, sum: string): ExpectedBucket => ({ deals: Number(x[n] ?? 0), sum: Number(x[sum] ?? 0) });
   return {
+    total: b("total_n", "total_s"),
     thisMonth: b("this_n", "this_s"),
     nextMonth: b("next_n", "next_s"),
     overdue: b("overdue_n", "overdue_s"),

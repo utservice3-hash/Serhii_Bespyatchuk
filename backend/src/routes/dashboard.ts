@@ -4271,7 +4271,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
         },
       },
       funnel,
-      expected: { thisMonth: expected.thisMonth, nextMonth: expected.nextMonth, overdue: expected.overdue },
+      expected: { total: expected.total, thisMonth: expected.thisMonth, nextMonth: expected.nextMonth, overdue: expected.overdue, later: expected.later, noDate: expected.noDate },
       conversions: {
         ads: { cohort: ad.wonCohort, period: ad.wonPeriod, entered: ad.entered, mature: ad.mature, target: T.ads, vsTarget: vs(ad.wonCohort, T.ads) },
         prodzvin: { won: pz.wonCohort, handoff: pz.handoffCohort, entered: pz.entered, mature: pz.mature, target: T.leadgen, vsTarget: vs(pz.wonCohort, T.leadgen) },
