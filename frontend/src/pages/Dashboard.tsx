@@ -84,6 +84,7 @@ import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, p
 import { STAGE_LABELS, STAGE_COLORS, STAGE_ORDER, STAT_CHARTS } from "./dashboard/constants";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
+import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
 import { RatesSection } from "./dashboard/sections/RatesSection";
 import { AiWorkSection } from "./dashboard/sections/AiWorkSection";
@@ -1074,6 +1075,14 @@ export function Dashboard() {
           reportManagerId={reportManagerId}
           setReportManagerId={setReportManagerId}
           onPlanSaved={() => setRefreshNonce((n) => n + 1)}
+        />
+      )}
+
+      {section === "manager-report" && auth && (
+        <ManagerReportSection
+          auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }}
+          teams={teams}
+          managerOptions={managerOptions}
         />
       )}
 

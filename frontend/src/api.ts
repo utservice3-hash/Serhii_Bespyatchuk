@@ -1664,3 +1664,38 @@ export async function saveStatisticsManual(body: {
   const { data } = await api.put<{ ok: boolean; saved: number }>("/statistics/manual", body);
   return data;
 }
+
+// ───────────────────────── Р4b: ЄДИНИЙ ЗВІТ (manager-report) ─────────────────────────
+
+export interface MRFunnelBucket {
+  bucket: string; cohort: number;
+  reached: { lead_taken: number; quote_requested: number; approved: number; invoiced: number; paid: number };
+  pct: { lead_taken: number; quote_requested: number | null; approved: number | null; invoiced: number | null; paid: number | null };
+  midfunnel: number; mature: boolean;
+}
+export interface MRBucket { deals: number; sum: number }
+export interface MRConv { cohort?: number | null; won?: number | null; period?: number | null; handoff?: number | null; entered: number; mature: boolean; target: number; vsTarget: number | null }
+export interface MRDelta { current: number | null; previous: number | null; delta: number | null; deltaPct: number | null; maturityMismatch?: boolean }
+export interface ManagerReport {
+  scope: { level: "department" | "team" | "manager"; id: number | null; period: { from: string; to: string; granularity: "month" | "week" }; compareWith: { from: string; to: string } | null };
+  revenue: {
+    plan: number; fact: number; pctComplete: number | null; remaining: number;
+    projection: { projected: number; projectedPct: number | null; elapsedWorkingDays: number; totalWorkingDays: number };
+  };
+  funnel: MRFunnelBucket[];
+  expected: { thisMonth: MRBucket; nextMonth: MRBucket; overdue: MRBucket };
+  conversions: { ads: MRConv; prodzvin: MRConv; reactivation: MRConv };
+  carryover: { amount: number; deals: number };
+  weekly: { label: string; from: string; to: string; plan: number; fact: number; pct: number | null; remaining: number; status: "past" | "current" | "future" }[];
+  teams?: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number }[];
+  compare: Record<string, MRDelta> | null;
+}
+
+export async function fetchManagerReport(params: {
+  level: "department" | "team" | "manager"; id?: number;
+  from: string; to: string; granularity: "month" | "week";
+  compareFrom?: string; compareTo?: string;
+}): Promise<ManagerReport> {
+  const { data } = await api.get<ManagerReport>("/dashboard/manager-report", { params });
+  return data;
+}
