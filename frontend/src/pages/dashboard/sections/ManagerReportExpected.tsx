@@ -3,8 +3,6 @@ import type { ManagerReport } from "../../../api";
 
 const uah = (n: number) => Math.round(n).toLocaleString("uk-UA") + " ₴";
 
-type ScopeRow = ManagerReport["expectedByTeam"][number];
-
 /**
  * «Очікування надходжень» — самостійний блок із CRM, ПОВНІСТЮ окремий від дебіторки.
  * «Загальні» великим; три картки за планованою датою. Картка «Цей місяць» —
