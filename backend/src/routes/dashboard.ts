@@ -4229,9 +4229,11 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   };
   async function fetchPlan(mFrom: string): Promise<number> {
     const p: unknown[] = [monthStartOf(mFrom)];
+    // mp.is_active — план деактивованого менеджера НЕ рахується (правило «деактивований
+    // зникає з усіх списків»); інакше дептовий план ≠ Σ планів видимих команд/менеджерів.
     const r = await pool.query<{ s: string }>(
       `SELECT COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers mp ON mp.id = p.manager_id
-        WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date ${planScopeSql(p)}`, p);
+        WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date AND mp.is_active ${planScopeSql(p)}`, p);
     return Math.round(Number(r.rows[0]?.s ?? 0));
   }
   async function fetchCarryover(mFrom: string): Promise<{ amount: number; deals: number }> {
@@ -4320,28 +4322,34 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   // лишається received — та сама база, що план/факт.
   let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
   if (level === "department") {
-    const [facts, plansRes, flowsCur, flowsPrev] = await Promise.all([
+    const [facts, plansRes, namesRes, flowsCur, flowsPrev] = await Promise.all([
       money.receivedByTeam({ from, to }),
       pool.query<{ team_id: number; s: string }>(
         `SELECT mp.team_id, COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers mp ON mp.id = p.manager_id
-          WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date GROUP BY mp.team_id`, [monthStartOf(from)]),
+          WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date AND mp.is_active AND mp.team_id IS NOT NULL GROUP BY mp.team_id`, [monthStartOf(from)]),
+      pool.query<{ id: number; name: string }>(`SELECT id, name FROM teams`),
       compareFrom && compareTo ? money.successByTeam({ from, to }) : Promise.resolve(null),
       compareFrom && compareTo ? money.successByTeam({ from: compareFrom, to: compareTo }) : Promise.resolve(null),
     ]);
     const planByTeam = new Map(plansRes.rows.map((r) => [r.team_id, Math.round(Number(r.s))]));
+    const nameByTeam = new Map(namesRes.rows.map((r) => [r.id, r.name]));
+    const factByTeam = new Map(facts.filter((t) => t.teamId != null).map((t) => [t.teamId, { name: t.teamName, revenue: Math.round(t.revenue) }]));
     const curByTeam = flowsCur ? new Map(flowsCur.filter((t) => t.teamId != null).map((t) => [t.teamId, Math.round(t.revenue)])) : null;
     const prevByTeam = flowsPrev ? new Map(flowsPrev.filter((t) => t.teamId != null).map((t) => [t.teamId, Math.round(t.revenue)])) : null;
-    teams = facts.filter((t) => t.teamId != null).map((t) => {
-      const plan = planByTeam.get(t.teamId) ?? 0;
-      const fact = Math.round(t.revenue);
+    // Рядки = ОБʼЄДНАННЯ команд-з-планом і команд-з-фактом (не лише факт) → команди з
+    // планом і 0 факту видимі при 0%, зверху. Σ планів = дептовий план (без деактивованих).
+    const teamIds = new Set<number>([...factByTeam.keys(), ...planByTeam.keys()]);
+    teams = [...teamIds].map((tid) => {
+      const plan = planByTeam.get(tid) ?? 0;
+      const fact = factByTeam.get(tid)?.revenue ?? 0;
       return {
-        teamId: t.teamId, teamName: t.teamName, plan, fact,
+        teamId: tid, teamName: factByTeam.get(tid)?.name ?? nameByTeam.get(tid) ?? "—", plan, fact,
         pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact),
-        expectedThisMonth: Math.round(expThisByTeam.get(t.teamId) ?? 0),
-        flowCur: curByTeam ? (curByTeam.get(t.teamId) ?? 0) : null,
-        flowPrev: prevByTeam ? (prevByTeam.get(t.teamId) ?? 0) : null,
+        expectedThisMonth: Math.round(expThisByTeam.get(tid) ?? 0),
+        flowCur: curByTeam ? (curByTeam.get(tid) ?? 0) : null,
+        flowPrev: prevByTeam ? (prevByTeam.get(tid) ?? 0) : null,
       };
-    }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху
+    }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху (0% вгорі)
   }
 
   // Рядки ПО МЕНЕДЖЕРАХ (той самий формат, що teams): для дрілу «команда→менеджери»
@@ -4350,29 +4358,39 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   // = відділ (доведено). Менеджери без плану → pctPlan=null («без плану», у низ).
   let managers: { managerId: number; name: string; teamId: number | null; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
   if (level !== "manager") {
-    const [mFacts, mPlansRes, mFlowCur, mFlowPrev] = await Promise.all([
+    const planP: unknown[] = [monthStartOf(from)];
+    const teamScope = teamId ? (planP.push(teamId), `AND m.team_id = $${planP.length}`) : "";
+    const [mFacts, mPlansRes, mNamesRes, mFlowCur, mFlowPrev] = await Promise.all([
       money.receivedByMgr({ from, to, managerId, teamId }),
       pool.query<{ manager_id: number; s: string }>(
-        `SELECT manager_id, COALESCE(SUM(planned_value),0) s FROM plans
-          WHERE metric='payment_amount' AND date_trunc('month',plan_date) = $1::date GROUP BY manager_id`, [monthStartOf(from)]),
+        `SELECT p.manager_id, COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers m ON m.id = p.manager_id
+          WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date AND m.is_active ${teamScope} GROUP BY p.manager_id`, planP),
+      pool.query<{ id: number; name: string; team_id: number | null }>(
+        teamId ? `SELECT id, name, team_id FROM managers WHERE is_active AND team_id = $1` : `SELECT id, name, team_id FROM managers WHERE is_active`,
+        teamId ? [teamId] : []),
       compareFrom && compareTo ? money.successByMgr({ from, to, managerId, teamId }) : Promise.resolve(null),
       compareFrom && compareTo ? money.successByMgr({ from: compareFrom, to: compareTo, managerId, teamId }) : Promise.resolve(null),
     ]);
     const planByMgr = new Map(mPlansRes.rows.map((r) => [r.manager_id, Math.round(Number(r.s))]));
+    const nameByMgr = new Map(mNamesRes.rows.map((r) => [r.id, { name: r.name, teamId: r.team_id }]));
+    const factByMgr = new Map(mFacts.map((m) => [m.managerId, { name: m.name, teamId: m.teamId, revenue: Math.round(m.revenue) }]));
     const expByMgr = new Map(expectedByManager.map((r) => [r.id, r.sum]));
     const curByMgr = mFlowCur ? new Map(mFlowCur.map((m) => [m.managerId, Math.round(m.revenue)])) : null;
     const prevByMgr = mFlowPrev ? new Map(mFlowPrev.map((m) => [m.managerId, Math.round(m.revenue)])) : null;
-    managers = mFacts.map((m) => {
-      const plan = planByMgr.get(m.managerId) ?? 0;
-      const fact = Math.round(m.revenue);
+    // union: АКТИВНІ менеджери з планом ∪ з фактом → 0%-виконавці з планом видимі, зверху.
+    const mgrIds = new Set<number>([...factByMgr.keys(), ...planByMgr.keys()]);
+    managers = [...mgrIds].map((mid) => {
+      const plan = planByMgr.get(mid) ?? 0;
+      const f = factByMgr.get(mid), nm = nameByMgr.get(mid);
+      const fact = f?.revenue ?? 0;
       return {
-        managerId: m.managerId, name: m.name, teamId: m.teamId, plan, fact,
+        managerId: mid, name: f?.name ?? nm?.name ?? "—", teamId: f?.teamId ?? nm?.teamId ?? null, plan, fact,
         pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact),
-        expectedThisMonth: Math.round(expByMgr.get(m.managerId) ?? 0),
-        flowCur: curByMgr ? (curByMgr.get(m.managerId) ?? 0) : null,
-        flowPrev: prevByMgr ? (prevByMgr.get(m.managerId) ?? 0) : null,
+        expectedThisMonth: Math.round(expByMgr.get(mid) ?? 0),
+        flowCur: curByMgr ? (curByMgr.get(mid) ?? 0) : null,
+        flowPrev: prevByMgr ? (prevByMgr.get(mid) ?? 0) : null,
       };
-    }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху
+    }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху (0% вгорі)
   }
 
   // Δ до compareWith — по ключових скалярах; для когортних — maturityMismatch.
