@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { fetchManagerReport, type ManagerReport, type Team, type ManagerOption } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { previousRange } from "../format";
@@ -41,11 +41,23 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Менеджери у скоупі рівня «Команда» (для team_lead — своя команда).
-  const mgrsForPick = useMemo(
-    () => managerOptions.filter((m) => (auth.role === "team_lead" ? m.teamId === auth.teamId : level === "team" && teamId ? m.teamId === teamId : true)),
-    [managerOptions, auth.role, auth.teamId, level, teamId]
-  );
+  // 🔴 Джерело manager-picker'а — той самий масив `managers` із відповіді звіту (не
+  // окремий `managerOptions`, який на цій секції не вантажиться → був порожній). Кеш
+  // мерджить менеджерів по id у міру завантаження (department-рівень дає повний список,
+  // admin стартує з нього); скидається при зміні періоду. Fallback — `managerOptions`.
+  type MgrRow = NonNullable<ManagerReport["managers"]>[number];
+  const [mgrCache, setMgrCache] = useState<Record<number, MgrRow>>({});
+  useEffect(() => { setMgrCache({}); }, [month, compareOn]);
+  useEffect(() => {
+    const ms = data?.managers;
+    if (!ms) return;
+    setMgrCache((prev) => { const next = { ...prev }; for (const m of ms) next[m.managerId] = m; return next; });
+  }, [data]);
+  const pickerManagers = useMemo(() => {
+    const cached = Object.values(mgrCache);
+    if (cached.length) return cached.map((m) => ({ id: m.managerId, name: m.name, teamId: m.teamId, noPlan: m.plan <= 0 }));
+    return managerOptions.map((m) => ({ id: m.id, name: m.name, teamId: m.teamId, noPlan: false }));
+  }, [mgrCache, managerOptions]);
 
   const id = level === "team" ? teamId : level === "manager" ? managerId : undefined;
 
@@ -82,7 +94,7 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
             <Pick value={teamId} onChange={setTeamId} placeholder="команда" options={teams.map((t) => ({ value: t.id, label: t.name }))} />
           )}
           {level === "manager" && auth.role !== "manager" && (
-            <Pick value={managerId} onChange={setManagerId} placeholder="менеджер" options={mgrsForPick.map((m) => ({ value: m.id, label: m.name }))} />
+            <ManagerPicker value={managerId} onChange={setManagerId} managers={pickerManagers} teams={teams} />
           )}
           <span style={{ width: 1, height: 24, background: "var(--border)", margin: "0 2px" }} />
           <NavBtn onClick={() => setMonth((m) => shiftMonth(m, -1))} title="Попередній місяць">←</NavBtn>
@@ -175,6 +187,63 @@ function NavBtn({ children, onClick, disabled, title }: { children: ReactNode; o
         color: "var(--text)", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1 }}>
       {children}
     </button>
+  );
+}
+
+type MgrOpt = { id: number; name: string; teamId: number | null; noPlan: boolean };
+
+/** Пошуковий згрупований picker менеджерів (по командах; без плану → «— без плану»). */
+function ManagerPicker({ value, onChange, managers, teams }: { value: number | null; onChange: (v: number) => void; managers: MgrOpt[]; teams: Team[] }) {
+  const [open, setOpen] = useState(false);
+  const [qtext, setQtext] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+
+  const teamName = useMemo(() => new Map(teams.map((t) => [t.id, t.name])), [teams]);
+  const selected = managers.find((m) => m.id === value);
+  const q = qtext.trim().toLowerCase();
+  const groups = useMemo(() => {
+    const filtered = q ? managers.filter((m) => m.name.toLowerCase().includes(q)) : managers;
+    const byTeam = new Map<number | null, MgrOpt[]>();
+    for (const m of filtered) { const k = m.teamId; if (!byTeam.has(k)) byTeam.set(k, []); byTeam.get(k)!.push(m); }
+    return [...byTeam.entries()]
+      .map(([tid, ms]) => ({ tid, label: tid == null ? "Без команди" : (teamName.get(tid) ?? "—"), ms: ms.sort((a, b) => a.name.localeCompare(b.name, "uk")) }))
+      .sort((a, b) => a.label.localeCompare(b.label, "uk"));
+  }, [managers, q, teamName]);
+
+  return (
+    <div ref={boxRef} style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)}
+        style={{ padding: "7px 10px", fontSize: 13, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: selected ? "var(--text)" : "var(--text-muted)", cursor: "pointer", minWidth: 180, textAlign: "left" }}>
+        {selected ? selected.name : "— менеджер —"} <span style={{ color: "var(--text-muted)" }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", zIndex: 30, top: "calc(100% + 4px)", left: 0, width: 280, maxHeight: 360, overflowY: "auto", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.18)" }}>
+          <div style={{ position: "sticky", top: 0, background: "var(--card-bg)", padding: 8, borderBottom: "1px solid var(--border)" }}>
+            <input autoFocus value={qtext} onChange={(e) => setQtext(e.target.value)} placeholder="Пошук менеджера…"
+              style={{ width: "100%", padding: "6px 8px", fontSize: 13, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg, transparent)", color: "var(--text)" }} />
+          </div>
+          {groups.length === 0 && <div style={{ padding: "10px 12px", fontSize: 13, color: "var(--text-muted)" }}>Нічого не знайдено.</div>}
+          {groups.map((g) => (
+            <div key={String(g.tid)}>
+              <div style={{ padding: "6px 12px 2px", fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>{g.label}</div>
+              {g.ms.map((m) => (
+                <button key={m.id} onClick={() => { onChange(m.id); setOpen(false); setQtext(""); }}
+                  style={{ display: "flex", justifyContent: "space-between", gap: 8, width: "100%", padding: "7px 12px", fontSize: 13, border: "none", background: m.id === value ? "rgba(37,99,235,0.12)" : "transparent", color: "var(--text)", cursor: "pointer", textAlign: "left" }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
+                  {m.noPlan && <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>— без плану</span>}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
