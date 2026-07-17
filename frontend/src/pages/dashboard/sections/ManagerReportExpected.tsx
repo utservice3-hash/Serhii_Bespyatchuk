@@ -10,14 +10,14 @@ export function ManagerReportExpected({ expected }: Pick<ManagerReport, "expecte
   const e = expected;
   return (
     <div className="chart-card">
-      <h2 className="chart-title" style={{ marginBottom: 4 }}>Очікування оплат</h2>
+      <h2 className="chart-title" style={{ marginBottom: 4 }}>Очікування надходжень</h2>
       <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
-        Угоди в грошовій зоні (виставлено рахунок → очікуємо оплату), за «Запланованою датою оплати».
+        Прогноз надходжень за «Запланованою датою оплати» (грошова зона: виставлено рахунок → очікуємо оплату).
+        Прострочене/борг — у розділі «Дебіторська заборгованість» (окреме джерело), тут не дублюється.
       </p>
       <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
         <Tile label="Цей місяць" bucket={e.thisMonth} />
         <Tile label="Наступний місяць" bucket={e.nextMonth} />
-        <Tile label="🔴 Прострочені" bucket={e.overdue} danger />
       </div>
     </div>
   );

@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { fetchManagerReport, type ManagerReport, type Team, type ManagerOption } from "../../../api";
+import { DatePicker } from "../../../components/DatePicker";
 import { ManagerReportHero } from "./ManagerReportHero";
 import { ManagerReportExpected } from "./ManagerReportExpected";
 
 type Level = "department" | "team" | "manager";
 type Auth = { role: "admin" | "team_lead" | "manager"; managerId: number | null; teamId: number | null };
 
-const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
-const monthLabel = (ym: string) => { const [y, m] = ym.split("-").map(Number); return `${MONTHS[m - 1]} ${y}`; };
 const shiftMonth = (ym: string, by: number) => { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m - 1 + by, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+const curMonth = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 const monthBounds = (ym: string) => { const [y, m] = ym.split("-").map(Number); const last = new Date(y, m, 0).getDate(); return { from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, "0")}` }; };
 
 /**
@@ -49,32 +49,31 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* ── Контроли ── */}
-      <div className="chart-card" style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center" }}>
-        {levels.length > 1 && (
-          <Seg label="Рівень" value={level} onChange={(v) => setLevel(v as Level)}
-               options={levels.map((l) => ({ value: l, label: l === "department" ? "Відділ" : l === "team" ? "Команда" : "Менеджер" }))} />
-        )}
-        {level === "team" && auth.role === "admin" && (
-          <Pick label="Команда" value={teamId} onChange={setTeamId} options={teams.map((t) => ({ value: t.id, label: t.name }))} />
-        )}
-        {level === "manager" && auth.role !== "manager" && (
-          <Pick label="Менеджер" value={managerId} onChange={setManagerId} options={mgrsForPick.map((m) => ({ value: m.id, label: m.name }))} />
-        )}
-        <Seg label="Розбивка" value={granularity} onChange={(v) => setGranularity(v as "month" | "week")}
-             options={[{ value: "month", label: "Місяць" }, { value: "week", label: "Тиждень" }]} />
-        <div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>Період</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <button className="btn-ghost" onClick={() => setMonth((m) => shiftMonth(m, -1))}>◀</button>
-            <b style={{ minWidth: 130, textAlign: "center" }}>{monthLabel(month)}</b>
-            <button className="btn-ghost" onClick={() => setMonth((m) => shiftMonth(m, 1))}>▶</button>
-          </div>
+      {/* ── Контроли (стиль дашборду) ── */}
+      <div className="page-header">
+        <h1 className="page-title">🧭 Звіт 2.0</h1>
+        <div className="page-filters" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {levels.length > 1 && (
+            <Seg value={level} onChange={(v) => setLevel(v as Level)}
+                 options={levels.map((l) => ({ value: l, label: l === "department" ? "Відділ" : l === "team" ? "Команда" : "Менеджер" }))} />
+          )}
+          {level === "team" && auth.role === "admin" && (
+            <Pick value={teamId} onChange={setTeamId} placeholder="команда" options={teams.map((t) => ({ value: t.id, label: t.name }))} />
+          )}
+          {level === "manager" && auth.role !== "manager" && (
+            <Pick value={managerId} onChange={setManagerId} placeholder="менеджер" options={mgrsForPick.map((m) => ({ value: m.id, label: m.name }))} />
+          )}
+          <span style={{ width: 1, height: 24, background: "var(--border)", margin: "0 2px" }} />
+          <NavBtn onClick={() => setMonth((m) => shiftMonth(m, -1))} title="Попередній місяць">←</NavBtn>
+          <DatePicker mode="month" value={month} onChange={(v) => v && setMonth(v)} minWidth={150} />
+          <NavBtn onClick={() => setMonth((m) => shiftMonth(m, 1))} disabled={month >= curMonth()} title="Наступний місяць">→</NavBtn>
+          <Seg value={granularity} onChange={(v) => setGranularity(v as "month" | "week")}
+               options={[{ value: "month", label: "Місяць" }, { value: "week", label: "Тиждень" }]} />
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer", color: "var(--text)" }}>
+            <input type="checkbox" checked={compareOn} onChange={(e) => setCompareOn(e.target.checked)} />
+            Порівняти з попереднім
+          </label>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
-          <input type="checkbox" checked={compareOn} onChange={(e) => setCompareOn(e.target.checked)} />
-          Порівняти з попереднім місяцем
-        </label>
       </div>
 
       {loading && <div className="chart-card"><p className="loading-text">Завантаження…</p></div>}
@@ -96,31 +95,42 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
   );
 }
 
-function Seg<T extends string>({ label, value, onChange, options }: { label: string; value: T; onChange: (v: T) => void; options: { value: T; label: string }[] }) {
+// Сегмент-перемикач — стиль дашборду (як granularity-тумблер у Звіті).
+function Seg<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[] }) {
   return (
-    <div>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>{label}</div>
-      <div style={{ display: "flex", gap: 4 }}>
-        {options.map((o) => (
+    <div style={{ display: "flex", gap: 4 }}>
+      {options.map((o) => {
+        const active = value === o.value;
+        return (
           <button key={o.value} onClick={() => onChange(o.value)}
-            className={value === o.value ? "btn-primary" : "btn-ghost"} style={{ padding: "5px 12px", fontSize: 13 }}>
+            style={{ padding: "6px 13px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: active ? 700 : 500,
+              border: `1px solid ${active ? "#c5141c" : "var(--border)"}`,
+              background: active ? "#c5141c" : "var(--card-bg)", color: active ? "#fff" : "var(--text)" }}>
             {o.label}
           </button>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
 
-function Pick({ label, value, onChange, options }: { label: string; value: number | null; onChange: (v: number) => void; options: { value: number; label: string }[] }) {
+function NavBtn({ children, onClick, disabled, title }: { children: ReactNode; onClick: () => void; disabled?: boolean; title?: string }) {
   return (
-    <div>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>{label}</div>
-      <select value={value ?? ""} onChange={(e) => onChange(Number(e.target.value))} style={{ padding: "6px 10px", fontSize: 13 }}>
-        <option value="" disabled>— обрати —</option>
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </div>
+    <button onClick={onClick} disabled={disabled} title={title}
+      style={{ padding: "6px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)",
+        color: "var(--text)", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1 }}>
+      {children}
+    </button>
+  );
+}
+
+function Pick({ value, onChange, placeholder, options }: { value: number | null; onChange: (v: number) => void; placeholder: string; options: { value: number; label: string }[] }) {
+  return (
+    <select value={value ?? ""} onChange={(e) => onChange(Number(e.target.value))}
+      style={{ padding: "7px 10px", fontSize: 13, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+      <option value="" disabled>— {placeholder} —</option>
+      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
   );
 }
 
