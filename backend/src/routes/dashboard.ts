@@ -4306,11 +4306,19 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   // Тижнева розбивка — по місяцю поточного періоду.
   const weekly = await money.weeklyBreakdown({ from: monthStartOf(from), managerId, teamId }, current.revenue.plan);
 
+  // Розрізи бакета «Цей місяць» очікувань (дрілдаун картки; те саме джерело, що
+  // expected.thisMonth → Σ менеджерів = команда = відділ). Скоуп як у решті звіту.
+  const [expectedByTeam, expectedByManager] = await Promise.all([
+    metrics.expectedThisMonthByScope({ managerId, teamId }, "team"),
+    metrics.expectedThisMonthByScope({ managerId, teamId }, "manager"),
+  ]);
+  const expThisByTeam = new Map(expectedByTeam.map((r) => [r.id, r.sum]));
+
   // Світлофор команд — лише на рівні department (найгірші зверху).
   // Δ (flowCur/flowPrev) — like-for-like по ДАТОВАНОМУ потоку (successByTeam): received-
   // снапшот несиметричний між свіжим MTD і дозрілим минулим місяцем. fact (для % плану)
   // лишається received — та сама база, що план/факт.
-  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
+  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
   if (level === "department") {
     const [facts, plansRes, flowsCur, flowsPrev] = await Promise.all([
       money.receivedByTeam({ from, to }),
@@ -4329,6 +4337,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
       return {
         teamId: t.teamId, teamName: t.teamName, plan, fact,
         pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact),
+        expectedThisMonth: Math.round(expThisByTeam.get(t.teamId) ?? 0),
         flowCur: curByTeam ? (curByTeam.get(t.teamId) ?? 0) : null,
         flowPrev: prevByTeam ? (prevByTeam.get(t.teamId) ?? 0) : null,
       };
@@ -4363,6 +4372,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     scope: { level, id: managerId ?? teamId ?? null, period: { from, to, granularity }, compareWith: compareFrom && compareTo ? { from: compareFrom, to: compareTo } : null },
     ...current,
     weekly,
+    expectedByTeam, expectedByManager,
     ...(teams ? { teams } : {}),
     compare,
   });

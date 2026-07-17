@@ -99,7 +99,7 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
       {data && !loading && (
         <>
           <ManagerReportHero revenue={data.revenue} compare={data.compare} compareLabel={compareLabel} />
-          <ManagerReportExpected expected={data.expected} />
+          <ManagerReportExpected expected={data.expected} expectedByTeam={data.expectedByTeam} expectedByManager={data.expectedByManager} />
 
           {/* ── Р4c.1 — світлофор команд (лише рівень «Відділ») ── */}
           {level === "department" && data.teams && (

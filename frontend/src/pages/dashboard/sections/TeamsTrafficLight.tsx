@@ -50,7 +50,7 @@ export function TeamsTrafficLight({
               title={`Відкрити звіт по команді «${t.teamName}»`}
               style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(120px, 1.4fr) minmax(90px, 2fr) 54px minmax(90px, 1fr)",
+                gridTemplateColumns: "minmax(120px, 1.4fr) minmax(80px, 1.8fr) 48px minmax(80px, 0.9fr) minmax(90px, 1fr)",
                 alignItems: "center",
                 gap: 12,
                 padding: "10px 12px",
@@ -82,6 +82,11 @@ export function TeamsTrafficLight({
               {/* % */}
               <span style={{ fontWeight: 700, fontSize: 15, color, textAlign: "right" }}>
                 {t.pctPlan == null ? "—" : `${t.pctPlan}%`}
+              </span>
+
+              {/* Очікування цей місяць (підсумкове число, без дрілдауну) */}
+              <span style={{ textAlign: "right", fontSize: 12, color: "var(--text-muted)" }} title={`Очікування цього місяця (CRM, planned-date): ${formatAmountFull(t.expectedThisMonth)}`}>
+                очік. <span style={{ color: "#b45309", fontWeight: 600 }}>{formatAmount(t.expectedThisMonth)}</span>
               </span>
 
               {/* Залишок до плану */}

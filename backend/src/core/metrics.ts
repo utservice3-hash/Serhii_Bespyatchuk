@@ -1106,6 +1106,37 @@ export async function expectedPaymentsByPlanned(s: SnapshotScope): Promise<Expec
   };
 }
 
+export interface ExpectedScopeRow { id: number; name: string; teamId: number | null; deals: number; sum: number }
+
+/**
+ * Розріз бакета «Цей місяць» очікувань (planned-date у поточному місяці, зона EXPECT_ZONE)
+ * по КОМАНДІ або МЕНЕДЖЕРУ — для дрілдауну картки «Цей місяць». Те саме джерело, що
+ * `expectedPaymentsByPlanned.thisMonth` → інваріант: Σ менеджерів = команда = відділ.
+ * `by`='team' → id/name = команда (teamId=null); `by`='manager' → id/name = менеджер (+teamId).
+ */
+export async function expectedThisMonthByScope(s: SnapshotScope, by: "team" | "manager"): Promise<ExpectedScopeRow[]> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = [
+    "d.pipeline_id = ANY($1)", "d.status_id = ANY($2)",
+    "d.planned_payment_at IS NOT NULL",
+    `to_char((d.planned_payment_at ${KYIV}), 'YYYY-MM') = to_char((now() ${KYIV}), 'YYYY-MM')`,
+  ];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const sel = by === "team"
+    ? "t.id AS id, t.name AS name, NULL::int AS team_id"
+    : "m.id AS id, m.name AS name, m.team_id";
+  const grp = by === "team" ? "GROUP BY t.id, t.name" : "GROUP BY m.id, m.name, m.team_id";
+  const join = by === "team" ? "JOIN teams t ON t.id = m.team_id" : "";
+  const r = await pool.query<{ id: number; name: string; team_id: number | null; deals: string; sum: string }>(
+    `SELECT ${sel}, COUNT(*)::int deals, COALESCE(SUM(d.price),0) sum
+       FROM deals d JOIN managers m ON m.id = d.manager_id ${join}
+      WHERE ${conds.join(" AND ")} ${grp} ORDER BY sum DESC`,
+    params
+  );
+  return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
+}
+
 // ───────────────────────── ЦІЛЬОВІ КОНВЕРСІЇ (Р4a) ─────────────────────────
 
 /**
