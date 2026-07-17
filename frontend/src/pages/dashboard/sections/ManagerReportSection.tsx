@@ -136,7 +136,7 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
                 <TrafficLight
                   title="🚦 Рейтинг менеджерів (усі)" hint="клік → звіт менеджера"
                   rows={data.managers.map(mgrToRow)} compareLabel={compareLabel}
-                  onRowClick={(id) => { setManagerId(id); setLevel("manager"); }}
+                  onRowClick={(id) => { if (id <= 0) return; setManagerId(id); setLevel("manager"); }}
                   clickTitle={(n) => `Відкрити звіт менеджера «${n}»`}
                 />
               )}
