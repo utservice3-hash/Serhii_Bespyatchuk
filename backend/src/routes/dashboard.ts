@@ -4288,19 +4288,22 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   const weekly = await money.weeklyBreakdown({ from: monthStartOf(from), managerId, teamId }, current.revenue.plan);
 
   // Світлофор команд — лише на рівні department (найгірші зверху).
-  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number }[] | undefined;
+  // factPrev — виручка команди за період порівняння (для Δ прогрес/регрес), лише коли compareWith увімкнено.
+  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; factPrev: number | null }[] | undefined;
   if (level === "department") {
-    const [facts, plansRes] = await Promise.all([
+    const [facts, plansRes, factsPrev] = await Promise.all([
       money.receivedByTeam({ from, to }),
       pool.query<{ team_id: number; s: string }>(
         `SELECT mp.team_id, COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers mp ON mp.id = p.manager_id
           WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date GROUP BY mp.team_id`, [monthStartOf(from)]),
+      compareFrom && compareTo ? money.receivedByTeam({ from: compareFrom, to: compareTo }) : Promise.resolve(null),
     ]);
     const planByTeam = new Map(plansRes.rows.map((r) => [r.team_id, Math.round(Number(r.s))]));
+    const prevByTeam = factsPrev ? new Map(factsPrev.filter((t) => t.teamId != null).map((t) => [t.teamId, Math.round(t.revenue)])) : null;
     teams = facts.filter((t) => t.teamId != null).map((t) => {
       const plan = planByTeam.get(t.teamId) ?? 0;
       const fact = Math.round(t.revenue);
-      return { teamId: t.teamId, teamName: t.teamName, plan, fact, pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact) };
+      return { teamId: t.teamId, teamName: t.teamName, plan, fact, pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact), factPrev: prevByTeam ? (prevByTeam.get(t.teamId) ?? 0) : null };
     }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху
   }
 

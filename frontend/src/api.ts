@@ -1688,7 +1688,7 @@ export interface ManagerReport {
   conversions: { ads: MRConv; prodzvin: MRConv; reactivation: MRConv };
   carryover: { amount: number; deals: number };
   weekly: { label: string; from: string; to: string; plan: number; fact: number; pct: number | null; remaining: number; status: "past" | "current" | "future" }[];
-  teams?: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number }[];
+  teams?: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; factPrev: number | null }[];
   compare: Record<string, MRDelta> | null;
 }
 

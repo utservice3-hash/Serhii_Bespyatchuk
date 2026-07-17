@@ -3,6 +3,7 @@ import { fetchManagerReport, type ManagerReport, type Team, type ManagerOption }
 import { DatePicker } from "../../../components/DatePicker";
 import { ManagerReportHero } from "./ManagerReportHero";
 import { ManagerReportExpected } from "./ManagerReportExpected";
+import { TeamsTrafficLight } from "./TeamsTrafficLight";
 
 type Level = "department" | "team" | "manager";
 type Auth = { role: "admin" | "team_lead" | "manager"; managerId: number | null; teamId: number | null };
@@ -84,9 +85,16 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
           <ManagerReportHero revenue={data.revenue} compare={data.compare} />
           <ManagerReportExpected expected={data.expected} />
 
+          {/* ── Р4c.1 — світлофор команд (лише рівень «Відділ») ── */}
+          {level === "department" && data.teams && (
+            <TeamsTrafficLight
+              teams={data.teams}
+              onSelectTeam={(tid) => { setTeamId(tid); setLevel("team"); }}
+            />
+          )}
+
           {/* ── Заглушки решти піраміди (Р4c+) ── */}
           <Placeholder title="Воронка продажів (чесна, ≤100%)" note="funnelCohortHonest — тут буде 5 стадій + «зайшли посередині»" />
-          {data.teams && <Placeholder title="Світлофор команд" note="teams — найгірші зверху, % плану, залишок" />}
           <Placeholder title="Конверсії + цілі" note="ads / Продзвін / Реактивація vs цільові (15 / 7-8 / 10%)" />
           <Placeholder title="Тижнева розбивка · Перенесені · Деталі" note="weekly · carryover · дрилл-даун" />
         </>
