@@ -1691,6 +1691,7 @@ export interface ManagerReport {
   expectedByTeam: { id: number; name: string; teamId: number | null; deals: number; sum: number }[];
   expectedByManager: { id: number; name: string; teamId: number | null; deals: number; sum: number }[];
   teams?: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[];
+  managers?: { managerId: number; name: string; teamId: number | null; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[];
   compare: Record<string, MRDelta> | null;
 }
 

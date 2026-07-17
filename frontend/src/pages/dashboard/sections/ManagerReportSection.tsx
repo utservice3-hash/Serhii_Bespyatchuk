@@ -4,7 +4,7 @@ import { DatePicker } from "../../../components/DatePicker";
 import { previousRange } from "../format";
 import { ManagerReportHero } from "./ManagerReportHero";
 import { ManagerReportExpected } from "./ManagerReportExpected";
-import { TeamsTrafficLight } from "./TeamsTrafficLight";
+import { TrafficLight, type TrafficRow } from "./TeamsTrafficLight";
 
 type Level = "department" | "team" | "manager";
 type Auth = { role: "admin" | "team_lead" | "manager"; managerId: number | null; teamId: number | null };
@@ -18,6 +18,9 @@ const fmtRange = (f: string, t: string) => {
   const fd = new Date(f + "T00:00:00"), td = new Date(t + "T00:00:00");
   return `${fd.getDate()}–${td.getDate()} ${MONTHS_SHORT[td.getMonth()]}`;
 };
+// Уніфікація рядків світлофора (команда/менеджер → TrafficRow).
+const teamToRow = (t: NonNullable<ManagerReport["teams"]>[number]): TrafficRow => ({ id: t.teamId, name: t.teamName, plan: t.plan, fact: t.fact, pctPlan: t.pctPlan, remaining: t.remaining, expectedThisMonth: t.expectedThisMonth, flowCur: t.flowCur, flowPrev: t.flowPrev });
+const mgrToRow = (m: NonNullable<ManagerReport["managers"]>[number]): TrafficRow => ({ id: m.managerId, name: m.name, plan: m.plan, fact: m.fact, pctPlan: m.pctPlan, remaining: m.remaining, expectedThisMonth: m.expectedThisMonth, flowCur: m.flowCur, flowPrev: m.flowPrev });
 
 /**
  * Р4b — ЄДИНИЙ звіт (менеджер + КВП) з фільтром рівня. Каркас + головне (рівень 1
@@ -32,6 +35,7 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [granularity, setGranularity] = useState<"month" | "week">("month");
   const [compareOn, setCompareOn] = useState(true);
+  const [tlMode, setTlMode] = useState<"teams" | "managers">("teams"); // світлофор: Команди / Усі менеджери (лише на рівні «Відділ»)
 
   const [data, setData] = useState<ManagerReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,12 +105,37 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
           <ManagerReportHero revenue={data.revenue} compare={data.compare} compareLabel={compareLabel} />
           <ManagerReportExpected expected={data.expected} expectedByTeam={data.expectedByTeam} expectedByManager={data.expectedByManager} />
 
-          {/* ── Р4c.1 — світлофор команд (лише рівень «Відділ») ── */}
-          {level === "department" && data.teams && (
-            <TeamsTrafficLight
-              teams={data.teams}
-              compareLabel={compareLabel}
-              onSelectTeam={(tid) => { setTeamId(tid); setLevel("team"); }}
+          {/* ── Р4c.1 — світлофор (рівне-залежний + плоский рейтинг менеджерів) ── */}
+          {level === "department" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ alignSelf: "flex-start" }}>
+                <Seg value={tlMode} onChange={(v) => setTlMode(v as "teams" | "managers")}
+                     options={[{ value: "teams", label: "Команди" }, { value: "managers", label: "Усі менеджери" }]} />
+              </div>
+              {tlMode === "teams" && data.teams && (
+                <TrafficLight
+                  title="🚦 Світлофор команд" hint="клік → звіт по команді"
+                  rows={data.teams.map(teamToRow)} compareLabel={compareLabel}
+                  onRowClick={(id) => { setTeamId(id); setLevel("team"); }}
+                  clickTitle={(n) => `Відкрити звіт по команді «${n}»`}
+                />
+              )}
+              {tlMode === "managers" && data.managers && (
+                <TrafficLight
+                  title="🚦 Рейтинг менеджерів (усі)" hint="клік → звіт менеджера"
+                  rows={data.managers.map(mgrToRow)} compareLabel={compareLabel}
+                  onRowClick={(id) => { setManagerId(id); setLevel("manager"); }}
+                  clickTitle={(n) => `Відкрити звіт менеджера «${n}»`}
+                />
+              )}
+            </div>
+          )}
+          {level === "team" && data.managers && (
+            <TrafficLight
+              title="🚦 Менеджери команди" hint="клік → звіт менеджера"
+              rows={data.managers.map(mgrToRow)} compareLabel={compareLabel}
+              onRowClick={(id) => { setManagerId(id); setLevel("manager"); }}
+              clickTitle={(n) => `Відкрити звіт менеджера «${n}»`}
             />
           )}
 

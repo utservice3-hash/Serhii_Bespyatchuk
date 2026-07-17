@@ -1,7 +1,17 @@
-import type { ManagerReport } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 
-type TeamRow = NonNullable<ManagerReport["teams"]>[number];
+/** Уніфікований рядок світлофора (команда АБО менеджер). */
+export interface TrafficRow {
+  id: number;
+  name: string;
+  plan: number;
+  fact: number;
+  pctPlan: number | null;
+  remaining: number;
+  expectedThisMonth: number;
+  flowCur: number | null;
+  flowPrev: number | null;
+}
 
 /** Колір за % виконання плану (токени дашборду): <70 червоний, 70–95 жовтий, ≥95 зелений. */
 function planColor(pct: number | null): string {
@@ -12,42 +22,52 @@ function planColor(pct: number | null): string {
 }
 
 /**
- * Р4c.1 — світлофор команд (лише рівень «Відділ»). Команди рядками, найгірші зверху
- * (сортування на бекенді), колір по % плану. Клік по команді → звіт перебудовується
- * на рівень цієї команди (level=team). Δ — до періоду порівняння, коли він увімкнений.
+ * Р4c.1 — світлофор (рівне-залежний). Рядки — команди АБО менеджери (той самий формат):
+ * бар % плану · % · очік. цього місяця · залишок до плану. Найгірші зверху (сорт бекенду).
+ * Клік по рядку → дрілл (команда→менеджери / менеджер→звіт менеджера). Δ — like-for-like
+ * по датованому потоку. % плану менеджера — нативний план з `plans` (без вигадки; без плану → «—»).
  */
-export function TeamsTrafficLight({
-  teams,
+export function TrafficLight({
+  title,
+  hint,
+  rows,
   compareLabel,
-  onSelectTeam,
+  onRowClick,
+  clickTitle,
 }: {
-  teams: TeamRow[];
+  title: string;
+  hint: string;
+  rows: TrafficRow[];
   compareLabel?: string | null;
-  onSelectTeam: (teamId: number) => void;
+  onRowClick?: (id: number) => void;
+  clickTitle?: (name: string) => string;
 }) {
-  if (teams.length === 0) {
+  if (rows.length === 0) {
     return (
       <div className="chart-card">
-        <h2 className="chart-title">🚦 Світлофор команд</h2>
-        <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>Немає даних по командах за цей період.</p>
+        <h2 className="chart-title">{title}</h2>
+        <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>Немає даних за цей період.</p>
       </div>
     );
   }
 
   return (
     <div className="chart-card">
-      <h2 className="chart-title" style={{ marginBottom: 12 }}>🚦 Світлофор команд <span style={{ fontSize: 12, fontWeight: 400, color: "var(--text-muted)" }}>· найгірші зверху · клік → звіт по команді{compareLabel ? ` · Δ: ${compareLabel}` : ""}</span></h2>
+      <h2 className="chart-title" style={{ marginBottom: 12 }}>
+        {title} <span style={{ fontSize: 12, fontWeight: 400, color: "var(--text-muted)" }}>· найгірші зверху · {hint}{compareLabel ? ` · Δ: ${compareLabel}` : ""}</span>
+      </h2>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {teams.map((t) => {
+        {rows.map((t) => {
           const color = planColor(t.pctPlan);
           const fill = t.pctPlan == null ? 0 : Math.min(100, Math.max(0, t.pctPlan));
-          // Δ — like-for-like по датованому потоку (successByTeam), не по received.
+          // Δ — like-for-like по датованому потоку (success), не по received.
           const dprev = t.flowCur != null && t.flowPrev != null ? t.flowCur - t.flowPrev : null;
+          const Tag = onRowClick ? "button" : "div";
           return (
-            <button
-              key={t.teamId}
-              onClick={() => onSelectTeam(t.teamId)}
-              title={`Відкрити звіт по команді «${t.teamName}»`}
+            <Tag
+              key={t.id}
+              onClick={onRowClick ? () => onRowClick(t.id) : undefined}
+              title={clickTitle ? clickTitle(t.name) : undefined}
               style={{
                 display: "grid",
                 gridTemplateColumns: "minmax(120px, 1.4fr) minmax(80px, 1.8fr) 48px minmax(80px, 0.9fr) minmax(90px, 1fr)",
@@ -59,14 +79,14 @@ export function TeamsTrafficLight({
                 borderLeft: `4px solid ${color}`,
                 background: "var(--card-bg)",
                 color: "var(--text)",
-                cursor: "pointer",
+                cursor: onRowClick ? "pointer" : "default",
                 textAlign: "left",
                 width: "100%",
               }}
             >
               {/* Назва + Δ */}
               <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-                <span style={{ fontWeight: 600, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.teamName}</span>
+                <span style={{ fontWeight: 600, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
                 {dprev != null && (
                   <span style={{ fontSize: 11, color: dprev >= 0 ? "#16a34a" : "#dc2626" }}>
                     {dprev >= 0 ? "↑" : "↓"} {formatAmount(Math.abs(dprev))} <span style={{ color: "var(--text-muted)" }}>дат. потік</span>
@@ -84,7 +104,7 @@ export function TeamsTrafficLight({
                 {t.pctPlan == null ? "—" : `${t.pctPlan}%`}
               </span>
 
-              {/* Очікування цей місяць (підсумкове число, без дрілдауну) */}
+              {/* Очікування цей місяць */}
               <span style={{ textAlign: "right", fontSize: 12, color: "var(--text-muted)" }} title={`Очікування цього місяця (CRM, planned-date): ${formatAmountFull(t.expectedThisMonth)}`}>
                 очік. <span style={{ color: "#b45309", fontWeight: 600 }}>{formatAmount(t.expectedThisMonth)}</span>
               </span>
@@ -93,7 +113,7 @@ export function TeamsTrafficLight({
               <span style={{ textAlign: "right", fontSize: 12, color: "var(--text-muted)" }} title={t.plan > 0 ? `План ${formatAmountFull(t.plan)} · факт ${formatAmountFull(t.fact)}` : "План не заданий"}>
                 {t.plan > 0 ? <>залишок <span style={{ color: "var(--text)", fontWeight: 600 }}>{formatAmount(t.remaining)}</span></> : "без плану"}
               </span>
-            </button>
+            </Tag>
           );
         })}
       </div>

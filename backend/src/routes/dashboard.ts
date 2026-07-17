@@ -4344,6 +4344,37 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху
   }
 
+  // Рядки ПО МЕНЕДЖЕРАХ (той самий формат, що teams): для дрілу «команда→менеджери»
+  // (level=team, скоуп по teamId) і плоского рейтингу «Усі менеджери» (level=department).
+  // % плану — нативний план менеджера з `plans` (per manager_id); Σ планів = план команди
+  // = відділ (доведено). Менеджери без плану → pctPlan=null («без плану», у низ).
+  let managers: { managerId: number; name: string; teamId: number | null; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
+  if (level !== "manager") {
+    const [mFacts, mPlansRes, mFlowCur, mFlowPrev] = await Promise.all([
+      money.receivedByMgr({ from, to, managerId, teamId }),
+      pool.query<{ manager_id: number; s: string }>(
+        `SELECT manager_id, COALESCE(SUM(planned_value),0) s FROM plans
+          WHERE metric='payment_amount' AND date_trunc('month',plan_date) = $1::date GROUP BY manager_id`, [monthStartOf(from)]),
+      compareFrom && compareTo ? money.successByMgr({ from, to, managerId, teamId }) : Promise.resolve(null),
+      compareFrom && compareTo ? money.successByMgr({ from: compareFrom, to: compareTo, managerId, teamId }) : Promise.resolve(null),
+    ]);
+    const planByMgr = new Map(mPlansRes.rows.map((r) => [r.manager_id, Math.round(Number(r.s))]));
+    const expByMgr = new Map(expectedByManager.map((r) => [r.id, r.sum]));
+    const curByMgr = mFlowCur ? new Map(mFlowCur.map((m) => [m.managerId, Math.round(m.revenue)])) : null;
+    const prevByMgr = mFlowPrev ? new Map(mFlowPrev.map((m) => [m.managerId, Math.round(m.revenue)])) : null;
+    managers = mFacts.map((m) => {
+      const plan = planByMgr.get(m.managerId) ?? 0;
+      const fact = Math.round(m.revenue);
+      return {
+        managerId: m.managerId, name: m.name, teamId: m.teamId, plan, fact,
+        pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact),
+        expectedThisMonth: Math.round(expByMgr.get(m.managerId) ?? 0),
+        flowCur: curByMgr ? (curByMgr.get(m.managerId) ?? 0) : null,
+        flowPrev: prevByMgr ? (prevByMgr.get(m.managerId) ?? 0) : null,
+      };
+    }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху
+  }
+
   // Δ до compareWith — по ключових скалярах; для когортних — maturityMismatch.
   const delta = (cur: number | null, prev: number | null) => {
     if (cur == null || prev == null) return { current: cur, previous: prev, delta: null, deltaPct: null };
@@ -4374,6 +4405,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     weekly,
     expectedByTeam, expectedByManager,
     ...(teams ? { teams } : {}),
+    ...(managers ? { managers } : {}),
     compare,
   });
 });
