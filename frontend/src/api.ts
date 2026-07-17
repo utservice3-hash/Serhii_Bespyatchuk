@@ -1680,7 +1680,7 @@ export interface MRDelta { current: number | null; previous: number | null; delt
 export interface ManagerReport {
   scope: { level: "department" | "team" | "manager"; id: number | null; period: { from: string; to: string; granularity: "month" | "week" }; compareWith: { from: string; to: string } | null };
   revenue: {
-    plan: number; fact: number; pctComplete: number | null; remaining: number;
+    plan: number; fact: number; successFlow: number; pctComplete: number | null; remaining: number;
     projection: { projected: number; projectedPct: number | null; zoneFull: number; zoneDeals: number; dobir: number; byPace: number; byPacePct: number | null; floor: number; floorPct: number | null; elapsedWorkingDays: number; totalWorkingDays: number };
   };
   funnel: MRFunnelBucket[];
@@ -1688,7 +1688,7 @@ export interface ManagerReport {
   conversions: { ads: MRConv; prodzvin: MRConv; reactivation: MRConv };
   carryover: { amount: number; deals: number };
   weekly: { label: string; from: string; to: string; plan: number; fact: number; pct: number | null; remaining: number; status: "past" | "current" | "future" }[];
-  teams?: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; factPrev: number | null }[];
+  teams?: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; flowCur: number | null; flowPrev: number | null }[];
   compare: Record<string, MRDelta> | null;
 }
 

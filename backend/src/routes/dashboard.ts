@@ -4247,8 +4247,9 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   const vs = (v: number | null, target: number) => (v == null ? null : Math.round((v - target) * 10) / 10);
 
   async function buildPeriod(pFrom: string, pTo: string) {
-    const [proj, plan, funnel, expected, adsRows, pzRows, reRows, carry] = await Promise.all([
+    const [proj, succFlow, plan, funnel, expected, adsRows, pzRows, reRows, carry] = await Promise.all([
       money.revenueProjection({ from: pFrom, to: pTo, managerId, teamId }),
+      money.successMoney({ from: pFrom, to: pTo, managerId, teamId }),
       fetchPlan(pFrom),
       metrics.funnelCohortHonest({ from: pFrom, to: pTo, managerId, teamId }, granularity),
       metrics.expectedPaymentsByPlanned({ managerId, teamId }),
@@ -4272,6 +4273,9 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     return {
       revenue: {
         plan, fact,
+        // Датований потік (success по closed_at) — база ЧЕСНОГО Δ між періодами:
+        // received-снапшот (paidOnly) несиметричний між «свіжим» і «дозрілим» місяцем.
+        successFlow: succFlow.revenue,
         pctComplete: plan > 0 ? Math.round((fact / plan) * 100) : null,
         remaining: Math.max(0, plan - fact),
         projection: {
@@ -4303,22 +4307,31 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   const weekly = await money.weeklyBreakdown({ from: monthStartOf(from), managerId, teamId }, current.revenue.plan);
 
   // Світлофор команд — лише на рівні department (найгірші зверху).
-  // factPrev — виручка команди за період порівняння (для Δ прогрес/регрес), лише коли compareWith увімкнено.
-  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; factPrev: number | null }[] | undefined;
+  // Δ (flowCur/flowPrev) — like-for-like по ДАТОВАНОМУ потоку (successByTeam): received-
+  // снапшот несиметричний між свіжим MTD і дозрілим минулим місяцем. fact (для % плану)
+  // лишається received — та сама база, що план/факт.
+  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
   if (level === "department") {
-    const [facts, plansRes, factsPrev] = await Promise.all([
+    const [facts, plansRes, flowsCur, flowsPrev] = await Promise.all([
       money.receivedByTeam({ from, to }),
       pool.query<{ team_id: number; s: string }>(
         `SELECT mp.team_id, COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers mp ON mp.id = p.manager_id
           WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date GROUP BY mp.team_id`, [monthStartOf(from)]),
-      compareFrom && compareTo ? money.receivedByTeam({ from: compareFrom, to: compareTo }) : Promise.resolve(null),
+      compareFrom && compareTo ? money.successByTeam({ from, to }) : Promise.resolve(null),
+      compareFrom && compareTo ? money.successByTeam({ from: compareFrom, to: compareTo }) : Promise.resolve(null),
     ]);
     const planByTeam = new Map(plansRes.rows.map((r) => [r.team_id, Math.round(Number(r.s))]));
-    const prevByTeam = factsPrev ? new Map(factsPrev.filter((t) => t.teamId != null).map((t) => [t.teamId, Math.round(t.revenue)])) : null;
+    const curByTeam = flowsCur ? new Map(flowsCur.filter((t) => t.teamId != null).map((t) => [t.teamId, Math.round(t.revenue)])) : null;
+    const prevByTeam = flowsPrev ? new Map(flowsPrev.filter((t) => t.teamId != null).map((t) => [t.teamId, Math.round(t.revenue)])) : null;
     teams = facts.filter((t) => t.teamId != null).map((t) => {
       const plan = planByTeam.get(t.teamId) ?? 0;
       const fact = Math.round(t.revenue);
-      return { teamId: t.teamId, teamName: t.teamName, plan, fact, pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact), factPrev: prevByTeam ? (prevByTeam.get(t.teamId) ?? 0) : null };
+      return {
+        teamId: t.teamId, teamName: t.teamName, plan, fact,
+        pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact),
+        flowCur: curByTeam ? (curByTeam.get(t.teamId) ?? 0) : null,
+        flowPrev: prevByTeam ? (prevByTeam.get(t.teamId) ?? 0) : null,
+      };
     }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху
   }
 
@@ -4332,6 +4345,9 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   if (compareData) {
     const cf = (rows: metrics.FunnelHonestRow[]) => rows[0]?.pct?.paid ?? null;
     compare = {
+      // 🔴 successFlow — ГОЛОВНА Δ hero (like-for-like по датованому потоку; received-Δ
+      // лишається для довідки, але «свіжий снапшот vs дозрілий місяць» перекручує).
+      successFlow: delta(current.revenue.successFlow, compareData.revenue.successFlow),
       revenueFact: delta(current.revenue.fact, compareData.revenue.fact),
       revenuePctComplete: delta(current.revenue.pctComplete, compareData.revenue.pctComplete),
       funnelPaidPct: { ...delta(cf(current.funnel), cf(compareData.funnel)), maturityMismatch: current.funnel[0]?.mature === false },

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { fetchManagerReport, type ManagerReport, type Team, type ManagerOption } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
+import { previousRange } from "../format";
 import { ManagerReportHero } from "./ManagerReportHero";
 import { ManagerReportExpected } from "./ManagerReportExpected";
 import { TeamsTrafficLight } from "./TeamsTrafficLight";
@@ -11,6 +12,12 @@ type Auth = { role: "admin" | "team_lead" | "manager"; managerId: number | null;
 const shiftMonth = (ym: string, by: number) => { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m - 1 + by, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 const curMonth = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 const monthBounds = (ym: string) => { const [y, m] = ym.split("-").map(Number); const last = new Date(y, m, 0).getDate(); return { from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, "0")}` }; };
+const todayKyiv = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+const MONTHS_SHORT = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"];
+const fmtRange = (f: string, t: string) => {
+  const fd = new Date(f + "T00:00:00"), td = new Date(t + "T00:00:00");
+  return `${fd.getDate()}–${td.getDate()} ${MONTHS_SHORT[td.getMonth()]}`;
+};
 
 /**
  * Р4b — ЄДИНИЙ звіт (менеджер + КВП) з фільтром рівня. Каркас + головне (рівень 1
@@ -38,14 +45,23 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
 
   const id = level === "team" ? teamId : level === "manager" ? managerId : undefined;
 
+  // Like-for-like порівняння: для ПОТОЧНОГО (неповного) місяця — MTD vs ті самі дні
+  // попереднього (1–17 vs 1–17, `previousRange`); для завершених — ПОВНИЙ vs ПОВНИЙ
+  // (не same-day-span — інакше різали б 31-ше число попереднього).
+  // Раніше порівнювали MTD з ПОВНИМ минулим місяцем → фейкові −50% посеред місяця.
+  const { from, to } = monthBounds(month);
+  const isPartial = to > todayKyiv();
+  const effTo = isPartial ? todayKyiv() : to;
+  const cmp = compareOn ? (isPartial ? previousRange(from, effTo) : monthBounds(shiftMonth(month, -1))) : null;
+  const compareLabel = cmp ? `${fmtRange(from, effTo)} vs ${fmtRange(cmp.from, cmp.to)} · за датованим потоком` : null;
+
   useEffect(() => {
     if (level !== "department" && !id) { setData(null); setError("Оберіть " + (level === "team" ? "команду" : "менеджера")); setLoading(false); return; }
     setLoading(true); setError(null);
-    const { from, to } = monthBounds(month);
-    const cmp = compareOn ? monthBounds(shiftMonth(month, -1)) : null;
     fetchManagerReport({ level, id: id ?? undefined, from, to, granularity, compareFrom: cmp?.from, compareTo: cmp?.to })
       .then((d) => { setData(d); setLoading(false); })
       .catch((e) => { setError(e?.response?.data?.error ?? "Помилка завантаження"); setData(null); setLoading(false); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [level, id, month, granularity, compareOn]);
 
   return (
@@ -82,13 +98,14 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
 
       {data && !loading && (
         <>
-          <ManagerReportHero revenue={data.revenue} compare={data.compare} />
+          <ManagerReportHero revenue={data.revenue} compare={data.compare} compareLabel={compareLabel} />
           <ManagerReportExpected expected={data.expected} />
 
           {/* ── Р4c.1 — світлофор команд (лише рівень «Відділ») ── */}
           {level === "department" && data.teams && (
             <TeamsTrafficLight
               teams={data.teams}
+              compareLabel={compareLabel}
               onSelectTeam={(tid) => { setTeamId(tid); setLevel("team"); }}
             />
           )}

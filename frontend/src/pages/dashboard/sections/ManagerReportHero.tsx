@@ -7,9 +7,11 @@ const pctColor = (p: number | null) => (p == null ? "#667085" : p >= 100 ? "#16a
  * Р4b — ГОЛОВНЕ (рівень 1 піраміди): виконання плану виручки великим числом.
  * Факт/план, залишок, прогноз, Δ до порівняння. Окремий компонент (не моноліт).
  */
-export function ManagerReportHero({ revenue, compare }: Pick<ManagerReport, "revenue" | "compare">) {
+export function ManagerReportHero({ revenue, compare, compareLabel }: Pick<ManagerReport, "revenue" | "compare"> & { compareLabel?: string | null }) {
   const pct = revenue.pctComplete;
-  const d = compare?.revenueFact;
+  // Δ — like-for-like по ДАТОВАНОМУ потоку (success), не по received-снапшоту:
+  // свіжий paidOnly поточного місяця проти «дозрілого» минулого перекручує Δ.
+  const d = compare?.successFlow ?? compare?.revenueFact;
   const proj = revenue.projection;
   return (
     <div className="chart-card" style={{ display: "flex", flexWrap: "wrap", gap: 28, alignItems: "center" }}>
@@ -20,7 +22,8 @@ export function ManagerReportHero({ revenue, compare }: Pick<ManagerReport, "rev
         </div>
         {d && d.delta != null && (
           <div style={{ fontSize: 13, fontWeight: 700, marginTop: 6, color: d.delta >= 0 ? "#16a34a" : "#dc2626" }}>
-            {d.delta >= 0 ? "↑" : "↓"} {uah(Math.abs(d.delta))} ({d.deltaPct != null ? `${d.deltaPct > 0 ? "+" : ""}${d.deltaPct}%` : "—"}) до порівняння
+            {d.delta >= 0 ? "↑" : "↓"} {uah(Math.abs(d.delta))} ({d.deltaPct != null ? `${d.deltaPct > 0 ? "+" : ""}${d.deltaPct}%` : "—"})
+            {compareLabel && <div style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)" }}>{compareLabel}</div>}
           </div>
         )}
       </div>

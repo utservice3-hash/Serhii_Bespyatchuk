@@ -18,9 +18,11 @@ function planColor(pct: number | null): string {
  */
 export function TeamsTrafficLight({
   teams,
+  compareLabel,
   onSelectTeam,
 }: {
   teams: TeamRow[];
+  compareLabel?: string | null;
   onSelectTeam: (teamId: number) => void;
 }) {
   if (teams.length === 0) {
@@ -34,12 +36,13 @@ export function TeamsTrafficLight({
 
   return (
     <div className="chart-card">
-      <h2 className="chart-title" style={{ marginBottom: 12 }}>🚦 Світлофор команд <span style={{ fontSize: 12, fontWeight: 400, color: "var(--text-muted)" }}>· найгірші зверху · клік → звіт по команді</span></h2>
+      <h2 className="chart-title" style={{ marginBottom: 12 }}>🚦 Світлофор команд <span style={{ fontSize: 12, fontWeight: 400, color: "var(--text-muted)" }}>· найгірші зверху · клік → звіт по команді{compareLabel ? ` · Δ: ${compareLabel}` : ""}</span></h2>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {teams.map((t) => {
           const color = planColor(t.pctPlan);
           const fill = t.pctPlan == null ? 0 : Math.min(100, Math.max(0, t.pctPlan));
-          const dprev = t.factPrev != null ? t.fact - t.factPrev : null;
+          // Δ — like-for-like по датованому потоку (successByTeam), не по received.
+          const dprev = t.flowCur != null && t.flowPrev != null ? t.flowCur - t.flowPrev : null;
           return (
             <button
               key={t.teamId}
@@ -66,7 +69,7 @@ export function TeamsTrafficLight({
                 <span style={{ fontWeight: 600, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.teamName}</span>
                 {dprev != null && (
                   <span style={{ fontSize: 11, color: dprev >= 0 ? "#16a34a" : "#dc2626" }}>
-                    {dprev >= 0 ? "↑" : "↓"} {formatAmount(Math.abs(dprev))} <span style={{ color: "var(--text-muted)" }}>до пор.</span>
+                    {dprev >= 0 ? "↑" : "↓"} {formatAmount(Math.abs(dprev))} <span style={{ color: "var(--text-muted)" }}>дат. потік</span>
                   </span>
                 )}
               </span>
