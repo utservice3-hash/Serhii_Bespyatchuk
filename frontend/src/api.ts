@@ -1681,7 +1681,7 @@ export interface ManagerReport {
   scope: { level: "department" | "team" | "manager"; id: number | null; period: { from: string; to: string; granularity: "month" | "week" }; compareWith: { from: string; to: string } | null };
   revenue: {
     plan: number; fact: number; pctComplete: number | null; remaining: number;
-    projection: { projected: number; projectedPct: number | null; pipelineThisMonth: number; pipelineDeals: number; byPace: number; byPacePct: number | null; elapsedWorkingDays: number; totalWorkingDays: number };
+    projection: { projected: number; projectedPct: number | null; zoneFull: number; zoneDeals: number; dobir: number; byPace: number; byPacePct: number | null; floor: number; floorPct: number | null; elapsedWorkingDays: number; totalWorkingDays: number };
   };
   funnel: MRFunnelBucket[];
   expected: { total: MRBucket; thisMonth: MRBucket; nextMonth: MRBucket; overdue: MRBucket; later: MRBucket; noDate: MRBucket };

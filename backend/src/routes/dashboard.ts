@@ -4259,14 +4259,16 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     ]);
     const ad = sumConv(adsRows, pFrom, pTo), pz = sumConv(pzRows, pFrom, pTo), re = sumConv(reRows, pFrom, pTo);
     const fact = proj.fact; // ЄДИНЕ джерело «факту» (= receivedMoney)
-    // Прогноз = факт + пайплайн «цей місяць» (expected.thisMonth). Додаємо ЛИШЕ для
-    // поточного місяця, що ТРИВАЄ (місячна гранулярність, elapsed<total). Для минулого/
-    // завершеного місяця та тижня — прогноз = факт (пайплайн-снапшот завжди «зараз»,
-    // додавати його до чужого періоду хибно). Факт∩пайплайн диз'юнктні (доведено).
+    // 🔴 ПРОГНОЗ = ФОРМУЛА A (бектест: зміщення −3.9%, MAE 4.6%): факт + ПОВНА грошова
+    // зона (expected.total — усі 5 стадій за СТАТУСОМ, ~65% закривається до кінця міс,
+    // решту добирають угоди з ранніх стадій) + добір (новий бізнес, трейл-3м). Складові
+    // диз'юнктні. Додаємо ЛИШЕ для поточного місяця, що ТРИВАЄ (місячна гранулярність);
+    // минулий/завершений/тиждень → прогноз = факт (зона/добір — «зараз»-величини).
     const monthInProgress = granularity === "month" && proj.elapsedWorkingDays < proj.totalWorkingDays;
-    const pipelineSum = monthInProgress ? expected.thisMonth.sum : 0;
-    const pipelineDeals = monthInProgress ? expected.thisMonth.deals : 0;
-    const projected = fact + pipelineSum;
+    const zoneFull = monthInProgress ? expected.total.sum : 0;
+    const zoneDeals = monthInProgress ? expected.total.deals : 0;
+    const dobir = monthInProgress ? await money.newBusinessDobir({ managerId, teamId }) : 0;
+    const projected = fact + zoneFull + dobir;
     return {
       revenue: {
         plan, fact,
@@ -4275,9 +4277,11 @@ dashboardRouter.get("/manager-report", async (req, res) => {
         projection: {
           projected,
           projectedPct: plan > 0 ? Math.round((projected / plan) * 100) : null,
-          pipelineThisMonth: pipelineSum, pipelineDeals,
+          zoneFull, zoneDeals, dobir,
           byPace: proj.byPace,
           byPacePct: plan > 0 ? Math.round((proj.byPace / plan) * 100) : null,
+          floor: proj.floor,
+          floorPct: plan > 0 ? Math.round((proj.floor / plan) * 100) : null,
           elapsedWorkingDays: proj.elapsedWorkingDays, totalWorkingDays: proj.totalWorkingDays,
         },
       },

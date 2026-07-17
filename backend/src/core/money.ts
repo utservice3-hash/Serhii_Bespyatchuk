@@ -196,23 +196,26 @@ function countWorkingDays(start: Date, end: Date): number {
 export interface RevenueProjection {
   fact: number;             // = receivedMoney (ТА САМА база, що «факт» у план/факті)
   byPace: number;           // «по темпу дня» = факт ÷ минулі роб. дні × усі роб. дні (ЛИШЕ показ)
+  floor: number;            // «підлога» = success×(total/elapsed)+paidOnly (стара модель D; ЛИШЕ показ, як низ)
   elapsedWorkingDays: number;
   totalWorkingDays: number;
 }
 
 /**
  * Р4a — база прогнозу. `fact` = `receivedMoney` (та сама, що план/факт; endpoint
- * бере `projection.fact` як ЄДИНЕ джерело «факту»). `byPace` = наївний run-rate по
- * робочих днях («по темпу дня») — ЛИШЕ для звірки/показу, у прогноз-суму НЕ входить.
- * 🔴 САМ ПРОГНОЗ рахується В РОУТІ (buildPeriod): прогноз = факт + пайплайн «цей
- * місяць» (`expected.thisMonth`, планова дата в поточному місяці, ще не оплачені;
- * НЕ протерміновані, НЕ наступний). Множини факт∩пайплайн диз'юнктні за поточним
- * статусом (142/етап9 vs зона виставлення→очікуємо) — доведено, перетин=0.
- * Період [from,to] — місяць або тиждень.
+ * бере `projection.fact` як ЄДИНЕ джерело «факту»). `byPace` (наївний run-rate по
+ * факту) і `floor` (стара модель success×k+paidOnly) — ЛИШЕ для показу/контексту,
+ * у прогноз-суму НЕ входять.
+ * 🔴 САМ ПРОГНОЗ (Формула A, обрана бектестом — зміщення −3.9%, MAE 4.6%) рахується
+ * В РОУТІ (buildPeriod): прогноз = факт + ПОВНА грошова зона (`expected.total`, усі
+ * угоди 5 стадій за статусом) + добір (`newBusinessDobir`, новий бізнес). Складові
+ * диз'юнктні (доведено). `floor`/`byPace` бектест показав як −46%/під — тому вони
+ * контекст, не прогноз. Період [from,to] — місяць або тиждень.
  */
 export async function revenueProjection(s: MoneyScope): Promise<RevenueProjection> {
-  const recv = await receivedMoney(s);
+  const [succ, recv] = await Promise.all([successMoney(s), receivedMoney(s)]);
   const fact = recv.revenue;
+  const paidOnly = recv.revenue - succ.revenue;
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const start = new Date((s.from ?? todayStr.slice(0, 7) + "-01") + "T00:00:00");
   const end = new Date((s.to ?? todayStr) + "T00:00:00");
@@ -220,7 +223,39 @@ export async function revenueProjection(s: MoneyScope): Promise<RevenueProjectio
   const total = countWorkingDays(start, end);
   const elapsed = countWorkingDays(start, today < end ? today : end);
   const byPace = elapsed > 0 ? Math.round(fact * (total / elapsed)) : Math.round(fact);
-  return { fact: Math.round(fact), byPace, elapsedWorkingDays: elapsed, totalWorkingDays: total };
+  const floor = elapsed > 0 ? Math.round(succ.revenue * (total / elapsed) + paidOnly) : Math.round(fact);
+  return { fact: Math.round(fact), byPace, floor, elapsedWorkingDays: elapsed, totalWorkingDays: total };
+}
+
+/**
+ * Добір на нові угоди (компонент прогнозу, Формула A) — трейлінг-3-місячне середнє
+ * надходжень від угод, СТВОРЕНИХ після поточного дня місяця й ЗАКРИТИХ (142) того ж
+ * місяця. Це «новий бізнес», якого ще нема в зоні (на сьогодні ще не створений) →
+ * disjoint від пайплайну (доведено: pipeline = створені ≤ сьогодні). Без зазирання
+ * вперед — лише ЗАВЕРШЕНІ місяці перед поточним. Скоуп по менеджеру/команді.
+ * cutoff-день = поточний день місяця («дні, що лишились»).
+ */
+export async function newBusinessDobir(s: MoneyScope): Promise<number> {
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const p: unknown[] = [FC_PIPELINES];
+  const conds = [
+    "d.status_id = 142", "d.pipeline_id = ANY($1)", "d.closed_at_kommo IS NOT NULL",
+    `to_char((d.created_at_kommo ${K}),'YYYY-MM') = to_char((d.closed_at_kommo ${K}),'YYYY-MM')`,
+    `extract(day from (d.created_at_kommo ${K})) > extract(day from (now() ${K}))`,
+    `(d.closed_at_kommo ${K})::date >= (date_trunc('month', now() ${K}) - interval '3 months')::date`,
+    `(d.closed_at_kommo ${K})::date < date_trunc('month', now() ${K})::date`,
+  ];
+  if (s.managerId) { p.push(s.managerId); conds.push(`d.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const r = await pool.query<{ ym: string; s: string }>(
+    `SELECT to_char((d.closed_at_kommo ${K}),'YYYY-MM') ym, COALESCE(SUM(d.price),0) s
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE ${conds.join(" AND ")} GROUP BY 1`,
+    p
+  );
+  if (r.rows.length === 0) return 0;
+  const sum = r.rows.reduce((a, x) => a + Number(x.s), 0);
+  return Math.round(sum / r.rows.length); // середнє по наявних завершених місяцях (≤3)
 }
 
 // ───────────────────────── ТИЖНЕВА РОЗБИВКА (Р4a) ─────────────────────────

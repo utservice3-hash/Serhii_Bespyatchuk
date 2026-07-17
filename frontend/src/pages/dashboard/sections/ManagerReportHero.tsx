@@ -29,32 +29,38 @@ export function ManagerReportHero({ revenue, compare }: Pick<ManagerReport, "rev
         <Stat label="Факт" value={uah(revenue.fact)} strong />
         <Stat label="План" value={uah(revenue.plan)} />
         <Stat label="Залишок до плану" value={uah(revenue.remaining)} color={revenue.remaining > 0 ? "#dc2626" : "#16a34a"} />
-        <Stat
-          label={proj.pipelineThisMonth > 0 ? "Прогноз (факт + пайплайн)" : "Прогноз"}
-          value={uah(proj.projected)}
-          sub={
-            proj.pipelineThisMonth > 0
-              ? `${proj.projectedPct != null ? `${proj.projectedPct}% плану · ` : ""}+${uah(proj.pipelineThisMonth)} пайплайн (${proj.pipelineDeals})`
-              : proj.projectedPct != null ? `${proj.projectedPct}% плану` : undefined
-          }
-          color={pctColor(proj.projectedPct)}
-        />
-        {proj.pipelineThisMonth > 0 && (
-          <Stat
-            label={`По темпу дня (${proj.elapsedWorkingDays}/${proj.totalWorkingDays} роб. дн.)`}
-            value={uah(proj.byPace)}
-            sub={`${proj.byPacePct != null ? `${proj.byPacePct}% · ` : ""}для звірки, не в сумі`}
-            color="#94a3b8"
-          />
+        {proj.zoneFull > 0 ? (
+          <>
+            <Stat
+              label="Прогноз місяця"
+              value={uah(proj.projected)}
+              sub={`${proj.projectedPct != null ? `${proj.projectedPct}% плану · ` : ""}коридор ±5%: ${uah(proj.projected * 0.95)} – ${uah(proj.projected * 1.05)}`}
+              color={pctColor(proj.projectedPct)}
+              title={`Модель (бектест 5 міс: зміщення −3.9%, MAE 4.6%, найгірший місяць −14%): факт + повна грошова зона + новий бізнес (трейл 3м). Місяці задньозавантажені — точність ±5% із середини місяця.\nСкладові: факт ${uah(revenue.fact)} + зона ${uah(proj.zoneFull)} (${proj.zoneDeals} угод, ~65% закривається, решту добирають ранні стадії) + добір ${uah(proj.dobir)}.`}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, justifyContent: "center" }}>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                = факт + повна грошова зона {uah(proj.zoneFull)} ({proj.zoneDeals}) + новий бізнес {uah(proj.dobir)}
+              </span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                контекст: підлога (без нових) {uah(proj.floor)}{proj.floorPct != null ? ` · ${proj.floorPct}%` : ""} · по темпу дня ({proj.elapsedWorkingDays}/{proj.totalWorkingDays} роб. дн.) {uah(proj.byPace)}{proj.byPacePct != null ? ` · ${proj.byPacePct}%` : ""}
+              </span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                ⚠️ прогноз бере ПОВНУ зону; картка «Очікування → цей місяць» — лише planned-дату (різні питання)
+              </span>
+            </div>
+          </>
+        ) : (
+          <Stat label="Прогноз" value={uah(proj.projected)} sub={proj.projectedPct != null ? `${proj.projectedPct}% плану` : undefined} color={pctColor(proj.projectedPct)} />
         )}
       </div>
     </div>
   );
 }
 
-function Stat({ label, value, sub, color, strong }: { label: string; value: string; sub?: string; color?: string; strong?: boolean }) {
+function Stat({ label, value, sub, color, strong, title }: { label: string; value: string; sub?: string; color?: string; strong?: boolean; title?: string }) {
   return (
-    <div>
+    <div title={title} style={title ? { cursor: "help" } : undefined}>
       <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{label}</div>
       <div style={{ fontSize: strong ? 24 : 20, fontWeight: strong ? 800 : 700, color: color ?? "var(--text)" }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{sub}</div>}
