@@ -1051,7 +1051,7 @@ export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> 
 // Перевезення завершено 98470988 · Дзвінок після розвантаж. 69716304 · Очікуємо
 // оплату 69716312. + старі 155304 еквіваленти (легасі, ~0 поточних). Раніше було
 // лише 3 (пропущено Авто працює/Перевезення завершено) → зона занижена на ~160 угод.
-const EXPECT_ZONE = [100274340, 69716300, 98470988, 69716304, 69716312, 10937178, 42639144, 42639147, 25044997, 62940068];
+export const EXPECT_ZONE = [100274340, 69716300, 98470988, 69716304, 69716312, 10937178, 42639144, 42639147, 25044997, 62940068];
 
 export interface ExpectedBucket { deals: number; sum: number }
 export interface ExpectedPaymentsByPlanned {

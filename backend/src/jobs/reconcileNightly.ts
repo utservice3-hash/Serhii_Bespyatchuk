@@ -5,6 +5,7 @@ import { reclassifyAdChannel } from "./syncKommo.js";
 import { backfillClientKey } from "./backfillClientKey.js";
 import { withHeavyJobLock } from "./jobLock.js";
 import { sendAdminAlert } from "../bot/notify.js";
+import { checkProjectionAccuracy, PROJECTION_ALERT_PCT } from "../core/projectionCheck.js";
 
 /**
  * КРОК 4 (Звірка) + AUTO-HEAL. Дві точки виклику (див. `index.ts`):
@@ -141,6 +142,30 @@ export async function reconcileNightly(months = 2): Promise<void> {
       `reconcileNightly: ok=${res.ok}, healed=${healed}, integrity=${res.integrity.orphans}, sync_over=${res.rowsOverThreshold.length}, dash_over=${res.dashboardOver.length}, stillMissing=${stillMissing}`
     );
     });
+
+    // Ч.4: 🔁 самоперевірка Формули A прогнозу (стоп-критерій формули). Щоночі,
+    // але фактично РАЗ на місяць (PK ym → ідемпотентно): першої ночі нового місяця
+    // логуємо «прогноз@17 vs реальний фінал» щойно завершеного місяця в
+    // projection_backtest; |зміщення| > PROJECTION_ALERT_PCT → алерт (формула
+    // поплила — ребектест, не мовчазна віра). БЕЗ Kommo (тільки БД) — поза замком.
+    try {
+      const pc = await checkProjectionAccuracy();
+      if (pc?.isNew) {
+        console.log(
+          `projectionCheck: ${pc.ym} forecast@17=${pc.forecast} (fact ${pc.factAt17} + zone ${pc.zoneAt17} + dobir ${pc.dobir}) vs final=${pc.final} → err=${pc.errorPct}%`
+        );
+        if (pc.errorPct != null && Math.abs(pc.errorPct) > PROJECTION_ALERT_PCT) {
+          await sendAdminAlert(
+            `📐 <b>Прогноз (Формула A) поплив за ${pc.ym}</b>: зміщення ${pc.errorPct > 0 ? "+" : ""}${pc.errorPct}% (поріг ±${PROJECTION_ALERT_PCT}%).\n` +
+              `прогноз@17 = ${Math.round(pc.forecast).toLocaleString("uk-UA")} (факт ${Math.round(pc.factAt17).toLocaleString("uk-UA")} + зона ${Math.round(pc.zoneAt17).toLocaleString("uk-UA")} + добір ${Math.round(pc.dobir).toLocaleString("uk-UA")})\n` +
+              `реальний фінал = ${Math.round(pc.final).toLocaleString("uk-UA")}\n` +
+              `Бектест давав MAE 4.6% — формулу треба ребектестити, а не ігнорувати.`
+          ).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.error("projectionCheck failed:", e);
+    }
   } catch (e) {
     console.error("reconcileNightly failed:", e);
     await pool

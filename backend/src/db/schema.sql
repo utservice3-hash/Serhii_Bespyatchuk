@@ -826,3 +826,18 @@ CREATE TABLE IF NOT EXISTS job_locks (
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 🔁 Самоперевірка Формули A прогнозу (стоп-критерій формули): по завершенні
+-- місяця reconcileNightly реконструює «прогноз@17» (та сама методологія, що
+-- бектест: статус-на-T + повна зона + трейл-добір) і порівнює з реальним фіналом.
+-- PK ym → рахується РАЗ на місяць (ідемпотентно). |error_pct| > 10 → Telegram-алерт.
+CREATE TABLE IF NOT EXISTS projection_backtest (
+  ym TEXT PRIMARY KEY,               -- 'YYYY-MM' (завершений місяць)
+  fact_at17 NUMERIC NOT NULL,        -- реконструйований факт на 17-те (142+етап9 по подіях)
+  zone_at17 NUMERIC NOT NULL,        -- повна грошова зона на 17-те (за статусом)
+  dobir NUMERIC NOT NULL,            -- трейл-3м добір (created>17 & closed same month)
+  forecast NUMERIC NOT NULL,         -- fact_at17 + zone_at17 + dobir
+  final NUMERIC NOT NULL,            -- реальний фінал місяця (success по closed_at)
+  error_pct NUMERIC,                 -- (forecast-final)/final×100; NULL якщо final=0
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
