@@ -388,6 +388,8 @@ dashboardRouter.get("/overview", async (req, res) => {
   // неатрибутований борг при адмін-розрізі; скоуп по менеджеру/команді природно
   // виключає null-рядки, тож роль-скоуп не змінюється).
   const receivablesTotalValue = await metrics.receivablesTotal({ managerId, teamId });
+  // Готівкова дебіторка з CRM — ОКРЕМА позначка (НЕ в основному тоталі, який 1:1 з таблицею).
+  const receivablesCashValue = await metrics.receivablesCash({ managerId, teamId });
 
   // Plan (monthly payment_amount targets) prorated to the SELECTED period by
   // day-overlap, so the gauge responds to week/month/quarter just like the
@@ -860,6 +862,7 @@ dashboardRouter.get("/overview", async (req, res) => {
       deals: Number(r.deals),
     })),
     receivablesTotal: receivablesTotalValue,
+    receivablesCash: receivablesCashValue,
     createdLeads: Number(createdLeadsResult.rows[0]?.count ?? 0),
     newClients: Number(newRow?.clients ?? 0),
     newRevenue: Number(newRow?.revenue ?? 0),

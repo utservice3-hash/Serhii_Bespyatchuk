@@ -240,6 +240,10 @@ CREATE TABLE IF NOT EXISTS receivables (
 
 CREATE INDEX IF NOT EXISTS idx_receivables_manager ON receivables(manager_id);
 CREATE INDEX IF NOT EXISTS idx_receivables_client_key ON receivables(client_key);
+-- Джерело рядка: 'sheet' = гугл-таблиця дебіторки (безнал, ДЖЕРЕЛО ПРАВДИ);
+-- 'cash' = готівкові з CRM (insertCashReceivables). Основний тотал дебіторки =
+-- ЛИШЕ 'sheet' (1:1 з таблицею); готівка — окремою позначкою (рішення власника).
+ALTER TABLE receivables ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'sheet';
 
 -- Team-lead notes on receivables. Kept separate from `receivables` because that
 -- table is TRUNCATEd on every Google-Sheet sync; notes are keyed by client_key

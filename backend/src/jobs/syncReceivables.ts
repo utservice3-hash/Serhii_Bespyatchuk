@@ -67,8 +67,8 @@ async function insertCashReceivables(client: PoolClient): Promise<number> {
       : "";
 
     await client.query(
-      `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
-       VALUES ($1, $2, $3, $4, $5, NULL, NULL)`,
+      `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days, source)
+       VALUES ($1, $2, $3, $4, $5, NULL, NULL, 'cash')`,
       [clientKey, cc.label, managerId, managerName, total]
     );
     for (const r of deals.rows) {

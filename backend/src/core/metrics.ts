@@ -778,25 +778,39 @@ export async function funnelCohortHonest(
 // ───────────────────────── ДЕБІТОРКА (знімок, БЕЗ дат) ─────────────────────────
 
 /**
- * Спільний скоуп боргу. 🔴 ЗМІНА ПОВЕДІНКИ (рішення власника 15.07): дебіторка =
- * ПОВНА сума, неатрибутований борг (manager_id NULL) БІЛЬШЕ НЕ ховається. Тому
- * **LEFT JOIN** managers і **БЕЗ** `manager_id IS NOT NULL`. Скоуп по менеджеру/команді
- * природно виключає null-рядки (вони не в жодній команді) → «Без менеджера» видно лише
- * в загальному/адмін-розрізі. Стара логіка (INNER + `IS NOT NULL`) ховала 1.575 млн
- * (гол. ПВК АРСЕНАЛ 1.56 млн) — це знайдений прихований борг, а не помилка core.
- * Тому звіряти core проти ДЖЕРЕЛА (`SUM(receivable_invoices)`), а не проти старої.
- * Джерело `receivables` уже містить і безнал (файл), і готівку (`insertCashReceivables`).
+ * Спільний скоуп боргу. Неатрибутований борг (manager_id NULL) НЕ ховається
+ * (LEFT JOIN, без `IS NOT NULL`) — «Без менеджера» (гол. ПВК АРСЕНАЛ) Є в
+ * гугл-таблиці, лише немапнутий у нас, тож лишається в тоталі.
+ * 🔴 ЗМІНА (рішення власника): основний тотал дебіторки = ЛИШЕ `source='sheet'`
+ * (1:1 з гугл-таблицею — ДЖЕРЕЛОМ ПРАВДИ). Готівка з CRM (`source='cash'`,
+ * insertCashReceivables) виключена з тоталу — вона окремою позначкою
+ * (`receivablesCash`), бо її НЕМАЄ в безнал-таблиці і вона роздувала дебіторку
+ * над джерелом (доведено: dashboard − sheet = рівно готівка МГЕР 188 200).
  */
 function debtWhere(s: SnapshotScope): { where: string; params: unknown[] } {
   const params: unknown[] = [];
-  const conds: string[] = [];
+  const conds: string[] = ["r.source = 'sheet'"];
   if (s.managerId) { params.push(s.managerId); conds.push(`r.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  return { where: conds.length ? `WHERE ${conds.join(" AND ")}` : "", params };
+  return { where: `WHERE ${conds.join(" AND ")}`, params };
 }
 
-/** Загальний борг «станом на зараз» = ПОВНИЙ `SUM(receivables.amount)` (безнал +
- *  готівка + неатрибутований). = `SUM(receivable_invoices)`. */
+/** Готівкова дебіторка з CRM (`source='cash'`) — ОКРЕМА позначка, НЕ в основному
+ *  тоталі (той = 1:1 з безнал-таблицею). */
+export async function receivablesCash(s: SnapshotScope): Promise<number> {
+  const params: unknown[] = [];
+  const conds: string[] = ["r.source = 'cash'"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`r.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ total: string }>(
+    `SELECT COALESCE(SUM(r.amount), 0) AS total FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id WHERE ${conds.join(" AND ")}`,
+    params
+  );
+  return Number(r.rows[0]?.total ?? 0);
+}
+
+/** Загальний борг «станом на зараз» = `SUM(receivables.amount)` ЛИШЕ безнал-таблиці
+ *  (`source='sheet'`, вкл. «Без менеджера») = тотал гугл-таблиці 1:1. Готівка окремо. */
 export async function receivablesTotal(s: SnapshotScope): Promise<number> {
   const { where, params } = debtWhere(s);
   const r = await pool.query<{ total: string }>(
