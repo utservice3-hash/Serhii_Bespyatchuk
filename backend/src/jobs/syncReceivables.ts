@@ -108,6 +108,20 @@ function parseInvoice(cell: string | undefined): { no: string | null; date: stri
 }
 
 /**
+ * Парсить грошову суму з комірки бухгалтерського експорту.
+ * ⚠️ Кома — це ДЕСЯТКОВИЙ роздільник копійок ("26073,48" = 26 073,48 грн), пробіл/nbsp —
+ * розряди тисяч. Старий код робив `.replace(/[^\d.-]/g,"")` — стирав кому як «сміття»,
+ * тож "26073,48" → "2607348" → сума роздувалась РІВНО ×100 (Укрпошта: 2,68 млн замість
+ * ~103 тис, +30% до всієї дебіторки). Тому: прибрати пробіли, кому → крапка, далі число.
+ * НЕ повертати стрип коми.
+ */
+function parseAmount(raw: string | undefined): number {
+  if (!raw) return NaN;
+  const cleaned = raw.replace(/[\s ]/g, "").replace(",", ".").replace(/[^\d.-]/g, "");
+  return Number(cleaned);
+}
+
+/**
  * The sheet has no header row. Columns observed: 0 Контрагент, 1 Счет,
  * 2 "<Менеджер>, Загружен из amoCRM по сделке №...", 3 Сумма, 4 ЕДРПОУ,
  * 5 Сервіс (url), 6 (empty), 7 Пометка.
@@ -118,7 +132,7 @@ function parseRow(cells: string[]): ReceivableRow | null {
   const rawAmount = cells[3]?.trim();
   if (!rawClientName || !rawAmount) return null;
 
-  const amount = Number(rawAmount.replace(/[^\d.-]/g, ""));
+  const amount = parseAmount(rawAmount);
   if (!Number.isFinite(amount) || amount === 0) return null;
 
   const managerNameRaw = managerCell?.split(",")[0]?.trim() ?? "";
@@ -154,7 +168,7 @@ function parseLimitRow(cells: string[]): { clientKey: string; limit: ClientLimit
   const clientKey = normalizeClientName(rawClientName);
   if (!clientKey) return null;
 
-  const amount = Number(cells[2]?.replace(/[^\d.-]/g, "")) || 0;
+  const amount = parseAmount(cells[2]) || 0;
   const limitDays = cells[5]?.trim() ? Number(cells[5]) : null;
   const overdueDays = cells[6]?.trim() ? Number(cells[6]) : null;
 
