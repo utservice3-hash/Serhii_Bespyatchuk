@@ -1072,3 +1072,14 @@ export async function expectedPaymentsByPlanned(s: SnapshotScope): Promise<Expec
     noDate: b("nodate_n", "nodate_s"),
   };
 }
+
+// ───────────────────────── ЦІЛЬОВІ КОНВЕРСІЇ (Р4a) ─────────────────────────
+
+/**
+ * Р4a — цільові конверсії (рішення власника; задокументовано в
+ * CONVERSION_RULES.md §8). Дефолти в коді; per-manager override — пізніше.
+ *   ads          — РНК, конверсія реклами: 15%
+ *   leadgen      — лідген (Продзвін/Реактивація won): 7-8% → ціль 7.5%
+ *   managerLeadgenWon — менеджер: лід від лідогена → успіх: 10%
+ */
+export const CONVERSION_TARGETS = { ads: 15, leadgen: 7.5, managerLeadgenWon: 10 } as const;

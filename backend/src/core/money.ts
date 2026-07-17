@@ -179,3 +179,105 @@ export async function awaitingNowSnapshot(s: MoneyScope): Promise<{ deals: numbe
   const byTeam = r.rows.map((x) => ({ teamId: x.team_id, teamName: x.team_name, revenue: Number(x.revenue), deals: Number(x.deals) }));
   return { deals: byTeam.reduce((a, b) => a + b.deals, 0), revenue: byTeam.reduce((a, b) => a + b.revenue, 0), byTeam };
 }
+
+// ───────────────────────── ПРОГНОЗ ВИРУЧКИ (Р4a) ─────────────────────────
+
+function countWorkingDays(start: Date, end: Date): number {
+  let n = 0;
+  const d = new Date(start);
+  while (d <= end) {
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) n++;
+    d.setDate(d.getDate() + 1);
+  }
+  return n;
+}
+
+export interface RevenueProjection {
+  fact: number;             // = receivedMoney (ТА САМА база, що «факт» у план/факті)
+  projected: number;        // екстраполяція потоку (success) по робочих днях + снапшот (paidOnly)
+  elapsedWorkingDays: number;
+  totalWorkingDays: number;
+}
+
+/**
+ * Р4a — прогноз виручки. База «факту» — `receivedMoney` (та сама, що план/факт;
+ * тому endpoint бере `projection.fact` як ЄДИНЕ джерело «факту», без розбіжності).
+ * Прогноз = потік (`successMoney`, датований) екстрапольований по робочих днях
+ * періоду + снапшот (`paidOnly` = received − success, недатований, уже «в руках»).
+ * Коли період завершений (elapsed=total) → projected === fact (немає чого
+ * екстраполювати). Період [from,to] — місяць або тиждень.
+ */
+export async function revenueProjection(s: MoneyScope): Promise<RevenueProjection> {
+  const [succ, recv] = await Promise.all([successMoney(s), receivedMoney(s)]);
+  const fact = recv.revenue;
+  const paidOnly = recv.revenue - succ.revenue;
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const start = new Date((s.from ?? todayStr.slice(0, 7) + "-01") + "T00:00:00");
+  const end = new Date((s.to ?? todayStr) + "T00:00:00");
+  const today = new Date(todayStr + "T00:00:00");
+  const total = countWorkingDays(start, end);
+  const elapsed = countWorkingDays(start, today < end ? today : end);
+  const projected = elapsed > 0 ? Math.round(succ.revenue * (total / elapsed) + paidOnly) : Math.round(fact);
+  return { fact: Math.round(fact), projected, elapsedWorkingDays: elapsed, totalWorkingDays: total };
+}
+
+// ───────────────────────── ТИЖНЕВА РОЗБИВКА (Р4a) ─────────────────────────
+
+export interface WeekBreakdownRow {
+  label: string; from: string; to: string;   // YYYY-MM-DD
+  plan: number; fact: number; pct: number | null; remaining: number;
+  status: "past" | "current" | "future";
+}
+
+/**
+ * Р4a — динамічна тижнева розбивка місяця (правило KVP): фіксовані 7-денні
+ * блоки від 1-го ([1-7],[8-14],[15-21],[22-28],[29-кінець]). Тижневий ФАКТ —
+ * `successMoney` (датований по closed_at; снапшот paidOnly недатований, тому в
+ * тижні НЕ входить — тижнева база = success). ПЛАН перерозкидається: залишок
+ * місячного плану (мінус факт завершених тижнів) ділиться на РОБОЧІ ДНІ ще не
+ * завершених тижнів. Минулі тижні — базовий план (monthPlan × wd/totalWd) для %.
+ * `s.from` має бути 1-м числом місяця (YYYY-MM-01).
+ */
+export async function weeklyBreakdown(s: MoneyScope, monthPlan: number): Promise<WeekBreakdownRow[]> {
+  const monthStr = (s.from ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" })).slice(0, 7);
+  const [y, mo] = monthStr.split("-").map(Number);
+  const daysInMonth = new Date(y, mo, 0).getDate();
+  const wdBetween = (from: number, to: number): number => {
+    let n = 0;
+    for (let d = from; d <= to; d++) { const dow = new Date(y, mo - 1, d).getDay(); if (dow !== 0 && dow !== 6) n++; }
+    return n;
+  };
+  const totalWd = wdBetween(1, daysInMonth);
+  const starts = [1, 8, 15, 22, 29].filter((s2) => s2 <= daysInMonth);
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const todayDay = todayStr.slice(0, 7) === monthStr ? Number(todayStr.slice(8, 10)) : (todayStr.slice(0, 7) > monthStr ? 99 : 0);
+  const pad = (d: number) => `${monthStr}-${String(d).padStart(2, "0")}`;
+
+  const weeks = starts.map((from, i) => {
+    const to = Math.min(from + 6, daysInMonth);
+    const status: WeekBreakdownRow["status"] = to < todayDay ? "past" : from > todayDay ? "future" : "current";
+    return { i, from, to, wd: wdBetween(from, to), status };
+  });
+
+  // ФАКТ по тижнях — датований success.
+  const facts = await Promise.all(
+    weeks.map((w) => successMoney({ ...s, from: pad(w.from), to: pad(w.to) }).then((r) => r.revenue))
+  );
+
+  const factCompleted = weeks.reduce((acc, w, i) => acc + (w.status === "past" ? facts[i] : 0), 0);
+  const remainingPlan = Math.max(0, monthPlan - factCompleted);
+  const remainingWd = weeks.filter((w) => w.status !== "past").reduce((a, w) => a + w.wd, 0);
+
+  return weeks.map((w, i) => {
+    const fact = Math.round(facts[i]);
+    const plan = w.status === "past"
+      ? Math.round(totalWd > 0 ? monthPlan * (w.wd / totalWd) : 0)
+      : Math.round(remainingWd > 0 ? remainingPlan * (w.wd / remainingWd) : 0);
+    return {
+      label: `Тиждень ${w.i + 1}`, from: pad(w.from), to: pad(w.to),
+      plan, fact, pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
+      remaining: Math.max(0, plan - fact), status: w.status,
+    };
+  });
+}

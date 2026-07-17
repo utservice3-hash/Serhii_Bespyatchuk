@@ -4172,3 +4172,161 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
     },
   });
 });
+
+// ───────────────────────── Р4a: ЄДИНИЙ ЗВІТ (manager-report) ─────────────────────────
+
+/**
+ * Р4a — ЄДИНИЙ звіт (менеджер / тімлід / КВП) з фільтром рівня. Чистий шар
+ * ЗБІРКИ: усі секції з наявних core-функцій (money/metrics), сам майже нічого не
+ * рахує. scope-резолвер жорстко обмежує за роллю (403 при виході за межі).
+ * Легасі (/report,/overview,/kvp-extra) не чіпаємо — приберемо окремим кроком.
+ */
+dashboardRouter.get("/manager-report", async (req, res) => {
+  const auth = req.auth!;
+  const reqLevel = (String(req.query.level ?? "department")) as "department" | "team" | "manager";
+  const reqId = req.query.id ? Number(req.query.id) : null;
+
+  // ── єдиний scope-резолвер + роль-обмеження ──
+  let level: "department" | "team" | "manager";
+  let managerId: number | null = null;
+  let teamId: number | null = null;
+  if (auth.role === "manager") {
+    if (reqLevel !== "manager" || (reqId && reqId !== auth.managerId))
+      return res.status(403).json({ error: "Менеджер бачить лише свій звіт" });
+    level = "manager"; managerId = auth.managerId;
+  } else if (auth.role === "team_lead") {
+    if (reqLevel === "manager") {
+      if (!reqId) return res.status(400).json({ error: "id менеджера обовʼязковий" });
+      const chk = await pool.query(`SELECT 1 FROM managers WHERE id = $1 AND team_id = $2`, [reqId, auth.teamId]);
+      if (!chk.rowCount) return res.status(403).json({ error: "Менеджер не з вашої команди" });
+      level = "manager"; managerId = reqId;
+    } else {
+      level = "team"; teamId = auth.teamId;
+    }
+  } else {
+    level = reqLevel;
+    if (level === "manager") { if (!reqId) return res.status(400).json({ error: "id обовʼязковий" }); managerId = reqId; }
+    else if (level === "team") { if (!reqId) return res.status(400).json({ error: "id обовʼязковий" }); teamId = reqId; }
+  }
+
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+  if (!from || !to) return res.status(400).json({ error: "from/to обовʼязкові" });
+  const granularity: "month" | "week" = req.query.granularity === "week" ? "week" : "month";
+  const compareFrom = (req.query.compareFrom as string) ?? null;
+  const compareTo = (req.query.compareTo as string) ?? null;
+  const { adSources } = await getSettings();
+
+  const monthStartOf = (d: string) => d.slice(0, 7) + "-01";
+  const planScopeSql = (p: unknown[], mgrCol = "p.manager_id", teamCol = "mp.team_id") => {
+    const sc: string[] = [];
+    if (managerId) { p.push(managerId); sc.push(`${mgrCol} = $${p.length}`); }
+    if (teamId) { p.push(teamId); sc.push(`${teamCol} = $${p.length}`); }
+    return sc.length ? "AND " + sc.join(" AND ") : "";
+  };
+  async function fetchPlan(mFrom: string): Promise<number> {
+    const p: unknown[] = [monthStartOf(mFrom)];
+    const r = await pool.query<{ s: string }>(
+      `SELECT COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers mp ON mp.id = p.manager_id
+        WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date ${planScopeSql(p)}`, p);
+    return Math.round(Number(r.rows[0]?.s ?? 0));
+  }
+  async function fetchCarryover(mFrom: string): Promise<{ amount: number; deals: number }> {
+    const p: unknown[] = [monthStartOf(mFrom)];
+    const r = await pool.query<{ a: string; d: string }>(
+      `SELECT COALESCE(SUM(cm.amount),0) a, COALESCE(SUM(cm.deals),0) d
+         FROM monthly_carryover_mgr cm JOIN managers m ON m.id = cm.manager_id
+        WHERE cm.month = $1::date ${planScopeSql(p, "cm.manager_id", "m.team_id")}`, p);
+    return { amount: Number(r.rows[0]?.a ?? 0), deals: Number(r.rows[0]?.d ?? 0) };
+  }
+
+  const T = metrics.CONVERSION_TARGETS;
+  const vs = (v: number | null, target: number) => (v == null ? null : Math.round((v - target) * 10) / 10);
+
+  async function buildPeriod(pFrom: string, pTo: string) {
+    const [proj, plan, funnel, expected, adsRows, pzRows, reRows, carry] = await Promise.all([
+      money.revenueProjection({ from: pFrom, to: pTo, managerId, teamId }),
+      fetchPlan(pFrom),
+      metrics.funnelCohortHonest({ from: pFrom, to: pTo, managerId, teamId }, granularity),
+      metrics.expectedPaymentsByPlanned({ managerId, teamId }),
+      metrics.conversionAdsByMonth({ managerId, teamId }, adSources),
+      metrics.conversionProdzvinByMonth({ managerId, teamId }),
+      metrics.conversionReactivationByMonth({ managerId, teamId }),
+      fetchCarryover(pFrom),
+    ]);
+    const ad = sumConv(adsRows, pFrom, pTo), pz = sumConv(pzRows, pFrom, pTo), re = sumConv(reRows, pFrom, pTo);
+    const fact = proj.fact; // ЄДИНЕ джерело «факту» (= receivedMoney; = база прогнозу — збігаються за побудовою)
+    return {
+      revenue: {
+        plan, fact,
+        pctComplete: plan > 0 ? Math.round((fact / plan) * 100) : null,
+        remaining: Math.max(0, plan - fact),
+        projection: {
+          projected: proj.projected,
+          projectedPct: plan > 0 ? Math.round((proj.projected / plan) * 100) : null,
+          elapsedWorkingDays: proj.elapsedWorkingDays, totalWorkingDays: proj.totalWorkingDays,
+        },
+      },
+      funnel,
+      expected: { thisMonth: expected.thisMonth, nextMonth: expected.nextMonth, overdue: expected.overdue },
+      conversions: {
+        ads: { cohort: ad.wonCohort, period: ad.wonPeriod, entered: ad.entered, mature: ad.mature, target: T.ads, vsTarget: vs(ad.wonCohort, T.ads) },
+        prodzvin: { won: pz.wonCohort, handoff: pz.handoffCohort, entered: pz.entered, mature: pz.mature, target: T.leadgen, vsTarget: vs(pz.wonCohort, T.leadgen) },
+        reactivation: { won: re.wonCohort, handoff: re.handoffCohort, entered: re.entered, mature: re.mature, target: T.leadgen, vsTarget: vs(re.wonCohort, T.leadgen) },
+      },
+      carryover: carry,
+    };
+  }
+
+  const current = await buildPeriod(from, to);
+  const compareData = compareFrom && compareTo ? await buildPeriod(compareFrom, compareTo) : null;
+
+  // Тижнева розбивка — по місяцю поточного періоду.
+  const weekly = await money.weeklyBreakdown({ from: monthStartOf(from), managerId, teamId }, current.revenue.plan);
+
+  // Світлофор команд — лише на рівні department (найгірші зверху).
+  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number }[] | undefined;
+  if (level === "department") {
+    const [facts, plansRes] = await Promise.all([
+      money.receivedByTeam({ from, to }),
+      pool.query<{ team_id: number; s: string }>(
+        `SELECT mp.team_id, COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers mp ON mp.id = p.manager_id
+          WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date GROUP BY mp.team_id`, [monthStartOf(from)]),
+    ]);
+    const planByTeam = new Map(plansRes.rows.map((r) => [r.team_id, Math.round(Number(r.s))]));
+    teams = facts.filter((t) => t.teamId != null).map((t) => {
+      const plan = planByTeam.get(t.teamId) ?? 0;
+      const fact = Math.round(t.revenue);
+      return { teamId: t.teamId, teamName: t.teamName, plan, fact, pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact) };
+    }).sort((a, b) => (a.pctPlan ?? 999) - (b.pctPlan ?? 999)); // найгірші зверху
+  }
+
+  // Δ до compareWith — по ключових скалярах; для когортних — maturityMismatch.
+  const delta = (cur: number | null, prev: number | null) => {
+    if (cur == null || prev == null) return { current: cur, previous: prev, delta: null, deltaPct: null };
+    const d = Math.round((cur - prev) * 10) / 10;
+    return { current: cur, previous: prev, delta: d, deltaPct: prev !== 0 ? Math.round((d / Math.abs(prev)) * 1000) / 10 : null };
+  };
+  let compare: Record<string, unknown> | null = null;
+  if (compareData) {
+    const cf = (rows: metrics.FunnelHonestRow[]) => rows[0]?.pct?.paid ?? null;
+    compare = {
+      revenueFact: delta(current.revenue.fact, compareData.revenue.fact),
+      revenuePctComplete: delta(current.revenue.pctComplete, compareData.revenue.pctComplete),
+      funnelPaidPct: { ...delta(cf(current.funnel), cf(compareData.funnel)), maturityMismatch: current.funnel[0]?.mature === false },
+      adsCohort: { ...delta(current.conversions.ads.cohort, compareData.conversions.ads.cohort), maturityMismatch: current.conversions.ads.mature === false },
+      prodzvinWon: { ...delta(current.conversions.prodzvin.won, compareData.conversions.prodzvin.won), maturityMismatch: current.conversions.prodzvin.mature === false },
+      reactivationWon: { ...delta(current.conversions.reactivation.won, compareData.conversions.reactivation.won), maturityMismatch: current.conversions.reactivation.mature === false },
+      expectedThisMonth: delta(current.expected.thisMonth.sum, compareData.expected.thisMonth.sum),
+      expectedOverdue: delta(current.expected.overdue.sum, compareData.expected.overdue.sum),
+    };
+  }
+
+  res.json({
+    scope: { level, id: managerId ?? teamId ?? null, period: { from, to, granularity }, compareWith: compareFrom && compareTo ? { from: compareFrom, to: compareTo } : null },
+    ...current,
+    weekly,
+    ...(teams ? { teams } : {}),
+    compare,
+  });
+});
