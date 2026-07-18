@@ -677,14 +677,21 @@ export function ReportSection({
       ) : (
         <>
           {s && (s.plan > 0 || s.revenue > 0 || s.expected > 0) && (() => {
-            // Плитка план/факт зі шкалою: оплачено (зелений) + очікувані (коричневий)
-            // на тлі плану; сірим — залишок. Показник кожен окремим кольором.
-            const paid = s.revenue, exp = s.expected, plan = s.plan;
-            const base = Math.max(plan, paid + exp, 1);
+            // Смуга План/Факт: оплачено (зелений) + грошова зона (коричневий) + добір
+            // (штрихований — модельований) на тлі плану. «Прогноз» = summary.projection
+            // (= Огляд buildProjection, адитивно), НЕ paid+expected. Зона/добір показуємо
+            // лише коли прогноз дивиться вперед (активний місяць): forward = projection − paid.
+            const paid = s.revenue, zone = s.expected, plan = s.plan, projection = s.projection;
+            const forward = Math.max(0, projection - paid);   // зона+добір (0 для минулого місяця)
+            const zoneSeg = Math.min(zone, forward);
+            const dobirSeg = Math.max(0, forward - zoneSeg);
+            const base = Math.max(plan, projection, 1);
             const pctPaid = Math.round((paid / base) * 100);
-            const pctExp = Math.round((exp / base) * 100);
+            const pctZone = Math.round((zoneSeg / base) * 100);
+            const pctDobir = Math.round((dobirSeg / base) * 100);
             const planPct = plan > 0 ? Math.round((paid / plan) * 100) : null;
-            const gap = plan > 0 ? Math.max(0, plan - paid - exp) : 0;
+            const gap = plan > 0 ? Math.max(0, plan - projection) : 0;
+            const dobirStripe = "repeating-linear-gradient(45deg,#d9a441,#d9a441 5px,#f0cd85 5px,#f0cd85 10px)";
             const who = reportManagerId ? (managerOptions.find((m) => m.id === Number(reportManagerId))?.name ?? "менеджер")
               : reportTeamId ? (teams.find((t) => t.id === Number(reportTeamId))?.name ?? "команда") : "усі команди";
             const pc = planPct == null ? "var(--text-muted)" : planPct >= 100 ? "#16a34a" : planPct >= 70 ? "#d97706" : "#dc2626";
@@ -696,14 +703,16 @@ export function ReportSection({
                 </div>
                 <div style={{ display: "flex", height: 26, borderRadius: 8, overflow: "hidden", background: "var(--border)", margin: "6px 0 8px" }}>
                   <div style={{ width: `${pctPaid}%`, background: "#16a34a" }} title={`Оплачено: ${formatAmount(paid)}`} />
-                  <div style={{ width: `${pctExp}%`, background: "#b45309" }} title={`Очікувані: ${formatAmount(exp)}`} />
+                  <div style={{ width: `${pctZone}%`, background: "#b45309" }} title={`Очікування (грошова зона): ${formatAmount(zoneSeg)}`} />
+                  <div style={{ width: `${pctDobir}%`, background: dobirStripe }} title={`Добір (модельований, історична частка): ${formatAmount(dobirSeg)}`} />
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 16, fontSize: 13 }}>
                   <span><span style={{ color: "#16a34a", fontWeight: 700 }}>■</span> Оплачено: <b>{formatAmount(paid)}</b></span>
-                  <span><span style={{ color: "#b45309", fontWeight: 700 }}>■</span> Очікувані: <b>{formatAmount(exp)}</b></span>
+                  <span><span style={{ color: "#b45309", fontWeight: 700 }}>■</span> Очікування (зона): <b>{formatAmount(zoneSeg)}</b></span>
+                  {dobirSeg > 0 && <span title="Модельована історична частка нового бізнесу за 3 міс — НЕ живий пайплайн менеджера"><span style={{ color: "#d9a441", fontWeight: 700 }}>▨</span> Добір (модельований): <b>{formatAmount(dobirSeg)}</b></span>}
                   {plan > 0 && <span><span style={{ color: "var(--text-muted)", fontWeight: 700 }}>■</span> Залишок до плану: <b>{formatAmount(gap)}</b></span>}
                   {plan > 0 && <span style={{ color: "var(--text-muted)" }}>План: <b>{formatAmount(plan)}</b></span>}
-                  <span style={{ color: "var(--text-muted)" }}>Прогноз (оплачено+очікувані): <b>{formatAmount(paid + exp)}</b></span>
+                  <span style={{ color: "var(--text-muted)" }} title="Факт + грошова зона + модельований добір (історична частка), = прогноз Огляду">Прогноз: <b>{formatAmount(projection)}</b></span>
                 </div>
               </div>
             );
@@ -933,7 +942,8 @@ export function ReportSection({
                     <th>Відпр. авто</th>
                     <th>Сума відпр.</th>
                     <th>Оплата отр. ₴</th>
-                    <th title="Виставлені рахунки, що очікують оплати">Очікування ₴</th>
+                    <th title="Грошова зона (5 стадій core, знімок «зараз») — очікувані надходження">Очікування ₴</th>
+                    <th title="Факт + грошова зона + модельований добір (історична частка нового бізнесу за 3 міс, НЕ живий пайплайн). Σ менеджерів = прогноз відділу.">Прогноз ₴</th>
                     <th>Успішно ₴</th>
                     <th>Успішно, шт</th>
                     <th>Сер. чек</th>
@@ -958,6 +968,7 @@ export function ReportSection({
                         <td>{formatAmount(m.dispatchedSum)}</td>
                         <td>{formatAmount(m.paymentReceived)}</td>
                         <td style={{ color: "#d97706", fontWeight: 600 }}>{formatAmount(m.expected)}</td>
+                        <td style={{ color: "#7c3aed", fontWeight: 700 }} title={m.projection > fact ? "факт+зона+добір (модельований)" : "= факт (місяць не активний або без прогнозу вперед)"}>{formatAmount(m.projection)}</td>
                         <td style={{ fontWeight: 600 }}>{formatAmount(m.successRevenue)}</td>
                         <td>{m.successDeals}</td>
                         <td>{formatAmountFull(m.avgCheck)}</td>
