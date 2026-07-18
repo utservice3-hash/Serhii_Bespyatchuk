@@ -2661,13 +2661,19 @@ dashboardRouter.get("/report", async (req, res) => {
   const adPriceVoiced = Number(ftRes.rows[0]?.voiced ?? 0);
   const adFirstTouchAnalyzed = Number(ftRes.rows[0]?.analyzed ?? 0);
 
-  // Per-manager гроші — анкер+дедуп (core/money.ts). success=142; paidOnly=етап 9
-  // без 142; expected=етап 8. Сума менеджерів = received команди (consistency).
-  const [succByMgrAgg, paidByMgrAgg, expByMgrAgg] = await Promise.all([
+  // Per-manager гроші — анкер+дедуп (core/money.ts). success=142; paidOnly=етап 9 без 142.
+  // 🔴 expected = ЗОНА (expectedPaymentsByPlanned) по менеджеру — НЕ вузький etap-8 (як
+  // Огляд/Звіт 2.0). dobir = декомпозований по історичній частці. scopeProj — для
+  // monthInProgress + звірки Σ = buildProjection(scope). Усе адитивне: Σ мгр = команда = відділ.
+  const [succByMgrAgg, paidByMgrAgg, zoneByMgr, dobirByMgr, scopeProj] = await Promise.all([
     money.successByMgr(reportScope),
     money.paidOnlyByMgr(reportScope),
-    money.expectedByMgr(reportScope),
+    metrics.expectedZoneByScope({ managerId, teamId }, "manager"),
+    money.dobirByManager({ managerId, teamId }),
+    metrics.buildProjection({ from, to, managerId, teamId, granularity }),
   ]);
+  const zoneMap = new Map(zoneByMgr.map((r) => [r.id, r.sum]));
+  const dobirMap = new Map(dobirByMgr.map((r) => [r.managerId, r.dobir]));
 
   // Передані заявки per manager (period) — з «Реєстру» лідоген-бота: один лід =
   // один вхід у «Нова заявка від лідогенератора», DISTINCT lead_id за період.
@@ -2695,12 +2701,12 @@ dashboardRouter.get("/report", async (req, res) => {
     managerId: number; name: string;
     adLeads: number; quotes: number; dispatched: number; dispatchedSum: number;
     successRevenue: number; successDeals: number; paymentReceived: number;
-    transfers: number; carryover: number; carryoverDeals: number; plan: number; expected: number;
+    transfers: number; carryover: number; carryoverDeals: number; plan: number; expected: number; projection: number;
   };
   const scoreMap = new Map<number, Score>();
   const sc = (id: number, name = ""): Score => {
     let e = scoreMap.get(id);
-    if (!e) { e = { managerId: id, name, adLeads: 0, quotes: 0, dispatched: 0, dispatchedSum: 0, successRevenue: 0, successDeals: 0, paymentReceived: 0, transfers: 0, carryover: 0, carryoverDeals: 0, plan: 0, expected: 0 }; scoreMap.set(id, e); }
+    if (!e) { e = { managerId: id, name, adLeads: 0, quotes: 0, dispatched: 0, dispatchedSum: 0, successRevenue: 0, successDeals: 0, paymentReceived: 0, transfers: 0, carryover: 0, carryoverDeals: 0, plan: 0, expected: 0, projection: 0 }; scoreMap.set(id, e); }
     if (name) e.name = name;
     return e;
   };
@@ -2712,9 +2718,19 @@ dashboardRouter.get("/report", async (req, res) => {
     e.dispatched = r.deals; e.dispatchedSum = r.revenue;
   }
   for (const r of paidByMgrAgg) sc(r.managerId).paymentReceived = r.revenue;
-  for (const r of expByMgrAgg) sc(r.managerId).expected = r.revenue;
+  // A: expected = ЗОНА по менеджеру. Заводимо рядок і для zone/dobir-only менеджерів
+  // (щоб не випадали з декомпозиції — Σ мгр має = відділ).
+  for (const [id, zone] of zoneMap) sc(id).expected = zone;
+  for (const [id] of dobirMap) sc(id);
   for (const r of transfByMgr.rows) sc(r.id).transfers = Number(r.c);
   for (const r of carryByMgr) { const e = sc(r.managerId); e.carryover = r.amount; e.carryoverDeals = r.deals; }
+  // B: projection_m = факт(received) + зона + добір — ЛИШЕ коли місяць триває (як buildProjection);
+  // інакше = факт. Σ мгр = buildProjection(scope).projected (добір-частка адитивна).
+  const projMonthInProgress = scopeProj.monthInProgress;
+  for (const e of scoreMap.values()) {
+    const factM = e.successRevenue + e.paymentReceived;
+    e.projection = projMonthInProgress ? factM + e.expected + (dobirMap.get(e.managerId) ?? 0) : factM;
+  }
   // Monthly payment_amount plan per manager (for the План/Факт drill-down).
   const planMonthR = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
   const planScoreP: unknown[] = [planMonthR];
@@ -2749,7 +2765,8 @@ dashboardRouter.get("/report", async (req, res) => {
     dispatched: sumK("dispatched"), dispatchedSum: sumK("dispatchedSum"),
     transfers: sumK("transfers"),
     carryover: sumK("carryover"), carryoverDeals: sumK("carryoverDeals"),
-    expected: sumK("expected"),
+    expected: sumK("expected"),        // A: зона (Σ мгр = expectedPaymentsByPlanned.total)
+    projection: sumK("projection"),    // B: декомпозований прогноз (Σ мгр = buildProjection.projected)
     plan: sumK("plan"), // сума місячних планів виручки в скоупі (для плитки план/факт)
   };
 
@@ -2763,7 +2780,9 @@ dashboardRouter.get("/report", async (req, res) => {
   const byManager = managerId
     ? []
     : [...scoreMap.values()]
-        .filter((e) => e.successRevenue > 0 || e.dispatched > 0 || e.quotes > 0 || e.paymentReceived > 0 || e.transfers > 0)
+        // Включаємо й zone/dobir/projection-only менеджерів (напр. teamless) — щоб рядок
+        // НЕ випадав мовчки й Σ видимих = summary (декомпозиція повна).
+        .filter((e) => e.successRevenue > 0 || e.dispatched > 0 || e.quotes > 0 || e.paymentReceived > 0 || e.transfers > 0 || e.expected > 0 || e.projection > 0)
         .map((e) => {
           const ac = adConvByMgr.get(e.managerId);
           return {

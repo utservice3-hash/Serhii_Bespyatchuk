@@ -859,7 +859,8 @@ export interface ReportData {
     transfers: number;
     carryover: number;
     carryoverDeals: number;
-    expected: number;
+    expected: number;      // грошова зона (expectedPaymentsByPlanned), Σ мгр = відділ
+    projection: number;    // декомпозований прогноз (факт+зона+добір), Σ мгр = відділ
     plan: number;
   };
   byPeriod: { period: string; revenue: number; deals: number; created: number; avgCheck: number }[];
@@ -878,7 +879,8 @@ export interface ReportData {
     carryoverDeals: number;
     avgCheck: number;
     plan: number;
-    expected: number;
+    expected: number;      // грошова зона по менеджеру
+    projection: number;    // декомпозований прогноз по менеджеру
     conversion: number | null;    // null → «—» (нерекламний менеджер / entered<10)
     conversionEntered: number;
     conversionBase: string;

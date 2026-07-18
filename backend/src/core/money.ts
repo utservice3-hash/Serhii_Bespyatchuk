@@ -258,6 +258,43 @@ export async function newBusinessDobir(s: MoneyScope): Promise<number> {
   return Math.round(sum / r.rows.length); // середнє по наявних завершених місяцях (≤3)
 }
 
+export interface DobirRow { managerId: number; dobir: number }
+
+/**
+ * Добір (Формула A) ДЕКОМПОЗОВАНИЙ на менеджерів за ІСТОРИЧНОЮ ЧАСТКОЮ нового бізнесу
+ * (рішення власника). Канонічний добір рахується на рівні ВІДДІЛУ (`newBusinessDobir`);
+ * вага менеджера = його raw-новий-бізнес(трейл-3м) ÷ raw-відділу. `dobir_m = dobir_відділу
+ * × вага_m` → Σ менеджерів = dobir_відділу (адитивно, Σ ваг = 1). Та сама популяція, що й
+ * `newBusinessDobir` (створені після cutoff-дня, закриті того ж місяця, 142, 3 завершені
+ * місяці). ⚠️ Це МОДЕЛЬОВАНА історична частка, НЕ живий пайплайн менеджера.
+ * Значення `dobir` — точне (без округлення), щоб Σ = dobir_відділу; округляти на показі.
+ */
+export async function dobirByManager(s: MoneyScope): Promise<DobirRow[]> {
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const POP = (extra: string): string =>
+    `d.status_id = 142 AND d.pipeline_id = ANY($1) AND d.closed_at_kommo IS NOT NULL
+     AND to_char((d.created_at_kommo ${K}),'YYYY-MM') = to_char((d.closed_at_kommo ${K}),'YYYY-MM')
+     AND extract(day from (d.created_at_kommo ${K})) > extract(day from (now() ${K}))
+     AND (d.closed_at_kommo ${K})::date >= (date_trunc('month', now() ${K}) - interval '3 months')::date
+     AND (d.closed_at_kommo ${K})::date < date_trunc('month', now() ${K})::date ${extra}`;
+  const deptDobir = await newBusinessDobir({});
+  const deptRawRes = await pool.query<{ s: string }>(
+    `SELECT COALESCE(SUM(d.price),0) s FROM deals d WHERE ${POP("")}`, [FC_PIPELINES]);
+  const deptRaw = Number(deptRawRes.rows[0]?.s ?? 0);
+  if (deptRaw === 0 || deptDobir === 0) return [];
+  const factor = deptDobir / deptRaw;
+  const p: unknown[] = [FC_PIPELINES];
+  const sc: string[] = [];
+  if (s.managerId) { p.push(s.managerId); sc.push(`AND d.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); sc.push(`AND m.team_id = $${p.length}`); }
+  const rows = await pool.query<{ manager_id: number; raw: string }>(
+    `SELECT d.manager_id, COALESCE(SUM(d.price),0) raw
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE ${POP(sc.join(" "))} AND d.manager_id IS NOT NULL
+      GROUP BY d.manager_id`, p);
+  return rows.rows.map((r) => ({ managerId: r.manager_id, dobir: Number(r.raw) * factor }));
+}
+
 // ───────────────────────── ТИЖНЕВА РОЗБИВКА (Р4a) ─────────────────────────
 
 export interface WeekBreakdownRow {
