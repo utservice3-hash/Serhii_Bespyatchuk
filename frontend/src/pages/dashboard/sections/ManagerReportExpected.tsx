@@ -16,7 +16,6 @@ export function ManagerReportExpected({
 }: Pick<ManagerReport, "expected" | "expectedByTeam" | "expectedByManager">) {
   const e = expected;
   const [openThis, setOpenThis] = useState(false);
-  const [openTeam, setOpenTeam] = useState<number | null>(null);
 
   return (
     <div className="chart-card">
@@ -48,7 +47,7 @@ export function ManagerReportExpected({
           label="Цей місяць"
           bucket={e.thisMonth}
           chevron={openThis ? "▾" : "▸"}
-          onClick={() => { setOpenThis((v) => !v); setOpenTeam(null); }}
+          onClick={() => setOpenThis((v) => !v)}
           sub={expectedByTeam.length > 0 ? "клік — розріз по командах" : undefined}
         />
         <Tile label="Наступний місяць" bucket={e.nextMonth} />
@@ -57,31 +56,41 @@ export function ManagerReportExpected({
 
       {/* ── Матрьошка: команди → менеджери (тільки для «Цей місяць») ── */}
       {openThis && (
-        <div style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-          {expectedByTeam.length === 0 && (
-            <div style={{ padding: "10px 12px", fontSize: 13, color: "var(--text-muted)" }}>Немає очікувань цього місяця в цьому зрізі.</div>
-          )}
-          {expectedByTeam.map((t) => {
-            const isOpen = openTeam === t.id;
-            const mgrs = expectedByManager.filter((m) => m.teamId === t.id).sort((a, b) => b.sum - a.sum);
-            return (
-              <div key={t.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                <Row
-                  chevron={mgrs.length > 0 ? (isOpen ? "▾" : "▸") : ""}
-                  name={t.name}
-                  sum={t.sum}
-                  deals={t.deals}
-                  strong
-                  onClick={mgrs.length > 0 ? () => setOpenTeam(isOpen ? null : t.id) : undefined}
-                />
-                {isOpen && mgrs.map((m) => (
-                  <Row key={m.id} name={m.name} sum={m.sum} deals={m.deals} indent />
-                ))}
-              </div>
-            );
-          })}
-        </div>
+        <TeamManagerBreakdown byTeam={expectedByTeam} byManager={expectedByManager} emptyText="Немає очікувань цього місяця в цьому зрізі." />
       )}
+    </div>
+  );
+}
+
+/** Спільна матрьошка «команди → менеджери» (Row/Tile). Реюз: очікування (тут) і
+ *  carryover-розріз у Звіті 2.0 §3. `byTeam`/`byManager` — {id, name, teamId, deals, sum}. */
+export interface ScopeBreakdownRow { id: number; name: string; teamId: number | null; deals: number; sum: number }
+export function TeamManagerBreakdown({ byTeam, byManager, emptyText }: { byTeam: ScopeBreakdownRow[]; byManager: ScopeBreakdownRow[]; emptyText: string }) {
+  const [openTeam, setOpenTeam] = useState<number | null>(null);
+  return (
+    <div style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+      {byTeam.length === 0 && (
+        <div style={{ padding: "10px 12px", fontSize: 13, color: "var(--text-muted)" }}>{emptyText}</div>
+      )}
+      {byTeam.map((t) => {
+        const isOpen = openTeam === t.id;
+        const mgrs = byManager.filter((m) => m.teamId === t.id).sort((a, b) => b.sum - a.sum);
+        return (
+          <div key={t.id} style={{ borderBottom: "1px solid var(--border)" }}>
+            <Row
+              chevron={mgrs.length > 0 ? (isOpen ? "▾" : "▸") : ""}
+              name={t.name}
+              sum={t.sum}
+              deals={t.deals}
+              strong
+              onClick={mgrs.length > 0 ? () => setOpenTeam(isOpen ? null : t.id) : undefined}
+            />
+            {isOpen && mgrs.map((m) => (
+              <Row key={m.id} name={m.name} sum={m.sum} deals={m.deals} indent />
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

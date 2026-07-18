@@ -3,7 +3,7 @@ import { fetchManagerReport, type ManagerReport, type Team, type ManagerOption }
 import { DatePicker } from "../../../components/DatePicker";
 import { previousRange, formatAmount } from "../format";
 import { ManagerReportHero } from "./ManagerReportHero";
-import { ManagerReportExpected } from "./ManagerReportExpected";
+import { ManagerReportExpected, TeamManagerBreakdown, type ScopeBreakdownRow } from "./ManagerReportExpected";
 import { TrafficLight, type TrafficRow } from "./TeamsTrafficLight";
 
 type Level = "department" | "team" | "manager";
@@ -154,7 +154,7 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
           {/* ── Р4c.2 — когортна воронка · конверсії+цілі · тижнева+перенесені ── */}
           <MRFunnel funnel={data.funnel} compare={data.compare} />
           <MRConversions conv={data.conversions} compare={data.compare} />
-          <MRWeeklyCarryover weekly={data.weekly} carryover={data.carryover} />
+          <MRWeeklyCarryover weekly={data.weekly} carryover={data.carryover} teams={data.teams} managers={data.managers} teamNames={teams} />
         </>
       )}
     </div>
@@ -368,7 +368,26 @@ const WEEK_STATUS: Record<"past" | "current" | "future", { bg: string; label: st
   current: { bg: "rgba(197,20,28,0.06)", label: "поточний" },
   future: { bg: "transparent", label: "попереду" },
 };
-function MRWeeklyCarryover({ weekly, carryover }: { weekly: ManagerReport["weekly"]; carryover: ManagerReport["carryover"] }) {
+function MRWeeklyCarryover({ weekly, carryover, teams, managers, teamNames }: {
+  weekly: ManagerReport["weekly"];
+  carryover: ManagerReport["carryover"];
+  teams: ManagerReport["teams"];
+  managers: ManagerReport["managers"];
+  teamNames: Team[];
+}) {
+  // Дрілдаун перенесених: команди → менеджери. carryover тепер у рядках teams[]/managers[].
+  // Реюз тієї самої матрьошки (TeamManagerBreakdown), що й «Очікування». Σ мгр = команда = тотал.
+  const coManagers: ScopeBreakdownRow[] = (managers ?? [])
+    .filter((m) => m.carryover.deals > 0)
+    .map((m) => ({ id: m.managerId, name: m.name, teamId: m.teamId, deals: m.carryover.deals, sum: m.carryover.amount }));
+  const teamNameById = new Map(teamNames.map((t) => [t.id, t.name]));
+  const coTeams: ScopeBreakdownRow[] = teams
+    ? teams.filter((t) => t.carryover.deals > 0).map((t) => ({ id: t.teamId, name: t.teamName, teamId: t.teamId, deals: t.carryover.deals, sum: t.carryover.amount }))
+    : [...coManagers.reduce((acc, m) => {                       // рівень «команда»: teams[] немає → групуємо менеджерів
+        const k = m.teamId ?? -1;
+        const e = acc.get(k) ?? { id: k, name: teamNameById.get(k) ?? "Команда", teamId: m.teamId, deals: 0, sum: 0 };
+        e.deals += m.deals; e.sum += m.sum; acc.set(k, e); return acc;
+      }, new Map<number, ScopeBreakdownRow>()).values()];
   return (
     <div className="chart-card">
       <h2 className="chart-title" style={{ marginBottom: 4 }}>Тижнева розбивка · Перенесені</h2>
@@ -379,6 +398,12 @@ function MRWeeklyCarryover({ weekly, carryover }: { weekly: ManagerReport["weekl
           <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{carryover.deals} угод · display-only (не в план/факт)</span>
         </div>
       </div>
+      {coTeams.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 2px" }}>Розріз перенесених (display-only) — команди → менеджери:</p>
+          <TeamManagerBreakdown byTeam={coTeams} byManager={coManagers} emptyText="Немає перенесених у цьому зрізі." />
+        </div>
+      )}
       <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
         Факт по тижнях — <b>датований потік (по даті закриття угоди)</b>; тому Σ тижнів навмисно не дорівнює факту в шапці (той — отримані кошти).
       </p>

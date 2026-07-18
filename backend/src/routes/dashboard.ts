@@ -4312,11 +4312,27 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   ]);
   const expThisByTeam = new Map(expectedByTeam.map((r) => [r.id, r.sum]));
 
+  // Carryover-РОЗРІЗ по менеджерах/командах — та сама детермінована реконструкція
+  // (metrics.carryoverByManager, зона EXPECT_ZONE на 00:00 дня-1), що живить скалярний
+  // data.carryover і /report·plans-grid. Інваріант: Σ мгр = команда = скалярний тотал.
+  const coByMgrRows = await metrics.carryoverByManager({ managerId, teamId }, monthStartOf(from));
+  const coByMgr = new Map(coByMgrRows.map((r) => [r.managerId, { amount: r.amount, deals: r.deals }]));
+  const teamOfMgr = new Map(
+    (await pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers`)).rows.map((r) => [r.id, r.team_id])
+  );
+  const coByTeam = new Map<number, { amount: number; deals: number }>();
+  for (const r of coByMgrRows) {
+    const tid = teamOfMgr.get(r.managerId);
+    if (tid == null) continue;
+    const e = coByTeam.get(tid) ?? { amount: 0, deals: 0 };
+    e.amount += r.amount; e.deals += r.deals; coByTeam.set(tid, e);
+  }
+
   // Світлофор команд — лише на рівні department (найгірші зверху).
   // Δ (flowCur/flowPrev) — like-for-like по ДАТОВАНОМУ потоку (successByTeam): received-
   // снапшот несиметричний між свіжим MTD і дозрілим минулим місяцем. fact (для % плану)
   // лишається received — та сама база, що план/факт.
-  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
+  let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; carryover: { amount: number; deals: number }; flowCur: number | null; flowPrev: number | null }[] | undefined;
   if (level === "department") {
     const [facts, plansRes, namesRes, flowsCur, flowsPrev] = await Promise.all([
       money.receivedByTeam({ from, to }),
@@ -4336,7 +4352,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     const prevByTeam = flowsPrev ? new Map(flowsPrev.filter((t) => t.teamId != null).map((t) => [t.teamId, Math.round(t.revenue)])) : null;
     // Рядки = ОБʼЄДНАННЯ команд-з-планом і команд-з-фактом (не лише факт) → команди з
     // планом і 0 факту видимі при 0%, зверху. Σ планів = дептовий план (без деактивованих).
-    const teamIds = new Set<number>([...factByTeam.keys(), ...planByTeam.keys()]);
+    const teamIds = new Set<number>([...factByTeam.keys(), ...planByTeam.keys(), ...coByTeam.keys()]);
     teams = [...teamIds].map((tid) => {
       const plan = planByTeam.get(tid) ?? 0;
       const fact = factByTeam.get(tid)?.revenue ?? 0;
@@ -4344,6 +4360,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
         teamId: tid, teamName: factByTeam.get(tid)?.name ?? nameByTeam.get(tid) ?? "—", plan, fact,
         pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact),
         expectedThisMonth: Math.round(expThisByTeam.get(tid) ?? 0),
+        carryover: coByTeam.get(tid) ?? { amount: 0, deals: 0 },
         flowCur: curByTeam ? (curByTeam.get(tid) ?? 0) : null,
         flowPrev: prevByTeam ? (prevByTeam.get(tid) ?? 0) : null,
       };
@@ -4354,7 +4371,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   // (level=team, скоуп по teamId) і плоского рейтингу «Усі менеджери» (level=department).
   // % плану — нативний план менеджера з `plans` (per manager_id); Σ планів = план команди
   // = відділ (доведено). Менеджери без плану → pctPlan=null («без плану», у низ).
-  let managers: { managerId: number; name: string; teamId: number | null; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
+  let managers: { managerId: number; name: string; teamId: number | null; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; carryover: { amount: number; deals: number }; flowCur: number | null; flowPrev: number | null }[] | undefined;
   if (level !== "manager") {
     const mStart = monthStartOf(from);
     const [mFacts, planRes, teamFacts, mFlowCur, mFlowPrev] = await Promise.all([
@@ -4373,16 +4390,23 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     const prevByMgr = mFlowPrev ? new Map(mFlowPrev.map((m) => [m.managerId, Math.round(m.revenue)])) : null;
 
     const activeFactByTeam = new Map<number | null, number>();
+    const activeCarryByTeam = new Map<number | null, { amount: number; deals: number }>();
     const rows: NonNullable<typeof managers> = [];
     for (const r of planRes.rows) {
       const plan = r.plan; // власний + частка звільнених (core/plans)
       const fact = factByMgr.get(r.managerId) ?? 0;
+      const carryover = coByMgr.get(r.managerId) ?? { amount: 0, deals: 0 };
       activeFactByTeam.set(r.teamId, (activeFactByTeam.get(r.teamId) ?? 0) + fact);
-      if (plan <= 0 && fact <= 0) continue; // без плану й факту — не показуємо
+      const ac = activeCarryByTeam.get(r.teamId) ?? { amount: 0, deals: 0 };
+      ac.amount += carryover.amount; ac.deals += carryover.deals; activeCarryByTeam.set(r.teamId, ac);
+      // Тримаємо й carryover-only менеджера (немає плану/факту, але є перенесені) —
+      // інакше Σ мгр carryover < команда (розрив у дрілдауні).
+      if (plan <= 0 && fact <= 0 && carryover.deals === 0) continue;
       rows.push({
         managerId: r.managerId, name: r.name, teamId: r.teamId, plan, fact,
         pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact),
         expectedThisMonth: Math.round(expByMgr.get(r.managerId) ?? 0),
+        carryover,
         flowCur: curByMgr ? (curByMgr.get(r.managerId) ?? 0) : null,
         flowPrev: prevByMgr ? (prevByMgr.get(r.managerId) ?? 0) : null,
       });
@@ -4390,15 +4414,23 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     // 🔴 ОРФАН-РЯДОК (НЕ ховаємо розрив): факт команди понад Σ активних = гроші звільнених
     // (лишаються в команді, але не на колегах); план деактивованих, який НЕМАЄ куди розподілити
     // (0 активних у команді, core/plans.orphanPlanByTeam) — теж явно, managerId=0. Зазвичай порожньо.
-    for (const [tid, tf] of teamFactMap) {
+    // Residual carryover команди (teamCo − Σ активних) теж падає сюди, щоб Σ мгр = команда.
+    const orphanTids = new Set<number>([...teamFactMap.keys(), ...coByTeam.keys()]);
+    for (const tid of orphanTids) {
+      const tf = teamFactMap.get(tid);
       const residualPlan = planRes.orphanPlanByTeam.get(tid) ?? 0;
-      const residualFact = tf.revenue - (activeFactByTeam.get(tid) ?? 0);
-      if (residualPlan > 0 || residualFact > 0) {
+      const residualFact = (tf?.revenue ?? 0) - (activeFactByTeam.get(tid) ?? 0);
+      const teamCo = coByTeam.get(tid) ?? { amount: 0, deals: 0 };
+      const acc = activeCarryByTeam.get(tid) ?? { amount: 0, deals: 0 };
+      const residualCarry = { amount: teamCo.amount - acc.amount, deals: teamCo.deals - acc.deals };
+      if (residualPlan > 0 || residualFact > 0 || residualCarry.deals !== 0) {
         rows.push({
-          managerId: 0, name: `⚠️ ${tf.name}: без активного менеджера (звільнені)`, teamId: tid,
+          managerId: 0, name: `⚠️ ${tf?.name ?? "команда"}: без активного менеджера (звільнені)`, teamId: tid,
           plan: residualPlan, fact: residualFact,
           pctPlan: residualPlan > 0 ? Math.round((residualFact / residualPlan) * 100) : null,
-          remaining: Math.max(0, residualPlan - residualFact), expectedThisMonth: 0, flowCur: null, flowPrev: null,
+          remaining: Math.max(0, residualPlan - residualFact), expectedThisMonth: 0,
+          carryover: residualCarry,
+          flowCur: null, flowPrev: null,
         });
       }
     }
