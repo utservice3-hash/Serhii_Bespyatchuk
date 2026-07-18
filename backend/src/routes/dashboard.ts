@@ -487,15 +487,12 @@ dashboardRouter.get("/overview", async (req, res) => {
     })(),
   ].filter((s) => s.deals > 0);
 
-  // Carried-over deals: the fixed start-of-month snapshot for the viewed month.
-  const carryMonth = (from ? from.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
-  const carryoverRes = await pool.query<{ amount: string; deals: string }>(
-    `SELECT amount, deals FROM monthly_carryover WHERE month = $1`,
-    [carryMonth]
-  );
-  const carryover = carryoverRes.rows[0]
-    ? { amount: Number(carryoverRes.rows[0].amount), deals: Number(carryoverRes.rows[0].deals) }
-    : null;
+  // «Перенесені» — ДЕТЕРМІНОВАНА реконструкція з deal_stage_events на 00:00 дня-1
+  // місяця (ядро metrics.carryoverByScope, зона EXPECT_ZONE). Замінює знімок-таблицю
+  // monthly_carryover (корумпувалась startup-джобою). Скоуп як у решті Огляду →
+  // збігається зі Звітом 2.0 (та сама функція).
+  const carryMonth = (from ? from.slice(0, 7) : new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" }).slice(0, 7)) + "-01";
+  const carryover = await metrics.carryoverByScope({ managerId, teamId }, carryMonth);
 
   // Repeat clients active in the period (for the "Постійні клієнти" drill-down):
   // their in-period order count and revenue. "Repeat" = first-ever paid before
@@ -4230,12 +4227,10 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     return Math.round(Number(r.rows[0]?.s ?? 0));
   }
   async function fetchCarryover(mFrom: string): Promise<{ amount: number; deals: number }> {
-    const p: unknown[] = [monthStartOf(mFrom)];
-    const r = await pool.query<{ a: string; d: string }>(
-      `SELECT COALESCE(SUM(cm.amount),0) a, COALESCE(SUM(cm.deals),0) d
-         FROM monthly_carryover_mgr cm JOIN managers m ON m.id = cm.manager_id
-        WHERE cm.month = $1::date ${planScopeSql(p, "cm.manager_id", "m.team_id")}`, p);
-    return { amount: Number(r.rows[0]?.a ?? 0), deals: Number(r.rows[0]?.d ?? 0) };
+    // ЄДИНЕ ЯДРО metrics.carryoverByScope (детермінована реконструкція з deal_stage_events
+    // на 00:00 дня-1 місяця, зона EXPECT_ZONE) — та сама функція, що й Огляд → Δ=0.
+    // Прибрано читання знімок-таблиці monthly_carryover_mgr (корумпувалась рестартами).
+    return metrics.carryoverByScope({ managerId, teamId }, monthStartOf(mFrom));
   }
 
   const T = metrics.CONVERSION_TARGETS;

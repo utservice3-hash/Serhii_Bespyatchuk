@@ -34,7 +34,6 @@ import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
-import { snapshotCarryover } from "./jobs/snapshotCarryover.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
 import { syncDealActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
@@ -260,11 +259,12 @@ cron.schedule("30 4 * * *", () => {
   cleanupOldStageEvents(24).catch((err) => console.error("Stage events cleanup failed:", err));
 });
 
-// Snapshot carried-over (in-progress) deal value at the start of each month +
-// on startup (seeds the current month if it hasn't been captured yet).
-cron.schedule("0 0 1 * *", () => {
-  snapshotCarryover().catch((err) => console.error("Carryover snapshot failed:", err));
-});
+// 🔴 BAG 1 (carryover): джобу snapshotCarryover ВИМКНЕНО. «Перенесені» тепер рахуються
+// детерміновано з deal_stage_events на 00:00 дня-1 місяця (core/metrics.carryoverByScope,
+// зона EXPECT_ZONE) — БЕЗ фріз-таблиць. Стара джоба була ДЖЕРЕЛОМ КОРУПЦІЇ: startup-виклик
+// на кожному рестарті + per-manager ON CONFLICT → monthly_carryover_mgr ріс рестартами
+// (Огляд 520к vs Звіт 2.0 694к). Таблиці monthly_carryover(_mgr) — легасі (дані не чіпаємо,
+// просто не пишемо/не читаємо). Крон і startup-виклик прибрано.
 
 // Ван-ту-ван нагадування: 1-го числа 06:00 + на старті (посіяти поточний місяць).
 cron.schedule("0 6 1 * *", () => {
@@ -401,7 +401,6 @@ else app.listen(config.port, onListen);
 const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["freshnessWatch", () => freshnessWatch()],
   ["catchUpAiChat", () => catchUpAiChat()],
-  ["snapshotCarryover", () => snapshotCarryover()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],
   ["createDutyReminders", () => createDutyReminders()],
   ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],

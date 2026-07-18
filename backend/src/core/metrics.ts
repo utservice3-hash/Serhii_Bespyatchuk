@@ -1107,6 +1107,42 @@ export async function expectedPaymentsByPlanned(s: SnapshotScope): Promise<Expec
   };
 }
 
+export interface CarryoverResult { amount: number; deals: number }
+
+/**
+ * «Перенесені» (carried-over) угоди — ДЕТЕРМІНОВАНА реконструкція з `deal_stage_events`:
+ * стан стадії КОЖНОЇ угоди на 00:00 дня-1 місяця `monthStart` (київський), відфільтрований
+ * по ТІЙ САМІЙ грошовій зоні `EXPECT_ZONE`, що й `expectedPaymentsByPlanned` (та сама
+ * константа, не копія списку стадій). Без фріз-таблиць → одне відтворюване число, без
+ * дрейфу від рестартів. Замінює `monthly_carryover` / `monthly_carryover_mgr` (обидві
+ * корумпувались startup-знімком: dept-рядок морозився цілим, `_mgr` ріс per-manager на
+ * кожному рестарті). `monthStart` = 'YYYY-MM-01'. Зріз відділ→команда→менеджер (SnapshotScope).
+ */
+export async function carryoverByScope(s: SnapshotScope, monthStart: string): Promise<CarryoverResult> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE, monthStart];
+  const conds: string[] = [];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  // stage_at = остання подія стадії КОЖНОЇ угоди ДО 00:00 дня-1 місяця (київський інстант).
+  const r = await pool.query<{ amt: string; dl: string }>(
+    `WITH stage_at AS (
+       SELECT DISTINCT ON (dse.kommo_id) dse.kommo_id, dse.status_id
+         FROM deal_stage_events dse
+        WHERE dse.pipeline_id = ANY($1)
+          AND dse.changed_at < ($3::date AT TIME ZONE 'Europe/Kyiv')
+        ORDER BY dse.kommo_id, dse.changed_at DESC
+     )
+     SELECT COALESCE(SUM(d.price),0) amt, COUNT(*)::int dl
+       FROM stage_at sa
+       JOIN deals d ON d.kommo_id = sa.kommo_id
+       LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE d.pipeline_id = ANY($1) AND sa.status_id = ANY($2)
+        ${conds.length ? "AND " + conds.join(" AND ") : ""}`,
+    params
+  );
+  return { amount: Number(r.rows[0]?.amt ?? 0), deals: Number(r.rows[0]?.dl ?? 0) };
+}
+
 export interface ExpectedScopeRow { id: number; name: string; teamId: number | null; deals: number; sum: number }
 
 /**
