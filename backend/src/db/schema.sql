@@ -83,6 +83,11 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS traf_type TEXT;
 CREATE INDEX IF NOT EXISTS idx_deals_traf_type ON deals(traf_type);
 CREATE INDEX IF NOT EXISTS idx_deals_utm_medium ON deals(utm_medium);
 
+-- «Мінусова угода» (Kommo select 2098529 = «Мінус»): сторно/повернення. Знак `price`
+-- дає ЦЕ поле, не слово в назві: price = is_minus ? -abs(budget) : +abs(budget).
+-- price лишається чистою функцією (бюджет, is_minus) → само-виправляється в обидва боки.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS is_minus BOOLEAN NOT NULL DEFAULT false;
+
 -- Два якорі (Правило №1 глосарію): unload_at = дата акту (Kommo 463253,
 -- «Дата выгрузки (Дата акта)») — ФІНАНСОВИЙ якір; load_at = «Дата загрузки»
 -- (473637) — операційне поле, не якір. Якір продажів — вхід у 142

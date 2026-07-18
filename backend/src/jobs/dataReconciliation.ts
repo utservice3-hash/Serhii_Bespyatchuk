@@ -85,17 +85,17 @@ export async function runDataReconciliation(): Promise<{ warnings: number; check
     detail: noMgrN > 0 ? `${noMgrN} угод не привʼязані до менеджера → не потрапляють у per-manager звіти.` : "Усі угоди привʼязані.",
   });
 
-  // 5) Відʼємна ціна без позначки «мінус» (30 дн.) — псує грошові суми. Поріг 0.
+  // 5) Відʼємна ціна без прапорця «Мінусова угода» (30 дн.) — псує грошові суми. Поріг 0.
+  // Знак тепер дає ПОЛЕ 2098529 (is_minus), не слово в назві → перевіряємо по полю.
   const negs = await pool.query<{ n: string }>(
-    `SELECT COUNT(*) AS n FROM deals d WHERE ${FC} AND d.price < 0
-       AND (d.name IS NULL OR d.name NOT ILIKE '%мінус%')
+    `SELECT COUNT(*) AS n FROM deals d WHERE ${FC} AND d.price < 0 AND NOT d.is_minus
        AND d.created_at_kommo >= now() - interval '30 days'`
   );
   const negN = Number(negs.rows[0].n) || 0;
   checks.push({
-    key: "negative_price_no_marker", label: "Відʼємна ціна без «мінус» (30 дн.)",
+    key: "negative_price_no_marker", label: "Відʼємна ціна без поля «Мінус» (30 дн.)",
     value: negN, threshold: 0, ok: negN === 0,
-    detail: negN > 0 ? `${negN} угод з відʼємним price без слова «мінус» у назві → викривляють суми.` : "Немає.",
+    detail: negN > 0 ? `${negN} угод з відʼємним price, де поле «Мінусова угода» ≠ «Мінус» → викривляють суми.` : "Немає.",
   });
 
   const warnings = checks.filter((c) => !c.ok).length;

@@ -204,6 +204,9 @@ const FIELD_UTM_CAMPAIGN = 481997; // utm_campaign (tracking_data)
 const FIELD_ADV_CAMP = 2098331; // ADV_CAMP (text)
 const FIELD_TRAF_SRC = 2098327; // TRAF_SRC (text)
 const FIELD_TRAF_TYPE = 2098329; // TRAF_TYPE (text: cpc/organic/referral/none)
+// «Мінусова угода» (select): «Мінус» = сторно/повернення. Kommo-бюджет завжди додатний;
+// саме ЦЕ поле (не слово в назві) визначає знак: price = is_minus ? -abs(budget) : +abs.
+const FIELD_MINUS = 2098529;
 
 function fieldDate(deal: KommoDeal, fieldId: number): Date | null {
   const raw = fieldText(deal, fieldId);
@@ -240,6 +243,14 @@ export function extractIncomeAmount(deal: KommoDeal): number | null {
 /** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */
 export function extractPaymentType(deal: KommoDeal): string | null {
   return fieldText(deal, FIELD_PAYMENT_TYPE);
+}
+
+/**
+ * «Мінусова угода» = «Мінус» (поле 2098529) → сторно/повернення: бюджет має відніматись.
+ * ЄДИНЕ джерело знаку (не слово в назві). Порожнє/«Ні» → false.
+ */
+export function extractIsMinus(deal: KommoDeal): boolean {
+  return (fieldText(deal, FIELD_MINUS) ?? "").trim().toLowerCase() === "мінус";
 }
 // "Продзвін" pipelines are run by the lead-generation department.
 const LEADGEN_PIPELINES = new Set([8921936, 7337048]);

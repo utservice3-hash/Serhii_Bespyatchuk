@@ -6,6 +6,7 @@ import {
   extractUnloadDate,
   extractLoadDate,
   extractPlannedPaymentDate,
+  extractIsMinus,
   extractWebTags,
   fetchAllDeals,
   fetchContactsByIds,
@@ -394,19 +395,21 @@ export async function upsertDeal(
   const source = extractLeadSource(deal);
   const webTags = extractWebTags(deal);
 
-  // "Мінусові" угоди: Kommo's calculator can't store a negative budget, so it
-  // shows it as positive. These deals are marked by the word "мінус" in the
-  // name — persist their budget as NEGATIVE so every money sum nets correctly.
-  const isMinusDeal = /мінус/i.test(deal.name ?? "");
-  const signedPrice = isMinusDeal ? -Math.abs(Number(deal.price) || 0) : deal.price;
+  // «Мінусові» угоди (сторно/повернення): Kommo-калькулятор не вміє відʼємний бюджет →
+  // показує плюсом. Знак дає ПОЛЕ «Мінусова угода» (2098529 = «Мінус»), НЕ слово в назві.
+  // price — чиста функція (бюджет, is_minus): price = is_minus ? -abs(budget) : +abs(budget).
+  // Тож при зміні прапорця в CRM синк само-виправляє знак у обидва боки (ідемпотентно).
+  const isMinus = extractIsMinus(deal);
+  const budget = Math.abs(Number(deal.price) || 0);
+  const signedPrice = isMinus ? -budget : budget;
 
   await pool.query(
     `INSERT INTO deals (
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
          client_name, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
-         unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+         unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -430,7 +433,8 @@ export async function upsertDeal(
          traf_src = EXCLUDED.traf_src,
          traf_type = EXCLUDED.traf_type,
          utm_medium = EXCLUDED.utm_medium,
-         planned_payment_at = EXCLUDED.planned_payment_at`,
+         planned_payment_at = EXCLUDED.planned_payment_at,
+         is_minus = EXCLUDED.is_minus`,
       [
         deal.id,
         deal.name,
@@ -457,6 +461,7 @@ export async function upsertDeal(
         webTags.trafType,
         webTags.utmMedium,
         extractPlannedPaymentDate(deal),
+        isMinus,
       ]
     );
 }

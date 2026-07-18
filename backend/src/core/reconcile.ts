@@ -1,5 +1,5 @@
 import { pool } from "../db/pool.js";
-import { kommoGet } from "../kommo/client.js";
+import { kommoGet, extractIsMinus, type KommoDeal } from "../kommo/client.js";
 import * as money from "./money.js";
 
 /**
@@ -33,10 +33,14 @@ interface KommoWonLead {
   price: number;
   responsible_user_id: number;
   closed_at: number | null;
+  is_minus: boolean;
 }
 
-const signedPrice = (name: string, price: number) =>
-  /мінус/i.test(name || "") ? -Math.abs(price) : price;
+// Знак дає ПОЛЕ «Мінусова угода» (2098529), не слово в назві — тотожно syncKommo,
+// щоб Kommo-сторона звірки нетила мінуси так само, як наша `deals.price` (інакше
+// 270 польових-мінусів давали б хибний дрейф deals↔Kommo).
+const signedPrice = (isMinus: boolean, price: number) =>
+  isMinus ? -Math.abs(price) : Math.abs(price);
 
 /** YYYY-MM у КИЇВСЬКОМУ часі — щоб бакетити Kommo так само, як наше (не по UTC). */
 const kyivMonth = (unix: number | null): string | null =>
@@ -73,12 +77,12 @@ async function fetchWonLeads(fromUnix: number, toUnix: number): Promise<KommoWon
   const dateFilter = `filter[closed_at][from]=${fromUnix - 86400}&filter[closed_at][to]=${toUnix + 86400}`;
   const out: KommoWonLead[] = [];
   for (let page = 1; page <= 400; page++) {
-    const data = await kommoGet<{ _embedded?: { leads?: KommoWonLead[] } }>(
+    const data = await kommoGet<{ _embedded?: { leads?: KommoDeal[] } }>(
       `/api/v4/leads?page=${page}&limit=250&${statusFilter}&${dateFilter}`
     );
     const leads = data?._embedded?.leads ?? [];
     for (const l of leads) {
-      out.push({ id: l.id, name: l.name ?? "", price: Number(l.price) || 0, responsible_user_id: l.responsible_user_id, closed_at: l.closed_at ?? null });
+      out.push({ id: l.id, name: l.name ?? "", price: Number(l.price) || 0, responsible_user_id: l.responsible_user_id, closed_at: l.closed_at ?? null, is_minus: extractIsMinus(l) });
     }
     if (leads.length < 250) break;
   }
@@ -316,7 +320,7 @@ export async function runReconcile(months = 12): Promise<ReconResult> {
       if (kyivMonth(l.closed_at) !== M.ym) continue; // бакет по київській даті (як наше)
       const mgr = byKommoUser.get(l.responsible_user_id);
       if (!mgr) continue; // ліди неактивних/несинкнутих користувачів — поза скоупом
-      const price = signedPrice(l.name, l.price);
+      const price = signedPrice(l.is_minus, l.price);
       const em = kMgr.get(mgr.id) ?? { rev: 0, n: 0 };
       em.rev += price; em.n += 1; kMgr.set(mgr.id, em);
       if (mgr.team_id != null) {

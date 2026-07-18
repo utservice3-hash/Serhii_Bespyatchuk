@@ -3379,13 +3379,13 @@ dashboardRouter.get("/data-quality", async (req, res) => {
        FROM deals d WHERE ${FC} AND d.manager_id IS NULL AND ${recent}
        ORDER BY d.created_at_kommo DESC LIMIT 100`);
 
-  // 2) Money-stage deals with no amount (price ≤ 0), excluding real "minus" deals.
+  // 2) Money-stage deals with no amount (price ≤ 0), excluding real "minus" deals (поле 2098529).
   const noAmount = await pool.query<{ kommo_id: string; name: string; manager: string; extra: string }>(
     `SELECT d.kommo_id, d.name, m.name AS manager, psm.funnel_stage AS extra
        FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
       WHERE ${FC} AND ${MONEY} AND ${ACTIVE} AND COALESCE(d.price,0) <= 0
-        AND (d.name IS NULL OR d.name NOT ILIKE '%мінус%') AND ${recent} ${teamAnd}
+        AND NOT d.is_minus AND ${recent} ${teamAnd}
       ORDER BY d.created_at_kommo DESC LIMIT 100`);
 
   // 3) Full-cycle deals whose (pipeline,status) is not mapped → invisible to funnel analytics.
@@ -3396,11 +3396,11 @@ dashboardRouter.get("/data-quality", async (req, res) => {
       WHERE ${FC} AND psm.funnel_stage IS NULL AND ${recent}
       ORDER BY d.created_at_kommo DESC LIMIT 100`);
 
-  // 4) Negative price without the "minus" marker → likely a data-entry error.
+  // 4) Negative price without the "minus" FIELD (2098529) → likely a data-entry error.
   const negatives = await pool.query<{ kommo_id: string; name: string; manager: string; extra: string }>(
     `SELECT d.kommo_id, d.name, m.name AS manager, d.price::text AS extra
        FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
-      WHERE ${FC} AND d.price < 0 AND (d.name IS NULL OR d.name NOT ILIKE '%мінус%') AND ${recent}
+      WHERE ${FC} AND d.price < 0 AND NOT d.is_minus AND ${recent}
       ORDER BY d.created_at_kommo DESC LIMIT 100`);
 
   // 5) Probable duplicates — same client with 2+ active full-cycle deals.
