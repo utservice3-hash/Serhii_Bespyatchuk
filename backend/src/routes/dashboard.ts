@@ -2684,16 +2684,12 @@ dashboardRouter.get("/report", async (req, res) => {
      ${trConds.length ? "WHERE " + trConds.join(" AND ") : ""}
      GROUP BY d.manager_id`, trP);
 
-  // Перенесені (carryover) per manager for the report month.
+  // Перенесені (carryover) per manager — ЯДРО metrics.carryoverByManager (детермінована
+  // реконструкція з deal_stage_events на 00:00 дня-1, зона EXPECT_ZONE), ТА САМА функція,
+  // що Огляд / Звіт 2.0 / plans-grid. Прибрано читання знімок-таблиці monthly_carryover_mgr
+  // (легасі, корупція рестартами). Display-only: у розрахунки не входить.
   const coMonth = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
-  const coP: unknown[] = [coMonth];
-  const coScope: string[] = [];
-  if (managerId) { coP.push(managerId); coScope.push(`cm.manager_id = $${coP.length}`); }
-  if (teamId) { coP.push(teamId); coScope.push(`m.team_id = $${coP.length}`); }
-  const carryByMgr = await pool.query<{ id: number; amount: string; deals: string }>(
-    `SELECT cm.manager_id AS id, cm.amount, cm.deals
-     FROM monthly_carryover_mgr cm JOIN managers m ON m.id = cm.manager_id
-     WHERE cm.month = $1 ${coScope.length ? "AND " + coScope.join(" AND ") : ""}`, coP);
+  const carryByMgr = await metrics.carryoverByManager({ managerId, teamId }, coMonth);
 
   type Score = {
     managerId: number; name: string;
@@ -2718,7 +2714,7 @@ dashboardRouter.get("/report", async (req, res) => {
   for (const r of paidByMgrAgg) sc(r.managerId).paymentReceived = r.revenue;
   for (const r of expByMgrAgg) sc(r.managerId).expected = r.revenue;
   for (const r of transfByMgr.rows) sc(r.id).transfers = Number(r.c);
-  for (const r of carryByMgr.rows) { const e = sc(r.id); e.carryover = Number(r.amount); e.carryoverDeals = Number(r.deals); }
+  for (const r of carryByMgr) { const e = sc(r.managerId); e.carryover = r.amount; e.carryoverDeals = r.deals; }
   // Monthly payment_amount plan per manager (for the План/Факт drill-down).
   const planMonthR = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
   const planScoreP: unknown[] = [planMonthR];
