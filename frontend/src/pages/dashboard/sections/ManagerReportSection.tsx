@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { fetchManagerReport, type ManagerReport, type Team, type ManagerOption } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
-import { previousRange } from "../format";
+import { previousRange, formatAmount } from "../format";
 import { ManagerReportHero } from "./ManagerReportHero";
 import { ManagerReportExpected } from "./ManagerReportExpected";
 import { TrafficLight, type TrafficRow } from "./TeamsTrafficLight";
@@ -151,10 +151,10 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
             />
           )}
 
-          {/* ── Заглушки решти піраміди (Р4c+) ── */}
-          <Placeholder title="Воронка продажів (чесна, ≤100%)" note="funnelCohortHonest — тут буде 5 стадій + «зайшли посередині»" />
-          <Placeholder title="Конверсії + цілі" note="ads / Продзвін / Реактивація vs цільові (15 / 7-8 / 10%)" />
-          <Placeholder title="Тижнева розбивка · Перенесені · Деталі" note="weekly · carryover · дрилл-даун" />
+          {/* ── Р4c.2 — когортна воронка · конверсії+цілі · тижнева+перенесені ── */}
+          <MRFunnel funnel={data.funnel} compare={data.compare} />
+          <MRConversions conv={data.conversions} compare={data.compare} />
+          <MRWeeklyCarryover weekly={data.weekly} carryover={data.carryover} />
         </>
       )}
     </div>
@@ -257,11 +257,157 @@ function Pick({ value, onChange, placeholder, options }: { value: number | null;
   );
 }
 
-function Placeholder({ title, note }: { title: string; note: string }) {
+// ─────────────────────── Р4c.2 — chartless секції піраміди ───────────────────────
+// Спільні хелпери. pctCell — cohort-% з BE (вже «чесний» ≤100%, тому рендеримо як є,
+// без перерахунку). ddmm — «DD.MM» із YYYY-MM-DD.
+const pctCell = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v)}%`);
+const ddmm = (iso: string) => { const [, m, d] = iso.split("-"); return `${d}.${m}`; };
+
+// §1 — Когортна воронка (чесна ≤100%). Джерело: data.funnel (MRFunnelBucket[]).
+const FUNNEL_STAGES: { key: keyof ManagerReport["funnel"][number]["reached"]; label: string }[] = [
+  { key: "lead_taken", label: "Взято в роботу" },
+  { key: "quote_requested", label: "Запит на прорахунок" },
+  { key: "approved", label: "Погоджено" },
+  { key: "invoiced", label: "Виставлено рахунок" },
+  { key: "paid", label: "Оплата" },
+];
+function MRFunnel({ funnel, compare }: { funnel: ManagerReport["funnel"]; compare: ManagerReport["compare"] }) {
+  if (!funnel.length) return null;
+  const cmp = compare?.funnelPaidPct;
+  // Δ показуємо ЛИШЕ коли когорти співмірні за зрілістю (інакше оманливо).
+  const dPct = cmp && !cmp.maturityMismatch ? cmp.deltaPct : null;
   return (
-    <div className="chart-card" style={{ opacity: 0.7, border: "1px dashed var(--border)" }}>
-      <h2 className="chart-title" style={{ marginBottom: 4 }}>{title}</h2>
-      <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>🚧 тут буде: {note}</p>
+    <div className="chart-card">
+      <h2 className="chart-title" style={{ marginBottom: 4 }}>Воронка (когорта створених, чесна ≤100%)</h2>
+      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
+        Когорта = ліди, що зайшли у «Взято в роботу» в бакеті; кожна стадія — скільки з ТІЄЇ САМОЇ когорти її досягли (стеля ≤100%).
+      </p>
+      {funnel.map((b) => (
+        <div key={b.bucket} style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "baseline", flexWrap: "wrap", gap: "4px 12px", marginBottom: 6 }}>
+            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{b.bucket} · когорта {b.cohort}</span>
+            <span style={{ fontSize: 26, fontWeight: 800, color: "var(--text)", lineHeight: 1 }}>{pctCell(b.pct.paid)}</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>дійшли до оплати</span>
+            {b.mature === false && <span style={{ fontSize: 11, color: "#b45309", fontWeight: 600 }}>⏳ дозріває</span>}
+            {b.midfunnel > 0 && (
+              <span style={{ fontSize: 11, color: "var(--text-muted)", background: "var(--hover-bg, rgba(127,127,127,0.08))", borderRadius: 999, padding: "1px 8px" }}>
+                + {b.midfunnel} зайшли посередині
+              </span>
+            )}
+            {dPct != null && (
+              <span style={{ fontSize: 12, fontWeight: 600, color: dPct >= 0 ? "#16a34a" : "#dc2626" }}>
+                {dPct >= 0 ? "↑" : "↓"} {Math.abs(dPct)}% до попер.
+              </span>
+            )}
+          </div>
+          <table className="data-table" style={{ fontSize: 13 }}>
+            <thead>
+              <tr><th>Стадія</th><th style={{ textAlign: "right" }}>Досягли</th><th style={{ textAlign: "right" }}>% когорти</th></tr>
+            </thead>
+            <tbody>
+              {FUNNEL_STAGES.map((s) => (
+                <tr key={s.key}>
+                  <td>{s.label}</td>
+                  <td style={{ textAlign: "right", fontWeight: s.key === "paid" ? 700 : 400 }}>{b.reached[s.key]}</td>
+                  <td style={{ textAlign: "right" }}>{pctCell(b.pct[s.key])}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// §2 — Конверсії + цілі. Реюз ідіому плиток Огляду (kpi-card). Джерело: data.conversions.
+function MRConversions({ conv, compare }: { conv: ManagerReport["conversions"]; compare: ManagerReport["compare"] }) {
+  const tiles = [
+    { label: "Конверсія реклами", c: conv.ads, headline: conv.ads.cohort, sub: undefined as string | undefined, cmpKey: "adsCohort" },
+    { label: "Конверсія Продзвін", c: conv.prodzvin, headline: conv.prodzvin.won, sub: `передано ${pctCell(conv.prodzvin.handoff)}`, cmpKey: "prodzvinWon" },
+    { label: "Конверсія Реактивація", c: conv.reactivation, headline: conv.reactivation.won, sub: `передано ${pctCell(conv.reactivation.handoff)}`, cmpKey: "reactivationWon" },
+  ];
+  return (
+    <div className="chart-card">
+      <h2 className="chart-title" style={{ marginBottom: 4 }}>Конверсії + цілі</h2>
+      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
+        Когортні наскрізні конверсії (стеля ≤100%). «⏳ дозріває» — когорта молодша 90 днів (частина ще не закрилась). «—» — замало входів (&lt;10).
+      </p>
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
+        {tiles.map((t) => {
+          const low = t.c.entered < 10;
+          const value = low || t.headline == null ? "—" : `${t.headline}%`;
+          const cmp = compare?.[t.cmpKey];
+          const dPct = cmp && !cmp.maturityMismatch ? cmp.deltaPct : null;
+          const vsColor = t.c.vsTarget == null ? "var(--text-muted)" : t.c.vsTarget >= 0 ? "#16a34a" : "#dc2626";
+          return (
+            <div key={t.label} className="kpi-card">
+              <span className="kpi-label">{t.label}</span>
+              <span className="kpi-value">{value}</span>
+              {t.sub && !low && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{t.sub}</span>}
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                ціль {t.c.target}% · <span style={{ color: vsColor, fontWeight: 600 }}>vs {t.c.vsTarget == null ? "—" : `${t.c.vsTarget >= 0 ? "+" : ""}${t.c.vsTarget}`}</span>
+              </span>
+              {t.c.mature === false && <span style={{ fontSize: 11, color: "#b45309", fontWeight: 600 }}>⏳ дозріває</span>}
+              {dPct != null && (
+                <span style={{ fontSize: 12, fontWeight: 600, color: dPct >= 0 ? "#16a34a" : "#dc2626" }}>
+                  {dPct >= 0 ? "↑" : "↓"} {Math.abs(dPct)}% до попер.
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// §3 — Тижнева розбивка + Перенесені (carryover). Джерело: data.weekly, data.carryover.
+const WEEK_STATUS: Record<"past" | "current" | "future", { bg: string; label: string }> = {
+  past: { bg: "transparent", label: "минув" },
+  current: { bg: "rgba(197,20,28,0.06)", label: "поточний" },
+  future: { bg: "transparent", label: "попереду" },
+};
+function MRWeeklyCarryover({ weekly, carryover }: { weekly: ManagerReport["weekly"]; carryover: ManagerReport["carryover"] }) {
+  return (
+    <div className="chart-card">
+      <h2 className="chart-title" style={{ marginBottom: 4 }}>Тижнева розбивка · Перенесені</h2>
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 14 }}>
+        <div className="kpi-card" style={{ borderLeft: "4px solid #2563eb" }}>
+          <span className="kpi-label">Перенесені (carryover)</span>
+          <span className="kpi-value">{formatAmount(carryover.amount)}</span>
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{carryover.deals} угод · display-only (не в план/факт)</span>
+        </div>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
+        Факт по тижнях — <b>датований потік (по даті закриття угоди)</b>; тому Σ тижнів навмисно не дорівнює факту в шапці (той — отримані кошти).
+      </p>
+      <div style={{ overflowX: "auto" }}>
+        <table className="data-table" style={{ fontSize: 13 }}>
+          <thead>
+            <tr>
+              <th>Тиждень</th>
+              <th style={{ textAlign: "right" }}>План</th>
+              <th style={{ textAlign: "right" }}>Факт</th>
+              <th style={{ textAlign: "right" }}>%</th>
+              <th style={{ textAlign: "right" }}>Залишок</th>
+            </tr>
+          </thead>
+          <tbody>
+            {weekly.map((w) => (
+              <tr key={w.label} style={{ background: WEEK_STATUS[w.status].bg, opacity: w.status === "future" ? 0.6 : 1 }}>
+                <td style={{ fontWeight: w.status === "current" ? 700 : 400 }}>
+                  {w.label} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ddmm(w.from)}–{ddmm(w.to)} · {WEEK_STATUS[w.status].label}</span>
+                </td>
+                <td style={{ textAlign: "right" }}>{formatAmount(w.plan)}</td>
+                <td style={{ textAlign: "right", fontWeight: 700, color: "#c5141c" }}>{formatAmount(w.fact)}</td>
+                <td style={{ textAlign: "right" }}>{w.pct == null ? "—" : `${w.pct}%`}</td>
+                <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{formatAmount(w.remaining)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
