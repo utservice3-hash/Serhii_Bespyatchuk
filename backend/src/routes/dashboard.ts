@@ -26,6 +26,7 @@ import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
 import * as money from "../core/money.js";
 import * as metrics from "../core/metrics.js";
+import * as plans from "../core/plans.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 
 export const dashboardRouter = Router();
@@ -2093,12 +2094,11 @@ dashboardRouter.get("/teams", async (req, res) => {
   // Per-manager breakdown for the team drill-down: revenue (success+payment),
   // deals, the month's plan and receivables — one row per active manager.
   const planMonth = (to ? to.slice(0, 7) : new Date().toISOString().slice(0, 7)) + "-01";
-  const mPlan = await pool.query<{ id: number; name: string; tid: number; plan: string }>(
-    `SELECT m.id, m.name, m.team_id AS tid, SUM(p.planned_value) AS plan
-     FROM plans p JOIN managers m ON m.id = p.manager_id AND m.is_active
-     WHERE p.metric = 'payment_amount' AND p.plan_date = $1 GROUP BY m.id, m.name, m.team_id`,
-    [planMonth]
-  );
+  // 🔴 План на менеджера — ЄДИНЕ ЯДРО core/plans.managerPlan (базовий + розподіл планів
+  // звільнених одноплемінників), ТА САМА функція, що й світлофор Звіту 2.0 → per-mgr план
+  // на /teams == світлофор. Прибрано сирий `SUM(planned_value) … AND is_active` без розподілу
+  // (він губив план звільнених → живий розрив з світлофором, team14: −25 000).
+  const mPlan = await plans.managerPlan({ month: planMonth });
   type MgrRow = { id: number; name: string; teamId: number; revenue: number; deals: number; plan: number; receivables: number; expected: number; dispatched: number; successRev: number };
   const mmap = new Map<number, MgrRow>();
   const mget = (id: number, tid: number | null, name: string): MgrRow => {
@@ -2111,7 +2111,7 @@ dashboardRouter.get("/teams", async (req, res) => {
   // revenue/deals = received (анкер+дедуп); dispatched/successRev = success-only (avgCheck).
   for (const r of recvMgrAgg) { const e = mget(r.managerId, r.teamId, r.name); e.revenue += r.revenue; e.deals += r.deals; }
   for (const r of sucMgrAgg) { const e = mget(r.managerId, r.teamId, r.name); e.dispatched += r.deals; e.successRev += r.revenue; }
-  for (const r of mPlan.rows) { mget(r.id, r.tid, r.name).plan += Number(r.plan); }
+  for (const r of mPlan.rows) { mget(r.managerId, r.teamId, r.name).plan += r.plan; }
   for (const d of debtByMgr) { if (d.managerId != null) { const e = mmap.get(d.managerId); if (e) e.receivables += d.debt; } }
 
   const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; expected: number; dispatched: number; successRev: number }>();
@@ -4347,71 +4347,41 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   let managers: { managerId: number; name: string; teamId: number | null; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; flowCur: number | null; flowPrev: number | null }[] | undefined;
   if (level !== "manager") {
     const mStart = monthStartOf(from);
-    const ownP: unknown[] = [mStart]; const ownScope = teamId ? (ownP.push(teamId), `AND m.team_id = $${ownP.length}`) : "";
-    const taP: unknown[] = [mStart]; const taScope = teamId ? (taP.push(teamId), `AND m.team_id = $${taP.length}`) : "";
-    const [mFacts, ownPlansRes, teamAggRes, mNamesRes, teamFacts, mFlowCur, mFlowPrev] = await Promise.all([
+    const [mFacts, planRes, teamFacts, mFlowCur, mFlowPrev] = await Promise.all([
       money.receivedByMgr({ from, to, managerId, teamId }),
-      // власний план АКТИВНОГО менеджера
-      pool.query<{ manager_id: number; s: string }>(
-        `SELECT p.manager_id, COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers m ON m.id = p.manager_id
-          WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date AND m.is_active ${ownScope} GROUP BY p.manager_id`, ownP),
-      // по команді: Σ плану ДЕАКТИВОВАНИХ + к-сть АКТИВНИХ (для розподілу)
-      pool.query<{ team_id: number; deact: string; nactive: string }>(
-        `SELECT m.team_id,
-            COALESCE(SUM(p.planned_value) FILTER (WHERE NOT m.is_active),0) deact,
-            COUNT(DISTINCT m.id) FILTER (WHERE m.is_active) nactive
-          FROM managers m LEFT JOIN plans p ON p.manager_id = m.id AND p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date
-          WHERE m.team_id IS NOT NULL ${taScope} GROUP BY m.team_id`, taP),
-      pool.query<{ id: number; name: string; team_id: number | null }>(
-        teamId ? `SELECT id, name, team_id FROM managers WHERE is_active AND team_id = $1 ORDER BY id` : `SELECT id, name, team_id FROM managers WHERE is_active ORDER BY id`,
-        teamId ? [teamId] : []),
+      // 🔴 План на менеджера (базовий + розподіл звільнених) — ЄДИНЕ ЯДРО core/plans.
+      // Та сама функція, що й /teams drill → числа світлофора й /teams збігаються.
+      plans.managerPlan({ teamId, month: mStart }),
       money.receivedByTeam({ from, to, teamId }),
       compareFrom && compareTo ? money.successByMgr({ from, to, managerId, teamId }) : Promise.resolve(null),
       compareFrom && compareTo ? money.successByMgr({ from: compareFrom, to: compareTo, managerId, teamId }) : Promise.resolve(null),
     ]);
-    const ownPlan = new Map(ownPlansRes.rows.map((r) => [r.manager_id, Math.round(Number(r.s))]));
-    const teamAgg = new Map(teamAggRes.rows.map((r) => [r.team_id, { deact: Math.round(Number(r.deact)), nactive: Number(r.nactive) }]));
     const factByMgr = new Map(mFacts.map((m) => [m.managerId, Math.round(m.revenue)]));
     const teamFactMap = new Map(teamFacts.filter((t) => t.teamId != null).map((t) => [t.teamId, { name: t.teamName, revenue: Math.round(t.revenue) }]));
     const expByMgr = new Map(expectedByManager.map((r) => [r.id, r.sum]));
     const curByMgr = mFlowCur ? new Map(mFlowCur.map((m) => [m.managerId, Math.round(m.revenue)])) : null;
     const prevByMgr = mFlowPrev ? new Map(mFlowPrev.map((m) => [m.managerId, Math.round(m.revenue)])) : null;
 
-    // 🔴 РОЗПОДІЛ ПЛАНУ ДЕАКТИВОВАНИХ (рішення власника): план звільненого ділиться РІВНОМІРНО
-    // на активних членів його команди (з точним залишком, щоб Σ не дрейфував на копійки).
-    // Деактивований рядка НЕ має, але його план не зникає → ціль команди/відділу повна (2.7 млн).
-    const activeByTeam = new Map<number | null, { id: number; name: string; team_id: number | null }[]>();
-    for (const r of mNamesRes.rows) { if (!activeByTeam.has(r.team_id)) activeByTeam.set(r.team_id, []); activeByTeam.get(r.team_id)!.push(r); }
-    const shareForMgr = new Map<number, number>();
-    for (const [tid, members] of activeByTeam) {
-      const agg = tid != null ? teamAgg.get(tid) : undefined;
-      if (!agg || agg.deact <= 0 || members.length === 0) continue;
-      const base = Math.floor(agg.deact / members.length);
-      let rem = agg.deact - base * members.length; // залишок → першим по 1
-      for (const mm of members) { shareForMgr.set(mm.id, base + (rem > 0 ? 1 : 0)); if (rem > 0) rem--; }
-    }
-
     const activeFactByTeam = new Map<number | null, number>();
     const rows: NonNullable<typeof managers> = [];
-    for (const r of mNamesRes.rows) {
-      const plan = (ownPlan.get(r.id) ?? 0) + (shareForMgr.get(r.id) ?? 0);
-      const fact = factByMgr.get(r.id) ?? 0;
-      activeFactByTeam.set(r.team_id, (activeFactByTeam.get(r.team_id) ?? 0) + fact);
+    for (const r of planRes.rows) {
+      const plan = r.plan; // власний + частка звільнених (core/plans)
+      const fact = factByMgr.get(r.managerId) ?? 0;
+      activeFactByTeam.set(r.teamId, (activeFactByTeam.get(r.teamId) ?? 0) + fact);
       if (plan <= 0 && fact <= 0) continue; // без плану й факту — не показуємо
       rows.push({
-        managerId: r.id, name: r.name, teamId: r.team_id, plan, fact,
+        managerId: r.managerId, name: r.name, teamId: r.teamId, plan, fact,
         pctPlan: plan > 0 ? Math.round((fact / plan) * 100) : null, remaining: Math.max(0, plan - fact),
-        expectedThisMonth: Math.round(expByMgr.get(r.id) ?? 0),
-        flowCur: curByMgr ? (curByMgr.get(r.id) ?? 0) : null,
-        flowPrev: prevByMgr ? (prevByMgr.get(r.id) ?? 0) : null,
+        expectedThisMonth: Math.round(expByMgr.get(r.managerId) ?? 0),
+        flowCur: curByMgr ? (curByMgr.get(r.managerId) ?? 0) : null,
+        flowPrev: prevByMgr ? (prevByMgr.get(r.managerId) ?? 0) : null,
       });
     }
     // 🔴 ОРФАН-РЯДОК (НЕ ховаємо розрив): факт команди понад Σ активних = гроші звільнених
     // (лишаються в команді, але не на колегах); план деактивованих, який НЕМАЄ куди розподілити
-    // (0 активних у команді) — теж явно, managerId=0 (не клікабельний). Зазвичай порожньо.
+    // (0 активних у команді, core/plans.orphanPlanByTeam) — теж явно, managerId=0. Зазвичай порожньо.
     for (const [tid, tf] of teamFactMap) {
-      const agg = teamAgg.get(tid);
-      const residualPlan = agg && agg.nactive === 0 ? agg.deact : 0;
+      const residualPlan = planRes.orphanPlanByTeam.get(tid) ?? 0;
       const residualFact = tf.revenue - (activeFactByTeam.get(tid) ?? 0);
       if (residualPlan > 0 || residualFact > 0) {
         rows.push({
