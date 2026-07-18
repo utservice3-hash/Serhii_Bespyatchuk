@@ -3534,7 +3534,10 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
 
   // Per-manager money for the month (teamId is a validated number → safe to inline):
   //  fact = «Успішно» (142, закрито в місяці) + «Оплата отримана» (снапшот);
-  //  carryover = перенесені з мин. міс. (monthly_carryover_mgr);
+  //  carryover = ЯДРО metrics.carryoverByManager (детермінована реконструкція з
+  //    deal_stage_events на 00:00 дня-1, зона EXPECT_ZONE) — та сама функція, що Огляд/
+  //    Звіт 2.0. Прибрано читання знімок-таблиці monthly_carryover_mgr (легасі, корупція
+  //    рестартами). СИРІ ПЛАНИ (row.plan/planned_value) НЕ чіпано.
   //  expected = очікувані кошти = снапшот угод з етапу «Виставлено рахунок» (invoiced).
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
   const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
@@ -3558,14 +3561,11 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
         WHERE ${EXPECTED_STAGES} ${teamAnd}
         GROUP BY d.manager_id`),
-    pool.query<{ id: string; amount: string }>(
-      `SELECT cm.manager_id AS id, cm.amount FROM monthly_carryover_mgr cm
-         JOIN managers m ON m.id = cm.manager_id
-        WHERE cm.month = $1 ${teamAnd}`, [planDate]),
+    metrics.carryoverByManager({ teamId }, planDate),
   ]);
   const numMap = (rows: { id: string; s: string }[]) => new Map(rows.map((x) => [Number(x.id), Number(x.s)]));
   const succM = numMap(succ.rows), payM = numMap(pay.rows), expM = numMap(exp.rows);
-  const carryM = new Map(carry.rows.map((x) => [Number(x.id), Number(x.amount)]));
+  const carryM = new Map(carry.map((x) => [x.managerId, x.amount]));
 
   const teamsMap = new Map<number, { teamId: number; teamName: string; teamPlan: number; teamFact: number; teamCarryover: number; teamExpected: number; managers: { managerId: number; name: string; plan: number; fact: number; carryover: number; expected: number }[] }>();
   let totalPlan = 0, totalFact = 0, totalCarryover = 0, totalExpected = 0;

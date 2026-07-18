@@ -1143,6 +1143,38 @@ export async function carryoverByScope(s: SnapshotScope, monthStart: string): Pr
   return { amount: Number(r.rows[0]?.amt ?? 0), deals: Number(r.rows[0]?.dl ?? 0) };
 }
 
+export interface CarryoverMgrRow { managerId: number; amount: number; deals: number }
+
+/**
+ * Розріз `carryoverByScope` ПО МЕНЕДЖЕРУ (та сама реконструкція з deal_stage_events на
+ * 00:00 дня-1 місяця, зона EXPECT_ZONE) — для колонки carryover у /plans-grid. Σ рядків =
+ * carryoverByScope(той самий скоуп) для угод з менеджером (інваріант матрьошки). Тому
+ * plans-grid.carryover(менеджер) == Огляд carryover({managerId}) байт-у-байт.
+ */
+export async function carryoverByManager(s: SnapshotScope, monthStart: string): Promise<CarryoverMgrRow[]> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE, monthStart];
+  const conds: string[] = ["d.manager_id IS NOT NULL"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ manager_id: number; amt: string; dl: string }>(
+    `WITH stage_at AS (
+       SELECT DISTINCT ON (dse.kommo_id) dse.kommo_id, dse.status_id
+         FROM deal_stage_events dse
+        WHERE dse.pipeline_id = ANY($1)
+          AND dse.changed_at < ($3::date AT TIME ZONE 'Europe/Kyiv')
+        ORDER BY dse.kommo_id, dse.changed_at DESC
+     )
+     SELECT d.manager_id, COALESCE(SUM(d.price),0) amt, COUNT(*)::int dl
+       FROM stage_at sa
+       JOIN deals d ON d.kommo_id = sa.kommo_id
+       LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE d.pipeline_id = ANY($1) AND sa.status_id = ANY($2) AND ${conds.join(" AND ")}
+      GROUP BY d.manager_id`,
+    params
+  );
+  return r.rows.map((x) => ({ managerId: x.manager_id, amount: Number(x.amt), deals: Number(x.dl) }));
+}
+
 export interface ExpectedScopeRow { id: number; name: string; teamId: number | null; deals: number; sum: number }
 
 /**
