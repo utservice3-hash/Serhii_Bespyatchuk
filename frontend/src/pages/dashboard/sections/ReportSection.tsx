@@ -689,8 +689,8 @@ export function ReportSection({
             const pctPaid = Math.round((paid / base) * 100);
             const pctZone = Math.round((zoneSeg / base) * 100);
             const pctDobir = Math.round((dobirSeg / base) * 100);
-            const planPct = plan > 0 ? Math.round((paid / plan) * 100) : null;
-            const gap = plan > 0 ? Math.max(0, plan - projection) : 0;
+            const planPct = plan > 0 ? Math.round((paid / plan) * 100) : null; // % плану = оплочено/план
+            const gap = plan > 0 ? Math.max(0, plan - paid) : 0;               // залишок = план − оплочено (не прогноз)
             const dobirStripe = "repeating-linear-gradient(45deg,#d9a441,#d9a441 5px,#f0cd85 5px,#f0cd85 10px)";
             const who = reportManagerId ? (managerOptions.find((m) => m.id === Number(reportManagerId))?.name ?? "менеджер")
               : reportTeamId ? (teams.find((t) => t.id === Number(reportTeamId))?.name ?? "команда") : "усі команди";
