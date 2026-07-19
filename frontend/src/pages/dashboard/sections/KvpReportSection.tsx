@@ -13,7 +13,6 @@ const fmtMoney = (v: number) => formatAmount(v);
 const fmtFull = (v: number) => formatAmountFull(v);
 const fmtNum = (v: number | null) => (v == null ? "—" : Number(v).toLocaleString("uk-UA"));
 const fmtPct = (v: number | null) => (v == null ? "—" : `${v}%`);
-const dmy = (iso: string) => iso.split("-").reverse().join(".");
 
 /** ⓘ на кожній метриці: що рахує / якір / включено / чому. */
 const HINT: Record<string, string> = {
