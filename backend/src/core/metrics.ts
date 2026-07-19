@@ -484,6 +484,57 @@ export async function adsAcceptedByMgr(s: MetricScope, adSources: string[]): Pro
   return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, count: Number(x.n) }));
 }
 
+// ───────────────────────── НЕЦІЛЬОВІ ЛІДИ (marketing/КВП) ─────────────────────────
+
+/**
+ * Категорії «Причина отказа» (`deals.reject_reason`, ТЕКСТ-label), що власник рахує
+ * НЕЦІЛЬОВИМИ (рішення КВП, Крок Б/Г): ЛИШЕ «Дубль» + «Перевізник». Інші відмови —
+ * «Нецільове звернення», «Немає зв'язку», «Є інші угоди в роботі» тощо — сюди НЕ
+ * входять (свідома межа власника). Live-доведено: `reject_reason` заповнюється ЛИШЕ
+ * на Кваліфікації 8921928, тож pipeline-фільтр не потрібен (реджект = вже 8921928).
+ */
+export const REJECT_NONTARGET = ["Дубль", "Перевізник"];
+
+/**
+ * Спільний предикат нецільових: РЕКЛАМНИЙ (`adDealSql`) лід із reject_reason ∈
+ * {Дубль, Перевізник}. Ad-фільтр обовʼязковий — метрика про ЗЛИТИЙ рекламний бюджет
+ * на junk, не про всю відмову (стара Кваліфікація-143-усе-підряд змітала й
+ * не-рекламні: live ~989/міс → ~74). `$1`=adSources, `$2`=REJECT_NONTARGET.
+ */
+const nonTargetPredicate = "(" + adDealSql("$1") + " AND d.reject_reason = ANY($2))";
+
+/**
+ * НЕЦІЛЬОВІ ліди за скоупом і періодом (за датою СТВОРЕННЯ, обидва кінці по-київськи).
+ * Additive: Σ менеджерів = команда = відділ (кожен лід має 1 manager). Скаляр — для
+ * /lead-quality (КВП). Бакетна версія (нижче) — для depstats.
+ */
+export async function nonTargetLeads(s: MetricScope, adSources: string[]): Promise<number> {
+  const params: unknown[] = [adSources, REJECT_NONTARGET];
+  const conds = [nonTargetPredicate];
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ n: string }>(
+    `SELECT COUNT(*)::int AS n FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/**
+ * НЕЦІЛЬОВІ помісячно/потижнево (той самий предикат) — для depstats-бекфілу/перерахунку.
+ * `trunc` ∈ 'month'|'week'. Бакет = київський місяць/тиждень дати створення.
+ */
+export async function nonTargetLeadsByBucket(adSources: string[], trunc: "month" | "week"): Promise<{ bucket: string; count: number }[]> {
+  const r = await pool.query<{ bucket: string; v: string }>(
+    `SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
+       FROM deals d
+      WHERE ${nonTargetPredicate} AND d.created_at_kommo IS NOT NULL
+      GROUP BY bucket`,
+    [adSources, REJECT_NONTARGET]);
+  return r.rows.map((x) => ({ bucket: x.bucket, count: Number(x.v) }));
+}
+
 // ───────────────────────── КОНВЕРСІЯ РЕКЛАМИ (conversion_ads) ─────────────────────────
 
 /**

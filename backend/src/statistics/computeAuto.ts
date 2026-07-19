@@ -10,7 +10,8 @@
 import { pool } from "../db/pool.js";
 import { getSettings } from "../routes/settings.js";
 // КРОК 9 Фаза 3: `adDealSql` — єдине джерело `core/metrics.ts` (прибрано локальний дубль).
-import { adDealSql } from "../core/metrics.js";
+// КРОК Г #1: нецільові — теж із ядра (nonTargetLeadsByBucket), спільний предикат із /lead-quality.
+import { adDealSql, nonTargetLeadsByBucket } from "../core/metrics.js";
 
 const FULL_CYCLE = [8921932, 155304];
 
@@ -49,13 +50,10 @@ export async function computeDeptAuto(since: string): Promise<Map<string, number
         GROUP BY bucket`, [FULL_CYCLE, adSources]);
     for (const r of adLeads.rows) set("marketing", ptype, r.bucket, "ad_leads", Number(r.v));
 
-    // ── marketing.non_target_leads (Кваліфікація 8921928 статус 143, за створенням) ──
-    const nonTarget = await pool.query<Row>(
-      `SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
-         FROM deals d
-        WHERE d.pipeline_id = 8921928 AND d.status_id = 143 AND d.created_at_kommo IS NOT NULL
-        GROUP BY bucket`);
-    for (const r of nonTarget.rows) set("marketing", ptype, r.bucket, "non_target_leads", Number(r.v));
+    // ── marketing.non_target_leads (КРОК Г #1: реклама ∩ reject_reason {Дубль|Перевізник},
+    //    з ядра — спільний предикат із /lead-quality; стара Кваліфікація-143-усе знято) ──
+    const nonTarget = await nonTargetLeadsByBucket(adSources, trunc);
+    for (const r of nonTarget) set("marketing", ptype, r.bucket, "non_target_leads", Number(r.count));
 
     // ── marketing.ad_budget_total (ad_budget_daily.budget_fact) ──
     const adBudget = await pool.query<Row>(

@@ -3480,9 +3480,13 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
   if (from) { adParams.push(from); adConds.push(`day >= $${adParams.length}`); }
   if (to) { adParams.push(to); adConds.push(`day <= $${adParams.length}`); }
   const adWhere = adConds.length ? `WHERE ${adConds.join(" AND ")}` : "";
+  // КРОК Г #1: нецільові — КОГОРТА реклама ∩ reject_reason {Дубль|Перевізник} з ядра
+  // (metrics.nonTargetLeads), а НЕ стара Кваліфікація-143-усе-підряд (яка змітала й
+  // не-рекламні відмови). Загальні/цільові ліди не чіпаємо.
+  const { adSources: lqAdSources } = await getSettings();
   const [targetLeads, nonTargetLeads, adRes] = await Promise.all([
     countFor("d.pipeline_id = 8921932"),
-    countFor("d.pipeline_id = 8921928 AND d.status_id = 143"),
+    metrics.nonTargetLeads({ from, to, teamId }, lqAdSources),
     pool.query<{ plan: string; fact: string; conv: string }>(
       `SELECT COALESCE(SUM(budget_plan),0) AS plan, COALESCE(SUM(budget_fact),0) AS fact,
               COALESCE(SUM(conversions),0) AS conv
