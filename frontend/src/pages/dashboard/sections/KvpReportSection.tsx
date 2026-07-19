@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDaily, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDaily, type KvpWeek } from "../../../api";
+import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
@@ -249,53 +249,54 @@ export function KvpReportSection() {
   );
 }
 
-// Крок Д фінал #1 — ЛІНИВИЙ денний дрил менеджера (fetch при розкритті). Денна
-// таблиця (ліди р/лг · авто · отримано [· конв]) + плитки.
-function ManagerDailyDrill({ managerId, from, to, isRnk }: { managerId: number; from: string; to: string; isRnk: boolean }) {
-  const [d, setD] = useState<KvpManagerDaily | null>(null);
+// Крок Д фінал A — ЛІНИВИЙ ДЕТАЛЬНИЙ дрил менеджера weeks→days (fetch при розкритті).
+// Тижні Т1–Т5, «Разом» = Σ днів; клік тижня → дні. Поточний тиждень відкрито; майбутні
+// — лише очікування. Колонки: створено · ліди р/лг · авто · отримано · очікування.
+function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: string; to: string; isRnk: boolean }) {
+  const [d, setD] = useState<KvpManagerDetail | null>(null);
   const [err, setErr] = useState(false);
-  useEffect(() => { let a = true; setD(null); setErr(false); fetchManagerDaily({ managerId, from, to }).then((x) => a && setD(x)).catch(() => a && setErr(true)); return () => { a = false; }; }, [managerId, from, to]);
+  const [openW, setOpenW] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    let a = true; setD(null); setErr(false);
+    fetchManagerDetail({ managerId, from, to }).then((x) => { if (!a) return; setD(x); setOpenW(new Set(x.weeks.filter((w) => w.isCurrent).map((w) => w.idx))); }).catch(() => a && setErr(true));
+    return () => { a = false; };
+  }, [managerId, from, to]);
   if (err) return <div style={{ fontSize: 12, color: RED }}>Не вдалося завантажити деталь.</div>;
   if (!d) return <div style={{ fontSize: 12, color: MUTED }}>Завантаження деталі…</div>;
-  const t = d.tiles;
-  const days = d.days.filter((x) => x.leadsAd || x.leadsLeadgen || x.leadsOther || x.dispatched.deals || x.received.deals || x.converted);
+  const cell = (c: { created: number; leadsAd: number; leadsLeadgen: number; dispatched: number; received: { revenue: number; deals: number }; expected: { sum: number } }, future: boolean) => (<>
+    <td style={{ textAlign: "right" }}>{future ? "—" : (c.created || "—")}</td>
+    <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsAd || "—")}</td>
+    <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsLeadgen || "—")}</td>
+    <td style={{ textAlign: "right" }}>{future ? "—" : (c.dispatched || "—")}</td>
+    <td style={{ textAlign: "right", fontWeight: 600 }}>{future ? "—" : (c.received.deals ? fmtMoney(c.received.revenue) : "—")}</td>
+    <td style={{ textAlign: "right", color: AMBER }}>{c.expected.sum ? fmtMoney(c.expected.sum) : "—"}</td>
+  </>);
   return (
-    <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-        <Tile label="Відправлено авто" val={`${t.dispatched.deals} · ${fmtMoney(t.dispatched.revenue)}`} />
-        <Tile label="Середній чек" val={fmtFull(t.avgCheck)} />
-        <Tile label="Очікується цей міс" val={fmtMoney(t.expectedThis.sum)} color={AMBER} />
-        <Tile label="Очікується наст." val={fmtMoney(t.expectedNext.sum)} color={AMBER} />
-        {isRnk && <Tile label="Конверсія лід→оплата" val={t.conversion == null ? "—" : `${t.conversion}%`} />}
-        {t.gap > 0 && <Tile label="Розрив до плану" val={fmtMoney(t.gap)} color={RED} />}
-      </div>
-      {days.length === 0 ? <div style={{ fontSize: 12, color: MUTED }}>Немає активності у періоді.</div> : (
-        <div style={{ overflowX: "auto" }}>
-          <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
-            <thead><tr><th>День</th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто (сума)</th><th style={{ textAlign: "right" }}>Отримано</th>{isRnk && <th style={{ textAlign: "right" }}>Сконв.→оплата</th>}</tr></thead>
-            <tbody>
-              {days.map((x) => (
-                <tr key={x.day}>
-                  <td>{x.day.slice(8)}.{x.day.slice(5, 7)}</td>
-                  <td style={{ textAlign: "right" }}>{x.leadsAd || "—"}</td>
-                  <td style={{ textAlign: "right" }}>{x.leadsLeadgen || "—"}</td>
-                  <td style={{ textAlign: "right" }}>{x.dispatched.deals ? `${x.dispatched.deals} · ${fmtMoney(x.dispatched.revenue)}` : "—"}</td>
-                  <td style={{ textAlign: "right", fontWeight: 600 }}>{x.received.deals ? fmtMoney(x.received.revenue) : "—"}</td>
-                  {isRnk && <td style={{ textAlign: "right" }}>{x.converted || "—"}</td>}
+    <div style={{ overflowX: "auto" }}>
+      <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
+        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
+        <tbody>
+          {d.weeks.map((w) => {
+            const open = openW.has(w.idx);
+            return (
+              <Fragment key={w.idx}>
+                <tr onClick={() => setOpenW((s) => { const n = new Set(s); n.has(w.idx) ? n.delete(w.idx) : n.add(w.idx); return n; })}
+                  style={{ cursor: "pointer", background: w.isCurrent ? "rgba(37,99,235,0.08)" : "var(--bg)", fontWeight: 600 }}>
+                  <td>{open ? "▾" : "▸"} Т{w.idx} <span style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</span> Разом{w.isCurrent && " ●"}</td>
+                  {cell(w.total, w.isFuture)}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-function Tile({ label, val, color }: { label: string; val: string; color?: string }) {
-  return (
-    <div style={{ padding: "6px 10px", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 8, minWidth: 120 }}>
-      <div style={{ fontSize: 10, color: MUTED }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: color ?? "var(--text)" }}>{val}</div>
+                {open && w.days.map((x) => (
+                  <tr key={x.day}>
+                    <td style={{ paddingLeft: 24, color: MUTED }}>{x.day.slice(8)}.{x.day.slice(5, 7)}</td>
+                    {cell(x, w.isFuture)}
+                  </tr>
+                ))}
+                {open && w.days.length === 0 && <tr><td colSpan={7} style={{ paddingLeft: 24, color: MUTED, fontSize: 11 }}>Немає активності.</td></tr>}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -338,7 +339,7 @@ function ManagerDrill({ team, from, to, weekBlocks }: { team: KvpTeam; from: str
                 )}
                 {open && (
                   <tr><td colSpan={cols} style={{ padding: "8px 8px 12px 40px", background: "var(--card-bg)" }}>
-                    <ManagerDailyDrill managerId={m.managerId} from={from} to={to} isRnk={team.kind === "rnk"} />
+                    <ManagerDetailDrill managerId={m.managerId} from={from} to={to} isRnk={team.kind === "rnk"} />
                   </td></tr>
                 )}
               </Fragment>

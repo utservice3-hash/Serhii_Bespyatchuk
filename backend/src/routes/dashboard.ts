@@ -4213,12 +4213,13 @@ function workingDaysBetween(from: string, to: string): number {
 const RNK_MGR_TEAMS = new Set([13, 15]);
 
 /**
- * КРОК Д фінал #1 — ЛІНИВИЙ денний дрил менеджера. Admin-only. По КОЖНОМУ дню:
- * взято лідів (split ad/leadgen), відправлено авто (load_at), отримано коштів,
- * [РНК: сконвертовано→оплата]. + плитки (авто/чек/очікування цей-наст/[конв]/розрив).
- * ТІЛЬКИ збірка з ядра. Гейт: Σ по днях == місячні тотали менеджера.
+ * КРОК Д фінал A — ЛІНИВИЙ ДЕТАЛЬНИЙ дрил менеджера (weeks→days). Admin-only. Тижні
+ * Т1–Т5 місяця, у кожному — дні; по КОЖНОМУ тижню й дню ОДНАКОВИЙ набір: створено
+ * угод · взято лідів (ad/lg) · відправлено авто (load_at) · отримано коштів · очікування
+ * (зона за плановою датою). ТІЛЬКИ збірка з ядра. Гейт: Σ днів==тиждень, Σ тижнів==місяць
+ * по КОЖНОМУ показнику (тиждень.total = Σ днів; monthTotals = Σ тижнів).
  */
-dashboardRouter.get("/kvp-report/manager-daily", async (req, res) => {
+dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   const auth = req.auth!;
   if (auth.role !== "admin") return res.status(403).json({ error: "Лише КВП (адміністратор)" });
   const managerId = Number(req.query.managerId);
@@ -4226,56 +4227,38 @@ dashboardRouter.get("/kvp-report/manager-daily", async (req, res) => {
   const from = String(req.query.from ?? "");
   const to = String(req.query.to ?? "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: "from/to (YYYY-MM-DD) обовʼязкові" });
-  const mScope: money.MoneyScope = { managerId, from, to };
   const scope: metrics.MetricScope = { managerId, from, to };
   const monthStart = from.slice(0, 7) + "-01";
   const mRow = (await pool.query<{ name: string; team_id: number | null }>(`SELECT name, team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
   const isRnk = mRow?.team_id != null && RNK_MGR_TEAMS.has(mRow.team_id);
 
-  const [leadsRows, dispRows, recvRows, succ, expTiles, convMgr, planMonth, convDayRows] = await Promise.all([
+  const [createdRows, leadsRows, dispRows, recvRows, expRows] = await Promise.all([
+    metrics.createdByBucket(scope, "day"),
     metrics.leadsTakenByBucket(scope, "day", true),
     metrics.dispatchedByLoadBucket(scope, "day"),
-    money.receivedByManagerBucket(mScope, "day"),
-    money.successByMgr(mScope),
-    metrics.expectedPaymentsByPlanned({ managerId }),
-    metrics.conversionAdsByManager(scope, (await getSettings()).adSources),
-    plans.managerPlan({ month: monthStart }),
-    // сконвертовано→оплата по дню = ПЕРШИЙ вхід угоди менеджера в MONEY_ZONE (FC) у дні періоду
-    pool.query<{ day: string; n: string }>(
-      `SELECT to_char((won_at AT TIME ZONE 'Europe/Kyiv')::date,'YYYY-MM-DD') day, COUNT(*) n FROM (
-         SELECT e.kommo_id, MIN(e.changed_at) won_at
-           FROM deal_stage_events e JOIN deals d ON d.kommo_id = e.kommo_id
-          WHERE e.pipeline_id = ANY($1) AND e.status_id = ANY($2) AND d.manager_id = $3
-          GROUP BY e.kommo_id) x
-        WHERE (won_at AT TIME ZONE 'Europe/Kyiv')::date >= $4 AND (won_at AT TIME ZONE 'Europe/Kyiv')::date <= $5
-        GROUP BY 1`, [metrics.FC_PIPELINES, metrics.MONEY_ZONE, managerId, from, to]),
+    money.receivedByManagerBucket({ managerId, from, to }, "day"),
+    metrics.expectedByManagerDay({ managerId }),
   ]);
 
-  const days = new Map<string, { day: string; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: { deals: number; revenue: number }; received: { deals: number; revenue: number }; converted: number }>();
-  const dayGet = (day: string) => { let e = days.get(day); if (!e) { e = { day, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: { deals: 0, revenue: 0 }, received: { deals: 0, revenue: 0 }, converted: 0 }; days.set(day, e); } return e; };
-  for (const r of leadsRows) { const e = dayGet(r.bucket); const c = (r as { channel?: string }).channel; if (c === "ad") e.leadsAd += r.deals; else if (c === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals; }
-  for (const r of dispRows) { const e = dayGet(r.ym); e.dispatched = { deals: r.deals, revenue: r.revenue }; }
-  for (const r of recvRows) if (r.managerId === managerId) { const e = dayGet(r.bucket); e.received = { deals: r.deals, revenue: r.revenue }; }
-  for (const r of convDayRows.rows) dayGet(r.day).converted = Number(r.n);
-  const dayList = [...days.values()].sort((a, b) => a.day.localeCompare(b.day));
+  type Cell = { created: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; received: { deals: number; revenue: number }; expected: { deals: number; sum: number } };
+  const zero = (): Cell => ({ created: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 } });
+  const dayMap = new Map<string, Cell>();
+  const dget = (d: string) => { let e = dayMap.get(d); if (!e) { e = zero(); dayMap.set(d, e); } return e; };
+  for (const r of createdRows) dget(r.bucket).created += r.deals;
+  for (const r of leadsRows) { const e = dget(r.bucket); const c = (r as { channel?: string }).channel; if (c === "ad") e.leadsAd += r.deals; else if (c === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals; }
+  for (const r of dispRows) dget(r.ym).dispatched += r.deals;
+  for (const r of recvRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.received.deals += r.deals; e.received.revenue += r.revenue; }
+  for (const r of expRows) if (r.day >= from && r.day <= to) { const e = dget(r.day); e.expected.deals += r.deals; e.expected.sum += r.sum; }
 
-  const su = succ.find((x) => x.managerId === managerId);
-  const recvTotal = recvRows.filter((r) => r.managerId === managerId).reduce((a, r) => a + r.revenue, 0);
-  const dispTotal = dispRows.reduce((a, r) => ({ deals: a.deals + r.deals, revenue: a.revenue + r.revenue }), { deals: 0, revenue: 0 });
-  const cv = convMgr.find((x) => x.managerId === managerId);
-  const plan = planMonth.rows.find((x) => x.managerId === managerId)?.plan ?? 0;
-  const gap = plan > 0 ? Math.max(0, plan - recvTotal) : 0;
-  res.json({
-    managerId, name: mRow?.name ?? "", isRnk, from, to,
-    days: dayList,
-    tiles: {
-      dispatched: dispTotal,
-      avgCheck: su && su.deals > 0 ? Math.round(su.revenue / su.deals) : 0,
-      expectedThis: expTiles.thisMonth, expectedNext: expTiles.nextMonth,
-      conversion: isRnk && cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
-      plan, received: recvTotal, gap,
-    },
+  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum } });
+  const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const weeks = fixedWeekBlocks(monthStart).map((w) => {
+    const days = [...dayMap.entries()].filter(([d]) => d >= w.from && d <= w.to).sort((a, b) => a[0].localeCompare(b[0])).map(([day, c]) => ({ day, ...c }));
+    const total = days.reduce((acc, d) => addCell(acc, d), zero());
+    return { idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivToday && kyivToday <= w.to, isFuture: w.from > kyivToday, total, days };
   });
+  const monthTotals = weeks.reduce((acc, w) => addCell(acc, w.total), zero());
+  res.json({ managerId, name: mRow?.name ?? "", isRnk, from, to, weeks, monthTotals });
 });
 
 /**

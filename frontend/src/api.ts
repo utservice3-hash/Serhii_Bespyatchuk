@@ -423,14 +423,18 @@ export interface KvpManager {
   daily: KvpDay[]; weeks: KvpWeek[];
 }
 export interface KvpExpBucket { deals: number; sum: number }
-// Крок Д фінал #1 — денний дрил менеджера (лінивий фетч)
-export interface KvpManagerDaily {
-  managerId: number; name: string; isRnk: boolean; from: string; to: string;
-  days: { day: string; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: { deals: number; revenue: number }; received: { deals: number; revenue: number }; converted: number }[];
-  tiles: { dispatched: { deals: number; revenue: number }; avgCheck: number; expectedThis: KvpExpBucket; expectedNext: KvpExpBucket; conversion: number | null; convEntered: number; plan: number; received: number; gap: number };
+// Крок Д фінал A — детальний дрил менеджера weeks→days (лінивий фетч)
+export interface KvpDetailCell {
+  created: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
+  received: { deals: number; revenue: number }; expected: { deals: number; sum: number };
 }
-export async function fetchManagerDaily(params: { managerId: number; from: string; to: string }): Promise<KvpManagerDaily> {
-  const { data } = await api.get<KvpManagerDaily>("/dashboard/kvp-report/manager-daily", { params });
+export interface KvpDetailWeek { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; total: KvpDetailCell; days: (KvpDetailCell & { day: string })[] }
+export interface KvpManagerDetail {
+  managerId: number; name: string; isRnk: boolean; from: string; to: string;
+  weeks: KvpDetailWeek[]; monthTotals: KvpDetailCell;
+}
+export async function fetchManagerDetail(params: { managerId: number; from: string; to: string }): Promise<KvpManagerDetail> {
+  const { data } = await api.get<KvpManagerDetail>("/dashboard/kvp-report/manager-detail", { params });
   return data;
 }
 export interface KvpTeam {
