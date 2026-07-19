@@ -509,52 +509,140 @@ const paidAdSql = (srcRef: string): string =>
 
 export interface ConversionAdsRow {
   ym: string;
-  entered: number;       // знаменник обох версій: платні нові, що зайшли в зону в місяці
-  wonEventually: number; // чисельник КОГОРТИ: із цих — скільки ЗРЕШТОЮ виграли (FC 142)
+  entered: number;       // знаменник обох версій: вхідна когорта, що зайшла в зону в місяці
+  wonEventually: number; // чисельник КОГОРТИ: із цих — скільки ЗРЕШТОЮ дійшли до MONEY_ZONE
   cohortPct: number | null;
-  wonInMonth: number;    // чисельник ПЕРІОДУ: виграли (FC 142) у цьому місяці
+  wonInMonth: number;    // чисельник ПЕРІОДУ: дійшли до MONEY_ZONE у цьому місяці
   periodPct: number | null;
   mature: boolean;       // когорта дозріла (≥90 днів від кінця місяця)
 }
+/** Уніфікований рядок когортної конверсії — спільний для всіх 4 конверсій (Крок В). */
+export type ConversionCohortRow = ConversionAdsRow;
 
 /**
- * `conversion_ads` помісячно за 12 міс (GLOSSARY §2b): дві версії —
- *  • `cohort`  = зайшли в зону в місяці → скільки з них ЗРЕШТОЮ виграли (наскрізь
- *    до FC 142). Чисельник ⊆ знаменник → стеля ≤100% (математичний інваріант).
- *  • `period`  = виграли у місяці ÷ зайшли в місяці (різні когорти) → може
- *    перевищувати 100% при зростанні потоку (артефакт когорт, не баг коду).
- * Знаменник: платні (paidAdSql) нові (SEGMENT_CASE='new', вже без лідогену)
- * ліди, що зайшли в ADZONE_TAKEN. Чисельник: їхній `deal_id` має подію входу в
- * 142 у Повному циклі. Скоуп — той самий MetricScope (manager/team).
+ * Опис ВХІДНОЇ КОГОРТИ (знаменника) для `conversionByCohort`. Чисельник скрізь
+ * ОДНАКОВИЙ — «дійшов до MONEY_ZONE у Повному циклі» — тут задається лише ЯК
+ * формується вхідна когорта та її ЗЕРНО дедупу:
+ *   • `deal`   — зерно `kommo_id` (та сама угода йде Кваліфікація→FC, id зберігає):
+ *     РЕКЛАМА. Вхід = подія входу в `entryStatuses`; знаменник — платні нові
+ *     (`paidAdSql`+SEGMENT='new'), тому потрібен `adSources`.
+ *   • `client`+`stage` — зерно `client_key` (угода лідогену і виграна FC — РІЗНІ
+ *     id, спільний client_key): ПРОДЗВІН / РЕАКТИВАЦІЯ. Вхід = стадія у своїй воронці.
+ *   • `client`+`transferred` — зерно `client_key`: ЛІДОГЕН-ПЕРЕДАЧІ. Вхід =
+ *     `leadgen_registry.transferred_at` (виключаючи лідоген-команди).
  */
-export async function conversionAdsByMonth(s: MetricScope, adSources: string[]): Promise<ConversionAdsRow[]> {
-  const params: unknown[] = [ADZONE_TAKEN, FC_PIPELINES, adSources];
-  const scopeConds: string[] = [];
-  if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
-  const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+type CohortEntry =
+  | { grain: "deal"; entryStatuses: number[]; adSources: string[] }
+  | { grain: "client"; kind: "stage"; entryStatuses: number[]; entryPipelines: number[] }
+  | { grain: "client"; kind: "transferred" };
+
+/**
+ * 🎯 ЄДИНЕ ЯДРО КОНВЕРСІЇ (Крок В) — знаменник ВСІХ 4 конверсій формує `entry`,
+ * а ЧИСЕЛЬНИК завжди однаковий: із вхідної когорти — скільки БУДЬ-КОЛИ дійшли до
+ * **MONEY_ZONE** (`EXPECT_ZONE∪PAID∪{142}`) у Повному циклі, дедуп по зерну.
+ *  • `cohort` = зайшли в місяці → з них зрештою дійшли до грошей. Чисельник ⊆
+ *    знаменник → стеля ≤100% (математичний інваріант).
+ *  • `period` = дійшли до грошей у місяці ÷ зайшли в місяці (різні когорти) → може
+ *    перевищувати 100% при зростанні потоку (артефакт когорт, не баг коду).
+ * Дозрівання — ЄДИНА формула скрізь: `(кінець міс.+1 міс) ≤ now−90д`; поточний
+ * місяць `mature=false` (UI → ⏳). client-grain: чисельник ПІСЛЯ входу
+ * (`changed_at >= entered_at`) — інакше стара виграна угода до дотику хибно
+ * зараховувалась би. `client_key IS NULL` виключено (немає по чому трекати).
+ */
+async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<ConversionCohortRow[]> {
+  const params: unknown[] = [MONEY_ZONE, FC_PIPELINES]; // $1 = MONEY_ZONE (won), $2 = FC pipelines
+  let cte: string;
+
+  if (entry.grain === "deal") {
+    params.push(entry.entryStatuses);              // $3
+    const entryRef = `$${params.length}`;
+    params.push(entry.adSources);                  // $4
+    const srcRef = `$${params.length}`;
+    const scopeConds: string[] = [];
+    if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+    cte = `adzone AS (
+         SELECT kommo_id, MIN(changed_at) AS entered_at
+           FROM deal_stage_events WHERE status_id = ANY(${entryRef}) GROUP BY kommo_id
+       ),
+       won AS (
+         SELECT kommo_id, MIN(changed_at) AS won_at
+           FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = ANY($1) GROUP BY kommo_id
+       ),
+       pop AS (
+         SELECT a.entered_at, w.won_at
+           FROM adzone a
+           JOIN deals d ON d.kommo_id = a.kommo_id
+           LEFT JOIN managers m ON m.id = d.manager_id
+           LEFT JOIN won w ON w.kommo_id = a.kommo_id
+          WHERE ${paidAdSql(srcRef)} AND (${SEGMENT_CASE}) = 'new' ${scopeWhere}
+       )`;
+  } else if (entry.kind === "stage") {
+    params.push(entry.entryStatuses);              // $3
+    const entryRef = `$${params.length}`;
+    params.push(entry.entryPipelines);             // $4
+    const entryPipeRef = `$${params.length}`;
+    const scopeConds: string[] = [];
+    if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    const scopeJoin = s.teamId ? "LEFT JOIN managers m ON m.id = d.manager_id" : "";
+    const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+    cte = `entered AS (
+         SELECT d.client_key, MIN(e.changed_at) AS entered_at
+           FROM deal_stage_events e
+           JOIN deals d ON d.kommo_id = e.kommo_id ${scopeJoin}
+          WHERE e.status_id = ANY(${entryRef}) AND e.pipeline_id = ANY(${entryPipeRef})
+            AND d.client_key IS NOT NULL ${scopeWhere}
+          GROUP BY d.client_key
+       ),
+       won AS (
+         SELECT en.client_key, MIN(e.changed_at) AS won_at
+           FROM entered en
+           JOIN deals d ON d.client_key = en.client_key
+           JOIN deal_stage_events e ON e.kommo_id = d.kommo_id
+          WHERE e.status_id = ANY($1) AND e.pipeline_id = ANY($2) AND e.changed_at >= en.entered_at
+          GROUP BY en.client_key
+       ),
+       pop AS (
+         SELECT en.entered_at, w.won_at
+           FROM entered en LEFT JOIN won w ON w.client_key = en.client_key
+       )`;
+  } else {
+    // client / transferred — знаменник = передані заявки (leadgen_registry) за
+    // transferred_at, ВИКЛЮЧаючи лідоген-команди (передача = лідоген→продажі, а не
+    // раунд-робін усередині лідогену). Дедуп по client_key.
+    const scopeConds: string[] = ["t.name NOT ILIKE '%лідоген%'", "d.client_key IS NOT NULL"];
+    if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    const scopeWhere = scopeConds.join(" AND ");
+    cte = `entered AS (
+         SELECT d.client_key, MIN(lr.transferred_at) AS entered_at
+           FROM leadgen_registry lr
+           JOIN deals d ON d.kommo_id = lr.lead_id
+           JOIN managers m ON m.id = d.manager_id
+           JOIN teams t ON t.id = m.team_id
+          WHERE ${scopeWhere}
+          GROUP BY d.client_key
+       ),
+       won AS (
+         SELECT en.client_key, MIN(e.changed_at) AS won_at
+           FROM entered en
+           JOIN deals d ON d.client_key = en.client_key
+           JOIN deal_stage_events e ON e.kommo_id = d.kommo_id
+          WHERE e.status_id = ANY($1) AND e.pipeline_id = ANY($2) AND e.changed_at >= en.entered_at
+          GROUP BY en.client_key
+       ),
+       pop AS (
+         SELECT en.entered_at, w.won_at
+           FROM entered en LEFT JOIN won w ON w.client_key = en.client_key
+       )`;
+  }
 
   const r = await pool.query<{
     ym: string; entered: string; won_eventually: string; won_in_month: string; mature: boolean;
   }>(
-    `WITH adzone AS (
-       SELECT kommo_id, MIN(changed_at) AS entered_at
-         FROM deal_stage_events WHERE status_id = ANY($1) GROUP BY kommo_id
-     ),
-     won AS (
-       SELECT kommo_id, MIN(changed_at) AS won_at
-         FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = 142 GROUP BY kommo_id
-     ),
-     pop AS (
-       SELECT a.entered_at, w.won_at
-         FROM adzone a
-         JOIN deals d ON d.kommo_id = a.kommo_id
-         LEFT JOIN managers m ON m.id = d.manager_id
-         LEFT JOIN won w ON w.kommo_id = a.kommo_id
-        WHERE ${paidAdSql("$3")}
-          AND (${SEGMENT_CASE}) = 'new'
-          ${scopeWhere}
-     ),
+    `WITH ${cte},
      months AS (
        SELECT generate_series(
          date_trunc('month', (now() ${KYIV})) - INTERVAL '11 months',
@@ -589,6 +677,25 @@ export async function conversionAdsByMonth(s: MetricScope, adSources: string[]):
   });
 }
 
+/**
+ * `conversion_ads` помісячно (GLOSSARY §2b) — тонка обгортка над `conversionByCohort`
+ * (deal-grain по `kommo_id`). Знаменник: платні нові ліди, що зайшли в ADZONE_TAKEN.
+ * Чисельник (Крок В): їхній `kommo_id` дійшов до MONEY_ZONE у Повному циклі (не
+ * лише 142 — тепер уся зона визнання грошей). Скоуп — той самий MetricScope.
+ */
+export async function conversionAdsByMonth(s: MetricScope, adSources: string[]): Promise<ConversionAdsRow[]> {
+  return conversionByCohort(s, { grain: "deal", entryStatuses: ADZONE_TAKEN, adSources });
+}
+
+/**
+ * `conversion_leadgen` (Огляд, рішення Крок В #4): когорта ПЕРЕДАНИХ заявок за
+ * `transferred_at` (client-grain) → скільки client_key дійшли до MONEY_ZONE у
+ * Повному циклі. Замінює стару period-ratio (передано÷успіх «як зараз»): тепер
+ * когортна, стеля ≤100%, ⏳ до дозрівання, entered<10 → «—» (на рівні агрегатора).
+ */
+export const conversionTransferredByMonth = (s: MetricScope): Promise<ConversionCohortRow[]> =>
+  conversionByCohort(s, { grain: "client", kind: "transferred" });
+
 export interface MgrConversion {
   managerId: number;
   name: string;
@@ -606,7 +713,8 @@ export interface MgrConversion {
  * менеджери не плутаються з «0%»).
  */
 export async function conversionAdsByManager(s: MetricScope, adSources: string[]): Promise<MgrConversion[]> {
-  const params: unknown[] = [ADZONE_TAKEN, FC_PIPELINES, adSources];
+  // $1 ADZONE, $2 FC, $3 adSources, $4 MONEY_ZONE (won-межа, Крок В — не лише 142).
+  const params: unknown[] = [ADZONE_TAKEN, FC_PIPELINES, adSources, MONEY_ZONE];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
@@ -621,7 +729,7 @@ export async function conversionAdsByManager(s: MetricScope, adSources: string[]
      ),
      won AS (
        SELECT kommo_id, MIN(changed_at) AS won_at
-         FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = 142 GROUP BY kommo_id
+         FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = ANY($4) GROUP BY kommo_id
      ),
      pop AS (
        SELECT d.manager_id, (w.won_at IS NOT NULL) AS won
@@ -669,25 +777,23 @@ export interface LeadgenConversionRow {
   mature: boolean;
 }
 
+interface HandoffRow { ym: string; entered: number; handoffEventually: number; handoffInMonth: number; mature: boolean }
+
 /**
- * СПІЛЬНЕ ЯДРО конверсії лідогену (Продзвін і Реактивація мають ідентичну
- * структуру, різняться лише воронкою + entry-стадією). ДЕДУП по `client_key` —
- * одиниця = КЛІЄНТ, не deal_id (угода лідогену і виграна FC-угода — РІЗНІ
- * deal_id, спільний client_key; доведено на даних КРОК 6.4/6.5). Категорії
- * відмов НЕ фільтруємо, БЕЗ new-фільтра.
- *  • handoff = зайшли в entry → дійшли до 142 у СВОЇЙ воронці (`entryPipelines`).
- *  • won     = → `client_key` дійшов до 142 у Повному циклі (крос-пайплайн).
- * Обидва чисельники — ПІСЛЯ входу (`changed_at >= entered_at`), інакше стара
- * виграна угода клієнта (до дотику лідогену) хибно зараховувалась би йому.
- * cohort: чисельник ⊆ знаменник → стеля ≤100%. period: може >100% (різні когорти).
- * `client_key IS NULL` виключено (немає по чому дедупити/трекати наскрізь).
+ * HANDOFF (Крок В — ОКРЕМА під-метрика, НЕ headline-конверсія): зайшли в entry
+ * → дійшли до 142 у СВОЇЙ воронці (`entryPipelines`) = «прорахунок отримано /
+ * передано у продажі». Термінальна ВЛАСНА воронка лідогену — money-межу
+ * (MONEY_ZONE) на неї НЕ накладаємо; won (наскрізь до грошей FC) рахує
+ * `conversionByCohort`. ДЕДУП по `client_key`. Чисельник ПІСЛЯ входу
+ * (`changed_at >= entered_at`). Той самий `entered`, що й у `conversionByCohort`
+ * (client/stage) → знаменники збігаються при злитті (`mergeLeadgen`).
  */
-async function leadgenConversionByMonth(
+async function handoffByMonth(
   s: MetricScope,
   cfg: { entryPipelines: number[]; entryStatus: number }
-): Promise<LeadgenConversionRow[]> {
-  // $1 = entryPipelines (also handoff-142 lives here), $2 = FC (won), $3 = entryStatus, $4 = 142
-  const params: unknown[] = [cfg.entryPipelines, FC_PIPELINES, cfg.entryStatus, STATUS_142];
+): Promise<HandoffRow[]> {
+  // $1 = entryPipelines (handoff-142 теж тут), $2 = entryStatus, $3 = 142
+  const params: unknown[] = [cfg.entryPipelines, cfg.entryStatus, STATUS_142];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
@@ -695,14 +801,13 @@ async function leadgenConversionByMonth(
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
   const r = await pool.query<{
-    ym: string; entered: string; handoff_eventually: string; won_eventually: string;
-    handoff_in_month: string; won_in_month: string; mature: boolean;
+    ym: string; entered: string; handoff_eventually: string; handoff_in_month: string; mature: boolean;
   }>(
     `WITH entered AS (
        SELECT d.client_key, MIN(e.changed_at) AS entered_at
          FROM deal_stage_events e
          JOIN deals d ON d.kommo_id = e.kommo_id ${scopeJoin}
-        WHERE e.status_id = $3 AND e.pipeline_id = ANY($1) AND d.client_key IS NOT NULL ${scopeWhere}
+        WHERE e.status_id = $2 AND e.pipeline_id = ANY($1) AND d.client_key IS NOT NULL ${scopeWhere}
         GROUP BY d.client_key
      ),
      handoff AS (
@@ -710,22 +815,12 @@ async function leadgenConversionByMonth(
          FROM entered en
          JOIN deals d ON d.client_key = en.client_key
          JOIN deal_stage_events e ON e.kommo_id = d.kommo_id
-        WHERE e.status_id = $4 AND e.pipeline_id = ANY($1) AND e.changed_at >= en.entered_at
-        GROUP BY en.client_key
-     ),
-     won AS (
-       SELECT en.client_key, MIN(e.changed_at) AS won_at
-         FROM entered en
-         JOIN deals d ON d.client_key = en.client_key
-         JOIN deal_stage_events e ON e.kommo_id = d.kommo_id
-        WHERE e.status_id = $4 AND e.pipeline_id = ANY($2) AND e.changed_at >= en.entered_at
+        WHERE e.status_id = $3 AND e.pipeline_id = ANY($1) AND e.changed_at >= en.entered_at
         GROUP BY en.client_key
      ),
      pop AS (
-       SELECT en.client_key, en.entered_at, h.handoff_at, w.won_at
-         FROM entered en
-         LEFT JOIN handoff h ON h.client_key = en.client_key
-         LEFT JOIN won w ON w.client_key = en.client_key
+       SELECT en.entered_at, h.handoff_at
+         FROM entered en LEFT JOIN handoff h ON h.client_key = en.client_key
      ),
      months AS (
        SELECT generate_series(
@@ -738,49 +833,71 @@ async function leadgenConversionByMonth(
                           AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS entered,
        COUNT(*) FILTER (WHERE p.handoff_at IS NOT NULL
                           AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS handoff_eventually,
-       COUNT(*) FILTER (WHERE p.won_at IS NOT NULL
-                          AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS won_eventually,
        COUNT(*) FILTER (WHERE p.handoff_at IS NOT NULL
                           AND date_trunc('month', (p.handoff_at ${KYIV})) = mo.m)::int AS handoff_in_month,
-       COUNT(*) FILTER (WHERE p.won_at IS NOT NULL
-                          AND date_trunc('month', (p.won_at ${KYIV})) = mo.m)::int AS won_in_month,
        ((mo.m + INTERVAL '1 month') <= (now() ${KYIV}) - INTERVAL '90 days') AS mature
      FROM months mo LEFT JOIN pop p ON TRUE
      GROUP BY mo.m ORDER BY mo.m`,
     params
   );
+  return r.rows.map((x) => ({
+    ym: x.ym,
+    entered: Number(x.entered),
+    handoffEventually: Number(x.handoff_eventually),
+    handoffInMonth: Number(x.handoff_in_month),
+    mature: x.mature,
+  }));
+}
+
+/**
+ * Зливає won-когорту (наскрізь до MONEY_ZONE, з `conversionByCohort`) + handoff
+ * (термінал власної воронки, з `handoffByMonth`) у `LeadgenConversionRow`.
+ * Знаменник = `won.entered` (той самий entered у обох джерел). Стеля ≤100%.
+ */
+function mergeLeadgen(won: ConversionCohortRow[], handoff: HandoffRow[]): LeadgenConversionRow[] {
   const pct = (num: number, den: number): number | null => (den > 0 ? Math.round((num / den) * 1000) / 10 : null);
-  return r.rows.map((x) => {
-    const entered = Number(x.entered);
-    const he = Number(x.handoff_eventually), we = Number(x.won_eventually);
-    const hm = Number(x.handoff_in_month), wm = Number(x.won_in_month);
+  const hByYm = new Map(handoff.map((h) => [h.ym, h]));
+  return won.map((w) => {
+    const h = hByYm.get(w.ym);
+    const he = h?.handoffEventually ?? 0, hm = h?.handoffInMonth ?? 0;
     return {
-      ym: x.ym, entered,
-      handoffEventually: he, handoffCohortPct: pct(he, entered),
-      wonEventually: we, wonCohortPct: pct(we, entered),
-      handoffInMonth: hm, handoffPeriodPct: pct(hm, entered),
-      wonInMonth: wm, wonPeriodPct: pct(wm, entered),
-      mature: x.mature,
+      ym: w.ym, entered: w.entered,
+      handoffEventually: he, handoffCohortPct: pct(he, w.entered),
+      wonEventually: w.wonEventually, wonCohortPct: w.cohortPct,
+      handoffInMonth: hm, handoffPeriodPct: pct(hm, w.entered),
+      wonInMonth: w.wonInMonth, wonPeriodPct: w.periodPct,
+      mature: w.mature,
     };
   });
 }
 
 /**
- * `conversion_prodzvin_handoff` + `conversion_prodzvin_won` (рішення 6.4).
- * Холодний Продзвін (8921936/7337048), entry «ВЗЯТО В РОБОТУ» 69693696 →
- * handoff Продзвін-142 (прорахунок отримано) / won FC-142. Реактивація НЕ тут.
+ * `conversion_prodzvin` (рішення 6.4 + Крок В). Холодний Продзвін (8921936/7337048),
+ * entry «ВЗЯТО В РОБОТУ» 69693696. **won** (headline) = client_key дійшов до
+ * MONEY_ZONE у Повному циклі (наскрізь, `conversionByCohort`); **handoff** (окрема
+ * під-метрика) = дійшов до Продзвін-142 у своїй воронці (`handoffByMonth`).
  */
-export const conversionProdzvinByMonth = (s: MetricScope): Promise<LeadgenConversionRow[]> =>
-  leadgenConversionByMonth(s, { entryPipelines: PRODZVIN_PIPELINES, entryStatus: PZ_TAKEN });
+export const conversionProdzvinByMonth = async (s: MetricScope): Promise<LeadgenConversionRow[]> => {
+  const [won, handoff] = await Promise.all([
+    conversionByCohort(s, { grain: "client", kind: "stage", entryStatuses: [PZ_TAKEN], entryPipelines: PRODZVIN_PIPELINES }),
+    handoffByMonth(s, { entryPipelines: PRODZVIN_PIPELINES, entryStatus: PZ_TAKEN }),
+  ]);
+  return mergeLeadgen(won, handoff);
+};
 
 /**
- * `conversion_reactivation_handoff` + `conversion_reactivation_won` (рішення 6.5).
- * Реактивація (8921948), entry «Клієнт підігрівається» 69693740 (не мертвий
- * «Дзвінок ВКЯ» 69693736) → handoff 142 «Відправлено у відділ продажів» / won
- * FC-142 (client_key повіз знову). Категорії відмов не фільтруємо.
+ * `conversion_reactivation` (рішення 6.5 + Крок В). Реактивація (8921948), entry
+ * «Клієнт підігрівається» 69693740. **won** (headline) = client_key дійшов до
+ * MONEY_ZONE у Повному циклі; **handoff** = 142 «Відправлено у відділ продажів»
+ * у своїй воронці. Категорії відмов не фільтруємо.
  */
-export const conversionReactivationByMonth = (s: MetricScope): Promise<LeadgenConversionRow[]> =>
-  leadgenConversionByMonth(s, { entryPipelines: REACTIVATION_PIPELINES, entryStatus: REACT_WARMING });
+export const conversionReactivationByMonth = async (s: MetricScope): Promise<LeadgenConversionRow[]> => {
+  const [won, handoff] = await Promise.all([
+    conversionByCohort(s, { grain: "client", kind: "stage", entryStatuses: [REACT_WARMING], entryPipelines: REACTIVATION_PIPELINES }),
+    handoffByMonth(s, { entryPipelines: REACTIVATION_PIPELINES, entryStatus: REACT_WARMING }),
+  ]);
+  return mergeLeadgen(won, handoff);
+};
 
 // ───────────────────────── ЧЕСНА КОГОРТНА ВОРОНКА (Р1) ─────────────────────────
 
@@ -1170,6 +1287,20 @@ export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> 
 // оплату 69716312. + старі 155304 еквіваленти (легасі, ~0 поточних). Раніше було
 // лише 3 (пропущено Авто працює/Перевезення завершено) → зона занижена на ~160 угод.
 export const EXPECT_ZONE = [100274340, 69716300, 98470988, 69716304, 69716312, 10937178, 42639144, 42639147, 25044997, 62940068];
+
+/**
+ * 🎯 MONEY_ZONE — межа ЧИСЕЛЬНИКА конверсій (рішення власника Крок В). Угода
+ * «дійшла до грошей» = потрапила в зону визнання доходу (`EXPECT_ZONE`) АБО
+ * «Оплата отримана» (STAGE_PAID 69716460/60412544) АБО «Успішна» (142). Це
+ * ЄДИНА money-межа наскрізного `won` для ВСІХ 4 конверсій (реклама / продзвін /
+ * реактивація / лідоген-передачі) — ширша за саме-142, тож нова конверсія ≥
+ * старої (142-only), а стеля лишається ≤100% (won ⊆ entered).
+ * ⚠️ Це НЕ money-СУМА (суми виручки — виключно `core/money.ts`): MONEY_ZONE лише
+ * відповідає на «дійшов / не дійшов угода до грошей», а не «скільки грошей».
+ * Порядок визначення (після EXPECT_ZONE) — щоб уникнути TDZ: конверсії читають
+ * MONEY_ZONE лише у тілі async-функцій (call-time), не при оцінці модуля.
+ */
+export const MONEY_ZONE = [...EXPECT_ZONE, 69716460, 60412544, 142];
 
 export interface ExpectedBucket { deals: number; sum: number }
 export interface ExpectedPaymentsByPlanned {

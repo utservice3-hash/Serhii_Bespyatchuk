@@ -144,7 +144,7 @@ const METRICS: Metric[] = [
   { key: "transferSuccess", label: "Успішно з переданих", unit: "num", group: "📞 Лідогенератори", get: (b) => b.ov.transferred.success, planKind: "transfer_success", flow: true, editable: true, hint: HINTS.transferSuccess },
   { key: "lgRevenue", label: "Дохід з лідогену", unit: "money", group: "📞 Лідогенератори", get: (b) => b.ex.leadgen.revenue, weeklyGet: (b) => b.ex.flow?.leadgen ?? b.ex.leadgen.revenue, planKind: "leadgen_revenue", flow: true, editable: true, hint: HINTS.lgRevenue },
   { key: "lgDispatched", label: "Поставлені машини з лідогену", unit: "num", group: "📞 Лідогенератори", get: (b) => b.ex.leadgen.dispatched, planKind: "leadgen_dispatched", flow: true, editable: true, hint: HINTS.lgDispatched },
-  { key: "leadgenConv", label: "Конверсія лідогену", unit: "pct", group: "📞 Лідогенератори", get: (b) => b.ov.leadgenConversion.conversion, planKind: "leadgen_conversion", flow: false, editable: true, hint: HINTS.leadgenConv },
+  { key: "leadgenConv", label: "Конверсія лідогену", unit: "pct", group: "📞 Лідогенератори", get: (b) => b.ov.leadgenConversion.conversion ?? 0, planKind: "leadgen_conversion", flow: false, editable: true, hint: HINTS.leadgenConv },
 ];
 
 /** Робочі дні місяця (для темпу). elapsed<total лише для поточного місяця (MTD). */

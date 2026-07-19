@@ -296,33 +296,11 @@ dashboardRouter.get("/overview", async (req, res) => {
     params
   );
 
-  // Conversion by acquisition channel (leads created in period). A lead counts
-  // as "converted" when its CLIENT reaches a paid deal in the full-cycle funnel
-  // — matched by client_key. This is essential for "leadgen": those leads live
-  // in the Продзвін/Реактивація pipelines whose statuses never map to 'paid',
-  // so a same-deal check always yielded 0. "ad" deals are in the full-cycle
-  // funnel themselves, so the same client_key match works for them too.
-  const scopeConds = paidConds.filter((c) => !c.includes("funnel_stage"));
-
-  // "Конверсія реклами" = full-cycle deals whose «Источник клиента» is in the
-  // configured ad-source list (SAME definition as the KPI «прийняв рекламу»),
-  // that reached payment — same-deal. Джерело з САМОЇ угоди, не з історії
-  // (раніше lead_channel='ad' → неузгодженість із «прийняв рекламу»).
+  // КРОК В: легасі period-ratio «конверсія реклами» (paid ÷ ad_leads по СТВОРЕННЮ,
+  // same-deal) ВИДАЛЕНО — Огляд віддає КОГОРТНУ adConversion з ядра
+  // (metrics.conversionAdsByMonth → MONEY_ZONE, стеля ≤100%, ⏳ дозрівання) нижче.
+  // `adSources` лишається — потрібен для історії та core-конверсій.
   const { adSources } = await getSettings();
-  const adConvParams = [...params, adSources];
-  const adSrcIdx = adConvParams.length;
-  const adConvRes = await pool.query<{ ad_leads: string; ad_paid: string }>(
-    `SELECT COUNT(*) FILTER (WHERE ${metrics.adDealSql(`$${adSrcIdx}`)}) AS ad_leads,
-            COUNT(*) FILTER (WHERE ${metrics.adDealSql(`$${adSrcIdx}`)} AND psm.funnel_stage = 'paid') AS ad_paid
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id
-     LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE d.pipeline_id = ANY(ARRAY[8921932, 155304])${scopeConds.length ? " AND " + scopeConds.join(" AND ") : ""}`,
-    adConvParams
-  );
-  const adLeadsCnt = Number(adConvRes.rows[0]?.ad_leads ?? 0);
-  const adPaidCnt = Number(adConvRes.rows[0]?.ad_paid ?? 0);
-  const adConversion = { leads: adLeadsCnt, paid: adPaidCnt, conversion: adLeadsCnt > 0 ? Math.round((adPaidCnt / adLeadsCnt) * 100) : 0 };
 
   // MASTER_PLAN КРОК 2: гроші анкеряться по ДАТІ ВХОДУ В ЕТАП (deal_stage_events),
   // дедуп по угоді — знімки прибрано (недатований знімок мутував минулі місяці).
@@ -715,8 +693,6 @@ dashboardRouter.get("/overview", async (req, res) => {
     const deals = Number(r.deals);
     const paid = Number(r.paid);
     const revenue = Number(r.revenue);
-    const adLeads = Number(r.ad_leads);
-    const lgLeads = Number(r.lg_leads);
     return {
       month: r.month,
       deals,
@@ -726,8 +702,10 @@ dashboardRouter.get("/overview", async (req, res) => {
       // Історія: знімки (оплата/очікувані) не відтворюються заднім числом,
       // тому чисельник — лише «успішно»; знаменник — поставлені машини.
       avgCheck: Number(r.dispatched) > 0 ? Math.round(revenue / Number(r.dispatched)) : 0,
-      adConversion: adLeads > 0 ? Math.round((Number(r.ad_paid) / adLeads) * 100) : 0,
-      leadgenConversion: lgLeads > 0 ? Math.round((Number(r.lg_paid) / lgLeads) * 100) : 0,
+      // Крок В: adConversion/leadgenConversion — КОГОРТНІ з ядра (MONEY_ZONE),
+      // перекриваються нижче по ym (adByYm/trByYm). Легасі period-ratio знято.
+      adConversion: 0,
+      leadgenConversion: 0,
       newClients: Number(r.new_clients),
       repeatClients: Number(r.repeat_clients),
     };
@@ -772,18 +750,25 @@ dashboardRouter.get("/overview", async (req, res) => {
   const adsMonthlyOv = await metrics.conversionAdsByMonth({ managerId, teamId }, adSources);
   const pzMonthlyOv = await metrics.conversionProdzvinByMonth({ managerId, teamId });
   const reMonthlyOv = await metrics.conversionReactivationByMonth({ managerId, teamId });
+  // Крок В #4: «Конверсія лідогену» = КОГОРТА переданих заявок (transferred_at) →
+  // дійшли до MONEY_ZONE (когортна, стеля ≤100%, ⏳). Замінює стару period-ratio.
+  const trMonthlyOv = await metrics.conversionTransferredByMonth({ managerId, teamId });
   const adAgg = sumConv(adsMonthlyOv, from, to);
   const pzAgg = sumConv(pzMonthlyOv, from, to);
   const reAgg = sumConv(reMonthlyOv, from, to);
+  const trAgg = sumConv(trMonthlyOv, from, to);
   const adConversionOut = { leads: adAgg.entered, paid: adAgg.wonCount, conversion: adAgg.wonCohort, conversionPeriod: adAgg.wonPeriod, mature: adAgg.mature };
   const prodzvinConversion = { entered: pzAgg.entered, won: pzAgg.wonCohort, wonPeriod: pzAgg.wonPeriod, handoff: pzAgg.handoffCohort, mature: pzAgg.mature };
   const reactivationConversion = { entered: reAgg.entered, won: reAgg.wonCohort, wonPeriod: reAgg.wonPeriod, handoff: reAgg.handoffCohort, mature: reAgg.mature };
-  // Спарклайни: adConversion + won-лідоген по місяцях із ядра (перекриваємо старі).
+  // Спарклайни: adConversion + won-лідоген + лідоген-передачі по місяцях із ядра
+  // (перекриваємо старі period-ratio у monthlyHistory).
   const adByYm = new Map(adsMonthlyOv.map((r) => [r.ym, r.cohortPct]));
   const pzByYm = new Map(pzMonthlyOv.map((r) => [r.ym, r.wonCohortPct]));
   const reByYm = new Map(reMonthlyOv.map((r) => [r.ym, r.wonCohortPct]));
+  const trByYm = new Map(trMonthlyOv.map((r) => [r.ym, r.cohortPct]));
   for (const h of monthlyHistory) {
     h.adConversion = adByYm.get(h.month) ?? 0;
+    h.leadgenConversion = trByYm.get(h.month) ?? 0;
     (h as Record<string, unknown>).prodzvinWon = pzByYm.get(h.month) ?? 0;
     (h as Record<string, unknown>).reactivationWon = reByYm.get(h.month) ?? 0;
   }
@@ -833,11 +818,15 @@ dashboardRouter.get("/overview", async (req, res) => {
     // ДВІ лідоген-плитки з ядра (won велике, handoff дрібне; рішення власника).
     prodzvinConversion,
     reactivationConversion,
-    // Стара «конверсія лідогену» (передана заявка→успіх) — лишена для Фази 3.
+    // Крок В #4: «Конверсія лідогену» — КОГОРТА переданих заявок (transferred_at,
+    // дедуп по client_key) → дійшли до MONEY_ZONE у Повному циклі. Стеля ≤100%,
+    // ⏳ дозрівання, entered<10 → «—» (conversion=null). Стару period-ratio знято.
     leadgenConversion: {
-      leads: transferred.total,
-      paid: transferred.success,
-      conversion: transferred.total > 0 ? Math.round((transferred.success / transferred.total) * 100) : 0,
+      leads: trAgg.entered,
+      paid: trAgg.wonCount,
+      conversion: trAgg.wonCohort,
+      conversionPeriod: trAgg.wonPeriod,
+      mature: trAgg.mature,
     },
     monthlyHistory,
     byTeam: byTeam.rows.map((r) => ({

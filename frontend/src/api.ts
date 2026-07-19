@@ -172,8 +172,8 @@ export interface ExecutiveOverview {
   // Дві лідоген-плитки: won велике, handoff дрібне.
   prodzvinConversion: { entered: number; won: number | null; wonPeriod: number | null; handoff: number | null; mature: boolean };
   reactivationConversion: { entered: number; won: number | null; wonPeriod: number | null; handoff: number | null; mature: boolean };
-  // Стара (Фаза 3 прибере) — лишена для сумісності.
-  leadgenConversion: { leads: number; paid: number; conversion: number };
+  // Крок В #4: КОГОРТА переданих заявок → MONEY_ZONE (стеля ≤100%, ⏳, entered<10 → «—»).
+  leadgenConversion: { leads: number; paid: number; conversion: number | null; conversionPeriod: number | null; mature: boolean };
   monthlyHistory: {
     month: string;
     deals: number;
