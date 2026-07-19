@@ -334,6 +334,53 @@ export async function funnelWeeklyByManager(s: MetricScope, granularity: "day" |
   }));
 }
 
+export interface LeadsTakenRow { bucket: string; deals: number; channel?: "ad" | "leadgen" | "other" }
+
+/**
+ * «Взято лідів» SINGLE-ANCHOR — кожна угода РАЗ, за ПЕРШИМ входом у «Взято в роботу»
+ * (`funnel_stage='lead_taken'`) У МЕЖАХ періоду (MIN(changed_at) серед входів у вікні).
+ * На відміну від `funnelWeekly` (потік входів, DISTINCT-per-bucket → реоупени дублюються),
+ * тут один анкер/угода → **день сходиться в тиждень і місяць** (Σ бакетів = унікальні угоди).
+ * `byChannel=true` → розріз `deals.lead_channel` (ad/leadgen/other, last-touch). Scope-aware.
+ */
+export async function leadsTakenByBucket(s: MetricScope, granularity: "day" | "week" | "month", byChannel = false): Promise<LeadsTakenRow[]> {
+  const gran = granularity === "day" ? "day" : granularity === "month" ? "month" : "week";
+  const bucket = granularity === "day" ? `(f.anchor_at ${KYIV})::date` : `date_trunc('${gran}', (f.anchor_at ${KYIV}))::date`;
+  const params: unknown[] = [FC_PIPELINES];
+  const winConds = ["d.pipeline_id = ANY($1)", "psm.funnel_stage = 'lead_taken'"];
+  if (s.from) { params.push(s.from); winConds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); winConds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
+  const scopeConds: string[] = [];
+  if (s.managerId) { params.push(s.managerId); scopeConds.push(`d2.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  const activeJoin = s.activeOnly ? "AND m.is_active" : "";
+  const chanSel = byChannel ? `, COALESCE(d2.lead_channel, 'other') AS channel` : "";
+  const chanGrp = byChannel ? `, COALESCE(d2.lead_channel, 'other')` : "";
+  const scopeWhere = scopeConds.length ? "WHERE " + scopeConds.join(" AND ") : "";
+  const r = await pool.query<{ bucket: string; deals: string; channel?: string }>(
+    `WITH first_lt AS (
+       SELECT dse.kommo_id, MIN(dse.changed_at) AS anchor_at
+         FROM deal_stage_events dse
+         JOIN deals d ON d.kommo_id = dse.kommo_id
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
+        WHERE ${winConds.join(" AND ")}
+        GROUP BY dse.kommo_id
+     )
+     SELECT to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS deals${chanSel}
+       FROM first_lt f
+       JOIN deals d2 ON d2.kommo_id = f.kommo_id
+       LEFT JOIN managers m ON m.id = d2.manager_id ${activeJoin}
+       ${scopeWhere}
+       GROUP BY bucket${chanGrp}
+       ORDER BY bucket`,
+    params
+  );
+  return r.rows.map((x) => ({
+    bucket: x.bucket, deals: Number(x.deals),
+    ...(byChannel ? { channel: (x.channel as "ad" | "leadgen" | "other") ?? "other" } : {}),
+  }));
+}
+
 export interface CreatedBucketRow { bucket: string; deals: number }
 
 /**

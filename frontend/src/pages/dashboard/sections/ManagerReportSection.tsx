@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { fetchManagerReport, type ManagerReport, type Team, type ManagerOption } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { previousRange, formatAmount } from "../format";
+import { InfoHint } from "../widgets";
 import { ManagerReportHero } from "./ManagerReportHero";
 import { ManagerReportExpected, TeamManagerBreakdown, type ScopeBreakdownRow } from "./ManagerReportExpected";
 import { TrafficLight, type TrafficRow } from "./TeamsTrafficLight";
@@ -154,7 +155,8 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
           {/* ── Р4c.2 — когортна воронка · конверсії+цілі · тижнева+перенесені ── */}
           <MRFunnel funnel={data.funnel} compare={data.compare} />
           <MRConversions conv={data.conversions} compare={data.compare} />
-          <MRWeeklyCarryover weekly={data.weekly} carryover={data.carryover} teams={data.teams} managers={data.managers} teamNames={teams} />
+          <MRDailyWeekly revenue={data.revenue} expected={data.expected} weekly={data.weekly} daily={data.daily} expectedByDay={data.expectedByDay} planPerDay={data.planPerDay} />
+          <MRCarryover carryover={data.carryover} teams={data.teams} managers={data.managers} teamNames={teams} />
         </>
       )}
     </div>
@@ -368,71 +370,169 @@ const WEEK_STATUS: Record<"past" | "current" | "future", { bg: string; label: st
   current: { bg: "rgba(197,20,28,0.06)", label: "поточний" },
   future: { bg: "transparent", label: "попереду" },
 };
-function MRWeeklyCarryover({ weekly, carryover, teams, managers, teamNames }: {
+// ⓘ-тексти (що рахує / за якою датою / чому таке число).
+const HINT = {
+  leads: "Унікальні нові ліди за період — кожну угоду рахуємо РАЗ, за ПЕРШИМ входом у «Взято в роботу». Спліт по каналу (lead_channel): реклама / лідген / інше. Тому день сходиться в тиждень і місяць.",
+  created: "Створені угоди за ДАТОЮ СТВОРЕННЯ. Постійні клієнти = вже виконана робота (заходять посеред воронки), тому конверсію тут НЕ рахуємо — це лічильник.",
+  dispatched: "Авто відправлено = угоди у стадії «Успішна» (142), за ДАТОЮ ЗАКРИТТЯ.",
+  received: "Фактично отримані кошти — у місяці ВХОДУ угоди в оплату (не планова й не актова дата).",
+  expected: "Грошова зона за ПЛАНОВОЮ ДАТОЮ оплати — очікуване, ще не в касі.",
+  plan: "Місячний план ÷ робочі дні = денний темп. Відставання = план-темп (наростаюче) мінус факт.",
+};
+
+// §3a — Місяць · тиждень · день (chartless). Заміна старої тижневої таблиці.
+function MRDailyWeekly({ revenue, expected, weekly, daily, expectedByDay, planPerDay }: {
+  revenue: ManagerReport["revenue"];
+  expected: ManagerReport["expected"];
   weekly: ManagerReport["weekly"];
+  daily: ManagerReport["daily"];
+  expectedByDay: ManagerReport["expectedByDay"];
+  planPerDay: ManagerReport["planPerDay"];
+}) {
+  const [weekSel, setWeekSel] = useState<string>("all");   // "all" | index у weekly
+  const [openDays, setOpenDays] = useState(false);
+
+  const plan = revenue.plan, fact = revenue.fact;
+  const elapsed = revenue.projection.elapsedWorkingDays, totalWd = revenue.projection.totalWorkingDays;
+  const planToDate = Math.round(planPerDay.perWorkingDay * elapsed);   // наростаючий план-темп
+  const lag = Math.max(0, planToDate - fact);
+  const expNextThis = expected.thisMonth.sum + expected.nextMonth.sum;
+  const pctPlan = plan > 0 ? Math.round((fact / plan) * 100) : null;
+  const factW = plan > 0 ? Math.min(100, Math.round((fact / plan) * 100)) : 0;
+  const paceW = plan > 0 ? Math.min(100, Math.round((planToDate / plan) * 100)) : 0;
+
+  const expInRange = (from: string, to: string) =>
+    expectedByDay.filter((d) => d.date >= from && d.date <= to).reduce((a, d) => a + d.sum, 0);
+
+  const selW = weekSel !== "all" ? weekly[Number(weekSel)] : null;
+  const shownDays = selW ? daily.filter((d) => d.date >= selW.from && d.date <= selW.to) : daily;
+
+  return (
+    <div className="chart-card">
+      <h2 className="chart-title" style={{ marginBottom: 8 }}>Місяць · тиждень · день</h2>
+
+      {/* ── Місячна смуга: план · факт · відставання · очікування ── */}
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", marginBottom: 10 }}>
+        <div className="kpi-card"><span className="kpi-label">План<InfoHint text={HINT.plan} /></span><span className="kpi-value">{formatAmount(plan)}</span></div>
+        <div className="kpi-card"><span className="kpi-label">Факт (оплачено)<InfoHint text={HINT.received} /></span><span className="kpi-value" style={{ color: "#16a34a" }}>{formatAmount(fact)}</span>{pctPlan != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{pctPlan}% плану</span>}</div>
+        <div className="kpi-card" style={{ borderLeft: "4px solid #d97706" }}><span className="kpi-label">Відставання (темп)<InfoHint text={HINT.plan} /></span><span className="kpi-value" style={{ color: lag > 0 ? "#dc2626" : "#16a34a" }}>{formatAmount(lag)}</span><span style={{ fontSize: 11, color: "var(--text-muted)" }}>план-темп {formatAmount(planToDate)} ({elapsed}/{totalWd} р.д.)</span></div>
+        <div className="kpi-card" style={{ borderLeft: "4px solid #2563eb" }}><span className="kpi-label">Очікування (цей+наст.)<InfoHint text={HINT.expected} /></span><span className="kpi-value" style={{ color: "#2563eb" }}>{formatAmount(expNextThis)}</span><span style={{ fontSize: 11, color: "var(--text-muted)" }}>цей {formatAmount(expected.thisMonth.sum)} · наст. {formatAmount(expected.nextMonth.sum)}</span></div>
+      </div>
+      {/* смуга факт vs план + маркер темпу */}
+      <div style={{ position: "relative", height: 16, background: "var(--hover-bg, rgba(127,127,127,0.12))", borderRadius: 999, marginBottom: 16, overflow: "hidden" }}>
+        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${factW}%`, background: "#16a34a", borderRadius: 999 }} />
+        <div title={`План-темп: ${formatAmount(planToDate)}`} style={{ position: "absolute", left: `${paceW}%`, top: -2, bottom: -2, width: 2, background: "#dc2626" }} />
+      </div>
+
+      {/* ── Фільтр тижня ── */}
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
+        <WeekBtn active={weekSel === "all"} onClick={() => setWeekSel("all")} label="Місяць" />
+        {weekly.map((w, i) => (
+          <WeekBtn key={w.label} active={weekSel === String(i)} onClick={() => setWeekSel(String(i))}
+            label={`${w.label} (${ddmm(w.from)}–${ddmm(w.to)})`} status={w.status} />
+        ))}
+      </div>
+      {selW && (
+        <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", marginBottom: 12 }}>
+          <div className="kpi-card"><span className="kpi-label">План тижня<InfoHint text={HINT.plan} /></span><span className="kpi-value">{formatAmount(selW.plan)}</span></div>
+          <div className="kpi-card"><span className="kpi-label">Факт тижня<InfoHint text={HINT.received} /></span><span className="kpi-value" style={{ color: "#16a34a" }}>{formatAmount(selW.fact)}</span></div>
+          <div className="kpi-card"><span className="kpi-label">Очікування тижня<InfoHint text={HINT.expected} /></span><span className="kpi-value" style={{ color: "#2563eb" }}>{formatAmount(expInRange(selW.from, selW.to))}</span></div>
+        </div>
+      )}
+
+      {/* ── Поденний розкривний список ── */}
+      <button onClick={() => setOpenDays((v) => !v)}
+        style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontSize: 13, marginBottom: openDays ? 8 : 0 }}>
+        {openDays ? "▾" : "▸"} Поденно {selW ? `(${selW.label})` : "(увесь місяць)"}
+      </button>
+      {openDays && (
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table" style={{ fontSize: 12.5 }}>
+            <thead>
+              <tr>
+                <th>День</th>
+                <th style={{ textAlign: "right" }}>Взято лідів<InfoHint text={HINT.leads} /></th>
+                <th style={{ textAlign: "right" }}>Створено<InfoHint text={HINT.created} /></th>
+                <th style={{ textAlign: "right" }}>Авто<InfoHint text={HINT.dispatched} /></th>
+                <th style={{ textAlign: "right" }}>Отримано<InfoHint text={HINT.received} /></th>
+                <th style={{ textAlign: "right" }}>План/Факт/Відст.<InfoHint text={HINT.plan} /></th>
+              </tr>
+            </thead>
+            <tbody>
+              {shownDays.map((d) => {
+                const dLag = Math.max(0, d.plan - d.received);
+                const empty = d.leadsTotal === 0 && d.created === 0 && d.dispatched === 0 && d.received === 0;
+                return (
+                  <tr key={d.date} style={{ opacity: d.working ? (empty ? 0.6 : 1) : 0.4 }}>
+                    <td>{ddmm(d.date)}{!d.working && <span style={{ fontSize: 10, color: "var(--text-muted)" }}> вих.</span>}</td>
+                    <td style={{ textAlign: "right" }}>
+                      {d.leadsTotal}
+                      {d.leadsTotal > 0 && <span style={{ fontSize: 10, color: "var(--text-muted)" }}> (р{d.leadsAd}/лг{d.leadsLeadgen}/і{d.leadsOther})</span>}
+                    </td>
+                    <td style={{ textAlign: "right" }}>{d.created}</td>
+                    <td style={{ textAlign: "right" }}>{d.dispatched}</td>
+                    <td style={{ textAlign: "right", fontWeight: d.received > 0 ? 700 : 400, color: d.received > 0 ? "#16a34a" : undefined }}>{formatAmount(d.received)}</td>
+                    <td style={{ textAlign: "right", fontSize: 11, color: "var(--text-muted)" }}>
+                      {d.plan > 0 ? `${formatAmount(d.plan)} / ${formatAmount(d.received)} / ` : "— / — / "}
+                      <span style={{ color: dLag > 0 ? "#dc2626" : "#16a34a", fontWeight: 600 }}>{d.plan > 0 ? formatAmount(dLag) : "—"}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WeekBtn({ active, onClick, label, status }: { active: boolean; onClick: () => void; label: string; status?: "past" | "current" | "future" }) {
+  return (
+    <button onClick={onClick} title={status ? WEEK_STATUS[status].label : undefined}
+      style={{ padding: "5px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: active ? 700 : 500,
+        border: `1px solid ${active ? "#c5141c" : "var(--border)"}`,
+        background: active ? "#c5141c" : status === "current" ? WEEK_STATUS.current.bg : "var(--card-bg)",
+        color: active ? "#fff" : "var(--text)" }}>
+      {label}
+    </button>
+  );
+}
+
+// §3b — Перенесені (carryover): плитка + дрілдаун команди→менеджери (реюз матрьошки).
+function MRCarryover({ carryover, teams, managers, teamNames }: {
   carryover: ManagerReport["carryover"];
   teams: ManagerReport["teams"];
   managers: ManagerReport["managers"];
   teamNames: Team[];
 }) {
-  // Дрілдаун перенесених: команди → менеджери. carryover тепер у рядках teams[]/managers[].
-  // Реюз тієї самої матрьошки (TeamManagerBreakdown), що й «Очікування». Σ мгр = команда = тотал.
   const coManagers: ScopeBreakdownRow[] = (managers ?? [])
     .filter((m) => m.carryover.deals > 0)
     .map((m) => ({ id: m.managerId, name: m.name, teamId: m.teamId, deals: m.carryover.deals, sum: m.carryover.amount }));
   const teamNameById = new Map(teamNames.map((t) => [t.id, t.name]));
   const coTeams: ScopeBreakdownRow[] = teams
     ? teams.filter((t) => t.carryover.deals > 0).map((t) => ({ id: t.teamId, name: t.teamName, teamId: t.teamId, deals: t.carryover.deals, sum: t.carryover.amount }))
-    : [...coManagers.reduce((acc, m) => {                       // рівень «команда»: teams[] немає → групуємо менеджерів
+    : [...coManagers.reduce((acc, m) => {
         const k = m.teamId ?? -1;
         const e = acc.get(k) ?? { id: k, name: teamNameById.get(k) ?? "Команда", teamId: m.teamId, deals: 0, sum: 0 };
         e.deals += m.deals; e.sum += m.sum; acc.set(k, e); return acc;
       }, new Map<number, ScopeBreakdownRow>()).values()];
   return (
     <div className="chart-card">
-      <h2 className="chart-title" style={{ marginBottom: 4 }}>Тижнева розбивка · Перенесені</h2>
-      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 14 }}>
+      <h2 className="chart-title" style={{ marginBottom: 4 }}>Перенесені (carryover)</h2>
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 12 }}>
         <div className="kpi-card" style={{ borderLeft: "4px solid #2563eb" }}>
-          <span className="kpi-label">Перенесені (carryover)</span>
+          <span className="kpi-label">Перенесені</span>
           <span className="kpi-value">{formatAmount(carryover.amount)}</span>
           <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{carryover.deals} угод · display-only (не в план/факт)</span>
         </div>
       </div>
       {coTeams.length > 0 && (
-        <div style={{ marginBottom: 14 }}>
+        <>
           <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 2px" }}>Розріз перенесених (display-only) — команди → менеджери:</p>
           <TeamManagerBreakdown byTeam={coTeams} byManager={coManagers} emptyText="Немає перенесених у цьому зрізі." />
-        </div>
+        </>
       )}
-      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
-        Факт по тижнях — <b>датований потік (по даті закриття угоди)</b>; тому Σ тижнів навмисно не дорівнює факту в шапці (той — отримані кошти).
-      </p>
-      <div style={{ overflowX: "auto" }}>
-        <table className="data-table" style={{ fontSize: 13 }}>
-          <thead>
-            <tr>
-              <th>Тиждень</th>
-              <th style={{ textAlign: "right" }}>План</th>
-              <th style={{ textAlign: "right" }}>Факт</th>
-              <th style={{ textAlign: "right" }}>%</th>
-              <th style={{ textAlign: "right" }}>Залишок</th>
-            </tr>
-          </thead>
-          <tbody>
-            {weekly.map((w) => (
-              <tr key={w.label} style={{ background: WEEK_STATUS[w.status].bg, opacity: w.status === "future" ? 0.6 : 1 }}>
-                <td style={{ fontWeight: w.status === "current" ? 700 : 400 }}>
-                  {w.label} <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ddmm(w.from)}–{ddmm(w.to)} · {WEEK_STATUS[w.status].label}</span>
-                </td>
-                <td style={{ textAlign: "right" }}>{formatAmount(w.plan)}</td>
-                <td style={{ textAlign: "right", fontWeight: 700, color: "#c5141c" }}>{formatAmount(w.fact)}</td>
-                <td style={{ textAlign: "right" }}>{w.pct == null ? "—" : `${w.pct}%`}</td>
-                <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{formatAmount(w.remaining)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

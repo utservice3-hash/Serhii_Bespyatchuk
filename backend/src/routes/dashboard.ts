@@ -4304,6 +4304,44 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   // Тижнева розбивка — по місяцю поточного періоду.
   const weekly = await money.weeklyBreakdown({ from: monthStartOf(from), managerId, teamId }, current.revenue.plan);
 
+  // §3 поденний+потижневий деталь — усі бакет-функції single-anchor (день=тиждень=місяць).
+  // Ліди — leadsTakenByBucket (single-anchor, спліт каналу); авто=success; отримано=received;
+  // створено=created; план/день = місячний план ÷ робочі дні. Скоуп як у решті звіту.
+  const mStartD = monthStartOf(from);
+  const [dyY, dyM] = mStartD.split("-").map(Number);
+  const daysInMon = new Date(dyY, dyM, 0).getDate();
+  const mEndD = `${mStartD.slice(0, 7)}-${String(daysInMon).padStart(2, "0")}`;
+  const dayScope = { from: mStartD, to: mEndD, managerId, teamId };
+  const [leadsDay, createdDay, dispDay, recvDay, expDayAll, ppd] = await Promise.all([
+    metrics.leadsTakenByBucket(dayScope, "day", true),
+    metrics.createdByBucket(dayScope, "day"),
+    money.successByBucket(dayScope, "day"),
+    money.receivedByBucket(dayScope, "day"),
+    metrics.expectedByPlannedBucket({ managerId, teamId }, "day"),
+    plans.planPerWorkingDay({ managerId, teamId }, mStartD),
+  ]);
+  type DailyRow = { date: string; leadsAd: number; leadsLeadgen: number; leadsOther: number; leadsTotal: number; created: number; dispatched: number; dispatchedSum: number; received: number; plan: number; working: boolean };
+  const dmap = new Map<string, DailyRow>();
+  for (let d = 1; d <= daysInMon; d++) {
+    const date = `${mStartD.slice(0, 7)}-${String(d).padStart(2, "0")}`;
+    const dow = new Date(dyY, dyM - 1, d).getDay();
+    const working = dow !== 0 && dow !== 6;
+    dmap.set(date, { date, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, leadsTotal: 0, created: 0, dispatched: 0, dispatchedSum: 0, received: 0, plan: working ? ppd.perWorkingDay : 0, working });
+  }
+  for (const r of leadsDay) {
+    const e = dmap.get(r.bucket); if (!e) continue;
+    if (r.channel === "ad") e.leadsAd += r.deals; else if (r.channel === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals;
+    e.leadsTotal += r.deals;
+  }
+  for (const r of createdDay) { const e = dmap.get(r.bucket); if (e) e.created += r.deals; }
+  for (const r of dispDay) { const e = dmap.get(r.bucket); if (e) { e.dispatched += r.deals; e.dispatchedSum += r.revenue; } }
+  for (const r of recvDay) { const e = dmap.get(r.bucket); if (e) e.received += r.revenue; }
+  const daily = [...dmap.values()];
+  // Очікування по дню (планова дата) — лише цей місяць (для потижневого згортання блоками
+  // 1-7/8-14/… як у weekly). Місяць this/next лишається у current.expected (не дублюємо).
+  const expectedByDay = expDayAll.filter((r) => r.bucket >= mStartD && r.bucket <= mEndD).map((r) => ({ date: r.bucket, sum: r.sum, deals: r.deals }));
+  const planPerDay = ppd;
+
   // Розрізи бакета «Цей місяць» очікувань (дрілдаун картки; те саме джерело, що
   // expected.thisMonth → Σ менеджерів = команда = відділ). Скоуп як у решті звіту.
   const [expectedByTeam, expectedByManager] = await Promise.all([
@@ -4465,6 +4503,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     scope: { level, id: managerId ?? teamId ?? null, period: { from, to, granularity }, compareWith: compareFrom && compareTo ? { from: compareFrom, to: compareTo } : null },
     ...current,
     weekly,
+    daily, expectedByDay, planPerDay,
     expectedByTeam, expectedByManager,
     ...(teams ? { teams } : {}),
     ...(managers ? { managers } : {}),

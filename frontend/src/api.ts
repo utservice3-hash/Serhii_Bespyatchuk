@@ -1690,6 +1690,9 @@ export interface ManagerReport {
   conversions: { ads: MRConv; prodzvin: MRConv; reactivation: MRConv };
   carryover: { amount: number; deals: number };
   weekly: { label: string; from: string; to: string; plan: number; fact: number; pct: number | null; remaining: number; status: "past" | "current" | "future" }[];
+  daily: { date: string; leadsAd: number; leadsLeadgen: number; leadsOther: number; leadsTotal: number; created: number; dispatched: number; dispatchedSum: number; received: number; plan: number; working: boolean }[];
+  expectedByDay: { date: string; sum: number; deals: number }[];
+  planPerDay: { monthPlan: number; workingDays: number; perWorkingDay: number };
   expectedByTeam: { id: number; name: string; teamId: number | null; deals: number; sum: number }[];
   expectedByManager: { id: number; name: string; teamId: number | null; deals: number; sum: number }[];
   teams?: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; carryover: { amount: number; deals: number }; flowCur: number | null; flowPrev: number | null }[];
