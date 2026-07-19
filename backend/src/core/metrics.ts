@@ -537,6 +537,33 @@ type CohortEntry =
   | { grain: "client"; kind: "transferred" };
 
 /**
+ * СПІЛЬНЕ ЯДРО ЧИСЕЛЬНИКА для DEAL-grain (реклама): `adzone`(вхід у ADZONE) →
+ * `won`(MONEY_ZONE у FC) → `pop`. Одне джерело SQL для ОБОХ агрегацій —
+ * помісячної (`conversionByCohort`) і per-manager (`conversionAdsByManager`), щоб
+ * рейтинг менеджерів гарантовано збігався з Оглядом ДО одного коду, а не лише
+ * до однакової межі. `pop` віддає manager_id/team_id (для групування) — помісячна
+ * агрегація їх ігнорує. Вимагає $1=MONEY_ZONE, $2=FC у `params`.
+ */
+function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): string {
+  return `adzone AS (
+         SELECT kommo_id, MIN(changed_at) AS entered_at
+           FROM deal_stage_events WHERE status_id = ANY(${entryRef}) GROUP BY kommo_id
+       ),
+       won AS (
+         SELECT kommo_id, MIN(changed_at) AS won_at
+           FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = ANY($1) GROUP BY kommo_id
+       ),
+       pop AS (
+         SELECT a.entered_at, w.won_at, d.manager_id, m.team_id
+           FROM adzone a
+           JOIN deals d ON d.kommo_id = a.kommo_id
+           LEFT JOIN managers m ON m.id = d.manager_id
+           LEFT JOIN won w ON w.kommo_id = a.kommo_id
+          WHERE ${paidAdSql(srcRef)} AND (${SEGMENT_CASE}) = 'new' ${scopeWhere}
+       )`;
+}
+
+/**
  * 🎯 ЄДИНЕ ЯДРО КОНВЕРСІЇ (Крок В) — знаменник ВСІХ 4 конверсій формує `entry`,
  * а ЧИСЕЛЬНИК завжди однаковий: із вхідної когорти — скільки БУДЬ-КОЛИ дійшли до
  * **MONEY_ZONE** (`EXPECT_ZONE∪PAID∪{142}`) у Повному циклі, дедуп по зерну.
@@ -562,22 +589,7 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
     if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
     if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
     const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
-    cte = `adzone AS (
-         SELECT kommo_id, MIN(changed_at) AS entered_at
-           FROM deal_stage_events WHERE status_id = ANY(${entryRef}) GROUP BY kommo_id
-       ),
-       won AS (
-         SELECT kommo_id, MIN(changed_at) AS won_at
-           FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = ANY($1) GROUP BY kommo_id
-       ),
-       pop AS (
-         SELECT a.entered_at, w.won_at
-           FROM adzone a
-           JOIN deals d ON d.kommo_id = a.kommo_id
-           LEFT JOIN managers m ON m.id = d.manager_id
-           LEFT JOIN won w ON w.kommo_id = a.kommo_id
-          WHERE ${paidAdSql(srcRef)} AND (${SEGMENT_CASE}) = 'new' ${scopeWhere}
-       )`;
+    cte = dealCohortCte(entryRef, srcRef, scopeWhere); // спільне ядро deal-grain (реклама)
   } else if (entry.kind === "stage") {
     params.push(entry.entryStatuses);              // $3
     const entryRef = `$${params.length}`;
@@ -707,14 +719,15 @@ export interface MgrConversion {
 
 /**
  * `conversion_ads` ПО МЕНЕДЖЕРУ, period-aggregate (для таблиці Звіту). Одним
- * згрупованим запитом (не N викликів помісячної). Когорта: платні нові ліди,
- * що зайшли в рекламну зону в [from,to] → з них дійшли до FC-142 (той самий
- * deal_id). Стеля ≤100% (won ⊆ entered). entered<10 → cohortPct=null (нерекламні
- * менеджери не плутаються з «0%»).
+ * згрупованим запитом (не N викликів помісячної) через СПІЛЬНЕ ядро `dealCohortCte`
+ * — ТОЙ САМИЙ чисельник, що й Огляд/помісячна (Крок В): рейтинг менеджерів
+ * збігається з Оглядом до одного коду. Когорта: платні нові ліди, що зайшли в
+ * рекламну зону в [from,to] → з них дійшли до MONEY_ZONE у Повному циклі (той
+ * самий kommo_id). Стеля ≤100% (won ⊆ entered). entered<10 → cohortPct=null.
  */
 export async function conversionAdsByManager(s: MetricScope, adSources: string[]): Promise<MgrConversion[]> {
-  // $1 ADZONE, $2 FC, $3 adSources, $4 MONEY_ZONE (won-межа, Крок В — не лише 142).
-  const params: unknown[] = [ADZONE_TAKEN, FC_PIPELINES, adSources, MONEY_ZONE];
+  // $1 MONEY_ZONE (won), $2 FC, $3 ADZONE (вхід), $4 adSources — контракт dealCohortCte.
+  const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
@@ -723,28 +736,12 @@ export async function conversionAdsByManager(s: MetricScope, adSources: string[]
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
   const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; entered: string; won: string }>(
-    `WITH adzone AS (
-       SELECT kommo_id, MIN(changed_at) AS entered_at
-         FROM deal_stage_events WHERE status_id = ANY($1) GROUP BY kommo_id
-     ),
-     won AS (
-       SELECT kommo_id, MIN(changed_at) AS won_at
-         FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = ANY($4) GROUP BY kommo_id
-     ),
-     pop AS (
-       SELECT d.manager_id, (w.won_at IS NOT NULL) AS won
-         FROM adzone a
-         JOIN deals d ON d.kommo_id = a.kommo_id
-         LEFT JOIN managers m ON m.id = d.manager_id
-         LEFT JOIN won w ON w.kommo_id = a.kommo_id
-        WHERE ${paidAdSql("$3")} AND (${SEGMENT_CASE}) = 'new'
-          AND ((${fromRef})::date IS NULL OR (a.entered_at ${KYIV})::date >= (${fromRef})::date)
-          AND ((${toRef})::date IS NULL OR (a.entered_at ${KYIV})::date <= (${toRef})::date)
-          ${scopeWhere}
-     )
+    `WITH ${dealCohortCte("$3", "$4", scopeWhere)}
      SELECT mm.id AS manager_id, mm.name, mm.team_id,
-            COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won)::int AS won
+            COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won
        FROM pop JOIN managers mm ON mm.id = pop.manager_id
+      WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
+        AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
       GROUP BY mm.id, mm.name, mm.team_id`,
     params
   );
