@@ -37,6 +37,8 @@ const HINT: Record<string, string> = {
   nonTarget: "Нецільові = рекламні ліди з причиною відмови «Дубль»/«Перевізник». Місяці до горизонту синку reject_reason → «—» (немає даних, не «0»).",
   receivablesPaidOff: "Погашено дебіторки — джерела історії погашень немає (receivables це знімок) → «—».",
   newRepeat: "Нові/постійні (client-grain лінз): клієнт з першою оплатою в періоді = новий. ОКРЕМО від team-based РПК/РНК (то ознака команди). Кожен клієнт → primary-менеджер, Σ = відділ.",
+  structReceived: "«Отримано» = ТА САМА каса, що у вердикті (receivedMoney: 142⊎оплата, дедуп), розкладена по сегменту клієнта. Σ(нові+постійні+залишок) звіряється з загальним received.",
+  structExpected: "«В очікуванні» = зона визнання доходу (виставлено→оплата, EXPECT_ZONE), знімок «зараз», по сегменту клієнта. Σ = загальна зона очікування.",
   avgCheck: "Середній чек = виручка успішних угод ÷ к-ть успішних угод менеджера.",
   expected: "Очікування менеджера = його угоди в зоні виставлено→оплата (знімок).",
 };
@@ -208,7 +210,7 @@ export function KvpReportSection() {
                   {rep.teams.map((t) => (
                     <Fragment key={t.teamId}>
                       <tr onClick={() => setOpenTeam(openTeam === t.teamId ? null : t.teamId)} style={{ cursor: "pointer" }}>
-                        <td>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}</span></td>
+                        <td>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з РПК/повним циклом)." />}</span></td>
                         <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}</td>
                         <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={t.pct ?? 0} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 42, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
@@ -225,13 +227,7 @@ export function KvpReportSection() {
 
           {/* ── ЯКІСТЬ / ЛОЯЛЬНІСТЬ + РИЗИКИ ── */}
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginBottom: 16 }}>
-            <div className="chart-card">
-              <h2 className="chart-title">💎 Структура виручки <InfoHint text={HINT.newRepeat} /></h2>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <Stat label="Нові клієнти" value={fmtMoney(rep.segments.totals.newRevenue)} sub={`${rep.segments.totals.newClients} клієнтів`} color={BLUE} />
-                <Stat label="Постійні клієнти" value={fmtMoney(rep.segments.totals.repeatRevenue)} sub={`${rep.segments.totals.repeatClients} клієнтів`} color={GREEN} />
-              </div>
-            </div>
+            <div className="chart-card"><StructureBlock rep={rep} /></div>
             <div className="chart-card">
               <h2 className="chart-title">🔁 Ризики / retention</h2>
               <RetentionBlock rep={rep} />
@@ -252,17 +248,21 @@ export function KvpReportSection() {
 }
 
 function ManagerDrill({ team }: { team: KvpTeam }) {
+  const [openMgr, setOpenMgr] = useState<number | null>(null);
+  const cols = team.kind === "rnk" ? 7 : 6;
   return (
     <tr><td colSpan={6} style={{ padding: 0, background: "var(--bg)" }}>
       <table className="data-table" style={{ width: "100%", margin: 0 }}>
-        <thead><tr><th style={{ paddingLeft: 28 }}>Менеджер</th><th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ minWidth: 90 }}>%</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікує</th>{team.kind === "rnk" && <th style={{ textAlign: "right" }}>Конв.</th>}</tr></thead>
+        <thead><tr><th style={{ paddingLeft: 28 }}>Менеджер (клік = дні)</th><th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ minWidth: 90 }}>%</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікує</th>{team.kind === "rnk" && <th style={{ textAlign: "right" }}>Конв.</th>}</tr></thead>
         <tbody>
           {team.managers.map((m: KvpManager) => {
             const lagging = m.pct != null && m.pct < 70 && m.plan > 0;
+            const open = openMgr === m.managerId;
+            const days = (m.daily ?? []).filter((d) => d.deals > 0 || d.revenue !== 0);
             return (
               <Fragment key={m.managerId}>
-                <tr>
-                  <td style={{ paddingLeft: 28 }}>{m.name}</td>
+                <tr onClick={() => setOpenMgr(open ? null : m.managerId)} style={{ cursor: "pointer" }}>
+                  <td style={{ paddingLeft: 28 }}>{open ? "▾" : "▸"} {m.name}</td>
                   <td style={{ textAlign: "right" }}>{fmtMoney(m.plan)}</td>
                   <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(m.revenue)}</td>
                   <td><span style={{ color: pctColor(m.pct), fontWeight: 600 }}>{fmtPct(m.pct)}</span></td>
@@ -271,8 +271,22 @@ function ManagerDrill({ team }: { team: KvpTeam }) {
                   {team.kind === "rnk" && <td style={{ textAlign: "right" }}>{m.conversion == null ? "—" : `${m.conversion}%`}</td>}
                 </tr>
                 {lagging && (
-                  <tr><td colSpan={team.kind === "rnk" ? 7 : 6} style={{ paddingLeft: 28, background: "rgba(220,38,38,0.06)", fontSize: 12, color: RED }}>
+                  <tr><td colSpan={cols} style={{ paddingLeft: 28, background: "rgba(220,38,38,0.06)", fontSize: 12, color: RED }}>
                     ⚠️ {m.name} відстає ({m.pct}% плану). {m.successDeals < 3 ? "Мало закритих угод" : "Є угоди, але недобір суми"}{team.kind === "rnk" && m.conversion != null && m.conversion < (team.conversion ?? 0) ? ` · конверсія ${m.conversion}% нижча за команду` : ""}. → перевірити пайплайн і темп по днях.
+                  </td></tr>
+                )}
+                {open && (
+                  <tr><td colSpan={cols} style={{ padding: "6px 8px 10px 40px", background: "var(--card-bg)" }}>
+                    <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Отримані кошти по днях (з подіями):</div>
+                    {days.length === 0 ? <div style={{ fontSize: 12, color: MUTED }}>Немає надходжень у періоді.</div> : (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {days.map((d) => (
+                          <span key={d.bucket} style={{ fontSize: 12, padding: "2px 8px", border: "1px solid var(--border)", borderRadius: 6 }}>
+                            {d.bucket.slice(8)}.{d.bucket.slice(5, 7)}: <b>{fmtMoney(d.revenue)}</b> <span style={{ color: MUTED }}>({d.deals})</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </td></tr>
                 )}
               </Fragment>
@@ -281,6 +295,41 @@ function ManagerDrill({ team }: { team: KvpTeam }) {
         </tbody>
       </table>
     </td></tr>
+  );
+}
+
+function StructureBlock({ rep }: { rep: KvpReport }) {
+  const rs = rep.revenueStructure;
+  const rTotal = rs.received.total.revenue;
+  const sumSeg = rs.received.new.revenue + rs.received.repeat.revenue + rs.received.unattributed.revenue;
+  const reconcilesOk = Math.abs(sumSeg - rTotal) < 1;
+  const seg = (label: string, recv: { deals: number; revenue: number }, exp: { deals: number; sum: number }, color: string) => (
+    <div style={{ padding: 10, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10 }}>
+      <div style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>{label}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+        <span style={{ fontSize: 11, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>Отримано<InfoHint text={HINT.structReceived} /></span>
+        <span style={{ fontWeight: 700, color }}>{fmtMoney(recv.revenue)}</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 11, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>В очікуванні<InfoHint text={HINT.structExpected} /></span>
+        <span style={{ fontWeight: 600, color: AMBER }}>{fmtMoney(exp.sum)}</span>
+      </div>
+    </div>
+  );
+  return (
+    <>
+      <h2 className="chart-title">💎 Структура виручки — 2 етапи <InfoHint text={HINT.newRepeat} /></h2>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        {seg("Нові клієнти", rs.received.new, rs.expected.new, BLUE)}
+        {seg("Постійні клієнти", rs.received.repeat, rs.expected.repeat, GREEN)}
+      </div>
+      <div style={{ marginTop: 8, fontSize: 12, color: MUTED, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Не віднесено (без клієнта): отримано <b style={{ color: "var(--text)" }}>{fmtMoney(rs.received.unattributed.revenue)}</b> · в очікуванні <b style={{ color: "var(--text)" }}>{fmtMoney(rs.expected.unattributed.sum)}</b><InfoHint text="Угоди без client_key — немає по чому віднести до нового/постійного. Показано ЯВНО, не сховано." /></span>
+      </div>
+      <div style={{ marginTop: 4, fontSize: 12, color: reconcilesOk ? GREEN : RED }}>
+        {reconcilesOk ? "✅" : "⚠️"} Σ отримано (нові {fmtMoney(rs.received.new.revenue)} + постійні {fmtMoney(rs.received.repeat.revenue)} + залишок {fmtMoney(rs.received.unattributed.revenue)}) = {fmtMoney(sumSeg)} {reconcilesOk ? "==" : "≠"} каса {fmtMoney(rTotal)}
+      </div>
+    </>
   );
 }
 
@@ -299,31 +348,59 @@ function RetentionBlock({ rep }: { rep: KvpReport }) {
 }
 
 function FullTable({ rep, plans, onSave }: { rep: KvpReport; plans: KvpPlans; onSave: (k: string, v: number | null) => void }) {
-  const m = rep.money;
-  const rows: [string, string, string?][] = [
-    ["Отримані кошти", fmtMoney(m.received.revenue), HINT.received],
-    ["Успішно реалізовано", fmtMoney(m.success.revenue)],
-    ["Оплата отримана (знімок)", fmtMoney(m.paidOnly.revenue)],
-    ["Очікування (цей міс.)", fmtMoney(m.expectedThis.sum), HINT.awaiting],
-    ["Очікування (наст. міс.)", fmtMoney(m.expectedNext.sum)],
-    ["Стратегічний план 🔒", fmtMoney(rep.strategicPlan), HINT.strategic],
-    ["Нові / Постійні", `${fmtMoney(rep.segments.totals.newRevenue)} / ${fmtMoney(rep.segments.totals.repeatRevenue)}`, HINT.newRepeat],
+  const m = rep.money, rs = rep.revenueStructure, en = rep.engines, lifecycle = rep.verdict.lifecycle;
+  const editCell = (k: string) => (
+    <input type="number" defaultValue={plans[k] ?? ""} onBlur={(e) => onSave(k, e.target.value === "" ? null : Number(e.target.value))}
+      style={{ width: 100, textAlign: "right", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", padding: "2px 6px" }} />
+  );
+  // group → rows: [label, value, hint?, editKey?]
+  const groups: [string, [string, string, string?, string?][]][] = [
+    ["💰 Дохід", [
+      ["Отримано (каса)", fmtMoney(m.received.revenue), HINT.received],
+      ["Дохід в очікуванні (зона)", fmtMoney(m.expectedZoneTotal.sum), HINT.structExpected],
+      ["Успішно закриті (142)", fmtMoney(m.success.revenue), "Угоди в статусі «Успішна угода» (142), за датою закриття в періоді."],
+      ["Поставлені машини (авто)", `${lifecycle.sent.deals} авто · ${fmtMoney(lifecycle.sent.revenue)}`, HINT.sent],
+      ["Перенесені (в роботі)", fmtMoney(m.paidOnly.revenue), "Оплата отримана (знімок етап 9) — ще не 142."],
+      ["Стратегічний план 🔒", fmtMoney(rep.strategicPlan), HINT.strategic],
+      ["Середній чек (ціль)", plans.avg_check != null ? fmtFull(plans.avg_check) : "—", "КВП-ручна ціль.", "avg_check"],
+    ]],
+    ["🆕 Нові клієнти", [
+      ["Отримано", fmtMoney(rs.received.new.revenue), HINT.structReceived],
+      ["В очікуванні", fmtMoney(rs.expected.new.sum), HINT.structExpected],
+    ]],
+    ["🔁 Постійні клієнти", [
+      ["Отримано", fmtMoney(rs.received.repeat.revenue), HINT.structReceived],
+      ["В очікуванні", fmtMoney(rs.expected.repeat.sum), HINT.structExpected],
+    ]],
+    ["🎯 Реклама", [
+      ["Бюджет (Google)", fmtMoney(en.ad.budget), HINT.romi, "ad_budget"],
+      ["Ліди (у зоні)", fmtNum(en.ad.entered), HINT.cplCrm],
+      ["Нецільові", rep.retention.nonTarget == null ? "—" : fmtNum(rep.retention.nonTarget), HINT.nonTarget],
+      ["Конверсія", en.ad.conversion == null ? "—" : `${en.ad.conversion}%${en.ad.mature ? "" : " ⏳"}`, HINT.conversion],
+      ["Середній чек реклами (ціль)", plans.ad_avg_check != null ? fmtFull(plans.ad_avg_check) : "—", "КВП-ручна ціль.", "ad_avg_check"],
+    ]],
+    ["📞 Лідогенератори", [
+      ["Передані заявки", fmtNum(en.leadgen.transferred), HINT.transferred],
+      ["Поїхали (успіх→рахунок)", `${fmtNum(en.leadgen.dispatched)} · ${fmtMoney(en.leadgen.dispatchedRevenue)}`, HINT.lgDispatched],
+      ["Дохід лідогену", fmtMoney(en.leadgen.revenue), HINT.lgRevenue],
+    ]],
   ];
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="data-table" style={{ width: "100%" }}>
-        <thead><tr><th>Показник</th><th style={{ textAlign: "right" }}>Значення</th><th style={{ textAlign: "right" }}>Ручний план (kvp)</th></tr></thead>
+        <thead><tr><th>Показник</th><th style={{ textAlign: "right" }}>Значення</th><th style={{ textAlign: "right" }}>Ручний план ✎</th></tr></thead>
         <tbody>
-          {rows.map(([label, val, hint]) => (
-            <tr key={label}><td style={{ display: "flex", alignItems: "center", gap: 4 }}>{label}{hint && <InfoHint text={hint} />}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{val}</td><td style={{ textAlign: "right", color: MUTED }}>—</td></tr>
-          ))}
-          {/* КВП-ручні (persist у kvp_plans): чек / бюджет / цілі */}
-          {([["avg_check", "Середній чек (ціль)"], ["ad_avg_check", "Середній чек реклами (ціль)"], ["target_leads", "Цільові ліди (ціль)"]] as const).map(([k, label]) => (
-            <tr key={k}><td>{label}</td><td style={{ textAlign: "right", color: MUTED }}>ручний</td>
-              <td style={{ textAlign: "right" }}>
-                <input type="number" defaultValue={plans[k] ?? ""} onBlur={(e) => onSave(k, e.target.value === "" ? null : Number(e.target.value))}
-                  style={{ width: 100, textAlign: "right", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", padding: "2px 6px" }} />
-              </td></tr>
+          {groups.map(([grp, rows]) => (
+            <Fragment key={grp}>
+              <tr><td colSpan={3} style={{ fontWeight: 700, background: "var(--bg)", paddingTop: 8 }}>{grp}</td></tr>
+              {rows.map(([label, val, hint, editKey]) => (
+                <tr key={grp + label}>
+                  <td><span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{label}{hint && <InfoHint text={hint} />}</span></td>
+                  <td style={{ textAlign: "right", fontWeight: 600 }}>{val}</td>
+                  <td style={{ textAlign: "right" }}>{editKey ? editCell(editKey) : <span style={{ color: MUTED }}>—</span>}</td>
+                </tr>
+              ))}
+            </Fragment>
           ))}
         </tbody>
       </table>

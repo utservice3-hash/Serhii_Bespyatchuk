@@ -4136,10 +4136,13 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
 // ───────────────────────── КРОК Д: КОМПОЗИТНИЙ ЗВІТ КВП (/kvp-report) ─────────────────────────
 
 // Класифікація команд для «двигунів» (CLAUDE.md §Канали): РНК (реклама) = Безпамятний/
-// Михальчевська; лідоген = назва містить «лідоген»; решта = РПК (повний цикл).
+// Михальчевська; лідоген = назва містить «лідоген» АБО teamId 11 (відділ лідогенерації);
+// решта = РПК (повний цикл). Крок Д owner-review: фінвідділ (teamId 12) — НЕ sales, прибрати.
+const KVP_FINANCE_TEAM_IDS = new Set([12]);   // «Финансовый отдел» — не sales-юніт → зі звіту геть
+const KVP_LEADGEN_TEAM_IDS = new Set([11]);   // «Таня Ковтонюк (лідогенерація)» — лишити, логіка окремо
 const RNK_TEAM_IDS = new Set([13, 15]);
 const kvpTeamKind = (teamId: number, name: string): "rpk" | "rnk" | "leadgen" =>
-  /лідоген|лидоген/i.test(name) ? "leadgen" : RNK_TEAM_IDS.has(teamId) ? "rnk" : "rpk";
+  (KVP_LEADGEN_TEAM_IDS.has(teamId) || /лідоген|лидоген/i.test(name)) ? "leadgen" : RNK_TEAM_IDS.has(teamId) ? "rnk" : "rpk";
 
 /** Місяці (перше число) у діапазоні [from,to] по-київськи — для помісячних core-серій. */
 function monthsInRange(from: string, to: string): string[] {
@@ -4214,6 +4217,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     newRepeatTot, newRepeatMgr, newRepeatTeam, receivedByCh,
     dispatchedAllSeries, dispatchedLgSeries, transferredSeries,
     newToRepeat, activeBase, weeklyReg, nonTarget, planRes, funnel,
+    receivedSeg, expectedSeg, mgrDaily,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -4228,7 +4232,10 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     metrics.nonTargetLeads(scope, adSources),
     Promise.all(months.map((m) => plans.managerPlan({ month: m }))),
     metrics.funnelByStage(scope),
+    money.receivedBySegment(mScope), metrics.expectedBySegment({ from }), money.receivedByManagerBucket(mScope, "day"),
   ]);
+  const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
+  for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
 
   // strategic = Σ місячних planів (🔒 read-only). Плани по менеджеру/команді — теж Σ.
   let strategic = 0;
@@ -4276,9 +4283,12 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       successDeals: su?.deals ?? 0,
       conversion: cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
       expected: expByMgr.get(mid)?.sum ?? 0,
+      daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
     });
   }
-  const teams = [...teamMap.values()].map((t) => ({
+  // Крок Д owner-review #1: фінвідділ — НЕ sales-юніт → повністю прибрати зі звіту
+  // (received=0, тож Σ teams.revenue не зрушиться).
+  const teams = [...teamMap.values()].filter((t) => !KVP_FINANCE_TEAM_IDS.has(t.teamId)).map((t) => ({
     teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
     pct: t.plan > 0 ? Math.round((t.revenue / t.plan) * 100) : null,
     conversion: t.conversion, entered: t.entered, won: t.won,
@@ -4349,8 +4359,23 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       newToRepeat, activeBase, weeklyRegulars: weeklyReg,
       nonTarget, receivablesPaidOff: null, // «—»: немає джерела історії погашень
     },
+    // Крок Д owner-review #3: СТРУКТУРА ВИРУЧКИ — 2 етапи client-grain.
+    //  received — та САМА каса, що verdict (receivedMoney), розкладена по сегменту +
+    //             ЯВНИЙ залишок (unattributed). Σ(new+repeat+unattributed) == received.
+    //  expected — зона визнання EXPECT_ZONE (знімок) по сегменту. Σ == expectedZone.total.
+    //  legacy — стара created-at-based newRepeatByScope (client-grain лінз) для повної таблиці.
+    revenueStructure: {
+      received: {
+        new: receivedSeg.newSeg, repeat: receivedSeg.repeatSeg, unattributed: receivedSeg.unattributed,
+        total: { deals: received.deals, revenue: received.revenue },
+      },
+      expected: {
+        new: expectedSeg.newSeg, repeat: expectedSeg.repeatSeg, unattributed: expectedSeg.unattributed,
+        total: { deals: expectedZone.total.deals, sum: expectedZone.total.sum },
+      },
+    },
     segments: { totals: newRepeatTot, byManager: newRepeatMgr, byTeam: newRepeatTeam },
-    money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth },
+    money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),
   });
 });

@@ -122,6 +122,51 @@ async function aggByMgr(kind: Kind, s: MoneyScope): Promise<MgrRow[]> {
 export const receivedMoney = (s: MoneyScope) => agg("received", s);
 export const receivedByTeam = (s: MoneyScope) => aggByTeam("received", s);
 export const receivedByMgr = (s: MoneyScope) => aggByMgr("received", s);
+export interface SegmentAgg { newSeg: MoneyAgg; repeatSeg: MoneyAgg; unattributed: MoneyAgg }
+
+/**
+ * «Отримані кошти» РОЗКЛАДЕНІ по сегменту КЛІЄНТА (Крок Д owner-review #3): ТА САМА
+ * каса, що `receivedMoney` (received src = success ⊎ paidOnly, анкер stage-entry/
+ * closed_at, дедуп), лише розбита client-grain:
+ *   • new    — перша оплата клієнта (lifetime MIN(created_at) серед paid) у періоді;
+ *   • repeat — перша оплата була ДО періоду;
+ *   • unattributed — угода без `client_key` (немає по чому віднести) → ЗАЛИШОК показуємо
+ *     ЯВНО, не ховаємо. Σ(new+repeat+unattributed) == `receivedMoney` (той самий src).
+ */
+export async function receivedBySegment(s: MoneyScope): Promise<SegmentAgg> {
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
+  if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const fromRef = s.from ? (p.push(s.from), `$${p.length}`) : "NULL";
+  const rows = (await pool.query<{ seg: string; revenue: string; deals: string }>(
+    `WITH firsts AS (
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL GROUP BY d.client_key
+     ),
+     pop AS (
+       SELECT src.price, dd.client_key, f.first_paid
+         FROM (${src}) src
+         JOIN managers m ON m.id = src.manager_id
+         JOIN deals dd ON dd.kommo_id = src.kommo_id
+         LEFT JOIN firsts f ON f.client_key = dd.client_key
+        ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
+     )
+     SELECT CASE WHEN client_key IS NULL OR first_paid IS NULL THEN 'u'
+                 WHEN ${fromRef}::date IS NOT NULL AND first_paid >= ${fromRef}::date THEN 'n'
+                 ELSE 'r' END AS seg,
+            COALESCE(SUM(price),0) AS revenue, COUNT(*) AS deals
+       FROM pop GROUP BY 1`, p)).rows;
+  const g = (k: string): MoneyAgg => { const r = rows.find((x) => x.seg === k); return { revenue: Number(r?.revenue ?? 0), deals: Number(r?.deals ?? 0) }; };
+  return { newSeg: g("n"), repeatSeg: g("r"), unattributed: g("u") };
+}
+
 // «Успішно реалізовано» (ЗАРАЗ 142, за closed_at) — знаменник avg_check_success_only.
 export const successMoney = (s: MoneyScope) => agg("success", s);
 export const successByTeam = (s: MoneyScope) => aggByTeam("success", s);
@@ -151,6 +196,17 @@ export const receivedByBucket = (s: MoneyScope, granularity: "day" | "week" | "m
 // BE-2 «Авто відправлено» по бакету — success (ЗАРАЗ 142), анкер `closed_at_kommo`. Дзеркало
 // receivedByBucket з kind='success'. Σ бакетів = successMoney(той самий scope/період).
 export const successByBucket = (s: MoneyScope, granularity: "day" | "week" | "month") => bucketAgg("success", s, granularity);
+
+export interface MgrBucketRow { managerId: number; bucket: string; revenue: number; deals: number }
+/** received по (менеджер × день/тиждень) ОДНИМ запитом — для денного дрілу КВП (Крок Д #4). */
+export async function receivedByManagerBucket(s: MoneyScope, granularity: "day" | "week"): Promise<MgrBucketRow[]> {
+  const rows = await query<{ manager_id: number; bucket: string; revenue: string; deals: string }>(
+    "received", { ...s, activeOnly: true },
+    `src.manager_id AS manager_id, to_char(date_trunc('${granularity}', (src.anchor_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
+    "GROUP BY 1, 2 ORDER BY 2"
+  );
+  return rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
 
 /** received по (менеджер × тиждень) за місяць — для тижневої сітки план/факт. */
 export async function receivedByManagerWeek(managerIds: number[], monthStart: string): Promise<MgrWeekRow[]> {

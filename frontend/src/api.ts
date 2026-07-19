@@ -415,10 +415,13 @@ export async function fetchKvpExtra(params: { from?: string; to?: string }): Pro
 // ── КРОК Д: композитний Звіт КВП (/kvp-report) ──
 export interface KvpAgg { deals: number; revenue: number }
 export interface KvpEngineTeam { plan: number; revenue: number; expected: number; pct: number | null; conversion: number | null; entered: number }
+export interface KvpDay { bucket: string; revenue: number; deals: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
+  daily: KvpDay[];
 }
+export interface KvpExpBucket { deals: number; sum: number }
 export interface KvpTeam {
   teamId: number; name: string; kind: "rpk" | "rnk" | "leadgen";
   plan: number; revenue: number; expected: number; pct: number | null;
@@ -449,12 +452,16 @@ export interface KvpReport {
     nonTarget: number | null;
     receivablesPaidOff: null;
   };
+  revenueStructure: {
+    received: { new: KvpAgg; repeat: KvpAgg; unattributed: KvpAgg; total: KvpAgg };
+    expected: { new: KvpExpBucket; repeat: KvpExpBucket; unattributed: KvpExpBucket; total: KvpExpBucket };
+  };
   segments: {
     totals: { newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number };
     byManager: { id: number; name: string; teamId: number | null; newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number }[];
     byTeam: { id: number; name: string; teamId: number | null; newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number }[];
   };
-  money: { received: KvpAgg; success: KvpAgg; paidOnly: KvpAgg; awaitingNow: { deals: number; revenue: number }; expectedThis: { deals: number; sum: number }; expectedNext: { deals: number; sum: number } };
+  money: { received: KvpAgg; success: KvpAgg; paidOnly: KvpAgg; awaitingNow: { deals: number; revenue: number }; expectedThis: KvpExpBucket; expectedNext: KvpExpBucket; expectedZoneTotal: KvpExpBucket };
   funnel: { stage: string; deals: number; revenue: number }[];
 }
 export async function fetchKvpReport(params: { preset?: string; date?: string; from?: string; to?: string }): Promise<KvpReport> {

@@ -1817,6 +1817,47 @@ export async function expectedZoneByScope(s: SnapshotScope, by: "team" | "manage
   return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
 }
 
+export interface ExpectedSegment { newSeg: ExpectedBucket; repeatSeg: ExpectedBucket; unattributed: ExpectedBucket }
+/**
+ * «Дохід в очікуванні» РОЗКЛАДЕНИЙ по сегменту КЛІЄНТА (Крок Д owner-review #3, ДРУГИЙ
+ * етап структури виручки): ТА САМА зона визнання `EXPECT_ZONE` (знімок «зараз»), що й
+ * `expectedPaymentsByPlanned`/`expectedZoneByScope`, лише розбита client-grain:
+ *   • new    — клієнт ще НЕ платив (first_paid NULL → новий проспект) АБО перша оплата у періоді;
+ *   • repeat — перша оплата була ДО періоду;
+ *   • unattributed — угода без `client_key`.
+ * Σ(new+repeat+unattributed) == `expectedPaymentsByPlanned.total` (той самий предикат зони).
+ * `from` — лише для класифікації new/repeat (сама зона — знімок, без періоду).
+ */
+export async function expectedBySegment(s: { managerId?: number | null; teamId?: number | null; from?: string | null }): Promise<ExpectedSegment> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const fromRef = s.from ? (params.push(s.from), `$${params.length}`) : "NULL";
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const rows = (await pool.query<{ seg: string; deals: string; sum: string }>(
+    `WITH firsts AS (
+       SELECT d2.client_key, MIN(d2.created_at_kommo) AS first_paid
+         FROM deals d2
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d2.pipeline_id AND psm.status_id = d2.status_id
+        WHERE psm.funnel_stage = 'paid' AND d2.client_key IS NOT NULL GROUP BY d2.client_key
+     ),
+     pop AS (
+       SELECT d.price, d.client_key, f.first_paid
+         FROM deals d ${join}
+         LEFT JOIN firsts f ON f.client_key = d.client_key
+        WHERE ${conds.join(" AND ")}
+     )
+     SELECT CASE WHEN client_key IS NULL THEN 'u'
+                 WHEN first_paid IS NULL THEN 'n'
+                 WHEN ${fromRef}::date IS NOT NULL AND first_paid >= ${fromRef}::date THEN 'n'
+                 ELSE 'r' END AS seg,
+            COUNT(*)::int AS deals, COALESCE(SUM(d.price),0) AS sum
+       FROM pop d GROUP BY 1`, params)).rows;
+  const g = (k: string): ExpectedBucket => { const r = rows.find((x) => x.seg === k); return { deals: Number(r?.deals ?? 0), sum: Number(r?.sum ?? 0) }; };
+  return { newSeg: g("n"), repeatSeg: g("r"), unattributed: g("u") };
+}
+
 // ───────────────────────── ПРОГНОЗ ВИРУЧКИ — ЄДИНЕ ЯДРО (Формула A) ─────────────────────────
 
 export interface ProjectionScope {
