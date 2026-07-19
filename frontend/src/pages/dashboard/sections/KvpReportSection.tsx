@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type CSSProperties } from "react";
 import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
@@ -79,6 +79,7 @@ export function KvpReportSection() {
   const [weekMode, setWeekMode] = useState<"money" | "activity">("money");
   // #6: тижнево-скоупований дрил — клік по клітинці тижня команди → менеджери ЦЬОГО тижня.
   const [openWeekDrill, setOpenWeekDrill] = useState<{ teamId: number; weekIdx: number } | null>(null);
+  const [openMgr, setOpenMgr] = useState<number | null>(null);   // денний дрил менеджера (weeks→days)
 
   const rangeMode = !!(range.from && range.to);
   useEffect(() => {
@@ -218,16 +219,25 @@ export function KvpReportSection() {
               )}
             </div>
             <div style={{ overflowX: "auto" }}>
-              <table className="data-table" style={{ width: "100%" }}>
-                <thead><tr><th>Команда</th><th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ minWidth: 110 }}>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо</th><th style={{ textAlign: "right" }}>Конв.</th>{rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}</tr></thead>
+              <table className="data-table" style={{ width: "100%", tableLayout: "fixed", minWidth: 640 + rep.weekBlocks.length * WK_W }}>
+                <colgroup>
+                  <col style={{ width: 216 }} />
+                  <col style={{ width: 84 }} /><col style={{ width: 84 }} /><col style={{ width: 108 }} /><col style={{ width: 88 }} /><col style={{ width: 56 }} />
+                  {rep.weekBlocks.map((w) => <col key={w.idx} style={{ width: WK_W }} />)}
+                </colgroup>
+                <thead><tr>
+                  <th>Команда / менеджер</th>
+                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо</th><th style={{ textAlign: "right" }}>Конв.</th>
+                  {rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}
+                </tr></thead>
                 <tbody>
                   {rep.teams.map((t) => (
                     <Fragment key={t.teamId}>
                       <tr onClick={() => setOpenTeam(openTeam === t.teamId ? null : t.teamId)} style={{ cursor: "pointer" }}>
-                        <td>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з РПК/повним циклом)." />}</span></td>
+                        <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з РПК/повним циклом)." />}</span></td>
                         <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}</td>
-                        <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={t.pct ?? 0} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 42, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
+                        <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={t.pct ?? 0} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
                         <td style={{ textAlign: "right", color: MUTED }}>{fmtMoney(t.expected)}</td>
                         <td style={{ textAlign: "right" }}>{t.kind === "rnk" ? fmtPct(t.conversion) : "—"}</td>
                         {rep.weekBlocks.map((w) => (
@@ -239,13 +249,41 @@ export function KvpReportSection() {
                         ))}
                       </tr>
                       {openWeekDrill?.teamId === t.teamId && <WeekManagerDrill team={t} weekIdx={openWeekDrill.weekIdx} weekBlocks={rep.weekBlocks} />}
-                      {openTeam === t.teamId && <ManagerDrill team={t} from={rep.scope.from} to={rep.scope.to} weekBlocks={rep.weekBlocks} mode={weekMode} />}
+                      {/* Менеджери — ІНЛАЙН у тій самій таблиці (той самий <colgroup>) → тижневі колонки
+                          збігаються попіксельно з командними. Клік по імені = денний дрил weeks→days. */}
+                      {openTeam === t.teamId && t.managers.map((m: KvpManager) => {
+                        const lagging = m.pct != null && m.pct < 70 && m.plan > 0;
+                        const open = openMgr === m.managerId;
+                        return (
+                          <Fragment key={m.managerId}>
+                            <tr onClick={() => setOpenMgr(open ? null : m.managerId)} style={{ cursor: "pointer", background: "var(--bg)" }}>
+                              <td style={{ ...clip, paddingLeft: 26 }}>{open ? "▾" : "▸"} {m.name}</td>
+                              <td style={{ textAlign: "right" }}>{fmtMoney(m.plan)}</td>
+                              <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(m.revenue)}</td>
+                              <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={m.pct ?? 0} color={pctColor(m.pct)} /><span style={{ color: pctColor(m.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(m.pct)}</span></div></td>
+                              <td style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.expected)}</td>
+                              <td style={{ textAlign: "right" }}>{t.kind === "rnk" ? (m.conversion == null ? "—" : `${m.conversion}%`) : "—"}</td>
+                              {rep.weekBlocks.map((w) => <WeekCell key={w.idx} mode={weekMode} w={m.weeks?.find((x) => x.idx === w.idx)} prev={m.weeks?.find((x) => x.idx === w.idx - 1)} />)}
+                            </tr>
+                            {lagging && (
+                              <tr><td colSpan={6 + rep.weekBlocks.length} style={{ paddingLeft: 26, background: "rgba(220,38,38,0.06)", fontSize: 12, color: RED }}>
+                                ⚠️ {m.name} відстає ({m.pct}% плану). {m.successDeals < 3 ? "Мало закритих угод" : "Є угоди, але недобір суми"}{t.kind === "rnk" && m.conversion != null && m.conversion < (t.conversion ?? 0) ? ` · конверсія ${m.conversion}% нижча за команду` : ""}. → перевірити пайплайн і темп по днях.
+                              </td></tr>
+                            )}
+                            {open && (
+                              <tr><td colSpan={6 + rep.weekBlocks.length} style={{ padding: "8px 8px 12px 40px", background: "var(--card-bg)" }}>
+                                <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} isRnk={t.kind === "rnk"} />
+                              </td></tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
                     </Fragment>
                   ))}
                   {/* #5: розріз відділу по тижнях = Σ команд (гейт Σ Dept == Σ teams == Σ days) */}
                   {rep.deptWeeks.length > 0 && (
                     <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 600 }}>
-                      <td>Σ Відділ</td>
+                      <td style={clip}>Σ Відділ</td>
                       <td style={{ textAlign: "right" }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.plan, 0))}</td>
                       <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.revenue, 0))}</td>
                       <td colSpan={3}></td>
@@ -339,74 +377,46 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
 const wkPct = (fact: number, plan: number) => (plan > 0 ? Math.round((fact / plan) * 100) : null);
 const barColor = (p: number | null) => (p == null ? MUTED : p >= 100 ? GREEN : p >= 70 ? AMBER : RED);
 type WeekLike = { plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; isCurrent: boolean; isFuture: boolean; pace: number | null };
-// #1-4: читабельна клітинка тижня. mode 'money' → факт/план/бар/%/✓✗/темп/очік/тренд;
-// 'activity' → авто·ліди. onClick (тільки командні клітинки) → менеджери цього тижня.
+// Фіксована ширина КОЖНОЇ тижневої колонки (команди, відділ, менеджери) — одна вертикальна
+// сітка. table-layout:fixed + <colgroup> кріплять ці ширини, contain обрізає переповнення.
+const WK_W = 94;
+const wkTd = (bg?: string, clickable?: boolean): CSSProperties => ({
+  width: WK_W, maxWidth: WK_W, boxSizing: "border-box", padding: "3px 7px", textAlign: "right",
+  background: bg, cursor: clickable ? "pointer" : undefined, overflow: "hidden", verticalAlign: "middle",
+});
+const clip: CSSProperties = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+// Компактна клітинка тижня — max 3 рядки: «факт /план» · бар(колір+темп) · «% ✓/✗ ↑↓».
+// Очікування ЛИШЕ на майбутніх тижнях (минуле/поточне не дублює колонку «Очікуємо»).
+// mode 'activity' → авто·ліди. onClick (лише командні) → менеджери цього тижня.
 function WeekCell({ w, prev, mode, onClick, active }: { w: WeekLike | undefined; prev?: WeekLike; mode: "money" | "activity"; onClick?: () => void; active?: boolean }) {
   const bg = active ? "rgba(197,20,28,0.12)" : w?.isCurrent ? "rgba(37,99,235,0.07)" : undefined;
-  if (!w) return <td style={{ textAlign: "center", color: MUTED, fontSize: 11 }}>—</td>;
-  const cur = onClick ? "pointer" : undefined;
   const handle = onClick ? (e: { stopPropagation: () => void }) => { e.stopPropagation(); onClick(); } : undefined;
+  if (!w) return <td style={{ ...wkTd(bg), textAlign: "center", color: MUTED, fontSize: 11 }}>—</td>;
   if (mode === "activity") return (
-    <td onClick={handle} style={{ textAlign: "right", fontSize: 11, background: bg, cursor: cur }}>
-      {w.isFuture ? <span style={{ color: MUTED }}>—</span> : <><div style={{ fontWeight: 700 }}>{w.auto} <span style={{ fontWeight: 400, color: MUTED, fontSize: 10 }}>авто</span></div><div style={{ color: MUTED, fontSize: 10 }}>{w.leadsAd}р · {w.leadsLeadgen}лг</div></>}
+    <td onClick={handle} style={{ ...wkTd(bg, !!onClick), fontSize: 11 }}>
+      {w.isFuture ? <span style={{ color: MUTED }}>—</span> : <>
+        <div style={{ ...clip, fontWeight: 700 }}>{w.auto}<span style={{ fontWeight: 400, color: MUTED, fontSize: 10 }}> авто</span></div>
+        <div style={{ ...clip, color: MUTED, fontSize: 10 }}>{w.leadsAd}р · {w.leadsLeadgen}лг</div>
+      </>}
     </td>
   );
-  if (w.isFuture) return <td onClick={handle} style={{ textAlign: "right", fontSize: 10, color: MUTED, background: bg, cursor: cur }}>план {fmtMoney(w.plan)}{w.expected > 0 && <div style={{ color: AMBER }}>очік {fmtMoney(w.expected)}</div>}</td>;
+  if (w.isFuture) return (
+    <td onClick={handle} style={{ ...wkTd(bg, !!onClick), fontSize: 10, color: MUTED }}>
+      <div style={clip}>план {fmtMoney(w.plan)}</div>
+      {w.expected > 0 && <div style={{ ...clip, color: AMBER }}>очік {fmtMoney(w.expected)}</div>}
+    </td>
+  );
   const p = wkPct(w.fact, w.plan), pp = prev ? wkPct(prev.fact, prev.plan) : null, col = barColor(p);
-  const trend = p != null && pp != null ? (p > pp ? "↑" : p < pp ? "↓" : "→") : "";
+  const trend = p != null && pp != null ? (p > pp ? "↑" : p < pp ? "↓" : "") : "";
   return (
-    <td onClick={handle} style={{ textAlign: "right", fontSize: 11, background: bg, minWidth: 82, cursor: cur }}>
-      <div style={{ fontWeight: 700 }}>{fmtMoney(w.fact)} {trend && <span style={{ color: trend === "↑" ? GREEN : trend === "↓" ? RED : MUTED }}>{trend}</span>}</div>
-      <div style={{ color: MUTED, fontSize: 10 }}>/ {fmtMoney(w.plan)}</div>
-      <div style={{ position: "relative", height: 6, background: "var(--border)", borderRadius: 3, margin: "2px 0" }}>
+    <td onClick={handle} style={{ ...wkTd(bg, !!onClick), fontSize: 11 }}>
+      <div style={{ ...clip, lineHeight: 1.25 }}><b>{fmtMoney(w.fact)}</b><span style={{ color: MUTED, fontSize: 10 }}> /{fmtMoney(w.plan)}</span></div>
+      <div style={{ position: "relative", height: 5, background: "var(--border)", borderRadius: 3, margin: "2px 0" }}>
         <div style={{ width: `${Math.min(100, p ?? 0)}%`, height: "100%", background: col, borderRadius: 3 }} />
-        {w.isCurrent && w.pace != null && <div title="темп: де мали б бути на сьогодні" style={{ position: "absolute", left: `${Math.min(100, w.pace * 100)}%`, top: -1, bottom: -1, width: 2, background: "var(--text)" }} />}
+        {w.isCurrent && w.pace != null && <span title="темп: де мали б бути на сьогодні" style={{ position: "absolute", left: `${Math.min(100, Math.max(0, w.pace * 100))}%`, top: -1, bottom: -1, width: 1.5, background: "var(--text)", opacity: 0.65 }} />}
       </div>
-      <div style={{ color: col, fontWeight: 600, fontSize: 10 }}>{p == null ? "—" : `${p >= 100 ? "✓" : "✗"} ${p}%`}</div>
-      {w.expected > 0 && <div style={{ color: AMBER, fontSize: 10 }}>очік {fmtMoney(w.expected)}</div>}
+      <div style={{ ...clip, color: col, fontWeight: 600, fontSize: 10, lineHeight: 1.1 }}>{p == null ? "—" : `${p >= 100 ? "✓" : "✗"} ${p}%`}{trend && <span style={{ color: trend === "↑" ? GREEN : RED, marginLeft: 3 }}>{trend}</span>}</div>
     </td>
-  );
-}
-
-function ManagerDrill({ team, from, to, weekBlocks, mode }: { team: KvpTeam; from: string; to: string; weekBlocks: KvpReport["weekBlocks"]; mode: "money" | "activity" }) {
-  const [openMgr, setOpenMgr] = useState<number | null>(null);
-  const cols = (team.kind === "rnk" ? 7 : 6) + weekBlocks.length;
-  return (
-    <tr><td colSpan={6 + weekBlocks.length} style={{ padding: 0, background: "var(--bg)" }}>
-      <table className="data-table" style={{ width: "100%", margin: 0 }}>
-        <thead><tr><th style={{ paddingLeft: 28 }}>Менеджер (клік = дні)</th><th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ minWidth: 90 }}>%</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікує</th>{team.kind === "rnk" && <th style={{ textAlign: "right" }}>Конв.</th>}{weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10 }}>Т{w.idx}</th>)}</tr></thead>
-        <tbody>
-          {team.managers.map((m: KvpManager) => {
-            const lagging = m.pct != null && m.pct < 70 && m.plan > 0;
-            const open = openMgr === m.managerId;
-            return (
-              <Fragment key={m.managerId}>
-                <tr onClick={() => setOpenMgr(open ? null : m.managerId)} style={{ cursor: "pointer" }}>
-                  <td style={{ paddingLeft: 28 }}>{open ? "▾" : "▸"} {m.name}</td>
-                  <td style={{ textAlign: "right" }}>{fmtMoney(m.plan)}</td>
-                  <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(m.revenue)}</td>
-                  <td><span style={{ color: pctColor(m.pct), fontWeight: 600 }}>{fmtPct(m.pct)}</span></td>
-                  <td style={{ textAlign: "right" }}>{fmtFull(m.avgCheck)}</td>
-                  <td style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.expected)}</td>
-                  {team.kind === "rnk" && <td style={{ textAlign: "right" }}>{m.conversion == null ? "—" : `${m.conversion}%`}</td>}
-                  {weekBlocks.map((w) => <WeekCell key={w.idx} mode={mode} w={m.weeks?.find((x) => x.idx === w.idx)} prev={m.weeks?.find((x) => x.idx === w.idx - 1)} />)}
-                </tr>
-                {lagging && (
-                  <tr><td colSpan={cols} style={{ paddingLeft: 28, background: "rgba(220,38,38,0.06)", fontSize: 12, color: RED }}>
-                    ⚠️ {m.name} відстає ({m.pct}% плану). {m.successDeals < 3 ? "Мало закритих угод" : "Є угоди, але недобір суми"}{team.kind === "rnk" && m.conversion != null && m.conversion < (team.conversion ?? 0) ? ` · конверсія ${m.conversion}% нижча за команду` : ""}. → перевірити пайплайн і темп по днях.
-                  </td></tr>
-                )}
-                {open && (
-                  <tr><td colSpan={cols} style={{ padding: "8px 8px 12px 40px", background: "var(--card-bg)" }}>
-                    <ManagerDetailDrill managerId={m.managerId} from={from} to={to} isRnk={team.kind === "rnk"} />
-                  </td></tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </td></tr>
   );
 }
 
