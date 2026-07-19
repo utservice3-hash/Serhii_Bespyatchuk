@@ -4133,6 +4133,228 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
   });
 });
 
+// ───────────────────────── КРОК Д: КОМПОЗИТНИЙ ЗВІТ КВП (/kvp-report) ─────────────────────────
+
+// Класифікація команд для «двигунів» (CLAUDE.md §Канали): РНК (реклама) = Безпамятний/
+// Михальчевська; лідоген = назва містить «лідоген»; решта = РПК (повний цикл).
+const RNK_TEAM_IDS = new Set([13, 15]);
+const kvpTeamKind = (teamId: number, name: string): "rpk" | "rnk" | "leadgen" =>
+  /лідоген|лидоген/i.test(name) ? "leadgen" : RNK_TEAM_IDS.has(teamId) ? "rnk" : "rpk";
+
+/** Місяці (перше число) у діапазоні [from,to] по-київськи — для помісячних core-серій. */
+function monthsInRange(from: string, to: string): string[] {
+  const out: string[] = [];
+  const [fy, fm] = from.split("-").map(Number);
+  const end = to.slice(0, 7);
+  let y = fy, m = fm;
+  for (let i = 0; i < 60; i++) {
+    const ym = `${y}-${String(m).padStart(2, "0")}`;
+    out.push(ym + "-01");
+    if (ym >= end) break;
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+
+/** Резолвер scope КВП: preset (day/week/month/quarter/year) навколо `date` АБО custom from/to. */
+function resolveKvpScope(preset: string, date: string, from?: string | null, to?: string | null): { from: string; to: string; prevFrom: string; prevTo: string; label: string; isCurrent: boolean } {
+  const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const anchor = date || kyivToday;
+  const d = new Date(anchor + "T00:00:00Z");
+  const iso = (x: Date) => x.toISOString().slice(0, 10);
+  const shift = (x: Date, days: number) => { const c = new Date(x); c.setUTCDate(c.getUTCDate() + days); return c; };
+  let f: string, t: string, pf: string, pt: string, label: string;
+  if (from && to) {
+    f = from; t = to;
+    const span = Math.round((new Date(t + "T00:00:00Z").getTime() - new Date(f + "T00:00:00Z").getTime()) / 864e5) + 1;
+    pt = iso(shift(new Date(f + "T00:00:00Z"), -1)); pf = iso(shift(new Date(pt + "T00:00:00Z"), -(span - 1)));
+    label = `${f} — ${t}`;
+  } else if (preset === "day") {
+    f = t = iso(d); pf = pt = iso(shift(d, -1)); label = iso(d);
+  } else if (preset === "week") {
+    const dow = (d.getUTCDay() + 6) % 7; const mon = shift(d, -dow);
+    f = iso(mon); t = iso(shift(mon, 6)); pf = iso(shift(mon, -7)); pt = iso(shift(mon, -1)); label = `Тиждень ${f}`;
+  } else if (preset === "quarter") {
+    const q = Math.floor(d.getUTCMonth() / 3); const y = d.getUTCFullYear();
+    f = `${y}-${String(q * 3 + 1).padStart(2, "0")}-01`; t = iso(new Date(Date.UTC(y, q * 3 + 3, 0)));
+    pf = `${q === 0 ? y - 1 : y}-${String((q === 0 ? 4 : q) * 3 - 2).padStart(2, "0")}-01`; pt = iso(new Date(Date.UTC(q === 0 ? y - 1 : y, (q === 0 ? 4 : q) * 3, 0)));
+    label = `Q${q + 1} ${y}`;
+  } else if (preset === "year") {
+    const y = d.getUTCFullYear(); f = `${y}-01-01`; t = `${y}-12-31`; pf = `${y - 1}-01-01`; pt = `${y - 1}-12-31`; label = `${y}`;
+  } else { // month (default)
+    const y = d.getUTCFullYear(), mo = d.getUTCMonth();
+    f = `${y}-${String(mo + 1).padStart(2, "0")}-01`; t = iso(new Date(Date.UTC(y, mo + 1, 0)));
+    pf = `${mo === 0 ? y - 1 : y}-${String(mo === 0 ? 12 : mo).padStart(2, "0")}-01`; pt = iso(new Date(Date.UTC(mo === 0 ? y - 1 : y, mo === 0 ? 12 : mo, 0)));
+    const MN = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
+    label = `${MN[mo]} ${y}`;
+  }
+  const isCurrent = f <= kyivToday && kyivToday <= t;
+  return { from: f, to: t, prevFrom: pf, prevTo: pt, label, isCurrent };
+}
+
+/**
+ * КРОК Д — КОМПОЗИТНИЙ звіт КВП. Admin-only (роль КВП = вся компанія). ТІЛЬКИ
+ * збірка з ядра (money/metrics/plans) — нової бізнес-логіки НЕ додає. Scope-aware
+ * (preset day/week/month/quarter/year або custom). strategicRevenuePlan = 🔒
+ * read-only (Σ plans). Числа звіряються з Оглядом/Звітом (спільне ядро).
+ */
+dashboardRouter.get("/kvp-report", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin") return res.status(403).json({ error: "Звіт КВП — лише адміністратор (КВП)" });
+  const sc = resolveKvpScope(String(req.query.preset ?? "month"), String(req.query.date ?? ""), (req.query.from as string) || null, (req.query.to as string) || null);
+  const { from, to } = sc;
+  const scope: metrics.MetricScope = { from, to };
+  const mScope: money.MoneyScope = { from, to };
+  const { adSources } = await getSettings();
+  const months = monthsInRange(from, to);
+
+  const [
+    received, receivedPrev, success, paidOnly, expectedZone, awaitingNow,
+    projection, receivedTeams, expectedTeams, convTeams, convMgrs,
+    newRepeatTot, newRepeatMgr, newRepeatTeam, receivedByCh,
+    dispatchedAllSeries, dispatchedLgSeries, transferredSeries,
+    newToRepeat, activeBase, weeklyReg, nonTarget, planRes, funnel,
+  ] = await Promise.all([
+    money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
+    money.successMoney(mScope), money.paidOnlyMoney(mScope),
+    metrics.expectedPaymentsByPlanned({}), money.awaitingNowSnapshot(mScope),
+    metrics.buildProjection({ from, to, granularity: "month" }, null),
+    money.receivedByTeam(mScope), metrics.expectedZoneByScope({}, "team"),
+    metrics.conversionAdsByTeam(scope, adSources), metrics.conversionAdsByManager(scope, adSources),
+    metrics.newRepeatTotals(scope), metrics.newRepeatByScope(scope, "manager"), metrics.newRepeatByScope(scope, "team"),
+    money.receivedByChannel(mScope, adSources),
+    metrics.dispatchedByLoadMonth(scope), metrics.dispatchedByLoadMonth(scope, "leadgen"), metrics.conversionTransferredByMonth(scope),
+    metrics.newToRepeatByMonth({}), metrics.activeBaseByMonth({}), metrics.weeklyRegulars({}),
+    metrics.nonTargetLeads(scope, adSources),
+    Promise.all(months.map((m) => plans.managerPlan({ month: m }))),
+    metrics.funnelByStage(scope),
+  ]);
+
+  // strategic = Σ місячних planів (🔒 read-only). Плани по менеджеру/команді — теж Σ.
+  let strategic = 0;
+  for (const m of months) strategic += await plans.strategicRevenuePlan({ month: m });
+  const mgrPlan = new Map<number, { name: string; teamId: number | null; plan: number }>();
+  for (const pr of planRes) for (const row of pr.rows) {
+    const e = mgrPlan.get(row.managerId) ?? { name: row.name, teamId: row.teamId, plan: 0 };
+    e.plan += row.plan; mgrPlan.set(row.managerId, e);
+  }
+  // Дисп/передані у періоді = сума місячних бакетів у діапазоні (місяць-вирівняні пресети).
+  const inRange = (ym: string) => months.includes(ym + "-01");
+  const sumSeries = (rows: { ym: string; deals?: number; revenue?: number; wonEventually?: number; entered?: number }[], k: "deals" | "revenue" | "wonEventually" | "entered") =>
+    rows.filter((r) => inRange(r.ym)).reduce((a, r) => a + (Number((r as Record<string, unknown>)[k]) || 0), 0);
+  const dispatchedAll = { deals: sumSeries(dispatchedAllSeries, "deals"), revenue: sumSeries(dispatchedAllSeries, "revenue") };
+  const dispatchedLg = { deals: sumSeries(dispatchedLgSeries, "deals"), revenue: sumSeries(dispatchedLgSeries, "revenue") };
+  const transferred = { entered: sumSeries(transferredSeries, "entered"), won: sumSeries(transferredSeries, "wonEventually") };
+
+  // ── ТЕАМИ (Σ = відділ) ──
+  const teamMap = new Map<number, { teamId: number; name: string; kind: string; plan: number; revenue: number; expected: number; conversion: number | null; entered: number; won: number; managers: Record<string, unknown>[] }>();
+  const orphanPlan = new Map<number, number>();
+  for (const pr of planRes) pr.orphanPlanByTeam.forEach((v, k) => orphanPlan.set(k, (orphanPlan.get(k) ?? 0) + v));
+  const teamGet = (id: number, name: string) => {
+    let e = teamMap.get(id);
+    if (!e) { e = { teamId: id, name, kind: kvpTeamKind(id, name), plan: orphanPlan.get(id) ?? 0, revenue: 0, expected: 0, conversion: null, entered: 0, won: 0, managers: [] }; teamMap.set(id, e); }
+    return e;
+  };
+  for (const t of receivedTeams) teamGet(t.teamId, t.teamName).revenue += t.revenue;
+  for (const r of expectedTeams) { const e = teamMap.get(r.id) ?? teamGet(r.id, r.name); e.expected += r.sum; }
+  for (const c of convTeams) if (c.teamId != null) { const e = teamMap.get(c.teamId); if (e) { e.entered = c.entered; e.won = c.won; e.conversion = c.cohortPct; } }
+  // менеджери під команду
+  const succByMgr = new Map((await money.successByMgr(mScope)).map((x) => [x.managerId, x]));
+  const recvByMgr = new Map((await money.receivedByMgr(mScope)).map((x) => [x.managerId, x]));
+  const convByMgr = new Map(convMgrs.map((x) => [x.managerId, x]));
+  const expByMgr = new Map((await metrics.expectedZoneByScope({}, "manager")).map((x) => [x.id, x]));
+  for (const [mid, mp] of mgrPlan) {
+    if (mp.teamId == null) continue;
+    const e = teamGet(mp.teamId, "");
+    const rev = recvByMgr.get(mid)?.revenue ?? 0;
+    const su = succByMgr.get(mid); const cv = convByMgr.get(mid);
+    e.plan += mp.plan;
+    e.managers.push({
+      managerId: mid, name: mp.name, plan: mp.plan, revenue: rev,
+      pct: mp.plan > 0 ? Math.round((rev / mp.plan) * 100) : null,
+      avgCheck: su && su.deals > 0 ? Math.round(su.revenue / su.deals) : 0,
+      successDeals: su?.deals ?? 0,
+      conversion: cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
+      expected: expByMgr.get(mid)?.sum ?? 0,
+    });
+  }
+  const teams = [...teamMap.values()].map((t) => ({
+    teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
+    pct: t.plan > 0 ? Math.round((t.revenue / t.plan) * 100) : null,
+    conversion: t.conversion, entered: t.entered, won: t.won,
+    managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
+  })).sort((a, b) => b.revenue - a.revenue);
+
+  // ── ДВИГУНИ (team-based) ──
+  const engineOf = (kind: string) => {
+    const ts = teams.filter((t) => t.kind === kind);
+    const plan = ts.reduce((a, t) => a + t.plan, 0), revenue = ts.reduce((a, t) => a + t.revenue, 0), expected = ts.reduce((a, t) => a + t.expected, 0);
+    const entered = ts.reduce((a, t) => a + t.entered, 0), won = ts.reduce((a, t) => a + t.won, 0);
+    return { plan, revenue, expected, pct: plan > 0 ? Math.round((revenue / plan) * 100) : null, conversion: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null, entered };
+  };
+  const adBudget = (await pool.query<{ fact: string; plan: string; conv: string }>(
+    `SELECT COALESCE(SUM(budget_fact),0) fact, COALESCE(SUM(budget_plan),0) plan, COALESCE(SUM(conversions),0) conv FROM ad_budget_daily WHERE day >= $1 AND day <= $2`, [from, to])).rows[0];
+  const adMonthly = await metrics.conversionAdsByMonth(scope, adSources);
+  const adEntered = adMonthly.filter((r) => inRange(r.ym)).reduce((a, r) => a + r.entered, 0);
+  const adWon = adMonthly.filter((r) => inRange(r.ym)).reduce((a, r) => a + r.wonEventually, 0);
+  const adMature = adMonthly.filter((r) => inRange(r.ym)).every((r) => r.mature);
+  const budgetFact = Number(adBudget.fact);
+  const engines = {
+    rpk: engineOf("rpk"), rnk: engineOf("rnk"), leadgenTeam: engineOf("leadgen"),
+    ad: {
+      budget: Math.round(budgetFact), gaLeads: Number(adBudget.conv),
+      romi: budgetFact > 0 ? Math.round((receivedByCh.ad.revenue / budgetFact) * 100) : null,
+      cpa: adWon > 0 ? Math.round(budgetFact / adWon) : null,
+      cplGa: Number(adBudget.conv) > 0 ? Math.round(budgetFact / Number(adBudget.conv)) : null,
+      cplCrm: adEntered > 0 ? Math.round(budgetFact / adEntered) : null,
+      conversion: adEntered >= 10 ? Math.round((adWon / adEntered) * 1000) / 10 : null, entered: adEntered, won: adWon, mature: adMature,
+      revenue: receivedByCh.ad.revenue,
+    },
+    leadgen: {
+      transferred: transferred.entered, transferredWon: transferred.won,
+      dispatched: dispatchedLg.deals, dispatchedRevenue: dispatchedLg.revenue,
+      revenue: receivedByCh.leadgen.revenue,
+    },
+  };
+
+  // ── ВЕРДИКТ + LIFECYCLE ──
+  const verdict = {
+    received: { deals: received.deals, revenue: received.revenue },
+    receivedPrev: { revenue: receivedPrev.revenue },
+    strategicPlan: strategic,
+    planPct: strategic > 0 ? Math.round((received.revenue / strategic) * 100) : null,
+    projection: { fact: projection.fact, projected: projection.projected, projectedPct: projection.projectedPct, elapsedWorkingDays: projection.elapsedWorkingDays, totalWorkingDays: projection.totalWorkingDays },
+    lifecycle: {
+      sent: { deals: dispatchedAll.deals, revenue: dispatchedAll.revenue },
+      awaiting: { deals: expectedZone.total.deals, revenue: expectedZone.total.sum },
+      received: { deals: received.deals, revenue: received.revenue },
+    },
+    derived: plans.deriveMonthlyTarget(receivedPrev.revenue),
+  };
+
+  // ── СИГНАЛИ (деривовані, ранж за гостротою) ──
+  const signals: { severity: string; icon: string; title: string; detail: string; action: string }[] = [];
+  for (const t of teams.filter((x) => x.kind === "rpk" || x.kind === "rnk")) {
+    if (t.pct != null && t.pct < 70 && t.plan > 0) signals.push({ severity: t.pct < 50 ? "critical" : "serious", icon: "📉", title: `${t.name}: ${t.pct}% плану`, detail: `факт ${Math.round(t.revenue).toLocaleString("uk-UA")} з ${Math.round(t.plan).toLocaleString("uk-UA")}`, action: "перевірити менеджерів команди (дриллдаун нижче)" });
+  }
+  if (engines.ad.mature === false && sc.isCurrent) signals.push({ severity: "info", icon: "⏳", title: "Конверсія реклами дозріває", detail: `когорта <90 днів (${engines.ad.entered} лідів)`, action: "оцінювати за зрілий місяць" });
+  if (expectedZone.total.sum > 0) signals.push({ severity: "warning", icon: "💰", title: `В очікуванні ${Math.round(expectedZone.total.sum).toLocaleString("uk-UA")} ₴`, detail: `${expectedZone.total.deals} угод у зоні виставлено→оплата`, action: "тиснути на дебіторку/оплати" });
+  signals.sort((a, b) => ({ critical: 0, serious: 1, warning: 2, info: 3 } as Record<string, number>)[a.severity] - ({ critical: 0, serious: 1, warning: 2, info: 3 } as Record<string, number>)[b.severity]);
+
+  res.json({
+    scope: { from, to, prevFrom: sc.prevFrom, prevTo: sc.prevTo, preset: String(req.query.preset ?? "month"), label: sc.label, isCurrent: sc.isCurrent },
+    strategicPlan: strategic,   // 🔒 read-only
+    verdict, signals, engines, teams,
+    retention: {
+      newToRepeat, activeBase, weeklyRegulars: weeklyReg,
+      nonTarget, receivablesPaidOff: null, // «—»: немає джерела історії погашень
+    },
+    segments: { totals: newRepeatTot, byManager: newRepeatMgr, byTeam: newRepeatTeam },
+    money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth },
+    funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),
+  });
+});
+
 // ───────────────────────── Р4a: ЄДИНИЙ ЗВІТ (manager-report) ─────────────────────────
 
 /**
