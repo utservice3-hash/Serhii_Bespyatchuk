@@ -263,18 +263,21 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
   }, [managerId, from, to]);
   if (err) return <div style={{ fontSize: 12, color: RED }}>Не вдалося завантажити деталь.</div>;
   if (!d) return <div style={{ fontSize: 12, color: MUTED }}>Завантаження деталі…</div>;
+  // Середній чек = отримано ÷ авто (ПОХІДНИЙ, не сумується — перераховується на кожному
+  // рівні з received.revenue ÷ dispatched; «—» де авто=0).
   const cell = (c: { created: number; leadsAd: number; leadsLeadgen: number; dispatched: number; received: { revenue: number; deals: number }; expected: { sum: number } }, future: boolean) => (<>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.created || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsAd || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsLeadgen || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.dispatched || "—")}</td>
     <td style={{ textAlign: "right", fontWeight: 600 }}>{future ? "—" : (c.received.deals ? fmtMoney(c.received.revenue) : "—")}</td>
+    <td style={{ textAlign: "right" }}>{future || c.dispatched === 0 ? "—" : fmtFull(Math.round(c.received.revenue / c.dispatched))}</td>
     <td style={{ textAlign: "right", color: AMBER }}>{c.expected.sum ? fmtMoney(c.expected.sum) : "—"}</td>
   </>);
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
-        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
+        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
         <tbody>
           {d.weeks.map((w) => {
             const open = openW.has(w.idx);
@@ -291,7 +294,7 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
                     {cell(x, w.isFuture)}
                   </tr>
                 ))}
-                {open && w.days.length === 0 && <tr><td colSpan={7} style={{ paddingLeft: 24, color: MUTED, fontSize: 11 }}>Немає активності.</td></tr>}
+                {open && w.days.length === 0 && <tr><td colSpan={8} style={{ paddingLeft: 24, color: MUTED, fontSize: 11 }}>Немає активності.</td></tr>}
               </Fragment>
             );
           })}
