@@ -412,6 +412,56 @@ export async function fetchKvpExtra(params: { from?: string; to?: string }): Pro
   return data;
 }
 
+// ── КРОК Д: композитний Звіт КВП (/kvp-report) ──
+export interface KvpAgg { deals: number; revenue: number }
+export interface KvpEngineTeam { plan: number; revenue: number; expected: number; pct: number | null; conversion: number | null; entered: number }
+export interface KvpManager {
+  managerId: number; name: string; plan: number; revenue: number; pct: number | null;
+  avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
+}
+export interface KvpTeam {
+  teamId: number; name: string; kind: "rpk" | "rnk" | "leadgen";
+  plan: number; revenue: number; expected: number; pct: number | null;
+  conversion: number | null; entered: number; won: number; managers: KvpManager[];
+}
+export interface KvpSignal { severity: "critical" | "serious" | "warning" | "info"; icon: string; title: string; detail: string; action: string }
+export interface KvpSeriesRow { ym: string; [k: string]: number | string | boolean }
+export interface KvpReport {
+  scope: { from: string; to: string; prevFrom: string; prevTo: string; preset: string; label: string; isCurrent: boolean };
+  strategicPlan: number;
+  verdict: {
+    received: KvpAgg; receivedPrev: { revenue: number }; strategicPlan: number; planPct: number | null;
+    projection: { fact: number; projected: number; projectedPct: number; elapsedWorkingDays: number; totalWorkingDays: number };
+    lifecycle: { sent: KvpAgg; awaiting: KvpAgg; received: KvpAgg };
+    derived: { base: number; low: number; target: number; high: number };
+  };
+  signals: KvpSignal[];
+  engines: {
+    rpk: KvpEngineTeam; rnk: KvpEngineTeam; leadgenTeam: KvpEngineTeam;
+    ad: { budget: number; gaLeads: number; romi: number | null; cpa: number | null; cplGa: number | null; cplCrm: number | null; conversion: number | null; entered: number; won: number; mature: boolean; revenue: number };
+    leadgen: { transferred: number; transferredWon: number; dispatched: number; dispatchedRevenue: number; revenue: number };
+  };
+  teams: KvpTeam[];
+  retention: {
+    newToRepeat: { ym: string; cohort: number; became: number; pct: number | null; mature: boolean }[];
+    activeBase: { ym: string; activeClients: number }[];
+    weeklyRegulars: { clients: number; windowWeeks: number; minWeeks: number };
+    nonTarget: number | null;
+    receivablesPaidOff: null;
+  };
+  segments: {
+    totals: { newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number };
+    byManager: { id: number; name: string; teamId: number | null; newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number }[];
+    byTeam: { id: number; name: string; teamId: number | null; newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number }[];
+  };
+  money: { received: KvpAgg; success: KvpAgg; paidOnly: KvpAgg; awaitingNow: { deals: number; revenue: number }; expectedThis: { deals: number; sum: number }; expectedNext: { deals: number; sum: number } };
+  funnel: { stage: string; deals: number; revenue: number }[];
+}
+export async function fetchKvpReport(params: { preset?: string; date?: string; from?: string; to?: string }): Promise<KvpReport> {
+  const { data } = await api.get<KvpReport>("/dashboard/kvp-report", { params });
+  return data;
+}
+
 export interface ResponseTimeBucket {
   key: string;
   label: string;
