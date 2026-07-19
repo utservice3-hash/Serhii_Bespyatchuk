@@ -334,33 +334,11 @@ dashboardRouter.get("/overview", async (req, res) => {
       .map((x) => ({ manager_id: x.managerId, name: x.name, revenue: String(x.revenue), deals: String(x.deals) })),
   };
 
-  // New vs repeat: a client whose first-ever paid deal falls in the period is
-  // "new"; one who paid before the period is "repeat".
-  // With a date range, "new" = first-ever paid falls in the period. Without
-  // one (all-time view), "new" = one-time buyer, "repeat" = bought 2+ times.
-  const newRepeat = await pool.query<{ bucket: string; clients: string; revenue: string }>(
-    `WITH firsts AS (
-       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid, COUNT(*) AS cnt
-       FROM deals d
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
-       GROUP BY d.client_key
-     )
-     SELECT CASE
-              WHEN $${params.length + 1}::date IS NOT NULL THEN
-                CASE WHEN f.first_paid >= $${params.length + 1}::date THEN 'new' ELSE 'repeat' END
-              ELSE CASE WHEN f.cnt = 1 THEN 'new' ELSE 'repeat' END
-            END AS bucket,
-            COUNT(DISTINCT d.client_key) AS clients,
-            COALESCE(SUM(d.price), 0) AS revenue
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     JOIN firsts f ON f.client_key = d.client_key
-     ${paidWhere}
-     GROUP BY 1`,
-    [...params, from]
-  );
+  // New vs repeat (КРОК Г #2): client-grain «нові/постійні» (def A) — винесено в
+  // ЯДРО (metrics.newRepeatTotals, primary-attribution, Σ мгр=тотал). Тотал байт-у-байт
+  // збігається зі старим inline-firsts (live-звірено). Розріз per team/manager —
+  // metrics.newRepeatByScope (для КВП).
+  const newRepeatAgg = await metrics.newRepeatTotals({ from, to, managerId, teamId });
 
   // КРОК 9: загальний борг = core/metrics.receivablesTotal (LEFT JOIN — включає
   // неатрибутований борг при адмін-розрізі; скоуп по менеджеру/команді природно
@@ -560,8 +538,8 @@ dashboardRouter.get("/overview", async (req, res) => {
     revenue: Number(r.revenue),
   }));
 
-  const newRow = newRepeat.rows.find((r) => r.bucket === "new");
-  const repeatRow = newRepeat.rows.find((r) => r.bucket === "repeat");
+  const newRow = { clients: newRepeatAgg.newClients, revenue: newRepeatAgg.newRevenue };
+  const repeatRow = { clients: newRepeatAgg.repeatClients, revenue: newRepeatAgg.repeatRevenue };
 
   // Передані заявки: lead-gen qualification leads handed to a SALES manager
   // (entity_responsible_changed on a Кваліфікація lead) in the period, by team.

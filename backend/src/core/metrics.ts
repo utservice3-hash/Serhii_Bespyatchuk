@@ -535,6 +535,96 @@ export async function nonTargetLeadsByBucket(adSources: string[], trunc: "month"
   return r.rows.map((x) => ({ bucket: x.bucket, count: Number(x.v) }));
 }
 
+// ───────────── КЛІЄНТ-GRAIN НОВІ/ПОСТІЙНІ (лінз лояльності, def A) ─────────────
+
+export interface NewRepeatAgg { newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number }
+export interface NewRepeatRow extends NewRepeatAgg { id: number; name: string; teamId: number | null }
+
+/**
+ * КЛІЄНТ-GRAIN «нові/постійні» (def A, GLOSSARY): клієнт, чия ПЕРША в житті оплата
+ * (`MIN(created_at_kommo)` серед paid-угод, lifetime) припадає на період → 'new';
+ * раніше → 'repeat'. БЕЗ періоду — 'new'=разова оплата (cnt=1), 'repeat'=2+.
+ * 🔴 ОКРЕМИЙ ЛІНЗ — НЕ плутати з deal-grain `segments()` (SEGMENT_CASE, обсяг угод)
+ * і НЕ з team-based РНК/РПК (то ознака команди). Тут одиниця = КЛІЄНТ.
+ * **Attribution до PRIMARY-менеджера** (найбільше paid-угод клієнта в періоді,
+ * тайбрейк — остання) → кожен клієнт рахується РАЗ → Σ менеджерів = Σ команд =
+ * відділ (інваріант, як у /loyalty). Виручка клієнта за період кріпиться цілком до
+ * його primary → Σ = загальна виручка периоду (той самий тотал, що dept-версія).
+ * `by=null` → лише тотал (dept/scope). Якір — `created_at_kommo`, paid-стадія.
+ */
+async function newRepeatRows(s: MetricScope, by: "manager" | "team" | null): Promise<NewRepeatRow[]> {
+  const params: unknown[] = [];
+  const scope: string[] = ["psm.funnel_stage = 'paid'", "d.client_key IS NOT NULL"];
+  if (s.from) { params.push(s.from); scope.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); scope.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); scope.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scope.push(`m.team_id = $${params.length}`); }
+  const fromRef = s.from ? (params.push(s.from), `$${params.length}`) : "NULL";
+  const idSel = by === "team" ? "pc.team_id AS id, t.name, NULL::int AS team_id"
+             : by === "manager" ? "pc.manager_id AS id, mm.name, pc.team_id AS team_id"
+             : "0 AS id, ''::text AS name, NULL::int AS team_id";
+  const idJoin = by === "team" ? "JOIN teams t ON t.id = pc.team_id"
+              : by === "manager" ? "JOIN managers mm ON mm.id = pc.manager_id" : "";
+  const grp = by === "team" ? "GROUP BY pc.team_id, t.name"
+           : by === "manager" ? "GROUP BY pc.manager_id, mm.name, pc.team_id" : "";
+
+  const r = await pool.query<{ id: number; name: string; team_id: number | null; new_clients: string; new_revenue: string; repeat_clients: string; repeat_revenue: string }>(
+    `WITH paid AS (
+       SELECT d.client_key, d.manager_id, m.team_id, d.price, d.created_at_kommo
+         FROM deals d
+         JOIN managers m ON m.id = d.manager_id
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE ${scope.join(" AND ")}
+     ),
+     firsts AS (
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid, COUNT(*) AS cnt
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+        GROUP BY d.client_key
+     ),
+     primary_mgr AS (
+       SELECT client_key, manager_id, team_id FROM (
+         SELECT client_key, manager_id, team_id,
+                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(created_at_kommo) DESC) AS rn
+           FROM paid GROUP BY client_key, manager_id, team_id
+       ) z WHERE rn = 1
+     ),
+     per_client AS (
+       SELECT p.client_key, pm.manager_id, pm.team_id,
+              CASE WHEN ${fromRef}::date IS NOT NULL
+                     THEN CASE WHEN f.first_paid >= ${fromRef}::date THEN 'new' ELSE 'repeat' END
+                     ELSE CASE WHEN f.cnt = 1 THEN 'new' ELSE 'repeat' END END AS bucket,
+              COALESCE(SUM(p.price), 0) AS revenue
+         FROM paid p
+         JOIN firsts f ON f.client_key = p.client_key
+         JOIN primary_mgr pm ON pm.client_key = p.client_key
+        GROUP BY p.client_key, pm.manager_id, pm.team_id, bucket
+     )
+     SELECT ${idSel},
+            COUNT(*) FILTER (WHERE bucket = 'new')::int AS new_clients,
+            COALESCE(SUM(revenue) FILTER (WHERE bucket = 'new'), 0) AS new_revenue,
+            COUNT(*) FILTER (WHERE bucket = 'repeat')::int AS repeat_clients,
+            COALESCE(SUM(revenue) FILTER (WHERE bucket = 'repeat'), 0) AS repeat_revenue
+       FROM per_client pc ${idJoin} ${grp}`,
+    params
+  );
+  return r.rows.map((x) => ({
+    id: Number(x.id), name: x.name, teamId: x.team_id,
+    newClients: Number(x.new_clients), newRevenue: Number(x.new_revenue),
+    repeatClients: Number(x.repeat_clients), repeatRevenue: Number(x.repeat_revenue),
+  }));
+}
+
+/** Розріз нові/постійні по менеджеру або команді (primary-attribution, Σ=тотал). */
+export const newRepeatByScope = (s: MetricScope, by: "manager" | "team"): Promise<NewRepeatRow[]> => newRepeatRows(s, by);
+
+/** Тотал нові/постійні у скоупі (dept/scope) — той самий грандтотал, що dept-версія. */
+export async function newRepeatTotals(s: MetricScope): Promise<NewRepeatAgg> {
+  const [row] = await newRepeatRows(s, null);
+  return row ?? { newClients: 0, newRevenue: 0, repeatClients: 0, repeatRevenue: 0 };
+}
+
 // ───────────────────────── КОНВЕРСІЯ РЕКЛАМИ (conversion_ads) ─────────────────────────
 
 /**
