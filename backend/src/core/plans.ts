@@ -130,3 +130,40 @@ export async function planPerWorkingDay(s: { managerId?: number | null; teamId?:
   }
   return { monthPlan, workingDays, perWorkingDay: workingDays > 0 ? Math.round(monthPlan / workingDays) : 0 };
 }
+
+// ───────────────────────── СТРАТЕГІЧНИЙ ПЛАН + ДЕРИВАЦІЯ (Крок Г #6) ─────────────────────────
+
+/**
+ * СТРАТЕГІЧНИЙ план виручки = Σ `plans.payment_amount` у скоупі (АКТИВНІ менеджери),
+ * КАНОНІЧНИЙ read-only. Замінює kvp_plans-дублі (`success`, `team_revenue_*`,
+ * `received_total`, …): виручка НЕ дублюється в kvp_plans — деривується звідси.
+ * Σ менеджерів = команда = відділ (той самий predicate, що `managerPlan`).
+ */
+export async function strategicRevenuePlan(s: { month: string; managerId?: number | null; teamId?: number | null }): Promise<number> {
+  const params: unknown[] = [s.month];
+  const conds = ["p.metric = 'payment_amount'", "date_trunc('month', p.plan_date) = $1::date", "m.is_active"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`p.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ s: string }>(
+    `SELECT COALESCE(SUM(p.planned_value), 0) AS s
+       FROM plans p JOIN managers m ON m.id = p.manager_id
+      WHERE ${conds.join(" AND ")}`,
+    params
+  );
+  return Math.round(Number(r.rows[0]?.s ?? 0));
+}
+
+export interface DerivedTarget { base: number; low: number; target: number; high: number }
+/**
+ * Деривація місячного плану «+10%» (коридор 10–15%, рішення власника Крок Г #6) від
+ * бази (напр. факт минулого місяця / стратегічний план): target = base×1.10,
+ * коридор [base×1.10 … base×1.15]. Чиста функція (без БД).
+ */
+export function deriveMonthlyTarget(base: number, upliftLow = 0.10, upliftHigh = 0.15): DerivedTarget {
+  return {
+    base: Math.round(base),
+    low: Math.round(base * (1 + upliftLow)),
+    target: Math.round(base * (1 + upliftLow)),
+    high: Math.round(base * (1 + upliftHigh)),
+  };
+}

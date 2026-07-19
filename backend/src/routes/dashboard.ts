@@ -626,10 +626,6 @@ dashboardRouter.get("/overview", async (req, res) => {
     deals: string;
     paid: string;
     revenue: string;
-    ad_leads: string;
-    ad_paid: string;
-    lg_leads: string;
-    lg_paid: string;
     new_clients: string;
     repeat_clients: string;
     dispatched: string;
@@ -646,10 +642,6 @@ dashboardRouter.get("/overview", async (req, res) => {
             COUNT(*) FILTER (WHERE psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178)) AS dispatched,
             COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
             COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS revenue,
-            COUNT(*) FILTER (WHERE ${metrics.adDealSql("$2")}) AS ad_leads,
-            COUNT(*) FILTER (WHERE ${metrics.adDealSql("$2")} AND psm.funnel_stage = 'paid') AS ad_paid,
-            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_leads,
-            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen' AND psm.funnel_stage = 'paid') AS lg_paid,
             COUNT(DISTINCT d.client_key) FILTER (
               WHERE psm.funnel_stage = 'paid'
                 AND date_trunc('month', f.first_paid) = date_trunc('month', d.created_at_kommo)) AS new_clients,
@@ -4003,14 +3995,20 @@ dashboardRouter.post("/funnel-plan", async (req, res) => {
 // Top-down цілі по відділу на місяць, editable лише КВП (admin). Виручку сюди
 // НЕ дублюємо (вона в plans, сума по менеджерах — read-only у звіті); тут решта
 // цілей, щоб «Викон.%» був реальним для кожного рядка матриці План/Факт.
+// 🔴 КРОК Г #6: ДЕПРЕКЕЙТ дублів виручки. `success`, `new_revenue`, `repeat_revenue`,
+// `received_total`, `dispatched_sum` — це та сама виручка, що вже в `plans`
+// (Σ payment_amount) → деривуються з `plans.strategicRevenuePlan`/`managerPlan`, НЕ
+// зберігаються вручну. Прибрані з writable-набору (POST їх відхиляє, GET не віддає).
+// kvp_plans лишає ЛИШЕ КВП-ручні (чек, бюджет, цілі, avg_per_manager, к-ті).
+const DEPRECATED_KVP_METRICS = new Set([
+  "success", "new_revenue", "repeat_revenue", "received_total", "dispatched_sum",
+]);
 const KVP_PLAN_METRICS = [
-  "success", "avg_check", "new_revenue", "repeat_revenue",
+  "avg_check",
   "created_full_cycle", "dispatched_cars", "new_clients", "repeat_clients",
   "ad_leads", "ad_conversion", "target_leads",
   "transferred", "transfer_success", "leadgen_conversion",
-  // Рядки з ручного звіту КВП (структура файлу керівника):
-  "received_total",      // план «Отримані кошти», якщо немає суми планів менеджерів
-  "dispatched_sum",      // Відправлені авто, грн
+  // Ручні рядки звіту КВП (структура файлу керівника), яких немає в ядрі:
   "success_deals",       // Успішні угоди, шт
   "paid_deals",          // Оплата отримана, шт
   "managers_count",      // Менеджерів у продажу
@@ -4022,8 +4020,10 @@ const KVP_PLAN_METRICS = [
   "leadgen_revenue",     // Дохід з лідогену, грн
   "leadgen_dispatched",  // Відправлені авто з лідогену, шт
 ];
-// Плани по командах — динамічні ключі team_revenue_<teamId>.
-const kvpMetricAllowed = (m: string) => KVP_PLAN_METRICS.includes(m) || /^team_revenue_\d+$/.test(m);
+// Плани по командах team_revenue_<teamId> ТЕЖ депрекейт (Крок Г #6): деривуються з
+// managerPlan(teamId). Лишаємо readable у GET для сумісності FE-гріда, доки КВП-UI не
+// переведено на derived (наступна фаза) — але POST більше НЕ пише нові.
+const kvpMetricAllowed = (m: string) => KVP_PLAN_METRICS.includes(m);
 
 dashboardRouter.get("/kvp-plan", async (req, res) => {
   const auth = req.auth!;
@@ -4034,7 +4034,11 @@ dashboardRouter.get("/kvp-plan", async (req, res) => {
     [month]
   );
   const plans: Record<string, number> = {};
-  for (const row of r.rows) plans[row.metric] = Number(row.planned_value);
+  // КРОК Г #6: депрекейтнуті дублі виручки НЕ віддаємо (деривуються з plans).
+  for (const row of r.rows) {
+    if (DEPRECATED_KVP_METRICS.has(row.metric)) continue;
+    plans[row.metric] = Number(row.planned_value);
+  }
   res.json({ month, plans });
 });
 

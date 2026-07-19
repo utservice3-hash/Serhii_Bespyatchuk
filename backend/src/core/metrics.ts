@@ -625,6 +625,45 @@ export async function newRepeatTotals(s: MetricScope): Promise<NewRepeatAgg> {
   return row ?? { newClients: 0, newRevenue: 0, repeatClients: 0, repeatRevenue: 0 };
 }
 
+// ───────────── ЛІДГЕН ТРИ ЯКОРІ — «ПОЇХАЛИ» за load_at (Крок Г #5) ─────────────
+// Три РІЗНІ якорі, які НЕ зводимо в межах місяця:
+//  • «Передані»  = `leadgen_registry.transferred_at` (conversionTransferredByMonth / transferred).
+//  • «Поїхали»   = `deals.load_at` (Дата загрузки) — фактичне відправлення авто. Live
+//                  fill-rate: 100% на виграних (142), тож для won-популяції coalesce не
+//                  потрібен. Тут — саме дата ВІДПРАВЛЕННЯ, окремо від дати грошей.
+//  • «Дохід»     = дата отримання коштів (`core/money.receivedByChannel`, канал 'leadgen').
+
+export interface DispatchRow { ym: string; deals: number; revenue: number }
+/**
+ * «Поїхали» помісячно за `load_at` (Дата загрузки = відправлення): угоди Повного
+ * циклу з проставленою `load_at`, опційно фільтр каналу (`channel`). Сума — signed
+ * `price` (мінуси нетяться). Additive по скоупу/бакету. НЕ анкериться на гроші/успіх —
+ * це операційний потік «скільки авто поїхало у місяці M».
+ */
+export async function dispatchedByLoadMonth(s: MetricScope, channel?: "leadgen" | "ad" | null): Promise<DispatchRow[]> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
+  if (channel) { params.push(channel); conds.push(`d.lead_channel = $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ ym: string; deals: string; revenue: string }>(
+    `WITH disp AS (
+       SELECT date_trunc('month',(d.load_at ${KYIV})) AS m, d.price
+         FROM deals d ${join} WHERE ${conds.join(" AND ")}
+     ),
+     months AS (
+       SELECT generate_series(date_trunc('month',(now() ${KYIV})) - INTERVAL '11 months',
+                              date_trunc('month',(now() ${KYIV})), INTERVAL '1 month') AS m
+     )
+     SELECT to_char(mo.m,'YYYY-MM') AS ym,
+            COUNT(disp.*)::int AS deals, COALESCE(SUM(disp.price),0) AS revenue
+       FROM months mo LEFT JOIN disp ON disp.m = mo.m GROUP BY mo.m ORDER BY mo.m`,
+    params
+  );
+  return r.rows.map((x) => ({ ym: x.ym, deals: Number(x.deals), revenue: Number(x.revenue) }));
+}
+
 // ───────────────────────── RETENTION-РОДИНА (Крок Г #4) ─────────────────────────
 // Скоуп-рівень (dept/team/manager через `s`). «Погашено дебіторки» НЕ будуємо —
 // `receivables` це TRUNCATE-знімок без історії погашень → метрика = «—» (ⓘ у UI).
