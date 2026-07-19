@@ -563,7 +563,10 @@ async function newRepeatRows(s: MetricScope, by: "manager" | "team" | null): Pro
   const idSel = by === "team" ? "pc.team_id AS id, t.name, NULL::int AS team_id"
              : by === "manager" ? "pc.manager_id AS id, mm.name, pc.team_id AS team_id"
              : "0 AS id, ''::text AS name, NULL::int AS team_id";
-  const idJoin = by === "team" ? "JOIN teams t ON t.id = pc.team_id"
+  // LEFT JOIN teams — клієнти, чий primary-менеджер БЕЗ команди (team_id NULL), мають
+  // лишитись у ролапі окремим рядком (id=NULL, name=NULL «Без команди»), інакше
+  // Σ команд < відділ (INNER їх мовчки викидав — зловлено гейтом на лютому).
+  const idJoin = by === "team" ? "LEFT JOIN teams t ON t.id = pc.team_id"
               : by === "manager" ? "JOIN managers mm ON mm.id = pc.manager_id" : "";
   const grp = by === "team" ? "GROUP BY pc.team_id, t.name"
            : by === "manager" ? "GROUP BY pc.manager_id, mm.name, pc.team_id" : "";
