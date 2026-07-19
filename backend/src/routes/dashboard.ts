@@ -3031,18 +3031,17 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   //    "Успішна угода" (142) closed within the month.
   const IN_PROGRESS =
     "(psm.funnel_stage IN ('approved','invoiced') OR d.status_id IN (69716300, 98470988, 10937178))";
-  const mParams: unknown[] = [[8921932, 155304], fmt(mStart), fmt(mStart), fmt(factUpper)];
+  // carryover/expected — знімки in-progress (окремі метрики, не чіпаємо). received —
+  // 🔴 Крок А: винесено в ЯДРО money.receivedByMgr (нижче), недатований paidOnly-знімок
+  // прибрано. Тому тут лишились ЛИШЕ carryover/expected (параметри $1=FC, $2=mStart).
+  const mParams: unknown[] = [[8921932, 155304], fmt(mStart)];
   const mConds = ["d.pipeline_id = ANY($1)"];
   if (managerId) { mParams.push(managerId); mConds.push(`d.manager_id = $${mParams.length}`); }
   if (teamId) { mParams.push(teamId); mConds.push(`m.team_id = $${mParams.length}`); }
-  const moneyRows = await pool.query<{ manager_id: number; carryover: string; expected: string; received: string; received_deals: string }>(
+  const moneyRows = await pool.query<{ manager_id: number; carryover: string; expected: string }>(
     `SELECT d.manager_id,
        COALESCE(SUM(d.price) FILTER (WHERE ${IN_PROGRESS} AND (d.created_at_kommo ${KYIV})::date < $2), 0) AS carryover,
-       COALESCE(SUM(d.price) FILTER (WHERE ${IN_PROGRESS}), 0) AS expected,
-       COALESCE(SUM(d.price) FILTER (WHERE d.status_id IN (69716460, 60412544)), 0)
-       + COALESCE(SUM(d.price) FILTER (WHERE d.status_id = 142 AND (d.closed_at_kommo ${KYIV})::date BETWEEN $3 AND $4), 0) AS received,
-       COUNT(*) FILTER (WHERE d.status_id IN (69716460, 60412544))
-       + COUNT(*) FILTER (WHERE d.status_id = 142 AND (d.closed_at_kommo ${KYIV})::date BETWEEN $3 AND $4) AS received_deals
+       COALESCE(SUM(d.price) FILTER (WHERE ${IN_PROGRESS}), 0) AS expected
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -3050,6 +3049,9 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
      GROUP BY d.manager_id`,
     mParams
   );
+  // received/receivedDeals (місячні, per manager) = ЯДРО (датований, дедуп). Той самий
+  // scope і вікно (mStart..factUpper), що й факт-воронка → КВП == Огляд == Звіт.
+  const recvByMgr = await money.receivedByMgr({ from: fmt(mStart), to: fmt(factUpper), managerId, teamId });
   type MoneyWeek = { plan: number; fact: number; expected: number };
   type Money = {
     carryover: number; expected: number; received: number; receivedDeals: number;
@@ -3068,10 +3070,13 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   };
   for (const r of moneyRows.rows) {
     const m = moneyOf(r.manager_id);
-    m.carryover = Number(r.carryover); m.expected = Number(r.expected); m.received = Number(r.received);
-    m.receivedDeals = Number(r.received_deals);
+    m.carryover = Number(r.carryover); m.expected = Number(r.expected);
     overallMoney.carryover += m.carryover;
     overallMoney.expected += m.expected;
+  }
+  for (const rr of recvByMgr) {
+    const m = moneyOf(rr.managerId);
+    m.received = Math.round(rr.revenue); m.receivedDeals = rr.deals;
     overallMoney.received += m.received;
     overallMoney.receivedDeals += m.receivedDeals;
   }
@@ -3557,19 +3562,11 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
   const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
   const teamAnd = teamId != null ? `AND m.team_id = ${teamId}` : "";
-  const [succ, pay, exp, carry] = await Promise.all([
-    pool.query<{ id: string; s: string }>(
-      `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d
-         JOIN managers m ON m.id = d.manager_id AND m.is_active
-         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE psm.funnel_stage='paid' AND d.status_id=142 AND d.closed_at_kommo IS NOT NULL
-          AND (d.closed_at_kommo ${KYIV})::date BETWEEN $1 AND $2 ${teamAnd}
-        GROUP BY d.manager_id`, [planDate, monthEnd]),
-    pool.query<{ id: string; s: string }>(
-      `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d
-         JOIN managers m ON m.id = d.manager_id AND m.is_active
-        WHERE d.status_id IN (69716460,60412544) ${teamAnd}
-        GROUP BY d.manager_id`),
+  // 🔴 Крок А: fact = ЯДРО money.receivedByMgr (датований received: 142 по closed_at ⊎
+  // etap9 по останньому входу; дедуп; signed). Прибрано недатований paidOnly-знімок
+  // (він додавав поза-періодні оплати в кожен місяць). expected/carryover — без змін.
+  const [recvMgr, exp, carry] = await Promise.all([
+    money.receivedByMgr({ from: planDate, to: monthEnd, teamId }),
     pool.query<{ id: string; s: string }>(
       `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d
          JOIN managers m ON m.id = d.manager_id AND m.is_active
@@ -3579,7 +3576,8 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
     metrics.carryoverByManager({ teamId }, planDate),
   ]);
   const numMap = (rows: { id: string; s: string }[]) => new Map(rows.map((x) => [Number(x.id), Number(x.s)]));
-  const succM = numMap(succ.rows), payM = numMap(pay.rows), expM = numMap(exp.rows);
+  const factM = new Map(recvMgr.map((x) => [x.managerId, Math.round(x.revenue)]));
+  const expM = numMap(exp.rows);
   const carryM = new Map(carry.map((x) => [x.managerId, x.amount]));
 
   const teamsMap = new Map<number, { teamId: number; teamName: string; teamPlan: number; teamFact: number; teamCarryover: number; teamExpected: number; managers: { managerId: number; name: string; plan: number; fact: number; carryover: number; expected: number }[] }>();
@@ -3588,7 +3586,7 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
     const tid = row.team_id ?? 0;
     if (!teamsMap.has(tid)) teamsMap.set(tid, { teamId: tid, teamName: row.team_name ?? "Без команди", teamPlan: 0, teamFact: 0, teamCarryover: 0, teamExpected: 0, managers: [] });
     const plan = Number(row.plan);
-    const fact = (succM.get(row.id) ?? 0) + (payM.get(row.id) ?? 0);
+    const fact = factM.get(row.id) ?? 0;
     const carryover = carryM.get(row.id) ?? 0;
     const expected = expM.get(row.id) ?? 0;
     const t = teamsMap.get(tid)!;
@@ -4130,19 +4128,10 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
     params
   );
 
-  // Отримані кошти по каналах — та сама формула, що «Отримані кошти» (142 закриті
-  // в періоді + оплата-снапшот), відфільтрована по каналу угоди.
-  const rev = await pool.query<{ ad_rev: string; lg_rev: string }>(
-    `SELECT
-       COALESCE(SUM(d.price) FILTER (WHERE ${metrics.adDealSql("$4")} AND d.status_id = 142
-         AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3), 0)
-       + COALESCE(SUM(d.price) FILTER (WHERE ${metrics.adDealSql("$4")} AND d.status_id IN (69716460, 60412544)), 0) AS ad_rev,
-       COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen' AND d.status_id = 142
-         AND (d.closed_at_kommo ${KYIV})::date BETWEEN $2 AND $3), 0)
-       + COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen' AND d.status_id IN (69716460, 60412544)), 0) AS lg_rev
-     FROM deals d WHERE d.pipeline_id = ANY($1)`,
-    params
-  );
+  // 🔴 Крок А: отримані кошти по каналах — ЯДРО money.receivedByChannel (датований
+  // received: 142 по closed_at ⊎ etap9 по останньому входу; дедуп; signed). Прибрано
+  // недатований paidOnly-знімок (він додавав ~46 600 ₴ поза-періодних оплат у кожен місяць).
+  const chan = await money.receivedByChannel({ from, to }, adSources);
 
   // Активні менеджери продажу (з командою, без лідоген-команд).
   const mgr = await pool.query<{ c: string }>(
@@ -4150,33 +4139,21 @@ dashboardRouter.get("/kvp-extra", async (req, res) => {
      WHERE m.is_active AND m.team_id IS NOT NULL AND COALESCE(t.name, '') NOT ILIKE '%лідоген%'`
   );
 
-  // ПОТІК грошей за період: угоди, в які оплата ВПЕРШЕ надійшла в періоді
-  // (перший вхід у 142/«Оплата отримана» за подіями). Для тижневих зрізів —
-  // знімкові формули вище дублювали б «зараз в оплаті» у кожному тижні.
-  const flow = await pool.query<{ s: string; ad_s: string; lg_s: string }>(
-    `WITH first_paid AS (
-       SELECT kommo_id, MIN(changed_at) AS t FROM deal_stage_events
-       WHERE status_id IN (142, 69716460, 60412544) GROUP BY kommo_id
-     )
-     SELECT COALESCE(SUM(d.price), 0) AS s,
-            COALESCE(SUM(d.price) FILTER (WHERE ${metrics.adDealSql("$4")}), 0) AS ad_s,
-            COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen'), 0) AS lg_s
-     FROM first_paid f JOIN deals d ON d.kommo_id = f.kommo_id
-     WHERE d.pipeline_id = ANY($1) AND (f.t ${KYIV})::date BETWEEN $2 AND $3`,
-    params
-  );
+  // Потік грошей за період = ЯДРО money.receivedMoney (той самий датований received).
+  // Замінює колишній first_paid-знімок; тепер flow == канал-розбивка вище == Огляд/Звіт.
+  const totalRecv = await money.receivedMoney({ from, to });
 
   const d = disp.rows[0];
   res.json({
     from, to,
     dispatched: { count: Number(d?.c ?? 0), revenue: Number(d?.s ?? 0) },
-    ad: { revenue: Number(rev.rows[0]?.ad_rev ?? 0), dispatched: Number(d?.ad_c ?? 0), dispatchedSum: Number(d?.ad_s ?? 0) },
-    leadgen: { revenue: Number(rev.rows[0]?.lg_rev ?? 0), dispatched: Number(d?.lg_c ?? 0), dispatchedSum: Number(d?.lg_s ?? 0) },
+    ad: { revenue: chan.ad.revenue, dispatched: Number(d?.ad_c ?? 0), dispatchedSum: Number(d?.ad_s ?? 0) },
+    leadgen: { revenue: chan.leadgen.revenue, dispatched: Number(d?.lg_c ?? 0), dispatchedSum: Number(d?.lg_s ?? 0) },
     managersCount: Number(mgr.rows[0]?.c ?? 0),
     flow: {
-      received: Number(flow.rows[0]?.s ?? 0),
-      ad: Number(flow.rows[0]?.ad_s ?? 0),
-      leadgen: Number(flow.rows[0]?.lg_s ?? 0),
+      received: totalRecv.revenue,
+      ad: chan.ad.revenue,
+      leadgen: chan.leadgen.revenue,
     },
   });
 });

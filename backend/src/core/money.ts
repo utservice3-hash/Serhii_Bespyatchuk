@@ -1,4 +1,9 @@
 import { pool } from "../db/pool.js";
+// 🔴 Канонічний рекламний предикат — ЄДИНЕ джерело (metrics.adDealSql). Імпорт створює
+// циклічну залежність money↔metrics, але вона РАНТАЙМ-безпечна: обидва модулі викликають
+// одне одного лише всередині функцій (не на рівні модуля), тож ESM-live-binding резолвиться
+// до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
+import { adDealSql } from "./metrics.js";
 
 /**
  * ЄДИНЕ джерело грошових метрик (MASTER_PLAN КРОК 2, виправлено КРОКОМ 4 — опція Б).
@@ -165,6 +170,42 @@ export async function receivedByManagerWeek(managerIds: number[], monthStart: st
     p
   );
   return r.rows.map((x) => ({ managerId: x.manager_id, weekStart: x.week_start, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+
+/**
+ * «Отримані кошти» РОЗРІЗ ПО КАНАЛУ (реклама / лідоген) — те саме ядро `received`
+ * (датований анкер: 142 по closed_at ⊎ etap9 по останньому входу; дедуп; signed price),
+ * лише з каналовим фільтром. Прибирає недатований paidOnly-знімок, що жив у /kvp-extra.
+ * `ad` = канонічний `adDealSql` (client_source ∈ adSources АБО lead_channel='ad', без
+ * реактивації); `leadgen` = `lead_channel='leadgen'`. Множини можуть перетинатись (як і
+ * раніше в роуті) — це ДВІ незалежні агрегації, не розбиття.
+ */
+export async function receivedByChannel(s: MoneyScope, adSources: string[]): Promise<{ ad: MoneyAgg; leadgen: MoneyAgg }> {
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
+  if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  p.push(adSources); const adRef = `$${p.length}`;
+  const ad = adDealSql(adRef);
+  const r = await pool.query<{ ad_rev: string; ad_deals: string; lg_rev: string; lg_deals: string }>(
+    `SELECT COALESCE(SUM(src.price) FILTER (WHERE ${ad}),0) AS ad_rev,
+            COUNT(*) FILTER (WHERE ${ad}) AS ad_deals,
+            COALESCE(SUM(src.price) FILTER (WHERE d.lead_channel = 'leadgen'),0) AS lg_rev,
+            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_deals
+       FROM (${src}) src
+       JOIN deals d ON d.kommo_id = src.kommo_id
+       JOIN managers m ON m.id = src.manager_id
+      ${conds.length ? "WHERE " + conds.join(" AND ") : ""}`,
+    p
+  );
+  const x = r.rows[0];
+  return {
+    ad: { revenue: Number(x?.ad_rev ?? 0), deals: Number(x?.ad_deals ?? 0) },
+    leadgen: { revenue: Number(x?.lg_rev ?? 0), deals: Number(x?.lg_deals ?? 0) },
+  };
 }
 
 /**
