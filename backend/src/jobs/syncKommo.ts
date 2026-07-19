@@ -17,6 +17,7 @@ import {
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 import { provisionUsers } from "../db/userProvisioning.js";
 import { isHeavyJobActive } from "./jobLock.js";
+import { getSettings } from "../routes/settings.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -169,10 +170,18 @@ const QUAL_LEADGEN_STAGES = [69716164, 63019380];
  * по всій таблиці (ідемпотентно, вміє і знижувати канал назад).
  */
 export async function reclassifyAdChannel(): Promise<number> {
+  // ЄДИНЕ джерело правди рекламних джерел — той самий список, що adDealSql/ads_accepted
+  // (app_settings через getSettings). Раніше «ad» ставився по хардкод-двійці client_source
+  // ('Google','Реактивация ретаргетом'), тож РНК-угоди з client_source='uts.ua'/traf='cpc'
+  // падали в 'other' → «взято лідів реклама» (читає lead_channel) розходилось з adDealSql.
+  // Тепер гілка 'ad' == не-lead_channel-частина adDealSql + traf_type='cpc'/utm (маркери
+  // платного трафіку), з тим самим виключенням реактивації. Пріоритет leadgen → ad → other
+  // збережено (leadgen-гілки лишаються ПЕРШИМИ, щоб не з'їсти лідоген).
+  const { adSources } = await getSettings();
   const res = await pool.query(
     `WITH fc AS (
        SELECT d.kommo_id, d.client_key, d.created_at_kommo, d.lead_channel,
-              d.lead_generator, d.utm_source, d.client_source
+              d.lead_generator, d.utm_source, d.client_source, d.traf_type
          FROM deals d
         WHERE d.pipeline_id = ANY($1) AND d.client_key IS NOT NULL
      ),
@@ -200,7 +209,7 @@ export async function reclassifyAdChannel(): Promise<number> {
                            WHERE dse.kommo_id = q.kommo_id AND dse.status_id = ANY($3))
      ),
      calc AS (
-       SELECT f.kommo_id, f.lead_channel, f.lead_generator, f.utm_source, f.client_source,
+       SELECT f.kommo_id, f.lead_channel, f.lead_generator, f.utm_source, f.client_source, f.traf_type,
               (SELECT MAX(lg.t) FROM lg
                 WHERE lg.client_key = f.client_key
                   AND lg.t <= f.created_at_kommo + interval '3 days') AS lg_t,
@@ -215,14 +224,15 @@ export async function reclassifyAdChannel(): Promise<number> {
                 CASE
                   WHEN lead_generator IS NOT NULL THEN 'leadgen'
                   WHEN lg_t IS NOT NULL AND (ad_t IS NULL OR lg_t >= ad_t) THEN 'leadgen'
-                  WHEN ad_t IS NOT NULL THEN 'ad'
-                  WHEN utm_source IS NOT NULL OR client_source IN ('Google','Реактивация ретаргетом') THEN 'ad'
+                  WHEN ad_t IS NOT NULL AND COALESCE(client_source, '') NOT ILIKE '%реактив%' THEN 'ad'
+                  WHEN (client_source = ANY($4) OR traf_type = 'cpc' OR utm_source IS NOT NULL)
+                       AND COALESCE(client_source, '') NOT ILIKE '%реактив%' THEN 'ad'
                   ELSE 'other'
                 END AS target
            FROM calc
        ) c
       WHERE d.kommo_id = c.kommo_id AND d.lead_channel IS DISTINCT FROM c.target`,
-    [[8921932, 155304], QUALIFICATION_PIPELINES, QUAL_LEADGEN_STAGES]
+    [[8921932, 155304], QUALIFICATION_PIPELINES, QUAL_LEADGEN_STAGES, adSources]
   );
   return res.rowCount ?? 0;
 }
