@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import * as metrics from "../core/metrics.js";
+import { getSettings } from "../routes/settings.js";
 
 /**
  * Крок В — Σ-ГЕЙТИ конверсій (READ-ONLY, запускати НА СЕРВЕРІ з DATABASE_URL):
@@ -22,12 +23,13 @@ const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
 let failed = false;
 
 async function adSources(): Promise<string[]> {
-  // Той самий контракт, що getSettings().adSources: активні джерела реклами.
-  const r = await pool.query<{ v: string }>(
-    `SELECT DISTINCT source AS v FROM ad_sources_log WHERE active = true`
-  );
-  if (!r.rows.length) throw new Error("adSources порожній — конфіг-помилка (див. schema.sql сид)");
-  return r.rows.map((x) => x.v);
+  // ЄДИНЕ джерело правди adSources = app_settings.data->'adSources' через
+  // getSettings() — рівно той список, що й прод-ендпоінти (dashboard/computeAuto/
+  // evaluateKpiTasks). НЕ ad_sources_log (то JSONB audit-log old_list/new_list, без
+  // колонки `source` — саме тут падав перший прогін).
+  const { adSources } = await getSettings();
+  if (!adSources.length) throw new Error("adSources порожній — конфіг-помилка (migrate: сид adSources у schema.sql)");
+  return adSources;
 }
 
 // ── ДО: чисельник = вхід у 142 (стара межа), той самий знаменник ──
