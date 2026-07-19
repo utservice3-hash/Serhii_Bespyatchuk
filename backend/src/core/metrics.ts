@@ -625,6 +625,122 @@ export async function newRepeatTotals(s: MetricScope): Promise<NewRepeatAgg> {
   return row ?? { newClients: 0, newRevenue: 0, repeatClients: 0, repeatRevenue: 0 };
 }
 
+// ───────────────────────── RETENTION-РОДИНА (Крок Г #4) ─────────────────────────
+// Скоуп-рівень (dept/team/manager через `s`). «Погашено дебіторки» НЕ будуємо —
+// `receivables` це TRUNCATE-знімок без історії погашень → метрика = «—» (ⓘ у UI).
+
+/** Спільний скоуп для paid-угод (funnel_stage='paid') за атрибуцією угоди. */
+function paidScopeConds(s: MetricScope, params: unknown[], needTeamJoin = false): { conds: string[]; join: string } {
+  const conds = ["psm.funnel_stage = 'paid'", "d.client_key IS NOT NULL"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = (needTeamJoin || s.teamId) ? "JOIN managers m ON m.id = d.manager_id" : "";
+  return { conds, join };
+}
+
+export interface NewToRepeatRow { ym: string; cohort: number; became: number; pct: number | null; mature: boolean }
+/**
+ * % нових→постійних (12 міс): когорта = клієнти, чия ПЕРША оплата (lifetime,
+ * `created_at_kommo`) у місяці M; `became` = із них мають ≥2 оплати lifetime (стали
+ * постійними — замовили ще раз БУДЬ-КОЛИ). Скоуп — за менеджером/командою ПЕРШОЇ
+ * угоди. Зрілість 90д (свіжа когорта не встигла повернутись) → поточні місяці ⏳.
+ */
+export async function newToRepeatByMonth(s: MetricScope): Promise<NewToRepeatRow[]> {
+  const params: unknown[] = [];
+  const { conds, join } = paidScopeConds(s, params);
+  const r = await pool.query<{ ym: string; cohort: string; became: string; mature: boolean }>(
+    `WITH paid AS (
+       SELECT d.client_key, d.manager_id, d.created_at_kommo
+         FROM deals d ${join}
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE ${conds.join(" AND ")}
+     ),
+     first_deal AS (
+       SELECT DISTINCT ON (client_key) client_key, created_at_kommo AS first_paid, manager_id
+         FROM paid ORDER BY client_key, created_at_kommo ASC
+     ),
+     cnt AS (
+       SELECT client_key, COUNT(*) AS c
+         FROM deals d2
+         JOIN pipeline_stage_map psm2 ON psm2.pipeline_id = d2.pipeline_id AND psm2.status_id = d2.status_id
+        WHERE psm2.funnel_stage = 'paid' AND d2.client_key IS NOT NULL
+        GROUP BY client_key
+     ),
+     months AS (
+       SELECT generate_series(date_trunc('month',(now() ${KYIV})) - INTERVAL '11 months',
+                              date_trunc('month',(now() ${KYIV})), INTERVAL '1 month') AS m
+     ),
+     coh AS (
+       SELECT date_trunc('month',(fd.first_paid ${KYIV})) AS m,
+              COUNT(*)::int AS cohort,
+              COUNT(*) FILTER (WHERE c.c >= 2)::int AS became
+         FROM first_deal fd JOIN cnt c ON c.client_key = fd.client_key
+        GROUP BY 1
+     )
+     SELECT to_char(mo.m,'YYYY-MM') AS ym,
+            COALESCE(coh.cohort,0) AS cohort, COALESCE(coh.became,0) AS became,
+            ((mo.m + INTERVAL '1 month') <= (now() ${KYIV}) - INTERVAL '90 days') AS mature
+       FROM months mo LEFT JOIN coh ON coh.m = mo.m ORDER BY mo.m`,
+    params
+  );
+  return r.rows.map((x) => {
+    const cohort = Number(x.cohort), became = Number(x.became);
+    return { ym: x.ym, cohort, became, pct: cohort > 0 ? Math.round((became / cohort) * 1000) / 10 : null, mature: x.mature };
+  });
+}
+
+export interface ActiveBaseRow { ym: string; activeClients: number }
+/**
+ * Активність бази (12 міс): DISTINCT клієнтів з ОПЛАТОЮ (paid) у місяці M за
+ * `created_at_kommo`. «Замовили цей місяць». Скоуп за атрибуцією угоди. Це знімок
+ * активності, не потік грошей.
+ */
+export async function activeBaseByMonth(s: MetricScope): Promise<ActiveBaseRow[]> {
+  const params: unknown[] = [];
+  const { conds, join } = paidScopeConds(s, params);
+  const r = await pool.query<{ ym: string; active: string }>(
+    `WITH paid AS (
+       SELECT DISTINCT d.client_key, date_trunc('month',(d.created_at_kommo ${KYIV})) AS m
+         FROM deals d ${join}
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE ${conds.join(" AND ")}
+     ),
+     months AS (
+       SELECT generate_series(date_trunc('month',(now() ${KYIV})) - INTERVAL '11 months',
+                              date_trunc('month',(now() ${KYIV})), INTERVAL '1 month') AS m
+     )
+     SELECT to_char(mo.m,'YYYY-MM') AS ym, COUNT(p.client_key)::int AS active
+       FROM months mo LEFT JOIN paid p ON p.m = mo.m GROUP BY mo.m ORDER BY mo.m`,
+    params
+  );
+  return r.rows.map((x) => ({ ym: x.ym, activeClients: Number(x.active) }));
+}
+
+export interface WeeklyRegularsResult { clients: number; windowWeeks: number; minWeeks: number }
+/**
+ * Постійні, що замовляють ЩОТИЖНЯ (знімок, cadence-евристика — owner-tunable):
+ * клієнти з оплатами у ≥ `minWeeks` РІЗНИХ ISO-тижнях за trailing вікно `windowWeeks`
+ * (дефолт: ≥4 з останніх 8 тижнів). Не серія — поточний зріз. Скоуп за угодою.
+ */
+export async function weeklyRegulars(s: MetricScope, windowWeeks = 8, minWeeks = 4): Promise<WeeklyRegularsResult> {
+  const params: unknown[] = [];
+  const { conds, join } = paidScopeConds(s, params);
+  const r = await pool.query<{ n: string }>(
+    `WITH weeks AS (
+       SELECT d.client_key, date_trunc('week',(d.created_at_kommo ${KYIV})) AS wk
+         FROM deals d ${join}
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE ${conds.join(" AND ")}
+          AND (d.created_at_kommo ${KYIV})::date >= (now() ${KYIV})::date - (${windowWeeks} * 7)
+     )
+     SELECT COUNT(*)::int AS n FROM (
+       SELECT client_key FROM weeks GROUP BY client_key HAVING COUNT(DISTINCT wk) >= ${minWeeks}
+     ) z`,
+    params
+  );
+  return { clients: Number(r.rows[0]?.n ?? 0), windowWeeks, minWeeks };
+}
+
 // ───────────────────────── КОНВЕРСІЯ РЕКЛАМИ (conversion_ads) ─────────────────────────
 
 /**
@@ -891,6 +1007,27 @@ export async function conversionAdsByManager(s: MetricScope, adSources: string[]
     return { managerId: x.manager_id, name: x.name, teamId: x.team_id, entered, won,
       cohortPct: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null };
   });
+}
+
+export interface TeamConversion { teamId: number | null; entered: number; won: number; cohortPct: number | null }
+
+/**
+ * `conversion_ads` ПО КОМАНДІ (РНК) — РОЛАП per-manager (Крок Г #3), тому Σ мгр =
+ * команда ЗА ПОБУДОВОЮ. Той самий чисельник MONEY_ZONE / знаменник, що й Огляд і
+ * per-manager. cohortPct рахується на СУМАХ команди (не середнє відсотків),
+ * entered<10 → null. Additive: Σ команд = відділ (бо Σ мгр = відділ, доведено Крок В).
+ */
+export async function conversionAdsByTeam(s: MetricScope, adSources: string[]): Promise<TeamConversion[]> {
+  const mgrs = await conversionAdsByManager(s, adSources);
+  const byTeam = new Map<number | null, { entered: number; won: number }>();
+  for (const r of mgrs) {
+    const e = byTeam.get(r.teamId) ?? { entered: 0, won: 0 };
+    e.entered += r.entered; e.won += r.won; byTeam.set(r.teamId, e);
+  }
+  return [...byTeam.entries()].map(([teamId, v]) => ({
+    teamId, entered: v.entered, won: v.won,
+    cohortPct: v.entered >= 10 ? Math.round((v.won / v.entered) * 1000) / 10 : null,
+  }));
 }
 
 // ───────────────────────── КОНВЕРСІЯ ЛІДОГЕНУ (Продзвін + Реактивація) ─────────────────────────
