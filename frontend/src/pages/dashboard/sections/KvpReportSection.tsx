@@ -31,7 +31,7 @@ const HINTS: Record<string, string> = {
   adBudget: "Витрати на рекламу з Google-таблиці (сума денних Cost).",
   adGaLeads: "Заявки з Google Ads (конверсії) з тієї ж таблиці.",
   adLeads: "Ліди з реклами (сайтові джерела) в CRM за період.",
-  nonTarget: "Не цільові = Кваліфікація 8921928, статус 143 (відмова).",
+  nonTarget: "Не цільові = рекламні ліди з причиною відмови «Дубль» або «Перевізник» (поле 2097265). Місяці до горизонту синку reject_reason → «—» (немає даних, не «0»).",
   adRevenue: "Отримані кошти від рекламних клієнтів («Источник клиента» = сайтові джерела): успішно закриті в періоді + оплата (знімок).",
   adDispatched: "Угоди рекламних клієнтів, що ВПЕРШЕ увійшли в «Авто працює» у періоді.",
   adAvg: "Дохід з реклами ÷ оплачені рекламні угоди.",
@@ -83,6 +83,7 @@ const avgCheck = (o: ExecutiveOverview, cars: number) =>
   cars > 0 ? Math.round(o.successRevenue / cars) : 0;
 
 function fmtVal(v: number, unit: Unit) {
+  if (v == null || Number.isNaN(v)) return "—"; // honest-label: немає даних (напр. нецільові поза горизонтом reject_reason)
   if (unit === "money") return formatAmount(v);
   if (unit === "moneyFull") return formatAmountFull(v);
   if (unit === "pct") return `${v}%`;
@@ -132,7 +133,7 @@ const METRICS: Metric[] = [
   { key: "adBudget", label: "Рекламний бюджет", unit: "money", group: "🎯 Реклама", get: (b) => b.lq.adBudgetFact, planKind: "ad_budget", flow: true, hint: HINTS.adBudget },
   { key: "adGaLeads", label: "Заявки з реклами (GA)", unit: "num", group: "🎯 Реклама", get: (b) => b.lq.adBudgetLeads, planKind: null, flow: true, hint: HINTS.adGaLeads },
   { key: "adLeads", label: "Прийнято реклами (CRM)", unit: "num", group: "🎯 Реклама", get: (b) => b.ov.adConversion.leads, planKind: "ad_leads", flow: true, editable: true, hint: HINTS.adLeads },
-  { key: "nonTarget", label: "К-ть не цільових лідів", unit: "num", group: "🎯 Реклама", get: (b) => b.lq.nonTargetLeads, planKind: "nontarget_leads", flow: true, editable: true, hint: HINTS.nonTarget },
+  { key: "nonTarget", label: "К-ть не цільових лідів", unit: "num", group: "🎯 Реклама", get: (b) => b.lq.nonTargetLeads ?? NaN, planKind: "nontarget_leads", flow: true, editable: true, hint: HINTS.nonTarget },
   { key: "adRevenue", label: "Дохід з реклами", unit: "money", group: "🎯 Реклама", get: (b) => b.ex.ad.revenue, weeklyGet: (b) => b.ex.flow?.ad ?? b.ex.ad.revenue, planKind: "ad_revenue", flow: true, editable: true, hint: HINTS.adRevenue },
   { key: "adDispatched", label: "Поставлені машини з реклами", unit: "num", group: "🎯 Реклама", get: (b) => b.ex.ad.dispatched, planKind: "ad_dispatched", flow: true, editable: true, hint: HINTS.adDispatched },
   { key: "adPaid", label: "Оплачено з реклами", unit: "num", group: "🎯 Реклама", get: (b) => b.ov.adConversion.paid, planKind: null, flow: true, hint: HINTS.adPaid },

@@ -227,7 +227,7 @@ export async function fetchDataQuality(): Promise<{ checks: DataQualityCheck[]; 
 
 export interface LeadQuality {
   targetLeads: number;
-  nonTargetLeads: number;
+  nonTargetLeads: number | null;
   adBudgetPlan: number;
   adBudgetFact: number;
   adBudgetLeads: number;

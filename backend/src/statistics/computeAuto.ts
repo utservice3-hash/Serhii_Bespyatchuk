@@ -53,7 +53,9 @@ export async function computeDeptAuto(since: string): Promise<Map<string, number
     // ── marketing.non_target_leads (КРОК Г #1: реклама ∩ reject_reason {Дубль|Перевізник},
     //    з ядра — спільний предикат із /lead-quality; стара Кваліфікація-143-усе знято) ──
     const nonTarget = await nonTargetLeadsByBucket(adSources, trunc);
-    for (const r of nonTarget) set("marketing", ptype, r.bucket, "non_target_leads", Number(r.count));
+    // 🕰 Бакети до горизонту reject_reason → count=null → НЕ пишемо (лишаємо imported,
+    // не затираємо «—» нулем).
+    for (const r of nonTarget) if (r.count != null) set("marketing", ptype, r.bucket, "non_target_leads", r.count);
 
     // ── marketing.ad_budget_total (ad_budget_daily.budget_fact) ──
     const adBudget = await pool.query<Row>(

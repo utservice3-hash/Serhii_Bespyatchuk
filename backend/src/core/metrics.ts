@@ -504,11 +504,30 @@ export const REJECT_NONTARGET = ["Дубль", "Перевізник"];
 const nonTargetPredicate = "(" + adDealSql("$1") + " AND d.reject_reason = ANY($2))";
 
 /**
+ * 🕰 ГОРИЗОНТ reject_reason (honest-label guard): перший місяць із МАТЕРІАЛЬНИМ
+ * покриттям (≥30 реджектів/міс) — відсікає поодинокі страй-записи (live: 2024-09 n=1,
+ * 2025-03 n=1) від реального бекфілу Крок Б (75д → ~2026-05, 656+/міс). Місяці ДО
+ * горизонту НЕ мають даних → показуємо «—» (null), а не «0 нецільових». Повертає
+ * 'YYYY-MM-01' першого покритого місяця.
+ */
+export async function rejectReasonHorizon(): Promise<string> {
+  const r = await pool.query<{ m: string | null }>(
+    `SELECT to_char(MIN(m), 'YYYY-MM-DD') AS m FROM (
+       SELECT date_trunc('month', (created_at_kommo ${KYIV})) AS m,
+              COUNT(*) FILTER (WHERE reject_reason IS NOT NULL) AS n
+         FROM deals GROUP BY 1
+     ) x WHERE n >= 30`);
+  return r.rows[0]?.m ?? "2026-05-01";
+}
+
+/**
  * НЕЦІЛЬОВІ ліди за скоупом і періодом (за датою СТВОРЕННЯ, обидва кінці по-київськи).
  * Additive: Σ менеджерів = команда = відділ (кожен лід має 1 manager). Скаляр — для
- * /lead-quality (КВП). Бакетна версія (нижче) — для depstats.
+ * /lead-quality (КВП). 🕰 Honest-label: якщо ВЕСЬ період до горизонту reject_reason →
+ * `null` («—»), щоб старі місяці не читались як «0 нецільових».
  */
-export async function nonTargetLeads(s: MetricScope, adSources: string[]): Promise<number> {
+export async function nonTargetLeads(s: MetricScope, adSources: string[]): Promise<number | null> {
+  if (s.to && s.to < (await rejectReasonHorizon())) return null;
   const params: unknown[] = [adSources, REJECT_NONTARGET];
   const conds = [nonTargetPredicate];
   const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
@@ -523,16 +542,18 @@ export async function nonTargetLeads(s: MetricScope, adSources: string[]): Promi
 
 /**
  * НЕЦІЛЬОВІ помісячно/потижнево (той самий предикат) — для depstats-бекфілу/перерахунку.
- * `trunc` ∈ 'month'|'week'. Бакет = київський місяць/тиждень дати створення.
+ * `trunc` ∈ 'month'|'week'. Бакет = київський місяць/тиждень дати створення. 🕰 Бакети
+ * ДО горизонту reject_reason → `count=null` («—»; споживач НЕ пише 0, лишає imported).
  */
-export async function nonTargetLeadsByBucket(adSources: string[], trunc: "month" | "week"): Promise<{ bucket: string; count: number }[]> {
+export async function nonTargetLeadsByBucket(adSources: string[], trunc: "month" | "week"): Promise<{ bucket: string; count: number | null }[]> {
+  const horizon = await rejectReasonHorizon();
   const r = await pool.query<{ bucket: string; v: string }>(
     `SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
        FROM deals d
       WHERE ${nonTargetPredicate} AND d.created_at_kommo IS NOT NULL
       GROUP BY bucket`,
     [adSources, REJECT_NONTARGET]);
-  return r.rows.map((x) => ({ bucket: x.bucket, count: Number(x.v) }));
+  return r.rows.map((x) => ({ bucket: x.bucket, count: x.bucket < horizon ? null : Number(x.v) }));
 }
 
 // ───────────── КЛІЄНТ-GRAIN НОВІ/ПОСТІЙНІ (лінз лояльності, def A) ─────────────
