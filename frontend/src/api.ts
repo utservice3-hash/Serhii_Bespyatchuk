@@ -416,21 +416,34 @@ export async function fetchKvpExtra(params: { from?: string; to?: string }): Pro
 export interface KvpAgg { deals: number; revenue: number }
 export interface KvpEngineTeam { plan: number; revenue: number; expected: number; pct: number | null; conversion: number | null; entered: number }
 export interface KvpDay { bucket: string; revenue: number; deals: number }
+export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; met: boolean; isCurrent: boolean; isFuture: boolean }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
-  daily: KvpDay[];
+  daily: KvpDay[]; weeks: KvpWeek[];
 }
 export interface KvpExpBucket { deals: number; sum: number }
+// Крок Д фінал #1 — денний дрил менеджера (лінивий фетч)
+export interface KvpManagerDaily {
+  managerId: number; name: string; isRnk: boolean; from: string; to: string;
+  days: { day: string; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: { deals: number; revenue: number }; received: { deals: number; revenue: number }; converted: number }[];
+  tiles: { dispatched: { deals: number; revenue: number }; avgCheck: number; expectedThis: KvpExpBucket; expectedNext: KvpExpBucket; conversion: number | null; convEntered: number; plan: number; received: number; gap: number };
+}
+export async function fetchManagerDaily(params: { managerId: number; from: string; to: string }): Promise<KvpManagerDaily> {
+  const { data } = await api.get<KvpManagerDaily>("/dashboard/kvp-report/manager-daily", { params });
+  return data;
+}
 export interface KvpTeam {
   teamId: number; name: string; kind: "rpk" | "rnk" | "leadgen";
   plan: number; revenue: number; expected: number; pct: number | null;
   conversion: number | null; entered: number; won: number; managers: KvpManager[];
+  expectedThisMonth: number; expectedNextMonth: number; weeks: KvpWeek[];
 }
-export interface KvpSignal { severity: "critical" | "serious" | "warning" | "info"; icon: string; title: string; detail: string; action: string }
+export interface KvpSignal { severity: "critical" | "serious" | "warning" | "info"; icon: string; title: string; detail: string; action: string; expectedThisMonth?: number; expectedNextMonth?: number }
 export interface KvpSeriesRow { ym: string; [k: string]: number | string | boolean }
 export interface KvpReport {
   scope: { from: string; to: string; prevFrom: string; prevTo: string; preset: string; label: string; isCurrent: boolean };
+  weekBlocks: { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean }[];
   strategicPlan: number;
   verdict: {
     received: KvpAgg; receivedPrev: { revenue: number }; strategicPlan: number; planPct: number | null;

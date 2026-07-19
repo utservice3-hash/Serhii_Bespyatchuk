@@ -4195,6 +4195,89 @@ function resolveKvpScope(preset: string, date: string, from?: string | null, to?
   return { from: f, to: t, prevFrom: pf, prevTo: pt, label, isCurrent };
 }
 
+// Фіксовані тижневі блоки місяця Т1–Т5 (1-7/8-14/15-21/22-28/29-кінець) — як у ручному КВП.
+function fixedWeekBlocks(monthStart: string): { idx: number; from: string; to: string }[] {
+  const ym = monthStart.slice(0, 7);
+  const [y, mo] = ym.split("-").map(Number);
+  const dim = new Date(y, mo, 0).getDate();
+  const pad = (d: number) => String(d).padStart(2, "0");
+  return ([[1, 7], [8, 14], [15, 21], [22, 28], [29, dim]] as const)
+    .filter(([a]) => a <= dim)
+    .map(([a, b], i) => ({ idx: i + 1, from: `${ym}-${pad(a)}`, to: `${ym}-${pad(Math.min(b, dim))}` }));
+}
+function workingDaysBetween(from: string, to: string): number {
+  let n = 0; const d = new Date(from + "T00:00:00Z"); const end = new Date(to + "T00:00:00Z");
+  while (d.getTime() <= end.getTime()) { const dow = d.getUTCDay(); if (dow !== 0 && dow !== 6) n++; d.setUTCDate(d.getUTCDate() + 1); }
+  return n;
+}
+const RNK_MGR_TEAMS = new Set([13, 15]);
+
+/**
+ * КРОК Д фінал #1 — ЛІНИВИЙ денний дрил менеджера. Admin-only. По КОЖНОМУ дню:
+ * взято лідів (split ad/leadgen), відправлено авто (load_at), отримано коштів,
+ * [РНК: сконвертовано→оплата]. + плитки (авто/чек/очікування цей-наст/[конв]/розрив).
+ * ТІЛЬКИ збірка з ядра. Гейт: Σ по днях == місячні тотали менеджера.
+ */
+dashboardRouter.get("/kvp-report/manager-daily", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "admin") return res.status(403).json({ error: "Лише КВП (адміністратор)" });
+  const managerId = Number(req.query.managerId);
+  if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
+  const from = String(req.query.from ?? "");
+  const to = String(req.query.to ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: "from/to (YYYY-MM-DD) обовʼязкові" });
+  const mScope: money.MoneyScope = { managerId, from, to };
+  const scope: metrics.MetricScope = { managerId, from, to };
+  const monthStart = from.slice(0, 7) + "-01";
+  const mRow = (await pool.query<{ name: string; team_id: number | null }>(`SELECT name, team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
+  const isRnk = mRow?.team_id != null && RNK_MGR_TEAMS.has(mRow.team_id);
+
+  const [leadsRows, dispRows, recvRows, succ, expTiles, convMgr, planMonth, convDayRows] = await Promise.all([
+    metrics.leadsTakenByBucket(scope, "day", true),
+    metrics.dispatchedByLoadBucket(scope, "day"),
+    money.receivedByManagerBucket(mScope, "day"),
+    money.successByMgr(mScope),
+    metrics.expectedPaymentsByPlanned({ managerId }),
+    metrics.conversionAdsByManager(scope, (await getSettings()).adSources),
+    plans.managerPlan({ month: monthStart }),
+    // сконвертовано→оплата по дню = ПЕРШИЙ вхід угоди менеджера в MONEY_ZONE (FC) у дні періоду
+    pool.query<{ day: string; n: string }>(
+      `SELECT to_char((won_at AT TIME ZONE 'Europe/Kyiv')::date,'YYYY-MM-DD') day, COUNT(*) n FROM (
+         SELECT e.kommo_id, MIN(e.changed_at) won_at
+           FROM deal_stage_events e JOIN deals d ON d.kommo_id = e.kommo_id
+          WHERE e.pipeline_id = ANY($1) AND e.status_id = ANY($2) AND d.manager_id = $3
+          GROUP BY e.kommo_id) x
+        WHERE (won_at AT TIME ZONE 'Europe/Kyiv')::date >= $4 AND (won_at AT TIME ZONE 'Europe/Kyiv')::date <= $5
+        GROUP BY 1`, [metrics.FC_PIPELINES, metrics.MONEY_ZONE, managerId, from, to]),
+  ]);
+
+  const days = new Map<string, { day: string; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: { deals: number; revenue: number }; received: { deals: number; revenue: number }; converted: number }>();
+  const dayGet = (day: string) => { let e = days.get(day); if (!e) { e = { day, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: { deals: 0, revenue: 0 }, received: { deals: 0, revenue: 0 }, converted: 0 }; days.set(day, e); } return e; };
+  for (const r of leadsRows) { const e = dayGet(r.bucket); const c = (r as { channel?: string }).channel; if (c === "ad") e.leadsAd += r.deals; else if (c === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals; }
+  for (const r of dispRows) { const e = dayGet(r.ym); e.dispatched = { deals: r.deals, revenue: r.revenue }; }
+  for (const r of recvRows) if (r.managerId === managerId) { const e = dayGet(r.bucket); e.received = { deals: r.deals, revenue: r.revenue }; }
+  for (const r of convDayRows.rows) dayGet(r.day).converted = Number(r.n);
+  const dayList = [...days.values()].sort((a, b) => a.day.localeCompare(b.day));
+
+  const su = succ.find((x) => x.managerId === managerId);
+  const recvTotal = recvRows.filter((r) => r.managerId === managerId).reduce((a, r) => a + r.revenue, 0);
+  const dispTotal = dispRows.reduce((a, r) => ({ deals: a.deals + r.deals, revenue: a.revenue + r.revenue }), { deals: 0, revenue: 0 });
+  const cv = convMgr.find((x) => x.managerId === managerId);
+  const plan = planMonth.rows.find((x) => x.managerId === managerId)?.plan ?? 0;
+  const gap = plan > 0 ? Math.max(0, plan - recvTotal) : 0;
+  res.json({
+    managerId, name: mRow?.name ?? "", isRnk, from, to,
+    days: dayList,
+    tiles: {
+      dispatched: dispTotal,
+      avgCheck: su && su.deals > 0 ? Math.round(su.revenue / su.deals) : 0,
+      expectedThis: expTiles.thisMonth, expectedNext: expTiles.nextMonth,
+      conversion: isRnk && cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
+      plan, received: recvTotal, gap,
+    },
+  });
+});
+
 /**
  * КРОК Д — КОМПОЗИТНИЙ звіт КВП. Admin-only (роль КВП = вся компанія). ТІЛЬКИ
  * збірка з ядра (money/metrics/plans) — нової бізнес-логіки НЕ додає. Scope-aware
@@ -4218,6 +4301,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     dispatchedAllSeries, dispatchedLgSeries, transferredSeries,
     newToRepeat, activeBase, weeklyReg, nonTarget, planRes, funnel,
     receivedSeg, expectedSeg, mgrDaily,
+    expTeamThis, expTeamNext, mgrDayExp,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -4233,9 +4317,29 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     Promise.all(months.map((m) => plans.managerPlan({ month: m }))),
     metrics.funnelByStage(scope),
     money.receivedBySegment(mScope), metrics.expectedBySegment({ from }), money.receivedByManagerBucket(mScope, "day"),
+    metrics.expectedMonthByScope({}, "team", 0), metrics.expectedMonthByScope({}, "team", 1), metrics.expectedByManagerDay({}),
   ]);
   const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
   for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
+
+  // Крок Д фінал #2: тижневий розріз Т1–Т5 (лише одномісячний скоуп). План тижня =
+  // місячний план × (робочі дні тижня ÷ робочі дні місяця) → Σ тижнів план == місяць.
+  // Факт тижня = received за датою оплати в тижні → Σ тижнів факт == місяць. RAW (без
+  // округлення) — щоб Σ звірялось точно; FE округлює на показ.
+  const weekBlocks = months.length === 1 ? fixedWeekBlocks(months[0]) : [];
+  const wdMonth = weekBlocks.reduce((a, w) => a + workingDaysBetween(w.from, w.to), 0);
+  const mgrDayExpMap = new Map<number, { day: string; sum: number }[]>();
+  for (const r of mgrDayExp) { const a = mgrDayExpMap.get(r.managerId) ?? []; a.push({ day: r.day, sum: r.sum }); mgrDayExpMap.set(r.managerId, a); }
+  const kyivTodayW = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const weeksForMgr = (mid: number, monthPlan: number) => weekBlocks.map((w) => {
+    const wd = workingDaysBetween(w.from, w.to);
+    const plan = wdMonth > 0 ? monthPlan * wd / wdMonth : 0;
+    const fact = (mgrDailyMap.get(mid) ?? []).filter((d) => d.bucket >= w.from && d.bucket <= w.to).reduce((a, d) => a + d.revenue, 0);
+    const expected = (mgrDayExpMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.sum, 0);
+    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, met: fact >= plan && plan > 0, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW };
+  });
+  const expTeamThisMap = new Map(expTeamThis.map((r) => [r.id, r.sum]));
+  const expTeamNextMap = new Map(expTeamNext.map((r) => [r.id, r.sum]));
 
   // strategic = Σ місячних planів (🔒 read-only). Плани по менеджеру/команді — теж Σ.
   let strategic = 0;
@@ -4284,16 +4388,27 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       conversion: cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
       expected: expByMgr.get(mid)?.sum ?? 0,
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
+      weeks: weeksForMgr(mid, mp.plan),    // Крок Д фінал #2: тижневий розріз Т1–Т5
     });
   }
   // Крок Д owner-review #1: фінвідділ — НЕ sales-юніт → повністю прибрати зі звіту
   // (received=0, тож Σ teams.revenue не зрушиться).
-  const teams = [...teamMap.values()].filter((t) => !KVP_FINANCE_TEAM_IDS.has(t.teamId)).map((t) => ({
-    teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
-    pct: t.plan > 0 ? Math.round((t.revenue / t.plan) * 100) : null,
-    conversion: t.conversion, entered: t.entered, won: t.won,
-    managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
-  })).sort((a, b) => b.revenue - a.revenue);
+  const teams = [...teamMap.values()].filter((t) => !KVP_FINANCE_TEAM_IDS.has(t.teamId)).map((t) => {
+    // Крок Д фінал #2: тижні команди = Σ тижнів менеджерів (per idx). met = teamFact ≥ teamPlan.
+    const teamWeeks = weekBlocks.map((w) => {
+      const ms = t.managers.map((mm) => ((mm.weeks as { idx: number; plan: number; fact: number; expected: number }[]) ?? []).find((x) => x.idx === w.idx)).filter(Boolean) as { plan: number; fact: number; expected: number }[];
+      const plan = ms.reduce((a, x) => a + x.plan, 0), fact = ms.reduce((a, x) => a + x.fact, 0), expected = ms.reduce((a, x) => a + x.expected, 0);
+      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, met: fact >= plan && plan > 0, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW };
+    });
+    return {
+      teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
+      pct: t.plan > 0 ? Math.round((t.revenue / t.plan) * 100) : null,
+      conversion: t.conversion, entered: t.entered, won: t.won,
+      expectedThisMonth: expTeamThisMap.get(t.teamId) ?? 0, expectedNextMonth: expTeamNextMap.get(t.teamId) ?? 0,
+      weeks: teamWeeks,
+      managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
+    };
+  }).sort((a, b) => b.revenue - a.revenue);
 
   // ── ДВИГУНИ (team-based) ──
   const engineOf = (kind: string) => {
@@ -4343,9 +4458,10 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   };
 
   // ── СИГНАЛИ (деривовані, ранж за гостротою) ──
-  const signals: { severity: string; icon: string; title: string; detail: string; action: string }[] = [];
+  const signals: { severity: string; icon: string; title: string; detail: string; action: string; expectedThisMonth?: number; expectedNextMonth?: number }[] = [];
   for (const t of teams.filter((x) => x.kind === "rpk" || x.kind === "rnk")) {
-    if (t.pct != null && t.pct < 70 && t.plan > 0) signals.push({ severity: t.pct < 50 ? "critical" : "serious", icon: "📉", title: `${t.name}: ${t.pct}% плану`, detail: `факт ${Math.round(t.revenue).toLocaleString("uk-UA")} з ${Math.round(t.plan).toLocaleString("uk-UA")}`, action: "перевірити менеджерів команди (дриллдаун нижче)" });
+    // Крок Д фінал #3: командний сигнал несе очікування цей/наступний (планова дата).
+    if (t.pct != null && t.pct < 70 && t.plan > 0) signals.push({ severity: t.pct < 50 ? "critical" : "serious", icon: "📉", title: `${t.name}: ${t.pct}% плану`, detail: `факт ${Math.round(t.revenue).toLocaleString("uk-UA")} з ${Math.round(t.plan).toLocaleString("uk-UA")}`, action: "перевірити менеджерів команди (дриллдаун нижче)", expectedThisMonth: t.expectedThisMonth, expectedNextMonth: t.expectedNextMonth });
   }
   if (engines.ad.mature === false && sc.isCurrent) signals.push({ severity: "info", icon: "⏳", title: "Конверсія реклами дозріває", detail: `когорта <90 днів (${engines.ad.entered} лідів)`, action: "оцінювати за зрілий місяць" });
   if (expectedZone.total.sum > 0) signals.push({ severity: "warning", icon: "💰", title: `В очікуванні ${Math.round(expectedZone.total.sum).toLocaleString("uk-UA")} ₴`, detail: `${expectedZone.total.deals} угод у зоні виставлено→оплата`, action: "тиснути на дебіторку/оплати" });
@@ -4353,6 +4469,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
 
   res.json({
     scope: { from, to, prevFrom: sc.prevFrom, prevTo: sc.prevTo, preset: String(req.query.preset ?? "month"), label: sc.label, isCurrent: sc.isCurrent },
+    weekBlocks: weekBlocks.map((w) => ({ idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW })),
     strategicPlan: strategic,   // 🔒 read-only
     verdict, signals, engines, teams,
     retention: {

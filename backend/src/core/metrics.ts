@@ -688,6 +688,70 @@ export async function dispatchedByLoadMonth(s: MetricScope, channel?: "leadgen" 
   return r.rows.map((x) => ({ ym: x.ym, deals: Number(x.deals), revenue: Number(x.revenue) }));
 }
 
+/**
+ * «Поїхали» по БАКЕТУ (день/тиждень/місяць) у [from,to] за `load_at` — для денного
+ * дрілу КВП (Крок Д фінал). Scoped, опційний канал. Additive: Σ бакетів = разом у періоді.
+ */
+export async function dispatchedByLoadBucket(s: MetricScope, granularity: "day" | "week" | "month", channel?: "leadgen" | "ad" | null): Promise<DispatchRow[]> {
+  const gran = granularity;
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
+  if (channel) { params.push(channel); conds.push(`d.lead_channel = $${params.length}`); }
+  if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ ym: string; deals: string; revenue: string }>(
+    `SELECT to_char(date_trunc('${gran}', (d.load_at ${KYIV})), 'YYYY-MM-DD') AS ym,
+            COUNT(*)::int AS deals, COALESCE(SUM(d.price),0) AS revenue
+       FROM deals d ${join} WHERE ${conds.join(" AND ")}
+      GROUP BY 1 ORDER BY 1`, params);
+  return r.rows.map((x) => ({ ym: x.ym, deals: Number(x.deals), revenue: Number(x.revenue) }));
+}
+
+export interface MgrDayExp { managerId: number; day: string; deals: number; sum: number }
+/**
+ * «В очікуванні» по (менеджер × день ПЛАНОВОЇ дати оплати) — знімок EXPECT_ZONE,
+ * бакет = `planned_payment_at`::date. Для тижневого розрізу КВП (Крок Д фінал):
+ * дні кладуться у фіксовані блоки Т1–Т5. Additive: Σ = зона по менеджеру.
+ */
+export async function expectedByManagerDay(s: SnapshotScope): Promise<MgrDayExp[]> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ manager_id: number; day: string; deals: string; sum: string }>(
+    `SELECT d.manager_id, to_char((d.planned_payment_at ${KYIV})::date, 'YYYY-MM-DD') AS day,
+            COUNT(*)::int AS deals, COALESCE(SUM(d.price),0) AS sum
+       FROM deals d JOIN managers m ON m.id = d.manager_id
+      WHERE ${conds.join(" AND ")} GROUP BY d.manager_id, 2 ORDER BY 2`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, day: x.day, deals: Number(x.deals), sum: Number(x.sum) }));
+}
+
+/**
+ * «В очікуванні» команди/менеджера за плановою датою в місяці зі ЗСУВОМ `monthOffset`
+ * (0 = поточний, 1 = наступний) — для сигналів КВП «цей/наступний» (Крок Д фінал #3).
+ * Той самий предикат, що `expectedThisMonthByScope` (offset 0). Σ рядків == зона того місяця.
+ */
+export async function expectedMonthByScope(s: SnapshotScope, by: "team" | "manager", monthOffset: number): Promise<ExpectedScopeRow[]> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = [
+    "d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL",
+    `to_char((d.planned_payment_at ${KYIV}), 'YYYY-MM') = to_char((now() ${KYIV}) + INTERVAL '${monthOffset} months', 'YYYY-MM')`,
+  ];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const sel = by === "team" ? "t.id AS id, t.name AS name, NULL::int AS team_id" : "m.id AS id, m.name AS name, m.team_id";
+  const grp = by === "team" ? "GROUP BY t.id, t.name" : "GROUP BY m.id, m.name, m.team_id";
+  const join = by === "team" ? "JOIN teams t ON t.id = m.team_id" : "";
+  const r = await pool.query<{ id: number; name: string; team_id: number | null; deals: string; sum: string }>(
+    `SELECT ${sel}, COUNT(*)::int deals, COALESCE(SUM(d.price),0) sum
+       FROM deals d JOIN managers m ON m.id = d.manager_id ${join}
+      WHERE ${conds.join(" AND ")} ${grp}`, params);
+  return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
+}
+
 // ───────────────────────── RETENTION-РОДИНА (Крок Г #4) ─────────────────────────
 // Скоуп-рівень (dept/team/manager через `s`). «Погашено дебіторки» НЕ будуємо —
 // `receivables` це TRUNCATE-знімок без історії погашень → метрика = «—» (ⓘ у UI).
