@@ -416,7 +416,8 @@ export async function fetchKvpExtra(params: { from?: string; to?: string }): Pro
 export interface KvpAgg { deals: number; revenue: number }
 export interface KvpEngineTeam { plan: number; revenue: number; expected: number; pct: number | null; conversion: number | null; entered: number }
 export interface KvpDay { bucket: string; revenue: number; deals: number }
-export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; met: boolean; isCurrent: boolean; isFuture: boolean }
+export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
+export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
@@ -447,7 +448,8 @@ export interface KvpSignal { severity: "critical" | "serious" | "warning" | "inf
 export interface KvpSeriesRow { ym: string; [k: string]: number | string | boolean }
 export interface KvpReport {
   scope: { from: string; to: string; prevFrom: string; prevTo: string; preset: string; label: string; isCurrent: boolean };
-  weekBlocks: { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean }[];
+  weekBlocks: { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; pace: number | null }[];
+  deptWeeks: KvpDeptWeek[];
   strategicPlan: number;
   verdict: {
     received: KvpAgg; receivedPrev: { revenue: number }; strategicPlan: number; planPct: number | null;

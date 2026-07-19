@@ -729,6 +729,46 @@ export async function expectedByManagerDay(s: SnapshotScope): Promise<MgrDayExp[
   return r.rows.map((x) => ({ managerId: x.manager_id, day: x.day, deals: Number(x.deals), sum: Number(x.sum) }));
 }
 
+export interface MgrDayN { managerId: number; day: string; deals: number }
+/** «Поїхали» по (менеджер × день `load_at`) — для тижневої активності КВП (Крок Д). */
+export async function dispatchedByManagerDay(s: MetricScope): Promise<MgrDayN[]> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ manager_id: number; bkt: string; deals: string }>(
+    `SELECT d.manager_id, to_char((d.load_at ${KYIV})::date,'YYYY-MM-DD') AS bkt, COUNT(*) deals
+       FROM deals d ${join} WHERE ${conds.join(" AND ")} GROUP BY d.manager_id, 2`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, day: x.bkt, deals: Number(x.deals) }));
+}
+
+export interface MgrDayLeads { managerId: number; day: string; ad: number; leadgen: number }
+/** «Взято лідів» по (менеджер × день × канал) — той самий предикат, що `leadsTakenByBucket`. */
+export async function leadsByManagerDay(s: MetricScope): Promise<MgrDayLeads[]> {
+  const params: unknown[] = [FC_PIPELINES];
+  const winConds = ["d.pipeline_id = ANY($1)", "psm.funnel_stage = 'lead_taken'"];
+  if (s.from) { params.push(s.from); winConds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); winConds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
+  const teamCond = s.teamId ? (params.push(s.teamId), `WHERE m.team_id = $${params.length}`) : "";
+  const r = await pool.query<{ manager_id: number; bkt: string; ad: string; leadgen: string }>(
+    `WITH first_lt AS (
+       SELECT dse.kommo_id, MIN(dse.changed_at) AS anchor_at
+         FROM deal_stage_events dse
+         JOIN deals d ON d.kommo_id = dse.kommo_id
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
+        WHERE ${winConds.join(" AND ")} GROUP BY dse.kommo_id
+     )
+     SELECT d2.manager_id, to_char((f.anchor_at ${KYIV})::date,'YYYY-MM-DD') AS bkt,
+            COUNT(*) FILTER (WHERE d2.lead_channel = 'ad') ad,
+            COUNT(*) FILTER (WHERE d2.lead_channel = 'leadgen') leadgen
+       FROM first_lt f JOIN deals d2 ON d2.kommo_id = f.kommo_id
+       LEFT JOIN managers m ON m.id = d2.manager_id ${teamCond}
+      GROUP BY d2.manager_id, 2`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, day: x.bkt, ad: Number(x.ad), leadgen: Number(x.leadgen) }));
+}
+
 /**
  * «В очікуванні» команди/менеджера за плановою датою в місяці зі ЗСУВОМ `monthOffset`
  * (0 = поточний, 1 = наступний) — для сигналів КВП «цей/наступний» (Крок Д фінал #3).

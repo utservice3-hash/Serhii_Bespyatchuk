@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek } from "../../../api";
+import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
@@ -76,6 +76,9 @@ export function KvpReportSection() {
   const [plans, setPlans] = useState<KvpPlans>({});
   const [openTeam, setOpenTeam] = useState<number | null>(null);
   const [showFull, setShowFull] = useState(false);
+  const [weekMode, setWeekMode] = useState<"money" | "activity">("money");
+  // #6: тижнево-скоупований дрил — клік по клітинці тижня команди → менеджери ЦЬОГО тижня.
+  const [openWeekDrill, setOpenWeekDrill] = useState<{ teamId: number; weekIdx: number } | null>(null);
 
   const rangeMode = !!(range.from && range.to);
   useEffect(() => {
@@ -203,7 +206,17 @@ export function KvpReportSection() {
 
           {/* ── КОМАНДИ → менеджери drill ── */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
-            <h2 className="chart-title">🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Т1–Т5 = фіксовані блоки місяця (1-7/8-14/15-21/22-28/29-кінець). Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; майбутні тижні = план+очікування (у виконання НЕ входить). Наведи на клітинку для деталей." /></h2>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = фіксовані блоки місяця (1-7/8-14/15-21/22-28/29-кінець). Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні)." /></h2>
+              {rep.weekBlocks.length > 0 && (
+                <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", fontSize: 12 }}>
+                  {([["money", "💰 Гроші"], ["activity", "⚙️ Активність"]] as const).map(([k, lbl]) => (
+                    <button key={k} onClick={() => setWeekMode(k)}
+                      style={{ padding: "5px 12px", border: "none", cursor: "pointer", background: weekMode === k ? "#c5141c" : "var(--card-bg)", color: weekMode === k ? "#fff" : "var(--text)", fontWeight: weekMode === k ? 600 : 400 }}>{lbl}</button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div style={{ overflowX: "auto" }}>
               <table className="data-table" style={{ width: "100%" }}>
                 <thead><tr><th>Команда</th><th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th style={{ minWidth: 110 }}>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо</th><th style={{ textAlign: "right" }}>Конв.</th>{rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}</tr></thead>
@@ -217,11 +230,30 @@ export function KvpReportSection() {
                         <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={t.pct ?? 0} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 42, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
                         <td style={{ textAlign: "right", color: MUTED }}>{fmtMoney(t.expected)}</td>
                         <td style={{ textAlign: "right" }}>{t.kind === "rnk" ? fmtPct(t.conversion) : "—"}</td>
-                        {rep.weekBlocks.map((w) => <WeekCell key={w.idx} w={t.weeks?.find((x) => x.idx === w.idx)} />)}
+                        {rep.weekBlocks.map((w) => (
+                          <WeekCell key={w.idx} mode={weekMode}
+                            w={t.weeks?.find((x) => x.idx === w.idx)}
+                            prev={t.weeks?.find((x) => x.idx === w.idx - 1)}
+                            active={openWeekDrill?.teamId === t.teamId && openWeekDrill?.weekIdx === w.idx}
+                            onClick={() => setOpenWeekDrill((cur) => cur?.teamId === t.teamId && cur?.weekIdx === w.idx ? null : { teamId: t.teamId, weekIdx: w.idx })} />
+                        ))}
                       </tr>
-                      {openTeam === t.teamId && <ManagerDrill team={t} from={rep.scope.from} to={rep.scope.to} weekBlocks={rep.weekBlocks} />}
+                      {openWeekDrill?.teamId === t.teamId && <WeekManagerDrill team={t} weekIdx={openWeekDrill.weekIdx} weekBlocks={rep.weekBlocks} />}
+                      {openTeam === t.teamId && <ManagerDrill team={t} from={rep.scope.from} to={rep.scope.to} weekBlocks={rep.weekBlocks} mode={weekMode} />}
                     </Fragment>
                   ))}
+                  {/* #5: розріз відділу по тижнях = Σ команд (гейт Σ Dept == Σ teams == Σ days) */}
+                  {rep.deptWeeks.length > 0 && (
+                    <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 600 }}>
+                      <td>Σ Відділ</td>
+                      <td style={{ textAlign: "right" }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.plan, 0))}</td>
+                      <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.revenue, 0))}</td>
+                      <td colSpan={3}></td>
+                      {rep.deptWeeks.map((w) => (
+                        <WeekCell key={w.idx} mode={weekMode} w={w} prev={rep.deptWeeks.find((x) => x.idx === w.idx - 1)} />
+                      ))}
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -304,15 +336,39 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
   );
 }
 
-function WeekCell({ w }: { w: KvpWeek | undefined }) {
-  if (!w) return <td style={{ textAlign: "right", color: MUTED, fontSize: 11 }}>—</td>;
-  if (w.isFuture) return <td style={{ textAlign: "right", fontSize: 10, color: MUTED }} title={`план ${fmtMoney(w.plan)} · очік ${fmtMoney(w.expected)}`}>{fmtMoney(w.plan)}<div>очік {fmtMoney(w.expected)}</div></td>;
-  return <td style={{ textAlign: "right", fontSize: 11, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }} title={`факт ${fmtMoney(w.fact)} / план ${fmtMoney(w.plan)} · очік ${fmtMoney(w.expected)}`}>
-    <span style={{ color: w.met ? GREEN : RED, fontWeight: 700 }}>{w.met ? "✓" : "✗"}</span> {fmtMoney(w.fact)}
-  </td>;
+const wkPct = (fact: number, plan: number) => (plan > 0 ? Math.round((fact / plan) * 100) : null);
+const barColor = (p: number | null) => (p == null ? MUTED : p >= 100 ? GREEN : p >= 70 ? AMBER : RED);
+type WeekLike = { plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; isCurrent: boolean; isFuture: boolean; pace: number | null };
+// #1-4: читабельна клітинка тижня. mode 'money' → факт/план/бар/%/✓✗/темп/очік/тренд;
+// 'activity' → авто·ліди. onClick (тільки командні клітинки) → менеджери цього тижня.
+function WeekCell({ w, prev, mode, onClick, active }: { w: WeekLike | undefined; prev?: WeekLike; mode: "money" | "activity"; onClick?: () => void; active?: boolean }) {
+  const bg = active ? "rgba(197,20,28,0.12)" : w?.isCurrent ? "rgba(37,99,235,0.07)" : undefined;
+  if (!w) return <td style={{ textAlign: "center", color: MUTED, fontSize: 11 }}>—</td>;
+  const cur = onClick ? "pointer" : undefined;
+  const handle = onClick ? (e: { stopPropagation: () => void }) => { e.stopPropagation(); onClick(); } : undefined;
+  if (mode === "activity") return (
+    <td onClick={handle} style={{ textAlign: "right", fontSize: 11, background: bg, cursor: cur }}>
+      {w.isFuture ? <span style={{ color: MUTED }}>—</span> : <><div style={{ fontWeight: 700 }}>{w.auto} <span style={{ fontWeight: 400, color: MUTED, fontSize: 10 }}>авто</span></div><div style={{ color: MUTED, fontSize: 10 }}>{w.leadsAd}р · {w.leadsLeadgen}лг</div></>}
+    </td>
+  );
+  if (w.isFuture) return <td onClick={handle} style={{ textAlign: "right", fontSize: 10, color: MUTED, background: bg, cursor: cur }}>план {fmtMoney(w.plan)}{w.expected > 0 && <div style={{ color: AMBER }}>очік {fmtMoney(w.expected)}</div>}</td>;
+  const p = wkPct(w.fact, w.plan), pp = prev ? wkPct(prev.fact, prev.plan) : null, col = barColor(p);
+  const trend = p != null && pp != null ? (p > pp ? "↑" : p < pp ? "↓" : "→") : "";
+  return (
+    <td onClick={handle} style={{ textAlign: "right", fontSize: 11, background: bg, minWidth: 82, cursor: cur }}>
+      <div style={{ fontWeight: 700 }}>{fmtMoney(w.fact)} {trend && <span style={{ color: trend === "↑" ? GREEN : trend === "↓" ? RED : MUTED }}>{trend}</span>}</div>
+      <div style={{ color: MUTED, fontSize: 10 }}>/ {fmtMoney(w.plan)}</div>
+      <div style={{ position: "relative", height: 6, background: "var(--border)", borderRadius: 3, margin: "2px 0" }}>
+        <div style={{ width: `${Math.min(100, p ?? 0)}%`, height: "100%", background: col, borderRadius: 3 }} />
+        {w.isCurrent && w.pace != null && <div title="темп: де мали б бути на сьогодні" style={{ position: "absolute", left: `${Math.min(100, w.pace * 100)}%`, top: -1, bottom: -1, width: 2, background: "var(--text)" }} />}
+      </div>
+      <div style={{ color: col, fontWeight: 600, fontSize: 10 }}>{p == null ? "—" : `${p >= 100 ? "✓" : "✗"} ${p}%`}</div>
+      {w.expected > 0 && <div style={{ color: AMBER, fontSize: 10 }}>очік {fmtMoney(w.expected)}</div>}
+    </td>
+  );
 }
 
-function ManagerDrill({ team, from, to, weekBlocks }: { team: KvpTeam; from: string; to: string; weekBlocks: KvpReport["weekBlocks"] }) {
+function ManagerDrill({ team, from, to, weekBlocks, mode }: { team: KvpTeam; from: string; to: string; weekBlocks: KvpReport["weekBlocks"]; mode: "money" | "activity" }) {
   const [openMgr, setOpenMgr] = useState<number | null>(null);
   const cols = (team.kind === "rnk" ? 7 : 6) + weekBlocks.length;
   return (
@@ -333,13 +389,56 @@ function ManagerDrill({ team, from, to, weekBlocks }: { team: KvpTeam; from: str
                   <td style={{ textAlign: "right" }}>{fmtFull(m.avgCheck)}</td>
                   <td style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.expected)}</td>
                   {team.kind === "rnk" && <td style={{ textAlign: "right" }}>{m.conversion == null ? "—" : `${m.conversion}%`}</td>}
-                  {weekBlocks.map((w) => <WeekCell key={w.idx} w={m.weeks?.find((x) => x.idx === w.idx)} />)}
+                  {weekBlocks.map((w) => <WeekCell key={w.idx} mode={mode} w={m.weeks?.find((x) => x.idx === w.idx)} prev={m.weeks?.find((x) => x.idx === w.idx - 1)} />)}
                 </tr>
                 {lagging && (
                   <tr><td colSpan={cols} style={{ paddingLeft: 28, background: "rgba(220,38,38,0.06)", fontSize: 12, color: RED }}>
                     ⚠️ {m.name} відстає ({m.pct}% плану). {m.successDeals < 3 ? "Мало закритих угод" : "Є угоди, але недобір суми"}{team.kind === "rnk" && m.conversion != null && m.conversion < (team.conversion ?? 0) ? ` · конверсія ${m.conversion}% нижча за команду` : ""}. → перевірити пайплайн і темп по днях.
                   </td></tr>
                 )}
+                {open && (
+                  <tr><td colSpan={cols} style={{ padding: "8px 8px 12px 40px", background: "var(--card-bg)" }}>
+                    <ManagerDetailDrill managerId={m.managerId} from={from} to={to} isRnk={team.kind === "rnk"} />
+                  </td></tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </td></tr>
+  );
+}
+
+// #6: тижнево-скоупований дрил — менеджери ЦЬОГО тижня (факт/план тижня), клік → денний дрил
+// саме цього тижня (ManagerDetailDrill з from/to = межі тижня). Не ламає «клік по команді».
+function WeekManagerDrill({ team, weekIdx, weekBlocks }: { team: KvpTeam; weekIdx: number; weekBlocks: KvpReport["weekBlocks"] }) {
+  const [openMgr, setOpenMgr] = useState<number | null>(null);
+  const wb = weekBlocks.find((x) => x.idx === weekIdx);
+  const cols = 4 + (team.kind === "rnk" ? 1 : 0);
+  if (!wb) return null;
+  const from = wb.from, to = wb.to;
+  const rows = team.managers.map((m) => {
+    const w = m.weeks?.find((x) => x.idx === weekIdx);
+    return { m, plan: w?.plan ?? 0, fact: w?.fact ?? 0, expected: w?.expected ?? 0, isFuture: w?.isFuture ?? false };
+  });
+  return (
+    <tr><td colSpan={6 + weekBlocks.length} style={{ padding: 0, background: "rgba(197,20,28,0.04)" }}>
+      <div style={{ padding: "6px 12px", fontSize: 12, color: MUTED }}>📅 Т{weekIdx} ({from.slice(8)}–{to.slice(8)}) — менеджери цього тижня <span style={{ color: MUTED }}>(клік = дні тижня)</span></div>
+      <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
+        <thead><tr><th style={{ paddingLeft: 28 }}>Менеджер</th><th style={{ textAlign: "right" }}>План тижня</th><th style={{ textAlign: "right" }}>Факт тижня</th><th style={{ minWidth: 70 }}>%</th></tr></thead>
+        <tbody>
+          {rows.map(({ m, plan, fact, expected, isFuture }) => {
+            const pct = plan > 0 ? Math.round((fact / plan) * 100) : null;
+            const open = openMgr === m.managerId;
+            return (
+              <Fragment key={m.managerId}>
+                <tr onClick={() => setOpenMgr(open ? null : m.managerId)} style={{ cursor: "pointer" }}>
+                  <td style={{ paddingLeft: 28 }}>{open ? "▾" : "▸"} {m.name}</td>
+                  <td style={{ textAlign: "right", color: MUTED }}>{fmtMoney(plan)}</td>
+                  <td style={{ textAlign: "right", fontWeight: 600 }}>{isFuture ? <span style={{ color: AMBER, fontWeight: 400 }}>очік {fmtMoney(expected)}</span> : fmtMoney(fact)}</td>
+                  <td>{isFuture ? "—" : <span style={{ color: pctColor(pct), fontWeight: 600 }}>{pct == null ? "—" : `${pct >= 100 ? "✓" : "✗"} ${pct}%`}</span>}</td>
+                </tr>
                 {open && (
                   <tr><td colSpan={cols} style={{ padding: "8px 8px 12px 40px", background: "var(--card-bg)" }}>
                     <ManagerDetailDrill managerId={m.managerId} from={from} to={to} isRnk={team.kind === "rnk"} />

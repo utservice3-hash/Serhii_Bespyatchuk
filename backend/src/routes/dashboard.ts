@@ -4284,7 +4284,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     dispatchedAllSeries, dispatchedLgSeries, transferredSeries,
     newToRepeat, activeBase, weeklyReg, nonTarget, planRes, funnel,
     receivedSeg, expectedSeg, mgrDaily,
-    expTeamThis, expTeamNext, mgrDayExp,
+    expTeamThis, expTeamNext, mgrDayExp, mgrDayDisp, mgrDayLeads,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -4301,6 +4301,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     metrics.funnelByStage(scope),
     money.receivedBySegment(mScope), metrics.expectedBySegment({ from }), money.receivedByManagerBucket(mScope, "day"),
     metrics.expectedMonthByScope({}, "team", 0), metrics.expectedMonthByScope({}, "team", 1), metrics.expectedByManagerDay({}),
+    metrics.dispatchedByManagerDay(scope), metrics.leadsByManagerDay(scope),
   ]);
   const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
   for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
@@ -4313,13 +4314,29 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const wdMonth = weekBlocks.reduce((a, w) => a + workingDaysBetween(w.from, w.to), 0);
   const mgrDayExpMap = new Map<number, { day: string; sum: number }[]>();
   for (const r of mgrDayExp) { const a = mgrDayExpMap.get(r.managerId) ?? []; a.push({ day: r.day, sum: r.sum }); mgrDayExpMap.set(r.managerId, a); }
+  // Крок Д (тижневий вигляд) #7: активність per менеджер×день (авто/ліди) для перемикача.
+  const mgrDayDispMap = new Map<number, { day: string; deals: number }[]>();
+  for (const r of mgrDayDisp) { const a = mgrDayDispMap.get(r.managerId) ?? []; a.push({ day: r.day, deals: r.deals }); mgrDayDispMap.set(r.managerId, a); }
+  const mgrDayLeadsMap = new Map<number, { day: string; ad: number; leadgen: number }[]>();
+  for (const r of mgrDayLeads) { const a = mgrDayLeadsMap.get(r.managerId) ?? []; a.push({ day: r.day, ad: r.ad, leadgen: r.leadgen }); mgrDayLeadsMap.set(r.managerId, a); }
   const kyivTodayW = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  // #2 pace поточного тижня = минулі робочі дні тижня ÷ усі робочі дні тижня.
+  const paceOf = (w: { from: string; to: string }, isCurrent: boolean): number | null => {
+    if (!isCurrent) return null;
+    const wd = workingDaysBetween(w.from, w.to);
+    const elapsedTo = kyivTodayW < w.to ? kyivTodayW : w.to;
+    return wd > 0 ? workingDaysBetween(w.from, elapsedTo) / wd : null;
+  };
   const weeksForMgr = (mid: number, monthPlan: number) => weekBlocks.map((w) => {
     const wd = workingDaysBetween(w.from, w.to);
     const plan = wdMonth > 0 ? monthPlan * wd / wdMonth : 0;
     const fact = (mgrDailyMap.get(mid) ?? []).filter((d) => d.bucket >= w.from && d.bucket <= w.to).reduce((a, d) => a + d.revenue, 0);
     const expected = (mgrDayExpMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.sum, 0);
-    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, met: fact >= plan && plan > 0, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW };
+    const auto = (mgrDayDispMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.deals, 0);
+    const leadsAd = (mgrDayLeadsMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.ad, 0);
+    const leadsLeadgen = (mgrDayLeadsMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.leadgen, 0);
+    const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
+    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
   });
   const expTeamThisMap = new Map(expTeamThis.map((r) => [r.id, r.sum]));
   const expTeamNextMap = new Map(expTeamNext.map((r) => [r.id, r.sum]));
@@ -4376,12 +4393,15 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   }
   // Крок Д owner-review #1: фінвідділ — НЕ sales-юніт → повністю прибрати зі звіту
   // (received=0, тож Σ teams.revenue не зрушиться).
+  type WeekAgg = { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null };
   const teams = [...teamMap.values()].filter((t) => !KVP_FINANCE_TEAM_IDS.has(t.teamId)).map((t) => {
     // Крок Д фінал #2: тижні команди = Σ тижнів менеджерів (per idx). met = teamFact ≥ teamPlan.
     const teamWeeks = weekBlocks.map((w) => {
-      const ms = t.managers.map((mm) => ((mm.weeks as { idx: number; plan: number; fact: number; expected: number }[]) ?? []).find((x) => x.idx === w.idx)).filter(Boolean) as { plan: number; fact: number; expected: number }[];
+      const ms = t.managers.map((mm) => ((mm.weeks as WeekAgg[]) ?? []).find((x) => x.idx === w.idx)).filter(Boolean) as WeekAgg[];
       const plan = ms.reduce((a, x) => a + x.plan, 0), fact = ms.reduce((a, x) => a + x.fact, 0), expected = ms.reduce((a, x) => a + x.expected, 0);
-      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, met: fact >= plan && plan > 0, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW };
+      const auto = ms.reduce((a, x) => a + x.auto, 0), leadsAd = ms.reduce((a, x) => a + x.leadsAd, 0), leadsLeadgen = ms.reduce((a, x) => a + x.leadsLeadgen, 0);
+      const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
+      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
     });
     return {
       teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
@@ -4392,6 +4412,19 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
     };
   }).sort((a, b) => b.revenue - a.revenue);
+
+  // Крок Д (тижневий) #5: рядок ВІДДІЛУ по тижнях = Σ команд (per idx). Гейт: Σ команд == відділ.
+  const deptWeeks = weekBlocks.map((w) => {
+    const ws = teams.map((t) => t.weeks.find((x) => x.idx === w.idx)).filter(Boolean) as WeekAgg[];
+    const s = (k: keyof WeekAgg) => ws.reduce((a, x) => a + (Number(x[k]) || 0), 0);
+    return { idx: w.idx, from: w.from, to: w.to, plan: s("plan"), fact: s("fact"), expected: s("expected"), auto: s("auto"), leadsAd: s("leadsAd"), leadsLeadgen: s("leadsLeadgen"), isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW, pace: paceOf(w, w.from <= kyivTodayW && kyivTodayW <= w.to) };
+  });
+  // #8 streak «✗ N тижнів поспіль» = trailing consecutive ЗАВЕРШЕНИХ (past) тижнів з факт<план.
+  const failStreak = (weeks: { fact: number; plan: number; isFuture: boolean; isCurrent: boolean }[]): number => {
+    const past = weeks.filter((w) => !w.isFuture && !w.isCurrent);
+    let s = 0; for (let i = past.length - 1; i >= 0; i--) { if (past[i].plan > 0 && past[i].fact < past[i].plan) s++; else break; }
+    return s;
+  };
 
   // ── ДВИГУНИ (team-based) ──
   const engineOf = (kind: string) => {
@@ -4446,13 +4479,23 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     // Крок Д фінал #3: командний сигнал несе очікування цей/наступний (планова дата).
     if (t.pct != null && t.pct < 70 && t.plan > 0) signals.push({ severity: t.pct < 50 ? "critical" : "serious", icon: "📉", title: `${t.name}: ${t.pct}% плану`, detail: `факт ${Math.round(t.revenue).toLocaleString("uk-UA")} з ${Math.round(t.plan).toLocaleString("uk-UA")}`, action: "перевірити менеджерів команди (дриллдаун нижче)", expectedThisMonth: t.expectedThisMonth, expectedNextMonth: t.expectedNextMonth });
   }
+  // #8 «✗ N тижнів поспіль» (≥3) — системний провал → особистий розбір. Команди й менеджери.
+  for (const t of teams.filter((x) => x.kind === "rpk" || x.kind === "rnk")) {
+    const ts = failStreak(t.weeks);
+    if (ts >= 3) signals.push({ severity: "critical", icon: "🔴", title: `${t.name}: ✗ ${ts} тижні поспіль`, detail: `${ts} завершених тижні факт < план поспіль`, action: "системний провал команди → особистий розбір з тімлідом" });
+    for (const mm of t.managers as { name: string; weeks: { fact: number; plan: number; isFuture: boolean; isCurrent: boolean }[] }[]) {
+      const ms = failStreak(mm.weeks);
+      if (ms >= 3) signals.push({ severity: "critical", icon: "🔴", title: `${mm.name}: ✗ ${ms} тижні поспіль`, detail: `${t.name} · ${ms} завершених тижні факт < план поспіль`, action: "системний провал → особистий розбір" });
+    }
+  }
   if (engines.ad.mature === false && sc.isCurrent) signals.push({ severity: "info", icon: "⏳", title: "Конверсія реклами дозріває", detail: `когорта <90 днів (${engines.ad.entered} лідів)`, action: "оцінювати за зрілий місяць" });
   if (expectedZone.total.sum > 0) signals.push({ severity: "warning", icon: "💰", title: `В очікуванні ${Math.round(expectedZone.total.sum).toLocaleString("uk-UA")} ₴`, detail: `${expectedZone.total.deals} угод у зоні виставлено→оплата`, action: "тиснути на дебіторку/оплати" });
   signals.sort((a, b) => ({ critical: 0, serious: 1, warning: 2, info: 3 } as Record<string, number>)[a.severity] - ({ critical: 0, serious: 1, warning: 2, info: 3 } as Record<string, number>)[b.severity]);
 
   res.json({
     scope: { from, to, prevFrom: sc.prevFrom, prevTo: sc.prevTo, preset: String(req.query.preset ?? "month"), label: sc.label, isCurrent: sc.isCurrent },
-    weekBlocks: weekBlocks.map((w) => ({ idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW })),
+    weekBlocks: weekBlocks.map((w) => ({ idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW, pace: paceOf(w, w.from <= kyivTodayW && kyivTodayW <= w.to) })),
+    deptWeeks,
     strategicPlan: strategic,   // 🔒 read-only
     verdict, signals, engines, teams,
     retention: {
