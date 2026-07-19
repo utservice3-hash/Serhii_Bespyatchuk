@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');fs.readdirSync('src/db').filter(f=>f.endsWith('.sql')).forEach(f=>fs.copyFileSync('src/db/'+f,'dist/db/'+f))\"",
     "test": "node --test dist/**/*.test.js",
     "reconcile": "node dist/scripts/reconcile.js",
     "start": "node dist/index.js",

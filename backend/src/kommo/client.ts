@@ -196,6 +196,9 @@ const FIELD_INCOME_1 = 2097627;
 const FIELD_UNLOAD_DATE = 463253; // «Дата выгрузки (Дата акта)»
 const FIELD_LOAD_DATE = 473637; // «Дата загрузки» — операційне поле, НЕ якір
 const FIELD_PLANNED_PAYMENT = 2097273; // «Запланована дата оплати» (Р2 — сума очікування)
+// «Причина отказа» (select) — причина відмови ліда. Нецільові (owner) = ад ∩
+// {«Дубль» enum 6340789, «Перевізник» enum 6343043}. Зберігаємо ТЕКСТ значення (label).
+const FIELD_REJECT_REASON = 2097265;
 // Web/гео-мітки реклами (КРОК 6 — конверсія реклами по каналах). field_id звірені
 // з docs/CRM_SCHEMA.md §трекінг. TRAF_SRC/TRAF_TYPE — text-поля Kommo (не
 // tracking_data), заповнюються і для органіки; TRAF_TYPE ∈ cpc/organic/referral/none.
@@ -243,6 +246,11 @@ export function extractIncomeAmount(deal: KommoDeal): number | null {
 /** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */
 export function extractPaymentType(deal: KommoDeal): string | null {
   return fieldText(deal, FIELD_PAYMENT_TYPE);
+}
+
+/** «Причина отказа» (поле 2097265) — текст значення (напр. «Дубль», «Перевізник»). */
+export function extractRejectReason(deal: KommoDeal): string | null {
+  return fieldText(deal, FIELD_REJECT_REASON);
 }
 
 /**

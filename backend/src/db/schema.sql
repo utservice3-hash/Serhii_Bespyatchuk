@@ -99,6 +99,10 @@ CREATE INDEX IF NOT EXISTS idx_deals_unload_at ON deals(unload_at);
 -- для суми очікування в грошовій зоні (виставлено рахунок → очікуємо оплату).
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS planned_payment_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_deals_planned_payment_at ON deals(planned_payment_at);
+-- «Причина отказа» (Kommo select 2097265) — текст значення. Нецільові (owner) =
+-- реклама ∩ reject_reason ∈ {«Дубль», «Перевізник»}. Populate у syncKommo щосинку.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+CREATE INDEX IF NOT EXISTS idx_deals_reject_reason ON deals(reject_reason);
 
 ALTER TABLE managers ADD COLUMN IF NOT EXISTS is_team_lead BOOLEAN NOT NULL DEFAULT false;
 
