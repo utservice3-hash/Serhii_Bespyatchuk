@@ -96,3 +96,37 @@ export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
 
   return { rows, orphanPlanByTeam };
 }
+
+export interface PlanPerDay {
+  monthPlan: number;      // місячний план виручки у scope (Σ planned_value, payment_amount)
+  workingDays: number;    // робочі дні (Пн–Пт) у місяці
+  perWorkingDay: number;  // monthPlan ÷ workingDays (округлено)
+}
+
+/**
+ * BE-5 «План на день» — місячний план (`plans`, metric='payment_amount') у scope,
+ * поділений на робочі дні місяця. Тижневий план лишається у `money.weeklyBreakdown`
+ * (розкидає залишок на роб. дні незавершених тижнів); це рівний денний темп для дисплею.
+ * `month` = 'YYYY-MM-01'. Scope-aware (менеджер / команда / відділ).
+ */
+export async function planPerWorkingDay(s: { managerId?: number | null; teamId?: number | null }, month: string): Promise<PlanPerDay> {
+  const params: unknown[] = [month];
+  const conds = ["p.metric='payment_amount'", "date_trunc('month',p.plan_date) = $1::date"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`p.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ s: string }>(
+    `SELECT COALESCE(SUM(p.planned_value),0) s
+       FROM plans p JOIN managers m ON m.id = p.manager_id
+      WHERE ${conds.join(" AND ")}`,
+    params
+  );
+  const monthPlan = Math.round(Number(r.rows[0]?.s ?? 0));
+  const [y, mo] = month.split("-").map(Number);
+  const daysInMonth = new Date(y, mo, 0).getDate();
+  let workingDays = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = new Date(y, mo - 1, d).getDay();
+    if (dow !== 0 && dow !== 6) workingDays++;
+  }
+  return { monthPlan, workingDays, perWorkingDay: workingDays > 0 ? Math.round(monthPlan / workingDays) : 0 };
+}

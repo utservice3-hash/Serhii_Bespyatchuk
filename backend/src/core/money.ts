@@ -130,15 +130,22 @@ export const expectedMoney = (s: MoneyScope) => agg("expected", s);
 export const expectedByTeam = (s: MoneyScope) => aggByTeam("expected", s);
 export const expectedByMgr = (s: MoneyScope) => aggByMgr("expected", s);
 
-export async function receivedByBucket(s: MoneyScope, granularity: "day" | "week" | "month"): Promise<BucketRow[]> {
+// Спільне ядро бакетування (день/тиждень/місяць) за анкером метрики. Дзеркало для
+// received/success — той самий scope-aware SQL, лише kind міняється.
+async function bucketAgg(kind: Kind, s: MoneyScope, granularity: "day" | "week" | "month"): Promise<BucketRow[]> {
   const gran = granularity === "day" || granularity === "month" ? granularity : "week";
   const rows = await query<{ bucket: string; revenue: string; deals: string }>(
-    "received", s,
+    kind, s,
     `to_char(date_trunc('${gran}', (src.anchor_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
     "GROUP BY 1 ORDER BY 1"
   );
   return rows.map((x) => ({ bucket: x.bucket, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
+// «Отримані кошти» по бакету (received = success ⊎ paidOnly; анкер stage-entry / closed_at).
+export const receivedByBucket = (s: MoneyScope, granularity: "day" | "week" | "month") => bucketAgg("received", s, granularity);
+// BE-2 «Авто відправлено» по бакету — success (ЗАРАЗ 142), анкер `closed_at_kommo`. Дзеркало
+// receivedByBucket з kind='success'. Σ бакетів = successMoney(той самий scope/період).
+export const successByBucket = (s: MoneyScope, granularity: "day" | "week" | "month") => bucketAgg("success", s, granularity);
 
 /** received по (менеджер × тиждень) за місяць — для тижневої сітки план/факт. */
 export async function receivedByManagerWeek(managerIds: number[], monthStart: string): Promise<MgrWeekRow[]> {

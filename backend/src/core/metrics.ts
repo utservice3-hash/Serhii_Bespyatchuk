@@ -240,19 +240,29 @@ export async function funnelSegmentRows(s: MetricScope): Promise<FunnelSegmentRo
 
 export interface FunnelWeekRow {
   stage: string;
-  bucket: string; // YYYY-MM-DD (початок тижня або день)
+  bucket: string; // YYYY-MM-DD (день / понеділок тижня / 1-е місяця)
   deals: number;
+  channel?: "ad" | "leadgen" | "other"; // лише коли byChannel=true (BE-1)
 }
+
+// Спільний вираз бакета за подією стадії (день / тиждень-Пн / місяць-1).
+const eventBucket = (granularity: "day" | "week" | "month") =>
+  granularity === "day"
+    ? `(dse.changed_at ${KYIV})::date`
+    : `date_trunc('${granularity === "month" ? "month" : "week"}', (dse.changed_at ${KYIV}))::date`;
 
 /**
  * `/funnel-weekly` FACT — пропускна здатність: скільки угод УВІЙШЛО в кожну стадію
- * у кожному тижні/дні (`deal_stage_events`, анкер `changed_at`, DISTINCT по угоді).
+ * у кожному тижні/дні/місяці (`deal_stage_events`, анкер `changed_at`, DISTINCT по угоді).
  * На відміну від funnelCohort (когорта створення), це потік входів у стадію.
+ *
+ * BE-1: `byChannel=true` → додає розріз `deals.lead_channel` ('ad'/'leadgen'/'other',
+ * last-touch reclassifyAdChannel). Для «ліди взято» = фільтр stage='lead_taken'. За
+ * замовчуванням OFF → форма й числа наявних викликів (/funnel-weekly матриця) незмінні.
+ * Σ каналів per (stage,bucket) = байт-у-байт значення byChannel=false (угода має 1 канал).
  */
-export async function funnelWeekly(s: MetricScope, granularity: "day" | "week" = "week"): Promise<FunnelWeekRow[]> {
-  const bucket = granularity === "day"
-    ? `(dse.changed_at ${KYIV})::date`
-    : `date_trunc('week', (dse.changed_at ${KYIV}))::date`;
+export async function funnelWeekly(s: MetricScope, granularity: "day" | "week" | "month" = "week", byChannel = false): Promise<FunnelWeekRow[]> {
+  const bucket = eventBucket(granularity);
   const params: unknown[] = [FC_PIPELINES];
   const conds = ["d.pipeline_id = ANY($1)", "psm.funnel_stage IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
@@ -260,26 +270,32 @@ export async function funnelWeekly(s: MetricScope, granularity: "day" | "week" =
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  const r = await pool.query<{ stage: string; bucket: string; deals: string }>(
+  const chanSel = byChannel ? `, COALESCE(d.lead_channel, 'other') AS channel` : "";
+  const chanGrp = byChannel ? `, COALESCE(d.lead_channel, 'other')` : "";
+  const r = await pool.query<{ stage: string; bucket: string; deals: string; channel?: string }>(
     `SELECT psm.funnel_stage AS stage, to_char(${bucket}, 'YYYY-MM-DD') AS bucket,
-            COUNT(DISTINCT dse.kommo_id) AS deals
+            COUNT(DISTINCT dse.kommo_id) AS deals${chanSel}
      FROM deal_stage_events dse
      JOIN deals d ON d.kommo_id = dse.kommo_id
      JOIN managers m ON m.id = d.manager_id ${activeJoin}
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
      WHERE ${conds.join(" AND ")}
-     GROUP BY psm.funnel_stage, bucket`,
+     GROUP BY psm.funnel_stage, bucket${chanGrp}`,
     params
   );
-  return r.rows.map((x) => ({ stage: x.stage, bucket: x.bucket, deals: Number(x.deals) }));
+  return r.rows.map((x) => ({
+    stage: x.stage, bucket: x.bucket, deals: Number(x.deals),
+    ...(byChannel ? { channel: (x.channel as "ad" | "leadgen" | "other") ?? "other" } : {}),
+  }));
 }
 
 export interface FunnelWeekMgrRow {
   managerId: number;
   name: string;
   stage: string;
-  bucket: string; // YYYY-MM-DD (понеділок тижня або день, київський)
+  bucket: string; // YYYY-MM-DD (день / понеділок тижня / 1-е місяця, київський)
   deals: number;
+  channel?: "ad" | "leadgen" | "other"; // лише коли byChannel=true (BE-1)
 }
 
 /**
@@ -290,10 +306,8 @@ export interface FunnelWeekMgrRow {
  * старому інлайн-запиту роуту (той самий SQL, лише винесений) — форма (тижні, план,
  * гроші) лишається в роуті. Лише активні менеджери.
  */
-export async function funnelWeeklyByManager(s: MetricScope, granularity: "day" | "week" = "week"): Promise<FunnelWeekMgrRow[]> {
-  const bucket = granularity === "day"
-    ? `(dse.changed_at ${KYIV})::date`
-    : `date_trunc('week', (dse.changed_at ${KYIV}))::date`;
+export async function funnelWeeklyByManager(s: MetricScope, granularity: "day" | "week" | "month" = "week", byChannel = false): Promise<FunnelWeekMgrRow[]> {
+  const bucket = eventBucket(granularity);
   const params: unknown[] = [FC_PIPELINES];
   const conds = ["d.pipeline_id = ANY($1)", "psm.funnel_stage IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
@@ -301,20 +315,76 @@ export async function funnelWeeklyByManager(s: MetricScope, granularity: "day" |
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  const r = await pool.query<{ manager_id: number; name: string; stage: string; bucket: string; deals: string }>(
+  const chanSel = byChannel ? `, COALESCE(d.lead_channel, 'other') AS channel` : "";
+  const chanGrp = byChannel ? `, COALESCE(d.lead_channel, 'other')` : "";
+  const r = await pool.query<{ manager_id: number; name: string; stage: string; bucket: string; deals: string; channel?: string }>(
     `SELECT d.manager_id, m.name, psm.funnel_stage AS stage, to_char(${bucket}, 'YYYY-MM-DD') AS bucket,
-            COUNT(DISTINCT dse.kommo_id) AS deals
+            COUNT(DISTINCT dse.kommo_id) AS deals${chanSel}
      FROM deal_stage_events dse
      JOIN deals d ON d.kommo_id = dse.kommo_id
      JOIN managers m ON m.id = d.manager_id ${activeJoin}
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = dse.status_id
      WHERE ${conds.join(" AND ")}
-     GROUP BY d.manager_id, m.name, psm.funnel_stage, bucket`,
+     GROUP BY d.manager_id, m.name, psm.funnel_stage, bucket${chanGrp}`,
     params
   );
   return r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, stage: x.stage, bucket: x.bucket, deals: Number(x.deals),
+    ...(byChannel ? { channel: (x.channel as "ad" | "leadgen" | "other") ?? "other" } : {}),
   }));
+}
+
+export interface CreatedBucketRow { bucket: string; deals: number }
+
+/**
+ * BE-3 «Створено угод» по бакету — угоди повного циклу, СТВОРЕНІ в періоді (анкер
+ * `created_at_kommo`, по-київськи). Scope-aware. Σ бакетів = COUNT створених у періоді.
+ */
+export async function createdByBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<CreatedBucketRow[]> {
+  const col = `(d.created_at_kommo ${KYIV})`;
+  const bucket = granularity === "day" ? `${col}::date` : `date_trunc('${granularity === "month" ? "month" : "week"}', ${col})::date`;
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.created_at_kommo IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`${col}::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`${col}::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const activeJoin = s.activeOnly ? "AND m.is_active" : "";
+  const r = await pool.query<{ bucket: string; deals: string }>(
+    `SELECT to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS deals
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id ${activeJoin}
+      WHERE ${conds.join(" AND ")}
+      GROUP BY bucket ORDER BY bucket`,
+    params
+  );
+  return r.rows.map((x) => ({ bucket: x.bucket, deals: Number(x.deals) }));
+}
+
+export interface ExpectedBucketRow { bucket: string; deals: number; sum: number }
+
+/**
+ * BE-4 «Очікування» по тижню/дню — грошова зона EXPECT_ZONE (знімок «зараз»),
+ * бакетована за `planned_payment_at` (день / понеділок тижня). Для «очікування тижня».
+ * Місячні this/next лишаються в `expectedPaymentsByPlanned` (не дублюємо). SnapshotScope
+ * (без from/to — це знімок зони). noDate (без планової дати) сюди НЕ входить. Σ бакетів
+ * = сума зони з непорожньою планової датою (= total − noDate у тому самому scope).
+ */
+export async function expectedByPlannedBucket(s: SnapshotScope, granularity: "day" | "week"): Promise<ExpectedBucketRow[]> {
+  const col = `(d.planned_payment_at ${KYIV})`;
+  const bucket = granularity === "day" ? `${col}::date` : `date_trunc('week', ${col})::date`;
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL"];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const activeJoin = s.activeOnly ? "AND m.is_active" : "";
+  const r = await pool.query<{ bucket: string; deals: string; sum: string }>(
+    `SELECT to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS deals, COALESCE(SUM(d.price),0) AS sum
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id ${activeJoin}
+      WHERE ${conds.join(" AND ")}
+      GROUP BY bucket ORDER BY bucket`,
+    params
+  );
+  return r.rows.map((x) => ({ bucket: x.bucket, deals: Number(x.deals), sum: Number(x.sum) }));
 }
 
 // ───────────────────────── ЛІДИ (ads_accepted) ─────────────────────────
