@@ -818,6 +818,58 @@ export async function lostDeals(s: MetricScope): Promise<{ count: number; sum: n
   return { count: Number(r.rows[0].c), sum: Math.round(Number(r.rows[0].s)) };
 }
 
+// ── Блок B (логістика) — часові/дебіторські метрики ──
+export interface DaysStat { avg: number | null; median: number | null; n: number }
+// Транзитний час = днів load_at → unload_at (дата акта) для FC-угод з обома датами,
+// розвантажених у періоді. ⓘ unload_at = ДАТА АКТА (бухг.), не фізичне розвантаження.
+export async function transitStats(s: MetricScope): Promise<DaysStat> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL", "d.unload_at IS NOT NULL", "d.unload_at >= d.load_at"];
+  if (s.from) { params.push(s.from); conds.push(`(d.unload_at ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.unload_at ${KYIV})::date <= $${params.length}`); }
+  const r = await pool.query<{ a: string | null; med: string | null; n: string }>(
+    `SELECT AVG(EXTRACT(EPOCH FROM (d.unload_at - d.load_at))/86400.0) a,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (d.unload_at - d.load_at))/86400.0) med,
+            COUNT(*) n FROM deals d WHERE ${conds.join(" AND ")}`, params);
+  const x = r.rows[0];
+  return { avg: x.a == null ? null : Math.round(Number(x.a) * 10) / 10, median: x.med == null ? null : Math.round(Number(x.med) * 10) / 10, n: Number(x.n) };
+}
+
+// DSO-проксі = днів unload_at (дата акта) → closed_at (оплата/142), для угод, оплачених
+// у періоді. ⓘ реальної банк-дати оплати в CRM нема → проксі по даті закриття.
+export async function dsoProxyDays(s: MetricScope): Promise<DaysStat> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = 142", "d.unload_at IS NOT NULL", "d.closed_at_kommo IS NOT NULL", "d.closed_at_kommo >= d.unload_at"];
+  if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
+  const r = await pool.query<{ a: string | null; med: string | null; n: string }>(
+    `SELECT AVG(EXTRACT(EPOCH FROM (d.closed_at_kommo - d.unload_at))/86400.0) a,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (d.closed_at_kommo - d.unload_at))/86400.0) med,
+            COUNT(*) n FROM deals d WHERE ${conds.join(" AND ")}`, params);
+  const x = r.rows[0];
+  return { avg: x.a == null ? null : Math.round(Number(x.a) * 10) / 10, median: x.med == null ? null : Math.round(Number(x.med) * 10) / 10, n: Number(x.n) };
+}
+
+// Aging простроченої дебіторки (знімок «зараз»): неоплачені FC-угоди (не 142/143, не
+// етап 9) з planned_payment_at у минулому, розкидані по кошиках прострочки. count+Σ price.
+export interface AgingBucket { bucket: string; count: number; sum: number }
+export async function receivablesAging(): Promise<AgingBucket[]> {
+  const r = await pool.query<{ bucket: string; c: string; s: string }>(
+    `WITH od AS (
+       SELECT d.price, ((now() ${KYIV})::date - (d.planned_payment_at ${KYIV})::date) AS days
+         FROM deals d
+        WHERE d.pipeline_id = ANY($1) AND d.planned_payment_at IS NOT NULL
+          AND (d.planned_payment_at ${KYIV})::date < (now() ${KYIV})::date
+          AND d.status_id NOT IN (142, 143) AND NOT (d.status_id = ANY($2))
+     )
+     SELECT CASE WHEN days <= 7 THEN '1-7' WHEN days <= 30 THEN '8-30' ELSE '30+' END AS bucket,
+            COUNT(*) c, COALESCE(SUM(price),0) s
+       FROM od GROUP BY 1`, [FC_PIPELINES, [69716460, 60412544]]);
+  const order = ["1-7", "8-30", "30+"];
+  const map = new Map(r.rows.map((x) => [x.bucket, { bucket: x.bucket, count: Number(x.c), sum: Math.round(Number(x.s)) }]));
+  return order.map((b) => map.get(b) ?? { bucket: b, count: 0, sum: 0 });
+}
+
 /**
  * «В очікуванні» команди/менеджера за плановою датою в місяці зі ЗСУВОМ `monthOffset`
  * (0 = поточний, 1 = наступний) — для сигналів КВП «цей/наступний» (Крок Д фінал #3).

@@ -4286,6 +4286,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     receivedSeg, expectedSeg, mgrDaily,
     expTeamThis, expTeamNext, mgrDayExp, mgrDayDisp, mgrDayLeads,
     overdue, avgCycle, lost,
+    dirSplit, chanSplit, clientRev, transit, dso, aging,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -4304,6 +4305,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     metrics.expectedMonthByScope({}, "team", 0), metrics.expectedMonthByScope({}, "team", 1), metrics.expectedByManagerDay({}),
     metrics.dispatchedByManagerDay(scope), metrics.leadsByManagerDay(scope),
     metrics.overduePayments(scope), metrics.avgDealCycleDays(scope), metrics.lostDeals(scope),
+    money.receivedByRequestType(mScope), money.receivedBySalesChannel(mScope), money.receivedByClientKey(mScope),
+    metrics.transitStats(scope), metrics.dsoProxyDays(scope), metrics.receivablesAging(),
   ]);
   const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
   for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
@@ -4546,6 +4549,37 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     segments: { totals: newRepeatTot, byManager: newRepeatMgr, byTeam: newRepeatTeam },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),
+    // Блок B — ЛОГІСТИКА. direction/salesChannel — розклад received (Σ == received).
+    //  concentration = топ-N клієнтів % received; repeatRides = клієнти по к-ті рейсів у
+    //  періоді; transit/dso — часові проксі; aging — прострочка по кошиках; margin LOCKED
+    //  (собівартість ~0% — поле є, не заповнюється). fillRates — % заповнення нових полів.
+    logistics: (() => {
+      const fill = (rows: { key: string; deals: number }[]) => {
+        const tot = rows.reduce((a, r) => a + r.deals, 0);
+        const filled = rows.filter((r) => r.key !== "—").reduce((a, r) => a + r.deals, 0);
+        return tot > 0 ? Math.round((filled / tot) * 1000) / 10 : 0;
+      };
+      const named = clientRev.filter((c) => c.key !== "—").sort((a, b) => b.revenue - a.revenue);
+      const totalRev = clientRev.reduce((a, c) => a + c.revenue, 0);
+      const topN = 5;
+      const topRev = named.slice(0, topN).reduce((a, c) => a + c.revenue, 0);
+      const bucketRides = (lo: number, hi: number) => {
+        const cs = named.filter((c) => c.deals >= lo && (hi === Infinity || c.deals <= hi));
+        return { clients: cs.length, revenue: Math.round(cs.reduce((a, c) => a + c.revenue, 0)) };
+      };
+      return {
+        direction: dirSplit, salesChannel: chanSplit,
+        transit, dso, aging,
+        concentration: { topN, topRevenue: Math.round(topRev), totalRevenue: Math.round(totalRev), pct: totalRev > 0 ? Math.round((topRev / totalRev) * 1000) / 10 : null, clients: named.length },
+        repeatRides: [
+          { bucket: "1", ...bucketRides(1, 1) },
+          { bucket: "2-3", ...bucketRides(2, 3) },
+          { bucket: "4+", ...bucketRides(4, Infinity) },
+        ],
+        fillRates: { requestType: fill(dirSplit), salesChannel: fill(chanSplit) },
+        margin: null,   // LOCKED — собівартість не заповнюється
+      };
+    })(),
   });
 });
 

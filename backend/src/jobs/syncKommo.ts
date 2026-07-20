@@ -8,6 +8,8 @@ import {
   extractPlannedPaymentDate,
   extractIsMinus,
   extractRejectReason,
+  extractRequestType,
+  extractSalesChannel,
   extractWebTags,
   fetchAllDeals,
   fetchContactsByIds,
@@ -421,8 +423,9 @@ export async function upsertDeal(
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
          client_name, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
-         unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus, reject_reason
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+         unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus, reject_reason,
+         request_type, sales_channel
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -448,7 +451,9 @@ export async function upsertDeal(
          utm_medium = EXCLUDED.utm_medium,
          planned_payment_at = EXCLUDED.planned_payment_at,
          is_minus = EXCLUDED.is_minus,
-         reject_reason = EXCLUDED.reject_reason`,
+         reject_reason = EXCLUDED.reject_reason,
+         request_type = EXCLUDED.request_type,
+         sales_channel = EXCLUDED.sales_channel`,
       [
         deal.id,
         deal.name,
@@ -477,6 +482,8 @@ export async function upsertDeal(
         extractPlannedPaymentDate(deal),
         isMinus,
         rejectReason,
+        extractRequestType(deal),
+        extractSalesChannel(deal),
       ]
     );
 }

@@ -472,6 +472,17 @@ export interface KvpReport {
     leadgen: { transferred: number; transferredWon: number; dispatched: number; dispatchedRevenue: number; revenue: number };
   };
   teams: KvpTeam[];
+  logistics: {
+    direction: { key: string; revenue: number; deals: number }[];
+    salesChannel: { key: string; revenue: number; deals: number }[];
+    transit: { avg: number | null; median: number | null; n: number };
+    dso: { avg: number | null; median: number | null; n: number };
+    aging: { bucket: string; count: number; sum: number }[];
+    concentration: { topN: number; topRevenue: number; totalRevenue: number; pct: number | null; clients: number };
+    repeatRides: { bucket: string; clients: number; revenue: number }[];
+    fillRates: { requestType: number; salesChannel: number };
+    margin: null;
+  };
   retention: {
     newToRepeat: { ym: string; cohort: number; became: number; pct: number | null; mature: boolean }[];
     activeBase: { ym: string; activeClients: number }[];

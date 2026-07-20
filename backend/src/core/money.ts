@@ -122,6 +122,34 @@ async function aggByMgr(kind: Kind, s: MoneyScope): Promise<MgrRow[]> {
 export const receivedMoney = (s: MoneyScope) => agg("received", s);
 export const receivedByTeam = (s: MoneyScope) => aggByTeam("received", s);
 export const receivedByMgr = (s: MoneyScope) => aggByMgr("received", s);
+
+// Блок B — «отримані кошти» РОЗКЛАДЕНІ по атрибуту угоди (напрямок / канал продажу /
+// клієнт). ТА САМА каса, що receivedMoney (received src = success ⊎ paidOnly, анкер+дедуп),
+// лише GROUP BY атрибут. Σ рядків == receivedMoney (COALESCE «—» ловить NULL → повний
+// розподіл). НЕ новий money-SQL — reuse sourceSql (ядро одне).
+export interface DimRow { key: string; revenue: number; deals: number }
+async function receivedByDealAttr(s: MoneyScope, expr: string): Promise<DimRow[]> {
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const rows = (await pool.query<{ k: string; revenue: string; deals: string }>(
+    `SELECT ${expr} AS k, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
+       FROM (${src}) src
+       JOIN managers m ON m.id = src.manager_id
+       JOIN deals dd ON dd.kommo_id = src.kommo_id
+      ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
+      GROUP BY 1 ORDER BY revenue DESC`, p)).rows;
+  return rows.map((x) => ({ key: x.k, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+export const receivedByRequestType = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(dd.request_type, '—')");
+export const receivedBySalesChannel = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(dd.sales_channel, '—')");
+// По клієнту (для концентрації + розподілу повторних рейсів). Без client_key → «—».
+export const receivedByClientKey = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(dd.client_key, '—')");
+
 export interface SegmentAgg { newSeg: MoneyAgg; repeatSeg: MoneyAgg; unattributed: MoneyAgg }
 
 /**

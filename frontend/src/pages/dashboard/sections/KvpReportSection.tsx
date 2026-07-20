@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
@@ -45,6 +45,51 @@ const HINT: Record<string, string> = {
 
 const teamKindLabel: Record<string, string> = { rpk: "РПК · повний цикл", rnk: "РНК · реклама", leadgen: "Лідогенерація" };
 
+// Блок B — секція «Логістика». Чесні мітки: ✓ пряме джерело · ~ проксі/наближення · ✗ нема даних.
+function LogisticsSection({ rep }: { rep: KvpReport }) {
+  const L = rep.logistics;
+  const days = (d: { avg: number | null; median: number | null; n: number }) => d.n === 0 ? "—" : `сер ${d.avg} · медіана ${d.median} дн (${d.n})`;
+  const mark = (m: "ok" | "proxy" | "none", text: string) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: m === "ok" ? GREEN : m === "proxy" ? AMBER : RED }}>
+      {m === "ok" ? "✓" : m === "proxy" ? "~" : "✗"}<InfoHint text={text} />
+    </span>
+  );
+  const splitTable = (rows: { key: string; revenue: number; deals: number }[]) => (
+    <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
+      <thead><tr><th>Значення</th><th style={{ textAlign: "right" }}>Виручка</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Сер. чек</th></tr></thead>
+      <tbody>{rows.map((r) => (
+        <tr key={r.key}><td style={clip}>{r.key}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(r.revenue)}</td><td style={{ textAlign: "right" }}>{fmtNum(r.deals)}</td><td style={{ textAlign: "right" }}>{r.deals > 0 ? fmtFull(Math.round(r.revenue / r.deals)) : "—"}</td></tr>
+      ))}</tbody>
+    </table>
+  );
+  const card = (title: string, badge: ReactNode, body: ReactNode) => (
+    <div style={{ padding: 12, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}><b style={{ fontSize: 13 }}>{title}</b>{badge}</div>
+      {body}
+    </div>
+  );
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
+      {card(`🧭 Напрямок (Тип запиту)`, mark(L.fillRates.requestType >= 90 ? "ok" : "proxy", `Fill-rate поля «Тип запиту»: ${L.fillRates.requestType}%. Виручка розкладена з ядра (Σ == отримано).`), splitTable(L.direction))}
+      {card(`🏷 Канал продажу`, mark(L.fillRates.salesChannel >= 90 ? "ok" : "proxy", `Fill-rate поля «Канал продажу»: ${L.fillRates.salesChannel}%. Σ == отримано.`), splitTable(L.salesChannel))}
+      {card("⏱ Транзитний час", mark("proxy", "load_at → unload_at. ⓘ unload = ДАТА АКТА (бухгалтерська), не фізичне розвантаження → трохи завищує."),
+        <div style={{ fontSize: 14, fontWeight: 700 }}>{days(L.transit)}</div>)}
+      {card("💳 DSO (проксі)", mark("proxy", "unload (дата акта) → closed (оплата/142). ⓘ Реальної банк-дати оплати в CRM НЕМА → проксі по даті закриття."),
+        <div style={{ fontSize: 14, fontWeight: 700 }}>{days(L.dso)}</div>)}
+      {card("🧮 Концентрація клієнтів", mark("ok", `Топ-${L.concentration.topN} клієнтів як % отриманої виручки (${L.concentration.clients} клієнтів з іменем).`),
+        <div><div style={{ fontSize: 20, fontWeight: 700, color: (L.concentration.pct ?? 0) > 50 ? AMBER : "var(--text)" }}>{L.concentration.pct == null ? "—" : `${L.concentration.pct}%`}</div><div style={{ fontSize: 11, color: MUTED }}>топ-{L.concentration.topN} {fmtMoney(L.concentration.topRevenue)} з {fmtMoney(L.concentration.totalRevenue)}</div></div>)}
+      {card("🔁 Повторні рейси", mark("ok", "Клієнти з оплатою в періоді, згруповані за к-тю оплачених рейсів."),
+        <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Рейсів</th><th style={{ textAlign: "right" }}>Клієнтів</th><th style={{ textAlign: "right" }}>Виручка</th></tr></thead>
+          <tbody>{L.repeatRides.map((r) => <tr key={r.bucket}><td>{r.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(r.clients)}</td><td style={{ textAlign: "right" }}>{fmtMoney(r.revenue)}</td></tr>)}</tbody></table>)}
+      {card("📅 Прострочена дебіторка (aging)", mark("ok", "Неоплачені угоди з простроченою планова датою оплати, по кошиках днів прострочки."),
+        <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Днів</th><th style={{ textAlign: "right" }}>Угод</th><th style={{ textAlign: "right" }}>Сума</th></tr></thead>
+          <tbody>{L.aging.map((a) => <tr key={a.bucket}><td>{a.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(a.count)}</td><td style={{ textAlign: "right" }}>{fmtMoney(a.sum)}</td></tr>)}</tbody></table>)}
+      {card("💰 Маржа на авто", mark("none", "🔒 Заблоковано: собівартість (Видаток/Оплата перевізнику) заповнена ~0%. Поле в Kommo Є — потрібне заповнення менеджерами, не нове поле."),
+        <div style={{ fontSize: 12, color: MUTED }}>Недоступно — заповніть собівартість рейсу в CRM.</div>)}
+    </div>
+  );
+}
+
 /** Горизонтальний div-бар (magnitude), 4px заокруглені кінці, статус-колір по %. */
 function Bar({ pct, color, h = 8 }: { pct: number; color?: string; h?: number }) {
   const w = Math.max(0, Math.min(100, pct));
@@ -76,6 +121,7 @@ export function KvpReportSection() {
   const [plans, setPlans] = useState<KvpPlans>({});
   const [openTeam, setOpenTeam] = useState<number | null>(null);
   const [showFull, setShowFull] = useState(false);
+  const [showLogi, setShowLogi] = useState(false);
   const [weekMode, setWeekMode] = useState<"money" | "activity">("money");
   // #6: тижнево-скоупований дрил — клік по клітинці тижня команди → менеджери ЦЬОГО тижня.
   const [openWeekDrill, setOpenWeekDrill] = useState<{ teamId: number; weekIdx: number } | null>(null);
@@ -312,6 +358,12 @@ export function KvpReportSection() {
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ cursor: "pointer" }} onClick={() => setShowFull(!showFull)}>{showFull ? "▾" : "▸"} 📋 Повна таблиця</h2>
             {showFull && <FullTable rep={rep} plans={plans} onSave={(k, val) => { setPlans((p) => { const n = { ...p }; if (val == null) delete n[k]; else n[k] = val; return n; }); saveKvpPlan(monthSel, { [k]: val }).catch(() => {}); }} />}
+          </div>
+
+          {/* ── 🚚 ЛОГІСТИКА (під катом) ── */}
+          <div className="chart-card" style={{ marginBottom: 16 }}>
+            <h2 className="chart-title" style={{ cursor: "pointer" }} onClick={() => setShowLogi(!showLogi)}>{showLogi ? "▾" : "▸"} 🚚 Логістика</h2>
+            {showLogi && <LogisticsSection rep={rep} />}
           </div>
         </>
       )}

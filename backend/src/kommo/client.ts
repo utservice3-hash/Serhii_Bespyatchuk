@@ -210,6 +210,10 @@ const FIELD_TRAF_TYPE = 2098329; // TRAF_TYPE (text: cpc/organic/referral/none)
 // «Мінусова угода» (select): «Мінус» = сторно/повернення. Kommo-бюджет завжди додатний;
 // саме ЦЕ поле (не слово в назві) визначає знак: price = is_minus ? -abs(budget) : +abs.
 const FIELD_MINUS = 2098529;
+// Блок B (логістика). «Тип запиту» (напрямок): По Україні / Міжнародні / Домашній переїзд.
+const FIELD_REQUEST_TYPE = 2097965;
+// «Канал продажу»: Нові клієнти / Постійні клієнти / Тендерний напрямок.
+const FIELD_SALES_CHANNEL = 2099549;
 
 function fieldDate(deal: KommoDeal, fieldId: number): Date | null {
   const raw = fieldText(deal, fieldId);
@@ -251,6 +255,16 @@ export function extractPaymentType(deal: KommoDeal): string | null {
 /** «Причина отказа» (поле 2097265) — текст значення (напр. «Дубль», «Перевізник»). */
 export function extractRejectReason(deal: KommoDeal): string | null {
   return fieldText(deal, FIELD_REJECT_REASON);
+}
+
+/** Блок B — «Тип запиту» (2097965): напрямок По Україні / Міжнародні / Домашній переїзд. */
+export function extractRequestType(deal: KommoDeal): string | null {
+  return fieldText(deal, FIELD_REQUEST_TYPE);
+}
+
+/** Блок B — «Канал продажу» (2099549): Нові / Постійні / Тендерний напрямок. */
+export function extractSalesChannel(deal: KommoDeal): string | null {
+  return fieldText(deal, FIELD_SALES_CHANNEL);
 }
 
 /**
