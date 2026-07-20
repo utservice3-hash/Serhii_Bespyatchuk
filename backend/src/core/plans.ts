@@ -133,25 +133,10 @@ export async function planPerWorkingDay(s: { managerId?: number | null; teamId?:
 
 // ───────────────────────── СТРАТЕГІЧНИЙ ПЛАН + ДЕРИВАЦІЯ (Крок Г #6) ─────────────────────────
 
-/**
- * СТРАТЕГІЧНИЙ план виручки = Σ `plans.payment_amount` у скоупі (АКТИВНІ менеджери),
- * КАНОНІЧНИЙ read-only. Замінює kvp_plans-дублі (`success`, `team_revenue_*`,
- * `received_total`, …): виручка НЕ дублюється в kvp_plans — деривується звідси.
- * Σ менеджерів = команда = відділ (той самий predicate, що `managerPlan`).
- */
-export async function strategicRevenuePlan(s: { month: string; managerId?: number | null; teamId?: number | null }): Promise<number> {
-  const params: unknown[] = [s.month];
-  const conds = ["p.metric = 'payment_amount'", "date_trunc('month', p.plan_date) = $1::date", "m.is_active"];
-  if (s.managerId) { params.push(s.managerId); conds.push(`p.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const r = await pool.query<{ s: string }>(
-    `SELECT COALESCE(SUM(p.planned_value), 0) AS s
-       FROM plans p JOIN managers m ON m.id = p.manager_id
-      WHERE ${conds.join(" AND ")}`,
-    params
-  );
-  return Math.round(Number(r.rows[0]?.s ?? 0));
-}
+// СТРАТЕГІЧНИЙ план виручки БІЛЬШЕ НЕ рахується окремо: /kvp-report бере його як
+// Σ планів команд (managerPlan → teams.plan), щоб вердикт == рядки таблиці байт-у-байт.
+// Стара strategicRevenuePlan фільтрувала m.is_active і мовчки губила план звільнених
+// (25к) → 2.675М ≠ таблиця 2.700М. managerPlan лишається ЄДИНИМ джерелом планів.
 
 export interface DerivedTarget { base: number; low: number; target: number; high: number }
 /**

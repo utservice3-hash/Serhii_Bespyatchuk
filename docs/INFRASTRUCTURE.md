@@ -88,6 +88,25 @@
 - **Frontend:** React 19 + Vite + recharts. `frontend/src/pages/Dashboard.tsx` — контейнер, секції в `pages/dashboard/sections/*`.
 - **Backend:** Node/Express + `pg`, `node-cron` (джоби), `grammy` (ТГ). `backend/src/routes/dashboard.ts` — основна аналітика.
 - **БД:** Neon Postgres. Структура — `backend/src/db/schema.sql`. Мапінг етапів — `seedKommoMapping.sql`.
-- **Деплой:** relay-PHP на сервері evraziat (див. `CLAUDE.md`). Прод тягне гілку `claude/friendly-galileo-8pijhl`.
+- **Деплой:** relay-PHP на сервері evraziat (див. `CLAUDE.md`). Прод тягне гілку `claude/friendly-galileo-8pijhl`. **Повна процедура — нижче, §7.**
 - **Джоби:** синк Kommo (5хв), події етапів (10хв), передані заявки (10хв), дебіторка (30хв), новини (08:00), KPI-задачі (07:00), реконсиляція (04:00), **бекап (03:00)**.
 - **Проєктна памʼять:** `CLAUDE.md` — тримати актуальним (усі бізнес-правила там).
+
+## 7. Процедура деплою в прод (порядок кроків)
+
+Гілка розробки → прод-гілка `claude/friendly-galileo-8pijhl`. Деплоїти лише за явним токеном власника `ДЕПЛОЙ-ПРОД: ТАК`.
+
+1. **FF-merge:** `git fetch origin <dev-branch>` → `git merge --ff-only origin/<dev-branch>` на прод-checkout (`/home/evraziat/uts.ua/dashboard`).
+2. **Build BE:** `cd backend && npm run build` (tsc + копія `*.sql` у `dist/db`).
+3. **Build FE:** `cd frontend && npm run build` (vite → `frontend/dist/`, новий хеш `index-*.js`).
+4. **🔴 ОБОВʼЯЗКОВО — копія FE у веб-докрут.** Apache віддає **не** `frontend/dist`, а корінь `/home/evraziat/uts.ua/dashboard/` (там власні `index.html` + `assets/`). Vite пише лише в `frontend/dist`, тож без копії користувач бачить **старий** бандл, хоч API вже нове. Порядок (щоб index.html ніколи не показав на відсутній asset):
+   - спершу нові asset-и: `cp -r frontend/dist/assets/. assets/`
+   - статику: `cp frontend/dist/favicon.svg frontend/dist/icons.svg .`
+   - **останнім** `index.html`: `cp frontend/dist/index.html index.html`
+   - прибрати старий бандл: `rm assets/index-<OLD>.js assets/index-<OLD>.css`
+   - `index.html` віддається `no-cache` (див. `.htaccess`), тож новий хеш підхоплюється одразу.
+5. **Рестарт node:** процес під панеллю adm.tools (`npm start` → `node dist/index.js`, PORT=3000). `kill -TERM <pid>` → панель авто-респавнить (новий pid за ~6с).
+6. **Health:** `curl https://dashboard.uts.ua/api/health` = 200 ×N, `stale:false` (за потреби смикнути `POST /api/dashboard/sync` з admin-JWT — освіжає вотермарк без ризику подвійного синку).
+7. **Перевірка бандла наживо:** `curl https://dashboard.uts.ua/index.html?cb=<ts>` має показати НОВИЙ `index-*.js`.
+
+⚠️ Крок 4 — системний, не разовий: пропустиш → «ендпоінт віддає нове, а сайт показує старе» (реальний інцидент). BE-only деплой (FE не змінювався) → хеш той самий, крок 4 можна пропустити, але звірити хеш усе одно.

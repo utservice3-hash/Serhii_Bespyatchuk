@@ -3997,7 +3997,7 @@ dashboardRouter.post("/funnel-plan", async (req, res) => {
 // цілей, щоб «Викон.%» був реальним для кожного рядка матриці План/Факт.
 // 🔴 КРОК Г #6: ДЕПРЕКЕЙТ дублів виручки. `success`, `new_revenue`, `repeat_revenue`,
 // `received_total`, `dispatched_sum` — це та сама виручка, що вже в `plans`
-// (Σ payment_amount) → деривуються з `plans.strategicRevenuePlan`/`managerPlan`, НЕ
+// (Σ payment_amount) → деривуються з `plans.managerPlan` (єдине джерело планів), НЕ
 // зберігаються вручну. Прибрані з writable-набору (POST їх відхиляє, GET не віддає).
 // kvp_plans лишає ЛИШЕ КВП-ручні (чек, бюджет, цілі, avg_per_manager, к-ті).
 const DEPRECATED_KVP_METRICS = new Set([
@@ -4264,8 +4264,8 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
 /**
  * КРОК Д — КОМПОЗИТНИЙ звіт КВП. Admin-only (роль КВП = вся компанія). ТІЛЬКИ
  * збірка з ядра (money/metrics/plans) — нової бізнес-логіки НЕ додає. Scope-aware
- * (preset day/week/month/quarter/year або custom). strategicRevenuePlan = 🔒
- * read-only (Σ plans). Числа звіряються з Оглядом/Звітом (спільне ядро).
+ * (preset day/week/month/quarter/year або custom). Стратегічний план = Σ планів
+ * команд (🔒 read-only, managerPlan). Числа звіряються з Оглядом/Звітом (спільне ядро).
  */
 dashboardRouter.get("/kvp-report", async (req, res) => {
   const auth = req.auth!;
@@ -4341,9 +4341,6 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const expTeamThisMap = new Map(expTeamThis.map((r) => [r.id, r.sum]));
   const expTeamNextMap = new Map(expTeamNext.map((r) => [r.id, r.sum]));
 
-  // strategic = Σ місячних planів (🔒 read-only). Плани по менеджеру/команді — теж Σ.
-  let strategic = 0;
-  for (const m of months) strategic += await plans.strategicRevenuePlan({ month: m });
   const mgrPlan = new Map<number, { name: string; teamId: number | null; plan: number }>();
   for (const pr of planRes) for (const row of pr.rows) {
     const e = mgrPlan.get(row.managerId) ?? { name: row.name, teamId: row.teamId, plan: 0 };
@@ -4412,6 +4409,12 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
     };
   }).sort((a, b) => b.revenue - a.revenue);
+
+  // Стратегічний план (🔒 read-only) = Σ планів команд у таблиці — ОДНЕ джерело з
+  // рядками дашборда. Раніше strategicRevenuePlac фільтрував m.is_active і мовчки
+  // губив план звільнених (25к) → вердикт 2.675М ≠ таблиця 2.700М. Тепер вердикт ==
+  // Σ команд == Σ менеджерів == Σ тижнів байт-у-байт (managerPlan — єдине джерело).
+  const strategic = teams.reduce((s, t) => s + t.plan, 0);
 
   // Крок Д (тижневий) #5: рядок ВІДДІЛУ по тижнях = Σ команд (per idx). Гейт: Σ команд == відділ.
   const deptWeeks = weekBlocks.map((w) => {
