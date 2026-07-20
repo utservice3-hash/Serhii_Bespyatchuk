@@ -4202,15 +4202,24 @@ function resolveKvpScope(preset: string, date: string, from?: string | null, to?
   return { from: f, to: t, prevFrom: pf, prevTo: pt, label, isCurrent };
 }
 
-// Фіксовані тижневі блоки місяця Т1–Т5 (1-7/8-14/15-21/22-28/29-кінець) — як у ручному КВП.
+// РЕАЛЬНІ календарні тижні Пн–Нд (ISO), обрізані по місяцю: Т1 = 1-ше число → перша
+// неділя (частковий), далі повні Пн–Нд, останній — до кінця місяця (частковий). К-ть
+// тижнів = 5 або 6 (НЕ фіксовано). ЄДИНЕ джерело меж тижня для всіх споживачів.
+// День тижня календарної дати — TZ-незалежний (date-only), рахуємо через Date.UTC.
 function fixedWeekBlocks(monthStart: string): { idx: number; from: string; to: string }[] {
   const ym = monthStart.slice(0, 7);
   const [y, mo] = ym.split("-").map(Number);
   const dim = new Date(y, mo, 0).getDate();
   const pad = (d: number) => String(d).padStart(2, "0");
-  return ([[1, 7], [8, 14], [15, 21], [22, 28], [29, dim]] as const)
-    .filter(([a]) => a <= dim)
-    .map(([a, b], i) => ({ idx: i + 1, from: `${ym}-${pad(a)}`, to: `${ym}-${pad(Math.min(b, dim))}` }));
+  const isoDow = (day: number) => { const w = new Date(Date.UTC(y, mo - 1, day)).getUTCDay(); return w === 0 ? 7 : w; }; // Пн=1..Нд=7
+  const blocks: { idx: number; from: string; to: string }[] = [];
+  let cursor = 1, idx = 1;
+  while (cursor <= dim) {
+    const end = Math.min(cursor + (7 - isoDow(cursor)), dim); // до найближчої неділі АБО кінця місяця
+    blocks.push({ idx, from: `${ym}-${pad(cursor)}`, to: `${ym}-${pad(end)}` });
+    cursor = end + 1; idx++;
+  }
+  return blocks;
 }
 function workingDaysBetween(from: string, to: string): number {
   let n = 0; const d = new Date(from + "T00:00:00Z"); const end = new Date(to + "T00:00:00Z");
