@@ -448,9 +448,17 @@ export interface KvpSignal { severity: "critical" | "serious" | "warning" | "inf
 export interface KvpSeriesRow { ym: string; [k: string]: number | string | boolean }
 export interface KvpReport {
   scope: { from: string; to: string; prevFrom: string; prevTo: string; preset: string; label: string; isCurrent: boolean };
-  weekBlocks: { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; pace: number | null }[];
+  weekBlocks: { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; pace: number | null; workingDays: number }[];
   deptWeeks: KvpDeptWeek[];
   strategicPlan: number;
+  newMetrics: {
+    forecast: { projected: number; fact: number; projectedPct: number | null };
+    neededPacePerDay: number | null; remainingWorkingDays: number; remainingPlan: number;
+    overduePayments: { count: number; sum: number };
+    cac: number | null; cacBudget: number; cacNewClients: number;
+    avgCycleDays: number | null;
+    lost: { deals: number; sum: number; nonTargetLeads: number | null };
+  };
   verdict: {
     received: KvpAgg; receivedPrev: { revenue: number }; strategicPlan: number; planPct: number | null;
     projection: { fact: number; projected: number; projectedPct: number; elapsedWorkingDays: number; totalWorkingDays: number };

@@ -375,6 +375,7 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
 }
 
 const wkPct = (fact: number, plan: number) => (plan > 0 ? Math.round((fact / plan) * 100) : null);
+const pctOf = (fact: number, plan: number | null): number | null => (plan && plan > 0 ? Math.round((fact / plan) * 100) : null);
 const barColor = (p: number | null) => (p == null ? MUTED : p >= 100 ? GREEN : p >= 70 ? AMBER : RED);
 type WeekLike = { plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; isCurrent: boolean; isFuture: boolean; pace: number | null };
 // Фіксована ширина КОЖНОЇ тижневої колонки (команди, відділ, менеджери) — одна вертикальна
@@ -512,57 +513,89 @@ function RetentionBlock({ rep }: { rep: KvpReport }) {
   );
 }
 
+// Блок A — повна таблиця: місяць (факт/план/%) + Т1–Т5 (факт/план) для показників з
+// тижневою природою; ратіо/знімки — місяць-онлі (тижневі «—»). Місячний план ✎ КВП-ручних
+// живо декомпозується на тижні за робочими днями. Нові метрики — окрема група.
 function FullTable({ rep, plans, onSave }: { rep: KvpReport; plans: KvpPlans; onSave: (k: string, v: number | null) => void }) {
-  const m = rep.money, rs = rep.revenueStructure, en = rep.engines, lifecycle = rep.verdict.lifecycle;
+  const m = rep.money, rs = rep.revenueStructure, en = rep.engines, nm = rep.newMetrics, wb = rep.weekBlocks;
+  const [draft, setDraft] = useState<Record<string, number | null>>({});
+  const planVal = (k: string): number | null => (k in draft ? draft[k] : (plans[k] ?? null));
+  const wdMonth = wb.reduce((a, w) => a + w.workingDays, 0) || 1;
+  const dw = (wi: number) => rep.deptWeeks.find((x) => x.idx === wi);
+  const decomp = (monthPlan: number | null, wi: number) => (monthPlan == null ? null : monthPlan * (wb.find((w) => w.idx === wi)?.workingDays ?? 0) / wdMonth);
   const editCell = (k: string) => (
-    <input type="number" defaultValue={plans[k] ?? ""} onBlur={(e) => onSave(k, e.target.value === "" ? null : Number(e.target.value))}
-      style={{ width: 100, textAlign: "right", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", padding: "2px 6px" }} />
+    <input type="number" value={planVal(k) ?? ""} placeholder="—"
+      onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value === "" ? null : Number(e.target.value) }))}
+      onBlur={(e) => onSave(k, e.target.value === "" ? null : Number(e.target.value))}
+      style={{ width: 76, textAlign: "right", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", padding: "1px 5px", fontSize: 12 }} />
   );
-  // group → rows: [label, value, hint?, editKey?]
-  const groups: [string, [string, string, string?, string?][]][] = [
-    ["💰 Дохід", [
-      ["Отримано (каса)", fmtMoney(m.received.revenue), HINT.received],
-      ["Дохід в очікуванні (зона)", fmtMoney(m.expectedZoneTotal.sum), HINT.structExpected],
-      ["Успішно закриті (142)", fmtMoney(m.success.revenue), "Угоди в статусі «Успішна угода» (142), за датою закриття в періоді."],
-      ["Поставлені машини (авто)", `${lifecycle.sent.deals} авто · ${fmtMoney(lifecycle.sent.revenue)}`, HINT.sent],
-      ["Перенесені (в роботі)", fmtMoney(m.paidOnly.revenue), "Оплата отримана (знімок етап 9) — ще не 142."],
-      ["Стратегічний план 🔒", fmtMoney(rep.strategicPlan), HINT.strategic],
-      ["Середній чек (ціль)", plans.avg_check != null ? fmtFull(plans.avg_check) : "—", "КВП-ручна ціль.", "avg_check"],
+  // weekly cell: fact над plan (компактно, фікс.ширина). money/num formatter.
+  const wkCell = (f: number | null, p: number | null, money: boolean) => {
+    const fmt = money ? fmtMoney : (v: number) => fmtNum(Math.round(v));
+    return (
+      <td style={{ ...wkTd(), fontSize: 10 }}>
+        {f == null && p == null ? <span style={{ color: MUTED }}>—</span> : <>
+          <div style={{ ...clip, fontWeight: 700 }}>{f == null ? "—" : fmt(f)}</div>
+          <div style={{ ...clip, color: MUTED }}>{p == null ? "" : `/${fmt(p)}`}</div>
+        </>}
+      </td>
+    );
+  };
+  const dash = <td style={{ ...wkTd(), color: MUTED, fontSize: 10 }}>—</td>;
+  type Row = { label: string; hint?: string; fact: string; pct?: number | null; planKey?: string; planFixed?: string;
+    // weekly: per-idx {f,p} у сирих числах + money-прапор; null → «—»
+    wk?: null | { money: boolean; f: (wi: number) => number | null; p: (wi: number) => number | null } };
+  const groups: [string, Row[]][] = [
+    ["💰 Дохід (тижнева природа)", [
+      { label: "Отримано (каса)", hint: HINT.received, fact: fmtMoney(m.received.revenue), planFixed: fmtMoney(rep.strategicPlan) + " 🔒", pct: rep.verdict.planPct,
+        wk: { money: true, f: (wi) => dw(wi)?.fact ?? null, p: (wi) => dw(wi)?.plan ?? null } },
+      { label: "Поставлені авто", hint: HINT.sent, fact: fmtNum(rep.verdict.lifecycle.sent.deals), planKey: "dispatched_cars",
+        pct: pctOf(rep.verdict.lifecycle.sent.deals, planVal("dispatched_cars")),
+        wk: { money: false, f: (wi) => dw(wi)?.auto ?? null, p: (wi) => decomp(planVal("dispatched_cars"), wi) } },
+      { label: "Ліди реклама", hint: HINT.conversion, fact: fmtNum(rep.deptWeeks.reduce((a, w) => a + w.leadsAd, 0)), planKey: "ad_leads",
+        pct: pctOf(rep.deptWeeks.reduce((a, w) => a + w.leadsAd, 0), planVal("ad_leads")),
+        wk: { money: false, f: (wi) => dw(wi)?.leadsAd ?? null, p: (wi) => decomp(planVal("ad_leads"), wi) } },
+      { label: "Ліди лідоген", hint: HINT.transferred, fact: fmtNum(rep.deptWeeks.reduce((a, w) => a + w.leadsLeadgen, 0)),
+        wk: { money: false, f: (wi) => dw(wi)?.leadsLeadgen ?? null, p: () => null } },
     ]],
-    ["🆕 Нові клієнти", [
-      ["Отримано", fmtMoney(rs.received.new.revenue), HINT.structReceived],
-      ["В очікуванні", fmtMoney(rs.expected.new.sum), HINT.structExpected],
+    ["📸 Ратіо / знімки (місяць-онлі)", [
+      { label: "Дохід в очікуванні (зона)", hint: HINT.structExpected, fact: fmtMoney(m.expectedZoneTotal.sum), wk: null },
+      { label: "Успішно закриті (142)", hint: "Статус 142 за датою закриття в періоді.", fact: fmtMoney(m.success.revenue), wk: null },
+      { label: "Середній чек (ціль)", hint: "КВП-ручна ціль (звірка з листом 2600–2900).", fact: en.ad.conversion != null ? "—" : "—", planKey: "avg_check", wk: null },
+      { label: "Конверсія реклами", hint: HINT.conversion, fact: en.ad.conversion == null ? "—" : `${en.ad.conversion}%${en.ad.mature ? "" : " ⏳"}`, wk: null },
     ]],
-    ["🔁 Постійні клієнти", [
-      ["Отримано", fmtMoney(rs.received.repeat.revenue), HINT.structReceived],
-      ["В очікуванні", fmtMoney(rs.expected.repeat.sum), HINT.structExpected],
+    ["🔮 Нові метрики (місяць-онлі)", [
+      { label: "Прогноз місяця", hint: HINT.projection, fact: `${fmtMoney(nm.forecast.projected)}${nm.forecast.projectedPct == null ? "" : ` (${nm.forecast.projectedPct}%)`}`, wk: null },
+      { label: "Потрібний темп/день", hint: `Залишок плану ${fmtMoney(nm.remainingPlan)} ÷ ${nm.remainingWorkingDays} роб. днів, що лишились.`, fact: nm.neededPacePerDay == null ? "—" : `${fmtMoney(nm.neededPacePerDay)}/день`, wk: null },
+      { label: "Прострочена оплата", hint: "planned_payment_at минув, а угода ще не оплачена (не 142/143, не етап 9). Знімок «зараз».", fact: `${fmtMoney(nm.overduePayments.sum)} · ${nm.overduePayments.count} угод`, wk: null },
+      { label: "CAC (вартість клієнта)", hint: `Рекламний бюджет ${fmtMoney(nm.cacBudget)} ÷ ${nm.cacNewClients} нових клієнтів.`, fact: nm.cac == null ? "—" : fmtFull(nm.cac), wk: null },
+      { label: "Середній цикл угоди", hint: "Днів від створення (лід) до закриття (142). ⓘ created≈лід, closed≈оплата — банк-дати нема.", fact: nm.avgCycleDays == null ? "—" : `${nm.avgCycleDays} днів`, wk: null },
+      { label: "Втрачені", hint: "Відмови (143 у періоді) + нецільові ліди.", fact: `${nm.lost.deals} угод · ${fmtMoney(nm.lost.sum)}${nm.lost.nonTargetLeads != null ? ` · ${nm.lost.nonTargetLeads} нецільових` : ""}`, wk: null },
     ]],
-    ["🎯 Реклама", [
-      ["Бюджет (Google)", fmtMoney(en.ad.budget), HINT.romi, "ad_budget"],
-      ["Ліди (у зоні)", fmtNum(en.ad.entered), HINT.cplCrm],
-      ["Нецільові", rep.retention.nonTarget == null ? "—" : fmtNum(rep.retention.nonTarget), HINT.nonTarget],
-      ["Конверсія", en.ad.conversion == null ? "—" : `${en.ad.conversion}%${en.ad.mature ? "" : " ⏳"}`, HINT.conversion],
-      ["Середній чек реклами (ціль)", plans.ad_avg_check != null ? fmtFull(plans.ad_avg_check) : "—", "КВП-ручна ціль.", "ad_avg_check"],
-    ]],
-    ["📞 Лідогенератори", [
-      ["Передані заявки", fmtNum(en.leadgen.transferred), HINT.transferred],
-      ["Поїхали (успіх→рахунок)", `${fmtNum(en.leadgen.dispatched)} · ${fmtMoney(en.leadgen.dispatchedRevenue)}`, HINT.lgDispatched],
-      ["Дохід лідогену", fmtMoney(en.leadgen.revenue), HINT.lgRevenue],
+    ["🆕 / 🔁 Клієнти (місяць-онлі)", [
+      { label: "Нові — отримано / очікування", hint: HINT.structReceived, fact: `${fmtMoney(rs.received.new.revenue)} / ${fmtMoney(rs.expected.new.sum)}`, wk: null },
+      { label: "Постійні — отримано / очікування", hint: HINT.structReceived, fact: `${fmtMoney(rs.received.repeat.revenue)} / ${fmtMoney(rs.expected.repeat.sum)}`, wk: null },
     ]],
   ];
   return (
     <div style={{ overflowX: "auto" }}>
-      <table className="data-table" style={{ width: "100%" }}>
-        <thead><tr><th>Показник</th><th style={{ textAlign: "right" }}>Значення</th><th style={{ textAlign: "right" }}>Ручний план ✎</th></tr></thead>
+      <table className="data-table" style={{ width: "100%", tableLayout: "fixed", minWidth: 520 + wb.length * WK_W }}>
+        <colgroup><col style={{ width: 210 }} /><col style={{ width: 128 }} /><col style={{ width: 96 }} /><col style={{ width: 64 }} />{wb.map((w) => <col key={w.idx} style={{ width: WK_W }} />)}</colgroup>
+        <thead><tr>
+          <th>Показник</th><th style={{ textAlign: "right" }}>Місяць (факт)</th><th style={{ textAlign: "right" }}>План ✎</th><th>%</th>
+          {wb.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}</th>)}
+        </tr></thead>
         <tbody>
           {groups.map(([grp, rows]) => (
             <Fragment key={grp}>
-              <tr><td colSpan={3} style={{ fontWeight: 700, background: "var(--bg)", paddingTop: 8 }}>{grp}</td></tr>
-              {rows.map(([label, val, hint, editKey]) => (
-                <tr key={grp + label}>
-                  <td><span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{label}{hint && <InfoHint text={hint} />}</span></td>
-                  <td style={{ textAlign: "right", fontWeight: 600 }}>{val}</td>
-                  <td style={{ textAlign: "right" }}>{editKey ? editCell(editKey) : <span style={{ color: MUTED }}>—</span>}</td>
+              <tr><td colSpan={4 + wb.length} style={{ fontWeight: 700, background: "var(--bg)", paddingTop: 8 }}>{grp}</td></tr>
+              {rows.map((r) => (
+                <tr key={grp + r.label}>
+                  <td style={clip}><span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{r.label}{r.hint && <InfoHint text={r.hint} />}</span></td>
+                  <td style={{ textAlign: "right", fontWeight: 600 }}>{r.fact}</td>
+                  <td style={{ textAlign: "right" }}>{r.planKey ? editCell(r.planKey) : r.planFixed ? <span style={{ color: MUTED, fontSize: 12 }}>{r.planFixed}</span> : <span style={{ color: MUTED }}>—</span>}</td>
+                  <td>{r.pct == null ? <span style={{ color: MUTED }}>—</span> : <span style={{ color: pctColor(r.pct), fontWeight: 600, fontSize: 12 }}>{r.pct}%</span>}</td>
+                  {wb.map((w) => r.wk ? wkCell(r.wk.f(w.idx), r.wk.p(w.idx), r.wk.money) : <Fragment key={w.idx}>{dash}</Fragment>)}
                 </tr>
               ))}
             </Fragment>
@@ -572,3 +605,4 @@ function FullTable({ rep, plans, onSave }: { rep: KvpReport; plans: KvpPlans; on
     </div>
   );
 }
+

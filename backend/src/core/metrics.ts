@@ -769,6 +769,55 @@ export async function leadsByManagerDay(s: MetricScope): Promise<MgrDayLeads[]> 
   return r.rows.map((x) => ({ managerId: x.manager_id, day: x.bkt, ad: Number(x.ad), leadgen: Number(x.leadgen) }));
 }
 
+// ── Блок A (КВП повна таблиця) — нові метрики ──
+// Прострочена оплата = ЗНІМОК «зараз»: планова дата оплати минула, а угода ще НЕ оплачена
+// (не 142/143 і не в етапі 9 «оплата отримана»). Не залежить від періоду. sum = Σ price.
+const STAGE_PAID_STATUSES = [69716460, 60412544]; // етап 9 «Оплата отримана»
+export async function overduePayments(s: MetricScope): Promise<{ count: number; sum: number }> {
+  const params: unknown[] = [FC_PIPELINES, STAGE_PAID_STATUSES];
+  const conds = [
+    "d.pipeline_id = ANY($1)",
+    "d.planned_payment_at IS NOT NULL",
+    `(d.planned_payment_at ${KYIV})::date < (now() ${KYIV})::date`,
+    "d.status_id NOT IN (142, 143)",
+    "NOT (d.status_id = ANY($2))",
+  ];
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ c: string; s: string }>(
+    `SELECT COUNT(*) c, COALESCE(SUM(d.price), 0) s FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
+  return { count: Number(r.rows[0].c), sum: Math.round(Number(r.rows[0].s)) };
+}
+
+// Середній цикл угоди = днів від СТВОРЕННЯ (лід) до ЗАКРИТТЯ (оплата, 142), для угод,
+// що стали 142 у періоді. ⓘ: created_at≈лід, closed_at≈оплата (реальної банк-дати нема).
+export async function avgDealCycleDays(s: MetricScope): Promise<number | null> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = 142", "d.created_at_kommo IS NOT NULL", "d.closed_at_kommo IS NOT NULL", "d.closed_at_kommo >= d.created_at_kommo"];
+  if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ d: string | null }>(
+    `SELECT AVG(EXTRACT(EPOCH FROM (d.closed_at_kommo - d.created_at_kommo)) / 86400.0) d
+       FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
+  return r.rows[0].d == null ? null : Math.round(Number(r.rows[0].d));
+}
+
+// Втрачені угоди = зайшли в 143 (закрито й не реалізовано) у періоді (за closed_at).
+// count + Σ price. Окремо від «нецільових лідів» (nonTargetLeads) — у роуті складаємо.
+export async function lostDeals(s: MetricScope): Promise<{ count: number; sum: number }> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = 143", "d.closed_at_kommo IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ c: string; s: string }>(
+    `SELECT COUNT(*) c, COALESCE(SUM(ABS(d.price)), 0) s FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
+  return { count: Number(r.rows[0].c), sum: Math.round(Number(r.rows[0].s)) };
+}
+
 /**
  * «В очікуванні» команди/менеджера за плановою датою в місяці зі ЗСУВОМ `monthOffset`
  * (0 = поточний, 1 = наступний) — для сигналів КВП «цей/наступний» (Крок Д фінал #3).

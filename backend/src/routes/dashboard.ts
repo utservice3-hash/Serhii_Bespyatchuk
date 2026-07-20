@@ -4285,6 +4285,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     newToRepeat, activeBase, weeklyReg, nonTarget, planRes, funnel,
     receivedSeg, expectedSeg, mgrDaily,
     expTeamThis, expTeamNext, mgrDayExp, mgrDayDisp, mgrDayLeads,
+    overdue, avgCycle, lost,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -4302,6 +4303,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     money.receivedBySegment(mScope), metrics.expectedBySegment({ from }), money.receivedByManagerBucket(mScope, "day"),
     metrics.expectedMonthByScope({}, "team", 0), metrics.expectedMonthByScope({}, "team", 1), metrics.expectedByManagerDay({}),
     metrics.dispatchedByManagerDay(scope), metrics.leadsByManagerDay(scope),
+    metrics.overduePayments(scope), metrics.avgDealCycleDays(scope), metrics.lostDeals(scope),
   ]);
   const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
   for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
@@ -4497,7 +4499,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
 
   res.json({
     scope: { from, to, prevFrom: sc.prevFrom, prevTo: sc.prevTo, preset: String(req.query.preset ?? "month"), label: sc.label, isCurrent: sc.isCurrent },
-    weekBlocks: weekBlocks.map((w) => ({ idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW, pace: paceOf(w, w.from <= kyivTodayW && kyivTodayW <= w.to) })),
+    weekBlocks: weekBlocks.map((w) => ({ idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW, pace: paceOf(w, w.from <= kyivTodayW && kyivTodayW <= w.to), workingDays: workingDaysBetween(w.from, w.to) })),
     deptWeeks,
     strategicPlan: strategic,   // 🔒 read-only
     verdict, signals, engines, teams,
@@ -4520,6 +4522,27 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
         total: { deals: expectedZone.total.deals, sum: expectedZone.total.sum },
       },
     },
+    // Блок A — НОВІ метрики повної таблиці (місяць-онлі знімки/ратіо).
+    //  forecast = прогноз (факт+зона+добір, buildProjection); neededPacePerDay = скільки
+    //  треба закривати щодня, щоб дійти плану (залишок ÷ робочі дні, що ЛИШИЛИСЬ);
+    //  overdue = прострочена оплата (знімок); cac = бюджет ÷ нові клієнти; avgCycleDays =
+    //  сер. цикл угоди; lost = нецільові + відмови(143), к-сть+сума.
+    newMetrics: (() => {
+      const remainWd = Math.max(0, projection.totalWorkingDays - projection.elapsedWorkingDays);
+      const remainPlan = Math.max(0, strategic - received.revenue);
+      const newClients = newRepeatTot.newClients ?? 0;
+      return {
+        forecast: { projected: projection.projected, fact: projection.fact, projectedPct: strategic > 0 ? Math.round((projection.projected / strategic) * 100) : null },
+        neededPacePerDay: remainWd > 0 ? Math.round(remainPlan / remainWd) : null,
+        remainingWorkingDays: remainWd,
+        remainingPlan: remainPlan,
+        overduePayments: overdue,                       // { count, sum } — знімок «зараз»
+        cac: newClients > 0 ? Math.round(budgetFact / newClients) : null,
+        cacBudget: Math.round(budgetFact), cacNewClients: newClients,
+        avgCycleDays: avgCycle,
+        lost: { deals: lost.count, sum: lost.sum, nonTargetLeads: nonTarget },
+      };
+    })(),
     segments: { totals: newRepeatTot, byManager: newRepeatMgr, byTeam: newRepeatTeam },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),
