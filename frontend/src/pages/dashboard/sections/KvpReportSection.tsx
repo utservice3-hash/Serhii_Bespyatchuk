@@ -80,12 +80,12 @@ function LogisticsSection({ rep }: { rep: KvpReport }) {
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
       {/* Напрямок — КАРТКИ з барами частки */}
       <LogiCard title="🧭 Напрямок (Тип запиту)" kind={L.fillRates.requestType >= 90 ? "ok" : "proxy"}
-        hint={`Розклад отриманої виручки за «Тип запиту» (напрямок). Σ по напрямках == отримано. Fill-rate поля: ${L.fillRates.requestType}%. Конверсія по напрямку — окремим кроком (потребує бекфіл + когортну метрику).`}>
+        hint={`Розклад отриманої виручки за «Тип запиту» (напрямок). Σ по напрямках == отримано. Fill-rate поля: ${L.fillRates.requestType}%. Конверсія = ad-new когорта (вхід→гроші) цього напрямку; ⏳ якщо <10 у зоні.`}>
         <div style={{ display: "grid", gap: 8 }}>
           {L.direction.map((d) => { const share = Math.round(d.revenue / totalDir * 100); return (
             <div key={d.key}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}><b style={{ ...clip }}>{d.key}</b><span style={{ fontWeight: 700 }}>{fmtMoney(d.revenue)}</span></div>
-              <div style={{ fontSize: 10, color: MUTED }}>{fmtNum(d.deals)} авто · чек {d.deals > 0 ? fmtFull(Math.round(d.revenue / d.deals)) : "—"} · {share}%</div>
+              <div style={{ fontSize: 10, color: MUTED }}>{fmtNum(d.deals)} авто · чек {d.deals > 0 ? fmtFull(Math.round(d.revenue / d.deals)) : "—"} · конв. {d.conversion == null ? "⏳" : `${d.conversion}%`} · {share}%</div>
               <ShareBar pct={share} color={BLUE} />
             </div>
           ); })}

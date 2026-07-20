@@ -1087,6 +1087,24 @@ type CohortEntry =
  * до однакової межі. `pop` віддає manager_id/team_id (для групування) — помісячна
  * агрегація їх ігнорує. Вимагає $1=MONEY_ZONE, $2=FC у `params`.
  */
+// Конверсія реклами ПО НАПРЯМКУ (Тип запиту) — той самий когортний контракт, що
+// conversionAdsByManager (вхід ADZONE → дійшли MONEY_ZONE, ad-new), лише GROUP BY request_type.
+export interface DirConversion { key: string; entered: number; won: number; cohortPct: number | null }
+export async function conversionAdsByDirection(s: MetricScope, adSources: string[]): Promise<DirConversion[]> {
+  const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
+  const fromRef = (params.push(s.from ?? null), `$${params.length}`);
+  const toRef = (params.push(s.to ?? null), `$${params.length}`);
+  const r = await pool.query<{ key: string; entered: string; won: string }>(
+    `WITH ${dealCohortCte("$3", "$4", "")}
+     SELECT COALESCE(pop.request_type, '—') AS key,
+            COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won
+       FROM pop
+      WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
+        AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
+      GROUP BY 1`, params);
+  return r.rows.map((x) => { const entered = Number(x.entered), won = Number(x.won); return { key: x.key, entered, won, cohortPct: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null }; });
+}
+
 function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): string {
   return `adzone AS (
          SELECT kommo_id, MIN(changed_at) AS entered_at
@@ -1097,7 +1115,7 @@ function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): st
            FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = ANY($1) GROUP BY kommo_id
        ),
        pop AS (
-         SELECT a.entered_at, w.won_at, d.manager_id, m.team_id
+         SELECT a.entered_at, w.won_at, d.manager_id, m.team_id, d.request_type
            FROM adzone a
            JOIN deals d ON d.kommo_id = a.kommo_id
            LEFT JOIN managers m ON m.id = d.manager_id

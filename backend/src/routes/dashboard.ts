@@ -4294,7 +4294,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     expTeamThis, expTeamNext, mgrDayExp, mgrDayDisp, mgrDayLeads,
     overdue, avgCycle, lost,
     dirSplit, chanSplit, clientRev, transit, dso, aging,
-    successDay, segDay, lostDay,
+    successDay, segDay, lostDay, dirConv,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -4316,6 +4316,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     money.receivedByRequestType(mScope), money.receivedBySalesChannel(mScope), money.receivedByClientKey(mScope),
     metrics.transitStats(scope), metrics.dsoProxyDays(scope), metrics.receivablesAging(),
     money.successByBucket(mScope, "day"), money.receivedSegByDay(mScope), metrics.lostByDay(scope),
+    metrics.conversionAdsByDirection(scope, adSources),
   ]);
   const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
   for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
@@ -4593,8 +4594,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
         const cs = named.filter((c) => c.deals >= lo && (hi === Infinity || c.deals <= hi));
         return { clients: cs.length, revenue: Math.round(cs.reduce((a, c) => a + c.revenue, 0)) };
       };
+      const convByDir = new Map(dirConv.map((c) => [c.key, c]));
       return {
-        direction: dirSplit, salesChannel: chanSplit,
+        // напрямок + конверсія реклами по напрямку (когорта ad-new; ⏳ якщо <10 у зоні).
+        direction: dirSplit.map((d) => { const c = convByDir.get(d.key); return { ...d, conversion: c?.cohortPct ?? null, convEntered: c?.entered ?? 0 }; }),
+        salesChannel: chanSplit,
         transit, dso, aging,
         concentration: { topN, topRevenue: Math.round(topRev), totalRevenue: Math.round(totalRev), pct: totalRev > 0 ? Math.round((topRev / totalRev) * 1000) / 10 : null, clients: named.length,
           topClients: named.slice(0, topN).map((c) => ({ key: c.key, revenue: Math.round(c.revenue), deals: c.deals })) },

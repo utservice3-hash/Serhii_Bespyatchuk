@@ -473,7 +473,7 @@ export interface KvpReport {
   };
   teams: KvpTeam[];
   logistics: {
-    direction: { key: string; revenue: number; deals: number }[];
+    direction: { key: string; revenue: number; deals: number; conversion: number | null; convEntered: number }[];
     salesChannel: { key: string; revenue: number; deals: number }[];
     transit: { avg: number | null; median: number | null; n: number };
     dso: { avg: number | null; median: number | null; n: number };
