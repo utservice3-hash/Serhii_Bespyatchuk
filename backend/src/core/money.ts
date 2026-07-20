@@ -195,6 +195,39 @@ export async function receivedBySegment(s: MoneyScope): Promise<SegmentAgg> {
   return { newSeg: g("n"), repeatSeg: g("r"), unattributed: g("u") };
 }
 
+// receivedBySegment РОЗБИТИЙ ПО ДНЯХ (для тижневого факту Нові/Постійні у Повній таблиці).
+// Той самий src/сегментація (сегмент відносно ПЕРІОДУ), лише + день анкера. Σднів == місяць.
+export interface SegDayRow { day: string; newRev: number; repeatRev: number }
+export async function receivedSegByDay(s: MoneyScope): Promise<SegDayRow[]> {
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
+  const fromRef = s.from ? (p.push(s.from), `$${p.length}`) : "NULL";
+  const rows = (await pool.query<{ day: string; seg: string; revenue: string }>(
+    `WITH firsts AS (
+       SELECT d.client_key, MIN(d.created_at_kommo) AS first_paid
+         FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL GROUP BY d.client_key),
+     pop AS (
+       SELECT src.price, to_char((src.anchor_at ${K})::date, 'YYYY-MM-DD') AS day, dd.client_key, f.first_paid
+         FROM (${src}) src JOIN managers m ON m.id = src.manager_id
+         JOIN deals dd ON dd.kommo_id = src.kommo_id LEFT JOIN firsts f ON f.client_key = dd.client_key
+        ${conds.length ? "WHERE " + conds.join(" AND ") : ""})
+     SELECT day, CASE WHEN client_key IS NULL OR first_paid IS NULL THEN 'u'
+                      WHEN ${fromRef}::date IS NOT NULL AND first_paid >= ${fromRef}::date THEN 'n' ELSE 'r' END AS seg,
+            COALESCE(SUM(price),0) AS revenue FROM pop GROUP BY 1, 2`, p)).rows;
+  const map = new Map<string, SegDayRow>();
+  for (const x of rows) {
+    const d = map.get(x.day) ?? { day: x.day, newRev: 0, repeatRev: 0 };
+    if (x.seg === "n") d.newRev += Number(x.revenue); else if (x.seg === "r") d.repeatRev += Number(x.revenue);
+    map.set(x.day, d);
+  }
+  return [...map.values()];
+}
+
 // «Успішно реалізовано» (ЗАРАЗ 142, за closed_at) — знаменник avg_check_success_only.
 export const successMoney = (s: MoneyScope) => agg("success", s);
 export const successByTeam = (s: MoneyScope) => aggByTeam("success", s);

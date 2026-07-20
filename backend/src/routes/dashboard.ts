@@ -4019,6 +4019,13 @@ const KVP_PLAN_METRICS = [
   "ad_avg_check",        // Середній чек реклами
   "leadgen_revenue",     // Дохід з лідогену, грн
   "leadgen_dispatched",  // Відправлені авто з лідогену, шт
+  // Повна таблиця v3 — редаговані плани виручки (декомпозуються на тижні) + цілі-відношення.
+  "new_revenue_plan",    // Нові — отримано (план РНК)
+  "repeat_revenue_plan", // Постійні — отримано (план РПК)
+  "success_plan",        // Успішно закриті (142) план
+  "cac_target",          // CAC-ціль (місяць-онлі)
+  "cycle_target",        // Середній цикл-ціль (днів)
+  "conversion_target",   // Конверсія реклами-ціль (%)
 ];
 // Плани по командах team_revenue_<teamId> ТЕЖ депрекейт (Крок Г #6): деривуються з
 // managerPlan(teamId). Лишаємо readable у GET для сумісності FE-гріда, доки КВП-UI не
@@ -4287,6 +4294,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     expTeamThis, expTeamNext, mgrDayExp, mgrDayDisp, mgrDayLeads,
     overdue, avgCycle, lost,
     dirSplit, chanSplit, clientRev, transit, dso, aging,
+    successDay, segDay, lostDay,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -4307,6 +4315,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     metrics.overduePayments(scope), metrics.avgDealCycleDays(scope), metrics.lostDeals(scope),
     money.receivedByRequestType(mScope), money.receivedBySalesChannel(mScope), money.receivedByClientKey(mScope),
     metrics.transitStats(scope), metrics.dsoProxyDays(scope), metrics.receivablesAging(),
+    money.successByBucket(mScope, "day"), money.receivedSegByDay(mScope), metrics.lostByDay(scope),
   ]);
   const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
   for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
@@ -4421,11 +4430,28 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // Σ команд == Σ менеджерів == Σ тижнів байт-у-байт (managerPlan — єдине джерело).
   const strategic = teams.reduce((s, t) => s + t.plan, 0);
 
+  // Тижневий факт дод.показників (датовані по дню анкера, Σтижнів==місяць): успіх(142),
+  // нові/постійні отримано, втрачені(143), дохід в очікуванні за ПЛАНОВОЮ датою.
+  const inBlk = <T,>(rows: T[], day: (r: T) => string, from: string, to: string) =>
+    rows.filter((r) => { const d = day(r); return d >= from && d <= to; });
   // Крок Д (тижневий) #5: рядок ВІДДІЛУ по тижнях = Σ команд (per idx). Гейт: Σ команд == відділ.
   const deptWeeks = weekBlocks.map((w) => {
     const ws = teams.map((t) => t.weeks.find((x) => x.idx === w.idx)).filter(Boolean) as WeekAgg[];
     const s = (k: keyof WeekAgg) => ws.reduce((a, x) => a + (Number(x[k]) || 0), 0);
-    return { idx: w.idx, from: w.from, to: w.to, plan: s("plan"), fact: s("fact"), expected: s("expected"), auto: s("auto"), leadsAd: s("leadsAd"), leadsLeadgen: s("leadsLeadgen"), isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW, pace: paceOf(w, w.from <= kyivTodayW && kyivTodayW <= w.to) };
+    const successW = inBlk(successDay, (r) => r.bucket, w.from, w.to).reduce((a, r) => a + r.revenue, 0);
+    const segW = inBlk(segDay, (r) => r.day, w.from, w.to);
+    const lostW = inBlk(lostDay, (r) => r.day, w.from, w.to);
+    const expPlannedW = mgrDayExp.filter((r) => r.day >= w.from && r.day <= w.to).reduce((a, r) => a + r.sum, 0);
+    return {
+      idx: w.idx, from: w.from, to: w.to, plan: s("plan"), fact: s("fact"), expected: s("expected"),
+      auto: s("auto"), leadsAd: s("leadsAd"), leadsLeadgen: s("leadsLeadgen"),
+      success: Math.round(successW),
+      newRecv: Math.round(segW.reduce((a, r) => a + r.newRev, 0)),
+      repeatRecv: Math.round(segW.reduce((a, r) => a + r.repeatRev, 0)),
+      lostDeals: lostW.reduce((a, r) => a + r.deals, 0), lostSum: lostW.reduce((a, r) => a + r.sum, 0),
+      expectedPlanned: Math.round(expPlannedW),
+      isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW, pace: paceOf(w, w.from <= kyivTodayW && kyivTodayW <= w.to),
+    };
   });
   // #8 streak «✗ N тижнів поспіль» = trailing consecutive ЗАВЕРШЕНИХ (past) тижнів з факт<план.
   const failStreak = (weeks: { fact: number; plan: number; isFuture: boolean; isCurrent: boolean }[]): number => {

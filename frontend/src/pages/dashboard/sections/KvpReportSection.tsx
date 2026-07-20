@@ -573,7 +573,7 @@ function RetentionBlock({ rep }: { rep: KvpReport }) {
 // тижневою природою; ратіо/знімки — місяць-онлі (тижневі «—»). Місячний план ✎ КВП-ручних
 // живо декомпозується на тижні за робочими днями. Нові метрики — окрема група.
 function FullTable({ rep, plans, onSave }: { rep: KvpReport; plans: KvpPlans; onSave: (k: string, v: number | null) => void }) {
-  const m = rep.money, rs = rep.revenueStructure, en = rep.engines, nm = rep.newMetrics, wb = rep.weekBlocks;
+  const m = rep.money, en = rep.engines, nm = rep.newMetrics, wb = rep.weekBlocks;
   const [draft, setDraft] = useState<Record<string, number | null>>({});
   const planVal = (k: string): number | null => (k in draft ? draft[k] : (plans[k] ?? null));
   const wdMonth = wb.reduce((a, w) => a + w.workingDays, 0) || 1;
@@ -601,36 +601,38 @@ function FullTable({ rep, plans, onSave }: { rep: KvpReport; plans: KvpPlans; on
   type Row = { label: string; hint?: string; fact: string; pct?: number | null; planKey?: string; planFixed?: string;
     // weekly: per-idx {f,p} у сирих числах + money-прапор; null → «—»
     wk?: null | { money: boolean; f: (wi: number) => number | null; p: (wi: number) => number | null } };
+  const sumDW = (k: "success" | "newRecv" | "repeatRecv" | "lostDeals" | "lostSum" | "expectedPlanned") => rep.deptWeeks.reduce((a, w) => a + (w[k] || 0), 0);
   const groups: [string, Row[]][] = [
-    ["💰 Дохід (тижнева природа)", [
+    ["💰 Дохід (тижнева природа — факт/план по Т1–Т5)", [
       { label: "Отримано (каса)", hint: HINT.received, fact: fmtMoney(m.received.revenue), planFixed: fmtMoney(rep.strategicPlan) + " 🔒", pct: rep.verdict.planPct,
         wk: { money: true, f: (wi) => dw(wi)?.fact ?? null, p: (wi) => dw(wi)?.plan ?? null } },
-      { label: "Поставлені авто", hint: HINT.sent, fact: fmtNum(rep.verdict.lifecycle.sent.deals), planKey: "dispatched_cars",
-        pct: pctOf(rep.verdict.lifecycle.sent.deals, planVal("dispatched_cars")),
+      { label: "Успішно закриті (142)", hint: "Статус 142 за датою закриття, по тижнях. План КВП декомпозується на тижні.", fact: fmtMoney(sumDW("success")), planKey: "success_plan", pct: pctOf(sumDW("success"), planVal("success_plan")),
+        wk: { money: true, f: (wi) => dw(wi)?.success ?? null, p: (wi) => decomp(planVal("success_plan"), wi) } },
+      { label: "Нові — отримано", hint: "Каса нових клієнтів (перша оплата в періоді), по тижнях. План РНК декомпозується.", fact: fmtMoney(sumDW("newRecv")), planKey: "new_revenue_plan", pct: pctOf(sumDW("newRecv"), planVal("new_revenue_plan")),
+        wk: { money: true, f: (wi) => dw(wi)?.newRecv ?? null, p: (wi) => decomp(planVal("new_revenue_plan"), wi) } },
+      { label: "Постійні — отримано", hint: "Каса постійних клієнтів, по тижнях. План РПК декомпозується.", fact: fmtMoney(sumDW("repeatRecv")), planKey: "repeat_revenue_plan", pct: pctOf(sumDW("repeatRecv"), planVal("repeat_revenue_plan")),
+        wk: { money: true, f: (wi) => dw(wi)?.repeatRecv ?? null, p: (wi) => decomp(planVal("repeat_revenue_plan"), wi) } },
+      { label: "Дохід в очікуванні (план. дата)", hint: "Зона визнання за ПЛАНОВОЮ датою оплати (коли має зайти), по тижнях періоду.", fact: fmtMoney(sumDW("expectedPlanned")),
+        wk: { money: true, f: (wi) => dw(wi)?.expectedPlanned ?? null, p: () => null } },
+      { label: "Поставлені авто", hint: HINT.sent, fact: fmtNum(rep.verdict.lifecycle.sent.deals), planKey: "dispatched_cars", pct: pctOf(rep.verdict.lifecycle.sent.deals, planVal("dispatched_cars")),
         wk: { money: false, f: (wi) => dw(wi)?.auto ?? null, p: (wi) => decomp(planVal("dispatched_cars"), wi) } },
-      { label: "Ліди реклама", hint: HINT.conversion, fact: fmtNum(rep.deptWeeks.reduce((a, w) => a + w.leadsAd, 0)), planKey: "ad_leads",
-        pct: pctOf(rep.deptWeeks.reduce((a, w) => a + w.leadsAd, 0), planVal("ad_leads")),
+      { label: "Ліди реклама", hint: HINT.conversion, fact: fmtNum(rep.deptWeeks.reduce((a, w) => a + w.leadsAd, 0)), planKey: "ad_leads", pct: pctOf(rep.deptWeeks.reduce((a, w) => a + w.leadsAd, 0), planVal("ad_leads")),
         wk: { money: false, f: (wi) => dw(wi)?.leadsAd ?? null, p: (wi) => decomp(planVal("ad_leads"), wi) } },
       { label: "Ліди лідоген", hint: HINT.transferred, fact: fmtNum(rep.deptWeeks.reduce((a, w) => a + w.leadsLeadgen, 0)),
         wk: { money: false, f: (wi) => dw(wi)?.leadsLeadgen ?? null, p: () => null } },
+      { label: "Втрачені (143)", hint: "Відмови (143 за датою закриття), к-сть по тижнях; сума в місяці.", fact: `${sumDW("lostDeals")} угод · ${fmtMoney(sumDW("lostSum"))}`,
+        wk: { money: false, f: (wi) => dw(wi)?.lostDeals ?? null, p: () => null } },
     ]],
-    ["📸 Ратіо / знімки (місяць-онлі)", [
-      { label: "Дохід в очікуванні (зона)", hint: HINT.structExpected, fact: fmtMoney(m.expectedZoneTotal.sum), wk: null },
-      { label: "Успішно закриті (142)", hint: "Статус 142 за датою закриття в періоді.", fact: fmtMoney(m.success.revenue), wk: null },
-      { label: "Середній чек (ціль)", hint: "КВП-ручна ціль (звірка з листом 2600–2900).", fact: en.ad.conversion != null ? "—" : "—", planKey: "avg_check", wk: null },
-      { label: "Конверсія реклами", hint: HINT.conversion, fact: en.ad.conversion == null ? "—" : `${en.ad.conversion}%${en.ad.mature ? "" : " ⏳"}`, wk: null },
+    ["🎯 Цілі-відношення (місяць-онлі: факт vs ціль ✎)", [
+      { label: "Середній чек", hint: "Ціль КВП (звірка з листом 2600–2900). Відношення → без тижневої декомпозиції.", fact: "—", planKey: "avg_check", wk: null },
+      { label: "CAC (вартість клієнта)", hint: `Факт: бюджет ${fmtMoney(nm.cacBudget)} ÷ ${nm.cacNewClients} нових. Ціль ✎.`, fact: nm.cac == null ? "—" : fmtFull(nm.cac), planKey: "cac_target", wk: null },
+      { label: "Середній цикл угоди", hint: "Факт: днів створення→закриття (142). ⓘ created≈лід, closed≈оплата. Ціль ✎.", fact: nm.avgCycleDays == null ? "—" : `${nm.avgCycleDays} дн`, planKey: "cycle_target", wk: null },
+      { label: "Конверсія реклами", hint: HINT.conversion, fact: en.ad.conversion == null ? "—" : `${en.ad.conversion}%${en.ad.mature ? "" : " ⏳"}`, planKey: "conversion_target", pct: en.ad.conversion != null && planVal("conversion_target") ? pctOf(en.ad.conversion, planVal("conversion_target")) : null, wk: null },
     ]],
-    ["🔮 Нові метрики (місяць-онлі)", [
+    ["🔮 Похідні (місяць-онлі, без плану — по тижнях брехали б)", [
       { label: "Прогноз місяця", hint: HINT.projection, fact: `${fmtMoney(nm.forecast.projected)}${nm.forecast.projectedPct == null ? "" : ` (${nm.forecast.projectedPct}%)`}`, wk: null },
       { label: "Потрібний темп/день", hint: `Залишок плану ${fmtMoney(nm.remainingPlan)} ÷ ${nm.remainingWorkingDays} роб. днів, що лишились.`, fact: nm.neededPacePerDay == null ? "—" : `${fmtMoney(nm.neededPacePerDay)}/день`, wk: null },
-      { label: "Прострочена оплата", hint: "planned_payment_at минув, а угода ще не оплачена (не 142/143, не етап 9). Знімок «зараз».", fact: `${fmtMoney(nm.overduePayments.sum)} · ${nm.overduePayments.count} угод`, wk: null },
-      { label: "CAC (вартість клієнта)", hint: `Рекламний бюджет ${fmtMoney(nm.cacBudget)} ÷ ${nm.cacNewClients} нових клієнтів.`, fact: nm.cac == null ? "—" : fmtFull(nm.cac), wk: null },
-      { label: "Середній цикл угоди", hint: "Днів від створення (лід) до закриття (142). ⓘ created≈лід, closed≈оплата — банк-дати нема.", fact: nm.avgCycleDays == null ? "—" : `${nm.avgCycleDays} днів`, wk: null },
-      { label: "Втрачені", hint: "Відмови (143 у періоді) + нецільові ліди.", fact: `${nm.lost.deals} угод · ${fmtMoney(nm.lost.sum)}${nm.lost.nonTargetLeads != null ? ` · ${nm.lost.nonTargetLeads} нецільових` : ""}`, wk: null },
-    ]],
-    ["🆕 / 🔁 Клієнти (місяць-онлі)", [
-      { label: "Нові — отримано / очікування", hint: HINT.structReceived, fact: `${fmtMoney(rs.received.new.revenue)} / ${fmtMoney(rs.expected.new.sum)}`, wk: null },
-      { label: "Постійні — отримано / очікування", hint: HINT.structReceived, fact: `${fmtMoney(rs.received.repeat.revenue)} / ${fmtMoney(rs.expected.repeat.sum)}`, wk: null },
+      { label: "Прострочена оплата", hint: "planned_payment_at минув, угода ще не оплачена (не 142/143, не етап 9). Знімок «зараз».", fact: `${fmtMoney(nm.overduePayments.sum)} · ${nm.overduePayments.count} угод`, wk: null },
     ]],
   ];
   return (
