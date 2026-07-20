@@ -6,8 +6,12 @@ import { signToken } from "../auth/auth.js";
 
 export const authRouter = Router();
 
+// Email нормалізується (trim + нижній регістр) ще до валідації — мобільний
+// автокапс/пробіл більше не ламає вхід. Пароль НЕ чіпаємо (пробіл може бути
+// частиною пароля). У запиті теж lower(email) — на випадок, якщо збережений
+// email містить великі літери.
 const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().toLowerCase().email(),
   password: z.string().min(1),
 });
 
@@ -26,7 +30,7 @@ authRouter.post("/login", async (req, res) => {
     team_id: number | null;
     is_active: boolean;
   }>(
-    `SELECT id, password_hash, role, manager_id, team_id, is_active FROM users WHERE email = $1`,
+    `SELECT id, password_hash, role, manager_id, team_id, is_active FROM users WHERE lower(email) = $1`,
     [email]
   );
   const user = result.rows[0];
