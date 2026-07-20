@@ -81,9 +81,13 @@ function LogisticsSection({ rep }: { rep: KvpReport }) {
       {card("🔁 Повторні рейси", mark("ok", "Клієнти з оплатою в періоді, згруповані за к-тю оплачених рейсів."),
         <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Рейсів</th><th style={{ textAlign: "right" }}>Клієнтів</th><th style={{ textAlign: "right" }}>Виручка</th></tr></thead>
           <tbody>{L.repeatRides.map((r) => <tr key={r.bucket}><td>{r.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(r.clients)}</td><td style={{ textAlign: "right" }}>{fmtMoney(r.revenue)}</td></tr>)}</tbody></table>)}
-      {card("📅 Прострочена дебіторка (aging)", mark("ok", "Неоплачені угоди з простроченою планова датою оплати, по кошиках днів прострочки."),
-        <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Днів</th><th style={{ textAlign: "right" }}>Угод</th><th style={{ textAlign: "right" }}>Сума</th></tr></thead>
-          <tbody>{L.aging.map((a) => <tr key={a.bucket}><td>{a.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(a.count)}</td><td style={{ textAlign: "right" }}>{fmtMoney(a.sum)}</td></tr>)}</tbody></table>)}
+      {card("📅 Прострочена дебіторка (aging)", mark("ok", "Неоплачені угоди з простроченою планова датою оплати, по кошиках днів прострочки. Кошики = реальний борг до стягнення (позитивні); сторно/коригування (повернення) — окремим рядком, не борг."),
+        <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Днів</th><th style={{ textAlign: "right" }}>Угод</th><th style={{ textAlign: "right" }}>Борг</th></tr></thead>
+          <tbody>
+            {L.aging.buckets.map((a) => <tr key={a.bucket}><td>{a.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(a.count)}</td><td style={{ textAlign: "right" }}>{fmtMoney(a.sum)}</td></tr>)}
+            <tr style={{ borderTop: "1px solid var(--border)", fontWeight: 600 }}><td>Разом борг</td><td style={{ textAlign: "right" }}>{fmtNum(L.aging.buckets.reduce((a, b) => a + b.count, 0))}</td><td style={{ textAlign: "right", color: GREEN }}>{fmtMoney(L.aging.buckets.reduce((a, b) => a + b.sum, 0))}</td></tr>
+            {L.aging.reversals.count > 0 && <tr style={{ color: MUTED }}><td>сторно/коригування</td><td style={{ textAlign: "right" }}>{fmtNum(L.aging.reversals.count)}</td><td style={{ textAlign: "right" }}>{fmtMoney(L.aging.reversals.sum)}</td></tr>}
+          </tbody></table>)}
       {card("💰 Маржа на авто", mark("none", "🔒 Заблоковано: собівартість (Видаток/Оплата перевізнику) заповнена ~0%. Поле в Kommo Є — потрібне заповнення менеджерами, не нове поле."),
         <div style={{ fontSize: 12, color: MUTED }}>Недоступно — заповніть собівартість рейсу в CRM.</div>)}
     </div>

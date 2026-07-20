@@ -477,7 +477,7 @@ export interface KvpReport {
     salesChannel: { key: string; revenue: number; deals: number }[];
     transit: { avg: number | null; median: number | null; n: number };
     dso: { avg: number | null; median: number | null; n: number };
-    aging: { bucket: string; count: number; sum: number }[];
+    aging: { buckets: { bucket: string; count: number; sum: number }[]; reversals: { count: number; sum: number } };
     concentration: { topN: number; topRevenue: number; totalRevenue: number; pct: number | null; clients: number };
     repeatRides: { bucket: string; clients: number; revenue: number }[];
     fillRates: { requestType: number; salesChannel: number };

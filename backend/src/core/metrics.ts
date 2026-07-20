@@ -851,23 +851,29 @@ export async function dsoProxyDays(s: MetricScope): Promise<DaysStat> {
 }
 
 // Aging простроченої дебіторки (знімок «зараз»): неоплачені FC-угоди (не 142/143, не
-// етап 9) з planned_payment_at у минулому, розкидані по кошиках прострочки. count+Σ price.
+// етап 9) з planned_payment_at у минулому. Кошики 1-7/8-30/30+ = РЕАЛЬНИЙ БОРГ до стягнення
+// (лише не-сторно, price>0) → жоден не відʼємний. Сторно (is_minus, повернення/коригування)
+// винесено ОКРЕМИМ рядком, бо це не «борг до стягнення», а зменшення нарахувань. Σ-узгодженість:
+// Σ(кошики.sum) + reversals.sum == overduePayments.sum (той самий предикат, знакова сумісність).
 export interface AgingBucket { bucket: string; count: number; sum: number }
-export async function receivablesAging(): Promise<AgingBucket[]> {
+export interface AgingResult { buckets: AgingBucket[]; reversals: { count: number; sum: number } }
+export async function receivablesAging(): Promise<AgingResult> {
   const r = await pool.query<{ bucket: string; c: string; s: string }>(
     `WITH od AS (
-       SELECT d.price, ((now() ${KYIV})::date - (d.planned_payment_at ${KYIV})::date) AS days
+       SELECT d.price, d.is_minus, ((now() ${KYIV})::date - (d.planned_payment_at ${KYIV})::date) AS days
          FROM deals d
         WHERE d.pipeline_id = ANY($1) AND d.planned_payment_at IS NOT NULL
           AND (d.planned_payment_at ${KYIV})::date < (now() ${KYIV})::date
           AND d.status_id NOT IN (142, 143) AND NOT (d.status_id = ANY($2))
      )
-     SELECT CASE WHEN days <= 7 THEN '1-7' WHEN days <= 30 THEN '8-30' ELSE '30+' END AS bucket,
+     SELECT CASE WHEN is_minus THEN 'reversal'
+                 WHEN days <= 7 THEN '1-7' WHEN days <= 30 THEN '8-30' ELSE '30+' END AS bucket,
             COUNT(*) c, COALESCE(SUM(price),0) s
        FROM od GROUP BY 1`, [FC_PIPELINES, [69716460, 60412544]]);
-  const order = ["1-7", "8-30", "30+"];
-  const map = new Map(r.rows.map((x) => [x.bucket, { bucket: x.bucket, count: Number(x.c), sum: Math.round(Number(x.s)) }]));
-  return order.map((b) => map.get(b) ?? { bucket: b, count: 0, sum: 0 });
+  const map = new Map(r.rows.map((x) => [x.bucket, { count: Number(x.c), sum: Math.round(Number(x.s)) }]));
+  const buckets = ["1-7", "8-30", "30+"].map((b) => ({ bucket: b, ...(map.get(b) ?? { count: 0, sum: 0 }) }));
+  const reversals = map.get("reversal") ?? { count: 0, sum: 0 };
+  return { buckets, reversals };
 }
 
 /**
