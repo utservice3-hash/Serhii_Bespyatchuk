@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail } from "../../../api";
+import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
@@ -357,35 +357,13 @@ export function KvpReportSection() {
                         ))}
                       </tr>
                       {openWeekDrill?.teamId === t.teamId && <WeekManagerDrill team={t} weekIdx={openWeekDrill.weekIdx} weekBlocks={rep.weekBlocks} />}
-                      {/* Менеджери — ІНЛАЙН у тій самій таблиці (той самий <colgroup>) → тижневі колонки
-                          збігаються попіксельно з командними. Клік по імені = денний дрил weeks→days. */}
-                      {openTeam === t.teamId && t.managers.map((m: KvpManager) => {
-                        const lagging = m.pct != null && m.pct < 70 && m.plan > 0;
-                        const open = openMgr === m.managerId;
-                        return (
-                          <Fragment key={m.managerId}>
-                            <tr onClick={() => setOpenMgr(open ? null : m.managerId)} style={{ cursor: "pointer", background: "var(--bg)" }}>
-                              <td style={{ ...clip, paddingLeft: 26 }}>{open ? "▾" : "▸"} {m.name}</td>
-                              <td style={{ textAlign: "right" }}>{fmtMoney(m.plan)}</td>
-                              <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(m.revenue)}</td>
-                              <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={m.pct ?? 0} color={pctColor(m.pct)} /><span style={{ color: pctColor(m.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(m.pct)}</span></div></td>
-                              <td style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.expected)}</td>
-                              <td style={{ textAlign: "right" }}>{t.kind === "rnk" ? (m.conversion == null ? "—" : `${m.conversion}%`) : "—"}</td>
-                              {rep.weekBlocks.map((w) => <WeekCell key={w.idx} mode={weekMode} w={m.weeks?.find((x) => x.idx === w.idx)} prev={m.weeks?.find((x) => x.idx === w.idx - 1)} />)}
-                            </tr>
-                            {lagging && (
-                              <tr><td colSpan={6 + rep.weekBlocks.length} style={{ paddingLeft: 26, background: "rgba(220,38,38,0.06)", fontSize: 12, color: RED }}>
-                                ⚠️ {m.name} відстає ({m.pct}% плану). {m.successDeals < 3 ? "Мало закритих угод" : "Є угоди, але недобір суми"}{t.kind === "rnk" && m.conversion != null && m.conversion < (t.conversion ?? 0) ? ` · конверсія ${m.conversion}% нижча за команду` : ""}. → перевірити пайплайн і темп по днях.
-                              </td></tr>
-                            )}
-                            {open && (
-                              <tr><td colSpan={6 + rep.weekBlocks.length} style={{ padding: "8px 8px 12px 40px", background: "var(--card-bg)" }}>
-                                <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} isRnk={t.kind === "rnk"} />
-                              </td></tr>
-                            )}
-                          </Fragment>
-                        );
-                      })}
+                      {/* Спокійний вигляд менеджерів (макет kvp_managers_calm_mockup): тихий рядок +
+                          спарклайн 5 тижнів; тижневі числа + діагноз + дні — на клік. Без банера. */}
+                      {openTeam === t.teamId && (
+                        <tr><td colSpan={6 + rep.weekBlocks.length} style={{ padding: 0, background: "var(--bg)" }}>
+                          <CalmManagers team={t} rep={rep} plans={plans} openMgr={openMgr} setOpenMgr={setOpenMgr} />
+                        </td></tr>
+                      )}
                     </Fragment>
                   ))}
                   {/* #5: розріз відділу по тижнях = Σ команд (гейт Σ Dept == Σ teams == Σ days) */}
@@ -484,6 +462,100 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ── Спокійний вигляд менеджерів (макет kvp_managers_calm_mockup) + рушій рекомендацій ──
+const CALM_COLS = "1fr 82px 116px 50px 78px 50px 122px"; // імʼя·план·факт·вик·очік·конв·спарклайн
+
+// Спарклайн 5 тижнів — ТОНКІ бари ЛИШЕ кольором (зелений≥100/жовтий70-99/червоний<70/сірий нуль),
+// поточний тиждень обведено. Без чисел/стрілок.
+function Sparkline({ weeks, blocks }: { weeks: KvpWeek[]; blocks: KvpReport["weekBlocks"] }) {
+  return (
+    <div style={{ display: "flex", gap: 3, alignItems: "flex-end", justifyContent: "flex-end", height: 20 }}>
+      {blocks.map((b) => {
+        const w = weeks?.find((x) => x.idx === b.idx);
+        const fact = w?.fact ?? 0, plan = w?.plan ?? 0, isFut = w?.isFuture ?? false, isCur = w?.isCurrent ?? false;
+        let color = "var(--border)", h = 4;
+        if (!isFut && fact > 0) { const p = plan > 0 ? (fact / plan) * 100 : 0; color = p >= 100 ? GREEN : p >= 70 ? AMBER : RED; h = 20; }
+        return <span key={b.idx} title={`Т${b.idx} ${b.from.slice(8)}–${b.to.slice(8)}`}
+          style={{ width: 15, height: h, borderRadius: "2px 2px 0 0", background: color, outline: isCur ? `1.5px solid ${BLUE}` : undefined, outlineOffset: 1 }} />;
+      })}
+    </div>
+  );
+}
+
+// Детермінований рушій рекомендацій (БЕЗ AI). ПЕРВИННИЙ провал → дія з числами. Скоуп за
+// роллю: РПК=лідоген, РНК=реклама. Флаг «відстає» — проти ТЕМПУ на сьогодні, не проти 100%.
+type Rec = { level: "crit" | "warn" | "ok"; why: string; action: string };
+function mgrRecommendation(m: KvpManager, kind: string, plans: KvpPlans, proj: KvpReport["verdict"]["projection"]): Rec {
+  const remaining = Math.max(0, m.plan - m.revenue);              // залишок_плану = план − факт
+  const pace = proj.totalWorkingDays > 0 ? proj.elapsedWorkingDays / proj.totalWorkingDays : 0;
+  const paceTarget = m.plan * pace;                              // темп на сьогодні
+  const behind = m.plan > 0 && m.revenue < paceTarget;
+  const CHECK = 2000, LG_CONV = 0.10;                            // константи (чек 2000, лідоген 10%)
+  const adTargetPct = plans.conversion_target ?? 10;            // конв_реклама_ціль (%)
+  const paceNote = `факт ${fmtMoney(m.revenue)} < темп ${fmtMoney(Math.round(paceTarget))} (${proj.elapsedWorkingDays}/${proj.totalWorkingDays} роб. днів)`;
+  // 1) ВІДСТАЄ ВІД ТЕМПУ (первинний)
+  if (behind) {
+    if (kind === "rnk") {
+      const conv = adTargetPct / 100;
+      const N = conv > 0 ? Math.round(remaining / CHECK / conv) : null;
+      return { level: "crit", why: `Відстає від темпу: ${paceNote}.`,
+        action: `Треба ~${N ?? "—"} реклама-лідів цього тижня = round(залишок ${fmtMoney(remaining)} ÷ чек ${CHECK} ÷ конв. реклами ${adTargetPct}%). Аналіз угод, коментар що не так, план дій, затвердити.` };
+    }
+    const N = Math.round(remaining / CHECK / LG_CONV);
+    return { level: "crit", why: `Відстає від темпу: ${paceNote}.`,
+      action: `Треба ~${N} лідогенів цього тижня = round(залишок ${fmtMoney(remaining)} ÷ чек ${CHECK} ÷ конв. лідоген 10%). Аналіз Прогноз/реактивація — клієнти зі зниженням обсягу, звʼязок, фіксація. Розбір дзвінків.` };
+  }
+  // 2) Конверсія каналу < ціль (РНК реклама)
+  if (kind === "rnk" && m.conversion != null && m.conversion < adTargetPct) {
+    return { level: "warn", why: `Конверсія реклами ${m.conversion}% нижча за ціль ${adTargetPct}%.`,
+      action: `Аналіз угод, коментар що не так, план дій, затвердити.` };
+  }
+  // 3) НЕ відстає → позитивна нотатка (без червоного)
+  return { level: "ok", why: `Тримає темп (${m.pct ?? 0}% плану).`,
+    action: m.expected > 0 ? `Дотиснути очікувані ${fmtMoney(m.expected)}.` : `Тримати темп, закривати заплановане.` };
+}
+
+function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam; rep: KvpReport; plans: KvpPlans; openMgr: number | null; setOpenMgr: (v: number | null) => void }) {
+  const proj = rep.verdict.projection;
+  const recCol = (l: Rec["level"]) => (l === "crit" ? RED : l === "warn" ? AMBER : GREEN);
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: CALM_COLS, gap: 8, padding: "6px 16px 6px 30px", color: MUTED, fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".04em", borderBottom: "1px solid var(--border)" }}>
+        <span>Менеджер</span><span style={{ textAlign: "right" }}>План</span><span style={{ textAlign: "right" }}>Факт</span><span style={{ textAlign: "right" }}>Вик</span><span style={{ textAlign: "right" }}>Очік</span><span style={{ textAlign: "right" }}>Конв</span><span style={{ textAlign: "right" }}>Тижні Т1–Т{rep.weekBlocks.length}</span>
+      </div>
+      {team.managers.map((m) => {
+        const open = openMgr === m.managerId;
+        const zero = m.revenue === 0;
+        const pctColr = zero ? MUTED : pctColor(m.pct);
+        const rec = mgrRecommendation(m, team.kind, plans, proj);
+        return (
+          <Fragment key={m.managerId}>
+            <div onClick={() => setOpenMgr(open ? null : m.managerId)}
+              style={{ display: "grid", gridTemplateColumns: CALM_COLS, gap: 8, alignItems: "center", padding: "9px 16px 9px 30px", borderBottom: "1px solid var(--border)", cursor: "pointer", background: open ? "rgba(37,99,235,0.05)" : undefined }}>
+              <span style={{ ...clip, fontWeight: 560, fontSize: 12.5 }}><span style={{ color: MUTED, fontSize: 10 }}>{open ? "▾" : "▸"}</span> {m.name}</span>
+              <span style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.plan)}</span>
+              <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}><span style={{ width: 40, height: 6, background: "var(--bg)", borderRadius: 4, overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, m.pct ?? 0)}%`, background: zero ? "var(--border)" : pctColr, borderRadius: 4 }} /></span><b>{fmtMoney(m.revenue)}</b></span>
+              <span style={{ textAlign: "right", fontWeight: 700, color: pctColr }}>{m.plan > 0 ? `${m.pct ?? 0}%` : "—"}</span>
+              <span style={{ textAlign: "right", color: m.expected > 0 ? AMBER : MUTED }}>{m.expected > 0 ? fmtMoney(m.expected) : "—"}</span>
+              <span style={{ textAlign: "right", color: MUTED }}>{team.kind === "rnk" && m.conversion != null ? `${m.conversion}%` : "—"}</span>
+              <Sparkline weeks={m.weeks} blocks={rep.weekBlocks} />
+            </div>
+            {open && (
+              <div style={{ padding: "8px 16px 14px 30px", background: "rgba(37,99,235,0.03)", borderBottom: "1px solid var(--border)" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, background: "var(--card-bg)", border: "1px solid var(--border)", borderLeft: `3px solid ${recCol(rec.level)}`, borderRadius: 9, padding: "9px 12px", marginBottom: 8 }}>
+                  <div><span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, color: recCol(rec.level) }}>{rec.level === "ok" ? "Статус" : "Чому"}</span><div style={{ fontSize: 11.5, lineHeight: 1.5 }}>{rec.why}</div></div>
+                  <div><span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, color: GREEN }}>Що робити</span><div style={{ fontSize: 11.5, lineHeight: 1.5 }}>{rec.action}</div></div>
+                </div>
+                <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} isRnk={team.kind === "rnk"} />
+              </div>
+            )}
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
