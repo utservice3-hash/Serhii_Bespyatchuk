@@ -824,10 +824,10 @@ export async function lostByDay(s: MetricScope): Promise<{ day: string; deals: n
   const conds = ["d.pipeline_id = ANY($1)", "d.status_id = 143", "d.closed_at_kommo IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
-  const r = await pool.query<{ day: string; c: string; s: string }>(
-    `SELECT to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM-DD') day, COUNT(*) c, COALESCE(SUM(ABS(d.price)),0) s
+  const r = await pool.query<{ bkt: string; c: string; s: string }>(
+    `SELECT to_char((d.closed_at_kommo ${KYIV})::date, 'YYYY-MM-DD') AS bkt, COUNT(*) c, COALESCE(SUM(ABS(d.price)),0) s
        FROM deals d WHERE ${conds.join(" AND ")} GROUP BY 1`, params);
-  return r.rows.map((x) => ({ day: x.day, deals: Number(x.c), sum: Math.round(Number(x.s)) }));
+  return r.rows.map((x) => ({ day: x.bkt, deals: Number(x.c), sum: Math.round(Number(x.s)) }));
 }
 
 // ── Блок B (логістика) — часові/дебіторські метрики ──
