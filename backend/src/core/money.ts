@@ -146,7 +146,9 @@ async function receivedByDealAttr(s: MoneyScope, expr: string): Promise<DimRow[]
   return rows.map((x) => ({ key: x.k, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
 export const receivedByRequestType = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(dd.request_type, '—')");
-export const receivedBySalesChannel = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(dd.sales_channel, '—')");
+// «Тендерний напрямок» (реальне enum-значення Kommo 2099549) бізнес зве «Самостійні»
+// (самостійні менеджери) — relabel на показ, БЕЗ зміни сум (Σ == received тримається).
+export const receivedBySalesChannel = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(CASE WHEN dd.sales_channel = 'Тендерний напрямок' THEN 'Самостійні' ELSE dd.sales_channel END, '—')");
 // По клієнту (для концентрації + розподілу повторних рейсів). Без client_key → «—».
 export const receivedByClientKey = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(dd.client_key, '—')");
 

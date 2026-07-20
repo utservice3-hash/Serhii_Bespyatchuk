@@ -96,10 +96,10 @@ function LogisticsSection({ rep }: { rep: KvpReport }) {
       <LogiCard title="🏷 Канал продажу" kind={L.fillRates.salesChannel >= 90 ? "ok" : "proxy"}
         hint={`Розклад отриманої виручки за «Канал продажу». Σ == отримано. Fill-rate поля: ${L.fillRates.salesChannel}%.`}>
         <div style={{ display: "grid", gap: 8 }}>
-          {L.salesChannel.map((c) => { const share = Math.round(c.revenue / totalChan * 100); const tender = /тендер/i.test(c.key); return (
+          {L.salesChannel.map((c) => { const share = Math.round(c.revenue / totalChan * 100); const solo = /самостій/i.test(c.key); return (
             <div key={c.key}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}><span style={{ ...clip, fontWeight: tender ? 700 : 400, color: tender ? AMBER : undefined }}>{c.key}{tender ? " ⭐" : ""}</span><span style={{ fontWeight: 600 }}>{fmtMoney(c.revenue)} · {share}%</span></div>
-              <ShareBar pct={share} color={tender ? AMBER : GREEN} />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}><span style={{ ...clip, fontWeight: solo ? 700 : 400, color: solo ? AMBER : undefined }}>{c.key}{solo ? " ⭐" : ""}</span><span style={{ fontWeight: 600 }}>{fmtMoney(c.revenue)} · {share}%</span></div>
+              <ShareBar pct={share} color={solo ? AMBER : GREEN} />
             </div>
           ); })}
         </div>
