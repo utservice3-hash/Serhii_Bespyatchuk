@@ -4596,7 +4596,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       return {
         direction: dirSplit, salesChannel: chanSplit,
         transit, dso, aging,
-        concentration: { topN, topRevenue: Math.round(topRev), totalRevenue: Math.round(totalRev), pct: totalRev > 0 ? Math.round((topRev / totalRev) * 1000) / 10 : null, clients: named.length },
+        concentration: { topN, topRevenue: Math.round(topRev), totalRevenue: Math.round(totalRev), pct: totalRev > 0 ? Math.round((topRev / totalRev) * 1000) / 10 : null, clients: named.length,
+          topClients: named.slice(0, topN).map((c) => ({ key: c.key, revenue: Math.round(c.revenue), deals: c.deals })) },
         repeatRides: [
           { bucket: "1", ...bucketRides(1, 1) },
           { bucket: "2-3", ...bucketRides(2, 3) },

@@ -46,50 +46,108 @@ const HINT: Record<string, string> = {
 const teamKindLabel: Record<string, string> = { rpk: "РПК · повний цикл", rnk: "РНК · реклама", leadgen: "Лідогенерація" };
 
 // Блок B — секція «Логістика». Чесні мітки: ✓ пряме джерело · ~ проксі/наближення · ✗ нема даних.
+// ⓘ у ТІЙ САМІЙ позиції, що в решті звіту (поряд із заголовком, у flex-лейблі) — тултіп працює.
+const MK: Record<string, { c: string; ch: string }> = { ok: { c: GREEN, ch: "✓" }, proxy: { c: AMBER, ch: "~" }, none: { c: RED, ch: "✗" } };
+function LogiCard({ title, kind, hint, children }: { title: string; kind: "ok" | "proxy" | "none"; hint: string; children: ReactNode }) {
+  return (
+    <div style={{ padding: 12, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 8 }}>
+        <b style={{ fontSize: 13 }}>{title}</b>
+        <span style={{ color: MK[kind].c, fontWeight: 700, fontSize: 12 }} title={MK[kind].ch === "✓" ? "пряме джерело" : MK[kind].ch === "~" ? "проксі/наближення" : "нема даних"}>{MK[kind].ch}</span>
+        <InfoHint text={hint} />
+      </div>
+      {children}
+    </div>
+  );
+}
+function ShareBar({ pct, color }: { pct: number; color: string }) {
+  return <div style={{ height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden", marginTop: 3 }}><div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: color, borderRadius: 3 }} /></div>;
+}
 function LogisticsSection({ rep }: { rep: KvpReport }) {
   const L = rep.logistics;
-  const days = (d: { avg: number | null; median: number | null; n: number }) => d.n === 0 ? "—" : `сер ${d.avg} · медіана ${d.median} дн (${d.n})`;
-  const mark = (m: "ok" | "proxy" | "none", text: string) => (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: m === "ok" ? GREEN : m === "proxy" ? AMBER : RED }}>
-      {m === "ok" ? "✓" : m === "proxy" ? "~" : "✗"}<InfoHint text={text} />
-    </span>
-  );
-  const splitTable = (rows: { key: string; revenue: number; deals: number }[]) => (
-    <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
-      <thead><tr><th>Значення</th><th style={{ textAlign: "right" }}>Виручка</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Сер. чек</th></tr></thead>
-      <tbody>{rows.map((r) => (
-        <tr key={r.key}><td style={clip}>{r.key}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(r.revenue)}</td><td style={{ textAlign: "right" }}>{fmtNum(r.deals)}</td><td style={{ textAlign: "right" }}>{r.deals > 0 ? fmtFull(Math.round(r.revenue / r.deals)) : "—"}</td></tr>
-      ))}</tbody>
-    </table>
-  );
-  const card = (title: string, badge: ReactNode, body: ReactNode) => (
-    <div style={{ padding: 12, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}><b style={{ fontSize: 13 }}>{title}</b>{badge}</div>
-      {body}
+  const totalDir = L.direction.reduce((a, d) => a + d.revenue, 0) || 1;
+  const totalChan = L.salesChannel.reduce((a, c) => a + c.revenue, 0) || 1;
+  const agingDebt = L.aging.buckets.reduce((a, b) => a + b.sum, 0);
+  const agingCnt = L.aging.buckets.reduce((a, b) => a + b.count, 0);
+  const tile = (label: string, val: string, sub: string) => (
+    <div style={{ padding: "8px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, textAlign: "center" }}>
+      <div style={{ fontSize: 11, color: MUTED }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700 }}>{val}</div>
+      <div style={{ fontSize: 10, color: MUTED }}>{sub}</div>
     </div>
   );
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
-      {card(`🧭 Напрямок (Тип запиту)`, mark(L.fillRates.requestType >= 90 ? "ok" : "proxy", `Fill-rate поля «Тип запиту»: ${L.fillRates.requestType}%. Виручка розкладена з ядра (Σ == отримано).`), splitTable(L.direction))}
-      {card(`🏷 Канал продажу`, mark(L.fillRates.salesChannel >= 90 ? "ok" : "proxy", `Fill-rate поля «Канал продажу»: ${L.fillRates.salesChannel}%. Σ == отримано.`), splitTable(L.salesChannel))}
-      {card("⏱ Транзитний час", mark("proxy", "load_at → unload_at. ⓘ unload = ДАТА АКТА (бухгалтерська), не фізичне розвантаження → трохи завищує."),
-        <div style={{ fontSize: 14, fontWeight: 700 }}>{days(L.transit)}</div>)}
-      {card("💳 DSO (проксі)", mark("proxy", "unload (дата акта) → closed (оплата/142). ⓘ Реальної банк-дати оплати в CRM НЕМА → проксі по даті закриття."),
-        <div style={{ fontSize: 14, fontWeight: 700 }}>{days(L.dso)}</div>)}
-      {card("🧮 Концентрація клієнтів", mark("ok", `Топ-${L.concentration.topN} клієнтів як % отриманої виручки (${L.concentration.clients} клієнтів з іменем).`),
-        <div><div style={{ fontSize: 20, fontWeight: 700, color: (L.concentration.pct ?? 0) > 50 ? AMBER : "var(--text)" }}>{L.concentration.pct == null ? "—" : `${L.concentration.pct}%`}</div><div style={{ fontSize: 11, color: MUTED }}>топ-{L.concentration.topN} {fmtMoney(L.concentration.topRevenue)} з {fmtMoney(L.concentration.totalRevenue)}</div></div>)}
-      {card("🔁 Повторні рейси", mark("ok", "Клієнти з оплатою в періоді, згруповані за к-тю оплачених рейсів."),
+      {/* Напрямок — КАРТКИ з барами частки */}
+      <LogiCard title="🧭 Напрямок (Тип запиту)" kind={L.fillRates.requestType >= 90 ? "ok" : "proxy"}
+        hint={`Розклад отриманої виручки за «Тип запиту» (напрямок). Σ по напрямках == отримано. Fill-rate поля: ${L.fillRates.requestType}%. Конверсія по напрямку — окремим кроком (потребує бекфіл + когортну метрику).`}>
+        <div style={{ display: "grid", gap: 8 }}>
+          {L.direction.map((d) => { const share = Math.round(d.revenue / totalDir * 100); return (
+            <div key={d.key}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}><b style={{ ...clip }}>{d.key}</b><span style={{ fontWeight: 700 }}>{fmtMoney(d.revenue)}</span></div>
+              <div style={{ fontSize: 10, color: MUTED }}>{fmtNum(d.deals)} авто · чек {d.deals > 0 ? fmtFull(Math.round(d.revenue / d.deals)) : "—"} · {share}%</div>
+              <ShareBar pct={share} color={BLUE} />
+            </div>
+          ); })}
+        </div>
+      </LogiCard>
+
+      {/* Канал продажу — рядки з барами, Тендерний виділено */}
+      <LogiCard title="🏷 Канал продажу" kind={L.fillRates.salesChannel >= 90 ? "ok" : "proxy"}
+        hint={`Розклад отриманої виручки за «Канал продажу». Σ == отримано. Fill-rate поля: ${L.fillRates.salesChannel}%.`}>
+        <div style={{ display: "grid", gap: 8 }}>
+          {L.salesChannel.map((c) => { const share = Math.round(c.revenue / totalChan * 100); const tender = /тендер/i.test(c.key); return (
+            <div key={c.key}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}><span style={{ ...clip, fontWeight: tender ? 700 : 400, color: tender ? AMBER : undefined }}>{c.key}{tender ? " ⭐" : ""}</span><span style={{ fontWeight: 600 }}>{fmtMoney(c.revenue)} · {share}%</span></div>
+              <ShareBar pct={share} color={tender ? AMBER : GREEN} />
+            </div>
+          ); })}
+        </div>
+      </LogiCard>
+
+      {/* Швидкість — плитки транзит / DSO / прострочено */}
+      <LogiCard title="⚡ Швидкість грошей" kind="proxy"
+        hint="Транзит: load_at→unload_at (unload=ДАТА АКТА, не фізичне розвантаження ~). DSO: unload→closed(142) — реальної банк-дати оплати в CRM нема, проксі по даті закриття ~. Прострочено: борг зі знімка aging.">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+          {tile("Транзит", L.transit.n === 0 ? "—" : `${L.transit.avg} дн`, L.transit.n === 0 ? "" : `медіана ${L.transit.median}`)}
+          {tile("DSO ~", L.dso.n === 0 ? "—" : `${L.dso.avg} дн`, L.dso.n === 0 ? "" : `медіана ${L.dso.median}`)}
+          {tile("Прострочено", fmtMoney(agingDebt), `${agingCnt} угод`)}
+        </div>
+      </LogiCard>
+
+      {/* Концентрація — % + ТОП-5 список */}
+      <LogiCard title="🧮 Концентрація клієнтів" kind="ok"
+        hint={`Топ-${L.concentration.topN} клієнтів як % отриманої виручки (${L.concentration.clients} клієнтів з іменем у періоді).`}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: (L.concentration.pct ?? 0) > 50 ? AMBER : "var(--text)" }}>{L.concentration.pct == null ? "—" : `${L.concentration.pct}%`}<span style={{ fontSize: 11, fontWeight: 400, color: MUTED }}> топ-{L.concentration.topN} ({fmtMoney(L.concentration.topRevenue)} з {fmtMoney(L.concentration.totalRevenue)})</span></div>
+        <table className="data-table" style={{ width: "100%", margin: "6px 0 0", fontSize: 12 }}>
+          <tbody>{L.concentration.topClients.map((c, i) => (
+            <tr key={c.key}><td style={{ color: MUTED, width: 18 }}>{i + 1}</td><td style={clip}>{c.key}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(c.revenue)}</td><td style={{ textAlign: "right", color: MUTED }}>{fmtNum(c.deals)}р</td></tr>
+          ))}</tbody>
+        </table>
+      </LogiCard>
+
+      {/* Повторні рейси */}
+      <LogiCard title="🔁 Повторні рейси" kind="ok" hint="Клієнти з оплатою в періоді, згруповані за к-тю оплачених рейсів (1 / 2-3 / 4+).">
         <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Рейсів</th><th style={{ textAlign: "right" }}>Клієнтів</th><th style={{ textAlign: "right" }}>Виручка</th></tr></thead>
-          <tbody>{L.repeatRides.map((r) => <tr key={r.bucket}><td>{r.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(r.clients)}</td><td style={{ textAlign: "right" }}>{fmtMoney(r.revenue)}</td></tr>)}</tbody></table>)}
-      {card("📅 Прострочена дебіторка (aging)", mark("ok", "Неоплачені угоди з простроченою планова датою оплати, по кошиках днів прострочки. Кошики = реальний борг до стягнення (позитивні); сторно/коригування (повернення) — окремим рядком, не борг."),
+          <tbody>{L.repeatRides.map((r) => <tr key={r.bucket}><td>{r.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(r.clients)}</td><td style={{ textAlign: "right" }}>{fmtMoney(r.revenue)}</td></tr>)}</tbody></table>
+      </LogiCard>
+
+      {/* Aging */}
+      <LogiCard title="📅 Прострочена дебіторка (aging)" kind="ok"
+        hint="Неоплачені угоди з простроченою планова датою, по кошиках днів. Кошики = реальний борг до стягнення (позитивні); сторно/коригування (повернення) — окремим рядком, не борг.">
         <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}><thead><tr><th>Днів</th><th style={{ textAlign: "right" }}>Угод</th><th style={{ textAlign: "right" }}>Борг</th></tr></thead>
           <tbody>
             {L.aging.buckets.map((a) => <tr key={a.bucket}><td>{a.bucket}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtNum(a.count)}</td><td style={{ textAlign: "right" }}>{fmtMoney(a.sum)}</td></tr>)}
-            <tr style={{ borderTop: "1px solid var(--border)", fontWeight: 600 }}><td>Разом борг</td><td style={{ textAlign: "right" }}>{fmtNum(L.aging.buckets.reduce((a, b) => a + b.count, 0))}</td><td style={{ textAlign: "right", color: GREEN }}>{fmtMoney(L.aging.buckets.reduce((a, b) => a + b.sum, 0))}</td></tr>
+            <tr style={{ borderTop: "1px solid var(--border)", fontWeight: 600 }}><td>Разом борг</td><td style={{ textAlign: "right" }}>{fmtNum(agingCnt)}</td><td style={{ textAlign: "right", color: GREEN }}>{fmtMoney(agingDebt)}</td></tr>
             {L.aging.reversals.count > 0 && <tr style={{ color: MUTED }}><td>сторно/коригування</td><td style={{ textAlign: "right" }}>{fmtNum(L.aging.reversals.count)}</td><td style={{ textAlign: "right" }}>{fmtMoney(L.aging.reversals.sum)}</td></tr>}
-          </tbody></table>)}
-      {card("💰 Маржа на авто", mark("none", "🔒 Заблоковано: собівартість (Видаток/Оплата перевізнику) заповнена ~0%. Поле в Kommo Є — потрібне заповнення менеджерами, не нове поле."),
-        <div style={{ fontSize: 12, color: MUTED }}>Недоступно — заповніть собівартість рейсу в CRM.</div>)}
+          </tbody></table>
+      </LogiCard>
+
+      {/* Маржа LOCKED */}
+      <LogiCard title="💰 Маржа на авто" kind="none"
+        hint="🔒 Заблоковано: собівартість (Видаток/Оплата перевізнику) заповнена ~0%. Поле в Kommo Є — потрібне заповнення менеджерами, не нове поле.">
+        <div style={{ fontSize: 12, color: MUTED }}>🔒 Недоступно — заповніть собівартість рейсу в CRM.</div>
+      </LogiCard>
     </div>
   );
 }
