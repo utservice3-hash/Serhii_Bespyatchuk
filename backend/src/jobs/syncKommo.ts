@@ -156,6 +156,34 @@ const QUALIFICATION_PIPELINES = [8921928, 7336928];
 const QUAL_LEADGEN_STAGES = [69716164, 63019380];
 
 /**
+ * Персистимо лідоген-дотик у постійну `leadgen_touch` з `leadgen_registry` (бот —
+ * ДЖЕРЕЛО ПРАВДИ передач; TRUNCATE+insert, тримає ~5 тижнів). APPEND-ONLY
+ * (`ON CONFLICT DO NOTHING`): перший раз, коли лід побачено як лідоген, фіксуємо
+ * назавжди — навіть коли реєстр перезапише вікно, слід лишається, тож
+ * `reclassifyAdChannel` більше не «забуває» лідоген і угода не мігрує назад у
+ * «вручну». `transfer_date` = найраніша дата передачі. Ганяється щосинку ПЕРЕД
+ * reclassifyAdChannel.
+ *
+ * 🔴 ЛИШЕ реєстр, НЕ lead_transfer_events (свідомо, доведено гейтом): transfer_events
+ * завищує у рази (зміни відповідального, CLAUDE.md) і ВЖЕ бере участь у reclassify
+ * через lg-CTE зі збалансованим last-touch проти реклами. Персист+форс-лідоген із
+ * нього перебивав би рекламу: гейт показав 175 хибних ad→leadgen і липень 562 (замість
+ * ~356 реєстру). Тільки реєстр → 4 ad→leadgen і липень 373 ≈ 356. Схема лишає колонку
+ * `source` під майбутні джерела, але наразі пишемо лише 'registry'.
+ */
+export async function upsertLeadgenTouch(): Promise<number> {
+  const res = await pool.query(
+    `INSERT INTO leadgen_touch (lead_kommo_id, transfer_date, source)
+     SELECT lead_id,
+            (MIN(transferred_at) AT TIME ZONE 'Europe/Kyiv')::date,
+            'registry'
+       FROM leadgen_registry GROUP BY lead_id
+     ON CONFLICT (lead_kommo_id) DO NOTHING`
+  );
+  return res.rowCount ?? 0;
+}
+
+/**
  * Channel re-attribution for full-cycle deals — «останній дотик» ПО КОЖНІЙ
  * угоді (правило власника, уточнене 08.07.2026): лідоген може реактивувати
  * клієнта, що колись прийшов з реклами, і передати в прорахунок — тоді угоди,
@@ -212,6 +240,11 @@ export async function reclassifyAdChannel(): Promise<number> {
      ),
      calc AS (
        SELECT f.kommo_id, f.lead_channel, f.lead_generator, f.utm_source, f.client_source, f.traf_type,
+              -- ПОСТІЙНИЙ лідоген-слід САМОГО ліда (leadgen_touch, джойн по kommo_id
+              -- 1:1). Deal-specific сигнал: якщо цей лід передав лідоген — це лідоген,
+              -- незалежно від того, що реєстр уже перезаписав вікно. БЕЗ client_key
+              -- (уникаємо колізії порожніх ключів типу «названиенеуказано»).
+              EXISTS (SELECT 1 FROM leadgen_touch lt WHERE lt.lead_kommo_id = f.kommo_id) AS has_touch,
               (SELECT MAX(lg.t) FROM lg
                 WHERE lg.client_key = f.client_key
                   AND lg.t <= f.created_at_kommo + interval '3 days') AS lg_t,
@@ -225,6 +258,10 @@ export async function reclassifyAdChannel(): Promise<number> {
          SELECT kommo_id, lead_channel,
                 CASE
                   WHEN lead_generator IS NOT NULL THEN 'leadgen'
+                  -- Персистентний слід — поруч зі старим лідоген-дотиком, у межах
+                  -- того самого пріоритету leadgen → ad → other (leadgen лишається
+                  -- ПЕРШИМ; deal-specific слід не з'їдає рекламу через client_key).
+                  WHEN has_touch THEN 'leadgen'
                   WHEN lg_t IS NOT NULL AND (ad_t IS NULL OR lg_t >= ad_t) THEN 'leadgen'
                   WHEN ad_t IS NOT NULL AND COALESCE(client_source, '') NOT ILIKE '%реактив%' THEN 'ad'
                   WHEN (client_source = ANY($4) OR traf_type = 'cpc' OR utm_source IS NOT NULL)
@@ -320,6 +357,11 @@ export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<
       );
     }
 
+    // Персистимо лідоген-слід із поточного знімка реєстру (+ transfer_events) у
+    // постійну leadgen_touch ПЕРЕД reclassify — щоб хвіст не губився, коли реєстр
+    // перезапише вікно, і угода не мігрувала назад у «вручну».
+    const touched = await upsertLeadgenTouch();
+
     // Re-attribute ad-sourced full-cycle deals (client came via a Qualification
     // ad lead but the deal was created "manually"). Runs over the whole table so
     // it stays correct despite the incremental upsert resetting window deals.
@@ -338,7 +380,7 @@ export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<
       [syncStartedAt, deals.length, Date.now() - startMs]
     );
 
-    console.log(`Synced ${managerCount} users and ${deals.length} deals. Reclassified ${reclassified} full-cycle deals to ad-channel.`);
+    console.log(`Synced ${managerCount} users and ${deals.length} deals. Leadgen-touch +${touched}. Reclassified ${reclassified} full-cycle deals.`);
   } catch (err) {
     // Record the failure WITHOUT advancing the watermark, so the next run
     // retries the same window instead of skipping the missed updates.

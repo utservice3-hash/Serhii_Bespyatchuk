@@ -628,6 +628,22 @@ CREATE TABLE IF NOT EXISTS leadgen_registry (
 );
 CREATE INDEX IF NOT EXISTS idx_leadgen_registry_time ON leadgen_registry(transferred_at);
 
+-- ПОСТІЙНИЙ слід лідоген-дотику. `leadgen_registry` перезаписується щосинку
+-- (TRUNCATE+insert, тримає ~5 тижнів), тож дотик з нього треба зберегти
+-- назавжди — інакше угоди старітимуть і знову ставали б «вручну». Правило:
+-- «раз побачили лід як лідоген → назавжди лідоген». Append-only: заповнюється
+-- у syncKommo (upsertLeadgenTouch) з РЕЄСТРУ (джерело правди передач). Ключ =
+-- kommo_id самого ліда (95% реєстрових лідів = сам FC-запис 1:1), тож
+-- reclassifyAdChannel джойнить угода→слід напряму по kommo_id (БЕЗ client_key —
+-- уникаємо колізії порожніх ключів). Колонка `source` лишена під майбутні
+-- джерела; lead_transfer_events сюди НЕ пишемо (завищує; вже в lg-CTE reclassify).
+CREATE TABLE IF NOT EXISTS leadgen_touch (
+  lead_kommo_id BIGINT PRIMARY KEY,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  transfer_date DATE,
+  source TEXT NOT NULL -- 'registry' | 'transfer_events'
+);
+
 -- Департаментні (top-down) плани КВП для Звіту КВП: цілі по відділу на місяць,
 -- НЕ привʼязані до менеджера (тому окремо від plans, де manager_id NOT NULL).
 -- Ключ (month, metric). Виручка лишається в plans (сума по менеджерах,
