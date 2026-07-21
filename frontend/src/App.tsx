@@ -12,7 +12,7 @@ function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       {/* Розділ у URL (/report, /kvp, …) — щоб працювали посилання, «назад/вперед»,
-          закладки. «/» = Огляд. Обидва шляхи рендерять один Dashboard. */}
+          закладки. «/» = Звіт (лендинг). Обидва шляхи рендерять один Dashboard. */}
       <Route
         path="/"
         element={

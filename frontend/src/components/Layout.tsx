@@ -57,19 +57,26 @@ export const NAV_GROUPS = [
 type NavItem = { key: string; label: string; icon: string; roles?: readonly string[] };
 export type NavKey = (typeof NAV_GROUPS)[number]["items"][number]["key"];
 
+// Вкладки, ПРИБРАНІ з навігації (меню/таби/командна панель) за рішенням власника —
+// «Огляд» і «Звіт 2.0». Код компонентів і ексклюзивні ендпоінти ЛИШАЮТЬСЯ в репо;
+// прямий захід на ці роути редіректиться на «Звіт» (Dashboard). NAV_GROUPS свідомо
+// НЕ чіпаємо (щоб зберегти тип NavKey і блоки рендера) — ховаємо тут, при вибірці.
+export const HIDDEN_NAV: ReadonlySet<string> = new Set<string>(["overview", "manager-report"]);
+
 /** Nav items visible to a given role (items without `roles` are visible to all). */
 export function navGroupsForRole(role: string | undefined) {
   return NAV_GROUPS
     .map((g) => ({
       label: g.label,
-      items: (g.items as readonly NavItem[]).filter((it) => !it.roles || (role != null && it.roles.includes(role))),
+      items: (g.items as readonly NavItem[]).filter((it) => !HIDDEN_NAV.has(it.key) && (!it.roles || (role != null && it.roles.includes(role)))),
     }))
     .filter((g) => g.items.length > 0);
 }
 
-export const NAV_ITEMS: { key: NavKey; label: string; icon: string }[] = NAV_GROUPS.flatMap(
-  (g) => g.items as readonly { key: NavKey; label: string; icon: string }[]
-);
+// Прибрані вкладки виключені й тут → командна панель і валідація роуту їх не бачать.
+export const NAV_ITEMS: { key: NavKey; label: string; icon: string }[] = NAV_GROUPS
+  .flatMap((g) => g.items as readonly { key: NavKey; label: string; icon: string }[])
+  .filter((it) => !HIDDEN_NAV.has(it.key));
 
 export function Layout({
   children,

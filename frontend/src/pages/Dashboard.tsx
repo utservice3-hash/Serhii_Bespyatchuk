@@ -77,7 +77,7 @@ import {
   type TaskPriority,
   type Team,
 } from "../api";
-import { Layout, NAV_ITEMS, type NavKey } from "../components/Layout";
+import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { DateRangeFilter, QuickPeriods, getDateRange } from "../components/DateRangeFilter";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
@@ -134,15 +134,23 @@ function beep(success: boolean) {
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
   // Розділ живе в URL (/report, /kvp, …) — посилання, «назад/вперед», закладки
-  // працюють, а F5 лишає тебе на місці. «/» = Огляд. Джерело правди — адреса.
+  // працюють, а F5 лишає тебе на місці. «/» = Звіт (лендинг для всіх ролей).
+  // Джерело правди — адреса.
   const navigate = useNavigate();
   const { section: rawSection } = useParams<{ section?: string }>();
+  // Прибрані вкладки (HIDDEN_NAV: «Огляд»/«Звіт 2.0») уже не в NAV_ITEMS → невідомий
+  // або прихований роут падає у дефолт «report». «report» — корінь «/».
   const section: NavKey =
-    rawSection && NAV_ITEMS.some((i) => i.key === rawSection) ? (rawSection as NavKey) : "overview";
+    rawSection && NAV_ITEMS.some((i) => i.key === rawSection) ? (rawSection as NavKey) : "report";
   const setSection = useCallback(
-    (key: NavKey) => { navigate(key === "overview" ? "/" : `/${key}`); },
+    (key: NavKey) => { navigate(key === "report" ? "/" : `/${key}`); },
     [navigate]
   );
+  // Прямий захід по URL на прибраний роут (/overview, /manager-report) → редірект на
+  // «Звіт», щоб і адреса оновилась (не лише контент). Компоненти/ендпоінти лишаються.
+  useEffect(() => {
+    if (rawSection && HIDDEN_NAV.has(rawSection)) navigate("/", { replace: true });
+  }, [rawSection, navigate]);
   const [navHistory, setNavHistory] = useState<NavKey[]>([]);
   const [stages, setStages] = useState<FunnelStage[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
