@@ -6,7 +6,16 @@ export const teamsRouter = Router();
 teamsRouter.use(requireAuth);
 
 teamsRouter.get("/", async (_req, res) => {
-  const result = await pool.query(`SELECT id, name FROM teams ORDER BY name`);
+  // ФІЛЬТР показу, НЕ видалення: ховаємо порожні команди (0 активних менеджерів) з
+  // усіх переліків/фільтрів/декомпозиції. Дані команди лишаються в БД недоторканими —
+  // якщо в неї знову зайде активний менеджер (як буває при переводі відділу в нову
+  // Kommo-групу), рядок зʼявиться сам. Приклад: стара «Тендер»→«Самостійний» (team 4)
+  // спорожніла після переводу Шевчука в нову групу «Самостійні» (team 36283).
+  const result = await pool.query(
+    `SELECT id, name FROM teams t
+      WHERE EXISTS (SELECT 1 FROM managers m WHERE m.team_id = t.id AND m.is_active)
+      ORDER BY name`
+  );
   res.json({ teams: result.rows });
 });
 
