@@ -894,6 +894,74 @@ export async function leadsByManagerDay(s: MetricScope): Promise<MgrDayLeads[]> 
   return r.rows.map((x) => ({ managerId: x.manager_id, day: x.bkt, ad: Number(x.ad), leadgen: Number(x.leadgen) }));
 }
 
+// ── ЗВІТ+ЗАДАЧНИК: per-manager агрегати для авто-заповнення KPI (спільне джерело) ──
+// Мета: Звіт і evaluateKpiTasks беруть факт із ОДНИХ функцій → числа не розходяться.
+// Авто = load_at (фактична відправка) КАНОНІЧНО (рішення власника), як і у КВП-дрилі.
+
+export interface MgrN { managerId: number; deals: number }
+export interface MgrBucketN { managerId: number; bucket: string; deals: number }
+export interface MgrLeads { managerId: number; ad: number; leadgen: number }
+export interface MgrBucketLeads { managerId: number; bucket: string; ad: number; leadgen: number }
+
+/** «Поїхали» (авто) ПО МЕНЕДЖЕРУ, period-total за `load_at`. Той самий предикат, що
+ *  `dispatchedByManagerDay`/`dispatchedByLoadBucket`, лише згрупований по менеджеру. */
+export async function dispatchedByManager(s: MetricScope): Promise<MgrN[]> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ manager_id: number; deals: string }>(
+    `SELECT d.manager_id, COUNT(*) deals FROM deals d ${join}
+      WHERE ${conds.join(" AND ")} AND d.manager_id IS NOT NULL GROUP BY d.manager_id`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, deals: Number(x.deals) }));
+}
+
+/** «Поїхали» ПО (менеджер × бакет день/тиждень/місяць) за `load_at`. Additive:
+ *  Σ бакетів = `dispatchedByManager` того ж скоупу (день=тиждень=місяць інваріант). */
+export async function dispatchedByManagerBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<MgrBucketN[]> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ manager_id: number; bucket: string; deals: string }>(
+    `SELECT d.manager_id, to_char(date_trunc('${granularity}', (d.load_at ${KYIV}))::date, 'YYYY-MM-DD') bucket, COUNT(*) deals
+       FROM deals d ${join} WHERE ${conds.join(" AND ")} AND d.manager_id IS NOT NULL
+      GROUP BY d.manager_id, 2 ORDER BY 2`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, deals: Number(x.deals) }));
+}
+
+/** «Взято лідів» ПО МЕНЕДЖЕРУ, period-total, канал ad/leadgen (той самий lead_taken
+ *  stage-entry анкер, що `leadsByManagerDay`). Закриває GAP лідоген-per-manager. */
+export async function leadsByManager(s: MetricScope): Promise<MgrLeads[]> {
+  const days = await leadsByManagerDay(s);
+  const m = new Map<number, MgrLeads>();
+  for (const d of days) { const e = m.get(d.managerId) ?? { managerId: d.managerId, ad: 0, leadgen: 0 }; e.ad += d.ad; e.leadgen += d.leadgen; m.set(d.managerId, e); }
+  return [...m.values()];
+}
+
+/** «Взято лідів» ПО (менеджер × бакет) — leadsByManagerDay, згорнутий у день/тиждень/
+ *  місяць (тижні Пн–Нд Kyiv через date_trunc('week')). Additive по бакетах. */
+export async function leadsByManagerBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<MgrBucketLeads[]> {
+  const days = await leadsByManagerDay(s);
+  if (granularity === "day") return days.map((d) => ({ managerId: d.managerId, bucket: d.day, ad: d.ad, leadgen: d.leadgen }));
+  const trunc = (day: string): string => {
+    const dt = new Date(day + "T00:00:00Z");
+    if (granularity === "month") return day.slice(0, 7) + "-01";
+    const dow = dt.getUTCDay() === 0 ? 7 : dt.getUTCDay(); // Пн=1..Нд=7
+    dt.setUTCDate(dt.getUTCDate() - (dow - 1)); // понеділок тижня
+    return dt.toISOString().slice(0, 10);
+  };
+  const m = new Map<string, MgrBucketLeads>();
+  for (const d of days) { const b = trunc(d.day); const key = `${d.managerId}|${b}`; const e = m.get(key) ?? { managerId: d.managerId, bucket: b, ad: 0, leadgen: 0 }; e.ad += d.ad; e.leadgen += d.leadgen; m.set(key, e); }
+  return [...m.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
+}
+
 // ── Блок A (КВП повна таблиця) — нові метрики ──
 // Прострочена оплата = ЗНІМОК «зараз»: планова дата оплати минула, а угода ще НЕ оплачена
 // (не 142/143 і не в етапі 9 «оплата отримана»). Не залежить від періоду. sum = Σ price.
