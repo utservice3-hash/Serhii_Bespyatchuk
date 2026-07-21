@@ -418,9 +418,11 @@ export interface KvpEngineTeam { plan: number; revenue: number; expected: number
 export interface KvpDay { bucket: string; revenue: number; deals: number }
 export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
 export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
+export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; conflict: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
+  createdSplit: CreatedSplit;
   daily: KvpDay[]; weeks: KvpWeek[];
 }
 export interface KvpExpBucket { deals: number; sum: number }
@@ -498,6 +500,10 @@ export interface KvpReport {
     totals: { newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number };
     byManager: { id: number; name: string; teamId: number | null; newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number }[];
     byTeam: { id: number; name: string; teamId: number | null; newClients: number; newRevenue: number; repeatClients: number; repeatRevenue: number }[];
+  };
+  createdSplit: {
+    totals: CreatedSplit;
+    byManager: (CreatedSplit & { managerId: number; name: string; teamId: number | null })[];
   };
   money: { received: KvpAgg; success: KvpAgg; paidOnly: KvpAgg; awaitingNow: { deals: number; revenue: number }; expectedThis: KvpExpBucket; expectedNext: KvpExpBucket; expectedZoneTotal: KvpExpBucket };
   funnel: { stage: string; deals: number; revenue: number }[];

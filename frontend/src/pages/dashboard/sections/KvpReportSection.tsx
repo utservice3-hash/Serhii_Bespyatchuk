@@ -37,6 +37,7 @@ const HINT: Record<string, string> = {
   nonTarget: "Нецільові = рекламні ліди з причиною відмови «Дубль»/«Перевізник». Місяці до горизонту синку reject_reason → «—» (немає даних, не «0»).",
   receivablesPaidOff: "Погашено дебіторки — джерела історії погашень немає (receivables це знімок) → «—».",
   newRepeat: "Нові/постійні (client-grain лінз): клієнт з першою оплатою в періоді = новий. ОКРЕМО від team-based РПК/РНК (то ознака команди). Кожен клієнт → primary-менеджер, Σ = відділ.",
+  createdSplit: "Створено новий/постійний за звіркою 3 сигналів (об'єктивне перебиває декларацію). Порядок B→C→A: B=канал угоди (реклама/лідоген → новий); C=історія клієнта (≥1 попередня завершена поїздка → постійний); A=поле «Канал продажу» — лише фолбек. Постійний = клієнт, що вже їздив ≥1 раз → показник повернення/задоволеності. «Конфлікт» = поле каже «постійний», а об'єктив каже новий (аудит недбалого теггінгу).",
   structReceived: "«Отримано» = ТА САМА каса, що у вердикті (receivedMoney: 142⊎оплата, дедуп), розкладена по сегменту клієнта. Σ(нові+постійні+залишок) звіряється з загальним received.",
   structExpected: "«В очікуванні» = зона визнання доходу (виставлено→оплата, EXPECT_ZONE), знімок «зараз», по сегменту клієнта. Σ = загальна зона очікування.",
   avgCheck: "Середній чек = виручка успішних угод ÷ к-ть успішних угод менеджера.",
@@ -550,6 +551,21 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
                   <div><span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, color: recCol(rec.level) }}>{rec.level === "ok" ? "Статус" : "Чому"}</span><div style={{ fontSize: 11.5, lineHeight: 1.5 }}>{rec.why}</div></div>
                   <div><span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, color: GREEN }}>Що робити</span><div style={{ fontSize: 11.5, lineHeight: 1.5 }}>{rec.action}</div></div>
                 </div>
+                {(() => {
+                  const cs = m.createdSplit;
+                  if (!cs || cs.created === 0) return null;
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, fontSize: 11.5, margin: "0 0 8px", padding: "6px 12px", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 9 }}>
+                      <span style={{ fontWeight: 700 }}>📦 Створено {cs.created}</span>
+                      <span style={{ color: MUTED }}>нові <b style={{ color: "var(--text)" }}>{cs.new}</b> · постійні <b style={{ color: GREEN }}>{cs.repeat}</b>{cs.undef > 0 ? <> · невизн {cs.undef}</> : null}</span>
+                      {cs.conflict > 0 && (
+                        <span title="Поле «Канал продажу» позначене «Постійні клієнти», але об'єктивні сигнали (канал угоди / відсутня історія) кажуть новий. Аудит недбалого теггінгу."
+                          style={{ color: AMBER, fontWeight: 700 }}>⚠ конфлікт теггінгу: {cs.conflict}</span>
+                      )}
+                      <InfoHint text={HINT.createdSplit} />
+                    </div>
+                  );
+                })()}
                 <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} isRnk={team.kind === "rnk"} />
               </div>
             )}

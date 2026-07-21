@@ -4303,7 +4303,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     expTeamThis, expTeamNext, mgrDayExp, mgrDayDisp, mgrDayLeads,
     overdue, avgCycle, lost,
     dirSplit, chanSplit, clientRev, transit, dso, aging,
-    successDay, segDay, lostDay, dirConv,
+    successDay, segDay, lostDay, dirConv, createdSplitMgr,
   ] = await Promise.all([
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
@@ -4326,7 +4326,10 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     metrics.transitStats(scope), metrics.dsoProxyDays(scope), metrics.receivablesAging(),
     money.successByBucket(mScope, "day"), money.receivedSegByDay(mScope), metrics.lostByDay(scope),
     metrics.conversionAdsByDirection(scope, adSources),
+    metrics.createdSplitByManager(scope),
   ]);
+  // Розкол «створено» новий/постійний (3 сигнали B→C→A) по менеджеру → мапа + агрегати.
+  const splitByMgr = new Map(createdSplitMgr.map((x) => [x.managerId, x]));
   const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
   for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
 
@@ -4408,6 +4411,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       successDeals: su?.deals ?? 0,
       conversion: cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
       expected: expByMgr.get(mid)?.sum ?? 0,
+      // Розкол створеного (3 сигнали): created N (нові · постійні · невизн) + конфлікт.
+      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, conflict: s?.conflict ?? 0 }; })(),
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
       weeks: weeksForMgr(mid, mp.plan),    // Крок Д фінал #2: тижневий розріз Т1–Т5
     });
@@ -4583,6 +4588,16 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       };
     })(),
     segments: { totals: newRepeatTot, byManager: newRepeatMgr, byTeam: newRepeatTeam },
+    // Розкол СТВОРЕНОГО новий/постійний (3 сигнали B→C→A, поріг ≥1 попередня виграна).
+    // totals = Σ по відділу; byManager несе teamId (FE зводить у команду/відділ). Конфлікт
+    // (поле=постійний, об'єктив=новий) — прапорець аудиту, у дрилдаун менеджера, не в заголовок.
+    createdSplit: {
+      totals: createdSplitMgr.reduce((a, x) => ({
+        created: a.created + x.created, new: a.new + x.newCount, repeat: a.repeat + x.repeatCount,
+        undef: a.undef + x.undefCount, conflict: a.conflict + x.conflict,
+      }), { created: 0, new: 0, repeat: 0, undef: 0, conflict: 0 }),
+      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, conflict: x.conflict })),
+    },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),
     // Блок B — ЛОГІСТИКА. direction/salesChannel — розклад received (Σ == received).
