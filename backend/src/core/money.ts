@@ -234,6 +234,23 @@ export async function receivedSegByDay(s: MoneyScope): Promise<SegDayRow[]> {
 export const successMoney = (s: MoneyScope) => agg("success", s);
 export const successByTeam = (s: MoneyScope) => aggByTeam("success", s);
 export const successByMgr = (s: MoneyScope) => aggByMgr("success", s);
+export interface MgrAvgCheck { managerId: number; revenue: number; successDeals: number; avgCheck: number | null }
+/**
+ * СЕРЕДНІЙ ЧЕК ПО МЕНЕДЖЕРУ (`avg_check_success_only`) — ЄДИНЕ джерело для Звіту й
+ * задачника. = successByMgr.revenue ÷ successByMgr.deals (успіх 142, closed_at,
+ * signed). 🔴 Знаменник = К-ТЬ ВИГРАНИХ УГОД (не dispatched): саме це число
+ * звіряється з ручним листом (діапазон 2600–2900) і саме його рахує КВП-звіт
+ * (dashboard.ts) → крос-екран Звіт==КВП по менеджеру тримається. avgCheck=null
+ * коли виграних угод 0 (UI показує «—», не «0»). Scope-aware.
+ */
+export async function avgCheckByManager(s: MoneyScope): Promise<MgrAvgCheck[]> {
+  const succ = await successByMgr(s);
+  return succ.map((x) => ({
+    managerId: x.managerId, revenue: x.revenue, successDeals: x.deals,
+    avgCheck: x.deals > 0 ? Math.round(x.revenue / x.deals) : null,
+  }));
+}
+
 // «Досі в оплаті» (ЗАРАЗ етап 9).
 export const paidOnlyMoney = (s: MoneyScope) => agg("paidOnly", s);
 export const paidOnlyByTeam = (s: MoneyScope) => aggByTeam("paidOnly", s);
