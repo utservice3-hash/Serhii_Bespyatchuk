@@ -418,7 +418,7 @@ export interface KvpEngineTeam { plan: number; revenue: number; expected: number
 export interface KvpDay { bucket: string; revenue: number; deals: number }
 export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
 export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
-export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; conflict: number }
+export interface CreatedSplit { created: number; new: number; repeat: number; undef: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
@@ -428,7 +428,8 @@ export interface KvpManager {
 export interface KvpExpBucket { deals: number; sum: number }
 // Крок Д фінал A — детальний дрил менеджера weeks→days (лінивий фетч)
 export interface KvpDetailCell {
-  created: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
+  created: number; newCount: number; repeatCount: number; undefCount: number;
+  leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
   received: { deals: number; revenue: number }; expected: { deals: number; sum: number };
 }
 export interface KvpDetailWeek { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; total: KvpDetailCell; days: (KvpDetailCell & { day: string })[] }

@@ -4248,25 +4248,27 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   const mRow = (await pool.query<{ name: string; team_id: number | null }>(`SELECT name, team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
   const isRnk = mRow?.team_id != null && RNK_MGR_TEAMS.has(mRow.team_id);
 
-  const [createdRows, leadsRows, dispRows, recvRows, expRows] = await Promise.all([
+  const [createdRows, splitRows, leadsRows, dispRows, recvRows, expRows] = await Promise.all([
     metrics.createdByBucket(scope, "day"),
+    metrics.createdSplitByBucket(scope, "day"),
     metrics.leadsTakenByBucket(scope, "day", true),
     metrics.dispatchedByLoadBucket(scope, "day"),
     money.receivedByManagerBucket({ managerId, from, to }, "day"),
     metrics.expectedByManagerDay({ managerId }),
   ]);
 
-  type Cell = { created: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; received: { deals: number; revenue: number }; expected: { deals: number; sum: number } };
-  const zero = (): Cell => ({ created: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 } });
+  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; received: { deals: number; revenue: number }; expected: { deals: number; sum: number } };
+  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 } });
   const dayMap = new Map<string, Cell>();
   const dget = (d: string) => { let e = dayMap.get(d); if (!e) { e = zero(); dayMap.set(d, e); } return e; };
   for (const r of createdRows) dget(r.bucket).created += r.deals;
+  for (const r of splitRows) { const e = dget(r.bucket); e.newCount += r.newCount; e.repeatCount += r.repeatCount; e.undefCount += r.undefCount; }
   for (const r of leadsRows) { const e = dget(r.bucket); const c = (r as { channel?: string }).channel; if (c === "ad") e.leadsAd += r.deals; else if (c === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals; }
   for (const r of dispRows) dget(r.ym).dispatched += r.deals;
   for (const r of recvRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.received.deals += r.deals; e.received.revenue += r.revenue; }
   for (const r of expRows) if (r.day >= from && r.day <= to) { const e = dget(r.day); e.expected.deals += r.deals; e.expected.sum += r.sum; }
 
-  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum } });
+  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum } });
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const weeks = fixedWeekBlocks(monthStart).map((w) => {
     const days = [...dayMap.entries()].filter(([d]) => d >= w.from && d <= w.to).sort((a, b) => a[0].localeCompare(b[0])).map(([day, c]) => ({ day, ...c }));
@@ -4411,8 +4413,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       successDeals: su?.deals ?? 0,
       conversion: cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
       expected: expByMgr.get(mid)?.sum ?? 0,
-      // Розкол створеного (3 сигнали): created N (нові · постійні · невизн) + конфлікт.
-      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, conflict: s?.conflict ?? 0 }; })(),
+      // Розкол створеного (3 сигнали): created N (нові · постійні · невизн).
+      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0 }; })(),
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
       weeks: weeksForMgr(mid, mp.plan),    // Крок Д фінал #2: тижневий розріз Т1–Т5
     });
@@ -4589,14 +4591,13 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     })(),
     segments: { totals: newRepeatTot, byManager: newRepeatMgr, byTeam: newRepeatTeam },
     // Розкол СТВОРЕНОГО новий/постійний (3 сигнали B→C→A, поріг ≥1 попередня виграна).
-    // totals = Σ по відділу; byManager несе teamId (FE зводить у команду/відділ). Конфлікт
-    // (поле=постійний, об'єктив=новий) — прапорець аудиту, у дрилдаун менеджера, не в заголовок.
+    // totals = Σ по відділу; byManager несе teamId (FE зводить у команду/відділ). Погранична
+    // деталізація (нові/постійні по тижнях/днях) — у /kvp-report/manager-detail (createdSplitByBucket).
     createdSplit: {
       totals: createdSplitMgr.reduce((a, x) => ({
-        created: a.created + x.created, new: a.new + x.newCount, repeat: a.repeat + x.repeatCount,
-        undef: a.undef + x.undefCount, conflict: a.conflict + x.conflict,
-      }), { created: 0, new: 0, repeat: 0, undef: 0, conflict: 0 }),
-      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, conflict: x.conflict })),
+        created: a.created + x.created, new: a.new + x.newCount, repeat: a.repeat + x.repeatCount, undef: a.undef + x.undefCount,
+      }), { created: 0, new: 0, repeat: 0, undef: 0 }),
+      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount })),
     },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),

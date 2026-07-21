@@ -391,80 +391,83 @@ export interface CreatedSplitRow {
   newCount: number;
   repeatCount: number;
   undefCount: number;
-  conflict: number;
 }
+export interface CreatedSplitBucketRow { bucket: string; created: number; newCount: number; repeatCount: number; undefCount: number }
 
 // Дженерик/порожні client_key, що НЕ беруть участі в матчингу історії клієнта
 // (колізійні: «названиенеуказано» = 1.3к угод різних клієнтів; порожній ключ).
 // Живе тут, а не в коді СИНКУ, бо це правило ЗВІРКИ, не нормалізації ключа.
 const GENERIC_CLIENT_KEYS = ["названиенеуказано", ""];
 
-/**
- * РОЗКОЛ СТВОРЕНИХ угод новий/постійний по менеджеру — звірка 3 сигналів
- * (об'єктивне перебиває декларацію). Query-time, похідне з `deals`, БЕЗ персисту/
- * міграції. Порядок сигналів (зверху вниз):
- *   B = `lead_channel`: ad|leadgen → Новий (клієнт із реклами/лідогену — за
- *       визначенням не «постійний»; якщо поле каже «Постійні клієнти» → у КОНФЛІКТ).
- *   C = історія клієнта: чи є ≥1 ІНША виграна (142) угода того ж `client_key`,
- *       закрита (`closed_at`) ДО створення поточної. Матч по `client_key`, БЕЗ
- *       дженерик/порожніх ключів. B=other: C≥1 → Постійний · C=0 → Новий.
- *   A = `sales_channel` (декларація менеджера) — ФОЛБЕК, коли B=other і придатного
- *       ключа немає: «Постійні клієнти» → Постійний · «Нові клієнти» → Новий · решта
- *       (порожнє/«Тендерний напрямок») → Невизначено.
- * Поріг «постійний = ≥1 попередня виграна поїздка» (бізнес: 2-ге замовлення напряму
- * менеджеру = показник повернення). КОНФЛІКТ (аудит недбалого теггінгу) = поле каже
- * «Постійні клієнти», а об'єктив каже новий (B=ad|leadgen АБО підтверджено C=0).
- * 🔴 Гроші тут НЕ рахуються — лише лічильники угод (money-запити не чіпаються).
- * Σ(new+repeat+undef)=created; Σ менеджерів = команда = відділ (партиція за klass).
- */
-export async function createdSplitByManager(s: MetricScope): Promise<CreatedSplitRow[]> {
-  const params: unknown[] = [FC_PIPELINES, GENERIC_CLIENT_KEYS];
+// ЄДИНЕ джерело правила класифікації (B→C→A) — щоб by-manager і by-bucket не
+// розходились. Читає lead_channel / vkey / has_prior / sales_channel з CTE `classed`.
+const CREATED_KLASS_CASE = `
+  CASE
+    WHEN lead_channel IN ('ad','leadgen') THEN 'new'
+    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND has_prior THEN 'repeat'
+    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND NOT has_prior THEN 'new'
+    WHEN sales_channel = 'Постійні клієнти' THEN 'repeat'
+    WHEN sales_channel = 'Нові клієнти' THEN 'new'
+    ELSE 'undef'
+  END`;
+
+/** Спільний CTE-конвеєр класифікації (base→classed→final з `klass`). Мутує `params`
+ * (додає $1 FC, $2 дженерик-ключі + scope). `bucketExpr` — необов'язковий вираз
+ * бакета за `created_at` (день/тиждень/місяць, той самий анкер, що createdByBucket)
+ * для грануляції; без нього final несе лише manager_id. Повертає ТІЛО WITH (без «WITH»).*/
+function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string): string {
+  params.push(FC_PIPELINES, GENERIC_CLIENT_KEYS);
   const conds = ["d.pipeline_id = ANY($1)", "d.created_at_kommo IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  const r = await pool.query<{
-    manager_id: number; name: string; team_id: number | null;
-    created: string; new_count: string; repeat_count: string; undef_count: string; conflict_count: string;
-  }>(
-    `WITH base AS (
-       SELECT d.kommo_id, d.manager_id, d.created_at_kommo, d.sales_channel, d.lead_channel,
+  const bcol = bucketExpr ? `, ${bucketExpr} AS bucket` : "";
+  const bcarry = bucketExpr ? ", bucket" : "";
+  return `base AS (
+       SELECT d.kommo_id, d.manager_id, d.created_at_kommo, d.sales_channel, d.lead_channel${bcol},
               CASE WHEN d.client_key IS NULL OR d.client_key = ANY($2) THEN NULL ELSE d.client_key END AS vkey
          FROM deals d LEFT JOIN managers m ON m.id = d.manager_id ${activeJoin}
         WHERE ${conds.join(" AND ")}
      ),
      classed AS (
-       SELECT b.manager_id, b.sales_channel, b.lead_channel,
+       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey${bcarry},
               (b.vkey IS NOT NULL AND EXISTS (
                  SELECT 1 FROM deals p
                   WHERE p.client_key = b.vkey AND p.status_id = 142
                     AND p.closed_at_kommo < b.created_at_kommo AND p.kommo_id <> b.kommo_id
-              )) AS has_prior,
-              b.vkey
+              )) AS has_prior
          FROM base b
      ),
      final AS (
-       SELECT manager_id,
-              CASE
-                WHEN lead_channel IN ('ad','leadgen') THEN 'new'
-                WHEN lead_channel = 'other' AND vkey IS NOT NULL AND has_prior THEN 'repeat'
-                WHEN lead_channel = 'other' AND vkey IS NOT NULL AND NOT has_prior THEN 'new'
-                WHEN sales_channel = 'Постійні клієнти' THEN 'repeat'
-                WHEN sales_channel = 'Нові клієнти' THEN 'new'
-                ELSE 'undef'
-              END AS klass,
-              (sales_channel = 'Постійні клієнти'
-                 AND (lead_channel IN ('ad','leadgen') OR (vkey IS NOT NULL AND NOT has_prior))) AS conflict
-         FROM classed
-     )
+       SELECT manager_id${bcarry}, ${CREATED_KLASS_CASE} AS klass FROM classed
+     )`;
+}
+
+/**
+ * РОЗКОЛ СТВОРЕНИХ угод новий/постійний — звірка 3 сигналів (об'єктивне перебиває
+ * декларацію). Query-time, похідне з `deals`, БЕЗ персисту/міграції. Порядок сигналів:
+ *   B = `lead_channel`: ad|leadgen → Новий (клієнт із реклами/лідогену — не «постійний»).
+ *   C = історія клієнта: ≥1 ІНША виграна (142) угода того ж `client_key`, закрита
+ *       (`closed_at`) ДО створення поточної; матч по `client_key` без дженерик/порожніх
+ *       ключів. B=other: C≥1 → Постійний · C=0 → Новий.
+ *   A = `sales_channel` (декларація) — ФОЛБЕК, коли B=other і придатного ключа немає:
+ *       «Постійні клієнти» → Постійний · «Нові клієнти» → Новий · решта → Невизначено.
+ * Поріг «постійний = ≥1 попередня виграна поїздка» (бізнес: 2-ге замовлення напряму
+ * менеджеру = показник повернення). 🔴 Гроші НЕ рахуються — лише лічильники угод.
+ * Σ(new+repeat+undef)=created; Σ менеджерів = команда = відділ (партиція за klass).
+ */
+export async function createdSplitByManager(s: MetricScope): Promise<CreatedSplitRow[]> {
+  const params: unknown[] = [];
+  const cte = createdSplitCte(s, params);
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; created: string; new_count: string; repeat_count: string; undef_count: string }>(
+    `WITH ${cte}
      SELECT m.id AS manager_id, m.name, m.team_id,
             COUNT(*) AS created,
             COUNT(*) FILTER (WHERE klass = 'new') AS new_count,
             COUNT(*) FILTER (WHERE klass = 'repeat') AS repeat_count,
-            COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count,
-            COUNT(*) FILTER (WHERE conflict) AS conflict_count
+            COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count
        FROM final f JOIN managers m ON m.id = f.manager_id
       GROUP BY m.id, m.name, m.team_id
       ORDER BY created DESC`,
@@ -472,8 +475,36 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   );
   return r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, teamId: x.team_id,
-    created: Number(x.created), newCount: Number(x.new_count),
-    repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count), conflict: Number(x.conflict_count),
+    created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
+  }));
+}
+
+/**
+ * Той самий розкол (нові/постійні/невизн), але по БАКЕТУ (день/тиждень/місяць за
+ * `created_at`, той самий анкер і грануляція, що `createdByBucket`) — для тижневого/
+ * денного дрилу менеджера. Класифікація СПІЛЬНА (`createdSplitCte` + `CREATED_KLASS_CASE`),
+ * тож Σ бакетів = createdSplitByManager того ж скоупу (день=тиждень=місяць інваріант).
+ */
+export async function createdSplitByBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<CreatedSplitBucketRow[]> {
+  const col = `(d.created_at_kommo ${KYIV})`;
+  const bucketExpr = granularity === "day"
+    ? `to_char(${col}::date, 'YYYY-MM-DD')`
+    : `to_char(date_trunc('${granularity === "month" ? "month" : "week"}', ${col})::date, 'YYYY-MM-DD')`;
+  const params: unknown[] = [];
+  const cte = createdSplitCte(s, params, bucketExpr);
+  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string }>(
+    `WITH ${cte}
+     SELECT bucket,
+            COUNT(*) AS created,
+            COUNT(*) FILTER (WHERE klass = 'new') AS new_count,
+            COUNT(*) FILTER (WHERE klass = 'repeat') AS repeat_count,
+            COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count
+       FROM final
+      GROUP BY bucket ORDER BY bucket`,
+    params
+  );
+  return r.rows.map((x) => ({
+    bucket: x.bucket, created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
   }));
 }
 

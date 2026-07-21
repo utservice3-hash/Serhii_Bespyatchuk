@@ -37,7 +37,7 @@ const HINT: Record<string, string> = {
   nonTarget: "Нецільові = рекламні ліди з причиною відмови «Дубль»/«Перевізник». Місяці до горизонту синку reject_reason → «—» (немає даних, не «0»).",
   receivablesPaidOff: "Погашено дебіторки — джерела історії погашень немає (receivables це знімок) → «—».",
   newRepeat: "Нові/постійні (client-grain лінз): клієнт з першою оплатою в періоді = новий. ОКРЕМО від team-based РПК/РНК (то ознака команди). Кожен клієнт → primary-менеджер, Σ = відділ.",
-  createdSplit: "Створено новий/постійний за звіркою 3 сигналів (об'єктивне перебиває декларацію). Порядок B→C→A: B=канал угоди (реклама/лідоген → новий); C=історія клієнта (≥1 попередня завершена поїздка → постійний); A=поле «Канал продажу» — лише фолбек. Постійний = клієнт, що вже їздив ≥1 раз → показник повернення/задоволеності. «Конфлікт» = поле каже «постійний», а об'єктив каже новий (аудит недбалого теггінгу).",
+  createdSplit: "Створено новий/постійний за звіркою 3 сигналів (об'єктивне перебиває декларацію). Порядок B→C→A: B=канал угоди (реклама/лідоген → новий); C=історія клієнта (≥1 попередня завершена поїздка → постійний); A=поле «Канал продажу» — лише фолбек. Постійний = клієнт, що вже їздив ≥1 раз → показник повернення/задоволеності. Створено = Нові + Постійні (+ Невизн, показано лише коли >0).",
   structReceived: "«Отримано» = ТА САМА каса, що у вердикті (receivedMoney: 142⊎оплата, дедуп), розкладена по сегменту клієнта. Σ(нові+постійні+залишок) звіряється з загальним received.",
   structExpected: "«В очікуванні» = зона визнання доходу (виставлено→оплата, EXPECT_ZONE), знімок «зараз», по сегменту клієнта. Σ = загальна зона очікування.",
   avgCheck: "Середній чек = виручка успішних угод ÷ к-ть успішних угод менеджера.",
@@ -428,8 +428,10 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
   if (!d) return <div style={{ fontSize: 12, color: MUTED }}>Завантаження деталі…</div>;
   // Середній чек = отримано ÷ авто (ПОХІДНИЙ, не сумується — перераховується на кожному
   // рівні з received.revenue ÷ dispatched; «—» де авто=0).
-  const cell = (c: { created: number; leadsAd: number; leadsLeadgen: number; dispatched: number; received: { revenue: number; deals: number }; expected: { sum: number } }, future: boolean) => (<>
-    <td style={{ textAlign: "right" }}>{future ? "—" : (c.created || "—")}</td>
+  const cell = (c: { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; dispatched: number; received: { revenue: number; deals: number }; expected: { sum: number } }, future: boolean) => (<>
+    <td style={{ textAlign: "right" }}>{future ? "—" : (c.created || "—")}{!future && c.undefCount > 0 && <span style={{ color: MUTED, fontSize: 10, fontWeight: 400 }}> ·{c.undefCount} невизн</span>}</td>
+    <td style={{ textAlign: "right" }}>{future ? "—" : (c.newCount || "—")}</td>
+    <td style={{ textAlign: "right", color: c.repeatCount > 0 ? GREEN : undefined }}>{future ? "—" : (c.repeatCount || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsAd || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsLeadgen || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.dispatched || "—")}</td>
@@ -440,7 +442,7 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
-        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
+        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Нові</th><th style={{ textAlign: "right" }}>Постійні <InfoHint text={HINT.createdSplit} /></th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
         <tbody>
           {d.weeks.map((w) => {
             const open = openW.has(w.idx);
@@ -551,21 +553,6 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
                   <div><span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, color: recCol(rec.level) }}>{rec.level === "ok" ? "Статус" : "Чому"}</span><div style={{ fontSize: 11.5, lineHeight: 1.5 }}>{rec.why}</div></div>
                   <div><span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, color: GREEN }}>Що робити</span><div style={{ fontSize: 11.5, lineHeight: 1.5 }}>{rec.action}</div></div>
                 </div>
-                {(() => {
-                  const cs = m.createdSplit;
-                  if (!cs || cs.created === 0) return null;
-                  return (
-                    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, fontSize: 11.5, margin: "0 0 8px", padding: "6px 12px", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 9 }}>
-                      <span style={{ fontWeight: 700 }}>📦 Створено {cs.created}</span>
-                      <span style={{ color: MUTED }}>нові <b style={{ color: "var(--text)" }}>{cs.new}</b> · постійні <b style={{ color: GREEN }}>{cs.repeat}</b>{cs.undef > 0 ? <> · невизн {cs.undef}</> : null}</span>
-                      {cs.conflict > 0 && (
-                        <span title="Поле «Канал продажу» позначене «Постійні клієнти», але об'єктивні сигнали (канал угоди / відсутня історія) кажуть новий. Аудит недбалого теггінгу."
-                          style={{ color: AMBER, fontWeight: 700 }}>⚠ конфлікт теггінгу: {cs.conflict}</span>
-                      )}
-                      <InfoHint text={HINT.createdSplit} />
-                    </div>
-                  );
-                })()}
                 <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} isRnk={team.kind === "rnk"} />
               </div>
             )}
