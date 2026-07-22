@@ -4338,19 +4338,39 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     return out;
   })();
 
-  // ПЛАН із ЗАДАЧНИКА: таргети daily_kpi за [from,to] (count/sum → SUM, avg/conv → MAX).
-  const pp: unknown[] = [from, to];
-  const pConds = ["t.auto", "t.task_type = 'daily_kpi'", "t.assignee_id IS NOT NULL", "t.metrics_json IS NOT NULL", "t.plan_date BETWEEN $1 AND $2"];
-  const planRows = (await pool.query<{ assignee_id: number; metric: string; sum_t: string; max_t: string }>(
-    `SELECT t.assignee_id, elem->>'metric' AS metric,
-            SUM((elem->>'target')::numeric) sum_t, MAX((elem->>'target')::numeric) max_t
-       FROM tasks t, jsonb_array_elements(t.metrics_json) elem
-      WHERE ${pConds.join(" AND ")} GROUP BY 1, 2`, pp
+  // ПЛАН із ЗАДАЧНИКА = таргет ПАРАСОЛЬКИ `kpi_period`, НЕ Σ daily children (діти
+  // дрейфують нижче через денний перерозподіл — рішення власника 22.07). Розподіл
+  // РІВНОМІРНИЙ по РОБОЧИХ днях парасольки: денний пейс = target ÷ wd(парасольки);
+  // план за обраний період = Σ парасольок × (робочі дні перетину ÷ робочі дні
+  // парасольки). Так day=week=month СХОДЯТЬСЯ (Σ днів тижня = тижнева парасолька;
+  // Σ тижнів місяця = Σ парасольок) і план НЕ занижується. Лічильні метрики
+  // (payment_amount/ads/leadgen/dispatch) апортуються й сумуються; СТАВКОВІ
+  // (avg_check/conversion) не сумуються — MAX парасольки, що покриває період.
+  const umbRows = (await pool.query<{ assignee_id: number; ps: string; pe: string; metrics_json: { metric: string; target: number | string }[] | null }>(
+    `SELECT t.assignee_id, to_char(t.period_start,'YYYY-MM-DD') ps,
+            to_char(COALESCE(t.period_end, t.period_start),'YYYY-MM-DD') pe, t.metrics_json
+       FROM tasks t
+      WHERE t.auto AND t.task_type = 'kpi_period' AND t.assignee_id IS NOT NULL
+        AND t.metrics_json IS NOT NULL
+        AND t.period_start <= $2 AND COALESCE(t.period_end, t.period_start) >= $1`, [from, to]
   )).rows;
+  const ADDITIVE = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
   const planByMgr = new Map<number, Record<string, number>>();
-  for (const r of planRows) {
-    const e = planByMgr.get(r.assignee_id) ?? {}; const sumM = ["ads_count", "leadgen_count", "dispatch_count", "payment_amount"];
-    e[r.metric] = sumM.includes(r.metric) ? Number(r.sum_t) : Number(r.max_t); planByMgr.set(r.assignee_id, e);
+  for (const u of umbRows) {
+    const wdU = workingDaysBetween(u.ps, u.pe);
+    if (wdU <= 0) continue;
+    const oFrom = u.ps > from ? u.ps : from;         // перетин [парасолька ∩ період]
+    const oTo = u.pe < to ? u.pe : to;
+    if (oFrom > oTo) continue;
+    const frac = workingDaysBetween(oFrom, oTo) / wdU;
+    if (frac <= 0) continue;
+    const e = planByMgr.get(u.assignee_id) ?? {};
+    for (const m of u.metrics_json ?? []) {
+      const t = Number(m.target) || 0;
+      if (ADDITIVE.has(m.metric)) e[m.metric] = (e[m.metric] ?? 0) + t * frac; // апортовано + Σ парасольок
+      else e[m.metric] = Math.max(e[m.metric] ?? 0, t);                        // ставка — MAX покривної
+    }
+    planByMgr.set(u.assignee_id, e);
   }
 
   // Темп: частка робочих днів періоду, що минули (для статусу g/a/r як у макеті).
