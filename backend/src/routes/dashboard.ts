@@ -4338,14 +4338,17 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     return out;
   })();
 
-  // ПЛАН із ЗАДАЧНИКА = таргет ПАРАСОЛЬКИ `kpi_period`, НЕ Σ daily children (діти
-  // дрейфують нижче через денний перерозподіл — рішення власника 22.07). Розподіл
-  // РІВНОМІРНИЙ по РОБОЧИХ днях парасольки: денний пейс = target ÷ wd(парасольки);
-  // план за обраний період = Σ парасольок × (робочі дні перетину ÷ робочі дні
-  // парасольки). Так day=week=month СХОДЯТЬСЯ (Σ днів тижня = тижнева парасолька;
-  // Σ тижнів місяця = Σ парасольок) і план НЕ занижується. Лічильні метрики
-  // (payment_amount/ads/leadgen/dispatch) апортуються й сумуються; СТАВКОВІ
-  // (avg_check/conversion) не сумуються — MAX парасольки, що покриває період.
+  // ПЛАН із ЗАДАЧНИКА — ГІБРИД (рішення власника 22.07): де є тижнева ПАРАСОЛЬКА
+  // `kpi_period` — беремо ЇЇ таргет (діти дрейфують нижче через денний перерозподіл);
+  // де парасольки НЕМАЄ (незаплановані тижні / менеджери без парасольки) — падаємо на
+  // Σ daily children, щоб МІСЯЦЬ не занижувався. Парасольки тижневі й задаються лише
+  // на поточний тиждень, тож чистий umbrella заниження місяця вчетверо.
+  //   • Розподіл парасольки — рівномірний по РОБОЧИХ днях: денний пейс = target ÷ wd(парасольки),
+  //     внесок за період = target × (робочі дні перетину ÷ робочі дні парасольки).
+  //   • Daily-фолбек рахується ЛИШЕ для днів ПОЗА будь-якою парасолькою менеджера (щоб
+  //     не подвоювати вже покритий парасолькою проміжок).
+  //   • Лічильні (payment_amount/ads/leadgen/dispatch) — сума; ставкові (avg_check/conversion) — MAX.
+  // day=week=month сходяться: тиждень із парасолькою = target; без — Σ daily; місяць = Σ обох.
   const umbRows = (await pool.query<{ assignee_id: number; ps: string; pe: string; metrics_json: { metric: string; target: number | string }[] | null }>(
     `SELECT t.assignee_id, to_char(t.period_start,'YYYY-MM-DD') ps,
             to_char(COALESCE(t.period_end, t.period_start),'YYYY-MM-DD') pe, t.metrics_json
@@ -4354,8 +4357,25 @@ dashboardRouter.get("/report-plan", async (req, res) => {
         AND t.metrics_json IS NOT NULL
         AND t.period_start <= $2 AND COALESCE(t.period_end, t.period_start) >= $1`, [from, to]
   )).rows;
+  const dayRows = (await pool.query<{ assignee_id: number; pd: string; metrics_json: { metric: string; target: number | string }[] | null }>(
+    `SELECT t.assignee_id, to_char(t.plan_date,'YYYY-MM-DD') pd, t.metrics_json
+       FROM tasks t
+      WHERE t.auto AND t.task_type = 'daily_kpi' AND t.assignee_id IS NOT NULL
+        AND t.metrics_json IS NOT NULL AND t.plan_date BETWEEN $1 AND $2`, [from, to]
+  )).rows;
   const ADDITIVE = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
   const planByMgr = new Map<number, Record<string, number>>();
+  const accum = (aid: number, metrics: { metric: string; target: number | string }[] | null, factor: number) => {
+    const e = planByMgr.get(aid) ?? {};
+    for (const m of metrics ?? []) {
+      const t = Number(m.target) || 0;
+      if (ADDITIVE.has(m.metric)) e[m.metric] = (e[m.metric] ?? 0) + t * factor; // сума (апортовано factor)
+      else e[m.metric] = Math.max(e[m.metric] ?? 0, t);                          // ставка — MAX
+    }
+    planByMgr.set(aid, e);
+  };
+  // Парасольки: діапазони на менеджера (для перевірки покриття) + внесок таргету.
+  const umbByMgr = new Map<number, { ps: string; pe: string }[]>();
   for (const u of umbRows) {
     const wdU = workingDaysBetween(u.ps, u.pe);
     if (wdU <= 0) continue;
@@ -4363,14 +4383,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     const oTo = u.pe < to ? u.pe : to;
     if (oFrom > oTo) continue;
     const frac = workingDaysBetween(oFrom, oTo) / wdU;
-    if (frac <= 0) continue;
-    const e = planByMgr.get(u.assignee_id) ?? {};
-    for (const m of u.metrics_json ?? []) {
-      const t = Number(m.target) || 0;
-      if (ADDITIVE.has(m.metric)) e[m.metric] = (e[m.metric] ?? 0) + t * frac; // апортовано + Σ парасольок
-      else e[m.metric] = Math.max(e[m.metric] ?? 0, t);                        // ставка — MAX покривної
-    }
-    planByMgr.set(u.assignee_id, e);
+    (umbByMgr.get(u.assignee_id) ?? umbByMgr.set(u.assignee_id, []).get(u.assignee_id)!).push({ ps: u.ps, pe: u.pe });
+    if (frac > 0) accum(u.assignee_id, u.metrics_json, frac);
+  }
+  // Daily-фолбек: лише дні ПОЗА всіма парасольками менеджера.
+  const covered = (aid: number, d: string) => (umbByMgr.get(aid) ?? []).some((u) => d >= u.ps && d <= u.pe);
+  for (const r of dayRows) {
+    if (covered(r.assignee_id, r.pd)) continue;      // проміжок уже покрито парасолькою
+    accum(r.assignee_id, r.metrics_json, 1);
   }
 
   // Темп: частка робочих днів періоду, що минули (для статусу g/a/r як у макеті).
