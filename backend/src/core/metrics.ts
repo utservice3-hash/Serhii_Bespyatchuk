@@ -962,6 +962,68 @@ export async function leadsByManagerBucket(s: MetricScope, granularity: "day" | 
   return [...m.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
 }
 
+/** «Прийняв лідогенераторів» ПО МЕНЕДЖЕРУ — з ПЕРСИСТОВАНОГО `leadgen_touch` (не з
+ *  живої leadgen_registry, що обрізається ~5 тижнів → історія давала б 0). Те саме
+ *  джерело, що класифікує лідоген у проді. Джойн touch→угода→менеджер, DISTINCT
+ *  lead_kommo_id за `transfer_date` у [from,to]. Period-total. */
+export async function leadgenByManager(s: MetricScope): Promise<MgrN[]> {
+  const params: unknown[] = [];
+  const conds = ["d.manager_id IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`lt.transfer_date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ manager_id: number; deals: string }>(
+    `SELECT d.manager_id, COUNT(DISTINCT lt.lead_kommo_id) deals
+       FROM leadgen_touch lt JOIN deals d ON d.kommo_id = lt.lead_kommo_id ${join}
+      WHERE ${conds.join(" AND ")} GROUP BY d.manager_id`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, deals: Number(x.deals) }));
+}
+
+/** «Прийняв лідогенераторів» ПО (менеджер × бакет) за `transfer_date`. Additive. */
+export async function leadgenByManagerBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<MgrBucketN[]> {
+  const params: unknown[] = [];
+  const conds = ["d.manager_id IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`lt.transfer_date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ manager_id: number; bucket: string; deals: string }>(
+    `SELECT d.manager_id, to_char(date_trunc('${granularity}', lt.transfer_date)::date,'YYYY-MM-DD') bucket, COUNT(DISTINCT lt.lead_kommo_id) deals
+       FROM leadgen_touch lt JOIN deals d ON d.kommo_id = lt.lead_kommo_id ${join}
+      WHERE ${conds.join(" AND ")} GROUP BY d.manager_id, 2 ORDER BY 2`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, deals: Number(x.deals) }));
+}
+
+export interface MgrConvTaken { managerId: number; taken: number; won: number; cohortPct: number | null }
+/**
+ * КОНВЕРСІЯ ПО МЕНЕДЖЕРУ (рішення власника): **виграно ÷ УЗЯТІ ЛІДИ (реклама +
+ * лідоген РАЗОМ)**. Знаменник = FC-угоди `lead_channel IN ('ad','leadgen')`, СТВОРЕНІ
+ * в періоді (постійні `other` БЕЗ ліда — НЕ входять). Чисельник = з них дійшли до
+ * MONEY_ZONE (визнання доходу, ≤100%). Само підлаштовується під канал: РПК≈лідоген,
+ * РНК≈ads. cohortPct=null коли taken<10 (UI «—», не «0%»). Scope-aware.
+ */
+export async function conversionByManager(s: MetricScope): Promise<MgrConvTaken[]> {
+  const params: unknown[] = [FC_PIPELINES, MONEY_ZONE];
+  const conds = ["d.pipeline_id = ANY($1)", "d.lead_channel IN ('ad','leadgen')", "d.manager_id IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  const r = await pool.query<{ manager_id: number; taken: string; won: string }>(
+    `SELECT d.manager_id, COUNT(*) taken,
+            COUNT(*) FILTER (WHERE d.status_id = ANY($2)
+                 OR EXISTS (SELECT 1 FROM deal_stage_events e WHERE e.kommo_id = d.kommo_id AND e.status_id = ANY($2))) won
+       FROM deals d ${join} WHERE ${conds.join(" AND ")} GROUP BY d.manager_id`, params);
+  return r.rows.map((x) => {
+    const taken = Number(x.taken), won = Number(x.won);
+    return { managerId: x.manager_id, taken, won, cohortPct: taken >= 10 ? Math.round((won / taken) * 1000) / 10 : null };
+  });
+}
+
 // ── Блок A (КВП повна таблиця) — нові метрики ──
 // Прострочена оплата = ЗНІМОК «зараз»: планова дата оплати минула, а угода ще НЕ оплачена
 // (не 142/143 і не в етапі 9 «оплата отримана»). Не залежить від періоду. sum = Σ price.
