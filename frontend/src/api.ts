@@ -522,7 +522,7 @@ export interface ReportPlanManager {
 }
 export interface ReportPlan {
   scope: { from: string; to: string; isCurrent: boolean };
-  role: string; elapsed: number; remainingWorkdays: number;
+  role: string; viewerManagerId: number | null; elapsed: number; remainingWorkdays: number;
   glance: { plan: number; fact: number; expect: number; dispatched: number; created: number; statusCounts: { g: number; a: number; r: number } };
   managers: ReportPlanManager[];
 }

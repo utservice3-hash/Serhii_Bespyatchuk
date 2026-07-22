@@ -4292,21 +4292,36 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const to = (req.query.to as string) || null;
   if (!from || !to) return res.status(400).json({ error: "from/to (YYYY-MM-DD) обовʼязкові" });
 
+  // Рольовий скоуп (E7 22.07): menedzher бачить ВСЮ СВОЮ КОМАНДУ (не лише себе) —
+  // teamId з `managers`, свій рядок підсвічується (viewerManagerId). team_lead — своя
+  // команда (+дрил по managerId). admin — усі команди (перемикач teamId/managerId).
   let managerId: number | null = null;
   let teamId: number | null = null;
-  if (auth.role === "manager") managerId = auth.managerId;
-  else if (auth.role === "team_lead") { teamId = auth.teamId; managerId = req.query.managerId ? Number(req.query.managerId) : null; }
+  let viewerManagerId: number | null = null;
+  if (auth.role === "manager") {
+    viewerManagerId = auth.managerId;
+    const tr = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId]);
+    teamId = tr.rows[0]?.team_id ?? null;
+    if (!teamId) managerId = auth.managerId;              // менеджер без команди → лише себе
+  } else if (auth.role === "team_lead") { teamId = auth.teamId; managerId = req.query.managerId ? Number(req.query.managerId) : null; }
   else { managerId = req.query.managerId ? Number(req.query.managerId) : null; teamId = req.query.teamId ? Number(req.query.teamId) : null; }
   const scope: metrics.MetricScope = { from, to, managerId, teamId };
   const { adSources } = await getSettings();
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
 
-  // Ростер менеджерів у скоупі (активні; дрил team_lead/admin по managerId).
+  // Ростер менеджерів у скоупі (активні; дрил team_lead/admin по managerId). КОМЕРЦІЙНИЙ
+  // скоуп (A1): коли команду НЕ обрано (admin «Всі команди») — у РОСТЕР і в усі агрегати
+  // входять лише продажні юніти (РНК/РПК/Самостійні); Финансовый (12) і лідоген-генератор
+  // Ковтонюк (11) ВИКЛЮЧАЮТЬСЯ. Фінанси давали факт без плану → інфляція % — цим і чиниться.
   const rp: unknown[] = [];
   const rConds = ["m.is_active"];
   if (managerId) { rp.push(managerId); rConds.push(`m.id = $${rp.length}`); }
   if (teamId) { rp.push(teamId); rConds.push(`m.team_id = $${rp.length}`); }
+  if (!managerId && !teamId) {
+    rp.push([...KVP_FINANCE_TEAM_IDS, ...KVP_LEADGEN_TEAM_IDS]);
+    rConds.push(`(m.team_id IS NULL OR NOT (m.team_id = ANY($${rp.length})))`);
+  }
   const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m LEFT JOIN teams t ON t.id = m.team_id
       WHERE ${rConds.join(" AND ")} ORDER BY m.name`, rp
@@ -4440,7 +4455,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
 
   res.json({
     scope: { from, to, isCurrent: from <= kyivToday && kyivToday <= to },
-    role: auth.role, elapsed, remainingWorkdays: remWd, glance, managers,
+    role: auth.role, viewerManagerId, elapsed, remainingWorkdays: remWd, glance, managers,
   });
 });
 
@@ -4451,11 +4466,14 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
   const managerId = Number(req.query.managerId);
   const date = String(req.query.date ?? "");
   if (!managerId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "managerId + date (YYYY-MM-DD) обовʼязкові" });
-  // Роль-скоуп: manager лише свій; team_lead лише своя команда; admin будь-хто.
-  if (auth.role === "manager" && managerId !== auth.managerId) return res.status(403).json({ error: "Forbidden" });
-  if (auth.role === "team_lead") {
+  // Роль-скоуп (E7): manager і team_lead — лише СВОЯ КОМАНДА; admin — будь-хто.
+  if (auth.role === "manager" || auth.role === "team_lead") {
+    const myTeam = auth.role === "team_lead"
+      ? auth.teamId
+      : (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId])).rows[0]?.team_id ?? null;
     const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
-    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Forbidden" });
+    // менеджер без команди бачить лише себе; інакше — уся команда
+    if (myTeam == null ? managerId !== auth.managerId : chk.rows[0]?.team_id !== myTeam) return res.status(403).json({ error: "Forbidden" });
   }
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
   const r = await pool.query<{ name: string; channel: string | null; price: string; status_id: number }>(

@@ -13,6 +13,9 @@ const SLBL: Record<string, string> = { g: "В нормі", a: "Відстає", 
 const SICON: Record<string, string> = { g: "🟢", a: "🟠", r: "🔴" };
 const TAGCOL: Record<string, string> = { rpk: BAR, rnk: "#7a52c7", self: GREEN };
 
+// Комерційний скоуп (A1): у перемикачі команд не показуємо Финансовый(12) і
+// лідоген-генератор Ковтонюк(11) — вони не в продажному звіті (= бекенд KVP_FINANCE/LEADGEN).
+const HIDE_TEAMS = new Set([11, 12]);
 const fmt = (n: number) => (n === 0 ? "0" : Math.round(n).toLocaleString("uk-UA").replace(/,/g, " "));
 const k = (n: number) => Math.round(n / 1000) + "к";
 const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
@@ -65,7 +68,11 @@ export function ReportPlanSection({ auth, teams }: {
   }, [period.from, period.to, focusDay, teamId]);
 
   const focusByMgr = useMemo(() => new Map((focus?.managers ?? []).map((m) => [m.managerId, m])), [focus]);
-  const roleChip = auth.role === "manager" ? "лише себе" : auth.role === "team_lead" ? "свою команду" : "усі команди";
+  // E7: менеджер бачить свою КОМАНДУ; його рядок підсвічений, «Ти» = особисте.
+  const viewerId = data?.viewerManagerId ?? auth.managerId;
+  const selfRow = data?.managers.find((m) => m.managerId === viewerId) ?? null;
+  const selfFocus = viewerId != null ? focusByMgr.get(viewerId) ?? null : null;
+  const roleChip = auth.role === "manager" ? "свою команду" : auth.role === "team_lead" ? "свою команду" : "усі команди";
   const periodLabel = mode === "day" ? anchor : mode === "month" ? anchor.slice(0, 7) : `${ddmm(period.from)}–${ddmm(period.to)}`;
 
   return (
@@ -99,7 +106,7 @@ export function ReportPlanSection({ auth, teams }: {
         {auth.role === "admin" && (
           <select value={teamId} onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")} style={{ ...navBtn, cursor: "pointer" }}>
             <option value="">Усі команди</option>
-            {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            {teams.filter((t) => !HIDE_TEAMS.has(t.id)).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         )}
       </div>
@@ -125,11 +132,20 @@ export function ReportPlanSection({ auth, teams }: {
 
       {loading && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
         <>
-          <Glance data={data} focus={focus} focusDay={focusDay} />
-          <div style={{ fontSize: 12, color: MUTED, margin: "0 2px 10px" }}>↓ Відсортовано за станом — хто відстає, той угорі</div>
+          <Glance data={data} focus={focus} focusDay={focusDay} today={today} />
+          {/* E7: у вигляді менеджера — особистий блок «Ти» (свої числа) поруч з агрегатом команди */}
+          {auth.role === "manager" && selfRow && (
+            <MgrStrip m={selfRow} fy={selfFocus ?? undefined} focusDay={focusDay} today={today}
+              elapsed={data.elapsed} remWd={data.remainingWorkdays} period={period} role={auth.role} isSelf
+              open={openMgr === selfRow.managerId} onToggle={() => setOpenMgr(openMgr === selfRow.managerId ? null : selfRow.managerId)} />
+          )}
+          <div style={{ fontSize: 12, color: MUTED, margin: "0 2px 10px" }}>
+            {auth.role === "manager" ? "↓ Твоя команда — хто відстає, той угорі" : "↓ Відсортовано за станом — хто відстає, той угорі"}
+          </div>
           {data.managers.map((m) => (
-            <MgrStrip key={m.managerId} m={m} fy={focusByMgr.get(m.managerId)} focusDay={focusDay}
-              elapsed={data.elapsed} remWd={data.remainingWorkdays} period={period}
+            <MgrStrip key={m.managerId} m={m} fy={focusByMgr.get(m.managerId)} focusDay={focusDay} today={today}
+              elapsed={data.elapsed} remWd={data.remainingWorkdays} period={period} role={auth.role}
+              isSelf={m.managerId === viewerId}
               open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
           ))}
           {data.managers.length === 0 && <div style={{ color: MUTED, padding: 20 }}>Немає менеджерів у цьому розрізі.</div>}
@@ -142,11 +158,12 @@ export function ReportPlanSection({ auth, teams }: {
 
 const navBtn: React.CSSProperties = { border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 8, padding: "7px 12px", fontSize: 13, cursor: "pointer" };
 
-function Glance({ data, focus, focusDay }: { data: ReportPlan; focus: ReportPlan | null; focusDay: string }) {
+function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string }) {
   const g = data.glance;
   const pct = g.plan > 0 ? Math.round((g.fact / g.plan) * 100) : 0;
   const fg = focus?.glance;
   const st = g.statusCounts;
+  const futureFocus = focusDay > today; // A2: факт майбутнього дня не показуємо
   return (
     <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 15, padding: "16px 18px", marginBottom: 16, display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 20, alignItems: "center" }}>
       <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
@@ -154,10 +171,11 @@ function Glance({ data, focus, focusDay }: { data: ReportPlan; focus: ReportPlan
         <div>
           <div style={lab}>Команда до плану</div>
           <div style={val}>{fmt(g.fact)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>/ {fmt(g.plan)} ₴</small></div>
+          {/* D5: усі ТРИ лічильники завжди (зрив / відстає / у нормі) */}
           <div style={{ display: "flex", gap: 6, marginTop: 5 }}>
-            {st.r > 0 && <Pill c={RED}>{st.r} зрив</Pill>}
-            {st.a > 0 && <Pill c={AMBER}>{st.a} відстає</Pill>}
-            {st.g > 0 && <Pill c={GREEN}>{st.g} у нормі</Pill>}
+            <Pill c={RED}>{st.r} зрив</Pill>
+            <Pill c={AMBER}>{st.a} відстає</Pill>
+            <Pill c={GREEN}>{st.g} у нормі</Pill>
           </div>
         </div>
       </div>
@@ -168,8 +186,12 @@ function Glance({ data, focus, focusDay }: { data: ReportPlan; focus: ReportPlan
       </div>
       <div>
         <div style={lab}>Фокус-день {ddmm(focusDay)}</div>
-        <div style={val}>{fg?.dispatched ?? 0} <small style={{ fontSize: 12, color: MUTED }}>авто · </small>{k(fg?.fact ?? 0)}<small style={{ fontSize: 12, color: MUTED }}> отримано</small></div>
-        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>створено {fg?.created ?? 0} угод</div>
+        {futureFocus ? (
+          <div style={{ ...val, color: MUTED }}>— <small style={{ fontSize: 12, fontWeight: 600 }}>ще попереду</small></div>
+        ) : (
+          <div style={val}>{fg?.dispatched ?? 0} <small style={{ fontSize: 12, color: MUTED }}>авто · </small>{k(fg?.fact ?? 0)}<small style={{ fontSize: 12, color: MUTED }}> отримано</small></div>
+        )}
+        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>{futureFocus ? "день ще не настав" : `створено ${fg?.created ?? 0} угод`}</div>
       </div>
     </div>
   );
@@ -181,30 +203,33 @@ function Pill({ c, children }: { c: string; children: React.ReactNode }) {
 }
 function Donut({ pct }: { pct: number }) {
   const col = pct >= 100 ? GREEN : pct >= 70 ? AMBER : RED;
+  const ring = Math.min(100, Math.max(0, pct)); // D6: кільце ≤100% візуально, число повне
   return (
-    <div style={{ width: 58, height: 58, borderRadius: "50%", flex: "none", display: "grid", placeItems: "center", position: "relative", background: `conic-gradient(${col} ${pct}%, var(--border) 0)` }}>
+    <div style={{ width: 58, height: 58, borderRadius: "50%", flex: "none", display: "grid", placeItems: "center", position: "relative", background: `conic-gradient(${col} ${ring}%, var(--border) 0)` }}>
       <div style={{ width: 42, height: 42, background: "var(--card-bg)", borderRadius: "50%", position: "absolute" }} />
-      <span style={{ position: "relative", fontWeight: 750, fontSize: 14 }}>{pct}%</span>
+      <span style={{ position: "relative", fontWeight: 750, fontSize: 13 }}>{pct}%</span>
     </div>
   );
 }
 
-function MgrStrip({ m, fy, focusDay, elapsed, remWd, period, open, onToggle }: {
-  m: ReportPlanManager; fy: ReportPlanManager | undefined; focusDay: string; elapsed: number; remWd: number;
-  period: { from: string; to: string }; open: boolean; onToggle: () => void;
+function MgrStrip({ m, fy, focusDay, today, elapsed, remWd, period, role, isSelf, open, onToggle }: {
+  m: ReportPlanManager; fy: ReportPlanManager | undefined; focusDay: string; today: string; elapsed: number; remWd: number;
+  period: { from: string; to: string }; role: string; isSelf?: boolean; open: boolean; onToggle: () => void;
 }) {
   const s = m.status;
   const pct = m.plan > 0 ? Math.round((m.fact / m.plan) * 100) : 0;
   const smax = Math.max(...m.spark, 1);
+  const futureFocus = focusDay > today; // A2: факт майбутнього дня не показуємо
   const cr = fy?.created ?? 0, nw = fy?.new ?? 0, rp = fy?.rep ?? 0, disp = fy?.kpi.dispatch.fact ?? 0, recv = fy?.fact ?? 0;
   const showWhy = s !== "g"; // «чому+дія» лише не-зеленим
   return (
-    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderLeft: `4px solid ${SCOL[s]}`, borderRadius: 14, marginBottom: 11, overflow: "hidden" }}>
+    <div style={{ background: isSelf ? BAR + "0d" : "var(--card-bg)", border: `1px solid ${isSelf ? BAR + "88" : "var(--border)"}`, borderLeft: `4px solid ${SCOL[s]}`, borderRadius: 14, marginBottom: 11, overflow: "hidden" }}>
       <div onClick={onToggle} style={{ display: "grid", gridTemplateColumns: "210px 1fr 320px 34px", gap: 18, alignItems: "center", padding: "15px 17px", cursor: "pointer" }}>
         {/* who + status */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontWeight: 700, fontSize: 15.5, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 700, fontSize: 15.5, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {m.name}<span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: TAGCOL[m.tag] + "22", color: TAGCOL[m.tag] }}>{m.tag.toUpperCase()}</span>
+            {isSelf && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: BAR + "22", color: BAR }}>ТИ</span>}
           </span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 750, fontSize: 12.5, padding: "3px 10px", borderRadius: 20, width: "max-content", background: SCOL[s] + "22", color: SCOL[s] }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: SCOL[s] }} />{SLBL[s]}
@@ -233,11 +258,17 @@ function MgrStrip({ m, fy, focusDay, elapsed, remWd, period, open, onToggle }: {
             <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit second />
           </div>
         </div>
-        {/* yesterday cluster + spark */}
+        {/* focus-day cluster + spark — майбутній день без факту (A2) */}
         <div style={{ display: "flex", gap: 14, alignItems: "center", justifyContent: "flex-end" }}>
-          <Stat v={cr} l="створено" sub={`${nw}нов · ${rp}пост`} />
-          <Stat v={disp} l="авто" />
-          <Stat v={recv} l="отримано ₴" money />
+          {futureFocus ? (
+            <div style={{ fontSize: 11.5, color: MUTED, textAlign: "right", minWidth: 120 }}>{ddmm(focusDay)}<br />ще попереду</div>
+          ) : (
+            <>
+              <Stat v={cr} l="створено" sub={`${nw}нов · ${rp}пост`} />
+              <Stat v={disp} l="авто" />
+              <Stat v={recv} l="отримано ₴" money />
+            </>
+          )}
           <div title="отримано по тижнях (5)" style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 34 }}>
             {m.spark.map((v, ix) => (
               <div key={ix} style={{ width: 7, borderRadius: 2, background: ix === m.spark.length - 1 ? BAR : "var(--border)", height: Math.max(3, (v / smax) * 34) }} />
@@ -246,20 +277,22 @@ function MgrStrip({ m, fy, focusDay, elapsed, remWd, period, open, onToggle }: {
         </div>
         <div style={{ color: MUTED, textAlign: "center", fontSize: 13, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</div>
       </div>
-      {showWhy && <WhyBox m={m} />}
-      {open && <DayDrill managerId={m.managerId} period={period} focusDay={focusDay} />}
+      {showWhy && <WhyBox m={m} role={role} isSelf={!!isSelf} />}
+      {open && <DayDrill managerId={m.managerId} period={period} focusDay={focusDay} today={today} />}
     </div>
   );
 }
 
+// C4: усі KPI однаково «факт/ціль». Де цілі нема → «—» (не ховати). Формат ціль/факт спільний.
 function Kpi({ lbl, fact, target, money, pctUnit, second }: { lbl: string; fact: number | null; target: number; money?: boolean; pctUnit?: boolean; second?: boolean }) {
   const ok = target > 0 && fact != null && fact >= target;
   const has = target > 0;
   const col = !has ? MUTED : ok ? GREEN : AMBER;
   const f = fact == null ? "—" : money ? fmt(fact) : pctUnit ? `${fact}%` : String(fact);
+  const t = has ? (money ? k(target) : pctUnit ? target + "%" : String(target)) : "—";
   return (
-    <span style={{ fontSize: 11.5, color: MUTED, fontWeight: second ? 700 : 400 }} title={`${lbl}: факт ${f}${has ? ` / ціль ${money ? fmt(target) : pctUnit ? target + "%" : target}` : ""}`}>
-      {lbl} <b style={{ color: col }}>{f}</b>{has ? <span style={{ color: MUTED }}>/{money ? k(target) : pctUnit ? target + "%" : target}</span> : null}{has && (ok ? " ✓" : "")}
+    <span style={{ fontSize: 11.5, color: MUTED, fontWeight: second ? 700 : 400 }} title={`${lbl}: факт ${f} / ціль ${has ? (money ? fmt(target) : pctUnit ? target + "%" : target) : "не задано"}`}>
+      {lbl} <b style={{ color: col }}>{f}</b><span style={{ color: MUTED }}>/{t}</span>{has && ok ? " ✓" : ""}
     </span>
   );
 }
@@ -273,19 +306,32 @@ function Stat({ v, l, sub, money }: { v: number; l: string; sub?: string; money?
   );
 }
 
-// «Чому + Дія» — детермінований діагноз (не зелений). Пояснює відставання + одна дія.
-function WhyBox({ m }: { m: ReportPlanManager }) {
+// «Чому + Дія» — детермінований діагноз (не зелений). F8: світлофор ПО ГРОШАХ; де
+// активність по плану, а гроші відстають — це СИГНАЛ тімліду, не «провал». F9: дія
+// рольова (менеджеру — під нього; «замовити лідогенів» лишити тімліду/адміну).
+function WhyBox({ m, role, isSelf }: { m: ReportPlanManager; role: string; isSelf: boolean }) {
   const behind = m.plan > 0 ? Math.max(0, m.plan - m.fact) : 0;
-  const why = m.status === "r"
-    ? `Зрив темпу: факт ${k(m.fact)} при плані ${k(m.plan)} (${m.pct ?? 0}%).`
-    : `Відстає: факт ${k(m.fact)} (${m.pct ?? 0}% плану), нижче темпу.`;
-  const lowLeads = (m.kpi.ads.target > 0 && m.kpi.ads.fact != null && m.kpi.ads.fact < m.kpi.ads.target) ||
-    (m.kpi.leadgen.target > 0 && m.kpi.leadgen.fact != null && m.kpi.leadgen.fact < m.kpi.leadgen.target);
+  const met = (x: { fact: number | null; target: number }) => x.target > 0 && x.fact != null && x.fact >= x.target;
+  const low = (x: { fact: number | null; target: number }) => x.target > 0 && x.fact != null && x.fact < x.target;
+  const activityOnPlan = met(m.kpi.ads) || met(m.kpi.leadgen) || met(m.kpi.dispatch); // хоч одна активність по плану
+  const lowLeads = low(m.kpi.ads) || low(m.kpi.leadgen);
+  const forMe = role === "manager" || isSelf; // формулювати під менеджера
+  const why = activityOnPlan
+    ? `Активність по плану, але гроші відстають — потрібне втручання (факт ${k(m.fact)} / ${k(m.plan)}, ${m.pct ?? 0}%).`
+    : m.status === "r"
+      ? `Зрив темпу: факт ${k(m.fact)} при плані ${k(m.plan)} (${m.pct ?? 0}%).`
+      : `Відстає: факт ${k(m.fact)} (${m.pct ?? 0}% плану), нижче темпу.`;
   const act = m.expect > behind
-    ? `Пайплайн здоровий (очікуємо ${k(m.expect)}). Дія: дотиснути угоди з «Перевезення завершено»/«Дзвінок після розвантаж.».`
+    ? (forMe
+      ? `Пайплайн здоровий (очікуємо ${k(m.expect)}). Дотисни угоди з «Перевезення завершено» / «Дзвінок після розвантаж.».`
+      : `Пайплайн здоровий (очікуємо ${k(m.expect)}). Дія: дотиснути угоди на грошових стадіях.`)
     : lowLeads
-      ? `Лідів мало (реклама/лідоген нижче цілі). Дія: замовити лідогенів + підняти оплати. Треба ${fmt(m.needPerDay)} ₴/день.`
-      : `Пайплайну бракує (очікуємо лише ${k(m.expect)}). Дія: наростити нові ліди + прискорити закриття. Треба ${fmt(m.needPerDay)} ₴/день.`;
+      ? (forMe
+        ? `Лідів мало. Підніми оплати й додай нові ліди. Треба ${fmt(m.needPerDay)} ₴/день.`
+        : `Лідів мало (реклама/лідоген нижче цілі). Дія: замовити лідогенів + підняти оплати. Треба ${fmt(m.needPerDay)} ₴/день.`)
+      : (forMe
+        ? `Пайплайну бракує (очікуємо ${k(m.expect)}). Наростай нові ліди й прискорюй закриття. Треба ${fmt(m.needPerDay)} ₴/день.`
+        : `Пайплайну бракує (очікуємо лише ${k(m.expect)}). Дія: наростити ліди + прискорити закриття. Треба ${fmt(m.needPerDay)} ₴/день.`);
   const c = m.status === "r" ? RED : AMBER;
   return (
     <div style={{ padding: "0 17px 15px" }}>
@@ -298,7 +344,7 @@ function WhyBox({ m }: { m: ReportPlanManager }) {
 }
 
 // Дрил: тиждень→день→угоди. День-клітинки з manager-detail; угоди — лінивий фетч.
-function DayDrill({ managerId, period, focusDay }: { managerId: number; period: { from: string; to: string }; focusDay: string }) {
+function DayDrill({ managerId, period, focusDay, today }: { managerId: number; period: { from: string; to: string }; focusDay: string; today: string }) {
   const [d, setD] = useState<KvpManagerDetail | null>(null);
   const [err, setErr] = useState(false);
   const [dealsOpen, setDealsOpen] = useState<string | null>(null);
@@ -325,15 +371,24 @@ function DayDrill({ managerId, period, focusDay }: { managerId: number; period: 
             {days.map((x) => {
               const chk = x.dispatched ? Math.round(x.received.revenue / x.dispatched) : 0;
               const isF = x.day === focusDay;
+              const future = x.day > today;          // A2: факт майбутнього не показуємо
+              const weekend = dow(x.day) >= 6;       // A2: вихідні притлумити
+              const dim = future || weekend;
               return (
                 <Fragment key={x.day}>
-                  <tr onClick={() => openDeals(x.day)} style={{ cursor: "pointer", background: isF ? AMBER + "18" : undefined }}>
-                    <td style={{ textAlign: "left", fontWeight: 600 }}>▸ {WD[dow(x.day) - 1]} {ddmm(x.day)}{isF ? " •" : ""}</td>
-                    <td style={{ textAlign: "right" }}>{x.created || "—"} {x.created ? <span style={{ color: MUTED, fontSize: 11 }}>({x.newCount}н·{x.repeatCount}п)</span> : null}</td>
-                    <td style={{ textAlign: "right" }}>{x.dispatched || "—"}</td>
-                    <td style={{ textAlign: "right" }}>{x.received.revenue ? fmt(x.received.revenue) + " ₴" : "—"}</td>
-                    <td style={{ textAlign: "right" }}>{chk ? fmt(chk) : "—"}</td>
-                    <td style={{ textAlign: "right" }}>{x.newCount}/{x.repeatCount}</td>
+                  <tr onClick={() => !future && openDeals(x.day)} style={{ cursor: future ? "default" : "pointer", background: isF ? AMBER + "18" : weekend ? "var(--border)" + "44" : undefined, color: dim ? MUTED : undefined }}>
+                    <td style={{ textAlign: "left", fontWeight: 600, color: dim ? MUTED : undefined }}>{future ? "" : "▸ "}{WD[dow(x.day) - 1]} {ddmm(x.day)}{isF ? " •" : ""}</td>
+                    {future ? (
+                      <td colSpan={5} style={{ textAlign: "right", color: MUTED, fontStyle: "italic" }}>ще попереду</td>
+                    ) : (
+                      <>
+                        <td style={{ textAlign: "right" }}>{x.created || "—"} {x.created ? <span style={{ color: MUTED, fontSize: 11 }}>({x.newCount}н·{x.repeatCount}п)</span> : null}</td>
+                        <td style={{ textAlign: "right" }}>{x.dispatched || "—"}</td>
+                        <td style={{ textAlign: "right" }}>{x.received.revenue ? fmt(x.received.revenue) + " ₴" : "—"}</td>
+                        <td style={{ textAlign: "right" }}>{chk ? fmt(chk) : "—"}</td>
+                        <td style={{ textAlign: "right" }}>{x.newCount}/{x.repeatCount}</td>
+                      </>
+                    )}
                   </tr>
                   {dealsOpen === x.day && (
                     <tr><td colSpan={6} style={{ padding: 0, background: "var(--card-bg)" }}>
