@@ -4237,9 +4237,18 @@ const RNK_MGR_TEAMS = new Set([13, 15]);
  */
 dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin") return res.status(403).json({ error: "Лише КВП (адміністратор)" });
   const managerId = Number(req.query.managerId);
   if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
+  // Роль-скоуп ЯК У ЗВІТІ (E7): manager/team_lead — лише СВОЯ КОМАНДА (менеджер бачить
+  // рядки колег → може розгорнути їхню деталь); admin — будь-хто. requested managerId має
+  // належати дозволеному ростеру запитувача, інакше 403 (без витоку в чужі команди).
+  if (auth.role === "manager" || auth.role === "team_lead") {
+    const myTeam = auth.role === "team_lead"
+      ? auth.teamId
+      : (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId])).rows[0]?.team_id ?? null;
+    const tgt = (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId])).rows[0]?.team_id ?? null;
+    if (myTeam == null ? managerId !== auth.managerId : tgt !== myTeam) return res.status(403).json({ error: "Forbidden" });
+  }
   const from = String(req.query.from ?? "");
   const to = String(req.query.to ?? "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: "from/to (YYYY-MM-DD) обовʼязкові" });
