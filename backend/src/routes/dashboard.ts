@@ -4313,12 +4313,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   )).rows;
 
   // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
-  const [recv, disp, ads, lg, conv, avgc, expZone] = await Promise.all([
+  const [recv, disp, ads, lg, conv, avgc, expZone, split] = await Promise.all([
     money.receivedByMgr(scope), metrics.dispatchedByManager(scope),
     metrics.adsAcceptedByMgr(scope, adSources), metrics.leadgenByManager(scope),
     metrics.conversionByManager(scope), money.avgCheckByManager(scope),
     metrics.expectedZoneByScope({ managerId, teamId }, "manager"),
+    metrics.createdSplitByManager(scope),
   ]);
+  const splitM = new Map(split.map((s) => [s.managerId, s]));
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
   const recvM = mapBy(recv), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
     lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc);
@@ -4374,6 +4376,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       tag: kind === "leadgen" ? "self" : kind, // self=самостійні/лідоген у макеті — зелений тег
       plan, fact, expect: Math.round(expM.get(m.id) ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
+      created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
       spark: last5Weeks.map((w) => Math.round(sparkByMgr.get(m.id)?.get(w) ?? 0)),
       kpi: {
@@ -4391,12 +4394,46 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     fact: managers.reduce((s, m) => s + m.fact, 0),
     expect: managers.reduce((s, m) => s + m.expect, 0),
     dispatched: managers.reduce((s, m) => s + m.kpi.dispatch.fact, 0),
+    created: managers.reduce((s, m) => s + m.created, 0),
     statusCounts: { g: managers.filter((m) => m.status === "g").length, a: managers.filter((m) => m.status === "a").length, r: managers.filter((m) => m.status === "r").length },
   };
 
   res.json({
     scope: { from, to, isCurrent: from <= kyivToday && kyivToday <= to },
     role: auth.role, elapsed, remainingWorkdays: remWd, glance, managers,
+  });
+});
+
+/** Дрил Звіту: угоди менеджера, СТВОРЕНІ у конкретний день (для тижень→день→угоди).
+ *  new/rep = сигнал каналу (ad|leadgen→новий, інакше→постійний). Роль-скоуп. */
+dashboardRouter.get("/report-plan/deals", async (req, res) => {
+  const auth = req.auth!;
+  const managerId = Number(req.query.managerId);
+  const date = String(req.query.date ?? "");
+  if (!managerId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "managerId + date (YYYY-MM-DD) обовʼязкові" });
+  // Роль-скоуп: manager лише свій; team_lead лише своя команда; admin будь-хто.
+  if (auth.role === "manager" && managerId !== auth.managerId) return res.status(403).json({ error: "Forbidden" });
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Forbidden" });
+  }
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const r = await pool.query<{ name: string; channel: string | null; price: string; status_id: number }>(
+    `SELECT d.name, d.lead_channel AS channel, d.price, d.status_id
+       FROM deals d WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
+         AND (d.created_at_kommo ${KYIV})::date = $3::date
+      ORDER BY d.price DESC NULLS LAST, d.created_at_kommo`,
+    [managerId, [8921932, 155304], date]
+  );
+  const label = (s: number): string =>
+    s === 142 ? "Виграно" : s === 69716460 || s === 60412544 ? "Оплата отримана"
+      : s === 69716312 || s === 25044997 ? "Очікуємо оплату" : s === 100274340 ? "Виставлення рахунку"
+      : s === 143 ? "Закрито" : "В роботі";
+  res.json({
+    deals: r.rows.map((x) => ({
+      name: x.name, src: x.channel === "ad" || x.channel === "leadgen" ? "new" : "rep",
+      price: Math.round(Number(x.price)), status: label(Number(x.status_id)),
+    })),
   });
 });
 

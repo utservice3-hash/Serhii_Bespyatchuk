@@ -27,12 +27,6 @@ import {
   fetchSyncStatus,
   triggerSync,
   type SyncStatus,
-  fetchReport,
-  type ReportData,
-  fetchFunnelReport,
-  type FunnelReport,
-  fetchFunnelWeekly,
-  type FunnelWeeklyReport,
   fetchChatUsers,
   fetchConversation,
   fetchUnreadCount,
@@ -102,7 +96,7 @@ import { ReceivablesSection } from "./dashboard/sections/ReceivablesSection";
 import { TasksSection } from "./dashboard/sections/TasksSection";
 import { GoalsSection } from "./dashboard/sections/GoalsSection";
 import { ErrorBoundary } from "../components/ErrorBoundary";
-import { ReportSection } from "./dashboard/sections/ReportSection";
+import { ReportPlanSection } from "./dashboard/sections/ReportPlanSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { LeadgenRegularsCard } from "./dashboard/sections/LeadgenRegularsCard";
 import { PlansSection } from "./dashboard/sections/PlansSection";
@@ -208,23 +202,6 @@ export function Dashboard() {
   const [loyaltyDynamics, setLoyaltyDynamics] = useState<LoyaltyDynamics | null>(null);
 
   const [teamsRanking, setTeamsRanking] = useState<TeamRanking[]>([]);
-  const [reportData, setReportData] = useState<ReportData | null>(null);
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportGranularity, setReportGranularity] = useState<"day" | "week" | "month">(
-    () => (localStorage.getItem("reportGranularity") as "day" | "week" | "month") || "week"
-  );
-  const [reportManagerId, setReportManagerId] = useState<number | "">(() => {
-    const s = localStorage.getItem("reportManagerId"); return s ? Number(s) : "";
-  });
-  const [reportTeamId, setReportTeamId] = useState<number | "">(() => {
-    const s = localStorage.getItem("reportTeamId"); return s ? Number(s) : "";
-  });
-  useEffect(() => { localStorage.setItem("reportGranularity", reportGranularity); }, [reportGranularity]);
-  useEffect(() => { localStorage.setItem("reportManagerId", reportManagerId === "" ? "" : String(reportManagerId)); }, [reportManagerId]);
-  useEffect(() => { localStorage.setItem("reportTeamId", reportTeamId === "" ? "" : String(reportTeamId)); }, [reportTeamId]);
-  const [funnelReport, setFunnelReport] = useState<FunnelReport | null>(null);
-  const [funnelWeekly, setFunnelWeekly] = useState<FunnelWeeklyReport | null>(null);
-  const [funnelWeeklyGran, setFunnelWeeklyGran] = useState<"week" | "day">("week");
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
@@ -288,28 +265,11 @@ export function Dashboard() {
   }, [section, dateRange, refreshNonce]);
 
   useEffect(() => {
-    if (section !== "report") return;
-    // Manager pick takes precedence over team pick.
-    const mgr = reportManagerId || undefined;
-    const team = mgr ? undefined : reportTeamId || undefined;
-    setReportLoading(true);
-    fetchReport({ granularity: reportGranularity, from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr, teamId: team })
-      .then(setReportData)
-      .catch(() => setReportData(null))
-      .finally(() => setReportLoading(false));
-    // The client funnel lives inside the same "Звіт" section.
-    fetchFunnelReport({ from: dateRange.from || undefined, to: dateRange.to || undefined, managerId: mgr, teamId: team })
-      .then(setFunnelReport)
-      .catch(() => setFunnelReport(null));
-    // Weekly funnel matrix (operational Mon/Thu report), keyed to the selected month.
-    fetchFunnelWeekly({ to: dateRange.to || undefined, managerId: mgr, teamId: team, granularity: funnelWeeklyGran })
-      .then(setFunnelWeekly)
-      .catch(() => setFunnelWeekly(null));
-    if (auth?.role !== "manager") {
-      // When a team is picked, the manager list narrows to that team.
-      fetchManagerOptions(reportTeamId || undefined).then(setManagerOptions).catch(() => setManagerOptions([]));
-    }
-  }, [section, reportGranularity, reportManagerId, reportTeamId, dateRange, refreshNonce, auth, funnelWeeklyGran]);
+    // ReportPlanSection fetches its own data; here we only keep the manager
+    // dropdown populated (used by task assignment and other sections).
+    if (auth?.role === "manager") return;
+    fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
+  }, [auth, refreshNonce]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -1058,31 +1018,10 @@ export function Dashboard() {
         />
       )}
 
-      {section === "report" && (
-        <ReportSection
-          title={auth?.role === "manager" ? "Мій звіт" : auth?.role === "team_lead" ? "Звіт тімліда" : "Звіт"}
-          report={reportData}
-          funnelReport={funnelReport}
-          funnelWeekly={funnelWeekly}
-          funnelWeeklyGran={funnelWeeklyGran}
-          setFunnelWeeklyGran={setFunnelWeeklyGran}
-          loading={reportLoading}
-          granularity={reportGranularity}
-          setGranularity={setReportGranularity}
-          dateRange={dateRange}
-          setDateRange={setDateRange}
-          datePreset={datePreset}
-          setDatePreset={setDatePreset}
-          canEditPlan={auth?.role === "admin" || auth?.role === "team_lead"}
-          canPickManager={auth?.role !== "manager"}
-          canPickTeam={auth?.role === "admin"}
+      {section === "report" && auth && (
+        <ReportPlanSection
+          auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }}
           teams={teams}
-          reportTeamId={reportTeamId}
-          setReportTeamId={setReportTeamId}
-          managerOptions={managerOptions}
-          reportManagerId={reportManagerId}
-          setReportManagerId={setReportManagerId}
-          onPlanSaved={() => setRefreshNonce((n) => n + 1)}
         />
       )}
 

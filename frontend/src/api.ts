@@ -509,6 +509,33 @@ export interface KvpReport {
   money: { received: KvpAgg; success: KvpAgg; paidOnly: KvpAgg; awaitingNow: { deals: number; revenue: number }; expectedThis: KvpExpBucket; expectedNext: KvpExpBucket; expectedZoneTotal: KvpExpBucket };
   funnel: { stage: string; deals: number; revenue: number }[];
 }
+// ── ЗВІТ (лендинг) — план із задачника + факт із core (макет zvit_v2) ──
+export interface ReportPlanKpi { fact: number | null; target: number; taken?: number; won?: number }
+export interface ReportPlanManager {
+  managerId: number; name: string; teamId: number | null; teamName: string | null;
+  tag: "rpk" | "rnk" | "self";
+  plan: number; fact: number; expect: number; pct: number | null;
+  created: number; new: number; rep: number;
+  status: "g" | "a" | "r"; needPerDay: number; remainingWorkdays: number;
+  spark: number[];
+  kpi: { ads: ReportPlanKpi; leadgen: ReportPlanKpi; dispatch: ReportPlanKpi; avgCheck: ReportPlanKpi; conversion: ReportPlanKpi };
+}
+export interface ReportPlan {
+  scope: { from: string; to: string; isCurrent: boolean };
+  role: string; elapsed: number; remainingWorkdays: number;
+  glance: { plan: number; fact: number; expect: number; dispatched: number; created: number; statusCounts: { g: number; a: number; r: number } };
+  managers: ReportPlanManager[];
+}
+export async function fetchReportPlan(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<ReportPlan> {
+  const { data } = await api.get<ReportPlan>("/dashboard/report-plan", { params });
+  return data;
+}
+export interface ReportPlanDeal { name: string; src: "new" | "rep"; price: number; status: string }
+export async function fetchReportPlanDeals(params: { managerId: number; date: string }): Promise<ReportPlanDeal[]> {
+  const { data } = await api.get<{ deals: ReportPlanDeal[] }>("/dashboard/report-plan/deals", { params });
+  return data.deals;
+}
+
 export async function fetchKvpReport(params: { preset?: string; date?: string; from?: string; to?: string }): Promise<KvpReport> {
   const { data } = await api.get<KvpReport>("/dashboard/kvp-report", { params });
   return data;
