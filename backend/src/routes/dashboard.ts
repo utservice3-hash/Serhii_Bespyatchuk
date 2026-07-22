@@ -4458,7 +4458,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       kpi: {
         ads: { fact: adsM.get(m.id) ?? 0, target: Math.round(pl.ads_count ?? 0) },
         leadgen: { fact: lgM.get(m.id)?.deals ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
-        dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0) },
+        dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0) },
         avgCheck: { fact: avgM.get(m.id)?.avgCheck ?? null, target: Math.round(pl.avg_check ?? 0) },
         conversion: { fact: c && c.taken >= 10 ? c.cohortPct : null, target: Math.round(pl.conversion ?? 0), taken: c?.taken ?? 0, won: c?.won ?? 0 },
       },
@@ -4470,6 +4470,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     fact: managers.reduce((s, m) => s + m.fact, 0),
     expect: managers.reduce((s, m) => s + m.expect, 0),
     dispatched: managers.reduce((s, m) => s + m.kpi.dispatch.fact, 0),
+    dispatchedRevenue: managers.reduce((s, m) => s + m.kpi.dispatch.revenue, 0),
     created: managers.reduce((s, m) => s + m.created, 0),
     statusCounts: { g: managers.filter((m) => m.status === "g").length, a: managers.filter((m) => m.status === "a").length, r: managers.filter((m) => m.status === "r").length },
   };

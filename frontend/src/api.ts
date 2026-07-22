@@ -510,7 +510,7 @@ export interface KvpReport {
   funnel: { stage: string; deals: number; revenue: number }[];
 }
 // ── ЗВІТ (лендинг) — план із задачника + факт із core (макет zvit_v2) ──
-export interface ReportPlanKpi { fact: number | null; target: number; taken?: number; won?: number }
+export interface ReportPlanKpi { fact: number | null; target: number; taken?: number; won?: number; revenue?: number }
 export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";
@@ -523,7 +523,7 @@ export interface ReportPlanManager {
 export interface ReportPlan {
   scope: { from: string; to: string; isCurrent: boolean };
   role: string; viewerManagerId: number | null; elapsed: number; remainingWorkdays: number;
-  glance: { plan: number; fact: number; expect: number; dispatched: number; created: number; statusCounts: { g: number; a: number; r: number } };
+  glance: { plan: number; fact: number; expect: number; dispatched: number; dispatchedRevenue: number; created: number; statusCounts: { g: number; a: number; r: number } };
   managers: ReportPlanManager[];
 }
 export async function fetchReportPlan(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<ReportPlan> {

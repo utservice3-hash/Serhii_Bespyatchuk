@@ -905,7 +905,7 @@ export interface MgrBucketLeads { managerId: number; bucket: string; ad: number;
 
 /** «Поїхали» (авто) ПО МЕНЕДЖЕРУ, period-total за `load_at`. Той самий предикат, що
  *  `dispatchedByManagerDay`/`dispatchedByLoadBucket`, лише згрупований по менеджеру. */
-export async function dispatchedByManager(s: MetricScope): Promise<MgrN[]> {
+export async function dispatchedByManager(s: MetricScope): Promise<(MgrN & { revenue: number })[]> {
   const params: unknown[] = [FC_PIPELINES];
   const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
@@ -913,10 +913,11 @@ export async function dispatchedByManager(s: MetricScope): Promise<MgrN[]> {
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
-  const r = await pool.query<{ manager_id: number; deals: string }>(
-    `SELECT d.manager_id, COUNT(*) deals FROM deals d ${join}
+  // + сума вартості відправлених авто (signed price — мінусові угоди нетяться коректно).
+  const r = await pool.query<{ manager_id: number; deals: string; revenue: string }>(
+    `SELECT d.manager_id, COUNT(*) deals, COALESCE(SUM(d.price),0) revenue FROM deals d ${join}
       WHERE ${conds.join(" AND ")} AND d.manager_id IS NOT NULL GROUP BY d.manager_id`, params);
-  return r.rows.map((x) => ({ managerId: x.manager_id, deals: Number(x.deals) }));
+  return r.rows.map((x) => ({ managerId: x.manager_id, deals: Number(x.deals), revenue: Number(x.revenue) }));
 }
 
 /** «Поїхали» ПО (менеджер × бакет день/тиждень/місяць) за `load_at`. Additive:
