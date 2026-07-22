@@ -59,6 +59,8 @@ const METRIC_LBL: Record<string, string> = {
   payment_amount: "Сума",
 };
 const METRIC_UNIT: Record<string, string> = { avg_check: "₴", payment_amount: "₴", conversion: "%" };
+// Адитивні метрики (сумуються по днях у шапку парасольки); чек/конверсія — ставкові (по днях).
+const ADDITIVE_METRICS = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
 
 /** hex → rgba with alpha, for soft Notion-style pill backgrounds. */
 const hexA = (hex: string, a: number) => {
@@ -342,7 +344,7 @@ export function TasksSection({
                           onCommit={(v) => updateTask(task.id, { title: v })}
                         />
                       </div>
-                      {task.metricsJson && task.metricsJson.length > 0 && (
+                      {task.metricsJson && task.metricsJson.length > 0 && task.taskType !== "kpi_period" && (
                         <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 22, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                           {task.planDate ? <span>📅 {task.planDate}</span> : null}
                           {task.metricsJson.map((m, i) => {
@@ -361,8 +363,41 @@ export function TasksSection({
                         if (kids.length === 0) return null;
                         const open = expandedKpi.has(task.id);
                         const doneN = kids.filter((k) => k.status === "done").length;
+                        // Агрегація дітей у шапку (FE, дані не чіпаємо): адитивні = Σ факту дітей vs
+                        // ціль парасольки; ставкові (чек/конв) = лише ціль + «по днях» (рішення власника).
+                        const summary = (task.metricsJson ?? []).map((um) => {
+                          if (ADDITIVE_METRICS.has(um.metric)) {
+                            let fact = 0, has = false;
+                            for (const kid of kids) {
+                              const cm = (kid.metricsJson ?? []).find((x) => x.metric === um.metric);
+                              if (cm && cm.actual != null) { fact += cm.actual; has = true; }
+                            }
+                            return { metric: um.metric, target: um.target, fact: has ? fact : null, additive: true, done: has && fact >= um.target };
+                          }
+                          return { metric: um.metric, target: um.target, fact: null, additive: false, done: false };
+                        });
                         return (
                           <div style={{ paddingLeft: 22, marginTop: 4 }}>
+                            {/* період + виконавець */}
+                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 3 }}>
+                              📅 {task.periodStart}…{task.periodEnd}{task.assigneeName ? ` · 👤 ${task.assigneeName}` : ""}
+                            </div>
+                            {/* шапка: 6 KPI факт/ціль (адитивні Σ; ставкові — ціль + по днях) */}
+                            <div style={{ fontSize: 11, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 4 }}>
+                              {summary.map((s, i) => {
+                                const unit = METRIC_UNIT[s.metric] ?? "";
+                                if (!s.additive) {
+                                  return <span key={i} style={{ color: "var(--text-muted)" }} title="ставкова метрика — факт по днях у розгортанні">🎯 {METRIC_LBL[s.metric] ?? s.metric} <b>{s.target}{unit}</b> <i>· по днях</i></span>;
+                                }
+                                const icon = s.fact == null ? "⏳" : s.done ? "✅" : "❌";
+                                return (
+                                  <span key={i} title={s.done ? "виконано" : s.fact == null ? "попереду" : "не виконано"}>
+                                    {icon} {METRIC_LBL[s.metric] ?? s.metric}{" "}
+                                    <b style={{ color: s.done ? "#16a34a" : s.fact == null ? "var(--text-muted)" : "#dc2626" }}>{s.fact ?? "—"}</b>/{s.target}{unit}
+                                  </span>
+                                );
+                              })}
+                            </div>
                             <button onClick={() => toggleKpi(task.id)}
                               style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", fontSize: 12, fontWeight: 600, padding: 0 }}>
                               {open ? "▾" : "▸"} Дні плану: {doneN}/{kids.length} виконано
