@@ -62,6 +62,98 @@ const METRIC_UNIT: Record<string, string> = { avg_check: "₴", payment_amount: 
 // Адитивні метрики (сумуються по днях у шапку парасольки); чек/конверсія — ставкові (по днях).
 const ADDITIVE_METRICS = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
 
+// ── дати (Пн–Нд, UTC) для синтетичних парасольок сиріт-daily_kpi ──
+const tMondayOf = (s: string) => { const d = new Date(s + "T00:00:00Z"); const w = d.getUTCDay() === 0 ? 7 : d.getUTCDay(); d.setUTCDate(d.getUTCDate() - (w - 1)); return d.toISOString().slice(0, 10); };
+const tAddDays = (s: string, n: number) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const tDdmm = (s: string) => s.slice(8) + "." + s.slice(5, 7);
+
+type MetricJ = { metric: string; target: number; actual: number | null; done: boolean };
+type UmbSummaryRow = { metric: string; additive: boolean; fact: number | null; target: number | null; done: boolean };
+/**
+ * Агрегація дітей у шапку парасольки — СПІЛЬНА для реальної kpi_period і синтетичної
+ * (сироти). ownMetrics=metrics_json парасольки (реальна) → ціль = таргет парасольки;
+ * ownMetrics=null (синтетична) → набір метрик з дітей, адитивна ціль = Σ денних target.
+ * Адитивні (реклама/лідоген/авто/сума): факт = Σ денних actual. Ставкові (чек/конв): по днях.
+ */
+function buildUmbrellaSummary(children: Task[], ownMetrics: MetricJ[] | null): UmbSummaryRow[] {
+  const keys = ownMetrics
+    ? ownMetrics.map((m) => m.metric)
+    : [...new Set(children.flatMap((k) => (k.metricsJson ?? []).map((m) => m.metric)))];
+  return keys.map((metric) => {
+    if (ADDITIVE_METRICS.has(metric)) {
+      let fact = 0, has = false, sumT = 0;
+      for (const k of children) {
+        const cm = (k.metricsJson ?? []).find((x) => x.metric === metric);
+        if (cm) { if (cm.actual != null) { fact += cm.actual; has = true; } sumT += cm.target; }
+      }
+      const target = ownMetrics ? (ownMetrics.find((m) => m.metric === metric)?.target ?? 0) : sumT;
+      return { metric, additive: true, fact: has ? fact : null, target, done: has && fact >= target };
+    }
+    const target = ownMetrics ? (ownMetrics.find((m) => m.metric === metric)?.target ?? null) : null;
+    return { metric, additive: false, fact: null, target, done: false };
+  });
+}
+// Рядок 6 KPI у шапці парасольки (спільний для реальної та синтетичної).
+function UmbSummary({ rows }: { rows: UmbSummaryRow[] }) {
+  return (
+    <div style={{ fontSize: 11, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 4 }}>
+      {rows.map((s, i) => {
+        const unit = METRIC_UNIT[s.metric] ?? "";
+        if (!s.additive) {
+          return <span key={i} style={{ color: "var(--text-muted)" }} title="ставкова метрика — факт по днях у розгортанні">🎯 {METRIC_LBL[s.metric] ?? s.metric}{s.target != null ? <> <b>{s.target}{unit}</b></> : null} <i>· по днях</i></span>;
+        }
+        const icon = s.fact == null ? "⏳" : s.done ? "✅" : "❌";
+        return (
+          <span key={i} title={s.done ? "виконано" : s.fact == null ? "попереду" : "не виконано"}>
+            {icon} {METRIC_LBL[s.metric] ?? s.metric}{" "}
+            <b style={{ color: s.done ? "#16a34a" : s.fact == null ? "var(--text-muted)" : "#dc2626" }}>{s.fact ?? "—"}</b>/{s.target}{unit}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+// Тіло парасольки (період + виконавець + шапка 6 KPI + згортання денних рядків).
+// Спільне для реальної kpi_period і синтетичної (сироти-daily_kpi).
+function UmbBody({ periodStart, periodEnd, assigneeName, kids, summary, open, onToggle }: {
+  periodStart: string | null; periodEnd: string | null; assigneeName: string | null;
+  kids: Task[]; summary: UmbSummaryRow[]; open: boolean; onToggle: () => void;
+}) {
+  const doneN = kids.filter((k) => k.status === "done").length;
+  return (
+    <div style={{ paddingLeft: 22, marginTop: 4 }}>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 3 }}>
+        📅 {periodStart}…{periodEnd}{assigneeName ? ` · 👤 ${assigneeName}` : ""}
+      </div>
+      <UmbSummary rows={summary} />
+      <button onClick={onToggle} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", fontSize: 12, fontWeight: 600, padding: 0 }}>
+        {open ? "▾" : "▸"} Дні плану: {doneN}/{kids.length} виконано
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+          {kids.slice().sort((a, b) => (a.planDate ?? "").localeCompare(b.planDate ?? "")).map((k) => {
+            const allDone = k.status === "done";
+            return (
+              <div key={k.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, borderLeft: `3px solid ${allDone ? "#16a34a" : "var(--border)"}`, paddingLeft: 8 }}>
+                <span style={{ fontWeight: 600, minWidth: 84 }}>{allDone ? "✅" : "⬜"} {k.planDate}</span>
+                {(k.metricsJson ?? []).map((m, i) => {
+                  const icon = m.actual == null ? "⏳" : m.done ? "✅" : "❌";
+                  return (
+                    <span key={i} title={m.done ? "виконано" : m.actual == null ? "попереду" : "не виконано"}>
+                      {icon} {METRIC_LBL[m.metric] ?? m.metric}{" "}
+                      <b style={{ color: m.done ? "#16a34a" : m.actual == null ? "var(--text-muted)" : "#dc2626" }}>{m.actual ?? "—"}</b>/{m.target}{METRIC_UNIT[m.metric] ?? ""}
+                    </span>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** hex → rgba with alpha, for soft Notion-style pill backgrounds. */
 const hexA = (hex: string, a: number) => {
   const n = parseInt(hex.slice(1), 16);
@@ -164,13 +256,40 @@ export function TasksSection({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openTaskId, setOpenTaskId] = useState<number | null>(null);
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
-  const [expandedKpi, setExpandedKpi] = useState<Set<number>>(new Set());
-  const toggleKpi = (id: number) => setExpandedKpi((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const [expandedKpi, setExpandedKpi] = useState<Set<string>>(new Set());
+  const toggleKpi = (id: string) => setExpandedKpi((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const tabBtn = (active: boolean): React.CSSProperties => ({
     padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer",
     background: active ? "#c5141c" : "var(--card-bg)", color: active ? "#fff" : "var(--text)", fontWeight: 600,
   });
+
+  // «Мої» для тімліда/адміна: assignee = свій акаунт АБО я створив без виконавця.
+  const isMine = (t: Task) => t.assigneeId === currentManagerId || (t.createdById === currentUserId && t.assigneeId == null);
+
+  type SynthU = { synthKey: string; assigneeId: number | null; assigneeName: string | null; weekStart: string; weekEnd: string; kids: Task[]; status: string; title: string; department: string | null };
+  // Рядок СИНТЕТИЧНОЇ парасольки (згорнуті сироти-daily_kpi одного менеджера за тиждень).
+  // Віртуальний — статус/виконавець read-only; факт агрегується з реальних дітей (UmbBody).
+  const renderSynthRow = (s: SynthU) => (
+    <tr key={s.synthKey}>
+      <td style={{ verticalAlign: "top" }}>
+        <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          📦 План тижня {tDdmm(s.weekStart)}–{tDdmm(s.weekEnd)}
+          <span style={{ fontSize: 10, color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: 8, padding: "0 6px" }}>{s.kids.length} дн. · авто</span>
+        </div>
+        <UmbBody periodStart={s.weekStart} periodEnd={s.weekEnd} assigneeName={s.assigneeName}
+          kids={s.kids} summary={buildUmbrellaSummary(s.kids, null)}
+          open={expandedKpi.has(s.synthKey)} onToggle={() => toggleKpi(s.synthKey)} />
+      </td>
+      <td><span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: (s.status === "done" ? "#16a34a" : "var(--text-muted)") + "22", color: s.status === "done" ? "#16a34a" : "var(--text-muted)" }}>{s.status === "done" ? "Виконано" : "В роботі"}</span></td>
+      <td style={{ color: "var(--text-muted)" }}>{tDdmm(s.weekEnd)}</td>
+      <td>{s.assigneeName ?? "—"}</td>
+      <td style={{ color: "var(--text-muted)" }}>—</td>
+      <td style={{ color: "var(--text-muted)" }}>—</td>
+      <td style={{ color: "var(--text-muted)" }}>{s.department ?? "—"}</td>
+      <td></td>
+    </tr>
+  );
 
   return (
     <>
@@ -254,8 +373,11 @@ export function TasksSection({
 
       {tasksLoading ? (
         <p className="loading-text">Завантаження...</p>
-      ) : (
+      ) : ((() => {
+      // Один рендер таблиці для довільного набору задач (щоб тімлід міг мати ДВІ секції).
+      const renderTable = (src: Task[], title?: string) => (
         <div className="chart-card">
+          {title && <div style={{ fontSize: 15, fontWeight: 700, margin: "2px 0 10px", display: "flex", alignItems: "center", gap: 6 }}>{title}</div>}
           <table className="data-table tasks-table">
             <colgroup>
               <col style={{ width: "25%" }} />
@@ -282,41 +404,51 @@ export function TasksSection({
             <tbody>
               {(() => {
                 const q = taskSearch.trim().toLowerCase();
-                // Діти KPI-періоду (parentId) НЕ показуємо окремими рядками —
-                // вони в розкривному списку своєї задачі-парасольки.
+                // Діти KPI-періоду (parentId) НЕ показуємо окремими рядками — вони в
+                // розкривному списку парасольки (реальної kpi_period АБО синтетичної).
                 const childrenOf = (id: number) => tasks.filter((t) => t.parentId === id)
                   .sort((a, b) => (a.planDate ?? "").localeCompare(b.planDate ?? ""));
-                let base = tasks.filter((t) => t.parentId == null);
-                // Admin tab: «Мої» = personal tasks — assigned to my own account OR
-                // created by me without an assignee; «Усі» = everything.
-                if (isAdmin) {
-                  base = adminTab === "mine"
-                    ? base.filter((t) => t.assigneeId === currentManagerId || (t.createdById === currentUserId && t.assigneeId == null))
-                    : base;
+                // Реальні верхнього рівня — БЕЗ сиріт-daily_kpi (вони йдуть у синтетичні парасольки).
+                let base = src.filter((t) => t.parentId == null && t.taskType !== "daily_kpi");
+                // ЧАСТИНА 1: сироти-daily_kpi (parent_id NULL) → синтетична парасолька по
+                // (assignee + ISO-тиждень plan_date, Пн–Нд). Дані не чіпаємо — лише групування.
+                const gmap = new Map<string, Task[]>();
+                for (const t of src.filter((t) => t.parentId == null && t.taskType === "daily_kpi" && t.planDate)) {
+                  const wk = tMondayOf(t.planDate!); const key = `${t.assigneeId}|${wk}`;
+                  (gmap.get(key) ?? gmap.set(key, []).get(key)!).push(t);
                 }
-                if (assigneeFilter !== "") base = base.filter((t) => t.assigneeId === assigneeFilter);
-                if (statusFilter === "active") base = base.filter((t) => t.status !== "done");
-                else if (statusFilter === "done") base = base.filter((t) => t.status === "done");
-                const filtered = q
-                  ? base.filter((t) =>
-                      [t.title, t.comments, t.department, t.assigneeName]
-                        .some((v) => (v ?? "").toLowerCase().includes(q))
-                    )
-                  : base;
+                let synths: SynthU[] = [...gmap.entries()].map(([key, kids]) => {
+                  const wk = key.split("|")[1]; const allDone = kids.every((k) => k.status === "done");
+                  return { synthKey: `synth-${key}`, assigneeId: kids[0].assigneeId, assigneeName: kids[0].assigneeName,
+                    weekStart: wk, weekEnd: tAddDays(wk, 6), kids, status: allDone ? "done" : "in_progress",
+                    title: `План тижня ${tDdmm(wk)}–${tDdmm(tAddDays(wk, 6))}`, department: kids[0].department ?? null };
+                });
+                if (isAdmin && adminTab === "mine") { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
+                if (assigneeFilter !== "") { base = base.filter((t) => t.assigneeId === assigneeFilter); synths = synths.filter((s) => s.assigneeId === assigneeFilter); }
+                if (statusFilter === "active") { base = base.filter((t) => t.status !== "done"); synths = synths.filter((s) => s.status !== "done"); }
+                else if (statusFilter === "done") { base = base.filter((t) => t.status === "done"); synths = synths.filter((s) => s.status === "done"); }
+                if (q) {
+                  base = base.filter((t) => [t.title, t.comments, t.department, t.assigneeName].some((v) => (v ?? "").toLowerCase().includes(q)));
+                  synths = synths.filter((s) => [s.title, s.assigneeName].some((v) => (v ?? "").toLowerCase().includes(q)));
+                }
                 const prioRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
                 const dir = sortDir === "asc" ? 1 : -1;
-                const visible = [...filtered].sort((a, b) => {
-                  // Done tasks always sink to the bottom, regardless of sort.
-                  const ad = a.status === "done" ? 1 : 0, bd = b.status === "done" ? 1 : 0;
+                type Row = { kind: "task"; task: Task } | { kind: "synth"; synth: SynthU };
+                const gStatus = (r: Row) => r.kind === "task" ? r.task.status : r.synth.status;
+                const gName = (r: Row) => r.kind === "task" ? (r.task.assigneeName ?? "") : (r.synth.assigneeName ?? "");
+                const gCreated = (r: Row) => r.kind === "task" ? (r.task.createdAt ?? "") : r.synth.weekStart;
+                const gDeadline = (r: Row) => r.kind === "task" ? (r.task.deadline ?? "9999-99-99") : r.synth.weekEnd;
+                const visible: Row[] = [...base.map((t) => ({ kind: "task", task: t } as Row)), ...synths.map((s) => ({ kind: "synth", synth: s } as Row))].sort((a, b) => {
+                  const ad = gStatus(a) === "done" ? 1 : 0, bd = gStatus(b) === "done" ? 1 : 0;
                   if (ad !== bd) return ad - bd;
                   let cmp: number;
                   switch (sortBy) {
-                    case "deadline": cmp = (a.deadline ?? "9999-99-99").localeCompare(b.deadline ?? "9999-99-99"); break;
-                    case "priority": cmp = (prioRank[a.priority] ?? 9) - (prioRank[b.priority] ?? 9); break;
-                    case "status": cmp = (a.status ?? "").localeCompare(b.status ?? ""); break;
-                    case "assignee": cmp = (a.assigneeName ?? "").localeCompare(b.assigneeName ?? "", "uk"); break;
-                    case "title": cmp = (a.title ?? "").localeCompare(b.title ?? "", "uk"); break;
-                    default: cmp = (a.createdAt ?? "").localeCompare(b.createdAt ?? ""); break;
+                    case "deadline": cmp = gDeadline(a).localeCompare(gDeadline(b)); break;
+                    case "priority": cmp = (a.kind === "task" ? (prioRank[a.task.priority] ?? 9) : 1) - (b.kind === "task" ? (prioRank[b.task.priority] ?? 9) : 1); break;
+                    case "status": cmp = gStatus(a).localeCompare(gStatus(b)); break;
+                    case "assignee": cmp = gName(a).localeCompare(gName(b), "uk"); break;
+                    case "title": cmp = (a.kind === "task" ? (a.task.title ?? "") : a.synth.title).localeCompare(b.kind === "task" ? (b.task.title ?? "") : b.synth.title, "uk"); break;
+                    default: cmp = gCreated(a).localeCompare(gCreated(b)); break;
                   }
                   return cmp * dir;
                 });
@@ -329,7 +461,10 @@ export function TasksSection({
                     </tr>
                   );
                 }
-                return visible.map((task) => (
+                return visible.map((it) => {
+                  if (it.kind === "synth") return renderSynthRow(it.synth);
+                  const task = it.task;
+                  return (
                   <tr key={task.id}>
                     <td style={{ verticalAlign: "top" }}>
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 4 }}>
@@ -361,70 +496,9 @@ export function TasksSection({
                       {task.taskType === "kpi_period" && (() => {
                         const kids = childrenOf(task.id);
                         if (kids.length === 0) return null;
-                        const open = expandedKpi.has(task.id);
-                        const doneN = kids.filter((k) => k.status === "done").length;
-                        // Агрегація дітей у шапку (FE, дані не чіпаємо): адитивні = Σ факту дітей vs
-                        // ціль парасольки; ставкові (чек/конв) = лише ціль + «по днях» (рішення власника).
-                        const summary = (task.metricsJson ?? []).map((um) => {
-                          if (ADDITIVE_METRICS.has(um.metric)) {
-                            let fact = 0, has = false;
-                            for (const kid of kids) {
-                              const cm = (kid.metricsJson ?? []).find((x) => x.metric === um.metric);
-                              if (cm && cm.actual != null) { fact += cm.actual; has = true; }
-                            }
-                            return { metric: um.metric, target: um.target, fact: has ? fact : null, additive: true, done: has && fact >= um.target };
-                          }
-                          return { metric: um.metric, target: um.target, fact: null, additive: false, done: false };
-                        });
-                        return (
-                          <div style={{ paddingLeft: 22, marginTop: 4 }}>
-                            {/* період + виконавець */}
-                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 3 }}>
-                              📅 {task.periodStart}…{task.periodEnd}{task.assigneeName ? ` · 👤 ${task.assigneeName}` : ""}
-                            </div>
-                            {/* шапка: 6 KPI факт/ціль (адитивні Σ; ставкові — ціль + по днях) */}
-                            <div style={{ fontSize: 11, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 4 }}>
-                              {summary.map((s, i) => {
-                                const unit = METRIC_UNIT[s.metric] ?? "";
-                                if (!s.additive) {
-                                  return <span key={i} style={{ color: "var(--text-muted)" }} title="ставкова метрика — факт по днях у розгортанні">🎯 {METRIC_LBL[s.metric] ?? s.metric} <b>{s.target}{unit}</b> <i>· по днях</i></span>;
-                                }
-                                const icon = s.fact == null ? "⏳" : s.done ? "✅" : "❌";
-                                return (
-                                  <span key={i} title={s.done ? "виконано" : s.fact == null ? "попереду" : "не виконано"}>
-                                    {icon} {METRIC_LBL[s.metric] ?? s.metric}{" "}
-                                    <b style={{ color: s.done ? "#16a34a" : s.fact == null ? "var(--text-muted)" : "#dc2626" }}>{s.fact ?? "—"}</b>/{s.target}{unit}
-                                  </span>
-                                );
-                              })}
-                            </div>
-                            <button onClick={() => toggleKpi(task.id)}
-                              style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", fontSize: 12, fontWeight: 600, padding: 0 }}>
-                              {open ? "▾" : "▸"} Дні плану: {doneN}/{kids.length} виконано
-                            </button>
-                            {open && (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
-                                {kids.map((k) => {
-                                  const allDone = k.status === "done";
-                                  return (
-                                    <div key={k.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 11, borderLeft: `3px solid ${allDone ? "#16a34a" : "var(--border)"}`, paddingLeft: 8 }}>
-                                      <span style={{ fontWeight: 600, minWidth: 84 }}>{allDone ? "✅" : "⬜"} {k.planDate}</span>
-                                      {(k.metricsJson ?? []).map((m, i) => {
-                                        const icon = m.actual == null ? "⏳" : m.done ? "✅" : "❌";
-                                        return (
-                                          <span key={i} title={m.done ? "виконано" : m.actual == null ? "попереду" : "не виконано"}>
-                                            {icon} {METRIC_LBL[m.metric] ?? m.metric}{" "}
-                                            <b style={{ color: m.done ? "#16a34a" : m.actual == null ? "var(--text-muted)" : "#dc2626" }}>{m.actual ?? "—"}</b>/{m.target}
-                                          </span>
-                                        );
-                                      })}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
+                        return <UmbBody periodStart={task.periodStart} periodEnd={task.periodEnd} assigneeName={task.assigneeName}
+                          kids={kids} summary={buildUmbrellaSummary(kids, (task.metricsJson as MetricJ[] | null) ?? null)}
+                          open={expandedKpi.has(String(task.id))} onToggle={() => toggleKpi(String(task.id))} />;
                       })()}
                       {task.checklistJson && task.checklistJson.length > 0 && (() => {
                         const list = task.checklistJson;
@@ -583,12 +657,25 @@ export function TasksSection({
                       </button>
                     </td>
                   </tr>
-                ));
+                ); });
               })()}
             </tbody>
           </table>
         </div>
-      )}
+      );
+      // ЧАСТИНА 2: тімлід бачить дві секції ПОРУЧ — «Мої» окремо, «Команда» окремо.
+      if (role === "team_lead") {
+        const mine = tasks.filter(isMine);
+        const team = tasks.filter((t) => !isMine(t));
+        return (
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 460px", minWidth: 0 }}>{renderTable(mine, "👤 Мої задачі")}</div>
+            <div style={{ flex: "1 1 460px", minWidth: 0 }}>{renderTable(team, "👥 Задачі команди")}</div>
+          </div>
+        );
+      }
+      return renderTable(tasks);
+    })())}
 
       {openTask && (
         <div onClick={() => setOpenTaskId(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 2500 }}>
