@@ -4280,6 +4280,127 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
 });
 
 /**
+ * ЗВІТ (лендинг) — збірка «план із задачника + факт із core» по менеджеру (макет
+ * zvit_v2_mockup). ПЛАН = таргети kpi_period (сумовані з daily_kpi за [from,to] →
+ * само-вирівнюється під будь-який день/тиждень/місяць). ФАКТ = ті самі core-функції,
+ * що задачник (задачник==Звіт за побудовою). Роль-скоуп як /report:
+ * manager→свій, team_lead→команда(+дрил), admin→усе. Гроші головного бара = received.
+ */
+dashboardRouter.get("/report-plan", async (req, res) => {
+  const auth = req.auth!;
+  const from = (req.query.from as string) || null;
+  const to = (req.query.to as string) || null;
+  if (!from || !to) return res.status(400).json({ error: "from/to (YYYY-MM-DD) обовʼязкові" });
+
+  let managerId: number | null = null;
+  let teamId: number | null = null;
+  if (auth.role === "manager") managerId = auth.managerId;
+  else if (auth.role === "team_lead") { teamId = auth.teamId; managerId = req.query.managerId ? Number(req.query.managerId) : null; }
+  else { managerId = req.query.managerId ? Number(req.query.managerId) : null; teamId = req.query.teamId ? Number(req.query.teamId) : null; }
+  const scope: metrics.MetricScope = { from, to, managerId, teamId };
+  const { adSources } = await getSettings();
+  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
+  const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+
+  // Ростер менеджерів у скоупі (активні; дрил team_lead/admin по managerId).
+  const rp: unknown[] = [];
+  const rConds = ["m.is_active"];
+  if (managerId) { rp.push(managerId); rConds.push(`m.id = $${rp.length}`); }
+  if (teamId) { rp.push(teamId); rConds.push(`m.team_id = $${rp.length}`); }
+  const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
+    `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m LEFT JOIN teams t ON t.id = m.team_id
+      WHERE ${rConds.join(" AND ")} ORDER BY m.name`, rp
+  )).rows;
+
+  // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
+  const [recv, disp, ads, lg, conv, avgc, expZone] = await Promise.all([
+    money.receivedByMgr(scope), metrics.dispatchedByManager(scope),
+    metrics.adsAcceptedByMgr(scope, adSources), metrics.leadgenByManager(scope),
+    metrics.conversionByManager(scope), money.avgCheckByManager(scope),
+    metrics.expectedZoneByScope({ managerId, teamId }, "manager"),
+  ]);
+  const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
+  const recvM = mapBy(recv), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
+    lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc);
+  const expM = new Map(expZone.map((e) => [e.id, e.sum]));
+
+  // СПАРКЛАЙН: received по 5 останніх тижнях (Пн–Нд) до `to`, per-manager.
+  const sparkFrom = (() => { const d = new Date(to + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 34); return d.toISOString().slice(0, 10); })();
+  const sparkRows = await money.receivedByManagerBucket({ from: sparkFrom, to, managerId, teamId }, "week");
+  const sparkByMgr = new Map<number, Map<string, number>>();
+  for (const r of sparkRows) { const m = sparkByMgr.get(r.managerId) ?? new Map(); m.set(r.bucket, r.revenue); sparkByMgr.set(r.managerId, m); }
+  const last5Weeks = (() => {
+    const out: string[] = []; const d = new Date(to + "T00:00:00Z");
+    const dow = d.getUTCDay() === 0 ? 7 : d.getUTCDay(); d.setUTCDate(d.getUTCDate() - (dow - 1)); // понеділок тижня `to`
+    for (let i = 4; i >= 0; i--) { const w = new Date(d); w.setUTCDate(w.getUTCDate() - i * 7); out.push(w.toISOString().slice(0, 10)); }
+    return out;
+  })();
+
+  // ПЛАН із ЗАДАЧНИКА: таргети daily_kpi за [from,to] (count/sum → SUM, avg/conv → MAX).
+  const pp: unknown[] = [from, to];
+  const pConds = ["t.auto", "t.task_type = 'daily_kpi'", "t.assignee_id IS NOT NULL", "t.metrics_json IS NOT NULL", "t.plan_date BETWEEN $1 AND $2"];
+  const planRows = (await pool.query<{ assignee_id: number; metric: string; sum_t: string; max_t: string }>(
+    `SELECT t.assignee_id, elem->>'metric' AS metric,
+            SUM((elem->>'target')::numeric) sum_t, MAX((elem->>'target')::numeric) max_t
+       FROM tasks t, jsonb_array_elements(t.metrics_json) elem
+      WHERE ${pConds.join(" AND ")} GROUP BY 1, 2`, pp
+  )).rows;
+  const planByMgr = new Map<number, Record<string, number>>();
+  for (const r of planRows) {
+    const e = planByMgr.get(r.assignee_id) ?? {}; const sumM = ["ads_count", "leadgen_count", "dispatch_count", "payment_amount"];
+    e[r.metric] = sumM.includes(r.metric) ? Number(r.sum_t) : Number(r.max_t); planByMgr.set(r.assignee_id, e);
+  }
+
+  // Темп: частка робочих днів періоду, що минули (для статусу g/a/r як у макеті).
+  const wdTotal = workingDaysBetween(from, to);
+  const elapsedTo = kyivToday < to ? kyivToday : to;
+  const wdElapsed = kyivToday < from ? 0 : workingDaysBetween(from, elapsedTo);
+  const elapsed = wdTotal > 0 ? Math.min(1, wdElapsed / wdTotal) : 1;
+  const remWd = Math.max(0, wdTotal - wdElapsed);
+  const statusOf = (fact: number, plan: number): "g" | "a" | "r" => {
+    if (plan <= 0) return "g"; const r = (fact / plan) / (elapsed || 1);
+    return r >= 1 ? "g" : r >= 0.7 ? "a" : "r";
+  };
+
+  const managers = roster.map((m) => {
+    const fact = Math.round(recvM.get(m.id)?.revenue ?? 0);
+    const pl = planByMgr.get(m.id) ?? {};
+    const plan = Math.round(pl.payment_amount ?? 0);
+    const kind = m.team_id != null ? kvpTeamKind(m.team_id, m.team_name ?? "") : "rpk";
+    const st = statusOf(fact, plan);
+    const c = convM.get(m.id);
+    return {
+      managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
+      tag: kind === "leadgen" ? "self" : kind, // self=самостійні/лідоген у макеті — зелений тег
+      plan, fact, expect: Math.round(expM.get(m.id) ?? 0),
+      pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
+      status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
+      spark: last5Weeks.map((w) => Math.round(sparkByMgr.get(m.id)?.get(w) ?? 0)),
+      kpi: {
+        ads: { fact: adsM.get(m.id) ?? 0, target: Math.round(pl.ads_count ?? 0) },
+        leadgen: { fact: lgM.get(m.id)?.deals ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
+        dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0) },
+        avgCheck: { fact: avgM.get(m.id)?.avgCheck ?? null, target: Math.round(pl.avg_check ?? 0) },
+        conversion: { fact: c && c.taken >= 10 ? c.cohortPct : null, target: Math.round(pl.conversion ?? 0), taken: c?.taken ?? 0, won: c?.won ?? 0 },
+      },
+    };
+  }).sort((a, b) => ({ r: 0, a: 1, g: 2 })[a.status] - ({ r: 0, a: 1, g: 2 })[b.status]); // гірші вгорі
+
+  const glance = {
+    plan: managers.reduce((s, m) => s + m.plan, 0),
+    fact: managers.reduce((s, m) => s + m.fact, 0),
+    expect: managers.reduce((s, m) => s + m.expect, 0),
+    dispatched: managers.reduce((s, m) => s + m.kpi.dispatch.fact, 0),
+    statusCounts: { g: managers.filter((m) => m.status === "g").length, a: managers.filter((m) => m.status === "a").length, r: managers.filter((m) => m.status === "r").length },
+  };
+
+  res.json({
+    scope: { from, to, isCurrent: from <= kyivToday && kyivToday <= to },
+    role: auth.role, elapsed, remainingWorkdays: remWd, glance, managers,
+  });
+});
+
+/**
  * КРОК Д — КОМПОЗИТНИЙ звіт КВП. Admin-only (роль КВП = вся компанія). ТІЛЬКИ
  * збірка з ядра (money/metrics/plans) — нової бізнес-логіки НЕ додає. Scope-aware
  * (preset day/week/month/quarter/year або custom). Стратегічний план = Σ планів
