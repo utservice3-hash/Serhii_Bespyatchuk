@@ -468,7 +468,7 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
             COUNT(*) FILTER (WHERE klass = 'new') AS new_count,
             COUNT(*) FILTER (WHERE klass = 'repeat') AS repeat_count,
             COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count
-       FROM final f JOIN managers m ON m.id = f.manager_id
+       FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
       GROUP BY m.id, m.name, m.team_id
       ORDER BY created DESC`,
     params
@@ -597,7 +597,7 @@ export interface MgrCount {
 
 /** `ads_accepted` по менеджеру (для звіту/КВП). */
 export async function adsAcceptedByMgr(s: MetricScope, adSources: string[]): Promise<MgrCount[]> {
-  const { where, params, activeJoin } = adsScope(s, adSources);
+  const { where, params, activeJoin } = adsScope({ ...s, activeOnly: true }, adSources); // active-only скрізь
   const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; n: string }>(
     `SELECT m.id AS manager_id, m.name, m.team_id, COUNT(*) AS n
      FROM deals d JOIN managers m ON m.id = d.manager_id ${activeJoin}
@@ -655,7 +655,9 @@ export async function nonTargetLeads(s: MetricScope, adSources: string[]): Promi
   if (s.to && s.to < (await rejectReasonHorizon())) return null;
   const params: unknown[] = [adSources, REJECT_NONTARGET];
   const conds = [nonTargetPredicate];
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
@@ -795,7 +797,9 @@ export async function dispatchedByLoadMonth(s: MetricScope, channel?: "leadgen" 
   if (channel) { params.push(channel); conds.push(`d.lead_channel = $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ ym: string; deals: string; revenue: string }>(
     `WITH disp AS (
        SELECT date_trunc('month',(d.load_at ${KYIV})) AS m, d.price
@@ -826,7 +830,9 @@ export async function dispatchedByLoadBucket(s: MetricScope, granularity: "day" 
   if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ ym: string; deals: string; revenue: string }>(
     `SELECT to_char(date_trunc('${gran}', (d.load_at ${KYIV})), 'YYYY-MM-DD') AS ym,
             COUNT(*)::int AS deals, COALESCE(SUM(d.price),0) AS revenue
@@ -862,7 +868,9 @@ export async function dispatchedByManagerDay(s: MetricScope): Promise<MgrDayN[]>
   if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ manager_id: number; bkt: string; deals: string }>(
     `SELECT d.manager_id, to_char((d.load_at ${KYIV})::date,'YYYY-MM-DD') AS bkt, COUNT(*) deals
        FROM deals d ${join} WHERE ${conds.join(" AND ")} GROUP BY d.manager_id, 2`, params);
@@ -876,7 +884,8 @@ export async function leadsByManagerDay(s: MetricScope): Promise<MgrDayLeads[]> 
   const winConds = ["d.pipeline_id = ANY($1)", "psm.funnel_stage = 'lead_taken'"];
   if (s.from) { params.push(s.from); winConds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); winConds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
-  const teamCond = s.teamId ? (params.push(s.teamId), `WHERE m.team_id = $${params.length}`) : "";
+  // Active-only: INNER JOIN managers + m.is_active (неактивний зникає з агрегату).
+  const teamCond = s.teamId ? (params.push(s.teamId), `AND m.team_id = $${params.length}`) : "";
   const r = await pool.query<{ manager_id: number; bkt: string; ad: string; leadgen: string }>(
     `WITH first_lt AS (
        SELECT dse.kommo_id, MIN(dse.changed_at) AS anchor_at
@@ -889,7 +898,8 @@ export async function leadsByManagerDay(s: MetricScope): Promise<MgrDayLeads[]> 
             COUNT(*) FILTER (WHERE d2.lead_channel = 'ad') ad,
             COUNT(*) FILTER (WHERE d2.lead_channel = 'leadgen') leadgen
        FROM first_lt f JOIN deals d2 ON d2.kommo_id = f.kommo_id
-       LEFT JOIN managers m ON m.id = d2.manager_id ${teamCond}
+       JOIN managers m ON m.id = d2.manager_id
+      WHERE m.is_active ${teamCond}
       GROUP BY d2.manager_id, 2`, params);
   return r.rows.map((x) => ({ managerId: x.manager_id, day: x.bkt, ad: Number(x.ad), leadgen: Number(x.leadgen) }));
 }
@@ -912,7 +922,9 @@ export async function dispatchedByManager(s: MetricScope): Promise<(MgrN & { rev
   if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   // + сума вартості відправлених авто (signed price — мінусові угоди нетяться коректно).
   const r = await pool.query<{ manager_id: number; deals: string; revenue: string }>(
     `SELECT d.manager_id, COUNT(*) deals, COALESCE(SUM(d.price),0) revenue FROM deals d ${join}
@@ -929,7 +941,9 @@ export async function dispatchedByManagerBucket(s: MetricScope, granularity: "da
   if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ manager_id: number; bucket: string; deals: string }>(
     `SELECT d.manager_id, to_char(date_trunc('${granularity}', (d.load_at ${KYIV}))::date, 'YYYY-MM-DD') bucket, COUNT(*) deals
        FROM deals d ${join} WHERE ${conds.join(" AND ")} AND d.manager_id IS NOT NULL
@@ -974,7 +988,9 @@ export async function leadgenByManager(s: MetricScope): Promise<MgrN[]> {
   if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ manager_id: number; deals: string }>(
     `SELECT d.manager_id, COUNT(DISTINCT lt.lead_kommo_id) deals
        FROM leadgen_touch lt JOIN deals d ON d.kommo_id = lt.lead_kommo_id ${join}
@@ -990,7 +1006,9 @@ export async function leadgenByManagerBucket(s: MetricScope, granularity: "day" 
   if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ manager_id: number; bucket: string; deals: string }>(
     `SELECT d.manager_id, to_char(date_trunc('${granularity}', lt.transfer_date)::date,'YYYY-MM-DD') bucket, COUNT(DISTINCT lt.lead_kommo_id) deals
        FROM leadgen_touch lt JOIN deals d ON d.kommo_id = lt.lead_kommo_id ${join}
@@ -1013,7 +1031,9 @@ export async function conversionByManager(s: MetricScope): Promise<MgrConvTaken[
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ manager_id: number; taken: string; won: string }>(
     `SELECT d.manager_id, COUNT(*) taken,
             COUNT(*) FILTER (WHERE d.status_id = ANY($2)
@@ -1038,7 +1058,9 @@ export async function overduePayments(s: MetricScope): Promise<{ count: number; 
     "d.status_id NOT IN (142, 143)",
     "NOT (d.status_id = ANY($2))",
   ];
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const r = await pool.query<{ c: string; s: string }>(
     `SELECT COUNT(*) c, COALESCE(SUM(d.price), 0) s FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
@@ -1053,7 +1075,9 @@ export async function avgDealCycleDays(s: MetricScope): Promise<number | null> {
   if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ d: string | null }>(
     `SELECT AVG(EXTRACT(EPOCH FROM (d.closed_at_kommo - d.created_at_kommo)) / 86400.0) d
        FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
@@ -1068,7 +1092,9 @@ export async function lostDeals(s: MetricScope): Promise<{ count: number; sum: n
   if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const r = await pool.query<{ c: string; s: string }>(
     `SELECT COUNT(*) c, COALESCE(SUM(ABS(d.price)), 0) s FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
   return { count: Number(r.rows[0].c), sum: Math.round(Number(r.rows[0].s)) };
@@ -1162,7 +1188,7 @@ export async function expectedMonthByScope(s: SnapshotScope, by: "team" | "manag
   const join = by === "team" ? "JOIN teams t ON t.id = m.team_id" : "";
   const r = await pool.query<{ id: number; name: string; team_id: number | null; deals: string; sum: string }>(
     `SELECT ${sel}, COUNT(*)::int deals, COALESCE(SUM(d.price),0) sum
-       FROM deals d JOIN managers m ON m.id = d.manager_id ${join}
+       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active ${join}
       WHERE ${conds.join(" AND ")} ${grp}`, params);
   return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
 }
@@ -2045,7 +2071,7 @@ export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> 
   const cte = `
      WITH quals AS (
        SELECT d.kommo_id, d.created_at_kommo, d.first_activity_at
-       FROM deals d JOIN managers m ON m.id = d.manager_id
+       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
        WHERE ${conds.join(" AND ")}
      ),
      resp AS (
@@ -2282,7 +2308,7 @@ export async function expectedThisMonthByScope(s: SnapshotScope, by: "team" | "m
   const join = by === "team" ? "JOIN teams t ON t.id = m.team_id" : "";
   const r = await pool.query<{ id: number; name: string; team_id: number | null; deals: string; sum: string }>(
     `SELECT ${sel}, COUNT(*)::int deals, COALESCE(SUM(d.price),0) sum
-       FROM deals d JOIN managers m ON m.id = d.manager_id ${join}
+       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active ${join}
       WHERE ${conds.join(" AND ")} ${grp} ORDER BY sum DESC`,
     params
   );
@@ -2307,7 +2333,7 @@ export async function expectedZoneByScope(s: SnapshotScope, by: "team" | "manage
   const join = by === "team" ? "JOIN teams t ON t.id = m.team_id" : "";
   const r = await pool.query<{ id: number; name: string; team_id: number | null; deals: string; sum: string }>(
     `SELECT ${sel}, COUNT(*)::int deals, COALESCE(SUM(d.price),0) sum
-       FROM deals d JOIN managers m ON m.id = d.manager_id ${join}
+       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active ${join}
       WHERE ${conds.join(" AND ")} ${grp} ORDER BY sum DESC`,
     params
   );
@@ -2331,7 +2357,9 @@ export async function expectedBySegment(s: { managerId?: number | null; teamId?:
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const fromRef = s.from ? (params.push(s.from), `$${params.length}`) : "NULL";
-  const join = s.teamId ? "JOIN managers m ON m.id = d.manager_id" : "";
+  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
+  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
+  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
   const rows = (await pool.query<{ seg: string; deals: string; sum: string }>(
     `WITH firsts AS (
        SELECT d2.client_key, MIN(d2.created_at_kommo) AS first_paid
