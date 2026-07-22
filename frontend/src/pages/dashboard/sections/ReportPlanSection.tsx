@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail,
+  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail, fetchStuckDeals, fetchResponseTime,
   type ReportPlan, type ReportPlanManager, type ReportPlanDeal, type KvpManagerDetail, type Team,
+  type StuckDeal, type ResponseTime,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
@@ -176,6 +177,9 @@ export function ReportPlanSection({ auth, teams }: {
               open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
           ))}
           {data.managers.length === 0 && <div style={{ color: MUTED, padding: 20 }}>Немає менеджерів у цьому розрізі.</div>}
+          {/* #18/#19 — блоки як у КВП (роль-скоуп на бекенді за токеном) */}
+          <StuckBlock reloadKey={`${teamId}`} />
+          <ResponseBlock from={monthPeriod.from} to={monthPeriod.to} reloadKey={`${teamId}`} />
           <Legend />
         </>
       )}
@@ -264,9 +268,12 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: SCOL[s] }} />{SLBL[s]} · міс
           </span>
         </div>
-        {/* МІСЯЦЬ — план-бар (головна траєкторія) */}
+        {/* МІСЯЦЬ — план-бар (головна траєкторія) + #16 очікуємо + #17 прогноз */}
         <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
-          footer={<>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> (лишилось {remWd} дн.)</>} showTempo />
+          footer={<>
+            треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.) · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 && m.monthInProgress ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}
+            <br />очікуємо <b style={{ color: "var(--text)" }} title="Сума очікуваних коштів у зоні визнання (без мінусу) — == КВП">{fmt(m.expect)} ₴</b>
+          </>} showTempo />
         {/* ТИЖДЕНЬ — поточний */}
         {mWeek ? (
           <TrajBlock title={`Тиждень ${weekLabel}`} fact={mWeek.fact} plan={mWeek.plan}
@@ -459,6 +466,85 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// #18 — застряглі угоди (реюз КВП /stuck-deals, роль-скоуп за токеном; найдовші вгорі).
+function StuckBlock({ reloadKey }: { reloadKey: string }) {
+  const [deals, setDeals] = useState<StuckDeal[] | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { let a = true; setDeals(null); fetchStuckDeals({}).then((r) => a && setDeals(r.deals)).catch(() => a && setDeals([])); return () => { a = false; }; }, [reloadKey]);
+  const n = deals?.length ?? 0;
+  return (
+    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, marginTop: 18, overflow: "hidden" }}>
+      <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 17px", cursor: "pointer" }}>
+        <b style={{ fontSize: 14.5 }}>🕗 Застряглі угоди {deals && <span style={{ color: n ? RED : GREEN, fontWeight: 750 }}>· {n}</span>}</b>
+        <span style={{ color: MUTED, fontSize: 12 }}>{deals == null ? "…" : `без активності: гроші/рахунок ≥7 дн., «взято в роботу» ≥21 дн. ${open ? "▲" : "▼"}`}</span>
+      </div>
+      {open && deals && (
+        <div style={{ borderTop: "1px solid var(--border)", overflowX: "auto" }}>
+          {n === 0 ? <div style={{ padding: 16, color: MUTED, fontSize: 13 }}>Немає застряглих угод ✓</div> : (
+            <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
+              <thead><tr>{["Угода", "Клієнт", "Менеджер", "Стадія", "Сума", "Днів без руху"].map((h, i) => <th key={h} style={{ textAlign: i > 3 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {deals.map((d) => (
+                  <tr key={d.kommoId}>
+                    <td style={{ textAlign: "left" }}><a href={d.crmUrl} target="_blank" rel="noreferrer" style={{ color: BAR }}>{d.name || "—"}</a></td>
+                    <td style={{ textAlign: "left", color: MUTED }}>{d.client || "—"}</td>
+                    <td style={{ textAlign: "left" }}>{d.manager}</td>
+                    <td style={{ textAlign: "left", color: MUTED }}>{d.stage}</td>
+                    <td style={{ textAlign: "right" }}>{d.price ? fmt(d.price) + " ₴" : "—"}</td>
+                    <td style={{ textAlign: "right", fontWeight: 700, color: d.days >= 21 ? RED : AMBER }}>{d.activityDays ?? d.days} дн.</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// #19 — час опрацювання заявки (реюз КВП /response-time; медіана, % одразу, розбивка по добі).
+function ResponseBlock({ from, to, reloadKey }: { from: string; to: string; reloadKey: string }) {
+  const [rt, setRt] = useState<ResponseTime | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { let a = true; setRt(null); fetchResponseTime({ from, to }).then((r) => a && setRt(r)).catch(() => a && setRt(null)); return () => { a = false; }; }, [from, to, reloadKey]);
+  const med = (m: number | null) => m == null ? "—" : m < 60 ? `${Math.round(m)} хв` : `${(m / 60).toFixed(1)} год`;
+  return (
+    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, marginTop: 12, overflow: "hidden" }}>
+      <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 17px", cursor: "pointer" }}>
+        <b style={{ fontSize: 14.5 }}>⏱️ Час опрацювання заявки {rt && <span style={{ color: MUTED, fontWeight: 600, fontSize: 12.5 }}>· медіана {med(rt.overallMedianMin)} · одразу (≤2хв) {rt.taken2minPct}%</span>}</b>
+        <span style={{ color: MUTED, fontSize: 12 }}>{rt == null ? "…" : `${rt.totalCount} заявок ${open ? "▲" : "▼"}`}</span>
+      </div>
+      {open && rt && (
+        <div style={{ borderTop: "1px solid var(--border)", overflowX: "auto" }}>
+          <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
+            <thead><tr>{["Час приходу", "Заявок", "Медіана", "Середнє", "Одразу ≤2хв"].map((h, i) => <th key={h} style={{ textAlign: i ? "right" : "left" }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {rt.buckets.map((b) => (
+                <tr key={b.key} title={b.hint}>
+                  <td style={{ textAlign: "left" }}>{b.label}</td>
+                  <td style={{ textAlign: "right" }}>{b.count}</td>
+                  <td style={{ textAlign: "right" }}>{med(b.medianMin)}</td>
+                  <td style={{ textAlign: "right", color: MUTED }}>{med(b.avgMin)}</td>
+                  <td style={{ textAlign: "right" }}>{b.immediatePct}%</td>
+                </tr>
+              ))}
+              <tr style={{ background: "var(--bg)", fontWeight: 700, borderTop: "2px solid var(--border)" }}>
+                <td style={{ textAlign: "left" }}>Разом</td>
+                <td style={{ textAlign: "right" }}>{rt.totalCount}</td>
+                <td style={{ textAlign: "right" }}>{med(rt.overallMedianMin)}</td>
+                <td style={{ textAlign: "right", color: MUTED }}>{med(rt.overallAvgMin)}</td>
+                <td style={{ textAlign: "right" }}>{rt.taken2minPct}%</td>
+              </tr>
+            </tbody>
+          </table>
+          {rt.neglectedOver24h > 0 && <div style={{ padding: "8px 17px", fontSize: 12, color: RED }}>⚠️ Без реакції &gt;24 год: {rt.neglectedOver24h}</div>}
+        </div>
+      )}
     </div>
   );
 }

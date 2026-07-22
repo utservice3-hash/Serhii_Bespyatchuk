@@ -442,6 +442,34 @@ export async function newBusinessDobir(s: MoneyScope): Promise<number> {
   return Math.round(sum / r.rows.length); // середнє по наявних завершених місяцях (≤3)
 }
 
+/** Батчева двійня `newBusinessDobir` — ТОЙ САМИЙ предикат, лише GROUP BY менеджер, щоб не
+ *  кликати `buildProjection` по 35 разів у Звіті. Σ/к-сть місяців рахується per-manager
+ *  так само (середнє по наявних ≤3 завершених місяцях) → out.get(id) == newBusinessDobir({managerId:id}). */
+export async function newBusinessDobirByManager(s: MoneyScope): Promise<Map<number, number>> {
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const p: unknown[] = [FC_PIPELINES];
+  const conds = [
+    "d.status_id = 142", "d.pipeline_id = ANY($1)", "d.closed_at_kommo IS NOT NULL",
+    `to_char((d.created_at_kommo ${K}),'YYYY-MM') = to_char((d.closed_at_kommo ${K}),'YYYY-MM')`,
+    `extract(day from (d.created_at_kommo ${K})) > extract(day from (now() ${K}))`,
+    `(d.closed_at_kommo ${K})::date >= (date_trunc('month', now() ${K}) - interval '3 months')::date`,
+    `(d.closed_at_kommo ${K})::date < date_trunc('month', now() ${K})::date`,
+  ];
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const r = await pool.query<{ manager_id: number; ym: string; s: string }>(
+    `SELECT d.manager_id, to_char((d.closed_at_kommo ${K}),'YYYY-MM') ym, COALESCE(SUM(d.price),0) s
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE ${conds.join(" AND ")} AND d.manager_id IS NOT NULL GROUP BY 1, 2`, p);
+  const acc = new Map<number, { sum: number; months: Set<string> }>();
+  for (const x of r.rows) {
+    const e = acc.get(x.manager_id) ?? { sum: 0, months: new Set<string>() };
+    e.sum += Number(x.s); e.months.add(x.ym); acc.set(x.manager_id, e);
+  }
+  const out = new Map<number, number>();
+  for (const [id, e] of acc) out.set(id, e.months.size ? Math.round(e.sum / e.months.size) : 0);
+  return out;
+}
+
 export interface DobirRow { managerId: number; dobir: number }
 
 /**

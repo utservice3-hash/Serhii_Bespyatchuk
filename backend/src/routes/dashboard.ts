@@ -4440,6 +4440,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     return r >= 1 ? "g" : r >= 0.7 ? "a" : "r";
   };
 
+  // #17 ПРОГНОЗ per-manager — ТА САМА композиція, що core.buildProjection (факт + зона
+  // визнання + добір нового бізнесу), лише для ПОВНОГО ПОТОЧНОГО місяця, що ТРИВАЄ (як у
+  // КВП: minule/тиждень → прогноз = факт). Зона = expectedZoneByScope (expM, той самий
+  // предикат, що expectedPaymentsByPlanned.total). Добір — батчева двійня newBusinessDobir.
+  const isFullMonth = from === from.slice(0, 7) + "-01" && to === monthEndOf(from) && from.slice(0, 7) === to.slice(0, 7);
+  const monthInProgress = isFullMonth && wdElapsed < wdTotal;
+  const dobirByMgr = monthInProgress ? await money.newBusinessDobirByManager({ teamId }) : new Map<number, number>();
+
   const managers = roster.map((m) => {
     const fact = Math.round(recvM.get(m.id)?.revenue ?? 0);
     const pl = planByMgr.get(m.id) ?? {};
@@ -4452,6 +4460,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       tag: kind === "leadgen" ? "self" : kind, // self=самостійні/лідоген у макеті — зелений тег
       plan, fact, expect: Math.round(expM.get(m.id) ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
+      // #17 прогноз = факт + зона + добір (лише поточний місяць, що триває), == core.buildProjection
+      projected: Math.round(fact + (monthInProgress ? (expM.get(m.id) ?? 0) + (dobirByMgr.get(m.id) ?? 0) : 0)),
+      monthInProgress,
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
       spark: last5Weeks.map((w) => Math.round(sparkByMgr.get(m.id)?.get(w) ?? 0)),

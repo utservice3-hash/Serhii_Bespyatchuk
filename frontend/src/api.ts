@@ -515,6 +515,7 @@ export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";
   plan: number; fact: number; expect: number; pct: number | null;
+  projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   status: "g" | "a" | "r"; needPerDay: number; remainingWorkdays: number;
   spark: number[];
