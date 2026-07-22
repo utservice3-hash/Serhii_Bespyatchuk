@@ -210,8 +210,8 @@ function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: Rep
         </div>
       </div>
       <div>
-        <div style={lab}>Очікуємо цей період <InfoHint text="Живий пайплайн у зоні визнання доходу (виставлено→оплата), знімок «зараз». Без мінусу." /></div>
-        <div style={val}>{fmt(g.expect)} <small style={{ fontSize: 12, color: MUTED }}>₴</small></div>
+        <div style={lab}>💰 Очікуємо (Σ команди) <InfoHint text="Сума очікуваних коштів по всіх менеджерах у зоні визнання доходу (виставлено→оплата), знімок «зараз». Без мінусу. Σ per-manager == КВП." /></div>
+        <div style={{ ...val, color: g.expect > 0 ? GREEN : MUTED }}>{fmt(g.expect)} <small style={{ fontSize: 12, color: MUTED }}>₴</small></div>
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто за місяць: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
       </div>
       <div>
@@ -271,8 +271,10 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
         {/* МІСЯЦЬ — план-бар (головна траєкторія) + #16 очікуємо + #17 прогноз */}
         <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
           footer={<>
-            треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.) · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 && m.monthInProgress ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}
-            <br />очікуємо <b style={{ color: "var(--text)" }} title="Сума очікуваних коштів у зоні визнання (без мінусу) — == КВП">{fmt(m.expect)} ₴</b>
+            <div>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.) · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 && m.monthInProgress ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</div>
+            <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Сума очікуваних коштів у зоні визнання (виставлено→оплата, без мінусу) — == КВП per-manager «Очікуємо»">
+              💰 очікуємо <b style={{ color: GREEN }}>{fmt(m.expect)} ₴</b>
+            </div>
           </>} showTempo />
         {/* ТИЖДЕНЬ — поточний */}
         {mWeek ? (
