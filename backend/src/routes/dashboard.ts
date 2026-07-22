@@ -4408,6 +4408,27 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     accum(r.assignee_id, r.metrics_json, 1);
   }
 
+  // ГРОШОВИЙ ПЛАН = СТРАТЕГІЧНИЙ план із таблиці `plans` (core plans.managerPlan — повне
+  // покриття, ціль відділу 2.7млн), рішення власника 22.07. НЕ задачник: задачник покриває
+  // лише частину менеджерів (15 із 35 без плану) → % роздувався до 331%; plans-table дає
+  // реалістичний %. Місячний план апортується РІВНОМІРНО по робочих днях у обраний період
+  // (day=week=month сходяться). KPI-під-цілі (реклама/лідоген/авто/чек/конв) лишаються з
+  // задачника (planByMgr вище) — це активнісні таргети, не гроші.
+  const monthEndOf = (mo: string) => { const [y, mm] = mo.split("-").map(Number); return new Date(Date.UTC(y, mm, 0)).toISOString().slice(0, 10); };
+  const moneyPlanByMgr = new Map<number, number>();
+  for (const mo of monthsInRange(from, to)) {
+    const wdMonth = workingDaysBetween(mo, monthEndOf(mo));
+    if (wdMonth <= 0) continue;
+    const oF = mo > from ? mo : from;                 // перетин [місяць ∩ період]
+    const meEnd = monthEndOf(mo);
+    const oT = meEnd < to ? meEnd : to;
+    if (oF > oT) continue;
+    const frac = workingDaysBetween(oF, oT) / wdMonth;
+    if (frac <= 0) continue;
+    const mp = await plans.managerPlan(teamId ? { month: mo, teamId } : { month: mo });
+    for (const row of mp.rows) moneyPlanByMgr.set(row.managerId, (moneyPlanByMgr.get(row.managerId) ?? 0) + row.plan * frac);
+  }
+
   // Темп: частка робочих днів періоду, що минули (для статусу g/a/r як у макеті).
   const wdTotal = workingDaysBetween(from, to);
   const elapsedTo = kyivToday < to ? kyivToday : to;
@@ -4422,7 +4443,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const managers = roster.map((m) => {
     const fact = Math.round(recvM.get(m.id)?.revenue ?? 0);
     const pl = planByMgr.get(m.id) ?? {};
-    const plan = Math.round(pl.payment_amount ?? 0);
+    const plan = Math.round(moneyPlanByMgr.get(m.id) ?? 0); // грошовий план — plans-table
     const kind = m.team_id != null ? kvpTeamKind(m.team_id, m.team_name ?? "") : "rpk";
     const st = statusOf(fact, plan);
     const c = convM.get(m.id);
