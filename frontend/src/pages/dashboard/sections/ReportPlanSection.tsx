@@ -255,6 +255,12 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
   const cr = fy?.created ?? 0, nw = fy?.new ?? 0, rp = fy?.rep ?? 0;
   const dispN = fy?.kpi.dispatch.fact ?? 0, dispRev = fy?.kpi.dispatch.revenue ?? 0, recv = fy?.fact ?? 0;
   const showWhy = s !== "g";
+  // Сер.чек: виграно_дохід÷виграно_угод (==КВП); нема виграних, а є відправлені авто →
+  // Σ сума відправлених÷авто (load_at, signed) з поміткою «*відпр.»; нема й авто → «—».
+  const dispCnt = m.kpi.dispatch.fact ?? 0;
+  const chekAlt = m.kpi.avgCheck.fact == null && dispCnt > 0;
+  const chekFact = m.kpi.avgCheck.fact != null ? m.kpi.avgCheck.fact
+    : (chekAlt ? Math.round((m.kpi.dispatch.revenue ?? 0) / dispCnt) : null);
   return (
     <div style={{ background: isSelf ? BAR + "0d" : "var(--card-bg)", border: `1px solid ${isSelf ? BAR + "88" : "var(--border)"}`, borderLeft: `4px solid ${SCOL[s]}`, borderRadius: 14, marginBottom: 11, overflow: "hidden" }}>
       <div onClick={onToggle} style={{ display: "grid", gridTemplateColumns: "196px 1.1fr 1.1fr 300px 30px", gap: 14, alignItems: "center", padding: "15px 17px", cursor: "pointer" }}>
@@ -306,7 +312,7 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
         <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
         <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
         <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target} extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`} />
-        <Kpi lbl="чек" fact={m.kpi.avgCheck.fact} target={m.kpi.avgCheck.target} money />
+        <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)" />
         <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
       </div>
       {showWhy && <WhyBox m={m} role={role} isSelf={!!isSelf} />}
@@ -337,14 +343,14 @@ function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo 
 }
 
 // C4/#13: усі KPI «факт/ціль»; де цілі нема → «план не задано» (не ховаємо факт). extra = ₴ авто (#12).
-function Kpi({ lbl, fact, target, money, pctUnit, extra }: { lbl: string; fact: number | null; target: number; money?: boolean; pctUnit?: boolean; extra?: string }) {
+function Kpi({ lbl, fact, target, money, pctUnit, extra, altMark, altTitle }: { lbl: string; fact: number | null; target: number; money?: boolean; pctUnit?: boolean; extra?: string; altMark?: string; altTitle?: string }) {
   const ok = target > 0 && fact != null && fact >= target;
   const has = target > 0;
   const col = !has ? MUTED : ok ? GREEN : AMBER;
   const f = fact == null ? "—" : money ? fmt(fact) : pctUnit ? `${fact}%` : String(fact);
   return (
-    <span style={{ fontSize: 11.5, color: MUTED }} title={`${lbl}: факт ${f} / ${has ? "ціль " + (money ? fmt(target) : pctUnit ? target + "%" : target) : "план не задано"}`}>
-      {lbl} <b style={{ color: col }}>{f}</b>{extra ? <span style={{ color: MUTED }}> · {extra}</span> : null}
+    <span style={{ fontSize: 11.5, color: MUTED }} title={altMark ? altTitle : `${lbl}: факт ${f} / ${has ? "ціль " + (money ? fmt(target) : pctUnit ? target + "%" : target) : "план не задано"}`}>
+      {lbl} <b style={{ color: altMark ? AMBER : col }}>{f}</b>{altMark ? <sup style={{ fontSize: 8.5, color: AMBER, marginLeft: 1 }}>{altMark}</sup> : null}{extra ? <span style={{ color: MUTED }}> · {extra}</span> : null}
       {has ? <span style={{ color: MUTED }}> / {money ? k(target) : pctUnit ? target + "%" : target}{ok ? " ✓" : ""}</span>
            : <span style={{ color: MUTED, fontStyle: "italic" }}> · план не задано</span>}
     </span>
