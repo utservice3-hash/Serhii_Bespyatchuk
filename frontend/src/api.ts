@@ -258,6 +258,63 @@ export async function savePlan(managerId: number, month: string, plannedValue: n
   await api.post("/plans", { managerId, planDate: `${month}-01`, metric: "payment_amount", plannedValue });
 }
 
+// ───────────────────────── ФОРМУВАННЯ ПЛАНУ (двоетапне погодження) ─────────────────────────
+export interface PFRecommendation {
+  value: number; perWorkingDay: number; baseSum: number; baseWorkingDays: number;
+  targetWorkingDays: number; baseMonthlyAvg: number; growthPct: number; sparseHistory: boolean;
+}
+export interface PFCountSum { count: number; sum: number }
+export interface PFClients { repeat: PFCountSum; leadgen: PFCountSum; new: PFCountSum; undef: PFCountSum; total: PFCountSum }
+export type PFStatus = "draft" | "submitted" | "approved" | "returned";
+export interface PFState {
+  status: PFStatus; proposedValue: number | null; comment: string | null; returnComment: string | null;
+  submittedBy: string | null; submittedAt: string | null; decidedBy: string | null; decidedAt: string | null;
+}
+export interface PFManager {
+  managerId: number; name: string; teamId: number | null; teamName: string | null;
+  history: { month: string; revenue: number; deals: number }[];
+  recommendation: PFRecommendation;
+  clients: PFClients;
+  carryover: number; currentPlan: number;
+  formation: PFState;
+}
+export interface PFTeam {
+  teamId: number | null; teamName: string; total: number;
+  recommended: number; carryover: number; approved: number; submitted: number;
+  managers: PFManager[];
+}
+export interface PlanFormation {
+  month: string; refMonth: string; growthPct: number;
+  role: string; canApprove: boolean; canSubmit: boolean; teams: PFTeam[];
+}
+export async function fetchPlanFormation(month: string, teamId?: number, growth?: number): Promise<PlanFormation> {
+  const params: Record<string, string | number> = { month };
+  if (teamId) params.teamId = teamId;
+  if (growth != null) params.growth = growth;
+  const { data } = await api.get<PlanFormation>("/plans/formation", { params });
+  return data;
+}
+
+export interface PFRepeatClient { clientKey: string; name: string; revenue: number; orders: number; deltaPct: number | null }
+export interface PFRepeatBreakdown {
+  clients: PFRepeatClient[]; rest: { count: number; revenue: number };
+  totalRevenue: number; totalClients: number;
+}
+export async function fetchFormationRepeatClients(managerId: number, month: string): Promise<PFRepeatBreakdown> {
+  const { data } = await api.get<PFRepeatBreakdown>("/plans/formation/repeat-clients", { params: { managerId, month } });
+  return data;
+}
+export async function submitFormationPlan(managerId: number, month: string, proposedValue: number, comment?: string): Promise<void> {
+  await api.post("/plans/formation/submit", { managerId, month, proposedValue, comment });
+}
+export async function approveFormationPlan(body: { managerId?: number; teamId?: number; month: string }): Promise<{ approved: number }> {
+  const { data } = await api.post<{ ok: boolean; approved: number }>("/plans/formation/approve", body);
+  return data;
+}
+export async function returnFormationPlan(managerId: number, month: string, returnComment?: string): Promise<void> {
+  await api.post("/plans/formation/return", { managerId, month, returnComment });
+}
+
 // Repeat-client revenue plan (target earned from постійні клієнти), set monthly
 // per manager, decomposed by weeks with auto-filled fact.
 export interface RepeatPlansGrid {

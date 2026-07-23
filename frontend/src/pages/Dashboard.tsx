@@ -99,7 +99,7 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ReportPlanSection } from "./dashboard/sections/ReportPlanSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { LeadgenRegularsCard } from "./dashboard/sections/LeadgenRegularsCard";
-import { PlansSection } from "./dashboard/sections/PlansSection";
+import { PlansTabs } from "./dashboard/sections/PlansTabs";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
 
 /** Short pleasant beep via Web Audio (no asset needed, CSP-safe). Double for "done". */
@@ -1036,7 +1036,7 @@ export function Dashboard() {
       {section === "kvp" && auth?.role === "admin" && <KvpReportSection />}
 
       {section === "plans" && (auth?.role === "admin" || auth?.role === "team_lead") && (
-        <PlansSection canPickTeam={auth?.role === "admin"} teams={teams} />
+        <PlansTabs auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }} teams={teams} />
       )}
 
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
