@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail, fetchStuckDeals, fetchResponseTime,
+  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail, fetchStuckDeals,
   type ReportPlan, type ReportPlanManager, type ReportPlanDeal, type KvpManagerDetail, type Team,
-  type StuckDeal, type ResponseTime,
+  type StuckDeal,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
+import { ResponseTimeCard } from "./ResponseTimeCard";
 
 // Статуси-кольори (зарезервовані, з іконкою+підписом — не колір-наодинці). Тема-безпечні.
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BAR = "#2f6fdb", MUTED = "var(--text-muted)";
@@ -160,6 +161,10 @@ export function ReportPlanSection({ auth, teams }: {
       {loading && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
         <>
           <Glance data={data} focus={focus} focusDay={focusDay} today={today} />
+          {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
+              бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
+          <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
+          <ResponseTimeCard from={monthPeriod.from} to={monthPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
           {auth.role === "manager" && selfRow && (
             <MgrStrip m={selfRow} mWeek={weekByMgr.get(selfRow.managerId)} fy={focusByMgr.get(selfRow.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
@@ -177,9 +182,6 @@ export function ReportPlanSection({ auth, teams }: {
               open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
           ))}
           {data.managers.length === 0 && <div style={{ color: MUTED, padding: 20 }}>Немає менеджерів у цьому розрізі.</div>}
-          {/* #18/#19 — блоки як у КВП (роль-скоуп на бекенді за токеном) */}
-          <StuckBlock reloadKey={`${teamId}`} />
-          <ResponseBlock from={monthPeriod.from} to={monthPeriod.to} reloadKey={`${teamId}`} />
           <Legend />
         </>
       )}
@@ -479,10 +481,10 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
 }
 
 // #18 — застряглі угоди (реюз КВП /stuck-deals, роль-скоуп за токеном; найдовші вгорі).
-function StuckBlock({ reloadKey }: { reloadKey: string }) {
+function StuckBlock({ teamId }: { teamId?: number }) {
   const [deals, setDeals] = useState<StuckDeal[] | null>(null);
   const [open, setOpen] = useState(false);
-  useEffect(() => { let a = true; setDeals(null); fetchStuckDeals({}).then((r) => a && setDeals(r.deals)).catch(() => a && setDeals([])); return () => { a = false; }; }, [reloadKey]);
+  useEffect(() => { let a = true; setDeals(null); fetchStuckDeals(teamId ? { teamId } : {}).then((r) => a && setDeals(r.deals)).catch(() => a && setDeals([])); return () => { a = false; }; }, [teamId]);
   const n = deals?.length ?? 0;
   return (
     <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, marginTop: 18, overflow: "hidden" }}>
@@ -509,48 +511,6 @@ function StuckBlock({ reloadKey }: { reloadKey: string }) {
               </tbody>
             </table>
           )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// #19 — час опрацювання заявки (реюз КВП /response-time; медіана, % одразу, розбивка по добі).
-function ResponseBlock({ from, to, reloadKey }: { from: string; to: string; reloadKey: string }) {
-  const [rt, setRt] = useState<ResponseTime | null>(null);
-  const [open, setOpen] = useState(false);
-  useEffect(() => { let a = true; setRt(null); fetchResponseTime({ from, to }).then((r) => a && setRt(r)).catch(() => a && setRt(null)); return () => { a = false; }; }, [from, to, reloadKey]);
-  const med = (m: number | null) => m == null ? "—" : m < 60 ? `${Math.round(m)} хв` : `${(m / 60).toFixed(1)} год`;
-  return (
-    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, marginTop: 12, overflow: "hidden" }}>
-      <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 17px", cursor: "pointer" }}>
-        <b style={{ fontSize: 14.5 }}>⏱️ Час опрацювання заявки {rt && <span style={{ color: MUTED, fontWeight: 600, fontSize: 12.5 }}>· медіана {med(rt.overallMedianMin)} · одразу (≤2хв) {rt.taken2minPct}%</span>}</b>
-        <span style={{ color: MUTED, fontSize: 12 }}>{rt == null ? "…" : `${rt.totalCount} заявок ${open ? "▲" : "▼"}`}</span>
-      </div>
-      {open && rt && (
-        <div style={{ borderTop: "1px solid var(--border)", overflowX: "auto" }}>
-          <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
-            <thead><tr>{["Час приходу", "Заявок", "Медіана", "Середнє", "Одразу ≤2хв"].map((h, i) => <th key={h} style={{ textAlign: i ? "right" : "left" }}>{h}</th>)}</tr></thead>
-            <tbody>
-              {rt.buckets.map((b) => (
-                <tr key={b.key} title={b.hint}>
-                  <td style={{ textAlign: "left" }}>{b.label}</td>
-                  <td style={{ textAlign: "right" }}>{b.count}</td>
-                  <td style={{ textAlign: "right" }}>{med(b.medianMin)}</td>
-                  <td style={{ textAlign: "right", color: MUTED }}>{med(b.avgMin)}</td>
-                  <td style={{ textAlign: "right" }}>{b.immediatePct}%</td>
-                </tr>
-              ))}
-              <tr style={{ background: "var(--bg)", fontWeight: 700, borderTop: "2px solid var(--border)" }}>
-                <td style={{ textAlign: "left" }}>Разом</td>
-                <td style={{ textAlign: "right" }}>{rt.totalCount}</td>
-                <td style={{ textAlign: "right" }}>{med(rt.overallMedianMin)}</td>
-                <td style={{ textAlign: "right", color: MUTED }}>{med(rt.overallAvgMin)}</td>
-                <td style={{ textAlign: "right" }}>{rt.taken2minPct}%</td>
-              </tr>
-            </tbody>
-          </table>
-          {rt.neglectedOver24h > 0 && <div style={{ padding: "8px 17px", fontSize: 12, color: RED }}>⚠️ Без реакції &gt;24 год: {rt.neglectedOver24h}</div>}
         </div>
       )}
     </div>
