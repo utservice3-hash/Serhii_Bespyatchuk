@@ -204,6 +204,54 @@ function AutoTextarea({ value, onLocal, onCommit, style, placeholder }: {
   );
 }
 
+// ── Компактні клітинки (макет task_mock): щоб звільнити місце під ширший «Коментар» ──
+const shortName = (n: string | null | undefined) => {
+  if (!n) return "—";
+  const p = n.trim().split(/\s+/);
+  return p.length > 1 ? `${p[0]} ${p[1][0]}.` : p[0];
+};
+const initialsOf = (n: string | null | undefined) =>
+  n ? n.trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? "").join("") : "?";
+const PRIO_SHORT: Record<TaskPriority, string> = { high: "🚩 Вис.", medium: "🟡 Сер.", low: "⚪ Низ." };
+
+// Дедлайн: коротка дата (дд.мм.рр), редагування по кліку.
+function EditableDate({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return <input type="date" autoFocus value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}
+      onBlur={() => setEditing(false)} style={{ width: "100%", fontSize: 12, minWidth: 0 }} />;
+  }
+  return (
+    <button onClick={() => setEditing(true)} title="Клік — редагувати дедлайн"
+      style={{ border: "none", background: "transparent", cursor: "pointer", color: value ? "var(--text)" : "var(--text-muted)", fontSize: 12, padding: "2px 4px", whiteSpace: "nowrap" }}>
+      {value ? `${value.slice(8)}.${value.slice(5, 7)}.${value.slice(2, 4)}` : "—"}
+    </button>
+  );
+}
+
+// Виконавець: аватар-ініціали + скорочене прізвище; редагування по кліку (select).
+function AssigneeCell({ value, name, options, onChange }: {
+  value: number | null; name: string | null; options: ManagerOption[]; onChange: (id: number | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <select autoFocus value={value ?? ""} onChange={(e) => { onChange(e.target.value ? Number(e.target.value) : null); setEditing(false); }}
+        onBlur={() => setEditing(false)} style={{ width: "100%", fontSize: 12, minWidth: 0 }}>
+        <option value="">—</option>
+        {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+      </select>
+    );
+  }
+  return (
+    <button onClick={() => setEditing(true)} title={name ?? "Призначити виконавця"}
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "none", background: "transparent", cursor: "pointer", maxWidth: "100%", padding: "2px 0" }}>
+      <span style={{ width: 22, height: 22, borderRadius: "50%", flex: "0 0 auto", background: name ? "rgba(99,102,241,0.16)" : "var(--border)", color: "#6366f1", fontSize: 9.5, fontWeight: 700, display: "grid", placeItems: "center" }}>{initialsOf(name)}</span>
+      <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortName(name)}</span>
+    </button>
+  );
+}
+
 export function TasksSection({
   taskSearch,
   setTaskSearch,
@@ -277,16 +325,21 @@ export function TasksSection({
           📦 План тижня {tDdmm(s.weekStart)}–{tDdmm(s.weekEnd)}
           <span style={{ fontSize: 10, color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: 8, padding: "0 6px" }}>{s.kids.length} дн. · авто</span>
         </div>
+        {s.department && <div style={{ marginTop: 2 }}><span style={{ ...deptPillStyle(s.department), fontSize: 10.5, padding: "1px 8px", display: "inline-block" }}>{s.department}</span></div>}
         <UmbBody periodStart={s.weekStart} periodEnd={s.weekEnd} assigneeName={s.assigneeName}
           kids={s.kids} summary={buildUmbrellaSummary(s.kids, null)}
           open={expandedKpi.has(s.synthKey)} onToggle={() => toggleKpi(s.synthKey)} />
       </td>
       <td><span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: (s.status === "done" ? "#16a34a" : "var(--text-muted)") + "22", color: s.status === "done" ? "#16a34a" : "var(--text-muted)" }}>{s.status === "done" ? "Виконано" : "В роботі"}</span></td>
-      <td style={{ color: "var(--text-muted)" }}>{tDdmm(s.weekEnd)}</td>
-      <td>{s.assigneeName ?? "—"}</td>
+      <td style={{ color: "var(--text-muted)", fontSize: 12, whiteSpace: "nowrap" }}>{tDdmm(s.weekEnd)}</td>
+      <td>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: "100%" }} title={s.assigneeName ?? "—"}>
+          <span style={{ width: 22, height: 22, borderRadius: "50%", flex: "0 0 auto", background: s.assigneeName ? "rgba(99,102,241,0.16)" : "var(--border)", color: "#6366f1", fontSize: 9.5, fontWeight: 700, display: "grid", placeItems: "center" }}>{initialsOf(s.assigneeName)}</span>
+          <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shortName(s.assigneeName)}</span>
+        </span>
+      </td>
       <td style={{ color: "var(--text-muted)" }}>—</td>
       <td style={{ color: "var(--text-muted)" }}>—</td>
-      <td style={{ color: "var(--text-muted)" }}>{s.department ?? "—"}</td>
       <td></td>
     </tr>
   );
@@ -380,24 +433,22 @@ export function TasksSection({
           {title && <div style={{ fontSize: 15, fontWeight: 700, margin: "2px 0 10px", display: "flex", alignItems: "center", gap: 6 }}>{title}</div>}
           <table className="data-table tasks-table">
             <colgroup>
-              <col style={{ width: "25%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "15%" }} />
+              <col style={{ width: "23%" }} />
               <col style={{ width: "9%" }} />
+              <col style={{ width: "8%" }} />
               <col style={{ width: "12%" }} />
-              <col style={{ width: "14%" }} />
-              <col style={{ width: "3%" }} />
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "40%" }} />
+              <col style={{ width: "2%" }} />
             </colgroup>
             <thead>
               <tr>
-                <th>Задачі</th>
+                <th>Задача</th>
                 <th>Статус</th>
                 <th>Дедлайн</th>
                 <th>Виконавець</th>
                 <th>Пріоритет</th>
-                <th>Коментарі</th>
-                <th>Департамент</th>
+                <th>Коментар</th>
                 <th></th>
               </tr>
             </thead>
@@ -456,7 +507,7 @@ export function TasksSection({
                 if (visible.length === 0) {
                   return (
                     <tr>
-                      <td colSpan={8} className="loading-text">
+                      <td colSpan={7} className="loading-text">
                         {q ? "Нічого не знайдено." : "Задач немає."}
                       </td>
                     </tr>
@@ -479,6 +530,21 @@ export function TasksSection({
                           onLocal={(v) => patchTaskLocal(task.id, { title: v })}
                           onCommit={(v) => updateTask(task.id, { title: v })}
                         />
+                      </div>
+                      {/* Команда/департамент — малий чіп ПІД назвою (не окрема колонка), редагований */}
+                      <div style={{ paddingLeft: 22, marginTop: 2 }}>
+                        <select
+                          value={task.department ?? ""}
+                          onChange={(e) => { const department = e.target.value || null; patchTaskLocal(task.id, { department }); updateTask(task.id, { department }); }}
+                          title="Команда / департамент"
+                          style={task.department
+                            ? { ...deptPillStyle(task.department), fontSize: 10.5, padding: "1px 8px" }
+                            : { border: "1px dashed var(--border)", background: "transparent", color: "var(--text-muted)", cursor: "pointer", borderRadius: 999, fontSize: 10.5, padding: "1px 8px", maxWidth: "100%" }}
+                        >
+                          <option value="">+ команда</option>
+                          {task.department && !deptOptions.includes(task.department) && <option value={task.department}>{task.department}</option>}
+                          {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+                        </select>
                       </div>
                       {task.metricsJson && task.metricsJson.length > 0 && task.taskType !== "kpi_period" && (
                         <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 22, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
@@ -574,34 +640,11 @@ export function TasksSection({
                       />
                     </td>
                     <td>
-                      <input
-                        type="date"
-                        value={task.deadline ?? ""}
-                        onChange={(e) => {
-                          const deadline = e.target.value || null;
-                          patchTaskLocal(task.id, { deadline });
-                          updateTask(task.id, { deadline });
-                        }}
-                      />
+                      <EditableDate value={task.deadline} onChange={(deadline) => { patchTaskLocal(task.id, { deadline }); updateTask(task.id, { deadline }); }} />
                     </td>
                     <td>
-                      <select
-                        value={task.assigneeId ?? ""}
-                        onChange={(e) => {
-                          const assigneeId = e.target.value ? Number(e.target.value) : null;
-                          const assigneeName =
-                            managerOptions.find((m) => m.id === assigneeId)?.name ?? null;
-                          patchTaskLocal(task.id, { assigneeId, assigneeName });
-                          updateTask(task.id, { assigneeId });
-                        }}
-                      >
-                        <option value="">—</option>
-                        {managerOptions.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name}
-                          </option>
-                        ))}
-                      </select>
+                      <AssigneeCell value={task.assigneeId} name={task.assigneeName} options={managerOptions}
+                        onChange={(assigneeId) => { const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(task.id, { assigneeId, assigneeName }); updateTask(task.id, { assigneeId }); }} />
                     </td>
                     <td>
                       <select
@@ -611,12 +654,11 @@ export function TasksSection({
                           patchTaskLocal(task.id, { priority });
                           updateTask(task.id, { priority });
                         }}
-                        style={priorityPillStyle(task.priority)}
+                        style={{ ...priorityPillStyle(task.priority), fontSize: 11, padding: "3px 6px" }}
+                        title="Пріоритет"
                       >
-                        {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
+                        {(["high", "medium", "low"] as TaskPriority[]).map((value) => (
+                          <option key={value} value={value}>{PRIO_SHORT[value]}</option>
                         ))}
                       </select>
                     </td>
@@ -627,23 +669,6 @@ export function TasksSection({
                         onLocal={(v) => patchTaskLocal(task.id, { comments: v })}
                         onCommit={(v) => updateTask(task.id, { comments: v })}
                       />
-                    </td>
-                    <td>
-                      <select
-                        value={task.department ?? ""}
-                        onChange={(e) => {
-                          const department = e.target.value || null;
-                          patchTaskLocal(task.id, { department });
-                          updateTask(task.id, { department });
-                        }}
-                        style={task.department ? deptPillStyle(task.department) : { border: "none", background: "transparent", color: "var(--text-muted)", cursor: "pointer", maxWidth: "100%" }}
-                      >
-                        <option value="">—</option>
-                        {task.department && !deptOptions.includes(task.department) && (
-                          <option value={task.department}>{task.department}</option>
-                        )}
-                        {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
-                      </select>
                     </td>
                     <td>
                       <button
