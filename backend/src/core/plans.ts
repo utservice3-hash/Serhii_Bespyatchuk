@@ -156,10 +156,12 @@ export function deriveMonthlyTarget(base: number, upliftLow = 0.10, upliftHigh =
 
 export interface PlanRecMonth { month: string; revenue: number; deals: number }
 export interface PlanRecommendation {
-  recommendation: number;        // = round(baseMonthlyAvg × (1+growthPct))
-  baseMonthlyAvg: number;        // = Σ(won 3 повні міс) ÷ 3 (won 142 по closed_at, signed)
-  perWorkingDay: number;         // = round(baseMonthlyAvg ÷ targetWorkingDays) — для підпису
+  recommendation: number;        // = round(perWorkingDay × targetWorkingDays × (1+growthPct))
+  perWorkingDay: number;         // = round(baseSum ÷ baseWorkingDays) — ДЕННИЙ ТЕМП (headline-драйвер)
+  baseSum: number;               // Σ(won 3 повні міс) (won 142 по closed_at, signed)
+  baseWorkingDays: number;       // Σ робочих днів місяців бази З ФАКТОМ (Пн–Пт)
   targetWorkingDays: number;     // робочі дні target-місяця (Пн–Пт)
+  baseMonthlyAvg: number;        // Σ ÷ 3 — ЛИШЕ довідково (headline = weighted, не це)
   growthPct: number;
   baseMonths: PlanRecMonth[];    // 3 повні місяці бази (0 де немає)
   sparseHistory: boolean;        // <3 місяців із фактом → рекомендація орієнтовна
@@ -168,25 +170,27 @@ export interface PlanRecommendation {
 /**
  * РЕКОМЕНДАЦІЯ плану на target-місяць — ЧИСТА функція (без БД), щоб бари-історія і база
  * рекомендації рахувались з ОДНИХ чисел (викликач передає ті самі `successByManagerMonth`).
- * База = середнє won за 3 ПОВНІ місяці перед target (won 142 по closed_at, signed — рішення
- * власника; поточний неповний місяць НЕ входить). Підпис макета «база Xк/міс → Y₴/день ×
- * N роб.дні × 1.10»: perWorkingDay = base ÷ роб.дні(target), рекомендація = base × (1+ріст).
- * <3 місяців із фактом → `sparseHistory` (рахуємо по наявних, ділимо на 3; прапорець у UI).
- * 🔵 ПРИМІТКА: варіант «÷ Σ роб.дні бази × роб.дні(target)» (month-length-weighted) дає інший
- * результат коли довжина місяців різна — тут узято base×(1+ріст) під заголовок макета 137к.
+ * WEIGHTED (денний темп, рішення власника): менеджер робить X ₴/день + ріст.
+ *   perWorkingDay  = Σ(won 3 повні міс) ÷ Σ(робочі дні цих міс)      ← won 142 по closed_at, signed
+ *   recommendation = perWorkingDay × робочі_дні(target) × (1+growthPct)
+ * Підпис макета «X ₴/день × N роб.дні × 1.10» → МАТЕМАТИЧНО ТОЧНИЙ (не приблизний):
+ * headline рахується САМЕ з відображених perWorkingDay/targetWorkingDays. Поточний неповний
+ * місяць у базу НЕ входить. `baseMonthlyAvg` (Σ÷3) — лише довідково, НЕ headline.
+ * <3 місяців із фактом → `sparseHistory`; дільник = робочі дні ЛИШЕ місяців із фактом
+ * (новий менеджер: денний темп по наявних, без розмивання «порожніми» місяцями).
  */
 export function planRecommendation(baseMonths: PlanRecMonth[], targetMonth: string, growthPct = 0.10): PlanRecommendation {
-  const n = baseMonths.length || 1;
-  const sumRev = baseMonths.reduce((a, m) => a + m.revenue, 0);
-  const baseMonthlyAvg = sumRev / n;
-  const monthsWithData = baseMonths.filter((m) => m.deals > 0).length;
+  const withData = baseMonths.filter((m) => m.deals > 0);
+  const baseSum = baseMonths.reduce((a, m) => a + m.revenue, 0);
+  const baseWorkingDays = withData.reduce((a, m) => a + workingDaysBetween(m.month.slice(0, 7) + "-01", monthEndOf(m.month)), 0);
+  const perWorkingDay = baseWorkingDays > 0 ? Math.round(baseSum / baseWorkingDays) : 0;
   const targetWorkingDays = workingDaysBetween(targetMonth.slice(0, 7) + "-01", monthEndOf(targetMonth));
-  const perWorkingDay = targetWorkingDays > 0 ? Math.round(baseMonthlyAvg / targetWorkingDays) : 0;
   return {
-    recommendation: Math.round(baseMonthlyAvg * (1 + growthPct)),
-    baseMonthlyAvg: Math.round(baseMonthlyAvg),
-    perWorkingDay, targetWorkingDays, growthPct, baseMonths,
-    sparseHistory: monthsWithData < 3,
+    recommendation: Math.round(perWorkingDay * targetWorkingDays * (1 + growthPct)),
+    perWorkingDay, baseSum: Math.round(baseSum), baseWorkingDays, targetWorkingDays,
+    baseMonthlyAvg: Math.round(baseSum / (baseMonths.length || 1)),
+    growthPct, baseMonths,
+    sparseHistory: withData.length < 3,
   };
 }
 

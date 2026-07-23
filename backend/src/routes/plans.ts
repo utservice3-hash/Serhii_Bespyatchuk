@@ -136,7 +136,7 @@ plansRouter.get("/formation", async (req, res) => {
     return {
       managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
       history,
-      recommendation: { value: rec.recommendation, baseMonthlyAvg: rec.baseMonthlyAvg, perWorkingDay: rec.perWorkingDay, targetWorkingDays: rec.targetWorkingDays, growthPct: rec.growthPct, sparseHistory: rec.sparseHistory },
+      recommendation: { value: rec.recommendation, perWorkingDay: rec.perWorkingDay, baseSum: rec.baseSum, baseWorkingDays: rec.baseWorkingDays, targetWorkingDays: rec.targetWorkingDays, baseMonthlyAvg: rec.baseMonthlyAvg, growthPct: rec.growthPct, sparseHistory: rec.sparseHistory },
       clients: {
         repeat: { count: sp?.repeatCount ?? 0, sum: Math.round(sp?.repeatRevenue ?? 0) },
         leadgen: { count: sp?.leadgenCount ?? 0, sum: Math.round(sp?.leadgenRevenue ?? 0) },
