@@ -364,10 +364,10 @@ export function TasksSection({
         </div>
       </div>
 
-      {isAdmin && (
+      {(isAdmin || role === "team_lead") && (
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <button style={tabBtn(adminTab === "mine")} onClick={() => setAdminTab("mine")}>👤 Мої задачі</button>
-          <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>🗂️ Усі задачі</button>
+          <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>{isAdmin ? "🗂️ Усі задачі" : "👥 Командні задачі"}</button>
         </div>
       )}
 
@@ -423,7 +423,8 @@ export function TasksSection({
                     weekStart: wk, weekEnd: tAddDays(wk, 6), kids, status: allDone ? "done" : "in_progress",
                     title: `План тижня ${tDdmm(wk)}–${tDdmm(tAddDays(wk, 6))}`, department: kids[0].department ?? null };
                 });
-                if (isAdmin && adminTab === "mine") { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
+                // Перемикач «Мої / Усі(admin) / Командні(team_lead)»: «Мої» = свій assignee.
+                if ((isAdmin || role === "team_lead") && adminTab === "mine") { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
                 if (assigneeFilter !== "") { base = base.filter((t) => t.assigneeId === assigneeFilter); synths = synths.filter((s) => s.assigneeId === assigneeFilter); }
                 if (statusFilter === "active") { base = base.filter((t) => t.status !== "done"); synths = synths.filter((s) => s.status !== "done"); }
                 else if (statusFilter === "done") { base = base.filter((t) => t.status === "done"); synths = synths.filter((s) => s.status === "done"); }
@@ -663,17 +664,8 @@ export function TasksSection({
           </table>
         </div>
       );
-      // ЧАСТИНА 2: тімлід бачить дві секції ПОРУЧ — «Мої» окремо, «Команда» окремо.
-      if (role === "team_lead") {
-        const mine = tasks.filter(isMine);
-        const team = tasks.filter((t) => !isMine(t));
-        return (
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
-            <div style={{ flex: "1 1 460px", minWidth: 0 }}>{renderTable(mine, "👤 Мої задачі")}</div>
-            <div style={{ flex: "1 1 460px", minWidth: 0 }}>{renderTable(team, "👥 Задачі команди")}</div>
-          </div>
-        );
-      }
+      // ЧАСТИНА 2: тімлід — ОДНА таблиця на всю ширину + перемикач зверху «Мої / Командні»
+      // (як в адміна). Дві колонки прибрано (таблиця стискалась). manager/admin без змін.
       return renderTable(tasks);
     })())}
 
