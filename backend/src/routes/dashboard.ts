@@ -4266,18 +4266,18 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
     metrics.expectedByManagerDay({ managerId }),
   ]);
 
-  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; received: { deals: number; revenue: number }; expected: { deals: number; sum: number } };
-  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 } });
+  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number; received: { deals: number; revenue: number }; expected: { deals: number; sum: number } };
+  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispUndef: 0, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 } });
   const dayMap = new Map<string, Cell>();
   const dget = (d: string) => { let e = dayMap.get(d); if (!e) { e = zero(); dayMap.set(d, e); } return e; };
   for (const r of createdRows) dget(r.bucket).created += r.deals;
   for (const r of splitRows) { const e = dget(r.bucket); e.newCount += r.newCount; e.repeatCount += r.repeatCount; e.undefCount += r.undefCount; }
   for (const r of leadsRows) { const e = dget(r.bucket); const c = (r as { channel?: string }).channel; if (c === "ad") e.leadsAd += r.deals; else if (c === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals; }
-  for (const r of dispRows) dget(r.ym).dispatched += r.deals;
+  for (const r of dispRows) { const e = dget(r.ym); e.dispatched += r.deals; e.dispRepeat += r.repeat; e.dispLeadgen += r.leadgen; e.dispAd += r.ad; e.dispUndef += r.undef; }
   for (const r of recvRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.received.deals += r.deals; e.received.revenue += r.revenue; }
   for (const r of expRows) if (r.day >= from && r.day <= to) { const e = dget(r.day); e.expected.deals += r.deals; e.expected.sum += r.sum; }
 
-  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum } });
+  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum } });
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const weeks = fixedWeekBlocks(monthStart).map((w) => {
     const days = [...dayMap.entries()].filter(([d]) => d >= w.from && d <= w.to).sort((a, b) => a[0].localeCompare(b[0])).map(([day, c]) => ({ day, ...c }));
@@ -4478,7 +4478,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       kpi: {
         ads: { fact: adsM.get(m.id) ?? 0, target: Math.round(pl.ads_count ?? 0) },
         leadgen: { fact: lgM.get(m.id)?.deals ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
-        dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0) },
+        dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0),
+          // Розбивка авто за джерелом (постійний / лідоген / реклама / невизн). Σ = fact.
+          repeat: dispM.get(m.id)?.repeat ?? 0, leadgen: dispM.get(m.id)?.leadgen ?? 0, ad: dispM.get(m.id)?.ad ?? 0, undef: dispM.get(m.id)?.undef ?? 0 },
         avgCheck: { fact: avgM.get(m.id)?.avgCheck ?? null, target: Math.round(pl.avg_check ?? 0) },
         conversion: { fact: c && c.taken >= 10 ? c.cohortPct : null, target: Math.round(pl.conversion ?? 0), taken: c?.taken ?? 0, won: c?.won ?? 0 },
       },

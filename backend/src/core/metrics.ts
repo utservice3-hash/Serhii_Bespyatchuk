@@ -411,28 +411,56 @@ const CREATED_KLASS_CASE = `
     ELSE 'undef'
   END`;
 
+// РОЗБИВКА ЗА ДЖЕРЕЛОМ (реклама / лідоген / постійний / невизн) — та сама база сигналів,
+// що CREATED_KLASS_CASE, але ЧОТИРИ категорії за ПОХОДЖЕННЯМ угоди (а не new/repeat).
+// Пріоритет каналу-першим = правило реатрибуції «останній дотик» («реактивація б'є мітки»):
+//   ad → реклама · leadgen → лідоген · other+історія(has_prior) АБО декларація «Постійні» →
+//   постійний · решта (other без історії, невідома декларація) → невизн. Σ 4 категорій = total.
+const SOURCE_KLASS_CASE = `
+  CASE
+    WHEN lead_channel = 'ad' THEN 'ad'
+    WHEN lead_channel = 'leadgen' THEN 'leadgen'
+    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND has_prior THEN 'repeat'
+    WHEN sales_channel = 'Постійні клієнти' THEN 'repeat'
+    ELSE 'undef'
+  END`;
+
 /** Спільний CTE-конвеєр класифікації (base→classed→final з `klass`). Мутує `params`
- * (додає $1 FC, $2 дженерик-ключі + scope). `bucketExpr` — необов'язковий вираз
- * бакета за `created_at` (день/тиждень/місяць, той самий анкер, що createdByBucket)
- * для грануляції; без нього final несе лише manager_id. Повертає ТІЛО WITH (без «WITH»).*/
-function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string): string {
+ * (додає $1 FC, $2 дженерик-ключі + scope). Опції:
+ *   • `windowCol` — колонка АНКЕРА вікна періоду (дефолт `d.created_at_kommo`; для
+ *     відправлених авто — `d.load_at`). `has_prior` ЗАВЖДИ рахується проти
+ *     `created_at_kommo` (історія клієнта на момент СТВОРЕННЯ угоди — інваріант джерела).
+ *   • `klassCase` — вираз класу (`CREATED_KLASS_CASE` / `SOURCE_KLASS_CASE`).
+ *   • `bucketExpr` — необов'язковий бакет (день/тиждень/місяць за `windowCol`); без нього
+ *     final несе лише manager_id.
+ *   • `carryPrice` — тягнути `d.price` у final (для суми ₴ по відправлених авто; signed).
+ * Повертає ТІЛО WITH (без «WITH»). */
+function classifyCte(
+  s: MetricScope,
+  params: unknown[],
+  opts: { windowCol?: string; klassCase: string; bucketExpr?: string; carryPrice?: boolean; channel?: "leadgen" | "ad" | null }
+): string {
+  const windowCol = opts.windowCol ?? "d.created_at_kommo";
   params.push(FC_PIPELINES, GENERIC_CLIENT_KEYS);
-  const conds = ["d.pipeline_id = ANY($1)", "d.created_at_kommo IS NOT NULL"];
-  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
-  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+  const conds = ["d.pipeline_id = ANY($1)", `${windowCol} IS NOT NULL`];
+  if (opts.channel) { params.push(opts.channel); conds.push(`d.lead_channel = $${params.length}`); }
+  if (s.from) { params.push(s.from); conds.push(`(${windowCol} ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(${windowCol} ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  const bcol = bucketExpr ? `, ${bucketExpr} AS bucket` : "";
-  const bcarry = bucketExpr ? ", bucket" : "";
+  const bcol = opts.bucketExpr ? `, ${opts.bucketExpr} AS bucket` : "";
+  const bcarry = opts.bucketExpr ? ", bucket" : "";
+  const pcol = opts.carryPrice ? ", d.price" : "";
+  const pcarry = opts.carryPrice ? ", price" : "";
   return `base AS (
-       SELECT d.kommo_id, d.manager_id, d.created_at_kommo, d.sales_channel, d.lead_channel${bcol},
+       SELECT d.kommo_id, d.manager_id, d.created_at_kommo, d.sales_channel, d.lead_channel${bcol}${pcol},
               CASE WHEN d.client_key IS NULL OR d.client_key = ANY($2) THEN NULL ELSE d.client_key END AS vkey
          FROM deals d LEFT JOIN managers m ON m.id = d.manager_id ${activeJoin}
         WHERE ${conds.join(" AND ")}
      ),
      classed AS (
-       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey${bcarry},
+       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey${bcarry}${pcarry},
               (b.vkey IS NOT NULL AND EXISTS (
                  SELECT 1 FROM deals p
                   WHERE p.client_key = b.vkey AND p.status_id = 142
@@ -441,8 +469,14 @@ function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string)
          FROM base b
      ),
      final AS (
-       SELECT manager_id${bcarry}, ${CREATED_KLASS_CASE} AS klass FROM classed
+       SELECT manager_id${bcarry}${pcarry}, ${opts.klassCase} AS klass FROM classed
      )`;
+}
+
+/** Розкол СТВОРЕНИХ угод (new/repeat/undef) — анкер `created_at_kommo`. Тонка обгортка
+ * над `classifyCte` (поведінка НЕ змінилась: той самий порядок params, той самий klass). */
+function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string): string {
+  return classifyCte(s, params, { klassCase: CREATED_KLASS_CASE, bucketExpr });
 }
 
 /**
@@ -785,6 +819,16 @@ export async function newRepeatTotals(s: MetricScope): Promise<NewRepeatAgg> {
 //  • «Дохід»     = дата отримання коштів (`core/money.receivedByChannel`, канал 'leadgen').
 
 export interface DispatchRow { ym: string; deals: number; revenue: number }
+// Розбивка відправлених авто за ДЖЕРЕЛОМ (постійний / лідоген / реклама / невизн).
+// Σ(repeat+leadgen+ad+undef) = total авто того ж скоупу/бакета (партиція за SOURCE_KLASS_CASE).
+export interface DispatchSplit { repeat: number; leadgen: number; ad: number; undef: number }
+const DISPATCH_SPLIT_SELECT = `
+       COUNT(*) FILTER (WHERE klass = 'repeat')  AS repeat_c,
+       COUNT(*) FILTER (WHERE klass = 'leadgen') AS leadgen_c,
+       COUNT(*) FILTER (WHERE klass = 'ad')      AS ad_c,
+       COUNT(*) FILTER (WHERE klass = 'undef')   AS undef_c`;
+const dispatchSplitOf = (x: { repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }): DispatchSplit =>
+  ({ repeat: Number(x.repeat_c), leadgen: Number(x.leadgen_c), ad: Number(x.ad_c), undef: Number(x.undef_c) });
 /**
  * «Поїхали» помісячно за `load_at` (Дата загрузки = відправлення): угоди Повного
  * циклу з проставленою `load_at`, опційно фільтр каналу (`channel`). Сума — signed
@@ -821,24 +865,18 @@ export async function dispatchedByLoadMonth(s: MetricScope, channel?: "leadgen" 
  * «Поїхали» по БАКЕТУ (день/тиждень/місяць) у [from,to] за `load_at` — для денного
  * дрілу КВП (Крок Д фінал). Scoped, опційний канал. Additive: Σ бакетів = разом у періоді.
  */
-export async function dispatchedByLoadBucket(s: MetricScope, granularity: "day" | "week" | "month", channel?: "leadgen" | "ad" | null): Promise<DispatchRow[]> {
-  const gran = granularity;
-  const params: unknown[] = [FC_PIPELINES];
-  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
-  if (channel) { params.push(channel); conds.push(`d.lead_channel = $${params.length}`); }
-  if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
-  if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
-  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
-  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
-  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
-  const r = await pool.query<{ ym: string; deals: string; revenue: string }>(
-    `SELECT to_char(date_trunc('${gran}', (d.load_at ${KYIV})), 'YYYY-MM-DD') AS ym,
-            COUNT(*)::int AS deals, COALESCE(SUM(d.price),0) AS revenue
-       FROM deals d ${join} WHERE ${conds.join(" AND ")}
-      GROUP BY 1 ORDER BY 1`, params);
-  return r.rows.map((x) => ({ ym: x.ym, deals: Number(x.deals), revenue: Number(x.revenue) }));
+export async function dispatchedByLoadBucket(s: MetricScope, granularity: "day" | "week" | "month", channel?: "leadgen" | "ad" | null): Promise<(DispatchRow & DispatchSplit)[]> {
+  // Класифікація за ДЖЕРЕЛОМ через спільний `classifyCte` (анкер вікна = load_at,
+  // has_prior проти created_at_kommo). Active-only через зовнішній INNER JOIN.
+  const bucketExpr = `to_char(date_trunc('${granularity}', (d.load_at ${KYIV})), 'YYYY-MM-DD')`;
+  const params: unknown[] = [];
+  const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, bucketExpr, carryPrice: true, channel: channel ?? null });
+  const r = await pool.query<{ ym: string; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
+    `WITH ${cte}
+     SELECT f.bucket AS ym, COUNT(*)::int AS deals, COALESCE(SUM(f.price),0) AS revenue,${DISPATCH_SPLIT_SELECT}
+       FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
+      GROUP BY f.bucket ORDER BY f.bucket`, params);
+  return r.rows.map((x) => ({ ym: x.ym, deals: Number(x.deals), revenue: Number(x.revenue), ...dispatchSplitOf(x) }));
 }
 
 export interface MgrDayExp { managerId: number; day: string; deals: number; sum: number }
@@ -915,40 +953,32 @@ export interface MgrBucketLeads { managerId: number; bucket: string; ad: number;
 
 /** «Поїхали» (авто) ПО МЕНЕДЖЕРУ, period-total за `load_at`. Той самий предикат, що
  *  `dispatchedByManagerDay`/`dispatchedByLoadBucket`, лише згрупований по менеджеру. */
-export async function dispatchedByManager(s: MetricScope): Promise<(MgrN & { revenue: number })[]> {
-  const params: unknown[] = [FC_PIPELINES];
-  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
-  if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
-  if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
-  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
-  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
-  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
-  // + сума вартості відправлених авто (signed price — мінусові угоди нетяться коректно).
-  const r = await pool.query<{ manager_id: number; deals: string; revenue: string }>(
-    `SELECT d.manager_id, COUNT(*) deals, COALESCE(SUM(d.price),0) revenue FROM deals d ${join}
-      WHERE ${conds.join(" AND ")} AND d.manager_id IS NOT NULL GROUP BY d.manager_id`, params);
-  return r.rows.map((x) => ({ managerId: x.manager_id, deals: Number(x.deals), revenue: Number(x.revenue) }));
+export async function dispatchedByManager(s: MetricScope): Promise<(MgrN & { revenue: number } & DispatchSplit)[]> {
+  // Класифікація за ДЖЕРЕЛОМ через спільний `classifyCte` (анкер вікна = load_at,
+  // has_prior проти created_at_kommo). Active-only через зовнішній INNER JOIN на managers
+  // (m.is_active) — консистентно з money-core і зі старою поведінкою. Сума ₴ — signed price.
+  const params: unknown[] = [];
+  const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, carryPrice: true });
+  const r = await pool.query<{ manager_id: number; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
+    `WITH ${cte}
+     SELECT f.manager_id, COUNT(*) deals, COALESCE(SUM(f.price),0) revenue,${DISPATCH_SPLIT_SELECT}
+       FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
+      GROUP BY f.manager_id`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, deals: Number(x.deals), revenue: Number(x.revenue), ...dispatchSplitOf(x) }));
 }
 
-/** «Поїхали» ПО (менеджер × бакет день/тиждень/місяць) за `load_at`. Additive:
- *  Σ бакетів = `dispatchedByManager` того ж скоупу (день=тиждень=місяць інваріант). */
-export async function dispatchedByManagerBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<MgrBucketN[]> {
-  const params: unknown[] = [FC_PIPELINES];
-  const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
-  if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
-  if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
-  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
-  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
-  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
-  const r = await pool.query<{ manager_id: number; bucket: string; deals: string }>(
-    `SELECT d.manager_id, to_char(date_trunc('${granularity}', (d.load_at ${KYIV}))::date, 'YYYY-MM-DD') bucket, COUNT(*) deals
-       FROM deals d ${join} WHERE ${conds.join(" AND ")} AND d.manager_id IS NOT NULL
-      GROUP BY d.manager_id, 2 ORDER BY 2`, params);
-  return r.rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, deals: Number(x.deals) }));
+/** «Поїхали» ПО (менеджер × бакет день/тиждень/місяць) за `load_at`, з розбивкою за
+ *  джерелом. Additive: Σ бакетів = `dispatchedByManager` того ж скоупу (день=тиждень=місяць). */
+export async function dispatchedByManagerBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<(MgrBucketN & DispatchSplit)[]> {
+  const bucketExpr = `to_char(date_trunc('${granularity}', (d.load_at ${KYIV}))::date, 'YYYY-MM-DD')`;
+  const params: unknown[] = [];
+  const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, bucketExpr });
+  const r = await pool.query<{ manager_id: number; bucket: string; deals: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
+    `WITH ${cte}
+     SELECT f.manager_id, f.bucket, COUNT(*) deals,${DISPATCH_SPLIT_SELECT}
+       FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
+      GROUP BY f.manager_id, f.bucket ORDER BY f.bucket`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, deals: Number(x.deals), ...dispatchSplitOf(x) }));
 }
 
 /** «Взято лідів» ПО МЕНЕДЖЕРУ, period-total, канал ad/leadgen (той самий lead_taken

@@ -430,6 +430,8 @@ export interface KvpExpBucket { deals: number; sum: number }
 export interface KvpDetailCell {
   created: number; newCount: number; repeatCount: number; undefCount: number;
   leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
+  // Розбивка відправлених авто за джерелом (постійний / лідоген / реклама / невизн). Σ = dispatched.
+  dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number;
   received: { deals: number; revenue: number }; expected: { deals: number; sum: number };
 }
 export interface KvpDetailWeek { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; total: KvpDetailCell; days: (KvpDetailCell & { day: string })[] }
@@ -510,7 +512,9 @@ export interface KvpReport {
   funnel: { stage: string; deals: number; revenue: number }[];
 }
 // ── ЗВІТ (лендинг) — план із задачника + факт із core (макет zvit_v2) ──
-export interface ReportPlanKpi { fact: number | null; target: number; taken?: number; won?: number; revenue?: number }
+export interface ReportPlanKpi { fact: number | null; target: number; taken?: number; won?: number; revenue?: number;
+  // Тільки для «dispatch» (авто): розбивка факту за джерелом. Σ(repeat+leadgen+ad+undef) = fact.
+  repeat?: number; leadgen?: number; ad?: number; undef?: number }
 export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";

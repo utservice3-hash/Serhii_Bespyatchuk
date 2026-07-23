@@ -35,6 +35,10 @@ const addMonth = (s: string, n: number) => { const [y, m] = s.split("-").map(Num
 const todayKyiv = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
 const ddmm = (s: string) => s.slice(8) + "." + s.slice(5, 7);
 const monLbl = (s: string) => { const M = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"]; return M[Number(s.slice(5, 7)) - 1] + " " + s.slice(0, 4); };
+// Компактна розбивка авто за джерелом (пост/лід/рекл/невз), нулі приховані. «5пост · 3лід · 1рекл».
+const autoSplit = (repeat: number, leadgen: number, ad: number, undef: number): string =>
+  ([[repeat, "пост"], [leadgen, "лід"], [ad, "рекл"], [undef, "невз"]] as [number, string][])
+    .filter(([n]) => n > 0).map(([n, l]) => `${n}${l}`).join(" · ");
 
 type Mode = "day" | "week" | "month" | "range";
 
@@ -297,7 +301,7 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
           ) : (
             <>
               <Stat v={cr} l="створено" sub={`${nw}нов · ${rp}пост`} />
-              <Stat v={dispN} l="авто" sub={dispN ? `${k(dispRev)} ₴` : "0 ₴"} />
+              <Stat v={dispN} l="авто" sub={dispN ? (autoSplit(fy?.kpi.dispatch.repeat ?? 0, fy?.kpi.dispatch.leadgen ?? 0, fy?.kpi.dispatch.ad ?? 0, fy?.kpi.dispatch.undef ?? 0) || `${k(dispRev)} ₴`) : "0 ₴"} />
               <Stat v={recv} l="отримано ₴" money />
             </>
           )}
@@ -313,7 +317,8 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "0 17px 13px", marginTop: -4 }}>
         <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
         <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
-        <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target} extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`} />
+        <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target}
+          extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴${(() => { const s = autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.undef ?? 0); return s ? " · " + s : ""; })()}`} />
         <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)" />
         <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
       </div>
@@ -443,7 +448,7 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
                     ) : (
                       <>
                         <td style={{ textAlign: "right" }}>{x.created || "—"} {x.created ? <span style={{ color: MUTED, fontSize: 11 }}>({x.newCount}н·{x.repeatCount}п)</span> : null}</td>
-                        <td style={{ textAlign: "right" }}>{x.dispatched || "—"}</td>
+                        <td style={{ textAlign: "right" }}>{x.dispatched || "—"} {x.dispatched ? <span style={{ color: MUTED, fontSize: 11 }}>({autoSplit(x.dispRepeat, x.dispLeadgen, x.dispAd, x.dispUndef)})</span> : null}</td>
                         <td style={{ textAlign: "right" }}>{x.received.revenue ? fmt(x.received.revenue) + " ₴" : "—"}</td>
                         <td style={{ textAlign: "right" }}>{chk ? fmt(chk) : "—"}</td>
                         <td style={{ textAlign: "right" }}>{x.newCount}/{x.repeatCount}</td>
@@ -468,7 +473,7 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
             <tr style={{ background: "var(--bg)", fontWeight: 750, borderTop: "2px solid var(--border)" }}>
               <td style={{ textAlign: "left" }}>Σ період</td>
               <td style={{ textAlign: "right" }}>{d.monthTotals.created}</td>
-              <td style={{ textAlign: "right" }}>{d.monthTotals.dispatched}</td>
+              <td style={{ textAlign: "right" }}>{d.monthTotals.dispatched} {d.monthTotals.dispatched ? <span style={{ color: MUTED, fontSize: 11, fontWeight: 600 }}>({autoSplit(d.monthTotals.dispRepeat, d.monthTotals.dispLeadgen, d.monthTotals.dispAd, d.monthTotals.dispUndef)})</span> : null}</td>
               <td style={{ textAlign: "right" }}>{fmt(d.monthTotals.received.revenue)} ₴</td>
               <td style={{ textAlign: "right" }}>{d.monthTotals.dispatched ? fmt(Math.round(d.monthTotals.received.revenue / d.monthTotals.dispatched)) : "—"}</td>
               <td style={{ textAlign: "right" }}>{d.monthTotals.newCount}/{d.monthTotals.repeatCount}</td>
