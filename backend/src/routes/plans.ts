@@ -2,9 +2,18 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
+import type { AuthPayload } from "../auth/auth.js";
+import * as money from "../core/money.js";
+import * as metrics from "../core/metrics.js";
+import { planRecommendation, baseMonthsFor } from "../core/plans.js";
+import { monthEndOf } from "../core/dates.js";
 
 export const plansRouter = Router();
 plansRouter.use(requireAuth);
+
+// «YYYY-MM» | «YYYY-MM-DD» → 'YYYY-MM-01'; попередній місяць; N місяців тому (перше число).
+const monthStartOf = (m: string) => m.slice(0, 7) + "-01";
+const shiftMonth = (m: string, back: number) => { const [y, mm] = m.split("-").map(Number); return new Date(Date.UTC(y, mm - 1 - back, 1)).toISOString().slice(0, 10); };
 
 const upsertSchema = z.object({
   managerId: z.number(),
@@ -53,4 +62,210 @@ plansRouter.get("/", async (req, res) => {
     [managerId]
   );
   res.json({ plans: result.rows });
+});
+
+// ───────────────────────── ФОРМУВАННЯ ПЛАНУ (двоетапне погодження) ─────────────────────────
+// Роль-скоуп: manager → своя команда (read-only); team_lead → своя команда (подає);
+// admin → усі (?teamId фільтр), затверджує/повертає. У сакральний `plans` пише ЛИШЕ approve.
+
+/** Резолвер teamId зі скоупу ролі (manager/team_lead → своя команда; admin → ?teamId|усі). */
+async function formationScope(auth: AuthPayload, qTeamId?: string): Promise<{ teamId: number | null; canApprove: boolean; canSubmit: boolean }> {
+  if (auth.role === "admin") return { teamId: qTeamId ? Number(qTeamId) : null, canApprove: true, canSubmit: true };
+  if (auth.role === "team_lead") return { teamId: auth.teamId, canApprove: false, canSubmit: true };
+  // manager → своя команда, лише читання
+  const tr = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId]);
+  return { teamId: tr.rows[0]?.team_id ?? null, canApprove: false, canSubmit: false };
+}
+
+plansRouter.get("/formation", async (req, res) => {
+  const auth = req.auth!;
+  const month = monthStartOf(String(req.query.month ?? ""));
+  if (!/^\d{4}-\d{2}-01$/.test(month)) return res.status(400).json({ error: "month (YYYY-MM) обовʼязковий" });
+  const growthPct = req.query.growth != null ? Number(req.query.growth) : 0.10;
+  const { teamId, canApprove, canSubmit } = await formationScope(auth, req.query.teamId as string | undefined);
+
+  const refMonth = shiftMonth(month, 1);            // останній ЗАВЕРШЕНИЙ місяць (клієнт-спліт/історія-хвіст)
+  const refFrom = refMonth, refTo = monthEndOf(refMonth);
+  const histFrom = shiftMonth(month, 6);            // 6 повних місяців, що закінчуються refMonth
+  const scopeM: money.MoneyScope = { teamId };
+  const scopeMetric: metrics.MetricScope = { teamId };
+
+  // Ростер активних менеджерів у скоупі, згруповано по команді.
+  const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
+    `SELECT m.id, m.name, m.team_id, t.name AS team_name
+       FROM managers m LEFT JOIN teams t ON t.id = m.team_id
+      WHERE m.is_active ${teamId ? "AND m.team_id = $1" : "AND m.team_id IS NOT NULL"}
+      ORDER BY t.name NULLS LAST, m.name`, teamId ? [teamId] : []
+  )).rows;
+
+  const [hist, split, carry, plansRows, formRows] = await Promise.all([
+    money.successByManagerMonth({ ...scopeM, from: histFrom, to: refTo }),
+    metrics.clientSplitForPlan({ ...scopeMetric, from: refFrom, to: refTo }),
+    metrics.carryoverByManager({ teamId }, month),
+    pool.query<{ manager_id: number; planned_value: string }>(
+      `SELECT manager_id, planned_value FROM plans WHERE plan_date = $1 AND metric = 'payment_amount'`, [month]),
+    pool.query<{ manager_id: number; proposed_value: string; status: string; comment: string | null; return_comment: string | null;
+      submitted_by: number | null; submitted_at: string | null; submitted_name: string | null;
+      decided_by: number | null; decided_at: string | null; decided_name: string | null }>(
+      `SELECT pf.manager_id, pf.proposed_value, pf.status, pf.comment, pf.return_comment,
+              pf.submitted_by, to_char(pf.submitted_at,'YYYY-MM-DD') AS submitted_at, COALESCE(sm.name, su.email) AS submitted_name,
+              pf.decided_by, to_char(pf.decided_at,'YYYY-MM-DD') AS decided_at, COALESCE(dm.name, du.email) AS decided_name
+         FROM plan_formation pf
+         LEFT JOIN users su ON su.id = pf.submitted_by LEFT JOIN managers sm ON sm.id = su.manager_id
+         LEFT JOIN users du ON du.id = pf.decided_by LEFT JOIN managers dm ON dm.id = du.manager_id
+        WHERE pf.month = $1 AND pf.metric = 'payment_amount'`, [month]),
+  ]);
+
+  // Історія → map manager → month → {rev,deals}; 6-міс ряд + 3-міс база рекомендації.
+  const histMonths = [6, 5, 4, 3, 2, 1].map((b) => shiftMonth(month, b)); // старий→новий, закінчується refMonth
+  const histMap = new Map<number, Map<string, { revenue: number; deals: number }>>();
+  for (const r of hist) { const mm = histMap.get(r.managerId) ?? new Map(); mm.set(r.bucket, { revenue: r.revenue, deals: r.deals }); histMap.set(r.managerId, mm); }
+  const splitMap = new Map(split.map((s) => [s.managerId, s]));
+  const carryMap = new Map(carry.map((c) => [c.managerId, c.amount]));
+  const planMap = new Map(plansRows.rows.map((p) => [p.manager_id, Number(p.planned_value)]));
+  const formMap = new Map(formRows.rows.map((f) => [f.manager_id, f]));
+  const baseM = baseMonthsFor(month); // 3 повні місяці перед target
+
+  const mgrOut = roster.map((m) => {
+    const mh = histMap.get(m.id) ?? new Map();
+    const history = histMonths.map((mo) => ({ month: mo, revenue: mh.get(mo)?.revenue ?? 0, deals: mh.get(mo)?.deals ?? 0 }));
+    const recBase = baseM.map((mo) => ({ month: mo, revenue: mh.get(mo)?.revenue ?? 0, deals: mh.get(mo)?.deals ?? 0 }));
+    const rec = planRecommendation(recBase, month, growthPct);
+    const sp = splitMap.get(m.id);
+    const f = formMap.get(m.id);
+    return {
+      managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
+      history,
+      recommendation: { value: rec.recommendation, baseMonthlyAvg: rec.baseMonthlyAvg, perWorkingDay: rec.perWorkingDay, targetWorkingDays: rec.targetWorkingDays, growthPct: rec.growthPct, sparseHistory: rec.sparseHistory },
+      clients: {
+        repeat: { count: sp?.repeatCount ?? 0, sum: Math.round(sp?.repeatRevenue ?? 0) },
+        leadgen: { count: sp?.leadgenCount ?? 0, sum: Math.round(sp?.leadgenRevenue ?? 0) },
+        new: { count: sp?.newCount ?? 0, sum: Math.round(sp?.newRevenue ?? 0) },
+        undef: { count: sp?.undefCount ?? 0, sum: Math.round(sp?.undefRevenue ?? 0) },
+        total: { count: sp?.total ?? 0, sum: Math.round(sp?.totalRevenue ?? 0) },
+      },
+      carryover: Math.round(carryMap.get(m.id) ?? 0),
+      currentPlan: Math.round(planMap.get(m.id) ?? 0),
+      formation: f ? {
+        status: f.status, proposedValue: Math.round(Number(f.proposed_value)), comment: f.comment, returnComment: f.return_comment,
+        submittedBy: f.submitted_name, submittedAt: f.submitted_at, decidedBy: f.decided_name, decidedAt: f.decided_at,
+      } : { status: "draft", proposedValue: null, comment: null, returnComment: null, submittedBy: null, submittedAt: null, decidedBy: null, decidedAt: null },
+    };
+  });
+
+  // Групування по командах + лічильники шапки (рекомендовано/перенесено/затверджено/подано).
+  const teamsMap = new Map<string, { teamId: number | null; teamName: string; managers: typeof mgrOut }>();
+  for (const m of mgrOut) {
+    const key = String(m.teamId ?? "none");
+    const e = teamsMap.get(key) ?? { teamId: m.teamId, teamName: m.teamName ?? "Без команди", managers: [] as typeof mgrOut };
+    e.managers.push(m); teamsMap.set(key, e);
+  }
+  const teams = [...teamsMap.values()].map((t) => {
+    const recommended = t.managers.reduce((a, m) => a + m.recommendation.value, 0);
+    const carryover = t.managers.reduce((a, m) => a + m.carryover, 0);
+    const approved = t.managers.filter((m) => m.formation.status === "approved").length;
+    const submitted = t.managers.filter((m) => m.formation.status === "submitted").length;
+    return { teamId: t.teamId, teamName: t.teamName, total: t.managers.length, recommended, carryover, approved, submitted, managers: t.managers };
+  });
+
+  res.json({ month, refMonth, growthPct, role: auth.role, canApprove, canSubmit, teams });
+});
+
+/** Лазі-дриліл: розклад ПОСТІЙНИХ по клієнтах (розкривається під рядком «Постійні»). */
+plansRouter.get("/formation/repeat-clients", async (req, res) => {
+  const auth = req.auth!;
+  const managerId = Number(req.query.managerId);
+  const month = monthStartOf(String(req.query.month ?? ""));
+  if (!managerId || !/^\d{4}-\d{2}-01$/.test(month)) return res.status(400).json({ error: "managerId + month обовʼязкові" });
+  // Роль-скоуп: manager/team_lead — лише своя команда; admin — будь-хто.
+  if (auth.role !== "admin") {
+    const myTeam = auth.role === "team_lead" ? auth.teamId
+      : (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId])).rows[0]?.team_id ?? null;
+    const tgt = (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId])).rows[0]?.team_id ?? null;
+    if (myTeam == null || tgt !== myTeam) return res.status(403).json({ error: "Лише своя команда" });
+  }
+  const bd = await metrics.repeatClientsBreakdown(managerId, month, 4);
+  res.json(bd);
+});
+
+const submitSchema = z.object({ managerId: z.number(), month: z.string(), proposedValue: z.number(), comment: z.string().optional() });
+plansRouter.post("/formation/submit", requireRole("admin", "team_lead"), async (req, res) => {
+  const auth = req.auth!;
+  const parsed = submitSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { managerId, proposedValue, comment } = parsed.data;
+  const month = monthStartOf(parsed.data.month);
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  }
+  await pool.query(
+    `INSERT INTO plan_formation (manager_id, month, metric, proposed_value, status, comment, submitted_by, submitted_at, updated_at)
+     VALUES ($1, $2, 'payment_amount', $3, 'submitted', $4, $5, now(), now())
+     ON CONFLICT (manager_id, month, metric) DO UPDATE
+        SET proposed_value = EXCLUDED.proposed_value, status = 'submitted', comment = EXCLUDED.comment,
+            submitted_by = EXCLUDED.submitted_by, submitted_at = now(), return_comment = NULL, updated_at = now()`,
+    [managerId, month, proposedValue, comment ?? null, auth.userId]
+  );
+  res.json({ ok: true, status: "submitted" });
+});
+
+const approveSchema = z.object({ managerId: z.number().optional(), teamId: z.number().optional(), month: z.string() });
+plansRouter.post("/formation/approve", requireRole("admin"), async (req, res) => {
+  const auth = req.auth!;
+  const parsed = approveSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const month = monthStartOf(parsed.data.month);
+  const { managerId, teamId } = parsed.data;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Кого затверджуємо: конкретний менеджер АБО всі 'submitted' у команді (батч).
+    const sel: unknown[] = [month];
+    let scopeSql = "";
+    if (managerId) { sel.push(managerId); scopeSql = `AND pf.manager_id = $${sel.length}`; }
+    else if (teamId) { sel.push(teamId); scopeSql = `AND m.team_id = $${sel.length}`; }
+    const rows = (await client.query<{ manager_id: number; proposed_value: string }>(
+      `SELECT pf.manager_id, pf.proposed_value
+         FROM plan_formation pf JOIN managers m ON m.id = pf.manager_id
+        WHERE pf.month = $1 AND pf.metric = 'payment_amount' AND pf.status = 'submitted' ${scopeSql}
+        FOR UPDATE OF pf`, sel)).rows;
+    for (const r of rows) {
+      // Сакральний `plans` — ЛИШЕ дозволений metric='payment_amount' (не тиражуємо repeat-баг).
+      await client.query(
+        `INSERT INTO plans (manager_id, plan_date, metric, planned_value)
+         VALUES ($1, $2, 'payment_amount', $3)
+         ON CONFLICT (manager_id, plan_date, metric) DO UPDATE SET planned_value = EXCLUDED.planned_value`,
+        [r.manager_id, month, Number(r.proposed_value)]
+      );
+      await client.query(
+        `UPDATE plan_formation SET status = 'approved', decided_by = $3, decided_at = now(), updated_at = now()
+          WHERE manager_id = $1 AND month = $2 AND metric = 'payment_amount'`,
+        [r.manager_id, month, auth.userId]
+      );
+    }
+    await client.query("COMMIT");
+    res.json({ ok: true, approved: rows.length });
+  } catch (e) {
+    await client.query("ROLLBACK"); throw e;
+  } finally {
+    client.release();
+  }
+});
+
+const returnSchema = z.object({ managerId: z.number(), month: z.string(), returnComment: z.string().optional() });
+plansRouter.post("/formation/return", requireRole("admin"), async (req, res) => {
+  const auth = req.auth!;
+  const parsed = returnSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const month = monthStartOf(parsed.data.month);
+  const { managerId, returnComment } = parsed.data;
+  // `plans` НЕ чіпаємо — діє попередній затверджений план (якщо був).
+  const r = await pool.query(
+    `UPDATE plan_formation SET status = 'returned', return_comment = $3, decided_by = $4, decided_at = now(), updated_at = now()
+      WHERE manager_id = $1 AND month = $2 AND metric = 'payment_amount' AND status = 'submitted'`,
+    [managerId, month, returnComment ?? null, auth.userId]
+  );
+  if (r.rowCount === 0) return res.status(409).json({ error: "Немає поданого плану для повернення" });
+  res.json({ ok: true, status: "returned" });
 });

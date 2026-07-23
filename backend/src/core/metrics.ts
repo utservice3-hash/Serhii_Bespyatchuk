@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
+import { monthEndOf } from "./dates.js";
 
 /**
  * ЄДИНЕ місце в проєкті з SQL по НЕ-грошових бізнес-метриках (гроші — `core/money.ts`).
@@ -540,6 +541,176 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
   return r.rows.map((x) => ({
     bucket: x.bucket, created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
   }));
+}
+
+// ───────────── «ПЛАНИ» — клієнт-спліт нові/постійні/лідоген (won cohort) ─────────────
+
+/**
+ * Класифікатор сегмента для «Плани». 🔴 ІДЕНТИЧНИЙ `CREATED_KLASS_CASE` (тому, що ПОКАЗУЄ
+ * Звіт: трисигнальна `has_prior` — попередній won 142 по closed_at + `sales_channel` +
+ * `lead_channel`), лише `leadgen` ВІДОКРЕМЛЕНО зі спільного 'new' у власний бакет. Тобто
+ * якщо злити 'leadgen'→'new', вийде РІВНО `CREATED_KLASS_CASE`. Наслідок (прайм-директива
+ * «та сама цифра = те саме»): **repeat(Плани) ≡ repeat(Звіт)**, **leadgen+new(Плани) ≡
+ * new(Звіт)**, undef≡undef — 1:1. Гілки в ТОМУ Ж порядку (ad→new ПЕРЕД sales_channel-
+ * фолбеком), інакше ad-угода з old-міткою «Постійні» помилково впала б у repeat.
+ * ⚠️ НЕ `SEGMENT_CASE` (glossary §9): він розходиться зі Звітом (repeat по prior-PAID/
+ * created_at; ad-з-історією→repeat). Рішення власника — тримати консистентність зі Звітом.
+ */
+const PLAN_SEGMENT_KLASS_CASE = `
+  CASE
+    WHEN lead_channel = 'leadgen' THEN 'leadgen'
+    WHEN lead_channel = 'ad' THEN 'new'
+    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND has_prior THEN 'repeat'
+    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND NOT has_prior THEN 'new'
+    WHEN sales_channel = 'Постійні клієнти' THEN 'repeat'
+    WHEN sales_channel = 'Нові клієнти' THEN 'new'
+    ELSE 'undef'
+  END`;
+
+export interface ClientSplitRow {
+  managerId: number; name: string; teamId: number | null;
+  newCount: number; newRevenue: number;
+  repeatCount: number; repeatRevenue: number;
+  leadgenCount: number; leadgenRevenue: number;
+  undefCount: number; undefRevenue: number;
+  total: number; totalRevenue: number;
+}
+
+// WON-когорта = ТОЧНО money.sourceSql("success"): ЗАРАЗ 142, анкер closed_at, signed price,
+// FC-пайплайни, active-only. Тримати синхронно з money — від цього залежить Σ-інваріант
+// (спліт == successByManagerMonth[міс]). `has_prior`/`vkey` — як у classifyCte.
+function wonSplitCte(): string {
+  return `base AS (
+       SELECT dd.kommo_id, dd.manager_id, dd.created_at_kommo, dd.closed_at_kommo, dd.sales_channel,
+              dd.lead_channel, dd.price, dd.client_key, dd.client_name,
+              CASE WHEN dd.client_key IS NULL OR dd.client_key = ANY($2) THEN NULL ELSE dd.client_key END AS vkey
+         FROM deals dd JOIN managers m ON m.id = dd.manager_id AND m.is_active
+        WHERE __CONDS__
+     ),
+     classed AS (
+       SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey, b.price,
+              b.client_key, b.client_name, b.closed_at_kommo,
+              (b.vkey IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM deals p
+                  WHERE p.client_key = b.vkey AND p.status_id = 142
+                    AND p.closed_at_kommo < b.created_at_kommo AND p.kommo_id <> b.kommo_id
+              )) AS has_prior
+         FROM base b
+     )`;
+}
+/** Спільний скоуп won-когорти (params вже мають $1=FC, $2=generic). Повертає SQL-умови. */
+function wonScopeConds(s: MetricScope, params: unknown[]): string {
+  const conds = ["dd.status_id = 142", "dd.pipeline_id = ANY($1)", "dd.closed_at_kommo IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`(dd.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(dd.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`dd.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  return conds.join(" AND ");
+}
+
+/**
+ * КЛІЄНТ-СПЛІТ для «Плани» — угоди, УСПІШНО РЕАЛІЗОВАНІ (won 142, closed_at) у періоді,
+ * розкладені per-manager по джерелу: нові / постійні / лідоген / невизн (count + signed
+ * sum). Класифікація — `PLAN_SEGMENT_KLASS_CASE` (≡ Звіт). Анкер closed_at → Σ(усіх бакетів)
+ * = `money.successByManagerMonth` того ж місяця/скоупу (гейт Фази 3). undef ≈ мінімум.
+ */
+export async function clientSplitForPlan(s: MetricScope): Promise<ClientSplitRow[]> {
+  const params: unknown[] = [FC_PIPELINES, GENERIC_CLIENT_KEYS];
+  const conds = wonScopeConds(s, params);
+  const cte = wonSplitCte().replace("__CONDS__", conds);
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null;
+    new_c: string; new_r: string; repeat_c: string; repeat_r: string; leadgen_c: string; leadgen_r: string;
+    undef_c: string; undef_r: string; total: string; total_r: string }>(
+    `WITH ${cte},
+     final AS (SELECT manager_id, price, ${PLAN_SEGMENT_KLASS_CASE} AS klass FROM classed)
+     SELECT m.id AS manager_id, m.name, m.team_id,
+            COUNT(*) FILTER (WHERE klass='new')     AS new_c,     COALESCE(SUM(price) FILTER (WHERE klass='new'),0)     AS new_r,
+            COUNT(*) FILTER (WHERE klass='repeat')  AS repeat_c,  COALESCE(SUM(price) FILTER (WHERE klass='repeat'),0)  AS repeat_r,
+            COUNT(*) FILTER (WHERE klass='leadgen') AS leadgen_c, COALESCE(SUM(price) FILTER (WHERE klass='leadgen'),0) AS leadgen_r,
+            COUNT(*) FILTER (WHERE klass='undef')   AS undef_c,   COALESCE(SUM(price) FILTER (WHERE klass='undef'),0)   AS undef_r,
+            COUNT(*) AS total, COALESCE(SUM(price),0) AS total_r
+       FROM final f JOIN managers m ON m.id = f.manager_id
+      GROUP BY m.id, m.name, m.team_id
+      ORDER BY total_r DESC`,
+    params
+  );
+  return r.rows.map((x) => ({
+    managerId: x.manager_id, name: x.name, teamId: x.team_id,
+    newCount: Number(x.new_c), newRevenue: Number(x.new_r),
+    repeatCount: Number(x.repeat_c), repeatRevenue: Number(x.repeat_r),
+    leadgenCount: Number(x.leadgen_c), leadgenRevenue: Number(x.leadgen_r),
+    undefCount: Number(x.undef_c), undefRevenue: Number(x.undef_r),
+    total: Number(x.total), totalRevenue: Number(x.total_r),
+  }));
+}
+
+export interface RepeatClientRow { clientKey: string; name: string; revenue: number; orders: number; deltaPct: number | null }
+export interface RepeatClientsBreakdown {
+  clients: RepeatClientRow[];
+  rest: { count: number; revenue: number };
+  totalRevenue: number; totalClients: number;
+}
+
+/**
+ * Розклад ПОСТІЙНИХ (repeat-бакет `clientSplitForPlan`) ПО КЛІЄНТАХ для одного менеджера/
+ * місяця: назва, signed-сума, к-сть замовлень, динаміка ±% суми до ПОПЕРЕДНЬОГО місяця.
+ * Ті самі won-угоди й та сама класифікація (klass='repeat') → Σ(clients+rest) =
+ * `clientSplitForPlan.repeatRevenue` цього менеджера (гейт Фази 3). Top-N за сумою +
+ * агрегат «ще M клієнтів». Δ% = (цей − минулий)/минулий по won-сумі клієнта в цього
+ * менеджера (минулий=0 → null, показуємо як «новий сплеск»).
+ */
+export async function repeatClientsBreakdown(managerId: number, month: string, topN = 4): Promise<RepeatClientsBreakdown> {
+  const from = month.slice(0, 7) + "-01";
+  const to = monthEndOf(from);
+  const [py, pm] = from.split("-").map(Number);
+  const prevFrom = new Date(Date.UTC(py, pm - 2, 1)).toISOString().slice(0, 10);
+  const prevTo = new Date(Date.UTC(py, pm - 1, 0)).toISOString().slice(0, 10);
+
+  // Поточний місяць: repeat-угоди (та сама класифікація, klass='repeat'), груповано по
+  // client_key. Назва = найсвіжіша client_name клієнта. NULL client_key → «— без клієнта».
+  const p1: unknown[] = [FC_PIPELINES, GENERIC_CLIENT_KEYS, from, to, managerId];
+  const conds1 = `dd.status_id = 142 AND dd.pipeline_id = ANY($1) AND dd.closed_at_kommo IS NOT NULL
+      AND (dd.closed_at_kommo ${KYIV})::date >= $3 AND (dd.closed_at_kommo ${KYIV})::date <= $4
+      AND dd.manager_id = $5`;
+  const cte1 = wonSplitCte().replace("__CONDS__", conds1);
+  const cur = (await pool.query<{ client_key: string | null; name: string | null; revenue: string; orders: string }>(
+    `WITH ${cte1},
+     final AS (SELECT client_key, client_name, closed_at_kommo, price, ${PLAN_SEGMENT_KLASS_CASE} AS klass FROM classed)
+     SELECT client_key,
+            (array_agg(client_name ORDER BY closed_at_kommo DESC))[1] AS name,
+            COALESCE(SUM(price),0) AS revenue, COUNT(*) AS orders
+       FROM final WHERE klass = 'repeat'
+      GROUP BY client_key
+      ORDER BY revenue DESC`, p1
+  )).rows;
+
+  // Попередній місяць: won-сума КЛІЄНТА в цього менеджера (усі сегменти — динаміка бізнесу
+  // клієнта, не лише repeat) для Δ%. Одним запитом, лише по потрібних client_key.
+  const keys = cur.map((r) => r.client_key).filter((k): k is string => k != null);
+  const prevMap = new Map<string, number>();
+  if (keys.length) {
+    const prev = (await pool.query<{ client_key: string; revenue: string }>(
+      `SELECT dd.client_key, COALESCE(SUM(dd.price),0) AS revenue
+         FROM deals dd JOIN managers m ON m.id = dd.manager_id
+        WHERE dd.status_id = 142 AND dd.pipeline_id = ANY($1) AND dd.closed_at_kommo IS NOT NULL
+          AND (dd.closed_at_kommo ${KYIV})::date >= $2 AND (dd.closed_at_kommo ${KYIV})::date <= $3
+          AND dd.manager_id = $4 AND dd.client_key = ANY($5)
+        GROUP BY dd.client_key`, [FC_PIPELINES, prevFrom, prevTo, managerId, keys]
+    )).rows;
+    for (const r of prev) prevMap.set(r.client_key, Number(r.revenue));
+  }
+
+  const all = cur.map((r) => {
+    const revenue = Number(r.revenue);
+    const prevRev = r.client_key != null ? (prevMap.get(r.client_key) ?? 0) : 0;
+    const deltaPct = prevRev > 0 ? Math.round(((revenue - prevRev) / prevRev) * 100) : null;
+    return { clientKey: r.client_key ?? "", name: r.name ?? "— без клієнта", revenue, orders: Number(r.orders), deltaPct };
+  });
+  const totalRevenue = all.reduce((a, c) => a + c.revenue, 0);
+  const clients = all.slice(0, topN);
+  const tail = all.slice(topN);
+  const rest = { count: tail.length, revenue: tail.reduce((a, c) => a + c.revenue, 0) };
+  return { clients, rest, totalRevenue, totalClients: all.length };
 }
 
 /**

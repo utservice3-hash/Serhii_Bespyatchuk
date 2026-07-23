@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { workingDaysBetween, monthEndOf } from "./dates.js";
 
 /**
  * ЄДИНЕ ДЖЕРЕЛО «плану на менеджера для ДИСПЛЕЮ» (цеглина 1 міграції, рішення власника).
@@ -151,4 +152,46 @@ export function deriveMonthlyTarget(base: number, upliftLow = 0.10, upliftHigh =
     target: Math.round(base * (1 + upliftLow)),
     high: Math.round(base * (1 + upliftHigh)),
   };
+}
+
+export interface PlanRecMonth { month: string; revenue: number; deals: number }
+export interface PlanRecommendation {
+  recommendation: number;        // = round(baseMonthlyAvg × (1+growthPct))
+  baseMonthlyAvg: number;        // = Σ(won 3 повні міс) ÷ 3 (won 142 по closed_at, signed)
+  perWorkingDay: number;         // = round(baseMonthlyAvg ÷ targetWorkingDays) — для підпису
+  targetWorkingDays: number;     // робочі дні target-місяця (Пн–Пт)
+  growthPct: number;
+  baseMonths: PlanRecMonth[];    // 3 повні місяці бази (0 де немає)
+  sparseHistory: boolean;        // <3 місяців із фактом → рекомендація орієнтовна
+}
+
+/**
+ * РЕКОМЕНДАЦІЯ плану на target-місяць — ЧИСТА функція (без БД), щоб бари-історія і база
+ * рекомендації рахувались з ОДНИХ чисел (викликач передає ті самі `successByManagerMonth`).
+ * База = середнє won за 3 ПОВНІ місяці перед target (won 142 по closed_at, signed — рішення
+ * власника; поточний неповний місяць НЕ входить). Підпис макета «база Xк/міс → Y₴/день ×
+ * N роб.дні × 1.10»: perWorkingDay = base ÷ роб.дні(target), рекомендація = base × (1+ріст).
+ * <3 місяців із фактом → `sparseHistory` (рахуємо по наявних, ділимо на 3; прапорець у UI).
+ * 🔵 ПРИМІТКА: варіант «÷ Σ роб.дні бази × роб.дні(target)» (month-length-weighted) дає інший
+ * результат коли довжина місяців різна — тут узято base×(1+ріст) під заголовок макета 137к.
+ */
+export function planRecommendation(baseMonths: PlanRecMonth[], targetMonth: string, growthPct = 0.10): PlanRecommendation {
+  const n = baseMonths.length || 1;
+  const sumRev = baseMonths.reduce((a, m) => a + m.revenue, 0);
+  const baseMonthlyAvg = sumRev / n;
+  const monthsWithData = baseMonths.filter((m) => m.deals > 0).length;
+  const targetWorkingDays = workingDaysBetween(targetMonth.slice(0, 7) + "-01", monthEndOf(targetMonth));
+  const perWorkingDay = targetWorkingDays > 0 ? Math.round(baseMonthlyAvg / targetWorkingDays) : 0;
+  return {
+    recommendation: Math.round(baseMonthlyAvg * (1 + growthPct)),
+    baseMonthlyAvg: Math.round(baseMonthlyAvg),
+    perWorkingDay, targetWorkingDays, growthPct, baseMonths,
+    sparseHistory: monthsWithData < 3,
+  };
+}
+
+/** 3 повні місяці перед `targetMonth` ('YYYY-MM-01') → ['YYYY-MM-01' × 3] у порядку зростання. */
+export function baseMonthsFor(targetMonth: string): string[] {
+  const [y, m] = targetMonth.split("-").map(Number);
+  return [3, 2, 1].map((back) => new Date(Date.UTC(y, m - 1 - back, 1)).toISOString().slice(0, 10));
 }

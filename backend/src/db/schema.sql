@@ -869,3 +869,29 @@ CREATE TABLE IF NOT EXISTS projection_backtest (
   error_pct NUMERIC,                 -- (forecast-final)/final×100; NULL якщо final=0
   checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ── «ФОРМУВАННЯ ПЛАНУ» (двоетапне погодження, окремо від сакрального `plans`) ──
+-- Тімлід формує пропозицію плану по кожному менеджеру своєї команди (draft → submitted),
+-- КВП/адмін затверджує (approved) або повертає (returned) з коментарем. У сакральний
+-- `plans` (metric='payment_amount') число потрапляє ЛИШЕ на approve. `plans` не має місця
+-- під workflow-метадані (лише manager_id+plan_date+metric+value), тож стан живе тут.
+-- Прецедент — `repeat_client_plans` (submit→approve), але тут 4 стани (+ returned/return_comment)
+-- і рольова модель ІНША: подає тімлід, затверджує/повертає ЛИШЕ адмін.
+CREATE TABLE IF NOT EXISTS plan_formation (
+  id SERIAL PRIMARY KEY,
+  manager_id INTEGER NOT NULL REFERENCES managers(id),
+  month DATE NOT NULL,                              -- 'YYYY-MM-01' (target-місяць)
+  metric TEXT NOT NULL DEFAULT 'payment_amount',    -- наразі лише грошовий місячний план
+  proposed_value NUMERIC NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft','submitted','approved','returned')),
+  comment TEXT,                                     -- обґрунтування тімліда
+  return_comment TEXT,                              -- коментар КВП при поверненні
+  submitted_by INTEGER REFERENCES users(id),
+  submitted_at TIMESTAMPTZ,
+  decided_by INTEGER REFERENCES users(id),
+  decided_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (manager_id, month, metric)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_formation_month ON plan_formation (month, status);

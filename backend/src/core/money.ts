@@ -288,6 +288,22 @@ export async function receivedByManagerBucket(s: MoneyScope, granularity: "day" 
   return rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
 
+/**
+ * «Успішно реалізовано» (won 142, анкер `closed_at`, signed price) по (менеджер × МІСЯЦЬ)
+ * — для 6-міс історії-барів у «Плани» і для 3-міс бази рекомендації. ТА САМА success-каса
+ * (`sourceSql("success")`), лише бакет = київський місяць. Active-only. Σ менеджерів на
+ * кожен місяць = команда = відділ (той самий інваріант, що всі money-per-manager функції).
+ * Вікно [from,to] задає викликач (напр. 6 повних місяців перед target-місяцем).
+ */
+export async function successByManagerMonth(s: MoneyScope): Promise<MgrBucketRow[]> {
+  const rows = await query<{ manager_id: number; bucket: string; revenue: string; deals: string }>(
+    "success", { ...s, activeOnly: true },
+    `src.manager_id AS manager_id, to_char(date_trunc('month', (src.anchor_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
+    "GROUP BY 1, 2 ORDER BY 2"
+  );
+  return rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+
 /** received по (менеджер × тиждень) за місяць — для тижневої сітки план/факт. */
 export async function receivedByManagerWeek(managerIds: number[], monthStart: string): Promise<MgrWeekRow[]> {
   const p: unknown[] = [];
