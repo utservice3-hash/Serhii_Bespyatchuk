@@ -58,10 +58,13 @@ type NavItem = { key: string; label: string; icon: string; roles?: readonly stri
 export type NavKey = (typeof NAV_GROUPS)[number]["items"][number]["key"];
 
 // Вкладки, ПРИБРАНІ з навігації (меню/таби/командна панель) за рішенням власника —
-// «Огляд» і «Звіт 2.0». Код компонентів і ексклюзивні ендпоінти ЛИШАЮТЬСЯ в репо;
-// прямий захід на ці роути редіректиться на «Звіт» (Dashboard). NAV_GROUPS свідомо
-// НЕ чіпаємо (щоб зберегти тип NavKey і блоки рендера) — ховаємо тут, при вибірці.
-export const HIDDEN_NAV: ReadonlySet<string> = new Set<string>(["overview", "manager-report"]);
+// «Огляд», «Звіт 2.0», а також «Статистики (відділи)», «Команди», «Менеджери», «Мої звіти».
+// Код компонентів і ексклюзивні ендпоінти ЛИШАЮТЬСЯ в репо; прямий захід на ці роути
+// редіректиться на «Звіт» (Dashboard). NAV_GROUPS свідомо НЕ чіпаємо (щоб зберегти тип
+// NavKey і блоки рендера) — ховаємо тут, при вибірці.
+export const HIDDEN_NAV: ReadonlySet<string> = new Set<string>([
+  "overview", "manager-report", "depstats", "teams", "managers", "reports",
+]);
 
 /** Nav items visible to a given role (items without `roles` are visible to all). */
 export function navGroupsForRole(role: string | undefined) {
