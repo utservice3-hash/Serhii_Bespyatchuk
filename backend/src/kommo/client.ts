@@ -693,3 +693,39 @@ export async function forEachLeadNotePage(
   }
   return total;
 }
+
+/**
+ * Streams lead notes for a SPECIFIC set of lead ids (`filter[entity_id][]`), all
+ * note types, paginated. Живить цільовий бекфіл last_call_at: замість сканувати рік
+ * усіх нотаток компанії (~сотні тис.), тягнемо нотатки лише активних FC-угод по їхніх
+ * id (обмежений набір). Kommo обмежує довжину URL — викликати БАТЧАМИ (≤100 id).
+ */
+export async function forEachLeadNotePageByIds(
+  ids: number[],
+  onPage: (notes: KommoLeadNote[]) => Promise<void>
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  const limit = 250;
+  const idFilter = ids.map((id) => `${encodeURIComponent("filter[entity_id][]")}=${id}`).join("&");
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const data = await kommoRequest<KommoListResponse<KommoNoteRaw>>(
+      `/api/v4/leads/notes?limit=${limit}&page=${page}&${idFilter}`
+    );
+    const raw = data._embedded?.notes ?? [];
+    const notes: KommoLeadNote[] = raw.map((n) => ({
+      entityId: n.entity_id,
+      createdBy: n.created_by,
+      createdAt: n.created_at,
+      noteType: n.note_type,
+    }));
+    if (notes.length) {
+      await onPage(notes);
+      total += notes.length;
+    }
+    if (raw.length < limit || !data._links?.next) break;
+    page += 1;
+  }
+  return total;
+}
