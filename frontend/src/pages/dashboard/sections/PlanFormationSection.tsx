@@ -199,7 +199,7 @@ function ManagerCard({ m, month, data, onChanged }: { m: PFManager; month: strin
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "minmax(230px,1fr) minmax(260px,1.15fr) minmax(280px,1.2fr)", gap: 18, alignItems: "start" }}>
         <HistorySeg m={m} />
-        <ClientsSeg m={m} month={month} refMonth={data.refMonth} />
+        <ClientsSeg m={m} refMonth={data.refMonth} />
         <PlanSeg m={m} month={month} data={data} onChanged={onChanged} />
       </div>
     </div>
@@ -236,7 +236,7 @@ function HistorySeg({ m }: { m: PFManager }) {
   );
 }
 
-function ClientsSeg({ m, month, refMonth }: { m: PFManager; month: string; refMonth: string }) {
+function ClientsSeg({ m, refMonth }: { m: PFManager; refMonth: string }) {
   const [open, setOpen] = useState(false);
   const [bd, setBd] = useState<PFRepeatBreakdown | null>(null);
   const [loading, setLoading] = useState(false);
@@ -245,7 +245,9 @@ function ClientsSeg({ m, month, refMonth }: { m: PFManager; month: string; refMo
     const nx = !open; setOpen(nx);
     if (nx && !bd && !loading) {
       setLoading(true);
-      fetchFormationRepeatClients(m.managerId, month).then(setBd).catch(() => setBd(null)).finally(() => setLoading(false));
+      // 🔴 Розклад постійних — за РЕФЕРЕНСНИМ місяцем (той самий, що клієнт-спліт вище),
+      // НЕ за target-місяцем (той ще не настав/неповний → список був би порожній ≠ «54·88к»).
+      fetchFormationRepeatClients(m.managerId, refMonth).then(setBd).catch(() => setBd(null)).finally(() => setLoading(false));
     }
   };
   const row = (dot: string, label: string, cs: { count: number; sum: number }, extra?: React.ReactNode) => (
