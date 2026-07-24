@@ -1291,6 +1291,15 @@ export async function fetchStuckDeals(params: { managerId?: number; teamId?: num
   return data;
 }
 
+// Застряглі угоди ЗГРУПОВАНІ по менеджерах (без «стелі 50») + company-summary.
+export interface StuckGroupDeal { kommoId: number; crmUrl: string; name: string; client: string | null; price: number; stage: string; days: number; activityDays: number | null }
+export interface StuckManagerGroup { managerId: number; manager: string; teamId: number | null; teamTag: string | null; count: number; sumAtRisk: number; longestIdleDays: number; deals: StuckGroupDeal[] }
+export interface StuckGrouped { minDays: number; role: string; scope: "company" | "team" | "own"; total: number; sumRisk: number; managers: number; over90: number; groups: StuckManagerGroup[] }
+export async function fetchStuckGrouped(params: { teamId?: number; managerId?: number }): Promise<StuckGrouped> {
+  const { data } = await api.get<StuckGrouped>("/dashboard/stuck-deals-grouped", { params });
+  return data;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;

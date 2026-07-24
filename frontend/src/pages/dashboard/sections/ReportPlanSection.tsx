@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail, fetchStuckDeals,
+  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail, fetchStuckGrouped,
   type ReportPlan, type ReportPlanManager, type ReportPlanDeal, type KvpManagerDetail, type Team,
-  type StuckDeal,
+  type StuckGrouped, type StuckManagerGroup,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
@@ -525,36 +525,131 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
 }
 
 // #18 — застряглі угоди (реюз КВП /stuck-deals, роль-скоуп за токеном; найдовші вгорі).
-function StuckBlock({ teamId }: { teamId?: number }) {
-  const [deals, setDeals] = useState<StuckDeal[] | null>(null);
-  const [open, setOpen] = useState(false);
-  useEffect(() => { let a = true; setDeals(null); fetchStuckDeals(teamId ? { teamId } : {}).then((r) => a && setDeals(r.deals)).catch(() => a && setDeals([])); return () => { a = false; }; }, [teamId]);
-  const n = deals?.length ?? 0;
+// Тег команди → підпис + колір (РПК/РНК/лідоген).
+const STUCK_TAG: Record<string, { label: string; c: string }> = { rpk: { label: "РПК", c: BAR }, rnk: { label: "РНК", c: "#7a52c7" }, leadgen: { label: "ЛГ", c: GREEN } };
+// Стадія → чип-колір.
+const STUCK_STAGE_C = (s: string) => s === "Авто працює" ? GREEN : s === "Взято в роботу" ? BAR : AMBER;
+const idleColor = (d: number) => d >= 90 ? RED : d >= 21 ? AMBER : MUTED;
+const scopeLbl: Record<string, string> = { company: "вся компанія", team: "свій відділ", own: "свої угоди" };
+
+/**
+ * #18 — Застряглі угоди, ЗГРУПОВАНІ по менеджерах (переробка, без «стелі 50»): справжня
+ * к-сть, company-summary, роль-скоуп за токеном; дропдауни по менеджерах, на розкритті —
+ * ПОВНИЙ список угод менеджера (скрол при довгому), найдовший простій угорі. Реюз core.
+ */
+type StuckSort = "count" | "sum" | "idle";
+export function StuckBlock({ teamId }: { teamId?: number }) {
+  const [data, setData] = useState<StuckGrouped | null>(null);
+  const [openMgr, setOpenMgr] = useState<Set<number>>(new Set());
+  const [sortBy, setSortBy] = useState<StuckSort>("count");
+  useEffect(() => {
+    let a = true; setData(null); setOpenMgr(new Set());
+    fetchStuckGrouped(teamId ? { teamId } : {})
+      .then((d) => { if (!a) return; setData(d); if (d.scope === "own" && d.groups.length) setOpenMgr(new Set(d.groups.map((g) => g.managerId))); })
+      .catch(() => a && setData({ minDays: 7, role: "", scope: "company", total: 0, sumRisk: 0, managers: 0, over90: 0, groups: [] }));
+    return () => { a = false; };
+  }, [teamId]);
+
+  const toggleMgr = (id: number) => setOpenMgr((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const stat = (v: React.ReactNode, l: string, color?: string) => (
+    <div style={{ minWidth: 78 }}>
+      <div style={{ fontWeight: 800, fontSize: 20, lineHeight: 1.1, color: color ?? "var(--text)" }}>{v}</div>
+      <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{l}</div>
+    </div>
+  );
+
   return (
-    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, marginTop: 18, overflow: "hidden" }}>
-      <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 17px", cursor: "pointer" }}>
-        <b style={{ fontSize: 14.5 }}>🕗 Застряглі угоди {deals && <span style={{ color: n ? RED : GREEN, fontWeight: 750 }}>· {n}</span>}</b>
-        <span style={{ color: MUTED, fontSize: 12 }}>{deals == null ? "…" : `без активності: гроші/рахунок ≥7 дн., «взято в роботу» ≥21 дн. ${open ? "▲" : "▼"}`}</span>
+    <div style={{ marginTop: 18 }}>
+      <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
+        {/* Шапка */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "15px 18px", flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 750, fontSize: 16, display: "inline-flex", alignItems: "center", gap: 8 }}>
+            🕐 Застряглі угоди {data && <span style={{ color: data.total ? RED : GREEN, fontWeight: 800 }}>· {data.total}</span>}
+            <InfoHint text="Критерій — ВІДСУТНІСТЬ РУХУ, а не стадія: усі відкриті угоди без реальної людської активності понад поріг (гроші/рахунок ≥7 дн., «взято в роботу» ≥21 дн.), включно з «Авто працює». Виключено лише успіх/оплату отримано/злив. Анкер — остання активність (нотатки людини, не Salesbot). Сума в ризику — signed (сторно нетиться). Вікно створення 180 днів." />
+          </span>
+          <div style={{ textAlign: "right", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
+            без руху ≥7 дн. (рахунок/гроші) · ≥21 дн. («взято в роботу»)<br />
+            усі відкриті стадії, включно з «Авто працює» · дата = остання активність
+          </div>
+        </div>
+        {data == null ? <div style={{ padding: "0 18px 18px", color: MUTED }}>Завантаження…</div> : (
+          <>
+            {/* Summary-стрічка */}
+            <div style={{ display: "flex", alignItems: "center", gap: 26, flexWrap: "wrap", padding: "0 18px 15px", borderBottom: "1px solid var(--border)" }}>
+              {stat(data.total, "застряглих угод", RED)}
+              {stat(<>{k(data.sumRisk)} <span style={{ fontSize: 13 }}>₴</span></>, "сума в ризику", RED)}
+              {stat(data.managers, "менеджерів")}
+              {stat(data.over90, ">90 днів")}
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 12, color: MUTED, background: "var(--bg)", border: "1px solid var(--border)", padding: "5px 11px", borderRadius: 20 }}>
+                  Ти бачиш: <b style={{ color: "var(--text)" }}>{scopeLbl[data.scope]}</b>
+                </span>
+                {data.scope !== "own" && (
+                  <label style={{ fontSize: 12, color: MUTED, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    Сортувати:
+                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value as StuckSort)}
+                      style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 8px", cursor: "pointer" }}>
+                      <option value="count">за к-стю</option>
+                      <option value="sum">за сумою в ризику</option>
+                      <option value="idle">за простоєм</option>
+                    </select>
+                  </label>
+                )}
+              </div>
+            </div>
+
+            {data.groups.length === 0 ? (
+              <div style={{ padding: 18, color: MUTED, fontSize: 13 }}>Немає застряглих угод ✓</div>
+            ) : [...data.groups].sort((a, b) =>
+                  sortBy === "sum" ? b.sumAtRisk - a.sumAtRisk : sortBy === "idle" ? b.longestIdleDays - a.longestIdleDays : b.count - a.count
+                ).map((g) => (
+              <StuckMgrRow key={g.managerId} g={g} open={openMgr.has(g.managerId)} onToggle={() => toggleMgr(g.managerId)} single={data.scope === "own"} />
+            ))}
+          </>
+        )}
       </div>
-      {open && deals && (
-        <div style={{ borderTop: "1px solid var(--border)", overflowX: "auto" }}>
-          {n === 0 ? <div style={{ padding: 16, color: MUTED, fontSize: 13 }}>Немає застряглих угод ✓</div> : (
-            <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
-              <thead><tr>{["Угода", "Клієнт", "Менеджер", "Стадія", "Сума", "Днів без руху"].map((h, i) => <th key={h} style={{ textAlign: i > 3 ? "right" : "left" }}>{h}</th>)}</tr></thead>
-              <tbody>
-                {deals.map((d) => (
+
+      {/* Пояснення (макет) */}
+      <div style={{ background: "rgba(47,111,219,0.06)", border: "1px solid rgba(47,111,219,0.25)", borderRadius: 12, padding: "12px 15px", fontSize: 12, color: "var(--text)", lineHeight: 1.55, marginTop: 10 }}>
+        <b>Що рахуємо:</b> критерій — <b>відсутність руху</b>, а не стадія: усі відкриті угоди без активності понад поріг, <b>включно з «Авто працює»</b> (машина, що «працює» 175 днів, насправді стоїть). Список — по менеджерах (згорнуті), згори — <b>чесний підсумок</b> без «стелі 50»: реальна к-сть, сума в ризику (signed), критичні &gt;90 дн. <b>Роль-скоуп:</b> адмін/КВП — вся компанія, тімлід — свій відділ, менеджер — лише свої. Дата простою — від останньої активності; всередині менеджера сортування від найдовшого.
+      </div>
+    </div>
+  );
+}
+
+function StuckMgrRow({ g, open, onToggle, single }: { g: StuckManagerGroup; open: boolean; onToggle: () => void; single: boolean }) {
+  const tag = g.teamTag ? STUCK_TAG[g.teamTag] : null;
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)" }}>
+      <div onClick={onToggle} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 18px", cursor: "pointer", flexWrap: "wrap" }}>
+        <span style={{ color: MUTED, fontSize: 12 }}>{open ? "▼" : "▶"}</span>
+        <span style={{ fontWeight: 700, fontSize: 14.5 }}>{single ? "Мої застряглі" : g.manager}</span>
+        {tag && !single && <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 8px", borderRadius: 20, background: tag.c + "22", color: tag.c }}>{tag.label}</span>}
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "baseline", gap: 16 }}>
+          <span><b style={{ color: RED, fontSize: 16 }}>{g.count}</b> <span style={{ fontSize: 11, color: MUTED }}>угод</span></span>
+          <span><b style={{ fontSize: 16 }}>{k(g.sumAtRisk)} ₴</b> <span style={{ fontSize: 11, color: MUTED }}>в ризику</span></span>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: idleColor(g.longestIdleDays), background: idleColor(g.longestIdleDays) + "18", padding: "3px 10px", borderRadius: 20 }}>найдовша {g.longestIdleDays} дн</span>
+        </span>
+      </div>
+      {open && (
+        <div style={{ maxHeight: 420, overflowY: "auto", borderTop: "1px solid var(--border)", background: "var(--bg)" }}>
+          <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
+            <thead><tr>{["Угода", "Клієнт", "Стадія", "Сума", "Днів без руху"].map((h, i) => <th key={h} style={{ textAlign: i >= 3 ? "right" : "left", position: "sticky", top: 0, background: "var(--card-bg)", zIndex: 1 }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {g.deals.map((d) => {
+                const sc = STUCK_STAGE_C(d.stage);
+                return (
                   <tr key={d.kommoId}>
                     <td style={{ textAlign: "left" }}><a href={d.crmUrl} target="_blank" rel="noreferrer" style={{ color: BAR }}>{d.name || "—"}</a></td>
                     <td style={{ textAlign: "left", color: MUTED }}>{d.client || "—"}</td>
-                    <td style={{ textAlign: "left" }}>{d.manager}</td>
-                    <td style={{ textAlign: "left", color: MUTED }}>{d.stage}</td>
-                    <td style={{ textAlign: "right" }}>{d.price ? fmt(d.price) + " ₴" : "—"}</td>
-                    <td style={{ textAlign: "right", fontWeight: 700, color: d.days >= 21 ? RED : AMBER }}>{d.activityDays ?? d.days} дн.</td>
+                    <td style={{ textAlign: "left" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: sc + "1e", color: sc }}>{d.stage}</span></td>
+                    <td style={{ textAlign: "right", fontWeight: 650, color: d.price < 0 ? RED : "var(--text)" }}>{d.price ? fmt(d.price) + " ₴" : "—"}</td>
+                    <td style={{ textAlign: "right", fontWeight: 700, color: idleColor(d.days) }}>{d.days}</td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
