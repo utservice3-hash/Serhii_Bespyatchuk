@@ -1300,6 +1300,19 @@ export async function fetchStuckGrouped(params: { teamId?: number; managerId?: n
   return data;
 }
 
+// ── Статистики (діаграми) ──
+export interface StatsPoint { period: string; value: number; source: "sheet" | "crm" | "manual" }
+export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: string; points: StatsPoint[] }
+export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[] }
+export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string }): Promise<StatsSeriesResp> {
+  const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
+  return data;
+}
+export async function saveStatsManual(body: { block: string; metric: string; scopeType: string; scopeKey: string; scopeName?: string; granularity: string; period: string; value: number }): Promise<{ ok: boolean }> {
+  const { data } = await api.post<{ ok: boolean }>("/statistics/series/manual", body);
+  return data;
+}
+
 export async function fetchTeamsRanking(params: { from?: string; to?: string }): Promise<TeamRanking[]> {
   const { data } = await api.get<{ teams: TeamRanking[] }>("/dashboard/teams", { params });
   return data.teams;

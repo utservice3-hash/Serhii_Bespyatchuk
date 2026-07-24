@@ -55,9 +55,3 @@ export const STAGE_COLORS: Record<string, string> = {
 
 export const STAGE_ORDER = Object.keys(STAGE_LABELS);
 
-export const STAT_CHARTS = [
-  { key: "stages", title: "Динаміка по етапах" },
-  { key: "revenue", title: "Динаміка виручки (оплачено)" },
-  { key: "count", title: "Динаміка кількості оплат" },
-  { key: "avgcheck", title: "Динаміка середнього чека" },
-];

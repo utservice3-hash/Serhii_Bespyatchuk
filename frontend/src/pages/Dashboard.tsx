@@ -1,19 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  BarChart,
-  Bar,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Legend,
-  CartesianGrid,
-  ResponsiveContainer,
-  LabelList,
-} from "recharts";
-import {
   createTask,
   createTaskPlan,
   deleteTask,
@@ -75,7 +62,8 @@ import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout
 import { DateRangeFilter, QuickPeriods, getDateRange } from "../components/DateRangeFilter";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
-import { STAGE_LABELS, STAGE_COLORS, STAGE_ORDER, STAT_CHARTS } from "./dashboard/constants";
+import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
+import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
@@ -165,15 +153,14 @@ export function Dashboard() {
     else localStorage.removeItem("datePreset");
   }, [datePreset]);
   const [conversionChannels, setConversionChannels] = useState<ConversionChannel[]>([]);
-  const [paidDynamics, setPaidDynamics] = useState<
+  const [, setPaidDynamics] = useState<
     { period: string; revenue: number; paidCount: number; avgCheck: number }[]
   >([]);
-  const [zoomChart, setZoomChart] = useState<string | null>(null);
   const [overview, setOverview] = useState<ExecutiveOverview | null>(null);
   const [prevStages, setPrevStages] = useState<FunnelStage[]>([]);
   const [prevOverview, setPrevOverview] = useState<ExecutiveOverview | null>(null);
   const [kpiDetail, setKpiDetail] = useState<string | null>(null);
-  const [timeseries, setTimeseries] = useState<Record<string, number | string>[]>([]);
+  const [, setTimeseries] = useState<Record<string, number | string>[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [managerTeamId, setManagerTeamId] = useState<number | "">("");
@@ -832,82 +819,6 @@ export function Dashboard() {
       amount: Number(s.total_amount),
     }));
 
-  function renderStatChart(key: string, height: number) {
-    if (key === "stages") {
-      return (
-        <ResponsiveContainer width="100%" height={height}>
-          <LineChart data={timeseries}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            {STAGE_ORDER.map((stage) => (
-              <Line
-                key={stage}
-                type="monotone"
-                dataKey={stage}
-                name={STAGE_LABELS[stage]}
-                stroke={STAGE_COLORS[stage]}
-                strokeWidth={2.5}
-                dot={false}
-                activeDot={{ r: 4 }}
-                connectNulls
-              />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
-      );
-    }
-    if (key === "revenue") {
-      return (
-        <ResponsiveContainer width="100%" height={height}>
-          <BarChart data={paidDynamics} margin={{ top: 12 }}>
-            <defs>
-              <linearGradient id="statBar" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#e11d2a" />
-                <stop offset="100%" stopColor="#8f0f1c" />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" opacity={0.35} vertical={false} />
-            <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
-            <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-            <Tooltip formatter={(v) => formatAmount(Number(v))} cursor={{ fill: "rgba(197,20,28,0.06)" }} />
-            <Bar dataKey="revenue" name="Виручка" fill="url(#statBar)" radius={[4, 4, 0, 0]}>
-              {height >= 500 && (
-                <LabelList dataKey="revenue" position="top" formatter={(v) => formatAmount(Number(v))} style={{ fontSize: 10, fontWeight: 600, fill: "var(--text)" }} />
-              )}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      );
-    }
-    if (key === "count") {
-      return (
-        <ResponsiveContainer width="100%" height={height}>
-          <LineChart data={paidDynamics}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
-            <YAxis />
-            <Tooltip />
-            <Line type="monotone" dataKey="paidCount" name="Оплачено угод" stroke="#16a34a" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} connectNulls />
-          </LineChart>
-        </ResponsiveContainer>
-      );
-    }
-    // avgcheck
-    return (
-      <ResponsiveContainer width="100%" height={height}>
-        <LineChart data={paidDynamics}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="period" interval="preserveStartEnd" minTickGap={20} />
-          <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-          <Tooltip formatter={(v) => formatAmountFull(Number(v))} />
-          <Line type="monotone" dataKey="avgCheck" name="Середній чек" stroke="#7c3aed" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} connectNulls />
-        </LineChart>
-      </ResponsiveContainer>
-    );
-  }
 
   const totalDeals = chartData.reduce((sum, s) => sum + s.count, 0);
   // Average check = received money per received-money deal — the same base as
@@ -1041,135 +952,7 @@ export function Dashboard() {
 
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
 
-      {section === "statistics" && (
-        <>
-          <div className="page-header">
-            <h1 className="page-title">Статистика</h1>
-            <div className="page-filters">
-              {auth?.role !== "manager" && (
-                <select
-                  value={teamId}
-                  onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")}
-                >
-                  <option value="">{auth?.role === "team_lead" ? "Моя команда" : "Усі команди"}</option>
-                  {teamOptions(teams)}
-                </select>
-              )}
-              <select
-                value={granularity}
-                onChange={(e) => setGranularity(e.target.value as "day" | "week" | "month")}
-              >
-                <option value="day">По днях</option>
-                <option value="week">По тижнях</option>
-                <option value="month">По місяцях</option>
-              </select>
-              <DateRangeFilter
-                value={dateRange}
-                onChange={(r) => {
-                  setDateRange(r);
-                  setDatePreset(null);
-                }}
-              />
-            </div>
-          </div>
-
-          <QuickPeriods
-            active={datePreset}
-            onSelect={(id, range) => {
-              setDatePreset(id);
-              setDateRange(range);
-            }}
-          />
-
-          {loading ? (
-            <p className="loading-text">Завантаження...</p>
-          ) : (
-            <div className="chart-grid">
-              {STAT_CHARTS.map((c) => (
-                <div className="chart-card" key={c.key}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <h2 className="chart-title">{c.title}</h2>
-                    <button
-                      onClick={() => setZoomChart(c.key)}
-                      title="Збільшити"
-                      style={{
-                        border: "1px solid #d0d5dd",
-                        background: "#fff",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                        padding: "2px 8px",
-                        fontSize: 16,
-                      }}
-                    >
-                      ⛶
-                    </button>
-                  </div>
-                  {renderStatChart(c.key, 300)}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {zoomChart && (
-            <div
-              onClick={() => setZoomChart(null)}
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(0,0,0,0.55)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                zIndex: 2000,
-                padding: 24,
-              }}
-            >
-              <div
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  background: "#fff",
-                  borderRadius: 12,
-                  padding: 24,
-                  width: "90vw",
-                  maxWidth: 1200,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: 12,
-                  }}
-                >
-                  <h2 className="chart-title">
-                    {STAT_CHARTS.find((c) => c.key === zoomChart)?.title}
-                  </h2>
-                  <button
-                    onClick={() => setZoomChart(null)}
-                    style={{
-                      border: "1px solid #d0d5dd",
-                      background: "#fff",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                      padding: "4px 12px",
-                    }}
-                  >
-                    ✕ Закрити
-                  </button>
-                </div>
-                {renderStatChart(zoomChart, 600)}
-              </div>
-            </div>
-          )}
-        </>
-      )}
+      {section === "statistics" && <StatisticsChartsSection role={auth?.role} />}
 
       {section === "teams" && auth?.role !== "manager" && (
         <TeamsSection
