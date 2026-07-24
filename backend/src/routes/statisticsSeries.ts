@@ -19,8 +19,8 @@ statsSeriesRouter.use(requireAuth);
 
 type Gran = "day" | "week" | "month";
 interface Point { period: string; value: number; source: "sheet" | "crm" | "manual" }
-interface Series { scopeType: string; scopeKey: string; scopeName: string; points: Point[] }
-interface ScopeSpec { scopeType: string; scopeKey: string; scopeName: string; teamId: number | null; managerId: number | null }
+interface Series { scopeType: string; scopeKey: string; scopeName: string; points: Point[]; benchmark?: boolean }
+interface ScopeSpec { scopeType: string; scopeKey: string; scopeName: string; teamId: number | null; managerId: number | null; benchmark?: boolean }
 
 // ── LIVE-обчислювачі (реюз ядра). period='YYYY-MM-DD', source='crm'. Метрики без запису
 //    тут CRM-продовження через core НЕ мають (calls/finance/hr — через depstats-read нижче). ──
@@ -181,14 +181,27 @@ async function stitch(block: string, metric: string, g: Gran, from: string, to: 
   for (const p of sheet) byPeriod.set(p.period, p);
   for (const p of crm) byPeriod.set(p.period, p);
   const points = [...byPeriod.values()].filter((p) => p.period >= from && p.period <= to).sort((a, b) => a.period.localeCompare(b.period));
-  return { scopeType: sc.scopeType, scopeKey: sc.scopeKey, scopeName: sc.scopeName, points };
+  return { scopeType: sc.scopeType, scopeKey: sc.scopeKey, scopeName: sc.scopeName, points, ...(sc.benchmark ? { benchmark: true } : {}) };
 }
 
-function seriesSet(auth: { role: string; teamId: number | null; managerId: number | null }): ScopeSpec[] {
+// 🔒 СЕРВЕРНИЙ КЛАМП роль-скоупу. Тімлід бачить свою команду + її менеджерів ПЛЮС компанію
+// ЛИШЕ як агрегат-бенчмарк (одна серія значень; чужих команд/менеджерів у payload НЕМА).
+async function seriesSet(auth: { role: string; teamId: number | null; managerId: number | null }): Promise<ScopeSpec[]> {
   const company: ScopeSpec = { scopeType: "company", scopeKey: "company", scopeName: "Компанія", teamId: null, managerId: null };
   const teamOf = (t: { id: number; name: string }): ScopeSpec => ({ scopeType: "team_lead", scopeKey: String(t.id), scopeName: t.name, teamId: t.id, managerId: null });
   if (auth.role === "admin") return [company, ...LIVE_TEAMS.map(teamOf)];
-  if (auth.role === "team_lead") { const own = LIVE_TEAMS.find((t) => t.id === auth.teamId); return [company, ...(own ? [teamOf(own)] : [])]; }
+  if (auth.role === "team_lead") {
+    const own = LIVE_TEAMS.find((t) => t.id === auth.teamId);
+    if (!own) return [company]; // некомерційний тімлід → лише бенчмарк
+    const mgrs = await pool.query<{ id: number; name: string }>(
+      `SELECT id, name FROM managers WHERE team_id = $1 AND is_active ORDER BY name`, [own.id]);
+    // company = АГРЕГАТ-бенчмарк (без деком­позиції); далі своя команда + її менеджери.
+    return [
+      { ...company, benchmark: true },
+      teamOf(own),
+      ...mgrs.rows.map((m): ScopeSpec => ({ scopeType: "manager", scopeKey: String(m.id), scopeName: m.name, teamId: null, managerId: m.id })),
+    ];
+  }
   if (auth.managerId != null) return [{ scopeType: "manager", scopeKey: String(auth.managerId), scopeName: "Мої", teamId: null, managerId: auth.managerId }];
   return [company];
 }
@@ -202,7 +215,7 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const from = String(req.query.from ?? "2024-07-01");
   const to = String(req.query.to ?? "2026-12-31");
   if (!metric) return res.status(400).json({ error: "metric обовʼязковий" });
-  const set = seriesSet({ role: auth.role, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null });
+  const set = await seriesSet({ role: auth.role, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null });
   const series = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
   res.json({ block, metric, granularity: g, seam: STATS_SEAM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series });
 });

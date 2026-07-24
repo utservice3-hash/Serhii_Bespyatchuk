@@ -204,8 +204,12 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
               {seriesList.map((s, i) => (
                 <span key={s.scopeKey} onClick={() => toggle(s.scopeKey)} onDoubleClick={() => isolate(s.scopeKey)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 650, cursor: "pointer", opacity: hidden.has(s.scopeKey) ? 0.4 : 1, userSelect: "none" }}>
-                  <span style={{ width: 11, height: 11, borderRadius: "50%", background: color(i) }} /> {s.scopeName}
+                  title={s.benchmark ? "бенчмарк — агрегат компанії (для порівняння)" : undefined}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 650, cursor: "pointer", opacity: hidden.has(s.scopeKey) ? 0.4 : 1, userSelect: "none", color: s.benchmark ? MUTED : "var(--text)" }}>
+                  {s.benchmark
+                    ? <span style={{ width: 14, height: 0, borderTop: "2px dashed #94a3b8" }} />
+                    : <span style={{ width: 11, height: 11, borderRadius: "50%", background: color(i) }} />}
+                  {s.scopeName}{s.benchmark && " (бенчмарк)"}
                 </span>
               ))}
             </div>
@@ -227,8 +231,9 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                 <ReferenceLine x={rows.find((r) => r.period >= SEAM)?.period} stroke="#94a3b8" strokeDasharray="5 4"
                   label={{ value: "історія · CRM", position: "insideTopRight", fontSize: 10.5, fill: MUTED }} />
                 {visibleSeries.map(({ s, i }) => (
-                  <Line key={s.scopeKey} type="monotone" dataKey={`s${i}`} name={s.scopeName} stroke={color(i)} strokeWidth={i === 0 ? 2.4 : 1.8}
-                    dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+                  <Line key={s.scopeKey} type="monotone" dataKey={`s${i}`} name={s.scopeName}
+                    stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : i === 0 ? 2.4 : 1.8}
+                    strokeDasharray={s.benchmark ? "6 4" : undefined} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
                 ))}
                 {drag.a && drag.b && <ReferenceArea x1={drag.a} x2={drag.b} fill="#2f6fdb" fillOpacity={0.08} />}
                 <Brush dataKey="period" height={26} travellerWidth={9} stroke="#94a3b8" tickFormatter={shortDate}
