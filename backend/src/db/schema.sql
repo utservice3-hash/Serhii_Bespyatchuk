@@ -788,6 +788,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_statistics_values
 CREATE INDEX IF NOT EXISTS idx_statistics_values_lookup
   ON statistics_values(department, period_type, period_start);
 
+-- Вкладка «Статистики» (діаграми): історія з гугл-таблиці (source='sheet') + ручні
+-- точки (source='manual', бюджети/тендери тощо). CRM-ера (≥ шов 2026-07-01) для CRM-able
+-- метрик рахується LIVE ядром і ТУТ НЕ зберігається (див. routes/statisticsSeries.ts).
+-- Окрема від statistics_values (депстат) — інше призначення, per-scope + per-manager.
+CREATE TABLE IF NOT EXISTS stats_series (
+  id BIGSERIAL PRIMARY KEY,
+  block TEXT NOT NULL,                 -- sales|marketing|logistics|intl|tenders|lgintl|finance|hr
+  metric_key TEXT NOT NULL,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('company','team_lead','unit')),
+  scope_key TEXT NOT NULL,             -- стабільний ключ: team_id (текст) для живих команд; назва — для історичних/unit/company
+  scope_name TEXT NOT NULL,            -- показова назва
+  granularity TEXT NOT NULL CHECK (granularity IN ('month','week')),
+  period_date DATE NOT NULL,
+  value DOUBLE PRECISION NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('sheet','manual')),
+  entered_by INT,                      -- managers.id для source='manual' (аудит)
+  entered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stats_series
+  ON stats_series(metric_key, scope_type, scope_key, granularity, period_date, source);
+CREATE INDEX IF NOT EXISTS idx_stats_series_lookup
+  ON stats_series(block, metric_key, granularity, period_date);
+
 -- §3b словника (13.07.2026): adSources живе В БД, а не в дефолтах коду.
 -- Мовчазний мердж дефолтів прибрано з getSettings(); зміни списку журналюються.
 CREATE TABLE IF NOT EXISTS ad_sources_log (
