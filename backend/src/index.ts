@@ -25,6 +25,7 @@ import { dutyRouter } from "./routes/duty.js";
 import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { trainingRouter } from "./routes/training.js";
 import { statisticsRouter } from "./routes/statistics.js";
+import { statsSeriesRouter } from "./routes/statisticsSeries.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
 import { reconcileNightly } from "./jobs/reconcileNightly.js";
 import { freshnessWatch, abandonedStagesWatch } from "./jobs/freshnessWatch.js";
@@ -80,6 +81,7 @@ app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
 app.use("/api/training", trainingRouter);
 app.use("/api/statistics", statisticsRouter);
+app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".

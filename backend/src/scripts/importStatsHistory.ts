@@ -13,39 +13,7 @@
 import fs from "node:fs";
 import { pool } from "../db/pool.js";
 import { parseCsv } from "../utils/csv.js";
-
-const SEAM = "2026-07-01"; // шов sheet→crm
-
-// CRM-able набір: для цих метрик точки >= SEAM пропускаємо (CRM їх рахує live).
-// Тримати синхронно з live-обчислювачами у Фазі 2 (спільне джерело правди перенесемо туди).
-const CRM_ABLE: Record<string, Set<string>> = {
-  sales: new Set(["revenue_success", "avg_check", "calls", "cars_success", "cars_delivered", "payment_received", "managers_count", "cash_deals_sum"]),
-  marketing: new Set(["ad_leads", "ad_offtarget_leads", "ad_new_revenue", "ad_new_paid_cars", "ad_avg_check", "lg_transfers", "lg_new_revenue", "lg_new_clients", "lg_avg_check", "revenue_all_clients"]),
-  logistics: new Set(["repeat_clients_sum", "repeat_clients_cars", "repeat_clients_active", "repeat_avg_check", "cars_delivered_all"]),
-  intl: new Set(["intl_delivered_sum", "intl_delivered_cars", "intl_avg_check", "intl_new_sum", "intl_new_cars", "intl_new_avg_check", "intl_repeat_sum", "intl_repeat_cars", "intl_repeat_avg_check"]),
-  // tenders/lgintl/finance/hr + marketing-бюджети → import all (manual/depstats/воронка закрита)
-};
-const isCrmAble = (block: string, metric: string) => CRM_ABLE[block]?.has(metric) ?? false;
-
-// team_lead (scope_name у CSV) → {key, name}. Живі команди — team_id; історичні — назва.
-const TEAM_LEAD_MAP: Record<string, { key: string; name: string }> = {
-  "Яцик": { key: "5", name: "Яцик" },
-  "Дмитрук": { key: "6", name: "Дмитрук" },
-  "Шаврова": { key: "14", name: "Шаврова" },
-  "Безпамятний": { key: "13", name: "Безпамятний" },
-  "Михальчевська": { key: "15", name: "Михальчевська" },
-  "самостійні": { key: "36283", name: "Самостійні" },   // жива команда 36283 (Шевчук Назар) → CRM продовжує
-  "Шевчук": { key: "Шевчук", name: "Шевчук" },           // окрема історична серія (перетин дат із «самостійні») → без CRM
-};
-// Історичні тімліди без команд — ключ = назва, без CRM-продовження.
-function scopeForTeamLead(raw: string): { key: string; name: string } {
-  return TEAM_LEAD_MAP[raw] ?? { key: raw, name: raw };
-}
-function scopeFor(scopeType: string, raw: string): { key: string; name: string } {
-  if (scopeType === "company") return { key: "company", name: raw };       // UTS
-  if (scopeType === "team_lead") return scopeForTeamLead(raw);
-  return { key: raw, name: raw };                                          // unit — назва як ключ
-}
+import { STATS_SEAM as SEAM, isCrmAble, scopeFor } from "../statistics/seriesCatalog.js";
 
 async function main() {
   const fileArg = process.argv.find((a) => a.startsWith("--file="));
