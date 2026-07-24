@@ -22,39 +22,62 @@ function isHumanActivity(n: KommoLeadNote): boolean {
   return HUMAN_NOTE_TYPES.has(n.noteType);
 }
 
+// Дзвінок клієнту = лише call_in/call_out (людські). Окремо від last_activity_at,
+// бо той змішує дзвінки з нотатками/sms/чатом — а нам треба саме РОЗМОВУ.
+function isHumanCall(n: KommoLeadNote): boolean {
+  if (n.createdBy === 0) return false;
+  return n.noteType === "call_in" || n.noteType === "call_out";
+}
+
 async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
   // Collapse to the EARLIEST and LATEST human-activity timestamp per lead in this
   // page. last_activity_at → «застряглі» (остання активність); first_activity_at
   // → «час опрацювання» (перший контакт менеджера з лідом).
   const earliest = new Map<number, number>();
   const latest = new Map<number, number>();
+  const latestCall = new Map<number, number>(); // останній ДЗВІНОК (call_in/call_out) per lead
   for (const n of notes) {
+    if (isHumanCall(n)) {
+      const c = latestCall.get(n.entityId) ?? 0;
+      if (n.createdAt > c) latestCall.set(n.entityId, n.createdAt);
+    }
     if (!isHumanActivity(n)) continue;
     const lo = earliest.get(n.entityId);
     if (lo == null || n.createdAt < lo) earliest.set(n.entityId, n.createdAt);
     const hi = latest.get(n.entityId) ?? 0;
     if (n.createdAt > hi) latest.set(n.entityId, n.createdAt);
   }
-  if (latest.size === 0) return;
+  if (latest.size === 0 && latestCall.size === 0) return;
 
+  // Об'єднуємо ключі: угода може мати дзвінок без іншої активності (і навпаки лишень
+  // теоретично — дзвінок сам по собі вже activity). NULL у відсутньому анкері не чіпає
+  // колонку (GREATEST з COALESCE-нейтралем).
+  const allIds = new Set<number>([...latest.keys(), ...latestCall.keys()]);
   const ids: number[] = [];
-  const tsHi: Date[] = [];
-  const tsLo: Date[] = [];
-  for (const [id, hi] of latest) {
+  const tsHi: (Date | null)[] = [];
+  const tsLo: (Date | null)[] = [];
+  const tsCall: (Date | null)[] = [];
+  for (const id of allIds) {
     ids.push(id);
-    tsHi.push(new Date(hi * 1000));
-    tsLo.push(new Date((earliest.get(id) ?? hi) * 1000));
+    const hi = latest.get(id);
+    tsHi.push(hi != null ? new Date(hi * 1000) : null);
+    tsLo.push(hi != null ? new Date((earliest.get(id) ?? hi) * 1000) : null);
+    const call = latestCall.get(id);
+    tsCall.push(call != null ? new Date(call * 1000) : null);
   }
-  // last_activity_at рухається лише вперед (GREATEST); first_activity_at — лише
-  // назад (LEAST), тож стабілізується на найпершому контакті, щойно вікно синку
-  // його покриє. Оновлюємо на місці — нотатка завжди належить уже синхронізованій угоді.
+  // Postgres GREATEST/LEAST ІГНОРУЮТЬ NULL (результат NULL лише коли всі NULL). Тож:
+  // last_activity_at рухається лише вперед, first_activity_at лише назад, last_call_at —
+  // окремий анкер лише вперед. NULL у порції (напр. нотатка без дзвінка → v.call=NULL)
+  // лишає збережене значення недоторканим, а угода без ЖОДНОГО дзвінка тримає last_call_at=NULL
+  // («дзвінка не було»). Це коректніше за COALESCE(...,'epoch'), який засмітив би 1970-м.
   await pool.query(
     `UPDATE deals d
-        SET last_activity_at  = GREATEST(COALESCE(d.last_activity_at, 'epoch'::timestamptz), v.hi),
-            first_activity_at = LEAST(COALESCE(d.first_activity_at, 'infinity'::timestamptz), v.lo)
-       FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS hi, UNNEST($3::timestamptz[]) AS lo) v
+        SET last_activity_at  = GREATEST(d.last_activity_at, v.hi),
+            first_activity_at = LEAST(d.first_activity_at, v.lo),
+            last_call_at      = GREATEST(d.last_call_at, v.call)
+       FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS hi, UNNEST($3::timestamptz[]) AS lo, UNNEST($4::timestamptz[]) AS call) v
       WHERE d.kommo_id = v.kommo_id`,
-    [ids, tsHi, tsLo]
+    [ids, tsHi, tsLo, tsCall]
   );
 }
 

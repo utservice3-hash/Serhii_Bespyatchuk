@@ -2248,6 +2248,9 @@ export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Pro
 export interface StuckGroupDeal {
   kommoId: number; name: string; client: string | null; price: number;
   stage: string; days: number; activityDays: number | null;
+  lastCallAt: string | null;        // ISO дата останнього дзвінка клієнту (null = не було)
+  daysSinceLastCall: number | null; // днів від останнього дзвінка (null = не було)
+  noCallFlag: boolean;              // «метушня без контакту»: свіжа активність, але місяць без дзвінка
 }
 export interface StuckManagerGroup {
   managerId: number; manager: string; teamId: number | null; teamName: string | null;
@@ -2285,14 +2288,21 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const r = await pool.query<{ kommo_id: string; name: string; client: string | null; price: string;
     manager_id: number; manager: string; team_id: number | null; team_name: string | null;
-    stage: string; days: string; activity_days: string | null }>(
+    stage: string; days: string; activity_days: string | null;
+    last_call_at: Date | null; days_since_last_call: string | null; no_call_flag: boolean }>(
     `SELECT d.kommo_id, d.name, d.client_name AS client, d.price,
             m.id AS manager_id, m.name AS manager, m.team_id, t.name AS team_name,
             CASE WHEN ${AVTO} THEN 'Авто працює'
                  WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
                  WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
             EXTRACT(DAY FROM now() - ${ACT})::int AS days,
-            EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days
+            EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days,
+            d.last_call_at,
+            EXTRACT(DAY FROM now() - d.last_call_at)::int AS days_since_last_call,
+            -- «метушня без контакту»: свіжа активність (<30д) АЛЕ дзвінка не було / місяць без дзвінка (≥30д)
+            (   (d.last_call_at IS NULL OR now() - d.last_call_at >= interval '30 days')
+                AND d.last_activity_at IS NOT NULL
+                AND now() - d.last_activity_at < interval '30 days' ) AS no_call_flag
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      LEFT JOIN teams t ON t.id = m.team_id
@@ -2310,7 +2320,10 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
     let g = map.get(x.manager_id);
     if (!g) { g = { managerId: x.manager_id, manager: x.manager, teamId: x.team_id, teamName: x.team_name, count: 0, sumAtRisk: 0, longestIdleDays: 0, deals: [] }; map.set(x.manager_id, g); }
     g.count++; g.sumAtRisk += price; g.longestIdleDays = Math.max(g.longestIdleDays, days);
-    g.deals.push({ kommoId: Number(x.kommo_id), name: x.name, client: x.client, price, stage: x.stage, days, activityDays: x.activity_days == null ? null : Number(x.activity_days) });
+    g.deals.push({ kommoId: Number(x.kommo_id), name: x.name, client: x.client, price, stage: x.stage, days, activityDays: x.activity_days == null ? null : Number(x.activity_days),
+      lastCallAt: x.last_call_at == null ? null : new Date(x.last_call_at).toISOString(),
+      daysSinceLastCall: x.days_since_last_call == null ? null : Number(x.days_since_last_call),
+      noCallFlag: x.no_call_flag === true });
   }
   const groups = [...map.values()].sort((a, b) => b.count - a.count || b.longestIdleDays - a.longestIdleDays);
   return { total: r.rows.length, sumRisk, managers: groups.length, over90, groups };

@@ -3360,6 +3360,7 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
       deals: grp.deals.map((d) => ({
         kommoId: d.kommoId, crmUrl: kommoLeadUrl(d.kommoId), name: d.name, client: d.client,
         price: d.price, stage: d.stage, days: d.days, activityDays: d.activityDays,
+        lastCallAt: d.lastCallAt, daysSinceLastCall: d.daysSinceLastCall, noCallFlag: d.noCallFlag,
       })),
     })),
   });

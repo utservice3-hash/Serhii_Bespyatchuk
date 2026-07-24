@@ -546,7 +546,14 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
   useEffect(() => {
     let a = true; setData(null); setOpenMgr(new Set());
     fetchStuckGrouped(teamId ? { teamId } : {})
-      .then((d) => { if (!a) return; setData(d); setOpenMgr(new Set()); })
+      .then((d) => {
+        if (!a) return;
+        setData(d);
+        // Авто-відкриття секції, коли є критичні (>90 дн); інакше згорнута. Ручний тоггл далі перекриває.
+        setSectionOpen(d.over90 > 0);
+        // Авто-розгортання ЛИШЕ менеджерів із ≥1 критичною угодою (longestIdleDays ≥ 90); решта згорнуті.
+        setOpenMgr(new Set(d.groups.filter((g) => g.longestIdleDays >= 90).map((g) => g.managerId)));
+      })
       .catch(() => a && setData({ minDays: 7, role: "", scope: "company", total: 0, sumRisk: 0, managers: 0, over90: 0, groups: [] }));
     return () => { a = false; };
   }, [teamId]);
@@ -569,6 +576,7 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
             <span style={{ color: MUTED, fontSize: 13, width: 12, display: "inline-block" }}>{sectionOpen ? "▾" : "▸"}</span>
             🕐 Застряглі угоди {data && <span style={{ color: data.total ? RED : GREEN, fontWeight: 800 }}>· {data.total}</span>}
             {data && data.total > 0 && <span style={{ color: MUTED, fontWeight: 700, fontSize: 14 }}>· {k(data.sumRisk)} ₴ в ризику</span>}
+            {data && data.over90 > 0 && <span style={{ fontSize: 11.5, fontWeight: 800, color: "#fff", background: RED, padding: "2px 9px", borderRadius: 20 }}>⚠️ {data.over90} &gt;90 дн</span>}
             <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}>
               <InfoHint text="Критерій — ВІДСУТНІСТЬ РУХУ, а не стадія: усі відкриті угоди без реальної людської активності понад поріг (гроші/рахунок ≥7 дн., «взято в роботу» ≥21 дн.), включно з «Авто працює». Виключено лише успіх/оплату отримано/злив. Анкер — остання активність (нотатки людини, не Salesbot). Сума в ризику — signed (сторно нетиться). Вікно створення 180 днів." />
             </span>
@@ -625,13 +633,20 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
   );
 }
 
+const STUCK_COLS: { h: string; r?: boolean; hint?: string }[] = [
+  { h: "Угода" }, { h: "Клієнт" }, { h: "Стадія" }, { h: "Сума", r: true }, { h: "Днів без руху", r: true },
+  { h: "Остання розмова", r: true, hint: "Дата останнього ДЗВІНКА клієнту (call_in/call_out у CRM), а не будь-якої активності. 🚩 — свіжа активність є, але місяць без дзвінка (метушня без контакту)." },
+];
+
 function StuckMgrRow({ g, open, onToggle, single }: { g: StuckManagerGroup; open: boolean; onToggle: () => void; single: boolean }) {
   const tag = g.teamTag ? STUCK_TAG[g.teamTag] : null;
+  const hasCritical = g.longestIdleDays >= 90; // ≥1 критична угода (>90 дн) → червоний акцент рядка
   return (
-    <div style={{ borderBottom: "1px solid var(--border)" }}>
+    <div style={{ borderBottom: "1px solid var(--border)", borderLeft: hasCritical ? `3px solid ${RED}` : "3px solid transparent", background: hasCritical ? RED + "0a" : undefined }}>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 18px", cursor: "pointer", flexWrap: "wrap" }}>
         <span style={{ color: MUTED, fontSize: 12 }}>{open ? "▼" : "▶"}</span>
-        <span style={{ fontWeight: 700, fontSize: 14.5 }}>{single ? "Мої застряглі" : g.manager}</span>
+        {hasCritical && <span title="має критичні угоди >90 дн">⚠️</span>}
+        <span style={{ fontWeight: 700, fontSize: 14.5, color: hasCritical ? RED : "var(--text)" }}>{single ? "Мої застряглі" : g.manager}</span>
         {tag && !single && <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 8px", borderRadius: 20, background: tag.c + "22", color: tag.c }}>{tag.label}</span>}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "baseline", gap: 16 }}>
           <span><b style={{ color: RED, fontSize: 16 }}>{g.count}</b> <span style={{ fontSize: 11, color: MUTED }}>угод</span></span>
@@ -642,17 +657,24 @@ function StuckMgrRow({ g, open, onToggle, single }: { g: StuckManagerGroup; open
       {open && (
         <div style={{ maxHeight: 420, overflowY: "auto", borderTop: "1px solid var(--border)", background: "var(--bg)" }}>
           <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
-            <thead><tr>{["Угода", "Клієнт", "Стадія", "Сума", "Днів без руху"].map((h, i) => <th key={h} style={{ textAlign: i >= 3 ? "right" : "left", position: "sticky", top: 0, background: "var(--card-bg)", zIndex: 1 }}>{h}</th>)}</tr></thead>
+            <thead><tr>{STUCK_COLS.map((c) => <th key={c.h} style={{ textAlign: c.r ? "right" : "left", position: "sticky", top: 0, background: "var(--card-bg)", zIndex: 1 }}>{c.h}{c.hint && <> <InfoHint text={c.hint} /></>}</th>)}</tr></thead>
             <tbody>
               {g.deals.map((d) => {
                 const sc = STUCK_STAGE_C(d.stage);
+                const crit = d.days >= 90;
                 return (
                   <tr key={d.kommoId}>
                     <td style={{ textAlign: "left" }}><a href={d.crmUrl} target="_blank" rel="noreferrer" style={{ color: BAR }}>{d.name || "—"}</a></td>
                     <td style={{ textAlign: "left", color: MUTED }}>{d.client || "—"}</td>
                     <td style={{ textAlign: "left" }}><span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: sc + "1e", color: sc }}>{d.stage}</span></td>
                     <td style={{ textAlign: "right", fontWeight: 650, color: d.price < 0 ? RED : "var(--text)" }}>{d.price ? fmt(d.price) + " ₴" : "—"}</td>
-                    <td style={{ textAlign: "right", fontWeight: 700, color: idleColor(d.days) }}>{d.days}</td>
+                    <td style={{ textAlign: "right", fontWeight: 700, color: idleColor(d.days) }}>{crit && <span title="критична: >90 дн">⚠️ </span>}{d.days}</td>
+                    <td style={{ textAlign: "right", fontWeight: 650 }}>
+                      {d.daysSinceLastCall == null
+                        ? <span style={{ color: MUTED }}>дзвінка не було</span>
+                        : <span style={{ color: d.daysSinceLastCall >= 30 ? AMBER : "var(--text)" }}>{d.daysSinceLastCall} дн</span>}
+                      {d.noCallFlag && <span title="метушня без контакту: свіжа активність, але місяць без дзвінка"> 🚩</span>}
+                    </td>
                   </tr>
                 );
               })}

@@ -1292,7 +1292,7 @@ export async function fetchStuckDeals(params: { managerId?: number; teamId?: num
 }
 
 // Застряглі угоди ЗГРУПОВАНІ по менеджерах (без «стелі 50») + company-summary.
-export interface StuckGroupDeal { kommoId: number; crmUrl: string; name: string; client: string | null; price: number; stage: string; days: number; activityDays: number | null }
+export interface StuckGroupDeal { kommoId: number; crmUrl: string; name: string; client: string | null; price: number; stage: string; days: number; activityDays: number | null; lastCallAt: string | null; daysSinceLastCall: number | null; noCallFlag: boolean }
 export interface StuckManagerGroup { managerId: number; manager: string; teamId: number | null; teamTag: string | null; count: number; sumAtRisk: number; longestIdleDays: number; deals: StuckGroupDeal[] }
 export interface StuckGrouped { minDays: number; role: string; scope: "company" | "team" | "own"; total: number; sumRisk: number; managers: number; over90: number; groups: StuckManagerGroup[] }
 export async function fetchStuckGrouped(params: { teamId?: number; managerId?: number }): Promise<StuckGrouped> {

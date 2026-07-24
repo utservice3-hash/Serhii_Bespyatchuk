@@ -157,6 +157,9 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_transfer_at TIMESTAMPTZ;
 -- Used by "stuck deals": a deal with no human activity for a while is stuck.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS first_activity_at TIMESTAMPTZ; -- перший людський контакт (для «час опрацювання»)
+-- Дата останнього ДЗВІНКА клієнту (лише call_in/call_out, created_by<>0), окремо від будь-якої активності.
+-- Живить прапорець «метушня без контакту» у «Застряглих»: свіжа нотатка є, але місяць без дзвінка.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_call_at TIMESTAMPTZ;
 -- Блок B (логістика): «Тип запиту» (2097965 → напрямок) + «Канал продажу» (2099549).
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS request_type TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS sales_channel TEXT;
