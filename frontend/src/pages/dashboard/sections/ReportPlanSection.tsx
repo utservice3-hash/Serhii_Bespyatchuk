@@ -57,6 +57,8 @@ export function ReportPlanSection({ auth, teams }: {
   const [weekData, setWeekData] = useState<ReportPlan | null>(null);   // тиждень-контекст смуги
   const [focus, setFocus] = useState<ReportPlan | null>(null);         // кластер фокус-дня
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(false);        // місяць не піднявся навіть після ретраїв → видима помилка
+  const [retryNonce, setRetryNonce] = useState(0); // ручний «Спробувати знову» перезапускає ефект
   const [openMgr, setOpenMgr] = useState<number | null>(null);
 
   // Місяць + тиждень видно ЗАВЖДИ у шапці смуги (#11). Селектор керує лише дрилом унизу.
@@ -72,16 +74,44 @@ export function ReportPlanSection({ auth, teams }: {
   const weekOfFocus = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(mondayOf(focusDay), i)), [focusDay]);
   const scopeParams = teamId ? { teamId: Number(teamId) } : {};
 
+  // САМОВІДНОВЛЕННЯ (фікс порожнечі при транзієнтному відхиленні):
+  //  • cancelled-guard: жоден перерваний/застарілий виклик не пише стан (антигонка).
+  //  • МІСЯЦЬ (головне тіло) — з авто-ретраєм (2 спроби + backoff); транзієнтний блимок
+  //    піднімається САМ, без ручного refresh. Провал ПІСЛЯ ретраїв → err (видима помилка+ретрай).
+  //  • ТИЖДЕНЬ/ФОКУС — best-effort (allSettled): їхня невдача НЕ обнуляє звіт (не «все або нічого»).
   useEffect(() => {
-    let a = true; setLoading(true);
-    Promise.all([
-      fetchReportPlan({ ...monthPeriod, ...scopeParams }),
-      fetchReportPlan({ ...weekPeriod, ...scopeParams }),
-      fetchReportPlan({ from: focusDay, to: focusDay, ...scopeParams }),
-    ]).then(([m, w, f]) => { if (!a) return; setMonthData(m); setWeekData(w); setFocus(f); })
-      .catch(() => a && setMonthData(null)).finally(() => a && setLoading(false));
-    return () => { a = false; };
-  }, [monthPeriod.from, monthPeriod.to, weekPeriod.from, weekPeriod.to, focusDay, teamId]);
+    let cancelled = false;
+    setLoading(true); setErr(false);
+    const withRetry = async (params: { from: string; to: string; teamId?: number }, attempts = 3) => {
+      for (let i = 0; ; i++) {
+        try { return await fetchReportPlan(params); }
+        catch (e) {
+          if (cancelled) throw e;
+          if (i >= attempts - 1) throw e;
+          await new Promise((r) => setTimeout(r, 300 * (i + 1))); // 300мс, 600мс backoff
+        }
+      }
+    };
+    (async () => {
+      try {
+        const m = await withRetry({ ...monthPeriod, ...scopeParams });
+        if (cancelled) return;
+        setMonthData(m);
+        const [w, f] = await Promise.allSettled([
+          fetchReportPlan({ ...weekPeriod, ...scopeParams }),
+          fetchReportPlan({ from: focusDay, to: focusDay, ...scopeParams }),
+        ]);
+        if (cancelled) return;
+        if (w.status === "fulfilled") setWeekData(w.value);
+        if (f.status === "fulfilled") setFocus(f.value);
+      } catch {
+        if (!cancelled) setErr(true);   // ніколи не лишаємо мовчазну порожнечу
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [monthPeriod.from, monthPeriod.to, weekPeriod.from, weekPeriod.to, focusDay, teamId, retryNonce]);
 
   const data = monthData; // список/сортування/glance — за МІСЯЦЕМ (стабільно, без стрибків)
   const weekByMgr = useMemo(() => new Map((weekData?.managers ?? []).map((m) => [m.managerId, m])), [weekData]);
@@ -162,7 +192,16 @@ export function ReportPlanSection({ auth, teams }: {
         })}
       </div>
 
-      {loading && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
+      {err && !data ? (
+        <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
+          <div style={{ fontSize: 30, marginBottom: 6 }}>⚠️</div>
+          <div style={{ marginBottom: 12 }}>Не вдалося завантажити звіт (тимчасовий збій зʼєднання).</div>
+          <button onClick={() => setRetryNonce((n) => n + 1)}
+            style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: BAR, color: "#fff", fontWeight: 700, cursor: "pointer" }}>
+            Спробувати знову
+          </button>
+        </div>
+      ) : loading && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
         <>
           <Glance data={data} focus={focus} focusDay={focusDay} today={today} />
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
