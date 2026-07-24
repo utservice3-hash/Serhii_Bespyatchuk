@@ -55,6 +55,16 @@ export const NON_COMMERCIAL_TEAM_IDS = [11, 12];
 export const commercialManagerSql = (alias = "m") =>
   `(${alias}.team_id IS NOT NULL AND NOT (${alias}.team_id = ANY(ARRAY[${NON_COMMERCIAL_TEAM_IDS.join(", ")}]::int[])))`;
 
+// Команди РНК (рекламний напрям, тімліди Безпамʼятний/Михальчевська). Джерело правди
+// (== RNK_TEAM_IDS у routes/dashboard.ts, який тепер імпортує звідси — не дублювати число).
+export const RNK_TEAM_IDS = [13, 15];
+/**
+ * SQL-предикат «команда типу РНК» (рекламний напрям). Використовується у `stuckDealsGrouped`:
+ * РНК — усі застряглі; РПК/Самостійний (не-РНК) — лише лідген-угоди. `alias` — аліас managers.
+ */
+export const rnkTeamSql = (alias = "m") =>
+  `(${alias}.team_id = ANY(ARRAY[${RNK_TEAM_IDS.join(", ")}]::int[]))`;
+
 /**
  * ЄДИНЕ правило «рекламна угода» (рішення власника 10.07): повний цикл, де
  * «Источник клиента» ∈ adSources АБО дотик Кваліфікації без лідоген-маркерів
@@ -2262,14 +2272,17 @@ export interface StuckGrouped {
 
 /**
  * Застряглі угоди ЗГРУПОВАНІ по менеджерах (переробка секції, рішення власника 24.07):
- *   • ТОЙ САМИЙ критерій, що `stuckDeals` (без руху понад поріг у БУДЬ-ЯКІЙ відкритій стадії
- *     включно з «Авто працює»; виключено paid/успіх/злив; анкер = остання активність;
- *     signed price — сторно НЕ виключаємо), але БЕЗ `LIMIT` → повний набір (на проді ~600).
+ *   • Критерій «без руху понад поріг у БУДЬ-ЯКІЙ відкритій стадії включно з «Авто працює»;
+ *     виключено paid/успіх/злив; анкер = остання активність; signed price — сторно НЕ виключаємо»,
+ *     БЕЗ `LIMIT` → повний набір.
+ *   • 🎯 ТИП КОМАНДИ (рішення власника 24.07): РНК — усі застряглі; РПК/Самостійний (не-РНК) —
+ *     ЛИШЕ лідген-угоди (`lead_channel='leadgen'`). Через це набір на проді ~270 (РНК 233 +
+ *     РПК/Самост-лідген 37), а НЕ ~600. Це свідома РОЗБІЖНІСТЬ із легасі `stuckDeals` — там
+ *     team-type-фільтра немає; НЕ «ресинкати» WHERE назад.
  *   • Групування по менеджеру: {count, sumAtRisk(signed), longestIdleDays, deals[]} +
  *     company-summary {total, sumRisk, managers, over90}. Σ(deals по групах) == total (інваріант
  *     за побудовою — групуємо ту саму плоску вибірку). Групи сортуються за к-стю (як макет).
  *   • Роль-клампи — у роуті (manager→own, team_lead→team, admin→all), як у `stuckDeals`.
- * 🔴 WHERE тримати синхронно зі `stuckDeals` (свідома реплікація, щоб не ламати легасі-шлях).
  */
 export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<StuckGrouped> {
   const md = Math.max(1, minDays);
@@ -2283,6 +2296,9 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
     "d.created_at_kommo >= now() - interval '180 days'",
     `(${AVTO} OR psm.funnel_stage = 'invoiced' OR d.last_activity_at IS NOT NULL)`,
     commercialManagerSql("m"), // 🔒 СТРОГО: лише комерційні менеджери (не лідген/фінанси/без команди), незалежно від скоупу
+    // 🎯 Тип команди (рішення власника 24.07): РНК — усі застряглі; РПК/Самостійний (не-РНК) —
+    //    лише лідген-угоди (lead_channel='leadgen'). Реюз rnkTeamSql (без хардкоду ID).
+    `(${rnkTeamSql("m")} OR (NOT ${rnkTeamSql("m")} AND d.lead_channel = 'leadgen'))`,
   ];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }

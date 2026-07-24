@@ -549,10 +549,12 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
       .then((d) => {
         if (!a) return;
         setData(d);
-        // Авто-відкриття секції, коли є критичні (>90 дн); інакше згорнута. Ручний тоггл далі перекриває.
-        setSectionOpen(d.over90 > 0);
-        // Авто-розгортання ЛИШЕ менеджерів із ≥1 критичною угодою (longestIdleDays ≥ 90); решта згорнуті.
-        setOpenMgr(new Set(d.groups.filter((g) => g.longestIdleDays >= 90).map((g) => g.managerId)));
+        // Авто-відкриття/розгортання — ЛИШЕ РНК (рішення власника 24.07): секція авто-розкривається
+        // й авто-розгортаються менеджери тільки для критичних RNK-команд. РПК/Самостійний стартують
+        // згорнуті (лише ручний клік). Ручний тоггл далі перекриває. Червоний чип/акцент — для всіх.
+        const criticalRnk = d.groups.filter((g) => g.teamTag === "rnk" && g.longestIdleDays >= 90);
+        setSectionOpen(criticalRnk.length > 0);
+        setOpenMgr(new Set(criticalRnk.map((g) => g.managerId)));
       })
       .catch(() => a && setData({ minDays: 7, role: "", scope: "company", total: 0, sumRisk: 0, managers: 0, over90: 0, groups: [] }));
     return () => { a = false; };
