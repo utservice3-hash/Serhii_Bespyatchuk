@@ -46,13 +46,27 @@ export const LIVE_TEAMS: { id: number; name: string }[] = [
   { id: 14, name: "РПК Шаврової" },
 ];
 
-// Реєстр live-обчислювачів. kind → як рахувати з core-bucket-функцій. Метрики без
-// запису тут CRM-продовження ПОКИ не мають (serve sheet/manual; додаємо інкрементально).
-export type LiveKind = "success_rev" | "success_deals" | "success_avg" | "received_rev";
-export const LIVE_METRIC: Record<string, LiveKind> = {
-  revenue_success: "success_rev",   // дохід успіху (142, closed_at, signed)
-  cars_success: "success_deals",    // успішні авто (COUNT угод success)
-  avg_check: "success_avg",         // середній чек success-only (Σrev÷Σcars)
-  payment_received: "received_rev", // оплата отримана (received = success ⊎ paidOnly)
+// Реєстр live-обчислювачів живе в routes/statisticsSeries.ts (COMPUTERS) — там доступне
+// ядро. Тут лишаємо CRM_ABLE (skip на імпорті) + scope-мапи; liveness визначає роут.
+
+// ── depstats-read: мапа імен CSV-метрики (stats_series) → statistics_values.metric_key ──
+// Правило шва: sheet (<STATS_SEAM) зі stats_series; live (≥STATS_SEAM) — зі statistics_values
+// ЛИШЕ source IN ('auto','manual') (imported — стара копія тієї ж таблиці → ІГНОРУЄМО, щоб не
+// дублювати). finance/hr зараз мають у statistics_values лише 'imported' → live-точок нема,
+// доки не внесуть через depstats (чесно). sales·calls має 'auto' (Ringostat) → live є.
+export const DEPSTATS_DEPT: Record<string, string> = { finance: "finance", hr: "hr", sales: "sales" };
+export const DEPSTATS_METRIC_MAP: Record<string, string> = {
+  // finance
+  acted_income: "act_income", acted_expenses: "act_costs", acted_commission: "act_commission",
+  delivered_income: "dispatched_income", delivered_expenses: "dispatched_costs", delivered_commission: "dispatched_commission",
+  paid_delivered_income: "paid_dispatched_income", paid_delivered_expenses: "paid_dispatched_costs", paid_delivered_commission: "paid_dispatched_commission",
+  cashflow: "cash_flow", expenses_total: "expenses_total", overhead_expenses: "total_costs", receivables: "receivables",
+  // hr (скидаємо префікс hr_ + кілька перейменувань)
+  hr_hired: "hired", hr_fired: "fired", hr_headcount: "headcount", hr_interviews: "interviews",
+  hr_resumes: "resumes", hr_turnover_total: "total_turnover", hr_turnover_new: "new_turnover",
+  hr_training_started: "to_training", hr_offer_declines: "offer_declines", hr_vacancy_close_days: "avg_vacancy_days",
+  // sales (для calls live-read)
+  calls: "calls",
 };
-export const hasLive = (block: string, metric: string): boolean => isCrmAble(block, metric) && metric in LIVE_METRIC;
+export const hasDepstats = (block: string, metric: string): boolean =>
+  (block === "finance" || block === "hr" || (block === "sales" && metric === "calls")) && metric in DEPSTATS_METRIC_MAP;
