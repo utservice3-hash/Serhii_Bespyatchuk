@@ -3334,6 +3334,38 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
 });
 
 /**
+ * Застряглі угоди ЗГРУПОВАНІ по менеджерах (переробка секції) — БЕЗ «стелі 50»,
+ * повний набір + company-summary. Роль-клампи ідентичні `/stuck-deals`:
+ * manager→свої, team_lead→свій відділ, admin→вся компанія (з опц. ?teamId/?managerId).
+ * Кожна угода несе `crmUrl`; кожна група — `teamTag` (rpk/rnk/leadgen) для чипа.
+ */
+dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
+  const auth = req.auth!;
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") { teamId = auth.teamId; managerId = req.query.managerId ? Number(req.query.managerId) : null; }
+  const minDays = Math.max(1, Number(req.query.minDays) || 7);
+
+  const g = await metrics.stuckDealsGrouped({ managerId, teamId }, minDays);
+  res.json({
+    minDays,
+    role: auth.role,
+    scope: auth.role === "manager" ? "own" : auth.role === "team_lead" ? "team" : "company",
+    total: g.total, sumRisk: g.sumRisk, managers: g.managers, over90: g.over90,
+    groups: g.groups.map((grp) => ({
+      managerId: grp.managerId, manager: grp.manager, teamId: grp.teamId,
+      teamTag: grp.teamId != null ? kvpTeamKind(grp.teamId, grp.teamName ?? "") : null,
+      count: grp.count, sumAtRisk: grp.sumAtRisk, longestIdleDays: grp.longestIdleDays,
+      deals: grp.deals.map((d) => ({
+        kommoId: d.kommoId, crmUrl: kommoLeadUrl(d.kommoId), name: d.name, client: d.client,
+        price: d.price, stage: d.stage, days: d.days, activityDays: d.activityDays,
+      })),
+    })),
+  });
+});
+
+/**
  * Data-quality control (ТЗ §7) — surfaces records that silently distort every
  * other metric: deals with no manager, no amount, an unmapped status, negative
  * amounts that aren't real "minus" deals, and probable duplicates. Admin/lead.

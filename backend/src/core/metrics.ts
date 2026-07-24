@@ -2232,6 +2232,76 @@ export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Pro
   }));
 }
 
+export interface StuckGroupDeal {
+  kommoId: number; name: string; client: string | null; price: number;
+  stage: string; days: number; activityDays: number | null;
+}
+export interface StuckManagerGroup {
+  managerId: number; manager: string; teamId: number | null; teamName: string | null;
+  count: number; sumAtRisk: number; longestIdleDays: number; deals: StuckGroupDeal[];
+}
+export interface StuckGrouped {
+  total: number; sumRisk: number; managers: number; over90: number; groups: StuckManagerGroup[];
+}
+
+/**
+ * Застряглі угоди ЗГРУПОВАНІ по менеджерах (переробка секції, рішення власника 24.07):
+ *   • ТОЙ САМИЙ критерій, що `stuckDeals` (без руху понад поріг у БУДЬ-ЯКІЙ відкритій стадії
+ *     включно з «Авто працює»; виключено paid/успіх/злив; анкер = остання активність;
+ *     signed price — сторно НЕ виключаємо), але БЕЗ `LIMIT` → повний набір (на проді ~600).
+ *   • Групування по менеджеру: {count, sumAtRisk(signed), longestIdleDays, deals[]} +
+ *     company-summary {total, sumRisk, managers, over90}. Σ(deals по групах) == total (інваріант
+ *     за побудовою — групуємо ту саму плоску вибірку). Групи сортуються за к-стю (як макет).
+ *   • Роль-клампи — у роуті (manager→own, team_lead→team, admin→all), як у `stuckDeals`.
+ * 🔴 WHERE тримати синхронно зі `stuckDeals` (свідома реплікація, щоб не ламати легасі-шлях).
+ */
+export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<StuckGrouped> {
+  const md = Math.max(1, minDays);
+  const AVTO = `d.status_id = ANY($2)`;
+  const ACT = "COALESCE(d.last_activity_at, d.created_at_kommo)";
+  const params: unknown[] = [FC_PIPELINES, AVTO_STATUSES, md];
+  const conds = [
+    "d.pipeline_id = ANY($1)",
+    "psm.funnel_stage <> 'paid'",
+    `now() - ${ACT} >= (CASE WHEN (${AVTO} OR psm.funnel_stage = 'invoiced') THEN $3 ELSE $3*3 END || ' days')::interval`,
+    "d.created_at_kommo >= now() - interval '180 days'",
+    `(${AVTO} OR psm.funnel_stage = 'invoiced' OR d.last_activity_at IS NOT NULL)`,
+  ];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ kommo_id: string; name: string; client: string | null; price: string;
+    manager_id: number; manager: string; team_id: number | null; team_name: string | null;
+    stage: string; days: string; activity_days: string | null }>(
+    `SELECT d.kommo_id, d.name, d.client_name AS client, d.price,
+            m.id AS manager_id, m.name AS manager, m.team_id, t.name AS team_name,
+            CASE WHEN ${AVTO} THEN 'Авто працює'
+                 WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
+                 WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
+            EXTRACT(DAY FROM now() - ${ACT})::int AS days,
+            EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days
+     FROM deals d
+     JOIN managers m ON m.id = d.manager_id AND m.is_active
+     LEFT JOIN teams t ON t.id = m.team_id
+     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE ${conds.join(" AND ")}
+     ORDER BY days DESC`,
+    params
+  );
+  const map = new Map<number, StuckManagerGroup>();
+  let sumRisk = 0, over90 = 0;
+  for (const x of r.rows) {
+    const price = Number(x.price), days = Number(x.days);
+    sumRisk += price;
+    if (days >= 90) over90++;
+    let g = map.get(x.manager_id);
+    if (!g) { g = { managerId: x.manager_id, manager: x.manager, teamId: x.team_id, teamName: x.team_name, count: 0, sumAtRisk: 0, longestIdleDays: 0, deals: [] }; map.set(x.manager_id, g); }
+    g.count++; g.sumAtRisk += price; g.longestIdleDays = Math.max(g.longestIdleDays, days);
+    g.deals.push({ kommoId: Number(x.kommo_id), name: x.name, client: x.client, price, stage: x.stage, days, activityDays: x.activity_days == null ? null : Number(x.activity_days) });
+  }
+  const groups = [...map.values()].sort((a, b) => b.count - a.count || b.longestIdleDays - a.longestIdleDays);
+  return { total: r.rows.length, sumRisk, managers: groups.length, over90, groups };
+}
+
 // ───────────────────────── ЧАС ОПРАЦЮВАННЯ (період по created_at) ─────────────────────────
 
 const QUALIFICATION_PIPELINES = [8921928, 7336928];
