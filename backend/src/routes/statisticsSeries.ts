@@ -2,7 +2,7 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { successByBucket, receivedByBucket, type MoneyScope } from "../core/money.js";
-import { dispatchedByLoadBucket, leadsTakenByBucket, type MetricScope } from "../core/metrics.js";
+import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, type MetricScope } from "../core/metrics.js";
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
 import {
   STATS_SEAM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
@@ -64,6 +64,36 @@ const COMPUTERS: Record<string, Computer> = {
       [g, from, to]
     );
     return r.rows.map((x) => P(x.period, Number(x.v)));
+  },
+  // Логістика: усі поставлені авто (=dispatched total).
+  cars_delivered_all: async (g, from, to, teamId, managerId) =>
+    (await dispatchedByLoadBucket({ from, to, teamId, managerId, activeOnly: true }, g)).map((x) => P(x.ym, x.deals)),
+  // Клієнти: постійні (has_prior, klass='repeat', анкер load_at) — активні/авто/сума/чек.
+  repeat_clients_active: async (g, from, to, teamId, managerId) =>
+    (await repeatClientsByBucket({ from, to, teamId, managerId, activeOnly: true }, g)).map((x) => P(x.bucket, x.activeClients)),
+  repeat_clients_cars: async (g, from, to, teamId, managerId) =>
+    (await repeatClientsByBucket({ from, to, teamId, managerId, activeOnly: true }, g)).map((x) => P(x.bucket, x.cars)),
+  repeat_clients_sum: async (g, from, to, teamId, managerId) =>
+    (await repeatClientsByBucket({ from, to, teamId, managerId, activeOnly: true }, g)).map((x) => P(x.bucket, x.revenue)),
+  repeat_avg_check: async (g, from, to, teamId, managerId) =>
+    (await repeatClientsByBucket({ from, to, teamId, managerId, activeOnly: true }, g)).map((x) => P(x.bucket, x.cars ? x.revenue / x.cars : 0)),
+  // План/факт: місячна серія «% виконання» = received-fact ÷ plan (payment_amount). Тижневих планів нема.
+  plan_execution: async (g, from, to, teamId, managerId) => {
+    if (g !== "month") return [];
+    const fact = await receivedByBucket({ from, to, teamId, managerId }, "month");
+    const factMap = new Map(fact.map((x) => [x.bucket, x.revenue]));
+    const params: unknown[] = [from, to];
+    let scope = "";
+    if (managerId != null) { params.push(managerId); scope = `AND p.manager_id = $${params.length}`; }
+    else if (teamId != null) { params.push(teamId); scope = `AND m.team_id = $${params.length}`; }
+    const pl = await pool.query<{ period: string; plan: string }>(
+      `SELECT to_char(date_trunc('month', p.plan_date), 'YYYY-MM-DD') period, SUM(p.planned_value)::float plan
+         FROM plans p JOIN managers m ON m.id = p.manager_id
+        WHERE p.metric = 'payment_amount'
+          AND date_trunc('month', p.plan_date) >= date_trunc('month', $1::date)
+          AND date_trunc('month', p.plan_date) <= $2::date ${scope}
+        GROUP BY 1 ORDER BY 1`, params);
+    return pl.rows.filter((x) => Number(x.plan) > 0).map((x) => P(x.period, Math.round(((factMap.get(x.period) ?? 0) / Number(x.plan)) * 100)));
   },
 };
 const hasLive = (block: string, metric: string): boolean => (metric in COMPUTERS) || hasDepstats(block, metric);

@@ -462,7 +462,7 @@ const SOURCE_KLASS_CASE = `
 function classifyCte(
   s: MetricScope,
   params: unknown[],
-  opts: { windowCol?: string; klassCase: string; bucketExpr?: string; carryPrice?: boolean; channel?: "leadgen" | "ad" | null }
+  opts: { windowCol?: string; klassCase: string; bucketExpr?: string; carryPrice?: boolean; carryVkey?: boolean; channel?: "leadgen" | "ad" | null }
 ): string {
   const windowCol = opts.windowCol ?? "d.created_at_kommo";
   params.push(FC_PIPELINES, GENERIC_CLIENT_KEYS);
@@ -477,6 +477,7 @@ function classifyCte(
   const bcarry = opts.bucketExpr ? ", bucket" : "";
   const pcol = opts.carryPrice ? ", d.price" : "";
   const pcarry = opts.carryPrice ? ", price" : "";
+  const vcarry = opts.carryVkey ? ", vkey" : ""; // vkey у final для COUNT(DISTINCT client) — repeatClientsByBucket
   return `base AS (
        SELECT d.kommo_id, d.manager_id, d.created_at_kommo, d.sales_channel, d.lead_channel${bcol}${pcol},
               CASE WHEN d.client_key IS NULL OR d.client_key = ANY($2) THEN NULL ELSE d.client_key END AS vkey
@@ -493,7 +494,7 @@ function classifyCte(
          FROM base b
      ),
      final AS (
-       SELECT manager_id${bcarry}${pcarry}, ${opts.klassCase} AS klass FROM classed
+       SELECT manager_id${bcarry}${pcarry}${vcarry}, ${opts.klassCase} AS klass FROM classed
      )`;
 }
 
@@ -1071,6 +1072,26 @@ export async function dispatchedByLoadBucket(s: MetricScope, granularity: "day" 
        FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
       GROUP BY f.bucket ORDER BY f.bucket`, params);
   return r.rows.map((x) => ({ ym: x.ym, deals: Number(x.deals), revenue: Number(x.revenue), ...dispatchSplitOf(x) }));
+}
+
+export interface RepeatBucketRow { bucket: string; activeClients: number; cars: number; revenue: number }
+/**
+ * ПОСТІЙНІ клієнти по бакету (день/тиждень/місяць): активні постійні (DISTINCT client_key),
+ * їхні авто (COUNT) і сума (SUM price) — для категорії «Клієнти» вкладки Статистик. ТА САМА
+ * класифікація, що `dispatchedByLoadBucket` (анкер load_at, `SOURCE_KLASS_CASE`, klass='repeat'
+ * = has_prior проти created_at) — визначення 1:1 зі Звітом/лояльністю, БЕЗ нового правила.
+ * Гейт: `cars` == `dispatchedByLoadBucket.repeat_c` на тому ж бакеті. Active-only.
+ */
+export async function repeatClientsByBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<RepeatBucketRow[]> {
+  const bucketExpr = `to_char(date_trunc('${granularity}', (d.load_at ${KYIV})), 'YYYY-MM-DD')`;
+  const params: unknown[] = [];
+  const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, bucketExpr, carryPrice: true, carryVkey: true });
+  const r = await pool.query<{ bucket: string; active: string; cars: string; revenue: string }>(
+    `WITH ${cte}
+     SELECT f.bucket, COUNT(DISTINCT f.vkey)::int AS active, COUNT(*)::int AS cars, COALESCE(SUM(f.price),0) AS revenue
+       FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
+      WHERE f.klass = 'repeat' GROUP BY f.bucket ORDER BY f.bucket`, params);
+  return r.rows.map((x) => ({ bucket: x.bucket, activeClients: Number(x.active), cars: Number(x.cars), revenue: Number(x.revenue) }));
 }
 
 export interface MgrDayExp { managerId: number; day: string; deals: number; sum: number }
