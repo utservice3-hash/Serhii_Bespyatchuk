@@ -545,7 +545,7 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
   useEffect(() => {
     let a = true; setData(null); setOpenMgr(new Set());
     fetchStuckGrouped(teamId ? { teamId } : {})
-      .then((d) => { if (!a) return; setData(d); if (d.scope === "own" && d.groups.length) setOpenMgr(new Set(d.groups.map((g) => g.managerId))); })
+      .then((d) => { if (!a) return; setData(d); setOpenMgr(new Set()); })
       .catch(() => a && setData({ minDays: 7, role: "", scope: "company", total: 0, sumRisk: 0, managers: 0, over90: 0, groups: [] }));
     return () => { a = false; };
   }, [teamId]);
