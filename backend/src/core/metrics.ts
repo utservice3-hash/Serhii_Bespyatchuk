@@ -42,6 +42,19 @@ export interface SnapshotScope {
   to?: never;
 }
 
+// Не-комерційні команди: 11 = лідогенерація (Ковтонюк), 12 = фінанси. Джерело правди
+// (== KVP_LEADGEN_TEAM_IDS ∪ KVP_FINANCE_TEAM_IDS у routes/dashboard.ts).
+export const NON_COMMERCIAL_TEAM_IDS = [11, 12];
+/**
+ * SQL-предикат «КОМЕРЦІЙНИЙ менеджер» (рішення власника 24.07, Опція 2 — строго):
+ * має команду І команда не лідген/фінанси. Ловить усі три класи не-комерц: team NULL
+ * (Левентова/Операційний директор/Денисюк), team 11 (лідген), team 12 (фінанси).
+ * ЄДИНЕ джерело для обох поверхонь (/report roster + stuckDealsGrouped) — не дублювати SQL.
+ * `alias` — аліас таблиці managers у запиті (дефолт "m").
+ */
+export const commercialManagerSql = (alias = "m") =>
+  `(${alias}.team_id IS NOT NULL AND NOT (${alias}.team_id = ANY(ARRAY[${NON_COMMERCIAL_TEAM_IDS.join(", ")}]::int[])))`;
+
 /**
  * ЄДИНЕ правило «рекламна угода» (рішення власника 10.07): повний цикл, де
  * «Источник клиента» ∈ adSources АБО дотик Кваліфікації без лідоген-маркерів
@@ -2266,6 +2279,7 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
     `now() - ${ACT} >= (CASE WHEN (${AVTO} OR psm.funnel_stage = 'invoiced') THEN $3 ELSE $3*3 END || ' days')::interval`,
     "d.created_at_kommo >= now() - interval '180 days'",
     `(${AVTO} OR psm.funnel_stage = 'invoiced' OR d.last_activity_at IS NOT NULL)`,
+    commercialManagerSql("m"), // 🔒 СТРОГО: лише комерційні менеджери (не лідген/фінанси/без команди), незалежно від скоупу
   ];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }

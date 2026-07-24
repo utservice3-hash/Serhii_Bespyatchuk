@@ -4317,14 +4317,15 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // скоуп (A1): коли команду НЕ обрано (admin «Всі команди») — у РОСТЕР і в усі агрегати
   // входять лише продажні юніти (РНК/РПК/Самостійні); Финансовый (12) і лідоген-генератор
   // Ковтонюк (11) ВИКЛЮЧАЮТЬСЯ. Фінанси давали факт без плану → інфляція % — цим і чиниться.
+  // 🔒 КОМЕРЦІЙНИЙ СКОУП СТРОГО (рішення власника 24.07, Опція 2): лише активні комерційні
+  // менеджери — має команду І не лідген(11)/фінанси(12). БЕЗУМОВНО, незалежно від ролі-скоупу
+  // (навіть якщо не-комерц залогінений і скоуп = він сам → порожній звіт, очікувано). Раніше
+  // предикат дірявив на `team_id IS NULL` (Левентова/Операційний директор течуть) і діяв лише
+  // у вигляді «всі команди». Спільний хелвер зі stuckDealsGrouped — не дублюємо SQL.
   const rp: unknown[] = [];
-  const rConds = ["m.is_active"];
+  const rConds = ["m.is_active", metrics.commercialManagerSql("m")];
   if (managerId) { rp.push(managerId); rConds.push(`m.id = $${rp.length}`); }
   if (teamId) { rp.push(teamId); rConds.push(`m.team_id = $${rp.length}`); }
-  if (!managerId && !teamId) {
-    rp.push([...KVP_FINANCE_TEAM_IDS, ...KVP_LEADGEN_TEAM_IDS]);
-    rConds.push(`(m.team_id IS NULL OR NOT (m.team_id = ANY($${rp.length})))`);
-  }
   const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m LEFT JOIN teams t ON t.id = m.team_id
       WHERE ${rConds.join(" AND ")} ORDER BY m.name`, rp
