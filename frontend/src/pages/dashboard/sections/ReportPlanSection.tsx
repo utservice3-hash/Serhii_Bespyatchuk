@@ -542,6 +542,7 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
   const [data, setData] = useState<StuckGrouped | null>(null);
   const [openMgr, setOpenMgr] = useState<Set<number>>(new Set());
   const [sortBy, setSortBy] = useState<StuckSort>("count");
+  const [sectionOpen, setSectionOpen] = useState(false); // ВСЯ секція згорнута за замовчуванням (обгортка над per-manager акордеоном)
   useEffect(() => {
     let a = true; setData(null); setOpenMgr(new Set());
     fetchStuckGrouped(teamId ? { teamId } : {})
@@ -561,18 +562,25 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
   return (
     <div style={{ marginTop: 18 }}>
       <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
-        {/* Шапка */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "15px 18px", flexWrap: "wrap" }}>
+        {/* Шапка — клікабельна кнопка згортання ВСІЄЇ секції (обгортка над per-manager акордеоном) */}
+        <div onClick={() => setSectionOpen((o) => !o)} role="button" aria-expanded={sectionOpen}
+             style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "15px 18px", flexWrap: "wrap", cursor: "pointer", userSelect: "none" }}>
           <span style={{ fontWeight: 750, fontSize: 16, display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: MUTED, fontSize: 13, width: 12, display: "inline-block" }}>{sectionOpen ? "▾" : "▸"}</span>
             🕐 Застряглі угоди {data && <span style={{ color: data.total ? RED : GREEN, fontWeight: 800 }}>· {data.total}</span>}
-            <InfoHint text="Критерій — ВІДСУТНІСТЬ РУХУ, а не стадія: усі відкриті угоди без реальної людської активності понад поріг (гроші/рахунок ≥7 дн., «взято в роботу» ≥21 дн.), включно з «Авто працює». Виключено лише успіх/оплату отримано/злив. Анкер — остання активність (нотатки людини, не Salesbot). Сума в ризику — signed (сторно нетиться). Вікно створення 180 днів." />
+            {data && data.total > 0 && <span style={{ color: MUTED, fontWeight: 700, fontSize: 14 }}>· {k(data.sumRisk)} ₴ в ризику</span>}
+            <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}>
+              <InfoHint text="Критерій — ВІДСУТНІСТЬ РУХУ, а не стадія: усі відкриті угоди без реальної людської активності понад поріг (гроші/рахунок ≥7 дн., «взято в роботу» ≥21 дн.), включно з «Авто працює». Виключено лише успіх/оплату отримано/злив. Анкер — остання активність (нотатки людини, не Salesbot). Сума в ризику — signed (сторно нетиться). Вікно створення 180 днів." />
+            </span>
           </span>
-          <div style={{ textAlign: "right", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
-            без руху ≥7 дн. (рахунок/гроші) · ≥21 дн. («взято в роботу»)<br />
-            усі відкриті стадії, включно з «Авто працює» · дата = остання активність
-          </div>
+          {sectionOpen && (
+            <div style={{ textAlign: "right", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
+              без руху ≥7 дн. (рахунок/гроші) · ≥21 дн. («взято в роботу»)<br />
+              усі відкриті стадії, включно з «Авто працює» · дата = остання активність
+            </div>
+          )}
         </div>
-        {data == null ? <div style={{ padding: "0 18px 18px", color: MUTED }}>Завантаження…</div> : (
+        {sectionOpen && (data == null ? <div style={{ padding: "0 18px 18px", color: MUTED }}>Завантаження…</div> : (
           <>
             {/* Summary-стрічка */}
             <div style={{ display: "flex", alignItems: "center", gap: 26, flexWrap: "wrap", padding: "0 18px 15px", borderBottom: "1px solid var(--border)" }}>
@@ -606,13 +614,13 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
               <StuckMgrRow key={g.managerId} g={g} open={openMgr.has(g.managerId)} onToggle={() => toggleMgr(g.managerId)} single={data.scope === "own"} />
             ))}
           </>
-        )}
+        ))}
       </div>
 
-      {/* Пояснення (макет) */}
-      <div style={{ background: "rgba(47,111,219,0.06)", border: "1px solid rgba(47,111,219,0.25)", borderRadius: 12, padding: "12px 15px", fontSize: 12, color: "var(--text)", lineHeight: 1.55, marginTop: 10 }}>
+      {/* Пояснення (макет) — лише коли секція розкрита */}
+      {sectionOpen && <div style={{ background: "rgba(47,111,219,0.06)", border: "1px solid rgba(47,111,219,0.25)", borderRadius: 12, padding: "12px 15px", fontSize: 12, color: "var(--text)", lineHeight: 1.55, marginTop: 10 }}>
         <b>Що рахуємо:</b> критерій — <b>відсутність руху</b>, а не стадія: усі відкриті угоди без активності понад поріг, <b>включно з «Авто працює»</b> (машина, що «працює» 175 днів, насправді стоїть). Список — по менеджерах (згорнуті), згори — <b>чесний підсумок</b> без «стелі 50»: реальна к-сть, сума в ризику (signed), критичні &gt;90 дн. <b>Роль-скоуп:</b> адмін/КВП — вся компанія, тімлід — свій відділ, менеджер — лише свої. Дата простою — від останньої активності; всередині менеджера сортування від найдовшого.
-      </div>
+      </div>}
     </div>
   );
 }
