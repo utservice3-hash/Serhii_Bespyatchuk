@@ -22,24 +22,17 @@ const upsertSchema = z.object({
   plannedValue: z.number(),
 });
 
-plansRouter.post("/", requireRole("admin", "team_lead"), async (req, res) => {
+// 🔒 GOVERNANCE (рішення власника): ПРЯМИЙ запис у сакральний `plans` — ЛИШЕ admin.
+// Тімлід НЕ пише в plans повз двоетапне погодження: він формує план через «Формування»
+// (POST /formation/submit → status='submitted'), а число в `plans` лягає ВИКЛЮЧНО на
+// admin-approve (/formation/approve). Грід-редактор для тімліда — read-only (FE), а тут
+// сервер це підкріплює: єдиний інший writer у `plans` — саме /formation/approve (admin).
+plansRouter.post("/", requireRole("admin"), async (req, res) => {
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
   const { managerId, planDate, metric, plannedValue } = parsed.data;
-
-  // A team-lead may only plan for managers of their own team.
-  const auth = req.auth!;
-  if (auth.role === "team_lead") {
-    const chk = await pool.query<{ team_id: number | null }>(
-      `SELECT team_id FROM managers WHERE id = $1`,
-      [managerId]
-    );
-    if (chk.rows[0]?.team_id !== auth.teamId) {
-      return res.status(403).json({ error: "Лише своя команда" });
-    }
-  }
 
   await pool.query(
     `INSERT INTO plans (manager_id, plan_date, metric, planned_value)

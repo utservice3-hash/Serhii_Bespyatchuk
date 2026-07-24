@@ -27,7 +27,7 @@ export function PlansTabs({ auth, teams }: {
       </div>
       {view === "formation"
         ? <PlanFormationSection auth={auth} teams={teams} />
-        : <PlansSection canPickTeam={auth.role === "admin"} teams={teams} />}
+        : <PlansSection canPickTeam={auth.role === "admin"} canEdit={auth.role === "admin"} teams={teams} />}
     </>
   );
 }

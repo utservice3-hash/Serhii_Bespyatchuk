@@ -9,7 +9,7 @@ const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${S
 /** Plan editor: admin/team-lead sets each manager's monthly revenue plan; the
  *  grid auto-decomposes it by week (fixed 7-day blocks) and per working day.
  *  Team totals and grand total update live. Everything flows from these plans. */
-export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; teams: Team[] }) {
+export function PlansSection({ canPickTeam, teams, canEdit = true }: { canPickTeam: boolean; teams: Team[]; canEdit?: boolean }) {
   const [month, setMonth] = useState<string>(() => localStorage.getItem("plansMonth") || curMonthStr());
   const [teamId, setTeamId] = useState<number | "">(() => {
     const v = localStorage.getItem("plansTeam");
@@ -38,6 +38,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
   };
 
   const save = async (managerId: number) => {
+    if (!canEdit) return;                 // 🔒 запис у plans — лише admin (governance)
     const raw = drafts[managerId];
     if (raw == null) return;
     const val = Number(raw.replace(/[^\d.-]/g, ""));
@@ -117,6 +118,7 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
         Місячний план виручки по менеджеру (редагується). <b>Тижні/день — динамічні</b>: залишок (план − факт) розкидається на робочі дні, що ще залишилися, тож цілі <b>автоматично зменшуються</b> у міру виконання.
         Факт = «Успішно» + «Оплата отримана». Очікувані = снапшот угод з етапу «Виставлено рахунок».
         <b> Відставання</b> = план на сьогодні − (факт + перенесені); <b>Реаліст.</b> = ще й мінус очікувані (майже оплачені рахунки). «✓» — темп витримано.
+        {!canEdit && <><br /><b style={{ color: "#d97706" }}>🔒 Лише перегляд.</b> План формується через «💼 Формування плану» (ти подаєш → КВП затверджує). Пряме редагування плану — за адміністратором.</>}
       </p>
 
       {err && <p className="loading-text" style={{ color: "#dc2626" }}>{err}</p>}
@@ -172,18 +174,24 @@ export function PlansSection({ canPickTeam, teams }: { canPickTeam: boolean; tea
                         <tr key={m.managerId}>
                           <td style={{ textAlign: "left", paddingLeft: 18 }}>{m.name}</td>
                           <td style={{ textAlign: "right" }}>
-                            <input
-                              value={draft ?? String(m.plan)}
-                              onChange={(e) => setDrafts((p) => ({ ...p, [m.managerId]: e.target.value }))}
-                              onKeyDown={(e) => { if (e.key === "Enter") save(m.managerId); }}
-                              inputMode="numeric"
-                              style={{ width: 96, textAlign: "right", padding: "3px 6px", borderRadius: 6, border: `1px solid ${dirty ? "#d97706" : "var(--border)"}`, background: "var(--card-bg)", color: "var(--text)" }}
-                            />
-                            {dirty && (
-                              <button onClick={() => save(m.managerId)} disabled={savingId === m.managerId}
-                                style={{ marginLeft: 4, padding: "3px 8px", borderRadius: 6, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontSize: 12 }}>
-                                {savingId === m.managerId ? "…" : "✓"}
-                              </button>
+                            {canEdit ? (
+                              <>
+                                <input
+                                  value={draft ?? String(m.plan)}
+                                  onChange={(e) => setDrafts((p) => ({ ...p, [m.managerId]: e.target.value }))}
+                                  onKeyDown={(e) => { if (e.key === "Enter") save(m.managerId); }}
+                                  inputMode="numeric"
+                                  style={{ width: 96, textAlign: "right", padding: "3px 6px", borderRadius: 6, border: `1px solid ${dirty ? "#d97706" : "var(--border)"}`, background: "var(--card-bg)", color: "var(--text)" }}
+                                />
+                                {dirty && (
+                                  <button onClick={() => save(m.managerId)} disabled={savingId === m.managerId}
+                                    style={{ marginLeft: 4, padding: "3px 8px", borderRadius: 6, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+                                    {savingId === m.managerId ? "…" : "✓"}
+                                  </button>
+                                )}
+                              </>
+                            ) : (
+                              formatAmount(m.plan)   // 🔒 тімлід — лише перегляд (план формується через «Формування»)
                             )}
                           </td>
                           <td style={{ textAlign: "right", color: "#16a34a", fontWeight: 600 }}>{formatAmount(m.fact)}</td>
