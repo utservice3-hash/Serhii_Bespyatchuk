@@ -31,7 +31,11 @@ async function main() {
   let valid = 0, invalid = 0, imported = 0, skippedSeam = 0;
   const byBlock: Record<string, number> = {};
   const skipByBlock: Record<string, number> = {};
-  const batch: { block: string; metric: string; st: string; key: string; name: string; g: string; d: string; v: number }[] = [];
+  type Row = { block: string; metric: string; st: string; key: string; name: string; g: string; d: string; v: number };
+  // Дедуп по УНІКАЛЬНОМУ ключу (Map keep-last) — щоб ON CONFLICT не бачив дубль у батчі.
+  const batchMap = new Map<string, Row>();
+  const prevPeriod = new Map<string, string>(); // остання period_date по серії (для правила A1)
+  let a1skips = 0, dupSkips = 0;
 
   for (const r of rows) {
     const block = r[ci.block]?.trim(), metric = r[ci.metric]?.trim(), st = r[ci.st]?.trim();
@@ -41,12 +45,24 @@ async function main() {
     valid++;
     if (isCrmAble(block, metric) && d >= SEAM) { skippedSeam++; skipByBlock[block] = (skipByBlock[block] ?? 0) + 1; continue; }
     const sc = scopeFor(st, sn);
-    imported++; byBlock[block] = (byBlock[block] ?? 0) + 1;
-    batch.push({ block, metric, st, key: sc.key, name: sc.name, g, d, v });
+    const seriesKey = `${block}|${metric}|${sc.key}|${g}`;
+    // A1 (задокументована аномалія, як backfillStatistics §6): finance/month рядок «2025-12-01»,
+    // чий попередній період у цій серії — 2024, насправді зміщений 2024-грудень → пропуск.
+    if (block === "finance" && g === "month" && d === "2025-12-01" && (prevPeriod.get(seriesKey) ?? "").startsWith("2024")) {
+      a1skips++; prevPeriod.set(seriesKey, d); continue;
+    }
+    prevPeriod.set(seriesKey, d);
+    const uk = `${metric}|${st}|${sc.key}|${g}|${d}`;
+    if (batchMap.has(uk)) { dupSkips++; console.warn(`  ⚠️ дубль ключа ${uk} — keep-last`); }
+    batchMap.set(uk, { block, metric, st, key: sc.key, name: sc.name, g, d, v });
   }
+  const batch = [...batchMap.values()];
+  for (const x of batch) byBlock[x.block] = (byBlock[x.block] ?? 0) + 1;
+  imported = batch.length;
+  if (a1skips || dupSkips) console.log(`Аномалії: A1-skip=${a1skips} (finance 2025-12 зміщений) · дубль-ключів keep-last=${dupSkips}`);
 
   console.log(`CSV: валідних ${valid}, невалідних ${invalid}`);
-  console.log(`ІМПОРТ (sheet): ${imported} · СКІП (CRM-able ≥${SEAM}): ${skippedSeam} · Σ=${imported + skippedSeam}`);
+  console.log(`ІМПОРТ (sheet, унікальні): ${imported} · СКІП (CRM-able ≥${SEAM}): ${skippedSeam} · A1-аномалія: ${a1skips} · дубль: ${dupSkips} · Σ=${imported + skippedSeam + a1skips + dupSkips}`);
   console.log("по блоках (імпорт · скіп-шов):");
   for (const b of Object.keys(byBlock).sort((a, z) => byBlock[z] - byBlock[a]))
     console.log(`  ${b}: ${byBlock[b]} · скіп ${skipByBlock[b] ?? 0}`);
