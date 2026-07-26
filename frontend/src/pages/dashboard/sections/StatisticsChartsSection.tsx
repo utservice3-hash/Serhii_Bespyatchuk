@@ -10,7 +10,7 @@ const SEAM = "2026-07-01";
 const COLORS = ["#2f6fdb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#db2777", "#65a30d"];
 const MUTED = "var(--text-muted)";
 
-type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string };
+type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; weekOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string };
 type Cat = { key: string; icon: string; label: string; metrics: Metric[]; manualForm?: boolean; depstats?: boolean };
 
 const SEAM_CARS = "До лип 2026 — ручний лічильник таблиці; з лип 2026 — точний підрахунок CRM (тому рівень міг зміститись).";
@@ -56,8 +56,8 @@ const CATS: Cat[] = [
     { key: "tender_commission", block: "tenders", unitScope: "Тендери", label: "Тендери: комісія", unit: "₴", hint: DIR_HINT },
     { key: "lgintl_transfers", block: "lgintl", unitScope: "ЛідгенМіжн", label: "ЛідгенМіжн: передачі", hint: DIR_HINT },
     { key: "lgintl_revenue", block: "lgintl", unitScope: "ЛідгенМіжн", label: "ЛідгенМіжн: дохід", unit: "₴", hint: DIR_HINT },
-    { key: "cars_delivered_all", block: "logistics", unitScope: "ВЛТ", label: "ВЛТ: поставлені авто", hint: DIR_HINT },
-    { key: "repeat_clients_sum", block: "logistics", unitScope: "ВЛТ", label: "ВЛТ: сума постійних", unit: "₴", hint: DIR_HINT },
+    { key: "cars_delivered_all", block: "logistics", unitScope: "ВЛТ", label: "ВЛТ: поставлені авто", weekOnly: true, hint: DIR_HINT },
+    { key: "repeat_clients_sum", block: "logistics", unitScope: "ВЛТ", label: "ВЛТ: сума постійних", unit: "₴", weekOnly: true, hint: DIR_HINT },
   ] },
   { key: "finance", icon: "💵", label: "Фінанси", depstats: true, metrics: [
     { key: "cashflow", block: "finance", label: "Cash flow", unit: "₴", hint: FINHR_HINT },
@@ -102,7 +102,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const [win, setWin] = useState<{ lo: number; hi: number } | null>(null);
   const [drag, setDrag] = useState<{ a: string | null; b: string | null }>({ a: null, b: null });
 
-  const effGran = metric.monthOnly ? "month" : gran;
+  const effGran = metric.monthOnly ? "month" : metric.weekOnly ? "week" : gran; // напрямок без місячних (ВЛТ) → тиждень
   useEffect(() => {
     let alive = true; setResp(null); setHidden(new Set()); setWin(null);
     fetchStatsSeries({ block: metric.block, metric: metric.key, granularity: effGran, ...(metric.unitScope ? { unit: metric.unitScope } : {}) })
@@ -190,7 +190,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
               ))}
             </div>
             <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-              {!metric.monthOnly && (
+              {!metric.monthOnly && !metric.weekOnly && (
                 <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
                   {(["day", "week", "month"] as const).map((g) => (
                     <button key={g} onClick={() => setGran(g)} style={{ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", border: "none",
