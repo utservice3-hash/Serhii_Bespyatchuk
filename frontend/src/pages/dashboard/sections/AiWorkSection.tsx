@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchAiMessages, postAiMessage, uploadFile, FILES_BASE, type AiMessage, type AiAttachment } from "../../../api";
+import { usePolling } from "../../../hooks/usePolling";
 
 type Pending = { name: string; preview: string; file: File };
 
@@ -24,11 +25,8 @@ export function AiWorkSection() {
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
-  // АІ відповідає асинхронно на бекенді — добираємо його репліки полінгом.
-  useEffect(() => {
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
-  }, []);
+  // АІ відповідає асинхронно на бекенді — добираємо його репліки полінгом (пауза на фоні + джитер).
+  usePolling(load, 5000);
 
   const lastId = messages.length ? messages[messages.length - 1].id : 0;
   // Scroll only the message list (never the whole page) and only if the user is

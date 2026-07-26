@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePolling } from "../hooks/usePolling";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   createTask,
@@ -196,10 +197,8 @@ export function Dashboard() {
   // Live refresh: bump a nonce every 5 min so data-loading effects re-fetch
   // fresh CRM data without a manual page reload.
   const [refreshNonce, setRefreshNonce] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setRefreshNonce((n) => n + 1), 5 * 60 * 1000);
-    return () => clearInterval(id);
-  }, []);
+  // Пауза на фоні + джитер; повернення фокуса → один рефетч (bump nonce).
+  usePolling(() => setRefreshNonce((n) => n + 1), 5 * 60 * 1000);
   const canEditReceivables = auth?.role === "admin" || auth?.role === "team_lead";
   function patchReceivableNote(clientKey: string, patch: { comment?: string; dueDate?: string | null }) {
     setReceivablesData((prev) =>
@@ -274,34 +273,29 @@ export function Dashboard() {
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
-    const iv = setInterval(() => { fetchTasks().then(setTasks).catch(() => {}); }, 45000);
-    return () => clearInterval(iv);
   }, []);
+  usePolling(() => { fetchTasks().then(setTasks).catch(() => {}); }, 45000);
 
   // Poll unread messages in the background (any section) so the sidebar badge
   // stays live and we sound/toast a new incoming message even when the user is
   // elsewhere. Skips the first poll (baseline) so a page load never beeps.
-  useEffect(() => {
-    const poll = () =>
-      fetchUnreadCount()
-        .then((n) => {
-          const prev = prevChatUnread.current;
-          setChatUnread(n);
-          if (prev !== null && n > prev && section !== "messenger") {
-            const text = `Нове повідомлення 💬 (${n} непрочитан${n === 1 ? "е" : n < 5 ? "і" : "их"})`;
-            setToasts((cur) => [...cur, { id: Date.now(), text }]);
-            beep(false);
-            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-              try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
-            }
+  usePolling(() => {
+    fetchUnreadCount()
+      .then((n) => {
+        const prev = prevChatUnread.current;
+        setChatUnread(n);
+        if (prev !== null && n > prev && section !== "messenger") {
+          const text = `Нове повідомлення 💬 (${n} непрочитан${n === 1 ? "е" : n < 5 ? "і" : "их"})`;
+          setToasts((cur) => [...cur, { id: Date.now(), text }]);
+          beep(false);
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
           }
-          prevChatUnread.current = n;
-        })
-        .catch(() => {});
-    poll();
-    const iv = setInterval(poll, 15000);
-    return () => clearInterval(iv);
-  }, [section]);
+        }
+        prevChatUnread.current = n;
+      })
+      .catch(() => {});
+  }, 15000, { immediate: true });
 
   // Notify (sound + toast + browser notification) when MY task (created by me or
   // assigned to me) is taken into work or completed. Skips the first load.
@@ -539,26 +533,21 @@ export function Dashboard() {
     fetchChatUsers().then(setChatUsers).catch(() => setChatUsers([]));
   }, [section]);
 
-  useEffect(() => {
-    if (section !== "messenger" || !chatActive) return;
-    let stop = false;
-    const load = () =>
-      fetchConversation(chatActive.id)
-        .then((m) => {
-          if (!stop) setChatMessages(m);
-          // The conversation fetch marks incoming messages read; refresh the
-          // user list and the sidebar badge so both reflect the true state.
-          if (!stop) fetchChatUsers().then(setChatUsers).catch(() => {});
-          if (!stop) fetchUnreadCount().then((n) => { prevChatUnread.current = n; setChatUnread(n); }).catch(() => {});
-        })
-        .catch(() => {});
-    load();
-    const interval = setInterval(load, 5000);
-    return () => {
-      stop = true;
-      clearInterval(interval);
-    };
-  }, [section, chatActive]);
+  // Завантаження активної розмови. Месенджер 5с→15с; пауза на фоні + джитер (usePolling).
+  const loadConversation = useCallback(() => {
+    if (!chatActive) return;
+    fetchConversation(chatActive.id)
+      .then((m) => {
+        setChatMessages(m);
+        // The conversation fetch marks incoming messages read; refresh the
+        // user list and the sidebar badge so both reflect the true state.
+        fetchChatUsers().then(setChatUsers).catch(() => {});
+        fetchUnreadCount().then((n) => { prevChatUnread.current = n; setChatUnread(n); }).catch(() => {});
+      })
+      .catch(() => {});
+  }, [chatActive]);
+  useEffect(() => { if (section === "messenger" && chatActive) loadConversation(); }, [section, chatActive, loadConversation]); // одразу при відкритті/зміні чату
+  usePolling(loadConversation, 15000, { enabled: section === "messenger" && !!chatActive }); // періодично (immediate — вище)
 
   async function handleSendMessage() {
     const body = chatInput.trim();

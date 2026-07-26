@@ -14,8 +14,23 @@ api.interceptors.request.use((req) => {
 // request 401s — which previously left the UI silently broken (empty team
 // dropdown, blank charts). Clear the stale token and send the user back to
 // login so they can re-authenticate.
+// Хостинговий «I'm Under Attack» повертає HTML-сторінку-челендж (часто зі статусом 200).
+// Ловимо: якщо очікували JSON, а прийшов HTML — це НЕ дані. Кидаємо помилку з isChallenge,
+// щоб авто-ретраї робили backoff (не тайт-петлю) і UI не намагався читати HTML як дані.
+function looksLikeChallenge(res: { headers?: unknown; data?: unknown }): boolean {
+  const ct = String((res.headers as Record<string, unknown> | undefined)?.["content-type"] ?? "");
+  if (ct.includes("application/json")) return false;
+  return typeof res.data === "string" && /^\s*<(?:!doctype|html)/i.test(res.data);
+}
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    if (looksLikeChallenge(res)) {
+      const err = new Error("challenge") as Error & { isChallenge: boolean };
+      err.isChallenge = true;
+      return Promise.reject(err);
+    }
+    return res;
+  },
   (error) => {
     if (error.response?.status === 401 && localStorage.getItem("token")) {
       localStorage.removeItem("token");
@@ -23,6 +38,9 @@ api.interceptors.response.use(
         window.location.href = "/login";
       }
     }
+    // 429 / 503 (rate-limit або челендж) — позначаємо для backoff у авто-ретраях.
+    const st = error.response?.status;
+    if (st === 429 || st === 503) (error as { isChallenge?: boolean }).isChallenge = true;
     return Promise.reject(error);
   }
 );

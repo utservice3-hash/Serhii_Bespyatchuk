@@ -88,7 +88,10 @@ export function ReportPlanSection({ auth, teams }: {
         catch (e) {
           if (cancelled) throw e;
           if (i >= attempts - 1) throw e;
-          await new Promise((r) => setTimeout(r, 300 * (i + 1))); // 300мс, 600мс backoff
+          // Челендж/429 → довший експоненційний backoff з cap (не тайт-петля, щоб не «годувати»
+          // хостинговий захист); звичайна помилка — коротший. base·2^i, cap 8с.
+          const challenge = (e as { isChallenge?: boolean })?.isChallenge === true;
+          await new Promise((r) => setTimeout(r, Math.min((challenge ? 2000 : 400) * 2 ** i, 8000)));
         }
       }
     };

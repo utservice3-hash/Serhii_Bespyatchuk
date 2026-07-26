@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { CommandPalette } from "./CommandPalette";
 import { heartbeat } from "../api";
+import { usePolling } from "../hooks/usePolling";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
 export const NAV_GROUPS = [
@@ -108,12 +109,8 @@ export function Layout({
     localStorage.setItem("theme", theme);
   }, [theme]);
 
-  // Presence: ping a heartbeat so others see us as online.
-  useEffect(() => {
-    heartbeat();
-    const t = setInterval(heartbeat, 30000);
-    return () => clearInterval(t);
-  }, []);
+  // Presence: ping a heartbeat so others see us as online. Пауза на фоні + джитер.
+  usePolling(heartbeat, 30000, { immediate: true });
 
   function toggleCollapsed() {
     setCollapsed((c) => {
