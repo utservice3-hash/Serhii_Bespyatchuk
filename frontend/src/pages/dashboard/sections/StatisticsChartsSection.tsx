@@ -10,12 +10,13 @@ const SEAM = "2026-07-01";
 const COLORS = ["#2f6fdb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#db2777", "#65a30d"];
 const MUTED = "var(--text-muted)";
 
-type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string };
+type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string };
 type Cat = { key: string; icon: string; label: string; metrics: Metric[]; manualForm?: boolean; depstats?: boolean };
 
 const SEAM_CARS = "До лип 2026 — ручний лічильник таблиці; з лип 2026 — точний підрахунок CRM (тому рівень міг зміститись).";
 const CALLS_HINT = "Результативні дзвінки Ringostat (billsec>0); історія до лип 2026 — з таблиці (визначення могло відрізнятись).";
 const FINHR_HINT = "Історія з таблиці; оновиться після внесення через депстат-ввід.";
+const DIR_HINT = "Напрямок (unit-серія). Історія з таблиці; CRM-продовження по sales_channel — у розробці (де ще нема — показуємо історію до шва). Лише для КВП/адміна.";
 
 const CATS: Cat[] = [
   { key: "money", icon: "💰", label: "Гроші", metrics: [
@@ -45,9 +46,18 @@ const CATS: Cat[] = [
     { key: "plan_execution", block: "sales", label: "% виконання", unit: "%", monthOnly: true, hint: "received-факт ÷ план (payment_amount). Тижневих планів нема." },
   ] },
   { key: "intl", icon: "🌍", label: "Напрямки", metrics: [
-    { key: "intl_delivered_sum", block: "intl", label: "Дохід (Міжнародка)", unit: "₴" },
-    { key: "intl_delivered_cars", block: "intl", label: "Авто (Міжнародка)" },
-    { key: "intl_avg_check", block: "intl", label: "Чек (Міжнародка)", unit: "₴" },
+    // Кожен напрямок — unit-серія (scope_type='unit'). Історія з таблиці; CRM-обчислювачі
+    // напрямків у хвості 2b → показуємо історію (мітка «історія до…»), не порожнечу.
+    { key: "intl_delivered_sum", block: "intl", unitScope: "Міжнародка", label: "Міжнародка: дохід", unit: "₴", hint: DIR_HINT },
+    { key: "intl_delivered_cars", block: "intl", unitScope: "Міжнародка", label: "Міжнародка: авто", hint: DIR_HINT },
+    { key: "intl_avg_check", block: "intl", unitScope: "Міжнародка", label: "Міжнародка: чек", unit: "₴", hint: DIR_HINT },
+    { key: "tender_requests", block: "tenders", unitScope: "Тендери", label: "Тендери: заявки", hint: DIR_HINT },
+    { key: "tender_cars", block: "tenders", unitScope: "Тендери", label: "Тендери: авто", hint: DIR_HINT },
+    { key: "tender_commission", block: "tenders", unitScope: "Тендери", label: "Тендери: комісія", unit: "₴", hint: DIR_HINT },
+    { key: "lgintl_transfers", block: "lgintl", unitScope: "ЛідгенМіжн", label: "ЛідгенМіжн: передачі", hint: DIR_HINT },
+    { key: "lgintl_revenue", block: "lgintl", unitScope: "ЛідгенМіжн", label: "ЛідгенМіжн: дохід", unit: "₴", hint: DIR_HINT },
+    { key: "cars_delivered_all", block: "logistics", unitScope: "ВЛТ", label: "ВЛТ: поставлені авто", hint: DIR_HINT },
+    { key: "repeat_clients_sum", block: "logistics", unitScope: "ВЛТ", label: "ВЛТ: сума постійних", unit: "₴", hint: DIR_HINT },
   ] },
   { key: "finance", icon: "💵", label: "Фінанси", depstats: true, metrics: [
     { key: "cashflow", block: "finance", label: "Cash flow", unit: "₴", hint: FINHR_HINT },
@@ -95,10 +105,10 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const effGran = metric.monthOnly ? "month" : gran;
   useEffect(() => {
     let alive = true; setResp(null); setHidden(new Set()); setWin(null);
-    fetchStatsSeries({ block: metric.block, metric: metric.key, granularity: effGran })
+    fetchStatsSeries({ block: metric.block, metric: metric.key, granularity: effGran, ...(metric.unitScope ? { unit: metric.unitScope } : {}) })
       .then((d) => alive && setResp(d)).catch(() => alive && setResp({ block: metric.block, metric: metric.key, granularity: effGran, seam: SEAM, crmAble: false, live: false, series: [] }));
     return () => { alive = false; };
-  }, [metric.block, metric.key, effGran]);
+  }, [metric.block, metric.key, effGran, metric.unitScope]);
 
   // усі періоди (вісь X) + рядки для recharts
   const { rows, seriesList } = useMemo(() => {

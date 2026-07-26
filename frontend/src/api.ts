@@ -1304,7 +1304,7 @@ export async function fetchStuckGrouped(params: { teamId?: number; managerId?: n
 export interface StatsPoint { period: string; value: number; source: "sheet" | "crm" | "manual" }
 export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: string; points: StatsPoint[]; benchmark?: boolean }
 export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[] }
-export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string }): Promise<StatsSeriesResp> {
+export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string }): Promise<StatsSeriesResp> {
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
   return data;
 }
