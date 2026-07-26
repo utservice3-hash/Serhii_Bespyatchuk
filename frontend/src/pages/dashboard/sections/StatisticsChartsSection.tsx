@@ -89,6 +89,18 @@ const fmt = (n: number, unit?: string) => {
 };
 const shortDate = (p: string) => { const [y, m, d] = p.split("-"); return `${d}.${m}.${y.slice(2)}`; };
 const RANGES: Record<string, number> = { "3м": 90, "6м": 180, "12м": 365, "Усе": 9999 };
+const MIN_WIN = 3; // мінімальна ширина вікна брашу (≥4 точки) — щоб не з'їжджало в 2-точкову пряму
+// Вікно [lo,hi] (індекси у ПОВНОМУ rows) для діапазону 3м/6м/12м/Усе.
+function rangeWindow(rows: { period: string }[], range: string): { lo: number; hi: number } {
+  const hi = rows.length - 1;
+  if (hi < 0) return { lo: 0, hi: 0 };
+  if (range === "Усе") return { lo: 0, hi };
+  const cut = new Date(rows[hi].period); cut.setDate(cut.getDate() - RANGES[range]);
+  const cs = cut.toISOString().slice(0, 10);
+  let lo = rows.findIndex((r) => r.period >= cs); if (lo < 0) lo = 0;
+  if (hi - lo < MIN_WIN) lo = Math.max(0, hi - MIN_WIN);
+  return { lo, hi };
+}
 
 export default function StatisticsChartsSection({ role }: { role?: string }) {
   const [catKey, setCatKey] = useState("money");
@@ -99,7 +111,9 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const [range, setRange] = useState("12м");
   const [resp, setResp] = useState<StatsSeriesResp | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
-  const [win, setWin] = useState<{ lo: number; hi: number } | null>(null);
+  // Вікно брашу/зуму — індекси у ПОВНОМУ rows + key прив'язки (діапазон+довжина).
+  // key потрібен, щоб при зміні діапазону/показника старе вікно не «прилипало».
+  const [win, setWin] = useState<{ lo: number; hi: number; key: string } | null>(null);
   const [drag, setDrag] = useState<{ a: string | null; b: string | null }>({ a: null, b: null });
 
   const effGran = metric.monthOnly ? "month" : metric.weekOnly ? "week" : gran; // напрямок без місячних (ВЛТ) → тиждень
@@ -121,14 +135,21 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
     return { rows: sorted.map((p) => map.get(p)!), seriesList: resp.series };
   }, [resp]);
 
-  // діапазон (3м/6м/12м/Усе) → індекси; win (brush/zoom) перекриває
-  const view = useMemo(() => {
-    if (!rows.length) return { lo: 0, hi: 0, data: [] as any[] };
-    let lo = 0, hi = rows.length - 1;
-    if (range !== "Усе") { const days = RANGES[range]; const last = rows[hi].period; const cut = new Date(last); cut.setDate(cut.getDate() - days); const cs = cut.toISOString().slice(0, 10); lo = rows.findIndex((r) => r.period >= cs); if (lo < 0) lo = 0; }
-    if (win) { lo = win.lo; hi = win.hi; }
-    return { lo, hi, data: rows.slice(lo, hi + 1) };
-  }, [rows, range, win]);
+  // Ключ прив'язки вікна: діапазон + к-ть точок. win застосовується ЛИШЕ коли ключ збігається —
+  // інакше після зміни «3м/6м/12м/Усе» чи показника вертаємось на вікно діапазону.
+  const winKey = `${range}:${rows.length}`;
+  // Ефективне вікно [lo,hi] (індекси у ПОВНОМУ rows). Графік рендериться на ПОВНИХ rows,
+  // а Brush контрольований через startIndex/endIndex — жодного перерізання data → нема петлі.
+  const eff = useMemo(() => {
+    if (!rows.length) return { lo: 0, hi: 0 };
+    if (win && win.key === winKey) {
+      let lo = Math.max(0, Math.min(win.lo, rows.length - 1));
+      let hi = Math.max(0, Math.min(win.hi, rows.length - 1));
+      if (hi < lo) { const t = lo; lo = hi; hi = t; }
+      return { lo, hi };
+    }
+    return rangeWindow(rows, range);
+  }, [rows, range, win, winKey]);
 
   const color = (i: number) => COLORS[i % COLORS.length];
   const visibleSeries = seriesList.map((s, i) => ({ s, i })).filter(({ s }) => !hidden.has(s.scopeKey));
@@ -137,21 +158,24 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
 
   // статистика по ПЕРШІЙ видимій серії у вікні
   const stat = useMemo(() => {
-    const first = visibleSeries[0]; if (!first || !view.data.length) return null;
+    const first = visibleSeries[0]; if (!first || !rows.length) return null;
+    const windowRows = rows.slice(eff.lo, eff.hi + 1);
     const key = `s${first.i}`;
-    const pts = view.data.filter((r) => r[key] != null).map((r) => ({ p: r.period, v: r[key] as number }));
+    const pts = windowRows.filter((r) => r[key] != null).map((r) => ({ p: r.period, v: r[key] as number }));
     if (!pts.length) return null;
     const vals = pts.map((x) => x.v);
     const now = pts[pts.length - 1].v, avg = vals.reduce((a, b) => a + b, 0) / vals.length;
     const min = pts.reduce((a, b) => (b.v < a.v ? b : a)), max = pts.reduce((a, b) => (b.v > a.v ? b : a));
     const prev = pts.length > 1 ? pts[pts.length - 2].v : now;
     return { now, avg, min, max, delta: prev ? ((now - prev) / Math.abs(prev)) * 100 : 0 };
-  }, [visibleSeries, view.data]);
+  }, [visibleSeries, rows, eff.lo, eff.hi]);
 
   const onDragEnd = () => {
     if (drag.a && drag.b && drag.a !== drag.b) {
       const ia = rows.findIndex((r) => r.period === drag.a), ib = rows.findIndex((r) => r.period === drag.b);
-      setWin({ lo: Math.min(ia, ib), hi: Math.max(ia, ib) });
+      let lo = Math.min(ia, ib), hi = Math.max(ia, ib);
+      if (hi - lo < MIN_WIN) hi = Math.min(rows.length - 1, lo + MIN_WIN); // не даємо зуму зхлопнутись у 2 точки
+      setWin({ lo, hi, key: winKey });
     }
     setDrag({ a: null, b: null });
   };
@@ -229,7 +253,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
           {/* Великий графік */}
           <div style={{ userSelect: "none" }}>
             <ResponsiveContainer width="100%" height={340}>
-              <LineChart data={view.data} margin={{ top: 12, right: 64, bottom: 4, left: 8 }}
+              <LineChart data={rows} margin={{ top: 12, right: 64, bottom: 4, left: 8 }}
                 onMouseDown={(e: any) => e && setDrag({ a: e.activeLabel, b: e.activeLabel })}
                 onMouseMove={(e: any) => e && drag.a && setDrag((d) => ({ ...d, b: e.activeLabel }))}
                 onMouseUp={onDragEnd}>
@@ -247,7 +271,16 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                 ))}
                 {drag.a && drag.b && <ReferenceArea x1={drag.a} x2={drag.b} fill="#2f6fdb" fillOpacity={0.08} />}
                 <Brush dataKey="period" height={26} travellerWidth={9} stroke="#94a3b8" tickFormatter={shortDate}
-                  onChange={(e: any) => { if (e && e.startIndex != null) setWin({ lo: view.lo + e.startIndex, hi: view.lo + e.endIndex }); }} />
+                  startIndex={eff.lo} endIndex={eff.hi} gap={1}
+                  onChange={(e: any) => {
+                    if (!e || e.startIndex == null || e.endIndex == null) return;
+                    let lo = e.startIndex, hi = e.endIndex;
+                    if (lo === eff.lo && hi === eff.hi) return; // контрольований ре-емісія — ігноруємо (нема петлі)
+                    if (hi - lo < MIN_WIN) { // не даємо ручкам зхлопнутись у пряму
+                      if (lo + MIN_WIN <= rows.length - 1) hi = lo + MIN_WIN; else lo = Math.max(0, hi - MIN_WIN);
+                    }
+                    setWin({ lo, hi, key: winKey });
+                  }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
