@@ -7,7 +7,7 @@ import * as privat from "../bankSources/privat.js";
 import type { BankAccountRow, NormalizedTx } from "../bankSources/types.js";
 
 const ADAPTERS = { mono, privat } as const;
-const INITIAL_LOOKBACK_DAYS = 35;
+const INITIAL_LOOKBACK_DAYS = 30; // ≤31 — у межах ліміту виписки monobank (privat теж ок)
 
 /** Upsert однієї транзакції. Повертає true, якщо вставлено НОВУ (для лічильника). */
 export async function upsertTx(accountId: number, tx: NormalizedTx, unmatched = false): Promise<boolean> {

@@ -35,8 +35,12 @@ export async function fetchTransactions(account: BankAccountRow, since: Date): P
   const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
   if (!token) throw new Error(`monobank: немає env ${account.env_key_name}`);
   const acc = account.external_account_id ?? "0"; // '0' = дефолтний рахунок токена
-  const from = Math.floor(since.getTime() / 1000);
-  const to = Math.floor(Date.now() / 1000);
+  // monobank statement — максимум 31 доба + 1 год за запит. Клампимо `from`, щоб перший
+  // (широкий) прохід не падав 400; глибший бекфіл — не потрібен (виписка за поточний період).
+  const MONO_MAX_SEC = 31 * 24 * 3600;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const from = Math.max(Math.floor(since.getTime() / 1000), nowSec - MONO_MAX_SEC);
+  const to = nowSec;
   const res = await fetch(`${BASE}/personal/statement/${acc}/${from}/${to}`, {
     headers: { "X-Token": token }, signal: AbortSignal.timeout(30000),
   });
