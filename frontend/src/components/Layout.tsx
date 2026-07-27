@@ -27,7 +27,6 @@ export const NAV_GROUPS = [
     items: [
       { key: "loyalty", label: "Клієнти та реактивація", icon: "🔁" },
       { key: "receivables", label: "Дебіторська заборгованість", icon: "💰" },
-      { key: "bank", label: "Виписка", icon: "💳" },
       { key: "leadgen", label: "Лідогенерація", icon: "🎯" },
     ],
   },
@@ -36,6 +35,7 @@ export const NAV_GROUPS = [
     items: [
       { key: "tasks", label: "Задачник", icon: "📝" },
       { key: "duty", label: "Графік чергування", icon: "🗓" },
+      { key: "bank", label: "Виписка", icon: "💳" },
       { key: "oneonone", label: "Ван-ту-ван", icon: "🤝", roles: ["admin", "team_lead"] },
       { key: "rates", label: "Калькулятор ставок", icon: "🧮" },
       { key: "goals", label: "Місячні цілі", icon: "🎯", roles: ["admin", "team_lead"] },
