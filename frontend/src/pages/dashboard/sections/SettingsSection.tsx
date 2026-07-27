@@ -20,6 +20,9 @@ const PERMS: { key: string; label: string; hint?: string }[] = [
   { key: "enter_manual_stats", label: "Вносити ручні показники статистик", hint: "бюджети/фінанси/HR" },
   { key: "manage_users", label: "Керувати користувачами й ролями", hint: "лише адмін" },
   { key: "export", label: "Експорт у Excel / PDF" },
+  { key: "view_hidden_payments", label: "Бачити приховані вихідні (Виписка)", hint: "інакше приховані отримувачі відсутні" },
+  { key: "manage_bank_hidden", label: "Керувати списком прихованих (Виписка)" },
+  { key: "manage_bank_accounts", label: "Керувати реквізитами рахунків (Виписка)" },
 ];
 const SCOPES: { key: "own" | "team" | "company"; label: string; sub: string }[] = [
   { key: "own", label: "Свої", sub: "лише власні" },

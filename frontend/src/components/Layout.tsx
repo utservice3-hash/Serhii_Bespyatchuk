@@ -27,6 +27,7 @@ export const NAV_GROUPS = [
     items: [
       { key: "loyalty", label: "Клієнти та реактивація", icon: "🔁" },
       { key: "receivables", label: "Дебіторська заборгованість", icon: "💰" },
+      { key: "bank", label: "Виписка", icon: "💳" },
       { key: "leadgen", label: "Лідогенерація", icon: "🎯" },
     ],
   },

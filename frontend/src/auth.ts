@@ -3,6 +3,7 @@ export interface AuthPayload {
   role: "admin" | "team_lead" | "manager" | "company";
   roleKey?: string;      // ефективний ключ ролі (для кастомних)
   screens?: string[];    // дозволені вкладки (screen_access) — косметика nav; сервер гейтить
+  perms?: string[];      // надані права (permissions) — косметика UX; сервер гейтить через requirePerm
   managerId: number | null;
   teamId: number | null;
 }

@@ -57,6 +57,7 @@ import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, p
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
 import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSection";
 import SettingsSection from "./dashboard/sections/SettingsSection";
+import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
@@ -851,6 +852,7 @@ export function Dashboard() {
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
 
       {section === "statistics" && <StatisticsChartsSection role={auth?.role} />}
+      {section === "bank" && <BankSection />}
 
       {section === "teams" && auth?.role !== "manager" && (
         <TeamsSection

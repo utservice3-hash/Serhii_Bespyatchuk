@@ -49,12 +49,14 @@ authRouter.post("/login", async (req, res) => {
   const roleKey = effectiveRoleKey(user);
   const def = getRoleDef(roleKey);
   const screens = def ? Object.keys(def.screenAccess).filter((k) => def.screenAccess[k] === true) : undefined;
+  const perms = def ? Object.keys(def.permissions).filter((k) => def.permissions[k] === true) : undefined;
   const token = signToken({
     userId: user.id,
     email,
     role: scopeCompatRole(roleKey, def),
     roleKey,
     screens,
+    perms,
     managerId: user.manager_id,
     teamId: user.team_id,
   });

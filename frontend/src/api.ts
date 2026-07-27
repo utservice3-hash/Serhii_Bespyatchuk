@@ -1999,3 +1999,51 @@ export async function fetchManagerReport(params: {
   const { data } = await api.get<ManagerReport>("/dashboard/manager-report", { params });
   return data;
 }
+
+// ─────────────────────────── Виписка (банк) ───────────────────────────
+export interface BankAccount {
+  id: number; company: string; bank: "mono" | "privat"; label: string; currency: string;
+  external_account_id: string | null; is_active: boolean;
+  legal_name: string | null; edrpou_ipn: string | null; iban: string | null;
+  bank_name: string | null; mfo: string | null; purpose: string | null;
+  env_key_name?: string | null; api_connected: boolean;
+}
+export interface BankTx {
+  id: number; account_id: number; company: string; account_label: string; direction: "in" | "out";
+  booked_at: string; processed_at: string | null; counterparty_name: string | null;
+  counterparty_iban: string | null; purpose: string | null; amount: string; currency: string;
+  fx_rate: string | null; amount_uah: string; external_tx_id: string; unmatched_account: boolean;
+  hidden?: boolean;
+}
+export interface BankSummary { total: number; count: number; byCompany: Record<string, number>; maxPayment: number }
+export interface BankFeed { rows: BankTx[]; summary: BankSummary; canSeeHidden?: boolean }
+export interface BankHiddenPayee { id: number; pattern: string; match_type: "exact" | "glob"; note: string | null; created_at: string }
+
+export interface BankQuery { from?: string; to?: string; company?: string; account?: number; currency?: string; q?: string }
+const bankParams = (p: BankQuery) => ({ ...(p.from ? { from: p.from } : {}), ...(p.to ? { to: p.to } : {}), ...(p.company ? { company: p.company } : {}), ...(p.account ? { account: p.account } : {}), ...(p.currency ? { currency: p.currency } : {}), ...(p.q ? { q: p.q } : {}) });
+
+export async function fetchBankAccounts(): Promise<BankAccount[]> {
+  const { data } = await api.get<{ accounts: BankAccount[] }>("/bank/accounts");
+  return data.accounts;
+}
+export async function fetchBankIncoming(p: BankQuery): Promise<BankFeed> {
+  const { data } = await api.get<BankFeed>("/bank/incoming", { params: bankParams(p) });
+  return data;
+}
+export async function fetchBankOutgoing(p: BankQuery): Promise<BankFeed> {
+  const { data } = await api.get<BankFeed>("/bank/outgoing", { params: bankParams(p) });
+  return data;
+}
+export async function saveBankAccount(id: number | null, patch: Partial<BankAccount> & { envKeyName?: string; legalName?: string; edrpouIpn?: string; bankName?: string; isActive?: boolean }): Promise<void> {
+  if (id == null) await api.post("/bank/accounts", patch); else await api.patch(`/bank/accounts/${id}`, patch);
+}
+export async function fetchBankHiddenPayees(): Promise<BankHiddenPayee[]> {
+  const { data } = await api.get<{ payees: BankHiddenPayee[] }>("/bank/hidden-payees");
+  return data.payees;
+}
+export async function addBankHiddenPayee(pattern: string, matchType: "exact" | "glob"): Promise<void> {
+  await api.post("/bank/hidden-payees", { pattern, matchType });
+}
+export async function deleteBankHiddenPayee(id: number): Promise<void> {
+  await api.delete(`/bank/hidden-payees/${id}`);
+}
