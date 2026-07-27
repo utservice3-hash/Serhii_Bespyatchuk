@@ -312,8 +312,10 @@ function BalancesModal({ onClose }: { onClose: () => void }) {
   const fmtBal = (amt: string | null, ccy: string | null) => {
     if (amt == null) return "—";
     const n = Number(amt);
-    const s = n.toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/,/g, " ");
-    return `${s} ${ccy ?? "UAH"}`;
+    if (!Number.isFinite(n)) return "—";
+    const [int, dec] = Math.abs(n).toFixed(2).split(".");
+    const grp = int.replace(/\B(?=(\d{3})+(?!\d))/g, " "); // групування пробілом
+    return `${n < 0 ? "−" : ""}${grp},${dec} ${ccy ?? "UAH"}`;
   };
   const upd = (iso: string | null) => { if (!iso) return "—"; const d = new Date(iso); const p = (x: number) => String(x).padStart(2, "0"); return `оновлено ${p(d.getHours())}:${p(d.getMinutes())}`; };
   return (
