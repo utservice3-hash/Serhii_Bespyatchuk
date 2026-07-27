@@ -6,6 +6,11 @@ import type { BankAccountRow, NormalizedTx } from "./types.js";
 
 const BASE = "https://acp.privatbank.ua/api/statements/transactions";
 
+// ⚠️ ПриватБанк Autoclient віддає тіло у cp1251 (Windows-1251), НЕ UTF-8. res.text()/res.json()
+// припускають UTF-8 → кирилиця перетворюється на U+FFFD («◆◆◆»). Декодуємо сирі байти cp1251.
+// ASCII (синтаксис JSON) у cp1251 ідентичний, тож JSON.parse після декоду коректний. mono — UTF-8.
+const CP1251 = new TextDecoder("windows-1251");
+
 interface PrivatItem {
   ID?: string; REF?: string; TRANTYPE?: "C" | "D"; CCY?: string;
   SUM?: string | number; SUM_E?: string | number; OSND?: string;
@@ -13,13 +18,28 @@ interface PrivatItem {
   DAT_KL?: string; DAT_OD?: string; TIM_P?: string;
 }
 
+/** Київська «стінка» (y/mo/d/h/mi у часі Києва) → правильний UTC-інстант. DST-безпечно через
+ *  Intl (без хардкоду +2/+3): Privat віддає час по-київськи. */
+function kyivWallToUtc(y: number, mo: number, d: number, h: number, mi: number): Date {
+  const guess = Date.UTC(y, mo - 1, d, h, mi); // наближення: трактуємо як UTC
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date(guess));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  const hh = get("hour") === 24 ? 0 : get("hour"); // Intl інколи дає 24:00
+  const kyivAsUtc = Date.UTC(get("year"), get("month") - 1, get("day"), hh, get("minute"));
+  return new Date(guess - (kyivAsUtc - guess)); // віднімаємо зсув Києва для цього інстанту
+}
+
 function parseDate(dat?: string, tim?: string): Date | null {
   if (!dat) return null;
-  // формат privat: dd.mm.yyyy (+ час HH:MM:SS)
+  // формат privat: dd.mm.yyyy (+ час HH:MM[:SS]) у КИЇВСЬКОМУ часі
   const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(dat.trim());
   if (!m) { const d = new Date(dat); return isNaN(+d) ? null : d; }
-  const iso = `${m[3]}-${m[2]}-${m[1]}T${(tim && /^\d{2}:\d{2}/.test(tim)) ? tim : "00:00:00"}Z`;
-  const d = new Date(iso); return isNaN(+d) ? null : d;
+  const tm = (tim && /^(\d{2}):(\d{2})/.exec(tim.trim())) || null;
+  const H = tm ? Number(tm[1]) : 0, M = tm ? Number(tm[2]) : 0;
+  return kyivWallToUtc(Number(m[3]), Number(m[2]), Number(m[1]), H, M);
 }
 
 /** Чистий нормалізатор (тестується без мережі). Знак — з TRANTYPE (C=надходження, D=списання). */
@@ -28,7 +48,8 @@ export function normalizePrivat(it: PrivatItem, accountCurrency: string): Normal
   const abs = Math.abs(Number(it.SUM ?? 0));
   const sumE = it.SUM_E != null ? Math.abs(Number(it.SUM_E)) : null; // UAH-еквівалент (для валютних)
   const currency = (it.CCY || accountCurrency || "UAH").toUpperCase();
-  const booked = parseDate(it.DAT_KL) ?? parseDate(it.DAT_OD, it.TIM_P) ?? new Date(0);
+  // booked_at несе РЕАЛЬНИЙ час операції (TIM_P), а не лише дату (інакше всі рядки = 00:00/«03:00»).
+  const booked = parseDate(it.DAT_KL, it.TIM_P) ?? parseDate(it.DAT_OD, it.TIM_P) ?? new Date(0);
   const processed = parseDate(it.DAT_OD, it.TIM_P);
   const fxRate = currency !== "UAH" && sumE != null && abs > 0 ? sumE / abs : null;
   return {
@@ -66,7 +87,9 @@ export async function fetchTransactions(account: BankAccountRow, since: Date): P
     if (id) headers.id = id;
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(30000) });
     if (!res.ok) throw new Error(`privat ${res.status}`);
-    const body = (await res.json()) as { transactions?: PrivatItem[]; exist_next_page?: boolean; next_page_id?: string };
+    // cp1251 → UTF-8 на сирих байтах (НЕ res.json(), що припускає UTF-8 і псує кирилицю)
+    const body = JSON.parse(CP1251.decode(new Uint8Array(await res.arrayBuffer()))) as
+      { transactions?: PrivatItem[]; exist_next_page?: boolean; next_page_id?: string };
     for (const it of body.transactions ?? []) all.push(normalizePrivat(it, account.currency));
     if (!body.exist_next_page || !body.next_page_id) break;
     followId = body.next_page_id;
