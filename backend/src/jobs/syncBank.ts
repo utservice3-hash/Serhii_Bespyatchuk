@@ -7,7 +7,9 @@ import * as privat from "../bankSources/privat.js";
 import type { BankAccountRow, NormalizedTx, BankAdapter } from "../bankSources/types.js";
 
 const ADAPTERS: Record<BankAccountRow["bank"], BankAdapter> = { mono, privat };
-const INITIAL_LOOKBACK_DAYS = 30; // ≤31 — у межах ліміту виписки monobank (privat теж ок)
+// Історія ≥60 днів. mono statement обмежений 31 добою/запит → адаптер сам чанкує (2 вікна на 60д);
+// privat покриває вікно followId-пагінацією. Нічого молодшого за 60 днів не чистимо.
+const INITIAL_LOOKBACK_DAYS = 60;
 
 /** Upsert однієї транзакції. Повертає true, якщо вставлено НОВУ (для лічильника). */
 export async function upsertTx(accountId: number, tx: NormalizedTx, unmatched = false): Promise<boolean> {

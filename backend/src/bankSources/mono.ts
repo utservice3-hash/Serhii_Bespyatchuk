@@ -58,6 +58,21 @@ export function normalizeMono(it: MonoItem, accountCurrency: string): Normalized
   };
 }
 
+// statement monobank — максимум 31 доба+1год/запит. Беремо запас під межу. Бекфіл на 60 днів
+// → 2 вікна. Пауза між чанками — під ліміт «1 запит/60с» (429), лише КОЛИ є наступний чанк.
+const MONO_WINDOW_SEC = 30 * 24 * 3600; // ≤31 доба на одне вікно виписки
+const MONO_CHUNK_PAUSE_MS = 61_000;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+async function fetchWindow(acc: string, token: string, from: number, to: number, currency: string): Promise<NormalizedTx[]> {
+  const res = await fetch(`${BASE}/personal/statement/${acc}/${from}/${to}`, {
+    headers: { "X-Token": token }, signal: AbortSignal.timeout(30000),
+  });
+  if (!res.ok) throw new Error(`monobank ${res.status}`);
+  const items = (await res.json()) as MonoItem[];
+  return (Array.isArray(items) ? items : []).map((it) => normalizeMono(it, currency));
+}
+
 export async function fetchTransactions(account: BankAccountRow, since: Date): Promise<NormalizedTx[]> {
   const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
   if (!token) throw new Error(`monobank: немає env ${account.env_key_name}`);
@@ -65,16 +80,15 @@ export async function fetchTransactions(account: BankAccountRow, since: Date): P
   // явний ФОП-рахунок: збережений external_account_id або резолв через client-info (type='fop').
   const acc = account.external_account_id ?? (await resolveAccountId(account));
   if (!acc) throw new Error(`monobank: не знайдено ФОП-рахунок під токеном ${account.env_key_name}`);
-  // monobank statement — максимум 31 доба + 1 год за запит. Клампимо `from`, щоб перший
-  // (широкий) прохід не падав 400; глибший бекфіл — не потрібен (виписка за поточний період).
-  const MONO_MAX_SEC = 31 * 24 * 3600;
   const nowSec = Math.floor(Date.now() / 1000);
-  const from = Math.max(Math.floor(since.getTime() / 1000), nowSec - MONO_MAX_SEC);
-  const to = nowSec;
-  const res = await fetch(`${BASE}/personal/statement/${acc}/${from}/${to}`, {
-    headers: { "X-Token": token }, signal: AbortSignal.timeout(30000),
-  });
-  if (!res.ok) throw new Error(`monobank ${res.status}`);
-  const items = (await res.json()) as MonoItem[];
-  return (Array.isArray(items) ? items : []).map((it) => normalizeMono(it, account.currency));
+  let from = Math.floor(since.getTime() / 1000);
+  const all: NormalizedTx[] = [];
+  for (let guard = 0; from < nowSec && guard < 6; guard++) { // чанкуємо вперед вікнами ≤31 доба
+    const to = Math.min(from + MONO_WINDOW_SEC, nowSec);
+    all.push(...(await fetchWindow(acc, token, from, to, account.currency)));
+    if (to >= nowSec) break;
+    from = to + 1;
+    await sleep(MONO_CHUNK_PAUSE_MS); // ще є чанк → чекаємо ліміт mono
+  }
+  return all;
 }

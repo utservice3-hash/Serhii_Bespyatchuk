@@ -2016,11 +2016,12 @@ export interface BankTx {
   hidden?: boolean;
 }
 export interface BankSummary { total: number; count: number; byCompany: Record<string, number>; maxPayment: number }
-export interface BankFeed { rows: BankTx[]; summary: BankSummary; canSeeHidden?: boolean }
+// summary — лише на першій сторінці (за період); nextCursor — далі гортати (keyset), null = кінець історії
+export interface BankFeed { rows: BankTx[]; nextCursor: string | null; summary?: BankSummary; canSeeHidden?: boolean }
 export interface BankHiddenPayee { id: number; pattern: string; match_type: "exact" | "glob"; note: string | null; created_at: string }
 
-export interface BankQuery { from?: string; to?: string; company?: string; account?: number; currency?: string; q?: string }
-const bankParams = (p: BankQuery) => ({ ...(p.from ? { from: p.from } : {}), ...(p.to ? { to: p.to } : {}), ...(p.company ? { company: p.company } : {}), ...(p.account ? { account: p.account } : {}), ...(p.currency ? { currency: p.currency } : {}), ...(p.q ? { q: p.q } : {}) });
+export interface BankQuery { from?: string; to?: string; company?: string; account?: number; currency?: string; q?: string; cursor?: string; limit?: number }
+const bankParams = (p: BankQuery) => ({ ...(p.from ? { from: p.from } : {}), ...(p.to ? { to: p.to } : {}), ...(p.company ? { company: p.company } : {}), ...(p.account ? { account: p.account } : {}), ...(p.currency ? { currency: p.currency } : {}), ...(p.q ? { q: p.q } : {}), ...(p.cursor ? { cursor: p.cursor } : {}), ...(p.limit ? { limit: p.limit } : {}) });
 
 export async function fetchBankAccounts(): Promise<BankAccount[]> {
   const { data } = await api.get<{ accounts: BankAccount[] }>("/bank/accounts");

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchBankAccounts, fetchBankIncoming, fetchBankOutgoing, saveBankAccount,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
-  type BankAccount, type BankFeed, type BankHiddenPayee,
+  type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee,
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 import { usePolling } from "../../../hooks/usePolling";
@@ -42,28 +42,67 @@ export default function BankSection() {
   const canManageHidden = perms.includes("manage_bank_hidden");
   const canSeeHidden = perms.includes("view_hidden_payments");
 
+  const PAGE = 100;
   const [mode, setMode] = useState<"in" | "out" | "receivables">("in");
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [accFilter, setAccFilter] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [ccy, setCcy] = useState("");
-  const [feed, setFeed] = useState<BankFeed | null>(null);
+  const [rows, setRows] = useState<BankTx[]>([]);
+  const [summary, setSummary] = useState<BankSummary | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // діапазон дат: за замовч. останні 5 днів
-  const [range, setRange] = useState(() => { const to = new Date(); const from = new Date(); from.setDate(to.getDate() - 4); return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) }; });
+  // діапазон дат керує ЛИШЕ підсумками; таблиця гортається по всій утриманій історії. Дефолт — місяць.
+  const [range, setRange] = useState(() => { const to = new Date(); const from = new Date(); from.setDate(to.getDate() - 29); return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) }; });
 
   const loadAccounts = () => fetchBankAccounts().then(setAccounts).catch(() => setAccounts([]));
   useEffect(() => { loadAccounts(); }, []);
 
-  const load = () => {
-    if (mode === "receivables") { setFeed(null); setLoading(false); return; }
-    const p = { from: range.from, to: range.to, account: accFilter ?? undefined, currency: ccy || undefined, q: q || undefined };
-    const fn = mode === "in" ? fetchBankIncoming : fetchBankOutgoing;
-    fn(p).then(setFeed).catch(() => setFeed(null)).finally(() => setLoading(false));
-  };
-  useEffect(() => { setLoading(true); load(); /* eslint-disable-next-line */ }, [mode, accFilter, ccy, q, range.from, range.to]);
-  usePolling(load, 30000);
+  const filters = useMemo(() => ({ from: range.from, to: range.to, account: accFilter ?? undefined, currency: ccy || undefined, q: q || undefined }), [range.from, range.to, accFilter, ccy, q]);
+  const feedFn = mode === "in" ? fetchBankIncoming : fetchBankOutgoing;
+
+  // Перша сторінка (скидання): підсумки за період + перша порція історії.
+  const loadFirst = useCallback(() => {
+    if (mode === "receivables") { setRows([]); setSummary(null); setCursor(null); setHasMore(false); setLoading(false); return; }
+    setLoading(true);
+    feedFn({ ...filters, limit: PAGE }).then((d) => {
+      setRows(d.rows); setSummary(d.summary ?? null);
+      setCursor(d.nextCursor); setHasMore(!!d.nextCursor);
+    }).catch(() => { setRows([]); setSummary(null); setCursor(null); setHasMore(false); }).finally(() => setLoading(false));
+  }, [mode, feedFn, filters]);
+  useEffect(() => { loadFirst(); }, [loadFirst]);
+
+  // Довантаження наступної сторінки (keyset-курсор) — append донизу.
+  const loadMore = useCallback(() => {
+    if (!cursor || loadingMore) return;
+    setLoadingMore(true);
+    feedFn({ ...filters, cursor, limit: PAGE }).then((d) => {
+      setRows((prev) => { const seen = new Set(prev.map((r) => r.id)); return [...prev, ...d.rows.filter((r) => !seen.has(r.id))]; });
+      setCursor(d.nextCursor); setHasMore(!!d.nextCursor);
+    }).catch(() => setHasMore(false)).finally(() => setLoadingMore(false));
+  }, [cursor, loadingMore, feedFn, filters]);
+
+  // Полінг: перечитує ПЕРШУ сторінку, доклеює лише нові рядки згори (overflow-anchor тримає скрол).
+  usePolling(useCallback(() => {
+    if (mode === "receivables") return;
+    feedFn({ ...filters, limit: PAGE }).then((d) => {
+      if (d.summary) setSummary(d.summary);
+      setRows((prev) => { const seen = new Set(prev.map((r) => r.id)); const fresh = d.rows.filter((r) => !seen.has(r.id)); return fresh.length ? [...fresh, ...prev] : prev; });
+    }).catch(() => {});
+  }, [mode, feedFn, filters]), 30000);
+
+  // Infinite scroll: спостерігач за сентинелем внизу списку.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const io = new IntersectionObserver((entries) => { if (entries[0]?.isIntersecting) loadMore(); }, { rootMargin: "400px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loadMore]);
 
   const shiftRange = (dir: number) => setRange((r) => {
     const from = new Date(r.from), to = new Date(r.to);
@@ -74,13 +113,9 @@ export default function BankSection() {
   const rangeLabel = (() => { const f = new Date(range.from), t = new Date(range.to); return `${f.getDate()}–${t.getDate()} ${MONTHS[t.getMonth()]} ${t.getFullYear()}`; })();
 
   const active = accounts.filter((a) => a.is_active);
-  const byCo = feed?.summary.byCompany ?? {};
+  const byCo = summary?.byCompany ?? {};
   const fopSum = (byCo.fop_privat ?? 0) + (byCo.fop_mono ?? 0);
-  const currencies = [...new Set(feed?.rows.map((r) => r.currency) ?? [])];
-  const LIMIT = 12;
-  const rows = feed?.rows ?? [];
-  const shown = rows.slice(0, LIMIT);
-  const rest = rows.length - shown.length;
+  const currencies = [...new Set([...(accounts.map((a) => a.currency)), ...rows.map((r) => r.currency)])];
 
   return (
     <div>
@@ -121,12 +156,12 @@ export default function BankSection() {
         <>
           {/* Стрип підсумків (UAH) */}
           <div className="chart-card" style={{ display: "flex", gap: 26, flexWrap: "wrap", alignItems: "center", padding: "16px 20px" }}>
-            <Stat big label={mode === "in" ? "надійшло за період" : "виплачено за період"} value={fmtUah(feed?.summary.total ?? 0)} hint="Σ у гривні (валютні рахунки конвертовано за курсом банку/НБУ). Джерело — банк, не CRM." />
-            <Stat label="транзакцій" value={String(feed?.summary.count ?? 0)} hint="Кількість транзакцій у видимому наборі. Джерело — банк." />
-            <Stat label="ТОВ ЮТС" value={fmtUah(byCo.uts ?? 0)} hint="Σ по рахунку ТОВ ЮТС, UAH. Джерело — банк." />
-            <Stat label="ТОВ Автомув" value={fmtUah(byCo.automuv ?? 0)} hint="Σ по рахунку ТОВ Автомув, UAH. Джерело — банк." />
-            <Stat label="ФОП Беспятчук" value={fmtUah(fopSum)} hint="Σ по рахунках ФОП (Приват+Моно), UAH. Джерело — банк." />
-            <Stat label="найбільший платіж" value={fmtUah(feed?.summary.maxPayment ?? 0)} hint="Найбільша транзакція у видимому наборі, UAH." />
+            <Stat big label={mode === "in" ? "надійшло за період" : "виплачено за період"} value={fmtUah(summary?.total ?? 0)} hint="Σ у гривні за ВИБРАНИЙ ПЕРІОД (валютні конвертовано за курсом банку/НБУ). Таблиця нижче гортається по всій історії." />
+            <Stat label="транзакцій за період" value={String(summary?.count ?? 0)} hint="Кількість транзакцій за вибраний період. Таблиця показує всю утриману історію." />
+            <Stat label="ТОВ ЮТС" value={fmtUah(byCo.uts ?? 0)} hint="Σ по рахунку ТОВ ЮТС за період, UAH. Джерело — банк." />
+            <Stat label="ТОВ Автомув" value={fmtUah(byCo.automuv ?? 0)} hint="Σ по рахунку ТОВ Автомув за період, UAH. Джерело — банк." />
+            <Stat label="ФОП Беспятчук" value={fmtUah(fopSum)} hint="Σ по рахунках ФОП (Приват+Моно) за період, UAH. Джерело — банк." />
+            <Stat label="найбільший платіж" value={fmtUah(summary?.maxPayment ?? 0)} hint="Найбільша транзакція за період, UAH." />
             {(canManageAccounts || canManageHidden) && (
               <button onClick={() => setSettingsOpen((v) => !v)} style={{ marginLeft: "auto", padding: "9px 15px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 700 }}>⚙️ Налаштування виписки</button>
             )}
@@ -143,11 +178,11 @@ export default function BankSection() {
               <select value={accFilter ?? ""} onChange={(e) => setAccFilter(e.target.value ? Number(e.target.value) : null)} style={inp}><option value="">Рахунок: усі</option>{active.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>
               <select value={ccy} onChange={(e) => setCcy(e.target.value)} style={inp}><option value="">Валюта: усі</option>{currencies.map((c) => <option key={c} value={c}>{c}</option>)}</select>
             </div>
-            {loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій за період.</p> : (
+            {loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій в утриманій історії.</p> : (
               <table className="data-table">
                 <thead><tr><th>Дата · час</th><th>Рахунок</th><th>{mode === "in" ? "Контрагент (платник)" : "Отримувач"}</th><th>Підстава</th><th>Сума</th><th>UAH</th></tr></thead>
                 <tbody>
-                  {shown.map((r) => (
+                  {rows.map((r) => (
                     <tr key={r.id} style={{ background: r.hidden ? "rgba(217,119,6,0.09)" : r.unmatched_account ? "rgba(220,38,38,0.06)" : undefined, borderLeft: r.unmatched_account ? "3px solid #dc2626" : undefined }}>
                       <td style={{ whiteSpace: "nowrap" }}>{shortDate(r.booked_at)}</td>
                       <td><AccBadge company={r.company} />{r.unmatched_account && <span title="нерозпізнаний рахунок" style={{ marginLeft: 6, color: "#dc2626", fontSize: 11 }}>⚠</span>}</td>
@@ -160,8 +195,13 @@ export default function BankSection() {
                 </tbody>
               </table>
             )}
-            {rest > 0 && <div style={{ textAlign: "center", padding: "10px 0 0", color: MUTED, fontSize: 13 }}>…ще {rest} транзакція · Σ {fmtUah(feed?.summary.total ?? 0)}</div>}
-            {mode === "out" && !canSeeHidden && <p style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>👁 У вашому вигляді приховані отримувачі <b>повністю відсутні</b> (їх нема ні в списку, ні в підсумках) — сервер їх не віддає.</p>}
+            {/* сентинель infinite-scroll + індикатор довантаження / кінець історії */}
+            {!loading && rows.length > 0 && (
+              <div ref={sentinelRef} style={{ textAlign: "center", padding: "12px 0 2px", color: MUTED, fontSize: 12.5 }}>
+                {loadingMore ? "Завантаження ще…" : hasMore ? "Гортай нижче — довантажиться ще" : `Кінець історії · показано ${rows.length} транзакцій`}
+              </div>
+            )}
+            {mode === "out" && !canSeeHidden && <p style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>👁 У вашому вигляді приховані отримувачі <b>повністю відсутні</b> (їх нема ні в списку, ні в підсумках) — сервер їх не віддає на КОЖНІЙ сторінці.</p>}
           </div>
         </>
       )}

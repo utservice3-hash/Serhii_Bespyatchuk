@@ -3,7 +3,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { writeAudit } from "../db/audit.js";
-import { incoming, outgoing, getHiddenPayees, type BankFilter } from "../core/bankReport.js";
+import { feedPage, periodSummary, getHiddenPayees, type BankFilter } from "../core/bankReport.js";
 
 export const bankRouter = Router();
 bankRouter.use(requireAuth); // tab-гейт «bank» — усі ролі (screen_access); + auto-asyncH через lib/asyncRoutes
@@ -15,20 +15,29 @@ const filterFrom = (q: Record<string, unknown>): BankFilter => ({
   account: q.account ? Number(q.account) : undefined,
   currency: q.currency ? String(q.currency) : undefined,
   q: q.q ? String(q.q) : undefined,
+  cursor: q.cursor ? String(q.cursor) : undefined,
+  limit: q.limit ? Number(q.limit) : undefined,
 });
 const audit = (req: import("express").Request) => ({ actorUserId: req.auth!.userId, actorEmail: req.auth!.email ?? null });
 
-// Вхідні — усі ролі, повний обсяг.
+// Вхідні — усі ролі. Стрічка гортається по всій історії (keyset); ПІДСУМКИ — за період (лише 1-ша стор.).
 bankRouter.get("/incoming", async (req, res) => {
-  res.json(await incoming(filterFrom(req.query as Record<string, unknown>)));
+  const f = filterFrom(req.query as Record<string, unknown>);
+  const page = await feedPage("in", f, [], true);
+  const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor };
+  if (!f.cursor) body.summary = await periodSummary("in", f, [], true); // summary лише на першій сторінці
+  res.json(body);
 });
 
-// Вихідні — усі ролі; приховані рядки СЕРВЕРНО виключаються без права view_hidden_payments.
+// Вихідні — усі ролі; приховані рядки СЕРВЕРНО виключаються без view_hidden_payments НА КОЖНІЙ сторінці.
 bankRouter.get("/outgoing", async (req, res) => {
   const canSeeHidden = roleHasPerm(req.auth!.roleKey, "view_hidden_payments");
   const payees = await getHiddenPayees();
-  const data = await outgoing(filterFrom(req.query as Record<string, unknown>), payees, canSeeHidden);
-  res.json({ ...data, canSeeHidden });
+  const f = filterFrom(req.query as Record<string, unknown>);
+  const page = await feedPage("out", f, payees, canSeeHidden);
+  const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor, canSeeHidden };
+  if (!f.cursor) body.summary = await periodSummary("out", f, payees, canSeeHidden);
+  res.json(body);
 });
 
 // Дебіторка по компаніях — відкладено (варіант «в»): placeholder, без вигаданого розрізу.
