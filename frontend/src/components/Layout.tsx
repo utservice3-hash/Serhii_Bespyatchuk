@@ -203,6 +203,9 @@ export function Layout({
             </div>
           ))}
         </nav>
+        {/* 🔒 «Вийти» — дія АКАУНТА, не «екран». НАВМИСНО поза <nav>/NAV_GROUPS і поза
+            фільтром screens[] — рендериться ЗАВЖДИ, для будь-якої ролі (вбудованої чи
+            кастомної), незалежно від screen_access/permissions. НЕ переносити в NAV_GROUP. */}
         <button className="sidebar-logout" onClick={logout} title="Вийти">
           {collapsed ? "⎋" : "Вийти"}
         </button>

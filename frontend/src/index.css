@@ -79,6 +79,14 @@ button {
   display: flex;
   flex-direction: column;
   padding: 20px 14px;
+  /* Пришпилюємо сайдбар до вьюпорта на всю висоту екрана: на високих сторінках
+     дашборда сайдбар більше НЕ розтягується разом зі скролом сторінки, тож кнопка
+     «Вийти» у футері завжди у полі зору (раніше падала в самий низ довгої сторінки). */
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  align-self: flex-start;
+  box-sizing: border-box;
 }
 
 .sidebar-brand {
@@ -96,6 +104,8 @@ button {
   flex-direction: column;
   gap: 4px;
   flex: 1;
+  overflow-y: auto; /* довгий список вкладок скролиться ВСЕРЕДИНІ, не виштовхуючи футер */
+  min-height: 0;    /* дозволяє flex-дитині скролитись у колонці */
 }
 
 .sidebar-nav-item {
@@ -132,6 +142,8 @@ button {
   padding: 10px 12px;
   border-radius: 8px;
   font-size: 14px;
+  flex-shrink: 0;  /* футер ніколи не стискається/не виштовхується списком вкладок */
+  margin-top: 8px;
 }
 
 .sidebar-logout:hover {
