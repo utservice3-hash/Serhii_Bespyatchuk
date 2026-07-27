@@ -10,8 +10,6 @@ import {
   fetchOverview,
   fetchLeadgen,
   fetchLoyalty,
-  fetchSettings,
-  saveSettings,
   fetchSyncStatus,
   triggerSync,
   type SyncStatus,
@@ -29,11 +27,6 @@ import {
   type KmPrices,
   type ChatUser,
   type ChatMessage,
-  fetchUsers as fetchDashboardUsers,
-  provisionUsers,
-  createUser,
-  resetUserPassword,
-  updateUser,
   fetchManagerBreakdown,
   fetchManagerOptions,
   fetchPersonalDashboard,
@@ -52,8 +45,6 @@ import {
   type ExecutiveOverview,
   type LeadgenGroup,
   type LoyaltyDynamics,
-  type AppSettings,
-  type DashboardUser,
   type ReceivableManager,
   type Task,
   type TaskPriority,
@@ -65,6 +56,7 @@ import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
 import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSection";
+import SettingsSection from "./dashboard/sections/SettingsSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
@@ -215,14 +207,6 @@ export function Dashboard() {
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [settingsForm, setSettingsForm] = useState<AppSettings | null>(null);
-  const [settingsSaved, setSettingsSaved] = useState(false);
-  const [settingsSaving, setSettingsSaving] = useState(false);
-  const [users, setUsers] = useState<DashboardUser[]>([]);
-  const [revealed, setRevealed] = useState<Record<number, string>>({});
-  const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
-  const [newUserForm, setNewUserForm] = useState({ email: "", password: "", role: "manager" as "manager" | "team_lead" | "admin", teamId: "" as number | "" });
-  const [newUserCreds, setNewUserCreds] = useState<string | null>(null);
 
   const [chatUsers, setChatUsers] = useState<ChatUser[]>([]);
   const [chatActive, setChatActive] = useState<ChatUser | null>(null);
@@ -596,75 +580,11 @@ export function Dashboard() {
     setKmPrices(await fetchKmPrices());
   }
 
-  useEffect(() => {
-    if (section !== "settings") return;
-    fetchSettings().then(setSettingsForm).catch(() => setSettingsForm(null));
-    if (auth?.role === "admin") {
-      fetchDashboardUsers().then(setUsers).catch(() => setUsers([]));
-    }
-  }, [section, auth, refreshNonce]);
-
   // Sync status drives both the Overview quick-sync control and the Settings card.
   useEffect(() => {
     if (section !== "overview" && section !== "settings") return;
     fetchSyncStatus().then(setSyncStatus).catch(() => setSyncStatus(null));
   }, [section, refreshNonce]);
-
-  async function reloadUsers() {
-    try {
-      setUsers(await fetchDashboardUsers());
-    } catch {
-      setUsers([]);
-    }
-  }
-
-  async function handleCreateUser() {
-    if (!newUserForm.email.trim()) return;
-    try {
-      const res = await createUser({
-        email: newUserForm.email.trim(),
-        password: newUserForm.password || undefined,
-        role: newUserForm.role,
-        teamId: newUserForm.teamId || undefined,
-      });
-      setNewUserCreds(`${res.email} / ${res.password}`);
-      setNewUserForm({ email: "", password: "", role: "manager", teamId: "" });
-      await reloadUsers();
-    } catch (e: any) {
-      setNewUserCreds(e?.response?.data?.error ?? "Помилка створення");
-    }
-  }
-
-  async function handleProvision() {
-    const created = await provisionUsers();
-    setProvisionMsg(
-      created.length
-        ? `Створено логінів: ${created.length}`
-        : "Нових користувачів немає — усі вже створені"
-    );
-    await reloadUsers();
-  }
-
-  async function handleResetPassword(id: number) {
-    const password = await resetUserPassword(id);
-    setRevealed((r) => ({ ...r, [id]: password }));
-  }
-
-  async function handleSetRole(u: DashboardUser, role: "admin" | "team_lead" | "manager") {
-    if (role === u.role) return;
-    if (role === "admin" && !window.confirm(`Дати ПОВНИЙ доступ (адмін) користувачу ${u.email}? Він бачитиме й керуватиме всім.`)) return;
-    try {
-      await updateUser(u.id, { role });
-      await reloadUsers();
-    } catch (e) {
-      alert((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Не вдалося змінити роль");
-    }
-  }
-
-  async function handleToggleActive(u: DashboardUser) {
-    await updateUser(u.id, { isActive: !u.is_active });
-    await reloadUsers();
-  }
 
   async function handleManualSync() {
     setSyncing(true);
@@ -688,18 +608,6 @@ export function Dashboard() {
       setTimeout(poll, 5000);
     };
     setTimeout(poll, 5000);
-  }
-
-  async function handleSaveSettings() {
-    if (!settingsForm) return;
-    setSettingsSaving(true);
-    setSettingsSaved(false);
-    try {
-      await saveSettings(settingsForm);
-      setSettingsSaved(true);
-    } finally {
-      setSettingsSaving(false);
-    }
   }
 
   useEffect(() => {
@@ -1119,247 +1027,13 @@ export function Dashboard() {
       {section === "depstats" && <StatisticsSection role={auth?.role} />}
 
       {section === "settings" && (
-        <>
-          <div className="page-header">
-            <h1 className="page-title">Налаштування</h1>
-          </div>
-
-          {syncStatus && (
-            <div
-              className="chart-card"
-              style={{
-                marginBottom: 16,
-                borderLeft: `4px solid ${syncStatus.stale ? "#dc2626" : "#16a34a"}`,
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <h2 className="chart-title" style={{ marginBottom: 0 }}>
-                  Синхронізація з CRM
-                </h2>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontWeight: 600, color: syncStatus.stale ? "#dc2626" : "#16a34a" }}>
-                    {syncStatus.stale ? "⚠️ Дані застаріли" : "🟢 Актуально"}
-                  </span>
-                  {(auth?.role === "admin" || auth?.role === "team_lead") && (
-                    <button
-                      onClick={handleManualSync}
-                      disabled={syncing}
-                      style={{
-                        padding: "6px 14px",
-                        borderRadius: 8,
-                        border: "none",
-                        background: syncing ? "#94a3b8" : "#c5141c",
-                        color: "#fff",
-                        fontWeight: 600,
-                        cursor: syncing ? "default" : "pointer",
-                      }}
-                    >
-                      {syncing ? "Синхронізація…" : "🔄 Синхронізувати зараз"}
-                    </button>
-                  )}
-                </div>
-              </div>
-              <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "8px 0 0" }}>
-                Останнє оновлення:{" "}
-                {syncStatus.lastSuccessAt
-                  ? `${new Date(syncStatus.lastSuccessAt).toLocaleString("uk-UA")} (${
-                      syncStatus.ageMinutes != null ? `${syncStatus.ageMinutes} хв тому` : "—"
-                    })`
-                  : "ще не було"}
-                {syncStatus.lastDealCount != null && ` · угод за прохід: ${syncStatus.lastDealCount}`}
-              </p>
-              {syncStatus.consecutiveFailures > 0 && (
-                <p style={{ fontSize: 13, color: "#dc2626", margin: "4px 0 0" }}>
-                  Помилок поспіль: {syncStatus.consecutiveFailures}
-                  {syncStatus.lastError ? ` — ${syncStatus.lastError.split("\n")[0]}` : ""}
-                </p>
-              )}
-            </div>
-          )}
-
-          {!settingsForm ? (
-            <p className="loading-text">Завантаження...</p>
-          ) : (
-            <div className="chart-grid">
-              <div className="chart-card">
-                <h2 className="chart-title">Постійні клієнти</h2>
-                {(
-                  [
-                    { key: "loyaltyThreshold", label: "Поріг «постійного» (оплат)", hint: "Скільки оплат робить клієнта постійним" },
-                    { key: "loyaltyWindowMonths", label: "Вікно, місяців", hint: "За який період рахуються оплати" },
-                    { key: "sleepingWindowMonths", label: "Вікно «сплячих», місяців", hint: "Глибина пошуку клієнтів на реактивацію" },
-                    { key: "ratesFallbackFullPerKm", label: "Калькулятор: базовий тариф, грн/км (ціла машина)", hint: "Орієнтир, коли заявок по напрямку немає" },
-                    { key: "ratesFallbackPartPerKm", label: "Калькулятор: базовий тариф, грн/км (догруз)", hint: "Орієнтир для догруза без заявок" },
-                  ] as const
-                ).map((f) => (
-                  <div key={f.key} style={{ marginBottom: 14 }}>
-                    <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>
-                      {f.label}
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={settingsForm[f.key]}
-                      onChange={(e) =>
-                        setSettingsForm({ ...settingsForm, [f.key]: Number(e.target.value) })
-                      }
-                      style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d0d5dd", width: 120 }}
-                    />
-                    <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>{f.hint}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="chart-card">
-                <h2 className="chart-title">Дебіторська заборгованість</h2>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>
-                    Підсвічувати прострочення понад (днів)
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={settingsForm.receivablesOverdueWarnDays}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        receivablesOverdueWarnDays: Number(e.target.value),
-                      })
-                    }
-                    style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d0d5dd", width: 120 }}
-                  />
-                  <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>
-                    0 — підсвічувати, лише коли прострочення перевищує погоджений ліміт днів
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ gridColumn: "1 / -1", display: "flex", gap: 12, alignItems: "center" }}>
-                <button
-                  onClick={handleSaveSettings}
-                  disabled={settingsSaving}
-                  style={{
-                    padding: "10px 20px",
-                    borderRadius: 8,
-                    border: "none",
-                    background: "#c5141c",
-                    color: "#fff",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  {settingsSaving ? "Збереження..." : "Зберегти"}
-                </button>
-                {settingsSaved && <span style={{ color: "#16a34a" }}>✓ Збережено</span>}
-              </div>
-            </div>
-          )}
-
-          {auth?.role === "admin" && (
-            <div className="chart-card" style={{ marginTop: 16 }}>
-              <div
-                style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
-              >
-                <h2 className="chart-title">Користувачі та доступи</h2>
-                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                  {provisionMsg && <span style={{ color: "#16a34a", fontSize: 13 }}>{provisionMsg}</span>}
-                  <button
-                    onClick={handleProvision}
-                    style={{
-                      padding: "8px 16px",
-                      borderRadius: 8,
-                      border: "none",
-                      background: "#c5141c",
-                      color: "#fff",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Синхронізувати з CRM
-                  </button>
-                </div>
-              </div>
-              <p style={{ fontSize: 12, color: "#667085", marginTop: 4 }}>
-                Логіни створюються автоматично для кожного менеджера з CRM. Тімлід бачить свою
-                команду. Пароль генерується автоматично — натисніть «Скинути», щоб побачити новий.
-              </p>
-
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", margin: "12px 0", padding: 12, border: "1px solid var(--border)", borderRadius: 8 }}>
-                <b style={{ marginRight: 4 }}>Додати вручну:</b>
-                <input placeholder="e-mail" value={newUserForm.email} onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })} style={{ width: 180 }} />
-                <input placeholder="пароль (необов'язково)" value={newUserForm.password} onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })} style={{ width: 170 }} />
-                <select value={newUserForm.role} onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value as any })}>
-                  <option value="manager">Менеджер</option>
-                  <option value="team_lead">Тімлід</option>
-                  <option value="admin">Керівник відділу продажу</option>
-                </select>
-                <select value={newUserForm.teamId} onChange={(e) => setNewUserForm({ ...newUserForm, teamId: e.target.value ? Number(e.target.value) : "" })}>
-                  <option value="">Без команди</option>
-                  {teamOptions(teams)}
-                </select>
-                <button onClick={handleCreateUser} style={{ padding: "8px 16px", background: "#c5141c", color: "#fff", border: "none", borderRadius: 8 }}>Створити</button>
-                {newUserCreds && <span style={{ color: "#16a34a", fontFamily: "monospace" }}>{newUserCreds}</span>}
-              </div>
-
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Ім'я</th>
-                    <th>E-mail</th>
-                    <th>Команда</th>
-                    <th>Роль</th>
-                    <th>Пароль</th>
-                    <th>Активний</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((u) => (
-                    <tr key={u.id} style={{ opacity: u.is_active ? 1 : 0.5 }}>
-                      <td>{u.manager_name ?? "—"}</td>
-                      <td>{u.email}</td>
-                      <td>{u.team_name ?? "—"}</td>
-                      <td>
-                        <select
-                          value={u.role}
-                          onChange={(e) => handleSetRole(u, e.target.value as "admin" | "team_lead" | "manager")}
-                          title="Роль користувача. «Адмін» = повний доступ до всього."
-                          style={{
-                            cursor: "pointer", borderRadius: 8, padding: "3px 8px", fontSize: 13,
-                            border: "1px solid var(--border)", background: u.role === "admin" ? "#fde7ea" : u.role === "team_lead" ? "#fef3c7" : "var(--card-bg)",
-                            color: "var(--text)", fontWeight: u.role === "admin" ? 700 : 400,
-                          }}
-                        >
-                          <option value="manager">Менеджер</option>
-                          <option value="team_lead">Тімлід</option>
-                          <option value="admin">Адмін (повний доступ)</option>
-                        </select>
-                      </td>
-                      <td style={{ fontFamily: "monospace" }}>
-                        {revealed[u.id] ?? (u.initial_password ? u.initial_password : "••••••")}
-                      </td>
-                      <td>{u.is_active ? "✓" : "—"}</td>
-                      <td style={{ whiteSpace: "nowrap" }}>
-                        <button
-                          onClick={() => handleResetPassword(u.id)}
-                          style={{ cursor: "pointer", marginRight: 6, fontSize: 12 }}
-                        >
-                          Скинути пароль
-                        </button>
-                        <button
-                          onClick={async () => { try { await handleToggleActive(u); } catch (e) { alert((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка"); } }}
-                          style={{ cursor: "pointer", fontSize: 12 }}
-                        >
-                          {u.is_active ? "Деактивувати" : "Активувати"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+        <SettingsSection
+          role={auth?.role}
+          teams={teams}
+          syncStatus={syncStatus}
+          syncing={syncing}
+          onManualSync={handleManualSync}
+        />
       )}
 
       {section === "messenger" && (

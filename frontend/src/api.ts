@@ -853,23 +853,28 @@ export async function triggerReceivablesSync(): Promise<{ ok: boolean }> {
 export interface DashboardUser {
   id: number;
   email: string;
-  role: "admin" | "team_lead" | "manager";
+  name: string | null;                       // ПІБ: CRM-менеджерам з CRM, ручним — редаговане
+  synced_role: "admin" | "team_lead" | "manager"; // CRM-owned (синк)
+  role_override: string | null;              // панель-owned (переважає)
+  role_effective: string;                    // = role_override ?? synced_role
   is_active: boolean;
-  initial_password: string | null;
-  manager_name: string | null;
+  crm_linked: boolean;                        // ідентичність із CRM (ПІБ/команда/синк-роль read-only)
   team_name: string | null;
+  deactivated_at?: string | null;
+  deactivated_reason?: string | null;
 }
 
-export async function fetchUsers(): Promise<DashboardUser[]> {
-  const { data } = await api.get<{ users: DashboardUser[] }>("/settings/users");
+export async function fetchUsers(archived = false): Promise<DashboardUser[]> {
+  const { data } = await api.get<{ users: DashboardUser[] }>("/settings/users", { params: archived ? { archived: 1 } : {} });
   return data.users;
 }
 
 export async function createUser(payload: {
   email: string;
   password?: string;
-  role: "manager" | "team_lead" | "admin";
+  role: string;
   teamId?: number;
+  fullName?: string;
 }): Promise<{ email: string; password: string }> {
   const { data } = await api.post<{ email: string; password: string }>("/settings/users", payload);
   return data;
@@ -889,9 +894,64 @@ export async function resetUserPassword(id: number): Promise<string> {
 
 export async function updateUser(
   id: number,
-  patch: { role?: "admin" | "team_lead" | "manager"; isActive?: boolean }
+  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string }
 ): Promise<void> {
   await api.patch(`/settings/users/${id}`, patch);
+}
+
+export async function reactivateUser(id: number): Promise<void> {
+  await api.post(`/settings/users/${id}/reactivate`);
+}
+
+// --- Ролі та доступи ---
+export interface RoleDef {
+  key: string;
+  name: string;
+  built_in: boolean;
+  data_scope: "own" | "team" | "company";
+  screen_access: Record<string, boolean>;
+  permissions: Record<string, boolean>;
+  cloned_from: string | null;
+  users_count: number;
+}
+
+export async function fetchRoles(): Promise<RoleDef[]> {
+  const { data } = await api.get<{ roles: RoleDef[] }>("/settings/roles");
+  return data.roles;
+}
+
+export async function createRole(payload: {
+  key: string; name: string; cloneFrom?: string;
+  dataScope?: string; screenAccess?: Record<string, boolean>; permissions?: Record<string, boolean>;
+}): Promise<void> {
+  await api.post("/settings/roles", payload);
+}
+
+export async function updateRole(key: string, payload: {
+  name: string; dataScope: string; screenAccess: Record<string, boolean>; permissions: Record<string, boolean>;
+}): Promise<void> {
+  await api.put(`/settings/roles/${key}`, payload);
+}
+
+export async function deleteRole(key: string): Promise<void> {
+  await api.delete(`/settings/roles/${key}`);
+}
+
+// --- Журнал змін ---
+export interface AuditEntry {
+  id: number;
+  at: string;
+  actor_email: string | null;
+  action: string;
+  target_type: "user" | "role";
+  target_id: string;
+  target_label: string | null;
+  details: Record<string, unknown>;
+}
+
+export async function fetchAudit(): Promise<AuditEntry[]> {
+  const { data } = await api.get<{ audit: AuditEntry[] }>("/settings/audit");
+  return data.audit;
 }
 
 export async function fetchLoyalty(params: {
