@@ -1061,6 +1061,8 @@ ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_currency   TEXT;
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_updated_at TIMESTAMPTZ;
 -- Право «бачити баланси» — ЛИШЕ вбудованій ролі admin; решті доступ НЕ змінюємо.
 UPDATE roles SET permissions = permissions || '{"view_balances":true}'::jsonb WHERE key = 'admin';
+-- Право «бачити підсумки виписки» (агрегати надходжень/платежів) — ЛИШЕ admin; решті не чіпаємо.
+UPDATE roles SET permissions = permissions || '{"view_bank_totals":true}'::jsonb WHERE key = 'admin';
 
 -- access_audit — розширюємо типи цілей на банк-обʼєкти.
 ALTER TABLE access_audit DROP CONSTRAINT IF EXISTS access_audit_target_type_check;

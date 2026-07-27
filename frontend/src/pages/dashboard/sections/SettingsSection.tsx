@@ -24,6 +24,7 @@ const PERMS: { key: string; label: string; hint?: string }[] = [
   { key: "manage_bank_hidden", label: "Керувати списком прихованих (Виписка)" },
   { key: "manage_bank_accounts", label: "Керувати реквізитами рахунків (Виписка)" },
   { key: "view_balances", label: "Бачити баланси рахунків (Виписка)", hint: "кнопка «💰 Баланси» + залишки; лише адмін" },
+  { key: "view_bank_totals", label: "Бачити підсумки виписки (Виписка)", hint: "картка агрегатів надходжень/платежів; лише адмін" },
 ];
 const SCOPES: { key: "own" | "team" | "company"; label: string; sub: string }[] = [
   { key: "own", label: "Свої", sub: "лише власні" },

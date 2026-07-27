@@ -20,23 +20,25 @@ const filterFrom = (q: Record<string, unknown>): BankFilter => ({
 });
 const audit = (req: import("express").Request) => ({ actorUserId: req.auth!.userId, actorEmail: req.auth!.email ?? null });
 
-// Вхідні — усі ролі. Стрічка гортається по всій історії (keyset); ПІДСУМКИ — за період (лише 1-ша стор.).
+// Вхідні — усі ролі. Стрічка гортається по всій історії (keyset); ПІДСУМКИ (агрегати) — лише за
+// правом view_bank_totals і лише на 1-й сторінці. Без права блок summary у payload ВІДСУТНІЙ узагалі.
 bankRouter.get("/incoming", async (req, res) => {
   const f = filterFrom(req.query as Record<string, unknown>);
   const page = await feedPage("in", f, [], true);
   const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor };
-  if (!f.cursor) body.summary = await periodSummary("in", f, [], true); // summary лише на першій сторінці
+  if (!f.cursor && roleHasPerm(req.auth!.roleKey, "view_bank_totals")) body.summary = await periodSummary("in", f, [], true);
   res.json(body);
 });
 
 // Вихідні — усі ролі; приховані рядки СЕРВЕРНО виключаються без view_hidden_payments НА КОЖНІЙ сторінці.
+// ПІДСУМКИ — лише за правом view_bank_totals (без нього агрегатів у payload немає; список як завжди).
 bankRouter.get("/outgoing", async (req, res) => {
   const canSeeHidden = roleHasPerm(req.auth!.roleKey, "view_hidden_payments");
   const payees = await getHiddenPayees();
   const f = filterFrom(req.query as Record<string, unknown>);
   const page = await feedPage("out", f, payees, canSeeHidden);
   const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor, canSeeHidden };
-  if (!f.cursor) body.summary = await periodSummary("out", f, payees, canSeeHidden);
+  if (!f.cursor && roleHasPerm(req.auth!.roleKey, "view_bank_totals")) body.summary = await periodSummary("out", f, payees, canSeeHidden);
   res.json(body);
 });
 

@@ -23,16 +23,57 @@ const fmtUah = (n: number) => {
   const s = a >= 1e6 ? (n / 1e6).toFixed(2) + " млн" : a >= 1e3 ? Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ") : String(Math.round(n));
   return s + " ₴";
 };
-const fmtAmt = (amount: string, ccy: string) => {
-  const n = Number(amount);
-  const s = Math.abs(n).toLocaleString("uk-UA", { minimumFractionDigits: ccy === "UAH" ? 0 : 2, maximumFractionDigits: 2 }).replace(/,/g, " ");
-  return ccy === "UAH" ? s : `${s} ${ccy}`;
+// групування пробілом + кома як десятковий; десяткові показуємо, коли forceDec або є копійки
+const fmtMoney = (n: number, forceDec = false) => {
+  const [int, dec] = Math.abs(n).toFixed(2).split(".");
+  const grp = int.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return forceDec || dec !== "00" ? `${grp},${dec}` : grp;
 };
-const shortDate = (iso: string) => { const d = new Date(iso); const p = (x: number) => String(x).padStart(2, "0"); return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 const MONTHS = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"];
 function AccBadge({ company }: { company: string }) {
   const c = ACC_COLOR[company] ?? { bg: "var(--hover-bg)", fg: "var(--text)", short: company };
   return <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 7, background: c.bg, color: c.fg, whiteSpace: "nowrap" }}>{c.short}</span>;
+}
+
+// Двохрядковий запис: зліва дата·час стовпчиком; рядок1 — контрагент жирним + сума справа
+// (UAH-екв. лише для валютних); рядок2 приглушено — рахунок-бейдж · підстава (ellipsis + title).
+function TxRow({ r, mode }: { r: BankTx; mode: "in" | "out" }) {
+  const inMode = mode === "in";
+  const color = inMode ? "#16a34a" : "#dc2626";
+  const sign = inMode ? "" : "−";
+  const isUah = (r.currency ?? "UAH") === "UAH";
+  const d = new Date(r.booked_at);
+  const p = (x: number) => String(x).padStart(2, "0");
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 12, padding: "10px 4px",
+      borderBottom: "1px solid var(--border)",
+      background: r.hidden ? "rgba(217,119,6,0.07)" : r.unmatched_account ? "rgba(220,38,38,0.05)" : undefined,
+      borderLeft: r.unmatched_account ? "3px solid #dc2626" : "3px solid transparent",
+    }}>
+      <div style={{ width: 50, flexShrink: 0, textAlign: "center", lineHeight: 1.15 }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>{p(d.getDate())}.{p(d.getMonth() + 1)}</div>
+        <div style={{ fontSize: 11, color: MUTED }}>{p(d.getHours())}:{p(d.getMinutes())}</div>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ fontWeight: 700, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.counterparty_name ?? "—"}</span>
+            {r.hidden && <span title="лише адмін" style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "rgba(217,119,6,0.18)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише адмін</span>}
+          </div>
+          <div style={{ flexShrink: 0, textAlign: "right" }}>
+            <div style={{ fontWeight: 800, fontSize: 14.5, color, whiteSpace: "nowrap" }}>{sign}{fmtMoney(Number(r.amount), !isUah)} {isUah ? "₴" : r.currency}</div>
+            {!isUah && <div style={{ fontSize: 11, color: MUTED, whiteSpace: "nowrap" }}>≈ {sign}{fmtMoney(Number(r.amount_uah))} ₴</div>}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, minWidth: 0 }}>
+          <AccBadge company={r.company} />
+          {r.unmatched_account && <span title="нерозпізнаний рахунок" style={{ color: "#dc2626", fontSize: 11, flexShrink: 0 }}>⚠</span>}
+          <span title={r.purpose ?? ""} style={{ fontSize: 12.5, color: MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{r.purpose ?? "—"}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function BankSection() {
@@ -42,10 +83,11 @@ export default function BankSection() {
   const canManageHidden = perms.includes("manage_bank_hidden");
   const canSeeHidden = perms.includes("view_hidden_payments");
   const canViewBalances = perms.includes("view_balances");
+  const canViewTotals = perms.includes("view_bank_totals"); // косметика; сервер гейтить summary
   const [balancesOpen, setBalancesOpen] = useState(false);
 
   const PAGE = 100;
-  const [mode, setMode] = useState<"in" | "out" | "receivables">("in");
+  const [mode, setMode] = useState<"in" | "out">("in");
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [accFilter, setAccFilter] = useState<number | null>(null);
   const [q, setQ] = useState("");
@@ -68,7 +110,6 @@ export default function BankSection() {
 
   // Перша сторінка (скидання): підсумки за період + перша порція історії.
   const loadFirst = useCallback(() => {
-    if (mode === "receivables") { setRows([]); setSummary(null); setCursor(null); setHasMore(false); setLoading(false); return; }
     setLoading(true);
     feedFn({ ...filters, limit: PAGE }).then((d) => {
       setRows(d.rows); setSummary(d.summary ?? null);
@@ -89,7 +130,6 @@ export default function BankSection() {
 
   // Полінг: перечитує ПЕРШУ сторінку, доклеює лише нові рядки згори (overflow-anchor тримає скрол).
   usePolling(useCallback(() => {
-    if (mode === "receivables") return;
     feedFn({ ...filters, limit: PAGE }).then((d) => {
       if (d.summary) setSummary(d.summary);
       setRows((prev) => { const seen = new Set(prev.map((r) => r.id)); const fresh = d.rows.filter((r) => !seen.has(r.id)); return fresh.length ? [...fresh, ...prev] : prev; });
@@ -132,7 +172,7 @@ export default function BankSection() {
       {/* Панель керування */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", margin: "12px 0 16px" }}>
         <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-          {([["in", "📥 Вхідні"], ["out", "📤 Вихідні"], ["receivables", "📊 Дебіторка"]] as const).map(([m, lbl]) => (
+          {([["in", "📥 Вхідні"], ["out", "📤 Вихідні"]] as const).map(([m, lbl]) => (
             <button key={m} onClick={() => setMode(m)} style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", cursor: "pointer", border: "none", background: mode === m ? "#1f2330" : "var(--card-bg)", color: mode === m ? "#fff" : "var(--text)" }}>{lbl}</button>
           ))}
         </div>
@@ -140,77 +180,62 @@ export default function BankSection() {
           <Chip on={accFilter === null} onClick={() => setAccFilter(null)}>Усі рахунки</Chip>
           {active.map((a) => <Chip key={a.id} on={accFilter === a.id} onClick={() => setAccFilter(a.id)}>{a.label}</Chip>)}
         </div>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "1px solid var(--border)", borderRadius: 9, padding: "4px 6px" }}>
-          <button onClick={() => shiftRange(-1)} style={arrowBtn}>◀</button>
-          <span style={{ fontSize: 13, fontWeight: 700, minWidth: 120, textAlign: "center" }}>{rangeLabel}</span>
-          <button onClick={() => shiftRange(1)} style={arrowBtn}>▶</button>
-        </div>
-        {canViewBalances && (
-          <button onClick={() => setBalancesOpen(true)} style={{ marginLeft: "auto", padding: "8px 14px", borderRadius: 10, border: "1px solid " + RED, background: "rgba(200,16,46,0.06)", color: RED, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>💰 Баланси</button>
+        {canViewTotals && (
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "1px solid var(--border)", borderRadius: 9, padding: "4px 6px" }} title="Період керує лише підсумками; список гортається по всій історії">
+            <button onClick={() => shiftRange(-1)} style={arrowBtn}>◀</button>
+            <span style={{ fontSize: 13, fontWeight: 700, minWidth: 120, textAlign: "center" }}>{rangeLabel}</span>
+            <button onClick={() => shiftRange(1)} style={arrowBtn}>▶</button>
+          </div>
         )}
-        <span style={{ marginLeft: canViewBalances ? 0 : "auto", fontSize: 12.5, color: MUTED }}>Ти: <b style={{ color: "var(--text)" }}>{roleName[auth?.role ?? ""] ?? auth?.roleKey ?? "—"}</b> · {canSeeHidden ? "бачиш усе" : "без прихованих"}</span>
+        <div style={{ marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
+          {canViewBalances && (
+            <button onClick={() => setBalancesOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid " + RED, background: "rgba(200,16,46,0.06)", color: RED, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>💰 Баланси</button>
+          )}
+          {(canManageAccounts || canManageHidden) && (
+            <button onClick={() => setSettingsOpen((v) => !v)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 700, fontSize: 13.5 }}>⚙️ Налаштування</button>
+          )}
+          <span style={{ fontSize: 12.5, color: MUTED }}>Ти: <b style={{ color: "var(--text)" }}>{roleName[auth?.role ?? ""] ?? auth?.roleKey ?? "—"}</b> · {canSeeHidden ? "бачиш усе" : "без прихованих"}</span>
+        </div>
       </div>
       {balancesOpen && canViewBalances && <BalancesModal onClose={() => setBalancesOpen(false)} />}
 
-      {mode === "receivables" ? (
-        <div className="chart-card" style={{ textAlign: "center", padding: "48px 20px", color: MUTED }}>
-          <div style={{ fontSize: 34, marginBottom: 8 }}>🚧</div>
-          <b style={{ fontSize: 16, color: "var(--text)" }}>Дебіторка по компаніях — скоро</b>
-          <p style={{ maxWidth: 560, margin: "8px auto 0", fontSize: 13.5 }}>Реальний розріз по юрособах (ЮТС / Автомув / ФОП) буде, коли заведемо ознаку юрособи в джерелі. Без вигаданих цифр.</p>
+      {/* Стрип підсумків — ЛИШЕ якщо сервер віддав summary (право view_bank_totals). Немає → картки нема. */}
+      {summary && (
+        <div className="chart-card" style={{ display: "flex", gap: 26, flexWrap: "wrap", alignItems: "center", padding: "16px 20px" }}>
+          <Stat big label={mode === "in" ? "надійшло за період" : "виплачено за період"} value={fmtUah(summary.total)} hint="Σ у гривні за ВИБРАНИЙ ПЕРІОД (валютні конвертовано за курсом банку/НБУ). Список нижче гортається по всій історії." />
+          <Stat label="транзакцій за період" value={String(summary.count)} hint="Кількість транзакцій за вибраний період. Список показує всю утриману історію." />
+          <Stat label="ТОВ ЮТС" value={fmtUah(byCo.uts ?? 0)} hint="Σ по рахунку ТОВ ЮТС за період, UAH. Джерело — банк." />
+          <Stat label="ТОВ Автомув" value={fmtUah(byCo.automuv ?? 0)} hint="Σ по рахунку ТОВ Автомув за період, UAH. Джерело — банк." />
+          <Stat label="ФОП Беспятчук" value={fmtUah(fopSum)} hint="Σ по рахунках ФОП (Приват+Моно) за період, UAH. Джерело — банк." />
+          <Stat label="найбільший платіж" value={fmtUah(summary.maxPayment)} hint="Найбільша транзакція за період, UAH." />
+          <span style={{ marginLeft: "auto", alignSelf: "flex-start", fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише адмін</span>
         </div>
-      ) : (
-        <>
-          {/* Стрип підсумків (UAH) */}
-          <div className="chart-card" style={{ display: "flex", gap: 26, flexWrap: "wrap", alignItems: "center", padding: "16px 20px" }}>
-            <Stat big label={mode === "in" ? "надійшло за період" : "виплачено за період"} value={fmtUah(summary?.total ?? 0)} hint="Σ у гривні за ВИБРАНИЙ ПЕРІОД (валютні конвертовано за курсом банку/НБУ). Таблиця нижче гортається по всій історії." />
-            <Stat label="транзакцій за період" value={String(summary?.count ?? 0)} hint="Кількість транзакцій за вибраний період. Таблиця показує всю утриману історію." />
-            <Stat label="ТОВ ЮТС" value={fmtUah(byCo.uts ?? 0)} hint="Σ по рахунку ТОВ ЮТС за період, UAH. Джерело — банк." />
-            <Stat label="ТОВ Автомув" value={fmtUah(byCo.automuv ?? 0)} hint="Σ по рахунку ТОВ Автомув за період, UAH. Джерело — банк." />
-            <Stat label="ФОП Беспятчук" value={fmtUah(fopSum)} hint="Σ по рахунках ФОП (Приват+Моно) за період, UAH. Джерело — банк." />
-            <Stat label="найбільший платіж" value={fmtUah(summary?.maxPayment ?? 0)} hint="Найбільша транзакція за період, UAH." />
-            {(canManageAccounts || canManageHidden) && (
-              <button onClick={() => setSettingsOpen((v) => !v)} style={{ marginLeft: "auto", padding: "9px 15px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 700 }}>⚙️ Налаштування виписки</button>
-            )}
-          </div>
-
-          {/* Таблиця */}
-          <div className="chart-card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-              <h2 className="chart-title" style={{ marginBottom: 0 }}>{mode === "in" ? "📥 Вхідні надходження" : "📤 Вихідні платежі"}</h2>
-              <span style={{ fontSize: 12.5, color: MUTED }}>{mode === "in" ? "видно всім" : canSeeHidden ? "адмін-вигляд: 🔒 приховані позначені" : "приховані отримувачі відсутні (лише адмін)"} · дані з банку, оновлення ~15 хв</span>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔎 контрагент / підстава / ID" style={{ ...inp, width: 240 }} />
-              <select value={accFilter ?? ""} onChange={(e) => setAccFilter(e.target.value ? Number(e.target.value) : null)} style={inp}><option value="">Рахунок: усі</option>{active.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>
-              <select value={ccy} onChange={(e) => setCcy(e.target.value)} style={inp}><option value="">Валюта: усі</option>{currencies.map((c) => <option key={c} value={c}>{c}</option>)}</select>
-            </div>
-            {loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій в утриманій історії.</p> : (
-              <table className="data-table">
-                <thead><tr><th>Дата · час</th><th>Рахунок</th><th>{mode === "in" ? "Контрагент (платник)" : "Отримувач"}</th><th>Підстава</th><th>Сума</th><th>UAH</th></tr></thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={r.id} style={{ background: r.hidden ? "rgba(217,119,6,0.09)" : r.unmatched_account ? "rgba(220,38,38,0.06)" : undefined, borderLeft: r.unmatched_account ? "3px solid #dc2626" : undefined }}>
-                      <td style={{ whiteSpace: "nowrap" }}>{shortDate(r.booked_at)}</td>
-                      <td><AccBadge company={r.company} />{r.unmatched_account && <span title="нерозпізнаний рахунок" style={{ marginLeft: 6, color: "#dc2626", fontSize: 11 }}>⚠</span>}</td>
-                      <td>{r.counterparty_name ?? "—"} {r.hidden && <span title="лише адмін" style={{ fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 6, background: "rgba(217,119,6,0.18)", color: "#b45309" }}>🔒 лише адмін</span>}</td>
-                      <td style={{ color: MUTED, fontSize: 12.5 }}>{r.purpose ?? "—"}</td>
-                      <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>{fmtAmt(r.amount, r.currency)}</td>
-                      <td style={{ whiteSpace: "nowrap", fontWeight: 700, color: mode === "in" ? "#16a34a" : "#dc2626" }}>{mode === "in" ? "" : "−"}{Math.abs(Number(r.amount_uah)).toLocaleString("uk-UA").replace(/,/g, " ")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            {/* сентинель infinite-scroll + індикатор довантаження / кінець історії */}
-            {!loading && rows.length > 0 && (
-              <div ref={sentinelRef} style={{ textAlign: "center", padding: "12px 0 2px", color: MUTED, fontSize: 12.5 }}>
-                {loadingMore ? "Завантаження ще…" : hasMore ? "Гортай нижче — довантажиться ще" : `Кінець історії · показано ${rows.length} транзакцій`}
-              </div>
-            )}
-            {mode === "out" && !canSeeHidden && <p style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>👁 У вашому вигляді приховані отримувачі <b>повністю відсутні</b> (їх нема ні в списку, ні в підсумках) — сервер їх не віддає на КОЖНІЙ сторінці.</p>}
-          </div>
-        </>
       )}
+
+      {/* Список записів (двохрядкові) */}
+      <div className="chart-card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>{mode === "in" ? "📥 Вхідні надходження" : "📤 Вихідні платежі"}</h2>
+          <span style={{ fontSize: 12.5, color: MUTED }}>{mode === "in" ? "видно всім" : canSeeHidden ? "адмін-вигляд: 🔒 приховані позначені" : "приховані отримувачі відсутні (лише адмін)"} · дані з банку, оновлення ~15 хв</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔎 контрагент / підстава / ID" style={{ ...inp, width: 240 }} />
+          <select value={accFilter ?? ""} onChange={(e) => setAccFilter(e.target.value ? Number(e.target.value) : null)} style={inp}><option value="">Рахунок: усі</option>{active.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>
+          <select value={ccy} onChange={(e) => setCcy(e.target.value)} style={inp}><option value="">Валюта: усі</option>{currencies.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        </div>
+        {loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій в утриманій історії.</p> : (
+          <div>
+            {rows.map((r) => <TxRow key={r.id} r={r} mode={mode} />)}
+          </div>
+        )}
+        {/* сентинель infinite-scroll + індикатор довантаження / кінець історії */}
+        {!loading && rows.length > 0 && (
+          <div ref={sentinelRef} style={{ textAlign: "center", padding: "14px 0 2px", color: MUTED, fontSize: 12.5 }}>
+            {loadingMore ? "Завантаження ще…" : hasMore ? "Гортай нижче — довантажиться ще" : `Кінець історії · показано ${rows.length} транзакцій`}
+          </div>
+        )}
+        {mode === "out" && !canSeeHidden && <p style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>👁 У вашому вигляді приховані отримувачі <b>повністю відсутні</b> (їх нема ні в списку, ні в підсумках) — сервер їх не віддає на КОЖНІЙ сторінці.</p>}
+      </div>
 
       {settingsOpen && (canManageAccounts || canManageHidden) && (
         <SettingsBlock accounts={accounts} canAccounts={canManageAccounts} canHidden={canManageHidden} onAccountsChange={loadAccounts} />
