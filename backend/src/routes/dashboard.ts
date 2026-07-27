@@ -658,7 +658,11 @@ dashboardRouter.get("/overview", async (req, res) => {
        AND d.created_at_kommo < date_trunc('month', $1::date) + interval '1 month'
        ${histWhere}
      GROUP BY 1 ORDER BY 1`,
-    [monthAnchor, adSources]
+    // ⚠️ Ця вибірка має ЛИШЕ $1 (monthAnchor). adSources тут НЕ використовується —
+    // передача 2-го параметра → Postgres 08P01 «bind supplies 2 params, requires 1»
+    // → unhandledRejection → відповідь /overview НІКОЛИ не надсилалась → воркер PHP-FPM
+    // висів до таймауту → ранковий herd вичерпував пул → edge 503. НЕ додавати сюди $2.
+    [monthAnchor]
   );
   const monthlyHistory = histRes.rows.map((r) => {
     const deals = Number(r.deals);

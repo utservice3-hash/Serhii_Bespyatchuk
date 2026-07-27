@@ -60,6 +60,26 @@ const SITE_ROOT = path.join(__dirname, "..", "..");
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "60mb" }));
+
+// 🛡 Backstop проти «зависань»: Express 4 НЕ ловить кинуті проміси в async-хендлерах —
+// вони летять у process.on("unhandledRejection") (нижче), і відповідь НІКОЛИ не
+// надсилається → запит висить вічно → воркер PHP-FPM тримається до таймауту → ранковий
+// herd вичерпує пул → edge 503. (Саме так /overview поклав сайт 27.07.) Цей вартовий
+// гарантує, що будь-який запит завершиться за ≤REQ_TIMEOUT_MS швидким 503, звільнивши
+// воркер, навіть якщо майбутній баг знову лишить проміс необробленим. НЕ заміна фіксу
+// логіки — це страхувальна сітка, щоб один баг більше не клав увесь дашборд.
+const REQ_TIMEOUT_MS = 20_000; // > найповільнішого легіт-ендпоінта (/report ~7с) із запасом
+app.use((req, res, next) => {
+  const timer = setTimeout(() => {
+    if (res.headersSent) return;
+    console.error(`REQUEST TIMEOUT (${REQ_TIMEOUT_MS}ms) — ${req.method} ${req.originalUrl} не відповів; віддаю 503, звільняю воркер`);
+    res.status(503).json({ error: "request timeout" });
+  }, REQ_TIMEOUT_MS);
+  res.on("finish", () => clearTimeout(timer));
+  res.on("close", () => clearTimeout(timer));
+  next();
+});
+
 app.use("/api/files", express.static(UPLOAD_DIR));
 
 app.use("/api/auth", authRouter);
