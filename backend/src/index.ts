@@ -1,3 +1,6 @@
+// ⚠️ ПЕРШИМ: патч express.Router, щоб async-throw у будь-якому роуті йшов у error-middleware
+// (швидкий 500), а не лишав запит висіти. Має стояти до імпортів роутерів. Див. lib/asyncRoutes.
+import "./lib/asyncRoutes.js";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
@@ -407,6 +410,16 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
 app.use("/assets", express.static(path.join(SITE_ROOT, "assets"), { immutable: true, maxAge: "1y" }));
 app.get(["/favicon.svg", "/icons.svg"], (req, res) => res.sendFile(path.join(SITE_ROOT, req.path)));
 app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(SITE_ROOT, "index.html")));
+
+// 🛡 Error-middleware (ОСТАННІМ, arity 4). Async-throw з будь-якого роуту (завдяки
+// lib/asyncRoutes) приходить сюди → швидкий 500 + лог, замість вічного зависання. Якщо
+// заголовки вже надіслані — делегуємо стандартному обробнику Express (розрив зʼєднання).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error(`ROUTE ERROR ${req.method} ${req.originalUrl}:`, err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: "internal error" });
+});
 
 const onListen = () => console.log(`Backend listening on ${config.host ?? "0.0.0.0"}:${config.port}`);
 if (config.host) app.listen(config.port, config.host, onListen);
