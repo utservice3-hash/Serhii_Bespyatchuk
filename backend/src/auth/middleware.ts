@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken, type AuthPayload, type Role } from "./auth.js";
-import { tabForPath, roleHasTab, roleHasPerm } from "./rbac.js";
+import { tabForPath, roleHasTab, roleHasPerm, getRoleDef } from "./rbac.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -27,6 +27,19 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (tab && !roleHasTab(req.auth.roleKey, tab)) {
     return res.status(403).json({ error: "Доступ до цього розділу вимкнено для вашої ролі" });
   }
+  // 🔒 SCOPE-КЛАМП за ЕФЕКТИВНОЮ роллю (кастовної теж), а не лише за синковою users.role.
+  // Наявна per-route логіка клампить по auth.{role,managerId,teamId}; тут вирівнюємо їх під
+  // data_scope РОЛІ. Ключове: власний/командний обсяг БЕЗ менеджера/команди = ПОРОЖНЬО
+  // (managerId/teamId = -1), а не «усі дані» (раніше null → фільтр пропускався → company).
+  const scope = getRoleDef(req.auth.roleKey)?.dataScope;
+  if (scope === "own") {
+    req.auth.role = "manager";
+    if (req.auth.managerId == null) req.auth.managerId = -1;
+  } else if (scope === "team") {
+    req.auth.role = "team_lead";
+    if (req.auth.teamId == null) req.auth.teamId = -1;
+  }
+  // 'company' / роль поза кешем → лишаємо як є (admin/kvp — company; невідома роль уже 403 вище).
   next();
 }
 

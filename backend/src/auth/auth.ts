@@ -12,6 +12,7 @@ export interface AuthPayload {
   email?: string;    // для аудиту (хто зробив зміну)
   role: ScopeRole;   // scope-compat (для наявної data-scope логіки в роутах)
   roleKey: string;   // ефективний ключ ролі (admin|kvp|team_lead|manager|<custom>) — для гейтів
+  screens?: string[]; // дозволені вкладки (screen_access=true) — ЛИШЕ для косметики nav у FE; сервер гейтить незалежно
   managerId: number | null;
   teamId: number | null;
 }

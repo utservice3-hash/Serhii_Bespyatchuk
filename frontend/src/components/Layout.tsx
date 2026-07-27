@@ -67,12 +67,16 @@ export const HIDDEN_NAV: ReadonlySet<string> = new Set<string>([
   "overview", "manager-report", "depstats", "teams", "managers", "reports",
 ]);
 
-/** Nav items visible to a given role (items without `roles` are visible to all). */
-export function navGroupsForRole(role: string | undefined) {
+/** Nav items visible to a given role. Якщо переданий `screens` (screen_access ефективної
+ *  ролі — є в токені для всіх, включно з кастомними) — він АВТОРИТЕТНИЙ (косметика, сервер
+ *  гейтить незалежно). Інакше — фолбек на built-in `roles`-гейт (старі токени без screens). */
+export function navGroupsForRole(role: string | undefined, screens?: string[]) {
+  const allowed = (it: NavItem) =>
+    screens ? screens.includes(it.key) : (!it.roles || (role != null && it.roles.includes(role)));
   return NAV_GROUPS
     .map((g) => ({
       label: g.label,
-      items: (g.items as readonly NavItem[]).filter((it) => !HIDDEN_NAV.has(it.key) && (!it.roles || (role != null && it.roles.includes(role)))),
+      items: (g.items as readonly NavItem[]).filter((it) => !HIDDEN_NAV.has(it.key) && allowed(it)),
     }))
     .filter((g) => g.items.length > 0);
 }
@@ -88,6 +92,7 @@ export function Layout({
   onSelect,
   onBack,
   role,
+  screens,
   messengerUnread = 0,
 }: {
   children: React.ReactNode;
@@ -95,10 +100,11 @@ export function Layout({
   onSelect: (key: NavKey) => void;
   onBack?: () => void;
   role?: string;
+  screens?: string[];
   messengerUnread?: number;
 }) {
   const navigate = useNavigate();
-  const navGroups = navGroupsForRole(role);
+  const navGroups = navGroupsForRole(role, screens);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1"
   );

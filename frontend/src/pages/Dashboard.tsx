@@ -795,6 +795,7 @@ export function Dashboard() {
       onSelect={navigateTo}
       onBack={canGoBack ? goBack : undefined}
       role={auth?.role}
+      screens={auth?.screens}
       messengerUnread={chatUnread}
     >
       <ErrorBoundary resetKey={`${section}:${teamId}:${selectedManagerId}:${dateRange.from}:${dateRange.to}:${refreshNonce}`}>
@@ -828,14 +829,14 @@ export function Dashboard() {
 
       {section === "report" && auth && (
         <ReportPlanSection
-          auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }}
+          auth={{ role: auth.role === "company" ? "admin" : auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }}
           teams={teams}
         />
       )}
 
       {section === "manager-report" && auth && (
         <ManagerReportSection
-          auth={{ role: auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }}
+          auth={{ role: auth.role === "company" ? "admin" : auth.role, managerId: auth.managerId ?? null, teamId: auth.teamId ?? null }}
           teams={teams}
           managerOptions={managerOptions}
         />

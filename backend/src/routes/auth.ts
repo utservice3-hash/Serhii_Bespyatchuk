@@ -44,13 +44,17 @@ authRouter.post("/login", async (req, res) => {
   }
 
   // Ефективна роль = role_override ?? синкнута роль. У токен кладемо ключ ролі (для гейтів)
-  // + scope-compat роль (для наявної data-scope логіки в роутах).
+  // + scope-compat роль (для наявної data-scope логіки в роутах) + перелік дозволених вкладок
+  // (для косметики nav у FE — сервер усе одно гейтить незалежно).
   const roleKey = effectiveRoleKey(user);
+  const def = getRoleDef(roleKey);
+  const screens = def ? Object.keys(def.screenAccess).filter((k) => def.screenAccess[k] === true) : undefined;
   const token = signToken({
     userId: user.id,
     email,
-    role: scopeCompatRole(roleKey, getRoleDef(roleKey)),
+    role: scopeCompatRole(roleKey, def),
     roleKey,
+    screens,
     managerId: user.manager_id,
     teamId: user.team_id,
   });
