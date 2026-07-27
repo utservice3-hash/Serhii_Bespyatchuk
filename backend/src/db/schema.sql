@@ -1054,6 +1054,14 @@ UPDATE roles SET permissions = permissions ||
   '{"view_hidden_payments":true,"manage_bank_hidden":true,"manage_bank_accounts":true}'::jsonb
   WHERE key = 'admin';
 
+-- Баланси рахунків: останній залишок з банк-API (mono client-info / privat closing-balance),
+-- оновлюється на циклі синку. Ідемпотентно; наявні рахунки не чіпаємо.
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_amount     NUMERIC;
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_currency   TEXT;
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_updated_at TIMESTAMPTZ;
+-- Право «бачити баланси» — ЛИШЕ вбудованій ролі admin; решті доступ НЕ змінюємо.
+UPDATE roles SET permissions = permissions || '{"view_balances":true}'::jsonb WHERE key = 'admin';
+
 -- access_audit — розширюємо типи цілей на банк-обʼєкти.
 ALTER TABLE access_audit DROP CONSTRAINT IF EXISTS access_audit_target_type_check;
 ALTER TABLE access_audit ADD CONSTRAINT access_audit_target_type_check

@@ -24,9 +24,14 @@ export interface NormalizedTx {
   raw: unknown;
 }
 
+export interface AccountBalance { amount: number; currency: string }
+
 export interface BankAdapter {
   fetchTransactions(account: BankAccountRow, since: Date): Promise<NormalizedTx[]>;
   /** Опційно: резолвить банківський id рахунку (напр. mono ФОП-рахунок через client-info),
    *  коли external_account_id ще не збережено. Повертає id або null (не знайдено). */
   resolveAccountId?(account: BankAccountRow): Promise<string | null>;
+  /** Опційно: поточний залишок рахунку (mono client-info / privat closing-balance).
+   *  Повертає null, якщо недоступно (нема ключа / 403 / банк не дав) — тоді «—», без крашу. */
+  fetchBalance?(account: BankAccountRow): Promise<AccountBalance | null>;
 }

@@ -1,6 +1,6 @@
 // monobank Personal API. Токен — process.env[account.env_key_name] (напр. MONO_TOKEN_FOP).
 // GET /personal/statement/{account}/{from}/{to} (unix сек, ≤31 день/запит), заголовок X-Token.
-import type { BankAccountRow, NormalizedTx } from "./types.js";
+import type { AccountBalance, BankAccountRow, NormalizedTx } from "./types.js";
 
 const BASE = "https://api.monobank.ua";
 const CCY: Record<string, string> = { "980": "UAH", "840": "USD", "978": "EUR" };
@@ -13,8 +13,15 @@ interface MonoItem {
 
 // client-info віддає ВСІ рахунки під токеном, зокрема особисті картки власника
 // (black/white/platinum/iron/yellow…) і банки-jars. Синкаємо ЛИШЕ ФОП (type='fop').
-interface MonoAccount { id: string; type?: string; currencyCode?: number; iban?: string }
+interface MonoAccount { id: string; type?: string; currencyCode?: number; iban?: string; balance?: number }
 interface MonoClientInfo { accounts?: MonoAccount[]; jars?: unknown[] }
+
+/** Обирає ФОП-рахунок під валюту рядка (інакше перший ФОП). Спільна логіка резолву й балансу. */
+function pickFop(info: MonoClientInfo, currency: string): MonoAccount | null {
+  const fops = (info.accounts ?? []).filter((a) => a.type === "fop");
+  if (fops.length === 0) return null;
+  return fops.find((a) => CCY[String(a.currencyCode)] === currency) ?? fops[0];
+}
 
 async function fetchClientInfo(token: string): Promise<MonoClientInfo> {
   const res = await fetch(`${BASE}/personal/client-info`, {
@@ -31,11 +38,16 @@ async function fetchClientInfo(token: string): Promise<MonoClientInfo> {
 export async function resolveAccountId(account: BankAccountRow): Promise<string | null> {
   const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
   if (!token) throw new Error(`monobank: немає env ${account.env_key_name}`);
-  const info = await fetchClientInfo(token);
-  const fops = (info.accounts ?? []).filter((a) => a.type === "fop");
-  if (fops.length === 0) return null;
-  const match = fops.find((a) => CCY[String(a.currencyCode)] === account.currency);
-  return (match ?? fops[0]).id;
+  return pickFop(await fetchClientInfo(token), account.currency)?.id ?? null;
+}
+
+/** Залишок ФОП-рахунку з client-info (balance — у копійках). null → «—» (нема ключа / нема ФОП). */
+export async function fetchBalance(account: BankAccountRow): Promise<AccountBalance | null> {
+  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  if (!token) return null;
+  const fop = pickFop(await fetchClientInfo(token), account.currency);
+  if (!fop) return null;
+  return { amount: (fop.balance ?? 0) / 100, currency: CCY[String(fop.currencyCode)] ?? account.currency };
 }
 
 /** Чистий нормалізатор (тестується без мережі). amount monobank — у копійках, signed. */

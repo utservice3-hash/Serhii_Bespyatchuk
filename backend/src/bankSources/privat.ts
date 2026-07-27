@@ -2,9 +2,10 @@
 // Токен — process.env[account.env_key_name] (напр. PRIVAT_TOKEN_UTS); опційно merchant id
 // у process.env[<env>_ID] (PRIVAT_TOKEN_UTS → PRIVAT_TOKEN_UTS_ID) або окремій PRIVAT_ID_*.
 // Заголовки: token (+ id, якщо є). Параметри: acc (IBAN), startDate=dd-mm-yyyy.
-import type { BankAccountRow, NormalizedTx } from "./types.js";
+import type { AccountBalance, BankAccountRow, NormalizedTx } from "./types.js";
 
 const BASE = "https://acp.privatbank.ua/api/statements/transactions";
+const BALANCE_URL = "https://acp.privatbank.ua/api/statements/balance";
 
 // ⚠️ ПриватБанк Autoclient віддає тіло у cp1251 (Windows-1251), НЕ UTF-8. res.text()/res.json()
 // припускають UTF-8 → кирилиця перетворюється на U+FFFD («◆◆◆»). Декодуємо сирі байти cp1251.
@@ -95,4 +96,32 @@ export async function fetchTransactions(account: BankAccountRow, since: Date): P
     followId = body.next_page_id;
   }
   return all;
+}
+
+interface PrivatBalance { balanceOut?: string | number; balanceOutEq?: string | number; currency?: string; ccy?: string }
+
+/** Closing-balance рахунку (Autoclient /statements/balance). 403/помилка → null («—»). */
+export async function fetchBalance(account: BankAccountRow): Promise<AccountBalance | null> {
+  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  if (!token) return null;
+  const id = (account.env_key_name && process.env[`${account.env_key_name}_ID`]) || undefined;
+  const acc = account.external_account_id ?? account.iban;
+  if (!acc) return null;
+  const p = (n: number) => String(n).padStart(2, "0");
+  const since = new Date(Date.now() - 24 * 3600 * 1000); // вчора → свіжий залишок на сьогодні
+  const startDate = `${p(since.getUTCDate())}-${p(since.getUTCMonth() + 1)}-${since.getUTCFullYear()}`;
+  const url = new URL(BALANCE_URL);
+  url.searchParams.set("acc", acc);
+  url.searchParams.set("startDate", startDate);
+  url.searchParams.set("limit", "1");
+  const headers: Record<string, string> = { token };
+  if (id) headers.id = id;
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+  if (!res.ok) return null; // 403 (нема доступу) / помилка → баланс недоступний
+  const body = JSON.parse(CP1251.decode(new Uint8Array(await res.arrayBuffer()))) as { balances?: PrivatBalance[] };
+  const b = body.balances?.[0];
+  if (!b) return null;
+  const amount = Number(b.balanceOut ?? b.balanceOutEq);
+  if (!Number.isFinite(amount)) return null;
+  return { amount, currency: (b.currency || b.ccy || account.currency || "UAH").toUpperCase() };
 }

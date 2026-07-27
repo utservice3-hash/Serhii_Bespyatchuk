@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchBankAccounts, fetchBankIncoming, fetchBankOutgoing, saveBankAccount,
+  fetchBankAccounts, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
-  type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee,
+  type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance,
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 import { usePolling } from "../../../hooks/usePolling";
@@ -41,6 +41,8 @@ export default function BankSection() {
   const canManageAccounts = perms.includes("manage_bank_accounts");
   const canManageHidden = perms.includes("manage_bank_hidden");
   const canSeeHidden = perms.includes("view_hidden_payments");
+  const canViewBalances = perms.includes("view_balances");
+  const [balancesOpen, setBalancesOpen] = useState(false);
 
   const PAGE = 100;
   const [mode, setMode] = useState<"in" | "out" | "receivables">("in");
@@ -143,8 +145,12 @@ export default function BankSection() {
           <span style={{ fontSize: 13, fontWeight: 700, minWidth: 120, textAlign: "center" }}>{rangeLabel}</span>
           <button onClick={() => shiftRange(1)} style={arrowBtn}>▶</button>
         </div>
-        <span style={{ marginLeft: "auto", fontSize: 12.5, color: MUTED }}>Ти: <b style={{ color: "var(--text)" }}>{roleName[auth?.role ?? ""] ?? auth?.roleKey ?? "—"}</b> · {canSeeHidden ? "бачиш усе" : "без прихованих"}</span>
+        {canViewBalances && (
+          <button onClick={() => setBalancesOpen(true)} style={{ marginLeft: "auto", padding: "8px 14px", borderRadius: 10, border: "1px solid " + RED, background: "rgba(200,16,46,0.06)", color: RED, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>💰 Баланси</button>
+        )}
+        <span style={{ marginLeft: canViewBalances ? 0 : "auto", fontSize: 12.5, color: MUTED }}>Ти: <b style={{ color: "var(--text)" }}>{roleName[auth?.role ?? ""] ?? auth?.roleKey ?? "—"}</b> · {canSeeHidden ? "бачиш усе" : "без прихованих"}</span>
       </div>
+      {balancesOpen && canViewBalances && <BalancesModal onClose={() => setBalancesOpen(false)} />}
 
       {mode === "receivables" ? (
         <div className="chart-card" style={{ textAlign: "center", padding: "48px 20px", color: MUTED }}>
@@ -293,6 +299,45 @@ function HiddenBlock() {
         <input value={pattern} onChange={(e) => setPattern(e.target.value)} placeholder="назва або *шаблон*" style={{ ...inp, width: 200 }} />
         <select value={mt} onChange={(e) => setMt(e.target.value as "exact" | "glob")} style={inp}><option value="exact">точна</option><option value="glob">шаблон (*)</option></select>
         <button onClick={add} style={{ padding: "7px 14px", borderRadius: 8, border: "1px dashed " + RED, background: "transparent", color: RED, fontWeight: 700, cursor: "pointer" }}>＋ Додати отримувача / шаблон</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────── Баланси рахунків (лише view_balances) ───────────────────────────
+function BalancesModal({ onClose }: { onClose: () => void }) {
+  const [balances, setBalances] = useState<BankBalance[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { fetchBankBalances().then(setBalances).catch((e) => setError(err(e))); }, []);
+  const fmtBal = (amt: string | null, ccy: string | null) => {
+    if (amt == null) return "—";
+    const n = Number(amt);
+    const s = n.toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/,/g, " ");
+    return `${s} ${ccy ?? "UAH"}`;
+  };
+  const upd = (iso: string | null) => { if (!iso) return "—"; const d = new Date(iso); const p = (x: number) => String(x).padStart(2, "0"); return `оновлено ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 520, width: "100%", maxHeight: "84vh", overflowY: "auto", margin: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>💰 Баланси рахунків</h2>
+          <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: MUTED }}>✕</button>
+        </div>
+        <p style={{ fontSize: 12.5, color: MUTED, marginTop: 0 }}>Поточний залишок по кожному активному рахунку. Джерело — банк-API (mono client-info / privat closing-balance), оновлюється на синку. «—» = ключ/доступ відсутній.</p>
+        {error ? <p style={{ color: "#dc2626", fontSize: 13 }}>{error}</p> : !balances ? <p className="loading-text">Завантаження…</p> : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {balances.map((b) => (
+              <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 12, border: "1px solid var(--border)", borderRadius: 12, padding: "12px 14px" }}>
+                <AccBadge company={b.company} />
+                <b style={{ fontSize: 14 }}>{b.label}</b>
+                <div style={{ marginLeft: "auto", textAlign: "right" }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: b.balance_amount == null ? MUTED : "#16a34a" }}>{fmtBal(b.balance_amount, b.balance_currency)}</div>
+                  <div style={{ fontSize: 11, color: MUTED }}>{upd(b.balance_updated_at)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

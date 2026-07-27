@@ -40,6 +40,15 @@ bankRouter.get("/outgoing", async (req, res) => {
   res.json(body);
 });
 
+// Баланси рахунків — ЛИШЕ право view_balances (admin). Серверний гейт (не лише прихована кнопка).
+// Значень ключів НЕ віддаємо — тільки залишок + час оновлення.
+bankRouter.get("/balances", requirePerm("view_balances"), async (_req, res) => {
+  const r = await pool.query(
+    `SELECT id, label, company, balance_amount, balance_currency, balance_updated_at
+       FROM bank_accounts WHERE is_active = true ORDER BY label`);
+  res.json({ balances: r.rows });
+});
+
 // Дебіторка по компаніях — відкладено (варіант «в»): placeholder, без вигаданого розрізу.
 bankRouter.get("/receivables", async (_req, res) => {
   res.json({ deferred: true, message: "Розріз дебіторки по юрособах — скоро (потрібна ознака юрособи)" });

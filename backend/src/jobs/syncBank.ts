@@ -56,6 +56,16 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
         console.warn(`syncBank: «${acc.label}» привʼязано рахунок; виписку тягне наступний цикл`);
         continue;
       }
+      // Баланс (best-effort, ПЕРЕД випискою): mono — з client-info, privat — closing-balance.
+      // Немає ключа/доступу (403) → null → лишаємо старий («—»), не чіпаємо. Помилка не валить синк.
+      if (typeof adapter.fetchBalance === "function") {
+        try {
+          const bal = await adapter.fetchBalance(acc);
+          if (bal) await pool.query(
+            `UPDATE bank_accounts SET balance_amount=$1, balance_currency=$2, balance_updated_at=now() WHERE id=$3`,
+            [bal.amount, bal.currency, acc.id]);
+        } catch (e) { console.warn(`syncBank: баланс «${acc.label}» пропущено:`, (e as Error).message); }
+      }
       const last = await pool.query<{ b: Date }>(
         `SELECT MAX(booked_at) AS b FROM bank_transactions WHERE account_id=$1`, [acc.id]);
       const since = last.rows[0]?.b
