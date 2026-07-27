@@ -4,9 +4,9 @@ import { pool } from "../db/pool.js";
 import { toUah } from "../bankSources/fx.js";
 import * as mono from "../bankSources/mono.js";
 import * as privat from "../bankSources/privat.js";
-import type { BankAccountRow, NormalizedTx } from "../bankSources/types.js";
+import type { BankAccountRow, NormalizedTx, BankAdapter } from "../bankSources/types.js";
 
-const ADAPTERS = { mono, privat } as const;
+const ADAPTERS: Record<BankAccountRow["bank"], BankAdapter> = { mono, privat };
 const INITIAL_LOOKBACK_DAYS = 30; // ≤31 — у межах ліміту виписки monobank (privat теж ок)
 
 /** Upsert однієї транзакції. Повертає true, якщо вставлено НОВУ (для лічильника). */
@@ -43,6 +43,17 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
     const adapter = ADAPTERS[acc.bank];
     if (!adapter) { skipped.push(acc.label); continue; }
     try {
+      // external_account_id не збережено → резолвимо явно (mono: ФОП-рахунок через client-info).
+      // Персистимо в БД, щоб більше не бити ліміт client-info. Statement цього ж циклу пропускаємо
+      // (mono ліміт «1 запит / 60с» — client-info + statement підряд дали б 429); підтягне наступний.
+      if (!acc.external_account_id && typeof adapter.resolveAccountId === "function") {
+        const rid = await adapter.resolveAccountId(acc);
+        if (!rid) { skipped.push(acc.label); console.warn(`syncBank: «${acc.label}» — не знайдено рахунок для привʼязки`); continue; }
+        await pool.query(`UPDATE bank_accounts SET external_account_id=$1 WHERE id=$2`, [rid, acc.id]);
+        acc.external_account_id = rid;
+        console.warn(`syncBank: «${acc.label}» привʼязано рахунок; виписку тягне наступний цикл`);
+        continue;
+      }
       const last = await pool.query<{ b: Date }>(
         `SELECT MAX(booked_at) AS b FROM bank_transactions WHERE account_id=$1`, [acc.id]);
       const since = last.rows[0]?.b

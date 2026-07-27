@@ -26,4 +26,7 @@ export interface NormalizedTx {
 
 export interface BankAdapter {
   fetchTransactions(account: BankAccountRow, since: Date): Promise<NormalizedTx[]>;
+  /** Опційно: резолвить банківський id рахунку (напр. mono ФОП-рахунок через client-info),
+   *  коли external_account_id ще не збережено. Повертає id або null (не знайдено). */
+  resolveAccountId?(account: BankAccountRow): Promise<string | null>;
 }
