@@ -188,8 +188,8 @@ settingsRouter.post("/users/:id/reactivate", async (req, res) => {
 settingsRouter.patch("/users/:id", async (req, res) => {
   if (!requireManageUsers(req, res)) return;
   const id = Number(req.params.id);
-  const cur = await pool.query<{ email: string; role: string; role_override: string | null; is_active: boolean; manager_id: number | null }>(
-    `SELECT email, role, role_override, is_active, manager_id FROM users WHERE id = $1`, [id]
+  const cur = await pool.query<{ email: string; role: string; role_override: string | null; is_active: boolean; manager_id: number | null; full_name: string | null }>(
+    `SELECT email, role, role_override, is_active, manager_id, full_name FROM users WHERE id = $1`, [id]
   );
   if (!cur.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
   const c = cur.rows[0];
@@ -225,14 +225,23 @@ settingsRouter.patch("/users/:id", async (req, res) => {
     if (!newActive) { params.push(String(req.body.reason ?? "деактивовано адміном").slice(0, 300)); sets.push(`deactivated_reason = $${params.length}`); sets.push(`deactivated_at = now()`); }
     else { sets.push(`deactivated_at = NULL`); sets.push(`deactivated_reason = NULL`); }
   }
-  // ПІБ — лише для РУЧНИХ (CRM-менеджерам ПІБ з CRM, read-only).
-  if (typeof req.body.fullName === "string" && c.manager_id === null) { params.push(req.body.fullName.trim() || null); sets.push(`full_name = $${params.length}`); }
+  // ПІБ — ЛИШЕ для РУЧНИХ (не-CRM). Серверний інваріант (не покладаємось на FE):
+  // CRM-ім'я перезапише синк, тож редагувати його безглуздо → 400. Порожнє ім'я → 400.
+  let renamed: { from: string | null; to: string } | null = null;
+  const rawName = req.body.fullName ?? req.body.name;
+  if (rawName !== undefined) {
+    if (typeof rawName !== "string" || !rawName.trim()) return res.status(400).json({ error: "Ім'я не може бути порожнім" });
+    if (c.manager_id !== null) return res.status(400).json({ error: "ПІБ CRM-менеджера редагується лише в CRM (синк перезапише зміну)" });
+    const to = rawName.trim();
+    params.push(to); sets.push(`full_name = $${params.length}`);
+    renamed = { from: c.full_name, to };
+  }
   if (sets.length === 0) return res.json({ ok: true });
   params.push(id);
   await pool.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
 
-  const action = typeof req.body.isActive === "boolean" && !newActive ? "user.deactivate" : "user.update";
-  await writeAudit({ ...audit(req), action, targetType: "user", targetId: String(id), targetLabel: c.email, details: { role_override: newOverride, is_active: newActive } });
+  const action = typeof req.body.isActive === "boolean" && !newActive ? "user.deactivate" : (renamed ? "user.rename" : "user.update");
+  await writeAudit({ ...audit(req), action, targetType: "user", targetId: String(id), targetLabel: c.email, details: { role_override: newOverride, is_active: newActive, ...(renamed ? { renamed } : {}) } });
   res.json({ ok: true });
 });
 

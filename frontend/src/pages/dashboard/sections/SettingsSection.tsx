@@ -142,6 +142,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
   const [nf, setNf] = useState({ fullName: "", email: "", password: "", role: "manager", teamId: "" as number | "" });
   const [newCreds, setNewCreds] = useState<string | null>(null);
   const [provMsg, setProvMsg] = useState<string | null>(null);
+  const [editName, setEditName] = useState<{ id: number; value: string } | null>(null); // інлайн-перейменування (лише не-CRM)
 
   const reload = () => fetchUsers(false).then(setUsers).catch(() => setUsers([]));
   useEffect(() => { reload(); fetchRoles().then(setRoles).catch(() => setRoles([])); }, []);
@@ -163,6 +164,12 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
   };
   const deactivate = async (u: DashboardUser) => { if (!window.confirm(`Деактивувати ${u.email}?`)) return; try { await updateUser(u.id, { isActive: false }); await reload(); } catch (e) { alert(err(e)); } };
   const provision = async () => { try { const c = await provisionUsers(); setProvMsg(c.length ? `Створено логінів: ${c.length}` : "Нових немає — усі вже створені"); await reload(); } catch (e) { setProvMsg("✗ " + err(e)); } };
+  const saveName = async (u: DashboardUser) => {
+    if (!editName || editName.id !== u.id) return;
+    const v = editName.value.trim();
+    if (!v) { alert("Ім'я не може бути порожнім"); return; }
+    try { await updateUser(u.id, { fullName: v }); setEditName(null); await reload(); } catch (e) { alert(err(e)); }
+  };
 
   return (
     <div className="chart-card">
@@ -191,7 +198,24 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
-              <td>{u.name ?? "—"} {u.crm_linked && <CrmBadge />}</td>
+              <td>
+                {editName?.id === u.id ? (
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                    <input autoFocus value={editName.value} onChange={(e) => setEditName({ id: u.id, value: e.target.value })}
+                      onKeyDown={(e) => { if (e.key === "Enter") saveName(u); if (e.key === "Escape") setEditName(null); }}
+                      style={{ ...inp, width: 180, padding: "4px 8px" }} />
+                    <button onClick={() => saveName(u)} style={btn}>Зберегти</button>
+                    <button onClick={() => setEditName(null)} style={{ ...btn, color: "var(--text-muted)" }}>Скасувати</button>
+                  </span>
+                ) : u.crm_linked ? (
+                  <>{u.name ?? "—"} <CrmBadge /></>
+                ) : (
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                    {u.name ?? "—"}
+                    <button onClick={() => setEditName({ id: u.id, value: u.name ?? "" })} title="Перейменувати" style={{ border: "none", background: "none", cursor: "pointer", fontSize: 12, opacity: 0.65 }}>✏️</button>
+                  </span>
+                )}
+              </td>
               <td>{u.email}</td>
               <td>{u.team_name ?? "—"}</td>
               <td>
@@ -374,7 +398,7 @@ function AuditTab() {
   const [rows, setRows] = useState<AuditEntry[]>([]);
   useEffect(() => { fetchAudit().then(setRows).catch(() => setRows([])); }, []);
   const label = (a: AuditEntry) => ({
-    "user.create": "створив користувача", "user.update": "змінив користувача", "user.deactivate": "деактивував",
+    "user.create": "створив користувача", "user.update": "змінив користувача", "user.rename": "перейменував", "user.deactivate": "деактивував",
     "user.reactivate": "відновив", "user.reset_password": "скинув пароль", "role.create": "створив роль",
     "role.clone": "клонував роль", "role.update": "змінив роль", "role.delete": "видалив роль",
   } as Record<string, string>)[a.action] ?? a.action;
