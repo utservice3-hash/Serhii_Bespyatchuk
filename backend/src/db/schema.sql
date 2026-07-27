@@ -1062,11 +1062,13 @@ ALTER TABLE access_audit ADD CONSTRAINT access_audit_target_type_check
 -- Сид 4 відомих рахунків (лише структурні поля + env_key_name; реквізити адмін заповнює в
 -- панелі). Bootstrap: сидимо ЛИШЕ коли таблиця порожня → ідемпотентно, не дублює на ре-міграції
 -- і не воскрешає видалені/змінені адміном рахунки.
-INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, is_active)
+-- legal_name сидимо лише для ФОП (одна фізособа на обидва рахунки); ТОВ лишаємо NULL —
+-- адмін заповнить у панелі. Решта реквізитів (ЄДРПОУ/IBAN/банк/МФО/призначення) — теж у панелі.
+INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, is_active, legal_name)
 SELECT * FROM (VALUES
- ('uts','privat','ТОВ ЮТС','UAH','PRIVAT_TOKEN_UTS',true),
- ('automuv','privat','ТОВ Автомув','UAH','PRIVAT_TOKEN_AUTOMUV',true),
- ('fop_privat','privat','ФОП Беспятчук (Приват)','UAH','PRIVAT_TOKEN_FOP',true),
- ('fop_mono','mono','ФОП Беспятчук (Моно)','UAH','MONO_TOKEN_FOP',true)
-) AS v(company, bank, label, currency, env_key_name, is_active)
+ ('uts','privat','ТОВ ЮТС','UAH','PRIVAT_TOKEN_UTS',true,NULL),
+ ('automuv','privat','ТОВ Автомув','UAH','PRIVAT_TOKEN_AUTOMUV',true,NULL),
+ ('fop_privat','privat','ФОП Беспятчук (Приват)','UAH','PRIVAT_TOKEN_FOP',true,'ФОП Беспятчук Сергій Степанович'),
+ ('fop_mono','mono','ФОП Беспятчук (Моно)','UAH','MONO_TOKEN_FOP',true,'ФОП Беспятчук Сергій Степанович')
+) AS v(company, bank, label, currency, env_key_name, is_active, legal_name)
 WHERE NOT EXISTS (SELECT 1 FROM bank_accounts);
