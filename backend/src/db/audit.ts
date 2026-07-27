@@ -4,8 +4,8 @@ import { pool } from "./pool.js";
 export async function writeAudit(a: {
   actorUserId: number | null;
   actorEmail: string | null;
-  action: string; // user.create | user.update | user.deactivate | user.reactivate | user.reset_password | role.create | role.clone | role.update | role.delete
-  targetType: "user" | "role";
+  action: string; // user.* | role.* | bank.account.* | bank.hidden.*
+  targetType: "user" | "role" | "bank_account" | "bank_payee";
   targetId: string;
   targetLabel?: string | null;
   details?: Record<string, unknown>;

@@ -940,16 +940,16 @@ CREATE TABLE IF NOT EXISTS roles (
 -- (відсутність = немає доступу). Значення = дзеркало nav-гейта + серверних 403 сьогодні.
 INSERT INTO roles (key,name,built_in,data_scope,screen_access,permissions) VALUES
  ('admin','Адмін',true,'company',
-  '{"overview":true,"report":true,"manager-report":true,"kvp":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true,"aiwork":true,"settings":true}',
-  '{"approve_plans":true,"submit_plans":true,"manage_goals":true,"enter_manual_stats":true,"manage_users":true,"export":true}'),
+  '{"overview":true,"report":true,"manager-report":true,"kvp":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true,"aiwork":true,"settings":true,"bank":true}',
+  '{"approve_plans":true,"submit_plans":true,"manage_goals":true,"enter_manual_stats":true,"manage_users":true,"export":true,"view_hidden_payments":true,"manage_bank_hidden":true,"manage_bank_accounts":true}'),
  ('kvp','КВП',true,'company',
-  '{"overview":true,"report":true,"manager-report":true,"kvp":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true,"aiwork":true}',
+  '{"overview":true,"report":true,"manager-report":true,"kvp":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true,"aiwork":true,"bank":true}',
   '{"approve_plans":true,"submit_plans":true,"manage_goals":true,"enter_manual_stats":true,"export":true}'),
  ('team_lead','Тімлід',true,'team',
-  '{"overview":true,"report":true,"manager-report":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true}',
+  '{"overview":true,"report":true,"manager-report":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true,"bank":true}',
   '{"submit_plans":true,"manage_goals":true,"export":true}'),
  ('manager','Менеджер',true,'own',
-  '{"overview":true,"report":true,"manager-report":true,"statistics":true,"depstats":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"rates":true,"messenger":true,"news":true,"documents":true,"training":true,"feedback":true}',
+  '{"overview":true,"report":true,"manager-report":true,"statistics":true,"depstats":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"rates":true,"messenger":true,"news":true,"documents":true,"training":true,"feedback":true,"bank":true}',
   '{"export":true}')
 ON CONFLICT (key) DO NOTHING;
 
@@ -985,3 +985,88 @@ CREATE TABLE IF NOT EXISTS access_audit (
   details       JSONB NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_audit_at ON access_audit(at DESC);
+
+-- ============================================================================
+-- ВИПИСКА (банківські виписки). Окремо від CRM-метрик. Фаза 1.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS bank_accounts (
+  id            SERIAL PRIMARY KEY,
+  company       TEXT NOT NULL CHECK (company IN ('uts','automuv','fop_privat','fop_mono')),
+  bank          TEXT NOT NULL CHECK (bank IN ('mono','privat')),
+  label         TEXT NOT NULL,
+  currency      TEXT NOT NULL DEFAULT 'UAH',
+  external_account_id TEXT,               -- id/iban рахунку в банк-API (мапінг tx)
+  is_active     BOOLEAN NOT NULL DEFAULT true,
+  legal_name    TEXT,                     -- редаговані ПУБЛІЧНІ реквізити:
+  edrpou_ipn    TEXT,
+  iban          TEXT,
+  bank_name     TEXT,
+  mfo           TEXT,
+  purpose       TEXT,
+  env_key_name  TEXT,                     -- назва env-змінної з ключем; НЕ сам ключ
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS bank_transactions (
+  id              SERIAL PRIMARY KEY,
+  account_id      INTEGER NOT NULL REFERENCES bank_accounts(id),
+  direction       TEXT NOT NULL CHECK (direction IN ('in','out')),
+  external_tx_id  TEXT NOT NULL UNIQUE,   -- ідемпотентність upsert
+  booked_at       TIMESTAMPTZ,
+  processed_at    TIMESTAMPTZ,
+  counterparty_name TEXT,
+  counterparty_iban TEXT,
+  purpose         TEXT,
+  amount          NUMERIC NOT NULL,       -- signed: + надходження, − списання (у валюті рахунку)
+  currency        TEXT NOT NULL DEFAULT 'UAH',
+  fx_rate         NUMERIC,                -- UAH за 1 одиницю валюти (=1 для UAH)
+  amount_uah      NUMERIC,                -- amount * fx_rate
+  unmatched_account BOOLEAN NOT NULL DEFAULT false,
+  raw_json        JSONB,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_bank_tx_acc_date ON bank_transactions(account_id, booked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bank_tx_dir_date ON bank_transactions(direction, booked_at DESC);
+
+CREATE TABLE IF NOT EXISTS bank_hidden_payees (
+  id          SERIAL PRIMARY KEY,
+  pattern     TEXT NOT NULL,
+  match_type  TEXT NOT NULL CHECK (match_type IN ('exact','glob')),
+  note        TEXT,
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Курс НБУ на дату (фолбек, коли банк-API не дав курсу): UAH за 1 одиницю валюти.
+CREATE TABLE IF NOT EXISTS fx_rates_daily (
+  rate_date  DATE NOT NULL,
+  currency   TEXT NOT NULL,
+  rate       NUMERIC NOT NULL,           -- UAH за 1 одиницю
+  source     TEXT NOT NULL DEFAULT 'nbu',
+  PRIMARY KEY (rate_date, currency)
+);
+
+-- RBAC-міграція (ідемпотентно): вкладку «bank» бачать УСІ ролі (built-in + кастомні, напр. hr).
+UPDATE roles SET screen_access = screen_access || '{"bank":true}'::jsonb
+  WHERE NOT (screen_access ? 'bank');
+-- 3 банк-права — лише admin за замовчуванням (адмін може видати іншим тумблером у панелі).
+UPDATE roles SET permissions = permissions ||
+  '{"view_hidden_payments":true,"manage_bank_hidden":true,"manage_bank_accounts":true}'::jsonb
+  WHERE key = 'admin';
+
+-- access_audit — розширюємо типи цілей на банк-обʼєкти.
+ALTER TABLE access_audit DROP CONSTRAINT IF EXISTS access_audit_target_type_check;
+ALTER TABLE access_audit ADD CONSTRAINT access_audit_target_type_check
+  CHECK (target_type IN ('user','role','bank_account','bank_payee'));
+
+-- Сид 4 відомих рахунків (лише структурні поля + env_key_name; реквізити адмін заповнює в
+-- панелі). Bootstrap: сидимо ЛИШЕ коли таблиця порожня → ідемпотентно, не дублює на ре-міграції
+-- і не воскрешає видалені/змінені адміном рахунки.
+INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, is_active)
+SELECT * FROM (VALUES
+ ('uts','privat','ТОВ ЮТС','UAH','PRIVAT_TOKEN_UTS',true),
+ ('automuv','privat','ТОВ Автомув','UAH','PRIVAT_TOKEN_AUTOMUV',true),
+ ('fop_privat','privat','ФОП Беспятчук (Приват)','UAH','PRIVAT_TOKEN_FOP',true),
+ ('fop_mono','mono','ФОП Беспятчук (Моно)','UAH','MONO_TOKEN_FOP',true)
+) AS v(company, bank, label, currency, env_key_name, is_active)
+WHERE NOT EXISTS (SELECT 1 FROM bank_accounts);

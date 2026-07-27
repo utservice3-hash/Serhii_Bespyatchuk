@@ -35,6 +35,8 @@ import { freshnessWatch, abandonedStagesWatch } from "./jobs/freshnessWatch.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { refreshRoles } from "./auth/rbac.js";
+import { bankRouter } from "./routes/bank.js";
+import { syncBank } from "./jobs/syncBank.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
@@ -106,6 +108,7 @@ app.use("/api/duty", dutyRouter);
 app.use("/api/training", trainingRouter);
 app.use("/api/statistics", statisticsRouter);
 app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
+app.use("/api/bank", bankRouter); // Виписка — банк-API (окремо від CRM)
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".
@@ -320,6 +323,10 @@ cron.schedule("20 8 * * *", () => {
 // "🔄 Оновити з файлу" button in the UI forces it instantly).
 cron.schedule("*/15 * * * *", () => {
   syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
+});
+// Банк-виписки — що 15 хв (окремо від CRM). Upsert по external_tx_id.
+cron.schedule("*/15 * * * *", () => {
+  syncBank().catch((err) => console.error("Bank sync failed:", err));
 });
 
 // «Реєстр» лідоген-бота (Google Sheet) — джерело правди для «переданих заявок».

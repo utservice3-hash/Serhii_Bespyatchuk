@@ -98,6 +98,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tab: string }[] = (() => {
     { test: pre("/api/one-on-ones"), tab: "oneonone" },
     { test: pre("/api/duty"), tab: "duty" },
     { test: pre("/api/training"), tab: "training" },
+    { test: pre("/api/bank"), tab: "bank" },
   ];
 })();
 
