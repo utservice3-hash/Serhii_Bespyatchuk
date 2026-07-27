@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken, type AuthPayload, type Role } from "./auth.js";
+import { tabForPath, roleHasTab, roleHasPerm } from "./rbac.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -17,15 +18,33 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
   try {
     req.auth = verifyToken(header.slice("Bearer ".length));
-    next();
   } catch {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
+  // 🔒 СЕРВЕРНИЙ TAB-ГЕЙТ: роут → вкладка; якщо ефективна роль не має вкладки → 403.
+  // Не покладаємось на приховування у FE. Роути поза мапою (tab=null) — пропуск.
+  const tab = tabForPath(req.originalUrl);
+  if (tab && !roleHasTab(req.auth.roleKey, tab)) {
+    return res.status(403).json({ error: "Доступ до цього розділу вимкнено для вашої ролі" });
+  }
+  next();
+}
+
+/** Perm-гейт для write-роутів: право-дія з визначення ефективної ролі (напр. approve_plans). */
+export function requirePerm(perm: string) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.auth || !roleHasPerm(req.auth.roleKey, perm)) {
+      return res.status(403).json({ error: "Недостатньо прав для цієї дії" });
+    }
+    next();
+  };
 }
 
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.auth || !roles.includes(req.auth.role)) {
+    // auth.role — scope-compat (може бути 'company' для company-scope не-admin ролей);
+    // порівняння з Role[] безпечне (жоден роут не передає 'company' у requireRole).
+    if (!req.auth || !(roles as string[]).includes(req.auth.role)) {
       return res.status(403).json({ error: "Forbidden" });
     }
     next();

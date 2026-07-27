@@ -34,6 +34,7 @@ import { reconcileNightly } from "./jobs/reconcileNightly.js";
 import { freshnessWatch, abandonedStagesWatch } from "./jobs/freshnessWatch.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
+import { refreshRoles } from "./auth/rbac.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
@@ -422,8 +423,14 @@ app.use((err: unknown, req: express.Request, res: express.Response, _next: expre
 });
 
 const onListen = () => console.log(`Backend listening on ${config.host ?? "0.0.0.0"}:${config.port}`);
-if (config.host) app.listen(config.port, config.host, onListen);
-else app.listen(config.port, onListen);
+// Роль-кеш RBAC — до прийому запитів (tab/perm-гейт залежить від нього). Помилка тут не
+// брикує старт: кеш лишиться порожнім і гейт fail-open до першого успішного refresh.
+refreshRoles()
+  .catch((e) => console.error("refreshRoles at boot failed (gate fail-open until next refresh):", e))
+  .finally(() => {
+    if (config.host) app.listen(config.port, config.host, onListen);
+    else app.listen(config.port, onListen);
+  });
 
 // 🔴 СТАРТ БЕЗ СПЛЕСКУ ПАМʼЯТІ (2 ГБ shared-акаунт adm.tools, crash-loop 15.07.2026).
 // Раніше вся батарея синків стартувала СИНХРОННО на буті → пік памʼяті → хостинг

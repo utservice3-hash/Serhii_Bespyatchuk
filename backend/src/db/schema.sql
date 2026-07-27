@@ -921,3 +921,67 @@ CREATE TABLE IF NOT EXISTS plan_formation (
   UNIQUE (manager_id, month, metric)
 );
 CREATE INDEX IF NOT EXISTS idx_plan_formation_month ON plan_formation (month, status);
+
+-- ============================================================================
+-- RBAC (Phase 1). Additive, idempotent. Вбудовані ролі = ТОЧНА поточна поведінка.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS roles (
+  key           TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  built_in      BOOLEAN NOT NULL DEFAULT false,
+  data_scope    TEXT NOT NULL DEFAULT 'own' CHECK (data_scope IN ('own','team','company')),
+  screen_access JSONB NOT NULL DEFAULT '{}',
+  permissions   JSONB NOT NULL DEFAULT '{}',
+  cloned_from   TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Сид 4 вбудованих. screen_access/permissions зберігаємо ЛИШЕ надані ключі=true
+-- (відсутність = немає доступу). Значення = дзеркало nav-гейта + серверних 403 сьогодні.
+INSERT INTO roles (key,name,built_in,data_scope,screen_access,permissions) VALUES
+ ('admin','Адмін',true,'company',
+  '{"overview":true,"report":true,"manager-report":true,"kvp":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true,"aiwork":true,"settings":true}',
+  '{"approve_plans":true,"submit_plans":true,"manage_goals":true,"enter_manual_stats":true,"manage_users":true,"export":true}'),
+ ('kvp','КВП',true,'company',
+  '{"overview":true,"report":true,"manager-report":true,"kvp":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true,"aiwork":true}',
+  '{"approve_plans":true,"submit_plans":true,"manage_goals":true,"enter_manual_stats":true,"export":true}'),
+ ('team_lead','Тімлід',true,'team',
+  '{"overview":true,"report":true,"manager-report":true,"plans":true,"statistics":true,"depstats":true,"teams":true,"managers":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"oneonone":true,"rates":true,"goals":true,"messenger":true,"news":true,"documents":true,"training":true,"dataquality":true,"feedback":true}',
+  '{"submit_plans":true,"manage_goals":true,"export":true}'),
+ ('manager','Менеджер',true,'own',
+  '{"overview":true,"report":true,"manager-report":true,"statistics":true,"depstats":true,"reports":true,"loyalty":true,"receivables":true,"leadgen":true,"tasks":true,"duty":true,"rates":true,"messenger":true,"news":true,"documents":true,"training":true,"feedback":true}',
+  '{"export":true}')
+ON CONFLICT (key) DO NOTHING;
+
+-- Override-роль: панель-owned, синк її НІКОЛИ не чіпає. Ефективна роль = COALESCE(role_override, role).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role_override TEXT REFERENCES roles(key);
+
+-- Backfill = НУЛЬ змін доступу:
+--  1) кожен теперішній admin → role_override='admin' (синк далі веде users.role, але не адмінство).
+UPDATE users SET role_override = 'admin' WHERE role = 'admin' AND role_override IS NULL;
+--  2) замінюємо хардкод TEAM_LEAD_OVERRIDES={3379102} (Яцик) на кероване поле,
+--     щоб видалення хардкоду з синку не зняло його team_lead.
+UPDATE users SET role_override = 'team_lead'
+ WHERE role_override IS NULL
+   AND manager_id IN (SELECT id FROM managers WHERE kommo_user_id = 3379102);
+
+-- Причина/дата деактивації (для Архіву). Хто саме — окремий аудит.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deactivated_reason TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT; -- ПІБ для РУЧНИХ юзерів (CRM-менеджерам ПІБ береться з managers.name)
+
+-- Паролі → хеш-онлі: гасимо плейнтекст (колонку лишаємо, більше не наповнюємо/не показуємо).
+UPDATE users SET initial_password = NULL WHERE initial_password IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS access_audit (
+  id            SERIAL PRIMARY KEY,
+  at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_user_id INTEGER REFERENCES users(id),
+  actor_email   TEXT,
+  action        TEXT NOT NULL,
+  target_type   TEXT NOT NULL CHECK (target_type IN ('user','role')),
+  target_id     TEXT NOT NULL,
+  target_label  TEXT,
+  details       JSONB NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_audit_at ON access_audit(at DESC);

@@ -36,14 +36,15 @@ export async function provisionUsers(): Promise<{ email: string; password: strin
     );
 
     if (existing.rows[0]) {
-      // Keep role/team/active in sync, but never demote an admin.
+      // Синк веде ЛИШЕ CRM-owned поля (role/team_id/manager_id/is_active). role_override
+      // — панель-owned, синк його НІКОЛИ не чіпає → ефективна роль (напр. admin/kvp/custom,
+      // виставлена адміном) переживає синк. Адмінство більше не «захищене» гілкою if — воно
+      // живе в role_override, куди синк не пише.
       const u = existing.rows[0];
-      if (u.role !== "admin") {
-        await pool.query(
-          `UPDATE users SET role = $1, team_id = $2, manager_id = $3, is_active = $4 WHERE id = $5`,
-          [role, m.team_id, m.id, m.is_active, u.id]
-        );
-      }
+      await pool.query(
+        `UPDATE users SET role = $1, team_id = $2, manager_id = $3, is_active = $4 WHERE id = $5`,
+        [role, m.team_id, m.id, m.is_active, u.id]
+      );
       continue;
     }
 
@@ -51,11 +52,12 @@ export async function provisionUsers(): Promise<{ email: string; password: strin
 
     const password = generatePassword();
     const passwordHash = await bcrypt.hash(password, 10);
+    // Пароль — ЛИШЕ bcrypt-хеш; плейнтекст у БД не пишемо (initial_password прибрано).
     await pool.query(
-      `INSERT INTO users (email, password_hash, role, manager_id, team_id, is_active, initial_password)
-       VALUES ($1, $2, $3, $4, $5, true, $6)
+      `INSERT INTO users (email, password_hash, role, manager_id, team_id, is_active)
+       VALUES ($1, $2, $3, $4, $5, true)
        ON CONFLICT (email) DO NOTHING`,
-      [m.email, passwordHash, role, m.id, m.team_id, password]
+      [m.email, passwordHash, role, m.id, m.team_id]
     );
     created.push({ email: m.email!, password, name: m.name });
   }
@@ -66,9 +68,10 @@ export async function provisionUsers(): Promise<{ email: string; password: strin
 export async function resetPassword(userId: number): Promise<string> {
   const password = generatePassword();
   const passwordHash = await bcrypt.hash(password, 10);
+  // Хеш-онлі: плейнтекст НЕ зберігаємо; згенерований пароль повертаємо викликачу ОДИН раз.
   await pool.query(
-    `UPDATE users SET password_hash = $1, initial_password = $2 WHERE id = $3`,
-    [passwordHash, password, userId]
+    `UPDATE users SET password_hash = $1 WHERE id = $2`,
+    [passwordHash, userId]
   );
   return password;
 }

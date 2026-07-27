@@ -2,10 +2,16 @@ import jwt from "jsonwebtoken";
 import { config } from "../config.js";
 
 export type Role = "admin" | "team_lead" | "manager";
+// Scope-compat роль у токені (див. rbac.scopeCompatRole): для вбудованих = тотожність;
+// company-scope не-admin → 'company' (наявна per-route логіка трактує як «усі», але це
+// НЕ 'admin' — admin-only дії лишаються закритими, відкриваються лише perm-гейтом).
+export type ScopeRole = Role | "company";
 
 export interface AuthPayload {
   userId: number;
-  role: Role;
+  email?: string;    // для аудиту (хто зробив зміну)
+  role: ScopeRole;   // scope-compat (для наявної data-scope логіки в роутах)
+  roleKey: string;   // ефективний ключ ролі (admin|kvp|team_lead|manager|<custom>) — для гейтів
   managerId: number | null;
   teamId: number | null;
 }

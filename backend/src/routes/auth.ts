@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { signToken } from "../auth/auth.js";
+import { effectiveRoleKey, getRoleDef, scopeCompatRole } from "../auth/rbac.js";
 
 export const authRouter = Router();
 
@@ -26,11 +27,12 @@ authRouter.post("/login", async (req, res) => {
     id: number;
     password_hash: string;
     role: "admin" | "team_lead" | "manager";
+    role_override: string | null;
     manager_id: number | null;
     team_id: number | null;
     is_active: boolean;
   }>(
-    `SELECT id, password_hash, role, manager_id, team_id, is_active FROM users WHERE lower(email) = $1`,
+    `SELECT id, password_hash, role, role_override, manager_id, team_id, is_active FROM users WHERE lower(email) = $1`,
     [email]
   );
   const user = result.rows[0];
@@ -41,9 +43,14 @@ authRouter.post("/login", async (req, res) => {
     return res.status(403).json({ error: "Обліковий запис деактивовано" });
   }
 
+  // Ефективна роль = role_override ?? синкнута роль. У токен кладемо ключ ролі (для гейтів)
+  // + scope-compat роль (для наявної data-scope логіки в роутах).
+  const roleKey = effectiveRoleKey(user);
   const token = signToken({
     userId: user.id,
-    role: user.role,
+    email,
+    role: scopeCompatRole(roleKey, getRoleDef(roleKey)),
+    roleKey,
     managerId: user.manager_id,
     teamId: user.team_id,
   });

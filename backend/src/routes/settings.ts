@@ -3,6 +3,9 @@ import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { provisionUsers, resetPassword, generatePassword } from "../db/userProvisioning.js";
+import { roleHasPerm, getRoleDef, refreshRoles } from "../auth/rbac.js";
+import { wouldOrphanAdmin, otherActiveAdminCount } from "../auth/adminGuard.js";
+import { writeAudit } from "../db/audit.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -92,107 +95,224 @@ settingsRouter.put("/", async (req, res) => {
   res.json({ settings: next });
 });
 
-function requireAdmin(role: string, res: import("express").Response): boolean {
-  if (role !== "admin") {
-    res.status(403).json({ error: "Лише адміністратор" });
+// --- User & role management (право manage_users) ---
+// Гейт вкладки «Налаштування» вже відсіює чужі ролі (requireAuth tab-gate); тут додатково
+// вимагаємо право manage_users, щоб кастомна роль без нього не керувала людьми.
+function requireManageUsers(req: import("express").Request, res: import("express").Response): boolean {
+  if (!roleHasPerm(req.auth!.roleKey, "manage_users")) {
+    res.status(403).json({ error: "Немає права керувати користувачами й ролями" });
     return false;
   }
   return true;
 }
+const audit = (req: import("express").Request) => ({ actorUserId: req.auth!.userId, actorEmail: req.auth!.email ?? null });
 
-// --- User management (admin only) ---
-
+// Список: за замовч. лише АКТИВНІ; ?archived=1 → деактивовані (Архів) з причиною/датою.
+// Пароль НЕ віддаємо (лише bcrypt-хеш у БД). Ефективна роль = COALESCE(role_override, role).
 settingsRouter.get("/users", async (req, res) => {
-  if (!requireAdmin(req.auth!.role, res)) return;
-  // Hide logins whose CRM manager is deactivated / no longer in CRM (manager
-  // linked but inactive). Admin (no manager link) and active managers stay.
+  if (!requireManageUsers(req, res)) return;
+  const archived = req.query.archived === "1" || req.query.archived === "true";
   const result = await pool.query(
-    `SELECT u.id, u.email, u.role, u.is_active, u.initial_password,
-            COALESCE(m.name, CASE WHEN u.role = 'admin' THEN 'Операційний директор' END) AS manager_name,
+    `SELECT u.id, u.email,
+            COALESCE(m.name, u.full_name, CASE WHEN COALESCE(u.role_override,u.role)='admin' THEN 'Операційний директор' END) AS name,
+            u.role AS synced_role, u.role_override,
+            COALESCE(u.role_override, u.role) AS role_effective,
+            u.is_active, u.deactivated_at, u.deactivated_reason,
+            (u.manager_id IS NOT NULL) AS crm_linked,
             t.name AS team_name
      FROM users u
      LEFT JOIN managers m ON m.id = u.manager_id
      LEFT JOIN teams t ON t.id = u.team_id
-     WHERE u.manager_id IS NULL OR m.is_active
-     ORDER BY u.role = 'admin' DESC, t.name NULLS LAST, u.email`
+     WHERE u.is_active = $1
+     ORDER BY COALESCE(u.role_override,u.role)='admin' DESC, t.name NULLS LAST, u.email`,
+    [!archived]
   );
   res.json({ users: result.rows });
 });
 
-// Manually create a login (email + password). Password optional — generated
-// and returned if omitted.
+// Ручний користувач: ПІБ + email + пароль(опц.) + роль + команда. manager_id=NULL (не з CRM).
+// Роль кладемо в role_override (users.role має CHECK admin|team_lead|manager і не тримає custom).
 settingsRouter.post("/users", async (req, res) => {
-  if (!requireAdmin(req.auth!.role, res)) return;
+  if (!requireManageUsers(req, res)) return;
   const email = String(req.body?.email ?? "").trim().toLowerCase();
-  const role = ["admin", "team_lead", "manager"].includes(req.body?.role) ? req.body.role : "manager";
+  const fullName = String(req.body?.fullName ?? req.body?.name ?? "").trim() || null;
   const teamId = req.body?.teamId ? Number(req.body.teamId) : null;
-  if (!/^\S+@\S+\.\S+$/.test(email)) {
-    return res.status(400).json({ error: "Невірний e-mail" });
-  }
+  const roleKey = String(req.body?.role ?? "manager");
+  if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: "Невірний e-mail" });
+  if (!getRoleDef(roleKey)) return res.status(400).json({ error: "Невідома роль" });
   const exists = await pool.query(`SELECT 1 FROM users WHERE email = $1`, [email]);
   if (exists.rowCount) return res.status(409).json({ error: "Користувач з таким e-mail вже існує" });
 
   const password = String(req.body?.password ?? "").trim() || generatePassword();
   const passwordHash = await bcrypt.hash(password, 10);
-  await pool.query(
-    `INSERT INTO users (email, password_hash, role, team_id, is_active, initial_password)
-     VALUES ($1, $2, $3, $4, true, $5)`,
-    [email, passwordHash, role, teamId, password]
+  const ins = await pool.query<{ id: number }>(
+    `INSERT INTO users (email, password_hash, role, role_override, team_id, full_name, is_active)
+     VALUES ($1, $2, 'manager', $3, $4, $5, true) RETURNING id`,
+    [email, passwordHash, roleKey, teamId, fullName]
   );
-  res.json({ email, password });
+  await writeAudit({ ...audit(req), action: "user.create", targetType: "user", targetId: String(ins.rows[0].id), targetLabel: email, details: { role: roleKey, manual: true } });
+  res.json({ email, password }); // пароль повертаємо ОДИН раз
 });
 
-// Re-sync logins from the current CRM roster; returns any newly created creds.
 settingsRouter.post("/users/provision", async (req, res) => {
-  if (!requireAdmin(req.auth!.role, res)) return;
+  if (!requireManageUsers(req, res)) return;
   const created = await provisionUsers();
   res.json({ created });
 });
 
 settingsRouter.post("/users/:id/reset-password", async (req, res) => {
-  if (!requireAdmin(req.auth!.role, res)) return;
-  const password = await resetPassword(Number(req.params.id));
-  res.json({ password });
+  if (!requireManageUsers(req, res)) return;
+  const id = Number(req.params.id);
+  const u = await pool.query<{ email: string }>(`SELECT email FROM users WHERE id=$1`, [id]);
+  if (!u.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
+  const password = await resetPassword(id);
+  await writeAudit({ ...audit(req), action: "user.reset_password", targetType: "user", targetId: String(id), targetLabel: u.rows[0].email });
+  res.json({ password }); // ОДИН раз; у БД лише хеш
 });
 
-// Change a user's role (admin | team_lead | manager) and active state. Admin-only.
-// Дозволяємо ВИДАВАТИ admin-доступ; захист — не можна зняти/деактивувати
-// ОСТАННЬОГО активного адміністратора (щоб не втратити доступ до системи).
-settingsRouter.patch("/users/:id", async (req, res) => {
-  if (!requireAdmin(req.auth!.role, res)) return;
+// Реактивація РУЧНОГО користувача (CRM-менеджер відновлюється поверненням у CRM → синк).
+settingsRouter.post("/users/:id/reactivate", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
   const id = Number(req.params.id);
-  const cur = await pool.query<{ role: string; is_active: boolean }>(
-    `SELECT role, is_active FROM users WHERE id = $1`, [id]
+  const cur = await pool.query<{ email: string; manager_id: number | null }>(`SELECT email, manager_id FROM users WHERE id=$1`, [id]);
+  if (!cur.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
+  if (cur.rows[0].manager_id !== null) {
+    return res.status(400).json({ error: "CRM-менеджер відновлюється поверненням у CRM (синк активує автоматично)" });
+  }
+  await pool.query(`UPDATE users SET is_active=true, deactivated_at=NULL, deactivated_reason=NULL WHERE id=$1`, [id]);
+  await writeAudit({ ...audit(req), action: "user.reactivate", targetType: "user", targetId: String(id), targetLabel: cur.rows[0].email });
+  res.json({ ok: true });
+});
+
+// Зміна override-ролі / активності / ПІБ(ручним). Само-блокування → 409.
+settingsRouter.patch("/users/:id", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const id = Number(req.params.id);
+  const cur = await pool.query<{ email: string; role: string; role_override: string | null; is_active: boolean; manager_id: number | null }>(
+    `SELECT email, role, role_override, is_active, manager_id FROM users WHERE id = $1`, [id]
   );
   if (!cur.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
+  const c = cur.rows[0];
 
-  const validRole = ["admin", "team_lead", "manager"].includes(req.body.role) ? (req.body.role as string) : null;
-  const newRole = validRole ?? cur.rows[0].role;
-  const newActive = typeof req.body.isActive === "boolean" ? req.body.isActive : cur.rows[0].is_active;
+  // role_override: null (revert до синкнутої) або існуючий roles.key.
+  let newOverride = c.role_override;
+  if ("roleOverride" in req.body) {
+    const ro = req.body.roleOverride;
+    if (ro === null || ro === "") newOverride = null;
+    else if (typeof ro === "string" && getRoleDef(ro)) newOverride = ro;
+    else return res.status(400).json({ error: "Невідома роль" });
+  }
+  const newActive = typeof req.body.isActive === "boolean" ? req.body.isActive : c.is_active;
 
-  // Guard: не залишити систему без адміна.
-  const losingAdmin = cur.rows[0].role === "admin" && (newRole !== "admin" || newActive === false);
-  if (losingAdmin) {
-    const others = await pool.query<{ n: string }>(
-      `SELECT COUNT(*) n FROM users WHERE role = 'admin' AND is_active AND id <> $1`, [id]
-    );
-    if (Number(others.rows[0].n) === 0) {
-      return res.status(400).json({ error: "Не можна зняти останнього активного адміністратора" });
+  // Само-блокування (409): чисте рішення в adminGuard.wouldOrphanAdmin.
+  const curEff = c.role_override ?? c.role;
+  const newEff = newOverride ?? c.role;
+  const targetIsActiveAdmin = c.is_active && curEff === "admin";
+  const changeRemovesAdmin = targetIsActiveAdmin && (newEff !== "admin" || newActive === false);
+  if (changeRemovesAdmin) {
+    const others = await otherActiveAdminCount(id);
+    const g = wouldOrphanAdmin({ actorUserId: req.auth!.userId, targetUserId: id, targetIsActiveAdmin, changeRemovesAdmin, otherActiveAdmins: others });
+    if (g.block) {
+      return res.status(409).json({ error: g.reason === "self" ? "Не можна розжалувати/деактивувати самого себе (адміна)" : "Не можна зняти останнього активного адміністратора" });
     }
   }
 
   const sets: string[] = [];
   const params: unknown[] = [];
-  if (validRole) {
-    params.push(newRole); sets.push(`role = $${params.length}`);
-    // Адмін бачить усе — команда йому не потрібна; знімаємо привʼязку.
-    if (newRole === "admin") sets.push(`team_id = NULL`);
-  }
+  if ("roleOverride" in req.body) { params.push(newOverride); sets.push(`role_override = $${params.length}`); }
   if (typeof req.body.isActive === "boolean") {
     params.push(newActive); sets.push(`is_active = $${params.length}`);
+    if (!newActive) { params.push(String(req.body.reason ?? "деактивовано адміном").slice(0, 300)); sets.push(`deactivated_reason = $${params.length}`); sets.push(`deactivated_at = now()`); }
+    else { sets.push(`deactivated_at = NULL`); sets.push(`deactivated_reason = NULL`); }
   }
+  // ПІБ — лише для РУЧНИХ (CRM-менеджерам ПІБ з CRM, read-only).
+  if (typeof req.body.fullName === "string" && c.manager_id === null) { params.push(req.body.fullName.trim() || null); sets.push(`full_name = $${params.length}`); }
   if (sets.length === 0) return res.json({ ok: true });
   params.push(id);
   await pool.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
+
+  const action = typeof req.body.isActive === "boolean" && !newActive ? "user.deactivate" : "user.update";
+  await writeAudit({ ...audit(req), action, targetType: "user", targetId: String(id), targetLabel: c.email, details: { role_override: newOverride, is_active: newActive } });
   res.json({ ok: true });
+});
+
+// --- Ролі та доступи (право manage_users; вбудовані не видаляються/не перейменовуються) ---
+settingsRouter.get("/roles", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const r = await pool.query(
+    `SELECT key, name, built_in, data_scope, screen_access, permissions, cloned_from,
+            (SELECT count(*)::int FROM users u WHERE COALESCE(u.role_override,u.role)=roles.key AND u.is_active) AS users_count
+     FROM roles ORDER BY built_in DESC, name`
+  );
+  res.json({ roles: r.rows });
+});
+
+function validRolePayload(b: Record<string, unknown>) {
+  const dataScope = ["own", "team", "company"].includes(String(b.dataScope)) ? String(b.dataScope) : "own";
+  const screen = (b.screenAccess && typeof b.screenAccess === "object") ? b.screenAccess : {};
+  const perms = (b.permissions && typeof b.permissions === "object") ? b.permissions : {};
+  return { dataScope, screen, perms };
+}
+
+// Створення/клонування кастомної ролі.
+settingsRouter.post("/roles", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const key = String(req.body?.key ?? "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const name = String(req.body?.name ?? "").trim();
+  if (!key || !name) return res.status(400).json({ error: "Потрібні ключ і назва" });
+  if (getRoleDef(key)) return res.status(409).json({ error: "Роль з таким ключем уже існує" });
+  const clonedFrom = typeof req.body?.cloneFrom === "string" ? req.body.cloneFrom : null;
+  const base = clonedFrom ? getRoleDef(clonedFrom) : null;
+  const { dataScope, screen, perms } = validRolePayload(req.body ?? {});
+  await pool.query(
+    `INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions, cloned_from)
+     VALUES ($1,$2,false,$3,$4,$5,$6)`,
+    [key, name, base ? base.dataScope : dataScope, JSON.stringify(base ? base.screenAccess : screen), JSON.stringify(base ? base.permissions : perms), clonedFrom]
+  );
+  await refreshRoles();
+  await writeAudit({ ...audit(req), action: clonedFrom ? "role.clone" : "role.create", targetType: "role", targetId: key, targetLabel: name, details: { clonedFrom } });
+  res.json({ ok: true, key });
+});
+
+// Редагування — ЛИШЕ кастомних (вбудовані 🔒).
+settingsRouter.put("/roles/:key", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const key = req.params.key;
+  const def = getRoleDef(key);
+  if (!def) return res.status(404).json({ error: "Роль не знайдено" });
+  if (def.builtIn) return res.status(403).json({ error: "Вбудовану роль змінювати не можна" });
+  const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim() : def.name;
+  const { dataScope, screen, perms } = validRolePayload(req.body ?? {});
+  await pool.query(
+    `UPDATE roles SET name=$1, data_scope=$2, screen_access=$3, permissions=$4 WHERE key=$5`,
+    [name, dataScope, JSON.stringify(screen), JSON.stringify(perms), key]
+  );
+  await refreshRoles();
+  await writeAudit({ ...audit(req), action: "role.update", targetType: "role", targetId: key, targetLabel: name });
+  res.json({ ok: true });
+});
+
+// Видалення — ЛИШЕ кастомних і лише якщо нікому не призначена.
+settingsRouter.delete("/roles/:key", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const key = req.params.key;
+  const def = getRoleDef(key);
+  if (!def) return res.status(404).json({ error: "Роль не знайдено" });
+  if (def.builtIn) return res.status(403).json({ error: "Вбудовану роль видалити не можна" });
+  const used = await pool.query<{ n: number }>(`SELECT count(*)::int n FROM users WHERE role_override=$1`, [key]);
+  if (used.rows[0].n > 0) return res.status(409).json({ error: `Роль призначена ${used.rows[0].n} користувач(ам) — спершу зніміть` });
+  await pool.query(`DELETE FROM roles WHERE key=$1`, [key]);
+  await refreshRoles();
+  await writeAudit({ ...audit(req), action: "role.delete", targetType: "role", targetId: key, targetLabel: def.name });
+  res.json({ ok: true });
+});
+
+// Журнал змін.
+settingsRouter.get("/audit", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const r = await pool.query(
+    `SELECT id, at, actor_email, action, target_type, target_id, target_label, details
+     FROM access_audit ORDER BY at DESC LIMIT 500`
+  );
+  res.json({ audit: r.rows });
 });
