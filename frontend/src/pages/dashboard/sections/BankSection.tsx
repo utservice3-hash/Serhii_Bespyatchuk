@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchBankAccounts, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites,
+  fetchBankAccounts, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites, fetchBankCashflow,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
-  type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance, type BankRequisite,
+  type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance, type BankRequisite, type CashflowMonth,
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 import { usePolling } from "../../../hooks/usePolling";
@@ -85,7 +85,10 @@ export default function BankSection() {
   const canSeeHidden = perms.includes("view_hidden_payments");
   const canViewBalances = perms.includes("view_balances");
   const canViewTotals = perms.includes("view_bank_totals"); // косметика; сервер гейтить summary
+  const canViewCashflow = perms.includes("view_cashflow");
   const [balancesOpen, setBalancesOpen] = useState(false);
+  const [cashflowOpen, setCashflowOpen] = useState(false);
+  const [periodOpen, setPeriodOpen] = useState(false); // поповер календаря
   const [requisitesOpen, setRequisitesOpen] = useState(false); // «Реквізити» — усі ролі
 
   const PAGE = 100;
@@ -148,13 +151,17 @@ export default function BankSection() {
     return () => io.disconnect();
   }, [hasMore, loadMore]);
 
-  const shiftRange = (dir: number) => setRange((r) => {
-    const from = new Date(r.from), to = new Date(r.to);
-    const len = Math.round((+to - +from) / 86400000) + 1;
-    from.setDate(from.getDate() + dir * len); to.setDate(to.getDate() + dir * len);
-    return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
-  });
-  const rangeLabel = (() => { const f = new Date(range.from), t = new Date(range.to); return `${f.getDate()}–${t.getDate()} ${MONTHS[t.getMonth()]} ${t.getFullYear()}`; })();
+  // Ставимо період на конкретний місяць (клік по стовпчику кешфлоу / пресети календаря).
+  const setRangeMonth = (ym: string) => { const [y, m] = ym.split("-").map(Number); const last = new Date(y, m, 0).getDate(); setRange({ from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, "0")}` }); };
+  const rangeLabel = (() => {
+    const [fy, fm, fd] = range.from.split("-").map(Number), [ty, tm, td] = range.to.split("-").map(Number);
+    const lastOfTo = new Date(ty, tm, 0).getDate();
+    if (fd === 1 && td === lastOfTo) { // місяць-вирівняний діапазон → назви місяців
+      if (fy === ty && fm === tm) return `${MONTHS[tm - 1]} ${ty}`;
+      return `${MONTHS[fm - 1]}${fy !== ty ? " " + fy : ""} – ${MONTHS[tm - 1]} ${ty}`;
+    }
+    return `${fd}–${td} ${MONTHS[tm - 1]} ${ty}`;
+  })();
 
   const active = accounts.filter((a) => a.is_active);
   // ОДИН чип на компанію (усі валюти під нею). Назва — з UAH-рахунку, інакше label без « · CCY».
@@ -192,15 +199,20 @@ export default function BankSection() {
           {companies.map((c) => <Chip key={c.company} on={companyFilter === c.company} onClick={() => setCompanyFilter(c.company)}>{c.label}</Chip>)}
         </div>
         {canViewTotals && (
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "1px solid var(--border)", borderRadius: 9, padding: "4px 6px" }} title="Період керує лише підсумками; список гортається по всій історії">
-            <button onClick={() => shiftRange(-1)} style={arrowBtn}>◀</button>
-            <span style={{ fontSize: 13, fontWeight: 700, minWidth: 120, textAlign: "center" }}>{rangeLabel}</span>
-            <button onClick={() => shiftRange(1)} style={arrowBtn}>▶</button>
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setPeriodOpen((v) => !v)} title="Період керує лише підсумками; список гортається по всій історії"
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "1px solid var(--border)", borderRadius: 9, padding: "8px 14px", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 700, fontSize: 13.5 }}>
+              🗓 {rangeLabel} <span style={{ opacity: 0.5 }}>▾</span>
+            </button>
+            {periodOpen && <PeriodPicker from={range.from} to={range.to} onApply={(r) => { setRange(r); setPeriodOpen(false); }} onClose={() => setPeriodOpen(false)} />}
           </div>
         )}
         <div style={{ marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
           {/* «Реквізити» — доступні УСІМ ролям (без гейта прав) */}
           <button onClick={() => setRequisitesOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>📄 Реквізити</button>
+          {canViewCashflow && (
+            <button onClick={() => setCashflowOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid #2f6fdb", background: "rgba(47,111,219,0.08)", color: "#2f6fdb", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>📊 Кешфлоу</button>
+          )}
           {canViewBalances && (
             <button onClick={() => setBalancesOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid " + RED, background: "rgba(200,16,46,0.06)", color: RED, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>💰 Баланси</button>
           )}
@@ -211,6 +223,7 @@ export default function BankSection() {
         </div>
       </div>
       {balancesOpen && canViewBalances && <BalancesModal onClose={() => setBalancesOpen(false)} from={range.from} to={range.to} />}
+      {cashflowOpen && canViewCashflow && <CashflowModal onClose={() => setCashflowOpen(false)} onPickMonth={(ym) => { setRangeMonth(ym); setCashflowOpen(false); }} />}
       {requisitesOpen && <RequisitesModal onClose={() => setRequisitesOpen(false)} />}
 
       {/* Стрип підсумків — ЛИШЕ якщо сервер віддав summary (право view_bank_totals). Немає → картки нема. */}
@@ -466,6 +479,116 @@ function RequisitesModal({ onClose }: { onClose: () => void }) {
 function ReqLine({ label, v }: { label: string; v: string | null | undefined }) {
   if (!v) return null;
   return <div><span style={{ color: MUTED, display: "inline-block", minWidth: 130 }}>{label}</span><b>{v}</b></div>;
+}
+
+// ─────────────────────────── Кешфлоу помісячно (view_cashflow) ───────────────────────────
+function CashflowModal({ onClose, onPickMonth }: { onClose: () => void; onPickMonth: (ym: string) => void }) {
+  const [data, setData] = useState<CashflowMonth[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { fetchBankCashflow(12).then(setData).catch((e) => setError(err(e))); }, []);
+  const now = new Date();
+  const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const max = data && data.length ? Math.max(1, ...data.flatMap((d) => [d.incoming_uah, d.outgoing_uah])) : 1;
+  const H = 150;
+  const barH = (v: number) => Math.max(v > 0 ? 3 : 0, Math.round((v / max) * H));
+  const monLbl = (ym: string) => { const [y, m] = ym.split("-").map(Number); return `${MONTHS[m - 1]} ${String(y).slice(2)}`; };
+  // компактне сальдо (щоб не наповзало у вузькій колонці): +1,3млн / +840к / +120
+  const net = (n: number) => { const a = Math.abs(n), s = n >= 0 ? "+" : "−"; return a >= 1e6 ? `${s}${(a / 1e6).toFixed(1).replace(".", ",")}млн` : a >= 1e3 ? `${s}${Math.round(a / 1e3)}к` : `${s}${Math.round(a)}`; };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 780, width: "100%", margin: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>📊 Кешфлоу · рух коштів помісячно</h2>
+          <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: MUTED }}>✕</button>
+        </div>
+        <p style={{ fontSize: 12.5, color: MUTED, marginTop: 0 }}>Надходження мінус витрати (без банк-комісій) по місяцях, у гривні. Клік по місяцю → період виписки на цей місяць.</p>
+        <div style={{ display: "flex", gap: 16, fontSize: 12, color: MUTED, marginBottom: 8 }}>
+          <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "#16a34a", marginRight: 5 }} />Надходження</span>
+          <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "#dc2626", marginRight: 5 }} />Витрати</span>
+          <span>Сальдо — число під місяцем · суми у ₴</span>
+        </div>
+        {error ? <p style={{ color: "#dc2626", fontSize: 13 }}>{error}</p> : !data ? <p className="loading-text">Завантаження…</p> : (
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 4, overflowX: "auto", paddingBottom: 4 }}>
+            {data.map((d) => {
+              const active = d.month === curYm;
+              return (
+                <button key={d.month} onClick={() => onPickMonth(d.month)} title="Відкрити цей місяць у виписці"
+                  style={{ flex: "1 0 52px", minWidth: 52, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, border: active ? "1px solid #2f6fdb" : "1px solid transparent", background: active ? "rgba(47,111,219,0.07)" : "transparent", borderRadius: 10, padding: "6px 2px", cursor: "pointer" }}>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: H }}>
+                    <div title={`Надходження ${fmtUah(d.incoming_uah)}`} style={{ width: 11, height: barH(d.incoming_uah), background: "#16a34a", borderRadius: "3px 3px 0 0" }} />
+                    <div title={`Витрати ${fmtUah(d.outgoing_uah)}`} style={{ width: 11, height: barH(d.outgoing_uah), background: "#dc2626", borderRadius: "3px 3px 0 0" }} />
+                  </div>
+                  <div style={{ fontSize: 10.5, fontWeight: 800, color: d.net_uah >= 0 ? "#16a34a" : "#dc2626", whiteSpace: "nowrap" }}>{net(d.net_uah)}</div>
+                  <div style={{ fontSize: 11, color: active ? "#2f6fdb" : MUTED, fontWeight: active ? 700 : 400 }}>{monLbl(d.month)}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────── Календарний вибір періоду (поповер) ───────────────────────────
+function PeriodPicker({ from, to, onApply, onClose }: { from: string; to: string; onApply: (r: { from: string; to: string }) => void; onClose: () => void }) {
+  const ym = (y: number, m: number) => `${y}-${String(m).padStart(2, "0")}`;
+  const now = new Date();
+  const Y = now.getFullYear(), M = now.getMonth() + 1;
+  const [dFrom, setDFrom] = useState(from.slice(0, 7));
+  const [dTo, setDTo] = useState(to.slice(0, 7));
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [gridYear, setGridYear] = useState(Number(to.slice(0, 4)));
+  const set = (a: string, b: string) => { setDFrom(a); setDTo(b); setAnchor(null); setGridYear(Number(b.slice(0, 4))); };
+  const clickMonth = (m: string) => {
+    if (!anchor) { setAnchor(m); setDFrom(m); setDTo(m); }
+    else { const [a, b] = anchor <= m ? [anchor, m] : [m, anchor]; setDFrom(a); setDTo(b); setAnchor(null); }
+  };
+  const apply = () => { const [ty, tm] = dTo.split("-").map(Number); const last = new Date(ty, tm, 0).getDate(); onApply({ from: `${dFrom}-01`, to: `${dTo}-${String(last).padStart(2, "0")}` }); };
+  const presets: [string, () => void][] = [
+    ["Цей місяць", () => set(ym(Y, M), ym(Y, M))],
+    ["Минулий", () => { const d = new Date(Y, M - 2, 1); set(ym(d.getFullYear(), d.getMonth() + 1), ym(d.getFullYear(), d.getMonth() + 1)); }],
+    ["Останні 3 міс", () => { const d = new Date(Y, M - 3, 1); set(ym(d.getFullYear(), d.getMonth() + 1), ym(Y, M)); }],
+    ["Квартал", () => { const s = Math.floor((M - 1) / 3) * 3 + 1; set(ym(Y, s), ym(Y, s + 2)); }],
+    ["Рік", () => set(ym(Y, 1), ym(Y, 12))],
+  ];
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 90 }} />
+      <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 100, width: 320, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "0 8px 28px rgba(0,0,0,0.18)", padding: 12 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+          {presets.map(([lbl, fn]) => <button key={lbl} onClick={fn} style={{ fontSize: 12, fontWeight: 700, padding: "5px 10px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", cursor: "pointer" }}>{lbl}</button>)}
+          <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>або обери місяць/діапазон ↓</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <button onClick={() => setGridYear((y) => y - 1)} style={arrowBtn}>◀</button>
+          <b style={{ fontSize: 14 }}>{gridYear}</b>
+          <button onClick={() => setGridYear((y) => y + 1)} style={arrowBtn}>▶</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 }}>
+          {MONTHS.map((mn, i) => {
+            const cell = ym(gridYear, i + 1);
+            const inRange = cell >= dFrom && cell <= dTo;
+            const edge = cell === dFrom || cell === dTo;
+            return (
+              <button key={cell} onClick={() => clickMonth(cell)}
+                style={{ fontSize: 12.5, fontWeight: edge ? 800 : 600, padding: "8px 0", borderRadius: 8, cursor: "pointer",
+                  border: "1px solid " + (edge ? "#2f6fdb" : "var(--border)"),
+                  background: edge ? "#2f6fdb" : inRange ? "rgba(47,111,219,0.12)" : "var(--card-bg)",
+                  color: edge ? "#fff" : "var(--text)" }}>{mn}</button>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+          <span style={{ fontSize: 11.5, color: MUTED }}>{dFrom === dTo ? dFrom : `${dFrom} – ${dTo}`}</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => { set(ym(Y, M), ym(Y, M)); }} style={{ fontSize: 12.5, padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: MUTED, cursor: "pointer" }}>Скинути</button>
+            <button onClick={apply} style={{ fontSize: 12.5, fontWeight: 700, padding: "6px 14px", borderRadius: 8, border: "none", background: "#2f6fdb", color: "#fff", cursor: "pointer" }}>Застосувати</button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
 }
 
 // ─────────────────────────── дрібні ───────────────────────────

@@ -1070,6 +1070,15 @@ UPDATE roles SET permissions = permissions || '{"view_balances":true}'::jsonb WH
 -- Право «бачити підсумки виписки» (агрегати надходжень/платежів) — ЛИШЕ admin; решті не чіпаємо.
 UPDATE roles SET permissions = permissions || '{"view_bank_totals":true}'::jsonb WHERE key = 'admin';
 
+-- Право «кешфлоу» — default у admin. Роль «Фінансист» (РЕДАГОВАНА, admin може тюнити) — доступ до
+-- Виписки + фінансові права, БЕЗ manage_users/manage_bank_*/view_hidden. Ідемпотентно (ON CONFLICT
+-- DO NOTHING — не перетираємо admin-правки ролі); наявний доступ інших не чіпаємо.
+UPDATE roles SET permissions = permissions || '{"view_cashflow":true}'::jsonb WHERE key = 'admin';
+INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
+VALUES ('financier', 'Фінансист', false, 'company', '{"bank":true}'::jsonb,
+        '{"view_cashflow":true,"view_bank_totals":true,"view_balances":true}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
 -- Службові збори банку (комісії) — позначаємо, щоб не показувати серед вихідних платежів.
 -- Патерни: counterparty_name містить «ЗА ДЕБЕТУВАННЯ РАХУНК…»; purpose починається з «Комісія…».
 ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS is_bank_fee BOOLEAN NOT NULL DEFAULT false;

@@ -2051,6 +2051,11 @@ export async function saveBankAccount(id: number | null, patch: Partial<BankAcco
 }
 export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null; balance_uah?: number | null; fx_gain_period?: number | null }
 export interface BankBalancesResp { balances: BankBalance[]; period?: { from: string; to: string } }
+export interface CashflowMonth { month: string; incoming_uah: number; outgoing_uah: number; net_uah: number }
+export async function fetchBankCashflow(months = 12): Promise<CashflowMonth[]> {
+  const { data } = await api.get<{ cashflow: CashflowMonth[] }>("/bank/cashflow", { params: { months } });
+  return data.cashflow;
+}
 export async function fetchBankBalances(from?: string, to?: string): Promise<BankBalancesResp> {
   const { data } = await api.get<BankBalancesResp>("/bank/balances", { params: { ...(from ? { from } : {}), ...(to ? { to } : {}) } });
   return data;

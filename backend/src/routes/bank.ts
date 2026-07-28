@@ -84,6 +84,38 @@ bankRouter.get("/requisites", async (_req, res) => {
   res.json({ requisites: r.rows });
 });
 
+// Кешфлоу помісячно — право view_cashflow (admin/Фінансист). Реальний рух коштів у гривні:
+// incoming = Σ вхідних; outgoing = Σ вихідних БЕЗ банк-комісій; net = incoming − outgoing.
+// Це ФІНАНСОВИЙ АГРЕГАТ (не лінійний список) → приховані отримувачі сюди входять. Ключів нема.
+bankRouter.get("/cashflow", requirePerm("view_cashflow"), async (req, res) => {
+  const months = Math.min(Math.max(Number((req.query as Record<string, unknown>).months) || 12, 1), 36);
+  const r = await pool.query<{ month: string; incoming_uah: string; outgoing_uah: string }>(
+    `WITH months AS (
+       SELECT to_char(d, 'YYYY-MM') AS month
+       FROM generate_series(
+         date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv')) - (($1::int - 1) * interval '1 month'),
+         date_trunc('month', (now() AT TIME ZONE 'Europe/Kyiv')),
+         interval '1 month') d
+     ),
+     agg AS (
+       SELECT to_char((t.booked_at AT TIME ZONE 'Europe/Kyiv'), 'YYYY-MM') AS month,
+              SUM(CASE WHEN t.direction = 'in' THEN abs(COALESCE(t.amount_uah, 0)) ELSE 0 END) AS incoming_uah,
+              SUM(CASE WHEN t.direction = 'out' AND NOT COALESCE(t.is_bank_fee, false)
+                       THEN abs(COALESCE(t.amount_uah, 0)) ELSE 0 END) AS outgoing_uah
+         FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+        WHERE a.is_active = true
+        GROUP BY 1
+     )
+     SELECT m.month, COALESCE(agg.incoming_uah, 0) AS incoming_uah, COALESCE(agg.outgoing_uah, 0) AS outgoing_uah
+       FROM months m LEFT JOIN agg ON agg.month = m.month ORDER BY m.month`, [months]);
+  const cashflow = r.rows.map((x) => {
+    const inc = Math.round(Number(x.incoming_uah) * 100) / 100;
+    const out = Math.round(Number(x.outgoing_uah) * 100) / 100;
+    return { month: x.month, incoming_uah: inc, outgoing_uah: out, net_uah: Math.round((inc - out) * 100) / 100 };
+  });
+  res.json({ cashflow });
+});
+
 // Дебіторка по компаніях — відкладено (варіант «в»): placeholder, без вигаданого розрізу.
 bankRouter.get("/receivables", async (_req, res) => {
   res.json({ deferred: true, message: "Розріз дебіторки по юрособах — скоро (потрібна ознака юрособи)" });
