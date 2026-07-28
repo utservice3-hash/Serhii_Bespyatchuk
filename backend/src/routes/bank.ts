@@ -55,8 +55,8 @@ bankRouter.get("/balances", requirePerm("view_balances"), async (_req, res) => {
 // НІКОЛИ не віддаємо env-ключі, баланси чи будь-що секретне — лише перелічені публічні поля.
 bankRouter.get("/requisites", async (_req, res) => {
   const r = await pool.query(
-    `SELECT id, label, company, legal_name, edrpou_ipn, vat_ipn, iban, bank_name, mfo, bank_edrpou, legal_address, director
-       FROM bank_accounts WHERE is_active = true ORDER BY id`);
+    `SELECT id, label, company, currency, legal_name, edrpou_ipn, vat_ipn, iban, bank_name, mfo, bank_edrpou, legal_address, director
+       FROM bank_accounts WHERE is_active = true ORDER BY id, currency`);
   res.json({ requisites: r.rows });
 });
 

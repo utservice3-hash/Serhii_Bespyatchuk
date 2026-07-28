@@ -382,11 +382,12 @@ function BalancesModal({ onClose }: { onClose: () => void }) {
 }
 
 // ─────────────────────────── Реквізити компаній (усі ролі, перегляд+копіювання) ───────────────────────────
+const ccyTag = (c: string) => (c && c !== "UAH" ? ` (${c})` : "");
 function reqToText(r: BankRequisite): string {
   const L: string[] = [r.legal_name ?? r.label];
   if (r.edrpou_ipn) L.push(`ЄДРПОУ: ${r.edrpou_ipn}`);
   if (r.vat_ipn) L.push(`ІПН (ПДВ): ${r.vat_ipn}`);
-  if (r.iban) L.push(`IBAN: ${r.iban}`);
+  if (r.iban) L.push(`IBAN${ccyTag(r.currency)}: ${r.iban}`);
   const bank = [r.bank_name, r.mfo ? `МФО ${r.mfo}` : null, r.bank_edrpou ? `ЄДРПОУ банку ${r.bank_edrpou}` : null].filter(Boolean).join(", ");
   if (bank) L.push(`Банк: ${bank}`);
   if (r.legal_address) L.push(`Юр. адреса: ${r.legal_address}`);
@@ -416,13 +417,14 @@ function RequisitesModal({ onClose }: { onClose: () => void }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                     <AccBadge company={r.company} />
                     <b style={{ fontSize: 14.5 }}>{r.legal_name ?? r.label}</b>
+                    {r.currency && r.currency !== "UAH" && <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 7, background: "rgba(47,111,219,0.14)", color: "#2f6fdb" }}>{r.currency}</span>}
                     <button onClick={() => copy(reqToText(r), `r${r.id}`)} style={{ ...btn(copied === `r${r.id}`), marginLeft: "auto" }}>{copied === `r${r.id}` ? "✓ Скопійовано" : "⧉ Копіювати"}</button>
                   </div>
                   <div style={{ fontSize: 13, lineHeight: 1.85 }}>
                     <ReqLine label="ЄДРПОУ" v={r.edrpou_ipn} />
                     <ReqLine label="ІПН (ПДВ)" v={r.vat_ipn} />
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ color: MUTED, display: "inline-block", minWidth: 130 }}>IBAN</span>
+                      <span style={{ color: MUTED, display: "inline-block", minWidth: 130 }}>IBAN{ccyTag(r.currency)}</span>
                       <b style={{ fontFamily: "monospace", fontSize: 13 }}>{r.iban ?? "—"}</b>
                       {r.iban && <button onClick={() => copy(r.iban!, `i${r.id}`)} style={btn(copied === `i${r.id}`)}>{copied === `i${r.id}` ? "✓" : "⧉ IBAN"}</button>}
                     </div>

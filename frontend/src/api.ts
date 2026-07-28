@@ -2011,7 +2011,7 @@ export interface BankAccount {
 }
 // Публічні реквізити (усі ролі; без ключів/балансів)
 export interface BankRequisite {
-  id: number; label: string; company: string; legal_name: string | null; edrpou_ipn: string | null;
+  id: number; label: string; company: string; currency: string; legal_name: string | null; edrpou_ipn: string | null;
   vat_ipn: string | null; iban: string | null; bank_name: string | null; mfo: string | null;
   bank_edrpou: string | null; legal_address: string | null; director: string | null;
 }
