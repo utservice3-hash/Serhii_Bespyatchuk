@@ -1059,6 +1059,12 @@ UPDATE roles SET permissions = permissions ||
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_amount     NUMERIC;
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_currency   TEXT;
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_updated_at TIMESTAMPTZ;
+-- Розширені (публічні) реквізити компаній — для картки «Реквізити» (бачать усі ролі).
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS vat_ipn       TEXT; -- ІПН (платник ПДВ)
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS legal_address TEXT;
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS director      TEXT;
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS bank_edrpou   TEXT; -- ЄДРПОУ банку
+
 -- Право «бачити баланси» — ЛИШЕ вбудованій ролі admin; решті доступ НЕ змінюємо.
 UPDATE roles SET permissions = permissions || '{"view_balances":true}'::jsonb WHERE key = 'admin';
 -- Право «бачити підсумки виписки» (агрегати надходжень/платежів) — ЛИШЕ admin; решті не чіпаємо.

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchBankAccounts, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances,
+  fetchBankAccounts, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
-  type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance,
+  type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance, type BankRequisite,
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 import { usePolling } from "../../../hooks/usePolling";
@@ -86,6 +86,7 @@ export default function BankSection() {
   const canViewBalances = perms.includes("view_balances");
   const canViewTotals = perms.includes("view_bank_totals"); // косметика; сервер гейтить summary
   const [balancesOpen, setBalancesOpen] = useState(false);
+  const [requisitesOpen, setRequisitesOpen] = useState(false); // «Реквізити» — усі ролі
 
   const PAGE = 100;
   const [mode, setMode] = useState<"in" | "out">("in");
@@ -189,6 +190,8 @@ export default function BankSection() {
           </div>
         )}
         <div style={{ marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
+          {/* «Реквізити» — доступні УСІМ ролям (без гейта прав) */}
+          <button onClick={() => setRequisitesOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>📄 Реквізити</button>
           {canViewBalances && (
             <button onClick={() => setBalancesOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid " + RED, background: "rgba(200,16,46,0.06)", color: RED, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>💰 Баланси</button>
           )}
@@ -199,6 +202,7 @@ export default function BankSection() {
         </div>
       </div>
       {balancesOpen && canViewBalances && <BalancesModal onClose={() => setBalancesOpen(false)} />}
+      {requisitesOpen && <RequisitesModal onClose={() => setRequisitesOpen(false)} />}
 
       {/* Стрип підсумків — ЛИШЕ якщо сервер віддав summary (право view_bank_totals). Немає → картки нема. */}
       {summary && (
@@ -267,7 +271,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
   const [msg, setMsg] = useState("");
   const startEdit = (a: BankAccount) => { setEditId(a.id); setDraft({ ...a }); };
   const save = async () => {
-    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, iban: draft.iban ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, purpose: draft.purpose ?? undefined } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
+    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
     catch (e) { setMsg("✗ " + err(e)); }
   };
   const toggleActive = async (a: BankAccount) => { try { await saveBankAccount(a.id, { isActive: !a.is_active } as never); await onChange(); } catch (e) { alert(err(e)); } };
@@ -288,7 +292,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
             </div>
             {editId === a.id ? (
               <div style={{ display: "grid", gap: 8 }}>
-                {([["legal_name", "Юр. назва"], ["edrpou_ipn", "ЄДРПОУ / ІПН"], ["iban", "IBAN"], ["bank_name", "Банк"], ["mfo", "МФО"], ["purpose", "Призначення"]] as const).map(([k, lbl]) => (
+                {([["legal_name", "Юр. назва"], ["edrpou_ipn", "ЄДРПОУ"], ["vat_ipn", "ІПН (ПДВ)"], ["iban", "IBAN"], ["bank_name", "Банк"], ["mfo", "МФО"], ["bank_edrpou", "ЄДРПОУ банку"], ["legal_address", "Юр. адреса"], ["director", "Директор"], ["purpose", "Призначення"]] as const).map(([k, lbl]) => (
                   <label key={k} style={{ fontSize: 12 }}>{lbl}<input value={(draft[k] as string) ?? ""} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} style={{ ...inp, width: "100%", boxSizing: "border-box", marginTop: 2 }} /></label>
                 ))}
                 <div style={{ display: "flex", gap: 8 }}>
@@ -298,7 +302,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
               </div>
             ) : (
               <div style={{ fontSize: 13, lineHeight: 1.9 }}>
-                <Req label="ЄДРПОУ/ІПН" v={a.edrpou_ipn} /><Req label="IBAN" v={a.iban} /><Req label="Банк · МФО" v={a.bank_name ? `${a.bank_name}${a.mfo ? " · " + a.mfo : ""}` : null} /><Req label="Призначення" v={a.purpose} />
+                <Req label="ЄДРПОУ" v={a.edrpou_ipn} /><Req label="ІПН (ПДВ)" v={a.vat_ipn ?? null} /><Req label="IBAN" v={a.iban} /><Req label="Банк · МФО" v={a.bank_name ? `${a.bank_name}${a.mfo ? " · " + a.mfo : ""}${a.bank_edrpou ? " · ЄДРПОУ банку " + a.bank_edrpou : ""}` : null} /><Req label="Юр. адреса" v={a.legal_address ?? null} /><Req label="Директор" v={a.director ?? null} /><Req label="Призначення" v={a.purpose} />
                 <button onClick={() => startEdit(a)} style={{ marginTop: 8, padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5 }}>✎ Редагувати</button>
               </div>
             )}
@@ -375,6 +379,70 @@ function BalancesModal({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+// ─────────────────────────── Реквізити компаній (усі ролі, перегляд+копіювання) ───────────────────────────
+function reqToText(r: BankRequisite): string {
+  const L: string[] = [r.legal_name ?? r.label];
+  if (r.edrpou_ipn) L.push(`ЄДРПОУ: ${r.edrpou_ipn}`);
+  if (r.vat_ipn) L.push(`ІПН (ПДВ): ${r.vat_ipn}`);
+  if (r.iban) L.push(`IBAN: ${r.iban}`);
+  const bank = [r.bank_name, r.mfo ? `МФО ${r.mfo}` : null, r.bank_edrpou ? `ЄДРПОУ банку ${r.bank_edrpou}` : null].filter(Boolean).join(", ");
+  if (bank) L.push(`Банк: ${bank}`);
+  if (r.legal_address) L.push(`Юр. адреса: ${r.legal_address}`);
+  if (r.director) L.push(`Директор: ${r.director}`);
+  return L.join("\n");
+}
+function RequisitesModal({ onClose }: { onClose: () => void }) {
+  const [reqs, setReqs] = useState<BankRequisite[] | null>(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState("");
+  useEffect(() => { fetchBankRequisites().then(setReqs).catch((e) => setError(err(e))); }, []);
+  const copy = (text: string, tag: string) => { navigator.clipboard?.writeText(text).then(() => { setCopied(tag); setTimeout(() => setCopied((c) => (c === tag ? "" : c)), 1500); }).catch(() => {}); };
+  const btn = (active: boolean): React.CSSProperties => ({ padding: "5px 11px", borderRadius: 8, border: "1px solid var(--border)", background: active ? "rgba(22,163,74,0.14)" : "var(--card-bg)", color: active ? "#16a34a" : "#2f6fdb", cursor: "pointer", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" });
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: "40px 16px", overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 760, width: "100%", margin: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>📄 Реквізити компаній</h2>
+          <button onClick={onClose} title="Закрити" style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: MUTED }}>✕</button>
+        </div>
+        <p style={{ fontSize: 12.5, color: MUTED, marginTop: 0 }}>Публічні реквізити для вставки в рахунок/лист. Доступно всім. Копіюй блок або IBAN однією кнопкою.</p>
+        {error ? <p style={{ color: "#dc2626", fontSize: 13 }}>{error}</p> : !reqs ? <p className="loading-text">Завантаження…</p> : (
+          <>
+            <div style={{ display: "grid", gap: 12 }}>
+              {reqs.map((r) => (
+                <div key={r.id} style={{ border: "1px solid var(--border)", borderRadius: 12, padding: "13px 15px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+                    <AccBadge company={r.company} />
+                    <b style={{ fontSize: 14.5 }}>{r.legal_name ?? r.label}</b>
+                    <button onClick={() => copy(reqToText(r), `r${r.id}`)} style={{ ...btn(copied === `r${r.id}`), marginLeft: "auto" }}>{copied === `r${r.id}` ? "✓ Скопійовано" : "⧉ Копіювати"}</button>
+                  </div>
+                  <div style={{ fontSize: 13, lineHeight: 1.85 }}>
+                    <ReqLine label="ЄДРПОУ" v={r.edrpou_ipn} />
+                    <ReqLine label="ІПН (ПДВ)" v={r.vat_ipn} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: MUTED, display: "inline-block", minWidth: 130 }}>IBAN</span>
+                      <b style={{ fontFamily: "monospace", fontSize: 13 }}>{r.iban ?? "—"}</b>
+                      {r.iban && <button onClick={() => copy(r.iban!, `i${r.id}`)} style={btn(copied === `i${r.id}`)}>{copied === `i${r.id}` ? "✓" : "⧉ IBAN"}</button>}
+                    </div>
+                    <ReqLine label="Банк · МФО" v={r.bank_name ? `${r.bank_name}${r.mfo ? " · МФО " + r.mfo : ""}${r.bank_edrpou ? " · ЄДРПОУ банку " + r.bank_edrpou : ""}` : null} />
+                    <ReqLine label="Юр. адреса" v={r.legal_address} />
+                    <ReqLine label="Директор" v={r.director} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => copy(reqs.map(reqToText).join("\n\n"), "all")} style={{ ...btn(copied === "all"), width: "100%", marginTop: 14, padding: "10px", fontSize: 13.5 }}>{copied === "all" ? "✓ Скопійовано всі реквізити" : "⧉ Копіювати всі реквізити"}</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+function ReqLine({ label, v }: { label: string; v: string | null | undefined }) {
+  if (!v) return null;
+  return <div><span style={{ color: MUTED, display: "inline-block", minWidth: 130 }}>{label}</span><b>{v}</b></div>;
 }
 
 // ─────────────────────────── дрібні ───────────────────────────

@@ -2006,7 +2006,18 @@ export interface BankAccount {
   external_account_id: string | null; is_active: boolean;
   legal_name: string | null; edrpou_ipn: string | null; iban: string | null;
   bank_name: string | null; mfo: string | null; purpose: string | null;
+  vat_ipn?: string | null; legal_address?: string | null; director?: string | null; bank_edrpou?: string | null;
   env_key_name?: string | null; api_connected: boolean;
+}
+// Публічні реквізити (усі ролі; без ключів/балансів)
+export interface BankRequisite {
+  id: number; label: string; company: string; legal_name: string | null; edrpou_ipn: string | null;
+  vat_ipn: string | null; iban: string | null; bank_name: string | null; mfo: string | null;
+  bank_edrpou: string | null; legal_address: string | null; director: string | null;
+}
+export async function fetchBankRequisites(): Promise<BankRequisite[]> {
+  const { data } = await api.get<{ requisites: BankRequisite[] }>("/bank/requisites");
+  return data.requisites;
 }
 export interface BankTx {
   id: number; account_id: number; company: string; account_label: string; direction: "in" | "out";
@@ -2035,7 +2046,7 @@ export async function fetchBankOutgoing(p: BankQuery): Promise<BankFeed> {
   const { data } = await api.get<BankFeed>("/bank/outgoing", { params: bankParams(p) });
   return data;
 }
-export async function saveBankAccount(id: number | null, patch: Partial<BankAccount> & { envKeyName?: string; legalName?: string; edrpouIpn?: string; bankName?: string; isActive?: boolean }): Promise<void> {
+export async function saveBankAccount(id: number | null, patch: Partial<BankAccount> & { envKeyName?: string; legalName?: string; edrpouIpn?: string; bankName?: string; isActive?: boolean; vatIpn?: string; legalAddress?: string; director?: string; bankEdrpou?: string }): Promise<void> {
   if (id == null) await api.post("/bank/accounts", patch); else await api.patch(`/bank/accounts/${id}`, patch);
 }
 export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null }

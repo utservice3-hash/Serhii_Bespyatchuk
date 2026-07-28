@@ -51,6 +51,15 @@ bankRouter.get("/balances", requirePerm("view_balances"), async (_req, res) => {
   res.json({ balances: r.rows });
 });
 
+// Реквізити компаній — ПУБЛІЧНІ поля, доступні УСІМ ролям (гейт лише tab «bank», як сама вкладка).
+// НІКОЛИ не віддаємо env-ключі, баланси чи будь-що секретне — лише перелічені публічні поля.
+bankRouter.get("/requisites", async (_req, res) => {
+  const r = await pool.query(
+    `SELECT id, label, company, legal_name, edrpou_ipn, vat_ipn, iban, bank_name, mfo, bank_edrpou, legal_address, director
+       FROM bank_accounts WHERE is_active = true ORDER BY id`);
+  res.json({ requisites: r.rows });
+});
+
 // Дебіторка по компаніях — відкладено (варіант «в»): placeholder, без вигаданого розрізу.
 bankRouter.get("/receivables", async (_req, res) => {
   res.json({ deferred: true, message: "Розріз дебіторки по юрособах — скоро (потрібна ознака юрособи)" });
@@ -91,7 +100,8 @@ bankRouter.patch("/accounts/:id", requirePerm("manage_bank_accounts"), async (re
   const id = Number(req.params.id);
   const b = req.body ?? {};
   const map: Record<string, string> = { label: "label", currency: "currency", externalAccountId: "external_account_id",
-    isActive: "is_active", legalName: "legal_name", edrpouIpn: "edrpou_ipn", iban: "iban", bankName: "bank_name", mfo: "mfo", purpose: "purpose", envKeyName: "env_key_name" };
+    isActive: "is_active", legalName: "legal_name", edrpouIpn: "edrpou_ipn", iban: "iban", bankName: "bank_name", mfo: "mfo", purpose: "purpose", envKeyName: "env_key_name",
+    vatIpn: "vat_ipn", legalAddress: "legal_address", director: "director", bankEdrpou: "bank_edrpou" };
   const sets: string[] = []; const params: unknown[] = [];
   for (const [k, col] of Object.entries(map)) if (k in b) { params.push(b[k]); sets.push(`${col} = $${params.length}`); }
   if (!sets.length) return res.json({ ok: true });
