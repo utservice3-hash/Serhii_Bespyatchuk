@@ -36,6 +36,7 @@ import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js
 import { syncKommo } from "./jobs/syncKommo.js";
 import { refreshRoles } from "./auth/rbac.js";
 import { bankRouter } from "./routes/bank.js";
+import { trackerRouter } from "./routes/tracker.js";
 import { syncBank } from "./jobs/syncBank.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
@@ -109,6 +110,7 @@ app.use("/api/training", trainingRouter);
 app.use("/api/statistics", statisticsRouter);
 app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
 app.use("/api/bank", bankRouter); // Виписка — банк-API (окремо від CRM)
+app.use("/api/tracker", trackerRouter); // Трекер часу — власна авторизація (БЕЗ requireAuth), окрема підсистема
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".

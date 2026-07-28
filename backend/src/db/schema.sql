@@ -1097,3 +1097,39 @@ SELECT * FROM (VALUES
  ('fop_mono','mono','ФОП Беспятчук (Моно)','UAH','MONO_TOKEN_FOP',true,'ФОП Беспятчук Сергій Степанович')
 ) AS v(company, bank, label, currency, env_key_name, is_active, legal_name)
 WHERE NOT EXISTS (SELECT 1 FROM bank_accounts);
+
+-- ─────────────────────────── Трекер часу (окрема підсистема) ───────────────────────────
+-- Власна авторизація (device-токен), НЕ JWT. Банк/виписку не чіпає.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tracker_enabled BOOLEAN NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS tracker_devices (
+  id            SERIAL PRIMARY KEY,
+  user_id       INTEGER NOT NULL REFERENCES users(id),
+  manager_id    INTEGER REFERENCES managers(id),
+  token_hash    TEXT NOT NULL UNIQUE,        -- sha256(deviceToken); сам токен ніде не зберігаємо
+  platform      TEXT NOT NULL,
+  hostname      TEXT,
+  agent_version TEXT,
+  last_seen_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at    TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS tracker_intervals (
+  id           BIGSERIAL PRIMARY KEY,
+  device_id    INTEGER NOT NULL REFERENCES tracker_devices(id),
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  manager_id   INTEGER REFERENCES managers(id),
+  started_at   TIMESTAMPTZ NOT NULL,
+  ended_at     TIMESTAMPTZ NOT NULL,
+  state        TEXT NOT NULL CHECK (state IN ('active','idle')),
+  app          TEXT,
+  window_title TEXT,
+  input_events INTEGER,
+  UNIQUE (device_id, started_at)             -- дедуплікація heartbeat-батчів
+);
+CREATE INDEX IF NOT EXISTS idx_tracker_intervals_user_time ON tracker_intervals (user_id, started_at);
+
+-- Одноразове ввімкнення: усі з ефективною роллю manager + Дарʼя (utservice62). Власника/адмінів — НІ.
+UPDATE users SET tracker_enabled = true WHERE COALESCE(role_override, role) = 'manager';
+UPDATE users SET tracker_enabled = true WHERE lower(email) = 'utservice62@gmail.com';
