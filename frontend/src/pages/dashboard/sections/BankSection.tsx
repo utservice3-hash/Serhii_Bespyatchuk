@@ -379,6 +379,9 @@ function BalancesModal({ onClose }: { onClose: () => void }) {
                 <b style={{ fontSize: 14 }}>{b.label}</b>
                 <div style={{ marginLeft: "auto", textAlign: "right" }}>
                   <div style={{ fontSize: 17, fontWeight: 800, color: b.balance_amount == null ? MUTED : "#16a34a" }}>{fmtBal(b.balance_amount, b.balance_currency)}</div>
+                  {b.balance_currency && b.balance_currency !== "UAH" && b.balance_uah != null && (
+                    <div style={{ fontSize: 11.5, color: MUTED }}>≈ {fmtMoney(b.balance_uah, true)} ₴</div>
+                  )}
                   <div style={{ fontSize: 11, color: MUTED }}>{upd(b.balance_updated_at)}</div>
                 </div>
               </div>

@@ -4,6 +4,7 @@ import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { writeAudit } from "../db/audit.js";
 import { feedPage, periodSummary, getHiddenPayees, type BankFilter } from "../core/bankReport.js";
+import { toUah } from "../bankSources/fx.js";
 
 export const bankRouter = Router();
 bankRouter.use(requireAuth); // tab-гейт «bank» — усі ролі (screen_access); + auto-asyncH через lib/asyncRoutes
@@ -48,7 +49,16 @@ bankRouter.get("/balances", requirePerm("view_balances"), async (_req, res) => {
   const r = await pool.query(
     `SELECT id, label, company, balance_amount, balance_currency, balance_updated_at
        FROM bank_accounts WHERE is_active = true ORDER BY label`);
-  res.json({ balances: r.rows });
+  // Для валютних (≠UAH) додаємо ≈UAH тим самим fx (курс банку/НБУ на дату оновлення). Ключів — нема.
+  const balances = await Promise.all(r.rows.map(async (b) => {
+    let balance_uah: number | null = null;
+    if (b.balance_amount != null && b.balance_currency && b.balance_currency !== "UAH") {
+      const { amountUah } = await toUah(Number(b.balance_amount), b.balance_currency, null, b.balance_updated_at ?? new Date());
+      balance_uah = amountUah;
+    }
+    return { ...b, balance_uah };
+  }));
+  res.json({ balances });
 });
 
 // Реквізити компаній — ПУБЛІЧНІ поля, доступні УСІМ ролям (гейт лише tab «bank», як сама вкладка).
