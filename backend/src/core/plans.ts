@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
-import { workingDaysBetween, monthEndOf } from "./dates.js";
+import { workingDaysBetween, monthEndOf, fixedWeekBlocks } from "./dates.js";
+import { receivedByMgr } from "./money.js";
 
 /**
  * ЄДИНЕ ДЖЕРЕЛО «плану на менеджера для ДИСПЛЕЮ» (цеглина 1 міграції, рішення власника).
@@ -198,4 +199,101 @@ export function planRecommendation(baseMonths: PlanRecMonth[], targetMonth: stri
 export function baseMonthsFor(targetMonth: string): string[] {
   const [y, m] = targetMonth.split("-").map(Number);
   return [3, 2, 1].map((back) => new Date(Date.UTC(y, m - 1 - back, 1)).toISOString().slice(0, 10));
+}
+
+// ───────────────────────── ДИНАМІЧНА ЦІЛЬ (Звіт Phase 2) ─────────────────────────
+// «План НЕ зменшується — менше робочих днів → вища ціль на присутні дні». Рахує ПЕР-
+// МЕНЕДЖЕРА (команда/відділ = Σ менеджерів → Σ-інваріант тримається: weeksLeft спільний
+// для всіх, тож Σ(remaining/weeksLeft) = (Σplan−Σfact)/weeksLeft). Live (не морозиться).
+// Тижні — ISO Пн–Нд, нарізані від 1-го числа (`fixedWeekBlocks`) — ЄДИНА дефініція.
+
+/** ПРИСУТНІ робочі дні по менеджеру в [from,to]: Пн–Пт МІНУС держсвята МІНУС approved-
+ *  відсутності (day_off/vacation/sick; short_day лишає день присутнім). БАТЧЕМ (2 запити
+ *  на всю команду, не по менеджеру). Дзеркалить логіку `GET /api/duty/presence`. */
+export async function presentWorkingDaysByManager(managerIds: number[], from: string, to: string): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (!managerIds.length) return out;
+  const hol = new Set((await pool.query<{ d: string }>(
+    `SELECT to_char(holiday_date,'YYYY-MM-DD') d FROM company_holidays WHERE holiday_date BETWEEN $1 AND $2`, [from, to])).rows.map((r) => r.d));
+  const abs = (await pool.query<{ manager_id: number; s: string; e: string }>(
+    `SELECT manager_id, to_char(start_date,'YYYY-MM-DD') s, to_char(end_date,'YYYY-MM-DD') e
+       FROM team_calendar_absences
+      WHERE status='approved' AND kind IN ('day_off','vacation','sick')
+        AND manager_id = ANY($1) AND start_date <= $3 AND end_date >= $2`, [managerIds, from, to])).rows;
+  const absByMgr = new Map<number, { s: string; e: string }[]>();
+  for (const a of abs) { const arr = absByMgr.get(a.manager_id) ?? []; arr.push({ s: a.s, e: a.e }); absByMgr.set(a.manager_id, arr); }
+  for (const mid of managerIds) {
+    const ranges = absByMgr.get(mid) ?? [];
+    let n = 0; const d = new Date(from + "T00:00:00Z"); const end = new Date(to + "T00:00:00Z");
+    while (d.getTime() <= end.getTime()) {
+      const ds = d.toISOString().slice(0, 10); const dow = d.getUTCDay();
+      const working = dow !== 0 && dow !== 6 && !hol.has(ds);
+      const absent = ranges.some((r) => ds >= r.s && ds <= r.e);
+      if (working && !absent) n++;
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    out.set(mid, n);
+  }
+  return out;
+}
+
+/** ЧИСТА декомпозиція цілі (metric-агностична): місяць → тиждень → день. Використовується
+ *  і для грошей, і для активностей (реклама/лідген/авто-к-сть) — одна арифметика. */
+export function decomposeTarget(o: { monthPlan: number; factMonth: number; factWeek: number; weeksLeft: number; presentDaysLeftWeek: number }): { monthTarget: number; weekTarget: number; dayTarget: number } {
+  const remMonth = Math.max(0, o.monthPlan - o.factMonth);
+  const weekTarget = o.weeksLeft > 0 ? Math.round(remMonth / o.weeksLeft) : 0;
+  const remWeek = Math.max(0, weekTarget - o.factWeek);
+  const dayTarget = o.presentDaysLeftWeek > 0 ? Math.round(remWeek / o.presentDaysLeftWeek) : 0;
+  return { monthTarget: Math.round(o.monthPlan), weekTarget, dayTarget };
+}
+
+export type DynScope = { managerId?: number | null; teamId?: number | null; month?: string };
+export interface DynTargetRow {
+  managerId: number; name: string; teamId: number | null;
+  monthPlan: number; factMonth: number; factWeek: number;
+  weeksLeft: number; presentDaysLeftWeek: number;
+  monthTarget: number; weekTarget: number; dayTarget: number; target: number;
+}
+
+/**
+ * ДИНАМІЧНА ЦІЛЬ по грошах, ПЕР-МЕНЕДЖЕРА (Звіт Phase 2). Джерело плану — `managerPlan`
+ * (metric payment_amount, Σ=2.7 млн, з перерозподілом плану звільнених); сирі плани НЕ чіпаємо.
+ *   • monthTarget = monthPlan (сирий, незмінний);
+ *   • weekTarget  = max(0, monthPlan − фактМісяцяДоНині) ÷ тижнівЩоЛишились;
+ *   • dayTarget   = max(0, weekTarget − фактТижняДоНині) ÷ присутніхРобочихДнівЩоЛишились
+ *                   (Пн–Пт − держсвята − approved-відсутності).
+ * `target` = поле під обрану гранулярність. Факт — `receivedByMgr` (signed, дедуп). Місяць
+ * визначається `scope.month` (дефолт — поточний київський). Для минулих/майбутніх місяців
+ * «сьогодні» клампиться в межі місяця (історичний перегляд не ламається).
+ */
+export async function dynamicTarget(scope: DynScope, granularity: "month" | "week" | "day"): Promise<DynTargetRow[]> {
+  const todayReal = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const monthStart = (scope.month ?? todayReal).slice(0, 7) + "-01";
+  const mEnd = monthEndOf(monthStart);
+  const today = todayReal < monthStart ? monthStart : todayReal > mEnd ? mEnd : todayReal;
+  const weeks = fixedWeekBlocks(monthStart);
+  const weeksLeft = weeks.filter((w) => w.to >= today).length;
+  const curWeek = weeks.find((w) => today >= w.from && today <= w.to) ?? weeks[weeks.length - 1];
+
+  const mp = await managerPlan(scope.teamId ? { month: monthStart, teamId: scope.teamId } : { month: monthStart });
+  let rows = mp.rows;
+  if (scope.managerId) rows = rows.filter((r) => r.managerId === scope.managerId);
+  const ids = rows.map((r) => r.managerId);
+  if (!ids.length) return [];
+
+  const [factMonthArr, factWeekArr, present] = await Promise.all([
+    receivedByMgr({ from: monthStart, to: today, teamId: scope.teamId ?? null, managerId: scope.managerId ?? null }),
+    receivedByMgr({ from: curWeek.from, to: today, teamId: scope.teamId ?? null, managerId: scope.managerId ?? null }),
+    presentWorkingDaysByManager(ids, today, curWeek.to),
+  ]);
+  const fMonth = new Map(factMonthArr.map((x) => [x.managerId, x.revenue]));
+  const fWeek = new Map(factWeekArr.map((x) => [x.managerId, x.revenue]));
+  const pick = (d: { monthTarget: number; weekTarget: number; dayTarget: number }) => granularity === "day" ? d.dayTarget : granularity === "week" ? d.weekTarget : d.monthTarget;
+  return rows.map((r) => {
+    const factMonth = Math.round(fMonth.get(r.managerId) ?? 0);
+    const factWeek = Math.round(fWeek.get(r.managerId) ?? 0);
+    const pdl = present.get(r.managerId) ?? 0;
+    const dec = decomposeTarget({ monthPlan: r.plan, factMonth, factWeek, weeksLeft, presentDaysLeftWeek: pdl });
+    return { managerId: r.managerId, name: r.name, teamId: r.teamId, monthPlan: Math.round(r.plan), factMonth, factWeek, weeksLeft, presentDaysLeftWeek: pdl, ...dec, target: pick(dec) };
+  });
 }
