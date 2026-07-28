@@ -31,6 +31,23 @@ export const STAGE_PAID = [69716460, 60412544];
 export const STAGE_SUCCESS = [142];
 export const STAGE_RECEIVED = [...STAGE_PAID, ...STAGE_SUCCESS];
 
+/**
+ * PHASE-1 #4 — ЛАНЦЮГ «в роботі до оплати»: усі стадії від «Авто працює» ДО «Оплата
+ * отримана» ВКЛЮЧНО, БЕЗ 142 (обидва пайплайни). Пул для СЕРЕДНЬОГО ЧЕКУ:
+ *   • Звіт /report:  chainInflight ∪ success(142)   → «чек по всьому ланцюгу авто→успіх»
+ *   • КВП «в очікуванні оплат»:  лише chainInflight  (без 142)
+ *   • КВП «успішно реалізовано»: лише success(142)   (= існуючий avg_check_success_only)
+ * НЕ входить «Виставлення рахунку» (100274340 / old 62940064,62940068-контроль) — операційна,
+ * ДО «Авто працює». Кожна угода рахується РАЗ: 142 анкер `closed_at`; in-flight анкер =
+ * MAX(вхід у поточну стадію) — дзеркало `sourceSql` (той самий currentStage-патерн).
+ * New(8921932): 69716300 Авто працює · 98470988 Перевезення завершено · 69716304 Виставлено
+ *   рахунок після розвантаж. · 69716312 Очікуємо оплату · 69716460 Оплата отримана.
+ * Old(155304):  10937178 Авто працює · 42639144 Виставлено рахунок · 42639147 Документи
+ *   получены · 25044997 Очікуємо оплату (оплачений) · 62940068 Очікуємо оплату (не опл.) ·
+ *   60412544 Оплата отримана.
+ */
+export const CHAIN_INFLIGHT = [69716300, 98470988, 69716304, 69716312, 69716460, 10937178, 42639144, 42639147, 25044997, 62940068, 60412544];
+
 export interface MoneyScope {
   from?: string | null;
   to?: string | null;
@@ -44,7 +61,7 @@ export interface MgrRow { managerId: number; name: string; teamId: number | null
 export interface BucketRow { bucket: string; revenue: number; deals: number }
 export interface MgrWeekRow { managerId: number; weekStart: string; revenue: number; deals: number }
 
-type Kind = "received" | "success" | "paidOnly" | "expected";
+type Kind = "received" | "success" | "paidOnly" | "expected" | "chainInflight" | "reportChain";
 
 /**
  * Джерело угод для метрики — по одному рядку на угоду з ЄДИНИМ анкером:
@@ -75,6 +92,10 @@ function sourceSql(kind: Kind, p: unknown[]): string {
   if (kind === "success") return successSrc;
   if (kind === "paidOnly") return currentStageSrc(STAGE_PAID);
   if (kind === "expected") return currentStageSrc(STAGE_EXPECTED);
+  // PHASE-1 #4 — пули середнього чеку (chainInflight = ланцюг авто→оплата без 142;
+  // reportChain = той самий ланцюг ∪ 142). Дедуп інерентний: угода ЗАРАЗ в одному стані.
+  if (kind === "chainInflight") return currentStageSrc(CHAIN_INFLIGHT);
+  if (kind === "reportChain") return `${successSrc} UNION ALL ${currentStageSrc(CHAIN_INFLIGHT)}`;
   return `${successSrc} UNION ALL ${currentStageSrc(STAGE_PAID)}`; // received
 }
 
@@ -250,6 +271,26 @@ export async function avgCheckByManager(s: MoneyScope): Promise<MgrAvgCheck[]> {
     avgCheck: x.deals > 0 ? Math.round(x.revenue / x.deals) : null,
   }));
 }
+
+/**
+ * PHASE-1 #4 — ЄДИНА параметризована функція СЕРЕДНЬОГО ЧЕКУ (одна метрика = одна функція,
+ * усі екрани кличуть її). `avgCheck = Σ signed price ÷ COUNT угод` → для команди/відділу
+ * автоматично Σsum÷Σcount (НЕ середнє середніх — old-per-route формули пенсіонуються).
+ * Пул (набір стадій, кожна угода РАЗ, анкер по даті входу — дзеркало money-core):
+ *   • `reportChain`   — ланцюг «авто працює → успішно» ВКЛЮЧНО (Звіт /report);
+ *   • `chainInflight` — той самий ланцюг БЕЗ 142 (КВП «в очікуванні оплат»);
+ *   • `success`       — лише 142 by closed_at (КВП «успішно», = avg_check_success_only).
+ * `avgCheck=null` коли угод 0 (UI показує «—»). Scope-aware; Σ менеджерів = команда = відділ.
+ */
+export type AvgPool = "reportChain" | "chainInflight" | "success";
+export interface AvgCheckAgg { revenue: number; deals: number; avgCheck: number | null }
+const withAvg = <T extends MoneyAgg>(x: T): T & { avgCheck: number | null } =>
+  ({ ...x, avgCheck: x.deals > 0 ? Math.round(x.revenue / x.deals) : null });
+export const avgCheck = (pool: AvgPool, s: MoneyScope): Promise<AvgCheckAgg> => agg(pool, s).then(withAvg);
+export const avgCheckByTeam = (pool: AvgPool, s: MoneyScope): Promise<(TeamRow & { avgCheck: number | null })[]> =>
+  aggByTeam(pool, s).then((rows) => rows.map(withAvg));
+export const avgCheckPerManager = (pool: AvgPool, s: MoneyScope): Promise<(MgrRow & { avgCheck: number | null })[]> =>
+  aggByMgr(pool, s).then((rows) => rows.map(withAvg));
 
 // «Досі в оплаті» (ЗАРАЗ етап 9).
 export const paidOnlyMoney = (s: MoneyScope) => agg("paidOnly", s);

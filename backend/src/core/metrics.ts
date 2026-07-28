@@ -1113,8 +1113,10 @@ export async function expectedByManagerDay(s: SnapshotScope): Promise<MgrDayExp[
   return r.rows.map((x) => ({ managerId: x.manager_id, day: x.day, deals: Number(x.deals), sum: Number(x.sum) }));
 }
 
-export interface MgrDayN { managerId: number; day: string; deals: number }
-/** «Поїхали» по (менеджер × день `load_at`) — для тижневої активності КВП (Крок Д). */
+export interface MgrDayN { managerId: number; day: string; deals: number; revenue: number }
+/** «Поїхали» по (менеджер × день `load_at`) — для тижневої активності КВП (Крок Д).
+ *  Повертає к-сть І суму (signed `price`, мінуси нетяться) ОДНИМ запитом — одна функція
+ *  «авто» = count+sum (рішення власника PHASE-1 #3). Σ днів = `dispatchedByManager`. */
 export async function dispatchedByManagerDay(s: MetricScope): Promise<MgrDayN[]> {
   const params: unknown[] = [FC_PIPELINES];
   const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
@@ -1124,10 +1126,11 @@ export async function dispatchedByManagerDay(s: MetricScope): Promise<MgrDayN[]>
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
-  const r = await pool.query<{ manager_id: number; bkt: string; deals: string }>(
-    `SELECT d.manager_id, to_char((d.load_at ${KYIV})::date,'YYYY-MM-DD') AS bkt, COUNT(*) deals
+  const r = await pool.query<{ manager_id: number; bkt: string; deals: string; revenue: string }>(
+    `SELECT d.manager_id, to_char((d.load_at ${KYIV})::date,'YYYY-MM-DD') AS bkt, COUNT(*) deals,
+            COALESCE(SUM(d.price),0) revenue
        FROM deals d ${join} WHERE ${conds.join(" AND ")} GROUP BY d.manager_id, 2`, params);
-  return r.rows.map((x) => ({ managerId: x.manager_id, day: x.bkt, deals: Number(x.deals) }));
+  return r.rows.map((x) => ({ managerId: x.manager_id, day: x.bkt, deals: Number(x.deals), revenue: Number(x.revenue) }));
 }
 
 export interface MgrDayLeads { managerId: number; day: string; ad: number; leadgen: number }
@@ -1184,16 +1187,16 @@ export async function dispatchedByManager(s: MetricScope): Promise<(MgrN & { rev
 
 /** «Поїхали» ПО (менеджер × бакет день/тиждень/місяць) за `load_at`, з розбивкою за
  *  джерелом. Additive: Σ бакетів = `dispatchedByManager` того ж скоупу (день=тиждень=місяць). */
-export async function dispatchedByManagerBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<(MgrBucketN & DispatchSplit)[]> {
+export async function dispatchedByManagerBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<(MgrBucketN & { revenue: number } & DispatchSplit)[]> {
   const bucketExpr = `to_char(date_trunc('${granularity}', (d.load_at ${KYIV}))::date, 'YYYY-MM-DD')`;
   const params: unknown[] = [];
-  const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, bucketExpr });
-  const r = await pool.query<{ manager_id: number; bucket: string; deals: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
+  const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, bucketExpr, carryPrice: true });
+  const r = await pool.query<{ manager_id: number; bucket: string; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
     `WITH ${cte}
-     SELECT f.manager_id, f.bucket, COUNT(*) deals,${DISPATCH_SPLIT_SELECT}
+     SELECT f.manager_id, f.bucket, COUNT(*) deals, COALESCE(SUM(f.price),0) revenue,${DISPATCH_SPLIT_SELECT}
        FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
       GROUP BY f.manager_id, f.bucket ORDER BY f.bucket`, params);
-  return r.rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, deals: Number(x.deals), ...dispatchSplitOf(x) }));
+  return r.rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, deals: Number(x.deals), revenue: Number(x.revenue), ...dispatchSplitOf(x) }));
 }
 
 /** «Взято лідів» ПО МЕНЕДЖЕРУ, period-total, канал ad/leadgen (той самий lead_taken
