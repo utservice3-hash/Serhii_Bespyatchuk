@@ -224,7 +224,7 @@ export function DutySection({ role }: { role?: string }) {
                             <span style={{ fontSize: 15, color: "var(--text-muted)", lineHeight: 1 }}>＋</span>
                           </div>
                           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                            {items.slice(0, 3).map((it) => {
+                            {items.slice(0, 2).map((it) => {
                               const c = KIND[it.kind];
                               const pend = isPending(it.status);
                               return (
@@ -237,7 +237,7 @@ export function DutySection({ role }: { role?: string }) {
                                 </span>
                               );
                             })}
-                            {items.length > 3 && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>+{items.length - 3} ще</span>}
+                            {items.length > 2 && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>+{items.length - 2} ще</span>}
                           </div>
                         </div>
                       );
