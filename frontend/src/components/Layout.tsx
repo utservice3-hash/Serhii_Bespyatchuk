@@ -34,7 +34,7 @@ export const NAV_GROUPS = [
     label: "Робота",
     items: [
       { key: "tasks", label: "Задачник", icon: "📝" },
-      { key: "duty", label: "Графік чергування", icon: "🗓" },
+      { key: "duty", label: "Календар команди", icon: "🗓" },
       { key: "bank", label: "Виписка", icon: "💳" },
       { key: "oneonone", label: "Ван-ту-ван", icon: "🤝", roles: ["admin", "team_lead"] },
       { key: "rates", label: "Калькулятор ставок", icon: "🧮" },
