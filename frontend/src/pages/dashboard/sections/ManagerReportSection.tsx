@@ -470,7 +470,7 @@ function MRDailyWeekly({ revenue, expected, weekly, daily, expectedByDay, planPe
                       {d.leadsTotal > 0 && <span style={{ fontSize: 10, color: "var(--text-muted)" }}> (р{d.leadsAd}/лг{d.leadsLeadgen}/і{d.leadsOther})</span>}
                     </td>
                     <td style={{ textAlign: "right" }}>{d.created}</td>
-                    <td style={{ textAlign: "right" }}>{d.dispatched}</td>
+                    <td style={{ textAlign: "right" }}>{d.dispatched}{d.dispatchedSum ? <span style={{ fontSize: 10, color: "var(--text-muted)" }}> · {formatAmount(d.dispatchedSum)}</span> : null}</td>
                     <td style={{ textAlign: "right", fontWeight: d.received > 0 ? 700 : 400, color: d.received > 0 ? "#16a34a" : undefined }}>{formatAmount(d.received)}</td>
                     <td style={{ textAlign: "right", fontSize: 11, color: "var(--text-muted)" }}>
                       {d.plan > 0 ? `${formatAmount(d.plan)} / ${formatAmount(d.received)} / ` : "— / — / "}

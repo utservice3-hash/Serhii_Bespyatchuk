@@ -246,10 +246,11 @@ function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: Rep
   return (
     <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 15, padding: "16px 18px", marginBottom: 16, display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 20, alignItems: "center" }}>
       <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-        <Donut pct={pct} />
+        <Donut pct={pct} title={`Круг оплати — факт (отримані кошти): ${fmt(g.fact)} ₴\n= успішно реалізовано (виграно 142): ${fmt(g.factSuccess)} ₴\n+ оплачено (етап 9, ще не закрито): ${fmt(g.factPaid)} ₴\nКільце — % виконання плану.`} />
         <div>
-          <div style={lab}>Команда за місяць <InfoHint text="Грошовий план — стратегічна ціль із вкладки «Плани» (відділ 2.7 млн). Факт — отримані кошти (success⊎paidOnly)." /></div>
+          <div style={lab}>Команда за місяць <InfoHint text="Грошовий план — стратегічна ціль із вкладки «Плани» (відділ 2.7 млн). Факт — отримані кошти (успішно 142 ⊎ оплачено етап 9). Наведи на круг — розклад факту." /></div>
           <div style={val}>{fmt(g.fact)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>/ {fmt(g.plan)} ₴</small></div>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>= успішно {k(g.factSuccess)} + оплачено {k(g.factPaid)} · чек {g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"} <InfoHint text="Ср. чек Звіту = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць»; Σ суми ÷ Σ угод (не середнє середніх)." /></div>
           <div style={{ display: "flex", gap: 6, marginTop: 5 }}>
             <Pill c={RED}>{st.r} зрив</Pill>
             <Pill c={AMBER}>{st.a} відстає</Pill>
@@ -258,8 +259,9 @@ function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: Rep
         </div>
       </div>
       <div>
-        <div style={lab}>💰 Очікуємо (Σ команди) <InfoHint text="Сума очікуваних коштів по всіх менеджерах у зоні визнання доходу (виставлено→оплата), знімок «зараз». Без мінусу. Σ per-manager == КВП." /></div>
-        <div style={{ ...val, color: g.expect > 0 ? GREEN : MUTED }}>{fmt(g.expect)} <small style={{ fontSize: 12, color: MUTED }}>₴</small></div>
+        <div style={lab}>💰 Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. Цей / наступний КАЛЕНДАРНИЙ місяць, знімок «зараз». Σ per-manager == КВП." /></div>
+        <div style={{ ...val, color: g.expectThisMonth > 0 ? GREEN : MUTED }}>{fmt(g.expectThisMonth)} <small style={{ fontSize: 12, color: MUTED }}>₴ цей міс</small></div>
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>наст. міс: {fmt(g.expectNextMonth)} ₴</div>
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто за місяць: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
       </div>
       <div>
@@ -279,11 +281,11 @@ const val: React.CSSProperties = { fontSize: 19, fontWeight: 750, letterSpacing:
 function Pill({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: c + "22", color: c }}>{children}</span>;
 }
-function Donut({ pct }: { pct: number }) {
+function Donut({ pct, title }: { pct: number; title?: string }) {
   const col = pct >= 100 ? GREEN : pct >= 70 ? AMBER : RED;
   const ring = Math.min(100, Math.max(0, pct)); // кільце ≤100% візуально, число повне
   return (
-    <div style={{ width: 58, height: 58, borderRadius: "50%", flex: "none", display: "grid", placeItems: "center", position: "relative", background: `conic-gradient(${col} ${ring}%, var(--border) 0)` }}>
+    <div title={title} style={{ width: 58, height: 58, borderRadius: "50%", flex: "none", display: "grid", placeItems: "center", position: "relative", cursor: title ? "help" : undefined, background: `conic-gradient(${col} ${ring}%, var(--border) 0)` }}>
       <div style={{ width: 42, height: 42, background: "var(--card-bg)", borderRadius: "50%", position: "absolute" }} />
       <span style={{ position: "relative", fontWeight: 750, fontSize: 13 }}>{pct}%</span>
     </div>
@@ -326,15 +328,15 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
         <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
           footer={<>
             <div>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.) · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 && m.monthInProgress ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</div>
-            <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Сума очікуваних коштів у зоні визнання (виставлено→оплата, без мінусу) — == КВП per-manager «Очікуємо»">
-              💰 очікуємо <b style={{ color: GREEN }}>{fmt(m.expect)} ₴</b>
+            <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати (коли має надійти). Цей / наступний календарний місяць, знімок «зараз».">
+              💰 очікуємо <b style={{ color: GREEN }}>{k(m.expectThisMonth)}</b> цей · <b style={{ color: "var(--text)" }}>{k(m.expectNextMonth)}</b> наст. міс
             </div>
           </>} showTempo />
         {/* ТИЖДЕНЬ — поточний */}
         {mWeek ? (
           <TrajBlock title={`Тиждень ${weekLabel}`} fact={mWeek.fact} plan={mWeek.plan}
             pct={mWeek.plan > 0 ? Math.round((mWeek.fact / mWeek.plan) * 100) : 0} status={mWeek.status}
-            footer={<>очікуємо <b style={{ color: "var(--text)" }}>{k(mWeek.expect)}</b></>} />
+            footer={<>очікуємо (план. дата) <b style={{ color: "var(--text)" }}>{k(mWeek.expectThisMonth)}</b> цей міс</>} />
         ) : <div style={{ fontSize: 11.5, color: MUTED }}>тиждень —</div>}
         {/* focus-day cluster + spark */}
         <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "flex-end" }}>
@@ -361,7 +363,8 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
         <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
         <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target}
           extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴${(() => { const s = autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.undef ?? 0); return s ? " · " + s : ""; })()}`} />
-        <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)" />
+        <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
+          hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць». Σ signed суми ÷ Σ угод (не середнє середніх)."} />
         <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
       </div>
       {showWhy && <WhyBox m={m} role={role} isSelf={!!isSelf} />}
@@ -392,13 +395,13 @@ function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo 
 }
 
 // C4/#13: усі KPI «факт/ціль»; де цілі нема → «план не задано» (не ховаємо факт). extra = ₴ авто (#12).
-function Kpi({ lbl, fact, target, money, pctUnit, extra, altMark, altTitle }: { lbl: string; fact: number | null; target: number; money?: boolean; pctUnit?: boolean; extra?: string; altMark?: string; altTitle?: string }) {
+function Kpi({ lbl, fact, target, money, pctUnit, extra, altMark, altTitle, hintTitle }: { lbl: string; fact: number | null; target: number; money?: boolean; pctUnit?: boolean; extra?: string; altMark?: string; altTitle?: string; hintTitle?: string }) {
   const ok = target > 0 && fact != null && fact >= target;
   const has = target > 0;
   const col = !has ? MUTED : ok ? GREEN : AMBER;
   const f = fact == null ? "—" : money ? fmt(fact) : pctUnit ? `${fact}%` : String(fact);
   return (
-    <span style={{ fontSize: 11.5, color: MUTED }} title={altMark ? altTitle : `${lbl}: факт ${f} / ${has ? "ціль " + (money ? fmt(target) : pctUnit ? target + "%" : target) : "план не задано"}`}>
+    <span style={{ fontSize: 11.5, color: MUTED, cursor: hintTitle ? "help" : undefined }} title={altMark ? altTitle : hintTitle ?? `${lbl}: факт ${f} / ${has ? "ціль " + (money ? fmt(target) : pctUnit ? target + "%" : target) : "план не задано"}`}>
       {lbl} <b style={{ color: altMark ? AMBER : col }}>{f}</b>{altMark ? <sup style={{ fontSize: 8.5, color: AMBER, marginLeft: 1 }}>{altMark}</sup> : null}{extra ? <span style={{ color: MUTED }}> · {extra}</span> : null}
       {has ? <span style={{ color: MUTED }}> / {money ? k(target) : pctUnit ? target + "%" : target}{ok ? " ✓" : ""}</span>
            : <span style={{ color: MUTED, fontStyle: "italic" }}> · план не задано</span>}

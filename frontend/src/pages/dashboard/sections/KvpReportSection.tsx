@@ -336,7 +336,7 @@ export function KvpReportSection() {
                 </colgroup>
                 <thead><tr>
                   <th>Команда / менеджер</th>
-                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо</th><th style={{ textAlign: "right" }}>Конв.</th>
+                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, низ — наступний. Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Конв.</th>
                   {rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}
                 </tr></thead>
                 <tbody>
@@ -347,7 +347,7 @@ export function KvpReportSection() {
                         <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}</td>
                         <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={t.pct ?? 0} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
-                        <td style={{ textAlign: "right", color: MUTED }}>{fmtMoney(t.expected)}</td>
+                        <td style={{ textAlign: "right", color: MUTED }} title={`Очікування за ПЛАНОВОЮ датою оплати. Цей міс: ${fmtMoney(t.expectedThisMonth)} · наступний: ${fmtMoney(t.expectedNextMonth)}. Ср.чек команди — успішно: ${t.avgCheckSuccess == null ? "—" : fmtMoney(t.avgCheckSuccess)} · в очікуванні: ${t.avgCheckAwaiting == null ? "—" : fmtMoney(t.avgCheckAwaiting)}.`}>{fmtMoney(t.expectedThisMonth)}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(t.expectedNextMonth)}</div></td>
                         <td style={{ textAlign: "right" }}>{t.kind === "rnk" ? fmtPct(t.conversion) : "—"}</td>
                         {rep.weekBlocks.map((w) => (
                           <WeekCell key={w.idx} mode={weekMode}
@@ -527,6 +527,13 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
   const recCol = (l: Rec["level"]) => (l === "crit" ? RED : l === "warn" ? AMBER : GREEN);
   return (
     <div>
+      {/* #4 два середні чеки команди (Σsum÷Σcount): «успішно реалізовано» (виграні 142 за
+          місяць) + «в очікуванні оплат» (угоди зараз у роботі авто→оплата, знімок). */}
+      <div style={{ padding: "7px 16px 7px 30px", fontSize: 11.5, color: MUTED, borderBottom: "1px solid var(--border)", display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <span>Ср. чек команди:</span>
+        <span>успішно реалізовано <b style={{ color: "var(--text)" }}>{team.avgCheckSuccess == null ? "—" : fmtMoney(team.avgCheckSuccess)}</b><InfoHint text="Виграні угоди (142) за місяць по даті закриття: Σ суми ÷ Σ угод. Звірка з листом 2600–2900." /></span>
+        <span>в очікуванні оплат <b style={{ color: "var(--text)" }}>{team.avgCheckAwaiting == null ? "—" : fmtMoney(team.avgCheckAwaiting)}</b><InfoHint text="Угоди ЗАРАЗ у роботі (авто працює→оплата отримана, без 142), знімок «станом на зараз»: Σ суми ÷ Σ угод." /></span>
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: CALM_COLS, gap: 8, padding: "6px 16px 6px 30px", color: MUTED, fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".04em", borderBottom: "1px solid var(--border)" }}>
         <span>Менеджер</span><span style={{ textAlign: "right" }}>План</span><span style={{ textAlign: "right" }}>Факт</span><span style={{ textAlign: "right" }}>Вик</span><span style={{ textAlign: "right" }}>Очік</span><span style={{ textAlign: "right" }}>Конв</span><span style={{ textAlign: "right" }}>Тижні Т1–Т{rep.weekBlocks.length}</span>
       </div>
@@ -543,7 +550,7 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
               <span style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.plan)}</span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}><span style={{ width: 40, height: 6, background: "var(--bg)", borderRadius: 4, overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, m.pct ?? 0)}%`, background: zero ? "var(--border)" : pctColr, borderRadius: 4 }} /></span><b>{fmtMoney(m.revenue)}</b></span>
               <span style={{ textAlign: "right", fontWeight: 700, color: pctColr }}>{m.plan > 0 ? `${m.pct ?? 0}%` : "—"}</span>
-              <span style={{ textAlign: "right", color: m.expected > 0 ? AMBER : MUTED }}>{m.expected > 0 ? fmtMoney(m.expected) : "—"}</span>
+              <span style={{ textAlign: "right", color: m.expectedThisMonth > 0 ? AMBER : MUTED }} title={`За плановою датою оплати — цей міс: ${fmtMoney(m.expectedThisMonth)} · наступний: ${fmtMoney(m.expectedNextMonth)}`}>{m.expectedThisMonth > 0 ? fmtMoney(m.expectedThisMonth) : "—"}</span>
               <span style={{ textAlign: "right", color: MUTED }}>{team.kind === "rnk" && m.conversion != null ? `${m.conversion}%` : "—"}</span>
               <Sparkline weeks={m.weeks} blocks={rep.weekBlocks} />
             </div>
@@ -552,6 +559,12 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, background: "var(--card-bg)", border: "1px solid var(--border)", borderLeft: `3px solid ${recCol(rec.level)}`, borderRadius: 9, padding: "9px 12px", marginBottom: 8 }}>
                   <div><span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, color: recCol(rec.level) }}>{rec.level === "ok" ? "Статус" : "Чому"}</span><div style={{ fontSize: 11.5, lineHeight: 1.5 }}>{rec.why}</div></div>
                   <div><span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, color: GREEN }}>Що робити</span><div style={{ fontSize: 11.5, lineHeight: 1.5 }}>{rec.action}</div></div>
+                </div>
+                {/* #4 два чеки менеджера · #2 очікування за плановою датою */}
+                <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 11.5, color: MUTED, marginBottom: 8 }}>
+                  <span>чек успішно <b style={{ color: "var(--text)" }}>{m.avgCheck > 0 ? fmtMoney(m.avgCheck) : "—"}</b> <span style={{ fontSize: 10 }}>({m.successDeals} угод)</span></span>
+                  <span>чек в очікуванні <b style={{ color: "var(--text)" }}>{m.avgCheckAwaiting == null ? "—" : fmtMoney(m.avgCheckAwaiting)}</b> <span style={{ fontSize: 10 }}>({m.awaitingDeals} угод)</span></span>
+                  <span>очікуємо (план. дата) <b style={{ color: AMBER }}>{fmtMoney(m.expectedThisMonth)}</b> цей · <b>{fmtMoney(m.expectedNextMonth)}</b> наст. міс</span>
                 </div>
                 <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} isRnk={team.kind === "rnk"} />
               </div>
@@ -566,7 +579,7 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
 const wkPct = (fact: number, plan: number) => (plan > 0 ? Math.round((fact / plan) * 100) : null);
 const pctOf = (fact: number, plan: number | null): number | null => (plan && plan > 0 ? Math.round((fact / plan) * 100) : null);
 const barColor = (p: number | null) => (p == null ? MUTED : p >= 100 ? GREEN : p >= 70 ? AMBER : RED);
-type WeekLike = { plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; isCurrent: boolean; isFuture: boolean; pace: number | null };
+type WeekLike = { plan: number; fact: number; expected: number; auto: number; autoRevenue?: number; leadsAd: number; leadsLeadgen: number; isCurrent: boolean; isFuture: boolean; pace: number | null };
 // Фіксована ширина КОЖНОЇ тижневої колонки (команди, відділ, менеджери) — одна вертикальна
 // сітка. table-layout:fixed + <colgroup> кріплять ці ширини, contain обрізає переповнення.
 const WK_W = 94;
@@ -585,7 +598,7 @@ function WeekCell({ w, prev, mode, onClick, active }: { w: WeekLike | undefined;
   if (mode === "activity") return (
     <td onClick={handle} style={{ ...wkTd(bg, !!onClick), fontSize: 11 }}>
       {w.isFuture ? <span style={{ color: MUTED }}>—</span> : <>
-        <div style={{ ...clip, fontWeight: 700 }}>{w.auto}<span style={{ fontWeight: 400, color: MUTED, fontSize: 10 }}> авто</span></div>
+        <div style={{ ...clip, fontWeight: 700 }}>{w.auto}<span style={{ fontWeight: 400, color: MUTED, fontSize: 10 }}> авто{w.autoRevenue ? ` · ${fmtMoney(w.autoRevenue)}` : ""}</span></div>
         <div style={{ ...clip, color: MUTED, fontSize: 10 }}>{w.leadsAd}р · {w.leadsLeadgen}лг</div>
       </>}
     </td>

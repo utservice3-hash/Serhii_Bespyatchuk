@@ -491,12 +491,14 @@ export async function fetchKvpExtra(params: { from?: string; to?: string }): Pro
 export interface KvpAgg { deals: number; revenue: number }
 export interface KvpEngineTeam { plan: number; revenue: number; expected: number; pct: number | null; conversion: number | null; entered: number }
 export interface KvpDay { bucket: string; revenue: number; deals: number }
-export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
-export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
+export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
+export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
 export interface CreatedSplit { created: number; new: number; repeat: number; undef: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
+  // #4 «в очікуванні оплат» ср.чек (chainInflight знімок) · #2 очікування за план. датою.
+  avgCheckAwaiting: number | null; awaitingDeals: number; expectedThisMonth: number; expectedNextMonth: number;
   createdSplit: CreatedSplit;
   daily: KvpDay[]; weeks: KvpWeek[];
 }
@@ -522,6 +524,8 @@ export interface KvpTeam {
   teamId: number; name: string; kind: "rpk" | "rnk" | "leadgen";
   plan: number; revenue: number; expected: number; pct: number | null;
   conversion: number | null; entered: number; won: number; managers: KvpManager[];
+  // #4 два чеки команди: «успішно» (success за місяць) + «в очікуванні» (chainInflight знімок).
+  avgCheckSuccess: number | null; avgCheckAwaiting: number | null;
   expectedThisMonth: number; expectedNextMonth: number; weeks: KvpWeek[];
 }
 export interface KvpSignal { severity: "critical" | "serious" | "warning" | "info"; icon: string; title: string; detail: string; action: string; expectedThisMonth?: number; expectedNextMonth?: number }
@@ -589,11 +593,15 @@ export interface KvpReport {
 // ── ЗВІТ (лендинг) — план із задачника + факт із core (макет zvit_v2) ──
 export interface ReportPlanKpi { fact: number | null; target: number; taken?: number; won?: number; revenue?: number;
   // Тільки для «dispatch» (авто): розбивка факту за джерелом. Σ(repeat+leadgen+ad+undef) = fact.
-  repeat?: number; leadgen?: number; ad?: number; undef?: number }
+  repeat?: number; leadgen?: number; ad?: number; undef?: number;
+  // Тільки для «avgCheck» (#4): пул reportChain — signed Σ÷count (revenue/deals для Σ/Σ).
+  deals?: number }
 export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";
   plan: number; fact: number; expect: number; pct: number | null;
+  factSuccess: number; factPaid: number; // #1 круг оплати: факт = успішно ⊎ оплачено
+  expectThisMonth: number; expectNextMonth: number; // #2 за плановою датою оплати
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   status: "g" | "a" | "r"; needPerDay: number; remainingWorkdays: number;
@@ -603,7 +611,8 @@ export interface ReportPlanManager {
 export interface ReportPlan {
   scope: { from: string; to: string; isCurrent: boolean };
   role: string; viewerManagerId: number | null; elapsed: number; remainingWorkdays: number;
-  glance: { plan: number; fact: number; expect: number; dispatched: number; dispatchedRevenue: number; created: number; statusCounts: { g: number; a: number; r: number } };
+  glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number;
+    dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null; statusCounts: { g: number; a: number; r: number } };
   managers: ReportPlanManager[];
 }
 export async function fetchReportPlan(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<ReportPlan> {

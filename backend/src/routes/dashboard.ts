@@ -4337,14 +4337,31 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   )).rows;
 
   // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
-  const [recv, disp, ads, lg, conv, avgc, expZone, split] = await Promise.all([
-    money.receivedByMgr(scope), metrics.dispatchedByManager(scope),
+  // #4 ср.чек Звіту = пул `reportChain` (угоди ЗАРАЗ у «авто працює→оплата» ⊎ виграні
+  // за період) — signed Σ÷count per manager; команда/відділ = Σsum÷Σcount (glance нижче).
+  const [recv, succ, paid, disp, ads, lg, conv, avgc, expZone, split, expDays] = await Promise.all([
+    money.receivedByMgr(scope), money.successByMgr(scope), money.paidOnlyByMgr(scope),
+    metrics.dispatchedByManager(scope),
     metrics.adsAcceptedByMgr(scope, adSources), metrics.leadgenByManager(scope),
-    metrics.conversionByManager(scope), money.avgCheckByManager(scope),
+    metrics.conversionByManager(scope), money.avgCheckPerManager("reportChain", scope),
     metrics.expectedZoneByScope({ managerId, teamId }, "manager"),
     metrics.createdSplitByManager(scope),
+    // #2 «Очікуємо» = за ПЛАНОВОЮ датою оплати (grid по дню planned_payment_at), розкладемо
+    // per manager у поточний/наступний КАЛЕНДАРНИЙ місяць (forward-looking, БЕЗ періоду звіту).
+    metrics.expectedByManagerDay({ managerId, teamId }),
   ]);
   const splitM = new Map(split.map((s) => [s.managerId, s]));
+  // #1 круг оплати: факт(received) = успішно(142) ⊎ оплачено(етап 9). Per manager → Σ==факт.
+  const succM = new Map(succ.map((x) => [x.managerId, x])), paidM = new Map(paid.map((x) => [x.managerId, x]));
+  // Бакетуємо планові оплати у поточний/наступний календарний місяць (за київським сьогодні).
+  const curYm = kyivToday.slice(0, 7);
+  const nextYm = (() => { const d = new Date(kyivToday + "T00:00:00Z"); d.setUTCMonth(d.getUTCMonth() + 1); return d.toISOString().slice(0, 7); })();
+  const expPlannedM = new Map<number, { thisMonth: number; nextMonth: number }>();
+  for (const r of expDays) {
+    const e = expPlannedM.get(r.managerId) ?? { thisMonth: 0, nextMonth: 0 };
+    if (r.day.slice(0, 7) === curYm) e.thisMonth += r.sum; else if (r.day.slice(0, 7) === nextYm) e.nextMonth += r.sum;
+    expPlannedM.set(r.managerId, e);
+  }
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
   const recvM = mapBy(recv), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
     lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc);
@@ -4467,6 +4484,11 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
       tag: kind === "leadgen" ? "self" : kind, // self=самостійні/лідоген у макеті — зелений тег
       plan, fact, expect: Math.round(expM.get(m.id) ?? 0),
+      // #1 круг оплати: розклад факту (received) = успішно(142) + оплачено(етап 9).
+      factSuccess: Math.round(succM.get(m.id)?.revenue ?? 0), factPaid: Math.round(paidM.get(m.id)?.revenue ?? 0),
+      // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
+      expectThisMonth: Math.round(expPlannedM.get(m.id)?.thisMonth ?? 0),
+      expectNextMonth: Math.round(expPlannedM.get(m.id)?.nextMonth ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       // #17 прогноз = факт + зона + добір (лише поточний місяць, що триває), == core.buildProjection
       projected: Math.round(fact + (monthInProgress ? (expM.get(m.id) ?? 0) + (dobirByMgr.get(m.id) ?? 0) : 0)),
@@ -4480,19 +4502,29 @@ dashboardRouter.get("/report-plan", async (req, res) => {
         dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0),
           // Розбивка авто за джерелом (постійний / лідоген / реклама / невизн). Σ = fact.
           repeat: dispM.get(m.id)?.repeat ?? 0, leadgen: dispM.get(m.id)?.leadgen ?? 0, ad: dispM.get(m.id)?.ad ?? 0, undef: dispM.get(m.id)?.undef ?? 0 },
-        avgCheck: { fact: avgM.get(m.id)?.avgCheck ?? null, target: Math.round(pl.avg_check ?? 0) },
+        avgCheck: { fact: avgM.get(m.id)?.avgCheck ?? null, target: Math.round(pl.avg_check ?? 0),
+          revenue: Math.round(avgM.get(m.id)?.revenue ?? 0), deals: avgM.get(m.id)?.deals ?? 0 },
         conversion: { fact: c && c.taken >= 10 ? c.cohortPct : null, target: Math.round(pl.conversion ?? 0), taken: c?.taken ?? 0, won: c?.won ?? 0 },
       },
     };
   }).sort((a, b) => ({ r: 0, a: 1, g: 2 })[a.status] - ({ r: 0, a: 1, g: 2 })[b.status]); // гірші вгорі
 
+  // #4 ср.чек команди/відділу (glance) = Σsum ÷ Σcount по пулу reportChain (НЕ середнє
+  // середніх) → Σ по тих самих менеджерах, що показані. Σ-інваріант тримається за побудовою.
+  const acRev = managers.reduce((s, m) => s + m.kpi.avgCheck.revenue, 0);
+  const acDeals = managers.reduce((s, m) => s + m.kpi.avgCheck.deals, 0);
   const glance = {
     plan: managers.reduce((s, m) => s + m.plan, 0),
     fact: managers.reduce((s, m) => s + m.fact, 0),
+    factSuccess: managers.reduce((s, m) => s + m.factSuccess, 0),
+    factPaid: managers.reduce((s, m) => s + m.factPaid, 0),
     expect: managers.reduce((s, m) => s + m.expect, 0),
+    expectThisMonth: managers.reduce((s, m) => s + m.expectThisMonth, 0),
+    expectNextMonth: managers.reduce((s, m) => s + m.expectNextMonth, 0),
     dispatched: managers.reduce((s, m) => s + m.kpi.dispatch.fact, 0),
     dispatchedRevenue: managers.reduce((s, m) => s + m.kpi.dispatch.revenue, 0),
     created: managers.reduce((s, m) => s + m.created, 0),
+    avgCheck: acDeals > 0 ? Math.round(acRev / acDeals) : null,
     statusCounts: { g: managers.filter((m) => m.status === "g").length, a: managers.filter((m) => m.status === "a").length, r: managers.filter((m) => m.status === "r").length },
   };
 
@@ -4603,8 +4635,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const mgrDayExpMap = new Map<number, { day: string; sum: number }[]>();
   for (const r of mgrDayExp) { const a = mgrDayExpMap.get(r.managerId) ?? []; a.push({ day: r.day, sum: r.sum }); mgrDayExpMap.set(r.managerId, a); }
   // Крок Д (тижневий вигляд) #7: активність per менеджер×день (авто/ліди) для перемикача.
-  const mgrDayDispMap = new Map<number, { day: string; deals: number }[]>();
-  for (const r of mgrDayDisp) { const a = mgrDayDispMap.get(r.managerId) ?? []; a.push({ day: r.day, deals: r.deals }); mgrDayDispMap.set(r.managerId, a); }
+  const mgrDayDispMap = new Map<number, { day: string; deals: number; revenue: number }[]>();
+  for (const r of mgrDayDisp) { const a = mgrDayDispMap.get(r.managerId) ?? []; a.push({ day: r.day, deals: r.deals, revenue: r.revenue }); mgrDayDispMap.set(r.managerId, a); }
   const mgrDayLeadsMap = new Map<number, { day: string; ad: number; leadgen: number }[]>();
   for (const r of mgrDayLeads) { const a = mgrDayLeadsMap.get(r.managerId) ?? []; a.push({ day: r.day, ad: r.ad, leadgen: r.leadgen }); mgrDayLeadsMap.set(r.managerId, a); }
   const kyivTodayW = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
@@ -4621,10 +4653,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     const fact = (mgrDailyMap.get(mid) ?? []).filter((d) => d.bucket >= w.from && d.bucket <= w.to).reduce((a, d) => a + d.revenue, 0);
     const expected = (mgrDayExpMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.sum, 0);
     const auto = (mgrDayDispMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.deals, 0);
+    const autoRevenue = (mgrDayDispMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.revenue, 0); // #3 сума авто (signed)
     const leadsAd = (mgrDayLeadsMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.ad, 0);
     const leadsLeadgen = (mgrDayLeadsMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.leadgen, 0);
     const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
-    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
+    return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
   });
   const expTeamThisMap = new Map(expTeamThis.map((r) => [r.id, r.sum]));
   const expTeamNextMap = new Map(expTeamNext.map((r) => [r.id, r.sum]));
@@ -4659,6 +4692,19 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const recvByMgr = new Map((await money.receivedByMgr(mScope)).map((x) => [x.managerId, x]));
   const convByMgr = new Map(convMgrs.map((x) => [x.managerId, x]));
   const expByMgr = new Map((await metrics.expectedZoneByScope({}, "manager")).map((x) => [x.id, x]));
+  // #4 два середні чеки (одна параметризована avgCheck): «успішно» = success за період
+  // (= succByMgr), «в очікуванні оплат» = ЗНІМОК chainInflight станом на зараз (per mgr+team).
+  // #2 очікування за плановою датою — per manager (цей / наступний календарний місяць).
+  const [ciMgr, ciTeam, suTeam, expMgrThisR, expMgrNextR] = await Promise.all([
+    money.avgCheckPerManager("chainInflight", {}), money.avgCheckByTeam("chainInflight", {}),
+    money.avgCheckByTeam("success", mScope),
+    metrics.expectedMonthByScope({}, "manager", 0), metrics.expectedMonthByScope({}, "manager", 1),
+  ]);
+  const ciMgrMap = new Map(ciMgr.map((x) => [x.managerId, x]));
+  const ciTeamMap = new Map(ciTeam.map((x) => [x.teamId, x]));
+  const suTeamMap = new Map(suTeam.map((x) => [x.teamId, x]));
+  const expMgrThis = new Map(expMgrThisR.map((x) => [x.id, x.sum]));
+  const expMgrNext = new Map(expMgrNextR.map((x) => [x.id, x.sum]));
   for (const [mid, mp] of mgrPlan) {
     if (mp.teamId == null) continue;
     const e = teamGet(mp.teamId, "");
@@ -4668,10 +4714,15 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     e.managers.push({
       managerId: mid, name: mp.name, plan: mp.plan, revenue: rev,
       pct: mp.plan > 0 ? Math.round((rev / mp.plan) * 100) : null,
+      // #4 два чеки: avgCheck = «успішно реалізовано» (success, за місяць по closed_at, gate 2878);
+      // avgCheckAwaiting = «в очікуванні оплат» (chainInflight, ЗНІМОК станом на зараз).
       avgCheck: su && su.deals > 0 ? Math.round(su.revenue / su.deals) : 0,
       successDeals: su?.deals ?? 0,
+      avgCheckAwaiting: ciMgrMap.get(mid)?.avgCheck ?? null, awaitingDeals: ciMgrMap.get(mid)?.deals ?? 0,
       conversion: cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
       expected: expByMgr.get(mid)?.sum ?? 0,
+      // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
+      expectedThisMonth: expMgrThis.get(mid) ?? 0, expectedNextMonth: expMgrNext.get(mid) ?? 0,
       // Розкол створеного (3 сигнали): created N (нові · постійні · невизн).
       createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0 }; })(),
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
@@ -4680,20 +4731,23 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   }
   // Крок Д owner-review #1: фінвідділ — НЕ sales-юніт → повністю прибрати зі звіту
   // (received=0, тож Σ teams.revenue не зрушиться).
-  type WeekAgg = { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null };
+  type WeekAgg = { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null };
   const teams = [...teamMap.values()].filter((t) => !KVP_FINANCE_TEAM_IDS.has(t.teamId)).map((t) => {
     // Крок Д фінал #2: тижні команди = Σ тижнів менеджерів (per idx). met = teamFact ≥ teamPlan.
     const teamWeeks = weekBlocks.map((w) => {
       const ms = t.managers.map((mm) => ((mm.weeks as WeekAgg[]) ?? []).find((x) => x.idx === w.idx)).filter(Boolean) as WeekAgg[];
       const plan = ms.reduce((a, x) => a + x.plan, 0), fact = ms.reduce((a, x) => a + x.fact, 0), expected = ms.reduce((a, x) => a + x.expected, 0);
-      const auto = ms.reduce((a, x) => a + x.auto, 0), leadsAd = ms.reduce((a, x) => a + x.leadsAd, 0), leadsLeadgen = ms.reduce((a, x) => a + x.leadsLeadgen, 0);
+      const auto = ms.reduce((a, x) => a + x.auto, 0), autoRevenue = ms.reduce((a, x) => a + x.autoRevenue, 0), leadsAd = ms.reduce((a, x) => a + x.leadsAd, 0), leadsLeadgen = ms.reduce((a, x) => a + x.leadsLeadgen, 0);
       const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
-      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
+      return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
     });
     return {
       teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
       pct: t.plan > 0 ? Math.round((t.revenue / t.plan) * 100) : null,
       conversion: t.conversion, entered: t.entered, won: t.won,
+      // #4 два чеки команди (Σsum÷Σcount): «успішно» (success за місяць) + «в очікуванні» (chainInflight знімок).
+      avgCheckSuccess: suTeamMap.get(t.teamId)?.avgCheck ?? null,
+      avgCheckAwaiting: ciTeamMap.get(t.teamId)?.avgCheck ?? null,
       expectedThisMonth: expTeamThisMap.get(t.teamId) ?? 0, expectedNextMonth: expTeamNextMap.get(t.teamId) ?? 0,
       weeks: teamWeeks,
       managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
@@ -4720,7 +4774,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     const expPlannedW = mgrDayExp.filter((r) => r.day >= w.from && r.day <= w.to).reduce((a, r) => a + r.sum, 0);
     return {
       idx: w.idx, from: w.from, to: w.to, plan: s("plan"), fact: s("fact"), expected: s("expected"),
-      auto: s("auto"), leadsAd: s("leadsAd"), leadsLeadgen: s("leadsLeadgen"),
+      auto: s("auto"), autoRevenue: s("autoRevenue"), leadsAd: s("leadsAd"), leadsLeadgen: s("leadsLeadgen"),
       success: Math.round(successW),
       newRecv: Math.round(segW.reduce((a, r) => a + r.newRev, 0)),
       repeatRecv: Math.round(segW.reduce((a, r) => a + r.repeatRev, 0)),
