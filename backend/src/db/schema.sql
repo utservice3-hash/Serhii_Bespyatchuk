@@ -693,6 +693,50 @@ CREATE TABLE IF NOT EXISTS duty_schedule (
 CREATE INDEX IF NOT EXISTS idx_duty_date ON duty_schedule(duty_date);
 CREATE INDEX IF NOT EXISTS idx_duty_manager ON duty_schedule(manager_id, duty_date);
 
+-- Календар команди — ВІДСУТНОСТІ (окремо від duty_schedule; чергування лишається як є).
+-- Один рядок = одна відмітка відсутності менеджера. Поденні типи (day_off/short_day) →
+-- start_date = end_date. Діапазонні (vacation/sick) → [start_date, end_date] показуються
+-- смугою через дні. `hours` — лише для short_day (скорочений день). team_id денормалізований
+-- з менеджера (як у duty_schedule) для швидкого скоуп-фільтра.
+--   ПОГОДЖЕННЯ: кожна відмітка створюється status='pending' і набуває чинності лише після
+--   approve (тімлід своєї команди / адмін будь-кого). Для робочих днів (Phase 2) враховуються
+--   ЛИШЕ approved. АУДИТ: created_by/created_at (хто/коли відмітив), approved_by/approved_at
+--   (хто/коли погодив) — для HR.
+CREATE TABLE IF NOT EXISTS team_calendar_absences (
+  id SERIAL PRIMARY KEY,
+  manager_id INTEGER NOT NULL REFERENCES managers(id),
+  team_id INTEGER REFERENCES teams(id),
+  kind TEXT NOT NULL CHECK (kind IN ('day_off','vacation','sick','short_day')),
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,                       -- = start_date для поденних; діапазон для vacation/sick
+  hours NUMERIC,                                -- лише short_day (к-сть годин скороченого дня)
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','approved','rejected')),
+  created_by INTEGER REFERENCES users(id),      -- хто відмітив (аудит)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_by INTEGER REFERENCES users(id),     -- хто погодив/відхилив (аудит)
+  approved_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (end_date >= start_date)
+);
+CREATE INDEX IF NOT EXISTS idx_absence_range ON team_calendar_absences(start_date, end_date);
+CREATE INDEX IF NOT EXISTS idx_absence_manager ON team_calendar_absences(manager_id, start_date);
+CREATE INDEX IF NOT EXISTS idx_absence_status ON team_calendar_absences(status);
+CREATE INDEX IF NOT EXISTS idx_absence_team ON team_calendar_absences(team_id, start_date);
+
+-- Держсвята — фіксує ВРУЧНУ адмін (окремий тип неробочого дня, глобальний для всіх команд;
+-- автоматично НЕ тягнемо). Погодження не потребує (адмін — авторитет). Живить робочі дні
+-- (Phase 2) так само, як approved-відсутності, але для всіх менеджерів одразу.
+CREATE TABLE IF NOT EXISTS company_holidays (
+  id SERIAL PRIMARY KEY,
+  holiday_date DATE NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_holiday_date ON company_holidays(holiday_date);
+
 -- Історія змін планів по постійних клієнтах: кожне збереження/затвердження пише
 -- рядок (хто, коли, дія, підсумковий план і статус). Для аудиту й «історії» в UI.
 CREATE TABLE IF NOT EXISTS repeat_client_plan_history (
