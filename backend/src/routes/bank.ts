@@ -4,7 +4,7 @@ import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { writeAudit } from "../db/audit.js";
 import { feedPage, periodSummary, getHiddenPayees, type BankFilter } from "../core/bankReport.js";
-import { toUah } from "../bankSources/fx.js";
+import { toUah, getRate } from "../bankSources/fx.js";
 
 export const bankRouter = Router();
 bankRouter.use(requireAuth); // tab-гейт «bank» — усі ролі (screen_access); + auto-asyncH через lib/asyncRoutes
@@ -45,20 +45,34 @@ bankRouter.get("/outgoing", async (req, res) => {
 
 // Баланси рахунків — ЛИШЕ право view_balances (admin). Серверний гейт (не лише прихована кнопка).
 // Значень ключів НЕ віддаємо — тільки залишок + час оновлення.
-bankRouter.get("/balances", requirePerm("view_balances"), async (_req, res) => {
+bankRouter.get("/balances", requirePerm("view_balances"), async (req, res) => {
+  const q = req.query as Record<string, unknown>;
+  const to = q.to ? String(q.to) : new Date().toISOString().slice(0, 10);
+  const from = q.from ? String(q.from) : new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const now = new Date();
   const r = await pool.query(
     `SELECT id, label, company, balance_amount, balance_currency, balance_updated_at
        FROM bank_accounts WHERE is_active = true ORDER BY label`);
-  // Для валютних (≠UAH) додаємо ≈UAH тим самим fx (курс банку/НБУ на дату оновлення). Ключів — нема.
+  // Для валютних (≠UAH): ≈UAH (курс на дату оновлення) + курсова різниця за період (Варіант Б).
+  // Ключів/секретів — нема.
   const balances = await Promise.all(r.rows.map(async (b) => {
-    let balance_uah: number | null = null;
+    let balance_uah: number | null = null, fx_gain_period: number | null = null;
     if (b.balance_amount != null && b.balance_currency && b.balance_currency !== "UAH") {
-      const { amountUah } = await toUah(Number(b.balance_amount), b.balance_currency, null, b.balance_updated_at ?? new Date());
+      const { amountUah } = await toUah(Number(b.balance_amount), b.balance_currency, null, b.balance_updated_at ?? now);
       balance_uah = amountUah;
+      // курсова різниця = Σ по ВХІДНИХ надходженнях: amount_native × (курс_сьогодні − fx_rate_на_дату)
+      const today = await getRate(b.balance_currency, now);
+      const tx = await pool.query<{ amount: string; fx_rate: string }>(
+        `SELECT t.amount, t.fx_rate FROM bank_transactions t
+          WHERE t.account_id = $1 AND t.direction = 'in' AND t.fx_rate IS NOT NULL
+            AND (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2 AND $3`, [b.id, from, to]);
+      let gain = 0;
+      for (const t of tx.rows) gain += Number(t.amount) * (today - Number(t.fx_rate));
+      fx_gain_period = Math.round(gain * 100) / 100;
     }
-    return { ...b, balance_uah };
+    return { ...b, balance_uah, fx_gain_period };
   }));
-  res.json({ balances });
+  res.json({ balances, period: { from, to } });
 });
 
 // Реквізити компаній — ПУБЛІЧНІ поля, доступні УСІМ ролям (гейт лише tab «bank», як сама вкладка).

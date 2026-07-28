@@ -2049,10 +2049,11 @@ export async function fetchBankOutgoing(p: BankQuery): Promise<BankFeed> {
 export async function saveBankAccount(id: number | null, patch: Partial<BankAccount> & { envKeyName?: string; legalName?: string; edrpouIpn?: string; bankName?: string; isActive?: boolean; vatIpn?: string; legalAddress?: string; director?: string; bankEdrpou?: string }): Promise<void> {
   if (id == null) await api.post("/bank/accounts", patch); else await api.patch(`/bank/accounts/${id}`, patch);
 }
-export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null; balance_uah?: number | null }
-export async function fetchBankBalances(): Promise<BankBalance[]> {
-  const { data } = await api.get<{ balances: BankBalance[] }>("/bank/balances");
-  return data.balances;
+export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null; balance_uah?: number | null; fx_gain_period?: number | null }
+export interface BankBalancesResp { balances: BankBalance[]; period?: { from: string; to: string } }
+export async function fetchBankBalances(from?: string, to?: string): Promise<BankBalancesResp> {
+  const { data } = await api.get<BankBalancesResp>("/bank/balances", { params: { ...(from ? { from } : {}), ...(to ? { to } : {}) } });
+  return data;
 }
 export async function fetchBankHiddenPayees(): Promise<BankHiddenPayee[]> {
   const { data } = await api.get<{ payees: BankHiddenPayee[] }>("/bank/hidden-payees");

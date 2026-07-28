@@ -210,7 +210,7 @@ export default function BankSection() {
           <span style={{ fontSize: 12.5, color: MUTED }}>Ти: <b style={{ color: "var(--text)" }}>{roleName[auth?.role ?? ""] ?? auth?.roleKey ?? "—"}</b> · {canSeeHidden ? "бачиш усе" : "без прихованих"}</span>
         </div>
       </div>
-      {balancesOpen && canViewBalances && <BalancesModal onClose={() => setBalancesOpen(false)} />}
+      {balancesOpen && canViewBalances && <BalancesModal onClose={() => setBalancesOpen(false)} from={range.from} to={range.to} />}
       {requisitesOpen && <RequisitesModal onClose={() => setRequisitesOpen(false)} />}
 
       {/* Стрип підсумків — ЛИШЕ якщо сервер віддав summary (право view_bank_totals). Немає → картки нема. */}
@@ -350,10 +350,13 @@ function HiddenBlock() {
 }
 
 // ─────────────────────────── Баланси рахунків (лише view_balances) ───────────────────────────
-function BalancesModal({ onClose }: { onClose: () => void }) {
+function BalancesModal({ onClose, from, to }: { onClose: () => void; from: string; to: string }) {
   const [balances, setBalances] = useState<BankBalance[] | null>(null);
+  const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => { fetchBankBalances().then(setBalances).catch((e) => setError(err(e))); }, []);
+  useEffect(() => { fetchBankBalances(from, to).then((d) => { setBalances(d.balances); setPeriod(d.period ?? null); }).catch((e) => setError(err(e))); }, [from, to]);
+  const periodLabel = period ? `${period.from} — ${period.to}` : `${from} — ${to}`;
+  const fmtGain = (n: number) => `${n > 0 ? "↑ +" : n < 0 ? "↓ −" : ""}${fmtMoney(Math.abs(n))} ₴`;
   const fmtBal = (amt: string | null, ccy: string | null) => {
     if (amt == null) return "—";
     const n = Number(amt);
@@ -370,7 +373,7 @@ function BalancesModal({ onClose }: { onClose: () => void }) {
           <h2 className="chart-title" style={{ marginBottom: 0 }}>💰 Баланси рахунків</h2>
           <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: MUTED }}>✕</button>
         </div>
-        <p style={{ fontSize: 12.5, color: MUTED, marginTop: 0 }}>Поточний залишок по кожному активному рахунку. Джерело — банк-API (mono client-info / privat closing-balance), оновлюється на синку. «—» = ключ/доступ відсутній.</p>
+        <p style={{ fontSize: 12.5, color: MUTED, marginTop: 0 }}>Поточний залишок по кожному активному рахунку. Джерело — банк-API (mono client-info / privat closing-balance), оновлюється на синку. «—» = ключ/доступ відсутній. Курсова різниця — за період <b style={{ color: "var(--text)" }}>{periodLabel}</b>.</p>
         {error ? <p style={{ color: "#dc2626", fontSize: 13 }}>{error}</p> : !balances ? <p className="loading-text">Завантаження…</p> : (
           <div style={{ display: "grid", gap: 10 }}>
             {balances.map((b) => (
@@ -381,6 +384,12 @@ function BalancesModal({ onClose }: { onClose: () => void }) {
                   <div style={{ fontSize: 17, fontWeight: 800, color: b.balance_amount == null ? MUTED : "#16a34a" }}>{fmtBal(b.balance_amount, b.balance_currency)}</div>
                   {b.balance_currency && b.balance_currency !== "UAH" && b.balance_uah != null && (
                     <div style={{ fontSize: 11.5, color: MUTED }}>≈ {fmtMoney(b.balance_uah, true)} ₴</div>
+                  )}
+                  {b.balance_currency && b.balance_currency !== "UAH" && b.fx_gain_period != null && (
+                    <div style={{ fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 3, justifyContent: "flex-end", color: b.fx_gain_period > 0 ? "#16a34a" : b.fx_gain_period < 0 ? "#dc2626" : MUTED }}>
+                      {fmtGain(b.fx_gain_period)} · курсова різниця за період
+                      <InfoHint text="Різниця між курсом на момент надходження і сьогоднішнім, по валютних надходженнях за період. Нереалізована — фіксується лише при конвертації в гривню." />
+                    </div>
                   )}
                   <div style={{ fontSize: 11, color: MUTED }}>{upd(b.balance_updated_at)}</div>
                 </div>
