@@ -25,6 +25,14 @@ function globToRe(p: string): RegExp {
   return new RegExp(`^${esc}$`, "i");
 }
 
+/** Службовий збір банку (комісія) — виключається з вихідних. name містить «ЗА ДЕБЕТУВАННЯ
+ *  РАХУНК…»; purpose починається з «Комісія…». Викор. при інжесті (set is_bank_fee). */
+export function isBankFee(name: string | null, purpose: string | null): boolean {
+  const n = (name ?? "").toUpperCase();
+  const p = (purpose ?? "").replace(/^\s+/, "").toLowerCase();
+  return n.includes("ЗА ДЕБЕТУВАННЯ РАХУНК") || p.startsWith("комісія");
+}
+
 /** Чисте рішення: чи прихований отримувач (для out-транзакцій). Тестується без БД. */
 export function isHidden(name: string | null, payees: HiddenPayee[]): boolean {
   const n = (name ?? "").trim();
@@ -49,6 +57,7 @@ const stripCursorField = (r: Row): Row => { const { booked_iso: _drop, ...rest }
 // opts.cursor: keyset-межа «строго далі за курсором» ((booked_at,id) < курсор) — гортання без OFFSET.
 function whereClause(dir: "in" | "out", f: BankFilter, params: unknown[], opts: { period: boolean; cursor?: Cursor | null }): string {
   const c = [`t.direction = '${dir}'`, `a.is_active = true`];
+  if (dir === "out") c.push(`NOT COALESCE(t.is_bank_fee, false)`); // комісії банку не показуємо у вихідних (ні в списку, ні в Σ)
   if (opts.period && f.from) { params.push(f.from); c.push(`(t.booked_at AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`); }
   if (opts.period && f.to) { params.push(f.to); c.push(`(t.booked_at AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`); }
   if (f.company) { params.push(f.company); c.push(`a.company = $${params.length}`); }

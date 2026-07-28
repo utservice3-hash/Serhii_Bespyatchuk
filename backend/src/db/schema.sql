@@ -1064,6 +1064,15 @@ UPDATE roles SET permissions = permissions || '{"view_balances":true}'::jsonb WH
 -- Право «бачити підсумки виписки» (агрегати надходжень/платежів) — ЛИШЕ admin; решті не чіпаємо.
 UPDATE roles SET permissions = permissions || '{"view_bank_totals":true}'::jsonb WHERE key = 'admin';
 
+-- Службові збори банку (комісії) — позначаємо, щоб не показувати серед вихідних платежів.
+-- Патерни: counterparty_name містить «ЗА ДЕБЕТУВАННЯ РАХУНК…»; purpose починається з «Комісія…».
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS is_bank_fee BOOLEAN NOT NULL DEFAULT false;
+UPDATE bank_transactions SET is_bank_fee = true
+  WHERE is_bank_fee = false AND (
+    counterparty_name ILIKE '%ЗА ДЕБЕТУВАННЯ РАХУНК%'
+    OR btrim(coalesce(purpose, '')) ILIKE 'Комісія%'
+  );
+
 -- access_audit — розширюємо типи цілей на банк-обʼєкти.
 ALTER TABLE access_audit DROP CONSTRAINT IF EXISTS access_audit_target_type_check;
 ALTER TABLE access_audit ADD CONSTRAINT access_audit_target_type_check

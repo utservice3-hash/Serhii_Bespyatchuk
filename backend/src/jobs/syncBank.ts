@@ -1,6 +1,7 @@
 // Синк банк-виписок — що ~15 хв. Активні рахунки → адаптер банку → нормалізація → UAH →
 // upsert по external_tx_id (ідемпотентно). Нема env для рахунку → warning + skip (не краш).
 import { pool } from "../db/pool.js";
+import { isBankFee } from "../core/bankReport.js";
 import { toUah } from "../bankSources/fx.js";
 import * as mono from "../bankSources/mono.js";
 import * as privat from "../bankSources/privat.js";
@@ -15,19 +16,20 @@ const INITIAL_LOOKBACK_DAYS = 60;
 export async function upsertTx(accountId: number, tx: NormalizedTx, unmatched = false): Promise<boolean> {
   const when = tx.processedAt ?? tx.bookedAt;
   const { amountUah, rate } = await toUah(tx.amount, tx.currency, tx.fxRate, when);
+  const fee = isBankFee(tx.counterpartyName, tx.purpose);
   const r = await pool.query(
     `INSERT INTO bank_transactions
        (account_id, direction, external_tx_id, booked_at, processed_at, counterparty_name,
-        counterparty_iban, purpose, amount, currency, fx_rate, amount_uah, unmatched_account, raw_json)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        counterparty_iban, purpose, amount, currency, fx_rate, amount_uah, unmatched_account, raw_json, is_bank_fee)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (external_tx_id) DO UPDATE SET
        booked_at=EXCLUDED.booked_at, processed_at=EXCLUDED.processed_at,
        counterparty_name=EXCLUDED.counterparty_name, counterparty_iban=EXCLUDED.counterparty_iban,
        purpose=EXCLUDED.purpose, amount=EXCLUDED.amount, currency=EXCLUDED.currency,
-       fx_rate=EXCLUDED.fx_rate, amount_uah=EXCLUDED.amount_uah
+       fx_rate=EXCLUDED.fx_rate, amount_uah=EXCLUDED.amount_uah, is_bank_fee=EXCLUDED.is_bank_fee
      RETURNING (xmax = 0) AS inserted`,
     [accountId, tx.direction, tx.externalTxId, tx.bookedAt, tx.processedAt, tx.counterpartyName,
-     tx.counterpartyIban, tx.purpose, tx.amount, tx.currency, rate, amountUah, unmatched, tx.raw as object]
+     tx.counterpartyIban, tx.purpose, tx.amount, tx.currency, rate, amountUah, unmatched, tx.raw as object, fee]
   );
   return r.rows[0]?.inserted === true;
 }

@@ -18,10 +18,11 @@ const ACC_COLOR: Record<string, { bg: string; fg: string; short: string }> = {
   fop_privat: { bg: "rgba(22,163,74,0.14)", fg: "#16a34a", short: "ФОП·П" },
   fop_mono: { bg: "rgba(217,119,6,0.14)", fg: "#d97706", short: "ФОП·М" },
 };
+// детерміноване групування пробілом (без locale/.replace(/,/g) — там була помилка з комою)
 const fmtUah = (n: number) => {
   const a = Math.abs(n);
-  const s = a >= 1e6 ? (n / 1e6).toFixed(2) + " млн" : a >= 1e3 ? Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ") : String(Math.round(n));
-  return s + " ₴";
+  if (a >= 1e6) return (a / 1e6).toFixed(2).replace(".", ",") + " млн ₴";
+  return String(Math.round(a)).replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " ₴";
 };
 // групування пробілом + кома як десятковий; десяткові показуємо, коли forceDec або є копійки
 const fmtMoney = (n: number, forceDec = false) => {
@@ -237,8 +238,14 @@ export default function BankSection() {
         {mode === "out" && !canSeeHidden && <p style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>👁 У вашому вигляді приховані отримувачі <b>повністю відсутні</b> (їх нема ні в списку, ні в підсумках) — сервер їх не віддає на КОЖНІЙ сторінці.</p>}
       </div>
 
+      {/* Налаштування — МОДАЛКА (раніше рендерилось під нескінченною стрічкою → недосяжно) */}
       {settingsOpen && (canManageAccounts || canManageHidden) && (
-        <SettingsBlock accounts={accounts} canAccounts={canManageAccounts} canHidden={canManageHidden} onAccountsChange={loadAccounts} />
+        <div onClick={() => setSettingsOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: "40px 16px", overflowY: "auto" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1000, width: "100%", position: "relative" }}>
+            <button onClick={() => setSettingsOpen(false)} title="Закрити" style={{ position: "absolute", top: 10, right: 10, zIndex: 2, border: "1px solid var(--border)", background: "var(--card-bg)", borderRadius: 8, width: 34, height: 34, cursor: "pointer", fontSize: 18, color: MUTED }}>✕</button>
+            <SettingsBlock accounts={accounts} canAccounts={canManageAccounts} canHidden={canManageHidden} onAccountsChange={loadAccounts} />
+          </div>
+        </div>
       )}
     </div>
   );
