@@ -33,13 +33,16 @@ export const STAGE_RECEIVED = [...STAGE_PAID, ...STAGE_SUCCESS];
 
 /**
  * PHASE-1 #4 — ЛАНЦЮГ «в роботі до оплати»: усі стадії від «Авто працює» ДО «Оплата
- * отримана» ВКЛЮЧНО, БЕЗ 142 (обидва пайплайни). Пул для СЕРЕДНЬОГО ЧЕКУ:
- *   • Звіт /report:  chainInflight ∪ success(142)   → «чек по всьому ланцюгу авто→успіх»
- *   • КВП «в очікуванні оплат»:  лише chainInflight  (без 142)
- *   • КВП «успішно реалізовано»: лише success(142)   (= існуючий avg_check_success_only)
- * НЕ входить «Виставлення рахунку» (100274340 / old 62940064,62940068-контроль) — операційна,
- * ДО «Авто працює». Кожна угода рахується РАЗ: 142 анкер `closed_at`; in-flight анкер =
- * MAX(вхід у поточну стадію) — дзеркало `sourceSql` (той самий currentStage-патерн).
+ * отримана» ВКЛЮЧНО, БЕЗ 142 (обидва пайплайни). 🔴 in-flight пул — ЗНІМОК «станом на
+ * зараз» (угоди, що ПРЯМО ЗАРАЗ на цих стадіях, БЕЗ фільтра періоду; рішення власника).
+ * Пули СЕРЕДНЬОГО ЧЕКУ:
+ *   • Звіт /report:  {chainInflight ЗАРАЗ} ∪ {success(142) за місяць по closed_at}
+ *                    → «угоди в роботі зараз + виграні за місяць»
+ *   • КВП «в очікуванні оплат»:  лише {chainInflight ЗАРАЗ} (снапшот, без 142)
+ *   • КВП «успішно реалізовано»: лише success(142) за місяць (= avg_check_success_only)
+ * НЕ входить «Виставлення рахунку» (100274340 / old 62940064-контроль) — операційна, ДО
+ * «Авто працює». Success і chainInflight ДИЗ'ЮНКТНІ за поточним статусом (угода або ЗАРАЗ
+ * 142, або ЗАРАЗ in-flight — ніколи обидва) → reportChain = проста сума без подвійного рахунку.
  * New(8921932): 69716300 Авто працює · 98470988 Перевезення завершено · 69716304 Виставлено
  *   рахунок після розвантаж. · 69716312 Очікуємо оплату · 69716460 Оплата отримана.
  * Old(155304):  10937178 Авто працює · 42639144 Виставлено рахунок · 42639147 Документи
@@ -61,7 +64,7 @@ export interface MgrRow { managerId: number; name: string; teamId: number | null
 export interface BucketRow { bucket: string; revenue: number; deals: number }
 export interface MgrWeekRow { managerId: number; weekStart: string; revenue: number; deals: number }
 
-type Kind = "received" | "success" | "paidOnly" | "expected" | "chainInflight" | "reportChain";
+type Kind = "received" | "success" | "paidOnly" | "expected";
 
 /**
  * Джерело угод для метрики — по одному рядку на угоду з ЄДИНИМ анкером:
@@ -92,10 +95,6 @@ function sourceSql(kind: Kind, p: unknown[]): string {
   if (kind === "success") return successSrc;
   if (kind === "paidOnly") return currentStageSrc(STAGE_PAID);
   if (kind === "expected") return currentStageSrc(STAGE_EXPECTED);
-  // PHASE-1 #4 — пули середнього чеку (chainInflight = ланцюг авто→оплата без 142;
-  // reportChain = той самий ланцюг ∪ 142). Дедуп інерентний: угода ЗАРАЗ в одному стані.
-  if (kind === "chainInflight") return currentStageSrc(CHAIN_INFLIGHT);
-  if (kind === "reportChain") return `${successSrc} UNION ALL ${currentStageSrc(CHAIN_INFLIGHT)}`;
   return `${successSrc} UNION ALL ${currentStageSrc(STAGE_PAID)}`; // received
 }
 
@@ -273,24 +272,95 @@ export async function avgCheckByManager(s: MoneyScope): Promise<MgrAvgCheck[]> {
 }
 
 /**
+ * ЗНІМОК «станом на зараз» по НАБОРУ стадій — угоди, що ПРЯМО ЗАРАЗ на цих стадіях
+ * (з `deals`, БЕЗ періоду й анкера). Дзеркало `awaitingNowSnapshot`, але параметризоване
+ * набором стадій і з грейном total/team/mgr. Active-only на ВСІХ грейнах → Σ менеджерів =
+ * команда = відділ. signed price (мінуси нетяться).
+ */
+async function snapshotBy(stages: number[], s: MoneyScope, extraSelect: string, groupBy: string): Promise<Record<string, string>[]> {
+  const p: unknown[] = [FC_PIPELINES, stages];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
+  if (s.managerId) { p.push(s.managerId); conds.push(`d.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? "LEFT JOIN teams t ON t.id = m.team_id" : "";
+  const sql = `SELECT ${extraSelect}
+     FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active ${teamsJoin}
+    WHERE ${conds.join(" AND ")} ${groupBy}`;
+  return (await pool.query(sql, p)).rows as Record<string, string>[];
+}
+async function snapshotAgg(stages: number[], s: MoneyScope): Promise<MoneyAgg> {
+  const r = await snapshotBy(stages, s, "COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals", "");
+  return { revenue: Number(r[0]?.revenue ?? 0), deals: Number(r[0]?.deals ?? 0) };
+}
+async function snapshotByTeam(stages: number[], s: MoneyScope): Promise<TeamRow[]> {
+  const r = await snapshotBy(stages, s, "t.id AS team_id, t.name AS team_name, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals", "GROUP BY t.id, t.name");
+  return r.map((x) => ({ teamId: Number(x.team_id), teamName: x.team_name, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+async function snapshotByMgr(stages: number[], s: MoneyScope): Promise<MgrRow[]> {
+  const r = await snapshotBy(stages, s, "m.id AS manager_id, m.name, m.team_id, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals", "GROUP BY m.id, m.name, m.team_id");
+  return r.map((x) => ({ managerId: Number(x.manager_id), name: x.name, teamId: x.team_id == null ? null : Number(x.team_id), revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+
+/**
  * PHASE-1 #4 — ЄДИНА параметризована функція СЕРЕДНЬОГО ЧЕКУ (одна метрика = одна функція,
  * усі екрани кличуть її). `avgCheck = Σ signed price ÷ COUNT угод` → для команди/відділу
  * автоматично Σsum÷Σcount (НЕ середнє середніх — old-per-route формули пенсіонуються).
- * Пул (набір стадій, кожна угода РАЗ, анкер по даті входу — дзеркало money-core):
- *   • `reportChain`   — ланцюг «авто працює → успішно» ВКЛЮЧНО (Звіт /report);
- *   • `chainInflight` — той самий ланцюг БЕЗ 142 (КВП «в очікуванні оплат»);
- *   • `success`       — лише 142 by closed_at (КВП «успішно», = avg_check_success_only).
- * `avgCheck=null` коли угод 0 (UI показує «—»). Scope-aware; Σ менеджерів = команда = відділ.
+ * Пул (рішення власника — in-flight ЗНІМОК, success за МІСЯЦЕМ):
+ *   • `success`       — лише 142 за [from,to] по `closed_at` (= avg_check_success_only, gate 2878);
+ *   • `chainInflight` — ЗНІМОК угод ЗАРАЗ у ланцюгу «авто→оплата» (БЕЗ 142, БЕЗ періоду);
+ *   • `reportChain`   — {chainInflight ЗАРАЗ} ⊎ {success за місяць} (Звіт /report).
+ * Success і chainInflight диз'юнктні за поточним статусом → reportChain = проста сума.
+ * `avgCheck=null` коли угод 0 (UI показує «—»). Active-only скрізь → Σмгр = команда = відділ.
  */
 export type AvgPool = "reportChain" | "chainInflight" | "success";
-export interface AvgCheckAgg { revenue: number; deals: number; avgCheck: number | null }
+export interface AvgCheckAgg extends MoneyAgg { avgCheck: number | null }
 const withAvg = <T extends MoneyAgg>(x: T): T & { avgCheck: number | null } =>
   ({ ...x, avgCheck: x.deals > 0 ? Math.round(x.revenue / x.deals) : null });
-export const avgCheck = (pool: AvgPool, s: MoneyScope): Promise<AvgCheckAgg> => agg(pool, s).then(withAvg);
-export const avgCheckByTeam = (pool: AvgPool, s: MoneyScope): Promise<(TeamRow & { avgCheck: number | null })[]> =>
-  aggByTeam(pool, s).then((rows) => rows.map(withAvg));
-export const avgCheckPerManager = (pool: AvgPool, s: MoneyScope): Promise<(MgrRow & { avgCheck: number | null })[]> =>
-  aggByMgr(pool, s).then((rows) => rows.map(withAvg));
+const addAgg = (a: MoneyAgg, b: MoneyAgg): MoneyAgg => ({ revenue: a.revenue + b.revenue, deals: a.deals + b.deals });
+// success за період (active-only, щоб тримати gate 2878 і Σ-інваріант).
+const successAggActive = (s: MoneyScope) => agg("success", { ...s, activeOnly: true });
+
+export async function avgCheck(pool: AvgPool, s: MoneyScope): Promise<AvgCheckAgg> {
+  if (pool === "success") return withAvg(await successAggActive(s));
+  if (pool === "chainInflight") return withAvg(await snapshotAgg(CHAIN_INFLIGHT, s));
+  const [su, ci] = await Promise.all([successAggActive(s), snapshotAgg(CHAIN_INFLIGHT, s)]);
+  return withAvg(addAgg(su, ci));
+}
+
+export async function avgCheckByTeam(pool: AvgPool, s: MoneyScope): Promise<(TeamRow & { avgCheck: number | null })[]> {
+  if (pool === "chainInflight") return (await snapshotByTeam(CHAIN_INFLIGHT, s)).map(withAvg);
+  const su = await aggByTeam("success", { ...s, activeOnly: true });
+  if (pool === "success") return su.map(withAvg);
+  const ci = await snapshotByTeam(CHAIN_INFLIGHT, s);
+  return mergeTeam(su, ci).map(withAvg);
+}
+
+export async function avgCheckPerManager(pool: AvgPool, s: MoneyScope): Promise<(MgrRow & { avgCheck: number | null })[]> {
+  if (pool === "chainInflight") return (await snapshotByMgr(CHAIN_INFLIGHT, s)).map(withAvg);
+  const su = await aggByMgr("success", s); // aggByMgr already active-only
+  if (pool === "success") return su.map(withAvg);
+  const ci = await snapshotByMgr(CHAIN_INFLIGHT, s);
+  return mergeMgr(su, ci).map(withAvg);
+}
+
+// Злиття success+inflight по ключу (диз'юнктні за статусом, але той самий менеджер/команда
+// може мати угоди в ОБОХ множинах → сумуємо revenue+deals по ключу; Σ тримається).
+function mergeTeam(a: TeamRow[], b: TeamRow[]): TeamRow[] {
+  const m = new Map<number, TeamRow>();
+  for (const r of [...a, ...b]) {
+    const e = m.get(r.teamId) ?? { teamId: r.teamId, teamName: r.teamName, revenue: 0, deals: 0 };
+    e.revenue += r.revenue; e.deals += r.deals; m.set(r.teamId, e);
+  }
+  return [...m.values()].sort((x, y) => y.revenue - x.revenue);
+}
+function mergeMgr(a: MgrRow[], b: MgrRow[]): MgrRow[] {
+  const m = new Map<number, MgrRow>();
+  for (const r of [...a, ...b]) {
+    const e = m.get(r.managerId) ?? { managerId: r.managerId, name: r.name, teamId: r.teamId, revenue: 0, deals: 0 };
+    e.revenue += r.revenue; e.deals += r.deals; m.set(r.managerId, e);
+  }
+  return [...m.values()].sort((x, y) => y.revenue - x.revenue);
+}
 
 // «Досі в оплаті» (ЗАРАЗ етап 9).
 export const paidOnlyMoney = (s: MoneyScope) => agg("paidOnly", s);
