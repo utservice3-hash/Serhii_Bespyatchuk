@@ -33,7 +33,9 @@ async function assignableManagers(auth: { role: string; teamId: number | null },
   let scope = teamId;
   if (auth.role === "team_lead") scope = auth.teamId;
   const params: unknown[] = [];
-  let where = `m.is_active AND ${RNK_TEAM}`;
+  // Тімлід — лише РНК (своя команда). Адмін — БУДЬ-ЯКА команда (РНК і РПК) → без RNK-фільтра.
+  let where = "m.is_active";
+  if (auth.role === "team_lead") where += ` AND ${RNK_TEAM}`;
   if (scope) { params.push(scope); where += ` AND m.team_id = $${params.length}`; }
   const r = await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name
@@ -118,10 +120,12 @@ dutyRouter.post("/", async (req, res) => {
        FROM managers m LEFT JOIN teams t ON t.id = m.team_id
       WHERE m.id = $1 AND m.is_active`, [managerId]);
   if (!mgr.rowCount) return res.status(404).json({ error: "Менеджера не знайдено" });
-  if (!mgr.rows[0].is_rnk) return res.status(400).json({ error: "У чергуванні беруть участь лише команди РНК" });
   const teamId = mgr.rows[0].team_id;
-  if (auth.role === "team_lead" && teamId !== auth.teamId) {
-    return res.status(403).json({ error: "Лише своя команда" });
+  // Тімлід — лише своя РНК-команда (як було). Адмін — будь-яка команда (РНК і РПК): RNK-гейт
+  // до адміна НЕ застосовуємо (рішення власника — адмін може призначити чергового і в РПК).
+  if (auth.role === "team_lead") {
+    if (!mgr.rows[0].is_rnk) return res.status(400).json({ error: "У чергуванні беруть участь лише команди РНК" });
+    if (teamId !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
   }
   const r = await pool.query<{ id: number }>(
     `INSERT INTO duty_schedule (duty_date, manager_id, team_id, shift, note, created_by)
@@ -243,8 +247,11 @@ dutyRouter.post("/absences", async (req, res) => {
   if (!mgr.rowCount) return res.status(404).json({ error: "Менеджера не знайдено" });
   const teamId = mgr.rows[0].team_id;
   if (auth.role === "team_lead" && teamId !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
-  // pending за замовч.; відмітка АПРУВЕРА (admin, або team_lead для своєї команди) → одразу approved.
-  const approver = auth.role === "admin" || (auth.role === "team_lead" && teamId === auth.teamId);
+  // 🔴 «Не погоджуєш сам себе»: відмітка АПРУВЕРА одразу approved, ОКРІМ власної відсутності
+  // тімліда (він не погоджує себе → pending на адміна). Admin → завжди approved (сам собі теж:
+  // адмін — найвищий рівень, вище нема). manager → завжди pending.
+  const isSelf = managerId === auth.managerId;
+  const approver = auth.role === "admin" || (auth.role === "team_lead" && teamId === auth.teamId && !isSelf);
   const status = approver ? "approved" : "pending";
   const r = await pool.query<{ id: number }>(
     `INSERT INTO team_calendar_absences (manager_id, team_id, kind, start_date, end_date, hours, note, status, created_by, approved_by, approved_at)
@@ -258,9 +265,13 @@ async function decide(req: import("express").Request, res: import("express").Res
   const auth = req.auth! as Auth;
   if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   const id = Number(req.params.id);
-  const row = await pool.query<{ team_id: number | null; status: string }>(`SELECT team_id, status FROM team_calendar_absences WHERE id = $1`, [id]);
+  const row = await pool.query<{ team_id: number | null; manager_id: number; status: string }>(`SELECT team_id, manager_id, status FROM team_calendar_absences WHERE id = $1`, [id]);
   if (!row.rowCount) return res.status(404).json({ error: "Не знайдено" });
-  if (auth.role === "team_lead" && row.rows[0].team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  if (auth.role === "team_lead") {
+    if (row.rows[0].team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+    // 🔴 Тімлід НЕ погоджує власну відсутність — це робить адмін (рівень вище).
+    if (row.rows[0].manager_id === auth.managerId) return res.status(403).json({ error: "Власну відсутність погоджує адміністратор" });
+  }
   await pool.query(
     `UPDATE team_calendar_absences SET status = $1, approved_by = $2, approved_at = now(), updated_at = now() WHERE id = $3`,
     [decision, auth.userId, id]);
