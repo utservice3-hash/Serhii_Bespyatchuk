@@ -91,7 +91,7 @@ export default function BankSection() {
   const PAGE = 100;
   const [mode, setMode] = useState<"in" | "out">("in");
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
-  const [accFilter, setAccFilter] = useState<number | null>(null);
+  const [companyFilter, setCompanyFilter] = useState<string | null>(null); // фільтр по КОМПАНІЇ (усі її валюти)
   const [q, setQ] = useState("");
   const [ccy, setCcy] = useState("");
   const [rows, setRows] = useState<BankTx[]>([]);
@@ -107,7 +107,7 @@ export default function BankSection() {
   const loadAccounts = () => fetchBankAccounts().then(setAccounts).catch(() => setAccounts([]));
   useEffect(() => { loadAccounts(); }, []);
 
-  const filters = useMemo(() => ({ from: range.from, to: range.to, account: accFilter ?? undefined, currency: ccy || undefined, q: q || undefined }), [range.from, range.to, accFilter, ccy, q]);
+  const filters = useMemo(() => ({ from: range.from, to: range.to, company: companyFilter ?? undefined, currency: ccy || undefined, q: q || undefined }), [range.from, range.to, companyFilter, ccy, q]);
   const feedFn = mode === "in" ? fetchBankIncoming : fetchBankOutgoing;
 
   // Перша сторінка (скидання): підсумки за період + перша порція історії.
@@ -157,6 +157,15 @@ export default function BankSection() {
   const rangeLabel = (() => { const f = new Date(range.from), t = new Date(range.to); return `${f.getDate()}–${t.getDate()} ${MONTHS[t.getMonth()]} ${t.getFullYear()}`; })();
 
   const active = accounts.filter((a) => a.is_active);
+  // ОДИН чип на компанію (усі валюти під нею). Назва — з UAH-рахунку, інакше label без « · CCY».
+  const companies = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of active) {
+      const clean = a.label.replace(/\s*·\s*[A-Z]{3}$/, "");
+      if (!m.has(a.company) || a.currency === "UAH") m.set(a.company, a.currency === "UAH" ? clean : (m.get(a.company) ?? clean));
+    }
+    return [...m.entries()].map(([company, label]) => ({ company, label }));
+  }, [active]);
   const byCo = summary?.byCompany ?? {};
   const fopSum = (byCo.fop_privat ?? 0) + (byCo.fop_mono ?? 0);
   const currencies = [...new Set([...(accounts.map((a) => a.currency)), ...rows.map((r) => r.currency)])];
@@ -179,8 +188,8 @@ export default function BankSection() {
           ))}
         </div>
         <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-          <Chip on={accFilter === null} onClick={() => setAccFilter(null)}>Усі рахунки</Chip>
-          {active.map((a) => <Chip key={a.id} on={accFilter === a.id} onClick={() => setAccFilter(a.id)}>{a.label}</Chip>)}
+          <Chip on={companyFilter === null} onClick={() => setCompanyFilter(null)}>Усі рахунки</Chip>
+          {companies.map((c) => <Chip key={c.company} on={companyFilter === c.company} onClick={() => setCompanyFilter(c.company)}>{c.label}</Chip>)}
         </div>
         {canViewTotals && (
           <div style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "1px solid var(--border)", borderRadius: 9, padding: "4px 6px" }} title="Період керує лише підсумками; список гортається по всій історії">
@@ -225,7 +234,7 @@ export default function BankSection() {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔎 контрагент / підстава / ID" style={{ ...inp, width: 240 }} />
-          <select value={accFilter ?? ""} onChange={(e) => setAccFilter(e.target.value ? Number(e.target.value) : null)} style={inp}><option value="">Рахунок: усі</option>{active.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>
+          <select value={companyFilter ?? ""} onChange={(e) => setCompanyFilter(e.target.value || null)} style={inp}><option value="">Компанія: усі</option>{companies.map((c) => <option key={c.company} value={c.company}>{c.label}</option>)}</select>
           <select value={ccy} onChange={(e) => setCcy(e.target.value)} style={inp}><option value="">Валюта: усі</option>{currencies.map((c) => <option key={c} value={c}>{c}</option>)}</select>
         </div>
         {loading ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">Немає транзакцій в утриманій історії.</p> : (
