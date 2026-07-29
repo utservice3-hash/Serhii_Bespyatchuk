@@ -17,6 +17,13 @@ oneOnOnesRouter.use(requireAuth);
 
 const isType = (t: unknown): t is OneOnOneType => ONE_ON_ONE_TYPES.includes(t as OneOnOneType);
 const monthOf = (q: unknown) => (String(q || new Date().toISOString().slice(0, 7)).slice(0, 7)) + "-01";
+/** Сьогодні по-київськи (YYYY-MM-DD) — дати завжди в київській зоні. */
+const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+/** Дата зустрічі з запиту: строго YYYY-MM-DD, інакше null. */
+const dateOf = (q: unknown): string | null => {
+  const s = String(q ?? "");
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) ? s : null;
+};
 const crossview = (auth: { roleKey: string }) => roleHasPerm(auth.roleKey, "view_all_1x1");
 
 /** Чи може ця роль ПРОВОДИТИ тип. A: тімлід(своя команда) або наскрізний; B/V: лише наскрізний. */
@@ -115,47 +122,82 @@ oneOnOnesRouter.put("/forms/:type", requirePerm("edit_1x1_forms"), async (req, r
 });
 
 // ── Проведення ───────────────────────────────────────────────────────────────
-/** Список субʼєктів, яких дозволено проводити (за типом) + статус заповнення за місяць. */
+/** Список субʼєктів, яких дозволено проводити (за типом) + зустрічі за МІСЯЦЬ.
+ *  Зустрічей у місяці може бути КІЛЬКА: `meetings` — скільки, `overall`/`last_meeting_date` —
+ *  по ОСТАННІЙ. `done` = чи була хоч одна (яку я маю право бачити). */
 oneOnOnesRouter.get("/subjects", async (req, res) => {
   const type = String(req.query.type || "");
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
   if (!canConduct(req.auth!, type)) return res.status(403).json({ error: "Немає доступу до проведення цього типу" });
   const month = monthOf(req.query.month);
   const { where, params } = conductSubjectScope(req.auth!, type);
-  // done = чи є ЗАПИС, який Я маю право бачити (мій, або наскрізний): показуємо статус чесно.
-  const vs = viewScope(req.auth!, "o");
-  const P = params.length, V = vs.params.length;
-  const vsFrag = V ? vs.frag.replace("$P", `$${P + 1}`) : vs.frag; // TRUE або o.conducted_by = $(P+1)
-  const monthIdx = P + V + 1, typeIdx = P + V + 2;
+  // conductSubjectScope для типу A використовує $1 → його параметри мають іти ПЕРШИМИ.
+  const p: unknown[] = [...params];
+  const push = (v: unknown) => { p.push(v); return `$${p.length}`; };
+  const typeP = push(type), monthP = push(month);
+  // видимість запису: наскрізний → усі; інакше лише мною проведені (статус чесний).
+  const vsFrag = crossview(req.auth!) ? "TRUE" : `x.conducted_by = ${push(req.auth!.userId)}`;
+  const inMonth = `x.subject_manager_id = m.id AND x.type = ${typeP}
+                   AND date_trunc('month', x.meeting_date) = ${monthP}::date AND (${vsFrag})`;
   const r = await pool.query(
     `SELECT m.id, m.name, m.team_id, m.is_team_lead, t.name AS team_name,
-            o.overall, (o.subject_manager_id IS NOT NULL) AS done, o.updated_at
+            last.overall, to_char(last.meeting_date,'YYYY-MM-DD') AS last_meeting_date,
+            last.updated_at, agg.meetings, (agg.meetings > 0) AS done
        FROM managers m
        LEFT JOIN teams t ON t.id = m.team_id
-       LEFT JOIN one_on_ones o ON o.subject_manager_id = m.id AND o.type = $${typeIdx}
-              AND o.month = $${monthIdx} AND (${vsFrag})
+       LEFT JOIN LATERAL (SELECT count(*)::int AS meetings FROM one_on_ones x WHERE ${inMonth}) agg ON TRUE
+       LEFT JOIN LATERAL (SELECT x.overall, x.meeting_date, x.updated_at FROM one_on_ones x
+                           WHERE ${inMonth} ORDER BY x.meeting_date DESC LIMIT 1) last ON TRUE
       WHERE ${where}
       ORDER BY t.name NULLS LAST, m.is_team_lead DESC, m.name`,
-    [...params, ...vs.params, month, type]
+    p
   );
   res.json({ type, month, subjects: r.rows });
 });
 
-/** Один запис (для проведення або перегляду). Порожній шаблон — якщо ще не проведено. */
+/** Журнал зустрічей одного субʼєкта за N місяців (view-скоуп). Кожна зустріч — окремий рядок. */
+oneOnOnesRouter.get("/meetings/:type/:managerId", async (req, res) => {
+  const type = req.params.type;
+  if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
+  const managerId = Number(req.params.managerId);
+  const months = Math.min(36, Math.max(1, Number(req.query.months) || 12));
+  const p: unknown[] = [managerId, type];
+  const push = (v: unknown) => { p.push(v); return `$${p.length}`; };
+  const vsFrag = crossview(req.auth!) ? "TRUE" : `o.conducted_by = ${push(req.auth!.userId)}`;
+  const monthsP = push(months - 1);
+  const r = await pool.query(
+    `SELECT to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date, o.overall, o.enps_score,
+            o.form_version, o.conducted_by, o.updated_at,
+            COALESCE(mm.name, u.email) AS conducted_by_name
+       FROM one_on_ones o
+       LEFT JOIN users u ON u.id = o.conducted_by
+       LEFT JOIN managers mm ON mm.id = u.manager_id
+      WHERE o.subject_manager_id=$1 AND o.type=$2 AND (${vsFrag})
+        AND o.meeting_date >= (date_trunc('month', now()) - make_interval(months => ${monthsP}))
+      ORDER BY o.meeting_date DESC`,
+    p
+  );
+  res.json({ type, subject_manager_id: managerId, meetings: r.rows });
+});
+
+/** Один запис ЗУСТРІЧІ за датою (для проведення або перегляду). Дата — авторитетна:
+ *  ?date=YYYY-MM-DD визначає КОНКРЕТНУ зустріч. Без дати — сьогоднішня (нова зустріч).
+ *  Порожній шаблон — якщо на цю дату ще не проводили. */
 oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
   const type = req.params.type;
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
   const managerId = Number(req.params.managerId);
-  const month = monthOf(req.query.month);
+  const meetingDate = dateOf(req.query.date) ?? kyivToday();
   const r = await pool.query(
-    `SELECT o.subject_manager_id, o.type, o.month, o.form_version, o.answers, o.overall,
+    `SELECT o.subject_manager_id, o.type, to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
+            o.form_version, o.answers, o.overall,
             o.enps_score, o.enps_reason, o.notes, o.conducted_by, o.updated_at,
             COALESCE(mm.name, u.email) AS conducted_by_name
        FROM one_on_ones o
        LEFT JOIN users u ON u.id = o.conducted_by
        LEFT JOIN managers mm ON mm.id = u.manager_id
-      WHERE o.subject_manager_id=$1 AND o.type=$2 AND o.month=$3`,
-    [managerId, type, month]);
+      WHERE o.subject_manager_id=$1 AND o.type=$2 AND o.meeting_date=$3`,
+    [managerId, type, meetingDate]);
   const rec = r.rows[0];
   if (rec) {
     if (!crossview(req.auth!) && rec.conducted_by !== req.auth!.userId) {
@@ -166,7 +208,7 @@ oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
   // немає запису → віддаємо порожній шаблон, лише якщо цей користувач може проводити цей тип
   if (!canConduct(req.auth!, type)) return res.status(403).json({ error: "Немає доступу" });
   const form = await activeForm(type);
-  res.json({ subject_manager_id: managerId, type, month, form_version: form?.version ?? 1,
+  res.json({ subject_manager_id: managerId, type, meeting_date: meetingDate, form_version: form?.version ?? 1,
     answers: {}, overall: null, enps_score: null, enps_reason: null, notes: null, conducted_by: null });
 });
 
@@ -177,7 +219,8 @@ oneOnOnesRouter.post("/record", async (req, res) => {
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
   if (!canConduct(auth, type)) return res.status(403).json({ error: "Немає доступу до проведення цього типу" });
   const managerId = Number(req.body?.subjectManagerId);
-  const month = monthOf(req.body?.month);
+  // ДАТА ЗУСТРІЧІ — авторитетна: визначає, який саме запис створюється/оновлюється.
+  const meetingDate = dateOf(req.body?.meetingDate) ?? kyivToday();
   const answers = (req.body?.answers ?? {}) as Record<string, { score?: number; text?: string }>;
   if (!managerId || typeof answers !== "object") return res.status(400).json({ error: "subjectManagerId та answers обовʼязкові" });
   // субʼєкт має бути в conduct-скоупі цього типу
@@ -186,7 +229,8 @@ oneOnOnesRouter.post("/record", async (req, res) => {
   if (!inScope.rowCount) return res.status(403).json({ error: "Субʼєкт поза вашим скоупом" });
   // не можна перезаписувати чужий запис (лише свій або наскрізний)
   const ex = await pool.query<{ conducted_by: number | null }>(
-    "SELECT conducted_by FROM one_on_ones WHERE subject_manager_id=$1 AND type=$2 AND month=$3", [managerId, type, month]);
+    "SELECT conducted_by FROM one_on_ones WHERE subject_manager_id=$1 AND type=$2 AND meeting_date=$3",
+    [managerId, type, meetingDate]);
   if (ex.rows[0] && !crossview(auth) && ex.rows[0].conducted_by !== auth.userId) {
     return res.status(403).json({ error: "Цей запис проводив інший" });
   }
@@ -196,15 +240,15 @@ oneOnOnesRouter.post("/record", async (req, res) => {
   const overall = overallFrom(type, answers, enpsScore);
   const form = await activeForm(type);
   await pool.query(
-    `INSERT INTO one_on_ones (subject_manager_id, type, month, form_version, conducted_by, answers, overall, enps_score, enps_reason, notes, updated_at)
+    `INSERT INTO one_on_ones (subject_manager_id, type, meeting_date, form_version, conducted_by, answers, overall, enps_score, enps_reason, notes, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
-     ON CONFLICT (subject_manager_id, type, month) DO UPDATE SET
+     ON CONFLICT (subject_manager_id, type, meeting_date) DO UPDATE SET
        answers=EXCLUDED.answers, overall=EXCLUDED.overall, enps_score=EXCLUDED.enps_score,
        enps_reason=EXCLUDED.enps_reason, notes=EXCLUDED.notes, conducted_by=EXCLUDED.conducted_by,
        form_version=EXCLUDED.form_version, updated_at=now()`,
-    [managerId, type, month, form?.version ?? 1, auth.userId, JSON.stringify(answers), overall,
+    [managerId, type, meetingDate, form?.version ?? 1, auth.userId, JSON.stringify(answers), overall,
      enpsScore, enpsReason, notes ? JSON.stringify(notes) : null]);
-  res.json({ ok: true, overall });
+  res.json({ ok: true, overall, meetingDate });
 });
 
 // ── Історія / аналітика (view-скоуп) ─────────────────────────────────────────
@@ -220,13 +264,15 @@ oneOnOnesRouter.get("/stats/scores", async (req, res) => {
   params.push(months - 1);
   const r = await pool.query(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name,
-            to_char(o.month,'YYYY-MM') AS month, o.overall, o.enps_score, o.form_version, o.answers
+            to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
+            to_char(date_trunc('month', o.meeting_date),'YYYY-MM') AS month,
+            o.overall, o.enps_score, o.form_version, o.answers
        FROM one_on_ones o
        JOIN managers m ON m.id = o.subject_manager_id
        LEFT JOIN teams t ON t.id = m.team_id
       WHERE o.type=$1 AND (${vsFrag})
-        AND o.month >= (date_trunc('month', now()) - make_interval(months => $${params.length}))
-      ORDER BY t.name NULLS LAST, m.name, o.month`, params);
+        AND o.meeting_date >= (date_trunc('month', now()) - make_interval(months => $${params.length}))
+      ORDER BY t.name NULLS LAST, m.name, o.meeting_date`, params);
   res.json({ type, rows: r.rows });
 });
 
@@ -239,14 +285,14 @@ oneOnOnesRouter.get("/enps", async (req, res) => {
   if (vs.params.length) { params.push(vs.params[0]); vsFrag = vs.frag.replace("$P", `$${params.length}`); }
   params.push(months - 1);
   const r = await pool.query<{ month: string; prom: number; det: number; total: number }>(
-    `SELECT to_char(o.month,'YYYY-MM') AS month,
+    `SELECT to_char(date_trunc('month', o.meeting_date),'YYYY-MM') AS month,
             count(*) FILTER (WHERE o.enps_score BETWEEN 9 AND 10)::int AS prom,
             count(*) FILTER (WHERE o.enps_score BETWEEN 0 AND 6)::int  AS det,
             count(*) FILTER (WHERE o.enps_score IS NOT NULL)::int      AS total
        FROM one_on_ones o
       WHERE o.type='V' AND o.enps_score IS NOT NULL AND (${vsFrag})
-        AND o.month >= (date_trunc('month', now()) - make_interval(months => $${params.length}))
-      GROUP BY o.month ORDER BY o.month`, params);
+        AND o.meeting_date >= (date_trunc('month', now()) - make_interval(months => $${params.length}))
+      GROUP BY date_trunc('month', o.meeting_date) ORDER BY date_trunc('month', o.meeting_date)`, params);
   const series = r.rows.map((x) => ({
     month: x.month, promoters: x.prom, detractors: x.det, passives: x.total - x.prom - x.det,
     total: x.total, enps: x.total ? Math.round(((x.prom - x.det) / x.total) * 100) : null,

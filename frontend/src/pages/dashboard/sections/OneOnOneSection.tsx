@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps, fetchO2OConductTypes,
+  fetchO2OMeetings,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint, type OneOnOneRecord,
+  type O2OMeeting,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
@@ -26,6 +28,9 @@ const FIELD: CSSProperties = { width: "100%", resize: "vertical", font: "inherit
 const RED = "#c5141c";
 
 const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
+/** Сьогодні по-київськи (YYYY-MM-DD) — дата зустрічі за замовчуванням. */
+const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+const dmy = (iso: string) => { const [y, m, d] = iso.split("-"); return `${d}.${m}.${y}`; };
 const scoreColor = (v: number | null) => (v == null ? "var(--text-muted)" : v >= 8 ? "#16a34a" : v >= 6 ? "#d97706" : "#dc2626");
 const enpsColor = (v: number) => (v >= 9 ? "#16a34a" : v >= 7 ? "#d97706" : "#dc2626");
 
@@ -132,7 +137,10 @@ export function OneOnOneSection() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [stats, setStats] = useState<OneOnOneStatRow[]>([]);
   const [enpsSeries, setEnpsSeries] = useState<O2OEnpsPoint[]>([]);
-  const [hist, setHist] = useState<{ managerId: number; name: string; month: string } | null>(null);
+  const [hist, setHist] = useState<{ managerId: number; name: string; date: string } | null>(null);
+  // ДАТА ЗУСТРІЧІ — авторитетна: саме вона визначає запис (у місяці зустрічей може бути кілька).
+  const [dateSel, setDateSel] = useState<string>(kyivToday);
+  const [meetings, setMeetings] = useState<O2OMeeting[]>([]);
 
   useEffect(() => {
     fetchO2OConductTypes().then((r) => {
@@ -144,18 +152,37 @@ export function OneOnOneSection() {
   }, []);
 
   const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel).then((d) => setSubjects(d.subjects)).catch(() => setSubjects([]));
+  const loadMeetings = (mgrId: number) => fetchO2OMeetings(type, mgrId, 24).then(setMeetings).catch(() => setMeetings([]));
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
-  useEffect(() => { setSelId(null); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
+  useEffect(() => { setSelId(null); setMeetings([]); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
   useEffect(() => { if (tab === "stats") fetchOneOnOneStats(type, 6).then(setStats).catch(() => setStats([])); }, [tab, type, monthSel]);
   useEffect(() => { if (tab === "enps") fetchO2OEnps(12).then(setEnpsSeries).catch(() => setEnpsSeries([])); }, [tab, monthSel]);
 
+  // Обрали субʼєкта → журнал його зустрічей + дата за замовчуванням: поточний місяць → СЬОГОДНІ
+  // (нова зустріч), минулий → остання зустріч того місяця (читаємо, що було).
+  useEffect(() => {
+    if (selId == null) { setMeetings([]); return; }
+    let live = true;
+    fetchO2OMeetings(type, selId, 24).then((list) => {
+      if (!live) return;
+      setMeetings(list);
+      const inMonth = list.filter((m) => m.meeting_date.slice(0, 7) === monthSel);
+      setDateSel(monthSel === curMonthStr() ? kyivToday() : (inMonth[0]?.meeting_date ?? `${monthSel}-01`));
+    }).catch(() => { if (live) setMeetings([]); });
+    return () => { live = false; };
+  }, [selId, type, monthSel]);
+
+  // Запис КОНКРЕТНОЇ зустрічі — ключ (субʼєкт, тип, дата).
   useEffect(() => {
     if (selId == null) return;
-    fetchOneOnOne(type, selId, monthSel).then((r) => {
+    let live = true;
+    fetchOneOnOne(type, selId, dateSel).then((r) => {
+      if (!live) return;
       setAnswers(r.answers || {}); setEnpsScore(r.enps_score); setEnpsReason(r.enps_reason || "");
       setNotes(r.notes || {}); setSavedAt(r.updated_at ?? null);
-    }).catch(() => { setAnswers({}); setEnpsScore(null); setEnpsReason(""); setNotes({}); });
-  }, [selId, type, monthSel]);
+    }).catch(() => { if (live) { setAnswers({}); setEnpsScore(null); setEnpsReason(""); setNotes({}); setSavedAt(null); } });
+    return () => { live = false; };
+  }, [selId, type, dateSel]);
 
   const setAns = (key: string, patch: { score?: number; text?: string }) =>
     setAnswers((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
@@ -175,14 +202,18 @@ export function OneOnOneSection() {
     if (selId == null) return;
     setSaving(true);
     try {
-      await saveOneOnOne({ type, subjectManagerId: selId, month: monthSel, answers,
+      await saveOneOnOne({ type, subjectManagerId: selId, meetingDate: dateSel, answers,
         enpsScore: type === "V" ? enpsScore : null, enpsReason: type === "V" ? enpsReason : null, notes: type === "V" ? notes : null });
-      setSavedAt(new Date().toISOString()); await loadSubjects();
+      setSavedAt(new Date().toISOString());
+      await Promise.all([loadSubjects(), loadMeetings(selId)]);
     } finally { setSaving(false); }
   };
 
   const pickMonth = (v: string) => { if (!v || v > curMonthStr()) return; setMonthSel(v); localStorage.setItem("o2oMonth", v); setSelId(null); };
   const selected = subjects.find((s) => s.id === selId);
+  const isV = type === "V";
+  // «нова зустріч» = на цю дату запису ще немає (журнал не містить її)
+  const isNewMeeting = !meetings.some((m) => m.meeting_date === dateSel);
   const byTeam = useMemo(() => {
     const m = new Map<string, OneOnOneSubject[]>();
     for (const s of subjects) { const k = s.team_name || "Без команди"; if (!m.has(k)) m.set(k, []); m.get(k)!.push(s); }
@@ -236,7 +267,11 @@ export function OneOnOneSection() {
                       border: "none", background: selId === s.id ? "rgba(197,20,28,0.07)" : "transparent", color: "var(--text)" }}>
                     <Avatar name={s.name} size={32} />
                     <span style={{ fontSize: 13.5, fontWeight: selId === s.id ? 700 : 500, flex: 1 }}>{s.is_team_lead ? "👑 " : ""}{s.name}</span>
-                    <span title={s.done ? "проведено" : "ще не проведено"}
+                    {s.meetings > 1 && (
+                      <span title={`зустрічей у місяці: ${s.meetings}`}
+                        style={{ fontSize: 10.5, fontWeight: 700, color: "#16a34a", background: "rgba(22,163,74,.12)", borderRadius: 20, padding: "1px 7px", flexShrink: 0 }}>×{s.meetings}</span>
+                    )}
+                    <span title={s.done ? `проведено${s.last_meeting_date ? ` · остання ${dmy(s.last_meeting_date)}` : ""}` : "ще не проведено"}
                       style={{ width: 9, height: 9, borderRadius: "50%", background: s.done ? "#16a34a" : "#eab308", flexShrink: 0 }} />
                   </button>
                 ))}
@@ -270,6 +305,28 @@ export function OneOnOneSection() {
                       {saving ? "Збереження…" : "Зберегти"}
                     </button>
                   </div>
+                </div>
+
+                {/* ЖУРНАЛ ЗУСТРІЧЕЙ. Дата — АВТОРИТЕТНА: вона визначає, який саме запис
+                    редагуємо. У місяці зустрічей може бути кілька; чипи ліворуч-направо — минулі. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16, padding: "12px 14px", borderRadius: 16, background: "rgba(128,128,128,.05)" }}>
+                  <span style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".05em", fontWeight: 800, color: "var(--text-muted)" }}>📅 Дата зустрічі</span>
+                  <DatePicker mode="day" value={dateSel} onChange={(v) => v && setDateSel(v)} minWidth={150} />
+                  <Chip>{isNewMeeting ? "нова зустріч" : "запис існує"}</Chip>
+                  {meetings.length > 0 && (
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center", marginLeft: "auto" }}>
+                      <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>журнал:</span>
+                      {meetings.slice(0, 10).map((m) => (
+                        <button key={m.meeting_date} onClick={() => setDateSel(m.meeting_date)}
+                          title={`${dmy(m.meeting_date)}${m.conducted_by_name ? ` · провів: ${m.conducted_by_name}` : ""}`}
+                          style={{ border: "none", cursor: "pointer", fontSize: 11.5, fontWeight: dateSel === m.meeting_date ? 700 : 500,
+                            padding: "4px 9px", borderRadius: 20, color: dateSel === m.meeting_date ? "#fff" : "var(--text)",
+                            background: dateSel === m.meeting_date ? RED : "rgba(128,128,128,.12)" }}>
+                          {dmy(m.meeting_date).slice(0, 5)}{(isV ? m.enps_score : m.overall) != null ? ` · ${isV ? m.enps_score : m.overall}` : ""}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Прогрес */}
@@ -328,11 +385,9 @@ export function OneOnOneSection() {
                     <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 12px", fontWeight: 800 }}>
                       <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#d97706" }} />📝 Нотатки HR
                     </h3>
+                    {/* Поля «Дата» тут БІЛЬШЕ НЕМАЄ: дата зустрічі — авторитетна (журнал угорі),
+                        а не напис у нотатках. Дублювати її тут = два джерела правди. */}
                     <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-                      <div>
-                        <label style={{ display: "block", fontSize: 11.5, color: "var(--text-muted)", marginBottom: 5 }}>Дата</label>
-                        <input type="date" value={notes.date ?? ""} onChange={(e) => setNotes((p) => ({ ...p, date: e.target.value }))} style={{ ...FIELD, width: "auto", padding: "8px 12px" }} />
-                      </div>
                       <div>
                         <label style={{ display: "block", fontSize: 11.5, color: "var(--text-muted)", marginBottom: 5 }}>Настрій</label>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -360,13 +415,13 @@ export function OneOnOneSection() {
           </div>
         </div>
       ) : tab === "stats" ? (
-        <StatsView stats={stats} isV={type === "V"} onOpen={(managerId, name, month) => setHist({ managerId, name, month })} />
+        <StatsView stats={stats} isV={isV} onOpen={(managerId, name, date) => setHist({ managerId, name, date })} />
       ) : tab === "enps" ? (
         <EnpsView series={enpsSeries} />
       ) : (
         <OneOnOneFormsEditor type={type} />
       )}
-      {hist && <HistoryRecordModal type={type} managerId={hist.managerId} name={hist.name} month={hist.month} onClose={() => setHist(null)} />}
+      {hist && <HistoryRecordModal type={type} managerId={hist.managerId} name={hist.name} date={hist.date} onClose={() => setHist(null)} />}
     </>
   );
 }
@@ -375,14 +430,15 @@ function Chip({ children }: { children: React.ReactNode }) {
   return <span style={{ fontSize: 11.5, color: "var(--text-muted)", background: "rgba(128,128,128,.10)", padding: "3px 10px", borderRadius: 20 }}>{children}</span>;
 }
 
-/** Історія: працівник × місяці (загальна оцінка або eNPS-бал). Клік по клітинці → повна анкета. */
-function StatsView({ stats, isV, onOpen }: { stats: OneOnOneStatRow[]; isV: boolean; onOpen: (managerId: number, name: string, month: string) => void }) {
-  const months = [...new Set(stats.map((r) => r.month))].sort();
+/** Історія: працівник × ЗУСТРІЧІ (колонка = дата, бо в місяці їх може бути кілька).
+ *  Значення — загальна оцінка або eNPS-бал. Клік по клітинці → повна анкета тієї зустрічі. */
+function StatsView({ stats, isV, onOpen }: { stats: OneOnOneStatRow[]; isV: boolean; onOpen: (managerId: number, name: string, date: string) => void }) {
+  const dates = [...new Set(stats.map((r) => r.meeting_date))].sort();
   const byMgr = useMemo(() => {
-    const m = new Map<number, { id: number; name: string; team: string | null; byMonth: Map<string, number | null> }>();
+    const m = new Map<number, { id: number; name: string; team: string | null; byDate: Map<string, number | null> }>();
     for (const r of stats) {
-      if (!m.has(r.id)) m.set(r.id, { id: r.id, name: r.name, team: r.team_name, byMonth: new Map() });
-      m.get(r.id)!.byMonth.set(r.month, isV ? r.enps_score : r.overall);
+      if (!m.has(r.id)) m.set(r.id, { id: r.id, name: r.name, team: r.team_name, byDate: new Map() });
+      m.get(r.id)!.byDate.set(r.meeting_date, isV ? r.enps_score : r.overall);
     }
     return [...m.values()].sort((a, b) => (a.team || "").localeCompare(b.team || "") || a.name.localeCompare(b.name));
   }, [stats, isV]);
@@ -391,27 +447,27 @@ function StatsView({ stats, isV, onOpen }: { stats: OneOnOneStatRow[]; isV: bool
   return (
     <div style={CARD}>
       <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>Динаміка {isV ? "eNPS-балів" : "загальних оцінок"} (останні місяці)</h2>
-      <p style={{ margin: "0 0 14px", fontSize: 12, color: "var(--text-muted)" }}>Клікніть по клітинці з оцінкою, щоб побачити повну анкету тієї зустрічі.</p>
+      <p style={{ margin: "0 0 14px", fontSize: 12, color: "var(--text-muted)" }}>Колонка = зустріч (за датою). Клікніть по клітинці з оцінкою, щоб побачити повну анкету тієї зустрічі.</p>
       <div style={{ overflowX: "auto" }}>
         <table className="data-table compact" style={{ minWidth: 520 }}>
           <thead><tr><th style={{ textAlign: "left" }}>Працівник</th><th style={{ textAlign: "left" }}>Команда</th>
-            {months.map((mo) => <th key={mo} style={{ textAlign: "center" }}>{mo}</th>)}
+            {dates.map((d) => <th key={d} style={{ textAlign: "center", whiteSpace: "nowrap" }}>{dmy(d).slice(0, 5)}<div style={{ fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>{d.slice(0, 4)}</div></th>)}
             <th style={{ textAlign: "center" }}>Тренд</th></tr></thead>
           <tbody>
             {byMgr.map((r) => {
-              const vals = months.map((mo) => r.byMonth.get(mo) ?? null);
+              const vals = dates.map((d) => r.byDate.get(d) ?? null);
               const nums = vals.filter((v): v is number => v != null);
               const trend = nums.length >= 2 ? nums[nums.length - 1] - nums[0] : 0;
               return (
                 <tr key={r.id}>
                   <td style={{ textAlign: "left", fontWeight: 600 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Avatar name={r.name} size={26} />{r.name}</span></td>
                   <td style={{ textAlign: "left", color: "var(--text-muted)" }}>{r.team ?? "—"}</td>
-                  {months.map((mo, i) => {
+                  {dates.map((d, i) => {
                     const v = vals[i];
                     return (
-                      <td key={mo} style={{ textAlign: "center" }}>
+                      <td key={d} style={{ textAlign: "center" }}>
                         {v == null ? <span style={{ color: "var(--text-muted)" }}>·</span> : (
-                          <button onClick={() => onOpen(r.id, r.name, mo)} title="Відкрити повну анкету"
+                          <button onClick={() => onOpen(r.id, r.name, d)} title={`Відкрити повну анкету · ${dmy(d)}`}
                             style={{ border: "none", background: "transparent", cursor: "pointer", fontWeight: 700, fontSize: 14, color: scoreColor(v), textDecoration: "underline", textUnderlineOffset: 3 }}>{v}</button>
                         )}
                       </td>
@@ -445,18 +501,18 @@ function ReadTrack({ value, enps = false }: { value: number | null; enps?: boole
 }
 
 /** READ-ONLY повна анкета минулої зустрічі (рендер проти form_version запису). Гейт — на сервері (GET /record). */
-function HistoryRecordModal({ type, managerId, name, month, onClose }: { type: O2OType; managerId: number; name: string; month: string; onClose: () => void }) {
+function HistoryRecordModal({ type, managerId, name, date, onClose }: { type: O2OType; managerId: number; name: string; date: string; onClose: () => void }) {
   const [rec, setRec] = useState<OneOnOneRecord | null>(null);
   const [form, setForm] = useState<O2OForm | null>(null);
   const [denied, setDenied] = useState(false);
   useEffect(() => {
     let live = true;
-    fetchOneOnOne(type, managerId, month).then((r) => {
+    fetchOneOnOne(type, managerId, date).then((r) => {
       if (!live) return; setRec(r);
       fetchO2OForm(type, r.form_version).then((f) => live && setForm(f)).catch(() => {});
     }).catch(() => live && setDenied(true));
     return () => { live = false; };
-  }, [type, managerId, month]);
+  }, [type, managerId, date]);
   const answers = rec?.answers ?? {};
   const notes = (rec?.notes ?? {}) as O2ONotes;
   return (
@@ -467,7 +523,7 @@ function HistoryRecordModal({ type, managerId, name, month, onClose }: { type: O
             <Avatar name={name} size={44} />
             <div>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>{name}</h2>
-              <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{TYPE_LABEL[type]} · {month}{rec?.conducted_by_name ? ` · провів: ${rec.conducted_by_name}` : ""}{rec ? ` · форма v${rec.form_version}` : ""}</div>
+              <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{TYPE_LABEL[type]} · {dmy(date)}{rec?.conducted_by_name ? ` · провів: ${rec.conducted_by_name}` : ""}{rec ? ` · форма v${rec.form_version}` : ""}</div>
             </div>
           </div>
           <button onClick={onClose} style={{ border: "none", background: "rgba(128,128,128,.12)", borderRadius: 10, width: 34, height: 34, cursor: "pointer", fontSize: 18, color: "var(--text)" }}>✕</button>
@@ -509,7 +565,6 @@ function HistoryRecordModal({ type, managerId, name, month, onClose }: { type: O
               <div>
                 <h3 style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 10px", fontWeight: 800 }}>📝 Нотатки HR</h3>
                 <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 10, fontSize: 13 }}>
-                  {notes.date && <span><b>Дата:</b> {notes.date}</span>}
                   {notes.mood && <span><b>Настрій:</b> {notes.mood}</span>}
                 </div>
                 {NOTE_FIELDS.map((f) => (notes[f.key] as string)?.trim() ? (

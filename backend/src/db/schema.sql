@@ -661,19 +661,18 @@ CREATE TABLE IF NOT EXISTS kvp_plans (
   PRIMARY KEY (month, metric)
 );
 
--- Ван-ту-вани (1-on-1): щомісячна зустріч із співробітником. Тімлід проводить
--- зі своєю командою; операційний/КВП (admin) — з тімлідами й бачить усіх.
+-- Ван-ту-вани (1-on-1): зустріч із співробітником. Тімлід проводить зі своєю
+-- командою; операційний/КВП (admin) — з тімлідами й бачить усіх.
 -- Менеджери 1-on-1 НЕ бачать. answers = { questionKey: {score?:1..10, text?} }.
+-- PK ставить DO-блок нижче (потребує колонки `type`, що додається ALTER-ом).
 CREATE TABLE IF NOT EXISTS one_on_ones (
   subject_manager_id INTEGER NOT NULL REFERENCES managers(id),
-  month DATE NOT NULL,
+  meeting_date DATE NOT NULL,    -- ДАТА ЗУСТРІЧІ — авторитетна: кожна зустріч = окремий запис
   conducted_by INTEGER REFERENCES users(id),
   answers JSONB NOT NULL DEFAULT '{}',
   overall NUMERIC,               -- середнє по scored-відповідях (кеш для статистики)
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (subject_manager_id, month)
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_one_on_ones_month ON one_on_ones(month);
 
 -- 1×1 ПЕРЕРОБКА: три типи (A/Б/В), конфігуровані набори питань, приватність.
 -- Тип запису + версія форми, проти якої заповнено (історія рендериться проти СВОЄЇ версії).
@@ -683,8 +682,28 @@ ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS form_version INTEGER NOT NULL D
 ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS enps_score INTEGER;   -- 0..10 (тип В)
 ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS enps_reason TEXT;
 ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS notes JSONB;          -- панель «Нотатки HR»
--- Міграція PK (subject_manager_id, month) → (subject_manager_id, type, month). Ідемпотентно:
--- наявні записи = тип 'A' (дефолт колонки), тож нова унікальність не конфліктує.
+-- ЖУРНАЛ ЗА ДАТАМИ: дата зустрічі АВТОРИТЕТНА — кожна зустріч окремий запис (у місяці їх
+-- може бути кілька). Колонки `month` БІЛЬШЕ НЕМАЄ: місяць = date_trunc('month', meeting_date),
+-- єдине джерело. Легасі-записи (місячний бакет) переносяться на 1-ше число свого місяця —
+-- детерміновано, без втрат; стара унікальність (subject,type,month) колізій не дає.
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS meeting_date DATE;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = current_schema() AND table_name = 'one_on_ones'
+                AND column_name = 'month') THEN
+    EXECUTE 'UPDATE one_on_ones SET meeting_date = month WHERE meeting_date IS NULL';
+    -- знімає заразом старий PK і idx_one_on_ones_month (залежні від колонки)
+    EXECUTE 'ALTER TABLE one_on_ones DROP COLUMN month';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = current_schema() AND table_name = 'one_on_ones'
+                AND column_name = 'meeting_date' AND is_nullable = 'YES') THEN
+    EXECUTE 'ALTER TABLE one_on_ones ALTER COLUMN meeting_date SET NOT NULL';
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_one_on_ones_mdate ON one_on_ones(meeting_date);
+-- Міграція PK → (subject_manager_id, type, meeting_date). Ідемпотентно.
 DO $$
 DECLARE pkcols text; pkname text;
 BEGIN
@@ -695,9 +714,9 @@ BEGIN
   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
   WHERE c.conrelid = 'one_on_ones'::regclass AND c.contype = 'p'
   GROUP BY c.conname;
-  IF pkcols IS DISTINCT FROM 'subject_manager_id,type,month' THEN
+  IF pkcols IS DISTINCT FROM 'subject_manager_id,type,meeting_date' THEN
     IF pkname IS NOT NULL THEN EXECUTE 'ALTER TABLE one_on_ones DROP CONSTRAINT ' || quote_ident(pkname); END IF;
-    ALTER TABLE one_on_ones ADD PRIMARY KEY (subject_manager_id, type, month);
+    ALTER TABLE one_on_ones ADD PRIMARY KEY (subject_manager_id, type, meeting_date);
   END IF;
 END $$;
 
