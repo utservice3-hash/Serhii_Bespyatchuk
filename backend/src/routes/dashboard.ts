@@ -4478,22 +4478,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // урахуванням approved-відсутностей). manual = payment_amount з kpi_period парасольки,
   // що покриває сьогодні (тімлід виставив вручну → перемагає).
   const dynMonth = to.slice(0, 7) + "-01";
-  const dynRows = await plans.dynamicTarget({ managerId, teamId, month: dynMonth }, "week");
-  const dynByMgr = new Map(dynRows.map((r) => [r.managerId, r]));
-  const manualWeekMap = new Map<number, number>();
-  const mwRes = await pool.query<{ assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
-    `SELECT assignee_id, metrics_json FROM tasks
-      WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
-        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1`, [kyivToday]);
-  for (const r of mwRes.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manualWeekMap.set(r.assignee_id, Number(pa.target) || 0); }
+  // ЄДИНИЙ вираз тижневої цілі (спільний із /kvp-report і /manager-report) — байт-в-байт.
+  const effWeek = await plans.effectiveWeekTargets({ managerId, teamId, month: dynMonth }, kyivToday);
 
   const managers = roster.map((m) => {
     const fact = Math.round(recvM.get(m.id)?.revenue ?? 0);
     const pl = planByMgr.get(m.id) ?? {};
     const plan = Math.round(moneyPlanByMgr.get(m.id) ?? 0); // грошовий план — plans-table
-    const dyn = dynByMgr.get(m.id);
-    const manualWeek = manualWeekMap.get(m.id) ?? null;
-    const weekTarget = manualWeek != null ? manualWeek : Math.round(dyn?.weekTarget ?? 0);
+    const ew = effWeek.get(m.id);
     const kind = m.team_id != null ? kvpTeamKind(m.team_id, m.team_name ?? "") : "rpk";
     const st = statusOf(fact, plan);
     const c = convM.get(m.id);
@@ -4512,10 +4504,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       monthInProgress,
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
-      // #P1 динамічна тижнева ціль (одна цифра з Задачником). isManual → тімлід виставив вручну.
-      week: { target: weekTarget, dynamic: Math.round(dyn?.weekTarget ?? 0), manual: manualWeek, isManual: manualWeek != null,
-        fact: Math.round(dyn?.factWeek ?? 0), dayTarget: Math.round(dyn?.dayTarget ?? 0), weeksLeft: dyn?.weeksLeft ?? 0,
-        presentDaysLeftWeek: dyn?.presentDaysLeftWeek ?? 0 },
+      // #P1 динамічна тижнева ціль (ЄДИНИЙ вираз effectiveWeekTargets — байт-в-байт з KVP/manager-report).
+      week: { target: ew?.target ?? 0, dynamic: ew?.dynamic ?? 0, manual: ew?.manual ?? null, isManual: ew?.isManual ?? false,
+        fact: ew?.fact ?? 0, dayTarget: ew?.dayTarget ?? 0, weeksLeft: ew?.weeksLeft ?? 0, presentDaysLeftWeek: ew?.presentDaysLeftWeek ?? 0 },
       spark: last5Weeks.map((w) => Math.round(sparkByMgr.get(m.id)?.get(w) ?? 0)),
       kpi: {
         ads: { fact: adsM.get(m.id) ?? 0, target: Math.round(pl.ads_count ?? 0) },
@@ -4661,6 +4652,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const mgrDayLeadsMap = new Map<number, { day: string; ad: number; leadgen: number }[]>();
   for (const r of mgrDayLeads) { const a = mgrDayLeadsMap.get(r.managerId) ?? []; a.push({ day: r.day, ad: r.ad, leadgen: r.leadgen }); mgrDayLeadsMap.set(r.managerId, a); }
   const kyivTodayW = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  // ONE-NUMBER: тижнева ЦІЛЬ поточного тижня — ЄДИНИЙ вираз (той самий, що /report-plan і
+  // /manager-report): effectiveWeekTargets (manual ?? dynamicTarget.week). Замінює власний
+  // fixedWeekBlocks-розрахунок для ПОТОЧНОГО тижня (минулі/майбутні лишаються апортованими
+  // для показу Т1–Т5). Місяць = months[0] (KVP — одномісячний скоуп для тижневого розрізу).
+  const effWeekKvp = weekBlocks.length ? await plans.effectiveWeekTargets({ month: months[0] }, kyivTodayW) : new Map<number, plans.EffWeekTarget>();
   // #2 pace поточного тижня = минулі робочі дні тижня ÷ усі робочі дні тижня.
   const paceOf = (w: { from: string; to: string }, isCurrent: boolean): number | null => {
     if (!isCurrent) return null;
@@ -4670,7 +4666,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   };
   const weeksForMgr = (mid: number, monthPlan: number) => weekBlocks.map((w) => {
     const wd = workingDaysBetween(w.from, w.to);
-    const plan = wdMonth > 0 ? monthPlan * wd / wdMonth : 0;
+    const isCur = w.from <= kyivTodayW && kyivTodayW <= w.to;
+    // Поточний тиждень — ЄДИНА ціль (manual ?? dynamic); інші — статичний апорт для Т1–Т5.
+    const plan = isCur && effWeekKvp.has(mid) ? effWeekKvp.get(mid)!.target : (wdMonth > 0 ? monthPlan * wd / wdMonth : 0);
     const fact = (mgrDailyMap.get(mid) ?? []).filter((d) => d.bucket >= w.from && d.bucket <= w.to).reduce((a, d) => a + d.revenue, 0);
     const expected = (mgrDayExpMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.sum, 0);
     const auto = (mgrDayDispMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.deals, 0);
@@ -4769,6 +4767,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       avgCheck: su && su.deals > 0 ? Math.round(su.revenue / su.deals) : 0,
       successDeals: su?.deals ?? 0,
       avgCheckAwaiting: ciMgrMap.get(mid)?.avgCheck ?? null, awaitingDeals: ciMgrMap.get(mid)?.deals ?? 0,
+      // ONE-NUMBER тижнева ціль (effectiveWeekTargets — байт-в-байт зі Звітом).
+      weekTarget: effWeekKvp.get(mid)?.target ?? 0,
       conversion: cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
       expected: expByMgr.get(mid)?.sum ?? 0,
       // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
@@ -5126,6 +5126,18 @@ dashboardRouter.get("/manager-report", async (req, res) => {
 
   // Тижнева розбивка — по місяцю поточного періоду.
   const weekly = await money.weeklyBreakdown({ from: monthStartOf(from), managerId, teamId }, current.revenue.plan);
+  // ONE-NUMBER: ціль ПОТОЧНОГО тижня — ЄДИНИЙ вираз effectiveWeekTargets (той самий, що
+  // /report-plan і /kvp-report). Прибираємо другий динамічний розрахунок weeklyBreakdown для
+  // поточного тижня: перезаписуємо його plan цією цифрою (manual ?? dynamic), pct/remaining слідом.
+  const kyivTodayMR = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const effWeekMR = await plans.effectiveWeekTargets({ managerId, teamId, month: monthStartOf(from) }, kyivTodayMR);
+  const effWeekTarget = managerId ? (effWeekMR.get(managerId)?.target ?? 0) : [...effWeekMR.values()].reduce((a, e) => a + e.target, 0);
+  for (const w of weekly) {
+    if (w.status !== "current") continue;
+    w.plan = effWeekTarget;
+    w.pct = effWeekTarget > 0 ? Math.round((w.fact / effWeekTarget) * 100) : null;
+    w.remaining = Math.max(0, effWeekTarget - w.fact);
+  }
 
   // §3 поденний+потижневий деталь — усі бакет-функції single-anchor (день=тиждень=місяць).
   // Ліди — leadsTakenByBucket (single-anchor, спліт каналу); авто=success; отримано=received;
@@ -5325,7 +5337,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   res.json({
     scope: { level, id: managerId ?? teamId ?? null, period: { from, to, granularity }, compareWith: compareFrom && compareTo ? { from: compareFrom, to: compareTo } : null },
     ...current,
-    weekly,
+    weekly, weekTarget: effWeekTarget, // ONE-NUMBER тижнева ціль (байт-в-байт зі Звітом/KVP)
     daily, expectedByDay, planPerDay,
     expectedByTeam, expectedByManager,
     ...(teams ? { teams } : {}),

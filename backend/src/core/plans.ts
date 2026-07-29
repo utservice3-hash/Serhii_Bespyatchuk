@@ -266,6 +266,34 @@ export interface DynTargetRow {
  * визначається `scope.month` (дефолт — поточний київський). Для минулих/майбутніх місяців
  * «сьогодні» клампиться в межі місяця (історичний перегляд не ламається).
  */
+export interface EffWeekTarget {
+  managerId: number; target: number; dynamic: number; manual: number | null; isManual: boolean;
+  fact: number; dayTarget: number; weeksLeft: number; presentDaysLeftWeek: number;
+}
+/**
+ * ЄДИНИЙ ВИРАЗ «тижневої цілі» для ВСІХ трьох екранів (Variant A — одна цифра скрізь):
+ *   target = manualWeekTarget ?? dynamicTarget.week
+ * manualWeekTarget = payment_amount з kpi_period-парасольки Задачника, що ПОКРИВАЄ сьогодні
+ * (тімлід виставив вручну → перемагає). Оскільки і /report-plan, і /kvp-report, і
+ * /manager-report кличуть ЦЮ функцію з тим самим (month, kyivToday, managerId) — тижнева
+ * ціль байт-в-байт однакова. `scope.month` — місяць перегляду; `kyivToday` — київське сьогодні.
+ */
+export async function effectiveWeekTargets(scope: DynScope, kyivToday: string): Promise<Map<number, EffWeekTarget>> {
+  const dyn = await dynamicTarget(scope, "week");
+  const mw = await pool.query<{ assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
+    `SELECT assignee_id, metrics_json FROM tasks
+      WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
+        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1`, [kyivToday]);
+  const manual = new Map<number, number>();
+  for (const r of mw.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manual.set(r.assignee_id, Number(pa.target) || 0); }
+  const out = new Map<number, EffWeekTarget>();
+  for (const d of dyn) {
+    const man = manual.get(d.managerId) ?? null;
+    out.set(d.managerId, { managerId: d.managerId, target: man != null ? man : d.weekTarget, dynamic: d.weekTarget, manual: man, isManual: man != null, fact: d.factWeek, dayTarget: d.dayTarget, weeksLeft: d.weeksLeft, presentDaysLeftWeek: d.presentDaysLeftWeek });
+  }
+  return out;
+}
+
 export async function dynamicTarget(scope: DynScope, granularity: "month" | "week" | "day"): Promise<DynTargetRow[]> {
   const todayReal = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const monthStart = (scope.month ?? todayReal).slice(0, 7) + "-01";
