@@ -1342,6 +1342,7 @@ export function Dashboard() {
           role={auth?.role}
           currentUserId={auth?.userId}
           currentManagerId={auth?.managerId}
+          accountEmail={auth?.email}
           teams={teams}
         />
       )}

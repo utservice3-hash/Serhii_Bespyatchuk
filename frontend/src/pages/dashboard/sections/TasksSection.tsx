@@ -271,6 +271,7 @@ export function TasksSection({
   role,
   currentUserId,
   currentManagerId,
+  accountEmail,
   teams,
 }: {
   taskSearch: string;
@@ -291,9 +292,12 @@ export function TasksSection({
   role?: string;
   currentUserId?: number;
   currentManagerId?: number | null;
+  accountEmail?: string;
   teams?: Team[];
 }) {
   const isAdmin = role === "admin";
+  // Підпис «чия сторінка»: імʼя менеджера (якщо акаунт привʼязаний) або email акаунта.
+  const accountName = managerOptions.find((m) => m.id === currentManagerId)?.name || accountEmail || "мій акаунт";
   // Department dropdown = fixed відділи + all team names, de-duplicated.
   const deptOptions = Array.from(new Set([...DEPARTMENTS, ...(teams ?? []).map((t) => t.name)]));
   const [adminTab, setAdminTab] = useState<"mine" | "all">("mine");
@@ -418,9 +422,12 @@ export function TasksSection({
       </div>
 
       {(isAdmin || role === "team_lead" || role === "company") && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
           <button style={tabBtn(adminTab === "mine")} onClick={() => setAdminTab("mine")}>👤 Свої задачі</button>
           <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>{isAdmin || role === "company" ? "🗂️ Усі задачі" : "👥 Командні задачі"}</button>
+          {adminTab === "mine" && (
+            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· {accountName}</span>
+          )}
         </div>
       )}
 

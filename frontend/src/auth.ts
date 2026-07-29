@@ -1,5 +1,6 @@
 export interface AuthPayload {
   userId: number;
+  email?: string;        // для підпису «чия сторінка» (токен несе email)
   role: "admin" | "team_lead" | "manager" | "company";
   roleKey?: string;      // ефективний ключ ролі (для кастомних)
   screens?: string[];    // дозволені вкладки (screen_access) — косметика nav; сервер гейтить
