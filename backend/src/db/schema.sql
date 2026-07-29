@@ -1123,6 +1123,17 @@ VALUES ('financier', 'Фінансист', false, 'company', '{"bank":true}'::js
         '{"view_cashflow":true,"view_bank_totals":true,"view_balances":true}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
+-- Роль «HR» (РЕДАГОВАНА): company-scope + доступ до Задачника й «Ван-ту-ван».
+-- ⚠️ data_scope МАЄ бути 'company' (не дефолтний 'own'): при 'own' scope-clamp у middleware
+-- трактує роль як 'manager' → 1Х1 (manager-blocker oneOnOnes.ts) і створення задачі падають 403
+-- попри увімкнені екрани. Company-scope проходить обидва гейти (як kvp/financier). Доступ
+-- відкриває САМЕ екран (tab-гейт tasks/oneonone) — вимкнеш екран, сервер закриє. Ідемпотентно
+-- (ON CONFLICT DO NOTHING — не перетираємо наявну роль/admin-правки); решту екранів/прав admin
+-- вмикає тумблером у панелі (не відкриваємо ширше, ніж треба для задач + 1Х1).
+INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
+VALUES ('hr', 'HR', false, 'company', '{"tasks":true,"oneonone":true}'::jsonb, '{}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
 -- Службові збори банку (комісії) — позначаємо, щоб не показувати серед вихідних платежів.
 -- Патерни: counterparty_name містить «ЗА ДЕБЕТУВАННЯ РАХУНК…»; purpose починається з «Комісія…».
 ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS is_bank_fee BOOLEAN NOT NULL DEFAULT false;

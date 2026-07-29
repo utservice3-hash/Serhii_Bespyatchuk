@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken, type AuthPayload, type Role } from "./auth.js";
-import { tabForPath, roleHasTab, roleHasPerm, getRoleDef } from "./rbac.js";
+import { tabForPath, roleHasTab, roleHasPerm, getRoleDef, scopeCompatRole } from "./rbac.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -31,15 +31,23 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   // Наявна per-route логіка клампить по auth.{role,managerId,teamId}; тут вирівнюємо їх під
   // data_scope РОЛІ. Ключове: власний/командний обсяг БЕЗ менеджера/команди = ПОРОЖНЬО
   // (managerId/teamId = -1), а не «усі дані» (раніше null → фільтр пропускався → company).
-  const scope = getRoleDef(req.auth.roleKey)?.dataScope;
+  const def = getRoleDef(req.auth.roleKey);
+  const scope = def?.dataScope;
   if (scope === "own") {
     req.auth.role = "manager";
     if (req.auth.managerId == null) req.auth.managerId = -1;
   } else if (scope === "team") {
     req.auth.role = "team_lead";
     if (req.auth.teamId == null) req.auth.teamId = -1;
+  } else if (scope === "company") {
+    // Company-scope: вирівнюємо scope-compat роль LIVE під data_scope РОЛІ, а не під знімок
+    // логіну. Для вбудованих — тотожність (admin→admin, kvp→company; нуль змін). Кастомна
+    // company-роль (напр. hr), чий токен ще ніс 'manager' зі старого own-scope, стає 'company'
+    // → перестає ловитись manager-гейтами (1Х1 blocker) і manager-гілкою створення задачі.
+    // Робить зміну data_scope у налаштуваннях дієвою БЕЗ релогіну — як screens/perms.
+    req.auth.role = scopeCompatRole(req.auth.roleKey, def);
   }
-  // 'company' / роль поза кешем → лишаємо як є (admin/kvp — company; невідома роль уже 403 вище).
+  // роль поза кешем → лишаємо як є (невідома роль уже 403 на tab-гейті вище).
   next();
 }
 
