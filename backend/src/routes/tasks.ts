@@ -275,7 +275,10 @@ tasksRouter.post("/", async (req, res) => {
   // Список виконавців: assigneeIds (кілька) або один assigneeId. Менеджер завжди сам.
   let assignees: (number | null)[];
   if (auth.role === "manager") {
-    assignees = [auth.managerId];
+    // Справжній менеджер (managerId>0) → задача собі (як було). HR/own-scope БЕЗ валідного
+    // менеджера (scope-clamp дає managerId=-1) → ОСОБИСТА задача (assignee NULL, created_by=я),
+    // а не падіння на assignee_id=-1 (FK). Створення особистої гейтить екран `tasks`, не scope.
+    assignees = auth.managerId && auth.managerId > 0 ? [auth.managerId] : [null];
   } else {
     const ids = parsed.data.assigneeIds?.length ? parsed.data.assigneeIds : (parsed.data.assigneeId != null ? [parsed.data.assigneeId] : []);
     if (auth.role === "team_lead") {
