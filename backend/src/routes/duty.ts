@@ -59,9 +59,17 @@ dutyRouter.get("/", async (req, res) => {
   let teamId = req.query.teamId ? Number(req.query.teamId) : null;
   if (auth.role === "manager" || auth.role === "team_lead") teamId = auth.teamId;
 
+  // 🔴 ЧЕРГУВАННЯ — окремий скоуп ПЕРЕГЛЯДУ (права на запис НЕ чіпаємо): тімлід бачить
+  // чергування ВСІХ команд (координація графіка), не лише своєї. Менеджер — своя команда;
+  // адмін — усі або обрана ?teamId. ВІДСУТНОСТІ лишаються team-scoped (нижче, self-scope
+  // за роллю). Це лише READ; POST/DELETE гейти незмінні (тімлід РНК-only своєї команди).
+  const dutyTeamId = auth.role === "manager" ? auth.teamId
+    : auth.role === "team_lead" ? null
+    : (req.query.teamId ? Number(req.query.teamId) : null); // admin (або кастомна company-роль)
+
   const params: unknown[] = [from, to];
   const conds = ["ds.duty_date BETWEEN $1 AND $2"];
-  if (teamId) { params.push(teamId); conds.push(`ds.team_id = $${params.length}`); }
+  if (dutyTeamId) { params.push(dutyTeamId); conds.push(`ds.team_id = $${params.length}`); }
 
   const r = await pool.query<{
     id: number; duty_date: string; manager_id: number; manager_name: string;

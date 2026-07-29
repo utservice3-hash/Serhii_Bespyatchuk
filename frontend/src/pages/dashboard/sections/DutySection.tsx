@@ -80,12 +80,14 @@ export function DutySection({ role }: { role?: string }) {
   // Поденні позначки в клітинці: чергування + ОДНОДЕННІ відсутності (start==end).
   // Багатоденні (vacation/sick, start<end) — смугами-бендами над тижнем.
   const perDay = useMemo(() => {
-    const map = new Map<string, { key: string; kind: CalKind; name: string; label: string; status: string; mine: boolean }[]>();
-    const push = (date: string, item: { key: string; kind: CalKind; name: string; label: string; status: string; mine: boolean }) => {
+    type Item = { key: string; kind: CalKind; name: string; label: string; status: string; mine: boolean; team?: string | null };
+    const map = new Map<string, Item[]>();
+    const push = (date: string, item: Item) => {
       if (!map.has(date)) map.set(date, []); map.get(date)!.push(item);
     };
+    // Чергування — тімлід бачить ВСІ команди (координація); підпис несе команду (name + team).
     for (const a of data?.assignments ?? []) push(a.date, {
-      key: "d" + a.id, kind: "duty", name: a.managerName, label: a.note?.trim() || KIND.duty.short, status: "approved", mine: a.mine,
+      key: "d" + a.id, kind: "duty", name: a.managerName, label: a.note?.trim() || KIND.duty.short, status: "approved", mine: a.mine, team: a.teamName,
     });
     for (const ab of data?.absences ?? []) {
       if (ab.status === "rejected") continue;
@@ -228,12 +230,12 @@ export function DutySection({ role }: { role?: string }) {
                               const c = KIND[it.kind];
                               const pend = isPending(it.status);
                               return (
-                                <span key={it.key} title={`${it.name} · ${it.label}`} style={{
+                                <span key={it.key} title={`${it.name}${it.team ? " · " + it.team : ""} · ${it.label}`} style={{
                                   fontSize: 11.5, padding: "2px 7px", borderRadius: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                                   background: c.bg, color: c.fg, fontWeight: 600,
                                   border: `1px ${pend ? "dashed" : "solid"} ${c.dot}${pend ? "" : "66"}`,
                                 }}>
-                                  {it.name} · {it.label}{it.kind === "duty" ? "" : ` ${statusMark(it.status)}`}
+                                  {it.name}{it.kind === "duty" && it.team ? <span style={{ fontWeight: 400, opacity: 0.75 }}> · {it.team}</span> : null} · {it.label}{it.kind === "duty" ? "" : ` ${statusMark(it.status)}`}
                                 </span>
                               );
                             })}
