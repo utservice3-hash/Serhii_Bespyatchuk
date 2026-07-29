@@ -272,6 +272,9 @@ export function OneOnOneSection() {
                   </div>
                 </div>
 
+                {/* Двоколонка для типу В: ліворуч форма+eNPS, праворуч Нотатки; вузько → стек (flex-wrap). */}
+                <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
+                <div style={{ flex: "1 1 460px", minWidth: 0 }}>
                 {form.questions.sections.map((sec, i) => (
                   <div key={sec.key} style={{ marginBottom: 22 }}>
                     <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 12px", fontWeight: 800 }}>
@@ -306,9 +309,11 @@ export function OneOnOneSection() {
                     <AutoTextarea value={enpsReason} onChange={(e) => setEnpsReason(e.target.value)} placeholder="Чому саме така оцінка?" style={FIELD} />
                   </div>
                 )}
+                </div>
 
                 {form.questions.notes && (
-                  <div style={{ marginBottom: 4 }}>
+                  <div style={{ flex: "1 1 300px", minWidth: 0, position: "sticky", top: 12 }}>
+                  <div style={{ background: "rgba(128,128,128,.05)", borderRadius: 16, padding: 16 }}>
                     <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 12px", fontWeight: 800 }}>
                       <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#d97706" }} />📝 Нотатки HR
                     </h3>
@@ -336,7 +341,9 @@ export function OneOnOneSection() {
                       </div>
                     ))}
                   </div>
+                  </div>
                 )}
+                </div>
               </>
             )}
           </div>
