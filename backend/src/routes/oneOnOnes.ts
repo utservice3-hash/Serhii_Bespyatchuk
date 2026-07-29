@@ -10,10 +10,12 @@ import { requireAuth } from "../auth/middleware.js";
  */
 export const oneOnOnesRouter = Router();
 oneOnOnesRouter.use(requireAuth);
-oneOnOnesRouter.use((req, res, next) => {
-  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
-  next();
-});
+// 🔒 Доступ гейтить ЕКРАН `oneonone` (tab-гейт у requireAuth: roleHasTab(roleKey,'oneonone')) —
+// ЄДИНЕ джерело правди. Раніше тут стояв додатковий блок `role==='manager'`; він був
+// (а) надлишковий для справжніх менеджерів — їх уже ріже tab-гейт (у ролі manager немає екрана
+// oneonone), і (б) ШКІДЛИВИЙ для company/own-scope кастомних ролей (напр. hr), яких scope-clamp
+// робить 'manager' → блок різав їх попри виданий екран (→ порожній «Ван-ту-ван»). Прибрано:
+// хто має екран, той має доступ, незалежно від data_scope. Хто ПРОВОДИТЬ/чиє видно — нижче по скоупу.
 
 const monthOf = (q: unknown) => (String(q || new Date().toISOString().slice(0, 7)).slice(0, 7)) + "-01";
 const overallOf = (answers: Record<string, { score?: number; text?: string }>) => {

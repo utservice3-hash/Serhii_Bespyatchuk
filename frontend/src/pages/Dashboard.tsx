@@ -1023,7 +1023,10 @@ export function Dashboard() {
 
       {section === "documents" && <DocumentsSection isAdmin={auth?.role === "admin"} />}
 
-      {section === "oneonone" && auth?.role !== "manager" && <OneOnOneSection role={auth?.role} />}
+      {/* Рендер гейтимо по ЕКРАНУ oneonone (дзеркало серверного tab-гейта), а не по scope-compat
+          ролі — інакше own/company-scope hr, яку clamp робить 'manager', не бачила б розділ.
+          Фолбек на старий role-гейт лише для токенів без screens[]. */}
+      {section === "oneonone" && (auth?.screens?.includes("oneonone") ?? auth?.role !== "manager") && <OneOnOneSection role={auth?.role} />}
 
       {section === "duty" && <DutySection role={auth?.role} />}
 
