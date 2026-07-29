@@ -1193,8 +1193,8 @@ CROSS JOIN (SELECT screen_access, permissions FROM roles WHERE key='admin') r
 ON CONFLICT (key) DO NOTHING;
 
 -- Апгрейд власників у ролі СЕО/ОД (лише якщо зараз чистий 'admin' → суперсет, без втрати прав).
-UPDATE users SET role_override = 'ceo'   WHERE email = 'utservice3@gmail.com'  AND role_override = 'admin';
-UPDATE users SET role_override = 'opdir' WHERE email = 'kriptokoval@gmail.com' AND role_override = 'admin';
+UPDATE users SET role_override = 'opdir' WHERE email = 'utservice3@gmail.com'  AND role_override = 'admin';
+UPDATE users SET role_override = 'ceo'   WHERE email = 'kriptokoval@gmail.com' AND role_override = 'admin';
 
 -- Службові збори банку (комісії) — позначаємо, щоб не показувати серед вихідних платежів.
 -- Патерни: counterparty_name містить «ЗА ДЕБЕТУВАННЯ РАХУНК…»; purpose починається з «Комісія…».
