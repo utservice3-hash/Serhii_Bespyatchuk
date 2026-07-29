@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps,
-  type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint,
+  type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint, type OneOnOneRecord,
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 import { DatePicker } from "../../../components/DatePicker";
@@ -134,6 +134,7 @@ export function OneOnOneSection() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [stats, setStats] = useState<OneOnOneStatRow[]>([]);
   const [enpsSeries, setEnpsSeries] = useState<O2OEnpsPoint[]>([]);
+  const [hist, setHist] = useState<{ managerId: number; name: string; month: string } | null>(null);
 
   const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel).then((d) => setSubjects(d.subjects)).catch(() => setSubjects([]));
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
@@ -349,12 +350,13 @@ export function OneOnOneSection() {
           </div>
         </div>
       ) : tab === "stats" ? (
-        <StatsView stats={stats} isV={type === "V"} />
+        <StatsView stats={stats} isV={type === "V"} onOpen={(managerId, name, month) => setHist({ managerId, name, month })} />
       ) : tab === "enps" ? (
         <EnpsView series={enpsSeries} />
       ) : (
         <OneOnOneFormsEditor type={type} />
       )}
+      {hist && <HistoryRecordModal type={type} managerId={hist.managerId} name={hist.name} month={hist.month} onClose={() => setHist(null)} />}
     </>
   );
 }
@@ -363,13 +365,13 @@ function Chip({ children }: { children: React.ReactNode }) {
   return <span style={{ fontSize: 11.5, color: "var(--text-muted)", background: "rgba(128,128,128,.10)", padding: "3px 10px", borderRadius: 20 }}>{children}</span>;
 }
 
-/** Історія: працівник × місяці (загальна оцінка або eNPS-бал). */
-function StatsView({ stats, isV }: { stats: OneOnOneStatRow[]; isV: boolean }) {
+/** Історія: працівник × місяці (загальна оцінка або eNPS-бал). Клік по клітинці → повна анкета. */
+function StatsView({ stats, isV, onOpen }: { stats: OneOnOneStatRow[]; isV: boolean; onOpen: (managerId: number, name: string, month: string) => void }) {
   const months = [...new Set(stats.map((r) => r.month))].sort();
   const byMgr = useMemo(() => {
-    const m = new Map<number, { name: string; team: string | null; byMonth: Map<string, number | null> }>();
+    const m = new Map<number, { id: number; name: string; team: string | null; byMonth: Map<string, number | null> }>();
     for (const r of stats) {
-      if (!m.has(r.id)) m.set(r.id, { name: r.name, team: r.team_name, byMonth: new Map() });
+      if (!m.has(r.id)) m.set(r.id, { id: r.id, name: r.name, team: r.team_name, byMonth: new Map() });
       m.get(r.id)!.byMonth.set(r.month, isV ? r.enps_score : r.overall);
     }
     return [...m.values()].sort((a, b) => (a.team || "").localeCompare(b.team || "") || a.name.localeCompare(b.name));
@@ -378,7 +380,8 @@ function StatsView({ stats, isV }: { stats: OneOnOneStatRow[]; isV: boolean }) {
   if (stats.length === 0) return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Ще немає проведених зустрічей за останні місяці.</p></div>;
   return (
     <div style={CARD}>
-      <h2 style={{ margin: "0 0 14px", fontSize: 16, fontWeight: 800 }}>Динаміка {isV ? "eNPS-балів" : "загальних оцінок"} (останні місяці)</h2>
+      <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>Динаміка {isV ? "eNPS-балів" : "загальних оцінок"} (останні місяці)</h2>
+      <p style={{ margin: "0 0 14px", fontSize: 12, color: "var(--text-muted)" }}>Клікніть по клітинці з оцінкою, щоб побачити повну анкету тієї зустрічі.</p>
       <div style={{ overflowX: "auto" }}>
         <table className="data-table compact" style={{ minWidth: 520 }}>
           <thead><tr><th style={{ textAlign: "left" }}>Працівник</th><th style={{ textAlign: "left" }}>Команда</th>
@@ -390,16 +393,125 @@ function StatsView({ stats, isV }: { stats: OneOnOneStatRow[]; isV: boolean }) {
               const nums = vals.filter((v): v is number => v != null);
               const trend = nums.length >= 2 ? nums[nums.length - 1] - nums[0] : 0;
               return (
-                <tr key={r.name}>
-                  <td style={{ textAlign: "left", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}><Avatar name={r.name} size={26} />{r.name}</td>
+                <tr key={r.id}>
+                  <td style={{ textAlign: "left", fontWeight: 600 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Avatar name={r.name} size={26} />{r.name}</span></td>
                   <td style={{ textAlign: "left", color: "var(--text-muted)" }}>{r.team ?? "—"}</td>
-                  {vals.map((v, i) => <td key={i} style={{ textAlign: "center", fontWeight: 700, color: scoreColor(v) }}>{v ?? "·"}</td>)}
+                  {months.map((mo, i) => {
+                    const v = vals[i];
+                    return (
+                      <td key={mo} style={{ textAlign: "center" }}>
+                        {v == null ? <span style={{ color: "var(--text-muted)" }}>·</span> : (
+                          <button onClick={() => onOpen(r.id, r.name, mo)} title="Відкрити повну анкету"
+                            style={{ border: "none", background: "transparent", cursor: "pointer", fontWeight: 700, fontSize: 14, color: scoreColor(v), textDecoration: "underline", textUnderlineOffset: 3 }}>{v}</button>
+                        )}
+                      </td>
+                    );
+                  })}
                   <td style={{ textAlign: "center", color: trend > 0 ? "#16a34a" : trend < 0 ? "#dc2626" : "var(--text-muted)", fontWeight: 700 }}>{trend > 0 ? `↑ +${trend.toFixed(1)}` : trend < 0 ? `↓ ${trend.toFixed(1)}` : "→"}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/** Read-only трек оцінки (для перегляду історії). */
+function ReadTrack({ value, enps = false }: { value: number | null; enps?: boolean }) {
+  if (value == null) return <span style={{ color: "var(--text-muted)" }}>—</span>;
+  const from = enps ? 0 : 1, to = 10;
+  const fill = enps ? enpsColor(value) : "#16a34a";
+  const nums: number[] = []; for (let i = from; i <= to; i++) nums.push(i);
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+      <span style={{ display: "inline-flex", gap: 3 }}>
+        {nums.map((n) => <span key={n} style={{ width: 16, height: 22, borderRadius: 5, background: n <= value ? fill : "rgba(128,128,128,.12)" }} />)}
+      </span>
+      <b style={{ color: fill, fontSize: 16 }}>{value}<span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 400 }}> / 10</span></b>
+    </span>
+  );
+}
+
+/** READ-ONLY повна анкета минулої зустрічі (рендер проти form_version запису). Гейт — на сервері (GET /record). */
+function HistoryRecordModal({ type, managerId, name, month, onClose }: { type: O2OType; managerId: number; name: string; month: string; onClose: () => void }) {
+  const [rec, setRec] = useState<OneOnOneRecord | null>(null);
+  const [form, setForm] = useState<O2OForm | null>(null);
+  const [denied, setDenied] = useState(false);
+  useEffect(() => {
+    let live = true;
+    fetchOneOnOne(type, managerId, month).then((r) => {
+      if (!live) return; setRec(r);
+      fetchO2OForm(type, r.form_version).then((f) => live && setForm(f)).catch(() => {});
+    }).catch(() => live && setDenied(true));
+    return () => { live = false; };
+  }, [type, managerId, month]);
+  const answers = rec?.answers ?? {};
+  const notes = (rec?.notes ?? {}) as O2ONotes;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,20,30,.45)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 16px", overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...CARD, maxWidth: 760, width: "100%", maxHeight: "none" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <Avatar name={name} size={44} />
+            <div>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>{name}</h2>
+              <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{TYPE_LABEL[type]} · {month}{rec?.conducted_by_name ? ` · провів: ${rec.conducted_by_name}` : ""}{rec ? ` · форма v${rec.form_version}` : ""}</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ border: "none", background: "rgba(128,128,128,.12)", borderRadius: 10, width: 34, height: 34, cursor: "pointer", fontSize: 18, color: "var(--text)" }}>✕</button>
+        </div>
+        {denied ? (
+          <p style={{ margin: 0, color: "#dc2626" }}>Ця зустріч недоступна — її проводив інший (потрібен наскрізний доступ).</p>
+        ) : !rec || !form ? (
+          <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>
+        ) : (
+          <div>
+            {form.questions.sections.map((sec, i) => (
+              <div key={sec.key} style={{ marginBottom: 18 }}>
+                <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 10px", fontWeight: 800 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: SECTION_DOTS[i % SECTION_DOTS.length] }} />{sec.title}
+                </h3>
+                {sec.questions.map((q) => (
+                  <div key={q.qKey} style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 13.5, lineHeight: 1.5, marginBottom: 6, color: "var(--text-muted)", overflowWrap: "anywhere" }}>{q.label}</div>
+                    {(q.field === "score" || q.field === "score_text") && <div style={{ marginBottom: 6 }}><ReadTrack value={answers[q.qKey]?.score ?? null} /></div>}
+                    {(q.field === "text" || q.field === "score_text") && (
+                      <div style={{ fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere", background: "rgba(128,128,128,.06)", borderRadius: 12, padding: "10px 12px", minHeight: 8 }}>
+                        {answers[q.qKey]?.text?.trim() ? answers[q.qKey]!.text : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {form.questions.enps && (
+              <div style={{ marginBottom: 18, padding: 14, borderRadius: 14, background: "rgba(22,163,74,.06)" }}>
+                <h3 style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 10px", fontWeight: 800 }}>eNPS</h3>
+                <ReadTrack value={rec.enps_score} enps />
+                <div style={{ fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere", marginTop: 10, background: "var(--card-bg)", borderRadius: 12, padding: "10px 12px" }}>
+                  {rec.enps_reason?.trim() ? rec.enps_reason : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                </div>
+              </div>
+            )}
+            {form.questions.notes && (
+              <div>
+                <h3 style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 10px", fontWeight: 800 }}>📝 Нотатки HR</h3>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 10, fontSize: 13 }}>
+                  {notes.date && <span><b>Дата:</b> {notes.date}</span>}
+                  {notes.mood && <span><b>Настрій:</b> {notes.mood}</span>}
+                </div>
+                {NOTE_FIELDS.map((f) => (notes[f.key] as string)?.trim() ? (
+                  <div key={f.key} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, marginBottom: 4 }}>{f.icon} {f.label}</div>
+                    <div style={{ fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere", background: "rgba(128,128,128,.06)", borderRadius: 12, padding: "10px 12px" }}>{notes[f.key] as string}</div>
+                  </div>
+                ) : null)}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
