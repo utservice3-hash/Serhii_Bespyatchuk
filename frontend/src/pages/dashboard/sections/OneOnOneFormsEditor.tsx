@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { fetchO2OForm, saveO2OForm, type O2OForm, type O2OFormBody, type O2OFieldType } from "../../../api";
+import { CARD } from "./OneOnOneSection";
+
+const FIELD: CSSProperties = { font: "inherit", fontSize: 13.5, padding: "9px 12px", borderRadius: 12, border: "none", background: "rgba(128,128,128,.08)", color: "var(--text)", outline: "none" };
 
 /** Редактор наборів питань 1×1 (право edit_1x1_forms). Збереження створює НОВУ версію форми;
  *  qKey стабільні (історія тримається за ними), тому наявні питання зберігають свій qKey. */
@@ -17,7 +20,7 @@ export function OneOnOneFormsEditor({ type }: { type: string }) {
   useEffect(() => { void load(); /* eslint-disable-next-line */ }, [type]);
 
   const sectionKeys = useMemo(() => (draft?.sections ?? []).map((s) => ({ key: s.key, title: s.title })), [draft]);
-  if (!draft) return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Завантаження форми…</p></div>;
+  if (!draft) return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Завантаження форми…</p></div>;
 
   const mutate = (fn: (d: O2OFormBody) => void) => setDraft((prev) => { const d = clone(prev!); fn(d); return d; });
 
@@ -29,9 +32,9 @@ export function OneOnOneFormsEditor({ type }: { type: string }) {
   };
 
   return (
-    <div className="chart-card">
+    <div style={CARD}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-        <h2 className="chart-title" style={{ margin: 0 }}>✏️ Питання — тип {type} <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>(активна v{version})</span></h2>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>✏️ Питання — тип {type} <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>(активна v{version})</span></h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {msg && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{msg}</span>}
           <button onClick={save} disabled={saving}
@@ -56,23 +59,23 @@ export function OneOnOneFormsEditor({ type }: { type: string }) {
       )}
 
       {draft.sections.map((sec, si) => (
-        <div key={sec.key} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+        <div key={sec.key} style={{ background: "rgba(128,128,128,.05)", borderRadius: 16, padding: 14, marginBottom: 12 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
             <input value={sec.title} onChange={(e) => mutate((d) => { d.sections[si].title = e.target.value; })}
-              style={{ font: "inherit", fontWeight: 700, padding: 6, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", flex: 1 }} />
+              style={{ ...FIELD, fontWeight: 700, flex: 1 }} />
             <button title="Секцію вгору" disabled={si === 0} onClick={() => mutate((d) => { [d.sections[si - 1], d.sections[si]] = [d.sections[si], d.sections[si - 1]]; })} style={btn}>↑</button>
             <button title="Секцію вниз" disabled={si === draft.sections.length - 1} onClick={() => mutate((d) => { [d.sections[si + 1], d.sections[si]] = [d.sections[si], d.sections[si + 1]]; })} style={btn}>↓</button>
             <button title="Видалити секцію" onClick={() => mutate((d) => { d.sections.splice(si, 1); })} style={{ ...btn, color: "#dc2626" }}>🗑</button>
           </div>
 
           {sec.questions.map((q, qi) => (
-            <div key={q.qKey} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "start", padding: "8px 0", borderTop: qi ? "1px dashed var(--border)" : "none" }}>
+            <div key={q.qKey} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "start", padding: "10px 0", borderTop: qi ? "1px dashed rgba(128,128,128,.18)" : "none" }}>
               <div>
                 <textarea value={q.label} onChange={(e) => mutate((d) => { d.sections[si].questions[qi].label = e.target.value; })} rows={2}
-                  style={{ width: "100%", resize: "vertical", font: "inherit", padding: 6, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+                  style={{ ...FIELD, width: "100%", resize: "vertical", background: "var(--card-bg)" }} />
                 <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
                   <select value={q.field} onChange={(e) => mutate((d) => { d.sections[si].questions[qi].field = e.target.value as O2OFieldType; })}
-                    style={{ font: "inherit", padding: 4, borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+                    style={{ ...FIELD, padding: "5px 8px" }}>
                     {(Object.keys(FIELD_LABEL) as O2OFieldType[]).map((f) => <option key={f} value={f}>{FIELD_LABEL[f]}</option>)}
                   </select>
                   <label style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -85,7 +88,7 @@ export function OneOnOneFormsEditor({ type }: { type: string }) {
                       if (target < 0 || target === si) return;
                       const [moved] = d.sections[si].questions.splice(qi, 1);
                       d.sections[target].questions.push(moved);
-                    })} style={{ font: "inherit", padding: 3, borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+                    })} style={{ ...FIELD, padding: "4px 6px" }}>
                       {sectionKeys.map((s) => <option key={s.key} value={s.key}>{s.title}</option>)}
                     </select>
                   </label>
@@ -111,6 +114,6 @@ export function OneOnOneFormsEditor({ type }: { type: string }) {
 }
 
 const btn: React.CSSProperties = {
-  minWidth: 28, height: 28, borderRadius: 6, cursor: "pointer", fontWeight: 700,
-  border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
+  minWidth: 28, height: 28, borderRadius: 9, cursor: "pointer", fontWeight: 700,
+  border: "none", background: "rgba(128,128,128,.10)", color: "var(--text)",
 };

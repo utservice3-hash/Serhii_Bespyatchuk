@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint,
@@ -10,34 +10,91 @@ import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
 type O2OType = "A" | "B" | "V";
 const TYPE_LABEL: Record<O2OType, string> = { A: "Тімлід → Менеджер", B: "Керівник → Тімлід", V: "HR → Всі" };
 const MOODS = ["Позитивний", "Нейтральний", "Напружений"];
-const NOTE_FIELDS: { key: keyof O2ONotes; label: string; kind: "text" | "mood" }[] = [
-  { key: "likes", label: "Що подобається", kind: "text" },
-  { key: "pains", label: "Болі", kind: "text" },
-  { key: "ideas", label: "Ідеї", kind: "text" },
-  { key: "requests", label: "Запити до HR", kind: "text" },
-  { key: "about_manager", label: "Про менеджера", kind: "text" },
-  { key: "development", label: "Розвиток", kind: "text" },
-  { key: "followup", label: "Follow-up", kind: "text" },
+const NOTE_FIELDS: { key: keyof O2ONotes; label: string; icon: string }[] = [
+  { key: "likes", label: "Що подобається", icon: "💚" },
+  { key: "pains", label: "Болі", icon: "⚠️" },
+  { key: "ideas", label: "Ідеї", icon: "💡" },
+  { key: "requests", label: "Запити до HR", icon: "🎯" },
+  { key: "about_manager", label: "Про менеджера", icon: "🧑" },
+  { key: "development", label: "Розвиток", icon: "📈" },
+  { key: "followup", label: "Follow-up", icon: "📌" },
 ];
+const SECTION_DOTS = ["#6366f1", "#16a34a", "#d97706", "#8b5cf6", "#0ea5e9", "#ec4899", "#ef4444"];
+
+// ── дизайн-токени (сучасний макет; тема-стійкі: card/text через CSS-vars) ──
+export const CARD: CSSProperties = { background: "var(--card-bg)", borderRadius: 20, boxShadow: "0 8px 34px rgba(20,30,50,.07)", border: "none", padding: 22 };
+const FIELD: CSSProperties = { width: "100%", resize: "vertical", font: "inherit", fontSize: 14, padding: "11px 13px", borderRadius: 14, border: "none", background: "rgba(128,128,128,.08)", color: "var(--text)", outline: "none" };
+const RED = "#c5141c";
 
 const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 const scoreColor = (v: number | null) => (v == null ? "var(--text-muted)" : v >= 8 ? "#16a34a" : v >= 6 ? "#d97706" : "#dc2626");
 const enpsColor = (v: number) => (v >= 9 ? "#16a34a" : v >= 7 ? "#d97706" : "#dc2626");
 
-function ScorePicker({ value, onChange, from = 1, to = 10 }: { value?: number; onChange: (v: number) => void; from?: number; to?: number }) {
-  const nums = []; for (let i = from; i <= to; i++) nums.push(i);
-  const color = from === 0 ? enpsColor : scoreColor;
+function initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("").toUpperCase(); }
+function avatarHue(name: string) { return [...name].reduce((a, c) => a + c.charCodeAt(0), 0) % 360; }
+function Avatar({ name, size = 34 }: { name: string; size?: number }) {
   return (
-    <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-      {nums.map((n) => (
-        <button key={n} onClick={() => onChange(n)}
-          style={{ width: 28, height: 28, borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13,
-            border: `1px solid ${value === n ? color(n) : "var(--border)"}`,
-            background: value === n ? color(n) : "var(--card-bg)", color: value === n ? "#fff" : "var(--text)" }}>
-          {n}
-        </button>
-      ))}
+    <div style={{ width: size, height: size, minWidth: size, borderRadius: size > 40 ? 14 : "50%",
+      background: `hsl(${avatarHue(name)} 52% 55%)`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
+      fontWeight: 700, fontSize: Math.round(size * 0.38) }}>{initials(name)}</div>
+  );
+}
+
+/** Кільце-прогрес загальної оцінки (conic). */
+function Ring({ value, max = 10, label }: { value: number | null; max?: number; label: string }) {
+  const pct = value == null ? 0 : Math.max(0, Math.min(1, value / max));
+  const col = value == null ? "var(--text-muted)" : scoreColor(value);
+  return (
+    <div style={{ width: 58, height: 58, borderRadius: "50%", background: `conic-gradient(${col} ${pct * 360}deg, rgba(128,128,128,.15) 0)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ width: 46, height: 46, borderRadius: "50%", background: "var(--card-bg)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
+        <b style={{ fontSize: 17, color: col }}>{value ?? "—"}</b>
+        <span style={{ fontSize: 8, color: "var(--text-muted)", marginTop: 2 }}>{label}</span>
+      </div>
     </div>
+  );
+}
+
+/** Суцільний трек оцінки: сегменти заповнюються до обраної; обрана — піднята. */
+function ScoreTrack({ value, onChange, from = 1, to = 10, enps = false }: { value?: number; onChange: (v: number) => void; from?: number; to?: number; enps?: boolean }) {
+  const nums: number[] = []; for (let i = from; i <= to; i++) nums.push(i);
+  const sel = typeof value === "number" ? value : null;
+  const fill = enps ? (sel != null ? enpsColor(sel) : "#16a34a") : "#16a34a";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+      <div style={{ flex: "1 1 320px", minWidth: 260 }}>
+        <div style={{ display: "flex", gap: 5 }}>
+          {nums.map((n) => {
+            const filled = sel != null && n <= sel;
+            const isSel = n === sel;
+            return (
+              <button key={n} onClick={() => onChange(n)} title={`${n}`}
+                style={{ flex: 1, minWidth: 26, height: 36, borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 13,
+                  border: "none", background: filled ? fill : "rgba(128,128,128,.10)", color: filled ? "#fff" : "var(--text-muted)",
+                  transform: isSel ? "translateY(-3px)" : "none", boxShadow: isSel ? `0 8px 16px ${fill}55` : "none", transition: "transform .1s" }}>
+                {n}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+          <span>{enps ? "0 — не порекомендую" : "низько"}</span><span>{enps ? "10 — точно" : "високо"}</span>
+        </div>
+      </div>
+      <div style={{ textAlign: "center", minWidth: 46 }}>
+        <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1, color: sel == null ? "var(--text-muted)" : fill }}>{sel ?? "—"}</div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>/ {to}</div>
+      </div>
+    </div>
+  );
+}
+
+function Pill({ active, onClick, children, title }: { active: boolean; onClick: () => void; children: React.ReactNode; title?: string }) {
+  return (
+    <button onClick={onClick} title={title}
+      style={{ padding: "7px 14px", borderRadius: 12, cursor: "pointer", fontWeight: active ? 700 : 500, fontSize: 13,
+        border: "none", background: active ? RED : "rgba(128,128,128,.10)", color: active ? "#fff" : "var(--text)", transition: "background .12s" }}>
+      {children}
+    </button>
   );
 }
 
@@ -82,8 +139,11 @@ export function OneOnOneSection() {
   const setAns = (key: string, patch: { score?: number; text?: string }) =>
     setAnswers((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
 
-  const scoreKeys = useMemo(() => (form?.questions.sections ?? []).flatMap((s) => s.questions)
-    .filter((q) => q.field === "score" || q.field === "score_text").map((q) => q.qKey), [form]);
+  const allQuestions = useMemo(() => (form?.questions.sections ?? []).flatMap((s) => s.questions), [form]);
+  const scoreKeys = useMemo(() => allQuestions.filter((q) => q.field === "score" || q.field === "score_text").map((q) => q.qKey), [allQuestions]);
+  const answeredCount = useMemo(() => allQuestions.filter((q) => {
+    const a = answers[q.qKey]; return (typeof a?.score === "number" && a.score > 0) || (a?.text?.trim() ?? "") !== "";
+  }).length, [allQuestions, answers]);
   const liveOverall = useMemo(() => {
     if (type === "V") return enpsScore;
     const s = scoreKeys.map((k) => answers[k]?.score).filter((x): x is number => typeof x === "number" && x > 0);
@@ -109,7 +169,7 @@ export function OneOnOneSection() {
   }, [subjects]);
 
   if (availableTypes.length === 0) {
-    return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Немає доступу до проведення 1×1.</p></div>;
+    return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Немає доступу до проведення 1×1.</p></div>;
   }
 
   return (
@@ -118,88 +178,104 @@ export function OneOnOneSection() {
         <h1 className="page-title">🤝 Ван-ту-ван</h1>
         <div className="page-filters" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {availableTypes.length > 1 && (
-            <div style={{ display: "flex", gap: 4 }}>
+            <div style={{ display: "flex", gap: 5 }}>
               {availableTypes.map((t) => (
-                <button key={t} onClick={() => { setType(t); setSelId(null); }} title={TYPE_LABEL[t]}
-                  style={{ padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontWeight: type === t ? 700 : 500,
-                    border: `1px solid ${type === t ? "#c5141c" : "var(--border)"}`, background: type === t ? "#c5141c" : "var(--card-bg)", color: type === t ? "#fff" : "var(--text)" }}>
-                  {t === "A" ? "Тип А" : t === "B" ? "Тип Б" : "Тип В"}
-                </button>
+                <Pill key={t} active={type === t} onClick={() => { setType(t); setSelId(null); }} title={TYPE_LABEL[t]}>
+                  {t === "A" ? "Тімлід→Менеджер" : t === "B" ? "КВП→Тімлід" : "HR→Всі"}
+                </Pill>
               ))}
             </div>
           )}
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", gap: 5 }}>
             {([["conduct", "Провести"], ["stats", "Історія"], ...(type === "V" ? [["enps", "eNPS"]] as const : []), ...(canEdit ? [["edit", "✏️ Питання"]] as const : [])] as const).map(([t, lbl]) => (
-              <button key={t} onClick={() => setTab(t)}
-                style={{ padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontWeight: tab === t ? 700 : 500,
-                  border: `1px solid ${tab === t ? "#c5141c" : "var(--border)"}`, background: tab === t ? "#c5141c" : "var(--card-bg)", color: tab === t ? "#fff" : "var(--text)" }}>
-                {lbl}
-              </button>
+              <Pill key={t} active={tab === t} onClick={() => setTab(t)}>{lbl}</Pill>
             ))}
           </div>
           <DatePicker mode="month" value={monthSel} onChange={(v) => v && pickMonth(v)} minWidth={150} />
         </div>
       </div>
-      <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 860 }}>
-        {TYPE_LABEL[type]}. {crossview ? "Наскрізний доступ: усі 1×1 і аналітика." : "Ви бачите лише свої проведені 1×1."} Менеджери цей розділ не бачать.
+      <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 900 }}>
+        <b style={{ color: "var(--text)" }}>{TYPE_LABEL[type]}.</b> {crossview ? "Наскрізний доступ: усі 1×1 і аналітика." : "Ви бачите лише свої проведені 1×1."} Менеджери цей розділ не бачать.
       </p>
 
       {tab === "conduct" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 320px) 1fr", gap: 16, alignItems: "start" }}>
-          <div className="chart-card" style={{ padding: 12 }}>
-            {byTeam.length === 0 && <p className="loading-text" style={{ margin: 0 }}>Немає працівників у скоупі.</p>}
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 300px) 1fr", gap: 18, alignItems: "start" }}>
+          {/* Список людей */}
+          <div style={{ ...CARD, padding: 12 }}>
+            {byTeam.length === 0 && <p className="loading-text" style={{ margin: 8 }}>Немає працівників у скоупі.</p>}
             {byTeam.map(([team, list]) => (
-              <div key={team} style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-muted)", fontWeight: 700, margin: "4px 0" }}>{team}</div>
+              <div key={team} style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", fontWeight: 700, margin: "6px 8px 4px" }}>{team}</div>
                 {list.map((s) => (
                   <button key={s.id} onClick={() => setSelId(s.id)}
-                    style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "7px 10px", borderRadius: 8, marginBottom: 3, cursor: "pointer", textAlign: "left",
-                      border: `1px solid ${selId === s.id ? "#c5141c" : "transparent"}`, background: selId === s.id ? "rgba(197,20,28,0.06)" : "transparent", color: "var(--text)" }}>
-                    <span style={{ fontSize: 14 }}>{s.is_team_lead ? "👑 " : ""}{s.name}</span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      {s.overall != null && <span style={{ fontWeight: 700, color: scoreColor(s.overall) }}>{s.overall}</span>}
-                      <span title={s.done ? "проведено" : "ще не проведено"}>{s.done ? "✅" : "⏳"}</span>
-                    </span>
+                    style={{ display: "flex", width: "100%", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 12, marginBottom: 2, cursor: "pointer", textAlign: "left",
+                      border: "none", background: selId === s.id ? "rgba(197,20,28,0.07)" : "transparent", color: "var(--text)" }}>
+                    <Avatar name={s.name} size={32} />
+                    <span style={{ fontSize: 13.5, fontWeight: selId === s.id ? 700 : 500, flex: 1 }}>{s.is_team_lead ? "👑 " : ""}{s.name}</span>
+                    <span title={s.done ? "проведено" : "ще не проведено"}
+                      style={{ width: 9, height: 9, borderRadius: "50%", background: s.done ? "#16a34a" : "#eab308", flexShrink: 0 }} />
                   </button>
                 ))}
               </div>
             ))}
           </div>
 
-          <div className="chart-card">
+          {/* Анкета */}
+          <div style={CARD}>
             {!selected ? (
               <p className="loading-text" style={{ margin: 0 }}>← Оберіть працівника зі списку, щоб провести зустріч.</p>
             ) : !form ? (
               <p className="loading-text" style={{ margin: 0 }}>Завантаження форми…</p>
             ) : (
               <>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                  <h2 className="chart-title" style={{ margin: 0 }}>{selected.is_team_lead ? "👑 " : ""}{selected.name}</h2>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{type === "V" ? "eNPS" : "Заг. оцінка"}: <b style={{ color: scoreColor(liveOverall), fontSize: 18 }}>{liveOverall ?? "—"}</b></span>
+                    <Avatar name={selected.name} size={48} />
+                    <div>
+                      <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>{selected.is_team_lead ? "👑 " : ""}{selected.name}</h2>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                        <Chip>{selected.is_team_lead ? "тімлід" : "менеджер"}</Chip>
+                        {selected.team_name && <Chip>команда {selected.team_name}</Chip>}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                    <Ring value={liveOverall} label={type === "V" ? "eNPS" : "оцінка"} />
                     <button onClick={save} disabled={saving}
-                      style={{ padding: "7px 18px", borderRadius: 8, border: "none", background: "#c5141c", color: "#fff", fontWeight: 700, cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1 }}>
-                      {saving ? "Збереження…" : "💾 Зберегти"}
+                      style={{ padding: "9px 22px", borderRadius: 12, border: "none", background: RED, color: "#fff", fontWeight: 700, fontSize: 14, cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1 }}>
+                      {saving ? "Збереження…" : "Зберегти"}
                     </button>
                   </div>
                 </div>
-                {savedAt && <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 12px" }}>Востаннє збережено: {new Date(savedAt).toLocaleString("uk-UA")}</p>}
 
-                {form.questions.sections.map((sec) => (
-                  <div key={sec.key} style={{ marginBottom: 18 }}>
-                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "#c5141c", margin: "0 0 8px", borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>{sec.title}</h3>
-                    {sec.note && <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>{sec.note}</p>}
+                {/* Прогрес */}
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ height: 6, borderRadius: 4, background: "rgba(128,128,128,.12)", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${allQuestions.length ? (answeredCount / allQuestions.length) * 100 : 0}%`, background: RED, borderRadius: 4, transition: "width .2s" }} />
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 6 }}>
+                    Заповнено <b style={{ color: "var(--text)" }}>{answeredCount}</b> з {allQuestions.length} · пікерів оцінки {scoreKeys.length}
+                    {savedAt && <> · збережено {new Date(savedAt).toLocaleString("uk-UA")}</>}
+                  </div>
+                </div>
+
+                {form.questions.sections.map((sec, i) => (
+                  <div key={sec.key} style={{ marginBottom: 22 }}>
+                    <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 12px", fontWeight: 800 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: SECTION_DOTS[i % SECTION_DOTS.length] }} />{sec.title}
+                    </h3>
+                    {sec.note && <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "0 0 12px" }}>{sec.note}</p>}
                     {sec.questions.map((q) => (
-                      <div key={q.qKey} style={{ marginBottom: 12 }}>
-                        <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>
-                          {q.label}{q.quarterly && <span title="1 раз на квартал" style={{ marginLeft: 6, fontSize: 11, color: "var(--text-muted)" }}>· 1×/квартал</span>}
+                      <div key={q.qKey} style={{ marginBottom: 16 }}>
+                        <label style={{ display: "block", fontSize: 14.5, lineHeight: 1.5, marginBottom: 8 }}>
+                          {q.label}{q.quarterly && <span style={{ marginLeft: 8, fontSize: 10.5, color: "#8b5cf6", background: "rgba(139,92,246,.12)", padding: "2px 8px", borderRadius: 20, whiteSpace: "nowrap" }}>1 раз на квартал</span>}
                         </label>
                         {(q.field === "score" || q.field === "score_text") && (
-                          <ScorePicker value={answers[q.qKey]?.score} onChange={(v) => setAns(q.qKey, { score: v })} />
+                          <ScoreTrack value={answers[q.qKey]?.score} onChange={(v) => setAns(q.qKey, { score: v })} />
                         )}
                         {(q.field === "text" || q.field === "score_text") && (
                           <textarea value={answers[q.qKey]?.text ?? ""} onChange={(e) => setAns(q.qKey, { text: e.target.value })} rows={2}
-                            style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", marginTop: q.field === "score_text" ? 6 : 0 }} />
+                            style={{ ...FIELD, marginTop: q.field === "score_text" ? 10 : 0 }} />
                         )}
                       </div>
                     ))}
@@ -207,38 +283,43 @@ export function OneOnOneSection() {
                 ))}
 
                 {form.questions.enps && (
-                  <div style={{ marginBottom: 18 }}>
-                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "#c5141c", margin: "0 0 8px", borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>eNPS</h3>
-                    <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>Наскільки ймовірно порекомендуєш компанію як місце роботи? (0-10)</label>
-                    <ScorePicker value={enpsScore ?? undefined} onChange={setEnpsScore} from={0} to={10} />
-                    <textarea value={enpsReason} onChange={(e) => setEnpsReason(e.target.value)} rows={2} placeholder="Причина оцінки"
-                      style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", marginTop: 8 }} />
+                  <div style={{ marginBottom: 22, padding: 16, borderRadius: 16, background: "rgba(22,163,74,.06)" }}>
+                    <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 12px", fontWeight: 800 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#16a34a" }} />eNPS
+                    </h3>
+                    <label style={{ display: "block", fontSize: 14.5, lineHeight: 1.5, marginBottom: 8 }}>Наскільки ймовірно порекомендуєш компанію як місце роботи? (0-10)</label>
+                    <ScoreTrack value={enpsScore ?? undefined} onChange={setEnpsScore} from={0} to={10} enps />
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "8px 0 10px" }}>0-6 критик · 7-8 нейтрал · 9-10 промоутер</div>
+                    <textarea value={enpsReason} onChange={(e) => setEnpsReason(e.target.value)} rows={2} placeholder="Чому саме така оцінка?" style={FIELD} />
                   </div>
                 )}
 
                 {form.questions.notes && (
-                  <div style={{ marginBottom: 8 }}>
-                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "#c5141c", margin: "0 0 8px", borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>📝 Нотатки HR</h3>
-                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+                  <div style={{ marginBottom: 4 }}>
+                    <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 12px", fontWeight: 800 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#d97706" }} />📝 Нотатки HR
+                    </h3>
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
                       <div>
-                        <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Дата</label>
-                        <input type="date" value={notes.date ?? ""} onChange={(e) => setNotes((p) => ({ ...p, date: e.target.value }))}
-                          style={{ font: "inherit", padding: 6, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+                        <label style={{ display: "block", fontSize: 11.5, color: "var(--text-muted)", marginBottom: 5 }}>Дата</label>
+                        <input type="date" value={notes.date ?? ""} onChange={(e) => setNotes((p) => ({ ...p, date: e.target.value }))} style={{ ...FIELD, width: "auto", padding: "8px 12px" }} />
                       </div>
                       <div>
-                        <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Настрій</label>
-                        <select value={notes.mood ?? ""} onChange={(e) => setNotes((p) => ({ ...p, mood: e.target.value }))}
-                          style={{ font: "inherit", padding: 6, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
-                          <option value="">—</option>
-                          {MOODS.map((m) => <option key={m} value={m}>{m}</option>)}
-                        </select>
+                        <label style={{ display: "block", fontSize: 11.5, color: "var(--text-muted)", marginBottom: 5 }}>Настрій</label>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {MOODS.map((m) => (
+                            <button key={m} onClick={() => setNotes((p) => ({ ...p, mood: p.mood === m ? "" : m }))}
+                              style={{ padding: "8px 12px", borderRadius: 12, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: notes.mood === m ? 700 : 500,
+                                background: notes.mood === m ? (m === "Позитивний" ? "#16a34a" : m === "Нейтральний" ? "#64748b" : "#dc2626") : "rgba(128,128,128,.10)",
+                                color: notes.mood === m ? "#fff" : "var(--text)" }}>{m}</button>
+                          ))}
+                        </div>
                       </div>
                     </div>
                     {NOTE_FIELDS.map((f) => (
-                      <div key={f.key} style={{ marginBottom: 10 }}>
-                        <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>{f.label}</label>
-                        <textarea value={(notes[f.key] as string) ?? ""} onChange={(e) => setNotes((p) => ({ ...p, [f.key]: e.target.value }))} rows={2}
-                          style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+                      <div key={f.key} style={{ marginBottom: 12 }}>
+                        <label style={{ display: "block", fontSize: 13.5, marginBottom: 6 }}>{f.icon} {f.label}</label>
+                        <textarea value={(notes[f.key] as string) ?? ""} onChange={(e) => setNotes((p) => ({ ...p, [f.key]: e.target.value }))} rows={2} style={FIELD} />
                       </div>
                     ))}
                   </div>
@@ -258,6 +339,10 @@ export function OneOnOneSection() {
   );
 }
 
+function Chip({ children }: { children: React.ReactNode }) {
+  return <span style={{ fontSize: 11.5, color: "var(--text-muted)", background: "rgba(128,128,128,.10)", padding: "3px 10px", borderRadius: 20 }}>{children}</span>;
+}
+
 /** Історія: працівник × місяці (загальна оцінка або eNPS-бал). */
 function StatsView({ stats, isV }: { stats: OneOnOneStatRow[]; isV: boolean }) {
   const months = [...new Set(stats.map((r) => r.month))].sort();
@@ -270,10 +355,10 @@ function StatsView({ stats, isV }: { stats: OneOnOneStatRow[]; isV: boolean }) {
     return [...m.values()].sort((a, b) => (a.team || "").localeCompare(b.team || "") || a.name.localeCompare(b.name));
   }, [stats, isV]);
 
-  if (stats.length === 0) return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Ще немає проведених зустрічей за останні місяці.</p></div>;
+  if (stats.length === 0) return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Ще немає проведених зустрічей за останні місяці.</p></div>;
   return (
-    <div className="chart-card">
-      <h2 className="chart-title">Динаміка {isV ? "eNPS-балів" : "загальних оцінок"} (останні місяці)</h2>
+    <div style={CARD}>
+      <h2 style={{ margin: "0 0 14px", fontSize: 16, fontWeight: 800 }}>Динаміка {isV ? "eNPS-балів" : "загальних оцінок"} (останні місяці)</h2>
       <div style={{ overflowX: "auto" }}>
         <table className="data-table compact" style={{ minWidth: 520 }}>
           <thead><tr><th style={{ textAlign: "left" }}>Працівник</th><th style={{ textAlign: "left" }}>Команда</th>
@@ -286,7 +371,7 @@ function StatsView({ stats, isV }: { stats: OneOnOneStatRow[]; isV: boolean }) {
               const trend = nums.length >= 2 ? nums[nums.length - 1] - nums[0] : 0;
               return (
                 <tr key={r.name}>
-                  <td style={{ textAlign: "left", fontWeight: 600 }}>{r.name}</td>
+                  <td style={{ textAlign: "left", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}><Avatar name={r.name} size={26} />{r.name}</td>
                   <td style={{ textAlign: "left", color: "var(--text-muted)" }}>{r.team ?? "—"}</td>
                   {vals.map((v, i) => <td key={i} style={{ textAlign: "center", fontWeight: 700, color: scoreColor(v) }}>{v ?? "·"}</td>)}
                   <td style={{ textAlign: "center", color: trend > 0 ? "#16a34a" : trend < 0 ? "#dc2626" : "var(--text-muted)", fontWeight: 700 }}>{trend > 0 ? `↑ +${trend.toFixed(1)}` : trend < 0 ? `↓ ${trend.toFixed(1)}` : "→"}</td>
@@ -302,14 +387,14 @@ function StatsView({ stats, isV }: { stats: OneOnOneStatRow[]; isV: boolean }) {
 
 /** eNPS-аналітика (тип В): тренд по місяцях + розклад промоутери/нейтрали/критики. */
 function EnpsView({ series }: { series: O2OEnpsPoint[] }) {
-  if (series.length === 0) return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Ще немає даних eNPS.</p></div>;
+  if (series.length === 0) return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Ще немає даних eNPS.</p></div>;
   const last = series[series.length - 1];
   const maxAbs = Math.max(50, ...series.map((s) => Math.abs(s.enps ?? 0)));
   return (
-    <div className="chart-card">
-      <h2 className="chart-title">eNPS (тип В) — %промоутерів − %критиків</h2>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", margin: "6px 0 16px" }}>
-        <Kpi label="Поточний eNPS" value={last.enps == null ? "—" : `${last.enps}`} color={last.enps == null ? undefined : last.enps >= 0 ? "#16a34a" : "#dc2626"} />
+    <div style={CARD}>
+      <h2 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 800 }}>eNPS (тип В) — %промоутерів − %критиків</h2>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "6px 0 18px" }}>
+        <Kpi label="Поточний eNPS" value={last.enps == null ? "—" : `${last.enps}`} color={last.enps == null ? undefined : last.enps >= 0 ? "#16a34a" : "#dc2626"} big />
         <Kpi label="Промоутери" value={`${last.promoters}`} color="#16a34a" />
         <Kpi label="Нейтрали" value={`${last.passives}`} color="#d97706" />
         <Kpi label="Критики" value={`${last.detractors}`} color="#dc2626" />
@@ -328,7 +413,7 @@ function EnpsView({ series }: { series: O2OEnpsPoint[] }) {
                 <td style={{ textAlign: "center" }}>{s.total}</td>
                 <td style={{ textAlign: "left" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ display: "inline-block", width: 120, height: 8, background: "var(--border)", borderRadius: 4, position: "relative" }}>
+                    <span style={{ display: "inline-block", width: 120, height: 8, background: "rgba(128,128,128,.14)", borderRadius: 4, position: "relative" }}>
                       <span style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "var(--text-muted)" }} />
                       {s.enps != null && <span style={{ position: "absolute", top: 0, bottom: 0, borderRadius: 4,
                         background: s.enps >= 0 ? "#16a34a" : "#dc2626",
@@ -348,11 +433,11 @@ function EnpsView({ series }: { series: O2OEnpsPoint[] }) {
   );
 }
 
-function Kpi({ label, value, color }: { label: string; value: string; color?: string }) {
+function Kpi({ label, value, color, big }: { label: string; value: string; color?: string; big?: boolean }) {
   return (
-    <div style={{ minWidth: 110 }}>
+    <div style={{ minWidth: 110, padding: "12px 16px", borderRadius: 16, background: "rgba(128,128,128,.06)" }}>
       <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, color: color ?? "var(--text)" }}>{value}</div>
+      <div style={{ fontSize: big ? 30 : 24, fontWeight: 800, color: color ?? "var(--text)" }}>{value}</div>
     </div>
   );
 }
