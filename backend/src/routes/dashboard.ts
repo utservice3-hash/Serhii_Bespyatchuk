@@ -4705,6 +4705,35 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const suTeamMap = new Map(suTeam.map((x) => [x.teamId, x]));
   const expMgrThis = new Map(expMgrThisR.map((x) => [x.id, x.sum]));
   const expMgrNext = new Map(expMgrNextR.map((x) => [x.id, x.sum]));
+
+  // #3 ЛАЙФТАЙМ-КОНВЕРСІЯ РНК/РПК (Варіант A — чесна воронка ≤100%; знаменник за весь час,
+  // майже не «дозріває»). Чисельник ТОГО САМОГО каналу, що знаменник (reachedAutoByManager):
+  //   РНК = рекламні угоди → «авто працює» ÷ adsAccepted (весь час);
+  //   РПК = лідген-угоди   → «авто працює» ÷ leadgen (leadgen_touch, весь час).
+  // per-manager → команда = Σ (Σ-інваріант). Тонкий знаменник (0) → «—», не «0%».
+  const [reachedAuto, adsAllTime, lgAllTime, mgrTeamRows] = await Promise.all([
+    metrics.reachedAutoByManager(adSources),
+    metrics.adsAcceptedByMgr({}, adSources),
+    metrics.leadgenByManager({}),
+    pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers WHERE is_active`),
+  ]);
+  const teamOfMgr = new Map(mgrTeamRows.rows.map((r) => [r.id, r.team_id]));
+  const adsByMgr = new Map(adsAllTime.map((x) => [x.managerId, x.count]));
+  const lgByMgr = new Map(lgAllTime.map((x) => [x.managerId, x.deals]));
+  const convLT = new Map<number, { numAd: number; numLg: number; adsDen: number; lgDen: number }>();
+  const bumpLT = (tid: number | null, f: (e: { numAd: number; numLg: number; adsDen: number; lgDen: number }) => void) => {
+    if (tid == null) return; const e = convLT.get(tid) ?? { numAd: 0, numLg: 0, adsDen: 0, lgDen: 0 }; f(e); convLT.set(tid, e);
+  };
+  for (const [mid, ch] of reachedAuto) bumpLT(teamOfMgr.get(mid) ?? null, (e) => { e.numAd += ch.ad; e.numLg += ch.leadgen; });
+  for (const [mid, n] of adsByMgr) bumpLT(teamOfMgr.get(mid) ?? null, (e) => { e.adsDen += n; });
+  for (const [mid, n] of lgByMgr) bumpLT(teamOfMgr.get(mid) ?? null, (e) => { e.lgDen += n; });
+  const lifetimeConvFor = (teamId: number, kind: string): { num: number; den: number; pct: number | null } => {
+    const e = convLT.get(teamId) ?? { numAd: 0, numLg: 0, adsDen: 0, lgDen: 0 };
+    const num = kind === "rnk" ? e.numAd : kind === "rpk" ? e.numLg : 0;
+    const den = kind === "rnk" ? e.adsDen : kind === "rpk" ? e.lgDen : 0;
+    return { num, den, pct: den > 0 ? Math.round((num / den) * 1000) / 10 : null };
+  };
+
   for (const [mid, mp] of mgrPlan) {
     if (mp.teamId == null) continue;
     const e = teamGet(mp.teamId, "");
@@ -4745,6 +4774,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
       pct: t.plan > 0 ? Math.round((t.revenue / t.plan) * 100) : null,
       conversion: t.conversion, entered: t.entered, won: t.won,
+      // #3 лайфтайм-конверсія за типом команди (Варіант A, чесна воронка ≤100%, весь час).
+      convLifetime: lifetimeConvFor(t.teamId, t.kind),
       // #4 два чеки команди (Σsum÷Σcount): «успішно» (success за місяць) + «в очікуванні» (chainInflight знімок).
       avgCheckSuccess: suTeamMap.get(t.teamId)?.avgCheck ?? null,
       avgCheckAwaiting: ciTeamMap.get(t.teamId)?.avgCheck ?? null,

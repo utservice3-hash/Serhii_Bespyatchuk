@@ -336,7 +336,7 @@ export function KvpReportSection() {
                 </colgroup>
                 <thead><tr>
                   <th>Команда / менеджер</th>
-                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, низ — наступний. Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Конв.</th>
+                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, низ — наступний. Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Конв. <InfoHint text="Лайфтайм-конверсія (весь час, чесна воронка): РНК = рекламні угоди, що досягли «авто працює» ÷ прийнята реклама; РПК = лідген-угоди, що досягли «авто працює» ÷ лідген-заявки. Команда = Σчисельників÷Σзнаменників. Тонкий знаменник (0) → «—»." /></th>
                   {rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}
                 </tr></thead>
                 <tbody>
@@ -348,7 +348,7 @@ export function KvpReportSection() {
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}</td>
                         <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={t.pct ?? 0} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
                         <td style={{ textAlign: "right", color: MUTED }} title={`Очікування за ПЛАНОВОЮ датою оплати. Цей міс: ${fmtMoney(t.expectedThisMonth)} · наступний: ${fmtMoney(t.expectedNextMonth)}. Ср.чек команди — успішно: ${t.avgCheckSuccess == null ? "—" : fmtMoney(t.avgCheckSuccess)} · в очікуванні: ${t.avgCheckAwaiting == null ? "—" : fmtMoney(t.avgCheckAwaiting)}.`}>{fmtMoney(t.expectedThisMonth)}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(t.expectedNextMonth)}</div></td>
-                        <td style={{ textAlign: "right" }}>{t.kind === "rnk" ? fmtPct(t.conversion) : "—"}</td>
+                        <td style={{ textAlign: "right" }} title={`Лайфтайм (весь час): ${t.convLifetime.num} / ${t.convLifetime.den}${t.kind === "rnk" ? " (реклама)" : t.kind === "rpk" ? " (лідген)" : ""}`}>{t.kind === "rnk" || t.kind === "rpk" ? fmtPct(t.convLifetime.pct) : "—"}</td>
                         {rep.weekBlocks.map((w) => (
                           <WeekCell key={w.idx} mode={weekMode}
                             w={t.weeks?.find((x) => x.idx === w.idx)}

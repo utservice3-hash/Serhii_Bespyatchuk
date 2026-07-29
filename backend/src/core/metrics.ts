@@ -2501,6 +2501,33 @@ export const EXPECT_ZONE = [100274340, 69716300, 98470988, 69716304, 69716312, 1
  */
 export const MONEY_ZONE = [...EXPECT_ZONE, 69716460, 60412544, 142];
 
+// «Авто працює» — New 8921932 → 69716300; Old 155304 → 10937178 (обидва ⊆ EXPECT_ZONE).
+export const AUTO_WORKING = [69716300, 10937178];
+
+export interface ReachedAutoChan { ad: number; leadgen: number }
+/**
+ * ЛАЙФТАЙМ-ЧИСЕЛЬНИК конверсії РНК/РПК (Варіант A — ЧЕСНА ВОРОНКА: чисельник ТОГО САМОГО
+ * каналу, що знаменник). Угоди, що БУДЬ-КОЛИ досягли «авто працює» (подія у
+ * `deal_stage_events` зі status_id ∈ AUTO_WORKING), за ВЕСЬ ЧАС, ПО МЕНЕДЖЕРУ, РОЗБИТІ ПО
+ * КАНАЛУ:
+ *   • `ad`      — рекламна угода (`adDealSql`) → пара до знаменника adsAccepted (РНК);
+ *   • `leadgen` — `lead_channel='leadgen'`      → пара до знаменника leadgen (РПК).
+ * Active-only (як знаменники) → num ⊆ den → командна конверсія ≤100%. Дедуп по `kommo_id`.
+ * Команда = Σ менеджерів (Σ-інваріант). `adSources` — канонічний список рекламних джерел.
+ */
+export async function reachedAutoByManager(adSources: string[]): Promise<Map<number, ReachedAutoChan>> {
+  const ad = adDealSql("$3");
+  const r = await pool.query<{ manager_id: number; ad: string; leadgen: string }>(
+    `SELECT d.manager_id,
+            COUNT(DISTINCT d.kommo_id) FILTER (WHERE ${ad}) ad,
+            COUNT(DISTINCT d.kommo_id) FILTER (WHERE d.lead_channel = 'leadgen') leadgen
+       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+      WHERE d.pipeline_id = ANY($1)
+        AND EXISTS (SELECT 1 FROM deal_stage_events e WHERE e.kommo_id = d.kommo_id AND e.status_id = ANY($2))
+      GROUP BY d.manager_id`, [FC_PIPELINES, AUTO_WORKING, adSources]);
+  return new Map(r.rows.map((x) => [x.manager_id, { ad: Number(x.ad), leadgen: Number(x.leadgen) }]));
+}
+
 export interface ExpectedBucket { deals: number; sum: number }
 export interface ExpectedPaymentsByPlanned {
   total: ExpectedBucket;

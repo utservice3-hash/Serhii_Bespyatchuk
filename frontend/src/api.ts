@@ -524,6 +524,8 @@ export interface KvpTeam {
   teamId: number; name: string; kind: "rpk" | "rnk" | "leadgen";
   plan: number; revenue: number; expected: number; pct: number | null;
   conversion: number | null; entered: number; won: number; managers: KvpManager[];
+  // #3 лайфтайм-конверсія (Варіант A, весь час): РНК÷реклама, РПК÷лідген; ≤100%.
+  convLifetime: { num: number; den: number; pct: number | null };
   // #4 два чеки команди: «успішно» (success за місяць) + «в очікуванні» (chainInflight знімок).
   avgCheckSuccess: number | null; avgCheckAwaiting: number | null;
   expectedThisMonth: number; expectedNextMonth: number; weeks: KvpWeek[];
