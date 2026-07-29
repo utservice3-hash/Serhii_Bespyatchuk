@@ -682,6 +682,10 @@ ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS form_version INTEGER NOT NULL D
 ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS enps_score INTEGER;   -- 0..10 (тип В)
 ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS enps_reason TEXT;
 ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS notes JSONB;          -- панель «Нотатки HR»
+-- ЗАДОВОЛЕНІСТЬ КОМПАНІЄЮ — ОКРЕМИЙ показник, СВІДОМО поза `overall`: інакше нові
+-- зустрічі стали б непорівнянні з історичними. Для A/Б — структурний блок форми,
+-- для В — дорівнює enps_score (єдине джерело для історії).
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS satisfaction_score INTEGER;
 -- ЖУРНАЛ ЗА ДАТАМИ: дата зустрічі АВТОРИТЕТНА — кожна зустріч окремий запис (у місяці їх
 -- може бути кілька). Колонки `month` БІЛЬШЕ НЕМАЄ: місяць = date_trunc('month', meeting_date),
 -- єдине джерело. Легасі-записи (місячний бакет) переносяться на 1-ше число свого місяця —

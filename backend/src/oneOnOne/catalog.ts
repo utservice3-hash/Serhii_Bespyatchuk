@@ -31,7 +31,14 @@ export interface FormDef {
   sections: FormSection[];
   enps?: boolean;        // тип В: блок eNPS (0-10 + причина) — структурний, не звичайне питання
   notes?: boolean;       // тип В: панель «Нотатки HR» — структурна
+  /** Типи A/Б: блок «Задоволеність компанією» (1-10). СТРУКТУРНИЙ — свідомо НЕ в `sections`,
+   *  тому НЕ потрапляє у scoreKeys() і НЕ впливає на overall ЗА ПОБУДОВОЮ (а не за домовленістю):
+   *  інакше нові зустрічі стали б непорівнянні з історичними. Для типу В роль цього
+   *  показника грає eNPS-бал. */
+  satisfaction?: boolean;
 }
+/** Текст питання задоволеності — один на всі типи (блок структурний, не редагується як питання). */
+export const SATISFACTION_LABEL = "Наскільки ти задоволений роботою в компанії? (1-10)";
 
 // eNPS-класифікація (шкала 0-10).
 export const ENPS = {
@@ -63,6 +70,7 @@ export function computeOverall(
 // ── Дефолтні набори (version 1) ──────────────────────────────────────────────
 
 const FORM_A: FormDef = {
+  satisfaction: true,
   sections: [
     { key: "overview", title: "Огляд", questions: [
       { qKey: "a_prev", label: "Короткий огляд обговореного на попередній зустрічі.", field: "text" },
@@ -93,6 +101,7 @@ const FORM_A: FormDef = {
 };
 
 const FORM_B: FormDef = {
+  satisfaction: true,
   sections: [
     { key: "overview", title: "Огляд", questions: [
       { qKey: "b_prev", label: "Короткий огляд обговореного на попередній зустрічі.", field: "text" },
@@ -159,7 +168,38 @@ const FORM_V: FormDef = {
 
 export const DEFAULT_FORMS: Record<OneOnOneType, FormDef> = { A: FORM_A, B: FORM_B, V: FORM_V };
 
-/** Сид версії 1 для кожного типу, якщо ще нема (ідемпотентно). Активує version 1. */
+/**
+ * РАЗОВЕ доливання блоку «Задоволеність» у типи A/Б для БД, посіяних ДО його появи.
+ * Створює НОВУ версію = поточні активні питання + прапорець (питання адміна зберігаються,
+ * стара версія лишається для історії).
+ *
+ * 🔴 Умова — «чи БУВ КОЛИСЬ прапорець у якійсь версії», а не «чи є він у активній». Інакше
+ * міграція воювала б з адміном: він свідомо вимикає блок у редакторі — а найближчий рестарт
+ * мовчки вмикає назад. Разова міграція має спрацювати РАЗ і більше ніколи.
+ */
+export async function ensureSatisfactionBlock(pool: Pool): Promise<number> {
+  let upgraded = 0;
+  for (const type of ["A", "B"] as OneOnOneType[]) {
+    const ever = await pool.query(
+      "SELECT 1 FROM one_on_one_forms WHERE type=$1 AND (questions->>'satisfaction') = 'true' LIMIT 1", [type]);
+    if (ever.rowCount) continue;                     // уже мігровано (або адмін керує сам)
+    const cur = await pool.query<{ version: number; questions: FormDef }>(
+      "SELECT version, questions FROM one_on_one_forms WHERE type=$1 AND is_active ORDER BY version DESC LIMIT 1", [type]);
+    if (!cur.rows[0]) continue;                      // форми ще нема — її посіє seed із прапорцем
+    const next: FormDef = { ...cur.rows[0].questions, satisfaction: true };
+    const nv = await pool.query<{ v: number }>(
+      "SELECT COALESCE(MAX(version),0)+1 AS v FROM one_on_one_forms WHERE type=$1", [type]);
+    await pool.query("UPDATE one_on_one_forms SET is_active=false WHERE type=$1 AND is_active", [type]);
+    await pool.query(
+      `INSERT INTO one_on_one_forms (type, version, questions, is_active, created_by)
+       VALUES ($1,$2,$3,true,NULL) ON CONFLICT (type, version) DO NOTHING`,
+      [type, nv.rows[0].v, JSON.stringify(next)]);
+    upgraded++;
+  }
+  return upgraded;
+}
+
+/** Сид версії 1 для кожного типу, якщо ще нема (ідемпотентно) + доливання структурних блоків. */
 export async function seedOneOnOneForms(pool: Pool): Promise<void> {
   for (const type of ONE_ON_ONE_TYPES) {
     const has = await pool.query("SELECT 1 FROM one_on_one_forms WHERE type=$1 LIMIT 1", [type]);
@@ -170,4 +210,5 @@ export async function seedOneOnOneForms(pool: Pool): Promise<void> {
       [type, JSON.stringify(DEFAULT_FORMS[type])]
     );
   }
+  await ensureSatisfactionBlock(pool);
 }

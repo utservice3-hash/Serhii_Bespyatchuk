@@ -1945,7 +1945,9 @@ export type O2OType = "A" | "B" | "V";
 export type O2OFieldType = "score" | "text" | "score_text";
 export interface O2OQuestion { qKey: string; label: string; field: O2OFieldType; quarterly?: boolean }
 export interface O2OSection { key: string; title: string; note?: string; questions: O2OQuestion[] }
-export interface O2OFormBody { sections: O2OSection[]; enps?: boolean; notes?: boolean }
+export interface O2OFormBody { sections: O2OSection[]; enps?: boolean; notes?: boolean;
+  /** A/Б: структурний блок «Задоволеність компанією» — поза sections, тож поза overall. */
+  satisfaction?: boolean }
 export interface O2OForm { type: string; version: number; questions: O2OFormBody; is_active?: boolean }
 export interface OneOnOneSubject {
   id: number; name: string; team_id: number | null; team_name: string | null;
@@ -1962,10 +1964,12 @@ export interface OneOnOneRecord {
   // meeting_date — АВТОРИТЕТНА дата зустрічі: саме вона визначає запис (не місяць).
   subject_manager_id: number; type: string; meeting_date: string; form_version: number;
   answers: OneOnOneAnswers; overall: number | null; enps_score: number | null; enps_reason: string | null;
+  // окремий показник, НЕ входить в overall (для типу В дорівнює enps_score)
+  satisfaction_score: number | null;
   notes: O2ONotes | null; conducted_by: number | null; conducted_by_name?: string | null; updated_at?: string;
 }
 export interface O2OMeeting {
-  meeting_date: string; overall: number | null; enps_score: number | null;
+  meeting_date: string; overall: number | null; enps_score: number | null; satisfaction_score: number | null;
   form_version: number; conducted_by: number | null; conducted_by_name: string | null; updated_at: string;
 }
 export async function fetchO2OConductTypes(): Promise<{ types: string[]; crossview: boolean; canEdit: boolean }> {
@@ -2001,11 +2005,12 @@ export async function fetchOneOnOne(type: string, managerId: number, date: strin
 export async function saveOneOnOne(p: {
   type: string; subjectManagerId: number; meetingDate: string; answers: OneOnOneAnswers;
   enpsScore?: number | null; enpsReason?: string | null; notes?: O2ONotes | null;
+  satisfactionScore?: number | null;
 }): Promise<{ overall: number | null }> {
   const { data } = await api.post("/one-on-ones/record", p);
   return { overall: data?.overall ?? null };
 }
-export interface OneOnOneStatRow { id: number; name: string; team_id: number | null; team_name: string | null; meeting_date: string; month: string; overall: number | null; enps_score: number | null; form_version: number; answers: OneOnOneAnswers; }
+export interface OneOnOneStatRow { id: number; name: string; team_id: number | null; team_name: string | null; meeting_date: string; month: string; overall: number | null; enps_score: number | null; satisfaction_score: number | null; form_version: number; answers: OneOnOneAnswers; }
 export async function fetchOneOnOneStats(type: string, months = 6): Promise<OneOnOneStatRow[]> {
   const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores", { params: { type, months } });
   return data?.rows ?? [];

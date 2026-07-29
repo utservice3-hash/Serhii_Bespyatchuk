@@ -167,7 +167,7 @@ oneOnOnesRouter.get("/meetings/:type/:managerId", async (req, res) => {
   const monthsP = push(months - 1);
   const r = await pool.query(
     `SELECT to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date, o.overall, o.enps_score,
-            o.form_version, o.conducted_by, o.updated_at,
+            o.satisfaction_score, o.form_version, o.conducted_by, o.updated_at,
             COALESCE(mm.name, u.email) AS conducted_by_name
        FROM one_on_ones o
        LEFT JOIN users u ON u.id = o.conducted_by
@@ -190,7 +190,7 @@ oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
   const meetingDate = dateOf(req.query.date) ?? kyivToday();
   const r = await pool.query(
     `SELECT o.subject_manager_id, o.type, to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
-            o.form_version, o.answers, o.overall,
+            o.form_version, o.answers, o.overall, o.satisfaction_score,
             o.enps_score, o.enps_reason, o.notes, o.conducted_by, o.updated_at,
             COALESCE(mm.name, u.email) AS conducted_by_name
        FROM one_on_ones o
@@ -209,7 +209,7 @@ oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
   if (!canConduct(req.auth!, type)) return res.status(403).json({ error: "Немає доступу" });
   const form = await activeForm(type);
   res.json({ subject_manager_id: managerId, type, meeting_date: meetingDate, form_version: form?.version ?? 1,
-    answers: {}, overall: null, enps_score: null, enps_reason: null, notes: null, conducted_by: null });
+    answers: {}, overall: null, satisfaction_score: null, enps_score: null, enps_reason: null, notes: null, conducted_by: null });
 });
 
 /** Зберегти запис (upsert). Ставить conducted_by=я, form_version=активна. */
@@ -237,18 +237,25 @@ oneOnOnesRouter.post("/record", async (req, res) => {
   const enpsScore = type === "V" && Number.isInteger(req.body?.enpsScore) ? Number(req.body.enpsScore) : null;
   const enpsReason = type === "V" ? (req.body?.enpsReason ?? null) : null;
   const notes = type === "V" ? (req.body?.notes ?? null) : null;
+  // ЗАДОВОЛЕНІСТЬ: для A/Б — власний структурний блок (1-10); для В — це і є eNPS-бал
+  // (єдине джерело для історії). У `overall` НЕ входить — окремий показник.
+  const rawSat = Number(req.body?.satisfactionScore);
+  const satisfaction = type === "V"
+    ? enpsScore
+    : (Number.isInteger(rawSat) && rawSat >= 1 && rawSat <= 10 ? rawSat : null);
   const overall = overallFrom(type, answers, enpsScore);
   const form = await activeForm(type);
   await pool.query(
-    `INSERT INTO one_on_ones (subject_manager_id, type, meeting_date, form_version, conducted_by, answers, overall, enps_score, enps_reason, notes, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+    `INSERT INTO one_on_ones (subject_manager_id, type, meeting_date, form_version, conducted_by, answers, overall, enps_score, enps_reason, notes, satisfaction_score, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
      ON CONFLICT (subject_manager_id, type, meeting_date) DO UPDATE SET
        answers=EXCLUDED.answers, overall=EXCLUDED.overall, enps_score=EXCLUDED.enps_score,
        enps_reason=EXCLUDED.enps_reason, notes=EXCLUDED.notes, conducted_by=EXCLUDED.conducted_by,
+       satisfaction_score=EXCLUDED.satisfaction_score,
        form_version=EXCLUDED.form_version, updated_at=now()`,
     [managerId, type, meetingDate, form?.version ?? 1, auth.userId, JSON.stringify(answers), overall,
-     enpsScore, enpsReason, notes ? JSON.stringify(notes) : null]);
-  res.json({ ok: true, overall, meetingDate });
+     enpsScore, enpsReason, notes ? JSON.stringify(notes) : null, satisfaction]);
+  res.json({ ok: true, overall, satisfaction, meetingDate });
 });
 
 // ── Історія / аналітика (view-скоуп) ─────────────────────────────────────────
@@ -266,7 +273,7 @@ oneOnOnesRouter.get("/stats/scores", async (req, res) => {
     `SELECT m.id, m.name, m.team_id, t.name AS team_name,
             to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
             to_char(date_trunc('month', o.meeting_date),'YYYY-MM') AS month,
-            o.overall, o.enps_score, o.form_version, o.answers
+            o.overall, o.enps_score, o.satisfaction_score, o.form_version, o.answers
        FROM one_on_ones o
        JOIN managers m ON m.id = o.subject_manager_id
        LEFT JOIN teams t ON t.id = m.team_id

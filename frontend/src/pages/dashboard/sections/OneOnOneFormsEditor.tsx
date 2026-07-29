@@ -58,6 +58,18 @@ export function OneOnOneFormsEditor({ type }: { type: string }) {
         </div>
       )}
 
+      {/* Структурний блок: живе ПОЗА sections, тож у загальну оцінку не потрапляє за побудовою. */}
+      {(type === "A" || type === "B") && (
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <input type="checkbox" checked={!!draft.satisfaction} onChange={(e) => mutate((d) => { d.satisfaction = e.target.checked; })} /> Блок «Задоволеність компанією» (1-10)
+          </label>
+          <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 5 }}>
+            Окремий показник — у загальну оцінку <b>не входить</b> (щоб історія лишалась порівнянною).
+          </div>
+        </div>
+      )}
+
       {draft.sections.map((sec, si) => (
         <div key={sec.key} style={{ background: "rgba(128,128,128,.05)", borderRadius: 16, padding: 14, marginBottom: 12 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
