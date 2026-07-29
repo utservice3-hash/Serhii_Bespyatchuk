@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { fetchO2OForm, saveO2OForm, type O2OForm, type O2OFormBody, type O2OFieldType } from "../../../api";
-import { CARD } from "./OneOnOneSection";
+import { CARD, AutoTextarea } from "./OneOnOneSection";
 
 const FIELD: CSSProperties = { font: "inherit", fontSize: 13.5, padding: "9px 12px", borderRadius: 12, border: "none", background: "rgba(128,128,128,.08)", color: "var(--text)", outline: "none" };
 
@@ -71,8 +71,8 @@ export function OneOnOneFormsEditor({ type }: { type: string }) {
           {sec.questions.map((q, qi) => (
             <div key={q.qKey} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "start", padding: "10px 0", borderTop: qi ? "1px dashed rgba(128,128,128,.18)" : "none" }}>
               <div>
-                <textarea value={q.label} onChange={(e) => mutate((d) => { d.sections[si].questions[qi].label = e.target.value; })} rows={2}
-                  style={{ ...FIELD, width: "100%", resize: "vertical", background: "var(--card-bg)" }} />
+                <AutoTextarea value={q.label} onChange={(e) => mutate((d) => { d.sections[si].questions[qi].label = e.target.value; })}
+                  style={{ ...FIELD, width: "100%", background: "var(--card-bg)" }} />
                 <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
                   <select value={q.field} onChange={(e) => mutate((d) => { d.sections[si].questions[qi].field = e.target.value as O2OFieldType; })}
                     style={{ ...FIELD, padding: "5px 8px" }}>

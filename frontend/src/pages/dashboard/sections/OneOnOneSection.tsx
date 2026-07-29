@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint,
@@ -85,6 +85,19 @@ function ScoreTrack({ value, onChange, from = 1, to = 10, enps = false }: { valu
         <div style={{ fontSize: 11, color: "var(--text-muted)" }}>/ {to}</div>
       </div>
     </div>
+  );
+}
+
+/** Textarea, що АВТО-РОСТЕ під вміст (без внутрішнього скролу, нічого не ріже).
+ *  Підганяє висоту при наборі і коли підвантажується збережений запис. */
+export function AutoTextarea({ style, value, onChange, ...rest }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const fit = () => { const el = ref.current; if (!el) return; el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; };
+  useLayoutEffect(fit, [value]);
+  return (
+    <textarea ref={ref} value={value} rows={2}
+      onChange={(e) => { onChange?.(e); fit(); }}
+      style={{ ...style, overflow: "hidden", resize: "none", whiteSpace: "pre-wrap", wordBreak: "break-word" }} {...rest} />
   );
 }
 
@@ -267,14 +280,14 @@ export function OneOnOneSection() {
                     {sec.note && <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "0 0 12px" }}>{sec.note}</p>}
                     {sec.questions.map((q) => (
                       <div key={q.qKey} style={{ marginBottom: 16 }}>
-                        <label style={{ display: "block", fontSize: 14.5, lineHeight: 1.5, marginBottom: 8 }}>
+                        <label style={{ display: "block", fontSize: 14.5, lineHeight: 1.5, marginBottom: 8, overflowWrap: "anywhere" }}>
                           {q.label}{q.quarterly && <span style={{ marginLeft: 8, fontSize: 10.5, color: "#8b5cf6", background: "rgba(139,92,246,.12)", padding: "2px 8px", borderRadius: 20, whiteSpace: "nowrap" }}>1 раз на квартал</span>}
                         </label>
                         {(q.field === "score" || q.field === "score_text") && (
                           <ScoreTrack value={answers[q.qKey]?.score} onChange={(v) => setAns(q.qKey, { score: v })} />
                         )}
                         {(q.field === "text" || q.field === "score_text") && (
-                          <textarea value={answers[q.qKey]?.text ?? ""} onChange={(e) => setAns(q.qKey, { text: e.target.value })} rows={2}
+                          <AutoTextarea value={answers[q.qKey]?.text ?? ""} onChange={(e) => setAns(q.qKey, { text: e.target.value })}
                             style={{ ...FIELD, marginTop: q.field === "score_text" ? 10 : 0 }} />
                         )}
                       </div>
@@ -290,7 +303,7 @@ export function OneOnOneSection() {
                     <label style={{ display: "block", fontSize: 14.5, lineHeight: 1.5, marginBottom: 8 }}>Наскільки ймовірно порекомендуєш компанію як місце роботи? (0-10)</label>
                     <ScoreTrack value={enpsScore ?? undefined} onChange={setEnpsScore} from={0} to={10} enps />
                     <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "8px 0 10px" }}>0-6 критик · 7-8 нейтрал · 9-10 промоутер</div>
-                    <textarea value={enpsReason} onChange={(e) => setEnpsReason(e.target.value)} rows={2} placeholder="Чому саме така оцінка?" style={FIELD} />
+                    <AutoTextarea value={enpsReason} onChange={(e) => setEnpsReason(e.target.value)} placeholder="Чому саме така оцінка?" style={FIELD} />
                   </div>
                 )}
 
@@ -319,7 +332,7 @@ export function OneOnOneSection() {
                     {NOTE_FIELDS.map((f) => (
                       <div key={f.key} style={{ marginBottom: 12 }}>
                         <label style={{ display: "block", fontSize: 13.5, marginBottom: 6 }}>{f.icon} {f.label}</label>
-                        <textarea value={(notes[f.key] as string) ?? ""} onChange={(e) => setNotes((p) => ({ ...p, [f.key]: e.target.value }))} rows={2} style={FIELD} />
+                        <AutoTextarea value={(notes[f.key] as string) ?? ""} onChange={(e) => setNotes((p) => ({ ...p, [f.key]: e.target.value }))} style={FIELD} />
                       </div>
                     ))}
                   </div>
