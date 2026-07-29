@@ -35,6 +35,7 @@ import { freshnessWatch, abandonedStagesWatch } from "./jobs/freshnessWatch.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
 import { refreshRoles } from "./auth/rbac.js";
+import { seedOneOnOneForms } from "./oneOnOne/catalog.js";
 import { bankRouter } from "./routes/bank.js";
 import { trackerRouter } from "./routes/tracker.js";
 import { syncBank } from "./jobs/syncBank.js";
@@ -437,6 +438,8 @@ const onListen = () => console.log(`Backend listening on ${config.host ?? "0.0.0
 refreshRoles()
   .catch((e) => console.error("refreshRoles at boot failed (gate fail-open until next refresh):", e))
   .finally(() => {
+    // 1×1 форми: гарантуємо наявність version 1 (A/Б/В) — ідемпотентно, не блокує старт.
+    seedOneOnOneForms(pool).catch((e) => console.error("seedOneOnOneForms at boot failed:", e));
     if (config.host) app.listen(config.port, config.host, onListen);
     else app.listen(config.port, onListen);
   });

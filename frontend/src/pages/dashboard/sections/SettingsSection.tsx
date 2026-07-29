@@ -26,6 +26,8 @@ const PERMS: { key: string; label: string; hint?: string }[] = [
   { key: "view_balances", label: "Бачити баланси рахунків (Виписка)", hint: "кнопка «💰 Баланси» + залишки; лише адмін" },
   { key: "view_bank_totals", label: "Бачити підсумки виписки (Виписка)", hint: "картка агрегатів надходжень/платежів; лише адмін" },
   { key: "view_cashflow", label: "Бачити кешфлоу (Виписка)", hint: "помісячний рух коштів; admin + Фінансист" },
+  { key: "view_all_1x1", label: "Наскрізний доступ до 1×1", hint: "усі типи/люди/історія/аналітика Ван-ту-ван; HR/СЕО/ОД" },
+  { key: "edit_1x1_forms", label: "Редагувати питання 1×1", hint: "керувати наборами питань Ван-ту-ван у Налаштуваннях" },
 ];
 const SCOPES: { key: "own" | "team" | "company"; label: string; sub: string }[] = [
   { key: "own", label: "Свої", sub: "лише власні" },

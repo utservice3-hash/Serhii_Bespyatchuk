@@ -675,6 +675,45 @@ CREATE TABLE IF NOT EXISTS one_on_ones (
 );
 CREATE INDEX IF NOT EXISTS idx_one_on_ones_month ON one_on_ones(month);
 
+-- 1×1 ПЕРЕРОБКА: три типи (A/Б/В), конфігуровані набори питань, приватність.
+-- Тип запису + версія форми, проти якої заповнено (історія рендериться проти СВОЄЇ версії).
+-- eNPS (тип В) — ОКРЕМЕ поле, не мішається з overall. notes — панель «Нотатки HR» (тип В).
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'A';
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS form_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS enps_score INTEGER;   -- 0..10 (тип В)
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS enps_reason TEXT;
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS notes JSONB;          -- панель «Нотатки HR»
+-- Міграція PK (subject_manager_id, month) → (subject_manager_id, type, month). Ідемпотентно:
+-- наявні записи = тип 'A' (дефолт колонки), тож нова унікальність не конфліктує.
+DO $$
+DECLARE pkcols text; pkname text;
+BEGIN
+  SELECT c.conname,
+         string_agg(a.attname, ',' ORDER BY array_position(c.conkey, a.attnum))
+    INTO pkname, pkcols
+  FROM pg_constraint c
+  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+  WHERE c.conrelid = 'one_on_ones'::regclass AND c.contype = 'p'
+  GROUP BY c.conname;
+  IF pkcols IS DISTINCT FROM 'subject_manager_id,type,month' THEN
+    IF pkname IS NOT NULL THEN EXECUTE 'ALTER TABLE one_on_ones DROP CONSTRAINT ' || quote_ident(pkname); END IF;
+    ALTER TABLE one_on_ones ADD PRIMARY KEY (subject_manager_id, type, month);
+  END IF;
+END $$;
+
+-- Версіоновані набори питань. questions JSONB = { sections:[{key,title,note?,questions:[{qKey,label,field,quarterly?}]}], enps?, notes? }.
+-- Редактор у Налаштуваннях створює НОВУ version; історія тримається за (type, version, qKey).
+CREATE TABLE IF NOT EXISTS one_on_one_forms (
+  type       TEXT NOT NULL,                 -- 'A' | 'B' | 'V'
+  version    INTEGER NOT NULL,
+  questions  JSONB NOT NULL,
+  is_active  BOOLEAN NOT NULL DEFAULT false,-- активна версія типу (одна на тип)
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (type, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_o2o_forms_active ON one_on_one_forms(type) WHERE is_active;
+
 -- Графік чергування: тімлід (РНК) / адмін призначає менеджерів на конкретні дні
 -- (закривати вхідні заявки у вечірні/вихідні «вікна», де реакція провисає).
 -- Один рядок = (день × менеджер × зміна). shift: 'day' | 'evening' | 'weekend'.
@@ -1133,6 +1172,29 @@ ON CONFLICT (key) DO NOTHING;
 INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
 VALUES ('hr', 'HR', false, 'company', '{"tasks":true,"oneonone":true}'::jsonb, '{}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
+
+-- ── 1×1 ПЕРЕРОБКА · права + ролі СЕО/Опер.директор ──────────────────────────
+-- view_all_1x1  = НАСКРІЗНИЙ доступ до 1×1 (усі типи/люди/історія/аналітика), поза conductor-скоупом.
+-- edit_1x1_forms = редагувати набори питань 1×1 у Налаштуваннях (створює нову версію форми).
+-- HR отримує обидва (додаємо РАЗ, якщо ще нема — не перетираємо ручні правки адміна).
+UPDATE roles SET permissions = permissions || '{"view_all_1x1":true}'::jsonb
+  WHERE key = 'hr' AND NOT (permissions ? 'view_all_1x1');
+UPDATE roles SET permissions = permissions || '{"edit_1x1_forms":true}'::jsonb
+  WHERE key = 'hr' AND NOT (permissions ? 'edit_1x1_forms');
+
+-- Ролі СЕО / Опер.директор — company-scope, admin-суперсет (усі екрани + admin-права),
+-- ПЛЮС наскрізний перегляд/редагування 1×1. Суперсет — щоб апгрейд наявних адмін-акаунтів
+-- (utservice3, kriptokoval) НЕ забирав можливостей. Ідемпотентно (ON CONFLICT DO NOTHING).
+INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
+SELECT k.key, k.name, false, 'company', r.screen_access,
+       r.permissions || '{"view_all_1x1":true,"edit_1x1_forms":true}'::jsonb
+FROM (VALUES ('ceo','СЕО'), ('opdir','Операційний директор')) AS k(key,name)
+CROSS JOIN (SELECT screen_access, permissions FROM roles WHERE key='admin') r
+ON CONFLICT (key) DO NOTHING;
+
+-- Апгрейд власників у ролі СЕО/ОД (лише якщо зараз чистий 'admin' → суперсет, без втрати прав).
+UPDATE users SET role_override = 'ceo'   WHERE email = 'utservice3@gmail.com'  AND role_override = 'admin';
+UPDATE users SET role_override = 'opdir' WHERE email = 'kriptokoval@gmail.com' AND role_override = 'admin';
 
 -- Службові збори банку (комісії) — позначаємо, щоб не показувати серед вихідних платежів.
 -- Патерни: counterparty_name містить «ЗА ДЕБЕТУВАННЯ РАХУНК…»; purpose починається з «Комісія…».
