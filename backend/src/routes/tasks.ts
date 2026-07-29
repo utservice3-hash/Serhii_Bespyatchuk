@@ -60,19 +60,30 @@ tasksRouter.get("/", async (req, res) => {
   const conditions: string[] = [];
   const params: unknown[] = [];
 
+  // 🔴 ВЛАСНІСТЬ ЗАДАЧ: ОСОБИСТА задача = БЕЗ виконавця (`assignee_id IS NULL`) — приватна
+  // творцю (`created_by`), НЕ протікає між акаунтами навіть адміну. ПРИЗНАЧЕНА (assignee_id
+  // NOT NULL — KPI/реактивація/manual менеджеру) — видимість за роллю (годує «одну цифру» у
+  // Звіті, тож НЕ ховаємо). Розріз по assignee_id, не по task_type (уже так міркує гілка лід).
   if (auth.role === "manager") {
+    // Менеджер: задачі, ПРИЗНАЧЕНІ йому + ВЛАСНІ особисті (щоб бачив свої, як canTouchTask).
     params.push(auth.managerId);
-    conditions.push(`t.assignee_id = $${params.length}`);
+    const mp = params.length;
+    params.push(auth.userId);
+    conditions.push(`(t.assignee_id = $${mp} OR (t.assignee_id IS NULL AND t.created_by = $${params.length}))`);
   } else if (auth.role === "team_lead") {
     // Team-lead sees their own team's tasks + anything they created themselves.
-    // NOT the admin's personal tasks (those have no assignee — the old
+    // NOT other accounts' personal tasks (those have no assignee — the old
     // `assignee_id IS NULL` clause leaked them into every team-lead's view).
     params.push(auth.teamId);
     const teamP = params.length;
     params.push(auth.userId);
     conditions.push(`(m.team_id = $${teamP} OR t.created_by = $${params.length})`);
+  } else {
+    // admin (та інші company-ролі): УСІ призначені/KPI задачі (наглядова видимість) + ЛИШЕ
+    // ВЛАСНІ особисті. Чужі особисті (assignee-less, створені іншим акаунтом) — приватні.
+    params.push(auth.userId);
+    conditions.push(`(t.assignee_id IS NOT NULL OR t.created_by = $${params.length})`);
   }
-  // admin sees everything (frontend splits into «Мої» / «Усі» tabs).
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -314,8 +325,13 @@ async function canTouchTask(
   taskId: number
 ): Promise<{ ok: boolean; found: boolean }> {
   if (auth.role === "admin") {
-    const r = await pool.query(`SELECT 1 FROM tasks WHERE id = $1`, [taskId]);
-    return { ok: (r.rowCount ?? 0) > 0, found: (r.rowCount ?? 0) > 0 };
+    // Дзеркалить GET: admin торкається УСІХ призначених задач + ЛИШЕ власних особистих
+    // (чужі особисті — приватні). `found` — чи існує задача взагалі (для коректного 404 vs 403).
+    const r = await pool.query<{ assignee_id: number | null; created_by: number | null }>(
+      `SELECT assignee_id, created_by FROM tasks WHERE id = $1`, [taskId]);
+    const t = r.rows[0];
+    if (!t) return { ok: false, found: false };
+    return { ok: t.assignee_id !== null || t.created_by === auth.userId, found: true };
   }
   const r = await pool.query<{ assignee_id: number | null; created_by: number | null; team_id: number | null }>(
     `SELECT t.assignee_id, t.created_by, m.team_id
