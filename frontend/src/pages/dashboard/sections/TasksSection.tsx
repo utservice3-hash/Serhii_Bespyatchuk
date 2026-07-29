@@ -417,10 +417,10 @@ export function TasksSection({
         </div>
       </div>
 
-      {(isAdmin || role === "team_lead") && (
+      {(isAdmin || role === "team_lead" || role === "company") && (
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <button style={tabBtn(adminTab === "mine")} onClick={() => setAdminTab("mine")}>👤 Мої задачі</button>
-          <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>{isAdmin ? "🗂️ Усі задачі" : "👥 Командні задачі"}</button>
+          <button style={tabBtn(adminTab === "mine")} onClick={() => setAdminTab("mine")}>👤 Свої задачі</button>
+          <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>{isAdmin || role === "company" ? "🗂️ Усі задачі" : "👥 Командні задачі"}</button>
         </div>
       )}
 
@@ -475,7 +475,7 @@ export function TasksSection({
                     title: `План тижня ${tDdmm(wk)}–${tDdmm(tAddDays(wk, 6))}`, department: kids[0].department ?? null };
                 });
                 // Перемикач «Мої / Усі(admin) / Командні(team_lead)»: «Мої» = свій assignee.
-                if ((isAdmin || role === "team_lead") && adminTab === "mine") { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
+                if ((isAdmin || role === "team_lead" || role === "company") && adminTab === "mine") { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
                 if (assigneeFilter !== "") { base = base.filter((t) => t.assigneeId === assigneeFilter); synths = synths.filter((s) => s.assigneeId === assigneeFilter); }
                 if (statusFilter === "active") { base = base.filter((t) => t.status !== "done"); synths = synths.filter((s) => s.status !== "done"); }
                 else if (statusFilter === "done") { base = base.filter((t) => t.status === "done"); synths = synths.filter((s) => s.status === "done"); }
