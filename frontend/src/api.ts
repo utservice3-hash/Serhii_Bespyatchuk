@@ -604,6 +604,8 @@ export interface ReportPlanManager {
   plan: number; fact: number; expect: number; pct: number | null;
   factSuccess: number; factPaid: number; // #1 круг оплати: факт = успішно ⊎ оплачено
   expectThisMonth: number; expectNextMonth: number; // #2 за плановою датою оплати
+  // #P1 динамічна тижнева ціль (Variant A: manual ?? dynamic — одна цифра з Задачником).
+  week: { target: number; dynamic: number; manual: number | null; isManual: boolean; fact: number; dayTarget: number; weeksLeft: number; presentDaysLeftWeek: number };
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   status: "g" | "a" | "r"; needPerDay: number; remainingWorkdays: number;

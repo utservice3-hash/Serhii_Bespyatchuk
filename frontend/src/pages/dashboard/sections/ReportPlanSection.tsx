@@ -118,7 +118,6 @@ export function ReportPlanSection({ auth, teams }: {
 
   const data = monthData; // список/сортування/glance — за МІСЯЦЕМ (стабільно, без стрибків)
   const weekByMgr = useMemo(() => new Map((weekData?.managers ?? []).map((m) => [m.managerId, m])), [weekData]);
-  const focusByMgr = useMemo(() => new Map((focus?.managers ?? []).map((m) => [m.managerId, m])), [focus]);
   const viewerId = data?.viewerManagerId ?? auth.managerId;
   const selfRow = data?.managers.find((m) => m.managerId === viewerId) ?? null;
   const roleChip = auth.role === "admin" ? "усі команди" : "свою команду";
@@ -212,7 +211,7 @@ export function ReportPlanSection({ auth, teams }: {
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
           <ResponseTimeCard from={monthPeriod.from} to={monthPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
           {auth.role === "manager" && selfRow && (
-            <MgrStrip m={selfRow} mWeek={weekByMgr.get(selfRow.managerId)} fy={focusByMgr.get(selfRow.managerId)}
+            <MgrStrip m={selfRow} mWeek={weekByMgr.get(selfRow.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
               weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} drillPeriod={drillPeriod} role={auth.role} isSelf
               open={openMgr === selfRow.managerId} onToggle={() => setOpenMgr(openMgr === selfRow.managerId ? null : selfRow.managerId)} />
@@ -221,7 +220,7 @@ export function ReportPlanSection({ auth, teams }: {
             ↓ {auth.role === "manager" ? "Твоя команда" : "Відсортовано"} за <b>місячним</b> станом — хто відстає, той угорі
           </div>
           {data.managers.map((m) => (
-            <MgrStrip key={m.managerId} m={m} mWeek={weekByMgr.get(m.managerId)} fy={focusByMgr.get(m.managerId)}
+            <MgrStrip key={m.managerId} m={m} mWeek={weekByMgr.get(m.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
               weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} drillPeriod={drillPeriod} role={auth.role}
               isSelf={m.managerId === viewerId}
@@ -293,17 +292,14 @@ function Donut({ pct, title }: { pct: number; title?: string }) {
 }
 
 // Смуга менеджера: МІСЯЦЬ (головна траєкторія, статус+сортування) + ТИЖДЕНЬ (поточний), обидва завжди (#11).
-function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, drillPeriod, role, isSelf, open, onToggle }: {
-  m: ReportPlanManager; mWeek: ReportPlanManager | undefined; fy: ReportPlanManager | undefined;
+function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillPeriod, role, isSelf, open, onToggle }: {
+  m: ReportPlanManager; mWeek: ReportPlanManager | undefined;
   focusDay: string; today: string; elapsed: number; remWd: number; weekLabel: string;
   drillPeriod: { from: string; to: string }; role: string; isSelf?: boolean; open: boolean; onToggle: () => void;
 }) {
   const s = m.status; // статус за МІСЯЦЕМ
   const pct = m.plan > 0 ? Math.round((m.fact / m.plan) * 100) : 0;
   const smax = Math.max(...m.spark, 1);
-  const futureFocus = focusDay > today;
-  const cr = fy?.created ?? 0, nw = fy?.new ?? 0, rp = fy?.rep ?? 0;
-  const dispN = fy?.kpi.dispatch.fact ?? 0, dispRev = fy?.kpi.dispatch.revenue ?? 0, recv = fy?.fact ?? 0;
   const showWhy = s !== "g";
   // Сер.чек: виграно_дохід÷виграно_угод (==КВП); нема виграних, а є відправлені авто →
   // Σ сума відправлених÷авто (load_at, signed) з поміткою «*відпр.»; нема й авто → «—».
@@ -324,31 +320,27 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: SCOL[s] }} />{SLBL[s]} · міс
           </span>
         </div>
-        {/* МІСЯЦЬ — план-бар (головна траєкторія) + #16 очікуємо + #17 прогноз */}
+        {/* ТИЖДЕНЬ — ДИНАМІЧНА ціль (Variant A: manual ?? dynamic) */}
+        <TrajBlock title={`Тиждень ${weekLabel}`} fact={m.week.fact} plan={m.week.target}
+          pct={m.week.target > 0 ? Math.round((m.week.fact / m.week.target) * 100) : 0}
+          status={m.week.target <= 0 ? "g" : m.week.fact >= m.week.target ? "g" : m.week.fact >= m.week.target * (elapsed || 1) ? "a" : "r"}
+          footer={<div title="Динамічна тижнева ціль = (місячний план − факт місяця) ÷ тижнів, що лишились. Присутні робочі дні враховують погоджені відсутності.">
+            {m.week.isManual ? <>вручну задано у Задачнику · <b style={{ color: AMBER }}>вручну</b></> : <>динамічний план тижня · залишок ÷ тижнів, що лишились</>}
+          </div>} />
+        {/* МІСЯЦЬ — план-бар (сирий план) + #16 очікуємо + #17 прогноз */}
         <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
           footer={<>
             <div>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.) · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 && m.monthInProgress ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</div>
-            <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати (коли має надійти). Цей / наступний календарний місяць, знімок «зараз».">
+            <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати. Цей / наступний календарний місяць.">
               💰 очікуємо <b style={{ color: GREEN }}>{k(m.expectThisMonth)}</b> цей · <b style={{ color: "var(--text)" }}>{k(m.expectNextMonth)}</b> наст. міс
             </div>
           </>} showTempo />
-        {/* ТИЖДЕНЬ — поточний */}
-        {mWeek ? (
-          <TrajBlock title={`Тиждень ${weekLabel}`} fact={mWeek.fact} plan={mWeek.plan}
-            pct={mWeek.plan > 0 ? Math.round((mWeek.fact / mWeek.plan) * 100) : 0} status={mWeek.status}
-            footer={<>очікуємо (план. дата) <b style={{ color: "var(--text)" }}>{k(mWeek.expectThisMonth)}</b> цей міс</>} />
-        ) : <div style={{ fontSize: 11.5, color: MUTED }}>тиждень —</div>}
-        {/* focus-day cluster + spark */}
+        {/* місячні стати + spark */}
         <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "flex-end" }}>
-          {futureFocus ? (
-            <div style={{ fontSize: 11.5, color: MUTED, textAlign: "right" }}>{ddmm(focusDay)}<br />ще попереду</div>
-          ) : (
-            <>
-              <Stat v={cr} l="створено" sub={`${nw}нов · ${rp}пост`} />
-              <Stat v={dispN} l="авто" sub={dispN ? (autoSplit(fy?.kpi.dispatch.repeat ?? 0, fy?.kpi.dispatch.leadgen ?? 0, fy?.kpi.dispatch.ad ?? 0, fy?.kpi.dispatch.undef ?? 0) || `${k(dispRev)} ₴`) : "0 ₴"} />
-              <Stat v={recv} l="отримано ₴" money />
-            </>
-          )}
+          <Stat v={m.created} l="створено" sub={`${m.new}нов · ${m.rep}пост`} />
+          <Stat v={m.kpi.dispatch.fact ?? 0} l="авто ₴" sub={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`} />
+          <Stat v={chekFact ?? 0} l="ср. чек" money />
+          <Stat v={m.fact} l="отримано ₴" money />
           <div title="отримано по тижнях (5)" style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 34 }}>
             {m.spark.map((v, ix) => (
               <div key={ix} style={{ width: 6, borderRadius: 2, background: ix === m.spark.length - 1 ? BAR : "var(--border)", height: Math.max(3, (v / smax) * 34) }} />
@@ -357,15 +349,42 @@ function MgrStrip({ m, mWeek, fy, focusDay, today, elapsed, remWd, weekLabel, dr
         </div>
         <div style={{ color: MUTED, textAlign: "center", fontSize: 13, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</div>
       </div>
-      {/* KPI-рядок (місячний контекст) — усі факт/ціль, «план не задано» де немає (#13) */}
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "0 17px 13px", marginTop: -4 }}>
-        <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
-        <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
-        <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target}
-          extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴${(() => { const s = autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.undef ?? 0); return s ? " · " + s : ""; })()}`} />
-        <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
-          hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць». Σ signed суми ÷ Σ угод (не середнє середніх)."} />
-        <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
+      {/* Розвантаження картки: активність РОЗДІЛЕНО на 📅 Місяць і 🗓 Тиждень·задача */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, padding: "0 17px 13px" }}>
+        {/* 📅 Місяць — показники факт/план за місяць */}
+        <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <b style={{ fontSize: 12 }}>📅 Місяць · показники</b><span style={{ fontSize: 10.5, color: MUTED }}>факт / план за місяць</span>
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
+            <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
+            <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target} extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`}
+              hintTitle={`Авто за джерелом: ${autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}`} />
+            <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
+              hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць». Σ signed ÷ Σ угод."} />
+            <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
+          </div>
+        </div>
+        {/* 🗓 Тиждень · задача з Задачника — дзеркалить РЕАЛЬНІ метрики задачника (тижнева ціль) */}
+        <div style={{ border: `1px solid ${BAR}44`, borderRadius: 10, padding: "10px 12px", background: BAR + "08" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+            <b style={{ fontSize: 12 }}>🗓 Тиждень · задача з Задачника</b>
+            <span title="Тижнева ціль = задачник (вручну) або динамічна ціль. Одна цифра у Звіті й Задачнику." style={{ fontSize: 10, fontWeight: 700, color: BAR, background: BAR + "1a", padding: "2px 8px", borderRadius: 12, whiteSpace: "nowrap" }}>↔ синхронізовано із Задачником</span>
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            {mWeek ? (
+              <>
+                <Kpi lbl="реклама" fact={mWeek.kpi.ads.fact} target={mWeek.kpi.ads.target} />
+                <Kpi lbl="лідоген" fact={mWeek.kpi.leadgen.fact} target={mWeek.kpi.leadgen.target} />
+                <Kpi lbl="авто" fact={mWeek.kpi.dispatch.fact} target={mWeek.kpi.dispatch.target} />
+                <Kpi lbl="чек" fact={mWeek.kpi.avgCheck.fact} target={mWeek.kpi.avgCheck.target} money />
+                <Kpi lbl="конв" fact={mWeek.kpi.conversion.fact} target={mWeek.kpi.conversion.target} pctUnit />
+              </>
+            ) : <span style={{ fontSize: 11.5, color: MUTED }}>тижнева задача не задана</span>}
+            <Kpi lbl="гроші тижня" fact={m.week.fact} target={m.week.target} money hintTitle="Тижнева грошова ціль = вручну (Задачник) або динамічна (залишок місяця ÷ тижнів). Факт — отримано за цей тиждень." />
+          </div>
+        </div>
       </div>
       {showWhy && <WhyBox m={m} role={role} isSelf={!!isSelf} />}
       {open && <DayDrill managerId={m.managerId} period={drillPeriod} focusDay={focusDay} today={today} />}

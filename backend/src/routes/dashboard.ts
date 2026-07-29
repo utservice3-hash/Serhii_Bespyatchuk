@@ -4473,10 +4473,27 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const monthInProgress = isFullMonth && wdElapsed < wdTotal;
   const dobirByMgr = monthInProgress ? await money.newBusinessDobirByManager({ teamId }) : new Map<number, number>();
 
+  // #P1 ДИНАМІЧНА ТИЖНЕВА ЦІЛЬ (Variant A: manualWeekTarget ?? dynamicTarget.week — одна
+  // цифра скрізь). dynamicTarget рахує по місяцю `to` (ISO Пн–Нд тижні, present-days з
+  // урахуванням approved-відсутностей). manual = payment_amount з kpi_period парасольки,
+  // що покриває сьогодні (тімлід виставив вручну → перемагає).
+  const dynMonth = to.slice(0, 7) + "-01";
+  const dynRows = await plans.dynamicTarget({ managerId, teamId, month: dynMonth }, "week");
+  const dynByMgr = new Map(dynRows.map((r) => [r.managerId, r]));
+  const manualWeekMap = new Map<number, number>();
+  const mwRes = await pool.query<{ assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
+    `SELECT assignee_id, metrics_json FROM tasks
+      WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
+        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1`, [kyivToday]);
+  for (const r of mwRes.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manualWeekMap.set(r.assignee_id, Number(pa.target) || 0); }
+
   const managers = roster.map((m) => {
     const fact = Math.round(recvM.get(m.id)?.revenue ?? 0);
     const pl = planByMgr.get(m.id) ?? {};
     const plan = Math.round(moneyPlanByMgr.get(m.id) ?? 0); // грошовий план — plans-table
+    const dyn = dynByMgr.get(m.id);
+    const manualWeek = manualWeekMap.get(m.id) ?? null;
+    const weekTarget = manualWeek != null ? manualWeek : Math.round(dyn?.weekTarget ?? 0);
     const kind = m.team_id != null ? kvpTeamKind(m.team_id, m.team_name ?? "") : "rpk";
     const st = statusOf(fact, plan);
     const c = convM.get(m.id);
@@ -4495,6 +4512,10 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       monthInProgress,
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
+      // #P1 динамічна тижнева ціль (одна цифра з Задачником). isManual → тімлід виставив вручну.
+      week: { target: weekTarget, dynamic: Math.round(dyn?.weekTarget ?? 0), manual: manualWeek, isManual: manualWeek != null,
+        fact: Math.round(dyn?.factWeek ?? 0), dayTarget: Math.round(dyn?.dayTarget ?? 0), weeksLeft: dyn?.weeksLeft ?? 0,
+        presentDaysLeftWeek: dyn?.presentDaysLeftWeek ?? 0 },
       spark: last5Weeks.map((w) => Math.round(sparkByMgr.get(m.id)?.get(w) ?? 0)),
       kpi: {
         ads: { fact: adsM.get(m.id) ?? 0, target: Math.round(pl.ads_count ?? 0) },
