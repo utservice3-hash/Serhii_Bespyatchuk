@@ -497,7 +497,12 @@ export function TasksSection({
                 const gName = (r: Row) => r.kind === "task" ? (r.task.assigneeName ?? "") : (r.synth.assigneeName ?? "");
                 const gCreated = (r: Row) => r.kind === "task" ? (r.task.createdAt ?? "") : r.synth.weekStart;
                 const gDeadline = (r: Row) => r.kind === "task" ? (r.task.deadline ?? "9999-99-99") : r.synth.weekEnd;
+                // Закріплені задачі з 1×1 — ЗАВЖДИ вгорі, незалежно від обраного сортування.
+                // Серверного ORDER BY тут замало: клієнт пересортовує список під себе.
+                const gPinned = (r: Row) => (r.kind === "task" && r.task.pinned ? 0 : 1);
                 const visible: Row[] = [...base.map((t) => ({ kind: "task", task: t } as Row)), ...synths.map((s) => ({ kind: "synth", synth: s } as Row))].sort((a, b) => {
+                  const ap = gPinned(a), bp = gPinned(b);
+                  if (ap !== bp) return ap - bp;
                   const ad = gStatus(a) === "done" ? 1 : 0, bd = gStatus(b) === "done" ? 1 : 0;
                   if (ad !== bd) return ad - bd;
                   let cmp: number;
@@ -538,6 +543,21 @@ export function TasksSection({
                           onCommit={(v) => updateTask(task.id, { title: v })}
                         />
                       </div>
+                      {/* Задача з 1×1: бейдж + закріплення + замок. Видалення блокує сервер (403). */}
+                      {task.taskType === "oneonone" && (
+                        <div style={{ paddingLeft: 22, marginTop: 3, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                          <span title={task.o2oMeetingDate ? `поставлено на 1×1 ${task.o2oMeetingDate}` : undefined}
+                            style={{ fontSize: 10.5, fontWeight: 700, color: "#b45309", background: "rgba(217,119,6,.15)", borderRadius: 999, padding: "1px 8px" }}>Задача з 1×1</span>
+                          {task.pinned && <span style={{ fontSize: 10.5, fontWeight: 600, color: "#b45309", background: "rgba(217,119,6,.10)", borderRadius: 999, padding: "1px 8px" }}>📌 закріплено</span>}
+                          <span title="Знімає лише ведучий на наступному 1×1"
+                            style={{ fontSize: 10.5, color: "var(--text-muted)", background: "rgba(128,128,128,.10)", borderRadius: 999, padding: "1px 8px" }}>🔒 без видалення</span>
+                          {task.o2oResolution === "cancelled" && (
+                            <span style={{ fontSize: 10.5, color: "#64748b", background: "rgba(100,116,139,.14)", borderRadius: 999, padding: "1px 8px" }}>
+                              знято{task.o2oResolvedByName ? ` · ${task.o2oResolvedByName}` : ""}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       {/* Команда/департамент — малий чіп ПІД назвою (не окрема колонка), редагований */}
                       <div style={{ paddingLeft: 22, marginTop: 2 }}>
                         <select
@@ -800,7 +820,14 @@ export function TasksSection({
             </div>
 
             <div style={{ marginTop: 18, textAlign: "right" }}>
-              <button onClick={() => { handleDeleteTask(openTask.id); setOpenTaskId(null); }} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "6px 12px", color: "#dc2626", cursor: "pointer" }}>🗑 Видалити</button>
+              {openTask.taskType === "oneonone" && openTask.createdById !== currentUserId ? (
+                // Замок server-enforced (DELETE → 403); кнопку ховаємо, щоб не обіцяти неможливого.
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  🔒 Задача з 1×1 — знімається на наступному 1×1, ведучим
+                </span>
+              ) : (
+                <button onClick={() => { handleDeleteTask(openTask.id); setOpenTaskId(null); }} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, padding: "6px 12px", color: "#dc2626", cursor: "pointer" }}>🗑 Видалити</button>
+              )}
             </div>
           </div>
         </div>

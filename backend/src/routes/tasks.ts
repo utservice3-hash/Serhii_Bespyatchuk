@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
+import { roleHasPerm } from "../auth/rbac.js";
 
 export const tasksRouter = Router();
 tasksRouter.use(requireAuth);
@@ -96,13 +97,18 @@ tasksRouter.get("/", async (req, res) => {
             t.parent_id AS "parentId", t.auto, u.role AS "createdByRole",
             t.created_by AS "createdById", m.team_id AS "assigneeTeamId",
             t.metrics_json AS "metricsJson", t.checklist_json AS "checklistJson",
-            t.subtasks_json AS "subtasksJson",
+            t.subtasks_json AS "subtasksJson", t.pinned,
+            t.o2o_type AS "o2oType", to_char(t.o2o_meeting_date, 'YYYY-MM-DD') AS "o2oMeetingDate",
+            t.o2o_resolution AS "o2oResolution", t.o2o_resolved_at AS "o2oResolvedAt",
+            COALESCE(rm.name, ru.email) AS "o2oResolvedByName",
             t.created_at AS "createdAt", t.updated_at AS "updatedAt"
      FROM tasks t
      LEFT JOIN managers m ON m.id = t.assignee_id
      LEFT JOIN users u ON u.id = t.created_by
+     LEFT JOIN users ru ON ru.id = t.o2o_resolved_by
+     LEFT JOIN managers rm ON rm.id = ru.manager_id
      ${where}
-     ORDER BY t.created_at DESC`,
+     ORDER BY t.pinned DESC, t.created_at DESC`,
     params
   );
 
@@ -351,6 +357,38 @@ async function canTouchTask(
   return { ok: t.assignee_id === auth.managerId || t.created_by === auth.userId, found: true };
 }
 
+/**
+ * ЗАМОК ЗАДАЧІ З 1×1 (`task_type='oneonone'`). Сенс: домовленості зі зустрічі субʼєкт
+ * не може позбутися сам — знімає лише ведучий через рев'ю на наступному 1×1.
+ *
+ * 🔴 Замок ОБОВʼЯЗКОВО двобічний. Сам по собі DELETE-гейт декоративний: субʼєкт міг би
+ * так само її знешкодити через PATCH — поставити status='done', перейменувати, зняти
+ * дедлайн або відвʼязати від себе (assigneeId=null → задача стає особистою і зникає
+ * з-під нагляду). Тому субʼєкту лишаємо тільки коментарі та статуси КРІМ 'done'.
+ *
+ * Повний доступ (правка й зняття будь-коли) — автор задачі (ведучий) або наскрізний.
+ */
+const O2O_SUBJECT_ALLOWED = new Set(["comments", "status"]);
+function o2oFullAccess(auth: { userId: number; roleKey: string }, createdBy: number | null): boolean {
+  return createdBy === auth.userId || roleHasPerm(auth.roleKey, "view_all_1x1");
+}
+/**
+ * Мета задачі + чи має цей користувач ПОВНИЙ доступ до неї як до задачі з 1×1.
+ *
+ * ⚠️ `canTouchTask` не знає ролі `company`: наскрізні ролі (HR/СЕО/ОД) провалюються
+ * в menedzher-гілку й отримують 403, хоча в GET /tasks бачать усе. Це ширша
+ * невідповідність наявного скоупу — тут НЕ чіпаємо її для звичайних задач, а лише
+ * даємо наскрізному повний доступ до задач з 1×1, як того вимагає модель рев'ю.
+ */
+async function o2oMeta(auth: { userId: number; roleKey: string }, taskId: number) {
+  const r = await pool.query<{ task_type: string; created_by: number | null }>(
+    "SELECT task_type, created_by FROM tasks WHERE id=$1", [taskId]);
+  const t = r.rows[0];
+  if (!t) return { found: false, isO2O: false, full: false };
+  const isO2O = t.task_type === "oneonone";
+  return { found: true, isO2O, full: isO2O && o2oFullAccess(auth, t.created_by) };
+}
+
 tasksRouter.patch("/:id", async (req, res) => {
   const id = Number(req.params.id);
   const parsed = patchSchema.safeParse(req.body);
@@ -359,9 +397,22 @@ tasksRouter.patch("/:id", async (req, res) => {
   }
 
   const auth = req.auth!;
-  const scope = await canTouchTask(auth, id);
-  if (!scope.found) return res.status(404).json({ error: "Задачу не знайдено" });
-  if (!scope.ok) return res.status(403).json({ error: "Немає доступу до цієї задачі" });
+  const meta = await o2oMeta(auth, id);
+  if (!meta.found) return res.status(404).json({ error: "Задачу не знайдено" });
+  if (!meta.full) {
+    const scope = await canTouchTask(auth, id);
+    if (!scope.found) return res.status(404).json({ error: "Задачу не знайдено" });
+    if (!scope.ok) return res.status(403).json({ error: "Немає доступу до цієї задачі" });
+    if (meta.isO2O) {
+      const forbidden = Object.keys(parsed.data).filter((k) => !O2O_SUBJECT_ALLOWED.has(k));
+      if (forbidden.length) {
+        return res.status(403).json({ error: `Задача з 1×1: змінювати «${forbidden.join(", ")}» може лише ведучий` });
+      }
+      if (parsed.data.status === "done") {
+        return res.status(403).json({ error: "Задача з 1×1 закривається лише на наступному 1×1 — ведучим" });
+      }
+    }
+  }
   // Reassignment is scoped like task creation: a manager only to themselves, a
   // team-lead only within their team.
   if (parsed.data.assigneeId !== undefined && auth.role !== "admin") {
@@ -411,9 +462,16 @@ tasksRouter.patch("/:id", async (req, res) => {
 
 tasksRouter.delete("/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const scope = await canTouchTask(req.auth!, id);
-  if (!scope.found) return res.status(404).json({ error: "Задачу не знайдено" });
-  if (!scope.ok) return res.status(403).json({ error: "Немає доступу до цієї задачі" });
+  const auth = req.auth!;
+  const meta = await o2oMeta(auth, id);
+  if (!meta.found) return res.status(404).json({ error: "Задачу не знайдено" });
+  // Задачу з 1×1 знімає лише ведучий (автор) або наскрізний — субʼєкту 403.
+  if (!meta.full) {
+    const scope = await canTouchTask(auth, id);
+    if (!scope.found) return res.status(404).json({ error: "Задачу не знайдено" });
+    if (!scope.ok) return res.status(403).json({ error: "Немає доступу до цієї задачі" });
+    if (meta.isO2O) return res.status(403).json({ error: "Задачу з 1×1 знімає лише ведучий" });
+  }
   await pool.query(`DELETE FROM tasks WHERE id = $1`, [id]);
   res.status(204).send();
 });

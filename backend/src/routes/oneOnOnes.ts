@@ -190,7 +190,7 @@ oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
   const meetingDate = dateOf(req.query.date) ?? kyivToday();
   const r = await pool.query(
     `SELECT o.subject_manager_id, o.type, to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
-            o.form_version, o.answers, o.overall, o.satisfaction_score,
+            o.form_version, o.answers, o.overall, o.satisfaction_score, o.task_reviews,
             o.enps_score, o.enps_reason, o.notes, o.conducted_by, o.updated_at,
             COALESCE(mm.name, u.email) AS conducted_by_name
        FROM one_on_ones o
@@ -209,7 +209,8 @@ oneOnOnesRouter.get("/record/:type/:managerId", async (req, res) => {
   if (!canConduct(req.auth!, type)) return res.status(403).json({ error: "Немає доступу" });
   const form = await activeForm(type);
   res.json({ subject_manager_id: managerId, type, meeting_date: meetingDate, form_version: form?.version ?? 1,
-    answers: {}, overall: null, satisfaction_score: null, enps_score: null, enps_reason: null, notes: null, conducted_by: null });
+    answers: {}, overall: null, satisfaction_score: null, enps_score: null, enps_reason: null,
+    notes: null, task_reviews: null, conducted_by: null });
 });
 
 /** Зберегти запис (upsert). Ставить conducted_by=я, form_version=активна. */
@@ -256,6 +257,122 @@ oneOnOnesRouter.post("/record", async (req, res) => {
     [managerId, type, meetingDate, form?.version ?? 1, auth.userId, JSON.stringify(answers), overall,
      enpsScore, enpsReason, notes ? JSON.stringify(notes) : null, satisfaction]);
   res.json({ ok: true, overall, satisfaction, meetingDate });
+});
+
+// ── Задачі з 1×1 ─────────────────────────────────────────────────────────────
+/** Чи може цей користувач ставити/знімати задачі по цьому субʼєкту (ведучий типу або наскрізний). */
+async function canManageTasks(auth: Express.Request["auth"] & object, type: OneOnOneType, managerId: number) {
+  if (!canConduct(auth, type)) return false;
+  const { where, params } = conductSubjectScope(auth, type);
+  const r = await pool.query(`SELECT 1 FROM managers m WHERE m.id=$${params.length + 1} AND (${where})`,
+    [...params, managerId]);
+  return !!r.rowCount;
+}
+
+/** Поставити задачу субʼєкту внизу форми зустрічі. Закріплена, знімає лише ведучий. */
+oneOnOnesRouter.post("/task", async (req, res) => {
+  const auth = req.auth!;
+  const type = String(req.body?.type || "");
+  if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
+  const managerId = Number(req.body?.subjectManagerId);
+  const title = String(req.body?.title ?? "").trim();
+  const deadline = dateOf(req.body?.deadline);
+  const meetingDate = dateOf(req.body?.meetingDate) ?? kyivToday();
+  if (!managerId || !title) return res.status(400).json({ error: "subjectManagerId і title обовʼязкові" });
+  if (!(await canManageTasks(auth, type, managerId))) {
+    return res.status(403).json({ error: "Немає доступу ставити задачі цьому субʼєкту" });
+  }
+  // департамент — з команди виконавця (як і в решті задачника)
+  const dep = await pool.query<{ department: string | null }>(
+    "SELECT t.name AS department FROM managers m LEFT JOIN teams t ON t.id=m.team_id WHERE m.id=$1", [managerId]);
+  const r = await pool.query<{ id: number }>(
+    `INSERT INTO tasks (title, status, deadline, assignee_id, created_by, priority, department,
+                        task_type, pinned, o2o_type, o2o_meeting_date)
+     VALUES ($1,'not_started',$2,$3,$4,'high',$5,'oneonone',true,$6,$7) RETURNING id`,
+    [title, deadline, managerId, auth.userId, dep.rows[0]?.department ?? null, type, meetingDate]);
+  res.status(201).json({ id: r.rows[0].id });
+});
+
+/** ВІДКРИТІ задачі з МИНУЛИХ зустрічей цього субʼєкта/типу — блок рев'ю вгорі форми.
+ *  Задачі, поставлені на ЦІЙ же зустрічі, у власне рев'ю не потрапляють (?before=дата). */
+oneOnOnesRouter.get("/open-tasks/:type/:managerId", async (req, res) => {
+  const type = req.params.type;
+  if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
+  const managerId = Number(req.params.managerId);
+  if (!(await canManageTasks(req.auth!, type, managerId))) {
+    return res.status(403).json({ error: "Немає доступу" });
+  }
+  const before = dateOf(req.query.before);
+  const p: unknown[] = [managerId, type];
+  if (before) p.push(before);
+  const r = await pool.query(
+    `SELECT t.id, t.title, to_char(t.deadline,'YYYY-MM-DD') AS deadline,
+            to_char(t.o2o_meeting_date,'YYYY-MM-DD') AS "setAt", t.status, t.created_by AS "createdById",
+            COALESCE(cm.name, cu.email) AS "createdByName",
+            (SELECT count(*)::int FROM one_on_ones o
+              WHERE o.subject_manager_id = t.assignee_id AND o.type = t.o2o_type
+                AND o.task_reviews @> jsonb_build_array(jsonb_build_object('taskId', t.id))) AS "carriedTimes"
+       FROM tasks t
+       LEFT JOIN users cu ON cu.id = t.created_by
+       LEFT JOIN managers cm ON cm.id = cu.manager_id
+      WHERE t.task_type='oneonone' AND t.assignee_id=$1 AND t.o2o_type=$2
+        AND t.o2o_resolution IS NULL AND t.status <> 'done'
+        ${before ? "AND t.o2o_meeting_date < $3" : ""}
+      ORDER BY t.o2o_meeting_date, t.id`, p);
+  res.json({ tasks: r.rows });
+});
+
+const OUTCOMES = new Set(["done", "carried", "cancelled"]);
+/** Рев'ю задачі на зустрічі: виконано / ні (переноситься) / знято. Лише ведучий або наскрізний.
+ *  Результат пишеться І в задачу (хто/коли зняв), І в запис зустрічі (що обговорювали). */
+oneOnOnesRouter.post("/task/:id/review", async (req, res) => {
+  const auth = req.auth!;
+  const id = Number(req.params.id);
+  const outcome = String(req.body?.outcome || "");
+  if (!OUTCOMES.has(outcome)) return res.status(400).json({ error: "outcome: done | carried | cancelled" });
+  const meetingDate = dateOf(req.body?.meetingDate) ?? kyivToday();
+  const t = await pool.query<{ assignee_id: number; o2o_type: OneOnOneType; title: string; created_by: number | null }>(
+    "SELECT assignee_id, o2o_type, title, created_by FROM tasks WHERE id=$1 AND task_type='oneonone'", [id]);
+  const task = t.rows[0];
+  if (!task) return res.status(404).json({ error: "Задачу з 1×1 не знайдено" });
+  // позначати може ЛИШЕ ведучий цього типу (у чиєму скоупі субʼєкт) або наскрізний
+  if (!(await canManageTasks(auth, task.o2o_type, task.assignee_id))) {
+    return res.status(403).json({ error: "Позначати може лише ведучий цього типу" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    if (outcome === "carried") {
+      // лишається відкритою і ЗАКРІПЛЕНОЮ — перенеслась на наступну зустріч
+      await client.query("UPDATE tasks SET updated_at=now() WHERE id=$1", [id]);
+    } else {
+      // done — зарахована; cancelled — знята без зарахування. Обидва: закрити + відкріпити.
+      await client.query(
+        `UPDATE tasks SET status='done', pinned=false, o2o_resolution=$2,
+                          o2o_resolved_at=now(), o2o_resolved_by=$3, updated_at=now() WHERE id=$1`,
+        [id, outcome, auth.userId]);
+    }
+    const who = await client.query<{ name: string | null }>(
+      "SELECT COALESCE(m.name, u.email) AS name FROM users u LEFT JOIN managers m ON m.id=u.manager_id WHERE u.id=$1",
+      [auth.userId]);
+    const entry = { taskId: id, title: task.title, outcome, at: new Date().toISOString(),
+      byUserId: auth.userId, byName: who.rows[0]?.name ?? null };
+    // запис зустрічі може ще не існувати (рев'ю до збереження анкети) — створюємо кістяк
+    await client.query(
+      `INSERT INTO one_on_ones (subject_manager_id, type, meeting_date, conducted_by, task_reviews)
+       VALUES ($1,$2,$3,$4, jsonb_build_array($5::jsonb))
+       ON CONFLICT (subject_manager_id, type, meeting_date) DO UPDATE
+         SET task_reviews = COALESCE(one_on_ones.task_reviews,'[]'::jsonb) || jsonb_build_array($5::jsonb),
+             updated_at = now()`,
+      [task.assignee_id, task.o2o_type, meetingDate, auth.userId, JSON.stringify(entry)]);
+    await client.query("COMMIT");
+    res.json({ ok: true, outcome });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
 });
 
 // ── Історія / аналітика (view-скоуп) ─────────────────────────────────────────

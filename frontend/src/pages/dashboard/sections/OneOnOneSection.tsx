@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps, fetchO2OConductTypes,
-  fetchO2OMeetings,
+  fetchO2OMeetings, fetchO2OOpenTasks, createO2OTask, reviewO2OTask,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint, type OneOnOneRecord,
-  type O2OMeeting,
+  type O2OMeeting, type O2OOpenTask, type O2OTaskOutcome,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
@@ -142,6 +142,11 @@ export function OneOnOneSection() {
   const [enpsSeries, setEnpsSeries] = useState<O2OEnpsPoint[]>([]);
   const [hist, setHist] = useState<{ managerId: number; name: string; date: string } | null>(null);
   const [person, setPerson] = useState<{ managerId: number; name: string } | null>(null);
+  // Задачі з 1×1: відкриті з МИНУЛИХ зустрічей (рев'ю) + форма постановки нової
+  const [openTasks, setOpenTasks] = useState<O2OOpenTask[]>([]);
+  const [newTask, setNewTask] = useState("");
+  const [newTaskDue, setNewTaskDue] = useState("");
+  const [taskBusy, setTaskBusy] = useState(false);
   // ДАТА ЗУСТРІЧІ — авторитетна: саме вона визначає запис (у місяці зустрічей може бути кілька).
   const [dateSel, setDateSel] = useState<string>(kyivToday);
   const [meetings, setMeetings] = useState<O2OMeeting[]>([]);
@@ -175,6 +180,32 @@ export function OneOnOneSection() {
     }).catch(() => { if (live) setMeetings([]); });
     return () => { live = false; };
   }, [selId, type, monthSel]);
+
+  // Відкриті задачі з МИНУЛИХ зустрічей (`before` = ця дата, тож поставлені сьогодні
+  // в блок рев'ю не потрапляють — їх переглядатимуть на НАСТУПНІЙ зустрічі).
+  const loadOpenTasks = (mgrId: number, date: string) =>
+    fetchO2OOpenTasks(type, mgrId, date).then(setOpenTasks).catch(() => setOpenTasks([]));
+  useEffect(() => {
+    if (selId == null || type === "V") { setOpenTasks([]); return; }
+    let live = true;
+    fetchO2OOpenTasks(type, selId, dateSel).then((r) => live && setOpenTasks(r)).catch(() => live && setOpenTasks([]));
+    return () => { live = false; };
+  }, [selId, type, dateSel]);
+
+  const doReview = async (id: number, outcome: O2OTaskOutcome) => {
+    if (selId == null) return;
+    setTaskBusy(true);
+    try { await reviewO2OTask(id, outcome, dateSel); await loadOpenTasks(selId, dateSel); }
+    finally { setTaskBusy(false); }
+  };
+  const addTask = async () => {
+    if (selId == null || !newTask.trim()) return;
+    setTaskBusy(true);
+    try {
+      await createO2OTask({ type, subjectManagerId: selId, meetingDate: dateSel, title: newTask.trim(), deadline: newTaskDue || null });
+      setNewTask(""); setNewTaskDue("");
+    } finally { setTaskBusy(false); }
+  };
 
   // Запис КОНКРЕТНОЇ зустрічі — ключ (субʼєкт, тип, дата).
   useEffect(() => {
@@ -335,6 +366,38 @@ export function OneOnOneSection() {
                   )}
                 </div>
 
+                {/* РЕВʼЮ: задачі з МИНУЛОГО 1×1 — угорі форми, поки не позначені. */}
+                {openTasks.length > 0 && (
+                  <div style={{ marginBottom: 16, padding: "14px 16px", borderRadius: 16, background: "rgba(217,119,6,.08)" }}>
+                    <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, margin: "0 0 10px", fontWeight: 800, color: "#b45309" }}>
+                      📌 Задачі з минулого 1×1 — переглянь і познач
+                    </h3>
+                    {openTasks.map((t) => (
+                      <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "9px 0", borderTop: "1px dashed rgba(180,83,9,.25)" }}>
+                        <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+                          <div style={{ fontSize: 14.5, overflowWrap: "anywhere" }}>{t.title}</div>
+                          <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 2 }}>
+                            поставлено {dmy(t.setAt)}{t.createdByName ? ` · ведучий: ${t.createdByName}` : ""}
+                            {t.deadline ? ` · до ${dmy(t.deadline).slice(0, 5)}` : ""}
+                          </div>
+                        </div>
+                        {t.carriedTimes > 0 && (
+                          <span title={`переносилась разів: ${t.carriedTimes}`}
+                            style={{ fontSize: 11, fontWeight: 700, color: "#b45309", background: "rgba(217,119,6,.18)", borderRadius: 20, padding: "3px 10px" }}>переноситься</span>
+                        )}
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {([["done", "✓ Виконано", "#16a34a"], ["carried", "✗ Ні", "#dc2626"], ["cancelled", "✗ Знято", "#64748b"]] as const).map(([o, lbl, col]) => (
+                            <button key={o} onClick={() => void doReview(t.id, o)} disabled={taskBusy}
+                              title={o === "done" ? "Закрити й відкріпити" : o === "carried" ? "Лишається закріпленою і переноситься далі" : "Помилкова/неактуальна — закрити БЕЗ зарахування"}
+                              style={{ border: "none", borderRadius: 10, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, cursor: taskBusy ? "default" : "pointer",
+                                background: "var(--card-bg)", color: col, opacity: taskBusy ? 0.6 : 1 }}>{lbl}</button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* Прогрес */}
                 <div style={{ marginBottom: 18 }}>
                   <div style={{ height: 6, borderRadius: 4, background: "rgba(128,128,128,.12)", overflow: "hidden" }}>
@@ -383,6 +446,28 @@ export function OneOnOneSection() {
                     <ScoreTrack value={satisfaction ?? undefined} onChange={setSatisfaction} />
                     <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
                       Окремий показник — у загальну оцінку <b>не входить</b> (щоб історія лишалась порівнянною).
+                    </div>
+                  </div>
+                )}
+
+                {/* ПОСТАНОВКА ЗАДАЧІ (A/Б) — унизу форми. Падає в Задачник субʼєкта закріпленою;
+                    зняти може лише ведучий через рев'ю на наступній зустрічі. */}
+                {type !== "V" && (
+                  <div style={{ marginBottom: 22, padding: 16, borderRadius: 16, background: "rgba(128,128,128,.05)" }}>
+                    <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, margin: "0 0 10px", fontWeight: 800 }}>
+                      ➕ Поставити задачу {selected.is_team_lead ? "тімліду" : "менеджеру"}
+                    </h3>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <input value={newTask} onChange={(e) => setNewTask(e.target.value)}
+                        placeholder="Напр.: підготувати шаблони КП до кінця місяця…"
+                        style={{ ...FIELD, flex: "1 1 320px", minWidth: 0 }} />
+                      <DatePicker mode="day" value={newTaskDue} onChange={(v) => setNewTaskDue(v || "")} placeholder="дедлайн" minWidth={150} />
+                      <button onClick={() => void addTask()} disabled={taskBusy || !newTask.trim()}
+                        style={{ padding: "10px 22px", borderRadius: 12, border: "none", background: RED, color: "#fff", fontWeight: 700, fontSize: 14,
+                          cursor: taskBusy || !newTask.trim() ? "default" : "pointer", opacity: taskBusy || !newTask.trim() ? 0.5 : 1 }}>Поставити</button>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 8 }}>
+                      Задача одразу зʼявиться в Задачнику з позначкою «Задача з 1×1», <b>закріпленою вгорі й без можливості видалення</b>. Її статус ти переглянеш і закриєш на <b>наступному 1×1</b>.
                     </div>
                   </div>
                 )}

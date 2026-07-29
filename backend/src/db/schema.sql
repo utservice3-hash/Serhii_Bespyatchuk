@@ -241,6 +241,23 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES tasks(id
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_tasks_kpi ON tasks(metric, plan_date) WHERE auto;
 
+-- ЗАДАЧА З 1×1 (task_type='oneonone'): домовленість зі зустрічі, яку субʼєкт НЕ може
+-- позбутися — знімає лише ведучий через рев'ю на наступній зустрічі. Замок — у роутах
+-- (DELETE/PATCH), тут лише поля.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT false;
+-- Посилання на КОНКРЕТНУ зустріч: субʼєкт = assignee_id, далі тип + дата.
+-- FK свідомо НЕ ставимо: задачу ставлять унизу форми, коли запис зустрічі ще може бути
+-- не збережений — FK змусив би створювати фантомний «проведений» 1×1 як побічний ефект.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS o2o_type TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS o2o_meeting_date DATE;
+-- Підсумок: done | carried | cancelled (NULL = ще відкрита, зʼявляється в рев'ю).
+-- «Знято ким/коли» тримаємо тут, щоб дію було видно в історії, а не лише в задачі.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS o2o_resolution TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS o2o_resolved_at TIMESTAMPTZ;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS o2o_resolved_by INTEGER REFERENCES users(id);
+CREATE INDEX IF NOT EXISTS idx_tasks_o2o_open ON tasks(assignee_id, o2o_type)
+  WHERE task_type = 'oneonone' AND o2o_resolution IS NULL;
+
 CREATE TABLE IF NOT EXISTS receivables (
   id SERIAL PRIMARY KEY,
   client_key TEXT NOT NULL,
@@ -686,6 +703,9 @@ ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS notes JSONB;          -- пан
 -- зустрічі стали б непорівнянні з історичними. Для A/Б — структурний блок форми,
 -- для В — дорівнює enps_score (єдине джерело для історії).
 ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS satisfaction_score INTEGER;
+-- Що обговорили на цій зустрічі за задачами з МИНУЛОГО 1×1 (щоб історія показувала рев'ю):
+-- [{taskId,title,outcome:'done'|'carried'|'cancelled',at,byUserId,byName}]
+ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS task_reviews JSONB;
 -- ЖУРНАЛ ЗА ДАТАМИ: дата зустрічі АВТОРИТЕТНА — кожна зустріч окремий запис (у місяці їх
 -- може бути кілька). Колонки `month` БІЛЬШЕ НЕМАЄ: місяць = date_trunc('month', meeting_date),
 -- єдине джерело. Легасі-записи (місячний бакет) переносяться на 1-ше число свого місяця —

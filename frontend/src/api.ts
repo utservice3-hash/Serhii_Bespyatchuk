@@ -1583,7 +1583,7 @@ export interface Task {
   priority: TaskPriority;
   comments: string | null;
   department: string | null;
-  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation";
+  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "daily_kpi" | "kpi_period" | "reactivation" | "oneonone";
   metric: "ads_count" | "avg_check" | "conversion" | null;
   targetValue: number | null;
   actualValue: number | null;
@@ -1592,6 +1592,13 @@ export interface Task {
   periodEnd: string | null;
   parentId: number | null;
   auto: boolean;
+  // Задача з 1×1: закріплена вгорі, знімає лише ведучий (замок — на сервері).
+  pinned?: boolean;
+  o2oType?: "A" | "B" | "V" | null;
+  o2oMeetingDate?: string | null;
+  o2oResolution?: "done" | "carried" | "cancelled" | null;
+  o2oResolvedAt?: string | null;
+  o2oResolvedByName?: string | null;
   createdByRole?: "admin" | "team_lead" | "manager" | null;
   createdById?: number | null;
   assigneeTeamId?: number | null;
@@ -2015,6 +2022,29 @@ export async function fetchOneOnOneStats(type: string, months = 6): Promise<OneO
   const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores", { params: { type, months } });
   return data?.rows ?? [];
 }
+// ── Задачі з 1×1 ─────────────────────────────────────────────────────────────
+export interface O2OOpenTask {
+  id: number; title: string; deadline: string | null; setAt: string; status: string;
+  createdById: number | null; createdByName: string | null; carriedTimes: number;
+}
+export type O2OTaskOutcome = "done" | "carried" | "cancelled";
+/** Поставити задачу субʼєкту внизу форми зустрічі (закріплена, знімає лише ведучий). */
+export async function createO2OTask(p: {
+  type: string; subjectManagerId: number; meetingDate: string; title: string; deadline?: string | null;
+}): Promise<{ id: number }> {
+  const { data } = await api.post("/one-on-ones/task", p);
+  return { id: data?.id };
+}
+/** Відкриті задачі з МИНУЛИХ зустрічей (для блоку рев'ю вгорі форми). */
+export async function fetchO2OOpenTasks(type: string, managerId: number, before: string): Promise<O2OOpenTask[]> {
+  const { data } = await api.get(`/one-on-ones/open-tasks/${type}/${managerId}`, { params: { before } });
+  return data?.tasks ?? [];
+}
+/** Позначити задачу на зустрічі: виконано / переноситься / знято. */
+export async function reviewO2OTask(id: number, outcome: O2OTaskOutcome, meetingDate: string): Promise<void> {
+  await api.post(`/one-on-ones/task/${id}/review`, { outcome, meetingDate });
+}
+
 export interface O2OEnpsPoint { month: string; promoters: number; detractors: number; passives: number; total: number; enps: number | null }
 export async function fetchO2OEnps(months = 12): Promise<O2OEnpsPoint[]> {
   const { data } = await api.get<{ series: O2OEnpsPoint[] }>("/one-on-ones/enps", { params: { months } });
