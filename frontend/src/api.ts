@@ -1961,6 +1961,10 @@ export interface OneOnOneRecord {
   answers: OneOnOneAnswers; overall: number | null; enps_score: number | null; enps_reason: string | null;
   notes: O2ONotes | null; conducted_by: number | null; conducted_by_name?: string | null; updated_at?: string;
 }
+export async function fetchO2OConductTypes(): Promise<{ types: string[]; crossview: boolean; canEdit: boolean }> {
+  const { data } = await api.get("/one-on-ones/conduct-types");
+  return { types: data?.types ?? [], crossview: !!data?.crossview, canEdit: !!data?.canEdit };
+}
 export async function fetchO2OForm(type: string, version?: number): Promise<O2OForm> {
   const { data } = await api.get<O2OForm>(`/one-on-ones/forms/${type}`, { params: version ? { version } : {} });
   return data;

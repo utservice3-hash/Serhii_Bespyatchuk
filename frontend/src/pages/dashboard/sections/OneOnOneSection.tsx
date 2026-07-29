@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps,
+  fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps, fetchO2OConductTypes,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint, type OneOnOneRecord,
 } from "../../../api";
-import { getAuthPayload } from "../../../auth";
 import { DatePicker } from "../../../components/DatePicker";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
 
@@ -112,15 +111,14 @@ function Pill({ active, onClick, children, title }: { active: boolean; onClick: 
 }
 
 export function OneOnOneSection() {
-  const auth = getAuthPayload();
-  const perms = auth?.perms ?? [];
-  const crossview = perms.includes("view_all_1x1");
-  const canEdit = perms.includes("edit_1x1_forms");
-  const availableTypes = useMemo<O2OType[]>(
-    () => (crossview ? ["A", "B", "V"] : auth?.role === "team_lead" ? ["A"] : []),
-    [crossview, auth?.role]);
+  // Доступні для проведення типи + прапорці беремо з СЕРВЕРА (живий roleKey/права),
+  // а не зі scope-clamped auth.role/знімку токена — тож працює за будь-якого data_scope.
+  const [availableTypes, setAvailableTypes] = useState<O2OType[]>([]);
+  const [crossview, setCrossview] = useState(false);
+  const [canEdit, setCanEdit] = useState(false);
+  const [typesLoaded, setTypesLoaded] = useState(false);
 
-  const [type, setType] = useState<O2OType>(availableTypes[0] ?? "A");
+  const [type, setType] = useState<O2OType>("A");
   const [tab, setTab] = useState<"conduct" | "stats" | "enps" | "edit">("conduct");
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("o2oMonth") || curMonthStr());
   const [form, setForm] = useState<O2OForm | null>(null);
@@ -135,6 +133,15 @@ export function OneOnOneSection() {
   const [stats, setStats] = useState<OneOnOneStatRow[]>([]);
   const [enpsSeries, setEnpsSeries] = useState<O2OEnpsPoint[]>([]);
   const [hist, setHist] = useState<{ managerId: number; name: string; month: string } | null>(null);
+
+  useEffect(() => {
+    fetchO2OConductTypes().then((r) => {
+      const types = r.types as O2OType[];
+      setAvailableTypes(types); setCrossview(r.crossview); setCanEdit(r.canEdit); setTypesLoaded(true);
+      if (types.length && !types.includes(type)) setType(types[0]);
+    }).catch(() => setTypesLoaded(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel).then((d) => setSubjects(d.subjects)).catch(() => setSubjects([]));
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
@@ -182,6 +189,9 @@ export function OneOnOneSection() {
     return [...m.entries()];
   }, [subjects]);
 
+  if (!typesLoaded) {
+    return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
+  }
   if (availableTypes.length === 0) {
     return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Немає доступу до проведення 1×1.</p></div>;
   }

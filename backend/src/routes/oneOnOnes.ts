@@ -47,6 +47,18 @@ const overallFrom = (type: OneOnOneType, answers: Record<string, { score?: numbe
   return s.length ? Math.round((s.reduce((a, b) => a + b, 0) / s.length) * 10) / 10 : null;
 };
 
+/** Які типи 1×1 цей користувач може ПРОВОДИТИ + прапорці — усе по ЖИВОМУ roleKey/правах,
+ *  не по scope-clamped auth.role чи знімку токена. FE бере доступні типи ЗВІДСИ (працює за
+ *  будь-якого data_scope і незалежно від свіжості токена). */
+oneOnOnesRouter.get("/conduct-types", (req, res) => {
+  const auth = req.auth!;
+  res.json({
+    types: ONE_ON_ONE_TYPES.filter((t) => canConduct(auth, t)),
+    crossview: crossview(auth),
+    canEdit: roleHasPerm(auth.roleKey, "edit_1x1_forms"),
+  });
+});
+
 async function activeForm(type: OneOnOneType): Promise<{ version: number; questions: unknown } | null> {
   const r = await pool.query<{ version: number; questions: unknown }>(
     "SELECT version, questions FROM one_on_one_forms WHERE type=$1 AND is_active ORDER BY version DESC LIMIT 1", [type]);
