@@ -1940,32 +1940,63 @@ export async function fetchTrainingFileBlobUrl(id: number): Promise<string> {
   return URL.createObjectURL(data as Blob);
 }
 
-// ── Ван-ту-вани (1-on-1) ──
+// ── Ван-ту-вани (1×1) — три типи, форми з БД, приватність ──
+export type O2OType = "A" | "B" | "V";
+export type O2OFieldType = "score" | "text" | "score_text";
+export interface O2OQuestion { qKey: string; label: string; field: O2OFieldType; quarterly?: boolean }
+export interface O2OSection { key: string; title: string; note?: string; questions: O2OQuestion[] }
+export interface O2OFormBody { sections: O2OSection[]; enps?: boolean; notes?: boolean }
+export interface O2OForm { type: string; version: number; questions: O2OFormBody; is_active?: boolean }
 export interface OneOnOneSubject {
   id: number; name: string; team_id: number | null; team_name: string | null;
   is_team_lead: boolean; overall: number | null; done: boolean; updated_at: string | null;
 }
 export type OneOnOneAnswers = Record<string, { score?: number; text?: string }>;
+export interface O2ONotes {
+  date?: string; mood?: string; likes?: string; pains?: string; ideas?: string;
+  requests?: string; about_manager?: string; development?: string; enps?: string; followup?: string;
+}
 export interface OneOnOneRecord {
-  subject_manager_id: number; month: string; answers: OneOnOneAnswers;
-  overall: number | null; conducted_by_name?: string | null; updated_at?: string;
+  subject_manager_id: number; type: string; month: string; form_version: number;
+  answers: OneOnOneAnswers; overall: number | null; enps_score: number | null; enps_reason: string | null;
+  notes: O2ONotes | null; conducted_by: number | null; conducted_by_name?: string | null; updated_at?: string;
 }
-export async function fetchOneOnOneSubjects(month: string): Promise<{ month: string; subjects: OneOnOneSubject[] }> {
-  const { data } = await api.get("/one-on-ones/subjects", { params: { month } });
-  return { month: data?.month ?? month, subjects: data?.subjects ?? [] };
-}
-export async function fetchOneOnOne(managerId: number, month: string): Promise<OneOnOneRecord> {
-  const { data } = await api.get<OneOnOneRecord>(`/one-on-ones/${managerId}`, { params: { month } });
+export async function fetchO2OForm(type: string, version?: number): Promise<O2OForm> {
+  const { data } = await api.get<O2OForm>(`/one-on-ones/forms/${type}`, { params: version ? { version } : {} });
   return data;
 }
-export async function saveOneOnOne(subjectManagerId: number, month: string, answers: OneOnOneAnswers): Promise<{ overall: number | null }> {
-  const { data } = await api.post("/one-on-ones", { subjectManagerId, month, answers });
+export async function fetchO2OFormVersions(type: string): Promise<{ version: number; is_active: boolean; created_at: string }[]> {
+  const { data } = await api.get(`/one-on-ones/forms/${type}/versions`);
+  return data?.versions ?? [];
+}
+export async function saveO2OForm(type: string, questions: O2OFormBody): Promise<{ version: number }> {
+  const { data } = await api.put(`/one-on-ones/forms/${type}`, { questions });
+  return { version: data?.version };
+}
+export async function fetchOneOnOneSubjects(type: string, month: string): Promise<{ subjects: OneOnOneSubject[] }> {
+  const { data } = await api.get("/one-on-ones/subjects", { params: { type, month } });
+  return { subjects: data?.subjects ?? [] };
+}
+export async function fetchOneOnOne(type: string, managerId: number, month: string): Promise<OneOnOneRecord> {
+  const { data } = await api.get<OneOnOneRecord>(`/one-on-ones/record/${type}/${managerId}`, { params: { month } });
+  return data;
+}
+export async function saveOneOnOne(p: {
+  type: string; subjectManagerId: number; month: string; answers: OneOnOneAnswers;
+  enpsScore?: number | null; enpsReason?: string | null; notes?: O2ONotes | null;
+}): Promise<{ overall: number | null }> {
+  const { data } = await api.post("/one-on-ones/record", p);
   return { overall: data?.overall ?? null };
 }
-export interface OneOnOneStatRow { id: number; name: string; team_id: number | null; team_name: string | null; month: string; overall: number | null; answers: OneOnOneAnswers; }
-export async function fetchOneOnOneStats(months = 6): Promise<OneOnOneStatRow[]> {
-  const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores", { params: { months } });
+export interface OneOnOneStatRow { id: number; name: string; team_id: number | null; team_name: string | null; month: string; overall: number | null; enps_score: number | null; form_version: number; answers: OneOnOneAnswers; }
+export async function fetchOneOnOneStats(type: string, months = 6): Promise<OneOnOneStatRow[]> {
+  const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores", { params: { type, months } });
   return data?.rows ?? [];
+}
+export interface O2OEnpsPoint { month: string; promoters: number; detractors: number; passives: number; total: number; enps: number | null }
+export async function fetchO2OEnps(months = 12): Promise<O2OEnpsPoint[]> {
+  const { data } = await api.get<{ series: O2OEnpsPoint[] }>("/one-on-ones/enps", { params: { months } });
+  return data?.series ?? [];
 }
 
 // ── Статистики ───────────────────────────────────────────────────────────────

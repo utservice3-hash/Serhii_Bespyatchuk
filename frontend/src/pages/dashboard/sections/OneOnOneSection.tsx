@@ -1,44 +1,39 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats,
-  type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow,
+  fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps,
+  type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint,
 } from "../../../api";
+import { getAuthPayload } from "../../../auth";
 import { DatePicker } from "../../../components/DatePicker";
+import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
 
-/** Покращений набір питань — щоб глибше розкрити менеджера (результат, клієнти,
- *  стан/мотивація, розвиток, домовленості). score = оцінка 1..10, text = вільна. */
-const QUESTIONS: { key: string; group: string; label: string; type: "score" | "text" }[] = [
-  { key: "prev", group: "Огляд", label: "Що з домовленостей минулої зустрічі виконано, що ні?", type: "text" },
-  { key: "result_score", group: "Результати", label: "Наскільки ти задоволений своїм результатом за місяць (виконання плану)?", type: "score" },
-  { key: "result_factors", group: "Результати", label: "Що найбільше допомогло / завадило досягти цілей?", type: "text" },
-  { key: "intake_score", group: "Результати", label: "Наскільки якісно ти опрацьовуєш вхідні заявки (швидкість, дотиск)?", type: "score" },
-  { key: "repeat_score", group: "Клієнти та процеси", label: "Наскільки добре ти утримуєш і розвиваєш постійних клієнтів?", type: "score" },
-  { key: "client_challenges", group: "Клієнти та процеси", label: "Які виклики в роботі з клієнтами зараз найгостріші?", type: "text" },
-  { key: "process_blockers", group: "Клієнти та процеси", label: "Що в процесах / інструментах сповільнює тебе найбільше?", type: "text" },
-  { key: "energy_score", group: "Мотивація та стан", label: "Оціни свій рівень енергії та залученості зараз.", type: "score" },
-  { key: "motivation", group: "Мотивація та стан", label: "Що тебе зараз найбільше мотивує / демотивує?", type: "text" },
-  { key: "retention_score", group: "Мотивація та стан", label: "Наскільки ймовірно, що ти працюватимеш тут через рік?", type: "score" },
-  { key: "growth_gap", group: "Розвиток", label: "Яких навичок / знань тобі бракує для наступного рівня?", type: "text" },
-  { key: "growth_dir", group: "Розвиток", label: "Куди ти хочеш рости (роль / напрям)?", type: "text" },
-  { key: "support_score", group: "Розвиток", label: "Наскільки ти отримуєш підтримку й визнання в роботі?", type: "score" },
-  { key: "summary", group: "Домовленості", label: "Головні висновки зустрічі.", type: "text" },
-  { key: "action_plan", group: "Домовленості", label: "План дій до наступної зустрічі (конкретні кроки).", type: "text" },
-  { key: "overall_score", group: "Домовленості", label: "ЗАГАЛЬНА оцінка місяця (підсумок).", type: "score" },
+type O2OType = "A" | "B" | "V";
+const TYPE_LABEL: Record<O2OType, string> = { A: "Тімлід → Менеджер", B: "Керівник → Тімлід", V: "HR → Всі" };
+const MOODS = ["Позитивний", "Нейтральний", "Напружений"];
+const NOTE_FIELDS: { key: keyof O2ONotes; label: string; kind: "text" | "mood" }[] = [
+  { key: "likes", label: "Що подобається", kind: "text" },
+  { key: "pains", label: "Болі", kind: "text" },
+  { key: "ideas", label: "Ідеї", kind: "text" },
+  { key: "requests", label: "Запити до HR", kind: "text" },
+  { key: "about_manager", label: "Про менеджера", kind: "text" },
+  { key: "development", label: "Розвиток", kind: "text" },
+  { key: "followup", label: "Follow-up", kind: "text" },
 ];
-const GROUPS = [...new Set(QUESTIONS.map((q) => q.group))];
-const SCORE_QS = QUESTIONS.filter((q) => q.type === "score");
 
 const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 const scoreColor = (v: number | null) => (v == null ? "var(--text-muted)" : v >= 8 ? "#16a34a" : v >= 6 ? "#d97706" : "#dc2626");
+const enpsColor = (v: number) => (v >= 9 ? "#16a34a" : v >= 7 ? "#d97706" : "#dc2626");
 
-function ScorePicker({ value, onChange }: { value?: number; onChange: (v: number) => void }) {
+function ScorePicker({ value, onChange, from = 1, to = 10 }: { value?: number; onChange: (v: number) => void; from?: number; to?: number }) {
+  const nums = []; for (let i = from; i <= to; i++) nums.push(i);
+  const color = from === 0 ? enpsColor : scoreColor;
   return (
     <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+      {nums.map((n) => (
         <button key={n} onClick={() => onChange(n)}
           style={{ width: 28, height: 28, borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 13,
-            border: `1px solid ${value === n ? scoreColor(n) : "var(--border)"}`,
-            background: value === n ? scoreColor(n) : "var(--card-bg)", color: value === n ? "#fff" : "var(--text)" }}>
+            border: `1px solid ${value === n ? color(n) : "var(--border)"}`,
+            background: value === n ? color(n) : "var(--card-bg)", color: value === n ? "#fff" : "var(--text)" }}>
           {n}
         </button>
       ))}
@@ -46,76 +41,113 @@ function ScorePicker({ value, onChange }: { value?: number; onChange: (v: number
   );
 }
 
-export function OneOnOneSection({ role }: { role?: string }) {
-  const [tab, setTab] = useState<"conduct" | "stats">("conduct");
+export function OneOnOneSection() {
+  const auth = getAuthPayload();
+  const perms = auth?.perms ?? [];
+  const crossview = perms.includes("view_all_1x1");
+  const canEdit = perms.includes("edit_1x1_forms");
+  const availableTypes = useMemo<O2OType[]>(
+    () => (crossview ? ["A", "B", "V"] : auth?.role === "team_lead" ? ["A"] : []),
+    [crossview, auth?.role]);
+
+  const [type, setType] = useState<O2OType>(availableTypes[0] ?? "A");
+  const [tab, setTab] = useState<"conduct" | "stats" | "enps" | "edit">("conduct");
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("o2oMonth") || curMonthStr());
+  const [form, setForm] = useState<O2OForm | null>(null);
   const [subjects, setSubjects] = useState<OneOnOneSubject[]>([]);
   const [selId, setSelId] = useState<number | null>(null);
   const [answers, setAnswers] = useState<OneOnOneAnswers>({});
+  const [enpsScore, setEnpsScore] = useState<number | null>(null);
+  const [enpsReason, setEnpsReason] = useState<string>("");
+  const [notes, setNotes] = useState<O2ONotes>({});
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [stats, setStats] = useState<OneOnOneStatRow[]>([]);
+  const [enpsSeries, setEnpsSeries] = useState<O2OEnpsPoint[]>([]);
 
-  const loadSubjects = () => fetchOneOnOneSubjects(monthSel).then((d) => setSubjects(d.subjects)).catch(() => setSubjects([]));
-  useEffect(() => { void loadSubjects(); }, [monthSel]);
-  useEffect(() => { if (tab === "stats") fetchOneOnOneStats(6).then(setStats).catch(() => setStats([])); }, [tab, monthSel]);
+  const loadSubjects = () => fetchOneOnOneSubjects(type, monthSel).then((d) => setSubjects(d.subjects)).catch(() => setSubjects([]));
+  useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
+  useEffect(() => { setSelId(null); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
+  useEffect(() => { if (tab === "stats") fetchOneOnOneStats(type, 6).then(setStats).catch(() => setStats([])); }, [tab, type, monthSel]);
+  useEffect(() => { if (tab === "enps") fetchO2OEnps(12).then(setEnpsSeries).catch(() => setEnpsSeries([])); }, [tab, monthSel]);
 
   useEffect(() => {
     if (selId == null) return;
-    fetchOneOnOne(selId, monthSel).then((r) => { setAnswers(r.answers || {}); setSavedAt(r.updated_at ?? null); }).catch(() => setAnswers({}));
-  }, [selId, monthSel]);
+    fetchOneOnOne(type, selId, monthSel).then((r) => {
+      setAnswers(r.answers || {}); setEnpsScore(r.enps_score); setEnpsReason(r.enps_reason || "");
+      setNotes(r.notes || {}); setSavedAt(r.updated_at ?? null);
+    }).catch(() => { setAnswers({}); setEnpsScore(null); setEnpsReason(""); setNotes({}); });
+  }, [selId, type, monthSel]);
 
   const setAns = (key: string, patch: { score?: number; text?: string }) =>
     setAnswers((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
 
+  const scoreKeys = useMemo(() => (form?.questions.sections ?? []).flatMap((s) => s.questions)
+    .filter((q) => q.field === "score" || q.field === "score_text").map((q) => q.qKey), [form]);
   const liveOverall = useMemo(() => {
-    const s = SCORE_QS.map((q) => answers[q.key]?.score).filter((x): x is number => typeof x === "number" && x > 0);
+    if (type === "V") return enpsScore;
+    const s = scoreKeys.map((k) => answers[k]?.score).filter((x): x is number => typeof x === "number" && x > 0);
     return s.length ? Math.round((s.reduce((a, b) => a + b, 0) / s.length) * 10) / 10 : null;
-  }, [answers]);
+  }, [answers, scoreKeys, type, enpsScore]);
 
   const save = async () => {
     if (selId == null) return;
     setSaving(true);
-    try { await saveOneOnOne(selId, monthSel, answers); setSavedAt(new Date().toISOString()); await loadSubjects(); }
-    finally { setSaving(false); }
+    try {
+      await saveOneOnOne({ type, subjectManagerId: selId, month: monthSel, answers,
+        enpsScore: type === "V" ? enpsScore : null, enpsReason: type === "V" ? enpsReason : null, notes: type === "V" ? notes : null });
+      setSavedAt(new Date().toISOString()); await loadSubjects();
+    } finally { setSaving(false); }
   };
 
   const pickMonth = (v: string) => { if (!v || v > curMonthStr()) return; setMonthSel(v); localStorage.setItem("o2oMonth", v); setSelId(null); };
   const selected = subjects.find((s) => s.id === selId);
-
-  // Групування списку по командах.
   const byTeam = useMemo(() => {
     const m = new Map<string, OneOnOneSubject[]>();
     for (const s of subjects) { const k = s.team_name || "Без команди"; if (!m.has(k)) m.set(k, []); m.get(k)!.push(s); }
     return [...m.entries()];
   }, [subjects]);
 
+  if (availableTypes.length === 0) {
+    return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Немає доступу до проведення 1×1.</p></div>;
+  }
+
   return (
     <>
       <div className="page-header">
         <h1 className="page-title">🤝 Ван-ту-ван</h1>
         <div className="page-filters" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {availableTypes.length > 1 && (
+            <div style={{ display: "flex", gap: 4 }}>
+              {availableTypes.map((t) => (
+                <button key={t} onClick={() => { setType(t); setSelId(null); }} title={TYPE_LABEL[t]}
+                  style={{ padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontWeight: type === t ? 700 : 500,
+                    border: `1px solid ${type === t ? "#c5141c" : "var(--border)"}`, background: type === t ? "#c5141c" : "var(--card-bg)", color: type === t ? "#fff" : "var(--text)" }}>
+                  {t === "A" ? "Тип А" : t === "B" ? "Тип Б" : "Тип В"}
+                </button>
+              ))}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 4 }}>
-            {(["conduct", "stats"] as const).map((t) => (
+            {([["conduct", "Провести"], ["stats", "Історія"], ...(type === "V" ? [["enps", "eNPS"]] as const : []), ...(canEdit ? [["edit", "✏️ Питання"]] as const : [])] as const).map(([t, lbl]) => (
               <button key={t} onClick={() => setTab(t)}
                 style={{ padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontWeight: tab === t ? 700 : 500,
                   border: `1px solid ${tab === t ? "#c5141c" : "var(--border)"}`, background: tab === t ? "#c5141c" : "var(--card-bg)", color: tab === t ? "#fff" : "var(--text)" }}>
-                {t === "conduct" ? "Провести" : "Статистика оцінок"}
+                {lbl}
               </button>
             ))}
           </div>
           <DatePicker mode="month" value={monthSel} onChange={(v) => v && pickMonth(v)} minWidth={150} />
         </div>
       </div>
-      <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 820 }}>
-        Щомісячні зустрічі 1-на-1. {role === "admin" ? "Ви бачите всі команди й тімлідів." : "Ви бачите свою команду."} Менеджери цей розділ не бачать. На початку місяця кожному тімліду ставиться задача провести ван-ту-вани.
+      <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 16px", maxWidth: 860 }}>
+        {TYPE_LABEL[type]}. {crossview ? "Наскрізний доступ: усі 1×1 і аналітика." : "Ви бачите лише свої проведені 1×1."} Менеджери цей розділ не бачать.
       </p>
 
       {tab === "conduct" ? (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 320px) 1fr", gap: 16, alignItems: "start" }}>
-          {/* Список працівників */}
           <div className="chart-card" style={{ padding: 12 }}>
-            {byTeam.length === 0 && <p className="loading-text" style={{ margin: 0 }}>Немає працівників.</p>}
+            {byTeam.length === 0 && <p className="loading-text" style={{ margin: 0 }}>Немає працівників у скоупі.</p>}
             {byTeam.map(([team, list]) => (
               <div key={team} style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-muted)", fontWeight: 700, margin: "4px 0" }}>{team}</div>
@@ -134,16 +166,17 @@ export function OneOnOneSection({ role }: { role?: string }) {
             ))}
           </div>
 
-          {/* Анкета */}
           <div className="chart-card">
             {!selected ? (
               <p className="loading-text" style={{ margin: 0 }}>← Оберіть працівника зі списку, щоб провести зустріч.</p>
+            ) : !form ? (
+              <p className="loading-text" style={{ margin: 0 }}>Завантаження форми…</p>
             ) : (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
                   <h2 className="chart-title" style={{ margin: 0 }}>{selected.is_team_lead ? "👑 " : ""}{selected.name}</h2>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Заг. оцінка: <b style={{ color: scoreColor(liveOverall), fontSize: 18 }}>{liveOverall ?? "—"}</b></span>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{type === "V" ? "eNPS" : "Заг. оцінка"}: <b style={{ color: scoreColor(liveOverall), fontSize: 18 }}>{liveOverall ?? "—"}</b></span>
                     <button onClick={save} disabled={saving}
                       style={{ padding: "7px 18px", borderRadius: 8, border: "none", background: "#c5141c", color: "#fff", fontWeight: 700, cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1 }}>
                       {saving ? "Збереження…" : "💾 Зберегти"}
@@ -152,50 +185,95 @@ export function OneOnOneSection({ role }: { role?: string }) {
                 </div>
                 {savedAt && <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 12px" }}>Востаннє збережено: {new Date(savedAt).toLocaleString("uk-UA")}</p>}
 
-                {GROUPS.map((g) => (
-                  <div key={g} style={{ marginBottom: 18 }}>
-                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "#c5141c", margin: "0 0 8px", borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>{g}</h3>
-                    {QUESTIONS.filter((q) => q.group === g).map((q) => (
-                      <div key={q.key} style={{ marginBottom: 12 }}>
-                        <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>{q.label}</label>
-                        {q.type === "score" ? (
-                          <ScorePicker value={answers[q.key]?.score} onChange={(v) => setAns(q.key, { score: v })} />
-                        ) : (
-                          <textarea value={answers[q.key]?.text ?? ""} onChange={(e) => setAns(q.key, { text: e.target.value })} rows={2}
-                            style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+                {form.questions.sections.map((sec) => (
+                  <div key={sec.key} style={{ marginBottom: 18 }}>
+                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "#c5141c", margin: "0 0 8px", borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>{sec.title}</h3>
+                    {sec.note && <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>{sec.note}</p>}
+                    {sec.questions.map((q) => (
+                      <div key={q.qKey} style={{ marginBottom: 12 }}>
+                        <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>
+                          {q.label}{q.quarterly && <span title="1 раз на квартал" style={{ marginLeft: 6, fontSize: 11, color: "var(--text-muted)" }}>· 1×/квартал</span>}
+                        </label>
+                        {(q.field === "score" || q.field === "score_text") && (
+                          <ScorePicker value={answers[q.qKey]?.score} onChange={(v) => setAns(q.qKey, { score: v })} />
+                        )}
+                        {(q.field === "text" || q.field === "score_text") && (
+                          <textarea value={answers[q.qKey]?.text ?? ""} onChange={(e) => setAns(q.qKey, { text: e.target.value })} rows={2}
+                            style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", marginTop: q.field === "score_text" ? 6 : 0 }} />
                         )}
                       </div>
                     ))}
                   </div>
                 ))}
+
+                {form.questions.enps && (
+                  <div style={{ marginBottom: 18 }}>
+                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "#c5141c", margin: "0 0 8px", borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>eNPS</h3>
+                    <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>Наскільки ймовірно порекомендуєш компанію як місце роботи? (0-10)</label>
+                    <ScorePicker value={enpsScore ?? undefined} onChange={setEnpsScore} from={0} to={10} />
+                    <textarea value={enpsReason} onChange={(e) => setEnpsReason(e.target.value)} rows={2} placeholder="Причина оцінки"
+                      style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", marginTop: 8 }} />
+                  </div>
+                )}
+
+                {form.questions.notes && (
+                  <div style={{ marginBottom: 8 }}>
+                    <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.04em", color: "#c5141c", margin: "0 0 8px", borderBottom: "1px solid var(--border)", paddingBottom: 4 }}>📝 Нотатки HR</h3>
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Дата</label>
+                        <input type="date" value={notes.date ?? ""} onChange={(e) => setNotes((p) => ({ ...p, date: e.target.value }))}
+                          style={{ font: "inherit", padding: 6, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Настрій</label>
+                        <select value={notes.mood ?? ""} onChange={(e) => setNotes((p) => ({ ...p, mood: e.target.value }))}
+                          style={{ font: "inherit", padding: 6, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+                          <option value="">—</option>
+                          {MOODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    {NOTE_FIELDS.map((f) => (
+                      <div key={f.key} style={{ marginBottom: 10 }}>
+                        <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>{f.label}</label>
+                        <textarea value={(notes[f.key] as string) ?? ""} onChange={(e) => setNotes((p) => ({ ...p, [f.key]: e.target.value }))} rows={2}
+                          style={{ width: "100%", resize: "vertical", font: "inherit", padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             )}
           </div>
         </div>
+      ) : tab === "stats" ? (
+        <StatsView stats={stats} isV={type === "V"} />
+      ) : tab === "enps" ? (
+        <EnpsView series={enpsSeries} />
       ) : (
-        <StatsView stats={stats} />
+        <OneOnOneFormsEditor type={type} />
       )}
     </>
   );
 }
 
-/** Статистика: працівник × місяці (загальна оцінка) + середнє по кожному score-питанню. */
-function StatsView({ stats }: { stats: OneOnOneStatRow[] }) {
+/** Історія: працівник × місяці (загальна оцінка або eNPS-бал). */
+function StatsView({ stats, isV }: { stats: OneOnOneStatRow[]; isV: boolean }) {
   const months = [...new Set(stats.map((r) => r.month))].sort();
   const byMgr = useMemo(() => {
     const m = new Map<number, { name: string; team: string | null; byMonth: Map<string, number | null> }>();
     for (const r of stats) {
       if (!m.has(r.id)) m.set(r.id, { name: r.name, team: r.team_name, byMonth: new Map() });
-      m.get(r.id)!.byMonth.set(r.month, r.overall);
+      m.get(r.id)!.byMonth.set(r.month, isV ? r.enps_score : r.overall);
     }
     return [...m.values()].sort((a, b) => (a.team || "").localeCompare(b.team || "") || a.name.localeCompare(b.name));
-  }, [stats]);
+  }, [stats, isV]);
 
   if (stats.length === 0) return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Ще немає проведених зустрічей за останні місяці.</p></div>;
-
   return (
     <div className="chart-card">
-      <h2 className="chart-title">Динаміка загальних оцінок (останні місяці)</h2>
+      <h2 className="chart-title">Динаміка {isV ? "eNPS-балів" : "загальних оцінок"} (останні місяці)</h2>
       <div style={{ overflowX: "auto" }}>
         <table className="data-table compact" style={{ minWidth: 520 }}>
           <thead><tr><th style={{ textAlign: "left" }}>Працівник</th><th style={{ textAlign: "left" }}>Команда</th>
@@ -218,7 +296,63 @@ function StatsView({ stats }: { stats: OneOnOneStatRow[] }) {
           </tbody>
         </table>
       </div>
-      <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "10px 0 0" }}>Оцінка = середнє по всіх бальних питаннях зустрічі (1–10). Зелений ≥8, жовтий ≥6, червоний &lt;6.</p>
+    </div>
+  );
+}
+
+/** eNPS-аналітика (тип В): тренд по місяцях + розклад промоутери/нейтрали/критики. */
+function EnpsView({ series }: { series: O2OEnpsPoint[] }) {
+  if (series.length === 0) return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Ще немає даних eNPS.</p></div>;
+  const last = series[series.length - 1];
+  const maxAbs = Math.max(50, ...series.map((s) => Math.abs(s.enps ?? 0)));
+  return (
+    <div className="chart-card">
+      <h2 className="chart-title">eNPS (тип В) — %промоутерів − %критиків</h2>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", margin: "6px 0 16px" }}>
+        <Kpi label="Поточний eNPS" value={last.enps == null ? "—" : `${last.enps}`} color={last.enps == null ? undefined : last.enps >= 0 ? "#16a34a" : "#dc2626"} />
+        <Kpi label="Промоутери" value={`${last.promoters}`} color="#16a34a" />
+        <Kpi label="Нейтрали" value={`${last.passives}`} color="#d97706" />
+        <Kpi label="Критики" value={`${last.detractors}`} color="#dc2626" />
+        <Kpi label="Відповідей" value={`${last.total}`} />
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="data-table compact" style={{ minWidth: 560 }}>
+          <thead><tr><th style={{ textAlign: "left" }}>Місяць</th><th style={{ textAlign: "center" }}>Пром.</th><th style={{ textAlign: "center" }}>Нейтр.</th><th style={{ textAlign: "center" }}>Крит.</th><th style={{ textAlign: "center" }}>Всього</th><th style={{ textAlign: "left" }}>eNPS</th></tr></thead>
+          <tbody>
+            {series.map((s) => (
+              <tr key={s.month}>
+                <td style={{ textAlign: "left", fontWeight: 600 }}>{s.month}</td>
+                <td style={{ textAlign: "center", color: "#16a34a", fontWeight: 700 }}>{s.promoters}</td>
+                <td style={{ textAlign: "center", color: "#d97706", fontWeight: 700 }}>{s.passives}</td>
+                <td style={{ textAlign: "center", color: "#dc2626", fontWeight: 700 }}>{s.detractors}</td>
+                <td style={{ textAlign: "center" }}>{s.total}</td>
+                <td style={{ textAlign: "left" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ display: "inline-block", width: 120, height: 8, background: "var(--border)", borderRadius: 4, position: "relative" }}>
+                      <span style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "var(--text-muted)" }} />
+                      {s.enps != null && <span style={{ position: "absolute", top: 0, bottom: 0, borderRadius: 4,
+                        background: s.enps >= 0 ? "#16a34a" : "#dc2626",
+                        left: s.enps >= 0 ? "50%" : `${50 - (Math.abs(s.enps) / maxAbs) * 50}%`,
+                        width: `${(Math.abs(s.enps) / maxAbs) * 50}%` }} />}
+                    </span>
+                    <b style={{ color: s.enps == null ? "var(--text-muted)" : s.enps >= 0 ? "#16a34a" : "#dc2626" }}>{s.enps ?? "—"}</b>
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "10px 0 0" }}>eNPS = %промоутерів (9-10) − %критиків (0-6). Нейтрали (7-8) у формулу не входять.</p>
+    </div>
+  );
+}
+
+function Kpi({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div style={{ minWidth: 110 }}>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color: color ?? "var(--text)" }}>{value}</div>
     </div>
   );
 }
