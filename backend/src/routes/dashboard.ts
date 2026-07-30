@@ -2244,9 +2244,7 @@ dashboardRouter.get("/regular-clients", async (req, res) => {
  */
 dashboardRouter.get("/reactivation-candidates", async (req, res) => {
   const auth = req.auth!;
-  // + КВП (наглядова роль): зберігаємо admin/team_lead, додаємо лише kvp по екрану 'kvp'
-  // (НЕ по 'loyalty' — його має й manager; так не розширюємо доступ понад kvp).
-  if (auth.role !== "admin" && auth.role !== "team_lead" && !roleHasTab(auth.roleKey, "kvp")) return res.status(403).json({ error: "Forbidden" });
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
   const teamId: number | null = auth.role === "team_lead" ? (auth.teamId ?? null) : (req.query.teamId ? Number(req.query.teamId) : null);
   const activeMonths = (await getSettings()).sleepingWindowMonths;
 
@@ -2398,9 +2396,7 @@ dashboardRouter.get("/expected-deals", async (req, res) => {
 // client (keyed by client_key so it survives sheet re-syncs).
 dashboardRouter.put("/receivables/note", async (req, res) => {
   const auth = req.auth!;
-  // + КВП (наглядова роль): admin/team_lead без змін, додаємо kvp по екрану 'kvp'
-  // (НЕ 'receivables' — його має й manager).
-  if (auth.role !== "admin" && auth.role !== "team_lead" && !roleHasTab(auth.roleKey, "kvp")) {
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const clientKey = String(req.body?.clientKey ?? "").trim();
@@ -3382,8 +3378,7 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
  */
 dashboardRouter.get("/data-quality", async (req, res) => {
   const auth = req.auth!;
-  // + КВП: admin/team_lead без змін, додаємо kvp (екран 'dataquality' у kvp теж є).
-  if (auth.role !== "admin" && auth.role !== "team_lead" && !roleHasTab(auth.roleKey, "kvp")) {
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
     return res.status(403).json({ error: "Доступ лише для тімліда/адміна" });
   }
   const teamAnd = auth.role === "team_lead" && auth.teamId ? `AND m.team_id = ${auth.teamId}` : "";
@@ -3525,8 +3520,7 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
  */
 dashboardRouter.get("/plans-grid", async (req, res) => {
   const auth = req.auth!;
-  // + КВП: admin/team_lead без змін, додаємо kvp (екран 'plans' у kvp теж є).
-  if (auth.role !== "admin" && auth.role !== "team_lead" && !roleHasTab(auth.roleKey, "kvp")) {
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
     return res.status(403).json({ error: "Доступ лише для тімліда/адміна" });
   }
   const monthStr = (req.query.month as string) || new Date().toISOString().slice(0, 7);
@@ -3903,8 +3897,7 @@ dashboardRouter.post("/repeat-client-plan", async (req, res) => {
 /** Team-lead/admin approves (or rejects) a manager-submitted client plan. */
 dashboardRouter.post("/repeat-client-plan/approve", async (req, res) => {
   const auth = req.auth!;
-  // + КВП (наглядова роль затверджує плани постійних, як тімлід/адмін). Екран 'plans' у kvp є.
-  if (auth.role !== "admin" && auth.role !== "team_lead" && !roleHasTab(auth.roleKey, "kvp")) return res.status(403).json({ error: "Forbidden" });
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
   const b = req.body ?? {};
   const clientKey = String(b.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
@@ -3934,8 +3927,7 @@ dashboardRouter.post("/repeat-client-plan/approve", async (req, res) => {
  *  або обрана команда). Одним кліком закриває чергу на затвердження. */
 dashboardRouter.post("/repeat-client-plan/approve-all", async (req, res) => {
   const auth = req.auth!;
-  // + КВП (наглядова роль). Екран 'plans' у kvp є.
-  if (auth.role !== "admin" && auth.role !== "team_lead" && !roleHasTab(auth.roleKey, "kvp")) return res.status(403).json({ error: "Forbidden" });
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
   const b = req.body ?? {};
   const month = ((b.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   let teamId = b.teamId != null ? Number(b.teamId) : null;
@@ -3991,8 +3983,7 @@ dashboardRouter.get("/repeat-client-plan/history", async (req, res) => {
  *  only; a team-lead may read only their own team's managers. */
 dashboardRouter.get("/funnel-plan", async (req, res) => {
   const auth = req.auth!;
-  // + КВП: admin/team_lead без змін, додаємо kvp по екрану 'kvp' (НЕ 'report' — його має й manager).
-  if (auth.role !== "admin" && auth.role !== "team_lead" && !roleHasTab(auth.roleKey, "kvp")) return res.status(403).json({ error: "Forbidden" });
+  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
   const managerId = Number(req.query.managerId);
   const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
@@ -4012,8 +4003,7 @@ dashboardRouter.get("/funnel-plan", async (req, res) => {
 /** Set a manager's monthly funnel plan (team-lead / admin). */
 dashboardRouter.post("/funnel-plan", async (req, res) => {
   const auth = req.auth!;
-  // + КВП: admin/team_lead без змін, додаємо kvp по екрану 'kvp' (НЕ 'report' — його має й manager).
-  if (auth.role !== "admin" && auth.role !== "team_lead" && !roleHasTab(auth.roleKey, "kvp")) {
+  if (auth.role !== "admin" && auth.role !== "team_lead") {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const managerId = Number(req.body?.managerId);

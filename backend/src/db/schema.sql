@@ -1248,6 +1248,16 @@ UPDATE roles SET
                   || '{"view_all_1x1":true,"edit_1x1_forms":true}'::jsonb
 WHERE key IN ('ceo','opdir');
 
+-- КВП — ПОВНИЙ операційний адмін (рішення власника): дзеркало admin по екранах І правах,
+-- але БЕЗ наскрізного 1×1. Синк саме з admin (у якого view_all_1x1/edit_1x1_forms НЕМАЄ),
+-- тож за замовчуванням kvp 1×1 наскрізно не бачить (crossview=roleHasPerm(roleKey,'view_all_1x1')).
+-- ⚠️ kvp отримує manage_users → технічно може відредагувати роль і додати собі 1×1;
+-- заборона 1×1 тут ДЕФОЛТНА, не жорстка (свідомий вибір власника). Ідемпотентно.
+UPDATE roles SET
+  screen_access = (SELECT screen_access FROM roles WHERE key='admin'),
+  permissions   = (SELECT permissions   FROM roles WHERE key='admin')
+WHERE key = 'kvp';
+
 -- Апгрейд власників у ролі СЕО/ОД (лише якщо зараз чистий 'admin' → суперсет, без втрати прав).
 UPDATE users SET role_override = 'opdir' WHERE email = 'utservice3@gmail.com'  AND role_override = 'admin';
 UPDATE users SET role_override = 'ceo'   WHERE email = 'kriptokoval@gmail.com' AND role_override = 'admin';
