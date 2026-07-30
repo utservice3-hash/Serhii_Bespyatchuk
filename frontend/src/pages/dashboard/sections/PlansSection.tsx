@@ -331,25 +331,36 @@ function LeadRec({ row, loading, period, onPeriod }: {
             {cell("Конверсія",
               <>
                 {row.conversionPct != null ? `${row.conversionPct}%` : dash}
-                {row.conversionSource === "team" && (
-                  <span title="Особистої конверсії не вистачає (менш як 10 заявок у періоді) — показано конверсію КОМАНДИ в цьому ж каналі. Це не особистий показник менеджера."
-                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: "rgba(47,111,219,0.14)", color: "#2f6fdb", cursor: "help", verticalAlign: "middle" }}>
-                    за конверсією команди
+                {(row.conversionSource === "team" || row.conversionSource === "company") && (
+                  <span title={row.conversionSource === "team"
+                    ? "Особистої конверсії не вистачає (менш як 10 заявок у періоді) — показано конверсію КОМАНДИ в цьому ж каналі. Це не особистий показник менеджера."
+                    : "Немає ні особистої, ні командної конверсії — показано конверсію ВСІЄЇ КОМПАНІЇ в цьому ж каналі. Це не показник менеджера і не команди."}
+                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, cursor: "help", verticalAlign: "middle",
+                          background: row.conversionSource === "team" ? "rgba(47,111,219,0.14)" : "rgba(217,119,6,0.16)",
+                          color: row.conversionSource === "team" ? "#2f6fdb" : "#d97706" }}>
+                    {row.conversionSource === "team" ? "за конверсією команди" : "за конверсією компанії"}
                   </span>
                 )}
               </>,
-              row.conversionSource === "team" ? "особистих заявок замало" : `${row.conversionWon}/${row.conversionEntered} заявок`)}
+              row.conversionSource === "team" ? "особистих заявок замало"
+                : row.conversionSource === "company" ? "ні своїх, ні командних"
+                : `${row.conversionWon}/${row.conversionEntered} заявок`)}
             {cell("Ср. чек",
               <>
                 {row.avgCheck != null ? formatAmount(row.avgCheck) : dash}
-                {row.avgCheckSource === "team" && (
-                  <span title="У менеджера немає успішних угод у періоді — показано середній чек КОМАНДИ. Це не особистий показник."
-                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: "rgba(47,111,219,0.14)", color: "#2f6fdb", cursor: "help", verticalAlign: "middle" }}>
-                    чек команди
+                {(row.avgCheckSource === "team" || row.avgCheckSource === "company") && (
+                  <span title={row.avgCheckSource === "team"
+                    ? "У менеджера немає успішних угод у періоді — показано середній чек КОМАНДИ. Це не особистий показник."
+                    : "Немає ні своїх успішних угод, ні командних — показано середній чек ВСІЄЇ КОМПАНІЇ. Це не показник менеджера і не команди."}
+                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, cursor: "help", verticalAlign: "middle",
+                          background: row.avgCheckSource === "team" ? "rgba(47,111,219,0.14)" : "rgba(217,119,6,0.16)",
+                          color: row.avgCheckSource === "team" ? "#2f6fdb" : "#d97706" }}>
+                    {row.avgCheckSource === "team" ? "чек команди" : "чек компанії"}
                   </span>
                 )}
               </>,
-              row.avgCheckSource === "team" ? "своїх успішних угод немає" : "успішних угод")}
+              row.avgCheckSource === "team" ? "своїх успішних угод немає"
+                : row.avgCheckSource === "company" ? "ні своїх, ні командних" : "успішних угод")}
             {cell("₴ з ліда", row.perLead != null ? formatAmount(row.perLead) : dash, "конверсія × чек")}
             {cell("ТРЕБА ЛІДІВ", row.leadsNeeded != null ? row.leadsNeeded : dash,
               row.maxMonthlyLeads > 0 ? `макс за 6 міс: ${row.maxMonthlyLeads}` : undefined, true)}

@@ -2590,18 +2590,25 @@ export async function repeatForecastByManager(s: MetricScope = {}, months = REPE
 }
 
 /**
- * `conversion_leadgen` ПО МЕНЕДЖЕРУ (пара до `conversionAdsByManager`, для РПК).
- * Побудовано ЗА ЗРАЗКОМ лайфтайм-конверсії РПК (Варіант A, `reachedAutoByManager`) —
- * когорту й чисельник не винаходимо заново:
+ * `conversion_leadgen` ПО МЕНЕДЖЕРУ — пара до `conversionAdsByManager` (для РПК).
  *   знаменник — лідоген-заявки менеджера (`leadgen_touch` за `transfer_date` у періоді,
  *               DISTINCT lead_kommo_id — той самий вираз, що в `leadgenByManager`);
- *   чисельник — ТІ САМІ заявки, чия угода БУДЬ-КОЛИ досягла «авто працює»
- *               (`deal_stage_events.status_id ∈ AUTO_WORKING`).
- * Чисельник ⊆ знаменника ЗА ПОБУДОВОЮ (фільтр над тим самим набором) → конверсія ≤100%
- * без окремого клампа. entered<10 → cohortPct=null (як у рекламній).
+ *   чисельник — ТІ САМІ заявки, чия угода БУДЬ-КОЛИ дійшла до **MONEY_ZONE**
+ *               (`EXPECT_ZONE ∪ PAID ∪ {142}`) у Повному циклі.
+ *
+ * 🔴 ФІНІШНА ЛІНІЯ ВИРІВНЯНА З РЕКЛАМНОЮ (30.07.2026). Було `AUTO_WORKING` («авто
+ * працює», етап 5 з 11), тоді як рекламна рахує до MONEY_ZONE (етапи 4 і 8-10). Через
+ * це в рекомендації «залишок ÷ (конверсія × ср.чек)» середина воронки множилась на її
+ * кінець: чек — це гроші УСПІШНИХ угод, отже й конверсія має міряти шлях ДО ГРОШЕЙ.
+ * Заміряно на проді до вирівнювання: лідген до «авто працює» 3.8% проти реклами до
+ * «авто працює» 3.2% — канали насправді рівні, а видимий розрив «13-21% проти 3-6%»
+ * був різницею ПОРОГІВ, не якості. Порівнювати різні фінішні лінії — не можна.
+ *
+ * Чисельник ⊆ знаменника ЗА ПОБУДОВОЮ (фільтр над тим самим набором) → ≤100% без
+ * клампа. entered<10 → cohortPct=null (як у рекламній).
  */
 export async function conversionLeadgenByManager(s: MetricScope): Promise<MgrConversion[]> {
-  const params: unknown[] = [AUTO_WORKING];
+  const params: unknown[] = [MONEY_ZONE, FC_PIPELINES];
   const conds = ["d.manager_id IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`lt.transfer_date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
@@ -2612,7 +2619,8 @@ export async function conversionLeadgenByManager(s: MetricScope): Promise<MgrCon
             COUNT(DISTINCT lt.lead_kommo_id) AS entered,
             COUNT(DISTINCT lt.lead_kommo_id) FILTER (
               WHERE EXISTS (SELECT 1 FROM deal_stage_events e
-                             WHERE e.kommo_id = d.kommo_id AND e.status_id = ANY($1))) AS won
+                             WHERE e.kommo_id = d.kommo_id AND e.status_id = ANY($1)
+                               AND e.pipeline_id = ANY($2))) AS won
        FROM leadgen_touch lt
        JOIN deals d ON d.kommo_id = lt.lead_kommo_id
        JOIN managers m ON m.id = d.manager_id AND m.is_active

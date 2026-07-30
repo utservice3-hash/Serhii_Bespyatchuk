@@ -3947,6 +3947,20 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     const a = tid != null ? teamConv.get(`${ch}:${tid}`) : undefined;
     return a && a.entered >= 10 ? Math.round((a.won / a.entered) * 1000) / 10 : null;
   };
+  // Третій рівень — КОМПАНІЯ (той самий канал). Теж на сумах, не середнім із середніх.
+  const compConv = new Map<string, { entered: number; won: number }>();
+  for (const [k, v] of teamConv) {
+    const ch = k.split(":")[0];
+    const cur = compConv.get(ch) ?? { entered: 0, won: 0 };
+    cur.entered += v.entered; cur.won += v.won; compConv.set(ch, cur);
+  }
+  const companyPct = (ch: string): number | null => {
+    const a = compConv.get(ch);
+    return a && a.entered >= 10 ? Math.round((a.won / a.entered) * 1000) / 10 : null;
+  };
+  let compRev = 0, compDeals = 0;
+  for (const x of checks) { compRev += x.revenue; compDeals += x.successDeals; }
+  const companyAvgCheck = (): number | null => (compDeals > 0 ? Math.round(compRev / compDeals) : null);
   const teamById = new Map(plansRes.rows.map((r) => [r.id, r.team_id]));
   const teamCheck = new Map<number, { revenue: number; deals: number }>();
   for (const x of checks) {
@@ -3975,13 +3989,19 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     const forecastVal = f?.forecast ?? 0;
     const remainder = Math.max(0, plan - forecastVal);
     // Пріоритет ОСОБИСТОМУ показнику; команда — лише коли особистого немає.
+    // Ланцюг фолбеку СТРОГО зверху вниз: особиста → команда → компанія → «—».
+    // Кожен наступний рівень підставляється ЛИШЕ коли попереднього немає.
     const ownPct = conv?.cohortPct ?? null;
     const tPct = ownPct == null ? teamPct(channel, r.team_id) : null;
-    const convPct = ownPct ?? tPct;
-    const conversionSource: "own" | "team" | null = ownPct != null ? "own" : tPct != null ? "team" : null;
+    const cPct = ownPct == null && tPct == null ? companyPct(channel) : null;
+    const convPct = ownPct ?? tPct ?? cPct;
+    const conversionSource: "own" | "team" | "company" | null =
+      ownPct != null ? "own" : tPct != null ? "team" : cPct != null ? "company" : null;
     const tCheck = avgCheck == null ? teamAvgCheck(r.team_id) : null;
-    const effCheck = avgCheck ?? tCheck;
-    const avgCheckSource: "own" | "team" | null = avgCheck != null ? "own" : tCheck != null ? "team" : null;
+    const cCheck = avgCheck == null && tCheck == null ? companyAvgCheck() : null;
+    const effCheck = avgCheck ?? tCheck ?? cCheck;
+    const avgCheckSource: "own" | "team" | "company" | null =
+      avgCheck != null ? "own" : tCheck != null ? "team" : cCheck != null ? "company" : null;
     const perLead = convPct != null && effCheck != null ? Math.round((convPct / 100) * effCheck) : null;
     // Залишок 0 (постійні покривають план) → треба 0 лідів, і конверсія тут не потрібна:
     // ділити нічого. Інакше менеджер із повністю закритим планом отримував «—» і сигнал
@@ -3996,8 +4016,8 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     // Коли залишок 0 — конверсія й чек у розрахунку не беруть участі, тож і «бракує даних»
     // про них казати нечесно: рекомендація повна.
     if (remainder !== 0 || f == null || plan <= 0) {
-      if (convPct == null) reasons.push(conv ? `тонкий знаменник конверсії (${conv.entered} < 10), у команди теж` : "немає даних по конверсії — ні в менеджера, ні в команди");
-      if (effCheck == null) reasons.push("немає середнього чека (немає успішних угод у періоді, у команди теж)");
+      if (convPct == null) reasons.push("немає конверсії — ні особистої, ні командної, ні по компанії");
+      if (effCheck == null) reasons.push("немає середнього чека — ні особистого, ні командного, ні по компанії");
     }
 
     // Дві позначки (лише сигнал, на розрахунок НЕ впливають):
