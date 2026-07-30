@@ -3353,6 +3353,18 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
   const minDays = Math.max(1, Number(req.query.minDays) || 7);
 
   const g = await metrics.stuckDealsGrouped({ managerId, teamId }, minDays);
+  // Нотатки менеджера — одним запитом по вже відібраних угодах (без N+1). Видимість
+  // успадковується від роль-клампу вище: у відповідь потрапляють ЛИШЕ ті угоди, які
+  // ця роль і так бачить, тож окремого гейта на читання нотатки не потрібно.
+  const ids = g.groups.flatMap((grp) => grp.deals.map((d) => d.kommoId));
+  const noteMap = new Map<number, { comment: string | null; author: string | null; at: string | null }>();
+  if (ids.length) {
+    const nr = await pool.query<{ kommo_id: string; comment: string | null; author: string | null; updated_at: string | null }>(
+      `SELECT n.kommo_id, n.comment, u.email AS author, to_char(n.updated_at,'YYYY-MM-DD"T"HH24:MI:SSOF') AS updated_at
+         FROM deal_notes n LEFT JOIN users u ON u.id = n.updated_by
+        WHERE n.kommo_id = ANY($1::bigint[])`, [ids]);
+    for (const r of nr.rows) noteMap.set(Number(r.kommo_id), { comment: r.comment, author: r.author, at: r.updated_at });
+  }
   res.json({
     minDays,
     role: auth.role,
@@ -3366,9 +3378,58 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
         kommoId: d.kommoId, crmUrl: kommoLeadUrl(d.kommoId), name: d.name, client: d.client,
         price: d.price, stage: d.stage, days: d.days, activityDays: d.activityDays,
         lastCallAt: d.lastCallAt, daysSinceLastCall: d.daysSinceLastCall, noCallFlag: d.noCallFlag,
+        note: noteMap.get(d.kommoId)?.comment ?? null,
+        noteAuthor: noteMap.get(d.kommoId)?.author ?? null,
+        noteAt: noteMap.get(d.kommoId)?.at ?? null,
+        // Право на правку рахує СЕРВЕР (не фронт): відповідальний менеджер + тімлід/адмін.
+        canEditNote: auth.role === "admin" || auth.role === "team_lead" || auth.managerId === grp.managerId,
       })),
     })),
   });
+});
+
+/**
+ * Нотатка менеджера по угоді (позначки в «Застряглих угодах»). Автозбереження з фронту.
+ * ПРАВО НА ПРАВКУ ПЕРЕРАХОВУЄТЬСЯ ТУТ, від живої угоди — прапорець `canEditNote` у
+ * GET-і суто косметичний, серверу він не джерело істини:
+ *   • admin (і всі, кого scopeCompatRole зводить до admin — ceo/opdir/kvp) — будь-яка угода;
+ *   • team_lead — угоди менеджерів СВОГО відділу;
+ *   • manager — лише де він відповідальний.
+ * Порожній коментар = зняти нотатку (DELETE), щоб не лишати порожніх рядків.
+ */
+dashboardRouter.post("/deal-note", async (req, res) => {
+  const auth = req.auth!;
+  const kommoId = Number(req.body?.kommoId);
+  if (!Number.isFinite(kommoId) || kommoId <= 0) return res.status(400).json({ error: "kommoId обовʼязковий" });
+  const raw = req.body?.comment;
+  const comment = typeof raw === "string" ? raw.trim().slice(0, 2000) : "";
+
+  // Хто відповідальний і в якому відділі — беремо з БД, не з тіла запиту.
+  const own = await pool.query<{ manager_id: number | null; team_id: number | null }>(
+    `SELECT d.manager_id, m.team_id FROM deals d
+       LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE d.kommo_id = $1`, [kommoId]);
+  if (!own.rows[0]) return res.status(404).json({ error: "Угоду не знайдено" });
+  const { manager_id, team_id } = own.rows[0];
+
+  const may = auth.role === "admin"
+    || (auth.role === "team_lead" && team_id != null && team_id === auth.teamId)
+    || (manager_id != null && manager_id === auth.managerId);
+  if (!may) return res.status(403).json({ error: "Нотатку може редагувати відповідальний менеджер або тімлід/адмін" });
+
+  if (!comment) {
+    await pool.query(`DELETE FROM deal_notes WHERE kommo_id = $1`, [kommoId]);
+    return res.json({ ok: true, note: null, noteAuthor: null, noteAt: null });
+  }
+  const up = await pool.query<{ author: string | null; updated_at: string }>(
+    `INSERT INTO deal_notes (kommo_id, comment, updated_by, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (kommo_id) DO UPDATE SET comment = EXCLUDED.comment,
+       updated_by = EXCLUDED.updated_by, updated_at = now()
+     RETURNING (SELECT email FROM users WHERE id = $3) AS author,
+               to_char(updated_at,'YYYY-MM-DD"T"HH24:MI:SSOF') AS updated_at`,
+    [kommoId, comment, auth.userId]);
+  res.json({ ok: true, note: comment, noteAuthor: up.rows[0]?.author ?? null, noteAt: up.rows[0]?.updated_at ?? null });
 });
 
 /**

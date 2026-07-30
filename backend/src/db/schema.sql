@@ -1302,6 +1302,19 @@ WHERE NOT EXISTS (SELECT 1 FROM bank_accounts);
 UPDATE bank_accounts SET key_card = '4246001043604218' WHERE company = 'fop_privat' AND key_card IS NULL;
 UPDATE bank_accounts SET key_card = '5408810042466572' WHERE company = 'fop_mono'   AND key_card IS NULL;
 
+-- ─────────────────────────── Нотатки менеджера по УГОДІ ───────────────────────────
+-- Позначки для «Застряглих угод» (чому стоїть / що зроблено). НАША анотація, а не
+-- дані CRM: у Kommo не пишемо, метрик не зачіпає. Ключ — kommo_id (як у `deals`),
+-- один запис на угоду (перезапис, не стрічка): поле для робочої позначки, не чат.
+-- ⚠️ Видимість НЕ гейтиться тут: коментар їде всередині вже роль-склампленої
+-- відповіді `/stuck-deals-grouped`, тож хто не бачить угоди — не бачить і нотатки.
+CREATE TABLE IF NOT EXISTS deal_notes (
+  kommo_id   BIGINT PRIMARY KEY REFERENCES deals(kommo_id) ON DELETE CASCADE,
+  comment    TEXT,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ─────────────────────────── Трекер часу (окрема підсистема) ───────────────────────────
 -- Власна авторизація (device-токен), НЕ JWT. Банк/виписку не чіпає.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS tracker_enabled BOOLEAN NOT NULL DEFAULT false;

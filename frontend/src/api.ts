@@ -1421,9 +1421,16 @@ export async function fetchStuckDeals(params: { managerId?: number; teamId?: num
 }
 
 // Застряглі угоди ЗГРУПОВАНІ по менеджерах (без «стелі 50») + company-summary.
-export interface StuckGroupDeal { kommoId: number; crmUrl: string; name: string; client: string | null; price: number; stage: string; days: number; activityDays: number | null; lastCallAt: string | null; daysSinceLastCall: number | null; noCallFlag: boolean }
+export interface StuckGroupDeal { kommoId: number; crmUrl: string; name: string; client: string | null; price: number; stage: string; days: number; activityDays: number | null; lastCallAt: string | null; daysSinceLastCall: number | null; noCallFlag: boolean;
+  // Нотатка менеджера по угоді. canEditNote рахує СЕРВЕР (відповідальний + тімлід/адмін);
+  // тут вона лише керує тим, показати поле чи текст — write-роут перевіряє право сам.
+  note: string | null; noteAuthor: string | null; noteAt: string | null; canEditNote: boolean }
 export interface StuckManagerGroup { managerId: number; manager: string; teamId: number | null; teamTag: string | null; count: number; sumAtRisk: number; longestIdleDays: number; deals: StuckGroupDeal[] }
 export interface StuckGrouped { minDays: number; role: string; scope: "company" | "team" | "own"; total: number; sumRisk: number; managers: number; over90: number; groups: StuckManagerGroup[] }
+export async function saveDealNote(kommoId: number, comment: string): Promise<{ note: string | null; noteAuthor: string | null; noteAt: string | null }> {
+  const { data } = await api.post<{ note: string | null; noteAuthor: string | null; noteAt: string | null }>("/dashboard/deal-note", { kommoId, comment });
+  return data;
+}
 export async function fetchStuckGrouped(params: { teamId?: number; managerId?: number }): Promise<StuckGrouped> {
   const { data } = await api.get<StuckGrouped>("/dashboard/stuck-deals-grouped", { params });
   return data;

@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail, fetchStuckGrouped,
+  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail, fetchStuckGrouped, saveDealNote,
   type ReportPlan, type ReportPlanManager, type ReportPlanDeal, type KvpManagerDetail, type Team,
-  type StuckGrouped, type StuckManagerGroup,
+  type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
@@ -668,7 +668,46 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
 const STUCK_COLS: { h: string; r?: boolean; hint?: string }[] = [
   { h: "Угода" }, { h: "Клієнт" }, { h: "Стадія" }, { h: "Сума", r: true }, { h: "Днів без руху", r: true },
   { h: "Остання розмова", r: true, hint: "Дата останнього ДЗВІНКА клієнту (call_in/call_out у CRM), а не будь-якої активності. 🚩 — свіжа активність є, але місяць без дзвінка (метушня без контакту)." },
+  { h: "Коментар", hint: "Робоча позначка: чому стоїть / що зроблено. Наша анотація — у CRM НЕ пишеться і на метрики не впливає. Зберігається автоматично (втрата фокуса або Ctrl+Enter). Редагує відповідальний менеджер, тімлід і адмін; бачать усі, хто бачить цю угоду." },
 ];
+
+// Інлайн-нотатка по угоді: автозбереження на blur / Ctrl+Enter, лише коли текст ЗМІНИВСЯ.
+// Не редактор — короткі позначки; сервер ріже до 2000 символів і сам перевіряє право.
+function DealNote({ d }: { d: StuckGroupDeal }) {
+  const [val, setVal] = useState(d.note ?? "");
+  const [saved, setSaved] = useState<string>(d.note ?? "");
+  const [state, setState] = useState<"" | "saving" | "ok" | "err">("");
+  const [meta, setMeta] = useState<{ author: string | null; at: string | null }>({ author: d.noteAuthor, at: d.noteAt });
+  const commit = async () => {
+    const next = val.trim();
+    if (next === saved.trim()) return; // без змін — не смикаємо сервер
+    setState("saving");
+    try {
+      const r = await saveDealNote(d.kommoId, next);
+      setSaved(next); setMeta({ author: r.noteAuthor, at: r.noteAt }); setState("ok");
+      setTimeout(() => setState((s) => (s === "ok" ? "" : s)), 1800);
+    } catch { setState("err"); }
+  };
+  if (!d.canEditNote) {
+    return d.note
+      ? <span title={meta.author ? `${meta.author}${meta.at ? " · " + meta.at.slice(0, 10) : ""}` : undefined} style={{ fontSize: 12 }}>{d.note}</span>
+      : <span style={{ color: MUTED }}>—</span>;
+  }
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, width: "100%" }}>
+      <input value={val} onChange={(e) => setVal(e.target.value)} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+        placeholder="позначка…" maxLength={2000}
+        title={meta.author ? `останнє: ${meta.author}${meta.at ? " · " + meta.at.slice(0, 10) : ""}` : undefined}
+        style={{ flex: 1, minWidth: 120, fontSize: 12, padding: "4px 8px", borderRadius: 7, color: "var(--text)",
+          background: "var(--card-bg)", border: `1px solid ${state === "err" ? RED : "var(--border)"}` }} />
+      <span style={{ fontSize: 11, width: 14, color: state === "err" ? RED : state === "ok" ? GREEN : MUTED }}
+        title={state === "err" ? "не збережено — спробуй ще раз" : undefined}>
+        {state === "saving" ? "…" : state === "ok" ? "✓" : state === "err" ? "✗" : ""}
+      </span>
+    </span>
+  );
+}
 
 function StuckMgrRow({ g, open, onToggle, single }: { g: StuckManagerGroup; open: boolean; onToggle: () => void; single: boolean }) {
   const tag = g.teamTag ? STUCK_TAG[g.teamTag] : null;
@@ -707,6 +746,7 @@ function StuckMgrRow({ g, open, onToggle, single }: { g: StuckManagerGroup; open
                         : <span style={{ color: d.daysSinceLastCall >= 30 ? AMBER : "var(--text)" }}>{d.daysSinceLastCall} дн</span>}
                       {d.noCallFlag && <span title="метушня без контакту: свіжа активність, але місяць без дзвінка"> 🚩</span>}
                     </td>
+                    <td style={{ textAlign: "left", minWidth: 190 }}><DealNote d={d} /></td>
                   </tr>
                 );
               })}
