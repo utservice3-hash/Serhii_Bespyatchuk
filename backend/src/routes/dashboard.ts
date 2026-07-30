@@ -2,6 +2,7 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth } from "../auth/middleware.js";
+import { roleHasTab } from "../auth/rbac.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
 const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
@@ -4072,7 +4073,10 @@ const kvpMetricAllowed = (m: string) => KVP_PLAN_METRICS.includes(m);
 
 dashboardRouter.get("/kvp-plan", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+  // Гейт по ЕКРАНУ «Звіт КВП» (screen_access.kvp), а не по scope-compat ролі: роль kvp
+  // company-scope → auth.role='company', тож старий `role!=='admin'` її хибно різав.
+  // Екран мають admin/ceo/opdir/kvp; решта — ні (поведінка для них байт-у-байт).
+  if (!roleHasTab(auth.roleKey, "kvp")) return res.status(403).json({ error: "Forbidden" });
   const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   const r = await pool.query<{ metric: string; planned_value: string }>(
     `SELECT metric, planned_value FROM kvp_plans WHERE month = $1`,
@@ -4090,7 +4094,7 @@ dashboardRouter.get("/kvp-plan", async (req, res) => {
 /** Set department KVP targets for a month (admin/КВП only). Null/empty deletes. */
 dashboardRouter.post("/kvp-plan", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin") return res.status(403).json({ error: "Лише КВП (адміністратор)" });
+  if (!roleHasTab(auth.roleKey, "kvp")) return res.status(403).json({ error: "Лише КВП (адміністратор)" });
   const monthRaw = String(req.body?.month ?? "").slice(0, 7);
   const plans = req.body?.plans as Record<string, unknown> | undefined;
   if (!/^\d{4}-\d{2}$/.test(monthRaw) || !plans || typeof plans !== "object") {
@@ -4590,7 +4594,7 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
  */
 dashboardRouter.get("/kvp-report", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin") return res.status(403).json({ error: "Звіт КВП — лише адміністратор (КВП)" });
+  if (!roleHasTab(auth.roleKey, "kvp")) return res.status(403).json({ error: "Звіт КВП — лише адміністратор (КВП)" });
   const sc = resolveKvpScope(String(req.query.preset ?? "month"), String(req.query.date ?? ""), (req.query.from as string) || null, (req.query.to as string) || null);
   const { from, to } = sc;
   const scope: metrics.MetricScope = { from, to };
