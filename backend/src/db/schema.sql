@@ -510,6 +510,9 @@ CREATE TABLE IF NOT EXISTS ai_messages (
 CREATE INDEX IF NOT EXISTS idx_ai_messages_time ON ai_messages(created_at);
 -- Attached images/files on a chat message: JSON array of {url, name}.
 ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS attachments JSONB;
+-- Розділ дашборду, відкритий у момент запиту → у системний промт, щоб «поясни цей блок»
+-- працювало без уточнень.
+ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS ui_section TEXT;
 
 -- «Мої звіти»: dashboard widgets the AI builds on request. Each widget is a
 -- read-only SQL query + a render config; the reports section runs the SQL live
@@ -865,6 +868,12 @@ CREATE TABLE IF NOT EXISTS training_materials (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_training_materials_folder ON training_materials(folder_id);
+-- Матеріали, згенеровані АІ, зʼявляються ЧЕРНЕТКОЮ і публікуються людиною (admin).
+-- Дефолт 'published' — бо всі 63 наявні матеріали створені руками й уже опубліковані.
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published'
+  CHECK (status IN ('draft','published'));
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS created_by_ai BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS idx_training_materials_status ON training_materials(status);
 
 -- Нічна авто-звірка даних із CRM: джоб рахує інваріанти-запобіжники (частка
 -- незамаплених статусів, дублі активних менеджерів, свіжість синку, внутрішня
@@ -1333,6 +1342,45 @@ CREATE TABLE IF NOT EXISTS deal_notes (
   updated_by INTEGER REFERENCES users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+
+-- ═══════════ БЕЗПЕКА AI query_db: окрема БД-роль з обмеженим доступом ═══════════
+-- `ai/readQuery.ts` виконує SQL, який СКЛАДАЄ МОДЕЛЬ. Досі він ходив під тим самим
+-- користувачем, що й застосунок, тобто бачив users.password_hash, приватні 1×1,
+-- особисті задачі, env-імена банківських ключів. Регекс-денилист на тексті SQL —
+-- ненадійний (лапки, коментарі, CTE), тому обмеження ставимо в САМІЙ БД: окрема роль
+-- + `SET LOCAL ROLE` у транзакції. Модель фізично не має привілеїв на заборонене.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ai_readonly') THEN
+    CREATE ROLE ai_readonly NOLOGIN;
+  END IF;
+  -- членство, щоб застосунок міг `SET ROLE` (не потребує superuser)
+  IF NOT EXISTS (SELECT 1 FROM pg_auth_members am
+                  JOIN pg_roles r ON r.oid = am.roleid
+                  JOIN pg_roles m ON m.oid = am.member
+                 WHERE r.rolname = 'ai_readonly' AND m.rolname = current_user) THEN
+    EXECUTE format('GRANT ai_readonly TO %I', current_user);
+  END IF;
+END $$;
+
+-- Особисті задачі приховані НАВІТЬ ВІД АДМІНА (правило приватності) → модель бачить
+-- задачі лише через вью без них, а не базову таблицю.
+CREATE OR REPLACE VIEW ai_tasks AS
+  SELECT id, title, task_type, status, department, assignee_id, deadline,
+         metric, target_value, actual_value, created_at
+    FROM tasks WHERE assignee_id IS NOT NULL;
+
+-- Спершу знімаємо все, потім видаємо на дозволене (ідемпотентно, щоразу на міграції).
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ai_readonly;
+GRANT USAGE ON SCHEMA public TO ai_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;
+-- 🔴 ЗАБОРОНЕНІ: паролі, приватні 1×1, аудит доступу, налаштування (можуть містити
+-- ключі), env-імена банківських ключів, трекер часу, сира таблиця задач.
+REVOKE ALL ON users, access_audit, app_settings, bank_accounts,
+  one_on_ones, one_on_one_forms, tracker_devices, tracker_intervals, tasks
+  FROM ai_readonly;
+GRANT SELECT ON ai_tasks TO ai_readonly;
 
 -- ─────────────────────────── Трекер часу (окрема підсистема) ───────────────────────────
 -- Власна авторизація (device-токен), НЕ JWT. Банк/виписку не чіпає.

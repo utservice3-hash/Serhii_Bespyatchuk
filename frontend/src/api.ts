@@ -1331,8 +1331,10 @@ export async function fetchAiMessages(): Promise<AiMessage[]> {
   const { data } = await api.get<{ messages: AiMessage[] }>("/ai-work");
   return data.messages;
 }
-export async function postAiMessage(body: string, attachments?: AiAttachment[]): Promise<AiMessage> {
-  const { data } = await api.post<{ message: AiMessage }>("/ai-work", { body, attachments });
+// uiSection — назва відкритого розділу дашборду: їде в системний промт, щоб питання
+// «поясни цей блок» працювало без уточнень.
+export async function postAiMessage(body: string, attachments?: AiAttachment[], uiSection?: string): Promise<AiMessage> {
+  const { data } = await api.post<{ message: AiMessage }>("/ai-work", { body, attachments, uiSection });
   return data.message;
 }
 
@@ -1918,6 +1920,11 @@ export interface TrainingMaterial {
   id: number; folder_id: number | null; title: string; kind: TrainingKind;
   url: string | null; mime: string | null; size_bytes: string | number | null;
   content: string | null; position: number; created_at: string; author?: string | null;
+  status?: "draft" | "published"; created_by_ai?: boolean;
+}
+/** Опублікувати чернетку (в т.ч. згенеровану АІ) — лише admin. */
+export async function publishTrainingMaterial(id: number): Promise<void> {
+  await api.post(`/training/materials/${id}/publish`);
 }
 export async function fetchTrainingTree(): Promise<{ folders: TrainingFolder[]; materials: TrainingMaterial[] }> {
   const { data } = await api.get<{ folders: TrainingFolder[]; materials: TrainingMaterial[] }>("/training/tree");

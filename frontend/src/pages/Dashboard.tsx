@@ -118,6 +118,12 @@ export function Dashboard() {
   // або прихований роут падає у дефолт «report». «report» — корінь «/».
   const section: NavKey =
     rawSection && NAV_ITEMS.some((i) => i.key === rawSection) ? (rawSection as NavKey) : "report";
+  // Останній НЕ-АІ розділ: їде в «Роботу з АІ» як контекст, щоб «поясни цей блок»
+  // працювало без уточнень (АІ інакше не знає, звідки прийшов користувач).
+  const lastNonAiRef = useRef<NavKey>("report");
+  useEffect(() => { if (section !== "aiwork") lastNonAiRef.current = section; }, [section]);
+  const lastVisitedSection = NAV_ITEMS.find((i) => i.key === lastNonAiRef.current)?.label ?? "Звіт";
+
   const setSection = useCallback(
     (key: NavKey) => { navigate(key === "report" ? "/" : `/${key}`); },
     [navigate]
@@ -1017,7 +1023,7 @@ export function Dashboard() {
 
       {section === "rates" && <RatesSection />}
 
-      {section === "aiwork" && <AiWorkSection />}
+      {section === "aiwork" && <AiWorkSection lastSection={lastVisitedSection} />}
 
       {section === "reports" && <ReportsSection canDelete={auth?.role === "admin"} />}
 

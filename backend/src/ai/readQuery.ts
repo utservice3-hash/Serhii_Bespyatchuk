@@ -24,6 +24,11 @@ export async function runReadOnly(sql: string): Promise<ReadResult> {
   try {
     await client.query("BEGIN TRANSACTION READ ONLY");
     await client.query("SET LOCAL statement_timeout = '20s'");
+    // 🔴 БЕЗПЕКА: SQL складає МОДЕЛЬ, тож обмежуємо її не текстовою перевіркою (регекс по
+    // SQL обходиться лапками/коментарями/CTE), а привілеями в САМІЙ БД: роль `ai_readonly`
+    // не має SELECT на users/1×1/app_settings/bank_accounts/tracker/tasks (схема).
+    // SET LOCAL діє лише до кінця транзакції й не потребує superuser (потрібне членство).
+    await client.query("SET LOCAL ROLE ai_readonly");
     const res = await client.query(trimmed);
     await client.query("COMMIT");
     const rows = res.rows.slice(0, MAX_RESULT_ROWS) as Record<string, unknown>[];

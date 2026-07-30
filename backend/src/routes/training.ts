@@ -22,19 +22,36 @@ const onlyAdmin = requireRole("admin");
 const KINDS = new Set(["video_embed", "file", "link", "text"]);
 
 /** Уся структура: пласкі списки папок і матеріалів (дерево будує фронт). */
-trainingRouter.get("/tree", async (_req, res) => {
+trainingRouter.get("/tree", async (req, res) => {
   const [folders, materials] = await Promise.all([
     pool.query(`SELECT id, parent_id, name, position, created_at FROM training_folders ORDER BY position, name`),
     pool.query(
+      // 🔴 ЧЕРНЕТКИ (в т.ч. згенеровані АІ) бачить ЛИШЕ admin — решта отримує тільки
+      // опубліковане. Публікація — окрема людська дія (POST /materials/:id/publish).
       `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.size_bytes, m.content, m.position, m.created_at,
+              m.status, m.created_by_ai,
               COALESCE(mm.name, u.email) AS author
          FROM training_materials m
          LEFT JOIN users u ON u.id = m.created_by
          LEFT JOIN managers mm ON mm.id = u.manager_id
-        ORDER BY m.position, m.created_at`
+        WHERE ($1::boolean OR m.status = 'published')
+        ORDER BY m.position, m.created_at`,
+      [req.auth!.role === "admin"]
     ),
   ]);
   res.json({ folders: folders.rows, materials: materials.rows });
+});
+
+/**
+ * Опублікувати чернетку — ЛИШЕ людина (admin). АІ створює матеріал зі status='draft' і
+ * опублікувати сам НЕ може: інструмент create_training_material інших статусів не приймає.
+ */
+trainingRouter.post("/materials/:id/publish", onlyAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const r = await pool.query<{ title: string }>(
+    `UPDATE training_materials SET status = 'published' WHERE id = $1 AND status = 'draft' RETURNING title`, [id]);
+  if (!r.rows[0]) return res.status(404).json({ error: "Чернетку не знайдено (або вже опублікована)" });
+  res.json({ ok: true, title: r.rows[0].title });
 });
 
 /** Створити папку. */

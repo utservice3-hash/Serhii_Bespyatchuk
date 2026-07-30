@@ -1,6 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { pool } from "../db/pool.js";
 import { runReadOnly } from "./readQuery.js";
+import { readFile } from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
 
 /**
  * АІ-відповідач для розділу «Робота з АІ»: читає історію чату ai_messages
@@ -10,13 +13,43 @@ import { runReadOnly } from "./readQuery.js";
  * Реплаї йдуть асинхронно після POST /ai-work — фронт добирає їх полінгом.
  */
 
-const MODEL = "claude-opus-4-8";
+// 6) Модель — з env, щоб оновлення не вимагало правки коду й деплою логіки.
+const MODEL = process.env.AI_MODEL ?? "claude-opus-4-8";
 const MAX_TOOL_ITERATIONS = 14;
 const HISTORY_LIMIT = 40;
 
 // Absolute origin so Anthropic can fetch attached images (served publicly at
 // /api/files/*). Override with PUBLIC_BASE_URL if the domain changes.
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "https://dashboard.uts.ua").replace(/\/$/, "");
+
+/**
+ * 1) ЄДИНЕ ДЖЕРЕЛО ПРАВДИ. Бізнес-правила НЕ дублюємо в коді: кістяк (роль, інструменти,
+ * формат) лишається тут, а нормативні визначення метрик тягнемо з `docs/` при старті.
+ * Раніше `SYSTEM_PROMPT` був ручною копією CLAUDE.md і неминуче розходився зі словником —
+ * тепер зміна docs змінює поведінку АІ без правки коду.
+ * Файли їдуть у деплої (прод робить git pull), тож рантайм їх бачить. Кожен ріжемо до
+ * DOC_CAP, щоб промт лишався керованим: CRM_SCHEMA.md сам по собі ~48 КБ.
+ */
+const DOC_FILES = ["METRICS_GLOSSARY.md", "KVP_REPORT_SPEC.md", "CRM_SCHEMA.md"];
+const DOC_CAP = 18_000; // символів на файл
+const DOCS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "docs");
+
+let docsBlock: string | null = null;
+export async function loadDocsContext(): Promise<string> {
+  if (docsBlock != null) return docsBlock;
+  const parts: string[] = [];
+  for (const f of DOC_FILES) {
+    try {
+      const raw = await readFile(path.join(DOCS_DIR, f), "utf8");
+      const cut = raw.length > DOC_CAP ? raw.slice(0, DOC_CAP) + "\n…(обрізано)" : raw;
+      parts.push(`\n===== ${f} =====\n${cut}`);
+    } catch {
+      parts.push(`\n===== ${f} =====\n(файл недоступний у рантаймі)`);
+    }
+  }
+  docsBlock = parts.join("\n");
+  return docsBlock;
+}
 
 const SYSTEM_PROMPT = `Ти — АІ-аналітик дашборду відділу продажів логістичної компанії UTS (Україна).
 Співрозмовники: операційний директор (КВП) та його асистент. Твоя робота — будувати статистику,
@@ -65,8 +98,33 @@ ad_budget_daily(day, budget_plan, budget_fact, conversions, clicks), sync_state.
 - Після створення коротко підтвердь: назва + де зʼявиться («у розділі „Мої звіти"»).
 - Зміна наявного — update_widget за id (спершу list_widgets). Видалення — delete_widget.
 
+НАВЧАЛЬНІ МАТЕРІАЛИ («Навчання»): read_training — подивитись наявну базу знань (спершу ЗАВЖДИ, щоб не
+дублювати й посилатись на вже написане). create_training_material — створити матеріал на запит
+(«зроби навчання по блоку Плани»). Він зʼявляється ЧЕРНЕТКОЮ і публікується людиною — так і кажи
+користувачу. Скріни ти не генеруєш: там, де потрібен знімок екрана, лишай у тексті явну позначку
+«[СКРІН: що саме зняти]», щоб людина вставила його вручну.
+
 Ти можеш ЧИТАТИ дані й КЕРУВАТИ ВЛАСНИМИ віджетами. Змінювати код дашборду, писати в CRM чи деплоїти ти НЕ можеш —
 такі прохання чемно переадресовуй розробнику через власника. Якщо надіслали скрін — розглянь його й дай по суті.`;
+
+/**
+ * Повний системний промт: кістяк (правила ролі/інструментів) + НОРМАТИВНІ визначення з
+ * docs/ + 4) контекст розділу, який користувач має відкритим, щоб питання «поясни цей
+ * блок» працювало без уточнень. Розділ беремо з останнього повідомлення (фронт шле мітку).
+ */
+async function buildSystemPrompt(): Promise<string> {
+  const docs = await loadDocsContext();
+  const section = await pool
+    .query<{ ui_section: string | null }>(
+      `SELECT ui_section FROM ai_messages WHERE role='user' ORDER BY created_at DESC, id DESC LIMIT 1`)
+    .then((r) => r.rows[0]?.ui_section ?? null)
+    .catch(() => null);
+  const sectionBlock = section
+    ? `\n\nВІДКРИТИЙ РОЗДІЛ ДАШБОРДУ: «${section}». Якщо питають «цей блок / цей розділ / поясни це» — ідеться саме про нього.`
+    : "";
+  return SYSTEM_PROMPT + sectionBlock +
+    `\n\n═══ НОРМАТИВНІ ДОКУМЕНТИ (джерело правди для визначень; код, що їм суперечить — баг) ═══${docs}`;
+}
 
 const TOOLS: Anthropic.Tool[] = [
   {
@@ -117,6 +175,35 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "read_training",
+    description:
+      "Прочитати навчальну базу (розділ «Навчання»): папки і матеріали (назва, папка, тип, текст). " +
+      "Викликай ПЕРЕД створенням нового матеріалу, щоб не дублювати вже написане й посилатись на наявне.",
+    input_schema: {
+      type: "object",
+      properties: {
+        folderId: { type: "integer", description: "Лише матеріали цієї папки (необовʼязково)" },
+        search: { type: "string", description: "Пошук по назві/тексту (необовʼязково)" },
+      },
+    },
+  },
+  {
+    name: "create_training_material",
+    description:
+      "Створити навчальний матеріал у розділі «Навчання». 🔴 Створюється ЧЕРНЕТКОЮ (status='draft') — " +
+      "публікує людина (адмін) окремою дією. Спершу виклич read_training, щоб не дублювати наявне. " +
+      "Зображення НЕ генеруються: якщо потрібен скрін — напиши в тексті, куди його вставити (напр. «[СКРІН: вкладка Плани, розкритий рядок менеджера]»).",
+    input_schema: {
+      type: "object",
+      properties: {
+        folderId: { type: "integer", description: "Папка з read_training. Обовʼязково." },
+        title: { type: "string" },
+        content: { type: "string", description: "Текст матеріалу (markdown-подібний простий текст)" },
+      },
+      required: ["folderId", "title", "content"],
+    },
+  },
+  {
     name: "delete_widget",
     description: "Видалити віджет «Мої звіти» за id.",
     input_schema: { type: "object", properties: { id: { type: "integer" } }, required: ["id"] },
@@ -128,6 +215,35 @@ type ToolInput = Record<string, unknown>;
 async function execTool(name: string, input: ToolInput, userId: number | null): Promise<string> {
   try {
     switch (name) {
+      case "read_training": {
+        const conds: string[] = ["m.status = 'published'"];
+        const params: unknown[] = [];
+        if (typeof input.folderId === "number") { params.push(input.folderId); conds.push(`m.folder_id = $${params.length}`); }
+        if (typeof input.search === "string" && input.search.trim()) {
+          params.push(`%${input.search.trim()}%`);
+          conds.push(`(m.title ILIKE $${params.length} OR m.content ILIKE $${params.length})`);
+        }
+        const folders = await pool.query(`SELECT id, parent_id, name FROM training_folders ORDER BY position, name`);
+        const mats = await pool.query(
+          `SELECT m.id, m.folder_id, m.title, m.kind, left(COALESCE(m.content,''), 4000) AS content
+             FROM training_materials m WHERE ${conds.join(" AND ")}
+             ORDER BY m.folder_id, m.position LIMIT 60`, params);
+        return JSON.stringify({ folders: folders.rows, materials: mats.rows });
+      }
+      case "create_training_material": {
+        const folderId = Number(input.folderId);
+        const title = String(input.title ?? "").trim().slice(0, 300);
+        const content = String(input.content ?? "").trim().slice(0, 40_000);
+        if (!Number.isFinite(folderId) || !title || !content) return "Потрібні folderId, title, content";
+        const f = await pool.query(`SELECT name FROM training_folders WHERE id = $1`, [folderId]);
+        if (!f.rows[0]) return `Папки #${folderId} не існує — спершу виклич read_training`;
+        const ins = await pool.query<{ id: number }>(
+          `INSERT INTO training_materials (folder_id, title, kind, content, created_by, status, created_by_ai)
+           VALUES ($1, $2, 'text', $3, $4, 'draft', true) RETURNING id`,
+          [folderId, title, content, userId]);
+        return `Створено ЧЕРНЕТКУ #${ins.rows[0].id} «${title}» у папці «${f.rows[0].name}». ` +
+               `Вона НЕ опублікована — адмін має натиснути «Опублікувати» в розділі «Навчання».`;
+      }
       case "query_db": {
         const r = await runReadOnly(String(input.sql ?? ""));
         return JSON.stringify(r.ok ? { rowCount: r.rowCount, truncated: r.truncated, rows: r.rows } : { error: r.error });
@@ -257,7 +373,7 @@ async function generateReply(): Promise<void> {
       model: MODEL,
       max_tokens: 16000,
       thinking: { type: "adaptive" },
-      system: SYSTEM_PROMPT,
+      system: await buildSystemPrompt(),
       tools: TOOLS,
       messages,
     });

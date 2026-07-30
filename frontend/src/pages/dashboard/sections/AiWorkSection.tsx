@@ -4,7 +4,7 @@ import { usePolling } from "../../../hooks/usePolling";
 
 type Pending = { name: string; preview: string; file: File };
 
-export function AiWorkSection() {
+export function AiWorkSection({ lastSection }: { lastSection?: string }) {
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
@@ -64,7 +64,7 @@ export function AiWorkSection() {
         attachments = uploaded.map((u) => ({ url: u.url, name: u.name }));
       }
       atBottomRef.current = true;
-      const created = await postAiMessage(body.trim(), attachments);
+      const created = await postAiMessage(body.trim(), attachments, lastSection);
       setMessages((p) => [...p, created]);
       setBody("");
       setPending([]);

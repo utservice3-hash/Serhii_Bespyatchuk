@@ -45,10 +45,13 @@ aiWorkRouter.post("/", async (req, res) => {
     `SELECT COALESCE(m.name, u.email) AS name FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $1`,
     [auth.userId]
   );
+  // Розділ, відкритий у фронті, — у системний промт («поясни цей блок» без уточнень).
+  const uiSection = String(req.body?.uiSection ?? "").trim().slice(0, 80) || null;
   const ins = await pool.query<{ id: number }>(
-    `INSERT INTO ai_messages (author_user_id, author_name, role, body, attachments)
-     VALUES ($1, $2, 'user', $3, $4) RETURNING id`,
-    [auth.userId, who.rows[0]?.name ?? "Користувач", body.slice(0, 8000), attachments.length ? JSON.stringify(attachments) : null]
+    `INSERT INTO ai_messages (author_user_id, author_name, role, body, attachments, ui_section)
+     VALUES ($1, $2, 'user', $3, $4, $5) RETURNING id`,
+    [auth.userId, who.rows[0]?.name ?? "Користувач", body.slice(0, 8000),
+     attachments.length ? JSON.stringify(attachments) : null, uiSection]
   );
   const r = await pool.query(`${SELECT} WHERE a.id = $1`, [ins.rows[0].id]);
   res.status(201).json({ message: r.rows[0] });

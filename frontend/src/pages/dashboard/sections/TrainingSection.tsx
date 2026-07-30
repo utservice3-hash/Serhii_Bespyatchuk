@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchTrainingTree, createTrainingFolder, updateTrainingFolder, deleteTrainingFolder,
   createTrainingMaterial, updateTrainingMaterial, deleteTrainingMaterial, fetchTrainingFileBlobUrl,
-  type TrainingFolder, type TrainingMaterial, type TrainingKind,
-} from "../../../api";
+  type TrainingFolder, type TrainingMaterial, type TrainingKind, publishTrainingMaterial } from "../../../api";
 
 const MAX_MB = 45;
 const ACC = "#c5141c";
@@ -33,7 +32,7 @@ function embedUrl(raw: string): { iframe?: string; direct?: string } {
   return { iframe: url }; // інший embed — пробуємо як iframe
 }
 
-function MaterialViewer({ material, onClose }: { material: TrainingMaterial; onClose: () => void }) {
+function MaterialViewer({ material, onClose, isAdmin, onChanged }: { material: TrainingMaterial; onClose: () => void; isAdmin?: boolean; onChanged?: () => void }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   useEffect(() => {
     if (material.kind !== "file") return;
@@ -79,6 +78,25 @@ function MaterialViewer({ material, onClose }: { material: TrainingMaterial; onC
         {material.kind === "link" && material.url && (
           <div style={{ padding: 16 }}>
             <a href={material.url} target="_blank" rel="noreferrer" style={{ color: ACC, fontWeight: 600, fontSize: 15 }}>🔗 Відкрити: {material.url}</a>
+          </div>
+        )}
+
+        {material.status === "draft" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12,
+                        padding: "9px 12px", borderRadius: 10, background: "rgba(217,119,6,0.1)", border: "1px solid rgba(217,119,6,0.3)" }}>
+            <b style={{ fontSize: 12, color: "#d97706" }}>
+              ✎ ЧЕРНЕТКА{material.created_by_ai ? " · створено АІ" : ""}
+            </b>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              Бачить лише адмін. Перевір текст і встав скріни там, де стоїть позначка [СКРІН: …], тоді публікуй.
+            </span>
+            {isAdmin && (
+              <button onClick={() => { void publishTrainingMaterial(material.id).then(() => { onChanged?.(); onClose(); }); }}
+                style={{ marginLeft: "auto", padding: "6px 14px", borderRadius: 8, border: "none",
+                         background: "#16a34a", color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 12.5 }}>
+                ✓ Опублікувати
+              </button>
+            )}
           </div>
         )}
 
@@ -298,7 +316,7 @@ export function TrainingSection({ isAdmin }: { isAdmin: boolean }) {
         </>
       )}
 
-      {viewing && <MaterialViewer material={viewing} onClose={() => setViewing(null)} />}
+      {viewing && <MaterialViewer material={viewing} onClose={() => setViewing(null)} isAdmin={isAdmin} onChanged={load} />}
       {adding && <AddMaterialModal folderId={cwd} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); void load(); }} />}
     </div>
   );
