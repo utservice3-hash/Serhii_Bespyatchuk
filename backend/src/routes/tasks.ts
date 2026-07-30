@@ -369,18 +369,14 @@ async function canTouchTask(
  * Повний доступ (правка й зняття будь-коли) — автор задачі (ведучий) або наскрізний.
  */
 const O2O_SUBJECT_ALLOWED = new Set(["comments", "status"]);
-function o2oFullAccess(auth: { userId: number; roleKey: string }, createdBy: number | null): boolean {
-  return createdBy === auth.userId || roleHasPerm(auth.roleKey, "view_all_1x1");
+/** Повний доступ до задачі з 1×1 (обходить замок субʼєкта): автор (ведучий), адмін
+ *  (тепер і СЕО/ОД — scopeCompatRole), або наскрізний 1×1 (HR за правом). Субʼєкту —
+ *  лише коментарі й статус, крім 'done'. */
+function o2oFullAccess(auth: { userId: number; role: string; roleKey: string }, createdBy: number | null): boolean {
+  return createdBy === auth.userId || auth.role === "admin" || roleHasPerm(auth.roleKey, "view_all_1x1");
 }
-/**
- * Мета задачі + чи має цей користувач ПОВНИЙ доступ до неї як до задачі з 1×1.
- *
- * ⚠️ `canTouchTask` не знає ролі `company`: наскрізні ролі (HR/СЕО/ОД) провалюються
- * в menedzher-гілку й отримують 403, хоча в GET /tasks бачать усе. Це ширша
- * невідповідність наявного скоупу — тут НЕ чіпаємо її для звичайних задач, а лише
- * даємо наскрізному повний доступ до задач з 1×1, як того вимагає модель рев'ю.
- */
-async function o2oMeta(auth: { userId: number; roleKey: string }, taskId: number) {
+/** Мета задачі + чи має цей користувач ПОВНИЙ доступ до неї як до задачі з 1×1. */
+async function o2oMeta(auth: { userId: number; role: string; roleKey: string }, taskId: number) {
   const r = await pool.query<{ task_type: string; created_by: number | null }>(
     "SELECT task_type, created_by FROM tasks WHERE id=$1", [taskId]);
   const t = r.rows[0];

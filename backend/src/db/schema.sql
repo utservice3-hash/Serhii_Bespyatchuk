@@ -1235,6 +1235,16 @@ FROM (VALUES ('ceo','СЕО'), ('opdir','Операційний директор
 CROSS JOIN (SELECT screen_access, permissions FROM roles WHERE key='admin') r
 ON CONFLICT (key) DO NOTHING;
 
+-- Досинк СЕО/ОД до АДМІН-СУПЕРСЕТУ. INSERT вище копіює admin лише на момент СТВОРЕННЯ
+-- (ON CONFLICT DO NOTHING), тож наявні рядки залишаються замороженими: якщо admin згодом
+-- дістав нові екрани (напр. «зворотний звʼязок»/bank) — СЕО/ОД їх не мали. Тут вирівнюємо
+-- ЩОРАЗУ: усі екрани й права admin + наскрізні 1×1-права поверх. Ідемпотентно.
+UPDATE roles SET
+  screen_access = (SELECT screen_access FROM roles WHERE key='admin'),
+  permissions   = (SELECT permissions   FROM roles WHERE key='admin')
+                  || '{"view_all_1x1":true,"edit_1x1_forms":true}'::jsonb
+WHERE key IN ('ceo','opdir');
+
 -- Апгрейд власників у ролі СЕО/ОД (лише якщо зараз чистий 'admin' → суперсет, без втрати прав).
 UPDATE users SET role_override = 'opdir' WHERE email = 'utservice3@gmail.com'  AND role_override = 'admin';
 UPDATE users SET role_override = 'ceo'   WHERE email = 'kriptokoval@gmail.com' AND role_override = 'admin';

@@ -47,6 +47,11 @@ export function effectiveRoleKey(user: { role: string; role_override: string | n
 export type ScopeRole = "admin" | "team_lead" | "manager" | "company";
 export function scopeCompatRole(key: string, def: RoleDef | undefined): ScopeRole {
   if (key === "admin") return "admin";
+  // СЕО / Операційний директор — ПОВНИЙ адмін: усі перевірки role==='admin' проходять.
+  // Явно по ключах (НЕ blanket company→admin!): kvp і hr теж company-scope, але адмінами
+  // НЕ є. Наскрізний 1×1 цим НЕ розширюється — він гейтиться правом view_all_1x1 по roleKey,
+  // а не роллю; звичайний admin без цього права 1×1 наскрізно не бачить.
+  if (key === "ceo" || key === "opdir") return "admin";
   if (key === "team_lead") return "team_lead";
   if (key === "manager") return "manager";
   const scope = def?.dataScope ?? "own";
