@@ -351,8 +351,11 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
       </div>
       {/* Розвантаження картки: активність РОЗДІЛЕНО на 🗓 Тиждень·задача і 📅 Місяць.
           ⚠️ ПОРЯДОК КОЛОНОК ДЗЕРКАЛИТЬ ВЕРХНІЙ РЯД: тиждень ЛІВОРУЧ, місяць ПРАВОРУЧ —
-          кожен нижній блок стоїть рівно під своїм зведенням (було навхрест). */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, padding: "0 17px 13px" }}>
+          кожен нижній блок стоїть рівно під своїм зведенням (було навхрест).
+          auto-fit/minmax(420px): на вузькому екрані колонка одна — блоки лягають
+          ОДИН ПІД ОДНИМ у тій самій послідовності (спершу Тиждень, тоді Місяць),
+          замість стискатись і рвати KPI переносами. НЕ повертати фіксовані "1fr 1fr". */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(420px,1fr))", gap: 12, padding: "0 17px 13px" }}>
         {/* 🗓 Тиждень · задача з Задачника — дзеркалить РЕАЛЬНІ метрики задачника (тижнева ціль) */}
         <div style={{ border: `1px solid ${BAR}44`, borderRadius: 10, padding: "10px 12px", background: BAR + "08" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
