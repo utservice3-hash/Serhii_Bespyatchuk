@@ -33,7 +33,8 @@ function isHumanCall(n: KommoLeadNote): boolean {
   return n.noteType === "call_in" || n.noteType === "call_out";
 }
 
-async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
+// export — щоб гейт міг довести монотонність/ідемпотентність без походу в Kommo.
+export async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
   // Collapse to the EARLIEST and LATEST human-activity timestamp per lead in this
   // page. last_activity_at → «застряглі» (остання активність); first_activity_at
   // → «час опрацювання» (перший контакт менеджера з лідом).
@@ -96,6 +97,42 @@ async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
         AND psm.funnel_stage <> 'paid'`,
     [ids, tsCall, FC_PIPELINES]
   );
+}
+
+/**
+ * 🩺 САМОЛІКУВАННЯ АКТИВНОСТІ (ФАЗА 1). Інкрементальний прохід іде ЛИШЕ ВПЕРЕД від
+ * вотермарка (`sinceUnix = last_activity_note_at - 300`), тому будь-яке пропущене вікно —
+ * IP-бан, падіння, ручний зсув вотермарка — губиться НАЗАВЖДИ: жоден наступний тік туди
+ * не повертається. Діагностика 30.07.2026: у ліда 61986895 людська нотатка 18.06 не
+ * потрапила в жоден прохід (її `updated_at` = `created_at` = 18.06, фільтр зловив би —
+ * просто вікно не сканувалось), через що «застій» показував 111 днів замість 42.
+ * Замір по всіх активних FC-угодах: 97 відстають + 192 з NULL при наявних нотатках = 289
+ * з 2319 (12.5%), медіана відставання 44 дні, макс 884.
+ *
+ * Лікування — НЕ ще один вотермарк (він так само може застрягти), а звірка ПО СУТНОСТЯХ:
+ * беремо нотатки лише активних FC-угод по їхніх id і переганяємо через той самий
+ * `applyNotes`. Він монотонний (GREATEST/LEAST), тож прохід ідемпотентний і ніколи не
+ * зсуває анкери назад. Вотермарк НЕ рухаємо — це страховка поверх інкремента, не заміна.
+ * Вартість обмежена й передбачувана: ~24 запити на батчі по 100 id (2.3к угод).
+ * CLI: `node dist/jobs/syncDealActivity.js --heal-activity`.
+ */
+export async function healDealActivity(): Promise<{ deals: number; notes: number; batches: number }> {
+  const idsRes = await pool.query<{ kommo_id: string }>(
+    `SELECT d.kommo_id FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE d.pipeline_id = ANY($1::bigint[]) AND psm.funnel_stage <> 'paid'
+      ORDER BY d.kommo_id`,
+    [FC_PIPELINES]
+  );
+  const ids = idsRes.rows.map((r) => Number(r.kommo_id));
+  const BATCH = 100; // Kommo обмежує довжину URL (filter[entity_id][] по id)
+  let notes = 0, batches = 0;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    batches++;
+    notes += await forEachLeadNotePageByIds(ids.slice(i, i + BATCH), applyNotes);
+  }
+  console.log(`healDealActivity: ${ids.length} активних FC-угод, ${batches} батчів, ${notes} нотаток.`);
+  return { deals: ids.length, notes, batches };
 }
 
 /**
@@ -191,7 +228,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // CLI:
   //   `node dist/jobs/syncDealActivity.js --months=6`      → backfill активності за N міс (як було)
   //   `node dist/jobs/syncDealActivity.js --backfill-calls` → цільовий бекфіл last_call_at (активні FC)
-  if (process.argv.includes("--backfill-calls")) {
+  if (process.argv.includes("--heal-activity")) {
+    healDealActivity()
+      .then(() => pool.end())
+      .catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+  } else if (process.argv.includes("--backfill-calls")) {
     backfillLastCall()
       .then(() => pool.end())
       .catch((err) => {

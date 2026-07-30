@@ -44,7 +44,7 @@ import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
-import { syncDealActivity } from "./jobs/syncDealActivity.js";
+import { syncDealActivity, healDealActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
@@ -273,6 +273,14 @@ cron.schedule("15,45 * * * *", () => {
 cron.schedule("40 */3 * * *", () => {
   if (isKommoPaused()) return;
   syncDealActivity().catch((err) => console.error("Deal activity sync failed:", err));
+});
+// 🩺 Самолікування активності — щодня 04:40. Інкремент вище йде лише ВПЕРЕД від вотермарка,
+// тож пропущене вікно (бан/падіння/зсув) не повертається ніколи. Цей прохід звіряє по
+// СУТНОСТЯХ (нотатки лише активних FC-угод по id) і монотонно підтягує анкери. ~24 запити
+// на добу — на тлі лімітів Kommo непомітно. 04:40: після нічної звірки (03:35) і до 05:00-піку.
+cron.schedule("40 4 * * *", () => {
+  if (isKommoPaused()) return;
+  healDealActivity().catch((err) => console.error("Deal activity heal failed:", err));
 });
 // Lead-transfer events — раз на добу (резерв; «передані заявки» тепер із «Реєстру»).
 cron.schedule("20 5 * * *", () => {
