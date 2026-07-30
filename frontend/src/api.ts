@@ -2139,6 +2139,7 @@ export interface BankAccount {
   id: number; company: string; bank: "mono" | "privat"; label: string; currency: string;
   external_account_id: string | null; is_active: boolean;
   legal_name: string | null; edrpou_ipn: string | null; iban: string | null;
+  key_card?: string | null; // ключ-карта ФОП (звичайні реквізити, як IBAN)
   bank_name: string | null; mfo: string | null; purpose: string | null;
   vat_ipn?: string | null; legal_address?: string | null; director?: string | null; bank_edrpou?: string | null;
   env_key_name?: string | null; api_connected: boolean;
@@ -2146,7 +2147,7 @@ export interface BankAccount {
 // Публічні реквізити (усі ролі; без ключів/балансів)
 export interface BankRequisite {
   id: number; label: string; company: string; currency: string; legal_name: string | null; edrpou_ipn: string | null;
-  vat_ipn: string | null; iban: string | null; bank_name: string | null; mfo: string | null;
+  vat_ipn: string | null; iban: string | null; key_card: string | null; bank_name: string | null; mfo: string | null;
   bank_edrpou: string | null; legal_address: string | null; director: string | null;
 }
 export async function fetchBankRequisites(): Promise<BankRequisite[]> {
@@ -2180,7 +2181,7 @@ export async function fetchBankOutgoing(p: BankQuery): Promise<BankFeed> {
   const { data } = await api.get<BankFeed>("/bank/outgoing", { params: bankParams(p) });
   return data;
 }
-export async function saveBankAccount(id: number | null, patch: Partial<BankAccount> & { envKeyName?: string; legalName?: string; edrpouIpn?: string; bankName?: string; isActive?: boolean; vatIpn?: string; legalAddress?: string; director?: string; bankEdrpou?: string }): Promise<void> {
+export async function saveBankAccount(id: number | null, patch: Partial<BankAccount> & { envKeyName?: string; legalName?: string; edrpouIpn?: string; bankName?: string; isActive?: boolean; vatIpn?: string; legalAddress?: string; director?: string; bankEdrpou?: string; keyCard?: string }): Promise<void> {
   if (id == null) await api.post("/bank/accounts", patch); else await api.patch(`/bank/accounts/${id}`, patch);
 }
 export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null; balance_uah?: number | null; fx_gain_period?: number | null }

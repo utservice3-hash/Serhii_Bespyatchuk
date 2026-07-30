@@ -293,7 +293,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
   const [msg, setMsg] = useState("");
   const startEdit = (a: BankAccount) => { setEditId(a.id); setDraft({ ...a }); };
   const save = async () => {
-    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
+    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
     catch (e) { setMsg("✗ " + err(e)); }
   };
   const toggleActive = async (a: BankAccount) => { try { await saveBankAccount(a.id, { isActive: !a.is_active } as never); await onChange(); } catch (e) { alert(err(e)); } };
@@ -314,7 +314,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
             </div>
             {editId === a.id ? (
               <div style={{ display: "grid", gap: 8 }}>
-                {([["legal_name", "Юр. назва"], ["edrpou_ipn", "ЄДРПОУ"], ["vat_ipn", "ІПН (ПДВ)"], ["iban", "IBAN"], ["bank_name", "Банк"], ["mfo", "МФО"], ["bank_edrpou", "ЄДРПОУ банку"], ["legal_address", "Юр. адреса"], ["director", "Директор"], ["purpose", "Призначення"]] as const).map(([k, lbl]) => (
+                {([["legal_name", "Юр. назва"], ["edrpou_ipn", "ЄДРПОУ"], ["vat_ipn", "ІПН (ПДВ)"], ["iban", "IBAN"], ["key_card", "Ключ-карта"], ["bank_name", "Банк"], ["mfo", "МФО"], ["bank_edrpou", "ЄДРПОУ банку"], ["legal_address", "Юр. адреса"], ["director", "Директор"], ["purpose", "Призначення"]] as const).map(([k, lbl]) => (
                   <label key={k} style={{ fontSize: 12 }}>{lbl}<input value={(draft[k] as string) ?? ""} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} style={{ ...inp, width: "100%", boxSizing: "border-box", marginTop: 2 }} /></label>
                 ))}
                 <div style={{ display: "flex", gap: 8 }}>
@@ -324,7 +324,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
               </div>
             ) : (
               <div style={{ fontSize: 13, lineHeight: 1.9 }}>
-                <Req label="ЄДРПОУ" v={a.edrpou_ipn} /><Req label="ІПН (ПДВ)" v={a.vat_ipn ?? null} /><Req label="IBAN" v={a.iban} /><Req label="Банк · МФО" v={a.bank_name ? `${a.bank_name}${a.mfo ? " · " + a.mfo : ""}${a.bank_edrpou ? " · ЄДРПОУ банку " + a.bank_edrpou : ""}` : null} /><Req label="Юр. адреса" v={a.legal_address ?? null} /><Req label="Директор" v={a.director ?? null} /><Req label="Призначення" v={a.purpose} />
+                <Req label="ЄДРПОУ" v={a.edrpou_ipn} /><Req label="ІПН (ПДВ)" v={a.vat_ipn ?? null} /><Req label="IBAN" v={a.iban} /><Req label="Ключ-карта" v={a.key_card ?? null} /><Req label="Банк · МФО" v={a.bank_name ? `${a.bank_name}${a.mfo ? " · " + a.mfo : ""}${a.bank_edrpou ? " · ЄДРПОУ банку " + a.bank_edrpou : ""}` : null} /><Req label="Юр. адреса" v={a.legal_address ?? null} /><Req label="Директор" v={a.director ?? null} /><Req label="Призначення" v={a.purpose} />
                 <button onClick={() => startEdit(a)} style={{ marginTop: 8, padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5 }}>✎ Редагувати</button>
               </div>
             )}
@@ -422,6 +422,7 @@ function reqToText(r: BankRequisite): string {
   if (r.edrpou_ipn) L.push(`ЄДРПОУ: ${r.edrpou_ipn}`);
   if (r.vat_ipn) L.push(`ІПН (ПДВ): ${r.vat_ipn}`);
   if (r.iban) L.push(`IBAN${ccyTag(r.currency)}: ${r.iban}`);
+  if (r.key_card) L.push(`Ключ-карта: ${r.key_card}`);
   const bank = [r.bank_name, r.mfo ? `МФО ${r.mfo}` : null, r.bank_edrpou ? `ЄДРПОУ банку ${r.bank_edrpou}` : null].filter(Boolean).join(", ");
   if (bank) L.push(`Банк: ${bank}`);
   if (r.legal_address) L.push(`Юр. адреса: ${r.legal_address}`);
@@ -462,6 +463,13 @@ function RequisitesModal({ onClose }: { onClose: () => void }) {
                       <b style={{ fontFamily: "monospace", fontSize: 13 }}>{r.iban ?? "—"}</b>
                       {r.iban && <button onClick={() => copy(r.iban!, `i${r.id}`)} style={btn(copied === `i${r.id}`)}>{copied === `i${r.id}` ? "✓" : "⧉ IBAN"}</button>}
                     </div>
+                    {r.key_card && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ color: MUTED, display: "inline-block", minWidth: 130 }}>Ключ-карта</span>
+                        <b style={{ fontFamily: "monospace", fontSize: 13 }}>{r.key_card}</b>
+                        <button onClick={() => copy(r.key_card!, `k${r.id}`)} style={btn(copied === `k${r.id}`)}>{copied === `k${r.id}` ? "✓" : "⧉ картка"}</button>
+                      </div>
+                    )}
                     <ReqLine label="Банк · МФО" v={r.bank_name ? `${r.bank_name}${r.mfo ? " · МФО " + r.mfo : ""}${r.bank_edrpou ? " · ЄДРПОУ банку " + r.bank_edrpou : ""}` : null} />
                     <ReqLine label="Юр. адреса" v={r.legal_address} />
                     <ReqLine label="Директор" v={r.director} />

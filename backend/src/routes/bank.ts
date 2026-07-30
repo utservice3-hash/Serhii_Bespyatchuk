@@ -79,7 +79,7 @@ bankRouter.get("/balances", requirePerm("view_balances"), async (req, res) => {
 // НІКОЛИ не віддаємо env-ключі, баланси чи будь-що секретне — лише перелічені публічні поля.
 bankRouter.get("/requisites", async (_req, res) => {
   const r = await pool.query(
-    `SELECT id, label, company, currency, legal_name, edrpou_ipn, vat_ipn, iban, bank_name, mfo, bank_edrpou, legal_address, director
+    `SELECT id, label, company, currency, legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou, legal_address, director
        FROM bank_accounts WHERE is_active = true ORDER BY id, currency`);
   res.json({ requisites: r.rows });
 });
@@ -127,7 +127,8 @@ bankRouter.get("/accounts", async (req, res) => {
   const canManage = roleHasPerm(req.auth!.roleKey, "manage_bank_accounts");
   const r = await pool.query(
     `SELECT id, company, bank, label, currency, external_account_id, is_active,
-            legal_name, edrpou_ipn, iban, bank_name, mfo, purpose, env_key_name
+            legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou,
+            legal_address, director, purpose, env_key_name
        FROM bank_accounts ORDER BY is_active DESC, label`);
   const accounts = r.rows.map((a) => ({
     ...a,
@@ -157,7 +158,7 @@ bankRouter.patch("/accounts/:id", requirePerm("manage_bank_accounts"), async (re
   const b = req.body ?? {};
   const map: Record<string, string> = { label: "label", currency: "currency", externalAccountId: "external_account_id",
     isActive: "is_active", legalName: "legal_name", edrpouIpn: "edrpou_ipn", iban: "iban", bankName: "bank_name", mfo: "mfo", purpose: "purpose", envKeyName: "env_key_name",
-    vatIpn: "vat_ipn", legalAddress: "legal_address", director: "director", bankEdrpou: "bank_edrpou" };
+    vatIpn: "vat_ipn", legalAddress: "legal_address", director: "director", bankEdrpou: "bank_edrpou", keyCard: "key_card" };
   const sets: string[] = []; const params: unknown[] = [];
   for (const [k, col] of Object.entries(map)) if (k in b) { params.push(b[k]); sets.push(`${col} = $${params.length}`); }
   if (!sets.length) return res.json({ ok: true });

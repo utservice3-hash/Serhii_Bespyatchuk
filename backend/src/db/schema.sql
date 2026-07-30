@@ -1193,6 +1193,10 @@ ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS vat_ipn       TEXT; -- ІПН
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS legal_address TEXT;
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS director      TEXT;
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS bank_edrpou   TEXT; -- ЄДРПОУ банку
+-- Ключ-карта ФОП (номер картки для оплати від фізосіб) — звичайні реквізити, як IBAN.
+-- НЕ секрет: показується в картці «Реквізити» поруч з IBAN. Значення сидимо НИЖЧЕ —
+-- ПІСЛЯ сид-INSERT рахунків (інакше на порожній базі UPDATE не має що оновлювати).
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS key_card      TEXT;
 
 -- Право «бачити баланси» — ЛИШЕ вбудованій ролі admin; решті доступ НЕ змінюємо.
 UPDATE roles SET permissions = permissions || '{"view_balances":true}'::jsonb WHERE key = 'admin';
@@ -1293,6 +1297,10 @@ SELECT * FROM (VALUES
  ('fop_mono','mono','ФОП Беспятчук (Моно)','UAH','MONO_TOKEN_FOP',true,'ФОП Беспятчук Сергій Степанович')
 ) AS v(company, bank, label, currency, env_key_name, is_active, legal_name)
 WHERE NOT EXISTS (SELECT 1 FROM bank_accounts);
+
+-- Ключ-карта ФОП — сид ПІСЛЯ рахунків, лише якщо порожньо (правки адміна в панелі не перетираємо).
+UPDATE bank_accounts SET key_card = '4246001043604218' WHERE company = 'fop_privat' AND key_card IS NULL;
+UPDATE bank_accounts SET key_card = '5408810042466572' WHERE company = 'fop_mono'   AND key_card IS NULL;
 
 -- ─────────────────────────── Трекер часу (окрема підсистема) ───────────────────────────
 -- Власна авторизація (device-токен), НЕ JWT. Банк/виписку не чіпає.
