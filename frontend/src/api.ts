@@ -2222,6 +2222,11 @@ export interface LeadRecRow {
   remainder: number | null;
   conversionPct: number | null; conversionEntered: number; conversionWon: number;
   avgCheck: number | null; perLead: number | null; leadsNeeded: number | null;
+  // Джерело показника: 'own' — особистий, 'team' — фолбек на команду (ОБОВʼЯЗКОВО
+  // підписується в UI, щоб командна цифра не читалась як особиста), null — немає.
+  conversionSource: "own" | "team" | null;
+  avgCheckSource: "own" | "team" | null;
+  ownAvgCheck: number | null;
   enough: boolean; reasons: string[];
   // Позначки-сигнали (на розрахунок не впливають):
   maxMonthlyLeads: number;   // історичний максимум лідів/міс за 6 міс (свій канал)

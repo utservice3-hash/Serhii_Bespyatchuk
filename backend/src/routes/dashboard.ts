@@ -3930,6 +3930,36 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     metrics.maxMonthlyLeadsByManager(adSources, 6),
   ]);
 
+  // ── ФОЛБЕК НА КОМАНДУ: коли в менеджера тонкий знаменник (<10) або немає успішних
+  // угод у періоді — беремо показник КОМАНДИ в тому ж каналі. Агрегуємо на СУМАХ
+  // (Σentered/Σwon, Σrevenue/Σdeals), а НЕ середнім із середніх — інакше маленький
+  // менеджер важив би стільки ж, скільки великий. Пріоритет завжди в особистого.
+  const teamConv = new Map<string, { entered: number; won: number }>();
+  const addConv = (ch: string, tid: number | null, e: number, w: number) => {
+    if (tid == null) return;
+    const k = `${ch}:${tid}`;
+    const cur = teamConv.get(k) ?? { entered: 0, won: 0 };
+    cur.entered += e; cur.won += w; teamConv.set(k, cur);
+  };
+  for (const x of convAds) addConv("ad", x.teamId, x.entered, x.won);
+  for (const x of convLg) addConv("leadgen", x.teamId, x.entered, x.won);
+  const teamPct = (ch: string, tid: number | null): number | null => {
+    const a = tid != null ? teamConv.get(`${ch}:${tid}`) : undefined;
+    return a && a.entered >= 10 ? Math.round((a.won / a.entered) * 1000) / 10 : null;
+  };
+  const teamById = new Map(plansRes.rows.map((r) => [r.id, r.team_id]));
+  const teamCheck = new Map<number, { revenue: number; deals: number }>();
+  for (const x of checks) {
+    const tid = teamById.get(x.managerId);
+    if (tid == null) continue;
+    const cur = teamCheck.get(tid) ?? { revenue: 0, deals: 0 };
+    cur.revenue += x.revenue; cur.deals += x.successDeals; teamCheck.set(tid, cur);
+  }
+  const teamAvgCheck = (tid: number | null): number | null => {
+    const a = tid != null ? teamCheck.get(tid) : undefined;
+    return a && a.deals > 0 ? Math.round(a.revenue / a.deals) : null;
+  };
+
   const fMap = new Map(forecast.map((x) => [x.managerId, x]));
   const adMap = new Map(convAds.map((x) => [x.managerId, x]));
   const lgMap = new Map(convLg.map((x) => [x.managerId, x]));
@@ -3944,8 +3974,15 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     const avgCheck = chkMap.get(r.id) ?? null;
     const forecastVal = f?.forecast ?? 0;
     const remainder = Math.max(0, plan - forecastVal);
-    const convPct = conv?.cohortPct ?? null;
-    const perLead = convPct != null && avgCheck != null ? Math.round((convPct / 100) * avgCheck) : null;
+    // Пріоритет ОСОБИСТОМУ показнику; команда — лише коли особистого немає.
+    const ownPct = conv?.cohortPct ?? null;
+    const tPct = ownPct == null ? teamPct(channel, r.team_id) : null;
+    const convPct = ownPct ?? tPct;
+    const conversionSource: "own" | "team" | null = ownPct != null ? "own" : tPct != null ? "team" : null;
+    const tCheck = avgCheck == null ? teamAvgCheck(r.team_id) : null;
+    const effCheck = avgCheck ?? tCheck;
+    const avgCheckSource: "own" | "team" | null = avgCheck != null ? "own" : tCheck != null ? "team" : null;
+    const perLead = convPct != null && effCheck != null ? Math.round((convPct / 100) * effCheck) : null;
     // Залишок 0 (постійні покривають план) → треба 0 лідів, і конверсія тут не потрібна:
     // ділити нічого. Інакше менеджер із повністю закритим планом отримував «—» і сигнал
     // «план нижчий за базу» губився саме там, де він найголосніший.
@@ -3959,8 +3996,8 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     // Коли залишок 0 — конверсія й чек у розрахунку не беруть участі, тож і «бракує даних»
     // про них казати нечесно: рекомендація повна.
     if (remainder !== 0 || f == null || plan <= 0) {
-      if (convPct == null) reasons.push(conv ? `тонкий знаменник конверсії (${conv.entered} < 10)` : "немає даних по конверсії");
-      if (avgCheck == null) reasons.push("немає середнього чека (немає успішних угод у періоді)");
+      if (convPct == null) reasons.push(conv ? `тонкий знаменник конверсії (${conv.entered} < 10), у команди теж` : "немає даних по конверсії — ні в менеджера, ні в команди");
+      if (effCheck == null) reasons.push("немає середнього чека (немає успішних угод у періоді, у команди теж)");
     }
 
     // Дві позначки (лише сигнал, на розрахунок НЕ впливають):
@@ -3980,7 +4017,9 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
       forecast: f ? forecastVal : null, forecastClients: f?.clients ?? 0,
       remainder: f ? remainder : null,
       conversionPct: convPct, conversionEntered: conv?.entered ?? 0, conversionWon: conv?.won ?? 0,
-      avgCheck, perLead, leadsNeeded,
+      avgCheck: effCheck, ownAvgCheck: avgCheck, avgCheckSource,
+      conversionSource,
+      perLead, leadsNeeded,
       enough: leadsNeeded != null && f != null && plan > 0,
       reasons,
     };

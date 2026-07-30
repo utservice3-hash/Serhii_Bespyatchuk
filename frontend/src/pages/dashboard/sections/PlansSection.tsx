@@ -328,9 +328,28 @@ function LeadRec({ row, loading, period, onPeriod }: {
             {cell("Постійні дадуть", row.forecast != null ? formatAmount(row.forecast) : dash,
               row.forecastClients ? `${row.forecastClients} кл. · сер./міс за 6 міс` : "немає історії")}
             {cell("Залишок", row.remainder != null ? formatAmount(row.remainder) : dash, "план − постійні")}
-            {cell("Конверсія", row.conversionPct != null ? `${row.conversionPct}%` : dash,
-              `${row.conversionWon}/${row.conversionEntered} заявок`)}
-            {cell("Ср. чек", row.avgCheck != null ? formatAmount(row.avgCheck) : dash, "успішних угод")}
+            {cell("Конверсія",
+              <>
+                {row.conversionPct != null ? `${row.conversionPct}%` : dash}
+                {row.conversionSource === "team" && (
+                  <span title="Особистої конверсії не вистачає (менш як 10 заявок у періоді) — показано конверсію КОМАНДИ в цьому ж каналі. Це не особистий показник менеджера."
+                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: "rgba(47,111,219,0.14)", color: "#2f6fdb", cursor: "help", verticalAlign: "middle" }}>
+                    за конверсією команди
+                  </span>
+                )}
+              </>,
+              row.conversionSource === "team" ? "особистих заявок замало" : `${row.conversionWon}/${row.conversionEntered} заявок`)}
+            {cell("Ср. чек",
+              <>
+                {row.avgCheck != null ? formatAmount(row.avgCheck) : dash}
+                {row.avgCheckSource === "team" && (
+                  <span title="У менеджера немає успішних угод у періоді — показано середній чек КОМАНДИ. Це не особистий показник."
+                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: "rgba(47,111,219,0.14)", color: "#2f6fdb", cursor: "help", verticalAlign: "middle" }}>
+                    чек команди
+                  </span>
+                )}
+              </>,
+              row.avgCheckSource === "team" ? "своїх успішних угод немає" : "успішних угод")}
             {cell("₴ з ліда", row.perLead != null ? formatAmount(row.perLead) : dash, "конверсія × чек")}
             {cell("ТРЕБА ЛІДІВ", row.leadsNeeded != null ? row.leadsNeeded : dash,
               row.maxMonthlyLeads > 0 ? `макс за 6 міс: ${row.maxMonthlyLeads}` : undefined, true)}
