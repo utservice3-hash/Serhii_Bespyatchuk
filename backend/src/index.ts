@@ -44,7 +44,7 @@ import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
-import { syncDealActivity, healDealActivity } from "./jobs/syncDealActivity.js";
+import { syncDealActivity, healDealActivity, syncContactActivity, healContactActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
@@ -273,6 +273,18 @@ cron.schedule("15,45 * * * *", () => {
 cron.schedule("40 */3 * * *", () => {
   if (isKommoPaused()) return;
   syncDealActivity().catch((err) => console.error("Deal activity sync failed:", err));
+});
+// ФАЗА 2 — нотатки КОНТАКТІВ (дзвінки Ringostat живуть саме там). 🔴 :10, а НЕ :40 —
+// навмисно рознесено з лідовим проходом, щоб дві пагінації не били Kommo одночасно
+// (памʼять про IP-бан 08.07). Заміряно: 3-год вікно = 2 запити проти 8 лідових.
+cron.schedule("10 */3 * * *", () => {
+  if (isKommoPaused()) return;
+  syncContactActivity().catch((err) => console.error("Contact activity sync failed:", err));
+});
+// 🩺 Самолікування контактної активності — щодня 05:40 (після 05:00-піку й syncTransfers 05:20).
+cron.schedule("40 5 * * *", () => {
+  if (isKommoPaused()) return;
+  healContactActivity().catch((err) => console.error("Contact activity heal failed:", err));
 });
 // 🩺 Самолікування активності — щодня 04:40. Інкремент вище йде лише ВПЕРЕД від вотермарка,
 // тож пропущене вікно (бан/падіння/зсув) не повертається ніколи. Цей прохід звіряє по

@@ -1,5 +1,8 @@
 import { pool } from "../db/pool.js";
-import { forEachLeadNotePage, forEachLeadNotePageByIds, type KommoLeadNote } from "../kommo/client.js";
+import {
+  forEachLeadNotePage, forEachLeadNotePageByIds,
+  forEachContactNotePage, forEachContactNotePageByIds, type KommoLeadNote,
+} from "../kommo/client.js";
 import { processInChunks } from "./chunkWindow.js";
 
 // FC-пайплайни «повний цикл» — тримати синхронно з core/metrics.FC_PIPELINES.
@@ -100,6 +103,104 @@ export async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
 }
 
 /**
+ * ФАЗА 2 — нотатки КОНТАКТІВ. Kommo вішає телефонію (Ringostat) на контакт, тому
+ * `/leads/notes` дзвінків не містить узагалі (доведено на 61986895: 0 у ліда, 5 call_out
+ * на контакті). Тут `entityId` — це contact_id, тож перед застосуванням РОЗКИДАЄМО
+ * нотатку на всі угоди цього контакта (`deal_contacts`) і далі жену через ТОЙ САМИЙ
+ * `applyNotes` — правила (людські типи, created_by≠0, лише call_in/call_out рухають
+ * last_call_at, FC + не-paid) лишаються в одному місці, без другої копії логіки.
+ */
+async function applyContactNotes(notes: KommoLeadNote[]): Promise<void> {
+  const contactIds = [...new Set(notes.map((n) => n.entityId))];
+  if (!contactIds.length) return;
+  const link = await pool.query<{ contact_id: string; deal_kommo_id: string }>(
+    `SELECT contact_id, deal_kommo_id FROM deal_contacts WHERE contact_id = ANY($1::bigint[])`,
+    [contactIds]
+  );
+  if (!link.rows.length) return;
+  const dealsByContact = new Map<number, number[]>();
+  for (const r of link.rows) {
+    const c = Number(r.contact_id);
+    if (!dealsByContact.has(c)) dealsByContact.set(c, []);
+    dealsByContact.get(c)!.push(Number(r.deal_kommo_id));
+  }
+  const projected: KommoLeadNote[] = [];
+  for (const n of notes) {
+    for (const dealId of dealsByContact.get(n.entityId) ?? []) projected.push({ ...n, entityId: dealId });
+  }
+  if (projected.length) await applyNotes(projected);
+}
+
+/**
+ * Інкрементальний прохід нотаток КОНТАКТІВ. Власний вотермарк (`last_contact_note_at`),
+ * щоб збій одного проходу не зсував інший. Порціями ≤24 год, як лідовий.
+ * 🔴 РОЗНЕСЕНО В ЧАСІ з лідовим (index.ts: контактний :10, лідовий :40) — навмисно НЕ в
+ * один тік: після IP-бану 08.07.2026 головна умова — не давати сплесків паралельних
+ * пагінацій. Заміряно 30.07.2026: вікно 3 год = 355 контактних нотаток = 2 запити
+ * (лідових за той самий час — 1956 / 8), тобто прохід удвічі-вп'ятеро легший за наявний.
+ */
+export async function syncContactActivity(opts: { sinceUnix?: number; untilUnix?: number } = {}): Promise<void> {
+  if (runningContacts) {
+    console.warn("syncContactActivity: previous run still in progress — skipping this tick.");
+    return;
+  }
+  runningContacts = true;
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const isBackfill = opts.sinceUnix != null;
+    let sinceUnix = opts.sinceUnix;
+    if (sinceUnix == null) {
+      const r = await pool.query<{ last_contact_note_at: Date | null }>(
+        `SELECT last_contact_note_at FROM sync_state WHERE id = 1`
+      );
+      const last = r.rows[0]?.last_contact_note_at;
+      sinceUnix = last ? Math.floor(last.getTime() / 1000) - 300 : now - 1800;
+    }
+    const untilUnix = opts.untilUnix ?? now;
+    const total = await processInChunks(
+      sinceUnix,
+      untilUnix,
+      (from, to) => forEachContactNotePage(from, to, applyContactNotes),
+      isBackfill
+        ? null
+        : (chunkUntil) =>
+            pool.query(`UPDATE sync_state SET last_contact_note_at = $1 WHERE id = 1`, [new Date(chunkUntil * 1000)]).then(() => {})
+    );
+    console.log(`Contact activity synced: ${total} notes scanned (${sinceUnix}..${untilUnix}).`);
+  } finally {
+    runningContacts = false;
+  }
+}
+
+/**
+ * 🩺 САМОЛІКУВАННЯ КОНТАКТНОЇ АКТИВНОСТІ — той самий принцип, що у ФАЗІ 1: інкремент іде
+ * лише вперед, тож пропущене вікно не повернеться саме. Звіряємо ПО СУТНОСТЯХ: беремо
+ * контакти, привʼязані до АКТИВНИХ FC-угод, і переганяємо їхні нотатки через
+ * `applyContactNotes` (монотонний). Вотермарк НЕ рухаємо.
+ * Це ж — разовий бекфіл: `--backfill-contacts`.
+ */
+export async function healContactActivity(): Promise<{ contacts: number; notes: number; batches: number }> {
+  const r = await pool.query<{ contact_id: string }>(
+    `SELECT DISTINCT dc.contact_id
+       FROM deal_contacts dc
+       JOIN deals d ON d.kommo_id = dc.deal_kommo_id
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE d.pipeline_id = ANY($1::bigint[]) AND psm.funnel_stage <> 'paid'
+      ORDER BY dc.contact_id`,
+    [FC_PIPELINES]
+  );
+  const ids = r.rows.map((x) => Number(x.contact_id));
+  const BATCH = 100;
+  let notes = 0, batches = 0;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    batches++;
+    notes += await forEachContactNotePageByIds(ids.slice(i, i + BATCH), applyContactNotes);
+  }
+  console.log(`healContactActivity: ${ids.length} контактів активних FC-угод, ${batches} батчів, ${notes} нотаток.`);
+  return { contacts: ids.length, notes, batches };
+}
+
+/**
  * 🩺 САМОЛІКУВАННЯ АКТИВНОСТІ (ФАЗА 1). Інкрементальний прохід іде ЛИШЕ ВПЕРЕД від
  * вотермарка (`sinceUnix = last_activity_note_at - 300`), тому будь-яке пропущене вікно —
  * IP-бан, падіння, ручний зсув вотермарка — губиться НАЗАВЖДИ: жоден наступний тік туди
@@ -181,6 +282,7 @@ export async function backfillLastCall(): Promise<void> {
 }
 
 let running = false;
+let runningContacts = false; // окремий guard: контактний і лідовий проходи незалежні
 
 /**
  * Pulls Kommo lead notes and records the latest human-made activity per deal in
@@ -228,7 +330,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // CLI:
   //   `node dist/jobs/syncDealActivity.js --months=6`      → backfill активності за N міс (як було)
   //   `node dist/jobs/syncDealActivity.js --backfill-calls` → цільовий бекфіл last_call_at (активні FC)
-  if (process.argv.includes("--heal-activity")) {
+  if (process.argv.includes("--backfill-contacts")) {
+    healContactActivity()
+      .then(() => pool.end())
+      .catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+  } else if (process.argv.includes("--heal-activity")) {
     healDealActivity()
       .then(() => pool.end())
       .catch((err) => {

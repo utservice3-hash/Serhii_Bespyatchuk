@@ -15,6 +15,7 @@ import {
   fetchContactsByIds,
   fetchCompaniesByIds,
   fetchUsers,
+  type KommoDeal,
 } from "../kommo/client.js";
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 import { provisionUsers } from "../db/userProvisioning.js";
@@ -357,6 +358,11 @@ export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<
       );
     }
 
+    // Звʼязок угода↔контакт — з ТОГО САМОГО знімка `deal._embedded.contacts`, який уже
+    // в руках: НУЛЬ додаткових запитів до Kommo. Живить рознесення нотаток контактів
+    // (дзвінки Ringostat) по угодах — див. `syncContactActivity`.
+    await upsertDealContacts(deals);
+
     // Персистимо лідоген-слід із поточного знімка реєстру (+ transfer_events) у
     // постійну leadgen_touch ПЕРЕД reclassify — щоб хвіст не губився, коли реєстр
     // перезапише вікно, і угода не мігрувала назад у «вручну».
@@ -437,6 +443,42 @@ function resolveClient(
   }
 
   return { name: null, key: null };
+}
+
+/**
+ * Пише `deal_contacts` із вже завантаженого знімка угод (ФАЗА 2 «дзвінки»). Kommo вішає
+ * телефонію на КОНТАКТ, тож без цього лінка дзвінок нікуди рознести. Джерело — те саме
+ * `_embedded.contacts`, яке синк уже отримав разом з угодою → додаткових запитів НЕМАЄ.
+ * Ідемпотентно (ON CONFLICT). Відвʼязані контакти чистимо по кожній угоді вікна, щоб
+ * старий звʼязок не тягнув чужі дзвінки після перепризначення контакта.
+ */
+async function upsertDealContacts(deals: KommoDeal[]): Promise<void> {
+  const dealIds: number[] = [], contactIds: number[] = [], mains: boolean[] = [];
+  const seenDeals: number[] = [];
+  for (const d of deals) {
+    const cs = d._embedded?.contacts ?? [];
+    seenDeals.push(d.id);
+    for (const c of cs) { dealIds.push(d.id); contactIds.push(c.id); mains.push(c.is_main === true); }
+  }
+  if (!seenDeals.length) return;
+  if (dealIds.length) {
+    await pool.query(
+      `INSERT INTO deal_contacts (deal_kommo_id, contact_id, is_main, updated_at)
+       SELECT * FROM (SELECT UNNEST($1::bigint[]) AS d, UNNEST($2::bigint[]) AS c,
+                             UNNEST($3::boolean[]) AS m, now() AS u) v
+       ON CONFLICT (deal_kommo_id, contact_id)
+       DO UPDATE SET is_main = EXCLUDED.is_main, updated_at = now()`,
+      [dealIds, contactIds, mains]
+    );
+  }
+  // прибрати звʼязки, яких уже немає в CRM (лише для угод цього вікна)
+  await pool.query(
+    `DELETE FROM deal_contacts dc
+      WHERE dc.deal_kommo_id = ANY($1::bigint[])
+        AND NOT EXISTS (SELECT 1 FROM (SELECT UNNEST($2::bigint[]) d, UNNEST($3::bigint[]) c) v
+                         WHERE v.d = dc.deal_kommo_id AND v.c = dc.contact_id)`,
+    [seenDeals, dealIds, contactIds]
+  );
 }
 
 export async function upsertDeal(

@@ -668,12 +668,24 @@ export async function forEachLeadNotePage(
   toUnix: number,
   onPage: (notes: KommoLeadNote[]) => Promise<void>
 ): Promise<number> {
+  return forEachNotePage("leads", fromUnix, toUnix, onPage);
+}
+
+// Спільне ядро пагінації нотаток (leads | contacts) — щоб два проходи не розʼїхались у
+// поведінці (ліміт, умова виходу, форма KommoLeadNote). Бекоф/429/403 живе в kommoRequest.
+type NoteEntity = "leads" | "contacts";
+async function forEachNotePage(
+  entity: NoteEntity,
+  fromUnix: number,
+  toUnix: number,
+  onPage: (notes: KommoLeadNote[]) => Promise<void>
+): Promise<number> {
   const limit = 250;
   let page = 1;
   let total = 0;
   for (;;) {
     const data = await kommoRequest<KommoListResponse<KommoNoteRaw>>(
-      `/api/v4/leads/notes?limit=${limit}&page=${page}` +
+      `/api/v4/${entity}/notes?limit=${limit}&page=${page}` +
         `&${encodeURIComponent("filter[updated_at][from]")}=${fromUnix}` +
         `&${encodeURIComponent("filter[updated_at][to]")}=${toUnix}`
     );
@@ -694,13 +706,8 @@ export async function forEachLeadNotePage(
   return total;
 }
 
-/**
- * Streams lead notes for a SPECIFIC set of lead ids (`filter[entity_id][]`), all
- * note types, paginated. Живить цільовий бекфіл last_call_at: замість сканувати рік
- * усіх нотаток компанії (~сотні тис.), тягнемо нотатки лише активних FC-угод по їхніх
- * id (обмежений набір). Kommo обмежує довжину URL — викликати БАТЧАМИ (≤100 id).
- */
-export async function forEachLeadNotePageByIds(
+async function forEachNotePageByIds(
+  entity: NoteEntity,
   ids: number[],
   onPage: (notes: KommoLeadNote[]) => Promise<void>
 ): Promise<number> {
@@ -711,7 +718,7 @@ export async function forEachLeadNotePageByIds(
   let total = 0;
   for (;;) {
     const data = await kommoRequest<KommoListResponse<KommoNoteRaw>>(
-      `/api/v4/leads/notes?limit=${limit}&page=${page}&${idFilter}`
+      `/api/v4/${entity}/notes?limit=${limit}&page=${page}&${idFilter}`
     );
     const raw = data._embedded?.notes ?? [];
     const notes: KommoLeadNote[] = raw.map((n) => ({
@@ -728,4 +735,39 @@ export async function forEachLeadNotePageByIds(
     page += 1;
   }
   return total;
+}
+
+/**
+ * Те саме для нотаток КОНТАКТІВ. Kommo вішає телефонію (Ringostat) на КОНТАКТ, а не на
+ * лід — у стрічці угоди дзвінок видно лише через звʼязок. Тому `/leads/notes` їх не
+ * повертає взагалі (перевірено 30.07.2026 на угоді 61986895: 0 дзвінків у нотатках ліда,
+ * 5 call_out на її контакті). Дзеркало `forEachLeadNotePage` — та сама пагінація й фільтр.
+ */
+export async function forEachContactNotePage(
+  fromUnix: number,
+  toUnix: number,
+  onPage: (notes: KommoLeadNote[]) => Promise<void>
+): Promise<number> {
+  return forEachNotePage("contacts", fromUnix, toUnix, onPage);
+}
+
+/** Нотатки КОНТАКТІВ по конкретних id — живить самолікування/бекфіл (батчами ≤100 id). */
+export async function forEachContactNotePageByIds(
+  ids: number[],
+  onPage: (notes: KommoLeadNote[]) => Promise<void>
+): Promise<number> {
+  return forEachNotePageByIds("contacts", ids, onPage);
+}
+
+/**
+ * Streams lead notes for a SPECIFIC set of lead ids (`filter[entity_id][]`), all
+ * note types, paginated. Живить цільовий бекфіл last_call_at: замість сканувати рік
+ * усіх нотаток компанії (~сотні тис.), тягнемо нотатки лише активних FC-угод по їхніх
+ * id (обмежений набір). Kommo обмежує довжину URL — викликати БАТЧАМИ (≤100 id).
+ */
+export async function forEachLeadNotePageByIds(
+  ids: number[],
+  onPage: (notes: KommoLeadNote[]) => Promise<void>
+): Promise<number> {
+  return forEachNotePageByIds("leads", ids, onPage);
 }

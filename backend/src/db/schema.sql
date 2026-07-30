@@ -1302,6 +1302,25 @@ WHERE NOT EXISTS (SELECT 1 FROM bank_accounts);
 UPDATE bank_accounts SET key_card = '4246001043604218' WHERE company = 'fop_privat' AND key_card IS NULL;
 UPDATE bank_accounts SET key_card = '5408810042466572' WHERE company = 'fop_mono'   AND key_card IS NULL;
 
+-- ───────────── Звʼязок УГОДА ↔ КОНТАКТ (для нотаток контактів / дзвінків) ─────────────
+-- Kommo вішає телефонію (Ringostat) на КОНТАКТ, а не на лід: у стрічці угоди дзвінок
+-- видно лише через цей звʼязок, а /leads/notes його не повертає взагалі. Щоб рознести
+-- дзвінок по угодах, потрібен лінк — його пише `syncKommo` з `deal._embedded.contacts`,
+-- які він І ТАК уже тягне (нуль додаткових запитів до Kommo).
+CREATE TABLE IF NOT EXISTS deal_contacts (
+  deal_kommo_id BIGINT NOT NULL,
+  contact_id    BIGINT NOT NULL,
+  is_main       BOOLEAN NOT NULL DEFAULT false,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (deal_kommo_id, contact_id)
+);
+-- зворотний напрям (контакт → його угоди) — гарячий шлях розкидання нотаток
+CREATE INDEX IF NOT EXISTS idx_deal_contacts_contact ON deal_contacts(contact_id);
+
+-- Вотермарк проходу нотаток КОНТАКТІВ — окремий від лідового (`last_activity_note_at`),
+-- щоб збій одного не зсував інший.
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_contact_note_at TIMESTAMPTZ;
+
 -- ─────────────────────────── Нотатки менеджера по УГОДІ ───────────────────────────
 -- Позначки для «Застряглих угод» (чому стоїть / що зроблено). НАША анотація, а не
 -- дані CRM: у Kommo не пишемо, метрик не зачіпає. Ключ — kommo_id (як у `deals`),
