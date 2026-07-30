@@ -349,23 +349,10 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
         </div>
         <div style={{ color: MUTED, textAlign: "center", fontSize: 13, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</div>
       </div>
-      {/* Розвантаження картки: активність РОЗДІЛЕНО на 📅 Місяць і 🗓 Тиждень·задача */}
+      {/* Розвантаження картки: активність РОЗДІЛЕНО на 🗓 Тиждень·задача і 📅 Місяць.
+          ⚠️ ПОРЯДОК КОЛОНОК ДЗЕРКАЛИТЬ ВЕРХНІЙ РЯД: тиждень ЛІВОРУЧ, місяць ПРАВОРУЧ —
+          кожен нижній блок стоїть рівно під своїм зведенням (було навхрест). */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, padding: "0 17px 13px" }}>
-        {/* 📅 Місяць — показники факт/план за місяць */}
-        <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <b style={{ fontSize: 12 }}>📅 Місяць · показники</b><span style={{ fontSize: 10.5, color: MUTED }}>факт / план за місяць</span>
-          </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
-            <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
-            <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target} extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`}
-              hintTitle={`Авто за джерелом: ${autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}`} />
-            <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
-              hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць». Σ signed ÷ Σ угод."} />
-            <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
-          </div>
-        </div>
         {/* 🗓 Тиждень · задача з Задачника — дзеркалить РЕАЛЬНІ метрики задачника (тижнева ціль) */}
         <div style={{ border: `1px solid ${BAR}44`, borderRadius: 10, padding: "10px 12px", background: BAR + "08" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
@@ -383,6 +370,21 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
               </>
             ) : <span style={{ fontSize: 11.5, color: MUTED }}>тижнева задача не задана</span>}
             <Kpi lbl="гроші тижня" fact={m.week.fact} target={m.week.target} money hintTitle="Тижнева грошова ціль = вручну (Задачник) або динамічна (залишок місяця ÷ тижнів). Факт — отримано за цей тиждень." />
+          </div>
+        </div>
+        {/* 📅 Місяць — показники факт/план за місяць */}
+        <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <b style={{ fontSize: 12 }}>📅 Місяць · показники</b><span style={{ fontSize: 10.5, color: MUTED }}>факт / план за місяць</span>
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
+            <Kpi lbl="лідоген" fact={m.kpi.leadgen.fact} target={m.kpi.leadgen.target} />
+            <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target} extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`}
+              hintTitle={`Авто за джерелом: ${autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}`} />
+            <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
+              hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць». Σ signed ÷ Σ угод."} />
+            <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
           </div>
         </div>
       </div>
