@@ -4008,7 +4008,11 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     const mx = maxLeads.get(r.id);
     const maxMonthlyLeads = mx ? (isRnk ? mx.ad : mx.leadgen) : 0;
     const planBelowBase = f != null && f.clients > 0 && plan > 0 && forecastVal > plan;
-    const unreachable = leadsNeeded != null && maxMonthlyLeads > 0 && leadsNeeded > maxMonthlyLeads;
+    const unreachable = leadsNeeded != null && leadsNeeded > 0 && leadsNeeded > maxMonthlyLeads;
+    // ⚠️ maxMonthlyLeads === 0 — це НЕ «немає даних», а «за 6 міс не взято жодного ліда
+    // в цьому каналі», тобто найбільш недосяжний випадок. Ранній guard `> 0` глушив
+    // позначку саме там, де вона найпотрібніша: Семенюк — треба 601, максимум 0 → бейдж
+    // не спалахував, а в Дмитрука з максимумом 1 спалахував. Тепер поріг лише на потребі.
 
     return {
       managerId: r.id, name: r.name, teamId: r.team_id, channel,
