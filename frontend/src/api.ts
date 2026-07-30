@@ -2223,6 +2223,10 @@ export interface LeadRecRow {
   conversionPct: number | null; conversionEntered: number; conversionWon: number;
   avgCheck: number | null; perLead: number | null; leadsNeeded: number | null;
   enough: boolean; reasons: string[];
+  // Позначки-сигнали (на розрахунок не впливають):
+  maxMonthlyLeads: number;   // історичний максимум лідів/міс за 6 міс (свій канал)
+  planBelowBase: boolean;    // прогноз по постійних > план
+  unreachable: boolean;      // треба лідів > історичного максимуму
 }
 export interface LeadRecResp { month: string; period: string; scope: { from: string; to: string }; rows: LeadRecRow[] }
 export async function fetchLeadRecommendation(params: { month: string; period: "month" | "3m" | "year"; teamId?: number }): Promise<LeadRecResp> {

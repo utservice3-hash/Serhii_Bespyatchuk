@@ -293,6 +293,18 @@ function LeadRec({ row, loading, period, onPeriod }: {
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
         <b style={{ fontSize: 13 }}>🎯 Скільки лідів треба взяти</b>
+        {row?.planBelowBase && (
+          <span title="Прогноз по постійних клієнтах перевищує місячний план. «Треба 0» тут означає не «все добре», а що план нижчий за базу, яку менеджер і так приносить — привід переглянути план, а не розслабитись."
+                style={{ fontSize: 10.5, fontWeight: 800, padding: "2px 9px", borderRadius: 20, background: "rgba(217,119,6,0.14)", color: "#d97706", whiteSpace: "nowrap", cursor: "help" }}>
+            ⚠️ план нижчий за базу постійних
+          </span>
+        )}
+        {row?.unreachable && (
+          <span title={`Потрібно ${row.leadsNeeded} лідів, а найкращий місяць за останні 6 — ${row.maxMonthlyLeads}. Цифра арифметично правильна, але як ціль нечитабельна: за поточної структури (конверсія × чек) план не забезпечений.`}
+                style={{ fontSize: 10.5, fontWeight: 800, padding: "2px 9px", borderRadius: 20, background: "rgba(220,38,38,0.12)", color: "#dc2626", whiteSpace: "nowrap", cursor: "help" }}>
+            🚫 недосяжно за поточної структури
+          </span>
+        )}
         <span style={{ fontSize: 11, color: MUTED }}>
           (план − прогноз по постійних) ÷ (конверсія × ср.чек){row ? ` · канал: ${row.channel === "ad" ? "реклама" : "лідоген"}` : ""}
         </span>
@@ -320,7 +332,8 @@ function LeadRec({ row, loading, period, onPeriod }: {
               `${row.conversionWon}/${row.conversionEntered} заявок`)}
             {cell("Ср. чек", row.avgCheck != null ? formatAmount(row.avgCheck) : dash, "успішних угод")}
             {cell("₴ з ліда", row.perLead != null ? formatAmount(row.perLead) : dash, "конверсія × чек")}
-            {cell("ТРЕБА ЛІДІВ", row.leadsNeeded != null ? row.leadsNeeded : dash, undefined, true)}
+            {cell("ТРЕБА ЛІДІВ", row.leadsNeeded != null ? row.leadsNeeded : dash,
+              row.maxMonthlyLeads > 0 ? `макс за 6 міс: ${row.maxMonthlyLeads}` : undefined, true)}
           </div>
           {row.reasons.length > 0 && (
             <div style={{ marginTop: 9, fontSize: 11.5, color: "#d97706" }}>

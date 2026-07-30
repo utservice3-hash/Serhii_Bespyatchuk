@@ -2615,6 +2615,60 @@ export async function conversionLeadgenByManager(s: MetricScope): Promise<MgrCon
   });
 }
 
+export interface MgrMaxLeads { ad: number; leadgen: number }
+/**
+ * ІСТОРИЧНИЙ МАКСИМУМ лідів за місяць по менеджеру (за останні `months` місяців), окремо
+ * по каналах. Потрібен, щоб позначити рекомендацію «треба N лідів» як НЕДОСЯЖНУ, коли N
+ * більший за все, що менеджер брав у найкращий місяць: арифметично цифра правильна, але
+ * читати її як ціль не можна — це сигнал «план не забезпечений структурою», а не завдання.
+ *
+ * Знаменники — ТІ САМІ, що в конверсіях (інакше порівнювали б різні сутності):
+ *   • ad      — вхід у рекламну зону (`ADZONE_TAKEN`), платний новий лід (`paidAdSql`+SEGMENT='new'),
+ *               помісячно за датою входу — тобто знаменник `conversionAdsByManager`;
+ *   • leadgen — `leadgen_touch` за `transfer_date` — знаменник `conversionLeadgenByManager`.
+ * Поточний (неповний) місяць ВИКЛЮЧЕНО: інакше максимум занижувався б у першій половині
+ * місяця й позначка спрацьовувала б хибно.
+ */
+export async function maxMonthlyLeadsByManager(adSources: string[], months = 6): Promise<Map<number, MgrMaxLeads>> {
+  const since = `date_trunc('month', CURRENT_DATE) - INTERVAL '${Math.max(1, months)} months'`;
+  const curMonth = `date_trunc('month', CURRENT_DATE)`;
+  const [adRes, lgRes] = await Promise.all([
+    pool.query<{ manager_id: number; mx: string }>(
+      `WITH adzone AS (
+          SELECT kommo_id, MIN(changed_at) AS entered_at
+            FROM deal_stage_events WHERE status_id = ANY($1) GROUP BY kommo_id),
+        pop AS (
+          SELECT d.manager_id, date_trunc('month', (a.entered_at ${KYIV})) AS mth, a.kommo_id
+            FROM adzone a
+            JOIN deals d ON d.kommo_id = a.kommo_id
+            JOIN managers m ON m.id = d.manager_id AND m.is_active
+           WHERE ${paidAdSql("$2")} AND (${SEGMENT_CASE}) = 'new'
+             AND (a.entered_at ${KYIV}) >= ${since} AND (a.entered_at ${KYIV}) < ${curMonth}),
+        per_month AS (
+          SELECT manager_id, mth, COUNT(DISTINCT kommo_id) AS n FROM pop GROUP BY 1, 2)
+       SELECT manager_id, MAX(n) AS mx FROM per_month GROUP BY manager_id`,
+      [ADZONE_TAKEN, adSources]),
+    pool.query<{ manager_id: number; mx: string }>(
+      `WITH per_month AS (
+          SELECT d.manager_id, date_trunc('month', lt.transfer_date) AS mth,
+                 COUNT(DISTINCT lt.lead_kommo_id) AS n
+            FROM leadgen_touch lt
+            JOIN deals d ON d.kommo_id = lt.lead_kommo_id
+            JOIN managers m ON m.id = d.manager_id AND m.is_active
+           WHERE lt.transfer_date >= ${since} AND lt.transfer_date < ${curMonth}
+           GROUP BY 1, 2)
+       SELECT manager_id, MAX(n) AS mx FROM per_month GROUP BY manager_id`),
+  ]);
+  const out = new Map<number, MgrMaxLeads>();
+  const put = (id: number, k: "ad" | "leadgen", v: number) => {
+    const e = out.get(id) ?? { ad: 0, leadgen: 0 };
+    e[k] = v; out.set(id, e);
+  };
+  for (const x of adRes.rows) put(x.manager_id, "ad", Number(x.mx));
+  for (const x of lgRes.rows) put(x.manager_id, "leadgen", Number(x.mx));
+  return out;
+}
+
 export interface ExpectedBucket { deals: number; sum: number }
 export interface ExpectedPaymentsByPlanned {
   total: ExpectedBucket;

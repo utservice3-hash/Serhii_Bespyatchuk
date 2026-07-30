@@ -3914,7 +3914,7 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
 
   const { adSources } = await getSettings();
   const scope = { from, to: end, teamId, managerId: managerFilter };
-  const [plansRes, forecast, convAds, convLg, checks] = await Promise.all([
+  const [plansRes, forecast, convAds, convLg, checks, maxLeads] = await Promise.all([
     pool.query<{ id: number; name: string; team_id: number | null; plan: string }>(
       `SELECT m.id, m.name, m.team_id, COALESCE(p.planned_value, 0) AS plan
          FROM managers m
@@ -3927,6 +3927,7 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     metrics.conversionAdsByManager(scope, adSources),
     metrics.conversionLeadgenByManager(scope),
     money.avgCheckByManager(scope),
+    metrics.maxMonthlyLeadsByManager(adSources, 6),
   ]);
 
   const fMap = new Map(forecast.map((x) => [x.managerId, x]));
@@ -3945,18 +3946,37 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     const remainder = Math.max(0, plan - forecastVal);
     const convPct = conv?.cohortPct ?? null;
     const perLead = convPct != null && avgCheck != null ? Math.round((convPct / 100) * avgCheck) : null;
-    const leadsNeeded = perLead != null && perLead > 0 ? Math.ceil(remainder / perLead) : null;
+    // Залишок 0 (постійні покривають план) → треба 0 лідів, і конверсія тут не потрібна:
+    // ділити нічого. Інакше менеджер із повністю закритим планом отримував «—» і сигнал
+    // «план нижчий за базу» губився саме там, де він найголосніший.
+    const leadsNeeded = f != null && plan > 0 && remainder === 0 ? 0
+      : perLead != null && perLead > 0 ? Math.ceil(remainder / perLead) : null;
 
     // Причини «—» — показуємо ЧОМУ, а не мовчазний нуль.
     const reasons: string[] = [];
     if (plan <= 0) reasons.push("немає плану на місяць");
     if (!f || f.clients === 0) reasons.push("немає постійних клієнтів з історією");
-    if (convPct == null) reasons.push(conv ? `тонкий знаменник конверсії (${conv.entered} < 10)` : "немає даних по конверсії");
-    if (avgCheck == null) reasons.push("немає середнього чека (немає успішних угод у періоді)");
+    // Коли залишок 0 — конверсія й чек у розрахунку не беруть участі, тож і «бракує даних»
+    // про них казати нечесно: рекомендація повна.
+    if (remainder !== 0 || f == null || plan <= 0) {
+      if (convPct == null) reasons.push(conv ? `тонкий знаменник конверсії (${conv.entered} < 10)` : "немає даних по конверсії");
+      if (avgCheck == null) reasons.push("немає середнього чека (немає успішних угод у періоді)");
+    }
+
+    // Дві позначки (лише сигнал, на розрахунок НЕ впливають):
+    //  • planBelowBase — прогноз по постійних перевищує план: «треба 0» насправді означає
+    //    не «все добре», а що план нижчий за базу постійних → сигнал перегляду плану;
+    //  • unreachable — потреба перевищує історичний максимум менеджера за 6 міс: цифра
+    //    арифметично правильна, але як ціль нечитабельна (структура не тягне).
+    const mx = maxLeads.get(r.id);
+    const maxMonthlyLeads = mx ? (isRnk ? mx.ad : mx.leadgen) : 0;
+    const planBelowBase = f != null && f.clients > 0 && plan > 0 && forecastVal > plan;
+    const unreachable = leadsNeeded != null && maxMonthlyLeads > 0 && leadsNeeded > maxMonthlyLeads;
 
     return {
       managerId: r.id, name: r.name, teamId: r.team_id, channel,
       plan,
+      maxMonthlyLeads, planBelowBase, unreachable,
       forecast: f ? forecastVal : null, forecastClients: f?.clients ?? 0,
       remainder: f ? remainder : null,
       conversionPct: convPct, conversionEntered: conv?.entered ?? 0, conversionWon: conv?.won ?? 0,
