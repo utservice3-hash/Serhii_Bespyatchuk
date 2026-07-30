@@ -105,6 +105,15 @@ function requireManageUsers(req: import("express").Request, res: import("express
   }
   return true;
 }
+// Скидання пароля — ОКРЕМЕ право, відділене від manage_users: дозволяємо тільки
+// довіреним (ceo/opdir/admin), тоді як керування ролями/юзерами (manage_users) — ширше.
+function requireResetPasswords(req: import("express").Request, res: import("express").Response): boolean {
+  if (!roleHasPerm(req.auth!.roleKey, "reset_passwords")) {
+    res.status(403).json({ error: "Немає права скидати паролі" });
+    return false;
+  }
+  return true;
+}
 const audit = (req: import("express").Request) => ({ actorUserId: req.auth!.userId, actorEmail: req.auth!.email ?? null });
 
 // Список: за замовч. лише АКТИВНІ; ?archived=1 → деактивовані (Архів) з причиною/датою.
@@ -161,7 +170,7 @@ settingsRouter.post("/users/provision", async (req, res) => {
 });
 
 settingsRouter.post("/users/:id/reset-password", async (req, res) => {
-  if (!requireManageUsers(req, res)) return;
+  if (!requireResetPasswords(req, res)) return;
   const id = Number(req.params.id);
   const u = await pool.query<{ email: string }>(`SELECT email FROM users WHERE id=$1`, [id]);
   if (!u.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });

@@ -19,6 +19,7 @@ const PERMS: { key: string; label: string; hint?: string }[] = [
   { key: "manage_goals", label: "Керувати цілями" },
   { key: "enter_manual_stats", label: "Вносити ручні показники статистик", hint: "бюджети/фінанси/HR" },
   { key: "manage_users", label: "Керувати користувачами й ролями", hint: "лише адмін" },
+  { key: "reset_passwords", label: "Скидати паролі", hint: "окреме право; лише СЕО/ОД/адмін" },
   { key: "export", label: "Експорт у Excel / PDF" },
   { key: "view_hidden_payments", label: "Бачити приховані вихідні (Виписка)", hint: "інакше приховані отримувачі відсутні" },
   { key: "manage_bank_hidden", label: "Керувати списком прихованих (Виписка)" },

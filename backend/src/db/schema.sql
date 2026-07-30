@@ -1242,20 +1242,24 @@ ON CONFLICT (key) DO NOTHING;
 -- (ON CONFLICT DO NOTHING), тож наявні рядки залишаються замороженими: якщо admin згодом
 -- дістав нові екрани (напр. «зворотний звʼязок»/bank) — СЕО/ОД їх не мали. Тут вирівнюємо
 -- ЩОРАЗУ: усі екрани й права admin + наскрізні 1×1-права поверх. Ідемпотентно.
+-- reset_passwords — ОКРЕМЕ право скидання паролів (відділене від manage_users). Base-admin
+-- дістає його тут (ідемпотентно), а ceo/opdir успадкують через синк нижче. НІКОМУ більше.
+UPDATE roles SET permissions = permissions || '{"reset_passwords":true}'::jsonb WHERE key='admin';
+
 UPDATE roles SET
   screen_access = (SELECT screen_access FROM roles WHERE key='admin'),
   permissions   = (SELECT permissions   FROM roles WHERE key='admin')
                   || '{"view_all_1x1":true,"edit_1x1_forms":true}'::jsonb
 WHERE key IN ('ceo','opdir');
 
--- КВП — ПОВНИЙ операційний адмін (рішення власника): дзеркало admin по екранах І правах,
--- але БЕЗ наскрізного 1×1. Синк саме з admin (у якого view_all_1x1/edit_1x1_forms НЕМАЄ),
--- тож за замовчуванням kvp 1×1 наскрізно не бачить (crossview=roleHasPerm(roleKey,'view_all_1x1')).
--- ⚠️ kvp отримує manage_users → технічно може відредагувати роль і додати собі 1×1;
--- заборона 1×1 тут ДЕФОЛТНА, не жорстка (свідомий вибір власника). Ідемпотентно.
+-- КВП — операційний адмін БЕЗ керування юзерами/ролями, БЕЗ скидання паролів, БЕЗ 1×1.
+-- Дзеркало admin по екранах; права = admin МІНУС {manage_users, reset_passwords} (1×1-прав
+-- admin і так не має). Без manage_users kvp НЕ може редагувати ролі → заборона 1×1 тут
+-- ЗАЛІЗНА (не самоескалюється). З банком і всіма операційними екранами лишається. Ідемпотентно.
 UPDATE roles SET
   screen_access = (SELECT screen_access FROM roles WHERE key='admin'),
-  permissions   = (SELECT permissions   FROM roles WHERE key='admin')
+  permissions   = ((SELECT permissions FROM roles WHERE key='admin')
+                    - 'manage_users' - 'reset_passwords')
 WHERE key = 'kvp';
 
 -- Апгрейд власників у ролі СЕО/ОД (лише якщо зараз чистий 'admin' → суперсет, без втрати прав).
