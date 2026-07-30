@@ -3916,10 +3916,12 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
   const scope = { from, to: end, teamId, managerId: managerFilter };
   const [plansRes, forecast, convAds, convLg, checks, maxLeads] = await Promise.all([
     pool.query<{ id: number; name: string; team_id: number | null; plan: string }>(
+      // 🔒 ЛИШЕ КОМЕРЦІЙНІ (те саме джерело, що stuckDealsGrouped): фінвідділ і команда
+      // лідогенерації не продають — рекомендація «скільки лідів взяти» для них безглузда.
       `SELECT m.id, m.name, m.team_id, COALESCE(p.planned_value, 0) AS plan
          FROM managers m
          LEFT JOIN plans p ON p.manager_id = m.id AND p.metric = 'payment_amount' AND p.plan_date = $1
-        WHERE m.is_active AND m.team_id IS NOT NULL
+        WHERE m.is_active AND ${metrics.commercialManagerSql("m")}
           ${teamId != null ? "AND m.team_id = " + Number(teamId) : ""}
           ${managerFilter != null ? "AND m.id = " + Number(managerFilter) : ""}
         ORDER BY m.name`, [planDate]),
@@ -3934,6 +3936,9 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
   // угод у періоді — беремо показник КОМАНДИ в тому ж каналі. Агрегуємо на СУМАХ
   // (Σentered/Σwon, Σrevenue/Σdeals), а НЕ середнім із середніх — інакше маленький
   // менеджер важив би стільки ж, скільки великий. Пріоритет завжди в особистого.
+  // Агрегати рахуємо ЛИШЕ по тому ростеру, який показуємо: інакше «конверсія команди/
+  // компанії» включала б менеджерів, яких у видачі немає (напр. лідоген-команду).
+  const rosterIds = new Set(plansRes.rows.map((r) => r.id));
   const teamConv = new Map<string, { entered: number; won: number }>();
   const addConv = (ch: string, tid: number | null, e: number, w: number) => {
     if (tid == null) return;
@@ -3941,8 +3946,8 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     const cur = teamConv.get(k) ?? { entered: 0, won: 0 };
     cur.entered += e; cur.won += w; teamConv.set(k, cur);
   };
-  for (const x of convAds) addConv("ad", x.teamId, x.entered, x.won);
-  for (const x of convLg) addConv("leadgen", x.teamId, x.entered, x.won);
+  for (const x of convAds) if (rosterIds.has(x.managerId)) addConv("ad", x.teamId, x.entered, x.won);
+  for (const x of convLg) if (rosterIds.has(x.managerId)) addConv("leadgen", x.teamId, x.entered, x.won);
   const teamPct = (ch: string, tid: number | null): number | null => {
     const a = tid != null ? teamConv.get(`${ch}:${tid}`) : undefined;
     return a && a.entered >= 10 ? Math.round((a.won / a.entered) * 1000) / 10 : null;
@@ -3959,11 +3964,12 @@ dashboardRouter.get("/lead-recommendation", async (req, res) => {
     return a && a.entered >= 10 ? Math.round((a.won / a.entered) * 1000) / 10 : null;
   };
   let compRev = 0, compDeals = 0;
-  for (const x of checks) { compRev += x.revenue; compDeals += x.successDeals; }
+  for (const x of checks) if (rosterIds.has(x.managerId)) { compRev += x.revenue; compDeals += x.successDeals; }
   const companyAvgCheck = (): number | null => (compDeals > 0 ? Math.round(compRev / compDeals) : null);
   const teamById = new Map(plansRes.rows.map((r) => [r.id, r.team_id]));
   const teamCheck = new Map<number, { revenue: number; deals: number }>();
   for (const x of checks) {
+    if (!rosterIds.has(x.managerId)) continue;
     const tid = teamById.get(x.managerId);
     if (tid == null) continue;
     const cur = teamCheck.get(tid) ?? { revenue: 0, deals: 0 };
