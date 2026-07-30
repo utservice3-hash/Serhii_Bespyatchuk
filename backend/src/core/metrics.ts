@@ -2528,6 +2528,93 @@ export async function reachedAutoByManager(adSources: string[]): Promise<Map<num
   return new Map(r.rows.map((x) => [x.manager_id, { ad: Number(x.ad), leadgen: Number(x.leadgen) }]));
 }
 
+export interface MgrRepeatForecast { managerId: number; forecast: number; clients: number }
+/**
+ * ПРОГНОЗ ПО ПОСТІЙНИХ, сума по менеджеру (рекомендація «скільки лідів треба»).
+ * По кожному постійному клієнту — СЕРЕДНЄ за 3 ОСТАННІ АКТИВНІ місяці (місяць = активний,
+ * якщо в ньому були оплати; порожні ВИКИДАЮТЬСЯ, щоб сезонна пауза не занижувала прогноз —
+ * та сама логіка, що в `/repeat-client-history`). Прогноз менеджера = Σ середніх.
+ *
+ * 🔴 БЕЗ множника ×1.12: у `suggestedPlan` він є як «плановий зріст», але тут потрібен
+ * прогноз «як є» — накрутка перетворила б прогноз на ціль і занизила б потребу в лідах.
+ * 🔴 «Постійний» = ≥2 АКТИВНІ місяці за 13-місячним вікном (горизонт даних).
+ * ⚠️ Групування по (менеджер × клієнт): якщо клієнта вели двоє, кожен прогнозує зі СВОЄЇ
+ * історії з ним — це навмисно (прогноз менеджера, не клієнта), тож Σ по менеджерах може
+ * бути більшою за «прогноз по клієнту» в /loyalty, де клієнт рахується РАЗ.
+ */
+export async function repeatForecastByManager(s: MetricScope = {}): Promise<MgrRepeatForecast[]> {
+  const params: unknown[] = [FC_PIPELINES];
+  const conds = [
+    "d.status_id = 142", "d.pipeline_id = ANY($1)",
+    "d.closed_at_kommo IS NOT NULL", "d.client_key IS NOT NULL",
+    `(d.closed_at_kommo ${KYIV})::date >= CURRENT_DATE - INTERVAL '13 months'`,
+  ];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ manager_id: number; forecast: string; clients: string }>(
+    `WITH won AS (
+        SELECT d.manager_id, d.client_key,
+               date_trunc('month', (d.closed_at_kommo ${KYIV})) AS mth,
+               SUM(d.price) AS rev
+          FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+         WHERE ${conds.join(" AND ")}
+         GROUP BY 1, 2, 3
+        HAVING SUM(d.price) > 0),          -- активний місяць = були оплати (порожні відсутні за побудовою)
+      ranked AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY manager_id, client_key ORDER BY mth DESC) rn,
+               COUNT(*)  OVER (PARTITION BY manager_id, client_key) active_months
+          FROM won),
+      per_client AS (
+        SELECT manager_id, client_key, AVG(rev) AS avg_rev, MAX(active_months) AS active_months
+          FROM ranked WHERE rn <= 3 GROUP BY 1, 2)
+     SELECT manager_id, COALESCE(SUM(avg_rev), 0) AS forecast, COUNT(*) AS clients
+       FROM per_client WHERE active_months >= 2
+      GROUP BY manager_id`,
+    params
+  );
+  return r.rows.map((x) => ({
+    managerId: x.manager_id, forecast: Math.round(Number(x.forecast)), clients: Number(x.clients),
+  }));
+}
+
+/**
+ * `conversion_leadgen` ПО МЕНЕДЖЕРУ (пара до `conversionAdsByManager`, для РПК).
+ * Побудовано ЗА ЗРАЗКОМ лайфтайм-конверсії РПК (Варіант A, `reachedAutoByManager`) —
+ * когорту й чисельник не винаходимо заново:
+ *   знаменник — лідоген-заявки менеджера (`leadgen_touch` за `transfer_date` у періоді,
+ *               DISTINCT lead_kommo_id — той самий вираз, що в `leadgenByManager`);
+ *   чисельник — ТІ САМІ заявки, чия угода БУДЬ-КОЛИ досягла «авто працює»
+ *               (`deal_stage_events.status_id ∈ AUTO_WORKING`).
+ * Чисельник ⊆ знаменника ЗА ПОБУДОВОЮ (фільтр над тим самим набором) → конверсія ≤100%
+ * без окремого клампа. entered<10 → cohortPct=null (як у рекламній).
+ */
+export async function conversionLeadgenByManager(s: MetricScope): Promise<MgrConversion[]> {
+  const params: unknown[] = [AUTO_WORKING];
+  const conds = ["d.manager_id IS NOT NULL"];
+  if (s.from) { params.push(s.from); conds.push(`lt.transfer_date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; entered: string; won: string }>(
+    `SELECT d.manager_id, m.name, m.team_id,
+            COUNT(DISTINCT lt.lead_kommo_id) AS entered,
+            COUNT(DISTINCT lt.lead_kommo_id) FILTER (
+              WHERE EXISTS (SELECT 1 FROM deal_stage_events e
+                             WHERE e.kommo_id = d.kommo_id AND e.status_id = ANY($1))) AS won
+       FROM leadgen_touch lt
+       JOIN deals d ON d.kommo_id = lt.lead_kommo_id
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+      WHERE ${conds.join(" AND ")}
+      GROUP BY d.manager_id, m.name, m.team_id`,
+    params
+  );
+  return r.rows.map((x) => {
+    const entered = Number(x.entered), won = Number(x.won);
+    return { managerId: x.manager_id, name: x.name, teamId: x.team_id, entered, won,
+      cohortPct: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null };
+  });
+}
+
 export interface ExpectedBucket { deals: number; sum: number }
 export interface ExpectedPaymentsByPlanned {
   total: ExpectedBucket;

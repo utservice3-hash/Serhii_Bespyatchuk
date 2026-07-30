@@ -3885,6 +3885,89 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
  * Повертає: history[{month, orders, revenue}] (13 міс), avgRecent (сер. по
  * останніх 3 активних міс.), suggestedPlan (avgRecent × 1.12) для челендж-плану.
  */
+/**
+ * РЕКОМЕНДАЦІЯ «скільки лідів треба взяти» (вкладка «Плани», розкривний рядок).
+ *   залишок = max(0, план − прогноз по постійних)
+ *   ₴ з ліда = конверсія × ср.чек;  треба лідів = ceil(залишок ÷ ₴ з ліда)
+ * Канал конверсії: РНК → реклама, решта → лідоген (RNK_TEAM_IDS з ядра).
+ *
+ * 🔴 СУТО ПОХІДНИЙ, READ-ONLY: жодного запису в `plans` чи будь-куди — рекомендація лише
+ * показується. План береться з `plans` як є (сирий), ядро планів не чіпається.
+ * 🔴 ЧЕСНІСТЬ: немає постійних / конверсія null (entered<10) / немає чека → віддаємо null
+ * і причину, а НЕ 0 і НЕ середнє по команді. Фронт малює «—» з підписом.
+ */
+dashboardRouter.get("/lead-recommendation", async (req, res) => {
+  const auth = req.auth!;
+  const monthStr = (req.query.month as string) || new Date().toISOString().slice(0, 7);
+  const period = (req.query.period as string) || "3m"; // month | 3m | year
+  const planDate = `${monthStr}-01`;
+  const [y, mo] = monthStr.split("-").map(Number);
+  const end = new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
+  const from = period === "month" ? planDate
+    : period === "year" ? `${y}-01-01`
+    : new Date(Date.UTC(y, mo - 3, 1)).toISOString().slice(0, 10);
+
+  // Роль-скоуп той самий, що в plans-grid: менеджер — себе, тімлід — свою команду.
+  const teamId: number | null = auth.role === "manager" || auth.role === "team_lead"
+    ? (auth.teamId ?? null) : (req.query.teamId ? Number(req.query.teamId) : null);
+  const managerFilter: number | null = auth.role === "manager" ? (auth.managerId ?? null) : null;
+
+  const { adSources } = await getSettings();
+  const scope = { from, to: end, teamId, managerId: managerFilter };
+  const [plansRes, forecast, convAds, convLg, checks] = await Promise.all([
+    pool.query<{ id: number; name: string; team_id: number | null; plan: string }>(
+      `SELECT m.id, m.name, m.team_id, COALESCE(p.planned_value, 0) AS plan
+         FROM managers m
+         LEFT JOIN plans p ON p.manager_id = m.id AND p.metric = 'payment_amount' AND p.plan_date = $1
+        WHERE m.is_active AND m.team_id IS NOT NULL
+          ${teamId != null ? "AND m.team_id = " + Number(teamId) : ""}
+          ${managerFilter != null ? "AND m.id = " + Number(managerFilter) : ""}
+        ORDER BY m.name`, [planDate]),
+    metrics.repeatForecastByManager({ teamId, managerId: managerFilter }),
+    metrics.conversionAdsByManager(scope, adSources),
+    metrics.conversionLeadgenByManager(scope),
+    money.avgCheckByManager(scope),
+  ]);
+
+  const fMap = new Map(forecast.map((x) => [x.managerId, x]));
+  const adMap = new Map(convAds.map((x) => [x.managerId, x]));
+  const lgMap = new Map(convLg.map((x) => [x.managerId, x]));
+  const chkMap = new Map(checks.map((x) => [x.managerId, x.avgCheck]));
+
+  const rows = plansRes.rows.map((r) => {
+    const plan = Math.round(Number(r.plan));
+    const isRnk = r.team_id != null && metrics.RNK_TEAM_IDS.includes(r.team_id);
+    const channel = isRnk ? "ad" : "leadgen";
+    const conv = (isRnk ? adMap : lgMap).get(r.id) ?? null;
+    const f = fMap.get(r.id) ?? null;
+    const avgCheck = chkMap.get(r.id) ?? null;
+    const forecastVal = f?.forecast ?? 0;
+    const remainder = Math.max(0, plan - forecastVal);
+    const convPct = conv?.cohortPct ?? null;
+    const perLead = convPct != null && avgCheck != null ? Math.round((convPct / 100) * avgCheck) : null;
+    const leadsNeeded = perLead != null && perLead > 0 ? Math.ceil(remainder / perLead) : null;
+
+    // Причини «—» — показуємо ЧОМУ, а не мовчазний нуль.
+    const reasons: string[] = [];
+    if (plan <= 0) reasons.push("немає плану на місяць");
+    if (!f || f.clients === 0) reasons.push("немає постійних клієнтів з історією");
+    if (convPct == null) reasons.push(conv ? `тонкий знаменник конверсії (${conv.entered} < 10)` : "немає даних по конверсії");
+    if (avgCheck == null) reasons.push("немає середнього чека (немає успішних угод у періоді)");
+
+    return {
+      managerId: r.id, name: r.name, teamId: r.team_id, channel,
+      plan,
+      forecast: f ? forecastVal : null, forecastClients: f?.clients ?? 0,
+      remainder: f ? remainder : null,
+      conversionPct: convPct, conversionEntered: conv?.entered ?? 0, conversionWon: conv?.won ?? 0,
+      avgCheck, perLead, leadsNeeded,
+      enough: leadsNeeded != null && f != null && plan > 0,
+      reasons,
+    };
+  });
+  res.json({ month: monthStr, period, scope: { from, to: end }, rows });
+});
+
 dashboardRouter.get("/repeat-client-history", async (req, res) => {
   const clientKey = String(req.query.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });

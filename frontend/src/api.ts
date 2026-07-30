@@ -2212,3 +2212,20 @@ export async function addBankHiddenPayee(pattern: string, matchType: "exact" | "
 export async function deleteBankHiddenPayee(id: number): Promise<void> {
   await api.delete(`/bank/hidden-payees/${id}`);
 }
+
+// ── Рекомендація «скільки лідів треба взяти» (вкладка «Плани», розкривний рядок).
+// Суто похідна від планів/історії — НІЧОГО не змінює в БД.
+export interface LeadRecRow {
+  managerId: number; name: string; teamId: number | null; channel: "ad" | "leadgen";
+  plan: number;
+  forecast: number | null; forecastClients: number;
+  remainder: number | null;
+  conversionPct: number | null; conversionEntered: number; conversionWon: number;
+  avgCheck: number | null; perLead: number | null; leadsNeeded: number | null;
+  enough: boolean; reasons: string[];
+}
+export interface LeadRecResp { month: string; period: string; scope: { from: string; to: string }; rows: LeadRecRow[] }
+export async function fetchLeadRecommendation(params: { month: string; period: "month" | "3m" | "year"; teamId?: number }): Promise<LeadRecResp> {
+  const { data } = await api.get<LeadRecResp>("/dashboard/lead-recommendation", { params });
+  return data;
+}

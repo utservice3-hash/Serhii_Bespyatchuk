@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fetchPlansGrid, savePlan, type PlansGrid, type Team } from "../../../api";
+import { fetchPlansGrid, savePlan, fetchLeadRecommendation, type PlansGrid, type Team, type LeadRecRow } from "../../../api";
 import { formatAmount } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { teamOptions } from "../teamColors";
@@ -20,6 +20,20 @@ export function PlansSection({ canPickTeam, teams, canEdit = true }: { canPickTe
   const [savingId, setSavingId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  // Рекомендація «скільки лідів треба» — розкривний рядок по кліку на менеджера.
+  // Вантажиться ОДИН раз на (місяць × період × команда) і роздається по managerId.
+  const [openRec, setOpenRec] = useState<number | null>(null);
+  const [recPeriod, setRecPeriod] = useState<"month" | "3m" | "year">("3m");
+  const [rec, setRec] = useState<Map<number, LeadRecRow> | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setRec(null);
+    fetchLeadRecommendation({ month, period: recPeriod, teamId: teamId ? Number(teamId) : undefined })
+      .then((r) => { if (alive) setRec(new Map(r.rows.map((x) => [x.managerId, x]))); })
+      .catch(() => { if (alive) setRec(new Map()); });
+    return () => { alive = false; };
+  }, [month, recPeriod, teamId, reload]);
 
   useEffect(() => {
     let alive = true;
@@ -171,8 +185,14 @@ export function PlansSection({ canPickTeam, teams, canEdit = true }: { canPickTe
                       const draft = drafts[m.managerId];
                       const dirty = draft != null && Number(draft.replace(/[^\d.-]/g, "")) !== m.plan;
                       return (
-                        <tr key={m.managerId}>
-                          <td style={{ textAlign: "left", paddingLeft: 18 }}>{m.name}</td>
+                        <Fragment key={m.managerId}>
+                        <tr>
+                          <td style={{ textAlign: "left", paddingLeft: 18, cursor: "pointer", userSelect: "none" }}
+                              title="Показати рекомендацію: скільки лідів треба взяти"
+                              onClick={() => setOpenRec((o) => (o === m.managerId ? null : m.managerId))}>
+                            <span style={{ color: "var(--text-muted)", fontSize: 11, marginRight: 5 }}>{openRec === m.managerId ? "▾" : "▸"}</span>
+                            {m.name}
+                          </td>
                           <td style={{ textAlign: "right" }}>
                             {canEdit ? (
                               <>
@@ -205,6 +225,15 @@ export function PlansSection({ canPickTeam, teams, canEdit = true }: { canPickTe
                           ))}
                           <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{formatAmount(d.perDay)}</td>
                         </tr>
+                        {openRec === m.managerId && (
+                          <tr>
+                            <td colSpan={9 + wkCols} style={{ background: sub, padding: "12px 18px" }}>
+                              <LeadRec row={rec?.get(m.managerId) ?? null} loading={rec == null}
+                                period={recPeriod} onPeriod={setRecPeriod} />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                       );
                     })}
                   </Fragment>
@@ -236,5 +265,70 @@ export function PlansSection({ canPickTeam, teams, canEdit = true }: { canPickTe
         );
       })()}
     </>
+  );
+}
+
+/**
+ * Рекомендація «скільки лідів треба взяти» — розкривний рядок під менеджером.
+ * 🔴 ЛИШЕ ПОКАЗУЄ: жодної кнопки збереження, план у БД не змінюється.
+ * 🔴 Мало даних → «—» + причина. Нуль замість «—» був би вигаданою цифрою.
+ */
+function LeadRec({ row, loading, period, onPeriod }: {
+  row: LeadRecRow | null; loading: boolean;
+  period: "month" | "3m" | "year"; onPeriod: (p: "month" | "3m" | "year") => void;
+}) {
+  const MUTED = "var(--text-muted)";
+  const cell = (label: string, value: React.ReactNode, hint?: string, strong?: boolean) => (
+    <div style={{ minWidth: 108 }}>
+      <div style={{ fontSize: 10.5, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px" }}>{label}</div>
+      <div style={{ fontSize: strong ? 19 : 15, fontWeight: strong ? 800 : 650, color: strong ? "#2f6fdb" : "var(--text)", lineHeight: 1.25 }}>{value}</div>
+      {hint && <div style={{ fontSize: 10.5, color: MUTED }}>{hint}</div>}
+    </div>
+  );
+  const dash = <span style={{ color: MUTED }}>—</span>;
+  const periods: { k: "month" | "3m" | "year"; l: string }[] = [
+    { k: "month", l: "місяць" }, { k: "3m", l: "3 міс" }, { k: "year", l: "рік" },
+  ];
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <b style={{ fontSize: 13 }}>🎯 Скільки лідів треба взяти</b>
+        <span style={{ fontSize: 11, color: MUTED }}>
+          (план − прогноз по постійних) ÷ (конверсія × ср.чек){row ? ` · канал: ${row.channel === "ad" ? "реклама" : "лідоген"}` : ""}
+        </span>
+        <span style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: MUTED }}>конверсія / чек за:</span>
+          {periods.map((p) => (
+            <button key={p.k} onClick={() => onPeriod(p.k)}
+              style={{ padding: "3px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
+                border: `1px solid ${period === p.k ? "#2f6fdb" : "var(--border)"}`,
+                background: period === p.k ? "rgba(47,111,219,0.12)" : "var(--card-bg)",
+                color: period === p.k ? "#2f6fdb" : MUTED }}>{p.l}</button>
+          ))}
+        </span>
+      </div>
+      {loading ? <span style={{ fontSize: 12, color: MUTED }}>Завантаження…</span> : !row ? (
+        <span style={{ fontSize: 12, color: MUTED }}>Немає даних для цього менеджера.</span>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 22, flexWrap: "wrap", alignItems: "flex-start" }}>
+            {cell("План", formatAmount(row.plan))}
+            {cell("Постійні дадуть", row.forecast != null ? formatAmount(row.forecast) : dash,
+              row.forecastClients ? `${row.forecastClients} кл. · сер. 3 акт. міс` : "немає історії")}
+            {cell("Залишок", row.remainder != null ? formatAmount(row.remainder) : dash, "план − постійні")}
+            {cell("Конверсія", row.conversionPct != null ? `${row.conversionPct}%` : dash,
+              `${row.conversionWon}/${row.conversionEntered} заявок`)}
+            {cell("Ср. чек", row.avgCheck != null ? formatAmount(row.avgCheck) : dash, "успішних угод")}
+            {cell("₴ з ліда", row.perLead != null ? formatAmount(row.perLead) : dash, "конверсія × чек")}
+            {cell("ТРЕБА ЛІДІВ", row.leadsNeeded != null ? row.leadsNeeded : dash, undefined, true)}
+          </div>
+          {row.reasons.length > 0 && (
+            <div style={{ marginTop: 9, fontSize: 11.5, color: "#d97706" }}>
+              ⚠️ недостатньо даних: {row.reasons.join(" · ")}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
