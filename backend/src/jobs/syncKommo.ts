@@ -12,6 +12,7 @@ import {
   extractSalesChannel,
   extractWebTags,
   fetchAllDeals,
+  fetchLeadsByIds,
   fetchContactsByIds,
   fetchCompaniesByIds,
   fetchUsers,
@@ -479,6 +480,30 @@ async function upsertDealContacts(deals: KommoDeal[]): Promise<void> {
                          WHERE v.d = dc.deal_kommo_id AND v.c = dc.contact_id)`,
     [seenDeals, dealIds, contactIds]
   );
+}
+
+/**
+ * Разова побудова `deal_contacts` для АКТИВНИХ FC-угод (крок 1 бекфілу ФАЗИ 2). Штатно
+ * лінк пише `syncKommo` зі свого вікна — але угоди, які давно не рухались, у це вікно не
+ * потрапляють, тож без цього проходу їхні дзвінки нікуди рознести. `fetchLeadsByIds` уже
+ * ходить із `with=contacts,companies`, тож це ~10 запитів на 2.3к угод (250/запит).
+ */
+export async function buildDealContactLinks(): Promise<{ deals: number; requests: number }> {
+  const r = await pool.query<{ kommo_id: string }>(
+    `SELECT d.kommo_id FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE d.pipeline_id = ANY('{8921932,155304}'::bigint[]) AND psm.funnel_stage <> 'paid'
+      ORDER BY d.kommo_id`
+  );
+  const ids = r.rows.map((x) => Number(x.kommo_id));
+  let requests = 0;
+  for (let i = 0; i < ids.length; i += 250) {
+    requests++;
+    const leads = await fetchLeadsByIds(ids.slice(i, i + 250));
+    await upsertDealContacts(leads);
+  }
+  console.log(`buildDealContactLinks: ${ids.length} активних FC-угод, ${requests} запитів.`);
+  return { deals: ids.length, requests };
 }
 
 export async function upsertDeal(

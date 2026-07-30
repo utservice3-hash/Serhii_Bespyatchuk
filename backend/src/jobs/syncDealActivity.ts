@@ -4,6 +4,7 @@ import {
   forEachContactNotePage, forEachContactNotePageByIds, type KommoLeadNote,
 } from "../kommo/client.js";
 import { processInChunks } from "./chunkWindow.js";
+import { buildDealContactLinks } from "./syncKommo.js";
 
 // FC-пайплайни «повний цикл» — тримати синхронно з core/metrics.FC_PIPELINES.
 // last_call_at рахуємо ЛИШЕ для активних (відкритих) угод цих воронок.
@@ -330,7 +331,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // CLI:
   //   `node dist/jobs/syncDealActivity.js --months=6`      → backfill активності за N міс (як було)
   //   `node dist/jobs/syncDealActivity.js --backfill-calls` → цільовий бекфіл last_call_at (активні FC)
-  if (process.argv.includes("--backfill-contacts")) {
+  if (process.argv.includes("--build-links")) {
+    buildDealContactLinks()
+      .then(() => pool.end())
+      .catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+  } else if (process.argv.includes("--backfill-contacts")) {
     healContactActivity()
       .then(() => pool.end())
       .catch((err) => {
