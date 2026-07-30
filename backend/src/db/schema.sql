@@ -168,18 +168,6 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_activity_note_at TIMESTAMPT
 -- Daily ad spend/results pulled from the Google Ads budget sheet (syncAdBudget).
 -- Accumulates history: each run refreshes the current month's rows; past months
 -- stay. Used by the КВП report (Реклама → рекламний бюджет план/факт).
--- Composite daily KPI task: one row per working day bundling ALL that day's
--- metric targets (sum/revenue, ads, leadgen, avg check, conversion) as
--- [{metric,target,actual,done}]. Lets a weekly plan land as N daily tasks
--- (one per day) instead of N×metrics rows. evaluateKpiTasks fills actual/done.
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS metrics_json JSONB;
--- Reactivation tasks bundle a list of clients as a checklist the manager ticks
--- off: [{clientKey, clientName, orders, revenue, lastPaid, category, done}].
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS checklist_json JSONB;
--- Довільні підзадачі будь-якої задачі, кожну можна відмітити виконаною:
--- [{title, done}]. Прогрес X/N показується на картці/рядку.
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS subtasks_json JSONB;
-
 CREATE TABLE IF NOT EXISTS ad_budget_daily (
   day DATE PRIMARY KEY,
   budget_plan NUMERIC DEFAULT 0,
@@ -239,6 +227,21 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS period_start DATE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS period_end DATE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT false;
+-- description — довільний опис задачі. Пишуть джоби нагадувань/звірки
+-- (dutyReminders, dataReconciliation) у своєму INSERT. Без цієї колонки їхній
+-- INSERT тихо падав на проді (колонки в схемі не було).
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description TEXT;
+-- Composite daily KPI task: one row per working day bundling ALL that day's
+-- metric targets (sum/revenue, ads, leadgen, avg check, conversion) as
+-- [{metric,target,actual,done}]. Lets a weekly plan land as N daily tasks
+-- (one per day) instead of N×metrics rows. evaluateKpiTasks fills actual/done.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS metrics_json JSONB;
+-- Reactivation tasks bundle a list of clients as a checklist the manager ticks
+-- off: [{clientKey, clientName, orders, revenue, lastPaid, category, done}].
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS checklist_json JSONB;
+-- Довільні підзадачі будь-якої задачі, кожну можна відмітити виконаною:
+-- [{title, done}]. Прогрес X/N показується на картці/рядку.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS subtasks_json JSONB;
 CREATE INDEX IF NOT EXISTS idx_tasks_kpi ON tasks(metric, plan_date) WHERE auto;
 
 -- ЗАДАЧА З 1×1 (task_type='oneonone'): домовленість зі зустрічі, яку субʼєкт НЕ може
