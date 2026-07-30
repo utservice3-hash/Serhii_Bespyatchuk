@@ -2529,25 +2529,39 @@ export async function reachedAutoByManager(adSources: string[]): Promise<Map<num
 }
 
 export interface MgrRepeatForecast { managerId: number; forecast: number; clients: number }
+/** Вікно прогнозу по постійних, КАЛЕНДАРНИХ місяців (поточний неповний виключено). */
+export const REPEAT_FORECAST_MONTHS = 6;
 /**
  * ПРОГНОЗ ПО ПОСТІЙНИХ, сума по менеджеру (рекомендація «скільки лідів треба»).
- * По кожному постійному клієнту — СЕРЕДНЄ за 3 ОСТАННІ АКТИВНІ місяці (місяць = активний,
- * якщо в ньому були оплати; порожні ВИКИДАЮТЬСЯ, щоб сезонна пауза не занижувала прогноз —
- * та сама логіка, що в `/repeat-client-history`). Прогноз менеджера = Σ середніх.
  *
- * 🔴 БЕЗ множника ×1.12: у `suggestedPlan` він є як «плановий зріст», але тут потрібен
- * прогноз «як є» — накрутка перетворила б прогноз на ціль і занизила б потребу в лідах.
- * 🔴 «Постійний» = ≥2 АКТИВНІ місяці за 13-місячним вікном (горизонт даних).
- * ⚠️ Групування по (менеджер × клієнт): якщо клієнта вели двоє, кожен прогнозує зі СВОЄЇ
- * історії з ним — це навмисно (прогноз менеджера, не клієнта), тож Σ по менеджерах може
- * бути більшою за «прогноз по клієнту» в /loyalty, де клієнт рахується РАЗ.
+ * 🔴 ФОРМУЛА (виправлено 30.07.2026): внесок клієнта = його виторг за N КАЛЕНДАРНИХ
+ * місяців ÷ N. ПОРОЖНІ МІСЯЦІ ВХОДЯТЬ У ЗНАМЕННИК — це очікуваний внесок У МІСЯЦЬ,
+ * а не «скільки платить, коли платить».
+ *
+ * Було: середнє по 3 АКТИВНИХ місяцях (порожні викидались) — і клієнт, що замовляє раз
+ * на 3 міс по 30к, рахувався як 30к/міс замість 10к/міс. По десятках клієнтів це давало
+ * нереальні суми. Звірка з фактом (прод, 30.07.2026) — прогноз проти реального
+ * середньомісячного виторгу від постійних:
+ *     Дмитрук    758 720 проти 227 859 → ×3.33      Самохвалов 499 938 проти 275 863 → ×1.81
+ *     Шаврова    253 135 проти  63 084 → ×4.01      Андрусенко 144 848 проти  21 843 → ×6.63
+ * Причина видна в ритмі: у Дмитрука з 57 постійних лише 5 замовляють щомісяця, а 42 —
+ * періодично (2-4 активні місяці з 13). Саме їх стара формула рахувала як щомісячних.
+ *
+ * Тепер Σ прогнозів менеджера ДОРІВНЮЄ його фактичному середньомісячному виторгу від
+ * постійних за вікно — не «приблизно», а тотожно, за побудовою (Σ(виторг_клієнта)/N =
+ * Σвиторг/N). Це і є гейт чесності.
+ * «Постійний» = ≥2 активні місяці У ТОМУ Ж вікні (щоб чисельник і знаменник збігались).
  */
-export async function repeatForecastByManager(s: MetricScope = {}): Promise<MgrRepeatForecast[]> {
+export async function repeatForecastByManager(s: MetricScope = {}, months = REPEAT_FORECAST_MONTHS): Promise<MgrRepeatForecast[]> {
+  const N = Math.max(1, months);
   const params: unknown[] = [FC_PIPELINES];
   const conds = [
     "d.status_id = 142", "d.pipeline_id = ANY($1)",
     "d.closed_at_kommo IS NOT NULL", "d.client_key IS NOT NULL",
-    `(d.closed_at_kommo ${KYIV})::date >= CURRENT_DATE - INTERVAL '13 months'`,
+    // вікно = N ПОВНИХ календарних місяців до поточного; поточний неповний виключено,
+    // інакше на початку місяця прогноз штучно провалювався б.
+    `(d.closed_at_kommo ${KYIV}) >= date_trunc('month', CURRENT_DATE) - INTERVAL '${N} months'`,
+    `(d.closed_at_kommo ${KYIV}) <  date_trunc('month', CURRENT_DATE)`,
   ];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
@@ -2559,15 +2573,13 @@ export async function repeatForecastByManager(s: MetricScope = {}): Promise<MgrR
           FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
          WHERE ${conds.join(" AND ")}
          GROUP BY 1, 2, 3
-        HAVING SUM(d.price) > 0),          -- активний місяць = були оплати (порожні відсутні за побудовою)
-      ranked AS (
-        SELECT *, ROW_NUMBER() OVER (PARTITION BY manager_id, client_key ORDER BY mth DESC) rn,
-               COUNT(*)  OVER (PARTITION BY manager_id, client_key) active_months
-          FROM won),
+        HAVING SUM(d.price) > 0),
       per_client AS (
-        SELECT manager_id, client_key, AVG(rev) AS avg_rev, MAX(active_months) AS active_months
-          FROM ranked WHERE rn <= 3 GROUP BY 1, 2)
-     SELECT manager_id, COALESCE(SUM(avg_rev), 0) AS forecast, COUNT(*) AS clients
+        SELECT manager_id, client_key,
+               SUM(rev) / ${N}::numeric AS monthly_share,   -- порожні місяці У ЗНАМЕННИКУ
+               COUNT(*) AS active_months
+          FROM won GROUP BY 1, 2)
+     SELECT manager_id, COALESCE(SUM(monthly_share), 0) AS forecast, COUNT(*) AS clients
        FROM per_client WHERE active_months >= 2
       GROUP BY manager_id`,
     params

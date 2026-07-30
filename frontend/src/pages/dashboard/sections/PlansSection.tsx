@@ -326,7 +326,7 @@ function LeadRec({ row, loading, period, onPeriod }: {
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", alignItems: "flex-start" }}>
             {cell("План", formatAmount(row.plan))}
             {cell("Постійні дадуть", row.forecast != null ? formatAmount(row.forecast) : dash,
-              row.forecastClients ? `${row.forecastClients} кл. · сер. 3 акт. міс` : "немає історії")}
+              row.forecastClients ? `${row.forecastClients} кл. · сер./міс за 6 міс` : "немає історії")}
             {cell("Залишок", row.remainder != null ? formatAmount(row.remainder) : dash, "план − постійні")}
             {cell("Конверсія", row.conversionPct != null ? `${row.conversionPct}%` : dash,
               `${row.conversionWon}/${row.conversionEntered} заявок`)}
