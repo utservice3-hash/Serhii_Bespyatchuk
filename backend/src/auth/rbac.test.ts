@@ -77,9 +77,11 @@ test("#5.2 SCOPE-COMPAT: до admin піднімається рівно той, 
     admin: "admin", ceo: "admin", opdir: "admin", kvp: "admin",
     // 🟢 ЗМІНА ПОЛІТИКИ 31.07.2026: financier піднято до admin (рішення власника).
     financier: "admin",
-    // 🔴 hr лишається НЕ адміном — саме тут ловиться blanket-правило «company → admin»,
-    // яке відкрило б їй усе. Підняття тепер вирішує ПРАВО, а не список ключів у коді.
-    hr: "manager", team_lead: "team_lead", manager: "manager",
+    // 🔴 hr — company-scope з 31.07.2026, але НЕ адмін. Саме тут ловиться blanket-правило
+    // «company → admin», яке відкрило б їй усе: підняття вирішує ПРАВО admin_scope,
+    // якого в HR немає. Значення 'company' збігається з тим, що мав фінансист до підйому —
+    // і це рівно те, що доводить #5.13.
+    hr: "company", team_lead: "team_lead", manager: "manager",
   }, "піднесення ролі до admin змінилось — перевір scopeCompatRole");
 });
 
@@ -442,4 +444,34 @@ test("#5.13 🔴 HR НЕ успадкував нічого з того, що о�
   // підйом фінансиста зламався, і «HR не успадкував» не доводило б нічого.
   assert.equal(rbac.scopeCompatRole("financier", fin), "admin",
     "фінансист більше не адмін — порівняння втратило сенс");
+});
+
+test("#5.14 ЕКВІВАЛЕНТНІСТЬ: isAdminScope == старий вираз по ролі, для КОЖНОЇ ролі", needsDb(), async () => {
+  const { rbac } = await load();
+  await rbac.refreshRoles();
+  // Партії рефакторингу міняють 51 рядок у роутах. Заміна вважається безпечною лише
+  // тому, що нова функція дає ТОЙ САМИЙ вердикт, що й вираз, який вона заміняє.
+  // Перевіряємо це для кожної ролі, а не «на око по одній».
+  const diffs: string[] = [];
+  for (const role of ROLES) {
+    const compat = rbac.scopeCompatRole(role, rbac.getRoleDef(role));
+    const auth = { role: compat, roleKey: role };
+    const was = compat === "admin";                       // рівно старий вираз у роутах
+    const now = rbac.isAdminScope(auth);
+    if (was !== now) diffs.push(`${role}: було ${was}, стало ${now}`);
+    const wasLead = compat === "admin" || compat === "team_lead";
+    const nowLead = rbac.isAdminOrLead(auth);
+    if (wasLead !== nowLead) diffs.push(`${role} (з тімлідом): було ${wasLead}, стало ${nowLead}`);
+  }
+  assert.deepEqual(diffs, [],
+    "🔴 хелпер дає ІНШИЙ вердикт, ніж вираз, який він заміняє — рефакторинг змінив би поведінку:\n  "
+      + diffs.join("\n  "));
+  // Дзеркало: функція має вміти казати «ні». Інакше `return true` пройшов би цей тест
+  // для ролей-адмінів і мовчки відкрив би все іншим.
+  assert.equal(rbac.isAdminScope({ role: "manager", roleKey: "manager" }), false,
+    "🔴 isAdminScope каже «так» менеджеру");
+  assert.equal(rbac.isAdminOrLead({ role: "manager", roleKey: "manager" }), false,
+    "🔴 isAdminOrLead каже «так» менеджеру");
+  assert.equal(rbac.isAdminScope({ role: "manager", roleKey: "__немає_такої_ролі__" }), false,
+    "🔴 невідома роль дає адмінський рівень");
 });

@@ -132,3 +132,47 @@ export function roleHasPerm(roleKey: string, perm: string): boolean {
   const def = cache.get(roleKey);
   return !!def && def.permissions[perm] === true;
 }
+
+/**
+ * СТРОГИЙ perm-чек: порожній кеш = НІ.
+ *
+ * 🔴 Чим відрізняється від `roleHasPerm` і навіщо. Той fail-open (`cache.size === 0
+ * → true`), щоб до першого `refreshRoles` не забрикувати сайт tab-гейтом. Для
+ * ГЕЙТІВ ДОСТУПУ таке саме fail-open означало б, що у вікні між стартом процесу і
+ * завантаженням ролей адмінські дії відкриті ВСІМ. Тому окрема функція, а не прапорець.
+ */
+function roleHasPermStrict(roleKey: string, perm: string): boolean {
+  return cache.get(roleKey)?.permissions[perm] === true;
+}
+
+/** Мінімум, який має нести `req.auth` для гейтів нижче. */
+export interface AuthLike { role: string; roleKey: string }
+
+/**
+ * «Роль працює на рівні адміністратора» — заміна розсипаного `auth.role === "admin"`.
+ *
+ * 🔒 ЕКВІВАЛЕНТНІСТЬ, а не «приблизно те саме». Перший доданок — рівно старий вираз,
+ * тож жодна роль не може ВТРАТИТИ доступ. Другий читає право `admin_scope` з БД —
+ * саме те, за яким `scopeCompatRole` і піднімає роль до `"admin"`, тож для всіх
+ * восьми відомих ролей обидва доданки дають однакову відповідь (доведено #5.14).
+ * Невідома роль: `def` немає → строгий чек `false`, а перший доданок поводиться як
+ * раніше. Тобто ширше не стало ніде.
+ *
+ * Навіщо взагалі: щоб «хто такий адмін» жило в ОДНОМУ місці й у БД, а не в 51 рядку
+ * по роутах. Додати роль адмінського рівня = запис у `roles`, не правка коду.
+ */
+export function isAdminScope(auth: AuthLike): boolean {
+  return auth.role === "admin" || roleHasPermStrict(auth.roleKey, ADMIN_SCOPE_PERM);
+}
+
+/**
+ * «Наглядовий рівень»: адміністратор АБО тімлід. Заміна для
+ * `auth.role !== "admin" && auth.role !== "team_lead"` та її дзеркал.
+ *
+ * `team_lead` лишається порівнянням по scope-ролі СВІДОМО: це не право, а рівень
+ * даних (своя команда). Виносити його в permission означало б вигадати бізнес-правило,
+ * якого в моделі немає.
+ */
+export function isAdminOrLead(auth: AuthLike): boolean {
+  return isAdminScope(auth) || auth.role === "team_lead";
+}
