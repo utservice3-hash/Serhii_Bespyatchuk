@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { requireAuth } from "../auth/middleware.js";
 import { lardiGet, lardiPost, LANG, hasLardiToken } from "../lardi/client.js";
 import { recordRoute, recordOffers, recordUsage, history, usageStats, learnedStats } from "../lardi/history.js";
@@ -511,7 +512,7 @@ ratesRouter.post("/analyze", async (req, res) => {
 
 // Статистика використання (адмін) — аналог /api/stats оригіналу.
 ratesRouter.get("/stats", async (req, res) => {
-  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   const days = Math.max(1, Math.min(Number(req.query.days) || 30, 90));
   try {
     res.json(await usageStats(days));

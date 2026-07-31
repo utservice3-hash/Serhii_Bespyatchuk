@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 
@@ -25,7 +26,7 @@ newsRouter.get("/", async (req, res) => {
 });
 
 newsRouter.post("/", async (req, res) => {
-  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   const { category, title, body, imageUrl } = req.body ?? {};
   if (!CATEGORIES.includes(category) || !String(title ?? "").trim()) {
     return res.status(400).json({ error: "Категорія і заголовок обов'язкові" });
@@ -42,7 +43,7 @@ newsRouter.post("/", async (req, res) => {
 });
 
 newsRouter.delete("/:id", async (req, res) => {
-  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   await pool.query(`DELETE FROM news WHERE id = $1`, [Number(req.params.id)]);
   res.json({ ok: true });
 });
@@ -56,7 +57,7 @@ newsRouter.get("/km-prices", async (_req, res) => {
 });
 
 newsRouter.put("/km-prices", async (req, res) => {
-  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   const num = (v: unknown) => (v === "" || v == null ? null : Number(v));
   const { t20, t10, t5, t2 } = req.body ?? {};
   const result = await pool.query(

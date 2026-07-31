@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
@@ -20,7 +21,7 @@ const upsert = z.object({
 
 goalsRouter.get("/", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
   const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   const params: unknown[] = [month];
   let scope = "";

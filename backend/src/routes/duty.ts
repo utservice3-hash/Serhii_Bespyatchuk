@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 
@@ -90,7 +91,7 @@ dutyRouter.get("/", async (req, res) => {
     mine: x.manager_id === auth.managerId,
   }));
 
-  const canEdit = auth.role === "admin" || auth.role === "team_lead";
+  const canEdit = isAdminOrLead(auth);
   const managers = canEdit ? await assignableManagers(auth, teamId) : [];
 
   // ── ВІДСУТНОСТІ (окремий шар; чергування вище лишається як є) ──
@@ -112,7 +113,7 @@ dutyRouter.get("/", async (req, res) => {
 /** Призначити менеджера на день (лід — лише своя команда). */
 dutyRouter.post("/", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const date = String(req.body?.date ?? "").slice(0, 10);
@@ -148,7 +149,7 @@ dutyRouter.post("/", async (req, res) => {
 /** Зняти призначення (лід — лише своя команда). */
 dutyRouter.delete("/:id", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const id = Number(req.params.id);
@@ -164,7 +165,7 @@ dutyRouter.delete("/:id", async (req, res) => {
 // ════════════════════ ВІДСУТНОСТІ (Календар команди) ════════════════════
 // Чергування (вище) — окремий тип, RNK-only, не чіпаємо. Відсутності — для ВСІХ команд.
 const ABSENCE_KINDS = new Set(["day_off", "vacation", "sick", "short_day"]);
-type Auth = { role: string; teamId: number | null; managerId: number | null; userId: number };
+type Auth = { role: string; roleKey: string; teamId: number | null; managerId: number | null; userId: number };
 
 /** Менеджери для FE-фільтра відсутностей — УСІ команди (не лише РНК). Роль-скоуп:
  *  admin → усі активні (або обрана команда); team_lead → своя команда; manager → лише себе. */
@@ -259,7 +260,7 @@ dutyRouter.post("/absences", async (req, res) => {
   // тімліда (він не погоджує себе → pending на адміна). Admin → завжди approved (сам собі теж:
   // адмін — найвищий рівень, вище нема). manager → завжди pending.
   const isSelf = managerId === auth.managerId;
-  const approver = auth.role === "admin" || (auth.role === "team_lead" && teamId === auth.teamId && !isSelf);
+  const approver = isAdminScope(auth) || (auth.role === "team_lead" && teamId === auth.teamId && !isSelf);
   const status = approver ? "approved" : "pending";
   const r = await pool.query<{ id: number }>(
     `INSERT INTO team_calendar_absences (manager_id, team_id, kind, start_date, end_date, hours, note, status, created_by, approved_by, approved_at)
@@ -271,7 +272,7 @@ dutyRouter.post("/absences", async (req, res) => {
 /** Погодити / відхилити — лише admin або team_lead (своя команда). */
 async function decide(req: import("express").Request, res: import("express").Response, decision: "approved" | "rejected") {
   const auth = req.auth! as Auth;
-  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   const id = Number(req.params.id);
   const row = await pool.query<{ team_id: number | null; manager_id: number; status: string }>(`SELECT team_id, manager_id, status FROM team_calendar_absences WHERE id = $1`, [id]);
   if (!row.rowCount) return res.status(404).json({ error: "Не знайдено" });
@@ -296,7 +297,7 @@ dutyRouter.delete("/absences/:id", async (req, res) => {
     `SELECT team_id, manager_id, created_by, status FROM team_calendar_absences WHERE id = $1`, [id]);
   if (!row.rowCount) return res.json({ ok: true });
   const a = row.rows[0];
-  const isAdmin = auth.role === "admin";
+  const isAdmin = isAdminScope(auth);
   const isLeadOwn = auth.role === "team_lead" && a.team_id === auth.teamId;
   const isOwnPending = a.manager_id === auth.managerId && a.status === "pending";
   if (!isAdmin && !isLeadOwn && !isOwnPending) return res.status(403).json({ error: "Немає прав видалити цю відмітку" });
@@ -307,7 +308,7 @@ dutyRouter.delete("/absences/:id", async (req, res) => {
 // ── ДЕРЖСВЯТА (глобальні, admin-only запис) ──
 dutyRouter.post("/holidays", async (req, res) => {
   const auth = req.auth! as Auth;
-  if (auth.role !== "admin") return res.status(403).json({ error: "Держсвята фіксує лише адміністратор" });
+  if (!isAdminScope(auth)) return res.status(403).json({ error: "Держсвята фіксує лише адміністратор" });
   const date = String(req.body?.date ?? "").slice(0, 10);
   const name = String(req.body?.name ?? "").slice(0, 200).trim() || "Свято";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD)" });
@@ -318,7 +319,7 @@ dutyRouter.post("/holidays", async (req, res) => {
 });
 dutyRouter.delete("/holidays/:id", async (req, res) => {
   const auth = req.auth! as Auth;
-  if (auth.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(auth)) return res.status(403).json({ error: "Лише адміністратор" });
   await pool.query(`DELETE FROM company_holidays WHERE id = $1`, [Number(req.params.id)]);
   res.json({ ok: true });
 });

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { runReadOnly } from "../ai/readQuery.js";
@@ -13,15 +14,17 @@ import { runReadOnly } from "../ai/readQuery.js";
 export const reportsRouter = Router();
 reportsRouter.use(requireAuth);
 
-function visibilityFilter(role: string): string[] {
-  if (role === "admin") return ["all", "leads", "admin"];
-  if (role === "team_lead") return ["all", "leads"];
+// Приймає весь auth, а не голий рядок ролі: `isAdminScope` читає право `admin_scope`
+// з БД, тож самого scope-рядка йому мало. Вердикт незмінний — див. #5.14.
+function visibilityFilter(auth: { role: string; roleKey: string }): string[] {
+  if (isAdminScope(auth)) return ["all", "leads", "admin"];
+  if (auth.role === "team_lead") return ["all", "leads"];
   return ["all"];
 }
 
 reportsRouter.get("/", async (req, res) => {
   const auth = req.auth!;
-  const vis = visibilityFilter(auth.role);
+  const vis = visibilityFilter(auth);
   const r = await pool.query<{
     id: number; title: string; chart_type: string; sql: string; config: unknown; visibility: string;
   }>(
@@ -48,7 +51,7 @@ reportsRouter.get("/", async (req, res) => {
 
 reportsRouter.delete("/:id", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(auth)) return res.status(403).json({ error: "Лише адміністратор" });
   await pool.query(`DELETE FROM ai_widgets WHERE id = $1`, [Number(req.params.id)]);
   res.json({ ok: true });
 });

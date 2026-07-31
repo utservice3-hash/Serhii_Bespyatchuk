@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
-import { roleHasPerm } from "../auth/rbac.js";
+import { roleHasPerm, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 
 export const tasksRouter = Router();
 tasksRouter.use(requireAuth);
@@ -157,7 +157,7 @@ tasksRouter.post("/plan", async (req, res) => {
   } else if (auth.role === "team_lead") {
     const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [assigneeId]);
     if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
-  } else if (auth.role !== "admin") {
+  } else if (!isAdminScope(auth)) {
     return res.status(403).json({ error: "Немає доступу" });
   }
 
@@ -246,7 +246,7 @@ const reactivationSchema = z.object({
 });
 tasksRouter.post("/reactivation", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const parsed = reactivationSchema.safeParse(req.body);
@@ -330,10 +330,10 @@ tasksRouter.post("/", async (req, res) => {
  * team's tasks or their own; admin → everything.
  */
 async function canTouchTask(
-  auth: { role: string; userId: number; managerId: number | null; teamId: number | null },
+  auth: { role: string; roleKey: string; userId: number; managerId: number | null; teamId: number | null },
   taskId: number
 ): Promise<{ ok: boolean; found: boolean }> {
-  if (auth.role === "admin") {
+  if (isAdminScope(auth)) {
     // Дзеркалить GET: admin торкається УСІХ призначених задач + ЛИШЕ власних особистих
     // (чужі особисті — приватні). `found` — чи існує задача взагалі (для коректного 404 vs 403).
     const r = await pool.query<{ assignee_id: number | null; created_by: number | null }>(
@@ -373,7 +373,7 @@ const O2O_SUBJECT_ALLOWED = new Set(["comments", "status"]);
  *  (тепер і СЕО/ОД — scopeCompatRole), або наскрізний 1×1 (HR за правом). Субʼєкту —
  *  лише коментарі й статус, крім 'done'. */
 function o2oFullAccess(auth: { userId: number; role: string; roleKey: string }, createdBy: number | null): boolean {
-  return createdBy === auth.userId || auth.role === "admin" || roleHasPerm(auth.roleKey, "view_all_1x1");
+  return createdBy === auth.userId || isAdminScope(auth) || roleHasPerm(auth.roleKey, "view_all_1x1");
 }
 /** Мета задачі + чи має цей користувач ПОВНИЙ доступ до неї як до задачі з 1×1. */
 async function o2oMeta(auth: { userId: number; role: string; roleKey: string }, taskId: number) {
@@ -411,7 +411,7 @@ tasksRouter.patch("/:id", async (req, res) => {
   }
   // Reassignment is scoped like task creation: a manager only to themselves, a
   // team-lead only within their team.
-  if (parsed.data.assigneeId !== undefined && auth.role !== "admin") {
+  if (parsed.data.assigneeId !== undefined && !isAdminScope(auth)) {
     const newAssignee = parsed.data.assigneeId;
     if (auth.role === "manager" && newAssignee !== auth.managerId && newAssignee !== null) {
       return res.status(403).json({ error: "Менеджер не може передавати задачі іншим" });

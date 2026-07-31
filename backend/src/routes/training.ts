@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { randomUUID } from "crypto";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import path from "path";
@@ -36,7 +37,7 @@ trainingRouter.get("/tree", async (req, res) => {
          LEFT JOIN managers mm ON mm.id = u.manager_id
         WHERE ($1::boolean OR m.status = 'published')
         ORDER BY m.position, m.created_at`,
-      [req.auth!.role === "admin"]
+      [isAdminScope(req.auth!)]
     ),
   ]);
   res.json({ folders: folders.rows, materials: materials.rows });

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth } from "../auth/middleware.js";
-import { roleHasTab } from "../auth/rbac.js";
+import { roleHasTab, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
 const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
@@ -1853,7 +1853,7 @@ dashboardRouter.get("/reactivation", async (req, res) => {
 /** Додати клієнта в реактивацію (тімлід — менеджеру СВОЄЇ команди, адмін — будь-кому). */
 dashboardRouter.post("/reactivation", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "team_lead" && auth.role !== "admin") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const clientKey = String(req.body?.clientKey ?? "").trim();
@@ -1905,7 +1905,7 @@ dashboardRouter.put("/reactivation", async (req, res) => {
   if ("contact2Result" in b) set("contact2_result", b.contact2Result != null ? String(b.contact2Result) : null);
   if ("status" in b && ["in_progress", "reactivated", "refused"].includes(String(b.status))) set("status", String(b.status));
   if ("comment" in b) set("comment", b.comment != null ? String(b.comment) : null);
-  if ("managerId" in b && (auth.role === "team_lead" || auth.role === "admin")) {
+  if ("managerId" in b && (isAdminOrLead(auth))) {
     const mid = Number(b.managerId);
     if (auth.role === "team_lead") {
       const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [mid]);
@@ -2000,7 +2000,7 @@ dashboardRouter.get("/leadgen-regulars", async (_req, res) => {
 /** Прибрати клієнта з реактивації (тімлід — своєї команди, адмін — будь-кого). */
 dashboardRouter.delete("/reactivation/:clientKey", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "team_lead" && auth.role !== "admin") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const clientKey = String(req.params.clientKey ?? "").trim();
@@ -2124,7 +2124,7 @@ dashboardRouter.get("/teams", async (req, res) => {
 // ── Ручні правки постійних клієнтів (лише адмін) ───────────────────────────
 /** Список активних оверрайдів + довідник менеджерів для UI. */
 dashboardRouter.get("/loyalty-overrides", async (req, res) => {
-  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   const r = await pool.query<{ client_key: string; client_name: string | null; hidden: boolean; pinned_manager_id: number | null; force_regular: boolean; note: string | null; manager_name: string | null; updated_at: string }>(
     `SELECT o.client_key, o.client_name, o.hidden, o.pinned_manager_id, o.force_regular, o.note,
             m.name AS manager_name, o.updated_at
@@ -2142,7 +2142,7 @@ dashboardRouter.get("/loyalty-overrides", async (req, res) => {
 
 /** Прибрати / передати / додати постійного клієнта (upsert). */
 dashboardRouter.post("/loyalty-override", async (req, res) => {
-  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
   const clientName = req.body?.clientName != null ? String(req.body.clientName) : null;
@@ -2166,7 +2166,7 @@ dashboardRouter.post("/loyalty-override", async (req, res) => {
 
 /** Скасувати ручну правку (повернути авто-логіку). */
 dashboardRouter.delete("/loyalty-override/:clientKey", async (req, res) => {
-  if (req.auth!.role !== "admin") return res.status(403).json({ error: "Лише адміністратор" });
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   await pool.query(`DELETE FROM loyalty_overrides WHERE client_key = $1`, [String(req.params.clientKey)]);
   res.json({ ok: true });
 });
@@ -2244,7 +2244,7 @@ dashboardRouter.get("/regular-clients", async (req, res) => {
  */
 dashboardRouter.get("/reactivation-candidates", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
   const teamId: number | null = auth.role === "team_lead" ? (auth.teamId ?? null) : (req.query.teamId ? Number(req.query.teamId) : null);
   const activeMonths = (await getSettings()).sleepingWindowMonths;
 
@@ -2396,7 +2396,7 @@ dashboardRouter.get("/expected-deals", async (req, res) => {
 // client (keyed by client_key so it survives sheet re-syncs).
 dashboardRouter.put("/receivables/note", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const clientKey = String(req.body?.clientKey ?? "").trim();
@@ -2451,7 +2451,7 @@ dashboardRouter.get("/sync-status", async (_req, res) => {
 // own in-process guards prevent overlap; the UI polls /sync-status for progress.
 dashboardRouter.post("/sync", (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   void syncKommo()
@@ -2465,7 +2465,7 @@ dashboardRouter.post("/sync", (req, res) => {
 // dashboard immediately instead of waiting for the 30-min cron.
 dashboardRouter.post("/sync-receivables", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   try {
@@ -3382,7 +3382,7 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
         noteAuthor: noteMap.get(d.kommoId)?.author ?? null,
         noteAt: noteMap.get(d.kommoId)?.at ?? null,
         // Право на правку рахує СЕРВЕР (не фронт): відповідальний менеджер + тімлід/адмін.
-        canEditNote: auth.role === "admin" || auth.role === "team_lead" || auth.managerId === grp.managerId,
+        canEditNote: isAdminOrLead(auth) || auth.managerId === grp.managerId,
       })),
     })),
   });
@@ -3412,7 +3412,7 @@ dashboardRouter.post("/deal-note", async (req, res) => {
   if (!own.rows[0]) return res.status(404).json({ error: "Угоду не знайдено" });
   const { manager_id, team_id } = own.rows[0];
 
-  const may = auth.role === "admin"
+  const may = isAdminScope(auth)
     || (auth.role === "team_lead" && team_id != null && team_id === auth.teamId)
     || (manager_id != null && manager_id === auth.managerId);
   if (!may) return res.status(403).json({ error: "Нотатку може редагувати відповідальний менеджер або тімлід/адмін" });
@@ -3439,7 +3439,7 @@ dashboardRouter.post("/deal-note", async (req, res) => {
  */
 dashboardRouter.get("/data-quality", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Доступ лише для тімліда/адміна" });
   }
   const teamAnd = auth.role === "team_lead" && auth.teamId ? `AND m.team_id = ${auth.teamId}` : "";
@@ -3581,7 +3581,7 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
  */
 dashboardRouter.get("/plans-grid", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Доступ лише для тімліда/адміна" });
   }
   const monthStr = (req.query.month as string) || new Date().toISOString().slice(0, 7);
@@ -4100,7 +4100,7 @@ dashboardRouter.post("/repeat-client-plan", async (req, res) => {
       const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
       if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
     }
-  } else if (auth.role !== "admin") {
+  } else if (!isAdminScope(auth)) {
     return res.status(403).json({ error: "Forbidden" });
   }
   // Manager submission → pending (awaits team-lead approval); team-lead/admin → approved.
@@ -4130,7 +4130,7 @@ dashboardRouter.post("/repeat-client-plan", async (req, res) => {
 /** Team-lead/admin approves (or rejects) a manager-submitted client plan. */
 dashboardRouter.post("/repeat-client-plan/approve", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
   const b = req.body ?? {};
   const clientKey = String(b.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
@@ -4160,7 +4160,7 @@ dashboardRouter.post("/repeat-client-plan/approve", async (req, res) => {
  *  або обрана команда). Одним кліком закриває чергу на затвердження. */
 dashboardRouter.post("/repeat-client-plan/approve-all", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
   const b = req.body ?? {};
   const month = ((b.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   let teamId = b.teamId != null ? Number(b.teamId) : null;
@@ -4216,7 +4216,7 @@ dashboardRouter.get("/repeat-client-plan/history", async (req, res) => {
  *  only; a team-lead may read only their own team's managers. */
 dashboardRouter.get("/funnel-plan", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
   const managerId = Number(req.query.managerId);
   const month = ((req.query.month as string) || new Date().toISOString().slice(0, 7)) + "-01";
   if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
@@ -4236,7 +4236,7 @@ dashboardRouter.get("/funnel-plan", async (req, res) => {
 /** Set a manager's monthly funnel plan (team-lead / admin). */
 dashboardRouter.post("/funnel-plan", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin" && auth.role !== "team_lead") {
+  if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
   const managerId = Number(req.body?.managerId);
@@ -4361,7 +4361,7 @@ dashboardRouter.post("/kvp-plan", async (req, res) => {
  */
 dashboardRouter.get("/kvp-extra", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+  if (!isAdminScope(auth)) return res.status(403).json({ error: "Forbidden" });
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const from = (req.query.from as string) || today.slice(0, 7) + "-01";

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 
@@ -19,7 +20,7 @@ feedbackRouter.get("/", async (req, res) => {
   const auth = req.auth!;
   const params: unknown[] = [];
   let where = "";
-  if (auth.role !== "admin") {
+  if (!isAdminScope(auth)) {
     params.push(auth.userId);
     where = `WHERE f.author_user_id = $1`;
   }

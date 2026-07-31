@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
@@ -64,7 +65,7 @@ plansRouter.get("/", async (req, res) => {
 
 /** Резолвер teamId зі скоупу ролі (manager/team_lead → своя команда; admin → ?teamId|усі). */
 async function formationScope(auth: AuthPayload, qTeamId?: string): Promise<{ teamId: number | null; canApprove: boolean; canSubmit: boolean }> {
-  if (auth.role === "admin") return { teamId: qTeamId ? Number(qTeamId) : null, canApprove: true, canSubmit: true };
+  if (isAdminScope(auth)) return { teamId: qTeamId ? Number(qTeamId) : null, canApprove: true, canSubmit: true };
   if (auth.role === "team_lead") return { teamId: auth.teamId, canApprove: false, canSubmit: true };
   // manager → своя команда, лише читання
   const tr = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId]);
@@ -176,7 +177,7 @@ plansRouter.get("/formation/repeat-clients", async (req, res) => {
   const month = monthStartOf(String(req.query.month ?? ""));
   if (!managerId || !/^\d{4}-\d{2}-01$/.test(month)) return res.status(400).json({ error: "managerId + month обовʼязкові" });
   // Роль-скоуп: manager/team_lead — лише своя команда; admin — будь-хто.
-  if (auth.role !== "admin") {
+  if (!isAdminScope(auth)) {
     const myTeam = auth.role === "team_lead" ? auth.teamId
       : (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId])).rows[0]?.team_id ?? null;
     const tgt = (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId])).rows[0]?.team_id ?? null;

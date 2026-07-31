@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import {
@@ -43,7 +44,7 @@ statisticsRouter.get("/", async (req, res) => {
   if (to) { params.push(to); conds.push(`period_start <= $${params.length}`); }
 
   // Скоуп sales для non-admin: лише свій team_lead.
-  if (auth.role !== "admin" && dept.hasTeamLeadBreakdown) {
+  if (!isAdminScope(auth) && dept.hasTeamLeadBreakdown) {
     const lead = ownTeamLead(auth.teamId);
     if (!lead) return res.json({ department, periodType, rows: [], scopedTo: null });
     params.push(lead); conds.push(`team_lead = $${params.length}`);
@@ -70,7 +71,7 @@ statisticsRouter.get("/", async (req, res) => {
          FROM plans p JOIN managers m ON m.id = p.manager_id
         WHERE ${pc.join(" AND ")}
         GROUP BY month, m.team_id`, pp);
-    const scopedLead = auth.role !== "admin" ? ownTeamLead(auth.teamId) : null;
+    const scopedLead = !isAdminScope(auth) ? ownTeamLead(auth.teamId) : null;
     for (const row of pr.rows) {
       const lead = row.team_id != null && SALES_TEAM_LEAD[row.team_id]
         ? canonTeamLead(SALES_TEAM_LEAD[row.team_id]) : "Шевчук Назар";
@@ -82,7 +83,7 @@ statisticsRouter.get("/", async (req, res) => {
 
   res.json({
     department, periodType,
-    scopedTo: auth.role !== "admin" && dept.hasTeamLeadBreakdown ? ownTeamLead(auth.teamId) : null,
+    scopedTo: !isAdminScope(auth) && dept.hasTeamLeadBreakdown ? ownTeamLead(auth.teamId) : null,
     rows: r.rows.map((x) => ({ ...x, value: x.value === null ? null : Number(x.value) })),
     plans,
   });

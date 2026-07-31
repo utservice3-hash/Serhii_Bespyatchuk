@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { successByBucket, receivedByBucket, type MoneyScope } from "../core/money.js";
@@ -188,13 +189,13 @@ async function stitch(block: string, metric: string, g: Gran, from: string, to: 
 // ЛИШЕ як агрегат-бенчмарк (одна серія значень; чужих команд/менеджерів у payload НЕМА).
 // `unit` (напрямок: Міжнародка/Тендери/ЛідгенМіжн/ВЛТ) — окрема unit-серія, ЛИШЕ admin/КВП
 // (напрямки не командні); team_lead/manager → порожньо.
-async function seriesSet(auth: { role: string; teamId: number | null; managerId: number | null }, unit: string | null): Promise<ScopeSpec[]> {
-  if (unit) return auth.role === "admin"
+async function seriesSet(auth: { role: string; roleKey: string; teamId: number | null; managerId: number | null }, unit: string | null): Promise<ScopeSpec[]> {
+  if (unit) return isAdminScope(auth)
     ? [{ scopeType: "unit", scopeKey: unit, scopeName: unit, teamId: null, managerId: null }]
     : [];
   const company: ScopeSpec = { scopeType: "company", scopeKey: "company", scopeName: "Компанія", teamId: null, managerId: null };
   const teamOf = (t: { id: number; name: string }): ScopeSpec => ({ scopeType: "team_lead", scopeKey: String(t.id), scopeName: t.name, teamId: t.id, managerId: null });
-  if (auth.role === "admin") return [company, ...LIVE_TEAMS.map(teamOf)];
+  if (isAdminScope(auth)) return [company, ...LIVE_TEAMS.map(teamOf)];
   if (auth.role === "team_lead") {
     const own = LIVE_TEAMS.find((t) => t.id === auth.teamId);
     if (!own) return [company]; // некомерційний тімлід → лише бенчмарк
@@ -221,7 +222,7 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const to = String(req.query.to ?? "2026-12-31");
   if (!metric) return res.status(400).json({ error: "metric обовʼязковий" });
   const unit = req.query.unit ? String(req.query.unit) : null; // напрямок (unit-scope)
-  const set = await seriesSet({ role: auth.role, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
+  const set = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
   const series = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
   res.json({ block, metric, granularity: g, seam: STATS_SEAM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series });
 });

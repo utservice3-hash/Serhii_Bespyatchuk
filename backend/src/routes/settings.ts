@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { provisionUsers, resetPassword, generatePassword } from "../db/userProvisioning.js";
-import { roleHasPerm, getRoleDef, refreshRoles } from "../auth/rbac.js";
+import { roleHasPerm, getRoleDef, refreshRoles, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { wouldOrphanAdmin, otherActiveAdminCount } from "../auth/adminGuard.js";
 import { writeAudit } from "../db/audit.js";
 
@@ -63,7 +63,7 @@ settingsRouter.get("/", async (_req, res) => {
 });
 
 settingsRouter.put("/", async (req, res) => {
-  if (req.auth!.role !== "admin") {
+  if (!isAdminScope(req.auth!)) {
     return res.status(403).json({ error: "Лише адміністратор може змінювати налаштування" });
   }
 

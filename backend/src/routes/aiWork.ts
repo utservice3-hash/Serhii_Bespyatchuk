@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isAdminScope } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { scheduleAiReply } from "../ai/respond.js";
@@ -9,8 +10,9 @@ aiWorkRouter.use(requireAuth);
 const ALLOWED_EMAILS = ["ranutservice@gmail.com"];
 
 /** Access: admins, plus explicitly whitelisted assistant accounts. */
-async function ensureAccess(userId: number, role: string): Promise<boolean> {
-  if (role === "admin") return true;
+// Приймає auth цілком — `isAdminScope` спирається на право в БД, не лише на scope-рядок.
+async function ensureAccess(userId: number, auth: { role: string; roleKey: string }): Promise<boolean> {
+  if (isAdminScope(auth)) return true;
   const r = await pool.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]);
   const email = r.rows[0]?.email?.toLowerCase() ?? "";
   return ALLOWED_EMAILS.includes(email);
@@ -25,14 +27,14 @@ const SELECT = `
 
 aiWorkRouter.get("/", async (req, res) => {
   const auth = req.auth!;
-  if (!(await ensureAccess(auth.userId, auth.role))) return res.status(403).json({ error: "Forbidden" });
+  if (!(await ensureAccess(auth.userId, auth))) return res.status(403).json({ error: "Forbidden" });
   const r = await pool.query(`${SELECT} ORDER BY a.created_at ASC`);
   res.json({ messages: r.rows });
 });
 
 aiWorkRouter.post("/", async (req, res) => {
   const auth = req.auth!;
-  if (!(await ensureAccess(auth.userId, auth.role))) return res.status(403).json({ error: "Forbidden" });
+  if (!(await ensureAccess(auth.userId, auth))) return res.status(403).json({ error: "Forbidden" });
   const body = String(req.body?.body ?? "").trim();
   // Normalize attachments to a small [{url, name}] array (images posted by the UI).
   const rawAtt = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
