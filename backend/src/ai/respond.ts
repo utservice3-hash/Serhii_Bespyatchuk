@@ -23,32 +23,50 @@ const HISTORY_LIMIT = 40;
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "https://dashboard.uts.ua").replace(/\/$/, "");
 
 /**
- * 1) ЄДИНЕ ДЖЕРЕЛО ПРАВДИ. Бізнес-правила НЕ дублюємо в коді: кістяк (роль, інструменти,
- * формат) лишається тут, а нормативні визначення метрик тягнемо з `docs/` при старті.
- * Раніше `SYSTEM_PROMPT` був ручною копією CLAUDE.md і неминуче розходився зі словником —
- * тепер зміна docs змінює поведінку АІ без правки коду.
- * Файли їдуть у деплої (прод робить git pull), тож рантайм їх бачить. Кожен ріжемо до
- * DOC_CAP, щоб промт лишався керованим: CRM_SCHEMA.md сам по собі ~48 КБ.
+ * 1) ЄДИНЕ ДЖЕРЕЛО ПРАВДИ + 3) РОЗВАНТАЖЕНИЙ ПРОМТ.
+ * Бізнес-правила не дублюємо в коді, але й НЕ вантажимо цілком: у статичний промт іде
+ * лише стислий ІНДЕКС словника метрик (заголовки + перший рядок визначення), а повні
+ * тексти — інструментами `read_glossary` / `read_schema_doc` на вимогу моделі.
+ * Чому: до оптимізації в кожен запит їхало ~40 КБ (METRICS_GLOSSARY + KVP_REPORT_SPEC +
+ * CRM_SCHEMA), тобто ~12k токенів на КОЖНЕ звернення, хоча CRM_SCHEMA (найбільший, ~48 КБ)
+ * потрібен рідко. Індекс дає моделі знати, ЩО існує; за деталями вона піде інструментом.
  */
-const DOC_FILES = ["METRICS_GLOSSARY.md", "KVP_REPORT_SPEC.md", "CRM_SCHEMA.md"];
-const DOC_CAP = 18_000; // символів на файл
 const DOCS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "docs");
+const DOC_CAP = 60_000; // стеля на один документ, коли його читають інструментом
 
-let docsBlock: string | null = null;
-export async function loadDocsContext(): Promise<string> {
-  if (docsBlock != null) return docsBlock;
-  const parts: string[] = [];
-  for (const f of DOC_FILES) {
-    try {
-      const raw = await readFile(path.join(DOCS_DIR, f), "utf8");
-      const cut = raw.length > DOC_CAP ? raw.slice(0, DOC_CAP) + "\n…(обрізано)" : raw;
-      parts.push(`\n===== ${f} =====\n${cut}`);
-    } catch {
-      parts.push(`\n===== ${f} =====\n(файл недоступний у рантаймі)`);
-    }
+async function readDoc(file: string): Promise<string> {
+  try {
+    const raw = await readFile(path.join(DOCS_DIR, file), "utf8");
+    return raw.length > DOC_CAP ? raw.slice(0, DOC_CAP) + "\n…(обрізано)" : raw;
+  } catch {
+    return `(${file} недоступний у рантаймі)`;
   }
-  docsBlock = parts.join("\n");
-  return docsBlock;
+}
+
+/**
+ * Стислий індекс словника: рядки-заголовки (##/###) + перший змістовний рядок під ними.
+ * Будується з ФАЙЛА, тож лишається єдиним джерелом правди — просто в стиснутому вигляді.
+ */
+let glossaryIndex: string | null = null;
+export async function loadGlossaryIndex(): Promise<string> {
+  if (glossaryIndex != null) return glossaryIndex;
+  const raw = await readDoc("METRICS_GLOSSARY.md");
+  const lines = raw.split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const h = lines[i].match(/^(#{2,4})\s+(.+)$/);
+    if (!h) continue;
+    const title = h[2].replace(/[`*]/g, "").trim();
+    let desc = "";
+    for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+      const t = lines[j].trim();
+      if (!t || t.startsWith("#") || t.startsWith("|") || t.startsWith("---")) continue;
+      desc = t.replace(/[`*]/g, "").slice(0, 150); break;
+    }
+    out.push(desc ? `• ${title} — ${desc}` : `• ${title}`);
+  }
+  glossaryIndex = out.join("\n").slice(0, 6000);
+  return glossaryIndex;
 }
 
 const SYSTEM_PROMPT = `Ти — АІ-аналітик дашборду відділу продажів логістичної компанії UTS (Україна).
@@ -108,22 +126,31 @@ ad_budget_daily(day, budget_plan, budget_fact, conversions, clicks), sync_state.
 такі прохання чемно переадресовуй розробнику через власника. Якщо надіслали скрін — розглянь його й дай по суті.`;
 
 /**
- * Повний системний промт: кістяк (правила ролі/інструментів) + НОРМАТИВНІ визначення з
- * docs/ + 4) контекст розділу, який користувач має відкритим, щоб питання «поясни цей
- * блок» працювало без уточнень. Розділ беремо з останнього повідомлення (фронт шле мітку).
+ * 2) PROMPT CACHING. Системний промт віддаємо ДВОМА блоками:
+ *   [0] СТАТИЧНИЙ (кістяк + індекс словника) — з `cache_control: ephemeral`. Він однаковий
+ *       між запитами, тож повторні звернення читають його з кешу за частку ціни.
+ *   [1] ДИНАМІЧНИЙ (відкритий розділ) — ПОЗА кешем.
+ * 🔴 Порядок критичний: кеш працює на ПРЕФІКСІ. Якби динамічна частина стояла першою або
+ * потрапила в кешований блок, префікс мінявся б щоразу і кеш не спрацьовував би ніколи.
  */
-async function buildSystemPrompt(): Promise<string> {
-  const docs = await loadDocsContext();
+async function buildSystemBlocks(): Promise<Anthropic.TextBlockParam[]> {
+  const index = await loadGlossaryIndex();
+  const staticText =
+    SYSTEM_PROMPT +
+    `\n\n═══ ІНДЕКС СЛОВНИКА МЕТРИК (нормативний; повний текст — інструментом read_glossary) ═══\n` +
+    index;
   const section = await pool
     .query<{ ui_section: string | null }>(
       `SELECT ui_section FROM ai_messages WHERE role='user' ORDER BY created_at DESC, id DESC LIMIT 1`)
     .then((r) => r.rows[0]?.ui_section ?? null)
     .catch(() => null);
-  const sectionBlock = section
-    ? `\n\nВІДКРИТИЙ РОЗДІЛ ДАШБОРДУ: «${section}». Якщо питають «цей блок / цей розділ / поясни це» — ідеться саме про нього.`
-    : "";
-  return SYSTEM_PROMPT + sectionBlock +
-    `\n\n═══ НОРМАТИВНІ ДОКУМЕНТИ (джерело правди для визначень; код, що їм суперечить — баг) ═══${docs}`;
+  const blocks: Anthropic.TextBlockParam[] = [
+    { type: "text", text: staticText, cache_control: { type: "ephemeral" } },
+  ];
+  if (section) {
+    blocks.push({ type: "text", text: `ВІДКРИТИЙ РОЗДІЛ ДАШБОРДУ: «${section}». Якщо питають «цей блок / цей розділ / поясни це» — ідеться саме про нього.` });
+  }
+  return blocks;
 }
 
 const TOOLS: Anthropic.Tool[] = [
@@ -175,6 +202,26 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "read_schema_doc",
+    description:
+      "Прочитати docs/CRM_SCHEMA.md — повний опис CRM Kommo (воронки, стадії, 261 кастомне поле, заповненість). " +
+      "Викликай ЛИШЕ коли треба знати структуру CRM або призначення конкретного поля: документ великий, у промті його немає.",
+    input_schema: {
+      type: "object",
+      properties: { search: { type: "string", description: "Показати лише фрагменти з цим рядком (напр. назва поля або id)" } },
+    },
+  },
+  {
+    name: "read_glossary",
+    description:
+      "Прочитати ПОВНИЙ текст нормативного словника метрик (docs/METRICS_GLOSSARY.md) або його розділ. " +
+      "У промті є лише індекс — за точним визначенням метрики йди сюди. Це джерело правди: код, що йому суперечить, — баг.",
+    input_schema: {
+      type: "object",
+      properties: { search: { type: "string", description: "Назва метрики/розділу; без нього — увесь документ" } },
+    },
+  },
+  {
     name: "read_training",
     description:
       "Прочитати навчальну базу (розділ «Навчання»): папки і матеріали (назва, папка, тип, текст). " +
@@ -215,6 +262,17 @@ type ToolInput = Record<string, unknown>;
 async function execTool(name: string, input: ToolInput, userId: number | null): Promise<string> {
   try {
     switch (name) {
+      case "read_schema_doc":
+      case "read_glossary": {
+        const file = name === "read_schema_doc" ? "CRM_SCHEMA.md" : "METRICS_GLOSSARY.md";
+        const doc = await readDoc(file);
+        const q = typeof input.search === "string" ? input.search.trim() : "";
+        if (!q) return doc.slice(0, 40_000);
+        // Віддаємо лише релевантні шматки — інакше економія промта зʼїдається відповіддю.
+        const paras = doc.split(/\n(?=#{1,4}\s)/);
+        const hit = paras.filter((p) => p.toLowerCase().includes(q.toLowerCase()));
+        return hit.length ? hit.join("\n").slice(0, 25_000) : `У ${file} нічого не знайдено за «${q}».`;
+      }
       case "read_training": {
         const conds: string[] = ["m.status = 'published'"];
         const params: unknown[] = [];
@@ -359,6 +417,11 @@ async function generateReply(): Promise<void> {
   const messages = buildMessages(hist.rows.reverse());
   if (!messages.length) return;
 
+  const msgId = await pool
+    .query<{ id: number }>(`SELECT id FROM ai_messages WHERE role='user' ORDER BY created_at DESC, id DESC LIMIT 1`)
+    .then((r) => r.rows[0]?.id ?? null)
+    .catch(() => null);
+
   const userId = await pool
     .query<{ author_user_id: number | null }>(
       `SELECT author_user_id FROM ai_messages WHERE role='user' ORDER BY created_at DESC, id DESC LIMIT 1`
@@ -373,10 +436,22 @@ async function generateReply(): Promise<void> {
       model: MODEL,
       max_tokens: 16000,
       thinking: { type: "adaptive" },
-      system: await buildSystemPrompt(),
+      system: await buildSystemBlocks(),
       tools: TOOLS,
       messages,
     });
+
+    // КРОК 1: облік токенів по КОЖНОМУ виклику (їх кілька на відповідь через tool-loop).
+    // Без заміру не видно, що дала оптимізація; cache_read показує, чи спрацював кеш.
+    const u = response.usage as unknown as {
+      input_tokens?: number; output_tokens?: number;
+      cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+    await pool.query(
+      `INSERT INTO ai_usage (message_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, iteration)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [msgId, MODEL, u?.input_tokens ?? 0, u?.output_tokens ?? 0,
+       u?.cache_read_input_tokens ?? 0, u?.cache_creation_input_tokens ?? 0, i]
+    ).catch(() => undefined);
 
     if (response.stop_reason === "pause_turn") {
       messages.push({ role: "assistant", content: response.content });

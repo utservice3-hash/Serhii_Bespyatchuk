@@ -514,6 +514,22 @@ ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS attachments JSONB;
 -- працювало без уточнень.
 ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS ui_section TEXT;
 
+-- Облік токенів AI-чату: по одному рядку на КОЖЕН виклик API (їх кілька на відповідь
+-- через tool-loop). Потрібен, щоб бачити ефект кешування промта і вартість запиту —
+-- без заміру оптимізація сліпа.
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id SERIAL PRIMARY KEY,
+  message_id INTEGER REFERENCES ai_messages(id) ON DELETE SET NULL,
+  model TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,   -- прочитано з кешу (дешево)
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,  -- записано в кеш (дорожче за звичайний)
+  iteration INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_time ON ai_usage(created_at DESC);
+
 -- «Мої звіти»: dashboard widgets the AI builds on request. Each widget is a
 -- read-only SQL query + a render config; the reports section runs the SQL live
 -- and draws it. Visibility scopes who sees it (admin / team leads / everyone).
