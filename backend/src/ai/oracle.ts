@@ -1,11 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { pool } from "../db/pool.js";
-import { getMetric } from "../ai/metricTools.js";
-import { buildSystemBlocks, execTool, TOOLS, MODEL, MAX_TOOL_ITERATIONS } from "../ai/respond.js";
+import { getMetric } from "./metricTools.js";
+import { buildSystemBlocks, execTool, TOOLS, MODEL, MAX_TOOL_ITERATIONS } from "./respond.js";
 
 /**
- * ГЕЙТ ЯКОСТІ AI — версія 2 (READ-ONLY). Запуск на сервері:
- *   node dist/scripts/gateAiOracle.js
+ * ГЕЙТ ЯКОСТІ AI — ядро (READ-ONLY). Запускається як частина ЄДИНОГО набору:
+ *   npm run test:ai
  *
  * ЧОМУ ПЕРЕПИСАНО. Попередній гейт був регуляркою «є число 10-12 десь у тексті».
  * Замір 31.07.2026 показав, що він міряє не те:
@@ -24,9 +23,8 @@ import { buildSystemBlocks, execTool, TOOLS, MODEL, MAX_TOOL_ITERATIONS } from "
  *     Один прогін більше не доказ: у замірі Q2 проходив 2 рази з 3.
  */
 
-const RUNS = Number(process.env.RUNS ?? 2);
+export const RUNS = Number(process.env.RUNS ?? 2);
 const client = new Anthropic({ timeout: 8 * 60 * 1000 });
-let failed = false;
 
 const kyivToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
 /** Останні 12 повних місяців + поточний, як їх бачить правило «за рік» у промті. */
@@ -47,7 +45,7 @@ function last12(): { from: string; to: string } {
  * Без цього оракул знову міряв би обгортку, а не відповідь.
  */
 const DOMAIN_IDS = /\b(142|143|8921932|155304|8921928|7336928|8921936|7337048|8921948|69716460|60412544|69716312|25044997|100274340|69716164|63019380)\b/g;
-const numsOf = (t: string): number[] =>
+export const numsOf = (t: string): number[] =>
   (t.replace(/\d{4}-\d{2}(-\d{2})?/g, " ")
     .replace(DOMAIN_IDS, " ")
     .replace(/\d+\s*(?:міс\b|місяц\w*|тижн\w*|дн(?:і|ів|я)\b)/gi, " ")
@@ -55,7 +53,7 @@ const numsOf = (t: string): number[] =>
     .map((s) => Number(s.replace(/[\s ]/g, "").replace(",", ".")))
     .filter((x) => Number.isFinite(x));
 
-interface Case {
+export interface Case {
   id: string;
   q: string;
   /**
@@ -71,7 +69,7 @@ interface Case {
   behaviour?: (text: string, toolCalls: string[]) => string | null;
 }
 
-const CASES: Case[] = [
+export const CASES: Case[] = [
   {
     id: "Q1", q: "Сформуй звіт по клієнту ПВК Арсенал за червень",
     reference: async () => {
@@ -129,9 +127,9 @@ const CASES: Case[] = [
   },
 ];
 
-interface RunResult { text: string; nums: number[]; calls: string[]; iter: number }
+export interface RunResult { text: string; nums: number[]; calls: string[]; iter: number }
 
-async function ask(q: string): Promise<RunResult> {
+export async function ask(q: string): Promise<RunResult> {
   const system = await buildSystemBlocks();
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: q }];
   const calls: string[] = [];
@@ -154,58 +152,50 @@ async function ask(q: string): Promise<RunResult> {
   return { text, nums: numsOf(text), calls, iter };
 }
 
-console.log(`ОРАКУЛ AI · модель ${MODEL} · прогонів ${RUNS} · сьогодні ${kyivToday()}\n`);
 
-for (const c of CASES) {
-  let ref: { must: number[]; universe: number[]; note: string };
-  try { ref = await c.reference(); }
-  catch (e) { console.log(`${c.id} ❌ еталон не порахувався: ${e instanceof Error ? e.message : e}`); failed = true; continue; }
+export interface CaseVerdict {
+  id: string;
+  note: string;
+  green: boolean;
+  stable: boolean;
+  matchesCore: boolean;
+  strays: number[];
+  behaviour: string[];
+  iters: number[];
+  why: string;
+}
 
-  const runs: RunResult[] = [];
-  for (let k = 0; k < RUNS; k++) runs.push(await ask(c.q));
+/**
+ * Прогнати один кейс RUNS разів і винести вердикт.
+ * ЗЕЛЕНИЙ = стабільно між прогонами + числа == ядру + жодного числа поза ядром.
+ */
+export async function evaluateCase(c: Case, runs = RUNS): Promise<CaseVerdict> {
+  const ref = await c.reference();
+  const results: RunResult[] = [];
+  for (let k = 0; k < runs; k++) results.push(await ask(c.q));
 
-  // (1) стабільність: набір чисел між прогонами має збігатись.
-  // Для питань БЕЗ цифр (уточнення) числову стабільність не міряємо взагалі: там
-  // «числа» — це нумерація списку («1. 2. 3.»), і вона нічого не означає. Саме на
-  // цьому оракул дав хибний ❌ у першому прогоні — та сама помилка, що й «порівняння
-  // по прозі», лише з іншого боку.
   const numericCase = ref.must.length > 0;
   const inUniverse = (v: number) => ref.universe.some((u) => Math.abs(u - v) < 0.5);
   const dataOf = (r: RunResult) => [...new Set(r.nums.filter(inUniverse))].sort((a, b) => a - b);
   const key = (r: RunResult) => JSON.stringify(dataOf(r));
-  const stable = !numericCase || runs.every((r) => key(r) === key(runs[0]));
+  const stable = !numericCase || results.every((r) => key(r) === key(results[0]));
 
-  // (2b) СТОРОННІ ЧИСЛА: усе, що виглядає як дані (≥100, не рік) і чого в ядрі НЕМА.
-  // Саме тут ловиться ручна арифметика — рівно те, що дало 9750 замість 9752.
-  const isYear = (v: number) => v >= 1900 && v <= 2100 && Number.isInteger(v);
-  const strays = numericCase
-    ? [...new Set(runs.flatMap((r) => r.nums.filter((v) => v >= 100 && !isYear(v) && !inUniverse(v))))]
-    : [];
-
-  // (2) збіг з ядром: кожне обов'язкове число присутнє в КОЖНОМУ прогоні
-  const missing = runs.map((r) => ref.must.filter((v) => !r.nums.some((x) => Math.abs(x - v) < 0.5)));
+  const missing = results.map((r) => ref.must.filter((v) => !r.nums.some((x) => Math.abs(x - v) < 0.5)));
   const matchesCore = missing.every((m) => m.length === 0);
 
-  // (3) поведінкова перевірка (для питань без цифр)
-  const behaviour = c.behaviour ? runs.map((r) => c.behaviour!(r.text, r.calls)).filter(Boolean) : [];
+  const isYear = (v: number) => v >= 1900 && v <= 2100 && Number.isInteger(v);
+  const strays = numericCase
+    ? [...new Set(results.flatMap((r) => r.nums.filter((v) => v >= 100 && !isYear(v) && !inUniverse(v))))]
+    : [];
 
+  const behaviour = c.behaviour ? results.map((r) => c.behaviour!(r.text, r.calls)).filter((x): x is string => Boolean(x)) : [];
   const green = stable && matchesCore && behaviour.length === 0 && strays.length === 0;
-  if (!green) failed = true;
-  console.log("═".repeat(70));
-  console.log(`${green ? "✅" : "❌"} ${c.id} · ${c.q}`);
-  console.log(`   ${ref.note}`);
-  console.log(`   витків: ${runs.map((r) => r.iter).join("/")} · інструменти: ${runs[0].calls.join(",") || "—"}`);
-  console.log(`   стабільність між прогонами: ${stable ? "✅ числа ідентичні" : "❌ РОЗІЙШЛИСЬ"}`);
-  console.log(`   збіг з ядром: ${matchesCore ? "✅" : `❌ не знайдено у відповіді: ${missing.map((m, i) => `прогін${i + 1}[${m.join(", ")}]`).filter((_, i) => missing[i].length).join(" ")}`}`);
-  if (behaviour.length) console.log(`   поведінка: ❌ ${behaviour.join(" · ")}`);
-  if (strays.length) console.log(`   числа поза ядром (порахував сам?): ❌ ${strays.join(", ")}`);
-  if (!stable) runs.forEach((r, i) => console.log(`     прогін ${i + 1} (дані): ${dataOf(r).join(" ")}`));
-  if (!green) console.log(`   → ${runs[0].text.replace(/\s+/g, " ").slice(0, 400)}`);
+  const why = [
+    stable ? "" : "числа розійшлись між прогонами",
+    matchesCore ? "" : `не знайдено чисел ядра: ${missing.flat().join(", ")}`,
+    strays.length ? `числа поза ядром (порахував сам?): ${strays.join(", ")}` : "",
+    behaviour.length ? `поведінка: ${behaviour.join(" · ")}` : "",
+  ].filter(Boolean).join(" | ");
+  return { id: c.id, note: ref.note, green, stable, matchesCore, strays, behaviour,
+           iters: results.map((r) => r.iter), why };
 }
-
-console.log("\n" + "═".repeat(70));
-console.log(failed
-  ? "❌ ГЕЙТ ПРОВАЛЕНО (зелений = 2 прогони + ідентичні числа + числа == ядро)"
-  : "✅ ГЕЙТ ЗЕЛЕНИЙ: усі питання стабільні між прогонами і збігаються з ядром");
-await pool.end();
-process.exit(failed ? 1 : 0);

@@ -1,6 +1,7 @@
 // ⚠️ ПЕРШИМ: патч express.Router, щоб async-throw у будь-якому роуті йшов у error-middleware
 // (швидкий 500), а не лишав запит висіти. Має стояти до імпортів роутерів. Див. lib/asyncRoutes.
 import "./lib/asyncRoutes.js";
+import { buildVersion } from "./version.js";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
@@ -145,12 +146,17 @@ app.get("/api/health", async (_req, res) => {
       },
       kommoCircuit: kommoCircuitState(),
       dataCheck: dc.rows[0] ? { ranAt: dc.rows[0].ran_at, warnings: Number(dc.rows[0].warnings) } : null,
+      // ТЕСТ #1: яку саме збірку крутить процес. Health із самим лише ok:true
+      // одного разу 11 годин підтверджував «усе добре», поки прод крутив старий код
+      // (рестарт убив не той PID). Тепер версію видно, і приймання після деплою
+      // може її звірити з тим, що ми викотили.
+      version: buildVersion(),
       statistics: getStatisticsStatus(),
       ringostat: getRingostatStatus(),
       cashIncome: getCashIncomeStatus(),
     });
   } catch {
-    res.json({ ok: true, sync: null });
+    res.json({ ok: true, sync: null, version: buildVersion() });
   }
 });
 

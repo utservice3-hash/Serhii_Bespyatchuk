@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');fs.readdirSync('src/db').filter(f=>f.endsWith('.sql')).forEach(f=>fs.copyFileSync('src/db/'+f,'dist/db/'+f))\"",
-    "test": "node --test dist/**/*.test.js",
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');fs.readdirSync('src/db').filter(f=>f.endsWith('.sql')).forEach(f=>fs.copyFileSync('src/db/'+f,'dist/db/'+f))\" && node scripts/writeVersion.mjs",
+    "test": "node --test \"dist/**/*.test.js\"",
     "reconcile": "node dist/scripts/reconcile.js",
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",
@@ -17,7 +17,9 @@
     "backup": "tsx src/jobs/backupDb.ts",
     "sync:users": "tsx src/jobs/syncUsersOnly.ts",
     "backfill:client-keys": "tsx src/jobs/backfillClientKeys.ts",
-    "bot": "tsx src/bot/index.ts"
+    "bot": "tsx src/bot/index.ts",
+    "test:prod": "TEST_SCOPE=prod node --test \"dist/**/*.test.js\"",
+    "test:ai": "TEST_SCOPE=prod TEST_AI=1 node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
