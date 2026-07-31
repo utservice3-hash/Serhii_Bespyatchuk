@@ -3,6 +3,7 @@ import * as money from "../core/money.js";
 import * as metrics from "../core/metrics.js";
 import * as plans from "../core/plans.js";
 import { getSettings } from "../routes/settings.js";
+import { resolveNamedMonth, guardFuturePeriod, type ResolvedPeriod } from "./period.js";
 
 /**
  * 🎯 БІЛИЙ СПИСОК МЕТРИК ДЛЯ AI (`get_metric`) — КРОК 4.
@@ -53,6 +54,11 @@ export const FORBIDDEN_TABLES = [
 export const CONFIG_TABLES = ["app_settings"];
 
 export interface MetricArgs {
+  /**
+   * Місяць, названий БЕЗ року («червень»). Передавати САМЕ його замість from/to —
+   * рік підставляє код (найближче минуле входження), а не модель. Див. `ai/period.ts`.
+   */
+  month?: string | null;
   from?: string | null;
   to?: string | null;
   manager?: string | null;
@@ -222,7 +228,12 @@ export function metricCatalog(): string {
 }
 
 export type MetricResult =
-  | { ok: true; metric: string; source: string; scope: Record<string, unknown>; table: string; data: unknown }
+  | { ok: true; metric: string; source: string; scope: Record<string, unknown>;
+      /** Розв'язаний період словами — модель ЗОБОВ'ЯЗАНА назвати його у відповіді. */
+      resolvedPeriod: string | null;
+      /** Поточний місяць ще не завершився / код виправив період — сказати вголос. */
+      periodNote?: string;
+      table: string; data: unknown }
   | { ok: false; error: string };
 
 /** Ліміт рядків у `table` — щоб великі зрізи (клієнти) не рвали контекст. */
@@ -266,8 +277,10 @@ function renderTable(data: unknown): string {
  * Резолв імені менеджера/команди в id. Повертає підказку зі списком кандидатів при
  * неоднозначності — щоб модель виправилась за ОДИН виток, а не пішла шукати схему.
  */
-async function resolveScope(a: MetricArgs): Promise<ResolvedScope | { error: string }> {
-  const s: ResolvedScope = { from: a.from ?? null, to: a.to ?? null };
+async function resolveScope(a: MetricArgs, period: ResolvedPeriod | null): Promise<ResolvedScope | { error: string }> {
+  const s: ResolvedScope = period
+    ? { from: period.from, to: period.to }
+    : { from: a.from ?? null, to: a.to ?? null };
   if (a.manager) {
     const r = await pool.query<{ id: number; name: string }>(
       "SELECT id, name FROM managers WHERE is_active AND name ILIKE $1 ORDER BY name", [`%${a.manager}%`]);
@@ -294,7 +307,12 @@ export async function getMetric(name: string, a: MetricArgs): Promise<MetricResu
   if (!def) {
     return { ok: false, error: `Невідома метрика «${name}». Доступні: ${METRICS.map((m) => m.name).join(", ")}` };
   }
-  const scope = await resolveScope(a);
+  // 🗓 ПЕРІОД ВИРІШУЄ КОД. Пріоритет: явний `month` (місяць без року) → страхувальна
+  // сітка на майбутній період → те, що передала модель у from/to.
+  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const period = (a.month ? resolveNamedMonth(a.month, today) : null)
+    ?? guardFuturePeriod(a.from, a.to, today);
+  const scope = await resolveScope(a, period);
   if ("error" in scope) return { ok: false, error: scope.error };
   try {
     const { adSources } = await getSettings();
@@ -303,6 +321,9 @@ export async function getMetric(name: string, a: MetricArgs): Promise<MetricResu
       ok: true, metric: def.name, source: def.source,
       scope: { from: scope.from, to: scope.to, managerId: scope.managerId ?? null, teamId: scope.teamId ?? null,
                granularity: def.granular ? g(a) : undefined },
+      resolvedPeriod: period?.label ?? (scope.from && scope.to ? `${scope.from} … ${scope.to}` : null),
+      periodNote: period?.correction
+        ?? (period?.incomplete ? "поточний місяць ще НЕ завершився — цифри неповні, сказати це користувачу" : undefined),
       table: renderTable(data),
       data,
     };
