@@ -1371,13 +1371,17 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ai_readonly') THEN
     CREATE ROLE ai_readonly NOLOGIN;
   END IF;
-  -- членство, щоб застосунок міг `SET ROLE` (не потребує superuser)
-  IF NOT EXISTS (SELECT 1 FROM pg_auth_members am
-                  JOIN pg_roles r ON r.oid = am.roleid
-                  JOIN pg_roles m ON m.oid = am.member
-                 WHERE r.rolname = 'ai_readonly' AND m.rolname = current_user) THEN
+  -- 🔴 GRANT робимо БЕЗУМОВНО і з явними опціями. У PG16 користувач із CREATEROLE, який
+  -- створив роль, автоматично отримує членство, але з set_option=false — тобто SET ROLE
+  -- ЗАБОРОНЕНО. Ранній guard «якщо членства ще немає» бачив це авто-членство і пропускав
+  -- GRANT → `SET LOCAL ROLE ai_readonly` падав з "permission denied to set role"
+  -- (спіймано пост-деплой гейтом 31.07.2026). WITH SET/INHERIT — синтаксис PG16+,
+  -- на старіших падає 42601 → фолбек на простий GRANT (там опцій немає й SET дозволено).
+  BEGIN
+    EXECUTE format('GRANT ai_readonly TO %I WITH SET TRUE, INHERIT TRUE', current_user);
+  EXCEPTION WHEN syntax_error OR feature_not_supported THEN
     EXECUTE format('GRANT ai_readonly TO %I', current_user);
-  END IF;
+  END;
 END $$;
 
 -- Особисті задачі приховані НАВІТЬ ВІД АДМІНА (правило приватності) → модель бачить
