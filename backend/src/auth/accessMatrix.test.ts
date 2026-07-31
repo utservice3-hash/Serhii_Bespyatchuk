@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsApi, needsMatrix, API_BASE } from "../testMode.js";
 import { ACCESS_MATRIX, ACCESS_ROLES } from "./accessMatrix.js";
+import { MOUNTS } from "./routeInventory.js";
 
 /**
  * #11 — ЕМПІРИЧНА МАТРИЦЯ ДОСТУПУ (450 пар роль×ендпоінт).
@@ -61,16 +62,25 @@ test("#11 МАТРИЦЯ ДОСТУПУ: жодна клітинка не змі
 
   const drift: string[] = [];
   let checked = 0;
+  /** Скільки проб реально впіймали гейт. 0 при непорожньому дрейфі = зламана проба. */
+  let seen403 = 0;
   for (const row of ACCESS_MATRIX) {
     // Пробуємо рівно ті ролі, що є у зліпку: для deny-only дозволених там немає.
     const probe = [...row.allow, ...row.deny];
     for (const role of probe) {
-      const res = await fetch(`${API_BASE}/api${fill(row.path)}`, {
+      // 🔴 БЕЗ `/api` ПЕРЕД `row.path`. До кроку B1 зліпок зберігав шляхи БЕЗ префікса
+      // (`/dashboard/overview`), і префікс дописувався тут. B1 перегенерував зліпок із
+      // РАНТАЙМ-обходу роутерів, а той віддає повний шлях (`/api/dashboard/overview`) —
+      // тож проба пішла в `/api/api/…` і сервер віддав 404 на ВСЕ. Наслідок був
+      // асиметричний і тому підступний: рядки `allow` зеленіли (404 ≠ 403 = «дозволено»),
+      // а всі `deny` показали фальшивий дрейф. Формат шляху тепер тримає #11c.
+      const res = await fetch(`${API_BASE}${fill(row.path)}`, {
         method: row.method,
         headers: { Authorization: `Bearer ${tok(role)}`, "Content-Type": "application/json" },
         body: row.method === "GET" ? undefined : BAD_BODY,
       });
       checked++;
+      if (res.status === 403) seen403++;
       const allowedNow = res.status !== 403;
       const allowedThen = row.allow.includes(role);
       if (allowedNow !== allowedThen) {
@@ -91,8 +101,33 @@ test("#11 МАТРИЦЯ ДОСТУПУ: жодна клітинка не змі
   const expectedPairs = ACCESS_MATRIX.reduce((n, r) => n + r.allow.length + r.deny.length, 0);
   assert.equal(checked, expectedPairs,
     `обійшли ${checked} пар, а у зліпку ${expectedPairs} — цикл проби неповний`);
+  // 🔴 ДІАГНОЗ ПЕРЕД ВИРОКОМ. Якщо ЖОДНА проба не отримала 403, гейт не спрацював
+  // ніде — а це не «політику відкрили всім», це зламана проба (не той базовий URL,
+  // не той префікс шляху, лежить сервер). Саме так виглядав інцидент 01.08.2026:
+  // 274 рядки «дрейфу», а насправді подвійний `/api`. Без цього рядка вивід підказує
+  // хибний напрямок і кличе «полагодити» політику, з якою все гаразд.
+  if (drift.length > 0 && seen403 === 0) {
+    assert.fail(`🔴 ЗЛАМАНА ПРОБА, А НЕ ПОЛІТИКА: обійшли ${checked} пар і не отримали ЖОДНОГО 403. `
+      + `Перевір API_BASE (${API_BASE}) і формат шляхів у зліпку — вони мають бути повними `
+      + "(`/api/…`) і не дописуватись удруге. Дрейф не оцінюємо, поки проба не б'є в живі роути.");
+  }
   assert.deepEqual(drift, [],
     "🔴 ПОВЕДІНКА ДОСТУПУ ЗМІНИЛАСЬ (рефакторинг не має права цього робити):\n  " + drift.join("\n  "));
+});
+
+test("#11c ФОРМАТ ШЛЯХІВ: зліпок і проба говорять однією мовою", () => {
+  // Ворота проти рівно того класу, що коштував нам прогону: генератор зліпка й пробник
+  // розійшлись у тому, чи шлях уже містить `/api`. Мережі не треба — тому перевірка
+  // виконується в кожному `npm test`, а не лише в матричному режимі.
+  const mounts = [...new Set(MOUNTS.map((m) => m.mount))];
+  const bad = ACCESS_MATRIX
+    .filter((r) => !mounts.some((m) => r.path === m || r.path.startsWith(m + "/")))
+    .map((r) => `${r.method} ${r.path}`);
+  assert.deepEqual(bad, [],
+    "🔴 у зліпку є шлях, який не починається з жодного змонтованого префікса. Або зліпок "
+    + "зберігає шлях БЕЗ `/api`, або зʼявився новий mount, не записаний у MOUNTS. Проба "
+    + "піде в неіснуючий URL і поверне 404 — тобто «дозволено» для кожного рядка:\n  "
+    + bad.join("\n  "));
 });
 
 test("#11b ЗЛІПОК ЦІЛИЙ: усі ролі відомі, класи проби коректні", () => {
