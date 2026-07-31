@@ -41,10 +41,9 @@ const TAB_MATRIX: Record<Role, { allow: string[]; deny: string[] }> = {
   ceo:       { allow: ["overview", "report", "kvp"], deny: [] },
   opdir:     { allow: ["overview", "report", "kvp", "settings"], deny: [] },
   kvp:       { allow: ["overview", "report", "kvp", "settings"], deny: [] },
-  // ⚠️ financier зараз НЕ має вкладки receivables (перевірено на проді 31.07.2026).
-  // Фіксуємо реальність, а не побажання — але це схоже на конфіг-недогляд: роль
-  // «Фінансист» без дебіторки. ВІДКРИТЕ ПИТАННЯ до власника, не правити наосліп.
-  financier: { allow: [], deny: ["kvp", "settings", "receivables"] },
+  // ✅ 31.07.2026, рішення власника: дебіторка — буквально робота фінансиста, 403 був
+  // конфіг-недоглядом. Відкрито ЕКРАНОМ (screen_access), не хардкодом по ролі.
+  financier: { allow: ["receivables"], deny: ["kvp", "settings", "overview", "report"] },
   hr:        { allow: ["tasks", "training"], deny: ["overview", "report", "kvp", "settings", "receivables", "teams", "managers", "loyalty"] },
   team_lead: { allow: ["overview", "report", "teams", "managers"], deny: ["kvp", "settings"] },
   manager:   { allow: ["overview", "report", "tasks"], deny: ["kvp", "settings", "teams", "managers"] },
@@ -107,8 +106,8 @@ const ENDPOINTS: EndpointCase[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"],
     note: "реєстр рахунків — доступ по вкладці, HR не має" },
   { path: "/api/dashboard/receivables",
-    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"],
-    note: "дебіторка: HR і (наразі) financier не мають" },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"],
+    note: "дебіторка: фінансист відкритий 31.07.2026; HR не має" },
 ];
 
 test("#5.3 МАТРИЦЯ ЕНДПОІНТІВ: сервер відмовляє тим, кому не можна", needsApi(), async () => {

@@ -1443,3 +1443,33 @@ CREATE INDEX IF NOT EXISTS idx_tracker_intervals_user_time ON tracker_intervals 
 -- Одноразове ввімкнення: усі з ефективною роллю manager + Дарʼя (utservice62). Власника/адмінів — НІ.
 UPDATE users SET tracker_enabled = true WHERE COALESCE(role_override, role) = 'manager';
 UPDATE users SET tracker_enabled = true WHERE lower(email) = 'utservice62@gmail.com';
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 31.07.2026 · Рішення власника після спринту якості (тест #5 знайшов обидва).
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- 1) ФІНАНСИСТ БАЧИТЬ ДЕБІТОРКУ. 403 на /dashboard/receivables був конфіг-недоглядом:
+-- дебіторка — буквально робота фінансиста. Відкриваємо ЕКРАНОМ (screen_access), а не
+-- хардкодом по ролі в роуті — ми якраз ідемо від розсипаних role==='admin'.
+-- Ідемпотентно; наявні права ролі не перетираємо (||).
+UPDATE roles SET screen_access = screen_access || '{"receivables":true}'::jsonb
+ WHERE key = 'financier';
+
+-- 2) БЕКФІЛ below_min для рядків, поданих ДО викату фічі (вони мають DEFAULT false).
+--
+-- 🔴 ПРАВИЛО (рішення власника 31.07.2026): below_min рахуємо ЛИШЕ для активних
+-- менеджерів із планом > 0. План 0 — це окремий стан «виключений із плану» (так
+-- свідомо ставили звільненому, щоб прибрати його з перерозподілу), а НЕ «нижче
+-- мінімуму». Якби бекфіл позначив нулі, звіт кричав би про свідоме рішення, і люди
+-- за тиждень навчились би ігнорувати прапорець — гірше, ніж його відсутність.
+--
+-- Мінімум береться з налаштувань (єдине джерело), фолбек 30000 — рівно дефолт коду.
+UPDATE plan_formation pf
+   SET below_min = true
+  FROM managers m
+ WHERE m.id = pf.manager_id
+   AND m.is_active
+   AND pf.proposed_value > 0
+   AND pf.proposed_value < COALESCE(
+         (SELECT (data->>'planMinPerManager')::numeric FROM app_settings WHERE id = 1), 30000)
+   AND pf.below_min = false;

@@ -51,18 +51,38 @@ test("#4.2 МІНІМУМ доходить до API формування пла�
     "форма формування повернула 0 команд — порожній результат це ПРОВАЛ, а не «немає даних»");
 });
 
-test("#4.3 below_min БЕЗ ХИБНИХ СПРАЦЮВАНЬ: прапорець стоїть рівно там, де план < мінімуму", needsDb(), async () => {
+/**
+ * #4.3 — ПРАВИЛО below_min (рішення власника 31.07.2026):
+ * прапорець ставиться ЛИШЕ для АКТИВНИХ менеджерів із планом > 0.
+ *
+ * 🔴 Чому не «будь-який план < мінімуму»: план 0 ми ставимо СВІДОМО — так прибирали
+ * звільненого з перерозподілу. Це стан «виключений із плану», а не «нижче мінімуму».
+ * Якби прапорець ловив і нулі, звіт кричав би про навмисне рішення, і за тиждень на
+ * позначку перестали б дивитись — гірше, ніж її відсутність.
+ */
+test("#4.3 below_min БЕЗ ХИБНИХ СПРАЦЮВАНЬ (лише активні, план > 0)", needsDb(), async () => {
   const { pool, getSettings } = await load();
   const min = (await getSettings()).planMinPerManager;
-  const rows = (await pool.query<{ id: number; proposed_value: string; below_min: boolean; status: string }>(
-    `SELECT id, proposed_value, below_min, status FROM plan_formation`)).rows;
+  const rows = (await pool.query<{ id: number; proposed_value: string; below_min: boolean; active: boolean }>(
+    `SELECT pf.id, pf.proposed_value, pf.below_min, COALESCE(m.is_active, false) AS active
+       FROM plan_formation pf LEFT JOIN managers m ON m.id = pf.manager_id`)).rows;
   assert.ok(rows.length > 0, "у plan_formation немає жодного рядка — тест нічого не перевіряє");
-  const falsePos = rows.filter((r) => r.below_min && Number(r.proposed_value) >= min);
-  const falseNeg = rows.filter((r) => !r.below_min && Number(r.proposed_value) < min);
+
+  const shouldFlag = (r: typeof rows[number]) =>
+    r.active && Number(r.proposed_value) > 0 && Number(r.proposed_value) < min;
+
+  const falsePos = rows.filter((r) => r.below_min && !shouldFlag(r));
+  const falseNeg = rows.filter((r) => !r.below_min && shouldFlag(r));
   assert.deepEqual(falsePos.map((r) => `#${r.id}=${r.proposed_value}`), [],
-    `🔴 below_min стоїть на планах ≥ ${min} — позначка знеціниться`);
+    `🔴 below_min стоїть там, де не має (план ≥ ${min}, нуль або неактивний) — позначка знеціниться`);
   assert.deepEqual(falseNeg.map((r) => `#${r.id}=${r.proposed_value}`), [],
-    `🔴 план < ${min} без позначки below_min — виняток пройде непоміченим`);
+    `🔴 активний менеджер із планом 0 < план < ${min} без позначки — виняток пройде непоміченим`);
+
+  // Окремо фіксуємо, що нулі СВІДОМО не позначені: інакше «зелено» могло б означати
+  // просто відсутність таких рядків.
+  const zeros = rows.filter((r) => Number(r.proposed_value) === 0);
+  assert.deepEqual(zeros.filter((r) => r.below_min).map((r) => r.id), [],
+    "план 0 позначено як below_min — це стан «виключений із плану», не «нижче мінімуму»");
 });
 
 test("#4.4 🔴 ЗНІМОК: суми планів закритих місяців НЕ рухаються", needsDb(), async () => {

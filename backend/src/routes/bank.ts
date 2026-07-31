@@ -121,20 +121,45 @@ bankRouter.get("/receivables", async (_req, res) => {
   res.json({ deferred: true, message: "Розріз дебіторки по юрособах — скоро (потрібна ознака юрособи)" });
 });
 
-// Реєстр рахунків + реквізити (усі ролі — для чипів фільтра). api_connected — похідне.
-// env_key_name (НАЗВА змінної, не ключ) віддаємо лише тим, хто керує рахунками. Значення ключа — НІКОЛИ.
+/**
+ * Реєстр рахунків. Ендпоінт доступний усім, хто має вкладку «bank» — список потрібен
+ * для ЧИПІВ ФІЛЬТРА у Виписці. Але чипам достатньо label/company/bank/currency.
+ *
+ * 🔴 ВИПРАВЛЕНО 31.07.2026 (знайшов тест #5.6). Раніше SELECT віддавав ПОВНІ реквізити
+ * — IBAN, ЄДРПОУ, директора, юр.адресу, МФО і **номер ключ-карти** — будь-якому
+ * автентифікованому: рядовому менеджеру, тімліду. Гейтилась лише назва env-змінної.
+ * Фронт їх не показував, але відповідь фізично містила: `curl` віддавав усе.
+ *
+ * Тепер відсів на СЕРВЕРІ: поля реквізитів взагалі не потрапляють у відповідь тим,
+ * хто не веде фінанси. Ховати їх у UI — не захист.
+ */
+const ACCOUNT_PUBLIC_FIELDS = ["id", "company", "bank", "label", "currency", "is_active"] as const;
+
 bankRouter.get("/accounts", async (req, res) => {
   const canManage = roleHasPerm(req.auth!.roleKey, "manage_bank_accounts");
+  // Повні реквізити бачить той, хто веде рахунки або має доступ до балансів
+  // (адмін, КВП/опердир, фінансист). Решта — лише те, з чого будуються чипи.
+  const canSeeRequisites = canManage || roleHasPerm(req.auth!.roleKey, "view_balances");
   const r = await pool.query(
     `SELECT id, company, bank, label, currency, external_account_id, is_active,
             legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou,
             legal_address, director, purpose, env_key_name
        FROM bank_accounts ORDER BY is_active DESC, label`);
-  const accounts = r.rows.map((a) => ({
-    ...a,
-    api_connected: !!(a.env_key_name && process.env[a.env_key_name]),
-    env_key_name: canManage ? a.env_key_name : undefined, // назва лише для панелі; значення — ніколи
-  }));
+  const accounts = r.rows.map((a) => {
+    const api_connected = !!(a.env_key_name && process.env[a.env_key_name]);
+    if (!canSeeRequisites) {
+      // Складаємо об'єкт З НУЛЯ, а не видаляємо зайве з наявного: при додаванні
+      // нової колонки в bank_accounts вона за замовчуванням НЕ поїде назовні.
+      const slim: Record<string, unknown> = { api_connected };
+      for (const f of ACCOUNT_PUBLIC_FIELDS) slim[f] = a[f];
+      return slim;
+    }
+    return {
+      ...a,
+      api_connected,
+      env_key_name: canManage ? a.env_key_name : undefined, // назва лише для панелі; значення — ніколи
+    };
+  });
   res.json({ accounts });
 });
 
