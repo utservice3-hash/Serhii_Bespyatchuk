@@ -29,15 +29,23 @@ const from = `${YM}-01`;
 const to = new Date(Date.UTC(+YM.slice(0, 4), +YM.slice(5, 7), 0)).toISOString().slice(0, 10);
 const n = (v: unknown) => Number(v ?? 0);
 
-test("БЕЗПЕКА: жодна функція ядра не читає персональні дані", needsDb(), async () => {
-  const { METRICS, FORBIDDEN_TABLES, CONFIG_TABLES, pool, getSettings } = await load();
-  // Трасуємо САМЕ функцію ядра, а не getMetric: інакше в трасу потрапляє
-  // getSettings() диспетчера і кожна метрика хибно світиться читанням app_settings.
+/**
+ * #6 БЕЗПЕКА — ОКРЕМЕ ТВЕРДЖЕННЯ НА КОЖНУ ТАБЛИЦЮ.
+ *
+ * Раніше це був один assert на всі таблиці одразу: він казав «щось відкрилось», але не
+ * ЩО САМЕ, і перше ж порушення ховало решту. Тепер `users`, `one_on_ones`,
+ * `bank_accounts`, `tasks` і конфіг перевіряються окремо — падає рівно той рядок,
+ * який відкрився, і одразу видно, яку метрику дивитись.
+ *
+ * Трасуємо САМЕ функцію ядра (`m.run`), а не `getMetric`: інакше в трасу потрапляє
+ * `getSettings()` диспетчера і кожна метрика хибно світиться читанням `app_settings`.
+ */
+async function traceMetrics(): Promise<Map<string, string[]>> {
+  const { METRICS, pool, getSettings } = await load();
   const { adSources } = await getSettings();
   const scope = { from, to, managerId: null, teamId: null };
   const orig = pool.query.bind(pool) as typeof pool.query;
-  const rxBad = new RegExp(`(?<![a-z0-9_])(${FORBIDDEN_TABLES.join("|")})(?![a-z0-9_])`, "i");
-  const rxCfg = new RegExp(`(?<![a-z0-9_])(${CONFIG_TABLES.join("|")})(?![a-z0-9_])`, "i");
+  const byMetric = new Map<string, string[]>();
   let seen: string[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (pool as any).query = (...args: unknown[]) => {
@@ -46,22 +54,51 @@ test("БЕЗПЕКА: жодна функція ядра не читає пер�
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (orig as any)(...args);
   };
-  const bad: string[] = [], cfg: string[] = [];
   try {
     for (const m of METRICS) {
       seen = [];
-      try { await m.run(scope, { from, to }, adSources); } catch { /* SQL до падіння все одно перевірено */ }
-      const hitBad = seen.map((s) => s.match(rxBad)?.[1]).find(Boolean);
-      if (hitBad) bad.push(`${m.name} (${m.source}) → ${hitBad}`);
-      const hitCfg = seen.map((s) => s.match(rxCfg)?.[1]).find(Boolean);
-      if (hitCfg) cfg.push(`${m.name} → ${hitCfg}`);
+      try { await m.run(scope, { from, to }, adSources); } catch { /* SQL до падіння теж рахується */ }
+      byMetric.set(`${m.name} (${m.source})`, seen);
     }
   } finally {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (pool as any).query = orig;
   }
-  assert.deepEqual(bad, [], `метрика читає персональні дані: ${bad.join(" · ")}`);
-  assert.deepEqual(cfg, [], `конфіг має читати лише диспетчер, а читає ядро: ${cfg.join(" · ")}`);
+  return byMetric;
+}
+
+let traced: Map<string, string[]> | null = null;
+const getTrace = async () => (traced ??= await traceMetrics());
+
+const offendersFor = (trace: Map<string, string[]>, table: string): string[] => {
+  const rx = new RegExp(`(?<![a-z0-9_])${table}(?![a-z0-9_])`, "i");
+  return [...trace.entries()].filter(([, sqls]) => sqls.some((s) => rx.test(s))).map(([name]) => name);
+};
+
+for (const table of ["users", "access_audit", "bank_accounts", "one_on_ones",
+                     "one_on_one_forms", "tracker_devices", "tracker_intervals", "tasks"]) {
+  test(`#6 БЕЗПЕКА · «${table}» не читає ЖОДНА метрика`, needsDb(), async () => {
+    const trace = await getTrace();
+    assert.ok(trace.size > 0, "жодної метрики не протрасовано — тест нічого не довів");
+    assert.deepEqual(offendersFor(trace, table), [],
+      `🔴 «${table}» читається метриками: ${offendersFor(trace, table).join(", ")}`);
+  });
+}
+
+test("#6 КОНФІГ: app_settings читає лише диспетчер, не ядро", needsDb(), async () => {
+  const trace = await getTrace();
+  assert.ok(trace.size > 0, "жодної метрики не протрасовано");
+  assert.deepEqual(offendersFor(trace, "app_settings"), [],
+    "конфіг має читати диспетчер (getSettings), а не функції ядра");
+});
+
+test("#6 ПОКРИТТЯ: протрасовано ВСІ метрики білого списку", needsDb(), async () => {
+  const { METRICS } = await load();
+  const trace = await getTrace();
+  assert.equal(trace.size, METRICS.length,
+    `протрасовано ${trace.size} із ${METRICS.length} — решта могла лишитись неперевіреною`);
+  const silent = [...trace.entries()].filter(([, sqls]) => sqls.length === 0).map(([n]) => n);
+  assert.deepEqual(silent, [], `метрики не зробили ЖОДНОГО запиту — підозра на заглушку: ${silent.join(", ")}`);
 });
 
 test("ПАРИТЕТ: get_metric == /api/dashboard/overview, ідентично", needsApi(), async () => {

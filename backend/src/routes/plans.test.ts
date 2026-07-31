@@ -1,0 +1,89 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { needsDb, needsApi, API_BASE } from "../testMode.js";
+
+/**
+ * ТЕСТ #4 — ПЛАНИ.
+ *
+ * Три речі, кожна з яких уже ламалась:
+ *  1. МІНІМУМ 30 000 ₴ на менеджера — з НАЛАШТУВАНЬ, не з хардкоду. Якщо значення
+ *     зникне з відповіді або стане 0, форма мовчки перестане попереджати.
+ *  2. `below_min` БЕЗ ХИБНИХ СПРАЦЮВАНЬ — прапорець має стояти рівно там, де план
+ *     реально нижчий за мінімум. Хибне спрацювання знецінює позначку швидше, ніж
+ *     її відсутність: на неї перестають дивитись.
+ *  3. 🔴 ЗНІМОК СУМ ПО МІСЯЦЯХ — ловить автоперерозподіл. Був випадок: план
+ *     звільненого менеджера АВТОМАТИЧНО розкидався на решту, і сума місяця мінялась
+ *     сама собою. Минулі місяці НЕ МАЮТЬ рухатись ніколи.
+ */
+
+const load = async () => ({
+  pool: (await import("../db/pool.js")).pool,
+  signToken: (await import("../auth/auth.js")).signToken,
+  getSettings: (await import("./settings.js")).getSettings,
+});
+
+/**
+ * 🔒 ЗНІМОК ЗАКРИТИХ МІСЯЦІВ (зафіксовано 31.07.2026 з прода). Цифри тут — НЕ
+ * «поточне значення», а закріплений факт. Якщо тест почервонів — хтось змінив план
+ * закритого місяця, і це треба пояснити, а не оновити знімок.
+ */
+const PLAN_SNAPSHOT: Record<string, { managers: number; total: number }> = {
+  "2026-06": { managers: 25, total: 2_674_000 },
+  "2026-07": { managers: 32, total: 2_700_000 },
+};
+
+test("#4.1 МІНІМУМ: planMinPerManager приходить із налаштувань і дорівнює 30 000", needsDb(), async () => {
+  const { getSettings } = await load();
+  const s = await getSettings();
+  assert.equal(typeof s.planMinPerManager, "number", "planMinPerManager відсутній у налаштуваннях");
+  assert.equal(s.planMinPerManager, 30000,
+    `мінімум ${s.planMinPerManager} ≠ 30 000 — або змінили свідомо (онови тест), або він загубився`);
+});
+
+test("#4.2 МІНІМУМ доходить до API формування плану", needsApi(), async () => {
+  const { signToken } = await load();
+  const t = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
+  const r = await fetch(`${API_BASE}/api/plans/formation?month=2026-08`, { headers: { Authorization: `Bearer ${t}` } });
+  assert.equal(r.status, 200, `/plans/formation віддав ${r.status}`);
+  const j = (await r.json()) as { minPerManager?: number; teams?: unknown[] };
+  assert.equal(j.minPerManager, 30000, "мінімум не доїхав до форми — попередження зникне мовчки");
+  assert.ok(Array.isArray(j.teams) && j.teams.length > 0,
+    "форма формування повернула 0 команд — порожній результат це ПРОВАЛ, а не «немає даних»");
+});
+
+test("#4.3 below_min БЕЗ ХИБНИХ СПРАЦЮВАНЬ: прапорець стоїть рівно там, де план < мінімуму", needsDb(), async () => {
+  const { pool, getSettings } = await load();
+  const min = (await getSettings()).planMinPerManager;
+  const rows = (await pool.query<{ id: number; proposed_value: string; below_min: boolean; status: string }>(
+    `SELECT id, proposed_value, below_min, status FROM plan_formation`)).rows;
+  assert.ok(rows.length > 0, "у plan_formation немає жодного рядка — тест нічого не перевіряє");
+  const falsePos = rows.filter((r) => r.below_min && Number(r.proposed_value) >= min);
+  const falseNeg = rows.filter((r) => !r.below_min && Number(r.proposed_value) < min);
+  assert.deepEqual(falsePos.map((r) => `#${r.id}=${r.proposed_value}`), [],
+    `🔴 below_min стоїть на планах ≥ ${min} — позначка знеціниться`);
+  assert.deepEqual(falseNeg.map((r) => `#${r.id}=${r.proposed_value}`), [],
+    `🔴 план < ${min} без позначки below_min — виняток пройде непоміченим`);
+});
+
+test("#4.4 🔴 ЗНІМОК: суми планів закритих місяців НЕ рухаються", needsDb(), async () => {
+  const { pool } = await load();
+  const rows = (await pool.query<{ m: string; n: string; total: string }>(
+    `SELECT to_char(plan_date,'YYYY-MM') m, COUNT(*) n, COALESCE(SUM(planned_value),0) total
+       FROM plans WHERE metric = 'payment_amount' GROUP BY 1`)).rows;
+  assert.ok(rows.length > 0, "планів немає взагалі — порожній результат це провал");
+  const drift: string[] = [];
+  for (const [ym, exp] of Object.entries(PLAN_SNAPSHOT)) {
+    const got = rows.find((r) => r.m === ym);
+    if (!got) { drift.push(`${ym}: місяць зник із planів`); continue; }
+    if (Number(got.n) !== exp.managers) drift.push(`${ym}: менеджерів ${got.n}, було ${exp.managers}`);
+    if (Number(got.total) !== exp.total) drift.push(`${ym}: сума ${Number(got.total).toLocaleString("uk")}, було ${exp.total.toLocaleString("uk")}`);
+  }
+  assert.deepEqual(drift, [],
+    "🔴 план закритого місяця зрушив — саме так виглядав автоперерозподіл плану звільненого:\n  " + drift.join("\n  "));
+});
+
+test.after(async () => {
+  if (!process.env.DATABASE_URL) return;
+  const { pool } = await import("../db/pool.js");
+  await pool.end();
+});
