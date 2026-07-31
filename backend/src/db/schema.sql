@@ -1254,6 +1254,17 @@ INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
 VALUES ('hr', 'HR', false, 'company', '{"tasks":true,"oneonone":true}'::jsonb, '{}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
+-- 🔴 КОРЕКЦІЯ НЕЗАСТОСОВАНОЇ МІГРАЦІЇ (31.07.2026). INSERT вище написали 29.07 САМЕ щоб
+-- дати HR company-scope — але роль на той момент уже існувала (створена з панелі), тож
+-- `ON CONFLICT DO NOTHING` не зробив НІЧОГО. Міграція звітувала «Migration applied»,
+-- а data_scope три доби лишався 'own'. Наслідок: scope-clamp тиснув HR у 'manager' з
+-- managerId=-1, тобто екрани відкриті, а дані порожні (симптом «HR бачить порожньо»).
+--
+-- Це РАЗОВА КОРЕКЦІЯ, а не постійний синк: умова `= 'own'` б'є рівно по зламаному стану.
+-- Постійний `SET data_scope='company'` тут ставити НЕ МОЖНА — панель дозволяє адміну
+-- міняти scope кастомних ролей, і такий рядок мовчки відкочував би його правки щодеплою.
+UPDATE roles SET data_scope = 'company' WHERE key = 'hr' AND data_scope = 'own';
+
 -- ── 1×1 ПЕРЕРОБКА · права + ролі СЕО/Опер.директор ──────────────────────────
 -- view_all_1x1  = НАСКРІЗНИЙ доступ до 1×1 (усі типи/люди/історія/аналітика), поза conductor-скоупом.
 -- edit_1x1_forms = редагувати набори питань 1×1 у Налаштуваннях (створює нову версію форми).

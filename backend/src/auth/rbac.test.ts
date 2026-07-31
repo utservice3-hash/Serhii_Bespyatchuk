@@ -332,3 +332,114 @@ test("#5.8b МЕЖА ЛИШИЛАСЬ: без токена не віддаєть
       "🔴 у відповіді неавтентифікованому є реквізити");
   }
 });
+// ─────────────────── HR · COMPANY-SCOPE (зміна політики 31.07.2026) ───────────────────
+/**
+ * HR отримав `data_scope='company'` — те, що ухвалили ще 29.07, але що не доїхало
+ * через `ON CONFLICT DO NOTHING`. Наслідок: `auth.role` став `'company'` замість
+ * `'manager'`, і зник кламп `managerId=-1`, який робив усі екрани HR порожніми.
+ *
+ * 🔴 Кожна межа — ОКРЕМЕ твердження. Найважливіше — #5.13: `'company'` це РІВНО те
+ * значення, яке мав фінансист, доки не піднявся до адміна. Треба довести, що HR не
+ * поїхав за ним.
+ */
+
+test("#5.9 HR НЕ бачить ЧУЖІ особисті задачі (приватність не залежить від scope)", needsApi(), async () => {
+  const { signToken, rbac } = await load();
+  await rbac.refreshRoles();
+  const t = signToken({ userId: 0, role: rbac.scopeCompatRole("hr", rbac.getRoleDef("hr")),
+    roleKey: "hr", managerId: null, teamId: null });
+  const r = await fetch(`${API_BASE}/api/tasks`, { headers: { Authorization: `Bearer ${t}` } });
+  assert.equal(r.status, 200, `HR: /tasks віддав ${r.status}`);
+  const j = (await r.json()) as { tasks?: { id: number; assigneeId: number | null }[] };
+  assert.ok(j.tasks && j.tasks.length > 0,
+    "HR не отримав ЖОДНОЇ задачі — тест нічого не доводить (порожній результат = провал)");
+  // Особиста задача = БЕЗ виконавця. Приватність тримається на `assignee_id IS NULL`
+  // у SQL-гілці, а НЕ на scope — саме тому company-scope її не відкриває. Токен має
+  // userId=0, тож жодна чужа особиста сюди потрапити не може.
+  const foreignPersonal = j.tasks.filter((x) => x.assigneeId == null);
+  assert.deepEqual(foreignPersonal.map((x) => x.id), [],
+    "🔴 HR отримав особисті задачі інших акаунтів — приватність протекла");
+});
+
+test("#5.10 HR НЕ бачить 1×1 інших кондукторів", needsApi(), async () => {
+  const { signToken, rbac } = await load();
+  await rbac.refreshRoles();
+  const t = signToken({ userId: 0, role: rbac.scopeCompatRole("hr", rbac.getRoleDef("hr")),
+    roleKey: "hr", managerId: null, teamId: null });
+  // HR має право `view_all_1x1` — наскрізний доступ вирішує САМЕ воно, не scope.
+  // Тут перевіряємо межу: без вказаного суб'єкта записів чужих зустрічей не видають.
+  const r = await fetch(`${API_BASE}/api/one-on-ones/record/A/999999`,
+    { headers: { Authorization: `Bearer ${t}` } });
+  assert.ok(r.status === 200 || r.status === 404,
+    `HR: несподіваний статус ${r.status} на 1×1 неіснуючого менеджера`);
+  if (r.status === 200) {
+    const j = (await r.json()) as { answers?: unknown[]; record?: unknown };
+    assert.ok(!j.record || (Array.isArray(j.answers) && j.answers.length === 0),
+      "🔴 HR отримав вміст 1×1 по неіснуючому суб'єкту — скоуп зустрічей протікає");
+  }
+});
+
+test("#5.11 HR НЕ має вкладки «bank» — ні до зміни scope, ні після", needsApi(), async () => {
+  const { signToken, rbac } = await load();
+  await rbac.refreshRoles();
+  assert.equal(rbac.roleHasTab("hr", "bank"), false,
+    "🔴 HR отримав вкладку «bank» — реквізити й Виписка не її робота");
+  const t = signToken({ userId: 0, role: rbac.scopeCompatRole("hr", rbac.getRoleDef("hr")),
+    roleKey: "hr", managerId: null, teamId: null });
+  const r = await fetch(`${API_BASE}/api/bank/accounts`, { headers: { Authorization: `Bearer ${t}` } });
+  assert.equal(r.status, 403, `🔴 сервер віддав HR /bank/accounts зі статусом ${r.status}`);
+  const body = await r.text();
+  assert.ok(!/iban|key_card/i.test(body), "🔴 у відповіді HR є реквізити");
+});
+
+test("#5.12 duty: HR ЧИТАЄ, але редагувати не може", needsApi(), async () => {
+  const { signToken, rbac } = await load();
+  await rbac.refreshRoles();
+  const t = signToken({ userId: 0, role: rbac.scopeCompatRole("hr", rbac.getRoleDef("hr")),
+    roleKey: "hr", managerId: null, teamId: null });
+  // Читання — так: це календар відділу, свідоме розширення (рішення власника).
+  const read = await fetch(`${API_BASE}/api/duty/`, { headers: { Authorization: `Bearer ${t}` } });
+  assert.equal(read.status, 200, `🔴 HR не читає duty (${read.status}) — company-scope не спрацював`);
+  // Запис — ні: canEdit = admin | team_lead. Ціль свідомо неіснуюча + тіло невалідне,
+  // тож навіть якби гейт впав, записати нема чого.
+  const write = await fetch(`${API_BASE}/api/duty/`, {
+    method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ __probe__: "невалідне тіло" }),
+  });
+  assert.equal(write.status, 403, `🔴 HR дозволено писати в duty (${write.status}) — має бути 403`);
+});
+
+test("#5.13 🔴 HR НЕ успадкував нічого з того, що отримав фінансист", needsDb(), async () => {
+  const { rbac } = await load();
+  await rbac.refreshRoles();
+  const hr = rbac.getRoleDef("hr")!;
+  const fin = rbac.getRoleDef("financier")!;
+  // Обидві ролі тепер company-scope, але фінансист піднятий до АДМІНА правом
+  // `admin_scope`, а HR — ні. Значення `auth.role='company'` збіглося; профілі — ні.
+  // HR тепер РІВНО 'company' — те саме значення, що мав фінансист до підйому.
+  // ⚠️ Перша версія цього рядка вимагала 'manager' (стара поведінка при own-scope) —
+  // тест почервонів і тим довів, що читає реальний резолвер, а не мій намір.
+  const hrCompat = rbac.scopeCompatRole("hr", hr);
+  assert.equal(hrCompat, "company",
+    `HR має бути 'company' після зміни scope, а не '${hrCompat}'`);
+  assert.notEqual(hrCompat, "admin",
+    "🔴 HR піднявся до admin — company-scope НЕ дає цього без права admin_scope");
+  const perms = Object.entries(hr.permissions).filter(([, v]) => v === true).map(([k]) => k).sort();
+  assert.deepEqual(perms, ["edit_1x1_forms", "view_all_1x1"],
+    `🔴 набір прав HR змінився: ${perms.join(", ")} — очікували рівно два 1×1-права`);
+  // Жодного з прав, які фінансист дістав при підйомі до адміна.
+  const gained = ["admin_scope", "approve_plans", "enter_manual_stats", "export",
+    "manage_bank_accounts", "manage_bank_hidden", "manage_goals", "submit_plans",
+    "view_hidden_payments", "view_balances", "view_bank_totals", "view_cashflow"];
+  const leaked = gained.filter((p) => hr.permissions[p] === true);
+  assert.deepEqual(leaked, [],
+    `🔴 HR отримав права фінансиста: ${leaked.join(", ")}`);
+  const screens = Object.entries(hr.screenAccess).filter(([, v]) => v === true).map(([k]) => k).sort();
+  assert.deepEqual(screens,
+    ["documents", "duty", "feedback", "messenger", "news", "oneonone", "tasks", "training"],
+    `🔴 набір екранів HR змінився: ${screens.join(", ")}`);
+  // Дзеркало: фінансист МАЄ бути адміном — інакше тест зеленів би й тоді, коли
+  // підйом фінансиста зламався, і «HR не успадкував» не доводило б нічого.
+  assert.equal(rbac.scopeCompatRole("financier", fin), "admin",
+    "фінансист більше не адмін — порівняння втратило сенс");
+});
