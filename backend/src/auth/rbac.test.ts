@@ -226,3 +226,47 @@ test.after(async () => {
   const { pool } = await import("../db/pool.js");
   await pool.end();
 });
+
+/**
+ * #5.7 — ДЗЕРКАЛО до #5.6. Заборона без дозволу нічого не варта: якщо «полагодити»
+ * витік, вирізавши поля ВСІМ, тест #5.6 позеленіє, а Виписка зламається мовчки.
+ * Тому окремо перевіряємо, що той, кому МОЖНА, реквізити ОТРИМУЄ.
+ *
+ * ⚠️ Історія: у першій спробі цей тест не потрапив у файл (правка не застосувалась,
+ * я цього не помітив), і фікс #5.6 поїхав у прод із перевіреною лише однією гілкою.
+ */
+test("#5.7 РЕКВІЗИТИ: хто веде фінанси — отримує їх повністю", needsApi(), async () => {
+  const { signToken, rbac } = await load();
+  await rbac.refreshRoles();
+  for (const role of ["admin", "financier"] as Role[]) {
+    const t = signToken({ userId: 0, role: rbac.scopeCompatRole(role, rbac.getRoleDef(role)),
+      roleKey: role, managerId: null, teamId: null });
+    const r = await fetch(`${API_BASE}/api/bank/accounts`, { headers: { Authorization: `Bearer ${t}` } });
+    assert.equal(r.status, 200, `${role}: /bank/accounts віддав ${r.status}`);
+    const j = (await r.json()) as { accounts?: Record<string, unknown>[] };
+    assert.ok(j.accounts && j.accounts.length > 0, `${role}: список рахунків порожній — провал`);
+    const withIban = j.accounts.filter((a) => a.iban != null && String(a.iban).length > 0);
+    assert.ok(withIban.length > 0,
+      `🔴 ${role} МАЄ бачити реквізити, а IBAN не прийшов у жодному рахунку — відсів зрізав зайве`);
+  }
+});
+
+/** #5.8 Ключ-карта — номер платіжної картки. Окреме твердження, щоб не загубилось. */
+test("#5.8 КЛЮЧ-КАРТА: номерів карток немає у відповіді менеджера й тімліда", needsApi(), async () => {
+  const { signToken, rbac } = await load();
+  await rbac.refreshRoles();
+  let checked = 0;
+  for (const role of ["manager", "team_lead"] as Role[]) {
+    const t = signToken({ userId: 0, role: rbac.scopeCompatRole(role, rbac.getRoleDef(role)),
+      roleKey: role, managerId: role === "manager" ? 8 : null, teamId: role === "team_lead" ? 5 : null });
+    const r = await fetch(`${API_BASE}/api/bank/accounts`, { headers: { Authorization: `Bearer ${t}` } });
+    assert.equal(r.status, 200, `${role}: /bank/accounts віддав ${r.status}`);
+    const j = (await r.json()) as { accounts?: Record<string, unknown>[] };
+    assert.ok(j.accounts && j.accounts.length > 0, `${role}: список порожній — тест нічого не доводить`);
+    checked += j.accounts.length;
+    const leaked = j.accounts.filter((a) => "key_card" in a && a.key_card != null);
+    assert.deepEqual(leaked.map((a) => a.label), [],
+      `🔴 ${role} отримав номери ключ-карт — це номери платіжних карток`);
+  }
+  assert.ok(checked > 0, "жодного рахунку не перевірено");
+});
