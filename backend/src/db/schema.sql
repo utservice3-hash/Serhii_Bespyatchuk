@@ -1075,6 +1075,12 @@ CREATE TABLE IF NOT EXISTS plan_formation (
   UNIQUE (manager_id, month, metric)
 );
 CREATE INDEX IF NOT EXISTS idx_plan_formation_month ON plan_formation (month, status);
+-- Прапорець «виняток»: на МОМЕНТ ПОДАЧІ сума була нижча за поріг (app_settings.
+-- planMinPerManager). Ставить СЕРВЕР, не фронт. Потрібен, щоб винятки лишались
+-- відрізнюваними в майбутніх звітах: `comment` для цього не годиться — там і звичайні
+-- примітки тімліда, і обґрунтування виключення, розрізнити їх постфактум неможливо.
+-- Фіксується саме на подачі: поріг може змінитись, а факт «тоді було нижче» — ні.
+ALTER TABLE plan_formation ADD COLUMN IF NOT EXISTS below_min BOOLEAN NOT NULL DEFAULT false;
 
 -- ============================================================================
 -- RBAC (Phase 1). Additive, idempotent. Вбудовані ролі = ТОЧНА поточна поведінка.

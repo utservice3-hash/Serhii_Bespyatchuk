@@ -286,6 +286,8 @@ export interface PFClients { repeat: PFCountSum; leadgen: PFCountSum; new: PFCou
 export type PFStatus = "draft" | "submitted" | "approved" | "returned";
 export interface PFState {
   status: PFStatus; proposedValue: number | null; comment: string | null; returnComment: string | null;
+  /** На момент ПОДАЧІ сума була нижча за поріг — ставить сервер; для бейджа й майбутніх звітів. */
+  belowMin?: boolean;
   submittedBy: string | null; submittedAt: string | null; decidedBy: string | null; decidedAt: string | null;
 }
 export interface PFManager {

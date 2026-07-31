@@ -430,7 +430,19 @@ function PlanSeg({ m, month, data, onChanged, onValue }: { m: PFManager; month: 
       {(f.status === "submitted" || f.status === "approved") && f.proposedValue != null && (
         <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginTop: 10 }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: ".4px" }}>Пропозиція тімліда</div>
-          <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{fmt(f.proposedValue)} ₴ {f.status === "approved" && <span style={{ color: GREEN }}>✓</span>}</div>
+          <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{fmt(f.proposedValue)} ₴</span>
+            {f.status === "approved" && <span style={{ color: GREEN }}>✓</span>}
+            {/* Бейдж винятку — щоб затверджувач бачив, що план свідомо нижчий за мінімум,
+                і одразу поруч читав обґрунтування (нижче в тому ж блоці). */}
+            {f.belowMin && (
+              <span title={`Нижче мінімуму ${fmt(minPer)} ₴ — подано як виняток з обґрунтуванням`}
+                style={{ fontSize: 10.5, fontWeight: 800, padding: "2px 9px", borderRadius: 20, cursor: "help",
+                         background: "rgba(217,119,6,0.16)", color: AMBER }}>
+                ⚠️ нижче мінімуму
+              </span>
+            )}
+          </div>
           {f.comment && <div style={{ fontSize: 12.5, color: "var(--text)", fontStyle: "italic", marginTop: 4 }}>«{f.comment}»</div>}
           <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4 }}>
             {f.submittedBy}{f.submittedAt ? ` · подав ${dm(f.submittedAt)}` : ""}{f.decidedBy && f.status === "approved" ? ` · КВП затвердив ${dm(f.decidedAt)}` : ""}

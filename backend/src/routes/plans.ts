@@ -99,9 +99,9 @@ plansRouter.get("/formation", async (req, res) => {
     pool.query<{ manager_id: number; planned_value: string }>(
       `SELECT manager_id, planned_value FROM plans WHERE plan_date = $1 AND metric = 'payment_amount'`, [month]),
     pool.query<{ manager_id: number; proposed_value: string; status: string; comment: string | null; return_comment: string | null;
-      submitted_by: number | null; submitted_at: string | null; submitted_name: string | null;
+      below_min: boolean; submitted_by: number | null; submitted_at: string | null; submitted_name: string | null;
       decided_by: number | null; decided_at: string | null; decided_name: string | null }>(
-      `SELECT pf.manager_id, pf.proposed_value, pf.status, pf.comment, pf.return_comment,
+      `SELECT pf.manager_id, pf.proposed_value, pf.status, pf.comment, pf.return_comment, pf.below_min,
               pf.submitted_by, to_char(pf.submitted_at,'YYYY-MM-DD') AS submitted_at, COALESCE(sm.name, su.email) AS submitted_name,
               pf.decided_by, to_char(pf.decided_at,'YYYY-MM-DD') AS decided_at, COALESCE(dm.name, du.email) AS decided_name
          FROM plan_formation pf
@@ -142,8 +142,9 @@ plansRouter.get("/formation", async (req, res) => {
       currentPlan: Math.round(planMap.get(m.id) ?? 0),
       formation: f ? {
         status: f.status, proposedValue: Math.round(Number(f.proposed_value)), comment: f.comment, returnComment: f.return_comment,
+        belowMin: f.below_min === true,
         submittedBy: f.submitted_name, submittedAt: f.submitted_at, decidedBy: f.decided_name, decidedAt: f.decided_at,
-      } : { status: "draft", proposedValue: null, comment: null, returnComment: null, submittedBy: null, submittedAt: null, decidedBy: null, decidedAt: null },
+      } : { status: "draft", proposedValue: null, comment: null, returnComment: null, belowMin: false, submittedBy: null, submittedAt: null, decidedBy: null, decidedAt: null },
     };
   });
 
@@ -205,13 +206,16 @@ plansRouter.post("/formation/submit", requireRole("admin", "team_lead"), async (
         `${planMinPerManager.toLocaleString("uk-UA")} ₴ — потрібне обґрунтування.`,
     });
   }
+  // Прапорець ставить СЕРВЕР за фактичним порогом на момент подачі — фронт на нього не впливає.
+  const belowMin = planMinPerManager > 0 && proposedValue < planMinPerManager;
   await pool.query(
-    `INSERT INTO plan_formation (manager_id, month, metric, proposed_value, status, comment, submitted_by, submitted_at, updated_at)
-     VALUES ($1, $2, 'payment_amount', $3, 'submitted', $4, $5, now(), now())
+    `INSERT INTO plan_formation (manager_id, month, metric, proposed_value, status, comment, below_min, submitted_by, submitted_at, updated_at)
+     VALUES ($1, $2, 'payment_amount', $3, 'submitted', $4, $5, $6, now(), now())
      ON CONFLICT (manager_id, month, metric) DO UPDATE
         SET proposed_value = EXCLUDED.proposed_value, status = 'submitted', comment = EXCLUDED.comment,
+            below_min = EXCLUDED.below_min,
             submitted_by = EXCLUDED.submitted_by, submitted_at = now(), return_comment = NULL, updated_at = now()`,
-    [managerId, month, proposedValue, comment ?? null, auth.userId]
+    [managerId, month, proposedValue, comment ?? null, belowMin, auth.userId]
   );
   res.json({ ok: true, status: "submitted" });
 });
