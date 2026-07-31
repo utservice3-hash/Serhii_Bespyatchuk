@@ -88,7 +88,18 @@ const ROUTE_TAB: { test: (p: string) => boolean; tab: string }[] = (() => {
     { test: pre("/api/dashboard/funnel"), tab: "overview" },
     { test: pre("/api/dashboard/conversion"), tab: "overview" },
     { test: pre("/api/dashboard/timeseries"), tab: "overview" },
-    // решта /api/dashboard/* — оглядові дані; лишаємо без tab-гейта (scope все одно клампить).
+    // 🔴 ДОДАНО 31.07.2026 — ПОВЕРНЕННЯ ДО МОДЕЛІ, не рефакторинг. Ці три жили без
+    // tab-гейта, і їхньою ЄДИНОЮ межею був scope-кламп: `if (auth.role === "manager")
+    // return 403`. Щойно HR отримав company-scope, кламп зник — і роль, у якої немає
+    // ні «overview», ні «loyalty», ні «manager-report», побачила їх усі. Спіймав #11.
+    { test: pre("/api/dashboard/lead-quality"), tab: "overview" },
+    { test: pre("/api/dashboard/regular-clients"), tab: "loyalty" },
+    { test: pre("/api/dashboard/manager-report"), tab: "manager-report" },
+    // ⚠️ РЕШТА /api/dashboard/* ЛИШАЄТЬСЯ БЕЗ TAB-ГЕЙТА — і це ВІДОМА ДІРА, а не задум.
+    // Тут раніше стояло «scope все одно клампить». Це припущення НЕПРАВИЛЬНЕ для будь-якої
+    // company-ролі: у неї клампа немає за визначенням. Наступна роль зі scope=company
+    // відкриє ці роути так само тихо. Повний перелік — `docs/SCOPE_ONLY_ROUTES.md`;
+    // закриваємо їх окремою свідомою роботою (крок B), а не по одному після інциденту.
     // /api/statistics — series* → statistics; інше → depstats
     { test: pre("/api/statistics/series"), tab: "statistics" },
     { test: pre("/api/statistics"), tab: "depstats" },
