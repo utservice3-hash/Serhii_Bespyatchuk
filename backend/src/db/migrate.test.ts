@@ -19,7 +19,12 @@ import { execFileSync } from "node:child_process";
 const SCRATCH = process.env.TEST_SCRATCH_DB_URL;
 
 test("#8 міграція проходить на ПОРОЖНІЙ базі повністю", 
-  SCRATCH ? {} : { skip: "потрібен TEST_SCRATCH_DB_URL (окрема ПОРОЖНЯ база; проти прода — ніколи)" },
+  // 🔴 31.07.2026: цей skip тримався так довго, що схема з нуля НІКОЛИ не прогонялась —
+  // і в ній накопичився GRANT на таблицю, яка створюється нижче. Тому в причині — готовий
+  // рецепт стенда, щоб «пропущено» не означало «нема як перевірити».
+  SCRATCH ? {} : { skip: "потрібен TEST_SCRATCH_DB_URL (ПОРОЖНЯ база; проти прода — ніколи). "
+    + "Стенд: su postgres -c 'initdb -D /tmp/pgro/data -U sbx --auth=trust && "
+    + "pg_ctl -D /tmp/pgro/data -o \"-p 5599 -k /tmp/pgro\" start' (бінарі /usr/lib/postgresql/16/bin)" },
   () => {
     assert.ok(!/neon\.tech|prod/i.test(SCRATCH!) || process.env.TEST_SCRATCH_FORCE === "1",
       "TEST_SCRATCH_DB_URL схожий на бойову базу — відмовляюсь писати в неї");

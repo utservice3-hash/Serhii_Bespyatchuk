@@ -1390,23 +1390,7 @@ BEGIN
   END;
 END $$;
 
--- Особисті задачі приховані НАВІТЬ ВІД АДМІНА (правило приватності) → модель бачить
--- задачі лише через вью без них, а не базову таблицю.
-CREATE OR REPLACE VIEW ai_tasks AS
-  SELECT id, title, task_type, status, department, assignee_id, deadline,
-         metric, target_value, actual_value, created_at
-    FROM tasks WHERE assignee_id IS NOT NULL;
-
--- Спершу знімаємо все, потім видаємо на дозволене (ідемпотентно, щоразу на міграції).
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ai_readonly;
-GRANT USAGE ON SCHEMA public TO ai_readonly;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;
--- 🔴 ЗАБОРОНЕНІ: паролі, приватні 1×1, аудит доступу, налаштування (можуть містити
--- ключі), env-імена банківських ключів, трекер часу, сира таблиця задач.
-REVOKE ALL ON users, access_audit, app_settings, bank_accounts,
-  one_on_ones, one_on_one_forms, tracker_devices, tracker_intervals, tasks
-  FROM ai_readonly;
-GRANT SELECT ON ai_tasks TO ai_readonly;
+-- (привілеї ai_readonly винесено в самий кінець файла — див. «ПРИВІЛЕЇ РОЛЕЙ»)
 
 -- ─────────────────────────── Трекер часу (окрема підсистема) ───────────────────────────
 -- Власна авторизація (device-токен), НЕ JWT. Банк/виписку не чіпає.
@@ -1490,3 +1474,69 @@ CREATE TABLE IF NOT EXISTS job_runs (
   last_duration_ms INTEGER,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- ПРИВІЛЕЇ РОЛЕЙ — ЗАВЖДИ В КІНЦІ ФАЙЛА.
+--
+-- 🔴 Чому саме тут. `GRANT/REVOKE ON <таблиця>` вимагає, щоб таблиця ВЖЕ існувала.
+-- Блок ai_readonly стояв усередині файла й перелічував `tracker_devices`, які
+-- створюються НИЖЧЕ, — на живій базі це проходило (таблиці вже є), а на ПОРОЖНІЙ
+-- міграція падала з «relation does not exist». Той самий клас, що й сид key_card
+-- перед INSERT: видно лише з нуля. Тест #8 цього не ловив, бо без
+-- TEST_SCRATCH_DB_URL він просто пропускався.
+--
+-- ПРАВИЛО: нові GRANT/REVOKE дописувати СЮДИ, а не поруч із таблицею.
+-- ═════════════════════════════════════════════════════════════════════════════
+-- Особисті задачі приховані НАВІТЬ ВІД АДМІНА (правило приватності) → модель бачить
+-- задачі лише через вью без них, а не базову таблицю.
+CREATE OR REPLACE VIEW ai_tasks AS
+  SELECT id, title, task_type, status, department, assignee_id, deadline,
+         metric, target_value, actual_value, created_at
+    FROM tasks WHERE assignee_id IS NOT NULL;
+
+-- Спершу знімаємо все, потім видаємо на дозволене (ідемпотентно, щоразу на міграції).
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ai_readonly;
+GRANT USAGE ON SCHEMA public TO ai_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;
+-- 🔴 ЗАБОРОНЕНІ: паролі, приватні 1×1, аудит доступу, налаштування (можуть містити
+-- ключі), env-імена банківських ключів, трекер часу, сира таблиця задач.
+REVOKE ALL ON users, access_audit, app_settings, bank_accounts,
+  one_on_ones, one_on_one_forms, tracker_devices, tracker_intervals, tasks
+  FROM ai_readonly;
+GRANT SELECT ON ai_tasks TO ai_readonly;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 31.07.2026 · ТЕСТОВИЙ ХАРНЕС ХОДИТЬ ДО ПРОДА ТІЛЬКИ ЧЕРЕЗ READ-ONLY РОЛЬ.
+--
+-- 🔴 ПРИЧИНА. Юніт-тест гейтів обійшов middleware і виконав справжній
+-- `DELETE FROM monthly_goals WHERE id = 0` проти бойової БД. Рядка з таким id не
+-- було, тож обійшлось — але це ТРЕТІЙ поспіль випадок, коли нас рятує випадковість
+-- (не збігся sed, не знайшовся блок для replace, не існував id). Щоразу з РІЗНОЇ
+-- причини, отже наступного разу може не обійтись.
+--
+-- Логіка та сама, з якої ми закривали AI: межа має жити в БД, а не в акуратності
+-- того, хто пише запит. Під цією роллю помилковий DELETE дає permission denied —
+-- запис стає НЕМОЖЛИВИМ, а не невдалим.
+--
+-- ⚠️ Роль потрібна САМЕ як окрема від `ai_readonly`: та обмежує МОДЕЛЬ і ховає
+-- персональні таблиці, а харнесу навпаки треба читати `users`/`tasks`, щоб
+-- перевіряти RBAC. Різні межі — різні ролі.
+-- ─────────────────────────────────────────────────────────────────────────────
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'test_readonly') THEN
+    CREATE ROLE test_readonly NOLOGIN;
+  END IF;
+  -- PG16+ авто-видає членство з set_option=false → SET ROLE падає. Той самий фікс,
+  -- що ми вже проходили на ai_readonly: членство треба видати ЯВНО з SET TRUE.
+  BEGIN
+    EXECUTE format('GRANT test_readonly TO %I WITH SET TRUE, INHERIT TRUE', current_user);
+  EXCEPTION WHEN syntax_error OR feature_not_supported THEN
+    EXECUTE format('GRANT test_readonly TO %I', current_user);
+  END;
+END $$;
+GRANT USAGE ON SCHEMA public TO test_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO test_readonly;
+-- Жодних INSERT/UPDATE/DELETE/TRUNCATE — ні зараз, ні на майбутні таблиці.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM test_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO test_readonly;
