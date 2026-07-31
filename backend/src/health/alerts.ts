@@ -2,6 +2,7 @@ import { readFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { pool } from "../db/pool.js";
+import { rolesCacheState } from "../auth/rbac.js";
 import { buildVersion } from "../version.js";
 import { runReadOnly } from "../ai/readQuery.js";
 import { MONITORED_JOBS } from "../jobs/monitoredJobs.js";
@@ -241,6 +242,44 @@ async function checkWidgets(): Promise<Alert[]> {
   }];
 }
 
+/**
+ * 🔴 РОЛЬ-КЕШ RBAC. Стан, у якому система працює НЕПРАВИЛЬНО і мовчить — рівно те,
+ * заради чого будувалась ця сигналізація.
+ *
+ * Порожній кеш означав би, що гейти доступу не мають на чому працювати. Після
+ * 31.07.2026 це вже не «відкрито всім» (обидві функції fail-closed, і сервер із
+ * порожнім кешем не стартує), але тоді це «закрито всім» — сайт живий, а люди не
+ * бачать своїх вкладок. Обидва стани треба показувати, а не з'ясовувати по скаргах.
+ *
+ * Задавнений кеш (періодичний refresh раз на 10 хв мовчки помер) — попередження:
+ * правки ролей в адмінці перестають діяти, і про це теж ніхто не дізнається сам.
+ */
+async function checkRoleCache(): Promise<Alert[]> {
+  const { size, ageMinutes } = rolesCacheState();
+  if (size === 0) {
+    return [{
+      id: "roles:empty", severity: "critical",
+      title: "Роль-кеш RBAC порожній",
+      detail: "Гейти доступу працюють у режимі fail-closed: жодна роль не бачить своїх вкладок. "
+        + "Причина зазвичай — недоступна БД на старті або порожня таблиця roles.",
+      action: "Перевірити доступність БД і `SELECT count(*) FROM roles`; далі рестарт процесу.",
+      since: null,
+    }];
+  }
+  // Поріг = 3× частоти джоби (*/10). Менше давало б хибні тривоги на тіку.
+  if (ageMinutes != null && ageMinutes > 30) {
+    return [{
+      id: "roles:stale", severity: "warning",
+      title: `Роль-кеш не оновлювався ${ageMinutes} хв`,
+      detail: "Періодичний refreshRoles (кожні 10 хв) не відпрацьовує. Зміни ролей в адмінці "
+        + "не набувають чинності до рестарту.",
+      action: "Подивитись у логах «periodic refreshRoles failed» і перевірити БД.",
+      since: null,
+    }];
+  }
+  return [];
+}
+
 // ─────────────────────── збірка ───────────────────────
 
 const CHECKS: { id: string; label: string; run: () => Promise<Alert[]> }[] = [
@@ -249,7 +288,13 @@ const CHECKS: { id: string; label: string; run: () => Promise<Alert[]> }[] = [
   { id: "sync", label: "синхронізація з CRM", run: checkSync },
   { id: "jobs", label: "фонові джоби", run: checkJobs },
   { id: "widgets", label: "віджети власника", run: checkWidgets },
+  { id: "roles", label: "роль-кеш RBAC", run: checkRoleCache },
 ];
+
+/** Перелік оголошених джерел банера — щоб тест міг довести, що нове ДОДАНО, а не лише написане. */
+export function declaredCheckIds(): string[] {
+  return CHECKS.map((c) => c.id);
+}
 
 /**
  * Зібрати стан. Кожна перевірка ізольована: її падіння НЕ глушить решту і саме

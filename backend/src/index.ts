@@ -38,7 +38,7 @@ import { reconcileNightly } from "./jobs/reconcileNightly.js";
 import { freshnessWatch, abandonedStagesWatch } from "./jobs/freshnessWatch.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
-import { refreshRoles } from "./auth/rbac.js";
+import { refreshRoles, rolesCacheSize } from "./auth/rbac.js";
 import { seedOneOnOneForms } from "./oneOnOne/catalog.js";
 import { bankRouter } from "./routes/bank.js";
 import { trackerRouter } from "./routes/tracker.js";
@@ -488,16 +488,56 @@ app.use((err: unknown, req: express.Request, res: express.Response, _next: expre
 });
 
 const onListen = () => console.log(`Backend listening on ${config.host ?? "0.0.0.0"}:${config.port}`);
-// Роль-кеш RBAC — до прийому запитів (tab/perm-гейт залежить від нього). Помилка тут не
-// брикує старт: кеш лишиться порожнім і гейт fail-open до першого успішного refresh.
-refreshRoles()
-  .catch((e) => console.error("refreshRoles at boot failed (gate fail-open until next refresh):", e))
-  .finally(() => {
-    // 1×1 форми: гарантуємо наявність version 1 (A/Б/В) — ідемпотентно, не блокує старт.
-    seedOneOnOneForms(pool).catch((e) => console.error("seedOneOnOneForms at boot failed:", e));
-    if (config.host) app.listen(config.port, config.host, onListen);
-    else app.listen(config.port, onListen);
-  });
+
+/**
+ * 🔴 СТАРТ ЗА УМОВОЮ: сервер приймає запити ЛИШЕ з завантаженим роль-кешем.
+ *
+ * Було `.finally(listen)` — тобто при збої `refreshRoles` процес усе одно починав
+ * слухати з ПОРОЖНІМ кешем. А `roleHasTab`/`roleHasPerm` тоді fail-open віддавали
+ * `true` всім: у цьому стані менеджерський токен проходив `requirePerm("reset_passwords")`,
+ * `view_balances`, `manage_users`. Само це не лікувалось: `refreshRoles` викликається
+ * лише на старті й при записі ролі, тож кеш лишався порожнім БЕЗСТРОКОВО.
+ *
+ * Тепер: краще недоступний сервіс, ніж сервіс без прав доступу.
+ *
+ * ⏳ Ретрай — бо Neon має холодний старт (3-5 с) і `connectionTimeoutMillis: 10_000`.
+ * Разова спроба зробила б рестарти крихкими саме тоді, коли БД прокидається.
+ * Зростаючі паузи ~1+2+4+8+16 с ≈ 31 с сумарно, плюс до 10 с на кожен конект.
+ */
+const ROLE_CACHE_RETRIES = 5;
+async function loadRolesOrDie(): Promise<void> {
+  for (let attempt = 1; attempt <= ROLE_CACHE_RETRIES; attempt++) {
+    try {
+      await refreshRoles();
+      if (rolesCacheSize() > 0) return;
+      throw new Error("refreshRoles відпрацював, але кеш порожній (у таблиці roles нема рядків)");
+    } catch (e) {
+      const last = attempt === ROLE_CACHE_RETRIES;
+      console.error(`refreshRoles спроба ${attempt}/${ROLE_CACHE_RETRIES} не вдалася`
+        + `${last ? "" : ", повтор"}:`, e instanceof Error ? e.message : e);
+      if (last) {
+        console.error("🔴 РОЛЬ-КЕШ НЕ ЗАВАНТАЖЕНО — НЕ приймаю запити. Сервер із порожнім "
+          + "кешем віддавав би доступ усім ролям. Перевір доступність БД і таблицю roles.");
+        process.exit(1);
+      }
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
+    }
+  }
+}
+
+loadRolesOrDie().then(() => {
+  // 1×1 форми: гарантуємо наявність version 1 (A/Б/В) — ідемпотентно, не блокує старт.
+  seedOneOnOneForms(pool).catch((e) => console.error("seedOneOnOneForms at boot failed:", e));
+  if (config.host) app.listen(config.port, config.host, onListen);
+  else app.listen(config.port, onListen);
+});
+
+// (в) ПЕРІОДИЧНЕ ОНОВЛЕННЯ роль-кешу. Раніше `refreshRoles` кликали лише на старті й
+// при записі ролі — тож будь-яке спорожнення кешу було вічним. Раз на 10 хв дешево
+// (один SELECT по 8 рядках) і робить стан самовідновним.
+cron.schedule("*/10 * * * *", () => {
+  refreshRoles().catch((e) => console.error("periodic refreshRoles failed:", e));
+});
 
 // 🔴 СТАРТ БЕЗ СПЛЕСКУ ПАМʼЯТІ (2 ГБ shared-акаунт adm.tools, crash-loop 15.07.2026).
 // Раніше вся батарея синків стартувала СИНХРОННО на буті → пік памʼяті → хостинг

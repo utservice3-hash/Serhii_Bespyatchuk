@@ -475,3 +475,42 @@ test("#5.14 ЕКВІВАЛЕНТНІСТЬ: isAdminScope == старий вир�
   assert.equal(rbac.isAdminScope({ role: "manager", roleKey: "__немає_такої_ролі__" }), false,
     "🔴 невідома роль дає адмінський рівень");
 });
+
+/**
+ * #16 — FAIL-CLOSED РОЛЬ-КЕШУ. Найсерйозніша знахідка спринту.
+ *
+ * Було: `roleHasTab`/`roleHasPerm` при порожньому кеші віддавали `true` ВСІМ. Разом із
+ * `.finally(listen)` це означало, що збій `refreshRoles` на старті лишав сервер
+ * працювати з відкритими гейтами — включно з `reset_passwords`, `manage_users`,
+ * `view_balances`. І не лікувалось: періодичного refresh не існувало.
+ */
+test("#16 FAIL-CLOSED: порожній роль-кеш ВІДМОВЛЯЄ, а не дозволяє", needsDb(), async () => {
+  // Свіжий модуль без жодного refreshRoles — кеш гарантовано порожній.
+  const fresh = await import(`./rbac.js?empty=${Date.now()}`);
+  assert.equal(fresh.rolesCacheSize(), 0, "кеш мав бути порожнім — тест не про те");
+  assert.equal(fresh.roleHasTab("manager", "settings"), false,
+    "🔴 порожній кеш дозволив вкладку — це старий fail-open");
+  assert.equal(fresh.roleHasPerm("manager", "reset_passwords"), false,
+    "🔴 порожній кеш дозволив reset_passwords — рівно та дірка, яку закривали");
+  assert.equal(fresh.roleHasPerm("admin", "manage_users"), false,
+    "🔴 порожній кеш дозволив manage_users навіть без завантажених ролей");
+});
+
+test("#16b ДЗЕРКАЛО: із завантаженим кешем гейти працюють як раніше", needsDb(), async () => {
+  // Без цієї пари #16 зеленів би й тоді, якби функції почали віддавати false ЗАВЖДИ —
+  // тобто повністю зламаний RBAC виглядав би як «надійно закрито».
+  const { rbac } = await load();
+  await rbac.refreshRoles();
+  assert.ok(rbac.rolesCacheSize() > 0, "кеш не завантажився — далі перевіряти нема що");
+  assert.equal(rbac.roleHasTab("admin", "settings"), true, "🔴 адмін втратив «Налаштування»");
+  assert.equal(rbac.roleHasTab("manager", "settings"), false, "менеджер не має бачити налаштування");
+  assert.equal(rbac.roleHasPerm("admin", "manage_users"), true, "🔴 адмін втратив manage_users");
+  assert.equal(rbac.roleHasPerm("manager", "reset_passwords"), false, "менеджер не має скидати паролі");
+});
+
+test("#16c СИГНАЛІЗАЦІЯ знає про порожній кеш", needsDb(), async () => {
+  const fresh = await import(`./rbac.js?state=${Date.now()}`);
+  const st = fresh.rolesCacheState();
+  assert.equal(st.size, 0);
+  assert.equal(st.ageMinutes, null, "кеш ніколи не завантажувався → вік має бути null");
+});

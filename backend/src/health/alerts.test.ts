@@ -99,3 +99,13 @@ test.after(async () => {
   const { pool } = await import("../db/pool.js");
   await pool.end();
 });
+
+test("#10.7 РОЛЬ-КЕШ: перевірка зареєстрована в сигналізації", needsDb(), async () => {
+  // Джерело мало бути ДОДАНО в банер, а не лише написане. Без цього твердження
+  // checkRoleCache міг би існувати у файлі й ніколи не викликатись.
+  const mod = await import("./alerts.js");
+  const declared = mod.declaredCheckIds ? mod.declaredCheckIds() : null;
+  assert.ok(declared, "alerts.ts не віддає перелік перевірок — нема що звіряти");
+  assert.ok(declared.includes("roles"),
+    `🔴 перевірки «roles» немає серед джерел банера: ${declared.join(", ")}`);
+});

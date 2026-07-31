@@ -14,6 +14,21 @@ export interface RoleDef {
 }
 
 let cache = new Map<string, RoleDef>();
+/** Час останнього УСПІШНОГО завантаження кешу (для сигналізації). null = ще не було. */
+let lastRefreshAt: number | null = null;
+
+/** Скільки ролей у кеші. 0 = гейти закриті (fail-closed) — див. `roleHasTab`. */
+export function rolesCacheSize(): number {
+  return cache.size;
+}
+
+/** Стан кешу для банера тривог: порожній або задавнений — це поломка, що мовчить. */
+export function rolesCacheState(): { size: number; ageMinutes: number | null } {
+  return {
+    size: cache.size,
+    ageMinutes: lastRefreshAt == null ? null : Math.round((Date.now() - lastRefreshAt) / 60_000),
+  };
+}
 
 export async function refreshRoles(): Promise<void> {
   const rows = await pool.query<{
@@ -28,6 +43,7 @@ export async function refreshRoles(): Promise<void> {
     });
   }
   cache = next;
+  lastRefreshAt = Date.now();
 }
 
 export function getRoleDef(key: string): RoleDef | undefined {
@@ -129,17 +145,28 @@ export function tabForPath(originalUrl: string): string | null {
   return null;
 }
 
-/** Чи має ефективна роль доступ до вкладки. Невідома роль / відсутня вкладка → false.
- *  Кеш ще не завантажено (size===0, до-старт/до-міграція) → fail-open, щоб не забрикувати
- *  сайт; після завантаження (вбудовані ролі завжди є) — строге застосування. */
+/**
+ * Чи має ефективна роль доступ до вкладки. Невідома роль / відсутня вкладка → false.
+ *
+ * 🔴 FAIL-CLOSED (31.07.2026). Тут стояло `if (cache.size === 0) return true` — «щоб не
+ * забрикувати сайт до першого refresh». Ціна такого зручності: при збої `refreshRoles`
+ * на старті сервер приймав запити з порожнім кешем, і ВСІ tab- та perm-гейти
+ * пропускали будь-яку роль — включно з `reset_passwords`, `manage_users`,
+ * `view_balances`. Само не лікувалось: періодичного refresh не було.
+ *
+ * Тепер порожній кеш = ВІДМОВА. Це ДРУГИЙ рубіж: перший — сервер із порожнім кешем
+ * узагалі не починає слухати (`loadRolesOrDie` в index.ts). Межа не має триматись на
+ * одному запобіжнику — рівно те саме правило, що й у read-only харнесі.
+ */
 export function roleHasTab(roleKey: string, tab: string): boolean {
-  if (cache.size === 0) return true;
+  if (cache.size === 0) return false;
   const def = cache.get(roleKey);
   return !!def && def.screenAccess[tab] === true;
 }
 
+/** Те саме fail-closed, що й `roleHasTab` — і з тієї ж причини. */
 export function roleHasPerm(roleKey: string, perm: string): boolean {
-  if (cache.size === 0) return true;
+  if (cache.size === 0) return false;
   const def = cache.get(roleKey);
   return !!def && def.permissions[perm] === true;
 }
