@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { pool } from "../db/pool.js";
 import { runReadOnly } from "./readQuery.js";
+import { getMetric, metricCatalog, type MetricArgs } from "./metricTools.js";
 import { readFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -14,8 +15,8 @@ import { fileURLToPath } from "url";
  */
 
 // 6) Модель — з env, щоб оновлення не вимагало правки коду й деплою логіки.
-const MODEL = process.env.AI_MODEL ?? "claude-opus-4-8";
-const MAX_TOOL_ITERATIONS = 14;
+export const MODEL = process.env.AI_MODEL ?? "claude-opus-4-8";
+export const MAX_TOOL_ITERATIONS = 14;
 const HISTORY_LIMIT = 40;
 
 // Absolute origin so Anthropic can fetch attached images (served publicly at
@@ -75,14 +76,43 @@ const SYSTEM_PROMPT = `Ти — АІ-аналітик дашборду відд�
 (графіки/таблиці/KPI) у розділі дашборду «Мої звіти». Відповідай українською, стисло і по суті.
 Формат — звичайний текст (без markdown-таблиць з |, чат їх не рендерить): списки, короткі рядки «показник: значення».
 
-ДЖЕРЕЛО ДАНИХ: Postgres-БД дашборду (дзеркало CRM Kommo — єдиного джерела істини). Інструмент
-query_db: один SELECT/WITH-запит за виклик, read-only. Використовуй його для БУДЬ-ЯКИХ цифр — не вигадуй.
-Якщо не впевнений у колонках таблиці — спершу подивись information_schema.columns.
+ДЖЕРЕЛО ДАНИХ: Postgres-БД дашборду (дзеркало CRM Kommo — єдиного джерела істини).
+
+🔴 ДВА ШЛЯХИ ДО ЦИФРИ, І ВОНИ НЕ РІВНОЦІННІ:
+1) get_metric — ГОЛОВНИЙ. Викликає ту саму функцію ядра, що й сам дашборд, тож цифра
+   ЗБІГАЄТЬСЯ з дашбордом за побудовою. ЗАВЖДИ спершу дивись, чи є потрібна метрика в
+   каталозі get_metric. Якщо є — бери її. Не переписуй метрику власним SQL «щоб
+   перевірити»: власний SQL — це ІНША метрика, а не перевірка цієї.
+2) query_db — ЗАПАСНИЙ, лише коли в каталозі метрики НЕМАЄ (разові зрізи, розвідка
+   даних, нетипові питання). Один SELECT/WITH за виклик, read-only.
+
+🔴 ПІДПИС ДЖЕРЕЛА ОБОВ'ЯЗКОВИЙ — це бачить користувач, не лог:
+- Цифра з get_metric → в кінці відповіді рядок: «Джерело: <source з відповіді інструмента>».
+- Цифра з query_db → в кінці відповіді рядок: «⚠️ Порахувано вільним SQL, з дашбордом не звірено».
+- Якщо у відповіді є і те, і те — пиши ОБИДВА рядки і познач, яка цифра звідки.
+Мовчки видати цифру без підпису — заборонено: користувач має бачити, чи можна їй вірити.
+
+🔴 НЕ РАХУЙ В ГОЛОВІ. Підсумок, частку, різницю, середнє — бери ОКРЕМИМ викликом
+get_metric, а не арифметикою над рядками відповіді. Підсумок за період — це та сама
+метрика БЕЗ granularity (напр. success_money за період), а НЕ сума бакетів.
+У замірі ручне додавання 12 чисел дало 9750 замість 9752, і щоразу інакше.
+
+🔴 ФОРМАТ ВІДПОВІДІ СТАЛИЙ — та сама відповідь має виглядати однаково двічі, інакше
+її не звірити ні з дашбордом, ні з учорашньою. Два правила:
+- get_metric повертає готове поле table (подачу склав код). Числа, назви й порядок
+  полів бери З НЬОГО ДОСЛІВНО: не переформатовуй (жодних пробілів у тисячах, жодного
+  округлення), не перейменовуй поля, не міняй їх порядок. Рядки можеш відфільтрувати
+  під питання — але для КОЖНОГО показаного рядка виводь УСІ його поля.
+- Якщо table закінчується рядком «…показано N з M рядків» — скажи це користувачу.
+  Замовчати обрізання = подати огризок як повну картину.
+- Відповідай РІВНО на поставлене питання. Ніяких незапитаних рейтингів, лідерів,
+  «місць у топі» й порівнянь: якщо просили одного клієнта — дай одного клієнта.
 
 КЛЮЧОВІ ПРАВИЛА БІЗНЕС-ЛОГІКИ (не порушуй):
 - Дати ЗАВЖДИ по-київськи, обидва кінці включно: (col AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $from AND $to.
-- «Отримані кошти» = успішно реалізовано (status_id=142, за closed_at_kommo в періоді) + «оплата отримана»
-  (поточний status_id IN (69716460, 60412544) — знімок, без фільтра дати). Це одна логіка скрізь.
+- «Отримані кошти» = угоди, що ВВІЙШЛИ в етап 9 (69716460/60412544) АБО в 142 у періоді, пораховані
+  РАЗ (дедуп по угоді — це одні й ті самі гроші). Анкер — ДАТА ВХОДУ В ЕТАП (deal_stage_events).
+  ⚠️ НЕ знімок поточного статусу: недатований знімок мутує минулі місяці. Готова метрика — received_money.
 - Воронка продажів (повний цикл) = pipeline_id IN (8921932, 155304). Лідогенерація: Продзвін 8921936/7337048,
   Реактивація 8921948. Кваліфікація: 8921928/7336928 (етап «Нова заявка від лідогенератора» 69716164/63019380).
 - funnel_stage угоди — через pipeline_stage_map (pipeline_id,status_id→lead_taken/quote_requested/approved/invoiced/paid).
@@ -138,7 +168,12 @@ ad_budget_daily(day, budget_plan, budget_fact, conversions, clicks), sync_state.
  * 🔴 Порядок критичний: кеш працює на ПРЕФІКСІ. Якби динамічна частина стояла першою або
  * потрапила в кешований блок, префікс мінявся б щоразу і кеш не спрацьовував би ніколи.
  */
-async function buildSystemBlocks(): Promise<Anthropic.TextBlockParam[]> {
+/**
+ * Експортовано для `scripts/gateAiOracle.ts`: гейт має ганяти РІВНО той промт і ті
+ * інструменти, що й прод. Інакше він міряв би свою копію, а не продукт — саме так
+ * попередній гейт і розійшовся з реальністю.
+ */
+export async function buildSystemBlocks(): Promise<Anthropic.TextBlockParam[]> {
   const index = await loadGlossaryIndex();
   const staticText =
     SYSTEM_PROMPT +
@@ -164,11 +199,33 @@ async function buildSystemBlocks(): Promise<Anthropic.TextBlockParam[]> {
   return blocks;
 }
 
-const TOOLS: Anthropic.Tool[] = [
+export const TOOLS: Anthropic.Tool[] = [
+  {
+    name: "get_metric",
+    description:
+      "ГОЛОВНЕ ДЖЕРЕЛО ЦИФР. Викликає функцію ядра дашборду — результат збігається з дашбордом за побудовою. " +
+      "Період: from/to (YYYY-MM-DD, обидва кінці включно, київські). Розріз: manager / team — ІМЕНАМИ (підрядок), " +
+      "id не потрібні; при неоднозначності інструмент поверне список кандидатів. granularity: day|week|month. " +
+      "Відповідь містить поле source — назви його користувачу.\n\nКАТАЛОГ МЕТРИК:\n" + metricCatalog(),
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Ім'я метрики з каталогу" },
+        from: { type: "string", description: "YYYY-MM-DD, початок періоду (включно)" },
+        to: { type: "string", description: "YYYY-MM-DD, кінець періоду (включно)" },
+        manager: { type: "string", description: "Ім'я менеджера (підрядок), якщо потрібен розріз" },
+        team: { type: "string", description: "Назва команди (підрядок), якщо потрібен розріз" },
+        granularity: { type: "string", enum: ["day", "week", "month"] },
+      },
+      required: ["name"],
+    },
+  },
   {
     name: "query_db",
     description:
-      "Виконати ОДИН read-only SQL-запит (SELECT/WITH) до Postgres-БД дашборду. Повертає рядки в JSON. Таймаут 20с.",
+      "ЗАПАСНИЙ шлях — лише коли потрібної метрики НЕМАЄ в каталозі get_metric. Один read-only SELECT/WITH " +
+      "до Postgres-БД дашборду, JSON, таймаут 20с. Цифра з нього НЕ звірена з дашбордом — відповідь мусить " +
+      "нести про це явний підпис для користувача.",
     input_schema: {
       type: "object",
       properties: { sql: { type: "string", description: "Один SELECT/WITH-запит без крапки з комою в кінці" } },
@@ -270,7 +327,7 @@ const TOOLS: Anthropic.Tool[] = [
 
 type ToolInput = Record<string, unknown>;
 
-async function execTool(name: string, input: ToolInput, userId: number | null): Promise<string> {
+export async function execTool(name: string, input: ToolInput, userId: number | null): Promise<string> {
   try {
     switch (name) {
       case "read_schema_doc":
@@ -313,9 +370,23 @@ async function execTool(name: string, input: ToolInput, userId: number | null): 
         return `Створено ЧЕРНЕТКУ #${ins.rows[0].id} «${title}» у папці «${f.rows[0].name}». ` +
                `Вона НЕ опублікована — адмін має натиснути «Опублікувати» в розділі «Навчання».`;
       }
+      case "get_metric": {
+        const r = await getMetric(String(input.name ?? ""), {
+          from: input.from == null ? null : String(input.from),
+          to: input.to == null ? null : String(input.to),
+          manager: input.manager == null ? null : String(input.manager),
+          team: input.team == null ? null : String(input.team),
+          granularity: (input.granularity as MetricArgs["granularity"]) ?? null,
+        });
+        return JSON.stringify(r);
+      }
       case "query_db": {
         const r = await runReadOnly(String(input.sql ?? ""));
-        return JSON.stringify(r.ok ? { rowCount: r.rowCount, truncated: r.truncated, rows: r.rows } : { error: r.error });
+        // `unverified` — маркер запасного шляху: цифра НЕ звірена з дашбордом, і
+        // модель зобов'язана донести це користувачу видимим підписом (див. промт).
+        return JSON.stringify(r.ok
+          ? { unverified: true, rowCount: r.rowCount, truncated: r.truncated, rows: r.rows }
+          : { error: r.error });
       }
       case "create_widget": {
         const sql = String(input.sql ?? "");
