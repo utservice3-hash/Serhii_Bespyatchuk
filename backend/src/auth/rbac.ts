@@ -45,14 +45,18 @@ export function effectiveRoleKey(user: { role: string; role_override: string | n
 // кастомних беремо з data_scope; company → 'company' (не 'admin'!) — щоб НЕ надати
 // admin-only дій; конкретні дозволені дії відкриваються perm-гейтом на write-роутах.
 export type ScopeRole = "admin" | "team_lead" | "manager" | "company";
+/** Право-маркер «ця роль працює на рівні адміна». Живе в БД, не в коді. */
+export const ADMIN_SCOPE_PERM = "admin_scope";
 export function scopeCompatRole(key: string, def: RoleDef | undefined): ScopeRole {
+  // Вбудований admin — підлога: навіть на криво засіяній базі він лишається адміном.
   if (key === "admin") return "admin";
-  // СЕО / Опер.директор / КВП — ПОВНИЙ операційний адмін: усі перевірки role==='admin'
-  // проходять. Явно по ключах (НЕ blanket company→admin!): hr теж company-scope, але
-  // адміном НЕ є. Наскрізний 1×1 цим НЕ розширюється — він гейтиться правом view_all_1x1
-  // по roleKey (не по ролі); ці ролі мають адмін-права БЕЗ view_all_1x1 (kvp), або З ним
-  // (ceo/opdir) — саме право, а не роль, вирішує 1×1-доступ.
-  if (key === "ceo" || key === "opdir" || key === "kvp") return "admin";
+  // 🔄 31.07.2026: було жорстко зашито `key === "ceo" || "opdir" || "kvp"`. Тепер це
+  // ПРАВО в БД (`admin_scope`) — рівно тому, що ми прибираємо хардкод ролей: додати
+  // роль адмінського рівня має бути записом у `roles`, а не правкою цього файла.
+  // НЕ blanket company→admin: hr теж company-scope, але права не має і адміном не стає.
+  // Наскрізний 1×1 цим НЕ розширюється — він гейтиться окремим правом `view_all_1x1`,
+  // тож саме право, а не рівень ролі, вирішує доступ до 1×1.
+  if (def?.permissions?.[ADMIN_SCOPE_PERM] === true) return "admin";
   if (key === "team_lead") return "team_lead";
   if (key === "manager") return "manager";
   const scope = def?.dataScope ?? "own";

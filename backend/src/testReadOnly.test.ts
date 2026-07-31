@@ -68,3 +68,45 @@ test("#13c ДЗЕРКАЛО: читання під роллю ПРАЦЮЄ (ін
   assert.ok(Number(r.rows[0].n) > 0,
     "🔴 під test_readonly не читаються навіть угоди — роль зарізана надто сильно, набір нічого не перевіряє");
 });
+
+/**
+ * #14 — САМ ГЕЙТ У `db/pool.ts`. Це БОЙОВИЙ код, тож він має бути перевірений в
+ * обидва боки: спрацьовує в тесті — і НЕ втручається в прод. Функція приймає env
+ * параметром саме заради цього: інакше перевірити «а що буде в проді» можна було б
+ * лише зупинивши прод.
+ */
+const guard = async () => (await import("./db/readOnlyGuard.js")).assertTestHarnessReadOnly;
+
+test("#14 ГЕЙТ ІНЕРТНИЙ У ПРОДІ: без TEST_SCOPE не втручається", async () => {
+  const assertGuard = await guard();
+  // Найважливіше твердження файлу: бойовий процес не має ні падати, ні вимагати роль.
+  assertGuard({ DATABASE_URL: "postgres://u@h/db" } as NodeJS.ProcessEnv);
+  assertGuard({} as NodeJS.ProcessEnv);
+  assertGuard({ TEST_SCOPE: "local", DATABASE_URL: "postgres://u@h/db" } as NodeJS.ProcessEnv);
+});
+
+test("#14b ГЕЙТ ЛОВИТЬ обхід `TEST_SCOPE=prod npm test`", async () => {
+  const assertGuard = await guard();
+  // Саме ця команда стояла в доках і обходила запобіжник: preload не виконується,
+  // набір іде в бойову базу з повними правами.
+  assert.throws(() => assertGuard({ TEST_SCOPE: "prod", DATABASE_URL: "postgres://u@h/db" } as NodeJS.ProcessEnv),
+    /НЕ під роллю test_readonly/);
+  assert.throws(() => assertGuard({ TEST_SCOPE: "prod", PGOPTIONS: "-c role=neondb_owner" } as NodeJS.ProcessEnv),
+    /НЕ під роллю test_readonly/);
+});
+
+test("#14c ДЗЕРКАЛО: з правильним PGOPTIONS гейт пропускає", async () => {
+  const assertGuard = await guard();
+  // Без цієї пари гейт міг би кидати ЗАВЖДИ — і `test:prod` став би непрацездатним,
+  // а ми б читали це як «запобіжник надійний».
+  assertGuard({ TEST_SCOPE: "prod", PGOPTIONS: "-c role=test_readonly",
+    DATABASE_URL: "postgres://u@h/db" } as NodeJS.ProcessEnv);
+});
+
+test("#14d ГЕЙТ ловить підміну через options= у DATABASE_URL", async () => {
+  const assertGuard = await guard();
+  // `options=` у рядку підключення має пріоритет над PGOPTIONS і мовчки скасував би роль.
+  assert.throws(() => assertGuard({ TEST_SCOPE: "prod", PGOPTIONS: "-c role=test_readonly",
+    DATABASE_URL: "postgres://u@h/db?sslmode=require&options=-c%20role%3Dneondb_owner" } as NodeJS.ProcessEnv),
+    /options=/);
+});

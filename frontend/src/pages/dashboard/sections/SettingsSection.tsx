@@ -14,6 +14,7 @@ const SCREEN_TABS: { key: string; label: string }[] = NAV_GROUPS.flatMap((g) =>
   (g.items as readonly { key: string; label: string }[]).map((it) => ({ key: it.key, label: it.label }))
 );
 const PERMS: { key: string; label: string; hint?: string }[] = [
+  { key: "admin_scope", label: "Рівень адміністратора", hint: "роль проходить усі admin-перевірки; раніше цей перелік був зашитий у коді" },
   { key: "approve_plans", label: "Затверджувати плани", hint: "пише в plans (зараз лише КВП/адмін)" },
   { key: "submit_plans", label: "Редагувати грід планів" },
   { key: "manage_goals", label: "Керувати цілями" },

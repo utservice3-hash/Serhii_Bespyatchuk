@@ -122,43 +122,51 @@ bankRouter.get("/receivables", async (_req, res) => {
 });
 
 /**
- * Реєстр рахунків. Ендпоінт доступний усім, хто має вкладку «bank» — список потрібен
- * для ЧИПІВ ФІЛЬТРА у Виписці. Але чипам достатньо label/company/bank/currency.
+ * Реєстр рахунків. Ендпоінт доступний усім, хто має вкладку «bank».
  *
- * 🔴 ВИПРАВЛЕНО 31.07.2026 (знайшов тест #5.6). Раніше SELECT віддавав ПОВНІ реквізити
- * — IBAN, ЄДРПОУ, директора, юр.адресу, МФО і **номер ключ-карти** — будь-якому
- * автентифікованому: рядовому менеджеру, тімліду. Гейтилась лише назва env-змінної.
- * Фронт їх не показував, але відповідь фізично містила: `curl` віддавав усе.
+ * 🟢 РІШЕННЯ ВЛАСНИКА 31.07.2026: РЕКВІЗИТИ БАЧАТЬ УСІ автентифіковані, включно з
+ * НОМЕРОМ КЛЮЧ-КАРТИ. Це ФУНКЦІЯ, а не витік: менеджер щодня виставляє клієнту
+ * рахунок, а ключ-карту навмисно й заводили, щоб менеджер давав її клієнту на оплату.
+ * Тест #5.6 показав ФАКТ (поля їдуть усім) правильно — помилковим був ВИРОК «це баг»,
+ * зроблений без питання до власника. Обмеження відкочено свідомо.
+ * ⚠️ НЕ «виправляти» вдруге: якщо здається, що IBAN/ключ-карта не мають їхати
+ * менеджеру — це не баг, це узгоджена поведінка. Дивись CLAUDE.md.
  *
- * Тепер відсів на СЕРВЕРІ: поля реквізитів взагалі не потрапляють у відповідь тим,
- * хто не веде фінанси. Ховати їх у UI — не захист.
+ * Закритим лишається те, що є ГРОШИМА чи КЛЮЧАМИ, а не реквізитами: баланси
+ * (`/balances`), виписка, редагування рахунків, `env_key_name` і службові поля.
+ *
+ * 🔒 ЗБЕРЕЖЕНО НЕЗАЛЕЖНО ВІД ПОЛІТИКИ: обидві гілки складають об'єкт із ЯВНОГО
+ * списку полів, а не спредом рядка БД. Нова колонка в `bank_accounts` не поїде
+ * назовні сама — її треба дописати сюди СВІДОМО. Політика змінилась, список став
+ * ширшим; принцип «явний перелік» лишився.
  */
-const ACCOUNT_PUBLIC_FIELDS = ["id", "company", "bank", "label", "currency", "is_active"] as const;
+/** Реквізити — публічні для всіх автентифікованих (рішення власника 31.07.2026). */
+const ACCOUNT_PUBLIC_FIELDS = [
+  "id", "company", "bank", "label", "currency", "is_active",
+  "iban", "edrpou_ipn", "director", "legal_address", "mfo", "key_card",
+] as const;
+/** Додається тим, хто веде рахунки / має доступ до балансів. Службове, не реквізити. */
+const ACCOUNT_FINANCE_FIELDS = [
+  "external_account_id", "legal_name", "vat_ipn", "bank_name", "bank_edrpou", "purpose",
+] as const;
 
 bankRouter.get("/accounts", async (req, res) => {
   const canManage = roleHasPerm(req.auth!.roleKey, "manage_bank_accounts");
-  // Повні реквізити бачить той, хто веде рахунки або має доступ до балансів
-  // (адмін, КВП/опердир, фінансист). Решта — лише те, з чого будуються чипи.
-  const canSeeRequisites = canManage || roleHasPerm(req.auth!.roleKey, "view_balances");
+  const canSeeFinance = canManage || roleHasPerm(req.auth!.roleKey, "view_balances");
   const r = await pool.query(
     `SELECT id, company, bank, label, currency, external_account_id, is_active,
             legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou,
             legal_address, director, purpose, env_key_name
        FROM bank_accounts ORDER BY is_active DESC, label`);
   const accounts = r.rows.map((a) => {
-    const api_connected = !!(a.env_key_name && process.env[a.env_key_name]);
-    if (!canSeeRequisites) {
-      // Складаємо об'єкт З НУЛЯ, а не видаляємо зайве з наявного: при додаванні
-      // нової колонки в bank_accounts вона за замовчуванням НЕ поїде назовні.
-      const slim: Record<string, unknown> = { api_connected };
-      for (const f of ACCOUNT_PUBLIC_FIELDS) slim[f] = a[f];
-      return slim;
-    }
-    return {
-      ...a,
-      api_connected,
-      env_key_name: canManage ? a.env_key_name : undefined, // назва лише для панелі; значення — ніколи
+    const out: Record<string, unknown> = {
+      api_connected: !!(a.env_key_name && process.env[a.env_key_name]),
     };
+    for (const f of ACCOUNT_PUBLIC_FIELDS) out[f] = a[f];
+    if (canSeeFinance) for (const f of ACCOUNT_FINANCE_FIELDS) out[f] = a[f];
+    // Назва env-змінної — лише для панелі керування. ЗНАЧЕННЯ ключа — ніколи й нікому.
+    if (canManage) out.env_key_name = a.env_key_name;
+    return out;
   });
   res.json({ accounts });
 });

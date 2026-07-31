@@ -1281,6 +1281,13 @@ ON CONFLICT (key) DO NOTHING;
 -- дістає його тут (ідемпотентно), а ceo/opdir успадкують через синк нижче. НІКОМУ більше.
 UPDATE roles SET permissions = permissions || '{"reset_passwords":true}'::jsonb WHERE key='admin';
 
+-- admin_scope — ПРАВО-МАРКЕР «роль працює на рівні адміна» (читає `scopeCompatRole`).
+-- Раніше цей перелік був ЗАШИТИЙ У КОДІ (`key === 'ceo' || 'opdir' || 'kvp'`). Винесли в
+-- БД: додати роль адмінського рівня має бути записом у `roles`, а не правкою rbac.ts.
+-- Ставимо на base-admin ДО синків нижче — ceo/opdir/kvp/financier успадкують його разом
+-- з рештою прав, тож їхня поведінка не змінюється ані на біт.
+UPDATE roles SET permissions = permissions || '{"admin_scope":true}'::jsonb WHERE key='admin';
+
 UPDATE roles SET
   screen_access = (SELECT screen_access FROM roles WHERE key='admin'),
   permissions   = (SELECT permissions   FROM roles WHERE key='admin')
@@ -1432,12 +1439,30 @@ UPDATE users SET tracker_enabled = true WHERE lower(email) = 'utservice62@gmail.
 -- 31.07.2026 · Рішення власника після спринту якості (тест #5 знайшов обидва).
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- 1) ФІНАНСИСТ БАЧИТЬ ДЕБІТОРКУ. 403 на /dashboard/receivables був конфіг-недоглядом:
--- дебіторка — буквально робота фінансиста. Відкриваємо ЕКРАНОМ (screen_access), а не
--- хардкодом по ролі в роуті — ми якраз ідемо від розсипаних role==='admin'.
--- Ідемпотентно; наявні права ролі не перетираємо (||).
-UPDATE roles SET screen_access = screen_access || '{"receivables":true}'::jsonb
- WHERE key = 'financier';
+-- 1) ФІНАНСИСТ = РІВЕНЬ АДМІНА (🟢 ЗМІНА ПОЛІТИКИ, рішення власника 31.07.2026).
+--
+-- Було: 2 екрани (bank, receivables) + 3 фінансові права. Попередній дефолт «немає
+-- вкладки → закрити ендпоінт» СКАСОВАНО власником: 15 продажних ендпоінтів не
+-- закриваємо, а роль вирівнюємо до адмінської. Дзеркало admin по екранах і правах.
+--
+-- ДВА ВИНЯТКИ (обидва — попередні рішення власника, не нові):
+--   • reset_passwords — скидання паролів лише в kriptokoval/utservice3/utservice62;
+--   • 1×1 — це право СЕО/ОД та HR; admin їх не бачить, тож копія admin їх і не дає.
+--
+-- ⚠️ manage_users теж НЕ віддаємо — і це НЕ звуження понад названі винятки, а умова
+-- їх існування: з manage_users роль редагує ролі, тобто може сама собі видати
+-- reset_passwords і view_all_1x1. Обидва винятки стали б декоративними. Точно та сама
+-- логіка вже застосована до КВП вище («заборона 1×1 тут ЗАЛІЗНА, не самоескалюється»).
+-- Якщо власник вирішить, що фінансист має керувати користувачами — прибрати
+-- `- 'manage_users'` нижче, СВІДОМО приймаючи, що обидва винятки перестають триматись.
+--
+-- Робимо ЕКРАНАМИ/ПРАВАМИ, а не хардкодом по ролі в роутах. Ідемпотентно (щоразу
+-- вирівнює: якщо admin дістане новий екран — фінансист дістане його наступною міграцією).
+UPDATE roles SET
+  screen_access = (SELECT screen_access FROM roles WHERE key='admin'),
+  permissions   = ((SELECT permissions FROM roles WHERE key='admin')
+                    - 'manage_users' - 'reset_passwords')
+WHERE key = 'financier';
 
 -- 2) БЕКФІЛ below_min для рядків, поданих ДО викату фічі (вони мають DEFAULT false).
 --

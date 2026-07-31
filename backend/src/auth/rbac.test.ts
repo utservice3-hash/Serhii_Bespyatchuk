@@ -41,9 +41,12 @@ const TAB_MATRIX: Record<Role, { allow: string[]; deny: string[] }> = {
   ceo:       { allow: ["overview", "report", "kvp"], deny: [] },
   opdir:     { allow: ["overview", "report", "kvp", "settings"], deny: [] },
   kvp:       { allow: ["overview", "report", "kvp", "settings"], deny: [] },
-  // ✅ 31.07.2026, рішення власника: дебіторка — буквально робота фінансиста, 403 був
-  // конфіг-недоглядом. Відкрито ЕКРАНОМ (screen_access), не хардкодом по ролі.
-  financier: { allow: ["receivables"], deny: ["kvp", "settings", "overview", "report"] },
+  // 🟢 ЗМІНА ПОЛІТИКИ 31.07.2026 (рішення власника): ФІНАНСИСТ = РІВЕНЬ АДМІНА.
+  // Було `deny: ["kvp","settings","overview","report"]` — тепер усе це ДОЗВОЛЕНО.
+  // Не регресія і не «розширився доступ мовчки»: роль вирівняно до admin навмисно,
+  // замість попереднього плану «немає вкладки → закрити ендпоінт», який скасовано.
+  // Винятки лишились правами, а не екранами: reset_passwords і manage_users.
+  financier: { allow: ["receivables", "kvp", "settings", "overview", "report", "bank"], deny: [] },
   hr:        { allow: ["tasks", "training"], deny: ["overview", "report", "kvp", "settings", "receivables", "teams", "managers", "loyalty"] },
   team_lead: { allow: ["overview", "report", "teams", "managers"], deny: ["kvp", "settings"] },
   manager:   { allow: ["overview", "report", "tasks"], deny: ["kvp", "settings", "teams", "managers"] },
@@ -66,16 +69,40 @@ test("#5.1 МАТРИЦЯ ЕКРАНІВ: кожна роль бачить рі�
   assert.deepEqual(problems, [], "розбіжності з матрицею:\n  " + problems.join("\n  "));
 });
 
-test("#5.2 SCOPE-COMPAT: тільки ceo/opdir/kvp піднімаються до admin", needsDb(), async () => {
+test("#5.2 SCOPE-COMPAT: до admin піднімається рівно той, хто має admin_scope", needsDb(), async () => {
   const { rbac } = await load();
   await rbac.refreshRoles();
   const got = Object.fromEntries(ROLES.map((r) => [r, rbac.scopeCompatRole(r, rbac.getRoleDef(r))]));
   assert.deepEqual(got, {
     admin: "admin", ceo: "admin", opdir: "admin", kvp: "admin",
-    // 🔴 financier і hr теж company/own-scope, але АДМІНАМИ бути не мають.
-    // Саме тут ловиться blanket-правило «company → admin», яке відкрило б їм усе.
-    financier: "company", hr: "manager", team_lead: "team_lead", manager: "manager",
+    // 🟢 ЗМІНА ПОЛІТИКИ 31.07.2026: financier піднято до admin (рішення власника).
+    financier: "admin",
+    // 🔴 hr лишається НЕ адміном — саме тут ловиться blanket-правило «company → admin»,
+    // яке відкрило б їй усе. Підняття тепер вирішує ПРАВО, а не список ключів у коді.
+    hr: "manager", team_lead: "team_lead", manager: "manager",
   }, "піднесення ролі до admin змінилось — перевір scopeCompatRole");
+});
+
+test("#5.2b ЕКВІВАЛЕНТНІСТЬ: перехід зі списку ключів на право нікого не зрушив", needsDb(), async () => {
+  const { rbac } = await load();
+  await rbac.refreshRoles();
+  // Було: `key === "ceo" || key === "opdir" || key === "kvp"` зашито в rbac.ts.
+  // Стало: право `admin_scope` у БД. Це РЕФАКТОРИНГ поверх зміни політики, і його
+  // легко зробити непомітно шкідливим — тому звіряємо стару логіку з новою для КОЖНОЇ
+  // ролі. Розбіжність дозволена РІВНО одна: financier, і саме її власник і замовив.
+  const legacy = (key: string, def: ReturnType<typeof rbac.getRoleDef>) => {
+    if (key === "admin" || key === "ceo" || key === "opdir" || key === "kvp") return "admin";
+    if (key === "team_lead") return "team_lead";
+    if (key === "manager") return "manager";
+    const scope = def?.dataScope ?? "own";
+    return scope === "own" ? "manager" : scope === "team" ? "team_lead" : "company";
+  };
+  const diffs = ROLES
+    .map((r) => ({ r, was: legacy(r, rbac.getRoleDef(r)), now: rbac.scopeCompatRole(r, rbac.getRoleDef(r)) }))
+    .filter((x) => x.was !== x.now);
+  assert.deepEqual(diffs, [{ r: "financier", was: "company", now: "admin" }],
+    "перехід на admin_scope зрушив НЕ ту роль (або не зрушив ту, що мав): "
+      + JSON.stringify(diffs));
 });
 
 // ─────────────────────── 2. ЖИВІ ЕНДПОІНТИ ───────────────────────
@@ -89,11 +116,12 @@ interface EndpointCase {
 
 const ENDPOINTS: EndpointCase[] = [
   { path: "/api/dashboard/overview?from=2026-06-01&to=2026-06-30",
-    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"],
-    note: "огляд: фінансист і HR сюди не ходять" },
+    // 🟢 financier доданий 31.07.2026 — зміна політики, не регресія.
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"],
+    note: "огляд: фінансист відкритий (рівень адміна); HR сюди не ходить" },
   { path: "/api/settings",
-    allow: ["admin", "ceo", "opdir", "kvp"],
-    note: "налаштування: ceo/opdir/kvp підняті до admin через scopeCompatRole — задокументовано" },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"],
+    note: "налаштування: підняті до admin через admin_scope — задокументовано" },
   { path: "/api/settings/users",
     // kvp сюди НЕ пускають (403), хоч він і admin за скоупом: керування людьми
     // гейтиться окремим правом, не роллю. Це навмисно — фіксуємо.
@@ -197,30 +225,42 @@ test("#5.5 СКОУП: тімлід бачить лише свою команд�
  * лише за правом (manage_bank_accounts / view_balances), або коли власник свідомо
  * підтвердить, що так і треба — тоді правимо очікування разом із рішенням.
  */
-test("#5.6 РЕКВІЗИТИ: сервер не віддає IBAN/ключ-карту тим, хто не веде фінанси", needsApi(), async () => {
+test("#5.6 РЕКВІЗИТИ: менеджер і тімлід їх ОТРИМУЮТЬ", needsApi(), async () => {
   const { signToken, rbac } = await load();
   await rbac.refreshRoles();
-  const SENSITIVE = ["iban", "key_card", "edrpou_ipn", "vat_ipn", "director", "legal_address", "bank_edrpou", "mfo"] as const;
-  const leaks: string[] = [];
+  // 🟢 ЗМІНА ПОЛІТИКИ 31.07.2026 (рішення власника). Тест НЕ видалено, а ПЕРЕВЕРНУТО:
+  // раніше він вимагав, щоб цих полів у менеджера НЕ було. Тепер вимагає протилежного —
+  // менеджер щодня виставляє клієнту рахунок, ключ-карту й заводили, щоб він її давав
+  // клієнту на оплату. Факт «поля їдуть усім» був поданий правильно; помилковим був
+  // ВИРОК «це витік». Перевернутий тест — щоб обмеження не повернули «як фікс».
+  const REQUISITES = ["iban", "key_card", "edrpou_ipn", "director", "legal_address", "mfo"] as const;
+  const missing: string[] = [];
+  let checked = 0;
   for (const role of ["manager", "team_lead"] as Role[]) {
     const t = signToken({ userId: 0, role: rbac.scopeCompatRole(role, rbac.getRoleDef(role)),
       roleKey: role, managerId: role === "manager" ? 8 : null, teamId: role === "team_lead" ? 5 : null });
     const r = await fetch(`${API_BASE}/api/bank/accounts`, { headers: { Authorization: `Bearer ${t}` } });
-    if (r.status !== 200) continue; // немає доступу до ендпоінта — питання зняте
+    assert.equal(r.status, 200, `${role}: /bank/accounts віддав ${r.status}`);
     const j = (await r.json()) as { accounts?: Record<string, unknown>[] };
     assert.ok(j.accounts && j.accounts.length > 0,
-      "список рахунків порожній — тест нічого не доводить (порожній результат = провал)");
-    for (const acc of j.accounts) {
-      for (const f of SENSITIVE) {
-        const v = acc[f];
-        if (v != null && String(v).length > 0) leaks.push(`${role} бачить ${f} рахунку «${acc.label}»`);
+      `${role}: список рахунків порожній — тест нічого не доводить (порожній результат = провал)`);
+    checked += j.accounts.length;
+    // Поле МАЄ бути присутнім у відповіді. Значення може бути порожнім у конкретного
+    // рахунку (не всі мають ключ-карту) — тому перевіряємо наявність КЛЮЧА, а окремо
+    // вимагаємо, щоб хоч десь було непорожнє значення: інакше «відсів зрізав усе»
+    // виглядало б як «політика застосована».
+    for (const f of REQUISITES) {
+      if (!j.accounts.some((a) => f in a)) missing.push(`${role} не отримує поле ${f} ЖОДНОГО рахунку`);
+      if (!j.accounts.some((a) => a[f] != null && String(a[f]).length > 0)) {
+        missing.push(`${role}: поле ${f} присутнє, але порожнє в УСІХ рахунках`);
       }
     }
   }
-  assert.deepEqual([...new Set(leaks)], [],
-    "🔴 фінансові реквізити віддаються поза фінансовими ролями:\n  " + [...new Set(leaks)].join("\n  "));
+  assert.ok(checked > 0, "жодного рахунку не перевірено");
+  assert.deepEqual([...new Set(missing)], [],
+    "🔴 реквізити НЕ доходять до менеджера/тімліда — це ламає виставлення рахунку клієнту:\n  "
+      + [...new Set(missing)].join("\n  "));
 });
-
 test.after(async () => {
   if (!process.env.DATABASE_URL) return;
   const { pool } = await import("../db/pool.js");
@@ -235,7 +275,7 @@ test.after(async () => {
  * ⚠️ Історія: у першій спробі цей тест не потрапив у файл (правка не застосувалась,
  * я цього не помітив), і фікс #5.6 поїхав у прод із перевіреною лише однією гілкою.
  */
-test("#5.7 РЕКВІЗИТИ: хто веде фінанси — отримує їх повністю", needsApi(), async () => {
+test("#5.7 РЕКВІЗИТИ: адмін і фінансист теж отримують (дзеркало до #5.6)", needsApi(), async () => {
   const { signToken, rbac } = await load();
   await rbac.refreshRoles();
   for (const role of ["admin", "financier"] as Role[]) {
@@ -252,21 +292,40 @@ test("#5.7 РЕКВІЗИТИ: хто веде фінанси — отримує
 });
 
 /** #5.8 Ключ-карта — номер платіжної картки. Окреме твердження, щоб не загубилось. */
-test("#5.8 КЛЮЧ-КАРТА: номерів карток немає у відповіді менеджера й тімліда", needsApi(), async () => {
+test("#5.8 КЛЮЧ-КАРТА видима всім автентифікованим", needsApi(), async () => {
   const { signToken, rbac } = await load();
   await rbac.refreshRoles();
+  // 🟢 ЗМІНА ПОЛІТИКИ 31.07.2026: ключ-карта — це РЕКВІЗИТ для оплати від фізосіб,
+  // а не секрет. Її й додавали, щоб менеджер давав номер клієнту. Тест перевернуто.
   let checked = 0;
-  for (const role of ["manager", "team_lead"] as Role[]) {
+  const blind: string[] = [];
+  for (const role of ROLES) {
     const t = signToken({ userId: 0, role: rbac.scopeCompatRole(role, rbac.getRoleDef(role)),
       roleKey: role, managerId: role === "manager" ? 8 : null, teamId: role === "team_lead" ? 5 : null });
     const r = await fetch(`${API_BASE}/api/bank/accounts`, { headers: { Authorization: `Bearer ${t}` } });
+    if (r.status === 403) continue; // немає вкладки «bank» (hr) — питання не про поля
     assert.equal(r.status, 200, `${role}: /bank/accounts віддав ${r.status}`);
     const j = (await r.json()) as { accounts?: Record<string, unknown>[] };
     assert.ok(j.accounts && j.accounts.length > 0, `${role}: список порожній — тест нічого не доводить`);
     checked += j.accounts.length;
-    const leaked = j.accounts.filter((a) => "key_card" in a && a.key_card != null);
-    assert.deepEqual(leaked.map((a) => a.label), [],
-      `🔴 ${role} отримав номери ключ-карт — це номери платіжних карток`);
+    if (!j.accounts.some((a) => a.key_card != null && String(a.key_card).length > 0)) {
+      blind.push(`${role} не бачить ключ-карти в ЖОДНОМУ рахунку`);
+    }
   }
   assert.ok(checked > 0, "жодного рахунку не перевірено");
+  assert.deepEqual(blind, [], "🔴 ключ-карта не доходить до ролі, яка має її бачити:\n  " + blind.join("\n  "));
+});
+
+test("#5.8b МЕЖА ЛИШИЛАСЬ: без токена не віддається НІЧОГО", needsApi(), async () => {
+  // Дзеркало до #5.8. «Реквізити бачать усі» = усі АВТЕНТИФІКОВАНІ, а не «усі в
+  // інтернеті». Без цієї пари попередній тест зеленів би й тоді, якби ендпоінт став
+  // публічним — і ми б це прочитали як «політику застосовано».
+  for (const headers of [{}, { Authorization: "Bearer не-токен" }]) {
+    const r = await fetch(`${API_BASE}/api/bank/accounts`, { headers: headers as HeadersInit });
+    assert.ok(r.status === 401 || r.status === 403,
+      `🔴 /bank/accounts без валідного токена віддав ${r.status} — реквізити стали публічними`);
+    const body = await r.text();
+    assert.ok(!/iban|key_card/i.test(body),
+      "🔴 у відповіді неавтентифікованому є реквізити");
+  }
 });
