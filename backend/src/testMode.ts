@@ -33,6 +33,18 @@ export const needsApi = (): Opts =>
     ? (HAS_DB ? {} : { skip: "потрібен DATABASE_URL" })
     : { skip: "лише в режимі TEST_SCOPE=prod (npm run test:prod)" };
 
+/**
+ * Повний зліпок доступу (#11): 177 роутів × ролі ≈ 1024 проби, ~7-8 хв.
+ * ⏱ Тому окремий режим: `npm test` і `npm run test:prod` його ПРОПУСКАЮТЬ,
+ * `npm run test:matrix` — вмикає. Це не «зазвичай ганяємо шматок», а названий поділ:
+ * швидкий набір на кожен деплой, повна матриця — перед злиттям у прод-гілку.
+ */
+export const MATRIX_ENABLED = process.env.TEST_MATRIX === "1";
+export const needsMatrix = (): Opts =>
+  MATRIX_ENABLED
+    ? (IS_PROD_SCOPE && HAS_DB ? {} : { skip: "потрібні TEST_SCOPE=prod + DATABASE_URL" })
+    : { skip: "повний зліпок доступу — окремий режим (npm run test:matrix)" };
+
 /** Потрібні платні виклики моделі. */
 export const needsAi = (): Opts =>
   AI_ENABLED

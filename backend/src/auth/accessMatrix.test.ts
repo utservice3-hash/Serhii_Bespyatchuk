@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsApi, API_BASE } from "../testMode.js";
+import { needsApi, needsMatrix, API_BASE } from "../testMode.js";
 import { ACCESS_MATRIX, ACCESS_ROLES } from "./accessMatrix.js";
 
 /**
@@ -26,6 +26,22 @@ import { ACCESS_MATRIX, ACCESS_ROLES } from "./accessMatrix.js";
  */
 const ADMIN_LEVEL_ROLES = new Set(["admin", "ceo", "opdir", "kvp", "financier"]);
 
+/**
+ * Роути, що ЗАПИСУЮТЬ і де роль адмінського рівня відмовлена ПРАВОМ, а не рівнем.
+ * 403 тут — емпіричний факт із прода, тож проба безпечна. Кожен запис називає право,
+ * інакше це знову «непробована роль у deny», з якої й почався інцидент.
+ */
+const ADMIN_DENIED_BY_PERM: Record<string, string> = {
+  "PUT /api/one-on-ones/forms/:type": "edit_1x1_forms — право СЕО/ОД та HR; admin його не має",
+  "POST /api/settings/roles": "manage_users — kvp/financier його не мають (рішення власника)",
+  "PUT /api/settings/roles/:key": "manage_users — те саме",
+  "POST /api/settings/users": "manage_users — те саме",
+  "PATCH /api/settings/users/:id": "manage_users — те саме",
+  "POST /api/settings/users/:id/reactivate": "manage_users — те саме",
+  "POST /api/settings/users/:id/reset-password": "reset_passwords — окреме право, лише СЕО/ОД/адмін",
+  "POST /api/settings/users/provision": "manage_users — те саме",
+};
+
 const GHOST = "__zzz_neisnuyucha_cil_9999__";
 const BAD_BODY = JSON.stringify({ __probe__: "невалідне тіло", zzz: null });
 const fill = (p: string) => p.replace(":clientKey", GHOST).replace(":id", "0").replace(/:\w+/g, GHOST);
@@ -35,7 +51,7 @@ const load = async () => ({
   rbac: await import("./rbac.js"),
 });
 
-test("#11 МАТРИЦЯ ДОСТУПУ: жодна клітинка не змінилась", needsApi(), async (t) => {
+test("#11 МАТРИЦЯ ДОСТУПУ: жодна клітинка не змінилась", needsMatrix(), async (t) => {
   const { signToken, rbac } = await load();
   await rbac.refreshRoles();
   const tok = (r: string) => signToken({
@@ -104,16 +120,22 @@ test("#11b ЗЛІПОК ЦІЛИЙ: усі ролі відомі, класи п�
         + "проба таких ролей записала б дані");
       // 🔴 31.07.2026, реальний інцидент: перегенерація зліпка зсипала НЕПРОБОВАНІ ролі
       // (admin/ceo/opdir/kvp) у `deny`. Структурно це легально — `allow` лишався порожнім,
-      // і перевірка вище пройшла. Але наступний прогін #11 узяв ці ролі в пробу й
-      // виконав POST /dashboard/sync, PUT /settings/, POST /news/ АДМІНСЬКИМ токеном
-      // проти прода. Врятувало лише невалідне тіло (умова «б»).
-      // Тому окреме твердження: у deny-only рядку не сміє бути ролі АДМІНСЬКОГО РІВНЯ —
-      // вона за визначенням проходить admin-гейти, отже пробувати її = писати.
+      // і перевірка вище пройшла. Наступний прогін #11 узяв ці ролі в пробу й виконав
+      // POST /dashboard/sync, PUT /settings/, POST /news/ АДМІНСЬКИМ токеном проти прода.
+      //
+      // ⚠️ УТОЧНЕНО 01.08.2026 (крок B1). Твердження «адмін-рівня в deny не буває» надто
+      // грубе: є роути, де адмін відмовлений ПРАВОМ, а не рівнем ролі — напр.
+      // `PUT /one-on-ones/forms/:type` за `edit_1x1_forms`, якого в admin немає взагалі.
+      // Там 403 — емпіричний факт із прода, і проба такої ролі безпечна за побудовою.
+      // Тому вимога тепер конкретніша: такий випадок треба НАЗВАТИ в реєстрі нижче.
       for (const role of r.deny) {
-        assert.ok(!ADMIN_LEVEL_ROLES.has(role),
-          `🔴 ${r.method} ${r.path}: роль «${role}» адмінського рівня стоїть у deny рядка, `
-          + "що ЗАПИСУЄ. Вона пройде гейт, і проба виконає справжню мутацію проти прода. "
-          + "Дозволені ролі в deny-only рядках не перелічуються ВЗАГАЛІ — ні в allow, ні в deny.");
+        if (!ADMIN_LEVEL_ROLES.has(role)) continue;
+        const key = `${r.method} ${r.path}`;
+        const known = ADMIN_DENIED_BY_PERM[key];
+        assert.ok(known,
+          `🔴 ${key}: роль «${role}» адмінського рівня стоїть у deny рядка, що ЗАПИСУЄ. `
+          + "Якщо це справжня відмова по ПРАВУ — назви право в ADMIN_DENIED_BY_PERM. "
+          + "Якщо ні — роль пройде гейт, і проба виконає мутацію проти прода.");
       }
     }
   }

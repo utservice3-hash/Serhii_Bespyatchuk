@@ -47,7 +47,10 @@ function declaredTests(file: string): string[] {
   const src = readFileSync(path.join(DIST, file), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-  return [...src.matchAll(/\btest\(\s*(["`])((?:(?!\1)[\s\S])*?)\1/g)]
+  // ⚠️ `(?<![.\w])` — щоб не зловити ЧУЖИЙ `.test(...)`: у `gates.test.ts` є
+  // `METRIC_SQL.test("SELECT SUM(price)…")`, і без цього маніфест вимагав би
+  // зареєструвати SQL-рядок як назву тесту.
+  return [...src.matchAll(/(?<![.\w])test\(\s*(["`])((?:(?!\1)[\s\S])*?)\1/g)]
     .map((m) => m[2])
     .filter((name) => !name.includes("${"));
 }

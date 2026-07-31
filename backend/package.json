@@ -19,7 +19,8 @@
     "backfill:client-keys": "tsx src/jobs/backfillClientKeys.ts",
     "bot": "tsx src/bot/index.ts",
     "test:prod": "TEST_SCOPE=prod node --import ./dist/testReadOnly.js --test \"dist/**/*.test.js\"",
-    "test:ai": "TEST_SCOPE=prod TEST_AI=1 node --import ./dist/testReadOnly.js --test \"dist/**/*.test.js\""
+    "test:ai": "TEST_SCOPE=prod TEST_AI=1 node --import ./dist/testReadOnly.js --test \"dist/**/*.test.js\"",
+    "test:matrix": "TEST_SCOPE=prod TEST_MATRIX=1 node --import ./dist/testReadOnly.js --test \"dist/**/*.test.js\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
