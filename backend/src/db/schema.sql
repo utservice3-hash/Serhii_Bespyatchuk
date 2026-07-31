@@ -1473,3 +1473,20 @@ UPDATE plan_formation pf
    AND pf.proposed_value < COALESCE(
          (SELECT (data->>'planMinPerManager')::numeric FROM app_settings WHERE id = 1), 30000)
    AND pf.below_min = false;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 31.07.2026 · СИГНАЛІЗАЦІЯ (Крок 2). Durable-облік прогонів джоб.
+-- До цього стан жив у пам'яті процесу (getStatisticsStatus тощо) і зникав при
+-- рестарті, тому «джоба не працює вже добу» було невидимо: після кожного деплою
+-- лічильники обнулялись. Тепер факт успіху переживає рестарт.
+-- last_success_at рухається ЛИШЕ при успіху; помилка пише last_error, не зачіпаючи
+-- останній успіх — інакше «колись працювало» стерлося б першим же збоєм.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS job_runs (
+  name TEXT PRIMARY KEY,
+  last_success_at TIMESTAMPTZ,
+  last_error TEXT,
+  last_error_at TIMESTAMPTZ,
+  last_duration_ms INTEGER,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

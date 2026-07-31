@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { HealthBanner } from "./HealthBanner";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { CommandPalette } from "./CommandPalette";
@@ -279,6 +280,10 @@ export function Layout({
             ← Назад
           </button>
         )}
+        {/* 🚨 Банер тривог — лише керівництву (scope-compat "admin" = admin/ceo/opdir/kvp).
+            Гейт потрібен і тут, і на бекенді: без фронтового менеджер отримав би 403
+            і побачив банер «сигналізація недоступна» — шум замість сигналу. */}
+        {role === "admin" && <HealthBanner />}
         {children}
       </main>
     </div>

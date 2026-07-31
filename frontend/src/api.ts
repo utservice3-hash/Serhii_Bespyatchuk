@@ -2249,3 +2249,19 @@ export async function fetchLeadRecommendation(params: { month: string; period: "
   const { data } = await api.get<LeadRecResp>("/dashboard/lead-recommendation", { params });
   return data;
 }
+
+// 🚨 Тривоги для банера (Крок 2). Доступно лише керівництву — інші отримають 403.
+export interface HealthAlert {
+  id: string;
+  severity: "critical" | "warning";
+  title: string;
+  detail: string;
+  action: string;
+  since: string | null;
+}
+export async function fetchHealthAlerts(): Promise<{
+  alerts: HealthAlert[]; checkedAt: string; checksDeclared: number; checksRan: number;
+}> {
+  const { data } = await api.get("/health/alerts");
+  return data;
+}

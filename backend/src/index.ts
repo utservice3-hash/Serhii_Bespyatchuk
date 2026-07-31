@@ -1,6 +1,9 @@
 // ⚠️ ПЕРШИМ: патч express.Router, щоб async-throw у будь-якому роуті йшов у error-middleware
 // (швидкий 500), а не лишав запит висіти. Має стояти до імпортів роутерів. Див. lib/asyncRoutes.
 import "./lib/asyncRoutes.js";
+import { collectAlerts } from "./health/alerts.js";
+import { requireAuth } from "./auth/middleware.js";
+import { runJob } from "./jobs/jobRuns.js";
 import { buildVersion } from "./version.js";
 import express from "express";
 import cors from "cors";
@@ -161,6 +164,34 @@ app.get("/api/health", async (_req, res) => {
 });
 
 // КРОК 4 (Звірка): стан останньої нічної реконсиляції наше↔Kommo + цілісності.
+/**
+ * 🚨 Тривоги для банера в дашборді. Бачать лише керівництво (admin/ceo/opdir/kvp) —
+ * менеджерам це шум. Кешу тут НЕМАЄ навмисно: перевірки дешеві (кілька SELECT +
+ * один синтетичний SELECT 1), а кеш зробив би «застарілу тишу» можливою.
+ */
+app.get("/api/health/alerts", requireAuth, async (req, res) => {
+  const roleKey = req.auth!.roleKey;
+  if (!["admin", "ceo", "opdir", "kvp"].includes(roleKey)) {
+    return res.status(403).json({ error: "Немає доступу" });
+  }
+  try {
+    res.json(await collectAlerts());
+  } catch (err) {
+    // Навіть повний провал збірки — це ТРИВОГА, а не порожній список: інакше фронт
+    // намалював би «все чисто» рівно тоді, коли нічого не перевірено.
+    res.json({
+      alerts: [{
+        id: "check_failed:collect", severity: "critical",
+        title: "Сигналізація не працює",
+        detail: `Збірка тривог впала: ${err instanceof Error ? err.message : String(err)}`,
+        action: "Подивитись лог сервера. Поки це так, поломки не буде видно взагалі.",
+        since: null,
+      }],
+      checkedAt: new Date().toISOString(), checksDeclared: 0, checksRan: 0,
+    });
+  }
+});
+
 app.get("/api/health/reconciliation", async (_req, res) => {
   try {
     const r = await pool.query<{
@@ -218,7 +249,7 @@ app.get("/api/health/reconciliation", async (_req, res) => {
 // повільний (800мс/запит), тож навіть бек­лог тече без сплеску.
 cron.schedule("*/30 * * * *", () => {
   if (isKommoPaused()) return;
-  syncKommo().catch((err) => console.error("Kommo sync failed:", err));
+  void runJob("syncKommo", () => syncKommo());
 });
 // (startup-виклик syncKommo → відкладено, див. блок «СТАРТ БЕЗ СПЛЕСКУ» наприкінці)
 
@@ -226,9 +257,7 @@ cron.schedule("*/30 * * * *", () => {
 // це був найбільший разовий сплеск). Лікує гепи інкременту.
 cron.schedule("0 4 * * *", () => {
   if (isKommoPaused()) return;
-  syncKommo({ reconcileDays: 10 }).catch((err) =>
-    console.error("Kommo reconciliation failed:", err)
-  );
+  void runJob("syncKommo", () => syncKommo({ reconcileDays: 10 }));
 });
 
 // КРОК 4 (Звірка) + AUTO-HEAL. ЩОНОЧІ 03:35 — лише ОСТАННІ 2 МІСЯЦІ: швидко/дешево,
@@ -239,7 +268,7 @@ cron.schedule("0 4 * * *", () => {
 // :00/:30) обрана свідомо — щоб СТАРТ звірки не збігся з тіком syncKommo (*/30).
 cron.schedule("35 3 * * *", () => {
   if (isKommoPaused()) return;
-  reconcileNightly(2).catch((err) => console.error("reconcileNightly(2) failed:", err));
+  void runJob("reconcileNightly", () => reconcileNightly(2));
 });
 // РАЗ НА МІСЯЦЬ (1-го, 02:35) — ПОВНІ 12 МІСЯЦІВ: страховка на випадок, якщо нічна
 // кілька разів не спрацювала. Дірка 35к була разовим артефактом (1 дормантна/12 міс),
@@ -248,21 +277,21 @@ cron.schedule("35 3 * * *", () => {
 // при дормантних, а їх сплеск >10 сам алертиться). Замок job_locks тримає synKommo осторонь.
 cron.schedule("35 2 1 * *", () => {
   if (isKommoPaused()) return;
-  reconcileNightly(12).catch((err) => console.error("reconcileNightly(12) monthly failed:", err));
+  void runJob("reconcileNightly", () => reconcileNightly(12));
 });
 // Ч.2: щогодинний вартовий СВІЖОСТІ вотермарків (:50). Дешево (лише читання sync_state,
 // БЕЗ Kommo) → можна часто. Будить, коли last_event_at/last_success_at/last_activity_note_at/
 // last_transfer_at відстають >2× частоти джоби. Нічна звірка цього не ловила (поточний
 // місяць виключено), а застряглий вотермарк тихо ламає гроші. + на старті (одразу після рестарту).
 cron.schedule("50 * * * *", () => {
-  freshnessWatch().catch((err) => console.error("freshnessWatch failed:", err));
+  void runJob("freshnessWatch", () => freshnessWatch());
 });
 // Ч.4 (КРОК 6.6): вартовий ПОКИНУТИХ СТАДІЙ — раз на добу (07:55). Гранулярність
 // місячна (порівнює останній ПОВНИЙ місяць з медіаною 3 попередніх), тож щогодини
 // не треба. Ловить зламаний CRM-процес (стадію перестали проставляти → метрика тихо
 // ~0) — той самий клас, що застряглий вотермарк. Дешево: лише deal_stage_events, БЕЗ Kommo.
 cron.schedule("55 7 * * *", () => {
-  abandonedStagesWatch().catch((err) => console.error("abandonedStagesWatch failed:", err));
+  void runJob("abandonedStagesWatch", () => abandonedStagesWatch());
 });
 
 // syncStageEvents — КОЖНІ 30 ХВ (:15/:45). 🔴 КРИТИЧНО ДЛЯ СВІЖОСТІ ГРОШЕЙ:
@@ -274,23 +303,23 @@ cron.schedule("55 7 * * *", () => {
 // БЕЗ стартового виклику (щоб рестарт не давав сплеск).
 cron.schedule("15,45 * * * *", () => {
   if (isKommoPaused()) return;
-  syncStageEvents().catch((err) => console.error("Stage events sync failed:", err));
+  void runJob("syncStageEvents", () => syncStageEvents());
 });
 cron.schedule("40 */3 * * *", () => {
   if (isKommoPaused()) return;
-  syncDealActivity().catch((err) => console.error("Deal activity sync failed:", err));
+  void runJob("syncDealActivity", () => syncDealActivity());
 });
 // ФАЗА 2 — нотатки КОНТАКТІВ (дзвінки Ringostat живуть саме там). 🔴 :10, а НЕ :40 —
 // навмисно рознесено з лідовим проходом, щоб дві пагінації не били Kommo одночасно
 // (памʼять про IP-бан 08.07). Заміряно: 3-год вікно = 2 запити проти 8 лідових.
 cron.schedule("10 */3 * * *", () => {
   if (isKommoPaused()) return;
-  syncContactActivity().catch((err) => console.error("Contact activity sync failed:", err));
+  void runJob("syncContactActivity", () => syncContactActivity());
 });
 // 🩺 Самолікування контактної активності — щодня 05:40 (після 05:00-піку й syncTransfers 05:20).
 cron.schedule("40 5 * * *", () => {
   if (isKommoPaused()) return;
-  healContactActivity().catch((err) => console.error("Contact activity heal failed:", err));
+  void runJob("healContactActivity", () => healContactActivity());
 });
 // 🩺 Самолікування активності — щодня 04:40. Інкремент вище йде лише ВПЕРЕД від вотермарка,
 // тож пропущене вікно (бан/падіння/зсув) не повертається ніколи. Цей прохід звіряє по
@@ -298,23 +327,23 @@ cron.schedule("40 5 * * *", () => {
 // на добу — на тлі лімітів Kommo непомітно. 04:40: після нічної звірки (03:35) і до 05:00-піку.
 cron.schedule("40 4 * * *", () => {
   if (isKommoPaused()) return;
-  healDealActivity().catch((err) => console.error("Deal activity heal failed:", err));
+  void runJob("healDealActivity", () => healDealActivity());
 });
 // Lead-transfer events — раз на добу (резерв; «передані заявки» тепер із «Реєстру»).
 cron.schedule("20 5 * * *", () => {
   if (isKommoPaused()) return;
-  syncTransfers().catch((err) => console.error("Transfers sync failed:", err));
+  void runJob("syncTransfers", () => syncTransfers());
 });
 
 // Ad budget (Google Ads sheet) hourly + on startup — feeds the КВП report.
 cron.schedule("15 * * * *", () => {
-  syncAdBudget().catch((err) => console.error("Ad budget sync failed:", err));
+  void runJob("syncAdBudget", () => syncAdBudget());
 });
-syncAdBudget().catch((err) => console.error("Ad budget startup sync failed:", err));
+void runJob("syncAdBudget", () => syncAdBudget());
 
 // Prune stage events older than 24 months daily at 04:30 (bounded storage).
 cron.schedule("30 4 * * *", () => {
-  cleanupOldStageEvents(24).catch((err) => console.error("Stage events cleanup failed:", err));
+  void runJob("cleanupOldStageEvents", () => cleanupOldStageEvents(24));
 });
 
 // 🔴 BAG 1 (carryover): джобу snapshotCarryover ВИМКНЕНО. «Перенесені» тепер рахуються
@@ -326,96 +355,96 @@ cron.schedule("30 4 * * *", () => {
 
 // Ван-ту-ван нагадування: 1-го числа 06:00 + на старті (посіяти поточний місяць).
 cron.schedule("0 6 1 * *", () => {
-  createOneOnOneReminders().catch((err) => console.error("One-on-one reminders failed:", err));
+  void runJob("createOneOnOneReminders", () => createOneOnOneReminders());
 });
 
 // Чергування: щоранку 07:30 + на старті — задача «сьогодні ти черговий» тим,
 // хто в графіку на сьогодні (ідемпотентно по даті).
 cron.schedule("30 7 * * *", () => {
-  createDutyReminders().catch((err) => console.error("Duty reminders failed:", err));
+  void runJob("createDutyReminders", () => createDutyReminders());
 });
 
 // Нічна авто-звірка даних із CRM: щодня 03:30 + на старті. Ловить «тихі» баги
 // (незамаплені статуси, дублі менеджерів, застій синку) і сигналить КВП задачею.
 cron.schedule("30 3 * * *", () => {
-  runDataReconciliation().catch((err) => console.error("Data reconciliation failed:", err));
+  void runJob("runDataReconciliation", () => runDataReconciliation());
 });
 
 // Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».
 // Щодня 08:20 + на старті (ідемпотентно через task_created_at).
 cron.schedule("20 8 * * *", () => {
-  createReceivableDeadlineTasks().catch((err) => console.error("Receivable deadline tasks failed:", err));
+  void runJob("createReceivableDeadlineTasks", () => createReceivableDeadlineTasks());
 });
 
 // Refresh receivables from the accounting Google Sheet every 15 minutes so a
 // paid invoice removed from the file drops off the dashboard promptly (a manual
 // "🔄 Оновити з файлу" button in the UI forces it instantly).
 cron.schedule("*/15 * * * *", () => {
-  syncReceivables().catch((err) => console.error("Receivables sync failed:", err));
+  void runJob("syncReceivables", () => syncReceivables());
 });
 // Банк-виписки — що 15 хв (окремо від CRM). Upsert по external_tx_id.
 cron.schedule("*/15 * * * *", () => {
-  syncBank().catch((err) => console.error("Bank sync failed:", err));
+  void runJob("syncBank", () => syncBank());
 });
 
 // «Реєстр» лідоген-бота (Google Sheet) — джерело правди для «переданих заявок».
 // Кожні 30 хв + на старті. TRUNCATE+insert.
 cron.schedule("*/30 * * * *", () => {
-  syncLeadgenRegistry().catch((err) => console.error("Leadgen registry sync failed:", err));
+  void runJob("syncLeadgenRegistry", () => syncLeadgenRegistry());
 });
 
 // «Перший дотик» (AI-транскрибація дзвінка) — джерело правди для показника
 // «озвучення ціни в перший дотик». Кожні 30 хв + на старті. TRUNCATE+insert.
 cron.schedule("*/30 * * * *", () => {
-  syncFirstTouch().catch((err) => console.error("First-touch sync failed:", err));
+  void runJob("syncFirstTouch", () => syncFirstTouch());
 });
 
 // Розділ «Статистики» — живий перерахунок auto-метрик (поточний місяць+тиждень).
 // Щогодини + на старті. Метрики агрегатні, частіше не потрібно. UPSERT.
 cron.schedule("25 * * * *", () => {
-  recomputeStatistics().catch((err) => console.error("Statistics recompute failed:", err));
+  void runJob("recomputeStatistics", () => recomputeStatistics());
 });
 
 // «Кількість дзвінків» із Ringostat API (відділ «Менеджери з продажу» → sales.calls).
 // Щогодини (:35) + старт. Порожній Auth-key → джоба сама себе пропускає.
 cron.schedule("35 * * * *", () => {
-  syncRingostatCalls().catch((err) => console.error("Ringostat calls sync failed:", err));
+  void runJob("syncRingostatCalls", () => syncRingostatCalls());
 });
 
 // Готівка = приход (не бюджет). Легкий фетч приходу по готівкових 142-угодах
 // поточного міс+тижня. Раз на 3 год + старт (готівка змінюється повільно, тримаємо
 // навантаження на Kommo низьким).
 cron.schedule("50 */3 * * *", () => {
-  syncCashIncome().catch((err) => console.error("Cash-income sync failed:", err));
+  void runJob("syncCashIncome", () => syncCashIncome());
 });
 
 // Збирач архіву цін Lardi (калькулятор ставок) — кожні 3 години.
 cron.schedule("40 */3 * * *", () => {
-  collectLardi().catch((err) => console.error("Lardi collect failed:", err));
+  void runJob("collectLardi", () => collectLardi());
 });
 
 // Перевізники з CRM (контакти успішних угод) — раз на добу, порціями
 // (некритично для калькулятора; знижено з щогодини заради малого обсягу).
 cron.schedule("0 5 * * *", () => {
   if (isKommoPaused()) return;
-  syncCarriers().catch((err) => console.error("Carriers sync failed:", err));
+  void runJob("syncCarriers", () => syncCarriers());
 });
 
 // Fetch 3 fresh logistics-industry news items daily at 08:00.
 cron.schedule("0 8 * * *", () => {
-  syncNews().catch((err) => console.error("News sync failed:", err));
+  void runJob("syncNews", () => syncNews());
 });
 
 // Evaluate KPI plan tasks (auto-complete on target). Every 30 min so today's
 // composite facts are live intraday, not just after the 07:00 daily pass.
 cron.schedule("*/30 * * * *", () => {
-  evaluateKpiTasks().catch((err) => console.error("KPI task eval failed:", err));
+  void runJob("evaluateKpiTasks", () => evaluateKpiTasks());
 });
 
 // Independent nightly DB backup (gzipped CSV per table) at 03:00, kept 14 days.
 // Neon's own PITR is primary; this is a second, portable copy on our server.
 cron.schedule("0 3 * * *", () => {
-  backupDb().catch((err) => console.error("DB backup failed:", err));
+  void runJob("backupDb", () => backupDb());
 });
 
 // Backstop: a rejected query inside an un-try/catched async route handler used to
