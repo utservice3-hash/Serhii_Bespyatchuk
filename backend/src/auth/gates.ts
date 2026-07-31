@@ -53,56 +53,51 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Постійні від підігріву. Відкритий усім — борг, пропозиція: tab «leadgen»." },
   { method: "GET", path: "/api/dashboard/repeat-client-history", permanent: false,
     why: "Історія клієнта. Відкритий усім — борг, пропозиція: tab «loyalty»." },
-  { method: "DELETE", path: "/api/dashboard/loyalty-override/:clientKey", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «loyalty»." },
   { method: "GET", path: "/api/dashboard/conversion-timeseries", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «overview»." },
+    why: "МЕРТВИЙ, кандидат на видалення. Єдиний споживач — `ConversionTrendCard`, а він рендериться лише в `ReportSection.tsx`, який НІДЕ не імпортується. У прод-бандлі рядка «conversion-timeseries» немає (tree-shaking викинув). Межу навмання не ставимо — ставити нікуди." },
   { method: "GET", path: "/api/dashboard/daily", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «overview»." },
-  { method: "GET", path: "/api/dashboard/data-quality", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «dataquality»." },
+    why: "МЕРТВИЙ, кандидат на видалення. Те саме: `DailyProductivityCard` живе лише в мертвому `ReportSection.tsx`; рядка «dashboard/daily» у прод-бандлі немає." },
   { method: "GET", path: "/api/dashboard/expected-deals", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «overview»." },
+    why: "МЕРТВИЙ, кандидат на видалення. `fetchExpectedDeals` не має ЖОДНОГО виклику у фронті — навіть мертвого." },
   { method: "GET", path: "/api/dashboard/funnel-weekly", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «overview»." },
-  { method: "GET", path: "/api/dashboard/kvp-extra", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «kvp» — та сама причина." },
-  { method: "GET", path: "/api/dashboard/kvp-plan", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «kvp» — та сама причина." },
-  { method: "GET", path: "/api/dashboard/kvp-report", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «kvp» (зараз pre(/api/dashboard/kvp) не матчить kvp-report — дефіс, не слеш)." },
-  { method: "GET", path: "/api/dashboard/kvp-report/manager-detail", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «kvp» — та сама причина." },
-  { method: "GET", path: "/api/dashboard/lead-recommendation", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «leadgen»." },
-  { method: "GET", path: "/api/dashboard/loyalty-overrides", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «loyalty»." },
-  { method: "GET", path: "/api/dashboard/reactivation-candidates", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «loyalty»." },
-  { method: "GET", path: "/api/dashboard/report-plan", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «report»." },
-  { method: "GET", path: "/api/dashboard/report-plan/deals", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «report»." },
-  { method: "GET", path: "/api/dashboard/response-time", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «overview»." },
-  { method: "GET", path: "/api/dashboard/stuck-deals-grouped", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «dataquality»." },
-  { method: "POST", path: "/api/dashboard/deal-note", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «dataquality» (нотатка до угоди — робота з якістю даних)." },
-  { method: "POST", path: "/api/dashboard/kvp-plan", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «kvp» — та сама причина." },
-  { method: "POST", path: "/api/dashboard/loyalty-override", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: tab «loyalty»." },
-  { method: "POST", path: "/api/dashboard/sync", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: право (нове) `run_sync` — запуск синку це дія, не екран." },
-  { method: "POST", path: "/api/dashboard/sync-receivables", permanent: false,
-    why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: право `run_sync` — те саме." },
+    why: "МЕРТВИЙ, кандидат на видалення. `fetchFunnelWeekly` без викликів поза `api.ts`; рядка «funnel-weekly» у прод-бандлі немає." },
   { method: "POST", path: "/api/tracker/auth", permanent: true,
     why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: свідомо публічний — трекер має ВЛАСНУ авторизацію (device-токен), без JWT." },
   { method: "POST", path: "/api/tracker/heartbeat", permanent: true,
     why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: свідомо публічний — той самий device-токен." },
   { method: "POST", path: "/api/tracker/logout", permanent: true,
     why: "Зафіксовано «як є» 01.08.2026. Межі немає; пропозиція: свідомо публічний — той самий device-токен." },
+];
+
+/**
+ * 🪦 КАНДИДАТИ НА ВИДАЛЕННЯ — роути, яких НІХТО не викликає.
+ *
+ * 🔴 Навіщо окремий реєстр, а не «просто видалити». Мертвий роут не можна гейтити
+ * «навмання»: вкладку немає з чого вивести, бо немає споживача, і будь-який мапінг був
+ * би вигадкою. Але й лишати його в реєстрі межі мовчки не можна — там він виглядав би
+ * як звичайний борг, який колись закриють вкладкою.
+ *
+ * 🔎 Доказ смерті — ТРИ незалежні, бо кожен окремо бреше:
+ *   1) немає виклику функції-обгортки поза `api.ts`;
+ *   2) компонент-споживач (якщо є) сам рендериться лише з файла, який ніхто не імпортує;
+ *   3) рядка шляху НЕМАЄ у зібраному прод-бандлі — tree-shaking його викинув.
+ * Третій пункт головний: він міряє те, що реально поїхало користувачу, а не наміри коду.
+ *
+ * ⚠️ Видалення — ОКРЕМЕ рішення власника, не побічний ефект цього кроку.
+ */
+export interface DeadRouteCandidate { method: string; path: string; why: string }
+export const DEAD_ROUTE_CANDIDATES: DeadRouteCandidate[] = [
+  { method: "GET", path: "/api/dashboard/conversion-timeseries",
+    why: "ConversionTrendCard → лише ReportSection.tsx (файл ніде не імпортується); рядка немає у прод-бандлі." },
+  { method: "GET", path: "/api/dashboard/daily",
+    why: "DailyProductivityCard → лише ReportSection.tsx; рядка немає у прод-бандлі." },
+  { method: "GET", path: "/api/dashboard/expected-deals",
+    why: "fetchExpectedDeals не викликається взагалі — навіть із мертвого файла." },
+  { method: "GET", path: "/api/dashboard/funnel-weekly",
+    why: "fetchFunnelWeekly без викликів поза api.ts; рядка немає у прод-бандлі." },
+  { method: "GET", path: "/api/dashboard/kvp-extra",
+    why: "fetchKvpExtra без викликів. Межу все одно поставлено (tab «kvp») — роут живе в КВП-родині "
+       + "й у MASTER_PLAN стоїть на переведення в ядро; закрити його дешевше, ніж лишити відкритим до видалення." },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -210,5 +205,6 @@ export function exemptionsWithoutReason(): string[] {
   for (const e of ROUTE_BOUNDARY_EXEMPTIONS) if (!e.why.trim()) bad.push(`межа: ${e.method} ${e.path}`);
   for (const e of CORE_BYPASS_EXEMPTIONS) if (!e.why.trim()) bad.push(`ядро: ${e.file}`);
   for (const e of ROW_SPREAD_EXEMPTIONS) if (!e.why.trim()) bad.push(`спред: ${e.file} ${e.frag}`);
+  for (const e of DEAD_ROUTE_CANDIDATES) if (!e.why.trim()) bad.push(`мертвий: ${e.method} ${e.path}`);
   return bad;
 }

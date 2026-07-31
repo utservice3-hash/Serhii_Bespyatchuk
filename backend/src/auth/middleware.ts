@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken, type AuthPayload, type Role } from "./auth.js";
-import { tabForPath, roleHasTab, roleHasPerm, getRoleDef, scopeCompatRole } from "./rbac.js";
+import { tabsForPath, roleHasTab, roleHasPerm, getRoleDef, scopeCompatRole } from "./rbac.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -21,10 +21,12 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   } catch {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
-  // 🔒 СЕРВЕРНИЙ TAB-ГЕЙТ: роут → вкладка; якщо ефективна роль не має вкладки → 403.
-  // Не покладаємось на приховування у FE. Роути поза мапою (tab=null) — пропуск.
-  const tab = tabForPath(req.originalUrl);
-  if (tab && !roleHasTab(req.auth.roleKey, tab)) {
+  // 🔒 СЕРВЕРНИЙ TAB-ГЕЙТ: роут → ВКЛАДКИ; роль мусить мати ХОЧ ОДНУ з них, інакше 403.
+  // Не покладаємось на приховування у FE. Роути поза мапою (tabs=null) — пропуск.
+  // «Хоч одну» — бо роут може малюватись на двох екранах (kvp-report/manager-detail):
+  // вимога «всі» забрала б його в тімліда, що має «report», але не має «kvp».
+  const tabs = tabsForPath(req.originalUrl);
+  if (tabs && !tabs.some((t) => roleHasTab(req.auth!.roleKey, t))) {
     return res.status(403).json({ error: "Доступ до цього розділу вимкнено для вашої ролі" });
   }
   // 🔒 SCOPE-КЛАМП за ЕФЕКТИВНОЮ роллю (кастовної теж), а не лише за синковою users.role.

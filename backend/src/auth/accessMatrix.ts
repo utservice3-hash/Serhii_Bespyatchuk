@@ -19,6 +19,18 @@
  * ⏱ Повний прогін ≈ втричі довший — тому поділ: `npm test` (швидкий, без #11) і
  * `npm run test:matrix` (повний). Обидва названі в маніфесті.
  *
+ * 🟢 ОНОВЛЕНО 02.08.2026 — ЗМІНА ПОЛІТИКИ (такт 2): 17 роутів дістали tab-межу.
+ * Зрушило РІВНО 8 клітинок, і всі в один бік — 200 → 403:
+ *   hr:      kvp-report/manager-detail · report-plan · report-plan/deals ·
+ *            response-time · stuck-deals-grouped · deal-note · lead-recommendation
+ *   manager: lead-recommendation
+ * Це НЕ звуження чиїхось прав, а закриття того самого класу, що дав інцидент з HR:
+ * єдиною межею цих роутів був scope-кламп, а в company-ролі клампа немає. Жодна з
+ * восьми ролей не втратила екран, який у неї Є: HR не має ні «report», ні «plans»,
+ * ні «kvp»; менеджер не має «plans». Перевірено перед застосуванням по всіх 8 ролях.
+ * Решта 9 мапінгів зрушили НУЛЬ клітинок — там ті самі ролі й так отримували 403.
+ * Мапінги взяті з ФРОНТУ (який екран кличе роут), не з форми шляху.
+ *
  * 🟢 ПЕРЕЗНЯТО 31.07.2026 — ЗМІНА ПОЛІТИКИ, НЕ РЕГРЕСІЯ.
  * Рішення власника: ФІНАНСИСТ ПРАЦЮЄ НА РІВНІ АДМІНА. Попередній дефолт «немає
  * вкладки → закрити ендпоінт» скасовано: 15 продажних ендпоінтів не закривали, а
@@ -112,7 +124,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/dashboard/data-quality", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/deal-note", cls: "deny-only",
-    allow: [], deny: [] },
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/expected-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/dashboard/funnel", cls: "GET",
@@ -134,11 +146,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/dashboard/kvp-report", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/kvp-report/manager-detail", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/lead-quality", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   { method: "GET", path: "/api/dashboard/leadgen", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/leadgen-regulars", cls: "GET",
@@ -196,15 +208,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/dashboard/report", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/report-plan", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/report-plan/deals", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/response-time", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/stuck-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/stuck-deals-grouped", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/sync", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/sync-receivables", cls: "deny-only",

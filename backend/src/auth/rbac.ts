@@ -79,9 +79,9 @@ export function scopeCompatRole(key: string, def: RoleDef | undefined): ScopeRol
   return scope === "own" ? "manager" : scope === "team" ? "team_lead" : "company";
 }
 
-// Роут → вкладка живе в окремому модулі без залежностей (див. routeTab.ts),
+// Роут → вкладки живе в окремому модулі без залежностей (див. routeTab.ts),
 // щоб ворота доступу перевірялись без БД. Ре-експорт — щоб не ламати наявні імпорти.
-export { tabForPath } from "./routeTab.js";
+export { tabsForPath, hasTabBoundary } from "./routeTab.js";
 
 /**
  * Чи має ефективна роль доступ до вкладки. Невідома роль / відсутня вкладка → false.

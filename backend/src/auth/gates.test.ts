@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { tabForPath } from "./routeTab.js";
+import { tabsForPath, hasTabBoundary } from "./routeTab.js";
 import { MOUNTS } from "./routeInventory.js";
 import {
   ROUTE_BOUNDARY_EXEMPTIONS, CORE_BYPASS_EXEMPTIONS, ROW_SPREAD_EXEMPTIONS,
@@ -62,7 +62,7 @@ test("#17 ВОРОТА · кожен роут має МЕЖУ (tab, право) 
   const exempt = new Set(ROUTE_BOUNDARY_EXEMPTIONS.map((e) => `${e.method} ${e.path}`));
   const naked: string[] = [];
   for (const r of routes) {
-    if (tabForPath(r.path)) continue;                        // межа = вкладка
+    if (hasTabBoundary(r.path)) continue;                    // межа = вкладка
     if (permGated.has(`${r.method} ${r.suffix}`)) continue;   // межа = право
     if (exempt.has(`${r.method} ${r.path}`)) continue;        // виняток, названий вголос
     naked.push(`${r.method} ${r.path}`);
@@ -77,9 +77,23 @@ test("#17 ВОРОТА · кожен роут має МЕЖУ (tab, право) 
 
 test("#17b ДЗЕРКАЛО: ворота межі ВМІЮТЬ спрацювати", () => {
   // Без цієї пари #17 зеленів би й тоді, якби детектор вважав межею геть усе.
-  assert.equal(tabForPath("/api/dashboard/__вигаданий_роут__"), null,
-    "🔴 tabForPath знаходить вкладку для неіснуючого шляху — детектор межі несправний");
-  assert.ok(tabForPath("/api/settings"), "tabForPath не бачить очевидної вкладки — детектор мертвий");
+  assert.equal(tabsForPath("/api/dashboard/__вигаданий_роут__"), null,
+    "🔴 tabsForPath знаходить вкладку для неіснуючого шляху — детектор межі несправний");
+  assert.ok(hasTabBoundary("/api/settings"), "детектор не бачить очевидної вкладки — він мертвий");
+});
+
+test("#17g ПОРЯДОК ПРЕФІКСІВ: специфічний шлях виграє в загального", () => {
+  // 🔴 Перший збіг виграє, тож `kvp-report/manager-detail` мусить стояти ПЕРЕД
+  // `kvp-report`. Помилишся порядком — роут тихо звузиться до однієї вкладки, і
+  // тімлід зі «report» втратить екран, який бачив. Мовчки: коди 403, не 500.
+  assert.deepEqual(tabsForPath("/api/dashboard/kvp-report/manager-detail"), ["kvp", "report"],
+    "🔴 загальний префікс перехопив специфічний — переставляй рядки, а не права ролей");
+  assert.deepEqual(tabsForPath("/api/dashboard/kvp-report"), ["kvp"]);
+  // Дзеркало для дефіса: `pre()` матчить по слешу, тож сусід через дефіс — ІНШИЙ роут.
+  // Саме це й давало «kvp-report виглядає покритим, а насправді ні».
+  assert.deepEqual(tabsForPath("/api/dashboard/reactivation"), ["loyalty"]);
+  assert.deepEqual(tabsForPath("/api/dashboard/reactivation-candidates"), ["tasks"],
+    "🔴 дефісного сусіда накрив загальний префікс — значить `pre()` змінив семантику");
 });
 
 // ─────────────────────── B3 · метрика лише через ядро ───────────────────────
