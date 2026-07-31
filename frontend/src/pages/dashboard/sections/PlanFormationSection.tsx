@@ -19,6 +19,18 @@ const monthTitle = (ym: string) => `${MN_FULL[mi(ym)]} ${ym.slice(0, 4)}`;
 const dm = (iso: string | null) => iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : (iso ?? "");
 const curMonth = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; };
 
+/**
+ * «Виставлене» значення менеджера для ЖИВОЇ суми: пріоритет — те, що зараз у полі вводу
+ * (drafts), далі подане/затверджене, і лише потім рекомендація. Саме так тімлід бачить
+ * підсумок ще ДО подачі. Σ менеджерів = команда = компанія за побудовою: обидві суми
+ * рахуються цією ж функцією над тим самим набором.
+ */
+function issuedOf(m: PFManager, drafts: Record<number, number>): number {
+  const d = drafts[m.managerId];
+  if (typeof d === "number" && Number.isFinite(d)) return d;
+  return m.formation.proposedValue ?? m.recommendation.value;
+}
+
 // Стани картки: колір + іконка + підпис.
 const ST: Record<PFStatus, { c: string; icon: string; label: string }> = {
   draft: { c: MUTED, icon: "●", label: "Чернетка" },
@@ -40,6 +52,10 @@ export function PlanFormationSection({ auth, teams, previewData }: {
   const [err, setErr] = useState<string | null>(null);
   const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
   const [reload, setReload] = useState(0);
+  // ЖИВІ значення полів вводу (managerId → ₴). Підняті сюди, бо сума команди й компанії
+  // має оновлюватись ПІД ЧАС набору, ще до подачі — інакше тімлід рахує в голові.
+  const [drafts, setDrafts] = useState<Record<number, number>>({});
+  const setDraft = (id: number, v: number) => setDrafts((p) => (p[id] === v ? p : { ...p, [id]: v }));
 
   const setMonthP = (v: string) => { setMonth(v); localStorage.setItem("pfMonth", v); };
   const shiftMonth = (d: number) => { const [y, m] = month.split("-").map(Number); const nd = new Date(y, m - 1 + d, 1); setMonthP(`${nd.getFullYear()}-${String(nd.getMonth() + 1).padStart(2, "0")}`); };
@@ -53,6 +69,8 @@ export function PlanFormationSection({ auth, teams, previewData }: {
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, [month, teamFilter, growth, reload]);
+  // Нові дані (інший місяць/команда) → чернетки скидаємо, інакше показували б чужі суми.
+  useEffect(() => { setDrafts({}); }, [month, teamFilter]);
 
   const refresh = () => setReload((n) => n + 1);
   const teamOpts = useMemo(() => teams.filter((t) => !new Set([11, 12]).has(t.id)), [teams]);
@@ -105,11 +123,30 @@ export function PlanFormationSection({ auth, teams, previewData }: {
 
       {data && data.teams.map((t) => (
         <TeamBlock key={String(t.teamId ?? "none")} team={t} month={month} data={data}
+          drafts={drafts} setDraft={setDraft}
           open={openTeams.has(String(t.teamId ?? "none"))}
           onToggle={() => setOpenTeams((p) => { const n = new Set(p); const key = String(t.teamId ?? "none"); n.has(key) ? n.delete(key) : n.add(key); return n; })}
           onChanged={refresh} />
       ))}
       {data && data.teams.length === 0 && !loading && <p style={{ color: MUTED }}>Немає команд у цьому скоупі.</p>}
+
+      {/* ПІДСУМОК ПО КОМПАНІЇ — для КВП/ОД: це фактично майбутній план компанії, бо з
+          наступного місяця він рахується з виставлених. Σ команд = компанія за побудовою
+          (обидві суми беруть ті самі значення менеджерів). */}
+      {data && data.canApprove && data.teams.length > 1 && (() => {
+        const all = data.teams.flatMap((t) => t.managers);
+        const total = all.reduce((a, m) => a + issuedOf(m, drafts), 0);
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 14,
+                        background: "var(--card-bg)", border: `1px solid ${BAR}55`, borderRadius: 14, padding: "14px 18px" }}>
+            <b style={{ fontSize: 14 }}>🏢 ВИСТАВЛЕНО ПО КОМПАНІЇ</b>
+            <b style={{ fontSize: 22, color: BAR }}>{fmt(total)} ₴</b>
+            <span style={{ fontSize: 12, color: MUTED }}>
+              {data.teams.length} команд · {all.length} менеджерів · оновлюється наживо під час введення
+            </span>
+          </div>
+        );
+      })()}
 
       <RoleNote />
     </div>
@@ -141,8 +178,9 @@ function ProcessLegend() {
   );
 }
 
-function TeamBlock({ team, month, data, open, onToggle, onChanged }: {
+function TeamBlock({ team, month, data, open, onToggle, onChanged, drafts, setDraft }: {
   team: PFTeam; month: string; data: PlanFormation; open: boolean; onToggle: () => void; onChanged: () => void;
+  drafts: Record<number, number>; setDraft: (id: number, v: number) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const allApproved = team.approved >= team.total && team.total > 0;
@@ -164,6 +202,13 @@ function TeamBlock({ team, month, data, open, onToggle, onChanged }: {
         <div style={{ fontWeight: 750, fontSize: 16, display: "flex", alignItems: "center", gap: 9, flex: 1, minWidth: 220 }}>
           <span style={{ color: MUTED, fontSize: 13 }}>{open ? "▼" : "▶"}</span>{team.teamName}
         </div>
+        {/* ЖИВА сума виставленого — оновлюється під час набору, ще до подачі. */}
+        <div style={{ minWidth: 96 }}>
+          <div style={{ fontWeight: 800, fontSize: 20, lineHeight: 1.1, color: BAR }}>
+            {fmt(team.managers.reduce((a, m) => a + issuedOf(m, drafts), 0))} ₴
+          </div>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>ВИСТАВЛЕНО</div>
+        </div>
         {stat(k(team.recommended), "рекомендовано")}
         {stat(k(team.carryover), "перенесено")}
         {stat(`${team.approved} / ${team.total}`, "затверджено")}
@@ -178,7 +223,7 @@ function TeamBlock({ team, month, data, open, onToggle, onChanged }: {
       </div>
       {open && (
         <div style={{ borderTop: "1px solid var(--border)", padding: "6px 18px 18px" }}>
-          {team.managers.map((m) => <ManagerCard key={m.managerId} m={m} month={month} data={data} onChanged={onChanged} />)}
+          {team.managers.map((m) => <ManagerCard key={m.managerId} m={m} month={month} data={data} onChanged={onChanged} onValue={setDraft} />)}
           {team.managers.length === 0 && <p style={{ color: MUTED, fontSize: 13, padding: "10px 0" }}>Немає активних менеджерів.</p>}
         </div>
       )}
@@ -186,7 +231,7 @@ function TeamBlock({ team, month, data, open, onToggle, onChanged }: {
   );
 }
 
-function ManagerCard({ m, month, data, onChanged }: { m: PFManager; month: string; data: PlanFormation; onChanged: () => void }) {
+function ManagerCard({ m, month, data, onChanged, onValue }: { m: PFManager; month: string; data: PlanFormation; onChanged: () => void; onValue?: (id: number, v: number) => void }) {
   const st = ST[m.formation.status];
   return (
     <div style={{ border: "1px solid var(--border)", borderLeft: `4px solid ${st.c}`, borderRadius: 12, marginTop: 12, padding: "15px 16px" }}>
@@ -200,7 +245,7 @@ function ManagerCard({ m, month, data, onChanged }: { m: PFManager; month: strin
       <div style={{ display: "grid", gridTemplateColumns: "minmax(230px,1fr) minmax(260px,1.15fr) minmax(280px,1.2fr)", gap: 18, alignItems: "start" }}>
         <HistorySeg m={m} />
         <ClientsSeg m={m} refMonth={data.refMonth} />
-        <PlanSeg m={m} month={month} data={data} onChanged={onChanged} />
+        <PlanSeg m={m} month={month} data={data} onChanged={onChanged} onValue={onValue} />
       </div>
     </div>
   );
@@ -318,7 +363,7 @@ function RepeatList({ bd }: { bd: PFRepeatBreakdown }) {
   );
 }
 
-function PlanSeg({ m, month, data, onChanged }: { m: PFManager; month: string; data: PlanFormation; onChanged: () => void }) {
+function PlanSeg({ m, month, data, onChanged, onValue }: { m: PFManager; month: string; data: PlanFormation; onChanged: () => void; onValue?: (id: number, v: number) => void }) {
   const f = m.formation;
   const rec = m.recommendation;
   const [val, setVal] = useState<string>(String(f.proposedValue ?? rec.value));
@@ -328,6 +373,14 @@ function PlanSeg({ m, month, data, onChanged }: { m: PFManager; month: string; d
   const [comment, setComment] = useState("");
   useEffect(() => { setVal(String(f.proposedValue ?? rec.value)); }, [f.proposedValue, rec.value]);
   const num = () => Number(String(val).replace(/[^\d.-]/g, "")) || 0;
+  // Живий підйом значення нагору → сума команди/компанії рахується під час набору.
+  useEffect(() => { onValue?.(m.managerId, num()); }, [val, m.managerId]);
+
+  // МʼЯКА НИЖНЯ МЕЖА (з налаштувань): нижче мінімуму подача лише з обґрунтуванням.
+  const minPer = data.minPerManager ?? 0;
+  const belowMin = minPer > 0 && num() < minPer;
+  const hasReason = Boolean((comment || f.comment || "").trim());
+  const blockSubmit = belowMin && !hasReason;
 
   const doSubmit = async () => { setBusy(true); try { await submitFormationPlan(m.managerId, month, num(), comment || undefined); onChanged(); } finally { setBusy(false); } };
   const doApprove = async () => { setBusy(true); try {
@@ -348,10 +401,12 @@ function PlanSeg({ m, month, data, onChanged }: { m: PFManager; month: string; d
     <input value={val} onChange={(e) => setVal(e.target.value)} inputMode="numeric"
       style={{ width: 120, padding: "8px 10px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 15, textAlign: "right" }} />
   );
-  const btn = (label: string, color: string, onClick: () => void, solid = true) => (
-    <button onClick={onClick} disabled={busy}
-      style={{ padding: "9px 14px", borderRadius: 9, border: solid ? "none" : `1px solid ${color}`, cursor: "pointer",
-        background: solid ? color : "transparent", color: solid ? "#fff" : color, fontWeight: 700, fontSize: 13.5 }}>{busy ? "…" : label}</button>
+  const btn = (label: string, color: string, onClick: () => void, solid = true, off = false) => (
+    <button onClick={onClick} disabled={busy || off} title={off ? `Нижче мінімуму ${fmt(minPer)} ₴ — вкажи обґрунтування` : undefined}
+      style={off ? { padding: "9px 14px", borderRadius: 9, border: "1px solid var(--border)", cursor: "not-allowed",
+        background: "var(--bg)", color: MUTED, fontWeight: 700, fontSize: 13.5 } : undefined}
+      {...(off ? {} : { style: { padding: "9px 14px", borderRadius: 9, border: solid ? "none" : `1px solid ${color}`, cursor: "pointer",
+        background: solid ? color : "transparent", color: solid ? "#fff" : color, fontWeight: 700, fontSize: 13.5 } })}>{busy ? "…" : label}</button>
   );
 
   return (
@@ -413,14 +468,31 @@ function PlanSeg({ m, month, data, onChanged }: { m: PFManager; month: string; d
             {/* draft → тімлід/адмін формує і подає */}
             {f.status === "draft" && canSubmit && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Обґрунтування (необовʼязково)…"
+                {belowMin && (
+                  <div style={{ fontSize: 12, color: AMBER, background: "rgba(217,119,6,0.1)", border: "1px solid rgba(217,119,6,0.3)",
+                                borderRadius: 8, padding: "7px 10px" }}>
+                    ⚠️ Нижче мінімуму <b>{fmt(minPer)} ₴</b>. Це допускається (напр. менеджер вийшов у середині місяця),
+                    але потрібне обґрунтування — інакше подати не можна.
+                  </div>
+                )}
+                <input value={comment} onChange={(e) => setComment(e.target.value)}
+                  placeholder={belowMin ? "Обґрунтування (обовʼязково — план нижчий за мінімум)…" : "Обґрунтування (необовʼязково)…"}
                   style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 12.5 }} />
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{input}{btn("Подати", BAR, doSubmit)}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{input}{btn("Подати", BAR, doSubmit, true, blockSubmit)}</div>
               </div>
             )}
             {/* returned → тімлід/адмін переробляє і подає знову */}
             {f.status === "returned" && canSubmit && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{input}{btn("↑ Подати знову", RED, doSubmit)}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {belowMin && (
+                  <div style={{ fontSize: 12, color: AMBER }}>⚠️ Нижче мінімуму {fmt(minPer)} ₴ — потрібне обґрунтування.</div>
+                )}
+                {belowMin && !f.comment && (
+                  <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Обґрунтування (обовʼязково)…"
+                    style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 12.5 }} />
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{input}{btn("↑ Подати знову", RED, doSubmit, true, blockSubmit)}</div>
+              </div>
             )}
             {/* approved → адмін може змінити; інші — read-only */}
             {f.status === "approved" && canApprove && (

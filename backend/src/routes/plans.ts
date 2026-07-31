@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import type { AuthPayload } from "../auth/auth.js";
 import * as money from "../core/money.js";
+import { getSettings } from "./settings.js";
 import * as metrics from "../core/metrics.js";
 import { planRecommendation, baseMonthsFor } from "../core/plans.js";
 import { monthEndOf } from "../core/dates.js";
@@ -161,7 +162,10 @@ plansRouter.get("/formation", async (req, res) => {
     return { teamId: t.teamId, teamName: t.teamName, total: t.managers.length, recommended, carryover, approved, submitted, managers: t.managers };
   });
 
-  res.json({ month, refMonth, growthPct, role: auth.role, canApprove, canSubmit, teams });
+  // Мʼяка нижня межа з НАЛАШТУВАНЬ (не хардкод): фронт блокує подачу без
+  // обґрунтування, сервер перевіряє те саме нижче — фронту тут не довіряємо.
+  const { planMinPerManager } = await getSettings();
+  res.json({ month, refMonth, growthPct, role: auth.role, canApprove, canSubmit, minPerManager: planMinPerManager, teams });
 });
 
 /** Лазі-дриліл: розклад ПОСТІЙНИХ по клієнтах (розкривається під рядком «Постійні»). */
@@ -191,6 +195,15 @@ plansRouter.post("/formation/submit", requireRole("admin", "team_lead"), async (
   if (auth.role === "team_lead") {
     const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
     if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  }
+  // 🔴 МʼЯКА МЕЖА, але перевіряється НА СЕРВЕРІ: нижче мінімуму — лише з обґрунтуванням.
+  // Фронт блокує кнопку, проте покладатись на нього не можна (запит шлеться напряму).
+  const { planMinPerManager } = await getSettings();
+  if (proposedValue < planMinPerManager && !String(comment ?? "").trim()) {
+    return res.status(400).json({
+      error: `План ${proposedValue.toLocaleString("uk-UA")} ₴ нижчий за мінімум ` +
+        `${planMinPerManager.toLocaleString("uk-UA")} ₴ — потрібне обґрунтування.`,
+    });
   }
   await pool.query(
     `INSERT INTO plan_formation (manager_id, month, metric, proposed_value, status, comment, submitted_by, submitted_at, updated_at)

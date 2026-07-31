@@ -23,6 +23,11 @@ export interface AppSettings {
   // реклама» в повному циклі (KPI ads_count). Ручний метод КВП: 6 сайтових
   // джерел. Admin-редаговане — можна додавати/прибирати без правок коду.
   adSources: string[];
+  // Мʼяка нижня межа місячного плану на менеджера (₴). НЕ заборона: план нижчий
+  // допускається з обґрунтуванням (напр. менеджер вийшов у середині місяця), але
+  // тоді картка йде до затверджувача з бейджем. У налаштуваннях, а не в коді, —
+  // щоб КВП міняв поріг без деплою.
+  planMinPerManager: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -35,6 +40,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // §3b словника: adSources НЕ має дефолту в коді — список живе в БД
   // (сид у schema.sql). Відсутність = помилка конфігурації, видима як [].
   adSources: [] as string[],
+  planMinPerManager: 30000,
 };
 
 /** Reads the persisted settings merged over defaults. */
@@ -75,6 +81,8 @@ settingsRouter.put("/", async (req, res) => {
     receivablesOverdueWarnDays: clampInt(body.receivablesOverdueWarnDays, 0, 365, current.receivablesOverdueWarnDays),
     ratesFallbackFullPerKm: clampInt(body.ratesFallbackFullPerKm, 1, 500, current.ratesFallbackFullPerKm),
     ratesFallbackPartPerKm: clampInt(body.ratesFallbackPartPerKm, 1, 500, current.ratesFallbackPartPerKm),
+    // 0 = вимкнути перевірку зовсім; стеля 1 млн, щоб помилковий ввід не заблокував подачу.
+    planMinPerManager: clampInt(body.planMinPerManager, 0, 1_000_000, current.planMinPerManager),
     adSources: Array.isArray(body.adSources)
       ? [...new Set((body.adSources as unknown[]).map((s) => String(s).trim()).filter((s) => s.length > 0))]
       : current.adSources,

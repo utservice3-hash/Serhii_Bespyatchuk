@@ -304,6 +304,8 @@ export interface PFTeam {
 export interface PlanFormation {
   month: string; refMonth: string; growthPct: number;
   role: string; canApprove: boolean; canSubmit: boolean; teams: PFTeam[];
+  /** Мʼяка нижня межа плану на менеджера (₴) з налаштувань; 0 = вимкнено. */
+  minPerManager?: number;
 }
 export async function fetchPlanFormation(month: string, teamId?: number, growth?: number): Promise<PlanFormation> {
   const params: Record<string, string | number> = { month };
