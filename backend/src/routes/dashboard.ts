@@ -627,7 +627,6 @@ dashboardRouter.get("/overview", async (req, res) => {
     month: string;
     deals: string;
     paid: string;
-    revenue: string;
     new_clients: string;
     repeat_clients: string;
     dispatched: string;
@@ -643,7 +642,6 @@ dashboardRouter.get("/overview", async (req, res) => {
             COUNT(*) FILTER (WHERE psm.funnel_stage IN ('invoiced','paid')) AS deals,
             COUNT(*) FILTER (WHERE psm.funnel_stage IN ('invoiced','paid') OR d.status_id IN (69716300,98470988,10937178)) AS dispatched,
             COUNT(*) FILTER (WHERE psm.funnel_stage = 'paid') AS paid,
-            COALESCE(SUM(d.price) FILTER (WHERE psm.funnel_stage = 'paid'), 0) AS revenue,
             COUNT(DISTINCT d.client_key) FILTER (
               WHERE psm.funnel_stage = 'paid'
                 AND date_trunc('month', f.first_paid) = date_trunc('month', d.created_at_kommo)) AS new_clients,
