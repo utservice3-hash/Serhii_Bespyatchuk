@@ -665,19 +665,38 @@ dashboardRouter.get("/overview", async (req, res) => {
     // висів до таймауту → ранковий herd вичерпував пул → edge 503. НЕ додавати сюди $2.
     [monthAnchor]
   );
+  // 🔴 ПРАВИЛО ВЛАСНИКА (02.08.2026): ГРОШІ в «Історії за 3 місяці» — це ① «успішно
+  // реалізовано», анкер = дата входу в 142, а НЕ місяць створення угоди.
+  //
+  // Було: `SUM(price) FILTER (funnel_stage='paid')` згруповане по `created_at_kommo`.
+  // Тобто угода, створена в червні й оплачена в липні, не потрапляла НІКУДИ, а створена
+  // в липні й ще не оплачена — теж. Похибка структурно найбільша саме в поточному
+  // місяці: липень показував 2 079 764 ₴ замість 2 765 155 ₴ (−24.8%).
+  //
+  // Кількісні поля (deals/dispatched/newClients/repeatClients) лишаються когортою
+  // СТВОРЕННЯ — вони про «скільки завели», і це інше питання, ніж «скільки грошей».
+  // Той самий поділ, що вже діє в `/managers`: кількості з SQL, гроші з ядра.
+  const histFrom = `${histRes.rows[0]?.month ?? monthAnchor.slice(0, 7)}-01`;
+  const succByMonth = new Map(
+    (await money.successByBucket({ from: histFrom, to: monthAnchor, managerId, teamId }, "month"))
+      .map((b) => [b.bucket.slice(0, 7), b])
+  );
   const monthlyHistory = histRes.rows.map((r) => {
     const deals = Number(r.deals);
     const paid = Number(r.paid);
-    const revenue = Number(r.revenue);
+    const succ = succByMonth.get(r.month);
+    const revenue = succ?.revenue ?? 0;
     return {
       month: r.month,
       deals,
       paid,
       revenue,
       conversion: deals > 0 ? Math.round((paid / deals) * 100) : 0,
-      // Історія: знімки (оплата/очікувані) не відтворюються заднім числом,
-      // тому чисельник — лише «успішно»; знаменник — поставлені машини.
-      avgCheck: Number(r.dispatched) > 0 ? Math.round(revenue / Number(r.dispatched)) : 0,
+      // Чек історії — той самий `avg_check_success_only`, що й на картці: ① виручка
+      // місяця ÷ ① угоди місяця. Раніше знаменником стояли «поставлені машини» з
+      // когорти СТВОРЕННЯ — чисельник і знаменник рахувались за різними подіями,
+      // тож число не дорівнювало нічому в системі (еталон листа 2600–2900).
+      avgCheck: succ && succ.deals > 0 ? Math.round(revenue / succ.deals) : 0,
       // Крок В: adConversion/leadgenConversion — КОГОРТНІ з ядра (MONEY_ZONE),
       // перекриваються нижче по ym (adByYm/trByYm). Легасі period-ratio знято.
       adConversion: 0,
@@ -753,8 +772,13 @@ dashboardRouter.get("/overview", async (req, res) => {
     plan: planTotal,
     planMonthTotal,
     projection,
-    fact: successRevenue + paymentRevenue,
-    planPct: planTotal > 0 ? Math.round(((successRevenue + paymentRevenue) / planTotal) * 100) : 0,
+    // 🔴 ПРАВИЛО ВЛАСНИКА (02.08.2026): «Виконано плану» — це РЕЗУЛЬТАТ, тож ① лише
+    // «успішно реалізовано» (142). Було `successRevenue + paymentRevenue` = ②: частково
+    // оплачені угоди переносяться в наступний місяць, і зараховувати їх зараз означало б
+    // рахувати незавершене. ② лишається окремою карткою «Отримані кошти», підписаною
+    // як орієнтир, — і `paymentRevenue` нижче у відповіді для неї.
+    fact: successRevenue,
+    planPct: planTotal > 0 ? Math.round((successRevenue / planTotal) * 100) : 0,
     closedRevenue: Number(closedRes.rows[0]?.revenue ?? 0),
     closedDeals: Number(closedRes.rows[0]?.deals ?? 0),
     successRevenue,
@@ -1197,7 +1221,7 @@ dashboardRouter.get("/managers", async (req, res) => {
   // КРОК 2: payment_amount ФАКТ = «Отримані кошти» по тижнях (анкер по даті входу в
   // етап 9∪10 + дедуп), а НЕ created-cohort знімок funnel_stage='paid' (той мутував:
   // минулі тижні росли, коли угоди доходили до оплати). Сума тижнів = місячний received.
-  const recvWeeks = await money.receivedByManagerWeek(managerIds, monthStart);
+  const recvWeeks = await money.successByManagerWeek(managerIds, monthStart);   // ① результат менеджера
   for (const r of recvWeeks) getOrInit(r.managerId, r.weekStart, "payment_amount").fact += r.revenue;
 
   // «Очікування оплат» = вхід у етап 8 «Очікуємо оплату» в місяці (анкер по даті
@@ -1289,10 +1313,17 @@ dashboardRouter.get("/personal", async (req, res) => {
     if (METRICS.includes(r.funnel_stage as (typeof METRICS)[number])) {
       totals[r.funnel_stage].fact = Number(r.deal_count);
     }
-    if (r.funnel_stage === "paid") {
-      totals.payment_amount.fact += Number(r.total_amount);
-    }
+    // 🔴 Гроші сюди БІЛЬШЕ НЕ ЙДУТЬ із цього SQL: він групує по місяцю СТВОРЕННЯ
+    // угоди, а не по даті входу в «успішно реалізовано». Кількості (`deal_count`)
+    // лишаються когортою створення — це інше питання, ніж «скільки грошей».
   }
+  // 🔴 ПРАВИЛО ВЛАСНИКА (02.08.2026): факт «Мого звіту» = ① «успішно реалізовано» (142),
+  // анкер = `closed_at`. Це стосується всіх трьох блоків нижче — місяць, поденно,
+  // 12 місяців — і ПРОГНОЗУ, який рахується з місячного факту.
+  const monthEndP = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0))
+    .toISOString().slice(0, 10);
+  const succScope = { from: `${month}-01`, to: monthEndP, managerId: manager.id };
+  totals.payment_amount.fact = (await money.successMoney(succScope)).revenue;
   for (const r of planResult.rows) {
     if (totals[r.metric]) totals[r.metric].plan = Number(r.planned_value);
   }
@@ -1322,8 +1353,13 @@ dashboardRouter.get("/personal", async (req, res) => {
     const key = new Date(r.day).toISOString().slice(0, 10);
     const row = dailyByDate.get(key) ?? {};
     row[r.funnel_stage] = Number(r.deal_count);
-    if (r.funnel_stage === "paid") row.payment_amount = Number(r.total_amount);
     dailyByDate.set(key, row);
+  }
+  // Гроші дня — з ядра, тим самим анкером. Σ днів == totals.payment_amount.fact.
+  for (const b of await money.successByManagerBucket(succScope, "day")) {
+    const row = dailyByDate.get(b.bucket) ?? {};
+    row.payment_amount = b.revenue;
+    dailyByDate.set(b.bucket, row);
   }
   const daily = Array.from(dailyByDate.entries())
     .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -1372,8 +1408,16 @@ dashboardRouter.get("/personal", async (req, res) => {
     if (r.funnel_stage === "paid") {
       const row = getHistoryRow(monthKey);
       row.factPaid = Number(r.deal_count);
-      row.factPaymentAmount = Number(r.total_amount);
     }
+  }
+  // Гроші історії — з ядра. Місяць у бакеті вже київський, тож ключ збігається з тим,
+  // що будує `getHistoryRow`.
+  {
+    const histStart = new Date(`${month}-01T00:00:00Z`);
+    histStart.setUTCMonth(histStart.getUTCMonth() - 11);
+    for (const b of await money.successByManagerBucket(
+      { from: histStart.toISOString().slice(0, 10), to: monthEndP, managerId: manager.id }, "month"
+    )) getHistoryRow(b.bucket.slice(0, 7)).factPaymentAmount = b.revenue;
   }
   for (const r of historyPlanResult.rows) {
     if (r.metric === "payment_amount") {
@@ -1597,40 +1641,23 @@ dashboardRouter.get("/loyalty", async (req, res) => {
     };
   });
 
-  // Monthly dynamics of repeat-business: paid orders and revenue over the last
-  // 12 months for the same scope, so we can see whether the regular-client base
-  // is growing or shrinking by both order count and amount.
-  const dynConditions = ["psm.funnel_stage = 'paid'"];
-  const dynParams: unknown[] = [asOf];
-  if (managerId) {
-    dynParams.push(managerId);
-    dynConditions.push(`d.manager_id = $${dynParams.length}`);
-  }
-  if (teamId) {
-    dynParams.push(teamId);
-    dynConditions.push(`m.team_id = $${dynParams.length}`);
-  }
+  // 🔴 ПРАВИЛО ВЛАСНИКА (02.08.2026): «Замовлень / Сума (міс.)» — це ① «успішно
+  // реалізовано», анкер = дата входу в 142.
+  //
+  // Було: `SUM(price)` + `COUNT(*)` по `funnel_stage='paid'`, згруповані за МІСЯЦЕМ
+  // СТВОРЕННЯ угоди. Тобто картка «Сума (міс.)» і «% до попер. міс.» рахували когорту
+  // створення, а підписані були як гроші місяця. Найбільше розходилось у свіжому
+  // місяці — там угоди ще не встигали дійти до оплати.
+  //
+  // Тепер обидва числа беруться з ЯДРА однією функцією, тією самою, що живить
+  // «успішно реалізовано» в Звіті: Σ місяців тут == successMoney(той самий scope).
+  const dynFrom = `${asOf.slice(0, 7)}-01`;
+  const dynStart = new Date(`${dynFrom}T00:00:00Z`);
+  dynStart.setUTCMonth(dynStart.getUTCMonth() - 11);
+  const months = (await money.successByBucket(
+    { from: dynStart.toISOString().slice(0, 10), to: asOf, managerId, teamId }, "month"
+  )).map((b) => ({ month: b.bucket.slice(0, 7), orders: b.deals, amount: b.revenue }));
 
-  const dynResult = await pool.query<{ month: string; orders: string; amount: string }>(
-    `SELECT to_char(date_trunc('month', d.created_at_kommo), 'YYYY-MM') AS month,
-            COUNT(*) AS orders,
-            COALESCE(SUM(d.price), 0) AS amount
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id
-     JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-     WHERE ${dynConditions.join(" AND ")}
-       AND d.created_at_kommo >= date_trunc('month', $1::date) - interval '11 months'
-       AND d.created_at_kommo < date_trunc('month', $1::date) + interval '1 month'
-     GROUP BY 1
-     ORDER BY 1`,
-    dynParams
-  );
-
-  const months = dynResult.rows.map((r) => ({
-    month: r.month,
-    orders: Number(r.orders),
-    amount: Number(r.amount),
-  }));
 
   // Growth compares the last two COMPLETE months — the current calendar month
   // is still partial, so including it would understate the trend.
@@ -3625,11 +3652,14 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
   const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
   const teamAnd = teamId != null ? `AND m.team_id = ${teamId}` : "";
-  // 🔴 Крок А: fact = ЯДРО money.receivedByMgr (датований received: 142 по closed_at ⊎
-  // etap9 по останньому входу; дедуп; signed). Прибрано недатований paidOnly-знімок
-  // (він додавав поза-періодні оплати в кожен місяць). expected/carryover — без змін.
+  // 🔴 Крок А: fact = ЯДРО (датований анкер, дедуп, signed price). Прибрано недатований
+  // paidOnly-знімок (він додавав поза-періодні оплати в кожен місяць).
+  // 🔴 02.08.2026 — ПРАВИЛО ВЛАСНИКА: тут ① `successByMgr` (лише 142 по closed_at), а не
+  // ② received. План ставиться людині за РЕЗУЛЬТАТ, а частково оплачена угода
+  // переїздить у наступний місяць — зараховувати її зараз означало б рахувати
+  // незавершене. expected/carryover — без змін.
   const [recvMgr, exp, carry] = await Promise.all([
-    money.receivedByMgr({ from: planDate, to: monthEnd, teamId }),
+    money.successByMgr({ from: planDate, to: monthEnd, teamId }),   // ① результат менеджера
     pool.query<{ id: string; s: string }>(
       `SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d
          JOIN managers m ON m.id = d.manager_id AND m.is_active
@@ -4600,13 +4630,19 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     expPlannedM.set(r.managerId, e);
   }
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
-  const recvM = mapBy(recv), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
+  // 🔴 ПРАВИЛО ВЛАСНИКА (02.08.2026): факт менеджера = ① «успішно реалізовано» (142).
+  // Було `mapBy(recv)` = ② (9∪10). Причина зміни: частково оплачені угоди автоматично
+  // переносяться в наступний місяць, тож зарахувати їх людині ЗАРАЗ = порахувати
+  // незавершене. На цьому числі стоять %, світлофор, needPerDay і прогноз.
+  const recvM = mapBy(succ), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
     lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc);
   const expM = new Map(expZone.map((e) => [e.id, e.sum]));
 
   // СПАРКЛАЙН: received по 5 останніх тижнях (Пн–Нд) до `to`, per-manager.
   const sparkFrom = (() => { const d = new Date(to + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 34); return d.toISOString().slice(0, 10); })();
-  const sparkRows = await money.receivedByManagerBucket({ from: sparkFrom, to, managerId, teamId }, "week");
+  // Спарклайн — та сама метрика, що й факт (①), інакше смужка й число під нею
+  // розповідали б різне про одну людину.
+  const sparkRows = await money.successByManagerBucket({ from: sparkFrom, to, managerId, teamId }, "week");
   const sparkByMgr = new Map<number, Map<string, number>>();
   for (const r of sparkRows) { const m = sparkByMgr.get(r.managerId) ?? new Map(); m.set(r.bucket, r.revenue); sparkByMgr.set(r.managerId, m); }
   const last5Weeks = (() => {

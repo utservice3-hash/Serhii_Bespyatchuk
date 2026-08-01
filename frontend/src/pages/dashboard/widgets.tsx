@@ -9,12 +9,16 @@ export function ProgressGauge({
   fact,
   pct,
   contributors,
+  factHint,
 }: {
   plan: number;
   planMonth?: number;
   fact: number;
   pct: number;
   contributors: { name: string; revenue: number; deals: number }[];
+  /** Чесний підпис, ЯКОЮ метрикою рахується факт. Без нього дві правильні метрики
+   *  («успішно реалізовано» тут і «отримані кошти» поруч) читаються як розбіжність. */
+  factHint?: string;
 }) {
   const [hover, setHover] = useState(false);
   const color = pct >= 100 ? "#16a34a" : pct >= 70 ? "#d97706" : "#dc2626";
@@ -30,7 +34,9 @@ export function ProgressGauge({
         <span style={{ fontWeight: 700, color }}>{pct}%</span>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, margin: "6px 0 8px" }}>
-        <span style={{ color: "var(--text-muted)" }}>Факт {formatAmount(fact)}</span>
+        <span style={{ color: "var(--text-muted)" }} title={factHint}>
+          Факт {formatAmount(fact)}{factHint ? " ⓘ" : ""}
+        </span>
         <span style={{ color: "var(--text-muted)" }}>План {formatAmount(plan)}</span>
       </div>
       {planMonth != null && planMonth !== plan && (

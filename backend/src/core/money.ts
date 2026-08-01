@@ -389,15 +389,22 @@ export const receivedByBucket = (s: MoneyScope, granularity: "day" | "week" | "m
 export const successByBucket = (s: MoneyScope, granularity: "day" | "week" | "month") => bucketAgg("success", s, granularity);
 
 export interface MgrBucketRow { managerId: number; bucket: string; revenue: number; deals: number }
-/** received по (менеджер × день/тиждень) ОДНИМ запитом — для денного дрілу КВП (Крок Д #4). */
-export async function receivedByManagerBucket(s: MoneyScope, granularity: "day" | "week"): Promise<MgrBucketRow[]> {
+async function mgrBucketAgg(kind: Kind, s: MoneyScope, granularity: "day" | "week" | "month"): Promise<MgrBucketRow[]> {
   const rows = await query<{ manager_id: number; bucket: string; revenue: string; deals: string }>(
-    "received", { ...s, activeOnly: true },
+    kind, { ...s, activeOnly: true },
     `src.manager_id AS manager_id, to_char(date_trunc('${granularity}', (src.anchor_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
     "GROUP BY 1, 2 ORDER BY 2"
   );
   return rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
+/** received по (менеджер × день/тиждень) ОДНИМ запитом — для денного дрілу КВП (Крок Д #4). */
+export const receivedByManagerBucket = (s: MoneyScope, granularity: "day" | "week") => mgrBucketAgg("received", s, granularity);
+/**
+ * ① «Успішно реалізовано» по (менеджер × день/тиждень/місяць) — дзеркало
+ * `receivedByManagerBucket` з `kind='success'`. Та сама каса, лише анкер = `closed_at`
+ * і множина = ЗАРАЗ 142. Σ бакетів менеджера = `successByMgr` того ж періоду.
+ */
+export const successByManagerBucket = (s: MoneyScope, granularity: "day" | "week" | "month") => mgrBucketAgg("success", s, granularity);
 
 /**
  * «Успішно реалізовано» (won 142, анкер `closed_at`, signed price) по (менеджер × МІСЯЦЬ)
@@ -406,19 +413,20 @@ export async function receivedByManagerBucket(s: MoneyScope, granularity: "day" 
  * кожен місяць = команда = відділ (той самий інваріант, що всі money-per-manager функції).
  * Вікно [from,to] задає викликач (напр. 6 повних місяців перед target-місяцем).
  */
-export async function successByManagerMonth(s: MoneyScope): Promise<MgrBucketRow[]> {
-  const rows = await query<{ manager_id: number; bucket: string; revenue: string; deals: string }>(
-    "success", { ...s, activeOnly: true },
-    `src.manager_id AS manager_id, to_char(date_trunc('month', (src.anchor_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
-    "GROUP BY 1, 2 ORDER BY 2"
-  );
-  return rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, revenue: Number(x.revenue), deals: Number(x.deals) }));
-}
+export const successByManagerMonth = (s: MoneyScope) => mgrBucketAgg("success", s, "month");
 
 /** received по (менеджер × тиждень) за місяць — для тижневої сітки план/факт. */
-export async function receivedByManagerWeek(managerIds: number[], monthStart: string): Promise<MgrWeekRow[]> {
+export const receivedByManagerWeek = (managerIds: number[], monthStart: string) =>
+  mgrWeekAgg("received", managerIds, monthStart);
+/**
+ * ① «Успішно реалізовано» по (менеджер × тиждень) за місяць — дзеркало
+ * `receivedByManagerWeek`. Σ тижнів менеджера = `successByMgr` за той самий місяць.
+ */
+export const successByManagerWeek = (managerIds: number[], monthStart: string) =>
+  mgrWeekAgg("success", managerIds, monthStart);
+async function mgrWeekAgg(kind: Kind, managerIds: number[], monthStart: string): Promise<MgrWeekRow[]> {
   const p: unknown[] = [];
-  const src = sourceSql("received", p);
+  const src = sourceSql(kind, p);
   p.push(monthStart); const ms = `$${p.length}`;
   p.push(managerIds); const ids = `$${p.length}`;
   const r = await pool.query<{ manager_id: number; week_start: string; revenue: string; deals: string }>(

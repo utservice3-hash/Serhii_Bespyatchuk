@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
-import { receivedByMgr } from "../core/money.js";
+import { successByMgr } from "../core/money.js";
 
 export const messagesRouter = Router();
 messagesRouter.use(requireAuth);
@@ -28,6 +28,11 @@ function kyivMonthToDate(): { from: string; to: string } {
  *
  * Це не косметика: бейдж рахується від порогів 100/200/300 тис. (`getRank`), тож
  * заниження ПУБЛІЧНО знижувало людям статус — у липні 6 із 46 користувачів.
+ *
+ * 🔴 ПОПРАВКА ВЛАСНИКА (02.08.2026): метрика тут ① `successByMgr` — лише «успішно
+ * реалізовано» (142). Спершу викотили ② (9∪10), але лідерборд публічно ОЦІНЮЄ
+ * людину, а частково оплачена угода переїздить у наступний місяць: зарахувати її
+ * зараз означало б поставити людині в заслугу незавершене.
  */
 messagesRouter.get("/users", async (req, res) => {
   const me = req.auth!.userId;
@@ -49,7 +54,7 @@ messagesRouter.get("/users", async (req, res) => {
         ORDER BY team_name, name`,
       [me]
     ),
-    receivedByMgr(period),
+    successByMgr(period),
   ]);
   const revenueOf = new Map(byMgr.map((r) => [r.managerId, r.revenue]));
   // 🔒 Поля перелічені ЯВНО, а не спредом рядка. `manager_id` потрібен лише щоб

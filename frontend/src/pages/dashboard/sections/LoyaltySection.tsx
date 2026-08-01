@@ -231,6 +231,7 @@ export function LoyaltySection({
                 <>
                   <div className="kpi-card">
                     <span className="kpi-label">Замовлень (міс.)</span>
+                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>успішно реалізовано</span>
                     <span className="kpi-value">{d.latestOrders.toLocaleString("uk-UA")}</span>
                     <span style={{ color: color(d.deltaOrders), fontWeight: 600 }}>
                       {arrow(d.deltaOrders)} {Math.abs(d.deltaOrders)}% до попер. міс.
@@ -238,6 +239,7 @@ export function LoyaltySection({
                   </div>
                   <div className="kpi-card">
                     <span className="kpi-label">Сума (міс.)</span>
+                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>успішно реалізовано</span>
                     <span className="kpi-value">{formatAmount(d.latestAmount)}</span>
                     <span style={{ color: color(d.deltaAmount), fontWeight: 600 }}>
                       {arrow(d.deltaAmount)} {Math.abs(d.deltaAmount)}% до попер. міс.
