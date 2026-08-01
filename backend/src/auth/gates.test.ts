@@ -7,7 +7,7 @@ import { tabsForPath, hasTabBoundary } from "./routeTab.js";
 import { MOUNTS } from "./routeInventory.js";
 import {
   ROUTE_BOUNDARY_EXEMPTIONS, CORE_BYPASS_EXEMPTIONS, ROW_SPREAD_EXEMPTIONS,
-  exemptionsWithoutReason,
+  CREATED_COHORT_EXEMPTIONS, classifySql, METRIC_SQL, exemptionsWithoutReason,
 } from "./gates.js";
 
 /**
@@ -98,30 +98,69 @@ test("#17g ПОРЯДОК ПРЕФІКСІВ: специфічний шлях в
 
 // ─────────────────────── B3 · метрика лише через ядро ───────────────────────
 
-/** Ознаки грошової/стадійної метрики в сирому SQL. */
-const METRIC_SQL = /\b(SUM|AVG)\s*\(\s*[a-z_.]*price|status_id\s*(=|IN)|closed_at\s+BETWEEN|'142'|\b142\b\s*\)/i;
+/** SQL-блоки файлу: вміст кожного шаблонного літерала (у dist вони збережені). */
+function sqlBlocks(src: string): { q: string; at: number }[] {
+  return [...src.matchAll(/`([^`]{20,8000})`/g)].map((m) => ({ q: m[1], at: m.index ?? 0 }));
+}
+const lineOf = (src: string, at: number) => src.slice(0, at).split("\n").length;
 
 test("#17c ВОРОТА · метрика мимо ядра не проходить", () => {
   const exempt = new Set(CORE_BYPASS_EXEMPTIONS.map((e) => e.file));
   const offenders: string[] = [];
+  const unnamedCohorts: string[] = [];
+  let scanned = 0, lifetime = 0, cohorts = 0;
   for (const f of routeFiles()) {
     const rel = `routes/${f.replace(/\.js$/, ".ts")}`;
     if (exempt.has(rel)) continue;
     const src = strip(readFileSync(path.join(ROUTES, f), "utf8"));
-    if (METRIC_SQL.test(src)) offenders.push(rel);
+    for (const { q, at } of sqlBlocks(src)) {
+      const cls = classifySql(q);
+      if (!cls) continue;
+      scanned++;
+      if (cls === "lifetime") { lifetime++; continue; }
+      const where = `${rel}:${lineOf(src, at)}`;
+      if (cls === "money-period") { offenders.push(`${where} — ${q.replace(/\s+/g, " ").slice(0, 110)}`); continue; }
+      // created-cohort: законно, але має бути НАЗВАНА
+      const named = CREATED_COHORT_EXEMPTIONS.some((e) => e.file === rel && q.includes(e.frag));
+      if (named) cohorts++;
+      else unnamedCohorts.push(`${where} — ${q.replace(/\s+/g, " ").slice(0, 110)}`);
+    }
   }
+  assert.ok(scanned > 10, `детектор знайшов лише ${scanned} блоків — розбір зламався`);
   assert.deepEqual(offenders, [],
-    "🔴 СИРИЙ SQL ІЗ ГРОШИМА/СТАДІЯМИ В РОУТІ. Гроші рахує ЛИШЕ core/money.ts: анкер по даті "
-    + "входу в етап + дедуплікація 9∪10. Свій SQL обходить обидва правила, і розбіжність "
-    + "спливає через місяці як «дашборд бреше». Клич ядро — або назви виняток у "
-    + "CORE_BYPASS_EXEMPTIONS:\n  " + offenders.join("\n  "));
+    "🔴 ГРОШІ ЗА ПЕРІОД ПОВЗ ЯДРО. У запиті є фільтр по ГРОШОВОМУ анкері (closed_at/"
+    + "changed_at) і сума/стадія — отже це метрика проміжку, а її рахує ЛИШЕ core/money.ts "
+    + "(анкер по даті входу + дедуп 9∪10). Свій SQL обходить обидва правила, і розбіжність "
+    + "спливає через місяці як «дашборд бреше»:\n  " + offenders.join("\n  "));
+  assert.deepEqual(unnamedCohorts, [],
+    "🔴 НЕНАЗВАНА КОГОРТА СТВОРЕННЯ. Фільтр періоду тут по `created_at` — це законно "
+    + "(«скільки завели»), але саме в такому запиті колись і сховався грошовий анкер: "
+    + "«Історія за 3 місяці» рахувала виручку по місяцю СТВОРЕННЯ і давала −27% у "
+    + "поточному місяці. Тому кожна когорта має бути названа в CREATED_COHORT_EXEMPTIONS "
+    + "з причиною:\n  " + unnamedCohorts.join("\n  "));
+  assert.ok(lifetime + cohorts > 0,
+    "жоден блок не класифіковано як законний — детектор, схоже, нічого не бачить");
 });
 
-test("#17d ДЗЕРКАЛО: детектор метрик ловить справжній зразок", () => {
+test("#17d ДЗЕРКАЛО: детектор РОЗРІЗНЯЄ три класи, а не червоніє на все", () => {
+  // Без цієї пари #17c зеленів би й тоді, коли класифікатор вважає геть усе законним —
+  // або, навпаки, став би параноїком і його б вимкнули через тиждень.
+  assert.equal(classifySql("SELECT name FROM managers ORDER BY name"), null,
+    "🔴 нешкідливий SQL позначено як грошовий — ворота стануть шумом");
+  assert.equal(
+    classifySql("SELECT SUM(d.price) FROM deals d WHERE d.status_id = 142 AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1 AND $2"),
+    "money-period", "🔴 гроші за період по closed_at не впізнані — #17c пропустив би саме те, що ловить");
+  assert.equal(
+    classifySql("SELECT date_trunc('month', d.created_at_kommo) m, COUNT(*) FILTER (WHERE d.status_id = 142) FROM deals d"),
+    "created-cohort", "🔴 когорта створення не впізнана — вона мовчки поїхала б у money-period");
+  assert.equal(
+    // Реальна форма з коду: `status_id` тут — умова JOIN до мапи стадій, а не фільтр
+    // періоду. Саме такі 16 блоків і тримали весь `dashboard.ts` у винятку.
+    classifySql("SELECT DISTINCT d.client_key FROM deals d JOIN pipeline_stage_map psm"
+      + " ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id WHERE psm.funnel_stage = 'paid'"),
+    "lifetime", "🔴 lifetime-предикат прийнято за метрику — ворота почервоніли б на сегментах");
   assert.ok(METRIC_SQL.test("SELECT SUM(d.price) FROM deals WHERE status_id = 142"),
-    "🔴 детектор не бачить очевидного грошового SQL — #17c зеленів би завжди");
-  assert.ok(!METRIC_SQL.test("SELECT name FROM managers ORDER BY name"),
-    "🔴 детектор спрацьовує на нешкідливому SQL — ворота стануть шумом");
+    "🔴 базова грошова ознака не спрацьовує — класифікувати немає чого");
 });
 
 // ─────────────────────── B4 · рядок БД не віддається спредом ───────────────────────

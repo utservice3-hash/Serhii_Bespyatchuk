@@ -114,23 +114,56 @@ export const DEAD_ROUTE_CANDIDATES: DeadRouteCandidate[] = [
  */
 export interface CoreExemption { file: string; why: string }
 
+/**
+ * 🔎 ТРИ КЛАСИ SQL із грошима/стадіями. Детектор дивиться не на форму запиту, а на
+ * те, ЩО САМЕ обмежує вибірку в часі — бо саме там і живе різниця між метрикою і
+ * предикатом.
+ *
+ *   `money-period`     — є фільтр періоду по ГРОШОВОМУ анкері (`closed_at`/`changed_at`).
+ *                        Це гроші за проміжок → мусить рахувати `core/money.ts`.
+ *   `created-cohort`   — період по `created_at`. Законно (когорта СТВОРЕННЯ: «скільки
+ *                        завели», воронка клієнтів), але має бути НАЗВАНА поіменно.
+ *   `lifetime`         — періоду немає взагалі. `funnel_stage='paid'` тут означає
+ *                        «клієнт КОЛИСЬ платив» — предикат сегментації, не метрика.
+ *
+ * 🔴 Навіщо саме так. Раніше `#17c` дивився на файл цілком: один сирий SUM(price)
+ * робив увесь `dashboard.ts` винятком, і ворота ставали сліпі на 5000 рядків — рівно
+ * те, від чого ми йшли. Класифікація по БЛОКУ звужує виняток із «увесь файл» до
+ * названих запитів. Замір, що це працює: у `dashboard.ts` було 35 збігів у 18 блоках,
+ * із них 28 — lifetime, 7 — дві когорти, і НУЛЬ money-period.
+ */
+export type SqlClass = "money-period" | "created-cohort" | "lifetime";
+/** Грошова/стадійна ознака — те, що взагалі робить запит кандидатом. */
+export const METRIC_SQL = /\b(SUM|AVG)\s*\(\s*[a-z_.]*price|status_id\s*(=|IN)|closed_at\s+BETWEEN|'142'|\b142\b\s*\)/i;
+const MONEY_PERIOD = /(closed_at\w*|anchor_at|changed_at)[^\n]{0,90}(BETWEEN|>=|<=|<|>)|date_trunc\('\w+'\s*,\s*[^)]*?(closed_at|anchor_at|changed_at)/i;
+const CREATED_PERIOD = /created_at\w*[^\n]{0,90}(BETWEEN|>=|<=|<|>)|date_trunc\('(day|week|month)'\s*,\s*[a-z_.]*created_at/i;
+
+export function classifySql(q: string): SqlClass | null {
+  if (!METRIC_SQL.test(q)) return null;
+  if (MONEY_PERIOD.test(q)) return "money-period";
+  if (CREATED_PERIOD.test(q)) return "created-cohort";
+  return "lifetime";
+}
+
+/**
+ * Когорти СТВОРЕННЯ, названі поіменно. Кожна — законна, але мусить бути свідомою:
+ * саме тут колись і сховався анкер `created_at` у грошах.
+ */
+export interface CohortExemption { file: string; frag: string; why: string }
+export const CREATED_COHORT_EXEMPTIONS: CohortExemption[] = [
+  { file: "routes/dashboard.ts", frag: "AS dispatched",
+    why: "/overview «Історія за 3 місяці» — КІЛЬКОСТІ (створено/поставлено/нові/постійні) "
+       + "за місяцем створення. Гроші цього блоку переведено на `successByBucket` 02.08.2026, "
+       + "а мертву колонку `revenue` прибрано; лишились самі лічильники, і вони про «скільки "
+       + "завели», а не «скільки грошей»." },
+  { file: "routes/dashboard.ts", frag: "AS carryover",
+    why: "/funnel-report «перенесені»: `SUM(price) FILTER (в роботі AND created_at < період)`. "
+       + "Тут `created_at` І Є означенням перенесеної угоди — створена до періоду й досі в "
+       + "роботі. Грошового анкера в неї ще НЕ ІСНУЄ, бо вона не оплачена." },
+];
+
 /** Місця, де сирий SQL із грошима/стадіями лишається свідомо. */
 export const CORE_BYPASS_EXEMPTIONS: CoreExemption[] = [
-  { file: "routes/dashboard.ts",
-    why: "БОРГ, ЩО ХУДНЕ — і вже виміряний. 02.08.2026 з файлу прибрано ВЕСЬ грошовий "
-       + "анкер по `created_at`, тож блоків «гроші за період повз ядро» тут тепер НУЛЬ. "
-       + "Лишається 35 збігів детектора у 18 SQL-блоках, і всі вони — НЕ гроші періоду: "
-       + "16 блоків (28 збігів) — lifetime-предикати (`funnel_stage='paid'` = «клієнт "
-       + "колись платив»: сегменти, реактивація, постійні), 2 блоки (7 збігів) — свідомі "
-       + "когорти СТВОРЕННЯ (`/overview` історія-кількості, `/funnel-report` воронка "
-       + "клієнтів). Детектор їх не розрізняє, бо дивиться лише на форму SQL. "
-       + "ЯК ЗВУЗИТИ (пропозиція власника, підтверджена заміром — див. нижче): додати "
-       + "до `#17c` ознаку «чи є в ТОМУ Ж запиті фільтр періоду по ГРОШОВОМУ анкері "
-       + "(`closed_at`/`changed_at`)». Є період → метрика, має йти через ядро. Немає → "
-       + "lifetime, законно. Замір на поточному коді: гіпотеза відсіює 28 із 35 збігів, "
-       + "а решту 7 закриває другий крок — «період по created_at» = когорта, теж "
-       + "законна, але вимагає ІМЕННОГО запису. Тобто виняток «увесь файл» звужується "
-       + "до 2 названих блоків." },
   { file: "routes/statistics.ts",
     why: "Розділ «Статистики (відділи)» читає EAV-таблицю statistics_values, а не угоди. "
        + "Це не метрика ядра, а імпортовані/ручні показники — ядру там нема що рахувати." },
