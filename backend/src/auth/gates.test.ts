@@ -204,5 +204,12 @@ test("#17f ДЗЕРКАЛО: жоден реєстр винятків не по�
   assert.deepEqual(exemptionsWithoutReason(), [],
     "🔴 у реєстрі є виняток без причини — назви її або прибери запис");
   assert.ok(ROUTE_BOUNDARY_EXEMPTIONS.length + CORE_BYPASS_EXEMPTIONS.length
-    + ROW_SPREAD_EXEMPTIONS.length > 0, "усі реєстри порожні — перевірка причин нічого не робить");
+    + ROW_SPREAD_EXEMPTIONS.length + CREATED_COHORT_EXEMPTIONS.length > 0,
+    "усі реєстри порожні — перевірка причин нічого не робить");
+  // Дзеркало до дзеркала: перевірка мусить УМІТИ побачити порожню причину. Інакше
+  // «0 записів без причини» означало б лише «ми туди не дивимось» — той самий
+  // хибно-зелений, що й скіп, який ніколи не виконувався.
+  assert.deepEqual(
+    [{ file: "x", frag: "y", why: "  " }].filter((e) => !e.why.trim()).map((e) => e.file),
+    ["x"], "🔴 детектор порожньої причини не працює");
 });

@@ -246,5 +246,6 @@ export function exemptionsWithoutReason(): string[] {
   for (const e of CORE_BYPASS_EXEMPTIONS) if (!e.why.trim()) bad.push(`ядро: ${e.file}`);
   for (const e of ROW_SPREAD_EXEMPTIONS) if (!e.why.trim()) bad.push(`спред: ${e.file} ${e.frag}`);
   for (const e of DEAD_ROUTE_CANDIDATES) if (!e.why.trim()) bad.push(`мертвий: ${e.method} ${e.path}`);
+  for (const e of CREATED_COHORT_EXEMPTIONS) if (!e.why.trim()) bad.push(`когорта: ${e.file} ${e.frag}`);
   return bad;
 }
