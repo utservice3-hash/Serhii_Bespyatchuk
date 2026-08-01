@@ -18,9 +18,9 @@
     "sync:users": "tsx src/jobs/syncUsersOnly.ts",
     "backfill:client-keys": "tsx src/jobs/backfillClientKeys.ts",
     "bot": "tsx src/bot/index.ts",
-    "test:prod": "TEST_SCOPE=prod node --import ./dist/testReadOnly.js --test \"dist/**/*.test.js\"",
-    "test:ai": "TEST_SCOPE=prod TEST_AI=1 node --import ./dist/testReadOnly.js --test \"dist/**/*.test.js\"",
-    "test:matrix": "TEST_SCOPE=prod TEST_MATRIX=1 node --import ./dist/testReadOnly.js --test \"dist/**/*.test.js\""
+    "test:prod": "TEST_SCOPE=prod node --import ./dist/testReadOnly.js --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\"",
+    "test:ai": "TEST_SCOPE=prod TEST_AI=1 node --import ./dist/testReadOnly.js --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\"",
+    "test:matrix": "TEST_SCOPE=prod TEST_MATRIX=1 node --import ./dist/testReadOnly.js --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
