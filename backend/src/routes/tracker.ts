@@ -6,14 +6,19 @@ import crypto from "crypto";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
 import { effectiveRoleKey } from "../auth/rbac.js";
+import { getSettings } from "./settings.js";
+import { acceptBatch } from "../tracker/intervalPolicy.js";
 
 export const trackerRouter = Router();
 
-// Конфіг агента (нові поля можна додавати — агент ігнорує незнайомі).
-const CONFIG = { idleThresholdSec: 300, heartbeatIntervalSec: 60, trackApps: false };
+// 🔴 КОНФІГ АГЕНТА ЖИВЕ В НАЛАШТУВАННЯХ, а не тут (`AppSettings.tracker`).
+// Причина та сама, з якої класифікує сервер, а не агент: правило міняється
+// частіше, ніж виходить версія агента, і поки версії різні — двоє людей за той
+// самий час дістануть дані різної якості. Тепер зміна діє без релізу й без
+// перелогіну (конфіг їде і в /auth, і у відповіді /heartbeat).
 const MAX_BATCH = 500;
-const MAX_INTERVAL_MS = 10 * 60 * 1000; // >10 хв — пропускаємо
 const sha256 = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
+
 
 // ─────────────────────────── POST /auth ───────────────────────────
 const authSchema = z.object({
@@ -53,7 +58,7 @@ trackerRouter.post("/auth", async (req, res) => {
      VALUES ($1,$2,$3,$4,$5,$6, now())`,
     [u.id, u.manager_id, sha256(token), device.platform, device.hostname ?? null, device.agentVersion ?? null]);
 
-  res.json({ deviceToken: token, manager: { id: u.id, name: u.pib }, config: CONFIG });
+  res.json({ deviceToken: token, manager: { id: u.id, name: u.pib }, config: (await getSettings()).tracker });
 });
 
 // ─────────────────────────── спільне: пристрій за токеном ───────────────────────────
@@ -66,28 +71,10 @@ async function deviceByToken(req: import("express").Request) {
 }
 
 // ─────────────────────────── POST /heartbeat ───────────────────────────
-interface CleanInterval { startedAt: Date; endedAt: Date; state: "active" | "idle"; app: string | null; windowTitle: string | null; inputEvents: number | null }
-// Валідує ОДИН інтервал структурно + за правилами (ended>started, ≤10хв). Бракований → null (пропуск).
-function cleanInterval(it: unknown): CleanInterval | null {
-  if (!it || typeof it !== "object") return null;
-  const o = it as Record<string, unknown>;
-  const s = typeof o.startedAt === "string" ? Date.parse(o.startedAt) : NaN;
-  const e = typeof o.endedAt === "string" ? Date.parse(o.endedAt) : NaN;
-  if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
-  if (e <= s) return null;                       // ended має бути пізніше started
-  if (e - s > MAX_INTERVAL_MS) return null;      // >10 хв — пропустити
-  if (o.state !== "active" && o.state !== "idle") return null;
-  return {
-    startedAt: new Date(s), endedAt: new Date(e), state: o.state,
-    app: typeof o.app === "string" ? o.app : null,
-    windowTitle: typeof o.windowTitle === "string" ? o.windowTitle : null,
-    inputEvents: Number.isInteger(o.inputEvents) ? (o.inputEvents as number) : null,
-  };
-}
-
 trackerRouter.post("/heartbeat", async (req, res) => {
   const dev = await deviceByToken(req);
   if (!dev) return res.status(401).json({ error: "token_revoked" });
+  const cfg = (await getSettings()).tracker;
 
   const body = req.body;
   // 400 ЛИШЕ для структурно битого пейлоада — не через один аномальний інтервал.
@@ -98,24 +85,24 @@ trackerRouter.post("/heartbeat", async (req, res) => {
   await pool.query(`UPDATE tracker_devices SET last_seen_at = now(), agent_version = COALESCE($2, agent_version) WHERE id = $1`,
     [dev.id, typeof body.agentVersion === "string" ? body.agentVersion : null]);
 
-  // Очищаємо аномальні, сортуємо за часом, відкидаємо перетини (не перетинаються).
-  const cand = (Array.isArray(body.intervals) ? (body.intervals as unknown[]) : [])
-    .map(cleanInterval).filter((x): x is CleanInterval => x !== null)
-    .sort((a, b) => +a.startedAt - +b.startedAt);
-  const toInsert: CleanInterval[] = [];
-  let lastEnd = -Infinity;
-  for (const c of cand) { if (+c.startedAt < lastEnd) continue; toInsert.push(c); lastEnd = +c.endedAt; }
+  const { toInsert, rejected } = acceptBatch(
+    Array.isArray(body.intervals) ? (body.intervals as unknown[]) : [], cfg, Date.now());
 
-  let accepted = 0;
+  let accepted = 0, duplicate = 0;
   for (const c of toInsert) {
     const ins = await pool.query(
-      `INSERT INTO tracker_intervals (device_id, user_id, manager_id, started_at, ended_at, state, app, window_title, input_events)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO tracker_intervals (device_id, user_id, manager_id, started_at, ended_at, state, app, source, window_title, input_events)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (device_id, started_at) DO NOTHING RETURNING id`,
-      [dev.id, dev.user_id, dev.manager_id, c.startedAt, c.endedAt, c.state, c.app, c.windowTitle, c.inputEvents]);
-    if (ins.rowCount) accepted++;
+      [dev.id, dev.user_id, dev.manager_id, c.startedAt, c.endedAt, c.state, c.app, c.source, c.windowTitle, c.inputEvents]);
+    if (ins.rowCount) accepted++; else duplicate++;
   }
-  res.json({ ok: true, accepted, config: CONFIG });
+  // `received + accepted + rejected + duplicate` завжди сходиться — саме це й дає
+  // агенту змогу побачити, що частина даних не доїхала.
+  res.json({
+    ok: true, received: Array.isArray(body.intervals) ? body.intervals.length : 0,
+    accepted, duplicate, rejected, config: cfg,
+  });
 });
 
 // ─────────────────────────── POST /logout ───────────────────────────

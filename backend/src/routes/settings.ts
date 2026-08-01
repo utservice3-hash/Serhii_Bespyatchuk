@@ -28,6 +28,40 @@ export interface AppSettings {
   // тоді картка йде до затверджувача з бейджем. У налаштуваннях, а не в коді, —
   // щоб КВП міняв поріг без деплою.
   planMinPerManager: number;
+  /**
+   * ⏱ КОНФІГ АГЕНТА ТРЕКЕРА. Живе тут, а не в коді роута, з тієї самої причини,
+   * що й класифікація на сервері: правило міняється частіше, ніж виходить версія
+   * агента, а поки версії різні — двоє людей за той самий час дістануть різні
+   * дані, і ми не зможемо сказати, хто з них правий. Агент читає це у відповіді
+   * `/auth` І `/heartbeat`, тож зміна діє без перелогіну й без оновлення агента.
+   */
+  tracker: TrackerConfig;
+}
+
+export interface TrackerConfig {
+  /** Скільки секунд без вводу = «простій». */
+  idleThresholdSec: number;
+  /** Як часто агент шле батч. */
+  heartbeatIntervalSec: number;
+  /** Збирати назву застосунку. */
+  trackApps: boolean;
+  /** Збирати ХОСТ активної вкладки (не URL, не шлях). */
+  collectHost: boolean;
+  /**
+   * 🔴 ЗАГОЛОВКИ ВІКОН — ЗА ЗАМОВЧУВАННЯМ ВИМКНЕНО (умова власника, не побажання).
+   * Заголовок містить клієнтські дані (назва угоди, ПІБ), а для класифікації
+   * достатньо `app` + `source`. Вмикати — лише свідомим рішенням.
+   */
+  sendTitles: boolean;
+  /** Склеювати сусідні інтервали з однаковими (state, app, source) до відправки. */
+  coalesceSameSource: boolean;
+  /**
+   * Максимальна тривалість ОДНОГО інтервалу. Сервер ОГОЛОШУЄ свою межу, щоб агент
+   * не склеював понад неї: інакше склеєні інтервали відкидались би на прийомі.
+   */
+  maxIntervalSec: number;
+  /** Допустимий зсув годинника клієнта від серверного часу, секунд. */
+  maxClockSkewSec: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -41,6 +75,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // (сид у schema.sql). Відсутність = помилка конфігурації, видима як [].
   adSources: [] as string[],
   planMinPerManager: 30000,
+  tracker: {
+    idleThresholdSec: 300,
+    heartbeatIntervalSec: 60,
+    trackApps: true,
+    collectHost: true,
+    sendTitles: false,          // 🔴 умова власника
+    coalesceSameSource: true,
+    maxIntervalSec: 900,        // 15 хв (було 10, і склеювання його б пробивало)
+    maxClockSkewSec: 2 * 60 * 60,
+  },
 };
 
 /** Reads the persisted settings merged over defaults. */
@@ -48,7 +92,12 @@ export async function getSettings(): Promise<AppSettings> {
   const result = await pool.query<{ data: Partial<AppSettings> }>(
     `SELECT data FROM app_settings WHERE id = 1`
   );
-  const merged = { ...DEFAULT_SETTINGS, ...(result.rows[0]?.data ?? {}) };
+  const stored = result.rows[0]?.data ?? {};
+  const merged = { ...DEFAULT_SETTINGS, ...stored };
+  // `tracker` — вкладений обʼєкт, тож поверхневий spread затер би дефолти цілком:
+  // додали в код нове поле → у збереженому JSON його немає → агент отримав би
+  // `undefined` і поводився б непередбачувано. Зливаємо поле-в-поле.
+  merged.tracker = { ...DEFAULT_SETTINGS.tracker, ...(stored.tracker ?? {}) };
   // §3b: adSources БЕЗ code-fallback. Порожній список = помилка конфігурації
   // (метрики реклами видимо занулюються, а не тихо рахуються «якимось» списком).
   if (!Array.isArray(merged.adSources) || merged.adSources.length === 0) {
@@ -83,6 +132,22 @@ settingsRouter.put("/", async (req, res) => {
     ratesFallbackPartPerKm: clampInt(body.ratesFallbackPartPerKm, 1, 500, current.ratesFallbackPartPerKm),
     // 0 = вимкнути перевірку зовсім; стеля 1 млн, щоб помилковий ввід не заблокував подачу.
     planMinPerManager: clampInt(body.planMinPerManager, 0, 1_000_000, current.planMinPerManager),
+    // ⏱ Трекер: кожне поле клампиться окремо, а не приймається як є — конфіг їде на
+    // 38 машин і поганим значенням (heartbeat раз на секунду) можна покласти сервер.
+    // Відсутнє поле = лишається поточне, тому часткове збереження безпечне.
+    tracker: {
+      idleThresholdSec: clampInt(body.tracker?.idleThresholdSec, 30, 3600, current.tracker.idleThresholdSec),
+      heartbeatIntervalSec: clampInt(body.tracker?.heartbeatIntervalSec, 15, 900, current.tracker.heartbeatIntervalSec),
+      trackApps: typeof body.tracker?.trackApps === "boolean" ? body.tracker.trackApps : current.tracker.trackApps,
+      collectHost: typeof body.tracker?.collectHost === "boolean" ? body.tracker.collectHost : current.tracker.collectHost,
+      sendTitles: typeof body.tracker?.sendTitles === "boolean" ? body.tracker.sendTitles : current.tracker.sendTitles,
+      coalesceSameSource: typeof body.tracker?.coalesceSameSource === "boolean"
+        ? body.tracker.coalesceSameSource : current.tracker.coalesceSameSource,
+      // Стеля 1 год: довший «інтервал» — це вже не спостереження, а здогад про те,
+      // що відбувалось між двома точками.
+      maxIntervalSec: clampInt(body.tracker?.maxIntervalSec, 60, 3600, current.tracker.maxIntervalSec),
+      maxClockSkewSec: clampInt(body.tracker?.maxClockSkewSec, 60, 24 * 3600, current.tracker.maxClockSkewSec),
+    },
     adSources: Array.isArray(body.adSources)
       ? [...new Set((body.adSources as unknown[]).map((s) => String(s).trim()).filter((s) => s.length > 0))]
       : current.adSources,
@@ -135,7 +200,7 @@ settingsRouter.get("/users", async (req, res) => {
             u.role AS synced_role, u.role_override,
             COALESCE(u.role_override, u.role) AS role_effective,
             u.is_active, u.deactivated_at, u.deactivated_reason,
-            (u.manager_id IS NOT NULL) AS crm_linked,
+            (u.manager_id IS NOT NULL) AS crm_linked, u.tracker_enabled,
             t.name AS team_name
      FROM users u
      LEFT JOIN managers m ON m.id = u.manager_id
@@ -253,12 +318,20 @@ settingsRouter.patch("/users/:id", async (req, res) => {
     params.push(to); sets.push(`full_name = $${params.length}`);
     renamed = { from: c.full_name, to };
   }
+  // ⏱ Трекер: дозвіл на збір часу з машини людини. Досі вмикався ЛИШЕ разовою
+  // міграцією в schema.sql — тобто зняти його з конкретної людини було неможливо
+  // інакше, ніж SQL-ом по проду. Для прапорця, що вмикає спостереження за людиною,
+  // це неправильно за побудовою: вимкнення має бути таким же простим, як вмикання.
+  if (typeof req.body.trackerEnabled === "boolean") {
+    params.push(req.body.trackerEnabled); sets.push(`tracker_enabled = $${params.length}`);
+  }
   if (sets.length === 0) return res.json({ ok: true });
   params.push(id);
   await pool.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
 
   const action = typeof req.body.isActive === "boolean" && !newActive ? "user.deactivate" : (renamed ? "user.rename" : "user.update");
-  await writeAudit({ ...audit(req), action, targetType: "user", targetId: String(id), targetLabel: c.email, details: { role_override: newOverride, is_active: newActive, ...(renamed ? { renamed } : {}) } });
+  await writeAudit({ ...audit(req), action, targetType: "user", targetId: String(id), targetLabel: c.email, details: { role_override: newOverride, is_active: newActive, ...(renamed ? { renamed } : {}),
+      ...(typeof req.body.trackerEnabled === "boolean" ? { tracker_enabled: req.body.trackerEnabled } : {}) } });
   res.json({ ok: true });
 });
 
