@@ -2052,12 +2052,16 @@ dashboardRouter.get("/teams", async (req, res) => {
   // КРОК 2: гроші з core/money.ts (анкер по даті входу + дедуп). revenue = received
   // (етап 9∪10); avgCheck — success-only (142). Знімки прибрано.
   const teamScope: money.MoneyScope = { from, to };
-  const [recvTeamAgg, sucTeamAgg, recvMgrAgg, sucMgrAgg] = await Promise.all([
-    money.receivedByTeam(teamScope),
+  // 🔴 ПРАВИЛО ВЛАСНИКА (02.08.2026): «Рейтинг команд» ОЦІНЮЄ роботу, а не показує
+  // стан каси, тож і виручка, і угоди тут — ① «успішно реалізовано». Було: revenue/deals
+  // з `receivedBy*` (②), а dispatched/successRev з `successBy*` — тобто в ОДНОМУ рядку
+  // рейтингу сусідили дві різні множини угод, і «середній чек» ділив ② на ①.
+  // Тепер обидві пари з одного джерела, тож чек ділить те саме на те саме.
+  const [sucTeamAgg, sucMgrAgg] = await Promise.all([
     money.successByTeam(teamScope),
-    money.receivedByMgr(teamScope),
     money.successByMgr(teamScope),
   ]);
+  const recvTeamAgg = sucTeamAgg, recvMgrAgg = sucMgrAgg;
   const lc: string[] = [];
   const lp: unknown[] = [];
   if (from) { lp.push(from); lc.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${lp.length}`); }
@@ -5420,11 +5424,13 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   const daysInMon = new Date(dyY, dyM, 0).getDate();
   const mEndD = `${mStartD.slice(0, 7)}-${String(daysInMon).padStart(2, "0")}`;
   const dayScope = { from: mStartD, to: mEndD, managerId, teamId };
-  const [leadsDay, createdDay, dispDay, recvDay, expDayAll, ppd] = await Promise.all([
+  // `recvDay` більше немає окремим запитом: поденне «Отримано» тепер ① — те саме,
+  // що `dispDay`. Тримати два запити, які після переходу дають однакове число,
+  // означало б лишити місце, де вони колись знову розійдуться.
+  const [leadsDay, createdDay, dispDay, expDayAll, ppd] = await Promise.all([
     metrics.leadsTakenByBucket(dayScope, "day", true),
     metrics.createdByBucket(dayScope, "day"),
     money.successByBucket(dayScope, "day"),
-    money.receivedByBucket(dayScope, "day"),
     metrics.expectedByPlannedBucket({ managerId, teamId }, "day"),
     plans.planPerWorkingDay({ managerId, teamId }, mStartD),
   ]);
@@ -5443,7 +5449,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   }
   for (const r of createdDay) { const e = dmap.get(r.bucket); if (e) e.created += r.deals; }
   for (const r of dispDay) { const e = dmap.get(r.bucket); if (e) { e.dispatched += r.deals; e.dispatchedSum += r.revenue; } }
-  for (const r of recvDay) { const e = dmap.get(r.bucket); if (e) e.received += r.revenue; }
+  for (const r of dispDay) { const e = dmap.get(r.bucket); if (e) e.received += r.revenue; }
   const daily = [...dmap.values()];
   // Очікування по дню (планова дата) — лише цей місяць (для потижневого згортання блоками
   // 1-7/8-14/… як у weekly). Місяць this/next лишається у current.expected (не дублюємо).
@@ -5481,7 +5487,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   let teams: { teamId: number; teamName: string; plan: number; fact: number; pctPlan: number | null; remaining: number; expectedThisMonth: number; carryover: { amount: number; deals: number }; flowCur: number | null; flowPrev: number | null }[] | undefined;
   if (level === "department") {
     const [facts, plansRes, namesRes, flowsCur, flowsPrev] = await Promise.all([
-      money.receivedByTeam({ from, to }),
+      money.successByTeam({ from, to }),                 // ① результат команди
       pool.query<{ team_id: number; s: string }>(
         // План команди = УСІ плани її членів (вкл. деактивованих) → ціль команди повна;
         // деактивований плану не втрачає, він перерозподіляється на активних (нижче).
@@ -5521,11 +5527,14 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   if (level !== "manager") {
     const mStart = monthStartOf(from);
     const [mFacts, planRes, teamFacts, mFlowCur, mFlowPrev] = await Promise.all([
-      money.receivedByMgr({ from, to, managerId, teamId }),
+      // 🔴 ПРАВИЛО ВЛАСНИКА (02.08.2026): факт менеджера/команди — ① «успішно
+      // реалізовано». Було `receivedByMgr`/`receivedByTeam` (②): план/факт і %
+      // ОЦІНЮЮТЬ роботу, а частково оплачена угода переїздить у наступний місяць.
+      money.successByMgr({ from, to, managerId, teamId }),
       // 🔴 План на менеджера (базовий + розподіл звільнених) — ЄДИНЕ ЯДРО core/plans.
       // Та сама функція, що й /teams drill → числа світлофора й /teams збігаються.
       plans.managerPlan({ teamId, month: mStart }),
-      money.receivedByTeam({ from, to, teamId }),
+      money.successByTeam({ from, to, teamId }),
       compareFrom && compareTo ? money.successByMgr({ from, to, managerId, teamId }) : Promise.resolve(null),
       compareFrom && compareTo ? money.successByMgr({ from: compareFrom, to: compareTo, managerId, teamId }) : Promise.resolve(null),
     ]);
