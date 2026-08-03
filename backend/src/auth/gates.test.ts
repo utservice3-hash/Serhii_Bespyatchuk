@@ -7,7 +7,7 @@ import { tabsForPath, hasTabBoundary } from "./routeTab.js";
 import { MOUNTS } from "./routeInventory.js";
 import {
   ROUTE_BOUNDARY_EXEMPTIONS, CORE_BYPASS_EXEMPTIONS, ROW_SPREAD_EXEMPTIONS,
-  CREATED_COHORT_EXEMPTIONS, classifySql, METRIC_SQL, exemptionsWithoutReason,
+  CREATED_COHORT_EXEMPTIONS, CLIENT_KEY_WRITERS, classifySql, METRIC_SQL, exemptionsWithoutReason,
 } from "./gates.js";
 
 /**
@@ -161,6 +161,77 @@ test("#17d ДЗЕРКАЛО: детектор РОЗРІЗНЯЄ три клас
     "lifetime", "🔴 lifetime-предикат прийнято за метрику — ворота почервоніли б на сегментах");
   assert.ok(METRIC_SQL.test("SELECT SUM(d.price) FROM deals WHERE status_id = 142"),
     "🔴 базова грошова ознака не спрацьовує — класифікувати немає чого");
+});
+
+/**
+ * Чи ПИШЕ цей SQL-блок у `deals.client_key`. Дивимось у МЕЖАХ ОДНОГО блоку —
+ * перша версія брала вікно в 400 символів по файлу й перестрибувала з `UPDATE deals`
+ * на `client_key =` СУСІДНЬОГО запиту (`UPDATE receivables …`). Хибне спрацювання
+ * на чесному файлі гірше за пропуск: його швидко навчаться глушити.
+ */
+export function writesDealsClientKey(q: string): boolean {
+  const isDeals = /UPDATE\s+deals\b|INSERT\s+INTO\s+deals\s*\(/i.test(q);
+  if (!isDeals) return false;
+  // `client_key_raw` — саме те, що ми ВИМАГАЄМО писати, тож воно не порушення.
+  // `\b` між `client_key` і `_raw` немає (підкреслення — символ слова), але
+  // прибираємо явно, щоб намір читався без знання регулярок.
+  const withoutRaw = q.replace(/client_key_raw/gi, "«raw»");
+  return /\bclient_key\s*=/.test(withoutRaw)
+      || /INSERT\s+INTO\s+deals\s*\([^)]*\bclient_key\b/i.test(withoutRaw);
+}
+
+test("#17h ВОРОТА · у deals.client_key пише лише перерахунок", () => {
+  // 🔴 Канонічний ключ — ПОХІДНА від `client_key_raw` + реєстру псевдонімів. Запис
+  // сирого значення напряму в `client_key` мовчки скасовує аліас для цієї угоди —
+  // і саме для тих угод, які синк оновлює найчастіше.
+  const SRC = path.resolve(DIST, "..", "src");
+  const files: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith(".ts") && !e.name.includes(".test.")) files.push(p);
+    }
+  };
+  walk(SRC);
+  const allowed = new Set(CLIENT_KEY_WRITERS.map((w) => w.file));
+  const offenders: string[] = [];
+  let scanned = 0;
+  for (const f of files) {
+    const rel = f.slice(SRC.length + 1).replace(/\\/g, "/");
+    const src = strip(readFileSync(f, "utf8"));
+    for (const { q } of sqlBlocks(src)) {
+      if (!writesDealsClientKey(q)) continue;
+      scanned++;
+      if (allowed.has(rel)) continue;
+      offenders.push(`${rel} — ${q.replace(/\s+/g, " ").slice(0, 100)}`);
+    }
+  }
+  assert.ok(scanned > 0,
+    "жодного запису в deals.client_key не знайдено — детектор осліп, а не код чистий");
+  assert.deepEqual(offenders, [],
+    "🔴 ЗАПИС У deals.client_key ПОВЗ ПЕРЕРАХУНОК. Канонічний ключ — похідна від "
+    + "`client_key_raw` і реєстру псевдонімів; пряме присвоєння мовчки скасує аліас "
+    + "для цих угод. Пиши в `client_key_raw`, а канонічний лиши джобі "
+    + "`recomputeClientKeys` — або назви місце в CLIENT_KEY_WRITERS з причиною:\n  "
+    + offenders.join("\n  "));
+});
+
+test("#17i ДЗЕРКАЛО: детектор запису в client_key ВМІЄ спрацювати", () => {
+  // Без пари #17h зеленів би й тоді, коли детектор не бачить узагалі нічого.
+  assert.ok(writesDealsClientKey("UPDATE deals SET client_name = $2, client_key = $3 WHERE kommo_id = $1"),
+    "🔴 не бачить прямого UPDATE — ворота були б декорацією");
+  assert.ok(writesDealsClientKey("INSERT INTO deals (kommo_id, client_key) VALUES ($1,$2)"),
+    "🔴 не бачить INSERT зі стовпцем client_key");
+  assert.ok(!writesDealsClientKey("SELECT client_key FROM deals WHERE manager_id = $1"),
+    "🔴 спрацьовує на ЧИТАННІ — ворота почервоніли б на ~359 законних місцях");
+  assert.ok(!writesDealsClientKey("UPDATE deals SET client_key_raw = $3 WHERE kommo_id = $1"),
+    "🔴 спрацьовує на записі в RAW — а це саме те, що ми вимагаємо робити");
+  // 🔴 Регресія, яку я сам і зробив: вікно по файлу перестрибувало з `UPDATE deals`
+  // на `client_key =` СУСІДНЬОГО запиту по іншій таблиці.
+  assert.ok(!writesDealsClientKey("UPDATE deals SET client_key_raw = replace(client_key_raw,' ','')"),
+    "🔴 нормалізація сирого ключа прийнята за запис канонічного");
+  assert.ok(CLIENT_KEY_WRITERS.length >= 1, "реєстр дозволених порожній — перевірка нічого не робить");
 });
 
 // ─────────────────────── B4 · рядок БД не віддається спредом ───────────────────────

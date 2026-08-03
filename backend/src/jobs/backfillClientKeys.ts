@@ -119,7 +119,12 @@ async function backfillClientKeyById(): Promise<void> {
       const { name, key } = resolveClientKey(deal, companyNameById, contactById);
       if (!key) continue;
       const result = await pool.query(
-        `UPDATE deals SET client_name = $2, client_key = $3 WHERE kommo_id = $1`,
+        // 🔴 Пише СИРИЙ ключ; канонічний — похідна (аліас або той самий сирий).
+        // Писати в client_key напряму не можна: це затерло б чинний аліас.
+        `UPDATE deals SET client_name = $2, client_key_raw = $3,
+                client_key = COALESCE((SELECT a.canonical_key FROM client_key_alias a
+                       WHERE a.alias_key = $3 AND a.revoked_at IS NULL), $3)
+           WHERE kommo_id = $1`,
         [deal.id, name, key]
       );
       updated += result.rowCount ?? 0;
@@ -184,7 +189,10 @@ export async function backfillClientKeys(): Promise<void> {
         }
         const { name, key } = resolveClientKey(deal, companyNameById, contactById);
         const result = await pool.query(
-          `UPDATE deals SET client_name = $2, client_key = $3,
+          // те саме: сирий — від Kommo, канонічний — з реєстру псевдонімів.
+          `UPDATE deals SET client_name = $2, client_key_raw = $3,
+                  client_key = COALESCE((SELECT a.canonical_key FROM client_key_alias a
+                       WHERE a.alias_key = $3 AND a.revoked_at IS NULL), $3),
                   utm_source = $4, lead_generator = $5, client_source = $6, lead_channel = $7
              WHERE kommo_id = $1`,
           [deal.id, name, key, src.utmSource, src.leadGenerator, src.clientSource, src.channel]

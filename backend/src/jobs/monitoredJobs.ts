@@ -20,5 +20,6 @@ export const MONITORED_JOBS: { name: string; everyMin: number; why: string }[] =
   { name: "recomputeStatistics", everyMin: 60, why: "розділ «Статистики (відділи)»" },
   { name: "syncAdBudget", everyMin: 60, why: "рекламний бюджет → CPL/ROMI" },
   { name: "syncRingostatCalls", everyMin: 60, why: "дзвінки → «остання розмова»" },
+  { name: "recomputeClientKeys", everyMin: 60, why: "канонічний client_key: мовчання = аліаси застосовані наполовину, клієнт знову розколотий" },
   { name: "freshnessWatch", everyMin: 60, why: "сторож вотермарків: якщо мовчить він, мовчить і решта нагляду" },
 ];

@@ -17,8 +17,10 @@ export async function backfillClientKey(): Promise<void> {
 
     // deals — no unique constraint on client_key (PK is kommo_id), bulk-safe.
     const d = await client.query(
-      `UPDATE deals SET client_key = replace(client_key, ' ', '')
-        WHERE client_key IS NOT NULL AND position(' ' in client_key) > 0`
+      // Нормалізація пробілів — операція над СИРИМ ключем. Канонічний після цього
+      // перераховує `recomputeClientKeys` (він і зведе новий сирий з аліасами).
+      `UPDATE deals SET client_key_raw = replace(client_key_raw, ' ', '')
+        WHERE client_key_raw IS NOT NULL AND position(' ' in client_key_raw) > 0`
     );
 
     // receivables / receivable_invoices — id PK, bulk-safe (also re-synced later).

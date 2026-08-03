@@ -531,10 +531,16 @@ export async function upsertDeal(
     `INSERT INTO deals (
          kommo_id, name, manager_id, kommo_user_id, pipeline_id, status_id,
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
-         client_name, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
+         client_name, client_key_raw, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
          unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus, reject_reason,
          request_type, sales_channel
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12,
+                 -- 🔴 КАНОНІЧНИЙ КЛЮЧ РАХУЄМО ТУТ, а не пишемо сирий. Інакше синк при
+                 -- наступному оновленні угоди ЗАТЕР би канонічний ключ сирим, і аліас
+                 -- тихо перестав би діяти — рівно для тих угод, що змінюються найчастіше.
+                 COALESCE((SELECT a.canonical_key FROM client_key_alias a
+                            WHERE a.alias_key = $12 AND a.revoked_at IS NULL), $12),
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -545,6 +551,9 @@ export async function upsertDeal(
          closed_at_kommo = EXCLUDED.closed_at_kommo,
          synced_at = now(),
          client_name = EXCLUDED.client_name,
+         client_key_raw = EXCLUDED.client_key_raw,
+         -- те саме на UPDATE: канонічний перераховується з нового сирого, а не
+         -- перезаписується ним.
          client_key = EXCLUDED.client_key,
          utm_source = EXCLUDED.utm_source,
          lead_generator = EXCLUDED.lead_generator,

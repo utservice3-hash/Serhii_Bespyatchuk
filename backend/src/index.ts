@@ -54,6 +54,7 @@ import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
+import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
@@ -405,6 +406,14 @@ cron.schedule("25 * * * *", () => {
   void runJob("recomputeStatistics", () => recomputeStatistics());
 });
 
+// 🔑 Канонічний client_key = raw + активні псевдоніми. Щогодини (:05) + старт.
+// Ідемпотентна: без змін у реєстрі не чіпає жодного рядка. Під наглядом свідомо —
+// джоба, що мовчки не відпрацювала, лишає аліаси застосованими НАПОЛОВИНУ, і
+// «постійний клієнт» знову розколюється при цілком зеленому вигляді.
+cron.schedule("5 * * * *", () => {
+  void runJob("recomputeClientKeys", () => recomputeClientKeys());
+});
+
 // «Кількість дзвінків» із Ringostat API (відділ «Менеджери з продажу» → sales.calls).
 // Щогодини (:35) + старт. Порожній Auth-key → джоба сама себе пропускає.
 cron.schedule("35 * * * *", () => {
@@ -554,6 +563,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["createDutyReminders", () => createDutyReminders()],
   ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],
   ["recomputeStatistics", () => recomputeStatistics()],
+  ["recomputeClientKeys", () => recomputeClientKeys()],
   ["syncReceivables", () => syncReceivables()],
   ["syncLeadgenRegistry", () => syncLeadgenRegistry()],
   ["syncFirstTouch", () => syncFirstTouch()],
