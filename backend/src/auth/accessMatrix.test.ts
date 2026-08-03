@@ -41,6 +41,13 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/settings/users/:id/reactivate": "manage_users — те саме",
   "POST /api/settings/users/:id/reset-password": "reset_passwords — окреме право, лише СЕО/ОД/адмін",
   "POST /api/settings/users/provision": "manage_users — те саме",
+  // ФАЗА B. `merge_clients` — право КВП та Опер. директора (рішення власника
+  // 03.08.2026: «лише КВП і ОД, за ПРАВОМ»). admin його НЕ має свідомо; вмикається
+  // тумблером у «Налаштуваннях → Ролі», бо admin має manage_users. Записано тут
+  // саме тому, що інакше це виглядало б як зламана проба, а не як політика.
+  "POST /api/dashboard/client-merge": "merge_clients — право КВП/ОД; admin його не має (рішення власника)",
+  "POST /api/dashboard/client-merge/revoke": "merge_clients — те саме",
+  "POST /api/dashboard/client-manager": "merge_clients — те саме",
 };
 
 const GHOST = "__zzz_neisnuyucha_cil_9999__";

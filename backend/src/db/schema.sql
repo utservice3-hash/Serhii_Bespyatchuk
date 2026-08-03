@@ -342,6 +342,54 @@ CREATE TABLE IF NOT EXISTS loyalty_overrides (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ФАЗА B · РЕАКТИВАЦІЯ ТА ВІДПОВІДАЛЬНИЙ МЕНЕДЖЕР
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 🔴 СТАН КЛІЄНТА НЕ ЗБЕРІГАЄТЬСЯ. Постійний → сплячий (60 дн.) → втрачений
+-- (180 дн.) → повернений — усе це ПОХІДНА від дат замовлень, і рахується на льоту.
+-- Колонки `state` тут навмисно НЕМАЄ: збережений стан треба комусь оновлювати, а
+-- джоба, що тихо не відпрацювала, лишила б «сплячого» клієнта, який учора замовив.
+-- Той самий клас, що знімки у грошах — вони мутували минулі місяці.
+--
+-- Руками ставиться РІВНО ОДНЕ: позначка «сезонний». Її з дат вивести неможливо
+-- (зерно, опалення, ремонти), тому це рішення людини, а не обчислення.
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal_note TEXT;
+-- Місяць, З ЯКОГО діє нове закріплення менеджера. Правило власника: поточний
+-- місяць лишається за старим (план і факт не рухаються посеред місяця), новий
+-- планує з наступного. NULL = діє одразу (закріплення, зроблені до цього правила).
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS pinned_from_month DATE;
+
+-- Історія передач клієнта між менеджерами. Kommo клієнтського відповідального НЕ
+-- веде взагалі, тож це єдине джерело «хто вів клієнта і з якого місяця».
+CREATE TABLE IF NOT EXISTS client_manager_history (
+  id           SERIAL PRIMARY KEY,
+  client_key   TEXT NOT NULL,
+  from_manager_id INTEGER REFERENCES managers(id),
+  to_manager_id   INTEGER NOT NULL REFERENCES managers(id),
+  effective_from  DATE NOT NULL,       -- 1-ше число місяця, з якого діє
+  reason       TEXT,
+  changed_by   INTEGER REFERENCES users(id),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cmh_client ON client_manager_history(client_key, effective_from DESC);
+
+-- Задача реактивації прив'язана до КЛІЄНТА і НЕ закривається без причини.
+-- 🔴 Чому причина обов'язкова саме в БД, а не лише у формі: «закрив і забув» —
+-- це втрата єдиних даних про те, ЧОМУ клієнт не повернувся. Без них список
+-- реактивації через півроку знову покаже тих самих людей, і ніхто не згадає,
+-- що з ними вже говорили і чим це скінчилось.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS client_key TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS close_reason TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_tasks_client_key ON tasks(client_key) WHERE client_key IS NOT NULL;
+-- Перелік причин живе в коді (`core/reactivation.ts`), а CHECK тут тримає межу:
+-- порожня причина у закритій реактиваційній задачі неможлива за побудовою.
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_reactivation_close_reason;
+ALTER TABLE tasks ADD CONSTRAINT tasks_reactivation_close_reason CHECK (
+  task_type <> 'reactivation_client' OR status <> 'done' OR length(btrim(coalesce(close_reason,''))) > 0
+);
+
 -- Monthly goals / objectives a team lead (or КВП) sets for a month — a
 -- high-level goals tracker separate from the numeric plans. Team-lead → own
 -- team (team_id), admin → team_id NULL (department-wide) or a chosen team.
@@ -1162,6 +1210,21 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT; -- ПІБ для РУ
 
 -- Паролі → хеш-онлі: гасимо плейнтекст (колонку лишаємо, більше не наповнюємо/не показуємо).
 UPDATE users SET initial_password = NULL WHERE initial_password IS NOT NULL;
+
+-- ПРАВО «злиття клієнтів і призначення відповідального» — КВП та Опер. директор
+-- (рішення власника 03.08.2026). Саме ПРАВО, не хардкод ролі в роуті: додати ще
+-- одну роль = запис у `roles`, а не правка коду. Та сама модель, що admin_scope.
+--
+-- ⚠️ Свідомо НЕ видано `admin`: власник назвав рівно дві ролі. Якщо це виявиться
+-- недоглядом — тумблер вмикається в «Налаштуваннях → Ролі» одним кліком, бо
+-- admin має `manage_users`. Мовчки розширювати доступ ми не будемо.
+--
+-- 🔴 СТОЇТЬ САМЕ ТУТ, ПІСЛЯ СИДУ РОЛЕЙ. Перша версія стояла на 400 рядків вище —
+-- на живій базі проходила (таблиця вже є), а на ПОРОЖНІЙ міграція падала з
+-- «relation "roles" does not exist». Той самий клас, що GRANT перед CREATE TABLE;
+-- спіймав #8 (схема з нуля), і саме заради цього він і піднімає базу щоразу.
+UPDATE roles SET permissions = permissions || '{"merge_clients": true}'::jsonb
+ WHERE key IN ('kvp', 'opdir') AND NOT (permissions ? 'merge_clients');
 
 CREATE TABLE IF NOT EXISTS access_audit (
   id            SERIAL PRIMARY KEY,

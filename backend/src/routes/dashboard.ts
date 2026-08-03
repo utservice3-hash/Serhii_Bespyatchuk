@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { requireAuth } from "../auth/middleware.js";
-import { roleHasTab, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
+import { requireAuth, requirePerm } from "../auth/middleware.js";
+import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
 const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
@@ -27,6 +27,8 @@ import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
 import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanRules.js";
+import * as reactivation from "../core/reactivation.js";
+import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import * as metrics from "../core/metrics.js";
 import * as plans from "../core/plans.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
@@ -4089,6 +4091,243 @@ dashboardRouter.post("/client-comments", async (req, res) => {
     `INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3) RETURNING id, created_at`,
     [clientKey, auth.userId, body.slice(0, 2000)]);
   res.json({ id: r.rows[0].id, createdAt: r.rows[0].created_at });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ФАЗА B · РЕАКТИВАЦІЯ · ОБʼЄДНАННЯ КЛІЄНТІВ · ВІДПОВІДАЛЬНИЙ МЕНЕДЖЕР
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Список кандидатів на реактивацію + плитки. Стани рахуються з дат, не з тумблера. */
+dashboardRouter.get("/reactivation-list", async (req, res) => {
+  const auth = req.auth!;
+  let scope: reactivation.ReactivationScope = {};
+  if (auth.role === "manager") scope = { managerId: auth.managerId ?? -1 };
+  else if (auth.role === "team_lead") scope = { teamId: auth.teamId ?? -1 };
+  else if (req.query.managerId) scope = { managerId: Number(req.query.managerId) };
+  else if (req.query.teamId) scope = { teamId: Number(req.query.teamId) };
+
+  const [clients, returned30] = await Promise.all([
+    reactivation.clientStates(scope),
+    reactivation.returnedAfterTask(30, scope),
+  ]);
+
+  // Ранжування за ЦІННІСТЮ (ядро), сезонні — ВНИЗ списку і без задач.
+  const ranked = [...clients].sort((a, b) => {
+    if (a.seasonal !== b.seasonal) return a.seasonal ? 1 : -1;
+    return b.value - a.value;
+  });
+  const byState = (st: reactivation.ClientState) => ranked.filter((c) => c.state === st && !c.seasonal);
+  const inWork = ranked.filter((c) => c.taskId != null && c.taskStatus !== "done");
+
+  res.json({
+    clients: ranked,
+    closeReasons: reactivation.CLOSE_REASONS,
+    thresholds: { sleepingDays: reactivation.SLEEPING_DAYS, lostDays: reactivation.LOST_DAYS },
+    tiles: {
+      sleeping: byState("sleeping").length,
+      sleepingPotential: Math.round(byState("sleeping").reduce((s2, c) => s2 + c.lifetimeRevenue, 0)),
+      lost: byState("lost").length,
+      seasonal: ranked.filter((c) => c.seasonal).length,
+      inWork: inWork.length,
+      // «Повернено за 30 дн.» — метрика РЕЗУЛЬТАТУ: клієнт із реактиваційною
+      // задачею, у якого ПІСЛЯ її створення зʼявилась оплата. Не «замовив у
+      // періоді» — інакше сюди потрапили б ті, хто й не йшов.
+      returned30: returned30.clients,
+      returned30Revenue: Math.round(returned30.revenue),
+    },
+    canAssign: roleHasPerm(auth.roleKey, "merge_clients"),
+  });
+});
+
+/** Позначка «сезонний» — єдине, що ставиться руками (з дат її вивести неможливо). */
+dashboardRouter.post("/client-seasonal", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const seasonal = req.body?.seasonal === true;
+  const note = String(req.body?.note ?? "").trim().slice(0, 300) || null;
+  await pool.query(
+    `INSERT INTO loyalty_overrides (client_key, seasonal, seasonal_note, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4, now())
+     ON CONFLICT (client_key) DO UPDATE SET seasonal = EXCLUDED.seasonal,
+       seasonal_note = EXCLUDED.seasonal_note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, seasonal, note, auth.userId]);
+  res.json({ ok: true, seasonal });
+});
+
+// ───────────────────────── ОБʼЄДНАННЯ КЛІЄНТІВ ─────────────────────────
+/**
+ * 🔴 UI ПОВЕРХ `client_key_alias` — механіка вже на проді (178 псевдонімів,
+ * 151 клієнт), нічого нового в даних не вигадуємо. Тут лише передпоказ,
+ * підтвердження й журнал.
+ *
+ * ⚠️ КЛАС B НЕ ПІДКАЗУЄМО: контакт-людина при компанії, гомогліфи, телефон, що
+ * веде до ДВОХ фірм. Транзитивне склеювання заборонене тригером у БД; підказувати
+ * те, що БД усе одно відкине, означало б вчити людину неправильному.
+ */
+dashboardRouter.get("/client-merge/preview", requirePerm("merge_clients"), async (req, res) => {
+  const alias = String(req.query.alias ?? "").trim();
+  const canonical = String(req.query.canonical ?? "").trim();
+  if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
+  if (alias === canonical) return res.status(400).json({ error: "Ключі однакові" });
+
+  const side = async (key: string) => (await pool.query<{ orders: string; revenue: string; name: string | null; last_paid: string | null }>(
+    `SELECT COUNT(*)::int AS orders, COALESCE(SUM(d.price),0) AS revenue,
+            (array_agg(d.client_name ORDER BY d.closed_at_kommo DESC NULLS LAST))[1] AS name,
+            to_char(MAX(d.closed_at_kommo) AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE psm.funnel_stage = 'paid' AND d.client_key = $1`, [key])).rows[0];
+
+  const [a, c, chain, plans, dealsToMove] = await Promise.all([
+    side(alias), side(canonical),
+    // Ланцюжок заборонений тригером; попереджаємо ДО спроби, щоб людина бачила
+    // причину, а не голий 500 з бази.
+    pool.query<{ who: string }>(
+      `SELECT 'canonical_is_alias' AS who FROM client_key_alias WHERE revoked_at IS NULL AND alias_key = $2
+       UNION ALL
+       SELECT 'alias_is_canonical' FROM client_key_alias WHERE revoked_at IS NULL AND canonical_key = $1`,
+      [alias, canonical]),
+    pool.query<{ ck: string; ym: string; plan: string; status: string }>(
+      `SELECT client_key AS ck, to_char(month,'YYYY-MM') AS ym, plan, status
+         FROM repeat_client_plans WHERE client_key IN ($1,$2) ORDER BY month`, [alias, canonical]),
+    pool.query<{ n: string }>(`SELECT COUNT(*) AS n FROM deals WHERE client_key_raw = $1`, [alias]),
+  ]);
+
+  const aOrders = Number(a?.orders ?? 0), cOrders = Number(c?.orders ?? 0);
+  const aRev = Number(a?.revenue ?? 0), cRev = Number(c?.revenue ?? 0);
+  const planRows = plans.rows.map((p) => ({ side: p.ck === alias ? "alias" : "canonical", month: p.ym, plan: Number(p.plan), status: p.status }));
+  const conflictMonths = planRows
+    .filter((p) => p.side === "alias")
+    .filter((p) => planRows.some((q) => q.side === "canonical" && q.month === p.month))
+    .map((p) => p.month);
+
+  res.json({
+    alias: { key: alias, name: a?.name ?? null, orders: aOrders, revenue: Math.round(aRev), lastPaid: a?.last_paid ?? null },
+    canonical: { key: canonical, name: c?.name ?? null, orders: cOrders, revenue: Math.round(cRev), lastPaid: c?.last_paid ?? null },
+    after: { orders: aOrders + cOrders, revenue: Math.round(aRev + cRev), regular: aOrders + cOrders >= 2 },
+    dealsToMove: Number(dealsToMove.rows[0]?.n ?? 0),
+    chainBlocked: chain.rows.map((x) => x.who),
+    // 🔴 Плани НЕ переносяться перерахунком (він рухає лише deals.client_key).
+    // Показуємо їх окремо: рядок на злитому ключі осиротіє й зникне з екрана.
+    plans: planRows,
+    planConflictMonths: conflictMonths,
+    reversible: "Відкіт = revoked_at + перерахунок; client_key_raw зберігається, бекап не потрібен",
+  });
+});
+
+dashboardRouter.post("/client-merge", requirePerm("merge_clients"), async (req, res) => {
+  const auth = req.auth!;
+  const alias = String(req.body?.alias ?? "").trim();
+  const canonical = String(req.body?.canonical ?? "").trim();
+  const reason = String(req.body?.reason ?? "").trim();
+  if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
+  if (!reason) return res.status(400).json({ error: "Причина обовʼязкова — реєстр без причини стає смітником" });
+  try {
+    await pool.query(
+      `INSERT INTO client_key_alias (alias_key, canonical_key, reason, evidence, approved_by)
+       VALUES ($1,$2,$3,$4::jsonb,$5)`,
+      [alias, canonical, reason.slice(0, 300),
+       JSON.stringify({ source: "ui", approvedAt: new Date().toISOString().slice(0, 10) }), auth.userId]);
+  } catch (e) {
+    const msg = String((e as Error).message ?? e);
+    if (/ланцюжок заборонено/.test(msg)) return res.status(409).json({ error: msg });
+    if (/duplicate key/.test(msg)) return res.status(409).json({ error: "Такий псевдонім уже є в реєстрі" });
+    throw e;
+  }
+  const r = await recomputeClientKeys();
+  res.json({ ok: true, recomputed: r.changed });
+});
+
+dashboardRouter.post("/client-merge/revoke", requirePerm("merge_clients"), async (req, res) => {
+  const alias = String(req.body?.alias ?? "").trim();
+  if (!alias) return res.status(400).json({ error: "alias обовʼязковий" });
+  const upd = await pool.query(
+    `UPDATE client_key_alias SET revoked_at = now() WHERE alias_key = $1 AND revoked_at IS NULL`, [alias]);
+  if (!upd.rowCount) return res.status(409).json({ error: "Активного псевдоніма з таким ключем немає" });
+  const r = await recomputeClientKeys();
+  res.json({ ok: true, recomputed: r.changed });
+});
+
+dashboardRouter.get("/client-merge/journal", requirePerm("merge_clients"), async (_req, res) => {
+  const r = await pool.query<{ alias_key: string; canonical_key: string; reason: string; created_at: string;
+    revoked_at: string | null; approved: string | null }>(
+    `SELECT a.alias_key, a.canonical_key, a.reason,
+            to_char(a.created_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS created_at,
+            to_char(a.revoked_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS revoked_at,
+            COALESCE(u.full_name, u.email) AS approved
+       FROM client_key_alias a LEFT JOIN users u ON u.id = a.approved_by
+      ORDER BY a.created_at DESC LIMIT 200`);
+  res.json(r.rows.map((x) => ({
+    aliasKey: x.alias_key, canonicalKey: x.canonical_key, reason: x.reason,
+    createdAt: x.created_at, revokedAt: x.revoked_at, approvedBy: x.approved,
+  })));
+});
+
+// ───────────────────────── ВІДПОВІДАЛЬНИЙ МЕНЕДЖЕР ─────────────────────────
+/**
+ * 🔴 ПРАВИЛО ВЛАСНИКА: поточний місяць лишається за СТАРИМ менеджером, новий
+ * планує з наступного. Інакше план/факт/світлофор посеред місяця поїхали б у
+ * двох людей одразу, і жоден із них у цьому не винен.
+ *
+ * Механізм не новий: `loyalty_overrides.pinned_manager_id` існує давно. Нове —
+ * ТРИ правила навколо нього: межа місяця, історія передач і бейдж розбіжності
+ * з CRM (нижче, у списку клієнтів).
+ */
+dashboardRouter.post("/client-manager", requirePerm("merge_clients"), async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const toManagerId = Number(req.body?.managerId);
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || null;
+  if (!clientKey || !Number.isFinite(toManagerId)) return res.status(400).json({ error: "clientKey і managerId обовʼязкові" });
+
+  const chk = await pool.query<{ id: number }>(`SELECT id FROM managers WHERE id = $1 AND is_active`, [toManagerId]);
+  if (!chk.rowCount) return res.status(400).json({ error: "Менеджер не знайдений або деактивований" });
+
+  const cur = await pool.query<{ pinned_manager_id: number | null }>(
+    `SELECT pinned_manager_id FROM loyalty_overrides WHERE client_key = $1`, [clientKey]);
+  const from = cur.rows[0]?.pinned_manager_id ?? null;
+
+  // Наступний місяць по-київськи: передача НЕ рухає поточний.
+  const today = kyivToday();
+  const d = new Date(`${today.slice(0, 8)}01T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  const effectiveFrom = d.toISOString().slice(0, 10);
+
+  await pool.query(
+    `INSERT INTO loyalty_overrides (client_key, pinned_manager_id, pinned_from_month, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4, now())
+     ON CONFLICT (client_key) DO UPDATE SET pinned_manager_id = EXCLUDED.pinned_manager_id,
+       pinned_from_month = EXCLUDED.pinned_from_month, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, toManagerId, effectiveFrom, auth.userId]);
+  await pool.query(
+    `INSERT INTO client_manager_history (client_key, from_manager_id, to_manager_id, effective_from, reason, changed_by)
+     VALUES ($1,$2,$3,$4,$5,$6)`, [clientKey, from, toManagerId, effectiveFrom, reason, auth.userId]);
+
+  res.json({ ok: true, effectiveFrom, note: "Поточний місяць лишається за попереднім менеджером" });
+});
+
+dashboardRouter.get("/client-manager/history", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const r = await pool.query<{ from_name: string | null; to_name: string; effective_from: string; reason: string | null; who: string | null; created_at: string }>(
+    `SELECT fm.name AS from_name, tm.name AS to_name,
+            to_char(h.effective_from,'YYYY-MM-DD') AS effective_from, h.reason,
+            COALESCE(u.full_name, u.email) AS who,
+            to_char(h.created_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS created_at
+       FROM client_manager_history h
+       LEFT JOIN managers fm ON fm.id = h.from_manager_id
+       JOIN managers tm ON tm.id = h.to_manager_id
+       LEFT JOIN users u ON u.id = h.changed_by
+      WHERE h.client_key = $1 ORDER BY h.created_at DESC LIMIT 50`, [clientKey]);
+  res.json(r.rows.map((x) => ({
+    fromManager: x.from_name, toManager: x.to_name, effectiveFrom: x.effective_from,
+    reason: x.reason, changedBy: x.who, createdAt: x.created_at,
+  })));
 });
 
 dashboardRouter.get("/repeat-plans-grid", async (req, res) => {

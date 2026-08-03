@@ -180,3 +180,49 @@ test("#22f ЦИКЛ ЗАТВЕРДЖЕННЯ на ПІСОЧНИЦІ: у пла�
     scratch.dispose();
   }
 });
+
+// ── ФАЗА B · РЕАКТИВАЦІЯ
+test("#23 СТАНИ — З ДАТ, а не з тумблера: 50/70/200 днів", async () => {
+  const R = await import("./reactivationRules.js");
+  assert.equal(R.stateOf(50), "active", "оплата 50 дн. тому — постійний");
+  assert.equal(R.stateOf(70), "sleeping", "оплата 70 дн. тому — сплячий");
+  assert.equal(R.stateOf(200), "lost", "оплата 200 дн. тому — втрачений");
+  // Межі включно — щоб «рівно 60» не залежало від того, хто читає код.
+  assert.equal(R.stateOf(R.SLEEPING_DAYS - 1), "active");
+  assert.equal(R.stateOf(R.SLEEPING_DAYS), "sleeping");
+  assert.equal(R.stateOf(R.LOST_DAYS - 1), "sleeping");
+  assert.equal(R.stateOf(R.LOST_DAYS), "lost");
+  assert.equal(R.SLEEPING_DAYS, 60); assert.equal(R.LOST_DAYS, 180);
+});
+
+test("#23b ЦІННІСТЬ = виручка × свіжість, і свіжість СПРАВДІ важить", async () => {
+  const R = await import("./reactivationRules.js");
+  // Без цієї перевірки формула могла б звестись до «сортуємо за виручкою», і
+  // список реактивації показував би зверху давно втрачених гігантів, а не тих,
+  // кого ще реально повернути.
+  assert.ok(R.valueScore(100_000, 0) > R.valueScore(100_000, 365),
+    "🔴 свіжий і річної давнини клієнти важать однаково — свіжість не враховується");
+  assert.ok(R.valueScore(100_000, 365) > R.valueScore(10_000, 0) / 2,
+    "перевірка, що свіжість не з'їдає виручку повністю");
+  assert.equal(R.valueScore(100_000, 0), 100_000, "свіжий клієнт важить рівно свою виручку");
+  // 12 міс. простою = удесятеро менше (1 / (1 + 12.17)).
+  const y = R.valueScore(100_000, 365);
+  assert.ok(y > 7_000 && y < 8_000, `очікували ~7.6к, отримали ${Math.round(y)}`);
+});
+
+test("#23c ПРИЧИНИ ЗАКРИТТЯ — закритий перелік, і БД його тримає", async () => {
+  const R = await import("./reactivationRules.js");
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  assert.deepEqual(R.CLOSE_REASON_KEYS,
+    ["price", "competitor", "own_transport", "seasonality", "closed_down", "other"],
+    "перелік причин змінився — це рішення власника, не рефакторинг");
+  // 🔴 Дзеркало до переліку: межа має жити в БД, а не лише у формі. «Закрив і
+  // забув» — це втрата єдиних даних про те, ЧОМУ клієнт не повернувся.
+  const roots = [path.join(import.meta.dirname, "..", "db"), path.join(import.meta.dirname, "..", "..", "src", "db")];
+  let sql: string | null = null;
+  for (const r of roots) { try { sql = readFileSync(path.join(r, "schema.sql"), "utf8"); break; } catch { /* далі */ } }
+  assert.ok(sql, "schema.sql не знайдено — перевірка не має права мовчки пропускатись");
+  assert.match(sql, /tasks_reactivation_close_reason/,
+    "🔴 у схемі немає CHECK на причину закриття — форму обійде будь-який прямий UPDATE");
+});

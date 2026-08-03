@@ -52,6 +52,11 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // `/client-plans` і `/client-comments` — окремі записи, а не один префікс:
     // сусід через дефіс є ІНШИМ роутом.
     { test: pre("/api/dashboard/client-plans"), tabs: ["loyalty"] },
+    // ФАЗА B. `client-seasonal` і `client-manager` — окремі записи, а не один
+    // префікс `client-`: сусід через дефіс є ІНШИМ роутом (pre матчить по слешу).
+    { test: pre("/api/dashboard/client-seasonal"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/client-manager"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/reactivation-list"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-plan"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-comments"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },
