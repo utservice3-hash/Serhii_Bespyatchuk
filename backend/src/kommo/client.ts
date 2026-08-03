@@ -1,3 +1,4 @@
+import { dedupeById } from "../jobs/dealContactPairs.js";
 import { config } from "../config.js";
 
 interface KommoListResponse<T> {
@@ -414,7 +415,15 @@ export async function fetchAllDeals(
     page += PAGE_FETCH_CONCURRENCY;
   }
 
-  return deals;
+  // 🔴 ДЕДУП ЗА id — ЦЕ ПРИЧИНА, А НЕ ПЕРЕСТРАХОВКА. Сторінки тягнуться ПАРАЛЕЛЬНО
+  // (PAGE_FETCH_CONCURRENCY), а `filter[updated_at][from]` + пагінація не дають
+  // стабільного знімка: угоду, яку оновили між запитами сусідніх сторінок, зсуває,
+  // і вона потрапляє у ДВІ сторінки одразу. 03.08.2026 це поклало синк — дубльована
+  // угода давала дубльовану пару (угода, контакт), а Postgres не дозволяє одному
+  // `ON CONFLICT DO UPDATE` зачепити рядок двічі.
+  //
+  // Останнє входження перемагає: пізніша сторінка — свіжіший знімок.
+  return dedupeById(deals);
 }
 
 export interface KommoUser {

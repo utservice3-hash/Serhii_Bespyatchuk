@@ -20,6 +20,7 @@ export const MANIFEST_FILES: string[] = [
   "ai/oracle.test.js",
   "ai/period.test.js",
   "auth/accessMatrix.test.js",
+  "jobs/dealContactPairs.test.js",
   "core/clientPlans.test.js",
   "auth/gateUnit.test.js",
   "auth/gates.test.js",
@@ -198,4 +199,8 @@ export const MANIFEST_TESTS: string[] = [
   "#22d ДЗЕРКАЛО: тижневий факт СУМУЄТЬСЯ в місячний по кожному клієнту",
   "#22e СТАТУСИ КЛІЄНТА рахуються з ДАТ, а не з тумблера",
   "#22f ЦИКЛ ЗАТВЕРДЖЕННЯ на ПІСОЧНИЦІ: у план іде Σ лише ЗАТВЕРДЖЕНИХ",
+  "#24 БАТЧ ІЗ ДУБЛЕМ ПАРИ: вставляється ОДИН раз, без винятку",
+  "#24b ДЕДУП УГОД у пагінації — причина, а не наслідок",
+  "#24c ДЗЕРКАЛО: дедуп НЕ склеює різні пари й різні угоди",
+  "#24d КОД СПРАВДІ ЙОГО КЛИЧЕ — а не «фікс лежить поруч»",
 ];
