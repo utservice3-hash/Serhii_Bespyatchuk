@@ -3801,8 +3801,21 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     first_paid: string | null; last_paid: string | null; manager_id: number;
     manager_name: string; payment_type: string | null; pinned_manager_id: number | null;
   }>(
+    // 🔴 ЧОМУ САМЕ ТАК, А НЕ «як зручніше читати». Перша версія брала назву й тип
+    // розрахунку через `(array_agg(client_name ORDER BY closed_at DESC))[1]` —
+    // тобто СОРТУВАЛА всередині кожної групи по ~19.5 тис. рядках, і ще раз для
+    // другого поля, плюс ROW_NUMBER-вікно для основного менеджера. У пісочниці
+    // (18 тис. угод) це коштувало 0.1 с і виглядало нормально; на проді (146 тис.)
+    // — 21.4 с, тобто ДОВШЕ за 20-секундного вартового в index.ts, і екран КВП
+    // віддавав 503. Заміряно, не припущено.
+    //
+    // Тепер: DISTINCT ON замість вікна, а назва/тип — латералом ЛИШЕ для тих
+    // ~1.1 тис. клієнтів, що пройшли відбір. 21.4 с → 0.7 с, рядки ті самі (1133).
+    //
+    // ⚠️ Урок ширший за цей роут: пісочниця на 18 тис. рядків НЕ доводить нічого
+    // про 146 тис. Порядок даних — частина умов задачі, а не деталь.
     `WITH paid AS (
-       SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo, d.client_name, d.payment_type
+       SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
          FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
         WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
@@ -3810,24 +3823,18 @@ dashboardRouter.get("/client-plans", async (req, res) => {
      ),
      agg AS (
        SELECT client_key, COUNT(*)::int AS orders, COALESCE(SUM(price),0) AS revenue,
-              MIN(closed_at_kommo) AS first_paid, MAX(closed_at_kommo) AS last_paid,
-              (array_agg(client_name ORDER BY closed_at_kommo DESC NULLS LAST))[1] AS name,
-              (array_agg(payment_type ORDER BY closed_at_kommo DESC NULLS LAST))[1] AS payment_type
+              MIN(closed_at_kommo) AS first_paid, MAX(closed_at_kommo) AS last_paid
          FROM paid GROUP BY client_key HAVING COUNT(*) >= 2
      ),
+     per_cm AS (
+       SELECT client_key, manager_id, COUNT(*) AS n, MAX(closed_at_kommo) AS mx
+         FROM paid GROUP BY 1, 2
+     ),
      primary_mgr AS (
-       SELECT client_key, manager_id FROM (
-         SELECT client_key, manager_id,
-                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(closed_at_kommo) DESC) AS rn
-           FROM paid GROUP BY client_key, manager_id
-       ) z WHERE rn = 1
+       SELECT DISTINCT ON (client_key) client_key, manager_id
+         FROM per_cm ORDER BY client_key, n DESC, mx DESC
      )
-     -- 🔴 Дати віддаємо ТЕКСТОМ і по-київськи. pg повертає timestamptz як Date,
-     -- і slice(0,7) на ньому падає — пісочниця це й спіймала. Київ, бо весь
-     -- дашборд рахує по-київськи; UTC зсував би «з якого місяця» на добу.
-     -- (Зворотних лапок тут бути НЕ МОЖЕ: цей SQL живе в шаблонному рядку JS,
-     --  і перша ж лапка обриває шаблон. Саме так і сталось першого разу.)
-     SELECT a.client_key, a.name, a.orders, a.revenue, a.payment_type,
+     SELECT a.client_key, a.orders, a.revenue, nm.client_name AS name, nm.payment_type,
             to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS first_paid,
             to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS last_paid,
             COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
@@ -3836,6 +3843,13 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        JOIN primary_mgr pm ON pm.client_key = a.client_key
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key AND NOT lo.hidden
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+       LEFT JOIN LATERAL (
+         SELECT d2.client_name, d2.payment_type FROM deals d2
+           JOIN pipeline_stage_map p2 ON p2.pipeline_id = d2.pipeline_id AND p2.status_id = d2.status_id
+                                      AND p2.funnel_stage = 'paid'
+          WHERE d2.client_key = a.client_key
+          ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
+       ) nm ON true
       WHERE COALESCE(lo.hidden, false) = false ${mgrCond}
       ORDER BY a.revenue DESC`,
     mgrParams
