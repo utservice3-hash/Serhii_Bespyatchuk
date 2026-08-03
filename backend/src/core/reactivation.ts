@@ -145,7 +145,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
      per_cm AS (SELECT client_key, manager_id, COUNT(*) AS n, MAX(closed_at_kommo) AS mx FROM paid GROUP BY 1,2),
      primary_mgr AS (SELECT DISTINCT ON (client_key) client_key, manager_id FROM per_cm ORDER BY client_key, n DESC, mx DESC),
      tasks_in AS (
-       SELECT * FROM (SELECT UNNEST($TK::text[]) AS client_key, UNNEST($TC::timestamptz[]) AS created_at) t
+       SELECT * FROM (SELECT UNNEST(${TK}::text[]) AS client_key, UNNEST(${TC}::timestamptz[]) AS created_at) t
      )
      SELECT a.client_key, nm.client_name, a.orders, a.revenue,
             to_char(a.last_paid ${KYIV}, 'YYYY-MM-DD') AS last_paid,
@@ -219,7 +219,7 @@ export async function returnedAfterTask(days: number, s: ReactivationScope): Pro
         WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL AND NOT (d.client_key = ANY($1))
      ),
      task AS (
-       SELECT * FROM (SELECT UNNEST($TK::text[]) AS client_key, UNNEST($TC::timestamptz[]) AS created_at) t
+       SELECT * FROM (SELECT UNNEST(${TK}::text[]) AS client_key, UNNEST(${TC}::timestamptz[]) AS created_at) t
      )
      SELECT COUNT(DISTINCT p2.client_key) AS clients, COALESCE(SUM(p2.price),0) AS revenue
        FROM paid p2

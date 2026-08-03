@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   fetchReactivationList, setClientSeasonal, fetchMergePreview, mergeClients, revokeMerge,
   fetchMergeJournal, assignClientManager, fetchClientManagerHistory, fetchManagerOptions,
+  createClientReactivationTask, closeReactivationTask,
   type ReactivationResp, type ReactivationRow, type MergePreview, type MergeJournalRow,
   type ManagerHistoryRow, type ManagerOption,
 } from "../../../api";
@@ -233,11 +234,85 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
   );
 }
 
+
+/** Модалка — спільна оболонка, щоб обидва діалоги виглядали однаково. */
+function Modal({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex",
+                  alignItems: "center", justifyContent: "center", zIndex: 60 }}>
+      <div style={{ ...S.card, width: 460, maxWidth: "92vw", boxShadow: "0 18px 48px rgba(0,0,0,.22)" }}>
+        <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>{title}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function CreateTaskDialog({ client, busy, onCancel, onSubmit }: {
+  client: { clientKey: string; name: string }; busy: boolean;
+  onCancel: () => void; onSubmit: (deadline: string, comment: string) => void;
+}) {
+  const inWeek = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
+  const [deadline, setDeadline] = useState(inWeek);
+  const [comment, setComment] = useState("");
+  return (
+    <Modal title={`＋ Задача реактивації · ${client.name}`}>
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.5 }}>
+        Одна задача = один клієнт. Виконавець — основний менеджер цього клієнта.
+        Закрити її буде можна лише з причиною.
+      </div>
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Строк</div>
+      <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} style={S.input} />
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Що зробити (не обовʼязково)</div>
+      <input value={comment} onChange={(e) => setComment(e.target.value)}
+        placeholder="подзвонити, запропонувати серпневі тарифи" style={S.input} />
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button style={S.btn(true)} disabled={busy} onClick={() => onSubmit(deadline, comment)}>Створити</button>
+        <button style={S.btn()} disabled={busy} onClick={onCancel}>Скасувати</button>
+      </div>
+    </Modal>
+  );
+}
+
+function CloseTaskDialog({ task, reasons, busy, onCancel, onSubmit }: {
+  task: { taskId: number; name: string }; reasons: { key: string; label: string }[];
+  busy: boolean; onCancel: () => void; onSubmit: (reason: string, note: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+  // 🔴 «Інше» без пояснення — це та сама відсутність причини під іншою назвою.
+  const needNote = reason === "other";
+  const ready = reason !== "" && (!needNote || note.trim() !== "");
+  return (
+    <Modal title={`Закрити задачу · ${task.name}`}>
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.5 }}>
+        Причина обовʼязкова. Це єдине джерело даних про те, ЧОМУ клієнт не повернувся —
+        без неї через півроку список покаже тих самих людей, і ніхто не згадає, чим скінчилась розмова.
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {reasons.map((r) => (
+          <button key={r.key} onClick={() => setReason(r.key)}
+            style={{ ...S.btn(reason === r.key), fontSize: 12 }}>{r.label}</button>
+        ))}
+      </div>
+      <input value={note} onChange={(e) => setNote(e.target.value)}
+        placeholder={needNote ? "Поясніть — для «Інше» обовʼязково" : "Деталі (не обовʼязково)"}
+        style={{ ...S.input, marginTop: 10, borderColor: needNote && !note.trim() ? "#fca5a5" : "#d1d5db" }} />
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button style={S.btn(true)} disabled={busy || !ready} onClick={() => onSubmit(reason, note.trim())}>Закрити задачу</button>
+        <button style={S.btn()} disabled={busy} onClick={onCancel}>Скасувати</button>
+      </div>
+    </Modal>
+  );
+}
+
 export function ReactivationSection({ auth }: { auth: AuthPayload }) {
   const [data, setData] = useState<ReactivationResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [view, setView] = useState<"sleeping" | "lost" | "inwork" | "returned">("sleeping");
   const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
+  const [closing, setClosing] = useState<{ taskId: number; name: string } | null>(null);
 
   const load = useCallback(() => {
     setErr(null);
@@ -310,12 +385,26 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
                   <div style={{ fontSize: 11, color: "#9ca3af" }}>lifetime · вага {Math.round(c.value).toLocaleString("uk-UA")}</div>
                 </td>
                 <td style={S.td}>
-                  {c.taskId
-                    ? <span>{c.taskStatus === "done" ? "закрита" : <b>{c.taskAssignee ?? "—"}</b>}
-                        {c.taskDeadline && <span style={{ color: "#b45309" }}> · до {c.taskDeadline.slice(5)}</span>}</span>
-                    : c.seasonal
-                      ? <span style={{ color: "#9ca3af" }}>сезонний — задача не потрібна</span>
-                      : <span style={{ color: "#9ca3af" }}>задачі немає</span>}
+                  {c.taskId && c.taskStatus !== "done" ? (
+                    <div>
+                      <b>{c.taskAssignee ?? "—"}</b>
+                      {c.taskDeadline && <span style={{ color: "#b45309" }}> · до {c.taskDeadline.slice(5)}</span>}
+                      <div>
+                        <button disabled={busy} style={{ ...S.btn(), marginTop: 5, fontSize: 11, padding: "4px 9px" }}
+                          onClick={() => setClosing({ taskId: c.taskId!, name: c.clientName })}>Закрити…</button>
+                      </div>
+                    </div>
+                  ) : c.taskId ? (
+                    <span style={{ color: "#6b7280" }}>закрита</span>
+                  ) : c.seasonal ? (
+                    // 🔴 Сезонним задачі НЕ ставимо: їхній «простій» — це не втрата
+                    // клієнта, а календар. Смикати їх означає вчити менеджера, що
+                    // список реактивації можна ігнорувати.
+                    <span style={{ color: "#9ca3af" }}>сезонний — задача не потрібна</span>
+                  ) : (
+                    <button disabled={busy} style={{ ...S.btn(true), fontSize: 11, padding: "5px 10px" }}
+                      onClick={() => setCreating({ clientKey: c.clientKey, name: c.clientName })}>＋ Задача</button>
+                  )}
                 </td>
                 <td style={S.td}>{c.lastPaid ?? "—"}<div style={{ fontSize: 11, color: "#9ca3af" }}>{c.daysSince} дн. тому</div></td>
                 <td style={S.td}>
@@ -353,6 +442,25 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
           <MergePanel onDone={load} />
           <ManagerPanel clients={data.clients} onDone={load} />
         </div>
+      )}
+
+      {creating && (
+        <CreateTaskDialog client={creating} busy={busy}
+          onCancel={() => setCreating(null)}
+          onSubmit={async (deadline, comment) => {
+            setBusy(true);
+            try { await createClientReactivationTask({ clientKey: creating.clientKey, deadline, comment }); setCreating(null); load(); }
+            finally { setBusy(false); }
+          }} />
+      )}
+      {closing && (
+        <CloseTaskDialog task={closing} reasons={data.closeReasons} busy={busy}
+          onCancel={() => setClosing(null)}
+          onSubmit={async (reason, note) => {
+            setBusy(true);
+            try { await closeReactivationTask({ taskId: closing.taskId, reason, note }); setClosing(null); load(); }
+            finally { setBusy(false); }
+          }} />
       )}
     </div>
   );

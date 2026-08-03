@@ -57,6 +57,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/client-seasonal"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-manager"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/reactivation-list"), tabs: ["loyalty"] },
+    // Задача реактивації живе на екрані клієнтів, але веде в задачник — доступ
+    // мають обидві вкладки: тімлід відкриває її зі списку, менеджер бачить у себе.
+    { test: pre("/api/dashboard/reactivation-task"), tabs: ["loyalty", "tasks"] },
     { test: pre("/api/dashboard/client-plan"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-comments"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },

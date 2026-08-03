@@ -4150,6 +4150,92 @@ dashboardRouter.get("/reactivation-list", async (req, res) => {
   });
 });
 
+/**
+ * ＋ ЗАДАЧА РЕАКТИВАЦІЇ — ОДНА ЗАДАЧА = ОДИН КЛІЄНТ (`reactivation_client`).
+ *
+ * 🔴 Чому саме так (рішення власника 03.08.2026): обидві ключові фічі вимагають
+ * привʼязки до клієнта — ПРИЧИНА ВТРАТИ і метрика «повернено після задачі».
+ * Пачка їх розмиває: закрив одну задачу на 12 клієнтів — і причина стосується
+ * усіх дванадцятьох, хоч насправді одного відлякнула ціна, а другий закрився.
+ *
+ * Старий `POST /tasks/reactivation` (пачка з чеклістом) НЕ чіпаємо — він
+ * лишається для масових кампаній; метрика «повернено» читає обидва типи.
+ */
+dashboardRouter.post("/reactivation-task", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+
+  // Виконавець за замовчуванням — основний менеджер клієнта: задача без
+  // виконавця нікому не належить і не зʼявиться в жодному списку.
+  const owner = await pool.query<{ manager_id: number; client_name: string | null }>(
+    `WITH paid AS (
+       SELECT d.manager_id, d.closed_at_kommo, d.client_name FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE psm.funnel_stage = 'paid' AND d.client_key = $1
+     ), pm AS (
+       SELECT manager_id FROM (SELECT manager_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(closed_at_kommo) DESC) rn
+                                 FROM paid GROUP BY manager_id) z WHERE rn = 1
+     )
+     SELECT COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
+            (SELECT client_name FROM paid WHERE client_name IS NOT NULL ORDER BY closed_at_kommo DESC LIMIT 1) AS client_name
+       FROM pm LEFT JOIN loyalty_overrides lo ON lo.client_key = $1`, [clientKey]);
+  const defaultAssignee = owner.rows[0]?.manager_id ?? null;
+  const clientName = owner.rows[0]?.client_name ?? clientKey;
+  const assigneeId = req.body?.assigneeId != null ? Number(req.body.assigneeId) : defaultAssignee;
+  if (assigneeId == null) return res.status(400).json({ error: "Не вдалося визначити виконавця" });
+
+  const deadline = String(req.body?.deadline ?? "").match(/^\d{4}-\d{2}-\d{2}$/) ? String(req.body.deadline) : null;
+  const note = String(req.body?.comment ?? "").trim().slice(0, 1000) || null;
+
+  // Відкрита задача по цьому клієнту вже може існувати — другу не плодимо,
+  // інакше «задач у роботі» рахувало б наміри, а не роботу.
+  const open = await pool.query<{ id: number }>(
+    `SELECT id FROM tasks WHERE task_type = 'reactivation_client' AND client_key = $1 AND status <> 'done' LIMIT 1`,
+    [clientKey]);
+  if (open.rowCount) return res.status(409).json({ error: "Задача по цьому клієнту вже відкрита", taskId: open.rows[0].id });
+
+  const dept = await pool.query<{ name: string | null }>(
+    `SELECT t.name FROM managers m LEFT JOIN teams t ON t.id = m.team_id WHERE m.id = $1`, [assigneeId]);
+  const r = await pool.query<{ id: number }>(
+    `INSERT INTO tasks (title, status, deadline, assignee_id, priority, department, created_by,
+                        task_type, client_key, description)
+     VALUES ($1,'not_started',$2,$3,'high',$4,$5,'reactivation_client',$6,$7) RETURNING id`,
+    [`Реактивація: ${clientName}`, deadline, assigneeId, dept.rows[0]?.name ?? null, auth.userId, clientKey, note]);
+  res.json({ id: r.rows[0].id, assigneeId, clientName });
+});
+
+/**
+ * Закриття задачі реактивації — ПРИЧИНА ОБОВʼЯЗКОВА.
+ * Межу тримає ще й CHECK у БД: форму обійде будь-який прямий UPDATE, а дані про
+ * те, ЧОМУ клієнт не повернувся, існують тільки тут.
+ */
+dashboardRouter.post("/reactivation-task/close", async (req, res) => {
+  const auth = req.auth!;
+  const taskId = Number(req.body?.taskId);
+  const reasonKey = String(req.body?.reason ?? "").trim();
+  const note = String(req.body?.note ?? "").trim().slice(0, 500);
+  if (!Number.isFinite(taskId)) return res.status(400).json({ error: "taskId обовʼязковий" });
+  if (!reactivation.CLOSE_REASON_KEYS.includes(reasonKey)) {
+    return res.status(400).json({ error: `Причина обовʼязкова: ${reactivation.CLOSE_REASON_KEYS.join(" · ")}` });
+  }
+  // «Інше» без пояснення — це та сама відсутність причини, лише під іншою назвою.
+  if (reasonKey === "other" && !note) return res.status(400).json({ error: "Для «Інше» потрібне пояснення" });
+
+  const t = await pool.query<{ client_key: string | null; assignee_id: number | null }>(
+    `SELECT client_key, assignee_id FROM tasks WHERE id = $1 AND task_type = 'reactivation_client'`, [taskId]);
+  const row = t.rows[0];
+  if (!row) return res.status(404).json({ error: "Задача не знайдена" });
+  if (!row.client_key || !(await canSeeClient(auth, row.client_key))) return res.status(403).json({ error: "Forbidden" });
+
+  const stored = note ? `${reasonKey}: ${note}` : reasonKey;
+  await pool.query(
+    `UPDATE tasks SET status = 'done', close_reason = $2, closed_at = now(), updated_at = now() WHERE id = $1`,
+    [taskId, stored]);
+  res.json({ ok: true, closeReason: stored });
+});
+
 /** Позначка «сезонний» — єдине, що ставиться руками (з дат її вивести неможливо). */
 dashboardRouter.post("/client-seasonal", async (req, res) => {
   const auth = req.auth!;

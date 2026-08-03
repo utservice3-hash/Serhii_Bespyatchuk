@@ -2391,3 +2391,13 @@ export async function fetchClientManagerHistory(clientKey: string): Promise<Mana
   const { data } = await api.get<ManagerHistoryRow[]>("/dashboard/client-manager/history", { params: { clientKey } });
   return data;
 }
+
+/** Задача на ОДНОГО клієнта (Фаза B). Пачкову `createReactivationTask` не чіпаємо — вона лишається для масових кампаній. */
+export async function createClientReactivationTask(body: { clientKey: string; deadline?: string; comment?: string; assigneeId?: number }): Promise<{ id: number; clientName: string }> {
+  const { data } = await api.post("/dashboard/reactivation-task", body);
+  return data;
+}
+export async function closeReactivationTask(body: { taskId: number; reason: string; note?: string }): Promise<{ closeReason: string }> {
+  const { data } = await api.post("/dashboard/reactivation-task/close", body);
+  return data;
+}
