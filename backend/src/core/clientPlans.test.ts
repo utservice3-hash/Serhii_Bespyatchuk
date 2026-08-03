@@ -226,3 +226,34 @@ test("#23c ПРИЧИНИ ЗАКРИТТЯ — закритий перелік, 
   assert.match(sql, /tasks_reactivation_close_reason/,
     "🔴 у схемі немає CHECK на причину закриття — форму обійде будь-який прямий UPDATE");
 });
+
+test("#23d ПАЧКИ ВРАХОВУЮТЬСЯ ЧЕРЕЗ ТУ САМУ НОРМАЛІЗАЦІЮ, що й синк", async () => {
+  const { normalizeClientName } = await import("../utils/clientName.js");
+  // 🔴 Рішення прийнято ЗА ЦИФРОЮ, не за схемою. Замір на проді 03.08.2026:
+  // 12 задач-пачок, 94 елементи, `clientKey` заповнений у 94/94; напряму
+  // зіставились 78, решта 16 — старі ключі з ПРОБІЛАМИ (до бекфілу нормалізації).
+  // `normalizeClientName` відновила ВСІ 16.
+  const oldKeys = ["перша ливарня", "аб джорджіа", "d traks ood", "техно лізинг"];
+  for (const k of oldKeys) {
+    assert.equal(normalizeClientName(k), k.replace(/\s/g, ""),
+      `🔴 «${k}» не зводиться до ключа без пробілів — тоді пачки не зіставляться`);
+  }
+  // ДЗЕРКАЛО: на вже нормалізованих ключах функція НІЧОГО не міняє. Без цього
+  // «фікс» міг би тихо переписати 78 робочих ключів і зламати те, що працювало.
+  for (const k of ["вкавтострада", "акам", "першаливарня", "dtraksood"]) {
+    assert.equal(normalizeClientName(k), k,
+      `🔴 функція змінила вже канонічний ключ «${k}» — це не нормалізація, а псування`);
+  }
+  // І перевіряємо, що ядро кличе САМЕ її, а не свій регексп у SQL.
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const roots = [path.join(import.meta.dirname, "reactivation.ts"),
+                 path.join(import.meta.dirname, "..", "..", "src", "core", "reactivation.ts")];
+  let src: string | null = null;
+  for (const r of roots) { try { src = readFileSync(r, "utf8"); break; } catch { /* далі */ } }
+  assert.ok(src, "reactivation.ts не знайдено — перевірка не має права мовчки пропускатись");
+  assert.match(src, /normalizeClientName\(/,
+    "🔴 ядро реактивації не кличе normalizeClientName — отже нормалізує «схоже», а не те саме");
+  assert.ok(!/regexp_replace\([^)]*clientKey/i.test(src),
+    "🔴 у SQL зʼявився власний регексп по clientKey — саме те розходження, від якого ця перевірка й рятує");
+});

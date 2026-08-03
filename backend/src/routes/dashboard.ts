@@ -29,6 +29,7 @@ import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanRules.js";
 import * as reactivation from "../core/reactivation.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
+import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
 import * as plans from "../core/plans.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
@@ -2486,9 +2487,13 @@ dashboardRouter.post("/sync", (req, res) => {
   if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
-  void syncKommo()
-    .then(() => syncStageEvents())
-    .catch((err) => console.error("Manual sync failed:", err));
+  // 🔴 ЧЕРЕЗ `runJob`, А НЕ НАПРЯМУ. Раніше ручний запуск ішов повз обгортку —
+  // і був НЕВИДИМИЙ для нагляду так само, як колись стартові прогони: успіх не
+  // чистив `job_runs.last_error`, тож після інциденту 03.08.2026 банер горів ще
+  // довго ПІСЛЯ того, як синк уже відпрацював. Той самий однорядковий клас, що
+  // й `deferredStartup`: джоба, яку викликали не тією дверима, зникає з обліку.
+  void runJob("syncKommo", () => syncKommo())
+    .then(() => runJob("syncStageEvents", () => syncStageEvents()));
   res.json({ started: true });
 });
 
@@ -2500,8 +2505,14 @@ dashboardRouter.post("/sync-receivables", async (req, res) => {
   if (!isAdminOrLead(auth)) {
     return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   }
+  // Те саме: ручний запуск має лишати слід у `job_runs`, інакше «оновив руками»
+  // і «джоба відпрацювала» — два різні факти, і нагляд бачить лише другий.
+  // `runJob` сам ловить виняток, тож помилку читаємо з `job_runs`.
   try {
-    await syncReceivables();
+    await runJob("syncReceivables", () => syncReceivables());
+    const st = await pool.query<{ err: string | null }>(
+      `SELECT last_error AS err FROM job_runs WHERE name = 'syncReceivables'`);
+    if (st.rows[0]?.err) return res.status(502).json({ error: "Не вдалося оновити дебіторку" });
     res.json({ ok: true });
   } catch (err) {
     console.error("Manual receivables sync failed:", err);
