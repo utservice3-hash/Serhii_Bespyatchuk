@@ -1,6 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDb } from "../testMode.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+test("#9.7 СТАРТОВІ ПРОГОНИ обліковуються так само, як планові", () => {
+  // 🔴 Тут стояв голий `fn()`, тож жоден стартовий прогін не потрапляв у `job_runs`:
+  // після рестарту нагляд бачив джобу як «мовчить», хоч вона щойно відпрацювала, а
+  // джоба, що ВПАЛА на старті, не лишала сліду взагалі. Виявилось на
+  // `recomputeClientKeys`, чий перший cron-тік аж о :05 — вікно мовчання до години.
+  //
+  // Перевіряємо ЗІБРАНИЙ index.js: тест на вихідник пропустив би зміну, що не
+  // зібралась, а нас цікавить те, що реально виконується.
+  const idx = readFileSync(path.join(import.meta.dirname, "..", "index.js"), "utf8");
+  const loop = idx.slice(idx.indexOf("deferredStartup"));
+  const body = loop.slice(loop.indexOf("for (const ["), loop.indexOf("for (const [") + 400);
+  assert.match(body, /runJob\(\s*name\s*,\s*fn\s*\)/,
+    "🔴 стартовий цикл кличе джобу повз `runJob` — прогін не потрапить у `job_runs`, "
+    + "і після рестарту нагляд вважатиме джобу мовчазною, хоч вона відпрацювала");
+  assert.doesNotMatch(body, /\bfn\(\)\s*\.catch/,
+    "🔴 у циклі лишився голий `fn().catch(...)` — саме та форма, що ховала стартові прогони");
+});
 
 /**
  * ТЕСТ #9 — ДЖОБИ НЕ ПАДАЮТЬ МОВЧКИ.
