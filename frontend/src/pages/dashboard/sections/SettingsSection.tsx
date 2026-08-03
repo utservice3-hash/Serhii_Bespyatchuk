@@ -172,6 +172,15 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
     const roleOverride = val === "__synced__" ? null : val;
     try { await updateUser(u.id, { roleOverride }); await reload(); } catch (e) { alert(err(e)); }
   };
+  const [busy, setBusy] = useState<number | null>(null);
+  // ⏱ Перемикач трекера. Оптимістично НЕ малюємо: спостереження за людиною —
+  // не те місце, де можна показати «увімкнено», якщо сервер відмовив.
+  const toggleTracker = async (id: number, on: boolean) => {
+    setBusy(id);
+    try { await updateUser(id, { trackerEnabled: on }); await reload(); }
+    catch (e) { alert(err(e)); }
+    finally { setBusy(null); }
+  };
   const deactivate = async (u: DashboardUser) => { if (!window.confirm(`Деактивувати ${u.email}?`)) return; try { await updateUser(u.id, { isActive: false }); await reload(); } catch (e) { alert(err(e)); } };
   const provision = async () => { try { const c = await provisionUsers(); setProvMsg(c.length ? `Створено логінів: ${c.length}` : "Нових немає — усі вже створені"); await reload(); } catch (e) { setProvMsg("✗ " + err(e)); } };
   const saveName = async (u: DashboardUser) => {
@@ -204,7 +213,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       {newCreds && <OneTimeCred text={newCreds} onClose={() => setNewCreds(null)} />}
 
       <table className="data-table">
-        <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>КОМАНДА</th><th>РОЛЬ</th><th>ПАРОЛЬ</th><th>АКТИВНИЙ</th><th></th></tr></thead>
+        <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>КОМАНДА</th><th>РОЛЬ</th><th>ПАРОЛЬ</th><th>АКТИВНИЙ</th><th title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ ТРЕКЕР</th><th></th></tr></thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
@@ -238,6 +247,19 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
               </td>
               <td style={{ fontFamily: "monospace" }}>{issued[u.id] ? <RevealCred text={issued[u.id]} /> : "••••••••"}</td>
               <td>{u.is_active ? "✓" : "—"}</td>
+              {/* ⏱ Трекер: дозвіл на збір часу. Досі вмикався ЛИШЕ міграцією, тобто зняти
+                  його з конкретної людини можна було тільки SQL-ом по проду. Для прапорця,
+                  що вмикає спостереження за людиною, вимкнення має бути не важчим за вмикання. */}
+              <td>
+                <input
+                  type="checkbox"
+                  checked={u.tracker_enabled === true}
+                  disabled={!u.is_active || busy === u.id}
+                  title={u.is_active ? undefined : "Неактивний користувач — трекер і так не пустить"}
+                  onChange={(e) => toggleTracker(u.id, e.target.checked)}
+                  style={{ width: 16, height: 16, cursor: u.is_active ? "pointer" : "not-allowed" }}
+                />
+              </td>
               <td style={{ whiteSpace: "nowrap" }}>
                 <button onClick={() => reset(u.id)} style={btn}>↺ Пароль</button>
                 <button onClick={() => deactivate(u)} style={{ ...btn, color: "#dc2626" }}>Деактивувати</button>

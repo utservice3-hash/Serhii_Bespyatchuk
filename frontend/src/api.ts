@@ -914,6 +914,7 @@ export interface DashboardUser {
   role_effective: string;                    // = role_override ?? synced_role
   is_active: boolean;
   crm_linked: boolean;                        // ідентичність із CRM (ПІБ/команда/синк-роль read-only)
+  tracker_enabled: boolean;                   // ⏱ дозвіл трекеру часу збирати дані з машини людини
   team_name: string | null;
   deactivated_at?: string | null;
   deactivated_reason?: string | null;
@@ -949,7 +950,7 @@ export async function resetUserPassword(id: number): Promise<string> {
 
 export async function updateUser(
   id: number,
-  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string }
+  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string; trackerEnabled?: boolean }
 ): Promise<void> {
   await api.patch(`/settings/users/${id}`, patch);
 }

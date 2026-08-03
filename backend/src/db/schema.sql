@@ -1512,6 +1512,59 @@ CREATE TABLE IF NOT EXISTS job_runs (
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- ПСЕВДОНІМИ КЛІЄНТСЬКИХ КЛЮЧІВ (розкол client_key)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 🔴 НАВІЩО. Один клієнт живе в БД під кількома ключами: «вкавтострада» (116 оплат)
+-- і «0977086747» (82 оплати) — це та сама фірма, розколота на «назву» й «телефон».
+-- Наслідок не косметичний: обидва шматки слабші за реального клієнта, тож псується
+-- прогноз постійних, сегментація РНК/РПК і середній чек — цифри, на яких СТАВЛЯТЬСЯ
+-- ПЛАНИ людям.
+--
+-- 🔒 ЗЛИТТЯ МУСИТЬ БУТИ ЗВОРОТНИМ. Тому це таблиця псевдонімів, а не переписування
+-- `deals`: скасувати = проставити `revoked_at`, а не відновлювати з бекапу.
+-- Рядки НЕ видаляються ніколи — інакше зникне й доказ, чому колись злили.
+--
+-- 🔴 ТРАНЗИТИВНІСТЬ ЗАБОРОНЕНА НА РІВНІ ДАНИХ, а не дисципліни. Замір показав, чому:
+-- один телефон може вести до ДВОХ різних фірм (`0673221810` → і «торговийдімлемберг»,
+-- і «ерсохем»). Транзитивне замикання 297 груп дало 7 компонент, де злиплися РІЗНІ
+-- компанії — «Укрпошта» опинилась би в одному клієнті з «боскокомпані». Тому
+-- canonical_key не може сам бути аліасом (тригер нижче), і ланцюжок неможливий.
+CREATE TABLE IF NOT EXISTS client_key_alias (
+  alias_key     TEXT PRIMARY KEY,                    -- ключ, що ЗЛИВАЄТЬСЯ
+  canonical_key TEXT NOT NULL,                       -- ключ-переможець
+  -- Доказ, а не «бо схоже»: напр. 'shared_contact:48778662'. Порожньо = відмова
+  -- (CHECK нижче). Реєстр без причини перетворюється на смітник — це ми вже
+  -- проходили з винятками архітектурних воріт.
+  reason        TEXT NOT NULL,
+  evidence      JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {contactId, ordersBefore, revenueBefore}
+  approved_by   INTEGER REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at    TIMESTAMPTZ,
+  CHECK (alias_key <> canonical_key),
+  CHECK (length(btrim(reason)) > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_client_key_alias_canon ON client_key_alias(canonical_key) WHERE revoked_at IS NULL;
+
+-- Блокування ланцюжків: A→B і B→C одночасно існувати не можуть НІ В ЯКОМУ порядку.
+CREATE OR REPLACE FUNCTION client_key_alias_no_chain() RETURNS trigger AS $cka$
+BEGIN
+  IF NEW.revoked_at IS NULL THEN
+    IF EXISTS (SELECT 1 FROM client_key_alias a
+                WHERE a.revoked_at IS NULL AND a.alias_key = NEW.canonical_key) THEN
+      RAISE EXCEPTION 'canonical_key «%» сам є псевдонімом — ланцюжок заборонено', NEW.canonical_key;
+    END IF;
+    IF EXISTS (SELECT 1 FROM client_key_alias a
+                WHERE a.revoked_at IS NULL AND a.canonical_key = NEW.alias_key) THEN
+      RAISE EXCEPTION 'alias_key «%» уже є canonical для інших — ланцюжок заборонено', NEW.alias_key;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $cka$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_client_key_alias_no_chain ON client_key_alias;
+CREATE TRIGGER trg_client_key_alias_no_chain BEFORE INSERT OR UPDATE ON client_key_alias
+  FOR EACH ROW EXECUTE FUNCTION client_key_alias_no_chain();
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- ТРЕКЕР · ФАЗА 2 (контракт агента 0.2.0)
 -- ─────────────────────────────────────────────────────────────────────────────
 -- `received_at` — коли ІНТЕРВАЛ ДОЇХАВ до сервера, за СЕРВЕРНИМ годинником.
