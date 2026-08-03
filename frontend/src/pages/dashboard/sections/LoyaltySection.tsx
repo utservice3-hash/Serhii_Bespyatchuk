@@ -17,7 +17,6 @@ import {
   type LoyaltyOverride, type ManagerOption,
 } from "../../../api";
 import { formatAmount } from "../format";
-import { RepeatPlanGrid } from "./RepeatPlanGrid";
 import { ClientPlansSection } from "./ClientPlansSection";
 import { ReactivationGrid } from "./ReactivationGrid";
 import { teamOptions } from "../teamColors";
@@ -170,9 +169,12 @@ export function LoyaltySection({
         />
       )}
 
-      {auth && (
-        <RepeatPlanGrid canPickTeam={auth.role === "admin"} teams={teams} role={auth.role} />
-      )}
+      {/* 🪦 RepeatPlanGrid прибрано 03.08.2026 (рішення власника). Він рахував факт
+          ВЛАСНИМ SQL і додавав НЕДАТОВАНИЙ знімок етапу 9 — тобто метрику ②, якої на
+          екрані клієнтів бути не повинно, і знімок, що мутує минулі місяці. Заміна —
+          ClientPlansSection вище (факт ① з ядра). Роут /repeat-plans-grid лишається
+          живим ще один спринт і стоїть у DEAD_ROUTE_CANDIDATES з датою перегляду:
+          зникнення має бути рішенням, а не наслідком. */}
 
       {auth?.role !== "manager" && (
         <div className="chart-card" style={{ marginBottom: 16 }}>

@@ -95,6 +95,13 @@ export const DEAD_ROUTE_CANDIDATES: DeadRouteCandidate[] = [
     why: "fetchExpectedDeals не викликається взагалі — навіть із мертвого файла." },
   { method: "GET", path: "/api/dashboard/funnel-weekly",
     why: "fetchFunnelWeekly без викликів поза api.ts; рядка немає у прод-бандлі." },
+  { method: "GET", path: "/api/dashboard/repeat-plans-grid",
+    why: "ВИВОДИТЬСЯ З УЖИТКУ з 03.08.2026: компонент RepeatPlanGrid прибрано з екрана "
+       + "(рахував факт зі знімком етапу 9 — метрику ②, якої на екрані клієнтів бути не "
+       + "повинно за правилом власника 02.08.2026), заміна — GET /api/dashboard/client-plans. "
+       + "Роут лишається живим ОДИН спринт: рішення власника — зникнення має бути рішенням, "
+       + "а не наслідком. ⏳ ПЕРЕГЛЯНУТИ ПІСЛЯ 2026-09-01: якщо звернень немає — видалити "
+       + "разом із /repeat-client-plan* і repeat_client_plan_history." },
   { method: "GET", path: "/api/dashboard/kvp-extra",
     why: "fetchKvpExtra без викликів. Межу все одно поставлено (tab «kvp») — роут живе в КВП-родині "
        + "й у MASTER_PLAN стоїть на переведення в ядро; закрити його дешевше, ніж лишити відкритим до видалення." },
