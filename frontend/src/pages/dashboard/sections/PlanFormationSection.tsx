@@ -307,25 +307,34 @@ function ClientsSeg({ m, refMonth }: { m: PFManager; refMonth: string }) {
   return (
     <div>
       <div style={segTitle}>Клієнти · {monFull(refMonth)}</div>
-      {/* 🔴 РОЗБІЖНІСТЬ ПОКАЗУЄМО, А НЕ ХОВАЄМО (рішення власника 03.08.2026).
-          Ручне поле «постійні принесуть» лишається як є; Σ ЗАТВЕРДЖЕНИХ планів по
-          клієнтах стоїть поруч довідково. Якщо вони не збігаються — це видно
-          бейджем, а не з'ясовується постфактум, коли план уже затверджено. */}
-      {m.repeatClients && (m.repeatClients.declared > 0 || m.repeatClients.approved > 0) && (
-        <div style={{ margin: "4px 0 8px", padding: "6px 9px", borderRadius: 8, fontSize: 12, lineHeight: 1.5,
-          background: m.repeatClients.declared === m.repeatClients.approved ? "var(--surface-2, #f8fafc)" : "#fffbeb",
-          border: `1px solid ${m.repeatClients.declared === m.repeatClients.approved ? "var(--border)" : "#fcd34d"}` }}>
-          {m.repeatClients.declared === m.repeatClients.approved ? (
-            <>✓ «Постійні принесуть» {k(m.repeatClients.declared)} ₴ — збігається з Σ затверджених
-              планів по {m.repeatClients.approvedClients} клієнтах.</>
-          ) : (
-            <><b>⚠️ Заявлено {k(m.repeatClients.declared)} ₴</b>, затверджено по клієнтах{" "}
-              <b>{k(m.repeatClients.approved)} ₴</b> ({m.repeatClients.approvedClients} кл.)
-              {m.repeatClients.entered !== m.repeatClients.approved &&
-                <> · ще не погоджено {k(m.repeatClients.entered - m.repeatClients.approved)} ₴</>}
-              . Ручне поле лишається як є — це орієнтир, а не помилка.</>
-          )}
-        </div>
+      {/* 🔴 БЕЙДЖ — ЛИШЕ ПРИ РЕАЛЬНОМУ РОЗХОДЖЕННІ ДВОХ ЖИВИХ ЦИФР (рішення власника
+          03.08.2026, варіант «б»). «Заявлено 0» — це НЕ конфлікт, це незаповнене
+          поле: у `plans` немає жодного рядка `repeat_payment_amount` за всю історію,
+          тож попередня версія червоніла б у КОЖНОГО менеджера. Перевірено заміром,
+          не припущено. Гейт порогів звірки навчив нас тому самому: сигнал, що
+          горить завжди, за два тижні перестають читати.
+          Довідкову Σ затверджених показуємо тихо й завжди — вона корисна сама по собі. */}
+      {m.repeatClients && m.repeatClients.approved > 0 && (
+        (() => {
+          const rc = m.repeatClients;
+          const conflict = rc.declared > 0 && rc.declared !== rc.approved;
+          return (
+            <div style={{ margin: "4px 0 8px", padding: "6px 9px", borderRadius: 8, fontSize: 12, lineHeight: 1.5,
+              background: conflict ? "#fffbeb" : "var(--surface-2, #f8fafc)",
+              border: `1px solid ${conflict ? "#fcd34d" : "var(--border)"}` }}>
+              {conflict ? (
+                <><b>⚠️ Заявлено {k(rc.declared)} ₴</b>, затверджено по клієнтах{" "}
+                  <b>{k(rc.approved)} ₴</b> ({rc.approvedClients} кл.)
+                  {rc.entered !== rc.approved && <> · ще не погоджено {k(rc.entered - rc.approved)} ₴</>}
+                  . Ручне поле лишається як є — це орієнтир, а не помилка.</>
+              ) : (
+                <>Затверджено планів по клієнтах: <b>{k(rc.approved)} ₴</b> ({rc.approvedClients} кл.)
+                  {rc.entered !== rc.approved && <> · ще не погоджено {k(rc.entered - rc.approved)} ₴</>}
+                  {rc.declared > 0 && <> · збігається із заявленим</>}</>
+              )}
+            </div>
+          );
+        })()
       )}
       {row(GREEN, "Постійні", c.repeat, (
         <button onClick={toggle} style={{ background: "none", border: "none", color: BAR, cursor: "pointer", fontSize: 12, padding: 0 }}>
