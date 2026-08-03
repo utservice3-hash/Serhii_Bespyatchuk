@@ -2320,3 +2320,74 @@ export async function addClientComment(body: { clientKey: string; body: string }
   const { data } = await api.post("/dashboard/client-comments", body);
   return data;
 }
+
+// ── ФАЗА B · Реактивація · обʼєднання · відповідальний ───────────────────────
+export type ClientState = "active" | "sleeping" | "lost";
+export interface ReactivationRow {
+  clientKey: string; clientName: string; managerId: number; managerName: string;
+  orders: number; lifetimeRevenue: number; lastPaid: string | null; daysSince: number;
+  state: ClientState; value: number; seasonal: boolean; seasonalNote: string | null;
+  taskId: number | null; taskStatus: string | null; taskAssignee: string | null;
+  taskDeadline: string | null; closeReason: string | null;
+  returned: boolean; returnedRevenue: number;
+}
+export interface ReactivationResp {
+  clients: ReactivationRow[];
+  closeReasons: { key: string; label: string }[];
+  thresholds: { sleepingDays: number; lostDays: number };
+  tiles: {
+    sleeping: number; sleepingPotential: number; lost: number; seasonal: number;
+    inWork: number; returned30: number; returned30Revenue: number;
+  };
+  canAssign: boolean;
+}
+export async function fetchReactivationList(params?: { managerId?: number; teamId?: number }): Promise<ReactivationResp> {
+  const { data } = await api.get<ReactivationResp>("/dashboard/reactivation-list", { params });
+  return data;
+}
+export async function setClientSeasonal(body: { clientKey: string; seasonal: boolean; note?: string }): Promise<{ seasonal: boolean }> {
+  const { data } = await api.post("/dashboard/client-seasonal", body);
+  return data;
+}
+export interface MergePreview {
+  alias: { key: string; name: string | null; orders: number; revenue: number; lastPaid: string | null };
+  canonical: { key: string; name: string | null; orders: number; revenue: number; lastPaid: string | null };
+  after: { orders: number; revenue: number; regular: boolean };
+  dealsToMove: number;
+  chainBlocked: string[];
+  plans: { side: string; month: string; plan: number; status: string }[];
+  planConflictMonths: string[];
+  reversible: string;
+}
+export async function fetchMergePreview(alias: string, canonical: string): Promise<MergePreview> {
+  const { data } = await api.get<MergePreview>("/dashboard/client-merge/preview", { params: { alias, canonical } });
+  return data;
+}
+export async function mergeClients(body: { alias: string; canonical: string; reason: string }): Promise<{ recomputed: number }> {
+  const { data } = await api.post("/dashboard/client-merge", body);
+  return data;
+}
+export async function revokeMerge(alias: string): Promise<{ recomputed: number }> {
+  const { data } = await api.post("/dashboard/client-merge/revoke", { alias });
+  return data;
+}
+export interface MergeJournalRow {
+  aliasKey: string; canonicalKey: string; reason: string;
+  createdAt: string; revokedAt: string | null; approvedBy: string | null;
+}
+export async function fetchMergeJournal(): Promise<MergeJournalRow[]> {
+  const { data } = await api.get<MergeJournalRow[]>("/dashboard/client-merge/journal");
+  return data;
+}
+export async function assignClientManager(body: { clientKey: string; managerId: number; reason?: string }): Promise<{ effectiveFrom: string; note: string }> {
+  const { data } = await api.post("/dashboard/client-manager", body);
+  return data;
+}
+export interface ManagerHistoryRow {
+  fromManager: string | null; toManager: string; effectiveFrom: string;
+  reason: string | null; changedBy: string | null; createdAt: string;
+}
+export async function fetchClientManagerHistory(clientKey: string): Promise<ManagerHistoryRow[]> {
+  const { data } = await api.get<ManagerHistoryRow[]>("/dashboard/client-manager/history", { params: { clientKey } });
+  return data;
+}

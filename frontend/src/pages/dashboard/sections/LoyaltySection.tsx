@@ -18,6 +18,7 @@ import {
 } from "../../../api";
 import { formatAmount } from "../format";
 import { ClientPlansSection } from "./ClientPlansSection";
+import { ReactivationSection } from "./ReactivationSection";
 import { ReactivationGrid } from "./ReactivationGrid";
 import { teamOptions } from "../teamColors";
 
@@ -117,6 +118,9 @@ export function LoyaltySection({
       {/* ФАЗА A · новий екран за макетом. Старі блоки лишаються нижче до Фази B —
           видаляти їх разом із побудовою означало б втратити дані, якщо щось не так. */}
       {auth && <ClientPlansSection auth={auth} />}
+      {auth && <div style={{ height: 22 }} />}
+      {auth && <ReactivationSection auth={auth} />}
+      {auth && <div style={{ height: 22 }} />}
 
       <div className="page-header">
         <h1 className="page-title">Клієнти: постійні та реактивація</h1>
