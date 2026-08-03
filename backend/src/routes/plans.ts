@@ -93,12 +93,18 @@ plansRouter.get("/formation", async (req, res) => {
       ORDER BY t.name NULLS LAST, m.name`, teamId ? [teamId] : []
   )).rows;
 
-  const [hist, split, carry, plansRows, formRows] = await Promise.all([
+  // 🔴 ДОВІДКОВО: Σ ЗАТВЕРДЖЕНИХ планів по клієнтах за TARGET-місяць.
+  // Рішення власника 03.08.2026: ручне поле «постійні принесуть» ЛИШАЄТЬСЯ, а ця
+  // цифра стоїть ПОРУЧ. Розбіжність між ними має бути ВИДИМОЮ, а не мовчазною —
+  // той самий принцип, що з відповідальним менеджером: показуємо конфлікт, а не
+  // ховаємо. Тому тут НЕ окремий підрахунок: беремо ті самі рядки
+  // `repeat_client_plans` зі статусом 'approved', що й екран клієнтів.
+  const [hist, split, carry, plansRows, formRows, repeatApproved] = await Promise.all([
     money.successByManagerMonth({ ...scopeM, from: histFrom, to: refTo }),
     metrics.clientSplitForPlan({ ...scopeMetric, from: refFrom, to: refTo }),
     metrics.carryoverByManager({ teamId }, month),
-    pool.query<{ manager_id: number; planned_value: string }>(
-      `SELECT manager_id, planned_value FROM plans WHERE plan_date = $1 AND metric = 'payment_amount'`, [month]),
+    pool.query<{ manager_id: number; planned_value: string; metric: string }>(
+      `SELECT manager_id, planned_value, metric FROM plans WHERE plan_date = $1 AND metric IN ('payment_amount','repeat_payment_amount')`, [month]),
     pool.query<{ manager_id: number; proposed_value: string; status: string; comment: string | null; return_comment: string | null;
       below_min: boolean; submitted_by: number | null; submitted_at: string | null; submitted_name: string | null;
       decided_by: number | null; decided_at: string | null; decided_name: string | null }>(
@@ -109,7 +115,15 @@ plansRouter.get("/formation", async (req, res) => {
          LEFT JOIN users su ON su.id = pf.submitted_by LEFT JOIN managers sm ON sm.id = su.manager_id
          LEFT JOIN users du ON du.id = pf.decided_by LEFT JOIN managers dm ON dm.id = du.manager_id
         WHERE pf.month = $1 AND pf.metric = 'payment_amount'`, [month]),
+    pool.query<{ manager_id: number; approved_sum: string; approved_clients: string; total_sum: string }>(
+      `SELECT manager_id,
+              COALESCE(SUM(plan) FILTER (WHERE status = 'approved'), 0) AS approved_sum,
+              COUNT(*) FILTER (WHERE status = 'approved') AS approved_clients,
+              COALESCE(SUM(plan), 0) AS total_sum
+         FROM repeat_client_plans WHERE month = $1 AND manager_id IS NOT NULL
+        GROUP BY manager_id`, [month]),
   ]);
+  const repeatMap = new Map(repeatApproved.rows.map((r) => [r.manager_id, r]));
 
   // Історія → map manager → month → {rev,deals}; 6-міс ряд + 3-міс база рекомендації.
   const histMonths = [6, 5, 4, 3, 2, 1].map((b) => shiftMonth(month, b)); // старий→новий, закінчується refMonth
@@ -117,7 +131,10 @@ plansRouter.get("/formation", async (req, res) => {
   for (const r of hist) { const mm = histMap.get(r.managerId) ?? new Map(); mm.set(r.bucket, { revenue: r.revenue, deals: r.deals }); histMap.set(r.managerId, mm); }
   const splitMap = new Map(split.map((s) => [s.managerId, s]));
   const carryMap = new Map(carry.map((c) => [c.managerId, c.amount]));
-  const planMap = new Map(plansRows.rows.map((p) => [p.manager_id, Number(p.planned_value)]));
+  const planMap = new Map(plansRows.rows.filter((p) => p.metric === "payment_amount").map((p) => [p.manager_id, Number(p.planned_value)]));
+  // Ручне поле «постійні принесуть» — лишається як є (рішення власника); поруч
+  // із ним фронт покаже Σ затверджених, і розбіжність буде видно.
+  const repeatPlanMap = new Map(plansRows.rows.filter((p) => p.metric === "repeat_payment_amount").map((p) => [p.manager_id, Number(p.planned_value)]));
   const formMap = new Map(formRows.rows.map((f) => [f.manager_id, f]));
   const baseM = baseMonthsFor(month); // 3 повні місяці перед target
 
@@ -141,6 +158,16 @@ plansRouter.get("/formation", async (req, res) => {
       },
       carryover: Math.round(carryMap.get(m.id) ?? 0),
       currentPlan: Math.round(planMap.get(m.id) ?? 0),
+      // Довідкова цифра з екрана «Постійні клієнти». `approved` — те, що
+      // система вважає планом по постійних; `declared` — ручне поле. Обидва
+      // віддаються окремо, щоб фронт МІГ показати розбіжність, а не мусив
+      // здогадуватись, яка з них «правильна».
+      repeatClients: {
+        approved: Math.round(Number(repeatMap.get(m.id)?.approved_sum ?? 0)),
+        approvedClients: Number(repeatMap.get(m.id)?.approved_clients ?? 0),
+        entered: Math.round(Number(repeatMap.get(m.id)?.total_sum ?? 0)),
+        declared: Math.round(Number(repeatPlanMap.get(m.id) ?? 0)),
+      },
       formation: f ? {
         status: f.status, proposedValue: Math.round(Number(f.proposed_value)), comment: f.comment, returnComment: f.return_comment,
         belowMin: f.below_min === true,

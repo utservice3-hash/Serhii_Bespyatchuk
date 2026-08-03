@@ -307,6 +307,26 @@ function ClientsSeg({ m, refMonth }: { m: PFManager; refMonth: string }) {
   return (
     <div>
       <div style={segTitle}>Клієнти · {monFull(refMonth)}</div>
+      {/* 🔴 РОЗБІЖНІСТЬ ПОКАЗУЄМО, А НЕ ХОВАЄМО (рішення власника 03.08.2026).
+          Ручне поле «постійні принесуть» лишається як є; Σ ЗАТВЕРДЖЕНИХ планів по
+          клієнтах стоїть поруч довідково. Якщо вони не збігаються — це видно
+          бейджем, а не з'ясовується постфактум, коли план уже затверджено. */}
+      {m.repeatClients && (m.repeatClients.declared > 0 || m.repeatClients.approved > 0) && (
+        <div style={{ margin: "4px 0 8px", padding: "6px 9px", borderRadius: 8, fontSize: 12, lineHeight: 1.5,
+          background: m.repeatClients.declared === m.repeatClients.approved ? "var(--surface-2, #f8fafc)" : "#fffbeb",
+          border: `1px solid ${m.repeatClients.declared === m.repeatClients.approved ? "var(--border)" : "#fcd34d"}` }}>
+          {m.repeatClients.declared === m.repeatClients.approved ? (
+            <>✓ «Постійні принесуть» {k(m.repeatClients.declared)} ₴ — збігається з Σ затверджених
+              планів по {m.repeatClients.approvedClients} клієнтах.</>
+          ) : (
+            <><b>⚠️ Заявлено {k(m.repeatClients.declared)} ₴</b>, затверджено по клієнтах{" "}
+              <b>{k(m.repeatClients.approved)} ₴</b> ({m.repeatClients.approvedClients} кл.)
+              {m.repeatClients.entered !== m.repeatClients.approved &&
+                <> · ще не погоджено {k(m.repeatClients.entered - m.repeatClients.approved)} ₴</>}
+              . Ручне поле лишається як є — це орієнтир, а не помилка.</>
+          )}
+        </div>
+      )}
       {row(GREEN, "Постійні", c.repeat, (
         <button onClick={toggle} style={{ background: "none", border: "none", color: BAR, cursor: "pointer", fontSize: 12, padding: 0 }}>
           {open ? "▲ згорнути" : "▼ розгорнути"}

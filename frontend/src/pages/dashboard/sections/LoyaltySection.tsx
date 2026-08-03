@@ -18,6 +18,7 @@ import {
 } from "../../../api";
 import { formatAmount } from "../format";
 import { RepeatPlanGrid } from "./RepeatPlanGrid";
+import { ClientPlansSection } from "./ClientPlansSection";
 import { ReactivationGrid } from "./ReactivationGrid";
 import { teamOptions } from "../teamColors";
 
@@ -114,6 +115,10 @@ export function LoyaltySection({
   };
   return (
     <>
+      {/* ФАЗА A · новий екран за макетом. Старі блоки лишаються нижче до Фази B —
+          видаляти їх разом із побудовою означало б втратити дані, якщо щось не так. */}
+      {auth && <ClientPlansSection auth={auth} />}
+
       <div className="page-header">
         <h1 className="page-title">Клієнти: постійні та реактивація</h1>
         {auth?.role !== "manager" && (

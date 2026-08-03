@@ -421,7 +421,7 @@ export interface CreatedSplitBucketRow { bucket: string; created: number; newCou
 // Дженерик/порожні client_key, що НЕ беруть участі в матчингу історії клієнта
 // (колізійні: «названиенеуказано» = 1.3к угод різних клієнтів; порожній ключ).
 // Живе тут, а не в коді СИНКУ, бо це правило ЗВІРКИ, не нормалізації ключа.
-const GENERIC_CLIENT_KEYS = ["названиенеуказано", ""];
+export const GENERIC_CLIENT_KEYS = ["названиенеуказано", "companynamenotspecified", ""];
 
 // ЄДИНЕ джерело правила класифікації (B→C→A) — щоб by-manager і by-bucket не
 // розходились. Читає lead_channel / vkey / has_prior / sales_channel з CTE `classed`.

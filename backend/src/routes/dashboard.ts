@@ -3786,7 +3786,12 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // ── ПОСТІЙНІ КЛІЄНТИ (2+ оплат lifetime) з основним менеджером.
   // lifetime-факт, ГОРИЗОНТ НЕ ЗАСТОСОВУЄТЬСЯ (правило: горизонт не стосується
   // lifetime-фактів — постійність, лояльність, реактивація).
-  const mgrParams: unknown[] = [];
+  // 🔴 ДЖЕНЕРИК-КЛЮЧІ ВИКИДАЄМО. Пісочниця показала «Название не указано» першим
+  // рядком: 612 замовлень і 80 878 ₴ за місяць. Це не клієнт, а плейсхолдер Kommo,
+  // під яким лежать сотні РІЗНИХ замовників — план на нього поставити неможливо, а
+  // в топі він витісняє справжніх. Список спільний зі звіркою (`GENERIC_CLIENT_KEYS`),
+  // щоб два екрани не розійшлись у тому, що вважати клієнтом.
+  const mgrParams: unknown[] = [metrics.GENERIC_CLIENT_KEYS];
   let mgrCond = "";
   if (managerId != null) { mgrParams.push(managerId); mgrCond = `AND pm.manager_id = $${mgrParams.length}`; }
   else if (teamId != null) { mgrParams.push(teamId); mgrCond = `AND mm.team_id = $${mgrParams.length}`; }
@@ -3801,6 +3806,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
          FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
         WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+          AND NOT (d.client_key = ANY($1))
      ),
      agg AS (
        SELECT client_key, COUNT(*)::int AS orders, COALESCE(SUM(price),0) AS revenue,
@@ -3816,7 +3822,14 @@ dashboardRouter.get("/client-plans", async (req, res) => {
            FROM paid GROUP BY client_key, manager_id
        ) z WHERE rn = 1
      )
-     SELECT a.client_key, a.name, a.orders, a.revenue, a.first_paid, a.last_paid, a.payment_type,
+     -- 🔴 Дати віддаємо ТЕКСТОМ і по-київськи. pg повертає timestamptz як Date,
+     -- і slice(0,7) на ньому падає — пісочниця це й спіймала. Київ, бо весь
+     -- дашборд рахує по-київськи; UTC зсував би «з якого місяця» на добу.
+     -- (Зворотних лапок тут бути НЕ МОЖЕ: цей SQL живе в шаблонному рядку JS,
+     --  і перша ж лапка обриває шаблон. Саме так і сталось першого разу.)
+     SELECT a.client_key, a.name, a.orders, a.revenue, a.payment_type,
+            to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS first_paid,
+            to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS last_paid,
             COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
             mm.name AS manager_name, lo.pinned_manager_id
        FROM agg a
@@ -3877,7 +3890,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // ── ПЛАН ТИЖНЯ = місячний план × робочі дні тижня / робочі дні місяця.
   const totalWd = money.monthWorkingDays(monthStr);
   const todayStr = kyivToday();
-  const dayOf = (iso: string | null) => (iso ? Math.floor((Date.parse(`${todayStr}T00:00:00Z`) - Date.parse(iso)) / 86400000) : null);
+  const dayOf = (ymd: string | null) =>
+    ymd ? Math.round((Date.parse(`${todayStr}T00:00:00Z`) - Date.parse(`${ymd}T00:00:00Z`)) / 86400000) : null;
 
   const clients = clientsRes.rows.map((c) => {
     const p = planByKey.get(c.client_key);
@@ -3890,7 +3904,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       paymentType: c.payment_type ?? null,
       orders: Number(c.orders),
       lifetimeRevenue: Number(c.revenue),
-      since: c.first_paid ? c.first_paid.slice(0, 7) : null,
+      since: c.first_paid ? c.first_paid.slice(0, 7) : null,   // YYYY-MM
       lastOrderDays: dayOf(c.last_paid),
       history: histByKey.get(c.client_key) ?? histMonths.map(() => 0),
       plan,

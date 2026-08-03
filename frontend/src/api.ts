@@ -296,6 +296,8 @@ export interface PFManager {
   recommendation: PFRecommendation;
   clients: PFClients;
   carryover: number; currentPlan: number;
+  /** Довідково з екрана «Постійні клієнти»: що заявлено вручну і що погоджено по клієнтах. */
+  repeatClients?: { approved: number; approvedClients: number; entered: number; declared: number };
   formation: PFState;
 }
 export interface PFTeam {
@@ -2264,5 +2266,57 @@ export async function fetchHealthAlerts(): Promise<{
   alerts: HealthAlert[]; checkedAt: string; checksDeclared: number; checksRan: number;
 }> {
   const { data } = await api.get("/health/alerts");
+  return data;
+}
+
+// ── ФАЗА A · «Постійні клієнти · план місяця» ────────────────────────────────
+export interface ClientPlanWeek { label: string; from: string; to: string; status: "past" | "current" | "future"; plan: number; fact: number }
+export interface ClientPlanRow {
+  clientKey: string; clientName: string; paymentType: string | null;
+  orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
+  history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
+  reviewNote: string | null; weeks: ClientPlanWeek[]; fact: number; pct: number | null;
+  managerId: number; managerName: string; pinned: boolean; comments: number; calls: never[];
+}
+export interface ClientPlansResp {
+  month: string; historyMonths: string[];
+  weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
+  clients: ClientPlanRow[];
+  totals: {
+    planTotal: number; planApproved: number; factTotal: number; pct: number | null;
+    filledClients: number; totalClients: number;
+    currentWeekIndex: number | null; currentWeekFact: number | null; currentWeekPlan: number | null;
+    atRiskCount: number; atRiskNames: string[]; goesToManagerPlan: number;
+    byStatus: Record<string, number>; canSubmit: boolean; canApprove: boolean;
+  };
+  callsUnavailable: string;
+}
+export async function fetchClientPlans(params: { month: string; managerId?: number; teamId?: number }): Promise<ClientPlansResp> {
+  const { data } = await api.get<ClientPlansResp>("/dashboard/client-plans", { params });
+  return data;
+}
+export async function saveClientPlan(body: { clientKey: string; month: string; plan: number }): Promise<{ status: string }> {
+  const { data } = await api.post("/dashboard/client-plan", body);
+  return data;
+}
+export async function submitClientPlans(body: { month: string; managerId?: number }): Promise<{ submitted: number }> {
+  const { data } = await api.post("/dashboard/client-plans/submit", body);
+  return data;
+}
+export async function approveClientPlans(body: { month: string; managerId?: number }): Promise<{ approved: number }> {
+  const { data } = await api.post("/dashboard/client-plans/approve-all", body);
+  return data;
+}
+export async function returnClientPlan(body: { clientKey: string; month: string; note: string }): Promise<{ ok: boolean }> {
+  const { data } = await api.post("/dashboard/client-plan/return", body);
+  return data;
+}
+export interface ClientComment { id: number; body: string; createdAt: string; author: string | null }
+export async function fetchClientComments(clientKey: string): Promise<ClientComment[]> {
+  const { data } = await api.get<ClientComment[]>("/dashboard/client-comments", { params: { clientKey } });
+  return data;
+}
+export async function addClientComment(body: { clientKey: string; body: string }): Promise<ClientComment> {
+  const { data } = await api.post("/dashboard/client-comments", body);
   return data;
 }

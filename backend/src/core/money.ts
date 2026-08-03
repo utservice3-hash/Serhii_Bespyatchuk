@@ -227,10 +227,27 @@ export interface ClientWeekRow { clientKey: string; weekIndex: number; revenue: 
 export async function successByClientWeek(s: MoneyScope): Promise<ClientWeekRow[]> {
   const monthStr = (s.from ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" })).slice(0, 7);
   const weeks = monthWeeks(monthStr);
-  const per = await Promise.all(weeks.map((w) => successByClientKey({ ...s, from: w.from, to: w.to })));
-  const out: ClientWeekRow[] = [];
-  per.forEach((rows, i) => { for (const r of rows) out.push({ clientKey: r.key, weekIndex: i, revenue: r.revenue, deals: r.deals }); });
-  return out;
+  // 🔴 ОДИН запит по днях, а не пʼять по тижнях. Перша версія робила
+  // `successByClientKey` на кожен тиждень — пʼять повних сканів `deals` заради
+  // розрізу, який дає один GROUP BY. У пісочниці це коштувало 8.5 с на запит; на
+  // проді (146 тис. угод) було б помітно гірше, і виглядало б як «екран гальмує»,
+  // а не як «ми пʼять разів спитали те саме».
+  const days = await successByClientBucket(s, "day");
+  const idxOf = (ymd: string): number => {
+    const d = Number(ymd.slice(8, 10));
+    for (const w of weeks) if (d >= w.fromDay && d <= w.toDay) return w.index;
+    return weeks.length - 1;
+  };
+  const acc = new Map<string, ClientWeekRow>();
+  for (const r of days) {
+    if (r.bucket.slice(0, 7) !== monthStr) continue;
+    const wi = idxOf(r.bucket);
+    const k = `${r.clientKey}|${wi}`;
+    const cur = acc.get(k) ?? { clientKey: r.clientKey, weekIndex: wi, revenue: 0, deals: 0 };
+    cur.revenue += r.revenue; cur.deals += r.deals;
+    acc.set(k, cur);
+  }
+  return [...acc.values()];
 }
 
 export interface SegmentAgg { newSeg: MoneyAgg; repeatSeg: MoneyAgg; unattributed: MoneyAgg }
