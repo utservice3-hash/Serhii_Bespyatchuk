@@ -47,6 +47,13 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/personal"), tabs: ["manager-report"] },
     { test: pre("/api/dashboard/teams"), tabs: ["teams"] },
     { test: pre("/api/dashboard/managers"), tabs: ["managers"] },
+    // ФАЗА A · «Постійні клієнти · план місяця» — заміна екрана «Клієнти та
+    // реактивація», тож вкладка та сама. `pre` матчить ПО СЛЕШУ, тому
+    // `/client-plans` і `/client-comments` — окремі записи, а не один префікс:
+    // сусід через дефіс є ІНШИМ роутом.
+    { test: pre("/api/dashboard/client-plans"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/client-plan"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/client-comments"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-override"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-overrides"), tabs: ["loyalty"] },

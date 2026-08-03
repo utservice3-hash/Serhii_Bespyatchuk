@@ -402,6 +402,36 @@ CREATE TABLE IF NOT EXISTS repeat_client_plans (
 ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved';
 ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCES users(id);
 ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+-- ЦИКЛ ЗАТВЕРДЖЕННЯ ПЛАНУ ПО КЛІЄНТУ (рішення власника 03.08.2026): той самий,
+-- що в місячного плану менеджера — ЧЕРНЕТКА → ПОДАНО → ЗАТВЕРДЖЕНО.
+-- 🔴 `status` уже існував із двома станами ('pending'/'approved') і DEFAULT
+-- 'approved'. Третій стан ('draft') додається БЕЗ зміни дефолта: старі рядки
+-- лишаються затвердженими, інакше міграція мовчки знецінила б уже погоджені
+-- плани, і Σ «постійні принесуть» просіла б на рівному місці.
+ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
+-- Коментар тімліда при поверненні на доопрацювання. Окремо від `comment`
+-- (той — про клієнта, від менеджера); змішавши їх, ми втратили б обидва сенси.
+ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE repeat_client_plans ADD COLUMN IF NOT EXISTS returned_at TIMESTAMPTZ;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- КОМЕНТАРІ ПО КЛІЄНТУ (екран «Постійні клієнти · план місяця»)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 🔴 Чому окрема таблиця, а не поле `comment` у `repeat_client_plans`. Те поле —
+-- ОДИН рядок на (клієнт, місяць) і без автора: другий коментар затирає перший, а
+-- «хто це написав» відновити неможливо. Макет вимагає стрічку з автором і датою,
+-- тож це різні сутності: план місяця (одна цифра) і розмова про клієнта (журнал).
+-- Ключ — КАНОНІЧНИЙ `client_key`: після злиття псевдонімів коментарі обох половин
+-- клієнта опиняються в одній стрічці, а не губляться разом зі старим ключем.
+CREATE TABLE IF NOT EXISTS client_comments (
+  id          SERIAL PRIMARY KEY,
+  client_key  TEXT NOT NULL,
+  author_id   INTEGER REFERENCES users(id),
+  body        TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (length(btrim(body)) > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_client_comments_key ON client_comments(client_key, created_at DESC);
 
 -- Monthly snapshot of "carried-over" deals: the value of deals still in
 -- progress (approved→invoiced→payment received, NOT yet closed as Успішна) as

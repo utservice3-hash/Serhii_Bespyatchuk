@@ -155,6 +155,24 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/leadgen-regulars", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  // ФАЗА A · «Постійні клієнти · план місяця». Межа — вкладка `loyalty`, якої в
+  // HR немає (перевірено в БД: ключа `loyalty` у screen_access ролі hr немає
+  // взагалі). Менеджер вкладку МАЄ і бачить своїх клієнтів — звуження робить
+  // скоуп усередині роута, а не відмова на вході.
+  { method: "GET", path: "/api/dashboard/client-plans", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/client-comments?clientKey=zzz", cls: "GET",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/client-comments", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/client-plan", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/client-plan/return", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/client-plans/submit", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/client-plans/approve-all", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/loyalty", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/loyalty-override", cls: "deny-only",

@@ -26,6 +26,7 @@ import { getSettings } from "./settings.js";
 import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
 import * as money from "../core/money.js";
+import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanRules.js";
 import * as metrics from "../core/metrics.js";
 import * as plans from "../core/plans.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
@@ -3633,16 +3634,13 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
 
   const [y, mo] = monthStr.split("-").map(Number);
   const daysInMonth = new Date(y, mo, 0).getDate();
-  let workingDays = 0;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dow = new Date(y, mo - 1, d).getDay();
-    if (dow !== 0 && dow !== 6) workingDays++;
-  }
-  const weekStarts = [1, 8, 15, 22, 29].filter((s) => s <= daysInMonth);
-  const weeks = weekStarts.map((s, i) => {
-    const end = Math.min(s + 6, daysInMonth);
-    return { label: `Тиждень ${i + 1}`, from: s, to: end, days: end - s + 1 };
-  });
+  // Межі тижнів і робочі дні — ЯДРО (`money.monthWeeks`/`monthWorkingDays`).
+  // Тут стояла власна копія `[1, 8, 15, 22, 29]`; поки копії збігались, різниці
+  // не було видно, але «тиждень 2» на двох екранах мусить означати ОДНІ дні.
+  const workingDays = money.monthWorkingDays(monthStr);
+  const weeks = money.monthWeeks(monthStr).map((w) => ({
+    label: w.label, from: w.fromDay, to: w.toDay, days: w.toDay - w.fromDay + 1,
+  }));
 
   // Per-manager money for the month (teamId is a validated number → safe to inline):
   //  fact = «Успішно» (142, закрито в місяці) + «Оплата отримана» (снапшот);
@@ -3707,6 +3705,364 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
  * and the frontend decomposes the remaining target across the month's weeks.
  * Team-lead sees only their team; admin sees all (optional teamId).
  */
+/** Сьогодні по-київськи, YYYY-MM-DD. */
+const kyivToday = (): string => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+
+/**
+ * Чи має роль право бачити цього клієнта. МЕЖА ОДНА для читання і для запису
+ * коментарів — інакше «не бачить» і «не може писати» роз'їхались би, і одне з
+ * двох тихо стало б ширшим.
+ *
+ * Основний менеджер клієнта = закріплений (`loyalty_overrides.pinned_manager_id`)
+ * або той, у кого найбільше оплачених угод цього клієнта.
+ */
+async function canSeeClient(auth: NonNullable<typeof import("express")["request"]["auth"]>, clientKey: string): Promise<boolean> {
+  if (isAdminScope(auth)) return true;
+  const r = await pool.query<{ manager_id: number; team_id: number | null }>(
+    `WITH paid AS (
+       SELECT d.manager_id, d.closed_at_kommo FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE psm.funnel_stage = 'paid' AND d.client_key = $1
+     ), pm AS (
+       SELECT manager_id FROM (
+         SELECT manager_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(closed_at_kommo) DESC) rn
+           FROM paid GROUP BY manager_id) z WHERE rn = 1
+     )
+     SELECT COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id, m.team_id
+       FROM pm LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
+       JOIN managers m ON m.id = COALESCE(lo.pinned_manager_id, pm.manager_id)`, [clientKey]);
+  const row = r.rows[0];
+  if (!row) return false;
+  if (auth.role === "manager") return row.manager_id === auth.managerId;
+  if (auth.role === "team_lead") return row.team_id === auth.teamId;
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ФАЗА A · «ПОСТІЙНІ КЛІЄНТИ · ПЛАН МІСЯЦЯ»
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Рядок = клієнт по КАНОНІЧНОМУ `client_key`; постійний = 2+ оплат lifetime.
+ *
+ * 🔴 ФАКТ РАХУЄ ЯДРО, і саме тому Σ сходиться. `money.successByClientKey` —
+ * та сама функція, що дає `successByMgr`: інший лише GROUP BY. Попередній екран
+ * (`/repeat-plans-grid`) рахував факт ВЛАСНИМ SQL і додавав НЕДАТОВАНИЙ знімок
+ * етапу 9 — тобто (а) метрику ②, якої тут бути не повинно за правилом власника
+ * від 02.08.2026, і (б) знімок, що мутує минулі місяці. Через це «факт по
+ * клієнтах» і «факт менеджера у Звіті» розходились за побудовою.
+ *
+ * 🔴 ТИЖНІ — з `money.monthWeeks`, тієї самої функції, що живить Звіт. Копії
+ * `[1,8,15,22,29]` більше немає ніде.
+ */
+dashboardRouter.get("/client-plans", async (req, res) => {
+  const auth = req.auth!;
+  const monthStr = String(req.query.month ?? "").match(/^\d{4}-\d{2}$/)
+    ? String(req.query.month) : kyivToday().slice(0, 7);
+  const monthStart = `${monthStr}-01`;
+  const daysInMonth = new Date(Number(monthStr.slice(0, 4)), Number(monthStr.slice(5, 7)), 0).getDate();
+  const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
+
+  // Скоуп: менеджер — лише свої клієнти; тімлід — своя команда; КВП/ОД — усі
+  // (з необовʼязковим вибором менеджера). HR сюди не потрапляє — межа вкладки.
+  let managerId: number | null = null;
+  let teamId: number | null = null;
+  if (auth.role === "manager") managerId = auth.managerId ?? -1;
+  else if (auth.role === "team_lead") {
+    teamId = auth.teamId ?? -1;
+    if (req.query.managerId) {
+      const wanted = Number(req.query.managerId);
+      const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [wanted]);
+      if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+      managerId = wanted; teamId = null;
+    }
+  } else {
+    if (req.query.managerId) managerId = Number(req.query.managerId);
+    else if (req.query.teamId) teamId = Number(req.query.teamId);
+  }
+  const scope: money.MoneyScope = { from: monthStart, to: monthEnd, managerId: managerId ?? undefined, teamId: teamId ?? undefined };
+
+  const weeks = money.monthWeeks(monthStr);
+
+  // ── ПОСТІЙНІ КЛІЄНТИ (2+ оплат lifetime) з основним менеджером.
+  // lifetime-факт, ГОРИЗОНТ НЕ ЗАСТОСОВУЄТЬСЯ (правило: горизонт не стосується
+  // lifetime-фактів — постійність, лояльність, реактивація).
+  const mgrParams: unknown[] = [];
+  let mgrCond = "";
+  if (managerId != null) { mgrParams.push(managerId); mgrCond = `AND pm.manager_id = $${mgrParams.length}`; }
+  else if (teamId != null) { mgrParams.push(teamId); mgrCond = `AND mm.team_id = $${mgrParams.length}`; }
+
+  const clientsRes = await pool.query<{
+    client_key: string; name: string | null; orders: string; revenue: string;
+    first_paid: string | null; last_paid: string | null; manager_id: number;
+    manager_name: string; payment_type: string | null; pinned_manager_id: number | null;
+  }>(
+    `WITH paid AS (
+       SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo, d.client_name, d.payment_type
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+     ),
+     agg AS (
+       SELECT client_key, COUNT(*)::int AS orders, COALESCE(SUM(price),0) AS revenue,
+              MIN(closed_at_kommo) AS first_paid, MAX(closed_at_kommo) AS last_paid,
+              (array_agg(client_name ORDER BY closed_at_kommo DESC NULLS LAST))[1] AS name,
+              (array_agg(payment_type ORDER BY closed_at_kommo DESC NULLS LAST))[1] AS payment_type
+         FROM paid GROUP BY client_key HAVING COUNT(*) >= 2
+     ),
+     primary_mgr AS (
+       SELECT client_key, manager_id FROM (
+         SELECT client_key, manager_id,
+                ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY COUNT(*) DESC, MAX(closed_at_kommo) DESC) AS rn
+           FROM paid GROUP BY client_key, manager_id
+       ) z WHERE rn = 1
+     )
+     SELECT a.client_key, a.name, a.orders, a.revenue, a.first_paid, a.last_paid, a.payment_type,
+            COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
+            mm.name AS manager_name, lo.pinned_manager_id
+       FROM agg a
+       JOIN primary_mgr pm ON pm.client_key = a.client_key
+       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key AND NOT lo.hidden
+       JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+      WHERE COALESCE(lo.hidden, false) = false ${mgrCond}
+      ORDER BY a.revenue DESC`,
+    mgrParams
+  );
+  const clientKeys = clientsRes.rows.map((c) => c.client_key);
+  const keySet = new Set(clientKeys);
+
+  // ── ФАКТ І ТИЖНІ — ЯДРО (①). Один виклик на місяць + один на тиждень.
+  const histFrom = (() => { const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 5); return d.toISOString().slice(0, 7) + "-01"; })();
+  // Явний обʼєкт, а не спред scope: ворота #17e2 вимагають, щоб кожен спред був
+  // названим у реєстрі — тут дешевше не спредити, ніж пояснювати спред.
+  const histScope: money.MoneyScope = {
+    from: histFrom, to: monthEnd,
+    managerId: managerId ?? undefined, teamId: teamId ?? undefined,
+  };
+  const [monthFact, weekFact, hist, plansRes, commentsRes] = await Promise.all([
+    money.successByClientKey(scope),
+    money.successByClientWeek(scope),
+    money.successByClientBucket(histScope, "month"),
+    clientKeys.length ? pool.query<{ client_key: string; plan: string; status: string; manager_id: number | null; review_note: string | null }>(
+      `SELECT client_key, plan, status, manager_id, review_note FROM repeat_client_plans WHERE month = $1 AND client_key = ANY($2)`,
+      [monthStart, clientKeys]) : { rows: [] as { client_key: string; plan: string; status: string; manager_id: number | null; review_note: string | null }[] },
+    clientKeys.length ? pool.query<{ client_key: string; n: string }>(
+      `SELECT client_key, COUNT(*) AS n FROM client_comments WHERE client_key = ANY($1) GROUP BY client_key`,
+      [clientKeys]) : { rows: [] as { client_key: string; n: string }[] },
+  ]);
+  const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
+  const weekByKey = new Map<string, number[]>();
+  for (const w of weekFact) {
+    if (!keySet.has(w.clientKey)) continue;
+    const arr = weekByKey.get(w.clientKey) ?? weeks.map(() => 0);
+    arr[w.weekIndex] = w.revenue;
+    weekByKey.set(w.clientKey, arr);
+  }
+  const histMonths: string[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - i);
+    histMonths.push(d.toISOString().slice(0, 7));
+  }
+  const histByKey = new Map<string, number[]>();
+  for (const h of hist) {
+    if (!keySet.has(h.clientKey)) continue;
+    const idx = histMonths.indexOf(h.bucket.slice(0, 7));
+    if (idx < 0) continue;
+    const arr = histByKey.get(h.clientKey) ?? histMonths.map(() => 0);
+    arr[idx] += h.revenue;
+    histByKey.set(h.clientKey, arr);
+  }
+  const planByKey = new Map(plansRes.rows.map((p) => [p.client_key, p]));
+  const commentsByKey = new Map(commentsRes.rows.map((c) => [c.client_key, Number(c.n)]));
+
+  // ── ПЛАН ТИЖНЯ = місячний план × робочі дні тижня / робочі дні місяця.
+  const totalWd = money.monthWorkingDays(monthStr);
+  const todayStr = kyivToday();
+  const dayOf = (iso: string | null) => (iso ? Math.floor((Date.parse(`${todayStr}T00:00:00Z`) - Date.parse(iso)) / 86400000) : null);
+
+  const clients = clientsRes.rows.map((c) => {
+    const p = planByKey.get(c.client_key);
+    const plan = p ? Number(p.plan) : 0;
+    const fact = factByKey.get(c.client_key) ?? 0;
+    const wf = weekByKey.get(c.client_key) ?? weeks.map(() => 0);
+    return {
+      clientKey: c.client_key,
+      clientName: c.name ?? c.client_key,
+      paymentType: c.payment_type ?? null,
+      orders: Number(c.orders),
+      lifetimeRevenue: Number(c.revenue),
+      since: c.first_paid ? c.first_paid.slice(0, 7) : null,
+      lastOrderDays: dayOf(c.last_paid),
+      history: histByKey.get(c.client_key) ?? histMonths.map(() => 0),
+      plan,
+      planStatus: p?.status ?? "none",
+      reviewNote: p?.review_note ?? null,
+      weeks: weeks.map((w, i) => ({
+        label: w.label, from: w.from, to: w.to, status: w.status,
+        plan: totalWd > 0 ? Math.round(plan * (w.workingDays / totalWd)) : 0,
+        fact: Math.round(wf[i] ?? 0),
+      })),
+      fact: Math.round(fact),
+      pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
+      managerId: c.manager_id,
+      managerName: c.manager_name,
+      pinned: c.pinned_manager_id != null,
+      comments: commentsByKey.get(c.client_key) ?? 0,
+      // 🔴 Дзвінків тут НЕМАЄ і бути поки не може: Ringostat-синк зберігає лише
+      // АГРЕГАТ по тімлідах у statistics_values, окремих дзвінків із номером
+      // абонента ми не зберігаємо взагалі. Порожній масив із названою причиною —
+      // чесніше за приховану колонку: видно, що місце є, а даних немає.
+      calls: [] as never[],
+    };
+  });
+
+  // Арифметика статусів — у `clientPlanRules`, той самий модуль, що бере гейт.
+  const { planTotal, planApproved, byStatus } = planTotals(clients);
+  const factTotal = clients.reduce((s2, c) => s2 + c.fact, 0);
+  const curIdx = weeks.findIndex((w) => w.status === "current");
+  const atRisk = clients.filter((c) => c.lastOrderDays != null && c.lastOrderDays > 30);
+
+  res.json({
+    month: monthStr,
+    historyMonths: histMonths,
+    weeks: weeks.map((w) => ({ label: w.label, from: w.from, to: w.to, status: w.status, workingDays: w.workingDays })),
+    clients,
+    totals: {
+      planTotal, factTotal,
+      pct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : null,
+      filledClients: clients.filter((c) => c.plan > 0).length,
+      totalClients: clients.length,
+      currentWeekIndex: curIdx < 0 ? null : curIdx,
+      currentWeekFact: curIdx < 0 ? null : clients.reduce((s2, c) => s2 + c.weeks[curIdx].fact, 0),
+      currentWeekPlan: curIdx < 0 ? null : clients.reduce((s2, c) => s2 + c.weeks[curIdx].plan, 0),
+      atRiskCount: atRisk.length,
+      atRiskNames: atRisk.slice(0, 3).map((c) => c.clientName),
+      planApproved, byStatus,
+      // Σ ЗАТВЕРДЖЕНИХ по клієнтах = рядок «постійні принесуть» у Формуванні
+      // плану. Це не окрема цифра, а ТА САМА — гейт вимагає точного збігу.
+      goesToManagerPlan: planApproved,
+      canSubmit: byStatus.draft > 0,
+      canApprove: byStatus.pending > 0,
+    },
+    callsUnavailable: "Ringostat-синк зберігає лише агрегат по тімлідах (statistics_values); "
+      + "окремих дзвінків із номером абонента в базі немає — панель дзвінків порожня до Фази C",
+  });
+});
+
+// ── ЦИКЛ ЗАТВЕРДЖЕННЯ ПЛАНУ ПО КЛІЄНТУ (рішення власника 03.08.2026)
+// ЧЕРНЕТКА → ПОДАНО → ЗАТВЕРДЖЕНО. Той самий цикл, що в місячного плану
+// менеджера, і те саме правило: у «постійні принесуть» іде Σ лише
+// ЗАТВЕРДЖЕНИХ. Незатверджений план для системи не існує.
+
+/** Менеджер зберігає план по СВОЄМУ клієнту. Затверджений — уже не редагує. */
+dashboardRouter.post("/client-plan", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const monthStr = String(req.body?.month ?? "").match(/^\d{4}-\d{2}$/) ? String(req.body.month) : kyivToday().slice(0, 7);
+  const month = `${monthStr}-01`;
+  const plan = Number(req.body?.plan);
+  if (!Number.isFinite(plan) || plan < 0) return res.status(400).json({ error: "plan має бути невідʼємним числом" });
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+
+  const cur = await pool.query<{ status: string }>(
+    `SELECT status FROM repeat_client_plans WHERE client_key = $1 AND month = $2`, [clientKey, month]);
+  const isLead = isAdminOrLead(auth);
+  // 🔴 Після затвердження менеджер план НЕ редагує — зміна лише через тімліда
+  // (повернути → виправити → подати знову). Інакше «затверджено» нічого не
+  // означало б: цифру можна було б переписати після погодження.
+  if (!isLead && cur.rows[0]?.status === "approved") {
+    return res.status(409).json({ error: "План затверджено — зміна лише через тімліда (повернути на доопрацювання)" });
+  }
+  const status = isLead ? "approved" : "draft";
+  const mgr = await pool.query<{ manager_id: number }>(
+    `SELECT manager_id FROM repeat_client_plans WHERE client_key = $1 AND month = $2`, [clientKey, month]);
+  const managerId = mgr.rows[0]?.manager_id ?? (auth.role === "manager" ? auth.managerId ?? null : null);
+
+  await pool.query(
+    `INSERT INTO repeat_client_plans (client_key, month, manager_id, plan, status, updated_by, updated_at,
+                                      approved_by, approved_at, submitted_at, returned_at, review_note)
+     VALUES ($1,$2,$3,$4,$5,$6, now(), CASE WHEN $5='approved' THEN $6 END,
+             CASE WHEN $5='approved' THEN now() END, NULL, NULL, NULL)
+     ON CONFLICT (client_key, month) DO UPDATE SET
+       plan = EXCLUDED.plan, status = EXCLUDED.status, manager_id = COALESCE(repeat_client_plans.manager_id, EXCLUDED.manager_id),
+       updated_by = EXCLUDED.updated_by, updated_at = now(),
+       approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at,
+       submitted_at = NULL, returned_at = NULL, review_note = NULL`,
+    [clientKey, month, managerId, plan, status, auth.userId]);
+  await pool.query(
+    `INSERT INTO repeat_client_plan_history (client_key, month, changed_by, action, plan, status)
+     VALUES ($1,$2,$3,'save',$4,$5)`, [clientKey, month, auth.userId, plan, status]);
+  res.json({ ok: true, status });
+});
+
+/** Менеджер подає ПАКЕТОМ усі свої чернетки за місяць — одна кнопка, не по одному. */
+dashboardRouter.post("/client-plans/submit", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role !== "manager" && !isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
+  const monthStr = String(req.body?.month ?? "").match(/^\d{4}-\d{2}$/) ? String(req.body.month) : kyivToday().slice(0, 7);
+  const managerId = auth.role === "manager" ? auth.managerId ?? -1 : Number(req.body?.managerId ?? -1);
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
+  }
+  const r = await pool.query(SUBMIT_SQL, [`${monthStr}-01`, managerId, auth.userId]);
+  res.json({ ok: true, submitted: r.rowCount ?? 0 });
+});
+
+/** Тімлід/адмін затверджує ВСІ подані за місяць у своїй зоні — одною кнопкою. */
+dashboardRouter.post("/client-plans/approve-all", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
+  const monthStr = String(req.body?.month ?? "").match(/^\d{4}-\d{2}$/) ? String(req.body.month) : kyivToday().slice(0, 7);
+  const p: unknown[] = [`${monthStr}-01`, auth.userId];
+  let scopeCond = "";
+  if (auth.role === "team_lead") { p.push(auth.teamId); scopeCond = `AND m.team_id = $${p.length}`; }
+  else if (req.body?.managerId) { p.push(Number(req.body.managerId)); scopeCond = `AND m.id = $${p.length}`; }
+  const r = await pool.query(approveAllSql(scopeCond), p);
+  res.json({ ok: true, approved: r.rowCount ?? 0 });
+});
+
+/** Тімлід повертає план на доопрацювання з коментарем — назад у чернетку. */
+dashboardRouter.post("/client-plan/return", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const note = String(req.body?.note ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!note) return res.status(400).json({ error: "Повернення без коментаря не приймається" });
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const monthStr = String(req.body?.month ?? "").match(/^\d{4}-\d{2}$/) ? String(req.body.month) : kyivToday().slice(0, 7);
+  const r = await pool.query(RETURN_SQL, [clientKey, `${monthStr}-01`, note.slice(0, 1000), auth.userId]);
+  if (!r.rowCount) return res.status(409).json({ error: "Немає що повертати — план уже в чернетці" });
+  res.json({ ok: true });
+});
+
+/** Коментарі по клієнту — стрічка з автором і датою (макет 1, розгорнутий рядок). */
+dashboardRouter.get("/client-comments", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const r = await pool.query<{ id: number; body: string; created_at: string; author: string | null }>(
+    `SELECT c.id, c.body, c.created_at, COALESCE(u.full_name, u.email) AS author
+       FROM client_comments c LEFT JOIN users u ON u.id = c.author_id
+      WHERE c.client_key = $1 ORDER BY c.created_at DESC LIMIT 50`, [clientKey]);
+  // Явний список полів — рядок БД назовні спредом не їде.
+  res.json(r.rows.map((x) => ({ id: x.id, body: x.body, createdAt: x.created_at, author: x.author })));
+});
+
+dashboardRouter.post("/client-comments", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const body = String(req.body?.body ?? "").trim();
+  if (!clientKey || !body) return res.status(400).json({ error: "clientKey і body обовʼязкові" });
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const r = await pool.query<{ id: number; created_at: string }>(
+    `INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3) RETURNING id, created_at`,
+    [clientKey, auth.userId, body.slice(0, 2000)]);
+  res.json({ id: r.rows[0].id, createdAt: r.rows[0].created_at });
+});
+
 dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
   const auth = req.auth!;
   const monthStr = (req.query.month as string) || new Date().toISOString().slice(0, 7);
@@ -3738,16 +4094,13 @@ dashboardRouter.get("/repeat-plans-grid", async (req, res) => {
 
   const [y, mo] = monthStr.split("-").map(Number);
   const daysInMonth = new Date(y, mo, 0).getDate();
-  let workingDays = 0;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dow = new Date(y, mo - 1, d).getDay();
-    if (dow !== 0 && dow !== 6) workingDays++;
-  }
-  const weekStarts = [1, 8, 15, 22, 29].filter((s) => s <= daysInMonth);
-  const weeks = weekStarts.map((s, i) => {
-    const end = Math.min(s + 6, daysInMonth);
-    return { label: `Тиждень ${i + 1}`, from: s, to: end, days: end - s + 1 };
-  });
+  // Межі тижнів і робочі дні — ЯДРО (`money.monthWeeks`/`monthWorkingDays`).
+  // Тут стояла власна копія `[1, 8, 15, 22, 29]`; поки копії збігались, різниці
+  // не було видно, але «тиждень 2» на двох екранах мусить означати ОДНІ дні.
+  const workingDays = money.monthWorkingDays(monthStr);
+  const weeks = money.monthWeeks(monthStr).map((w) => ({
+    label: w.label, from: w.fromDay, to: w.toDay, days: w.toDay - w.fromDay + 1,
+  }));
 
   // Fact = received money (успішно 142 закрито в місяці + оплата снапшот) whose
   // client is a REPEAT client (2+ lifetime paid orders) — «заробіток по постійних».

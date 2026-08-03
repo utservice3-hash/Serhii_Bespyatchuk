@@ -148,13 +148,19 @@ export const receivedByMgr = (s: MoneyScope) => aggByMgr("received", s);
 // лише GROUP BY атрибут. Σ рядків == receivedMoney (COALESCE «—» ловить NULL → повний
 // розподіл). НЕ новий money-SQL — reuse sourceSql (ядро одне).
 export interface DimRow { key: string; revenue: number; deals: number }
-async function receivedByDealAttr(s: MoneyScope, expr: string): Promise<DimRow[]> {
+/**
+ * Розклад грошей ЯДРА по атрибуту угоди. Параметризовано `kind`, бо той самий
+ * розріз потрібен і для ② («отримані кошти», Огляд), і для ① («успішно
+ * реалізовано» — усе інше). Ядро одне, змінюється лише джерело.
+ */
+async function byDealAttr(kind: Kind, s: MoneyScope, expr: string): Promise<DimRow[]> {
   const K = "AT TIME ZONE 'Europe/Kyiv'";
   const p: unknown[] = [];
-  const src = sourceSql("received", p);
+  const src = sourceSql(kind, p);
   const conds: string[] = [];
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
+  if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
   if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
   const rows = (await pool.query<{ k: string; revenue: string; deals: string }>(
     `SELECT ${expr} AS k, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
@@ -165,12 +171,67 @@ async function receivedByDealAttr(s: MoneyScope, expr: string): Promise<DimRow[]
       GROUP BY 1 ORDER BY revenue DESC`, p)).rows;
   return rows.map((x) => ({ key: x.k, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
+const receivedByDealAttr = (s: MoneyScope, expr: string) => byDealAttr("received", s, expr);
 export const receivedByRequestType = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(dd.request_type, '—')");
 // «Тендерний напрямок» (реальне enum-значення Kommo 2099549) бізнес зве «Самостійні»
 // (самостійні менеджери) — relabel на показ, БЕЗ зміни сум (Σ == received тримається).
 export const receivedBySalesChannel = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(CASE WHEN dd.sales_channel = 'Тендерний напрямок' THEN 'Самостійні' ELSE dd.sales_channel END, '—')");
 // По клієнту (для концентрації + розподілу повторних рейсів). Без client_key → «—».
 export const receivedByClientKey = (s: MoneyScope) => receivedByDealAttr(s, "COALESCE(dd.client_key, '—')");
+
+/**
+ * ① «УСПІШНО РЕАЛІЗОВАНО» ПО КЛІЄНТУ (канонічний `client_key`).
+ *
+ * 🔴 Це та сама функція ядра, що дає `successByMgr`/`successMoney` — інший лише
+ * GROUP BY. Тому Σ по клієнтах менеджера СХОДИТЬСЯ з `successByMgr` того ж
+ * періоду за побудовою, а не «бо ми написали схожий SQL». Саме на цьому стоїть
+ * гейт екрана «Постійні клієнти · план місяця».
+ *
+ * Клієнт = КАНОНІЧНИЙ ключ: злиті телефони й назви рахуються разом (`client_key`
+ * — похідна від `client_key_raw` через реєстр псевдонімів).
+ */
+export const successByClientKey = (s: MoneyScope) => byDealAttr("success", s, "COALESCE(dd.client_key, '—')");
+
+export interface ClientBucketRow { clientKey: string; bucket: string; revenue: number; deals: number }
+/**
+ * ① по клієнту × календарному бакету (день/тиждень/місяць) — для міні-барів
+ * «історія 6 міс». Один запит замість N: групування по клієнту І бакету.
+ */
+export async function successByClientBucket(s: MoneyScope, granularity: "day" | "week" | "month"): Promise<ClientBucketRow[]> {
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const p: unknown[] = [];
+  const src = sourceSql("success", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
+  if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const rows = (await pool.query<{ ck: string; b: string; revenue: string; deals: string }>(
+    `SELECT COALESCE(dd.client_key, '—') AS ck,
+            to_char(date_trunc('${granularity}', (src.anchor_at ${K})), 'YYYY-MM-DD') AS b,
+            COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
+       FROM (${src}) src
+       JOIN managers m ON m.id = src.manager_id
+       JOIN deals dd ON dd.kommo_id = src.kommo_id
+      ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
+      GROUP BY 1, 2`, p)).rows;
+  return rows.map((x) => ({ clientKey: x.ck, bucket: x.b, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
+
+export interface ClientWeekRow { clientKey: string; weekIndex: number; revenue: number; deals: number }
+/**
+ * ① по клієнту × ТИЖНЮ місяця. Межі тижнів беруться з `monthWeeks` — тієї самої
+ * функції, що живить Звіт; інакше «тиждень 2» на двох екранах означав би різні дні.
+ * `s.from` має бути 1-м числом місяця.
+ */
+export async function successByClientWeek(s: MoneyScope): Promise<ClientWeekRow[]> {
+  const monthStr = (s.from ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" })).slice(0, 7);
+  const weeks = monthWeeks(monthStr);
+  const per = await Promise.all(weeks.map((w) => successByClientKey({ ...s, from: w.from, to: w.to })));
+  const out: ClientWeekRow[] = [];
+  per.forEach((rows, i) => { for (const r of rows) out.push({ clientKey: r.key, weekIndex: i, revenue: r.revenue, deals: r.deals }); });
+  return out;
+}
 
 export interface SegmentAgg { newSeg: MoneyAgg; repeatSeg: MoneyAgg; unattributed: MoneyAgg }
 
@@ -644,6 +705,53 @@ export async function dobirByManager(s: MoneyScope): Promise<DobirRow[]> {
 
 // ───────────────────────── ТИЖНЕВА РОЗБИВКА (Р4a) ─────────────────────────
 
+/**
+ * 🗓 ЄДИНЕ ДЖЕРЕЛО МЕЖ ТИЖНІВ МІСЯЦЯ — фіксовані 7-денні блоки від 1-го:
+ * [1-7], [8-14], [15-21], [22-28], [29-кінець]. Правило КВП.
+ *
+ * 🔴 НАВІЩО ОКРЕМА ФУНКЦІЯ. Той самий `[1, 8, 15, 22, 29].filter(...)` стояв
+ * у ТРЬОХ місцях (`weeklyBreakdown` + два блоки в `routes/dashboard.ts`). Поки
+ * копії однакові, різниці не видно; варто одній поїхати — і «тиждень 2» у Звіті
+ * означатиме інші дні, ніж «тиждень 2» у плані по клієнтах, а зійтись вони мають
+ * ДО ГРИВНІ. Такі розходження не падають — вони тихо дають дві правди.
+ */
+export interface MonthWeek {
+  index: number;      // 0-based
+  label: string;      // «Тиждень 1»
+  from: string; to: string;   // YYYY-MM-DD, обидва кінці включно
+  fromDay: number; toDay: number;
+  workingDays: number;
+  status: "past" | "current" | "future";
+}
+export function monthWeeks(monthStr: string, todayStr?: string): MonthWeek[] {
+  const [y, mo] = monthStr.split("-").map(Number);
+  const daysInMonth = new Date(y, mo, 0).getDate();
+  const wdBetween = (from: number, to: number): number => {
+    let n = 0;
+    for (let d = from; d <= to; d++) { const dow = new Date(y, mo - 1, d).getDay(); if (dow !== 0 && dow !== 6) n++; }
+    return n;
+  };
+  const today = todayStr ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const todayDay = today.slice(0, 7) === monthStr ? Number(today.slice(8, 10)) : (today.slice(0, 7) > monthStr ? 99 : 0);
+  const pad = (d: number) => `${monthStr}-${String(d).padStart(2, "0")}`;
+  return [1, 8, 15, 22, 29].filter((s2) => s2 <= daysInMonth).map((from, i) => {
+    const to = Math.min(from + 6, daysInMonth);
+    return {
+      index: i, label: `Тиждень ${i + 1}`, from: pad(from), to: pad(to),
+      fromDay: from, toDay: to, workingDays: wdBetween(from, to),
+      status: (to < todayDay ? "past" : from > todayDay ? "future" : "current") as MonthWeek["status"],
+    };
+  });
+}
+/** Робочі дні місяця цілком — знаменник розкидання плану. */
+export function monthWorkingDays(monthStr: string): number {
+  const [y, mo] = monthStr.split("-").map(Number);
+  const daysInMonth = new Date(y, mo, 0).getDate();
+  let n = 0;
+  for (let d = 1; d <= daysInMonth; d++) { const dow = new Date(y, mo - 1, d).getDay(); if (dow !== 0 && dow !== 6) n++; }
+  return n;
+}
+
 export interface WeekBreakdownRow {
   label: string; from: string; to: string;   // YYYY-MM-DD
   plan: number; fact: number; pct: number | null; remaining: number;
@@ -661,28 +769,12 @@ export interface WeekBreakdownRow {
  */
 export async function weeklyBreakdown(s: MoneyScope, monthPlan: number): Promise<WeekBreakdownRow[]> {
   const monthStr = (s.from ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" })).slice(0, 7);
-  const [y, mo] = monthStr.split("-").map(Number);
-  const daysInMonth = new Date(y, mo, 0).getDate();
-  const wdBetween = (from: number, to: number): number => {
-    let n = 0;
-    for (let d = from; d <= to; d++) { const dow = new Date(y, mo - 1, d).getDay(); if (dow !== 0 && dow !== 6) n++; }
-    return n;
-  };
-  const totalWd = wdBetween(1, daysInMonth);
-  const starts = [1, 8, 15, 22, 29].filter((s2) => s2 <= daysInMonth);
-  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
-  const todayDay = todayStr.slice(0, 7) === monthStr ? Number(todayStr.slice(8, 10)) : (todayStr.slice(0, 7) > monthStr ? 99 : 0);
-  const pad = (d: number) => `${monthStr}-${String(d).padStart(2, "0")}`;
-
-  const weeks = starts.map((from, i) => {
-    const to = Math.min(from + 6, daysInMonth);
-    const status: WeekBreakdownRow["status"] = to < todayDay ? "past" : from > todayDay ? "future" : "current";
-    return { i, from, to, wd: wdBetween(from, to), status };
-  });
+  const totalWd = monthWorkingDays(monthStr);
+  const weeks = monthWeeks(monthStr).map((w) => ({ i: w.index, from: w.from, to: w.to, wd: w.workingDays, status: w.status }));
 
   // ФАКТ по тижнях — датований success.
   const facts = await Promise.all(
-    weeks.map((w) => successMoney({ ...s, from: pad(w.from), to: pad(w.to) }).then((r) => r.revenue))
+    weeks.map((w) => successMoney({ ...s, from: w.from, to: w.to }).then((r) => r.revenue))
   );
 
   const factCompleted = weeks.reduce((acc, w, i) => acc + (w.status === "past" ? facts[i] : 0), 0);
@@ -695,7 +787,7 @@ export async function weeklyBreakdown(s: MoneyScope, monthPlan: number): Promise
       ? Math.round(totalWd > 0 ? monthPlan * (w.wd / totalWd) : 0)
       : Math.round(remainingWd > 0 ? remainingPlan * (w.wd / remainingWd) : 0);
     return {
-      label: `Тиждень ${w.i + 1}`, from: pad(w.from), to: pad(w.to),
+      label: `Тиждень ${w.i + 1}`, from: w.from, to: w.to,
       plan, fact, pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       remaining: Math.max(0, plan - fact), status: w.status,
     };
