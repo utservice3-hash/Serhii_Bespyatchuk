@@ -1,3 +1,4 @@
+import { dedupeDealContactPairs, type DealContactPair } from "./dealContactPairs.js";
 import { pool } from "../db/pool.js";
 import {
   extractPhone,
@@ -454,13 +455,22 @@ function resolveClient(
  * старий звʼязок не тягнув чужі дзвінки після перепризначення контакта.
  */
 async function upsertDealContacts(deals: KommoDeal[]): Promise<void> {
-  const dealIds: number[] = [], contactIds: number[] = [], mains: boolean[] = [];
-  const seenDeals: number[] = [];
+  // 🔴 ДЕДУП ПАР ОБОВʼЯЗКОВИЙ. Postgres не дозволяє одному INSERT ... ON CONFLICT
+  // DO UPDATE зачепити той самий рядок двічі — саме на цьому синк ліг 03.08.2026.
+  // Джерело дублікатів — паралельна пагінація у `fetchAllDeals` (та сама угода
+  // може прийти у двох сторінках), а не дубль контакта в угоді; див.
+  // `dealContactPairs.ts`. Дедуп тут страхує від БУДЬ-ЯКОГО джерела.
+  const raw: DealContactPair[] = [];
+  const seenDeals = [...new Set(deals.map((d) => d.id))];
   for (const d of deals) {
-    const cs = d._embedded?.contacts ?? [];
-    seenDeals.push(d.id);
-    for (const c of cs) { dealIds.push(d.id); contactIds.push(c.id); mains.push(c.is_main === true); }
+    for (const c of d._embedded?.contacts ?? []) {
+      raw.push({ dealId: d.id, contactId: c.id, isMain: c.is_main === true });
+    }
   }
+  const pairs = dedupeDealContactPairs(raw);
+  const dealIds = pairs.map((p) => p.dealId);
+  const contactIds = pairs.map((p) => p.contactId);
+  const mains = pairs.map((p) => p.isMain);
   if (!seenDeals.length) return;
   if (dealIds.length) {
     await pool.query(

@@ -20,6 +20,7 @@ export const MANIFEST_FILES: string[] = [
   "ai/oracle.test.js",
   "ai/period.test.js",
   "auth/accessMatrix.test.js",
+  "jobs/dealContactPairs.test.js",
   "core/clientPlans.test.js",
   "auth/gateUnit.test.js",
   "auth/gates.test.js",
@@ -201,4 +202,8 @@ export const MANIFEST_TESTS: string[] = [
   "#23 СТАНИ — З ДАТ, а не з тумблера: 50/70/200 днів",
   "#23b ЦІННІСТЬ = виручка × свіжість, і свіжість СПРАВДІ важить",
   "#23c ПРИЧИНИ ЗАКРИТТЯ — закритий перелік, і БД його тримає",
+  "#24 БАТЧ ІЗ ДУБЛЕМ ПАРИ: вставляється ОДИН раз, без винятку",
+  "#24b ДЕДУП УГОД у пагінації — причина, а не наслідок",
+  "#24c ДЗЕРКАЛО: дедуп НЕ склеює різні пари й різні угоди",
+  "#24d КОД СПРАВДІ ЙОГО КЛИЧЕ — а не «фікс лежить поруч»",
 ];
