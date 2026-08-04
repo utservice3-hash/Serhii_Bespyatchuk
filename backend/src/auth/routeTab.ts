@@ -57,9 +57,13 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/client-seasonal"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-manager"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/reactivation-list"), tabs: ["loyalty"] },
-    // Задача реактивації живе на екрані клієнтів, але веде в задачник — доступ
-    // мають обидві вкладки: тімлід відкриває її зі списку, менеджер бачить у себе.
-    { test: pre("/api/dashboard/reactivation-task"), tabs: ["loyalty", "tasks"] },
+    // 🔴 ЛИШЕ `loyalty`, І ЦЕ ВИПРАВЛЕННЯ, А НЕ ПЕРШИЙ ЗАДУМ. Спершу я написав
+    // tabs: ["loyalty","tasks"] з міркування «задача веде в задачник». Семантика
+    // списку — «БУДЬ-ЯКА з них», тож HR, який має вкладку `tasks`, пройшов межу:
+    // #11 показав «hr: було 403, стало 400 (ДОЗВОЛЕНО)». Це і є розширення
+    // доступу поза моделлю — власник сказав «HR — нічого».
+    // Роут кличе ЕКРАН КЛІЄНТІВ, не задачник; менеджер має `loyalty` і проходить.
+    { test: pre("/api/dashboard/reactivation-task"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-plan"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-comments"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },
