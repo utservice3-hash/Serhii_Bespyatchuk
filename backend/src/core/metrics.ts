@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { stageName } from "./stageNames.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf } from "./dates.js";
 
@@ -2238,7 +2239,8 @@ export interface StuckDeal {
 /**
  * Активні угоди повного циклу БЕЗ реальної людської активності понад поріг.
  * Годинник — `COALESCE(last_activity_at, created_at_kommo)` (Salesbot-proof; НЕ `updated_at`).
- * Пороги: грошові стадії (Авто працює / Виставлено рахунок) — `minDays` (деф. 7);
+ * Пороги: грошові стадії (Авто працює / `invoiced` = рахунок після розвантаження +
+ * очікуємо оплату) — `minDays` (деф. 7);
  * рання «Взято в роботу» — `minDays×3` (природно «крутиться»). Вікно створення 180 днів
  * (старіші покинуті = мертві, не «застряглі»). Рання стадія рахується лише якщо угоду
  * ВЖЕ вели (`last_activity_at IS NOT NULL`). Порт `/stuck-deals` 1-в-1 (та сама к-сть/ID).
@@ -2258,11 +2260,9 @@ export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Pro
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   params.push(limit);
-  const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; stage: string; days: string; activity_days: string | null }>(
+  const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; pipeline_id: string; status_id: string; funnel_stage: string; days: string; activity_days: string | null }>(
     `SELECT d.kommo_id, d.name, d.client_name AS client, m.name AS manager, d.price,
-            CASE WHEN ${AVTO} THEN 'Авто працює'
-                 WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
-                 WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
+            d.pipeline_id, d.status_id, psm.funnel_stage,
             EXTRACT(DAY FROM now() - ${ACT})::int AS days,
             EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days
      FROM deals d
@@ -2275,7 +2275,7 @@ export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Pro
   );
   return r.rows.map((x) => ({
     kommoId: Number(x.kommo_id), name: x.name, client: x.client, manager: x.manager, price: Number(x.price),
-    stage: x.stage, days: Number(x.days), activityDays: x.activity_days == null ? null : Number(x.activity_days),
+    stage: stageName(x.pipeline_id, x.status_id, x.funnel_stage), days: Number(x.days), activityDays: x.activity_days == null ? null : Number(x.activity_days),
   }));
 }
 
@@ -2328,13 +2328,11 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const r = await pool.query<{ kommo_id: string; name: string; client: string | null; price: string;
     manager_id: number; manager: string; team_id: number | null; team_name: string | null;
-    stage: string; days: string; activity_days: string | null;
+    pipeline_id: string; status_id: string; funnel_stage: string; days: string; activity_days: string | null;
     last_call_at: Date | null; days_since_last_call: string | null; no_call_flag: boolean }>(
     `SELECT d.kommo_id, d.name, d.client_name AS client, d.price,
             m.id AS manager_id, m.name AS manager, m.team_id, t.name AS team_name,
-            CASE WHEN ${AVTO} THEN 'Авто працює'
-                 WHEN psm.funnel_stage IN ('lead_taken','quote_requested','approved') THEN 'Взято в роботу'
-                 WHEN psm.funnel_stage = 'invoiced' THEN 'Виставлено рахунок' END AS stage,
+            d.pipeline_id, d.status_id, psm.funnel_stage,
             EXTRACT(DAY FROM now() - ${ACT})::int AS days,
             EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days,
             d.last_call_at,
@@ -2360,7 +2358,7 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
     let g = map.get(x.manager_id);
     if (!g) { g = { managerId: x.manager_id, manager: x.manager, teamId: x.team_id, teamName: x.team_name, count: 0, sumAtRisk: 0, longestIdleDays: 0, deals: [] }; map.set(x.manager_id, g); }
     g.count++; g.sumAtRisk += price; g.longestIdleDays = Math.max(g.longestIdleDays, days);
-    g.deals.push({ kommoId: Number(x.kommo_id), name: x.name, client: x.client, price, stage: x.stage, days, activityDays: x.activity_days == null ? null : Number(x.activity_days),
+    g.deals.push({ kommoId: Number(x.kommo_id), name: x.name, client: x.client, price, stage: stageName(x.pipeline_id, x.status_id, x.funnel_stage), days, activityDays: x.activity_days == null ? null : Number(x.activity_days),
       lastCallAt: x.last_call_at == null ? null : new Date(x.last_call_at).toISOString(),
       daysSinceLastCall: x.days_since_last_call == null ? null : Number(x.days_since_last_call),
       noCallFlag: x.no_call_flag === true });

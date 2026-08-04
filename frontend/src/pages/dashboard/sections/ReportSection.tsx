@@ -242,7 +242,7 @@ const FUNNEL_STAGES: { stage: string; label: string }[] = [
   { stage: "lead_taken", label: "Взято в роботу лідів" },
   { stage: "quote_requested", label: "Отримано заявку на прорахунок" },
   { stage: "approved", label: "Договір/заявку погоджено" },
-  { stage: "invoiced", label: "Виставлено рахунок" },
+  { stage: "invoiced", label: "Рахунок / очікуємо оплату" },
   { stage: "paid", label: "Оплата отримана" },
 ];
 

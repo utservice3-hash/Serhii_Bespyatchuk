@@ -31,6 +31,7 @@ import * as reactivation from "../core/reactivation.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
+import { FUNNEL_STAGE_LABELS } from "../core/stageNames.js";
 import * as plans from "../core/plans.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -434,10 +435,10 @@ dashboardRouter.get("/overview", async (req, res) => {
     cfParams
   );
   const STAGE_ORDER = ["lead_taken", "quote_requested", "approved", "invoiced", "paid"];
-  const STAGE_LBL: Record<string, string> = {
-    lead_taken: "Взято в роботу", quote_requested: "Отримано заявку на прорахунок",
-    approved: "Договір/заявку погоджено", invoiced: "Виставлено рахунок", paid: "Оплачено / успішно",
-  };
+  // Підписи кошиків — зі спільного `core/stageNames.ts`: одна стадія має зватись
+  // однаково на всіх поверхнях, інакше «Виставлено рахунок» у воронці й у
+  // застряглих означають різне.
+  const STAGE_LBL = FUNNEL_STAGE_LABELS;
   const createdByStage = [
     ...STAGE_ORDER.map((st) => {
       const r = createdByStageRes.rows.find((x) => x.stage === st);
@@ -2815,12 +2816,15 @@ dashboardRouter.get("/report", async (req, res) => {
  * counts toward every stage up to and including the deepest it has reached.
  */
 const FUNNEL_ORDER = ["lead_taken", "quote_requested", "approved", "invoiced", "paid"];
+// Явним переліком, а не спредом: ворота #17e2 вимагають, щоб кожне поле у
+// відповіді було НАЗВАНЕ (спред одного дня протягне зайве поле назовні).
+// Значення беруться зі спільного джерела — стадія має зватись однаково скрізь.
 const FUNNEL_LABELS: Record<string, string> = {
-  lead_taken: "Взято в роботу лідів",
-  quote_requested: "Отримано заявку на прорахунок",
-  approved: "Договір/заявку погоджено",
-  invoiced: "Виставлено рахунок",
-  paid: "Оплата отримана",
+  lead_taken: "Взято в роботу лідів",   // тут саме ЛІДИ — когорта створення, не угоди
+  quote_requested: FUNNEL_STAGE_LABELS.quote_requested,
+  approved: FUNNEL_STAGE_LABELS.approved,
+  invoiced: FUNNEL_STAGE_LABELS.invoiced,
+  paid: FUNNEL_STAGE_LABELS.paid,
 };
 
 /** Working days (Mon–Fri) in [start, end] inclusive. */

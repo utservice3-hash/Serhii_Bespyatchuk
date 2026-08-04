@@ -270,7 +270,7 @@ const FUNNEL_STAGES: { key: keyof ManagerReport["funnel"][number]["reached"]; la
   { key: "lead_taken", label: "Взято в роботу" },
   { key: "quote_requested", label: "Запит на прорахунок" },
   { key: "approved", label: "Погоджено" },
-  { key: "invoiced", label: "Виставлено рахунок" },
+  { key: "invoiced", label: "Рахунок / очікуємо оплату" },
   { key: "paid", label: "Оплата" },
 ];
 function MRFunnel({ funnel, compare }: { funnel: ManagerReport["funnel"]; compare: ManagerReport["compare"] }) {
