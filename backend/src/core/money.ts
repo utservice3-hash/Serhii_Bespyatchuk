@@ -196,8 +196,16 @@ export interface ClientBucketRow { clientKey: string; bucket: string; revenue: n
 /**
  * ① по клієнту × календарному бакету (день/тиждень/місяць) — для міні-барів
  * «історія 6 міс». Один запит замість N: групування по клієнту І бакету.
+ *
+ * `onlyClientKey` звужує вибірку до ОДНОГО клієнта (картка клієнта, 12 міс.).
+ * 🔴 Чому окремий АРГУМЕНТ, а не поле в `MoneyScope`: поле у скоупі мовчки нічого
+ * не робило б у решті функцій ядра (`successMoney`, `successByMgr`, …), і перший,
+ * хто його туди передасть, отримає цифру по ВСІХ клієнтах, думаючи, що звузив.
+ * Аргумент існує рівно там, де він діє.
  */
-export async function successByClientBucket(s: MoneyScope, granularity: "day" | "week" | "month"): Promise<ClientBucketRow[]> {
+export async function successByClientBucket(
+  s: MoneyScope, granularity: "day" | "week" | "month", onlyClientKey?: string,
+): Promise<ClientBucketRow[]> {
   const K = "AT TIME ZONE 'Europe/Kyiv'";
   const p: unknown[] = [];
   const src = sourceSql("success", p);
@@ -206,6 +214,7 @@ export async function successByClientBucket(s: MoneyScope, granularity: "day" | 
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
   if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (onlyClientKey) { p.push(onlyClientKey); conds.push(`dd.client_key = $${p.length}`); }
   const rows = (await pool.query<{ ck: string; b: string; revenue: string; deals: string }>(
     `SELECT COALESCE(dd.client_key, '—') AS ck,
             to_char(date_trunc('${granularity}', (src.anchor_at ${K})), 'YYYY-MM-DD') AS b,

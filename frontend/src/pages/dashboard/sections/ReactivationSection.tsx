@@ -8,6 +8,7 @@ import {
   type ManagerHistoryRow, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
+import { ClientPicker, type ClientPickerValue } from "../ClientPicker";
 
 /**
  * ФАЗА B · «РЕАКТИВАЦІЯ · СПЛЯЧІ ТА ВТРАЧЕНІ» (макет 2).
@@ -52,8 +53,13 @@ function StateChip({ c }: { c: ReactivationRow }) {
 
 /** 🔗 Обʼєднання клієнтів — UI поверх client_key_alias. Механіка вже на проді. */
 function MergePanel({ onDone }: { onDone: () => void }) {
-  const [alias, setAlias] = useState("");
-  const [canonical, setCanonical] = useState("");
+  // 🔴 Тепер це ВИБІР зі списку, а не два поля вільного тексту: канонічний ключ
+  // (`вкавтострада`) дізнатись із екрана було нізвідки, тож формою не могли
+  // скористатись. Ключ підставляє пошук, людина шукає за назвою або номером.
+  const [aliasSel, setAliasSel] = useState<ClientPickerValue | null>(null);
+  const [canonSel, setCanonSel] = useState<ClientPickerValue | null>(null);
+  const alias = aliasSel?.clientKey ?? "";
+  const canonical = canonSel?.clientKey ?? "";
   const [reason, setReason] = useState("");
   const [pre, setPre] = useState<MergePreview | null>(null);
   const [journal, setJournal] = useState<MergeJournalRow[]>([]);
@@ -63,18 +69,23 @@ function MergePanel({ onDone }: { onDone: () => void }) {
   const reloadJournal = useCallback(() => { fetchMergeJournal().then(setJournal).catch(() => setJournal([])); }, []);
   useEffect(reloadJournal, [reloadJournal]);
 
-  const preview = async () => {
+  // Передпоказ рахується САМ, щойно обрано обидві сторони: раніше він висів на
+  // `onBlur` поля, і його легко було не побачити взагалі.
+  useEffect(() => {
     setErr(null); setPre(null);
-    if (!alias.trim() || !canonical.trim()) return;
+    if (!alias || !canonical) return;
+    let dead = false;
     setBusy(true);
-    try { setPre(await fetchMergePreview(alias.trim(), canonical.trim())); }
-    catch (e) { setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося порахувати"); }
-    finally { setBusy(false); }
-  };
+    fetchMergePreview(alias, canonical)
+      .then((r) => { if (!dead) setPre(r); })
+      .catch((e) => { if (!dead) setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося порахувати"); })
+      .finally(() => { if (!dead) setBusy(false); });
+    return () => { dead = true; };
+  }, [alias, canonical]);
   const doMerge = async () => {
     setBusy(true); setErr(null);
-    try { await mergeClients({ alias: alias.trim(), canonical: canonical.trim(), reason: reason.trim() });
-          setAlias(""); setCanonical(""); setReason(""); setPre(null); reloadJournal(); onDone(); }
+    try { await mergeClients({ alias, canonical, reason: reason.trim() });
+          setAliasSel(null); setCanonSel(null); setReason(""); setPre(null); reloadJournal(); onDone(); }
     catch (e) { setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося обʼєднати"); }
     finally { setBusy(false); }
   };
@@ -87,10 +98,10 @@ function MergePanel({ onDone }: { onDone: () => void }) {
       </div>
 
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Приєднати (псевдонім)</div>
-      <input value={alias} onChange={(e) => setAlias(e.target.value)} onBlur={preview} placeholder="напр. 0977086747" style={S.input} />
+      <ClientPicker value={aliasSel} onPick={setAliasSel} placeholder="назва або номер — напр. «0977086747»" disabled={busy} />
       <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, margin: "6px 0" }}>▼ стане частиною</div>
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Основний клієнт</div>
-      <input value={canonical} onChange={(e) => setCanonical(e.target.value)} onBlur={preview} placeholder="напр. вкавтострада" style={S.input} />
+      <ClientPicker value={canonSel} onPick={setCanonSel} placeholder="назва або номер — напр. «Автострада»" disabled={busy} />
 
       {err && <div style={{ marginTop: 10, fontSize: 12, color: "#b91c1c" }}>{err}</div>}
 
@@ -122,7 +133,7 @@ function MergePanel({ onDone }: { onDone: () => void }) {
 
       <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
         <button style={S.btn(true)} disabled={busy || !pre || !reason.trim() || (pre?.chainBlocked.length ?? 0) > 0} onClick={doMerge}>Обʼєднати</button>
-        <button style={S.btn()} disabled={busy} onClick={() => { setAlias(""); setCanonical(""); setReason(""); setPre(null); setErr(null); }}>Скасувати</button>
+        <button style={S.btn()} disabled={busy} onClick={() => { setAliasSel(null); setCanonSel(null); setReason(""); setPre(null); setErr(null); }}>Скасувати</button>
       </div>
 
       <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#78350f", lineHeight: 1.5 }}>
@@ -157,7 +168,10 @@ function MergePanel({ onDone }: { onDone: () => void }) {
 
 /** 👤 Відповідальний менеджер — межа місяця, історія, розбіжність із CRM. */
 function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone: () => void }) {
-  const [clientKey, setClientKey] = useState("");
+  // Був `<select>` із перших 300 клієнтів — тобто решта була недосяжна, і хто
+  // саме випав, з екрана не читалось. Тепер той самий пошук, що в обʼєднанні.
+  const [sel, setSel] = useState<ClientPickerValue | null>(null);
+  const clientKey = sel?.clientKey ?? "";
   const [managerId, setManagerId] = useState<number | "">("");
   const [reason, setReason] = useState("");
   const [managers, setManagers] = useState<ManagerOption[]>([]);
@@ -166,7 +180,10 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
   const [msg, setMsg] = useState<string | null>(null);
   useEffect(() => { fetchManagerOptions().then(setManagers).catch(() => setManagers([])); }, []);
   useEffect(() => { if (clientKey) fetchClientManagerHistory(clientKey).then(setHistory).catch(() => setHistory([])); }, [clientKey]);
+  // «Зараз веде» беремо з рядка списку, а якщо клієнта в поточному зрізі немає —
+  // з самого пошуку: обидва джерела — COALESCE(закріплений, основний за оплатами).
   const cur = clients.find((c) => c.clientKey === clientKey);
+  const curManager = cur?.managerName ?? sel?.managerName ?? null;
 
   const nextMonth = (() => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d.toLocaleDateString("uk-UA", { month: "long", year: "numeric" }); })();
 
@@ -178,13 +195,8 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
       </div>
 
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Клієнт</div>
-      <select value={clientKey} onChange={(e) => setClientKey(e.target.value)} style={{ ...S.input, cursor: "pointer" }}>
-        <option value="">— оберіть клієнта —</option>
-        {clients.slice(0, 300).map((c) => (
-          <option key={c.clientKey} value={c.clientKey}>{c.clientName} · {c.orders} зам.</option>
-        ))}
-      </select>
-      {cur && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 5 }}>Зараз веде: <b>{cur.managerName}</b></div>}
+      <ClientPicker value={sel} onPick={setSel} placeholder="назва або номер клієнта…" disabled={busy} />
+      {curManager && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 5 }}>Зараз веде: <b>{curManager}</b>{cur?.pinned ? " 📌" : ""}</div>}
 
       <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, margin: "8px 0" }}>▼ передати</div>
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Новий відповідальний</div>
@@ -215,7 +227,7 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
                   setMsg(`Передано. Діє з ${r.effectiveFrom}. ${r.note}`); setReason("");
                   setHistory(await fetchClientManagerHistory(clientKey)); onDone(); }
             finally { setBusy(false); } }}>Передати</button>
-        <button style={S.btn()} disabled={busy} onClick={() => { setClientKey(""); setManagerId(""); setReason(""); setMsg(null); }}>Скасувати</button>
+        <button style={S.btn()} disabled={busy} onClick={() => { setSel(null); setManagerId(""); setReason(""); setMsg(null); }}>Скасувати</button>
       </div>
 
       {history.length > 0 && (
@@ -376,7 +388,11 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
                 <td style={S.td}>
                   <div style={{ fontWeight: 700 }}>{c.clientName}</div>
                   <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>
-                    {c.orders} зам. · сер. чек {formatAmountFull(Math.round(c.lifetimeRevenue / Math.max(1, c.orders)))} · {c.managerName}
+                    {c.orders} зам. · сер. чек {formatAmountFull(Math.round(c.lifetimeRevenue / Math.max(1, c.orders)))}
+                    {" · "}
+                    <span title={c.pinned ? "закріплений за менеджером вручну" : "основний менеджер за оплатами"}>
+                      👤 {c.managerName}{c.pinned ? " 📌" : ""}
+                    </span>
                   </div>
                 </td>
                 <td style={S.td}><StateChip c={c} /></td>

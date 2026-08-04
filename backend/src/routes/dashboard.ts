@@ -31,7 +31,7 @@ import * as reactivation from "../core/reactivation.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
-import { FUNNEL_STAGE_LABELS } from "../core/stageNames.js";
+import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import * as plans from "../core/plans.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -3817,6 +3817,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     client_key: string; name: string | null; orders: string; revenue: string;
     first_paid: string | null; last_paid: string | null; manager_id: number;
     manager_name: string; payment_type: string | null; pinned_manager_id: number | null;
+    team_id: number | null; team_name: string | null;
   }>(
     // 🔴 ЧОМУ САМЕ ТАК, А НЕ «як зручніше читати». Перша версія брала назву й тип
     // розрахунку через `(array_agg(client_name ORDER BY closed_at DESC))[1]` —
@@ -3855,11 +3856,13 @@ dashboardRouter.get("/client-plans", async (req, res) => {
             to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS first_paid,
             to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS last_paid,
             COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
-            mm.name AS manager_name, lo.pinned_manager_id
+            mm.name AS manager_name, lo.pinned_manager_id,
+            mm.team_id, tt.name AS team_name
        FROM agg a
        JOIN primary_mgr pm ON pm.client_key = a.client_key
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key AND NOT lo.hidden
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+       LEFT JOIN teams tt ON tt.id = mm.team_id
        LEFT JOIN LATERAL (
          SELECT d2.client_name, d2.payment_type FROM deals d2
            JOIN pipeline_stage_map p2 ON p2.pipeline_id = d2.pipeline_id AND p2.status_id = d2.status_id
@@ -3950,6 +3953,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
       managerName: c.manager_name,
+      // Команда — щоб адмінський зріз можна було згорнути в ієрархію
+      // «команда → менеджер → клієнти». Це ПОДАЧА, не скоуп: сам добір рядків
+      // не змінився ані на клієнта (доведено гейтом #29b).
+      teamId: c.team_id,
+      teamName: c.team_name ?? "Без команди",
       pinned: c.pinned_manager_id != null,
       comments: commentsByKey.get(c.client_key) ?? 0,
       // 🔴 Дзвінків тут НЕМАЄ і бути поки не може: Ringostat-синк зберігає лише
@@ -4106,6 +4114,214 @@ dashboardRouter.post("/client-comments", async (req, res) => {
     `INSERT INTO client_comments (client_key, author_id, body) VALUES ($1,$2,$3) RETURNING id, created_at`,
     [clientKey, auth.userId, body.slice(0, 2000)]);
   res.json({ id: r.rows[0].id, createdAt: r.rows[0].created_at });
+});
+
+// ─────────────────────────── ПОШУК КЛІЄНТА ───────────────────────────
+/**
+ * 🔎 ЖИВИЙ ПОШУК КЛІЄНТА — для форм, де ключ доводилось знати напамʼять
+ * (обʼєднання, передача відповідального).
+ *
+ * 🔴 НАВІЩО. Форма «Обʼєднати клієнтів» мала два поля вільного тексту, а
+ * канонічний ключ — це `вкавтострада`, а не «ТОВ ВК Автострада»: дізнатись його
+ * було НІЗВІДКИ. Тому пошук віддає ЛЮДСЬКУ назву + менеджера + останню оплату, а
+ * ключ лишається технічним значенням, яке підставляє UI.
+ *
+ * 🔴 ЧОМУ НЕ «постійні» (2+ оплат). Обʼєднують якраз хвости: телефон з ОДНІЄЮ
+ * оплатою, що насправді та сама фірма. Обмеж пошук постійними — і половина роботи
+ * стане неможливою. Тому поріг тут `>= 1` оплата, і це свідома різниця з екраном
+ * планів.
+ *
+ * Право те саме, що в обʼєднання/передачі (`merge_clients`): форма, для якої
+ * пошук існує, живе за цим правом, і ширший доступ до списку клієнтів усієї
+ * компанії був би розширенням доступу без рішення власника.
+ */
+dashboardRouter.get("/client-search", requirePerm("merge_clients"), async (req, res) => {
+  const q = String(req.query.q ?? "").trim();
+  if (q.length < 2) return res.json([]);
+  const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 20));
+  // Ключ нормалізований (без пробілів, нижній регістр) — шукаємо і по ньому, і по
+  // сирій назві: людина пише «Автострада», у ключі лежить «вкавтострада».
+  const keyLike = `%${q.toLowerCase().replace(/[\s'’"«»]/g, "")}%`;
+  const nameLike = `%${q}%`;
+  const r = await pool.query<{
+    client_key: string; client_name: string | null; orders: string; revenue: string;
+    last_paid: string | null; manager_name: string | null; manager_active: boolean | null;
+    pinned_manager_id: number | null;
+  }>(
+    // Двокроково: спершу ВІДБІР ключів (індекс по client_key + скан назви), і лише
+    // потім агрегація по знайдених. Агрегувати спершу все, а фільтрувати потім —
+    // це той самий клас, що коштував екрану КВП 21 секунди (див. /client-plans).
+    `WITH hit AS (
+       SELECT DISTINCT d.client_key
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+          AND NOT (d.client_key = ANY($1))
+          AND (d.client_key LIKE $2 OR d.client_name ILIKE $3)
+        LIMIT 300
+     ),
+     paid AS (
+       SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+         JOIN hit h ON h.client_key = d.client_key
+        WHERE psm.funnel_stage = 'paid'
+     ),
+     agg AS (
+       SELECT client_key, COUNT(*)::int AS orders, COALESCE(SUM(price),0) AS revenue,
+              MAX(closed_at_kommo) AS last_paid
+         FROM paid GROUP BY 1
+     ),
+     per_cm AS (SELECT client_key, manager_id, COUNT(*) AS n, MAX(closed_at_kommo) AS mx FROM paid GROUP BY 1,2),
+     pm AS (SELECT DISTINCT ON (client_key) client_key, manager_id FROM per_cm ORDER BY client_key, n DESC, mx DESC)
+     SELECT a.client_key, nm.client_name, a.orders, a.revenue,
+            to_char(a.last_paid AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid,
+            mm.name AS manager_name, mm.is_active AS manager_active, lo.pinned_manager_id
+       FROM agg a
+       JOIN pm ON pm.client_key = a.client_key
+       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key AND NOT lo.hidden
+       LEFT JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id)
+       LEFT JOIN LATERAL (
+         SELECT d2.client_name FROM deals d2
+          WHERE d2.client_key = a.client_key AND d2.client_name IS NOT NULL
+          ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
+       ) nm ON true
+      ORDER BY a.revenue DESC
+      LIMIT ${limit}`,
+    [metrics.GENERIC_CLIENT_KEYS, keyLike, nameLike]);
+  // Явний перелік полів — рядок БД спредом назовні не їде.
+  res.json(r.rows.map((x) => ({
+    clientKey: x.client_key,
+    clientName: x.client_name ?? x.client_key,
+    orders: Number(x.orders),
+    lifetimeRevenue: Math.round(Number(x.revenue)),
+    lastPaid: x.last_paid,
+    // Менеджер — ТА САМА формула, що в передачі відповідального й на екрані планів:
+    // COALESCE(закріплений, основний за оплатами). Інакше два екрани показували б
+    // різних людей на тому самому клієнті.
+    managerName: x.manager_name,
+    managerActive: x.manager_active ?? false,
+    pinned: x.pinned_manager_id != null,
+  })));
+});
+
+// ─────────────────────────── КАРТКА КЛІЄНТА ───────────────────────────
+/**
+ * 💳 КАРТКА КЛІЄНТА — «як він платив»: 12 місяців ① + останні угоди.
+ *
+ * 🔴 ГІСТОГРАМУ РАХУЄ ЯДРО (`money.successByClientBucket` з ключем клієнта) —
+ * та сама функція, що дає `successByMgr`, лише інший GROUP BY. Свій SQL по
+ * виручці тут розійшовся б із «фактом» на тому самому екрані через місяці.
+ * Клієнт — КАНОНІЧНИЙ ключ, тож злиті телефони й назви рахуються разом.
+ *
+ * ⚠️ ДВА РІЗНІ ЯКОРІ, І ЦЕ ПІДПИСАНО В UI: стовпчики — гроші ① (анкер = дата
+ * входу в «успішно реалізовано»); список угод — журнал сутностей (дата закриття,
+ * а для незакритих — створення). Тому Σ стовпчиків НЕ дорівнює Σ списку, і
+ * зводити їх не треба: перше — метрика, друге — перелік.
+ */
+dashboardRouter.get("/client-card", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+
+  const MONTHS = 12;
+  const today = kyivToday();
+  const firstOfThis = `${today.slice(0, 7)}-01`;
+  const from = (() => {
+    const d = new Date(`${firstOfThis}T00:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() - (MONTHS - 1));
+    return d.toISOString().slice(0, 10);
+  })();
+  const to = monthEndOf(today.slice(0, 7));
+
+  const [buckets, head, dealsRes] = await Promise.all([
+    money.successByClientBucket({ from, to }, "month", clientKey),
+    pool.query<{ client_name: string | null; orders: string; revenue: string; first_paid: string | null;
+      last_paid: string | null; payment_type: string | null; manager_name: string | null;
+      team_name: string | null; pinned_manager_id: number | null }>(
+      `WITH paid AS (
+         SELECT d.manager_id, d.price, d.closed_at_kommo
+           FROM deals d
+           JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+          WHERE psm.funnel_stage = 'paid' AND d.client_key = $1
+       ),
+       agg AS (
+         SELECT COUNT(*)::int AS orders, COALESCE(SUM(price),0) AS revenue,
+                MIN(closed_at_kommo) AS first_paid, MAX(closed_at_kommo) AS last_paid FROM paid
+       ),
+       pm AS (
+         SELECT manager_id FROM (
+           SELECT manager_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(closed_at_kommo) DESC) rn
+             FROM paid GROUP BY manager_id) z WHERE rn = 1
+       )
+       SELECT nm.client_name, nm.payment_type, a.orders, a.revenue,
+              to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS first_paid,
+              to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid,
+              mm.name AS manager_name, t.name AS team_name, lo.pinned_manager_id
+         FROM agg a
+         LEFT JOIN pm ON true
+         LEFT JOIN loyalty_overrides lo ON lo.client_key = $1 AND NOT lo.hidden
+         LEFT JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id)
+         LEFT JOIN teams t ON t.id = mm.team_id
+         LEFT JOIN LATERAL (
+           SELECT d2.client_name, d2.payment_type FROM deals d2
+            WHERE d2.client_key = $1 AND d2.client_name IS NOT NULL
+            ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
+         ) nm ON true`, [clientKey]),
+    pool.query<{ kommo_id: string; name: string | null; price: string; pipeline_id: string;
+      status_id: string; funnel_stage: string | null; dt: string | null; closed: boolean; manager: string | null }>(
+      // Перелік угод клієнта, а не метрика періоду: фільтра по даті тут немає
+      // взагалі (клас `lifetime` за #17c). Підпис стадії — за СТАТУСОМ Kommo
+      // (`stageName`), а не за кошиком `funnel_stage`: кошик `invoiced` містить
+      // шість різних статусів і брехав би частині рядків.
+      `SELECT d.kommo_id, d.name, d.price, d.pipeline_id, d.status_id, psm.funnel_stage,
+              to_char(COALESCE(d.closed_at_kommo, d.created_at_kommo) AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS dt,
+              (d.closed_at_kommo IS NOT NULL) AS closed, m.name AS manager
+         FROM deals d
+         LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+         LEFT JOIN managers m ON m.id = d.manager_id
+        WHERE d.client_key = $1
+        ORDER BY COALESCE(d.closed_at_kommo, d.created_at_kommo) DESC NULLS LAST
+        LIMIT 15`, [clientKey]),
+  ]);
+
+  const months: { month: string; revenue: number; deals: number }[] = [];
+  for (let i = MONTHS - 1; i >= 0; i--) {
+    const d = new Date(`${firstOfThis}T00:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() - i);
+    const ym = d.toISOString().slice(0, 7);
+    const b = buckets.find((x) => x.bucket.slice(0, 7) === ym);
+    months.push({ month: ym, revenue: Math.round(b?.revenue ?? 0), deals: b?.deals ?? 0 });
+  }
+  const h = head.rows[0];
+  res.json({
+    clientKey,
+    clientName: h?.client_name ?? clientKey,
+    managerName: h?.manager_name ?? null,
+    teamName: h?.team_name ?? null,
+    pinned: h?.pinned_manager_id != null,
+    paymentType: h?.payment_type ?? null,
+    orders: Number(h?.orders ?? 0),
+    lifetimeRevenue: Math.round(Number(h?.revenue ?? 0)),
+    firstPaid: h?.first_paid ?? null,
+    lastPaid: h?.last_paid ?? null,
+    months,
+    monthsTotal: months.reduce((s2, m) => s2 + m.revenue, 0),
+    deals: dealsRes.rows.map((d) => ({
+      kommoId: Number(d.kommo_id),
+      crmUrl: kommoLeadUrl(Number(d.kommo_id)),
+      name: d.name,
+      date: d.dt,
+      dateKind: d.closed ? "closed" : "created",
+      price: Math.round(Number(d.price)),
+      stage: stageName(d.pipeline_id, d.status_id, d.funnel_stage ?? undefined),
+      won: String(d.status_id) === "142",
+      manager: d.manager,
+    })),
+    anchorNote: "Стовпчики — гроші ① (успішно реалізовано, анкер = дата входу в етап). "
+      + "Список — журнал угод (дата закриття; для незакритих — створення). Суми не зводяться між собою.",
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -88,6 +88,13 @@ export interface ReactivationClient {
   clientName: string;
   managerId: number;
   managerName: string;
+  /**
+   * Менеджер закріплений вручну (`loyalty_overrides.pinned_manager_id`), а не
+   * виведений з оплат. Формула та сама, що в передачі відповідального —
+   * COALESCE(закріплений, основний); прапорець лише робить видимим, ЯКА з двох
+   * гілок спрацювала, щоб «менеджер біля клієнта» не читався як здогад екрана.
+   */
+  pinned: boolean;
   orders: number;
   lifetimeRevenue: number;
   lastPaid: string | null;
@@ -127,7 +134,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
   const rows = (await pool.query<{
     client_key: string; client_name: string | null; orders: string; revenue: string;
     last_paid: string | null; days_since: string; manager_id: number; manager_name: string;
-    seasonal: boolean | null; seasonal_note: string | null;
+    pinned_manager_id: number | null; seasonal: boolean | null; seasonal_note: string | null;
     revenue_after_task: string | null;
   }>(
     `WITH paid AS (
@@ -151,7 +158,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
             to_char(a.last_paid ${KYIV}, 'YYYY-MM-DD') AS last_paid,
             GREATEST(0, (CURRENT_DATE - (a.last_paid ${KYIV})::date))::int AS days_since,
             COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id, mm.name AS manager_name,
-            lo.seasonal, lo.seasonal_note,
+            lo.pinned_manager_id, lo.seasonal, lo.seasonal_note,
             (SELECT COALESCE(SUM(p2.price),0) FROM paid p2
               WHERE p2.client_key = a.client_key AND tk.created_at IS NOT NULL
                 AND p2.closed_at_kommo > tk.created_at) AS revenue_after_task
@@ -177,6 +184,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
       clientName: r.client_name ?? r.client_key,
       managerId: r.manager_id,
       managerName: r.manager_name,
+      pinned: r.pinned_manager_id != null,
       orders: Number(r.orders),
       lifetimeRevenue: revenue,
       lastPaid: r.last_paid,

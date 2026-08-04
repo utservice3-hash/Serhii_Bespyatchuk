@@ -163,6 +163,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/client-comments?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
+  // Картка клієнта (гістограма 12 міс + останні угоди). Межа — та сама вкладка
+  // `loyalty` плюс `canSeeClient` усередині: на неіснуючому ключі менеджер і
+  // тімлід дістають 403 за скоупом, і саме це фіксує рядок.
+  { method: "GET", path: "/api/dashboard/client-card?clientKey=zzz", cls: "GET",
+    allow: [], deny: ["hr"] },
+  // Пошук клієнта для форм обʼєднання/передачі — за ПРАВОМ `merge_clients`, тим
+  // самим, що й форми, які його кличуть. Ширший доступ до списку клієнтів усієї
+  // компанії був би розширенням доступу без рішення власника.
+  { method: "GET", path: "/api/dashboard/client-search?q=zz", cls: "GET",
+    allow: ["admin", "kvp", "opdir"], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
   { method: "POST", path: "/api/dashboard/client-comments", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-plan", cls: "deny-only",

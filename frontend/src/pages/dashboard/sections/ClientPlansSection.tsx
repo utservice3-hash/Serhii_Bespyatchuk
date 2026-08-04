@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   fetchClientPlans, saveClientPlan, submitClientPlans, approveClientPlans, returnClientPlan,
   fetchClientComments, addClientComment,
-  type ClientPlansResp, type ClientComment, type ManagerOption,
+  type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
+import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
  * ФАЗА A · «ПОСТІЙНІ КЛІЄНТИ · ПЛАН МІСЯЦЯ» (макет 1).
@@ -124,6 +125,51 @@ function CallsPanel({ reason }: { reason: string }) {
   );
 }
 
+/**
+ * Підсумок рівня ієрархії. Рахується З ТИХ САМИХ рядків, що показані нижче —
+ * тому «згорнути» не змінює жодної цифри, а лише ховає рядки. Якби рівень
+ * рахувався окремим запитом, згорнутий і розгорнутий вигляд могли б розійтись, і
+ * ніхто б не сказав, який із них правильний.
+ */
+function levelTotals(rows: ClientPlanRow[]) {
+  return {
+    clients: rows.length,
+    plan: rows.reduce((s, c) => s + c.plan, 0),
+    fact: rows.reduce((s, c) => s + c.fact, 0),
+  };
+}
+
+/** Рядок-шапка рівня (команда / менеджер) з підсумками й «розгорнути». */
+function GroupRow({ level, title, sub, open, onToggle, totals }: {
+  level: "team" | "manager"; title: string; sub?: string; open: boolean;
+  onToggle: () => void; totals: { clients: number; plan: number; fact: number };
+}) {
+  const isTeam = level === "team";
+  const pct = totals.plan > 0 ? Math.round((totals.fact / totals.plan) * 100) : null;
+  return (
+    <tr onClick={onToggle}
+      style={{ background: isTeam ? "#f1f5f9" : "#fafcff", cursor: "pointer",
+               borderTop: isTeam ? "2px solid #e2e8f0" : "1px solid #eef2f7" }}>
+      <td style={{ ...S.td, paddingLeft: isTeam ? 10 : 28, fontWeight: isTeam ? 800 : 700,
+                   fontSize: isTeam ? 14 : 13, borderBottom: "none" }} colSpan={3}>
+        <span style={{ color: "#64748b", marginRight: 6 }}>{open ? "▾" : "▸"}</span>
+        {isTeam ? "🏢 " : "👤 "}{title}
+        <span style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>
+          {sub ? ` · ${sub}` : ""} · {totals.clients} {totals.clients === 1 ? "клієнт" : "клієнтів"}
+        </span>
+      </td>
+      <td style={{ ...S.td, borderBottom: "none", fontWeight: 700 }}>{totals.plan.toLocaleString("uk-UA")}</td>
+      <td style={{ ...S.td, borderBottom: "none" }} />
+      <td style={{ ...S.td, borderBottom: "none", textAlign: "right", fontWeight: 800,
+                   color: totals.fact > 0 ? "#166534" : "#9ca3af" }}>
+        {totals.fact.toLocaleString("uk-UA")}
+        {pct != null && <span style={{ color: "#6b7280", fontWeight: 500 }}> · {pct}%</span>}
+      </td>
+      <td style={{ ...S.td, borderBottom: "none" }} />
+    </tr>
+  );
+}
+
 export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: ManagerOption[] }) {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [data, setData] = useState<ClientPlansResp | null>(null);
@@ -133,6 +179,8 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
   const [busy, setBusy] = useState(false);
   const [payFilter, setPayFilter] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"in-plan" | "all" | "stale">("all");
+  const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
+  const [openMgrs, setOpenMgrs] = useState<Set<number>>(new Set());
 
   const isLead = auth.role === "team_lead" || auth.role === "admin";
   const load = useCallback(() => {
@@ -140,6 +188,18 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
     fetchClientPlans({ month }).then(setData).catch((e) => setErr(e?.response?.data?.error ?? "не вдалося завантажити"));
   }, [month]);
   useEffect(load, [load]);
+
+  /**
+   * Стартовий вигляд залежить від того, скільки людина бачить:
+   *   тімлід  — його команда РОЗГОРНУТА одразу (вона в нього одна, згорнутий
+   *             рівень «команда» був би кліком у нікуди);
+   *   адмін/ОД/КВП — усе згорнуто до команд: саме тут список і був нечитабельний.
+   * Менеджер сюди не потрапляє — у нього плаский список, як і був.
+   */
+  useEffect(() => {
+    if (!data || auth.role !== "team_lead") return;
+    setOpenTeams(new Set(data.clients.map((c) => c.teamName)));
+  }, [data, auth.role]);
 
   const act = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); load(); } finally { setBusy(false); } };
 
@@ -158,6 +218,140 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
     if (view === "stale" && !(c.lastOrderDays != null && c.lastOrderDays >= 30)) return false;
     return true;
   });
+
+  /**
+   * 🔴 ІЄРАРХІЯ — ЦЕ ПОДАЧА, А НЕ СКОУП. Групуємо ТІ САМІ рядки, що прийшли з
+   * бекенду: жоден клієнт не додається й не зникає, підсумки рівнів — суми
+   * видимих рядків. Адмін/ОД/КВП бачили сотні клієнтів одним списком і не могли
+   * з ним працювати; менеджер свій десяток бачить як бачив — йому ієрархія лише
+   * додала б два кліки.
+   */
+  const grouped = auth.role !== "manager";
+  const teams = (() => {
+    if (!grouped) return [];
+    const byTeam = new Map<string, { teamName: string; mgrs: Map<number, { name: string; rows: ClientPlanRow[] }> }>();
+    for (const c of rows) {
+      const tk = c.teamName;
+      const tEntry = byTeam.get(tk) ?? { teamName: tk, mgrs: new Map() };
+      const mEntry = tEntry.mgrs.get(c.managerId) ?? { name: c.managerName, rows: [] };
+      mEntry.rows.push(c);
+      tEntry.mgrs.set(c.managerId, mEntry);
+      byTeam.set(tk, tEntry);
+    }
+    const sortByFact = <T extends { rows: ClientPlanRow[] }>(a: T, b: T) =>
+      levelTotals(b.rows).fact - levelTotals(a.rows).fact;
+    return [...byTeam.values()]
+      .map((tt) => ({
+        teamName: tt.teamName,
+        rows: [...tt.mgrs.values()].flatMap((m) => m.rows),
+        mgrs: [...tt.mgrs.entries()]
+          .map(([id, m]) => ({ id, name: m.name, rows: [...m.rows].sort((a, b) => b.fact - a.fact || b.plan - a.plan) }))
+          .sort(sortByFact),
+      }))
+      .sort(sortByFact);
+  })();
+
+  const renderRow = (c: ClientPlanRow) => {
+  const st = STATUS_CHIP[c.planStatus] ?? STATUS_CHIP.none;
+  const locked = c.planStatus === "approved" && !isLead;
+  const val = edits[c.clientKey] ?? String(c.plan || "");
+  const isOpen = open === c.clientKey;
+  const risk = c.lastOrderDays != null && c.lastOrderDays >= 30;
+  return (
+    <Fragment key={c.clientKey}>
+      <tr style={{ background: risk ? "#fffbeb" : undefined }}>
+        <td style={S.td}>
+          <div style={{ fontWeight: 700 }}>{c.clientName}</div>
+          <div style={{ marginTop: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {c.paymentType && <span style={S.chip("#eff6ff", "#1d4ed8")}>{c.paymentType}</span>}
+            <span style={{ fontSize: 11, color: "#6b7280" }}>
+              {c.orders} зам.{c.since ? ` · з ${c.since}` : ""}
+            </span>
+            {/* 👤 ВІДПОВІДАЛЬНИЙ БІЛЯ КОЖНОГО КЛІЄНТА. Джерело — те саме, що
+                в передачі відповідального: COALESCE(закріплений, основний за
+                оплатами). 📌 показує, що спрацювала перша гілка, а не друга. */}
+            {grouped && (
+              <span style={{ fontSize: 11, color: "#6b7280" }}
+                title={c.pinned ? "закріплений за менеджером вручну" : "основний менеджер за оплатами"}>
+                · 👤 {c.managerName}{c.pinned ? " 📌" : ""}
+              </span>
+            )}
+            {!grouped && c.pinned && (
+              <span style={S.chip("#f5f3ff", "#6d28d9")} title="закріплений за менеджером вручну">📌 {c.managerName}</span>
+            )}
+          </div>
+        </td>
+        <td style={S.td}><Spark values={c.history} months={data.historyMonths} /></td>
+        <td style={S.td}><LastOrder days={c.lastOrderDays} /></td>
+        <td style={S.td}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input value={val} disabled={locked || busy}
+              onChange={(e) => setEdits({ ...edits, [c.clientKey]: e.target.value })}
+              onBlur={() => {
+                const n = Number(val.replace(/\s/g, ""));
+                if (!Number.isFinite(n) || n === c.plan) return;
+                act(() => saveClientPlan({ clientKey: c.clientKey, month, plan: n }));
+              }}
+              title={locked ? "План затверджено — зміна лише через тімліда" : ""}
+              style={{ width: 92, fontSize: 13, fontWeight: 700, padding: "6px 8px", textAlign: "center",
+                       border: "1px solid #d1d5db", borderRadius: 8, background: locked ? "#f9fafb" : "#fff" }} />
+          </div>
+          <div style={{ marginTop: 4 }}><span style={S.chip(st.bg, st.fg)}>{st.label}</span></div>
+          {c.reviewNote && <div style={{ fontSize: 11, color: "#b45309", marginTop: 3 }} title="коментар тімліда">↩ {c.reviewNote}</div>}
+        </td>
+        <td style={S.td}>
+          <div style={{ display: "flex", gap: 3 }}>
+            {c.weeks.map((w, i) => (
+              <div key={i} title={`${w.from} — ${w.to}`}
+                style={{ minWidth: 58, padding: "4px 4px", borderRadius: 8, textAlign: "center",
+                         border: `1px solid ${w.status === "current" ? "#93c5fd" : "#e5e7eb"}`,
+                         background: w.status === "current" ? "#eff6ff" : "#fff" }}>
+                <div style={{ fontSize: 10, color: "#6b7280" }}>Т{i + 1} · {w.plan.toLocaleString("uk-UA")}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: w.fact > 0 ? "#166534" : w.status === "future" ? "#d1d5db" : "#dc2626" }}>
+                  {w.status === "future" && w.fact === 0 ? "—" : w.fact.toLocaleString("uk-UA")}
+                </div>
+              </div>
+            ))}
+          </div>
+        </td>
+        <td style={{ ...S.td, textAlign: "right" }}>
+          <div style={{ fontWeight: 800, color: c.fact > 0 ? "#166534" : "#9ca3af" }}>
+            {c.fact.toLocaleString("uk-UA")}{c.pct != null && <span style={{ color: "#6b7280", fontWeight: 500 }}> · {c.pct}%</span>}
+          </div>
+          <div style={{ height: 5, background: "#f1f5f9", borderRadius: 3, marginTop: 5, overflow: "hidden" }}>
+            <div style={{ width: `${Math.min(100, c.pct ?? 0)}%`, height: "100%", background: "#2563eb" }} />
+          </div>
+        </td>
+        <td style={S.td}>
+          <button onClick={() => setOpen(isOpen ? null : c.clientKey)}
+            style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 13 }}>
+            💬 {c.comments} · 📞 0 · {isOpen ? "▲" : "▼"}
+          </button>
+          {isLead && c.planStatus !== "draft" && c.planStatus !== "none" && (
+            <button disabled={busy}
+              onClick={() => { const n = prompt("Коментар до повернення (обовʼязково):"); if (n && n.trim()) act(() => returnClientPlan({ clientKey: c.clientKey, month, note: n.trim() })); }}
+              title="Повернути план на доопрацювання"
+              style={{ marginLeft: 6, border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "#b45309" }}>↩</button>
+          )}
+        </td>
+      </tr>
+      {isOpen && (
+        <tr>
+          <td colSpan={7} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>
+            {/* КАРТКА КЛІЄНТА: спершу «як він платив» (те, заради чого
+                рядок і розгортають), під нею — коментарі й дзвінки. */}
+            <ClientCardPanel clientKey={c.clientKey} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22, marginTop: 16,
+                          borderTop: "1px solid #e5e7eb", paddingTop: 14 }}>
+              <CommentsPanel clientKey={c.clientKey} canWrite />
+              <CallsPanel reason={data.callsUnavailable} />
+            </div>
+          </td>
+        </tr>
+      )}
+    </Fragment>
+  );
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -244,90 +438,30 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
             </tr>
           </thead>
           <tbody>
-            {rows.map((c) => {
-              const st = STATUS_CHIP[c.planStatus] ?? STATUS_CHIP.none;
-              const locked = c.planStatus === "approved" && !isLead;
-              const val = edits[c.clientKey] ?? String(c.plan || "");
-              const isOpen = open === c.clientKey;
-              const risk = c.lastOrderDays != null && c.lastOrderDays >= 30;
+            {!grouped && rows.map(renderRow)}
+            {grouped && teams.map((tm) => {
+              const tOpen = openTeams.has(tm.teamName);
               return (
-                <>
-                  <tr key={c.clientKey} style={{ background: risk ? "#fffbeb" : undefined }}>
-                    <td style={S.td}>
-                      <div style={{ fontWeight: 700 }}>{c.clientName}</div>
-                      <div style={{ marginTop: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                        {c.paymentType && <span style={S.chip("#eff6ff", "#1d4ed8")}>{c.paymentType}</span>}
-                        <span style={{ fontSize: 11, color: "#6b7280" }}>
-                          {c.orders} зам.{c.since ? ` · з ${c.since}` : ""}
-                        </span>
-                        {c.pinned && <span style={S.chip("#f5f3ff", "#6d28d9")} title="закріплений за менеджером вручну">📌 {c.managerName}</span>}
-                      </div>
-                    </td>
-                    <td style={S.td}><Spark values={c.history} months={data.historyMonths} /></td>
-                    <td style={S.td}><LastOrder days={c.lastOrderDays} /></td>
-                    <td style={S.td}>
-                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <input value={val} disabled={locked || busy}
-                          onChange={(e) => setEdits({ ...edits, [c.clientKey]: e.target.value })}
-                          onBlur={() => {
-                            const n = Number(val.replace(/\s/g, ""));
-                            if (!Number.isFinite(n) || n === c.plan) return;
-                            act(() => saveClientPlan({ clientKey: c.clientKey, month, plan: n }));
-                          }}
-                          title={locked ? "План затверджено — зміна лише через тімліда" : ""}
-                          style={{ width: 92, fontSize: 13, fontWeight: 700, padding: "6px 8px", textAlign: "center",
-                                   border: "1px solid #d1d5db", borderRadius: 8, background: locked ? "#f9fafb" : "#fff" }} />
-                      </div>
-                      <div style={{ marginTop: 4 }}><span style={S.chip(st.bg, st.fg)}>{st.label}</span></div>
-                      {c.reviewNote && <div style={{ fontSize: 11, color: "#b45309", marginTop: 3 }} title="коментар тімліда">↩ {c.reviewNote}</div>}
-                    </td>
-                    <td style={S.td}>
-                      <div style={{ display: "flex", gap: 3 }}>
-                        {c.weeks.map((w, i) => (
-                          <div key={i} title={`${w.from} — ${w.to}`}
-                            style={{ minWidth: 58, padding: "4px 4px", borderRadius: 8, textAlign: "center",
-                                     border: `1px solid ${w.status === "current" ? "#93c5fd" : "#e5e7eb"}`,
-                                     background: w.status === "current" ? "#eff6ff" : "#fff" }}>
-                            <div style={{ fontSize: 10, color: "#6b7280" }}>Т{i + 1} · {w.plan.toLocaleString("uk-UA")}</div>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: w.fact > 0 ? "#166534" : w.status === "future" ? "#d1d5db" : "#dc2626" }}>
-                              {w.status === "future" && w.fact === 0 ? "—" : w.fact.toLocaleString("uk-UA")}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </td>
-                    <td style={{ ...S.td, textAlign: "right" }}>
-                      <div style={{ fontWeight: 800, color: c.fact > 0 ? "#166534" : "#9ca3af" }}>
-                        {c.fact.toLocaleString("uk-UA")}{c.pct != null && <span style={{ color: "#6b7280", fontWeight: 500 }}> · {c.pct}%</span>}
-                      </div>
-                      <div style={{ height: 5, background: "#f1f5f9", borderRadius: 3, marginTop: 5, overflow: "hidden" }}>
-                        <div style={{ width: `${Math.min(100, c.pct ?? 0)}%`, height: "100%", background: "#2563eb" }} />
-                      </div>
-                    </td>
-                    <td style={S.td}>
-                      <button onClick={() => setOpen(isOpen ? null : c.clientKey)}
-                        style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 13 }}>
-                        💬 {c.comments} · 📞 0 · {isOpen ? "▲" : "▼"}
-                      </button>
-                      {isLead && c.planStatus !== "draft" && c.planStatus !== "none" && (
-                        <button disabled={busy}
-                          onClick={() => { const n = prompt("Коментар до повернення (обовʼязково):"); if (n && n.trim()) act(() => returnClientPlan({ clientKey: c.clientKey, month, note: n.trim() })); }}
-                          title="Повернути план на доопрацювання"
-                          style={{ marginLeft: 6, border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "#b45309" }}>↩</button>
-                      )}
-                    </td>
-                  </tr>
-                  {isOpen && (
-                    <tr key={`${c.clientKey}-x`}>
-                      <td colSpan={7} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
-                          <CommentsPanel clientKey={c.clientKey} canWrite />
-                          <CallsPanel reason={data.callsUnavailable} />
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </>
+                <Fragment key={tm.teamName}>
+                  <GroupRow level="team" title={tm.teamName} open={tOpen}
+                    sub={`${tm.mgrs.length} ${tm.mgrs.length === 1 ? "менеджер" : "менеджерів"}`}
+                    totals={levelTotals(tm.rows)}
+                    onToggle={() => setOpenTeams((prev) => {
+                      const n = new Set(prev); n.has(tm.teamName) ? n.delete(tm.teamName) : n.add(tm.teamName); return n;
+                    })} />
+                  {tOpen && tm.mgrs.map((mg) => {
+                    const mOpen = openMgrs.has(mg.id);
+                    return (
+                      <Fragment key={mg.id}>
+                        <GroupRow level="manager" title={mg.name} open={mOpen} totals={levelTotals(mg.rows)}
+                          onToggle={() => setOpenMgrs((prev) => {
+                            const n = new Set(prev); n.has(mg.id) ? n.delete(mg.id) : n.add(mg.id); return n;
+                          })} />
+                        {mOpen && mg.rows.map(renderRow)}
+                      </Fragment>
+                    );
+                  })}
+                </Fragment>
               );
             })}
             {rows.length === 0 && (

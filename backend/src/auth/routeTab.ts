@@ -66,6 +66,10 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/reactivation-task"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-plan"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-comments"), tabs: ["loyalty"] },
+    // Картка клієнта і пошук клієнта — той самий екран, тож та сама вкладка.
+    // Знову ОКРЕМІ записи: `pre` матчить по слешу, дефісний сусід не накривається.
+    { test: pre("/api/dashboard/client-card"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/client-search"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-override"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-overrides"), tabs: ["loyalty"] },

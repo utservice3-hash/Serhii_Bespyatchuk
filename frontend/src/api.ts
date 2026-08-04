@@ -2277,6 +2277,8 @@ export interface ClientPlanRow {
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
   reviewNote: string | null; weeks: ClientPlanWeek[]; fact: number; pct: number | null;
   managerId: number; managerName: string; pinned: boolean; comments: number; calls: never[];
+  /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */
+  teamId: number | null; teamName: string;
 }
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
@@ -2311,6 +2313,33 @@ export async function returnClientPlan(body: { clientKey: string; month: string;
   const { data } = await api.post("/dashboard/client-plan/return", body);
   return data;
 }
+// ── Пошук клієнта (автокомпліт форм обʼєднання/передачі) ────────────────────
+export interface ClientSearchHit {
+  clientKey: string; clientName: string; orders: number; lifetimeRevenue: number;
+  lastPaid: string | null; managerName: string | null; managerActive: boolean; pinned: boolean;
+}
+export async function fetchClientSearch(q: string, limit = 20): Promise<ClientSearchHit[]> {
+  const { data } = await api.get<ClientSearchHit[]>("/dashboard/client-search", { params: { q, limit } });
+  return data;
+}
+
+// ── Картка клієнта: помісячна динаміка ① + останні угоди ────────────────────
+export interface ClientCardDeal {
+  kommoId: number; crmUrl: string; name: string | null; date: string | null;
+  dateKind: "closed" | "created"; price: number; stage: string; won: boolean; manager: string | null;
+}
+export interface ClientCard {
+  clientKey: string; clientName: string; managerName: string | null; teamName: string | null;
+  pinned: boolean; paymentType: string | null; orders: number; lifetimeRevenue: number;
+  firstPaid: string | null; lastPaid: string | null;
+  months: { month: string; revenue: number; deals: number }[];
+  monthsTotal: number; deals: ClientCardDeal[]; anchorNote: string;
+}
+export async function fetchClientCard(clientKey: string): Promise<ClientCard> {
+  const { data } = await api.get<ClientCard>("/dashboard/client-card", { params: { clientKey } });
+  return data;
+}
+
 export interface ClientComment { id: number; body: string; createdAt: string; author: string | null }
 export async function fetchClientComments(clientKey: string): Promise<ClientComment[]> {
   const { data } = await api.get<ClientComment[]>("/dashboard/client-comments", { params: { clientKey } });
@@ -2324,7 +2353,7 @@ export async function addClientComment(body: { clientKey: string; body: string }
 // ── ФАЗА B · Реактивація · обʼєднання · відповідальний ───────────────────────
 export type ClientState = "active" | "sleeping" | "lost";
 export interface ReactivationRow {
-  clientKey: string; clientName: string; managerId: number; managerName: string;
+  clientKey: string; clientName: string; managerId: number; managerName: string; pinned: boolean;
   orders: number; lifetimeRevenue: number; lastPaid: string | null; daysSince: number;
   state: ClientState; value: number; seasonal: boolean; seasonalNote: string | null;
   taskId: number | null; taskStatus: string | null; taskAssignee: string | null;
