@@ -9,6 +9,7 @@ import {
 } from "../../../api";
 import { formatAmountFull } from "../format";
 import { ClientPicker, type ClientPickerValue } from "../ClientPicker";
+import { SegmentBadge } from "./SegmentBadge";
 
 /**
  * ФАЗА B · «РЕАКТИВАЦІЯ · СПЛЯЧІ ТА ВТРАЧЕНІ» (макет 2).
@@ -459,6 +460,7 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
   const [closing, setClosing] = useState<{ taskId: number; name: string } | null>(null);
   const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
   const [openMgrs, setOpenMgrs] = useState<Set<number>>(new Set());
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const load = useCallback(() => {
     setErr(null);
@@ -482,12 +484,19 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
   if (!data) return <div style={{ ...S.card, color: "#6b7280" }}>завантаження…</div>;
 
   const t = data.tiles;
-  const rows = data.clients.filter((c) => {
+  const inView = data.clients.filter((c) => {
     if (view === "sleeping") return c.state === "sleeping";
     if (view === "lost") return c.state === "lost";
     if (view === "inwork") return c.taskId != null && c.taskStatus !== "done";
     return c.returned;
   });
+  // 🗄 АРХІВ — втрачені понад рік. Вони НЕ зникають (це були б втрачені дані), а
+  // йдуть у згорнуту секцію: на головній сцені мають бути ті, кого ще реально
+  // повернути. Порядок в архіві — за КОЛИШНЬОЮ цінністю (найжирніші зверху), бо
+  // «свіжість» там уже нічого не розрізняє.
+  const rows = inView.filter((c) => !c.archived);
+  const archived = inView.filter((c) => c.archived)
+    .sort((a, b) => b.lifetimeRevenue - a.lifetimeRevenue);
 
   /**
    * 🔴 ІЄРАРХІЯ — ЦЕ ПОДАЧА, А НЕ СКОУП. Групуємо ТІ САМІ рядки, що прийшли з
@@ -530,6 +539,9 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
           <span title={c.pinned ? "закріплений за менеджером вручну" : "основний менеджер за оплатами"}>
             👤 {c.managerName}{c.pinned ? " 📌" : ""}
           </span>
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <SegmentBadge segment={c.segment} gap={c.medianGapDays} />
         </div>
       </td>
       <td style={S.td}><StateChip c={c} /></td>
@@ -617,8 +629,11 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
             у ядрі — і підпис почав би брехати, причому мовчки. */}
         <div style={{ margin: "0 14px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8,
                       padding: "8px 11px", fontSize: 12, color: "#1e3a8a", lineHeight: 1.55 }}>
-          <b>Стан — від останньої ОПЛАТИ:</b> сплячий {data.thresholds.sleepingDays}+ днів,
-          втрачений {data.thresholds.lostDays}+ днів. Дзвінки на стан <b>не впливають</b> — вони довідка.
+          <b>Стан — від останньої ОПЛАТИ, а поріг залежить від СЕГМЕНТА:</b>{" "}
+          ⚡ ВІП {data.thresholds.bySegment.vip}+ днів · 🔁 Регулярний {data.thresholds.bySegment.regular}+ ·
+          {" "}🌙 Епізодичний {data.thresholds.bySegment.episodic}+ · без історії (менше{" "}
+          {data.thresholds.segmentMinPayments} оплат) — {data.thresholds.bySegment.unknown}+.
+          Втрачений — {data.thresholds.lostDays}+ днів для всіх. Дзвінки на стан <b>не впливають</b> — вони довідка.
           <b> Контакт = РОЗМОВА</b> (дзвінок, що відбувся); недодзвони показані окремо як
           <b> спроби</b> — щоб було видно, що менеджер працює, навіть коли контакту ще не було.
         </div>
@@ -659,8 +674,23 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
                 </Fragment>
               );
             })}
-            {rows.length === 0 && (
+            {rows.length === 0 && archived.length === 0 && (
               <tr><td colSpan={6} style={{ ...S.td, textAlign: "center", color: "#9ca3af", padding: 26 }}>у цій категорії порожньо</td></tr>
+            )}
+            {archived.length > 0 && (
+              <>
+                <tr onClick={() => setArchiveOpen((v) => !v)}
+                  style={{ background: "#f8fafc", cursor: "pointer", borderTop: "2px solid #e2e8f0" }}>
+                  <td colSpan={6} style={{ ...S.td, borderBottom: "none", fontWeight: 700 }}>
+                    <span style={{ color: "#64748b", marginRight: 6 }}>{archiveOpen ? "▾" : "▸"}</span>
+                    🗄 Архів · {archived.length} — втрачені понад {Math.round(data.thresholds.archiveDays / 30)} міс.
+                    <span style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>
+                      {" "}· найбільші за колишньою виручкою зверху · Σ {formatAmountFull(archived.reduce((x, c) => x + c.lifetimeRevenue, 0))}
+                    </span>
+                  </td>
+                </tr>
+                {archiveOpen && archived.map(renderRow)}
+              </>
             )}
           </tbody>
         </table>

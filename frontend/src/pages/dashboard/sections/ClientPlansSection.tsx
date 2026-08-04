@@ -6,6 +6,7 @@ import {
   type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
+import { SegmentBadge } from "./SegmentBadge";
 import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
@@ -279,6 +280,7 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
         <td style={S.td}>
           <div style={{ fontWeight: 700 }}>{c.clientName}</div>
           <div style={{ marginTop: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <SegmentBadge segment={c.segment} />
             {c.paymentType && <span style={S.chip("#eff6ff", "#1d4ed8")}>{c.paymentType}</span>}
             <span style={{ fontSize: 11, color: "#6b7280" }}>
               {c.orders} зам.{c.since ? ` · з ${c.since}` : ""}
@@ -400,6 +402,14 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
           sub={t.currentWeekPlan != null ? `/ ${Math.round(t.currentWeekPlan).toLocaleString("uk-UA")} · ті самі тижні, що у Звіті` : "місяць не поточний"} />
         <Tile title="Без замовлень > 30 дн." value={String(t.atRiskCount)} tone={t.atRiskCount ? "warn" : undefined}
           sub={t.atRiskNames.length ? `${t.atRiskNames.join(" · ")} — план під ризиком` : "усі активні"} />
+        {/* 🔴 «АКТИВНІ КЛІЄНТИ» — головна цифра екрана після жорсткого поділу.
+            Раніше тут стояла вся база (з мертвими всередині); тепер список — це
+            живі, і цифра має це називати, інакше «клієнтів стало менше» читалось
+            би як втрата даних. */}
+        <Tile title="Активні клієнти" value={String(t.totalClients)}
+          sub={`ВІП ${t.activeBySegment.vip} · Регулярних ${t.activeBySegment.regular}`
+            + ` · Епізодичних ${t.activeBySegment.episodic}`
+            + (t.activeBySegment.unknown ? ` · без історії ${t.activeBySegment.unknown}` : "")} />
         <Tile title="Іде у план менеджера" value={formatAmountFull(t.goesToManagerPlan)}
           sub={`лише ЗАТВЕРДЖЕНІ · довідково у «Формуванні плану»${t.planApproved !== t.planTotal
             ? ` · ще не погоджено ${formatAmountFull(t.planTotal - t.planApproved)}` : ""}`} />
@@ -518,6 +528,25 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
           )}
         </table>
       </div>
+
+      {/* 🌉 МІСТОК. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий поділ) — без цього
+          рядка вони зникли б МОВЧКИ, і це читалось би як «клієнти загубились».
+          У Σ «постійні принесуть» місток НЕ входить: це не план, а вказівник. */}
+      {t.inReactivation > 0 && (
+        <div style={{ ...S.card, borderLeft: "3px solid #b45309", display: "flex",
+                      alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13 }}>
+            🌉 Ще <b>{t.inReactivation}</b> постійних зараз у <b>реактивації</b>
+            <span style={{ color: "#6b7280" }}>
+              {" "}(сплячих {t.inReactivationSleeping} · втрачених {t.inReactivationLost})
+            </span>
+            <span style={{ color: "#6b7280" }}> — вони не в плані й у суму не входять.</span>
+          </span>
+          <span style={{ fontSize: 12, color: "#b45309" }}>
+            → розділ «Реактивація · сплячі та втрачені» нижче
+          </span>
+        </div>
+      )}
 
       <div style={{ ...S.card, fontSize: 12, color: "#4b5563", lineHeight: 1.6 }}>
         <b>Як це рахується.</b> Факт — «успішно реалізовано» (①), той самий, що у Звіті: рахує ядро,

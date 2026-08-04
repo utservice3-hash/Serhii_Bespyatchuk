@@ -2296,6 +2296,8 @@ export interface ClientPlanRow {
   managerId: number; managerName: string; pinned: boolean; comments: number; calls: never[];
   /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */
   teamId: number | null; teamName: string;
+  /** Сегмент за частотою замовлень — бейдж біля клієнта. */
+  segment: ClientSegment;
 }
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
@@ -2307,6 +2309,10 @@ export interface ClientPlansResp {
     currentWeekIndex: number | null; currentWeekFact: number | null; currentWeekPlan: number | null;
     atRiskCount: number; atRiskNames: string[]; goesToManagerPlan: number;
     byStatus: Record<string, number>; canSubmit: boolean; canApprove: boolean;
+    /** 🌉 МІСТОК: скільки постійних пішло в реактивацію. У Σ плану НЕ входить. */
+    inReactivation: number; inReactivationSleeping: number; inReactivationLost: number;
+    /** Розбивка ЖИВИХ по сегментах — цифра над таблицею. */
+    activeBySegment: Record<ClientSegment, number>;
   };
   callsUnavailable: string;
 }
@@ -2373,6 +2379,7 @@ export async function addClientComment(body: { clientKey: string; body: string }
 
 // ── ФАЗА B · Реактивація · обʼєднання · відповідальний ───────────────────────
 export type ClientState = "active" | "sleeping" | "lost";
+export type ClientSegment = "vip" | "regular" | "episodic" | "unknown";
 export interface ReactivationRow {
   clientKey: string; clientName: string; managerId: number; managerName: string; pinned: boolean;
   /** Команда ВІДПОВІДАЛЬНОГО менеджера — для ієрархії «команда → менеджер → клієнти». */
@@ -2386,6 +2393,11 @@ export interface ReactivationRow {
   lastTalk: string | null; lastTalkDays: number | null;
   lastTalkDirection: "in" | "out" | null;
   attempts: number; lastAttempt: string | null; lastAttemptDays: number | null;
+  /** Сегмент за частотою; `unknown` = <3 оплат, сегмент НЕ вгадуємо. */
+  segment: ClientSegment;
+  medianGapDays: number | null;
+  /** Втрачений понад рік — у згорнутий «Архів», а не на головну сцену. */
+  archived: boolean;
   state: ClientState; value: number; seasonal: boolean; seasonalNote: string | null;
   taskId: number | null; taskStatus: string | null; taskAssignee: string | null;
   taskDeadline: string | null; closeReason: string | null;
@@ -2394,7 +2406,12 @@ export interface ReactivationRow {
 export interface ReactivationResp {
   clients: ReactivationRow[];
   closeReasons: { key: string; label: string }[];
-  thresholds: { sleepingDays: number; lostDays: number };
+  thresholds: {
+    sleepingDays: number; lostDays: number;
+    /** Пороги ПО СЕГМЕНТАХ — із ядра, щоб підпис не став другою редакцією правила. */
+    bySegment: Record<ClientSegment, number>;
+    archiveDays: number; segmentMinPayments: number;
+  };
   tiles: {
     sleeping: number; sleepingPotential: number; lost: number; seasonal: number;
     inWork: number; returned30: number; returned30Revenue: number;

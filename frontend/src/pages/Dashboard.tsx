@@ -874,7 +874,11 @@ export function Dashboard() {
           <div className="page-header">
             <h1 className="page-title">Лідогенерація</h1>
             <div className="page-filters">
-              {auth?.role !== "manager" && (
+              {/* 🔴 ТІМЛІДУ СЕЛЕКТОР НЕ ПОКАЗУЄМО (рішення власника): сервер і так
+                  клампить його до власної команди, тож список «Усі команди» був
+                  би тумблером, який нічого не вмикає — і збивав би з пантелику
+                  сильніше за його відсутність. Менеджер сюди не потрапляє взагалі. */}
+              {auth?.role !== "manager" && auth?.role !== "team_lead" && (
                 <select
                   value={leadgenTeamId}
                   onChange={(e) => setLeadgenTeamId(e.target.value ? Number(e.target.value) : "")}

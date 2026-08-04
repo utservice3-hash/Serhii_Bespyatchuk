@@ -14,10 +14,59 @@ export const LOST_DAYS = 180;
 
 export type ClientState = "active" | "sleeping" | "lost";
 
-/** Чиста функція: стан із кількості днів без замовлення. Тестується без БД. */
-export function stateOf(daysSinceLastOrder: number): ClientState {
+/**
+ * 🧭 СЕГМЕНТ ЗА ЧАСТОТОЮ ЗАМОВЛЕНЬ (рішення власника 04.08.2026).
+ * Рахується з МЕДІАННОГО інтервалу між оплатами по канонічному ключу.
+ *
+ * 🔴 МІНІМУМ 3 ОПЛАТИ — і це не обережність, а замір. При порозі «2+» медіана
+ * рахується по ОДНОМУ інтервалу: дві оплати з різницею 3 дні робили клієнта
+ * «ВІП» назавжди. На проді таких 488 із 1 135, і ВІП роздувався з 232 до 393.
+ * Тому <3 оплат — це `unknown` («недостатньо історії»), а не вгаданий сегмент.
+ */
+export type ClientSegment = "vip" | "regular" | "episodic" | "unknown";
+export const SEGMENT_MIN_PAYMENTS = 3;
+export const VIP_MAX_GAP_DAYS = 10;
+export const REGULAR_MAX_GAP_DAYS = 28;
+
+export function segmentOf(medianGapDays: number | null, payments: number): ClientSegment {
+  if (payments < SEGMENT_MIN_PAYMENTS || medianGapDays == null) return "unknown";
+  if (medianGapDays <= VIP_MAX_GAP_DAYS) return "vip";
+  if (medianGapDays <= REGULAR_MAX_GAP_DAYS) return "regular";
+  return "episodic";
+}
+
+/**
+ * 🔴 ПОРІГ «ПОРА В РЕАКТИВАЦІЮ» ЗАЛЕЖИТЬ ВІД СЕГМЕНТА (рішення власника).
+ * Сенс: ВІП, що замовляв щотижня і мовчить два тижні, — головний кандидат;
+ * епізодичного чіпати через два тижні безглуздо, у нього такий ритм.
+ *
+ * `unknown` іде за епізодичним (60) — свідомий дефолт власника: клієнт без
+ * історії не має зависати взагалі без правила, а 60 днів це той поріг, за яким
+ * екран жив досі. Робити для нього окремий поріг означало б вигадати четверте
+ * правило під сегмент, якого ми навмисне не визначили.
+ */
+export const SEGMENT_SLEEPING_DAYS: Record<ClientSegment, number> = {
+  vip: 14, regular: 30, episodic: 60, unknown: 60,
+};
+
+/**
+ * 🗄 МЕЖА «АРХІВУ» — втрачені понад рік (рішення власника + замір 04.08.2026).
+ * З 628 втрачених: 180-269 дн. — 142, 270-364 — 102, 365-547 — 100, 548+ — 284.
+ * Тобто рік ділить список майже навпіл (244 свіжих / 384 архівних) і відрізає
+ * саме той хвіст, де давність рахується роками. Архів не ховає клієнта — він
+ * прибирає його з головної сцени, щоб свіжі не тонули.
+ */
+export const ARCHIVE_DAYS = 365;
+
+/**
+ * Чиста функція: стан із кількості днів без замовлення.
+ * `segment` не обовʼязковий — без нього поводиться як раніше (60/180), тож старі
+ * виклики й гейт #23 лишаються чинними без правок.
+ */
+export function stateOf(daysSinceLastOrder: number, segment?: ClientSegment): ClientState {
   if (daysSinceLastOrder >= LOST_DAYS) return "lost";
-  if (daysSinceLastOrder >= SLEEPING_DAYS) return "sleeping";
+  const sleep = segment ? SEGMENT_SLEEPING_DAYS[segment] : SLEEPING_DAYS;
+  if (daysSinceLastOrder >= sleep) return "sleeping";
   return "active";
 }
 

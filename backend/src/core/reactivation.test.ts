@@ -235,6 +235,55 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       assert.equal(noTalk.attempts, 1, "🔴 без жодної розмови спроби мають рахуватись усі");
     });
 
+    await t.test("#25f СЕГМЕНТИ: поріг залежить від частоти, <3 оплат — НЕ вгадуємо", async () => {
+      // 🔴 ГОЛОВНЕ, ЩО ТУТ ПЕРЕВІРЯЄТЬСЯ: SQL спільного фрагмента і чиста функція
+      // `segmentOf`/`stateOf` дають ОДНЕ Й ТЕ САМЕ. Вони живуть окремо (SQL —
+      // щоб два екрани рахували однаково; функція — щоб правило тестувалось без
+      // бази), і саме тому зобовʼязані збігатись: розійдуться — і екран почне
+      // показувати не те, що описано в правилі.
+      const R2 = await import("./reactivationRules.js");
+      // ВІП: 4 оплати з інтервалом 5 днів, остання 20 днів тому → сплячий (поріг 14).
+      const mk = async (id: number, key: string, gaps: number[], lastAgo: number) => {
+        let day = lastAgo;
+        for (let i = 0; i < gaps.length + 1; i++) {
+          await c.query(
+            `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo)
+             VALUES ($1,'d',10,8921932,142,1000,$2,$2,$2,$3)`, [id + i, key, daysAgo(day)]);
+          day += gaps[i] ?? 30;
+        }
+      };
+      await mk(500, "віп", [5, 5, 5], 20);        // медіана 5 → vip, 20 дн. ≥ 14 → сплячий
+      await mk(510, "регулярний", [20, 20, 20], 20); // медіана 20 → regular, 20 < 30 → активний
+      await mk(520, "епізодичний", [90, 90, 90], 40);// медіана 90 → episodic, 40 < 60 → активний
+
+      const rows = await R.clientStates({});
+      const by = new Map(rows.map((r) => [r.clientKey, r]));
+
+      assert.equal(by.get("віп")?.segment, "vip", "🔴 4 оплати кожні 5 днів — це ВІП");
+      assert.equal(by.get("віп")?.state, "sleeping",
+        "🔴 ВІП мовчить 20 днів і НЕ в реактивації — поріг сегмента не застосувався");
+      assert.equal(by.get("регулярний")?.segment, "regular");
+      assert.equal(by.get("регулярний")?.state, "active",
+        "🔴 регулярний на 20-й день не має бути сплячим (його поріг 30)");
+      assert.equal(by.get("епізодичний")?.segment, "episodic");
+      assert.equal(by.get("епізодичний")?.state, "active",
+        "🔴 епізодичний на 40-й день не має бути сплячим (його поріг 60)");
+
+      // 🔴 <3 ОПЛАТ — СЕГМЕНТ НЕ ВГАДУЄМО. Саме тут при порозі «2+» дві оплати з
+      // різницею 3 дні робили клієнта «ВІП» назавжди (на проді 488 таких).
+      const two = by.get("сплячий")!;   // у сіді рівно 2 оплати
+      assert.equal(two.segment, "unknown",
+        "🔴 сегмент поставлено по ОДНОМУ інтервалу — саме той артефакт, через який ВІП роздувався");
+
+      // ДЗЕРКАЛО: SQL і чиста функція згодні по КОЖНОМУ рядку.
+      for (const r of rows) {
+        assert.equal(r.segment, R2.segmentOf(r.medianGapDays, r.orders),
+          `🔴 SQL і segmentOf розійшлись на «${r.clientKey}»`);
+        assert.equal(r.state, R2.stateOf(r.daysSince, r.segment),
+          `🔴 SQL і stateOf розійшлись на «${r.clientKey}» (${r.segment}, ${r.daysSince} дн.)`);
+      }
+    });
+
     await t.test("#25e «ПРИБРАТИ З ПОСТІЙНИХ» СПРАВДІ ПРИБИРАЄ (і повертає назад)", async () => {
       // 🔴 РЕГРЕС, ЗНАЙДЕНИЙ ДІЄЮ, А НЕ ЧИТАННЯМ. `LEFT JOIN … AND NOT lo.hidden`
       // разом із `WHERE COALESCE(lo.hidden,false)=false` — це порожня операція:

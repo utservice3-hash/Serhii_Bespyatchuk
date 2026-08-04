@@ -30,6 +30,7 @@ import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanRules.js";
 import * as reactivation from "../core/reactivation.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
+import { SEGMENT_CTE, REACTIVATION_KEEP_SQL } from "../core/clientSegments.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
@@ -3847,11 +3848,45 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   if (managerId != null) { mgrParams.push(managerId); mgrCond = `AND pm.manager_id = $${mgrParams.length}`; }
   else if (teamId != null) { mgrParams.push(teamId); mgrCond = `AND mm.team_id = $${mgrParams.length}`; }
 
+  /**
+   * 🌉 МІСТОК + РОЗБИВКА АКТИВНИХ — окремим запитом по ТОМУ САМОМУ скоупу.
+   * Рахувати їх із `clients` неможливо: звідти сплячі й втрачені вже вирізані,
+   * і місток показував би нуль — саме тоді, коли він найпотрібніший.
+   */
+  const bridgeRes = await pool.query<{ state: string; segment: string; n: string }>(
+    `WITH ${SEGMENT_CTE},
+     paid AS (
+       SELECT d.client_key, d.manager_id FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL AND NOT (d.client_key = ANY($1))
+     ),
+     agg AS (SELECT client_key FROM paid GROUP BY client_key HAVING COUNT(*) >= 2),
+     pm AS (SELECT DISTINCT ON (client_key) client_key, manager_id,
+              COUNT(*) OVER (PARTITION BY client_key, manager_id) n
+              FROM paid ORDER BY client_key, n DESC)
+     SELECT sg.state, sg.segment, COUNT(*) AS n
+       FROM agg a
+       JOIN seg_state sg ON sg.client_key = a.client_key
+       JOIN pm ON pm.client_key = a.client_key
+       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
+       JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+      WHERE COALESCE(lo.hidden, false) = false ${mgrCond}
+      GROUP BY sg.state, sg.segment`, mgrParams);
+  const bridge = { sleeping: 0, lost: 0,
+    bySegment: { vip: 0, regular: 0, episodic: 0, unknown: 0 } as Record<string, number> };
+  for (const r of bridgeRes.rows) {
+    const n = Number(r.n);
+    if (r.state === "sleeping") bridge.sleeping += n;
+    else if (r.state === "lost") bridge.lost += n;
+    else bridge.bySegment[r.segment] = (bridge.bySegment[r.segment] ?? 0) + n;
+  }
+
   const clientsRes = await pool.query<{
     client_key: string; name: string | null; orders: string; revenue: string;
     first_paid: string | null; last_paid: string | null; manager_id: number;
     manager_name: string; payment_type: string | null; pinned_manager_id: number | null;
     team_id: number | null; team_name: string | null;
+      segment: string; seg_state: string;
   }>(
     // 🔴 ЧОМУ САМЕ ТАК, А НЕ «як зручніше читати». Перша версія брала назву й тип
     // розрахунку через `(array_agg(client_name ORDER BY closed_at DESC))[1]` —
@@ -3866,7 +3901,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     //
     // ⚠️ Урок ширший за цей роут: пісочниця на 18 тис. рядків НЕ доводить нічого
     // про 146 тис. Порядок даних — частина умов задачі, а не деталь.
-    `WITH paid AS (
+    `WITH ${SEGMENT_CTE},
+     paid AS (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
          FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -3887,6 +3923,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
          FROM per_cm ORDER BY client_key, n DESC, mx DESC
      )
      SELECT a.client_key, a.orders, a.revenue, nm.client_name AS name, nm.payment_type,
+            sg.segment, sg.state AS seg_state,
             to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS first_paid,
             to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS last_paid,
             COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
@@ -3903,6 +3940,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
        LEFT JOIN teams tt ON tt.id = mm.team_id
+       -- 🔴 ЖОРСТКИЙ ПОДІЛ ЕКРАНІВ (рішення власника 04.08.2026): у плануванні
+       -- лишаються ТІЛЬКИ активні; сплячі й втрачені живуть у реактивації.
+       -- Сегмент і стан рахує СПІЛЬНИЙ фрагмент — той самий, що там.
+       JOIN seg_state sg ON sg.client_key = a.client_key
        LEFT JOIN LATERAL (
          SELECT d2.client_name, d2.payment_type FROM deals d2
            JOIN pipeline_stage_map p2 ON p2.pipeline_id = d2.pipeline_id AND p2.status_id = d2.status_id
@@ -3910,7 +3951,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
           WHERE d2.client_key = a.client_key
           ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
        ) nm ON true
-      WHERE COALESCE(lo.hidden, false) = false ${mgrCond}
+      WHERE COALESCE(lo.hidden, false) = false ${mgrCond} AND sg.state = 'active'
       ORDER BY a.revenue DESC`,
     mgrParams
   );
@@ -3976,6 +4017,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       clientKey: c.client_key,
       clientName: c.name ?? c.client_key,
       paymentType: c.payment_type ?? null,
+      segment: c.segment,
       orders: Number(c.orders),
       lifetimeRevenue: Number(c.revenue),
       since: c.first_paid ? c.first_paid.slice(0, 7) : null,   // YYYY-MM
@@ -4024,6 +4066,17 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       pct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : null,
       filledClients: clients.filter((c) => c.plan > 0).length,
       totalClients: clients.length,
+      /**
+       * 🌉 МІСТОК ДО РЕАКТИВАЦІЇ. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий
+       * поділ), і без цієї цифри вони зникли б МОВЧКИ — виглядало б як «клієнти
+       * загубились». Місток лише показує, скільки їх і куди піти; у Σ «постійні
+       * принесуть» він НЕ входить, бо це не план.
+       */
+      inReactivation: bridge.sleeping + bridge.lost,
+      inReactivationSleeping: bridge.sleeping,
+      inReactivationLost: bridge.lost,
+      /** Розбивка ЖИВИХ по сегментах — та, що стоїть над таблицею. */
+      activeBySegment: bridge.bySegment,
       currentWeekIndex: curIdx < 0 ? null : curIdx,
       currentWeekFact: curIdx < 0 ? null : clients.reduce((s2, c) => s2 + c.weeks[curIdx].fact, 0),
       currentWeekPlan: curIdx < 0 ? null : clients.reduce((s2, c) => s2 + c.weeks[curIdx].plan, 0),
@@ -4436,7 +4489,14 @@ dashboardRouter.get("/reactivation-list", async (req, res) => {
   res.json({
     clients: ranked,
     closeReasons: reactivation.CLOSE_REASONS,
-    thresholds: { sleepingDays: reactivation.SLEEPING_DAYS, lostDays: reactivation.LOST_DAYS },
+    thresholds: {
+      sleepingDays: reactivation.SLEEPING_DAYS, lostDays: reactivation.LOST_DAYS,
+      // Пороги ПО СЕГМЕНТАХ і межа архіву — з ядра, щоб підпис на екрані не став
+      // другою редакцією правила (зашите «14/30/60» почало б брехати мовчки).
+      bySegment: reactivation.SEGMENT_SLEEPING_DAYS,
+      archiveDays: reactivation.ARCHIVE_DAYS,
+      segmentMinPayments: reactivation.SEGMENT_MIN_PAYMENTS,
+    },
     tiles: {
       sleeping: byState("sleeping").length,
       sleepingPotential: Math.round(byState("sleeping").reduce((s2, c) => s2 + c.lifetimeRevenue, 0)),
