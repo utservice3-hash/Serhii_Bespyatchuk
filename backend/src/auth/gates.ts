@@ -102,6 +102,34 @@ export const DEAD_ROUTE_CANDIDATES: DeadRouteCandidate[] = [
        + "Роут лишається живим ОДИН спринт: рішення власника — зникнення має бути рішенням, "
        + "а не наслідком. ⏳ ПЕРЕГЛЯНУТИ ПІСЛЯ 2026-09-01: якщо звернень немає — видалити "
        + "разом із /repeat-client-plan* і repeat_client_plan_history." },
+  // 🪦 ТРИ СТАРІ БЛОКИ ЕКРАНА КЛІЄНТІВ, прибрані з UI 04.08.2026 (рішення власника).
+  // Роути лишаються живими — зникнення має бути рішенням, а не наслідком правки UI.
+  // Доказ смерті для всіх пʼяти рядків — той самий і повний:
+  //   (1) обгортки `fetchRegularClients` / `addReactivationClient` не кличе НІХТО;
+  //       `fetchReactivation`/`update…`/`remove…` — лише `ReactivationGrid.tsx`;
+  //   (2) `ReactivationGrid` рендериться ЛИШЕ з `ReportSection.tsx`, а той файл не
+  //       імпортує ніхто (Dashboard.tsx бере ManagerReportSection/KvpReportSection);
+  //   (3) рядків "/dashboard/reactivation" (точний, без дефіса) і "regular-clients"
+  //       у прод-бандлі НЕМАЄ — заміряно `grep` по dist/assets/index-*.js.
+  // ⚠️ ДАНІ НЕ ЧІПАЄМО: у `reactivation_clients` лишились 6 живих рядків (усі
+  // «в роботі», без дат контактів/результатів/коментарів — замір 04.08.2026).
+  // Що з ними робити — питання до власника, а не побічний ефект прибирання UI.
+  // ⏳ ПЕРЕГЛЯНУТИ ПІСЛЯ 2026-10-01.
+  { method: "GET", path: "/api/dashboard/regular-clients",
+    why: "Блок «Усі постійні клієнти (усі команди)» прибрано з екрана; заміна — "
+       + "GET /api/dashboard/client-plans (ієрархія команда → менеджер → клієнти). "
+       + "fetchRegularClients не кличе ніхто; рядка немає у прод-бандлі." },
+  { method: "GET", path: "/api/dashboard/reactivation",
+    why: "Грід «🔄 Реактивація — клієнти в роботі» прибрано; заміна — "
+       + "GET /api/dashboard/reactivation-list + задачі `reactivation_client`. "
+       + "Єдиний споживач — ReactivationGrid.tsx із мертвого ReportSection.tsx." },
+  { method: "POST", path: "/api/dashboard/reactivation",
+    why: "Кнопки «➕ в реактивацію» прибрано разом із грідом: вони писали в таблицю, "
+       + "якої ніхто не показує. Обгортка addReactivationClient без викликів." },
+  { method: "PUT", path: "/api/dashboard/reactivation",
+    why: "Редагування рядків того самого гріда (1-й/2-й контакт, результат, статус)." },
+  { method: "DELETE", path: "/api/dashboard/reactivation/:clientKey",
+    why: "Видалення рядка того самого гріда." },
   { method: "GET", path: "/api/dashboard/kvp-extra",
     why: "fetchKvpExtra без викликів. Межу все одно поставлено (tab «kvp») — роут живе в КВП-родині "
        + "й у MASTER_PLAN стоїть на переведення в ядро; закрити його дешевше, ніж лишити відкритим до видалення." },

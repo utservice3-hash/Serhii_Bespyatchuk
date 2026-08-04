@@ -44,7 +44,6 @@ import {
   type ConversionChannel,
   type ExecutiveOverview,
   type LeadgenGroup,
-  type LoyaltyDynamics,
   type ReceivableManager,
   type Task,
   type TaskPriority,
@@ -186,7 +185,6 @@ export function Dashboard() {
   const [loyaltyTeamId, setLoyaltyTeamId] = useState<number | "">("");
   const [loyaltyData, setLoyaltyData] = useState<LoyaltyManager[]>([]);
   const [loyaltyLoading, setLoyaltyLoading] = useState(false);
-  const [loyaltyDynamics, setLoyaltyDynamics] = useState<LoyaltyDynamics | null>(null);
 
   const [teamsRanking, setTeamsRanking] = useState<TeamRanking[]>([]);
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
@@ -493,14 +491,11 @@ export function Dashboard() {
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setLoyaltyLoading(true);
     fetchLoyalty({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
-      .then(({ managers, dynamics }) => {
-        setLoyaltyData(managers);
-        setLoyaltyDynamics(dynamics);
-      })
-      .catch(() => {
-        setLoyaltyData([]);
-        setLoyaltyDynamics(null);
-      })
+      // `dynamics` із відповіді більше не читається: блок «Динаміка повторних
+      // оплат (12 міс.)» прибрано 04.08.2026, а його роль виконує гістограма В
+      // КАРТЦІ КЛІЄНТА. Роут `/loyalty` живий — він живить картки менеджерів.
+      .then(({ managers }) => setLoyaltyData(managers))
+      .catch(() => setLoyaltyData([]))
       .finally(() => setLoyaltyLoading(false));
   }, [section, loyaltyTeamId, teams, auth, refreshNonce]);
 
@@ -892,7 +887,6 @@ export function Dashboard() {
           teams={teams}
           loyaltyTeamId={loyaltyTeamId}
           setLoyaltyTeamId={setLoyaltyTeamId}
-          loyaltyDynamics={loyaltyDynamics}
           loyaltyLoading={loyaltyLoading}
           loyaltyData={loyaltyData}
         />

@@ -1,25 +1,11 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Legend,
-  CartesianGrid,
-  ResponsiveContainer,
-} from "recharts";
 import type { AuthPayload } from "../../../auth";
 import {
-  fetchRegularClients, fetchReactivation, addReactivationClient,
   fetchLoyaltyOverrides, saveLoyaltyOverride, removeLoyaltyOverride, fetchManagerOptions,
-  type LoyaltyManager, type LoyaltyDynamics, type RegularClient, type Team, type ReactivationClient,
-  type LoyaltyOverride, type ManagerOption,
+  type LoyaltyManager, type Team, type LoyaltyOverride, type ManagerOption,
 } from "../../../api";
-import { formatAmount } from "../format";
 import { ClientPlansSection } from "./ClientPlansSection";
 import { ReactivationSection } from "./ReactivationSection";
-import { ReactivationGrid } from "./ReactivationGrid";
 import { teamOptions } from "../teamColors";
 
 /** Адмін-дії над постійним клієнтом: 🗑 прибрати · ↪ передати менеджеру. */
@@ -61,7 +47,6 @@ export function LoyaltySection({
   teams,
   loyaltyTeamId,
   setLoyaltyTeamId,
-  loyaltyDynamics,
   loyaltyLoading,
   loyaltyData,
 }: {
@@ -69,30 +54,9 @@ export function LoyaltySection({
   teams: Team[];
   loyaltyTeamId: number | "";
   setLoyaltyTeamId: Dispatch<SetStateAction<number | "">>;
-  loyaltyDynamics: LoyaltyDynamics | null;
   loyaltyLoading: boolean;
   loyaltyData: LoyaltyManager[];
 }) {
-  const [allClients, setAllClients] = useState<RegularClient[] | null>(null);
-  const [allOpen, setAllOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<"revenue" | "orders">("revenue");
-  const toggleAll = () => {
-    const next = !allOpen;
-    setAllOpen(next);
-    if (next && allClients === null) {
-      fetchRegularClients().then(setAllClients).catch(() => setAllClients([]));
-    }
-  };
-  const sortedAll = allClients
-    ? [...allClients].sort((a, b) => (sortBy === "revenue" ? b.revenue - a.revenue : b.orders - a.orders))
-    : [];
-
-  // Реактивація: список клієнтів у роботі (роль-скоуп на бекенді) + додавання
-  // сплячих/втрачених тімлідом. targetMgr — кому віддати (дефолт = менеджер картки).
-  const [reactClients, setReactClients] = useState<ReactivationClient[] | null>(null);
-  const reloadReact = () => { fetchReactivation().then(setReactClients).catch(() => setReactClients([])); };
-  useEffect(reloadReact, []);
-
   // Адмін: ручні правки постійних (прибрати/передати) + список менеджерів для передачі.
   const isAdmin = auth?.role === "admin";
   const [overrides, setOverrides] = useState<LoyaltyOverride[]>([]);
@@ -104,19 +68,20 @@ export function LoyaltySection({
     fetchManagerOptions().then(setAllManagers).catch(() => setAllManagers([]));
   }, [isAdmin]);
   const bumpOverrides = () => { reloadOverrides(); /* дані оновляться на наступному 5-хв рефреші дашборду */ };
-  const reactKeys = new Set((reactClients ?? []).map((c) => c.clientKey));
-  const canAssign = auth?.role === "team_lead" || auth?.role === "admin";
-  const [targetMgr, setTargetMgr] = useState<Record<number, number>>({}); // cardManagerId → обраний менеджер
-  const addToReactivation = (client: { clientKey: string; clientName: string }, cardManagerId: number, category: "sleeping" | "lost") => {
-    const managerId = targetMgr[cardManagerId] || cardManagerId;
-    addReactivationClient({ clientKey: client.clientKey, clientName: client.clientName, managerId, category })
-      .then(reloadReact)
-      .catch(() => {});
-  };
   return (
     <>
-      {/* ФАЗА A · новий екран за макетом. Старі блоки лишаються нижче до Фази B —
-          видаляти їх разом із побудовою означало б втратити дані, якщо щось не так. */}
+      {/* ФАЗА A/B · новий екран за макетом.
+          🪦 ПРИБРАНО 04.08.2026 (рішення власника) ТРИ БЛОКИ СТАРОГО ПОКОЛІННЯ:
+            (а) «🔄 Реактивація — клієнти в роботі» (ручна таблиця 1-й/2-й контакт) —
+                заміна: «Реактивація · сплячі та втрачені» з задачами й причиною закриття;
+            (б) «Усі постійні клієнти (усі команди)» — заміна: «Постійні клієнти · план
+                місяця» з ієрархією команда → менеджер → клієнти;
+            (в) «Динаміка повторних оплат (12 міс.)» — заміна: гістограма 12 міс. У КАРТЦІ
+                КЛІЄНТА (по канонічному ключу), а не однією цифрою по всьому зрізу.
+          🔴 РАЗОМ ІЗ (а) прибрано кнопки «➕ в реактивацію» в картках менеджерів нижче:
+          вони писали в `reactivation_clients` — таблицю, якої більше НІХТО не показує.
+          Лишити їх означало б робити дані, які нікуди не потрапляють; це гірше за
+          відсутність кнопки. Роути в DEAD_ROUTE_CANDIDATES, дані не чіпаємо. */}
       {auth && <ClientPlansSection auth={auth} />}
       {auth && <div style={{ height: 22 }} />}
       {auth && <ReactivationSection auth={auth} />}
@@ -165,121 +130,12 @@ export function LoyaltySection({
         </div>
       )}
 
-      {auth && (
-        <ReactivationGrid
-          clients={reactClients}
-          onReload={reloadReact}
-          canDelete={canAssign}
-        />
-      )}
-
       {/* 🪦 RepeatPlanGrid прибрано 03.08.2026 (рішення власника). Він рахував факт
           ВЛАСНИМ SQL і додавав НЕДАТОВАНИЙ знімок етапу 9 — тобто метрику ②, якої на
           екрані клієнтів бути не повинно, і знімок, що мутує минулі місяці. Заміна —
           ClientPlansSection вище (факт ① з ядра). Роут /repeat-plans-grid лишається
           живим ще один спринт і стоїть у DEAD_ROUTE_CANDIDATES з датою перегляду:
           зникнення має бути рішенням, а не наслідком. */}
-
-      {auth?.role !== "manager" && (
-        <div className="chart-card" style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <button
-              onClick={toggleAll}
-              style={{ border: "none", background: "none", cursor: "pointer", fontSize: 16, fontWeight: 700, color: "var(--text)" }}
-            >
-              {allOpen ? "▾" : "▸"} Усі постійні клієнти (усі команди)
-            </button>
-            {allOpen && allClients && allClients.length > 0 && (
-              <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
-                <span style={{ color: "var(--text-muted)" }}>Сортувати:</span>
-                <button onClick={() => setSortBy("revenue")} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid var(--border)", background: sortBy === "revenue" ? "#c5141c" : "var(--card-bg)", color: sortBy === "revenue" ? "#fff" : "var(--text)", cursor: "pointer" }}>за сумою</button>
-                <button onClick={() => setSortBy("orders")} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid var(--border)", background: sortBy === "orders" ? "#c5141c" : "var(--card-bg)", color: sortBy === "orders" ? "#fff" : "var(--text)", cursor: "pointer" }}>за к-стю</button>
-              </div>
-            )}
-          </div>
-          {allOpen && (
-            allClients === null ? (
-              <p className="loading-text">Завантаження…</p>
-            ) : allClients.length === 0 ? (
-              <p className="loading-text">Немає даних.</p>
-            ) : (
-              <table className="data-table" style={{ marginTop: 10 }}>
-                <thead>
-                  <tr><th>#</th><th>Клієнт</th><th>Тип</th><th>Замовлень (рахунків)</th><th>Сума (lifetime)</th><th>Остання оплата</th>{isAdmin && <th>Адмін</th>}</tr>
-                </thead>
-                <tbody>
-                  {sortedAll.map((c, i) => (
-                    <tr key={i}>
-                      <td>{i + 1}</td>
-                      <td>{c.clientName}</td>
-                      <td><ClientType isCompany={c.isCompany} identifier={c.identifier} /></td>
-                      <td>{c.orders}</td>
-                      <td style={{ fontWeight: 600 }}>{formatAmount(c.revenue)}</td>
-                      <td>{c.lastPaid ? new Date(c.lastPaid).toLocaleDateString("uk-UA") : "—"}</td>
-                      {isAdmin && (
-                        <td>{c.clientKey
-                          ? <AdminClientActions clientKey={c.clientKey} clientName={c.clientName} managers={allManagers} onDone={bumpOverrides} />
-                          : "—"}</td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )
-          )}
-        </div>
-      )}
-
-      {loyaltyDynamics && loyaltyDynamics.months.length > 0 && (
-        <div className="chart-card" style={{ marginBottom: 16 }}>
-          <h2 className="chart-title">Динаміка повторних оплат (12 міс.)</h2>
-          <div className="kpi-grid">
-            {(() => {
-              const d = loyaltyDynamics;
-              const arrow = (v: number) => (v > 0 ? "↑" : v < 0 ? "↓" : "→");
-              const color = (v: number) => (v > 0 ? "#16a34a" : v < 0 ? "#dc2626" : "#667085");
-              return (
-                <>
-                  <div className="kpi-card">
-                    <span className="kpi-label">Замовлень (міс.)</span>
-                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>успішно реалізовано</span>
-                    <span className="kpi-value">{d.latestOrders.toLocaleString("uk-UA")}</span>
-                    <span style={{ color: color(d.deltaOrders), fontWeight: 600 }}>
-                      {arrow(d.deltaOrders)} {Math.abs(d.deltaOrders)}% до попер. міс.
-                    </span>
-                  </div>
-                  <div className="kpi-card">
-                    <span className="kpi-label">Сума (міс.)</span>
-                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>успішно реалізовано</span>
-                    <span className="kpi-value">{formatAmount(d.latestAmount)}</span>
-                    <span style={{ color: color(d.deltaAmount), fontWeight: 600 }}>
-                      {arrow(d.deltaAmount)} {Math.abs(d.deltaAmount)}% до попер. міс.
-                    </span>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={loyaltyDynamics.months}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis yAxisId="left" orientation="left" />
-              <YAxis yAxisId="right" orientation="right" tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-              <Tooltip
-                formatter={(value, name) =>
-                  name === "Сума"
-                    ? formatAmount(Number(value))
-                    : Number(value).toLocaleString("uk-UA")
-                }
-              />
-              <Legend />
-              <Bar yAxisId="left" dataKey="orders" name="Замовлень" fill="#60a5fa" radius={[4, 4, 0, 0]} />
-              <Bar yAxisId="right" dataKey="amount" name="Сума" fill="#c5141c" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       {loyaltyLoading ? (
         <p className="loading-text">Завантаження...</p>
@@ -314,27 +170,16 @@ export function LoyaltySection({
                 { key: "sleeping", label: "Сплячі — кандидати на реактивацію", list: m.segments.sleeping },
                 { key: "lost", label: "Втрачені — давно не замовляли", list: m.segments.lost },
               ] as const).map((group) => {
-                const reactivatable = group.key === "sleeping" || group.key === "lost";
                 return (
                   group.list.length > 0 && (
                     <details key={group.key} style={{ marginTop: 12 }}>
                       <summary style={{ cursor: "pointer", fontWeight: 600 }}>
                         {group.label} ({group.list.length})
                       </summary>
-                      {reactivatable && canAssign && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, margin: "8px 0 4px", color: "var(--text-muted)" }}>
-                          ➕ додає в реактивацію менеджеру:
-                          <select
-                            value={targetMgr[m.managerId] || m.managerId}
-                            onChange={(e) => setTargetMgr((t) => ({ ...t, [m.managerId]: Number(e.target.value) }))}
-                            style={{ fontSize: 12 }}
-                          >
-                            {loyaltyData.map((mm) => (
-                              <option key={mm.managerId} value={mm.managerId}>{mm.managerName}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
+                      {/* Кнопки «➕ в реактивацію» прибрано разом зі старим грідом:
+                          вони писали в таблицю, якої більше ніхто не показує.
+                          Взяти клієнта в роботу тепер можна на екрані «Реактивація ·
+                          сплячі та втрачені» — там задача, виконавець і причина. */}
                       <table className="data-table">
                         <thead>
                           <tr>
@@ -343,7 +188,6 @@ export function LoyaltySection({
                             <th>За 2 міс.</th>
                             <th>Всього оплат</th>
                             <th>Остання оплата</th>
-                            {reactivatable && canAssign && <th>Реактивація</th>}
                             {isAdmin && group.key === "regular" && <th>Адмін</th>}
                           </tr>
                         </thead>
@@ -362,21 +206,6 @@ export function LoyaltySection({
                               {isAdmin && group.key === "regular" && (
                                 <td>
                                   <AdminClientActions clientKey={c.clientKey} clientName={c.clientName} managers={allManagers} onDone={bumpOverrides} />
-                                </td>
-                              )}
-                              {reactivatable && canAssign && (
-                                <td>
-                                  {reactKeys.has(c.clientKey) ? (
-                                    <span style={{ color: "#16a34a", fontSize: 12, fontWeight: 600 }}>✓ в роботі</span>
-                                  ) : (
-                                    <button
-                                      onClick={() => addToReactivation(c, m.managerId, group.key === "lost" ? "lost" : "sleeping")}
-                                      title="Віддати менеджеру в реактивацію"
-                                      style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}
-                                    >
-                                      ➕ в реактивацію
-                                    </button>
-                                  )}
                                 </td>
                               )}
                             </tr>
