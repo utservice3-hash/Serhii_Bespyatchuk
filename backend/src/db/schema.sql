@@ -431,6 +431,14 @@ ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_medium   TEXT;
 ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
 ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_term     TEXT;
 ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_content  TEXT;
+-- 🔴 РАЗОВА КОРЕКЦІЯ з умовою на ЗЛАМАНЕ значення (не постійний синк): перший
+-- бекфіл записав порожні рядки замість NULL, і замір показав «100% дзвінків із
+-- мітками». Умова `= ''` робить оператор ідемпотентним і не чіпає нічого іншого.
+UPDATE ringostat_calls SET
+  utm_source = NULLIF(utm_source,''), utm_medium = NULLIF(utm_medium,''),
+  utm_campaign = NULLIF(utm_campaign,''), utm_term = NULLIF(utm_term,''),
+  utm_content = NULLIF(utm_content,'')
+ WHERE utm_source = '' OR utm_medium = '' OR utm_campaign = '' OR utm_term = '' OR utm_content = '';
 CREATE INDEX IF NOT EXISTS idx_rc_utm_campaign ON ringostat_calls(utm_campaign) WHERE utm_campaign IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rc_client_key ON ringostat_calls(client_key, calldate DESC) WHERE client_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, calldate DESC);

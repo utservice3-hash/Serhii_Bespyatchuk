@@ -49,6 +49,19 @@ export async function fetchCalls(from: string, to: string): Promise<RawCall[]> {
  * `ON CONFLICT DO UPDATE` не може зачепити один рядок двічі, і батч із дублем
  * кладе всю джобу. Ringostat дублів не обіцяв, але й Kommo не обіцяв.
  */
+/**
+ * 🔴 ПОРОЖНІЙ РЯДОК — ЦЕ НЕ ЗНАЧЕННЯ. Ringostat віддає `utm_source: ""` для
+ * дзвінка без міток, а не пропускає поле. Збережений як є, він робить «мітки
+ * немає» НЕВІДРІЗНИМ від «мітка порожня»: перший же замір після бекфілу показав
+ * «100% дзвінків із мітками» — бо COUNT() рахує порожні рядки. Тому нормалізуємо
+ * на вході, а не при кожному читанні: інакше кожен наступний запит муситиме
+ * памʼятати про це, і один із них забуде.
+ */
+const nz = (v: string | undefined): string | null => {
+  const t = (v ?? "").trim();
+  return t === "" ? null : t;
+};
+
 export async function upsertCalls(calls: RawCall[]): Promise<number> {
   const rows = dedupeById(
     calls.filter((c) => c.uniqueid && c.calldate)
@@ -71,8 +84,8 @@ export async function upsertCalls(calls: RawCall[]): Promise<number> {
         Number(c.billsec ?? 0) || 0, Number(c.duration ?? 0) || 0,
         c.caller ?? null, c.dst ?? null, c.n_alias ?? null, c.recording ?? null,
         c.employee_fio ?? null, clientPhoneOf(c.call_type, c.caller, c.dst),
-        c.utm_source ?? null, c.utm_medium ?? null, c.utm_campaign ?? null,
-        c.utm_term ?? null, c.utm_content ?? null);
+        nz(c.utm_source), nz(c.utm_medium), nz(c.utm_campaign),
+        nz(c.utm_term), nz(c.utm_content));
     });
     const r = await pool.query(
       `INSERT INTO ringostat_calls (${cols.join(",")}) VALUES ${ph.join(",")}
