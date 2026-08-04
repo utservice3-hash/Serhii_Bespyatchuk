@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { NavIcon } from "./NavIcon";
 import { NAV_ITEMS, type NavKey } from "./Layout";
 
 /**
@@ -115,7 +116,7 @@ export function CommandPalette({ onSelect }: { onSelect: (key: NavKey) => void }
                 fontSize: 15,
               }}
             >
-              <span style={{ fontSize: 18 }}>{item.icon}</span>
+              <span style={{ display: "inline-flex", color: "var(--text-muted)" }}><NavIcon k={item.key} size={17} /></span>
               {item.label}
             </button>
           ))}

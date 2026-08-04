@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { HealthBanner } from "./HealthBanner";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
+import { NavIcon } from "./NavIcon";
 import { CommandPalette } from "./CommandPalette";
 import { heartbeat } from "../api";
 import { usePolling } from "../hooks/usePolling";
@@ -136,8 +137,9 @@ export function Layout({
     <div className="app-shell">
       <aside className="sidebar" style={collapsed ? { width: 64, minWidth: 64 } : undefined}>
         <div className="sidebar-brand" style={{ justifyContent: collapsed ? "center" : undefined }}>
-          <Logo size={28} />
-          {!collapsed && <span>UTS</span>}
+          <Logo size={collapsed ? 20 : 26} />
+          {/* Поруч із плашкою — не повтор «UTS», а що це за застосунок (макет). */}
+          {!collapsed && <span className="sidebar-brand-sub">дашборд</span>}
         </div>
         <button
           className="sidebar-nav-item"
@@ -175,7 +177,7 @@ export function Layout({
                   title={badge ? `${item.label} — ${badge} непрочитаних` : item.label}
                   style={{ position: "relative" }}
                 >
-                  <span className="sidebar-nav-icon">{item.icon}</span>
+                  <span className="sidebar-nav-icon"><NavIcon k={item.key} /></span>
                   {!collapsed && item.label}
                   {badge > 0 && (
                     <span
@@ -241,7 +243,7 @@ export function Layout({
               fontSize: 13,
             }}
           >
-            🔍 Пошук <span style={{ opacity: 0.6 }}>Ctrl K</span>
+            <NavIcon k="dataquality" size={15} /> Пошук <span style={{ opacity: 0.6 }}>Ctrl K</span>
           </button>
           <button
             onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
@@ -255,7 +257,14 @@ export function Layout({
               fontSize: 15,
             }}
           >
-            {theme === "dark" ? "☀️" : "🌙"}
+            {/* Сонце/місяць лінією — той самий принцип «нуль емодзі», що й у меню:
+                емодзі тут ще й міняло ширину кнопки при перемиканні теми. */}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {theme === "dark"
+                ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>
+                : <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />}
+            </svg>
           </button>
         </div>
         <CommandPalette onSelect={onSelect} />

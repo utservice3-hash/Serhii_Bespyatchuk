@@ -747,8 +747,11 @@ function StuckMgrRow({ g, open, onToggle, single }: { g: StuckManagerGroup; open
           </Tag>
         </span>
       </div>
+      {/* overflow-x: клітинки тримають колонки в один рядок (nowrap), тож на вузькому
+          екрані таблиця має ПРОКРУЧУВАТИСЬ, а не обрізатись — інакше «Коментар»
+          просто зникав за краєм картки. */}
       {open && (
-        <div style={{ maxHeight: 460, overflowY: "auto", borderTop: `1px solid ${LINE}` }}>
+        <div style={{ maxHeight: 460, overflowY: "auto", overflowX: "auto", borderTop: `1px solid ${LINE}` }}>
           <table className="data-table" style={{ width: "100%" }}>
             <thead><tr>{STUCK_COLS.map((c) => <th key={c.h} style={{ textAlign: c.r ? "right" : "left", position: "sticky", top: 0, zIndex: 1 }}>{c.h}{c.hint && <> <InfoHint text={c.hint} /></>}</th>)}</tr></thead>
             <tbody>
