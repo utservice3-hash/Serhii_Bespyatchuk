@@ -585,3 +585,110 @@ button {
     transform: none;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ПІЛОТ РЕДИЗАЙНУ · ЕКРАН «ЗВІТ» (scope `.rpt`)
+
+   🔴 Чому токени ЛОКАЛЬНІ, а не в :root. Умова власника до коміту 2: «інші
+   екрани НЕ чіпати — якщо зміна значення токена тягне за собою інші екрани,
+   значить цей токен ще не готовий бути спільним: розділи його». Значення
+   нижче (чорнильний акцент замість синього, тепла лінія, більші числа,
+   радіус 14) відрізняються від спільних — тому вони живуть у скоупі Звіту,
+   а не перекривають :root. Коли макет пошириться на решту екранів, ці
+   змінні переїдуть у :root ОДНИМ свідомим кроком, а не витечуть побічно.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.rpt {
+  --rpt-ink: #16181d;          /* «чорнило» — активний стан замість синього */
+  --rpt-ink-soft: #3f434b;
+  --rpt-muted: #8a8f98;
+  --rpt-line: #e8e6e3;
+  --rpt-card: #ffffff;
+  --rpt-soft: #f6f5f3;
+  --rpt-accent: var(--brand);  /* ОДИН акцент на екран */
+  --rpt-tint: rgba(197, 20, 28, .05);   /* ледь-ледь акценту — підсвітка рядка */
+  --rpt-link: #2563eb;                  /* посилання лишається посиланням (як у макеті) */
+  --rpt-ok: #1a7f4b;   --rpt-ok-bg: #e9f5ee;
+  --rpt-warn: #a06a08; --rpt-warn-bg: #fdf2e0;
+  --rpt-bad: #b4231d;  --rpt-bad-bg: #fdecea;
+  --rpt-r: 14px;
+  --rpt-r-sm: 10px;
+  --rpt-r-xs: 7px;
+  --rpt-num: 38px;
+
+  max-width: 1240px;
+  margin: 0 auto;
+  color: var(--rpt-ink);
+  font-variant-numeric: tabular-nums;   /* цифри — головні, тож не стрибають */
+}
+:root[data-theme="dark"] .rpt {
+  --rpt-ink: #eceef2;
+  --rpt-ink-soft: #b6bbc5;
+  --rpt-muted: #8b929f;
+  --rpt-line: #2c3140;
+  --rpt-card: #1a1d27;
+  --rpt-soft: #20242f;
+  --rpt-ok: #4ade80;   --rpt-ok-bg: #16311f;
+  --rpt-warn: #f0b429; --rpt-warn-bg: #3a2c10;
+  --rpt-bad: #f87171;  --rpt-bad-bg: #3a1616;
+  --rpt-tint: rgba(248, 113, 113, .08);
+  --rpt-link: #7aa2f7;
+}
+
+.rpt-crumb { font-size: 12.5px; color: var(--rpt-muted); letter-spacing: .2px; }
+.rpt-h1 { font-size: 30px; font-weight: 800; letter-spacing: -.6px; margin: 2px 0 0; color: var(--rpt-ink); }
+.rpt-sub { font-size: 13px; color: var(--rpt-muted); margin-top: 4px; }
+
+/* Сегментований перемикач замість розсипу кнопок */
+.rpt-seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--rpt-line); border-radius: var(--rpt-r-sm); background: var(--rpt-card); }
+.rpt-seg > button {
+  border: none; background: transparent; color: var(--rpt-muted);
+  font-size: 13.5px; font-weight: 600; padding: 7px 16px; border-radius: var(--rpt-r-xs);
+}
+.rpt-seg > button[aria-pressed="true"] { background: var(--rpt-ink); color: var(--rpt-card); }
+
+.rpt-btn {
+  border: 1px solid var(--rpt-line); background: var(--rpt-card); color: var(--rpt-ink);
+  border-radius: var(--rpt-r-sm); padding: 8px 14px; font-size: 13px; font-weight: 600;
+}
+.rpt-btn:disabled { opacity: .4; }
+.rpt-chip { font-size: 12px; color: var(--rpt-muted); background: var(--rpt-soft); border-radius: var(--r-pill); padding: 6px 13px; }
+
+/* Смуга днів */
+.rpt-day {
+  min-width: 66px; text-align: center; padding: 8px 12px; border-radius: var(--rpt-r-sm);
+  border: 1px solid var(--rpt-line); background: var(--rpt-card); line-height: 1.2;
+}
+.rpt-day > small { display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; color: var(--rpt-muted); }
+.rpt-day > b { font-size: 19px; font-weight: 800; letter-spacing: -.4px; }
+.rpt-day[data-on="1"] { background: var(--rpt-ink); border-color: var(--rpt-ink); color: var(--rpt-card); }
+.rpt-day[data-on="1"] > small { color: var(--rpt-card); opacity: .7; }
+.rpt-day[data-dim="1"] { opacity: .45; }
+
+/* Картки */
+.rpt-card { background: var(--rpt-card); border: 1px solid var(--rpt-line); border-radius: var(--rpt-r); }
+.rpt-lab { font-size: 11px; font-weight: 700; letter-spacing: .9px; text-transform: uppercase; color: var(--rpt-muted); }
+.rpt-big { font-size: var(--rpt-num); font-weight: 800; letter-spacing: -1.4px; line-height: 1.05; margin-top: 10px; }
+.rpt-unit { font-size: 15px; font-weight: 600; color: var(--rpt-ink-soft); letter-spacing: 0; }
+.rpt-note { font-size: 12.5px; color: var(--rpt-muted); }
+
+/* Тонка смуга прогресу — замість кільця */
+.rpt-track { height: 5px; border-radius: var(--r-pill); background: var(--rpt-line); overflow: hidden; position: relative; }
+.rpt-fill { height: 100%; border-radius: var(--r-pill); background: var(--rpt-accent); min-width: 5px; }
+
+/* Статус-плашка: колір НЕ наодинці — крапка + підпис */
+.rpt-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+.rpt-tag { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; padding: 4px 11px; border-radius: var(--r-pill); white-space: nowrap; }
+
+.rpt-strip { font-size: 12px; color: var(--rpt-muted); background: var(--rpt-soft); padding: 10px 20px; border-top: 1px solid var(--rpt-line); border-bottom: 1px solid var(--rpt-line); }
+
+/* Таблиця Звіту: рідше сітки, більше повітря */
+.rpt table.data-table th {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .9px; text-transform: uppercase;
+  color: var(--rpt-muted); border-bottom: 1px solid var(--rpt-line); padding: 11px 14px; background: var(--rpt-card);
+}
+.rpt table.data-table td { border-bottom: 1px solid var(--rpt-line); padding: 13px 14px; font-size: 13px; white-space: nowrap; }
+/* Клієнт і коментар — єдині, кому дозволено переносити: решта колонок вузькі й
+   від переносу стають нечитними (заголовок «ДНІВ БЕЗ РУХУ» рвався навпіл). */
+.rpt table.data-table td:nth-child(2) { white-space: normal; }
+.rpt table.data-table td:last-child { white-space: normal; }
+.rpt table.data-table tr:last-child td { border-bottom: none; }
