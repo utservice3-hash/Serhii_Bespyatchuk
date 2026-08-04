@@ -1211,24 +1211,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT; -- ПІБ для РУ
 -- Паролі → хеш-онлі: гасимо плейнтекст (колонку лишаємо, більше не наповнюємо/не показуємо).
 UPDATE users SET initial_password = NULL WHERE initial_password IS NOT NULL;
 
--- ПРАВО «злиття клієнтів і призначення відповідального» — КВП, Опер. директор
--- і admin. Саме ПРАВО, не хардкод ролі в роуті: додати ще одну роль = запис у
--- `roles`, а не правка коду. Та сама модель, що admin_scope.
---
--- 🟢 ЗМІНА ПОЛІТИКИ 03.08.2026. Перша редакція давала право лише kvp/opdir —
--- дослівно за формулюванням власника. Ми показали наслідок: його ВЛАСНИЙ акаунт
--- має роль `admin` і кнопки не побачив би. Рішення власника після цього: додати
--- `admin` (власник + бізнес-асистент, яка такі операції й так виконує).
--- Підзвітність тримає не вузькість права, а ЖУРНАЛ: `client_key_alias.approved_by`
--- і `client_manager_history.changed_by` фіксують, ХТО саме зливав і передавав.
---
--- 🔴 СТОЇТЬ САМЕ ТУТ, ПІСЛЯ СИДУ РОЛЕЙ. Перша версія стояла на 400 рядків вище —
--- на живій базі проходила (таблиця вже є), а на ПОРОЖНІЙ міграція падала з
--- «relation "roles" does not exist». Той самий клас, що GRANT перед CREATE TABLE;
--- спіймав #8 (схема з нуля), і саме заради цього він і піднімає базу щоразу.
-UPDATE roles SET permissions = permissions || '{"merge_clients": true}'::jsonb
- WHERE key IN ('kvp', 'opdir', 'admin') AND NOT (permissions ? 'merge_clients');
-
 CREATE TABLE IF NOT EXISTS access_audit (
   id            SERIAL PRIMARY KEY,
   at            TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1570,6 +1552,27 @@ UPDATE roles SET
   permissions   = ((SELECT permissions FROM roles WHERE key='admin')
                     - 'manage_users' - 'reset_passwords')
 WHERE key = 'financier';
+
+-- ПРАВО «злиття клієнтів і призначення відповідального» — КВП, Опер. директор
+-- і admin (рішення власника 03.08.2026). Саме ПРАВО, не хардкод ролі в роуті.
+--
+-- 🔴 СТОЇТЬ ПІСЛЯ ОСТАННЬОГО СИНКУ РОЛЕЙ (financier), І ЦЕ НЕ КОСМЕТИКА. Перша редакція стояла
+-- вище — і право просочилось у `ceo` та `financier`, яких власник НЕ називав:
+-- рядки нижче копіюють `permissions` АДМІНА цілком, тож усе, що дали admin
+-- раніше, автоматично розтікається по чотирьох ролях. Виявлено вже НА ПРОДІ,
+-- окремою перевіркою після міграції: «merge_clients мають admin, ceo, financier,
+-- kvp, opdir» — пʼять замість трьох.
+--
+-- Перенести грант «нижче» теж недостатньо, якщо не в САМИЙ кінець: синки йдуть
+-- у трьох місцях (ceo/opdir, kvp, financier), і я на цьому спіймався вдруге —
+-- поставив після двох перших, а financier синкається ще нижче й забрав право
+-- знову. Тому: грант і явне зняття — ПІСЛЯ ВСІХ ТРЬОХ. Зняття потрібне окремо,
+-- бо наступний прогін інакше знову скопіює право з admin.
+UPDATE roles SET permissions = permissions || '{"merge_clients": true}'::jsonb
+ WHERE key IN ('kvp', 'opdir', 'admin');
+UPDATE roles SET permissions = permissions - 'merge_clients'
+ WHERE key IN ('ceo', 'financier');
+
 
 -- 2) БЕКФІЛ below_min для рядків, поданих ДО викату фічі (вони мають DEFAULT false).
 --

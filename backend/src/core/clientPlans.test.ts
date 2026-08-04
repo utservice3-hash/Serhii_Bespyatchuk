@@ -257,3 +257,34 @@ test("#23d ПАЧКИ ВРАХОВУЮТЬСЯ ЧЕРЕЗ ТУ САМУ НОРМ
   assert.ok(!/regexp_replace\([^)]*clientKey/i.test(src),
     "🔴 у SQL зʼявився власний регексп по clientKey — саме те розходження, від якого ця перевірка й рятує");
 });
+
+test("#23e ПРАВО merge_clients НЕ ПРОСОЧУЄТЬСЯ через синк ролей", async (t) => {
+  // 🔴 ЗНАЙДЕНО НА ПРОДІ, не в теорії. Грант стояв ВИЩЕ за рядки, що копіюють
+  // `permissions` адміна в ceo/opdir і (мінус два права) у kvp — і право
+  // розтеклось на ПʼЯТЬ ролей замість трьох: admin, ceo, financier, kvp, opdir.
+  // Перевіряємо на схемі З НУЛЯ, бо на живій базі результат маскується історією.
+  const { provisionScratch } = await import("../db/scratchDb.js");
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    const schema = path.join(import.meta.dirname, "..", "db", "schema.sql");
+    await c.query(readFileSync(schema, "utf8"));
+    const have = async () => (await c.query<{ key: string }>(
+      `SELECT key FROM roles WHERE (permissions->>'merge_clients')::boolean ORDER BY key`)).rows.map((r) => r.key);
+    assert.deepEqual(await have(), ["admin", "kvp", "opdir"],
+      "🔴 право дісталось не тим ролям. Власник назвав рівно три; ceo/financier його НЕ мають");
+    // ДЗЕРКАЛО: повторна міграція нічого не змінює. Без цього перевірка зеленіла б
+    // на першому прогоні, а на другому synс знову розлив би право по чотирьох.
+    await c.query(readFileSync(schema, "utf8"));
+    assert.deepEqual(await have(), ["admin", "kvp", "opdir"],
+      "🔴 ДРУГИЙ прогін міграції розширив право — саме так воно й просочилось уперше");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
