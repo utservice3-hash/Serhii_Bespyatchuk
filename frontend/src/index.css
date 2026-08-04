@@ -1,18 +1,86 @@
 :root {
+  /* ═══════════════════════════════════════════════════════════════════════
+     ДИЗАЙН-ТОКЕНИ. Комміт 1: значення ТІ САМІ, що були захардкоджені нижче, —
+     мета цього коміту «нічого не змінилось візуально», а не «стало краще».
+
+     🔴 Навіщо окремий крок. Міняти вигляд і виносити змінні одночасно означає,
+     що потім неможливо сказати, чи зсув кольору — це задум редизайну, чи
+     помилка виносу. Ті самі граблі, що «зміна поведінки окремо від
+     рефакторингу» в DoD.
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  /* ── Бренд і акцент. ОДИН акцентний колір на екран (принцип макета). */
   --brand: #c5141c;
   --brand-dark: #9c0f16;
+  --accent: var(--brand);
+
+  /* ── Поверхні й текст */
   --text: #1f2330;
   --text-muted: #6b7280;
   --bg: #f4f5f7;
   --card-bg: #ffffff;
+  --surface-2: #f8fafc;          /* другорядна поверхня (плашки всередині карток) */
   --border: #e5e7eb;
+  --border-strong: #d1d5db;
   --sidebar-bg: #1a1d27;
   --sidebar-text: #c9cbd3;
+
+  /* ── Статуси. Зарезервовані: НЕ використовувати як «ще один колір серії». */
+  --ok: #166534;
+  --ok-bg: #dcfce7;
+  --warn: #b45309;
+  --warn-bg: #fef3c7;
+  --danger: #b91c1c;
+  --danger-bg: #fee2e2;
+  --info: #1d4ed8;
+  --info-bg: #eff6ff;
+
+  /* ── Сітка 4/8. Значення взяті з реального CSS: 5px і 13px існують, тому
+        лишаються окремими токенами, а не «округлюються» — округлення тут було б
+        зміною вигляду, тобто виходом за межі коміту 1. */
+  --sp-1: 4px;
+  --sp-1-5: 5px;
+  --sp-2: 6px;
+  --sp-3: 8px;
+  --sp-4: 10px;
+  --sp-5: 12px;
+  --sp-6: 14px;
+  --sp-7: 16px;
+  --sp-8: 20px;
+  --sp-9: 24px;
+
+  /* ── Радіуси */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
+  --r-2xl: 12px;
+  --r-pill: 999px;
+
+  /* ── Типографіка */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-13: 13px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+  --fs-lg: 16px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+  --fs-3xl: 26px;
+  --lh: 1.5;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-black: 800;
+  /* Цифри в одну ширину — інакше числа в колонках «стрибають» при оновленні. */
+  --num: "tabular-nums";
+
   --shadow: rgba(15, 23, 42, 0.06) 0 1px 3px, rgba(15, 23, 42, 0.04) 0 1px 2px;
+  --shadow-lg: rgba(15, 23, 42, 0.12) 0 8px 24px, rgba(15, 23, 42, 0.06) 0 2px 6px;
 
   --sans: system-ui, "Segoe UI", Roboto, sans-serif;
 
-  font: 15px/1.5 var(--sans);
+  font: var(--fs-md)/var(--lh) var(--sans);
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -23,9 +91,16 @@
   --text-muted: #9aa1ad;
   --bg: #0f1117;
   --card-bg: #1a1d27;
+  --surface-2: #20242f;
   --border: #2c3140;
+  --border-strong: #3a4050;
   --sidebar-bg: #14161e;
+  --ok-bg: #14311f;
+  --warn-bg: #3a2c10;
+  --danger-bg: #3a1616;
+  --info-bg: #16233a;
   --shadow: rgba(0, 0, 0, 0.4) 0 1px 3px, rgba(0, 0, 0, 0.3) 0 1px 2px;
+  --shadow-lg: rgba(0, 0, 0, 0.55) 0 8px 24px, rgba(0, 0, 0, 0.35) 0 2px 6px;
   color: var(--text);
   background: var(--bg);
 }
@@ -35,7 +110,7 @@
 }
 
 body {
-  margin: 0;
+  margin:0;
 }
 
 #root {
@@ -44,8 +119,8 @@ body {
 
 h1, h2, h3 {
   font-family: var(--sans);
-  font-weight: 600;
-  margin: 0;
+  font-weight:var(--fw-semibold);
+  margin:0;
 }
 
 select, input, button {
@@ -53,9 +128,9 @@ select, input, button {
 }
 
 select, input {
-  padding: 8px 12px;
+  padding:var(--sp-3) var(--sp-5);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius:var(--r-lg);
   background: var(--card-bg);
   color: var(--text);
 }
@@ -78,7 +153,7 @@ button {
   color: var(--sidebar-text);
   display: flex;
   flex-direction: column;
-  padding: 20px 14px;
+  padding:var(--sp-8) var(--sp-6);
   /* Пришпилюємо сайдбар до вьюпорта на всю висоту екрана: на високих сторінках
      дашборда сайдбар більше НЕ розтягується разом зі скролом сторінки, тож кнопка
      «Вийти» у футері завжди у полі зору (раніше падала в самий низ довгої сторінки). */
@@ -92,17 +167,17 @@ button {
 .sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap:var(--sp-4);
   color: #fff;
-  font-size: 18px;
-  font-weight: 700;
-  padding: 4px 10px 24px;
+  font-size:var(--fs-xl);
+  font-weight:var(--fw-bold);
+  padding:var(--sp-1) var(--sp-4) var(--sp-9);
 }
 
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap:var(--sp-1);
   flex: 1;
   overflow-y: auto; /* довгий список вкладок скролиться ВСЕРЕДИНІ, не виштовхуючи футер */
   min-height: 0;    /* дозволяє flex-дитині скролитись у колонці */
@@ -111,15 +186,15 @@ button {
 .sidebar-nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap:var(--sp-4);
   width: 100%;
   text-align: left;
   background: none;
   border: none;
   color: var(--sidebar-text);
-  padding: 10px 12px;
-  border-radius: 8px;
-  font-size: 14px;
+  padding:var(--sp-4) var(--sp-5);
+  border-radius:var(--r-lg);
+  font-size:var(--fs-base);
 }
 
 .sidebar-nav-item:hover {
@@ -132,18 +207,18 @@ button {
 }
 
 .sidebar-nav-icon {
-  font-size: 16px;
+  font-size:var(--fs-lg);
 }
 
 .sidebar-logout {
   background: none;
   border: 1px solid rgba(255, 255, 255, 0.15);
   color: var(--sidebar-text);
-  padding: 10px 12px;
-  border-radius: 8px;
-  font-size: 14px;
+  padding:var(--sp-4) var(--sp-5);
+  border-radius:var(--r-lg);
+  font-size:var(--fs-base);
   flex-shrink: 0;  /* футер ніколи не стискається/не виштовхується списком вкладок */
-  margin-top: 8px;
+  margin-top:var(--sp-3);
 }
 
 .sidebar-logout:hover {
@@ -153,7 +228,7 @@ button {
 
 .main-content {
   flex: 1;
-  padding: 28px 32px;
+  padding:28px 32px;
   min-width: 0;
 }
 
@@ -164,17 +239,17 @@ button {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap:var(--sp-7);
+  margin-bottom:var(--sp-9);
 }
 
 .page-title {
-  font-size: 22px;
+  font-size:var(--fs-2xl);
 }
 
 .page-filters {
   display: flex;
-  gap: 12px;
+  gap:var(--sp-5);
 }
 
 /* KPI cards */
@@ -182,29 +257,29 @@ button {
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
+  gap:var(--sp-7);
+  margin-bottom:var(--sp-9);
 }
 
 .kpi-card {
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius:var(--r-2xl);
   box-shadow: var(--shadow);
-  padding: 18px 20px;
+  padding:18px var(--sp-8);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap:var(--sp-2);
 }
 
 .kpi-label {
-  font-size: 13px;
+  font-size:var(--fs-13);
   color: var(--text-muted);
 }
 
 .kpi-value {
-  font-size: 26px;
-  font-weight: 700;
+  font-size:var(--fs-3xl);
+  font-weight:var(--fw-bold);
   color: var(--text);
 }
 
@@ -213,30 +288,30 @@ button {
 .chart-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap:var(--sp-7);
 }
 
 .chart-card {
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius:var(--r-2xl);
   box-shadow: var(--shadow);
-  padding: 20px;
+  padding:var(--sp-8);
 }
 
 .chart-title {
-  font-size: 16px;
-  margin-bottom: 12px;
+  font-size:var(--fs-lg);
+  margin-bottom:var(--sp-5);
 }
 
 .section-heading {
-  font-size: 14px;
-  font-weight: 700;
+  font-size:var(--fs-base);
+  font-weight:var(--fw-bold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
-  margin: 22px 0 10px;
-  padding-bottom: 6px;
+  margin:22px 0 var(--sp-4);
+  padding-bottom:var(--sp-2);
   border-bottom: 1px solid var(--border);
 }
 
@@ -249,7 +324,7 @@ button {
 }
 .data-table.weekly-funnel th,
 .data-table.weekly-funnel td {
-  padding: 7px 12px;
+  padding:7px var(--sp-5);
   text-align: center;
   white-space: nowrap;
   border-bottom: 1px solid var(--border);
@@ -293,37 +368,37 @@ button {
 /* Compact variant — columns hug their content (no stretched gaps) */
 .data-table.compact {
   width: auto;
-  font-size: 13px;
+  font-size:var(--fs-13);
 }
 .data-table.compact th,
 .data-table.compact td {
-  padding: 5px 10px;
+  padding:var(--sp-1-5) var(--sp-4);
 }
 
 .data-table th {
   text-align: left;
-  font-size: 13px;
+  font-size:var(--fs-13);
   color: var(--text-muted);
-  padding: 8px 0;
+  padding:var(--sp-3) 0;
   border-bottom: 1px solid var(--border);
 }
 
 .data-table td {
-  padding: 10px 0;
+  padding:var(--sp-4) 0;
   border-bottom: 1px solid var(--border);
 }
 
 .manager-card {
-  margin-bottom: 16px;
+  margin-bottom:var(--sp-7);
 }
 
 .btn-primary {
   background: var(--brand);
   color: #fff;
   border: none;
-  border-radius: 8px;
-  padding: 8px 14px;
-  font-weight: 600;
+  border-radius:var(--r-lg);
+  padding:var(--sp-3) var(--sp-6);
+  font-weight:var(--fw-semibold);
 }
 
 .btn-primary:hover {
@@ -338,8 +413,8 @@ button {
 
 .tasks-table th,
 .tasks-table td {
-  padding-right: 10px;
-  padding-top: 10px;
+  padding-right:var(--sp-4);
+  padding-top:var(--sp-4);
   /* Top-align so every control lines up with the task title even when a row is
      tall (e.g. a reactivation task with a client checklist). */
   vertical-align: top;
@@ -351,26 +426,26 @@ button {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  padding: 6px 8px;
-  font-size: 13px;
-  border-radius: 6px;
+  padding:var(--sp-2) var(--sp-3);
+  font-size:var(--fs-13);
+  border-radius:var(--r-md);
 }
 
 .tasks-table input[type="date"] {
-  padding: 5px 6px;
+  padding:var(--sp-1-5) var(--sp-2);
 }
 
 .task-status-cell {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap:var(--sp-2);
 }
 
 .task-status-dot {
   flex-shrink: 0;
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius:50%;
 }
 
 .task-status-cell select {
@@ -401,7 +476,7 @@ button {
     flex-direction: row;
   }
   .sidebar-logout {
-    margin-left: auto;
+    margin-left:auto;
   }
 }
 
@@ -418,31 +493,31 @@ button {
 .login-card {
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius:16px;
   box-shadow: var(--shadow);
-  padding: 36px 32px;
+  padding:36px 32px;
   width: 320px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap:var(--sp-6);
 }
 
 .login-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 18px;
-  font-weight: 700;
-  margin-bottom: 8px;
+  gap:var(--sp-4);
+  font-size:var(--fs-xl);
+  font-weight:var(--fw-bold);
+  margin-bottom:var(--sp-3);
 }
 
 .login-card button[type="submit"] {
   background: var(--brand);
   color: #fff;
   border: none;
-  border-radius: 8px;
-  padding: 10px;
-  font-weight: 600;
+  border-radius:var(--r-lg);
+  padding:var(--sp-4);
+  font-weight:var(--fw-semibold);
 }
 
 .login-card button[type="submit"]:hover {
@@ -451,8 +526,8 @@ button {
 
 .login-error {
   color: var(--brand);
-  font-size: 13px;
-  margin: 0;
+  font-size:var(--fs-13);
+  margin:0;
 }
 
 /* ── Info hint (ⓘ) — data-source explanation on hover/tap ───────────────── */
@@ -460,12 +535,12 @@ button {
   position: relative;
   display: inline-flex;
   align-items: center;
-  margin-left: 5px;
+  margin-left:var(--sp-1-5);
   vertical-align: middle;
   cursor: help;
 }
 .info-hint-icon {
-  font-size: 12px;
+  font-size:var(--fs-sm);
   line-height: 1;
   color: var(--text-muted);
   opacity: 0.7;
@@ -485,11 +560,11 @@ button {
   background: var(--card-bg, #fff);
   color: var(--text, #1a1a1a);
   border: 1px solid var(--border, #e0e4ea);
-  border-radius: 8px;
+  border-radius:var(--r-lg);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  padding: 8px 10px;
-  font-size: 12px;
-  font-weight: 400;
+  padding:var(--sp-3) var(--sp-4);
+  font-size:var(--fs-sm);
+  font-weight:400;
   line-height: 1.45;
   text-align: left;
   white-space: normal;
