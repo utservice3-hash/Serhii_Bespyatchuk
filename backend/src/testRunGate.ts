@@ -66,6 +66,34 @@ export function allowedSkips(env: NodeJS.ProcessEnv = process.env): Set<string> 
   return new Set(names);
 }
 
+/**
+ * 🔴 ПІДТЕСТИ СКІПНУТОГО БАТЬКА НЕ ДАЮТЬ ЖОДНОЇ ПОДІЇ.
+ *
+ * `t.skip()` у батьку спрацьовує ДО того, як оголошені `t.test(...)`, тож діти не
+ * зʼявляються у виводі ані як «пройшли», ані як «пропущені». Для воріт це виглядало
+ * як «тест зник» — і прогін чесно не зараховувався, хоча ламати не було чого.
+ *
+ * ⚠️ ЦЕ НЕ ПОСЛАБЛЕННЯ ГЕЙТА. Діти віднімаються з `declared` ЛИШЕ тоді, коли батько
+ * СПРАВДІ пропустився і цей пропуск дозволений. Якщо батько відпрацював — діти
+ * зобовʼязані зʼявитись, інакше прогін не зараховано, як і раніше. Тобто маніфест
+ * і далі гарантує, що ці тести ІСНУЮТЬ.
+ *
+ * Альтернатива «прибрати дітей із маніфесту» відкинута свідомо: маніфест саме для
+ * того й є, щоб зниклий тест червонів. Мовчазна відсутність — те, від чого він рятує.
+ */
+export const PROD_SKIP_CHILDREN: Record<string, string[]> = {
+  "#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стани з ДАТ": [
+    "#25b СКОУП: менеджер бачить своїх, команда — свою",
+    "#25c ЗАДАЧІ ОБОХ ТИПІВ і «повернено» — на живому запиті",
+  ],
+  "#27 ДЗВІНКИ: запис, дедуп батча, звʼязка номер→клієнт": [
+    "#27c ПІБ У managers ТЕЖ ТРИЧЛЕННЕ — ключ зрізається з ОБОХ боків",
+    "#27d ДУБЛЬ КЛЮЧА: беремо АКТИВНОГО, а не першого-ліпшого",
+    "#27e ЗВІЛЬНЕНОМУ ДЗВІНОК ПРИПИСУЄТЬСЯ (рішення власника 04.08.2026)",
+    "#27f ДЗЕРКАЛО ЗАБОРОНИ: невідомий ПІБ і далі NULL",
+  ],
+};
+
 export interface RunTally { ran: number; failed: number; skipped: string[] }
 export interface Verdict { ok: boolean; ran: number; required: number; declared: number; unexpected: string[]; report: string }
 
@@ -87,14 +115,20 @@ export function evaluateRun(t: RunTally, declared: number, env: NodeJS.ProcessEn
   const allowed = allowedSkips(env);
   const unexpected = t.skipped.filter((n) => !allowed.has(n));
   const okSkips = t.skipped.length - unexpected.length;
-  const required = declared - okSkips;              // стільки МАЄ виконатись у цьому режимі
+  // Діти дозволено-скіпнутих батьків фізично не можуть зʼявитись у виводі.
+  const skippedSet = new Set(t.skipped);
+  const absentChildren = Object.entries(PROD_SKIP_CHILDREN)
+    .filter(([parent]) => skippedSet.has(parent) && allowed.has(parent))
+    .reduce((n, [, kids]) => n + kids.length, 0);
+  const required = declared - okSkips - absentChildren;   // стільки МАЄ виконатись у цьому режимі
   const ok = unexpected.length === 0 && t.ran >= required;
   const mode = modeName(env);
 
   let report = "\n"
     + `🔒 РЕЖИМ ${mode}: ВИКОНАЛОСЬ ${t.ran} із ${required} обовʼязкових `
-    + `(оголошено в маніфесті ${declared}, дозволених скіпів ${okSkips}, `
-    + `несподіваних ${unexpected.length}, падінь ${t.failed})\n`;
+    + `(оголошено в маніфесті ${declared}, дозволених скіпів ${okSkips}`
+    + (absentChildren ? `, підтестів скіпнутих батьків ${absentChildren}` : "")
+    + `, несподіваних ${unexpected.length}, падінь ${t.failed})\n`;
   if (!ok) {
     report += "🔴 ПРОГІН НЕ ЗАРАХОВАНО: виконалось менше, ніж вимагає режим.\n"
       + "   «0 падінь» тут НЕ означає «перевірено» — саме так приймання одного разу\n"

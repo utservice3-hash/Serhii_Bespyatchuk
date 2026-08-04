@@ -78,3 +78,23 @@ test("#19f РЕЄСТР ДОЗВОЛЕНИХ СКІПІВ: кожен назва
   }
   assert.ok(allowedSkips(PROD).has(OK_SKIP), "дозволений скіп не потрапив у набір режиму");
 });
+
+test("#12g ДІТИ СКІПНУТОГО БАТЬКА не валять прогін (але лише коли батько СПРАВДІ скіпнувся)", async () => {
+  const { evaluateRun, PROD_SKIP_CHILDREN } = await import("./testRunGate.js");
+  const PARENT = "#27 ДЗВІНКИ: запис, дедуп батча, звʼязка номер→клієнт";
+  const kids = PROD_SKIP_CHILDREN[PARENT];
+  assert.ok(kids && kids.length === 4, "🔴 нема з чим працювати — перевірка була б порожньою");
+  // Батько скіпнувся (дозволено) → його 4 дітей фізично не зʼявляться.
+  const v = evaluateRun({ ran: 10, failed: 0, skipped: [PARENT] }, 15, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
+  assert.equal(v.required, 10, "15 оголошено − 1 скіп батька − 4 дітей = 10");
+  assert.ok(v.ok, "🔴 прогін не зараховано, хоча ламати не було чого");
+});
+
+test("#12h ДЗЕРКАЛО: батько ВІДПРАЦЮВАВ — діти зобовʼязані зʼявитись", async () => {
+  const { evaluateRun } = await import("./testRunGate.js");
+  // Без цього дзеркала #12g перетворив би маніфест на декорацію: діти зникали б
+  // мовчки й тоді, коли батько чудово працює.
+  const v = evaluateRun({ ran: 10, failed: 0, skipped: [] }, 15, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
+  assert.equal(v.required, 15, "нічого не скіпнулось — знижок бути не може");
+  assert.equal(v.ok, false, "🔴 недолік 5 тестів зарахований як успіх");
+});
