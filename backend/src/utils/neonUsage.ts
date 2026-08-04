@@ -34,34 +34,44 @@ export async function fetchNeonUsage(
 ): Promise<NeonUsage | null> {
   const key = env.NEON_API_KEY;
   if (!key) return null;
-  const projectId = env.NEON_PROJECT_ID;
+  const H = { Authorization: `Bearer ${key}`, Accept: "application/json" };
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 15_000);
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 15_000);
-    // Без явного project_id беремо перший проєкт акаунта — у нас він один.
-    const listRes = projectId ? null : await fetch(`${API}/projects`, {
-      headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, signal: ctrl.signal,
-    });
-    const pid = projectId ?? (await listRes?.json().catch(() => null))?.projects?.[0]?.id;
-    if (!pid) { clearTimeout(t); return null; }
-    const res = await fetch(`${API}/projects/${pid}`, {
-      headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, signal: ctrl.signal,
-    });
-    clearTimeout(t);
+    // 🔴 `org_id` ОБОВʼЯЗКОВИЙ. Перша версія кликала `GET /projects` без нього і
+    // отримувала 400 «org_id is required» — а хелпер, за побудовою мовчазний,
+    // повертав null, і це виглядало як «ключа немає». Тому org дістаємо явно.
+    let orgId = env.NEON_ORG_ID;
+    if (!orgId) {
+      const o = await fetch(`${API}/users/me/organizations`, { headers: H, signal: ctrl.signal });
+      if (!o.ok) return null;
+      const oj = await o.json() as { organizations?: { id?: string }[] };
+      orgId = oj.organizations?.[0]?.id;
+    }
+    if (!orgId) return null;
+
+    const pid = env.NEON_PROJECT_ID ?? await (async () => {
+      const r = await fetch(`${API}/projects?org_id=${encodeURIComponent(orgId!)}`, { headers: H, signal: ctrl.signal });
+      if (!r.ok) return undefined;
+      const j = await r.json() as { projects?: { id?: string }[] };
+      return j.projects?.[0]?.id;
+    })();
+    if (!pid) return null;
+
+    const res = await fetch(`${API}/projects/${pid}`, { headers: H, signal: ctrl.signal });
     if (!res.ok) return null;
     const j = await res.json() as { project?: Record<string, unknown> };
     const p = j.project ?? {};
-    const seconds = Number(p.compute_time_seconds ?? 0);
     return {
-      computeTimeHours: seconds / 3600,
-      storageBytes: Number(p.synthetic_storage_size ?? p.data_storage_bytes_hour ?? 0),
+      computeTimeHours: Number(p.compute_time_seconds ?? 0) / 3600,
+      storageBytes: Number(p.synthetic_storage_size ?? 0),
       periodStart: (p.consumption_period_start as string) ?? null,
       periodEnd: (p.consumption_period_end as string) ?? null,
     };
   } catch {
     // Мовчки: спостережність не валить джобу. Ключ у повідомлення не потрапляє.
     return null;
-  }
+  } finally { clearTimeout(t); }
 }
 
 /** Різниця CU-годин між двома замірами. `null`, якщо хоч один відсутній. */
