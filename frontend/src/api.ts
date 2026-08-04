@@ -2334,6 +2334,10 @@ export interface ClientCard {
   firstPaid: string | null; lastPaid: string | null;
   months: { month: string; revenue: number; deals: number }[];
   monthsTotal: number; deals: ClientCardDeal[]; anchorNote: string;
+  /** Право на «🗑 прибрати з постійних» — рахує сервер тим самим гейтом, що й роут. */
+  canHide: boolean;
+  /** Клієнт уже прибраний вручну (`loyalty_overrides.hidden`) — тоді дія зворотна. */
+  hidden: boolean;
 }
 export async function fetchClientCard(clientKey: string): Promise<ClientCard> {
   const { data } = await api.get<ClientCard>("/dashboard/client-card", { params: { clientKey } });
@@ -2354,7 +2358,15 @@ export async function addClientComment(body: { clientKey: string; body: string }
 export type ClientState = "active" | "sleeping" | "lost";
 export interface ReactivationRow {
   clientKey: string; clientName: string; managerId: number; managerName: string; pinned: boolean;
+  /** Команда ВІДПОВІДАЛЬНОГО менеджера — для ієрархії «команда → менеджер → клієнти». */
+  teamId: number | null; teamName: string | null;
   orders: number; lifetimeRevenue: number; lastPaid: string | null; daysSince: number;
+  /**
+   * Останній дзвінок по канонічному ключу — ДОВІДКА. Стан рахується від оплати
+   * (`daysSince`), не звідси. `null` = дзвінків не знайдено.
+   */
+  lastCall: string | null; lastCallDays: number | null;
+  lastCallAnswered: boolean | null; lastCallDirection: "in" | "out" | null;
   state: ClientState; value: number; seasonal: boolean; seasonalNote: string | null;
   taskId: number | null; taskStatus: string | null; taskAssignee: string | null;
   taskDeadline: string | null; closeReason: string | null;

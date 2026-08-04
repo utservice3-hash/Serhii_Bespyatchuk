@@ -237,6 +237,88 @@ test("#30j ГЕЙТ ПЕРЕД ВАЛІДАЦІЄЮ: порожнє тіло д�
   }
 });
 
+test("#30k РЕАКТИВАЦІЯ: команда в кожному рядку, ДВІ дати, пороги — з ЯДРА", needsApi(), async () => {
+  // 🔴 Питання: чи можна побудувати ту саму ієрархію, що на екрані планів, і чи
+  // підпис правила над списком каже те саме, що рахує ядро. Другий пункт —
+  // окрема пастка: «60/180» легко зашити текстом, і підпис почне брехати мовчки,
+  // щойно поріг у ядрі зрушить.
+  const token = await adminToken();
+  const res = await get("/api/dashboard/reactivation-list", token);
+  assert.equal(res.status, 200, `reactivation-list віддав ${res.status}`);
+  const data = await res.json() as {
+    clients: { clientKey: string; teamName: string | null; managerId: number; state: string;
+               lastPaid: string | null; daysSince: number; lastCall: string | null; lastCallDays: number | null }[];
+    thresholds: { sleepingDays: number; lostDays: number };
+  };
+  assert.ok(data.clients.length > 0, "🔴 клієнтів немає — інваріант нічого не доводить");
+
+  const rules = await import("../core/reactivationRules.js");
+  assert.equal(data.thresholds.sleepingDays, rules.SLEEPING_DAYS,
+    "🔴 поріг «сплячий» у відповіді розійшовся з ядром — підпис на екрані брехатиме");
+  assert.equal(data.thresholds.lostDays, rules.LOST_DAYS,
+    "🔴 поріг «втрачений» у відповіді розійшовся з ядром");
+
+  assert.deepEqual(data.clients.filter((c) => !c.teamName).map((c) => c.clientKey), [],
+    "🔴 є рядки без команди — у дереві вони провалились би в порожній вузол");
+  const keys = new Set(data.clients.map((c) => c.clientKey));
+  assert.equal(keys.size, data.clients.length,
+    "🔴 клієнт трапляється двічі — у дереві він потрапив би у дві гілки й подвоїв підсумок");
+
+  // 🔴 СТАН — ВІД ОПЛАТИ. Звіряємо КОЖЕН рядок із чистою функцією ядра, а не
+  // «схоже на правду»: якби дзвінок почав впливати на стан, розійшлись би саме ті
+  // рядки, де контакт свіжий, а оплати давно немає — тобто найцікавіші.
+  const wrong = data.clients.filter((c) => c.state !== rules.stateOf(c.daysSince));
+  assert.deepEqual(wrong.map((c) => `${c.clientKey}: ${c.state} при ${c.daysSince} дн.`), [],
+    "🔴 стан рахується НЕ від останньої оплати");
+
+  // Друга дата присутня як поле в кожного (значення може бути null — це відповідь).
+  assert.ok(data.clients.every((c) => "lastCall" in c && "lastCallDays" in c),
+    "🔴 у рядку немає полів останнього дзвінка — довідкова дата не доїхала до фронту");
+  const withCall = data.clients.filter((c) => c.lastCall != null);
+  assert.ok(withCall.length > 0,
+    `🔴 ЖОДЕН із ${data.clients.length} клієнтів не має дзвінка — порожній результат це ПРОВАЛ, `
+    + "а не «дзвінків немає»: звʼязка ringostat_calls.client_key не працює");
+  assert.ok(withCall.every((c) => c.lastCallDays != null && c.lastCallDays >= 0),
+    "🔴 є дата дзвінка без коректної кількості днів");
+});
+
+test("#30l КАРТКА: «прибрати з постійних» видно ТОМУ, кому роут це дозволяє", needsApi(), async () => {
+  // 🪞 ДЗЕРКАЛЬНА ПАРА, і вона тут обовʼязкова. Односторонній тест («менеджер не
+  // бачить кнопки») зеленів би й тоді, якби кнопки не бачив НІХТО — тобто саме в
+  // стані, який ми щойно виправляли: дія без входу. Тому перевіряємо обидва боки
+  // і звіряємо з тим самим гейтом, що стоїть на POST /loyalty-override.
+  const token = await adminToken();
+  const list = await (await get("/api/dashboard/client-plans", token)).json() as { clients: { clientKey: string }[] };
+  const key = list.clients[0]?.clientKey;
+  assert.ok(key, "🔴 немає жодного клієнта — перевірка порожня");
+
+  const asAdmin = await (await get("/api/dashboard/client-card?clientKey=" + encodeURIComponent(key), token)).json() as
+    { canHide?: boolean; hidden?: boolean };
+  assert.equal(asAdmin.canHide, true,
+    "🔴 адмін не бачить дії «прибрати з постійних» — вхід так і лишився втраченим");
+  assert.equal(typeof asAdmin.hidden, "boolean",
+    "🔴 картка не каже, чи клієнт уже прибраний — кнопка не знатиме, який бік показати");
+
+  // Другий бік: тімлід картку бачить (вкладка `loyalty` в нього є), але права
+  // прибирати з постійних не має — і сервер мусить сказати це сам, а не
+  // покластись на те, що фронт «не намалює».
+  const lead = await someTeamLead();
+  const { pool } = await import("../db/pool.js");
+  const own = (await pool.query<{ client_key: string }>(
+    `SELECT d.client_key FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       JOIN managers m ON m.id = d.manager_id
+      WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL AND m.team_id = $1
+      GROUP BY d.client_key ORDER BY COUNT(*) DESC LIMIT 1`, [lead.teamId])).rows[0]?.client_key;
+  assert.ok(own, "🔴 у команди тімліда немає клієнтів — дзеркало нема на чому перевіряти");
+  const asLead = await (await get("/api/dashboard/client-card?clientKey=" + encodeURIComponent(own!), lead.token)).json() as
+    { canHide?: boolean; months?: unknown[] };
+  assert.equal(asLead.canHide, false,
+    "🔴 тімлід бачить кнопку, яка на сервері дасть 403 — дозвіл і кнопка розійшлись");
+  assert.ok(Array.isArray(asLead.months) && asLead.months.length === 12,
+    "🔴 тімліду не віддалась сама картка — це вже не межа, а поломка екрана");
+});
+
 test("#30e МЕЖА: без токена екрани клієнтів не віддають нічого", needsApi(), async () => {
   // Дзеркало до #30/#30d: «доступно КВП/ОД/адміну» має означати «не всьому
   // інтернету». Матриця #11 перевіряє ролі, цей рядок — відсутність ролі взагалі.

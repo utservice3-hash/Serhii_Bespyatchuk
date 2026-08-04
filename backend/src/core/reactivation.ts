@@ -88,6 +88,9 @@ export interface ReactivationClient {
   clientName: string;
   managerId: number;
   managerName: string;
+  /** Команда ВІДПОВІДАЛЬНОГО менеджера (того самого COALESCE), не «команда клієнта». */
+  teamId: number | null;
+  teamName: string | null;
   /**
    * Менеджер закріплений вручну (`loyalty_overrides.pinned_manager_id`), а не
    * виведений з оплат. Формула та сама, що в передачі відповідального —
@@ -99,6 +102,23 @@ export interface ReactivationClient {
   lifetimeRevenue: number;
   lastPaid: string | null;
   daysSince: number;
+  /**
+   * 🔴 ДРУГА ДАТА — ДОВІДКА, А НЕ ДЖЕРЕЛО СТАНУ. Останній дзвінок по КАНОНІЧНОМУ
+   * ключу (`ringostat_calls.client_key`). Стан рахується ВИКЛЮЧНО від оплати
+   * (`daysSince`), і додавати сюди контакт не можна: «дзвонили вчора» не робить
+   * клієнта активним, він так само не платить. Але без цієї дати екран не
+   * пояснював, ЧОМУ клієнт із живим контактом стоїть у сплячих, — і читався як
+   * поломка. Показуємо обидві, підписуємо, яка з них рахує.
+   *
+   * `null` = дзвінків не знайдено. Це чесна відповідь, а не порожнє місце:
+   * звʼязка дзвінок→клієнт іде через телефон контакту Kommo і покриває не всіх.
+   */
+  lastCall: string | null;
+  lastCallDays: number | null;
+  /** `billsec > 0` — розмова відбулась; інакше це пропущений/недодзвін. */
+  lastCallAnswered: boolean | null;
+  /** `in` — клієнт дзвонив нам, `out` — ми йому. */
+  lastCallDirection: "in" | "out" | null;
   state: ClientState;
   value: number;
   seasonal: boolean;
@@ -134,8 +154,11 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
   const rows = (await pool.query<{
     client_key: string; client_name: string | null; orders: string; revenue: string;
     last_paid: string | null; days_since: string; manager_id: number; manager_name: string;
+    team_id: number | null; team_name: string | null;
     pinned_manager_id: number | null; seasonal: boolean | null; seasonal_note: string | null;
     revenue_after_task: string | null;
+    last_call: string | null; last_call_days: string | null;
+    last_call_answered: boolean | null; last_call_type: string | null;
   }>(
     `WITH paid AS (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
@@ -158,20 +181,40 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
             to_char(a.last_paid ${KYIV}, 'YYYY-MM-DD') AS last_paid,
             GREATEST(0, (CURRENT_DATE - (a.last_paid ${KYIV})::date))::int AS days_since,
             COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id, mm.name AS manager_name,
+            mm.team_id, tm.name AS team_name,
             lo.pinned_manager_id, lo.seasonal, lo.seasonal_note,
             (SELECT COALESCE(SUM(p2.price),0) FROM paid p2
               WHERE p2.client_key = a.client_key AND tk.created_at IS NOT NULL
-                AND p2.closed_at_kommo > tk.created_at) AS revenue_after_task
+                AND p2.closed_at_kommo > tk.created_at) AS revenue_after_task,
+            to_char(lc.calldate ${KYIV}, 'YYYY-MM-DD') AS last_call,
+            (CURRENT_DATE - (lc.calldate ${KYIV})::date)::int AS last_call_days,
+            (lc.billsec > 0) AS last_call_answered, lc.call_type AS last_call_type
        FROM agg a
        JOIN primary_mgr pm ON pm.client_key = a.client_key
-       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key AND NOT lo.hidden
+       -- 🔴 БЕЗ умови AND NOT lo.hidden У ЦЬОМУ JOIN — І ЦЕ НЕ КОСМЕТИКА.
+       -- Було: LEFT JOIN … AND NOT lo.hidden, а нижче WHERE COALESCE(lo.hidden,false)=false.
+       -- Для ПРИХОВАНОГО клієнта join не давав рядка → lo.hidden = NULL →
+       -- COALESCE(NULL,false)=false → умова ІСТИННА, і клієнт лишався на екрані.
+       -- Тобто дія «прибрати з постійних» роками писалась у базу й не робила НІЧОГО.
+       -- Заміряно на живому сервері: hidden=true, а клієнт у видачі обох екранів.
+       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+       LEFT JOIN teams tm ON tm.id = mm.team_id
        LEFT JOIN tasks_in tk ON tk.client_key = a.client_key
        LEFT JOIN LATERAL (
          SELECT d2.client_name FROM deals d2
           WHERE d2.client_key = a.client_key AND d2.client_name IS NOT NULL
           ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
        ) nm ON true
+       -- Останній дзвінок по канонічному ключу. Індекс idx_rc_client_key
+       -- (client_key, calldate DESC) робить це одним читанням на клієнта.
+       -- LEFT JOIN — саме тому, що «дзвінків немає» це РЕЗУЛЬТАТ, а не привід
+       -- викинути клієнта зі списку реактивації.
+       LEFT JOIN LATERAL (
+         SELECT rc.calldate, rc.billsec, rc.call_type FROM ringostat_calls rc
+          WHERE rc.client_key = a.client_key
+          ORDER BY rc.calldate DESC LIMIT 1
+       ) lc ON true
       WHERE COALESCE(lo.hidden, false) = false ${cond}`, p)).rows;
 
   return rows.map((r) => {
@@ -184,11 +227,19 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
       clientName: r.client_name ?? r.client_key,
       managerId: r.manager_id,
       managerName: r.manager_name,
+      teamId: r.team_id ?? null,
+      teamName: r.team_name ?? null,
       pinned: r.pinned_manager_id != null,
       orders: Number(r.orders),
       lifetimeRevenue: revenue,
       lastPaid: r.last_paid,
       daysSince: days,
+      lastCall: r.last_call,
+      lastCallDays: r.last_call_days == null ? null : Number(r.last_call_days),
+      lastCallAnswered: r.last_call_answered ?? null,
+      lastCallDirection: r.last_call_type == null ? null
+        : (r.last_call_type === "out" || r.last_call_type === "transitout" ? "out" : "in"),
+      // 🔴 СТАН — ВІД ОПЛАТИ. `lastCall` сюди не входить НАВМИСНО (див. поле вище).
       state: stateOf(days),
       value: valueScore(revenue, days),
       seasonal: r.seasonal ?? false,

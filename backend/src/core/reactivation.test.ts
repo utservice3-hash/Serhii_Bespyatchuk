@@ -165,6 +165,72 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
         "🔴 оплата 5 днів тому потрапила у вікно «за 1 день» — вікно не застосовується");
 
     });
+
+    await t.test("#25d КОМАНДА + ДРУГА ДАТА: дзвінок — довідка, стан лишається від ОПЛАТИ", async () => {
+      // 🔴 Питання, на яке відповідає цей підтест: чи можна тепер побудувати
+      // ієрархію (потрібна команда в КОЖНОМУ рядку) і чи не почав дзвінок
+      // впливати на стан. Друге важливіше за перше: саме тут найлегше «покращити»
+      // логіку до «дзвонили → значить активний», і ніхто б цього не помітив.
+      await c.query(
+        `INSERT INTO ringostat_calls (uniqueid, calldate, call_type, disposition, billsec, duration, client_key)
+         VALUES ('c1',$1,'out','ANSWERED',0,12,'сплячий'),
+                ('c2',$2,'in','ANSWERED',95,120,'сплячий'),
+                ('c3',$3,'out','NO ANSWER',0,8,'втрачений')`,
+        [daysAgo(3), daysAgo(40), daysAgo(2)]);
+
+      const rows = await R.clientStates({});
+      const by = new Map(rows.map((r) => [r.clientKey, r]));
+
+      // (а) КОМАНДА є в кожного — інакше дерево провалюється в порожній вузол.
+      assert.deepEqual(rows.filter((r) => !r.teamName).map((r) => r.clientKey), [],
+        "🔴 є рядки без назви команди — ієрархія «команда → менеджер» не побудується");
+      assert.equal(by.get("сплячий")?.teamName, "РПК");
+      assert.equal(by.get("чужий")?.teamName, "РНК", "команда береться з ВІДПОВІДАЛЬНОГО менеджера");
+
+      // (б) друга дата = НАЙСВІЖІШИЙ дзвінок, а не перший-ліпший.
+      const sleep = by.get("сплячий")!;
+      assert.equal(sleep.lastCallDays, 3, "🔴 взято не останній дзвінок");
+      assert.equal(sleep.lastCallDirection, "out");
+      assert.equal(sleep.lastCallAnswered, false, "billsec = 0 → розмови не було");
+
+      // (в) 🔴 ГОЛОВНЕ: дзвінок 3 дні тому НЕ зробив клієнта активним.
+      assert.equal(sleep.state, "sleeping",
+        "🔴 стан поїхав за дзвінком — рахувати треба ВИКЛЮЧНО від останньої оплати");
+      assert.equal(sleep.daysSince, 70, "анкер стану — оплата, і він не зрушив");
+
+      // (г) ДЗЕРКАЛО: клієнт БЕЗ дзвінків лишається у списку з чесним null.
+      // Без цієї половини тест зеленів би й тоді, якби JOIN викидав усіх, кому
+      // дзвінок не знайшовся, — а це саме ті, кого треба реактивувати.
+      const noCalls = by.get("активний")!;
+      assert.equal(noCalls.lastCall, null, "дзвінків немає → null, а не вигадана дата");
+      assert.equal(noCalls.lastCallDays, null);
+      assert.equal(rows.length, 10, "🔴 хтось зник зі списку через LEFT JOIN дзвінків");
+    });
+
+    await t.test("#25e «ПРИБРАТИ З ПОСТІЙНИХ» СПРАВДІ ПРИБИРАЄ (і повертає назад)", async () => {
+      // 🔴 РЕГРЕС, ЗНАЙДЕНИЙ ДІЄЮ, А НЕ ЧИТАННЯМ. `LEFT JOIN … AND NOT lo.hidden`
+      // разом із `WHERE COALESCE(lo.hidden,false)=false` — це порожня операція:
+      // для прихованого клієнта join не дає рядка, `lo.hidden` = NULL,
+      // COALESCE(NULL,false)=false → умова ІСТИННА. Дія писалась у базу й не
+      // робила нічого; на екрані це виглядало як «кнопка не спрацювала».
+      // Тест саме на ПОВЕДІНКУ (клієнта немає у видачі), а не на форму запиту.
+      const before = (await R.clientStates({})).length;
+      await c.query(`INSERT INTO loyalty_overrides (client_key, hidden) VALUES ('сплячий', true)
+                     ON CONFLICT (client_key) DO UPDATE SET hidden = true`);
+      const hidden = await R.clientStates({});
+      assert.equal(hidden.length, before - 1,
+        "🔴 прихований клієнт лишився у видачі — фільтр `hidden` не працює");
+      assert.equal(hidden.find((r) => r.clientKey === "сплячий"), undefined,
+        "🔴 саме той клієнт, якого прибрали, і лишився");
+
+      // ДЗЕРКАЛО: без нього тест зеленів би й тоді, якби фільтр різав ВСІХ
+      // підряд, — а це рівно та поломка, яку ми боїмось завести замість цієї.
+      await c.query(`UPDATE loyalty_overrides SET hidden = false WHERE client_key = 'сплячий'`);
+      const back = await R.clientStates({});
+      assert.equal(back.length, before, "🔴 повернення до постійних не спрацювало");
+      assert.ok(back.find((r) => r.clientKey === "сплячий"), "🔴 клієнт не повернувся у видачу");
+      await c.query(`DELETE FROM loyalty_overrides WHERE client_key = 'сплячий'`);
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();

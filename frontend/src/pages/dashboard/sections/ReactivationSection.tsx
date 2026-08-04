@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   fetchReactivationList, setClientSeasonal, fetchMergePreview, mergeClients, revokeMerge,
@@ -17,6 +17,12 @@ import { ClientPicker, type ClientPickerValue } from "../ClientPicker";
  * (180 дн.) → повернений — усе з дат замовлень, рахує ядро. Руками ставиться
  * рівно одне — «сезонний»: з дат його вивести неможливо.
  */
+
+/**
+ * Менеджер без команди в `managers.team_id` — це стан бази, а не помилка екрана.
+ * Ховати такі рядки не можна: клієнт зник би зі списку реактивації мовчки.
+ */
+const BEZ_KOMANDY = "Без команди";
 
 const S = {
   card: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 14px" } as const,
@@ -39,6 +45,60 @@ function Tile({ title, value, sub, tone }: { title: string; value: string; sub?:
       <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.05,
                     color: tone === "good" ? "#166534" : tone === "warn" ? "#b45309" : "#111827" }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 5 }}>{sub}</div>}
+    </div>
+  );
+}
+
+/**
+ * 🔴 ДВІ ДАТИ В РЯДКУ, І ПІДПИСАНО, ЯКА З НИХ РАХУЄ СТАН.
+ *
+ * Стан («сплячий»/«втрачений») рахується ВИКЛЮЧНО від останньої ОПЛАТИ — так у
+ * ядрі, і так лишається. Але власник бачив «без контакту 120 днів» серед
+ * активних і «з контактом» серед сплячих і не міг зрозуміти, від чого екран
+ * рахує. Обидві причини правильні; невидимою була сама відповідь.
+ *
+ * Тому: оплата — з підписом «джерело стану», дзвінок — з підписом «довідка».
+ * Дзвінок НЕ впливає на стан і не має впливати: розмова не робить клієнта
+ * платником.
+ */
+function TwoDates({ c }: { c: ReactivationRow }) {
+  const callTone = c.lastCallDays == null ? "#9ca3af"
+    : c.lastCallDays <= 30 ? "#166534" : c.lastCallDays <= 90 ? "#b45309" : "#b91c1c";
+  return (
+    <div style={{ lineHeight: 1.45 }}>
+      <div>
+        <span style={{ fontSize: 10, letterSpacing: .3, textTransform: "uppercase", color: "#6b7280" }}>
+          остання оплата
+        </span>
+        <div>
+          <b>{c.lastPaid ?? "—"}</b>
+          <span style={{ color: "#6b7280" }}> · {c.daysSince} дн. тому</span>
+        </div>
+        <div style={{ fontSize: 10, color: "#9ca3af" }}>джерело стану</div>
+      </div>
+      <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #e5e7eb" }}>
+        <span style={{ fontSize: 10, letterSpacing: .3, textTransform: "uppercase", color: "#6b7280" }}>
+          останній дзвінок
+        </span>
+        {c.lastCall == null ? (
+          // Порожньо — це відповідь, а не діра: звʼязка дзвінок→клієнт іде через
+          // телефон контакту Kommo і покриває не всіх. Мовчазний прочерк читався
+          // б як «не дзвонили», а це різні твердження.
+          <div style={{ color: "#9ca3af" }}>дзвінків не знайдено</div>
+        ) : (
+          <>
+            <div>
+              <b style={{ color: callTone }}>{c.lastCall}</b>
+              <span style={{ color: "#6b7280" }}> · {c.lastCallDays} дн. тому</span>
+            </div>
+            <div style={{ fontSize: 10, color: "#9ca3af" }}>
+              {c.lastCallDirection === "out" ? "вихідний" : "вхідний"}
+              {c.lastCallAnswered === false && <span style={{ color: "#b45309" }}> · без відповіді</span>}
+              {" · довідка, на стан не впливає"}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -258,6 +318,57 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
 }
 
 
+/**
+ * Підсумок рівня ієрархії — З ТИХ САМИХ рядків, що показані нижче. Той самий
+ * інваріант, що на екрані планів: «згорнути» ховає рядки й не змінює жодної
+ * цифри. Якби рівень рахувався окремим запитом, згорнутий і розгорнутий вигляд
+ * могли б розійтись, і ніхто не сказав би, який із них правильний.
+ */
+function levelTotals(rows: ReactivationRow[]) {
+  return {
+    clients: rows.length,
+    sleeping: rows.filter((c) => c.state === "sleeping" && !c.seasonal).length,
+    lost: rows.filter((c) => c.state === "lost" && !c.seasonal).length,
+    inWork: rows.filter((c) => c.taskId != null && c.taskStatus !== "done").length,
+    potential: rows.reduce((s, c) => s + c.lifetimeRevenue, 0),
+    value: rows.reduce((s, c) => s + c.value, 0),
+  };
+}
+
+/** Рядок-шапка рівня (команда / менеджер) з підсумками й «розгорнути». */
+function GroupRow({ level, title, sub, open, onToggle, totals }: {
+  level: "team" | "manager"; title: string; sub?: string; open: boolean;
+  onToggle: () => void; totals: ReturnType<typeof levelTotals>;
+}) {
+  const isTeam = level === "team";
+  return (
+    <tr onClick={onToggle}
+      style={{ background: isTeam ? "#f1f5f9" : "#fafcff", cursor: "pointer",
+               borderTop: isTeam ? "2px solid #e2e8f0" : "1px solid #eef2f7" }}>
+      <td style={{ ...S.td, paddingLeft: isTeam ? 10 : 28, fontWeight: isTeam ? 800 : 700,
+                   fontSize: isTeam ? 14 : 13, borderBottom: "none", verticalAlign: "middle" }}>
+        <span style={{ color: "#64748b", marginRight: 6 }}>{open ? "▾" : "▸"}</span>
+        {isTeam ? "🏢 " : "👤 "}{title}
+        <span style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>
+          {sub ? ` · ${sub}` : ""} · {totals.clients} {totals.clients === 1 ? "клієнт" : "клієнтів"}
+        </span>
+      </td>
+      {/* Підсумки станів — на рівні «Стан», тобто рівно під тим стовпчиком, який
+          вони підсумовують. Показуємо лише ненульові: рядок «💤 0 · ❌ 0 · 🔧 0»
+          нічого не каже, а місце займає. */}
+      <td style={{ ...S.td, borderBottom: "none", verticalAlign: "middle" }} colSpan={2}>
+        <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {totals.sleeping > 0 && <span style={S.chip("#fef3c7", "#92400e")}>💤 {totals.sleeping}</span>}
+          {totals.lost > 0 && <span style={S.chip("#fee2e2", "#b91c1c")}>❌ {totals.lost}</span>}
+          {totals.inWork > 0 && <span style={S.chip("#dbeafe", "#1d4ed8")}>🔧 {totals.inWork}</span>}
+          <span style={{ fontSize: 11, color: "#6b7280" }}>потенціал {formatAmountFull(totals.potential)}</span>
+        </span>
+      </td>
+      <td style={{ ...S.td, borderBottom: "none" }} colSpan={3} />
+    </tr>
+  );
+}
+
 /** Модалка — спільна оболонка, щоб обидва діалоги виглядали однаково. */
 function Modal({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -336,12 +447,26 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
   const [closing, setClosing] = useState<{ taskId: number; name: string } | null>(null);
+  const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
+  const [openMgrs, setOpenMgrs] = useState<Set<number>>(new Set());
 
   const load = useCallback(() => {
     setErr(null);
     fetchReactivationList().then(setData).catch((e) => setErr(e?.response?.data?.error ?? "не вдалося завантажити"));
   }, []);
   useEffect(load, [load]);
+
+  /**
+   * Стартовий вигляд — той самий, що на екрані планів (те саме рішення власника,
+   * тому й та сама поведінка, а не «схожа»):
+   *   тімлід       — його команда РОЗГОРНУТА одразу (вона в нього одна);
+   *   адмін/ОД/КВП — усе згорнуто до команд;
+   *   менеджер     — плаский список, ієрархія додала б лише два кліки.
+   */
+  useEffect(() => {
+    if (!data || auth.role !== "team_lead") return;
+    setOpenTeams(new Set(data.clients.map((c) => c.teamName ?? BEZ_KOMANDY)));
+  }, [data, auth.role]);
 
   if (err) return <div style={{ ...S.card, color: "#dc2626" }}>{err}</div>;
   if (!data) return <div style={{ ...S.card, color: "#6b7280" }}>завантаження…</div>;
@@ -353,6 +478,95 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
     if (view === "inwork") return c.taskId != null && c.taskStatus !== "done";
     return c.returned;
   });
+
+  /**
+   * 🔴 ІЄРАРХІЯ — ЦЕ ПОДАЧА, А НЕ СКОУП. Групуємо ТІ САМІ рядки, що прийшли з
+   * бекенду й пройшли той самий фільтр вкладки: жоден клієнт не додається і не
+   * зникає. Клієнт кріпиться до ОДНОГО менеджера (`COALESCE(закріплений,
+   * основний за оплатами)` з ядра), тож роздвоїтись між командами не може.
+   * Порядок усередині — той, що прийшов із бекенду (за цінністю); рівні —
+   * за Σ цінності, щоб «найважчі» команди були зверху.
+   */
+  const grouped = auth.role !== "manager";
+  const teams = (() => {
+    if (!grouped) return [];
+    const byTeam = new Map<string, Map<number, { name: string; rows: ReactivationRow[] }>>();
+    for (const c of rows) {
+      const tk = c.teamName ?? BEZ_KOMANDY;
+      const mgrs = byTeam.get(tk) ?? new Map();
+      const m = mgrs.get(c.managerId) ?? { name: c.managerName, rows: [] };
+      m.rows.push(c);
+      mgrs.set(c.managerId, m);
+      byTeam.set(tk, mgrs);
+    }
+    const byValue = <T extends { rows: ReactivationRow[] }>(a: T, b: T) =>
+      levelTotals(b.rows).value - levelTotals(a.rows).value;
+    return [...byTeam.entries()]
+      .map(([teamName, mgrs]) => ({
+        teamName,
+        rows: [...mgrs.values()].flatMap((m) => m.rows),
+        mgrs: [...mgrs.entries()].map(([id, m]) => ({ id, name: m.name, rows: m.rows })).sort(byValue),
+      }))
+      .sort(byValue);
+  })();
+
+  const renderRow = (c: ReactivationRow) => (
+    <tr key={c.clientKey} style={{ background: c.seasonal ? "#fafafa" : undefined }}>
+      <td style={S.td}>
+        <div style={{ fontWeight: 700 }}>{c.clientName}</div>
+        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>
+          {c.orders} зам. · сер. чек {formatAmountFull(Math.round(c.lifetimeRevenue / Math.max(1, c.orders)))}
+          {" · "}
+          <span title={c.pinned ? "закріплений за менеджером вручну" : "основний менеджер за оплатами"}>
+            👤 {c.managerName}{c.pinned ? " 📌" : ""}
+          </span>
+        </div>
+      </td>
+      <td style={S.td}><StateChip c={c} /></td>
+      <td style={S.td}>
+        <b>{formatAmountFull(c.lifetimeRevenue)}</b>
+        <div style={{ fontSize: 11, color: "#9ca3af" }}>lifetime · вага {Math.round(c.value).toLocaleString("uk-UA")}</div>
+      </td>
+      <td style={S.td}>
+        {c.taskId && c.taskStatus !== "done" ? (
+          <div>
+            <b>{c.taskAssignee ?? "—"}</b>
+            {c.taskDeadline && <span style={{ color: "#b45309" }}> · до {c.taskDeadline.slice(5)}</span>}
+            <div>
+              <button disabled={busy} style={{ ...S.btn(), marginTop: 5, fontSize: 11, padding: "4px 9px" }}
+                onClick={() => setClosing({ taskId: c.taskId!, name: c.clientName })}>Закрити…</button>
+            </div>
+          </div>
+        ) : c.taskId ? (
+          <span style={{ color: "#6b7280" }}>закрита</span>
+        ) : c.seasonal ? (
+          // 🔴 Сезонним задачі НЕ ставимо: їхній «простій» — це не втрата
+          // клієнта, а календар. Смикати їх означає вчити менеджера, що
+          // список реактивації можна ігнорувати.
+          <span style={{ color: "#9ca3af" }}>сезонний — задача не потрібна</span>
+        ) : (
+          <button disabled={busy} style={{ ...S.btn(true), fontSize: 11, padding: "5px 10px" }}
+            onClick={() => setCreating({ clientKey: c.clientKey, name: c.clientName })}>＋ Задача</button>
+        )}
+      </td>
+      <td style={S.td}><TwoDates c={c} /></td>
+      <td style={S.td}>
+        {c.closeReason
+          ? <span style={S.chip("#f3f4f6", "#4b5563")}>{data.closeReasons.find((r) => r.key === c.closeReason)?.label ?? c.closeReason}</span>
+          : <span style={{ color: "#d1d5db" }}>—</span>}
+        {(auth.role === "team_lead" || auth.role === "admin") && (
+          <button title={c.seasonal ? "Зняти позначку «сезонний»" : "Позначити сезонним"}
+            disabled={busy}
+            onClick={async () => { setBusy(true);
+              try { await setClientSeasonal({ clientKey: c.clientKey, seasonal: !c.seasonal }); load(); }
+              finally { setBusy(false); } }}
+            style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 13 }}>
+            {c.seasonal ? "↩" : "🌱"}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -386,71 +600,54 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
           <b style={{ fontSize: 15 }}>Кандидати на реактивацію</b>
           <span style={{ fontSize: 11, color: "#6b7280" }}>цінність = виручка за життя × свіжість · сезонні внизу</span>
         </div>
+
+        {/* 🔴 ПРАВИЛО НАПИСАНЕ НАД СПИСКОМ, А ПОРОГИ ПРИЇХАЛИ З ЯДРА
+            (`data.thresholds` ← `SLEEPING_DAYS`/`LOST_DAYS`). Зашити «60/180»
+            текстом означало б завести другу редакцію правила: підкрутили б поріг
+            у ядрі — і підпис почав би брехати, причому мовчки. */}
+        <div style={{ margin: "0 14px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8,
+                      padding: "8px 11px", fontSize: 12, color: "#1e3a8a", lineHeight: 1.55 }}>
+          <b>Стан — від останньої ОПЛАТИ:</b> сплячий {data.thresholds.sleepingDays}+ днів,
+          втрачений {data.thresholds.lostDays}+ днів. Дзвінки на стан <b>не впливають</b> —
+          вони показані поруч як довідка, щоб було видно, чи є контакт із клієнтом, який не платить.
+        </div>
+
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
           <thead>
             <tr>
               <th style={S.th}>Клієнт</th><th style={S.th}>Стан</th><th style={S.th}>Цінність</th>
-              <th style={S.th}>Задача</th><th style={S.th}>Остання оплата</th><th style={S.th}>Причина (при закритті)</th>
+              <th style={S.th}>Задача</th>
+              <th style={S.th}>Оплата · дзвінок</th>
+              <th style={S.th}>Причина (при закритті)</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((c) => (
-              <tr key={c.clientKey} style={{ background: c.seasonal ? "#fafafa" : undefined }}>
-                <td style={S.td}>
-                  <div style={{ fontWeight: 700 }}>{c.clientName}</div>
-                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>
-                    {c.orders} зам. · сер. чек {formatAmountFull(Math.round(c.lifetimeRevenue / Math.max(1, c.orders)))}
-                    {" · "}
-                    <span title={c.pinned ? "закріплений за менеджером вручну" : "основний менеджер за оплатами"}>
-                      👤 {c.managerName}{c.pinned ? " 📌" : ""}
-                    </span>
-                  </div>
-                </td>
-                <td style={S.td}><StateChip c={c} /></td>
-                <td style={S.td}>
-                  <b>{formatAmountFull(c.lifetimeRevenue)}</b>
-                  <div style={{ fontSize: 11, color: "#9ca3af" }}>lifetime · вага {Math.round(c.value).toLocaleString("uk-UA")}</div>
-                </td>
-                <td style={S.td}>
-                  {c.taskId && c.taskStatus !== "done" ? (
-                    <div>
-                      <b>{c.taskAssignee ?? "—"}</b>
-                      {c.taskDeadline && <span style={{ color: "#b45309" }}> · до {c.taskDeadline.slice(5)}</span>}
-                      <div>
-                        <button disabled={busy} style={{ ...S.btn(), marginTop: 5, fontSize: 11, padding: "4px 9px" }}
-                          onClick={() => setClosing({ taskId: c.taskId!, name: c.clientName })}>Закрити…</button>
-                      </div>
-                    </div>
-                  ) : c.taskId ? (
-                    <span style={{ color: "#6b7280" }}>закрита</span>
-                  ) : c.seasonal ? (
-                    // 🔴 Сезонним задачі НЕ ставимо: їхній «простій» — це не втрата
-                    // клієнта, а календар. Смикати їх означає вчити менеджера, що
-                    // список реактивації можна ігнорувати.
-                    <span style={{ color: "#9ca3af" }}>сезонний — задача не потрібна</span>
-                  ) : (
-                    <button disabled={busy} style={{ ...S.btn(true), fontSize: 11, padding: "5px 10px" }}
-                      onClick={() => setCreating({ clientKey: c.clientKey, name: c.clientName })}>＋ Задача</button>
-                  )}
-                </td>
-                <td style={S.td}>{c.lastPaid ?? "—"}<div style={{ fontSize: 11, color: "#9ca3af" }}>{c.daysSince} дн. тому</div></td>
-                <td style={S.td}>
-                  {c.closeReason
-                    ? <span style={S.chip("#f3f4f6", "#4b5563")}>{data.closeReasons.find((r) => r.key === c.closeReason)?.label ?? c.closeReason}</span>
-                    : <span style={{ color: "#d1d5db" }}>—</span>}
-                  {(auth.role === "team_lead" || auth.role === "admin") && (
-                    <button title={c.seasonal ? "Зняти позначку «сезонний»" : "Позначити сезонним"}
-                      disabled={busy}
-                      onClick={async () => { setBusy(true);
-                        try { await setClientSeasonal({ clientKey: c.clientKey, seasonal: !c.seasonal }); load(); }
-                        finally { setBusy(false); } }}
-                      style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 13 }}>
-                      {c.seasonal ? "↩" : "🌱"}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {!grouped && rows.map(renderRow)}
+            {grouped && teams.map((tm) => {
+              const tOpen = openTeams.has(tm.teamName);
+              return (
+                <Fragment key={tm.teamName}>
+                  <GroupRow level="team" title={tm.teamName} open={tOpen}
+                    sub={`${tm.mgrs.length} ${tm.mgrs.length === 1 ? "менеджер" : "менеджерів"}`}
+                    totals={levelTotals(tm.rows)}
+                    onToggle={() => setOpenTeams((prev) => {
+                      const n = new Set(prev); n.has(tm.teamName) ? n.delete(tm.teamName) : n.add(tm.teamName); return n;
+                    })} />
+                  {tOpen && tm.mgrs.map((mg) => {
+                    const mOpen = openMgrs.has(mg.id);
+                    return (
+                      <Fragment key={mg.id}>
+                        <GroupRow level="manager" title={mg.name} open={mOpen} totals={levelTotals(mg.rows)}
+                          onToggle={() => setOpenMgrs((prev) => {
+                            const n = new Set(prev); n.has(mg.id) ? n.delete(mg.id) : n.add(mg.id); return n;
+                          })} />
+                        {mOpen && mg.rows.map(renderRow)}
+                      </Fragment>
+                    );
+                  })}
+                </Fragment>
+              );
+            })}
             {rows.length === 0 && (
               <tr><td colSpan={6} style={{ ...S.td, textAlign: "center", color: "#9ca3af", padding: 26 }}>у цій категорії порожньо</td></tr>
             )}
