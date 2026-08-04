@@ -419,6 +419,19 @@ CREATE TABLE IF NOT EXISTS ringostat_calls (
   client_key    TEXT,                      -- канонічний ключ; NULL = не звʼязалось
   synced_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 🎯 UTM-МІТКИ ДЗВІНКА (рішення власника 04.08.2026 — трек «рекламні ліди»).
+-- Ringostat їх ВІДДАВАВ від початку; ми просто не просили — у запиті перелічені
+-- поля, і utm серед них не було. Тримаємо як віддає API (сирі значення поруч із
+-- нормалізованим номером — той самий принцип, що `client_key_raw`).
+-- ⚠️ `gclid` НЕ додаємо: у переліку полів Ringostat його НЕМАЄ (звірено з базою
+-- знань і довідником R-пакета). Заводити порожню колонку «про запас» означало б
+-- через півроку сперечатись, це «не заповнюється» чи «не тягнеться».
+ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_source   TEXT;
+ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_medium   TEXT;
+ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
+ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_term     TEXT;
+ALTER TABLE ringostat_calls ADD COLUMN IF NOT EXISTS utm_content  TEXT;
+CREATE INDEX IF NOT EXISTS idx_rc_utm_campaign ON ringostat_calls(utm_campaign) WHERE utm_campaign IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rc_client_key ON ringostat_calls(client_key, calldate DESC) WHERE client_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);

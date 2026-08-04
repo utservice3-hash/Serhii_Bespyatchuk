@@ -13,12 +13,19 @@ import { config } from "../config.js";
 import { normalizePhone, clientPhoneOf } from "../utils/phone.js";
 import { dedupeById } from "./dealContactPairs.js";
 
-const FIELDS = "calldate,caller,dst,n_alias,billsec,duration,call_type,disposition,recording,uniqueid,employee_fio";
+// 🎯 UTM додано 04.08.2026. Ringostat їх віддавав завжди — ми не просили.
+// ⚠️ Очікуваний відсоток НИЗЬКИЙ, і це не поломка: мітки має лише дзвінок із
+// САЙТУ (коллтрекінг бере їх із веб-сесії). Дзвінок на прямий мобільний
+// менеджера веб-сесії не має і мати не може.
+const FIELDS = "calldate,caller,dst,n_alias,billsec,duration,call_type,disposition,recording,uniqueid,employee_fio"
+  + ",utm_source,utm_medium,utm_campaign,utm_term,utm_content";
 
 export interface RawCall {
   uniqueid?: string; calldate?: string; caller?: string; dst?: string; n_alias?: string;
   billsec?: number | string; duration?: number | string; call_type?: string;
   disposition?: string; recording?: string; employee_fio?: string;
+  utm_source?: string; utm_medium?: string; utm_campaign?: string;
+  utm_term?: string; utm_content?: string;
 }
 
 /** Один запит до Ringostat за вікном. Період — рядки «YYYY-MM-DD HH:MM:SS». */
@@ -53,7 +60,8 @@ export async function upsertCalls(calls: RawCall[]): Promise<number> {
   for (let i = 0; i < rows.length; i += 500) {
     const chunk = rows.slice(i, i + 500);
     const cols = ["uniqueid", "calldate", "call_type", "disposition", "billsec", "duration",
-                  "caller", "dst", "n_alias", "recording", "employee_fio", "client_phone"];
+                  "caller", "dst", "n_alias", "recording", "employee_fio", "client_phone",
+                  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"];
     const vals: unknown[] = [];
     const ph: string[] = [];
     chunk.forEach((c, j) => {
@@ -62,7 +70,9 @@ export async function upsertCalls(calls: RawCall[]): Promise<number> {
         c.uniqueid, c.calldate, c.call_type ?? "unknown", c.disposition ?? null,
         Number(c.billsec ?? 0) || 0, Number(c.duration ?? 0) || 0,
         c.caller ?? null, c.dst ?? null, c.n_alias ?? null, c.recording ?? null,
-        c.employee_fio ?? null, clientPhoneOf(c.call_type, c.caller, c.dst));
+        c.employee_fio ?? null, clientPhoneOf(c.call_type, c.caller, c.dst),
+        c.utm_source ?? null, c.utm_medium ?? null, c.utm_campaign ?? null,
+        c.utm_term ?? null, c.utm_content ?? null);
     });
     const r = await pool.query(
       `INSERT INTO ringostat_calls (${cols.join(",")}) VALUES ${ph.join(",")}
@@ -70,6 +80,14 @@ export async function upsertCalls(calls: RawCall[]): Promise<number> {
          disposition = EXCLUDED.disposition, billsec = EXCLUDED.billsec,
          duration = EXCLUDED.duration, recording = EXCLUDED.recording,
          employee_fio = EXCLUDED.employee_fio, client_phone = EXCLUDED.client_phone,
+         -- 🔴 UTM ОБОВʼЯЗКОВО В SET, А НЕ ЛИШЕ В INSERT. Без цього помісячний
+         -- бекфіл «пройшов би» і не оновив ЖОДНОГО з 416 тис. наявних рядків:
+         -- вони всі конфліктують по uniqueid і йдуть у гілку UPDATE. Той самий
+         -- клас, що INSERT … ON CONFLICT DO NOTHING у міграції HR, яка три доби
+         -- друкувала «Migration applied» і не застосовувалась.
+         utm_source = EXCLUDED.utm_source, utm_medium = EXCLUDED.utm_medium,
+         utm_campaign = EXCLUDED.utm_campaign, utm_term = EXCLUDED.utm_term,
+         utm_content = EXCLUDED.utm_content,
          synced_at = now()`, vals);
     written += r.rowCount ?? 0;
   }
