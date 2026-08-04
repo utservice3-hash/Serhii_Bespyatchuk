@@ -9,7 +9,6 @@ import {
   fetchFunnel,
   fetchOverview,
   fetchLeadgen,
-  fetchLoyalty,
   fetchSyncStatus,
   triggerSync,
   type SyncStatus,
@@ -37,7 +36,6 @@ import {
   type TeamRanking,
   fetchTimeseries,
   type FunnelStage,
-  type LoyaltyManager,
   type ManagerBreakdown,
   type ManagerOption,
   type PersonalDashboard,
@@ -181,10 +179,6 @@ export function Dashboard() {
   const [taskSearch, setTaskSearch] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskForm, setTaskForm] = useState(emptyTaskForm);
-
-  const [loyaltyTeamId, setLoyaltyTeamId] = useState<number | "">("");
-  const [loyaltyData, setLoyaltyData] = useState<LoyaltyManager[]>([]);
-  const [loyaltyLoading, setLoyaltyLoading] = useState(false);
 
   const [teamsRanking, setTeamsRanking] = useState<TeamRanking[]>([]);
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
@@ -485,20 +479,9 @@ export function Dashboard() {
       .finally(() => setPersonalLoading(false));
   }, [section, selectedManagerId, month, auth]);
 
-  useEffect(() => {
-    if (section !== "loyalty") return;
-    const teamIdToUse = auth?.role === "manager" ? undefined : loyaltyTeamId || teams[0]?.id;
-    const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
-    setLoyaltyLoading(true);
-    fetchLoyalty({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
-      // `dynamics` із відповіді більше не читається: блок «Динаміка повторних
-      // оплат (12 міс.)» прибрано 04.08.2026, а його роль виконує гістограма В
-      // КАРТЦІ КЛІЄНТА. Роут `/loyalty` живий — він живить картки менеджерів.
-      .then(({ managers }) => setLoyaltyData(managers))
-      .catch(() => setLoyaltyData([]))
-      .finally(() => setLoyaltyLoading(false));
-  }, [section, loyaltyTeamId, teams, auth, refreshNonce]);
-
+  // 🪦 Ефект завантаження `/dashboard/loyalty` прибрано 04.08.2026 разом із картками
+  // менеджерів (рішення власника): обидва блоки екрана клієнтів скоупляться роллю на
+  // сервері й тягнуть свої дані самі. Роут — у DEAD_ROUTE_CANDIDATES.
   useEffect(() => {
     if (section !== "receivables") return;
     // Default to all teams (no filter) unless a specific team is picked.
@@ -882,14 +865,7 @@ export function Dashboard() {
       )}
 
       {section === "loyalty" && (
-        <LoyaltySection
-          auth={auth}
-          teams={teams}
-          loyaltyTeamId={loyaltyTeamId}
-          setLoyaltyTeamId={setLoyaltyTeamId}
-          loyaltyLoading={loyaltyLoading}
-          loyaltyData={loyaltyData}
-        />
+        <LoyaltySection auth={auth} />
       )}
 
       {section === "leadgen" && (

@@ -179,6 +179,10 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
   const [busy, setBusy] = useState(false);
   const [payFilter, setPayFilter] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"in-plan" | "all" | "stale">("all");
+  // 🔴 ДЕФОЛТ — «НАЙГІРШІ ЗВЕРХУ» (рішення власника 04.08.2026): екран планування
+  // існує, щоб бачити проблеми, а не щоб милуватись лідерами. Другий режим —
+  // «найбільші зверху» (факт ①), коли треба дивитись на обсяг.
+  const [sortMode, setSortMode] = useState<"worst" | "biggest">("worst");
   const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
   const [openMgrs, setOpenMgrs] = useState<Set<number>>(new Set());
 
@@ -238,17 +242,28 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
       tEntry.mgrs.set(c.managerId, mEntry);
       byTeam.set(tk, tEntry);
     }
-    const sortByFact = <T extends { rows: ClientPlanRow[] }>(a: T, b: T) =>
-      levelTotals(b.rows).fact - levelTotals(a.rows).fact;
+    // 🔴 БЕЗ ПЛАНУ % НЕ ІСНУЄ, і вигадувати його не можна. Такі рядки йдуть ПІСЛЯ
+    // тих, у кого план є (їм нічого не «завалено»), і між собою — за фактом.
+    // Інакше «найгірші зверху» очолили б ті, кому плану просто не поставили.
+    const cmp = <T extends { rows: ClientPlanRow[] }>(a: T, b: T) => {
+      const A = levelTotals(a.rows), B = levelTotals(b.rows);
+      if (sortMode === "biggest") return B.fact - A.fact;
+      const pa = A.plan > 0 ? A.fact / A.plan : null;
+      const pb = B.plan > 0 ? B.fact / B.plan : null;
+      if (pa == null && pb == null) return B.fact - A.fact;
+      if (pa == null) return 1;
+      if (pb == null) return -1;
+      return pa - pb;
+    };
     return [...byTeam.values()]
       .map((tt) => ({
         teamName: tt.teamName,
         rows: [...tt.mgrs.values()].flatMap((m) => m.rows),
         mgrs: [...tt.mgrs.entries()]
-          .map(([id, m]) => ({ id, name: m.name, rows: [...m.rows].sort((a, b) => b.fact - a.fact || b.plan - a.plan) }))
-          .sort(sortByFact),
+          .map(([id, m]) => ({ id, name: m.name, rows: [...m.rows].sort((a, b) => b.fact - a.fact || b.plan - a.plan) }))  // клієнти всередині менеджера — завжди за фактом
+          .sort(cmp),
       }))
-      .sort(sortByFact);
+      .sort(cmp);
   })();
 
   const renderRow = (c: ClientPlanRow) => {
@@ -405,6 +420,19 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
                      border: `1px solid ${view === k ? "#2563eb" : "#d1d5db"}`, background: view === k ? "#eff6ff" : "#fff",
                      color: view === k ? "#1d4ed8" : "#374151" }}>{label}</button>
         ))}
+        {grouped && (
+          <>
+            <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Сортувати:</span>
+            {([["worst", "найгірші зверху"], ["biggest", "найбільші зверху"]] as const).map(([k, label]) => (
+              <button key={k} onClick={() => setSortMode(k)}
+                title={k === "worst" ? "за % виконання плану (без плану — внизу)" : "за фактом ① (успішно реалізовано)"}
+                style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                         border: `1px solid ${sortMode === k ? "#2563eb" : "#d1d5db"}`,
+                         background: sortMode === k ? "#eff6ff" : "#fff",
+                         color: sortMode === k ? "#1d4ed8" : "#374151" }}>{label}</button>
+            ))}
+          </>
+        )}
         <span style={{ flex: 1 }} />
         {auth.role === "manager" && (
           <button disabled={busy || !t.canSubmit} onClick={() => act(() => submitClientPlans({ month }))}

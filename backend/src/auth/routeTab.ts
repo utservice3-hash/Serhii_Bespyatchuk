@@ -70,6 +70,12 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // Знову ОКРЕМІ записи: `pre` матчить по слешу, дефісний сусід не накривається.
     { test: pre("/api/dashboard/client-card"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-search"), tabs: ["loyalty"] },
+    // 🔴 ДОДАНО 04.08.2026, КОЛИ `requirePerm` ПІШОВ. Обʼєднання відкрилось тімліду
+    // (у межах команди), тож єдиною межею роутів лишився кламп усередині — а це
+    // рівно той випадок, від якого нас беруть ворота #17: «межа є, але її не видно
+    // з реєстру». Вкладка `loyalty` — груба межа (HR не має її взагалі), точну
+    // тримає `mergePairAllowed`, і саме її сторожать #30h/#30i та #31.
+    { test: pre("/api/dashboard/client-merge"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-override"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-overrides"), tabs: ["loyalty"] },

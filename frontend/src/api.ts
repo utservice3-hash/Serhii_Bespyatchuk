@@ -2369,6 +2369,9 @@ export interface ReactivationResp {
     inWork: number; returned30: number; returned30Revenue: number;
   };
   canAssign: boolean;
+  /** Обʼєднання: тімліду відкрито в межах його команди (кламп — на сервері). */
+  canMerge: boolean;
+  mergeScope: "all" | "team";
 }
 export async function fetchReactivationList(params?: { managerId?: number; teamId?: number }): Promise<ReactivationResp> {
   const { data } = await api.get<ReactivationResp>("/dashboard/reactivation-list", { params });

@@ -1,73 +1,18 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useState } from "react";
 import type { AuthPayload } from "../../../auth";
-import {
-  fetchLoyaltyOverrides, saveLoyaltyOverride, removeLoyaltyOverride, fetchManagerOptions,
-  type LoyaltyManager, type Team, type LoyaltyOverride, type ManagerOption,
-} from "../../../api";
+import { fetchLoyaltyOverrides, removeLoyaltyOverride, type LoyaltyOverride } from "../../../api";
 import { ClientPlansSection } from "./ClientPlansSection";
 import { ReactivationSection } from "./ReactivationSection";
-import { teamOptions } from "../teamColors";
 
-/** Адмін-дії над постійним клієнтом: 🗑 прибрати · ↪ передати менеджеру. */
-function AdminClientActions({ clientKey, clientName, managers, onDone }: {
-  clientKey: string; clientName: string; managers: ManagerOption[]; onDone: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const act = async (fn: () => Promise<void>) => { setBusy(true); try { await fn(); onDone(); } finally { setBusy(false); } };
-  return (
-    <span style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap" }}>
-      <button title="Прибрати з постійних" disabled={busy}
-        onClick={() => { if (confirm(`Прибрати «${clientName}» з постійних?`)) act(() => saveLoyaltyOverride({ clientKey, clientName, hidden: true })); }}
-        style={{ border: "none", background: "transparent", cursor: "pointer", color: "#dc2626", fontSize: 14 }}>🗑</button>
-      <select defaultValue="" disabled={busy} title="Передати іншому менеджеру"
-        onChange={(e) => { const v = e.target.value; if (v) act(() => saveLoyaltyOverride({ clientKey, clientName, pinnedManagerId: Number(v) })); e.target.value = ""; }}
-        style={{ fontSize: 11, maxWidth: 130 }}>
-        <option value="">↪ передати…</option>
-        {managers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-      </select>
-    </span>
-  );
-}
-
-/** Badge distinguishing a company regular (🏢, by name) from an individual
- * (👤, identified by phone) — so the list reads unambiguously and de-duped. */
-function ClientType({ isCompany, identifier }: { isCompany: boolean; identifier: string | null }) {
-  if (isCompany) {
-    return <span style={{ fontSize: 12, color: "var(--text-muted)" }}>🏢 Компанія</span>;
-  }
-  return (
-    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-      👤 Фізособа{identifier ? ` · ${identifier}` : ""}
-    </span>
-  );
-}
-
-export function LoyaltySection({
-  auth,
-  teams,
-  loyaltyTeamId,
-  setLoyaltyTeamId,
-  loyaltyLoading,
-  loyaltyData,
-}: {
-  auth: AuthPayload | null;
-  teams: Team[];
-  loyaltyTeamId: number | "";
-  setLoyaltyTeamId: Dispatch<SetStateAction<number | "">>;
-  loyaltyLoading: boolean;
-  loyaltyData: LoyaltyManager[];
-}) {
+export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
   // Адмін: ручні правки постійних (прибрати/передати) + список менеджерів для передачі.
   const isAdmin = auth?.role === "admin";
   const [overrides, setOverrides] = useState<LoyaltyOverride[]>([]);
-  const [allManagers, setAllManagers] = useState<ManagerOption[]>([]);
   const reloadOverrides = () => { fetchLoyaltyOverrides().then(setOverrides).catch(() => setOverrides([])); };
   useEffect(() => {
     if (!isAdmin) return;
     reloadOverrides();
-    fetchManagerOptions().then(setAllManagers).catch(() => setAllManagers([]));
   }, [isAdmin]);
-  const bumpOverrides = () => { reloadOverrides(); /* дані оновляться на наступному 5-хв рефреші дашборду */ };
   return (
     <>
       {/* ФАЗА A/B · новий екран за макетом.
@@ -87,19 +32,9 @@ export function LoyaltySection({
       {auth && <ReactivationSection auth={auth} />}
       {auth && <div style={{ height: 22 }} />}
 
-      <div className="page-header">
-        <h1 className="page-title">Клієнти: постійні та реактивація</h1>
-        {auth?.role !== "manager" && (
-          <div className="page-filters">
-            <select
-              value={loyaltyTeamId}
-              onChange={(e) => setLoyaltyTeamId(e.target.value ? Number(e.target.value) : "")}
-            >
-              {teamOptions(teams)}
-            </select>
-          </div>
-        )}
-      </div>
+      {/* Фільтр команд прибрано разом із картками: він керував ЛИШЕ ними
+          (`GET /dashboard/loyalty`). Обидва нові блоки скоупляться роллю на
+          сервері, тож селект був би тумблером, який нічого не вмикає. */}
 
       {isAdmin && overrides.length > 0 && (
         <div className="chart-card" style={{ marginBottom: 16, borderLeft: "3px solid #d97706" }}>
@@ -137,89 +72,16 @@ export function LoyaltySection({
           живим ще один спринт і стоїть у DEAD_ROUTE_CANDIDATES з датою перегляду:
           зникнення має бути рішенням, а не наслідком. */}
 
-      {loyaltyLoading ? (
-        <p className="loading-text">Завантаження...</p>
-      ) : loyaltyData.length === 0 ? (
-        <p className="loading-text">Немає даних.</p>
-      ) : (
-        <div className="chart-grid">
-          {loyaltyData.map((m) => (
-            <div className="chart-card" key={m.managerId}>
-              <h2 className="chart-title">{m.managerName}</h2>
-              <div className="kpi-grid">
-                <div className="kpi-card">
-                  <span className="kpi-label">Постійні (2+ за 2 міс.)</span>
-                  <span className="kpi-value">{m.regularCount}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">Разові (1 за 2 міс.)</span>
-                  <span className="kpi-value">{m.occasionalCount}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">Сплячі (реактивація)</span>
-                  <span className="kpi-value">{m.sleepingCount}</span>
-                </div>
-                <div className="kpi-card">
-                  <span className="kpi-label">Втрачені (&gt;6 міс.)</span>
-                  <span className="kpi-value">{m.lostCount}</span>
-                </div>
-              </div>
-
-              {([
-                { key: "regular", label: "Постійні клієнти", list: m.segments.regular },
-                { key: "sleeping", label: "Сплячі — кандидати на реактивацію", list: m.segments.sleeping },
-                { key: "lost", label: "Втрачені — давно не замовляли", list: m.segments.lost },
-              ] as const).map((group) => {
-                return (
-                  group.list.length > 0 && (
-                    <details key={group.key} style={{ marginTop: 12 }}>
-                      <summary style={{ cursor: "pointer", fontWeight: 600 }}>
-                        {group.label} ({group.list.length})
-                      </summary>
-                      {/* Кнопки «➕ в реактивацію» прибрано разом зі старим грідом:
-                          вони писали в таблицю, якої більше ніхто не показує.
-                          Взяти клієнта в роботу тепер можна на екрані «Реактивація ·
-                          сплячі та втрачені» — там задача, виконавець і причина. */}
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>Клієнт</th>
-                            <th>Тип</th>
-                            <th>За 2 міс.</th>
-                            <th>Всього оплат</th>
-                            <th>Остання оплата</th>
-                            {isAdmin && group.key === "regular" && <th>Адмін</th>}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {group.list.slice(0, 100).map((c) => (
-                            <tr key={c.clientKey}>
-                              <td>{c.clientName}</td>
-                              <td><ClientType isCompany={c.isCompany} identifier={c.identifier} /></td>
-                              <td>{c.orders}</td>
-                              <td>{c.totalPaid}</td>
-                              <td>
-                                {c.lastPaid
-                                  ? new Date(c.lastPaid).toLocaleDateString("uk-UA")
-                                  : "—"}
-                              </td>
-                              {isAdmin && group.key === "regular" && (
-                                <td>
-                                  <AdminClientActions clientKey={c.clientKey} clientName={c.clientName} managers={allManagers} onDone={bumpOverrides} />
-                                </td>
-                              )}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </details>
-                  )
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      )}
+      {/* 🪦 ПРИБРАНО 04.08.2026 (рішення власника): картки по кожному менеджеру
+          (Постійні / Разові / Сплячі / Втрачені + три списки). Дубль без дій:
+          сегменти читаються в «Постійні клієнти · план місяця» (ієрархія команда →
+          менеджер → клієнти) і в «Реактивація · сплячі та втрачені», де ще й є що
+          зробити — задача, виконавець, причина закриття.
+          Разом із ними зник ЄДИНИЙ вхід до дії «🗑 прибрати з постійних»
+          (`POST /dashboard/loyalty-override`, hidden=true). Роут ЖИВИЙ і навмисно
+          НЕ оголошений мертвим: це втрачений вхід до потрібної функції, а не мертвий
+          код — куди її повернути, вирішує власник. Скасувати вже наявні правки
+          можна тут же, у блоці «🔧 Ручні правки постійних». */}
     </>
   );
 }

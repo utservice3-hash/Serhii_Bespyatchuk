@@ -108,6 +108,116 @@ test("#30d КАРТКА КЛІЄНТА віддає 12 місяців і НАЗ�
     "🔴 підсумок 12 міс. не дорівнює сумі стовпчиків");
 });
 
+/**
+ * Тімлід із РЕАЛЬНОЇ команди — беремо з БД, а не зашиваємо id: зашитий id
+ * одного дня стане чужим/видаленим, і тест почне перевіряти порожнечу.
+ */
+async function someTeamLead(): Promise<{ token: string; teamId: number; teamName: string }> {
+  const { signToken, rbac } = await load();
+  await rbac.refreshRoles();
+  const { pool } = await import("../db/pool.js");
+  const r = await pool.query<{ team_id: number; name: string; n: string }>(
+    `SELECT m.team_id, t.name, COUNT(*) AS n
+       FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL AND m.team_id IS NOT NULL
+      GROUP BY 1, 2 ORDER BY n DESC LIMIT 1`);
+  const row = r.rows[0];
+  assert.ok(row, "🔴 у базі немає жодної команди з оплатами — скоуп-перевірці нема на чому працювати");
+  return {
+    token: signToken({ userId: 0, role: rbac.scopeCompatRole("team_lead", rbac.getRoleDef("team_lead")),
+                       roleKey: "team_lead", managerId: null, teamId: row.team_id }),
+    teamId: row.team_id, teamName: row.name,
+  };
+}
+
+test("#30f СКОУП: тімлід у пошуку НЕ бачить чужу команду", needsApi(), async () => {
+  // 🔴 Кламп мусить жити на СЕРВЕРІ. Фільтр у браузері не межа: той самий запит
+  // curl-ом віддав би чужих клієнтів. Тому питаємо API напряму токеном тімліда.
+  const lead = await someTeamLead();
+  const { pool } = await import("../db/pool.js");
+  const mine = await (await get("/api/dashboard/client-search?q=" + encodeURIComponent("ТОВ"), lead.token)).json() as
+    { clientKey: string; managerName: string | null }[];
+  assert.ok(Array.isArray(mine),
+    `🔴 тімлід дістав не список: ${JSON.stringify(mine).slice(0, 120)}`);
+  assert.ok(mine.length > 0,
+    `🔴 тімлід команди «${lead.teamName}» не знайшов ЖОДНОГО клієнта — порожнеча доводить не межу, а поломку`);
+  // Кожен знайдений клієнт мусить вести до менеджера ЦІЄЇ команди.
+  const owners = await pool.query<{ name: string; team_id: number | null }>(
+    `SELECT name, team_id FROM managers WHERE name = ANY($1)`,
+    [mine.map((h) => h.managerName).filter(Boolean)]);
+  const foreign = owners.rows.filter((o) => o.team_id !== lead.teamId).map((o) => o.name);
+  assert.deepEqual(foreign, [],
+    `🔴 у видачі тімліда команди «${lead.teamName}» є клієнти менеджерів з ІНШИХ команд: ${foreign.join(", ")}`);
+});
+
+test("#30g ДЗЕРКАЛО: адмін бачить те, чого не бачить тімлід", needsApi(), async () => {
+  // Без цієї пари #30f зеленів би й тоді, якби пошук був зламаний для всіх:
+  // «нічого чужого» і «нічого взагалі» ззовні виглядають однаково.
+  const lead = await someTeamLead();
+  const [asAdmin, asLead] = await Promise.all([
+    (await get("/api/dashboard/client-search?q=" + encodeURIComponent("ТОВ"), await adminToken())).json(),
+    (await get("/api/dashboard/client-search?q=" + encodeURIComponent("ТОВ"), lead.token)).json(),
+  ]) as { clientKey: string }[][];
+  const leadKeys = new Set(asLead.map((h) => h.clientKey));
+  const onlyAdmin = asAdmin.filter((h) => !leadKeys.has(h.clientKey));
+  assert.ok(onlyAdmin.length > 0,
+    `🔴 адмін і тімлід бачать ОДНЕ Й ТЕ САМЕ (${asAdmin.length} рядків) — або кламп не діє, `
+    + "або пошук віддає порожнечу обом");
+});
+
+/** Пара реальних клієнтів: один — команди тімліда, другий — ЧУЖОЇ. */
+async function crossTeamPair(teamId: number): Promise<{ mine: string; foreign: string }> {
+  const { pool } = await import("../db/pool.js");
+  const pick = async (sameTeam: boolean) => (await pool.query<{ client_key: string }>(
+    `SELECT d.client_key
+       FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+       JOIN managers m ON m.id = d.manager_id
+      WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+        AND m.team_id IS ${sameTeam ? "NOT" : ""} DISTINCT FROM $1
+        AND m.team_id IS NOT NULL
+      GROUP BY d.client_key ORDER BY COUNT(*) DESC LIMIT 1`, [teamId])).rows[0]?.client_key;
+  const [mine, foreign] = await Promise.all([pick(true), pick(false)]);
+  assert.ok(mine && foreign, "🔴 не знайшлось пари «свій + чужий» — перевірці нема на чому працювати");
+  return { mine: mine!, foreign: foreign! };
+}
+
+test("#30h СКОУП ЗЛИТТЯ: тімлід НЕ може злити пару, де один бік чужий", needsApi(), async () => {
+  // 🔴 Проба РЕАЛЬНИМИ ключами, а не привидами: привид відхиляється з будь-якої
+  // причини й нічого не доводить про КОМАНДУ. Запис при цьому неможливий двічі —
+  // кламп віддає 403 до вставки, а прогін іде під роллю test_readonly.
+  const lead = await someTeamLead();
+  const { mine, foreign } = await crossTeamPair(lead.teamId);
+  const body = JSON.stringify({ alias: foreign, canonical: mine, reason: "перевірка межі" });
+  const res = await fetch(`${API_BASE}/api/dashboard/client-merge`, {
+    method: "POST", headers: { Authorization: `Bearer ${lead.token}`, "Content-Type": "application/json" }, body,
+  });
+  assert.equal(res.status, 403,
+    `🔴 тімлід команди «${lead.teamName}» зміг подати міжкомандне злиття (${foreign} → ${mine}): ${res.status}`);
+  // Те саме для передпоказу: цифри чужої команди теж не віддаємо.
+  const pre = await get(`/api/dashboard/client-merge/preview?alias=${encodeURIComponent(foreign)}`
+    + `&canonical=${encodeURIComponent(mine)}`, lead.token);
+  assert.equal(pre.status, 403, `🔴 передпоказ чужої пари віддав ${pre.status} — межа лише на кнопці`);
+});
+
+test("#30i ДЗЕРКАЛО: своя пара тімліду ДОСТУПНА, чужа — адміну", needsApi(), async () => {
+  // Без цієї пари #30h зеленів би й тоді, якби роут відмовляв тімліду ЗАВЖДИ:
+  // «не може чуже» і «не може нічого» ззовні виглядають однаково.
+  const lead = await someTeamLead();
+  const { mine, foreign } = await crossTeamPair(lead.teamId);
+  const own = await get(`/api/dashboard/client-merge/preview?alias=${encodeURIComponent(mine)}`
+    + `&canonical=${encodeURIComponent(mine)}`, lead.token);
+  // Однакові ключі → 400 «Ключі однакові»: гейт пройдено, далі валідація. Саме це
+  // й треба — 403 тут означав би, що тімлід не проходить межу навіть на СВОЇХ.
+  assert.equal(own.status, 400,
+    `🔴 тімлід не проходить межу на власному клієнті (${own.status}) — право видано лише на папері`);
+  const asAdmin = await get(`/api/dashboard/client-merge/preview?alias=${encodeURIComponent(foreign)}`
+    + `&canonical=${encodeURIComponent(mine)}`, await adminToken());
+  assert.equal(asAdmin.status, 200,
+    `🔴 адмін не може порахувати міжкомандну пару (${asAdmin.status}) — зламався не кламп, а сам передпоказ`);
+});
+
 test("#30e МЕЖА: без токена екрани клієнтів не віддають нічого", needsApi(), async () => {
   // Дзеркало до #30/#30d: «доступно КВП/ОД/адміну» має означати «не всьому
   // інтернету». Матриця #11 перевіряє ролі, цей рядок — відсутність ролі взагалі.

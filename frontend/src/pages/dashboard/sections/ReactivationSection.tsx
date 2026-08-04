@@ -52,7 +52,7 @@ function StateChip({ c }: { c: ReactivationRow }) {
 }
 
 /** 🔗 Обʼєднання клієнтів — UI поверх client_key_alias. Механіка вже на проді. */
-function MergePanel({ onDone }: { onDone: () => void }) {
+function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boolean }) {
   // 🔴 Тепер це ВИБІР зі списку, а не два поля вільного тексту: канонічний ключ
   // (`вкавтострада`) дізнатись із екрана було нізвідки, тож формою не могли
   // скористатись. Ключ підставляє пошук, людина шукає за назвою або номером.
@@ -94,7 +94,9 @@ function MergePanel({ onDone }: { onDone: () => void }) {
     <div style={{ ...S.card, flex: "1 1 460px", minWidth: 420 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
         <b style={{ fontSize: 14 }}>🔗 Обʼєднати клієнтів</b>
-        <span style={{ fontSize: 11, color: "#6b7280" }}>за правом · КВП, Опер. директор, адмін</span>
+        <span style={{ fontSize: 11, color: "#6b7280" }}>
+          {teamOnly ? "лише в межах вашої команди" : "за правом · КВП, Опер. директор, адмін"}
+        </span>
       </div>
 
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Приєднати (псевдонім)</div>
@@ -136,6 +138,15 @@ function MergePanel({ onDone }: { onDone: () => void }) {
         <button style={S.btn()} disabled={busy} onClick={() => { setAliasSel(null); setCanonSel(null); setReason(""); setPre(null); setErr(null); }}>Скасувати</button>
       </div>
 
+      {teamOnly && (
+        // Кажемо ПРАВИЛО, а не «щось пішло не так»: інакше 403 на міжкомандній парі
+        // читався б як збій системи, і тімлід ішов би шукати баг, а не КВП.
+        <div style={{ marginTop: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8,
+                      padding: "8px 10px", fontSize: 12, color: "#1e3a8a", lineHeight: 1.5 }}>
+          Ви обʼєднуєте клієнтів <b>своєї команди</b>. Якщо хоч один бік належить іншій команді —
+          обʼєднання зробить КВП або Опер. директор. Перевіряє сервер, а не ця форма.
+        </div>
+      )}
       <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#78350f", lineHeight: 1.5 }}>
         Обʼєднання зворотне: у журналі зʼявиться запис із «↺ роз'єднати» — усе повернеться,
         історія не втрачається (сирий ключ угоди не змінюється ніколи).
@@ -453,10 +464,12 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
         </div>
       </div>
 
-      {data.canAssign && (
+      {/* Обʼєднання — тімліду теж (у межах його команди); передача відповідального
+          лишилась за правом merge_clients. Тому дві різні умови, а не одна. */}
+      {(data.canMerge || data.canAssign) && (
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-          <MergePanel onDone={load} />
-          <ManagerPanel clients={data.clients} onDone={load} />
+          {data.canMerge && <MergePanel onDone={load} teamOnly={data.mergeScope === "team"} />}
+          {data.canAssign && <ManagerPanel clients={data.clients} onDone={load} />}
         </div>
       )}
 

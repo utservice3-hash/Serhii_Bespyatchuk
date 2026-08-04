@@ -3,6 +3,7 @@ import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
+import { mergePairAllowed, mergeDenyReason, type MergePairScope } from "../auth/mergeScope.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
 const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
@@ -4131,11 +4132,26 @@ dashboardRouter.post("/client-comments", async (req, res) => {
  * стане неможливою. Тому поріг тут `>= 1` оплата, і це свідома різниця з екраном
  * планів.
  *
- * Право те саме, що в обʼєднання/передачі (`merge_clients`): форма, для якої
- * пошук існує, живе за цим правом, і ширший доступ до списку клієнтів усієї
- * компанії був би розширенням доступу без рішення власника.
+ * 🔴 ДОСТУП — ДВА РІЗНІ ЗАПИТАННЯ, І ЦЕ РІШЕННЯ ВЛАСНИКА (04.08.2026):
+ *   ЩО МОЖНА РОБИТИ — обʼєднання й передача лишаються за правом `merge_clients`;
+ *   КОГО МОЖНА ЗНАЙТИ — тімлід шукає, але ЛИШЕ у своїй команді.
+ * Тому пошук більше не висить на `requirePerm`, а клампиться тут: право дає
+ * повний доступ, тімліду дописується `mm.team_id = <його команда>`.
+ *
+ * ⚠️ КЛАМП НА СЕРВЕРІ, А НЕ ФІЛЬТР НА ФРОНТІ. Фільтр у браузері — це не межа:
+ * той самий запит curl-ом віддав би чужу команду. Доводиться тестом `#30f`
+ * (тімлід не бачить чужого клієнта) з дзеркалом `#30g` (адмін його бачить —
+ * інакше «не бачить» зеленіло б і тоді, коли пошук зламаний для всіх).
+ *
+ * Менеджер сюди НЕ входить: вкладку `loyalty` він має, тож tab-гейт його
+ * пропускає — відмова мусить бути явною й названою в матриці.
  */
-dashboardRouter.get("/client-search", requirePerm("merge_clients"), async (req, res) => {
+dashboardRouter.get("/client-search", async (req, res) => {
+  const auth = req.auth!;
+  const canAll = roleHasPerm(auth.roleKey, "merge_clients");
+  const isLead = auth.role === "team_lead";
+  if (!canAll && !isLead) return res.status(403).json({ error: "Forbidden" });
+  const teamClamp = !canAll && isLead ? (auth.teamId ?? -1) : null;
   const q = String(req.query.q ?? "").trim();
   if (q.length < 2) return res.json([]);
   const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 20));
@@ -4186,9 +4202,12 @@ dashboardRouter.get("/client-search", requirePerm("merge_clients"), async (req, 
           WHERE d2.client_key = a.client_key AND d2.client_name IS NOT NULL
           ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
        ) nm ON true
+      ${teamClamp != null ? "WHERE mm.team_id = $4" : ""}
       ORDER BY a.revenue DESC
       LIMIT ${limit}`,
-    [metrics.GENERIC_CLIENT_KEYS, keyLike, nameLike]);
+    teamClamp != null
+      ? [metrics.GENERIC_CLIENT_KEYS, keyLike, nameLike, teamClamp]
+      : [metrics.GENERIC_CLIENT_KEYS, keyLike, nameLike]);
   // Явний перелік полів — рядок БД спредом назовні не їде.
   res.json(r.rows.map((x) => ({
     clientKey: x.client_key,
@@ -4366,7 +4385,13 @@ dashboardRouter.get("/reactivation-list", async (req, res) => {
       returned30: returned30.clients,
       returned30Revenue: Math.round(returned30.revenue),
     },
+    // ДВА РІЗНІ ПИТАННЯ, і фронт мусить їх розрізняти:
+    //   canAssign — передати клієнта іншому менеджеру (лишилось за merge_clients);
+    //   canMerge  — обʼєднати клієнтів (тімліду відкрито В МЕЖАХ його команди,
+    //               рішення власника 04.08.2026; сам кламп — на сервері).
     canAssign: roleHasPerm(auth.roleKey, "merge_clients"),
+    canMerge: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
+    mergeScope: roleHasPerm(auth.roleKey, "merge_clients") ? "all" : "team",
   });
 });
 
@@ -4476,6 +4501,43 @@ dashboardRouter.post("/client-seasonal", async (req, res) => {
 
 // ───────────────────────── ОБʼЄДНАННЯ КЛІЄНТІВ ─────────────────────────
 /**
+ * Команда ВЛАСНИКА клієнта — та сама формула, що скрізь на цих екранах:
+ * COALESCE(закріплений вручну, основний за оплатами) → його `team_id`.
+ *
+ * 🔴 Дивимось і на `client_key`, і на `client_key_raw`. Після злиття угоди
+ * псевдоніма їдуть під канонічним ключем, тож пошук лише по `client_key` дав би
+ * `null` для щойно приєднаного боку — і тімлід не зміг би роз'єднати ВЛАСНЕ
+ * злиття. Сирий ключ не змінюється ніколи, тому він тут і потрібен.
+ */
+async function clientOwnerTeam(clientKey: string): Promise<number | null> {
+  const r = await pool.query<{ team_id: number | null }>(
+    `WITH paid AS (
+       SELECT d.manager_id, d.closed_at_kommo FROM deals d
+       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+      WHERE psm.funnel_stage = 'paid' AND (d.client_key = $1 OR d.client_key_raw = $1)
+     ), pm AS (
+       SELECT manager_id FROM (
+         SELECT manager_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(closed_at_kommo) DESC) rn
+           FROM paid GROUP BY manager_id) z WHERE rn = 1
+     )
+     SELECT m.team_id FROM pm
+       LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
+       JOIN managers m ON m.id = COALESCE(lo.pinned_manager_id, pm.manager_id)`, [clientKey]);
+  return r.rows[0]?.team_id ?? null;
+}
+
+/** Рішення «чи можна цій людині зливати ЦЮ пару» — предикат у `auth/mergeScope`. */
+async function mergePairScope(auth: NonNullable<typeof import("express")["request"]["auth"]>,
+  aliasKey: string, canonicalKey: string): Promise<MergePairScope> {
+  const canAll = roleHasPerm(auth.roleKey, "merge_clients");
+  const leadTeamId = !canAll && auth.role === "team_lead" ? auth.teamId ?? null : null;
+  if (canAll) return { canAll, leadTeamId: null, aliasTeamId: null, canonicalTeamId: null };
+  const [aliasTeamId, canonicalTeamId] = await Promise.all([
+    clientOwnerTeam(aliasKey), clientOwnerTeam(canonicalKey),
+  ]);
+  return { canAll, leadTeamId, aliasTeamId, canonicalTeamId };
+}
+/**
  * 🔴 UI ПОВЕРХ `client_key_alias` — механіка вже на проді (178 псевдонімів,
  * 151 клієнт), нічого нового в даних не вигадуємо. Тут лише передпоказ,
  * підтвердження й журнал.
@@ -4484,11 +4546,15 @@ dashboardRouter.post("/client-seasonal", async (req, res) => {
  * веде до ДВОХ фірм. Транзитивне склеювання заборонене тригером у БД; підказувати
  * те, що БД усе одно відкине, означало б вчити людину неправильному.
  */
-dashboardRouter.get("/client-merge/preview", requirePerm("merge_clients"), async (req, res) => {
+dashboardRouter.get("/client-merge/preview", async (req, res) => {
   const alias = String(req.query.alias ?? "").trim();
   const canonical = String(req.query.canonical ?? "").trim();
   if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
   if (alias === canonical) return res.status(400).json({ error: "Ключі однакові" });
+  // Передпоказ клампимо ТАК САМО, як саме злиття: інакше тімлід читав би цифри
+  // чужої команди, просто не маючи кнопки. Межа — це дані, а не кнопка.
+  const scope = await mergePairScope(req.auth!, alias, canonical);
+  if (!mergePairAllowed(scope)) return res.status(403).json({ error: mergeDenyReason(scope) });
 
   const side = async (key: string) => (await pool.query<{ orders: string; revenue: string; name: string | null; last_paid: string | null }>(
     `SELECT COUNT(*)::int AS orders, COALESCE(SUM(d.price),0) AS revenue,
@@ -4535,12 +4601,17 @@ dashboardRouter.get("/client-merge/preview", requirePerm("merge_clients"), async
   });
 });
 
-dashboardRouter.post("/client-merge", requirePerm("merge_clients"), async (req, res) => {
+dashboardRouter.post("/client-merge", async (req, res) => {
   const auth = req.auth!;
   const alias = String(req.body?.alias ?? "").trim();
   const canonical = String(req.body?.canonical ?? "").trim();
   const reason = String(req.body?.reason ?? "").trim();
   if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
+  // 🔴 КЛАМП ДО ВАЛІДАЦІЇ ПРИЧИНИ І ДО БУДЬ-ЯКОГО ЗАПИСУ: гейт має бути ПЕРШИМ
+  // значущим оператором, інакше проба матриці «невалідним тілом» діставала б 400
+  // там, де мусить бути 403, і межа виглядала б інакше, ніж вона є.
+  const scope = await mergePairScope(auth, alias, canonical);
+  if (!mergePairAllowed(scope)) return res.status(403).json({ error: mergeDenyReason(scope) });
   if (!reason) return res.status(400).json({ error: "Причина обовʼязкова — реєстр без причини стає смітником" });
   try {
     await pool.query(
@@ -4558,9 +4629,16 @@ dashboardRouter.post("/client-merge", requirePerm("merge_clients"), async (req, 
   res.json({ ok: true, recomputed: r.changed });
 });
 
-dashboardRouter.post("/client-merge/revoke", requirePerm("merge_clients"), async (req, res) => {
+dashboardRouter.post("/client-merge/revoke", async (req, res) => {
   const alias = String(req.body?.alias ?? "").trim();
   if (!alias) return res.status(400).json({ error: "alias обовʼязковий" });
+  // Роз'єднання — той самий кламп, що й злиття: тімлід відкочує лише СВОЇ
+  // (тобто внутрішньокомандні) записи. Канонічний бік беремо з реєстру, бо в
+  // тілі запиту його немає — інакше «своє» визначав би той, хто просить.
+  const row = (await pool.query<{ canonical_key: string }>(
+    `SELECT canonical_key FROM client_key_alias WHERE alias_key = $1 AND revoked_at IS NULL`, [alias])).rows[0];
+  const scope = await mergePairScope(req.auth!, alias, row?.canonical_key ?? alias);
+  if (!mergePairAllowed(scope)) return res.status(403).json({ error: mergeDenyReason(scope) });
   const upd = await pool.query(
     `UPDATE client_key_alias SET revoked_at = now() WHERE alias_key = $1 AND revoked_at IS NULL`, [alias]);
   if (!upd.rowCount) return res.status(409).json({ error: "Активного псевдоніма з таким ключем немає" });
@@ -4568,7 +4646,11 @@ dashboardRouter.post("/client-merge/revoke", requirePerm("merge_clients"), async
   res.json({ ok: true, recomputed: r.changed });
 });
 
-dashboardRouter.get("/client-merge/journal", requirePerm("merge_clients"), async (_req, res) => {
+dashboardRouter.get("/client-merge/journal", async (req, res) => {
+  const auth = req.auth!;
+  const canAll = roleHasPerm(auth.roleKey, "merge_clients");
+  const isLead = auth.role === "team_lead";
+  if (!canAll && !isLead) return res.status(403).json({ error: "Forbidden" });
   const r = await pool.query<{ alias_key: string; canonical_key: string; reason: string; created_at: string;
     revoked_at: string | null; approved: string | null }>(
     `SELECT a.alias_key, a.canonical_key, a.reason,
@@ -4577,7 +4659,17 @@ dashboardRouter.get("/client-merge/journal", requirePerm("merge_clients"), async
             COALESCE(u.full_name, u.email) AS approved
        FROM client_key_alias a LEFT JOIN users u ON u.id = a.approved_by
       ORDER BY a.created_at DESC LIMIT 200`);
-  res.json(r.rows.map((x) => ({
+  // 🔴 ТІМЛІДУ — ЛИШЕ ЗАПИСИ ЙОГО КОМАНДИ. Це моє рішення за замовчуванням, а не
+  // вказівка власника: він сказав «журнал діє без змін», але тімлід тут НОВИЙ
+  // читач, і показати йому ключі всієї компанії було б ширшим розширенням, ніж
+  // просили. Звужую до того, що він і так бачить у пошуку. Треба навпаки —
+  // прибрати цей фільтр (один рядок), але СВІДОМО.
+  const rows = canAll ? r.rows : await (async () => {
+    const teams = await Promise.all(r.rows.map(async (x) =>
+      mergePairAllowed(await mergePairScope(auth, x.alias_key, x.canonical_key))));
+    return r.rows.filter((_, i) => teams[i]);
+  })();
+  res.json(rows.map((x) => ({
     aliasKey: x.alias_key, canonicalKey: x.canonical_key, reason: x.reason,
     createdAt: x.created_at, revokedAt: x.revoked_at, approvedBy: x.approved,
   })));

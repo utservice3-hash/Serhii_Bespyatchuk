@@ -168,11 +168,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // тімлід дістають 403 за скоупом, і саме це фіксує рядок.
   { method: "GET", path: "/api/dashboard/client-card?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
-  // Пошук клієнта для форм обʼєднання/передачі — за ПРАВОМ `merge_clients`, тим
-  // самим, що й форми, які його кличуть. Ширший доступ до списку клієнтів усієї
-  // компанії був би розширенням доступу без рішення власника.
+  // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
+  // Пошук клієнта відкрито ТІМЛІДУ — але звужено до ЙОГО команди КЛАМПОМ НА
+  // СЕРВЕРІ (`mm.team_id`), не фільтром на фронті. Права `merge_clients` це не
+  // дає: обʼєднання й передача лишились там, де були (нижче), тож «знайти» і
+  // «змінити» тепер відповідають на різні запитання.
+  // `financier`/`ceo` — ролі адмінського рівня, але власник їх не називав; для
+  // них це справжня відмова по праву, і вона лишається. `manager` теж 403:
+  // вкладку `loyalty` він має, тож tab-гейт його пропустив би — відмова явна.
   { method: "GET", path: "/api/dashboard/client-search?q=zz", cls: "GET",
-    allow: ["admin", "kvp", "opdir"], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
+    allow: ["admin", "kvp", "opdir", "team_lead"], deny: ["hr", "manager", "financier", "ceo"] },
   { method: "POST", path: "/api/dashboard/client-comments", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-plan", cls: "deny-only",
@@ -194,10 +199,22 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/reactivation-task/close", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника): тімлід ОБʼЄДНУЄ клієнтів, але
+  // лише коли ОБИДВА боки — його команди; міжкомандні випадки лишились за
+  // `merge_clients` (КВП/ОД/адмін).
+  //
+  // 🔴 ЧОМУ `team_lead` ЛИШИВСЯ В `deny` ТАМ, ДЕ ПОЛІТИКА ЙОГО ДОЗВОЛЯЄ. Проба
+  // ходить у НЕІСНУЮЧІ ключі (`zzz`), а для них команда не визначається — і кламп
+  // чесно віддає 403. Клітинка каже правду про поведінку, і саме тому вона цінна:
+  // приберуть кламп — тімлід дістане 400 замість 403, і #11 почервоніє. Тобто
+  // матриця тут СТОРОЖУЄ кламп, а не описує намір. Намір доводять #30h/#30i
+  // (реальна пара «свій+чужий» проти «свій+свій») і #31 (чистий предикат).
   { method: "GET", path: "/api/dashboard/client-merge/preview?alias=a&canonical=b", cls: "GET",
     allow: ["admin", "kvp", "opdir"], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
+  // Журнал ключів не приймає, тож клітинка стабільна: тімлід читає (свої записи —
+  // фільтр усередині роута), решта — 403.
   { method: "GET", path: "/api/dashboard/client-merge/journal", cls: "GET",
-    allow: ["admin", "kvp", "opdir"], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
+    allow: ["admin", "kvp", "opdir", "team_lead"], deny: ["hr", "manager", "financier", "ceo"] },
   { method: "POST", path: "/api/dashboard/client-merge", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
   { method: "POST", path: "/api/dashboard/client-merge/revoke", cls: "deny-only",
