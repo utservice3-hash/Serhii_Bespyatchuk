@@ -44,9 +44,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * @param opts.batch     угод на один запит до Kommo (250 — межа API)
  * @param opts.pauseMs   пауза МІЖ пачками (тротлінг: після IP-бану 08.07.2026 темп свідомо низький)
  * @param opts.maxDeals  стеля для пробного прогону; 0 = усі
+ * @param opts.fromKommoId  РЕЗЮМЕ-КУРСОР: почати з угод `kommo_id >= N`.
+ *
+ * 🔴 НАВІЩО КУРСОР (урок 04.08.2026, заміряний). Перший прогін хостинг убив на
+ * 35 250 угоді зі 146 481 (24%) — процес зник, `job_locks` лишився з мертвим
+ * heartbeat, у логу жодної помилки. Без курсора єдиний спосіб продовжити — знову
+ * пройти вже зроблені 35 тис. (це ~140 зайвих запитів до Kommo, тобто рівно те,
+ * через що ми колись отримали IP-бан). Це ТОЙ САМИЙ клас, що «вотермарк
+ * все-або-нічого» в event-джобах: збій має коштувати ПОРЦІЮ, а не весь прогін.
+ * Тому джоба друкує курсор у кожному прогрес-рядку, а перезапуск бере його.
  */
 export async function backfillContactPhones(
-  opts: { batch?: number; pauseMs?: number; maxDeals?: number } = {}
+  opts: { batch?: number; pauseMs?: number; maxDeals?: number; fromKommoId?: number } = {}
 ): Promise<PhoneBackfillResult> {
   const batch = opts.batch ?? 250;
   const pauseMs = opts.pauseMs ?? 1200;
@@ -55,8 +64,11 @@ export async function backfillContactPhones(
     const linksBefore = Number((await pool.query<{ n: string }>(
       `SELECT COUNT(DISTINCT deal_kommo_id) n FROM deal_contacts`)).rows[0].n);
 
+    const from = opts.fromKommoId ?? 0;
     const ids = (await pool.query<{ kommo_id: string }>(
-      `SELECT kommo_id FROM deals ORDER BY kommo_id`)).rows.map((r) => Number(r.kommo_id));
+      `SELECT kommo_id FROM deals WHERE kommo_id >= $1 ORDER BY kommo_id`, [from]))
+      .rows.map((r) => Number(r.kommo_id));
+    if (from > 0) console.log(`  резюме з kommo_id >= ${from}: до обробки ${ids.length} угод`);
     const scoped = opts.maxDeals ? ids.slice(0, opts.maxDeals) : ids;
 
     let requests = 0, phonesWritten = 0;
@@ -113,7 +125,10 @@ export async function backfillContactPhones(
       }
       await sleep(pauseMs);
       if ((i / batch) % 20 === 0) {
-        console.log(`  ${i + leads.length}/${scoped.length} угод · контактів ${seen.size} · телефонів ${phonesWritten}`);
+        // Курсор друкуємо ЗАВЖДИ: без нього рядок прогресу каже «скільки», але не «звідки
+        // продовжити», і вбитий прогін доводиться починати спочатку.
+        const cursor = scoped[Math.min(i + batch, scoped.length - 1)];
+        console.log(`  ${i + leads.length}/${scoped.length} угод · контактів ${seen.size} · телефонів ${phonesWritten} · курсор ${cursor}`);
       }
     }
 
