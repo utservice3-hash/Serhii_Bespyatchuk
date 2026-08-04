@@ -56,6 +56,7 @@ import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
+import { syncCalls } from "./jobs/syncCalls.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
@@ -418,6 +419,10 @@ cron.schedule("5 * * * *", () => {
 // Щогодини (:35) + старт. Порожній Auth-key → джоба сама себе пропускає.
 cron.schedule("35 * * * *", () => {
   void runJob("syncRingostatCalls", () => syncRingostatCalls());
+  // ☎️ ПОКЛИКОВІ дзвінки — ОКРЕМА джоба. Агрегат «Статистик» вище лишається як є:
+  // домішати сюди запис 580 тис. рядків означало б, що падіння дзвінків валить і
+  // цифру статистик. Вікно 3 год із запасом перекриває годинний тік.
+  void runJob("syncCalls", () => syncCalls(3));
 });
 
 // Готівка = приход (не бюджет). Легкий фетч приходу по готівкових 142-угодах
@@ -568,6 +573,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["syncLeadgenRegistry", () => syncLeadgenRegistry()],
   ["syncFirstTouch", () => syncFirstTouch()],
   ["syncRingostatCalls", () => syncRingostatCalls()],
+  ["syncCalls", () => syncCalls(3)],
   ["syncCashIncome", () => syncCashIncome()],
   ["runDataReconciliation", () => runDataReconciliation()],
   ["syncKommo", () => (isKommoPaused() ? Promise.resolve() : syncKommo())],

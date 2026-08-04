@@ -390,6 +390,53 @@ ALTER TABLE tasks ADD CONSTRAINT tasks_reactivation_close_reason CHECK (
   task_type <> 'reactivation_client' OR status <> 'done' OR length(btrim(coalesce(close_reason,''))) > 0
 );
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ДЗВІНКИ RINGOSTAT (покликові) — окремо від агрегату «Статистик»
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ⚠️ Наявна джоба `syncRingostatCalls` рахує ЛІЧИЛЬНИК по тімлідах у
+-- `statistics_values` і лишається як є. Тут — самі дзвінки, покликово.
+--
+-- 🔒 Про `recording`: це прямий URL кабінету Ringostat, і він відкривається БЕЗ
+-- логіна (перевірено власником в інкогніто 04.08.2026). Ми цього не контролюємо —
+-- поведінка боку Ringostat. Проксі НЕ будуємо (створював би ілюзію захисту).
+-- Деталі й наслідки — `docs/RINGOSTAT_CALLS.md`.
+CREATE TABLE IF NOT EXISTS ringostat_calls (
+  uniqueid      TEXT PRIMARY KEY,          -- ключ Ringostat; унікальний (перевірено на 48 713)
+  calldate      TIMESTAMPTZ NOT NULL,
+  call_type     TEXT NOT NULL,             -- in | transitin | out | transitout
+  disposition   TEXT,                      -- ANSWERED | VOICEMAIL | BUSY | NO ANSWER
+  billsec       INTEGER NOT NULL DEFAULT 0,
+  duration      INTEGER NOT NULL DEFAULT 0,
+  -- СИРІ значення лежать поруч із нормалізованим номером — той самий принцип, що
+  -- `client_key_raw`: нормалізацію можна переграти без повторного бекфілу.
+  caller        TEXT,
+  dst           TEXT,
+  n_alias       TEXT,
+  recording     TEXT,
+  employee_fio  TEXT,                      -- NULL у ~20% → на екрані «менеджер невідомий»
+  manager_id    INTEGER REFERENCES managers(id),  -- NULL = ПІБ немає АБО не змапився
+  client_phone  TEXT,                      -- нормалізований номер КЛІЄНТА (не наш)
+  client_key    TEXT,                      -- канонічний ключ; NULL = не звʼязалось
+  synced_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_rc_client_key ON ringostat_calls(client_key, calldate DESC) WHERE client_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, calldate DESC);
+CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);
+CREATE INDEX IF NOT EXISTS idx_rc_manager    ON ringostat_calls(manager_id, calldate DESC) WHERE manager_id IS NOT NULL;
+
+-- Телефони контактів Kommo. 🔴 До цієї таблиці телефонів у базі НЕ БУЛО ВЗАГАЛІ:
+-- `deal_contacts` зберігає лише contact_id, а номер існував тільки як `client_key`
+-- фізособи. Без неї звʼязати дзвінок із клієнтом нічим.
+CREATE TABLE IF NOT EXISTS contact_phones (
+  contact_id  BIGINT NOT NULL,
+  phone       TEXT   NOT NULL,             -- нормалізований (`utils/phone.ts`)
+  raw_phone   TEXT,                        -- як віддав Kommo — щоб переграти нормалізацію
+  is_main     BOOLEAN NOT NULL DEFAULT false,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (contact_id, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_contact_phones_phone ON contact_phones(phone);
+
 -- Monthly goals / objectives a team lead (or КВП) sets for a month — a
 -- high-level goals tracker separate from the numeric plans. Team-lead → own
 -- team (team_id), admin → team_id NULL (department-wide) or a chosen team.
