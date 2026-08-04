@@ -62,8 +62,8 @@ function Tile({ title, value, sub, tone }: { title: string; value: string; sub?:
  * платником.
  */
 function TwoDates({ c }: { c: ReactivationRow }) {
-  const callTone = c.lastCallDays == null ? "#9ca3af"
-    : c.lastCallDays <= 30 ? "#166534" : c.lastCallDays <= 90 ? "#b45309" : "#b91c1c";
+  const callTone = c.lastTalkDays == null ? "#9ca3af"
+    : c.lastTalkDays <= 30 ? "#166534" : c.lastTalkDays <= 90 ? "#b45309" : "#b91c1c";
   return (
     <div style={{ lineHeight: 1.45 }}>
       <div>
@@ -78,25 +78,35 @@ function TwoDates({ c }: { c: ReactivationRow }) {
       </div>
       <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #e5e7eb" }}>
         <span style={{ fontSize: 10, letterSpacing: .3, textTransform: "uppercase", color: "#6b7280" }}>
-          останній дзвінок
+          останній контакт
         </span>
-        {c.lastCall == null ? (
+        {c.lastTalk == null ? (
           // Порожньо — це відповідь, а не діра: звʼязка дзвінок→клієнт іде через
           // телефон контакту Kommo і покриває не всіх. Мовчазний прочерк читався
           // б як «не дзвонили», а це різні твердження.
-          <div style={{ color: "#9ca3af" }}>дзвінків не знайдено</div>
+          <div style={{ color: "#9ca3af" }}>розмов не знайдено</div>
         ) : (
           <>
             <div>
-              <b style={{ color: callTone }}>{c.lastCall}</b>
-              <span style={{ color: "#6b7280" }}> · {c.lastCallDays} дн. тому</span>
+              <b style={{ color: callTone }}>{c.lastTalk}</b>
+              <span style={{ color: "#6b7280" }}> · {c.lastTalkDays} дн. тому</span>
             </div>
             <div style={{ fontSize: 10, color: "#9ca3af" }}>
-              {c.lastCallDirection === "out" ? "вихідний" : "вхідний"}
-              {c.lastCallAnswered === false && <span style={{ color: "#b45309" }}> · без відповіді</span>}
+              {c.lastTalkDirection === "out" ? "вихідний" : "вхідний"} · розмова
               {" · довідка, на стан не впливає"}
             </div>
           </>
+        )}
+        {/* 🔴 СПРОБИ — ОКРЕМО ВІД КОНТАКТУ, і саме тому окремим рядком. «Набирав
+            тричі й не додзвонився» — це робота менеджера, а не контакт із
+            клієнтом; в одній цифрі вони збрехали б про контакт, якого не було. */}
+        {c.attempts > 0 && (
+          <div style={{ fontSize: 11, color: "#b45309", marginTop: 3 }}
+            title="дзвінки без відповіді ПІСЛЯ останньої розмови (якщо розмов не було — усі)">
+            📞 спроб {c.attempts}
+            {c.lastAttempt && <span style={{ color: "#92400e" }}> · остання {c.lastAttempt} ({c.lastAttemptDays} дн.)</span>}
+            <div style={{ fontSize: 10, color: "#9ca3af" }}>без відповіді — контакту ще не було</div>
+          </div>
         )}
       </div>
     </div>
@@ -608,8 +618,9 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
         <div style={{ margin: "0 14px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8,
                       padding: "8px 11px", fontSize: 12, color: "#1e3a8a", lineHeight: 1.55 }}>
           <b>Стан — від останньої ОПЛАТИ:</b> сплячий {data.thresholds.sleepingDays}+ днів,
-          втрачений {data.thresholds.lostDays}+ днів. Дзвінки на стан <b>не впливають</b> —
-          вони показані поруч як довідка, щоб було видно, чи є контакт із клієнтом, який не платить.
+          втрачений {data.thresholds.lostDays}+ днів. Дзвінки на стан <b>не впливають</b> — вони довідка.
+          <b> Контакт = РОЗМОВА</b> (дзвінок, що відбувся); недодзвони показані окремо як
+          <b> спроби</b> — щоб було видно, що менеджер працює, навіть коли контакту ще не було.
         </div>
 
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
@@ -617,7 +628,7 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
             <tr>
               <th style={S.th}>Клієнт</th><th style={S.th}>Стан</th><th style={S.th}>Цінність</th>
               <th style={S.th}>Задача</th>
-              <th style={S.th}>Оплата · дзвінок</th>
+              <th style={S.th}>Оплата · контакт</th>
               <th style={S.th}>Причина (при закритті)</th>
             </tr>
           </thead>

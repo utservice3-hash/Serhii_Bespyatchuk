@@ -214,7 +214,8 @@ export async function reclassifyAdChannel(): Promise<number> {
   const res = await pool.query(
     `WITH fc AS (
        SELECT d.kommo_id, d.client_key, d.created_at_kommo, d.lead_channel,
-              d.lead_generator, d.utm_source, d.client_source, d.traf_type
+              d.lead_generator, d.utm_source, d.client_source, d.traf_type,
+              d.utm_medium, d.utm_campaign
          FROM deals d
         WHERE d.pipeline_id = ANY($1) AND d.client_key IS NOT NULL
      ),
@@ -243,11 +244,27 @@ export async function reclassifyAdChannel(): Promise<number> {
      ),
      calc AS (
        SELECT f.kommo_id, f.lead_channel, f.lead_generator, f.utm_source, f.client_source, f.traf_type,
+              f.utm_medium, f.utm_campaign,
               -- ПОСТІЙНИЙ лідоген-слід САМОГО ліда (leadgen_touch, джойн по kommo_id
               -- 1:1). Deal-specific сигнал: якщо цей лід передав лідоген — це лідоген,
               -- незалежно від того, що реєстр уже перезаписав вікно. БЕЗ client_key
               -- (уникаємо колізії порожніх ключів типу «названиенеуказано»).
               EXISTS (SELECT 1 FROM leadgen_touch lt WHERE lt.lead_kommo_id = f.kommo_id) AS has_touch,
+              -- 🟢 ПРАВИЛО ВЛАСНИКА 04.08.2026: рекламний дотик = звернення З UTM-МІТКОЮ
+              -- АБО від НОВОГО клієнта. Пропущений дзвінок / звернення постійного —
+              -- НЕ реклама. Раніше гілка adq вважала рекламним дотиком БУДЬ-ЯКИЙ лід
+              -- Кваліфікації, тож дзвінок постійного клієнта, за яким реклами не було
+              -- взагалі, потрапляв у знаменник конверсії реклами й у «ціну ліда».
+              -- ⚠️ COALESCE на traf_type ОБОВʼЯЗКОВИЙ: умова traf_type = cpc при NULL дає
+              -- NULL, і рядок не потрапив би в жодну гілку. На замірі це вже коштувало
+              -- 159 угод, що тихо зникли з обох боків підсумку.
+              (f.utm_source IS NOT NULL OR f.utm_medium IS NOT NULL
+               OR f.utm_campaign IS NOT NULL OR COALESCE(f.traf_type, '') = 'cpc') AS has_tag,
+              EXISTS (
+                SELECT 1 FROM deals pr
+                  JOIN pipeline_stage_map p2 ON p2.pipeline_id = pr.pipeline_id AND p2.status_id = pr.status_id
+                 WHERE pr.client_key = f.client_key AND p2.funnel_stage = 'paid'
+                   AND pr.created_at_kommo < f.created_at_kommo) AS is_repeat,
               (SELECT MAX(lg.t) FROM lg
                 WHERE lg.client_key = f.client_key
                   AND lg.t <= f.created_at_kommo + interval '3 days') AS lg_t,
@@ -266,9 +283,15 @@ export async function reclassifyAdChannel(): Promise<number> {
                   -- ПЕРШИМ; deal-specific слід не з'їдає рекламу через client_key).
                   WHEN has_touch THEN 'leadgen'
                   WHEN lg_t IS NOT NULL AND (ad_t IS NULL OR lg_t >= ad_t) THEN 'leadgen'
-                  WHEN ad_t IS NOT NULL AND COALESCE(client_source, '') NOT ILIKE '%реактив%' THEN 'ad'
+                  -- 🟢 ОБИДВІ рекламні гілки тепер під гейтом власника
+                  -- (мітка АБО новий клієнт). Ставимо його ОКРЕМИМ доданком, а не
+                  -- всередині кожної умови: інакше через півроку хтось додасть третю
+                  -- гілку й забуде гейт, і правило тихо перестане діяти.
+                  WHEN ad_t IS NOT NULL AND COALESCE(client_source, '') NOT ILIKE '%реактив%'
+                       AND (has_tag OR NOT is_repeat) THEN 'ad'
                   WHEN (client_source = ANY($4) OR traf_type = 'cpc' OR utm_source IS NOT NULL)
-                       AND COALESCE(client_source, '') NOT ILIKE '%реактив%' THEN 'ad'
+                       AND COALESCE(client_source, '') NOT ILIKE '%реактив%'
+                       AND (has_tag OR NOT is_repeat) THEN 'ad'
                   ELSE 'other'
                 END AS target
            FROM calc

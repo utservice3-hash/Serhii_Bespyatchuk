@@ -103,22 +103,32 @@ export interface ReactivationClient {
   lastPaid: string | null;
   daysSince: number;
   /**
-   * 🔴 ДРУГА ДАТА — ДОВІДКА, А НЕ ДЖЕРЕЛО СТАНУ. Останній дзвінок по КАНОНІЧНОМУ
-   * ключу (`ringostat_calls.client_key`). Стан рахується ВИКЛЮЧНО від оплати
-   * (`daysSince`), і додавати сюди контакт не можна: «дзвонили вчора» не робить
-   * клієнта активним, він так само не платить. Але без цієї дати екран не
-   * пояснював, ЧОМУ клієнт із живим контактом стоїть у сплячих, — і читався як
-   * поломка. Показуємо обидві, підписуємо, яка з них рахує.
+   * 🔴 ДРУГА ДАТА — ДОВІДКА, А НЕ ДЖЕРЕЛО СТАНУ. Стан рахується ВИКЛЮЧНО від
+   * оплати (`daysSince`): «розмовляли вчора» не робить клієнта активним, він так
+   * само не платить. Але без цієї дати екран не пояснював, ЧОМУ клієнт із живим
+   * контактом стоїть у сплячих, — і читався як поломка.
    *
-   * `null` = дзвінків не знайдено. Це чесна відповідь, а не порожнє місце:
-   * звʼязка дзвінок→клієнт іде через телефон контакту Kommo і покриває не всіх.
+   * 🟢 КОНТАКТ = РОЗМОВА (`billsec > 0`), рішення власника 04.08.2026. Було: будь-який
+   * дзвінок, включно з недодзвоном. Це два РІЗНІ факти, і змішувати їх не можна:
+   * «набирав тричі й не додзвонився» — це робота менеджера, а не контакт із
+   * клієнтом. Показавши їх однаково, ми б звітували про контакт, якого не було.
+   *
+   * `null` = розмов не знайдено. Чесна відповідь, а не порожнє місце: звʼязка
+   * дзвінок→клієнт іде через телефон контакту Kommo і покриває не всіх.
    */
-  lastCall: string | null;
-  lastCallDays: number | null;
-  /** `billsec > 0` — розмова відбулась; інакше це пропущений/недодзвін. */
-  lastCallAnswered: boolean | null;
+  lastTalk: string | null;
+  lastTalkDays: number | null;
   /** `in` — клієнт дзвонив нам, `out` — ми йому. */
-  lastCallDirection: "in" | "out" | null;
+  lastTalkDirection: "in" | "out" | null;
+  /**
+   * СПРОБИ — окремо від контакту: дзвінки без відповіді ПІСЛЯ останньої розмови
+   * (а якщо розмови не було жодної — усі). Саме цим видно, що менеджер працює,
+   * хоча контакту ще немає. Складати зі `lastTalk` в одну цифру ЗАБОРОНЕНО —
+   * це відповідь на інше питання.
+   */
+  attempts: number;
+  lastAttempt: string | null;
+  lastAttemptDays: number | null;
   state: ClientState;
   value: number;
   seasonal: boolean;
@@ -157,8 +167,8 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
     team_id: number | null; team_name: string | null;
     pinned_manager_id: number | null; seasonal: boolean | null; seasonal_note: string | null;
     revenue_after_task: string | null;
-    last_call: string | null; last_call_days: string | null;
-    last_call_answered: boolean | null; last_call_type: string | null;
+    last_talk: string | null; last_talk_days: string | null; last_talk_type: string | null;
+    attempts: string | null; last_attempt: string | null; last_attempt_days: string | null;
   }>(
     `WITH paid AS (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
@@ -186,9 +196,12 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
             (SELECT COALESCE(SUM(p2.price),0) FROM paid p2
               WHERE p2.client_key = a.client_key AND tk.created_at IS NOT NULL
                 AND p2.closed_at_kommo > tk.created_at) AS revenue_after_task,
-            to_char(lc.calldate ${KYIV}, 'YYYY-MM-DD') AS last_call,
-            (CURRENT_DATE - (lc.calldate ${KYIV})::date)::int AS last_call_days,
-            (lc.billsec > 0) AS last_call_answered, lc.call_type AS last_call_type
+            to_char(lt.calldate ${KYIV}, 'YYYY-MM-DD') AS last_talk,
+            (CURRENT_DATE - (lt.calldate ${KYIV})::date)::int AS last_talk_days,
+            lt.call_type AS last_talk_type,
+            at.n AS attempts,
+            to_char(at.last_at ${KYIV}, 'YYYY-MM-DD') AS last_attempt,
+            (CURRENT_DATE - (at.last_at ${KYIV})::date)::int AS last_attempt_days
        FROM agg a
        JOIN primary_mgr pm ON pm.client_key = a.client_key
        -- 🔴 БЕЗ умови AND NOT lo.hidden У ЦЬОМУ JOIN — І ЦЕ НЕ КОСМЕТИКА.
@@ -206,15 +219,23 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
           WHERE d2.client_key = a.client_key AND d2.client_name IS NOT NULL
           ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
        ) nm ON true
-       -- Останній дзвінок по канонічному ключу. Індекс idx_rc_client_key
-       -- (client_key, calldate DESC) робить це одним читанням на клієнта.
-       -- LEFT JOIN — саме тому, що «дзвінків немає» це РЕЗУЛЬТАТ, а не привід
-       -- викинути клієнта зі списку реактивації.
+       -- 🟢 КОНТАКТ = РОЗМОВА (billsec > 0), рішення власника 04.08.2026.
+       -- Індекс idx_rc_client_key (client_key, calldate DESC) робить це одним
+       -- читанням на клієнта. LEFT JOIN — бо «розмов немає» це РЕЗУЛЬТАТ, а не
+       -- привід викинути клієнта зі списку реактивації.
        LEFT JOIN LATERAL (
-         SELECT rc.calldate, rc.billsec, rc.call_type FROM ringostat_calls rc
-          WHERE rc.client_key = a.client_key
+         SELECT rc.calldate, rc.call_type FROM ringostat_calls rc
+          WHERE rc.client_key = a.client_key AND rc.billsec > 0
           ORDER BY rc.calldate DESC LIMIT 1
-       ) lc ON true
+       ) lt ON true
+       -- СПРОБИ — недодзвони ПІСЛЯ останньої розмови (без розмови — всі).
+       -- Окремим підзапитом, бо це відповідь на ІНШЕ питання: не «чи є контакт»,
+       -- а «чи його добиваються». Складати з розмовою в одну цифру заборонено.
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS n, MAX(rc.calldate) AS last_at FROM ringostat_calls rc
+          WHERE rc.client_key = a.client_key AND rc.billsec = 0
+            AND (lt.calldate IS NULL OR rc.calldate > lt.calldate)
+       ) at ON true
       WHERE COALESCE(lo.hidden, false) = false ${cond}`, p)).rows;
 
   return rows.map((r) => {
@@ -234,11 +255,13 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
       lifetimeRevenue: revenue,
       lastPaid: r.last_paid,
       daysSince: days,
-      lastCall: r.last_call,
-      lastCallDays: r.last_call_days == null ? null : Number(r.last_call_days),
-      lastCallAnswered: r.last_call_answered ?? null,
-      lastCallDirection: r.last_call_type == null ? null
-        : (r.last_call_type === "out" || r.last_call_type === "transitout" ? "out" : "in"),
+      lastTalk: r.last_talk,
+      lastTalkDays: r.last_talk_days == null ? null : Number(r.last_talk_days),
+      lastTalkDirection: r.last_talk_type == null ? null
+        : (r.last_talk_type === "out" || r.last_talk_type === "transitout" ? "out" : "in"),
+      attempts: Number(r.attempts ?? 0),
+      lastAttempt: r.last_attempt,
+      lastAttemptDays: r.last_attempt_days == null ? null : Number(r.last_attempt_days),
       // 🔴 СТАН — ВІД ОПЛАТИ. `lastCall` сюди не входить НАВМИСНО (див. поле вище).
       state: stateOf(days),
       value: valueScore(revenue, days),

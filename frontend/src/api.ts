@@ -2362,11 +2362,13 @@ export interface ReactivationRow {
   teamId: number | null; teamName: string | null;
   orders: number; lifetimeRevenue: number; lastPaid: string | null; daysSince: number;
   /**
-   * Останній дзвінок по канонічному ключу — ДОВІДКА. Стан рахується від оплати
-   * (`daysSince`), не звідси. `null` = дзвінків не знайдено.
+   * КОНТАКТ = РОЗМОВА (`billsec > 0`) по канонічному ключу — ДОВІДКА. Стан
+   * рахується від оплати (`daysSince`), не звідси. `null` = розмов не знайдено.
+   * Недодзвони — окремо в `attempts`, складати з розмовою заборонено.
    */
-  lastCall: string | null; lastCallDays: number | null;
-  lastCallAnswered: boolean | null; lastCallDirection: "in" | "out" | null;
+  lastTalk: string | null; lastTalkDays: number | null;
+  lastTalkDirection: "in" | "out" | null;
+  attempts: number; lastAttempt: string | null; lastAttemptDays: number | null;
   state: ClientState; value: number; seasonal: boolean; seasonalNote: string | null;
   taskId: number | null; taskStatus: string | null; taskAssignee: string | null;
   taskDeadline: string | null; closeReason: string | null;
