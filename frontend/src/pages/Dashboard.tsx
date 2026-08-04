@@ -202,6 +202,7 @@ export function Dashboard() {
 
   const [leadgenTeamId, setLeadgenTeamId] = useState<number | "">("");
   const [leadgenData, setLeadgenData] = useState<LeadgenGroup[]>([]);
+  const [leadgenNote, setLeadgenNote] = useState<string>("");
   const [leadgenLoading, setLeadgenLoading] = useState(false);
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
@@ -606,8 +607,8 @@ export function Dashboard() {
       from: dateRange.from || undefined,
       to: dateRange.to || undefined,
     })
-      .then(setLeadgenData)
-      .catch(() => setLeadgenData([]))
+      .then((r) => { setLeadgenData(r.groups); setLeadgenNote(`${r.unit} · ${r.dimensionNote}`); })
+      .catch(() => { setLeadgenData([]); setLeadgenNote(""); })
       .finally(() => setLeadgenLoading(false));
   }, [section, leadgenTeamId, auth, dateRange]);
 
@@ -902,6 +903,14 @@ export function Dashboard() {
 
           <LeadgenRegularsCard />
 
+          {/* 🔴 ПІДПИС ВІД СЕРВЕРА, не зашитий тут: одиниця лічби (передача) і
+              розріз (менеджер-ОТРИМУВАЧ) змінились разом із джерелом. Стара назва
+              над новою цифрою — рівно та підміна, від якої ми й ішли. */}
+          {leadgenNote && (
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
+              Одиниця лічби: {leadgenNote}.
+            </p>
+          )}
           {leadgenLoading ? (
             <p className="loading-text">Завантаження...</p>
           ) : leadgenData.length === 0 ? (
@@ -923,7 +932,12 @@ export function Dashboard() {
                     {group.teamName}
                     {!group.isLeadgen && " (комерційний відділ)"}
                     <span style={{ fontSize: 13, fontWeight: 400, color: "var(--text-muted)", marginLeft: 10 }}>
-                      {group.leads.toLocaleString("uk-UA")} лідів · {group.reachedPaid} оплат
+                      {/* 🔴 ПІДПИС ЧЕСНИЙ: одиниця лічби — ПЕРЕДАЧА заявки, а не
+                          унікальний лід (рішення власника 04.08.2026). Без цього
+                          підпису 358 і 260 читались би як та сама цифра. */}
+                      {group.leads.toLocaleString("uk-UA")} передач
+                      {group.uniqueLeads !== group.leads && ` (унікальних лідів ${group.uniqueLeads})`}
+                      {" · "}{group.reachedPaid} оплат
                     </span>
                   </h2>
                   <div className="chart-grid">
@@ -932,7 +946,9 @@ export function Dashboard() {
                         <h2 className="chart-title">{g.managerName}</h2>
                         <div className="kpi-grid">
                           <div className="kpi-card">
-                            <span className="kpi-label">Лідів</span>
+                            <span className="kpi-label" title="рядки реєстру бота: кожна передача заявки менеджеру">
+                              Передач
+                            </span>
                             <span className="kpi-value">{g.leads.toLocaleString("uk-UA")}</span>
                           </div>
                           <div className="kpi-card">
@@ -948,7 +964,7 @@ export function Dashboard() {
                           <thead>
                             <tr>
                               <th>Джерело клієнта</th>
-                              <th>Лідів</th>
+                              <th>Передач</th>
                               <th>Оплат</th>
                               <th>Конверсія</th>
                             </tr>

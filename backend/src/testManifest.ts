@@ -25,6 +25,7 @@ export const MANIFEST_FILES: string[] = [
   "core/clientCard.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
+  "core/adTouch.test.js",
   "routes/clientScreens.test.js",
   "jobs/calls.test.js",
   "utils/phone.test.js",
@@ -219,6 +220,8 @@ export const MANIFEST_TESTS: string[] = [
   "#25e «ПРИБРАТИ З ПОСТІЙНИХ» СПРАВДІ ПРИБИРАЄ (і повертає назад)",
   // core/loyaltyOverride.test.ts — «прибрати з постійних» не має знімати відповідального
   "#32 UPSERT оверрайду: передані поля — пишуться, НЕпередані — лишаються",
+  // core/adTouch.test.ts — гейт рекламного дотику на ОБОХ шляхах
+  "#33 РЕКЛАМНИЙ ДОТИК: мітка АБО новий клієнт — на ОБОХ шляхах",
   "#26 НОРМАЛІЗАЦІЯ ТЕЛЕФОНУ — один вигляд із усіх форматів CRM",
   "#26b НОМЕР КЛІЄНТА: вхідні — caller, вихідні — dst",
   "#27 ДЗВІНКИ: запис, дедуп батча, звʼязка номер→клієнт",

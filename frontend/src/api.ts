@@ -122,7 +122,9 @@ export interface LeadGenerator {
   managerId: number;
   managerName: string;
   teamName: string;
+  /** ПЕРЕДАЧІ заявок менеджеру, не унікальні ліди. */
   leads: number;
+  uniqueLeads: number;
   reachedPaid: number;
   conversion: number;
   bySource: LeadgenSource[];
@@ -131,21 +133,29 @@ export interface LeadGenerator {
 export interface LeadgenGroup {
   teamName: string;
   isLeadgen: boolean;
+  /** ПЕРЕДАЧІ (рядки реєстру бота) — головна цифра, рішення власника 04.08.2026. */
   leads: number;
+  /** Довідково: скільки з них РІЗНИХ лідів. Складати з `leads` не можна. */
+  uniqueLeads: number;
   reachedPaid: number;
   generators: LeadGenerator[];
 }
 
+export interface LeadgenResp {
+  groups: LeadgenGroup[];
+  /** Одиниця лічби — передача; підпис приходить із сервера, не зашитий у фронт. */
+  unit: string;
+  /** Розріз: менеджер-ОТРИМУВАЧ (імені лідогенератора в реєстрі немає). */
+  dimensionNote: string;
+}
 export async function fetchLeadgen(params: {
   managerId?: number;
   teamId?: number;
   from?: string;
   to?: string;
-}): Promise<LeadgenGroup[]> {
-  const { data } = await api.get<{ groups: LeadgenGroup[] }>("/dashboard/leadgen", {
-    params,
-  });
-  return data.groups;
+}): Promise<LeadgenResp> {
+  const { data } = await api.get<LeadgenResp>("/dashboard/leadgen", { params });
+  return data;
 }
 
 export interface ExecutiveOverview {
@@ -244,7 +254,14 @@ export async function fetchDataQuality(): Promise<{ checks: DataQualityCheck[]; 
 }
 
 export interface LeadQuality {
+  /**
+   * 🔴 УНІКАЛЬНІ КЛІЄНТИ в періоді (рішення власника 04.08.2026): один клієнт =
+   * один цільовий лід. Сира кількість угод — окремо у `targetLeadDeals`, щоб
+   * різницю було видно, а не щоб її склали. Підпис бере `targetLeadsNote`.
+   */
   targetLeads: number;
+  targetLeadDeals: number;
+  targetLeadsNote: string;
   nonTargetLeads: number | null;
   adBudgetPlan: number;
   adBudgetFact: number;

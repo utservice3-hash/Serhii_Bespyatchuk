@@ -74,8 +74,39 @@ export const rnkTeamSql = (alias = "m") =>
  * 🔴 Канонічний адДілSQL — раніше дублювався в `routes/dashboard.ts:26` та
  * `statistics/computeAuto.ts:14`; при міграції (КРОК 9) обидва беруть звідси.
  */
+/**
+ * 🎯 ГЕЙТ РЕКЛАМНОГО ДОТИКУ — ОДНЕ ПРАВИЛО НА ВСІ ШЛЯХИ (рішення власника 04.08.2026).
+ *
+ * Рекламним вважається звернення **з UTM-МІТКОЮ АБО від НОВОГО клієнта**.
+ * Пропущений дзвінок і звернення постійного клієнта — НЕ реклама: реклами там
+ * могло не бути взагалі, а в знаменник конверсії та в «ціну ліда» вони йшли
+ * нарівні з платним трафіком.
+ *
+ * 🔴 ЧОМУ ТУТ, А НЕ ЛИШЕ В `reclassifyAdChannel`. Шляхів у «рекламу» ДВА:
+ * `lead_channel='ad'` (його ставить джоба) і `client_source ∈ adSources` (він
+ * перевіряється прямо тут). Накривши лише перший, ми лишили б другий обхідним —
+ * і правило власника діяло б через раз, залежно від того, яким шляхом угода
+ * зайшла. Тому гейт стоїть у ЯДРІ й множиться на весь предикат.
+ *
+ * ⚠️ `COALESCE(traf_type,'')` ОБОВʼЯЗКОВИЙ: `traf_type = 'cpc'` при NULL дає NULL,
+ * і рядок не потрапляє В ЖОДНУ гілку. На замірі це вже коштувало 159 угод, що
+ * тихо зникли з обох боків підсумку.
+ */
+export const AD_TOUCH_GATE = `(
+  (d.utm_source IS NOT NULL OR d.utm_medium IS NOT NULL OR d.utm_campaign IS NOT NULL
+   OR COALESCE(d.traf_type, '') = 'cpc')
+  OR NOT EXISTS (
+    SELECT 1 FROM deals pr
+      JOIN pipeline_stage_map psm_ad ON psm_ad.pipeline_id = pr.pipeline_id
+                                    AND psm_ad.status_id = pr.status_id
+     WHERE pr.client_key = d.client_key AND d.client_key IS NOT NULL
+       AND psm_ad.funnel_stage = 'paid' AND pr.created_at_kommo < d.created_at_kommo)
+)`;
+
 export const adDealSql = (srcRef: string): string =>
-  `((d.client_source = ANY(${srcRef}) OR d.lead_channel = 'ad') AND COALESCE(d.client_source, '') NOT ILIKE '%реактив%')`;
+  `((d.client_source = ANY(${srcRef}) OR d.lead_channel = 'ad')
+    AND COALESCE(d.client_source, '') NOT ILIKE '%реактив%'
+    AND ${AD_TOUCH_GATE})`;
 
 /**
  * СЕГМЕНТ УГОДИ (не глобальна мітка клієнта), пріоритет-партиція (GLOSSARY §9):

@@ -105,105 +105,104 @@ dashboardRouter.get("/funnel", async (req, res) => {
  * in the sales funnel (matched by client_key). Broken down by client source
  * (Холодна база, Реактивація, Google, …) and optionally date-scoped.
  */
-const LEADGEN_PIPELINES = [8921936, 7337048, 8921948];
-
+/**
+ * 🎯 ЛІДОГЕНЕРАЦІЯ — ЛІД = РЯДОК РЕЄСТРУ БОТА (рішення власника 04.08.2026).
+ *
+ * 🔴 ЩО ЗМІНИЛОСЬ І ЧОМУ. Було: `COUNT(*)` угод у воронках Продзвін+Реактивація
+ * за датою СТВОРЕННЯ. Це рахувало не передані заявки, а всі угоди, що будь-коли
+ * завелись у цих воронках, — черв. 3 198 і лип. 12 599 проти 358/575 передач.
+ * Тобто екран показував іншу сутність під назвою «лід».
+ *
+ * Стало: канонічне визначення БОТА лідогенератора — передача заявки менеджеру.
+ * Джерело — `leadgen_registry` (Google-таблиця бота, синк `syncLeadgenRegistry`),
+ * уже оголошена в проєкті «ДЖЕРЕЛОМ ПРАВДИ для переданих заявок».
+ *
+ * 🔴 ЧОМУ НЕ З `deal_stage_events`, як просив промт: події входу в
+ * «НОВА ЗАЯВКА ВІД ЛІДОГЕНЕРАТОРА» (69716164) у Kommo практично НЕМАЄ —
+ * заміряно 2 із 831 ліда реєстру за черв.+лип. (0.24%), при тому що подій тієї
+ * самої воронки за період тисячі. Реалізація «з подій» рахувала б 2 замість 831
+ * і виглядала б робочою. Деталі — `docs/AD_LEADS_RECON.md` §6.
+ *
+ * 🔴 ОДИНИЦЯ ЛІЧБИ — ПЕРЕДАЧА, а не унікальний лід (рішення власника): один лід,
+ * переданий двічі, це дві передачі. `uniqueLeads` віддаємо ПОРУЧ як довідку —
+ * щоб різницю було видно, а не щоб її складали.
+ *
+ * 🔴 ФІЛЬТР ПОВТОРНИХ ПРОХОДІВ НЕ ДУБЛЮЄМО. За LOGIC.md бота (слова власника)
+ * для переходів із робочих етапів кваліфікації «сповіщення й запис НЕ йдуть» —
+ * тобто SKIP застосований ДО запису в реєстр. Накладати його вдруге тут означало
+ * б різати те, чого в даних уже немає, і мовчки занижувати.
+ */
 dashboardRouter.get("/leadgen", async (req, res) => {
   const auth = req.auth!;
   let managerId = req.query.managerId ? Number(req.query.managerId) : null;
   let teamId = req.query.teamId ? Number(req.query.teamId) : null;
   const from = (req.query.from as string) ?? null;
   const to = (req.query.to as string) ?? null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") { teamId = auth.teamId; }
 
-  if (auth.role === "manager") {
-    managerId = auth.managerId;
-    teamId = null;
-  } else if (auth.role === "team_lead") {
-    teamId = auth.teamId;
-  }
-
-  const conditions: string[] = [`d.pipeline_id = ANY($1)`];
-  const params: unknown[] = [LEADGEN_PIPELINES];
-  if (managerId) {
-    params.push(managerId);
-    conditions.push(`d.manager_id = $${params.length}`);
-  }
-  if (teamId) {
-    params.push(teamId);
-    conditions.push(`m.team_id = $${params.length}`);
-  }
-  if (from) {
-    params.push(from);
-    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`);
-  }
-  if (to) {
-    params.push(to);
-    conditions.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`);
-  }
-  const where = `WHERE ${conditions.join(" AND ")}`;
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const params: unknown[] = [];
+  const conds: string[] = [];
+  if (from) { params.push(from); conds.push(`(lr.transferred_at ${K})::date >= $${params.length}`); }
+  if (to) { params.push(to); conds.push(`(lr.transferred_at ${K})::date <= $${params.length}`); }
+  // Скоуп — по ЗМАПОВАНОМУ менеджеру, а не по текстовій назві команди з аркуша:
+  // назва в таблиці бота може розійтись із нашою, і тімлід тоді побачив би чуже.
+  if (managerId) { params.push(managerId); conds.push(`m.id = $${params.length}`); }
+  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
 
   const result = await pool.query<{
-    manager_id: number;
-    manager_name: string;
-    team_name: string;
-    client_source: string;
-    leads: string;
-    reached_paid: string;
+    manager_id: number | null; manager_name: string; team_name: string;
+    client_source: string; leads: string; unique_leads: string; reached_paid: string;
   }>(
     `WITH paid_clients AS (
-       SELECT DISTINCT d.client_key
-       FROM deals d
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-       WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+       SELECT DISTINCT d.client_key FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
      )
-     SELECT d.manager_id,
-            m.name AS manager_name,
-            COALESCE(t.name, 'Без команди') AS team_name,
+     SELECT m.id AS manager_id,
+            COALESCE(m.name, lr.manager_name, 'Не вказано') AS manager_name,
+            COALESCE(t.name, lr.team_name, 'Без команди') AS team_name,
             COALESCE(NULLIF(d.client_source, ''), 'Не вказано') AS client_source,
             COUNT(*) AS leads,
+            COUNT(DISTINCT lr.lead_id) AS unique_leads,
             COUNT(*) FILTER (WHERE d.client_key IN (SELECT client_key FROM paid_clients)) AS reached_paid
-     FROM deals d
-     JOIN managers m ON m.id = d.manager_id AND m.is_active
-     LEFT JOIN teams t ON t.id = m.team_id
-     ${where}
-     GROUP BY d.manager_id, m.name, t.name, COALESCE(NULLIF(d.client_source, ''), 'Не вказано')`,
+       FROM leadgen_registry lr
+       -- Лід реєстру → наша угода: назва джерела й клієнт живуть у deals.
+       -- LEFT JOIN — передача, чиєї угоди ми ще не бачили, НЕ має зникати з лічби:
+       -- це була б тиха втрата саме тих рядків, заради яких реєстр і заводили.
+       LEFT JOIN deals d ON d.kommo_id = lr.lead_id
+       LEFT JOIN managers m ON m.name = lr.manager_name
+       LEFT JOIN teams t ON t.id = m.team_id
+       ${where}
+      GROUP BY m.id, COALESCE(m.name, lr.manager_name, 'Не вказано'),
+               COALESCE(t.name, lr.team_name, 'Без команди'),
+               COALESCE(NULLIF(d.client_source, ''), 'Не вказано')`,
     params
   );
 
-  const byManager = new Map<
-    number,
-    {
-      managerId: number;
-      managerName: string;
-      teamName: string;
-      leads: number;
-      reachedPaid: number;
-      bySource: { source: string; leads: number; reachedPaid: number; conversion: number }[];
-    }
-  >();
-
+  type Gen = { managerId: number; managerName: string; teamName: string; leads: number;
+    uniqueLeads: number; reachedPaid: number;
+    bySource: { source: string; leads: number; reachedPaid: number; conversion: number }[] };
+  const byManager = new Map<string, Gen>();
   for (const row of result.rows) {
     const leads = Number(row.leads);
     const reached = Number(row.reached_paid);
-    let entry = byManager.get(row.manager_id);
+    // Ключ — ІМʼЯ, а не id: незмаплений лідогенератор (id = null) інакше злився б
+    // з усіма іншими незмапленими в один рядок «Не вказано».
+    const key = `${row.manager_id ?? "x"}|${row.manager_name}`;
+    let entry = byManager.get(key);
     if (!entry) {
-      entry = {
-        managerId: row.manager_id,
-        managerName: row.manager_name,
-        teamName: row.team_name,
-        leads: 0,
-        reachedPaid: 0,
-        bySource: [],
-      };
-      byManager.set(row.manager_id, entry);
+      entry = { managerId: row.manager_id ?? -1, managerName: row.manager_name,
+                teamName: row.team_name, leads: 0, uniqueLeads: 0, reachedPaid: 0, bySource: [] };
+      byManager.set(key, entry);
     }
     entry.leads += leads;
+    entry.uniqueLeads += Number(row.unique_leads);
     entry.reachedPaid += reached;
-    entry.bySource.push({
-      source: row.client_source,
-      leads,
-      reachedPaid: reached,
-      conversion: leads > 0 ? Math.round((reached / leads) * 100) : 0,
-    });
+    entry.bySource.push({ source: row.client_source, leads, reachedPaid: reached,
+      conversion: leads > 0 ? Math.round((reached / leads) * 100) : 0 });
   }
 
   const allGenerators = Array.from(byManager.values())
@@ -214,8 +213,6 @@ dashboardRouter.get("/leadgen", async (req, res) => {
     }))
     .sort((a, b) => b.leads - a.leads);
 
-  // Group by team so lead-gen teams are clearly separated from the commercial
-  // department people who merely touched a Продзвін/Реактивація deal.
   const teamsMap = new Map<string, typeof allGenerators>();
   for (const g of allGenerators) {
     if (!teamsMap.has(g.teamName)) teamsMap.set(g.teamName, []);
@@ -227,12 +224,25 @@ dashboardRouter.get("/leadgen", async (req, res) => {
       teamName,
       isLeadgen: isLeadgenTeam(teamName),
       leads: gens.reduce((s, g) => s + g.leads, 0),
+      uniqueLeads: gens.reduce((s, g) => s + g.uniqueLeads, 0),
       reachedPaid: gens.reduce((s, g) => s + g.reachedPaid, 0),
       generators: gens,
     }))
     .sort((a, b) => Number(b.isLeadgen) - Number(a.isLeadgen) || b.leads - a.leads);
 
-  res.json({ generators: allGenerators, groups });
+  res.json({
+    generators: allGenerators, groups,
+    unit: "передача заявки менеджеру (рядок реєстру бота); «унікальних» — довідково",
+    /**
+     * 🔴 РОЗРІЗ ЗМІНИВСЯ РАЗОМ ІЗ ДЖЕРЕЛОМ, і це треба сказати вголос. Реєстр
+     * бота несе менеджера, ЯКОМУ передали заявку, — імені лідогенератора в ньому
+     * немає взагалі. Тому екран тепер відповідає на питання «хто СКІЛЬКИ ОТРИМАВ»,
+     * а не «хто скільки згенерував». Промовчати означало б лишити стару назву над
+     * іншою цифрою — рівно та підміна, від якої ми й ішли.
+     */
+    dimensionNote: "розріз — менеджер, ЯКОМУ передали заявку (реєстр бота не містить "
+      + "імені лідогенератора)",
+  });
 });
 
 /**
@@ -3594,8 +3604,29 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
   // (metrics.nonTargetLeads), а НЕ стара Кваліфікація-143-усе-підряд (яка змітала й
   // не-рекламні відмови). Загальні/цільові ліди не чіпаємо.
   const { adSources: lqAdSources } = await getSettings();
+  /**
+   * 🔴 ЦІЛЬОВІ ЛІДИ — ДЕДУП ПО КЛІЄНТУ В МЕЖАХ ПЕРІОДУ (рішення власника 04.08.2026).
+   * Один клієнт у місяць = ОДИН цільовий лід. Було `COUNT(*)` по угодах: клієнт,
+   * що звернувся тричі, давав три «ліди». Заміряно на проді: 652 зайвих із 2 503
+   * у червні (26%) і 624 з 2 929 у липні (21%).
+   *
+   * Угоди БЕЗ `client_key` рахуються поштучно, а не зливаються в один рядок:
+   * `COUNT(DISTINCT client_key)` викинув би їх зовсім (NULL не рахується), і ми
+   * втратили б реальні звернення. Тому дві частини й додавання.
+   */
+  const targetLeadsDedup = async (): Promise<{ deals: number; clients: number }> => {
+    const p2: unknown[] = [];
+    const c2 = ["d.pipeline_id = 8921932", ...dateScope("d", p2)];
+    if (teamId) { p2.push(teamId); c2.push(`m.team_id = $${p2.length}`); }
+    const r = await pool.query<{ deals: string; clients: string }>(
+      `SELECT COUNT(*)::int AS deals,
+              (COUNT(DISTINCT d.client_key)
+               + COUNT(*) FILTER (WHERE d.client_key IS NULL))::int AS clients
+         FROM deals d ${teamJoin} WHERE ${c2.join(" AND ")}`, p2);
+    return { deals: Number(r.rows[0]?.deals ?? 0), clients: Number(r.rows[0]?.clients ?? 0) };
+  };
   const [targetLeads, nonTargetLeads, adRes] = await Promise.all([
-    countFor("d.pipeline_id = 8921932"),
+    targetLeadsDedup(),
     metrics.nonTargetLeads({ from, to, teamId }, lqAdSources),
     pool.query<{ plan: string; fact: string; conv: string }>(
       `SELECT COALESCE(SUM(budget_plan),0) AS plan, COALESCE(SUM(budget_fact),0) AS fact,
@@ -3605,7 +3636,12 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
     ),
   ]);
   res.json({
-    targetLeads,
+    // Головна цифра — УНІКАЛЬНІ клієнти; сира кількість угод іде поруч, щоб
+    // різницю було видно, а не щоб її десь склали.
+    targetLeads: targetLeads.clients,
+    targetLeadDeals: targetLeads.deals,
+    targetLeadsNote: "унікальних клієнтів у періоді (один клієнт = один лід); "
+      + `угод у Повному циклі за той самий період: ${targetLeads.deals}`,
     nonTargetLeads,
     adBudgetPlan: Math.round(Number(adRes.rows[0]?.plan ?? 0)),
     adBudgetFact: Math.round(Number(adRes.rows[0]?.fact ?? 0)),
