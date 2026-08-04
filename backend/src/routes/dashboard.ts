@@ -29,6 +29,7 @@ import { syncStageEvents } from "../jobs/syncStageEvents.js";
 import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanRules.js";
 import * as reactivation from "../core/reactivation.js";
+import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
@@ -2175,27 +2176,18 @@ dashboardRouter.get("/loyalty-overrides", async (req, res) => {
   });
 });
 
-/** Прибрати / передати / додати постійного клієнта (upsert). */
+/**
+ * Прибрати / передати / додати постійного клієнта (upsert).
+ *
+ * Правило «оновлюються лише передані поля» і причина, чому воно існує, — у
+ * `core/loyaltyOverride.ts` (там же його доводить тест #32 проти справжньої БД).
+ */
 dashboardRouter.post("/loyalty-override", async (req, res) => {
   if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
-  const clientName = req.body?.clientName != null ? String(req.body.clientName) : null;
-  const hidden = req.body?.hidden === true;
-  const forceRegular = req.body?.forceRegular === true;
-  const pinnedManagerId = req.body?.pinnedManagerId != null && req.body.pinnedManagerId !== ""
-    ? Number(req.body.pinnedManagerId) : null;
-  const note = req.body?.note != null ? String(req.body.note) : null;
-  await pool.query(
-    `INSERT INTO loyalty_overrides (client_key, client_name, hidden, pinned_manager_id, force_regular, note, updated_by, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-     ON CONFLICT (client_key) DO UPDATE SET
-       client_name = COALESCE(EXCLUDED.client_name, loyalty_overrides.client_name),
-       hidden = EXCLUDED.hidden, pinned_manager_id = EXCLUDED.pinned_manager_id,
-       force_regular = EXCLUDED.force_regular, note = EXCLUDED.note,
-       updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, clientName, hidden, pinnedManagerId, forceRegular, note, req.auth!.userId]
-  );
+  const q = buildOverrideUpsert(req.body ?? {}, req.auth!.userId);
+  await pool.query(q.sql, q.params);
   res.json({ ok: true });
 });
 
@@ -3861,7 +3853,13 @@ dashboardRouter.get("/client-plans", async (req, res) => {
             mm.team_id, tt.name AS team_name
        FROM agg a
        JOIN primary_mgr pm ON pm.client_key = a.client_key
-       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key AND NOT lo.hidden
+       -- 🔴 БЕЗ умови AND NOT lo.hidden У ЦЬОМУ JOIN — І ЦЕ НЕ КОСМЕТИКА.
+       -- Було: LEFT JOIN … AND NOT lo.hidden, а нижче WHERE COALESCE(lo.hidden,false)=false.
+       -- Для ПРИХОВАНОГО клієнта join не давав рядка → lo.hidden = NULL →
+       -- COALESCE(NULL,false)=false → умова ІСТИННА, і клієнт лишався на екрані.
+       -- Тобто дія «прибрати з постійних» роками писалась у базу й не робила НІЧОГО.
+       -- Заміряно на живому сервері: hidden=true, а клієнт у видачі обох екранів.
+       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
        LEFT JOIN teams tt ON tt.id = mm.team_id
        LEFT JOIN LATERAL (
@@ -3997,8 +3995,16 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       canSubmit: byStatus.draft > 0,
       canApprove: byStatus.pending > 0,
     },
-    callsUnavailable: "Ringostat-синк зберігає лише агрегат по тімлідах (statistics_values); "
-      + "окремих дзвінків із номером абонента в базі немає — панель дзвінків порожня до Фази C",
+    // 🔴 ТЕКСТ ВИПРАВЛЕНО 04.08.2026: попередній казав, що «окремих дзвінків із
+    // номером абонента в базі НЕМАЄ». Це перестало бути правдою — `syncCalls`
+    // пише саме окремі дзвінки в `ringostat_calls` разом із `client_key`, і
+    // сусідній екран реактивації вже показує з них «останній дзвінок». Лишити
+    // старе формулювання означало б, що екран стверджує неправду про власну
+    // базу — гірше за порожню панель. Сама панель тут поки не побудована, і про
+    // це сказано прямо.
+    callsUnavailable: "Окремі дзвінки в базі Є (ringostat_calls, звʼязка по client_key) — "
+      + "їх уже видно як «останній дзвінок» у «Реактивації». Перелік дзвінків у цій "
+      + "картці ще не побудований",
   });
 });
 
@@ -4258,7 +4264,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
     money.successByClientBucket({ from, to }, "month", clientKey),
     pool.query<{ client_name: string | null; orders: string; revenue: string; first_paid: string | null;
       last_paid: string | null; payment_type: string | null; manager_name: string | null;
-      team_name: string | null; pinned_manager_id: number | null }>(
+      team_name: string | null; pinned_manager_id: number | null; hidden: boolean | null }>(
       `WITH paid AS (
          SELECT d.manager_id, d.price, d.closed_at_kommo
            FROM deals d
@@ -4277,7 +4283,13 @@ dashboardRouter.get("/client-card", async (req, res) => {
        SELECT nm.client_name, nm.payment_type, a.orders, a.revenue,
               to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS first_paid,
               to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid,
-              mm.name AS manager_name, t.name AS team_name, lo.pinned_manager_id
+              mm.name AS manager_name, t.name AS team_name, lo.pinned_manager_id,
+              -- 🔴 ОКРЕМИМ ПІДЗАПИТОМ, а не з lo: той join навмисно звужений
+              -- умовою AND NOT lo.hidden, тож саме для прибраного клієнта він
+              -- порожній — і hidden завжди читалось би як false. Кнопка
+              -- «повернути» не зʼявилась би НІКОЛИ, а виглядало б це як
+              -- «дія не спрацювала».
+              (SELECT o2.hidden FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS hidden
          FROM agg a
          LEFT JOIN pm ON true
          LEFT JOIN loyalty_overrides lo ON lo.client_key = $1 AND NOT lo.hidden
@@ -4340,6 +4352,15 @@ dashboardRouter.get("/client-card", async (req, res) => {
     })),
     anchorNote: "Стовпчики — гроші ① (успішно реалізовано, анкер = дата входу в етап). "
       + "Список — журнал угод (дата закриття; для незакритих — створення). Суми не зводяться між собою.",
+    /**
+     * 🗑 «Прибрати з постійних» — рішення власника 04.08.2026: дія повертається
+     * САМЕ в картку клієнта (там, де видно гістограму й угоди, тобто підставу
+     * для рішення). Право рахує СЕРВЕР тією самою функцією, що гейтить
+     * `POST /loyalty-override` — інакше кнопка й дозвіл розійшлись би, і хтось
+     * бачив би кнопку, яка завжди дає 403.
+     */
+    canHide: isAdminScope(auth),
+    hidden: h?.hidden ?? false,
   });
 });
 

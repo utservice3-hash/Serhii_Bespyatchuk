@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, type ClientCard } from "../../../api";
+import { fetchClientCard, saveLoyaltyOverride, type ClientCard } from "../../../api";
 import { formatAmountFull } from "../format";
 
 /**
@@ -15,14 +15,16 @@ import { formatAmountFull } from "../format";
  * незакритих — створення) і показує ВСІ стадії, не лише виграні. Тому Σ списку не
  * дорівнює Σ стовпчиків, і зводити їх не треба.
  */
-export function ClientCardPanel({ clientKey }: { clientKey: string }) {
+export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; onChanged?: () => void }) {
   const [card, setCard] = useState<ClientCard | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
     setCard(null); setErr(null);
     fetchClientCard(clientKey).then(setCard)
       .catch((e) => setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося завантажити картку"));
   }, [clientKey]);
+  useEffect(load, [load]);
 
   if (err) return <div style={{ fontSize: 12, color: "#b91c1c" }}>{err}</div>;
   if (!card) return <div style={{ fontSize: 12, color: "#9ca3af" }}>завантаження картки…</div>;
@@ -44,6 +46,38 @@ export function ClientCardPanel({ clientKey }: { clientKey: string }) {
           {card.firstPaid ? ` · з ${card.firstPaid.slice(0, 7)}` : ""}
         </div>
       </div>
+
+      {/* 🗑 ДІЯ «ПРИБРАТИ З ПОСТІЙНИХ» — рішення власника 04.08.2026: вона живе
+          САМЕ тут, поруч із гістограмою й угодами, бо це і є підстава для
+          рішення. Право віддає сервер (`canHide`) тим самим гейтом, що стоїть на
+          роуті, — кнопка не може розійтись із дозволом.
+          🔴 Тіло запиту — РІВНО `{clientKey, hidden}`. Інші поля не передаються
+          СВІДОМО: роут оновлює лише передані, тож закріплений відповідальний
+          (`pinned_manager_id`) лишається на місці. */}
+      {card.canHide && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+          <button disabled={busy}
+            onClick={async () => {
+              const back = card.hidden;
+              if (!confirm(back
+                ? `Повернути «${card.clientName}» до постійних клієнтів?`
+                : `Прибрати «${card.clientName}» з постійних клієнтів?\n\nКлієнт зникне з планування, лояльності та реактивації. Дія зворотна — цією ж кнопкою.`)) return;
+              setBusy(true);
+              try { await saveLoyaltyOverride({ clientKey, hidden: !back }); load(); onChanged?.(); }
+              finally { setBusy(false); }
+            }}
+            style={{ fontSize: 12, fontWeight: 600, padding: "5px 11px", borderRadius: 8, cursor: "pointer",
+                     border: "1px solid #d1d5db", background: "#fff",
+                     color: card.hidden ? "#166534" : "#b91c1c" }}>
+            {card.hidden ? "↩ повернути до постійних" : "🗑 прибрати з постійних"}
+          </button>
+          <span style={{ fontSize: 11, color: "#6b7280" }}>
+            {card.hidden
+              ? "Зараз клієнт прибраний вручну — він не показується у планах, лояльності й реактивації."
+              : "Прибирає з планів, лояльності й реактивації. Угоди та гроші не змінюються."}
+          </span>
+        </div>
+      )}
 
       {empty ? (
         // Порожньо — це відповідь, а не помилка: клієнт не платив 12 міс.

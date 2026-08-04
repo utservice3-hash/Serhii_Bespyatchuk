@@ -108,10 +108,11 @@ function CommentsPanel({ clientKey, canWrite }: { clientKey: string; canWrite: b
 }
 
 /**
- * Панель дзвінків. 🔴 ДАНИХ ПОКИ НЕМАЄ, і це підписано вголос: Ringostat-синк
- * зберігає лише агрегат по тімлідах, окремих дзвінків із номером абонента в базі
- * немає. Порожня панель із названою причиною чесніша за приховану колонку —
- * видно, що місце є, і чому воно порожнє.
+ * Панель дзвінків. Причину порожнечі КАЖЕ СЕРВЕР (`callsUnavailable`) — щоб
+ * підпис не розійшовся зі станом бази, як це вже сталось: текст стверджував, що
+ * окремих дзвінків у базі немає, хоча `syncCalls` їх пише, і сусідній екран
+ * реактивації вже показує з них «останній дзвінок». Порожня панель із чесною
+ * причиною краща за приховану колонку; неправдива причина — гірша за обидві.
  */
 function CallsPanel({ reason }: { reason: string }) {
   return (
@@ -119,7 +120,7 @@ function CallsPanel({ reason }: { reason: string }) {
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>📞 Дзвінки · Ringostat</div>
       <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 8, padding: "12px 14px",
                     fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
-        Даних поки немає. {reason}.
+        {reason}.
       </div>
     </div>
   );
@@ -355,7 +356,9 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
           <td colSpan={7} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>
             {/* КАРТКА КЛІЄНТА: спершу «як він платив» (те, заради чого
                 рядок і розгортають), під нею — коментарі й дзвінки. */}
-            <ClientCardPanel clientKey={c.clientKey} />
+            {/* onChanged — щоб «прибрати з постійних» одразу зникло з цього ж
+                списку, а не лишалось рядком, який уже не існує за правилом. */}
+            <ClientCardPanel clientKey={c.clientKey} onChanged={load} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22, marginTop: 16,
                           borderTop: "1px solid #e5e7eb", paddingTop: 14 }}>
               <CommentsPanel clientKey={c.clientKey} canWrite />
