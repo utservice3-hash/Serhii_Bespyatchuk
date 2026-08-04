@@ -113,9 +113,10 @@ test("#27 ДЗВІНКИ: запис, дедуп батча, звʼязка но
       assert.equal(r.manager_id, 10, "🔴 обрано деактивований рядок замість активного");
     });
 
-    await t.test("#27e ДЗЕРКАЛО: деактивований БЕЗ активного двійника лишається NULL", async () => {
-      // Політика `is_active` фіксом НЕ змінювалась. Без цього дзеркала #27d
-      // зеленів би й тоді, коли ми почали чіпляти всіх підряд.
+    await t.test("#27e ЗВІЛЬНЕНОМУ ДЗВІНОК ПРИПИСУЄТЬСЯ (рішення власника 04.08.2026)", async () => {
+      // ЗМІНА ПОЛІТИКИ. Було: деактивований → NULL («менеджер невідомий»).
+      // Стало: історія має казати правду — «дзвонила конкретна людина (звільнена)»
+      // корисніше за «невідомо». Тест перевернуто, не видалено.
       await c.query(`INSERT INTO managers (id,name,team_id,is_active)
                      VALUES (11,'Ліненко Софія Євгенівна',1,false) ON CONFLICT DO NOTHING`);
       await S.upsertCalls([{ uniqueid: "u6", calldate: new Date().toISOString(), call_type: "in",
@@ -124,8 +125,22 @@ test("#27 ДЗВІНКИ: запис, дедуп батча, звʼязка но
       await S.linkCalls();
       const r = (await c.query<{ manager_id: number | null }>(
         `SELECT manager_id FROM ringostat_calls WHERE uniqueid='u6'`)).rows[0];
+      assert.equal(r.manager_id, 11,
+        "🔴 дзвінок звільненого лишився без менеджера — історія втрачає правду");
+    });
+
+    await t.test("#27f ДЗЕРКАЛО ЗАБОРОНИ: невідомий ПІБ і далі NULL", async () => {
+      // Без цього #27e зеленів би й тоді, коли ми почали чіпляти КОГО ЗАВГОДНО.
+      // «Приписуємо звільненим» ≠ «приписуємо навмання»: людини, якої немає в
+      // managers, у звʼязці бути не може.
+      await S.upsertCalls([{ uniqueid: "u7", calldate: new Date().toISOString(), call_type: "in",
+        caller: "380991112266", billsec: 10, disposition: "ANSWERED",
+        employee_fio: "Неіснуючий Персонаж Вигаданович" }]);
+      await S.linkCalls();
+      const r = (await c.query<{ manager_id: number | null }>(
+        `SELECT manager_id FROM ringostat_calls WHERE uniqueid='u7'`)).rows[0];
       assert.equal(r.manager_id, null,
-        "🔴 дзвінок деактивованого отримав менеджера — політика змінилась побічно");
+        "🔴 ПІБ, якого немає в managers, отримав менеджера — це вгадування");
     });
   } finally {
     await pool.end().catch(() => {});
