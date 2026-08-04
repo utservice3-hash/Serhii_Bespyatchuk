@@ -339,6 +339,41 @@ test("#30l КАРТКА: «прибрати з постійних» видно �
     "🔴 тімліду не віддалась сама картка — це вже не межа, а поломка екрана");
 });
 
+test("#30m ЛІДОГЕНЕРАЦІЯ: менеджеру 403, тімліду — ЛИШЕ його команда", needsApi(), async () => {
+  // 🪞 ДЗЕРКАЛЬНА ТРІЙКА. Односторонній тест («менеджер не бачить») зеленів би й
+  // тоді, якби екран був зламаний для всіх — тобто в стані, гіршому за проблему.
+  const { signToken, rbac } = await load();
+  await rbac.refreshRoles();
+  const lead = await someTeamLead();
+
+  // (а) МЕНЕДЖЕР — 403. Екран показує розподіл заявок МІЖ менеджерами.
+  const mgrToken = signToken({ userId: 0, role: rbac.scopeCompatRole("manager", rbac.getRoleDef("manager")),
+    roleKey: "manager", managerId: 1, teamId: lead.teamId });
+  const asMgr = await get("/api/dashboard/leadgen", mgrToken);
+  assert.equal(asMgr.status, 403, `🔴 менеджер дістав екран лідогенерації: ${asMgr.status}`);
+
+  // (б) ДЗЕРКАЛО: адмін бачить УСІ команди — інакше (а) нічого не доводить.
+  const all = await (await get("/api/dashboard/leadgen", await adminToken())).json() as
+    { groups: { teamName: string; leads: number }[]; unit: string; dimensionNote: string };
+  assert.ok(all.groups.length > 0,
+    "🔴 адмін не бачить жодної групи — порожнеча доводить не межу, а поломку");
+  assert.ok(/передач/i.test(all.unit),
+    "🔴 відповідь не називає одиницю лічби — 358 і 260 читались би як та сама цифра");
+  assert.ok(/отримал|ЯКОМУ/i.test(all.dimensionNote),
+    "🔴 відповідь не називає розріз — стара назва над іншою цифрою");
+
+  // (в) ТІМЛІД — лише своя команда, і кламп мусить бути на СЕРВЕРІ.
+  const asLead = await (await get("/api/dashboard/leadgen", lead.token)).json() as
+    { groups: { teamName: string }[] };
+  const foreign = asLead.groups.map((g) => g.teamName).filter((n) => n !== lead.teamName);
+  assert.deepEqual(foreign, [],
+    `🔴 тімлід команди «${lead.teamName}» бачить чужі команди: ${foreign.join(", ")}`);
+  if (all.groups.length > 1) {
+    assert.ok(asLead.groups.length < all.groups.length,
+      "🔴 тімлід і адмін бачать однаково — кламп не діє");
+  }
+});
+
 test("#30e МЕЖА: без токена екрани клієнтів не віддають нічого", needsApi(), async () => {
   // Дзеркало до #30/#30d: «доступно КВП/ОД/адміну» має означати «не всьому
   // інтернету». Матриця #11 перевіряє ролі, цей рядок — відсутність ролі взагалі.

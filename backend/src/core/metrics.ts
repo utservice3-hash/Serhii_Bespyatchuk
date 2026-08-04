@@ -58,6 +58,11 @@ export const commercialManagerSql = (alias = "m") =>
 
 // Команди РНК (рекламний напрям, тімліди Безпамʼятний/Михальчевська). Джерело правди
 // (== RNK_TEAM_IDS у routes/dashboard.ts, який тепер імпортує звідси — не дублювати число).
+// 🤖 Предикат «не автосделка» живе в ЧИСТОМУ `dealFilters.ts` (без імпортів),
+// а тут лише реекспортується — щоб виклик у запитах був один і той самий.
+export { AUTODEAL_PREFIX, notAutodealSql } from "./dealFilters.js";
+import { notAutodealSql } from "./dealFilters.js";
+
 export const RNK_TEAM_IDS = [13, 15];
 /**
  * SQL-предикат «команда типу РНК» (рекламний напрям). Використовується у `stuckDealsGrouped`:
@@ -2354,6 +2359,9 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
     // 🎯 Тип команди (рішення власника 24.07): РНК — усі застряглі; РПК/Самостійний (не-РНК) —
     //    лише лідген-угоди (lead_channel='leadgen'). Реюз rnkTeamSql (без хардкоду ID).
     `(${rnkTeamSql("m")} OR (NOT ${rnkTeamSql("m")} AND d.lead_channel = 'leadgen'))`,
+    // 🤖 Службові «Автосделка:» не показуємо людині (рішення власника 04.08.2026).
+    // Тут це ще й по суті: бот не «застряг», йому нема що робити з угодою.
+    notAutodealSql("d"),
   ];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }

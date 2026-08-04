@@ -134,12 +134,17 @@ dashboardRouter.get("/funnel", async (req, res) => {
  */
 dashboardRouter.get("/leadgen", async (req, res) => {
   const auth = req.auth!;
+  // 🔴 ГЕЙТ ПЕРШИМ ОПЕРАТОРОМ (рішення власника 04.08.2026: екран не для менеджерів).
+  // Порядок не дрібниця — валідація перед межею дала б 400 замість 403 і зламала б
+  // гарантію зліпка #11, на чому ми вже раз відкочували прод.
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
   let managerId = req.query.managerId ? Number(req.query.managerId) : null;
   let teamId = req.query.teamId ? Number(req.query.teamId) : null;
   const from = (req.query.from as string) ?? null;
   const to = (req.query.to as string) ?? null;
-  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
-  else if (auth.role === "team_lead") { teamId = auth.teamId; }
+  // Тімлід — ТІЛЬКИ своя команда, кламп на СЕРВЕРІ: фільтр у браузері не межа,
+  // той самий запит curl-ом віддав би чужі передачі.
+  if (auth.role === "team_lead") { teamId = auth.teamId ?? -1; managerId = null; }
 
   const K = "AT TIME ZONE 'Europe/Kyiv'";
   const params: unknown[] = [];
@@ -4348,7 +4353,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
          FROM deals d
          LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
          LEFT JOIN managers m ON m.id = d.manager_id
-        WHERE d.client_key = $1
+        -- 🤖 Службові «Автосделка:» тут не показуємо (рішення власника): предикат
+        -- один на весь проєкт, у ядрі — щоб редакція префікса не розійшлась.
+        WHERE d.client_key = $1 AND ${metrics.notAutodealSql("d")}
         ORDER BY COALESCE(d.closed_at_kommo, d.created_at_kommo) DESC NULLS LAST
         LIMIT 15`, [clientKey]),
   ]);

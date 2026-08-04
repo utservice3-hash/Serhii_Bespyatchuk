@@ -151,8 +151,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
+  // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
+  // «Лідогенерація» стала самостійним екраном на реєстрі бота: адмін/ОД/КВП — усе,
+  // тімлід — передачі СВОЄЇ команди (кламп на сервері), МЕНЕДЖЕР — 403.
+  // Менеджера прибрано СВІДОМО: екран показує розподіл заявок між менеджерами,
+  // тобто дані про колег, а не власну роботу.
   { method: "GET", path: "/api/dashboard/leadgen", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/leadgen-regulars", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   // ФАЗА A · «Постійні клієнти · план місяця». Межа — вкладка `loyalty`, якої в
