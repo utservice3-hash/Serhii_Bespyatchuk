@@ -4549,12 +4549,12 @@ async function mergePairScope(auth: NonNullable<typeof import("express")["reques
 dashboardRouter.get("/client-merge/preview", async (req, res) => {
   const alias = String(req.query.alias ?? "").trim();
   const canonical = String(req.query.canonical ?? "").trim();
-  if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
-  if (alias === canonical) return res.status(400).json({ error: "Ключі однакові" });
-  // Передпоказ клампимо ТАК САМО, як саме злиття: інакше тімлід читав би цифри
-  // чужої команди, просто не маючи кнопки. Межа — це дані, а не кнопка.
+  // Передпоказ клампимо ТАК САМО, як саме злиття (інакше тімлід читав би цифри
+  // чужої команди, просто не маючи кнопки), і так само ПЕРШИМ оператором.
   const scope = await mergePairScope(req.auth!, alias, canonical);
   if (!mergePairAllowed(scope)) return res.status(403).json({ error: mergeDenyReason(scope) });
+  if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
+  if (alias === canonical) return res.status(400).json({ error: "Ключі однакові" });
 
   const side = async (key: string) => (await pool.query<{ orders: string; revenue: string; name: string | null; last_paid: string | null }>(
     `SELECT COUNT(*)::int AS orders, COALESCE(SUM(d.price),0) AS revenue,
@@ -4606,12 +4606,16 @@ dashboardRouter.post("/client-merge", async (req, res) => {
   const alias = String(req.body?.alias ?? "").trim();
   const canonical = String(req.body?.canonical ?? "").trim();
   const reason = String(req.body?.reason ?? "").trim();
-  if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
-  // 🔴 КЛАМП ДО ВАЛІДАЦІЇ ПРИЧИНИ І ДО БУДЬ-ЯКОГО ЗАПИСУ: гейт має бути ПЕРШИМ
-  // значущим оператором, інакше проба матриці «невалідним тілом» діставала б 400
-  // там, де мусить бути 403, і межа виглядала б інакше, ніж вона є.
+  // 🔴 ГЕЙТ — ПЕРШИЙ ЗНАЧУЩИЙ ОПЕРАТОР, І ЦЕ ВИПРАВЛЕННЯ ПІСЛЯ ЧЕРВОНОЇ МАТРИЦІ
+  // (04.08.2026). Спершу тут стояла перевірка «alias і canonical обовʼязкові», і
+  // проба #11 з невалідним тілом діставала 400 ЗАМІСТЬ 403: запит помирав на
+  // валідації, не дійшовши до межі. Дірки в доступі це не робило (з реальними
+  // ключами кламп працює — #30h), але ламало ГАРАНТІЮ, на якій стоїть уся
+  // матриця: «403 у deny-рядку означає, що спрацював гейт». Порожні ключі дають
+  // невизначену команду → для тімліда це відмова, для merge_clients — прохід далі.
   const scope = await mergePairScope(auth, alias, canonical);
   if (!mergePairAllowed(scope)) return res.status(403).json({ error: mergeDenyReason(scope) });
+  if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
   if (!reason) return res.status(400).json({ error: "Причина обовʼязкова — реєстр без причини стає смітником" });
   try {
     await pool.query(
@@ -4631,14 +4635,14 @@ dashboardRouter.post("/client-merge", async (req, res) => {
 
 dashboardRouter.post("/client-merge/revoke", async (req, res) => {
   const alias = String(req.body?.alias ?? "").trim();
-  if (!alias) return res.status(400).json({ error: "alias обовʼязковий" });
-  // Роз'єднання — той самий кламп, що й злиття: тімлід відкочує лише СВОЇ
-  // (тобто внутрішньокомандні) записи. Канонічний бік беремо з реєстру, бо в
-  // тілі запиту його немає — інакше «своє» визначав би той, хто просить.
+  // Роз'єднання — той самий кламп, що й злиття, і так само ПЕРШИМ оператором
+  // (див. коментар у /client-merge). Канонічний бік беремо з реєстру, бо в тілі
+  // запиту його немає — інакше «своє» визначав би той, хто просить.
   const row = (await pool.query<{ canonical_key: string }>(
     `SELECT canonical_key FROM client_key_alias WHERE alias_key = $1 AND revoked_at IS NULL`, [alias])).rows[0];
   const scope = await mergePairScope(req.auth!, alias, row?.canonical_key ?? alias);
   if (!mergePairAllowed(scope)) return res.status(403).json({ error: mergeDenyReason(scope) });
+  if (!alias) return res.status(400).json({ error: "alias обовʼязковий" });
   const upd = await pool.query(
     `UPDATE client_key_alias SET revoked_at = now() WHERE alias_key = $1 AND revoked_at IS NULL`, [alias]);
   if (!upd.rowCount) return res.status(409).json({ error: "Активного псевдоніма з таким ключем немає" });
