@@ -75,6 +75,58 @@ test("#27 ДЗВІНКИ: запис, дедуп батча, звʼязка но
       "🔴 переміг ПЕРШИЙ запис дубля; має перемагати останній (свіжіший знімок)");
     assert.equal(by.get("u3")?.manager_id, null,
       "🔴 дзвінок без employee_fio отримав менеджера — це вгадування, яке заборонено");
+
+    // ── Підтести в ТОМУ САМОМУ кластері: окремий provisionScratch на тест колись
+    //    поклав сусідні тести («Connection terminated unexpectedly»).
+    await t.test("#27c ПІБ У managers ТЕЖ ТРИЧЛЕННЕ — ключ зрізається з ОБОХ боків", async () => {
+      // 🔴 РЕГРЕСІЯ, ЗАМІРЯНА НА ПРОДІ 04.08.2026. Правило різало ПІБ дзвінка до
+      // двох слів, а `managers.name` брало ЦІЛИМ. Поки в тесті був лише менеджер
+      // із коротким імʼям, баг був невидимий — а на проді 55 менеджерів (19
+      // активних) мають тричленне імʼя, і 111 366 дзвінків (26.8%) тихо лишались
+      // «менеджер невідомий». Цей менеджер існує САМЕ щоб ловити асиметрію.
+      await c.query(`INSERT INTO managers (id,name,team_id,is_active)
+                     VALUES (8,'Демчук Вікторія Олександрівна',1,true) ON CONFLICT DO NOTHING`);
+      await S.upsertCalls([{ uniqueid: "u4", calldate: new Date().toISOString(), call_type: "in",
+        caller: "380991112233", billsec: 42, disposition: "ANSWERED",
+        employee_fio: "Демчук Вікторія Олександрівна" }]);
+      await S.linkCalls();
+      const r = (await c.query<{ manager_id: number | null }>(
+        `SELECT manager_id FROM ringostat_calls WHERE uniqueid='u4'`)).rows[0];
+      assert.equal(r.manager_id, 8,
+        "🔴 тричленне імʼя в managers не змапилось — саме так губились 26.8% дзвінків");
+    });
+
+    await t.test("#27d ДУБЛЬ КЛЮЧА: беремо АКТИВНОГО, а не першого-ліпшого", async () => {
+      // На проді 8 ключів дублюються — це та сама людина двома рядками (активний +
+      // деактивований). Вибір має бути ДЕТЕРМІНОВАНИЙ, інакше історія дзвінків
+      // перескакує між рядками щопрогону.
+      await c.query(`INSERT INTO managers (id,name,team_id,is_active)
+                     VALUES (9,'Пехньо Ксенія Олександрівна',1,false) ON CONFLICT DO NOTHING`);
+      await c.query(`INSERT INTO managers (id,name,team_id,is_active)
+                     VALUES (10,'Пехньо Ксенія Олександрівна',1,true) ON CONFLICT DO NOTHING`);
+      await S.upsertCalls([{ uniqueid: "u5", calldate: new Date().toISOString(), call_type: "in",
+        caller: "380991112244", billsec: 10, disposition: "ANSWERED",
+        employee_fio: "Пехньо Ксенія Олександрівна" }]);
+      await S.linkCalls();
+      const r = (await c.query<{ manager_id: number | null }>(
+        `SELECT manager_id FROM ringostat_calls WHERE uniqueid='u5'`)).rows[0];
+      assert.equal(r.manager_id, 10, "🔴 обрано деактивований рядок замість активного");
+    });
+
+    await t.test("#27e ДЗЕРКАЛО: деактивований БЕЗ активного двійника лишається NULL", async () => {
+      // Політика `is_active` фіксом НЕ змінювалась. Без цього дзеркала #27d
+      // зеленів би й тоді, коли ми почали чіпляти всіх підряд.
+      await c.query(`INSERT INTO managers (id,name,team_id,is_active)
+                     VALUES (11,'Ліненко Софія Євгенівна',1,false) ON CONFLICT DO NOTHING`);
+      await S.upsertCalls([{ uniqueid: "u6", calldate: new Date().toISOString(), call_type: "in",
+        caller: "380991112255", billsec: 10, disposition: "ANSWERED",
+        employee_fio: "Ліненко Софія Євгенівна" }]);
+      await S.linkCalls();
+      const r = (await c.query<{ manager_id: number | null }>(
+        `SELECT manager_id FROM ringostat_calls WHERE uniqueid='u6'`)).rows[0];
+      assert.equal(r.manager_id, null,
+        "🔴 дзвінок деактивованого отримав менеджера — політика змінилась побічно");
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();
