@@ -453,6 +453,31 @@ test("#30o ДЖЕНЕРИКИ-ТЕЛЕФОНИ: без безналу — гет
   console.log(`   ℹ ключів-телефонів: у базі ${inDb}, у видачі ${phoneKeys.length} (решта — без безналу)`);
 });
 
+test("#30n КАРТКА · «УСПІШНІ УГОДИ»: жодного рядка з нулем і жодного неуспішного", needsApi(), async () => {
+  // 🔴 ПРИВІД. Список звався «Останні угоди» й показував усе підряд: закриті без
+  // грошей, запити на прорахунок, рядки «( ) – ( )» з нулем. Відкривають його,
+  // щоб зрозуміти, ЗА ЩО клієнт платив, — а він відповідав «щось відбувалось».
+  const token = await adminToken();
+  const list = await (await get("/api/dashboard/client-plans", token)).json() as { clients: { clientKey: string }[] };
+  // Беремо клієнта з історією, а не першого-ліпшого: на порожньому «жодного нуля»
+  // зеленіє саме собою (порожній результат це ПРОВАЛ, не успіх).
+  let checked = 0, rows = 0;
+  for (const c of list.clients.slice(0, 12)) {
+    const card = await (await get("/api/dashboard/client-card?clientKey=" + encodeURIComponent(c.clientKey), token)).json() as
+      { deals?: { price: number; won: boolean; stage: string; name: string | null }[] };
+    if (!card.deals?.length) continue;
+    checked++; rows += card.deals.length;
+    for (const d of card.deals) {
+      assert.notEqual(d.price, 0,
+        `🔴 у «${c.clientKey}» рядок із сумою 0 («${d.name ?? "—"}») — рівно те, що бачив власник`);
+      assert.equal(d.won, true,
+        `🔴 у «${c.clientKey}» неуспішна угода на етапі «${d.stage}» — список зветься «Успішні»`);
+    }
+  }
+  assert.ok(checked >= 3 && rows >= 5,
+    `🔴 перевірено ${checked} карток / ${rows} рядків — замало, щоб щось довести`);
+});
+
 test("#30l КАРТКА: дії керування видно ТОМУ, кому роут їх дозволяє", needsApi(), async () => {
   // 🪞 ДЗЕРКАЛЬНА ПАРА, і вона тут обовʼязкова. Односторонній тест («менеджер не
   // бачить кнопки») зеленів би й тоді, якби кнопки не бачив НІХТО — тобто саме в

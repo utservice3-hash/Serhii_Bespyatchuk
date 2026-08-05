@@ -191,7 +191,7 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
         </div>
       )}
 
-      <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>🧾 Останні угоди</div>
+      <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>🧾 Успішні угоди</div>
       {card.deals.length === 0 ? (
         <div style={{ fontSize: 12, color: "#9ca3af" }}>угод немає</div>
       ) : (
