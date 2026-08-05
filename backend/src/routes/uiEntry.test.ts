@@ -44,6 +44,25 @@ const MANAGEMENT_ACTIONS: { route: string; helper: string; what: string }[] = [
   { route: "/dashboard/orphan-clients/claim", helper: "claimOrphanClient", what: "взяти нічийного" },
 ];
 
+/**
+ * 🟡 ВІДКРИТЕ ПИТАННЯ — НЕ В РЕЄСТРІ СВІДОМО (05.08.2026, чекає рішення власника).
+ * Ці два роути живі й входу в UI НЕ мають. Не додаю їх у реєстр вище, бо це
+ * зробило б гейт червоним на питанні, яке вирішує не він:
+ *   · `POST /dashboard/loyalty-override` — лишився без входу ПІСЛЯ того, як я
+ *     прибрав кнопку `hidden`. Кнопка й так нічого не робила, тож можливості ніхто
+ *     не втратив; але роут ще вміє `forceRegular` («вважати постійним попри
+ *     правило») і `note`, і для них входу не було ніколи.
+ *   · `DELETE /dashboard/loyalty-override/:clientKey` — скинути ручну правку.
+ *     Входу не мав і до наших змін.
+ * Рішення власника потрібне саме тому, що варіанти протилежні: дати вхід у картці
+ * АБО визнати мертвими і внести в `DEAD_ROUTE_CANDIDATES`. Мовчки лишати «ні там,
+ * ні там» не можна — це рівно те, з чого почалась ця регресія.
+ */
+const NO_UI_ENTRY_PENDING_OWNER = [
+  "POST /dashboard/loyalty-override (forceRegular, note)",
+  "DELETE /dashboard/loyalty-override/:clientKey",
+];
+
 const read = (p: string) => fs.readFileSync(p, "utf-8");
 const walk = (dir: string, out: string[] = []): string[] => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -110,6 +129,15 @@ test("#39 ВХІД В UI: кожна дія керування викликає�
   }
   assert.deepEqual(missing, [],
     "🔴 дії керування без живого входу в UI:\n  " + missing.join("\n  "));
+});
+
+test("#39c ВІДКРИТІ ПИТАННЯ НАЗВАНІ, а не забуті", () => {
+  // Не перевіряє поведінку — тримає СПИСОК живим. Порожній список означав би, що
+  // питання «вирішилось» саме собою, а так не буває: його або закрили рішенням,
+  // або забули. Забули — цей рядок нагадає.
+  assert.ok(NO_UI_ENTRY_PENDING_OWNER.length > 0,
+    "🔴 список порожній — якщо питання закрито рішенням власника, приберіть і цей тест, "
+    + "а не лише список");
 });
 
 test("#39b МЕРТВЕ ПОЛЕ `hidden` НЕ ЖИВЕ У ФРОНТІ (той самий баг не повернеться тихо)", () => {
