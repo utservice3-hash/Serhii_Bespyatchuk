@@ -25,8 +25,13 @@ import { companyFieldValue, COMPANY_FIELD_EDRPOU, COMPANY_FIELD_IPN } from "../k
  */
 
 const BATCH = 250;
-/** Пауза між батчами. 400 мс ≈ 2.5 запити/с — удвічі повільніше за ліміт Kommo. */
-const THROTTLE_MS = 400;
+/**
+ * Пауза між батчами. 700 мс ≈ 1.4 запити/с.
+ * 🔴 ЧОМУ ТАК ПОВІЛЬНО. Ліміт Kommo вищий, але 08.07.2026 ми вже отримали IP-бан,
+ * і темп відтоді знижений СВІДОМО. Увесь прохід — ~605 запитів, тобто ~14 хв;
+ * економити тут 7 хвилин ціною ризику знову втратити доступ — поганий обмін.
+ */
+const THROTTLE_MS = 700;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface CompanyBackfillStats {
@@ -71,12 +76,20 @@ async function upsertBatch(deals: KommoDeal[], companies: KommoCompany[]): Promi
   return { links: dealIds.length, withCode };
 }
 
-export async function backfillCompanies(months = 12): Promise<CompanyBackfillStats> {
+/**
+ * @param months скільки місяців назад охопити
+ * @param only   обробити РІВНО один місяць-зсув (0 = поточний). Потрібне, щоб
+ *   ганяти прохід порціями по одному виклику: на цьому хості довгі фонові процеси
+ *   вбиває ліміт акаунта (LVE, `INFRASTRUCTURE.md` §6d), тож 12 коротких запусків
+ *   надійніші за один довгий. Джоба ідемпотентна, тож поділ безпечний.
+ */
+export async function backfillCompanies(months = 12, only?: number): Promise<CompanyBackfillStats> {
   return withHeavyJobLock("backfillCompanies", async () => {
     const st: CompanyBackfillStats = {
       months, deals: 0, leadRequests: 0, companyRequests: 0, companies: 0, withCode: 0, links: 0 };
 
-    for (let m = 0; m < months; m++) {
+    const from = only ?? 0, to = only != null ? only + 1 : months;
+    for (let m = from; m < to; m++) {
       // Помісячно й від найсвіжішого: якщо прохід доведеться спинити, зупинимось
       // на старих даних, а не на тих, якими користуються щодня.
       const r = await pool.query<{ kommo_id: string }>(
@@ -119,8 +132,9 @@ export async function backfillCompanies(months = 12): Promise<CompanyBackfillSta
 
 if (process.argv[1]?.endsWith("backfillCompanies.js") || process.argv[1]?.endsWith("backfillCompanies.ts")) {
   const arg = process.argv.find((a) => a.startsWith("--months="));
+  const one = process.argv.find((a) => a.startsWith("--only="));
   const months = arg ? Number(arg.split("=")[1]) : 12;
-  runJob("backfillCompanies", () => backfillCompanies(months))
+  runJob("backfillCompanies", () => backfillCompanies(months, one ? Number(one.split("=")[1]) : undefined))
     .then(() => process.exit(0))
     .catch((e) => { console.error(e); process.exit(1); });
 }
