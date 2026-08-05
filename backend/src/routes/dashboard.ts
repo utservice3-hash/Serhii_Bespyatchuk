@@ -4115,7 +4115,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    * зникають у тиші — вони окремим числом `skippedGeneric`, інакше ми повторили б
    * рівно ту помилку, яку цією правкою й лікуємо.
    */
-  const bridge = { sleeping: 0, lost: 0, archived: 0, oneOff: 0, skippedGeneric: 0,
+  const bridge = { sleeping: 0, lost: 0, longLapsed: 0, oneOff: 0, skippedGeneric: 0,
     bySegment: { vip: 0, regular: 0, episodic: 0, unknown: 0 } as Record<string, number> };
   const activeRows = clientsRes.rows.filter((c) => {
     const f = factsFor(seg, c.client_key);
@@ -4125,7 +4125,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     if (!f.qualified) { bridge.oneOff++; return false; }
     if (f.state === "sleeping" || f.state === "lost") {
       if (!keepInReactivation(f)) { bridge.skippedGeneric++; return false; }
-      if (f.archived) bridge.archived++;   // підмножина втрачених, не окрема купка
+      if (f.longLapsed) bridge.longLapsed++;   // підмножина втрачених, не окрема купка
       if (f.state === "sleeping") bridge.sleeping++; else bridge.lost++;
       return false;
     }
@@ -4205,7 +4205,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        * не додають: `активні + сплячі + втрачені = кваліфікована база`, інакше
        * втрачені порахувались би двічі.
        */
-      inReactivationArchived: bridge.archived,
+      longLapsedCount: bridge.longLapsed,
       /**
        * 🎯 РАЗОВІ — не проходять двошляхову кваліфікацію. Ні тут, ні в реактивації.
        * Названі числом навмисно: без нього перехід 1 137 → 795 читався б як втрата
@@ -4722,7 +4722,7 @@ dashboardRouter.get("/reactivation-list", async (req, res) => {
       // Пороги ПО СЕГМЕНТАХ і межа архіву — з ядра, щоб підпис на екрані не став
       // другою редакцією правила (зашите «14/30/60» почало б брехати мовчки).
       bySegment: reactivation.SEGMENT_SLEEPING_DAYS,
-      archiveDays: reactivation.ARCHIVE_DAYS,
+      longLapsedDays: reactivation.LONG_LAPSED_DAYS,
       segmentMinPayments: reactivation.SEGMENT_MIN_PAYMENTS,
     },
     tiles: {

@@ -107,7 +107,7 @@ export const SEGMENT_SLEEPING_DAYS: Record<ClientSegment, number> = {
  * саме той хвіст, де давність рахується роками. Архів не ховає клієнта — він
  * прибирає його з головної сцени, щоб свіжі не тонули.
  */
-export const ARCHIVE_DAYS = 365;
+export const LONG_LAPSED_DAYS = 365;
 
 /**
  * Чиста функція: стан із кількості днів без замовлення.

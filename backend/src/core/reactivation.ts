@@ -136,8 +136,10 @@ export interface ReactivationClient {
   segment: ClientSegment;
   /** Медіанний інтервал між оплатами, дні. `null` — інтервалів замало. */
   medianGapDays: number | null;
-  /** Втрачений понад рік — іде в згорнутий «Архів», а не на головну сцену. */
-  archived: boolean;
+  /** Втрачений понад рік — у згорнутий блок «Давно втрачені», а не на головну
+   *  сцену. НЕ плутати з реєстром архіву (вкладка «Архів»): там ручна дія з
+   *  причиною й автором, тут — просто вік без оплат. */
+  longLapsed: boolean;
   state: ClientState;
   value: number;
   seasonal: boolean;
@@ -294,7 +296,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
       lastAttemptDays: r.last_attempt_days == null ? null : Number(r.last_attempt_days),
       segment: f.segment,
       medianGapDays: f.medianGapDays,
-      archived: f.archived,
+      longLapsed: f.longLapsed,
       // 🔴 СТАН — ВІД ОПЛАТИ І ВІД СЕГМЕНТА. Дзвінки сюди не входять НАВМИСНО:
       // «дзвонили вчора» не означає «замовив». Рахує чиста функція `stateOf`
       // (єдина реалізація правила), не другий CASE у SQL — тримає #25f.

@@ -2317,8 +2317,9 @@ export interface ClientPlansResp {
     byStatus: Record<string, number>; canSubmit: boolean; canApprove: boolean;
     /** 🌉 МІСТОК: скільки постійних пішло в реактивацію. У Σ плану НЕ входить. */
     inReactivation: number; inReactivationSleeping: number; inReactivationLost: number;
-    /** Архів — ПІДМНОЖИНА втрачених (>365 дн.), у Σ не додається. */
-    inReactivationArchived: number;
+    /** «Давно втрачені · понад рік» — ПІДМНОЖИНА втрачених, у Σ не додається.
+     *  НЕ реєстр архіву (вкладка «Архів») — це вік без оплат, не ручна дія. */
+    longLapsedCount: number;
     /** 🎯 Разові — не проходять двошляхову кваліфікацію; ні тут, ні в реактивації. */
     oneOff: number;
     /** 📵 Сплячі/втрачені з ключем-телефоном без безналу — фільтр реактивації їх прибрав. */
@@ -2425,8 +2426,8 @@ export interface ReactivationRow {
   /** Сегмент за частотою; `unknown` = <3 оплат, сегмент НЕ вгадуємо. */
   segment: ClientSegment;
   medianGapDays: number | null;
-  /** Втрачений понад рік — у згорнутий «Архів», а не на головну сцену. */
-  archived: boolean;
+  /** Втрачений понад рік — у згорнутий блок «Давно втрачені», не в реєстр архіву. */
+  longLapsed: boolean;
   state: ClientState; value: number; seasonal: boolean; seasonalNote: string | null;
   taskId: number | null; taskStatus: string | null; taskAssignee: string | null;
   taskDeadline: string | null; closeReason: string | null;
@@ -2439,7 +2440,7 @@ export interface ReactivationResp {
     sleepingDays: number; lostDays: number;
     /** Пороги ПО СЕГМЕНТАХ — із ядра, щоб підпис не став другою редакцією правила. */
     bySegment: Record<ClientSegment, number>;
-    archiveDays: number; segmentMinPayments: number;
+    longLapsedDays: number; segmentMinPayments: number;
   };
   tiles: {
     sleeping: number; sleepingPotential: number; lost: number; seasonal: number;

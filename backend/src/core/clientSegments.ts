@@ -1,7 +1,7 @@
 import { pool } from "../db/pool.js";
 import { GENERIC_CLIENT_KEYS } from "./metrics.js";
 import {
-  segmentOf, stateOf, payModeOf, qualifiesAsRepeat, ARCHIVE_DAYS,
+  segmentOf, stateOf, payModeOf, qualifiesAsRepeat, LONG_LAPSED_DAYS,
   type ClientSegment, type ClientState, type ClientPayMode,
 } from "./reactivationRules.js";
 
@@ -69,7 +69,14 @@ export interface ClientSegmentFacts {
 export interface ClientSegmentRow extends ClientSegmentFacts {
   segment: ClientSegment;
   state: ClientState;
-  archived: boolean;
+  /**
+   * 🔴 «ДАВНО ВТРАЧЕНИЙ» — ВІК БЕЗ ОПЛАТ, А НЕ РЕЄСТР АРХІВУ.
+   * Поле звалось `archived`, і після появи вкладки «Архів» (реєстр із причиною,
+   * датою й автором) на сусідніх екранах опинились ДВІ різні метрики під одним
+   * словом: «архів 152» тут означало «не платив понад рік», а «Архів 0» там —
+   * скільки клієнтів прибрали руками. Перейменовано рішенням власника 05.08.2026.
+   */
+  longLapsed: boolean;
   /** Двошляхова кваліфікація постійного. `false` = РАЗОВИЙ, не на екранах. */
   qualified: boolean;
 }
@@ -142,7 +149,7 @@ export async function loadClientSegments(): Promise<Map<string, ClientSegmentRow
     map.set(r.client_key, {
       clientKey: r.client_key, payments, paymentsDated, medianGapDays, minGapDays, daysSince,
       paymentType: r.payment_type, payMode, phoneKey: r.phone_key,
-      segment, state: stateOf(daysSince, segment), archived: daysSince >= ARCHIVE_DAYS,
+      segment, state: stateOf(daysSince, segment), longLapsed: daysSince >= LONG_LAPSED_DAYS,
       qualified: qualifiesAsRepeat({ payments, minGapDays, payMode }),
     });
   }
@@ -160,7 +167,7 @@ export function factsFor(map: Map<string, ClientSegmentRow>, clientKey: string):
   return map.get(clientKey) ?? {
     clientKey, payments: 0, paymentsDated: 0, medianGapDays: null, minGapDays: null, daysSince: 0,
     paymentType: null, payMode: "cashless", phoneKey: /^[0-9]+$/.test(clientKey),
-    segment: segmentOf(null, 0), state: stateOf(0), archived: false, qualified: false,
+    segment: segmentOf(null, 0), state: stateOf(0), longLapsed: false, qualified: false,
   };
 }
 

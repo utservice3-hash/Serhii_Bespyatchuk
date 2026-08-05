@@ -250,7 +250,7 @@ test("#30k РЕАКТИВАЦІЯ: команда в кожному рядку, 
                segment: "vip" | "regular" | "episodic" | "unknown";
                lastPaid: string | null; daysSince: number; lastTalk: string | null; lastTalkDays: number | null }[];
     thresholds: { sleepingDays: number; lostDays: number;
-                  bySegment: Record<string, number>; archiveDays: number; segmentMinPayments: number };
+                  bySegment: Record<string, number>; longLapsedDays: number; segmentMinPayments: number };
   };
   assert.ok(data.clients.length > 0, "🔴 клієнтів немає — інваріант нічого не доводить");
 
@@ -291,7 +291,7 @@ test("#30k РЕАКТИВАЦІЯ: команда в кожному рядку, 
   // поріг у `reactivationRules.ts` зрушить.
   assert.deepEqual(data.thresholds.bySegment, rules.SEGMENT_SLEEPING_DAYS,
     "🔴 пороги по сегментах у відповіді розійшлись із ядром");
-  assert.equal(data.thresholds.archiveDays, rules.ARCHIVE_DAYS);
+  assert.equal(data.thresholds.longLapsedDays, rules.LONG_LAPSED_DAYS);
   assert.equal(data.thresholds.segmentMinPayments, rules.SEGMENT_MIN_PAYMENTS);
 
   // 🔴 СТАН — ВІД ОПЛАТИ І ВІД СЕГМЕНТА. Звіряємо КОЖЕН рядок із чистою функцією
@@ -344,7 +344,7 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
     clients: { clientKey: string; segment: string }[];
     totals: { totalClients: number; inReactivation: number;
               inReactivationSleeping: number; inReactivationLost: number;
-              inReactivationArchived: number; oneOff: number; skippedGeneric: number;
+              longLapsedCount: number; oneOff: number; skippedGeneric: number;
               activeBySegment: Record<string, number> };
   };
   const t = plans.totals;
@@ -358,10 +358,10 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
 
   // 🗄 Архів — ПІДМНОЖИНА втрачених, а не четверта купка. Якби його додавали в Σ,
   // втрачені порахувались би двічі; тому перевіряємо саме вкладеність.
-  assert.ok(t.inReactivationArchived <= t.inReactivationLost,
-    `🔴 архівних ${t.inReactivationArchived} більше за втрачених ${t.inReactivationLost} — `
+  assert.ok(t.longLapsedCount <= t.inReactivationLost,
+    `🔴 архівних ${t.longLapsedCount} більше за втрачених ${t.inReactivationLost} — `
     + "архів перестав бути підмножиною, і Σ почне подвоюватись");
-  assert.ok(t.inReactivationArchived > 0, "🔴 архів порожній — межа 365 днів не застосувалась");
+  assert.ok(t.longLapsedCount > 0, "🔴 архів порожній — межа 365 днів не застосувалась");
 
   // Розбивка активних по сегментах = кількості активних. Інакше «ВІП 60 · Регулярних 25»
   // під таблицею описувало б якийсь інший набір.
@@ -391,7 +391,7 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
     + ` + дженерики ${t.skippedGeneric} ≠ база ${whole} — хтось зник між екранами, і без цієї`
     + " перевірки це виглядало б як «клієнтів стало менше»");
   console.log(`   ℹ активних ${t.totalClients} · сплячих ${t.inReactivationSleeping}`
-    + ` · втрачених ${t.inReactivationLost} (з них архів ${t.inReactivationArchived})`
+    + ` · втрачених ${t.inReactivationLost} (з них архів ${t.longLapsedCount})`
     + ` · разових ${t.oneOff} · дженериків ${t.skippedGeneric} · разом ${whole}`);
 });
 
