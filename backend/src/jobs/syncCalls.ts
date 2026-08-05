@@ -183,15 +183,32 @@ export async function linkCalls(): Promise<{ byPhone: number; byFio: number }> {
 const pad = (n: number) => String(n).padStart(2, "0");
 
 /**
+ * ☎️ ЧАС ДЛЯ RINGOSTAT — КИЇВСЬКИЙ, А НЕ UTC.
+ *
+ * 🔴 БОЙОВИЙ БАГ, ЗАМІРЯНИЙ 05.08.2026 живим A/B проти самого API:
+ *     вікно 05:50→08:50 (UTC-числа, як будувала джоба) →   1 дзвінок
+ *     те саме вікно +3 год (київські числа)              → 530 дзвінків
+ * Ringostat трактує `from`/`to` у місцевому часі (і сам віддає `calldate`
+ * з `+0300`), а джоба складала рядок із `getUTC*`. Тобто щогодинний прохід
+ * просив вікно, яке ВЖЕ на 3 години в минулому, і в робочі години не забирав
+ * майже нічого. Видно було так: `job_runs` каже «успіх, помилок нема», а за
+ * 12 годин у таблицю лягло 66 рядків замість ~2000, і за поточний день —
+ * НУЛЬ. Помилки не було: джоба чесно записувала порожню відповідь.
+ *
+ * ⚠️ Саме тому «джоба зелена» ≠ «дані йдуть». Тут рятує лише замір обсягу.
+ */
+export const __kyivStampForTest = (d: Date): string => kyivStamp(d);
+const kyivStamp = (d: Date): string =>
+  d.toLocaleString("sv-SE", { timeZone: "Europe/Kyiv", hour12: false }).replace("T", " ").slice(0, 19);
+
+/**
  * ШТАТНИЙ ПРОХІД: останні `hours` годин. Викликати через `runJob` — щоб банер
  * бачив джобу (урок: ручні шляхи повз обгортку невидимі для нагляду).
  */
 export async function syncCalls(hours = 3): Promise<{ fetched: number; written: number }> {
   const to = new Date();
   const from = new Date(to.getTime() - hours * 3600_000);
-  const fmt = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} `
-    + `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`;
-  const calls = await fetchCalls(fmt(from), fmt(to));
+  const calls = await fetchCalls(kyivStamp(from), kyivStamp(to));
   const written = await upsertCalls(calls);
   await linkCalls();
   console.log(`syncCalls: отримано ${calls.length}, записано ${written}.`);
@@ -209,6 +226,9 @@ export async function backfillCalls(months = 12, pauseMs = 3000): Promise<{ mont
   for (let i = months - 1; i >= 0; i--) {
     const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
     const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i + 1, 1));
+    // Один закон часу на всю джобу: межі місяця теж київські. У бекфілі зсув
+    // крав лише краї місяця, але дві різні системи координат в одному файлі —
+    // це наступний баг, який чекає своєї години.
     const from = `${start.getUTCFullYear()}-${pad(start.getUTCMonth() + 1)}-01 00:00:00`;
     const to = new Date(end.getTime() - 1000);
     const toStr = `${to.getUTCFullYear()}-${pad(to.getUTCMonth() + 1)}-${pad(to.getUTCDate())} 23:59:59`;
