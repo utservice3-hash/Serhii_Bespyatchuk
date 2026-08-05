@@ -2276,7 +2276,8 @@ dashboardRouter.get("/client-archive", async (req, res) => {
         WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
         GROUP BY d.client_key
      )
-     SELECT o.client_key, o.client_name, o.archive_reason AS reason,
+     SELECT o.client_key, COALESCE(o.client_name, nm.client_name) AS client_name,
+            o.archive_reason AS reason,
             to_char(o.archived_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS archived_at,
             COALESCE(u.full_name, u.email) AS by_name,
             COALESCE(a.orders,0) AS orders, COALESCE(a.revenue,0) AS revenue,
@@ -2285,6 +2286,16 @@ dashboardRouter.get("/client-archive", async (req, res) => {
        LEFT JOIN arch_paid ap ON ap.client_key = o.client_key
        LEFT JOIN agg a ON a.client_key = o.client_key
        LEFT JOIN users u ON u.id = o.archived_by
+       -- 🔴 ІМʼЯ КЛІЄНТА БЕРЕТЬСЯ З deals, ТИМ САМИМ LATERAL, ЩО Й У РЕАКТИВАЦІЇ.
+       -- loyalty_overrides.client_name ніхто не заповнює (архівація пише лише
+       -- ключ і причину), тож фолбек "?? client_key" показував НОРМАЛІЗОВАНИЙ
+       -- ключ: «АМС ФАРМ ТОВ» на екрані виглядало як «амсфарм». Спіймано живою
+       -- пробою на проді, не читанням коду.
+       LEFT JOIN LATERAL (
+         SELECT d2.client_name FROM deals d2
+          WHERE d2.client_key = o.client_key AND d2.client_name IS NOT NULL
+          ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
+       ) nm ON true
       WHERE ${archivedSql("o", "ap")}
       ORDER BY o.archived_at DESC`);
   res.json({
