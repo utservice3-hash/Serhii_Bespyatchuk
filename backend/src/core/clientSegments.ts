@@ -1,8 +1,8 @@
 import { pool } from "../db/pool.js";
 import { GENERIC_CLIENT_KEYS } from "./metrics.js";
 import {
-  segmentOf, stateOf, ARCHIVE_DAYS,
-  type ClientSegment, type ClientState,
+  segmentOf, stateOf, payModeOf, qualifiesAsRepeat, ARCHIVE_DAYS,
+  type ClientSegment, type ClientState, type ClientPayMode,
 } from "./reactivationRules.js";
 
 /**
@@ -31,11 +31,17 @@ import {
  * (заміряно: 12 420 мс) — план псується не всередині фрагмента, а на стику.
  *
  * 🔴 ДРУГИЙ НАСЛІДОК ТОГО САМОГО РІШЕННЯ: `JOIN seg_state` був ВНУТРІШНІМ, а
- * фрагмент вимагає `closed_at_kommo IS NOT NULL`. Клієнт із 2+ оплатами, у яких
+ * фрагмент вимагав `closed_at_kommo IS NOT NULL`. Клієнт із 2+ оплатами, у яких
  * дата закриття не проставлена, випадав з ОБОХ екранів МОВЧКИ — рівно те, від чого
  * фрагмент і мав захистити. На проді такий один (`0674673308`, 3 оплати, 0 дат).
- * Тепер факти віддаються мапою, а `factsFor` дає таким клієнтам той самий стан,
- * що вони мали до появи сегментів: `unknown` / `active`. Тримає гейт `#30n`.
+ * Тепер запит рахує ВСІ оплати, а дату вимагає лише там, де без неї не обійтись —
+ * в інтервалах. Тримає гейт `#30n`.
+ *
+ * 🎯 ТУТ ЖЕ ЖИВЕ КВАЛІФІКАЦІЯ (`qualified`) — двошляхове правило власника
+ * «хто взагалі є постійним». Вона МУСИТЬ стояти поруч із сегментом, а не окремо:
+ * обидва екрани мають однаково відповідати і на «чи він наш постійний», і на
+ * «з якою частотою він замовляє». Саме правило — у `reactivationRules.ts`,
+ * чистою функцією; тут лише факти, з яких воно рахується.
  *
  * 🔴 ПРАВИЛО ЖИВЕ В ЧИСТИХ ФУНКЦІЯХ (`segmentOf`/`stateOf`), а SQL віддає лише
  * ФАКТИ (скільки оплат, медіанний інтервал, скільки днів мовчить). Раніше та сама
@@ -46,18 +52,26 @@ import {
 /** Сирі факти по клієнту — те, що вміє порахувати лише БД. */
 export interface ClientSegmentFacts {
   clientKey: string;
+  /** УСІ оплати, включно з тими, де не проставлена дата закриття (кваліфікація). */
   payments: number;
+  /** Оплати З датою — лише з них можна рахувати частоту (сегмент). */
+  paymentsDated: number;
   medianGapDays: number | null;
+  /** НАЙМЕНШИЙ інтервал між сусідніми оплатами — ритм для кваліфікації. */
+  minGapDays: number | null;
   daysSince: number;
   paymentType: string | null;
+  payMode: ClientPayMode;
   phoneKey: boolean;
 }
 
-/** Факти + похідні від них сегмент/стан (похідні рахують чисті функції). */
+/** Факти + похідні від них (похідні рахують чисті функції). */
 export interface ClientSegmentRow extends ClientSegmentFacts {
   segment: ClientSegment;
   state: ClientState;
   archived: boolean;
+  /** Двошляхова кваліфікація постійного. `false` = РАЗОВИЙ, не на екранах. */
+  qualified: boolean;
 }
 
 /**
@@ -71,75 +85,94 @@ const SEGMENT_FACTS_SQL = `
       FROM deals d
       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
-       AND NOT (d.client_key = ANY($1)) AND d.closed_at_kommo IS NOT NULL
+       AND NOT (d.client_key = ANY($1))
   ),
   seg_gaps AS (
     SELECT client_key,
            EXTRACT(EPOCH FROM (closed_at_kommo
              - LAG(closed_at_kommo) OVER (PARTITION BY client_key ORDER BY closed_at_kommo)))/86400 AS gap
-      FROM seg_paid
+      FROM seg_paid WHERE closed_at_kommo IS NOT NULL
   ),
   seg_med AS (
-    SELECT client_key, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY gap) AS median_gap
+    SELECT client_key,
+           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY gap) AS median_gap,
+           MIN(gap) AS min_gap
       FROM seg_gaps WHERE gap IS NOT NULL GROUP BY client_key
   )
   SELECT p.client_key,
          COUNT(*)::int AS payments,
-         m.median_gap,
-         (CURRENT_DATE - (MAX(p.closed_at_kommo) AT TIME ZONE 'Europe/Kyiv')::date)::int AS days_since,
+         COUNT(p.closed_at_kommo)::int AS payments_dated,
+         m.median_gap, m.min_gap,
+         -- Днів мовчання. Без жодної дати — 0: «мовчить нуль днів» це той самий
+         -- стан "active", який екран показував до появи сегментів; вигадувати
+         -- «сплячий» за датою, якої в CRM немає, ми не маємо права.
+         COALESCE((CURRENT_DATE - (MAX(p.closed_at_kommo) AT TIME ZONE 'Europe/Kyiv')::date)::int, 0) AS days_since,
          MODE() WITHIN GROUP (ORDER BY p.payment_type) AS payment_type,
+         -- 🔴 ФОРМУ ОПЛАТИ ДЛЯ КВАЛІФІКАЦІЇ беремо НЕ з MODE, а з наявності:
+         -- «змішані — за безнальним правилом» (рішення власника). MODE у клієнта
+         -- 2 готівки + 1 безнал сказав би «готівка» і зарахував би його в разові.
+         BOOL_OR(COALESCE(p.payment_type,'') ILIKE '%езнал%') AS has_cashless,
+         BOOL_OR(COALESCE(p.payment_type,'') ILIKE '%алич%'
+                 OR COALESCE(p.payment_type,'') ILIKE '%отівк%') AS has_cash,
          (p.client_key ~ '^[0-9]+$') AS phone_key
     FROM seg_paid p LEFT JOIN seg_med m ON m.client_key = p.client_key
-   GROUP BY p.client_key, m.median_gap`;
+   GROUP BY p.client_key, m.median_gap, m.min_gap`;
 
 /** Мапа `client_key → сегмент/стан`. Один запит на прохід екрана. */
 export async function loadClientSegments(): Promise<Map<string, ClientSegmentRow>> {
   const rows = (await pool.query<{
-    client_key: string; payments: number; median_gap: string | null;
-    days_since: number; payment_type: string | null; phone_key: boolean;
+    client_key: string; payments: number; payments_dated: number;
+    median_gap: string | null; min_gap: string | null; days_since: number;
+    payment_type: string | null; has_cashless: boolean; has_cash: boolean; phone_key: boolean;
   }>(SEGMENT_FACTS_SQL, [GENERIC_CLIENT_KEYS])).rows;
 
+  const round1 = (v: string | null) => (v == null ? null : Math.round(Number(v) * 10) / 10);
   const map = new Map<string, ClientSegmentRow>();
   for (const r of rows) {
-    const medianGapDays = r.median_gap == null ? null : Math.round(Number(r.median_gap) * 10) / 10;
+    const medianGapDays = round1(r.median_gap);
+    const minGapDays = round1(r.min_gap);
     const payments = Number(r.payments);
+    const paymentsDated = Number(r.payments_dated);
     const daysSince = Number(r.days_since);
-    const segment = segmentOf(medianGapDays, payments);
+    // 🔴 СЕГМЕНТ — від ОПЛАТ ІЗ ДАТОЮ: частота рахується з інтервалів, а інтервал
+    // без дати не існує. Кваліфікація натомість дивиться на ВСІ оплати — факт
+    // оплати є фактом, навіть коли менеджер не проставив дату закриття.
+    const segment = segmentOf(medianGapDays, paymentsDated);
+    const payMode = payModeOf(r.has_cash, r.has_cashless);
     map.set(r.client_key, {
-      clientKey: r.client_key, payments, medianGapDays, daysSince,
-      paymentType: r.payment_type, phoneKey: r.phone_key,
+      clientKey: r.client_key, payments, paymentsDated, medianGapDays, minGapDays, daysSince,
+      paymentType: r.payment_type, payMode, phoneKey: r.phone_key,
       segment, state: stateOf(daysSince, segment), archived: daysSince >= ARCHIVE_DAYS,
+      qualified: qualifiesAsRepeat({ payments, minGapDays, payMode }),
     });
   }
   return map;
 }
 
 /**
- * Факти для клієнта, якого у мапі немає (жодної оплати з проставленою датою).
+ * Факти для клієнта, якого у мапі немає взагалі (жодної оплаченої угоди).
  *
- * 🔴 НЕ ВИГАДУЄМО ЙОМУ СЕГМЕНТ І НЕ ХОВАЄМО ЙОГО. Сегмент — `unknown`
- * («частоту рахувати нема з чого» — це відповідь, а не порожнє місце), стан —
- * той самий `active`, що екран показував до появи сегментів. Викинути його
- * означало б мовчки втратити клієнта; призначити «сплячий» означало б збрехати
- * про дату, якої в CRM немає.
+ * 🔴 НЕ ВИГАДУЄМО ЙОМУ СЕГМЕНТ. `unknown` — «частоту рахувати нема з чого» — це
+ * відповідь, а не порожнє місце. `qualified: false`: без жодної оплати постійним
+ * не стають, і мовчазне «так» тут пустило б на екран кого завгодно.
  */
 export function factsFor(map: Map<string, ClientSegmentRow>, clientKey: string): ClientSegmentRow {
   return map.get(clientKey) ?? {
-    clientKey, payments: 0, medianGapDays: null, daysSince: 0,
-    paymentType: null, phoneKey: /^[0-9]+$/.test(clientKey),
-    segment: segmentOf(null, 0), state: stateOf(0), archived: false,
+    clientKey, payments: 0, paymentsDated: 0, medianGapDays: null, minGapDays: null, daysSince: 0,
+    paymentType: null, payMode: "cashless", phoneKey: /^[0-9]+$/.test(clientKey),
+    segment: segmentOf(null, 0), state: stateOf(0), archived: false, qualified: false,
   };
 }
 
 /**
  * 📵 ТЕЛЕФОННІ ДЖЕНЕРИКИ — геть із реактивації, КРІМ безготівкових
- * (рішення власника 04.08.2026).
+ * (рішення власника 05.08.2026, записане в CLAUDE.md).
  *
  * Клієнт із ключем-телефоном («380685263085») — це переважно разовий фізик, а не
  * клієнт із історією. Але серед них є й реальні фірми з кривим ключем — їх видає
  * форма оплати «Безнал з ПДВ / без ПДВ».
  *
- * 🟢 СТРАХОВКА ЗАМІРЯНА (прод, 04.08.2026): прибирається 294 із 388, лишається 94.
+ * 🟢 СТРАХОВКА ЗАМІРЯНА (прод, 05.08.2026): прибирається 294 із 388, лишається 94.
  * Топ-10 прибраних за грошима — усі з ПОРОЖНЬОЮ формою оплати і давністю
  * 1 034-2 246 днів, тобто легасі до появи поля. Цінного не викинули.
  * (Повторний замір 05.08.2026 на списку реактивації: 1 137 → 842, тобто 295.)

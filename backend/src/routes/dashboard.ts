@@ -3989,10 +3989,15 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    * кількість МУСИТЬ бути названа тут — інакше вони зникли б мовчки, а це
    * читається як «клієнти загубились» (гейт #30n).
    */
-  const bridge = { sleeping: 0, lost: 0,
+  const bridge = { sleeping: 0, lost: 0, archived: 0, oneOff: 0,
     bySegment: { vip: 0, regular: 0, episodic: 0, unknown: 0 } as Record<string, number> };
   const activeRows = clientsRes.rows.filter((c) => {
     const f = factsFor(seg, c.client_key);
+    // 🎯 РАЗОВІ — НЕ постійні (двошляхова кваліфікація, рішення власника 05.08.2026).
+    // Їх немає ні тут, ні в реактивації; але вони НАЗВАНІ числом, бо інакше 1 137 → 795
+    // читалось би як «третина клієнтів кудись поділась».
+    if (!f.qualified) { bridge.oneOff++; return false; }
+    if (f.archived) bridge.archived++;   // підмножина втрачених, не окрема купка
     if (f.state === "sleeping") { bridge.sleeping++; return false; }
     if (f.state === "lost") { bridge.lost++; return false; }
     bridge.bySegment[f.segment] = (bridge.bySegment[f.segment] ?? 0) + 1;
@@ -4066,6 +4071,18 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       inReactivation: bridge.sleeping + bridge.lost,
       inReactivationSleeping: bridge.sleeping,
       inReactivationLost: bridge.lost,
+      /**
+       * 🗄 Архів — ПІДМНОЖИНА втрачених (>365 дн.), а не четверта купка. У Σ його
+       * не додають: `активні + сплячі + втрачені = кваліфікована база`, інакше
+       * втрачені порахувались би двічі.
+       */
+      inReactivationArchived: bridge.archived,
+      /**
+       * 🎯 РАЗОВІ — не проходять двошляхову кваліфікацію. Ні тут, ні в реактивації.
+       * Названі числом навмисно: без нього перехід 1 137 → 795 читався б як втрата
+       * даних, а не як зміна правила (гейт #30n).
+       */
+      oneOff: bridge.oneOff,
       /** Розбивка ЖИВИХ по сегментах — та, що стоїть над таблицею. */
       activeBySegment: bridge.bySegment,
       currentWeekIndex: curIdx < 0 ? null : curIdx,

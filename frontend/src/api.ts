@@ -2311,6 +2311,10 @@ export interface ClientPlansResp {
     byStatus: Record<string, number>; canSubmit: boolean; canApprove: boolean;
     /** 🌉 МІСТОК: скільки постійних пішло в реактивацію. У Σ плану НЕ входить. */
     inReactivation: number; inReactivationSleeping: number; inReactivationLost: number;
+    /** Архів — ПІДМНОЖИНА втрачених (>365 дн.), у Σ не додається. */
+    inReactivationArchived: number;
+    /** 🎯 Разові — не проходять двошляхову кваліфікацію; ні тут, ні в реактивації. */
+    oneOff: number;
     /** Розбивка ЖИВИХ по сегментах — цифра над таблицею. */
     activeBySegment: Record<ClientSegment, number>;
   };

@@ -329,11 +329,12 @@ test("#30k РЕАКТИВАЦІЯ: команда в кожному рядку, 
     "🔴 є дата розмови без коректної кількості днів");
 });
 
-test("#30n ЖОРСТКИЙ ПОДІЛ: активні на планах, сплячі й втрачені — в реактивації, і НІХТО не зник", needsApi(), async () => {
-  // 🔴 ПИТАННЯ, НА ЯКЕ ВІДПОВІДАЄ ЦЕЙ ГЕЙТ. Після поділу екран планів показує 226
-  // клієнтів замість 1 137 — і це ПРАВИЛЬНО. Але рівно так само виглядало б, якби
-  // 900 клієнтів просто загубились у джойні. Різницю робить одне: сума частин має
-  // дорівнювати цілому, і місток має НАЗВАТИ тих, кого забрали.
+test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втрачені = кваліфікована база, разові НАЗВАНІ", needsApi(), async () => {
+  // 🔴 ПИТАННЯ, НА ЯКЕ ВІДПОВІДАЄ ЦЕЙ ГЕЙТ. Екран планів показує ~164 клієнти
+  // замість 1 137 — і це ПРАВИЛЬНО: спрацювали дві різні зміни правил (жорсткий
+  // поділ за станом + двошляхова кваліфікація). Але рівно так само виглядало б,
+  // якби сотні клієнтів просто загубились у джойні. Різницю робить одне: сума
+  // частин має дорівнювати цілому, і кожна відрізана купка має бути НАЗВАНА.
   //
   // Такий випадок уже був, і не гіпотетично: внутрішній `JOIN` до сегментів
   // викидав клієнта, у якого 2+ оплат, але в жодної не проставлена дата закриття
@@ -343,6 +344,7 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні на планах, спл
     clients: { clientKey: string; segment: string }[];
     totals: { totalClients: number; inReactivation: number;
               inReactivationSleeping: number; inReactivationLost: number;
+              inReactivationArchived: number; oneOff: number;
               activeBySegment: Record<string, number> };
   };
   const t = plans.totals;
@@ -351,15 +353,23 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні на планах, спл
     "🔴 місток не дорівнює сумі своїх частин");
   assert.ok(t.inReactivation > 0,
     "🔴 місток порожній — або поділу немає, або сплячих не порахували; і те, і те приховало б клієнтів");
+  assert.ok(t.oneOff > 0,
+    "🔴 разових НУЛЬ — кваліфікація не застосувалась, або її результат не названо числом");
+
+  // 🗄 Архів — ПІДМНОЖИНА втрачених, а не четверта купка. Якби його додавали в Σ,
+  // втрачені порахувались би двічі; тому перевіряємо саме вкладеність.
+  assert.ok(t.inReactivationArchived <= t.inReactivationLost,
+    `🔴 архівних ${t.inReactivationArchived} більше за втрачених ${t.inReactivationLost} — `
+    + "архів перестав бути підмножиною, і Σ почне подвоюватись");
+  assert.ok(t.inReactivationArchived > 0, "🔴 архів порожній — межа 365 днів не застосувалась");
 
   // Розбивка активних по сегментах = кількості активних. Інакше «ВІП 60 · Регулярних 25»
-  // під таблицею з 226 рядків описувало б якийсь інший набір.
+  // під таблицею описувало б якийсь інший набір.
   const segSum = Object.values(t.activeBySegment).reduce((s, v) => s + v, 0);
-  assert.equal(segSum, t.totalClients,
-    `🔴 Σ сегментів ${segSum} ≠ активних ${t.totalClients}`);
+  assert.equal(segSum, t.totalClients, `🔴 Σ сегментів ${segSum} ≠ активних ${t.totalClients}`);
 
-  // ГОЛОВНЕ: активні + сплячі + втрачені = УСІ постійні цього скоупу. Знаменник
-  // рахуємо НЕЗАЛЕЖНО від роуту — прямо з БД тим самим правилом «2+ оплат».
+  // ГОЛОВНЕ: активні + сплячі + втрачені + разові = УСІ клієнти з 2+ оплатами.
+  // Знаменник рахуємо НЕЗАЛЕЖНО від роуту — прямо з БД.
   const { pool } = await import("../db/pool.js");
   const metrics = await import("../core/metrics.js");
   const whole = Number((await pool.query<{ n: string }>(
@@ -376,9 +386,12 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні на планах, спл
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
       WHERE COALESCE(lo.hidden, false) = false`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
-  assert.equal(t.totalClients + t.inReactivation, whole,
-    `🔴 активні ${t.totalClients} + місток ${t.inReactivation} ≠ уся база постійних ${whole} — `
+  assert.equal(t.totalClients + t.inReactivation + t.oneOff, whole,
+    `🔴 активні ${t.totalClients} + місток ${t.inReactivation} + разові ${t.oneOff} ≠ база ${whole} — `
     + "хтось зник між екранами, і без цієї перевірки це виглядало б як «клієнтів стало менше»");
+  console.log(`   ℹ активних ${t.totalClients} · сплячих ${t.inReactivationSleeping}`
+    + ` · втрачених ${t.inReactivationLost} (з них архів ${t.inReactivationArchived})`
+    + ` · разових ${t.oneOff} · разом ${whole}`);
 });
 
 test("#30o ДЖЕНЕРИКИ-ТЕЛЕФОНИ: без безналу — геть, із безналом — ЗАЛИШАЮТЬСЯ", needsApi(), async () => {

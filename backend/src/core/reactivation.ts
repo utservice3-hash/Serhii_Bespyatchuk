@@ -252,7 +252,14 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
   // шапці `clientSegments.ts`).
   const seg = await loadClientSegments();
 
-  return rows.filter((r) => keepInReactivation(factsFor(seg, r.client_key))).map((r) => {
+  // 🎯 РАЗОВІ СЮДИ НЕ ПОТРАПЛЯЮТЬ (двошляхова кваліфікація, рішення власника
+  // 05.08.2026): реактивувати того, хто ніколи не був постійним, нема сенсу —
+  // це не повернення клієнта, а холодний дзвінок. Скільки їх — каже екран планів
+  // (`totals.oneOff`), щоб число не зникло мовчки.
+  return rows.filter((r) => {
+    const f = factsFor(seg, r.client_key);
+    return f.qualified && keepInReactivation(f);
+  }).map((r) => {
     const tk = taskMap.get(r.client_key);
     const f = factsFor(seg, r.client_key);
     const days = Number(r.days_since);

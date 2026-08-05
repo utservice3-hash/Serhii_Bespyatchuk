@@ -40,7 +40,17 @@ async function seed(c: import("pg").Client): Promise<void> {
   await c.query(`INSERT INTO pipeline_stage_map (pipeline_id,status_id,funnel_stage)
       VALUES (8921932,142,'paid') ON CONFLICT DO NOTHING`);
 
-  // Кожен клієнт — 2 оплати (поріг «постійного»), різна давність ОСТАННЬОЇ.
+  // Кожен клієнт — ТРИ оплати, різна давність ОСТАННЬОЇ.
+  //
+  // 🔴 ЧОМУ ТРИ, А НЕ ДВІ (як було). Двошляхова кваліфікація власника (05.08.2026)
+  // визнає постійним безнал із 2 оплатами ЛИШЕ за ритмом ≤30 днів. У сіді інтервал
+  // 400 днів і форма оплати не проставлена — тобто всі ці клієнти стали б РАЗОВИМИ,
+  // і кожен тест про стани перевіряв би порожній список. Третя оплата дає
+  // кваліфікацію «3+ за історію», не чіпаючи ДАТУ ОСТАННЬОЇ — а саме вона й
+  // визначає стан, який ці тести перевіряють.
+  //
+  // ⚠️ Інтервали 200/200 → медіана 200 → сегмент `episodic`, поріг сплячого 60 —
+  // той самий, що був у `unknown`. Тому межі 59/60/179/180 нижче лишились чинними.
   const clients: [string, string, number, number, number][] = [
     // ключ,                назва,          менеджер, днів тому, ціна
     ["активний",           "ТОВ Активний",   10,  10, 5000],
@@ -56,11 +66,11 @@ async function seed(c: import("pg").Client): Promise<void> {
   ];
   let id = 1;
   for (const [key, name, mgr, ago, price] of clients) {
-    for (const [i, when] of [ago + 400, ago].entries()) {
+    for (const [i, when] of [ago + 400, ago + 200, ago].entries()) {
       await c.query(
         `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo)
          VALUES ($1,'d',$2,8921932,142,$3,$4,$4,$5,$6)`,
-        [id++, mgr, i === 1 ? price : 1, key, name, daysAgo(when)]);
+        [id++, mgr, i === 2 ? price : 1, key, name, daysAgo(when)]);
     }
   }
   await c.query(`INSERT INTO loyalty_overrides (client_key, seasonal, seasonal_note) VALUES ('сезонний', true, 'зерно')`);
@@ -106,8 +116,8 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
 
     // Ранжування за цінністю рахує ядро — перевіряємо, що дані для нього справжні.
     const sleep = by.get("сплячий")!;
-    assert.equal(sleep.orders, 2);
-    assert.equal(sleep.lifetimeRevenue, 9001, "2 оплати: 9000 + 1");
+    assert.equal(sleep.orders, 3);
+    assert.equal(sleep.lifetimeRevenue, 9002, "3 оплати: 9000 + 1 + 1");
     assert.ok(sleep.value > 0 && sleep.value < sleep.lifetimeRevenue,
       "свіжість має ЗМЕНШУВАТИ вагу сплячого, інакше сортування зведеться до виручки");
     assert.equal(by.get("активний")!.managerName, "Менеджер А");
@@ -275,7 +285,11 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
 
       // 🔴 <3 ОПЛАТ — СЕГМЕНТ НЕ ВГАДУЄМО. Саме тут при порозі «2+» дві оплати з
       // різницею 3 дні робили клієнта «ВІП» назавжди (на проді 488 таких).
-      const two = by.get("сплячий")!;   // у сіді рівно 2 оплати
+      // Клієнт заводиться ТУТ, а не береться із сіду: сідові мають по три оплати,
+      // щоб проходити кваліфікацію, тож випадку «рівно дві» в них більше немає.
+      await mk(560, "дваблизько", [3], 5);   // 2 оплати з різницею 3 дні
+      const two = (await R.clientStates({})).find((r) => r.clientKey === "дваблизько")!;
+      assert.ok(two, "🔴 безнал… точніше клієнт із 2 оплатами за 3 дні мав кваліфікуватись");
       assert.equal(two.segment, "unknown",
         "🔴 сегмент поставлено по ОДНОМУ інтервалу — саме той артефакт, через який ВІП роздувався");
 
@@ -290,6 +304,59 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       // зеленим і тоді, коли сегменти взагалі не застосовуються.
       assert.ok(rows.some((r) => R2.stateOf(r.daysSince, r.segment) !== R2.stateOf(r.daysSince)),
         "🔴 сегментний поріг не змінив стан ЖОДНОГО рядка — цикл вище нічого не доводить");
+    });
+
+    await t.test("#25g КВАЛІФІКАЦІЯ ≠ СЕГМЕНТ: 2 оплати підряд — постійний без сегмента", async () => {
+      // 🔴 ДВА ВИПАДКИ, НАЗВАНІ ВЛАСНИКОМ ПОІМЕННО, і саме вони найлегше плутаються:
+      //  (1) 2 оплати з інтервалом ≤30 дн. (безнал) — КВАЛІФІКУЄТЬСЯ, але сегмент
+      //      `unknown`: медіана по ОДНОМУ інтервалу — це не частота. Поріг 60.
+      //  (2) 6 оплат раз на 2 місяці — Епізодичний, поріг 60, і точно НЕ разовий.
+      // Плюс дзеркало: 2 оплати ГОТІВКОЮ з тим самим інтервалом — разовий. Без нього
+      // тест зеленів би й тоді, коли кваліфікуються геть усі.
+      const R2 = await import("./reactivationRules.js");
+      const mk = async (id: number, key: string, gaps: number[], lastAgo: number, pay: string) => {
+        let day = lastAgo;
+        for (let i = 0; i < gaps.length + 1; i++) {
+          await c.query(
+            `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo,payment_type)
+             VALUES ($1,'d',10,8921932,142,1000,$2,$2,$2,$3,$4)`, [id + i, key, daysAgo(day), pay]);
+          day += gaps[i] ?? 30;
+        }
+      };
+      await mk(600, "двабезнал", [20], 5, "Безнал с НДС");   // 2 оплати, інтервал 20 дн.
+      await mk(610, "двабезналдалеко", [200], 5, "Безнал с НДС"); // 2 оплати, інтервал 200 дн.
+      await mk(620, "дваготівка", [20], 5, "Наличные");       // 2 оплати готівкою
+      // РІВНО дві оплати різними формами: 1 готівка + 1 безнал, інтервал 20 днів.
+      // Якби їх було три, кваліфікація спрацювала б за «3+ за історію» — і правило
+      // про змішані форми лишилось би неперевіреним.
+      await c.query(
+        `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo,payment_type)
+         VALUES (630,'d',10,8921932,142,1000,'змішаний','змішаний','змішаний',$1,'Наличные'),
+                (631,'d',10,8921932,142,1000,'змішаний','змішаний','змішаний',$2,'Безнал без НДС')`,
+        [daysAgo(25), daysAgo(5)]);
+      await mk(640, "разнадва", [60, 60, 60, 60, 60], 10, "Безнал с НДС"); // 6 оплат раз на 2 міс.
+
+      const by = new Map((await R.clientStates({})).map((r) => [r.clientKey, r]));
+
+      const two = by.get("двабезнал");
+      assert.ok(two, "🔴 безнал із 2 оплатами за 20 днів МАЄ кваліфікуватись — правило власника");
+      assert.equal(two!.segment, "unknown",
+        "🔴 сегмент вгадано по ОДНОМУ інтервалу — кваліфікація і сегмент це РІЗНІ питання");
+      assert.equal(two!.state, "active", "🔴 поріг для `unknown` — 60 днів, а оплата 5 днів тому");
+
+      const six = by.get("разнадва");
+      assert.ok(six, "🔴 6 оплат раз на 2 місяці — це точно НЕ разовий");
+      assert.equal(six!.segment, "episodic", "🔴 медіана 60 днів — це Епізодичний");
+      assert.equal(R2.SEGMENT_SLEEPING_DAYS[six!.segment], 60, "🔴 поріг епізодичного має бути 60");
+
+      // 🪞 ДЗЕРКАЛО: хто НЕ проходить — на екрані його немає.
+      assert.equal(by.get("дваготівка"), undefined,
+        "🔴 готівка з 2 оплатами кваліфікувалась — для готівки правило 3+, а не 2+");
+      assert.equal(by.get("двабезналдалеко"), undefined,
+        "🔴 безнал із 2 оплатами через 200 днів кваліфікувався — ритму 30 днів немає");
+      assert.ok(by.get("змішаний"),
+        "🔴 змішані форми мають рахуватись за БЕЗНАЛЬНИМ правилом: 1 готівка + 1 безнал "
+        + "з інтервалом 20 днів — це постійний, а не разовий");
     });
 
     await t.test("#25e «ПРИБРАТИ З ПОСТІЙНИХ» СПРАВДІ ПРИБИРАЄ (і повертає назад)", async () => {
