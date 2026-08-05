@@ -2217,7 +2217,21 @@ dashboardRouter.post("/loyalty-override", async (req, res) => {
   const clientKey = String(req.body?.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
   const q = buildOverrideUpsert(req.body ?? {}, req.auth!.userId);
-  await pool.query(q.sql, q.params);
+  try {
+    await pool.query(q.sql, q.params);
+  } catch (e) {
+    // 🔴 БД ЛИШАЄТЬСЯ ВАРТОВИМ, роут лише ПЕРЕКЛАДАЄ її відмову людською мовою.
+    // Переносити правило у валідацію роуту не можна — її обходить будь-який
+    // скрипт. Але 500 «internal error» на очікувану відмову теж неправильно:
+    // людина бачить поломку там, де насправді спрацювало правило.
+    // ⚠️ Ловимо САМЕ цей CHECK за іменем, а не будь-яку помилку: «зловив усе»
+    // перетворив би справжню аварію БД на охайне 400.
+    const err = e as { code?: string; constraint?: string };
+    if (err.code === "23514" && err.constraint === "loyalty_overrides_force_regular_note_chk")
+      return res.status(400).json({
+        error: "Щоб вважати клієнта постійним попри правило, потрібна примітка «чому»" });
+    throw e;
+  }
   res.json({ ok: true });
 });
 
