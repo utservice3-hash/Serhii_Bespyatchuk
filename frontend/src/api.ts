@@ -2481,3 +2481,29 @@ export async function closeReactivationTask(body: { taskId: number; reason: stri
   const { data } = await api.post("/dashboard/reactivation-task/close", body);
   return data;
 }
+
+// ── ПУЛ НІЧИЙНИХ КЛІЄНТІВ (рішення власника 05.08.2026) ──────────────────────
+export interface OrphanClientRow {
+  clientKey: string; name: string; managerId: number; manager: string;
+  reason: "service" | "inactive"; segment: string; isRegular: boolean;
+  payments: number; lastPaidAt: string | null; lastCallAt: string | null;
+  daysSincePaid: number | null; daysSinceCall: number | null;
+  revenue12: number; revenueAll: number; paymentType: string | null;
+}
+export interface OrphanGroup {
+  managerId: number; manager: string; reason: string; reasonLabel: string;
+  clients: OrphanClientRow[]; sum12: number; sumAll: number;
+}
+export interface OrphanPool {
+  scope: string;
+  tiles: { clients: number; money12: number; regulars: number; vip: number; claimedThisMonth: number; totalAllTime: number };
+  groups: OrphanGroup[];
+}
+export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {
+  const { data } = await api.get<OrphanPool>("/dashboard/orphan-clients", { params: scope ? { scope } : {} });
+  return data;
+}
+/** 409 = клієнта вже взяли; текст помилки називає, хто саме. */
+export async function claimOrphanClient(clientKey: string, managerId: number): Promise<void> {
+  await api.post("/dashboard/orphan-clients/claim", { clientKey, managerId });
+}

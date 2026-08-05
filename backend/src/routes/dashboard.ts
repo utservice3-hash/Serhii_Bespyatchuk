@@ -4508,6 +4508,7 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
       regulars: rows.filter((r) => r.isRegular).length,
       vip: rows.filter((r) => r.segment === "ВІП").length,
       claimedThisMonth: await metrics.orphanClaimedThisMonth(),
+      totalAllTime: await metrics.orphanTotalAllTime(),
     },
     groups: list,
   });

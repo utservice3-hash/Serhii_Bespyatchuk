@@ -3094,6 +3094,26 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
   });
 }
 
+/**
+ * Скільки нічийних УСЬОГО, без вікна 18 міс — для підпису плитки «усього в базі N».
+ * 🔴 Це СВІДОМО окремий підрахунок, і він не суперечить правилу «лічильник із тих
+ * самих даних»: тут інша множина (весь час проти робочого зрізу), тож брати її зі
+ * списку 18-місячної вибірки було б просто неправильно.
+ */
+export async function orphanTotalAllTime(): Promise<number> {
+  const r = await pool.query<{ n: string }>(
+    `SELECT count(DISTINCT ck) n FROM (
+       SELECT d.client_key ck, d.manager_id mid,
+              row_number() OVER (PARTITION BY d.client_key ORDER BY count(*) DESC, max(d.closed_at_kommo) DESC) rn
+         FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id=d.pipeline_id AND psm.status_id=d.status_id
+        WHERE psm.funnel_stage='paid' AND d.client_key IS NOT NULL
+          AND NOT (d.client_key = ANY($1)) AND d.closed_at_kommo IS NOT NULL
+        GROUP BY d.client_key, d.manager_id) t
+     JOIN managers m ON m.id = t.mid
+    WHERE t.rn = 1 AND ${orphanManagerSql("m")}`, [GENERIC_CLIENT_KEYS]);
+  return Number(r.rows[0].n);
+}
+
 /** «Взято в роботу за цей місяць» — плитка макета. */
 export async function orphanClaimedThisMonth(): Promise<number> {
   const r = await pool.query<{ n: string }>(
