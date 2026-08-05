@@ -159,7 +159,7 @@ export async function kommoWrite<T>(
   return res.json() as Promise<T>;
 }
 
-interface KommoFieldValue {
+export interface KommoFieldValue {
   field_id?: number;
   field_code?: string | null;
   values?: { value?: unknown }[];
@@ -502,6 +502,23 @@ export async function fetchContactsByIds(ids: number[]): Promise<KommoContact[]>
 export interface KommoCompany {
   id: number;
   name: string;
+  /**
+   * 🏢 Кастом-поля компанії. Kommo віддає їх у ТІЙ САМІЙ відповіді, яку синк уже
+   * отримує заради `name`, — тож читання коду (ЄДРПОУ/ІПН) не коштує жодного
+   * додаткового запиту. Той самий прийом, що з `deal._embedded.contacts`.
+   */
+  custom_fields_values?: KommoFieldValue[] | null;
+}
+
+/** Кастом-поля компанії з кодами. Розбір і межі — `core/companyCode.ts`. */
+export const COMPANY_FIELD_EDRPOU = 466493;
+export const COMPANY_FIELD_IPN = 463931;
+
+/** Значення кастом-поля компанії як рядок (перше зі списку). */
+export function companyFieldValue(co: KommoCompany, fieldId: number): string | null {
+  const f = co.custom_fields_values?.find((v) => v.field_id === fieldId);
+  const v = f?.values?.[0]?.value;
+  return v == null ? null : String(v);
 }
 
 /** Fetches specific companies by id (up to 250 per call). */

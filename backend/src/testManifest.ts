@@ -23,6 +23,7 @@ export const MANIFEST_FILES: string[] = [
   "jobs/dealContactPairs.test.js",
   "core/clientPlans.test.js",
   "core/clientCard.test.js",
+  "core/companyCode.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -263,6 +264,10 @@ export const MANIFEST_TESTS: string[] = [
   "#29b ДЗЕРКАЛО: аргумент СПРАВДІ звужує, а не ігнорується",
   "#29c Σ МІСЯЦІВ КАРТКИ == ФАКТУ КЛІЄНТА того ж діапазону",
   "#29d МІСЯЦЬ КАРТКИ == МІСЯЦЮ ЕКРАНА ПЛАНІВ (одна цифра, не дві схожі)",
+  // core/companyCode.test.ts — що вважаємо кодом підприємства
+  "#41 НОРМАЛІЗАЦІЯ КОДУ: беремо лише осмислені довжини",
+  "#41b КЛАС КОДУ: ЄДРПОУ й ІПН — РІЗНІ ключі, не зводяться в один",
+  "#41c ПОЛЕ НЕ ВИЗНАЧАЄ КЛАС — вирішує довжина значення",
   // routes/uiEntry.test.ts — дія керування без входу в UI (ловимо ВДРУГЕ)
   "#39 ВХІД В UI: кожна дія керування викликається з ДОСЯЖНОГО компонента",
   "#39b МЕРТВЕ ПОЛЕ `hidden` НЕ ЖИВЕ У ФРОНТІ (той самий баг не повернеться тихо)",

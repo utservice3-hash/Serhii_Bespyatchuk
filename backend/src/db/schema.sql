@@ -1560,6 +1560,58 @@ CREATE TABLE IF NOT EXISTS deal_contacts (
 -- зворотний напрям (контакт → його угоди) — гарячий шлях розкидання нотаток
 CREATE INDEX IF NOT EXISTS idx_deal_contacts_contact ON deal_contacts(contact_id);
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 🏢 КОМПАНІЇ Й ЇХНІ КОДИ (ЄДРПОУ / ІПН) — міст «угода → компанія → код».
+--
+-- 🔴 НАВІЩО. Дублі клієнтів досі шукались по спільному КОНТАКТУ й ТЕЛЕФОНУ, а
+-- це слабкі докази: 12 контактів-хабів давали 35 818 із 36 728 пар (експедитори),
+-- і 21% груп зі спільним контактом — різні фірми. Код підприємства унікальний ЗА
+-- ВИЗНАЧЕННЯМ, тож правило за кодом сильніше за обидва.
+--
+-- 🟢 ЦІНА СИНКУ — НУЛЬ ЗАПИТІВ. syncKommo уже тягне повний обʼєкт компанії для
+-- кожної угоди вікна (fetchCompaniesByIds) і досі викидав усе, крім name.
+-- Код лежить у тому самому custom_fields_values. Той самий прийом, що з
+-- deal_contacts.
+--
+-- 📐 ЯКІ САМЕ ПОЛЯ І ЧОМУ (заміряно на 10 000 компаній Kommo, 05.08.2026):
+--   · 466493 «ЕДРПОУ» — 855 значень по 8 цифр. Юрособа.
+--   · 463931 «ИНН»    — 616 значень по 12 цифр. Податковий номер (ФОП / платник ПДВ).
+--   · 468969 «Код»    — НЕ БЕРЕМО. Це внутрішній обліковий код: 9 цифр із
+--     провідними нулями (000000882, 1057), і з 517 компаній, де заповнені й
+--     він, і ЄДРПОУ, вони РІЗНІ у 513. Змішати їх означало б вигадати дублі.
+--   · 2097435 «ЕДРПОУ перевозчик» (на УГОДІ) — НЕ БЕРЕМО: це код ПЕРЕВІЗНИКА,
+--     інша сторона угоди. Плутанина тут коштувала б фальшивих злиттів клієнтів.
+--
+-- ⚠️ ЄДРПОУ Й ІПН — ДВА РІЗНІ КЛЮЧІ, НЕ ЗВОДИМО В ОДИН. Перевірена гіпотеза
+-- «ІПН містить ЄДРПОУ»: перші 7 цифр збігаються у 96%, перші 8 — лише у 15%
+-- (8-ма цифра ЄДРПОУ контрольна й в ІПН інша). Зрізати до 7 цифр на цих даних
+-- колізій не дало (0 на 853 унікальних ЄДРПОУ), але 7 цифр — це вже не
+-- ідентифікатор, а здогад, тож зберігаємо обидва коди окремо.
+--
+-- 🔴 СИРИЙ КОД ПОРУЧ ІЗ НОРМАЛІЗОВАНИМ — той самий принцип, що client_key_raw:
+-- правила нормалізації ще можуть змінитись, і без сирого значення переграти їх
+-- буде нізвідки.
+CREATE TABLE IF NOT EXISTS kommo_companies (
+  company_id  BIGINT PRIMARY KEY,
+  name        TEXT,
+  edrpou_raw  TEXT,               -- як віддав Kommo
+  edrpou      TEXT,               -- лише цифри; NULL, якщо не схоже на код
+  ipn_raw     TEXT,
+  ipn         TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kommo_companies_edrpou ON kommo_companies(edrpou) WHERE edrpou IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_kommo_companies_ipn    ON kommo_companies(ipn)    WHERE ipn    IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS deal_companies (
+  deal_kommo_id BIGINT NOT NULL,
+  company_id    BIGINT NOT NULL,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (deal_kommo_id, company_id)
+);
+-- зворотний напрям (компанія → її угоди) — саме ним будується міст код → client_key
+CREATE INDEX IF NOT EXISTS idx_deal_companies_company ON deal_companies(company_id);
+
 -- Вотермарк проходу нотаток КОНТАКТІВ — окремий від лідового (`last_activity_note_at`),
 -- щоб збій одного не зсував інший.
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_contact_note_at TIMESTAMPTZ;

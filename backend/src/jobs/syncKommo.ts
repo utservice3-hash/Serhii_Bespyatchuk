@@ -1,5 +1,6 @@
 import { dedupeDealContactPairs, type DealContactPair } from "./dealContactPairs.js";
 import { pool } from "../db/pool.js";
+import { splitCompanyCodes } from "../core/companyCode.js";
 import {
   extractPhone,
   extractLeadSource,
@@ -16,6 +17,10 @@ import {
   fetchLeadsByIds,
   fetchContactsByIds,
   fetchCompaniesByIds,
+  companyFieldValue,
+  COMPANY_FIELD_EDRPOU,
+  COMPANY_FIELD_IPN,
+  type KommoCompany,
   fetchUsers,
   type KommoDeal,
 } from "../kommo/client.js";
@@ -414,6 +419,8 @@ export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<
     // в руках: НУЛЬ додаткових запитів до Kommo. Живить рознесення нотаток контактів
     // (дзвінки Ringostat) по угодах — див. `syncContactActivity`.
     await upsertDealContacts(deals);
+    // 🏢 Те саме для компаній: звʼязок + коди (ЄДРПОУ/ІПН) із того самого знімка.
+    await upsertCompanies(deals, companies);
 
     // Персистимо лідоген-слід із поточного знімка реєстру (+ transfer_events) у
     // постійну leadgen_touch ПЕРЕД reclassify — щоб хвіст не губився, коли реєстр
@@ -504,6 +511,49 @@ function resolveClient(
  * Ідемпотентно (ON CONFLICT). Відвʼязані контакти чистимо по кожній угоді вікна, щоб
  * старий звʼязок не тягнув чужі дзвінки після перепризначення контакта.
  */
+/**
+ * 🏢 Пише `kommo_companies` (назва + коди) і `deal_companies` (звʼязок) із ТОГО
+ * САМОГО знімка, який синк уже отримав заради назви компанії → додаткових
+ * запитів до Kommo НЕМАЄ. Ідемпотентно.
+ *
+ * 🔴 ДЕДУП ПАР ОБОВʼЯЗКОВИЙ — той самий урок, що з `deal_contacts` (03.08.2026):
+ * паралельна пагінація може віддати ту саму угоду двічі, а Postgres не дозволяє
+ * одному `INSERT … ON CONFLICT DO UPDATE` зачепити рядок двічі.
+ */
+async function upsertCompanies(deals: KommoDeal[], companies: KommoCompany[]): Promise<void> {
+  if (companies.length) {
+    const uniq = [...new Map(companies.map((c) => [c.id, c])).values()];
+    const codes = uniq.map((c) => splitCompanyCodes(
+      companyFieldValue(c, COMPANY_FIELD_EDRPOU), companyFieldValue(c, COMPANY_FIELD_IPN)));
+    await pool.query(
+      `INSERT INTO kommo_companies (company_id, name, edrpou_raw, edrpou, ipn_raw, ipn, updated_at)
+       SELECT * FROM (SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::text[]) AS nm,
+                             UNNEST($3::text[]) AS er, UNNEST($4::text[]) AS e,
+                             UNNEST($5::text[]) AS ir, UNNEST($6::text[]) AS i, now() AS u) v
+       ON CONFLICT (company_id) DO UPDATE SET
+         name = EXCLUDED.name, edrpou_raw = EXCLUDED.edrpou_raw, edrpou = EXCLUDED.edrpou,
+         ipn_raw = EXCLUDED.ipn_raw, ipn = EXCLUDED.ipn, updated_at = now()`,
+      [uniq.map((c) => c.id), uniq.map((c) => c.name ?? null),
+       uniq.map((c) => companyFieldValue(c, COMPANY_FIELD_EDRPOU)), codes.map((c) => c.edrpou),
+       uniq.map((c) => companyFieldValue(c, COMPANY_FIELD_IPN)), codes.map((c) => c.ipn)]);
+  }
+
+  const seen = new Set<string>();
+  const dealIds: number[] = [], companyIds: number[] = [];
+  for (const d of deals)
+    for (const c of d._embedded?.companies ?? []) {
+      const k = `${d.id}|${c.id}`;
+      if (seen.has(k)) continue;
+      seen.add(k); dealIds.push(d.id); companyIds.push(c.id);
+    }
+  if (!dealIds.length) return;
+  await pool.query(
+    `INSERT INTO deal_companies (deal_kommo_id, company_id, updated_at)
+     SELECT * FROM (SELECT UNNEST($1::bigint[]) AS d, UNNEST($2::bigint[]) AS c, now() AS u) v
+     ON CONFLICT (deal_kommo_id, company_id) DO UPDATE SET updated_at = now()`,
+    [dealIds, companyIds]);
+}
+
 async function upsertDealContacts(deals: KommoDeal[]): Promise<void> {
   // 🔴 ДЕДУП ПАР ОБОВʼЯЗКОВИЙ. Postgres не дозволяє одному INSERT ... ON CONFLICT
   // DO UPDATE зачепити той самий рядок двічі — саме на цьому синк ліг 03.08.2026.
