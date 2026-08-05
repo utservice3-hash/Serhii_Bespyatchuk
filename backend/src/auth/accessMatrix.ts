@@ -241,6 +241,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/loyalty-override", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🗄 Архів клієнта — КВП/ОД/адмін (рішення власника 05.08.2026). Тімлід і
+  // менеджер НЕ архівують: прибрати клієнта з екранів усієї компанії — не їхнє
+  // рішення (те саме правило, що для «прибрати з постійних»).
+  { method: "POST", path: "/api/dashboard/client-archive", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/dashboard/client-archive", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/dashboard/loyalty-override/:clientKey", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/loyalty-overrides", cls: "GET",

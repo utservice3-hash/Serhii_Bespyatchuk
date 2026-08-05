@@ -4,6 +4,7 @@ import { fetchOrphanClients, fetchManagerOptions, type OrphanPool, type ManagerO
 import { ClientPlansSection } from "./ClientPlansSection";
 import { ReactivationSection } from "./ReactivationSection";
 import { OrphanPoolSection } from "./OrphanPoolSection";
+import { ArchiveSection } from "./ArchiveSection";
 
 /**
  * 🗂 РОЗДІЛ «КЛІЄНТИ» — ОДИН РОЗДІЛ, ЧОТИРИ РОБОТИ (макет власника 05.08.2026).
@@ -17,20 +18,23 @@ import { OrphanPoolSection } from "./OrphanPoolSection";
  * перемикання вкладки клало б запис в історію, і «назад» переставало б
  * означати «назад із розділу».
  *
- * 🔴 ВКЛАДКА «АРХІВ» НЕ ПОКАЗУЄТЬСЯ, поки реєстр архіву не збудовано. Заглушка
- * з нулем виглядала б як «архів порожній», а це неправда — його просто немає.
+ * 🗄 ВКЛАДКА «АРХІВ» ЗʼЯВИЛАСЬ (хвиля 2, 05.08.2026) — реєстр збудовано, тож
+ * заглушки більше немає. Її бачать ті самі, хто має право архівувати
+ * (КВП/ОД/адмін): показувати вкладку тому, кому сервер віддасть 403, означало б
+ * запропонувати глухий кут.
  */
-type Tab = "plan" | "react" | "pool";
+type Tab = "plan" | "react" | "pool" | "archive";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "plan", label: "План місяця" },
   { key: "react", label: "Реактивація" },
   { key: "pool", label: "Нічийні" },
+  { key: "archive", label: "Архів" },
 ];
 
 function readTab(): Tab {
   const t = new URLSearchParams(window.location.search).get("tab");
-  return t === "react" || t === "pool" ? t : "plan";
+  return t === "react" || t === "pool" || t === "archive" ? t : "plan";
 }
 
 export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
@@ -57,7 +61,11 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
     fetchManagerOptions().then(setManagers).catch(() => setManagers([]));
   }, [canSeePool]);
 
-  const visible = useMemo(() => TABS.filter((t) => t.key !== "pool" || canSeePool), [canSeePool]);
+  // Архів — та сама межа, що на сервері (`isAdminScope`): КВП/ОД/адмін.
+  const canSeeArchive = auth != null && (auth.role === "admin" || auth.role === "company");
+  const visible = useMemo(
+    () => TABS.filter((t) => (t.key !== "pool" || canSeePool) && (t.key !== "archive" || canSeeArchive)),
+    [canSeePool, canSeeArchive]);
   const active = visible.some((t) => t.key === tab) ? tab : "plan";
 
   return (
@@ -86,6 +94,7 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
       {active === "plan" && auth && <ClientPlansSection auth={auth} />}
       {active === "react" && auth && <ReactivationSection auth={auth} />}
       {active === "pool" && canSeePool && <OrphanPoolSection auth={auth} managers={managers} />}
+      {active === "archive" && canSeeArchive && <ArchiveSection auth={auth} />}
     </div>
   );
 }

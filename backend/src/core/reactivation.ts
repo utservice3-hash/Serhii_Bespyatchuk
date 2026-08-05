@@ -18,6 +18,7 @@ export * from "./reactivationRules.js";
 import { SLEEPING_DAYS, LOST_DAYS, valueScore, type ClientState,
          type ClientSegment } from "./reactivationRules.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "./clientSegments.js";
+import { archivedSql, LAST_PAID_CTE, LAST_PAID_JOIN } from "./clientArchive.js";
 export type { ClientState, ClientSegment };
 void SLEEPING_DAYS; void LOST_DAYS;
 
@@ -178,7 +179,8 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
     last_talk: string | null; last_talk_days: string | null; last_talk_type: string | null;
     attempts: string | null; last_attempt: string | null; last_attempt_days: string | null;
   }>(
-    `WITH paid AS (
+    `WITH ${LAST_PAID_CTE},
+     paid AS (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
          FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -219,6 +221,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
        -- Тобто дія «прибрати з постійних» роками писалась у базу й не робила НІЧОГО.
        -- Заміряно на живому сервері: hidden=true, а клієнт у видачі обох екранів.
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
+       ${LAST_PAID_JOIN}
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
        LEFT JOIN teams tm ON tm.id = mm.team_id
        LEFT JOIN tasks_in tk ON tk.client_key = a.client_key
@@ -244,7 +247,12 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
           WHERE rc.client_key = a.client_key AND rc.billsec = 0
             AND (lt.calldate IS NULL OR rc.calldate > lt.calldate)
        ) at ON true
-      WHERE COALESCE(lo.hidden, false) = false ${cond}`, p)).rows;
+      -- 🗄 АРХІВ ЗАМІСТЬ hidden (рішення власника 05.08.2026). Два способи прибрати
+      -- клієнта з екрана — це два визначення, які через півроку розійдуться, і ніхто
+      -- не памʼятатиме, яке з них дивиться на екран. Тому hidden тут більше НЕ
+      -- згадується. Повернення автоматичне: оплата ПІЗНІШЕ за дату архівації сама
+      -- виводить клієнта назад, без джоби й без тумблера (гейт #38).
+      WHERE NOT ${archivedSql("lo", "ap")} ${cond}`, p)).rows;
 
   // 🔴 Сегмент/стан — зі СПІЛЬНОГО джерела (`clientSegments.ts`), тим самим, що
   // живить екран планування. Окремим запитом, а не CTE всередині цього: підстановка

@@ -421,29 +421,50 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       await c.query(`DELETE FROM managers WHERE id = 30`);
     });
 
-    await t.test("#25e «ПРИБРАТИ З ПОСТІЙНИХ» СПРАВДІ ПРИБИРАЄ (і повертає назад)", async () => {
-      // 🔴 РЕГРЕС, ЗНАЙДЕНИЙ ДІЄЮ, А НЕ ЧИТАННЯМ. `LEFT JOIN … AND NOT lo.hidden`
-      // разом із `WHERE COALESCE(lo.hidden,false)=false` — це порожня операція:
-      // для прихованого клієнта join не дає рядка, `lo.hidden` = NULL,
-      // COALESCE(NULL,false)=false → умова ІСТИННА. Дія писалась у базу й не
-      // робила нічого; на екрані це виглядало як «кнопка не спрацювала».
-      // Тест саме на ПОВЕДІНКУ (клієнта немає у видачі), а не на форму запиту.
+    await t.test("#38 АРХІВ: одна дія з ПРИЧИНОЮ прибирає, нова оплата повертає САМА", async () => {
+      // 🔴 ЩО САМЕ ТУТ ПЕРЕВІРЯЄТЬСЯ І ЧОМУ ТАК. Раніше тут стояв тест на `hidden` —
+      // булевий тумблер без причини й без дати. Він ловив реальний регрес (порожня
+      // умова `LEFT JOIN … AND NOT lo.hidden` разом із `WHERE COALESCE(...)=false`),
+      // але сам механізм власник замінив архівом: дата + причина + хто.
+      // Перевіряємо ПОВЕДІНКУ, а не форму запиту.
       const before = (await R.clientStates({})).length;
-      await c.query(`INSERT INTO loyalty_overrides (client_key, hidden) VALUES ('сплячий', true)
-                     ON CONFLICT (client_key) DO UPDATE SET hidden = true`);
-      const hidden = await R.clientStates({});
-      assert.equal(hidden.length, before - 1,
-        "🔴 прихований клієнт лишився у видачі — фільтр `hidden` не працює");
-      assert.equal(hidden.find((r) => r.clientKey === "сплячий"), undefined,
-        "🔴 саме той клієнт, якого прибрали, і лишився");
 
-      // ДЗЕРКАЛО: без нього тест зеленів би й тоді, якби фільтр різав ВСІХ
-      // підряд, — а це рівно та поломка, яку ми боїмось завести замість цієї.
-      await c.query(`UPDATE loyalty_overrides SET hidden = false WHERE client_key = 'сплячий'`);
-      const back = await R.clientStates({});
-      assert.equal(back.length, before, "🔴 повернення до постійних не спрацювало");
-      assert.ok(back.find((r) => r.clientKey === "сплячий"), "🔴 клієнт не повернувся у видачу");
-      await c.query(`DELETE FROM loyalty_overrides WHERE client_key = 'сплячий'`);
+      // ── 1 · Дія з причиною прибирає клієнта з видачі
+      await c.query(
+        `INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason)
+         VALUES ('сплячий', now(), 'closed_down')
+         ON CONFLICT (client_key) DO UPDATE SET archived_at = now(), archive_reason = 'closed_down'`);
+      const archived = await R.clientStates({});
+      assert.equal(archived.length, before - 1, "🔴 заархівований клієнт лишився у видачі");
+      assert.equal(archived.find((r) => r.clientKey === "сплячий"), undefined,
+        "🔴 зник не той клієнт, якого архівували");
+
+      // ── 2 · 🔴 ПРИЧИНА ОБОВʼЯЗКОВА НА РІВНІ БД, а не лише роуту: скрипт повз роут
+      // не має вміти покласти клієнта в архів «без причини».
+      await assert.rejects(
+        () => c.query(`INSERT INTO loyalty_overrides (client_key, archived_at) VALUES ('межа60', now())
+                       ON CONFLICT (client_key) DO UPDATE SET archived_at = now(), archive_reason = NULL`),
+        /archive_reason|check/i,
+        "🔴 БД пустила архівацію БЕЗ причини — CHECK не працює");
+
+      // ── 3 · 🟢 АВТОПОВЕРНЕННЯ. Нова оплата ПІСЛЯ дати архівації повертає клієнта
+      // САМА — без джоби й без другої дії. Збережений стан треба комусь оновлювати;
+      // джоба, що тихо не відпрацювала, лишила б в архіві того, хто вчора замовив.
+      await c.query(
+        `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo)
+         VALUES (990,'d',10,8921932,142,4242,'сплячий','сплячий','ТОВ Сплячий', now() + interval '1 minute')`);
+      const returned = await R.clientStates({});
+      assert.ok(returned.find((r) => r.clientKey === "сплячий"),
+        "🔴 клієнт НЕ повернувся після нової оплати — автоповернення не працює, "
+        + "і хтось муситиме памʼятати, що його треба дістати руками");
+
+      // ── 4 · 🪞 ДЗЕРКАЛО: фільтр ріже САМЕ архівних, а не всіх підряд. Без цього
+      // пункт 1 зеленів би й тоді, коли з екрана зникли ВСІ.
+      assert.equal(returned.length, before,
+        "🔴 після повернення кількість не збіглася з початковою — фільтр зачепив зайвих");
+
+      await c.query(`DELETE FROM deals WHERE kommo_id = 990`);
+      await c.query(`DELETE FROM loyalty_overrides WHERE client_key IN ('сплячий','межа60')`);
     });
   } finally {
     await pool.end().catch(() => {});

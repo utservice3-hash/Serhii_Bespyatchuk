@@ -31,6 +31,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanR
 import * as reactivation from "../core/reactivation.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
+import { archivedSql, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS } from "../core/clientArchive.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
@@ -1603,7 +1604,7 @@ dashboardRouter.get("/loyalty", async (req, res) => {
 
   for (const row of result.rows) {
     const ov = overrides.get(row.client_key);
-    if (ov?.hidden) continue; // прибраний адміном — не показуємо ніде
+    if (ov?.hidden) continue; // в архіві (archivedSql) — не показуємо ніде
     const recent = Number(row.p_recent);
     const prior = Number(row.p_prior);
     // Передача: якщо адмін закріпив клієнта за іншим менеджером — переносимо туди
@@ -2214,6 +2215,83 @@ dashboardRouter.post("/loyalty-override", async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * 🗄 В АРХІВ / З АРХІВУ — ОДНА ДІЯ (рішення власника 05.08.2026).
+ *
+ * 🔴 ГЕЙТ ПЕРШИМ ЗНАЧУЩИМ ОПЕРАТОРОМ, валідація ПІСЛЯ — та сама гарантія, що й у
+ * `/client-merge`: «403 = спрацював гейт». Порядок навпаки дав би 400 замість 403
+ * і зламав би зліпок доступу (на цьому вже раз відкочували прод 04.08.2026).
+ *
+ * ПРАВА: КВП / ОД / адмін (`isAdminScope`) — рішення власника.
+ * ПРИЧИНА обовʼязкова й перевіряється ДВІЧІ: тут (щоб віддати 400 з людським
+ * текстом) і `CHECK`-ом у БД (щоб її не обійшов скрипт повз роут).
+ */
+dashboardRouter.post("/client-archive", async (req, res) => {
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише КВП, ОД або адміністратор" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const restore = req.body?.restore === true;
+  if (restore) {
+    await pool.query(
+      `UPDATE loyalty_overrides SET archived_at = NULL, archive_reason = NULL, archived_by = NULL,
+              updated_by = $2, updated_at = now() WHERE client_key = $1`,
+      [clientKey, req.auth!.userId]);
+    return res.json({ ok: true, archived: false });
+  }
+  const reason = String(req.body?.reason ?? "").trim();
+  if (!ARCHIVE_REASON_KEYS.includes(reason))
+    return res.status(400).json({ error: `Причина обовʼязкова: ${ARCHIVE_REASON_KEYS.join(", ")}` });
+  await pool.query(
+    `INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason, archived_by, updated_by, updated_at)
+     VALUES ($1, now(), $2, $3, $3, now())
+     ON CONFLICT (client_key) DO UPDATE
+       SET archived_at = now(), archive_reason = EXCLUDED.archive_reason,
+           archived_by = EXCLUDED.archived_by, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [clientKey, reason, req.auth!.userId]);
+  res.json({ ok: true, archived: true });
+});
+
+/**
+ * 🗄 СПИСОК АРХІВУ. Показує ЛИШЕ тих, хто в архіві ЗАРАЗ (з автоповерненням), плюс
+ * причину, дату й хто поклав — щоб «чому клієнта немає» мало відповідь на екрані,
+ * а не в чиїйсь памʼяті.
+ */
+dashboardRouter.get("/client-archive", async (req, res) => {
+  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише КВП, ОД або адміністратор" });
+  const r = await pool.query<{
+    client_key: string; client_name: string | null; reason: string; archived_at: string;
+    by_name: string | null; orders: string; revenue: string; last_paid: string | null;
+  }>(
+    `WITH ${LAST_PAID_CTE},
+     agg AS (
+       SELECT d.client_key, COUNT(*)::int AS orders, COALESCE(SUM(d.price),0) AS revenue
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+        GROUP BY d.client_key
+     )
+     SELECT o.client_key, o.client_name, o.archive_reason AS reason,
+            to_char(o.archived_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS archived_at,
+            u.name AS by_name,
+            COALESCE(a.orders,0) AS orders, COALESCE(a.revenue,0) AS revenue,
+            to_char(ap.last_paid AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid
+       FROM loyalty_overrides o
+       LEFT JOIN arch_paid ap ON ap.client_key = o.client_key
+       LEFT JOIN agg a ON a.client_key = o.client_key
+       LEFT JOIN users u ON u.id = o.archived_by
+      WHERE ${archivedSql("o", "ap")}
+      ORDER BY o.archived_at DESC`);
+  res.json({
+    reasons: ARCHIVE_REASONS,
+    clients: r.rows.map((x) => ({
+      clientKey: x.client_key, clientName: x.client_name ?? x.client_key,
+      reason: x.reason, reasonLabel: ARCHIVE_REASONS.find((z) => z.key === x.reason)?.label ?? x.reason,
+      archivedAt: x.archived_at, archivedBy: x.by_name,
+      orders: Number(x.orders), lifetimeRevenue: Number(x.revenue), lastPaid: x.last_paid,
+    })),
+  });
+});
+
 /** Скасувати ручну правку (повернути авто-логіку). */
 dashboardRouter.delete("/loyalty-override/:clientKey", async (req, res) => {
   if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
@@ -2222,10 +2300,20 @@ dashboardRouter.delete("/loyalty-override/:clientKey", async (req, res) => {
 });
 
 /** Мапа оверрайдів постійних + імена pinned-менеджерів (для застосування). */
+/**
+ * 🗄 `hidden` ТУТ ТЕЖ БІЛЬШЕ НЕ ЧИТАЄТЬСЯ — інакше «одна дія замість hidden»
+ * лишилась би гаслом: свіжо заархівований клієнт зникав би з двох головних
+ * екранів і далі висів би на цьому. Архівність рахує ТОЙ САМИЙ `archivedSql`,
+ * включно з автоповерненням по новій оплаті.
+ */
 async function loadLoyaltyOverrides(): Promise<Map<string, { hidden: boolean; pinnedManagerId: number | null; pinnedManagerName: string | null; pinnedTeamId: number | null; forceRegular: boolean }>> {
   const r = await pool.query<{ client_key: string; hidden: boolean; pinned_manager_id: number | null; force_regular: boolean; manager_name: string | null; team_id: number | null }>(
-    `SELECT o.client_key, o.hidden, o.pinned_manager_id, o.force_regular, m.name AS manager_name, m.team_id
-     FROM loyalty_overrides o LEFT JOIN managers m ON m.id = o.pinned_manager_id`
+    `WITH ${LAST_PAID_CTE}
+     SELECT o.client_key, ${archivedSql("o", "ap")} AS hidden,
+            o.pinned_manager_id, o.force_regular, m.name AS manager_name, m.team_id
+     FROM loyalty_overrides o
+     LEFT JOIN managers m ON m.id = o.pinned_manager_id
+     LEFT JOIN arch_paid ap ON ap.client_key = o.client_key`
   );
   const map = new Map<string, { hidden: boolean; pinnedManagerId: number | null; pinnedManagerName: string | null; pinnedTeamId: number | null; forceRegular: boolean }>();
   for (const x of r.rows) map.set(x.client_key, {
@@ -3880,7 +3968,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     //
     // ⚠️ Урок ширший за цей роут: пісочниця на 18 тис. рядків НЕ доводить нічого
     // про 146 тис. Порядок даних — частина умов задачі, а не деталь.
-    `WITH paid AS (
+    `WITH ${LAST_PAID_CTE},
+     paid AS (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
          FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -3915,6 +4004,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        -- Тобто дія «прибрати з постійних» роками писалась у базу й не робила НІЧОГО.
        -- Заміряно на живому сервері: hidden=true, а клієнт у видачі обох екранів.
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
+       ${LAST_PAID_JOIN}
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
        LEFT JOIN teams tt ON tt.id = mm.team_id
        LEFT JOIN LATERAL (
@@ -3924,7 +4014,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
           WHERE d2.client_key = a.client_key
           ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
        ) nm ON true
-      WHERE COALESCE(lo.hidden, false) = false ${mgrCond}
+      -- 🗄 Архів замість hidden — те саме джерело, що в реактивації (гейт #38).
+      WHERE NOT ${archivedSql("lo", "ap")} ${mgrCond}
       ORDER BY a.revenue DESC`,
     mgrParams
   );
@@ -4330,7 +4421,9 @@ dashboardRouter.get("/client-search", async (req, res) => {
             mm.name AS manager_name, mm.is_active AS manager_active, lo.pinned_manager_id
        FROM agg a
        JOIN pm ON pm.client_key = a.client_key
-       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key AND NOT lo.hidden
+       -- Архівність НЕ впливає на «хто відповідальний»: закріплення лишається,
+       -- навіть коли клієнта прибрали з екранів (інакше пошук показав би не того).
+       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        LEFT JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id)
        LEFT JOIN LATERAL (
          SELECT d2.client_name FROM deals d2
@@ -4418,10 +4511,11 @@ dashboardRouter.get("/client-card", async (req, res) => {
               -- порожній — і hidden завжди читалось би як false. Кнопка
               -- «повернути» не зʼявилась би НІКОЛИ, а виглядало б це як
               -- «дія не спрацювала».
-              (SELECT o2.hidden FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS hidden
+              (SELECT o2.archived_at FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archived_at,
+              (SELECT o2.archive_reason FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archive_reason
          FROM agg a
          LEFT JOIN pm ON true
-         LEFT JOIN loyalty_overrides lo ON lo.client_key = $1 AND NOT lo.hidden
+         LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
          LEFT JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id)
          LEFT JOIN teams t ON t.id = mm.team_id
          LEFT JOIN LATERAL (

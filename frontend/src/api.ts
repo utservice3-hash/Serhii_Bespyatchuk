@@ -2389,6 +2389,23 @@ export async function addClientComment(body: { clientKey: string; body: string }
   return data;
 }
 
+// ── 🗄 АРХІВ КЛІЄНТІВ (хвиля 2) ─────────────────────────────────────────────
+export interface ArchiveRow {
+  clientKey: string; clientName: string;
+  reason: string; reasonLabel: string;
+  archivedAt: string; archivedBy: string | null;
+  orders: number; lifetimeRevenue: number; lastPaid: string | null;
+}
+export interface ArchiveResp {
+  reasons: { key: string; label: string }[];
+  clients: ArchiveRow[];
+}
+export const fetchClientArchive = () =>
+  api.get<ArchiveResp>("/dashboard/client-archive").then((r) => r.data);
+/** `reason` обовʼязковий при архівації; при поверненні передається `restore: true`. */
+export const archiveClient = (body: { clientKey: string; reason?: string; restore?: boolean }) =>
+  api.post("/dashboard/client-archive", body).then((r) => r.data);
+
 // ── ФАЗА B · Реактивація · обʼєднання · відповідальний ───────────────────────
 export type ClientState = "active" | "sleeping" | "lost";
 export type ClientSegment = "vip" | "regular" | "episodic" | "unknown";

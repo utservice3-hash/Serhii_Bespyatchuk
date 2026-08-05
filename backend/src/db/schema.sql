@@ -353,6 +353,37 @@ CREATE TABLE IF NOT EXISTS loyalty_overrides (
 --
 -- Руками ставиться РІВНО ОДНЕ: позначка «сезонний». Її з дат вивести неможливо
 -- (зерно, опалення, ремонти), тому це рішення людини, а не обчислення.
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 🗄 АРХІВ КЛІЄНТА — ОДНА ДІЯ ЗАМІСТЬ `hidden` (рішення власника 05.08.2026)
+--
+-- `hidden` був булевим тумблером без причини й без дати: клієнт зникав, і через
+-- місяць ніхто не знав, хто це зробив і чому. Тепер архівація — це ДАТА + ПРИЧИНА
+-- + ХТО, а `hidden` більше не читається жодним запитом (колонка лишена як слід і
+-- її значення перенесені міграцією нижче).
+--
+-- 🔴 ПРИЧИНА СТЕРЕЖЕТЬСЯ `CHECK`, а не валідацією в роуті: роут обходить будь-який
+-- скрипт. Словник — той самий, що при закритті реактиваційної задачі
+-- (`CLOSE_REASONS` у `core/reactivationRules.ts`); два словники «чому клієнт більше
+-- не наш» розійшлися б за півроку.
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archive_reason TEXT;
+ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archived_by INTEGER REFERENCES users(id);
+DO $$ BEGIN
+  ALTER TABLE loyalty_overrides ADD CONSTRAINT loyalty_overrides_archive_reason_chk
+    -- ⚠️ NULL-ПАСТКА, спіймана гейтом #38: `NULL IN (...)` дає NULL, а CHECK на NULL
+    -- ПРОХОДИТЬ. Без явного `IS NOT NULL` архівація без причини тихо вставлялась би —
+    -- тобто CHECK стояв би для вигляду. Той самий клас, що `traf_type = 'cpc'` при NULL.
+    CHECK (archived_at IS NULL OR (archive_reason IS NOT NULL AND archive_reason IN
+           ('price','competitor','own_transport','seasonality','closed_down','other')));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- 🔁 ПЕРЕНЕСЕННЯ СТАРИХ `hidden` В АРХІВ. Разова, з умовою на ще не перенесені —
+-- повторний прогін нічого не зробить. Причина 'other': справжньої ми не знаємо і
+-- вигадувати не будемо, зате дата й факт збережені.
+UPDATE loyalty_overrides
+   SET archived_at = COALESCE(archived_at, updated_at), archive_reason = COALESCE(archive_reason, 'other')
+ WHERE hidden = true AND archived_at IS NULL;
+
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal_note TEXT;
 -- Місяць, З ЯКОГО діє нове закріплення менеджера. Правило власника: поточний

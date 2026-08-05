@@ -79,6 +79,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/client-merge"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-override"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/client-archive"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-overrides"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/reactivation"), tabs: ["loyalty"] },
     // Кандидати на реактивацію малює ЗАДАЧНИК (`TasksSection`) — тип задачі
