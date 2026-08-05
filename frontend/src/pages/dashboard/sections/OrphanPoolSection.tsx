@@ -80,7 +80,11 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
         <Tile lab="Клієнтів без власника" val={String(data.tiles.clients)}
           sub={all ? "усі, за весь час" : `за 18 міс · усього в базі ${data.tiles.totalAllTime}`} />
         <Tile lab="Гроші за 12 міс" val={money(data.tiles.money12)} unit="₴" sub="що зараз ніхто не веде" />
-        <Tile lab="З них постійні" val={String(data.tiles.regulars)} sub={`ВІП ${data.tiles.vip}`} />
+        {/* Підпис «у показаному зрізі» — свідомий: плитка описує СПИСОК ПІД НЕЮ.
+            Показати 27 за весь час над списком із 307 рядків за 18 міс було б тим
+            самим класом брехні, який ми викорінюємо (рішення власника 05.08.2026). */}
+        <Tile lab="З них постійні" val={String(data.tiles.regulars)}
+          sub={`ВІП ${data.tiles.vip} · у показаному зрізі`} />
         <Tile lab="Взято в роботу" val={String(data.tiles.claimedThisMonth)} sub="за цей місяць · закріплені одразу" />
       </div>
 
