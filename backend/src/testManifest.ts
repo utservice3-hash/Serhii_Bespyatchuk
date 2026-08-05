@@ -23,6 +23,7 @@ export const MANIFEST_FILES: string[] = [
   "jobs/dealContactPairs.test.js",
   "core/clientPlans.test.js",
   "core/clientCard.test.js",
+  "versionStale.test.js",
   "core/companyCode.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
@@ -264,6 +265,9 @@ export const MANIFEST_TESTS: string[] = [
   "#29b ДЗЕРКАЛО: аргумент СПРАВДІ звужує, а не ігнорується",
   "#29c Σ МІСЯЦІВ КАРТКИ == ФАКТУ КЛІЄНТА того ж діапазону",
   "#29d МІСЯЦЬ КАРТКИ == МІСЯЦЮ ЕКРАНА ПЛАНІВ (одна цифра, не дві схожі)",
+  // versionStale.test.ts — «зібрано, але не перезапущено» видно в health
+  "#42 HEALTH ПОРІВНЮЄ ЗАВАНТАЖЕНУ ЗБІРКУ З ТІЄЮ, ЩО НА ДИСКУ",
+  "#42b НЕВІДОМА ВЕРСІЯ НЕ ВВАЖАЄТЬСЯ РОЗБІЖНІСТЮ",
   // core/companyCode.test.ts — що вважаємо кодом підприємства
   "#41 НОРМАЛІЗАЦІЯ КОДУ: беремо лише осмислені довжини",
   "#41b КЛАС КОДУ: ЄДРПОУ й ІПН — РІЗНІ ключі, не зводяться в один",

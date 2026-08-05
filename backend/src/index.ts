@@ -4,7 +4,7 @@ import "./lib/asyncRoutes.js";
 import { collectAlerts } from "./health/alerts.js";
 import { requireAuth } from "./auth/middleware.js";
 import { runJob } from "./jobs/jobRuns.js";
-import { buildVersion } from "./version.js";
+import { buildVersion, buildIsStale, onDiskVersion } from "./version.js";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
@@ -156,6 +156,12 @@ app.get("/api/health", async (_req, res) => {
       // (рестарт убив не той PID). Тепер версію видно, і приймання після деплою
       // може її звірити з тим, що ми викотили.
       version: buildVersion(),
+      // 🔴 «ЗІБРАНО, АЛЕ НЕ ПЕРЕЗАПУЩЕНО» — окремий стан, який ззовні виглядає
+      // здоровим. 05.08.2026 прод 49 хвилин крутив попередню збірку: зібрав нову
+      // на сервері й не рестартував, бо коміт чіпав лише фонову джобу. Health про
+      // це мовчав — знав тільки те, що процес прочитав на старті.
+      buildOnDisk: buildIsStale() ? onDiskVersion() : null,
+      buildStale: buildIsStale(),
       statistics: getStatisticsStatus(),
       ringostat: getRingostatStatus(),
       cashIncome: getCashIncomeStatus(),
