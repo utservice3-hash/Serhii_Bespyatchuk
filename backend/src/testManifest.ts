@@ -28,6 +28,7 @@ export const MANIFEST_FILES: string[] = [
   "core/adTouch.test.js",
   "core/autodeal.test.js",
   "routes/clientScreens.test.js",
+  "core/priorPaid.test.js",
   "jobs/calls.test.js",
   "utils/phone.test.js",
   "auth/gateUnit.test.js",
@@ -277,6 +278,9 @@ export const MANIFEST_TESTS: string[] = [
   "#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втрачені = кваліфікована база, разові НАЗВАНІ",
   "#30o ДЖЕНЕРИКИ-ТЕЛЕФОНИ: без безналу — геть, із безналом — ЗАЛИШАЮТЬСЯ",
   "#30p МІСТОК == ВКЛАДЦІ: обіцяне число дорівнює тому, що в реактивації лежить",
+  // core/priorPaid.test.ts — переписаний OR-предикат рекламного ядра
+  "#35 ДВІ ФОРМИ ОДНОГО ПРАВИЛА збігаються на РЕАЛЬНИХ даних",
+  "#36 ЧАС ВІДПОВІДІ: /overview і /report тримаються під навантаженням",
   // auth/mergeScope.test.ts — предикат «хто кого може зливати» (без БД і мережі)
   "#31 ТІМЛІД ЗЛИВАЄ ЛИШЕ СВОЇХ: обидва боки його команди",
   "#31b ДЗЕРКАЛО: право merge_clients і далі зливає МІЖ командами",

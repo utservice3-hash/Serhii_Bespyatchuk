@@ -98,21 +98,62 @@ export const rnkTeamSql = (alias = "m") =>
  * і рядок не потрапляє В ЖОДНУ гілку. На замірі це вже коштувало 159 угод, що
  * тихо зникли з обох боків підсумку.
  */
-export const AD_TOUCH_GATE = `(
-  (d.utm_source IS NOT NULL OR d.utm_medium IS NOT NULL OR d.utm_campaign IS NOT NULL
-   OR COALESCE(d.traf_type, '') = 'cpc')
-  OR NOT EXISTS (
+/**
+ * 🧱 «КЛІЄНТ МАВ ОПЛАЧЕНУ УГОДУ, СТВОРЕНУ РАНІШЕ ЗА ЦЮ» — ОДНЕ правило, ДВІ форми.
+ *
+ * 🔴 НАВІЩО ДРУГА ФОРМА (заміряно на проді 05.08.2026). Корельована форма
+ * (`EXISTS (…)`) виконується НА КОЖЕН РЯДОК: у плані `/overview` це давало
+ * `loops=13 549` при `actual rows=0.01`, промах оцінки ×541 і **9.5 с** на запит.
+ * Та сама відповідь, порахована агрегатом ОДИН раз і підʼєднана join-ом, коштує
+ * **0.3 с** — при побайтово однаковому результаті (entered 13 526, won 1 303).
+ *
+ * ⚠️ ФОРМИ ОБОВʼЯЗКОВО ЕКВІВАЛЕНТНІ, і це не «очевидно», а перевірено гейтом
+ * `#35` проти РЕАЛЬНОЇ бази: `MIN(created_at) < d.created_at` — те саме, що
+ * «існує раніша оплачена», а `client_key IS NULL` в обох формах дає FALSE
+ * (у корельованій — бо підзапит порожній, у join-формі — бо `fp` не зматчився).
+ * Розійдуться — зміняться цифри реклами й сегментів, тому гейт обовʼязковий.
+ *
+ * Правило ОГОЛОШЕНЕ ОДИН РАЗ (`hasPriorPaidSql`), решта — його рендер.
+ */
+export type PriorPaidMode = "correlated" | "joined";
+
+/** CTE для join-форми. Ставиться першим у `WITH`, разом із `FIRST_PAID_JOIN`. */
+export const FIRST_PAID_CTE = `
+  first_paid AS (
+    SELECT pr.client_key, MIN(pr.created_at_kommo) AS first_paid_at
+      FROM deals pr
+      JOIN pipeline_stage_map psm_fp ON psm_fp.pipeline_id = pr.pipeline_id
+                                    AND psm_fp.status_id = pr.status_id
+     WHERE psm_fp.funnel_stage = 'paid' AND pr.client_key IS NOT NULL
+     GROUP BY pr.client_key
+  )`;
+export const FIRST_PAID_JOIN = "LEFT JOIN first_paid fp ON fp.client_key = d.client_key";
+
+export function hasPriorPaidSql(mode: PriorPaidMode): string {
+  return mode === "joined"
+    ? "(fp.first_paid_at IS NOT NULL AND fp.first_paid_at < d.created_at_kommo)"
+    : `EXISTS (
     SELECT 1 FROM deals pr
       JOIN pipeline_stage_map psm_ad ON psm_ad.pipeline_id = pr.pipeline_id
                                     AND psm_ad.status_id = pr.status_id
      WHERE pr.client_key = d.client_key AND d.client_key IS NOT NULL
-       AND psm_ad.funnel_stage = 'paid' AND pr.created_at_kommo < d.created_at_kommo)
+       AND psm_ad.funnel_stage = 'paid' AND pr.created_at_kommo < d.created_at_kommo)`;
+}
+
+export const adTouchGate = (mode: PriorPaidMode = "correlated"): string => `(
+  (d.utm_source IS NOT NULL OR d.utm_medium IS NOT NULL OR d.utm_campaign IS NOT NULL
+   OR COALESCE(d.traf_type, '') = 'cpc')
+  OR NOT ${hasPriorPaidSql(mode)}
 )`;
 
-export const adDealSql = (srcRef: string): string =>
+export const AD_TOUCH_GATE = adTouchGate("correlated");
+
+export const adDealSqlMode = (srcRef: string, mode: PriorPaidMode): string =>
   `((d.client_source = ANY(${srcRef}) OR d.lead_channel = 'ad')
     AND COALESCE(d.client_source, '') NOT ILIKE '%реактив%'
-    AND ${AD_TOUCH_GATE})`;
+    AND ${adTouchGate(mode)})`;
+
+export const adDealSql = (srcRef: string): string => adDealSqlMode(srcRef, "correlated");
 
 /**
  * СЕГМЕНТ УГОДИ (не глобальна мітка клієнта), пріоритет-партиція (GLOSSARY §9):
@@ -124,18 +165,14 @@ export const adDealSql = (srcRef: string): string =>
  * Вичерпний CASE → кожна угода рівно в один сегмент → Лідоген+Постійні+Нові=Загал.
  * «Попереднє» — за `created_at` (як існуючий `firsts` = MIN(created_at) по paid).
  */
-export const SEGMENT_CASE = `
+export const segmentCase = (mode: PriorPaidMode = "correlated"): string => `
   CASE
     WHEN d.lead_channel = 'leadgen' THEN 'leadgen'
-    WHEN d.client_key IS NOT NULL AND EXISTS (
-      SELECT 1 FROM deals pr
-      JOIN pipeline_stage_map psm2 ON psm2.pipeline_id = pr.pipeline_id AND psm2.status_id = pr.status_id
-      WHERE pr.client_key = d.client_key
-        AND psm2.funnel_stage = 'paid'
-        AND pr.created_at_kommo < d.created_at_kommo
-    ) THEN 'repeat'
+    WHEN d.client_key IS NOT NULL AND ${hasPriorPaidSql(mode)} THEN 'repeat'
     ELSE 'new'
   END`;
+
+export const SEGMENT_CASE = segmentCase("correlated");
 
 /** Спільний скоуп «когорта створення» по повному циклу: $1 = FC_PIPELINES, далі
  *  фільтри періоду (по `created_at`), менеджера/команди. Повертає SQL-умови + params. */
@@ -1614,9 +1651,9 @@ const ADZONE_TAKEN = [69693652, 69693656, 69693660, 68671948, 68065144, 67888780
  * (`traf_type<>'organic'`) — інакше adDealSql змітав би ~1.7к органічних угод
  * у знаменник (доведено 6.3). `srcRef` — плейсхолдер параметра з adSources.
  */
-const paidAdSql = (srcRef: string): string =>
+const paidAdSql = (srcRef: string, mode: PriorPaidMode = "correlated"): string =>
   `((d.traf_type = 'cpc' OR d.utm_medium = 'cpc' OR d.utm_campaign IS NOT NULL)
-    OR (${adDealSql(srcRef)} AND COALESCE(lower(d.traf_type), '') <> 'organic'))`;
+    OR (${adDealSqlMode(srcRef, mode)} AND COALESCE(lower(d.traf_type), '') <> 'organic'))`;
 
 export interface ConversionAdsRow {
   ym: string;
@@ -1674,7 +1711,12 @@ export async function conversionAdsByDirection(s: MetricScope, adSources: string
 }
 
 function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): string {
-  return `adzone AS (
+  // 🔴 JOIN-ФОРМА, НЕ КОРЕЛЬОВАНА (05.08.2026). Саме цей фрагмент живить `/overview`
+  // і `/report`; із корельованою формою він коштував 7.1 с медіани і давав 503 під
+  // одночасним навантаженням. Із `first_paid` — 0.34 с, результат той самий
+  // (гейт #35 звіряє форми, гейт #36 стереже час відповіді).
+  return `${FIRST_PAID_CTE},
+       adzone AS (
          SELECT kommo_id, MIN(changed_at) AS entered_at
            FROM deal_stage_events WHERE status_id = ANY(${entryRef}) GROUP BY kommo_id
        ),
@@ -1688,7 +1730,8 @@ function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): st
            JOIN deals d ON d.kommo_id = a.kommo_id
            LEFT JOIN managers m ON m.id = d.manager_id
            LEFT JOIN won w ON w.kommo_id = a.kommo_id
-          WHERE ${paidAdSql(srcRef)} AND (${SEGMENT_CASE}) = 'new' ${scopeWhere}
+           ${FIRST_PAID_JOIN}
+          WHERE ${paidAdSql(srcRef, "joined")} AND (${segmentCase("joined")}) = 'new' ${scopeWhere}
        )`;
 }
 
@@ -2692,7 +2735,8 @@ export async function maxMonthlyLeadsByManager(adSources: string[], months = 6):
   const curMonth = `date_trunc('month', CURRENT_DATE)`;
   const [adRes, lgRes] = await Promise.all([
     pool.query<{ manager_id: number; mx: string }>(
-      `WITH adzone AS (
+      `WITH ${FIRST_PAID_CTE},
+        adzone AS (
           SELECT kommo_id, MIN(changed_at) AS entered_at
             FROM deal_stage_events WHERE status_id = ANY($1) GROUP BY kommo_id),
         pop AS (
@@ -2700,7 +2744,8 @@ export async function maxMonthlyLeadsByManager(adSources: string[], months = 6):
             FROM adzone a
             JOIN deals d ON d.kommo_id = a.kommo_id
             JOIN managers m ON m.id = d.manager_id AND m.is_active
-           WHERE ${paidAdSql("$2")} AND (${SEGMENT_CASE}) = 'new'
+            ${FIRST_PAID_JOIN}
+           WHERE ${paidAdSql("$2", "joined")} AND (${segmentCase("joined")}) = 'new'
              AND (a.entered_at ${KYIV}) >= ${since} AND (a.entered_at ${KYIV}) < ${curMonth}),
         per_month AS (
           SELECT manager_id, mth, COUNT(DISTINCT kommo_id) AS n FROM pop GROUP BY 1, 2)
