@@ -344,7 +344,7 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
     clients: { clientKey: string; segment: string }[];
     totals: { totalClients: number; inReactivation: number;
               inReactivationSleeping: number; inReactivationLost: number;
-              inReactivationArchived: number; oneOff: number;
+              inReactivationArchived: number; oneOff: number; skippedGeneric: number;
               activeBySegment: Record<string, number> };
   };
   const t = plans.totals;
@@ -386,12 +386,39 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
       WHERE COALESCE(lo.hidden, false) = false`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
-  assert.equal(t.totalClients + t.inReactivation + t.oneOff, whole,
-    `🔴 активні ${t.totalClients} + місток ${t.inReactivation} + разові ${t.oneOff} ≠ база ${whole} — `
-    + "хтось зник між екранами, і без цієї перевірки це виглядало б як «клієнтів стало менше»");
+  assert.equal(t.totalClients + t.inReactivation + t.oneOff + t.skippedGeneric, whole,
+    `🔴 активні ${t.totalClients} + місток ${t.inReactivation} + разові ${t.oneOff}`
+    + ` + дженерики ${t.skippedGeneric} ≠ база ${whole} — хтось зник між екранами, і без цієї`
+    + " перевірки це виглядало б як «клієнтів стало менше»");
   console.log(`   ℹ активних ${t.totalClients} · сплячих ${t.inReactivationSleeping}`
     + ` · втрачених ${t.inReactivationLost} (з них архів ${t.inReactivationArchived})`
-    + ` · разових ${t.oneOff} · разом ${whole}`);
+    + ` · разових ${t.oneOff} · дженериків ${t.skippedGeneric} · разом ${whole}`);
+});
+
+test("#30p МІСТОК == ВКЛАДЦІ: обіцяне число дорівнює тому, що в реактивації лежить", needsApi(), async () => {
+  // 🔴 РЕАЛЬНА РОЗБІЖНІСТЬ, ЗНАЙДЕНА СКРІНШОТОМ, А НЕ ЧИТАННЯМ. Місток на екрані
+  // планів обіцяв **631**, а вкладка «Реактивація» показувала **456**. Обидві цифри
+  // рахувались правильно — просто місток брав їх ДО фільтра телефонних дженериків,
+  // а список ПІСЛЯ. Поруч це читається як поломка, і саме так його читав власник.
+  //
+  // Перевіряємо не «схоже», а РІВНІСТЬ: скільки місток обіцяє — стільки сплячих і
+  // втрачених має віддати `/reactivation-list` у тому самому скоупі.
+  const token = await adminToken();
+  const plans = await (await get("/api/dashboard/client-plans", token)).json() as {
+    totals: { inReactivation: number; inReactivationSleeping: number; inReactivationLost: number };
+  };
+  const react = await (await get("/api/dashboard/reactivation-list", token)).json() as {
+    clients: { state: string }[];
+  };
+  const sleeping = react.clients.filter((c) => c.state === "sleeping").length;
+  const lost = react.clients.filter((c) => c.state === "lost").length;
+  assert.ok(sleeping + lost > 0, "🔴 у реактивації порожньо — порівнювати нема з чим");
+  assert.equal(plans.totals.inReactivationSleeping, sleeping,
+    `🔴 місток обіцяє ${plans.totals.inReactivationSleeping} сплячих, у вкладці ${sleeping}`);
+  assert.equal(plans.totals.inReactivationLost, lost,
+    `🔴 місток обіцяє ${plans.totals.inReactivationLost} втрачених, у вкладці ${lost}`);
+  assert.equal(plans.totals.inReactivation, sleeping + lost,
+    "🔴 підсумок містка не дорівнює сумі рядків вкладки");
 });
 
 test("#30o ДЖЕНЕРИКИ-ТЕЛЕФОНИ: без безналу — геть, із безналом — ЗАЛИШАЮТЬСЯ", needsApi(), async () => {

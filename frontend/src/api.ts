@@ -2315,6 +2315,8 @@ export interface ClientPlansResp {
     inReactivationArchived: number;
     /** 🎯 Разові — не проходять двошляхову кваліфікацію; ні тут, ні в реактивації. */
     oneOff: number;
+    /** 📵 Сплячі/втрачені з ключем-телефоном без безналу — фільтр реактивації їх прибрав. */
+    skippedGeneric: number;
     /** Розбивка ЖИВИХ по сегментах — цифра над таблицею. */
     activeBySegment: Record<ClientSegment, number>;
   };

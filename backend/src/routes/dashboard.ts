@@ -30,7 +30,7 @@ import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanRules.js";
 import * as reactivation from "../core/reactivation.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
-import { loadClientSegments, factsFor } from "../core/clientSegments.js";
+import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
@@ -3984,12 +3984,24 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    * добір ОДИН — `clientsRes` (уже в потрібному скоупі), а стан лише розкладає
    * його на три купки.
    *
-   * 🔴 ЖОРСТКИЙ ПОДІЛ ЕКРАНІВ (рішення власника 04.08.2026): у плануванні
+   * 🔴 ЖОРСТКИЙ ПОДІЛ ЕКРАНІВ (рішення власника 05.08.2026): у плануванні
    * лишаються ТІЛЬКИ активні; сплячі й втрачені живуть у реактивації. Тому їхня
    * кількість МУСИТЬ бути названа тут — інакше вони зникли б мовчки, а це
    * читається як «клієнти загубились» (гейт #30n).
+   *
+   * 🔴 МІСТОК РАХУЄ ТИМ САМИМ ДОБОРОМ, ЩО Й ВКЛАДКА (виправлено 05.08.2026).
+   * Було: місток обіцяв **631**, а вкладка показувала **456**. Обидві цифри
+   * «правильні» — місток рахував ДО фільтра телефонних дженериків, список після, —
+   * але поруч вони читаються як поломка. Тепер `keepInReactivation` стоїть в обох
+   * місцях, тож місток дорівнює тому, що в реактивації справді лежить (гейт #30p).
+   *
+   * ⚠️ ФІЛЬТР ДЖЕНЕРИКІВ АСИМЕТРИЧНИЙ, і це не помилка: рішення власника звучало
+   * «геть із РЕАКТИВАЦІЇ», а не «геть звідусіль». Активний клієнт із ключем-телефоном
+   * лишається в плануванні. Тому ті, кого фільтр прибрав зі сплячих/втрачених, не
+   * зникають у тиші — вони окремим числом `skippedGeneric`, інакше ми повторили б
+   * рівно ту помилку, яку цією правкою й лікуємо.
    */
-  const bridge = { sleeping: 0, lost: 0, archived: 0, oneOff: 0,
+  const bridge = { sleeping: 0, lost: 0, archived: 0, oneOff: 0, skippedGeneric: 0,
     bySegment: { vip: 0, regular: 0, episodic: 0, unknown: 0 } as Record<string, number> };
   const activeRows = clientsRes.rows.filter((c) => {
     const f = factsFor(seg, c.client_key);
@@ -3997,9 +4009,12 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     // Їх немає ні тут, ні в реактивації; але вони НАЗВАНІ числом, бо інакше 1 137 → 795
     // читалось би як «третина клієнтів кудись поділась».
     if (!f.qualified) { bridge.oneOff++; return false; }
-    if (f.archived) bridge.archived++;   // підмножина втрачених, не окрема купка
-    if (f.state === "sleeping") { bridge.sleeping++; return false; }
-    if (f.state === "lost") { bridge.lost++; return false; }
+    if (f.state === "sleeping" || f.state === "lost") {
+      if (!keepInReactivation(f)) { bridge.skippedGeneric++; return false; }
+      if (f.archived) bridge.archived++;   // підмножина втрачених, не окрема купка
+      if (f.state === "sleeping") bridge.sleeping++; else bridge.lost++;
+      return false;
+    }
     bridge.bySegment[f.segment] = (bridge.bySegment[f.segment] ?? 0) + 1;
     return true;
   });
@@ -4083,6 +4098,12 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        * даних, а не як зміна правила (гейт #30n).
        */
       oneOff: bridge.oneOff,
+      /**
+       * 📵 Сплячі/втрачені з ключем-телефоном і БЕЗ безготівкових оплат: фільтр
+       * реактивації їх прибирає (рішення власника), у плануванні їх теж немає —
+       * тож без цього числа вони зникли б мовчки.
+       */
+      skippedGeneric: bridge.skippedGeneric,
       /** Розбивка ЖИВИХ по сегментах — та, що стоїть над таблицею. */
       activeBySegment: bridge.bySegment,
       currentWeekIndex: curIdx < 0 ? null : curIdx,

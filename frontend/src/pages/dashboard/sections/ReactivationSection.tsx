@@ -608,7 +608,16 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Tile title={`Сплячих (${data.thresholds.sleepingDays}–${data.thresholds.lostDays} дн.)`} value={String(t.sleeping)}
+        {/* 🔴 ПІДПИС БРАВСЯ З НЕ ТОГО ПОРОГУ. Стояло «Сплячих (60–180 дн.)» — з
+            `sleepingDays`, тобто зі СТАРОГО єдиного порога, хоча стан уже рахується
+            за сегментом (14/30/60). Формально «з ядра», по суті — брехня: правило
+            під плиткою казало одне, плитка інше. Тепер числа беруться з тих самих
+            `bySegment`, що й правило, і виводяться СПИСКОМ унікальних порогів —
+            зміниться поріг у ядрі, зміниться підпис. */}
+        <Tile title={`Сплячі · поріг за сегментом (${
+          [...new Set([data.thresholds.bySegment.vip, data.thresholds.bySegment.regular,
+                       data.thresholds.bySegment.episodic, data.thresholds.bySegment.unknown])]
+            .sort((a, b) => a - b).join("/")} дн.)`} value={String(t.sleeping)}
           sub={`потенціал ${formatAmountFull(t.sleepingPotential)} за історією`} tone={t.sleeping ? "warn" : undefined} />
         <Tile title={`Втрачених (${data.thresholds.lostDays}+ дн.)`} value={String(t.lost)}
           sub={t.seasonal ? `з них ${t.seasonal} сезонних — не смикаємо` : "сезонних немає"} />
