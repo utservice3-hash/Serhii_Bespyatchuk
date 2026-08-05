@@ -2370,10 +2370,12 @@ export interface ClientCard {
   firstPaid: string | null; lastPaid: string | null;
   months: { month: string; revenue: number; deals: number }[];
   monthsTotal: number; deals: ClientCardDeal[]; anchorNote: string;
-  /** Право на «🗑 прибрати з постійних» — рахує сервер тим самим гейтом, що й роут. */
-  canHide: boolean;
-  /** Клієнт уже прибраний вручну (`loyalty_overrides.hidden`) — тоді дія зворотна. */
-  hidden: boolean;
+  /** Права на дії керування — рахує СЕРВЕР тими самими гейтами, що й самі роути. */
+  canArchive: boolean; canMerge: boolean; canAssign: boolean; mergeScope: "all" | "team";
+  /** Клієнт ЗАРАЗ в архіві (з автоповерненням) — тоді дія зворотна. */
+  archived: boolean;
+  archiveReason: string | null;
+  archiveReasons: { key: string; label: string }[];
 }
 export async function fetchClientCard(clientKey: string): Promise<ClientCard> {
   const { data } = await api.get<ClientCard>("/dashboard/client-card", { params: { clientKey } });

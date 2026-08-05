@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, saveLoyaltyOverride, type ClientCard } from "../../../api";
+import { fetchClientCard, archiveClient, type ClientCard } from "../../../api";
+import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
 
 /**
@@ -19,6 +20,7 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
   const [card, setCard] = useState<ClientCard | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reason, setReason] = useState("");
   const load = useCallback(() => {
     setCard(null); setErr(null);
     fetchClientCard(clientKey).then(setCard)
@@ -47,35 +49,74 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
         </div>
       </div>
 
-      {/* 🗑 ДІЯ «ПРИБРАТИ З ПОСТІЙНИХ» — рішення власника 04.08.2026: вона живе
-          САМЕ тут, поруч із гістограмою й угодами, бо це і є підстава для
-          рішення. Право віддає сервер (`canHide`) тим самим гейтом, що стоїть на
-          роуті, — кнопка не може розійтись із дозволом.
-          🔴 Тіло запиту — РІВНО `{clientKey, hidden}`. Інші поля не передаються
-          СВІДОМО: роут оновлює лише передані, тож закріплений відповідальний
-          (`pinned_manager_id`) лишається на місці. */}
-      {card.canHide && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
-          <button disabled={busy}
-            onClick={async () => {
-              const back = card.hidden;
-              if (!confirm(back
-                ? `Повернути «${card.clientName}» до постійних клієнтів?`
-                : `Прибрати «${card.clientName}» з постійних клієнтів?\n\nКлієнт зникне з планування, лояльності та реактивації. Дія зворотна — цією ж кнопкою.`)) return;
-              setBusy(true);
-              try { await saveLoyaltyOverride({ clientKey, hidden: !back }); load(); onChanged?.(); }
-              finally { setBusy(false); }
-            }}
-            style={{ fontSize: 12, fontWeight: 600, padding: "5px 11px", borderRadius: 8, cursor: "pointer",
-                     border: "1px solid #d1d5db", background: "#fff",
-                     color: card.hidden ? "#166534" : "#b91c1c" }}>
-            {card.hidden ? "↩ повернути до постійних" : "🗑 прибрати з постійних"}
-          </button>
-          <span style={{ fontSize: 11, color: "#6b7280" }}>
-            {card.hidden
-              ? "Зараз клієнт прибраний вручну — він не показується у планах, лояльності й реактивації."
-              : "Прибирає з планів, лояльності й реактивації. Угоди та гроші не змінюються."}
-          </span>
+      {/* 🛠 ДІЇ КЕРУВАННЯ КЛІЄНТОМ — САМЕ ТУТ, поруч із гістограмою й угодами,
+          бо це і є підстава для рішення (рішення власника 04.08.2026, підтверджене
+          05.08.2026 після того, як дії з екрана зникли, а в картці не зʼявились).
+
+          🔴 ЩО ТУТ БУЛО ДО ЦЬОГО. Кнопка «прибрати з постійних», яка слала
+          `{clientKey, hidden}`. Хвиля 2 перестала писати `hidden` — кнопка
+          лишилась і **мовчки нічого не робила**: 200 у відповідь, нуль змін,
+          `hidden` завжди false (роут його навіть не віддавав). Це другий випадок
+          того самого класу за тиждень, тому тепер його ловить гейт, а не увага.
+
+          🔴 ПРАВА ВІДДАЄ СЕРВЕР (`canArchive`/`canMerge`/`canAssign`) тими самими
+          функціями, що гейтять роути: кнопка не може розійтись із дозволом. */}
+      {(card.canArchive || card.canMerge || card.canAssign) && (
+        <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fafafa" }}>
+          <div style={{ fontSize: 11, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 8 }}>
+            Керування клієнтом
+          </div>
+
+          {card.canArchive && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              {card.archived ? (
+                <>
+                  <button disabled={busy} style={BTN("#166534")}
+                    onClick={async () => {
+                      if (!confirm(`Повернути «${card.clientName}» з архіву?`)) return;
+                      setBusy(true);
+                      try { await archiveClient({ clientKey, restore: true }); load(); onChanged?.(); }
+                      finally { setBusy(false); }
+                    }}>↩ повернути з архіву</button>
+                  <span style={{ fontSize: 11, color: "#6b7280" }}>
+                    Зараз в архіві{card.archiveReason ? ` · причина: ${card.archiveReasons.find((r) => r.key === card.archiveReason)?.label ?? card.archiveReason}` : ""}.
+                    Повернеться <b>сам</b>, щойно зʼявиться оплата пізніша за дату архівації.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <select value={reason} onChange={(e) => setReason(e.target.value)} disabled={busy}
+                    style={{ fontSize: 12, padding: "5px 8px", border: "1px solid #d1d5db", borderRadius: 8 }}>
+                    <option value="">причина архівації…</option>
+                    {card.archiveReasons.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                  </select>
+                  <button disabled={busy || !reason} style={BTN("#b91c1c")}
+                    onClick={async () => {
+                      if (!confirm(`Прибрати «${card.clientName}» в архів?\n\nКлієнт зникне з планування й реактивації. Дія зворотна.`)) return;
+                      setBusy(true);
+                      try { await archiveClient({ clientKey, reason }); setReason(""); load(); onChanged?.(); }
+                      finally { setBusy(false); }
+                    }}>🗄 в архів</button>
+                  <span style={{ fontSize: 11, color: "#6b7280" }}>
+                    Прибирає з планування й реактивації. Причина обовʼязкова — інакше через місяць
+                    ніхто не згадає, чому клієнта немає. Угоди та гроші не змінюються.
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+
+          {(card.canMerge || card.canAssign) && (
+            <details style={{ marginTop: 10 }}>
+              <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#374151" }}>
+                🔗 Обʼєднання · роз'єднання · передача відповідального
+              </summary>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10 }}>
+                {card.canMerge && <MergePanel onDone={() => { load(); onChanged?.(); }} teamOnly={card.mergeScope === "team"} />}
+                {card.canAssign && <ManagerPanel clients={[]} onDone={() => { load(); onChanged?.(); }} />}
+              </div>
+            </details>
+          )}
         </div>
       )}
 
@@ -147,3 +188,9 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
     </div>
   );
 }
+
+/** Кнопка дії керування — один вигляд на всі, щоб «архів» і «повернути» не роз'їхались. */
+const BTN = (color: string) => ({
+  fontSize: 12, fontWeight: 600, padding: "5px 11px", borderRadius: 8, cursor: "pointer",
+  border: "1px solid #d1d5db", background: "#fff", color,
+} as const);

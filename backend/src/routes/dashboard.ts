@@ -31,7 +31,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanR
 import * as reactivation from "../core/reactivation.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
-import { archivedSql, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS } from "../core/clientArchive.js";
+import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS } from "../core/clientArchive.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
@@ -4503,7 +4503,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
     money.successByClientBucket({ from, to }, "month", clientKey),
     pool.query<{ client_name: string | null; orders: string; revenue: string; first_paid: string | null;
       last_paid: string | null; payment_type: string | null; manager_name: string | null;
-      team_name: string | null; pinned_manager_id: number | null; hidden: boolean | null }>(
+      team_name: string | null; pinned_manager_id: number | null;
+      archived_at: string | null; archive_reason: string | null }>(
       `WITH paid AS (
          SELECT d.manager_id, d.price, d.closed_at_kommo
            FROM deals d
@@ -4523,11 +4524,11 @@ dashboardRouter.get("/client-card", async (req, res) => {
               to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS first_paid,
               to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid,
               mm.name AS manager_name, t.name AS team_name, lo.pinned_manager_id,
-              -- 🔴 ОКРЕМИМ ПІДЗАПИТОМ, а не з lo: той join навмисно звужений
-              -- умовою AND NOT lo.hidden, тож саме для прибраного клієнта він
-              -- порожній — і hidden завжди читалось би як false. Кнопка
+              -- 🔴 СТАН АРХІВУ — ОКРЕМИМ ПІДЗАПИТОМ. Історично join по lo був
+              -- звужений умовою на прибраність, тож саме для прибраного клієнта
+              -- він порожній, і стан читався б як «не в архіві»: кнопка
               -- «повернути» не зʼявилась би НІКОЛИ, а виглядало б це як
-              -- «дія не спрацювала».
+              -- «дія не спрацювала». Підзапит від звуження join не залежить.
               (SELECT o2.archived_at FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archived_at,
               (SELECT o2.archive_reason FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archive_reason
          FROM agg a
@@ -4595,14 +4596,22 @@ dashboardRouter.get("/client-card", async (req, res) => {
     anchorNote: "Стовпчики — гроші ① (успішно реалізовано, анкер = дата входу в етап). "
       + "Список — журнал угод (дата закриття; для незакритих — створення). Суми не зводяться між собою.",
     /**
-     * 🗑 «Прибрати з постійних» — рішення власника 04.08.2026: дія повертається
-     * САМЕ в картку клієнта (там, де видно гістограму й угоди, тобто підставу
-     * для рішення). Право рахує СЕРВЕР тією самою функцією, що гейтить
-     * `POST /loyalty-override` — інакше кнопка й дозвіл розійшлись би, і хтось
-     * бачив би кнопку, яка завжди дає 403.
+     * 🛠 ПРАВА НА ДІЇ КЕРУВАННЯ — РАХУЄ СЕРВЕР, тими самими функціями, що гейтять
+     * самі роути. Інакше кнопка й дозвіл розходяться, і людина бачить кнопку,
+     * яка завжди дає 403 (або, гірше, не бачить дії, на яку має право).
+     *
+     * 🔴 `canHide`/`hidden` ПРИБРАНО, і це не косметика. Хвиля 2 перестала писати
+     * `loyalty_overrides.hidden`, але кнопка в картці лишилась і далі слала
+     * `{clientKey, hidden}` — тобто **мовчки нічого не робила**: 200 у відповідь,
+     * нуль змін у БД, `hidden` завжди false. Заміна — архів: причина, дата, автор.
      */
-    canHide: isAdminScope(auth),
-    hidden: h?.hidden ?? false,
+    canArchive: isAdminScope(auth),
+    archived: isArchived(h?.archived_at ?? null, h?.last_paid ?? null),
+    archiveReason: h?.archive_reason ?? null,
+    archiveReasons: ARCHIVE_REASONS,
+    canAssign: roleHasPerm(auth.roleKey, "merge_clients"),
+    canMerge: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
+    mergeScope: roleHasPerm(auth.roleKey, "merge_clients") ? "all" : "team",
   });
 });
 

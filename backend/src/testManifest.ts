@@ -28,6 +28,7 @@ export const MANIFEST_FILES: string[] = [
   "core/adTouch.test.js",
   "core/autodeal.test.js",
   "routes/clientScreens.test.js",
+  "routes/uiEntry.test.js",
   "core/priorPaid.test.js",
   "jobs/calls.test.js",
   "utils/phone.test.js",
@@ -261,6 +262,9 @@ export const MANIFEST_TESTS: string[] = [
   "#29b ДЗЕРКАЛО: аргумент СПРАВДІ звужує, а не ігнорується",
   "#29c Σ МІСЯЦІВ КАРТКИ == ФАКТУ КЛІЄНТА того ж діапазону",
   "#29d МІСЯЦЬ КАРТКИ == МІСЯЦЮ ЕКРАНА ПЛАНІВ (одна цифра, не дві схожі)",
+  // routes/uiEntry.test.ts — дія керування без входу в UI (ловимо ВДРУГЕ)
+  "#39 ВХІД В UI: кожна дія керування викликається з ДОСЯЖНОГО компонента",
+  "#39b МЕРТВЕ ПОЛЕ `hidden` НЕ ЖИВЕ У ФРОНТІ (той самий баг не повернеться тихо)",
   // routes/clientScreens.test.ts — пошук клієнта та ієрархія екрана планів
   "#30 ПОШУК КЛІЄНТА: знаходить за НАЗВОЮ і за КЛЮЧЕМ — і це та сама людина",
   "#30b ДЗЕРКАЛО: пошук НЕ віддає всіх підряд",
