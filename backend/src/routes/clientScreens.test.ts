@@ -453,26 +453,34 @@ test("#30o ДЖЕНЕРИКИ-ТЕЛЕФОНИ: без безналу — гет
   console.log(`   ℹ ключів-телефонів: у базі ${inDb}, у видачі ${phoneKeys.length} (решта — без безналу)`);
 });
 
-test("#30l КАРТКА: «прибрати з постійних» видно ТОМУ, кому роут це дозволяє", needsApi(), async () => {
+test("#30l КАРТКА: дії керування видно ТОМУ, кому роут їх дозволяє", needsApi(), async () => {
   // 🪞 ДЗЕРКАЛЬНА ПАРА, і вона тут обовʼязкова. Односторонній тест («менеджер не
   // бачить кнопки») зеленів би й тоді, якби кнопки не бачив НІХТО — тобто саме в
-  // стані, який ми щойно виправляли: дія без входу. Тому перевіряємо обидва боки
-  // і звіряємо з тим самим гейтом, що стоїть на POST /loyalty-override.
+  // стані, який ми щойно виправляли: дія без входу.
+  //
+  // 🗄 ПЕРЕЦІЛЕНО 05.08.2026 з `canHide` на `canArchive`. Причина — не косметика:
+  // `hidden` хвиля 2 перестала писати, роут перестав його віддавати, і кнопка в
+  // картці мовчки нічого не робила. Гейт мусить дивитись на ДІЮ, яка справді
+  // існує, інакше він стереже привид. Звіряємось із тим самим `isAdminScope`,
+  // що гейтить POST /dashboard/client-archive.
   const token = await adminToken();
   const list = await (await get("/api/dashboard/client-plans", token)).json() as { clients: { clientKey: string }[] };
   const key = list.clients[0]?.clientKey;
   assert.ok(key, "🔴 немає жодного клієнта — перевірка порожня");
 
   const asAdmin = await (await get("/api/dashboard/client-card?clientKey=" + encodeURIComponent(key), token)).json() as
-    { canHide?: boolean; hidden?: boolean };
-  assert.equal(asAdmin.canHide, true,
-    "🔴 адмін не бачить дії «прибрати з постійних» — вхід так і лишився втраченим");
-  assert.equal(typeof asAdmin.hidden, "boolean",
-    "🔴 картка не каже, чи клієнт уже прибраний — кнопка не знатиме, який бік показати");
+    { canArchive?: boolean; archived?: boolean; archiveReasons?: unknown[] };
+  assert.equal(asAdmin.canArchive, true,
+    "🔴 адмін не бачить дії «в архів» — вхід так і лишився втраченим");
+  assert.equal(typeof asAdmin.archived, "boolean",
+    "🔴 картка не каже, чи клієнт уже в архіві — кнопка не знатиме, який бік показати");
+  assert.ok(Array.isArray(asAdmin.archiveReasons) && asAdmin.archiveReasons.length > 0,
+    "🔴 картка не дала словника причин — селектор був би порожній, а причина ОБОВʼЯЗКОВА");
 
   // Другий бік: тімлід картку бачить (вкладка `loyalty` в нього є), але права
-  // прибирати з постійних не має — і сервер мусить сказати це сам, а не
-  // покластись на те, що фронт «не намалює».
+  // архівувати не має — і сервер мусить сказати це сам, а не покластись на те,
+  // що фронт «не намалює». При цьому обʼєднання в межах СВОЄЇ команди йому
+  // відкрито, тож дзеркало перевіряє обидва боки однієї картки.
   const lead = await someTeamLead();
   const { pool } = await import("../db/pool.js");
   const own = (await pool.query<{ client_key: string }>(
@@ -483,9 +491,14 @@ test("#30l КАРТКА: «прибрати з постійних» видно �
       GROUP BY d.client_key ORDER BY COUNT(*) DESC LIMIT 1`, [lead.teamId])).rows[0]?.client_key;
   assert.ok(own, "🔴 у команди тімліда немає клієнтів — дзеркало нема на чому перевіряти");
   const asLead = await (await get("/api/dashboard/client-card?clientKey=" + encodeURIComponent(own!), lead.token)).json() as
-    { canHide?: boolean; months?: unknown[] };
-  assert.equal(asLead.canHide, false,
-    "🔴 тімлід бачить кнопку, яка на сервері дасть 403 — дозвіл і кнопка розійшлись");
+    { canArchive?: boolean; canMerge?: boolean; mergeScope?: string; months?: unknown[] };
+  assert.equal(asLead.canArchive, false,
+    "🔴 тімлід бачить кнопку архівації, яка на сервері дасть 403 — дозвіл і кнопка розійшлись");
+  assert.equal(asLead.canMerge, true,
+    "🔴 тімліду закрили обʼєднання — це вже не межа, а втрачена дія (дзеркало до рядка вище: "
+    + "якби ми різали права всім підряд, перша перевірка теж зеленіла б)");
+  assert.equal(asLead.mergeScope, "team",
+    "🔴 тімліду віддали скоуп обʼєднання «all» — форма пропонувала б пари, на яких сервер дасть 403");
   assert.ok(Array.isArray(asLead.months) && asLead.months.length === 12,
     "🔴 тімліду не віддалась сама картка — це вже не межа, а поломка екрана");
 });
