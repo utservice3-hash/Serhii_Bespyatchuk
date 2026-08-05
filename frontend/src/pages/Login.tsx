@@ -25,7 +25,7 @@ export function Login() {
     <div className="login-screen">
       <form onSubmit={handleSubmit} className="login-card">
         <div className="login-brand">
-          <Logo size={40} />
+          <Logo size={40} variant="red" />
           <span>UTS Dashboard</span>
         </div>
         <input

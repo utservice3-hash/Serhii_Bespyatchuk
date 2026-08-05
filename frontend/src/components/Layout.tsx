@@ -141,7 +141,7 @@ export function Layout({
     <div className="app-shell">
       <aside className="sidebar" style={collapsed ? { width: 64, minWidth: 64 } : undefined}>
         <div className="sidebar-brand" style={{ justifyContent: collapsed ? "center" : undefined }}>
-          <Logo size={collapsed ? 20 : 26} />
+          <Logo size={collapsed ? 20 : 26} variant="white" />
           {/* Поруч із плашкою — не повтор «UTS», а що це за застосунок (макет). */}
           {!collapsed && <span className="sidebar-brand-sub">дашборд</span>}
         </div>
