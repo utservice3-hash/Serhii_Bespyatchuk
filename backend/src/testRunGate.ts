@@ -60,6 +60,10 @@ export const ALLOWED_PROD_SKIPS: { name: string; why: string }[] = [
        + "перевіряти масив params означало б порівняти логіку саму з собою) — на прод-сервері "
        + "бінарів PG немає. Шостий scratch-тест; маску («усі, що потребують PG») і далі свідомо "
        + "НЕ робимо — вона прикрила б і майбутній скіп, якого ми не бачили" },
+  { name: "#36 ЧАС ВІДПОВІДІ: /overview і /report тримаються під навантаженням",
+    why: "ДЗЕРКАЛО до #11: гейт ЧАСУ пропускається САМЕ в матричному режимі, бо #11 заливає "
+       + "сервер 1024 пробами і замір міряв би заливку (11 058 мс проти чистих 2 432-3 355). "
+       + "У `test:prod` — обовʼязковий, і саме він ганяється на КОЖЕН деплой" },
   { name: "#11 МАТРИЦЯ ДОСТУПУ: жодна клітинка не змінилась",
     why: "повний зліпок (1025 пар, ~7-8 хв) — окремий режим `npm run test:matrix`. "
        + "У ньому цей скіп уже НЕ дозволений (див. allowedSkips)" },
@@ -69,6 +73,10 @@ export const ALLOWED_PROD_SKIPS: { name: string; why: string }[] = [
 export function allowedSkips(env: NodeJS.ProcessEnv = process.env): Set<string> {
   const names = ALLOWED_PROD_SKIPS
     .filter((s) => !(env.TEST_MATRIX === "1" && s.name.startsWith("#11 ")))
+    // 🪞 ДЗЕРКАЛО ДО #11: часовий гейт дозволено пропустити ЛИШЕ в матричному
+    // режимі (там його замір міряв би заливку з 1024 проб). У `test:prod` він
+    // обовʼязковий — і саме `test:prod` ганяється на КОЖЕН деплой.
+    .filter((s) => !(env.TEST_MATRIX !== "1" && s.name.startsWith("#36 ")))
     .filter((s) => !(env.TEST_AI === "1" && s.name.startsWith("AI-оракул")))
     .map((s) => s.name);
   return new Set(names);

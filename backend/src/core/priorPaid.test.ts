@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsDb, needsApi, API_BASE } from "../testMode.js";
+import { needsDb, needsApiQuiet, API_BASE } from "../testMode.js";
 
 /**
  * #35 / #36 — ПЕРЕПИСУВАННЯ OR-ПРЕДИКАТА РЕКЛАМНОГО ЯДРА (05.08.2026).
@@ -48,7 +48,7 @@ test("#35 ДВІ ФОРМИ ОДНОГО ПРАВИЛА збігаються н�
       `🔴 форми розійшлись на «${k}»: корельована ${A[k]}, join ${B[k]} — це РІЗНІ метрики`);
 });
 
-test("#36 ЧАС ВІДПОВІДІ: /overview і /report тримаються під навантаженням", needsApi(), async () => {
+test("#36 ЧАС ВІДПОВІДІ: /overview і /report тримаються під навантаженням", needsApiQuiet(), async () => {
   // 🔴 ЦЕ ГЕЙТ, А НЕ ЗАМІР. Разовий замір ловить проблему один раз; гейт не дає їй
   // повернутись. Привід: 503 на Огляді приходив саме від ОДНОЧАСНОСТІ
   // (1 запит 8 с, 4 паралельних 16 с при межі вартового 20 с).
