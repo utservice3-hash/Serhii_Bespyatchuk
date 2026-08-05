@@ -3013,6 +3013,13 @@ export interface Projection {
   elapsedWorkingDays: number;
   totalWorkingDays: number;
   monthInProgress: boolean;
+  /**
+   * 🔴 ЗОНА, ЯКУ ЦЯ Ж ФУНКЦІЯ ВЖЕ ПОРАХУВАЛА. Віддається назовні НЕ «про всяк
+   * випадок»: `/overview` кликав `expectedPaymentsByPlanned` ВДРУГЕ з тими самими
+   * аргументами — ідентичний SQL, ідентичні параметри, окреме зʼєднання з пулу.
+   * Заміряно 05.08.2026: чиста втрата на порожньому місці. Беріть звідси.
+   */
+  expectedZone: ExpectedPaymentsByPlanned;
 }
 
 /**
@@ -3038,6 +3045,7 @@ export async function buildProjection(s: ProjectionScope, plan?: number | null):
   const dobir = monthInProgress ? await newBusinessDobir({ managerId: s.managerId, teamId: s.teamId }) : 0;
   const projected = fact + zoneFull + dobir;
   return {
+    expectedZone: expected,
     fact, projected,
     projectedPct: plan && plan > 0 ? Math.round((projected / plan) * 100) : null,
     zoneFull, zoneDeals, dobir,

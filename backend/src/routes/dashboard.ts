@@ -754,10 +754,12 @@ dashboardRouter.get("/overview", async (req, res) => {
   // усі 5 стадій за статусом), те саме джерело й число, що «Очікувані оплати» Звіту 2.0
   // (НЕ вузький етап-8-знімок money.expectedMoney, який лишається лише для avgCheckExpected).
   // byTeam — розріз ТІЄЇ САМОЇ зони (Σ рядків = total) для дрілдауну картки.
-  const [expectedZone, expectedZoneTeams] = await Promise.all([
-    metrics.expectedPaymentsByPlanned({ managerId, teamId }),
-    metrics.expectedZoneByScope({ managerId, teamId }, "team"),
-  ]);
+  // 🔴 ЗОНУ БЕРЕМО З ПРОГНОЗУ, А НЕ РАХУЄМО ВДРУГЕ. `buildProjection` вище вже
+  // викликав `expectedPaymentsByPlanned` із ТИМИ САМИМИ аргументами — це був
+  // ідентичний SQL з ідентичними параметрами, тобто чиста втрата зʼєднання й часу
+  // (заміряно 05.08.2026). Число те саме за побудовою: один виклик, одне джерело.
+  const expectedZone = proj.expectedZone;
+  const expectedZoneTeams = await metrics.expectedZoneByScope({ managerId, teamId }, "team");
 
   // КРОК 9-conv Фаза 1: конверсія — з ЯДРА (core/metrics), стеля ≤100%.
   //   Реклама → conversion_ads (cohort основне, period тренд).
