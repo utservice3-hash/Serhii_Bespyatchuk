@@ -20,7 +20,7 @@
  */
 
 export interface OverrideBody {
-  clientKey?: unknown; clientName?: unknown; hidden?: unknown;
+  clientKey?: unknown; clientName?: unknown;
   pinnedManagerId?: unknown; forceRegular?: unknown; note?: unknown;
 }
 
@@ -35,7 +35,11 @@ export function buildOverrideUpsert(body: OverrideBody, userId: number | null): 
   const has = (k: keyof OverrideBody) => Object.prototype.hasOwnProperty.call(body ?? {}, k);
   const clientKey = String(body?.clientKey ?? "").trim();
   const clientName = body?.clientName != null ? String(body.clientName) : null;
-  const hidden = has("hidden") ? body.hidden === true : null;
+  // 🗄 `hidden` БІЛЬШЕ НЕ ПИШЕТЬСЯ (хвиля 2, 05.08.2026). Прибрати клієнта з
+  // екранів тепер уміє РІВНО ОДНА дія — `/client-archive` (дата + причина + хто).
+  // Лишити тут запис означало б завести ТИХИЙ NO-OP: поле писалось би, а жоден
+  // запит його вже не читає — і «кнопка не спрацювала» повернулось би, тільки
+  // цього разу без сліду в коді. Стовпець у БД лишається як історичний слід.
   const forceRegular = has("forceRegular") ? body.forceRegular === true : null;
   const pinnedProvided = has("pinnedManagerId");
   // Порожній рядок із <select> читаємо як явний null — це «— не обрано —».
@@ -45,16 +49,18 @@ export function buildOverrideUpsert(body: OverrideBody, userId: number | null): 
   const note = noteProvided && body.note != null ? String(body.note) : null;
 
   return {
-    sql: `INSERT INTO loyalty_overrides (client_key, client_name, hidden, pinned_manager_id, force_regular, note, updated_by, updated_at)
-     VALUES ($1, $2, COALESCE($3::boolean, false), $4::int, COALESCE($5::boolean, false), $6::text, $7, now())
+    // ⚠️ Параметр під `hidden` ПРИБРАНО ЗОВСІМ, а не лишений порожнім: невживаний
+    // `$3` дає «could not determine data type of parameter $3» — Postgres не вміє
+    // вивести тип для плейсхолдера, якого немає в тексті. Спіймав гейт #32.
+    sql: `INSERT INTO loyalty_overrides (client_key, client_name, pinned_manager_id, force_regular, note, updated_by, updated_at)
+     VALUES ($1, $2, $3::int, COALESCE($4::boolean, false), $5::text, $6, now())
      ON CONFLICT (client_key) DO UPDATE SET
        client_name       = COALESCE(EXCLUDED.client_name, loyalty_overrides.client_name),
-       hidden            = COALESCE($3::boolean, loyalty_overrides.hidden),
-       force_regular     = COALESCE($5::boolean, loyalty_overrides.force_regular),
-       pinned_manager_id = CASE WHEN $8::boolean THEN $4::int ELSE loyalty_overrides.pinned_manager_id END,
-       note              = CASE WHEN $9::boolean THEN $6::text ELSE loyalty_overrides.note END,
+       force_regular     = COALESCE($4::boolean, loyalty_overrides.force_regular),
+       pinned_manager_id = CASE WHEN $7::boolean THEN $3::int ELSE loyalty_overrides.pinned_manager_id END,
+       note              = CASE WHEN $8::boolean THEN $5::text ELSE loyalty_overrides.note END,
        updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    params: [clientKey, clientName, hidden, pinnedManagerId, forceRegular, note, userId,
+    params: [clientKey, clientName, pinnedManagerId, forceRegular, note, userId,
              pinnedProvided, noteProvided],
   };
 }

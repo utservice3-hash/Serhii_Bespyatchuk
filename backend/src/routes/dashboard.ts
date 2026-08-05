@@ -2185,10 +2185,16 @@ dashboardRouter.get("/teams", async (req, res) => {
 /** Список активних оверрайдів + довідник менеджерів для UI. */
 dashboardRouter.get("/loyalty-overrides", async (req, res) => {
   if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
+  // 🗄 Показуємо АРХІВНІСТЬ (з автоповерненням), а не мертву колонку `hidden`:
+  // список оверрайдів має відповідати тому, що бачать екрани.
   const r = await pool.query<{ client_key: string; client_name: string | null; hidden: boolean; pinned_manager_id: number | null; force_regular: boolean; note: string | null; manager_name: string | null; updated_at: string }>(
-    `SELECT o.client_key, o.client_name, o.hidden, o.pinned_manager_id, o.force_regular, o.note,
+    `WITH ${LAST_PAID_CTE}
+     SELECT o.client_key, o.client_name, ${archivedSql("o", "ap")} AS hidden,
+            o.pinned_manager_id, o.force_regular, o.note,
             m.name AS manager_name, o.updated_at
-     FROM loyalty_overrides o LEFT JOIN managers m ON m.id = o.pinned_manager_id
+     FROM loyalty_overrides o
+     LEFT JOIN managers m ON m.id = o.pinned_manager_id
+     LEFT JOIN arch_paid ap ON ap.client_key = o.client_key
      ORDER BY o.updated_at DESC`
   );
   res.json({
