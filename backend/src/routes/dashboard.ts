@@ -2278,7 +2278,7 @@ dashboardRouter.get("/client-archive", async (req, res) => {
      )
      SELECT o.client_key, o.client_name, o.archive_reason AS reason,
             to_char(o.archived_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS archived_at,
-            u.name AS by_name,
+            COALESCE(u.full_name, u.email) AS by_name,
             COALESCE(a.orders,0) AS orders, COALESCE(a.revenue,0) AS revenue,
             to_char(ap.last_paid AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid
        FROM loyalty_overrides o
