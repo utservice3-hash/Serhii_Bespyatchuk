@@ -2304,6 +2304,8 @@ export interface ClientPlanRow {
   teamId: number | null; teamName: string;
   /** Сегмент за частотою замовлень — бейдж біля клієнта. */
   segment: ClientSegment;
+  /** ⭐ Включений КВП вручну попри правило + примітка «чому» (у підказці). */
+  forcedRegular: boolean; forceNote: string | null;
 }
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
@@ -2372,6 +2374,8 @@ export interface ClientCard {
   monthsTotal: number; deals: ClientCardDeal[]; anchorNote: string;
   /** Права на дії керування — рахує СЕРВЕР тими самими гейтами, що й самі роути. */
   canArchive: boolean; canMerge: boolean; canAssign: boolean; mergeScope: "all" | "team";
+  /** ⭐ «Вважати постійним попри правило» — право, стан і примітка «чому». */
+  canForceRegular: boolean; forcedRegular: boolean; forceNote: string | null;
   /** Клієнт ЗАРАЗ в архіві (з автоповерненням) — тоді дія зворотна. */
   archived: boolean;
   archiveReason: string | null;
@@ -2430,6 +2434,8 @@ export interface ReactivationRow {
   medianGapDays: number | null;
   /** Втрачений понад рік — у згорнутий блок «Давно втрачені», не в реєстр архіву. */
   longLapsed: boolean;
+  /** ⭐ Включений КВП вручну попри правило + примітка «чому» (у підказці). */
+  forcedRegular: boolean; forceNote: string | null;
   state: ClientState; value: number; seasonal: boolean; seasonalNote: string | null;
   taskId: number | null; taskStatus: string | null; taskAssignee: string | null;
   taskDeadline: string | null; closeReason: string | null;

@@ -79,6 +79,14 @@ export interface ClientSegmentRow extends ClientSegmentFacts {
   longLapsed: boolean;
   /** Двошляхова кваліфікація постійного. `false` = РАЗОВИЙ, не на екранах. */
   qualified: boolean;
+  /**
+   * ⭐ Клієнта включив КВП РУЧНО, попри правило (`loyalty_overrides.force_regular`).
+   * Примітку тримаємо поруч, бо на екрані вона потрібна в ту саму мить, що й
+   * позначка: «включений вручну» без «чому» через місяць нічим не відрізняється
+   * від помилки. Примітку стереже `CHECK` у БД, не валідація роуту.
+   */
+  forcedRegular: boolean;
+  forceNote: string | null;
 }
 
 /**
@@ -121,9 +129,15 @@ const SEGMENT_FACTS_SQL = `
          BOOL_OR(COALESCE(p.payment_type,'') ILIKE '%езнал%') AS has_cashless,
          BOOL_OR(COALESCE(p.payment_type,'') ILIKE '%алич%'
                  OR COALESCE(p.payment_type,'') ILIKE '%отівк%') AS has_cash,
-         (p.client_key ~ '^[0-9]+$') AS phone_key
-    FROM seg_paid p LEFT JOIN seg_med m ON m.client_key = p.client_key
-   GROUP BY p.client_key, m.median_gap, m.min_gap`;
+         (p.client_key ~ '^[0-9]+$') AS phone_key,
+         COALESCE(lo.force_regular, false) AS forced_regular,
+         lo.note AS force_note
+    FROM seg_paid p
+    LEFT JOIN seg_med m ON m.client_key = p.client_key
+    -- ⭐ Ручний виняток КВП. LEFT JOIN, а не окремий запит: інакше «включений
+    -- вручну» і «кваліфікований» рахувались би в різні моменти й розійшлися б.
+    LEFT JOIN loyalty_overrides lo ON lo.client_key = p.client_key
+   GROUP BY p.client_key, m.median_gap, m.min_gap, lo.force_regular, lo.note`;
 
 /** Мапа `client_key → сегмент/стан`. Один запит на прохід екрана. */
 export async function loadClientSegments(): Promise<Map<string, ClientSegmentRow>> {
@@ -131,6 +145,7 @@ export async function loadClientSegments(): Promise<Map<string, ClientSegmentRow
     client_key: string; payments: number; payments_dated: number;
     median_gap: string | null; min_gap: string | null; days_since: number;
     payment_type: string | null; has_cashless: boolean; has_cash: boolean; phone_key: boolean;
+    forced_regular: boolean; force_note: string | null;
   }>(SEGMENT_FACTS_SQL, [GENERIC_CLIENT_KEYS])).rows;
 
   const round1 = (v: string | null) => (v == null ? null : Math.round(Number(v) * 10) / 10);
@@ -150,7 +165,8 @@ export async function loadClientSegments(): Promise<Map<string, ClientSegmentRow
       clientKey: r.client_key, payments, paymentsDated, medianGapDays, minGapDays, daysSince,
       paymentType: r.payment_type, payMode, phoneKey: r.phone_key,
       segment, state: stateOf(daysSince, segment), longLapsed: daysSince >= LONG_LAPSED_DAYS,
-      qualified: qualifiesAsRepeat({ payments, minGapDays, payMode }),
+      forcedRegular: r.forced_regular, forceNote: r.force_note,
+      qualified: qualifiesAsRepeat({ payments, minGapDays, payMode, forcedRegular: r.forced_regular }),
     });
   }
   return map;
@@ -168,6 +184,7 @@ export function factsFor(map: Map<string, ClientSegmentRow>, clientKey: string):
     clientKey, payments: 0, paymentsDated: 0, medianGapDays: null, minGapDays: null, daysSince: 0,
     paymentType: null, payMode: "cashless", phoneKey: /^[0-9]+$/.test(clientKey),
     segment: segmentOf(null, 0), state: stateOf(0), longLapsed: false, qualified: false,
+    forcedRegular: false, forceNote: null,
   };
 }
 

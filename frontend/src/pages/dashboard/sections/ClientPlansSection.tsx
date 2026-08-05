@@ -6,7 +6,7 @@ import {
   type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
-import { SegmentBadge } from "./SegmentBadge";
+import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
 import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
@@ -281,6 +281,7 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
           <div style={{ fontWeight: 700 }}>{c.clientName}</div>
           <div style={{ marginTop: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <SegmentBadge segment={c.segment} />
+            {c.forcedRegular && <ForcedBadge note={c.forceNote} />}
             {c.paymentType && <span style={S.chip("#eff6ff", "#1d4ed8")}>{c.paymentType}</span>}
             <span style={{ fontSize: 11, color: "#6b7280" }}>
               {c.orders} зам.{c.since ? ` · з ${c.since}` : ""}

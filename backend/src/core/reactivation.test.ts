@@ -421,6 +421,65 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       await c.query(`DELETE FROM managers WHERE id = 30`);
     });
 
+    await t.test("#40 ⭐ ВРУЧНУ ПОСТІЙНИЙ: правило пускає, скидання повертає, БД вимагає примітку", async () => {
+      // 🔴 ЩО ЦЕ СТЕРЕЖЕ. Прапорець `force_regular` існував у БД і впливав ЛИШЕ на
+      // легасі-сегментацію старого `/loyalty` — нова кваліфікація його не бачила.
+      // Дати кнопку в UI без цього — рівно «брехлива кнопка», яку ми щойно прибрали.
+      // Тому перевіряємо НАСКРІЗЬ: БД → ядро → видача.
+      const { qualifiesAsRepeat } = await import("./reactivationRules.js");
+      const { loadClientSegments } = await import("./clientSegments.js");
+
+      // ── 0 · беремо клієнта, якого правило НЕ пускає (разовий)
+      const before = await loadClientSegments();
+      const oneOff = [...before.values()].find((x) => !x.qualified);
+      assert.ok(oneOff, "🔴 у сіді немає жодного разового — доводити нема на чому "
+        + "(порожній результат це ПРОВАЛ, не успіх)");
+      assert.equal(oneOff!.forcedRegular, false, "🔴 клієнт уже включений вручну — тест не з нуля");
+
+      // ── 1 · 🔴 БД ВІДХИЛЯЄ ПРАПОРЕЦЬ БЕЗ ПРИМІТКИ. Валідацію в роуті обходить
+      // будь-який скрипт; примітка має бути умовою існування рядка, а не звичкою.
+      await assert.rejects(
+        () => c.query(`INSERT INTO loyalty_overrides (client_key, force_regular)
+                       VALUES ($1, true)
+                       ON CONFLICT (client_key) DO UPDATE SET force_regular = true, note = NULL`,
+                      [oneOff!.clientKey]),
+        /force_regular|check/i,
+        "🔴 БД пустила «вважати постійним» БЕЗ примітки — CHECK стоїть для вигляду");
+      // порожній рядок — теж не примітка, інакше правило обходиться пробілом
+      await assert.rejects(
+        () => c.query(`INSERT INTO loyalty_overrides (client_key, force_regular, note)
+                       VALUES ($1, true, '   ')
+                       ON CONFLICT (client_key) DO UPDATE SET force_regular = true, note = '   '`,
+                      [oneOff!.clientKey]),
+        /force_regular|check/i,
+        "🔴 пробіли зійшли за примітку — CHECK не тримає btrim");
+
+      // ── 2 · З ПРИМІТКОЮ клієнт проходить, хоча правило його не пускає
+      await c.query(`INSERT INTO loyalty_overrides (client_key, force_regular, note)
+                     VALUES ($1, true, 'домовленість власника, возить щокварталу')
+                     ON CONFLICT (client_key) DO UPDATE
+                       SET force_regular = true, note = EXCLUDED.note`, [oneOff!.clientKey]);
+      const forced = (await loadClientSegments()).get(oneOff!.clientKey)!;
+      assert.equal(forced.forcedRegular, true, "🔴 ядро не побачило ручного винятку");
+      assert.equal(forced.qualified, true,
+        "🔴 клієнт із ручним винятком лишився разовим — кнопка була б мовчазною");
+      assert.equal(forced.forceNote, "домовленість власника, возить щокварталу",
+        "🔴 примітка не доїхала до екрана — позначка «вручну» без «чому» = майбутній пошук неіснуючого бага");
+      // чиста функція теж мусить це знати сама, без БД
+      assert.equal(qualifiesAsRepeat({ payments: 1, minGapDays: null, payMode: "cash", forcedRegular: true }), true,
+        "🔴 правило не поважає виняток — виняток жив би лише в SQL");
+
+      // ── 3 · 🪞 ДЗЕРКАЛО: скидання ПОВЕРТАЄ як було. Без цього пункт 2 зеленів би
+      // й тоді, коли ми зробили постійними ВСІХ підряд.
+      await c.query(`UPDATE loyalty_overrides SET force_regular = false WHERE client_key = $1`, [oneOff!.clientKey]);
+      const back = (await loadClientSegments()).get(oneOff!.clientKey)!;
+      assert.equal(back.forcedRegular, false, "🔴 скидання не спрацювало — дія незворотна");
+      assert.equal(back.qualified, false,
+        "🔴 після скидання клієнт лишився постійним — правило вже не керує, керує слід від правки");
+
+      await c.query(`DELETE FROM loyalty_overrides WHERE client_key = $1`, [oneOff!.clientKey]);
+    });
+
     await t.test("#38 АРХІВ: одна дія з ПРИЧИНОЮ прибирає, нова оплата повертає САМА", async () => {
       // 🔴 ЩО САМЕ ТУТ ПЕРЕВІРЯЄТЬСЯ І ЧОМУ ТАК. Раніше тут стояв тест на `hidden` —
       // булевий тумблер без причини й без дати. Він ловив реальний регрес (порожня

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, archiveClient, type ClientCard } from "../../../api";
+import { fetchClientCard, archiveClient, saveLoyaltyOverride, type ClientCard } from "../../../api";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
 
@@ -21,6 +21,7 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
+  const [forceNote, setForceNote] = useState("");
   const load = useCallback(() => {
     setCard(null); setErr(null);
     fetchClientCard(clientKey).then(setCard)
@@ -100,6 +101,49 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
                   <span style={{ fontSize: 11, color: "#6b7280" }}>
                     Прибирає з планування й реактивації. Причина обовʼязкова — інакше через місяць
                     ніхто не згадає, чому клієнта немає. Угоди та гроші не змінюються.
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ⭐ «ВВАЖАТИ ПОСТІЙНИМ ПОПРИ ПРАВИЛО» (рішення власника 05.08.2026).
+              Після двошляхової кваліфікації 342 клієнти стали разовими АВТОМАТИЧНО —
+              правило без винятків жорсткіше за реальність, і КВП має могти сказати
+              «цей постійний, я знаю чому».
+              🔴 ПРИМІТКА ОБОВʼЯЗКОВА, і стереже її БД (`CHECK`), а не ця форма:
+              валідацію в UI обходить будь-який скрипт, а прапорець без пояснення
+              через місяць нічим не відрізняється від помилки. */}
+          {card.canForceRegular && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              {card.forcedRegular ? (
+                <>
+                  <button disabled={busy} style={BTN("#6b7280")}
+                    onClick={async () => {
+                      if (!confirm(`Скинути ручну правку для «${card.clientName}»?\n\nКлієнт повернеться під загальне правило кваліфікації.`)) return;
+                      setBusy(true);
+                      try { await saveLoyaltyOverride({ clientKey, forceRegular: false }); load(); onChanged?.(); }
+                      finally { setBusy(false); }
+                    }}>↩ скинути ручну правку</button>
+                  <span style={{ fontSize: 11, color: "#6b7280" }}>
+                    ⭐ <b>Включений вручну</b> попри правило{card.forceNote ? <> · «{card.forceNote}»</> : null}.
+                    Скидання поверне його під загальне правило кваліфікації.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <input value={forceNote} onChange={(e) => setForceNote(e.target.value)} disabled={busy}
+                    placeholder="чому цей клієнт постійний (обовʼязково)…"
+                    style={{ fontSize: 12, padding: "5px 9px", border: "1px solid #d1d5db", borderRadius: 8, minWidth: 280 }} />
+                  <button disabled={busy || !forceNote.trim()} style={BTN("#b45309")}
+                    onClick={async () => {
+                      setBusy(true);
+                      try { await saveLoyaltyOverride({ clientKey, forceRegular: true, note: forceNote.trim() }); setForceNote(""); load(); onChanged?.(); }
+                      finally { setBusy(false); }
+                    }}>⭐ вважати постійним</button>
+                  <span style={{ fontSize: 11, color: "#6b7280" }}>
+                    Клієнт потрапить у планування й реактивацію, навіть якщо не проходить
+                    кваліфікацію. Примітка обовʼязкова — вона буде видна в списках.
                   </span>
                 </>
               )}

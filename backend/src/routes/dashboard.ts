@@ -4143,6 +4143,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       clientName: c.name ?? c.client_key,
       paymentType: c.payment_type ?? null,
       segment: factsFor(seg, c.client_key).segment,
+      // ⭐ Позначка «включений вручну» + примітка. Без примітки поруч позначка
+      // через місяць нічим не відрізняється від помилки — тому обидва поля, а
+      // не лише прапорець.
+      forcedRegular: factsFor(seg, c.client_key).forcedRegular,
+      forceNote: factsFor(seg, c.client_key).forceNote,
       orders: Number(c.orders),
       lifetimeRevenue: Number(c.revenue),
       since: c.first_paid ? c.first_paid.slice(0, 7) : null,   // YYYY-MM
@@ -4504,7 +4509,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
     pool.query<{ client_name: string | null; orders: string; revenue: string; first_paid: string | null;
       last_paid: string | null; payment_type: string | null; manager_name: string | null;
       team_name: string | null; pinned_manager_id: number | null;
-      archived_at: string | null; archive_reason: string | null }>(
+      archived_at: string | null; archive_reason: string | null;
+      force_regular: boolean | null; force_note: string | null }>(
       `WITH paid AS (
          SELECT d.manager_id, d.price, d.closed_at_kommo
            FROM deals d
@@ -4530,7 +4536,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
               -- «повернути» не зʼявилась би НІКОЛИ, а виглядало б це як
               -- «дія не спрацювала». Підзапит від звуження join не залежить.
               (SELECT o2.archived_at FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archived_at,
-              (SELECT o2.archive_reason FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archive_reason
+              (SELECT o2.archive_reason FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS archive_reason,
+              (SELECT o2.force_regular FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS force_regular,
+              (SELECT o2.note FROM loyalty_overrides o2 WHERE o2.client_key = $1) AS force_note
          FROM agg a
          LEFT JOIN pm ON true
          LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
@@ -4606,6 +4614,16 @@ dashboardRouter.get("/client-card", async (req, res) => {
      * нуль змін у БД, `hidden` завжди false. Заміна — архів: причина, дата, автор.
      */
     canArchive: isAdminScope(auth),
+    /**
+     * ⭐ «Вважати постійним попри правило» — та сама межа, що архівація
+     * (`isAdminScope`: КВП/ОД/адмін), і це не спрощення: рішення власника
+     * 05.08.2026 назвало саме цих людей, а сусідня дія на цьому ж екрані вже
+     * має рівно такий гейт. Заводити тут ДРУГУ межу означало б, що на одній
+     * картці дві дії одного рівня закриті по-різному, і ніхто не памʼятатиме чому.
+     */
+    canForceRegular: isAdminScope(auth),
+    forcedRegular: h?.force_regular ?? false,
+    forceNote: h?.force_note ?? null,
     archived: isArchived(h?.archived_at ?? null, h?.last_paid ?? null),
     archiveReason: h?.archive_reason ?? null,
     archiveReasons: ARCHIVE_REASONS,

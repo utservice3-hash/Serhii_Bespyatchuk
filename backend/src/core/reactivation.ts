@@ -140,6 +140,9 @@ export interface ReactivationClient {
    *  сцену. НЕ плутати з реєстром архіву (вкладка «Архів»): там ручна дія з
    *  причиною й автором, тут — просто вік без оплат. */
   longLapsed: boolean;
+  /** ⭐ Включений КВП вручну попри правило + примітка «чому». */
+  forcedRegular: boolean;
+  forceNote: string | null;
   state: ClientState;
   value: number;
   seasonal: boolean;
@@ -297,6 +300,8 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
       segment: f.segment,
       medianGapDays: f.medianGapDays,
       longLapsed: f.longLapsed,
+      forcedRegular: f.forcedRegular,
+      forceNote: f.forceNote,
       // 🔴 СТАН — ВІД ОПЛАТИ І ВІД СЕГМЕНТА. Дзвінки сюди не входять НАВМИСНО:
       // «дзвонили вчора» не означає «замовив». Рахує чиста функція `stateOf`
       // (єдина реалізація правила), не другий CASE у SQL — тримає #25f.

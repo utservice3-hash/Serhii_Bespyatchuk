@@ -7,7 +7,7 @@ import {
 } from "../../../api";
 import { formatAmountFull } from "../format";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
-import { SegmentBadge } from "./SegmentBadge";
+import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
 
 /**
  * ФАЗА B · «РЕАКТИВАЦІЯ · СПЛЯЧІ ТА ВТРАЧЕНІ» (макет 2).
@@ -335,6 +335,7 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
         </div>
         <div style={{ marginTop: 4 }}>
           <SegmentBadge segment={c.segment} gap={c.medianGapDays} />
+          {c.forcedRegular && <ForcedBadge note={c.forceNote} />}
         </div>
       </td>
       <td style={S.td}><StateChip c={c} /></td>

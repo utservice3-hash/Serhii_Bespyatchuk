@@ -30,3 +30,22 @@ export function SegmentBadge({ segment, gap }: { segment: ClientSegment; gap?: n
     </span>
   );
 }
+
+/**
+ * ⭐ ПОЗНАЧКА «ВКЛЮЧЕНИЙ ВРУЧНУ» — з приміткою в підказці.
+ *
+ * 🔴 Позначка БЕЗ примітки була б гіршою за її відсутність: через місяць ніхто
+ * не згадає, чому цей клієнт у базі попри правило, і почне шукати баг у
+ * кваліфікації. Тому примітка їде тим самим рядком даних, що й прапорець, і
+ * показується в `title` — а не «десь у картці».
+ */
+export function ForcedBadge({ note }: { note: string | null }) {
+  return (
+    <span title={note ? `Включений вручну: ${note}` : "Включений вручну (примітку не збережено)"}
+      style={{ display: "inline-block", padding: "1px 7px", borderRadius: 999, fontSize: 10,
+               fontWeight: 700, background: "#fffbeb", color: "#92400e",
+               border: "1px solid #fde68a", cursor: "help", whiteSpace: "nowrap" }}>
+      ⭐ вручну
+    </span>
+  );
+}

@@ -72,7 +72,22 @@ export function payModeOf(hasCash: boolean, hasCashless: boolean): ClientPayMode
 
 export function qualifiesAsRepeat(f: {
   payments: number; minGapDays: number | null; payMode: ClientPayMode;
+  /**
+   * ⭐ РУЧНИЙ ВИНЯТОК КВП («вважати постійним попри правило», рішення власника
+   * 05.08.2026). Стоїть ПЕРШИМ і коротким замиканням — це і є сенс винятку:
+   * правило без винятків жорсткіше за реальність, і після двошляхової
+   * кваліфікації 342 клієнти стали разовими автоматично.
+   *
+   * 🔴 ЧОМУ ВИНЯТОК ЖИВЕ ТУТ, А НЕ НА ЕКРАНІ. Прапорець `force_regular` існував
+   * у БД і впливав ЛИШЕ на легасі-сегментацію старого `/loyalty`; нова
+   * кваліфікація його не бачила ВЗАГАЛІ. Тобто вхід у UI без цього рядка дав би
+   * рівно «брехливу кнопку», яку ми щойно прибрали: КВП тисне «вважати
+   * постійним», а клієнт як був разовим у плануванні й реактивації, так і
+   * лишається — 200 у відповідь і нуль змін на екрані.
+   */
+  forcedRegular?: boolean;
 }): boolean {
+  if (f.forcedRegular) return true;
   if (f.payments >= QUALIFY_LIFETIME_MIN) return true;
   if (f.payMode === "cash") return false;
   return f.payments >= 2 && f.minGapDays != null && f.minGapDays <= QUALIFY_RHYTHM_DAYS;

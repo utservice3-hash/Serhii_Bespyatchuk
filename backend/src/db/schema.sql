@@ -384,6 +384,23 @@ UPDATE loyalty_overrides
    SET archived_at = COALESCE(archived_at, updated_at), archive_reason = COALESCE(archive_reason, 'other')
  WHERE hidden = true AND archived_at IS NULL;
 
+-- ⭐ «ВВАЖАТИ ПОСТІЙНИМ ПОПРИ ПРАВИЛО» — ПРИМІТКА ОБОВʼЯЗКОВА (рішення власника
+-- 05.08.2026). Після двошляхової кваліфікації 342 клієнти стали разовими
+-- автоматично; правило без винятків жорсткіше за реальність, і КВП має могти
+-- сказати «цей постійний, я знаю чому». Але саме «знаю чому» і треба зберегти:
+-- прапорець без пояснення через місяць нічим не відрізняється від помилки.
+--
+-- 🔴 СТЕРЕЖЕ `CHECK`, а не валідація в роуті — рівно як причина архівації: роут
+-- обходить будь-який скрипт.
+-- ⚠️ `force_regular IS NOT TRUE`, а НЕ `NOT force_regular`: якби колонка колись
+-- стала nullable, `NOT NULL` дало б NULL, і CHECK на NULL ПРОХОДИТЬ — прапорець
+-- без примітки тихо вставлявся б. Це вже третя NULL-пастка цього класу за тиждень
+-- (`traf_type='cpc'`, `archive_reason IN (...)`), тож пишемо явно й одразу.
+DO $$ BEGIN
+  ALTER TABLE loyalty_overrides ADD CONSTRAINT loyalty_overrides_force_regular_note_chk
+    CHECK (force_regular IS NOT TRUE OR (note IS NOT NULL AND btrim(note) <> ''));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS seasonal_note TEXT;
 -- Місяць, З ЯКОГО діє нове закріплення менеджера. Правило власника: поточний
