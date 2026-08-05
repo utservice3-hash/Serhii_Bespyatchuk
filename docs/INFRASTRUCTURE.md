@@ -103,7 +103,17 @@
    - спершу нові asset-и: `cp -r frontend/dist/assets/. assets/`
    - статику: `cp frontend/dist/favicon.svg frontend/dist/icons.svg .`
    - **останнім** `index.html`: `cp frontend/dist/index.html index.html`
-   - прибрати старий бандл: `rm assets/index-<OLD>.js assets/index-<OLD>.css`
+   - прибрати старий бандл — **ЛИШЕ якщо його імені НЕМАЄ в новому `index.html`**:
+     ```
+     for f in assets/index-*.js assets/index-*.css; do
+       grep -q "$(basename "$f")" index.html || rm -f "$f"
+     done
+     ```
+     🔴 **НЕ «якщо ім'я змінилось».** Vite хешує за ВМІСТОМ: правка лише в `.tsx`
+     лишає css із ТИМ САМИМ іменем, і перевірка `OLD != NEW` не спрацьовує — а
+     `rm assets/$OLDC` зносить рівно той файл, на який показує новий `index.html`.
+     Так 05.08.2026 прод ~4 хвилини віддавав сторінку **без стилів** при зелених
+     гейтах, health 200 і правильній версії. Спіймав скріншот приймання.
    - `index.html` віддається `no-cache` (див. `.htaccess`), тож новий хеш підхоплюється одразу.
 5. **Рестарт node:** процес під панеллю adm.tools (`npm start` → `node dist/index.js`, PORT=3000). `kill -TERM <pid>` → панель авто-респавнить (новий pid за ~6с).
 6. **Health:** `curl https://dashboard.uts.ua/api/health` = 200 ×N, `stale:false` (за потреби смикнути `POST /api/dashboard/sync` з admin-JWT — освіжає вотермарк без ризику подвійного синку).
