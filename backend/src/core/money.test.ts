@@ -99,6 +99,25 @@ test("еталон РПК-Яцика серпень 2025: ядро 651 729 ₴ �
     + "(якщо змінювався склад команди — див. арифметику в коментарі над тестом)");
 
   const { pool } = await import("../db/pool.js");
+
+  // 🔴 ЛИСТ ОПИСУЄ СКЛАД БЕЗ ШЕВЧУКА — тому й реконструюємо той самий склад.
+  // Ручний лист за серпень 2025 писали тоді, коли Шевчук був у «Самостійних»;
+  // його 57 433 ₴ у ту цифру не входили в принципі. Після рішення власника
+  // 05.08.2026 наш командний розріз рахує його в Яцика ЗАДНІМ ЧИСЛОМ (варіант A),
+  // тож реконструкція «як у листі» зобовʼязана його виключити — інакше ми
+  // порівнювали б два РІЗНІ набори людей і списували б різницю на «баг нетування».
+  //
+  // ⚠️ Менеджера шукаємо за `kommo_user_id`, а не за зашитим `id`: внутрішній id
+  // може змінитись при перезаливці, kommo_user_id — ні. Немає його в базі — тест
+  // ПАДАЄ з названою причиною, а не тихо звіряє інший склад.
+  const SHEVCHUK_KOMMO_ID = "7181916";   // той самий, що в TEAM_OVERRIDES
+  const sh = await pool.query<{ id: number }>(
+    `SELECT id FROM managers WHERE kommo_user_id::text = $1`, [SHEVCHUK_KOMMO_ID]);
+  assert.equal(sh.rowCount, 1,
+    `🔴 менеджер kommo_user_id=${SHEVCHUK_KOMMO_ID} не знайдений — реконструкцію листа `
+    + "нема з чим порівнювати (склад команди змінився інакше, ніж очікує цей тест)");
+  const shId = sh.rows[0].id;
+
   const r = await pool.query<{ neg: string; entered: string }>(
     `WITH ent AS (SELECT DISTINCT e.kommo_id FROM deal_stage_events e
                    WHERE e.status_id = 142 AND e.pipeline_id = ANY($1)
@@ -108,14 +127,19 @@ test("еталон РПК-Яцика серпень 2025: ядро 651 729 ₴ �
             COALESCE(SUM(d.price), 0) AS entered
        FROM ent JOIN deals d ON d.kommo_id = ent.kommo_id
        JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
-      WHERE t.name = 'РПК - Яцика Дмитра'`,
-    [[8921932, 155304], AUG.from, AUG.to]
+      WHERE t.name = 'РПК - Яцика Дмитра' AND d.manager_id <> $4`,
+    [[8921932, 155304], AUG.from, AUG.to, shId]
   );
+  const M2 = await loadMoney();
+  const shevchuk = await M2.successMoney({ ...AUG, managerId: shId });
+  const sheetScope = y!.revenue - shevchuk.revenue;    // склад листа = команда − Шевчук
   const negSum = Number(r.rows[0].neg), entered = Number(r.rows[0].entered);
-  const reopen = entered - y!.revenue;                 // перезакриті в інший місяць
-  const asSheet = y!.revenue - 2 * negSum + reopen;    // назад до логіки листа
+  const reopen = entered - sheetScope;                  // перезакриті в інший місяць
+  const asSheet = sheetScope - 2 * negSum + reopen;     // назад до логіки листа
   assert.ok(Math.abs(asSheet - 680655) / 680655 <= 0.015,
-    `реконструкція листа дала ${Math.round(asSheet)} замість 680 655 — розрив пояснюється НЕ мінусами й не реоупенами, шукати причину`);
+    `реконструкція листа дала ${Math.round(asSheet)} замість 680 655 (склад: команда `
+    + `${Math.round(y!.revenue)} − Шевчук ${Math.round(shevchuk.revenue)} = ${Math.round(sheetScope)}) `
+    + "— розрив пояснюється НЕ мінусами й не реоупенами, шукати причину");
 });
 
 test("expected (етап 8) рахується і не змішується з received", needsDb(), async () => {
