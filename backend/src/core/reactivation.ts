@@ -15,9 +15,9 @@ import { GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { normalizeClientName } from "../utils/clientName.js";
 
 export * from "./reactivationRules.js";
-import { SLEEPING_DAYS, LOST_DAYS, stateOf, valueScore, type ClientState,
+import { SLEEPING_DAYS, LOST_DAYS, valueScore, type ClientState,
          type ClientSegment } from "./reactivationRules.js";
-import { SEGMENT_CTE, REACTIVATION_KEEP_SQL } from "./clientSegments.js";
+import { loadClientSegments, factsFor, keepInReactivation } from "./clientSegments.js";
 export type { ClientState, ClientSegment };
 void SLEEPING_DAYS; void LOST_DAYS;
 
@@ -177,10 +177,8 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
     revenue_after_task: string | null;
     last_talk: string | null; last_talk_days: string | null; last_talk_type: string | null;
     attempts: string | null; last_attempt: string | null; last_attempt_days: string | null;
-    segment: string; median_gap: string | null; state: string; archived: boolean;
   }>(
-    `WITH ${SEGMENT_CTE},
-     paid AS (
+    `WITH paid AS (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
          FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -211,8 +209,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
             lt.call_type AS last_talk_type,
             at.n AS attempts,
             to_char(at.last_at ${KYIV}, 'YYYY-MM-DD') AS last_attempt,
-            (CURRENT_DATE - (at.last_at ${KYIV})::date)::int AS last_attempt_days,
-            sg.segment, sg.median_gap, sg.state, sg.archived
+            (CURRENT_DATE - (at.last_at ${KYIV})::date)::int AS last_attempt_days
        FROM agg a
        JOIN primary_mgr pm ON pm.client_key = a.client_key
        -- 🔴 БЕЗ умови AND NOT lo.hidden У ЦЬОМУ JOIN — І ЦЕ НЕ КОСМЕТИКА.
@@ -224,10 +221,6 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
        LEFT JOIN teams tm ON tm.id = mm.team_id
-       -- Сегмент і стан рахує СПІЛЬНИЙ фрагмент (clientSegments.ts), той самий,
-       -- що й на екрані планування: два запити розійшлись би, і клієнт зник би з
-       -- обох екранів або зʼявився на обох.
-       JOIN seg_state sg ON sg.client_key = a.client_key
        LEFT JOIN tasks_in tk ON tk.client_key = a.client_key
        LEFT JOIN LATERAL (
          SELECT d2.client_name FROM deals d2
@@ -251,12 +244,17 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
           WHERE rc.client_key = a.client_key AND rc.billsec = 0
             AND (lt.calldate IS NULL OR rc.calldate > lt.calldate)
        ) at ON true
-      WHERE COALESCE(lo.hidden, false) = false ${cond}
-        -- 📵 Телефонні дженерики — геть, крім безготівкових (рішення власника).
-        AND ${REACTIVATION_KEEP_SQL.replace(/\bs\./g, "sg.")}`, p)).rows;
+      WHERE COALESCE(lo.hidden, false) = false ${cond}`, p)).rows;
 
-  return rows.map((r) => {
+  // 🔴 Сегмент/стан — зі СПІЛЬНОГО джерела (`clientSegments.ts`), тим самим, що
+  // живить екран планування. Окремим запитом, а не CTE всередині цього: підстановка
+  // фрагмента сюди коштувала 10.5 с замість 0.7 с (замір 05.08.2026, деталі у
+  // шапці `clientSegments.ts`).
+  const seg = await loadClientSegments();
+
+  return rows.filter((r) => keepInReactivation(factsFor(seg, r.client_key))).map((r) => {
     const tk = taskMap.get(r.client_key);
+    const f = factsFor(seg, r.client_key);
     const days = Number(r.days_since);
     const revenue = Number(r.revenue);
     const returnedRevenue = Number(r.revenue_after_task ?? 0);
@@ -279,13 +277,13 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
       attempts: Number(r.attempts ?? 0),
       lastAttempt: r.last_attempt,
       lastAttemptDays: r.last_attempt_days == null ? null : Number(r.last_attempt_days),
-      segment: r.segment as ClientSegment,
-      medianGapDays: r.median_gap == null ? null : Math.round(Number(r.median_gap) * 10) / 10,
-      archived: r.archived,
-      // 🔴 СТАН — ВІД ОПЛАТИ І ВІД СЕГМЕНТА. Дзвінки сюди не входять НАВМИСНО.
-      // Рахує SQL спільного фрагмента; `stateOf` лишається для чистих тестів —
-      // і обидва зобовʼязані збігатись (тримає #25f).
-      state: r.state as ClientState,
+      segment: f.segment,
+      medianGapDays: f.medianGapDays,
+      archived: f.archived,
+      // 🔴 СТАН — ВІД ОПЛАТИ І ВІД СЕГМЕНТА. Дзвінки сюди не входять НАВМИСНО:
+      // «дзвонили вчора» не означає «замовив». Рахує чиста функція `stateOf`
+      // (єдина реалізація правила), не другий CASE у SQL — тримає #25f.
+      state: f.state,
       value: valueScore(revenue, days),
       seasonal: r.seasonal ?? false,
       seasonalNote: r.seasonal_note,

@@ -247,8 +247,10 @@ test("#30k РЕАКТИВАЦІЯ: команда в кожному рядку, 
   assert.equal(res.status, 200, `reactivation-list віддав ${res.status}`);
   const data = await res.json() as {
     clients: { clientKey: string; teamName: string | null; managerId: number; state: string;
-               lastPaid: string | null; daysSince: number; lastCall: string | null; lastCallDays: number | null }[];
-    thresholds: { sleepingDays: number; lostDays: number };
+               segment: "vip" | "regular" | "episodic" | "unknown";
+               lastPaid: string | null; daysSince: number; lastTalk: string | null; lastTalkDays: number | null }[];
+    thresholds: { sleepingDays: number; lostDays: number;
+                  bySegment: Record<string, number>; archiveDays: number; segmentMinPayments: number };
   };
   assert.ok(data.clients.length > 0, "🔴 клієнтів немає — інваріант нічого не доводить");
 
@@ -284,22 +286,131 @@ test("#30k РЕАКТИВАЦІЯ: команда в кожному рядку, 
   assert.ok(data.clients.every((c) => c.managerId > 0),
     "🔴 рядок без менеджера — у дереві він не має куди лягти навіть у «Без команди»");
 
-  // 🔴 СТАН — ВІД ОПЛАТИ. Звіряємо КОЖЕН рядок із чистою функцією ядра, а не
-  // «схоже на правду»: якби дзвінок почав впливати на стан, розійшлись би саме ті
-  // рядки, де контакт свіжий, а оплати давно немає — тобто найцікавіші.
-  const wrong = data.clients.filter((c) => c.state !== rules.stateOf(c.daysSince));
-  assert.deepEqual(wrong.map((c) => `${c.clientKey}: ${c.state} при ${c.daysSince} дн.`), [],
-    "🔴 стан рахується НЕ від останньої оплати");
+  // 🔴 ПОРОГИ ПО СЕГМЕНТАХ — теж із ЯДРА. Без цього підпис «⚡ ВІП 14+ днів» на
+  // екрані став би другою редакцією правила і почав би брехати мовчки, щойно
+  // поріг у `reactivationRules.ts` зрушить.
+  assert.deepEqual(data.thresholds.bySegment, rules.SEGMENT_SLEEPING_DAYS,
+    "🔴 пороги по сегментах у відповіді розійшлись із ядром");
+  assert.equal(data.thresholds.archiveDays, rules.ARCHIVE_DAYS);
+  assert.equal(data.thresholds.segmentMinPayments, rules.SEGMENT_MIN_PAYMENTS);
+
+  // 🔴 СТАН — ВІД ОПЛАТИ І ВІД СЕГМЕНТА. Звіряємо КОЖЕН рядок із чистою функцією
+  // ядра, а не «схоже на правду»: якби дзвінок почав впливати на стан, розійшлись
+  // би саме ті рядки, де контакт свіжий, а оплати давно немає — тобто найцікавіші.
+  //
+  // ⚠️ АРГУМЕНТ `segment` ТУТ ОБОВʼЯЗКОВИЙ. Виклик `stateOf(daysSince)` без нього
+  // перевіряв би СТАРЕ правило (єдиний поріг 60) — і саме на цьому тест червонів у
+  // хвилі 1: правило стало сегментним, а гейт лишився з попередньою сигнатурою.
+  // Заміряно на проді: 38 рядків із 842 розходились.
+  const wrong = data.clients.filter((c) => c.state !== rules.stateOf(c.daysSince, c.segment));
+  assert.deepEqual(wrong.map((c) => `${c.clientKey}: ${c.state} при ${c.daysSince} дн. (${c.segment})`), [],
+    "🔴 стан рахується НЕ від останньої оплати або НЕ за порогом сегмента");
+
+  // 🔴 ДОКАЗ, ЩО ПОПЕРЕДНЯ ПЕРЕВІРКА НЕ ПОРОЖНЯ. Якби сегментні пороги не
+  // застосовувались, `stateOf(days, segment)` збігався б із `stateOf(days)` на
+  // ВСІХ рядках — і тест був би зеленим, нічого не перевіряючи. Вимагаємо, щоб
+  // хоч один рядок відрізняв дві редакції правила.
+  const segmentMattered = data.clients.filter((c) => rules.stateOf(c.daysSince, c.segment)
+    !== rules.stateOf(c.daysSince));
+  assert.ok(segmentMattered.length > 0,
+    "🔴 сегментний поріг не змінив стан ЖОДНОГО клієнта — перевірка вище нічого не доводить");
 
   // Друга дата присутня як поле в кожного (значення може бути null — це відповідь).
-  assert.ok(data.clients.every((c) => "lastCall" in c && "lastCallDays" in c),
-    "🔴 у рядку немає полів останнього дзвінка — довідкова дата не доїхала до фронту");
-  const withCall = data.clients.filter((c) => c.lastCall != null);
+  // ⚠️ Поле зветься `lastTalk` (КОНТАКТ = РОЗМОВА), НЕ `lastCall`: перейменування
+  // приїхало з ядром, а гейт лишався зі старою назвою — і `lastCall` був `undefined`
+  // у ВСІХ, тобто перевірка «хоч у когось є дзвінок» падала на порожньому місці.
+  assert.ok(data.clients.every((c) => "lastTalk" in c && "lastTalkDays" in c),
+    "🔴 у рядку немає полів останньої розмови — довідкова дата не доїхала до фронту");
+  const withCall = data.clients.filter((c) => c.lastTalk != null);
   assert.ok(withCall.length > 0,
-    `🔴 ЖОДЕН із ${data.clients.length} клієнтів не має дзвінка — порожній результат це ПРОВАЛ, `
+    `🔴 ЖОДЕН із ${data.clients.length} клієнтів не має розмови — порожній результат це ПРОВАЛ, `
     + "а не «дзвінків немає»: звʼязка ringostat_calls.client_key не працює");
-  assert.ok(withCall.every((c) => c.lastCallDays != null && c.lastCallDays >= 0),
-    "🔴 є дата дзвінка без коректної кількості днів");
+  assert.ok(withCall.every((c) => c.lastTalkDays != null && c.lastTalkDays >= 0),
+    "🔴 є дата розмови без коректної кількості днів");
+});
+
+test("#30n ЖОРСТКИЙ ПОДІЛ: активні на планах, сплячі й втрачені — в реактивації, і НІХТО не зник", needsApi(), async () => {
+  // 🔴 ПИТАННЯ, НА ЯКЕ ВІДПОВІДАЄ ЦЕЙ ГЕЙТ. Після поділу екран планів показує 226
+  // клієнтів замість 1 137 — і це ПРАВИЛЬНО. Але рівно так само виглядало б, якби
+  // 900 клієнтів просто загубились у джойні. Різницю робить одне: сума частин має
+  // дорівнювати цілому, і місток має НАЗВАТИ тих, кого забрали.
+  //
+  // Такий випадок уже був, і не гіпотетично: внутрішній `JOIN` до сегментів
+  // викидав клієнта, у якого 2+ оплат, але в жодної не проставлена дата закриття
+  // (на проді `0674673308`, 3 оплати, 0 дат). Він зникав з ОБОХ екранів мовчки.
+  const token = await adminToken();
+  const plans = await (await get("/api/dashboard/client-plans", token)).json() as {
+    clients: { clientKey: string; segment: string }[];
+    totals: { totalClients: number; inReactivation: number;
+              inReactivationSleeping: number; inReactivationLost: number;
+              activeBySegment: Record<string, number> };
+  };
+  const t = plans.totals;
+  assert.ok(plans.clients.length > 0, "🔴 активних немає — інваріант нічого не доводить");
+  assert.equal(t.inReactivation, t.inReactivationSleeping + t.inReactivationLost,
+    "🔴 місток не дорівнює сумі своїх частин");
+  assert.ok(t.inReactivation > 0,
+    "🔴 місток порожній — або поділу немає, або сплячих не порахували; і те, і те приховало б клієнтів");
+
+  // Розбивка активних по сегментах = кількості активних. Інакше «ВІП 60 · Регулярних 25»
+  // під таблицею з 226 рядків описувало б якийсь інший набір.
+  const segSum = Object.values(t.activeBySegment).reduce((s, v) => s + v, 0);
+  assert.equal(segSum, t.totalClients,
+    `🔴 Σ сегментів ${segSum} ≠ активних ${t.totalClients}`);
+
+  // ГОЛОВНЕ: активні + сплячі + втрачені = УСІ постійні цього скоупу. Знаменник
+  // рахуємо НЕЗАЛЕЖНО від роуту — прямо з БД тим самим правилом «2+ оплат».
+  const { pool } = await import("../db/pool.js");
+  const metrics = await import("../core/metrics.js");
+  const whole = Number((await pool.query<{ n: string }>(
+    `WITH paid AS (
+       SELECT d.client_key, d.manager_id FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL AND NOT (d.client_key = ANY($1))
+     ),
+     agg AS (SELECT client_key FROM paid GROUP BY client_key HAVING COUNT(*) >= 2),
+     per_cm AS (SELECT client_key, manager_id, COUNT(*) n FROM paid GROUP BY 1,2),
+     pm AS (SELECT DISTINCT ON (client_key) client_key, manager_id FROM per_cm ORDER BY client_key, n DESC)
+     SELECT COUNT(*) AS n FROM agg a
+       JOIN pm ON pm.client_key = a.client_key
+       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
+       JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+      WHERE COALESCE(lo.hidden, false) = false`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
+  assert.equal(t.totalClients + t.inReactivation, whole,
+    `🔴 активні ${t.totalClients} + місток ${t.inReactivation} ≠ уся база постійних ${whole} — `
+    + "хтось зник між екранами, і без цієї перевірки це виглядало б як «клієнтів стало менше»");
+});
+
+test("#30o ДЖЕНЕРИКИ-ТЕЛЕФОНИ: без безналу — геть, із безналом — ЗАЛИШАЮТЬСЯ", needsApi(), async () => {
+  // 🪞 ДЗЕРКАЛЬНА ПАРА до правила «телефонні дженерики геть із реактивації».
+  // Односторонній тест («ключів-телефонів немає») зеленів би й тоді, якби фільтр
+  // вирізав ВСІХ — а серед них є справжні фірми з кривим ключем, і саме тому
+  // виняток для безготівкових узагалі існує.
+  const token = await adminToken();
+  const data = await (await get("/api/dashboard/reactivation-list", token)).json() as {
+    clients: { clientKey: string; paymentType?: string | null }[];
+  };
+  const phoneKeys = data.clients.filter((c) => /^[0-9]+$/.test(c.clientKey));
+  assert.ok(phoneKeys.length > 0,
+    "🔴 у списку НЕМАЄ жодного ключа-телефона — виняток для безготівкових не працює, "
+    + "фільтр вирізає всіх підряд (порожній результат це ПРОВАЛ, а не «таких немає»)");
+
+  // Другий бік: у БД таких ключів помітно більше, ніж у видачі — тобто фільтр
+  // справді щось прибирає, а не пропускає все.
+  const { pool } = await import("../db/pool.js");
+  const metrics = await import("../core/metrics.js");
+  const inDb = Number((await pool.query<{ n: string }>(
+    `WITH paid AS (
+       SELECT d.client_key FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL AND NOT (d.client_key = ANY($1))
+     )
+     SELECT COUNT(*) AS n FROM (
+       SELECT client_key FROM paid GROUP BY client_key HAVING COUNT(*) >= 2
+     ) q WHERE client_key ~ '^[0-9]+$'`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
+  assert.ok(inDb > phoneKeys.length,
+    `🔴 у видачі ${phoneKeys.length} ключів-телефонів із ${inDb} у базі — фільтр не прибрав нікого`);
+  console.log(`   ℹ ключів-телефонів: у базі ${inDb}, у видачі ${phoneKeys.length} (решта — без безналу)`);
 });
 
 test("#30l КАРТКА: «прибрати з постійних» видно ТОМУ, кому роут це дозволяє", needsApi(), async () => {
