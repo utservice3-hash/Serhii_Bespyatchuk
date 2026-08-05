@@ -83,6 +83,30 @@ export async function syncManagers(): Promise<number> {
   // remove this once his CRM role is set to «Тимлид».
   const TEAM_LEAD_OVERRIDES = new Set<string>(["3379102"]);
 
+  /**
+   * 🟢 ПЕРЕВИЗНАЧЕННЯ КОМАНДИ — свідоме рішення власника 05.08.2026.
+   *
+   * «Самостійний» відділ розформовано: Шевчук Назар (kommo_user_id 7181916)
+   * переходить під команду Яцика ПОВНІСТЮ і заднім числом. У CRM його ПОКИ НЕ
+   * рухаємо, тож:
+   *
+   *   ⚠️ CRM показує стару групу (332088 «Самостійні»), дашборд — нову
+   *      (335511 «РПК - Яцика Дмитра»). ЦЕ НЕ БАГ І НЕ РОЗСИНХРОН СИНКУ.
+   *      Щойно людину переведуть у CRM — цей оверрайд ЗНЯТИ (він стане зайвим
+   *      і почне мовчки дублювати те, що вже робить сама група).
+   *
+   * Механізм навмисно той самий, що в `NAME_OVERRIDES` і `TEAM_LEAD_OVERRIDES`
+   * поруч: ключ — `kommo_user_id`, застосовується ПІСЛЯ читання групи з Kommo,
+   * тому переживає кожен синк. Без нього `team_id = EXCLUDED.team_id` відкотив
+   * би ручну правку в БД максимум за 30 хвилин.
+   *
+   * 🔒 Історію переносити НЕ треба: командний розріз рахується за ПОТОЧНОЮ
+   * прив'язкою (варіант A), тож минулі місяці перерахуються самі.
+   */
+  const TEAM_OVERRIDES: Record<string, number> = {
+    "7181916": 335511,   // Шевчук Назар: «Самостійні» → «РПК - Яцика Дмитра» (kommo_group_id)
+  };
+
   // Попередня прив'язка (до апдейту) — щоб зафіксувати ЗМІНУ команди в
   // manager_team_history (варіант A: історію переходів пишемо самі, бо Kommo її не
   // веде). Мапа kommo_user_id → {internal id, team_id ДО цього синку}.
@@ -95,7 +119,10 @@ export async function syncManagers(): Promise<number> {
 
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
-    const teamId = group ? teamIdByGroupId.get(group.id) ?? null : null;
+    // Оверрайд б'є групу з CRM — див. коментар до TEAM_OVERRIDES вище.
+    const overrideGroup = TEAM_OVERRIDES[String(user.id)];
+    const effectiveGroupId = overrideGroup ?? group?.id;
+    const teamId = effectiveGroupId != null ? teamIdByGroupId.get(effectiveGroupId) ?? null : null;
     const role = user._embedded?.roles?.[0]?.name ?? "";
     const isTeamLead = role.toLowerCase().includes("тимл") || TEAM_LEAD_OVERRIDES.has(String(user.id));
     const displayName = NAME_OVERRIDES[String(user.id)] ?? user.name;
