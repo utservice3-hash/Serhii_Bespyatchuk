@@ -82,7 +82,17 @@ export function TeamsSection({
                               <tbody>
                                 {t.managers.map((m) => (
                                   <tr key={m.id}>
-                                    <td>{m.name}</td>
+                                    <td>
+                                      {m.name}
+                                      {/* Підпис, а не приховування: гроші зароблені, людини вже немає. */}
+                                      {m.isActive === false && (
+                                        <span style={{ marginLeft: 6, fontSize: 11, color: "#6b7280",
+                                                       border: "1px solid #e5e7eb", borderRadius: 999, padding: "1px 6px" }}
+                                          title="Звільнений. Історичні суми лишаються — гроші зароблені тоді, коли людина працювала.">
+                                          звільнений
+                                        </span>
+                                      )}
+                                    </td>
                                     <td style={{ fontWeight: 600 }}>{formatAmount(m.revenue)}</td>
                                     <td>{m.plan > 0 ? formatAmount(m.plan) : "—"}</td>
                                     <td style={{ color: m.plan > 0 ? (m.planPct >= 100 ? "#16a34a" : m.planPct >= 70 ? "#d97706" : "#dc2626") : undefined }}>

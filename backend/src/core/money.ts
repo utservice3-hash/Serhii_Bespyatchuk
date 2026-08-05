@@ -60,7 +60,10 @@ export interface MoneyScope {
 }
 export interface MoneyAgg { revenue: number; deals: number }
 export interface TeamRow { teamId: number; teamName: string; revenue: number; deals: number }
-export interface MgrRow { managerId: number; name: string; teamId: number | null; revenue: number; deals: number }
+export interface MgrRow { managerId: number; name: string; teamId: number | null; revenue: number; deals: number
+  /** 🔴 `false` = звільнений. Гроші лишаються, але в розрізі мусить бути ПІДПИС. */
+  isActive?: boolean;
+}
 export interface BucketRow { bucket: string; revenue: number; deals: number }
 export interface MgrWeekRow { managerId: number; weekStart: string; revenue: number; deals: number }
 
@@ -106,6 +109,14 @@ async function query<T>(kind: Kind, s: MoneyScope, extraSelect: string, groupBy:
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
   if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  // 🔴 `is_active` КЕРУЄ СПИСКАМИ Й ВИБОРОМ, А НЕ ІСТОРИЧНИМИ СУМАМИ
+  // (рішення власника 05.08.2026). Гроші зароблені тоді, коли людина працювала, і
+  // заднім числом не зникають. Жоден грошовий розріз більше не ставить `activeOnly`.
+  //
+  // ⚠️ ЧОМУ ЦЕ НЕ ТЕОРІЯ. 05.08.2026 менеджера деактивували в Kommo, а його угоди
+  // перепризначили лише за пів години. У цю щілину `Σ(менеджери)` стало на
+  // **16 567 ₴** менше за `Σ(команди)` — бо по менеджерах фільтр стояв, по командах
+  // ні. Гейт `#37` тримає: деактивація НЕ рухає жодної історичної суми.
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? "LEFT JOIN teams t ON t.id = m.team_id" : "";
   const sql = `
@@ -130,12 +141,13 @@ async function aggByTeam(kind: Kind, s: MoneyScope): Promise<TeamRow[]> {
   return rows.map((x) => ({ teamId: x.team_id, teamName: x.team_name, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
 async function aggByMgr(kind: Kind, s: MoneyScope): Promise<MgrRow[]> {
-  const rows = await query<{ manager_id: number; name: string; team_id: number | null; revenue: string; deals: string }>(
-    kind, { ...s, activeOnly: true },
-    "m.id AS manager_id, m.name, m.team_id, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals",
-    "GROUP BY m.id, m.name, m.team_id"
+  const rows = await query<{ manager_id: number; name: string; team_id: number | null; is_active: boolean; revenue: string; deals: string }>(
+    kind, s,
+    "m.id AS manager_id, m.name, m.team_id, m.is_active, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals",
+    "GROUP BY m.id, m.name, m.team_id, m.is_active"
   );
-  return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, revenue: Number(x.revenue), deals: Number(x.deals) }));
+  return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id,
+    isActive: x.is_active, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
 
 // «Отримані кошти» = success ⊎ paidOnly.
@@ -404,8 +416,9 @@ export interface AvgCheckAgg extends MoneyAgg { avgCheck: number | null }
 const withAvg = <T extends MoneyAgg>(x: T): T & { avgCheck: number | null } =>
   ({ ...x, avgCheck: x.deals > 0 ? Math.round(x.revenue / x.deals) : null });
 const addAgg = (a: MoneyAgg, b: MoneyAgg): MoneyAgg => ({ revenue: a.revenue + b.revenue, deals: a.deals + b.deals });
-// success за період (active-only, щоб тримати gate 2878 і Σ-інваріант).
-const successAggActive = (s: MoneyScope) => agg("success", { ...s, activeOnly: true });
+// success за період. БЕЗ фільтра активності — див. правило нижче: гроші зароблені
+// тоді, коли людина працювала, і заднім числом не зникають.
+const successAggActive = (s: MoneyScope) => agg("success", s);
 
 export async function avgCheck(pool: AvgPool, s: MoneyScope): Promise<AvgCheckAgg> {
   if (pool === "success") return withAvg(await successAggActive(s));
@@ -416,7 +429,7 @@ export async function avgCheck(pool: AvgPool, s: MoneyScope): Promise<AvgCheckAg
 
 export async function avgCheckByTeam(pool: AvgPool, s: MoneyScope): Promise<(TeamRow & { avgCheck: number | null })[]> {
   if (pool === "chainInflight") return (await snapshotByTeam(CHAIN_INFLIGHT, s)).map(withAvg);
-  const su = await aggByTeam("success", { ...s, activeOnly: true });
+  const su = await aggByTeam("success", s);
   if (pool === "success") return su.map(withAvg);
   const ci = await snapshotByTeam(CHAIN_INFLIGHT, s);
   return mergeTeam(su, ci).map(withAvg);
@@ -478,7 +491,7 @@ export const successByBucket = (s: MoneyScope, granularity: "day" | "week" | "mo
 export interface MgrBucketRow { managerId: number; bucket: string; revenue: number; deals: number }
 async function mgrBucketAgg(kind: Kind, s: MoneyScope, granularity: "day" | "week" | "month"): Promise<MgrBucketRow[]> {
   const rows = await query<{ manager_id: number; bucket: string; revenue: string; deals: string }>(
-    kind, { ...s, activeOnly: true },
+    kind, s,
     `src.manager_id AS manager_id, to_char(date_trunc('${granularity}', (src.anchor_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
     "GROUP BY 1, 2 ORDER BY 2"
   );

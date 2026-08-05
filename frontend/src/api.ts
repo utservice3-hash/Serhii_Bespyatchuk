@@ -1161,6 +1161,12 @@ export async function fetchReceivables(params: {
 export interface TeamManagerRow {
   id: number;
   name: string;
+  /**
+   * 🔴 `false` = ЗВІЛЬНЕНИЙ. Гроші лишаються в розрізі (рішення власника
+   * 05.08.2026: is_active керує списками й вибором, НЕ історичними сумами), але
+   * рядок мусить це СКАЗАТИ — інакше вчорашня людина виглядає як діючий менеджер.
+   */
+  isActive?: boolean;
   revenue: number;
   deals: number;
   avgCheck: number;

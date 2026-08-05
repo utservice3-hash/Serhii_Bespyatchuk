@@ -2114,18 +2114,22 @@ dashboardRouter.get("/teams", async (req, res) => {
   // на /teams == світлофор. Прибрано сирий `SUM(planned_value) … AND is_active` без розподілу
   // (він губив план звільнених → живий розрив з світлофором, team14: −25 000).
   const mPlan = await plans.managerPlan({ month: planMonth });
-  type MgrRow = { id: number; name: string; teamId: number; revenue: number; deals: number; plan: number; receivables: number; expected: number; dispatched: number; successRev: number };
+  // 🔴 `isActive` ЇДЕ ПОРУЧ ІЗ ГРІШМИ (рішення власника 05.08.2026): історичні суми
+  // рахують і звільнених, але екран мусить це СКАЗАТИ — інакше вчорашня людина
+  // виглядає як діючий менеджер, і хтось поставить їй задачу.
+  type MgrRow = { id: number; name: string; teamId: number; isActive: boolean; revenue: number; deals: number; plan: number; receivables: number; expected: number; dispatched: number; successRev: number };
   const mmap = new Map<number, MgrRow>();
-  const mget = (id: number, tid: number | null, name: string): MgrRow => {
+  const mget = (id: number, tid: number | null, name: string, isActive?: boolean): MgrRow => {
     let e = mmap.get(id);
-    if (!e) { e = { id, name, teamId: tid ?? 0, revenue: 0, deals: 0, plan: 0, receivables: 0, expected: 0, dispatched: 0, successRev: 0 }; mmap.set(id, e); }
+    if (!e) { e = { id, name, teamId: tid ?? 0, isActive: true, revenue: 0, deals: 0, plan: 0, receivables: 0, expected: 0, dispatched: 0, successRev: 0 }; mmap.set(id, e); }
     if (name) e.name = name;
+    if (isActive === false) e.isActive = false;
     if (tid) e.teamId = tid;
     return e;
   };
   // revenue/deals = received (анкер+дедуп); dispatched/successRev = success-only (avgCheck).
-  for (const r of recvMgrAgg) { const e = mget(r.managerId, r.teamId, r.name); e.revenue += r.revenue; e.deals += r.deals; }
-  for (const r of sucMgrAgg) { const e = mget(r.managerId, r.teamId, r.name); e.dispatched += r.deals; e.successRev += r.revenue; }
+  for (const r of recvMgrAgg) { const e = mget(r.managerId, r.teamId, r.name, r.isActive); e.revenue += r.revenue; e.deals += r.deals; }
+  for (const r of sucMgrAgg) { const e = mget(r.managerId, r.teamId, r.name, r.isActive); e.dispatched += r.deals; e.successRev += r.revenue; }
   for (const r of mPlan.rows) { mget(r.managerId, r.teamId, r.name).plan += r.plan; }
   for (const d of debtByMgr) { if (d.managerId != null) { const e = mmap.get(d.managerId); if (e) e.receivables += d.debt; } }
 

@@ -359,6 +359,68 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
         + "з інтервалом 20 днів — це постійний, а не разовий");
     });
 
+    await t.test("#37 ДЕАКТИВАЦІЯ не змінює історичних сум (відділ · команда · менеджер · чек)", async () => {
+      // 🔴 ЦЕ НЕ ГІПОТЕТИЧНИЙ ІНВАРІАНТ, А ІНЦИДЕНТ 05.08.2026. Менеджера
+      // деактивували в Kommo, а його угоди перепризначили лише за пів години. У цю
+      // щілину `Σ(менеджери)` стала на **16 567 ₴** менша за `Σ(команди)`: по
+      // менеджерах фільтр `is_active` стояв, по командах — ні. Пів години звіт
+      // показував гроші, яких «немає», хоча вони зароблені.
+      // Рішення власника: `is_active` керує СПИСКАМИ Й ВИБОРОМ, не історичними сумами.
+      //
+      // ⚠️ Тест живе ТУТ, а не в окремому файлі, і це не лінощі: `db/pool.js` —
+      // модульний синглтон, тож ДРУГИЙ `provisionScratch` в іншому файлі забирає
+      // базу в усіх, хто вже підключився. Перевірено дією: окремий файл поклав 13
+      // тестів. Один кластер на прогін — умова, а не стиль.
+      const M = await import("./money.js");
+      // Власний менеджер і власне вікно: беремо місяць, куди не потрапляє сід,
+      // тож суми складаються ЛИШЕ з угод цього підтесту.
+      await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (30,'Звільнять',1,true)
+                     ON CONFLICT (id) DO UPDATE SET is_active = true`);
+      const base = 1100;
+      let kid = 700;
+      // ⚠️ Ключ клієнта — ОКРЕМИМ параметром, не `'ф'||$1`: Postgres не може вивести
+      // тип для $1, який одночасно є `bigint` (kommo_id) і операндом конкатенації.
+      for (const price of [5000, 3000, 7000, 1500]) {
+        const k = `ф${kid}`;
+        await c.query(
+          `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo)
+           VALUES ($1,'d',30,8921932,142,$2,$3,$3,'ТОВ Ф',$4)`, [kid++, price, k, daysAgo(base)]);
+      }
+      const d0 = daysAgo(base + 3).toISOString().slice(0, 10);
+      const d1 = daysAgo(base - 3).toISOString().slice(0, 10);
+      const S = { from: d0, to: d1 };
+
+      const snap = async () => {
+        const [tot, mgr, team, chk] = await Promise.all([
+          M.successMoney(S), M.successByMgr(S), M.successByTeam(S), M.avgCheck("success", S)]);
+        return { total: tot.revenue, mgr: mgr.reduce((a, x) => a + x.revenue, 0),
+                 team: team.reduce((a, x) => a + x.revenue, 0), avg: chk.avgCheck,
+                 rows: mgr.map((x) => `${x.managerId}:${x.revenue}`).sort().join(",") };
+      };
+      const before = await snap();
+      assert.equal(before.total, 16500, "🔴 сід підтесту не дав очікуваних 16 500 ₴ — перевіряти нема чого");
+      assert.equal(before.mgr, before.total, "🔴 ще ДО деактивації Σ(менеджери) ≠ відділу");
+      assert.equal(before.team, before.total, "🔴 ще ДО деактивації Σ(команди) ≠ відділу");
+
+      await c.query(`UPDATE managers SET is_active = false WHERE id = 30`);
+      const after = await snap();
+      assert.equal(after.total, before.total, "🔴 сума відділу змінилась від деактивації");
+      assert.equal(after.mgr, before.mgr,
+        `🔴 Σ(менеджери) впала з ${before.mgr} до ${after.mgr} — це і є розрив на 16 567 ₴`);
+      assert.equal(after.team, before.team, "🔴 Σ(команди) змінилась від деактивації");
+      assert.equal(after.avg, before.avg, "🔴 середній чек змінився від деактивації");
+      assert.equal(after.rows, before.rows, "🔴 розріз по менеджерах змінився — звільнений зник із грошима");
+
+      // 🪞 ДЗЕРКАЛО: ознака звільнення ДОЇХАЛА до рядка. Без неї цифри були б чесні,
+      // але екран показував би звільненого як діючого.
+      const rows = await M.successByMgr(S);
+      const gone = rows.find((x) => x.managerId === 30);
+      assert.ok(gone, "🔴 звільнений зник із розрізу — суми зійшлись би лише випадково");
+      assert.equal(gone!.isActive, false, "🔴 у рядку немає ознаки звільнення — підписати нічим");
+      await c.query(`DELETE FROM deals WHERE manager_id = 30`);
+      await c.query(`DELETE FROM managers WHERE id = 30`);
+    });
+
     await t.test("#25e «ПРИБРАТИ З ПОСТІЙНИХ» СПРАВДІ ПРИБИРАЄ (і повертає назад)", async () => {
       // 🔴 РЕГРЕС, ЗНАЙДЕНИЙ ДІЄЮ, А НЕ ЧИТАННЯМ. `LEFT JOIN … AND NOT lo.hidden`
       // разом із `WHERE COALESCE(lo.hidden,false)=false` — це порожня операція:
