@@ -35,6 +35,7 @@ import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
+import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -4465,6 +4466,87 @@ dashboardRouter.get("/client-card", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Список кандидатів на реактивацію + плитки. Стани рахуються з дат, не з тумблера. */
+/**
+ * 🧭 ПУЛ НІЧИЙНИХ КЛІЄНТІВ (рішення власника 05.08.2026).
+ *
+ * Клієнти, чий основний відповідальний — службовий акаунт або звільнений
+ * менеджер. Означення ОДНЕ, з ядра (`core/orphanClients.ts`), а не набір умов,
+ * розсипаних по запитах.
+ *
+ * 🔴 СПІЛЬНИЙ ПУЛ — СВІДОМИЙ ВИНЯТОК ЗІ СКОУПУ. Тімлід бачить ВЕСЬ пул, без
+ * клампу по своїй команді: клієнт нічийний саме тому, що не належить нікому,
+ * і ділити його по командах немає за чим. Менеджери пулу не бачать зовсім.
+ * Виняток стосується ТІЛЬКИ цих роутів; будь-який інший роут кламиться як досі.
+ *
+ * ⚠️ Лічильники плиток рахуються з ТІЄЇ САМОЇ вибірки, що й список (макет):
+ * окремий COUNT-запит із часом розійшовся б зі списком, і ми б довго шукали,
+ * чому «27» не сходиться з кількістю рядків.
+ */
+dashboardRouter.get("/orphan-clients", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role === "manager") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  const all = String(req.query.scope ?? "") === "all";
+  const months = all ? 600 : ORPHAN_DEFAULT_MONTHS;
+  const rows = await metrics.orphanClients(months);
+  type Row = (typeof rows)[number];
+  const groups = new Map<number, { managerId: number; manager: string; reason: string; reasonLabel: string;
+    clients: Row[]; sum12: number; sumAll: number }>();
+  for (const r of rows) {
+    const g = groups.get(r.managerId) ?? { managerId: r.managerId, manager: r.manager, reason: r.reason as string,
+      reasonLabel: ORPHAN_REASON_LABEL[r.reason], clients: [] as Row[], sum12: 0, sumAll: 0 };
+    g.clients.push(r); g.sum12 += r.revenue12; g.sumAll += r.revenueAll;
+    groups.set(r.managerId, g);
+  }
+  const list = [...groups.values()].sort((a, b) => b.sumAll - a.sumAll);
+  for (const g of list) g.clients.sort((a, b) => b.revenueAll - a.revenueAll);
+  res.json({
+    scope: all ? "all" : `${ORPHAN_DEFAULT_MONTHS}m`,
+    // Плитки — з тієї самої вибірки, не окремим запитом.
+    tiles: {
+      clients: rows.length,
+      money12: rows.reduce((s, r) => s + r.revenue12, 0),
+      regulars: rows.filter((r) => r.isRegular).length,
+      vip: rows.filter((r) => r.segment === "ВІП").length,
+      claimedThisMonth: await metrics.orphanClaimedThisMonth(),
+    },
+    groups: list,
+  });
+});
+
+/**
+ * «Взяти в роботу» — закріплення клієнта за виконавцем ОДРАЗУ, щоб двоє не
+ * дзвонили тому самому. Гонка: перший виграє, другий отримує 409 (не тихе
+ * перезакріплення — інакше другий менеджер вважав би клієнта своїм).
+ */
+dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role === "manager") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const managerId = Number(req.body?.managerId);
+  if (!clientKey || !Number.isFinite(managerId)) return res.status(400).json({ error: "clientKey і managerId обовʼязкові" });
+  // Тімлід призначає ЛИШЕ свою команду; КВП/ОД/адмін — будь-кого.
+  if (auth.role === "team_lead") {
+    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Виконавець має бути з вашої команди" });
+  }
+  // Атомарно: закріплюємо лише якщо ще НЕ закріплений. Нуль рядків = хтось устиг раніше.
+  const up = await pool.query(
+    `INSERT INTO loyalty_overrides (client_key, pinned_manager_id, updated_by, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (client_key) DO UPDATE SET pinned_manager_id = EXCLUDED.pinned_manager_id,
+       updated_by = EXCLUDED.updated_by, updated_at = now()
+     WHERE loyalty_overrides.pinned_manager_id IS NULL
+     RETURNING client_key`,
+    [clientKey, managerId, auth.userId]);
+  if (up.rowCount === 0) {
+    const who = await pool.query<{ name: string }>(
+      `SELECT m.name FROM loyalty_overrides lo JOIN managers m ON m.id = lo.pinned_manager_id
+        WHERE lo.client_key = $1`, [clientKey]);
+    return res.status(409).json({ error: `Клієнта вже взяв ${who.rows[0]?.name ?? "інший менеджер"}` });
+  }
+  res.json({ ok: true, clientKey, managerId });
+});
+
 dashboardRouter.get("/reactivation-list", async (req, res) => {
   const auth = req.auth!;
   let scope: reactivation.ReactivationScope = {};

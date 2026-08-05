@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { stageName } from "./stageNames.js";
+import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf } from "./dates.js";
 
@@ -3011,3 +3012,93 @@ export async function buildProjection(s: ProjectionScope, plan?: number | null):
  *   managerLeadgenWon — менеджер: лід від лідогена → успіх: 10%
  */
 export const CONVERSION_TARGETS = { ads: 15, leadgen: 7.5, managerLeadgenWon: 10 } as const;
+
+
+export interface OrphanClient {
+  clientKey: string; name: string; managerId: number; manager: string;
+  reason: OrphanReason; segment: string; isRegular: boolean;
+  payments: number; lastPaidAt: string | null; lastCallAt: string | null;
+  daysSincePaid: number | null; daysSinceCall: number | null;
+  revenue12: number; revenueAll: number; paymentType: string | null;
+}
+
+/**
+ * Нічийні клієнти — ЄДИНИЙ запит під пул. Сегмент і «постійність» рахуються
+ * ТУТ, а не на фронті: інакше плитки й рядки почали б розходитись (макет
+ * прямо цього вимагає). Уже закріплені (`pinned_manager_id`) з пулу зникають.
+ */
+export async function orphanClients(months: number): Promise<OrphanClient[]> {
+  const r = await pool.query<Record<string, string | null>>(
+    `WITH pay AS (
+       SELECT d.client_key ck, d.manager_id mid, d.closed_at_kommo dt, d.price, d.client_name nm,
+              d.payment_type ptype,
+              CASE WHEN lower(COALESCE(d.payment_type,'')) LIKE '%налич%'
+                     OR lower(COALESCE(d.payment_type,'')) LIKE '%готів%' THEN 1 ELSE 0 END is_cash
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id=d.pipeline_id AND psm.status_id=d.status_id
+        WHERE psm.funnel_stage='paid' AND d.client_key IS NOT NULL
+          AND NOT (d.client_key = ANY($1)) AND d.closed_at_kommo IS NOT NULL),
+     agg AS (
+       SELECT ck, count(*)::int n, sum(price)::bigint rev_all, max(dt) last_dt,
+              COALESCE(sum(price) FILTER (WHERE dt >= now() - interval '12 months'),0)::bigint rev12,
+              sum(is_cash)::int cash_n,
+              (array_agg(nm ORDER BY dt DESC))[1] nm,
+              (array_agg(ptype ORDER BY dt DESC))[1] ptype
+         FROM pay GROUP BY ck),
+     w AS (SELECT p.ck,p.dt, lead(p.dt,1) OVER (PARTITION BY p.ck ORDER BY p.dt) d1,
+                              lead(p.dt,2) OVER (PARTITION BY p.ck ORDER BY p.dt) d2 FROM pay p),
+     win AS (SELECT ck, bool_or(d1 IS NOT NULL AND d1-dt<=interval '30 days') two30,
+                        bool_or(d2 IS NOT NULL AND d2-dt<=interval '30 days') three30 FROM w GROUP BY ck),
+     gaps AS (SELECT ck, percentile_cont(0.5) WITHIN GROUP (ORDER BY g)::int med FROM (
+                SELECT p.ck, EXTRACT(DAY FROM (lead(p.dt) OVER (PARTITION BY p.ck ORDER BY p.dt)) - p.dt)::int g
+                  FROM pay p) x WHERE g IS NOT NULL GROUP BY ck),
+     per AS (SELECT ck, mid, count(*) c, max(dt) mx FROM pay GROUP BY ck, mid),
+     prim AS (SELECT DISTINCT ON (ck) ck, mid FROM per ORDER BY ck, c DESC, mx DESC)
+     SELECT a.ck, a.nm, a.n::text, a.rev_all::text, a.rev12::text, a.cash_n::text, a.ptype,
+            to_char(a.last_dt AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') last_paid,
+            EXTRACT(DAY FROM now()-a.last_dt)::int::text days_paid,
+            w.two30::text, w.three30::text, g.med::text,
+            m.id::text mid, m.name mgr, m.kommo_user_id::text kuid, m.is_active::text act,
+            to_char(rc.last_call AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') last_call,
+            EXTRACT(DAY FROM now()-rc.last_call)::int::text days_call
+       FROM agg a
+       LEFT JOIN win w ON w.ck=a.ck
+       LEFT JOIN gaps g ON g.ck=a.ck
+       JOIN prim p ON p.ck=a.ck
+       JOIN managers m ON m.id=p.mid
+       LEFT JOIN loyalty_overrides lo ON lo.client_key=a.ck
+       LEFT JOIN LATERAL (SELECT max(calldate) last_call FROM ringostat_calls c WHERE c.client_key=a.ck) rc ON true
+      WHERE ${orphanManagerSql("m")}
+        AND lo.pinned_manager_id IS NULL
+        AND a.last_dt >= now() - ($2 || ' months')::interval`,
+    [GENERIC_CLIENT_KEYS, String(months)]);
+  return r.rows.map((x) => {
+    const n = Number(x.n), cash = Number(x.cash_n);
+    const allCash = cash > 0 && cash === n;
+    const two = x.two30 === "true", three = x.three30 === "true";
+    const isRegular = n >= 2 && (allCash ? (three || n >= 3) : (two || n >= 3));
+    const med = x.med == null ? null : Number(x.med);
+    const segment = n < 3 || med == null ? "недостатньо історії"
+      : med <= 14 ? "ВІП" : med <= 30 ? "Регулярний" : "Епізодичний";
+    return {
+      clientKey: x.ck!, name: x.nm ?? x.ck!,
+      managerId: Number(x.mid), manager: x.mgr!,
+      reason: orphanReason({ kommoUserId: x.kuid, isActive: x.act === "true" })!,
+      segment, isRegular, payments: n,
+      lastPaidAt: x.last_paid, lastCallAt: x.last_call,
+      daysSincePaid: x.days_paid == null ? null : Number(x.days_paid),
+      daysSinceCall: x.days_call == null ? null : Number(x.days_call),
+      revenue12: Number(x.rev12), revenueAll: Number(x.rev_all),
+      paymentType: x.ptype,
+    };
+  });
+}
+
+/** «Взято в роботу за цей місяць» — плитка макета. */
+export async function orphanClaimedThisMonth(): Promise<number> {
+  const r = await pool.query<{ n: string }>(
+    `SELECT count(*) n FROM loyalty_overrides
+      WHERE pinned_manager_id IS NOT NULL
+        AND (updated_at AT TIME ZONE 'Europe/Kyiv')::date >= date_trunc('month', now() AT TIME ZONE 'Europe/Kyiv')`);
+  return Number(r.rows[0].n);
+}

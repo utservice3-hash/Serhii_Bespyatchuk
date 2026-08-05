@@ -198,6 +198,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // (КВП, ОД, admin — зміна політики 03.08.2026), тому там deny значно ширший.
   { method: "GET", path: "/api/dashboard/reactivation-list", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 🔴 СПІЛЬНИЙ ПУЛ НІЧИЙНИХ — СВІДОМЕ РОЗШИРЕННЯ, НЕ ДІРКА (рішення власника
+  // 05.08.2026). Тімлід бачить ВЕСЬ пул, без клампу по своїй команді: клієнт
+  // нічийний саме тому, що не належить нікому, і ділити його по командах немає
+  // за чим. МЕНЕДЖЕР — 403: пул це інструмент розподілу, а не самообслуговування.
+  // Виняток діє ТІЛЬКИ на ці два роути; будь-який інший кламиться як досі.
+  { method: "GET", path: "/api/dashboard/orphan-clients", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/orphan-clients/claim", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/client-seasonal", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/reactivation-task", cls: "deny-only",

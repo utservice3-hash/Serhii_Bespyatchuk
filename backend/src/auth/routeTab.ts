@@ -57,6 +57,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/client-seasonal"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-manager"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/reactivation-list"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/orphan-clients"), tabs: ["loyalty"] },
     // 🔴 ЛИШЕ `loyalty`, І ЦЕ ВИПРАВЛЕННЯ, А НЕ ПЕРШИЙ ЗАДУМ. Спершу я написав
     // tabs: ["loyalty","tasks"] з міркування «задача веде в задачник». Семантика
     // списку — «БУДЬ-ЯКА з них», тож HR, який має вкладку `tasks`, пройшов межу:
