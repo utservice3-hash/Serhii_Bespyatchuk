@@ -148,6 +148,7 @@ def get_user_name(user_id: int) -> str:
 
 SOURCE_FIELD_ID = 2098035    # "Источник клиента"
 REJECT_REASON_FIELD_ID = 2097265  # "Причина отказа"
+LIDOGEN_FIELD_ID = 2098037   # "Лидогенератор" (текст) — заповнюється рідко, найточніше
 # Угода вважається "по таргету", якщо заповнене будь-яке з цих полів —
 # різні рекламні канали пишуть кампанію в різні поля (Facebook -> utm_campaign,
 # Google Ads -> ADV_CAMP/TRAF_SRC).
@@ -345,6 +346,120 @@ def get_lead_source(lead: dict) -> str:
             if values:
                 return values[0].get("value", "")
     return ""
+
+
+# ── Відділ «Лідогенерація» та визначення лідогена ─────────────────────
+# Лідогени — користувачі груп Kommo, чия назва містить «лідоген»/«лидоген»
+# (зараз це «Таня Ковтонюк (лідогенер…» 578664 і «Таня Юхно (лідогенератор…»
+# 578668). Тримаємо не хардкод id людей (склад міняється), а виявляємо групи
+# за назвою й тягнемо їх користувачів. Кеш довгий — склад відділу міняється рідко.
+_lidogen_cache: dict = {"ts": 0.0, "ids": set()}
+_LIDOGEN_CACHE_TTL = float(os.getenv("KOMMO_LIDOGEN_TTL", "21600"))  # 6 год
+_lidogen_lock = threading.Lock()
+
+
+def get_lidogen_user_ids() -> set:
+    """ID користувачів відділу(ів) Лідогенерації. Кешується; при помилці віддає
+    останнє відоме значення (або порожній набір)."""
+    now = time.monotonic()
+    with _lidogen_lock:
+        if _lidogen_cache["ids"] and (now - _lidogen_cache["ts"]) < _LIDOGEN_CACHE_TTL:
+            return _lidogen_cache["ids"]
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/account", headers=HEADERS,
+            params={"with": "users_groups"}, timeout=10,
+        )
+        groups = (resp.json().get("_embedded") or {}).get("users_groups") or [] if resp.ok else []
+        gids = {
+            g["id"] for g in groups
+            if any(k in (g.get("name") or "").lower() for k in ("лідоген", "лидоген"))
+        }
+        ids: set = set()
+        page = 1
+        while gids and page <= 6:
+            ru = requests.get(
+                f"{KOMMO_BASE}/api/v4/users", headers=HEADERS,
+                params={"limit": 250, "page": page}, timeout=10,
+            )
+            if not ru.ok:
+                break
+            us = (ru.json().get("_embedded") or {}).get("users") or []
+            if not us:
+                break
+            for u in us:
+                if (u.get("rights") or {}).get("group_id") in gids:
+                    ids.add(u["id"])
+            if len(us) < 250:
+                break
+            page += 1
+        if ids:
+            with _lidogen_lock:
+                _lidogen_cache["ids"] = ids
+                _lidogen_cache["ts"] = now
+        return ids or _lidogen_cache["ids"]
+    except Exception as e:
+        logger.error("get_lidogen_user_ids: %s", e)
+        return _lidogen_cache["ids"]
+
+
+def is_lidogen_user(user_id: int) -> bool:
+    return bool(user_id) and user_id in get_lidogen_user_ids()
+
+
+def get_lidogen_field(lead: dict) -> str:
+    """Значення поля «Лидогенератор» (2098037) з угоди, або порожній рядок."""
+    for cf in lead.get("custom_fields_values") or []:
+        if cf.get("field_id") == LIDOGEN_FIELD_ID:
+            values = cf.get("values") or []
+            if values:
+                return str(values[0].get("value", "") or "").strip()
+    return ""
+
+
+def get_responsible_change_author(lead_id: int) -> int:
+    """created_by останньої події зміни відповідального по угоді (=хто призначив
+    менеджера). 0, якщо подій немає/помилка."""
+    try:
+        resp = requests.get(
+            f"{KOMMO_BASE}/api/v4/events", headers=HEADERS,
+            params={
+                "filter[type][]": "entity_responsible_changed",
+                "filter[entity]": "lead",
+                "filter[entity_id][]": lead_id,
+                "order[created_at]": "desc",
+                "limit": 10,
+            },
+            timeout=10,
+        )
+        if resp.ok and resp.text.strip():
+            evs = (resp.json().get("_embedded") or {}).get("events") or []
+            if evs:
+                return evs[0].get("created_by", 0) or 0
+    except Exception as e:
+        logger.error("get_responsible_change_author(%s): %s", lead_id, e)
+    return 0
+
+
+def resolve_lidogen(lead: dict, lead_id: int) -> tuple[str, str]:
+    """Визначає лідогена на момент передачі. Повертає (ім'я_для_реєстру, джерело).
+    Пріоритет:
+      (a) явне поле «Лидогенератор» 2098037 → ім'я як є, джерело 'field';
+      (b) автор події зміни відповідального, якщо у відділі Лідогенерації →
+          '~ім'я', джерело 'event';
+      (c) updated_by угоди, якщо у відділі → '~ім'я', джерело 'updated_by';
+      (d) інакше ('', 'empty') — не вгадуємо.
+    Префікс '~' означає «визначено за відділом», без нього — явне поле."""
+    val = get_lidogen_field(lead)
+    if val:
+        return val, "field"
+    author = get_responsible_change_author(lead_id)
+    if is_lidogen_user(author):
+        return "~" + get_user_name(author), "event"
+    upd = lead.get("updated_by", 0)
+    if is_lidogen_user(upd):
+        return "~" + get_user_name(upd), "updated_by"
+    return "", "empty"
 
 
 def get_reject_reason(lead: dict) -> str:

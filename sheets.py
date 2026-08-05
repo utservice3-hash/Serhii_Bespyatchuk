@@ -278,13 +278,17 @@ def ensure_headers():
             ws.insert_row([
                 "Lead ID", "Назва ліда", "Менеджер", "Команда",
                 "Час передачі", "Час взяття в роботу", "Перший дзвінок",
-                "Час реакції (хв)", "Час до дзвінка (хв)"
+                "Час реакції (хв)", "Час до дзвінка (хв)", "Лідогенератор"
             ], 1)
+        elif not ws.cell(1, 10).value:
+            # Аркуш уже існує з 9 колонками — додаємо лише заголовок 10-ї
+            # праворуч, НЕ чіпаючи A1:I1 (дашборд читає їх за позицією).
+            ws.update_cell(1, 10, "Лідогенератор")
     except Exception as e:
         logger.error("ensure_headers: %s", e)
 
 
-def append_transfer(lead_id: int, lead_name: str, manager: str, transferred_at: datetime, manager_id: int = 0):
+def append_transfer(lead_id: int, lead_name: str, manager: str, transferred_at: datetime, manager_id: int = 0, lidogen: str = ""):
     ws = _get_or_create_worksheet("Реєстр")
     if not ws:
         return
@@ -300,8 +304,9 @@ def append_transfer(lead_id: int, lead_name: str, manager: str, transferred_at: 
             "",  # first_call_at
             "",  # reaction_min
             "",  # call_min
+            lidogen,  # 10-та колонка «Лідогенератор» (може бути порожня)
         ])
-        logger.info("sheets: appended transfer for lead %s (team: %s)", lead_id, team)
+        logger.info("sheets: appended transfer for lead %s (team: %s, lidogen: %s)", lead_id, team, lidogen or "—")
     except Exception as e:
         logger.error("sheets append_transfer: %s", e)
 

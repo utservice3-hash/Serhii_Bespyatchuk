@@ -2302,6 +2302,10 @@ def _handle_rnk_event(lead_id: int, responsible_id: int, label: str):
 _notified_new_leads: dict[int, datetime] = {}
 _NEW_LEAD_DEDUP_SECONDS = 300
 
+# Лічильник відфільтрованих «Автосделок» (технічні запити на оплату перевізника,
+# не ліди) — щоб було видно в логах/статусі, що фільтр працює, а не мовчить.
+_filtered_autodeal_count = 0
+
 
 def _handle_new_lead(lead_id: int, responsible_id: int):
     if lead_id in pending:
@@ -2328,6 +2332,24 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
 
     lead = kommo.get_lead(lead_id)
     lead_name = lead.get("name", f"Лід #{lead_id}") if lead else f"Лід #{lead_id}"
+
+    # ── Фільтр «Автосделок» ──────────────────────────────────────────
+    # «Автосделка: …» — технічний запит на оплату перевізника (обов'язкова
+    # умова роботи системи), а НЕ лід від лідогенератора. Такі угоди теж
+    # проходять статус 69716164 (створюються в ньому, потім їм міняють
+    # відповідального), тож без фільтра роздували б «Реєстр» технічними
+    # рядками. Не пишемо в Sheets і не шлемо сповіщення.
+    if (lead_name or "").strip().lower().startswith("автосделка"):
+        global _filtered_autodeal_count
+        with _state_lock:
+            _filtered_autodeal_count += 1
+            total_filtered = _filtered_autodeal_count
+        logger.info(
+            "Автосделка відфільтрована (не лід): #%s «%s» — усього відфільтровано %d",
+            lead_id, lead_name[:40], total_filtered,
+        )
+        return
+
     manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
     now = datetime.now(timezone.utc)
 
@@ -2354,7 +2376,15 @@ def _handle_new_lead(lead_id: int, responsible_id: int):
     if _is_working_hours():
         team = MANAGER_TEAM.get(responsible_id, "")
         notifier.send_to_team_tracking(msg, team)
-    sheets.append_transfer(lead_id, lead_name, manager_name, now, manager_id=responsible_id)
+
+    # Визначаємо лідогена (поле 2098037 → автор зміни відповідального з відділу →
+    # updated_by з відділу → порожньо). Живий захват при передачі — updated_by/
+    # автор події ще вказує на лідогена, бо менеджер угоди ще не чіпав.
+    lidogen = ""
+    if lead:
+        lidogen, lidogen_src = kommo.resolve_lidogen(lead, lead_id)
+        logger.info("Lidogen for lead %s: «%s» (джерело: %s)", lead_id, lidogen or "—", lidogen_src)
+    sheets.append_transfer(lead_id, lead_name, manager_name, now, manager_id=responsible_id, lidogen=lidogen)
     logger.info("New lead: %s → %s", lead_id, manager_name)
 
 
