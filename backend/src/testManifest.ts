@@ -34,6 +34,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/dismissedMoney.test.js",
   "routes/reactivateCycle.test.js",
   "routes/noPlanShare.test.js",
+  "routes/statePartition.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -350,4 +351,6 @@ export const MANIFEST_TESTS: string[] = [
   // routes/noPlanShare.test.ts — внесок менеджерів без плану названий числом
   "#53 factNoPlan == Σ факту менеджерів без плану + звільнених",
   "#53b саботаж: нуль при живому безплановому — це поломка",
+  // routes/statePartition.test.ts — чипи станів мусять сумуватись у к-сть людей
+  "#54 Σ чотирьох станів == к-сті менеджерів на екрані",
 ];

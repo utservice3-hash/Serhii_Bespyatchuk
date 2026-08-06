@@ -6488,10 +6488,18 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     talks: managers.reduce((s2, m) => s2 + m.talks, 0),
     attempts: managers.reduce((s2, m) => s2 + m.attempts, 0),
     // 🔴 П'ЯТИЙ СТАН — «гроші є · не закрито» (рішення власника 06.08.2026). Раніше
-    // ці 12 людей читались як «зрив»: ① = 0. Стан лічиться ОКРЕМО і не входить у
-    // r/a/g — інакше «зрив» і далі означав би дві різні речі.
+    // ці люди читались як «зрив»: ① = 0.
+    //
+    // 🔴 ЧОТИРИ СТАНИ — ЦЕ РОЗБИТТЯ, А НЕ ЧОТИРИ НЕЗАЛЕЖНІ ЛІЧИЛЬНИКИ. Перша
+    // редакція лічила `collectedNotClosed` ОКРЕМО, лишивши тих самих людей і в
+    // `r/a/g` — і плитка «31 менеджер» показувала чипи на **37** (6+21+4+6).
+    // Спіймав це не тест, а ПОГЛЯД НА ЕКРАН: жоден гейт не звіряє підпис плитки
+    // з сумою чипів під нею. Тепер стани взаємовиключні, тож Σ чипів == к-сті людей.
     collectedNotClosed: managers.filter((m) => m.factSuccess === 0 && m.factPaid > 0).length,
-    statusCounts: { g: managers.filter((m) => m.status === "g").length, a: managers.filter((m) => m.status === "a").length, r: managers.filter((m) => m.status === "r").length },
+    statusCounts: (() => {
+      const rest = managers.filter((m) => !(m.factSuccess === 0 && m.factPaid > 0));
+      return { g: rest.filter((m) => m.status === "g").length, a: rest.filter((m) => m.status === "a").length, r: rest.filter((m) => m.status === "r").length };
+    })(),
   };
 
   res.json({
