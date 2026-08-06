@@ -1,4 +1,4 @@
-import type { ReportPlan, ReportPlanManager } from "../../../api";
+import type { ReportPlan, ReportPlanManager, ReportPlanDismissed } from "../../../api";
 import { InfoHint } from "../widgets";
 import {
   GREEN, AMBER, RED, MUTED, INK, SOFT, LINE,
@@ -17,18 +17,20 @@ const teamOf = (m: ReportPlanManager): string => m.teamName ?? "Поза ком�
 
 export interface TeamAgg {
   key: string; name: string; managers: ReportPlanManager[];
+  /** Звільнені цієї команди — згорнутим рядком; їхні гроші вже в сумах нижче. */
+  dismissed: ReportPlanDismissed[];
   plan: number; fact: number; factSuccess: number; factPaid: number;
   expectThisMonth: number; dobir: number; byPace: number;
   collectedNotClosed: number; r: number; a: number; g: number;
 }
 
-export function aggregateTeams(managers: ReportPlanManager[]): TeamAgg[] {
+export function aggregateTeams(managers: ReportPlanManager[], dismissed: ReportPlanDismissed[] = []): TeamAgg[] {
   const map = new Map<string, TeamAgg>();
   for (const m of managers) {
     const key = teamOf(m);
     let e = map.get(key);
     if (!e) {
-      e = { key, name: key, managers: [], plan: 0, fact: 0, factSuccess: 0, factPaid: 0,
+      e = { key, name: key, managers: [], dismissed: [], plan: 0, fact: 0, factSuccess: 0, factPaid: 0,
         expectThisMonth: 0, dobir: 0, byPace: 0, collectedNotClosed: 0, r: 0, a: 0, g: 0 };
       map.set(key, e);
     }
@@ -39,6 +41,21 @@ export function aggregateTeams(managers: ReportPlanManager[]): TeamAgg[] {
     // «зрив» і далі означав би дві різні речі, а саме це ми й розчіпляли.
     if (m.factSuccess === 0 && m.factPaid > 0) e.collectedNotClosed++;
     else if (m.status === "r") e.r++; else if (m.status === "a") e.a++; else e.g++;
+  }
+  // 🔴 Звільнені додаються В ТУ САМУ команду і в ТІ САМІ грошові суми, але НЕ в
+  // лічильники станів: світлофор на людині, якої немає, читався б як докір нікому.
+  // Якщо команди звільненого вже немає в мапі (усі її активні пішли) — заводимо
+  // рядок, інакше його гроші зникли б разом із командою.
+  for (const d of dismissed) {
+    const key = d.teamName ?? "Поза командами";
+    let e = map.get(key);
+    if (!e) {
+      e = { key, name: key, managers: [], dismissed: [], plan: 0, fact: 0, factSuccess: 0, factPaid: 0,
+        expectThisMonth: 0, dobir: 0, byPace: 0, collectedNotClosed: 0, r: 0, a: 0, g: 0 };
+      map.set(key, e);
+    }
+    e.dismissed.push(d);
+    e.fact += d.fact; e.factSuccess += d.factSuccess; e.factPaid += d.factPaid;
   }
   return [...map.values()];
 }
@@ -115,7 +132,7 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
   const weekMark = wdWeek > 0 ? (wdWeekElapsed / wdWeek) * 100 : 0;
   const reconstructed = data.managers.some((m) => m.week.reconstructed);
 
-  const teams = aggregateTeams(data.managers)
+  const teams = aggregateTeams(data.managers, data.dismissed ?? [])
     // 🔴 СОРТУВАННЯ ЗА ВІДХИЛЕННЯМ ВІД ТЕМПУ, не за сумою: екран існує, щоб бачити,
     // хто не встигає. Команда без плану % не має, тож іде ПІСЛЯ тих, у кого план є —
     // інакше «найгірші» очолили б ті, кому плану просто не поставили.
@@ -218,7 +235,18 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
                     style={{ cursor: "pointer", background: pickedTeam === t.key ? SOFT : undefined }}>
                     <td>
                       <div style={{ fontWeight: 700 }}>{t.name}</div>
-                      <div style={{ fontSize: 10.5, color: MUTED }}>{t.managers.length} менеджер(ів)</div>
+                      <div style={{ fontSize: 10.5, color: MUTED }}>
+                        {t.managers.length} менеджер(ів)
+                        {t.dismissed.length > 0 && (
+                          <span title={"Звільнені з грішми в цьому періоді. План, відсоток, світлофор і темп їм НЕ рахуються — "
+                            + "ставити план людині, якої немає, безглуздо. Але гроші (① і ⑨) входять у суму команди й компанії: "
+                            + "вони зароблені тоді, коли людина працювала, і від звільнення не зникають.\n"
+                            + t.dismissed.map((d) => `${d.name}: ${fmt(d.fact)} ₴ (${d.factPaidDeals} угод на «оплата отримана»)`).join("\n")}>
+                            {" · "}<b style={{ color: MUTED }}>звільнені · {t.dismissed.length}</b>
+                            {" "}<span style={{ color: MUTED }}>({fmt(t.dismissed.reduce((s2, d) => s2 + d.fact, 0))} ₴)</span>
+                          </span>
+                        )}
+                      </div>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
                         <Chip n={t.collectedNotClosed} label="гроші є" color="var(--rpt-link)" bg={SOFT} />
                         <Chip n={t.r} label="зрив" color={RED} bg="var(--rpt-bad-bg)" />

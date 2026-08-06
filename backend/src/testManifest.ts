@@ -30,6 +30,7 @@ export const MANIFEST_FILES: string[] = [
   "core/sumInvariants.test.js",
   "core/periodNesting.test.js",
   "routes/managersExpected.test.js",
+  "routes/dismissedMoney.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -332,4 +333,7 @@ export const MANIFEST_TESTS: string[] = [
   "#49 добір: Σ по менеджерах == добір відділу",
   "#49b саботаж: повторне усереднення розходиться з відділом",
   "#49c план тижня: Σ по менеджерах == Σ по командах == компанія",
+  // routes/dismissedMoney.test.ts — гроші не зникають разом зі звільненою людиною
+  "#50 Σ факту на екрані == receivedMoney ядра (звільнені не губляться)",
+  "#50b звільнені з грішми: або їх нема, або вони НАЗВАНІ",
 ];

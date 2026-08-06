@@ -669,6 +669,19 @@ export interface ReportPlan {
     collectedNotClosed: number;
     statusCounts: { g: number; a: number; r: number } };
   managers: ReportPlanManager[];
+  /**
+   * 🔴 ЗВІЛЬНЕНІ З ГРІШМИ — окремий масив, а не рядки серед `managers`.
+   * У них НЕМАЄ плану, відсотка, світлофора й темпу (ставити план людині, якої
+   * немає, безглуздо), але їхні гроші ВХОДЯТЬ у `glance` і в суму команди —
+   * інакше Σ(менеджери) перестала б дорівнювати команді, а це той інваріант, на
+   * якому стоїть половина гейтів. Порожній масив — нормальний стан.
+   */
+  dismissed: ReportPlanDismissed[];
+}
+export interface ReportPlanDismissed {
+  managerId: number; name: string; teamId: number | null; teamName: string | null;
+  fact: number; factSuccess: number; factPaid: number;
+  factPaidDeals: number; factSuccessDeals: number;
 }
 export async function fetchReportPlan(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<ReportPlan> {
   const { data } = await api.get<ReportPlan>("/dashboard/report-plan", { params });

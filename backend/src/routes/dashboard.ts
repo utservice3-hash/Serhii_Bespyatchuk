@@ -6316,6 +6316,43 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // ЄДИНИЙ вираз тижневої цілі (спільний із /kvp-report і /manager-report) — байт-в-байт.
   const effWeek = await plans.effectiveWeekTargets({ managerId, teamId, month: dynMonth }, kyivToday);
 
+  /**
+   * 🔴 РЯДОК «ЗВІЛЬНЕНІ» — ЩОБ ГРОШІ НЕ ЗНИКАЛИ РАЗОМ ІЗ ЛЮДИНОЮ
+   * (рішення власника 06.08.2026).
+   *
+   * Пастка РЕАЛЬНА, а не теоретична: ростер вище фільтрує `m.is_active`, а грошові
+   * функції ядра — НІ (правило «is_active керує списками, а не історичними сумами»).
+   * Тобто щойно менеджера деактивують у Kommo, його рядок зникає зі Звіту, а його
+   * гроші лишаються в `receivedByTeam` — і Σ(менеджери) перестає дорівнювати команді.
+   * Саме цей інваріант тримає половину наших гейтів.
+   *
+   * Рядок навмисно БЕЗ плану, відсотка, світлофора й темпу: ставити план людині,
+   * якої немає, безглуздо, а світлофор на ній читався б як докір нікому. Гроші (① і ⑨)
+   * ВХОДЯТЬ у суму команди й компанії. Тримає гейт `#50`.
+   *
+   * ⚠️ Сьогодні цей список ПОРОЖНІЙ, і це не помилка: заміряно 06.08.2026 — жодна
+   * угода на етапі «оплата отримана» не висить на деактивованому акаунті, а ② за
+   * серпень на деактивованих = 0 ₴. Механізм стоїть заздалегідь і вмикається сам,
+   * щойно CRM позначить людину неактивною.
+   */
+  const rosterIds = new Set(roster.map((m) => m.id));
+  const dismissedIds = [...new Set([...recv, ...succ, ...paid].map((r) => r.managerId))]
+    .filter((id) => !rosterIds.has(id));
+  const dismissed = dismissedIds.length
+    ? (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
+        `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m
+           LEFT JOIN teams t ON t.id = m.team_id WHERE m.id = ANY($1) ORDER BY m.name`, [dismissedIds])).rows
+      .map((m) => ({
+        managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
+        fact: Math.round(recvM.get(m.id)?.revenue ?? 0),
+        factSuccess: Math.round(succM.get(m.id)?.revenue ?? 0),
+        factPaid: Math.round(paidM.get(m.id)?.revenue ?? 0),
+        factPaidDeals: paidM.get(m.id)?.deals ?? 0,
+        factSuccessDeals: succM.get(m.id)?.deals ?? 0,
+      }))
+      .filter((m) => m.fact !== 0 || m.factPaid !== 0 || m.factSuccess !== 0)
+    : [];
+
   const managers = roster.map((m) => {
     const fact = Math.round(recvM.get(m.id)?.revenue ?? 0);
     const pl = planByMgr.get(m.id) ?? {};
@@ -6400,11 +6437,16 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // середніх) → Σ по тих самих менеджерах, що показані. Σ-інваріант тримається за побудовою.
   const acRev = managers.reduce((s, m) => s + m.kpi.avgCheck.revenue, 0);
   const acDeals = managers.reduce((s, m) => s + m.kpi.avgCheck.deals, 0);
+  // 🔴 Гроші звільнених ВХОДЯТЬ у підсумок — інакше ми полагодили б рядок і зламали
+  // саме той Σ-інваріант, заради якого його й заводили (Σ по екрану == ядру).
+  const dFact = dismissed.reduce((s, m) => s + m.fact, 0);
+  const dSuc = dismissed.reduce((s, m) => s + m.factSuccess, 0);
+  const dPaid = dismissed.reduce((s, m) => s + m.factPaid, 0);
   const glance = {
     plan: managers.reduce((s, m) => s + m.plan, 0),
-    fact: managers.reduce((s, m) => s + m.fact, 0),
-    factSuccess: managers.reduce((s, m) => s + m.factSuccess, 0),
-    factPaid: managers.reduce((s, m) => s + m.factPaid, 0),
+    fact: managers.reduce((s, m) => s + m.fact, 0) + dFact,
+    factSuccess: managers.reduce((s, m) => s + m.factSuccess, 0) + dSuc,
+    factPaid: managers.reduce((s, m) => s + m.factPaid, 0) + dPaid,
     expect: managers.reduce((s, m) => s + m.expect, 0),
     expectThisMonth: managers.reduce((s, m) => s + m.expectThisMonth, 0),
     expectNextMonth: managers.reduce((s, m) => s + m.expectNextMonth, 0),
@@ -6432,6 +6474,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // писати «минуло 4 з 21 (19%)»: сама частка не дає сказати, ЧОГО 19%.
       workingDaysTotal: wdTotal, workingDaysElapsed: wdElapsed },
     role: auth.role, viewerManagerId, elapsed, remainingWorkdays: remWd, glance, managers,
+    // Окремим масивом, а не серед `managers`: у них немає плану, %, світлофора й темпу,
+    // тож змішувати їх у той самий список означало б рахувати статуси по людях, яких немає.
+    dismissed,
   });
 });
 
