@@ -505,6 +505,10 @@ export const receivedByManagerBucket = (s: MoneyScope, granularity: "day" | "wee
  * і множина = ЗАРАЗ 142. Σ бакетів менеджера = `successByMgr` того ж періоду.
  */
 export const successByManagerBucket = (s: MoneyScope, granularity: "day" | "week" | "month") => mgrBucketAgg("success", s, granularity);
+/** ⑨ «оплата отримана, ще не закрито» по (менеджер × бакет) — щоб день міг показати
+ *  РОЗКЛАД ② , а не лише суму. Сума без розкладу і є та поломка, з якої почалась
+ *  історія картки Антипенка: 23 632 ₴ виглядали як нуль, бо ① і ⑨ не були розділені. */
+export const paidOnlyByManagerBucket = (s: MoneyScope, granularity: "day" | "week" | "month") => mgrBucketAgg("paidOnly", s, granularity);
 
 /**
  * «Успішно реалізовано» (won 142, анкер `closed_at`, signed price) по (менеджер × МІСЯЦЬ)

@@ -7,6 +7,7 @@ import {
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 import { ResponseTimeCard } from "./ResponseTimeCard";
+import { ReportSummary } from "./ReportSummary";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Кольори беруться зі СКОУП-ТОКЕНІВ `.rpt` (index.css) — не хардкод. Тому:
@@ -74,6 +75,8 @@ export function ReportPlanSection({ auth, teams }: {
   const [err, setErr] = useState(false);        // місяць не піднявся навіть після ретраїв → видима помилка
   const [retryNonce, setRetryNonce] = useState(0); // ручний «Спробувати знову» перезапускає ефект
   const [openMgr, setOpenMgr] = useState<number | null>(null);
+  // Вибрана команда в підсумку — фільтр списку менеджерів нижче (клік по рядку).
+  const [pickedTeam, setPickedTeam] = useState<string | null>(null);
 
   // Місяць + тиждень видно ЗАВЖДИ у шапці смуги (#11). Селектор керує лише дрилом унизу.
   const monthPeriod = useMemo(() => ({ from: monthStart(anchor), to: monthEnd(anchor) }), [anchor]);
@@ -213,6 +216,14 @@ export function ReportPlanSection({ auth, teams }: {
         </div>
       ) : loading && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
         <>
+          {/* 🔴 ВЕРХНІЙ ПІДСУМОК ЗА МАКЕТОМ `zvit-2` (06.08.2026): п'ять плиток, де
+              «виконано» тижня й місяця обовʼязково несуть «% від необхідного» — єдину
+              величину, яку МОЖНА порівнювати між періодами різної довжини. Без неї
+              користувач порівняє −35.2 і −7.0 п.п. і зробить хибний висновок. */}
+          <ReportSummary data={data} weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`}
+            pickedTeam={pickedTeam} onPickTeam={setPickedTeam} />
+          {/* Стара плитка фокус-дня лишається під підсумком — вона про ІНШЕ питання
+              («що сталось саме сьогодні») і жодну з п'яти плиток не дублює. */}
           <Glance data={data} focus={focus} focusDay={focusDay} today={today} />
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
               бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
@@ -227,7 +238,7 @@ export function ReportPlanSection({ auth, teams }: {
           <div style={{ fontSize: 12, color: MUTED, margin: "20px 2px 10px" }}>
             {auth.role === "manager" ? "Твоя команда" : "Відсортовано"} за <b>місячним</b> станом — хто відстає, той угорі
           </div>
-          {data.managers.map((m) => (
+          {data.managers.filter((m) => !pickedTeam || (m.teamName ?? "Поза командами") === pickedTeam).map((m) => (
             <MgrStrip key={m.managerId} m={m} mWeek={weekByMgr.get(m.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
               weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} drillPeriod={drillPeriod} role={auth.role}
@@ -346,8 +357,15 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
         <TrajBlock title={`Тиждень ${weekLabel}`} fact={m.week.fact} plan={m.week.target}
           pct={m.week.target > 0 ? Math.round((m.week.fact / m.week.target) * 100) : 0}
           status={m.week.target <= 0 ? "g" : m.week.fact >= m.week.target ? "g" : m.week.fact >= m.week.target * (elapsed || 1) ? "a" : "r"}
-          footer={<div title="Динамічна тижнева ціль = (місячний план − факт місяця) ÷ тижнів, що лишились. Присутні робочі дні враховують погоджені відсутності.">
-            {m.week.isManual ? <>вручну задано у Задачнику · <b style={{ color: AMBER }}>вручну</b></> : <>динамічний план тижня · залишок ÷ тижнів, що лишились</>}
+          footer={<div title={"Динамічний план тижня = залишок місяця × робочі дні цього тижня ÷ робочі дні від початку тижня до кінця місяця. "
+            + "Базис — РОБОЧІ ДНІ, а не «тижні, що лишились»: інакше останній тиждень місяця (буває одноденним) отримав би повну тижневу норму. "
+            + "Ціль фіксується в понеділок 00:00 за Києвом і всередині тижня не змінюється."
+            + (m.week.reconstructed ? " ⚠️ Знімок цього тижня ВІДНОВЛЕНО ретроспективно, а не збережено в момент." : "")}>
+            {m.week.isManual
+              ? <>вручну задано у Задачнику · <b style={{ color: AMBER }}>вручну</b></>
+              : <>динамічний план · залишок ÷ робочі дні, що лишились{m.week.workingDaysWeek > 0 ? ` (${m.week.workingDaysWeek} роб. дн. у тижні)` : ""}</>}
+            {m.week.overPlan > 0 && <> · <b style={{ color: GREEN }}>понад план +{k(m.week.overPlan)} ₴</b></>}
+            {m.week.reconstructed && <> · <span style={{ color: MUTED }}>знімок відновлено</span></>}
           </div>} />
         {/* МІСЯЦЬ — план-бар (сирий план) + #16 очікуємо + #17 прогноз */}
         <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
@@ -359,12 +377,33 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
                 Доти обидва звались «очікуємо», і 44к проти 52к читались як поломка. */}
             <div style={{ marginTop: 3, fontSize: 12.5, color: INK }} title="Очікування за ПЛАНОВОЮ датою оплати (коли має надійти). Цей / наступний календарний місяць. Це НЕ те саме, що «зона очікування» в банері нижче — та без прив'язки до дати.">
               за план. датою <b style={{ color: GREEN }}>{k(m.expectThisMonth)}</b> цей · <b style={{ color: INK }}>{k(m.expectNextMonth)}</b> наст. міс
+              {m.expectNoDate > 0 && <> · <span style={{ color: MUTED }} title="Угоди в зоні очікування БЕЗ планової дати оплати. У ЖОДНУ суму не входять — вони не належать жодному місяцю.">без дати {k(m.expectNoDate)}</span></>}
             </div>
+            {/* 🔴 ТРИ ЧИСЛА «СКІЛЬКИ ВИЙДЕ» — ТРИ РІЗНІ НАЗВИ. Саме з однакових назв і
+                почалась уся історія, тож вони стоять поруч і кожне підписане своїм сенсом:
+                «з рахунками» = документи · «за темпом» = екстраполяція · «зазвичай
+                добирає» = середнє за 3 міс. Складати їх між собою не можна. */}
+            <div style={{ marginTop: 3, fontSize: 12.5, color: MUTED }}>
+              з рахунками <b style={{ color: INK }} title="Факт ② + рахунки з плановою датою оплати цього місяця. Підкріплене документами; добір сюди НЕ входить.">{k(m.fact + m.expectThisMonth)}</b>
+              {" "}· за темпом <b style={{ color: INK }} title="Факт ÷ робочі дні, що минули × усі робочі дні місяця. Це ЕКСТРАПОЛЯЦІЯ, а не прогноз.">{k(m.byPace)}</b>
+              {m.byPaceEarly && <span style={{ color: AMBER, fontWeight: 700 }} title="Екстраполяція перевищує 150% плану — на початку місяця вона нестабільна і не є прогнозом."> ⚠ рано</span>}
+              {" "}· зазвичай добирає <b style={{ color: INK }} title="Середнє за 3 завершені місяці — скільки людина зазвичай приносить угодами, створеними й закритими вже після цього числа. У прогноз НЕ входить.">{k(m.dobir)}</b>
+            </div>
+            {m.jam > 0 && (
+              <div style={{ marginTop: 3, fontSize: 12, color: AMBER }}
+                title="Скільки з очікувань стоїть на стадії «Виставлення рахунку». Поки рахунок не виставлений, дата оплати — намір, а не домовленість.">
+                затор на виставленні рахунку: {k(m.jam)} ₴ · {m.jamDeals} угод
+              </div>
+            )}
           </>} showTempo />
         {/* місячні стати + spark */}
         <div style={{ display: "flex", gap: 14, alignItems: "center", justifyContent: "flex-end" }}>
           <Stat v={m.created} l="створено" sub={`${m.new}нов · ${m.rep}пост`} />
           <Stat v={m.kpi.dispatch.fact ?? 0} l="авто ₴" sub={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`} />
+          {/* 📞 РОЗМОВИ Й СПРОБИ — ДВІ ЦИФРИ, складати заборонено (рішення власника
+              04.08.2026): «розмова» відповідає на питання «чи був контакт», «спроба» —
+              «чи людина працює». Одна сума відповіла б на жодне з них. */}
+          <Stat v={m.talks} l="розмов" sub={m.attempts ? `${m.attempts} спроб` : "без недодзвонів"} />
           <Stat v={chekFact ?? 0} l="ср. чек" money />
           {/* 🔴 ПЕРЕЙМЕНОВАНО (рішення власника 06.08.2026). «Отримано» на цій плитці
               означало ① «успішно реалізовано» — тобто НЕ те, що це слово означає на

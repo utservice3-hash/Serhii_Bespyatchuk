@@ -26,6 +26,8 @@ export const MANIFEST_FILES: string[] = [
   "versionStale.test.js",
   "core/companyCode.test.js",
   "core/moneyBuckets.test.js",
+  "core/weekPlan.test.js",
+  "core/sumInvariants.test.js",
   "core/periodNesting.test.js",
   "routes/managersExpected.test.js",
   "core/reactivation.test.js",
@@ -320,4 +322,14 @@ export const MANIFEST_TESTS: string[] = [
   "#46b факт місяця == успішно + оплачено (розклад ②)",
   // routes/managersExpected.test.ts — колонка «Очікування» не зникає тихо
   "#47 /dashboard/managers віддає expected у КОЖНОМУ рядку",
+  // core/weekPlan.test.ts — динамічний план тижня на базисі РОБОЧИХ ДНІВ
+  "#48 план тижня рахується від РОБОЧИХ ДНІВ (приклад власника, серпень 2026)",
+  "#48b саботаж: базис «тижні, що лишились» ламає обрізаний тиждень",
+  "#48c Σ тижневих планів == план місяця, коли кожен тиждень закрито в план",
+  "#48d перевиконання: план тижня 0 і названий надлишок",
+  "#48e знімок плану тижня не переписується",
+  // core/sumInvariants.test.ts — Σ(менеджери) == команда == компанія
+  "#49 добір: Σ по менеджерах == добір відділу",
+  "#49b саботаж: повторне усереднення розходиться з відділом",
+  "#49c план тижня: Σ по менеджерах == Σ по командах == компанія",
 ];

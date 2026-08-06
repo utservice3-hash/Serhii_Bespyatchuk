@@ -533,6 +533,9 @@ export interface KvpDetailCell {
   // Розбивка відправлених авто за джерелом (постійний / лідоген / реклама / невизн). Σ = dispatched.
   dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number;
   received: { deals: number; revenue: number }; expected: { deals: number; sum: number };
+  // Розклад ② по дню + активність дзвінків + виставлені рахунки ТОГО дня.
+  success: { deals: number; revenue: number }; paid: { deals: number; revenue: number };
+  talks: number; attempts: number; invoiced: { deals: number; sum: number };
 }
 export interface KvpDetailWeek { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; total: KvpDetailCell; days: (KvpDetailCell & { day: string })[] }
 export interface KvpManagerDetail {
@@ -628,12 +631,28 @@ export interface ReportPlanManager {
   factSuccess: number; factPaid: number; // #1 круг оплати: факт = успішно ⊎ оплачено
   // К-сть угод у кожній половині факту — банер має називати ЧИСЛО, а не лише суму.
   factSuccessDeals: number; factPaidDeals: number;
+  // 📞 Розмова (billsec>0) і недодзвін — ДВІ цифри; складати заборонено.
+  talks: number; attempts: number;
+  // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому й окремо.
+  expectNoDate: number; expectNoDateDeals: number;
+  // 🧱 Скільки з очікувань стоїть на «Виставленні рахунку» (затор).
+  jam: number; jamDeals: number;
+  // 📈 «За темпом» — ЕКСТРАПОЛЯЦІЯ (факт ÷ минулі роб. дні × усі), не прогноз.
+  // `byPaceEarly` = перевищує 150% плану → на екрані «⚠ рано».
+  byPace: number; byPaceEarly: boolean;
   expectThisMonth: number; expectNextMonth: number; // #2 за плановою датою оплати
   // 🟡 Добір нового бізнесу. У `projected` з 06.08.2026 НЕ входить (рішення власника),
   // але лишається видимим числом — щоб зміна формули читалась, а не зникла тихо.
   dobir: number;
   // #P1 динамічна тижнева ціль (Variant A: manual ?? dynamic — одна цифра з Задачником).
-  week: { target: number; dynamic: number; manual: number | null; isManual: boolean; fact: number; dayTarget: number; weeksLeft: number; presentDaysLeftWeek: number };
+  week: { target: number; dynamic: number; manual: number | null; isManual: boolean; fact: number; dayTarget: number; weeksLeft: number; presentDaysLeftWeek: number;
+    /** Перевиконання місячного плану на початок тижня (план тижня 0, надлишок названий). */
+    overPlan: number;
+    /** Ціль зафіксована знімком у понеділок — усередині тижня не рухається. */
+    frozen: boolean;
+    /** Знімок ВІДНОВЛЕНО ретроспективно, а не збережено в момент. Межа видима в ⓘ. */
+    reconstructed: boolean;
+    weekFrom: string | null; workingDaysWeek: number };
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   status: "g" | "a" | "r"; needPerDay: number; remainingWorkdays: number;
@@ -641,10 +660,14 @@ export interface ReportPlanManager {
   kpi: { ads: ReportPlanKpi; leadgen: ReportPlanKpi; dispatch: ReportPlanKpi; avgCheck: ReportPlanKpi; conversion: ReportPlanKpi };
 }
 export interface ReportPlan {
-  scope: { from: string; to: string; isCurrent: boolean };
+  scope: { from: string; to: string; isCurrent: boolean; workingDaysTotal: number; workingDaysElapsed: number };
   role: string; viewerManagerId: number | null; elapsed: number; remainingWorkdays: number;
   glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number;
-    dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null; statusCounts: { g: number; a: number; r: number } };
+    dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
+    expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
+    /** 🔴 П'ятий стан — «гроші є · не закрито». Раніше ці люди читались як «зрив». */
+    collectedNotClosed: number;
+    statusCounts: { g: number; a: number; r: number } };
   managers: ReportPlanManager[];
 }
 export async function fetchReportPlan(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<ReportPlan> {

@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { workingDaysBetween, monthEndOf, fixedWeekBlocks } from "./dates.js";
+import { weekPlansForMonth } from "./weekPlan.js";
 import { receivedByMgr } from "./money.js";
 
 /**
@@ -269,6 +270,14 @@ export interface DynTargetRow {
 export interface EffWeekTarget {
   managerId: number; target: number; dynamic: number; manual: number | null; isManual: boolean;
   fact: number; dayTarget: number; weeksLeft: number; presentDaysLeftWeek: number;
+  /** Перевиконання місячного плану на початок тижня: план тижня 0, а надлишок НАЗВАНИЙ. */
+  overPlan: number;
+  /** Ціль зафіксовано знімком (тиждень уже почався) — всередині тижня вона не рухається. */
+  frozen: boolean;
+  /** Знімок ВІДНОВЛЕНО ретроспективно, а не збережено в момент. Межа має бути видима. */
+  reconstructed: boolean;
+  weekFrom: string | null;
+  workingDaysWeek: number;
 }
 /**
  * ЄДИНИЙ ВИРАЗ «тижневої цілі» для ВСІХ трьох екранів (Variant A — одна цифра скрізь):
@@ -280,6 +289,27 @@ export interface EffWeekTarget {
  */
 export async function effectiveWeekTargets(scope: DynScope, kyivToday: string): Promise<Map<number, EffWeekTarget>> {
   const dyn = await dynamicTarget(scope, "week");
+  /**
+   * 🗓 БАЗИС ТИЖНЕВОЇ ЦІЛІ — РОБОЧІ ДНІ + ЗАМОРОЖЕННЯ (рішення власника 06.08.2026).
+   *
+   * `dynamicTarget(...,"week")` ділив залишок місяця на «тижні, що лишились» і
+   * рахувався НАЖИВО. Обидві властивості — поломки, і обидві виправлені тут:
+   *  · базис: останній «тиждень» серпня — один день (31.08), і поділ на тижні дав
+   *    би йому ПОВНУ тижневу норму, тобто ціль, яку фізично не виконати;
+   *  · заморожування: ціль, що повзе всередині тижня, наздогнати неможливо в
+   *    принципі — відстав у вівторок, у середу план виріс.
+   *
+   * 🔴 ПІДМІНА СТОЇТЬ САМЕ ТУТ, А НЕ В ТРЬОХ РОУТАХ. `effectiveWeekTargets` — це
+   * ЄДИНИЙ вираз тижневої цілі для `/report-plan`, `/kvp-report` і
+   * `/manager-report`; правити кожен окремо означало б завести три цілі, які
+   * розійдуться мовчки. Решта полів (`dayTarget`, `presentDaysLeftWeek`,
+   * `weeksLeft`) лишаються від `dynamicTarget` без змін — вони про ІНШЕ.
+   */
+  const monthStart = (scope.month ?? kyivToday).slice(0, 7) + "-01";
+  const planByMgr = new Map(dyn.map((d) => [d.managerId, d.monthPlan]));
+  const wpRows = await weekPlansForMonth({ managerId: scope.managerId, teamId: scope.teamId }, monthStart, planByMgr);
+  const curWeekStart = fixedWeekBlocks(monthStart).find((w) => kyivToday >= w.from && kyivToday <= w.to)?.from ?? null;
+  const wpByMgr = new Map(wpRows.filter((r) => r.weekStart === curWeekStart).map((r) => [r.managerId, r]));
   const mw = await pool.query<{ assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
     `SELECT assignee_id, metrics_json FROM tasks
       WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
@@ -289,7 +319,14 @@ export async function effectiveWeekTargets(scope: DynScope, kyivToday: string): 
   const out = new Map<number, EffWeekTarget>();
   for (const d of dyn) {
     const man = manual.get(d.managerId) ?? null;
-    out.set(d.managerId, { managerId: d.managerId, target: man != null ? man : d.weekTarget, dynamic: d.weekTarget, manual: man, isManual: man != null, fact: d.factWeek, dayTarget: d.dayTarget, weeksLeft: d.weeksLeft, presentDaysLeftWeek: d.presentDaysLeftWeek });
+    const wp = wpByMgr.get(d.managerId);
+    const dynamic = wp ? wp.plan : d.weekTarget;      // фолбек — лише якщо тижня немає в місяці
+    out.set(d.managerId, {
+      managerId: d.managerId, target: man != null ? man : dynamic, dynamic, manual: man, isManual: man != null,
+      fact: d.factWeek, dayTarget: d.dayTarget, weeksLeft: d.weeksLeft, presentDaysLeftWeek: d.presentDaysLeftWeek,
+      overPlan: wp?.overPlan ?? 0, frozen: wp?.source != null, reconstructed: wp?.reconstructed ?? false,
+      weekFrom: wp?.weekStart ?? null, workingDaysWeek: wp?.wdWeek ?? 0,
+    });
   }
   return out;
 }

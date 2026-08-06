@@ -38,6 +38,7 @@ import * as metrics from "../core/metrics.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
+import * as reportCuts from "../core/reportCuts.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 
@@ -6042,17 +6043,26 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   const mRow = (await pool.query<{ name: string; team_id: number | null }>(`SELECT name, team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
   const isRnk = mRow?.team_id != null && RNK_MGR_TEAMS.has(mRow.team_id);
 
-  const [createdRows, splitRows, leadsRows, dispRows, recvRows, expRows] = await Promise.all([
+  // 📊 Розгортка по днях за макетом 06.08.2026 читається ТИМИ САМИМИ смугами, що
+  // рядок менеджера, тож день мусить нести той самий набір: активність (створено /
+  // авто / ДЗВІНКИ) · ①/⑨/② · ВИСТАВЛЕНО РАХУНКІВ того дня · сер. чек ② того дня.
+  // ① і ⑨ окремо — бо «сума двох станів» без розкладу і є та сама поломка, з якої
+  // почалась історія Антипенка.
+  const [createdRows, splitRows, leadsRows, dispRows, recvRows, expRows, sucRows, paidRows, callDayRows, invDayRows] = await Promise.all([
     metrics.createdByBucket(scope, "day"),
     metrics.createdSplitByBucket(scope, "day"),
     metrics.leadsTakenByBucket(scope, "day", true),
     metrics.dispatchedByLoadBucket(scope, "day"),
     money.receivedByManagerBucket({ managerId, from, to }, "day"),
     metrics.expectedByManagerDay({ managerId }),
+    money.successByManagerBucket({ managerId, from, to }, "day"),
+    money.paidOnlyByManagerBucket({ managerId, from, to }, "day"),
+    reportCuts.callsByManagerDay(from, to, { managerId }),
+    reportCuts.invoicedByManagerDay(from, to, { managerId }),
   ]);
 
-  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number; received: { deals: number; revenue: number }; expected: { deals: number; sum: number } };
-  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispUndef: 0, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 } });
+  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
+  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispUndef: 0, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
   const dayMap = new Map<string, Cell>();
   const dget = (d: string) => { let e = dayMap.get(d); if (!e) { e = zero(); dayMap.set(d, e); } return e; };
   for (const r of createdRows) dget(r.bucket).created += r.deals;
@@ -6061,8 +6071,12 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   for (const r of dispRows) { const e = dget(r.ym); e.dispatched += r.deals; e.dispRepeat += r.repeat; e.dispLeadgen += r.leadgen; e.dispAd += r.ad; e.dispUndef += r.undef; }
   for (const r of recvRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.received.deals += r.deals; e.received.revenue += r.revenue; }
   for (const r of expRows) if (r.day >= from && r.day <= to) { const e = dget(r.day); e.expected.deals += r.deals; e.expected.sum += r.sum; }
+  for (const r of sucRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.success.deals += r.deals; e.success.revenue += r.revenue; }
+  for (const r of paidRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.paid.deals += r.deals; e.paid.revenue += r.revenue; }
+  for (const r of callDayRows) { const e = dget(r.day); e.talks += r.talks; e.attempts += r.attempts; }
+  for (const r of invDayRows) { const e = dget(r.day); e.invoiced.deals += r.deals; e.invoiced.sum += r.sum; }
 
-  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum } });
+  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const weeks = fixedWeekBlocks(monthStart).map((w) => {
     const days = [...dayMap.entries()].filter(([d]) => d >= w.from && d <= w.to).sort((a, b) => a[0].localeCompare(b[0])).map(([day, c]) => ({ day, ...c }));
@@ -6136,6 +6150,17 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     // per manager у поточний/наступний КАЛЕНДАРНИЙ місяць (forward-looking, БЕЗ періоду звіту).
     metrics.expectedByManagerDay({ managerId, teamId }),
   ]);
+  // 📊 Розрізи макета 06.08.2026: дзвінки (розмови/спроби), затор на «Виставленні
+  // рахунку», очікування БЕЗ планової дати. Усі — лічильні або знімок однієї стадії;
+  // грошей періоду тут не рахує ніхто, це й далі робота `core/money.ts`.
+  const [callsRows, jamRows, noDateRows] = await Promise.all([
+    reportCuts.callsByManager(from, to, { managerId, teamId }),
+    reportCuts.invoicingJamByManager({ managerId, teamId }),
+    reportCuts.expectedNoDateByManager(metrics.EXPECT_ZONE, { managerId, teamId }),
+  ]);
+  const callsM = new Map(callsRows.map((r) => [r.managerId, r]));
+  const jamM = new Map(jamRows.map((r) => [r.managerId, r]));
+  const noDateM = new Map(noDateRows.map((r) => [r.managerId, r]));
   const splitM = new Map(split.map((s) => [s.managerId, s]));
   // #1 круг оплати: факт(received) = успішно(142) ⊎ оплачено(етап 9). Per manager → Σ==факт.
   const succM = new Map(succ.map((x) => [x.managerId, x])), paidM = new Map(paid.map((x) => [x.managerId, x]));
@@ -6274,7 +6299,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // предикат, що expectedPaymentsByPlanned.total). Добір — батчева двійня newBusinessDobir.
   const isFullMonth = from === from.slice(0, 7) + "-01" && to === monthEndOf(from) && from.slice(0, 7) === to.slice(0, 7);
   const monthInProgress = isFullMonth && wdElapsed < wdTotal;
-  const dobirByMgr = monthInProgress ? await money.newBusinessDobirByManager({ teamId }) : new Map<number, number>();
+  // 🔴 ДОБІР — ЧАСТКА, А НЕ ПОВТОРНЕ УСЕРЕДНЕННЯ (рішення власника 06.08.2026).
+  // `newBusinessDobirByManager` рахував КОЖНОМУ власне середнє (raw_m ÷ місяців_m), і
+  // такі середні НЕ АДИТИВНІ: Σ по менеджерах давала **1 599 273 ₴** проти справжніх
+  // **1 511 318 ₴** по відділу — завищення на 87 955 ₴ (105.8%), заміряно на проді.
+  // `dobirByManager` розкладає добір ВІДДІЛУ за історичною часткою (raw_m ÷ raw_відділу),
+  // тож Σ менеджерів == команда == компанія точно (Δ=0, заміряно). Тримає гейт #49.
+  const dobirRows = monthInProgress ? await money.dobirByManager({ teamId }) : [];
+  const dobirByMgr = new Map(dobirRows.map((r) => [r.managerId, r.dobir]));
 
   // #P1 ДИНАМІЧНА ТИЖНЕВА ЦІЛЬ (Variant A: manualWeekTarget ?? dynamicTarget.week — одна
   // цифра скрізь). dynamicTarget рахує по місяцю `to` (ISO Пн–Нд тижні, present-days з
@@ -6327,12 +6359,29 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // більше не входить. Тихо викинути величину в 1.6 млн по компанії означало б
       // зробити зміну формули непомітною — а вона має читатись і перевірятись.
       dobir: Math.round(monthInProgress ? (dobirByMgr.get(m.id) ?? 0) : 0),
+      // 📞 Розмови й спроби — ДВІ цифри, складати заборонено (рішення власника 04.08).
+      talks: callsM.get(m.id)?.talks ?? 0, attempts: callsM.get(m.id)?.attempts ?? 0,
+      // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.
+      expectNoDate: Math.round(noDateM.get(m.id)?.sum ?? 0), expectNoDateDeals: noDateM.get(m.id)?.deals ?? 0,
+      // 🧱 Затор на «Виставленні рахунку»: скільки з очікувань стоїть саме тут.
+      jam: Math.round(jamM.get(m.id)?.sum ?? 0), jamDeals: jamM.get(m.id)?.deals ?? 0,
+      // 📈 «За темпом» = факт ÷ робочі дні, що минули × усі робочі дні. Це ЕКСТРАПОЛЯЦІЯ,
+      // а не прогноз, і на 4-й день місяця вона нестабільна — тому поруч їде `byPaceEarly`,
+      // за яким UI малює «⚠ рано». Три числа «скільки вийде» мусять зватись по-різному:
+      // «з рахунками» (документи) · «за темпом» (екстраполяція) · «зазвичай добирає» (середнє).
+      byPace: wdElapsed > 0 ? Math.round((fact / wdElapsed) * wdTotal) : 0,
+      byPaceEarly: wdElapsed > 0 && plan > 0 ? (fact / wdElapsed) * wdTotal > plan * 1.5 : false,
       monthInProgress,
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
       // #P1 динамічна тижнева ціль (ЄДИНИЙ вираз effectiveWeekTargets — байт-в-байт з KVP/manager-report).
       week: { target: ew?.target ?? 0, dynamic: ew?.dynamic ?? 0, manual: ew?.manual ?? null, isManual: ew?.isManual ?? false,
-        fact: ew?.fact ?? 0, dayTarget: ew?.dayTarget ?? 0, weeksLeft: ew?.weeksLeft ?? 0, presentDaysLeftWeek: ew?.presentDaysLeftWeek ?? 0 },
+        fact: ew?.fact ?? 0, dayTarget: ew?.dayTarget ?? 0, weeksLeft: ew?.weeksLeft ?? 0, presentDaysLeftWeek: ew?.presentDaysLeftWeek ?? 0,
+        // 🧊 Заморожений динамічний план: `frozen` — ціль зафіксовано в понеділок і
+        // всередині тижня вона не рухається; `reconstructed` — знімок ВІДНОВЛЕНО
+        // ретроспективно (чесна межа, яку UI зобовʼязаний показати, а не згладити).
+        overPlan: ew?.overPlan ?? 0, frozen: ew?.frozen ?? false, reconstructed: ew?.reconstructed ?? false,
+        weekFrom: ew?.weekFrom ?? null, workingDaysWeek: ew?.workingDaysWeek ?? 0 },
       spark: last5Weeks.map((w) => Math.round(sparkByMgr.get(m.id)?.get(w) ?? 0)),
       kpi: {
         ads: { fact: adsM.get(m.id) ?? 0, target: Math.round(pl.ads_count ?? 0) },
@@ -6363,11 +6412,25 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     dispatchedRevenue: managers.reduce((s, m) => s + m.kpi.dispatch.revenue, 0),
     created: managers.reduce((s, m) => s + m.created, 0),
     avgCheck: acDeals > 0 ? Math.round(acRev / acDeals) : null,
+    expectNoDate: managers.reduce((s2, m) => s2 + m.expectNoDate, 0),
+    jam: managers.reduce((s2, m) => s2 + m.jam, 0),
+    jamDeals: managers.reduce((s2, m) => s2 + m.jamDeals, 0),
+    dobir: managers.reduce((s2, m) => s2 + m.dobir, 0),
+    byPace: managers.reduce((s2, m) => s2 + m.byPace, 0),
+    talks: managers.reduce((s2, m) => s2 + m.talks, 0),
+    attempts: managers.reduce((s2, m) => s2 + m.attempts, 0),
+    // 🔴 П'ЯТИЙ СТАН — «гроші є · не закрито» (рішення власника 06.08.2026). Раніше
+    // ці 12 людей читались як «зрив»: ① = 0. Стан лічиться ОКРЕМО і не входить у
+    // r/a/g — інакше «зрив» і далі означав би дві різні речі.
+    collectedNotClosed: managers.filter((m) => m.factSuccess === 0 && m.factPaid > 0).length,
     statusCounts: { g: managers.filter((m) => m.status === "g").length, a: managers.filter((m) => m.status === "a").length, r: managers.filter((m) => m.status === "r").length },
   };
 
   res.json({
-    scope: { from, to, isCurrent: from <= kyivToday && kyivToday <= to },
+    scope: { from, to, isCurrent: from <= kyivToday && kyivToday <= to,
+      // Робочі дні періоду — ЧИСЛАМИ, а не лише часткою `elapsed`. Фронт мусить
+      // писати «минуло 4 з 21 (19%)»: сама частка не дає сказати, ЧОГО 19%.
+      workingDaysTotal: wdTotal, workingDaysElapsed: wdElapsed },
     role: auth.role, viewerManagerId, elapsed, remainingWorkdays: remWd, glance, managers,
   });
 });
