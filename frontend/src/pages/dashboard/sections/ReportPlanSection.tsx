@@ -614,9 +614,6 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
    * разом із причиною.
    */
   const past = days.filter((x) => x.day <= today);
-  const futureDays = days.filter((x) => x.day > today);
-  const futureFrom = futureDays[0]?.day ?? null;
-  const futureTo = futureDays[futureDays.length - 1]?.day ?? period.to;
   // Робочі дні, що лишились — рахуємо від календаря, а не від наявних рядків:
   // саме тому, що рядків на порожні дні немає (див. вище).
   const wdLeft = (() => {
@@ -699,7 +696,14 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
             })}
             {wdLeft > 0 && (
               <tr style={{ background: "var(--rpt-card)", color: MUTED, fontStyle: "italic" }}>
-                <td style={{ textAlign: "left" }}>{futureFrom ? `${ddmm(futureFrom)} — ${ddmm(futureTo)}` : `${ddmm(addDays(today, 1))} — ${ddmm(period.to)}`}</td>
+                {/* 🔴 ДІАПАЗОН — КАЛЕНДАРНИЙ, А НЕ «ДО ОСТАННЬОГО ДНЯ З ДАНИМИ».
+                    Спершу тут стояло `futureFrom — futureTo`, тобто межі рядків, які
+                    ПРИЙШЛИ з даних, — і виходило «07.08 — 12.08 · 17 робочих днів»:
+                    підпис і лічильник розповідали про різні відрізки. Причина та сама,
+                    що зі зниклою суботою: майбутній день існує лише там, де є планова
+                    дата оплати. Робочі дні й екстраполяція рахуються по КАЛЕНДАРЮ до
+                    кінця періоду — отже й підпис має називати саме його. */}
+                <td style={{ textAlign: "left" }}>{ddmm(addDays(today, 1))} — {ddmm(period.to)}</td>
                 <td colSpan={9} style={{ textAlign: "right" }}>
                   ще попереду · {wdLeft} робочих {wdLeft === 1 ? "день" : wdLeft < 5 ? "дні" : "днів"}
                   {d.monthTotals.received.deals > 0 && paceRest != null
