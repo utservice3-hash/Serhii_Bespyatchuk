@@ -25,6 +25,9 @@ export const MANIFEST_FILES: string[] = [
   "core/clientCard.test.js",
   "versionStale.test.js",
   "core/companyCode.test.js",
+  "core/moneyBuckets.test.js",
+  "core/periodNesting.test.js",
+  "routes/managersExpected.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -306,4 +309,15 @@ export const MANIFEST_TESTS: string[] = [
   "#31 ТІМЛІД ЗЛИВАЄ ЛИШЕ СВОЇХ: обидва боки його команди",
   "#31b ДЗЕРКАЛО: право merge_clients і далі зливає МІЖ командами",
   "#31c ВІДМОВА НАЗИВАЄ, ЩО САМЕ ПОЗА МЕЖЕЮ",
+  // core/moneyBuckets.test.ts — жоден статус із грішми не лишається без корзини
+  "#45 кожен статус FC-воронок належить якійсь корзині",
+  "#45b жоден статус не належить двом корзинам одночасно",
+  "#45s саботаж: без 69716460 у «гроші прийшли» стадія лишається без корзини",
+  "#45c реєстр корзин збігається з константами ядра",
+  "#45d кожна корзина непорожня і тримає очікуване",
+  // core/periodNesting.test.ts — вкладений період не може перевищувати той, що його містить
+  "#46 факт тижня ≤ факт місяця на картці менеджера",
+  "#46b факт місяця == успішно + оплачено (розклад ②)",
+  // routes/managersExpected.test.ts — колонка «Очікування» не зникає тихо
+  "#47 /dashboard/managers віддає expected у КОЖНОМУ рядку",
 ];
