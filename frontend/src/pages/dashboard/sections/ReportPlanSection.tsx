@@ -411,7 +411,13 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
               і назва мала б збігтись сама — але «отримано ₴» лишає невидимим головне:
               це СУМА ДВОХ РІЗНИХ СТАНІВ. «Гроші місяця» + підпис розкладу каже і
               скільки, і чим саме воно зібране. */}
-          <Stat v={m.fact} l="гроші місяця" money sub={`закрито ${k(m.factSuccess)} · оплачено ${k(m.factPaid)}`} />
+          {/* 🔴 Менеджер БЕЗ плану: його гроші йдуть у чисельник команди, не піднявши
+              знаменник (план команди = Σ планів менеджерів). Підпис стоїть ЛИШЕ там,
+              де плану справді немає — інакше він був би в кожному рядку й перестав
+              би читатись. */}
+          <Stat v={m.fact} l="гроші місяця" money
+            sub={`закрито ${k(m.factSuccess)} · оплачено ${k(m.factPaid)}`}
+            note={m.plan <= 0 ? "без плану — гроші піднімають % команди" : undefined} />
           <div title="отримано по тижнях (5)" style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 34 }}>
             {m.spark.map((v, ix) => (
               <div key={ix} style={{ width: 6, borderRadius: 2, background: ix === m.spark.length - 1 ? ACC : LINE, height: Math.max(3, (v / smax) * 34) }} />
@@ -503,12 +509,14 @@ function Kpi({ lbl, fact, target, money, pctUnit, extra, altMark, altTitle, hint
     </span>
   );
 }
-function Stat({ v, l, sub, money }: { v: number; l: string; sub?: string; money?: boolean }) {
+function Stat({ v, l, sub, money, note }: { v: number; l: string; sub?: string; money?: boolean; note?: string }) {
   return (
     <div style={{ textAlign: "center", minWidth: 62 }}>
       <div style={{ fontWeight: 800, fontSize: 17, lineHeight: 1.1, letterSpacing: "-.3px", color: v ? INK : MUTED }}>{money ? (v ? fmt(v) : "0") : v}</div>
       <div style={{ fontSize: 10, color: MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 4, whiteSpace: "nowrap" }}>{l}</div>
       {sub && <div style={{ fontSize: 10.5, color: MUTED, marginTop: 2 }}>{sub}</div>}
+      {note && <div style={{ fontSize: 10, color: AMBER, marginTop: 2, maxWidth: 150 }}
+        title="План команди = Σ планів її менеджерів. Гроші людини без плану піднімають відсоток команди, не піднявши знаменник.">{note}</div>}
     </div>
   );
 }

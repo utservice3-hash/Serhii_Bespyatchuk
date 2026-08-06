@@ -21,6 +21,8 @@ export interface TeamAgg {
   dismissed: ReportPlanDismissed[];
   plan: number; fact: number; factSuccess: number; factPaid: number;
   expectThisMonth: number; dobir: number; byPace: number;
+  /** Скільки з `fact` прийшло від менеджерів без плану (+ звільнених). Може бути 0. */
+  factNoPlan: number;
   collectedNotClosed: number; r: number; a: number; g: number;
 }
 
@@ -31,10 +33,12 @@ export function aggregateTeams(managers: ReportPlanManager[], dismissed: ReportP
     let e = map.get(key);
     if (!e) {
       e = { key, name: key, managers: [], dismissed: [], plan: 0, fact: 0, factSuccess: 0, factPaid: 0,
-        expectThisMonth: 0, dobir: 0, byPace: 0, collectedNotClosed: 0, r: 0, a: 0, g: 0 };
+        expectThisMonth: 0, dobir: 0, byPace: 0, factNoPlan: 0, collectedNotClosed: 0, r: 0, a: 0, g: 0 };
       map.set(key, e);
     }
     e.managers.push(m);
+    // Менеджер без плану: його гроші в чисельнику, знаменника він не додав.
+    if (m.plan <= 0) e.factNoPlan += m.fact;
     e.plan += m.plan; e.fact += m.fact; e.factSuccess += m.factSuccess; e.factPaid += m.factPaid;
     e.expectThisMonth += m.expectThisMonth; e.dobir += m.dobir; e.byPace += m.byPace;
     // 🔴 «Гроші є · не закрито» лічиться ОКРЕМО і НЕ входить у r/a/g — інакше
@@ -51,11 +55,13 @@ export function aggregateTeams(managers: ReportPlanManager[], dismissed: ReportP
     let e = map.get(key);
     if (!e) {
       e = { key, name: key, managers: [], dismissed: [], plan: 0, fact: 0, factSuccess: 0, factPaid: 0,
-        expectThisMonth: 0, dobir: 0, byPace: 0, collectedNotClosed: 0, r: 0, a: 0, g: 0 };
+        expectThisMonth: 0, dobir: 0, byPace: 0, factNoPlan: 0, collectedNotClosed: 0, r: 0, a: 0, g: 0 };
       map.set(key, e);
     }
     e.dismissed.push(d);
     e.fact += d.fact; e.factSuccess += d.factSuccess; e.factPaid += d.factPaid;
+    // Звільнені теж без плану за побудовою — спотворюють відсоток так само.
+    e.factNoPlan += d.fact;
   }
   return [...map.values()];
 }
@@ -219,7 +225,7 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
                 <th style={{ textAlign: "left" }}>Команда</th>
                 <th style={{ textAlign: "right" }}>План місяця</th>
                 <th style={{ textAlign: "right" }}>Факт ②</th>
-                <th style={{ textAlign: "right" }}>Виконано · темп</th>
+                <th style={{ textAlign: "right" }}>Виконано · темп <InfoHint text={HINTS.teamPct} /></th>
                 <th style={{ textAlign: "right" }}>З рахунками</th>
                 <th style={{ textAlign: "right" }}>За темпом</th>
                 <th style={{ textAlign: "right" }}>Зазвичай добирає</th>
@@ -258,6 +264,15 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
                     <td style={{ textAlign: "right" }}>
                       <div style={{ fontWeight: 700 }}>{fmt(t.fact)}</div>
                       <div style={{ fontSize: 10.5, color: MUTED }}>{fmt(t.factSuccess)} + {fmt(t.factPaid)}</div>
+                      {/* 🔴 ПОКАЗУЄМО ЛИШЕ КОЛИ ≠ 0 (рішення власника): у чотирьох із
+                          пʼяти команд тут нуль, і підпис у кожному рядку перетворив би
+                          сигнал на шум. */}
+                      {t.factNoPlan !== 0 && (
+                        <div style={{ fontSize: 10.5, color: AMBER }}
+                          title="Гроші менеджерів, яким не виставлено місячного плану (і звільнених — у них плану немає за побудовою). План команди = Σ планів її менеджерів, тож ця сума піднімає відсоток, не піднявши знаменник.">
+                          у т.ч. {fmt(t.factNoPlan)} ₴ від менеджерів без плану
+                        </div>
+                      )}
                     </td>
                     <td style={{ textAlign: "right", minWidth: 150 }}>
                       <div style={{ fontWeight: 700, color }}>{t.plan > 0 ? `${pct.toFixed(1)}%` : "—"}</div>

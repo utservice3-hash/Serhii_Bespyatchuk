@@ -33,6 +33,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/managersExpected.test.js",
   "routes/dismissedMoney.test.js",
   "routes/reactivateCycle.test.js",
+  "routes/noPlanShare.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -346,4 +347,7 @@ export const MANIFEST_TESTS: string[] = [
   // routes/reactivateCycle.test.ts — дія в UI мусить бути скасовною тим самим UI
   "#52 цикл деактивація → реактивація повертає CRM-менеджера у вихідний стан",
   "#52b саботаж: у роуті реактивації немає відмови CRM-менеджерам",
+  // routes/noPlanShare.test.ts — внесок менеджерів без плану названий числом
+  "#53 factNoPlan == Σ факту менеджерів без плану + звільнених",
+  "#53b саботаж: нуль при живому безплановому — це поломка",
 ];

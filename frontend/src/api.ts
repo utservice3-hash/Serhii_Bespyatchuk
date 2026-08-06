@@ -665,6 +665,12 @@ export interface ReportPlan {
   glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number;
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
+    /**
+     * 🔴 Скільки з факту прийшло від менеджерів БЕЗ плану (і від звільнених — у них
+     * плану немає за побудовою). План команди = Σ планів її менеджерів, тож ці гроші
+     * піднімають відсоток, не піднявши знаменник. Заміряно: у Яцика +8.3 п.п.
+     */
+    factNoPlan: number;
     /** 🔴 П'ятий стан — «гроші є · не закрито». Раніше ці люди читались як «зрив». */
     collectedNotClosed: number;
     statusCounts: { g: number; a: number; r: number } };
