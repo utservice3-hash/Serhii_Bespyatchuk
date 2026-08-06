@@ -2143,8 +2143,29 @@ dashboardRouter.get("/teams", async (req, res) => {
     if (name) e.teamName = name;
     return e;
   };
-  for (const r of recvTeamAgg) { const e = get(r.teamId, r.teamName); e.revenue += r.revenue; e.deals += r.deals; }
-  for (const r of sucTeamAgg) { const e = get(r.teamId, r.teamName); e.dispatched += r.deals; e.successRev += r.revenue; }
+  /**
+   * 🔴 «ПОЗА КОМАНДАМИ» — ІМЕНОВАНИЙ РЯДОК, А НЕ ПОРОЖНІЙ (рішення власника 05.08.2026).
+   *
+   * Ядро гроші НЕ губить: `successByTeam` віддає рядок із `teamId = null`
+   * (LEFT JOIN teams), і Σ команд == Σ відділу точно, Δ = 0 — заміряно.
+   * Але рядок приходив БЕЗ імені (`teamName: ""`), тож на екрані читався як
+   * порожній, і 618 648 ₴ за 12 міс виглядали як зниклі.
+   *
+   * `teamId: 0` — не вигадка: менеджери без команди вже зводяться сюди рядком
+   * `teamId: tid ?? 0` нижче, тож нуль уже є домовленістю «немає команди» в
+   * цьому роуті. Лишалось дати йому ІМʼЯ.
+   *
+   * ⚠️ Рядок тимчасовий за задумом: клієнти службового акаунта йдуть у пул
+   * «Нічийні», тімліди їх розбирають — і рядок худне сам. Прибирати його
+   * руками не треба; коли він стане нулем, фільтр «без активності» прибере
+   * його автоматично.
+   */
+  const NO_TEAM_ID = 0;
+  const NO_TEAM_NAME = "Поза командами";
+  const teamKey = (id: number | null) => id ?? NO_TEAM_ID;
+  const teamLabel = (id: number | null, name: string | null) => (id == null ? NO_TEAM_NAME : name ?? "");
+  for (const r of recvTeamAgg) { const e = get(teamKey(r.teamId), teamLabel(r.teamId, r.teamName)); e.revenue += r.revenue; e.deals += r.deals; }
+  for (const r of sucTeamAgg) { const e = get(teamKey(r.teamId), teamLabel(r.teamId, r.teamName)); e.dispatched += r.deals; e.successRev += r.revenue; }
   for (const r of conv.rows) { const e = get(r.tid); e.leads += Number(r.leads); e.paid += Number(r.paid); }
   for (const [tid, debt] of teamDebt) { get(tid).receivables += debt; }
 

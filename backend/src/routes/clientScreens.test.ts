@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsApi, API_BASE } from "../testMode.js";
+import { needsApi, needsDb, API_BASE } from "../testMode.js";
 
 /**
  * ГЕЙТИ ЕКРАНІВ КЛІЄНТІВ — те, що не видно з ядра, бо живе в роуті:
@@ -451,6 +451,49 @@ test("#30o ДЖЕНЕРИКИ-ТЕЛЕФОНИ: без безналу — гет
   assert.ok(inDb > phoneKeys.length,
     `🔴 у видачі ${phoneKeys.length} ключів-телефонів із ${inDb} у базі — фільтр не прибрав нікого`);
   console.log(`   ℹ ключів-телефонів: у базі ${inDb}, у видачі ${phoneKeys.length} (решта — без безналу)`);
+});
+
+test("#43 ГРОШІ ПОЗА КОМАНДАМИ: ядро їх НЕ втрачає (Σ команд == Σ відділу)", needsDb(), async () => {
+  // 🔴 ПРИВІД. За службовим акаунтом «Операційний директор» історично висять
+  // клієнти: 618 648 ₴ / 295 угод за 12 міс. Питання було, чи не зникають вони
+  // з розрізу. Замір показав: ядро їх НЕ втрачає — `successByTeam` віддає рядок
+  // `teamId = null` (LEFT JOIN teams), Δ до відділу = 0. Втрата була ВИЩЕ, у
+  // подачі: рядок приходив без імені й читався як порожній.
+  //
+  // 🪞 ІНВАРІАНТ, А НЕ «є такий рядок». Перевірка на назву зеленіла б і тоді, коли
+  // рядок є, а сума в ньому нульова або подвоєна. Сходиться Σ — значить, ніхто не
+  // випав і ніхто не порахувався двічі.
+  const money = await import("../core/money.js");
+  const to = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
+  const [dept, teams] = await Promise.all([
+    money.successMoney({ from, to }), money.successByTeam({ from, to }),
+  ]);
+  assert.ok(dept.revenue > 0 && teams.length >= 3,
+    `🔴 відділ ${dept.revenue} ₴ / команд ${teams.length} — порожньо, доводити нема на чому`);
+  const sum = teams.reduce((a, t) => a + t.revenue, 0);
+  assert.equal(sum, dept.revenue,
+    `🔴 Σ команд ${sum} ≠ відділ ${dept.revenue}: різниця ${dept.revenue - sum} ₴ зникає мовчки`);
+
+  // Невиродженість: рядок «поза командами» МУСИТЬ існувати, інакше рівність вище
+  // тримається просто тому, що поза командами нікого немає, — і гейт нічого не стереже.
+  const noTeam = teams.find((t) => t.teamId == null);
+  assert.ok(noTeam && noTeam.revenue > 0,
+    "🔴 у ядрі немає рядка «поза командами» — тоді інваріант перевіряє порожнечу; "
+    + "якщо клієнтів службового акаунта РОЗІБРАЛИ, цей гейт треба знімати СВІДОМО");
+});
+
+test("#43b РОЗРІЗ НЕ ПОКАЗУЄ БЕЗІМЕННИХ РЯДКІВ (тиха втрата на екрані)", needsApi(), async () => {
+  // Дзеркало до #43: ядро суму тримає, але користувач бачить ПОДАЧУ. Безіменний
+  // рядок — це і є та «зникла» сума, на яку скаржився власник.
+  const token = await adminToken();
+  const r = await get("/api/dashboard/teams", token);
+  assert.equal(r.status, 200, "🔴 /teams не віддався");
+  const body = await r.json() as { teams: { teamId: number; teamName: string; revenue: number }[] };
+  assert.ok(body.teams.length >= 3, `🔴 команд ${body.teams.length} — замало, щоб щось довести`);
+  const nameless = body.teams.filter((t) => !String(t.teamName ?? "").trim());
+  assert.deepEqual(nameless.map((t) => `${t.teamId}:${t.revenue}`), [],
+    "🔴 у розрізі БЕЗІМЕННИЙ рядок — на екрані він читається як порожній, а його сума як зникла");
 });
 
 test("#30n КАРТКА · «УСПІШНІ УГОДИ»: жодного рядка з нулем і жодного неуспішного", needsApi(), async () => {
