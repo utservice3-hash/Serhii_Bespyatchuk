@@ -2120,11 +2120,18 @@ dashboardRouter.get("/teams", async (req, res) => {
   // 🔴 `isActive` ЇДЕ ПОРУЧ ІЗ ГРІШМИ (рішення власника 05.08.2026): історичні суми
   // рахують і звільнених, але екран мусить це СКАЗАТИ — інакше вчорашня людина
   // виглядає як діючий менеджер, і хтось поставить їй задачу.
-  type MgrRow = { id: number; name: string; teamId: number; isActive: boolean; revenue: number; deals: number; plan: number; receivables: number; expected: number; dispatched: number; successRev: number };
+  // 🗑 `expected` ТУТ БІЛЬШЕ НЕМАЄ — і це прибирання, а не втрата функції. Поле
+  // оголошувалось, ініціалізувалось нулем і НІКОЛИ не заповнювалось та не
+  // серіалізувалось: жодне джерело йому нічого не присвоювало, у `res.json` воно не
+  // потрапляло. Тобто «Очікування» в цьому роуті було не зламане, а неіснуюче —
+  // мертвий нуль, який при читанні коду виглядав як робоча метрика і рано чи пізно
+  // спокусив би когось «полагодити» його підстановкою випадкового джерела.
+  // Живе «Очікування» по менеджеру віддає `/dashboard/managers` (гейт #47).
+  type MgrRow = { id: number; name: string; teamId: number; isActive: boolean; revenue: number; deals: number; plan: number; receivables: number; dispatched: number; successRev: number };
   const mmap = new Map<number, MgrRow>();
   const mget = (id: number, tid: number | null, name: string, isActive?: boolean): MgrRow => {
     let e = mmap.get(id);
-    if (!e) { e = { id, name, teamId: tid ?? 0, isActive: true, revenue: 0, deals: 0, plan: 0, receivables: 0, expected: 0, dispatched: 0, successRev: 0 }; mmap.set(id, e); }
+    if (!e) { e = { id, name, teamId: tid ?? 0, isActive: true, revenue: 0, deals: 0, plan: 0, receivables: 0, dispatched: 0, successRev: 0 }; mmap.set(id, e); }
     if (name) e.name = name;
     if (isActive === false) e.isActive = false;
     if (tid) e.teamId = tid;
@@ -2136,10 +2143,11 @@ dashboardRouter.get("/teams", async (req, res) => {
   for (const r of mPlan.rows) { mget(r.managerId, r.teamId, r.name).plan += r.plan; }
   for (const d of debtByMgr) { if (d.managerId != null) { const e = mmap.get(d.managerId); if (e) e.receivables += d.debt; } }
 
-  const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; expected: number; dispatched: number; successRev: number }>();
+  // `expected` прибрано з тієї ж причини, що й у `MgrRow` вище — мертвий нуль.
+  const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; dispatched: number; successRev: number }>();
   const get = (id: number, name?: string) => {
     let e = map.get(id);
-    if (!e) { e = { teamId: id, teamName: name ?? "", revenue: 0, deals: 0, leads: 0, paid: 0, receivables: 0, expected: 0, dispatched: 0, successRev: 0 }; map.set(id, e); }
+    if (!e) { e = { teamId: id, teamName: name ?? "", revenue: 0, deals: 0, leads: 0, paid: 0, receivables: 0, dispatched: 0, successRev: 0 }; map.set(id, e); }
     if (name) e.teamName = name;
     return e;
   };
@@ -6141,19 +6149,30 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     expPlannedM.set(r.managerId, e);
   }
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
-  // 🔴 ПРАВИЛО ВЛАСНИКА (02.08.2026): факт менеджера = ① «успішно реалізовано» (142).
-  // Було `mapBy(recv)` = ② (9∪10). Причина зміни: частково оплачені угоди автоматично
-  // переносяться в наступний місяць, тож зарахувати їх людині ЗАРАЗ = порахувати
-  // незавершене. На цьому числі стоять %, світлофор, needPerDay і прогноз.
-  const recvM = mapBy(succ), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
+  // 🔴 ПРАВИЛО ВЛАСНИКА (06.08.2026) — ЗМІНА ДО РІШЕННЯ ВІД 02.08: факт менеджера =
+  // ② `receivedMoney` = ① «успішно реалізовано» (142) ⊎ «оплата отримана» (етап 9),
+  // з дедупом. Попередня редакція («лише 142») скасована ВЛАСНИКОМ, а не нами.
+  //
+  // ЧОМУ ЗМІНИЛИ. Картка Антипенка за серпень 2026 показувала факт місяця **0 ₴**,
+  // тимчасом як тижневий блок того ж екрана показував **23 632 ₴**: десять угод
+  // уже оплачені, жодна ще не переведена в 142. Місяць рахував ①, тиждень — ②
+  // (незавершена міграція `989644f`). Тобто людина з десятьма оплатами читалась як
+  // «нуль» — і формально це було правильне ①.
+  //
+  // ⚠️ ЩО ЦЕ ТЯГНЕ ЗА СОБОЮ, НАЗВАНО ВГОЛОС: на цьому числі стоять %, світлофор,
+  // `needPerDay` і прогноз. Усі вони тепер рахуються від ②. Розклад ② на дві
+  // частини лишається видимим (`factSuccess`/`factPaid`) — саме щоб «гроші прийшли,
+  // угода не закрита» читалось як окремий стан, а не розчинялось у сумі.
+  const recvM = mapBy(recv), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
     lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc);
   const expM = new Map(expZone.map((e) => [e.id, e.sum]));
 
   // СПАРКЛАЙН: received по 5 останніх тижнях (Пн–Нд) до `to`, per-manager.
   const sparkFrom = (() => { const d = new Date(to + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 34); return d.toISOString().slice(0, 10); })();
-  // Спарклайн — та сама метрика, що й факт (①), інакше смужка й число під нею
-  // розповідали б різне про одну людину.
-  const sparkRows = await money.successByManagerBucket({ from: sparkFrom, to, managerId, teamId }, "week");
+  // Спарклайн — та сама метрика, що й факт (② з 06.08.2026), інакше смужка й число
+  // під нею розповідали б різне про одну людину. Рухається РАЗОМ із фактом навмисно:
+  // саме розсинхрон місяця й тижня і дав картку «0 ₴ при 23 632 ₴».
+  const sparkRows = await money.receivedByManagerBucket({ from: sparkFrom, to, managerId, teamId }, "week");
   const sparkByMgr = new Map<number, Map<string, number>>();
   for (const r of sparkRows) { const m = sparkByMgr.get(r.managerId) ?? new Map(); m.set(r.bucket, r.revenue); sparkByMgr.set(r.managerId, m); }
   const last5Weeks = (() => {
@@ -6279,12 +6298,35 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       plan, fact, expect: Math.round(expM.get(m.id) ?? 0),
       // #1 круг оплати: розклад факту (received) = успішно(142) + оплачено(етап 9).
       factSuccess: Math.round(succM.get(m.id)?.revenue ?? 0), factPaid: Math.round(paidM.get(m.id)?.revenue ?? 0),
+      // 🔴 К-СТЬ угод на етапі 9 — щоб банер міг сказати «гроші зібрані, але N угод не
+      // закриті», а не малювати «Зрив» людині, яка зібрала гроші. Без ЧИСЛА порада
+      // «дотисни» безадресна: незрозуміло, чи це одна угода, чи десять.
+      factPaidDeals: paidM.get(m.id)?.deals ?? 0,
+      factSuccessDeals: succM.get(m.id)?.deals ?? 0,
       // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
       expectThisMonth: Math.round(expPlannedM.get(m.id)?.thisMonth ?? 0),
       expectNextMonth: Math.round(expPlannedM.get(m.id)?.nextMonth ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
-      // #17 прогноз = факт + зона + добір (лише поточний місяць, що триває), == core.buildProjection
-      projected: Math.round(fact + (monthInProgress ? (expM.get(m.id) ?? 0) + (dobirByMgr.get(m.id) ?? 0) : 0)),
+      // 🔴 ПРОГНОЗ МІСЯЦЯ (рішення власника 06.08.2026) = ФАКТ ② + ОЧІКУВАННЯ З
+      // ПЛАНОВОЮ ДАТОЮ ОПЛАТИ В ЦЬОМУ Ж МІСЯЦІ. Контрольне число власника, звірене
+      // до правки: Антипенко = 23 632 + 44 282 = **67 914 ₴** (було 0).
+      //
+      // ⚠️ ДВІ ЗМІНИ ПРОТИ ПОПЕРЕДНЬОЇ РЕДАКЦІЇ — НАЗВАНІ ВГОЛОС, БО ДРУГА
+      // ПОБІЧНА:
+      //  (1) зона звузилась зі ЗНІМКА всієї `EXPECT_ZONE` (`expM`, БЕЗ дати —
+      //      51 782 ₴ у Антипенка) до датованої «цього місяця» (44 282 ₴). Це і
+      //      просив власник: прогноз місяця має спиратись на те, що обіцяно
+      //      надійти В ЦЬОМУ місяці, а не на всю зону без дати.
+      //  (2) 🟡 ДОБІР НОВОГО БІЗНЕСУ (`dobirByMgr`) З ФОРМУЛИ ВИПАВ. Це НЕ
+      //      наслідок (1) і не дрібниця: у Антипенка добір = **67 847 ₴**, по
+      //      компанії 28 менеджерів на **1 599 273 ₴**. Контрольне число власника
+      //      (≈68к) сходиться ЛИШЕ без добору, тож реалізовано за їхньою цифрою —
+      //      але це перегляд рішення #17, і повернути добір можна одним словом.
+      projected: Math.round(fact + (monthInProgress ? (expPlannedM.get(m.id)?.thisMonth ?? 0) : 0)),
+      // 🟡 Добір лишається ПОРАХОВАНИМ і ВИДИМИМ окремим числом, хоч у `projected`
+      // більше не входить. Тихо викинути величину в 1.6 млн по компанії означало б
+      // зробити зміну формули непомітною — а вона має читатись і перевірятись.
+      dobir: Math.round(monthInProgress ? (dobirByMgr.get(m.id) ?? 0) : 0),
       monthInProgress,
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,

@@ -626,7 +626,12 @@ export interface ReportPlanManager {
   tag: "rpk" | "rnk" | "self";
   plan: number; fact: number; expect: number; pct: number | null;
   factSuccess: number; factPaid: number; // #1 круг оплати: факт = успішно ⊎ оплачено
+  // К-сть угод у кожній половині факту — банер має називати ЧИСЛО, а не лише суму.
+  factSuccessDeals: number; factPaidDeals: number;
   expectThisMonth: number; expectNextMonth: number; // #2 за плановою датою оплати
+  // 🟡 Добір нового бізнесу. У `projected` з 06.08.2026 НЕ входить (рішення власника),
+  // але лишається видимим числом — щоб зміна формули читалась, а не зникла тихо.
+  dobir: number;
   // #P1 динамічна тижнева ціль (Variant A: manual ?? dynamic — одна цифра з Задачником).
   week: { target: number; dynamic: number; manual: number | null; isManual: boolean; fact: number; dayTarget: number; weeksLeft: number; presentDaysLeftWeek: number };
   projected: number; monthInProgress: boolean;
