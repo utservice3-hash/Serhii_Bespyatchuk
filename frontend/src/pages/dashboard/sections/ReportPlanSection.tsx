@@ -217,7 +217,7 @@ export function ReportPlanSection({ auth, teams }: {
           {auth.role === "manager" && selfRow && (
             <MgrStrip m={selfRow} mWeek={weekByMgr.get(selfRow.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
-              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} drillPeriod={drillPeriod} role={auth.role} isSelf
+              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={drillPeriod} role={auth.role} isSelf
               open={openMgr === selfRow.managerId} onToggle={() => setOpenMgr(openMgr === selfRow.managerId ? null : selfRow.managerId)} />
           )}
           <div style={{ fontSize: 12, color: MUTED, margin: "0 2px 10px" }}>
@@ -226,7 +226,7 @@ export function ReportPlanSection({ auth, teams }: {
           {data.managers.map((m) => (
             <MgrStrip key={m.managerId} m={m} mWeek={weekByMgr.get(m.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
-              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} drillPeriod={drillPeriod} role={auth.role}
+              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={drillPeriod} role={auth.role}
               isSelf={m.managerId === viewerId}
               open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
           ))}
@@ -296,9 +296,10 @@ function Donut({ pct, title }: { pct: number; title?: string }) {
 }
 
 // Смуга менеджера: МІСЯЦЬ (головна траєкторія, статус+сортування) + ТИЖДЕНЬ (поточний), обидва завжди (#11).
-function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillPeriod, role, isSelf, open, onToggle }: {
+function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPeriod, drillPeriod, role, isSelf, open, onToggle }: {
   m: ReportPlanManager; mWeek: ReportPlanManager | undefined;
   focusDay: string; today: string; elapsed: number; remWd: number; weekLabel: string;
+  weekPeriod: { from: string; to: string };
   drillPeriod: { from: string; to: string }; role: string; isSelf?: boolean; open: boolean; onToggle: () => void;
 }) {
   const s = m.status; // статус за МІСЯЦЕМ
@@ -364,7 +365,6 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
         <div style={{ border: `1px solid ${BAR}44`, borderRadius: 10, padding: "10px 12px", background: BAR + "08" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
             <b style={{ fontSize: 12 }}>🗓 Тиждень · задача з Задачника</b>
-            <b style={{ fontSize: 12 }}>🗓 Тиждень · задача з Задачника</b>
             {/* 🔴 ПІДПИС МУСИТЬ ЛИШАТИСЬ ЧЕСНИМ. Тут стояло «↔ синхронізовано із
                 Задачником» — і це неправда: живої синхронізації немає, Звіт лише
                 ЧИТАЄ `tasks` (доведено `#56c`: у тілі `/report-plan` нуль записів).
@@ -405,6 +405,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
             )}
           </div>
         </div>
+        <WeekMoney mWeek={mWeek} managerId={m.managerId} period={weekPeriod} />
         {/* 📅 Місяць — показники факт/план за місяць */}
         <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -533,6 +534,107 @@ const kindLabel: Record<DayItemKind, string> = {
   received: "Отримано ② того дня", avgcheck: "Угоди ②, з яких складається чек",
   calls: "Дзвінки того дня",
 };
+
+function WeekMoney({ mWeek, managerId, period }: {
+  mWeek: ReportPlanManager | null | undefined; managerId: number; period: { from: string; to: string };
+}) {
+  const [open, setOpen] = useState<DayItemKind | null>(null);
+  const [items, setItems] = useState<Record<string, DayItems | null>>({});
+  const onChainDrill = (kind: DayItemKind) => {
+    setOpen(open === kind ? null : kind);
+    if (items[kind] === undefined) {
+      setItems((p) => ({ ...p, [kind]: null }));
+      fetchDayItems({ managerId, date: period.from, to: period.to, kind })
+        .then((r) => setItems((p) => ({ ...p, [kind]: r })))
+        .catch(() => setItems((p) => ({ ...p, [kind]: { kind, day: period.from, items: [], total: { count: 0, sum: 0 } } })));
+    }
+  };
+  const r = open ? items[open] : undefined;
+  return (
+    <div>
+        {/**
+          * 💰 ГРОШІ ТИЖНЯ — ЛАНЦЮГ ІЗ ТРЬОХ ЛАНОК (макет `zvit-6`, 07.08.2026).
+          *
+          * ВІДПРАВЛЕНО АВТО → ОЧІКУЄ ОПЛАТИ → ОПЛАЧЕНО. Σ зобовʼязана сходитись:
+          * очікує + оплачено = відправлено. Це не оформлення, а перевірка, доступна
+          * користувачеві без нас — тримає гейт `#62`.
+          *
+          * 🔴 ОЧІКУВАННЯ РОЗКЛАДАЄТЬСЯ ЩЕ РАЗ, і саме тут ховається різниця між
+          * домовленістю і наміром: гроші з ПЛАНОВОЮ датою входять у прогноз, без
+          * дати — ні. Друга плитка показується лише коли їй є що показати.
+          *
+          * 🔗 Кожне число розкривається ТИМ САМИМ `day-items`, що й розгортка по днях,
+          * лише з періодом замість дня — другого механізму не заводимо.
+          */}
+        <div style={{ border: `1px solid ${GREEN}44`, borderRadius: 10, padding: "10px 12px", background: GREEN + "08" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+            <b style={{ fontSize: 12 }}>💰 Гроші тижня</b>
+            <span style={{ fontSize: 10.5, color: MUTED }}>з власної роботи за {ddmm(period.from)}–{ddmm(period.to)}</span>
+          </div>
+          {(mWeek?.cohort.deals ?? 0) === 0 ? (
+            /* 🔴 Дзеркало: порожній період КАЖЕ про себе, а не малює три нулі як досягнення. */
+            <div style={{ fontSize: 12, color: MUTED }}>За цей тиждень не відправлено жодного авто — ланцюга ще немає.</div>
+          ) : (() => {
+            const c = mWeek!.cohort;
+            const pct = (v: number) => c.sum > 0 ? `${Math.round((v / c.sum) * 100)}% від відправленого` : "";
+            const Link = ({ kind, val, sub, color }: { kind: DayItemKind; val: string; sub: string; color?: string }) => (
+              <div onClick={() => onChainDrill(kind)} title="клік → ці самі машини списком"
+                   style={{ cursor: "pointer", minWidth: 108 }}>
+                <div style={{ fontSize: 17, fontWeight: 800, color: color ?? "var(--text)",
+                  textDecoration: "underline dotted 1px", textUnderlineOffset: 3 }}>{val}</div>
+                <div style={{ fontSize: 10.5, color: MUTED, marginTop: 2 }}>{sub}</div>
+              </div>
+            );
+            return (
+              <>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                  <Link kind="dispatched" val={`${fmt(c.sum)} ₴`} sub={`${c.deals} ${c.deals === 1 ? "машина" : c.deals < 5 ? "машини" : "машин"}`} />
+                  <span style={{ color: MUTED, fontSize: 18, lineHeight: "24px" }}>→</span>
+                  <Link kind="dispatched_awaiting" val={`${fmt(c.awaitSum)} ₴`} sub={`очікує оплати · ${pct(c.awaitSum)}`} color={BAR} />
+                  <span style={{ color: MUTED, fontSize: 18, lineHeight: "24px" }}>→</span>
+                  <Link kind="dispatched_paid" val={`${fmt(c.paidSum)} ₴`} sub={`оплачено · ${pct(c.paidSum)}`} color={GREEN} />
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 11.5, padding: "6px 10px", borderRadius: 8, background: "var(--card-bg)", border: "1px solid var(--border)" }}>
+                    <b>{fmt(c.awaitDatedSum)} ₴</b> з плановою датою оплати <span style={{ color: MUTED }}>· входить у прогноз</span>
+                  </div>
+                  {c.awaitNoDateSum > 0 && (
+                    <div style={{ fontSize: 11.5, padding: "6px 10px", borderRadius: 8, background: AMBER + "14", border: `1px solid ${AMBER}44` }}>
+                      <b>{fmt(c.awaitNoDateSum)} ₴</b> без планової дати <span style={{ color: MUTED }}>· у прогноз не входить</span>
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      {open && (
+        <div style={{ marginTop: 8, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ padding: "7px 12px", fontSize: 10.5, fontWeight: 700, color: BAR, textTransform: "uppercase", letterSpacing: ".4px", background: BAR + "0e" }}>
+            ↳ {ddmm(period.from)}–{ddmm(period.to)} · {open === "dispatched" ? "відправлені авто" : open === "dispatched_paid" ? "з них уже оплачено" : "з них чекає оплати"}
+          </div>
+          {r == null ? <div style={{ padding: "8px 12px", fontSize: 12, color: MUTED }}>Завантаження…</div>
+            : r.items.length === 0 ? <div style={{ padding: "8px 12px", fontSize: 12, color: MUTED }}>Порожньо.</div>
+            : <>
+                {r.items.map((it, i2) => (
+                  <div key={i2} style={{ display: "grid", gridTemplateColumns: "1fr 100px 180px 110px", gap: 10, padding: "7px 12px", borderBottom: "1px solid var(--border)", fontSize: 12, alignItems: "center" }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                    <span style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5, textAlign: "center", background: (it.src === "new" ? BAR : GREEN) + "22", color: it.src === "new" ? BAR : GREEN }}>{it.src === "new" ? "новий" : "постійний"}</span>
+                    <span style={{ fontSize: 11 }}><b>{it.state}</b><span style={{ color: MUTED }}> · {it.plannedPayAt ? `план. оплата ${ddmm(it.plannedPayAt)}` : "дата оплати не вказана"}</span></span>
+                    <span style={{ textAlign: "right", fontWeight: 650 }}>{fmt(it.price)} ₴</span>
+                  </div>
+                ))}
+                {/* Підсумок обовʼязковий — він і є доказом, що число зійшлося. */}
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", fontSize: 12, fontWeight: 750, background: BAR + "16" }}>
+                  <span>разом за {ddmm(period.from)}–{ddmm(period.to)} · {r.total.count} поз.</span>
+                  <span>{fmt(r.total.sum)} ₴</span>
+                </div>
+              </>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function DayDrill({ managerId, period, focusDay, today }: { managerId: number; period: { from: string; to: string }; focusDay: string; today: string }) {
   const [d, setD] = useState<KvpManagerDetail | null>(null);

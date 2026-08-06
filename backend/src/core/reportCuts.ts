@@ -140,6 +140,10 @@ export interface DispatchCohortRow {
   deals: number; sum: number;          // усі авто, відправлені того дня
   paidDeals: number; paidSum: number;  // з них ті, що ВЖЕ оплачені (стан «зараз»)
   awaitDeals: number; awaitSum: number;// з них ті, що ще чекають оплати
+  /** Очікування з ПЛАНОВОЮ датою оплати — входить у прогноз. */
+  awaitDatedSum: number;
+  /** Очікування БЕЗ планової дати — у прогноз НЕ входить, тому названо окремо. */
+  awaitNoDateSum: number;
 }
 /**
  * 🟫 КОГОРТА ДНЯ — АВТО, ВІДПРАВЛЕНІ ТОГО ДНЯ, І ЩО З НИМИ ЗАРАЗ (макет `zvit-4`).
@@ -167,13 +171,15 @@ export async function dispatchCohortByManagerDay(
   if (scope.managerId) { p.push(scope.managerId); conds.push(`d.manager_id = $${p.length}`); }
   if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
   const r = await pool.query<{ manager_id: number; day: string; n: string; s: string;
-    pn: string; ps: string; an: string; as_: string }>(
+    pn: string; ps: string; an: string; as_: string; ad_: string; an_: string }>(
     `SELECT d.manager_id, to_char((d.load_at ${K})::date,'YYYY-MM-DD') AS day,
             COUNT(*)::int AS n, COALESCE(SUM(d.price),0) AS s,
             COUNT(*) FILTER (WHERE d.status_id = ANY($4))::int AS pn,
             COALESCE(SUM(d.price) FILTER (WHERE d.status_id = ANY($4)),0) AS ps,
             COUNT(*) FILTER (WHERE NOT (d.status_id = ANY($4)))::int AS an,
-            COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4))),0) AS as_
+            COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4))),0) AS as_,
+            COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4)) AND d.planned_payment_at IS NOT NULL),0) AS ad_,
+            COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4)) AND d.planned_payment_at IS NULL),0) AS an_
        FROM deals d JOIN managers m ON m.id = d.manager_id
       WHERE ${conds.join(" AND ")}
       GROUP BY 1, 2`, p);
@@ -182,5 +188,6 @@ export async function dispatchCohortByManagerDay(
     deals: Number(x.n), sum: Number(x.s),
     paidDeals: Number(x.pn), paidSum: Number(x.ps),
     awaitDeals: Number(x.an), awaitSum: Number(x.as_),
+    awaitDatedSum: Number(x.ad_), awaitNoDateSum: Number(x.an_),
   }));
 }

@@ -310,10 +310,32 @@ export async function effectiveWeekTargets(scope: DynScope, kyivToday: string): 
   const wpRows = await weekPlansForMonth({ managerId: scope.managerId, teamId: scope.teamId }, monthStart, planByMgr);
   const curWeekStart = fixedWeekBlocks(monthStart).find((w) => kyivToday >= w.from && kyivToday <= w.to)?.from ?? null;
   const wpByMgr = new Map(wpRows.filter((r) => r.weekStart === curWeekStart).map((r) => [r.managerId, r]));
+  /**
+   * 🔴 РУЧНА ЦІЛЬ ТИЖНЯ — ТІЛЬКИ З ТИЖНЕВОЇ ЗАДАЧІ (виправлено 07.08.2026).
+   *
+   * Було: фільтр лише за датами. Місячна парасолька покриває БУДЬ-ЯКИЙ день
+   * місяця, отже проходила ту саму умову й підставлялась як тижнева ціль.
+   * Заміряно на проді: Андрусенко Богдана — «гроші тижня 0 / 135к», де 135 000 ₴
+   * це її МІСЯЧНИЙ план, до копійки.
+   *
+   * 🔴 ДРУГИЙ ДЕФЕКТ, ГІРШИЙ ЗА ПЕРШИЙ, І В ПРОМТІ ЙОГО НЕ БУЛО: `ORDER BY`
+   * не було взагалі, а `manual.set()` затирає попереднє значення — тобто при
+   * ДВОХ парасольках на сьогодні вигравав той рядок, який Postgres віддав
+   * останнім. Заміряно: таких менеджерів **6**, і числа в них різні
+   * (Ворошилова 12 500 тижнева проти 50 000 місячної). Тобто ціль могла
+   * стрибати між запитами без жодної зміни в даних. Тепер порядок заданий
+   * явно: виграє НАЙСВІЖІША тижнева задача.
+   *
+   * ⚠️ FAIL-CLOSED: рядки з `period_kind IS NULL` (не розпізнані бекфілом)
+   * у ручну ціль НЕ потрапляють — краще показати динамічний план, ніж чужу
+   * цифру з підписом «задано вручну».
+   */
   const mw = await pool.query<{ assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
     `SELECT assignee_id, metrics_json FROM tasks
       WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
-        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1`, [kyivToday]);
+        AND period_kind = 'week'
+        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1
+      ORDER BY period_start ASC, id ASC`, [kyivToday]);
   const manual = new Map<number, number>();
   for (const r of mw.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manual.set(r.assignee_id, Number(pa.target) || 0); }
   const out = new Map<number, EffWeekTarget>();

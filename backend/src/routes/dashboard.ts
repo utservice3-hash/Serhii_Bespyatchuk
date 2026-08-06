@@ -6368,6 +6368,17 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       .filter((m) => m.fact !== 0 || m.factPaid !== 0 || m.factSuccess !== 0)
     : [];
 
+  // Ланцюг періоду по менеджерах — агрегація того самого денного зрізу.
+  const cohortByMgr = new Map<number, { deals: number; sum: number; paidDeals: number; paidSum: number;
+    awaitDeals: number; awaitSum: number; awaitDatedSum: number; awaitNoDateSum: number }>();
+  for (const r of await reportCuts.dispatchCohortByManagerDay(from, to, { managerId, teamId })) {
+    const e = cohortByMgr.get(r.managerId) ?? { deals: 0, sum: 0, paidDeals: 0, paidSum: 0,
+      awaitDeals: 0, awaitSum: 0, awaitDatedSum: 0, awaitNoDateSum: 0 };
+    e.deals += r.deals; e.sum += r.sum; e.paidDeals += r.paidDeals; e.paidSum += r.paidSum;
+    e.awaitDeals += r.awaitDeals; e.awaitSum += r.awaitSum;
+    e.awaitDatedSum += r.awaitDatedSum; e.awaitNoDateSum += r.awaitNoDateSum;
+    cohortByMgr.set(r.managerId, e);
+  }
   const managers = roster.map((m) => {
     const fact = Math.round(recvM.get(m.id)?.revenue ?? 0);
     const pl = planByMgr.get(m.id) ?? {};
@@ -6411,6 +6422,18 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // більше не входить. Тихо викинути величину в 1.6 млн по компанії означало б
       // зробити зміну формули непомітною — а вона має читатись і перевірятись.
       dobir: Math.round(monthInProgress ? (dobirByMgr.get(m.id) ?? 0) : 0),
+      /**
+       * 🔗 ЛАНЦЮГ ПЕРІОДУ: ВІДПРАВЛЕНО → ОЧІКУЄ → ОПЛАЧЕНО (блок «Гроші тижня»).
+       * Той самий зріз, що живить коричневу смугу розгортки, лише агрегований за
+       * увесь період. Σ тримається за побудовою: `paid + await == dispatched`.
+       */
+      cohort: (() => {
+        const c = cohortByMgr.get(m.id);
+        return { deals: c?.deals ?? 0, sum: c?.sum ?? 0,
+          paidDeals: c?.paidDeals ?? 0, paidSum: c?.paidSum ?? 0,
+          awaitDeals: c?.awaitDeals ?? 0, awaitSum: c?.awaitSum ?? 0,
+          awaitDatedSum: c?.awaitDatedSum ?? 0, awaitNoDateSum: c?.awaitNoDateSum ?? 0 };
+      })(),
       // 📞 Розмови й спроби — ДВІ цифри, складати заборонено (рішення власника 04.08).
       talks: callsM.get(m.id)?.talks ?? 0, attempts: callsM.get(m.id)?.attempts ?? 0,
       // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.
@@ -6572,8 +6595,13 @@ dashboardRouter.get("/report-plan/day-items", async (req, res) => {
   if (!isDayItemKind(kind)) {
     return res.status(400).json({ error: `kind має бути одним із: ${DAY_ITEM_KINDS.join(", ")}` });
   }
+  // Період: `date` — один день; `to` — той самий механізм на діапазон (блок «Гроші тижня»).
+  const to = String(req.query.to ?? "") || date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(to) || to < date) {
+    return res.status(400).json({ error: "to має бути датою YYYY-MM-DD не раніше date" });
+  }
   if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
-  res.json(await dayItems(kind, managerId, date));
+  res.json(await dayItems(kind, managerId, date, to));
 });
 
 dashboardRouter.get("/report-plan/deals", async (req, res) => {

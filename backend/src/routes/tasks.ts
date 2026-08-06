@@ -220,10 +220,14 @@ tasksRouter.post("/plan", async (req, res) => {
   if (dailyPayment > 0) periodTargets.push({ metric: "payment_amount", target: paymentAmount && paymentAmount > 0 ? paymentAmount : dailyPayment * sorted.length, actual: null, done: false });
 
   const parentRes = await pool.query<{ id: number }>(
-    `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, plan_date, period_start, period_end, deadline, auto, metrics_json, department)
-     VALUES ($1,'not_started',$2,$3,'kpi_period',$4,$4,$5,$5,true,$6,$7) RETURNING id`,
+    // 🔴 `period_kind` ПИШЕТЬСЯ ЯВНО. Доти тип періоду жив лише у слові всередині
+    // `title`, і `effectiveWeekTargets` не мав за що зачепитись — місячна парасолька
+    // покриває будь-який день місяця, отже проходила як «тижнева».
+    `INSERT INTO tasks (title, status, assignee_id, created_by, task_type, plan_date, period_start, period_end, deadline, auto, metrics_json, department, period_kind)
+     VALUES ($1,'not_started',$2,$3,'kpi_period',$4,$4,$5,$5,true,$6,$7,$8) RETURNING id`,
     [`План на ${periodLabel} (${mgrName}) — ${dailyMetrics.length} показник(и), ${sorted.length} дн.`,
-     assigneeId, auth.userId, periodStart, periodEnd, JSON.stringify(periodTargets), deptName]
+     assigneeId, auth.userId, periodStart, periodEnd, JSON.stringify(periodTargets), deptName,
+     period === "week" ? "week" : "month"]
   );
   const parentId = parentRes.rows[0].id;
 

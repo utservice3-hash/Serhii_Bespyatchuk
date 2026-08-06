@@ -225,6 +225,25 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_value NUMERIC;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_date DATE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS period_start DATE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS period_end DATE;
+
+-- 🔴 ТИП ПЕРІОДУ ПАРАСОЛЬКИ — ДАНИМИ, А НЕ ТЕКСТОМ ЗАГОЛОВКА (07.08.2026).
+--
+-- Був невидимий: тиждень і місяць відрізнялись лише словом у `title`
+-- («План на тиждень …» / «План на місяць …»). Через це `effectiveWeekTargets`
+-- фільтрував парасольку ЛИШЕ за датами — а місячна покриває будь-який день
+-- місяця, отже проходила як «тижнева». Заміряно 07.08: у Андрусенко тижнева
+-- ціль дорівнювала місячній 135 000 ₴ до копійки.
+--
+-- Бекфіл із заголовка — він 100% надійний для авто-створених рядків, бо його
+-- пише наш же код: 43 «тиждень» (1–7 дн) і 7 «місяць» (29 дн), діапазони
+-- тривалості НЕ перетинаються, обидві ознаки збігаються.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS period_kind TEXT;
+UPDATE tasks SET period_kind = CASE
+    WHEN title LIKE 'План на тиждень%' THEN 'week'
+    WHEN title LIKE 'План на місяць%'  THEN 'month'
+  END
+ WHERE task_type = 'kpi_period' AND period_kind IS NULL
+   AND (title LIKE 'План на тиждень%' OR title LIKE 'План на місяць%');
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS auto BOOLEAN NOT NULL DEFAULT false;
 -- description — довільний опис задачі. Пишуть джоби нагадувань/звірки

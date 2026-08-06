@@ -652,6 +652,12 @@ export interface ReportPlanManager {
   // 🟡 Добір нового бізнесу. У `projected` з 06.08.2026 НЕ входить (рішення власника),
   // але лишається видимим числом — щоб зміна формули читалась, а не зникла тихо.
   dobir: number;
+  /**
+   * 🔗 Ланцюг періоду: ВІДПРАВЛЕНО → ОЧІКУЄ → ОПЛАЧЕНО. `paidSum + awaitSum == sum`
+   * за побудовою; `awaitDatedSum + awaitNoDateSum == awaitSum`.
+   */
+  cohort: { deals: number; sum: number; paidDeals: number; paidSum: number;
+    awaitDeals: number; awaitSum: number; awaitDatedSum: number; awaitNoDateSum: number };
   // #P1 динамічна тижнева ціль (Variant A: manual ?? dynamic — одна цифра з Задачником).
   week: { target: number; dynamic: number; manual: number | null; isManual: boolean; fact: number; dayTarget: number; weeksLeft: number; presentDaysLeftWeek: number;
     /** Перевиконання місячного плану на початок тижня (план тижня 0, надлишок названий). */
@@ -723,7 +729,7 @@ export interface DayItems {
   /** Підсумок розкриття — доказ, що число зійшлося. */
   total: { count: number; sum: number };
 }
-export async function fetchDayItems(params: { managerId: number; date: string; kind: DayItemKind }): Promise<DayItems> {
+export async function fetchDayItems(params: { managerId: number; date: string; to?: string; kind: DayItemKind }): Promise<DayItems> {
   const { data } = await api.get<DayItems>("/dashboard/report-plan/day-items", { params });
   return data;
 }

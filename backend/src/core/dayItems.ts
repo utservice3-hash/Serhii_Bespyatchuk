@@ -97,7 +97,7 @@ const mapDeals = (rows: DealRow[]): DayItem[] => rows.map((x) => ({
  * угода зараховується, лише якщо ЗАРАЗ стоїть у відповідному статусі — той самий
  * фільтр, що в ядрі. Інакше склад показав би угоди, яких у числі немає.
  */
-async function byStageEntry(managerId: number, day: string, statuses: number[]): Promise<DayItem[]> {
+async function byStageEntry(managerId: number, from: string, to: string, statuses: number[]): Promise<DayItem[]> {
   const r = await pool.query<DealRow>(
     // ⚠️ КЛЮЧ — `kommo_id`, А НЕ `id`. У `deals` немає колонки `id` (PK = `kommo_id`),
     // у `deal_stage_events` немає `deal_id` (там теж `kommo_id`). Перша редакція
@@ -109,32 +109,37 @@ async function byStageEntry(managerId: number, day: string, statuses: number[]):
        JOIN deals d ON d.kommo_id = e.kommo_id
       WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
         AND e.status_id = ANY($3) AND d.status_id = ANY($3)
-        AND (e.changed_at ${K})::date = $4::date
+        AND (e.changed_at ${K})::date BETWEEN $4::date AND $5::date
       ORDER BY d.kommo_id, e.changed_at DESC`,
-    [managerId, FC_PIPELINES, statuses, day]
+    [managerId, FC_PIPELINES, statuses, from, to]
   );
   return mapDeals(r.rows);
 }
 
 /** Когорта дня: авто, ВІДПРАВЛЕНІ того дня (`load_at`) — той самий анкер, що `dispatchedByLoadBucket`. */
-async function dispatchedCohort(managerId: number, day: string, only: "all" | "paid" | "awaiting"): Promise<DayItem[]> {
-  const extra = only === "paid" ? `AND d.status_id = ANY($4)`
-    : only === "awaiting" ? `AND NOT (d.status_id = ANY($4))` : "";
-  const params: unknown[] = [managerId, FC_PIPELINES, day];
+async function dispatchedCohort(managerId: number, from: string, to: string, only: "all" | "paid" | "awaiting"): Promise<DayItem[]> {
+  const extra = only === "paid" ? `AND d.status_id = ANY($5)`
+    : only === "awaiting" ? `AND NOT (d.status_id = ANY($5))` : "";
+  const params: unknown[] = [managerId, FC_PIPELINES, from, to];
   if (only !== "all") params.push(STAGE_RECEIVED);
   const r = await pool.query<DealRow>(
     `SELECT d.name, d.lead_channel AS channel, d.price, d.status_id,
             to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
        FROM deals d
       WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
-        AND (d.load_at ${K})::date = $3::date ${extra}
+        AND (d.load_at ${K})::date BETWEEN $3::date AND $4::date ${extra}
       ORDER BY d.price DESC NULLS LAST, d.name`,
     params
   );
   return mapDeals(r.rows);
 }
 
-export async function dayItems(kind: DayItemKind, managerId: number, day: string): Promise<DayItemsResult> {
+/**
+ * 🔴 ДІАПАЗОН, А НЕ ЛИШЕ ДЕНЬ (07.08.2026). Блок «Гроші тижня» розкриває ТІ САМІ
+ * множини за тиждень — і робить це ЦИМ механізмом, а не другим. Один день = діапазон
+ * із однакових кінців: інакше через місяць у нас було б два визначення «оплачено».
+ */
+export async function dayItems(kind: DayItemKind, managerId: number, from: string, to: string = from): Promise<DayItemsResult> {
   let items: DayItem[];
   switch (kind) {
     case "created": {
@@ -143,22 +148,22 @@ export async function dayItems(kind: DayItemKind, managerId: number, day: string
                 to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
            FROM deals d
           WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
-            AND (d.created_at_kommo ${K})::date = $3::date
+            AND (d.created_at_kommo ${K})::date BETWEEN $3::date AND $4::date
           ORDER BY d.price DESC NULLS LAST, d.created_at_kommo`,
-        [managerId, FC_PIPELINES, day]
+        [managerId, FC_PIPELINES, from, to]
       );
       items = mapDeals(r.rows);
       break;
     }
-    case "dispatched": items = await dispatchedCohort(managerId, day, "all"); break;
-    case "dispatched_paid": items = await dispatchedCohort(managerId, day, "paid"); break;
-    case "dispatched_awaiting": items = await dispatchedCohort(managerId, day, "awaiting"); break;
-    case "success": items = await byStageEntry(managerId, day, STAGE_SUCCESS); break;
-    case "paid": items = await byStageEntry(managerId, day, STAGE_PAID); break;
+    case "dispatched": items = await dispatchedCohort(managerId, from, to, "all"); break;
+    case "dispatched_paid": items = await dispatchedCohort(managerId, from, to, "paid"); break;
+    case "dispatched_awaiting": items = await dispatchedCohort(managerId, from, to, "awaiting"); break;
+    case "success": items = await byStageEntry(managerId, from, to, STAGE_SUCCESS); break;
+    case "paid": items = await byStageEntry(managerId, from, to, STAGE_PAID); break;
     // ② = ① ∪ ⑨. Дедуп по угоді робить сам `byStageEntry` (DISTINCT ON), а обʼєднання
     // статусів в ОДНОМУ запиті не дає угоді потрапити двічі при вході в обидва етапи.
     case "received":
-    case "avgcheck": items = await byStageEntry(managerId, day, STAGE_RECEIVED); break;
+    case "avgcheck": items = await byStageEntry(managerId, from, to, STAGE_RECEIVED); break;
     case "calls": {
       const r = await pool.query<{ name: string | null; phone: string | null; billsec: number;
         at: string; recording: string | null }>(
@@ -169,9 +174,9 @@ export async function dayItems(kind: DayItemKind, managerId: number, day: string
              SELECT dd.name FROM deals dd
               WHERE dd.client_key = rc.client_key AND rc.client_key IS NOT NULL
               ORDER BY dd.created_at_kommo DESC LIMIT 1) d ON true
-          WHERE rc.manager_id = $1 AND (rc.calldate ${K})::date = $2::date
+          WHERE rc.manager_id = $1 AND (rc.calldate ${K})::date BETWEEN $2::date AND $3::date
           ORDER BY rc.calldate`,
-        [managerId, day]
+        [managerId, from, to]
       );
       items = r.rows.map((x) => ({
         name: x.name ?? x.phone ?? "невідомий",
@@ -186,5 +191,5 @@ export async function dayItems(kind: DayItemKind, managerId: number, day: string
   }
   // Для дзвінків «сума» безглузда — підсумком є КІЛЬКІСТЬ. Не показуємо 0 ₴ як суму.
   const sum = kind === "calls" ? 0 : items.reduce((s, x) => s + x.price, 0);
-  return { kind, day, items, total: { count: items.length, sum } };
+  return { kind, day: from, items, total: { count: items.length, sum } };
 }

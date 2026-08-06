@@ -39,6 +39,8 @@ export const MANIFEST_FILES: string[] = [
   "routes/avgCheckDay.test.js",
   "routes/dismissedOnScreen.test.js",
   "routes/dayItems.test.js",
+  "routes/weekTargetSource.test.js",
+  "routes/weekChain.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -372,4 +374,11 @@ export const MANIFEST_TESTS: string[] = [
   "#60 Σ рядків розкриття == число в комірці, для кожного типу",
   "#60b невідомий тип падає, порожній день віддає рівно нуль",
   "#60c когорта дня: оплачено + чекає == відправлено",
+  // routes/weekTargetSource.test.ts — тижнева ціль тільки з тижневої задачі
+  "#61 місячний план не підставляється як тижнева ціль",
+  "#61b ручні тижневі цілі лишились і відрізняються від динамічних",
+  "#61c у кожної парасольки заповнений period_kind",
+  // routes/weekChain.test.ts — ланцюг «Гроші тижня» сходиться
+  "#62 ланцюг сходиться: очікує + оплачено == відправлено",
+  "#62b розкриття ланцюга == числам ланцюга",
 ];
