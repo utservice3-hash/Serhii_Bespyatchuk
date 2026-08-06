@@ -2163,10 +2163,18 @@ dashboardRouter.get("/teams", async (req, res) => {
   const NO_TEAM_ID = 0;
   const NO_TEAM_NAME = "Поза командами";
   const teamKey = (id: number | null) => id ?? NO_TEAM_ID;
+  // 🔴 НАЗВИ КОМАНД — З ДОВІДНИКА, а не лише з грошових агрегатів. Команда, що в
+  // періоді має лише ЛІДИ або БОРГ (грошей 0), у грошових агрегатах не зʼявляється
+  // взагалі, тож імені їй не давав ніхто — і вона теж виходила безіменним рядком.
+  // Це не наслідок перейменування «поза командами»: так було й до нього, просто
+  // ніхто не дивився. Спіймав #43b на живому проді, уже після першого фікса.
+  const teamNames = new Map((await pool.query<{ id: number; name: string }>(
+    `SELECT id, name FROM teams`)).rows.map((t) => [t.id, t.name]));
   // ⚠️ Для НЕ-null команди повертаємо `undefined`, а не "": `get` затирає імʼя лише
   // непорожнім значенням, і порожній рядок із пізнішого джерела не має стерти назву,
   // яку вже дало попереднє.
-  const teamLabel = (id: number | null, name: string | null) => (id == null ? NO_TEAM_NAME : name ?? undefined);
+  const teamLabel = (id: number | null, name: string | null) =>
+    (id == null ? NO_TEAM_NAME : name ?? teamNames.get(id) ?? `Команда #${id}`);
   for (const r of recvTeamAgg) { const e = get(teamKey(r.teamId), teamLabel(r.teamId, r.teamName)); e.revenue += r.revenue; e.deals += r.deals; }
   for (const r of sucTeamAgg) { const e = get(teamKey(r.teamId), teamLabel(r.teamId, r.teamName)); e.dispatched += r.deals; e.successRev += r.revenue; }
   // 🔴 `teamKey` ТУТ ТЕЖ, І САМЕ ЦЕ Я СПЕРШУ ПРОҐАВИВ. Перейменувати два джерела з
