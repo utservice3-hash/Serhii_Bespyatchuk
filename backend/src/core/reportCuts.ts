@@ -57,12 +57,35 @@ export async function callsByManagerDay(from: string, to: string, scope: { manag
   const conds = [`(rc.calldate ${K})::date BETWEEN $1 AND $2`, "rc.manager_id IS NOT NULL"];
   if (scope.managerId) { p.push(scope.managerId); conds.push(`rc.manager_id = $${p.length}`); }
   if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
+  /**
+   * 🔗 ПЛЕЧІ ОДНОГО ДЗВІНКА СКЛЕЮЮТЬСЯ (рішення власника 07.08.2026).
+   *
+   * Ringostat пише переведений дзвінок ДВОМА записами (`in`+`transitout`,
+   * `out`+`transitin`) — явного поля «плече» чи id сесії в API немає, перевірено
+   * всі 20 колонок. Тому правило назване прямо: **той самий менеджер + той самий
+   * номер клієнта + старт у межах 120 с = ОДНА розмова.**
+   *
+   * 📐 Заміряно перед рішенням: серпень 3 795 → 3 546 (**+7.0%**), липень
+   * 24 805 → 23 270 (+6.6%). Вихідні +2.8%, вхідні **+19.3%** — перекіс майже
+   * весь у вхідних. Вирішальним був не середній відсоток, а РОЗКИД між людьми:
+   * від +1.1% (Крупник) до +10.8% (Демчук) — тобто склейка зсуває рейтинг
+   * менеджерів, а не просто зменшує всі числа однаково.
+   *
+   * ⚙️ `attempts` (недодзвони) склеюються тим самим правилом: перевід недодзвону
+   * теж дає два записи, і рахувати їх двічі так само неправильно.
+   */
   const r = await pool.query<{ manager_id: number; day: string; talks: string; attempts: string }>(
-    `SELECT rc.manager_id, to_char((rc.calldate ${K})::date,'YYYY-MM-DD') AS day,
-            COUNT(*) FILTER (WHERE rc.billsec > 0)::int talks,
-            COUNT(*) FILTER (WHERE rc.billsec = 0)::int attempts
-       FROM ringostat_calls rc JOIN managers m ON m.id = rc.manager_id
-      WHERE ${conds.join(" AND ")} GROUP BY 1, 2`, p);
+    `WITH marked AS (
+       SELECT rc.manager_id, rc.calldate, rc.billsec,
+              rc.calldate - LAG(rc.calldate) OVER (
+                PARTITION BY rc.manager_id, rc.client_phone, (rc.billsec > 0) ORDER BY rc.calldate) AS gap
+         FROM ringostat_calls rc JOIN managers m ON m.id = rc.manager_id
+        WHERE ${conds.join(" AND ")}
+     )
+     SELECT manager_id, to_char((calldate ${K})::date,'YYYY-MM-DD') AS day,
+            COUNT(*) FILTER (WHERE billsec > 0 AND (gap IS NULL OR gap > interval '120 seconds'))::int talks,
+            COUNT(*) FILTER (WHERE billsec = 0 AND (gap IS NULL OR gap > interval '120 seconds'))::int attempts
+       FROM marked GROUP BY 1, 2`, p);
   return r.rows.map((x) => ({ managerId: x.manager_id, day: x.day, talks: Number(x.talks), attempts: Number(x.attempts) }));
 }
 

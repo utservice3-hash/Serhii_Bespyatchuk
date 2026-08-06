@@ -41,6 +41,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/dayItems.test.js",
   "routes/weekTargetSource.test.js",
   "routes/weekChain.test.js",
+  "routes/callMerge.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -381,4 +382,7 @@ export const MANIFEST_TESTS: string[] = [
   // routes/weekChain.test.ts — ланцюг «Гроші тижня» сходиться
   "#62 ланцюг сходиться: очікує + оплачено == відправлено",
   "#62b розкриття ланцюга == числам ланцюга",
+  // routes/callMerge.test.ts — плечі одного дзвінка склеєні
+  "#63 склеєних розмов не більше, ніж записів, і склейка справді працює",
+  "#63b пара 09:47 склеюється рівно в одну",
 ];
