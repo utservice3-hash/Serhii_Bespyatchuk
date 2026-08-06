@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { weekPlanOf, weekWorkingDays } from "./weekPlanMath.js";
 import { fixedWeekBlocks, workingDaysBetween, monthEndOf } from "./dates.js";
-import { needsDb } from "../testMode.js";
+import { needsDb, needsDbWritable } from "../testMode.js";
 
 /** Серпень 2026 — місяць власника з прикладу: 1-ше субота, 31-ше понеділок-одинак. */
 const AUG = "2026-08-01";
@@ -110,7 +110,7 @@ test("#48d перевиконання: план тижня 0 і названий
  * тоді, коли перерахунок дав би інше число. Без цього таблиця була б просто
  * кешем, а ціль і далі повзла б усередині тижня.
  */
-test("#48e знімок плану тижня не переписується", needsDb(), async () => {
+test("#48e знімок плану тижня не переписується", needsDbWritable(), async () => {
   const { freezeWeekPlans } = await import("./weekPlan.js");
   const { pool } = await import("../db/pool.js");
   const mgr = (await pool.query<{ id: number }>(`SELECT id FROM managers ORDER BY id LIMIT 1`)).rows[0];

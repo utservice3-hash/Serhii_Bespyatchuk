@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isActiveManager, activeManagerSql } from "./activeManager.js";
-import { needsDb } from "../testMode.js";
+import { needsDb, needsDbWritable } from "../testMode.js";
 
 /**
  * #51 — АКТИВНІСТЬ МЕНЕДЖЕРА МАЄ ДВА ДЖЕРЕЛА, І ОБИДВА МУСЯТЬ РАХУВАТИСЬ.
@@ -69,7 +69,7 @@ test("#51b SQL-предикат == чиста функція на реальни
  * 🔒 Усе в транзакції з гарантованим ROLLBACK: тест проти живої бази не має права
  * лишити по собі слід. Права — другий рубіж, транзакція — перший.
  */
-test("#51c саботаж: деактивація в НАЛАШТУВАННЯХ виводить менеджера з ростера", needsDb(), async () => {
+test("#51c саботаж: деактивація в НАЛАШТУВАННЯХ виводить менеджера з ростера", needsDbWritable(), async () => {
   const { pool } = await import("../db/pool.js");
   const client = await pool.connect();
   try {

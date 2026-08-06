@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsApi, needsDb, API_BASE } from "../testMode.js";
+import { needsApi, needsDb, needsDbWritable, API_BASE } from "../testMode.js";
 
 /**
  * #50 — ГРОШІ НЕ ЗНИКАЮТЬ РАЗОМ ІЗ ЛЮДИНОЮ.
@@ -64,7 +64,7 @@ test("#50 Σ факту на екрані == receivedMoney ядра (звіль�
  * тобто щоб він випав із ростера й потрапив у `dismissed`, а не зник.
  * Усе в транзакції з гарантованим ROLLBACK.
  */
-test("#50c саботаж у ДАШБОРДІ: гроші звільненого лишаються в полі зору", needsDb(), async () => {
+test("#50c саботаж у ДАШБОРДІ: гроші звільненого лишаються в полі зору", needsDbWritable(), async () => {
   const { pool } = await import("../db/pool.js");
   const money = await import("../core/money.js");
   const { activeManagerSql } = await import("../core/activeManager.js");

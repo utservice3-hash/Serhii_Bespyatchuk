@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsDb } from "../testMode.js";
+import { needsDb, needsDbWritable } from "../testMode.js";
 
 /**
  * #52 — ДІЯ, ДОСТУПНА В ІНТЕРФЕЙСІ, МУСИТЬ БУТИ СКАСОВНОЮ ТИМ САМИМ ІНТЕРФЕЙСОМ.
@@ -24,7 +24,7 @@ import { needsDb } from "../testMode.js";
  * 🔒 Усе в транзакції з гарантованим ROLLBACK: гейт проти живої бази не має права
  * лишити по собі слід.
  */
-test("#52 цикл деактивація → реактивація повертає CRM-менеджера у вихідний стан", needsDb(), async () => {
+test("#52 цикл деактивація → реактивація повертає CRM-менеджера у вихідний стан", needsDbWritable(), async () => {
   const { pool } = await import("../db/pool.js");
   const client = await pool.connect();
   try {
