@@ -1,5 +1,5 @@
 import { pool } from "../db/pool.js";
-import { FC_PIPELINES } from "./money.js";
+import { FC_PIPELINES, STAGE_RECEIVED } from "./money.js";
 
 /**
  * 📊 РОЗРІЗИ ЗВІТУ, ЯКИХ НЕ БУЛО В ЯДРІ (макет 06.08.2026).
@@ -133,4 +133,54 @@ export async function invoicedByManagerDay(from: string, to: string, scope: { ma
       WHERE ${conds.join(" AND ")}
       GROUP BY 1, 2`, p);
   return r.rows.map((x) => ({ managerId: x.manager_id, day: x.day, deals: Number(x.n), sum: Number(x.s) }));
+}
+
+export interface DispatchCohortRow {
+  managerId: number; day: string;
+  deals: number; sum: number;          // усі авто, відправлені того дня
+  paidDeals: number; paidSum: number;  // з них ті, що ВЖЕ оплачені (стан «зараз»)
+  awaitDeals: number; awaitSum: number;// з них ті, що ще чекають оплати
+}
+/**
+ * 🟫 КОГОРТА ДНЯ — АВТО, ВІДПРАВЛЕНІ ТОГО ДНЯ, І ЩО З НИМИ ЗАРАЗ (макет `zvit-4`).
+ *
+ * 🔴 ЦЕ ДРУГА ДАТА НА ТОМУ САМОМУ ЕКРАНІ, І ЦЕ НАВМИСНО. Авто датовані днем
+ * ЗАВАНТАЖЕННЯ (`load_at`), гроші — днем ВХОДУ В ЕТАП. Тому «сума відправлених» і
+ * «отримано» за той самий день НЕ мусять збігатися: 01.08 авто поїхали на 2 400 ₴,
+ * а надійшло 1 500 ₴; 04.08 навпаки — жодного авто, але 1 000 ₴ прийшло за авто,
+ * що поїхало раніше. Без цього підпису дві правильні цифри читаються як поломка —
+ * рівно та пастка, через яку ми вже проходили з ① і ②.
+ *
+ * ⚙️ Стан «оплачено» береться ЗА ПОТОЧНИМ статусом угоди (`STAGE_RECEIVED`), а не
+ * за подіями: питання тут не «коли заплатили», а «що з цією машиною ЗАРАЗ».
+ * Тому `paid + await == deals` за побудовою — і саме це робить смугу перевірною
+ * очима, без нас.
+ *
+ * 🧮 Тотал звіряється з `metrics.dispatchedByLoadBucket` (той самий анкер `load_at`,
+ * ті самі пайплайни, active-only) — тримає гейт `#60c`.
+ */
+export async function dispatchCohortByManagerDay(
+  from: string, to: string, scope: { managerId?: number | null; teamId?: number | null }
+): Promise<DispatchCohortRow[]> {
+  const p: unknown[] = [from, to, FC_PIPELINES, STAGE_RECEIVED];
+  const conds = [`(d.load_at ${K})::date BETWEEN $1 AND $2`, "d.pipeline_id = ANY($3)", "m.is_active"];
+  if (scope.managerId) { p.push(scope.managerId); conds.push(`d.manager_id = $${p.length}`); }
+  if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const r = await pool.query<{ manager_id: number; day: string; n: string; s: string;
+    pn: string; ps: string; an: string; as_: string }>(
+    `SELECT d.manager_id, to_char((d.load_at ${K})::date,'YYYY-MM-DD') AS day,
+            COUNT(*)::int AS n, COALESCE(SUM(d.price),0) AS s,
+            COUNT(*) FILTER (WHERE d.status_id = ANY($4))::int AS pn,
+            COALESCE(SUM(d.price) FILTER (WHERE d.status_id = ANY($4)),0) AS ps,
+            COUNT(*) FILTER (WHERE NOT (d.status_id = ANY($4)))::int AS an,
+            COALESCE(SUM(d.price) FILTER (WHERE NOT (d.status_id = ANY($4))),0) AS as_
+       FROM deals d JOIN managers m ON m.id = d.manager_id
+      WHERE ${conds.join(" AND ")}
+      GROUP BY 1, 2`, p);
+  return r.rows.map((x) => ({
+    managerId: x.manager_id, day: x.day,
+    deals: Number(x.n), sum: Number(x.s),
+    paidDeals: Number(x.pn), paidSum: Number(x.ps),
+    awaitDeals: Number(x.an), awaitSum: Number(x.as_),
+  }));
 }

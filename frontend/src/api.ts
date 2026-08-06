@@ -536,6 +536,14 @@ export interface KvpDetailCell {
   // Розклад ② по дню + активність дзвінків + виставлені рахунки ТОГО дня.
   success: { deals: number; revenue: number }; paid: { deals: number; revenue: number };
   talks: number; attempts: number; invoiced: { deals: number; sum: number };
+  /**
+   * 🟫 КОГОРТА ДНЯ: авто, відправлені ТОГО дня, і що з ними ЗАРАЗ.
+   * `dispPaid + dispAwait == dispatched/dispSum` за побудовою — саме це робить
+   * коричневу смугу перевірною очима, без нас.
+   */
+  dispSum: number;
+  dispPaid: { deals: number; sum: number };
+  dispAwait: { deals: number; sum: number };
 }
 export interface KvpDetailWeek { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; total: KvpDetailCell; days: (KvpDetailCell & { day: string })[] }
 export interface KvpManagerDetail {
@@ -693,6 +701,32 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
   return data;
 }
 export interface ReportPlanDeal { name: string; src: "new" | "rep"; price: number; status: string }
+
+/**
+ * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ — склад КОНКРЕТНОГО числа в рядку дня.
+ * Один роут із параметром `kind`, а не одинадцять ендпоінтів: одинадцять місць —
+ * це одинадцять шансів, що склад розійдеться з числом, яке він пояснює.
+ */
+export type DayItemKind = "created" | "dispatched" | "dispatched_paid" | "dispatched_awaiting"
+  | "success" | "paid" | "received" | "avgcheck" | "calls";
+export interface DayItem {
+  name: string;
+  src: "new" | "rep" | null;
+  /** Сума показується ЗАВЖДИ; стан — окремим полем, а не замість числа. */
+  price: number;
+  state: string;
+  plannedPayAt: string | null;
+  call?: { phone: string | null; durationSec: number; at: string; answered: boolean; recordUrl: string | null };
+}
+export interface DayItems {
+  kind: DayItemKind; day: string; items: DayItem[];
+  /** Підсумок розкриття — доказ, що число зійшлося. */
+  total: { count: number; sum: number };
+}
+export async function fetchDayItems(params: { managerId: number; date: string; kind: DayItemKind }): Promise<DayItems> {
+  const { data } = await api.get<DayItems>("/dashboard/report-plan/day-items", { params });
+  return data;
+}
 export async function fetchReportPlanDeals(params: { managerId: number; date: string }): Promise<ReportPlanDeal[]> {
   const { data } = await api.get<{ deals: ReportPlanDeal[] }>("/dashboard/report-plan/deals", { params });
   return data.deals;

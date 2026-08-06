@@ -1,0 +1,186 @@
+import { pool } from "../db/pool.js";
+import { FC_PIPELINES, STAGE_PAID, STAGE_SUCCESS, STAGE_RECEIVED } from "./money.js";
+
+/**
+ * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ ПО ДНЯХ — склад КОЖНОГО числа в рядку дня.
+ *
+ * 🔴 ОДНЕ ДЖЕРЕЛО НА ВСІ РОЗКРИТТЯ (вимога власника 07.08.2026), а не одинадцять
+ * ендпоінтів. Причина не в економії коду: одинадцять місць — це одинадцять шансів,
+ * що склад розійдеться з числом, яке він нібито пояснює. Тут кожен `kind` описаний
+ * ОДНИМ предикатом, і той самий предикат живить підсумок розкриття.
+ *
+ * 🧮 ІНВАРІАНТ, ЯКИЙ І Є СЕНСОМ ФІЧІ: **Σ рядків розкриття == число в комірці**.
+ * Це перевірка, доступна користувачеві без нас — він складе очима. Тому підсумковий
+ * рядок обовʼязковий, а гейт `#60` звіряє Σ із агрегатом на живих даних.
+ *
+ * ⚠️ ЧОМУ ЦЕ НЕ «ЩЕ ОДИН SQL ПО ГРОШАХ». Кожен грошовий `kind` анкериться там само,
+ * де й агрегат, який він розкриває: `success`/`paid`/`received` — по ДАТІ ВХОДУ В
+ * ЕТАП (`deal_stage_events`), як `core/money.ts`, і з тим самим дедупом 9∪10.
+ * Розійтись вони можуть лише разом, і це ловить `#60`.
+ */
+export type DayItemKind =
+  | "created"            // угоди, заведені того дня (created_at_kommo)
+  | "dispatched"         // авто, відправлені того дня (load_at) — КОГОРТА ДНЯ
+  | "dispatched_paid"    // з них ті, що ВЖЕ оплачені (стан «зараз»)
+  | "dispatched_awaiting"// з них ті, що ще чекають оплати
+  | "success"            // угоди, що того дня зайшли в «успішно реалізовано» ①
+  | "paid"               // угоди, що того дня зайшли в «оплата отримана» ⑨
+  | "received"           // ① ∪ ⑨ з дедупом по угоді ②
+  | "avgcheck"           // ті самі угоди ②: щоб було видно і суму, і кількість
+  | "calls";             // розмови й спроби: клієнт, тривалість, ЛІНК НА ЗАПИС
+
+export const DAY_ITEM_KINDS: DayItemKind[] = ["created", "dispatched", "dispatched_paid",
+  "dispatched_awaiting", "success", "paid", "received", "avgcheck", "calls"];
+
+export const isDayItemKind = (v: string): v is DayItemKind =>
+  (DAY_ITEM_KINDS as string[]).includes(v);
+
+export interface DayItem {
+  /** Маршрут (назва угоди) або клієнт для дзвінка. */
+  name: string;
+  /** Новий / постійний — мітка, а не частина суми. */
+  src: "new" | "rep" | null;
+  /**
+   * 🔴 СУМА ПОКАЗУЄТЬСЯ ЗАВЖДИ, СТАН — ОКРЕМИМ ПОЛЕМ (рішення власника 07.08.2026).
+   * Було `price ? сума : статус` — тобто при нульовому бюджеті замість числа
+   * зʼявлявся текст «В роботі», і рядок читався як «суми немає».
+   */
+  price: number;
+  /** Людська назва поточного стану («Виграно», «Очікуємо оплату», …). */
+  state: string;
+  /** Планова дата оплати або `null` — на екрані «дата оплати не вказана». */
+  plannedPayAt: string | null;
+  /** Для дзвінків. */
+  call?: { phone: string | null; durationSec: number; at: string; answered: boolean; recordUrl: string | null };
+}
+
+export interface DayItemsResult {
+  kind: DayItemKind;
+  day: string;
+  items: DayItem[];
+  /** Підсумок розкриття — він і є доказом, що число зійшлося. */
+  total: { count: number; sum: number };
+}
+
+const K = "AT TIME ZONE 'Europe/Kyiv'";
+
+const STATE_LABEL = (s: number): string =>
+  s === 142 ? "Успішно реалізовано"
+    : STAGE_PAID.includes(s) ? "Оплата отримана"
+      : s === 69716312 || s === 25044997 ? "Очікуємо оплату"
+        : s === 100274340 ? "Виставлення рахунку"
+          : s === 143 ? "Закрито і не реалізовано" : "В роботі";
+
+/** Мітка «новий/постійний» — той самий сенс, що в списку угод дня (lead_channel). */
+const srcOf = (channel: string | null): "new" | "rep" =>
+  channel === "ad" || channel === "leadgen" ? "new" : "rep";
+
+interface DealRow {
+  name: string | null; channel: string | null; price: string | null;
+  status_id: number; planned: string | null;
+}
+
+const mapDeals = (rows: DealRow[]): DayItem[] => rows.map((x) => ({
+  name: x.name ?? "—",
+  src: srcOf(x.channel),
+  price: Math.round(Number(x.price ?? 0)),
+  state: STATE_LABEL(Number(x.status_id)),
+  plannedPayAt: x.planned,
+}));
+
+/**
+ * Угоди, що ВВІЙШЛИ у вказані статуси того дня — анкер по `deal_stage_events`,
+ * рівно як у `core/money.ts`. DISTINCT по угоді: етапи 9 і 10 — ОДНІ Й ТІ САМІ
+ * гроші, і без дедупу `received` подвоївся б (це вже коштувало нам інциденту).
+ *
+ * 🔴 ФІНАЛЬНИЙ СТАН, А НЕ БУДЬ-ЯКИЙ ВХІД. Реоупени трапляються регулярно, тож
+ * угода зараховується, лише якщо ЗАРАЗ стоїть у відповідному статусі — той самий
+ * фільтр, що в ядрі. Інакше склад показав би угоди, яких у числі немає.
+ */
+async function byStageEntry(managerId: number, day: string, statuses: number[]): Promise<DayItem[]> {
+  const r = await pool.query<DealRow>(
+    `SELECT DISTINCT ON (d.id) d.name, d.lead_channel AS channel, d.price, d.status_id,
+            to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
+       FROM deal_stage_events e
+       JOIN deals d ON d.id = e.deal_id
+      WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
+        AND e.status_id = ANY($3) AND d.status_id = ANY($3)
+        AND (e.changed_at ${K})::date = $4::date
+      ORDER BY d.id, e.changed_at DESC`,
+    [managerId, FC_PIPELINES, statuses, day]
+  );
+  return mapDeals(r.rows);
+}
+
+/** Когорта дня: авто, ВІДПРАВЛЕНІ того дня (`load_at`) — той самий анкер, що `dispatchedByLoadBucket`. */
+async function dispatchedCohort(managerId: number, day: string, only: "all" | "paid" | "awaiting"): Promise<DayItem[]> {
+  const extra = only === "paid" ? `AND d.status_id = ANY($4)`
+    : only === "awaiting" ? `AND NOT (d.status_id = ANY($4))` : "";
+  const params: unknown[] = [managerId, FC_PIPELINES, day];
+  if (only !== "all") params.push(STAGE_RECEIVED);
+  const r = await pool.query<DealRow>(
+    `SELECT d.name, d.lead_channel AS channel, d.price, d.status_id,
+            to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
+       FROM deals d
+      WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
+        AND (d.load_at ${K})::date = $3::date ${extra}
+      ORDER BY d.price DESC NULLS LAST, d.name`,
+    params
+  );
+  return mapDeals(r.rows);
+}
+
+export async function dayItems(kind: DayItemKind, managerId: number, day: string): Promise<DayItemsResult> {
+  let items: DayItem[];
+  switch (kind) {
+    case "created": {
+      const r = await pool.query<DealRow>(
+        `SELECT d.name, d.lead_channel AS channel, d.price, d.status_id,
+                to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
+           FROM deals d
+          WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
+            AND (d.created_at_kommo ${K})::date = $3::date
+          ORDER BY d.price DESC NULLS LAST, d.created_at_kommo`,
+        [managerId, FC_PIPELINES, day]
+      );
+      items = mapDeals(r.rows);
+      break;
+    }
+    case "dispatched": items = await dispatchedCohort(managerId, day, "all"); break;
+    case "dispatched_paid": items = await dispatchedCohort(managerId, day, "paid"); break;
+    case "dispatched_awaiting": items = await dispatchedCohort(managerId, day, "awaiting"); break;
+    case "success": items = await byStageEntry(managerId, day, STAGE_SUCCESS); break;
+    case "paid": items = await byStageEntry(managerId, day, STAGE_PAID); break;
+    // ② = ① ∪ ⑨. Дедуп по угоді робить сам `byStageEntry` (DISTINCT ON), а обʼєднання
+    // статусів в ОДНОМУ запиті не дає угоді потрапити двічі при вході в обидва етапи.
+    case "received":
+    case "avgcheck": items = await byStageEntry(managerId, day, STAGE_RECEIVED); break;
+    case "calls": {
+      const r = await pool.query<{ name: string | null; phone: string | null; billsec: number;
+        at: string; recording: string | null }>(
+        `SELECT COALESCE(d.name, rc.client_key) AS name, rc.client_phone AS phone,
+                rc.billsec, to_char((rc.calldate ${K}), 'YYYY-MM-DD HH24:MI') AS at, rc.recording
+           FROM ringostat_calls rc
+           LEFT JOIN LATERAL (
+             SELECT dd.name FROM deals dd
+              WHERE dd.client_key = rc.client_key AND rc.client_key IS NOT NULL
+              ORDER BY dd.created_at_kommo DESC LIMIT 1) d ON true
+          WHERE rc.manager_id = $1 AND (rc.calldate ${K})::date = $2::date
+          ORDER BY rc.calldate`,
+        [managerId, day]
+      );
+      items = r.rows.map((x) => ({
+        name: x.name ?? x.phone ?? "невідомий",
+        src: null, price: 0, state: x.billsec > 0 ? "розмова" : "спроба", plannedPayAt: null,
+        // 🎧 ПРЯМИЙ ЛІНК НА ЗАПИС, без проксі — рішення власника 05.08.2026,
+        // нового рішення не потрібно (закриває задачу «плеєр дзвінків» із черги).
+        call: { phone: x.phone, durationSec: x.billsec, at: x.at,
+          answered: x.billsec > 0, recordUrl: x.recording },
+      }));
+      break;
+    }
+  }
+  // Для дзвінків «сума» безглузда — підсумком є КІЛЬКІСТЬ. Не показуємо 0 ₴ як суму.
+  const sum = kind === "calls" ? 0 : items.reduce((s, x) => s + x.price, 0);
+  return { kind, day, items, total: { count: items.length, sum } };
+}

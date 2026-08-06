@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
-  fetchReportPlan, fetchReportPlanDeals, fetchManagerDetail, fetchStuckGrouped, saveDealNote,
-  type ReportPlan, type ReportPlanManager, type ReportPlanDeal, type KvpManagerDetail, type Team,
+  fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
+  type ReportPlan, type ReportPlanManager, type KvpManagerDetail, type Team,
+  type DayItemKind, type DayItems,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
@@ -10,6 +11,9 @@ import { ResponseTimeCard } from "./ResponseTimeCard";
 
 // Статуси-кольори (зарезервовані, з іконкою+підписом — не колір-наодинці). Тема-безпечні.
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BAR = "#2f6fdb", MUTED = "var(--text-muted)";
+// «Прийшло ⑨» — окремий колір від «Закрито ①»: це РІЗНІ стани тих самих грошей,
+// і зливати їх в один відтінок означало б знову подавати дві величини як одну.
+const LINK = "#7c3aed";
 const SCOL: Record<string, string> = { g: GREEN, a: AMBER, r: RED };
 const SLBL: Record<string, string> = { g: "В нормі", a: "Відстає", r: "Зрив" };
 const SICON: Record<string, string> = { g: "🟢", a: "🟠", r: "🔴" };
@@ -504,95 +508,241 @@ function WhyBox({ m, role, isSelf }: { m: ReportPlanManager; role: string; isSel
 }
 
 // Дрил: період селектора → дні → угоди. День-клітинки з manager-detail; угоди — лінивий фетч.
+/**
+ * 🔎 РОЗГОРТКА ПО ДНЯХ — ДВА РІВНІ (макет `zvit-4`, рішення власника 07.08.2026).
+ *
+ * Перший рівень — рядок дня у трьох смугах. Другий — склад БУДЬ-ЯКОГО непорожнього
+ * числа: клік на комірку → позиції, з яких воно склалось, і підсумок під ними.
+ *
+ * 🔴 ПРИНЦИП, А НЕ ПЕРЕЛІК ВИНЯТКІВ: Σ розкритих рядків ДОРІВНЮЄ числу, з якого їх
+ * розкрили. Це не зручність — це перевірка, доступна користувачеві без нас. Тримає
+ * гейт `#60` (на живих даних, по кожному типу) і `#60c` (когорта розбивається
+ * без залишку).
+ *
+ * 🔴 ДВІ ДАТИ НА ОДНОМУ ЕКРАНІ — НАВМИСНО. Коричнева смуга датована днем
+ * ЗАВАНТАЖЕННЯ, зелена — днем, коли ГРОШІ ЗАЙШЛИ. Тому «сума відправлених» і
+ * «отримано» за той самий день не мусять збігатися, і це не помилка. Підпис під
+ * таблицею називає це вголос: дві правильні величини без підпису читаються як
+ * поломка — та сама пастка, через яку ми вже проходили з ① і ②.
+ */
+type DrillKey = { day: string; kind: DayItemKind };
+const kindLabel: Record<DayItemKind, string> = {
+  created: "Створено угод", dispatched: "Авто, відправлені того дня",
+  dispatched_paid: "З них уже оплачено", dispatched_awaiting: "З них чекає оплати",
+  success: "Закрито ① того дня", paid: "Прийшло ⑨ того дня",
+  received: "Отримано ② того дня", avgcheck: "Угоди ②, з яких складається чек",
+  calls: "Дзвінки того дня",
+};
+
 function DayDrill({ managerId, period, focusDay, today }: { managerId: number; period: { from: string; to: string }; focusDay: string; today: string }) {
   const [d, setD] = useState<KvpManagerDetail | null>(null);
   const [err, setErr] = useState(false);
-  const [dealsOpen, setDealsOpen] = useState<string | null>(null);
-  const [deals, setDeals] = useState<Record<string, ReportPlanDeal[]>>({});
+  const [open, setOpen] = useState<DrillKey | null>(null);
+  const [items, setItems] = useState<Record<string, DayItems | null>>({});
   useEffect(() => {
-    let a = true; setD(null); setErr(false);
+    let a = true; setD(null); setErr(false); setOpen(null); setItems({});
     fetchManagerDetail({ managerId, from: period.from, to: period.to }).then((x) => a && setD(x)).catch(() => a && setErr(true));
     return () => { a = false; };
   }, [managerId, period.from, period.to]);
-  const openDeals = (day: string) => {
-    setDealsOpen(dealsOpen === day ? null : day);
-    if (!deals[day]) fetchReportPlanDeals({ managerId, date: day }).then((ds) => setDeals((p) => ({ ...p, [day]: ds }))).catch(() => setDeals((p) => ({ ...p, [day]: [] })));
+
+  /** 🔴 Дані вантажаться НА КЛІК — розкриття не має робити екран повільнішим для тих, хто його не відкриває. */
+  const toggle = (day: string, kind: DayItemKind) => {
+    const k = `${day}|${kind}`;
+    setOpen(open && open.day === day && open.kind === kind ? null : { day, kind });
+    if (items[k] === undefined) {
+      setItems((p) => ({ ...p, [k]: null }));
+      fetchDayItems({ managerId, date: day, kind })
+        .then((r) => setItems((p) => ({ ...p, [k]: r })))
+        .catch(() => setItems((p) => ({ ...p, [k]: { kind, day, items: [], total: { count: 0, sum: 0 } } })));
+    }
   };
+  const isOpen = (day: string, kind: DayItemKind) => !!open && open.day === day && open.kind === kind;
+
   if (err) return <div style={{ padding: "0 17px 16px", color: RED, fontSize: 12 }}>Не вдалося завантажити деталь.</div>;
   if (!d) return <div style={{ padding: "0 17px 16px", color: MUTED, fontSize: 12 }}>Завантаження деталі…</div>;
   const days = d.weeks.flatMap((w) => w.days);
+  const T = d.monthTotals;
+
+  /**
+   * 🔴 ПОРОЖНЯ КОМІРКА НЕ КЛІКАЄТЬСЯ ВЗАГАЛІ. Клік, що відкриває порожній список, —
+   * це «брехлива кнопка»: людина витрачає дію й дізнається, що дії не було.
+   */
+  const Cell = ({ day, kind, n, main, sub, color }: {
+    day: string; kind: DayItemKind; n: number;
+    main: React.ReactNode; sub?: React.ReactNode; color?: string;
+  }) => {
+    const live = n > 0;
+    return (
+      <td onClick={live ? (e) => { e.stopPropagation(); toggle(day, kind); } : undefined}
+          title={live ? `${kindLabel[kind]} · клік → склад числа` : undefined}
+          style={{ textAlign: "right", cursor: live ? "pointer" : "default",
+            color: live ? color : MUTED, fontWeight: live ? 600 : 400,
+            background: isOpen(day, kind) ? AMBER + "1f" : undefined,
+            textDecoration: live ? "underline dotted 1px" : undefined, textUnderlineOffset: 3 }}>
+        {live ? main : "—"}
+        {live && sub ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{sub}</div> : null}
+      </td>
+    );
+  };
+
+  /** Рядок-розкриття: позиції + ОБОВʼЯЗКОВИЙ підсумок — він і є доказом, що число зійшлося. */
+  const DrillRow = ({ day, kind }: { day: string; kind: DayItemKind }) => {
+    const r = items[`${day}|${kind}`];
+    return (
+      <tr>
+        <td colSpan={12} style={{ padding: 0, background: AMBER + "0e" }}>
+          <div style={{ padding: "7px 14px", fontSize: 10.5, fontWeight: 700, color: BAR,
+            textTransform: "uppercase", letterSpacing: ".4px", borderTop: `1px solid ${AMBER}55` }}>
+            ↳ {ddmm(day)} · {kindLabel[kind]}
+          </div>
+          {r === null || r === undefined ? (
+            <div style={{ padding: "8px 14px", color: MUTED, fontSize: 12 }}>Завантаження…</div>
+          ) : r.items.length === 0 ? (
+            <div style={{ padding: "8px 14px", color: MUTED, fontSize: 12 }}>Порожньо.</div>
+          ) : (
+            <>
+              {r.items.map((it, i) => (
+                <div key={i} style={{ display: "grid",
+                  gridTemplateColumns: kind === "calls" ? "1fr 150px 110px 120px" : "1fr 110px 190px 120px",
+                  gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--border)", fontSize: 12, alignItems: "center" }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                  {kind === "calls" ? (
+                    <>
+                      <span style={{ color: MUTED, fontSize: 11 }}>{it.call?.phone ?? "—"}</span>
+                      <span style={{ fontSize: 11 }}>
+                        <b style={{ color: it.call?.answered ? GREEN : MUTED }}>{it.state}</b>
+                        {it.call?.answered ? ` · ${Math.floor((it.call.durationSec) / 60)}:${String((it.call.durationSec) % 60).padStart(2, "0")}` : ""}
+                        <span style={{ color: MUTED }}> · {it.call?.at.slice(11)}</span>
+                      </span>
+                      {/* 🎧 ПРЯМИЙ ЛІНК НА ЗАПИС, без проксі — рішення власника 05.08.2026. */}
+                      <span style={{ textAlign: "right" }}>
+                        {it.call?.recordUrl
+                          ? <a href={it.call.recordUrl} target="_blank" rel="noreferrer" style={{ color: BAR, fontWeight: 600 }}>▶ запис</a>
+                          : <span style={{ color: MUTED, fontSize: 11 }}>запису немає</span>}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5, textAlign: "center",
+                        background: (it.src === "new" ? BAR : GREEN) + "22", color: it.src === "new" ? BAR : GREEN }}>
+                        {it.src === "new" ? "новий" : "постійний"}
+                      </span>
+                      <span style={{ fontSize: 11 }}>
+                        <span style={{ fontWeight: 600 }}>{it.state}</span>
+                        <span style={{ color: MUTED }}>
+                          {" · "}{it.plannedPayAt ? `план. оплата ${ddmm(it.plannedPayAt)}` : "дата оплати не вказана"}
+                        </span>
+                      </span>
+                      {/* 🔴 СУМА ЗАВЖДИ, СТАН ОКРЕМО. Було `price ? сума : статус` — при
+                          нульовому бюджеті замість числа зʼявлявся текст, і рядок
+                          читався як «суми немає». Тепер нуль виглядає нулем. */}
+                      <span style={{ textAlign: "right", fontWeight: 650 }}>{fmt(it.price)} ₴</span>
+                    </>
+                  )}
+                </div>
+              ))}
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 14px",
+                fontSize: 12, fontWeight: 750, background: AMBER + "18" }}>
+                <span>разом за {ddmm(day)} · {r.total.count} поз.</span>
+                <span>{kind === "calls" ? `${r.items.filter((x) => x.call?.answered).length} розмов · ${r.items.filter((x) => !x.call?.answered).length} спроб` : `${fmt(r.total.sum)} ₴`}</span>
+              </div>
+            </>
+          )}
+        </td>
+      </tr>
+    );
+  };
+
+  const BANDS: [string, number, string][] = [["Робота дня", 3, "var(--text)"], ["Авто, відправлені того дня · що з ними зараз", 4, BAR], ["Гроші, що надійшли того дня", 4, GREEN]];
+  const HEADS = ["День", "Створено угод", "Дзвінки розмов/спроб", "Нові/Пост.",
+    "Авто шт", "Сума відправлених", "З них оплачено", "З них чекає оплати",
+    "Закрито ①", "Прийшло ⑨", "Отримано ②", "Сер.чек ②"];
+
   return (
     <div style={{ borderTop: "1px solid var(--border)", background: "var(--bg)", padding: "14px 17px 18px" }}>
-      <div style={{ fontSize: 11.5, color: MUTED, textTransform: "uppercase", letterSpacing: ".4px", margin: "0 0 9px" }}>По днях періоду ({ddmm(period.from)}–{ddmm(period.to)}) · клік на день → угоди</div>
+      <div style={{ fontSize: 11.5, color: MUTED, textTransform: "uppercase", letterSpacing: ".4px", margin: "0 0 9px" }}>
+        По днях періоду ({ddmm(period.from)}–{ddmm(period.to)}) · клік на будь-яке число → його склад
+      </div>
       <div style={{ overflowX: "auto" }}>
         <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
-          <thead><tr>{["День", "Створено", "Авто", "Отримано", "Сер.чек", "Нові/Пост."].map((h, i) => <th key={h} style={{ textAlign: i ? "right" : "left" }}>{h}</th>)}</tr></thead>
+          <thead>
+            <tr>
+              <th />
+              {BANDS.map(([t, span, c]) => (
+                <th key={t} colSpan={span} style={{ textAlign: "center", fontSize: 10, letterSpacing: ".5px",
+                  textTransform: "uppercase", color: c, borderBottom: `2px solid ${c}44` }}>{t}</th>
+              ))}
+            </tr>
+            <tr>{HEADS.map((h, i) => <th key={h} style={{ textAlign: i ? "right" : "left" }}>{h}</th>)}</tr>
+          </thead>
           <tbody>
             {days.map((x) => {
-              /**
-               * 🔴 СЕР.ЧЕК = ГРОШІ ② ÷ УГОДИ ② — чисельник і знаменник з ОДНОГО джерела.
-               *
-               * Тут стояло `x.received.revenue / x.dispatched`: гроші ділились на АВТО.
-               * Це різні шкали й різні дати — авто рахуються за датою відправлення,
-               * гроші за датою входу в етап. Доказ із живого екрана 06.08 (Пехньо):
-               * Σ 2 850 ₴ і «сер.чек 475» → 2 850 ÷ 475 = 6, і шість — це авто.
-               * Ще ясніше 04.08: гроші 1 000 ₴, авто «—», чек «—» — знаменник
-               * обнулився РАЗОМ з авто, хоч гроші були.
-               *
-               * ⚠️ Це вже ДРУГЕ місце з тією самою помилкою: у CLAUDE.md вона записана
-               * як «НЕ 5313, що давала стара формула зі знімками ÷ машини». Відкат
-               * вигляду до 31.07 повернув би її втретє — тому рядок пропатчено ОКРЕМО
-               * від відкату (рішення власника 07.08: «відкат вигляду не означає відкат
-               * чесності»). Тримає гейт `#58`.
-               */
               const chk = x.received.deals ? Math.round(x.received.revenue / x.received.deals) : 0;
               const isF = x.day === focusDay;
               const future = x.day > today;
               const weekend = dow(x.day) >= 6;
-              const dim = future || weekend;
               return (
                 <Fragment key={x.day}>
-                  <tr onClick={() => !future && openDeals(x.day)} style={{ cursor: future ? "default" : "pointer", background: isF ? AMBER + "18" : weekend ? "var(--border)" + "44" : undefined, color: dim ? MUTED : undefined }}>
-                    <td style={{ textAlign: "left", fontWeight: 600, color: dim ? MUTED : undefined }}>{future ? "" : "▸ "}{WD[dow(x.day) - 1]} {ddmm(x.day)}{isF ? " •" : ""}</td>
+                  <tr style={{ background: isF ? AMBER + "18" : weekend ? "var(--border)" + "44" : undefined,
+                    color: future || weekend ? MUTED : undefined }}>
+                    <td style={{ textAlign: "left", fontWeight: 600, color: future || weekend ? MUTED : undefined }}>
+                      {WD[dow(x.day) - 1]} {ddmm(x.day)}{isF ? " •" : ""}
+                    </td>
                     {future ? (
-                      <td colSpan={5} style={{ textAlign: "right", color: MUTED, fontStyle: "italic" }}>ще попереду</td>
+                      <td colSpan={11} style={{ textAlign: "right", color: MUTED, fontStyle: "italic" }}>ще попереду</td>
                     ) : (
                       <>
-                        <td style={{ textAlign: "right" }}>{x.created || "—"} {x.created ? <span style={{ color: MUTED, fontSize: 11 }}>({x.newCount}н·{x.repeatCount}п)</span> : null}</td>
-                        <td style={{ textAlign: "right" }}>{x.dispatched || "—"} {x.dispatched ? <span style={{ color: MUTED, fontSize: 11 }}>({autoSplit(x.dispRepeat, x.dispLeadgen, x.dispAd, x.dispUndef)})</span> : null}</td>
-                        <td style={{ textAlign: "right" }}>{x.received.revenue ? fmt(x.received.revenue) + " ₴" : "—"}</td>
-                        <td style={{ textAlign: "right" }}>{chk ? fmt(chk) : "—"}</td>
-                        <td style={{ textAlign: "right" }}>{x.newCount}/{x.repeatCount}</td>
+                        <Cell day={x.day} kind="created" n={x.created} main={x.created} sub={`${x.newCount}н · ${x.repeatCount}п`} />
+                        <Cell day={x.day} kind="calls" n={x.talks + x.attempts} main={x.talks || "—"} sub={x.attempts ? `${x.attempts} спроб` : undefined} />
+                        <td style={{ textAlign: "right", color: MUTED }}>{x.newCount}/{x.repeatCount}</td>
+                        <Cell day={x.day} kind="dispatched" n={x.dispatched} main={x.dispatched} sub={x.dispatched ? autoSplit(x.dispRepeat, x.dispLeadgen, x.dispAd, x.dispUndef) : undefined} />
+                        <Cell day={x.day} kind="dispatched" n={x.dispSum} main={`${fmt(x.dispSum)} ₴`} />
+                        <Cell day={x.day} kind="dispatched_paid" n={x.dispPaid.sum} main={fmt(x.dispPaid.sum)} color={GREEN} />
+                        <Cell day={x.day} kind="dispatched_awaiting" n={x.dispAwait.sum} main={fmt(x.dispAwait.sum)} color={BAR} />
+                        <Cell day={x.day} kind="success" n={x.success.revenue} main={fmt(x.success.revenue)} sub={x.success.deals ? `${x.success.deals} угод` : undefined} color={GREEN} />
+                        <Cell day={x.day} kind="paid" n={x.paid.revenue} main={fmt(x.paid.revenue)} sub={x.paid.deals ? `${x.paid.deals} угод` : undefined} color={LINK} />
+                        <Cell day={x.day} kind="received" n={x.received.revenue} main={<b>{fmt(x.received.revenue)} ₴</b>} />
+                        <Cell day={x.day} kind="avgcheck" n={chk} main={fmt(chk)} sub={`${fmt(x.received.revenue)} ÷ ${x.received.deals}`} />
                       </>
                     )}
                   </tr>
-                  {dealsOpen === x.day && (
-                    <tr><td colSpan={6} style={{ padding: 0, background: "var(--card-bg)" }}>
-                      {(deals[x.day] ?? []).length === 0 ? <div style={{ padding: "8px 12px", color: MUTED, fontSize: 12 }}>{deals[x.day] ? "Немає угод." : "Завантаження…"}</div>
-                        : (deals[x.day] ?? []).map((dl, i) => (
-                          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 92px 100px", gap: 10, padding: "7px 12px", borderBottom: "1px solid var(--border)", fontSize: 12, alignItems: "center" }}>
-                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dl.name || "—"}</span>
-                            <span style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5, textAlign: "center", background: (dl.src === "new" ? BAR : GREEN) + "22", color: dl.src === "new" ? BAR : GREEN }}>{dl.src === "new" ? "новий" : "постійний"}</span>
-                            <span style={{ textAlign: "right", fontWeight: 650, color: dl.price ? "var(--text)" : MUTED }}>{dl.price ? fmt(dl.price) + " ₴" : dl.status}</span>
-                          </div>
-                        ))}
-                    </td></tr>
-                  )}
+                  {open && open.day === x.day ? <DrillRow day={x.day} kind={open.kind} /> : null}
                 </Fragment>
               );
             })}
             <tr style={{ background: "var(--bg)", fontWeight: 750, borderTop: "2px solid var(--border)" }}>
               <td style={{ textAlign: "left" }}>Σ період</td>
-              <td style={{ textAlign: "right" }}>{d.monthTotals.created}</td>
-              <td style={{ textAlign: "right" }}>{d.monthTotals.dispatched} {d.monthTotals.dispatched ? <span style={{ color: MUTED, fontSize: 11, fontWeight: 600 }}>({autoSplit(d.monthTotals.dispRepeat, d.monthTotals.dispLeadgen, d.monthTotals.dispAd, d.monthTotals.dispUndef)})</span> : null}</td>
-              <td style={{ textAlign: "right" }}>{fmt(d.monthTotals.received.revenue)} ₴</td>
+              <td style={{ textAlign: "right" }}>{T.created}<div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{T.newCount}н · {T.repeatCount}п</div></td>
+              <td style={{ textAlign: "right" }}>{T.talks || "—"}{T.attempts ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{T.attempts} спроб</div> : null}</td>
+              <td style={{ textAlign: "right" }}>{T.newCount}/{T.repeatCount}</td>
+              <td style={{ textAlign: "right" }}>{T.dispatched || "—"}{T.dispatched ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{autoSplit(T.dispRepeat, T.dispLeadgen, T.dispAd, T.dispUndef)}</div> : null}</td>
+              <td style={{ textAlign: "right" }}>{T.dispSum ? fmt(T.dispSum) + " ₴" : "—"}</td>
+              <td style={{ textAlign: "right", color: T.dispPaid.sum ? GREEN : MUTED }}>{T.dispPaid.sum ? fmt(T.dispPaid.sum) : "—"}{T.dispSum ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{Math.round((T.dispPaid.sum / T.dispSum) * 100)}%</div> : null}</td>
+              <td style={{ textAlign: "right", color: T.dispAwait.sum ? BAR : MUTED }}>{T.dispAwait.sum ? fmt(T.dispAwait.sum) : "—"}{T.dispSum ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{Math.round((T.dispAwait.sum / T.dispSum) * 100)}%</div> : null}</td>
+              <td style={{ textAlign: "right", color: T.success.revenue ? GREEN : MUTED }}>{T.success.revenue ? fmt(T.success.revenue) : "—"}{T.success.deals ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{T.success.deals} угод</div> : null}</td>
+              <td style={{ textAlign: "right", color: T.paid.revenue ? LINK : MUTED }}>{T.paid.revenue ? fmt(T.paid.revenue) : "—"}{T.paid.deals ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{T.paid.deals} угод</div> : null}</td>
+              <td style={{ textAlign: "right" }}>{fmt(T.received.revenue)} ₴</td>
               {/* Σ рахується ТІЄЮ САМОЮ формулою, що рядки над ним: гроші ② ÷ угоди ②.
-                  Інакше підсумок жив би за іншим правилом, ніж те, що він підсумовує. */}
-              <td style={{ textAlign: "right" }}>{d.monthTotals.received.deals ? fmt(Math.round(d.monthTotals.received.revenue / d.monthTotals.received.deals)) : "—"}</td>
-              <td style={{ textAlign: "right" }}>{d.monthTotals.newCount}/{d.monthTotals.repeatCount}</td>
+                  🔴 ТУТ НАВМИСНО БЕЗ ПСЕВДОНІМА `T`: гейт `#58` шукає саме цей вираз
+                  (`d.monthTotals.received.revenue / d.monthTotals.received.deals`), і
+                  скорочення робить його сліпим. Він щойно це й довів — почервонів на
+                  моєму ж рефакторингу. Читаність тут дешевша за перевірку. */}
+              <td style={{ textAlign: "right" }}>{d.monthTotals.received.deals ? fmt(Math.round(d.monthTotals.received.revenue / d.monthTotals.received.deals)) : "—"}
+                {T.received.deals ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{fmt(T.received.revenue)} ÷ {T.received.deals}</div> : null}</td>
             </tr>
           </tbody>
         </table>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11.5, color: MUTED, lineHeight: 1.55 }}>
+        <b>Коричнева смуга — це когорта дня:</b> авто, відправлені саме того дня, і що з ними сталося станом на сьогодні.
+        «Оплачено» плюс «чекає оплати» завжди дорівнює «сумі відправлених». ·
+        <b> Зелена смуга — це потік грошей того дня:</b> скільки надійшло, незалежно від того, коли авто поїхало.
+        «Закрито ①» — угода доведена до кінця; «Прийшло ⑨» — гроші є, угода ще відкрита.
+        <b> Сер.чек ②</b> = гроші ② ÷ кількість угод ② — чисельник і знаменник з одного джерела й однієї дати.
+        <br />
+        <b>Дві смуги міряні різними датами — і збігатися не мусять.</b> Авто датовані днем завантаження, гроші —
+        днем, коли зайшли на рахунок: тому в дні без жодного авто цілком може надійти оплата за рейс, що поїхав
+        раніше. Це не помилка. · Σ по «чекає оплати» за всі дні — це і є пайплайн менеджера, зібраний з його власної роботи.
       </div>
     </div>
   );

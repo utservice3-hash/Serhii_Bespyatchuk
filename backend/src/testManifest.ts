@@ -38,6 +38,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/drillSmoke.test.js",
   "routes/avgCheckDay.test.js",
   "routes/dismissedOnScreen.test.js",
+  "routes/dayItems.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -367,4 +368,8 @@ export const MANIFEST_TESTS: string[] = [
   // routes/dismissedOnScreen.test.ts — будильник на гроші звільнених без рядка
   "#59 гроші звільнених не висять у сумі без рядка на екрані",
   "#59b саботаж: звільнений із грішми робить предикат червоним",
+  // routes/dayItems.test.ts — другий рівень розгортки: Σ рядків == число в комірці
+  "#60 Σ рядків розкриття == число в комірці, для кожного типу",
+  "#60b невідомий тип падає, порожній день віддає рівно нуль",
+  "#60c когорта дня: оплачено + чекає == відправлено",
 ];

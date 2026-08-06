@@ -4,6 +4,8 @@ import { config } from "../config.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
 import { mergePairAllowed, mergeDenyReason, type MergePairScope } from "../auth/mergeScope.js";
+import type { AuthPayload } from "../auth/auth.js";
+import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
 const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
@@ -6049,7 +6051,7 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   // авто / ДЗВІНКИ) · ①/⑨/② · ВИСТАВЛЕНО РАХУНКІВ того дня · сер. чек ② того дня.
   // ① і ⑨ окремо — бо «сума двох станів» без розкладу і є та сама поломка, з якої
   // почалась історія Антипенка.
-  const [createdRows, splitRows, leadsRows, dispRows, recvRows, expRows, sucRows, paidRows, callDayRows, invDayRows] = await Promise.all([
+  const [createdRows, splitRows, leadsRows, dispRows, recvRows, expRows, sucRows, paidRows, callDayRows, invDayRows, cohortRows] = await Promise.all([
     metrics.createdByBucket(scope, "day"),
     metrics.createdSplitByBucket(scope, "day"),
     metrics.leadsTakenByBucket(scope, "day", true),
@@ -6060,10 +6062,11 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
     money.paidOnlyByManagerBucket({ managerId, from, to }, "day"),
     reportCuts.callsByManagerDay(from, to, { managerId }),
     reportCuts.invoicedByManagerDay(from, to, { managerId }),
+    reportCuts.dispatchCohortByManagerDay(from, to, { managerId }),
   ]);
 
-  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
-  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispUndef: 0, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
+  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number; dispSum: number; dispPaid: { deals: number; sum: number }; dispAwait: { deals: number; sum: number }; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
+  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispUndef: 0, dispSum: 0, dispPaid: { deals: 0, sum: 0 }, dispAwait: { deals: 0, sum: 0 }, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
   const dayMap = new Map<string, Cell>();
   const dget = (d: string) => { let e = dayMap.get(d); if (!e) { e = zero(); dayMap.set(d, e); } return e; };
   for (const r of createdRows) dget(r.bucket).created += r.deals;
@@ -6076,8 +6079,14 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   for (const r of paidRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.paid.deals += r.deals; e.paid.revenue += r.revenue; }
   for (const r of callDayRows) { const e = dget(r.day); e.talks += r.talks; e.attempts += r.attempts; }
   for (const r of invDayRows) { const e = dget(r.day); e.invoiced.deals += r.deals; e.invoiced.sum += r.sum; }
+  // 🟫 Когорта дня: авто, відправлені того дня, і що з ними ЗАРАЗ. `paid + await == deals`
+  // за побудовою — саме це робить смугу перевірною очима.
+  for (const r of cohortRows) { const e = dget(r.day);
+    e.dispSum += r.sum;
+    e.dispPaid.deals += r.paidDeals; e.dispPaid.sum += r.paidSum;
+    e.dispAwait.deals += r.awaitDeals; e.dispAwait.sum += r.awaitSum; }
 
-  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
+  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, dispSum: a.dispSum + b.dispSum, dispPaid: { deals: a.dispPaid.deals + b.dispPaid.deals, sum: a.dispPaid.sum + b.dispPaid.sum }, dispAwait: { deals: a.dispAwait.deals + b.dispAwait.deals, sum: a.dispAwait.sum + b.dispAwait.sum }, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   const weeks = fixedWeekBlocks(monthStart).map((w) => {
     const days = [...dayMap.entries()].filter(([d]) => d >= w.from && d <= w.to).sort((a, b) => a[0].localeCompare(b[0])).map(([day, c]) => ({ day, ...c }));
@@ -6526,20 +6535,53 @@ dashboardRouter.get("/report-plan", async (req, res) => {
 
 /** Дрил Звіту: угоди менеджера, СТВОРЕНІ у конкретний день (для тижень→день→угоди).
  *  new/rep = сигнал каналу (ad|leadgen→новий, інакше→постійний). Роль-скоуп. */
+/**
+ * Роль-скоуп для дрилів по менеджеру (E7): manager і team_lead — лише СВОЯ КОМАНДА;
+ * admin — будь-хто. Винесено в спільну функцію, бо тепер її кличуть ДВА роути:
+ * копія перевірки доступу — це два місця, де вона може розійтись.
+ */
+async function canDrillManager(auth: AuthPayload, managerId: number): Promise<boolean> {
+  if (auth.role !== "manager" && auth.role !== "team_lead") return true;
+  const myTeam = auth.role === "team_lead"
+    ? auth.teamId
+    : (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId])).rows[0]?.team_id ?? null;
+  const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+  // менеджер без команди бачить лише себе; інакше — уся команда
+  return myTeam == null ? managerId === auth.managerId : chk.rows[0]?.team_id === myTeam;
+}
+
+/**
+ * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ: склад КОНКРЕТНОГО числа в рядку дня.
+ *
+ * 🔴 ОДИН РОУТ ІЗ ПАРАМЕТРОМ `kind`, а не одинадцять ендпоінтів (вимога власника
+ * 07.08.2026). Логіка — у `core/dayItems.ts`, тут лише межа доступу й валідація.
+ *
+ * ⚠️ ЧОМУ ЦЕ НЕ ЗАМІНЮЄ `/report-plan/deals`: старий роут завжди віддає СТВОРЕНІ
+ * того дня незалежно від того, на що клікнули, — тому 04.08 показував список угод
+ * при прочерку в «Отримано», і це читалось як суперечність, хоч числа про різне.
+ * Новий роут привʼязаний до ЧИСЛА, а не до дня.
+ */
+dashboardRouter.get("/report-plan/day-items", async (req, res) => {
+  const auth = req.auth!;
+  const managerId = Number(req.query.managerId);
+  const date = String(req.query.date ?? "");
+  const kind = String(req.query.kind ?? "");
+  if (!managerId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "managerId + date (YYYY-MM-DD) обовʼязкові" });
+  }
+  if (!isDayItemKind(kind)) {
+    return res.status(400).json({ error: `kind має бути одним із: ${DAY_ITEM_KINDS.join(", ")}` });
+  }
+  if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
+  res.json(await dayItems(kind, managerId, date));
+});
+
 dashboardRouter.get("/report-plan/deals", async (req, res) => {
   const auth = req.auth!;
   const managerId = Number(req.query.managerId);
   const date = String(req.query.date ?? "");
   if (!managerId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "managerId + date (YYYY-MM-DD) обовʼязкові" });
-  // Роль-скоуп (E7): manager і team_lead — лише СВОЯ КОМАНДА; admin — будь-хто.
-  if (auth.role === "manager" || auth.role === "team_lead") {
-    const myTeam = auth.role === "team_lead"
-      ? auth.teamId
-      : (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [auth.managerId])).rows[0]?.team_id ?? null;
-    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
-    // менеджер без команди бачить лише себе; інакше — уся команда
-    if (myTeam == null ? managerId !== auth.managerId : chk.rows[0]?.team_id !== myTeam) return res.status(403).json({ error: "Forbidden" });
-  }
+  if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
   const r = await pool.query<{ name: string; channel: string | null; price: string; status_id: number }>(
     `SELECT d.name, d.lead_channel AS channel, d.price, d.status_id
