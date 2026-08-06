@@ -26,6 +26,7 @@ export const MANIFEST_FILES: string[] = [
   "versionStale.test.js",
   "core/companyCode.test.js",
   "core/moneyBuckets.test.js",
+  "core/activeManager.test.js",
   "core/weekPlan.test.js",
   "core/sumInvariants.test.js",
   "core/periodNesting.test.js",
@@ -336,4 +337,9 @@ export const MANIFEST_TESTS: string[] = [
   // routes/dismissedMoney.test.ts — гроші не зникають разом зі звільненою людиною
   "#50 Σ факту на екрані == receivedMoney ядра (звільнені не губляться)",
   "#50b звільнені з грішми: або їх нема, або вони НАЗВАНІ",
+  "#50c саботаж у ДАШБОРДІ: гроші звільненого лишаються в полі зору",
+  // core/activeManager.test.ts — активність має ДВА джерела (Kommo + налаштування)
+  "#51 звільненим вважається той, у кого знято БУДЬ-ЯКИЙ із двох прапорців",
+  "#51b SQL-предикат == чиста функція на реальних менеджерах",
+  "#51c саботаж: деактивація в НАЛАШТУВАННЯХ виводить менеджера з ростера",
 ];

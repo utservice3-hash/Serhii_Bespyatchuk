@@ -52,6 +52,62 @@ test("#50 Σ факту на екрані == receivedMoney ядра (звіль�
 });
 
 /**
+ * #50c — ГРОШІ НЕ ЗНИКАЮТЬ ПРИ ДЕАКТИВАЦІЇ БУДЬ-ЯКИМ ІЗ ДВОХ ПРАПОРЦІВ.
+ *
+ * 🔴 #50 перевіряв СУМУ, а не ДЖЕРЕЛО ознаки — і саме тому лишався б зеленим,
+ * навіть якби рядок «звільнені» ключився не на той прапорець. Реальний випадок:
+ * власник деактивує людей у НАЛАШТУВАННЯХ (`users.is_active`), а рядок стояв на
+ * Kommo (`managers.is_active`), тож на реальних звільненнях не спрацював би ніколи.
+ *
+ * 🧨 Саботаж робимо САМЕ деактивацією в дашборді: беремо менеджера З ГРІШМИ,
+ * знімаємо йому логін і вимагаємо, щоб його гроші лишились у полі зору —
+ * тобто щоб він випав із ростера й потрапив у `dismissed`, а не зник.
+ * Усе в транзакції з гарантованим ROLLBACK.
+ */
+test("#50c саботаж у ДАШБОРДІ: гроші звільненого лишаються в полі зору", needsDb(), async () => {
+  const { pool } = await import("../db/pool.js");
+  const money = await import("../core/money.js");
+  const { activeManagerSql } = await import("../core/activeManager.js");
+  const now = new Date();
+  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const from = `${ym}-01`;
+  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+
+  const rows = await money.receivedByMgr({ from, to });
+  const withMoney = rows.filter((r) => r.revenue !== 0);
+  assert.ok(withMoney.length > 0, "🔴 у місяці ні в кого немає грошей — саботувати нічого");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const victim = (await client.query<{ mid: number; uid: number }>(
+      `SELECT m.id AS mid, u.id AS uid FROM managers m JOIN users u ON u.manager_id = m.id
+        WHERE m.id = ANY($1) AND m.is_active AND u.is_active ORDER BY m.id LIMIT 1`,
+      [withMoney.map((r) => r.managerId)])).rows[0];
+    assert.ok(victim, "🔴 нема менеджера з грішми Й активним логіном — саботаж неможливий");
+    const cash = withMoney.find((r) => r.managerId === victim.mid)!.revenue;
+
+    const inRoster = async (): Promise<boolean> => (await client.query<{ n: string }>(
+      `SELECT COUNT(*) n FROM managers m WHERE m.id = $1 AND ${activeManagerSql("m")}`, [victim.mid])).rows[0].n === "1";
+
+    assert.equal(await inRoster(), true, "🔴 менеджер не в ростері ще ДО саботажу");
+    await client.query(`UPDATE users SET is_active = false WHERE id = $1`, [victim.uid]);
+    assert.equal(await inRoster(), false,
+      "🔴 деактивація в дашборді НЕ вивела людину з ростера — тоді її гроші лишились би "
+      + "в рядку активного менеджера, а сам рядок брехав би, що людина працює");
+
+    // 🔴 І головне: гроші ядро й далі бачить — тобто вони НЕ зникли, а мусять
+    // приїхати в `dismissed`. Ядро навмисно не фільтрує активність (правило #37).
+    const after = (await money.receivedByMgr({ from, to })).find((r) => r.managerId === victim.mid);
+    assert.equal(after?.revenue, cash,
+      "🔴 після деактивації ядро втратило гроші людини — тоді Σ зламалась би незалежно від рядка");
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+});
+
+/**
  * #50b — ДЗЕРКАЛО Й ЧЕСНА МЕЖА: якщо звільнених із грішми НЕМАЄ, гейт мусить це
  * СКАЗАТИ, а не мовчки зеленіти. Порожній результат — не доказ; доказом він стає
  * лише тоді, коли ми окремо переконались, що шукати справді не було чого.

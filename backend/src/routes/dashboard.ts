@@ -39,6 +39,7 @@ import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import * as reportCuts from "../core/reportCuts.js";
+import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 
@@ -6128,7 +6129,12 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // предикат дірявив на `team_id IS NULL` (Левентова/Операційний директор течуть) і діяв лише
   // у вигляді «всі команди». Спільний хелвер зі stuckDealsGrouped — не дублюємо SQL.
   const rp: unknown[] = [];
-  const rConds = ["m.is_active", metrics.commercialManagerSql("m")];
+  // 🔴 АКТИВНІСТЬ — ЗА ОБОМА ДЖЕРЕЛАМИ (знайдено 06.08.2026). `m.is_active` пише
+  // синк із Kommo, а власник деактивує людей у НАЛАШТУВАННЯХ (`users.is_active`) —
+  // і досі ця його дія на Звіт не впливала ЖОДНИМ чином: звільнений і далі стояв
+  // із планом, відсотком і світлофором. Тепер він випадає з ростера й потрапляє в
+  // рядок «звільнені» нижче — разом зі своїми грошима. Деталі — `core/activeManager.ts`.
+  const rConds = [activeManagerSql("m"), metrics.commercialManagerSql("m")];
   if (managerId) { rp.push(managerId); rConds.push(`m.id = $${rp.length}`); }
   if (teamId) { rp.push(teamId); rConds.push(`m.team_id = $${rp.length}`); }
   const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
