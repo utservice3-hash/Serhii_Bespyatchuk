@@ -2306,6 +2306,8 @@ export interface ClientPlanRow {
   segment: ClientSegment;
   /** ⭐ Включений КВП вручну попри правило + примітка «чому» (у підказці). */
   forcedRegular: boolean; forceNote: string | null;
+  /** 💬 Останній коментар — видно прямо в рядку, повний текст у підказці. */
+  lastComment: LastComment | null;
 }
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
@@ -2386,6 +2388,8 @@ export async function fetchClientCard(clientKey: string): Promise<ClientCard> {
   return data;
 }
 
+/** 💬 Останній коментар клієнта — те саме поле `client_comments`, що в картці. */
+export interface LastComment { body: string; author: string | null; createdAt: string }
 export interface ClientComment { id: number; body: string; createdAt: string; author: string | null }
 export async function fetchClientComments(clientKey: string): Promise<ClientComment[]> {
   const { data } = await api.get<ClientComment[]>("/dashboard/client-comments", { params: { clientKey } });
@@ -2436,6 +2440,8 @@ export interface ReactivationRow {
   longLapsed: boolean;
   /** ⭐ Включений КВП вручну попри правило + примітка «чому» (у підказці). */
   forcedRegular: boolean; forceNote: string | null;
+  /** 💬 Останній коментар — видно прямо в рядку. */
+  lastComment: LastComment | null;
   state: ClientState; value: number; seasonal: boolean; seasonalNote: string | null;
   taskId: number | null; taskStatus: string | null; taskAssignee: string | null;
   taskDeadline: string | null; closeReason: string | null;

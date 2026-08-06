@@ -4183,6 +4183,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     return true;
   });
 
+  const lastComment = await latestCommentByClient();
   const clients = activeRows.map((c) => {
     const p = planByKey.get(c.client_key);
     const plan = p ? Number(p.plan) : 0;
@@ -4198,6 +4199,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       // не лише прапорець.
       forcedRegular: factsFor(seg, c.client_key).forcedRegular,
       forceNote: factsFor(seg, c.client_key).forceNote,
+      // 💬 Останній коментар — щоб причину «чому не замовляє» було видно з рядка,
+      // а не лише тому, хто розгорнув картку.
+      lastComment: lastComment.get(c.client_key) ?? null,
       orders: Number(c.orders),
       lifetimeRevenue: Number(c.revenue),
       since: c.first_paid ? c.first_paid.slice(0, 7) : null,   // YYYY-MM
@@ -4390,6 +4394,33 @@ dashboardRouter.post("/client-plan/return", async (req, res) => {
 });
 
 /** Коментарі по клієнту — стрічка з автором і датою (макет 1, розгорнутий рядок). */
+/**
+ * 💬 ОСТАННІЙ КОМЕНТАР ПО КОЖНОМУ КЛІЄНТУ — для показу ПРЯМО В РЯДКУ списку.
+ *
+ * 🔴 ПРИВІД (рішення власника 05.08.2026). Епізодичний клієнт мовчить 55 днів і
+ * формально ще «активний» (поріг 60) — менеджеру НЕМА ДЕ записати, чому. Поки
+ * причина живе лише в картці, її не пише ніхто: заради одного речення ніхто не
+ * розгортає рядок.
+ *
+ * 🔴 ТЕ САМЕ ПОЛЕ, ЩО В КАРТЦІ — `client_comments`. Другої таблиці «коментар
+ * списку» не заводимо: два поля з однаковою назвою розійдуться за місяць, і
+ * ніхто не знатиме, яке з них бачить клієнт. Тут лише ОСТАННІЙ запис; уся
+ * стрічка лишається в картці.
+ *
+ * ⚠️ `DISTINCT ON` замість корельованого підзапиту: останній коментар потрібен
+ * для СОТЕНЬ рядків одразу, і підзапит на кожен рядок — це рівно та помилка,
+ * що коштувала `/overview` 9.5 с (див. `core/metrics.hasPriorPaidSql`).
+ */
+async function latestCommentByClient(): Promise<Map<string, { body: string; author: string | null; createdAt: string }>> {
+  const r = await pool.query<{ client_key: string; body: string; author: string | null; created_at: string }>(
+    `SELECT DISTINCT ON (c.client_key) c.client_key, c.body,
+            COALESCE(u.full_name, u.email) AS author,
+            to_char(c.created_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS created_at
+       FROM client_comments c LEFT JOIN users u ON u.id = c.author_id
+      ORDER BY c.client_key, c.created_at DESC`);
+  return new Map(r.rows.map((x) => [x.client_key, { body: x.body, author: x.author, createdAt: x.created_at }]));
+}
+
 dashboardRouter.get("/client-comments", async (req, res) => {
   const auth = req.auth!;
   const clientKey = String(req.query.clientKey ?? "").trim();
@@ -4794,6 +4825,12 @@ dashboardRouter.get("/reactivation-list", async (req, res) => {
   ]);
 
   // Ранжування за ЦІННІСТЮ (ядро), сезонні — ВНИЗ списку і без задач.
+  // 💬 Останній коментар у рядок — те саме поле `client_comments`, що в картці.
+  const lastCommentR = await latestCommentByClient();
+  // 🔴 ПРИСВОЄННЯ, А НЕ СПРЕД. `{ ...c, lastComment }` заборонений воротами #17e2:
+  // спред у відповіді одного дня винесе назовні нову колонку БД, якої ніхто не
+  // питав. Поле оголошене в типі рядка ядра, тож тут — просто заповнення.
+  for (const c of clients) c.lastComment = lastCommentR.get(c.clientKey) ?? null;
   const ranked = [...clients].sort((a, b) => {
     if (a.seasonal !== b.seasonal) return a.seasonal ? 1 : -1;
     return b.value - a.value;

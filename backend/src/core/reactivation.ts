@@ -143,6 +143,13 @@ export interface ReactivationClient {
   /** ⭐ Включений КВП вручну попри правило + примітка «чому». */
   forcedRegular: boolean;
   forceNote: string | null;
+  /**
+   * 💬 Останній коментар клієнта — заповнює РОУТ (`latestCommentByClient`), бо
+   * ядро станів про коментарі не знає й знати не повинно. Поле оголошене тут, а
+   * не приліплене спредом у відповіді: спред у видачі заборонений воротами
+   * `#17e2` — саме щоб нова колонка БД не поїхала назовні непоміченою.
+   */
+  lastComment?: { body: string; author: string | null; createdAt: string } | null;
   state: ClientState;
   value: number;
   seasonal: boolean;

@@ -7,6 +7,7 @@ import {
 } from "../../../api";
 import { formatAmountFull } from "../format";
 import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
+import { RowComment } from "./RowComment";
 import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
@@ -282,6 +283,9 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
           <div style={{ marginTop: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <SegmentBadge segment={c.segment} />
             {c.forcedRegular && <ForcedBadge note={c.forceNote} />}
+            {/* 💬 Коментар прямо тут: клієнт може мовчати 55 днів і формально
+                лишатись «активним» — причину треба записати, не розгортаючи рядок. */}
+            <RowComment clientKey={c.clientKey} value={c.lastComment} canWrite onSaved={load} />
             {c.paymentType && <span style={S.chip("#eff6ff", "#1d4ed8")}>{c.paymentType}</span>}
             <span style={{ fontSize: 11, color: "#6b7280" }}>
               {c.orders} зам.{c.since ? ` · з ${c.since}` : ""}

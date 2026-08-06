@@ -8,6 +8,7 @@ import {
 import { formatAmountFull } from "../format";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
+import { RowComment } from "./RowComment";
 
 /**
  * ФАЗА B · «РЕАКТИВАЦІЯ · СПЛЯЧІ ТА ВТРАЧЕНІ» (макет 2).
@@ -342,6 +343,10 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
       <td style={S.td}>
         <b>{formatAmountFull(c.lifetimeRevenue)}</b>
         <div style={{ fontSize: 11, color: "#9ca3af" }}>lifetime · вага {Math.round(c.value).toLocaleString("uk-UA")}</div>
+        {/* 💬 Причина «чому не замовляє» — тут, а не за два кліки в картці. */}
+        <div style={{ marginTop: 4 }}>
+          <RowComment clientKey={c.clientKey} value={c.lastComment} canWrite onSaved={load} />
+        </div>
       </td>
       <td style={S.td}>
         {c.taskId && c.taskStatus !== "done" ? (

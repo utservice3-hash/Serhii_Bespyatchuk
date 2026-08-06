@@ -453,6 +453,34 @@ test("#30o ДЖЕНЕРИКИ-ТЕЛЕФОНИ: без безналу — гет
   console.log(`   ℹ ключів-телефонів: у базі ${inDb}, у видачі ${phoneKeys.length} (решта — без безналу)`);
 });
 
+test("#44 КОМЕНТАР У РЯДКУ — ТЕ САМЕ ПОЛЕ, ЩО В КАРТЦІ (не друге поруч)", needsApi(), async () => {
+  // 🔴 ЧОМУ ЦЕ ВАРТЕ ГЕЙТА. Спокуса зробити «коментар списку» окремим полем велика:
+  // так простіше. Але два поля з однаковою назвою розходяться за місяць, і ніхто не
+  // знає, яке з них бачить клієнт. Тут доводимо, що рядок і картка показують ОДИН
+  // запис — беремо останній коментар зі списку й шукаємо його в стрічці картки.
+  const token = await adminToken();
+  const list = await (await get("/api/dashboard/client-plans", token)).json() as {
+    clients: { clientKey: string; lastComment: { body: string } | null }[] };
+  const withC = list.clients.filter((c) => c.lastComment?.body);
+  if (withC.length === 0) {
+    // Порожньо — це ПРОВАЛ перевірки, а не успіх: доводити нема на чому.
+    assert.fail("🔴 у жодного клієнта немає коментаря — гейт нічого не перевіряє; "
+      + "додайте коментар хоча б одному клієнту або зніміть тест СВІДОМО");
+  }
+  let checked = 0;
+  for (const c of withC.slice(0, 5)) {
+    const feed = await (await get("/api/dashboard/client-comments?clientKey=" + encodeURIComponent(c.clientKey), token)).json() as
+      { body: string; createdAt: string }[];
+    assert.ok(Array.isArray(feed) && feed.length > 0,
+      `🔴 у картці «${c.clientKey}» стрічка порожня, а в рядку коментар є — це ДВА різні поля`);
+    assert.ok(feed.some((f) => f.body === c.lastComment!.body),
+      `🔴 коментар рядка «${c.lastComment!.body.slice(0, 30)}…» не знайдено у стрічці картки — `
+      + "рядок і картка показують РІЗНІ записи");
+    checked++;
+  }
+  assert.ok(checked >= 1, "🔴 нічого не перевірено");
+});
+
 test("#43 ГРОШІ ПОЗА КОМАНДАМИ: ядро їх НЕ втрачає (Σ команд == Σ відділу)", needsDb(), async () => {
   // 🔴 ПРИВІД. За службовим акаунтом «Операційний директор» історично висять
   // клієнти: 618 648 ₴ / 295 угод за 12 міс. Питання було, чи не зникають вони
