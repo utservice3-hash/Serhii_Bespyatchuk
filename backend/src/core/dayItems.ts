@@ -99,14 +99,18 @@ const mapDeals = (rows: DealRow[]): DayItem[] => rows.map((x) => ({
  */
 async function byStageEntry(managerId: number, day: string, statuses: number[]): Promise<DayItem[]> {
   const r = await pool.query<DealRow>(
-    `SELECT DISTINCT ON (d.id) d.name, d.lead_channel AS channel, d.price, d.status_id,
+    // ⚠️ КЛЮЧ — `kommo_id`, А НЕ `id`. У `deals` немає колонки `id` (PK = `kommo_id`),
+    // у `deal_stage_events` немає `deal_id` (там теж `kommo_id`). Перша редакція
+    // джойнила `d.id = e.deal_id`: TypeScript цього не бачить, а гейт `#60` без
+    // прод-API не біжить — спіймала лише жива база. Той самий клас, що `day` без `AS`.
+    `SELECT DISTINCT ON (d.kommo_id) d.name, d.lead_channel AS channel, d.price, d.status_id,
             to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
        FROM deal_stage_events e
-       JOIN deals d ON d.id = e.deal_id
+       JOIN deals d ON d.kommo_id = e.kommo_id
       WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
         AND e.status_id = ANY($3) AND d.status_id = ANY($3)
         AND (e.changed_at ${K})::date = $4::date
-      ORDER BY d.id, e.changed_at DESC`,
+      ORDER BY d.kommo_id, e.changed_at DESC`,
     [managerId, FC_PIPELINES, statuses, day]
   );
   return mapDeals(r.rows);
