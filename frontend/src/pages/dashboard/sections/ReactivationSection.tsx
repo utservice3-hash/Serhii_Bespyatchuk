@@ -6,7 +6,6 @@ import {
   type ReactivationResp, type ReactivationRow,
 } from "../../../api";
 import { formatAmountFull } from "../format";
-import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
 
@@ -510,14 +509,12 @@ export function ReactivationSection({ auth }: { auth: AuthPayload }) {
         </div>
       </div>
 
-      {/* Обʼєднання — тімліду теж (у межах його команди); передача відповідального
-          лишилась за правом merge_clients. Тому дві різні умови, а не одна. */}
-      {(data.canMerge || data.canAssign) && (
-        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-          {data.canMerge && <MergePanel onDone={load} teamOnly={data.mergeScope === "team"} />}
-          {data.canAssign && <ManagerPanel clients={data.clients} onDone={load} />}
-        </div>
-      )}
+      {/* 🔗 ПАНЕЛЬ ЗВІДСИ ПРИБРАНА (рішення власника 06.08.2026) — вона стояла ПІД
+          таблицею на 610 рядків, тобто формально існувала, а практично власник її
+          не знаходив. Тепер обʼєднання відкривається кнопкою поруч із вкладками
+          (`LoyaltySection`), тими самими панелями — копії немає.
+          Той самий урок, що з коментарем у рядку: дія, до якої треба доскролити,
+          нічим не відрізняється від відсутньої. */}
 
       {creating && (
         <CreateTaskDialog client={creating} busy={busy}
