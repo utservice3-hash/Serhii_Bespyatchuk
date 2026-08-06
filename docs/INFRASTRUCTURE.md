@@ -88,6 +88,11 @@
 - **Frontend:** React 19 + Vite + recharts. `frontend/src/pages/Dashboard.tsx` — контейнер, секції в `pages/dashboard/sections/*`.
 - **Backend:** Node/Express + `pg`, `node-cron` (джоби), `grammy` (ТГ). `backend/src/routes/dashboard.ts` — основна аналітика.
 - **БД:** Neon Postgres. Структура — `backend/src/db/schema.sql`. Мапінг етапів — `seedKommoMapping.sql`.
+- ⚠️ **PORT = 4000, не 3000.** У документі роками стояло 3000; перевірено по живому
+  процесу 07.08.2026 — у логу `Backend listening on 0.0.0.0:4000`, а на 3000 не
+  слухає ніхто. Через це локальний `curl 127.0.0.1:3000/api/health` під час деплою
+  віддає порожнечу, і секунд тридцять здається, що прод покладено (сайт при цьому
+  живий — Apache проксує на 4000).
 - **Деплой:** relay-PHP на сервері evraziat (див. `CLAUDE.md`). Прод тягне гілку `claude/friendly-galileo-8pijhl`. **Повна процедура — нижче, §7.**
 - **Джоби:** синк Kommo (5хв), події етапів (10хв), передані заявки (10хв), дебіторка (30хв), новини (08:00), KPI-задачі (07:00), реконсиляція (04:00), **бекап (03:00)**.
 - **Проєктна памʼять:** `CLAUDE.md` — тримати актуальним (усі бізнес-правила там).
@@ -202,6 +207,21 @@ lve_suwrapper 1100
 
 1. **FF-merge:** `git fetch origin <dev-branch>` → `git merge --ff-only origin/<dev-branch>` на прод-checkout (`/home/evraziat/uts.ua/dashboard`).
 2. **Build BE:** `cd backend && npm run build` (tsc + копія `*.sql` у `dist/db`).
+2b. **🔴 МІГРАЦІЯ — ВРУЧНУ, ПЕРЕД РЕСТАРТОМ. `npm start` ЇЇ НЕ ЗАПУСКАЄ.**
+   `cd backend && set -a && . ./.env && set +a && npm run migrate`
+   Пропустиш при зміні `schema.sql` — новий код звернеться до колонки, якої ще
+   немає, і роут упаде з **500**. Заміряно 07.08.2026: `tasks.period_kind` додали
+   в схему, `effectiveWeekTargets` почав по ньому фільтрувати — без міграції
+   `/report-plan` (тобто ВЕСЬ екран Звіту) віддавав би помилку. У документі до
+   того було 8 кроків і жодного слова про міграцію: деплой строго по інструкції
+   поклав би прод.
+   ⚠️ **`Migration applied.` — НЕ доказ.** Рядок друкується й тоді, коли частина
+   роботи відкотилась (дедлок відкочує ВСЮ транзакцію, а повідомлення вже
+   надруковане). Тому після міграції — **окремий запит по результату**: колонка
+   існує І в ній немає несподіваних `NULL`. Приклад перевірки, що робили 07.08:
+   `information_schema.columns` на наявність + `GROUP BY period_kind` на бекфіл
+   (вийшло `week=43 · month=7`, жодного NULL). BE-only деплой без змін
+   `schema.sql` — крок можна пропустити, але переконатись, що схема не чіпалась.
 3. **Build FE:** `cd frontend && npm run build` (vite → `frontend/dist/`, новий хеш `index-*.js`).
 4. **🔴 ОБОВʼЯЗКОВО — копія FE у веб-докрут.** Apache віддає **не** `frontend/dist`, а корінь `/home/evraziat/uts.ua/dashboard/` (там власні `index.html` + `assets/`). Vite пише лише в `frontend/dist`, тож без копії користувач бачить **старий** бандл, хоч API вже нове. Порядок (щоб index.html ніколи не показав на відсутній asset):
    - спершу нові asset-и: `cp -r frontend/dist/assets/. assets/`
@@ -224,7 +244,8 @@ lve_suwrapper 1100
    Перед `test:prod` зробити по 2 запити на `/overview` і `/report`, інакше
    `#36` почервоніє без жодного регресу. Це вимір, а не поріг.
 
-5. **Рестарт node:** процес під панеллю adm.tools (`npm start` → `node dist/index.js`, PORT=3000). `kill -TERM <pid>` → панель авто-респавнить (новий pid за ~6с).
+5. **Рестарт node:** процес під панеллю adm.tools (`npm start` → `node dist/index.js`,
+   **PORT=4000**). `kill -TERM <pid>` → панель авто-респавнить (новий pid за ~6с).
 6. **Health:** `curl https://dashboard.uts.ua/api/health` = 200 ×N, `stale:false` (за потреби смикнути `POST /api/dashboard/sync` з admin-JWT — освіжає вотермарк без ризику подвійного синку).
 7. **Перевірка бандла наживо:** `curl https://dashboard.uts.ua/index.html?cb=<ts>` має показати НОВИЙ `index-*.js`.
 8. **🔴 `git push origin HEAD:claude/friendly-galileo-8pijhl` — ОБОВʼЯЗКОВО, і це не формальність.**
