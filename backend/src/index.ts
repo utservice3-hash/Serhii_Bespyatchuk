@@ -8,6 +8,7 @@ import { buildVersion, buildIsStale, onDiskVersion } from "./version.js";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
+import { MONITORED_JOBS } from "./jobs/monitoredJobs.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "./config.js";
@@ -135,8 +136,27 @@ app.get("/api/health", async (_req, res) => {
     const ageMinutes = lastSuccessAt
       ? Math.round((Date.now() - new Date(lastSuccessAt).getTime()) / 60000)
       : null;
-    // The 5-min cron should keep this well under ~15 min; flag a stall beyond that.
-    const stale = ageMinutes == null || ageMinutes > 15;
+    /**
+     * 🔴 ПОРІГ = 2× ЦИКЛ ДЖОБИ, І ВІН ПІДПИСАНИЙ У ВІДПОВІДІ (рішення власника 06.08.2026).
+     *
+     * Було `> 15` із коментарем «The 5-min cron should keep this well under ~15 min» —
+     * поріг рахувався під синк, що ходив КОЖНІ 5 ХВИЛИН. Після IP-бану 08.07.2026 темп
+     * знизили до 30 хв, а поріг лишили. Наслідок: `stale` був істинним **половину
+     * кожного нормального циклу** (15 хв із 30) без жодної несправності — тобто
+     * прапорець, червоний половину часу. Це рівно «алерт, який за два тижні почнуть
+     * ігнорувати», від чого нас береже правило про поріг «% + абсолют» у звірці.
+     *
+     * ⚠️ Поріг НЕ прибрано, хоч у Telegram уже є `freshnessWatch` (той самий 2×):
+     * два сигнали з різними порогами гірші за один, але сигнал у месенджері не
+     * заміняє ВИДИМОГО стану на сторінці — health читають люди.
+     *
+     * `staleAfterMin` їде в відповідь РАЗОМ із `jobEveryMin`: наступного разу, коли
+     * темп синку зміниться, розбіжність буде видно в самому health, а не через рік
+     * у коментарі.
+     */
+    const jobEveryMin = MONITORED_JOBS.find((j) => j.name === "syncKommo")?.everyMin ?? 30;
+    const staleAfterMin = jobEveryMin * 2;
+    const stale = ageMinutes == null || ageMinutes > staleAfterMin;
     const dc = await pool.query<{ ran_at: Date; warnings: number }>(
       `SELECT ran_at, warnings FROM data_check_state WHERE id = 1`
     ).catch(() => ({ rows: [] as { ran_at: Date; warnings: number }[] }));
@@ -146,6 +166,8 @@ app.get("/api/health", async (_req, res) => {
         lastSuccessAt,
         ageMinutes,
         stale,
+        // Підпис порога — щоб «чому саме 60» не доводилось шукати в коді.
+        staleAfterMin, jobEveryMin,
         consecutiveFailures: row?.consecutive_failures ?? 0,
         lastError: row?.last_error ?? null,
       },

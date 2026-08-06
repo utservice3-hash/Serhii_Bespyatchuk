@@ -425,7 +425,13 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
         <div style={{ border: `1px solid ${LINE}`, borderRadius: "var(--rpt-r-sm)", padding: "12px 14px", background: SOFT }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
             <b className="rpt-lab">Тиждень · задача з Задачника</b>
-            <span title="Тижнева ціль = задачник (вручну) або динамічна ціль. Одна цифра у Звіті й Задачнику." style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, whiteSpace: "nowrap" }}>синхронізовано із Задачником</span>
+            {/* 🔴 ПІДПИС ПЕРЕПИСАНО НА ЧЕСНИЙ (рішення власника 06.08.2026).
+                Було «синхронізовано із Задачником» — і це неправда: живої
+                двосторонньої синхронізації немає й не було, це статичний напис.
+                Дані під ним справді свіжі, але напис нічого не гарантував.
+                Той самий клас, що «знімок відновлено» на ручній цілі: підпис
+                правдоподібний, а величина за ним інша. */}
+            <span title="Плани беруться з Задачника (задача kpi_period і денні діти) при завантаженні Звіту. Звіт у Задачник НІЧОГО НЕ ПИШЕ — напрямок односторонній. Живої двосторонньої синхронізації немає." style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, whiteSpace: "nowrap" }}>дані з Задачника · лише читання</span>
           </div>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             {mWeek ? (

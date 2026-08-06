@@ -12,6 +12,21 @@ import { FC_PIPELINES } from "./money.js";
 
 const K = "AT TIME ZONE 'Europe/Kyiv'";
 
+/**
+ * 🔴 `AS` ПЕРЕД ПСЕВДОНІМОМ `day` — ОБОВʼЯЗКОВЕ, І ЦЕ НЕ СТИЛЬ.
+ *
+ * `day` — ключове слово Postgres (`EXTRACT(DAY FROM …)`, `INTERVAL '1 day'`), і як
+ * псевдонім колонки БЕЗ `AS` воно дає `syntax error at or near "day"`. Решта
+ * псевдонімів у цьому файлі (`talks`, `attempts`, `n`, `s`) працюють без `AS`, тому
+ * пропуск виглядав однорідно й нешкідливо.
+ *
+ * ⚠️ ЦЕ КОШТУВАЛО ПРОДА: обидві функції нижче падали, роут
+ * `/kvp-report/manager-detail` віддавав 500, і розгортка рядка менеджера по днях
+ * перестала працювати. Жоден із 202 тестів цього не бачив — жоден не клікає.
+ * Сусідній `metrics.expectedByManagerDay` увесь час стояв із `AS day` і працював,
+ * тобто правильний зразок лежав поруч.
+ */
+
 /** Стадія «Виставлення рахунку» — та, на якій стоїть затор. Значення одне, місце одне. */
 export const STAGE_INVOICING = 100274340;
 
@@ -43,7 +58,7 @@ export async function callsByManagerDay(from: string, to: string, scope: { manag
   if (scope.managerId) { p.push(scope.managerId); conds.push(`rc.manager_id = $${p.length}`); }
   if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
   const r = await pool.query<{ manager_id: number; day: string; talks: string; attempts: string }>(
-    `SELECT rc.manager_id, to_char((rc.calldate ${K})::date,'YYYY-MM-DD') day,
+    `SELECT rc.manager_id, to_char((rc.calldate ${K})::date,'YYYY-MM-DD') AS day,
             COUNT(*) FILTER (WHERE rc.billsec > 0)::int talks,
             COUNT(*) FILTER (WHERE rc.billsec = 0)::int attempts
        FROM ringostat_calls rc JOIN managers m ON m.id = rc.manager_id
@@ -107,7 +122,7 @@ export async function invoicedByManagerDay(from: string, to: string, scope: { ma
   if (scope.managerId) { p.push(scope.managerId); conds.push(`d.manager_id = $${p.length}`); }
   if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
   const r = await pool.query<{ manager_id: number; day: string; n: string; s: string }>(
-    `SELECT d.manager_id, to_char((ev.first_at ${K})::date,'YYYY-MM-DD') day,
+    `SELECT d.manager_id, to_char((ev.first_at ${K})::date,'YYYY-MM-DD') AS day,
             COUNT(*)::int n, COALESCE(SUM(d.price),0) s
        FROM (SELECT dse.kommo_id, MIN(dse.changed_at) first_at
                FROM deal_stage_events dse

@@ -37,6 +37,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/statePartition.test.js",
   "routes/noDoubleSource.test.js",
   "routes/tasksContract.test.js",
+  "routes/drillSmoke.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -362,4 +363,7 @@ export const MANIFEST_TESTS: string[] = [
   "#56 усі шість полів Задачника виводяться на екран",
   "#56b значення Задачника доходять; ручна ціль перекриває динамічну",
   "#56c /report-plan не змінює задач",
+  // routes/drillSmoke.test.ts — головна взаємодія екрана: розгортка по днях
+  "#57 розгортка по днях відповідає і несе дані",
+  "#57b у розгортці є хоч один день із рухом",
 ];
