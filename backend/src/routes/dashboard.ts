@@ -2163,11 +2163,18 @@ dashboardRouter.get("/teams", async (req, res) => {
   const NO_TEAM_ID = 0;
   const NO_TEAM_NAME = "Поза командами";
   const teamKey = (id: number | null) => id ?? NO_TEAM_ID;
-  const teamLabel = (id: number | null, name: string | null) => (id == null ? NO_TEAM_NAME : name ?? "");
+  // ⚠️ Для НЕ-null команди повертаємо `undefined`, а не "": `get` затирає імʼя лише
+  // непорожнім значенням, і порожній рядок із пізнішого джерела не має стерти назву,
+  // яку вже дало попереднє.
+  const teamLabel = (id: number | null, name: string | null) => (id == null ? NO_TEAM_NAME : name ?? undefined);
   for (const r of recvTeamAgg) { const e = get(teamKey(r.teamId), teamLabel(r.teamId, r.teamName)); e.revenue += r.revenue; e.deals += r.deals; }
   for (const r of sucTeamAgg) { const e = get(teamKey(r.teamId), teamLabel(r.teamId, r.teamName)); e.dispatched += r.deals; e.successRev += r.revenue; }
-  for (const r of conv.rows) { const e = get(r.tid); e.leads += Number(r.leads); e.paid += Number(r.paid); }
-  for (const [tid, debt] of teamDebt) { get(tid).receivables += debt; }
+  // 🔴 `teamKey` ТУТ ТЕЖ, І САМЕ ЦЕ Я СПЕРШУ ПРОҐАВИВ. Перейменувати два джерела з
+  // чотирьох означало розколоти рядок надвоє: іменований під ключем 0 і безіменний
+  // під ключем null. Гейт #43b спіймав це на живому проді — тобто перевірка була
+  // не формальністю. Джерел рівно чотири, і всі мусять зводитись до ОДНОГО ключа.
+  for (const r of conv.rows) { const e = get(teamKey(r.tid), teamLabel(r.tid, null)); e.leads += Number(r.leads); e.paid += Number(r.paid); }
+  for (const [tid, debt] of teamDebt) { get(teamKey(tid), teamLabel(tid, null)).receivables += debt; }
 
   const teams = [...map.values()]
     // Drop teams with no activity in the period (they leak in via the payment /
