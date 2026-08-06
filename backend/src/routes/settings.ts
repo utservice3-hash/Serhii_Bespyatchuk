@@ -252,15 +252,31 @@ settingsRouter.post("/users/:id/reset-password", async (req, res) => {
   res.json({ password }); // ОДИН раз; у БД лише хеш
 });
 
-// Реактивація РУЧНОГО користувача (CRM-менеджер відновлюється поверненням у CRM → синк).
+/**
+ * Реактивація користувача — БУДЬ-ЯКОГО, включно з CRM-менеджером.
+ *
+ * 🔴 GUARD ПРИБРАНО (рішення власника 06.08.2026), і не тому, що заважав, а тому,
+ * що його обґрунтування було НЕПРАВДИВЕ. Текст казав «CRM-менеджер відновлюється
+ * поверненням у CRM (синк активує автоматично)» — але `syncKommo` таблицю `users`
+ * НЕ ЧІПАЄ ВЗАГАЛІ (слово `users` там означає користувачів Kommo, і пишуться вони
+ * в `managers`). Тобто деактивація CRM-менеджера була **незворотною через
+ * інтерфейс**: кнопка «вимкнути» працювала, кнопка «увімкнути» відмовляла, а
+ * обіцяний автоматичний механізм не існував. Саме на цьому 06.08.2026 і застряг
+ * Шевчук Назар — повертати довелось SQL-ом по проду.
+ *
+ * 📏 ПРАВИЛО, ЯКЕ З ЦЬОГО ВИПЛИВАЄ (записане в CLAUDE.md): **дія, доступна в
+ * інтерфейсі, мусить бути скасовною ТИМ САМИМ інтерфейсом.** Незворотна кнопка —
+ * це пастка, навіть коли вона працює правильно.
+ *
+ * Тримає `#52` (цикл деактивація → реактивація повертає стан ДО байта, включно з
+ * `deactivated_at = NULL`) + саботаж `#52b`: повернення guard-а робить цикл
+ * незамкненим і гейт червоніє.
+ */
 settingsRouter.post("/users/:id/reactivate", async (req, res) => {
   if (!requireManageUsers(req, res)) return;
   const id = Number(req.params.id);
   const cur = await pool.query<{ email: string; manager_id: number | null }>(`SELECT email, manager_id FROM users WHERE id=$1`, [id]);
   if (!cur.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
-  if (cur.rows[0].manager_id !== null) {
-    return res.status(400).json({ error: "CRM-менеджер відновлюється поверненням у CRM (синк активує автоматично)" });
-  }
   await pool.query(`UPDATE users SET is_active=true, deactivated_at=NULL, deactivated_reason=NULL WHERE id=$1`, [id]);
   await writeAudit({ ...audit(req), action: "user.reactivate", targetType: "user", targetId: String(id), targetLabel: cur.rows[0].email });
   res.json({ ok: true });

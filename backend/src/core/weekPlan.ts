@@ -148,7 +148,21 @@ export async function weekPlansForMonth(
       // Морозимо ЛИШЕ тижні, що вже почались. Майбутній тиждень навмисно лишається
       // живим: заморозити його зараз означало б зафіксувати ціль за даними, яких
       // на момент його старту ще не буде.
-      if (opts.freeze !== false && w.from <= today) toInsert.push(row);
+      //
+      // 🔴 ЯРЛИК МУСИТЬ БУТИ ЧЕСНИЙ, І ЦЕ НЕ ДРІБНИЦЯ. `live` = «зафіксовано в
+      // момент старту тижня»; `backfill` = «відновлено ретроспективно». Тиждень,
+      // що почався ДО цього запуску (напр. викат у четвер), ми ловимо вже заднім
+      // числом — тобто це РЕКОНСТРУКЦІЯ, хай і точна. Ставити їй `live` означало б
+      // тихо назвати відновлене збереженим, а саме цю різницю UI і показує людині.
+      //
+      // ⚠️ САМЕ ЧИСЛО від моменту запуску НЕ залежить: `factBefore` рахується за
+      // ІСТОРИЧНИЙ діапазон [1-ше … день перед стартом тижня], тож викат о 13:00
+      // у четвер зафіксує залишок станом на ПОНЕДІЛОК, а не на момент відкриття
+      // екрана. Різниця з тодішнім станом можлива лише там, де угода відтоді
+      // переїхала між стадіями (реоупен) — і саме про це попереджає `backfill`.
+      if (opts.freeze !== false && w.from <= today) {
+        toInsert.push({ ...row, source: w.from === today ? "live" : "backfill" });
+      }
     }
   }
   if (toInsert.length) await freezeWeekPlans(monthStart, toInsert, "live");
@@ -162,11 +176,13 @@ export async function weekPlansForMonth(
 export async function freezeWeekPlans(monthStart: string, rows: WeekPlanRow[], source: "live" | "backfill"): Promise<number> {
   if (!rows.length) return 0;
   const vals: string[] = [];
-  const p: unknown[] = [monthStart, source];
+  const p: unknown[] = [monthStart];
   for (const r of rows) {
-    p.push(r.managerId, r.weekStart, r.plan, r.monthPlan, r.factBefore, r.wdWeek, r.wdRest);
+    // `source` рядка перемагає аргумент: виклик може змішувати «спіймали в момент»
+    // і «відновили заднім числом» в одній пачці (див. коментар про викат у четвер).
+    p.push(r.managerId, r.weekStart, r.plan, r.monthPlan, r.factBefore, r.wdWeek, r.wdRest, r.source ?? source);
     const b = p.length;
-    vals.push(`($${b - 6}, $${b - 5}::date, $1::date, $${b - 4}, $${b - 3}, $${b - 2}, $${b - 1}, $${b}, $2)`);
+    vals.push(`($${b - 7}, $${b - 6}::date, $1::date, $${b - 5}, $${b - 4}, $${b - 3}, $${b - 2}, $${b - 1}, $${b})`);
   }
   const r = await pool.query(
     `INSERT INTO weekly_plan_snapshots
@@ -187,7 +203,8 @@ export async function freezeWeekPlans(monthStart: string, rows: WeekPlanRow[], s
 export async function backfillWeekPlans(monthStart: string, planByMgr: Map<number, number>): Promise<{ inserted: number; weeks: number }> {
   const rows = await weekPlansForMonth({}, monthStart, planByMgr, { freeze: false });
   const today = await kyivToday();
-  const past = rows.filter((r) => r.weekStart <= today && r.source === null);
+  const past = rows.filter((r) => r.weekStart <= today && r.source === null)
+    .map((r) => ({ ...r, source: "backfill" as const }));
   const inserted = await freezeWeekPlans(monthStart, past, "backfill");
   return { inserted, weeks: new Set(past.map((r) => r.weekStart)).size };
 }

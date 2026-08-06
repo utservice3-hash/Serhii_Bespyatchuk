@@ -415,7 +415,14 @@ function ArchiveTab() {
                 <td>{u.deactivated_reason ?? (u.crm_linked ? "зник із CRM" : "—")}</td>
                 <td>{u.deactivated_at ? new Date(u.deactivated_at).toLocaleString("uk-UA") : "—"}</td>
                 <td>{u.crm_linked ? <CrmBadge /> : "ручний"}</td>
-                <td>{u.crm_linked ? <span style={{ fontSize: 12, color: "var(--text-muted)" }}>через CRM</span> : <button onClick={() => restore(u.id)} style={btn}>↺ Відновити</button>}</td>
+                {/* 🔴 КНОПКА Є ДЛЯ ВСІХ, включно з CRM-менеджерами (рішення власника
+                    06.08.2026). Раніше тут стояв напис «через CRM» — і він БРЕХАВ:
+                    `syncKommo` таблицю `users` не чіпає взагалі, тож деактивований
+                    CRM-менеджер не відновлювався ні сам, ні через інтерфейс. Разом із
+                    guard-ом на бекенді це робило дію НЕЗВОРОТНОЮ: «вимкнути» працювало,
+                    «увімкнути» — ні. Правило: дія, доступна в інтерфейсі, мусить бути
+                    скасовною ТИМ САМИМ інтерфейсом. */}
+                <td><button onClick={() => restore(u.id)} style={btn}>↺ Відновити</button></td>
               </tr>
             ))}
           </tbody>

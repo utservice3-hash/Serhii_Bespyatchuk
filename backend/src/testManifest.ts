@@ -32,6 +32,7 @@ export const MANIFEST_FILES: string[] = [
   "core/periodNesting.test.js",
   "routes/managersExpected.test.js",
   "routes/dismissedMoney.test.js",
+  "routes/reactivateCycle.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -342,4 +343,7 @@ export const MANIFEST_TESTS: string[] = [
   "#51 звільненим вважається той, у кого знято БУДЬ-ЯКИЙ із двох прапорців",
   "#51b SQL-предикат == чиста функція на реальних менеджерах",
   "#51c саботаж: деактивація в НАЛАШТУВАННЯХ виводить менеджера з ростера",
+  // routes/reactivateCycle.test.ts — дія в UI мусить бути скасовною тим самим UI
+  "#52 цикл деактивація → реактивація повертає CRM-менеджера у вихідний стан",
+  "#52b саботаж: у роуті реактивації немає відмови CRM-менеджерам",
 ];
