@@ -37,6 +37,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/tasksContract.test.js",
   "routes/drillSmoke.test.js",
   "routes/avgCheckDay.test.js",
+  "routes/dismissedOnScreen.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -363,4 +364,7 @@ export const MANIFEST_TESTS: string[] = [
   // routes/avgCheckDay.test.ts — сер.чек дня: чисельник і знаменник з одного джерела
   "#58 сер.чек дня ділить гроші на УГОДИ, а не на авто",
   "#58b живі дані: чек == гроші÷угоди і ≠ гроші÷авто",
+  // routes/dismissedOnScreen.test.ts — будильник на гроші звільнених без рядка
+  "#59 гроші звільнених не висять у сумі без рядка на екрані",
+  "#59b саботаж: звільнений із грішми робить предикат червоним",
 ];
