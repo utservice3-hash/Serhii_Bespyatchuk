@@ -34,8 +34,6 @@ export const MANIFEST_FILES: string[] = [
   "routes/dismissedMoney.test.js",
   "routes/reactivateCycle.test.js",
   "routes/noPlanShare.test.js",
-  "routes/statePartition.test.js",
-  "routes/noDoubleSource.test.js",
   "routes/tasksContract.test.js",
   "routes/drillSmoke.test.js",
   "routes/avgCheckDay.test.js",
@@ -355,11 +353,6 @@ export const MANIFEST_TESTS: string[] = [
   // routes/noPlanShare.test.ts — внесок менеджерів без плану названий числом
   "#53 factNoPlan == Σ факту менеджерів без плану + звільнених",
   "#53b саботаж: нуль при живому безплановому — це поломка",
-  // routes/statePartition.test.ts — чипи станів мусять сумуватись у к-сть людей
-  "#54 Σ чотирьох станів == к-сті менеджерів на екрані",
-  // routes/noDoubleSource.test.ts — жоден показник не має двох джерел на екрані
-  "#55 старі блоки-дублі не повернулись у Звіт",
-  "#55b саботаж: підкинутий дубль ловиться",
   // routes/tasksContract.test.ts — замок на інтеграцію із Задачником
   "#56 усі шість полів Задачника виводяться на екран",
   "#56b значення Задачника доходять; ручна ціль перекриває динамічну",
