@@ -36,6 +36,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/noPlanShare.test.js",
   "routes/statePartition.test.js",
   "routes/noDoubleSource.test.js",
+  "routes/tasksContract.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -357,4 +358,8 @@ export const MANIFEST_TESTS: string[] = [
   // routes/noDoubleSource.test.ts — жоден показник не має двох джерел на екрані
   "#55 старі блоки-дублі не повернулись у Звіт",
   "#55b саботаж: підкинутий дубль ловиться",
+  // routes/tasksContract.test.ts — замок на інтеграцію із Задачником
+  "#56 усі шість полів Задачника виводяться на екран",
+  "#56b значення Задачника доходять; ручна ціль перекриває динамічну",
+  "#56c /report-plan не змінює задач",
 ];
