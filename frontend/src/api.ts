@@ -159,6 +159,13 @@ export async function fetchLeadgen(params: {
 }
 
 export interface ExecutiveOverview {
+  /**
+   * 🔴 Чи обраний період ПОТОЧНИЙ. Знімкові показники (дебіторка, перехідні,
+   * очікування) від періоду не залежать — при непоточному вони мусять бути
+   * підписані «станом на сьогодні», інакше читаються як «за обраний період».
+   * Заміряно 07.08: `receivablesTotal` однаковий за липень, за тиждень і за день.
+   */
+  scope?: { from: string | null; to: string | null; isCurrent: boolean };
   plan: number;
   planMonthTotal: number;
   projection: {

@@ -69,6 +69,33 @@ export type Kpi = {
   subValue?: string;   // дрібний підпис під числом (напр. handoff у лідоген-плитках)
 };
 
+/**
+ * 🔴 ЗНІМКОВІ ПОКАЗНИКИ ПРИ НЕПОТОЧНОМУ ПЕРІОДІ (рішення власника 07.08.2026).
+ *
+ * Дебіторка, перехідні й очікування показують стан «ЗАРАЗ» і від обраного періоду
+ * не залежать узагалі. Заміряно 07.08: `receivablesTotal` = 9 446 853 ₴ однаковий
+ * і за липень, і за тиждень 21–27.07, і за один день 15.07. **Числа правильні —
+ * бреше подача:** людина читає їх як «за липень».
+ *
+ * 🟢 ПІДПИСУЄМО, А НЕ ХОВАЄМО. Сховане число люди шукають, не знаходять і питають,
+ * чи не зламалось. Підписане читається правильно з першого разу. Той самий вибір,
+ * що вже зроблено для «ще попереду» в розгортці та «мало історії» в пропозиціях.
+ *
+ * ⚠️ При ПОТОЧНОМУ періоді підпису немає навмисно: підпис, що стоїть завжди,
+ * перестає читатись і стає шумом. Тримає дзеркало гейта `#64b`.
+ */
+function SnapshotNote({ isCurrent }: { isCurrent: boolean }) {
+  if (isCurrent) return null;
+  return (
+    <span style={{ fontSize: 10.5, color: "var(--text-muted)", fontStyle: "italic", display: "block", marginTop: 2 }}>
+      станом на сьогодні · не за обраний період
+    </span>
+  );
+}
+
+/** Приглушення знімкової плитки — око має одразу бачити, що число з іншої шкали. */
+const snapshotDim = (isCurrent: boolean) => isCurrent ? undefined : { opacity: 0.62 };
+
 export function OverviewSection({
   isManager,
   teamId,
@@ -283,9 +310,10 @@ export function OverviewSection({
                       <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{overview.paymentDeals} угод</span>
                     </div>
                     <div className="kpi-card" style={{ borderLeft: "3px solid #d97706" }}>
-                      <span className="kpi-label">⏳ Очікування оплати (виставлені рахунки)</span>
+                      <span className="kpi-label" style={snapshotDim(overview.scope?.isCurrent !== false)}>⏳ Очікування оплати (виставлені рахунки)</span>
                       <span className="kpi-value" style={{ color: "#d97706" }}>{formatAmount((overview.pendingPayments?.revenue ?? 0))}</span>
                       <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{(overview.pendingPayments?.deals ?? 0)} угод · ще не в отриманих</span>
+                      <SnapshotNote isCurrent={overview.scope?.isCurrent !== false} />
                     </div>
                   </div>
                 </div>
@@ -430,7 +458,7 @@ export function OverviewSection({
               );
             })()}
             <HoverInfoCard
-              label="Очікувані оплати"
+              label={overview.scope?.isCurrent === false ? "Очікувані оплати · станом на сьогодні" : "Очікувані оплати"}
               value={`${(overview.pendingPayments?.deals ?? 0)} угод · ${formatAmount((overview.pendingPayments?.revenue ?? 0))}`}
               rows={overview.pendingPayments.byTeam}
               hint={CARD_HINTS.pending}
@@ -440,7 +468,7 @@ export function OverviewSection({
               <span className="kpi-value">{overview.createdFullCycle.toLocaleString("uk-UA")}</span>
             </button>
             <div className="kpi-card">
-              <span className="kpi-label">Сума перенесених угод з минулого місяця<InfoHint text={CARD_HINTS.carryover} /></span>
+              <span className="kpi-label" style={snapshotDim(overview.scope?.isCurrent !== false)}>Сума перенесених угод з минулого місяця<InfoHint text={CARD_HINTS.carryover} /></span>
               <span className="kpi-value">
                 {overview.carryover ? formatAmount(overview.carryover.amount) : "—"}
               </span>
@@ -449,6 +477,7 @@ export function OverviewSection({
                   {overview.carryover.deals.toLocaleString("uk-UA")} угод
                 </span>
               )}
+              <SnapshotNote isCurrent={overview.scope?.isCurrent !== false} />
             </div>
             <button
               className="kpi-card"
@@ -469,8 +498,9 @@ export function OverviewSection({
               <span className="kpi-value">{formatAmount(overview.newRevenue)}</span>
             </button>
             <div className="kpi-card">
-              <span className="kpi-label">Дебіторська заборгованість<InfoHint text={CARD_HINTS.receivables} /></span>
+              <span className="kpi-label" style={snapshotDim(overview.scope?.isCurrent !== false)}>Дебіторська заборгованість<InfoHint text={CARD_HINTS.receivables} /></span>
               <span className="kpi-value">{formatAmount(overview.receivablesTotal)}</span>
+              <SnapshotNote isCurrent={overview.scope?.isCurrent !== false} />
               {overview.receivablesCash > 0 && (
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                   з них готівка (МГЕР): {formatAmount(overview.receivablesCash)}
