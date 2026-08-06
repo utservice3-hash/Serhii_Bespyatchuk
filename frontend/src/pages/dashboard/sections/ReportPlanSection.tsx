@@ -503,7 +503,23 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
           <thead><tr>{["День", "Створено", "Авто", "Отримано", "Сер.чек", "Нові/Пост."].map((h, i) => <th key={h} style={{ textAlign: i ? "right" : "left" }}>{h}</th>)}</tr></thead>
           <tbody>
             {days.map((x) => {
-              const chk = x.dispatched ? Math.round(x.received.revenue / x.dispatched) : 0;
+              /**
+               * 🔴 СЕР.ЧЕК = ГРОШІ ② ÷ УГОДИ ② — чисельник і знаменник з ОДНОГО джерела.
+               *
+               * Тут стояло `x.received.revenue / x.dispatched`: гроші ділились на АВТО.
+               * Це різні шкали й різні дати — авто рахуються за датою відправлення,
+               * гроші за датою входу в етап. Доказ із живого екрана 06.08 (Пехньо):
+               * Σ 2 850 ₴ і «сер.чек 475» → 2 850 ÷ 475 = 6, і шість — це авто.
+               * Ще ясніше 04.08: гроші 1 000 ₴, авто «—», чек «—» — знаменник
+               * обнулився РАЗОМ з авто, хоч гроші були.
+               *
+               * ⚠️ Це вже ДРУГЕ місце з тією самою помилкою: у CLAUDE.md вона записана
+               * як «НЕ 5313, що давала стара формула зі знімками ÷ машини». Відкат
+               * вигляду до 31.07 повернув би її втретє — тому рядок пропатчено ОКРЕМО
+               * від відкату (рішення власника 07.08: «відкат вигляду не означає відкат
+               * чесності»). Тримає гейт `#58`.
+               */
+              const chk = x.received.deals ? Math.round(x.received.revenue / x.received.deals) : 0;
               const isF = x.day === focusDay;
               const future = x.day > today;
               const weekend = dow(x.day) >= 6;
@@ -544,7 +560,9 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
               <td style={{ textAlign: "right" }}>{d.monthTotals.created}</td>
               <td style={{ textAlign: "right" }}>{d.monthTotals.dispatched} {d.monthTotals.dispatched ? <span style={{ color: MUTED, fontSize: 11, fontWeight: 600 }}>({autoSplit(d.monthTotals.dispRepeat, d.monthTotals.dispLeadgen, d.monthTotals.dispAd, d.monthTotals.dispUndef)})</span> : null}</td>
               <td style={{ textAlign: "right" }}>{fmt(d.monthTotals.received.revenue)} ₴</td>
-              <td style={{ textAlign: "right" }}>{d.monthTotals.dispatched ? fmt(Math.round(d.monthTotals.received.revenue / d.monthTotals.dispatched)) : "—"}</td>
+              {/* Σ рахується ТІЄЮ САМОЮ формулою, що рядки над ним: гроші ② ÷ угоди ②.
+                  Інакше підсумок жив би за іншим правилом, ніж те, що він підсумовує. */}
+              <td style={{ textAlign: "right" }}>{d.monthTotals.received.deals ? fmt(Math.round(d.monthTotals.received.revenue / d.monthTotals.received.deals)) : "—"}</td>
               <td style={{ textAlign: "right" }}>{d.monthTotals.newCount}/{d.monthTotals.repeatCount}</td>
             </tr>
           </tbody>
