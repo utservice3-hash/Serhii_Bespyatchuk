@@ -671,8 +671,7 @@ export interface ReportPlan {
      * піднімають відсоток, не піднявши знаменник. Заміряно: у Яцика +8.3 п.п.
      */
     factNoPlan: number;
-    /** 🔴 П'ятий стан — «гроші є · не закрито». Раніше ці люди читались як «зрив». */
-    collectedNotClosed: number;
+    /** 🟢 ТРИ стани, взаємовиключні й повні: Σ(g+a+r) == к-сті менеджерів (рішення 07.08.2026). */
     statusCounts: { g: number; a: number; r: number } };
   managers: ReportPlanManager[];
   /**
