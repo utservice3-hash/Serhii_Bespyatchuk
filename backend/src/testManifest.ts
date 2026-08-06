@@ -38,6 +38,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/noDoubleSource.test.js",
   "routes/tasksContract.test.js",
   "routes/drillSmoke.test.js",
+  "routes/avgCheckDay.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -366,4 +367,7 @@ export const MANIFEST_TESTS: string[] = [
   // routes/drillSmoke.test.ts — головна взаємодія екрана: розгортка по днях
   "#57 розгортка по днях відповідає і несе дані",
   "#57b у розгортці є хоч один день із рухом",
+  // routes/avgCheckDay.test.ts — сер.чек дня: чисельник і знаменник з одного джерела
+  "#58 сер.чек дня ділить гроші на УГОДИ, а не на авто",
+  "#58b живі дані: чек == гроші÷угоди і ≠ гроші÷авто",
 ];
