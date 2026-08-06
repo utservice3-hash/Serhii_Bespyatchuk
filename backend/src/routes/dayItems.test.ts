@@ -48,7 +48,18 @@ async function ctx() {
   const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
   const rp = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, { headers: H });
   const body = await rp.json() as { managers: { managerId: number; name: string }[] };
-  return { H, from, to, mgrs: (body.managers ?? []).slice(0, 8) };
+  /**
+   * 🔴 БЕРЕМО ВСІХ, А НЕ ПЕРШИХ N. Перша редакція брала `.slice(0, 8)` — і приймання
+   * 07.08 червоніло на «Прийшло ⑨»: у восьми найгірших менеджерів (список
+   * відсортований найгіршими вгору) просто немає жодного дня з входом в етап 9.
+   * Продукт при цьому був справний — перевірено окремо, розкриття збіглось до
+   * копійки в Мокляка, Палія, Самохвалова і Шаврової.
+   *
+   * ⚠️ І ЦЕ НЕ «ГЕЙТ ПОМИЛИВСЯ» — він відмовився зеленіти на вибірці, де типу
+   * немає, рівно як задумано. Помилкою була вибірка. Різниця принципова: якби
+   * дзеркало мовчало, ми б викотили ⑨-розкриття НЕПЕРЕВІРЕНИМ і не дізнались би.
+   */
+  return { H, from, to, mgrs: body.managers ?? [] };
 }
 
 test("#60 Σ рядків розкриття == число в комірці, для кожного типу", needsApi(), async () => {
@@ -59,7 +70,9 @@ test("#60 Σ рядків розкриття == число в комірці, д
   /** Скільки НЕНУЛЬОВИХ прикладів знайшлось на кожен тип — для дзеркала `#60b`. */
   const checked = new Map<string, number>(KINDS.map((k) => [k.kind, 0]));
 
+  const enough = () => KINDS.every((k) => (checked.get(k.kind) ?? 0) >= 3);
   for (const m of mgrs) {
+    if (enough()) break; // усі типи підтверджені тричі — далі ходити нема сенсу
     const r = await fetch(
       `${API_BASE}/api/dashboard/kvp-report/manager-detail?managerId=${m.managerId}&from=${from}&to=${to}`,
       { headers: H });
