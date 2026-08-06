@@ -35,6 +35,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/reactivateCycle.test.js",
   "routes/noPlanShare.test.js",
   "routes/statePartition.test.js",
+  "routes/noDoubleSource.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -353,4 +354,7 @@ export const MANIFEST_TESTS: string[] = [
   "#53b саботаж: нуль при живому безплановому — це поломка",
   // routes/statePartition.test.ts — чипи станів мусять сумуватись у к-сть людей
   "#54 Σ чотирьох станів == к-сті менеджерів на екрані",
+  // routes/noDoubleSource.test.ts — жоден показник не має двох джерел на екрані
+  "#55 старі блоки-дублі не повернулись у Звіт",
+  "#55b саботаж: підкинутий дубль ловиться",
 ];

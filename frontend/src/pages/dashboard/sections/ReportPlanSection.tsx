@@ -254,46 +254,23 @@ export function ReportPlanSection({ auth, teams }: {
 }
 
 function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string }) {
-  const g = data.glance;
-  const pct = g.plan > 0 ? Math.round((g.fact / g.plan) * 100) : 0;
+  void data;                       // блок лишився лише про ФОКУС-ДЕНЬ (див. коментар нижче)
   const fg = focus?.glance;
-  const st = g.statusCounts;
   const futureFocus = focusDay > today;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr 1fr", gap: 16, marginBottom: 18 }}>
-      {/* ① Команда за місяць — головна цифра екрана, тому єдина, що несе акцент. */}
-      <div className="rpt-card" style={{ padding: "20px 22px" }}>
-        <div className="rpt-lab">Команда за місяць <InfoHint text="Грошовий план — стратегічна ціль із вкладки «Плани» (відділ 2.7 млн). Факт — отримані кошти (успішно 142 ⊎ оплачено етап 9)." /></div>
-        <div className="rpt-big">
-          {fmt(g.fact)} <span className="rpt-unit">/ {fmt(g.plan)} ₴ · {pct}%</span>
-        </div>
-        {/* Смуга замість кільця: лінійний прогрес читається одним поглядом і не
-            змагається з числом за увагу. Число повне, смуга візуально ≤100%. */}
-        <div className="rpt-track" style={{ margin: "14px 0 10px" }}
-          title={`Факт (отримані кошти): ${fmt(g.fact)} ₴\n= успішно реалізовано (виграно 142): ${fmt(g.factSuccess)} ₴\n+ оплачено (етап 9, ще не закрито): ${fmt(g.factPaid)} ₴`}>
-          <div className="rpt-fill" style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
-        </div>
-        <div className="rpt-note">
-          успішно {fmt(g.factSuccess)} + оплачено {fmt(g.factPaid)} · середній чек {g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"}
-          {" "}<InfoHint text="Ср. чек Звіту = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць»; Σ суми ÷ Σ угод (не середнє середніх)." />
-        </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-          <Tag c={RED} bg={SBG.r}><Dot c={RED} />{st.r} зрив</Tag>
-          <Tag c={AMBER} bg={SBG.a}><Dot c={AMBER} />{st.a} відстає</Tag>
-          <Tag c={GREEN} bg={SBG.g}><Dot c={GREEN} />{st.g} у нормі</Tag>
-        </div>
-      </div>
-
-      {/* ② Очікуємо за плановою датою */}
-      <div className="rpt-card" style={{ padding: "20px 22px" }}>
-        <div className="rpt-lab">Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. Цей / наступний КАЛЕНДАРНИЙ місяць, знімок «зараз». Σ per-manager == КВП." /></div>
-        <div className="rpt-big">{fmt(g.expectThisMonth)} <span className="rpt-unit">₴ цього міс.</span></div>
-        <div style={{ display: "flex", gap: 28, marginTop: 18, flexWrap: "wrap" }}>
-          <Sub l="наст. міс." v={`${fmt(g.expectNextMonth)} ₴`} />
-          <Sub l="авто за місяць" v={`${g.dispatched} · ${fmt(g.dispatchedRevenue)} ₴`} />
-        </div>
-      </div>
-
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px)", gap: 16, marginBottom: 18 }}>
+      {/* 🔴 ТУТ БУЛИ ДВА БЛОКИ — «Команда за місяць» і «Очікуємо за план. датою», —
+          і обидва ДУБЛЮВАЛИ плитки верхнього підсумку (рішення власника 06.08.2026
+          після огляду прода). Наслідки — рівно ті, з яких почалась уся ця робота:
+            · «Команда за місяць» показувала 12%, а плитка «Виконано · місяць» 11.8%:
+              одне число, два округлення, один екран;
+            · стани людей тут лишались ТРИ (18+1+6 = 25 із 31) — тобто подвійний
+              рахунок, який щойно виправили в новій плитці, жив поруч у старій;
+            · «Очікуємо за план. датою» повторювало плитку «Ще не надійшли».
+          Унікальні числа (середній чек, авто за місяць) НЕ викинуті — вони переїхали
+          у відповідні плитки `ReportSummary`: окремий блок заради двох показників і є
+          той спосіб, яким дублі відроджуються.
+          📏 ПРАВИЛО: жоден показник не має двох джерел на одному екрані (гейт #55). */}
       {/* ③ Фокус-день */}
       <div className="rpt-card" style={{ padding: "20px 22px" }}>
         <div className="rpt-lab">Фокус-день · {ddmm(focusDay)}</div>
@@ -304,6 +281,7 @@ function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: Rep
         )}
         <div style={{ display: "flex", gap: 28, marginTop: 18, flexWrap: "wrap" }}>
           <Sub l="створено угод" v={futureFocus ? "—" : String(fg?.created ?? 0)} />
+          <Sub l="середній чек" v={fg?.avgCheck == null ? "—" : `${fmt(fg.avgCheck)} ₴`} />
           {/* TODO (крок 3, Ringostat): друга цифра «дзвінки за день». У макеті вона є,
               але поля в `/report-plan` НЕМА, а вигадувати метрику заборонено. Джерело
               зʼявиться, коли `linkCalls()` звʼяже `ringostat_calls` з `client_key`/менеджером
@@ -360,12 +338,22 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
           footer={<div title={"Динамічний план тижня = залишок місяця × робочі дні цього тижня ÷ робочі дні від початку тижня до кінця місяця. "
             + "Базис — РОБОЧІ ДНІ, а не «тижні, що лишились»: інакше останній тиждень місяця (буває одноденним) отримав би повну тижневу норму. "
             + "Ціль фіксується в понеділок 00:00 за Києвом і всередині тижня не змінюється."
-            + (m.week.reconstructed ? " ⚠️ Знімок цього тижня ВІДНОВЛЕНО ретроспективно, а не збережено в момент." : "")}>
+            + (m.week.isManual
+              ? " ⚠️ У ЦЬОГО менеджера ціль ЗАДАНА ВРУЧНУ в Задачнику й перекриває динамічну — тобто вона не рахувалась за формулою вище."
+              : m.week.reconstructed ? " ⚠️ Знімок цього тижня ВІДНОВЛЕНО ретроспективно, а не збережено в момент." : "")}>
+            {/* 🔴 РУЧНИЙ ПЛАН ПЕРЕКРИВАЄ ДИНАМІЧНИЙ, вони НЕ конфліктують:
+                `plans.effectiveWeekTargets` рахує `target = manual ?? dynamic`. Знімок
+                при цьому все одно рахується й морозиться (він лишається фолбеком і
+                історією), але на екрані показане НЕ воно.
+                Тому підпис «знімок відновлено» стоїть ЛИШЕ коли ціль динамічна —
+                поруч із ручною він означав би, що показане число реконструйоване,
+                хоча його просто ввели руками. Це той самий клас, що два «очікуємо»:
+                правдиві підписи, поставлені не до тієї величини. */}
             {m.week.isManual
-              ? <>вручну задано у Задачнику · <b style={{ color: AMBER }}>вручну</b></>
+              ? <>ціль <b style={{ color: AMBER }}>задана вручну</b> у Задачнику — не рахувалась{m.week.dynamic > 0 ? ` (динамічна була б ${k(m.week.dynamic)})` : ""}</>
               : <>динамічний план · залишок ÷ робочі дні, що лишились{m.week.workingDaysWeek > 0 ? ` (${m.week.workingDaysWeek} роб. дн. у тижні)` : ""}</>}
             {m.week.overPlan > 0 && <> · <b style={{ color: GREEN }}>понад план +{k(m.week.overPlan)} ₴</b></>}
-            {m.week.reconstructed && <> · <span style={{ color: MUTED }}>знімок відновлено</span></>}
+            {!m.week.isManual && m.week.reconstructed && <> · <span style={{ color: MUTED }}>знімок відновлено</span></>}
           </div>} />
         {/* МІСЯЦЬ — план-бар (сирий план) + #16 очікуємо + #17 прогноз */}
         <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}

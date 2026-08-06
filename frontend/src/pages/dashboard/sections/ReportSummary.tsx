@@ -2,7 +2,7 @@ import type { ReportPlan, ReportPlanManager, ReportPlanDismissed } from "../../.
 import { InfoHint } from "../widgets";
 import {
   GREEN, AMBER, RED, MUTED, INK, SOFT, LINE,
-  fmt, kk, ddmm, PaceBar, pctOfNeeded, HINTS,
+  fmt, kk, ddmm, PaceBar, pctOfNeeded, HINTS, mgrWord,
 } from "./ReportBands";
 
 /**
@@ -176,6 +176,20 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
               <div style={{ fontWeight: 700, color: "var(--rpt-link)" }}>{fmt(g.factPaid)}</div>
             </div>
           </div>
+          {/* 🔴 Переїхало сюди зі старого блоку «Команда за місяць», який дублював
+              плитку «Виконано · місяць». Ці два числа аналога серед плиток не мали,
+              тож викидати їх разом із дублем було б втратою, а лишати окремим блоком —
+              способом відродити дубль. */}
+          <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase" }}>середній чек</div>
+              <div style={{ fontWeight: 700 }}>{g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase" }}>авто за місяць</div>
+              <div style={{ fontWeight: 700 }}>{g.dispatched} · {fmt(g.dispatchedRevenue)} ₴</div>
+            </div>
+          </div>
           <div style={{ fontSize: 11, color: MUTED, marginTop: 8 }}>
             В оцінку роботи менеджера йде лише «закрито ①». Решта — гроші на рахунку за незакритими угодами.
           </div>
@@ -189,6 +203,10 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
               <div style={{ fontWeight: 700, color: AMBER }}>{fmt(g.expectThisMonth)}</div>
             </div>
             <div>
+              <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase" }}>наст. місяць</div>
+              <div style={{ fontWeight: 700, color: MUTED }}>{fmt(g.expectNextMonth)}</div>
+            </div>
+            <div>
               <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase" }}>зазвичай добирає <InfoHint text={HINTS.dobir} /></div>
               <div style={{ fontWeight: 700, color: MUTED }}>{fmt(g.dobir)}</div>
             </div>
@@ -198,7 +216,7 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
           </div>
         </div>
         <div className="rpt-card" style={{ padding: "16px 18px" }}>
-          <div className="rpt-lab">Люди · {data.managers.length} менеджер(ів)</div>
+          <div className="rpt-lab">Люди · {mgrWord(data.managers.length)}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
             <Chip n={g.collectedNotClosed} label="гроші є · не закрито" color="var(--rpt-link)" bg="var(--rpt-soft)" />
             <Chip n={g.statusCounts.r} label="зрив" color={RED} bg="var(--rpt-bad-bg)" />
@@ -207,7 +225,7 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
           </div>
           <div style={{ fontSize: 11, color: MUTED, marginTop: 10 }}>
             {g.collectedNotClosed > 0
-              ? <>{g.collectedNotClosed} менеджер(ів) зібрали гроші, але не перевели жодної угоди в «успішно реалізовано» — раніше вони читались як «зрив». Це не відставання, це незакриті угоди.</>
+              ? <>{mgrWord(g.collectedNotClosed)} зібрали гроші, але не перевели жодної угоди в «успішно реалізовано» — раніше вони читались як «зрив». Це не відставання, це незакриті угоди.</>
               : <>Стан «гроші є · не закрито» порожній: у всіх, хто зібрав гроші, є й закриті угоди.</>}
           </div>
         </div>
@@ -242,7 +260,7 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
                     <td>
                       <div style={{ fontWeight: 700 }}>{t.name}</div>
                       <div style={{ fontSize: 10.5, color: MUTED }}>
-                        {t.managers.length} менеджер(ів)
+                        {mgrWord(t.managers.length)}
                         {t.dismissed.length > 0 && (
                           <span title={"Звільнені з грішми в цьому періоді. План, відсоток, світлофор і темп їм НЕ рахуються — "
                             + "ставити план людині, якої немає, безглуздо. Але гроші (① і ⑨) входять у суму команди й компанії: "
@@ -293,15 +311,58 @@ export function ReportSummary({ data, weekLabel, onPickTeam, pickedTeam }: {
                   </tr>
                 );
               })}
-              <tr style={{ borderTop: `2px solid ${LINE}`, fontWeight: 800 }}>
-                <td>КОМПАНІЯ</td>
-                <td style={{ textAlign: "right" }}>{fmt(g.plan)}</td>
-                <td style={{ textAlign: "right" }}>{fmt(g.fact)}</td>
-                <td style={{ textAlign: "right" }}>{g.plan > 0 ? `${((g.fact / g.plan) * 100).toFixed(1)}%` : "—"}</td>
-                <td style={{ textAlign: "right" }}>{fmt(g.fact + g.expectThisMonth)}</td>
-                <td style={{ textAlign: "right" }}>{fmt(g.byPace)}</td>
-                <td style={{ textAlign: "right" }}>{fmt(g.dobir)}</td>
-              </tr>
+              {/* 🔴 ПІДСУМОК ДОРІВНЯНО ДО РЯДКІВ КОМАНД (рішення власника 06.08.2026).
+                  Раніше тут не було ані розкладу ①+⑨, ані смуги темпу з міткою, ані
+                  чипів станів — і підсумок читався як МЕНШ інформативний за свої ж
+                  складові, хоча має бути їх повною сумою. */}
+              {(() => {
+                const pct = g.plan > 0 ? (g.fact / g.plan) * 100 : 0;
+                const dev = pct - monthMark;
+                const color = g.plan <= 0 ? MUTED : dev >= 0 ? GREEN : dev >= -10 ? AMBER : RED;
+                return (
+                  <tr style={{ borderTop: `2px solid ${LINE}`, fontWeight: 800 }}>
+                    <td>
+                      <div>КОМПАНІЯ</div>
+                      <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 500 }}>
+                        {teams.length} {teams.length === 1 ? "команда" : teams.length < 5 ? "команди" : "команд"} · {mgrWord(data.managers.length)}
+                      </div>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
+                        <Chip n={g.collectedNotClosed} label="гроші є" color="var(--rpt-link)" bg={SOFT} />
+                        <Chip n={g.statusCounts.r} label="зрив" color={RED} bg="var(--rpt-bad-bg)" />
+                        <Chip n={g.statusCounts.a} label="відстає" color={AMBER} bg="var(--rpt-warn-bg)" />
+                        <Chip n={g.statusCounts.g} label="норма" color={GREEN} bg="var(--rpt-ok-bg)" />
+                      </div>
+                    </td>
+                    <td style={{ textAlign: "right" }}>{fmt(g.plan)}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <div>{fmt(g.fact)}</div>
+                      <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 500 }}>{fmt(g.factSuccess)} + {fmt(g.factPaid)}</div>
+                      {g.factNoPlan !== 0 && (
+                        <div style={{ fontSize: 10.5, color: AMBER, fontWeight: 500 }}
+                          title="Гроші менеджерів без місячного плану (і звільнених). Піднімають відсоток, не піднявши знаменник.">
+                          у т.ч. {fmt(g.factNoPlan)} ₴ від менеджерів без плану
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ textAlign: "right", minWidth: 150 }}>
+                      <div style={{ color }}>{g.plan > 0 ? `${pct.toFixed(1)}%` : "—"}</div>
+                      <PaceBar pct={pct} markPct={monthMark} color={color} />
+                      <div style={{ fontSize: 10, color, fontWeight: 700 }}>
+                        {g.plan > 0 ? `${dev >= 0 ? "+" : ""}${dev.toFixed(1)} п.п. від темпу` : "плану немає"}
+                      </div>
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      <div>{fmt(g.fact + g.expectThisMonth)}</div>
+                      <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 500 }}>+{fmt(g.expectThisMonth)} рахунків</div>
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      <div>{fmt(g.byPace)}</div>
+                      <div style={{ fontSize: 10.5, color: MUTED, fontWeight: 500 }}>{g.plan > 0 ? `${Math.round((g.byPace / g.plan) * 100)}% плану` : "—"}</div>
+                    </td>
+                    <td style={{ textAlign: "right", color: MUTED }}>{fmt(g.dobir)}</td>
+                  </tr>
+                );
+              })()}
             </tbody>
           </table>
         </div>

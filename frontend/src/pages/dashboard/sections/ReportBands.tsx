@@ -20,6 +20,21 @@ export const fmt = (n: number): string =>
 export const kk = (n: number): string => (!Number.isFinite(n) ? "—" : Math.abs(n) >= 1000 ? Math.round(n / 1000) + "к" : String(Math.round(n)));
 export const ddmm = (s: string): string => s.slice(8) + "." + s.slice(5, 7);
 
+/**
+ * 🔤 УКРАЇНСЬКА МНОЖИНА — це текст, який читають живі люди щодня.
+ * «31 менеджер(ів)» — не скорочення, а відмова щось вирішувати за читача.
+ * Правило: 1 (крім 11) → однина · 2-4 (крім 12-14) → мала множина · решта → множина.
+ */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b === 1) return one;
+  if (b >= 2 && b <= 4) return few;
+  return many;
+}
+export const mgrWord = (n: number): string => `${n} ${plural(n, "менеджер", "менеджери", "менеджерів")}`;
+export const dealWord = (n: number): string => `${n} ${plural(n, "угода", "угоди", "угод")}`;
+
 /** Порожнє значення читається як «—», а не як нуль: невідоме має читатись як невідоме. */
 export const dash = (n: number, render: (x: number) => string = fmt): string => (n ? render(n) : "—");
 
