@@ -360,7 +360,13 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, drillP
         <div style={{ border: `1px solid ${BAR}44`, borderRadius: 10, padding: "10px 12px", background: BAR + "08" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
             <b style={{ fontSize: 12 }}>🗓 Тиждень · задача з Задачника</b>
-            <span title="Тижнева ціль = задачник (вручну) або динамічна ціль. Одна цифра у Звіті й Задачнику." style={{ fontSize: 10, fontWeight: 700, color: BAR, background: BAR + "1a", padding: "2px 8px", borderRadius: 12, whiteSpace: "nowrap" }}>↔ синхронізовано із Задачником</span>
+            <b style={{ fontSize: 12 }}>🗓 Тиждень · задача з Задачника</b>
+            {/* 🔴 ПІДПИС МУСИТЬ ЛИШАТИСЬ ЧЕСНИМ. Тут стояло «↔ синхронізовано із
+                Задачником» — і це неправда: живої синхронізації немає, Звіт лише
+                ЧИТАЄ `tasks` (доведено `#56c`: у тілі `/report-plan` нуль записів).
+                Стрілка «↔» обіцяла двосторонність, якої не існує. Старий текст назад
+                не повертаємо навіть у відкаті вигляду — гейт `#56` його забороняє. */}
+            <span title="Тижнева ціль = задачник (вручну) або динамічна ціль. Одна цифра у Звіті й Задачнику." style={{ fontSize: 10, fontWeight: 700, color: BAR, background: BAR + "1a", padding: "2px 8px", borderRadius: 12, whiteSpace: "nowrap" }}>дані з Задачника · лише читання</span>
           </div>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             {mWeek ? (
