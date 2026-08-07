@@ -771,6 +771,16 @@ def get_manager_deal_stats(user_id: int, days: int) -> dict:
     }
 
 
+def _is_non_ad_campaign(name: str) -> bool:
+    """Чи є 'кампанія' насправді НЕ рекламою. Google Analytics підставляє в
+    поле джерела службові значення в дужках — (organic) / (direct) /
+    (referral) / (not set) / (none): це органіка, прямі заходи, реферали й
+    лідогенерація, а НЕ платна реклама. У рекламний звіт вони не входять
+    (власник: «тільки реклама»)."""
+    n = (name or "").strip()
+    return n.startswith("(") and n.endswith(")")
+
+
 def get_campaign_name(lead: dict) -> str:
     """
     Назва рекламної кампанії ліда. Перевіряє поля-кандидати у фіксованому
@@ -861,7 +871,7 @@ def get_ad_campaign_report(since: int, until: int) -> dict:
     non_target_total = 0
     for lead in leads:
         campaign = get_campaign_name(lead)
-        if not campaign:
+        if not campaign or _is_non_ad_campaign(campaign):
             continue
         total += 1
         c = campaigns.setdefault(
