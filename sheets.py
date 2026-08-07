@@ -190,6 +190,53 @@ def get_ad_spend_by_campaign(days: int = 7) -> dict[str, dict]:
     return spend
 
 
+def get_ad_spend_by_campaign_for_month(year: int, month: int) -> dict[str, dict]:
+    """Витрати по кампаніях за ЗАВЕРШЕНИЙ календарний місяць — повний місячний
+    підсумок з блоку відповідного місяця (без пропорції по днях, бо місяць
+    цілий). month_label формується англійською як у таблиці (напр. 'July 2026').
+    Повертає {normalize_campaign_name(назва): {"monthly_cost", "estimated_period_cost"}}."""
+    import re
+    from datetime import date
+
+    sh = _get_external_sheet(AD_SPEND_SPREADSHEET_ID)
+    if not sh:
+        return {}
+    try:
+        ws = sh.worksheet(AD_SPEND_MONTH_TAB)
+        values = ws.get_all_values()
+    except Exception as e:
+        logger.error("get_ad_spend_by_campaign_for_month: %s", e)
+        return {}
+
+    month_label = date(year, month, 1).strftime("%B %Y")
+    spend: dict[str, dict] = {}
+    i = 0
+    while i < len(values):
+        if values[i] and (values[i][0] or "").strip() == month_label:
+            i += 2  # skip month header row + metric header row
+            while i < len(values):
+                row = values[i]
+                name = (row[0] or "").strip()
+                if not name or name == "TOTAL":
+                    break
+                cost_str = re.sub(r"\s+", "", row[1] if len(row) > 1 else "") or "0"
+                try:
+                    monthly_cost = float(cost_str)
+                except ValueError:
+                    monthly_cost = 0.0
+                spend[normalize_campaign_name(name)] = {
+                    "monthly_cost": monthly_cost,
+                    "estimated_period_cost": monthly_cost,  # цілий місяць — повний підсумок
+                }
+                i += 1
+            break
+        i += 1
+    else:
+        logger.warning("get_ad_spend_by_campaign_for_month: month block '%s' not found", month_label)
+
+    return spend
+
+
 def _get_or_create_worksheet(name: str, rows: int = 1000, cols: int = 20):
     sh = _get_sheet()
     if not sh:

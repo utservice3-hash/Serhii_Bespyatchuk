@@ -795,23 +795,15 @@ def get_campaign_name(lead: dict) -> str:
     return ""
 
 
-def get_weekly_ad_campaign_report(days: int = 7, offset_days: int = 0) -> dict:
+def get_ad_campaign_report(since: int, until: int) -> dict:
     """
-    Зведення по угодах, що прийшли з реклами (заповнене поле кампанії) за
-    період `days` днів, що закінчується `offset_days` днів тому (offset_days=0 —
-    період закінчується зараз; offset_days=days дає попередній рівновеликий
-    період — зручно для порівняння тиждень-до-тижня).
+    Зведення по угодах, що прийшли з реклами (заповнене поле кампанії),
+    створених у діапазоні unix-часу [since, until].
 
     status_id в Kommo унікальний лише в межах pipeline — те саме число 143
     означає "Закрито не реалізовано" в pipeline "Перевозки" і "Не цільові" в
     pipeline "Кваліфікація", тож класифікація статусу враховує pipeline_id.
     """
-    from datetime import datetime, timezone, timedelta
-
-    until_dt = datetime.now(timezone.utc) - timedelta(days=offset_days)
-    since = int((until_dt - timedelta(days=days)).timestamp())
-    until = int(until_dt.timestamp())
-
     leads = []
     page = 1
     while True:
@@ -911,6 +903,30 @@ def get_weekly_ad_campaign_report(days: int = 7, offset_days: int = 0) -> dict:
         "campaigns": campaigns,
         "leads": leads_detail,
     }
+
+
+def get_weekly_ad_campaign_report(days: int = 7, offset_days: int = 0) -> dict:
+    """Обгортка над get_ad_campaign_report для rolling-вікна `days` днів, що
+    закінчується `offset_days` днів тому (offset_days=0 — закінчується зараз;
+    offset_days=days → попередній рівновеликий період для WoW-порівняння)."""
+    from datetime import datetime, timezone, timedelta
+
+    until_dt = datetime.now(timezone.utc) - timedelta(days=offset_days)
+    since = int((until_dt - timedelta(days=days)).timestamp())
+    until = int(until_dt.timestamp())
+    return get_ad_campaign_report(since, until)
+
+
+def get_ad_campaign_report_for_month(year: int, month: int) -> dict:
+    """Зведення по рекламних угодах за календарний місяць (Europe/Kyiv):
+    від 1-го числа 00:00 до 1-го числа наступного місяця 00:00."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    kyiv = ZoneInfo("Europe/Kyiv")
+    since_dt = datetime(year, month, 1, tzinfo=kyiv)
+    ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
+    until_dt = datetime(ny, nm, 1, tzinfo=kyiv)
+    return get_ad_campaign_report(int(since_dt.timestamp()), int(until_dt.timestamp()))
 
 
 def _count_contact_won_deals(contact_id: int) -> int:

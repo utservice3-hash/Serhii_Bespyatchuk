@@ -1345,8 +1345,9 @@ def _pct_change(current: float, previous: float) -> str:
     return f"{sign}{delta:.1f}%"
 
 
-def _build_wow_comparison(report: dict, prev_report: dict) -> list[str]:
-    """Порівняння ключових метрик з попереднім рівновеликим періодом (WoW)."""
+def _build_wow_comparison(report: dict, prev_report: dict, label: str = "WoW") -> list[str]:
+    """Порівняння ключових метрик з попереднім рівновеликим періодом
+    (label: 'WoW' для тижня, 'MoM' для місяця)."""
     total = report["total"]
     prev_total = prev_report["total"]
     if not prev_total:
@@ -1358,7 +1359,7 @@ def _build_wow_comparison(report: dict, prev_report: dict) -> list[str]:
     )
     revenue = lambda r: sum(c.get("revenue", 0) for c in r["campaigns"].values())
 
-    lines = ["\n📊 <b>Порівняння з попереднім періодом (WoW):</b>"]
+    lines = [f"\n📊 <b>Порівняння з попереднім періодом ({label}):</b>"]
     lines.append(f"• Угод: {total} ({_pct_change(total, prev_total)})")
     lines.append(f"• Конверсія: {conv(report)}% (попередньо {conv(prev_report)}%)")
     if any(c.get("revenue") is not None for c in report["campaigns"].values()):
@@ -1388,13 +1389,18 @@ def _build_ad_report_text(
     days: int = 7,
     prev_report: dict | None = None,
     repeat_info: dict | None = None,
+    title: str | None = None,
+    comparison_label: str = "WoW",
+    empty_note: str | None = None,
 ) -> str:
     total = report["total"]
     non_target_total = report.get("non_target_total", 0)
     campaigns = report["campaigns"]
 
+    header = title or f"📢 <b>Тижневий звіт по рекламі</b> (останні {days} днів)"
+
     if total == 0:
-        return f"📢 <b>Звіт по рекламі за {days} днів</b>\nЦього тижня угод з реклами не надходило."
+        return f"{header}\n{empty_note or 'Цього тижня угод з реклами не надходило.'}"
 
     MIN_DEALS_FOR_RANKING = 3  # щоб 1 угода з 1 виграною не виглядала як "100% конверсія"
 
@@ -1406,7 +1412,7 @@ def _build_ad_report_text(
     non_target_pct = round(non_target_total / total * 100, 1) if total else 0.0
 
     lines = [
-        f"📢 <b>Тижневий звіт по рекламі</b> (останні {days} днів)",
+        header,
         f"📥 Всього угод з реклами: <b>{total}</b>",
         f"🚫 З них нецільові: <b>{non_target_total}</b> ({non_target_pct}%)\n",
     ]
@@ -1466,7 +1472,7 @@ def _build_ad_report_text(
         lines.extend(_build_repeat_customers_block(repeat_info))
 
     if prev_report and prev_report.get("total"):
-        lines.extend(_build_wow_comparison(report, prev_report))
+        lines.extend(_build_wow_comparison(report, prev_report, label=comparison_label))
 
     return "\n".join(lines)
 
@@ -1490,6 +1496,76 @@ def _send_weekly_ad_report() -> None:
         filename = f"ad_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
         notifier.send_ad_report_file(filename, excel_bytes, caption="📎 Деталізація по угодах і кампаніях")
     logger.info("Weekly ad report sent")
+
+
+_UA_MONTHS = {
+    1: "січень", 2: "лютий", 3: "березень", 4: "квітень", 5: "травень", 6: "червень",
+    7: "липень", 8: "серпень", 9: "вересень", 10: "жовтень", 11: "листопад", 12: "грудень",
+}
+
+
+def _enrich_campaigns_with_spend_month(report: dict, year: int, month: int) -> None:
+    """Як _enrich_campaigns_with_spend, але витрати — повний підсумок за
+    завершений календарний місяць (sheets.get_ad_spend_by_campaign_for_month)."""
+    spend_map = sheets.get_ad_spend_by_campaign_for_month(year, month)
+    revenue_by_campaign: dict[str, int] = {}
+    for lead in report.get("leads", []):
+        if lead.get("revenue_eligible"):
+            revenue_by_campaign[lead["campaign"]] = revenue_by_campaign.get(lead["campaign"], 0) + lead["amount"]
+
+    for name, c in report["campaigns"].items():
+        spend_entry = spend_map.get(sheets.normalize_campaign_name(name))
+        revenue = revenue_by_campaign.get(name, 0)
+        c["revenue"] = revenue
+        if spend_entry:
+            spend = spend_entry["estimated_period_cost"]
+            c["spend"] = spend
+            c["margin"] = round(revenue - spend, 2)
+            c["cpl"] = round(spend / c["total"], 2) if c["total"] else 0.0
+            c["roas"] = round(revenue / spend * 100, 1) if spend else None
+        else:
+            c["spend"] = None
+            c["margin"] = None
+            c["cpl"] = None
+            c["roas"] = None
+
+
+def _send_monthly_ad_report(year: int | None = None, month: int | None = None) -> None:
+    """Місячний звіт по рекламі у форматі тижневого, з MoM-порівнянням із
+    попереднім місяцем. Без аргументів — за МИНУЛИЙ місяць (для запуску 1-го
+    числа). Витрати беруться з блоку відповідного місяця (повний підсумок)."""
+    now = datetime.now(timezone.utc)
+    if year is None or month is None:
+        # місяць, що щойно завершився
+        month = now.month - 1 or 12
+        year = now.year if now.month > 1 else now.year - 1
+    pmonth = month - 1 or 12
+    pyear = year if month > 1 else year - 1
+
+    report = kommo.get_ad_campaign_report_for_month(year, month)
+    prev_report = kommo.get_ad_campaign_report_for_month(pyear, pmonth)
+    if report["total"] > 0:
+        _enrich_campaigns_with_spend_month(report, year, month)
+    if prev_report["total"] > 0:
+        _enrich_campaigns_with_spend_month(prev_report, pyear, pmonth)
+    repeat_info = kommo.get_repeat_customers(report) if report["total"] > 0 else None
+
+    mname = _UA_MONTHS.get(month, str(month))
+    title = f"📢 <b>Місячний звіт по рекламі</b> — {mname} {year}"
+    empty_note = f"За {mname} {year} угод з реклами не надходило."
+    text = _build_ad_report_text(
+        report, days=0, prev_report=prev_report, repeat_info=repeat_info,
+        title=title, comparison_label="MoM", empty_note=empty_note,
+    )
+    notifier.send_ad_report(text)
+    if report["total"] > 0:
+        try:
+            excel_bytes = excel_report.build_ad_report_excel(report, 0, trend=None, repeat_info=repeat_info)
+            filename = f"ad_report_{year}-{month:02d}.xlsx"
+            notifier.send_ad_report_file(filename, excel_bytes, caption=f"📎 Деталізація за {mname} {year}")
+        except Exception as e:
+            logger.error("monthly ad report xlsx: %s", e)
+    logger.info("Monthly ad report sent for %s-%02d", year, month)
 
 
 _last_ad_report_error: dict = {"error": None}
@@ -1537,6 +1613,39 @@ def send_ad_report_endpoint():
     return jsonify({"ok": True, "sent": True, "excel_queued": excel_queued, "text": text})
 
 
+@app.route("/send-monthly-ad-report", methods=["GET"])
+def send_monthly_ad_report_endpoint():
+    """Ручний запуск місячного звіту по рекламі.
+    ?year=2026&month=7 — конкретний місяць (за замовч. — минулий місяць).
+    ?dry=1 — лише показати текст (без відправки в Telegram)."""
+    year = request.args.get("year")
+    month = request.args.get("month")
+    year = int(year) if year else None
+    month = int(month) if month else None
+    if request.args.get("dry") == "1":
+        now = datetime.now(timezone.utc)
+        y = year if year is not None else (now.year if now.month > 1 else now.year - 1)
+        m = month if month is not None else (now.month - 1 or 12)
+        pm = m - 1 or 12
+        py = y if m > 1 else y - 1
+        report = kommo.get_ad_campaign_report_for_month(y, m)
+        prev_report = kommo.get_ad_campaign_report_for_month(py, pm)
+        if report["total"] > 0:
+            _enrich_campaigns_with_spend_month(report, y, m)
+        if prev_report["total"] > 0:
+            _enrich_campaigns_with_spend_month(prev_report, py, pm)
+        repeat_info = kommo.get_repeat_customers(report) if report["total"] > 0 else None
+        mname = _UA_MONTHS.get(m, str(m))
+        text = _build_ad_report_text(
+            report, days=0, prev_report=prev_report, repeat_info=repeat_info,
+            title=f"📢 <b>Місячний звіт по рекламі</b> — {mname} {y}",
+            comparison_label="MoM", empty_note=f"За {mname} {y} угод з реклами не надходило.",
+        )
+        return jsonify({"ok": True, "text": text, "leads_count": len(report["leads"])})
+    threading.Thread(target=_send_monthly_ad_report, kwargs={"year": year, "month": month}, daemon=True).start()
+    return jsonify({"ok": True, "queued": True, "year": year, "month": month})
+
+
 WEBHOOK_URL = "https://my-bot-8nib.onrender.com/webhook"
 WEBHOOK_SETTINGS = ["note_lead", "status_lead", "update_lead", "responsible_lead"]
 
@@ -1574,6 +1683,7 @@ scheduler.add_job(_send_month_end_report, "interval", hours=1)           # ос�
 scheduler.add_job(_send_rnk_ai_report, "cron", hour=16, minute=50)       # 16:50 Kyiv
 scheduler.add_job(_send_rnk_daily_reminder, "cron", hour=17, minute=0)   # 17:00 Kyiv
 scheduler.add_job(_send_weekly_ad_report, "cron", day_of_week="fri", hour=17, minute=0)  # П'ятниця 17:00 Kyiv
+scheduler.add_job(_send_monthly_ad_report, "cron", day=1, hour=9, minute=0)  # 1-ше число 09:00 Kyiv — звіт за минулий місяць
 scheduler.add_job(_refresh_plans_from_sheet, "cron", hour=6, minute=0)   # плани з таблиці, 06:00 Kyiv
 # і одразу на старті (деплой міг статися після редагування таблиці)
 threading.Thread(target=_refresh_plans_from_sheet, daemon=True).start()

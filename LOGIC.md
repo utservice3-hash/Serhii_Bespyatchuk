@@ -578,6 +578,8 @@ QUAL-статус у PEREVOZY-ліда), через що тімлід не мі�
 
 - Джерело: `kommo.get_weekly_ad_campaign_report()` — ліди пайплайнів
   Кваліфікація+Перевозки за період, згруповані по UTM-кампанії.
+  Ядро — `kommo.get_ad_campaign_report(since, until)` (діапазон unix-часу);
+  тижнева функція — обгортка над ним (rolling-вікно `days`/`offset_days`).
 - Маржа/виручка рахується по `REVENUE_STATUS_IDS` (з "АВТО ПРАЦЮЄ" і
   далі), не лише по "Успіх".
 - WoW-порівняння — `prev_report` за попередній рівний період
@@ -598,6 +600,24 @@ QUAL-статус у PEREVOZY-ліда), через що тімлід не мі�
   фоновому daemon-треді, інакше gunicorn `--timeout 60` рве запит.
   Помилки фону пишуться в `_last_ad_report_error`, перевірити —
   `GET /last-ad-report-error`.
+
+### Місячний звіт по рекламі (1-ше число + `/send-monthly-ad-report`)
+
+Той самий формат, що й тижневий, але за КАЛЕНДАРНИЙ місяць і з
+**MoM**-порівнянням (місяць-до-місяця).
+- Cron: `_send_monthly_ad_report` 1-го числа 09:00 Kyiv → звіт за минулий
+  місяць (без аргументів визначає його сам).
+- Дані угод: `kommo.get_ad_campaign_report_for_month(year, month)` — діапазон
+  від 1-го числа 00:00 до 1-го наступного 00:00 (Europe/Kyiv).
+- Витрати: `sheets.get_ad_spend_by_campaign_for_month(year, month)` — читає
+  блок відповідного місяця (`%B %Y`, англ., напр. «July 2026») і бере
+  **повний** місячний підсумок (без пропорції по днях, бо місяць цілий).
+  ⚠️ Для звіту й MoM у вкладці `Campain_Month` мають бути блоки цільового і
+  попереднього місяців.
+- Ручний запуск: `GET /send-monthly-ad-report?year=2026&month=7`
+  (`?dry=1` — лише текст без відправки; без параметрів — минулий місяць).
+- `_build_ad_report_text` параметризовано: `title`, `comparison_label`
+  ('WoW'/'MoM'), `empty_note`.
 
 ## Ліміт запитів Kommo API (throttle + кеш)
 
