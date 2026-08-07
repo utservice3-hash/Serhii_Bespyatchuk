@@ -932,7 +932,10 @@ def get_ad_campaign_report_for_month(year: int, month: int) -> dict:
     від 1-го числа 00:00 до 1-го числа наступного місяця 00:00."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    kyiv = ZoneInfo("Europe/Kyiv")
+    try:
+        kyiv = ZoneInfo("Europe/Kyiv")
+    except Exception:  # старіші tzdata знають лише стару назву
+        kyiv = ZoneInfo("Europe/Kiev")
     since_dt = datetime(year, month, 1, tzinfo=kyiv)
     ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
     until_dt = datetime(ny, nm, 1, tzinfo=kyiv)
