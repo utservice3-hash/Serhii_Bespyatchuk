@@ -327,6 +327,12 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
         </div>
         {/* ТИЖДЕНЬ — ДИНАМІЧНА ціль (Variant A: manual ?? dynamic) */}
         <TrajBlock title={`Тиждень ${weekLabel}`} fact={m.week.fact} plan={m.week.target}
+          extraBar={m.cohort && m.cohort.sum > 0 ? {
+            label: "Відправлено", value: m.cohort.sum,
+            pct: m.week.target > 0 ? Math.round((m.cohort.sum / m.week.target) * 100) : 0,
+            color: AMBER,
+            note: `${m.cohort.deals} ${m.cohort.deals === 1 ? "машина" : m.cohort.deals < 5 ? "машини" : "машин"} · роботи зроблено на ${m.week.target > 0 ? Math.round((m.cohort.sum / m.week.target) * 100) : 0}% тижневого плану`,
+          } : null}
           pct={m.week.target > 0 ? Math.round((m.week.fact / m.week.target) * 100) : 0}
           status={m.week.target <= 0 ? "g" : m.week.fact >= m.week.target ? "g" : m.week.fact >= m.week.target * (elapsed || 1) ? "a" : "r"}
           footer={<div title="Динамічна тижнева ціль = (місячний план − факт місяця) ÷ тижнів, що лишились. Присутні робочі дні враховують погоджені відсутності.">
@@ -334,6 +340,12 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
           </div>} />
         {/* МІСЯЦЬ — план-бар (сирий план) + #16 очікуємо + #17 прогноз */}
         <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
+          segments={m.plan > 0 ? [
+            { from: 0, to: Math.min(100, (m.fact / m.plan) * 100), color: GREEN, title: `отримано ${fmt(m.fact)} ₴` },
+            { from: Math.min(100, (m.fact / m.plan) * 100), to: Math.min(100, ((m.fact + m.expectThisMonth) / m.plan) * 100),
+              color: AMBER, hatch: true, title: `очікується цього місяця ${fmt(m.expectThisMonth)} ₴ — за плановою датою оплати` },
+          ] : undefined}
+          forecastPct={m.plan > 0 ? Math.min(100, (m.projected / m.plan) * 100) : null}
           footer={<>
             <div>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.) · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 && m.monthInProgress ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</div>
             <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати. Цей / наступний календарний місяць.">
@@ -429,9 +441,16 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
 }
 
 // План-бар одного контексту (місяць або тиждень).
-function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo }: {
+interface BarSeg { from: number; to: number; color: string; hatch?: boolean; title: string }
+function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo, segments, forecastPct, extraBar }: {
   title: string; fact: number; plan: number; pct: number; status: string; elapsed?: number;
   footer: React.ReactNode; showTempo?: boolean;
+  /** Накопичувальні сегменти у відсотках ТІЄЇ САМОЇ шкали (100% = план). */
+  segments?: BarSeg[];
+  /** Риска прогнозу у відсотках шкали. */
+  forecastPct?: number | null;
+  /** Друга НЕЗАЛЕЖНА смужка (тиждень: «відправлено»). НЕ складається з першою. */
+  extraBar?: { label: string; value: number; pct: number; color: string; note: string } | null;
 }) {
   return (
     <div>
@@ -441,9 +460,49 @@ function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo 
         <span style={{ fontWeight: 750, fontSize: 14, color: SCOL[status] }}>{plan > 0 ? `${pct}%` : "—"}</span>
       </div>
       <div style={{ height: 8, background: "var(--border)", borderRadius: 6, overflow: "hidden", position: "relative" }}>
-        <div style={{ height: "100%", borderRadius: 6, width: `${Math.min(100, pct)}%`, background: SCOL[status] }} />
+        {/**
+         * 🟩🟧 СЕГМЕНТИ (рішення власника 07.08.2026). `segments` — накопичувальні
+         * частки ТІЄЇ САМОЇ шкали (100% = план). Без них смуга показувала лише
+         * гроші на рахунку й читалась як «нічого не зроблено» у людини, що
+         * відправила роботи більше за план.
+         */}
+        {segments?.length
+          ? segments.map((sg, i) => (
+              <div key={i} title={sg.title} style={{ position: "absolute", top: 0, bottom: 0,
+                left: `${Math.min(100, sg.from)}%`, width: `${Math.max(0, Math.min(100, sg.to) - Math.min(100, sg.from))}%`,
+                background: sg.hatch
+                  ? `repeating-linear-gradient(135deg, ${sg.color} 0 5px, transparent 5px 10px)`
+                  : sg.color,
+                backgroundColor: sg.hatch ? sg.color + "22" : sg.color }} />
+            ))
+          : <div style={{ height: "100%", borderRadius: 6, width: `${Math.min(100, pct)}%`, background: SCOL[status] }} />}
+        {/* 🔻 Прогноз — риска в кінці покритого, а НЕ ще один сегмент. */}
+        {forecastPct != null && forecastPct > 0 && (
+          <div title={`прогноз ${fmt(Math.round((forecastPct / 100) * plan))} ₴`}
+               style={{ position: "absolute", top: -3, bottom: -3, width: 2,
+                 left: `${Math.min(100, forecastPct)}%`, background: "var(--text)", opacity: 0.8 }} />
+        )}
         {showTempo && elapsed != null && <div title="темп «сьогодні»" style={{ position: "absolute", top: -3, bottom: -3, width: 2, left: `${Math.min(100, elapsed * 100)}%`, background: "var(--text)", opacity: 0.55 }} />}
       </div>
+      {/**
+        * 🔴 ДРУГА СМУЖКА НЕ СКЛАДАЄТЬСЯ З ПЕРШОЮ (рішення власника 07.08.2026).
+        * «Отримано» — гроші, що зайшли; «відправлено» — робота тижня. Заміряно:
+        * у 13 із 25 менеджерів ці числа різні, і так і має бути. Вони стоять на
+        * одній лінійці плану лише для порівняння, інваріанту між ними НЕМАЄ.
+        */}
+      {extraBar && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 11.5 }}>
+            <span style={{ color: MUTED }}>{extraBar.label} <b style={{ color: "var(--text)" }}>{fmt(extraBar.value)} ₴</b></span>
+            <span style={{ fontWeight: 700, color: extraBar.color }}>{plan > 0 ? `${extraBar.pct}%` : "—"}</span>
+          </div>
+          <div style={{ height: 6, background: "var(--border)", borderRadius: 5, overflow: "hidden", marginTop: 3 }}>
+            <div style={{ height: "100%", width: `${Math.min(100, extraBar.pct)}%`,
+              background: `repeating-linear-gradient(135deg, ${extraBar.color} 0 5px, ${extraBar.color}55 5px 10px)` }} />
+          </div>
+          <div style={{ fontSize: 10.5, color: MUTED, marginTop: 2 }}>{extraBar.note}</div>
+        </div>
+      )}
       <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>{footer}</div>
     </div>
   );

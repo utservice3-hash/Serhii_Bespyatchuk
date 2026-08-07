@@ -43,6 +43,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/weekChain.test.js",
   "routes/callMerge.test.js",
   "routes/snapshotLabel.test.js",
+  "routes/progressBars.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -389,4 +390,7 @@ export const MANIFEST_TESTS: string[] = [
   // routes/snapshotLabel.test.ts — знімкові показники підписані при непоточному періоді
   "#64 API розрізняє поточний і непоточний період",
   "#64b фронт малює підпис, і лише при непоточному періоді",
+  // routes/progressBars.test.ts — смуги прогресу: що складається, а що ні
+  "#65 прогноз == факт + очікується цього місяця, без carryover",
+  "#65b смужки тижня окремі, у місячній смузі немає carryover",
 ];
