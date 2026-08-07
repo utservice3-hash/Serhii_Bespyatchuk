@@ -83,12 +83,76 @@ test("#65b смужки тижня окремі, у місячній смузі 
     + "07.08 — у 13 із 25 менеджерів вони не збігаються, і так і має бути.");
 
   // Місячні сегменти: рівно два, і жоден не з carryover.
-  const seg = src.slice(src.indexOf("segments={m.plan > 0"), src.indexOf("forecastPct={m.plan > 0"));
+  // ⚠️ Прив'язка до ФОРМИ коду ламається при рефакторингу — це вже сталось:
+  // сегменти переїхали у спред, і гейт перестав їх знаходити (впав на «перевіряє
+  // не те», а не мовчки позеленів — саме тому ця перевірка й стоїть першою).
+  const seg = src.slice(src.indexOf("segments: ["), src.indexOf("uncovered:"));
   assert.ok(seg.length > 50, "🔴 не знайшов сегменти місячної смуги — гейт перевіряє не те");
   assert.ok(!/carry/i.test(seg),
     "🔴 У МІСЯЧНУ СМУГУ ДОДАЛИ CARRYOVER. Заміряно 07.08: у Антипенка 35 088 ₴ із 50 876 ₴ "
     + "перенесеного ВЖЕ мають планову дату в серпні, тобто вже сидять у «очікується цього "
     + "місяця». Сусідній сегмент показав би ці гроші двічі й завищив прогноз.");
-  assert.equal((seg.match(/from:/g) ?? []).length, 2,
-    "🔴 сегментів має бути рівно два (отримано + очікується цього місяця)");
+  assert.equal((seg.match(/from:/g) ?? []).length, 3,
+    "🔴 сегментів має бути рівно ТРИ: отримано · чекає з датою · чекає БЕЗ дати");
+  /**
+   * 🔴 ПЕРЕВІРЯЄМО ДЖЕРЕЛО ТРЕТЬОГО СЕГМЕНТА, А НЕ ЗГАДКУ ПРО НЬОГО. Перша редакція
+   * шукала слово `awaitNoDateSum` де завгодно у файлі — і саботаж «s3 = 0» її НЕ
+   * повалив, бо слово лишалось у типі. Другий фіктивний гейт за два проходи, той
+   * самий механізм: шукав текст замість зв'язку.
+   */
+  assert.ok(/s3 = m\.cohort\?\.awaitNoDateSum/.test(src),
+    "🔴 ЗНИК ТРЕТІЙ СЕГМЕНТ «чекає без дати». Без нього місяць суперечить тижню: "
+    + "у Ворошилової тиждень показував 109% роботи, а місяць 7% плану — бо 10 141 ₴ "
+    + "відправлені без планової дати не входять у `projected` узагалі.");
+  assert.ok(/const covered = s1 \+ s2 \+ s3/.test(src),
+    "🔴 третій сегмент випав із «покрито» — «не покрито» рахуватиметься завищено");
+  assert.ok(/uncovered:/.test(src) && /не покрито/.test(src),
+    "🔴 зник підпис «не покрито» — головне число смуги, скільки плану не забезпечено нічим");
+  assert.ok(/legend/.test(src),
+    "🔴 зникла легенда — кольори знову не підписані, і смуга нічого не пояснює");
+});
+
+/**
+ * #65c — ТРИ СЕГМЕНТИ НЕ ПЕРЕТИНАЮТЬСЯ, І ЇХНЯ Σ НЕ ПЕРЕВИЩУЄ ПОКРИТТЯ.
+ *
+ * 🔴 Множини розділені ЗА ПОБУДОВОЮ: (1) гроші вже прийшли — статус; (2) дата
+ * оплати є і вона в цьому місяці; (3) дати немає. Угода не може одночасно мати
+ * й не мати планову дату. Гейт перевіряє це на живих даних: якщо хтось колись
+ * замінить предикат сегмента 3 на «все, що чекає», Σ миттєво перевищить когорту.
+ *
+ * ⚠️ Заміряно 07.08: «чекає без дати» у ЗОНІ ВИЗНАННЯ = 0 в обох перевірених —
+ * саме тому сегмент 3 береться з КОГОРТИ (ті гроші стоять на стадіях поза зоною).
+ */
+test("#65c три сегменти місяця не перетинаються", needsApi(), async () => {
+  const { signToken } = await import("../auth/auth.js");
+  const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
+  const now = new Date();
+  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${to}`,
+    { headers: { Authorization: `Bearer ${token}` } });
+  const b = await r.json() as { managers: { name: string; plan: number; fact: number;
+    expectThisMonth: number; expectNextMonth: number;
+    cohort: { sum: number; awaitNoDateSum: number; awaitDatedSum: number } }[] };
+
+  const live = b.managers.filter((m) => m.plan > 0 && (m.cohort?.sum ?? 0) > 0);
+  assert.ok(live.length >= 3, `🔴 лише ${live.length} менеджерів із планом і рухом — перевіряти нема на чому`);
+
+  const bad: string[] = [];
+  for (const m of live) {
+    // Сегмент 3 не може перевищувати все, що когорта вважає неоплаченим без дати.
+    if (m.cohort.awaitNoDateSum > m.cohort.sum) {
+      bad.push(`${m.name}: «без дати» ${m.cohort.awaitNoDateSum} > усього відправлено ${m.cohort.sum}`);
+    }
+    // Дата в НАСТУПНОМУ місяці в сегменти не входить — інакше місяць з'їдав би чужі гроші.
+    if (m.expectNextMonth > 0 && m.expectThisMonth === m.expectNextMonth && m.expectNextMonth > 1000) {
+      bad.push(`${m.name}: expectThisMonth == expectNextMonth (${m.expectNextMonth}) — межа місяця не тримає`);
+    }
+  }
+  assert.deepEqual(bad, [], "🔴 СЕГМЕНТИ ПЕРЕТИНАЮТЬСЯ АБО ЛІЗУТЬ У ЧУЖИЙ МІСЯЦЬ:\n  " + bad.join("\n  "));
+
+  // ⚠️ Порожній результат = ПРОВАЛ: третій сегмент має бути видно хоч у когось.
+  assert.ok(live.some((m) => m.cohort.awaitNoDateSum > 0),
+    "🔴 у жодного менеджера немає «чекає без дати» — третій сегмент ніде не видно, "
+    + "і гейт про нього нічого не довів");
 });

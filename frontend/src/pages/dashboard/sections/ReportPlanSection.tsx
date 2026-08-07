@@ -340,12 +340,47 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
           </div>} />
         {/* МІСЯЦЬ — план-бар (сирий план) + #16 очікуємо + #17 прогноз */}
         <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
-          segments={m.plan > 0 ? [
-            { from: 0, to: Math.min(100, (m.fact / m.plan) * 100), color: GREEN, title: `отримано ${fmt(m.fact)} ₴` },
-            { from: Math.min(100, (m.fact / m.plan) * 100), to: Math.min(100, ((m.fact + m.expectThisMonth) / m.plan) * 100),
-              color: AMBER, hatch: true, title: `очікується цього місяця ${fmt(m.expectThisMonth)} ₴ — за плановою датою оплати` },
-          ] : undefined}
-          forecastPct={m.plan > 0 ? Math.min(100, (m.projected / m.plan) * 100) : null}
+          {...(() => {
+            /**
+             * 🔴 ТРИ ВЗАЄМОВИКЛЮЧНІ СЕГМЕНТИ (рішення власника 07.08.2026).
+             *
+             * Третій — «чекає БЕЗ дати» — у першій редакції був відсутній, і місяць
+             * через це суперечив тижню: у Ворошилової тиждень показував 109% роботи,
+             * а місяць 7% плану. Заміряно: її 10 141 ₴ відправлені й неоплачені, але
+             * планової дати не мають, тож у `projected` не входять узагалі.
+             * З третім сегментом місяць став 27,3% — учетверо ближче до правди.
+             *
+             * ⚠️ Множини не перетинаються ЗА ПОБУДОВОЮ: (1) статус — гроші вже
+             * прийшли; (2) дата оплати є і вона в цьому місяці; (3) дати немає.
+             * Угода не може одночасно мати й не мати дату. Перевірено заміром:
+             * «чекає без дати» в зоні визнання = 0 в обох, бо ці гроші стоять на
+             * стадіях ПОЗА зоною — саме тому сегмент 3 береться з когорти.
+             *
+             * 🚫 CARRYOVER окремим сегментом НЕ малюємо: доведено, що він перетинає
+             * очікуване на 69%. За цим поділом він уже розподілений між трьома.
+             * ⏭ Очікування з датою в НАСТУПНОМУ місяці в цей місяць не входить.
+             */
+            if (m.plan <= 0) return {};
+            const s1 = m.fact, s2 = m.expectThisMonth, s3 = m.cohort?.awaitNoDateSum ?? 0;
+            const p = (v: number) => Math.min(100, (v / m.plan) * 100);
+            const covered = s1 + s2 + s3;
+            return {
+              segments: [
+                { from: 0, to: p(s1), color: GREEN, title: `отримано ${fmt(s1)} ₴` },
+                { from: p(s1), to: p(s1 + s2), color: AMBER, hatch: true,
+                  title: `чекає, дата оплати в цьому місяці — ${fmt(s2)} ₴` },
+                { from: p(s1 + s2), to: p(covered), color: AMBER, hatch: true,
+                  title: `чекає БЕЗ планової дати — ${fmt(s3)} ₴ · у прогноз не входить` },
+              ],
+              forecastPct: Math.min(100, (m.projected / m.plan) * 100),
+              legend: [
+                { color: GREEN, label: "отримано", value: s1 },
+                { color: AMBER, hatch: true, label: "чекає, дата є", value: s2 },
+                { color: AMBER, hatch: true, label: "чекає без дати", value: s3 },
+              ],
+              uncovered: { sum: Math.max(0, m.plan - covered), pct: Math.round(Math.max(0, m.plan - covered) / m.plan * 100) },
+            };
+          })()}
           footer={<>
             <div>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.) · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 && m.monthInProgress ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</div>
             <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати. Цей / наступний календарний місяць.">
@@ -442,7 +477,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
 
 // План-бар одного контексту (місяць або тиждень).
 interface BarSeg { from: number; to: number; color: string; hatch?: boolean; title: string }
-function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo, segments, forecastPct, extraBar }: {
+function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo, segments, forecastPct, extraBar, legend, uncovered }: {
   title: string; fact: number; plan: number; pct: number; status: string; elapsed?: number;
   footer: React.ReactNode; showTempo?: boolean;
   /** Накопичувальні сегменти у відсотках ТІЄЇ САМОЇ шкали (100% = план). */
@@ -451,6 +486,10 @@ function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo,
   forecastPct?: number | null;
   /** Друга НЕЗАЛЕЖНА смужка (тиждень: «відправлено»). НЕ складається з першою. */
   extraBar?: { label: string; value: number; pct: number; color: string; note: string } | null;
+  /** Легенда сегментів під смугою + підпис порожнього хвоста. */
+  legend?: { color: string; hatch?: boolean; label: string; value: number }[];
+  /** «Не покрито» — головне число місячної смуги. */
+  uncovered?: { sum: number; pct: number } | null;
 }) {
   return (
     <div>
@@ -478,12 +517,33 @@ function TrajBlock({ title, fact, plan, pct, status, elapsed, footer, showTempo,
           : <div style={{ height: "100%", borderRadius: 6, width: `${Math.min(100, pct)}%`, background: SCOL[status] }} />}
         {/* 🔻 Прогноз — риска в кінці покритого, а НЕ ще один сегмент. */}
         {forecastPct != null && forecastPct > 0 && (
-          <div title={`прогноз ${fmt(Math.round((forecastPct / 100) * plan))} ₴`}
-               style={{ position: "absolute", top: -3, bottom: -3, width: 2,
-                 left: `${Math.min(100, forecastPct)}%`, background: "var(--text)", opacity: 0.8 }} />
+          <div title={`прогноз ${fmt(Math.round((forecastPct / 100) * plan))} ₴ — факт + очікування з датою оплати`}
+               style={{ position: "absolute", top: -4, bottom: -4, width: 2,
+                 left: `${Math.min(100, forecastPct)}%`, background: "var(--text)", opacity: 0.85 }} />
         )}
         {showTempo && elapsed != null && <div title="темп «сьогодні»" style={{ position: "absolute", top: -3, bottom: -3, width: 2, left: `${Math.min(100, elapsed * 100)}%`, background: "var(--text)", opacity: 0.55 }} />}
       </div>
+      {/**
+        * 🔴 ЛЕГЕНДА Й «НЕ ПОКРИТО» — БЕЗ НИХ СМУГА НЕ ПОЯСНЮЄ НІЧОГО.
+        * Після викату 91b60e9 місячна смуга була двома кольоровими плямами без
+        * жодного слова: кольори не підписані, хвіст німий. Тижнева при цьому
+        * читалась — саме тому, що мала підпис. Головне число тут — «не покрито»:
+        * скільки плану не забезпечено НІЧИМ (ані грішми, ані очікуваннями).
+        */}
+      {(legend?.length || uncovered) && (
+        <div style={{ fontSize: 10.5, color: MUTED, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          {legend?.filter((l) => l.value > 0).map((l, i) => (
+            <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 9, height: 9, borderRadius: 2, display: "inline-block",
+                background: l.hatch ? `repeating-linear-gradient(135deg, ${l.color} 0 3px, ${l.color}33 3px 6px)` : l.color }} />
+              {l.label} <b style={{ color: "var(--text)" }}>{fmt(l.value)} ₴</b>
+            </span>
+          ))}
+          {uncovered && uncovered.sum > 0 && (
+            <span style={{ color: RED, fontWeight: 700 }}>не покрито {fmt(uncovered.sum)} ₴ — {uncovered.pct}% плану</span>
+          )}
+        </div>
+      )}
       {/**
         * 🔴 ДРУГА СМУЖКА НЕ СКЛАДАЄТЬСЯ З ПЕРШОЮ (рішення власника 07.08.2026).
         * «Отримано» — гроші, що зайшли; «відправлено» — робота тижня. Заміряно:
@@ -517,7 +577,8 @@ function Kpi({ lbl, fact, target, money, pctUnit, extra, altMark, altTitle, hint
   return (
     <span style={{ fontSize: 11.5, color: MUTED, cursor: hintTitle ? "help" : undefined }} title={altMark ? altTitle : hintTitle ?? `${lbl}: факт ${f} / ${has ? "ціль " + (money ? fmt(target) : pctUnit ? target + "%" : target) : "план не задано"}`}>
       {lbl} <b style={{ color: altMark ? AMBER : col }}>{f}</b>{altMark ? <sup style={{ fontSize: 8.5, color: AMBER, marginLeft: 1 }}>{altMark}</sup> : null}{extra ? <span style={{ color: MUTED }}> · {extra}</span> : null}
-      {has ? <span style={{ color: MUTED }}> / {money ? k(target) : pctUnit ? target + "%" : target}{ok ? " ✓" : ""}</span>
+      {/* 🔴 Ціль грішми — ТИМ САМИМ форматером, що факт: «2 500 / 13к» читалось як два різні плани. */}
+      {has ? <span style={{ color: MUTED }}> / {money ? fmt(target) : pctUnit ? target + "%" : target}{ok ? " ✓" : ""}</span>
            : <span style={{ color: MUTED, fontStyle: "italic" }}> · план не задано</span>}
     </span>
   );
