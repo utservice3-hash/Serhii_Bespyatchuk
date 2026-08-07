@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { FC_PIPELINES, STAGE_PAID, STAGE_SUCCESS, STAGE_RECEIVED } from "./money.js";
+import { dealKlassSql } from "./metrics.js";
 
 /**
  * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ ПО ДНЯХ — склад КОЖНОГО числа в рядку дня.
@@ -71,18 +72,38 @@ const STATE_LABEL = (s: number): string =>
         : s === 100274340 ? "Виставлення рахунку"
           : s === 143 ? "Закрито і не реалізовано" : "В роботі";
 
-/** Мітка «новий/постійний» — той самий сенс, що в списку угод дня (lead_channel). */
-const srcOf = (channel: string | null): "new" | "rep" =>
-  channel === "ad" || channel === "leadgen" ? "new" : "rep";
+/**
+ * 🔴 МІТКА «НОВИЙ/ПОСТІЙНИЙ» — З ЯДРА, А НЕ ЗІ СКОРОЧЕННЯ (виправлено 07.08.2026).
+ *
+ * Було: `channel === 'ad' || channel === 'leadgen' ? 'new' : 'rep'` — тобто ДВІ
+ * гілки замість шести, історія клієнта не читалась узагалі. Через це розкриття
+ * СПЕРЕЧАЛОСЬ із числом, яке пояснює: рядок «створено 3 · 3н · 0п», а чипи —
+ * 1 новий / 2 постійні (скріншот власника, 03.08). Розходилось 12.6% угод серпня.
+ *
+ * ⚠️ Помилка була НЕ в анкері (142 проти оплати) — обидві угоди-порушниці нові за
+ * ОБОМА визначеннями. Правило просто не було застосоване: `lead_channel='other'`
+ * без історії клієнта — це НОВИЙ, а скорочення робило його постійним.
+ *
+ * Тепер SQL віддає готовий `klass` через `dealKlassSql()`, тож мітка й лічильник
+ * рахуються ОДНИМ виразом. `'undef'` → `null`: «не знаємо» мусить бути видно, а не
+ * зʼїжджати в «постійний» (саме таке мовчазне зʼїжджання ми тут і виправляємо).
+ */
+const srcOf = (klass: string | null): "new" | "rep" | null =>
+  klass === "new" ? "new" : klass === "repeat" ? "rep" : null;
+
+/** SELECT-колонки складу угоди — спільні для всіх `kind`, щоб мітка не розʼїхалась. */
+const DEAL_COLS = `d.name, d.price, d.status_id,
+            to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned,
+            (${dealKlassSql("d")}) AS klass`;
 
 interface DealRow {
-  name: string | null; channel: string | null; price: string | null;
+  name: string | null; klass: string | null; price: string | null;
   status_id: number; planned: string | null;
 }
 
 const mapDeals = (rows: DealRow[]): DayItem[] => rows.map((x) => ({
   name: x.name ?? "—",
-  src: srcOf(x.channel),
+  src: srcOf(x.klass),
   price: Math.round(Number(x.price ?? 0)),
   state: STATE_LABEL(Number(x.status_id)),
   plannedPayAt: x.planned,
@@ -103,8 +124,7 @@ async function byStageEntry(managerId: number, from: string, to: string, statuse
     // у `deal_stage_events` немає `deal_id` (там теж `kommo_id`). Перша редакція
     // джойнила `d.id = e.deal_id`: TypeScript цього не бачить, а гейт `#60` без
     // прод-API не біжить — спіймала лише жива база. Той самий клас, що `day` без `AS`.
-    `SELECT DISTINCT ON (d.kommo_id) d.name, d.lead_channel AS channel, d.price, d.status_id,
-            to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
+    `SELECT DISTINCT ON (d.kommo_id) ${DEAL_COLS}
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
       WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
@@ -123,8 +143,7 @@ async function dispatchedCohort(managerId: number, from: string, to: string, onl
   const params: unknown[] = [managerId, FC_PIPELINES, from, to];
   if (only !== "all") params.push(STAGE_RECEIVED);
   const r = await pool.query<DealRow>(
-    `SELECT d.name, d.lead_channel AS channel, d.price, d.status_id,
-            to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
+    `SELECT ${DEAL_COLS}
        FROM deals d
       WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
         AND (d.load_at ${K})::date BETWEEN $3::date AND $4::date ${extra}
@@ -144,8 +163,7 @@ export async function dayItems(kind: DayItemKind, managerId: number, from: strin
   switch (kind) {
     case "created": {
       const r = await pool.query<DealRow>(
-        `SELECT d.name, d.lead_channel AS channel, d.price, d.status_id,
-                to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned
+        `SELECT ${DEAL_COLS}
            FROM deals d
           WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
             AND (d.created_at_kommo ${K})::date BETWEEN $3::date AND $4::date

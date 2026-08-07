@@ -713,7 +713,7 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
   const { data } = await api.get<ReportPlan>("/dashboard/report-plan", { params });
   return data;
 }
-export interface ReportPlanDeal { name: string; src: "new" | "rep"; price: number; status: string }
+export interface ReportPlanDeal { name: string; src: "new" | "rep" | null; price: number; status: string }
 
 /**
  * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ — склад КОНКРЕТНОГО числа в рядку дня.

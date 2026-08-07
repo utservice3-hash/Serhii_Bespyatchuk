@@ -6631,8 +6631,13 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
   if (!managerId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "managerId + date (YYYY-MM-DD) обовʼязкові" });
   if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
-  const r = await pool.query<{ name: string; channel: string | null; price: string; status_id: number }>(
-    `SELECT d.name, d.lead_channel AS channel, d.price, d.status_id
+  // 🔴 Мітка «новий/постійний» — з ЯДРА (`dealKlassSql`), а не зі скорочення по
+  // `lead_channel`. Тут стояла та сама двогілкова копія правила, що й у dayItems:
+  // «реклама/лідоген → новий, усе інше → постійний». Вона робила постійними угоди
+  // `other` БЕЗ історії клієнта — тобто сперечалась із лічильником рядка (12.6%
+  // угод серпня). Правило тепер одне; форми звіряє гейт `#66`.
+  const r = await pool.query<{ name: string; klass: string | null; price: string; status_id: number }>(
+    `SELECT d.name, d.price, d.status_id, (${metrics.dealKlassSql("d")}) AS klass
        FROM deals d WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
          AND (d.created_at_kommo ${KYIV})::date = $3::date
       ORDER BY d.price DESC NULLS LAST, d.created_at_kommo`,
@@ -6644,7 +6649,7 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
       : s === 143 ? "Закрито" : "В роботі";
   res.json({
     deals: r.rows.map((x) => ({
-      name: x.name, src: x.channel === "ad" || x.channel === "leadgen" ? "new" : "rep",
+      name: x.name, src: x.klass === "new" ? "new" : x.klass === "repeat" ? "rep" : null,
       price: Math.round(Number(x.price)), status: label(Number(x.status_id)),
     })),
   });

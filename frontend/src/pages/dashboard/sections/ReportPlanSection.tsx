@@ -16,6 +16,23 @@ const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BAR = "#2f6fdb", MU
 const LINK = "#7c3aed";
 const SCOL: Record<string, string> = { g: GREEN, a: AMBER, r: RED };
 const SLBL: Record<string, string> = { g: "В нормі", a: "Відстає", r: "Зрив" };
+
+/**
+ * 🔴 ЧИП «новий/постійний» — ОДИН на обидва розкриття (07.08.2026).
+ * Було двічі скопійовано `it.src === "new" ? "новий" : "постійний"`, тобто третій
+ * стан (`null` = ядро не змогло визначити) МОВЧКИ друкувався як «постійний».
+ * Це той самий клас помилки, який ми тут і виправляємо: невідоме зʼїжджає в
+ * конкретну відповідь. Тепер «невизначено» видно, і воно сіре.
+ */
+function SrcChip({ src }: { src: "new" | "rep" | null }) {
+  const c = src === "new" ? BAR : src === "rep" ? GREEN : MUTED;
+  const t = src === "new" ? "новий" : src === "rep" ? "постійний" : "невизначено";
+  return (
+    <span title={src === null ? "ядро не змогло визначити: немає ні каналу, ні ключа клієнта, ні мітки CRM" : undefined}
+          style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5,
+                   textAlign: "center", background: c + "22", color: c }}>{t}</span>
+  );
+}
 const SICON: Record<string, string> = { g: "🟢", a: "🟠", r: "🔴" };
 const TAGCOL: Record<string, string> = { rpk: BAR, rnk: "#7a52c7", self: GREEN };
 
@@ -739,7 +756,7 @@ function WeekMoney({ mWeek, managerId, period }: {
                 {r.items.map((it, i2) => (
                   <div key={i2} style={{ display: "grid", gridTemplateColumns: "1fr 100px 180px 110px", gap: 10, padding: "7px 12px", borderBottom: "1px solid var(--border)", fontSize: 12, alignItems: "center" }}>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
-                    <span style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5, textAlign: "center", background: (it.src === "new" ? BAR : GREEN) + "22", color: it.src === "new" ? BAR : GREEN }}>{it.src === "new" ? "новий" : "постійний"}</span>
+                    <SrcChip src={it.src} />
                     <span style={{ fontSize: 11 }}><b>{it.state}</b><span style={{ color: MUTED }}> · {it.plannedPayAt ? `план. оплата ${ddmm(it.plannedPayAt)}` : "дата оплати не вказана"}</span></span>
                     <span style={{ textAlign: "right", fontWeight: 650 }}>{fmt(it.price)} ₴</span>
                   </div>
@@ -845,10 +862,7 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
                     </>
                   ) : (
                     <>
-                      <span style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5, textAlign: "center",
-                        background: (it.src === "new" ? BAR : GREEN) + "22", color: it.src === "new" ? BAR : GREEN }}>
-                        {it.src === "new" ? "новий" : "постійний"}
-                      </span>
+                      <SrcChip src={it.src} />
                       <span style={{ fontSize: 11 }}>
                         <span style={{ fontWeight: 600 }}>{it.state}</span>
                         <span style={{ color: MUTED }}>

@@ -498,17 +498,62 @@ export interface CreatedSplitBucketRow { bucket: string; created: number; newCou
 // Живе тут, а не в коді СИНКУ, бо це правило ЗВІРКИ, не нормалізації ключа.
 export const GENERIC_CLIENT_KEYS = ["названиенеуказано", "companynamenotspecified", ""];
 
-// ЄДИНЕ джерело правила класифікації (B→C→A) — щоб by-manager і by-bucket не
-// розходились. Читає lead_channel / vkey / has_prior / sales_channel з CTE `classed`.
-const CREATED_KLASS_CASE = `
+/**
+ * ЄДИНЕ джерело правила класифікації «новий/постійний» (B→C→A).
+ *
+ * 🔴 ЧОМУ ЦЕ ФУНКЦІЯ, А НЕ РЯДОК-КОНСТАНТА (07.08.2026). Константа читала голі
+ * імена (`lead_channel`, `vkey`, `has_prior`) і тому працювала ЛИШЕ всередині CTE
+ * `classed`. Хто мав ті самі угоди, але без CTE — розкриття по днях
+ * (`core/dayItems.ts`) і `/report-plan/deals` — писав правило заново, СКОРОЧЕНО:
+ * «реклама/лідоген → новий, УСЕ ІНШЕ → постійний». Дві гілки замість шести.
+ * Наслідок бачив власник на скріншоті: рядок «створено 3 · 3н · 0п», а розкриття
+ * того самого числа — 1 новий / 2 постійні. Заміряно: розходились **12.6%** угод
+ * серпня, 11.0% липня, 15.8% за 12 міс — тобто системно, а не в поодиноких.
+ *
+ * Тепер правило існує ОДИН раз, а форми відрізняються лише ОПЕРАНДАМИ: CTE-форма
+ * підставляє колонки `classed`, інлайн-форма — вирази по `deals d`. Дописати
+ * гілку в одну форму й забути другу більше НЕМОЖЛИВО. Еквівалентність доводить
+ * гейт `#66` (той самий прийом, що `#35` для `hasPriorPaidSql`).
+ */
+export function createdKlassCase(ops: {
+  channel: string; vkey: string; hasPrior: string; salesChannel: string;
+}): string {
+  return `
   CASE
-    WHEN lead_channel IN ('ad','leadgen') THEN 'new'
-    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND has_prior THEN 'repeat'
-    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND NOT has_prior THEN 'new'
-    WHEN sales_channel = 'Постійні клієнти' THEN 'repeat'
-    WHEN sales_channel = 'Нові клієнти' THEN 'new'
+    WHEN ${ops.channel} IN ('ad','leadgen') THEN 'new'
+    WHEN ${ops.channel} = 'other' AND ${ops.vkey} IS NOT NULL AND ${ops.hasPrior} THEN 'repeat'
+    WHEN ${ops.channel} = 'other' AND ${ops.vkey} IS NOT NULL AND NOT ${ops.hasPrior} THEN 'new'
+    WHEN ${ops.salesChannel} = 'Постійні клієнти' THEN 'repeat'
+    WHEN ${ops.salesChannel} = 'Нові клієнти' THEN 'new'
     ELSE 'undef'
   END`;
+}
+
+/** CTE-форма: операнди — колонки, які готує `classifyCte` у підзапиті `classed`. */
+const CREATED_KLASS_CASE = createdKlassCase({
+  channel: "lead_channel", vkey: "vkey", hasPrior: "has_prior", salesChannel: "sales_channel",
+});
+
+/**
+ * ІНЛАЙН-форма ТОГО САМОГО правила — для запитів, що беруть угоди напряму з
+ * `deals` без CTE (розкриття по днях, список угод дня). Сигнали рахуються тут же:
+ * `vkey` глушить дженерик-ключі (`GENERIC_CLIENT_KEYS`), `has_prior` — це
+ * попередня ВИГРАНА (142) угода того ж клієнта, закрита ДО створення цієї.
+ * Обидва — дослівно те, що робить `classifyCte`.
+ */
+export function dealKlassSql(alias = "d"): string {
+  const generic = GENERIC_CLIENT_KEYS.map((k) => `'${k}'`).join(", ");
+  const vkey = `(CASE WHEN ${alias}.client_key IS NULL OR ${alias}.client_key IN (${generic})
+                      THEN NULL ELSE ${alias}.client_key END)`;
+  const hasPrior = `EXISTS (
+        SELECT 1 FROM deals p
+         WHERE p.client_key = ${vkey} AND p.status_id = 142
+           AND p.closed_at_kommo < ${alias}.created_at_kommo
+           AND p.kommo_id <> ${alias}.kommo_id)`;
+  return createdKlassCase({
+    channel: `${alias}.lead_channel`, vkey, hasPrior, salesChannel: `${alias}.sales_channel`,
+  });
+}
 
 // РОЗБИВКА ЗА ДЖЕРЕЛОМ (реклама / лідоген / постійний / невизн) — та сама база сигналів,
 // що CREATED_KLASS_CASE, але ЧОТИРИ категорії за ПОХОДЖЕННЯМ угоди (а не new/repeat).
