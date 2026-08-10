@@ -2380,15 +2380,19 @@ export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Pro
   // 🔗 СПІЛЬНЕ ПРАВИЛО (`core/stuckRule.ts`), а не власна копія. Легасі-роут
   // відрізняється від екрана рівно ВІДСУТНІСТЮ фільтра типу команди — і це тепер
   // видно як параметр нижче, а не як розбіжність двох SQL-текстів.
-  const conds = stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3" });
+  // 🕰 `asOf` — ТОЙ САМИЙ, що на екрані. Ringostat-гасіння сюди свідомо НЕ їде (це
+  // інша, ширша множина за побудовою), а от час мусить бути спільний: інакше під час
+  // наступного простою синку легасі-картка роздувалась би, поки екран стоїть, і два
+  // числа на одному Звіті знову розказували б різне. Δ у звичайний день = 0 (заміряно).
+  const conds = stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3", asOf: ASOF_SQL });
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   params.push(limit);
   const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; pipeline_id: string; status_id: string; funnel_stage: string; days: string; activity_days: string | null }>(
     `SELECT d.kommo_id, d.name, d.client_name AS client, m.name AS manager, d.price,
             d.pipeline_id, d.status_id, psm.funnel_stage,
-            EXTRACT(DAY FROM now() - ${ACT})::int AS days,
-            EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days
+            EXTRACT(DAY FROM ${ASOF_SQL} - ${ACT})::int AS days,
+            EXTRACT(DAY FROM ${ASOF_SQL} - d.last_activity_at)::int AS activity_days
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
