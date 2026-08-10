@@ -46,6 +46,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/progressBars.test.js",
   "core/klassParity.test.js",
   "jobs/syncGuard.test.js",
+  "health/jobAlert.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -406,4 +407,7 @@ export const MANIFEST_TESTS: string[] = [
   "#68c УСПІХ НЕ ЗАТИРАЄ last_error",
   "#68d РОЗБІЖНІСТЬ job_runs↔sync_state видно запитом",
   "#68e ЗАМОК НАЗИВАЄ ТРИМАЧА І ТРИВАЛІСТЬ",
+  // health/jobAlert.test.ts — банер джоби гасне після успіху (регресія 45465f5)
+  "#69 БАНЕР ДЖОБИ: помилка актуальна лише без пізнішого успіху",
+  "#69b ДЖЕРЕЛО: банер кличе errorIsCurrent, а не голий last_error",
 ];

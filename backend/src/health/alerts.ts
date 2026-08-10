@@ -181,6 +181,25 @@ async function checkJobs(): Promise<Alert[]> {
   const byName = new Map(rows.map((r) => [r.name, r]));
   const uptimeMin = process.uptime() / 60;
   const out: Alert[] = [];
+  /**
+   * 🔴 ПОМИЛКА АКТУАЛЬНА, ЛИШЕ ЯКЩО ПІСЛЯ НЕЇ НЕ БУЛО УСПІХУ (виправлено 10.08.2026).
+   *
+   * Тут стояло просто `rec.last_error`, і це було ПРАВИЛЬНО — але не саме по собі,
+   * а тому що `runJob` занулював `last_error` на кожному успіху. Тобто ненульова
+   * помилка за побудовою була свіжішою за успіх.
+   *
+   * У `45465f5` я прибрав те занулення (щоб не втрачати причину аварій — саме так
+   * зник текст помилки, що почала простій 14 год 52 хв). Інваріанту прибрав, а
+   * читача не перевірив: банер «падала після останнього успіху» став вічним і
+   * почав стверджувати неправду. Заміряно: `syncCalls` впала 09:15, одужала 09:35,
+   * банер висів годинами.
+   *
+   * Це вже третій баг цього класу за добу (чипи новий/постійний, цей банер, мовчазна
+   * сигналізація): умова спирається на гарантію, яку дає хтось поруч.
+   */
+  const errorIsCurrent = (r: { last_error: string | null; last_error_at: Date | null; last_success_at: Date | null }): boolean =>
+    Boolean(r.last_error) && r.last_error_at != null
+    && (r.last_success_at == null || r.last_error_at > r.last_success_at);
   for (const j of MONITORED_JOBS) {
     const rec = byName.get(j.name);
     const graceMin = j.everyMin * 2;
@@ -192,7 +211,7 @@ async function checkJobs(): Promise<Alert[]> {
           id: `job:${j.name}:never`, severity: "critical",
           title: `Джоба «${j.name}» не відпрацювала жодного разу`,
           detail: `Процес живе ${Math.round(uptimeMin)} хв, штатна частота ${j.everyMin} хв. ${j.why}.`
-            + (rec?.last_error ? ` Остання помилка: ${rec.last_error}` : ""),
+            + (rec && errorIsCurrent(rec) ? ` Остання помилка: ${rec.last_error}` : ""),
           action: `Перевірити лог процесу на «${j.name} failed» і розклад cron.`,
           since: ISO(rec?.last_error_at ?? null),
         });
@@ -205,11 +224,11 @@ async function checkJobs(): Promise<Alert[]> {
         id: `job:${j.name}:stale`, severity: "critical",
         title: `Джоба «${j.name}» мовчить ${ageMin} хв`,
         detail: `Штатна частота ${j.everyMin} хв, поріг ${graceMin} хв. ${j.why}.`
-          + (rec.last_error ? ` Остання помилка: ${rec.last_error}` : ""),
+          + (errorIsCurrent(rec) ? ` Остання помилка: ${rec.last_error}` : ""),
         action: `Перевірити лог на «${j.name} failed»; якщо помилка схемна — прогнати npm run migrate.`,
         since: ISO(rec.last_success_at),
       });
-    } else if (rec.last_error) {
+    } else if (errorIsCurrent(rec)) {
       out.push({
         id: `job:${j.name}:error`, severity: "warning",
         title: `Джоба «${j.name}» падала після останнього успіху`,
