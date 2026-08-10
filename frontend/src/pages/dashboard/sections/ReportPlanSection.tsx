@@ -1016,7 +1016,7 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
         setSectionOpen(criticalRnk.length > 0);
         setOpenMgr(new Set(criticalRnk.map((g) => g.managerId)));
       })
-      .catch(() => a && setData({ minDays: 7, role: "", scope: "company", total: 0, sumRisk: 0, managers: 0, over90: 0, groups: [] }));
+      .catch(() => a && setData({ minDays: 7, role: "", scope: "company", total: 0, sumRisk: 0, managers: 0, over90: 0, groups: [], asOf: "", talkAmbiguousCount: 0 }));
     return () => { a = false; };
   }, [teamId]);
 
@@ -1040,13 +1040,15 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
             {data && data.total > 0 && <span style={{ color: MUTED, fontWeight: 700, fontSize: 14 }}>· {k(data.sumRisk)} ₴ в ризику</span>}
             {data && data.over90 > 0 && <span style={{ fontSize: 11.5, fontWeight: 800, color: "#fff", background: RED, padding: "2px 9px", borderRadius: 20 }}>⚠️ {data.over90} &gt;90 дн</span>}
             <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}>
-              <InfoHint text="Критерій — ВІДСУТНІСТЬ РУХУ, а не стадія: усі відкриті угоди без реальної людської активності понад поріг (гроші/рахунок ≥7 дн., «взято в роботу» ≥21 дн.), включно з «Авто працює». Виключено лише успіх/оплату отримано/злив. Анкер — остання активність (нотатки людини, не Salesbot). Сума в ризику — signed (сторно нетиться). Вікно створення 180 днів." />
+              <InfoHint text="Критерій — ВІДСУТНІСТЬ РУХУ, а не стадія: усі відкриті угоди без реальної людської активності понад поріг (гроші/рахунок ≥7 дн., «взято в роботу» ≥21 дн.), включно з «Авто працює». Виключено лише успіх/оплату отримано/злив. Анкер — остання активність (нотатки людини, не Salesbot); ДЗВІНОК КОРОТШИЙ ЗА 10 c активністю не вважається — недодзвон не є контактом. Розмова з Ringostat теж рахується рухом, але лише коли у клієнта РІВНО ОДНА відкрита угода: інакше невідомо, про яку з них говорили. Вік рахується від часу останнього успішного синку, а не від годинника — поки дані не оновлюються, лічильник не росте. Сума в ризику — signed (сторно нетиться). Вікно створення 180 днів." />
             </span>
           </span>
           {sectionOpen && (
             <div style={{ textAlign: "right", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
-              без руху ≥7 дн. (рахунок/гроші) · ≥21 дн. («взято в роботу»)<br />
-              усі відкриті стадії, включно з «Авто працює» · дата = остання активність
+              без руху ≥7 дн. (рахунок/гроші) · ≥21 дн. («взято в роботу») · розмова від 10 c<br />
+              усі відкриті стадії, включно з «Авто працює» · дата = остання активність<br />
+              <b style={{ color: "var(--text)" }}>дані станом на {asOfLabel(data?.asOf)}</b>
+              {data && data.talkAmbiguousCount > 0 && <> · ⚠️ {data.talkAmbiguousCount} з розмовою, але угода не одна</>}
             </div>
           )}
         </div>
@@ -1095,9 +1097,26 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
   );
 }
 
+/**
+ * 🕰 «ДАНІ СТАНОМ НА HH:MM» — обовʼязковий підпис, а не прикраса.
+ *
+ * Вік «днів без руху» тепер рахується від часу останнього успішного синку, а не від
+ * годинника. Без цього підпису екран мовчки показував би те саме число годинами й
+ * читався б як «нічого не змінилось», хоча правильне пояснення інше: «ми ще не знаємо».
+ * Час — київський, як усі дати в продукті.
+ */
+function asOfLabel(iso: string | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const hhmm = d.toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" });
+  const ageMin = Math.floor((Date.now() - d.getTime()) / 60000);
+  return ageMin >= 120 ? `${hhmm} (${Math.floor(ageMin / 60)} год тому)` : hhmm;
+}
+
 const STUCK_COLS: { h: string; r?: boolean; hint?: string }[] = [
   { h: "Угода" }, { h: "Клієнт" }, { h: "Стадія" }, { h: "Сума", r: true }, { h: "Днів без руху", r: true },
-  { h: "Остання розмова", r: true, hint: "Дата останнього ДЗВІНКА клієнту (call_in/call_out у CRM), а не будь-якої активності. 🚩 — свіжа активність є, але місяць без дзвінка (метушня без контакту)." },
+  { h: "Остання розмова", r: true, hint: "Остання РОЗМОВА з клієнтом (від 10 c) — недодзвон не рахується. Два джерела: нотатка в CRM і телефонія Ringostat, береться свіжіше. 🎧 — розмова знайшлась лише в Ringostat (у CRM її немає). ⚠️ — розмова є, але у клієнта кілька відкритих угод, тож котрої саме вона стосується, ми не знаємо: таку угоду зі списку НЕ прибираємо. 🚩 — свіжа активність є, але місяць без розмови (метушня без контакту)." },
   { h: "Коментар", hint: "Робоча позначка: чому стоїть / що зроблено. Наша анотація — у CRM НЕ пишеться і на метрики не впливає. Зберігається автоматично (втрата фокуса або Ctrl+Enter). Редагує відповідальний менеджер, тімлід і адмін; бачать усі, хто бачить цю угоду." },
 ];
 
@@ -1172,9 +1191,11 @@ function StuckMgrRow({ g, open, onToggle, single }: { g: StuckManagerGroup; open
                     <td style={{ textAlign: "right", fontWeight: 700, color: idleColor(d.days) }}>{crit && <span title="критична: >90 дн">⚠️ </span>}{d.days}</td>
                     <td style={{ textAlign: "right", fontWeight: 650 }}>
                       {d.daysSinceLastCall == null
-                        ? <span style={{ color: MUTED }}>дзвінка не було</span>
+                        ? <span style={{ color: MUTED }}>розмови не було</span>
                         : <span style={{ color: d.daysSinceLastCall >= 30 ? AMBER : "var(--text)" }}>{d.daysSinceLastCall} дн</span>}
-                      {d.noCallFlag && <span title="метушня без контакту: свіжа активність, але місяць без дзвінка"> 🚩</span>}
+                      {d.talkSource === "ringostat" && <span title="розмова знайшлась у Ringostat — у CRM її немає"> 🎧</span>}
+                      {d.talkAmbiguous && <span title="розмова є, але у клієнта кілька відкритих угод — котрої саме вона стосується, невідомо, тож угоду не прибираємо зі списку"> ⚠️</span>}
+                      {d.noCallFlag && <span title="метушня без контакту: свіжа активність, але місяць без розмови"> 🚩</span>}
                     </td>
                     <td style={{ textAlign: "left", minWidth: 190 }}><DealNote d={d} /></td>
                   </tr>

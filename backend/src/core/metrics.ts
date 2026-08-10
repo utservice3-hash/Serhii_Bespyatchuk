@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
-import { AVTO_STATUSES, ACTIVITY_CLOCK, stuckBaseConds } from "./stuckRule.js";
+import { AVTO_STATUSES, ACTIVITY_CLOCK, stuckBaseConds, ASOF_SQL,
+  CLOCK_WITH_TALK, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
@@ -2405,9 +2406,21 @@ export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Pro
 export interface StuckGroupDeal {
   kommoId: number; name: string; client: string | null; price: number;
   stage: string; days: number; activityDays: number | null;
-  lastCallAt: string | null;        // ISO дата останнього дзвінка клієнту (null = не було)
-  daysSinceLastCall: number | null; // днів від останнього дзвінка (null = не було)
-  noCallFlag: boolean;              // «метушня без контакту»: свіжа активність, але місяць без дзвінка
+  lastCallAt: string | null;        // ISO дата останньої РОЗМОВИ (null = розмови не було)
+  daysSinceLastCall: number | null; // днів від останньої розмови (null = не було)
+  noCallFlag: boolean;              // «метушня без контакту»: свіжа активність, але місяць без розмови
+  /**
+   * 🎧 Звідки взялась остання розмова. `kommo` — нотатка на угоді; `ringostat` —
+   * розмова, якої в Kommo немає (їх 647 із 2 304 активних, саме звідси «99 днів»
+   * замість 56). `null` — розмови не знайдено в жодному джерелі.
+   */
+  talkSource: "kommo" | "ringostat" | null;
+  /**
+   * ⚠️ Розмова з Ringostat Є, але у клієнта КІЛЬКА відкритих угод — котрої саме вона
+   * стосується, ми не знаємо. Такі угоди зі списку НЕ гасяться; позначка каже, чому
+   * вони лишились попри свіжу розмову.
+   */
+  talkAmbiguous: boolean;
 }
 export interface StuckManagerGroup {
   managerId: number; manager: string; teamId: number | null; teamName: string | null;
@@ -2415,6 +2428,10 @@ export interface StuckManagerGroup {
 }
 export interface StuckGrouped {
   total: number; sumRisk: number; managers: number; over90: number; groups: StuckManagerGroup[];
+  /** 🕰 Дані станом на цей момент — найстаріший із синків, що живлять екран (`ASOF_SQL`). */
+  asOf: string;
+  /** Скільки угод лишились у списку з неоднозначною розмовою (для підпису над таблицею). */
+  talkAmbiguousCount: number;
 }
 
 /**
@@ -2433,11 +2450,13 @@ export interface StuckGrouped {
  */
 export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<StuckGrouped> {
   const md = Math.max(1, minDays);
-  const ACT = ACTIVITY_CLOCK;
+  const AS_OF = ASOF_SQL, CLOCK = CLOCK_WITH_TALK;
   const params: unknown[] = [FC_PIPELINES, AVTO_STATUSES, md];
   // 🔗 ТЕ САМЕ ПРАВИЛО, що в легасі; далі — ТІЛЬКИ те, чим екран свідомо вужчий.
   const conds = [
-    ...stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3" }),
+    // 🕰 `asOf` + 🎧 годинник із однозначною розмовою — обидва СВІДОМІ параметри правила,
+    // а не друга його копія: легасі `/stuck-deals` бере ті самі умови з дефолтами.
+    ...stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3", asOf: AS_OF, clock: CLOCK }),
     commercialManagerSql("m"), // 🔒 СТРОГО: лише комерційні менеджери (не лідген/фінанси/без команди), незалежно від скоупу
     // 🎯 Тип команди (рішення власника 24.07): РНК — усі застряглі; РПК/Самостійний (не-РНК) —
     //    лише лідген-угоди (lead_channel='leadgen'). Реюз rnkTeamSql (без хардкоду ID).
@@ -2451,22 +2470,36 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
   const r = await pool.query<{ kommo_id: string; name: string; client: string | null; price: string;
     manager_id: number; manager: string; team_id: number | null; team_name: string | null;
     pipeline_id: string; status_id: string; funnel_stage: string; days: string; activity_days: string | null;
-    last_call_at: Date | null; days_since_last_call: string | null; no_call_flag: boolean }>(
-    `SELECT d.kommo_id, d.name, d.client_name AS client, d.price,
+    last_call_at: Date | null; days_since_last_call: string | null; no_call_flag: boolean;
+    talk_source: "kommo" | "ringostat" | null; talk_ambiguous: boolean; as_of: Date }>(
+    // 🕰 ВІК — ВІД `AS_OF`, А НЕ ВІД `now()`. Годинник іде завжди; дані — ні. Під час
+    // аварії №2 (синк стояв 15 год 13 хв) список роздувся б на 17 угод «застою», якого
+    // ніхто не бачив — ми просто не знали про рух. У звичайний день Δ = 0 (заміряно).
+    `WITH ${ringostatTalkCte({ pipelines: "$1" })}
+     SELECT d.kommo_id, d.name, d.client_name AS client, d.price,
             m.id AS manager_id, m.name AS manager, m.team_id, t.name AS team_name,
             d.pipeline_id, d.status_id, psm.funnel_stage,
-            EXTRACT(DAY FROM now() - ${ACT})::int AS days,
-            EXTRACT(DAY FROM now() - d.last_activity_at)::int AS activity_days,
-            d.last_call_at,
-            EXTRACT(DAY FROM now() - d.last_call_at)::int AS days_since_last_call,
-            -- «метушня без контакту»: свіжа активність (<30д) АЛЕ дзвінка не було / місяць без дзвінка (≥30д)
-            (   (d.last_call_at IS NULL OR now() - d.last_call_at >= interval '30 days')
+            ${AS_OF} AS as_of,
+            EXTRACT(DAY FROM ${AS_OF} - ${CLOCK})::int AS days,
+            EXTRACT(DAY FROM ${AS_OF} - d.last_activity_at)::int AS activity_days,
+            ${LAST_TALK} AS last_call_at,
+            EXTRACT(DAY FROM ${AS_OF} - ${LAST_TALK})::int AS days_since_last_call,
+            CASE WHEN ${LAST_TALK} IS NULL THEN NULL
+                 WHEN d.last_call_at IS NOT NULL AND d.last_call_at >= COALESCE(${TALK_ATTRIBUTED}, d.last_call_at)
+                   THEN 'kommo' ELSE 'ringostat' END AS talk_source,
+            -- Розмова є, але привʼязати її до ЦІЄЇ угоди не можна: у клієнта кілька відкритих.
+            (tk.talk_at IS NOT NULL AND oc.n > 1
+             AND (d.last_call_at IS NULL OR tk.talk_at > d.last_call_at)) AS talk_ambiguous,
+            -- «метушня без контакту»: свіжа активність (<30д) АЛЕ розмови не було / місяць без розмови
+            (   (${LAST_TALK} IS NULL OR ${AS_OF} - ${LAST_TALK} >= interval '30 days')
                 AND d.last_activity_at IS NOT NULL
-                AND now() - d.last_activity_at < interval '30 days' ) AS no_call_flag
+                AND ${AS_OF} - d.last_activity_at < interval '30 days' ) AS no_call_flag
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      LEFT JOIN teams t ON t.id = m.team_id
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     LEFT JOIN talk tk ON tk.client_key = d.client_key
+     LEFT JOIN open_cnt oc ON oc.client_key = d.client_key
      WHERE ${conds.join(" AND ")}
      ORDER BY days DESC`,
     params
@@ -2483,10 +2516,13 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
     g.deals.push({ kommoId: Number(x.kommo_id), name: x.name, client: x.client, price, stage: stageName(x.pipeline_id, x.status_id, x.funnel_stage), days, activityDays: x.activity_days == null ? null : Number(x.activity_days),
       lastCallAt: x.last_call_at == null ? null : new Date(x.last_call_at).toISOString(),
       daysSinceLastCall: x.days_since_last_call == null ? null : Number(x.days_since_last_call),
-      noCallFlag: x.no_call_flag === true });
+      noCallFlag: x.no_call_flag === true,
+      talkSource: x.talk_source ?? null, talkAmbiguous: x.talk_ambiguous === true });
   }
   const groups = [...map.values()].sort((a, b) => b.count - a.count || b.longestIdleDays - a.longestIdleDays);
-  return { total: r.rows.length, sumRisk, managers: groups.length, over90, groups };
+  return { total: r.rows.length, sumRisk, managers: groups.length, over90, groups,
+    asOf: new Date(r.rows[0]?.as_of ?? Date.now()).toISOString(),
+    talkAmbiguousCount: r.rows.filter((x) => x.talk_ambiguous === true).length };
 }
 
 // ───────────────────────── ЧАС ОПРАЦЮВАННЯ (період по created_at) ─────────────────────────

@@ -6,7 +6,7 @@ import {
 import { processInChunks } from "./chunkWindow.js";
 import { buildDealContactLinks } from "./syncKommo.js";
 import { FC_PIPELINES } from "../core/money.js";
-import { callTargetConds } from "../core/stuckRule.js";
+import { callTargetConds, callCountsAsActivity, CALL_MIN_SEC } from "../core/stuckRule.js";
 
 /**
  * «АКТИВНА FC-УГОДА» — одна форма на всю джобу ($1 = масив пайплайнів).
@@ -37,16 +37,31 @@ const HUMAN_NOTE_TYPES = new Set([
   "chat_message",
 ]);
 
+const CALL_TYPES = new Set(["call_in", "call_out"]);
+
+/**
+ * 🔴 ДЗВІНОК КОРОТШИЙ ЗА 10 c — НЕ АКТИВНІСТЬ (рішення власника 10.08.2026).
+ *
+ * Недодзвон скидав годинник застрягання так само, як справжня розмова, — тобто
+ * ХОВАВ угоду зі списку тим, що менеджер набрав номер і поклав слухавку. Заміряно
+ * на проді: 10 238 із 31 567 дзвінків активних FC-угод тривали 0 c, і вони ховали
+ * 83 угоди; поріг 10 c додає ще 14.
+ *
+ * Поріг живе в `core/stuckRule.ts` — там само, де правило списку. Тут його НЕ
+ * повторюємо числом: розійшлись би мовчки, і саме така розбіжність робить колонку
+ * порожньою там, де вона потрібна.
+ */
 function isHumanActivity(n: KommoLeadNote): boolean {
   if (n.createdBy === 0) return false; // Salesbot / system
-  return HUMAN_NOTE_TYPES.has(n.noteType);
+  if (!HUMAN_NOTE_TYPES.has(n.noteType)) return false;
+  return !CALL_TYPES.has(n.noteType) || callCountsAsActivity(n.durationSec);
 }
 
-// Дзвінок клієнту = лише call_in/call_out (людські). Окремо від last_activity_at,
-// бо той змішує дзвінки з нотатками/sms/чатом — а нам треба саме РОЗМОВУ.
+// РОЗМОВА клієнту = call_in/call_out від людини, що тривала ≥ CALL_MIN_SEC.
+// Окремо від last_activity_at, бо той змішує розмови з нотатками/sms/чатом.
 function isHumanCall(n: KommoLeadNote): boolean {
   if (n.createdBy === 0) return false;
-  return n.noteType === "call_in" || n.noteType === "call_out";
+  return CALL_TYPES.has(n.noteType) && callCountsAsActivity(n.durationSec);
 }
 
 // export — щоб гейт міг довести монотонність/ідемпотентність без походу в Kommo.
@@ -189,64 +204,91 @@ export async function syncContactActivity(opts: { sinceUnix?: number; untilUnix?
 }
 
 /**
- * 🩺 САМОЛІКУВАННЯ КОНТАКТНОЇ АКТИВНОСТІ — той самий принцип, що у ФАЗІ 1: інкремент іде
- * лише вперед, тож пропущене вікно не повернеться саме. Звіряємо ПО СУТНОСТЯХ: беремо
- * контакти, привʼязані до АКТИВНИХ FC-угод, і переганяємо їхні нотатки через
- * `applyContactNotes` (монотонний). Вотермарк НЕ рухаємо.
- * Це ж — разовий бекфіл: `--backfill-contacts`.
- */
-export async function healContactActivity(): Promise<{ contacts: number; notes: number; batches: number }> {
-  const r = await pool.query<{ contact_id: string }>(
-    `SELECT DISTINCT dc.contact_id
-       FROM deal_contacts dc, deals d, pipeline_stage_map psm
-      WHERE d.kommo_id = dc.deal_kommo_id AND ${ACTIVE_FC}
-      ORDER BY dc.contact_id`,
-    [FC_PIPELINES]
-  );
-  const ids = r.rows.map((x) => Number(x.contact_id));
-  const BATCH = 100;
-  let notes = 0, batches = 0;
-  for (let i = 0; i < ids.length; i += BATCH) {
-    batches++;
-    notes += await forEachContactNotePageByIds(ids.slice(i, i + BATCH), applyContactNotes);
-  }
-  console.log(`healContactActivity: ${ids.length} контактів активних FC-угод, ${batches} батчів, ${notes} нотаток.`);
-  return { contacts: ids.length, notes, batches };
-}
-
-/**
- * 🩺 САМОЛІКУВАННЯ АКТИВНОСТІ (ФАЗА 1). Інкрементальний прохід іде ЛИШЕ ВПЕРЕД від
- * вотермарка (`sinceUnix = last_activity_note_at - 300`), тому будь-яке пропущене вікно —
- * IP-бан, падіння, ручний зсув вотермарка — губиться НАЗАВЖДИ: жоден наступний тік туди
- * не повертається. Діагностика 30.07.2026: у ліда 61986895 людська нотатка 18.06 не
- * потрапила в жоден прохід (її `updated_at` = `created_at` = 18.06, фільтр зловив би —
- * просто вікно не сканувалось), через що «застій» показував 111 днів замість 42.
- * Замір по всіх активних FC-угодах: 97 відстають + 192 з NULL при наявних нотатках = 289
- * з 2319 (12.5%), медіана відставання 44 дні, макс 884.
+ * 🩺 ПЕРЕРАХУНОК АКТИВНОСТІ ПО СУТНОСТЯХ — ОДИН ЗВІРЯЛЬНИК ЗАМІСТЬ ДВОХ.
  *
- * Лікування — НЕ ще один вотермарк (він так само може застрягти), а звірка ПО СУТНОСТЯХ:
- * беремо нотатки лише активних FC-угод по їхніх id і переганяємо через той самий
- * `applyNotes`. Він монотонний (GREATEST/LEAST), тож прохід ідемпотентний і ніколи не
- * зсуває анкери назад. Вотермарк НЕ рухаємо — це страховка поверх інкремента, не заміна.
- * Вартість обмежена й передбачувана: ~24 запити на батчі по 100 id (2.3к угод).
- * CLI: `node dist/jobs/syncDealActivity.js --heal-activity`.
+ * Було два монотонні проходи: `healDealActivity` (нотатки угод) і
+ * `healContactActivity` (нотатки контактів, куди Kommo вішає телефонію). Обидва
+ * лише ПІДТЯГУВАЛИ анкер уперед — і поки правило звучало «будь-яка людська нотатка
+ * = активність», цього вистачало.
+ *
+ * 🔴 З ПОРОГОМ 10 c ЦЬОГО СТАЛО МАЛО. Уже записані анкери походять із дзвінків на
+ * 0 c, а `GREATEST` їх не знижує НІКОЛИ — тобто зміна правила застосувалась би лише
+ * до майбутніх нотаток, а 83 угоди й далі ховались би за недодзвонами. Виправляє це
+ * тільки перерахунок, що вміє рухати анкер НАЗАД.
+ *
+ * 🔒 ЧОМУ ЦЕ БЕЗПЕЧНО САМЕ ТУТ, і чому інкремент лишається монотонним: цей прохід
+ * бере нотатки ПО id сутностей — тобто бачить УСЮ історію угоди, а не вікно. Знизити
+ * анкер за повною історією коректно; зробити те саме в інкременті означало б скидати
+ * анкер щоразу, коли в порцію не потрапила остання нотатка.
+ *
+ * 🔴 ОБИДВА ДЖЕРЕЛА В ОДНОМУ ПРОХОДІ — НЕ ОПТИМІЗАЦІЯ, А УМОВА КОРЕКТНОСТІ. Точний
+ * перерахунок лише за нотатками угоди стер би активність, що прийшла з КОНТАКТА
+ * (там живуть дзвінки Ringostat). Тому розділити ці два проходи, як було, більше не
+ * можна: кожен окремо «знає» неповну правду.
+ *
+ * Вартість та сама, що в двох старих: ~47 запитів на добу (24 лідові + 23 контактні).
+ * CLI: `node dist/jobs/syncDealActivity.js --recompute-activity`.
  */
-export async function healDealActivity(): Promise<{ deals: number; notes: number; batches: number }> {
+export async function recomputeActivity(): Promise<{ deals: number; notes: number; changed: number }> {
   const idsRes = await pool.query<{ kommo_id: string }>(
     `SELECT d.kommo_id FROM deals d, pipeline_stage_map psm
-      WHERE ${ACTIVE_FC}
-      ORDER BY d.kommo_id`,
+      WHERE ${ACTIVE_FC} ORDER BY d.kommo_id`,
     [FC_PIPELINES]
   );
-  const ids = idsRes.rows.map((r) => Number(r.kommo_id));
-  const BATCH = 100; // Kommo обмежує довжину URL (filter[entity_id][] по id)
-  let notes = 0, batches = 0;
-  for (let i = 0; i < ids.length; i += BATCH) {
-    batches++;
-    notes += await forEachLeadNotePageByIds(ids.slice(i, i + BATCH), applyNotes);
+  const dealIds = idsRes.rows.map((r) => Number(r.kommo_id));
+  if (!dealIds.length) throw new Error("recomputeActivity: активних FC-угод НУЛЬ — це провал, не порожня база");
+
+  const link = await pool.query<{ contact_id: string; deal_kommo_id: string }>(
+    `SELECT contact_id, deal_kommo_id FROM deal_contacts WHERE deal_kommo_id = ANY($1::bigint[])`,
+    [dealIds]
+  );
+  const dealsByContact = new Map<number, number[]>();
+  for (const r of link.rows) {
+    const c = Number(r.contact_id);
+    if (!dealsByContact.has(c)) dealsByContact.set(c, []);
+    dealsByContact.get(c)!.push(Number(r.deal_kommo_id));
   }
-  console.log(`healDealActivity: ${ids.length} активних FC-угод, ${batches} батчів, ${notes} нотаток.`);
-  return { deals: ids.length, notes, batches };
+
+  const known = new Set(dealIds);
+  const hi = new Map<number, number>(), lo = new Map<number, number>(), call = new Map<number, number>();
+  const take = (dealId: number, n: KommoLeadNote): void => {
+    if (!known.has(dealId)) return;
+    if (isHumanCall(n)) { if (n.createdAt > (call.get(dealId) ?? 0)) call.set(dealId, n.createdAt); }
+    if (!isHumanActivity(n)) return;
+    if (n.createdAt > (hi.get(dealId) ?? 0)) hi.set(dealId, n.createdAt);
+    const l = lo.get(dealId);
+    if (l == null || n.createdAt < l) lo.set(dealId, n.createdAt);
+  };
+
+  const BATCH = 100; // Kommo обмежує довжину URL (filter[entity_id][] по id)
+  let notes = 0;
+  for (let i = 0; i < dealIds.length; i += BATCH)
+    notes += await forEachLeadNotePageByIds(dealIds.slice(i, i + BATCH), async (ns) => {
+      for (const n of ns) take(n.entityId, n);
+    });
+  const contactIds = [...dealsByContact.keys()];
+  for (let i = 0; i < contactIds.length; i += BATCH)
+    notes += await forEachContactNotePageByIds(contactIds.slice(i, i + BATCH), async (ns) => {
+      for (const n of ns) for (const d of dealsByContact.get(n.entityId) ?? []) take(d, n);
+    });
+
+  // ⚠️ ПРИСВОЄННЯ, а не GREATEST — у цьому весь сенс проходу. Угода без ЖОДНОЇ
+  // кваліфікованої нотатки отримує NULL: «її не вели» — і це правда, а не втрата даних.
+  const at = (m: Map<number, number>, id: number) => { const v = m.get(id); return v == null ? null : new Date(v * 1000); };
+  const upd = await pool.query(
+    `UPDATE deals d
+        SET last_activity_at = v.hi, first_activity_at = v.lo, last_call_at = v.call
+       FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS hi,
+                    UNNEST($3::timestamptz[]) AS lo, UNNEST($4::timestamptz[]) AS call) v
+      WHERE d.kommo_id = v.kommo_id
+        AND (d.last_activity_at IS DISTINCT FROM v.hi
+          OR d.first_activity_at IS DISTINCT FROM v.lo
+          OR d.last_call_at      IS DISTINCT FROM v.call)`,
+    [dealIds, dealIds.map((i) => at(hi, i)), dealIds.map((i) => at(lo, i)), dealIds.map((i) => at(call, i))]
+  );
+  console.log(`recomputeActivity: ${dealIds.length} активних FC-угод, ${contactIds.length} контактів, `
+    + `${notes} нотаток, змінено ${upd.rowCount} угод.`);
+  return { deals: dealIds.length, notes, changed: upd.rowCount ?? 0 };
 }
 
 /**
@@ -342,6 +384,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // CLI:
   //   `node dist/jobs/syncDealActivity.js --months=6`      → backfill активності за N міс (як було)
   //   `node dist/jobs/syncDealActivity.js --backfill-calls` → цільовий бекфіл last_call_at (активні FC)
+  //   `node dist/jobs/syncDealActivity.js --recompute-activity` → ТОЧНИЙ перерахунок анкерів
+  //      (єдиний прохід, що вміє знизити анкер — саме він застосовує поріг 10 c до історії)
   if (process.argv.includes("--build-links")) {
     buildDealContactLinks()
       .then(() => pool.end())
@@ -349,15 +393,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         console.error(err);
         process.exit(1);
       });
-  } else if (process.argv.includes("--backfill-contacts")) {
-    healContactActivity()
-      .then(() => pool.end())
-      .catch((err) => {
-        console.error(err);
-        process.exit(1);
-      });
-  } else if (process.argv.includes("--heal-activity")) {
-    healDealActivity()
+  } else if (process.argv.includes("--recompute-activity")) {
+    recomputeActivity()
       .then(() => pool.end())
       .catch((err) => {
         console.error(err);

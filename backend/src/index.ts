@@ -49,7 +49,7 @@ import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
-import { syncDealActivity, healDealActivity, syncContactActivity, healContactActivity } from "./jobs/syncDealActivity.js";
+import { syncDealActivity, syncContactActivity, recomputeActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
@@ -373,18 +373,18 @@ cron.schedule("10 */3 * * *", () => {
   if (isKommoPaused()) return;
   void runJob("syncContactActivity", () => syncContactActivity());
 });
-// 🩺 Самолікування контактної активності — щодня 05:40 (після 05:00-піку й syncTransfers 05:20).
-cron.schedule("40 5 * * *", () => {
-  if (isKommoPaused()) return;
-  void runJob("healContactActivity", () => healContactActivity());
-});
-// 🩺 Самолікування активності — щодня 04:40. Інкремент вище йде лише ВПЕРЕД від вотермарка,
-// тож пропущене вікно (бан/падіння/зсув) не повертається ніколи. Цей прохід звіряє по
-// СУТНОСТЯХ (нотатки лише активних FC-угод по id) і монотонно підтягує анкери. ~24 запити
-// на добу — на тлі лімітів Kommo непомітно. 04:40: після нічної звірки (03:35) і до 05:00-піку.
+// 🩺 ТОЧНИЙ перерахунок анкерів активності — щодня 04:40, ОДИН прохід замість двох
+// (`healDealActivity` 04:40 + `healContactActivity` 05:40). Інкремент іде лише ВПЕРЕД від
+// вотермарка, тож пропущене вікно (бан/падіння/зсув) не повертається ніколи; цей прохід
+// звіряє по СУТНОСТЯХ — нотатки активних FC-угод І їхніх контактів по id — і виставляє
+// анкер ТОЧНО, включно зі зниженням. Саме зниження й застосовує поріг 10 c до історії:
+// `GREATEST` не знизив би анкер, набитий недодзвонами, ніколи.
+// ⚠️ Обидва джерела мусять бути в ОДНОМУ проході: точний перерахунок лише за нотатками
+// угоди стер би активність, що прийшла з контакту (там живе телефонія).
+// ~47 запитів на добу — рівно стільки ж, скільки коштували два старі проходи.
 cron.schedule("40 4 * * *", () => {
   if (isKommoPaused()) return;
-  void runJob("healDealActivity", () => healDealActivity());
+  void runJob("recomputeActivity", () => recomputeActivity());
 });
 // Lead-transfer events — раз на добу (резерв; «передані заявки» тепер із «Реєстру»).
 cron.schedule("20 5 * * *", () => {

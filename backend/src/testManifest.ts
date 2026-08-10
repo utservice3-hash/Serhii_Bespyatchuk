@@ -49,6 +49,7 @@ export const MANIFEST_FILES: string[] = [
   "health/jobAlert.test.js",
   "jobs/backupRotate.test.js",
   "core/stuckRule.test.js",
+  "core/stuckTalk.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -425,4 +426,9 @@ export const MANIFEST_TESTS: string[] = [
   "#72b ЗАСТРЯГЛІ ⊆ ТІ, КОМУ ДЖОБА ПИШЕ last_call_at",
   "#72c ВІК РАХУЄТЬСЯ ВІД ПЕРЕДАНОГО АНКЕРА, а не від зашитого now()",
   "#72d ПРАВИЛО НЕ ДУБЛЮЄТЬСЯ: поверхні кличуть stuckRule, а не пишуть SQL",
+  // core/stuckTalk.test.ts — Фаза 3: поріг розмови, анкер від синку, Ringostat
+  "#73 ДЗВІНОК КОРОТШИЙ ЗА 10 c НЕ Є АКТИВНІСТЮ",
+  "#73b ВІК РАХУЄТЬСЯ ВІД СИНКУ: застарілий синк НЕ роздуває лічильник",
+  "#73c RINGOSTAT ГАСИТЬ, КОЛИ У КЛІЄНТА ОДНА ВІДКРИТА УГОДА",
+  "#73d КІЛЬКА ВІДКРИТИХ УГОД — РОЗМОВА НЕ ГАСИТЬ ЖОДНОЇ",
 ];

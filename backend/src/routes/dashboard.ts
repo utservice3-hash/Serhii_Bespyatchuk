@@ -3620,6 +3620,9 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
     role: auth.role,
     scope: auth.role === "manager" ? "own" : auth.role === "team_lead" ? "team" : "company",
     total: g.total, sumRisk: g.sumRisk, managers: g.managers, over90: g.over90,
+    // 🕰 «Дані станом на» — не косметика: лічильник рахується від ЦЬОГО моменту, а не
+    // від годинника, тож без підпису екран не пояснив би, чому число не росте.
+    asOf: g.asOf, talkAmbiguousCount: g.talkAmbiguousCount,
     groups: g.groups.map((grp) => ({
       managerId: grp.managerId, manager: grp.manager, teamId: grp.teamId,
       teamTag: grp.teamId != null ? kvpTeamKind(grp.teamId, grp.teamName ?? "") : null,
@@ -3628,6 +3631,7 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
         kommoId: d.kommoId, crmUrl: kommoLeadUrl(d.kommoId), name: d.name, client: d.client,
         price: d.price, stage: d.stage, days: d.days, activityDays: d.activityDays,
         lastCallAt: d.lastCallAt, daysSinceLastCall: d.daysSinceLastCall, noCallFlag: d.noCallFlag,
+        talkSource: d.talkSource, talkAmbiguous: d.talkAmbiguous,
         note: noteMap.get(d.kommoId)?.comment ?? null,
         noteAuthor: noteMap.get(d.kommoId)?.author ?? null,
         noteAt: noteMap.get(d.kommoId)?.at ?? null,
