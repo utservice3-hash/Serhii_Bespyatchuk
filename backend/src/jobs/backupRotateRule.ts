@@ -27,25 +27,74 @@ export const MIN_KEPT_COMPLETE = 2;
 /**
  * ЩО САМЕ ротація видалила б — ЧИСТА функція, без файлової системи.
  * Так рішення доводиться фікстурою, а не «прогнати й подивитись, що зникло».
+ *
+ * 🔴 ТРИ СТАНИ, А НЕ ДВА (10.08.2026, рішення власника). Раніше «придатна» означало
+ * «має MANIFEST.txt» — і копія на 72 таблиці важила стільки ж, скільки на 78.
+ * Це та сама пастка, що й порожні папки, лише поверхом вище: артефакт є,
+ * придатність невідома. Тепер:
+ *   • `complete` — вивантажились УСІ таблиці. Лише вони рахуються в `keep` і лише
+ *     їх боронить підлога `MIN_KEPT_COMPLETE`;
+ *   • `partial`  — маніфест є, але частини таблиць бракує. Користь має, копією
+ *     не є: тримаємо як `broken`, за віком, і НІКОЛИ не даємо їй захищати нас
+ *     від видалення справжньої копії;
+ *   • `broken`   — маніфесту немає взагалі (прогін обірвався).
+ * Без цього поділу через тиждень ми мали б шість часткових копій, формально
+ * «придатних», і жодної цілої.
  */
+export type BackupStatus = "complete" | "partial" | "broken";
+
 export function plannedDeletions(
-  dirs: { name: string; complete: boolean }[],
+  dirs: { name: string; status: BackupStatus }[],
   nowMs: number,
   keep = KEEP,
   keepBrokenDays = KEEP_BROKEN_DAYS
 ): string[] {
   const sorted = [...dirs].sort((a, b) => a.name.localeCompare(b.name));
-  const complete = sorted.filter((d) => d.complete);
+  const complete = sorted.filter((d) => d.status === "complete");
   const out: string[] = [];
-  // Неповні: прибираємо лише старші за поріг — копіями вони не є, але слідів для
-  // розбору позбавляти себе не варто, доки місце дозволяє.
+  // Часткові й обірвані: прибираємо лише старші за поріг — слідів для розбору
+  // позбавляти себе не варто, доки місце дозволяє.
   const cutoff = nowMs - keepBrokenDays * 86_400_000;
-  for (const d of sorted.filter((x) => !x.complete)) {
+  for (const d of sorted.filter((x) => x.status !== "complete")) {
     const ts = Date.parse(d.name.slice(4, 14)); // `uts_YYYY-MM-DD_…`; нерозбірне ім'я лишаємо
     if (Number.isFinite(ts) && ts < cutoff) out.push(d.name);
   }
-  // Придатні: за `keep`, але НІКОЛИ не чіпаємо останні `MIN_KEPT_COMPLETE`.
+  // Цілі: за `keep`, але НІКОЛИ не чіпаємо останні `MIN_KEPT_COMPLETE`.
   const maxDeletable = Math.max(0, complete.length - Math.max(keep, MIN_KEPT_COMPLETE));
   for (const d of complete.slice(0, maxDeletable)) out.push(d.name);
   return out;
+}
+
+/** Скільки разів пробуємо вивантажити таблицю, перш ніж визнати невдачу. */
+export const COPY_ATTEMPTS = 3;
+
+/**
+ * РЕТРАЙ ОДНІЄЇ ТАБЛИЦІ — чиста обгортка, тестується без БД і без мережі.
+ *
+ * 🔴 НАВІЩО. Заміряно 10.08.2026 трьома прогонами проти прода: падає 2-6 таблиць
+ * із 78, і **набори падінь майже не перетинаються** — `deal_stage_events` упала в
+ * двох прогонах, але в третьому пройшла; `statistics_values` навпаки. Тобто рветься
+ * не таблиця й не бібліотека, а з'єднання до Neon посеред `COPY`. При частоті ~2/78
+ * два випадкові збої поспіль в ОДНУ таблицю практично неймовірні, тож три спроби
+ * дають цілу копію.
+ *
+ * ⚠️ `onRetry` ОБОВ'ЯЗКОВО перепідключає клієнта: обірване з'єднання отруєне, і
+ * повтор по ньому впаде так само. Саме тому це параметр, а не деталь усередині.
+ */
+export async function copyWithRetry(
+  attempt: (n: number) => Promise<void>,
+  onRetry: (n: number, err: unknown) => Promise<void>,
+  attempts = COPY_ATTEMPTS
+): Promise<number> {
+  let last: unknown;
+  for (let n = 1; n <= attempts; n++) {
+    try {
+      await attempt(n);
+      return n; // ← номер вдалої спроби: третя спроба це УСПІХ, а не провал
+    } catch (err) {
+      last = err;
+      if (n < attempts) await onRetry(n, err);
+    }
+  }
+  throw last;
 }

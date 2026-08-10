@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { plannedDeletions, MIN_KEPT_COMPLETE } from "./backupRotateRule.js";
+import { plannedDeletions, copyWithRetry, MIN_KEPT_COMPLETE, COPY_ATTEMPTS } from "./backupRotateRule.js";
 
 /**
  * #70 — РОТАЦІЯ НЕ ЗНИЩУЄ ОСТАННІ ПРИДАТНІ КОПІЇ.
@@ -20,7 +20,9 @@ import { plannedDeletions, MIN_KEPT_COMPLETE } from "./backupRotateRule.js";
  */
 
 const NOW = Date.parse("2026-08-10T12:00:00Z");
-const d = (name: string, complete: boolean) => ({ name, complete });
+const d = (name: string, complete: boolean) =>
+  ({ name, status: (complete ? "complete" : "broken") as "complete" | "partial" | "broken" });
+const partial = (name: string) => ({ name, status: "partial" as const });
 
 /**
  * Реальний стан каталогу на момент інциденту: **26 папок**, придатних три.
@@ -86,4 +88,67 @@ test("#70c ДЗЕРКАЛО: зайві придатні копії ВИДАЛЯ
     `🔴 з 20 придатних при KEEP=14 мали піти 6, пішло ${del.length} — ротація не працює`);
   assert.ok(del.includes("uts_2026-07-01_00-00-00") && !del.includes("uts_2026-07-20_00-00-00"),
     "🔴 видаляються не найстаріші — порядок ротації перевернутий");
+});
+
+/**
+ * 🔴 #70d — ЧАСТКОВА КОПІЯ НЕ ЗАХИЩАЄ І НЕ РАХУЄТЬСЯ (рішення власника 10.08.2026).
+ *
+ * Раніше «придатна» = «має MANIFEST.txt», тож копія на 72 таблиці важила стільки ж,
+ * скільки на 78. Через тиждень ми мали б шість часткових копій, формально придатних,
+ * і жодної цілої — та сама пастка «артефакт є, придатність невідома», лише поверхом
+ * вище за порожні папки.
+ */
+test("#70d ЧАСТКОВА КОПІЯ НЕ ЗАМІНЮЄ ЦІЛУ", () => {
+  // ⚠️ ДВАДЦЯТЬ часткових, а не шість — і це знову про розмір фікстури. З шістьма
+  // саботаж «часткові рахуються цілими» НЕ червонив: 7 каталогів мінус KEEP(14) дає
+  // нуль, і ротація нічого не видаляла попри помилку. Той самий механізм маскування
+  // вже ловив мене годиною раніше на #70. Записано, щоб не наступити втретє.
+  const dirs = [
+    d("uts_2026-07-01_00-00-00", true),
+    ...Array.from({ length: 20 }, (_, i) => partial(`uts_2026-08-${String(i + 1).padStart(2, "0")}_00-00-00`)),
+  ];
+  const del = plannedDeletions(dirs, NOW, 14);
+  assert.ok(!del.includes("uts_2026-07-01_00-00-00"),
+    "🔴 ЄДИНУ цілу копію знесли, бо поруч лежать свіжі часткові — саме цього ми й уникаємо");
+  // Дзеркало: часткові НЕ рахуються цілими, тож підлога їх не боронить —
+  // старі часткові прибираються за віком, як і обірвані.
+  const old = [partial("uts_2026-06-01_00-00-00"), d("uts_2026-08-09_00-00-00", true), d("uts_2026-08-10_00-00-00", true)];
+  assert.ok(plannedDeletions(old, NOW, 14).includes("uts_2026-06-01_00-00-00"),
+    "🔴 стара ЧАСТКОВА копія не прибирається — каталог наповнюватиметься мотлохом");
+});
+
+/**
+ * #71 — РЕТРАЙ: ТРЕТЯ СПРОБА ЦЕ УСПІХ, А НЕ ПРОВАЛ.
+ *
+ * 🔴 Заміряно трьома прогонами проти прода: падає 2-6 таблиць із 78, і набори
+ * падінь майже не перетинаються (`deal_stage_events` упала двічі, але раз пройшла;
+ * `statistics_values` навпаки). Рветься з'єднання до Neon посеред COPY, а не
+ * таблиця й не бібліотека — обидві версії `pg-copy-streams` на локальній базі
+ * тягнуть 98 МБ за секунду. При частоті ~2/78 три спроби дають цілу копію.
+ */
+test("#71 РЕТРАЙ: таблиця, що вдалась із третьої спроби, — це УСПІХ", async () => {
+  let calls = 0;
+  const reconnects: number[] = [];
+  const used = await copyWithRetry(
+    async () => { calls++; if (calls < 3) throw new Error("Cannot read properties of null (reading 'push')"); },
+    async (n) => { reconnects.push(n); },
+  );
+  assert.equal(used, 3, "🔴 не повернуто номер вдалої спроби — «з третьої» має читатись як успіх");
+  assert.equal(calls, 3, `🔴 спроб було ${calls}, а не 3`);
+  assert.deepEqual(reconnects, [1, 2],
+    "🔴 перепідключення НЕ відбулось між спробами — повтор по отруєному з'єднанню впаде так само");
+});
+
+test("#71b РЕТРАЙ НЕ ХОВАЄ СПРАВЖНЮ ПОМИЛКУ", async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => copyWithRetry(async () => { calls++; throw new Error("завжди падає"); }, async () => {}),
+    /завжди падає/,
+    "🔴 після вичерпання спроб помилка мусить летіти далі, інакше провал стане тихим успіхом");
+  assert.equal(calls, COPY_ATTEMPTS, `🔴 зроблено ${calls} спроб замість ${COPY_ATTEMPTS}`);
+  // 🪞 Дзеркало: успіх із ПЕРШОЇ спроби не робить зайвих викликів.
+  let once = 0;
+  assert.equal(await copyWithRetry(async () => { once++; }, async () => {}), 1,
+    "🔴 успішна з першого разу таблиця не має вважатись повтореною");
+  assert.equal(once, 1, "🔴 зайвий виклик при успіху — ретрай спрацьовує там, де не треба");
 });
