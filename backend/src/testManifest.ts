@@ -47,6 +47,7 @@ export const MANIFEST_FILES: string[] = [
   "core/klassParity.test.js",
   "jobs/syncGuard.test.js",
   "health/jobAlert.test.js",
+  "jobs/backupRotate.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -410,4 +411,8 @@ export const MANIFEST_TESTS: string[] = [
   // health/jobAlert.test.ts — банер джоби гасне після успіху (регресія 45465f5)
   "#69 БАНЕР ДЖОБИ: помилка актуальна лише без пізнішого успіху",
   "#69b ДЖЕРЕЛО: банер кличе errorIsCurrent, а не голий last_error",
+  // jobs/backupRotate.test.ts — ротація не знищує останні придатні копії
+  "#70 РОТАЦІЯ НЕ ЧІПАЄ ОСТАННІ ПРИДАТНІ КОПІЇ",
+  "#70b ПІДЛОГА ТРИМАЄТЬСЯ НАВІТЬ ПРИ KEEP=1",
+  "#70c ДЗЕРКАЛО: зайві придатні копії ВИДАЛЯЮТЬСЯ",
 ];

@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { to as copyTo } from "pg-copy-streams";
 import pg from "pg";
 import { config } from "../config.js";
+import { plannedDeletions } from "./backupRotateRule.js";
 
 // Independent, off-Neon logical backup: one gzipped CSV per table (COPY = native
 // Postgres, so escaping/nulls/json are handled correctly). Neon's platform
@@ -13,7 +14,6 @@ import { config } from "../config.js";
 // server that can be restored into ANY Postgres.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKUP_DIR = process.env.BACKUP_DIR ?? path.resolve(__dirname, "..", "..", "..", "backups");
-const KEEP = 14; // keep the newest 14 COMPLETE daily backups
 
 /** Копія вважається придатною ТІЛЬКИ з маніфестом — він пишеться останнім. */
 const isComplete = (dir: string): boolean => existsSync(path.join(BACKUP_DIR, dir, "MANIFEST.txt"));
@@ -94,8 +94,8 @@ export async function backupDb(): Promise<void> {
   }
 }
 
-/** Скільки днів тримаємо НЕПОВНІ копії, перш ніж прибрати (див. коментар у `rotate`). */
-const KEEP_BROKEN_DAYS = 14;
+
+
 
 /**
  * Ротація — у `finally`, і рахує ЛИШЕ придатні копії (причини 3 і 4 вище).
@@ -112,19 +112,15 @@ const KEEP_BROKEN_DAYS = 14;
 function rotate(): void {
   try {
     const all = readdirSync(BACKUP_DIR).filter((n) => n.startsWith("uts_")).sort();
-    const complete = all.filter(isComplete);
-    const broken = all.filter((n) => !isComplete(n));
+    const dirs = all.map((name) => ({ name, complete: isComplete(name) }));
+    const broken = dirs.filter((d) => !d.complete).map((d) => d.name);
+    const complete = dirs.filter((d) => d.complete).map((d) => d.name);
     if (broken.length) {
       console.warn(`backupDb: НЕПОВНИХ копій ${broken.length} (без MANIFEST.txt): ${broken.join(", ")}`);
     }
-    const cutoff = Date.now() - KEEP_BROKEN_DAYS * 86_400_000;
-    for (const bad of broken) {
-      // Дата — з імені каталогу `uts_YYYY-MM-DD_HH-MM-SS`; нерозбірне ім'я лишаємо.
-      const ts = Date.parse(bad.slice(4, 14));
-      if (Number.isFinite(ts) && ts < cutoff) rmSync(path.join(BACKUP_DIR, bad), { recursive: true, force: true });
-    }
-    for (const old of complete.slice(0, Math.max(0, complete.length - KEEP))) {
-      rmSync(path.join(BACKUP_DIR, old), { recursive: true, force: true });
+    console.log(`backupDb: придатних копій ${complete.length}${complete.length ? ` (найсвіжіша ${complete[complete.length - 1]})` : " — ЖОДНОЇ"}`);
+    for (const name of plannedDeletions(dirs, Date.now())) {
+      rmSync(path.join(BACKUP_DIR, name), { recursive: true, force: true });
     }
   } catch (err) {
     console.error("Backup rotation failed:", err);
