@@ -674,6 +674,21 @@ export interface KommoLeadNote {
   createdBy: number; // Kommo user id; 0 = system/Salesbot
   createdAt: number; // unix seconds
   noteType: string;
+  /**
+   * 🔴 ТРИВАЛІСТЬ РОЗМОВИ, с — для `call_in`/`call_out`; `null` там, де її немає.
+   *
+   * Kommo кладе її в `params.duration` (джерело Ringostat), а ми досі відкидали
+   * `params` цілком. Наслідок був не косметичний: «застряглі угоди» зараховують
+   * дзвінок активністю БЕЗ перевірки тривалості, тож дзвінок на **0 секунд**
+   * («не додзвонився», `call_status: 6`) скидає лічильник застрягання й ХОВАЄ
+   * угоду зі списку. Заміряно: 8 із 26 угод, де остання активність — дзвінок,
+   * мали саме нульовий.
+   *
+   * ⚠️ `null` означає «НЕ ЗНАЄМО», а не «нуль». Не-Ringostat нотатки й нетелефонні
+   * типи `params` не мають; читач зобов'язаний розрізняти ці випадки, інакше
+   * «немає даних» тихо перетвориться на «дзвінка не було».
+   */
+  durationSec: number | null;
 }
 
 interface KommoNoteRaw {
@@ -681,6 +696,15 @@ interface KommoNoteRaw {
   created_by: number;
   created_at: number;
   note_type: string;
+  params?: { duration?: number | string | null } | null;
+}
+
+/** `params.duration` → секунди. Нечислове/відсутнє → `null` («не знаємо»). */
+function noteDuration(n: KommoNoteRaw): number | null {
+  const d = n.params?.duration;
+  if (d == null) return null;
+  const v = typeof d === "string" ? Number(d) : d;
+  return Number.isFinite(v) ? v : null;
 }
 
 /**
@@ -721,6 +745,7 @@ async function forEachNotePage(
       createdBy: n.created_by,
       createdAt: n.created_at,
       noteType: n.note_type,
+      durationSec: noteDuration(n),
     }));
     if (notes.length) {
       await onPage(notes);
@@ -752,6 +777,7 @@ async function forEachNotePageByIds(
       createdBy: n.created_by,
       createdAt: n.created_at,
       noteType: n.note_type,
+      durationSec: noteDuration(n),
     }));
     if (notes.length) {
       await onPage(notes);

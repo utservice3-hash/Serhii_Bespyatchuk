@@ -48,6 +48,7 @@ export const MANIFEST_FILES: string[] = [
   "jobs/syncGuard.test.js",
   "health/jobAlert.test.js",
   "jobs/backupRotate.test.js",
+  "core/stuckRule.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -419,4 +420,9 @@ export const MANIFEST_TESTS: string[] = [
   "#70e НУЛЬ ЦІЛИХ — НЕ ВИДАЛЯЄМО НІЧОГО",
   "#71 РЕТРАЙ: таблиця, що вдалась із третьої спроби, — це УСПІХ",
   "#71b РЕТРАЙ НЕ ХОВАЄ СПРАВЖНЮ ПОМИЛКУ",
+  // core/stuckRule.test.ts — правило «застряглої угоди» одне на три поверхні
+  "#72 СКЛАД ЗАСТРЯГЛИХ — рівно той, що дає правило на кожній умові",
+  "#72b ЗАСТРЯГЛІ ⊆ ТІ, КОМУ ДЖОБА ПИШЕ last_call_at",
+  "#72c ВІК РАХУЄТЬСЯ ВІД ПЕРЕДАНОГО АНКЕРА, а не від зашитого now()",
+  "#72d ПРАВИЛО НЕ ДУБЛЮЄТЬСЯ: поверхні кличуть stuckRule, а не пишуть SQL",
 ];

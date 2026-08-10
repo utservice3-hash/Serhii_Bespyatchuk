@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { AVTO_STATUSES, ACTIVITY_CLOCK, stuckBaseConds } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
@@ -2348,7 +2349,8 @@ export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[
 
 // ───────────────────────── ЗАСТРЯГЛІ УГОДИ (знімок, БЕЗ дат) ─────────────────────────
 
-const AVTO_STATUSES = [69716300, 98470988, 10937178];
+// 🔗 Реекспорт для сумісності: канонічне джерело — `core/stuckRule.ts`.
+export { AVTO_STATUSES } from "./stuckRule.js";
 
 export interface StuckDeal {
   kommoId: number;
@@ -2372,16 +2374,12 @@ export interface StuckDeal {
  */
 export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Promise<StuckDeal[]> {
   const md = Math.max(1, minDays);
-  const AVTO = `d.status_id = ANY($2)`;
-  const ACT = "COALESCE(d.last_activity_at, d.created_at_kommo)";
-  const params: unknown[] = [FC_PIPELINES, AVTO_STATUSES, md, md * 3];
-  const conds = [
-    "d.pipeline_id = ANY($1)",
-    "psm.funnel_stage <> 'paid'",
-    `now() - ${ACT} >= (CASE WHEN (${AVTO} OR psm.funnel_stage = 'invoiced') THEN $3 ELSE $4 END || ' days')::interval`,
-    "d.created_at_kommo >= now() - interval '180 days'",
-    `(${AVTO} OR psm.funnel_stage = 'invoiced' OR d.last_activity_at IS NOT NULL)`,
-  ];
+  const ACT = ACTIVITY_CLOCK;
+  const params: unknown[] = [FC_PIPELINES, AVTO_STATUSES, md];
+  // 🔗 СПІЛЬНЕ ПРАВИЛО (`core/stuckRule.ts`), а не власна копія. Легасі-роут
+  // відрізняється від екрана рівно ВІДСУТНІСТЮ фільтра типу команди — і це тепер
+  // видно як параметр нижче, а не як розбіжність двох SQL-текстів.
+  const conds = stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3" });
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   params.push(limit);
@@ -2435,15 +2433,11 @@ export interface StuckGrouped {
  */
 export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<StuckGrouped> {
   const md = Math.max(1, minDays);
-  const AVTO = `d.status_id = ANY($2)`;
-  const ACT = "COALESCE(d.last_activity_at, d.created_at_kommo)";
+  const ACT = ACTIVITY_CLOCK;
   const params: unknown[] = [FC_PIPELINES, AVTO_STATUSES, md];
+  // 🔗 ТЕ САМЕ ПРАВИЛО, що в легасі; далі — ТІЛЬКИ те, чим екран свідомо вужчий.
   const conds = [
-    "d.pipeline_id = ANY($1)",
-    "psm.funnel_stage <> 'paid'",
-    `now() - ${ACT} >= (CASE WHEN (${AVTO} OR psm.funnel_stage = 'invoiced') THEN $3 ELSE $3*3 END || ' days')::interval`,
-    "d.created_at_kommo >= now() - interval '180 days'",
-    `(${AVTO} OR psm.funnel_stage = 'invoiced' OR d.last_activity_at IS NOT NULL)`,
+    ...stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3" }),
     commercialManagerSql("m"), // 🔒 СТРОГО: лише комерційні менеджери (не лідген/фінанси/без команди), незалежно від скоупу
     // 🎯 Тип команди (рішення власника 24.07): РНК — усі застряглі; РПК/Самостійний (не-РНК) —
     //    лише лідген-угоди (lead_channel='leadgen'). Реюз rnkTeamSql (без хардкоду ID).

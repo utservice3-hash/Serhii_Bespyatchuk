@@ -5,10 +5,22 @@ import {
 } from "../kommo/client.js";
 import { processInChunks } from "./chunkWindow.js";
 import { buildDealContactLinks } from "./syncKommo.js";
+import { FC_PIPELINES } from "../core/money.js";
+import { callTargetConds } from "../core/stuckRule.js";
 
-// FC-пайплайни «повний цикл» — тримати синхронно з core/metrics.FC_PIPELINES.
-// last_call_at рахуємо ЛИШЕ для активних (відкритих) угод цих воронок.
-const FC_PIPELINES = [8921932, 155304];
+/**
+ * «АКТИВНА FC-УГОДА» — одна форма на всю джобу ($1 = масив пайплайнів).
+ * Копій цього предикату тут було чотири: інкремент `last_call_at` і три
+ * самолікувальні/бекфільні вибірки. Три останні писались через `JOIN psm ON …`,
+ * що для INNER JOIN тотожно кон'юнкції у `WHERE` — але «тотожно» треба було
+ * тримати в голові, а тепер тримає код.
+ */
+const ACTIVE_FC = callTargetConds({ deal: "d", psm: "psm", pipelines: "$1::bigint[]" }).join(" AND ");
+
+// 🔴 FC_PIPELINES БІЛЬШЕ НЕ КОПІЯ. Тут стояв власний масив `[8921932, 155304]` із
+// припискою «тримати синхронно з core». Приписка — не механізм: розійдись вони, і
+// джоба тихо перестала б писати `last_call_at` частині угод, а екран лишився б
+// зеленим. Тепер константа одна, з `core/money.ts`.
 
 /**
  * Note types that count as real work in the deal. Calls and texts (in/out) and
@@ -85,10 +97,15 @@ export async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
       WHERE d.kommo_id = v.kommo_id`,
     [ids, tsHi, tsLo]
   );
-  // 2) ДЗВІНОК (last_call_at) — ЛИШЕ активні FC-угоди (той самий предикат, що WHERE у
-  //    stuckDealsGrouped: FC-пайплайни + mapped status + funnel_stage<>'paid'). Закриті/
-  //    won/lost/інші воронки лишаються NULL — позначка там і не показується. Угода без
-  //    жодного дзвінка тримає NULL («дзвінка не було»).
+  // 2) ДЗВІНОК (last_call_at) — ЛИШЕ активні FC-угоди. Закриті/won/lost/інші воронки
+  //    лишаються NULL — позначка там і не показується. Угода без жодного дзвінка
+  //    тримає NULL («дзвінка не було»).
+  //
+  //    🔴 ПРЕДИКАТ БІЛЬШЕ НЕ ПИШЕТЬСЯ ТУТ. Це була ТРЕТЯ копія правила «застряглої
+  //    угоди» — і найнебезпечніша: вона не ламає екран, а тихо не записує дані.
+  //    Розійшовшись зі списком, вона лишила б колонку «остання розмова» порожньою
+  //    саме там, де вона потрібна, без жодного червоного тесту. Тепер форму дає
+  //    `core/stuckRule.callTargetConds`, і гейт стереже її збіг зі списком.
   await pool.query(
     `UPDATE deals d
         SET last_call_at = GREATEST(d.last_call_at, v.call)
@@ -96,9 +113,7 @@ export async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
             pipeline_stage_map psm
       WHERE d.kommo_id = v.kommo_id
         AND v.call IS NOT NULL
-        AND psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        AND d.pipeline_id = ANY($3::bigint[])
-        AND psm.funnel_stage <> 'paid'`,
+        AND ${callTargetConds({ deal: "d", psm: "psm", pipelines: "$3::bigint[]" }).join("\n        AND ")}`,
     [ids, tsCall, FC_PIPELINES]
   );
 }
@@ -183,10 +198,8 @@ export async function syncContactActivity(opts: { sinceUnix?: number; untilUnix?
 export async function healContactActivity(): Promise<{ contacts: number; notes: number; batches: number }> {
   const r = await pool.query<{ contact_id: string }>(
     `SELECT DISTINCT dc.contact_id
-       FROM deal_contacts dc
-       JOIN deals d ON d.kommo_id = dc.deal_kommo_id
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-      WHERE d.pipeline_id = ANY($1::bigint[]) AND psm.funnel_stage <> 'paid'
+       FROM deal_contacts dc, deals d, pipeline_stage_map psm
+      WHERE d.kommo_id = dc.deal_kommo_id AND ${ACTIVE_FC}
       ORDER BY dc.contact_id`,
     [FC_PIPELINES]
   );
@@ -220,9 +233,8 @@ export async function healContactActivity(): Promise<{ contacts: number; notes: 
  */
 export async function healDealActivity(): Promise<{ deals: number; notes: number; batches: number }> {
   const idsRes = await pool.query<{ kommo_id: string }>(
-    `SELECT d.kommo_id FROM deals d
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-      WHERE d.pipeline_id = ANY($1::bigint[]) AND psm.funnel_stage <> 'paid'
+    `SELECT d.kommo_id FROM deals d, pipeline_stage_map psm
+      WHERE ${ACTIVE_FC}
       ORDER BY d.kommo_id`,
     [FC_PIPELINES]
   );
@@ -245,9 +257,8 @@ export async function healDealActivity(): Promise<{ deals: number; notes: number
  */
 export async function backfillLastCall(): Promise<void> {
   const idsRes = await pool.query<{ kommo_id: string }>(
-    `SELECT d.kommo_id FROM deals d
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-      WHERE d.pipeline_id = ANY($1::bigint[]) AND psm.funnel_stage <> 'paid'`,
+    `SELECT d.kommo_id FROM deals d, pipeline_stage_map psm
+      WHERE ${ACTIVE_FC}`,
     [FC_PIPELINES]
   );
   const allIds = idsRes.rows.map((r) => Number(r.kommo_id));
