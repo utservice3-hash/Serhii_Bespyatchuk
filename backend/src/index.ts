@@ -72,6 +72,23 @@ import { pool } from "./db/pool.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SITE_ROOT = path.join(__dirname, "..", "..");
 
+/**
+ * 🕐 МІТКИ ЧАСУ В ЛОЗІ (додано 10.08.2026 — аварія 14 год 52 хв).
+ *
+ * Лог не мав ЖОДНОЇ мітки часу. Під час розбору я знав із БД, що все почалось о
+ * 18:00:28, мав збережений лог із помилками — і не міг сказати, які з них ТІ САМІ.
+ * Діагноз довелось будувати обхідним шляхом. Один префікс робить лог доказом.
+ *
+ * ⚠️ Ротацію логу ми НЕ контролюємо: файл пише `npm start 2>&1 | tee -a …` під
+ * панеллю adm.tools, і команду задає панель. Тому мітки часу тут — це те, що ми
+ * реально можемо; повна ротація потребує зміни команди запуску в панелі, і це
+ * дія власника, не наша.
+ */
+for (const level of ["log", "warn", "error"] as const) {
+  const orig = console[level].bind(console);
+  console[level] = (...args: unknown[]) => orig(new Date().toISOString(), ...args);
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "60mb" }));
@@ -184,6 +201,16 @@ app.get("/api/health", async (_req, res) => {
       // це мовчав — знав тільки те, що процес прочитав на старті.
       buildOnDisk: buildIsStale() ? onDiskVersion() : null,
       buildStale: buildIsStale(),
+      // 🔔 ЧИ ПІДКЛЮЧЕНИЙ ГУДОК. Аварія 10.08.2026: вартовий свіжості СПРАЦЮВАВ і
+      // 15 годин слав алерти в `sendAdminAlert`, який мовчки виходив — у `.env`
+      // немає ні TELEGRAM_BOT_TOKEN, ні TELEGRAM_ADMIN_IDS. Про аварію двічі
+      // дізнався власник, подивившись на екран. Сигналізація, про несправність
+      // якої не сигналізують, гірша за її відсутність: на неї розраховують.
+      alertChannel: {
+        telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN)
+          && (process.env.TELEGRAM_ADMIN_IDS ?? "").trim().length > 0,
+        note: "false = алерти нікуди не йдуть; потрібні TELEGRAM_BOT_TOKEN і TELEGRAM_ADMIN_IDS у backend/.env",
+      },
       statistics: getStatisticsStatus(),
       ringostat: getRingostatStatus(),
       cashIncome: getCashIncomeStatus(),

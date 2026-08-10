@@ -26,7 +26,9 @@ import {
 } from "../kommo/client.js";
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 import { provisionUsers } from "../db/userProvisioning.js";
-import { isHeavyJobActive } from "./jobLock.js";
+import { heavyJobHolder } from "./jobLock.js";
+import { jobSkip, type JobSkip } from "./jobRuns.js";
+import { guardDecision, MAX_RUN_MS } from "./syncGuardRule.js";
 import { getSettings } from "../routes/settings.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
@@ -339,6 +341,20 @@ export async function reclassifyAdChannel(): Promise<number> {
 // "freezing" — heavy runs stacked up, exhausted resources and stopped advancing
 // the watermark. Reconciliation runs are gated by the same flag.
 let syncRunning = false;
+/**
+ * 🔴 КОЛИ ЦЕЙ ПРАПОРЕЦЬ ПІДНЯЛИ. Без цієї мітки він міг стояти `true` ВІЧНО.
+ *
+ * Аварія 10.08.2026 (14 год 52 хв) — прохід 17:30 записав успіх (26 740 мс,
+ * 3 угоди), але до `finally` не дійшов: усередині `try` лишилось очікування, яке
+ * не завершилось НІКОЛИ. `finally` виконується, коли `try` завершився або кинув;
+ * зависла обіцянка не робить ні того, ні іншого — тож `syncRunning` лишився `true`
+ * до рестарту. Далі 30 тіків поспіль виходили першим рядком.
+ *
+ * `finally` — НЕ страховка від зависання, лише від помилки. Страховка — ось вона:
+ * прохід, старший за `MAX_RUN_MS`, вважається мертвим і НЕ блокує наступний.
+ * Прапорець більше не може пережити ліміт часу, хай що станеться всередині.
+ */
+let syncRunningSince = 0;
 
 /**
  * Pulls fresh CRM data into Postgres.
@@ -348,19 +364,39 @@ let syncRunning = false;
  *   whose status changed during a past outage is never re-fetched by the
  *   watermark-based sync, because its updated_at is now older than the mark).
  */
-export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<void> {
-  if (syncRunning) {
-    console.warn("syncKommo: previous run still in progress — skipping this tick.");
-    return;
+export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<JobSkip | void> {
+  const decision = guardDecision(syncRunning, syncRunningSince, Date.now());
+  if (decision === "skip") {
+    // Нормальний випадок: попередній прохід ще працює. Пропуск, а НЕ успіх.
+    const heldMs = Date.now() - syncRunningSince;
+    return jobSkip(`попередній прохід ще біжить (${Math.round(heldMs / 1000)} с)`);
+  }
+  if (decision === "seize") {
+    const heldMs = Date.now() - syncRunningSince;
+    // 🔴 Аварійна гілка. Прохід висить довше за стелю — вважаємо його мертвим і йдемо
+    // далі. Саме тут аварія 10.08.2026 закінчилась би за 15 хвилин замість 15 годин.
+    console.error(
+      `syncKommo: попередній прохід висить ${Math.round(heldMs / 60000)} хв (> ${MAX_RUN_MS / 60000}) `
+      + `— вважаю мертвим і перехоплюю. Це АВАРІЯ, а не норма.`
+    );
+    void import("../bot/notify.js").then(({ sendAdminAlert }) => sendAdminAlert(
+      `🚨 <b>syncKommo: завислий прохід перехоплено</b>\n`
+      + `Попередній прохід не завершився за ${Math.round(heldMs / 60000)} хв. Синк відновлено примусово.\n`
+      + `Причину шукати в лозі ДО цього моменту — вона там, і вона нова.`
+    ).catch(() => {}));
   }
   // Поки біжить важка Kommo-джоба (звірка / бекфіл / auto-heal, у т.ч. окремим
   // nohup-процесом) — пропускаємо прохід, щоб їхні потоки не наклались і разом не
   // перевищили ліміт Kommo. Замок у БД з heartbeat → мертва джоба знімає його сама.
-  if (await isHeavyJobActive()) {
-    console.warn("syncKommo: важка Kommo-джоба активна (job_locks) — пропускаю прохід.");
-    return;
+  const holder = await heavyJobHolder();
+  if (holder) {
+    // 🔴 НАЗИВАЄМО, ХТО ТРИМАЄ І СКІЛЬКИ. Раніше тут був безіменний warn: побачивши
+    // його в лозі, ми не могли відрізнити «звірка законно працює 2 хв» від
+    // «мертвий замок душить синк годинами».
+    return jobSkip(`важка джоба «${holder.name}» тримає замок ${holder.heldSec} с`);
   }
   syncRunning = true;
+  syncRunningSince = Date.now();
   const syncStartedAt = new Date();
   const startMs = Date.now();
 

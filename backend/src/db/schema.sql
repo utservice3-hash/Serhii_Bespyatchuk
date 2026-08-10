@@ -1796,6 +1796,14 @@ CREATE TABLE IF NOT EXISTS job_runs (
   last_duration_ms INTEGER,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 🚨 ПРОПУСК ≠ УСПІХ (аварія 10.08.2026, 14 год 52 хв). `syncKommo` залипла на
+-- in-process прапорці й 30 разів поспіль виходила першим рядком; `runJob` писав це
+-- як `last_success_at = now(), last_duration_ms = 0`. Джерело правди про здоров'я
+-- джоби повідомляло «все добре» САМЕ ТОМУ, що вона не працювала. Тепер ранній вихід
+-- пише сюди й НЕ рухає останній успіх, а `consecutive_skips` робить тишу видимою.
+ALTER TABLE job_runs ADD COLUMN IF NOT EXISTS last_skip_at TIMESTAMPTZ;
+ALTER TABLE job_runs ADD COLUMN IF NOT EXISTS last_skip_reason TEXT;
+ALTER TABLE job_runs ADD COLUMN IF NOT EXISTS consecutive_skips INTEGER NOT NULL DEFAULT 0;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- ПСЕВДОНІМИ КЛІЄНТСЬКИХ КЛЮЧІВ (розкол client_key)

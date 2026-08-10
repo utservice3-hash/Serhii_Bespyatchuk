@@ -14,7 +14,45 @@ import { sendAdminAlert } from "../bot/notify.js";
  */
 const alerted = new Set<string>();
 
+/**
+ * 🔴 РОЗБІЖНІСТЬ «ДЖОБА КАЖЕ УСПІХ — ДАНІ СТОЯТЬ» (додано 10.08.2026).
+ *
+ * Аварія показала клас поломки, якого не бачив ЖОДЕН наглядач: `job_runs.syncKommo`
+ * бадьоро оновлював `last_success_at` кожні 30 хв, а `sync_state.last_success_at`
+ * стояв 15 годин. Обидва наглядачі дивились кожен у своє джерело й обидва бачили
+ * норму. Ловить це лише ПОРІВНЯННЯ двох джерел — тому воно тут.
+ *
+ * Нульова тривалість — другий підпис того самого: реальний прохід триває 26 с.
+ * «Успіх за 0 мс» це не швидкість, це відсутність роботи.
+ */
+async function watchSyncDivergence(): Promise<void> {
+  const { pool } = await import("../db/pool.js");
+  const r = await pool.query<{ job_ok: Date | null; state_ok: Date | null; dur: number | null; skips: number }>(
+    `SELECT jr.last_success_at AS job_ok, ss.last_success_at AS state_ok,
+            jr.last_duration_ms AS dur, jr.consecutive_skips AS skips
+       FROM job_runs jr, sync_state ss
+      WHERE jr.name = 'syncKommo' AND ss.id = 1`
+  ).catch(() => null);
+  const x = r?.rows[0];
+  if (!x || !x.job_ok || !x.state_ok) return;
+  const gapMin = Math.round((x.job_ok.getTime() - x.state_ok.getTime()) / 60000);
+  if (gapMin < 90) { divergenceAlerted = false; return; }
+  if (divergenceAlerted) return;           // один алерт на епізод, як і решта тут
+  divergenceAlerted = true;
+  await sendAdminAlert(
+    `🚨 <b>syncKommo: успіх є, даних немає</b>\n`
+    + `job_runs каже «успіх» ${x.job_ok.toISOString()}, а sync_state стоїть на ${x.state_ok.toISOString()} `
+    + `— розрив <b>${gapMin} хв</b>.\n`
+    + `Остання тривалість: ${x.dur} мс${x.dur === 0 ? " (0 мс = прохід не робив роботи)" : ""}. `
+    + `Пропусків поспіль: ${x.skips}.\n`
+    + `Це підпис аварії 10.08.2026 — джоба виходить рано, а звітує успіхом.`
+  ).catch(() => {});
+  console.error(`freshnessWatch: РОЗБІЖНІСТЬ job_runs↔sync_state ${gapMin} хв.`);
+}
+let divergenceAlerted = false;
+
 export async function freshnessWatch(): Promise<void> {
+  await watchSyncDivergence().catch((e) => console.error("watchSyncDivergence failed:", e));
   let fresh: FreshnessRow[];
   try {
     fresh = await checkFreshness();

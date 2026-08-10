@@ -45,6 +45,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/snapshotLabel.test.js",
   "routes/progressBars.test.js",
   "core/klassParity.test.js",
+  "jobs/syncGuard.test.js",
   "core/reactivation.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
@@ -399,4 +400,10 @@ export const MANIFEST_TESTS: string[] = [
   "#66 ПРАВИЛО «новий/постійний» дає очікуваний клас на ВСІХ шести гілках",
   "#66b ДВІ ФОРМИ ПРАВИЛА (CTE і інлайн) збігаються порядково",
   "#66c ПОСТІЙНИЙ ЛИШАЄТЬСЯ ПОСТІЙНИМ — поділ не зрізано в один бік",
+  // jobs/syncGuard.test.ts — захист після аварії 10.08.2026 (синк стояв 14 год 52 хв)
+  "#68 ОХОРОНЕЦЬ НЕ МОЖЕ ЗАЛИПНУТИ НАЗАВЖДИ",
+  "#68b ПРОПУСК пишеться пропуском, а не успіхом",
+  "#68c УСПІХ НЕ ЗАТИРАЄ last_error",
+  "#68d РОЗБІЖНІСТЬ job_runs↔sync_state видно запитом",
+  "#68e ЗАМОК НАЗИВАЄ ТРИМАЧА І ТРИВАЛІСТЬ",
 ];
