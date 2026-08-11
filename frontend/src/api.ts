@@ -1557,7 +1557,13 @@ export interface StuckGroupDeal { kommoId: number; crmUrl: string; name: string;
 export interface StuckManagerGroup { managerId: number; manager: string; teamId: number | null; teamTag: string | null; count: number; sumAtRisk: number; longestIdleDays: number; deals: StuckGroupDeal[] }
 export interface StuckGrouped { minDays: number; role: string; scope: "company" | "team" | "own"; total: number; sumRisk: number; managers: number; over90: number; groups: StuckManagerGroup[];
   /** 🕰 Дані станом на цей момент (найстаріший із синків, що живлять екран). */
-  asOf: string; talkAmbiguousCount: number }
+  asOf: string; talkAmbiguousCount: number;
+  /**
+   * ⏳ Чи показувати «(N год тому)». Вирішує СЕРВЕР: поріг = 2× штатний інтервал
+   * тієї джоби, що відстає (`MONITORED_JOBS.everyMin`). Фронт свого числа годин
+   * НЕ має — інакше правило жило б двома копіями і розійшлось би мовчки.
+   */
+  asOfStale: boolean; asOfAgeMin: number; asOfStaleAfterMin: number; asOfJob: string | null }
 export async function saveDealNote(kommoId: number, comment: string): Promise<{ note: string | null; noteAuthor: string | null; noteAt: string | null }> {
   const { data } = await api.post<{ note: string | null; noteAuthor: string | null; noteAt: string | null }>("/dashboard/deal-note", { kommoId, comment });
   return data;

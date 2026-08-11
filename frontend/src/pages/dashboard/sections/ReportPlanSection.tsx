@@ -1016,7 +1016,7 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
         setSectionOpen(criticalRnk.length > 0);
         setOpenMgr(new Set(criticalRnk.map((g) => g.managerId)));
       })
-      .catch(() => a && setData({ minDays: 7, role: "", scope: "company", total: 0, sumRisk: 0, managers: 0, over90: 0, groups: [], asOf: "", talkAmbiguousCount: 0 }));
+      .catch(() => a && setData({ minDays: 7, role: "", scope: "company", total: 0, sumRisk: 0, managers: 0, over90: 0, groups: [], asOf: "", talkAmbiguousCount: 0, asOfStale: false, asOfAgeMin: 0, asOfStaleAfterMin: 0, asOfJob: null }));
     return () => { a = false; };
   }, [teamId]);
 
@@ -1047,7 +1047,7 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
             <div style={{ textAlign: "right", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
               без руху ≥7 дн. (рахунок/гроші) · ≥21 дн. («взято в роботу») · розмова від 10 c<br />
               усі відкриті стадії, включно з «Авто працює» · дата = остання активність<br />
-              <b style={{ color: "var(--text)" }}>дані станом на {asOfLabel(data?.asOf)}</b>
+              <b style={{ color: data?.asOfStale ? AMBER : "var(--text)" }}>дані станом на {asOfLabel(data?.asOf, data?.asOfStale, data?.asOfAgeMin)}</b>
               {data && data.talkAmbiguousCount > 0 && <> · ⚠️ {data.talkAmbiguousCount} з розмовою, але угода не одна</>}
             </div>
           )}
@@ -1100,18 +1100,25 @@ export function StuckBlock({ teamId }: { teamId?: number }) {
 /**
  * 🕰 «ДАНІ СТАНОМ НА HH:MM» — обовʼязковий підпис, а не прикраса.
  *
- * Вік «днів без руху» тепер рахується від часу останнього успішного синку, а не від
+ * Вік «днів без руху» рахується від часу останнього успішного синку, а не від
  * годинника. Без цього підпису екран мовчки показував би те саме число годинами й
  * читався б як «нічого не змінилось», хоча правильне пояснення інше: «ми ще не знаємо».
+ *
+ * ⏳ ХВІСТ «(N год тому)» — ЛИШЕ КОЛИ ВІДСТАВАННЯ НЕНОРМАЛЬНЕ, і вирішує це СЕРВЕР
+ * (`asOfStale`). `syncDealActivity` ходить раз на 3 год, тож нормальний стан — це
+ * відставання до трьох годин; малювати хвіст завжди означало б щодня лякати тим, що
+ * є штатною роботою. Свого числа годин фронт НЕ має: поріг = 2× інтервал відсталішої
+ * джоби, узятий із реєстру розкладу, і живе він в одному місці.
  * Час — київський, як усі дати в продукті.
  */
-function asOfLabel(iso: string | undefined): string {
+function asOfLabel(iso: string | undefined, stale?: boolean, ageMin?: number): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   const hhmm = d.toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" });
-  const ageMin = Math.floor((Date.now() - d.getTime()) / 60000);
-  return ageMin >= 120 ? `${hhmm} (${Math.floor(ageMin / 60)} год тому)` : hhmm;
+  if (!stale) return hhmm;
+  const h = Math.floor((ageMin ?? 0) / 60);
+  return `${hhmm} (${h >= 1 ? `${h} год` : `${ageMin} хв`} тому)`;
 }
 
 const STUCK_COLS: { h: string; r?: boolean; hint?: string }[] = [

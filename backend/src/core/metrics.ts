@@ -1,6 +1,6 @@
 import { pool } from "../db/pool.js";
-import { AVTO_STATUSES, ACTIVITY_CLOCK, stuckBaseConds, ASOF_SQL,
-  CLOCK_WITH_TALK, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
+import { AVTO_STATUSES, ACTIVITY_CLOCK, stuckBaseConds, ASOF_SQL, ASOF_JOB_SQL,
+  asOfStaleAfterMin, CLOCK_WITH_TALK, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
@@ -2434,6 +2434,16 @@ export interface StuckGrouped {
   total: number; sumRisk: number; managers: number; over90: number; groups: StuckManagerGroup[];
   /** 🕰 Дані станом на цей момент — найстаріший із синків, що живлять екран (`ASOF_SQL`). */
   asOf: string;
+  /**
+   * ⏳ РІШЕННЯ ПРО «(N год тому)» ПРИЙМАЄ СЕРВЕР, не фронт.
+   * Інакше правило «поріг = 2× інтервал джоби» жило б двома копіями — у ядрі й у
+   * компоненті, — і розійшлось би так само тихо, як три копії правила застрягання.
+   * Фронт лише малює хвіст, коли `asOfStale`.
+   */
+  asOfStale: boolean;
+  asOfAgeMin: number;
+  asOfStaleAfterMin: number;
+  asOfJob: string | null;
   /** Скільки угод лишились у списку з неоднозначною розмовою (для підпису над таблицею). */
   talkAmbiguousCount: number;
 }
@@ -2475,7 +2485,8 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
     manager_id: number; manager: string; team_id: number | null; team_name: string | null;
     pipeline_id: string; status_id: string; funnel_stage: string; days: string; activity_days: string | null;
     last_call_at: Date | null; days_since_last_call: string | null; no_call_flag: boolean;
-    talk_source: "kommo" | "ringostat" | null; talk_ambiguous: boolean; as_of: Date }>(
+    talk_source: "kommo" | "ringostat" | null; talk_ambiguous: boolean;
+    as_of: Date; as_of_job: string | null; as_of_age_min: string }>(
     // 🕰 ВІК — ВІД `AS_OF`, А НЕ ВІД `now()`. Годинник іде завжди; дані — ні. Під час
     // аварії №2 (синк стояв 15 год 13 хв) список роздувся б на 17 угод «застою», якого
     // ніхто не бачив — ми просто не знали про рух. У звичайний день Δ = 0 (заміряно).
@@ -2483,7 +2494,8 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
      SELECT d.kommo_id, d.name, d.client_name AS client, d.price,
             m.id AS manager_id, m.name AS manager, m.team_id, t.name AS team_name,
             d.pipeline_id, d.status_id, psm.funnel_stage,
-            ${AS_OF} AS as_of,
+            ${AS_OF} AS as_of, ${ASOF_JOB_SQL} AS as_of_job,
+            EXTRACT(EPOCH FROM now() - ${AS_OF})::int / 60 AS as_of_age_min,
             EXTRACT(DAY FROM ${AS_OF} - ${CLOCK})::int AS days,
             EXTRACT(DAY FROM ${AS_OF} - d.last_activity_at)::int AS activity_days,
             ${LAST_TALK} AS last_call_at,
@@ -2524,8 +2536,15 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
       talkSource: x.talk_source ?? null, talkAmbiguous: x.talk_ambiguous === true });
   }
   const groups = [...map.values()].sort((a, b) => b.count - a.count || b.longestIdleDays - a.longestIdleDays);
+  const first = r.rows[0];
+  const asOfJob = first?.as_of_job ?? null;
+  const staleAfterMin = asOfStaleAfterMin(asOfJob);
+  const ageMin = Math.max(0, Number(first?.as_of_age_min ?? 0));
   return { total: r.rows.length, sumRisk, managers: groups.length, over90, groups,
-    asOf: new Date(r.rows[0]?.as_of ?? Date.now()).toISOString(),
+    asOf: new Date(first?.as_of ?? Date.now()).toISOString(),
+    // Поріг ≥, а не >: «удвічі більше за норму» вже мусить бути видно.
+    asOfStale: ageMin >= staleAfterMin, asOfAgeMin: ageMin,
+    asOfStaleAfterMin: staleAfterMin, asOfJob,
     talkAmbiguousCount: r.rows.filter((x) => x.talk_ambiguous === true).length };
 }
 

@@ -1,3 +1,5 @@
+import { MONITORED_JOBS } from "../jobs/monitoredJobs.js";
+
 /**
  * ПРАВИЛО «ЗАСТРЯГЛОЇ УГОДИ» — ОДНЕ, у вигляді функції від операндів.
  *
@@ -15,7 +17,8 @@
  * 5fd2bd8: grouped 147 ⊂ legacy 534, спільних рівно 147. Саме цю вкладеність
  * і стереже гейт — вона доводить, що форми не розʼїхались.
  *
- * ⚠️ Тут НЕМАЄ жодного імпорту — навмисно. `db/pool.js` → `config.js` кидає на
+ * ⚠️ Імпортується ЛИШЕ `jobs/monitoredJobs.js` — модуль без жодного імпорту, чисті
+ * дані розкладу. Заборона тут не на імпорти взагалі, а на все, що тягне зʼєднання. `db/pool.js` → `config.js` кидає на
  * відсутньому `DATABASE_URL` ще НА ІМПОРТІ, і тест правила не встиг би навіть
  * початись. За сесію ця пастка спрацювала чотири рази (`monitoredJobs`,
  * `syncGuardRule`, `klassParity`, `backupRotateRule`), тож дані й рішення
@@ -65,9 +68,39 @@ export function callCountsAsActivity(durationSec: number | null | undefined): bo
  * майбутньому (перекошений годинник на сервері БД) дав би відʼємний вік.
  */
 export const ASOF_JOBS = ["syncKommo", "syncDealActivity"];
+const JOB_LIST = `ARRAY['${ASOF_JOBS.join("','")}']`;
 export const ASOF_SQL =
   `LEAST(COALESCE((SELECT MIN(last_success_at) FROM job_runs`
-  + ` WHERE name = ANY(ARRAY['${ASOF_JOBS.join("','")}'])), now()), now())`;
+  + ` WHERE name = ANY(${JOB_LIST})), now()), now())`;
+
+/** Хто саме відстає — щоб поріг мовчання брався з ЙОГО розкладу, а не з середнього. */
+export const ASOF_JOB_SQL =
+  `(SELECT name FROM job_runs WHERE name = ANY(${JOB_LIST})`
+  + ` AND last_success_at IS NOT NULL ORDER BY last_success_at LIMIT 1)`;
+
+/**
+ * ⏳ ПОРІГ МОВЧАННЯ ПІДПИСУ = ПОДВІЙНИЙ ІНТЕРВАЛ ТІЄЇ ДЖОБИ, ЩО ВІДСТАЄ.
+ *
+ * 🔴 ЧОМУ НЕ КОНСТАНТА «4 години». `syncDealActivity` ходить раз на 3 год, тож
+ * НОРМАЛЬНИЙ стан — відставання до трьох годин, і підпис «(2 год тому)» лякав би
+ * щодня без причини. Але зашити «4 год» означало б: хтось міняє розклад джоби в
+ * `index.ts` — і поріг мовчки розходиться з реальністю. Те саме, що ми щойно
+ * прибрали з трьох копій правила.
+ *
+ * Тому джерело одне — `MONITORED_JOBS.everyMin` (там уже лежить штатна частота
+ * кожної джоби, і там само живе поріг тривоги 2×). Зміниш розклад — поріг поїде
+ * за ним сам.
+ *
+ * ⚠️ Невідома джоба (у `job_runs` її ще немає) → беремо НАЙБІЛЬШИЙ інтервал серед
+ * анкерних: помилитись у бік зайвої мовчазності підпису дешевше, ніж лякати
+ * хвостом на порожньому місці. Сам простій це не ховає — його ловить нагляд джоб.
+ */
+export function asOfStaleAfterMin(jobName: string | null | undefined): number {
+  const known = MONITORED_JOBS.filter((j) => ASOF_JOBS.includes(j.name));
+  const hit = known.find((j) => j.name === jobName);
+  const everyMin = hit ? hit.everyMin : Math.max(...known.map((j) => j.everyMin));
+  return everyMin * 2;
+}
 
 export interface StuckRuleOpts {
   /** Плейсхолдери параметрів у порядку, як їх поклав виклик. */

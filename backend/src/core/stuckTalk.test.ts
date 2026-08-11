@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   AVTO_STATUSES, CALL_MIN_SEC, callCountsAsActivity, stuckBaseConds,
-  ASOF_SQL, CLOCK_WITH_TALK, ringostatTalkCte,
+  ASOF_SQL, CLOCK_WITH_TALK, ringostatTalkCte, ASOF_JOBS, asOfStaleAfterMin,
 } from "./stuckRule.js";
 
 /**
@@ -73,14 +73,26 @@ async function withScratch(t: { skip: (m: string) => void },
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  // ⚠️ `metrics.js` тягне `db/pool.js` → `config.js`, який кидає на відсутньому
+  // DATABASE_URL ще НА ІМПОРТІ (пастка спрацювала за сесію вже пʼятий раз).
+  // 🔴 `pool` кешується НА ПРОЦЕС: перший імпорт прибиває його до ЦІЄЇ пісочниці.
+  //    Тому через `pool` ходить РІВНО ОДИН тест файлу (#74b) — другий читав би чужу
+  //    базу й зеленів на порожньому. Решта працює власним клієнтом `c`.
+  process.env.DATABASE_URL = scratch.url;
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "x";
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
   await c.connect();
   const now = Date.now();
   try {
     await c.query(readFileSync(SCHEMA, "utf8"));
-    await c.query(`INSERT INTO teams (id,name) VALUES (1,'РНК-тест') ON CONFLICT DO NOTHING`);
-    await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (10,'М',1,true) ON CONFLICT DO NOTHING`);
+    // ⚠️ Команда 13 — РНК за `RNK_TEAM_IDS`, і це не декорація: `stuckDealsGrouped`
+    //    показує НЕ-РНК лише лідоген-угоди, тож на довільному team_id список був би
+    //    порожній, а гейт зеленів би «бо нічого не знайшлось».
+    await c.query(`INSERT INTO teams (id,name) VALUES (13,'РНК-тест') ON CONFLICT DO NOTHING`);
+    await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (10,'М',13,true) ON CONFLICT DO NOTHING`);
     for (const [p, st, stage] of [[8921932, AVTO, "approved"], [8921932, EARLY, "lead_taken"], [8921932, 142, "paid"]] as [number, number, string][])
       await c.query(`INSERT INTO pipeline_stage_map (pipeline_id,status_id,funnel_stage) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [p, st, stage]);
     for (const d of DEALS)
@@ -197,4 +209,80 @@ test("#73d КІЛЬКА ВІДКРИТИХ УГОД — РОЗМОВА НЕ ГА
       "🔴 угода 307 лишилась навіть коли стала єдиною відкритою — гасіння не працює взагалі, "
       + "і перевірка вище зеленіла б із тієї ж причини");
   });
+});
+
+/**
+ * #74 — ПОРІГ МОВЧАННЯ ПІДПИСУ БЕРЕТЬСЯ З РОЗКЛАДУ ДЖОБИ, А НЕ З КОНСТАНТИ.
+ *
+ * 🔴 ПРИВІД — СКРІНШОТ (11.08.2026). Підпис показував «дані станом на 12:40 (2 год
+ * тому)» у цілком нормальному стані: `syncDealActivity` ходить раз на 3 год, тож
+ * відставання до трьох годин — це штатна робота, а не подія. Хвіст щодня лякав би
+ * тим, що є нормою, і за тиждень його перестали б читати — так і вмирає сигналізація.
+ *
+ * 🔴 І НЕ «4 ГОДИНИ» ЗАШИТИМ ЧИСЛОМ (рішення власника): поріг = ПОДВІЙНИЙ інтервал
+ * тієї джоби, що відстає, обчислений із її розкладу. Зміниться cron — поріг поїде за
+ * ним сам. Зашите число розійшлося б із розкладом мовчки, як три копії правила
+ * застрягання розходились між собою.
+ */
+test("#74 ПОРІГ = 2× ІНТЕРВАЛ ВІДСТАЛІШОЇ ДЖОБИ, з реєстру розкладу", async () => {
+  const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
+  const reg = (n: string) => MONITORED_JOBS.find((j) => j.name === n)!;
+  for (const name of ASOF_JOBS) {
+    assert.ok(reg(name), `🔴 анкерна джоба «${name}» відсутня в реєстрі розкладу — поріг нема з чого рахувати`);
+    assert.equal(asOfStaleAfterMin(name), reg(name).everyMin * 2,
+      `🔴 поріг для «${name}» не дорівнює 2× її штатному інтервалу`);
+  }
+  // Пороги РІЗНІ — інакше «береться з розкладу» неможливо відрізнити від константи.
+  assert.notEqual(asOfStaleAfterMin("syncKommo"), asOfStaleAfterMin("syncDealActivity"),
+    "🔴 обидві анкерні джоби дали однаковий поріг — гейт не відрізнив би його від зашитого числа");
+  // Невідома джоба → найбільший інтервал: помилятись у бік мовчазності, не лякати дарма.
+  const maxEvery = Math.max(...ASOF_JOBS.map((n) => reg(n).everyMin));
+  assert.equal(asOfStaleAfterMin(null), maxEvery * 2);
+  assert.equal(asOfStaleAfterMin("нема-такої"), maxEvery * 2);
+  // ДЖЕРЕЛО: у ядрі немає власного числа годин.
+  const src = readFileSync(path.join(SRC, "core", "stuckRule.ts"), "utf8");
+  assert.ok(src.includes("MONITORED_JOBS"), "🔴 поріг рахується не з реєстру розкладу");
+  assert.ok(!/\b(4|6|8)\s*\*\s*60\b|\b240\b|\b360\b/.test(src),
+    "🔴 у правилі зʼявилось зашите число годин — воно розійдеться з cron мовчки");
+});
+
+/** #74b — МЕЖА: норма → хвоста немає; удвічі більше за норму → хвіст є. */
+test("#74b МЕЖА ХВОСТА: норма мовчить, подвійна норма говорить", async (t) => {
+  await withScratch(t, async (c, now) => {
+    const { stuckDealsGrouped } = await import("./metrics.js");
+    const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
+    const every = MONITORED_JOBS.find((j) => j.name === "syncDealActivity")!.everyMin;
+    const setSync = (lagMin: number) => c.query(
+      `INSERT INTO job_runs (name,last_success_at) VALUES ('syncKommo',$1),('syncDealActivity',$2)
+       ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`,
+      [new Date(now), new Date(now - lagMin * 60_000)]);
+
+    for (const [lagMin, want, why] of [
+      [Math.floor(every / 2), false, "половина інтервалу — джоба навіть не мусила ще ходити"],
+      [every, false, "рівно інтервал — це штатний ритм, а не подія"],
+      [every * 2 - 1, false, "на хвилину менше за поріг — ще мовчимо"],
+      [every * 2, true, "удвічі більше за норму — хвіст МУСИТЬ зʼявитись"],
+      [every * 5, true, "простій у пʼять інтервалів — тим паче"],
+    ] as [number, boolean, string][]) {
+      await setSync(lagMin);
+      const g = await stuckDealsGrouped({}, 7);
+      assert.ok(g.total > 0, "🔴 список порожній — фікстура не засіялась, гейт нічого не доводить");
+      assert.equal(g.asOfStale, want, `🔴 відставання ${lagMin} хв (норма ${every}): ${why}`);
+      assert.equal(g.asOfJob, "syncDealActivity", "🔴 відсталішою названо не ту джобу");
+      assert.equal(g.asOfStaleAfterMin, every * 2, "🔴 поріг у відповіді не дорівнює 2× інтервалу");
+    }
+  });
+});
+
+/** 🪞 #74c — фронт малює хвіст ЛИШЕ за прапорцем сервера і свого числа годин не має. */
+test("#74c ФРОНТ НЕ МАЄ ВЛАСНОГО ЧИСЛА ГОДИН", () => {
+  const fe = readFileSync(path.join(SRC, "..", "..", "frontend", "src", "pages",
+    "dashboard", "sections", "ReportPlanSection.tsx"), "utf8");
+  const fn = fe.slice(fe.indexOf("function asOfLabel"), fe.indexOf("const STUCK_COLS"));
+  assert.ok(fn.length > 100, "🔴 підпис asOfLabel зник — перевіряти нема чого");
+  assert.ok(/if \(!stale\) return hhmm;/.test(fn),
+    "🔴 підпис не питає прапорець сервера — отже вирішує сам");
+  assert.ok(!/\b120\b|\b240\b|ageMin >= \d/.test(fn),
+    "🔴 у підписі зʼявився власний поріг у хвилинах — правило знову у двох копіях");
+  assert.ok(fe.includes("data?.asOfStale"), "🔴 компонент не передає прапорець у підпис");
 });

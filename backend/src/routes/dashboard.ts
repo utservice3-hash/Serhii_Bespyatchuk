@@ -3623,6 +3623,9 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
     // 🕰 «Дані станом на» — не косметика: лічильник рахується від ЦЬОГО моменту, а не
     // від годинника, тож без підпису екран не пояснив би, чому число не росте.
     asOf: g.asOf, talkAmbiguousCount: g.talkAmbiguousCount,
+    // Хвіст «(N год тому)» вирішує СЕРВЕР: поріг = 2× інтервал тієї джоби, що відстає.
+    asOfStale: g.asOfStale, asOfAgeMin: g.asOfAgeMin,
+    asOfStaleAfterMin: g.asOfStaleAfterMin, asOfJob: g.asOfJob,
     groups: g.groups.map((grp) => ({
       managerId: grp.managerId, manager: grp.manager, teamId: grp.teamId,
       teamTag: grp.teamId != null ? kvpTeamKind(grp.teamId, grp.teamName ?? "") : null,
