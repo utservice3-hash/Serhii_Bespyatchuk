@@ -23,17 +23,38 @@ import assert from "node:assert/strict";
 const { to: copyTo } = await import("pg-copy-streams");
 const proto = () => Object.getPrototypeOf(copyTo("COPY (SELECT 1) TO STDOUT")) as Record<string, Function>;
 
-/** Екземпляр у стані «копію завершено, прибрано за собою», з фальшивим потоком. */
-function afterCleanup(): { q: Record<string, unknown>; reads: () => number } {
-  const q = copyTo("COPY (SELECT 1) TO STDOUT") as unknown as Record<string, unknown>;
+/**
+ * 🔴 ФІКСТУРА ВІДТВОРЮЄ ЦИКЛ, А НЕ МОЮ ГІПОТЕЗУ.
+ *
+ * Перша редакція цього гейта імітувала подію `readable` ПІСЛЯ `_cleanup()` — і була
+ * зелена, поки патч насправді НЕ ПРАЦЮВАВ (15 падінь із 30 на проді). Саботаж її
+ * валив, і це виглядало як доказ. Механізм інший: копія завершується ВСЕРЕДИНІ циклу
+ * `_forward`, і наступна ітерація читає ще один chunk.
+ *
+ * Тут відтворено саме це: `_parse` на ПЕРШОМУ chunk кличе `_cleanup()` (як робить
+ * бібліотека, коли дочитала копію) і повертає `true`. Далі все вирішує те, що
+ * поверне обгортка.
+ */
+function loopFixture(parse: (this: Record<string, unknown>, c: unknown) => unknown) {
   let reads = 0;
-  // `_forward` вимагає `connection`, і саме тому охоронець його пропускає:
-  // `_cleanup` цього поля НЕ чіпає — у цьому весь баг.
-  q.connection = { stream: { read: () => { reads++; return reads === 1 ? Buffer.from("x") : null; } } };
-  q._drained = true;
-  q._forwarding = false;
-  (q._cleanup as () => void).call(q); // ← те саме, що робить бібліотека в кінці копії
+  const q: Record<string, unknown> = {
+    _buffer: { push: () => {} }, _drained: true, _forwarding: false,
+    _cleanup(this: Record<string, unknown>) { this._buffer = null; },
+    _parse: parse,
+    connection: { stream: { read: () => { reads++; return reads <= 2 ? Buffer.from("x") : null; } } },
+  };
   return { q, reads: () => reads };
+}
+
+/** Дослівний цикл із `copy-to.js` — щоб перевіряти НАШЕ правило, а не переписаний цикл. */
+function origForward(this: Record<string, unknown>): void {
+  if (this._forwarding || !this._drained || !this.connection) return;
+  this._forwarding = true;
+  const st = (this.connection as { stream: { read: () => Buffer | null } }).stream;
+  let chunk: Buffer | null;
+  while (this._drained && (chunk = st.read()) !== null)
+    this._drained = (this._parse as Function).call(this, chunk);
+  this._forwarding = false;
 }
 
 test("#75 ПАТЧ НАКЛАДЕНО, І ВІДБИТОК БІБЛІОТЕКИ ТОЙ, ЩО ОЧІКУВАВСЯ", async () => {
@@ -43,42 +64,42 @@ test("#75 ПАТЧ НАКЛАДЕНО, І ВІДБИТОК БІБЛІОТЕКИ 
     `🔴 патч НЕ ліг: ${st.reason}. Бібліотеку оновили або переписали — перевір, чи баг `
     + "не виправлено вгорі: тоді патч треба ПРИБРАТИ, а не лагодити");
   assert.equal(copyPatchState().applied, true, "🔴 стан патча не запамʼятався");
-  assert.equal((proto()._forward as { __utsCopyPatch?: boolean }).__utsCopyPatch, true,
+  assert.equal((proto()._parse as { __utsCopyPatch?: boolean }).__utsCopyPatch, true,
     "🔴 позначки на пропатченій функції немає — накладено не те, що думаємо");
   // Ідемпотентність: повторний виклик не має обгортати обгортку.
-  const before = proto()._forward;
+  const before = proto()._parse;
   applyCopyStreamPatch();
-  assert.equal(proto()._forward, before, "🔴 повторний виклик наклав патч удруге");
+  assert.equal(proto()._parse, before, "🔴 повторний виклик наклав патч удруге");
 });
 
 test("#75b ГОНКА ВІДТВОРЕНА: без патча — падіння, з патчем — тиша", async () => {
-  const { applyCopyStreamPatch } = await import("./copyStreamPatch.js");
-  applyCopyStreamPatch();
+  const { wrapParse } = await import("./copyStreamPatch.js");
 
-  // ── З ПАТЧЕМ: не падає і, головне, НЕ ЧИТАЄ з потоку.
-  const a = afterCleanup();
-  assert.doesNotThrow(() => (a.q._forward as () => void).call(a.q),
-    "🔴 патч не тримає: подія readable після завершення копії досі валить COPY");
-  assert.equal(a.reads(), 0,
-    "🔴 патч пропустив читання з потоку. Цей chunk належить НАСТУПНОМУ повідомленню "
-    + "протоколу — проковтнути його означає зіпсувати зʼєднання замість копії");
-
-  // ── БЕЗ ПАТЧА (знімаємо тимчасово): та сама фікстура МУСИТЬ упасти.
-  //    Інакше перевірка вище зеленіла б і на зламаному патчі — просто тому,
-  //    що ламатись нема чому.
-  const p = proto();
-  const saved = p._forward;
-  p._forward = function (this: Record<string, unknown>) {
-    // дослівна поведінка оригіналу: охоронець без перевірки `_buffer`
-    if (this._forwarding || !this._drained || !this.connection) return;
-    const st = (this.connection as { stream: { read: () => Buffer | null } }).stream;
-    let chunk: Buffer | null;
-    while (this._drained && (chunk = st.read()) !== null) this._drained = (this._parse as Function).call(this, chunk);
+  // «Бібліотечний» _parse: на першому chunk копія дочитана → _cleanup() обнуляє буфер.
+  const libParse = function (this: Record<string, unknown>): unknown {
+    (this._buffer as { push: (c: unknown) => void }).push(null); // те, що падає, якщо буфера немає
+    (this._cleanup as () => void).call(this);
+    return true;
   };
-  const b = afterCleanup();
-  assert.throws(() => (b.q._forward as () => void).call(b.q), /reading 'push'|_buffer/,
-    "🔴 фікстура НЕ відтворює гонку — гейт порожній, і «з патчем не падає» нічого не доводить");
-  p._forward = saved;
+
+  // ── БЕЗ ПАТЧА: другий оберт циклу валиться на null-буфері.
+  const bad = loopFixture(libParse);
+  assert.throws(() => origForward.call(bad.q), /reading 'push'/,
+    "🔴 фікстура НЕ відтворює гонку — гейт порожній. Саме на цьому я вже спіймався: "
+    + "зелений тест при непрацюючому патчі");
+  assert.equal(bad.reads(), 2, "🔴 без патча цикл мусив прочитати ДРУГИЙ chunk — інакше ламатись нема на чому");
+
+  // ── З ПАТЧЕМ: не падає І не читає другий chunk.
+  const good = loopFixture(wrapParse(libParse) as never);
+  assert.doesNotThrow(() => origForward.call(good.q), "🔴 патч не зупиняє цикл");
+  assert.equal(good.reads(), 1,
+    "🔴 патч дозволив ще один read(). Після _detach() потік уже належить обробнику pg — "
+    + "зайвий chunk краде повідомлення протоколу і псує ЗʼЄДНАННЯ, а не копію");
+
+  // Дзеркало: поки буфер живий, обгортка нічого не міняє.
+  const alive = { _buffer: { push: () => {} } } as Record<string, unknown>;
+  assert.equal(wrapParse(() => "як-є").call(alive as never, null), "як-є",
+    "🔴 обгортка втручається в нормальний хід — вона мусить бути прозорою");
 });
 
 test("#75c БЕЗ ПАТЧА БЕКАП НЕ ПОЧИНАЄТЬСЯ, а не працює тихо", async () => {
@@ -89,7 +110,7 @@ test("#75c БЕЗ ПАТЧА БЕКАП НЕ ПОЧИНАЄТЬСЯ, а не п�
   // Імітуємо «бібліотеку оновили»: підміняємо `_parse` так, щоб відбиток не збігся.
   const p = proto();
   const savedParse = p._parse, savedForward = p._forward;
-  delete (p._forward as { __utsCopyPatch?: boolean }).__utsCopyPatch;
+  delete (p._parse as { __utsCopyPatch?: boolean }).__utsCopyPatch;
   p._parse = function () { /* переписано вгорі — нашого `this._buffer.push` більше немає */ };
   const st = m.applyCopyStreamPatch();
   assert.equal(st.applied, false, "🔴 патч ліг на чужий код, відбитку якого не впізнав");
@@ -102,7 +123,7 @@ test("#75c БЕЗ ПАТЧА БЕКАП НЕ ПОЧИНАЄТЬСЯ, а не п�
   // відбитка, і саме тому відновлюємо стан, а не кличемо патч ще раз.
   p._parse = savedParse;
   p._forward = savedForward;
-  (p._forward as { __utsCopyPatch?: boolean }).__utsCopyPatch = true;
+  (p._parse as { __utsCopyPatch?: boolean }).__utsCopyPatch = true;
   assert.doesNotThrow(() => m.applyCopyStreamPatch());
   assert.equal(m.copyPatchState().applied, true, "🔴 стан не відновився після тесту");
 });

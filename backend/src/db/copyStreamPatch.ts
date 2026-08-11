@@ -23,14 +23,32 @@ import { to as copyTo } from "pg-copy-streams";
  * **Апгрейд НЕ лікує:** `copy-to.js` у 7.0.0 байт-у-байт той самий, окрім
  * `require('obuf')` → `require('./obuf')`. Перевірено `npm pack` обох версій.
  *
- * 🔴 ЧОМУ ПАТЧИМО `_forward`, А НЕ `_parse` (відступ від початкового формулювання).
- * «Хай `_parse` тихо завершується при `_buffer === null`» лікує симптом, але вже
- * ПІСЛЯ того, як `_forward` витяг chunk із потоку: `while (… (chunk = connectionStream.read()) !== null)`.
- * А до цього моменту `_detach()` уже повернув потік справжньому обробнику `pg` —
- * тобто вкрадений chunk належить НАСТУПНОМУ повідомленню протоколу. Проковтнути
- * його означало б зіпсувати зʼєднання замість того, щоб зіпсувати копію: тихіше,
- * але гірше. Охоронець `_forward` не дає прочитати chunk узагалі — нічого не
- * крадеться і нічого не губиться.
+ * 🔴 ДЕ САМЕ ГОНКА — ЗАМІРЯНО СТЕКОМ, а не виведено з коду (11.08.2026).
+ * Перша редакція патча стерегла ВХІД у `_forward` — і не спрацювала: 15 падінь із 30
+ * при `applied: true`. Стек назвав справжній шлях:
+ *
+ *     _read → patched(_forward) → _forward(87) → _parse(95)   ← падіння ТУТ
+ *
+ * Тобто охоронець на вході пропускає (буфер ще живий), а рветься **всередині циклу**:
+ *
+ *     while (this._drained && (chunk = connectionStream.read()) !== null)
+ *       this._drained = this._parse(chunk)
+ *
+ * На якомусь `chunk` копія ЗАВЕРШУЄТЬСЯ — `_parse` кличе `_detach()` + `_cleanup()`,
+ * буфер стає `null`. Але цикл живий: `_drained` усе ще `true`, `read()` віддає
+ * наступний chunk, і `_parse` падає на `this._buffer.push`.
+ *
+ * 🔴 ТОМУ ПАТЧ — НА `_parse`, І ВІН ПОВЕРТАЄ `false`, А НЕ ковтає chunk.
+ * `false` кладеться в `this._drained`, а умова циклу перевіряє його ПЕРШИМ:
+ * `while (this._drained && (chunk = read()) …)` — отже `read()` більше не кличеться
+ * взагалі. Це важливо: після `_detach()` потік уже повернуто обробнику `pg`, і
+ * зайвий `read()` украв би chunk наступного повідомлення протоколу, зіпсувавши
+ * ЗʼЄДНАННЯ замість копії. Охоронець на вході `_forward` лишаємо як другий рубіж —
+ * він ловить подію `readable`, що прилетіла вже після всього.
+ *
+ * ⚠️ УРОК, ЗАПИСАНИЙ НАВМИСНО: гейт `#75b` був ЗЕЛЕНИЙ, поки патч не працював —
+ * бо фікстура відтворювала гонку МІЖ викликами, тобто мою гіпотезу, а не механізм.
+ * Саботаж її валив, і це виглядало як доказ. Тепер фікстура відтворює цикл.
  */
 
 /**
@@ -66,7 +84,7 @@ function copyProto(): Record<string, (...a: unknown[]) => unknown> {
 export function applyCopyStreamPatch(): CopyPatchState {
   try {
     const proto = copyProto();
-    if ((proto._forward as { __utsCopyPatch?: boolean }).__utsCopyPatch) {
+    if ((proto._parse as { __utsCopyPatch?: boolean }).__utsCopyPatch) {
       state = { applied: true, reason: null };
       return state;
     }
@@ -75,14 +93,26 @@ export function applyCopyStreamPatch(): CopyPatchState {
       if (!f.check(src))
         throw new Error(`відбиток pg-copy-streams не збігся: «${f.name}» — ${f.why}`);
 
-    const orig = proto._forward;
-    function patched(this: { _buffer: unknown }, ...args: unknown[]): unknown {
-      // Копія вже завершилась і прибрала за собою — читати з потоку більше НЕ можна.
-      if (this._buffer == null) return undefined;
-      return orig.apply(this, args);
+    // 1) ГОЛОВНЕ: зупинити ЦИКЛ, щойно копія завершилась.
+    const origParse = proto._parse;
+    function patchedParse(this: { _buffer: unknown }, ...args: unknown[]): unknown {
+      if (this._buffer == null) return false;          // прибрано ще до входу
+      const drained = origParse.apply(this, args);
+      if (this._buffer == null) return false;          // прибрано САМЕ цим chunk'ом
+      return drained;
     }
-    (patched as { __utsCopyPatch?: boolean }).__utsCopyPatch = true;
-    proto._forward = patched as typeof proto._forward;
+    (patchedParse as { __utsCopyPatch?: boolean }).__utsCopyPatch = true;
+    proto._parse = patchedParse as typeof proto._parse;
+
+    // 2) ДРУГИЙ РУБІЖ: подія `readable` вже після всього — не читати з потоку взагалі.
+    const origForward = proto._forward;
+    function patchedForward(this: { _buffer: unknown }, ...args: unknown[]): unknown {
+      if (this._buffer == null) return undefined;
+      return origForward.apply(this, args);
+    }
+    (patchedForward as { __utsCopyPatch?: boolean }).__utsCopyPatch = true;
+    proto._forward = patchedForward as typeof proto._forward;
+
     state = { applied: true, reason: null };
   } catch (err) {
     state = { applied: false, reason: err instanceof Error ? err.message : String(err) };
@@ -91,6 +121,19 @@ export function applyCopyStreamPatch(): CopyPatchState {
 }
 
 export function copyPatchState(): CopyPatchState { return state; }
+
+/**
+ * ПРАВИЛО ПАТЧА ОКРЕМО ВІД НАКЛАДАННЯ — щоб гейт перевіряв саме його, без бібліотеки.
+ * `false` означає «цикл `_forward` мусить зупинитись, не читаючи наступний chunk».
+ */
+export function wrapParse(orig: (chunk: unknown) => unknown) {
+  return function (this: { _buffer: unknown }, chunk: unknown): unknown {
+    if (this._buffer == null) return false;
+    const drained = orig.call(this, chunk);
+    if (this._buffer == null) return false;
+    return drained;
+  };
+}
 
 /**
  * 🔴 «НЕ НАКЛАДЕНО → ПАДІННЯ З ЧЕСНОЮ ПОМИЛКОЮ, А НЕ ТИХА РОБОТА БЕЗ НЬОГО».
