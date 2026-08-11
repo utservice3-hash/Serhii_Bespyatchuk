@@ -48,6 +48,7 @@ export const MANIFEST_FILES: string[] = [
   "jobs/syncGuard.test.js",
   "health/jobAlert.test.js",
   "jobs/backupRotate.test.js",
+  "db/copyStreamPatch.test.js",
   "core/stuckRule.test.js",
   "core/stuckTalk.test.js",
   "core/reactivation.test.js",
@@ -434,4 +435,8 @@ export const MANIFEST_TESTS: string[] = [
   "#74 ПОРІГ = 2× ІНТЕРВАЛ ВІДСТАЛІШОЇ ДЖОБИ, з реєстру розкладу",
   "#74b МЕЖА ХВОСТА: норма мовчить, подвійна норма говорить",
   "#74c ФРОНТ НЕ МАЄ ВЛАСНОГО ЧИСЛА ГОДИН",
+  // db/copyStreamPatch.test.ts — патч гонки в чужій бібліотеці + гейт на застосованість
+  "#75 ПАТЧ НАКЛАДЕНО, І ВІДБИТОК БІБЛІОТЕКИ ТОЙ, ЩО ОЧІКУВАВСЯ",
+  "#75b ГОНКА ВІДТВОРЕНА: без патча — падіння, з патчем — тиша",
+  "#75c БЕЗ ПАТЧА БЕКАП НЕ ПОЧИНАЄТЬСЯ, а не працює тихо",
 ];

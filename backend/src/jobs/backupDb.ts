@@ -7,6 +7,11 @@ import { to as copyTo } from "pg-copy-streams";
 import pg from "pg";
 import { config } from "../config.js";
 import { plannedDeletions, copyWithRetry, COPY_ATTEMPTS, type BackupStatus } from "./backupRotateRule.js";
+import { applyCopyStreamPatch, assertCopyStreamPatched } from "../db/copyStreamPatch.js";
+
+// Патч гонки в pg-copy-streams накладається на імпорті; `backupDb()` відмовляється
+// працювати без нього (див. `assertCopyStreamPatched`).
+applyCopyStreamPatch();
 
 // Independent, off-Neon logical backup: one gzipped CSV per table (COPY = native
 // Postgres, so escaping/nulls/json are handled correctly). Neon's platform
@@ -58,6 +63,9 @@ function backupStatus(dir: string): BackupStatus {
  * `runJob` записав помилку, а не тихий успіх.
  */
 export async function backupDb(): Promise<void> {
+  // 🔒 ПЕРШИМ РЯДКОМ: без патча гонки копія буде частковою з ~60% імовірністю на
+  //    таблицю — краще гучно не почати, ніж тихо зробити непридатне.
+  assertCopyStreamPatched();
   const stamp = new Date().toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "-");
   const dir = path.join(BACKUP_DIR, `uts_${stamp}`);
   mkdirSync(dir, { recursive: true });
@@ -104,7 +112,13 @@ export async function backupDb(): Promise<void> {
         if (usedAttempt > 1) retried.push({ table: t, attempt: usedAttempt });
       } catch (err) {
         failed.push({ table: t, error: err instanceof Error ? err.message : String(err) });
-        console.error(`backupDb: таблиця "${t}" не збереглась після ${COPY_ATTEMPTS} спроб:`, err);
+        // 🔴 ОБІРВАНИЙ ФАЙЛ ПРИБИРАЄМО. Інакше в каталозі лишається `stats_series.csv.gz`
+        //    на 80 КБ від невдалої спроби, файлів рівно 78 — і копія ВИГЛЯДАЄ повною.
+        //    Маніфест каже правду, а файли брешуть; хто відновлюватиметься за `ls`,
+        //    відновить обрізану таблицю. Той самий клас «наявність ≠ придатність»,
+        //    лише поверхом глибше за порожні каталоги.
+        try { rmSync(path.join(dir, `${t}.csv.gz`), { force: true }); } catch { /* нема — і добре */ }
+        console.error(`backupDb: таблиця "${t}" не збереглась після ${COPY_ATTEMPTS} спроб (файл прибрано):`, err);
       }
     }
     if (ok.length === 0) throw new Error("backupDb: не збережено ЖОДНОЇ таблиці — це провал, а не порожня база");
