@@ -50,6 +50,7 @@ import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
 import { syncDealActivity, syncContactActivity, recomputeActivity } from "./jobs/syncDealActivity.js";
+import { syncKommoTasks } from "./jobs/syncKommoTasks.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
@@ -385,6 +386,14 @@ cron.schedule("10 */3 * * *", () => {
 cron.schedule("40 4 * * *", () => {
   if (isKommoPaused()) return;
   void runJob("recomputeActivity", () => recomputeActivity());
+});
+// 📋 ЗАДАЧІ KOMMO — кожні 30 хв на :20/:50.
+// Слот обрано свідомо: :00/:30 — syncKommo, :15/:45 — syncStageEvents, :35 — Ringostat,
+// :25 — статистики, :05 — рекламний бюджет. На :50 стоїть лише freshnessWatch, і він
+// до Kommo НЕ ходить, тож конкуренції за ліміт немає. Обсяг тіку — 1-2 сторінки.
+cron.schedule("20,50 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("syncKommoTasks", () => syncKommoTasks());
 });
 // Lead-transfer events — раз на добу (резерв; «передані заявки» тепер із «Реєстру»).
 cron.schedule("20 5 * * *", () => {

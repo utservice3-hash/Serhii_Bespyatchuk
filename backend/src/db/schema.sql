@@ -1675,6 +1675,46 @@ END $$;
 
 -- (привілеї ai_readonly винесено в самий кінець файла — див. «ПРИВІЛЕЇ РОЛЕЙ»)
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ЗАДАЧІ KOMMO — четверте джерело «активності» по угоді
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 🔴 НАВІЩО. Власник назвав задачі активністю, а в базі їх не було взагалі.
+-- Заміряно 11.08.2026: **79%** активних FC-угод мають задачу за 14 днів, і **499**
+-- із них не мають БІЛЬШЕ НІЧОГО. Без цієї таблиці новий критерій дав би 383 угоди
+-- замість ~130 — помилкових було б більше, ніж справжніх.
+--
+-- 🔒 `text` і `result` НЕ ЗБЕРІГАЄМО СВІДОМО. Це вільний текст менеджера про
+-- клієнта — персональні дані, яких критерій не потребує. Ціна названа вголос:
+-- якщо колись знадобиться показувати зміст задачі, буде потрібен ПОВТОРНИЙ бекфіл
+-- (20-45 хв). Зберігати «про запас» те, що не використовується, — гірше.
+--
+-- 🔴 ДВА АКТОРИ ОБОВʼЯЗКОВІ. Salesbot створює 47% задач, але **4 739** ботових
+-- задач за 14 днів закрила ЛЮДИНА, і у **325 угод (204 у скоупі)** це єдина людська
+-- дія. Фільтр `created_by <> 0` наосліп викинув би саме їх.
+CREATE TABLE IF NOT EXISTS kommo_tasks (
+  kommo_id     BIGINT PRIMARY KEY,          -- id задачі в Kommo
+  entity_id    BIGINT NOT NULL,             -- до чого прикріплена (угода/контакт)
+  entity_type  TEXT,                        -- leads | contacts | customers | NULL
+  created_by   INTEGER NOT NULL DEFAULT 0,  -- 0 = Salesbot
+  updated_by   INTEGER NOT NULL DEFAULT 0,  -- ХТО ЗАКРИВ — без цього втрачаємо 204 угоди
+  responsible_user_id INTEGER,
+  task_type_id INTEGER,
+  is_completed BOOLEAN NOT NULL DEFAULT false,
+  created_at   TIMESTAMPTZ NOT NULL,
+  updated_at   TIMESTAMPTZ NOT NULL,        -- ключ інкремента: закриття СТАРОЇ задачі — свіжа дія
+  complete_till TIMESTAMPTZ,
+  duration     INTEGER,
+  synced_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Під майбутній `max(...) GROUP BY entity_id` у годиннику активності (прохід 3).
+CREATE INDEX IF NOT EXISTS idx_kommo_tasks_entity ON kommo_tasks(entity_type, entity_id, updated_at DESC);
+-- Під інкремент по вотермарку.
+CREATE INDEX IF NOT EXISTS idx_kommo_tasks_updated ON kommo_tasks(updated_at);
+-- ⚠️ Вотермарк ЗАДАЧ окремий: інкремент іде по `updated_at`, а не по `created_at`.
+-- Заміряно: 76 задач, оновлених за 14 днів, створені РАНІШЕ 180 днів (макс вік 624
+-- дні) — вони зачіпають 52 активні угоди. Бекфіл по `created_at` їх би не побачив.
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_task_at TIMESTAMPTZ;
+
 -- ─────────────────────────── Трекер часу (окрема підсистема) ───────────────────────────
 -- Власна авторизація (device-токен), НЕ JWT. Банк/виписку не чіпає.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS tracker_enabled BOOLEAN NOT NULL DEFAULT false;
