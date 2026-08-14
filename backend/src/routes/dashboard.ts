@@ -3566,7 +3566,7 @@ dashboardRouter.get("/stuck-deals", async (req, res) => {
   let teamId = req.query.teamId ? Number(req.query.teamId) : null;
   if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
   else if (auth.role === "team_lead") { teamId = auth.teamId; managerId = req.query.managerId ? Number(req.query.managerId) : null; }
-  const minDays = Math.max(1, Number(req.query.minDays) || 7);
+  const minDays = Math.max(1, Number(req.query.minDays) || metrics.STUCK_MIN_DAYS);
 
   // КРОК 9: рероут на core/metrics.stuckDeals (SQL/пороги ідентичні: minDays для
   // грошових стадій, ×3 для ранньої, вікно 180 днів, годинник COALESCE(last_activity,
@@ -3600,7 +3600,7 @@ dashboardRouter.get("/stuck-deals-grouped", async (req, res) => {
   let teamId = req.query.teamId ? Number(req.query.teamId) : null;
   if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
   else if (auth.role === "team_lead") { teamId = auth.teamId; managerId = req.query.managerId ? Number(req.query.managerId) : null; }
-  const minDays = Math.max(1, Number(req.query.minDays) || 7);
+  const minDays = Math.max(1, Number(req.query.minDays) || metrics.STUCK_MIN_DAYS);
 
   const g = await metrics.stuckDealsGrouped({ managerId, teamId }, minDays);
   // Нотатки менеджера — одним запитом по вже відібраних угодах (без N+1). Видимість

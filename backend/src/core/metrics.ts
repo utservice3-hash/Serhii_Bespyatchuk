@@ -1,6 +1,7 @@
 import { pool } from "../db/pool.js";
-import { AVTO_STATUSES, ACTIVITY_CLOCK, stuckBaseConds, ASOF_SQL, ASOF_JOB_SQL,
-  asOfStaleAfterMin, CLOCK_WITH_TALK, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
+import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckClock,
+  stageMoveCte, STAGE_MOVE, ASOF_SQL, ASOF_JOB_SQL,
+  asOfStaleAfterMin, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
@@ -2351,7 +2352,7 @@ export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[
 // ───────────────────────── ЗАСТРЯГЛІ УГОДИ (знімок, БЕЗ дат) ─────────────────────────
 
 // 🔗 Реекспорт для сумісності: канонічне джерело — `core/stuckRule.ts`.
-export { AVTO_STATUSES } from "./stuckRule.js";
+export { SCOPE_STATUSES, STUCK_MIN_DAYS } from "./stuckRule.js";
 
 export interface StuckDeal {
   kommoId: number;
@@ -2365,18 +2366,17 @@ export interface StuckDeal {
 }
 
 /**
- * Активні угоди повного циклу БЕЗ реальної людської активності понад поріг.
- * Годинник — `COALESCE(last_activity_at, created_at_kommo)` (Salesbot-proof; НЕ `updated_at`).
- * Пороги: грошові стадії (Авто працює / `invoiced` = рахунок після розвантаження +
- * очікуємо оплату) — `minDays` (деф. 7);
- * рання «Взято в роботу» — `minDays×3` (природно «крутиться»). Вікно створення 180 днів
- * (старіші покинуті = мертві, не «застряглі»). Рання стадія рахується лише якщо угоду
- * ВЖЕ вели (`last_activity_at IS NOT NULL`). Порт `/stuck-deals` 1-в-1 (та сама к-сть/ID).
+ * Угоди у скоупі «до Виставлення рахунку включно» БЕЗ жодного сигналу активності
+ * понад поріг. Сигнали (модель власника 14.08.2026): чат · дзвінок ≥10 c · рух етапу.
+ * Годинник — найсвіжіший із них, інакше створення (Salesbot-proof; НЕ `updated_at`).
+ * ЄДИНИЙ поріг `minDays` (деф. `STUCK_MIN_DAYS`), вікно створення 180 днів
+ * (старіші покинуті = мертві, не «застряглі»), угоду мусили ВЖЕ вести.
  */
-export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Promise<StuckDeal[]> {
+export async function stuckDeals(s: SnapshotScope, minDays = STUCK_MIN_DAYS, limit = 50): Promise<StuckDeal[]> {
   const md = Math.max(1, minDays);
-  const ACT = ACTIVITY_CLOCK;
-  const params: unknown[] = [FC_PIPELINES, AVTO_STATUSES, md];
+  // 🔁 Годинник рахується з ТОГО САМОГО переліку сигналів, що й предикат — не поруч із ним.
+  const CLOCK = stuckClock(stuckSignals({ stageMove: STAGE_MOVE }));
+  const params: unknown[] = [FC_PIPELINES, SCOPE_STATUSES, md];
   // 🔗 СПІЛЬНЕ ПРАВИЛО (`core/stuckRule.ts`), а не власна копія. Легасі-роут
   // відрізняється від екрана рівно ВІДСУТНІСТЮ фільтра типу команди — і це тепер
   // видно як параметр нижче, а не як розбіжність двох SQL-текстів.
@@ -2384,18 +2384,21 @@ export async function stuckDeals(s: SnapshotScope, minDays = 7, limit = 50): Pro
   // інша, ширша множина за побудовою), а от час мусить бути спільний: інакше під час
   // наступного простою синку легасі-картка роздувалась би, поки екран стоїть, і два
   // числа на одному Звіті знову розказували б різне. Δ у звичайний день = 0 (заміряно).
-  const conds = stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3", asOf: ASOF_SQL });
+  const conds = stuckBaseConds({ pipelines: "$1", scopeStatuses: "$2", minDays: "$3",
+    asOf: ASOF_SQL, stageMove: STAGE_MOVE });
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   params.push(limit);
   const r = await pool.query<{ kommo_id: string; name: string; client: string | null; manager: string; price: string; pipeline_id: string; status_id: string; funnel_stage: string; days: string; activity_days: string | null }>(
-    `SELECT d.kommo_id, d.name, d.client_name AS client, m.name AS manager, d.price,
+    `WITH ${stageMoveCte()}
+     SELECT d.kommo_id, d.name, d.client_name AS client, m.name AS manager, d.price,
             d.pipeline_id, d.status_id, psm.funnel_stage,
-            EXTRACT(DAY FROM ${ASOF_SQL} - ${ACT})::int AS days,
+            EXTRACT(DAY FROM ${ASOF_SQL} - ${CLOCK})::int AS days,
             EXTRACT(DAY FROM ${ASOF_SQL} - d.last_activity_at)::int AS activity_days
      FROM deals d
      JOIN managers m ON m.id = d.manager_id AND m.is_active
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     LEFT JOIN stage_move sm ON sm.kommo_id = d.kommo_id
      WHERE ${conds.join(" AND ")}
      ORDER BY days DESC
      LIMIT $${params.length}`,
@@ -2450,9 +2453,9 @@ export interface StuckGrouped {
 
 /**
  * Застряглі угоди ЗГРУПОВАНІ по менеджерах (переробка секції, рішення власника 24.07):
- *   • Критерій «без руху понад поріг у БУДЬ-ЯКІЙ відкритій стадії включно з «Авто працює»;
- *     виключено paid/успіх/злив; анкер = остання активність; signed price — сторно НЕ виключаємо»,
- *     БЕЗ `LIMIT` → повний набір.
+ *   • Критерій «без ЖОДНОГО сигналу (чат · дзвінок ≥10 c · рух етапу · однозначна розмова
+ *     Ringostat) понад поріг, у скоупі до «Виставлення рахунку» ВКЛЮЧНО; signed price —
+ *     сторно НЕ виключаємо», БЕЗ `LIMIT` → повний набір.
  *   • 🎯 ТИП КОМАНДИ (рішення власника 24.07): РНК — усі застряглі; РПК/Самостійний (не-РНК) —
  *     ЛИШЕ лідген-угоди (`lead_channel='leadgen'`). Через це набір на проді ~270 (РНК 233 +
  *     РПК/Самост-лідген 37), а НЕ ~600. Це свідома РОЗБІЖНІСТЬ із легасі `stuckDeals` — там
@@ -2462,15 +2465,20 @@ export interface StuckGrouped {
  *     за побудовою — групуємо ту саму плоску вибірку). Групи сортуються за к-стю (як макет).
  *   • Роль-клампи — у роуті (manager→own, team_lead→team, admin→all), як у `stuckDeals`.
  */
-export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<StuckGrouped> {
+export async function stuckDealsGrouped(s: SnapshotScope, minDays = STUCK_MIN_DAYS): Promise<StuckGrouped> {
   const md = Math.max(1, minDays);
-  const AS_OF = ASOF_SQL, CLOCK = CLOCK_WITH_TALK;
-  const params: unknown[] = [FC_PIPELINES, AVTO_STATUSES, md];
+  const AS_OF = ASOF_SQL;
+  // 🎧 Екран додає ЧЕТВЕРТИЙ операнд — однозначну розмову з Ringostat. Годинник і
+  // предикат беруть той самий перелік, тож «порахували рух» і «вважаємо, що вели»
+  // не можуть розійтись.
+  const CLOCK = stuckClock(stuckSignals({ stageMove: STAGE_MOVE, talk: TALK_ATTRIBUTED }));
+  const params: unknown[] = [FC_PIPELINES, SCOPE_STATUSES, md];
   // 🔗 ТЕ САМЕ ПРАВИЛО, що в легасі; далі — ТІЛЬКИ те, чим екран свідомо вужчий.
   const conds = [
-    // 🕰 `asOf` + 🎧 годинник із однозначною розмовою — обидва СВІДОМІ параметри правила,
-    // а не друга його копія: легасі `/stuck-deals` бере ті самі умови з дефолтами.
-    ...stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3", asOf: AS_OF, clock: CLOCK }),
+    // 🕰 `asOf` + 🎧 розмова — обидва СВІДОМІ параметри правила, а не друга його копія:
+    // легасі `/stuck-deals` кличе ту саму функцію без `talk`.
+    ...stuckBaseConds({ pipelines: "$1", scopeStatuses: "$2", minDays: "$3", asOf: AS_OF,
+      stageMove: STAGE_MOVE, talk: TALK_ATTRIBUTED }),
     commercialManagerSql("m"), // 🔒 СТРОГО: лише комерційні менеджери (не лідген/фінанси/без команди), незалежно від скоупу
     // 🎯 Тип команди (рішення власника 24.07): РНК — усі застряглі; РПК/Самостійний (не-РНК) —
     //    лише лідген-угоди (lead_channel='leadgen'). Реюз rnkTeamSql (без хардкоду ID).
@@ -2490,7 +2498,7 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
     // 🕰 ВІК — ВІД `AS_OF`, А НЕ ВІД `now()`. Годинник іде завжди; дані — ні. Під час
     // аварії №2 (синк стояв 15 год 13 хв) список роздувся б на 17 угод «застою», якого
     // ніхто не бачив — ми просто не знали про рух. У звичайний день Δ = 0 (заміряно).
-    `WITH ${ringostatTalkCte({ pipelines: "$1" })}
+    `WITH ${ringostatTalkCte({ pipelines: "$1" })}, ${stageMoveCte()}
      SELECT d.kommo_id, d.name, d.client_name AS client, d.price,
             m.id AS manager_id, m.name AS manager, m.team_id, t.name AS team_name,
             d.pipeline_id, d.status_id, psm.funnel_stage,
@@ -2516,6 +2524,7 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = 7): Promise<
      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      LEFT JOIN talk tk ON tk.client_key = d.client_key
      LEFT JOIN open_cnt oc ON oc.client_key = d.client_key
+     LEFT JOIN stage_move sm ON sm.kommo_id = d.kommo_id
      WHERE ${conds.join(" AND ")}
      ORDER BY days DESC`,
     params

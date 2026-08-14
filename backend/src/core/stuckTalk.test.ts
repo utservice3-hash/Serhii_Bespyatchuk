@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  AVTO_STATUSES, CALL_MIN_SEC, callCountsAsActivity, stuckBaseConds,
-  ASOF_SQL, CLOCK_WITH_TALK, ringostatTalkCte, ASOF_JOBS, asOfStaleAfterMin,
+  SCOPE_STATUSES, STUCK_MIN_DAYS, CALL_MIN_SEC, callCountsAsActivity, stuckBaseConds,
+  ASOF_SQL, ringostatTalkCte, ASOF_JOBS, asOfStaleAfterMin,
+  stageMoveCte, STAGE_MOVE, TALK_ATTRIBUTED, stuckClock, stuckSignals,
 } from "./stuckRule.js";
 
 /**
@@ -27,8 +28,10 @@ const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 const SRC = path.join(import.meta.dirname, "..", "..", "src");
 const H = 3600_000, DAY = 24 * H;
 const FC = [8921932, 155304];
-const AVTO = AVTO_STATUSES[0];
-const EARLY = 69693668;
+// 🎯 Обидва — У СКОУПІ (до «Виставлення рахунку» включно). «Авто працює» більше не
+//    в критерії, тож фікстура на ньому доводила б поведінку, якої немає.
+const INVOICE = 100274340;          // «Виставлення рахунку» — межа скоупу
+const EARLY = 69693668;             // «Взято на прорахунок»
 
 /**
  * 15 годин — тривалість аварії №2 (09-10.08.2026, синк стояв 15 год 13 хв). Вік угод
@@ -36,29 +39,29 @@ const EARLY = 69693668;
  * саме тому, що рости нікуди.
  */
 const OUTAGE_H = 15;
-const MIN_DAYS = 7;
+const MIN_DAYS = STUCK_MIN_DAYS;   // 14 — ЄДИНИЙ поріг, поділу 7/21 більше немає
 
 type D = { id: number; why: string; status: number; actH: number; ck: string | null };
 /** Кожна угода названа тим, що саме вона доводить. `actH` — годин від «зараз». */
 const DEALS: D[] = [
   // ── ТРОЄ НА МЕЖІ: вік між порогом і порогом+15 год. Саме вони показують роздування:
   //    «зараз» вони застряглі, «на момент синку 15 год тому» — ще ні.
-  { id: 301, why: "авто, 7 діб + 3 год: перетнула поріг ЗА останні 15 год", status: AVTO, actH: 7 * 24 + 3, ck: "клієнта" },
-  { id: 311, why: "авто, 7 діб + 10 год: те саме, друга на межі", status: AVTO, actH: 7 * 24 + 10, ck: "клієнте" },
-  { id: 312, why: "рання, 21 доба + 5 год: перетнула поріг ×3 за останні 15 год", status: EARLY, actH: 21 * 24 + 5, ck: "клієнтж" },
+  { id: 301, why: "рахунок, 14 діб + 3 год: перетнула поріг ЗА останні 15 год", status: INVOICE, actH: 14 * 24 + 3, ck: "клієнта" },
+  { id: 311, why: "рахунок, 14 діб + 10 год: те саме, друга на межі", status: INVOICE, actH: 14 * 24 + 10, ck: "клієнте" },
+  { id: 312, why: "рання, 14 діб + 5 год: ТОЙ САМИЙ поріг (поділу ×3 більше немає)", status: EARLY, actH: 14 * 24 + 5, ck: "клієнтж" },
   // ── СТАБІЛЬНІ: застряглі за будь-якого анкера.
-  { id: 302, why: "авто, 7 діб + 30 год: застрягла за будь-якого анкера", status: AVTO, actH: 7 * 24 + 30, ck: "клієнтб" },
+  { id: 302, why: "рахунок, 14 діб + 30 год: застрягла за будь-якого анкера", status: INVOICE, actH: 14 * 24 + 30, ck: "клієнтб" },
   { id: 305, why: "рання, 22 доби: застрягла за будь-якого анкера", status: EARLY, actH: 22 * 24, ck: "клієнтд" },
   // ── СВІЖІ: не застряглі за будь-якого анкера.
-  { id: 303, why: "авто, активність 2 год тому: свіжа за будь-якого анкера", status: AVTO, actH: 2, ck: "клієнтв" },
-  { id: 304, why: "рання, 20 діб < 21 → не застрягла", status: EARLY, actH: 20 * 24, ck: "клієнтг" },
-  { id: 313, why: "авто, 7 діб − 40 год: 15 год простою його НЕ дотягують", status: AVTO, actH: 7 * 24 - 40, ck: "клієнтз" },
+  { id: 303, why: "рахунок, активність 2 год тому: свіжа за будь-якого анкера", status: INVOICE, actH: 2, ck: "клієнтв" },
+  { id: 304, why: "рання, 13 діб < 14 → не застрягла", status: EARLY, actH: 13 * 24, ck: "клієнтг" },
+  { id: 313, why: "рахунок, 14 діб − 40 год: 15 год простою його НЕ дотягують", status: INVOICE, actH: 14 * 24 - 40, ck: "клієнтз" },
   // ── RINGOSTAT: чотири випадки привʼязки розмови.
-  { id: 306, why: "застрягла, клієнт з ОДНІЄЮ угодою і свіжою розмовою → гаситься", status: AVTO, actH: 30 * 24, ck: "розмоводин" },
-  { id: 307, why: "застрягла, клієнт з ДВОМА угодами і свіжою розмовою → НЕ гаситься", status: AVTO, actH: 30 * 24, ck: "розмовдва" },
-  { id: 308, why: "друга угода того самого клієнта — вона й робить привʼязку неоднозначною", status: AVTO, actH: 31 * 24, ck: "розмовдва" },
-  { id: 309, why: "застрягла, розмова СТАРІША за анкер → не гасить", status: AVTO, actH: 30 * 24, ck: "розмовстар" },
-  { id: 310, why: "застрягла без client_key → Ringostat до неї не дотягнеться", status: AVTO, actH: 30 * 24, ck: null },
+  { id: 306, why: "застрягла, клієнт з ОДНІЄЮ угодою і свіжою розмовою → гаситься", status: INVOICE, actH: 30 * 24, ck: "розмоводин" },
+  { id: 307, why: "застрягла, клієнт з ДВОМА угодами і свіжою розмовою → НЕ гаситься", status: INVOICE, actH: 30 * 24, ck: "розмовдва" },
+  { id: 308, why: "друга угода того самого клієнта — вона й робить привʼязку неоднозначною", status: INVOICE, actH: 31 * 24, ck: "розмовдва" },
+  { id: 309, why: "застрягла, розмова СТАРІША за анкер → не гасить", status: INVOICE, actH: 30 * 24, ck: "розмовстар" },
+  { id: 310, why: "застрягла без client_key → Ringostat до неї не дотягнеться", status: INVOICE, actH: 30 * 24, ck: null },
 ];
 /** Розмови Ringostat: клієнт → скільки годин тому, скільки секунд. */
 const TALKS: [string, number, number][] = [
@@ -93,7 +96,7 @@ async function withScratch(t: { skip: (m: string) => void },
     //    порожній, а гейт зеленів би «бо нічого не знайшлось».
     await c.query(`INSERT INTO teams (id,name) VALUES (13,'РНК-тест') ON CONFLICT DO NOTHING`);
     await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (10,'М',13,true) ON CONFLICT DO NOTHING`);
-    for (const [p, st, stage] of [[8921932, AVTO, "approved"], [8921932, EARLY, "lead_taken"], [8921932, 142, "paid"]] as [number, number, string][])
+    for (const [p, st, stage] of [[8921932, INVOICE, "approved"], [8921932, EARLY, "lead_taken"], [8921932, 142, "paid"]] as [number, number, string][])
       await c.query(`INSERT INTO pipeline_stage_map (pipeline_id,status_id,funnel_stage) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [p, st, stage]);
     for (const d of DEALS)
       await c.query(
@@ -111,17 +114,19 @@ async function withScratch(t: { skip: (m: string) => void },
   } finally { await c.end(); }
 }
 
-/** Список за правилом екрана: анкер `asOf`, годинник із однозначною розмовою. */
+/** Список за правилом екрана: анкер `asOf`, сигнали з рухом етапу й однозначною розмовою. */
 async function screen(c: import("pg").Client, asOf: string, params: unknown[] = []): Promise<number[]> {
-  const conds = stuckBaseConds({ pipelines: "$1", avtoStatuses: "$2", minDays: "$3", asOf, clock: CLOCK_WITH_TALK });
+  const conds = stuckBaseConds({ pipelines: "$1", scopeStatuses: "$2", minDays: "$3", asOf,
+    stageMove: STAGE_MOVE, talk: TALK_ATTRIBUTED });
   const r = await c.query<{ kommo_id: string }>(
-    `WITH ${ringostatTalkCte({ pipelines: "$1" })}
+    `WITH ${ringostatTalkCte({ pipelines: "$1" })}, ${stageMoveCte()}
      SELECT d.kommo_id FROM deals d
        JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
        LEFT JOIN talk tk ON tk.client_key = d.client_key
        LEFT JOIN open_cnt oc ON oc.client_key = d.client_key
+       LEFT JOIN stage_move sm ON sm.kommo_id = d.kommo_id
       WHERE ${conds.join(" AND ")} ORDER BY d.kommo_id`,
-    [FC, AVTO_STATUSES, MIN_DAYS, ...params]);
+    [FC, SCOPE_STATUSES, MIN_DAYS, ...params]);
   return r.rows.map((x) => Number(x.kommo_id));
 }
 
@@ -146,7 +151,8 @@ test("#73 ДЗВІНОК КОРОТШИЙ ЗА 10 c НЕ Є АКТИВНІСТЮ
 test("#73b ВІК РАХУЄТЬСЯ ВІД СИНКУ: застарілий синк НЕ роздуває лічильник", async (t) => {
   await withScratch(t, async (c, now) => {
     const setSync = (d: Date) => c.query(
-      `INSERT INTO job_runs (name,last_success_at) VALUES ('syncKommo',$1),('syncDealActivity',$1)
+      `INSERT INTO job_runs (name,last_success_at)
+       VALUES ('syncKommo',$1),('syncDealActivity',$1),('syncStageEvents',$1)
        ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`, [d]);
 
     // Контроль: синк «щойно» — анкер і годинник мусять давати ОДНЕ Й ТЕ САМЕ.
@@ -179,7 +185,8 @@ test("#73b ВІК РАХУЄТЬСЯ ВІД СИНКУ: застарілий с�
 
 test("#73c RINGOSTAT ГАСИТЬ, КОЛИ У КЛІЄНТА ОДНА ВІДКРИТА УГОДА", async (t) => {
   await withScratch(t, async (c, now) => {
-    await c.query(`INSERT INTO job_runs (name,last_success_at) VALUES ('syncKommo',$1),('syncDealActivity',$1)
+    await c.query(`INSERT INTO job_runs (name,last_success_at)
+                   VALUES ('syncKommo',$1),('syncDealActivity',$1),('syncStageEvents',$1)
                    ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`, [new Date(now)]);
     const got = await screen(c, ASOF_SQL);
     assert.ok(!got.includes(306),
@@ -195,7 +202,8 @@ test("#73c RINGOSTAT ГАСИТЬ, КОЛИ У КЛІЄНТА ОДНА ВІДК�
 
 test("#73d КІЛЬКА ВІДКРИТИХ УГОД — РОЗМОВА НЕ ГАСИТЬ ЖОДНОЇ", async (t) => {
   await withScratch(t, async (c, now) => {
-    await c.query(`INSERT INTO job_runs (name,last_success_at) VALUES ('syncKommo',$1),('syncDealActivity',$1)
+    await c.query(`INSERT INTO job_runs (name,last_success_at)
+                   VALUES ('syncKommo',$1),('syncDealActivity',$1),('syncStageEvents',$1)
                    ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`, [new Date(now)]);
     const got = await screen(c, ASOF_SQL);
     for (const id of [307, 308])
@@ -253,7 +261,8 @@ test("#74b МЕЖА ХВОСТА: норма мовчить, подвійна н
     const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
     const every = MONITORED_JOBS.find((j) => j.name === "syncDealActivity")!.everyMin;
     const setSync = (lagMin: number) => c.query(
-      `INSERT INTO job_runs (name,last_success_at) VALUES ('syncKommo',$1),('syncDealActivity',$2)
+      `INSERT INTO job_runs (name,last_success_at)
+       VALUES ('syncKommo',$1),('syncStageEvents',$1),('syncDealActivity',$2)
        ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`,
       [new Date(now), new Date(now - lagMin * 60_000)]);
 
@@ -265,12 +274,53 @@ test("#74b МЕЖА ХВОСТА: норма мовчить, подвійна н
       [every * 5, true, "простій у пʼять інтервалів — тим паче"],
     ] as [number, boolean, string][]) {
       await setSync(lagMin);
-      const g = await stuckDealsGrouped({}, 7);
+      const g = await stuckDealsGrouped({}, MIN_DAYS);
       assert.ok(g.total > 0, "🔴 список порожній — фікстура не засіялась, гейт нічого не доводить");
       assert.equal(g.asOfStale, want, `🔴 відставання ${lagMin} хв (норма ${every}): ${why}`);
       assert.equal(g.asOfJob, "syncDealActivity", "🔴 відсталішою названо не ту джобу");
       assert.equal(g.asOfStaleAfterMin, every * 2, "🔴 поріг у відповіді не дорівнює 2× інтервалу");
     }
+  });
+});
+
+/**
+ * #74d — 🔗 КОЖНЕ ДЖЕРЕЛО СИГНАЛУ МУСИТЬ БУТИ В АНКЕРІ «СТАНОМ НА».
+ *
+ * 🔴 ЧОМУ ЦЕ ОКРЕМИЙ ГЕЙТ, А НЕ РЯДОК У СПИСКУ. Додати сигнал у критерій — одна
+ * правка; додати його синк в анкер — інша, у сусідньому файлі. Забудеш другу, і
+ * поламається НАЙТИХІШЕ з можливого: угода, яку менеджер учора зрушив, висітиме як
+ * «без руху 14 днів», бо про рух ми не дізнались, а підпис «дані станом на» бадьоро
+ * скаже, що все свіже. Це рівно той клас, що прибрана інваріанта, на яку хтось
+ * спирався.
+ *
+ * Доводимо ПОВЕДІНКОЮ, а не переліком: застарілий `syncStageEvents` мусить ЗАМОРОЗИТИ
+ * список так само, як застарілий `syncDealActivity`.
+ */
+test("#74d ЗАСТАРІЛИЙ syncStageEvents ЗАМОРОЖУЄ СПИСОК, як і решта анкерних", async (t) => {
+  await withScratch(t, async (c, now) => {
+    // Сигнал «рух етапу» тут єдиний, що тримає 302 поза списком: подія свіжа.
+    await c.query(`INSERT INTO deal_stage_events (kommo_id,status_id,pipeline_id,changed_at)
+                   VALUES (302,$1,8921932,$2)`, [INVOICE, new Date(now - 2 * H)]);
+    const fresh = (d: Date) => c.query(
+      `INSERT INTO job_runs (name,last_success_at) VALUES ('syncKommo',$1),('syncDealActivity',$1),('syncStageEvents',$2)
+       ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`, [new Date(now), d]);
+
+    await fresh(new Date(now));
+    const ok = await screen(c, ASOF_SQL);
+    assert.ok(!ok.includes(302),
+      "🔴 свіжий переїзд стадії не погасив 302 — сигнал «рух етапу» не працює, і все нижче порожнє");
+
+    // 🔴 syncStageEvents стоїть 15 годин. Якби він НЕ був анкерним, `asOf` лишився б
+    //    «зараз», і список поїхав би вперед на подіях, яких ми ще не бачили.
+    await fresh(new Date(now - OUTAGE_H * H));
+    const frozen = await screen(c, `now() - interval '${OUTAGE_H} hours'`);
+    assert.deepEqual(await screen(c, ASOF_SQL), frozen,
+      `🔴 при syncStageEvents, що стоїть ${OUTAGE_H} год, список НЕ замерз на моменті синку — `
+      + "джоба не входить в ASOF_JOBS, і підпис «станом на» бреше про свіжість");
+    assert.ok(ASOF_JOBS.includes("syncStageEvents"),
+      "🔴 syncStageEvents немає в ASOF_JOBS — сигнал у критерії є, а нагляду за його свіжістю немає");
+    // 🪞 Дзеркало: заморозка мусить бути ВИДИМОЮ, а не збігом порожніх списків.
+    assert.ok(frozen.length > 0, "🔴 замерзлий список порожній — рівність нічого не доводить");
   });
 });
 
