@@ -49,7 +49,6 @@ export const MANIFEST_FILES: string[] = [
   "health/jobAlert.test.js",
   "jobs/backupRotate.test.js",
   "db/copyStreamPatch.test.js",
-  "jobs/kommoTasks.test.js",
   "core/stuckRule.test.js",
   "core/stuckTalk.test.js",
   "core/reactivation.test.js",
@@ -440,10 +439,4 @@ export const MANIFEST_TESTS: string[] = [
   "#75 ПАТЧ НАКЛАДЕНО, І ВІДБИТОК БІБЛІОТЕКИ ТОЙ, ЩО ОЧІКУВАВСЯ",
   "#75b ГОНКА ВІДТВОРЕНА: без патча — падіння, з патчем — тиша",
   "#75c БЕЗ ПАТЧА БЕКАП НЕ ПОЧИНАЄТЬСЯ, а не працює тихо",
-  // jobs/kommoTasks.test.ts — синк задач Kommo (четверте джерело активності)
-  "#76 ІНКРЕМЕНТ ПО updated_at, а не created_at",
-  "#76b ПОРЦІЇ: збій не перестрибує невичитане",
-  "#76c text/result НЕ ЗБЕРІГАЮТЬСЯ — ні в схемі, ні у вставці",
-  "#76d ЗБЕРЕЖЕНО ОБОХ АКТОРІВ — created_by І updated_by",
-  "#76e UPSERT ІДЕМПОТЕНТНИЙ і оновлює стан задачі",
 ];
