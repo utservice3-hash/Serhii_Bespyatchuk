@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -71,16 +71,40 @@ const TALKS: [string, number, number][] = [
   ["клієнта", 90 * 24, 0],  // 0 c: не розмова, у CTE не потрапляє взагалі
 ];
 
+/**
+ * 🔴 ОДИН КЛАСТЕР НА ФАЙЛ, А НЕ НА ТЕСТ.
+ *
+ * `db/pool.js` — модульний синглтон: він прибивається до того `DATABASE_URL`, який
+ * діяв на ПЕРШОМУ імпорті. Поки кожен тест піднімав власну пісочницю, через `pool`
+ * міг ходити рівно один із них — решта читала б чужу (уже знесену) базу й зеленіла
+ * б на порожньому. Тепер кластер один, тож `pool` вказує туди ж, куди й прямий
+ * клієнт `c`, і БД-тестів у файлі може бути скільки треба.
+ *
+ * Побічно це вп'ятеро дешевше: було пʼять `initdb` на файл, стало один.
+ */
+let shared: { url: string; dispose: () => void } | { unavailable: string } | null = null;
+/**
+ * ⚠️ ПУЛ ЗАКРИВАЄМО ПЕРШИМ, кластер — другим. Знесений кластер обриває зʼєднання,
+ * що лишились у пулі, і `Connection terminated unexpectedly` прилітає ПІСЛЯ
+ * завершення тесту — тобто як uncaughtException, який валить весь файл при восьми
+ * зелених тестах. Спіймано одразу після переходу на спільний кластер.
+ */
+let poolUsed = false;
+after(async () => {
+  if (poolUsed) await (await import("../db/pool.js")).pool.end();
+  if (shared && !("unavailable" in shared)) shared.dispose();
+});
+
 async function withScratch(t: { skip: (m: string) => void },
   fn: (c: import("pg").Client, now: number) => Promise<void>): Promise<void> {
-  const { provisionScratch } = await import("../db/scratchDb.js");
-  const scratch = provisionScratch();
+  if (shared == null) {
+    const { provisionScratch } = await import("../db/scratchDb.js");
+    shared = provisionScratch();
+  }
+  const scratch = shared;
   if ("unavailable" in scratch) return t.skip(scratch.unavailable);
   // ⚠️ `metrics.js` тягне `db/pool.js` → `config.js`, який кидає на відсутньому
   // DATABASE_URL ще НА ІМПОРТІ (пастка спрацювала за сесію вже пʼятий раз).
-  // 🔴 `pool` кешується НА ПРОЦЕС: перший імпорт прибиває його до ЦІЄЇ пісочниці.
-  //    Тому через `pool` ходить РІВНО ОДИН тест файлу (#74b) — другий читав би чужу
-  //    базу й зеленів на порожньому. Решта працює власним клієнтом `c`.
   process.env.DATABASE_URL = scratch.url;
   process.env.JWT_SECRET ??= "test";
   process.env.KOMMO_BASE_URL ??= "https://x.invalid";
@@ -90,6 +114,8 @@ async function withScratch(t: { skip: (m: string) => void },
   await c.connect();
   const now = Date.now();
   try {
+    // Кластер спільний, тож кожен тест починає з чистого аркуша сам.
+    await c.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
     await c.query(readFileSync(SCHEMA, "utf8"));
     // ⚠️ Команда 13 — РНК за `RNK_TEAM_IDS`, і це не декорація: `stuckDealsGrouped`
     //    показує НЕ-РНК лише лідоген-угоди, тож на довільному team_id список був би
@@ -257,6 +283,7 @@ test("#74 ПОРІГ = 2× ІНТЕРВАЛ ВІДСТАЛІШОЇ ДЖОБИ, �
 /** #74b — МЕЖА: норма → хвоста немає; удвічі більше за норму → хвіст є. */
 test("#74b МЕЖА ХВОСТА: норма мовчить, подвійна норма говорить", async (t) => {
   await withScratch(t, async (c, now) => {
+    poolUsed = true;
     const { stuckDealsGrouped } = await import("./metrics.js");
     const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
     const every = MONITORED_JOBS.find((j) => j.name === "syncDealActivity")!.everyMin;
@@ -335,4 +362,56 @@ test("#74c ФРОНТ НЕ МАЄ ВЛАСНОГО ЧИСЛА ГОДИН", () =>
   assert.ok(!/\b120\b|\b240\b|ageMin >= \d/.test(fn),
     "🔴 у підписі зʼявився власний поріг у хвилинах — правило знову у двох копіях");
   assert.ok(fe.includes("data?.asOfStale"), "🔴 компонент не передає прапорець у підпис");
+});
+
+/**
+ * #77 — 🔬 ІНСТРУМЕНТ ЗАМІРУ ПРАЦЮЄ ПРОТИ СПРАВЖНЬОЇ БАЗИ, А НЕ «МАЄ ПРАЦЮВАТИ».
+ *
+ * 🔴 ПРИВІД, І ВІН ЦЬОГО ТИЖНЯ. `core/dayItems.ts` джойнив `d.id = e.deal_id` —
+ * колонок, яких НЕ ІСНУЄ. Це пройшло `tsc` (SQL у шаблонному рядку не типізується),
+ * пройшло весь набір (гейт чесно скіпався без живого API) і впало б на першому кліку.
+ * Інструмент, яким власник обиратиме поріг, не має права зустріти прод уперше: він
+ * мусить хоч раз виконатись проти справжнього Postgres із справжньою схемою.
+ *
+ * Заодно доводиться сам ДЕТЕКТОР інструмента: три числа зняті двома шляхами
+ * (прямий виклик і розподіл), і розбіжність між ними мусить ПАДАТИ, а не друкуватись.
+ */
+test("#77 ІНСТРУМЕНТ ЗАМІРУ: три пороги, і його власний детектор працює", async (t) => {
+  await withScratch(t, async (c, now) => {
+    poolUsed = true;
+    await c.query(`INSERT INTO job_runs (name,last_success_at)
+                   VALUES ('syncKommo',$1),('syncDealActivity',$1),('syncStageEvents',$1)
+                   ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`, [new Date(now)]);
+    const { measureStuck } = await import("../tools/measureStuck.js");
+    const r = await measureStuck([14, 21, 30]);
+
+    assert.equal(r.measures.length, 3, "🔴 інструмент віддав не три пороги");
+    assert.ok(r.population > 0, "🔴 популяція порожня — інструмент не має що міряти");
+    // Монотонність: вищий поріг НЕ може дати більший список. Це властивість самого
+    // означення, тож її порушення означало б, що пороги рахуються різними правилами.
+    for (let i = 1; i < r.measures.length; i++)
+      assert.ok(r.measures[i].total <= r.measures[i - 1].total,
+        `🔴 поріг ${r.measures[i].minDays} дав БІЛЬШЕ угод, ніж ${r.measures[i - 1].minDays} — `
+        + "пороги міряються не одним правилом");
+    // Фікстура має розрізняти пороги, інакше «три числа» нічого не показують.
+    assert.ok(r.measures[0].total > r.measures[2].total,
+      `🔴 14 і 30 дали однаково (${r.measures[0].total}) — фікстура нечутлива до порога`);
+    // Розподіл покриває всю популяцію: якби відро загубилось, крива брехала б у бік меншого.
+    assert.equal(r.histogram.reduce((s, b) => s + b.count, 0), r.population,
+      "🔴 сума відер розподілу ≠ популяції — частина угод не потрапила в жодне відро");
+    assert.equal(r.asOfStale, false, "🔴 на свіжих синках замір позначив дані застарілими");
+
+    // 🧨 ДЕТЕКТОР ІНСТРУМЕНТА: підмінюємо число, здобуте другим шляхом, і вимагаємо ПАДІННЯ.
+    //    Без цього «два шляхи збіглись» доводило б лише те, що ми їх порівнюємо.
+    const { stuckDealsGrouped } = await import("./metrics.js");
+    let first = true;
+    const lying: typeof stuckDealsGrouped = async (s, md) => {
+      const g = await stuckDealsGrouped(s, md);
+      if (first) { first = false; return g; }   // популяція — як є
+      return { ...g, total: g.total + 1 };      // а поріг бреше рівно на одиницю
+    };
+    await assert.rejects(() => measureStuck([14], lying), /розійшлись/,
+      "🔴 інструмент прийняв розбіжність двох шляхів — його детектор не працює, "
+      + "і хибне число поїхало б власникові як підстава для вибору порога");
+  });
 });
