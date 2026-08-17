@@ -105,7 +105,7 @@ function print(r: StuckReport): void {
   console.log("\nРозподіл «днів без руху» (уся популяція):");
   for (const b of r.histogram)
     console.log(`  ${String(b.from).padStart(3)}–${b.to == null ? "∞  " : String(b.to).padEnd(3)} ${String(b.count).padStart(5)}`);
-  console.log(`\nДефолт у коді зараз: STUCK_MIN_DAYS = ${STUCK_MIN_DAYS} (стартове значення для заміру, не рішення).`);
+  console.log(`\nДефолт у коді зараз: STUCK_MIN_DAYS = ${STUCK_MIN_DAYS} (рішення власника 17.08.2026 за цим самим заміром).`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
