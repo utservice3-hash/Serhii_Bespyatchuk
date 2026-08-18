@@ -1815,7 +1815,8 @@ export async function fetchReactivationCandidates(teamId?: number): Promise<Reac
 
 export async function createTaskPlan(payload: {
   assigneeId: number;
-  period: "week" | "month";
+  /** Рівень цілі-показника — ЛИШЕ тиждень: місячну ціль знято 18.08.2026. */
+  period: "week";
   days: string[];
   adsCount?: number;
   leadgenCount?: number;

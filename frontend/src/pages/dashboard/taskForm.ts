@@ -11,7 +11,10 @@ export type TaskForm = {
   department: string;
   comments: string;
   // KPI plan fields
-  taskType: "simple" | "weekly_kpi" | "monthly_kpi" | "reactivation";
+  // 🔴 «monthly_kpi» ЗНЯТО 18.08.2026 (рішення власника): місячної цілі по ПОКАЗНИКАХ
+  // більше немає — ціль живе на тижні, а місяць лишається ФАКТОМ. Грошовий план це не
+  // зачіпає: він живе в таблиці `plans` і ставиться на вкладці «Плани».
+  taskType: "simple" | "weekly_kpi" | "reactivation";
   planScope: "range" | "day"; // weekly plan: a period or a single day
   weekStart: string;
   rangeFrom: string; // weekly plan: custom range start (from calendar)

@@ -7,6 +7,7 @@ import { mergePairAllowed, mergeDenyReason, type MergePairScope } from "../auth/
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
 import { kommoLeadUrl } from "../core/kommoLinks.js";
+import { accumulateKpiTargets } from "../core/kpiTargets.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
 // Посилання на картку угоди — з `core/kommoLinks` (одне місце на весь продукт).
@@ -6261,9 +6262,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   //     не подвоювати вже покритий парасолькою проміжок).
   //   • Лічильні (payment_amount/ads/leadgen/dispatch) — сума; ставкові (avg_check/conversion) — MAX.
   // day=week=month сходяться: тиждень із парасолькою = target; без — Σ daily; місяць = Σ обох.
-  const umbRows = (await pool.query<{ assignee_id: number; ps: string; pe: string; metrics_json: { metric: string; target: number | string }[] | null }>(
+  // 🔴 `period_kind` ТЯГНЕТЬСЯ, А НЕ ФІЛЬТРУЄТЬСЯ В SQL. Місячні парасольки й далі
+  // потрібні — але лише щоб їхні дні лишались ПОКРИТИМИ: інакше 21 прихована денна
+  // дитина місячного плану стала б «нічийною», і daily-фолбек повернув би зняту ціль
+  // через задні двері. Рішення «яку ціль читати» ухвалює `accumulateKpiTargets`.
+  const umbRows = (await pool.query<{ assignee_id: number; ps: string; pe: string; kind: string | null; metrics_json: { metric: string; target: number | string }[] | null }>(
     `SELECT t.assignee_id, to_char(t.period_start,'YYYY-MM-DD') ps,
-            to_char(COALESCE(t.period_end, t.period_start),'YYYY-MM-DD') pe, t.metrics_json
+            to_char(COALESCE(t.period_end, t.period_start),'YYYY-MM-DD') pe,
+            t.period_kind AS kind, t.metrics_json
        FROM tasks t
       WHERE t.auto AND t.task_type = 'kpi_period' AND t.assignee_id IS NOT NULL
         AND t.metrics_json IS NOT NULL
@@ -6275,35 +6281,13 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       WHERE t.auto AND t.task_type = 'daily_kpi' AND t.assignee_id IS NOT NULL
         AND t.metrics_json IS NOT NULL AND t.plan_date BETWEEN $1 AND $2`, [from, to]
   )).rows;
-  const ADDITIVE = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
-  const planByMgr = new Map<number, Record<string, number>>();
-  const accum = (aid: number, metrics: { metric: string; target: number | string }[] | null, factor: number) => {
-    const e = planByMgr.get(aid) ?? {};
-    for (const m of metrics ?? []) {
-      const t = Number(m.target) || 0;
-      if (ADDITIVE.has(m.metric)) e[m.metric] = (e[m.metric] ?? 0) + t * factor; // сума (апортовано factor)
-      else e[m.metric] = Math.max(e[m.metric] ?? 0, t);                          // ставка — MAX
-    }
-    planByMgr.set(aid, e);
-  };
-  // Парасольки: діапазони на менеджера (для перевірки покриття) + внесок таргету.
-  const umbByMgr = new Map<number, { ps: string; pe: string }[]>();
-  for (const u of umbRows) {
-    const wdU = workingDaysBetween(u.ps, u.pe);
-    if (wdU <= 0) continue;
-    const oFrom = u.ps > from ? u.ps : from;         // перетин [парасолька ∩ період]
-    const oTo = u.pe < to ? u.pe : to;
-    if (oFrom > oTo) continue;
-    const frac = workingDaysBetween(oFrom, oTo) / wdU;
-    (umbByMgr.get(u.assignee_id) ?? umbByMgr.set(u.assignee_id, []).get(u.assignee_id)!).push({ ps: u.ps, pe: u.pe });
-    if (frac > 0) accum(u.assignee_id, u.metrics_json, frac);
-  }
-  // Daily-фолбек: лише дні ПОЗА всіма парасольками менеджера.
-  const covered = (aid: number, d: string) => (umbByMgr.get(aid) ?? []).some((u) => d >= u.ps && d <= u.pe);
-  for (const r of dayRows) {
-    if (covered(r.assignee_id, r.pd)) continue;      // проміжок уже покрито парасолькою
-    accum(r.assignee_id, r.metrics_json, 1);
-  }
+  // Накопичення — у ЧИСТІЙ функції `core/kpiTargets` (гейти #80…#80c). Інлайном воно
+  // не мало жодної перевірки, окрім живого екрана.
+  const planByMgr = accumulateKpiTargets(
+    umbRows.map((u) => ({ assigneeId: u.assignee_id, from: u.ps, to: u.pe, kind: u.kind, metrics: u.metrics_json })),
+    dayRows.map((r) => ({ assigneeId: r.assignee_id, day: r.pd, metrics: r.metrics_json })),
+    from, to
+  );
 
   // ГРОШОВИЙ ПЛАН = СТРАТЕГІЧНИЙ план із таблиці `plans` (core plans.managerPlan — повне
   // покриття, ціль відділу 2.7млн), рішення власника 22.07. НЕ задачник: задачник покриває

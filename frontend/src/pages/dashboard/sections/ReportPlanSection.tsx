@@ -587,7 +587,13 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
         {/* 📅 Місяць — показники факт/план за місяць */}
         <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <b style={{ fontSize: 12 }}>📅 Місяць · показники</b><span style={{ fontSize: 10.5, color: MUTED }}>факт / план за місяць</span>
+            {/* 🔴 ЗАГОЛОВОК ЗА ОБРАНИМ ПЕРІОДОМ. Тут стояло жорстке «Місяць · показники»,
+                і при виборі тижня блок обіцяв місяць над тижневими цифрами. Ціль-показник
+                тепер береться ЛИШЕ з тижневих парасольок (`core/kpiTargets`), тож у
+                місячному вигляді частина метрик буде «план не задано» — і це чесно:
+                місячної цілі по показниках більше немає. ФАКТ показується завжди. */}
+            <b style={{ fontSize: 12 }}>📅 Показники{isMonthMode ? "" : ` · ${periodLabel}`}</b>
+            <span style={{ fontSize: 10.5, color: MUTED }}>факт за {isMonthMode ? "місяць" : periodLabel} · ціль — з тижневої задачі</span>
           </div>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             <Kpi lbl="реклама" fact={m.kpi.ads.fact} target={m.kpi.ads.target} />
