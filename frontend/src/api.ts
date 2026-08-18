@@ -724,7 +724,11 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
 /** `src` — НОВИЗНА клієнта, `source` — ДЖЕРЕЛО угоди. Різні виміри: угода буває
  *  водночас `src:"rep"` і `source:"ad"` (постійний клієнт прийшов через рекламу). */
 export type DealSource = "ad" | "leadgen" | "other" | null;
-export interface ReportPlanDeal { name: string; src: "new" | "rep" | null; source: DealSource; price: number; status: string }
+export interface ReportPlanDeal {
+  name: string; src: "new" | "rep" | null; source: DealSource; price: number; status: string;
+  /** Картка угоди в Kommo — URL будує сервер, піддомен фронт не знає. */
+  kommoId: number; url: string;
+}
 
 /**
  * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ — склад КОНКРЕТНОГО числа в рядку дня.
@@ -735,6 +739,9 @@ export type DayItemKind = "created" | "dispatched" | "dispatched_paid" | "dispat
   | "success" | "paid" | "received" | "avgcheck" | "calls";
 export interface DayItem {
   name: string;
+  /** Картка угоди в Kommo (для дзвінків — `null`). */
+  kommoId: number | null;
+  url: string | null;
   src: "new" | "rep" | null;
   /** ДЖЕРЕЛО угоди — окремий вимір від новизни (`src`). */
   source: DealSource;

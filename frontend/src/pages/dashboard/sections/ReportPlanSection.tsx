@@ -47,6 +47,27 @@ function SrcChip({ src, source }: { src: "new" | "rep" | null; source?: DealSour
     </span>
   );
 }
+/**
+ * 🔗 НАЗВА УГОДИ — ПОСИЛАННЯ НА ЇЇ КАРТКУ В KOMMO.
+ *
+ * Один компонент на ОБИДВА розкриття — рівно з тієї ж причини, що й `SrcChip`:
+ * два однакові рядки верстки розходяться мовчки, і потім одне розкриття клікабельне,
+ * а друге ні. `url` приходить ІЗ СЕРВЕРА (`core/kommoLinks.kommoLeadUrl` від
+ * `KOMMO_BASE_URL`) — фронт піддомену акаунта не знає й не зашиває.
+ *
+ * `target="_blank"` + `rel="noopener noreferrer"`: розкриття дня — робочий список,
+ * з якого людина йде в CRM і повертається; підміняти вкладку зі списком не можна.
+ * Дзвінки картки не мають (`url === null`) і лишаються звичайним текстом.
+ */
+function DealName({ name, url }: { name: string; url: string | null }) {
+  const style = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
+  if (!url) return <span style={style}>{name}</span>;
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" title="відкрити картку угоди в Kommo"
+       style={{ ...style, color: LINK, textDecoration: "none" }}>{name}</a>
+  );
+}
+
 const SICON: Record<string, string> = { g: "🟢", a: "🟠", r: "🔴" };
 const TAGCOL: Record<string, string> = { rpk: BAR, rnk: "#7a52c7", self: GREEN };
 
@@ -769,7 +790,7 @@ function WeekMoney({ mWeek, managerId, period }: {
             : <>
                 {r.items.map((it, i2) => (
                   <div key={i2} style={{ display: "grid", gridTemplateColumns: "1fr 100px 180px 110px", gap: 10, padding: "7px 12px", borderBottom: "1px solid var(--border)", fontSize: 12, alignItems: "center" }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                    <DealName name={it.name} url={it.url} />
                     <SrcChip src={it.src} source={it.source} />
                     <span style={{ fontSize: 11 }}><b>{it.state}</b><span style={{ color: MUTED }}> · {it.plannedPayAt ? `план. оплата ${ddmm(it.plannedPayAt)}` : "дата оплати не вказана"}</span></span>
                     <span style={{ textAlign: "right", fontWeight: 650 }}>{fmt(it.price)} ₴</span>
@@ -858,7 +879,7 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
                 <div key={i} style={{ display: "grid",
                   gridTemplateColumns: kind === "calls" ? "1fr 150px 110px 120px" : "1fr 110px 190px 120px",
                   gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--border)", fontSize: 12, alignItems: "center" }}>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                  <DealName name={it.name} url={it.url} />
                   {kind === "calls" ? (
                     <>
                       <span style={{ color: MUTED, fontSize: 11 }}>{it.call?.phone ?? "—"}</span>

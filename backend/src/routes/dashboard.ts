@@ -6,9 +6,10 @@ import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rb
 import { mergePairAllowed, mergeDenyReason, type MergePairScope } from "../auth/mergeScope.js";
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
+import { kommoLeadUrl } from "../core/kommoLinks.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
-const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
+// Посилання на картку угоди — з `core/kommoLinks` (одне місце на весь продукт).
 
 /**
  * «Очікування оплати» = deals from "Виставлено рахунок" through the pre-payment
@@ -6646,8 +6647,8 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
   // «реклама/лідоген → новий, усе інше → постійний». Вона робила постійними угоди
   // `other` БЕЗ історії клієнта — тобто сперечалась із лічильником рядка (12.6%
   // угод серпня). Правило тепер одне; форми звіряє гейт `#66`.
-  const r = await pool.query<{ name: string; klass: string | null; source: string | null; price: string; status_id: number }>(
-    `SELECT d.name, d.price, d.status_id, (${metrics.dealKlassSql("d")}) AS klass,
+  const r = await pool.query<{ kommo_id: string; name: string; klass: string | null; source: string | null; price: string; status_id: number }>(
+    `SELECT d.kommo_id, d.name, d.price, d.status_id, (${metrics.dealKlassSql("d")}) AS klass,
             (${metrics.dealSourceSql("d")}) AS source
        FROM deals d WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
          AND (d.created_at_kommo ${KYIV})::date = $3::date
@@ -6660,6 +6661,10 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
       : s === 143 ? "Закрито" : "В роботі";
   res.json({
     deals: r.rows.map((x) => ({
+      // 🔗 Назва угоди — клікабельна: id угоди в нас уже є, і без лінка людина
+      // мусить шукати ту саму угоду в CRM руками. URL будує сервер (`kommoLeadUrl`),
+      // фронт піддомену не знає.
+      kommoId: Number(x.kommo_id), url: kommoLeadUrl(Number(x.kommo_id)),
       name: x.name, src: x.klass === "new" ? "new" : x.klass === "repeat" ? "rep" : null,
       source: x.source === "ad" || x.source === "leadgen" || x.source === "other" ? x.source : null,
       price: Math.round(Number(x.price)), status: label(Number(x.status_id)),

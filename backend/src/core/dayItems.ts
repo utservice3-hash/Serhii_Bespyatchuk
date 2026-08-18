@@ -1,6 +1,7 @@
 import { pool } from "../db/pool.js";
 import { FC_PIPELINES, STAGE_PAID, STAGE_SUCCESS, STAGE_RECEIVED } from "./money.js";
 import { dealKlassSql, dealSourceSql } from "./metrics.js";
+import { kommoLeadUrl } from "./kommoLinks.js";
 
 /**
  * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ ПО ДНЯХ — склад КОЖНОГО числа в рядку дня.
@@ -39,6 +40,9 @@ export const isDayItemKind = (v: string): v is DayItemKind =>
 export interface DayItem {
   /** Маршрут (назва угоди) або клієнт для дзвінка. */
   name: string;
+  /** Угода в Kommo: id і готове посилання на картку. Для дзвінків — `null`. */
+  kommoId: number | null;
+  url: string | null;
   /**
    * НОВИЗНА клієнта — мітка, а не частина суми. `null` = ядро не змогло визначити.
    * 🔴 ОКРЕМО ВІД ДЖЕРЕЛА (18.08.2026): угода може бути `src:'rep'` і `source:'ad'`
@@ -102,18 +106,22 @@ const sourceOf = (v: string | null): "ad" | "leadgen" | "other" | null =>
   v === "ad" ? "ad" : v === "leadgen" ? "leadgen" : v === "other" ? "other" : null;
 
 /** SELECT-колонки складу угоди — спільні для всіх `kind`, щоб мітка не розʼїхалась. */
-const DEAL_COLS = `d.name, d.price, d.status_id,
+const DEAL_COLS = `d.kommo_id, d.name, d.price, d.status_id,
             to_char((d.planned_payment_at ${K})::date, 'YYYY-MM-DD') AS planned,
             (${dealKlassSql("d")}) AS klass,
             (${dealSourceSql("d")}) AS source`;
 
 interface DealRow {
-  name: string | null; klass: string | null; source: string | null; price: string | null;
-  status_id: number; planned: string | null;
+  kommo_id: string; name: string | null; klass: string | null; source: string | null;
+  price: string | null; status_id: number; planned: string | null;
 }
 
 const mapDeals = (rows: DealRow[]): DayItem[] => rows.map((x) => ({
   name: x.name ?? "—",
+  // 🔗 Посилання будує СЕРВЕР з `KOMMO_BASE_URL` — фронт піддомену не знає й не
+  // має знати (у нього вже є одна зашита копія, і саме так вони й розходяться).
+  kommoId: Number(x.kommo_id),
+  url: kommoLeadUrl(Number(x.kommo_id)),
   src: srcOf(x.klass),
   source: sourceOf(x.source),
   price: Math.round(Number(x.price ?? 0)),
@@ -220,8 +228,8 @@ export async function dayItems(kind: DayItemKind, managerId: number, from: strin
       );
       items = r.rows.map((x) => ({
         name: x.name ?? x.phone ?? "невідомий",
-        // Дзвінок не є угодою: ані новизни, ані джерела в нього немає — обидва `null`.
-        src: null, source: null, price: 0, state: x.billsec > 0 ? "розмова" : "спроба", plannedPayAt: null,
+        // Дзвінок не є угодою: ані новизни, ані джерела, ані картки в CRM.
+        kommoId: null, url: null, src: null, source: null, price: 0, state: x.billsec > 0 ? "розмова" : "спроба", plannedPayAt: null,
         // 🎧 ПРЯМИЙ ЛІНК НА ЗАПИС, без проксі — рішення власника 05.08.2026,
         // нового рішення не потрібно (закриває задачу «плеєр дзвінків» із черги).
         call: { phone: x.phone, durationSec: x.billsec, at: x.at,

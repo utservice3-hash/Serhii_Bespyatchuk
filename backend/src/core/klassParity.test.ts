@@ -34,6 +34,8 @@ const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
  * "metrics.ts"` дав би ENOENT, бо в `dist` лежить `.js`).
  */
 const METRICS_SRC = path.join(import.meta.dirname, "..", "..", "src", "core", "metrics.ts");
+const REPORT_SECTION = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src",
+  "pages", "dashboard", "sections", "ReportPlanSection.tsx");
 const KVP_SECTION = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src",
   "pages", "dashboard", "sections", "KvpReportSection.tsx");
 const DAY = 86400000;
@@ -361,4 +363,62 @@ test("#67g НОВИЗНА — ПАРТИЦІЯ, ДЖЕРЕЛО — НАКЛАД�
       "🔴 жодна угода з реклами/лідогену не є постійною — фікстура не навантажує саме той "
       + "випадок, заради якого виміри й розділили");
   });
+});
+
+/**
+ * #78 — НАЗВА УГОДИ ВЕДЕ НА ЇЇ КАРТКУ В KOMMO.
+ *
+ * 🔴 ПЕРЕВІРЯЄМО ЗВʼЯЗОК ID↔УГОДА, А НЕ ФОРМУ РЯДКА. Тест, що звіряє URL із тим
+ * самим `kommoLeadUrl`, був би забороненою перевіркою «A = A»: він зеленів би й
+ * тоді, коли в посилання підставили ЧУЖИЙ id. Тому id ВИТЯГУЄТЬСЯ з готового
+ * посилання й звіряється з назвою угоди, яка лежить у базі під цим id — підміна
+ * id одразу дає іншу назву. База URL звіряється з `KOMMO_BASE_URL` (зовнішнє
+ * джерело), а не з тим, що повернув хелпер.
+ *
+ * Кластер той самий, що в гейтах вище (правило «один scratch на прогін»).
+ */
+test("#78 НАЗВА УГОДИ ВЕДЕ НА ЇЇ КАРТКУ В KOMMO — id у посиланні той самий", async (t) => {
+  await withScratch(t, async (c) => {
+    const { dayItems } = await import("./dayItems.js");
+    const day = new Date(Date.now() - 5 * DAY).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+    const r = await dayItems("created", 10, day);
+    assert.ok(r.items.length > 0,
+      `🔴 у розкритті дня ${day} немає жодної угоди — фікстура не потрапила у вікно, `
+      + "а порожній список це ПРОВАЛ, не успіх");
+    const base = (process.env.KOMMO_BASE_URL ?? "").replace(/\/$/, "");
+    const byId = new Map(CASES.map((x) => [x.id, x.why]));
+    for (const it of r.items) {
+      assert.ok(it.url && it.url.startsWith(base + "/leads/detail/"),
+        `🔴 посилання «${it.url}» не веде в акаунт із KOMMO_BASE_URL`);
+      const idFromUrl = Number(it.url!.split("/leads/detail/")[1]);
+      assert.equal(idFromUrl, it.kommoId,
+        "🔴 id у посиланні розійшовся з id угоди в тому ж рядку");
+      const nameInDb = (await c.query<{ name: string }>(
+        "SELECT name FROM deals WHERE kommo_id = $1", [idFromUrl])).rows[0]?.name;
+      assert.equal(nameInDb, it.name,
+        `🔴 посилання веде на угоду «${nameInDb}», а в рядку написано «${it.name}» — `
+        + "клік відкриє ЧУЖУ картку");
+      assert.ok(byId.has(idFromUrl), `🔴 id ${idFromUrl} узагалі не з нашої вибірки`);
+    }
+  });
+});
+
+/**
+ * #78b — ОБИДВА РОЗКРИТТЯ РЕНДЕРЯТЬ НАЗВУ ОДНИМ КОМПОНЕНТОМ. Дві копії верстки
+ * розходяться мовчки: одне розкриття лишиться клікабельним, друге ні — рівно та
+ * поломка, що вже сталась із чипом «новий/постійний» (дві копії правила).
+ * Перевіряємо ДЖЕРЕЛО фронта, бо HTTP-проба цього не бачить.
+ */
+test("#78b ОБИДВА РОЗКРИТТЯ РЕНДЕРЯТЬ НАЗВУ ЯК <a> (одна верстка, не дві копії)", () => {
+  const src = readFileSync(REPORT_SECTION, "utf8");
+  const uses = src.match(/<DealName name=\{it\.name\} url=\{it\.url\} \/>/g) ?? [];
+  assert.equal(uses.length, 2,
+    `🔴 компонент назви вжито ${uses.length} раз(и) замість 2 — одне з розкриттів знову `
+    + "малює назву власною версткою");
+  const comp = src.split("function DealName")[1]?.slice(0, 700) ?? "";
+  assert.ok(/<a href=\{url\}/.test(comp), "🔴 назва більше не посилання");
+  assert.ok(/target="_blank"/.test(comp) && /rel="noopener noreferrer"/.test(comp),
+    "🔴 посилання відкривається без target=_blank / rel=noopener — зникає список, з якого пішли");
+  assert.ok(/if \(!url\) return <span/.test(comp),
+    "🔴 рядок без картки (дзвінок) більше не має безпечної гілки — буде <a href=null>");
 });
