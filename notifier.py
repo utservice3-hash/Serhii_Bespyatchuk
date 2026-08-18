@@ -287,17 +287,22 @@ def _send_tracked(text: str, chat_id, thread_id) -> dict | None:
     return None
 
 
-def send_unassigned_tracked(text: str) -> list[dict]:
-    """Шле сповіщення про нерозібрану заявку в РНК-групу + гілки трекінгу ВСІХ
-    команд РНК (як send_to_rnk + send_to_all_rnk_tracking), але повертає список
-    рефів {chat_id, message_id} — щоб видалити ці повідомлення, коли заявку
-    візьмуть у роботу."""
+def send_unassigned_tracked(text_rnk: str, text_team: str | None = None) -> list[dict]:
+    """Шле сповіщення про нерозібрану заявку в спільну РНК-групу + гілки трекінгу
+    ВСІХ команд РНК. Повертає список рефів {chat_id, message_id} — щоб редагувати
+    ці повідомлення, коли заявку візьмуть у роботу.
+
+    Правило власника: тег тім-ліда лише в ОДНІЙ групі — спільній РНК-групі
+    (`text_rnk`). У гілки трекінгу команд шлемо `text_team` (без тегу тім-ліда).
+    Якщо `text_team` не задано — обидва однакові (сумісність)."""
+    if text_team is None:
+        text_team = text_rnk
     refs = []
-    r = _send_tracked(text, TG_CHAT_ID_RNK, TG_THREAD_ID_RNK)
+    r = _send_tracked(text_rnk, TG_CHAT_ID_RNK, TG_THREAD_ID_RNK)
     if r:
         refs.append(r)
     for team, route in _RNK_TEAM_ROUTES.items():
-        r = _send_tracked(text, route["chat_id"], route["tracking_thread"])
+        r = _send_tracked(text_team, route["chat_id"], route["tracking_thread"])
         if r:
             refs.append(r)
     return refs
@@ -342,19 +347,26 @@ def send_raw(text: str, chat_id, thread_id=None) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def edit_tracked(refs: list[dict], new_text: str) -> None:
+def edit_tracked(refs: list[dict], new_text: str, new_text_team: str | None = None) -> None:
     """Редагує раніше надіслані повідомлення (список {chat_id, message_id}) на
-    новий текст — щоб оновлювати статус заявки в одному повідомленні без спаму."""
+    новий текст — щоб оновлювати статус заявки в одному повідомленні без спаму.
+
+    `new_text` — для спільної РНК-групи (з тегом тім-ліда); `new_text_team` —
+    для гілок трекінгу команд (без тегу). Якщо `new_text_team` не задано —
+    для всіх використовується `new_text` (сумісність)."""
     if not TG_TOKEN or not refs:
         return
     for ref in refs:
+        text = new_text
+        if new_text_team is not None and str(ref.get("chat_id")) != str(TG_CHAT_ID_RNK):
+            text = new_text_team
         try:
             requests.post(
                 f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
                 json={
                     "chat_id": ref["chat_id"],
                     "message_id": ref["message_id"],
-                    "text": new_text,
+                    "text": text,
                     "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 },

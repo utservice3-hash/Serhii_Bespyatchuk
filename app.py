@@ -1086,18 +1086,21 @@ def _scan_unassigned_leads():
                 # Одразу сповіщаємо про нерозібрану заявку
                 kommo_url = f"https://utsercice.kommo.com/leads/detail/{lid}"
                 source_line = f"\n🌐 Джерело: {source}" if source else ""
-                msg = (
+                _body = (
                     f"📬 <b>Нерозібрана заявка!</b>\n"
                     f"{_source_badge(is_elogist)}\n"
                     f"🏷 Назва: {lead_name}\n"
                     f"📍 Етап: {status_name}{source_line}\n"
                     f"⏱ Щойно виявлено сканером\n"
-                    f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
-                    f"🔗 <a href='{kommo_url}'>Відкрити лід #{lid}</a>"
                 )
+                _tail = f"🔗 <a href='{kommo_url}'>Відкрити лід #{lid}</a>"
+                _sup = f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
                 # Шлемо з відстеженням message_id — щоб редагувати ці сповіщення,
-                # коли заявку візьмуть у роботу.
-                unassigned[lid]["msg_refs"] = notifier.send_unassigned_tracked(msg)
+                # коли заявку візьмуть у роботу. Тег тім-лідів — лише в спільній
+                # РНК-групі; у гілки трекінгу команд — без тегу (правило власника).
+                unassigned[lid]["msg_refs"] = notifier.send_unassigned_tracked(
+                    _body + _sup + _tail, _body + _tail
+                )
                 _save_unassigned_refs(lid, unassigned[lid]["msg_refs"])
                 logger.info("Scan found unassigned lead %s in %s", lid, status_name)
         except Exception as e:
@@ -1137,19 +1140,20 @@ def _check_unassigned_leads():
 
         # Ескалація на 45 хв (одноразово, позначається як count=99)
         if age_min >= 45 and last < 99:
-            msg = (
+            _body = (
                 f"🔴 <b>Заявка не опрацьована більше 45 хв!</b>\n"
                 f"{_source_badge(info.get('is_elogist'))}\n"
                 f"🏷 Назва: {info['lead_name']}\n"
                 f"📍 Етап: {info['status_name']}\n"
                 f"⏱ Очікує: <b>{_format_duration(age_min)}</b>\n"
-                f"👥 {ALL_SUPERVISORS}\n"
-                f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
             )
+            _tail = f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+            _sup = f"👥 {ALL_SUPERVISORS}\n"
             # Оновлюємо те саме повідомлення (без нового спаму). Через info,
             # не unassigned[lead_id] — паралельний _mark_lead_taken міг зробити
-            # pop, і реіндексація живого dict дала б KeyError.
-            notifier.edit_tracked(info.get("msg_refs", []), msg)
+            # pop, і реіндексація живого dict дала б KeyError. Тег тім-лідів —
+            # лише в спільній РНК-групі, у гілки команд без тегу.
+            notifier.edit_tracked(info.get("msg_refs", []), _body + _sup + _tail, _body + _tail)
             info["last_reminded_count"] = 99
             logger.info("Escalation for lead %s (%.0f min)", lead_id, age_min)
             continue
@@ -1162,18 +1166,19 @@ def _check_unassigned_leads():
         if reminder_count <= last:
             continue
 
-        msg = (
+        _body = (
             f"📬 <b>Нерозібрана заявка!</b>\n"
             f"{_source_badge(info.get('is_elogist'))}\n"
             f"🏷 Назва: {info['lead_name']}\n"
             f"📍 Етап: {info['status_name']}\n"
             f"⏱ Очікує: <b>{_format_duration(age_min)}</b>\n"
-            f"👥 {tag_line}\n"
-            f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
         )
+        _tail = f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+        _sup = f"👥 {tag_line}\n"
         # Оновлюємо те саме повідомлення (без нового спаму) — через info,
-        # не unassigned[lead_id] (див. коментар про KeyError вище).
-        notifier.edit_tracked(info.get("msg_refs", []), msg)
+        # не unassigned[lead_id] (див. коментар про KeyError вище). Тег тім-лідів —
+        # лише в спільній РНК-групі, у гілки команд без тегу.
+        notifier.edit_tracked(info.get("msg_refs", []), _body + _sup + _tail, _body + _tail)
         info["last_reminded_count"] = reminder_count
         logger.info("Unassigned reminder #%d for lead %s (%.0f min)", reminder_count, lead_id, age_min)
 
@@ -2029,16 +2034,17 @@ def _handle_unassigned(lead_id: int, status_id: int):
         return
 
     source_line = f"\n🌐 Джерело: {source}" if source else ""
-    msg = (
+    _body = (
         f"📬 <b>Нерозібрана заявка!</b>\n"
         f"{_source_badge(is_elogist)}\n"
         f"🏷 Назва: {lead_name}\n"
         f"📍 Етап: {status_name}{source_line}\n"
         f"⏱ Щойно надійшла\n"
-        f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
-        f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
     )
-    msg_refs = notifier.send_unassigned_tracked(msg)
+    _tail = f"🔗 <a href='{kommo_url}'>Відкрити лід #{lead_id}</a>"
+    _sup = f"👥 {_weekend_duty_supervisor() or ALL_SUPERVISORS}\n"
+    # Тег тім-лідів — лише в спільній РНК-групі; у гілки команд без тегу.
+    msg_refs = notifier.send_unassigned_tracked(_body + _sup + _tail, _body + _tail)
     unassigned[lead_id]["msg_refs"] = msg_refs
     _save_unassigned_refs(lead_id, msg_refs)
     logger.info("Unassigned lead %s in status %s", lead_id, status_name)
