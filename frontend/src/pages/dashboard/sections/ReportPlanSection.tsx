@@ -85,6 +85,8 @@ const addDays = (s: string, n: number) => { const d = parse(s); d.setUTCDate(d.g
 const dow = (s: string) => { const w = parse(s).getUTCDay(); return w === 0 ? 7 : w; }; // Пн=1..Нд=7
 const mondayOf = (s: string) => addDays(s, -(dow(s) - 1));
 const sundayOf = (s: string) => addDays(mondayOf(s), 6);
+/** Довжина діапазону в днях ВКЛЮЧНО (11–13 = 3). Крок навігації ←/→ у режимі «Період». */
+const spanDays = (a: string, b: string) => Math.round((parse(b).getTime() - parse(a).getTime()) / 86400000) + 1;
 const monthStart = (s: string) => s.slice(0, 7) + "-01";
 const monthEnd = (s: string) => { const [y, m] = s.split("-").map(Number); return iso(new Date(Date.UTC(y, m, 0))); };
 const addMonth = (s: string, n: number) => { const [y, m] = s.split("-").map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return iso(d); };
@@ -109,23 +111,38 @@ export function ReportPlanSection({ auth, teams }: {
   const [rangeFrom, setRangeFrom] = useState(monthStart(today));
   const [rangeTo, setRangeTo] = useState(today);
   const [teamId, setTeamId] = useState<number | "">("");
-  const [monthData, setMonthData] = useState<ReportPlan | null>(null); // головна траєкторія + сортування + glance
+  const [monthData, setMonthData] = useState<ReportPlan | null>(null); // місяць (дефолт + смуга місяця)
+  const [rangeData, setRangeData] = useState<ReportPlan | null>(null);  // довільний діапазон (режим «Період»)
+  const [rangeLoading, setRangeLoading] = useState(false);
   const [weekData, setWeekData] = useState<ReportPlan | null>(null);   // тиждень-контекст смуги
   const [focus, setFocus] = useState<ReportPlan | null>(null);         // кластер фокус-дня
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(false);        // місяць не піднявся навіть після ретраїв → видима помилка
   const [retryNonce, setRetryNonce] = useState(0); // ручний «Спробувати знову» перезапускає ефект
   const [openMgr, setOpenMgr] = useState<number | null>(null);
 
-  // Місяць + тиждень видно ЗАВЖДИ у шапці смуги (#11). Селектор керує лише дрилом унизу.
+  // Тижнева смуга ЛИШАЄТЬСЯ на власному якорі (Пн–Нд тижня focusDay) — рішення власника:
+  // вона про поточний тиждень людини, а не про обраний період.
   const monthPeriod = useMemo(() => ({ from: monthStart(anchor), to: monthEnd(anchor) }), [anchor]);
   const weekPeriod = useMemo(() => ({ from: mondayOf(focusDay), to: sundayOf(focusDay) }), [focusDay]);
-  const drillPeriod = useMemo(() => {
+  /**
+   * 🔴 ОБРАНИЙ ПЕРІОД — ОДНЕ ПОНЯТТЯ НА ВЕСЬ ЕКРАН (18.08.2026).
+   *
+   * Було: цей вираз звався `drillPeriod` і доходив РІВНО до розгортки по днях, а тіло
+   * Звіту читало `monthData` завжди (`const data = monthData`). Тобто перемикач
+   * «Тиждень/Період» не змінював ані ростер, ані glance, ані гроші — людина бачила
+   * місяць під підписом тижня. Гірше: `mode`/`rangeFrom`/`rangeTo` не стояли в
+   * залежностях ефекту, тож режим «Період» не робив ЖОДНОГО запиту.
+   * Тепер той самий вираз живить і тіло, і дрил — розійтись їм більше нема як.
+   */
+  const selectedPeriod = useMemo(() => {
     if (mode === "day") return { from: focusDay, to: focusDay };
     if (mode === "week") return weekPeriod;
     if (mode === "range") return { from: rangeFrom, to: rangeTo };
     return monthPeriod;
   }, [mode, focusDay, weekPeriod, monthPeriod, rangeFrom, rangeTo]);
+  const periodLabel = mode === "month" ? monLbl(anchor)
+    : mode === "day" ? ddmm(selectedPeriod.from)
+    : `${ddmm(selectedPeriod.from)}–${ddmm(selectedPeriod.to)}`;
 
   const weekOfFocus = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(mondayOf(focusDay), i)), [focusDay]);
   const scopeParams = teamId ? { teamId: Number(teamId) } : {};
@@ -137,7 +154,7 @@ export function ReportPlanSection({ auth, teams }: {
   //  • ТИЖДЕНЬ/ФОКУС — best-effort (allSettled): їхня невдача НЕ обнуляє звіт (не «все або нічого»).
   useEffect(() => {
     let cancelled = false;
-    setLoading(true); setErr(false);
+    setLoading(true);
     const withRetry = async (params: { from: string; to: string; teamId?: number }, attempts = 3) => {
       for (let i = 0; ; i++) {
         try { return await fetchReportPlan(params); }
@@ -164,7 +181,9 @@ export function ReportPlanSection({ auth, teams }: {
         if (w.status === "fulfilled") setWeekData(w.value);
         if (f.status === "fulfilled") setFocus(f.value);
       } catch {
-        if (!cancelled) setErr(true);   // ніколи не лишаємо мовчазну порожнечу
+        // Порожнечу мовчки не лишаємо: `periodData` лишиться null → екран покаже
+        // помилку з кнопкою «Спробувати знову» (умова нижче — по ДАНИХ, не по прапорцю,
+        // тож вона накриває і тиждень, і день, і діапазон, а не лише місяць).
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -172,7 +191,35 @@ export function ReportPlanSection({ auth, teams }: {
     return () => { cancelled = true; };
   }, [monthPeriod.from, monthPeriod.to, weekPeriod.from, weekPeriod.to, focusDay, teamId, retryNonce]);
 
-  const data = monthData; // список/сортування/glance — за МІСЯЦЕМ (стабільно, без стрибків)
+  /**
+   * Довільний діапазон — ОКРЕМИЙ ефект, а не гілка в ефекті вище: місяць/тиждень/день
+   * потрібні іншим віджетам ЗАВЖДИ (смуга тижня, кластер дня), і тягнути їх заново на
+   * кожен зсув діапазону було б чистою витратою. Залежності містять `selectedPeriod` —
+   * саме їх бракувало, через що режим «Період» не робив запиту взагалі.
+   */
+  useEffect(() => {
+    if (mode !== "range") return;
+    let cancelled = false;
+    setRangeLoading(true);
+    fetchReportPlan({ from: selectedPeriod.from, to: selectedPeriod.to, ...scopeParams })
+      .then((r) => { if (!cancelled) setRangeData(r); })
+      .catch(() => { if (!cancelled) setRangeData(null); })
+      .finally(() => { if (!cancelled) setRangeLoading(false); });
+    return () => { cancelled = true; };
+  }, [mode, selectedPeriod.from, selectedPeriod.to, teamId, retryNonce]);
+
+  /**
+   * 🔴 ТІЛО ЗВІТУ ЙДЕ ЗА ОБРАНИМ ПЕРІОДОМ. Готові відповіді ПЕРЕВИКОРИСТОВУЮТЬСЯ
+   * (день/тиждень/місяць уже завантажені ефектом вище) — новий запит потрібен лише
+   * діапазону. Підміни на `monthData` тут бути НЕ МОЖЕ: показати місяць під підписом
+   * тижня гірше, ніж показати «даних немає», — тому фолбеку на місяць немає навмисно.
+   */
+  const periodData = mode === "range" ? rangeData
+    : mode === "week" ? weekData
+    : mode === "day" ? focus
+    : monthData;
+  const data = periodData;
+  const busy = loading || rangeLoading;
   const weekByMgr = useMemo(() => new Map((weekData?.managers ?? []).map((m) => [m.managerId, m])), [weekData]);
   const viewerId = data?.viewerManagerId ?? auth.managerId;
   const selfRow = data?.managers.find((m) => m.managerId === viewerId) ?? null;
@@ -180,9 +227,18 @@ export function ReportPlanSection({ auth, teams }: {
   const teamName = teamId ? teams.find((t) => t.id === Number(teamId))?.name : "";
 
   // Навігація ←/→ за одиницею режиму; синхронізує anchor+focusDay.
+  // 🔴 ДІАПАЗОН ЗСУВАЄТЬСЯ НА ВЛАСНУ ДОВЖИНУ (18.08.2026). Гілка була порожня, а кнопки
+  // вимкнені — тобто «минулі 3 дні» подивитись було НЕМОЖЛИВО, доводилось клацати обидві
+  // дати в календарі. Крок = довжина діапазону включно, тож ← дає рівно попередній
+  // такий самий відрізок без дірки й без перекриття.
   const nav = (dir: number) => {
     if (mode === "month") setAnchor(addMonth(anchor, dir));
-    else if (mode === "range") { /* діапазон — лише через календар */ }
+    else if (mode === "range") {
+      const span = spanDays(rangeFrom, rangeTo);
+      if (span <= 0) return;                      // діапазон не заданий/зіпсований — не рухаємо
+      setRangeFrom(addDays(rangeFrom, dir * span));
+      setRangeTo(addDays(rangeTo, dir * span));
+    }
     else { const step = mode === "day" ? dir : dir * 7; const nd = addDays(focusDay, step); setFocusDay(nd); setAnchor(nd); }
   };
 
@@ -192,7 +248,10 @@ export function ReportPlanSection({ auth, teams }: {
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
         <div>
           <h1 style={{ fontSize: 21, margin: 0 }}>Звіт{teamName ? ` — ${teamName}` : ""}</h1>
-          <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>Грошовий план — вкладка «Плани» (2.7 млн) · KPI-активність — задачник · {monLbl(anchor)}</div>
+          {/* 🔴 Підпис — за ОБРАНИМ періодом. Заголовок «серпень» над тижневими цифрами
+              це рівно той клас поломки, який ми вже ловили: підпис правдивий, величина
+              за ним інша. */}
+          <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>Грошовий план — вкладка «Плани» (2.7 млн) · KPI-активність — задачник · <b style={{ color: "var(--text)" }}>{periodLabel}</b></div>
         </div>
         <div style={{ fontSize: 12, color: MUTED, background: "var(--card-bg)", border: "1px solid var(--border)", padding: "4px 11px", borderRadius: 20 }}>
           Ти бачиш: <b style={{ color: "var(--text)" }}>{roleChip}</b>
@@ -210,11 +269,11 @@ export function ReportPlanSection({ auth, teams }: {
             }}>{mo === "day" ? "День" : mo === "week" ? "Тиждень" : mo === "month" ? "Місяць" : "Період"}</button>
           ))}
         </div>
-        <button onClick={() => nav(-1)} disabled={mode === "range"} style={{ ...navBtn, opacity: mode === "range" ? 0.4 : 1 }}>←</button>
+        <button onClick={() => nav(-1)} style={navBtn} title="попередній період тієї ж довжини">←</button>
         <button onClick={() => { setAnchor(today); setFocusDay(today); }} style={navBtn}>Сьогодні</button>
         {/* #15 — швидко на поточний тиждень */}
         <button onClick={() => { setMode("week"); setAnchor(today); setFocusDay(today); }} style={navBtn}>Поточний тиждень</button>
-        <button onClick={() => nav(1)} disabled={mode === "range"} style={{ ...navBtn, opacity: mode === "range" ? 0.4 : 1 }}>→</button>
+        <button onClick={() => nav(1)} style={navBtn} title="наступний період тієї ж довжини">→</button>
         {mode === "range" ? (
           <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 13, color: MUTED }}>
             <DatePicker value={rangeFrom} onChange={(v) => v && setRangeFrom(v)} mode="day" minWidth={130} />–
@@ -250,35 +309,40 @@ export function ReportPlanSection({ auth, teams }: {
         })}
       </div>
 
-      {err && !data ? (
+      {!data && !busy ? (
         <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
           <div style={{ fontSize: 30, marginBottom: 6 }}>⚠️</div>
-          <div style={{ marginBottom: 12 }}>Не вдалося завантажити звіт (тимчасовий збій зʼєднання).</div>
+          <div style={{ marginBottom: 12 }}>
+            Не вдалося завантажити звіт за {periodLabel} (тимчасовий збій зʼєднання).
+          </div>
           <button onClick={() => setRetryNonce((n) => n + 1)}
             style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: BAR, color: "#fff", fontWeight: 700, cursor: "pointer" }}>
             Спробувати знову
           </button>
         </div>
-      ) : loading && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
+      ) : busy && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
         <>
           <Glance data={data} focus={focus} focusDay={focusDay} today={today} />
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
               бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
-          <ResponseTimeCard from={monthPeriod.from} to={monthPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
+          {/* Час реакції — за ОБРАНИМ періодом (був прибитий до місяця). */}
+          <ResponseTimeCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
           {auth.role === "manager" && selfRow && (
             <MgrStrip m={selfRow} mWeek={weekByMgr.get(selfRow.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
-              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={drillPeriod} role={auth.role} isSelf
+              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
+              periodLabel={periodLabel} isMonthMode={mode === "month"} role={auth.role} isSelf
               open={openMgr === selfRow.managerId} onToggle={() => setOpenMgr(openMgr === selfRow.managerId ? null : selfRow.managerId)} />
           )}
           <div style={{ fontSize: 12, color: MUTED, margin: "0 2px 10px" }}>
-            ↓ {auth.role === "manager" ? "Твоя команда" : "Відсортовано"} за <b>місячним</b> станом — хто відстає, той угорі
+            ↓ {auth.role === "manager" ? "Твоя команда" : "Відсортовано"} за станом <b>{periodLabel}</b> — хто відстає, той угорі
           </div>
           {data.managers.map((m) => (
             <MgrStrip key={m.managerId} m={m} mWeek={weekByMgr.get(m.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
-              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={drillPeriod} role={auth.role}
+              weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
+              periodLabel={periodLabel} isMonthMode={mode === "month"} role={auth.role}
               isSelf={m.managerId === viewerId}
               open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
           ))}
@@ -348,13 +412,16 @@ function Donut({ pct, title }: { pct: number; title?: string }) {
 }
 
 // Смуга менеджера: МІСЯЦЬ (головна траєкторія, статус+сортування) + ТИЖДЕНЬ (поточний), обидва завжди (#11).
-function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPeriod, drillPeriod, role, isSelf, open, onToggle }: {
+function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPeriod, drillPeriod, periodLabel, isMonthMode, role, isSelf, open, onToggle }: {
   m: ReportPlanManager; mWeek: ReportPlanManager | undefined;
   focusDay: string; today: string; elapsed: number; remWd: number; weekLabel: string;
   weekPeriod: { from: string; to: string };
-  drillPeriod: { from: string; to: string }; role: string; isSelf?: boolean; open: boolean; onToggle: () => void;
+  drillPeriod: { from: string; to: string };
+  /** Підпис ОБРАНОГО періоду — щоб жоден заголовок не казав «Місяць» над тижневими цифрами. */
+  periodLabel: string; isMonthMode: boolean;
+  role: string; isSelf?: boolean; open: boolean; onToggle: () => void;
 }) {
-  const s = m.status; // статус за МІСЯЦЕМ
+  const s = m.status; // статус за ОБРАНИМ періодом
   const pct = m.plan > 0 ? Math.round((m.fact / m.plan) * 100) : 0;
   const smax = Math.max(...m.spark, 1);
   const showWhy = s !== "g";
@@ -374,7 +441,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
             {isSelf && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: BAR + "22", color: BAR }}>ТИ</span>}
           </span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 750, fontSize: 12, padding: "3px 10px", borderRadius: 20, width: "max-content", background: SCOL[s] + "22", color: SCOL[s] }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: SCOL[s] }} />{SLBL[s]} · міс
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: SCOL[s] }} />{SLBL[s]} · {isMonthMode ? "міс" : periodLabel}
           </span>
         </div>
         {/* ТИЖДЕНЬ — ДИНАМІЧНА ціль (Variant A: manual ?? dynamic) */}
@@ -391,7 +458,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
             {m.week.isManual ? <>вручну задано у Задачнику · <b style={{ color: AMBER }}>вручну</b></> : <>динамічний план тижня · залишок ÷ тижнів, що лишились</>}
           </div>} />
         {/* МІСЯЦЬ — план-бар (сирий план) + #16 очікуємо + #17 прогноз */}
-        <TrajBlock title="Місяць" fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
+        <TrajBlock title={isMonthMode ? "Місяць" : periodLabel} fact={m.fact} plan={m.plan} pct={pct} status={s} elapsed={elapsed}
           {...(() => {
             /**
              * 🔴 ТРИ ВЗАЄМОВИКЛЮЧНІ СЕГМЕНТИ (рішення власника 07.08.2026).
@@ -424,7 +491,11 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
                 { from: p(s1 + s2), to: p(covered), color: AMBER, hatch: true,
                   title: `чекає БЕЗ планової дати — ${fmt(s3)} ₴ · у прогноз не входить` },
               ],
-              forecastPct: Math.min(100, (m.projected / m.plan) * 100),
+              // 🔴 РИСКА ПРОГНОЗУ — ЛИШЕ ДЛЯ ПОВНОГО ПОТОЧНОГО МІСЯЦЯ. Бек рахує прогноз
+              // саме так (`projected = факт + очікування` лише при `monthInProgress`);
+              // за тиждень/діапазон/завершений місяць він дорівнює ФАКТУ, і риска на
+              // місці факту читалась би як «прогноз = стільки й буде». Це не прогноз.
+              forecastPct: m.monthInProgress ? Math.min(100, (m.projected / m.plan) * 100) : null,
               legend: [
                 { color: GREEN, label: "отримано", value: s1 },
                 { color: AMBER, hatch: true, label: "чекає, дата є", value: s2 },
@@ -434,9 +505,17 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
             };
           })()}
           footer={<>
-            <div>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.) · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 && m.monthInProgress ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</div>
-            <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати. Цей / наступний календарний місяць.">
+            <div>треба <b style={{ color: "var(--text)" }}>{fmt(m.needPerDay)} ₴/д</b> ({remWd} дн.)
+              {m.monthInProgress
+                ? <> · прогноз <b style={{ color: "var(--text)" }} title="факт + зона визнання + добір нового бізнесу (як у КВП)">{k(m.projected)}</b>{m.plan > 0 ? ` (${Math.round((m.projected / m.plan) * 100)}%)` : ""}</>
+                : <span style={{ color: MUTED }}> · прогноз — лише для повного поточного місяця</span>}
+            </div>
+            {/* 🔴 ФОРВАРД-БЛОК ПОЗА ОБРАНИМ ПЕРІОДОМ, і це підписано. Він рахується за
+                ПЛАНОВОЮ датою оплати в календарних місяцях і не залежить від того, який
+                період обрано вгорі — інакше його читали б як частину факту періоду. */}
+            <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати, календарні місяці. НЕ залежить від обраного періоду.">
               💰 очікуємо <b style={{ color: GREEN }}>{k(m.expectThisMonth)}</b> цей · <b style={{ color: "var(--text)" }}>{k(m.expectNextMonth)}</b> наст. міс
+              <span style={{ color: MUTED }}> · поза обраним періодом</span>
             </div>
           </>} showTempo />
         {/* місячні стати + spark */}
