@@ -458,6 +458,19 @@ SUPERVISOR_MAP = {
 }
 
 
+def _tracking_supervisor_tag(responsible_id: int) -> str:
+    """Тег тімліда для трекінг-сповіщень.
+
+    Правило власника: теги тім-лідів у сповіщеннях про трекінг роботи шлемо
+    ТІЛЬКИ для команд РНК (Михальчевська/Безпам'ятний) — тобто в групу РНК.
+    В інші групи (РПК тощо) трекінг шлемо, але БЕЗ тегу тім-ліда. Тому для
+    не-РНК менеджерів повертаємо порожній рядок.
+    """
+    if MANAGER_TEAM.get(responsible_id) in RNK_TEAMS:
+        return SUPERVISOR_MAP.get(responsible_id, "")
+    return ""
+
+
 def _format_duration(minutes: float) -> str:
     """Форматує тривалість: 1 д. 3 год. 25 хв → замість 1405 хв."""
     total_min = int(minutes)
@@ -518,7 +531,7 @@ def _check_overdue_leads():
         responsible_id = info.get("responsible_id", 0)
         manager_name = info.get("manager", kommo.get_user_name(responsible_id))
         tg_tag = notifier.get_manager_tag(responsible_id)
-        supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+        supervisor_tag = _tracking_supervisor_tag(responsible_id)  # тег тімліда лише для РНК
         lead_name = info.get("lead_name", f"Лід #{lead_id}")
         kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
 
@@ -1219,7 +1232,7 @@ def _check_stale_qualification_leads():
             age_days = (now - updated_dt).total_seconds() / 86400
             manager_name = kommo.get_user_name(responsible_id)
             tg_tag = notifier.get_manager_tag(responsible_id)
-            supervisor_tag = SUPERVISOR_MAP.get(responsible_id, "")
+            supervisor_tag = _tracking_supervisor_tag(responsible_id)  # тег тімліда лише для РНК
             sup_part = f" {supervisor_tag}" if supervisor_tag else ""
             lead_name = lead.get("name", f"Лід #{lead_id}")
             kommo_url = f"https://utsercice.kommo.com/leads/detail/{lead_id}"
