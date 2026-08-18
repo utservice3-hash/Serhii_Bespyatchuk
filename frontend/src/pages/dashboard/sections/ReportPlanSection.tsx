@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
   type ReportPlan, type ReportPlanManager, type KvpManagerDetail, type Team,
-  type DayItemKind, type DayItems,
+  type DayItemKind, type DayItems, type DealSource,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
@@ -24,13 +24,27 @@ const SLBL: Record<string, string> = { g: "В нормі", a: "Відстає", 
  * Це той самий клас помилки, який ми тут і виправляємо: невідоме зʼїжджає в
  * конкретну відповідь. Тепер «невизначено» видно, і воно сіре.
  */
-function SrcChip({ src }: { src: "new" | "rep" | null }) {
+function SrcChip({ src, source }: { src: "new" | "rep" | null; source?: DealSource }) {
   const c = src === "new" ? BAR : src === "rep" ? GREEN : MUTED;
   const t = src === "new" ? "новий" : src === "rep" ? "постійний" : "невизначено";
+  // 🔴 ДЖЕРЕЛО — ДРУГА, ОКРЕМА ПОЗНАЧКА (18.08.2026). Доти канал угоди ВИРІШУВАВ
+  // новизну: усе з реклами й лідогену друкувалось «новий», навіть якщо клієнт возив
+  // із нами роками (заміряно: 296 угод за 12 міс). Тепер новизну рахує канон, а
+  // «звідки прийшла угода» стоїть поруч власним маркером — дві відповіді на два
+  // різні питання, а не одна замість обох.
+  const sLbl = source === "ad" ? "рекл." : source === "leadgen" ? "лідог." : null;
   return (
-    <span title={src === null ? "ядро не змогло визначити: немає ні каналу, ні ключа клієнта, ні мітки CRM" : undefined}
-          style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5,
-                   textAlign: "center", background: c + "22", color: c }}>{t}</span>
+    <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
+      <span title={src === null ? "ядро не змогло визначити: немає ні ключа клієнта, ні мітки CRM"
+                                : "новизна клієнта — за історією його угод у повному циклі"}
+            style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5,
+                     textAlign: "center", background: c + "22", color: c }}>{t}</span>
+      {sLbl && (
+        <span title="джерело угоди — окремий вимір, на новизну клієнта не впливає"
+              style={{ fontSize: 9, fontWeight: 600, padding: "2px 5px", borderRadius: 5,
+                       background: "var(--surface-2, #f1f5f9)", color: MUTED }}>{sLbl}</span>
+      )}
+    </span>
   );
 }
 const SICON: Record<string, string> = { g: "🟢", a: "🟠", r: "🔴" };
@@ -756,7 +770,7 @@ function WeekMoney({ mWeek, managerId, period }: {
                 {r.items.map((it, i2) => (
                   <div key={i2} style={{ display: "grid", gridTemplateColumns: "1fr 100px 180px 110px", gap: 10, padding: "7px 12px", borderBottom: "1px solid var(--border)", fontSize: 12, alignItems: "center" }}>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
-                    <SrcChip src={it.src} />
+                    <SrcChip src={it.src} source={it.source} />
                     <span style={{ fontSize: 11 }}><b>{it.state}</b><span style={{ color: MUTED }}> · {it.plannedPayAt ? `план. оплата ${ddmm(it.plannedPayAt)}` : "дата оплати не вказана"}</span></span>
                     <span style={{ textAlign: "right", fontWeight: 650 }}>{fmt(it.price)} ₴</span>
                   </div>
@@ -862,7 +876,7 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
                     </>
                   ) : (
                     <>
-                      <SrcChip src={it.src} />
+                      <SrcChip src={it.src} source={it.source} />
                       <span style={{ fontSize: 11 }}>
                         <span style={{ fontWeight: 600 }}>{it.state}</span>
                         <span style={{ color: MUTED }}>

@@ -306,7 +306,11 @@ export interface PFRecommendation {
   targetWorkingDays: number; baseMonthlyAvg: number; growthPct: number; sparseHistory: boolean;
 }
 export interface PFCountSum { count: number; sum: number }
-export interface PFClients { repeat: PFCountSum; leadgen: PFCountSum; new: PFCountSum; undef: PFCountSum; total: PFCountSum }
+/** Партиція новизни (`repeat+new+undef = total`) + накладка джерела (`source.*` ⊂ партиція). */
+export interface PFClients {
+  repeat: PFCountSum; new: PFCountSum; undef: PFCountSum; total: PFCountSum;
+  source: { leadgen: PFCountSum; ad: PFCountSum };
+}
 export type PFStatus = "draft" | "submitted" | "approved" | "returned";
 export interface PFState {
   status: PFStatus; proposedValue: number | null; comment: string | null; returnComment: string | null;
@@ -523,7 +527,9 @@ export interface KvpEngineTeam { plan: number; revenue: number; expected: number
 export interface KvpDay { bucket: string; revenue: number; deals: number }
 export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
 export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
-export interface CreatedSplit { created: number; new: number; repeat: number; undef: number }
+/** `new+repeat+undef = created` — партиція НОВИЗНИ. `ad`/`leadgen` — накладка
+ *  ДЖЕРЕЛА: підмножини партиції, у `created` НЕ додаються. */
+export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
@@ -676,6 +682,8 @@ export interface ReportPlanManager {
     weekFrom: string | null; workingDaysWeek: number };
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
+  /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
+  srcAd: number; srcLeadgen: number;
   status: "g" | "a" | "r"; needPerDay: number; remainingWorkdays: number;
   spark: number[];
   kpi: { ads: ReportPlanKpi; leadgen: ReportPlanKpi; dispatch: ReportPlanKpi; avgCheck: ReportPlanKpi; conversion: ReportPlanKpi };
@@ -713,7 +721,10 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
   const { data } = await api.get<ReportPlan>("/dashboard/report-plan", { params });
   return data;
 }
-export interface ReportPlanDeal { name: string; src: "new" | "rep" | null; price: number; status: string }
+/** `src` — НОВИЗНА клієнта, `source` — ДЖЕРЕЛО угоди. Різні виміри: угода буває
+ *  водночас `src:"rep"` і `source:"ad"` (постійний клієнт прийшов через рекламу). */
+export type DealSource = "ad" | "leadgen" | "other" | null;
+export interface ReportPlanDeal { name: string; src: "new" | "rep" | null; source: DealSource; price: number; status: string }
 
 /**
  * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ — склад КОНКРЕТНОГО числа в рядку дня.
@@ -725,6 +736,8 @@ export type DayItemKind = "created" | "dispatched" | "dispatched_paid" | "dispat
 export interface DayItem {
   name: string;
   src: "new" | "rep" | null;
+  /** ДЖЕРЕЛО угоди — окремий вимір від новизни (`src`). */
+  source: DealSource;
   /** Сума показується ЗАВЖДИ; стан — окремим полем, а не замість числа. */
   price: number;
   state: string;

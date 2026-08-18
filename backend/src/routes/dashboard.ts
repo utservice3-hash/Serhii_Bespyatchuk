@@ -6475,6 +6475,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       byPaceEarly: wdElapsed > 0 && plan > 0 ? (fact / wdElapsed) * wdTotal > plan * 1.5 : false,
       monthInProgress,
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
+      // ДЖЕРЕЛО — накладка поверх партиції (⊂ created), у суму не додається.
+      srcAd: splitM.get(m.id)?.adCount ?? 0, srcLeadgen: splitM.get(m.id)?.leadgenCount ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
       // #P1 динамічна тижнева ціль (ЄДИНИЙ вираз effectiveWeekTargets — байт-в-байт з KVP/manager-report).
       week: { target: ew?.target ?? 0, dynamic: ew?.dynamic ?? 0, manual: ew?.manual ?? null, isManual: ew?.isManual ?? false,
@@ -6638,13 +6640,15 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
   if (!managerId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "managerId + date (YYYY-MM-DD) обовʼязкові" });
   if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
-  // 🔴 Мітка «новий/постійний» — з ЯДРА (`dealKlassSql`), а не зі скорочення по
+  // 🔴 Мітка «новий/постійний» І ДЖЕРЕЛО — обидва з ЯДРА (`dealKlassSql` +
+  // `dealSourceSql`), а не зі скорочення по
   // `lead_channel`. Тут стояла та сама двогілкова копія правила, що й у dayItems:
   // «реклама/лідоген → новий, усе інше → постійний». Вона робила постійними угоди
   // `other` БЕЗ історії клієнта — тобто сперечалась із лічильником рядка (12.6%
   // угод серпня). Правило тепер одне; форми звіряє гейт `#66`.
-  const r = await pool.query<{ name: string; klass: string | null; price: string; status_id: number }>(
-    `SELECT d.name, d.price, d.status_id, (${metrics.dealKlassSql("d")}) AS klass
+  const r = await pool.query<{ name: string; klass: string | null; source: string | null; price: string; status_id: number }>(
+    `SELECT d.name, d.price, d.status_id, (${metrics.dealKlassSql("d")}) AS klass,
+            (${metrics.dealSourceSql("d")}) AS source
        FROM deals d WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
          AND (d.created_at_kommo ${KYIV})::date = $3::date
       ORDER BY d.price DESC NULLS LAST, d.created_at_kommo`,
@@ -6657,6 +6661,7 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
   res.json({
     deals: r.rows.map((x) => ({
       name: x.name, src: x.klass === "new" ? "new" : x.klass === "repeat" ? "rep" : null,
+      source: x.source === "ad" || x.source === "leadgen" || x.source === "other" ? x.source : null,
       price: Math.round(Number(x.price)), status: label(Number(x.status_id)),
     })),
   });
@@ -6854,7 +6859,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
       expectedThisMonth: expMgrThis.get(mid) ?? 0, expectedNextMonth: expMgrNext.get(mid) ?? 0,
       // Розкол створеного (3 сигнали): created N (нові · постійні · невизн).
-      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0 }; })(),
+      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, ad: s?.adCount ?? 0, leadgen: s?.leadgenCount ?? 0 }; })(),
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
       weeks: weeksForMgr(mid, mp.plan),    // Крок Д фінал #2: тижневий розріз Т1–Т5
     });
@@ -7035,14 +7040,16 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       };
     })(),
     segments: { totals: newRepeatTot, byManager: newRepeatMgr, byTeam: newRepeatTeam },
-    // Розкол СТВОРЕНОГО новий/постійний (3 сигнали B→C→A, поріг ≥1 попередня виграна).
-    // totals = Σ по відділу; byManager несе teamId (FE зводить у команду/відділ). Погранична
+    // Розкол СТВОРЕНОГО: ПАРТИЦІЯ новизни (new+repeat+undef = created, канон
+    // `priorClientSql`) + НАКЛАДКА джерела (`ad`/`leadgen` ⊂ партиція, у created НЕ
+    // додаються). totals = Σ по відділу; byManager несе teamId (FE зводить у команду/відділ). Погранична
     // деталізація (нові/постійні по тижнях/днях) — у /kvp-report/manager-detail (createdSplitByBucket).
     createdSplit: {
       totals: createdSplitMgr.reduce((a, x) => ({
         created: a.created + x.created, new: a.new + x.newCount, repeat: a.repeat + x.repeatCount, undef: a.undef + x.undefCount,
-      }), { created: 0, new: 0, repeat: 0, undef: 0 }),
-      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount })),
+        ad: a.ad + x.adCount, leadgen: a.leadgen + x.leadgenCount,
+      }), { created: 0, new: 0, repeat: 0, undef: 0, ad: 0, leadgen: 0 }),
+      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, ad: x.adCount, leadgen: x.leadgenCount })),
     },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),
