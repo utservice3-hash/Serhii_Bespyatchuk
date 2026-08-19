@@ -8,6 +8,7 @@ import {
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 import { ResponseTimeCard } from "./ResponseTimeCard";
+import { ReportTableSection } from "./ReportTableSection";
 
 // Статуси-кольори (зарезервовані, з іконкою+підписом — не колір-наодинці). Тема-безпечні.
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BAR = "#2f6fdb", MUTED = "var(--text-muted)";
@@ -106,6 +107,14 @@ export function ReportPlanSection({ auth, teams }: {
 }) {
   const today = todayKyiv();
   const [mode, setMode] = useState<Mode>("month");
+  /**
+   * 🖥 ВИГЛЯД: картки (як було) або таблиця. Перемикач СУТО презентаційний —
+   * обидва вигляди читають той самий `periodData`, тож перемикання не робить
+   * жодного запиту і не може показати інші числа.
+   */
+  const [view, setView] = useState<"cards" | "table">(
+    () => (localStorage.getItem("rptView") === "table" ? "table" : "cards"));
+  const pickView = (v: "cards" | "table") => { setView(v); localStorage.setItem("rptView", v); };
   const [anchor, setAnchor] = useState(today);        // якір (місяць + навігація)
   const [focusDay, setFocusDay] = useState(today);    // активний день (тиждень-контекст + кластер)
   const [rangeFrom, setRangeFrom] = useState(monthStart(today));
@@ -253,8 +262,21 @@ export function ReportPlanSection({ auth, teams }: {
               за ним інша. */}
           <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>Грошовий план — вкладка «Плани» (2.7 млн) · KPI-активність — задачник · <b style={{ color: "var(--text)" }}>{periodLabel}</b></div>
         </div>
-        <div style={{ fontSize: 12, color: MUTED, background: "var(--card-bg)", border: "1px solid var(--border)", padding: "4px 11px", borderRadius: 20 }}>
-          Ти бачиш: <b style={{ color: "var(--text)" }}>{roleChip}</b>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* Картки / Таблиця — той самий вигляд сегмента, що й перемикач періоду нижче. */}
+          <div style={{ display: "flex", gap: 4, background: "var(--surface-2)", border: "1px solid var(--border)", padding: 3, borderRadius: 9 }}>
+            {(["cards", "table"] as const).map((v) => (
+              <button key={v} onClick={() => pickView(v)} aria-pressed={view === v} style={{
+                padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600,
+                background: view === v ? "var(--card-bg)" : "transparent",
+                color: view === v ? "var(--brand)" : MUTED,
+                boxShadow: view === v ? "var(--shadow)" : "none",
+              }}>{v === "cards" ? "Картки" : "Таблиця"}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, background: "var(--card-bg)", border: "1px solid var(--border)", padding: "4px 11px", borderRadius: 20 }}>
+            Ти бачиш: <b style={{ color: "var(--text)" }}>{roleChip}</b>
+          </div>
         </div>
       </div>
 
@@ -282,7 +304,9 @@ export function ReportPlanSection({ auth, teams }: {
         ) : (
           <DatePicker value={anchor} onChange={(v) => v && (setAnchor(v), setFocusDay(v))} mode="day" minWidth={140} />
         )}
-        {auth.role === "admin" && (
+        {/* У табличному вигляді цей select замінює селектор «Обсяг» — два контроли
+            з тим самим сенсом на одному екрані читались би як різні фільтри. */}
+        {auth.role === "admin" && view === "cards" && (
           <select value={teamId} onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : "")} style={{ ...navBtn, cursor: "pointer" }}>
             <option value="">Усі команди</option>
             {teams.filter((t) => !HIDE_TEAMS.has(t.id)).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -328,6 +352,13 @@ export function ReportPlanSection({ auth, teams }: {
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
           {/* Час реакції — за ОБРАНИМ періодом (був прибитий до місяця). */}
           <ResponseTimeCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
+          {view === "table" ? (
+            <ReportTableSection
+              data={data} teams={teams} auth={auth}
+              teamId={teamId} onTeamId={setTeamId}
+              periodLabel={periodLabel} isMonthMode={mode === "month"} hideTeams={HIDE_TEAMS}
+            />
+          ) : (<>
           {auth.role === "manager" && selfRow && (
             <MgrStrip m={selfRow} mWeek={weekByMgr.get(selfRow.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
@@ -347,6 +378,7 @@ export function ReportPlanSection({ auth, teams }: {
               open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
           ))}
           {data.managers.length === 0 && <div style={{ color: MUTED, padding: 20 }}>Немає менеджерів у цьому розрізі.</div>}
+          </>)}
           <Legend />
         </>
       )}
