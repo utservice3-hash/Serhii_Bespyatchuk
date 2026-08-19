@@ -760,6 +760,30 @@ export async function fetchDayItems(params: { managerId: number; date: string; t
   const { data } = await api.get<DayItems>("/dashboard/report-plan/day-items", { params });
   return data;
 }
+/**
+ * 🗓 ТИЖНІ МІСЯЦЯ ОДНОГО МЕНЕДЖЕРА — розкриття рядка табличного вигляду.
+ * `plan` приходить ІЗ ЗАМОРОЖЕНОГО ЗНІМКА, а не перераховується: `source`
+ * каже, чи його зафіксували в понеділок (`live`), чи відновили заднім числом
+ * (`backfill`). UI зобовʼязаний цю різницю показати.
+ */
+export interface ManagerWeek {
+  idx: number; from: string; to: string; workingDays: number;
+  plan: number; fact: number; pct: number | null; overPlan: number;
+  source: "live" | "backfill" | null; reconstructed: boolean;
+}
+export interface ManagerWeeks { managerId: number; month: string; monthPlan: number; weeks: ManagerWeek[] }
+export async function fetchManagerWeeks(params: { managerId: number; month: string }): Promise<ManagerWeeks> {
+  const { data } = await api.get<ManagerWeeks>("/dashboard/report-plan/manager-weeks", { params });
+  return data;
+}
+
+/** ⏱ Медіана реакції на ВХІДНИЙ лід по менеджерах. Менеджера без лідів у видачі немає. */
+export interface ResponseTimeMgr { managerId: number; count: number; medianMin: number | null; avgMin: number | null }
+export async function fetchResponseTimeByManager(params: { from: string; to: string; teamId?: number }): Promise<ResponseTimeMgr[]> {
+  const { data } = await api.get<{ managers: ResponseTimeMgr[] }>("/dashboard/response-time/by-manager", { params });
+  return data.managers ?? [];
+}
+
 export async function fetchReportPlanDeals(params: { managerId: number; date: string }): Promise<ReportPlanDeal[]> {
   const { data } = await api.get<{ deals: ReportPlanDeal[] }>("/dashboard/report-plan/deals", { params });
   return data.deals;

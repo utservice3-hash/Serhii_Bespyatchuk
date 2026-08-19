@@ -45,6 +45,8 @@ import * as plans from "../core/plans.js";
 import * as reportCuts from "../core/reportCuts.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
+import { weekPlansForMonth } from "../core/weekPlan.js";
+import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 
 export const dashboardRouter = Router();
@@ -2590,6 +2592,34 @@ dashboardRouter.get("/response-time", async (req, res) => {
     taken15minPct: rt.taken15minPct,
     neglectedOver24h: rt.neglectedOver24h,
   });
+});
+
+/**
+ * ⏱ ЧАС РЕАКЦІЇ ПО МЕНЕДЖЕРАХ — колонка табличного вигляду Звіту.
+ *
+ * 🔴 ЧОМУ ОКРЕМИЙ РОЗРІЗ, А НЕ N ВИКЛИКІВ `/response-time`. Агрегат уміє звузитись
+ * до одного менеджера, але тридцять один запит на рендер таблиці — це тридцять один
+ * шанс упертися в `REQ_TIMEOUT_MS`. Предикат спільний із агрегатом (`responseScope`
+ * у ядрі), тож розріз не може розійтися з карткою над таблицею.
+ *
+ * 🔴 ШЛЯХ ЧЕРЕЗ СЛЕШ (`response-time/by-manager`), А НЕ ЧЕРЕЗ ДЕФІС. `pre()` у
+ * `routeTab` матчить лише по слешу: `response-time-by-manager` був би ІНШИМ роутом
+ * і лишився б без вкладкової межі — рівно та пастка, що описана в `#17g`.
+ *
+ * Менеджер, у якого в періоді не було вхідних лідів, у видачі ВІДСУТНІЙ. Це
+ * «лідів не було», а не «нуль хвилин»; домальовувати йому нуль означало б
+ * приписати результат там, де його нема з чого взяти.
+ */
+dashboardRouter.get("/response-time/by-manager", async (req, res) => {
+  const auth = req.auth!;
+  const from = (req.query.from as string) || new Date().toISOString().slice(0, 8) + "01";
+  const to = (req.query.to as string) || new Date().toISOString().slice(0, 10);
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") teamId = auth.teamId;
+  const rows = await metrics.responseTimeByManager({ from, to, managerId, teamId });
+  res.json({ from, to, managers: rows });
 });
 
 /**
@@ -6616,6 +6646,72 @@ dashboardRouter.get("/report-plan/day-items", async (req, res) => {
   }
   if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
   res.json(await dayItems(kind, managerId, date, to));
+});
+
+/**
+ * 🗓 ТИЖНІ МІСЯЦЯ ОДНОГО МЕНЕДЖЕРА — розкриття рядка в табличному вигляді Звіту.
+ *
+ * 🔴 ПЛАН БЕРЕТЬСЯ ЗІ ЗНІМКІВ, А НЕ ПЕРЕРАХОВУЄТЬСЯ. `weekPlansForMonth` читає
+ * `weekly_plan_snapshots`, тобто ту саму цифру, яку людина бачила в понеділок.
+ * Проста декомпозиція «місячний план × робочі дні тижня ÷ робочі дні місяця»
+ * виглядала б охайніше, але вона: (1) завела б ЧЕТВЕРТЕ означення тижневого плану
+ * поруч із `effectiveWeekTargets`, і (2) переписувала б історію — за минулі тижні
+ * показувала б не те, що було заморожене. `source='backfill'` віддається назовні
+ * саме тому, що екран зобовʼязаний зізнатись: цей знімок ВІДНОВЛЕНО заднім числом.
+ *
+ * 🔴 ФАКТ РАХУЄТЬСЯ ПО ТИХ САМИХ МЕЖАХ, ЩО Й ПЛАН. Тижні тут — `fixedWeekBlocks`:
+ * Пн–Нд, ОБРІЗАНІ межами місяця (перший блок серпня 2026 — це 1–2 число). Тому
+ * `receivedByManagerBucket(..., "week")` тут не годиться: `date_trunc('week')`
+ * віднесе 1 серпня до понеділка ПОПЕРЕДНЬОГО місяця, і перший рядок розкриття
+ * лишився б порожнім при живих грошах. Беремо ДЕННІ бакети ядра й складаємо їх
+ * у блоки — одним запитом і без власного SQL по виручці.
+ */
+dashboardRouter.get("/report-plan/manager-weeks", async (req, res) => {
+  const auth = req.auth!;
+  const managerId = Number(req.query.managerId);
+  const month = String(req.query.month ?? "");
+  if (!managerId || !/^\d{4}-\d{2}$/.test(month)) {
+    return res.status(400).json({ error: "managerId + month (YYYY-MM) обовʼязкові" });
+  }
+  if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
+
+  const monthStart = `${month}-01`;
+  const monthEnd = monthEndOf(monthStart);
+  const mgrRow = (await pool.query<{ team_id: number | null }>(
+    `SELECT team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
+
+  // Місячний план — ЄДИНИМ джерелом (`plans-grid`), як і всюди: тижневий похідний від нього.
+  const mp = await plans.managerPlan(mgrRow?.team_id != null ? { month: monthStart, teamId: mgrRow.team_id } : { month: monthStart });
+  const planByMgr = new Map(mp.rows.map((r) => [r.managerId, r.plan]));
+  const [snapRows, dayRows] = await Promise.all([
+    weekPlansForMonth({ managerId }, monthStart, planByMgr),
+    money.receivedByManagerBucket({ from: monthStart, to: monthEnd, managerId }, "day"),
+  ]);
+  const snapByWeek = new Map(snapRows.map((r) => [r.weekStart, r]));
+  const blocks = fixedWeekBlocks(monthStart);
+  // Складання денних сум у блоки — чиста функція (`core/weekFacts`), щоб її можна
+  // було перевірити без БД: саме на межах блоків і губляться гроші.
+  const { byBlock } = sumDaysIntoBlocks(
+    dayRows.filter((r) => r.managerId === managerId).map((r) => ({ day: r.bucket, value: r.revenue })),
+    blocks,
+  );
+
+  const weeks = blocks.map((w, i) => {
+    const snap = snapByWeek.get(w.from);
+    const fact = byBlock[i];
+    const plan = Math.round(snap?.plan ?? 0);
+    return {
+      idx: w.idx, from: w.from, to: w.to,
+      workingDays: snap?.wdWeek ?? workingDaysBetween(w.from, w.to),
+      plan, fact: Math.round(fact),
+      pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
+      overPlan: Math.round(snap?.overPlan ?? 0),
+      // `null` — тиждень ще не почався, тож знімка й не мало бути.
+      source: snap?.source ?? null,
+      reconstructed: snap?.reconstructed ?? false,
+    };
+  });
+  res.json({ managerId, month, monthPlan: Math.round(planByMgr.get(managerId) ?? 0), weeks });
 });
 
 dashboardRouter.get("/report-plan/deals", async (req, res) => {

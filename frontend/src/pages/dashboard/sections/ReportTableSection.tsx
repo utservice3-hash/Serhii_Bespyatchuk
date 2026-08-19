@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import type { ReportPlan, ReportPlanManager, Team } from "../../../api";
+import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanManager, type Team } from "../../../api";
 import { InfoHint } from "../widgets";
 import {
   REPORT_COLS, OPTIONAL_COLS, DEFAULT_OPT_ON, sortRows, footValue,
@@ -30,8 +30,8 @@ const TOKEN: Record<string, string> = { g: "--ok", a: "--warn", r: "--danger" };
 const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відстає", r: "Зрив" };
 
 export function ReportTableSection({
-  data, teams, auth, teamId, onTeamId, periodLabel, isMonthMode, hideTeams,
-  responseByMgr, renderWeeks,
+  data, teams, auth, teamId, onTeamId, periodLabel, hideTeams,
+  responseByMgr, month,
 }: {
   data: ReportPlan;
   teams: Team[];
@@ -39,12 +39,11 @@ export function ReportTableSection({
   teamId: number | "";
   onTeamId: (v: number | "") => void;
   periodLabel: string;
-  isMonthMode: boolean;
   hideTeams: Set<number>;
   /** Медіана реакції по менеджеру (хв). `undefined` — ще вантажиться, `null` — лідів не було. */
   responseByMgr?: Map<number, number | null>;
-  /** Розкриття тижнів — вставляється контейнером (коміт 2). */
-  renderWeeks?: (m: ReportPlanManager) => React.ReactNode;
+  /** Місяць для розкриття тижнів (YYYY-MM) — береться від початку обраного періоду. */
+  month: string;
 }) {
   const [sortKey, setSortKey] = useState<ColKey>("fact");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -158,17 +157,17 @@ export function ReportTableSection({
             <tbody>
               {rows.map((m, i) => (
                 <Fragment key={m.managerId}>
-                  <tr onClick={() => renderWeeks && setOpen(open === m.managerId ? null : m.managerId)}
-                      style={{ cursor: renderWeeks ? "pointer" : "default" }}>
+                  <tr onClick={() => setOpen(open === m.managerId ? null : m.managerId)}
+                      style={{ cursor: "pointer" }}>
                     {cols.map((c) => (
                       <Cell key={c.key} col={c} m={m} idx={i} isOpen={open === m.managerId}
-                            isMonthMode={isMonthMode} responseByMgr={responseByMgr} />
+                            responseByMgr={responseByMgr} />
                     ))}
                   </tr>
-                  {renderWeeks && open === m.managerId && (
+                  {open === m.managerId && (
                     <tr>
                       <td colSpan={cols.length} style={{ padding: 0, background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
-                        {renderWeeks(m)}
+                        <WeeksDrill managerId={m.managerId} month={month} />
                       </td>
                     </tr>
                   )}
@@ -192,7 +191,9 @@ export function ReportTableSection({
       </div>
 
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 11, lineHeight: 1.55 }}>
-        Клік на заголовок — сортування; рядки без даних завжди внизу. Перша колонка залипає при
+        <b style={{ color: "var(--text)" }}>Клік по менеджеру</b> розкриває його тижні: план кожного
+        тижня — той, що був <b style={{ color: "var(--text)" }}>зафіксований у понеділок</b>, а не
+        перерахований зараз. Клік на заголовок — сортування; рядки без даних завжди внизу. Перша колонка залипає при
         горизонтальному скролі. <b style={{ color: "var(--text)" }}>Сер. чек, Викон. % і Конв.</b> у
         підсумку рахуються від сум чисельника й знаменника, а не складанням стовпчика — це частки,
         і додавати їх не можна.
@@ -222,8 +223,8 @@ const badge: React.CSSProperties = {
   display: "inline-block", padding: "2px 8px", borderRadius: "var(--r-pill)", fontSize: 12, fontWeight: 600,
 };
 
-function Cell({ col, m, idx, isOpen, isMonthMode, responseByMgr }: {
-  col: ColDef; m: ReportPlanManager; idx: number; isOpen: boolean; isMonthMode: boolean;
+function Cell({ col, m, idx, isOpen, responseByMgr }: {
+  col: ColDef; m: ReportPlanManager; idx: number; isOpen: boolean;
   responseByMgr?: Map<number, number | null>;
 }) {
   const st: React.CSSProperties = { ...tdBase, textAlign: col.left ? "left" : "right" };
@@ -335,3 +336,75 @@ function FootCell({ col, rows, scopeLabel, count }: { col: ColDef; rows: ReportP
   if (col.key === "dispRevenue") return <td style={st}>{K(f.value)} ₴</td>;
   return <td style={st}>{money(f.value)}{MONEY_COLS.includes(col.key) ? " ₴" : ""}</td>;
 }
+
+/**
+ * 🗓 РОЗКРИТТЯ РЯДКА — ТИЖНІ МІСЯЦЯ.
+ *
+ * 🔴 ПІДПИС ПРО ПРИРОДУ ЧИСЛА ОБОВʼЯЗКОВИЙ. `plan` — заморожений знімок; коли він
+ * `backfill`, це означає «відновлено ретроспективно з ПОТОЧНОГО стану подій», тож
+ * для угод, що відтоді переїхали, число відрізняється від баченого тоді. Приховати
+ * цю різницю = тихо збрехати про історію, і саме тому вона їде окремим рядком, а не
+ * ховається в підказку.
+ *
+ * 🔴 ЩО ТУТ СВІДОМО НЕ НАПИСАНО: «сума тижневих планів = місячний план». Це
+ * неправда: динамічна ціль рахується від ЗАЛИШКУ на початок тижня, тож Σ тижнів
+ * не зобовʼязана сходитись із місяцем. Макет таке твердження містив — прибрано.
+ */
+function WeeksDrill({ managerId, month }: { managerId: number; month: string }) {
+  const [d, setD] = useState<ManagerWeeks | null>(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setD(null); setErr(false);
+    fetchManagerWeeks({ managerId, month })
+      .then((r) => alive && setD(r))
+      .catch(() => alive && setErr(true));
+    return () => { alive = false; };
+  }, [managerId, month]);
+
+  if (err) return <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--danger)" }}>Не вдалося завантажити тижні.</div>;
+  if (!d) return <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--text-muted)" }}>Завантаження…</div>;
+
+  const anyReconstructed = d.weeks.some((w) => w.reconstructed);
+  return (
+    <div style={{ padding: "9px 14px 12px 30px" }}>
+      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".02em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6 }}>
+        По тижнях · план зафіксовано в понеділок
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
+        <tbody>
+          <tr style={{ color: "var(--text-muted)", fontSize: 11 }}>
+            <td style={wTd}>Тиждень</td>
+            <td style={{ ...wTd, textAlign: "right" }}>Факт</td>
+            <td style={{ ...wTd, textAlign: "right" }}>План</td>
+            <td style={{ ...wTd, textAlign: "right" }}>Викон.</td>
+          </tr>
+          {d.weeks.map((w) => (
+            <tr key={w.idx}>
+              <td style={{ ...wTd, color: "var(--text-muted)" }}>
+                {w.from.slice(8)}–{w.to.slice(8)} {w.from.slice(5, 7)}
+                <span style={{ opacity: 0.6 }}> · {w.workingDays} р.д.</span>
+                {w.reconstructed && <span title="знімок відновлено ретроспективно, а не збережено в момент"
+                  style={{ marginLeft: 6, fontSize: 10, color: "var(--warn)" }}>знімок відновлено</span>}
+              </td>
+              <td style={{ ...wTd, textAlign: "right", fontWeight: 600 }}>{w.fact ? `${money(w.fact)} ₴` : "—"}</td>
+              <td style={{ ...wTd, textAlign: "right", color: "var(--text-muted)" }}>
+                {w.plan > 0 ? `${money(w.plan)} ₴` : w.overPlan > 0 ? `0 ₴ · понад план +${money(w.overPlan)}` : "—"}
+              </td>
+              <td style={{ ...wTd, textAlign: "right" }}>
+                {w.pct == null ? <span style={{ color: "var(--text-muted)", opacity: 0.6 }}>—</span> : `${w.pct}%`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {anyReconstructed && (
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+          «Знімок відновлено» — план тижня реконструйовано з поточного стану подій, тож для угод,
+          що відтоді переїхали, він відрізняється від баченого тоді.
+        </div>
+      )}
+    </div>
+  );
+}
+const wTd: React.CSSProperties = { padding: "6px 10px", borderBottom: "1px dashed var(--border)", fontSize: 12 };

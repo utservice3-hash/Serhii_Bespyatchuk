@@ -2695,7 +2695,15 @@ export interface ResponseTimeResult {
  * надходження: work(9–18)/evening(18–21)/night(21–9)/weekend. Порт `/response-time` як є
  * (означення не чіпаємо). Період — по `created_at` (дефолт: поточний місяць у роуті).
  */
-export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> {
+/**
+ * 🔴 ПРЕДИКАТ ЧАСУ РЕАКЦІЇ — ОДИН НА ОБИДВІ ФОРМИ (агрегат і розріз по менеджерах).
+ *
+ * Поки він був написаний усередині `responseTime`, розріз по менеджерах довелося б
+ * скопіювати — і копії розійшлися б мовчки, як уже розійшлись дві копії правила
+ * «новий/постійний» (12.6% угод серпня). Тут вони фізично не можуть розійтись:
+ * `responseTimeByManager` викликає ЦЮ функцію, а не свою.
+ */
+function responseScope(s: MetricScope): { conds: string[]; params: unknown[] } {
   const KY = "AT TIME ZONE 'Europe/Kyiv'";
   const params: unknown[] = [QUALIFICATION_PIPELINES];
   const conds = ["d.pipeline_id = ANY($1)", "d.first_activity_at IS NOT NULL"];
@@ -2703,7 +2711,53 @@ export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> 
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KY})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const RESP_MIN = `GREATEST(0, EXTRACT(EPOCH FROM (q.first_activity_at - q.created_at_kommo)) / 60.0)`;
+  return { conds, params };
+}
+
+/** Хвилини від створення ліда до першого людського контакту — теж один вираз на обидві форми. */
+const RESPONSE_MINUTES_SQL =
+  `GREATEST(0, EXTRACT(EPOCH FROM (q.first_activity_at - q.created_at_kommo)) / 60.0)`;
+
+export interface ResponseMgrRow { managerId: number; count: number; medianMin: number | null; avgMin: number | null }
+
+/**
+ * Медіана реакції ПО МЕНЕДЖЕРАХ — для табличного вигляду Звіту.
+ *
+ * ⚠️ МЕЖА, ЯКУ ЗОБОВʼЯЗАНИЙ ПОКАЗАТИ ЕКРАН: це реакція на ВХІДНИЙ ЛІД воронки
+ * «Кваліфікація», а не на угоду повного циклу. Менеджер без лідів у періоді
+ * взагалі відсутній у видачі — і це «лідів не було», а не «повільно». Перетворити
+ * порожнечу на нуль тут означало б звинуватити людину в тому, чого не сталось.
+ * 📐 Заміряно 19.08.2026 (01–19.08): 30 із 33 менеджерів ростера мають ліди,
+ * 923 з 1 077 лідів припадають на ростер.
+ */
+export async function responseTimeByManager(s: MetricScope): Promise<ResponseMgrRow[]> {
+  const { conds, params } = responseScope(s);
+  const r = await pool.query<{ manager_id: number; n: string; median_min: string | null; avg_min: string | null }>(
+    `WITH quals AS (
+       SELECT d.manager_id, d.created_at_kommo, d.first_activity_at
+         FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+        WHERE ${conds.join(" AND ")}
+     ), resp AS (
+       SELECT q.manager_id, ${RESPONSE_MINUTES_SQL} AS minutes FROM quals q
+     )
+     SELECT manager_id, COUNT(*) AS n,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min,
+            AVG(LEAST(minutes, 1440)) AS avg_min
+       FROM resp WHERE manager_id IS NOT NULL GROUP BY manager_id`,
+    params
+  );
+  return r.rows.map((x) => ({
+    managerId: x.manager_id,
+    count: Number(x.n),
+    medianMin: x.median_min != null ? Math.round(Number(x.median_min) * 10) / 10 : null,
+    avgMin: x.avg_min != null ? Math.round(Number(x.avg_min)) : null,
+  }));
+}
+
+export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> {
+  const KY = "AT TIME ZONE 'Europe/Kyiv'";
+  const { conds, params } = responseScope(s);
+  const RESP_MIN = RESPONSE_MINUTES_SQL;
   const bucketCase = `CASE WHEN dow IN (0,6) THEN 'weekend' WHEN hr >= 9 AND hr < 18 THEN 'work' WHEN hr >= 18 AND hr < 21 THEN 'evening' ELSE 'night' END`;
   const cte = `
      WITH quals AS (

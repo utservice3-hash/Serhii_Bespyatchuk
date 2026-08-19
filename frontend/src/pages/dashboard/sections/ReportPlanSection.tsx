@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
+  fetchResponseTimeByManager,
   type ReportPlan, type ReportPlanManager, type KvpManagerDetail, type Team,
   type DayItemKind, type DayItems, type DealSource,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
@@ -223,6 +224,25 @@ export function ReportPlanSection({ auth, teams }: {
    * діапазону. Підміни на `monthData` тут бути НЕ МОЖЕ: показати місяць під підписом
    * тижня гірше, ніж показати «даних немає», — тому фолбеку на місяць немає навмисно.
    */
+  /**
+   * ⏱ ЧАС РЕАКЦІЇ ПО МЕНЕДЖЕРАХ — лише для табличного вигляду й лише коли він
+   * відкритий: у картках цієї колонки немає, тож тягнути її завжди означало б
+   * платити запитом за те, чого ніхто не бачить.
+   *
+   * `undefined` у мапі = «менеджера немає у видачі», тобто вхідних лідів у періоді
+   * не було. Це НЕ нуль хвилин — клітинка покаже «—».
+   */
+  const [respByMgr, setRespByMgr] = useState<Map<number, number | null> | undefined>(undefined);
+  useEffect(() => {
+    if (view !== "table") return;
+    let alive = true;
+    setRespByMgr(undefined);
+    fetchResponseTimeByManager({ from: selectedPeriod.from, to: selectedPeriod.to, ...(teamId ? { teamId: Number(teamId) } : {}) })
+      .then((rows) => { if (alive) setRespByMgr(new Map(rows.map((r) => [r.managerId, r.medianMin]))); })
+      .catch(() => { if (alive) setRespByMgr(new Map()); });
+    return () => { alive = false; };
+  }, [view, selectedPeriod.from, selectedPeriod.to, teamId, retryNonce]);
+
   const periodData = mode === "range" ? rangeData
     : mode === "week" ? weekData
     : mode === "day" ? focus
@@ -356,7 +376,8 @@ export function ReportPlanSection({ auth, teams }: {
             <ReportTableSection
               data={data} teams={teams} auth={auth}
               teamId={teamId} onTeamId={setTeamId}
-              periodLabel={periodLabel} isMonthMode={mode === "month"} hideTeams={HIDE_TEAMS}
+              periodLabel={periodLabel} hideTeams={HIDE_TEAMS}
+              responseByMgr={respByMgr} month={selectedPeriod.from.slice(0, 7)}
             />
           ) : (<>
           {auth.role === "manager" && selfRow && (
