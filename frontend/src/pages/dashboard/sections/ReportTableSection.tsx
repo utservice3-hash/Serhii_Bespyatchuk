@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanManager, type Team } from "../../../api";
 import {
   REPORT_COLS, OPTIONAL_COLS, DEFAULT_OPT_ON, sortRows, footValue,
@@ -85,6 +86,22 @@ export function ReportTableSection({
   const scopeLabel = mgrFilter !== "" ? "Менеджер"
     : teamId !== "" ? "Команда" : "Весь відділ";
 
+  /**
+   * 🔢 ЛІЧИЛЬНИКИ В ОПЦІЯХ — З УЖЕ ЗАВАНТАЖЕНОГО НАБОРУ, без жодного запиту.
+   *
+   * 🔴 НАСЛІДОК, ЯКИЙ ТРЕБА ЗНАТИ: коли адмін уже звузив вигляд до однієї команди,
+   * сервер прислав ЛИШЕ її менеджерів — про склад інших ми в цю мить не знаємо.
+   * Тому число стоїть лише там, де воно справді пораховане; решта команд ідуть без
+   * лічильника. Написати їм «· 0» означало б стверджувати, що команда порожня, —
+   * а це не «нуль», це «ми не дивились».
+   */
+  const byTeam = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const r of data.managers) if (r.teamId != null) m.set(r.teamId, (m.get(r.teamId) ?? 0) + 1);
+    return m;
+  }, [data.managers]);
+  const mgrWord = (n: number) => (n === 1 ? "менеджер" : n < 5 ? "менеджери" : "менеджерів");
+
   return (
     <div>
       {/* ── Обсяг: перевикористовує teamId-механізм Звіту (серверний зріз),
@@ -101,13 +118,24 @@ export function ReportTableSection({
           }}
           style={selStyle}
         >
-          <option value="all">Весь відділ</option>
-          {auth.role === "admin" && teams.filter((t) => !hideTeams.has(t.id)).map((t) => (
-            <option key={`team:${t.id}`} value={`team:${t.id}`}>Команда · {t.name}</option>
-          ))}
-          {data.managers.map((m) => (
-            <option key={`mgr:${m.managerId}`} value={`mgr:${m.managerId}`}>Менеджер · {m.name}</option>
-          ))}
+          <option value="all">Весь відділ · {data.managers.length} {mgrWord(data.managers.length)}</option>
+          {auth.role === "admin" && (
+            <optgroup label="Команди">
+              {teams.filter((t) => !hideTeams.has(t.id)).map((t) => {
+                const n = byTeam.get(t.id);
+                return (
+                  <option key={`team:${t.id}`} value={`team:${t.id}`}>
+                    {t.name}{n != null ? ` · ${n}` : ""}
+                  </option>
+                );
+              })}
+            </optgroup>
+          )}
+          <optgroup label="Менеджери">
+            {data.managers.map((m) => (
+              <option key={`mgr:${m.managerId}`} value={`mgr:${m.managerId}`}>{m.name}</option>
+            ))}
+          </optgroup>
         </select>
         <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
           {rows.length} {rows.length === 1 ? "рядок" : rows.length < 5 ? "рядки" : "рядків"} · {periodLabel}
@@ -341,65 +369,116 @@ function FootCell({ col, rows, scopeLabel, count }: { col: ColDef; rows: ReportP
 }
 
 /**
- * ❓ ПОЯСНЕННЯ КОЛОНКИ — hover, ФОКУС і тап.
+ * ❓ ПОЯСНЕННЯ КОЛОНКИ — hover, ФОКУС, тап; клік ПРИШПИЛЮЄ.
  *
- * 🔴 ЧОМУ НЕ `title=""`. Атрибут `title` не показується на тачі взагалі, не
- * відкривається з клавіатури і не існує для гейта як видимий текст — ми вже
- * ловили себе на цьому в #85b, де перевірка зеленіла на підказці, якої людина
- * не бачить. Тому це справжній елемент: `role="button"`, `tabIndex=0`,
- * Enter/Пробіл, і той самий стан на hover.
+ * 🔴 ЧОМУ НЕ `title=""`. Атрибут не показується на тачі, не відкривається з
+ * клавіатури і не існує для гейта як видимий текст — на цьому ми вже ловились у
+ * #85b. Тому це справжній елемент: `role="button"`, `tabIndex=0`, Enter/Пробіл.
  *
- * 🔴 КЛІК ЗУПИНЯЄТЬСЯ. Заголовок колонки сортує таблицю, тож без
- * `stopPropagation` спроба прочитати пояснення перевертала б сортування —
- * дія, якої людина не просила.
+ * 🔴 ЧОМУ ПОРТАЛ У BODY, А НЕ `position:absolute` У ЗАГОЛОВКУ. Таблиця лежить у
+ * контейнері з `overflow-x:auto`, а це за специфікацією робить НЕ-visible і другу
+ * вісь: вікно, що виходить за межі контейнера, обрізається — і найдужче саме там,
+ * де воно найпотрібніше (крайні праві колонки, куди треба скролити). Портал із
+ * `position:fixed` виносить вікно з-під обрізання зовсім; координати беруться від
+ * кнопки і перераховуються на скролі, щоб підказка не «відклеїлась».
  *
- * Праві колонки відкривають вікно вліво (`alignRight`): таблиця лежить у
- * контейнері з горизонтальним скролом, і поп-ап з правого краю інакше
- * обрізався б.
+ * 🔴 ЧОМУ КЛІК ПРИШПИЛЮЄ. Наведенням вікно зникало, щойно курсор рушав до тексту —
+ * тобто прочитати довге пояснення було неможливо, і власник це й побачив. Тепер
+ * клік фіксує вікно до Escape або кліку поза ним, а наведення лишається швидким
+ * способом зазирнути.
+ *
+ * 🔴 КЛІК ЗУПИНЯЄТЬСЯ: заголовок сортує таблицю, тож без `stopPropagation` спроба
+ * прочитати пояснення перевертала б сортування — дія, якої людина не просила.
  */
 function HelpDot({ text, title, alignRight }: { text: string; title: string; alignRight?: boolean }) {
   const [open, setOpen] = useState(false);
+  /** Клік/тап ПРИШПИЛЮЄ: поки читаєш — вікно стоїть. Наведення так не робить. */
+  const [pinned, setPinned] = useState(false);
+  const [box, setBox] = useState<{ top: number; left: number; right: number } | null>(null);
+  const btn = useRef<HTMLSpanElement | null>(null);
+
+  const measure = () => {
+    const r = btn.current?.getBoundingClientRect();
+    if (r) setBox({ top: r.bottom + 6, left: r.left, right: window.innerWidth - r.right });
+  };
+  const show = () => { measure(); setOpen(true); };
+  const hide = () => { if (!pinned) setOpen(false); };
+  const close = () => { setPinned(false); setOpen(false); };
   const stop = (e: { preventDefault: () => void; stopPropagation: () => void }) => {
     e.preventDefault(); e.stopPropagation();
   };
+
+  // Пришпилене вікно закриває Escape або клік ПОЗА ним — як і будь-який поп-ап,
+  // що перекриває вміст. Слухачі живуть лише поки вікно відкрите.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (!btn.current?.contains(e.target as Node)) close(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    // Позиція фіксована відносно вікна, тож при скролі її треба перерахувати —
+    // інакше підказка «відклеїться» від свого заголовка.
+    const onMove = () => (pinned ? measure() : close());
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [open, pinned]);
+
   return (
     <span style={{ position: "relative", display: "inline-flex", marginLeft: 4, verticalAlign: "middle" }}>
       <span
+        ref={btn}
         role="button"
         tabIndex={0}
         aria-label={`Що означає «${title}» і звідки береться`}
         aria-expanded={open}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
-        onClick={(e) => { stop(e); setOpen((v) => !v); }}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        onClick={(e) => { stop(e); if (pinned) close(); else { setPinned(true); show(); } }}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") { stop(e); setOpen((v) => !v); }
-          if (e.key === "Escape") setOpen(false);
+          if (e.key === "Enter" || e.key === " ") { stop(e); if (pinned) close(); else { setPinned(true); show(); } }
+          if (e.key === "Escape") close();
         }}
         style={{
-          cursor: "help", fontSize: 12, lineHeight: 1, color: open ? "var(--brand)" : "var(--text-muted)",
-          border: "1px solid var(--border)", borderRadius: "var(--r-pill)",
+          cursor: "help", fontSize: 12, lineHeight: 1,
+          color: open ? "var(--brand)" : "var(--text-muted)",
+          border: `1px solid ${pinned ? "var(--brand)" : "var(--border)"}`, borderRadius: "var(--r-pill)",
           width: 15, height: 15, display: "inline-flex", alignItems: "center", justifyContent: "center",
           fontWeight: 700, background: "var(--card-bg)",
         }}
       >?</span>
-      {open && (
+      {open && box && createPortal(
         <span
           role="tooltip"
           onClick={stop}
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={hide}
           style={{
-            position: "absolute", top: "calc(100% + 7px)", zIndex: 20,
-            ...(alignRight ? { right: 0 } : { left: 0 }),
-            width: "max-content", maxWidth: 290,
+            position: "fixed", top: box.top, zIndex: 60,
+            ...(alignRight ? { right: box.right } : { left: box.left }),
+            width: "max-content", maxWidth: "min(320px, 92vw)",
             background: "var(--card-bg)", color: "var(--text)",
             border: "1px solid var(--border)", borderRadius: "var(--r-lg)",
             boxShadow: "var(--shadow-lg)", padding: "9px 11px",
             fontSize: 12, fontWeight: 400, lineHeight: 1.45,
             textTransform: "none", letterSpacing: 0, whiteSpace: "normal", textAlign: "left",
           }}
-        >{text}</span>
+        >
+          {text}
+          {pinned && (
+            <span style={{ display: "block", marginTop: 6, color: "var(--text-muted)", fontSize: 11 }}>
+              Esc або клік поза вікном — закрити
+            </span>
+          )}
+        </span>,
+        document.body,
       )}
     </span>
   );
