@@ -2718,10 +2718,29 @@ function responseScope(s: MetricScope): { conds: string[]; params: unknown[] } {
 const RESPONSE_MINUTES_SQL =
   `GREATEST(0, EXTRACT(EPOCH FROM (q.first_activity_at - q.created_at_kommo)) / 60.0)`;
 
-export interface ResponseMgrRow { managerId: number; count: number; medianMin: number | null; avgMin: number | null }
+/** Частка «повільних» лідів (реакція > 60 хв) по менеджеру. */
+export interface ResponseMgrRow {
+  managerId: number;
+  /** Усього вхідних лідів Кваліфікації з першим контактом. */
+  n: number;
+  /** Скільки з них опрацьовано ПІЗНІШЕ ніж за годину. */
+  slow: number;
+  /** `slow / n × 100`. `null` — лідів не було, тобто рахувати нема з чого. */
+  pctSlow: number | null;
+}
+
+/** Поріг «повільно». Один вираз: і в SQL, і в підписі колонки. */
+export const RESPONSE_SLOW_MINUTES = 60;
 
 /**
- * Медіана реакції ПО МЕНЕДЖЕРАХ — для табличного вигляду Звіту.
+ * ЧАСТКА ПОВІЛЬНИХ ЛІДІВ ПО МЕНЕДЖЕРАХ — для табличного вигляду Звіту.
+ *
+ * 🔴 ЧОМУ НЕ МЕДІАНА (рішення власника 19.08.2026, після заміру). Медіана реакції
+ * по проду виявилась НУЛЬОВОЮ майже в усіх: із 1 076 лідів серпня **744 (69%)**
+ * опрацьовані менш ніж за хвилину, і лише 9 менеджерів із 38 мали медіану ≥1 хв.
+ * Тобто колонка показувала б «усі миттєві» і мовчки ховала хвіст — а хвіст там
+ * важкий: 185 лідів (17%) чекали понад годину, p90 = 683 хв. Частка повільних
+ * дивиться саме на хвіст, тобто на те, заради чого метрику й заводили.
  *
  * ⚠️ МЕЖА, ЯКУ ЗОБОВʼЯЗАНИЙ ПОКАЗАТИ ЕКРАН: це реакція на ВХІДНИЙ ЛІД воронки
  * «Кваліфікація», а не на угоду повного циклу. Менеджер без лідів у періоді
@@ -2732,7 +2751,7 @@ export interface ResponseMgrRow { managerId: number; count: number; medianMin: n
  */
 export async function responseTimeByManager(s: MetricScope): Promise<ResponseMgrRow[]> {
   const { conds, params } = responseScope(s);
-  const r = await pool.query<{ manager_id: number; n: string; median_min: string | null; avg_min: string | null }>(
+  const r = await pool.query<{ manager_id: number; n: string; slow: string }>(
     `WITH quals AS (
        SELECT d.manager_id, d.created_at_kommo, d.first_activity_at
          FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
@@ -2741,17 +2760,16 @@ export async function responseTimeByManager(s: MetricScope): Promise<ResponseMgr
        SELECT q.manager_id, ${RESPONSE_MINUTES_SQL} AS minutes FROM quals q
      )
      SELECT manager_id, COUNT(*) AS n,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY minutes) AS median_min,
-            AVG(LEAST(minutes, 1440)) AS avg_min
+            COUNT(*) FILTER (WHERE minutes > ${RESPONSE_SLOW_MINUTES}) AS slow
        FROM resp WHERE manager_id IS NOT NULL GROUP BY manager_id`,
     params
   );
-  return r.rows.map((x) => ({
-    managerId: x.manager_id,
-    count: Number(x.n),
-    medianMin: x.median_min != null ? Math.round(Number(x.median_min) * 10) / 10 : null,
-    avgMin: x.avg_min != null ? Math.round(Number(x.avg_min)) : null,
-  }));
+  return r.rows.map((x) => {
+    const n = Number(x.n), slow = Number(x.slow);
+    // n = 0 сюди не потрапляє (GROUP BY), але правило лишається явним: без лідів
+    // частки не існує, і вона `null` — «—» на екрані, а не бадьорий нуль.
+    return { managerId: x.manager_id, n, slow, pctSlow: n > 0 ? Math.round((slow / n) * 1000) / 10 : null };
+  });
 }
 
 export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> {

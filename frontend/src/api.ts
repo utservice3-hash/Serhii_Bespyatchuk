@@ -777,8 +777,11 @@ export async function fetchManagerWeeks(params: { managerId: number; month: stri
   return data;
 }
 
-/** ⏱ Медіана реакції на ВХІДНИЙ лід по менеджерах. Менеджера без лідів у видачі немає. */
-export interface ResponseTimeMgr { managerId: number; count: number; medianMin: number | null; avgMin: number | null }
+/**
+ * ⏱ ЧАСТКА ПОВІЛЬНИХ ЛІДІВ (реакція > 60 хв) по менеджерах.
+ * Менеджера без вхідних лідів у видачі немає — на екрані буде «—», а не 0%.
+ */
+export interface ResponseTimeMgr { managerId: number; n: number; slow: number; pctSlow: number | null }
 export async function fetchResponseTimeByManager(params: { from: string; to: string; teamId?: number }): Promise<ResponseTimeMgr[]> {
   const { data } = await api.get<{ managers: ResponseTimeMgr[] }>("/dashboard/response-time/by-manager", { params });
   return data.managers ?? [];

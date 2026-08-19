@@ -40,7 +40,7 @@ export function ReportTableSection({
   onTeamId: (v: number | "") => void;
   periodLabel: string;
   hideTeams: Set<number>;
-  /** Медіана реакції по менеджеру (хв). `undefined` — ще вантажиться, `null` — лідів не було. */
+  /** Частка лідів >1 год по менеджеру (%). `undefined` — ще вантажиться, `null` — лідів не було. */
   responseByMgr?: Map<number, number | null>;
   /** Місяць для розкриття тижнів (YYYY-MM) — береться від початку обраного періоду. */
   month: string;
@@ -71,8 +71,11 @@ export function ReportTableSection({
   const cols = useMemo(() => REPORT_COLS.filter((c) => c.core || optOn[c.key]), [optOn]);
   const rows = useMemo(() => {
     const base = mgrFilter === "" ? data.managers : data.managers.filter((m) => m.managerId === mgrFilter);
-    return sortRows(base, sortKey, sortDir);
-  }, [data.managers, mgrFilter, sortKey, sortDir]);
+    // Контекст потрібен, бо частка повільних лідів приходить окремим запитом і не
+    // лежить у рядку менеджера. Без нього клік по цій колонці нічого не робив би —
+    // чип є, сортування мертве.
+    return sortRows(base, sortKey, sortDir, { slowByMgr: responseByMgr });
+  }, [data.managers, mgrFilter, sortKey, sortDir, responseByMgr]);
 
   const onSort = (k: ColKey) => {
     if (k === "rank") return;
@@ -301,10 +304,11 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
     case "responseTime": {
       if (!responseByMgr) return <td style={{ ...st, color: "var(--text-muted)" }}>…</td>;
       const v = responseByMgr.get(m.managerId);
-      // `null`/відсутність = «лідів у періоді не було». Це НЕ «повільно» і не нуль.
+      // `null`/відсутність = «лідів у періоді не було». Це НЕ «жодного повільного».
       if (v == null) return <td style={st} title="вхідних лідів Кваліфікації в періоді не було">{none}</td>;
-      const tok = v > 15 ? "--danger" : v > 5 ? "--warn" : "--ok";
-      return <td style={{ ...st, color: `var(${tok})` }}>{v < 1 ? "<1" : Math.round(v)} хв</td>;
+      // Вище = гірше: тут частка ПРОСТРОЧЕНИХ, а не швидкість.
+      const tok = v > 25 ? "--danger" : v >= 10 ? "--warn" : "--ok";
+      return <td style={{ ...st, color: `var(${tok})` }}>{v.toFixed(1)}%</td>;
     }
     default:
       return <td style={st}>{none}</td>;

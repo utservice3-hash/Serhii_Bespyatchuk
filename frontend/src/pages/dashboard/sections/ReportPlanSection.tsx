@@ -225,12 +225,12 @@ export function ReportPlanSection({ auth, teams }: {
    * тижня гірше, ніж показати «даних немає», — тому фолбеку на місяць немає навмисно.
    */
   /**
-   * ⏱ ЧАС РЕАКЦІЇ ПО МЕНЕДЖЕРАХ — лише для табличного вигляду й лише коли він
-   * відкритий: у картках цієї колонки немає, тож тягнути її завжди означало б
-   * платити запитом за те, чого ніхто не бачить.
+   * ⏱ ЧАСТКА ПОВІЛЬНИХ ЛІДІВ ПО МЕНЕДЖЕРАХ — лише для табличного вигляду й лише
+   * коли він відкритий: у картках цієї колонки немає, тож тягнути її завжди
+   * означало б платити запитом за те, чого ніхто не бачить.
    *
    * `undefined` у мапі = «менеджера немає у видачі», тобто вхідних лідів у періоді
-   * не було. Це НЕ нуль хвилин — клітинка покаже «—».
+   * не було. Це НЕ «нуль повільних» — клітинка покаже «—».
    */
   const [respByMgr, setRespByMgr] = useState<Map<number, number | null> | undefined>(undefined);
   useEffect(() => {
@@ -238,7 +238,7 @@ export function ReportPlanSection({ auth, teams }: {
     let alive = true;
     setRespByMgr(undefined);
     fetchResponseTimeByManager({ from: selectedPeriod.from, to: selectedPeriod.to, ...(teamId ? { teamId: Number(teamId) } : {}) })
-      .then((rows) => { if (alive) setRespByMgr(new Map(rows.map((r) => [r.managerId, r.medianMin]))); })
+      .then((rows) => { if (alive) setRespByMgr(new Map(rows.map((r) => [r.managerId, r.pctSlow]))); })
       .catch(() => { if (alive) setRespByMgr(new Map()); });
     return () => { alive = false; };
   }, [view, selectedPeriod.from, selectedPeriod.to, teamId, retryNonce]);

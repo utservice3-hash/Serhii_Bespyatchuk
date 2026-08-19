@@ -28,7 +28,14 @@ export type ColKey =
  * · `none` — підсумку немає (ім'я, ранг, статус);
  * · `ratio:*` — ЧАСТКА: Σ чисельника ÷ Σ знаменника, а не Σ часток.
  */
-export type FootKind = "add" | "none" | "ratio:avgCheck" | "ratio:pct" | "ratio:conv" | "median:none";
+export type FootKind = "add" | "none" | "ratio:avgCheck" | "ratio:pct" | "ratio:conv" | "share:none";
+
+/**
+ * Дані, яких НЕМАЄ в рядку менеджера, але за якими треба сортувати.
+ * Поки що це лише частка повільних лідів: вона приходить окремим запитом і не
+ * може лежати в `ReportPlanManager`.
+ */
+export interface SortCtx { slowByMgr?: Map<number, number | null> }
 
 export interface ColDef {
   key: ColKey;
@@ -39,7 +46,7 @@ export interface ColDef {
   /** Ліве вирівнювання (текстові колонки). */
   left?: boolean;
   /** Значення для СОРТУВАННЯ. `null` = «немає даних» і завжди їде донизу. */
-  val: (m: ReportPlanManager) => number | string | null;
+  val: (m: ReportPlanManager, ctx?: SortCtx) => number | string | null;
   foot: FootKind;
   /** Підказка ⓘ — там, де підпис сам по собі збрехав би про природу числа. */
   hint?: string;
@@ -90,8 +97,12 @@ export const REPORT_COLS: ColDef[] = [
   { key: "talks", title: "Дзвінки", core: false, val: (m) => m.talks, foot: "add",
     hint: "Розмови (від 10 c) / спроби. ДВІ різні цифри — складати їх заборонено: це відповіді на різні питання." },
   { key: "dispRevenue", title: "Авто-сума", core: false, val: (m) => numOrNull(m.kpi.dispatch.revenue), foot: "add" },
-  { key: "responseTime", title: "Час відп.", core: false, val: () => null, foot: "median:none",
-    hint: "Медіана реакції на ВХІДНИЙ ЛІД (воронка «Кваліфікація»), а не на угоду повного циклу. «—» означає «лідів у періоді не було», а не «повільно». Підсумку немає: медіана медіан — не медіана." },
+  // 🔴 ЧАСТКА, А НЕ МЕДІАНА (рішення власника 19.08.2026). Медіана на проді
+  // виявилась нульовою майже в усіх — 69% лідів опрацьовані менш ніж за хвилину,
+  // тож колонка казала б «усі миттєві» й ховала хвіст, заради якого існує.
+  { key: "responseTime", title: "Ліди >1год", core: false,
+    val: (m, ctx) => ctx?.slowByMgr?.get(m.managerId) ?? null, foot: "share:none",
+    hint: "Частка вхідних лідів, які чекали першого контакту ПОНАД ГОДИНУ. Рахується лише по воронці «Кваліфікація» — це реакція на вхідний лід, а не на угоду повного циклу. «—» означає «лідів у періоді не було», а не «швидко». Підсумку немає: частка від часток не є часткою." },
 ];
 
 /** Опційні колонки, увімкнені за замовчуванням (решта — вимкнені). */
@@ -108,11 +119,11 @@ export const OPTIONAL_COLS = REPORT_COLS.filter((c) => !c.core);
  * напрямку: інакше перемикання ↑↓ піднімало б нагору порожні рядки, і таблиця
  * читалась би як «у цих найгірше», хоч про них просто нічого не відомо.
  */
-export function sortRows<T extends ReportPlanManager>(rows: T[], key: ColKey, dir: 1 | -1): T[] {
+export function sortRows<T extends ReportPlanManager>(rows: T[], key: ColKey, dir: 1 | -1, ctx?: SortCtx): T[] {
   const col = REPORT_COLS.find((c) => c.key === key);
   if (!col) return rows;
   return [...rows].sort((a, b) => {
-    const x = col.val(a), y = col.val(b);
+    const x = col.val(a, ctx), y = col.val(b, ctx);
     if (x == null && y == null) return 0;
     if (x == null) return 1;          // null донизу незалежно від dir
     if (y == null) return -1;
@@ -131,7 +142,7 @@ export interface FootValue { kind: FootKind; value: number | null; extra?: { num
 export function footValue(key: ColKey, rows: ReportPlanManager[]): FootValue {
   const col = REPORT_COLS.find((c) => c.key === key);
   const kind: FootKind = col?.foot ?? "none";
-  if (kind === "none" || kind === "median:none") return { kind, value: null };
+  if (kind === "none" || kind === "share:none") return { kind, value: null };
   if (kind === "ratio:avgCheck") {
     // Σ маржі ÷ Σ угод пулу — так само, як `glance.avgCheck` на бекенді.
     const num = rows.reduce((s, m) => s + (m.kpi.avgCheck.revenue ?? 0), 0);

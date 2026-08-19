@@ -80,8 +80,9 @@ test("#85b ПЛАН ТИЖНЯ — ЗІ ЗНІМКА, А НЕ ПЕРЕРАХОВ
 
 // ─────────────────── #89 · час реакції: розріз == агрегат ───────────────────
 
-test("#89 РОЗРІЗ ПО МЕНЕДЖЕРАХ ЗБІГАЄТЬСЯ З АГРЕГАТОМ ПО ТОМУ САМОМУ МЕНЕДЖЕРУ", needsDb(), async () => {
+test("#89 ЧАСТКА ПОВІЛЬНИХ == НЕЗАЛЕЖНОМУ ПІДРАХУНКУ НА ТОМУ САМОМУ СКОУПІ", needsDb(), async () => {
   const m = await import("../core/metrics.js");
+  const { pool } = await import("../db/pool.js");
   const now = new Date();
   const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
   const from = `${ym}-01`, to = now.toISOString().slice(0, 10);
@@ -91,18 +92,44 @@ test("#89 РОЗРІЗ ПО МЕНЕДЖЕРАХ ЗБІГАЄТЬСЯ З АГР�
     "🔴 розріз порожній — або вхідних лідів немає взагалі, або предикат зламався. "
     + "Порожній результат тут це ПРОВАЛ, а не «немає даних»");
 
-  // Беремо трьох найактивніших: у менеджера з одним лідом медіана збіглася б випадково.
-  const top = [...rows].sort((a, b) => b.count - a.count).slice(0, 3);
+  /**
+   * 🔴 ЗВІРКА ЗОВНІШНЯ, А НЕ «A = A». Порівнювати розріз із самим собою (той самий
+   * виклик, звужений до менеджера) означало б перевіряти, що функція детермінована,
+   * — а не що вона рахує правильно. Тому очікуване значення рахується ТУТ, окремим
+   * простим запитом: якщо в ядрі зсунути поріг «повільно», числа розійдуться.
+   */
+  const ctrl = await pool.query<{ manager_id: number; n: string; slow: string }>(
+    `SELECT d.manager_id,
+            COUNT(*) AS n,
+            COUNT(*) FILTER (
+              WHERE d.first_activity_at > d.created_at_kommo + interval '60 minutes') AS slow
+       FROM deals d JOIN managers mm ON mm.id = d.manager_id AND mm.is_active
+      WHERE d.pipeline_id = ANY($1) AND d.first_activity_at IS NOT NULL
+        AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $2
+        AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $3
+      GROUP BY d.manager_id`, [[8921928, 7336928], from, to]);
+  const want = new Map(ctrl.rows.map((r) => [r.manager_id, { n: Number(r.n), slow: Number(r.slow) }]));
+
+  // Найактивніші: у менеджера з одним лідом частка збіглася б випадково.
+  const top = [...rows].sort((a, b) => b.n - a.n).slice(0, 5);
+  assert.ok(top.some((r) => r.n >= 20),
+    "🔴 у найактивнішого менеджера менше 20 лідів — вибірка замала, щоб гейт щось доводив");
   for (const r of top) {
-    const one = await m.responseTime({ from, to, managerId: r.managerId });
-    assert.equal(one.totalCount, r.count,
-      `🔴 менеджер ${r.managerId}: кількість лідів у розрізі (${r.count}) ≠ агрегату (${one.totalCount}) — `
-      + "предикати розійшлись");
-    // Агрегат округлює медіану до цілих хвилин, розріз тримає десяту.
-    assert.ok(one.overallMedianMin == null || r.medianMin == null
-      || Math.abs(one.overallMedianMin - r.medianMin) <= 0.5,
-      `🔴 менеджер ${r.managerId}: медіана ${r.medianMin} проти ${one.overallMedianMin} в агрегаті`);
+    const w = want.get(r.managerId);
+    assert.ok(w, `🔴 менеджер ${r.managerId} є в розрізі, але не в контрольному запиті`);
+    assert.equal(r.n, w!.n, `🔴 менеджер ${r.managerId}: лідів ${r.n} проти ${w!.n} у контролі`);
+    assert.equal(r.slow, w!.slow,
+      `🔴 менеджер ${r.managerId}: повільних ${r.slow} проти ${w!.slow} у контролі — `
+      + "поріг «повільно» в ядрі більше не 60 хвилин");
+    assert.equal(r.pctSlow, Math.round((w!.slow / w!.n) * 1000) / 10,
+      `🔴 менеджер ${r.managerId}: частка не дорівнює slow/n`);
   }
+
+  // Дзеркало: сама метрика не вироджена — хоча б в одного менеджера повільні Є.
+  // Інакше гейт лишався б зеленим і у світі, де фільтр не працює взагалі.
+  assert.ok(rows.some((r) => r.slow > 0),
+    "🔴 у ЖОДНОГО менеджера немає лідів, що чекали понад годину. Заміряно 19.08.2026: "
+    + "185 із 1 076 лідів серпня (17%) саме такі, тож нуль тут означає зламаний фільтр");
 });
 
 test("#89b МЕНЕДЖЕР БЕЗ ЛІДІВ ВІДСУТНІЙ У ВИДАЧІ, А НЕ СТОЇТЬ ІЗ НУЛЕМ", needsDb(), async () => {
@@ -110,8 +137,8 @@ test("#89b МЕНЕДЖЕР БЕЗ ЛІДІВ ВІДСУТНІЙ У ВИДАЧІ
   // Вигаданий id: лідів у нього бути не може за побудовою.
   const rows = await m.responseTimeByManager({ from: "2026-01-01", to: "2026-12-31", managerId: -424242 });
   assert.deepEqual(rows, [],
-    "🔴 менеджеру без вхідних лідів домальовано рядок. Нуль хвилин тут означав би «відповів миттєво», "
-    + "тобто приписав би результат там, де його нема з чого взяти");
+    "🔴 менеджеру без вхідних лідів домальовано рядок. Нуль відсотків тут читався б як "
+    + "«жодного простроченого ліда», тобто приписав би заслугу там, де її нема з чого взяти");
 });
 
 // ─────────────────── #57c · smoke кліком по новому вигляду ───────────────────
