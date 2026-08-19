@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanManager, type Team } from "../../../api";
-import { InfoHint } from "../widgets";
 import {
   REPORT_COLS, OPTIONAL_COLS, DEFAULT_OPT_ON, sortRows, footValue,
   type ColDef, type ColKey,
@@ -134,7 +133,7 @@ export function ReportTableSection({
           <table className="data-table rpt-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontVariantNumeric: "tabular-nums" }}>
             <thead>
               <tr>
-                {cols.map((c) => (
+                {cols.map((c, i) => (
                   <th key={c.key} onClick={() => onSort(c.key)}
                     className={c.key === "name" ? "sticky-mgr" : undefined}
                     style={{
@@ -147,7 +146,7 @@ export function ReportTableSection({
                       ...(c.key === "name" ? { left: 0, boxShadow: "6px 0 8px -6px rgba(0,0,0,.18)" } : null),
                     }}>
                     {c.title}
-                    {c.hint && <> <InfoHint text={c.hint} /></>}
+                    {c.help && <HelpDot text={c.help} title={c.title} alignRight={i > cols.length / 2} />}
                     {c.key !== "rank" && (
                       <span style={{ marginLeft: 3, fontSize: 9, opacity: c.key === sortKey ? 1 : 0.35 }}>
                         {c.key === sortKey ? (sortDir === -1 ? "▼" : "▲") : "↕"}
@@ -342,6 +341,71 @@ function FootCell({ col, rows, scopeLabel, count }: { col: ColDef; rows: ReportP
 }
 
 /**
+ * ❓ ПОЯСНЕННЯ КОЛОНКИ — hover, ФОКУС і тап.
+ *
+ * 🔴 ЧОМУ НЕ `title=""`. Атрибут `title` не показується на тачі взагалі, не
+ * відкривається з клавіатури і не існує для гейта як видимий текст — ми вже
+ * ловили себе на цьому в #85b, де перевірка зеленіла на підказці, якої людина
+ * не бачить. Тому це справжній елемент: `role="button"`, `tabIndex=0`,
+ * Enter/Пробіл, і той самий стан на hover.
+ *
+ * 🔴 КЛІК ЗУПИНЯЄТЬСЯ. Заголовок колонки сортує таблицю, тож без
+ * `stopPropagation` спроба прочитати пояснення перевертала б сортування —
+ * дія, якої людина не просила.
+ *
+ * Праві колонки відкривають вікно вліво (`alignRight`): таблиця лежить у
+ * контейнері з горизонтальним скролом, і поп-ап з правого краю інакше
+ * обрізався б.
+ */
+function HelpDot({ text, title, alignRight }: { text: string; title: string; alignRight?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const stop = (e: { preventDefault: () => void; stopPropagation: () => void }) => {
+    e.preventDefault(); e.stopPropagation();
+  };
+  return (
+    <span style={{ position: "relative", display: "inline-flex", marginLeft: 4, verticalAlign: "middle" }}>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={`Що означає «${title}» і звідки береться`}
+        aria-expanded={open}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onClick={(e) => { stop(e); setOpen((v) => !v); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") { stop(e); setOpen((v) => !v); }
+          if (e.key === "Escape") setOpen(false);
+        }}
+        style={{
+          cursor: "help", fontSize: 12, lineHeight: 1, color: open ? "var(--brand)" : "var(--text-muted)",
+          border: "1px solid var(--border)", borderRadius: "var(--r-pill)",
+          width: 15, height: 15, display: "inline-flex", alignItems: "center", justifyContent: "center",
+          fontWeight: 700, background: "var(--card-bg)",
+        }}
+      >?</span>
+      {open && (
+        <span
+          role="tooltip"
+          onClick={stop}
+          style={{
+            position: "absolute", top: "calc(100% + 7px)", zIndex: 20,
+            ...(alignRight ? { right: 0 } : { left: 0 }),
+            width: "max-content", maxWidth: 290,
+            background: "var(--card-bg)", color: "var(--text)",
+            border: "1px solid var(--border)", borderRadius: "var(--r-lg)",
+            boxShadow: "var(--shadow-lg)", padding: "9px 11px",
+            fontSize: 12, fontWeight: 400, lineHeight: 1.45,
+            textTransform: "none", letterSpacing: 0, whiteSpace: "normal", textAlign: "left",
+          }}
+        >{text}</span>
+      )}
+    </span>
+  );
+}
+
+/**
  * 🗓 РОЗКРИТТЯ РЯДКА — ТИЖНІ МІСЯЦЯ.
  *
  * 🔴 ПІДПИС ПРО ПРИРОДУ ЧИСЛА ОБОВʼЯЗКОВИЙ. `plan` — заморожений знімок; коли він
@@ -372,8 +436,12 @@ function WeeksDrill({ managerId, month }: { managerId: number; month: string }) 
   const anyReconstructed = d.weeks.some((w) => w.reconstructed);
   return (
     <div style={{ padding: "9px 14px 12px 30px" }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".02em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 6 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".02em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 3 }}>
         По тижнях · план зафіксовано в понеділок
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 7, maxWidth: 640, lineHeight: 1.45 }}>
+        План тижня зафіксовано в понеділок (weekly_plan_snapshots); де «знімок відновлено» —
+        реконструйовано ретроспективно. Факт — каса ② по днях тижня.
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
         <tbody>
