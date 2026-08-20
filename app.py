@@ -2064,6 +2064,36 @@ def _gather_deal_context(lead_id: int, manager_name: str):
     ]
     notes_text = "\n".join(f"- {t}" for t in note_texts)[:4000]
 
+    # Прикріплені файли / скріншоти переписки (note_type "attachment").
+    # Враховуємо ЛИШЕ факт наявності (без розпізнавання змісту картинки):
+    # скрін листування = доказ комунікації з клієнтом (див. ТЗ / LOGIC.md).
+    _IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".heic", ".gif", ".bmp")
+    _SCREEN_HINTS = ("снимок экрана", "снімок екрана", "screenshot", "screen shot",
+                     "скрін", "скрин", "viber", "whatsapp", "telegram", "переписк", "листуванн")
+    attach_names = []
+    for n in notes:
+        if str(n.get("note_type")).lower() not in ("attachment", "5"):
+            continue
+        p = n.get("params") or {}
+        nm = (p.get("original_name") or p.get("text") or p.get("file_name") or "файл").strip()
+        attach_names.append(nm)
+    screenshot_names = [
+        nm for nm in attach_names
+        if nm.lower().endswith(_IMG_EXT) or any(h in nm.lower() for h in _SCREEN_HINTS)
+    ]
+    if not attach_names:
+        attachments_summary = ""
+    else:
+        parts = [f"Прикріплено файлів: {len(attach_names)}."]
+        if screenshot_names:
+            shown = ", ".join(screenshot_names[:8])
+            parts.append(
+                f"Скріншоти/зображення ({len(screenshot_names)}): {shown}"
+                + (" …" if len(screenshot_names) > 8 else "")
+                + ". Ймовірно — скрін переписки з клієнтом (доказ комунікації)."
+            )
+        attachments_summary = " ".join(parts)[:1500]
+
     call_notes = sorted(
         (n for n in notes if n.get("note_type") in (10, 11, "call_in", "call_out")),
         key=lambda n: n.get("created_at", 0),
@@ -2107,7 +2137,7 @@ def _gather_deal_context(lead_id: int, manager_name: str):
     contact_summary = (
         f"Спроби контакту: {attempts} дзвінк(ів) у {len(days)} різни(х) дн(ів)."
     )
-    return notes_text, calls_text, contact_summary
+    return notes_text, calls_text, contact_summary, attachments_summary
 
 
 def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id: int = 0, pipeline_id: int = 0):
@@ -2147,12 +2177,14 @@ def _handle_closed_not_realized(lead_id: int, responsible_id: int, old_status_id
     tags = [t.get("name") for t in (lead.get("_embedded", {}).get("tags") or [])] if lead else []
     already_returned = RETURNED_QC_TAG in tags
 
-    # Повна картина: усі нотатки + транскрипти всіх дзвінків + спроби контакту.
-    notes_text, calls_text, contact_summary = _gather_deal_context(lead_id, manager_name)
+    # Повна картина: усі нотатки + транскрипти всіх дзвінків + спроби контакту
+    # + прикріплені скріншоти переписки (як доказ комунікації).
+    notes_text, calls_text, contact_summary, attachments_summary = _gather_deal_context(lead_id, manager_name)
 
     recommendation = ai_analyzer.analyze_closed_deal(
         {**details, "manager": manager_name, "amount": amount},
         notes_text=notes_text, calls_text=calls_text, contact_summary=contact_summary,
+        attachments_summary=attachments_summary,
     )
 
     closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ['ʼ’]?ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
