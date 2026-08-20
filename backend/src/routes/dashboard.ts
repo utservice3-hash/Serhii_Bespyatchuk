@@ -42,6 +42,7 @@ import * as metrics from "../core/metrics.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
+import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
@@ -6239,14 +6240,11 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // #1 круг оплати: факт(received) = успішно(142) ⊎ оплачено(етап 9). Per manager → Σ==факт.
   const succM = new Map(succ.map((x) => [x.managerId, x])), paidM = new Map(paid.map((x) => [x.managerId, x]));
   // Бакетуємо планові оплати у поточний/наступний календарний місяць (за київським сьогодні).
-  const curYm = kyivToday.slice(0, 7);
-  const nextYm = (() => { const d = new Date(kyivToday + "T00:00:00Z"); d.setUTCMonth(d.getUTCMonth() + 1); return d.toISOString().slice(0, 7); })();
-  const expPlannedM = new Map<number, { thisMonth: number; nextMonth: number }>();
-  for (const r of expDays) {
-    const e = expPlannedM.get(r.managerId) ?? { thisMonth: 0, nextMonth: 0 };
-    if (r.day.slice(0, 7) === curYm) e.thisMonth += r.sum; else if (r.day.slice(0, 7) === nextYm) e.nextMonth += r.sum;
-    expPlannedM.set(r.managerId, e);
-  }
+  // 🔗 Бакетування — у `core/forecast`, разом із самою формулою прогнозу. Поведінка
+  //    та сама (той самий поділ на поточний/наступний київський місяць); винесено,
+  //    щоб Звіт КВП рахував прогноз ТИМ САМИМ кодом, а не «за тим самим сенсом» —
+  //    рішення 06.08.2026 доїхало сюди й не доїхало туди саме через дві копії.
+  const expPlannedM = forecast.expectedSplitByMonth(expDays, kyivToday);
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
   // 🔴 ПРАВИЛО ВЛАСНИКА (06.08.2026) — ЗМІНА ДО РІШЕННЯ ВІД 02.08: факт менеджера =
   // ② `receivedMoney` = ① «успішно реалізовано» (142) ⊎ «оплата отримана» (етап 9),
@@ -6459,7 +6457,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       //      компанії 28 менеджерів на **1 599 273 ₴**. Контрольне число власника
       //      (≈68к) сходиться ЛИШЕ без добору, тож реалізовано за їхньою цифрою —
       //      але це перегляд рішення #17, і повернути добір можна одним словом.
-      projected: Math.round(fact + (monthInProgress ? (expPlannedM.get(m.id)?.thisMonth ?? 0) : 0)),
+      projected: Math.round(forecast.forecastMonth(fact, expPlannedM.get(m.id)?.thisMonth ?? 0, monthInProgress)),
       // 🟡 Добір лишається ПОРАХОВАНИМ і ВИДИМИМ окремим числом, хоч у `projected`
       // більше не входить. Тихо викинути величину в 1.6 млн по компанії означало б
       // зробити зміну формули непомітною — а вона має читатись і перевірятись.
@@ -7113,13 +7111,43 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     },
   };
 
+  /**
+   * 📈 ПРОГНОЗ — ВАРІАНТ A (рішення власника 20.08.2026): ТА САМА ФОРМУЛА, ЩО НА
+   * КАРТЦІ МЕНЕДЖЕРА. Факт ② + очікування з ПЛАНОВОЮ ДАТОЮ цього місяця; добір
+   * нового бізнесу з формули виведено й показується ОКРЕМО.
+   *
+   * 🔴 ЩО БУЛО. КВП рахував `факт + УСЯ зона + добір` (`buildProjection`) — тобто
+   * старою формулою, яку для картки менеджера скасували ще 06.08.2026. Заміряно на
+   * проді 20.08: **2 748 167 ₴ (99.6% плану)** проти **2 306 403 ₴ (84%)** за
+   * формулою картки. Збіг зі стратпланом (Δ 10 833 ₴) був ВИПАДКОВИЙ, і читався як
+   * «прогноз дублює план».
+   *
+   * ⚠️ `mgrDayExp` — те саме джерело (`expectedByManagerDay({})`), що живить картку,
+   * і бакетується тим самим кодом. Не «схожий сенс», а один виклик.
+   */
+  const expSplit = forecast.expectedSplitByMonth(mgrDayExp, kyivTodayW);
+  const expThisMonthTotal = [...expSplit.values()].reduce((a, v) => a + v.thisMonth, 0);
+  const projectedA = forecast.forecastMonth(received.revenue, expThisMonthTotal, projection.monthInProgress);
+  const pace = forecast.paceProjection(received.revenue, projection.elapsedWorkingDays, projection.totalWorkingDays);
+
   // ── ВЕРДИКТ + LIFECYCLE ──
   const verdict = {
     received: { deals: received.deals, revenue: received.revenue },
     receivedPrev: { revenue: receivedPrev.revenue },
     strategicPlan: strategic,
     planPct: pctOfPlan(received.revenue),
-    projection: { fact: projection.fact, projected: projection.projected, projectedPct: pctOfPlan(projection.projected), elapsedWorkingDays: projection.elapsedWorkingDays, totalWorkingDays: projection.totalWorkingDays },
+    projection: {
+      fact: projection.fact,
+      projected: projectedA, projectedPct: pctOfPlan(projectedA),
+      expectedThisMonth: Math.round(expThisMonthTotal),
+      // 🟡 ДОБІР — ПОРУЧ, НЕ В ПРОГНОЗІ (рішення власника 06.08.2026). Він не
+      //    підкріплений документами: це середнє за 3 місяці, а не угоди з датою.
+      dobir: Math.round(projection.dobir),
+      // ⏱ ТЕМП — ІНШЕ ПИТАННЯ, ніж прогноз: «що вийде, якщо нічого не зміниться».
+      //    Розрив між ними і є те, заради чого КВП дивиться на екран.
+      pace, pacePct: pace == null ? null : pctOfPlan(pace),
+      elapsedWorkingDays: projection.elapsedWorkingDays, totalWorkingDays: projection.totalWorkingDays,
+    },
     lifecycle: {
       sent: { deals: dispatchedAll.deals, revenue: dispatchedAll.revenue },
       awaiting: { deals: expectedZone.total.deals, revenue: expectedZone.total.sum },
@@ -7145,6 +7173,20 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   }
   if (engines.ad.mature === false && sc.isCurrent) signals.push({ severity: "info", icon: "⏳", title: "Конверсія реклами дозріває", detail: `когорта <90 днів (${engines.ad.entered} лідів)`, action: "оцінювати за зрілий місяць" });
   if (expectedZone.total.sum > 0) signals.push({ severity: "warning", icon: "💰", title: `В очікуванні ${Math.round(expectedZone.total.sum).toLocaleString("uk-UA")} ₴`, detail: `${expectedZone.total.deals} угод у зоні виставлено→оплата`, action: "тиснути на дебіторку/оплати" });
+  /**
+   * ⏰ ПЛАНОВА ДАТА ВЖЕ МИНУЛА — окремий сигнал, і він НЕ про суму.
+   *
+   * Заміряно на проді 20.08.2026: **163 угоди на 20 995 ₴** мають планову дату
+   * раніше за початок періоду. Багато угод, мізерні гроші — тобто це або дрібні
+   * хвости, або зіпсовані дати, і в обох випадках зона очікування містить те, чого
+   * там бути не має. Мовчки включати їх у «очікуємо» означало б обіцяти гроші за
+   * домовленістю, термін якої вийшов.
+   */
+  const overdueExp = mgrDayExp.filter((r) => r.day < from).reduce((a, r) => ({ n: a.n + 1, sum: a.sum + r.sum }), { n: 0, sum: 0 });
+  if (overdueExp.n > 0) signals.push({ severity: "warning", icon: "⏰",
+    title: `Планова дата минула: ${overdueExp.n} записів на ${Math.round(overdueExp.sum).toLocaleString("uk-UA")} ₴`,
+    detail: "оплата очікувалась ДО початку періоду — домовленість прострочена або дата не оновлена",
+    action: "перепитати дату оплати або зняти з очікувань" });
   signals.sort((a, b) => ({ critical: 0, serious: 1, warning: 2, info: 3 } as Record<string, number>)[a.severity] - ({ critical: 0, serious: 1, warning: 2, info: 3 } as Record<string, number>)[b.severity]);
 
   res.json({
@@ -7186,7 +7228,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       const remainPlan = Math.max(0, strategic - received.revenue);
       const newClients = newRepeatTot.newClients ?? 0;
       return {
-        forecast: { projected: projection.projected, fact: projection.fact, projectedPct: pctOfPlan(projection.projected) },
+        forecast: { projected: projectedA, fact: projection.fact, projectedPct: pctOfPlan(projectedA) },
         neededPacePerDay: remainWd > 0 ? Math.round(remainPlan / remainWd) : null,
         remainingWorkingDays: remainWd,
         remainingPlan: remainPlan,

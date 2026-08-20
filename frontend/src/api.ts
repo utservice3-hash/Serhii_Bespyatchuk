@@ -594,7 +594,7 @@ export interface KvpReport {
   };
   verdict: {
     received: KvpAgg; receivedPrev: { revenue: number }; strategicPlan: number; planPct: number | null;
-    projection: { fact: number; projected: number; projectedPct: number; elapsedWorkingDays: number; totalWorkingDays: number };
+    projection: { fact: number; projected: number; projectedPct: number | null; expectedThisMonth: number; dobir: number; pace: number | null; pacePct: number | null; elapsedWorkingDays: number; totalWorkingDays: number };
     lifecycle: { sent: KvpAgg; awaiting: KvpAgg; received: KvpAgg };
     derived: { base: number; low: number; target: number; high: number };
   };

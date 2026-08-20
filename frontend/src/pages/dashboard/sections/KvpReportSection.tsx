@@ -18,7 +18,15 @@ const fmtPct = (v: number | null) => (v == null ? "—" : `${v}%`);
 const HINT: Record<string, string> = {
   received: "«Отримані кошти» = угоди, що ввійшли в етап 9 (Оплата отримана) АБО 10 (Успішна) у періоді, РАЗ (дедуп). Ядро core/money.ts.",
   strategic: "🔒 Стратегічний план виручки = Σ планів менеджерів (plans.payment_amount). Read-only — редагується у грід-редакторі планів, не тут.",
-  projection: "Прогноз місяця = факт + зона визнання (виставлено→оплата за плановою датою) + добір нового бізнесу. «Станом на зараз».",
+  projection: "Прогноз місяця = факт ② + очікування з ПЛАНОВОЮ ДАТОЮ ОПЛАТИ в цьому ж місяці — "
+    + "ТА САМА формула, що на картці менеджера у Звіті (рішення власника 06.08.2026). "
+    + "Добір нового бізнесу в прогноз НЕ входить і показаний окремо: він не підкріплений "
+    + "документами (це середнє за 3 місяці, а не угоди з датою). Завершений місяць нічого не "
+    + "очікує — там прогноз дорівнює факту.",
+  pace: "Темп = факт ÷ минулі робочі дні × усі робочі дні місяця. Це ІНШЕ питання, ніж прогноз: "
+    + "прогноз каже «що вже домовлено» (є рахунок і планова дата), темп — «що вийде, якщо нічого "
+    + "не зміниться». Розрив між ними і є те, заради чого сюди дивляться. «Зазвичай добирає» — "
+    + "середнє за 3 місяці по відділу, розкладене часткою; це НЕ угоди й у жодну суму не входить.",
   lifecycle: "Життєвий цикл грошей: Відправлено (авто поїхало, дата загрузки load_at) → Очікуємо (зона виставлено→оплата, знімок) → Отримано (кошти в періоді). Три РІЗНІ якорі.",
   sent: "Відправлено = угоди з проставленою «Датою загрузки» (load_at) у періоді. Фактичне відправлення авто, окремо від дати грошей.",
   awaiting: "Очікуємо = зона визнання доходу (виставлено рахунок→оплата), знімок «зараз». НЕ входить у виручку періоду.",
@@ -273,7 +281,13 @@ export function KvpReportSection() {
               <Stat label="Стратегічний план 🔒" value={fmtMoney(v.strategicPlan)} hint={HINT.strategic}
                 sub={`виконання ${fmtPct(v.planPct)}`} color={pctColor(v.planPct)} />
               <Stat label="Прогноз місяця" value={fmtMoney(v.projection.projected)} hint={HINT.projection}
-                sub={`факт ${fmtMoney(v.projection.fact)} · ${fmtPct(v.projection.projectedPct)} плану`} />
+                sub={`факт ${fmtMoney(v.projection.fact)} + ${fmtMoney(v.projection.expectedThisMonth)} за план. датою · ${fmtPct(v.projection.projectedPct)} плану`}
+                color={pctColor(v.projection.projectedPct)} />
+              {/* ⏱ ТЕМП — окрема плитка, бо це ІНШЕ питання: «що вийде, якщо нічого не
+                  зміниться», проти «що вже домовлено». Розрив між ними і є вердикт. */}
+              <Stat label="При поточному темпі" value={v.projection.pace == null ? "—" : fmtMoney(v.projection.pace)} hint={HINT.pace}
+                sub={v.projection.pace == null ? "робочі дні ще не минули" : `${fmtPct(v.projection.pacePct)} плану · зазвичай добирає ${fmtMoney(v.projection.dobir)}`}
+                color={pctColor(v.projection.pacePct)} />
               <Stat label="Робочі дні" value={`${v.projection.elapsedWorkingDays}/${v.projection.totalWorkingDays}`}
                 sub="минуло / всього" />
             </div>
