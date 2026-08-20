@@ -367,28 +367,21 @@ export function Dashboard() {
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const wd = (d: Date) => (d.getDay() + 6) % 7; // Mon=0..Sun=6
     const days: string[] = [];
-    if (taskForm.taskType === "weekly_kpi") {
-      // «Один день»: одна задача на обрану дату, дні тижня не фільтруємо.
-      if (taskForm.planScope === "day") return taskForm.rangeFrom ? [taskForm.rangeFrom] : [];
-      // Custom calendar range: every day between rangeFrom..rangeTo whose weekday
-      // is enabled. No more forcing the fixed Mon–Sun 7-day block.
-      if (!taskForm.rangeFrom || !taskForm.rangeTo) return [];
-      const from = new Date(taskForm.rangeFrom + "T00:00:00");
-      const to = new Date(taskForm.rangeTo + "T00:00:00");
-      if (to < from) return [];
-      const d = new Date(from);
-      while (d <= to) {
-        if (taskForm.weekdays[wd(d)]) days.push(fmt(d));
-        d.setDate(d.getDate() + 1);
-      }
-    } else {
-      if (!taskForm.weekStart) return [];
-      const base = new Date(taskForm.weekStart + "T00:00:00");
-      const d = new Date(base.getFullYear(), base.getMonth(), 1);
-      while (d.getMonth() === base.getMonth()) {
-        if (taskForm.weekdays[wd(d)]) days.push(fmt(d));
-        d.setDate(d.getDate() + 1);
-      }
+    // 🔴 МІСЯЧНА ГІЛКА ЗНЯТА 18.08.2026 (рішення власника). Вона розкладала ціль на ВСІ
+    // робочі дні місяця — тобто заводила місячну ціль по показниках, якої більше немає.
+    // Лишився один шлях: тижневий/довільний набір днів.
+    // «Один день»: одна задача на обрану дату, дні тижня не фільтруємо.
+    if (taskForm.planScope === "day") return taskForm.rangeFrom ? [taskForm.rangeFrom] : [];
+    // Custom calendar range: every day between rangeFrom..rangeTo whose weekday
+    // is enabled. No more forcing the fixed Mon–Sun 7-day block.
+    if (!taskForm.rangeFrom || !taskForm.rangeTo) return [];
+    const from = new Date(taskForm.rangeFrom + "T00:00:00");
+    const to = new Date(taskForm.rangeTo + "T00:00:00");
+    if (to < from) return [];
+    const d = new Date(from);
+    while (d <= to) {
+      if (taskForm.weekdays[wd(d)]) days.push(fmt(d));
+      d.setDate(d.getDate() + 1);
     }
     return days;
   }
@@ -433,7 +426,8 @@ export function Dashboard() {
       }
       await createTaskPlan({
         assigneeId: planAssignee,
-        period: taskForm.taskType === "weekly_kpi" ? "week" : "month",
+        // Єдиний рівень цілі-показника — ТИЖДЕНЬ (місячний шлях знято 18.08.2026).
+        period: "week",
         days,
         adsCount: taskForm.adsCount ? Number(taskForm.adsCount) : undefined,
         leadgenCount: taskForm.leadgenCount ? Number(taskForm.leadgenCount) : undefined,

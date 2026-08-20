@@ -485,6 +485,11 @@ export async function leadsTakenByBucket(s: MetricScope, granularity: "day" | "w
 
 export interface CreatedBucketRow { bucket: string; deals: number }
 
+/**
+ * Рядок розколу СТВОРЕНИХ. `new + repeat + undef = created` — ПАРТИЦІЯ новизни.
+ * `adCount`/`leadgenCount` — НАКЛАДКА джерела (підмножини партиції), у `created`
+ * не додаються: джерело й новизна — різні виміри (див. `dealSourceCase`).
+ */
 export interface CreatedSplitRow {
   managerId: number;
   name: string;
@@ -493,8 +498,13 @@ export interface CreatedSplitRow {
   newCount: number;
   repeatCount: number;
   undefCount: number;
+  adCount: number;
+  leadgenCount: number;
 }
-export interface CreatedSplitBucketRow { bucket: string; created: number; newCount: number; repeatCount: number; undefCount: number }
+export interface CreatedSplitBucketRow {
+  bucket: string; created: number; newCount: number; repeatCount: number; undefCount: number;
+  adCount: number; leadgenCount: number;
+}
 
 // Дженерик/порожні client_key, що НЕ беруть участі в матчингу історії клієнта
 // (колізійні: «названиенеуказано» = 1.3к угод різних клієнтів; порожній ключ).
@@ -502,7 +512,80 @@ export interface CreatedSplitBucketRow { bucket: string; created: number; newCou
 export const GENERIC_CLIENT_KEYS = ["названиенеуказано", "companynamenotspecified", ""];
 
 /**
- * ЄДИНЕ джерело правила класифікації «новий/постійний» (B→C→A).
+ * 🧭 КАНОН «КЛІЄНТ УЖЕ БУВ НАШ» — ОДНЕ ОГОЛОШЕННЯ НА ВЕСЬ ПРОДУКТ (18.08.2026).
+ *
+ * Рішення власника. Клієнт вважається ПОСТІЙНИМ, якщо ДО створення цієї угоди він:
+ *   • ВИГРАВ угоду повного циклу (142 у FC, анкер `closed_at`) — «виграна, навіть
+ *     якщо ще не оплачена», АБО
+ *   • ЗАХОДИВ У ЗОНУ ВИЗНАННЯ повного циклу (`MONEY_ZONE`) — за ПОДІЯМИ
+ *     (`deal_stage_events`) або за ПОТОЧНИМ станом угоди-донора.
+ * Матч по `vkey` (дженерик-ключі заглушені), донор ≠ сама угода, донор СТРОГО раніше
+ * за `created_at` цієї угоди.
+ *
+ * 🔴 ФІЛЬТР ВОРОНКИ — ЧАСТИНА ПРАВИЛА, А НЕ ОПТИМІЗАЦІЯ. Попередня редакція шукала
+ * `status_id = 142` У БУДЬ-ЯКІЙ воронці, тож постійним робив донор із **Продзвону**
+ * (`8921936`, там 142 = «заявку на прорахунок отримано», маркер ПЕРЕДАЧІ, а не
+ * оплачене перевезення) і з **Автосделки** (`7341740` — запит на оплату ПЕРЕВІЗНИКА).
+ * Заміряно на проді 18.08.2026: за 12 міс хибний сигнал у 4 612 угод із 28 403
+ * (16.2%), донор із Продзвону — 4 480 із них; мітка перевертається у 2 505 угод.
+ *
+ * 🔴 ПЕРША ГІЛКА (won-FC) СЬОГОДНІ ВКЛАДЕНА В ТРЕТЮ і виглядає як дубль: 142 входить
+ * у `MONEY_ZONE`, анкер той самий `closed_at`. Лишається СВІДОМО — як страховка
+ * ФОРМУЛЮВАННЯ: звузять зону (приберуть «Виставлення рахунку»), і «виграв» мусить
+ * лишитись постійним незалежно від складу зони. Щоб її не прибрали як зайву, гейт
+ * `#67f` кличе правило з ПОРОЖНЬОЮ зоною і вимагає `repeat` від виграного донора.
+ *
+ * ⚠️ `MONEY_ZONE` читається В ТІЛІ функції (call-time): константа оголошена НИЖЧЕ,
+ * і звернення на рівні модуля дало б TDZ — той самий порядок, що вже описаний над
+ * `MONEY_ZONE` для конверсій.
+ */
+export function priorClientSql(
+  ops: { vkey: string; createdAt: string; selfId: string },
+  zone: number[] = MONEY_ZONE
+): string {
+  const fc = `ARRAY[${FC_PIPELINES.join(",")}]::bigint[]`;
+  const zn = `ARRAY[${zone.join(",")}]::bigint[]`;
+  const { vkey, createdAt, selfId } = ops;
+  // ⚙️ ДВІ ГІЛКИ ПО `deals` — ОДНИМ ПРОХОДОМ. Обидві шукають донора за тим самим
+  // ключем і тим самим індексом (`idx_deals_client_key`), тож окремими `EXISTS`
+  // вони коштували ДВОХ обходів. Семантика та сама: диз'юнкція всередині одного
+  // `EXISTS` дає ту саму множину, що об'єднання двох (тримають #67a/#67b/#67f).
+  // 🔴 ГІЛКА «ВИГРАВ» ЛИШАЄТЬСЯ ОКРЕМИМ ДИЗ'ЮНКТОМ, а не зливається в зону: з
+  // порожньою зоною вона мусить працювати сама (страховка формулювання, `#67f`).
+  return `(${vkey} IS NOT NULL AND (
+        EXISTS (SELECT 1 FROM deals pw
+                 WHERE pw.client_key = ${vkey} AND pw.kommo_id <> ${selfId}
+                   AND pw.pipeline_id = ANY(${fc})
+                   AND ((pw.status_id = 142 AND pw.closed_at_kommo < ${createdAt})
+                     OR (pw.status_id = ANY(${zn})
+                         AND COALESCE(pw.closed_at_kommo, pw.created_at_kommo) < ${createdAt})))
+     OR EXISTS (SELECT 1 FROM deal_stage_events pe
+                  JOIN deals pd ON pd.kommo_id = pe.kommo_id
+                 WHERE pd.client_key = ${vkey} AND pd.kommo_id <> ${selfId}
+                   AND pe.pipeline_id = ANY(${fc}) AND pe.status_id = ANY(${zn})
+                   AND pe.changed_at < ${createdAt})
+  ))`;
+}
+
+/** `vkey` — client_key із заглушеними дженериками. Один вираз на всі інлайн-форми. */
+export const vkeySql = (alias = "d"): string =>
+  `(CASE WHEN ${alias}.client_key IS NULL
+          OR ${alias}.client_key IN (${GENERIC_CLIENT_KEYS.map((k) => `'${k}'`).join(", ")})
+         THEN NULL ELSE ${alias}.client_key END)`;
+
+/**
+ * ЄДИНЕ джерело правила НОВИЗНИ («новий / постійний / невизначено»).
+ *
+ * 🔴 ДЖЕРЕЛО І НОВИЗНА — РІЗНІ ПИТАННЯ (рішення власника 18.08.2026). Перша гілка
+ * форсувала `lead_channel IN ('ad','leadgen') → 'new'`, тобто ЗВІДКИ прийшла угода
+ * відповідало на питання, ЧИ ВПЕРШЕ в нас цей клієнт. Заміряно за 12 міс: так
+ * ховалось 296 угод постійних клієнтів (131 з реклами, 165 з лідогену), а 34 угоди
+ * без ключа й без декларації мовчки числились «новими». Тепер новизну рахує канон
+ * ДЛЯ ВСІХ каналів, а джерело віддає окремий вираз `dealSourceCase`; лідоген —
+ * вимір ДЖЕРЕЛА, а не клас новизни.
+ *
+ * ⚙️ `hasPrior` підставляється РІВНО ОДИН раз (гілка `vkey IS NULL` відсіяна раніше):
+ * канон — це три `EXISTS`, і дворазова підстановка коштувала б удвічі.
  *
  * 🔴 ЧОМУ ЦЕ ФУНКЦІЯ, А НЕ РЯДОК-КОНСТАНТА (07.08.2026). Константа читала голі
  * імена (`lead_channel`, `vkey`, `has_prior`) і тому працювала ЛИШЕ всередині CTE
@@ -519,23 +602,40 @@ export const GENERIC_CLIENT_KEYS = ["названиенеуказано", "compa
  * гейт `#66` (той самий прийом, що `#35` для `hasPriorPaidSql`).
  */
 export function createdKlassCase(ops: {
-  channel: string; vkey: string; hasPrior: string; salesChannel: string;
+  vkey: string; hasPrior: string; salesChannel: string;
 }): string {
   return `
   CASE
-    WHEN ${ops.channel} IN ('ad','leadgen') THEN 'new'
-    WHEN ${ops.channel} = 'other' AND ${ops.vkey} IS NOT NULL AND ${ops.hasPrior} THEN 'repeat'
-    WHEN ${ops.channel} = 'other' AND ${ops.vkey} IS NOT NULL AND NOT ${ops.hasPrior} THEN 'new'
-    WHEN ${ops.salesChannel} = 'Постійні клієнти' THEN 'repeat'
-    WHEN ${ops.salesChannel} = 'Нові клієнти' THEN 'new'
-    ELSE 'undef'
+    WHEN ${ops.vkey} IS NULL THEN
+      CASE WHEN ${ops.salesChannel} = 'Постійні клієнти' THEN 'repeat'
+           WHEN ${ops.salesChannel} = 'Нові клієнти' THEN 'new'
+           ELSE 'undef' END
+    WHEN ${ops.hasPrior} THEN 'repeat'
+    ELSE 'new'
   END`;
 }
 
-/** CTE-форма: операнди — колонки, які готує `classifyCte` у підзапиті `classed`. */
+/**
+ * ДЖЕРЕЛО угоди — ОКРЕМИЙ вимір (реклама / лідоген / інше / невизначено). Не
+ * перетинається з новизною: та сама угода може бути `ad` і `repeat` одночасно —
+ * саме це й ховала стара перша гілка. `NULL` каналу читається як «невизначено», а
+ * не зсипається в «інше»: невідоме має читатись як невідоме.
+ */
+export function dealSourceCase(channel: string): string {
+  return `
+  CASE
+    WHEN ${channel} = 'ad' THEN 'ad'
+    WHEN ${channel} = 'leadgen' THEN 'leadgen'
+    WHEN ${channel} IS NULL THEN 'undef'
+    ELSE 'other'
+  END`;
+}
+
+/** CTE-форми: операнди — колонки, які готує `classifyCte` у підзапиті `classed`. */
 const CREATED_KLASS_CASE = createdKlassCase({
-  channel: "lead_channel", vkey: "vkey", hasPrior: "has_prior", salesChannel: "sales_channel",
+  vkey: "vkey", hasPrior: "has_prior", salesChannel: "sales_channel",
 });
+const CREATED_SOURCE_CASE = dealSourceCase("lead_channel");
 
 /**
  * ІНЛАЙН-форма ТОГО САМОГО правила — для запитів, що беруть угоди напряму з
@@ -545,21 +645,24 @@ const CREATED_KLASS_CASE = createdKlassCase({
  * Обидва — дослівно те, що робить `classifyCte`.
  */
 export function dealKlassSql(alias = "d"): string {
-  const generic = GENERIC_CLIENT_KEYS.map((k) => `'${k}'`).join(", ");
-  const vkey = `(CASE WHEN ${alias}.client_key IS NULL OR ${alias}.client_key IN (${generic})
-                      THEN NULL ELSE ${alias}.client_key END)`;
-  const hasPrior = `EXISTS (
-        SELECT 1 FROM deals p
-         WHERE p.client_key = ${vkey} AND p.status_id = 142
-           AND p.closed_at_kommo < ${alias}.created_at_kommo
-           AND p.kommo_id <> ${alias}.kommo_id)`;
+  const vkey = vkeySql(alias);
   return createdKlassCase({
-    channel: `${alias}.lead_channel`, vkey, hasPrior, salesChannel: `${alias}.sales_channel`,
+    vkey,
+    hasPrior: priorClientSql({
+      vkey, createdAt: `${alias}.created_at_kommo`, selfId: `${alias}.kommo_id`,
+    }),
+    salesChannel: `${alias}.sales_channel`,
   });
 }
 
-// РОЗБИВКА ЗА ДЖЕРЕЛОМ (реклама / лідоген / постійний / невизн) — та сама база сигналів,
-// що CREATED_KLASS_CASE, але ЧОТИРИ категорії за ПОХОДЖЕННЯМ угоди (а не new/repeat).
+/** ДЖЕРЕЛО угоди в інлайн-формі — пара до `dealKlassSql` (та сама угода, інший вимір). */
+export const dealSourceSql = (alias = "d"): string => dealSourceCase(`${alias}.lead_channel`);
+
+// РОЗБИВКА ЗА ДЖЕРЕЛОМ (реклама / лідоген / постійний / невизн) — ЧОТИРИ категорії за
+// ПОХОДЖЕННЯМ угоди. ⚠️ Цей вираз ЗМІШУЄ джерело з новизною (гілка 'repeat') і тому
+// НЕ є `dealSourceCase`; крок 1 його свідомо не переписує — змінився лише операнд
+// `has_prior`, який тепер канон (заміряно 18.08.2026: repeat-бакет відправлених авто
+// 6 685 → 6 642, серія «постійні клієнти» у Статистиках 808 → 724 клієнтів).
 // Пріоритет каналу-першим = правило реатрибуції «останній дотик» («реактивація б'є мітки»):
 //   ad → реклама · leadgen → лідоген · other+історія(has_prior) АБО декларація «Постійні» →
 //   постійний · решта (other без історії, невідома декларація) → невизн. Σ 4 категорій = total.
@@ -609,15 +712,13 @@ function classifyCte(
      ),
      classed AS (
        SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey${bcarry}${pcarry},
-              (b.vkey IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM deals p
-                  WHERE p.client_key = b.vkey AND p.status_id = 142
-                    AND p.closed_at_kommo < b.created_at_kommo AND p.kommo_id <> b.kommo_id
-              )) AS has_prior
+              ${priorClientSql({ vkey: "b.vkey", createdAt: "b.created_at_kommo", selfId: "b.kommo_id" })} AS has_prior
          FROM base b
      ),
      final AS (
-       SELECT manager_id${bcarry}${pcarry}${vcarry}, ${opts.klassCase} AS klass FROM classed
+       SELECT manager_id${bcarry}${pcarry}${vcarry}, ${opts.klassCase} AS klass,
+              ${CREATED_SOURCE_CASE} AS source
+         FROM classed
      )`;
 }
 
@@ -628,28 +729,31 @@ function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string)
 }
 
 /**
- * РОЗКОЛ СТВОРЕНИХ угод новий/постійний — звірка 3 сигналів (об'єктивне перебиває
- * декларацію). Query-time, похідне з `deals`, БЕЗ персисту/міграції. Порядок сигналів:
- *   B = `lead_channel`: ad|leadgen → Новий (клієнт із реклами/лідогену — не «постійний»).
- *   C = історія клієнта: ≥1 ІНША виграна (142) угода того ж `client_key`, закрита
- *       (`closed_at`) ДО створення поточної; матч по `client_key` без дженерик/порожніх
- *       ключів. B=other: C≥1 → Постійний · C=0 → Новий.
- *   A = `sales_channel` (декларація) — ФОЛБЕК, коли B=other і придатного ключа немає:
- *       «Постійні клієнти» → Постійний · «Нові клієнти» → Новий · решта → Невизначено.
- * Поріг «постійний = ≥1 попередня виграна поїздка» (бізнес: 2-ге замовлення напряму
- * менеджеру = показник повернення). 🔴 Гроші НЕ рахуються — лише лічильники угод.
- * Σ(new+repeat+undef)=created; Σ менеджерів = команда = відділ (партиція за klass).
+ * РОЗКОЛ СТВОРЕНИХ угод — ДВА НЕЗАЛЕЖНІ ВИМІРИ (18.08.2026). Query-time, похідне з
+ * `deals` + `deal_stage_events`, БЕЗ персисту/міграції.
+ *   НОВИЗНА (партиція, `klass`): є придатний ключ (`vkey`) → вирішує КАНОН
+ *     (`priorClientSql`: виграв у FC або заходив у зону визнання FC до створення цієї
+ *     угоди); ключа немає → декларація CRM `sales_channel`; немає й її → «невизначено».
+ *   ДЖЕРЕЛО (накладка, `source`): `lead_channel` → реклама / лідоген / інше / невизн.
+ * 🔴 Канал БІЛЬШЕ НЕ вирішує новизну: угода з реклами від клієнта, який уже возив, —
+ * це `source='ad'` І `klass='repeat'` одночасно. Раніше перша гілка форсувала таким
+ * угодам «новий» (заміряно: 296 угод за 12 міс).
+ * Поріг «постійний = клієнт уже був наш» (бізнес: повернення клієнта). 🔴 Гроші тут НЕ
+ * рахуються — лише лічильники угод. Σ(new+repeat+undef)=created (партиція);
+ * ad/leadgen — ПІДМНОЖИНИ, у created не додаються. Σ менеджерів = команда = відділ.
  */
 export async function createdSplitByManager(s: MetricScope): Promise<CreatedSplitRow[]> {
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params);
-  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; created: string; new_count: string; repeat_count: string; undef_count: string }>(
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string }>(
     `WITH ${cte}
      SELECT m.id AS manager_id, m.name, m.team_id,
             COUNT(*) AS created,
             COUNT(*) FILTER (WHERE klass = 'new') AS new_count,
             COUNT(*) FILTER (WHERE klass = 'repeat') AS repeat_count,
-            COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count
+            COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count,
+            COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
+            COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count
        FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
       GROUP BY m.id, m.name, m.team_id
       ORDER BY created DESC`,
@@ -658,6 +762,7 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   return r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, teamId: x.team_id,
     created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
+    adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count),
   }));
 }
 
@@ -674,52 +779,59 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
     : `to_char(date_trunc('${granularity === "month" ? "month" : "week"}', ${col})::date, 'YYYY-MM-DD')`;
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params, bucketExpr);
-  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string }>(
+  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string }>(
     `WITH ${cte}
      SELECT bucket,
             COUNT(*) AS created,
             COUNT(*) FILTER (WHERE klass = 'new') AS new_count,
             COUNT(*) FILTER (WHERE klass = 'repeat') AS repeat_count,
-            COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count
+            COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count,
+            COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
+            COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count
        FROM final
       GROUP BY bucket ORDER BY bucket`,
     params
   );
   return r.rows.map((x) => ({
     bucket: x.bucket, created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
+    adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count),
   }));
 }
 
 // ───────────── «ПЛАНИ» — клієнт-спліт нові/постійні/лідоген (won cohort) ─────────────
 
 /**
- * Класифікатор сегмента для «Плани». 🔴 ІДЕНТИЧНИЙ `CREATED_KLASS_CASE` (тому, що ПОКАЗУЄ
- * Звіт: трисигнальна `has_prior` — попередній won 142 по closed_at + `sales_channel` +
- * `lead_channel`), лише `leadgen` ВІДОКРЕМЛЕНО зі спільного 'new' у власний бакет. Тобто
- * якщо злити 'leadgen'→'new', вийде РІВНО `CREATED_KLASS_CASE`. Наслідок (прайм-директива
- * «та сама цифра = те саме»): **repeat(Плани) ≡ repeat(Звіт)**, **leadgen+new(Плани) ≡
- * new(Звіт)**, undef≡undef — 1:1. Гілки в ТОМУ Ж порядку (ad→new ПЕРЕД sales_channel-
- * фолбеком), інакше ad-угода з old-міткою «Постійні» помилково впала б у repeat.
- * ⚠️ НЕ `SEGMENT_CASE` (glossary §9): він розходиться зі Звітом (repeat по prior-PAID/
- * created_at; ad-з-історією→repeat). Рішення власника — тримати консистентність зі Звітом.
+ * Класифікатор «Планів» — це ТОЙ САМИЙ вираз новизни, що у Звіті (18.08.2026).
+ *
+ * 🔴 БУЛО: власна копія правила, де `leadgen` і `ad` стояли ПЕРШИМИ гілками, тобто
+ * лідоген був КЛАСОМ поряд із «новий/постійний». Через це постійний клієнт, який
+ * прийшов через лідоген, на екрані «Плани» не був постійним ніде. Тепер:
+ *   • НОВИЗНА — `PLAN_KLASS_CASE` ≡ `CREATED_KLASS_CASE` (буквально та сама функція),
+ *     партиція `new + repeat + undef = total`;
+ *   • ДЖЕРЕЛО — `PLAN_SOURCE_CASE` ≡ `CREATED_SOURCE_CASE`, НАКЛАДКА поверх партиції
+ *     (лідоген/реклама ⊂ new ∪ repeat ∪ undef), у суму НЕ додається.
+ * Наслідок і вимога приймання: **klass(Плани) ≡ klass(Звіт) для тієї самої угоди** —
+ * доводить `#66b` (три форми правила порядково).
+ * ⚠️ НЕ `SEGMENT_CASE` (glossary §9): він рахує prior-PAID по created_at і лишається
+ * своїм життям (крок 1 його НЕ чіпає).
  */
-const PLAN_SEGMENT_KLASS_CASE = `
-  CASE
-    WHEN lead_channel = 'leadgen' THEN 'leadgen'
-    WHEN lead_channel = 'ad' THEN 'new'
-    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND has_prior THEN 'repeat'
-    WHEN lead_channel = 'other' AND vkey IS NOT NULL AND NOT has_prior THEN 'new'
-    WHEN sales_channel = 'Постійні клієнти' THEN 'repeat'
-    WHEN sales_channel = 'Нові клієнти' THEN 'new'
-    ELSE 'undef'
-  END`;
+const PLAN_KLASS_CASE = CREATED_KLASS_CASE;
+const PLAN_SOURCE_CASE = CREATED_SOURCE_CASE;
 
+/**
+ * Рядок «Планів». 🔴 ДВА РІЗНІ ЗА ПРИРОДОЮ БЛОКИ ПОЛІВ, і плутати їх не можна:
+ *   • ПАРТИЦІЯ новизни — `new + repeat + undef = total` (інваріант, гейт `#67g`);
+ *   • НАКЛАДКА джерела — `leadgen*`/`ad*` — ПІДМНОЖИНИ партиції, у суму НЕ додаються
+ *     (раніше `leadgen` був четвертим класом і саме тому ховав постійних).
+ */
 export interface ClientSplitRow {
   managerId: number; name: string; teamId: number | null;
   newCount: number; newRevenue: number;
   repeatCount: number; repeatRevenue: number;
-  leadgenCount: number; leadgenRevenue: number;
   undefCount: number; undefRevenue: number;
+  /** накладка ДЖЕРЕЛА (⊂ партиція), не додавати до total */
+  leadgenCount: number; leadgenRevenue: number;
+  adCount: number; adRevenue: number;
   total: number; totalRevenue: number;
 }
 
@@ -737,11 +849,7 @@ function wonSplitCte(): string {
      classed AS (
        SELECT b.manager_id, b.sales_channel, b.lead_channel, b.vkey, b.price,
               b.client_key, b.client_name, b.closed_at_kommo,
-              (b.vkey IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM deals p
-                  WHERE p.client_key = b.vkey AND p.status_id = 142
-                    AND p.closed_at_kommo < b.created_at_kommo AND p.kommo_id <> b.kommo_id
-              )) AS has_prior
+              ${priorClientSql({ vkey: "b.vkey", createdAt: "b.created_at_kommo", selfId: "b.kommo_id" })} AS has_prior
          FROM base b
      )`;
 }
@@ -757,9 +865,10 @@ function wonScopeConds(s: MetricScope, params: unknown[]): string {
 
 /**
  * КЛІЄНТ-СПЛІТ для «Плани» — угоди, УСПІШНО РЕАЛІЗОВАНІ (won 142, closed_at) у періоді,
- * розкладені per-manager по джерелу: нові / постійні / лідоген / невизн (count + signed
- * sum). Класифікація — `PLAN_SEGMENT_KLASS_CASE` (≡ Звіт). Анкер closed_at → Σ(усіх бакетів)
- * = `money.successByManagerMonth` того ж місяця/скоупу (гейт Фази 3). undef ≈ мінімум.
+ * розкладені per-manager: ПАРТИЦІЯ новизни (нові / постійні / невизн) + НАКЛАДКА
+ * джерела (лідоген / реклама, ⊂ партиція). Класифікація — `PLAN_KLASS_CASE` ≡ Звіт.
+ * Анкер closed_at → Σ(партиції) = `money.successByManagerMonth` того ж місяця/скоупу
+ * (гейт Фази 3). undef ≈ мінімум.
  */
 export async function clientSplitForPlan(s: MetricScope): Promise<ClientSplitRow[]> {
   const params: unknown[] = [FC_PIPELINES, GENERIC_CLIENT_KEYS];
@@ -767,14 +876,15 @@ export async function clientSplitForPlan(s: MetricScope): Promise<ClientSplitRow
   const cte = wonSplitCte().replace("__CONDS__", conds);
   const r = await pool.query<{ manager_id: number; name: string; team_id: number | null;
     new_c: string; new_r: string; repeat_c: string; repeat_r: string; leadgen_c: string; leadgen_r: string;
-    undef_c: string; undef_r: string; total: string; total_r: string }>(
+    ad_c: string; ad_r: string; undef_c: string; undef_r: string; total: string; total_r: string }>(
     `WITH ${cte},
-     final AS (SELECT manager_id, price, ${PLAN_SEGMENT_KLASS_CASE} AS klass FROM classed)
+     final AS (SELECT manager_id, price, ${PLAN_KLASS_CASE} AS klass, ${PLAN_SOURCE_CASE} AS source FROM classed)
      SELECT m.id AS manager_id, m.name, m.team_id,
             COUNT(*) FILTER (WHERE klass='new')     AS new_c,     COALESCE(SUM(price) FILTER (WHERE klass='new'),0)     AS new_r,
             COUNT(*) FILTER (WHERE klass='repeat')  AS repeat_c,  COALESCE(SUM(price) FILTER (WHERE klass='repeat'),0)  AS repeat_r,
-            COUNT(*) FILTER (WHERE klass='leadgen') AS leadgen_c, COALESCE(SUM(price) FILTER (WHERE klass='leadgen'),0) AS leadgen_r,
             COUNT(*) FILTER (WHERE klass='undef')   AS undef_c,   COALESCE(SUM(price) FILTER (WHERE klass='undef'),0)   AS undef_r,
+            COUNT(*) FILTER (WHERE source='leadgen') AS leadgen_c, COALESCE(SUM(price) FILTER (WHERE source='leadgen'),0) AS leadgen_r,
+            COUNT(*) FILTER (WHERE source='ad')      AS ad_c,      COALESCE(SUM(price) FILTER (WHERE source='ad'),0)      AS ad_r,
             COUNT(*) AS total, COALESCE(SUM(price),0) AS total_r
        FROM final f JOIN managers m ON m.id = f.manager_id
       GROUP BY m.id, m.name, m.team_id
@@ -785,8 +895,9 @@ export async function clientSplitForPlan(s: MetricScope): Promise<ClientSplitRow
     managerId: x.manager_id, name: x.name, teamId: x.team_id,
     newCount: Number(x.new_c), newRevenue: Number(x.new_r),
     repeatCount: Number(x.repeat_c), repeatRevenue: Number(x.repeat_r),
-    leadgenCount: Number(x.leadgen_c), leadgenRevenue: Number(x.leadgen_r),
     undefCount: Number(x.undef_c), undefRevenue: Number(x.undef_r),
+    leadgenCount: Number(x.leadgen_c), leadgenRevenue: Number(x.leadgen_r),
+    adCount: Number(x.ad_c), adRevenue: Number(x.ad_r),
     total: Number(x.total), totalRevenue: Number(x.total_r),
   }));
 }
@@ -822,7 +933,7 @@ export async function repeatClientsBreakdown(managerId: number, month: string, t
   const cte1 = wonSplitCte().replace("__CONDS__", conds1);
   const cur = (await pool.query<{ client_key: string | null; name: string | null; revenue: string; orders: string }>(
     `WITH ${cte1},
-     final AS (SELECT client_key, client_name, closed_at_kommo, price, ${PLAN_SEGMENT_KLASS_CASE} AS klass FROM classed)
+     final AS (SELECT client_key, client_name, closed_at_kommo, price, ${PLAN_KLASS_CASE} AS klass FROM classed)
      SELECT client_key,
             (array_agg(client_name ORDER BY closed_at_kommo DESC))[1] AS name,
             COALESCE(SUM(price),0) AS revenue, COUNT(*) AS orders
@@ -2584,7 +2695,15 @@ export interface ResponseTimeResult {
  * надходження: work(9–18)/evening(18–21)/night(21–9)/weekend. Порт `/response-time` як є
  * (означення не чіпаємо). Період — по `created_at` (дефолт: поточний місяць у роуті).
  */
-export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> {
+/**
+ * 🔴 ПРЕДИКАТ ЧАСУ РЕАКЦІЇ — ОДИН НА ОБИДВІ ФОРМИ (агрегат і розріз по менеджерах).
+ *
+ * Поки він був написаний усередині `responseTime`, розріз по менеджерах довелося б
+ * скопіювати — і копії розійшлися б мовчки, як уже розійшлись дві копії правила
+ * «новий/постійний» (12.6% угод серпня). Тут вони фізично не можуть розійтись:
+ * `responseTimeByManager` викликає ЦЮ функцію, а не свою.
+ */
+function responseScope(s: MetricScope): { conds: string[]; params: unknown[] } {
   const KY = "AT TIME ZONE 'Europe/Kyiv'";
   const params: unknown[] = [QUALIFICATION_PIPELINES];
   const conds = ["d.pipeline_id = ANY($1)", "d.first_activity_at IS NOT NULL"];
@@ -2592,7 +2711,71 @@ export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> 
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KY})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  const RESP_MIN = `GREATEST(0, EXTRACT(EPOCH FROM (q.first_activity_at - q.created_at_kommo)) / 60.0)`;
+  return { conds, params };
+}
+
+/** Хвилини від створення ліда до першого людського контакту — теж один вираз на обидві форми. */
+const RESPONSE_MINUTES_SQL =
+  `GREATEST(0, EXTRACT(EPOCH FROM (q.first_activity_at - q.created_at_kommo)) / 60.0)`;
+
+/** Частка «повільних» лідів (реакція > 60 хв) по менеджеру. */
+export interface ResponseMgrRow {
+  managerId: number;
+  /** Усього вхідних лідів Кваліфікації з першим контактом. */
+  n: number;
+  /** Скільки з них опрацьовано ПІЗНІШЕ ніж за годину. */
+  slow: number;
+  /** `slow / n × 100`. `null` — лідів не було, тобто рахувати нема з чого. */
+  pctSlow: number | null;
+}
+
+/** Поріг «повільно». Один вираз: і в SQL, і в підписі колонки. */
+export const RESPONSE_SLOW_MINUTES = 60;
+
+/**
+ * ЧАСТКА ПОВІЛЬНИХ ЛІДІВ ПО МЕНЕДЖЕРАХ — для табличного вигляду Звіту.
+ *
+ * 🔴 ЧОМУ НЕ МЕДІАНА (рішення власника 19.08.2026, після заміру). Медіана реакції
+ * по проду виявилась НУЛЬОВОЮ майже в усіх: із 1 076 лідів серпня **744 (69%)**
+ * опрацьовані менш ніж за хвилину, і лише 9 менеджерів із 38 мали медіану ≥1 хв.
+ * Тобто колонка показувала б «усі миттєві» і мовчки ховала хвіст — а хвіст там
+ * важкий: 185 лідів (17%) чекали понад годину, p90 = 683 хв. Частка повільних
+ * дивиться саме на хвіст, тобто на те, заради чого метрику й заводили.
+ *
+ * ⚠️ МЕЖА, ЯКУ ЗОБОВʼЯЗАНИЙ ПОКАЗАТИ ЕКРАН: це реакція на ВХІДНИЙ ЛІД воронки
+ * «Кваліфікація», а не на угоду повного циклу. Менеджер без лідів у періоді
+ * взагалі відсутній у видачі — і це «лідів не було», а не «повільно». Перетворити
+ * порожнечу на нуль тут означало б звинуватити людину в тому, чого не сталось.
+ * 📐 Заміряно 19.08.2026 (01–19.08): 30 із 33 менеджерів ростера мають ліди,
+ * 923 з 1 077 лідів припадають на ростер.
+ */
+export async function responseTimeByManager(s: MetricScope): Promise<ResponseMgrRow[]> {
+  const { conds, params } = responseScope(s);
+  const r = await pool.query<{ manager_id: number; n: string; slow: string }>(
+    `WITH quals AS (
+       SELECT d.manager_id, d.created_at_kommo, d.first_activity_at
+         FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+        WHERE ${conds.join(" AND ")}
+     ), resp AS (
+       SELECT q.manager_id, ${RESPONSE_MINUTES_SQL} AS minutes FROM quals q
+     )
+     SELECT manager_id, COUNT(*) AS n,
+            COUNT(*) FILTER (WHERE minutes > ${RESPONSE_SLOW_MINUTES}) AS slow
+       FROM resp WHERE manager_id IS NOT NULL GROUP BY manager_id`,
+    params
+  );
+  return r.rows.map((x) => {
+    const n = Number(x.n), slow = Number(x.slow);
+    // n = 0 сюди не потрапляє (GROUP BY), але правило лишається явним: без лідів
+    // частки не існує, і вона `null` — «—» на екрані, а не бадьорий нуль.
+    return { managerId: x.manager_id, n, slow, pctSlow: n > 0 ? Math.round((slow / n) * 1000) / 10 : null };
+  });
+}
+
+export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> {
+  const KY = "AT TIME ZONE 'Europe/Kyiv'";
+  const { conds, params } = responseScope(s);
+  const RESP_MIN = RESPONSE_MINUTES_SQL;
   const bucketCase = `CASE WHEN dow IN (0,6) THEN 'weekend' WHEN hr >= 9 AND hr < 18 THEN 'work' WHEN hr >= 18 AND hr < 21 THEN 'evening' ELSE 'night' END`;
   const cte = `
      WITH quals AS (

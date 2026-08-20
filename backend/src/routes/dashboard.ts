@@ -6,9 +6,11 @@ import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rb
 import { mergePairAllowed, mergeDenyReason, type MergePairScope } from "../auth/mergeScope.js";
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
+import { kommoLeadUrl } from "../core/kommoLinks.js";
+import { accumulateKpiTargets } from "../core/kpiTargets.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
-const kommoLeadUrl = (kommoId: number) => `${config.kommo.baseUrl.replace(/\/$/, "")}/leads/detail/${kommoId}`;
+// Посилання на картку угоди — з `core/kommoLinks` (одне місце на весь продукт).
 
 /**
  * «Очікування оплати» = deals from "Виставлено рахунок" through the pre-payment
@@ -43,6 +45,8 @@ import * as plans from "../core/plans.js";
 import * as reportCuts from "../core/reportCuts.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
+import { weekPlansForMonth } from "../core/weekPlan.js";
+import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 
 export const dashboardRouter = Router();
@@ -2588,6 +2592,34 @@ dashboardRouter.get("/response-time", async (req, res) => {
     taken15minPct: rt.taken15minPct,
     neglectedOver24h: rt.neglectedOver24h,
   });
+});
+
+/**
+ * ⏱ ЧАС РЕАКЦІЇ ПО МЕНЕДЖЕРАХ — колонка табличного вигляду Звіту.
+ *
+ * 🔴 ЧОМУ ОКРЕМИЙ РОЗРІЗ, А НЕ N ВИКЛИКІВ `/response-time`. Агрегат уміє звузитись
+ * до одного менеджера, але тридцять один запит на рендер таблиці — це тридцять один
+ * шанс упертися в `REQ_TIMEOUT_MS`. Предикат спільний із агрегатом (`responseScope`
+ * у ядрі), тож розріз не може розійтися з карткою над таблицею.
+ *
+ * 🔴 ШЛЯХ ЧЕРЕЗ СЛЕШ (`response-time/by-manager`), А НЕ ЧЕРЕЗ ДЕФІС. `pre()` у
+ * `routeTab` матчить лише по слешу: `response-time-by-manager` був би ІНШИМ роутом
+ * і лишився б без вкладкової межі — рівно та пастка, що описана в `#17g`.
+ *
+ * Менеджер, у якого в періоді не було вхідних лідів, у видачі ВІДСУТНІЙ. Це
+ * «лідів не було», а не «нуль хвилин»; домальовувати йому нуль означало б
+ * приписати результат там, де його нема з чого взяти.
+ */
+dashboardRouter.get("/response-time/by-manager", async (req, res) => {
+  const auth = req.auth!;
+  const from = (req.query.from as string) || new Date().toISOString().slice(0, 8) + "01";
+  const to = (req.query.to as string) || new Date().toISOString().slice(0, 10);
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") teamId = auth.teamId;
+  const rows = await metrics.responseTimeByManager({ from, to, managerId, teamId });
+  res.json({ from, to, managers: rows });
 });
 
 /**
@@ -6260,9 +6292,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   //     не подвоювати вже покритий парасолькою проміжок).
   //   • Лічильні (payment_amount/ads/leadgen/dispatch) — сума; ставкові (avg_check/conversion) — MAX.
   // day=week=month сходяться: тиждень із парасолькою = target; без — Σ daily; місяць = Σ обох.
-  const umbRows = (await pool.query<{ assignee_id: number; ps: string; pe: string; metrics_json: { metric: string; target: number | string }[] | null }>(
+  // 🔴 `period_kind` ТЯГНЕТЬСЯ, А НЕ ФІЛЬТРУЄТЬСЯ В SQL. Місячні парасольки й далі
+  // потрібні — але лише щоб їхні дні лишались ПОКРИТИМИ: інакше 21 прихована денна
+  // дитина місячного плану стала б «нічийною», і daily-фолбек повернув би зняту ціль
+  // через задні двері. Рішення «яку ціль читати» ухвалює `accumulateKpiTargets`.
+  const umbRows = (await pool.query<{ assignee_id: number; ps: string; pe: string; kind: string | null; metrics_json: { metric: string; target: number | string }[] | null }>(
     `SELECT t.assignee_id, to_char(t.period_start,'YYYY-MM-DD') ps,
-            to_char(COALESCE(t.period_end, t.period_start),'YYYY-MM-DD') pe, t.metrics_json
+            to_char(COALESCE(t.period_end, t.period_start),'YYYY-MM-DD') pe,
+            t.period_kind AS kind, t.metrics_json
        FROM tasks t
       WHERE t.auto AND t.task_type = 'kpi_period' AND t.assignee_id IS NOT NULL
         AND t.metrics_json IS NOT NULL
@@ -6274,35 +6311,13 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       WHERE t.auto AND t.task_type = 'daily_kpi' AND t.assignee_id IS NOT NULL
         AND t.metrics_json IS NOT NULL AND t.plan_date BETWEEN $1 AND $2`, [from, to]
   )).rows;
-  const ADDITIVE = new Set(["ads_count", "leadgen_count", "dispatch_count", "payment_amount"]);
-  const planByMgr = new Map<number, Record<string, number>>();
-  const accum = (aid: number, metrics: { metric: string; target: number | string }[] | null, factor: number) => {
-    const e = planByMgr.get(aid) ?? {};
-    for (const m of metrics ?? []) {
-      const t = Number(m.target) || 0;
-      if (ADDITIVE.has(m.metric)) e[m.metric] = (e[m.metric] ?? 0) + t * factor; // сума (апортовано factor)
-      else e[m.metric] = Math.max(e[m.metric] ?? 0, t);                          // ставка — MAX
-    }
-    planByMgr.set(aid, e);
-  };
-  // Парасольки: діапазони на менеджера (для перевірки покриття) + внесок таргету.
-  const umbByMgr = new Map<number, { ps: string; pe: string }[]>();
-  for (const u of umbRows) {
-    const wdU = workingDaysBetween(u.ps, u.pe);
-    if (wdU <= 0) continue;
-    const oFrom = u.ps > from ? u.ps : from;         // перетин [парасолька ∩ період]
-    const oTo = u.pe < to ? u.pe : to;
-    if (oFrom > oTo) continue;
-    const frac = workingDaysBetween(oFrom, oTo) / wdU;
-    (umbByMgr.get(u.assignee_id) ?? umbByMgr.set(u.assignee_id, []).get(u.assignee_id)!).push({ ps: u.ps, pe: u.pe });
-    if (frac > 0) accum(u.assignee_id, u.metrics_json, frac);
-  }
-  // Daily-фолбек: лише дні ПОЗА всіма парасольками менеджера.
-  const covered = (aid: number, d: string) => (umbByMgr.get(aid) ?? []).some((u) => d >= u.ps && d <= u.pe);
-  for (const r of dayRows) {
-    if (covered(r.assignee_id, r.pd)) continue;      // проміжок уже покрито парасолькою
-    accum(r.assignee_id, r.metrics_json, 1);
-  }
+  // Накопичення — у ЧИСТІЙ функції `core/kpiTargets` (гейти #80…#80c). Інлайном воно
+  // не мало жодної перевірки, окрім живого екрана.
+  const planByMgr = accumulateKpiTargets(
+    umbRows.map((u) => ({ assigneeId: u.assignee_id, from: u.ps, to: u.pe, kind: u.kind, metrics: u.metrics_json })),
+    dayRows.map((r) => ({ assigneeId: r.assignee_id, day: r.pd, metrics: r.metrics_json })),
+    from, to
+  );
 
   // ГРОШОВИЙ ПЛАН = СТРАТЕГІЧНИЙ план із таблиці `plans` (core plans.managerPlan — повне
   // покриття, ціль відділу 2.7млн), рішення власника 22.07. НЕ задачник: задачник покриває
@@ -6475,6 +6490,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       byPaceEarly: wdElapsed > 0 && plan > 0 ? (fact / wdElapsed) * wdTotal > plan * 1.5 : false,
       monthInProgress,
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
+      // ДЖЕРЕЛО — накладка поверх партиції (⊂ created), у суму не додається.
+      srcAd: splitM.get(m.id)?.adCount ?? 0, srcLeadgen: splitM.get(m.id)?.leadgenCount ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
       // #P1 динамічна тижнева ціль (ЄДИНИЙ вираз effectiveWeekTargets — байт-в-байт з KVP/manager-report).
       week: { target: ew?.target ?? 0, dynamic: ew?.dynamic ?? 0, manual: ew?.manual ?? null, isManual: ew?.isManual ?? false,
@@ -6631,6 +6648,72 @@ dashboardRouter.get("/report-plan/day-items", async (req, res) => {
   res.json(await dayItems(kind, managerId, date, to));
 });
 
+/**
+ * 🗓 ТИЖНІ МІСЯЦЯ ОДНОГО МЕНЕДЖЕРА — розкриття рядка в табличному вигляді Звіту.
+ *
+ * 🔴 ПЛАН БЕРЕТЬСЯ ЗІ ЗНІМКІВ, А НЕ ПЕРЕРАХОВУЄТЬСЯ. `weekPlansForMonth` читає
+ * `weekly_plan_snapshots`, тобто ту саму цифру, яку людина бачила в понеділок.
+ * Проста декомпозиція «місячний план × робочі дні тижня ÷ робочі дні місяця»
+ * виглядала б охайніше, але вона: (1) завела б ЧЕТВЕРТЕ означення тижневого плану
+ * поруч із `effectiveWeekTargets`, і (2) переписувала б історію — за минулі тижні
+ * показувала б не те, що було заморожене. `source='backfill'` віддається назовні
+ * саме тому, що екран зобовʼязаний зізнатись: цей знімок ВІДНОВЛЕНО заднім числом.
+ *
+ * 🔴 ФАКТ РАХУЄТЬСЯ ПО ТИХ САМИХ МЕЖАХ, ЩО Й ПЛАН. Тижні тут — `fixedWeekBlocks`:
+ * Пн–Нд, ОБРІЗАНІ межами місяця (перший блок серпня 2026 — це 1–2 число). Тому
+ * `receivedByManagerBucket(..., "week")` тут не годиться: `date_trunc('week')`
+ * віднесе 1 серпня до понеділка ПОПЕРЕДНЬОГО місяця, і перший рядок розкриття
+ * лишився б порожнім при живих грошах. Беремо ДЕННІ бакети ядра й складаємо їх
+ * у блоки — одним запитом і без власного SQL по виручці.
+ */
+dashboardRouter.get("/report-plan/manager-weeks", async (req, res) => {
+  const auth = req.auth!;
+  const managerId = Number(req.query.managerId);
+  const month = String(req.query.month ?? "");
+  if (!managerId || !/^\d{4}-\d{2}$/.test(month)) {
+    return res.status(400).json({ error: "managerId + month (YYYY-MM) обовʼязкові" });
+  }
+  if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
+
+  const monthStart = `${month}-01`;
+  const monthEnd = monthEndOf(monthStart);
+  const mgrRow = (await pool.query<{ team_id: number | null }>(
+    `SELECT team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
+
+  // Місячний план — ЄДИНИМ джерелом (`plans-grid`), як і всюди: тижневий похідний від нього.
+  const mp = await plans.managerPlan(mgrRow?.team_id != null ? { month: monthStart, teamId: mgrRow.team_id } : { month: monthStart });
+  const planByMgr = new Map(mp.rows.map((r) => [r.managerId, r.plan]));
+  const [snapRows, dayRows] = await Promise.all([
+    weekPlansForMonth({ managerId }, monthStart, planByMgr),
+    money.receivedByManagerBucket({ from: monthStart, to: monthEnd, managerId }, "day"),
+  ]);
+  const snapByWeek = new Map(snapRows.map((r) => [r.weekStart, r]));
+  const blocks = fixedWeekBlocks(monthStart);
+  // Складання денних сум у блоки — чиста функція (`core/weekFacts`), щоб її можна
+  // було перевірити без БД: саме на межах блоків і губляться гроші.
+  const { byBlock } = sumDaysIntoBlocks(
+    dayRows.filter((r) => r.managerId === managerId).map((r) => ({ day: r.bucket, value: r.revenue })),
+    blocks,
+  );
+
+  const weeks = blocks.map((w, i) => {
+    const snap = snapByWeek.get(w.from);
+    const fact = byBlock[i];
+    const plan = Math.round(snap?.plan ?? 0);
+    return {
+      idx: w.idx, from: w.from, to: w.to,
+      workingDays: snap?.wdWeek ?? workingDaysBetween(w.from, w.to),
+      plan, fact: Math.round(fact),
+      pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
+      overPlan: Math.round(snap?.overPlan ?? 0),
+      // `null` — тиждень ще не почався, тож знімка й не мало бути.
+      source: snap?.source ?? null,
+      reconstructed: snap?.reconstructed ?? false,
+    };
+  });
+  res.json({ managerId, month, monthPlan: Math.round(planByMgr.get(managerId) ?? 0), weeks });
+});
+
 dashboardRouter.get("/report-plan/deals", async (req, res) => {
   const auth = req.auth!;
   const managerId = Number(req.query.managerId);
@@ -6638,13 +6721,15 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
   if (!managerId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "managerId + date (YYYY-MM-DD) обовʼязкові" });
   if (!(await canDrillManager(auth, managerId))) return res.status(403).json({ error: "Forbidden" });
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
-  // 🔴 Мітка «новий/постійний» — з ЯДРА (`dealKlassSql`), а не зі скорочення по
+  // 🔴 Мітка «новий/постійний» І ДЖЕРЕЛО — обидва з ЯДРА (`dealKlassSql` +
+  // `dealSourceSql`), а не зі скорочення по
   // `lead_channel`. Тут стояла та сама двогілкова копія правила, що й у dayItems:
   // «реклама/лідоген → новий, усе інше → постійний». Вона робила постійними угоди
   // `other` БЕЗ історії клієнта — тобто сперечалась із лічильником рядка (12.6%
   // угод серпня). Правило тепер одне; форми звіряє гейт `#66`.
-  const r = await pool.query<{ name: string; klass: string | null; price: string; status_id: number }>(
-    `SELECT d.name, d.price, d.status_id, (${metrics.dealKlassSql("d")}) AS klass
+  const r = await pool.query<{ kommo_id: string; name: string; klass: string | null; source: string | null; price: string; status_id: number }>(
+    `SELECT d.kommo_id, d.name, d.price, d.status_id, (${metrics.dealKlassSql("d")}) AS klass,
+            (${metrics.dealSourceSql("d")}) AS source
        FROM deals d WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
          AND (d.created_at_kommo ${KYIV})::date = $3::date
       ORDER BY d.price DESC NULLS LAST, d.created_at_kommo`,
@@ -6656,7 +6741,12 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
       : s === 143 ? "Закрито" : "В роботі";
   res.json({
     deals: r.rows.map((x) => ({
+      // 🔗 Назва угоди — клікабельна: id угоди в нас уже є, і без лінка людина
+      // мусить шукати ту саму угоду в CRM руками. URL будує сервер (`kommoLeadUrl`),
+      // фронт піддомену не знає.
+      kommoId: Number(x.kommo_id), url: kommoLeadUrl(Number(x.kommo_id)),
       name: x.name, src: x.klass === "new" ? "new" : x.klass === "repeat" ? "rep" : null,
+      source: x.source === "ad" || x.source === "leadgen" || x.source === "other" ? x.source : null,
       price: Math.round(Number(x.price)), status: label(Number(x.status_id)),
     })),
   });
@@ -6854,7 +6944,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
       expectedThisMonth: expMgrThis.get(mid) ?? 0, expectedNextMonth: expMgrNext.get(mid) ?? 0,
       // Розкол створеного (3 сигнали): created N (нові · постійні · невизн).
-      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0 }; })(),
+      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, ad: s?.adCount ?? 0, leadgen: s?.leadgenCount ?? 0 }; })(),
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
       weeks: weeksForMgr(mid, mp.plan),    // Крок Д фінал #2: тижневий розріз Т1–Т5
     });
@@ -7035,14 +7125,16 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       };
     })(),
     segments: { totals: newRepeatTot, byManager: newRepeatMgr, byTeam: newRepeatTeam },
-    // Розкол СТВОРЕНОГО новий/постійний (3 сигнали B→C→A, поріг ≥1 попередня виграна).
-    // totals = Σ по відділу; byManager несе teamId (FE зводить у команду/відділ). Погранична
+    // Розкол СТВОРЕНОГО: ПАРТИЦІЯ новизни (new+repeat+undef = created, канон
+    // `priorClientSql`) + НАКЛАДКА джерела (`ad`/`leadgen` ⊂ партиція, у created НЕ
+    // додаються). totals = Σ по відділу; byManager несе teamId (FE зводить у команду/відділ). Погранична
     // деталізація (нові/постійні по тижнях/днях) — у /kvp-report/manager-detail (createdSplitByBucket).
     createdSplit: {
       totals: createdSplitMgr.reduce((a, x) => ({
         created: a.created + x.created, new: a.new + x.newCount, repeat: a.repeat + x.repeatCount, undef: a.undef + x.undefCount,
-      }), { created: 0, new: 0, repeat: 0, undef: 0 }),
-      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount })),
+        ad: a.ad + x.adCount, leadgen: a.leadgen + x.leadgenCount,
+      }), { created: 0, new: 0, repeat: 0, undef: 0, ad: 0, leadgen: 0 }),
+      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, ad: x.adCount, leadgen: x.leadgenCount })),
     },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),

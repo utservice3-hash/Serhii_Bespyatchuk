@@ -347,9 +347,21 @@ function ClientsSeg({ m, refMonth }: { m: PFManager; refMonth: string }) {
           {bd && <RepeatList bd={bd} />}
         </div>
       )}
-      {row(PURPLE, "Лідоген", c.leadgen)}
       {row(BAR, "Нові", c.new)}
       {c.undef.count > 0 && row(MUTED, "Невизн.", c.undef)}
+      {/* 🔴 ДЖЕРЕЛО СТОЇТЬ ПІД РИСКОЮ, А НЕ В СПИСКУ (18.08.2026). Доти «Лідоген» був
+          ЧЕТВЕРТИМ рядком поряд із «Постійні/Нові», тобто читався як клас клієнта —
+          і постійний клієнт, приведений лідогеном, не був постійним ніде. Тепер три
+          рядки вище — це ПАРТИЦІЯ (Σ = всього), а лідоген і реклама — ПІДМНОЖИНИ,
+          підписані окремо, щоб їх не складали з партицією. */}
+      {(c.source.leadgen.count > 0 || c.source.ad.count > 0) && (
+        <div style={{ fontSize: 11.5, color: MUTED, marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--border)" }}>
+          з них за джерелом (не окремий клас):{" "}
+          <span style={{ color: PURPLE, fontWeight: 600 }}>лідоген {c.source.leadgen.count} · {k(c.source.leadgen.sum)} ₴</span>
+          {" · "}
+          <span style={{ fontWeight: 600 }}>реклама {c.source.ad.count} · {k(c.source.ad.sum)} ₴</span>
+        </div>
+      )}
       <div style={{ fontSize: 12, color: MUTED, marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 7 }}>
         Перенесено з {monGen(refMonth)}: <b style={{ color: "var(--text)" }}>{k(m.carryover)} ₴</b>
       </div>

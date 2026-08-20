@@ -872,7 +872,6 @@ export function TasksSection({
                 >
                   <option value="simple">Звичайна</option>
                   <option value="weekly_kpi">Тижневий план (KPI)</option>
-                  <option value="monthly_kpi">Місячний план (KPI)</option>
                   {(role === "admin" || role === "team_lead") && <option value="reactivation">🔄 Реактивація клієнтів</option>}
                 </select>
               </label>

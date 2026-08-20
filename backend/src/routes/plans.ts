@@ -149,12 +149,20 @@ plansRouter.get("/formation", async (req, res) => {
       managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
       history,
       recommendation: { value: rec.recommendation, perWorkingDay: rec.perWorkingDay, baseSum: rec.baseSum, baseWorkingDays: rec.baseWorkingDays, targetWorkingDays: rec.targetWorkingDays, baseMonthlyAvg: rec.baseMonthlyAvg, growthPct: rec.growthPct, sparseHistory: rec.sparseHistory },
+      // 🔴 ДВА БЛОКИ РІЗНОЇ ПРИРОДИ (18.08.2026). `repeat/new/undef` — ПАРТИЦІЯ
+      // новизни, вона й тільки вона складається в `total`. `source` — накладка
+      // ДЖЕРЕЛА: лідоген і реклама є ПІДМНОЖИНАМИ партиції. Доти `leadgen` стояв
+      // четвертим класом поряд із «постійними», тож постійний клієнт, приведений
+      // лідогеном, не рахувався постійним ніде.
       clients: {
         repeat: { count: sp?.repeatCount ?? 0, sum: Math.round(sp?.repeatRevenue ?? 0) },
-        leadgen: { count: sp?.leadgenCount ?? 0, sum: Math.round(sp?.leadgenRevenue ?? 0) },
         new: { count: sp?.newCount ?? 0, sum: Math.round(sp?.newRevenue ?? 0) },
         undef: { count: sp?.undefCount ?? 0, sum: Math.round(sp?.undefRevenue ?? 0) },
         total: { count: sp?.total ?? 0, sum: Math.round(sp?.totalRevenue ?? 0) },
+        source: {
+          leadgen: { count: sp?.leadgenCount ?? 0, sum: Math.round(sp?.leadgenRevenue ?? 0) },
+          ad: { count: sp?.adCount ?? 0, sum: Math.round(sp?.adRevenue ?? 0) },
+        },
       },
       carryover: Math.round(carryMap.get(m.id) ?? 0),
       currentPlan: Math.round(planMap.get(m.id) ?? 0),
