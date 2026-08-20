@@ -342,6 +342,8 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
           <span style={{ color: "var(--text-muted)" }}> / {m.attempts}</span>
         </td>
       );
+    case "srcAd": return <td style={st}>{m.srcAd || none}</td>;
+    case "srcLeadgen": return <td style={st}>{m.srcLeadgen || none}</td>;
     case "dispRevenue":
       return <td style={st}>{m.kpi.dispatch.revenue ? `${K(m.kpi.dispatch.revenue)} ₴` : none}</td>;
     case "responseTime": {
