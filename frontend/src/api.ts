@@ -771,6 +771,12 @@ export interface ManagerWeek {
   idx: number; from: string; to: string; workingDays: number;
   plan: number; fact: number; pct: number | null; overPlan: number;
   source: "live" | "backfill" | null; reconstructed: boolean;
+  /** 🚚 Авто, відправлені того тижня (анкер `load_at`), і тижнева ціль із Задачника. */
+  dispatchFact: number;
+  /** `null` — тижневої парасольки немає (їх має 17 із 31), тобто цілі не ставили. */
+  dispatchTarget: number | null;
+  /** ✂️ Тиждень обрізаний межею місяця — не повний Пн–Нд. */
+  clipped: boolean;
 }
 export interface ManagerWeeks { managerId: number; month: string; monthPlan: number; weeks: ManagerWeek[] }
 export async function fetchManagerWeeks(params: { managerId: number; month: string }): Promise<ManagerWeeks> {

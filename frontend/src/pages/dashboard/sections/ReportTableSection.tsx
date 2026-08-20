@@ -31,7 +31,7 @@ const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відст�
 
 export function ReportTableSection({
   data, teams, auth, teamId, onTeamId, periodLabel, hideTeams,
-  responseByMgr, month,
+  responseByMgr, month, renderCard,
 }: {
   data: ReportPlan;
   teams: Team[];
@@ -44,6 +44,16 @@ export function ReportTableSection({
   responseByMgr?: Map<number, number | null>;
   /** Місяць для розкриття тижнів (YYYY-MM) — береться від початку обраного періоду. */
   month: string;
+  /**
+   * ПОВНА КАРТКА обраного менеджера — рендерить КОНТЕЙНЕР, а не таблиця.
+   *
+   * 🔴 ЧОМУ ПРОПСОМ, А НЕ ІМПОРТОМ. `MgrStrip` живе в `ReportPlanSection`, який сам
+   * імпортує цю таблицю. Прямий імпорт назад замкнув би цикл модулів: у ESM він
+   * зазвичай «якось працює», але лагодити його потім доводиться в рантаймі, а не
+   * на збірці. Виносити `MgrStrip` в окремий файл цим проходом теж не варто — це
+   * потягло б за собою пів карткового вигляду, який ми свідомо не чіпаємо.
+   */
+  renderCard?: (m: ReportPlanManager) => React.ReactNode;
 }) {
   const [sortKey, setSortKey] = useState<ColKey>("fact");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -142,6 +152,22 @@ export function ReportTableSection({
         </span>
       </div>
 
+      {/* 🔴 ПІДПИС ЗВУЖЕННЯ (рішення власника 20.08.2026, варіант «б»).
+             Верхній підсумок (кільце, плитки) рендериться КОНТЕЙНЕРОМ до розвилки
+             вигляду, тож фільтр менеджера його не звужує. Числа там не брешуть —
+             але без цього рядка вони читаються як «підсумок обраного».
+             Перераховувати `glance` на фронті свідомо НЕ стали: це завело б другий
+             обчислювач тих самих чисел, тобто рівно те, від чого береже #81. */}
+      {mgrFilter !== "" && (
+        <div style={{
+          fontSize: 12, color: "var(--text-muted)", marginBottom: 12, padding: "8px 12px",
+          background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--r-lg)",
+        }}>
+          Підсумок угорі — <b style={{ color: "var(--text)" }}>по всьому відділу</b>; нижче — лише
+          обраний менеджер.
+        </div>
+      )}
+
       {/* ── Чипи колонок */}
       <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>Колонки:</span>
@@ -155,6 +181,20 @@ export function ReportTableSection({
             }}>{c.title}</button>
         ))}
       </div>
+
+      {/**
+        * 🧍 ОДИН МЕНЕДЖЕР — ПОВНА КАРТКА (рішення власника 20.08.2026).
+        *
+        * Вибір одного менеджера в «Обсяг» і Є запитом «покажи все про нього», тож
+        * картка стоїть РОЗГОРНУТОЮ і стан `open` таблиці з нею не ділиться: інакше
+        * «розгорнув у таблиці — згорнулось у картці» стало б питанням часу.
+        *
+        * 🔴 Це ТОЙ САМИЙ `MgrStrip`, що в картковому вигляді, а не його копія: копія
+        * розійшлася б із оригіналом мовчки — рівно те, від чого береже #81.
+        */}
+      {mgrFilter !== "" && renderCard && rows[0] && (
+        <div style={{ marginBottom: 14 }}>{renderCard(rows[0])}</div>
+      )}
 
       <div className="chart-card" style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
@@ -326,6 +366,8 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
           <span style={{ color: "var(--text-muted)" }}> / {m.attempts}</span>
         </td>
       );
+    case "srcAd": return <td style={st}>{m.srcAd || none}</td>;
+    case "srcLeadgen": return <td style={st}>{m.srcLeadgen || none}</td>;
     case "dispRevenue":
       return <td style={st}>{m.kpi.dispatch.revenue ? `${K(m.kpi.dispatch.revenue)} ₴` : none}</td>;
     case "responseTime": {
@@ -529,12 +571,15 @@ function WeeksDrill({ managerId, month }: { managerId: number; month: string }) 
             <td style={{ ...wTd, textAlign: "right" }}>Факт</td>
             <td style={{ ...wTd, textAlign: "right" }}>План</td>
             <td style={{ ...wTd, textAlign: "right" }}>Викон.</td>
+            <td style={{ ...wTd, textAlign: "right" }}>Авто ф/ц</td>
           </tr>
           {d.weeks.map((w) => (
             <tr key={w.idx}>
               <td style={{ ...wTd, color: "var(--text-muted)" }}>
                 {w.from.slice(8)}–{w.to.slice(8)} {w.from.slice(5, 7)}
                 <span style={{ opacity: 0.6 }}> · {w.workingDays} р.д.</span>
+                {w.clipped && <span title="тиждень обрізаний межею місяця — коротший за повний Пн–Нд; тижнева ЦІЛЬ на картці рахується по повному календарному тижню"
+                  style={{ marginLeft: 6, fontSize: 10, color: "var(--text-muted)" }}>обрізаний місяцем</span>}
                 {w.reconstructed && <span title="знімок відновлено ретроспективно, а не збережено в момент"
                   style={{ marginLeft: 6, fontSize: 10, color: "var(--warn)" }}>знімок відновлено</span>}
               </td>
@@ -544,6 +589,10 @@ function WeeksDrill({ managerId, month }: { managerId: number; month: string }) 
               </td>
               <td style={{ ...wTd, textAlign: "right" }}>
                 {w.pct == null ? <span style={{ color: "var(--text-muted)", opacity: 0.6 }}>—</span> : `${w.pct}%`}
+              </td>
+              <td style={{ ...wTd, textAlign: "right" }}>
+                {w.dispatchFact}
+                <span style={{ color: "var(--text-muted)" }}> / {w.dispatchTarget ?? "—"}</span>
               </td>
             </tr>
           ))}

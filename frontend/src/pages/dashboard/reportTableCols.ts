@@ -20,7 +20,8 @@ export type ColKey =
   | "rank" | "name" | "status" | "created" | "ads" | "leadgen" | "conv"
   | "dispatch" | "avgCheck" | "fact" | "plan" | "pct"
   | "projected" | "needPerDay" | "expectThisMonth" | "awaitNoDate"
-  | "jamDeals" | "jam" | "dobir" | "talks" | "dispRevenue" | "responseTime";
+  | "jamDeals" | "jam" | "dobir" | "talks" | "dispRevenue" | "responseTime"
+  | "srcAd" | "srcLeadgen";
 
 /**
  * Як колонка згортається в підсумковий рядок.
@@ -83,10 +84,15 @@ export const REPORT_COLS: ColDef[] = [
     help: "Стан за темпом місяця: у нормі / відстає / зрив. Джерело: statusOf(факт,план) з поправкою на пройдені робочі дні (пороги 1.0 / 0.7)." },
   { key: "created", title: "Створено", core: true, val: (m) => m.created, foot: "add",
     help: "Угод створено за період; у дужках нові/постійні. Джерело: metrics.createdSplitByManager (постійний = клієнт мав визнану FC-угоду)." },
-  { key: "ads", title: "Реклама", core: true, val: (m) => numOrNull(m.kpi.ads.fact), foot: "add",
-    help: "Прийнято рекламних лідів за період. Джерело: metrics.adsAcceptedByMgr." },
-  { key: "leadgen", title: "Лідоген", core: true, val: (m) => numOrNull(m.kpi.leadgen.fact), foot: "add",
-    help: "Прийнято лідів від лідогенератора. Джерело: metrics.leadgenByManager." },
+  // 🔴 ЦЕ ОКРЕМА МЕТРИКА КАНАЛУ, А НЕ ЧАСТИНА «СТВОРЕНО». Заміряно 20.08.2026 на
+  // проді (тиждень 10–16.08, відділ): «Прийнято реклами» = 248, а створених із
+  // каналом `ad` = 228. Різні множини, різниця 20 угод (8.8%). Поки колонка звалась
+  // «Реклама» і стояла поруч зі «Створено», «15 = 13+0+2» читалось як розклад — а це
+  // був арифметичний збіг. Розклад створених — окремі колонки нижче.
+  { key: "ads", title: "Прийнято реклами", core: true, val: (m) => numOrNull(m.kpi.ads.fact), foot: "add",
+    help: "Прийнято рекламних лідів за період. Джерело: metrics.adsAcceptedByMgr. ⚠️ Це ОКРЕМА метрика каналу, а не підмножина колонки «Створено»: заміряно 248 проти 228 створених із каналом «реклама» за той самий тиждень. Розклад створених за джерелом — колонки «зі створених: реклама/лідоген»." },
+  { key: "leadgen", title: "Прийнято лідоген", core: true, val: (m) => numOrNull(m.kpi.leadgen.fact), foot: "add",
+    help: "Прийнято лідів від лідогенератора. Джерело: metrics.leadgenByManager. ⚠️ Це ОКРЕМА метрика каналу, а не підмножина колонки «Створено» — розклад створених за джерелом стоїть окремими колонками." },
   { key: "conv", title: "Конв. Р+Л", core: true, val: (m) => numOrNull(m.kpi.conversion.fact), foot: "ratio:conv",
     help: "Конверсія по каналах Реклама+лідоген: виграні ÷ взяті. «—» якщо взято <10. Джерело: metrics.conversionByManager." },
   { key: "dispatch", title: "Авто ф/ц", core: true, val: (m) => numOrNull(m.kpi.dispatch.fact), foot: "add",
@@ -119,6 +125,13 @@ export const REPORT_COLS: ColDef[] = [
     help: "Середній добір за 3 міс; у прогноз НЕ входить. Джерело: money.dobirByManager." },
   { key: "talks", title: "Дзвінки", core: false, val: (m) => m.talks, foot: "add",
     help: "Розмов / спроб (дві цифри). Джерело: reportCuts.callsByManager." },
+  // 🟢 СПРАВЖНІЙ РОЗКЛАД СТВОРЕНИХ ЗА ДЖЕРЕЛОМ (рішення власника 20.08.2026).
+  // Це НАКЛАДКА на «Створено», а не партиція: сума двох колонок ≤ створених, решта —
+  // угоди без рекламного чи лідоген-дотику. Складати їх зі «Створено» не можна.
+  { key: "srcAd", title: "зі створених: реклама", core: false, val: (m) => m.srcAd, foot: "add",
+    help: "Скільки зі СТВОРЕНИХ угод періоду мають рекламний канал (deals.lead_channel='ad'). Джерело: metrics.createdSplitByManager. Це накладка на «Створено», а не окремий потік: srcAd + srcLeadgen ≤ Створено." },
+  { key: "srcLeadgen", title: "зі створених: лідоген", core: false, val: (m) => m.srcLeadgen, foot: "add",
+    help: "Скільки зі СТВОРЕНИХ угод періоду прийшли від лідогенератора (deals.lead_channel='leadgen'). Джерело: metrics.createdSplitByManager. Накладка на «Створено», не підсумовується з нею." },
   { key: "dispRevenue", title: "Авто-сума", core: false, val: (m) => numOrNull(m.kpi.dispatch.revenue), foot: "add",
     help: "Сума відправлених авто ₴. Джерело: kpi.dispatch.revenue." },
   // 🔴 ЧАСТКА, А НЕ МЕДІАНА (рішення власника 19.08.2026). Медіана на проді
@@ -134,6 +147,7 @@ export const DEFAULT_OPT_ON: Record<string, boolean> = {
   projected: true, needPerDay: true, expectThisMonth: true, awaitNoDate: true,
   jamDeals: true, responseTime: true,
   jam: false, dobir: false, talks: false, dispRevenue: false,
+  srcAd: false, srcLeadgen: false,
 };
 
 export const OPTIONAL_COLS = REPORT_COLS.filter((c) => !c.core);

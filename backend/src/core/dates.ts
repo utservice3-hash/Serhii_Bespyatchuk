@@ -39,6 +39,34 @@ export function fixedWeekBlocks(monthStart: string): { idx: number; from: string
   return blocks;
 }
 
+/**
+ * 🗓 ТИЖНЕВІ БЛОКИ, ЩО ПОКРИВАЮТЬ ДОВІЛЬНИЙ ДІАПАЗОН (20.08.2026).
+ *
+ * Ті самі Пн–Нд, що й `fixedWeekBlocks`, але обрізані межами ДІАПАЗОНУ, а не місяця.
+ * Для повного місяця обидві функції дають БАЙТ-У-БАЙТ однакові блоки (межа місяця і є
+ * межею діапазону) — саме тому заміна безпечна там, де раніше стояв місяць.
+ *
+ * 🔴 НАВІЩО ОКРЕМА ФУНКЦІЯ, А НЕ ПРАВКА `fixedWeekBlocks`. Та живить заморожені
+ * знімки тижневого плану (`weekly_plan_snapshots`), де блок ЗОБОВʼЯЗАНИЙ бути
+ * місячним: знімок кріпиться до понеділка всередині свого місяця. Розширити її
+ * означало б заднім числом зрушити ключі вже заморожених тижнів.
+ */
+export function weekBlocksForRange(from: string, to: string): { idx: number; from: string; to: string }[] {
+  const blocks: { idx: number; from: string; to: string }[] = [];
+  const end = new Date(to + "T00:00:00Z");
+  const cur = new Date(from + "T00:00:00Z");
+  for (let idx = 1; cur.getTime() <= end.getTime() && idx <= 200; idx++) {
+    const dow = cur.getUTCDay() === 0 ? 7 : cur.getUTCDay();   // Пн=1..Нд=7
+    const stop = new Date(cur.getTime());
+    stop.setUTCDate(stop.getUTCDate() + (7 - dow));            // найближча неділя
+    const clipped = stop.getTime() > end.getTime() ? end : stop;
+    blocks.push({ idx, from: cur.toISOString().slice(0, 10), to: clipped.toISOString().slice(0, 10) });
+    cur.setTime(clipped.getTime());
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return blocks;
+}
+
 /** Робочі дні (Пн–Пт) у [from,to] включно. */
 export function workingDaysBetween(from: string, to: string): number {
   let n = 0; const d = new Date(from + "T00:00:00Z"); const end = new Date(to + "T00:00:00Z");
