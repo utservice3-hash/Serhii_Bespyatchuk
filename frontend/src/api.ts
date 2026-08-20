@@ -599,6 +599,7 @@ export interface KvpReport {
     derived: { base: number; low: number; target: number; high: number };
   };
   signals: KvpSignal[];
+  topPerformers: { name: string; team: string; plan: number; fact: number; pct: number }[];
   engines: {
     rpk: KvpEngineTeam; rnk: KvpEngineTeam; leadgenTeam: KvpEngineTeam;
     ad: { budget: number; gaLeads: number; romi: number | null; cpa: number | null; cplGa: number | null; cplCrm: number | null; conversion: number | null; entered: number; won: number; mature: boolean; revenue: number };

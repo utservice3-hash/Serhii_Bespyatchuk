@@ -331,6 +331,34 @@ export function KvpReportSection() {
             </div>
           )}
 
+          {/* ── 🏆 ТРИМАЮТЬ ──
+              Екран КВП складався з самих проблем: «Сигнали» показують лише падіння.
+              Тут — хто попереду. Порогу «лідера» НЕМАЄ навмисно: заміряно 20.08.2026,
+              що з 29 менеджерів із планом ≥100% має РІВНО ОДИН, тож умова «показувати
+              тих, хто перевиконав» лишала б блок майже завжди порожнім.
+              АБСОЛЮТ ПОРУЧ ІЗ ВІДСОТКОМ обовʼязковий: 97% на плані 39к і 64% на плані
+              300к без нього читаються навпаки. */}
+          {rep.topPerformers.length > 0 && (
+            <div className="chart-card" style={{ marginBottom: 16 }}>
+              <h2 className="chart-title">🏆 Тримають
+                <span style={{ fontSize: 12, fontWeight: 400, color: MUTED }}> · топ-3 за виконанням плану</span>
+              </h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {rep.topPerformers.map((m, i) => (
+                  <div key={m.name} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderLeft: `3px solid ${GREEN}`, background: "var(--card-bg)", borderRadius: 8 }}>
+                    <span style={{ fontSize: 18 }}>{["🥇", "🥈", "🥉"][i] ?? "•"}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600 }}>{m.name} <span style={{ fontSize: 12, fontWeight: 400, color: MUTED }}>· {m.team}</span></div>
+                      <div style={{ fontSize: 13, color: "var(--text)" }}>
+                        <b style={{ color: pctColor(m.pct) }}>{m.pct}%</b> — {fmtMoney(m.fact)} з {fmtMoney(m.plan)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* ── ДВИГУНИ (4) ── */}
           <div className="chart-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
             {([["🏭 РПК", rep.engines.rpk, false], ["📢 РНК", rep.engines.rnk, true]] as const).map(([lbl, e, showConv]) => (

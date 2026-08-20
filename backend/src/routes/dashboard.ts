@@ -7156,6 +7156,30 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     derived: plans.deriveMonthlyTarget(receivedPrev.revenue),
   };
 
+  /**
+   * 🏆 «ТРИМАЮТЬ» — ХТО ЛІДИРУЄ (D2, рішення власника 20.08.2026).
+   *
+   * 🔴 ПРИВІД. «Сигнали» показували ЛИШЕ падіння (<70% плану, «✗ N тижнів поспіль»),
+   * тож екран КВП складався з самих проблем — і не було видно, кого ставити в приклад.
+   *
+   * 🔴 ПОРІГ ЛІДЕРА НЕ ЗАШИТИЙ — і це вимога, а не зручність. Заміряно на проді
+   * 20.08.2026: із **29 менеджерів із планом ≥100% має РІВНО ОДИН**. Умова «показувати
+   * тих, хто перевиконав» лишала б блок майже завжди порожнім, тобто мертвим. Тому
+   * беремо ТОП-3 за відсотком, яким би він не був: «хто попереду сьогодні» — питання,
+   * що має відповідь у будь-який день місяця.
+   *
+   * 🔴 АБСОЛЮТ ПОРУЧ ІЗ ВІДСОТКОМ — ОБОВʼЯЗКОВО. 97% на плані 39 000 і 64% на плані
+   * 300 000 (обидва живі приклади того ж заміру) без абсолюту читаються навпаки:
+   * менший план дає більший відсоток за вчетверо менші гроші.
+   */
+  const topPerformers = teams
+    .filter((t) => t.kind === "rpk" || t.kind === "rnk")
+    .flatMap((t) => (t.managers as { name: string; plan: number; revenue: number; pct: number | null }[])
+      .filter((m) => m.plan > 0 && m.pct != null)
+      .map((m) => ({ name: m.name, team: t.name, plan: Math.round(m.plan), fact: Math.round(m.revenue), pct: m.pct as number })))
+    .sort((a, b) => b.pct - a.pct || b.fact - a.fact)
+    .slice(0, 3);
+
   // ── СИГНАЛИ (деривовані, ранж за гостротою) ──
   const signals: { severity: string; icon: string; title: string; detail: string; action: string; expectedThisMonth?: number; expectedNextMonth?: number }[] = [];
   for (const t of teams.filter((x) => x.kind === "rpk" || x.kind === "rnk")) {
@@ -7198,7 +7222,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     weekBlocks: weekBlocks.map((w) => ({ idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW, pace: paceOf(w, w.from <= kyivTodayW && kyivTodayW <= w.to), workingDays: workingDaysBetween(w.from, w.to) })),
     deptWeeks,
     strategicPlan: strategic,   // 🔒 read-only
-    verdict, signals, engines, teams,
+    verdict, signals, topPerformers, engines, teams,
     retention: {
       newToRepeat, activeBase, weeklyRegulars: weeklyReg,
       nonTarget, receivablesPaidOff: null, // «—»: немає джерела історії погашень
