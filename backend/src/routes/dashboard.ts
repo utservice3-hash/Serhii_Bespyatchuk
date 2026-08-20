@@ -6982,6 +6982,24 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // Σ команд == Σ менеджерів == Σ тижнів байт-у-байт (managerPlan — єдине джерело).
   const strategic = teams.reduce((s, t) => s + t.plan, 0);
 
+  /**
+   * 📐 ВІДСОТОК ПРОГНОЗУ — ОДИН ВИРАЗ НА ВЕСЬ ЗВІТ.
+   *
+   * 🔴 ЧОМУ ЦЕ ЗʼЯВИЛОСЬ. `buildProjection` кличеться в `Promise.all` ВИЩЕ (рядок
+   * ~6786), де `strategic` ще не існує, — тому туди йшов `plan = null`, і
+   * `projection.projectedPct` був `null` ЗАВЖДИ, за будь-яких даних. Плитка «Прогноз
+   * місяця» друкувала його сирою інтерполяцією й показувала слово **«null% плану»**
+   * при живому плані 2 759 000 і прогнозі 2 748 167 — тобто відсоток БУЛО чим
+   * порахувати, його просто не рахували.
+   *
+   * 🔴 І ЦЕ БУЛА НЕ ОДНА ГІЛКА, А ДВІ. Повна таблиця нижче рахувала той самий
+   * відсоток власним виразом `strategic > 0 ? … : null` — і показувала правильно.
+   * Одне число, два шляхи, різні результати на ОДНОМУ екрані: класика, від якої
+   * лікує не латка на `null`, а спільний вираз. Обидві поверхні тепер беруть звідси.
+   */
+  const pctOfPlan = (v: number): number | null =>
+    strategic > 0 ? Math.round((v / strategic) * 100) : null;
+
   // Тижневий факт дод.показників (датовані по дню анкера, Σтижнів==місяць): успіх(142),
   // нові/постійні отримано, втрачені(143), дохід в очікуванні за ПЛАНОВОЮ датою.
   const inBlk = <T,>(rows: T[], day: (r: T) => string, from: string, to: string) =>
@@ -7049,8 +7067,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     received: { deals: received.deals, revenue: received.revenue },
     receivedPrev: { revenue: receivedPrev.revenue },
     strategicPlan: strategic,
-    planPct: strategic > 0 ? Math.round((received.revenue / strategic) * 100) : null,
-    projection: { fact: projection.fact, projected: projection.projected, projectedPct: projection.projectedPct, elapsedWorkingDays: projection.elapsedWorkingDays, totalWorkingDays: projection.totalWorkingDays },
+    planPct: pctOfPlan(received.revenue),
+    projection: { fact: projection.fact, projected: projection.projected, projectedPct: pctOfPlan(projection.projected), elapsedWorkingDays: projection.elapsedWorkingDays, totalWorkingDays: projection.totalWorkingDays },
     lifecycle: {
       sent: { deals: dispatchedAll.deals, revenue: dispatchedAll.revenue },
       awaiting: { deals: expectedZone.total.deals, revenue: expectedZone.total.sum },
@@ -7113,7 +7131,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       const remainPlan = Math.max(0, strategic - received.revenue);
       const newClients = newRepeatTot.newClients ?? 0;
       return {
-        forecast: { projected: projection.projected, fact: projection.fact, projectedPct: strategic > 0 ? Math.round((projection.projected / strategic) * 100) : null },
+        forecast: { projected: projection.projected, fact: projection.fact, projectedPct: pctOfPlan(projection.projected) },
         neededPacePerDay: remainWd > 0 ? Math.round(remainPlan / remainWd) : null,
         remainingWorkingDays: remainWd,
         remainingPlan: remainPlan,

@@ -31,6 +31,7 @@ export const MANIFEST_FILES: string[] = [
   "core/sumInvariants.test.js",
   "core/periodNesting.test.js",
   "routes/managersExpected.test.js",
+  "routes/kvpReport.test.js",
   "routes/dismissedMoney.test.js",
   "routes/reactivateCycle.test.js",
   "routes/noPlanShare.test.js",
@@ -492,4 +493,8 @@ export const MANIFEST_TESTS: string[] = [
   "#75c БЕЗ ПАТЧА БЕКАП НЕ ПОЧИНАЄТЬСЯ, а не працює тихо",
   // core/stuckTalk.test.ts — інструмент живого заміру порога
   "#77 ІНСТРУМЕНТ ЗАМІРУ: три пороги, і його власний детектор працює",
+  // routes/kvpReport.test.ts — Звіт КВП: відсоток плану одним виразом
+  "K1 ВІДСОТОК ПРОГНОЗУ НЕ БЕРЕТЬСЯ З ЗАВЖДИ-NULL ПОЛЯ",
+  "K2 ВІДСОТОК ПЛАНУ — ОДИН ВИРАЗ НА ВСІ ПОВЕРХНІ ЗВІТУ",
+  "K3 ЕКРАН НЕ ДРУКУЄ ВІДСОТОК СИРОЮ ІНТЕРПОЛЯЦІЄЮ",
 ];

@@ -242,7 +242,7 @@ export function KvpReportSection() {
               <Stat label="Стратегічний план 🔒" value={fmtMoney(v.strategicPlan)} hint={HINT.strategic}
                 sub={`виконання ${fmtPct(v.planPct)}`} color={pctColor(v.planPct)} />
               <Stat label="Прогноз місяця" value={fmtMoney(v.projection.projected)} hint={HINT.projection}
-                sub={`факт ${fmtMoney(v.projection.fact)} · ${v.projection.projectedPct}% плану`} />
+                sub={`факт ${fmtMoney(v.projection.fact)} · ${fmtPct(v.projection.projectedPct)} плану`} />
               <Stat label="Робочі дні" value={`${v.projection.elapsedWorkingDays}/${v.projection.totalWorkingDays}`}
                 sub="минуло / всього" />
             </div>
