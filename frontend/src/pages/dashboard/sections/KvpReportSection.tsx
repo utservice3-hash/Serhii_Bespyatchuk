@@ -35,7 +35,15 @@ const HINT: Record<string, string> = {
   activeBase: "Активність бази = DISTINCT клієнтів з оплатою в місяці. «Замовили цей місяць».",
   weeklyRegulars: "Постійні щотижня = клієнти з оплатами у ≥4 з останніх 8 тижнів (евристика).",
   nonTarget: "Нецільові = рекламні ліди з причиною відмови «Дубль»/«Перевізник». Місяці до горизонту синку reject_reason → «—» (немає даних, не «0»).",
-  receivablesPaidOff: "Погашено дебіторки — джерела історії погашень немає (receivables це знімок) → «—».",
+  receivablesPaidOff: "Історії погашень у базі НЕМАЄ, і це не «нуль погашень». `receivables` і "
+    + "`receivable_invoices` — знімки: щосинку TRUNCATE+insert, тобто зберігається лише стан «зараз», "
+    + "без подій. `receivable_notes` тримає ОБІЦЯНУ дату (due_date), а не факт оплати. Щоб показник "
+    + "зʼявився, потрібна щоденна знімкова джоба (падіння боргу клієнта = погашення) — окрема задача. "
+    + "Доти тут написано, що ми не знаємо, а не «—»: порожнє місце читається як нуль.",
+  unattributed: "Угоди БЕЗ `client_key` — немає по чому віднести до нового/постійного. Показано ЯВНО, "
+    + "не сховано, і входять у Σ (інваріант «нові + постійні + залишок == каса» тримається точно). "
+    + "СУМА БУВАЄ ВІДʼЄМНОЮ, і це не помилка: сюди потрапляють мінусові угоди (сторно/повернення), "
+    + "а ядро їх нетить — рівно як задумано. Дивитись треба на кількість угод поруч, а не лише на суму.",
   newRepeat: "Нові/постійні (client-grain лінз): клієнт з першою оплатою в періоді = новий. ОКРЕМО від team-based РПК/РНК (то ознака команди). Кожен клієнт → primary-менеджер, Σ = відділ.",
   // 🔴 ПІДПИС ПЕРЕПИСАНО 18.08.2026 РАЗОМ ІЗ ПРАВИЛОМ. Тут стояв дослівний опис
   // старої логіки («B=канал угоди: реклама/лідоген → новий»), і лишити його означало
@@ -695,7 +703,7 @@ function StructureBlock({ rep }: { rep: KvpReport }) {
         {seg("Постійні клієнти", rs.received.repeat, rs.expected.repeat, GREEN)}
       </div>
       <div style={{ marginTop: 8, fontSize: 12, color: MUTED, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Не віднесено (без клієнта): отримано <b style={{ color: "var(--text)" }}>{fmtMoney(rs.received.unattributed.revenue)}</b> · в очікуванні <b style={{ color: "var(--text)" }}>{fmtMoney(rs.expected.unattributed.sum)}</b><InfoHint text="Угоди без client_key — немає по чому віднести до нового/постійного. Показано ЯВНО, не сховано." /></span>
+        <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Не віднесено (без клієнта): отримано <b style={{ color: "var(--text)" }}>{fmtMoney(rs.received.unattributed.revenue)}</b> <span style={{ color: MUTED }}>({rs.received.unattributed.deals} уг.)</span> · в очікуванні <b style={{ color: "var(--text)" }}>{fmtMoney(rs.expected.unattributed.sum)}</b> <span style={{ color: MUTED }}>({rs.expected.unattributed.deals} уг.)</span>{(rs.received.unattributed.revenue < 0 || rs.expected.unattributed.sum < 0) && <span style={{ color: MUTED }}> — мінус тут нормальний: у групі є сторно, і воно нетиться</span>}<InfoHint text={HINT.unattributed} /></span>
       </div>
       <div style={{ marginTop: 4, fontSize: 12, color: reconcilesOk ? GREEN : RED }}>
         {reconcilesOk ? "✅" : "⚠️"} Σ отримано (нові {fmtMoney(rs.received.new.revenue)} + постійні {fmtMoney(rs.received.repeat.revenue)} + залишок {fmtMoney(rs.received.unattributed.revenue)}) = {fmtMoney(sumSeg)} {reconcilesOk ? "==" : "≠"} каса {fmtMoney(rTotal)}
@@ -713,7 +721,7 @@ function RetentionBlock({ rep }: { rep: KvpReport }) {
       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>Активність бази: <b>{fmtNum(ab?.activeClients ?? null)}</b> <span style={{ color: MUTED }}>клієнтів ({ab?.ym})</span><InfoHint text={HINT.activeBase} /></span>
       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>Постійні щотижня: <b>{fmtNum(rep.retention.weeklyRegulars.clients)}</b><InfoHint text={HINT.weeklyRegulars} /></span>
       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>Нецільові: <b>{rep.retention.nonTarget == null ? "—" : fmtNum(rep.retention.nonTarget)}</b><InfoHint text={HINT.nonTarget} /></span>
-      <span style={{ display: "flex", alignItems: "center", gap: 4, color: MUTED }}>Погашено дебіторки: <b>—</b><InfoHint text={HINT.receivablesPaidOff} /></span>
+      <span style={{ display: "flex", alignItems: "center", gap: 4, color: MUTED }}>Погашено дебіторки: <b>історія не ведеться</b><InfoHint text={HINT.receivablesPaidOff} /></span>
     </div>
   );
 }
