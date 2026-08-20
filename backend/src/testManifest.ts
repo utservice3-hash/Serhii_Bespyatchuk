@@ -53,6 +53,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/reportTable.test.js",
   "routes/reportTableWeeks.test.js",
   "routes/reportWeekDrill.test.js",
+  "routes/reportSplits.test.js",
   "jobs/syncGuard.test.js",
   "health/jobAlert.test.js",
   "jobs/backupRotate.test.js",
@@ -471,6 +472,10 @@ export const MANIFEST_TESTS: string[] = [
   "#93b ТИЖДЕНЬ — ЦЕ Σ ЙОГО ВЛАСНИХ ДНІВ, І ДРУГОГО ДЖЕРЕЛА В РОЗКРИТТІ НЕМАЄ",
   "#98 ОБРІЗАНИЙ МІСЯЦЕМ ТИЖДЕНЬ НАЗВАНИЙ ОБРІЗАНИМ, а ціль без парасольки — «—», не 0",
   "#93c SMOKE: Σ тижнів == Σ днів == підсумку розкриття (живий API)",
+  // routes/reportSplits.test.ts — мультивибір команд / три конверсії / гроші за новизною
+  "#99 ЧЛЕНСТВО СКАЛЯРНЕ: менеджер не може дати два рядки (жива БД)",
+  "#99b ЗЛИТТЯ СУМУЄ glance ВСІХ ЧАСТИН, а не бере з першої",
+  "#99b2 ЕКРАН: групи рахуються з ТИХ САМИХ рядків, і чужий рядок не зникає",
   // jobs/syncGuard.test.ts — захист після аварії 10.08.2026 (синк стояв 14 год 52 хв)
   "#68 ОХОРОНЕЦЬ НЕ МОЖЕ ЗАЛИПНУТИ НАЗАВЖДИ",
   "#68b ПРОПУСК пишеться пропуском, а не успіхом",

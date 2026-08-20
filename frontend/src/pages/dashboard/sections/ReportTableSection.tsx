@@ -30,14 +30,14 @@ const TOKEN: Record<string, string> = { g: "--ok", a: "--warn", r: "--danger" };
 const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відстає", r: "Зрив" };
 
 export function ReportTableSection({
-  data, teams, auth, teamId, onTeamId, periodLabel, hideTeams,
+  data, teams, auth, teamIds, onTeamIds, periodLabel, hideTeams,
   responseByMgr, month, renderCard,
 }: {
   data: ReportPlan;
   teams: Team[];
   auth: { role: string; managerId: number | null; teamId: number | null };
-  teamId: number | "";
-  onTeamId: (v: number | "") => void;
+  teamIds: number[];
+  onTeamIds: (v: number[]) => void;
   periodLabel: string;
   hideTeams: Set<number>;
   /** Частка лідів >1 год по менеджеру (%). `undefined` — ще вантажиться, `null` — лідів не було. */
@@ -94,7 +94,33 @@ export function ReportTableSection({
   };
 
   const scopeLabel = mgrFilter !== "" ? "Менеджер"
-    : teamId !== "" ? "Команда" : "Весь відділ";
+    : teamIds.length >= 2 ? `Обрано команд: ${teamIds.length}`
+      : teamIds.length === 1 ? "Команда" : "Весь відділ";
+  /** 🧩 Групування вмикається САМЕ мультивибором, а не кількістю команд у даних:
+      при одній обраній команді екран мусить лишитись байт-у-байт теперішнім. */
+  const grouped = teamIds.length >= 2 && mgrFilter === "";
+  /**
+   * 🔴 ГРУПИ БУДУЮТЬСЯ З ТИХ САМИХ `rows`, ЩО Й ПЛОСКИЙ СПИСОК, і сортуються тим
+   * самим `sortRows`. Тому Σ груп == Σ рядків за побудовою, а не за домовленістю
+   * (це і стереже `#99`). Порядок груп — як людина їх обрала, а не випадковий.
+   */
+  const groups = useMemo(() => {
+    if (!grouped) return [];
+    const byId = new Map<number, ReportPlanManager[]>(teamIds.map((id) => [id, []]));
+    const rest: ReportPlanManager[] = [];
+    for (const r of rows) {
+      const g = r.teamId != null ? byId.get(r.teamId) : undefined;
+      if (g) g.push(r); else rest.push(r);
+    }
+    const out = teamIds.map((id) => ({
+      id, name: teams.find((t) => t.id === id)?.name ?? `Команда #${id}`, rows: byId.get(id) ?? [],
+    }));
+    // 🔴 Рядок, що не потрапив у жодну обрану команду, НЕ зникає: він іде окремою
+    // групою з чесною назвою. Мовчазне випадання зробило б Σ груп < Σ рядків, і
+    // помітити це можна було б лише склавши стовпчик очима.
+    if (rest.length) out.push({ id: -1, name: "Поза обраними командами", rows: rest });
+    return out.filter((g) => g.rows.length > 0);
+  }, [grouped, rows, teamIds, teams]);
 
   /**
    * 🔢 ЛІЧИЛЬНИКИ В ОПЦІЯХ — З УЖЕ ЗАВАНТАЖЕНОГО НАБОРУ, без жодного запиту.
@@ -118,35 +144,14 @@ export function ReportTableSection({
              менеджер фільтрує вже завантажений набір локально. */}
       <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>Обсяг:</span>
-        <select
-          value={mgrFilter !== "" ? `mgr:${mgrFilter}` : teamId !== "" ? `team:${teamId}` : "all"}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v === "all") { setMgrFilter(""); if (auth.role === "admin") onTeamId(""); }
-            else if (v.startsWith("team:")) { setMgrFilter(""); onTeamId(Number(v.slice(5))); }
-            else setMgrFilter(Number(v.slice(4)));
-          }}
-          style={selStyle}
-        >
-          <option value="all">Весь відділ · {data.managers.length} {mgrWord(data.managers.length)}</option>
-          {auth.role === "admin" && (
-            <optgroup label="Команди">
-              {teams.filter((t) => !hideTeams.has(t.id)).map((t) => {
-                const n = byTeam.get(t.id);
-                return (
-                  <option key={`team:${t.id}`} value={`team:${t.id}`}>
-                    {t.name}{n != null ? ` · ${n}` : ""}
-                  </option>
-                );
-              })}
-            </optgroup>
-          )}
-          <optgroup label="Менеджери">
-            {data.managers.map((m) => (
-              <option key={`mgr:${m.managerId}`} value={`mgr:${m.managerId}`}>{m.name}</option>
-            ))}
-          </optgroup>
-        </select>
+        <ScopePicker
+          teams={teams.filter((t) => !hideTeams.has(t.id))}
+          isAdmin={auth.role === "admin"}
+          teamIds={teamIds} onTeamIds={onTeamIds}
+          mgrFilter={mgrFilter} onMgrFilter={setMgrFilter}
+          managers={data.managers} byTeam={byTeam}
+          allLabel={`Весь відділ · ${data.managers.length} ${mgrWord(data.managers.length)}`}
+        />
         <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
           {rows.length} {rows.length === 1 ? "рядок" : rows.length < 5 ? "рядки" : "рядків"} · {periodLabel}
         </span>
@@ -224,8 +229,20 @@ export function ReportTableSection({
                 ))}
               </tr>
             </thead>
-            <tbody>
-              {rows.map((m, i) => (
+            {(grouped ? groups : [{ id: 0, name: "", rows }]).map((g) => (
+            <tbody key={`g${g.id}`}>
+              {grouped && (
+                <tr>
+                  <td colSpan={cols.length} className="sticky-mgr"
+                      style={{ position: "sticky", left: 0, background: "var(--surface-2)",
+                        padding: "9px 12px", fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em",
+                        textTransform: "uppercase", color: "var(--brand)",
+                        borderTop: "2px solid var(--border-strong)" }}>
+                    {g.name} <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>· {g.rows.length}</span>
+                  </td>
+                </tr>
+              )}
+              {g.rows.map((m, i) => (
                 <Fragment key={m.managerId}>
                   <tr onClick={() => setOpen(open === m.managerId ? null : m.managerId)}
                       style={{ cursor: "pointer" }}>
@@ -243,12 +260,20 @@ export function ReportTableSection({
                   )}
                 </Fragment>
               ))}
+              {grouped && (
+                <tr>
+                  {cols.map((c) => (
+                    <FootCell key={c.key} col={c} rows={g.rows} scopeLabel={`Команда · ${g.name}`} count={g.rows.length} group />
+                  ))}
+                </tr>
+              )}
               {rows.length === 0 && (
                 <tr><td colSpan={cols.length} style={{ padding: 20, color: "var(--text-muted)" }}>
                   Немає менеджерів у цьому розрізі.
                 </td></tr>
               )}
             </tbody>
+            ))}
             <tfoot>
               <tr>
                 {cols.map((c) => (
@@ -384,10 +409,14 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
   }
 }
 
-function FootCell({ col, rows, scopeLabel, count }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number }) {
+function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: ReportPlanManager[]; scopeLabel: string; count: number;
+  /** Підсумок ГРУПИ (команди) всередині таблиці — тонший, ніж загальний унизу. */
+  group?: boolean }) {
   const st: React.CSSProperties = {
-    padding: "11px 12px", textAlign: col.left ? "left" : "right", fontWeight: 700, fontSize: 13,
-    background: "var(--surface-2)", borderTop: "2px solid var(--border-strong)", whiteSpace: "nowrap",
+    padding: group ? "8px 12px" : "11px 12px", textAlign: col.left ? "left" : "right",
+    fontWeight: 700, fontSize: group ? 12.5 : 13,
+    background: group ? "var(--surface-2)" : "var(--surface-2)",
+    borderTop: `${group ? 1 : 2}px solid var(--border-strong)`, whiteSpace: "nowrap",
     ...(col.key === "name" ? { position: "sticky", left: 0, zIndex: 1 } : null),
   };
   if (col.key === "rank") return <td style={st} />;
@@ -539,6 +568,91 @@ function HelpDot({ text, title, alignRight }: { text: string; title: string; ali
  * неправда: динамічна ціль рахується від ЗАЛИШКУ на початок тижня, тож Σ тижнів
  * не зобовʼязана сходитись із місяцем. Макет таке твердження містив — прибрано.
  */
+/**
+ * 🧩 «ОБСЯГ» — ОДИН КОНТРОЛ НА ТРИ ВЗАЄМОВИКЛЮЧНІ РЕЖИМИ (21.08.2026).
+ *
+ * Весь відділ · кілька команд галочками · один менеджер. Режими взаємно
+ * скидаються: обрав менеджера — команди знято, поставив галочку — менеджера знято.
+ * Інакше екран показував би перетин двох фільтрів, якого людина не просила, і
+ * порожній результат читався б як «немає даних», а не як «фільтри б'ються».
+ *
+ * 🔴 ЧОМУ НЕ `<select multiple>`: нативний мультиселект вимагає Ctrl+клік, а без
+ * нього мовчки СКИДАЄ попередній вибір. Тобто найпростіша дія — клікнути другу
+ * команду — дала б протилежний результат очікуваному.
+ */
+function ScopePicker({ teams, isAdmin, teamIds, onTeamIds, mgrFilter, onMgrFilter, managers, byTeam, allLabel }: {
+  teams: Team[]; isAdmin: boolean;
+  teamIds: number[]; onTeamIds: (v: number[]) => void;
+  mgrFilter: number | ""; onMgrFilter: (v: number | "") => void;
+  managers: ReportPlanManager[]; byTeam: Map<number, number>; allLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away); document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
+
+  const label = mgrFilter !== "" ? (managers.find((m) => m.managerId === mgrFilter)?.name ?? "Менеджер")
+    : teamIds.length === 0 ? allLabel
+      : teamIds.length === 1 ? (teams.find((t) => t.id === teamIds[0])?.name ?? "Команда")
+        : `${teamIds.length} команди · ${managers.length} ${managers.length === 1 ? "менеджер" : managers.length < 5 ? "менеджери" : "менеджерів"}`;
+
+  const toggleTeam = (id: number) => {
+    onMgrFilter("");
+    onTeamIds(teamIds.includes(id) ? teamIds.filter((x) => x !== id) : [...teamIds, id]);
+  };
+  const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "6px 11px", cursor: "pointer", fontSize: 13 };
+
+  return (
+    <div ref={box} style={{ position: "relative" }}>
+      <button type="button" onClick={() => setOpen(!open)} style={{ ...selStyle, cursor: "pointer", textAlign: "left", minWidth: 210 }}>
+        {label} <span style={{ opacity: 0.5, marginLeft: 4 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 60, minWidth: 280, maxHeight: 420,
+          overflowY: "auto", background: "var(--card-bg)", border: "1px solid var(--border-strong)",
+          borderRadius: "var(--r-md)", boxShadow: "var(--shadow)", padding: "5px 0",
+        }}>
+          <div style={{ ...row, fontWeight: teamIds.length === 0 && mgrFilter === "" ? 700 : 400 }}
+               onClick={() => { onMgrFilter(""); onTeamIds([]); setOpen(false); }}>
+            <span style={{ width: 14 }}>{teamIds.length === 0 && mgrFilter === "" ? "•" : ""}</span>{allLabel}
+          </div>
+          {isAdmin && teams.length > 0 && (
+            <>
+              <div style={{ padding: "7px 11px 3px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--text-muted)" }}>
+                Команди — можна кілька
+              </div>
+              {teams.map((t) => {
+                const n = byTeam.get(t.id);
+                return (
+                  <label key={t.id} style={row}>
+                    <input type="checkbox" checked={teamIds.includes(t.id)} onChange={() => toggleTeam(t.id)} />
+                    {t.name}{n != null ? <span style={{ color: "var(--text-muted)" }}> · {n}</span> : null}
+                  </label>
+                );
+              })}
+            </>
+          )}
+          <div style={{ padding: "7px 11px 3px", fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--text-muted)" }}>
+            Один менеджер
+          </div>
+          {managers.map((m) => (
+            <div key={m.managerId} style={{ ...row, fontWeight: mgrFilter === m.managerId ? 700 : 400 }}
+                 onClick={() => { onTeamIds([]); onMgrFilter(m.managerId); setOpen(false); }}>
+              <span style={{ width: 14 }}>{mgrFilter === m.managerId ? "•" : ""}</span>{m.name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WeeksDrill({ managerId, month }: { managerId: number; month: string }) {
   const [d, setD] = useState<ManagerWeeks | null>(null);
   const [err, setErr] = useState(false);

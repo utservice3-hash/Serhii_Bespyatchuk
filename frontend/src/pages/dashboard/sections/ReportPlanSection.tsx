@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
   fetchResponseTimeByManager,
@@ -10,6 +10,7 @@ import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ReportTableSection } from "./ReportTableSection";
+import { mergeReportPlans } from "../reportScope";
 
 // Статуси-кольори (зарезервовані, з іконкою+підписом — не колір-наодинці). Тема-безпечні.
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BAR = "#2f6fdb", MUTED = "var(--text-muted)";
@@ -120,7 +121,16 @@ export function ReportPlanSection({ auth, teams }: {
   const [focusDay, setFocusDay] = useState(today);    // активний день (тиждень-контекст + кластер)
   const [rangeFrom, setRangeFrom] = useState(monthStart(today));
   const [rangeTo, setRangeTo] = useState(today);
-  const [teamId, setTeamId] = useState<number | "">("");
+  /**
+   * 🧩 ОБСЯГ — СПИСОК КОМАНД, а не одна (рішення власника 21.08.2026). Порожній =
+   * весь відділ, одна = теперішня поведінка байт-у-байт (той самий одиничний
+   * запит), 2+ = кілька запитів і злиття. Стан ОДИН на обидва вигляди: два стани
+   * скоупу дали б екран, де картки й таблиця показують різні набори людей.
+   */
+  const [teamIds, setTeamIds] = useState<number[]>([]);
+  /** Сумісність із тим, що вміє лише одну команду (StuckBlock, час реакції, select карток). */
+  const teamId: number | "" = teamIds.length === 1 ? teamIds[0] : "";
+  const setTeamId = (v: number | "") => setTeamIds(v === "" ? [] : [Number(v)]);
   const [monthData, setMonthData] = useState<ReportPlan | null>(null); // місяць (дефолт + смуга місяця)
   const [rangeData, setRangeData] = useState<ReportPlan | null>(null);  // довільний діапазон (режим «Період»)
   const [rangeLoading, setRangeLoading] = useState(false);
@@ -155,7 +165,19 @@ export function ReportPlanSection({ auth, teams }: {
     : `${ddmm(selectedPeriod.from)}–${ddmm(selectedPeriod.to)}`;
 
   const weekOfFocus = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(mondayOf(focusDay), i)), [focusDay]);
-  const scopeParams = teamId ? { teamId: Number(teamId) } : {};
+  /**
+   * 🔴 ОДИН ШЛЯХ ЗАВАНТАЖЕННЯ НА ВСІ ЧОТИРИ ЗАПИТИ (місяць, тиждень, фокус-день,
+   * діапазон). Розвилка «одна команда / кілька» стоїть ТУТ і ніде більше —
+   * інакше злиття лягло б лише в один із чотирьох, і тиждень почав би показувати
+   * інший набір людей, ніж місяць.
+   */
+  const scopeKey = teamIds.join(",");
+  const fetchScoped = useCallback(async (period: { from: string; to: string }): Promise<ReportPlan> => {
+    if (teamIds.length >= 2)
+      return mergeReportPlans(await Promise.all(teamIds.map((id) => fetchReportPlan({ ...period, teamId: id }))));
+    return fetchReportPlan({ ...period, ...(teamIds.length === 1 ? { teamId: teamIds[0] } : {}) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
 
   // САМОВІДНОВЛЕННЯ (фікс порожнечі при транзієнтному відхиленні):
   //  • cancelled-guard: жоден перерваний/застарілий виклик не пише стан (антигонка).
@@ -165,9 +187,9 @@ export function ReportPlanSection({ auth, teams }: {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const withRetry = async (params: { from: string; to: string; teamId?: number }, attempts = 3) => {
+    const withRetry = async (params: { from: string; to: string }, attempts = 3) => {
       for (let i = 0; ; i++) {
-        try { return await fetchReportPlan(params); }
+        try { return await fetchScoped(params); }
         catch (e) {
           if (cancelled) throw e;
           if (i >= attempts - 1) throw e;
@@ -180,12 +202,12 @@ export function ReportPlanSection({ auth, teams }: {
     };
     (async () => {
       try {
-        const m = await withRetry({ ...monthPeriod, ...scopeParams });
+        const m = await withRetry(monthPeriod);
         if (cancelled) return;
         setMonthData(m);
         const [w, f] = await Promise.allSettled([
-          fetchReportPlan({ ...weekPeriod, ...scopeParams }),
-          fetchReportPlan({ from: focusDay, to: focusDay, ...scopeParams }),
+          fetchScoped(weekPeriod),
+          fetchScoped({ from: focusDay, to: focusDay }),
         ]);
         if (cancelled) return;
         if (w.status === "fulfilled") setWeekData(w.value);
@@ -199,7 +221,7 @@ export function ReportPlanSection({ auth, teams }: {
       }
     })();
     return () => { cancelled = true; };
-  }, [monthPeriod.from, monthPeriod.to, weekPeriod.from, weekPeriod.to, focusDay, teamId, retryNonce]);
+  }, [monthPeriod.from, monthPeriod.to, weekPeriod.from, weekPeriod.to, focusDay, scopeKey, retryNonce, fetchScoped]);
 
   /**
    * Довільний діапазон — ОКРЕМИЙ ефект, а не гілка в ефекті вище: місяць/тиждень/день
@@ -211,7 +233,7 @@ export function ReportPlanSection({ auth, teams }: {
     if (mode !== "range") return;
     let cancelled = false;
     setRangeLoading(true);
-    fetchReportPlan({ from: selectedPeriod.from, to: selectedPeriod.to, ...scopeParams })
+    fetchScoped({ from: selectedPeriod.from, to: selectedPeriod.to })
       .then((r) => { if (!cancelled) setRangeData(r); })
       .catch(() => { if (!cancelled) setRangeData(null); })
       .finally(() => { if (!cancelled) setRangeLoading(false); });
@@ -375,7 +397,7 @@ export function ReportPlanSection({ auth, teams }: {
           {view === "table" ? (
             <ReportTableSection
               data={data} teams={teams} auth={auth}
-              teamId={teamId} onTeamId={setTeamId}
+              teamIds={teamIds} onTeamIds={setTeamIds}
               periodLabel={periodLabel} hideTeams={HIDE_TEAMS}
               responseByMgr={respByMgr} month={selectedPeriod.from.slice(0, 7)}
               /**
