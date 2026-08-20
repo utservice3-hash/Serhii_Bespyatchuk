@@ -384,6 +384,10 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
       return <td style={st}>{m.needPerDay ? `${money(m.needPerDay)} ₴` : none}</td>;
     case "expectThisMonth":
       return <td style={st}>{m.expectThisMonth ? `${money(m.expectThisMonth)} ₴` : none}</td>;
+    case "factNew": return <td style={st}>{m.factNew ? `${money(m.factNew)} ₴` : none}</td>;
+    case "factRepeat": return <td style={st}>{m.factRepeat ? `${money(m.factRepeat)} ₴` : none}</td>;
+    case "expectNew": return <td style={st}>{m.expectThisMonthNew ? `${money(m.expectThisMonthNew)} ₴` : none}</td>;
+    case "expectRepeat": return <td style={st}>{m.expectThisMonthRepeat ? `${money(m.expectThisMonthRepeat)} ₴` : none}</td>;
     case "awaitNoDate": {
       const v = m.cohort.awaitNoDateSum;
       return <td style={{ ...st, color: v > 0 ? "var(--danger)" : undefined }}>{v ? `${money(v)} ₴` : none}</td>;
@@ -447,7 +451,7 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
     const at = rows.reduce((s, m) => s + m.attempts, 0);
     return <td style={st}>{f.value}<span style={{ color: "var(--text-muted)", fontWeight: 500 }}> / {at}</span></td>;
   }
-  const MONEY_COLS: ColKey[] = ["avgCheck", "fact", "plan", "projected", "needPerDay",
+  const MONEY_COLS: ColKey[] = ["avgCheck", "fact", "factNew", "factRepeat", "expectNew", "expectRepeat", "plan", "projected", "needPerDay",
     "expectThisMonth", "awaitNoDate", "jam", "dobir"];
   if (col.key === "dispRevenue") return <td style={st}>{K(f.value)} ₴</td>;
   return <td style={st}>{money(f.value)}{MONEY_COLS.includes(col.key) ? " ₴" : ""}</td>;

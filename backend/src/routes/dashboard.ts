@@ -6223,7 +6223,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
   // #4 ср.чек Звіту = пул `reportChain` (угоди ЗАРАЗ у «авто працює→оплата» ⊎ виграні
   // за період) — signed Σ÷count per manager; команда/відділ = Σsum÷Σcount (glance нижче).
-  const [recv, succ, paid, disp, ads, lg, conv, avgc, expZone, split, expDays, convAd, convLg] = await Promise.all([
+  const [recv, succ, paid, disp, ads, lg, conv, avgc, expZone, split, expDays, convAd, convLg, recvKl, expKl] = await Promise.all([
     money.receivedByMgr(scope), money.successByMgr(scope), money.paidOnlyByMgr(scope),
     metrics.dispatchedByManager(scope),
     metrics.adsAcceptedByMgr(scope, adSources), metrics.leadgenByManager(scope),
@@ -6242,6 +6242,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
      */
     metrics.conversionByManager(scope, "ad"),
     metrics.conversionByManager(scope, "leadgen"),
+    /**
+     * 🧬 Гроші за новизною клієнта — ТОЙ САМИЙ вираз каси, лише розкладений
+     * (`money.receivedByMgrKlass`), і та сама зона очікувань за плановою датою.
+     * Числа «всього» рахуються, як рахувались; ці два виклики нічого не
+     * перевизначають, а лише пояснюють склад.
+     */
+    money.receivedByMgrKlass(scope),
+    metrics.expectedThisMonthByMgrKlass({ managerId, teamId }),
   ]);
   // 📊 Розрізи макета 06.08.2026: дзвінки (розмови/спроби), затор на «Виставленні
   // рахунку», очікування БЕЗ планової дати. Усі — лічильні або знімок однієї стадії;
@@ -6285,6 +6293,17 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const recvM = mapBy(recv), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
     lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc),
     convAdM = mapBy(convAd), convLgM = mapBy(convLg);
+  /** Розклад за класом → мапа `managerId → {new, repeat, undef}` (гроші й угоди). */
+  const klMap = <T extends { managerId: number; klass: string }>(rows: T[], pick: (r: T) => number) => {
+    const m = new Map<number, { new: number; repeat: number; undef: number }>();
+    for (const r of rows) {
+      const e = m.get(r.managerId) ?? { new: 0, repeat: 0, undef: 0 };
+      e[r.klass as "new" | "repeat" | "undef"] += pick(r);
+      m.set(r.managerId, e);
+    }
+    return m;
+  };
+  const recvKlM = klMap(recvKl, (r) => r.revenue), expKlM = klMap(expKl, (r) => r.sum);
   const expM = new Map(expZone.map((e) => [e.id, e.sum]));
 
   // СПАРКЛАЙН: received по 5 останніх тижнях (Пн–Нд) до `to`, per-manager.
@@ -6522,6 +6541,19 @@ dashboardRouter.get("/report-plan", async (req, res) => {
        */
       conversionAd: cvt(convAdM.get(m.id)),
       conversionLeadgen: cvt(convLgM.get(m.id)),
+      /**
+       * 🧬 РОЗКЛАД ГРОШЕЙ ЗА НОВИЗНОЮ (рішення власника 21.08.2026). `fact` і
+       * `expectThisMonth` НЕ змінюються — це вони ж, розкладені каноном.
+       * `undef` віддається окремо й на екран не йде: сьогодні він нуль, а
+       * будильник `#102b` червоніє на першому ненульовому — інакше гроші тихо
+       * випали б із розкладу «нові + постійні».
+       */
+      factNew: recvKlM.get(m.id)?.new ?? 0,
+      factRepeat: recvKlM.get(m.id)?.repeat ?? 0,
+      factUndef: recvKlM.get(m.id)?.undef ?? 0,
+      expectThisMonthNew: expKlM.get(m.id)?.new ?? 0,
+      expectThisMonthRepeat: expKlM.get(m.id)?.repeat ?? 0,
+      expectThisMonthUndef: expKlM.get(m.id)?.undef ?? 0,
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
       // #P1 динамічна тижнева ціль (ЄДИНИЙ вираз effectiveWeekTargets — байт-в-байт з KVP/manager-report).
       week: { target: ew?.target ?? 0, dynamic: ew?.dynamic ?? 0, manual: ew?.manual ?? null, isManual: ew?.isManual ?? false,

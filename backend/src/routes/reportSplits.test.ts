@@ -319,3 +319,110 @@ test("#106 ШЛЯХИ РЕЄСТРУ КОЛОНОК ІСНУЮТЬ У ЖИВІЙ
     "🔴 РЕЄСТР ЧИТАЄ ТЕ, ЧОГО У ВІДПОВІДІ НЕМАЄ. Увімкнення такої колонки — не хибне\n"
     + "число, а падіння таблиці на `undefined`:\n  " + missing.join("\n  "));
 });
+
+/**
+ * #102 / #102b / #103 / #104 — ГРОШІ ЗА НОВИЗНОЮ КЛІЄНТА (21.08.2026).
+ *
+ * 📐 Заміряно на проді 20.08.2026 (серпень): «Отримано» 1 492 822 ₴ = нові
+ * 334 584 (133 уг.) + постійні 1 158 238 (368 уг.), Δ0 по 8 менеджерах і по
+ * відділу. «Очікує (дата)» 902 222 ₴ = 119 912 + 782 310, теж Δ0.
+ */
+
+test("#102 РОЗКЛАД == ЧИСЛУ: нові + постійні + невизн == «Отримано» (жива БД)", needsDb(), async () => {
+  const money = await import("../core/money.js");
+  const now = new Date();
+  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const scope = { from: `${ym}-01`, to: `${ym}-31` };
+
+  const [core, split] = await Promise.all([money.receivedByMgr(scope), money.receivedByMgrKlass(scope)]);
+  assert.ok(core.length > 0, "🔴 каса порожня — перевіряти нема на чому (це ПРОВАЛ, а не «немає даних»)");
+  const agg = new Map<number, number>();
+  for (const r of split) agg.set(r.managerId, (agg.get(r.managerId) ?? 0) + r.revenue);
+
+  const bad: string[] = [];
+  for (const c of core) {
+    const s = agg.get(c.managerId) ?? 0;
+    if (Math.abs(s - c.revenue) > 1) bad.push(`мгр ${c.managerId}: розклад ${Math.round(s)} проти каси ${Math.round(c.revenue)}`);
+  }
+  assert.deepEqual(bad, [],
+    "🔴 РОЗКЛАД СПЕРЕЧАЄТЬСЯ З ЧИСЛОМ, яке пояснює — те саме, що ми лікували у F1:\n  " + bad.join("\n  "));
+
+  // Дзеркало: обидва класи справді присутні. Інакше рівність трималась би на тому,
+  // що один доданок завжди нуль, і гейт не перевіряв би поділу взагалі.
+  assert.ok(split.some((r) => r.klass === "new" && r.revenue !== 0), "🔴 жодних грошей від нових — доданок вироджений");
+  assert.ok(split.some((r) => r.klass === "repeat" && r.revenue !== 0), "🔴 жодних грошей від постійних — доданок вироджений");
+});
+
+test("#102b БУДИЛЬНИК: гроші поза «нові/постійні» мусять бути ПОМІЧЕНІ (жива БД)", needsDb(), async () => {
+  const money = await import("../core/money.js");
+  const now = new Date();
+  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const split = await money.receivedByMgrKlass({ from: `${ym}-01`, to: `${ym}-31` });
+  const undef = split.filter((r) => r.klass === "undef");
+  const sum = undef.reduce((s, r) => s + r.revenue, 0), deals = undef.reduce((s, r) => s + r.deals, 0);
+  /**
+   * 🔴 НА ЕКРАНІ ДВІ КОЛОНКИ, А КЛАСІВ ТРИ. Поки третій порожній, «всього == нові +
+   * постійні» — правда. Щойно він оживе, різниця почне мовчки зникати між
+   * колонками, і жоден інший гейт цього не побачить: кожне окреме число
+   * лишатиметься правильним. Тому будильник, а не мовчазне згортання в «постійні».
+   * 📐 Заміряно 20.08.2026: 0 ₴ / 0 угод із 1 492 822 ₴ серпня.
+   */
+  assert.equal(sum, 0,
+    `🔴 ${Math.round(sum)} ₴ у ${deals} угодах не належать ні «новим», ні «постійним» — на екрані `
+    + "їх НЕМАЄ в жодній із двох колонок. Треба або показати третю колонку, або назвати причину.");
+});
+
+test("#103 ОЧІКУВАННЯ: нові + постійні == «Очікує (дата)», і ділиться саме воно (жива БД)", needsDb(), async () => {
+  const m = await import("../core/metrics.js");
+  const [ctl, split] = await Promise.all([
+    m.expectedPaymentsByPlanned({}), m.expectedThisMonthByMgrKlass({}),
+  ]);
+  const sum = split.reduce((s, r) => s + r.sum, 0);
+  assert.ok(ctl.thisMonth.sum > 0, "🔴 зона очікувань цього місяця порожня — перевіряти нема на чому");
+  assert.ok(Math.abs(sum - ctl.thisMonth.sum) <= 1,
+    `🔴 розклад очікувань ${Math.round(sum)} ≠ ${Math.round(ctl.thisMonth.sum)} — колонка й її склад розійшлись`);
+  assert.equal(split.filter((r) => r.klass === "undef").reduce((s, r) => s + r.sum, 0), 0,
+    "🔴 в очікуваннях зʼявились гроші поза «нові/постійні» — див. #102b");
+
+  /**
+   * 🔴 ДІЛИТЬСЯ САМЕ `thisMonth` (рішення власника). `awaitNoDate` — інша множина
+   * (зона БЕЗ планової дати), і розкласти її тим самим підписом означало б
+   * поставити правильний підпис до не тієї величини — той самий клас, що два
+   * «очікуємо» на одному екрані.
+   */
+  const src = stripComments(readFileSync(path.join(ROOT, "backend", "src", "core", "metrics.ts"), "utf8"));
+  const body = src.split("export async function expectedThisMonthByMgrKlass")[1]?.split("\nexport ")[0] ?? "";
+  assert.ok(/planned_payment_at IS NOT NULL/.test(body) && /to_char\(\(now\(\)/.test(body),
+    "🔴 розклад очікувань більше не прибитий до планової дати ПОТОЧНОГО місяця");
+});
+
+test("#104 НОВІ КОЛОНКИ: опційні, сортовні, з підказкою — і не ламають підсумків", () => {
+  const cols = readFileSync(path.join(FE, "reportTableCols.ts"), "utf8");
+  const NEW_COLS = ["convAd", "convLg", "factNew", "factRepeat", "expectNew", "expectRepeat"];
+  for (const k of NEW_COLS) {
+    const def = cols.split(`key: "${k}"`)[1]?.split("},")[0] ?? "";
+    assert.ok(def.length > 0, `🔴 колонки ${k} немає в реєстрі`);
+    assert.ok(/core: false/.test(def), `🔴 ${k} увімкнена за замовчуванням — вона мусить бути чипом`);
+    assert.ok(/help: "/.test(def), `🔴 ${k} без підказки «що це і звідки»`);
+    assert.ok(/val: \(m\)/.test(def), `🔴 ${k} без val() — сортувати нема чого`);
+  }
+  /**
+   * 🔴 ЧАСТКИ НЕ ПОТРАПЛЯЮТЬ В АДИТИВНИЙ ПІДСУМОК. Грошові розрізи — `add`
+   * (їх складати можна й треба); конверсії — ratio, бо це частки.
+   */
+  for (const k of ["factNew", "factRepeat", "expectNew", "expectRepeat"]) {
+    const def = cols.split(`key: "${k}"`)[1]?.split("},")[0] ?? "";
+    assert.ok(/foot: "add"/.test(def), `🔴 ${k} не сумується в підсумку — гроші адитивні`);
+  }
+  for (const k of ["convAd", "convLg"]) {
+    const def = cols.split(`key: "${k}"`)[1]?.split("},")[0] ?? "";
+    assert.ok(/foot: "ratio:conv(Ad|Lg)"/.test(def), `🔴 ${k} потрапила в адитивний підсумок — частку складати не можна`);
+  }
+  // Кожна нова колонка мусить мати РЕНДЕР, інакше чип є, а клітинка порожня (#81b-клас).
+  const tsx = readFileSync(path.join(FE, "sections", "ReportTableSection.tsx"), "utf8");
+  for (const k of NEW_COLS)
+    assert.ok(new RegExp(`case "${k}":`).test(tsx), `🔴 у ${k} немає рендера — чип є, клітинка порожня`);
+  // Липка перша колонка не зрушена.
+  assert.ok(/className=\{c\.key === "name" \? "sticky-mgr" : undefined\}/.test(tsx),
+    "🔴 липка перша колонка зникла");
+});

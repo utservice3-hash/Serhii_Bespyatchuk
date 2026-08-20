@@ -858,3 +858,47 @@ export async function weeklyBreakdown(s: MoneyScope, monthPlan: number): Promise
     };
   });
 }
+
+/**
+ * 🧬 КАСА ② В РОЗРІЗІ НОВИЗНИ КЛІЄНТА (рішення власника 21.08.2026).
+ *
+ * 🔴 ТЕ САМЕ ЧИСЛО, ЛИШЕ РОЗКЛАДЕНЕ. Джерело — той самий `sourceSql('received')`,
+ * що живить `receivedByMgr`, з тим самим анкером і тим самим дедупом. Власного
+ * запиту по грошах тут немає й бути не може: варто написати другий SELECT — і
+ * через місяць «всього» перестане дорівнювати «нові + постійні», а помітить це
+ * лише той, хто складе колонки очима.
+ *
+ * Клас клієнта — КАНОН `metrics.dealKlassSql` (попередня ВИГРАНА угода того ж
+ * клієнта, закрита до створення цієї; дженерик-ключі глушаться; фолбек —
+ * декларація `sales_channel`). Свого правила новизни не заводимо.
+ *
+ * ⚠️ КЛАСІВ ТРИ, А НЕ ДВА: `new` / `repeat` / `undef`. На грошах третій сьогодні
+ * порожній (заміряно на проді 20.08.2026: 0 ₴ і 0 угод з 1 492 822 ₴ серпня), і
+ * саме тому на екрані стоять дві колонки. Але гілка «ні ключа, ні декларації» в
+ * каноні ЖИВА, тож `undef` повертається окремо — і будильник `#102b` червоніє на
+ * першому ж ненульовому. Інакше гроші тихо випали б із розкладу.
+ */
+export interface MoneyByKlass { managerId: number; klass: "new" | "repeat" | "undef"; deals: number; revenue: number }
+export async function receivedByMgrKlass(s: MoneyScope): Promise<MoneyByKlass[]> {
+  const { dealKlassSql } = await import("./metrics.js");
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
+  if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const r = await pool.query<{ manager_id: number; klass: string; n: string; s: string }>(
+    `WITH src AS (${src})
+     SELECT src.manager_id, (${dealKlassSql("d")}) AS klass,
+            COUNT(*) AS n, COALESCE(SUM(src.price), 0) AS s
+       FROM src
+       JOIN deals d ON d.kommo_id = src.kommo_id
+       LEFT JOIN managers m ON m.id = src.manager_id
+      ${conds.length ? `WHERE ${conds.join(" AND ")}` : ""}
+      GROUP BY 1, 2`, p);
+  return r.rows.map((x) => ({
+    managerId: x.manager_id, klass: x.klass as MoneyByKlass["klass"],
+    deals: Number(x.n), revenue: Math.round(Number(x.s)),
+  }));
+}

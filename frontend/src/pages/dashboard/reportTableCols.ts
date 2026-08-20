@@ -18,8 +18,8 @@ import type { ReportPlanManager } from "../../api";
 
 export type ColKey =
   | "rank" | "name" | "status" | "created" | "ads" | "leadgen" | "conv" | "convAd" | "convLg"
-  | "dispatch" | "avgCheck" | "fact" | "plan" | "pct"
-  | "projected" | "needPerDay" | "expectThisMonth" | "awaitNoDate"
+  | "dispatch" | "avgCheck" | "fact" | "factNew" | "factRepeat" | "plan" | "pct"
+  | "projected" | "needPerDay" | "expectThisMonth" | "expectNew" | "expectRepeat" | "awaitNoDate"
   | "jamDeals" | "jam" | "dobir" | "talks" | "dispRevenue" | "responseTime"
   | "srcAd" | "srcLeadgen";
 
@@ -110,6 +110,16 @@ export const REPORT_COLS: ColDef[] = [
     help: "Середній чек. Джерело: money.avgCheckPerManager(reportChain) — знімок «зараз у роботі» + виграні, не чисто за період." },
   { key: "fact", title: "Отримано", core: true, val: (m) => m.fact, foot: "add",
     help: "Гроші, що надійшли за період (каса ②). Джерело: money.receivedByMgr." },
+  /**
+   * 🧬 ГРОШІ НА ТРИ КОЛОНКИ ЗА НОВИЗНОЮ (рішення власника 21.08.2026): «Отримано»
+   * лишається як було, поруч — «нові» і «постійні», обидві опційні чипами.
+   * Заміряно за серпень: 1 492 822 ₴ = нові 334 584 (133 уг.) + постійні
+   * 1 158 238 (368 уг.), Δ0 по кожному з 8 перевірених менеджерів і по відділу.
+   */
+  { key: "factNew", title: "Отримано · нові", core: false, val: (m) => m.factNew, foot: "add",
+    help: "Частина колонки «Отримано», що прийшла від НОВИХ клієнтів. Джерело: money.receivedByMgrKlass — той самий вираз каси ②, розкладений каноном новизни (metrics.dealKlassSql: попередня ВИГРАНА угода того ж клієнта, закрита до створення цієї). «Отримано» = нові + постійні, Δ0." },
+  { key: "factRepeat", title: "Отримано · постійні", core: false, val: (m) => m.factRepeat, foot: "add",
+    help: "Частина колонки «Отримано» від ПОСТІЙНИХ клієнтів — доповнення до «Отримано · нові» тим самим виразом (money.receivedByMgrKlass). ⚠️ «Постійний» тут = у клієнта вже була виграна угода до створення цієї; це НЕ кваліфікація постійного клієнта з екрана лояльності, де правило 2+/3+ оплат." },
   { key: "plan", title: "План міс.", core: true, val: (m) => m.plan, foot: "add",
     help: "Місячний грошовий план, апорт по робочих днях періоду. Джерело: plans.managerPlan." },
   { key: "pct", title: "Викон.", core: true, val: (m) => m.pct, foot: "ratio:pct",
@@ -121,6 +131,10 @@ export const REPORT_COLS: ColDef[] = [
     help: "Скільки приносити щодня до кінця місяця, щоб дотягти план: (план−факт) ÷ роб. дні, що лишились." },
   { key: "expectThisMonth", title: "Очікує (дата)", core: false, val: (m) => m.expectThisMonth, foot: "add",
     help: "Гроші з плановою датою оплати цього місяця (входять у прогноз). Джерело: metrics.expectedByManagerDay. Рахується по календарному місяцю і НЕ залежить від обраного періоду." },
+  { key: "expectNew", title: "Очікує · нові", core: false, val: (m) => m.expectThisMonthNew, foot: "add",
+    help: "Частина колонки «Очікує (дата)» від НОВИХ клієнтів. Джерело: metrics.expectedThisMonthByMgrKlass — та сама зона очікування й та сама планова дата, розкладені каноном metrics.dealKlassSql. Ділиться саме «Очікує (дата)»; «Без дати» лишається цілою." },
+  { key: "expectRepeat", title: "Очікує · постійні", core: false, val: (m) => m.expectThisMonthRepeat, foot: "add",
+    help: "Частина колонки «Очікує (дата)» від ПОСТІЙНИХ клієнтів — доповнення до «Очікує · нові». Джерело: metrics.expectedThisMonthByMgrKlass, той самий виклик. Заміряно за серпень: 902 222 ₴ = нові 119 912 + постійні 782 310, Δ0." },
   { key: "awaitNoDate", title: "Без дати", core: false, val: (m) => m.cohort.awaitNoDateSum, foot: "add",
     help: "Гроші без планової дати; у прогноз НЕ входять — ризик. Джерело: cohort.awaitNoDateSum." },
   // 🔴 «ЗАТОР», А НЕ «ЗАСТРЯГЛО»: слово «застрягло» в Звіті вже зайняте списком

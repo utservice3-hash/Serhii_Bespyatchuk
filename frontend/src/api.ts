@@ -685,6 +685,14 @@ export interface ReportPlanManager {
   created: number; new: number; rep: number;
   /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
   srcAd: number; srcLeadgen: number;
+  /**
+   * 🧬 ГРОШІ ЗА НОВИЗНОЮ КЛІЄНТА (канон `dealKlassSql`). `fact == factNew +
+   * factRepeat + factUndef`, і те саме для очікувань. `undef` на екран не йде —
+   * сьогодні він нуль (заміряно на проді 20.08.2026: 0 ₴ з 1 492 822 ₴), а
+   * будильник `#102b` червоніє на першому ненульовому.
+   */
+  factNew: number; factRepeat: number; factUndef: number;
+  expectThisMonthNew: number; expectThisMonthRepeat: number; expectThisMonthUndef: number;
   status: "g" | "a" | "r"; needPerDay: number; remainingWorkdays: number;
   spark: number[];
   kpi: { ads: ReportPlanKpi; leadgen: ReportPlanKpi; dispatch: ReportPlanKpi; avgCheck: ReportPlanKpi; conversion: ReportPlanKpi };

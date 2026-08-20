@@ -3092,6 +3092,37 @@ export interface ExpectedPaymentsByPlanned {
   noDate: ExpectedBucket;
 }
 
+/**
+ * 🧬 ОЧІКУВАННЯ ЦЬОГО МІСЯЦЯ В РОЗРІЗІ НОВИЗНИ (рішення власника 21.08.2026).
+ *
+ * Та сама зона (`EXPECT_ZONE`) і той самий місячний бакет за плановою датою, що в
+ * `expectedPaymentsByPlanned().thisMonth` — розкладений за КАНОНОМ `dealKlassSql`.
+ * Другого означення «очікування» не заводимо: у продукті їх і так два (зона без
+ * дати й за плановою датою), і третє зробило б підпис на екрані безглуздим.
+ *
+ * ⚠️ Ділиться САМЕ `thisMonth`. `awaitNoDate` (зона без планової дати) лишається
+ * цілою — рішення власника; вона відповідає на інше питання.
+ * 📐 Заміряно на проді 20.08.2026: 902 222 ₴ = нові 119 912 (23 уг.) + постійні
+ * 782 310 (259 уг.), `undef` — 0 ₴ / 0 угод.
+ */
+export interface ExpectedByKlass { managerId: number; klass: "new" | "repeat" | "undef"; deals: number; sum: number }
+export async function expectedThisMonthByMgrKlass(s: SnapshotScope): Promise<ExpectedByKlass[]> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL",
+    `to_char((d.planned_payment_at ${KYIV}), 'YYYY-MM') = to_char((now() ${KYIV}), 'YYYY-MM')`];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const r = await pool.query<{ manager_id: number; klass: string; n: string; s: string }>(
+    `SELECT d.manager_id, (${dealKlassSql("d")}) AS klass, COUNT(*) AS n, COALESCE(SUM(d.price),0) AS s
+       FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+      WHERE ${conds.join(" AND ")} AND d.manager_id IS NOT NULL
+      GROUP BY 1, 2`, params);
+  return r.rows.map((x) => ({
+    managerId: x.manager_id, klass: x.klass as ExpectedByKlass["klass"],
+    deals: Number(x.n), sum: Math.round(Number(x.s)),
+  }));
+}
+
 export async function expectedPaymentsByPlanned(s: SnapshotScope): Promise<ExpectedPaymentsByPlanned> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
   const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
