@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { needsApi, API_BASE } from "../testMode.js";
 
 /**
  * K1-K3 — ЗВІТ КВП: ВІДСОТОК ПЛАНУ РАХУЄТЬСЯ ОДНИМ ВИРАЗОМ І ДРУКУЄТЬСЯ ЧЕРЕЗ `fmtPct`.
@@ -59,11 +60,13 @@ test("K2 ВІДСОТОК ПЛАНУ — ОДИН ВИРАЗ НА ВСІ ПОВ�
   const viaHelper = (body.match(/pctOfPlan\(/g) ?? []).length;
   assert.ok(viaHelper >= 3, `🔴 через спільний вираз іде лише ${viaHelper} виклик(и) — `
     + "поверхонь три (виконання плану · плитка прогнозу · повна таблиця), котрась рахує сама");
-  // Сама арифметика мусить існувати РІВНО В ОДНОМУ місці — у тілі `pctOfPlan`.
-  // ⚠️ Не «нуль входжень»: одне з них і є оголошення. Друге = повернута копія.
-  const arith = (body.match(/strategic > 0 \? Math\.round\(/g) ?? []).length;
+  // Сама арифметика мусить існувати РІВНО В ОДНОМУ місці.
+  // ⚠️ ДІМ ЇЇ ПЕРЕЇХАВ: із `pctOfPlan` у `pctOf(v, base)`, бо двосегментна смуга
+  //    зробила той самий вираз потрібним і для двигуна, і для команди — з іншими
+  //    знаменниками. `pctOfPlan` лишився обгорткою над ним для компанійського скоупу.
+  const arith = (body.match(/Math\.round\(\(v \/ base\) \* 100\)/g) ?? []).length;
   assert.equal(arith, 1,
-    `🔴 вираз відсотка зустрічається ${arith} раз(и) — має бути РІВНО один (тіло pctOfPlan). `
+    `🔴 вираз відсотка зустрічається ${arith} раз(и) — має бути РІВНО один (тіло pctOf). `
     + "Друга копія і є те, через що плитка й таблиця показували різне");
 });
 
@@ -227,4 +230,156 @@ test("K9 «ТРИМАЮТЬ»: без зашитого порога, з абсо
     "🔴 на екрані немає «факт з плану» поруч із відсотком — 97% на плані 39к "
     + "читатиметься як більше досягнення, ніж 64% на плані 300к");
   assert.match(ui, /\{m\.pct\}%/, "🔴 відсоток не показаний");
+});
+
+/**
+ * K10 — ДВОСЕГМЕНТНА СМУГА ПОКАЗУЄ ТЕ САМЕ, ЩО ЧИСЛО ПРОГНОЗУ ПОРУЧ.
+ *
+ * 🔴 ПРИВІД І ЗАМІР (прод, 20.08.2026). Плитка двигуна показувала «Очікуємо
+ * 904 462 ₴» — це `expectedZoneByScope`, ЗНІМОК УСІЄЇ зони без прив'язки до дати.
+ * А в прогноз входить `expectedThisMonth` = **800 744 ₴** (за плановою датою цього
+ * місяця). Розрив **103 718 ₴**: 88 817 наступного місяця + 14 901 прострочене.
+ * Заповни смугу тим, що плитка ПОКАЗУВАЛА, — і вона розійшлася б із числом
+ * прогнозу на тому самому екрані. Класика двох «очікуємо» під одним підписом.
+ *
+ * 🔴 ЗВІРКА — В МЕЖАХ ОДНОГО СКОУПУ, і це не формальність. Σ команд по
+ * `expectedThisMonth` дає 900 925 проти компанійських 902 222: різницю в
+ * **1 297 ₴** тримає «Операційний директор» (`id=2`, `team_id = NULL`) — він є в
+ * компанії й немає в жодній команді. Це ВІДОМЕ відхилення, а не помилка, тож
+ * гейт порівнює компанію з компанією, а плитку — з сумою ЇЇ команд.
+ */
+test("K10 СМУГА == ПРОГНОЗ, і очікування береться за ПЛАНОВОЮ ДАТОЮ", () => {
+  const body = kvpRouteBody();
+  // Плитка двигуна віддає САМЕ датоване очікування, а не знімок усієї зони.
+  assert.match(body, /const expectedThisMonth = ts\.reduce\(/,
+    "🔴 двигун більше не збирає `expectedThisMonth` — смузі нема чим заповнюватись, "
+    + "крім повної зони, а вона в прогноз не входить");
+  assert.match(body, /forecastPct: pctOf\(revenue \+ expectedThisMonth, plan\)/,
+    "🔴 прогнозний відсоток двигуна рахується не як «факт + датоване очікування»");
+  // Повна зона НЕ зникає — вона лишається окремим полем для підказки.
+  assert.match(body, /return \{ plan, revenue, expected, expectedThisMonth,/,
+    "🔴 `expected` (уся зона) прибрано — підказці нема що показати, і два «очікуємо» "
+    + "знову злиплись в одне");
+  // Рядок команди — той самий вираз, той самий скоуп (свій план).
+  assert.match(body, /forecastPct: pctOf\(t\.revenue \+ \(expTeamThisMap\.get\(t\.teamId\) \?\? 0\), t\.plan\)/,
+    "🔴 команда рахує прогнозний відсоток іншим виразом або від іншої бази");
+
+  // 🔒 АРИФМЕТИКА ВІДСОТКА — РІВНО ОДНА на всі скоупи.
+  const arith = (body.match(/Math\.round\(\(v \/ base\) \* 100\)/g) ?? []).length;
+  assert.equal(arith, 1, `🔴 вираз відсотка зустрічається ${arith} раз(и) — має бути один (тіло pctOf)`);
+  // ⚠️ ЛОВИМО КОПІЮ З БАЗОЮ-ПЛАНОМ, а не «будь-який відсоток». Два винятки свідомі:
+  //    тіло самого `pctOf` (воно й має бути) і ROMI — у нього база рекламний БЮДЖЕТ,
+  //    інший сенс, і власник його зі скоупу цієї правки виключив.
+  const legacy = (body.match(/\w+ > 0 \? Math\.round\(\([\w.]+ \/ [\w.]+\) \* 100\) : null/g) ?? [])
+    .filter((x) => !x.includes("/ base") && !x.includes("budgetFact"));
+  assert.deepEqual(legacy, [],
+    `🔴 повернулась власна копія відсотка ПЛАНУ повз pctOf: ${legacy.join(" · ")}`);
+  // Компанійська обгортка лишається — інакше скоуп «компанія» загубився б.
+  assert.match(body, /const pctOfPlan = \(v: number\): number \| null => pctOf\(v, strategic\)/,
+    "🔴 pctOfPlan більше не є обгорткою над спільною арифметикою");
+});
+
+/**
+ * K10b — ОБРІЗАЄТЬСЯ ШИРИНА, А НЕ ЧИСЛО.
+ *
+ * >100% — не гіпотеза: заміряно 20.08.2026 РПК 106%, Яцик 118%, Шаврова 111%.
+ * Смуга не має вилазити з контейнера, але сховати перевищення за «100%» означало б
+ * стерти рівно ту інформацію, заради якої на смугу й дивляться.
+ */
+test("K10b >100%: ширина обрізана, підпис — ні", () => {
+  const fe = src(FE);
+  const fn = fe.slice(fe.indexOf("function PlanBar("), fe.indexOf("function Stat("));
+  assert.ok(fn.length > 200, "🔴 PlanBar зник — перевіряти нема чого");
+  // Сума ширин ≤ 100 ЗА ПОБУДОВОЮ: другий сегмент бере лише залишок до 100.
+  assert.match(fn, /Math\.min\(100 - f,/,
+    "🔴 другий сегмент не обмежений залишком до 100 — при 118% смуга вилізе за контейнер");
+  assert.match(fn, /Math\.min\(100, factPct \?\? 0\)/, "🔴 сегмент факту не обрізаний");
+  // 🔴 І ЖОДНОГО обрізання у ЧИСЛАХ на екрані: підпис іде через fmtPct без min.
+  const capped = [...fe.matchAll(/fmtPct\(Math\.min\([^)]*\)/g)].map((m) => m[0]);
+  assert.deepEqual(capped, [],
+    `🔴 відсоток обрізається в ПІДПИСІ — 118% покажеться як 100%: ${capped.join(" · ")}`);
+  // Обидва відсотки справді показані поруч (інакше перевищення нема де побачити).
+  assert.match(fe, /fmtPct\(e\.forecastPct\)/, "🔴 плитка не показує прогнозного відсотка");
+  assert.match(fe, /fmtPct\(v\.projection\.projectedPct\)/, "🔴 верхня смуга не показує прогнозного відсотка");
+});
+
+/**
+ * K10c — 🪞 ДЗЕРКАЛО: очікування нема → другого сегмента НЕМАЄ.
+ * Сегмент нульової ширини — це артефакт, а не «нуль очікувань». Порожнє місце має
+ * лишатись порожнім (те саме правило, що «невідоме читається як невідоме»).
+ */
+test("K10c ОЧІКУВАННЯ НЕМА — сегмента немає, а не нульова смужка", () => {
+  const fe = src(FE);
+  const fn = fe.slice(fe.indexOf("function PlanBar("), fe.indexOf("function Stat("));
+  assert.match(fn, /\{e > 0 && </,
+    "🔴 другий сегмент малюється завжди — при нульовому очікуванні лишиться примара");
+  // Односегментного `Bar` більше немає — інакше поверхня могла б тихо лишитись на ньому.
+  assert.ok(!/function Bar\(/.test(fe),
+    "🔴 повернувся односегментний Bar — поверхня може мовчки лишитись на старій смузі, "
+    + "і це читатиметься як робочий код (доля `expected` у /teams і `BandHead`)");
+  assert.ok(!/<Bar\b/.test(fe), "🔴 десь лишився виклик старої смуги");
+});
+
+/**
+ * K10d — 🔌 ШЛЯХИ, ЯКІ ЧИТАЄ ПЛИТКА, ІСНУЮТЬ У ЖИВІЙ ВІДПОВІДІ `/kvp-report`.
+ *
+ * 🔴 ЦЕ КЛАС `#106`, І ВІН НАС ЩОЙНО ВКУСИВ ДВІЧІ. Прохід 2 Звіту виїхав на прод
+ * із `conversionAd`/`conversionLeadgen`, покладеними ВСЕРЕДИНУ `kpi`, тоді як фронт
+ * читає їх на верхньому рівні: увімкнення чипа дало б `undefined.fact` — падіння
+ * таблиці, а не хибне число. TypeScript тут безсилий: бекенд і фронт компілюються
+ * ОКРЕМО, і фронтовий тип не є контрактом для роута.
+ *
+ * 🔴 І `#106` ЦЮ ПЛИТКУ НЕ ПОКРИВАЄ. Він бере живу відповідь `/report-plan`; плитка
+ * читає `/kvp-report`. Різні роути — різні контракти, і «схожий гейт поруч» не
+ * стереже нічого. Тому тут своя перевірка того самого класу.
+ *
+ * ⚠️ Перевіряємо НАЯВНІСТЬ ШЛЯХУ, а не число: число живе й міняється щогодини,
+ * а от `engines.rpk.expectedThisMonth`, покладене на поверх нижче, зробить смугу
+ * порожньою мовчки.
+ */
+test("K10d ЖИВА ВІДПОВІДЬ /kvp-report має всі шляхи, які читає смуга", needsApi(), async () => {
+  const { signToken } = await import("../auth/auth.js");
+  const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
+  const now = new Date();
+  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const r = await fetch(`${API_BASE}/api/dashboard/kvp-report?preset=month&date=${ym}-01`,
+    { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(r.status, 200, `🔴 /kvp-report віддав ${r.status}`);
+  const body = await r.json() as Record<string, unknown>;
+
+  /** Шлях мусить існувати І бути числом (або null там, де плану немає). */
+  const at = (obj: unknown, pth: string): { ok: boolean; val: unknown } => {
+    let cur = obj;
+    for (const seg of pth.split(".")) {
+      if (cur == null || typeof cur !== "object" || !(seg in (cur as object))) return { ok: false, val: undefined };
+      cur = (cur as Record<string, unknown>)[seg];
+    }
+    return { ok: true, val: cur };
+  };
+  const need = [
+    // компанійська смуга
+    "verdict.planPct", "verdict.projection.projectedPct", "verdict.projection.expectedThisMonth",
+    "verdict.projection.projected", "verdict.received.revenue",
+    // плитки двигунів — саме той шлях, який ламався б тихо
+    "engines.rpk.expectedThisMonth", "engines.rpk.forecastPct", "engines.rpk.pct", "engines.rpk.expected",
+    "engines.rnk.expectedThisMonth", "engines.rnk.forecastPct", "engines.rnk.pct", "engines.rnk.expected",
+  ];
+  const missing = need.filter((p) => !at(body, p).ok);
+  assert.deepEqual(missing, [],
+    "🔴 СМУГА ЧИТАЄ ТЕ, ЧОГО У ВІДПОВІДІ НЕМАЄ. Поле, покладене на поверх нижче, не дає\n"
+    + "хибного числа — воно дає порожню смугу або падіння:\n  " + missing.join("\n  "));
+
+  // Рядок команди — той самий контракт, але на елементі масиву.
+  const teams = (body.teams ?? []) as Record<string, unknown>[];
+  assert.ok(teams.length > 0, "🔴 у відповіді жодної команди — перевіряти нема на чому");
+  for (const f of ["pct", "forecastPct", "expectedThisMonth", "plan", "revenue"])
+    assert.ok(f in teams[0], `🔴 у рядку команди немає «${f}» — смуга рядка не намалюється`);
+
+  // 🔒 І ЗМІСТ, а не лише наявність: датоване очікування НЕ БІЛЬШЕ за всю зону.
+  for (const k of ["rpk", "rnk"]) {
+    const zone = Number(at(body, `engines.${k}.expected`).val ?? 0);
+    const dated = Number(at(body, `engines.${k}.expectedThisMonth`).val ?? 0);
+    assert.ok(dated <= zone + 1,
+      `🔴 ${k}: «за плановою датою» (${dated}) більше за ВСЮ зону (${zone}) — поля переплутані місцями`);
+  }
 });

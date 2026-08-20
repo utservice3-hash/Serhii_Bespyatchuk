@@ -523,7 +523,8 @@ export async function fetchKvpExtra(params: { from?: string; to?: string }): Pro
 
 // ── КРОК Д: композитний Звіт КВП (/kvp-report) ──
 export interface KvpAgg { deals: number; revenue: number }
-export interface KvpEngineTeam { plan: number; revenue: number; expected: number; pct: number | null; conversion: number | null; entered: number }
+export interface KvpEngineTeam { plan: number; revenue: number; expected: number; expectedThisMonth: number;
+  pct: number | null; forecastPct: number | null; conversion: number | null; entered: number }
 export interface KvpDay { bucket: string; revenue: number; deals: number }
 export interface KvpWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; met: boolean; isCurrent: boolean; isFuture: boolean; pace: number | null }
 export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
@@ -569,7 +570,7 @@ export async function fetchManagerDetail(params: { managerId: number; from: stri
 }
 export interface KvpTeam {
   teamId: number; name: string; kind: "rpk" | "rnk" | "leadgen";
-  plan: number; revenue: number; expected: number; pct: number | null;
+  plan: number; revenue: number; expected: number; pct: number | null; forecastPct: number | null;
   conversion: number | null; entered: number; won: number; managers: KvpManager[];
   // #3 лайфтайм-конверсія (Варіант A, весь час): РНК÷реклама, РПК÷лідген; ≤100%.
   convLifetime: { num: number; den: number; pct: number | null };

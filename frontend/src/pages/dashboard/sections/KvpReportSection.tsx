@@ -18,6 +18,11 @@ const fmtPct = (v: number | null) => (v == null ? "—" : `${v}%`);
 const HINT: Record<string, string> = {
   received: "«Отримані кошти» = угоди, що ввійшли в етап 9 (Оплата отримана) АБО 10 (Успішна) у періоді, РАЗ (дедуп). Ядро core/money.ts.",
   strategic: "🔒 Стратегічний план виручки = Σ планів менеджерів (plans.payment_amount). Read-only — редагується у грід-редакторі планів, не тут.",
+  planBar: "Смуга заповнюється ДВІЧІ: щільний сегмент — факт (отримані кошти), світліший — "
+    + "очікування з ПЛАНОВОЮ ДАТОЮ оплати цього місяця. Разом = прогноз, тобто смуга показує те "
+    + "саме, що число прогнозу поруч. Ширина обрізається на 100%, а відсоток у підписі — НІ: "
+    + "перевищення видно числом. Добір нового бізнесу сюди не входить — він не підкріплений "
+    + "документами і показаний окремо.",
   projection: "Прогноз місяця = факт ② + очікування з ПЛАНОВОЮ ДАТОЮ ОПЛАТИ в цьому ж місяці — "
     + "ТА САМА формула, що на картці менеджера у Звіті (рішення власника 06.08.2026). "
     + "Добір нового бізнесу в прогноз НЕ входить і показаний окремо: він не підкріплений "
@@ -173,11 +178,33 @@ function LogisticsSection({ rep }: { rep: KvpReport }) {
 }
 
 /** Горизонтальний div-бар (magnitude), 4px заокруглені кінці, статус-колір по %. */
-function Bar({ pct, color, h = 8 }: { pct: number; color?: string; h?: number }) {
-  const w = Math.max(0, Math.min(100, pct));
+/**
+ * 📊 ДВОСЕГМЕНТНА СМУГА ВИКОНАННЯ ПЛАНУ (рішення власника 20.08.2026).
+ *
+ * Щільний сегмент — ФАКТ (отримані кошти), світліший — ОЧІКУВАННЯ за плановою
+ * датою оплати цього місяця. Разом вони дорівнюють ПРОГНОЗУ, тобто смуга показує
+ * те саме, що число прогнозу поруч, а не власну версію.
+ *
+ * 🔴 ОБРІЗАЄТЬСЯ ШИРИНА, А НЕ ЧИСЛО. Сума ширин ніколи не більша за 100 (смуга не
+ * вилазить із контейнера), але підпис показує СПРАВЖНІЙ відсоток. Заміряно на
+ * проді 20.08.2026: РПК 106%, команда Яцика 118%, Шаврової 111% — перевищення не
+ * гіпотеза, а сьогоднішній стан, і ховати його за «100%» означало б стерти саме
+ * ту інформацію, заради якої смугу й дивляться.
+ *
+ * ⚠️ Другий сегмент НЕ малюється, коли очікування нема: смуга нульової ширини —
+ * це не «нуль очікувань», це артефакт. Порожнє місце має лишатись порожнім.
+ */
+function PlanBar({ factPct, forecastPct, color, h = 8 }:
+  { factPct: number | null; forecastPct: number | null; color?: string; h?: number }) {
+  const f = Math.max(0, Math.min(100, factPct ?? 0));
+  // Очікування — рівно те, що ЛИШИЛОСЬ до 100 після факту. Тому сума ширин ≤ 100
+  // за побудовою, а не завдяки зовнішньому `min` десь у виклику.
+  const e = Math.max(0, Math.min(100 - f, (forecastPct ?? 0) - (factPct ?? 0)));
+  const base = color ?? BLUE;
   return (
-    <div style={{ background: "var(--border)", borderRadius: 4, height: h, width: "100%", overflow: "hidden" }}>
-      <div style={{ width: `${w}%`, height: "100%", background: color ?? BLUE, borderRadius: 4 }} />
+    <div style={{ background: "var(--border)", borderRadius: 4, height: h, width: "100%", overflow: "hidden", display: "flex" }}>
+      <div style={{ width: `${f}%`, height: "100%", background: base }} />
+      {e > 0 && <div style={{ width: `${e}%`, height: "100%", background: base, opacity: 0.38 }} />}
     </div>
   );
 }
@@ -294,9 +321,19 @@ export function KvpReportSection() {
             {/* прогрес до плану */}
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: MUTED, marginBottom: 4 }}>
-                <span>Виконання плану</span><span style={{ color: pctColor(v.planPct), fontWeight: 600 }}>{fmtPct(v.planPct)}</span>
+                <span>Виконання плану</span>
+                <span>
+                  <span style={{ color: pctColor(v.planPct), fontWeight: 600 }}>{fmtPct(v.planPct)}</span>
+                  <span style={{ color: MUTED }}> факт · </span>
+                  <span style={{ color: pctColor(v.projection.projectedPct), fontWeight: 600 }}>{fmtPct(v.projection.projectedPct)}</span>
+                  <span style={{ color: MUTED }}> з очікуванням</span>
+                </span>
               </div>
-              <Bar pct={v.planPct ?? 0} color={pctColor(v.planPct)} h={10} />
+              <PlanBar factPct={v.planPct} forecastPct={v.projection.projectedPct} color={pctColor(v.planPct)} h={10} />
+              <div style={{ fontSize: 11, color: MUTED, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                ▉ факт {fmtMoney(v.received.revenue)} · ▨ очікуємо {fmtMoney(v.projection.expectedThisMonth)} за план. датою = прогноз {fmtMoney(v.projection.projected)}
+                <InfoHint text={HINT.planBar} />
+              </div>
             </div>
             {/* lifecycle-смуга */}
             <div style={{ fontSize: 12, color: MUTED, display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>Життєвий цикл грошей<InfoHint text={HINT.lifecycle} /></div>
@@ -365,8 +402,12 @@ export function KvpReportSection() {
               <div key={lbl} className="chart-card">
                 <h2 className="chart-title">{lbl}</h2>
                 <Stat label="Факт / план" value={`${fmtMoney(e.revenue)}`} sub={`план ${fmtMoney(e.plan)} · ${fmtPct(e.pct)}`} color={pctColor(e.pct)} hint={HINT.teamPlan} />
-                <div style={{ margin: "8px 0" }}><Bar pct={e.pct ?? 0} color={pctColor(e.pct)} /></div>
-                <div style={{ fontSize: 12, color: MUTED }}>Очікуємо: {fmtMoney(e.expected)}</div>
+                <div style={{ margin: "8px 0" }}><PlanBar factPct={e.pct} forecastPct={e.forecastPct} color={pctColor(e.pct)} /></div>
+                <div style={{ fontSize: 11, color: MUTED, marginBottom: 2 }}>▉ факт {fmtPct(e.pct)} · ▨ з очікуванням <b style={{ color: pctColor(e.forecastPct) }}>{fmtPct(e.forecastPct)}</b></div>
+                <div style={{ fontSize: 12, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>
+                  Очікуємо: {fmtMoney(e.expectedThisMonth)} <span style={{ fontSize: 11 }}>за плановою датою цього місяця</span>
+                  <InfoHint text={`Це очікування, що ВХОДИТЬ у прогноз: угоди з плановою датою оплати в цьому місяці. Уся зона визнання, без прив'язки до дати, — ${fmtMoney(e.expected)}; вона ширша (туди входять наступний місяць і прострочені домовленості) і в прогноз НЕ береться. Два різні «очікуємо» — тому кожне підписане своїм.`} />
+                </div>
                 {showConv && <div style={{ fontSize: 12, color: MUTED, display: "flex", alignItems: "center", gap: 3 }}>Конверсія: {fmtPct(e.conversion)} {e.entered < 10 && "(<10 лідів)"}<InfoHint text={HINT.conversion} /></div>}
               </div>
             ))}
@@ -422,7 +463,7 @@ export function KvpReportSection() {
                         <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з РПК/повним циклом)." />}</span></td>
                         <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}</td>
-                        <td><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Bar pct={t.pct ?? 0} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
+                        <td><div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Факт ${fmtPct(t.pct)} · з очікуванням за плановою датою ${fmtPct(t.forecastPct)}`}><PlanBar factPct={t.pct} forecastPct={t.forecastPct} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
                         <td style={{ textAlign: "right", color: MUTED }} title={`Очікування за ПЛАНОВОЮ датою оплати. Цей міс: ${fmtMoney(t.expectedThisMonth)} · наступний: ${fmtMoney(t.expectedNextMonth)}. Ср.чек команди — успішно: ${t.avgCheckSuccess == null ? "—" : fmtMoney(t.avgCheckSuccess)} · в очікуванні: ${t.avgCheckAwaiting == null ? "—" : fmtMoney(t.avgCheckAwaiting)}.`}>{fmtMoney(t.expectedThisMonth)}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(t.expectedNextMonth)}</div></td>
                         <td style={{ textAlign: "right" }} title={`Лайфтайм (весь час): ${t.convLifetime.num} / ${t.convLifetime.den}${t.kind === "rnk" ? " (реклама)" : t.kind === "rpk" ? " (лідген)" : ""}`}>{t.kind === "rnk" || t.kind === "rpk" ? fmtPct(t.convLifetime.pct) : "—"}</td>
                         {rep.weekBlocks.map((w) => (

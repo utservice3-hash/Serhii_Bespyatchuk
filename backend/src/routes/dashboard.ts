@@ -6982,6 +6982,19 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const dispatchedLg = { deals: sumAll(dispatchedLgSeries, "deals"), revenue: sumAll(dispatchedLgSeries, "revenue") };
   const transferred = { entered: sumSeries(transferredSeries, "entered"), won: sumSeries(transferredSeries, "wonEventually") };
 
+  /**
+   * 📐 АРИФМЕТИКА ВІДСОТКА — РІВНО ОДНА, скоуп передається базою.
+   *
+   * 🔴 Копій цього виразу в роуті було ПʼЯТЬ (менеджер · команда · двигун · компанія
+   * · виконання плану), і всі однакові з точністю до знаменника. Поки смуга показувала
+   * саме факт, це терпіли. Щойно смуга стала двосегментною, кожна копія мусила б
+   * навчитись рахувати ще й прогноз — тобто пʼять місць, де можна дописати в одне
+   * й забути в решті. Той самий клас, що `pctOfPlan` проти власного виразу таблиці.
+   *
+   * ⚠️ ROMI сюди НЕ їде: у нього база — рекламний бюджет, а не план, і сенс інший.
+   */
+  const pctOf = (v: number, base: number): number | null =>
+    base > 0 ? Math.round((v / base) * 100) : null;
   // ── ТЕАМИ (Σ = відділ) ──
   const teamMap = new Map<number, { teamId: number; name: string; kind: string; plan: number; revenue: number; expected: number; conversion: number | null; entered: number; won: number; managers: Record<string, unknown>[] }>();
   const orphanPlan = new Map<number, number>();
@@ -7049,7 +7062,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     e.plan += mp.plan;
     e.managers.push({
       managerId: mid, name: mp.name, plan: mp.plan, revenue: rev,
-      pct: mp.plan > 0 ? Math.round((rev / mp.plan) * 100) : null,
+      pct: pctOf(rev, mp.plan),
       // #4 два чеки: avgCheck = «успішно реалізовано» (success, за місяць по closed_at, gate 2878);
       // avgCheckAwaiting = «в очікуванні оплат» (chainInflight, ЗНІМОК станом на зараз).
       avgCheck: su && su.deals > 0 ? Math.round(su.revenue / su.deals) : 0,
@@ -7081,7 +7094,10 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     });
     return {
       teamId: t.teamId, name: t.name, kind: t.kind, plan: t.plan, revenue: t.revenue, expected: t.expected,
-      pct: t.plan > 0 ? Math.round((t.revenue / t.plan) * 100) : null,
+      pct: pctOf(t.revenue, t.plan),
+      // 📊 Прогнозний відсоток для ДРУГОГО сегмента смуги: факт + очікування за
+      //    плановою датою ЦЬОГО місяця. Колонки рядка не чіпаються — лише смуга.
+      forecastPct: pctOf(t.revenue + (expTeamThisMap.get(t.teamId) ?? 0), t.plan),
       conversion: t.conversion, entered: t.entered, won: t.won,
       // #3 лайфтайм-конверсія за типом команди (Варіант A, чесна воронка ≤100%, весь час).
       convLifetime: lifetimeConvFor(t.teamId, t.kind),
@@ -7156,8 +7172,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
    * Одне число, два шляхи, різні результати на ОДНОМУ екрані: класика, від якої
    * лікує не латка на `null`, а спільний вираз. Обидві поверхні тепер беруть звідси.
    */
-  const pctOfPlan = (v: number): number | null =>
-    strategic > 0 ? Math.round((v / strategic) * 100) : null;
+  /** Відсоток КОМПАНІЙСЬКОГО плану — тонка обгортка над спільною арифметикою. */
+  const pctOfPlan = (v: number): number | null => pctOf(v, strategic);
 
   // Тижневий факт дод.показників (датовані по дню анкера, Σтижнів==місяць): успіх(142),
   // нові/постійні отримано, втрачені(143), дохід в очікуванні за ПЛАНОВОЮ датою.
@@ -7194,7 +7210,23 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     const ts = teams.filter((t) => t.kind === kind);
     const plan = ts.reduce((a, t) => a + t.plan, 0), revenue = ts.reduce((a, t) => a + t.revenue, 0), expected = ts.reduce((a, t) => a + t.expected, 0);
     const entered = ts.reduce((a, t) => a + t.entered, 0), won = ts.reduce((a, t) => a + t.won, 0);
-    return { plan, revenue, expected, pct: plan > 0 ? Math.round((revenue / plan) * 100) : null, conversion: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null, entered };
+    /**
+     * 🔴 ДВА РІЗНІ «ОЧІКУЄМО», І ПЛИТКА ДОСІ ПОКАЗУВАЛА НЕ ТЕ.
+     *   `expected`          — ЗНІМОК УСІЄЇ зони визнання, без прив'язки до дати;
+     *   `expectedThisMonth` — за ПЛАНОВОЮ ДАТОЮ оплати цього місяця.
+     * У прогноз входить ДРУГЕ (рішення власника 06.08.2026), а плитка малювала перше.
+     * Заміряно на проді 20.08.2026: РПК показував 904 462 ₴ там, де в прогнозі стоїть
+     * 800 744 — розрив 103 718 ₴ (88 817 наступного місяця + 14 901 прострочене).
+     * Тобто смуга, заповнена «очікуванням» плитки, розійшлась би з прогнозом на екрані.
+     * Рішення власника (варіант A): видиме число і смуга — `expectedThisMonth`, повна
+     * зона лишається у підказці з власним підписом.
+     */
+    const expectedThisMonth = ts.reduce((a, t) => a + (expTeamThisMap.get(t.teamId) ?? 0), 0);
+    return { plan, revenue, expected, expectedThisMonth,
+      pct: pctOf(revenue, plan),
+      // Другий сегмент смуги. Може бути >100% — обрізає ШИРИНУ фронт, не число.
+      forecastPct: pctOf(revenue + expectedThisMonth, plan),
+      conversion: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null, entered };
   };
   const adBudget = (await pool.query<{ fact: string; plan: string; conv: string }>(
     `SELECT COALESCE(SUM(budget_fact),0) fact, COALESCE(SUM(budget_plan),0) plan, COALESCE(SUM(conversions),0) conv FROM ad_budget_daily WHERE day >= $1 AND day <= $2`, [from, to])).rows[0];
