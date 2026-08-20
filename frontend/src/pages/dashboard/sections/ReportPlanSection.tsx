@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
   fetchResponseTimeByManager,
-  type ReportPlan, type ReportPlanManager, type KvpManagerDetail, type Team,
+  type ReportPlan, type ReportPlanManager, type KvpManagerDetail, type KvpDetailCell, type Team,
   type DayItemKind, type DayItems, type DealSource,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
@@ -393,7 +393,7 @@ export function ReportPlanSection({ auth, teams }: {
                   elapsed={data.elapsed} remWd={data.remainingWorkdays}
                   weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`}
                   weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
-                  periodLabel={periodLabel} isMonthMode={mode === "month"}
+                  periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"}
                   role={auth.role} isSelf={m.managerId === viewerId}
                   open onToggle={() => {}}
                 />
@@ -404,7 +404,7 @@ export function ReportPlanSection({ auth, teams }: {
             <MgrStrip m={selfRow} mWeek={weekByMgr.get(selfRow.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
               weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
-              periodLabel={periodLabel} isMonthMode={mode === "month"} role={auth.role} isSelf
+              periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"} role={auth.role} isSelf
               open={openMgr === selfRow.managerId} onToggle={() => setOpenMgr(openMgr === selfRow.managerId ? null : selfRow.managerId)} />
           )}
           <div style={{ fontSize: 12, color: MUTED, margin: "0 2px 10px" }}>
@@ -414,7 +414,7 @@ export function ReportPlanSection({ auth, teams }: {
             <MgrStrip key={m.managerId} m={m} mWeek={weekByMgr.get(m.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
               weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
-              periodLabel={periodLabel} isMonthMode={mode === "month"} role={auth.role}
+              periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"} role={auth.role}
               isSelf={m.managerId === viewerId}
               open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
           ))}
@@ -497,13 +497,19 @@ function Donut({ pct, title }: { pct: number; title?: string }) {
 }
 
 // Смуга менеджера: МІСЯЦЬ (головна траєкторія, статус+сортування) + ТИЖДЕНЬ (поточний), обидва завжди (#11).
-function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPeriod, drillPeriod, periodLabel, isMonthMode, role, isSelf, open, onToggle }: {
+function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPeriod, drillPeriod, periodLabel, isMonthMode, weeksFirst, role, isSelf, open, onToggle }: {
   m: ReportPlanManager; mWeek: ReportPlanManager | undefined;
   focusDay: string; today: string; elapsed: number; remWd: number; weekLabel: string;
   weekPeriod: { from: string; to: string };
   drillPeriod: { from: string; to: string };
   /** Підпис ОБРАНОГО періоду — щоб жоден заголовок не казав «Місяць» над тижневими цифрами. */
   periodLabel: string; isMonthMode: boolean;
+  /**
+   * 📅 Рівень розкриття: `true` — спершу тижні (Місяць/Період), `false` — одразу дні
+   * (День/Тиждень). Рішення власника 20.08.2026: у коротких режимах рівень тижнів
+   * порожній за змістом — блок там один.
+   */
+  weeksFirst: boolean;
   role: string; isSelf?: boolean; open: boolean; onToggle: () => void;
 }) {
   const s = m.status; // статус за ОБРАНИМ періодом
@@ -692,7 +698,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
         </div>
       </div>
       {showWhy && <WhyBox m={m} role={role} isSelf={!!isSelf} />}
-      {open && <DayDrill managerId={m.managerId} period={drillPeriod} focusDay={focusDay} today={today} />}
+      {open && <DayDrill managerId={m.managerId} period={drillPeriod} focusDay={focusDay} today={today} weeksFirst={weeksFirst} />}
     </div>
   );
 }
@@ -978,16 +984,37 @@ function WeekMoney({ mWeek, managerId, period }: {
   );
 }
 
-function DayDrill({ managerId, period, focusDay, today }: { managerId: number; period: { from: string; to: string }; focusDay: string; today: string }) {
+/**
+ * 📅 ДВА РІВНІ РОЗКРИТТЯ (рішення власника 20.08.2026): у режимах «Місяць» і «Період»
+ * спершу ТИЖНІ, і вже тиждень розкривається в дні. У «День»/«Тиждень» рівень тижнів
+ * зайвий — там і так один блок, тож дні показуються одразу.
+ *
+ * 🔴 ОБИДВА РІВНІ РАХУЮТЬСЯ З ОДНІЄЇ ВІДПОВІДІ. Тиждень — це `w.total`, тобто Σ ТИХ
+ * САМИХ днів, які під ним і розкриваються (`weeks[].days`). Другого запиту тут немає
+ * НАВМИСНО: щойно тижні поїхали б окремим ендпоінтом, зʼявився б другий вираз того
+ * самого числа — рівно те, від чого ми лікували чипи «новий/постійний» і розкриття
+ * дня. Розкриття мусить пояснювати число, а не сперечатися з ним.
+ */
+function DayDrill({ managerId, period, focusDay, today, weeksFirst }: { managerId: number; period: { from: string; to: string }; focusDay: string; today: string; weeksFirst: boolean }) {
   const [d, setD] = useState<KvpManagerDetail | null>(null);
   const [err, setErr] = useState(false);
   const [open, setOpen] = useState<DrillKey | null>(null);
+  const [openWeek, setOpenWeek] = useState<number | null>(null);
   const [items, setItems] = useState<Record<string, DayItems | null>>({});
   useEffect(() => {
-    let a = true; setD(null); setErr(false); setOpen(null); setItems({});
-    fetchManagerDetail({ managerId, from: period.from, to: period.to }).then((x) => a && setD(x)).catch(() => a && setErr(true));
+    let a = true; setD(null); setErr(false); setOpen(null); setOpenWeek(null); setItems({});
+    fetchManagerDetail({ managerId, from: period.from, to: period.to })
+      .then((x) => {
+        if (!a) return;
+        setD(x);
+        // Тиждень фокус-дня розкритий одразу: інакше перший екран — це п'ять згорнутих
+        // рядків, і день, на якому людина стоїть, треба ще знайти.
+        setOpenWeek(x.weeks.find((w) => w.from <= focusDay && focusDay <= w.to)?.idx
+          ?? x.weeks.find((w) => w.days.length > 0)?.idx ?? null);
+      })
+      .catch(() => a && setErr(true));
     return () => { a = false; };
-  }, [managerId, period.from, period.to]);
+  }, [managerId, period.from, period.to, focusDay]);
 
   /** 🔴 Дані вантажаться НА КЛІК — розкриття не має робити екран повільнішим для тих, хто його не відкриває. */
   const toggle = (day: string, kind: DayItemKind) => {
@@ -1011,6 +1038,31 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
    * 🔴 ПОРОЖНЯ КОМІРКА НЕ КЛІКАЄТЬСЯ ВЗАГАЛІ. Клік, що відкриває порожній список, —
    * це «брехлива кнопка»: людина витрачає дію й дізнається, що дії не було.
    */
+  /**
+   * 🔴 ОДИН ОПИС КОМІРОК НА ОБИДВА РІВНІ. Рядок тижня і рядок дня показують ті самі
+   * одинадцять чисел у тому самому порядку — тож опис колонок живе тут ОДИН раз, а
+   * рівні різняться лише тим, чи комірка клікається. Двi копії розмітки означали б,
+   * що колонку можна дописати в один рівень і забути в другому, і тиждень заперечував
+   * би день тим самим екраном.
+   */
+  const cellDefs = (x: KvpDetailCell): { kind: DayItemKind | null; n: number; main: React.ReactNode; sub?: React.ReactNode; color?: string }[] => {
+    const chk = x.received.deals ? Math.round(x.received.revenue / x.received.deals) : 0;
+    return [
+      { kind: "created", n: x.created, main: x.created, sub: `${x.newCount}н · ${x.repeatCount}п` },
+      { kind: "calls", n: x.talks + x.attempts, main: x.talks || "—", sub: x.attempts ? `${x.attempts} спроб` : undefined },
+      // `kind: null` — колонка-довідка без власного складу: клікати нема що діставати.
+      { kind: null, n: 0, main: `${x.newCount}/${x.repeatCount}` },
+      { kind: "dispatched", n: x.dispatched, main: x.dispatched, sub: x.dispatched ? autoSplit(x.dispRepeat, x.dispLeadgen, x.dispAd, x.dispUndef) : undefined },
+      { kind: "dispatched", n: x.dispSum, main: `${fmt(x.dispSum)} ₴` },
+      { kind: "dispatched_paid", n: x.dispPaid.sum, main: fmt(x.dispPaid.sum), color: GREEN },
+      { kind: "dispatched_awaiting", n: x.dispAwait.sum, main: fmt(x.dispAwait.sum), color: BAR },
+      { kind: "success", n: x.success.revenue, main: fmt(x.success.revenue), sub: x.success.deals ? `${x.success.deals} угод` : undefined, color: GREEN },
+      { kind: "paid", n: x.paid.revenue, main: fmt(x.paid.revenue), sub: x.paid.deals ? `${x.paid.deals} угод` : undefined, color: LINK },
+      { kind: "received", n: x.received.revenue, main: <b>{fmt(x.received.revenue)} ₴</b> },
+      { kind: "avgcheck", n: chk, main: fmt(chk), sub: `${fmt(x.received.revenue)} ÷ ${x.received.deals}` },
+    ];
+  };
+
   const Cell = ({ day, kind, n, main, sub, color }: {
     day: string; kind: DayItemKind; n: number;
     main: React.ReactNode; sub?: React.ReactNode; color?: string;
@@ -1102,7 +1154,9 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
   return (
     <div style={{ borderTop: "1px solid var(--border)", background: "var(--bg)", padding: "14px 17px 18px" }}>
       <div style={{ fontSize: 11.5, color: MUTED, textTransform: "uppercase", letterSpacing: ".4px", margin: "0 0 9px" }}>
-        По днях періоду ({ddmm(period.from)}–{ddmm(period.to)}) · клік на будь-яке число → його склад
+        {weeksFirst
+          ? `По тижнях періоду (${ddmm(period.from)}–${ddmm(period.to)}) · клік на тиждень → його дні, клік на число дня → його склад`
+          : `По днях періоду (${ddmm(period.from)}–${ddmm(period.to)}) · клік на будь-яке число → його склад`}
       </div>
       <div style={{ overflowX: "auto" }}>
         <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
@@ -1117,40 +1171,53 @@ function DayDrill({ managerId, period, focusDay, today }: { managerId: number; p
             <tr>{HEADS.map((h, i) => <th key={h} style={{ textAlign: i ? "right" : "left" }}>{h}</th>)}</tr>
           </thead>
           <tbody>
-            {days.map((x) => {
-              const chk = x.received.deals ? Math.round(x.received.revenue / x.received.deals) : 0;
-              const isF = x.day === focusDay;
-              const future = x.day > today;
-              const weekend = dow(x.day) >= 6;
-              return (
-                <Fragment key={x.day}>
-                  <tr style={{ background: isF ? AMBER + "18" : weekend ? "var(--border)" + "44" : undefined,
-                    color: future || weekend ? MUTED : undefined }}>
-                    <td style={{ textAlign: "left", fontWeight: 600, color: future || weekend ? MUTED : undefined }}>
-                      {WD[dow(x.day) - 1]} {ddmm(x.day)}{isF ? " •" : ""}
+            {(weeksFirst ? d.weeks : [{ idx: 0, from: period.from, to: period.to, days, total: T }]).map((w) => (
+              <Fragment key={`w${w.idx}`}>
+                {weeksFirst && (
+                  <tr onClick={() => setOpenWeek(openWeek === w.idx ? null : w.idx)}
+                      title="клік → дні цього тижня"
+                      style={{ cursor: "pointer", fontWeight: 650,
+                        background: openWeek === w.idx ? BAR + "14" : "var(--surface-2)",
+                        borderTop: "1px solid var(--border)" }}>
+                    <td style={{ textAlign: "left" }}>
+                      <span style={{ color: BAR, marginRight: 5 }}>{openWeek === w.idx ? "▾" : "▸"}</span>
+                      Тиждень {w.idx} · {ddmm(w.from)}–{ddmm(w.to)}
+                      <span style={{ color: MUTED, fontWeight: 400, fontSize: 11 }}> · {w.days.length} дн.</span>
                     </td>
-                    {future ? (
-                      <td colSpan={11} style={{ textAlign: "right", color: MUTED, fontStyle: "italic" }}>ще попереду</td>
-                    ) : (
-                      <>
-                        <Cell day={x.day} kind="created" n={x.created} main={x.created} sub={`${x.newCount}н · ${x.repeatCount}п`} />
-                        <Cell day={x.day} kind="calls" n={x.talks + x.attempts} main={x.talks || "—"} sub={x.attempts ? `${x.attempts} спроб` : undefined} />
-                        <td style={{ textAlign: "right", color: MUTED }}>{x.newCount}/{x.repeatCount}</td>
-                        <Cell day={x.day} kind="dispatched" n={x.dispatched} main={x.dispatched} sub={x.dispatched ? autoSplit(x.dispRepeat, x.dispLeadgen, x.dispAd, x.dispUndef) : undefined} />
-                        <Cell day={x.day} kind="dispatched" n={x.dispSum} main={`${fmt(x.dispSum)} ₴`} />
-                        <Cell day={x.day} kind="dispatched_paid" n={x.dispPaid.sum} main={fmt(x.dispPaid.sum)} color={GREEN} />
-                        <Cell day={x.day} kind="dispatched_awaiting" n={x.dispAwait.sum} main={fmt(x.dispAwait.sum)} color={BAR} />
-                        <Cell day={x.day} kind="success" n={x.success.revenue} main={fmt(x.success.revenue)} sub={x.success.deals ? `${x.success.deals} угод` : undefined} color={GREEN} />
-                        <Cell day={x.day} kind="paid" n={x.paid.revenue} main={fmt(x.paid.revenue)} sub={x.paid.deals ? `${x.paid.deals} угод` : undefined} color={LINK} />
-                        <Cell day={x.day} kind="received" n={x.received.revenue} main={<b>{fmt(x.received.revenue)} ₴</b>} />
-                        <Cell day={x.day} kind="avgcheck" n={chk} main={fmt(chk)} sub={`${fmt(x.received.revenue)} ÷ ${x.received.deals}`} />
-                      </>
-                    )}
+                    {cellDefs(w.total).map((c, i) => (
+                      <td key={i} style={{ textAlign: "right", color: c.n ? (c.color ?? undefined) : MUTED }}>
+                        {c.n || c.kind === null ? c.main : "—"}
+                        {c.n && c.sub ? <div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{c.sub}</div> : null}
+                      </td>
+                    ))}
                   </tr>
-                  {open && open.day === x.day ? <DrillRow day={x.day} kind={open.kind} /> : null}
-                </Fragment>
-              );
-            })}
+                )}
+                {(!weeksFirst || openWeek === w.idx) && w.days.map((x) => {
+                  const isF = x.day === focusDay;
+                  const future = x.day > today;
+                  const weekend = dow(x.day) >= 6;
+                  return (
+                    <Fragment key={x.day}>
+                      <tr style={{ background: isF ? AMBER + "18" : weekend ? "var(--border)" + "44" : undefined,
+                        color: future || weekend ? MUTED : undefined }}>
+                        <td style={{ textAlign: "left", fontWeight: 600, paddingLeft: weeksFirst ? 22 : undefined,
+                          color: future || weekend ? MUTED : undefined }}>
+                          {WD[dow(x.day) - 1]} {ddmm(x.day)}{isF ? " •" : ""}
+                        </td>
+                        {future ? (
+                          <td colSpan={11} style={{ textAlign: "right", color: MUTED, fontStyle: "italic" }}>ще попереду</td>
+                        ) : cellDefs(x).map((c, i) => (
+                          c.kind === null
+                            ? <td key={i} style={{ textAlign: "right", color: MUTED }}>{c.main}</td>
+                            : <Cell key={i} day={x.day} kind={c.kind} n={c.n} main={c.main} sub={c.sub} color={c.color} />
+                        ))}
+                      </tr>
+                      {open && open.day === x.day ? <DrillRow day={x.day} kind={open.kind} /> : null}
+                    </Fragment>
+                  );
+                })}
+              </Fragment>
+            ))}
             <tr style={{ background: "var(--bg)", fontWeight: 750, borderTop: "2px solid var(--border)" }}>
               <td style={{ textAlign: "left" }}>Σ період</td>
               <td style={{ textAlign: "right" }}>{T.created}<div style={{ color: MUTED, fontSize: 10.5, fontWeight: 400 }}>{T.newCount}н · {T.repeatCount}п</div></td>

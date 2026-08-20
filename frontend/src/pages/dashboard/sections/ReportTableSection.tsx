@@ -571,12 +571,15 @@ function WeeksDrill({ managerId, month }: { managerId: number; month: string }) 
             <td style={{ ...wTd, textAlign: "right" }}>Факт</td>
             <td style={{ ...wTd, textAlign: "right" }}>План</td>
             <td style={{ ...wTd, textAlign: "right" }}>Викон.</td>
+            <td style={{ ...wTd, textAlign: "right" }}>Авто ф/ц</td>
           </tr>
           {d.weeks.map((w) => (
             <tr key={w.idx}>
               <td style={{ ...wTd, color: "var(--text-muted)" }}>
                 {w.from.slice(8)}–{w.to.slice(8)} {w.from.slice(5, 7)}
                 <span style={{ opacity: 0.6 }}> · {w.workingDays} р.д.</span>
+                {w.clipped && <span title="тиждень обрізаний межею місяця — коротший за повний Пн–Нд; тижнева ЦІЛЬ на картці рахується по повному календарному тижню"
+                  style={{ marginLeft: 6, fontSize: 10, color: "var(--text-muted)" }}>обрізаний місяцем</span>}
                 {w.reconstructed && <span title="знімок відновлено ретроспективно, а не збережено в момент"
                   style={{ marginLeft: 6, fontSize: 10, color: "var(--warn)" }}>знімок відновлено</span>}
               </td>
@@ -586,6 +589,10 @@ function WeeksDrill({ managerId, month }: { managerId: number; month: string }) 
               </td>
               <td style={{ ...wTd, textAlign: "right" }}>
                 {w.pct == null ? <span style={{ color: "var(--text-muted)", opacity: 0.6 }}>—</span> : `${w.pct}%`}
+              </td>
+              <td style={{ ...wTd, textAlign: "right" }}>
+                {w.dispatchFact}
+                <span style={{ color: "var(--text-muted)" }}> / {w.dispatchTarget ?? "—"}</span>
               </td>
             </tr>
           ))}

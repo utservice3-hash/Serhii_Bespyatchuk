@@ -44,7 +44,7 @@ import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClient
 import * as plans from "../core/plans.js";
 import * as reportCuts from "../core/reportCuts.js";
 import { activeManagerSql } from "../core/activeManager.js";
-import { monthsInRange, fixedWeekBlocks, workingDaysBetween, monthEndOf } from "../core/dates.js";
+import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -6101,7 +6101,6 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   const to = String(req.query.to ?? "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: "from/to (YYYY-MM-DD) обовʼязкові" });
   const scope: metrics.MetricScope = { managerId, from, to };
-  const monthStart = from.slice(0, 7) + "-01";
   const mRow = (await pool.query<{ name: string; team_id: number | null }>(`SELECT name, team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
   const isRnk = mRow?.team_id != null && RNK_MGR_TEAMS.has(mRow.team_id);
 
@@ -6147,7 +6146,17 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
 
   const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, dispSum: a.dispSum + b.dispSum, dispPaid: { deals: a.dispPaid.deals + b.dispPaid.deals, sum: a.dispPaid.sum + b.dispPaid.sum }, dispAwait: { deals: a.dispAwait.deals + b.dispAwait.deals, sum: a.dispAwait.sum + b.dispAwait.sum }, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
-  const weeks = fixedWeekBlocks(monthStart).map((w) => {
+  /**
+   * 🔴 БЛОКИ — ПО ЗАПИТАНОМУ ДІАПАЗОНУ, А НЕ ПО МІСЯЦЮ `from` (20.08.2026).
+   *
+   * Було `fixedWeekBlocks(monthStart)`: блоки будувались лише для місяця, у який
+   * потрапив `from`, а дні поза ним відсіювались фільтром — і зникали НЕ ЛИШЕ з
+   * тижнів, а й із `monthTotals`, бо той рахується як Σ тижнів. Тобто в режимі
+   * «Період» через межу місяця (15.07–20.08) підсумок розкриття мовчки не бачив
+   * серпня. Для ПОВНОГО місяця обидві функції дають однакові блоки, тож числа
+   * місячного вигляду не зрушились ані на копійку — гейт `#93` це й доводить.
+   */
+  const weeks = weekBlocksForRange(from, to).map((w) => {
     const days = [...dayMap.entries()].filter(([d]) => d >= w.from && d <= w.to).sort((a, b) => a[0].localeCompare(b[0])).map(([day, c]) => ({ day, ...c }));
     const total = days.reduce((acc, d) => addCell(acc, d), zero());
     return { idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivToday && kyivToday <= w.to, isFuture: w.from > kyivToday, total, days };
@@ -6683,9 +6692,30 @@ dashboardRouter.get("/report-plan/manager-weeks", async (req, res) => {
   // Місячний план — ЄДИНИМ джерелом (`plans-grid`), як і всюди: тижневий похідний від нього.
   const mp = await plans.managerPlan(mgrRow?.team_id != null ? { month: monthStart, teamId: mgrRow.team_id } : { month: monthStart });
   const planByMgr = new Map(mp.rows.map((r) => [r.managerId, r.plan]));
-  const [snapRows, dayRows] = await Promise.all([
+  // 🚚 АВТО ПО ТИЖНЯХ (рішення власника 20.08.2026): у розкритті має бути видно не
+  // лише гроші, а й скільки авто відправлено проти тижневої цілі. Факт — той самий
+  // `dispatchedByManagerDay` (анкер `load_at`), що живить колонку «Авто ф/ц»;
+  // ціль — `accumulateKpiTargets` на межах ТОГО САМОГО блоку, тобто той самий вираз,
+  // що й у місячному блоці показників. Другого означення цілі не заводимо.
+  const [snapRows, dayRows, dispDays, umbRows2, dayRows2] = await Promise.all([
     weekPlansForMonth({ managerId }, monthStart, planByMgr),
     money.receivedByManagerBucket({ from: monthStart, to: monthEnd, managerId }, "day"),
+    metrics.dispatchedByManagerDay({ from: monthStart, to: monthEnd, managerId }),
+    pool.query<{ assignee_id: number; ps: string; pe: string; kind: string | null; metrics_json: { metric: string; target: number | string }[] | null }>(
+      `SELECT t.assignee_id, to_char(t.period_start,'YYYY-MM-DD') ps,
+              to_char(COALESCE(t.period_end, t.period_start),'YYYY-MM-DD') pe,
+              t.period_kind AS kind, t.metrics_json
+         FROM tasks t
+        WHERE t.auto AND t.task_type = 'kpi_period' AND t.assignee_id = $1
+          AND t.metrics_json IS NOT NULL
+          AND t.period_start <= $3 AND COALESCE(t.period_end, t.period_start) >= $2`,
+      [managerId, monthStart, monthEnd]),
+    pool.query<{ assignee_id: number; pd: string; metrics_json: { metric: string; target: number | string }[] | null }>(
+      `SELECT t.assignee_id, to_char(t.plan_date,'YYYY-MM-DD') pd, t.metrics_json
+         FROM tasks t
+        WHERE t.auto AND t.task_type = 'daily_kpi' AND t.assignee_id = $1
+          AND t.metrics_json IS NOT NULL AND t.plan_date BETWEEN $2 AND $3`,
+      [managerId, monthStart, monthEnd]),
   ]);
   const snapByWeek = new Map(snapRows.map((r) => [r.weekStart, r]));
   const blocks = fixedWeekBlocks(monthStart);
@@ -6696,10 +6726,24 @@ dashboardRouter.get("/report-plan/manager-weeks", async (req, res) => {
     blocks,
   );
 
+  const dispByBlock = sumDaysIntoBlocks(
+    dispDays.filter((r) => r.managerId === managerId).map((r) => ({ day: r.day, value: r.deals })),
+    blocks,
+  ).byBlock;
+
   const weeks = blocks.map((w, i) => {
     const snap = snapByWeek.get(w.from);
     const fact = byBlock[i];
     const plan = Math.round(snap?.plan ?? 0);
+    // 🚚 Ціль авто на ЦЕЙ тиждень — тим самим накопичувачем, що місячний блок
+    // показників. Парасольки має не кожен (17 із 31 менеджера), тож відсутність
+    // цілі — це `null`, а не 0: нуль читався б як «ціль нульова».
+    const wTargets = accumulateKpiTargets(
+      umbRows2.rows.map((u) => ({ assigneeId: u.assignee_id, from: u.ps, to: u.pe, kind: u.kind, metrics: u.metrics_json })),
+      dayRows2.rows.map((r) => ({ assigneeId: r.assignee_id, day: r.pd, metrics: r.metrics_json })),
+      w.from, w.to,
+    ).get(managerId) ?? {};
+    const dTarget = wTargets.dispatch_count != null ? Math.round(wTargets.dispatch_count) : null;
     return {
       idx: w.idx, from: w.from, to: w.to,
       workingDays: snap?.wdWeek ?? workingDaysBetween(w.from, w.to),
@@ -6709,6 +6753,17 @@ dashboardRouter.get("/report-plan/manager-weeks", async (req, res) => {
       // `null` — тиждень ще не почався, тож знімка й не мало бути.
       source: snap?.source ?? null,
       reconstructed: snap?.reconstructed ?? false,
+      dispatchFact: dispByBlock[i],
+      dispatchTarget: dTarget && dTarget > 0 ? dTarget : null,
+      /**
+       * ✂️ ТИЖДЕНЬ, ОБРІЗАНИЙ МЕЖЕЮ МІСЯЦЯ (F5). Перший і останній блоки місяця
+       * майже завжди коротші за Пн–Нд: серпень 2026 починається в суботу, тож
+       * перший блок — це 01–02. Картка при цьому рахує тижневу ЦІЛЬ по повному
+       * календарному тижню, і без цієї позначки два правильні числа на сусідніх
+       * екранах читались би як розбіжність.
+       */
+      clipped: !(new Date(w.from + "T00:00:00Z").getUTCDay() === 1
+                 && new Date(w.to + "T00:00:00Z").getUTCDay() === 0),
     };
   });
   res.json({ managerId, month, monthPlan: Math.round(planByMgr.get(managerId) ?? 0), weeks });
