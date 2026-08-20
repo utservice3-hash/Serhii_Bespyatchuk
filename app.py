@@ -3471,9 +3471,14 @@ def debug_closed_verdict():
         manager_name = kommo.get_user_name(responsible_id) if responsible_id else "—"
         team = MANAGER_TEAM.get(responsible_id, "")
         amount = int(lead.get("price", 0))
-        recommendation = ai_analyzer.analyze_closed_deal({
-            **details, "manager": manager_name, "amount": amount
-        })
+        # Той самий вхід, що й бойовий шлях (нотатки + дзвінки + спроби контакту
+        # + прикріплені скріншоти), але БЕЗ переміщення угоди й БЕЗ Telegram.
+        notes_text, calls_text, contact_summary, attachments_summary = _gather_deal_context(lead_id, manager_name)
+        recommendation = ai_analyzer.analyze_closed_deal(
+            {**details, "manager": manager_name, "amount": amount},
+            notes_text=notes_text, calls_text=calls_text, contact_summary=contact_summary,
+            attachments_summary=attachments_summary,
+        )
         closure_match = re.search(r"CLOSURE:\s*(ПЕРЕДЧАСНЕ|ОБ['ʼ’]?ЄКТИВНЕ)\s*-?\s*(.*)", recommendation)
         verdict = ""
         if closure_match:
@@ -3481,6 +3486,10 @@ def debug_closed_verdict():
         return jsonify({
             "ok": True, "lead_id": lead_id, "team": team, "is_rnk": team in RNK_TEAMS,
             "verdict": verdict, "raw_recommendation": recommendation,
+            "reject_reason": details.get("reject_reason"),
+            "contact_summary": contact_summary,
+            "attachments_summary": attachments_summary,
+            "has_screenshots": bool(attachments_summary),
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
