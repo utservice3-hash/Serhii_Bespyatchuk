@@ -688,6 +688,13 @@ export interface ReportPlanManager {
   status: "g" | "a" | "r"; needPerDay: number; remainingWorkdays: number;
   spark: number[];
   kpi: { ads: ReportPlanKpi; leadgen: ReportPlanKpi; dispatch: ReportPlanKpi; avgCheck: ReportPlanKpi; conversion: ReportPlanKpi };
+  /**
+   * 🔀 ТА САМА конверсія, звужена до каналу (рішення власника 21.08.2026).
+   * `taken`/`won` є ЗАВЖДИ, `fact` (відсоток) — лише при `taken >= 10`, як і в
+   * combined. Σ канальних counts == combined counts; відсотки НЕ адитивні.
+   */
+  conversionAd: { taken: number; won: number; fact: number | null };
+  conversionLeadgen: { taken: number; won: number; fact: number | null };
 }
 export interface ReportPlan {
   scope: { from: string; to: string; isCurrent: boolean; workingDaysTotal: number; workingDaysElapsed: number };

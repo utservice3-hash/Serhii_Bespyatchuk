@@ -354,7 +354,14 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
     case "ads": return <td style={st}>{m.kpi.ads.fact || none}</td>;
     case "leadgen": return <td style={st}>{m.kpi.leadgen.fact || none}</td>;
     case "conv":
-      return <td style={st}>{m.kpi.conversion.fact == null ? none : `${m.kpi.conversion.fact.toFixed(1)}%`}</td>;
+      // 🔀 Counts ЗАВЖДИ, % лише при взято ≥10 (рішення власника 21.08.2026) — однаково
+      // в усіх трьох колонках. Combined свого ЗНАЧЕННЯ не змінює: додались лише видимі
+      // взято/виграно, яких раніше не було (доводить `#101`).
+      return <td style={st}>{convCell(m.kpi.conversion.fact, m.kpi.conversion.won ?? 0, m.kpi.conversion.taken ?? 0)}</td>;
+    case "convAd":
+      return <td style={st}>{convCell(m.conversionAd.fact, m.conversionAd.won, m.conversionAd.taken)}</td>;
+    case "convLg":
+      return <td style={st}>{convCell(m.conversionLeadgen.fact, m.conversionLeadgen.won, m.conversionLeadgen.taken)}</td>;
     case "dispatch":
       return (
         <td style={st}>{m.kpi.dispatch.fact ?? 0}{" "}
@@ -424,7 +431,14 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
   const f = footValue(col.key, rows);
   if (f.value == null) return <td style={{ ...st, color: "var(--text-muted)", fontWeight: 500 }}>—</td>;
   if (col.key === "pct") return <td style={st}>{f.value}%</td>;
-  if (col.key === "conv") return <td style={st}>{f.value.toFixed(1)}%</td>;
+  if (col.key === "conv" || col.key === "convAd" || col.key === "convLg") {
+    const e = f.extra as { num: number; den: number } | undefined;
+    return (
+      <td style={st}>{f.value.toFixed(1)}%
+        {e ? <span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 500 }}> {e.num}/{e.den}</span> : null}
+      </td>
+    );
+  }
   if (col.key === "created") {
     const nw = rows.reduce((s, m) => s + m.new, 0), rp = rows.reduce((s, m) => s + m.rep, 0);
     return <td style={st}>{f.value} <span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 500 }}>{nw}/{rp}</span></td>;
@@ -580,6 +594,25 @@ function HelpDot({ text, title, alignRight }: { text: string; title: string; ali
  * нього мовчки СКИДАЄ попередній вибір. Тобто найпростіша дія — клікнути другу
  * команду — дала б протилежний результат очікуваному.
  */
+/**
+ * 🔀 КЛІТИНКА КОНВЕРСІЇ — ОДНА ФОРМА НА ВСІ ТРИ КОЛОНКИ (21.08.2026).
+ *
+ * Взято/виграно показуються ЗАВЖДИ, відсоток — лише при взято ≥ 10. Заміряно за
+ * серпень: після розділення за джерелом поріг лишив би «Конв. лідоген» порожньою
+ * у 22 із 31 менеджера, а екран із трьох чвертей прочерків читається як зламаний.
+ * Числа при цьому не брешуть при жодній вибірці — брехав би саме відсоток, тому
+ * поріг стоїть рівно там, де стояв.
+ */
+function convCell(pct: number | null, won: number, taken: number) {
+  if (taken === 0) return <span style={{ color: "var(--text-muted)" }}>—</span>;
+  return (
+    <>
+      {pct == null ? <span style={{ color: "var(--text-muted)" }}>—</span> : `${pct.toFixed(1)}%`}
+      <span style={{ color: "var(--text-muted)", fontSize: 11 }}> {won}/{taken}</span>
+    </>
+  );
+}
+
 function ScopePicker({ teams, isAdmin, teamIds, onTeamIds, mgrFilter, onMgrFilter, managers, byTeam, allLabel }: {
   teams: Team[]; isAdmin: boolean;
   teamIds: number[]; onTeamIds: (v: number[]) => void;

@@ -328,7 +328,17 @@ function LeadRec({ row, loading, period, onPeriod }: {
             {cell("Постійні дадуть", row.forecast != null ? formatAmount(row.forecast) : dash,
               row.forecastClients ? `${row.forecastClients} кл. · сер./міс за 6 міс` : "немає історії")}
             {cell("Залишок", row.remainder != null ? formatAmount(row.remainder) : dash, "план − постійні")}
-            {cell("Конверсія",
+            {/**
+              * 🔀 ПІДПИС НАЗИВАЄ ОСНОВУ (рішення власника 21.08.2026). У продукті тепер
+              * ДВІ різні «конверсії лідогену», і обидві правильні: тут знаменник —
+              * РЕЄСТР ПЕРЕДАНИХ ЗАЯВОК (`lead_transfer_events` за `transfer_date`), а в
+              * Звіті — когорта СТВОРЕНИХ угод за `lead_channel`. За серпень 2026 вони
+              * дають 3.8% і 24.8% — розрив у 6.5 раза. Без підпису два правильні числа
+              * на сусідніх екранах читаються як поломка.
+              * ⚠️ Змінено ТІЛЬКИ підпис: `row.conversionPct` рахується тим самим
+              * `conversionAdsByManager`/`conversionLeadgenByManager`, що й раніше.
+              */}
+            {cell(row.channel === "leadgen" ? "Конверсія (за передачами)" : "Конверсія (за прийнятою рекламою)",
               <>
                 {row.conversionPct != null ? `${row.conversionPct}%` : dash}
                 {(row.conversionSource === "team" || row.conversionSource === "company") && (
@@ -344,7 +354,7 @@ function LeadRec({ row, loading, period, onPeriod }: {
               </>,
               row.conversionSource === "team" ? "особистих заявок замало"
                 : row.conversionSource === "company" ? "ні своїх, ні командних"
-                : `${row.conversionWon}/${row.conversionEntered} заявок`)}
+                : `${row.conversionWon}/${row.conversionEntered} ${row.channel === "leadgen" ? "переданих заявок" : "прийнятих реклами"}`)}
             {cell("Ср. чек",
               <>
                 {row.avgCheck != null ? formatAmount(row.avgCheck) : dash}

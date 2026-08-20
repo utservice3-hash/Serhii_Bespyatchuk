@@ -1506,9 +1506,29 @@ export interface MgrConvTaken { managerId: number; taken: number; won: number; c
  * MONEY_ZONE (визнання доходу, ≤100%). Само підлаштовується під канал: РПК≈лідоген,
  * РНК≈ads. cohortPct=null коли taken<10 (UI «—», не «0%»). Scope-aware.
  */
-export async function conversionByManager(s: MetricScope): Promise<MgrConvTaken[]> {
+/**
+ * 🔀 РОЗРІЗ ЗА ДЖЕРЕЛОМ (21.08.2026, рішення власника): та сама конверсія, звужена
+ * до одного каналу. `undefined` — обидва разом, тобто теперішня «Конв. Р+Л»,
+ * БАЙТ-У-БАЙТ те саме число (гейт `#101` це й доводить).
+ *
+ * 🔴 ЧОМУ ОДНА ФУНКЦІЯ, А НЕ ТРИ. Чисельник і знаменник тут фільтруються ОДНІЄЮ
+ * колонкою `d.lead_channel`, тож розбиття адитивне за побудовою. Написані окремо,
+ * канальні варіанти рано чи пізно розійшлися б із combined — і помітити це можна
+ * було б лише склавши числа руками. Той самий прийом, що `createdKlassCase`.
+ * 📐 Заміряно на проді 20.08 (серпень): реклама 611/67 + лідоген 302/75 =
+ * 913/142 == combined 913/142, Δ0 і по кожному з 8 перевірених менеджерів.
+ *
+ * ⚠️ ВІДСОТКИ НЕ АДИТИВНІ: 11.0% (реклама) і 24.8% (лідоген) дають 15.6%
+ * (combined), а не середнє. Тому підсумок КОЖНОЇ з трьох колонок рахується як
+ * Σwon ÷ Σtaken окремо, і складати їх на екрані заборонено.
+ */
+export async function conversionByManager(s: MetricScope, channel?: "ad" | "leadgen"): Promise<MgrConvTaken[]> {
   const params: unknown[] = [FC_PIPELINES, MONEY_ZONE];
-  const conds = ["d.pipeline_id = ANY($1)", "d.lead_channel IN ('ad','leadgen')", "d.manager_id IS NOT NULL"];
+  const conds = ["d.pipeline_id = ANY($1)", "d.manager_id IS NOT NULL"];
+  // Канал — ОДНА умова на весь запит: і `taken`, і `won` рахуються по тій самій
+  // множині рядків, тож розійтись їм нема як.
+  if (channel) { params.push(channel); conds.push(`d.lead_channel = $${params.length}`); }
+  else conds.push("d.lead_channel IN ('ad','leadgen')");
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }

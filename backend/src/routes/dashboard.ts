@@ -6223,7 +6223,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
   // #4 ср.чек Звіту = пул `reportChain` (угоди ЗАРАЗ у «авто працює→оплата» ⊎ виграні
   // за період) — signed Σ÷count per manager; команда/відділ = Σsum÷Σcount (glance нижче).
-  const [recv, succ, paid, disp, ads, lg, conv, avgc, expZone, split, expDays] = await Promise.all([
+  const [recv, succ, paid, disp, ads, lg, conv, avgc, expZone, split, expDays, convAd, convLg] = await Promise.all([
     money.receivedByMgr(scope), money.successByMgr(scope), money.paidOnlyByMgr(scope),
     metrics.dispatchedByManager(scope),
     metrics.adsAcceptedByMgr(scope, adSources), metrics.leadgenByManager(scope),
@@ -6233,6 +6233,15 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     // #2 «Очікуємо» = за ПЛАНОВОЮ датою оплати (grid по дню planned_payment_at), розкладемо
     // per manager у поточний/наступний КАЛЕНДАРНИЙ місяць (forward-looking, БЕЗ періоду звіту).
     metrics.expectedByManagerDay({ managerId, teamId }),
+    /**
+     * 🔀 ТРИ КОНВЕРСІЇ (рішення власника 21.08.2026). Combined вище НЕ чіпаємо —
+     * канальні йдуть ДОДАТКОВО, тим самим виразом зі звуженням по `lead_channel`.
+     * Показувати конверсію без підпису каналу заборонено правилом глосарію, а
+     * одна колонка «Р+Л» ховала різницю в 2.3 раза: реклама 11.0% проти
+     * лідогену 24.8% (заміряно на проді за серпень).
+     */
+    metrics.conversionByManager(scope, "ad"),
+    metrics.conversionByManager(scope, "leadgen"),
   ]);
   // 📊 Розрізи макета 06.08.2026: дзвінки (розмови/спроби), затор на «Виставленні
   // рахунку», очікування БЕЗ планової дати. Усі — лічильні або знімок однієї стадії;
@@ -6255,6 +6264,10 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   //    рішення 06.08.2026 доїхало сюди й не доїхало туди саме через дві копії.
   const expPlannedM = forecast.expectedSplitByMonth(expDays, kyivToday);
   const mapBy = <T extends { managerId: number }>(rows: T[]) => new Map(rows.map((r) => [r.managerId, r]));
+  /** Канальна конверсія в контракт: counts завжди, % лише при taken ≥ 10 — той самий
+   *  поріг, що в combined, і рахується ТИМ САМИМ полем `cohortPct` ядра. */
+  const cvt = (c?: { taken: number; won: number; cohortPct: number | null }) =>
+    ({ taken: c?.taken ?? 0, won: c?.won ?? 0, fact: c && c.taken >= 10 ? c.cohortPct : null });
   // 🔴 ПРАВИЛО ВЛАСНИКА (06.08.2026) — ЗМІНА ДО РІШЕННЯ ВІД 02.08: факт менеджера =
   // ② `receivedMoney` = ① «успішно реалізовано» (142) ⊎ «оплата отримана» (етап 9),
   // з дедупом. Попередня редакція («лише 142») скасована ВЛАСНИКОМ, а не нами.
@@ -6270,7 +6283,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // частини лишається видимим (`factSuccess`/`factPaid`) — саме щоб «гроші прийшли,
   // угода не закрита» читалось як окремий стан, а не розчинялось у сумі.
   const recvM = mapBy(recv), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
-    lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc);
+    lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc),
+    convAdM = mapBy(convAd), convLgM = mapBy(convLg);
   const expM = new Map(expZone.map((e) => [e.id, e.sum]));
 
   // СПАРКЛАЙН: received по 5 останніх тижнях (Пн–Нд) до `to`, per-manager.
@@ -6518,6 +6532,15 @@ dashboardRouter.get("/report-plan", async (req, res) => {
         avgCheck: { fact: avgM.get(m.id)?.avgCheck ?? null, target: Math.round(pl.avg_check ?? 0),
           revenue: Math.round(avgM.get(m.id)?.revenue ?? 0), deals: avgM.get(m.id)?.deals ?? 0 },
         conversion: { fact: c && c.taken >= 10 ? c.cohortPct : null, target: Math.round(pl.conversion ?? 0), taken: c?.taken ?? 0, won: c?.won ?? 0 },
+        /**
+         * 🔀 Канальні конверсії — `taken`/`won` ЗАВЖДИ, відсоток лише при taken ≥ 10
+         * (рішення власника 21.08.2026). Числа не брешуть при жодній вибірці, а
+         * поріг лишається тим самим, що й у combined. Без чисел колонка «Конв.
+         * лідоген» була б порожня у 22 із 31 менеджера (заміряно за серпень) і
+         * читалась би як зламана.
+         */
+        conversionAd: cvt(convAdM.get(m.id)),
+        conversionLeadgen: cvt(convLgM.get(m.id)),
       },
     };
   }).sort((a, b) => ({ r: 0, a: 1, g: 2 })[a.status] - ({ r: 0, a: 1, g: 2 })[b.status]); // гірші вгорі

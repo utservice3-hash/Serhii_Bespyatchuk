@@ -17,7 +17,7 @@
 import type { ReportPlanManager } from "../../api";
 
 export type ColKey =
-  | "rank" | "name" | "status" | "created" | "ads" | "leadgen" | "conv"
+  | "rank" | "name" | "status" | "created" | "ads" | "leadgen" | "conv" | "convAd" | "convLg"
   | "dispatch" | "avgCheck" | "fact" | "plan" | "pct"
   | "projected" | "needPerDay" | "expectThisMonth" | "awaitNoDate"
   | "jamDeals" | "jam" | "dobir" | "talks" | "dispRevenue" | "responseTime"
@@ -29,7 +29,7 @@ export type ColKey =
  * · `none` — підсумку немає (ім'я, ранг, статус);
  * · `ratio:*` — ЧАСТКА: Σ чисельника ÷ Σ знаменника, а не Σ часток.
  */
-export type FootKind = "add" | "none" | "ratio:avgCheck" | "ratio:pct" | "ratio:conv" | "share:none";
+export type FootKind = "add" | "none" | "ratio:avgCheck" | "ratio:pct" | "ratio:conv" | "ratio:convAd" | "ratio:convLg" | "share:none";
 
 /**
  * Дані, яких НЕМАЄ в рядку менеджера, але за якими треба сортувати.
@@ -95,6 +95,15 @@ export const REPORT_COLS: ColDef[] = [
     help: "Прийнято лідів від лідогенератора. Джерело: metrics.leadgenByManager. ⚠️ Це ОКРЕМА метрика каналу, а не підмножина колонки «Створено» — розклад створених за джерелом стоїть окремими колонками." },
   { key: "conv", title: "Конв. Р+Л", core: true, val: (m) => numOrNull(m.kpi.conversion.fact), foot: "ratio:conv",
     help: "Конверсія по каналах Реклама+лідоген: виграні ÷ взяті. «—» якщо взято <10. Джерело: metrics.conversionByManager." },
+  /**
+   * 🔀 ТРИ КОНВЕРСІЇ ЗАМІСТЬ ОДНІЄЇ (рішення власника 21.08.2026). Combined лишається
+   * як був; канальні — опційні чипи. Показувати конверсію без підпису каналу
+   * заборонено правилом глосарію, а одна колонка ховала різницю в 2.3 раза.
+   */
+  { key: "convAd", title: "Конв. реклама (за каналом)", core: false, val: (m) => numOrNull(m.conversionAd.fact), foot: "ratio:convAd",
+    help: "Конверсія лише по РЕКЛАМНИХ лідах: виграні ÷ взяті. Джерело: metrics.conversionByManager(scope, 'ad') — той самий вираз, що «Конв. Р+Л», зі звуженням lead_channel='ad'. Під числом — взято/виграно; відсоток зʼявляється лише при взято ≥10, як і в Р+Л. Заміряно за серпень: реклама 11.0% проти лідогену 24.8%. ⚠️ Знаменник — угоди повного циклу, створені в періоді, а НЕ «прийнято реклами» зі словника метрик." },
+  { key: "convLg", title: "Конв. лідоген (за каналом)", core: false, val: (m) => numOrNull(m.conversionLeadgen.fact), foot: "ratio:convLg",
+    help: "Конверсія лише по лідах ВІД ЛІДОГЕНЕРАТОРА. Джерело: metrics.conversionByManager(scope, 'leadgen') — решта як у «Конв. реклама». ⚠️ Відсотки трьох колонок НЕ складаються: реклама 11.0% + лідоген 24.8% дають 15.6% у Р+Л, бо це частки з різними знаменниками. ⚠️ ЦЕ НЕ «conversion_leadgen» зі словника метрик: там знаменник — реєстр переданих заявок (lead_transfer_events за датою передачі), і за той самий серпень він дає 159/6 = 3.8% проти наших 302/75 = 24.8%. Дві різні метрики, і ця колонка рахує саме когорту створення угод." },
   { key: "dispatch", title: "Авто ф/ц", core: true, val: (m) => numOrNull(m.kpi.dispatch.fact), foot: "add",
     help: "Поставлено авто (факт) / тижнева ціль. Факт — metrics.dispatchedByManager (за подіями); ціль — тижнева парасолька Задачника." },
   { key: "avgCheck", title: "Сер. чек", core: true, val: (m) => numOrNull(m.kpi.avgCheck.fact), foot: "ratio:avgCheck",
@@ -191,6 +200,14 @@ export function footValue(key: ColKey, rows: ReportPlanManager[]): FootValue {
     const num = rows.reduce((s, m) => s + m.fact, 0);
     const den = rows.reduce((s, m) => s + m.plan, 0);
     return { kind, value: den > 0 ? Math.round((num / den) * 100) : null, extra: { num, den } };
+  }
+  if (kind === "ratio:convAd" || kind === "ratio:convLg") {
+    // 🔴 Σwon ÷ Σtaken ОКРЕМО для кожного каналу — частку не можна ані складати,
+    // ані усереднювати по рядках (реклама 11.0%, лідоген 24.8%, разом 15.6%).
+    const pick = (m: ReportPlanManager) => (kind === "ratio:convAd" ? m.conversionAd : m.conversionLeadgen);
+    const num = rows.reduce((s, m) => s + pick(m).won, 0);
+    const den = rows.reduce((s, m) => s + pick(m).taken, 0);
+    return { kind, value: den > 0 ? Math.round((num / den) * 1000) / 10 : null, extra: { num, den } };
   }
   if (kind === "ratio:conv") {
     // Когортна конверсія відділу = Σ виграних ÷ Σ узятих. Середнє відсотків дало б
