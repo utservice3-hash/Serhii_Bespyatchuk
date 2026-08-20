@@ -366,7 +366,7 @@ export function ReportPlanSection({ auth, teams }: {
         </div>
       ) : busy && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
         <>
-          <Glance data={data} focus={focus} focusDay={focusDay} today={today} />
+          <Glance data={data} focus={focus} focusDay={focusDay} today={today} periodLabel={periodLabel} />
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
               бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
@@ -409,7 +409,19 @@ export function ReportPlanSection({ auth, teams }: {
 
 const navBtn: React.CSSProperties = { border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 8, padding: "7px 12px", fontSize: 13, cursor: "pointer" };
 
-function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string }) {
+/**
+ * 🔴 ПІДПИС ІДЕ ЗА ОБРАНИМ ПЕРІОДОМ, А НЕ КАЖЕ «ЗА МІСЯЦЬ» ЗАВЖДИ (20.08.2026).
+ *
+ * `Glance` отримує `periodData` — тобто числа ЗА ОБРАНИЙ ПЕРІОД. Підпис при цьому
+ * був зашитий: у режимі «Тиждень» над сумою 587 590 ₴ за 10–16.08 стояло
+ * «Команда за місяць». Це рівно той клас, що ми вже ловили тричі: підпис
+ * правдоподібний, величина за ним інша.
+ *
+ * ⏭ ВИНЯТОК, ЯКИЙ ЛИШАЄТЬСЯ: плитка «ОЧІКУЄМО … цей міс» справді КАЛЕНДАРНО-
+ * місячна (`expectedByManagerDay` за плановою датою оплати) і від обраного періоду
+ * не залежить. Її підпис уже чесний, і міняти його означало б збрехати навпаки.
+ */
+function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string; periodLabel: string }) {
   const g = data.glance;
   const pct = g.plan > 0 ? Math.round((g.fact / g.plan) * 100) : 0;
   const fg = focus?.glance;
@@ -420,9 +432,9 @@ function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: Rep
       <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
         <Donut pct={pct} title={`Круг оплати — факт (отримані кошти): ${fmt(g.fact)} ₴\n= успішно реалізовано (виграно 142): ${fmt(g.factSuccess)} ₴\n+ оплачено (етап 9, ще не закрито): ${fmt(g.factPaid)} ₴\nКільце — % виконання плану.`} />
         <div>
-          <div style={lab}>Команда за місяць <InfoHint text="Грошовий план — стратегічна ціль із вкладки «Плани» (відділ 2.7 млн). Факт — отримані кошти (успішно 142 ⊎ оплачено етап 9). Наведи на круг — розклад факту." /></div>
+          <div style={lab}>Команда · {periodLabel} <InfoHint text="Грошовий план — стратегічна ціль із вкладки «Плани» (відділ 2.7 млн). Факт — отримані кошти (успішно 142 ⊎ оплачено етап 9). Наведи на круг — розклад факту." /></div>
           <div style={val}>{fmt(g.fact)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>/ {fmt(g.plan)} ₴</small></div>
-          <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>= успішно {k(g.factSuccess)} + оплачено {k(g.factPaid)} · чек {g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"} <InfoHint text="Ср. чек Звіту = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць»; Σ суми ÷ Σ угод (не середнє середніх)." /></div>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>= успішно {k(g.factSuccess)} + оплачено {k(g.factPaid)} · чек {g.avgCheck == null ? "—" : fmt(g.avgCheck) + " ₴"} <InfoHint text="Ср. чек Звіту = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період»; Σ суми ÷ Σ угод (не середнє середніх)." /></div>
           <div style={{ display: "flex", gap: 6, marginTop: 5 }}>
             <Pill c={RED}>{st.r} зрив</Pill>
             <Pill c={AMBER}>{st.a} відстає</Pill>
@@ -434,7 +446,7 @@ function Glance({ data, focus, focusDay, today }: { data: ReportPlan; focus: Rep
         <div style={lab}>💰 Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. Цей / наступний КАЛЕНДАРНИЙ місяць, знімок «зараз». Σ per-manager == КВП." /></div>
         <div style={{ ...val, color: g.expectThisMonth > 0 ? GREEN : MUTED }}>{fmt(g.expectThisMonth)} <small style={{ fontSize: 12, color: MUTED }}>₴ цей міс</small></div>
         <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>наст. міс: {fmt(g.expectNextMonth)} ₴</div>
-        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто за місяць: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
+        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто · {periodLabel}: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
       </div>
       <div>
         <div style={lab}>Фокус-день {ddmm(focusDay)}</div>
@@ -654,7 +666,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
             <Kpi lbl="авто" fact={m.kpi.dispatch.fact} target={m.kpi.dispatch.target} extra={`${k(m.kpi.dispatch.revenue ?? 0)} ₴`}
               hintTitle={`Авто за джерелом: ${autoSplit(m.kpi.dispatch.repeat ?? 0, m.kpi.dispatch.leadgen ?? 0, m.kpi.dispatch.ad ?? 0, m.kpi.dispatch.undef ?? 0) || "—"}`} />
             <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
-              hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за місяць». Σ signed ÷ Σ угод."} />
+              hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період». Σ signed ÷ Σ угод."} />
             <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
           </div>
         </div>

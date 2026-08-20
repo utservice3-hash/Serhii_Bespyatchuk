@@ -142,6 +142,22 @@ export function ReportTableSection({
         </span>
       </div>
 
+      {/* 🔴 ПІДПИС ЗВУЖЕННЯ (рішення власника 20.08.2026, варіант «б»).
+             Верхній підсумок (кільце, плитки) рендериться КОНТЕЙНЕРОМ до розвилки
+             вигляду, тож фільтр менеджера його не звужує. Числа там не брешуть —
+             але без цього рядка вони читаються як «підсумок обраного».
+             Перераховувати `glance` на фронті свідомо НЕ стали: це завело б другий
+             обчислювач тих самих чисел, тобто рівно те, від чого береже #81. */}
+      {mgrFilter !== "" && (
+        <div style={{
+          fontSize: 12, color: "var(--text-muted)", marginBottom: 12, padding: "8px 12px",
+          background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--r-lg)",
+        }}>
+          Підсумок угорі — <b style={{ color: "var(--text)" }}>по всьому відділу</b>; нижче — лише
+          обраний менеджер.
+        </div>
+      )}
+
       {/* ── Чипи колонок */}
       <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>Колонки:</span>
