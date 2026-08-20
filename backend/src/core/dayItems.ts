@@ -1,5 +1,5 @@
 import { pool } from "../db/pool.js";
-import { FC_PIPELINES, STAGE_PAID, STAGE_SUCCESS, STAGE_RECEIVED } from "./money.js";
+import { FC_PIPELINES, STAGE_PAID, STAGE_SUCCESS, STAGE_RECEIVED, moneySourceSql, type MoneyKind } from "./money.js";
 import { dealKlassSql, dealSourceSql } from "./metrics.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 
@@ -129,34 +129,43 @@ const mapDeals = (rows: DealRow[]): DayItem[] => rows.map((x) => ({
   plannedPayAt: x.planned,
 }));
 
+
+/** Когорта дня: авто, ВІДПРАВЛЕНІ того дня (`load_at`) — той самий анкер, що `dispatchedByLoadBucket`. */
 /**
- * Угоди, що ВВІЙШЛИ у вказані статуси того дня — анкер по `deal_stage_events`,
- * рівно як у `core/money.ts`. DISTINCT по угоді: етапи 9 і 10 — ОДНІ Й ТІ САМІ
- * гроші, і без дедупу `received` подвоївся б (це вже коштувало нам інциденту).
+ * 💰 СКЛАД ГРОШОВОЇ КАСИ — ТИМ САМИМ ВИРАЗОМ, ЩО Й ЧИСЛО (20.08.2026).
  *
- * 🔴 ФІНАЛЬНИЙ СТАН, А НЕ БУДЬ-ЯКИЙ ВХІД. Реоупени трапляються регулярно, тож
- * угода зараховується, лише якщо ЗАРАЗ стоїть у відповідному статусі — той самий
- * фільтр, що в ядрі. Інакше склад показав би угоди, яких у числі немає.
+ * 🔴 ЧОМУ НЕ `byStageEntry`. Той брав угоду за подією входу в БУДЬ-ЯКИЙ статус
+ * каси, тоді як ядро анкерить кожну гілку окремо: успішні — по `closed_at_kommo`,
+ * оплачені — по ОСТАННЬОМУ входу в етап 9. Угода, що встигла побувати в обох,
+ * потрапляла в розкриття не того дня, у який її рахує каса.
+ *
+ * 📐 Заміряно на проді (серпень, 8 менеджерів): розійшлось 13 із 68 днів (19%),
+ * розкриття показувало +20 угод і +96 840 ₴ понад числа, які пояснювало.
+ * Угода-доказ `62551669`: події `08-05:142` і `08-10:69716460` — каса рахує її
+ * 10.08, розкриття показувало 05.08.
+ *
+ * Тепер джерело — `money.moneySourceSql`, тобто ТА САМА каса. Розкриття більше
+ * не може посперечатися з числом, бо рахує його ж виразом.
  */
-async function byStageEntry(managerId: number, from: string, to: string, statuses: number[]): Promise<DayItem[]> {
+async function byMoneyAnchor(kind: MoneyKind, managerId: number, from: string, to: string): Promise<DayItem[]> {
+  const p: unknown[] = [];
+  const src = moneySourceSql(kind, p);
+  p.push(managerId); const mid = `$${p.length}`;
+  p.push(from); const f = `$${p.length}`;
+  p.push(to); const t = `$${p.length}`;
   const r = await pool.query<DealRow>(
-    // ⚠️ КЛЮЧ — `kommo_id`, А НЕ `id`. У `deals` немає колонки `id` (PK = `kommo_id`),
-    // у `deal_stage_events` немає `deal_id` (там теж `kommo_id`). Перша редакція
-    // джойнила `d.id = e.deal_id`: TypeScript цього не бачить, а гейт `#60` без
-    // прод-API не біжить — спіймала лише жива база. Той самий клас, що `day` без `AS`.
-    `SELECT DISTINCT ON (d.kommo_id) ${DEAL_COLS}
-       FROM deal_stage_events e
-       JOIN deals d ON d.kommo_id = e.kommo_id
-      WHERE d.manager_id = $1 AND d.pipeline_id = ANY($2)
-        AND e.status_id = ANY($3) AND d.status_id = ANY($3)
-        AND (e.changed_at ${K})::date BETWEEN $4::date AND $5::date
-      ORDER BY d.kommo_id, e.changed_at DESC`,
-    [managerId, FC_PIPELINES, statuses, from, to]
+    `WITH src AS (${src})
+     SELECT ${DEAL_COLS}
+       FROM src
+       JOIN deals d ON d.kommo_id = src.kommo_id
+      WHERE src.manager_id = ${mid}
+        AND (src.anchor_at ${K})::date BETWEEN ${f}::date AND ${t}::date
+      ORDER BY d.price DESC NULLS LAST, d.name`,
+    p
   );
   return mapDeals(r.rows);
 }
 
-/** Когорта дня: авто, ВІДПРАВЛЕНІ того дня (`load_at`) — той самий анкер, що `dispatchedByLoadBucket`. */
 async function dispatchedCohort(managerId: number, from: string, to: string, only: "all" | "paid" | "awaiting"): Promise<DayItem[]> {
   const extra = only === "paid" ? `AND d.status_id = ANY($5)`
     : only === "awaiting" ? `AND NOT (d.status_id = ANY($5))` : "";
@@ -196,12 +205,14 @@ export async function dayItems(kind: DayItemKind, managerId: number, from: strin
     case "dispatched": items = await dispatchedCohort(managerId, from, to, "all"); break;
     case "dispatched_paid": items = await dispatchedCohort(managerId, from, to, "paid"); break;
     case "dispatched_awaiting": items = await dispatchedCohort(managerId, from, to, "awaiting"); break;
-    case "success": items = await byStageEntry(managerId, from, to, STAGE_SUCCESS); break;
-    case "paid": items = await byStageEntry(managerId, from, to, STAGE_PAID); break;
-    // ② = ① ∪ ⑨. Дедуп по угоді робить сам `byStageEntry` (DISTINCT ON), а обʼєднання
-    // статусів в ОДНОМУ запиті не дає угоді потрапити двічі при вході в обидва етапи.
+    // 🔴 ВСІ ТРИ ГРОШОВІ ВИДИ — ЧЕРЕЗ КАСУ ЯДРА, а не через власний запит по подіях.
+    // Анкер кожної гілки належить ядру: успішні — `closed_at_kommo`, оплачені —
+    // останній вхід у етап 9. `received` = ① ⊎ ⑨ тим самим виразом, тож дедуп і
+    // межі днів у розкритті ті самі, що в числі над ним.
+    case "success": items = await byMoneyAnchor("success", managerId, from, to); break;
+    case "paid": items = await byMoneyAnchor("paidOnly", managerId, from, to); break;
     case "received":
-    case "avgcheck": items = await byStageEntry(managerId, from, to, STAGE_RECEIVED); break;
+    case "avgcheck": items = await byMoneyAnchor("received", managerId, from, to); break;
     case "calls": {
       const r = await pool.query<{ name: string | null; phone: string | null; billsec: number;
         at: string; recording: string | null }>(

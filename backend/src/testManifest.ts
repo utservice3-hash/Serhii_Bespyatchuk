@@ -47,6 +47,7 @@ export const MANIFEST_FILES: string[] = [
   "core/klassParity.test.js",
   "routes/reportPeriodScope.test.js",
   "core/kpiTargets.test.js",
+  "core/dayItemsAnchor.test.js",
   "routes/reportTable.test.js",
   "routes/reportTableWeeks.test.js",
   "jobs/syncGuard.test.js",
@@ -434,6 +435,10 @@ export const MANIFEST_TESTS: string[] = [
   // routes/reportTable.test.ts — табличний вигляд Звіту (19.08.2026)
   "#81 ТАБЛИЦЯ НЕ МАЄ ВЛАСНОГО ДЖЕРЕЛА ДАНИХ — той самий об'єкт, що картки",
   "#81b РЕЄСТР І ВЕРСТКА ЗБІГАЮТЬСЯ: кожна колонка має і опис, і рендер",
+  // core/dayItemsAnchor.test.ts — розкриття пояснює число тим самим виразом (F1)
+  "#94 СКЛАД КАСИ БЕРЕТЬСЯ З ЯДРА, а не з власного запиту по подіях",
+  "#94b СКЛАД == ЧИСЛУ по кожному дню місяця (жива БД)",
+  "#94c УГОДА, ЩО ПЕРЕЙШЛА МІЖ ЕТАПАМИ, ПОТРАПЛЯЄ РІВНО В ОДИН ДЕНЬ",
   "#91 СЕЛЕКТОР «ОБСЯГ» НАЗИВАЄ РОЗМІР, а не лише назву",
   "#91b ПІДКАЗКА НЕ ОБРІЗАЄТЬСЯ КОНТЕЙНЕРОМ І НЕ ЗНИКАЄ, ПОКИ ЧИТАЮТЬ",
   "#90 КОЖНА КОЛОНКА ПОЯСНЮЄ СЕБЕ: що показує і звідки береться",
