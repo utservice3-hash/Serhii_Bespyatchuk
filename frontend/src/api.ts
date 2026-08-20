@@ -580,7 +580,7 @@ export interface KvpTeam {
 export interface KvpSignal { severity: "critical" | "serious" | "warning" | "info"; icon: string; title: string; detail: string; action: string; expectedThisMonth?: number; expectedNextMonth?: number }
 export interface KvpSeriesRow { ym: string; [k: string]: number | string | boolean }
 export interface KvpReport {
-  scope: { from: string; to: string; prevFrom: string; prevTo: string; preset: string; label: string; isCurrent: boolean };
+  scope: { from: string; to: string; prevFrom: string; prevTo: string; preset: string; label: string; isCurrent: boolean; monthAligned: boolean };
   weekBlocks: { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; pace: number | null; workingDays: number }[];
   deptWeeks: KvpDeptWeek[];
   strategicPlan: number;

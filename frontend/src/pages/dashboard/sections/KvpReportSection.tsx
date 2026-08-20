@@ -185,6 +185,29 @@ function Stat({ label, value, sub, hint, color }: { label: string; value: string
 }
 
 const curMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+/** Сьогодні за КИЄВОМ — той самий часовий пояс, у якому сервер рахує `isCurrent`. */
+const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+
+/**
+ * 📅 ЯКІР ПРЕСЕТА. Місячний селектор задає МІСЯЦЬ, а не день, тож для «Дня» і «Тижня»
+ * його перше число — неправильний якір.
+ *
+ * 🔴 ЩО ЦЕ ЛАМАЛО (живий клік власника): при вибраному «Серпень 2026» перемикач
+ * «Тиждень» надсилав `date=2026-08-01` — суботу, — і сервер брав тиждень, що її
+ * містить, тобто **27.07-02.08**. Заголовок казав «Тиждень 2026-07-27» поруч із
+ * селектором «Серпень 2026»: два керма на один діапазон, і обидва показували правду
+ * про різні речі.
+ *
+ * Правило: день/тиждень — якір СЬОГОДНІ, якщо сьогодні всередині обраного місяця
+ * (типовий випадок «дивлюсь поточний період»), інакше — 1-ше число обраного місяця,
+ * щоб історичний місяць лишався досяжним. Місяць/квартал/рік якорем не переймаються:
+ * вони month-aligned за побудовою.
+ */
+function anchorFor(preset: string, monthSel: string): string {
+  if (preset !== "day" && preset !== "week") return monthSel + "-01";
+  const today = kyivToday();
+  return today.slice(0, 7) === monthSel ? today : monthSel + "-01";
+}
 
 export function KvpReportSection() {
   const [preset, setPreset] = useState<string>(() => localStorage.getItem("kvpDPreset") || "month");
@@ -204,7 +227,7 @@ export function KvpReportSection() {
   const rangeMode = !!(range.from && range.to);
   useEffect(() => {
     let alive = true; setRep(null); setErr(null);
-    const params = rangeMode ? { from: range.from, to: range.to } : { preset, date: monthSel + "-01" };
+    const params = rangeMode ? { from: range.from, to: range.to } : { preset, date: anchorFor(preset, monthSel) };
     fetchKvpReport(params).then((r) => { if (alive) setRep(r); }).catch(() => { if (alive) setErr("Не вдалося завантажити звіт КВП."); });
     return () => { alive = false; };
   }, [preset, monthSel, rangeMode, range.from, range.to]);
@@ -317,7 +340,7 @@ export function KvpReportSection() {
             <div className="chart-card">
               <h2 className="chart-title">📞 Лідген (3 якорі)</h2>
               <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Передані: <b>{fmtNum(rep.engines.leadgen.transferred)}</b><InfoHint text={HINT.transferred} /></span>
+                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Передані: <b>{fmtNum(rep.engines.leadgen.transferred)}</b>{!rep.scope.monthAligned && <span style={{ color: MUTED, fontSize: 11 }}> (за місяці)</span>}<InfoHint text={HINT.transferred + (rep.scope.monthAligned ? "" : " ⚠️ Обраний період НЕ збігається з календарним місяцем, а денного розрізу для переданих заявок немає — це число описує МІСЯЦІ, що перетинаються з періодом, а не сам період.")} /></span>
                 <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Поїхали: <b>{fmtNum(rep.engines.leadgen.dispatched)}</b> ({fmtMoney(rep.engines.leadgen.dispatchedRevenue)})<InfoHint text={HINT.lgDispatched} /></span>
                 <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Дохід: <b>{fmtMoney(rep.engines.leadgen.revenue)}</b><InfoHint text={HINT.lgRevenue} /></span>
               </div>

@@ -6788,7 +6788,13 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     metrics.conversionAdsByTeam(scope, adSources), metrics.conversionAdsByManager(scope, adSources),
     metrics.newRepeatTotals(scope), metrics.newRepeatByScope(scope, "manager"), metrics.newRepeatByScope(scope, "team"),
     money.receivedByChannel(mScope, adSources),
-    metrics.dispatchedByLoadMonth(scope), metrics.dispatchedByLoadMonth(scope, "leadgen"), metrics.conversionTransferredByMonth(scope),
+    // 🔴 `dispatchedByLoadMonth` ІГНОРУЄ from/to — вона завжди віддає 12 місяців, а роут
+    //    відсіював їх ЦІЛИМИ місяцями (`inRange`). Для тижня 27.07–02.08 це давало
+    //    ПОВНИЙ липень + ПОВНИЙ серпень: 1801 авто / 5 031 131 ₴ замість 285 / 723 090.
+    //    `dispatchedByLoadBucket` scoped за побудовою; на місячних діапазонах Δ = 0
+    //    (заміряно на проді: серпень 652/1 745 882 і липень 1149/3 285 249 обома шляхами,
+    //    лідоген 66/270 194 і 107/339 203 — байт у байт), тож джерело одне на всі пресети.
+    metrics.dispatchedByLoadBucket(scope, "month"), metrics.dispatchedByLoadBucket(scope, "month", "leadgen"), metrics.conversionTransferredByMonth(scope),
     metrics.newToRepeatByMonth({}), metrics.activeBaseByMonth({}), metrics.weeklyRegulars({}),
     metrics.nonTargetLeads(scope, adSources),
     Promise.all(months.map((m) => plans.managerPlan({ month: m }))),
@@ -6860,8 +6866,12 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const inRange = (ym: string) => months.includes(ym + "-01");
   const sumSeries = (rows: { ym: string; deals?: number; revenue?: number; wonEventually?: number; entered?: number }[], k: "deals" | "revenue" | "wonEventually" | "entered") =>
     rows.filter((r) => inRange(r.ym)).reduce((a, r) => a + (Number((r as Record<string, unknown>)[k]) || 0), 0);
-  const dispatchedAll = { deals: sumSeries(dispatchedAllSeries, "deals"), revenue: sumSeries(dispatchedAllSeries, "revenue") };
-  const dispatchedLg = { deals: sumSeries(dispatchedLgSeries, "deals"), revenue: sumSeries(dispatchedLgSeries, "revenue") };
+  // ⚠️ Bucket-рядки ВЖЕ обрізані діапазоном — фільтр по цілих місяцях тут був би тим
+  //    самим роздуванням, лише з іншого боку. Сума всіх рядків = сума за період.
+  const sumAll = (rows: { deals: number; revenue: number }[], k: "deals" | "revenue") =>
+    rows.reduce((acc, r) => acc + (Number(r[k]) || 0), 0);
+  const dispatchedAll = { deals: sumAll(dispatchedAllSeries, "deals"), revenue: sumAll(dispatchedAllSeries, "revenue") };
+  const dispatchedLg = { deals: sumAll(dispatchedLgSeries, "deals"), revenue: sumAll(dispatchedLgSeries, "revenue") };
   const transferred = { entered: sumSeries(transferredSeries, "entered"), won: sumSeries(transferredSeries, "wonEventually") };
 
   // ── ТЕАМИ (Σ = відділ) ──
@@ -6980,7 +6990,48 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // рядками дашборда. Раніше strategicRevenuePlac фільтрував m.is_active і мовчки
   // губив план звільнених (25к) → вердикт 2.675М ≠ таблиця 2.700М. Тепер вердикт ==
   // Σ команд == Σ менеджерів == Σ тижнів байт-у-байт (managerPlan — єдине джерело).
-  const strategic = teams.reduce((s, t) => s + t.plan, 0);
+  /**
+   * 🎯 СТРАТПЛАН ЗА ДІАПАЗОНОМ, А НЕ ЗА ЦІЛИМИ МІСЯЦЯМИ.
+   *
+   * 🔴 ЩО БУЛО ЗЛАМАНО. `months = monthsInRange(from, to)` для тижня 27.07-02.08 дає
+   * ОБИДВА місяці, і план складався ПОВНИЙ липень + ПОВНИЙ серпень: **5 459 000 ₴**
+   * проти місячних 2 759 000. Тобто вкладений період був удвічі більший за той, що
+   * його містить, — твердження, хибне за побудовою.
+   *
+   * 🔴 ЧОМУ САМЕ РОБОЧІ ДНІ. Календарні дали б липню й серпню однакову вагу за
+   * однакову кількість дат, хоча відпрацьованих днів у них різна кількість. Той самий
+   * базис уже стоїть під тижневим планом (`weeksForMgr`: `monthPlan × wd ÷ wdMonth`),
+   * тож третього означення «частки місяця» тут не заводиться.
+   *
+   * ⚠️ ПОТОЧНИЙ ТИЖДЕНЬ — ВИНЯТОК, І ЦЕ ПОСИЛЕННЯ, А НЕ ДРУГА ФОРМУЛА. Коли діапазон
+   * і Є поточним тижнем одного місяця, беремо `plans.effectiveWeekTargets` — ЄДИНИЙ
+   * вираз тижневої цілі, яким живуть `/report-plan`, `/kvp-report` і `/manager-report`
+   * (manual ?? dynamic). Інакше КВП показував би СВОЮ тижневу ціль поруч зі Звітом,
+   * що показує канонічну, — дві цілі, які розійдуться мовчки.
+   */
+  const monthAligned = /-01$/.test(from)
+    && to === new Date(Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  const isCurrentWeekOfMonth = months.length === 1 && weekBlocks.some((w) => w.from === from && w.to === to)
+    && from <= kyivTodayW && kyivTodayW <= to;
+  const planWeight = (m: string): number => {
+    if (monthAligned) return 1;
+    const mEnd = new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0)).toISOString().slice(0, 10);
+    const wdM = workingDaysBetween(m, mEnd);
+    if (wdM <= 0) return 0;
+    return workingDaysBetween(from > m ? from : m, to < mEnd ? to : mEnd) / wdM;
+  };
+  const strategicProrated = months.reduce((acc, m) => {
+    const pr = planRes[months.indexOf(m)];
+    if (!pr) return acc;
+    const full = pr.rows.reduce((a, r) => a + r.plan, 0)
+      + [...pr.orphanPlanByTeam.values()].reduce((a: number, v: number) => a + v, 0);
+    return acc + full * planWeight(m);
+  }, 0);
+  const strategic = monthAligned
+    ? teams.reduce((s, t) => s + t.plan, 0)
+    : isCurrentWeekOfMonth && effWeekKvp.size
+      ? [...effWeekKvp.values()].reduce((a, v) => a + v.target, 0)
+      : strategicProrated;
 
   /**
    * 📐 ВІДСОТОК ПРОГНОЗУ — ОДИН ВИРАЗ НА ВЕСЬ ЗВІТ.
@@ -7097,7 +7148,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   signals.sort((a, b) => ({ critical: 0, serious: 1, warning: 2, info: 3 } as Record<string, number>)[a.severity] - ({ critical: 0, serious: 1, warning: 2, info: 3 } as Record<string, number>)[b.severity]);
 
   res.json({
-    scope: { from, to, prevFrom: sc.prevFrom, prevTo: sc.prevTo, preset: String(req.query.preset ?? "month"), label: sc.label, isCurrent: sc.isCurrent },
+    // `monthAligned` — чесна ознака для екрана: «передані заявки» лишились МІСЯЧНИМИ
+    // (`conversionTransferredByMonth` денного розрізу не має), тож на не-місячному
+    // діапазоні вони описують місяці, а не діапазон. Без цієї ознаки екран мовчки
+    // видавав би одне за інше — те саме, від чого ми щойно вилікували план і «авто».
+    scope: { from, to, prevFrom: sc.prevFrom, prevTo: sc.prevTo, preset: String(req.query.preset ?? "month"), label: sc.label, isCurrent: sc.isCurrent, monthAligned },
     weekBlocks: weekBlocks.map((w) => ({ idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivTodayW && kyivTodayW <= w.to, isFuture: w.from > kyivTodayW, pace: paceOf(w, w.from <= kyivTodayW && kyivTodayW <= w.to), workingDays: workingDaysBetween(w.from, w.to) })),
     deptWeeks,
     strategicPlan: strategic,   // 🔒 read-only
