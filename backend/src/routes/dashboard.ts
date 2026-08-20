@@ -6513,6 +6513,15 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       // ДЖЕРЕЛО — накладка поверх партиції (⊂ created), у суму не додається.
       srcAd: splitM.get(m.id)?.adCount ?? 0, srcLeadgen: splitM.get(m.id)?.leadgenCount ?? 0,
+      /**
+       * 🔀 Канальні конверсії — `taken`/`won` ЗАВЖДИ, відсоток лише при taken ≥ 10
+       * (рішення власника 21.08.2026). Числа не брешуть при жодній вибірці, а
+       * поріг лишається тим самим, що й у combined. Без чисел колонка «Конв.
+       * лідоген» була б порожня у 22 із 31 менеджера (заміряно за серпень) і
+       * читалась би як зламана.
+       */
+      conversionAd: cvt(convAdM.get(m.id)),
+      conversionLeadgen: cvt(convLgM.get(m.id)),
       status: st, needPerDay: remWd > 0 ? Math.max(0, Math.round((plan - fact) / remWd)) : 0, remainingWorkdays: remWd,
       // #P1 динамічна тижнева ціль (ЄДИНИЙ вираз effectiveWeekTargets — байт-в-байт з KVP/manager-report).
       week: { target: ew?.target ?? 0, dynamic: ew?.dynamic ?? 0, manual: ew?.manual ?? null, isManual: ew?.isManual ?? false,
@@ -6532,15 +6541,6 @@ dashboardRouter.get("/report-plan", async (req, res) => {
         avgCheck: { fact: avgM.get(m.id)?.avgCheck ?? null, target: Math.round(pl.avg_check ?? 0),
           revenue: Math.round(avgM.get(m.id)?.revenue ?? 0), deals: avgM.get(m.id)?.deals ?? 0 },
         conversion: { fact: c && c.taken >= 10 ? c.cohortPct : null, target: Math.round(pl.conversion ?? 0), taken: c?.taken ?? 0, won: c?.won ?? 0 },
-        /**
-         * 🔀 Канальні конверсії — `taken`/`won` ЗАВЖДИ, відсоток лише при taken ≥ 10
-         * (рішення власника 21.08.2026). Числа не брешуть при жодній вибірці, а
-         * поріг лишається тим самим, що й у combined. Без чисел колонка «Конв.
-         * лідоген» була б порожня у 22 із 31 менеджера (заміряно за серпень) і
-         * читалась би як зламана.
-         */
-        conversionAd: cvt(convAdM.get(m.id)),
-        conversionLeadgen: cvt(convLgM.get(m.id)),
       },
     };
   }).sort((a, b) => ({ r: 0, a: 1, g: 2 })[a.status] - ({ r: 0, a: 1, g: 2 })[b.status]); // гірші вгорі

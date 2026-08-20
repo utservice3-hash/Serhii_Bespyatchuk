@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { needsDb } from "../testMode.js";
+import { needsDb, needsApi, API_BASE } from "../testMode.js";
 
 /**
  * #99 / #99b — МУЛЬТИВИБІР КОМАНД У «ОБСЯЗІ» (21.08.2026).
@@ -270,4 +270,52 @@ test("#105 КОЖНА ПОВЕРХНЯ НАЗИВАЄ СВІЙ ЗНАМЕННИ�
    */
   assert.ok(/conversion_leadgen/.test(cols) && /3\.8%/.test(cols) && /24\.8%/.test(cols),
     "🔴 підказка Звіту більше не називає другу метрику й обидва числа");
+});
+
+/**
+ * #106 — КОЖЕН ШЛЯХ, ЯКИЙ ЧИТАЄ РЕЄСТР КОЛОНОК, ІСНУЄ У ВІДПОВІДІ API.
+ *
+ * 🔴 ЧОМУ ЦЕЙ ГЕЙТ ЗʼЯВИВСЯ. Прохід 2 виїхав на прод із полями `conversionAd` /
+ * `conversionLeadgen`, покладеними ВСЕРЕДИНУ `kpi`, тоді як тип фронта й
+ * `val: (m) => m.conversionAd.fact` читають їх на ВЕРХНЬОМУ рівні. Тобто
+ * увімкнення чипа дало б `undefined.fact` — падіння таблиці, а не хибне число.
+ *
+ * 🔴 І ЖОДЕН НАЯВНИЙ ГЕЙТ ЦЬОГО НЕ БАЧИВ, бо всі вони читають ДЖЕРЕЛО:
+ * `#81b` звіряє реєстр із версткою, `#104` — властивості описів, `#100` — числа
+ * в ядрі. Між «поле є в типі» і «поле є у відповіді» перевірки не було взагалі:
+ * TypeScript тут безсилий — бекенд і фронт компілюються окремо, і фронтовий тип
+ * не є контрактом для роута.
+ *
+ * Тому гейт бере ЖИВУ відповідь і кожен шлях `m.<щось>`, який реєстр насправді
+ * розіменовує, перевіряє на РЕАЛЬНОМУ обʼєкті менеджера.
+ */
+test("#106 ШЛЯХИ РЕЄСТРУ КОЛОНОК ІСНУЮТЬ У ЖИВІЙ ВІДПОВІДІ", needsApi(), async () => {
+  const { signToken } = await import("../auth/auth.js");
+  const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
+  const now = new Date();
+  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${ym}-31`,
+    { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);
+  const body = await r.json() as { managers: Record<string, unknown>[] };
+  const m = body.managers?.[0];
+  assert.ok(m, "🔴 у відповіді нема жодного менеджера — перевіряти нема на чому");
+
+  const cols = stripComments(readFileSync(path.join(FE, "reportTableCols.ts"), "utf8"));
+  /** Шляхи виду `m.a.b`, які реєстр РОЗІМЕНОВУЄ у `val`. */
+  const paths = new Set<string>();
+  for (const mm of cols.matchAll(/\bm\.([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)/g)) paths.add(mm[1]);
+  assert.ok(paths.size >= 10, `🔴 з реєстру видобуто лише ${paths.size} шляхів — розбір зламався`);
+
+  const missing: string[] = [];
+  for (const pth of paths) {
+    let cur: unknown = m;
+    for (const seg of pth.split(".")) {
+      if (cur == null || typeof cur !== "object" || !(seg in (cur as object))) { missing.push(`m.${pth}`); cur = null; break; }
+      cur = (cur as Record<string, unknown>)[seg];
+    }
+  }
+  assert.deepEqual(missing, [],
+    "🔴 РЕЄСТР ЧИТАЄ ТЕ, ЧОГО У ВІДПОВІДІ НЕМАЄ. Увімкнення такої колонки — не хибне\n"
+    + "число, а падіння таблиці на `undefined`:\n  " + missing.join("\n  "));
 });
