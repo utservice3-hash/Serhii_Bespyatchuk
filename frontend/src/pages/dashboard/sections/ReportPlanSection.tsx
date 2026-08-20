@@ -378,6 +378,26 @@ export function ReportPlanSection({ auth, teams }: {
               teamId={teamId} onTeamId={setTeamId}
               periodLabel={periodLabel} hideTeams={HIDE_TEAMS}
               responseByMgr={respByMgr} month={selectedPeriod.from.slice(0, 7)}
+              /**
+               * 🧍 ОДИН МЕНЕДЖЕР — ПОВНА КАРТКА (рішення власника 20.08.2026).
+               * Рендерить КОНТЕЙНЕР і віддає готовий вузол: `MgrStrip` лишається
+               * тут, тож циклу модулів немає, а картка — ТА САМА, що в картковому
+               * вигляді, а не її копія (копія розійшлась би мовчки, див. #81).
+               * Стан `open` не ділиться: вибір одного менеджера і Є «покажи все»,
+               * тож картка завжди розгорнута.
+               */
+              renderCard={(m) => (
+                <MgrStrip
+                  m={m} mWeek={weekByMgr.get(m.managerId)}
+                  focusDay={focusDay} today={today}
+                  elapsed={data.elapsed} remWd={data.remainingWorkdays}
+                  weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`}
+                  weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
+                  periodLabel={periodLabel} isMonthMode={mode === "month"}
+                  role={auth.role} isSelf={m.managerId === viewerId}
+                  open onToggle={() => {}}
+                />
+              )}
             />
           ) : (<>
           {auth.role === "manager" && selfRow && (

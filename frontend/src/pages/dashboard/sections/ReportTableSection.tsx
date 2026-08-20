@@ -31,7 +31,7 @@ const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відст�
 
 export function ReportTableSection({
   data, teams, auth, teamId, onTeamId, periodLabel, hideTeams,
-  responseByMgr, month,
+  responseByMgr, month, renderCard,
 }: {
   data: ReportPlan;
   teams: Team[];
@@ -44,6 +44,16 @@ export function ReportTableSection({
   responseByMgr?: Map<number, number | null>;
   /** Місяць для розкриття тижнів (YYYY-MM) — береться від початку обраного періоду. */
   month: string;
+  /**
+   * ПОВНА КАРТКА обраного менеджера — рендерить КОНТЕЙНЕР, а не таблиця.
+   *
+   * 🔴 ЧОМУ ПРОПСОМ, А НЕ ІМПОРТОМ. `MgrStrip` живе в `ReportPlanSection`, який сам
+   * імпортує цю таблицю. Прямий імпорт назад замкнув би цикл модулів: у ESM він
+   * зазвичай «якось працює», але лагодити його потім доводиться в рантаймі, а не
+   * на збірці. Виносити `MgrStrip` в окремий файл цим проходом теж не варто — це
+   * потягло б за собою пів карткового вигляду, який ми свідомо не чіпаємо.
+   */
+  renderCard?: (m: ReportPlanManager) => React.ReactNode;
 }) {
   const [sortKey, setSortKey] = useState<ColKey>("fact");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -171,6 +181,20 @@ export function ReportTableSection({
             }}>{c.title}</button>
         ))}
       </div>
+
+      {/**
+        * 🧍 ОДИН МЕНЕДЖЕР — ПОВНА КАРТКА (рішення власника 20.08.2026).
+        *
+        * Вибір одного менеджера в «Обсяг» і Є запитом «покажи все про нього», тож
+        * картка стоїть РОЗГОРНУТОЮ і стан `open` таблиці з нею не ділиться: інакше
+        * «розгорнув у таблиці — згорнулось у картці» стало б питанням часу.
+        *
+        * 🔴 Це ТОЙ САМИЙ `MgrStrip`, що в картковому вигляді, а не його копія: копія
+        * розійшлася б із оригіналом мовчки — рівно те, від чого береже #81.
+        */}
+      {mgrFilter !== "" && renderCard && rows[0] && (
+        <div style={{ marginBottom: 14 }}>{renderCard(rows[0])}</div>
+      )}
 
       <div className="chart-card" style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
