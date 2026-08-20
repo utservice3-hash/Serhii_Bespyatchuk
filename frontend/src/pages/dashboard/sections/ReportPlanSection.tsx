@@ -238,7 +238,11 @@ export function ReportPlanSection({ auth, teams }: {
       .catch(() => { if (!cancelled) setRangeData(null); })
       .finally(() => { if (!cancelled) setRangeLoading(false); });
     return () => { cancelled = true; };
-  }, [mode, selectedPeriod.from, selectedPeriod.to, teamId, retryNonce]);
+    // 🔴 `scopeKey`, А НЕ `teamId`. Похідний `teamId` дорівнює "" ЩОРАЗУ, коли обрано
+    // 2+ команди, тож зміна набору [5,6] → [5,6,13] його не зрушує — і режим «Період»
+    // мовчки лишався б на попередньому наборі. Це та сама поломка, від якої гейт
+    // `#79b` і поставлений: він її й спіймав, уже на проді.
+  }, [mode, selectedPeriod.from, selectedPeriod.to, scopeKey, retryNonce, fetchScoped]);
 
   /**
    * 🔴 ТІЛО ЗВІТУ ЙДЕ ЗА ОБРАНИМ ПЕРІОДОМ. Готові відповіді ПЕРЕВИКОРИСТОВУЮТЬСЯ
