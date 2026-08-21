@@ -4,6 +4,8 @@ import "./lib/asyncRoutes.js";
 import { collectAlerts } from "./health/alerts.js";
 import { requireAuth } from "./auth/middleware.js";
 import { runJob } from "./jobs/jobRuns.js";
+import { alertPush } from "./jobs/alertPush.js";
+import { recordBoot } from "./jobs/appBoot.js";
 import { buildVersion, buildIsStale, onDiskVersion } from "./version.js";
 import express from "express";
 import cors from "cors";
@@ -597,6 +599,10 @@ async function loadRolesOrDie(): Promise<void> {
 loadRolesOrDie().then(() => {
   // 1×1 форми: гарантуємо наявність version 1 (A/Б/В) — ідемпотентно, не блокує старт.
   seedOneOnOneForms(pool).catch((e) => console.error("seedOneOnOneForms at boot failed:", e));
+  // 🔌 ЖУРНАЛ СТАРТІВ. Пишемо ОДРАЗУ, до першого тіку поштаря: інакше «несподіваний
+  // рестарт» не мав би з чим порівнюватись саме в той момент, коли він і стався.
+  // Не блокує підйом — збій журналу не має права завадити застосунку піднятись.
+  recordBoot().catch((e) => console.error("recordBoot at boot failed:", e));
   if (config.host) app.listen(config.port, config.host, onListen);
   else app.listen(config.port, onListen);
 });
@@ -606,6 +612,15 @@ loadRolesOrDie().then(() => {
 // (один SELECT по 8 рядках) і робить стан самовідновним.
 cron.schedule("*/10 * * * *", () => {
   refreshRoles().catch((e) => console.error("periodic refreshRoles failed:", e));
+});
+
+// 📮 ПОШТАР ТРИВОГ — щохвилини. Не детектор: кличе ТОЙ САМИЙ `collectAlerts()`, що
+// живить банер, і відправляє НОВЕ в телеграм. Хвилина, а не 5, бо `build:stale`
+// живе рівно між збіркою й рестартом, і о пів години про нього дізнаватись пізно.
+// Дедуп у `alert_state` (БД, не памʼять) робить частий тік дешевим: тихий тік —
+// це один SELECT і один UPDATE, без жодного повідомлення.
+cron.schedule("* * * * *", () => {
+  void runJob("alertPush", () => alertPush());
 });
 
 // 🔴 СТАРТ БЕЗ СПЛЕСКУ ПАМʼЯТІ (2 ГБ shared-акаунт adm.tools, crash-loop 15.07.2026).

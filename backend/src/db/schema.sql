@@ -1932,6 +1932,56 @@ CREATE TABLE IF NOT EXISTS weekly_plan_snapshots (
 CREATE INDEX IF NOT EXISTS idx_wps_month ON weekly_plan_snapshots(month_start);
 
 -- ═════════════════════════════════════════════════════════════════════════════
+-- 🔔 СТАН ТРИВОГ — ДЕДУП, ЩО ПЕРЕЖИВАЄ РЕСТАРТ.
+--
+-- 🔴 ЧОМУ В БД, А НЕ В ПАМʼЯТІ. Наявні вартові дедуплять через in-memory `Set`
+-- (`freshnessWatch.alerted`, `abandonAlerted`, `divergenceAlerted`), і той Set
+-- порожніє на кожному рестарті. Половина тривог, які ми шлемо, — ПРО рестарти й
+-- аварії, тобто дедуп зникає рівно тоді, коли він найпотрібніший: після падіння
+-- канал отримує повторно ВСІ чинні тривоги. Алерт, який спамить, глушать — і далі
+-- він не працює вже назавжди.
+--
+-- `resolved_notified` окремо від `resolved_at` навмисно: «інцидент закрито» і
+-- «людині про це сказано» — різні факти, і плутати їх не можна (той самий клас,
+-- що «папка бекапу є» ≠ «копія придатна»).
+CREATE TABLE IF NOT EXISTS alert_state (
+  id TEXT PRIMARY KEY,
+  severity TEXT NOT NULL,
+  title TEXT NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_sent_at TIMESTAMPTZ,
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  resolved_at TIMESTAMPTZ,
+  resolved_notified BOOLEAN NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS idx_alert_state_open ON alert_state(resolved_at) WHERE resolved_at IS NULL;
+
+-- 🔌 ЖУРНАЛ СТАРТІВ ПРОЦЕСУ — щоб «нас перезапустило» перестало бути невидимим.
+--
+-- 🔴 Досі система не знала, що рестарт БУВ: `process.uptime()` живе лише в памʼяті
+-- цього ж процесу, а `uncaughtException`/`unhandledRejection` лише пишуть у лог і
+-- тримають процес живим. Тобто крах із респавном не лишав ЖОДНОГО сліду.
+--
+-- 🔴 `kind` РОЗРІЗНЯЄ КРАХ І ВИКАТ, і це рішення власника 21.08.2026: рестарт із
+-- НОВИМ sha — плановий викат (ми його щойно зробили самі), тривожити ним нікого не
+-- можна, інакше кожен деплой шле фальшиву аварію і канал швидко навчаються ігнорувати.
+-- Кричить лише рестарт при НЕЗМІННОМУ sha — це крах.
+CREATE TABLE IF NOT EXISTS app_boot (
+  id BIGSERIAL PRIMARY KEY,
+  booted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sha TEXT NOT NULL,
+  short_sha TEXT NOT NULL,
+  prev_booted_at TIMESTAMPTZ,
+  prev_sha TEXT,
+  -- 'first'  — журнал порожній, порівнювати нема з чим (не тривога);
+  -- 'deploy' — sha змінився → плановий викат (не тривога);
+  -- 'crash'  — sha ТОЙ САМИЙ → процес перезапустився без викату (тривога).
+  kind TEXT NOT NULL CHECK (kind IN ('first', 'deploy', 'crash'))
+);
+CREATE INDEX IF NOT EXISTS idx_app_boot_at ON app_boot(booted_at DESC);
+
+-- ═════════════════════════════════════════════════════════════════════════════
 -- ПРИВІЛЕЇ РОЛЕЙ — ЗАВЖДИ В КІНЦІ ФАЙЛА.
 --
 -- 🔴 Чому саме тут. `GRANT/REVOKE ON <таблиця>` вимагає, щоб таблиця ВЖЕ існувала.

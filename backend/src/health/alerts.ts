@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { pool } from "../db/pool.js";
 import { rolesCacheState } from "../auth/rbac.js";
-import { buildVersion } from "../version.js";
+import { buildVersion, buildIsStale, onDiskVersion } from "../version.js";
 import { runReadOnly } from "../ai/readQuery.js";
 import { MONITORED_JOBS } from "../jobs/monitoredJobs.js";
 
@@ -299,6 +299,68 @@ async function checkRoleCache(): Promise<Alert[]> {
   return [];
 }
 
+// ─────────────────────── 7. ЗІБРАНО, АЛЕ НЕ ПЕРЕЗАПУЩЕНО ───────────────────────
+
+/**
+ * `buildStale` — стан, який ЗЗОВНІ виглядає повністю здоровим: health 200, версія
+ * є, сайт працює. 05.08.2026 прод так 49 хвилин крутив попередню збірку. Досі це
+ * було видно лише тому, хто відкриє `/api/health` очима.
+ *
+ * ⚠️ Вікно між збіркою й рестартом коротке й ЗАЛЕЖИТЬ ВІД ЧУЖОГО ЧАСУ ВІДПОВІДІ
+ * (рестарт прода — зовнішня залежність). Тому тут `warning`, а не `critical`:
+ * стан ненормальний, але сам застосунок працює. Наполегливість дає коротший
+ * інтервал повтору в поштарі, а не вищий рівень.
+ */
+async function checkBuildStale(): Promise<Alert[]> {
+  if (!buildIsStale()) return [];
+  const disk = onDiskVersion();
+  const run = buildVersion();
+  return [{
+    id: "build:stale", severity: "warning",
+    title: "Зібрано нову версію, але процес не перезапущено",
+    detail: `Процес крутить ${run.shortSha}, на диску лежить ${disk.shortSha}`
+      + `${disk.builtAt ? ` (зібрано ${disk.builtAt})` : ""}. Це не «трохи стара версія» — `
+      + "це ІНШИЙ код, ніж той, що ви щойно викотили.",
+    action: "Перезапустити процес і звірити /api/health.version.shortSha з викоченим SHA.",
+    since: disk.builtAt ?? null,
+  }];
+}
+
+// ─────────────────────── 8. НЕСПОДІВАНИЙ РЕСТАРТ ───────────────────────
+
+/**
+ * 🔴 КРИЧИТЬ ЛИШЕ КРАХ, НЕ ВИКАТ (рішення власника 21.08.2026). `kind` рахує
+ * `classifyBoot`: новий sha = плановий викат (мовчимо), той самий sha = процес
+ * пішов і піднявся без нашої участі.
+ *
+ * Тривога ТОЧКОВА: `id` містить номер старту, тож дедуп надішле її РІВНО раз, а
+ * через `BOOT_FRESH_MIN` вона зникає сама. Відбій для неї не шлеться (див.
+ * `isPointEvent` у поштарі): «✅ рестарт відновився» — беззмістовна фраза.
+ */
+async function checkAppBoot(): Promise<Alert[]> {
+  const { BOOT_FRESH_MIN } = await import("../jobs/appBoot.js");
+  const r = await pool.query<{ id: string; kind: string; booted_at: Date; short_sha: string;
+    prev_booted_at: Date | null; age_min: number }>(
+    `SELECT id, kind, booted_at, short_sha, prev_booted_at,
+            EXTRACT(EPOCH FROM (now() - booted_at))/60 AS age_min
+       FROM app_boot ORDER BY booted_at DESC LIMIT 1`);
+  const b = r.rows[0];
+  if (!b || b.kind !== "crash" || Number(b.age_min) > BOOT_FRESH_MIN) return [];
+  const lived = b.prev_booted_at
+    ? Math.round((new Date(b.booted_at).getTime() - new Date(b.prev_booted_at).getTime()) / 60000)
+    : null;
+  return [{
+    id: `app:restart:${b.id}`, severity: "critical",
+    title: "Застосунок перезапустився без викату",
+    detail: `Процес піднявся ${Math.round(Number(b.age_min))} хв тому на ТОМУ САМОМУ коді (${b.short_sha}) — `
+      + `тобто це не деплой, а падіння з респавном.`
+      + (lived != null ? ` Попередній процес прожив ${lived} хв.` : "")
+      + " Причина в лозі ДО моменту старту.",
+    action: "Скопіювати лог поза шлях ротації ПЕРШОЮ дією, далі шукати UNCAUGHT/OOM перед стартом.",
+    since: ISO(b.booted_at),
+  }];
+}
+
 // ─────────────────────── збірка ───────────────────────
 
 const CHECKS: { id: string; label: string; run: () => Promise<Alert[]> }[] = [
@@ -308,6 +370,8 @@ const CHECKS: { id: string; label: string; run: () => Promise<Alert[]> }[] = [
   { id: "jobs", label: "фонові джоби", run: checkJobs },
   { id: "widgets", label: "віджети власника", run: checkWidgets },
   { id: "roles", label: "роль-кеш RBAC", run: checkRoleCache },
+  { id: "build", label: "збірка на диску vs у процесі", run: checkBuildStale },
+  { id: "boot", label: "несподіваний рестарт", run: checkAppBoot },
 ];
 
 /** Перелік оголошених джерел банера — щоб тест міг довести, що нове ДОДАНО, а не лише написане. */
