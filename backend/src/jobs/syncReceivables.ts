@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 import { fetchLeadsByIds, extractIncomeAmount } from "../kommo/client.js";
 import { normalizeClientName } from "../utils/clientName.js";
 import { parseCsv } from "../utils/csv.js";
+import { loadReceivables1c, resolveManagerId } from "../core/receivables1c.js";
 
 // Cash ("готівка") clients tracked directly from CRM rather than the accounting
 // sheet: they pay cash, so their debt isn't in the безнал receivables file. We
@@ -85,30 +86,12 @@ async function insertCashReceivables(client: PoolClient): Promise<number> {
   return inserted;
 }
 
-interface ReceivableRow {
-  clientKey: string;
-  clientName: string;
-  managerNameRaw: string;
-  amount: number;
-  invoiceNo: string | null;
-  invoiceDate: string | null; // ISO YYYY-MM-DD
-  edrpou: string | null;
-  serviceUrl: string | null;
-  note: string | null;
-}
-
-/** Extracts the invoice number and date from the "Счет" cell, e.g.
- *  "Счет на оплату покупателю 000005176 від 06.07.2026 14:54:08". */
-function parseInvoice(cell: string | undefined): { no: string | null; date: string | null } {
-  if (!cell) return { no: null, date: null };
-  const noMatch = cell.match(/(\d{5,})/);
-  const dateMatch = cell.match(/(\d{2})\.(\d{2})\.(\d{4})/);
-  const date = dateMatch ? `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}` : null;
-  return { no: noMatch ? noMatch[1] : null, date };
-}
-
 /**
  * Парсить грошову суму з комірки бухгалтерського експорту.
+ * 🔴 ПІСЛЯ ПЕРЕХОДУ НА 1С ЦЕ ПОТРІБНО ЛИШЕ ДЛЯ АРКУША ЛІМІТІВ («Лист20»).
+ * Рахунки більше не парсяться з тексту — 1С віддає `Sum` числом, тож клас помилки
+ * «кома з'їдена → сума ×100» на шляху рахунків зник разом із парсингом. Прибрати
+ * функцію ЗОВСІМ не можна: `parseLimitRow` читає нею колонку «Сумма» Лист20.
  * ⚠️ Кома — це ДЕСЯТКОВИЙ роздільник копійок ("26073,48" = 26 073,48 грн), пробіл/nbsp —
  * розряди тисяч. Старий код робив `.replace(/[^\d.-]/g,"")` — стирав кому як «сміття»,
  * тож "26073,48" → "2607348" → сума роздувалась РІВНО ×100 (Укрпошта: 2,68 млн замість
@@ -119,34 +102,6 @@ function parseAmount(raw: string | undefined): number {
   if (!raw) return NaN;
   const cleaned = raw.replace(/[\s ]/g, "").replace(",", ".").replace(/[^\d.-]/g, "");
   return Number(cleaned);
-}
-
-/**
- * The sheet has no header row. Columns observed: 0 Контрагент, 1 Счет,
- * 2 "<Менеджер>, Загружен из amoCRM по сделке №...", 3 Сумма, 4 ЕДРПОУ,
- * 5 Сервіс (url), 6 (empty), 7 Пометка.
- */
-function parseRow(cells: string[]): ReceivableRow | null {
-  const rawClientName = cells[0]?.trim();
-  const managerCell = cells[2]?.trim();
-  const rawAmount = cells[3]?.trim();
-  if (!rawClientName || !rawAmount) return null;
-
-  const amount = parseAmount(rawAmount);
-  if (!Number.isFinite(amount) || amount === 0) return null;
-
-  const managerNameRaw = managerCell?.split(",")[0]?.trim() ?? "";
-  const clientKey = normalizeClientName(rawClientName);
-  if (!clientKey) return null;
-
-  const inv = parseInvoice(cells[1]?.trim());
-  return {
-    clientKey, clientName: rawClientName, managerNameRaw, amount,
-    invoiceNo: inv.no, invoiceDate: inv.date,
-    edrpou: cells[4]?.trim() || null,
-    serviceUrl: cells[5]?.trim() || null,
-    note: cells[7]?.trim() || null,
-  };
 }
 
 interface ClientLimit {
@@ -203,33 +158,56 @@ async function fetchClientLimits(): Promise<Map<string, ClientLimit>> {
 }
 
 export async function syncReceivables(): Promise<void> {
-  const [res, limitsByKey] = await Promise.all([fetch(config.receivablesSheetUrl), fetchClientLimits()]);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch receivables sheet: ${res.status}`);
-  }
-  const csvText = await res.text();
-  const rows = parseCsv(csvText).map(parseRow).filter((r): r is ReceivableRow => r !== null);
+  const previousRes = await pool.query<{ n: string }>(`SELECT COUNT(*) AS n FROM receivable_invoices`);
+  // ⚠️ Лічильник НАВМИСНО грубий: у `receivable_invoices` крім рахунків 1С лежить
+  // ще ~12 готівкових рядків із CRM, і відділити їх без нової колонки нічим.
+  // Похибка б'є в БЕЗПЕЧНИЙ бік — база трохи БІЛЬША за 1С-частину, тож поріг
+  // «половина минулого разу» виходить трохи СУВОРІШИМ, а не мʼякшим.
+  const previousCount = Number(previousRes.rows[0]?.n ?? 0);
 
-  const managerRows = await pool.query<{ id: number; name: string }>(
-    `SELECT id, name FROM managers`
-  );
+  const [rows, limitsByKey] = await Promise.all([
+    loadReceivables1c(async () => {
+      const res = await fetch(config.receivables1cUrl);
+      if (!res.ok) throw new Error(`Failed to fetch 1C receivables: ${res.status}`);
+      return res.json();
+    }, previousCount),
+    fetchClientLimits(),
+  ]);
+
+  const managerRows = await pool.query<{ id: number; name: string }>(`SELECT id, name FROM managers`);
   const managerIdByName = new Map(managerRows.rows.map((m) => [m.name, m.id]));
+
+  // № угоди з коментаря 1С → менеджер угоди. ОДИН запит по всіх id одразу:
+  // рахунків три сотні, і по одному це були б три сотні походів у БД.
+  const dealIds = [...new Set(rows.map((r) => r.dealId).filter((d): d is number => d != null))];
+  const dealRows = dealIds.length
+    ? await pool.query<{ kommo_id: string; manager_id: number | null }>(
+        `SELECT kommo_id, manager_id FROM deals WHERE kommo_id = ANY($1)`,
+        [dealIds]
+      )
+    : { rows: [] as { kommo_id: string; manager_id: number | null }[] };
+  const managerIdByDeal = new Map(dealRows.rows.map((d) => [Number(d.kommo_id), d.manager_id]));
+  const ctx = { managerIdByDeal, managerIdByName };
+
+  // Менеджера рахуємо РАЗ на рядок і носимо далі: агрегат і деталізація мусять
+  // казати про людину те саме, а два виклики одного правила поруч — це той спосіб,
+  // яким копії розходяться.
+  const priced = rows.map((row) => ({ row, managerId: resolveManagerId(row, ctx) }));
 
   const totalsByKey = new Map<
     string,
-    { clientName: string; managerNameRaw: string; managerId: number | null; amount: number }
+    { clientKey: string; clientName: string; managerNameRaw: string; managerId: number | null; amount: number }
   >();
-
-  for (const row of rows) {
-    const managerId = managerIdByName.get(row.managerNameRaw) ?? null;
-    const groupKey = `${row.clientKey}::${managerId ?? row.managerNameRaw}`;
+  for (const { row, managerId } of priced) {
+    const groupKey = `${row.clientKey}::${managerId ?? row.managerHint}`;
     const existing = totalsByKey.get(groupKey);
     if (existing) {
       existing.amount += row.amount;
     } else {
       totalsByKey.set(groupKey, {
+        clientKey: row.clientKey,
         clientName: row.clientName,
-        managerNameRaw: row.managerNameRaw,
+        managerNameRaw: row.managerHint,
         managerId,
         amount: row.amount,
       });
@@ -241,36 +219,37 @@ export async function syncReceivables(): Promise<void> {
     await client.query("BEGIN");
     await client.query("TRUNCATE receivables");
     await client.query("TRUNCATE receivable_invoices");
-    // Per-invoice detail rows (the "выгрузка" breakdown behind each balance).
-    for (const row of rows) {
-      const managerId = managerIdByName.get(row.managerNameRaw) ?? null;
+    for (const { row, managerId } of priced) {
+      // «Лінк» у деталізації: раніше сюди лягав URL самого ендпоінта 1С (тобто
+      // 🔗 вів на дамп JSON). Тепер — угода в Kommo, коли її № відомий; інакше
+      // порожньо, і на екрані чесне «—», а не лінк, що нікуди не веде.
+      const serviceUrl = row.dealId != null ? `${config.kommo.baseUrl}/leads/detail/${row.dealId}` : null;
       await client.query(
         `INSERT INTO receivable_invoices
            (client_key, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [row.clientKey, row.clientName, managerId, row.managerNameRaw, row.invoiceNo, row.invoiceDate, row.amount, row.edrpou, row.serviceUrl, row.note]
+        [row.clientKey, row.clientName, managerId, row.managerHint, row.invoiceNo, row.invoiceDate,
+         row.amount, row.edrpou, serviceUrl, row.comment]
       );
     }
-    for (const [key, entry] of totalsByKey) {
-      const clientKey = key.split("::")[0];
-      const limit = limitsByKey.get(clientKey);
+    for (const entry of totalsByKey.values()) {
+      const limit = limitsByKey.get(entry.clientKey);
       await client.query(
         `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          clientKey,
-          entry.clientName,
-          entry.managerId,
-          entry.managerNameRaw,
-          entry.amount,
-          limit?.limitDays ?? null,
-          limit?.overdueDays ?? null,
-        ]
+        [entry.clientKey, entry.clientName, entry.managerId, entry.managerNameRaw, entry.amount,
+         limit?.limitDays ?? null, limit?.overdueDays ?? null]
       );
     }
     const cashClients = await insertCashReceivables(client);
     await client.query("COMMIT");
-    console.log(`Synced ${totalsByKey.size} sheet balances + ${cashClients} CRM cash clients from ${rows.length} sheet rows.`);
+    // 🟢 ОБСЯГ У ЛОЗІ, А НЕ ЛИШЕ «відпрацювала»: для джоби-імпортера «успіх» без
+    // числа привезеного нічого не означає (правило з CLAUDE.md, урок `syncCalls`).
+    const byDeal = priced.filter((p) => p.row.dealId != null && managerIdByDeal.get(p.row.dealId!) != null).length;
+    console.log(
+      `Synced ${totalsByKey.size} balances + ${cashClients} CRM cash clients from ${rows.length} 1C invoice rows ` +
+      `(менеджер: за угодою ${byDeal}, без менеджера ${priced.filter((p) => p.managerId == null).length}).`
+    );
     return;
   } catch (err) {
     await client.query("ROLLBACK");

@@ -178,9 +178,9 @@ export function ReceivablesSection({
             </select>
           )}
           {canEditReceivables && (
-            <button onClick={refreshFromSheet} disabled={syncing} title="Перечитати файл дебіторки — сплачені (видалені з файлу) рахунки зникнуть одразу"
+            <button onClick={refreshFromSheet} disabled={syncing} title="Перечитати дебіторку прямо з 1С — оплачені рахунки зникнуть одразу"
               style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: syncing ? "default" : "pointer", fontWeight: 600, fontSize: 13 }}>
-              {syncing ? "Оновлення…" : "🔄 Оновити з файлу"}
+              {syncing ? "Оновлення…" : "🔄 Оновити з 1С"}
             </button>
           )}
           {receivablesSyncedAt && (

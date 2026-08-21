@@ -2735,9 +2735,11 @@ dashboardRouter.post("/sync", (req, res) => {
   res.json({ started: true });
 });
 
-// Manual "Оновити дебіторку зараз": re-pull the receivables Google Sheet on
-// demand so a payment removed from the file (invoice paid) drops off the
-// dashboard immediately instead of waiting for the 30-min cron.
+// Manual "Оновити дебіторку зараз": перечитати дебіторку ПРЯМО З 1С на вимогу,
+// щоб оплачений рахунок зник з екрана одразу, а не чекав тіку крону.
+// ⚠️ Підпис кнопки був «Оновити з файлу» — після переходу на 1С це стало
+// неправдою, тож підпис і підказку переписано разом із джерелом (правило
+// «підпис мусить називати ту величину, що за ним стоїть»).
 dashboardRouter.post("/sync-receivables", async (req, res) => {
   const auth = req.auth!;
   if (!isAdminOrLead(auth)) {

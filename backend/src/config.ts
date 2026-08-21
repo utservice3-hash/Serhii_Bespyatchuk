@@ -47,9 +47,15 @@ export const config = {
     // мапимо тільки employee_fio → наша команда.
     authKey: process.env.RINGOSTAT_AUTH_KEY ?? "",
   },
-  receivablesSheetUrl:
-    process.env.RECEIVABLES_SHEET_URL ??
-    "https://docs.google.com/spreadsheets/d/1FTHbWRYFa_rWNsF4GvwZrf_fL5Vj5zf4ihBRv3LZw2s/export?format=csv&gid=0",
+  // 🔴 РАХУНКИ ДЕБІТОРКИ — ПРЯМО З 1С, без гугл-таблиці-посередника.
+  // Таблиця була МІРОРОМ цього ж ендпоінта (її колонка «Сервис» містила цей URL),
+  // і мірор губив: 296 рахунків у 1С проти 277 у таблиці, 0 зайвих (замір 21.08.2026).
+  receivables1cUrl:
+    process.env.RECEIVABLES_1C_URL ??
+    "http://193.200.173.188:8010/rest-bk/hs/service/debit-balance-account-361",
+  // ⚠️ Ключа `receivablesSheetUrl` (аркуш «выгрузка») БІЛЬШЕ НЕМАЄ — його ніхто не
+  // читає, а мертвий ключ у конфізі читається як живий (урок `expected` у /teams).
+  // Аркуш ЛІМІТІВ нижче — читається далі, він з 1С не приходить.
   receivablesLimitsSheetUrl:
     process.env.RECEIVABLES_LIMITS_SHEET_URL ??
     "https://docs.google.com/spreadsheets/d/1FTHbWRYFa_rWNsF4GvwZrf_fL5Vj5zf4ihBRv3LZw2s/export?format=csv&gid=1649291567",
