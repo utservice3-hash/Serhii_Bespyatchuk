@@ -31,7 +31,8 @@ import { getSettings } from "./settings.js";
 import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
 import * as money from "../core/money.js";
-import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanRules.js";
+import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
+  isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached } from "./clientPlanRules.js";
 import * as reactivation from "../core/reactivation.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
@@ -4047,6 +4048,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const monthStart = `${monthStr}-01`;
   const daysInMonth = new Date(Number(monthStr.slice(0, 4)), Number(monthStr.slice(5, 7)), 0).getDate();
   const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
+  const prevMonthStart = (() => {
+    const d = new Date(`${monthStart}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 1);
+    return d.toISOString().slice(0, 10);
+  })();
 
   // Скоуп: менеджер — лише свої клієнти; тімлід — своя команда; КВП/ОД — усі
   // (з необовʼязковим вибором менеджера). HR сюди не потрапляє — межа вкладки.
@@ -4169,16 +4174,54 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     from: histFrom, to: monthEnd,
     managerId: managerId ?? undefined, teamId: teamId ?? undefined,
   };
-  const [monthFact, weekFact, hist, plansRes, commentsRes] = await Promise.all([
+
+  type PlanDbRow = { client_key: string; plan: string; status: string; manager_id: number | null;
+    review_note: string | null; manager_name: string | null };
+  /** Плани МІСЯЦЯ у скоупі перегляду — без огляду на те, чи клієнт активний зараз. */
+  const planQ = () => {
+    const pp: unknown[] = [monthStart];
+    let cond = "";
+    if (managerId != null) { pp.push(managerId); cond = `AND rp.manager_id = $${pp.length}`; }
+    else if (teamId != null) { pp.push(teamId); cond = `AND m.team_id = $${pp.length}`; }
+    return pool.query<PlanDbRow>(
+      `SELECT rp.client_key, rp.plan, rp.status, rp.manager_id, rp.review_note, m.name AS manager_name
+         FROM repeat_client_plans rp
+         LEFT JOIN managers m ON m.id = rp.manager_id
+        WHERE rp.month = $1 ${cond}`, pp);
+  };
+
+  const [monthFact, weekFact, hist, plansRes, commentsRes, prevPlans] = await Promise.all([
     money.successByClientKey(scope),
     money.successByClientWeek(scope),
     money.successByClientBucket(histScope, "month"),
-    clientKeys.length ? pool.query<{ client_key: string; plan: string; status: string; manager_id: number | null; review_note: string | null }>(
-      `SELECT client_key, plan, status, manager_id, review_note FROM repeat_client_plans WHERE month = $1 AND client_key = ANY($2)`,
-      [monthStart, clientKeys]) : { rows: [] as { client_key: string; plan: string; status: string; manager_id: number | null; review_note: string | null }[] },
+    // 🔴 ПЛАНИ ЧИТАЮТЬСЯ ПО МІСЯЦЮ, А НЕ ПО СПИСКУ АКТИВНИХ (виправлено 21.08.2026).
+    //
+    // Було: `AND client_key = ANY(clientKeys)`, де `clientKeys` — це ті, хто
+    // активний СЬОГОДНІ. Для минулого місяця це означало, що план клієнта, який
+    // відтоді заснув, зникав з екрана мовчки. Заміряно на проді за липень: у БД
+    // 92 плани / 954 171 ₴, на екрані 27 / 367 901 ₴ — випало 586 270 ₴.
+    //
+    // ⚠️ СКОУП ПЕРЕЇХАВ РАЗОМ ІЗ ФІЛЬТРОМ, інакше менеджер побачив би чужі плани.
+    // Раніше межу тримав `clientKeys` (він уже був у скоупі); тепер її тримає
+    // `rp.manager_id` / `m.team_id` — це ТА САМА межа, лише названа явно.
+    planQ(),
     clientKeys.length ? pool.query<{ client_key: string; n: string }>(
       `SELECT client_key, COUNT(*) AS n FROM client_comments WHERE client_key = ANY($1) GROUP BY client_key`,
       [clientKeys]) : { rows: [] as { client_key: string; n: string }[] },
+    // 💡 ПІДКАЗКА «минулого місяця було N планів на X ₴» — щоб порожній поточний
+    // місяць читався як «ще не заповнювали», а не як «дані зникли». Той самий
+    // скоуп, той самий вираз, лише інший місяць — копії правила тут немає.
+    (() => {
+      const pp: unknown[] = [prevMonthStart];
+      let cond = "";
+      if (managerId != null) { pp.push(managerId); cond = `AND rp.manager_id = $${pp.length}`; }
+      else if (teamId != null) { pp.push(teamId); cond = `AND m.team_id = $${pp.length}`; }
+      return pool.query<{ n: string; s: string }>(
+        `SELECT COUNT(*)::int AS n, COALESCE(SUM(rp.plan),0)::numeric AS s
+           FROM repeat_client_plans rp
+           LEFT JOIN managers m ON m.id = rp.manager_id
+          WHERE rp.month = $1 ${cond}`, pp);
+    })(),
   ]);
   const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
   const weekByKey = new Map<string, number[]>();
@@ -4255,8 +4298,32 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     return true;
   });
 
+  /**
+   * 🧩 РОСТЕР = АКТИВНІ ∪ ТІ, ХТО МАЄ ПЛАН НА ЦЕЙ МІСЯЦЬ.
+   *
+   * 🔴 ЛІЧИЛЬНИКИ ЛИШАЮТЬСЯ НА `activeRows`, І ЦЕ ГОЛОВНА МЕЖА ЦІЄЇ ПРАВКИ.
+   * `bridge` (сплячі/втрачені/разові/skippedGeneric/bySegment) і `totalClients`
+   * відповідають на питання «кому МОЖНА ставити новий план» — воно не змінилось
+   * ані на клієнта. Ростер відповідає на інше: «чиї плани цього місяця треба
+   * показати». Змішати їх означало б, що «Активних клієнтів» тихо поповзе вгору
+   * від того, що ми глянули в минулий місяць. Тримає `#109`.
+   *
+   * Дедуп — за побудовою (`rosterWithPlans` фільтрує другий список по ключах
+   * першого), а не за домовленістю. `#108`.
+   */
+  const { rows: rosterRows, planOnlyKeys } = rosterWithPlans(
+    activeRows, clientsRes.rows, (c) => c.client_key, (k) => planByKey.has(k));
+
+  /** Стан клієнта словом — для ВИДИМОЇ позначки в рядку (`#110`). */
+  const stateOf = (key: string): "active" | "sleeping" | "lost" | "oneoff" => {
+    if (!planOnlyKeys.has(key)) return "active";
+    const f = factsFor(seg, key);
+    if (!f.qualified) return "oneoff";
+    return f.state === "sleeping" || f.state === "lost" ? f.state : "sleeping";
+  };
+
   const lastComment = await latestCommentByClient();
-  const clients = activeRows.map((c) => {
+  const clients = rosterRows.map((c) => {
     const p = planByKey.get(c.client_key);
     const plan = p ? Number(p.plan) : 0;
     const fact = factByKey.get(c.client_key) ?? 0;
@@ -4266,6 +4333,15 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       clientName: c.name ?? c.client_key,
       paymentType: c.payment_type ?? null,
       segment: factsFor(seg, c.client_key).segment,
+      /**
+       * 🔵 СТАН — ВИДИМИЙ, а не виведений читачем із того, що рядок «якийсь не
+       * такий». Клієнт із планом, який відтоді заснув, тепер на екрані Є; без
+       * позначки він читався б як активний, тобто екран мовчки стверджував би
+       * неправду про людину, якій цей план виконувати. `planOnly` каже, ЧОМУ він
+       * тут: не «його можна планувати», а «за ним лишився план». Тримає `#110`.
+       */
+      state: stateOf(c.client_key),
+      planOnly: planOnlyKeys.has(c.client_key),
       // ⭐ Позначка «включений вручну» + примітка. Без примітки поруч позначка
       // через місяць нічим не відрізняється від помилки — тому обидва поля, а
       // не лише прапорець.
@@ -4306,11 +4382,35 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     };
   });
 
+  /**
+   * 🕳 ПЛАНИ, ЩО НЕ ЛЯГЛИ НА ЖОДЕН РЯДОК. Сьогодні це рівно один випадок —
+   * дженерик-ключ «названиенеуказано» (за липень 40 000 ₴, статус `pending`).
+   * Відфільтрувати його означало б повторити ту саму помилку, яку ця правка
+   * лікує, лише з іншої причини: гроші зникають, і жодне число не сперечається.
+   *
+   * 🔒 ВИДИМИЙ ЛИШЕ `isAdminScope` (рішення власника 21.08.2026) — і в Σ він
+   * входить РІВНО тоді, коли видимий. Підсумок, якого не пояснює жоден видимий
+   * рядок, — це та сама «невидима втрата», лише в інший бік (урок `#59`).
+   */
+  const rosterKeySet = new Set(clientsRes.rows.map((c) => c.client_key));
+  const unattachedRows = splitUnattached(plansRes.rows, (p) => p.client_key, rosterKeySet);
+  const canSeeUnattached = isAdminScope(auth);
+  const unattachedSum = unattachedRows.reduce((s2, p) => s2 + Number(p.plan), 0);
+  const unattachedApproved = unattachedRows
+    .filter((p) => p.status === "approved").reduce((s2, p) => s2 + Number(p.plan), 0);
+
   // Арифметика статусів — у `clientPlanRules`, той самий модуль, що бере гейт.
-  const { planTotal, planApproved, byStatus } = planTotals(clients);
+  const t0 = planTotals(clients);
+  const planTotal = t0.planTotal + (canSeeUnattached ? unattachedSum : 0);
+  const planApproved = t0.planApproved + (canSeeUnattached ? unattachedApproved : 0);
+  const byStatus = t0.byStatus;
   const factTotal = clients.reduce((s2, c) => s2 + c.fact, 0);
   const curIdx = weeks.findIndex((w) => w.status === "current");
-  const atRisk = clients.filter((c) => c.lastOrderDays != null && c.lastOrderDays > 30);
+  // 🔴 «Без замовлень > 30 дн.» — ПРО ЖИВИХ. Плитка існує, щоб ловити активного
+  // клієнта, який почав мовчати; сплячі й втрачені там не новина, вони туди
+  // потрапили б усі й одразу, перетворивши сигнал на шум. Тому `activeKeys`, а
+  // не весь ростер: ростер виріс, питання плитки — ні.
+  const atRisk = clients.filter((c) => !c.planOnly && c.lastOrderDays != null && c.lastOrderDays > 30);
 
   res.json({
     month: monthStr,
@@ -4320,8 +4420,17 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     totals: {
       planTotal, factTotal,
       pct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : null,
-      filledClients: clients.filter((c) => c.plan > 0).length,
-      totalClients: clients.length,
+      filledClients: clients.filter((c) => c.plan > 0).length
+        + (canSeeUnattached ? unattachedRows.filter((p) => Number(p.plan) > 0).length : 0),
+      /**
+       * 🔴 «АКТИВНІ КЛІЄНТИ» — ВІД `activeRows`, А НЕ ВІД РОСТЕРА. Ростер тепер
+       * ширший (у ньому є сплячі з планом), і взяти його довжину означало б, що
+       * головна цифра екрана мовчки виросте від погляду в минулий місяць. Це
+       * питання «кому можна ставити новий план», і воно не змінилось. `#109`.
+       */
+      totalClients: activeRows.length,
+      /** Скільки рядків ростера тут ЛИШЕ через план — щоб різницю було видно числом. */
+      planOnlyClients: planOnlyKeys.size,
       /**
        * 🌉 МІСТОК ДО РЕАКТИВАЦІЇ. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий
        * поділ), і без цієї цифри вони зникли б МОВЧКИ — виглядало б як «клієнти
@@ -4357,9 +4466,42 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       atRiskCount: atRisk.length,
       atRiskNames: atRisk.slice(0, 3).map((c) => c.clientName),
       planApproved, byStatus,
-      // Σ ЗАТВЕРДЖЕНИХ по клієнтах = рядок «постійні принесуть» у Формуванні
-      // плану. Це не окрема цифра, а ТА САМА — гейт вимагає точного збігу.
+      /**
+       * Σ ЗАТВЕРДЖЕНИХ по клієнтах = рядок «Затверджено планів по клієнтах» у
+       * «Формуванні плану» (`/plans/formation`). Це не окрема цифра, а ТА САМА.
+       *
+       * 🔴 РАНІШЕ ТУТ СТОЯЛО «гейт вимагає точного збігу» — І ГЕЙТА НЕ БУЛО.
+       * Єдині гейти (`core/clientPlans.test.ts`) перевіряють `planTotals()` як
+       * чисту функцію на рядках, які тест сам собі й підклав; `plans.ts` вони не
+       * бачать взагалі. Саме тому розбіжність у **290 570 ₴** за липень (196 000
+       * тут проти 486 570 там) прожила непоміченою: обидва екрани були «зелені»
+       * поодинці, а порівняти їх було нічим.
+       *
+       * Коментар, що стверджує інваріанту, якої ніхто не тримає, гірший за
+       * відсутність коментаря — на нього покладаються. Тепер збіг перевіряє
+       * СПРАВЖНІЙ гейт `#107c`, який ходить в обидва роути й віднімає.
+       */
       goesToManagerPlan: planApproved,
+      /**
+       * 🕳 РЯДОК «НЕ ПРИВʼЯЗАНО» — плани, під якими немає клієнтського рядка.
+       * `canSee` віддає СЕРВЕР (той самий `isAdminScope`, що гейтить показ), а не
+       * вгадує фронт: право на екран і право в коді мають бути одним рішенням.
+       */
+      unattached: {
+        canSee: canSeeUnattached,
+        count: canSeeUnattached ? unattachedRows.length : 0,
+        sum: canSeeUnattached ? unattachedSum : 0,
+        rows: canSeeUnattached
+          ? unattachedRows.map((p) => ({ clientKey: p.client_key, plan: Number(p.plan),
+              status: p.status, managerId: p.manager_id, managerName: p.manager_name }))
+          : [],
+      },
+      /** 💡 «минулого місяця було N планів на X ₴» — контекст для порожнього місяця. */
+      prevMonth: {
+        month: prevMonthStart.slice(0, 7),
+        count: Number(prevPlans.rows[0]?.n ?? 0),
+        sum: Number(prevPlans.rows[0]?.s ?? 0),
+      },
       canSubmit: byStatus.draft > 0,
       canApprove: byStatus.pending > 0,
     },
@@ -4391,6 +4533,13 @@ dashboardRouter.post("/client-plan", async (req, res) => {
   const plan = Number(req.body?.plan);
   if (!Number.isFinite(plan) || plan < 0) return res.status(400).json({ error: "plan має бути невідʼємним числом" });
   if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  // 🔑 План на дженерик-ключ — відмова З ПОЯСНЕННЯМ (`#111`). Дірка не теоретична:
+  // за липень такий план у базі вже лежить (40 000 ₴). Перевірка стоїть ПІСЛЯ
+  // гейта доступу, щоб 403 лишався 403 — інакше 400 підмінив би відмову доступу
+  // і зліпок `#11` перестав би означати те, що означає.
+  if (!isPlannableClientKey(clientKey, metrics.GENERIC_CLIENT_KEYS)) {
+    return res.status(400).json({ error: NOT_PLANNABLE_MSG });
+  }
 
   const cur = await pool.query<{ status: string }>(
     `SELECT status FROM repeat_client_plans WHERE client_key = $1 AND month = $2`, [clientKey, month]);

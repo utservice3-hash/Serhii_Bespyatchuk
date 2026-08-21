@@ -2484,6 +2484,18 @@ export interface ClientPlanRow {
   forcedRegular: boolean; forceNote: string | null;
   /** 💬 Останній коментар — видно прямо в рядку, повний текст у підказці. */
   lastComment: LastComment | null;
+  /**
+   * 🔵 Стан клієнта СЬОГОДНІ. `planOnly` = рядок у списку ЛИШЕ тому, що за ним
+   * лишився план цього місяця; ставити йому НОВИЙ план не можна — він уже не
+   * в активних. Без цієї позначки він читався б як живий.
+   */
+  state: "active" | "sleeping" | "lost" | "oneoff";
+  planOnly: boolean;
+}
+/** 🕳 План, під яким немає клієнтського рядка (дженерик-ключ Kommo). */
+export interface UnattachedPlan {
+  clientKey: string; plan: number; status: string;
+  managerId: number | null; managerName: string | null;
 }
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
@@ -2495,6 +2507,12 @@ export interface ClientPlansResp {
     currentWeekIndex: number | null; currentWeekFact: number | null; currentWeekPlan: number | null;
     atRiskCount: number; atRiskNames: string[]; goesToManagerPlan: number;
     byStatus: Record<string, number>; canSubmit: boolean; canApprove: boolean;
+    /** Скільки рядків у списку — ЛИШЕ через план (клієнт уже не активний). */
+    planOnlyClients: number;
+    /** 🕳 Плани без клієнтського рядка. `canSee` вирішує СЕРВЕР (isAdminScope). */
+    unattached: { canSee: boolean; count: number; sum: number; rows: UnattachedPlan[] };
+    /** 💡 «минулого місяця було N планів на X ₴» — контекст для порожнього місяця. */
+    prevMonth: { month: string; count: number; sum: number };
     /** 🌉 МІСТОК: скільки постійних пішло в реактивацію. У Σ плану НЕ входить. */
     inReactivation: number; inReactivationSleeping: number; inReactivationLost: number;
     /** «Давно втрачені · понад рік» — ПІДМНОЖИНА втрачених, у Σ не додається.

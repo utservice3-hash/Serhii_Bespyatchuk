@@ -65,7 +65,7 @@ test("#30c ІЄРАРХІЯ — ЦЕ ПОДАЧА: жоден клієнт не 
   const res = await get("/api/dashboard/client-plans", token);
   assert.equal(res.status, 200, `client-plans віддав ${res.status}`);
   const data = await res.json() as {
-    clients: { clientKey: string; teamName: string; managerId: number; fact: number; plan: number }[];
+    clients: { clientKey: string; teamName: string; managerId: number; fact: number; plan: number; planOnly?: boolean }[];
     totals: { factTotal: number; totalClients: number };
   };
   assert.ok(data.clients.length > 0, "🔴 клієнтів немає — інваріант нічого не доводить");
@@ -86,8 +86,18 @@ test("#30c ІЄРАРХІЯ — ЦЕ ПОДАЧА: жоден клієнт не 
   const sumFlat = data.clients.reduce((s, c) => s + c.fact, 0);
   assert.equal(Math.round(sumTeams), Math.round(sumFlat),
     `🔴 Σ по командах ${Math.round(sumTeams)} ≠ Σ плоского списку ${Math.round(sumFlat)}`);
-  assert.equal(data.totals.totalClients, data.clients.length,
-    "🔴 підсумок «клієнтів» розійшовся з кількістю рядків");
+  // 🔴 УТОЧНЕНО 21.08.2026, І ЦЕ НЕ ПОСЛАБЛЕННЯ. Раніше тут стояло
+  // `totalClients === clients.length`. Відколи ростер = АКТИВНІ ∪ ТІ, ХТО МАЄ ПЛАН
+  // на обраний місяць, рівність стала неправдою за побудовою: рядків може бути
+  // більше, ніж активних клієнтів. Твердження лишилось би ЗЕЛЕНИМ (цей гейт
+  // дивиться поточний місяць, де планів ще немає) і почервоніло б випадково —
+  // першого ж місяця, коли хтось заповнить план і клієнт засне. Тому перевіряємо
+  // те, що справді має триматись: плитка «Активні клієнти» рахує АКТИВНІ рядки.
+  const activeRows = data.clients.filter((c) => !c.planOnly);
+  assert.equal(data.totals.totalClients, activeRows.length,
+    "🔴 підсумок «активні клієнти» розійшовся з кількістю активних рядків");
+  assert.ok(data.totals.totalClients <= data.clients.length,
+    "🔴 активних більше, ніж усіх рядків — рядок порахували активним, не показавши");
 });
 
 test("#30d КАРТКА КЛІЄНТА віддає 12 місяців і НАЗИВАЄ анкер", needsApi(), async () => {

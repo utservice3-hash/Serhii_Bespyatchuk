@@ -37,6 +37,30 @@ const STATUS_CHIP: Record<string, { label: string; bg: string; fg: string }> = {
   approved: { label: "затверджено", bg: "#dcfce7", fg: "#166534" },
 };
 
+/**
+ * 🔵 ПОЗНАЧКА СТАНУ для рядка, який потрапив у список ЛИШЕ через план.
+ *
+ * 🔴 Без неї фікс зробив би гірше, ніж було. Раніше такий клієнт з екрана
+ * зникав — це помилка, але помітна («де мій план?»). Показати його БЕЗ позначки
+ * означало б поставити поруч із живими клієнтами тих, кому новий план ставити
+ * не можна, і жодним способом цього не сказати — тиха неправда замість гучної
+ * прогалини. Тримає `#110`.
+ */
+const STATE_CHIP: Record<string, { label: string; bg: string; fg: string; title: string }> = {
+  sleeping: { label: "💤 сплячий", bg: "#eef2ff", fg: "#3730a3",
+    title: "Клієнт зараз у реактивації — рядок показано, бо за ним лишився план цього місяця. Новий план ставлять лише активним." },
+  lost: { label: "❌ втрачений", bg: "#fef2f2", fg: "#991b1b",
+    title: "Клієнт втрачений — рядок показано, бо за ним лишився план цього місяця." },
+  oneoff: { label: "1× разовий", bg: "#f5f3ff", fg: "#5b21b6",
+    title: "Не проходить кваліфікацію постійного — рядок показано, бо за ним лишився план цього місяця." },
+};
+
+function StateChip({ state }: { state: string }) {
+  const m = STATE_CHIP[state];
+  if (!m) return null;
+  return <span title={m.title} style={S.chip(m.bg, m.fg)}>{m.label}</span>;
+}
+
 function Tile({ title, value, sub, tone }: { title: string; value: string; sub?: string; tone?: "warn" | "bad" }) {
   const color = tone === "bad" ? "#dc2626" : tone === "warn" ? "#b45309" : "#111827";
   return (
@@ -282,6 +306,7 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
           <div style={{ fontWeight: 700 }}>{c.clientName}</div>
           <div style={{ marginTop: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <SegmentBadge segment={c.segment} />
+            {c.planOnly && <StateChip state={c.state} />}
             {c.forcedRegular && <ForcedBadge note={c.forceNote} />}
             {/* 💬 Коментар прямо тут: клієнт може мовчати 55 днів і формально
                 лишатись «активним» — причину треба записати, не розгортаючи рядок. */}
@@ -398,8 +423,13 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
 
       {/* ── ПЛИТКИ */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {/* 🔴 ПІДПИС РОЗВЕДЕНО НА ДВІ ВЕЛИЧИНИ. «Заповнено N із M» тепер брехало б:
+            планів у місяці може бути БІЛЬШЕ, ніж активних клієнтів (плани тих, хто
+            відтоді заснув, тепер показані). Одне число проти іншого читалось би як
+            помилка — тому дві окремі фрази, кожна про своє. */}
         <Tile title="План по постійних" value={formatAmountFull(t.planTotal)}
-          sub={`заповнено ${t.filledClients} із ${t.totalClients} клієнтів`} />
+          sub={`${t.filledClients} планів · активних клієнтів ${t.totalClients}`
+            + (t.planOnlyClients ? ` · з них ${t.planOnlyClients} уже не активні` : "")} />
         <Tile title="Факт · успішно реалізовано" value={formatAmountFull(t.factTotal)}
           sub={t.pct != null ? `${t.pct}% плану` : "плану ще немає"} />
         <Tile title={t.currentWeekIndex != null ? `Тиждень ${t.currentWeekIndex + 1} з ${data.weeks.length}` : "Тиждень"}
@@ -416,9 +446,44 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
             + ` · Епізодичних ${t.activeBySegment.episodic}`
             + (t.activeBySegment.unknown ? ` · без історії ${t.activeBySegment.unknown}` : "")} />
         <Tile title="Іде у план менеджера" value={formatAmountFull(t.goesToManagerPlan)}
-          sub={`лише ЗАТВЕРДЖЕНІ · довідково у «Формуванні плану»${t.planApproved !== t.planTotal
+          sub={`лише ЗАТВЕРДЖЕНІ · те саме число у «Формуванні плану»${t.planApproved !== t.planTotal
             ? ` · ще не погоджено ${formatAmountFull(t.planTotal - t.planApproved)}` : ""}`} />
       </div>
+
+      {/* 💡 ПІДКАЗКА ПРО МИНУЛИЙ МІСЯЦЬ. Порожній місяць мусить читатись як «ще не
+          заповнювали», а не як «дані зникли» — а саме так він і читався, поки за
+          минулий місяць екран показував 0 через власний фільтр. */}
+      {t.prevMonth.count > 0 && (
+        <div style={{ fontSize: 12, color: "#6b7280" }}>
+          💡 Минулого місяця ({t.prevMonth.month}) було <b>{t.prevMonth.count}</b> планів
+          на <b>{formatAmountFull(t.prevMonth.sum)}</b>
+          {t.filledClients === 0 ? " — цього місяця плани ще не заповнювали" : ""}
+        </div>
+      )}
+
+      {/* 🕳 «НЕ ПРИВʼЯЗАНО» — план без клієнтського рядка. Право показу віддає
+          СЕРВЕР (`unattached.canSee` = isAdminScope), фронт його не вгадує. */}
+      {t.unattached.canSee && t.unattached.count > 0 && (
+        <div style={{ ...S.card, borderLeft: "3px solid #b45309", fontSize: 12 }}>
+          <div style={{ fontWeight: 700, color: "#b45309" }}>
+            🕳 Не привʼязано до клієнта: {t.unattached.count} план(ів) на {formatAmountFull(t.unattached.sum)}
+          </div>
+          <div style={{ color: "#6b7280", marginTop: 4 }}>
+            План стоїть на технічній заглушці Kommo, під якою лежать різні замовники —
+            рядка клієнта для нього немає. У сумі вище він ВРАХОВАНИЙ; сховати його
+            означало б, що гроші зникають без пояснення. Нові такі плани сервер більше
+            не приймає — виправляти треба в CRM (вказати компанію) або обʼєднанням клієнта.
+          </div>
+          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+            {t.unattached.rows.map((u) => (
+              <div key={`${u.clientKey}:${u.managerId}`}>
+                <code>{u.clientKey}</code> · {formatAmountFull(u.plan)} ·{" "}
+                {STATUS_CHIP[u.status]?.label ?? u.status} · 👤 {u.managerName ?? "без менеджера"}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── ФІЛЬТРИ + ДІЇ ЦИКЛУ */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
