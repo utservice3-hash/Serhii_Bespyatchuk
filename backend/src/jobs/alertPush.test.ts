@@ -26,7 +26,7 @@ import { needsApi, API_BASE } from "../testMode.js";
 // так він і впав на першому прогоні.
 import {
   formatAlert, formatResolved, repeatAfterMin, isPointEvent, humanDuration, REPEAT_AFTER_MIN,
-  classifyBoot,
+  classifyBoot, hasDeployGrace, DEPLOY_GRACE_MIN,
 } from "./alertRules.js";
 import type { Alert } from "../health/alerts.js";
 
@@ -305,6 +305,119 @@ test("#115b оголошена частота поштаря == крону, як
   assert.equal(Number(m[1]), declared,
     `🔴 крон каже «раз на ${m[1]} хв», реєстр наглядача — «${declared}». Сторож мовчання `
     + `рахує застій від 2×${declared} хв, тож поштар битиме тривогу сам на себе`);
+});
+
+/**
+ * #117 — ТИХА ФОРА НА ШУМ ВИКАТУ: молода умова мовчить, стара — шле.
+ *
+ * 🔴 ЩО САМЕ СТЕРЕЖЕМО. Не «чи вміє код промовчати» — а те, що фора ВІДКЛАДАЄ
+ * тривогу, а не СКАСОВУЄ її. Різниця тут вирішальна: придушення, яке не має
+ * протилежної половини, зеленіє й тоді, коли сигналізація вимкнена назавжди.
+ * Тому в гейті обовʼязково ОБИДВА боки — і мовчання, і спрацювання.
+ *
+ * Привід заміряний на власному викаті 1592eaf: плановий викат дав ЧОТИРИ
+ * повідомлення (дві правдиві тривоги + два відбої) за кілька хвилин. Канал, що
+ * передбачувано шумить на кожну планову дію, глушать разом зі справжніми
+ * тривогами — тобто це не косметика, а захист самого гудка.
+ *
+ * 🧨 САБОТАЖ (виконано): прибрати виклик `suppressedByGrace` → перша перевірка
+ * червоніє; зробити фору безумовною (`hasDeployGrace` → true) → червоніє дзеркало
+ * про чужу подію; лишити фору назавжди (прибрати порівняння з порогом) → червоніє
+ * перевірка «стара умова шле».
+ */
+test("#117 фора мовчить на молодій умові викату і НЕ мовчить на старій", async (t) => {
+  await withScratch(t, async (query) => {
+    const { alertPush } = await import("./alertPush.js");
+    const sent: string[] = [];
+    const stale = A({ id: "build:stale", severity: "warning",
+      title: "Зібрано нову версію, але процес не перезапущено" });
+    const deps = { collect: async () => ({ alerts: [stale], checksRan: 8, checksDeclared: 8 }),
+      send: async (x: string) => { sent.push(x); }, query } as never;
+
+    // ── 1. МОЛОДА умова (щойно зʼявилась) — звичайний викат. Мовчимо.
+    const r1 = await alertPush(deps);
+    assert.equal(r1.sent, 0, "🔴 молода `build:stale` надіслалась — кожен викат знову шумітиме");
+    assert.equal(sent.length, 0, "🔴 у канал пішло повідомлення під час фори");
+
+    // Рядок МУСИТЬ існувати: без запамʼятованого `first_seen_at` вік умови не було б
+    // з чого рахувати, і фора діяла б вічно — тобто перевірка зникла б назовсім.
+    const row = (await query(`SELECT sent_count, last_sent_at, first_seen_at FROM alert_state
+                              WHERE id = 'build:stale'`)).rows as unknown as
+      { sent_count: number; last_sent_at: Date | null }[];
+    assert.equal(row.length, 1, "🔴 умову не записано — вік рахувати нема від чого, фора стане вічною");
+    assert.equal(row[0].sent_count, 0, "🔴 порахували як надіслану, хоч промовчали");
+    assert.equal(row[0].last_sent_at, null, "🔴 позначили час відправки там, де відправки не було");
+
+    // ── 2. ТА САМА умова, що пережила поріг, — «зібрав і не перезапустив» (49 хв 05.08).
+    await query(`UPDATE alert_state SET first_seen_at = now() - ($1 || ' minutes')::interval
+                 WHERE id = 'build:stale'`, [String(DEPLOY_GRACE_MIN + 5)]);
+    const r2 = await alertPush(deps);
+    assert.equal(r2.sent, 1, `🔴 умова старша за ${DEPLOY_GRACE_MIN} хв не надіслалась — `
+      + "фора СКАСУВАЛА тривогу замість відкласти, і 49-хвилинний випадок 05.08 пройшов би повз");
+    assert.equal(r2.repeated, 0, "🔴 перше повідомлення поїхало гілкою повтору");
+    assert.doesNotMatch(sent[0], /ВСЕ ЩЕ/,
+      "🔴 перша фраза про подію — «ВСЕ ЩЕ»: людина не бачила попереднього повідомлення, бо його не було");
+  });
+});
+
+/**
+ * #117b — 🪞 ДЗЕРКАЛО: фора НЕ поширюється на решту тривог.
+ *
+ * 🔴 Без цієї половини «тиха фора» непомітно перетворилась би на «затримувати ВСЕ
+ * на 10 хв»: застарілий синк, впала джоба, порожній роль-кеш — усе почало б
+ * чекати, і жодна перевірка вище цього не побачила б. Односторонній тест на
+ * мовчання зеленіє і тоді, коли канал мовчить завжди.
+ */
+test("#117b фора стосується ЛИШЕ двох подій викату — решта шле з першого тіку", async (t) => {
+  await withScratch(t, async (query) => {
+    const { alertPush } = await import("./alertPush.js");
+    const sent: string[] = [];
+    // `sync:stale` — щойно зʼявилась, тобто «молода» рівно так само, як `build:stale`.
+    const deps = { collect: async () => ({ alerts: [A()], checksRan: 8, checksDeclared: 8 }),
+      send: async (x: string) => { sent.push(x); }, query } as never;
+
+    const r = await alertPush(deps);
+    assert.equal(r.sent, 1, "🔴 звичайну тривогу теж придушено — фора накрила все, "
+      + "і сигналізація мовчить перші 10 хв КОЖНОЇ поломки");
+    assert.equal(sent.length, 1, "🔴 у канал нічого не пішло");
+
+    // Реєстр фори — саме двоелементний, а не «усе, що схоже на викат».
+    assert.ok(hasDeployGrace("build:stale") && hasDeployGrace("version:mismatch"),
+      "🔴 подія викату випала з реєстру фори — шум повернеться");
+    assert.ok(!hasDeployGrace("sync:stale") && !hasDeployGrace("roles:empty"),
+      "🔴 у фору потрапила подія, яка до викату стосунку не має");
+  });
+});
+
+/**
+ * #117c — ПРО ЩО НЕ КАЗАЛИ, ПРО ТЕ Й ВІДБОЮ НЕ БУВАЄ.
+ *
+ * 🔴 Половина шуму — це відбої. Якби придушена умова, зникнувши, слала
+ * «✅ відновилось», фора прибрала б два повідомлення з чотирьох, а людина читала б
+ * підтвердження події, якої не бачила, — гірше за початковий шум, бо незрозуміло.
+ */
+test("#117c придушена умова зникає МОВЧКИ — відбою про неї не приходить", async (t) => {
+  await withScratch(t, async (query) => {
+    const { alertPush } = await import("./alertPush.js");
+    const sent: string[] = [];
+    const stale = A({ id: "build:stale", title: "Зібрано нову версію, але процес не перезапущено" });
+    let alerts = [stale];
+    const deps = { collect: async () => ({ alerts, checksRan: 8, checksDeclared: 8 }),
+      send: async (x: string) => { sent.push(x); }, query } as never;
+
+    await alertPush(deps);            // побачили, промовчали (фора)
+    alerts = [];                      // рестарт стався — умова зникла
+    const r = await alertPush(deps);
+    assert.equal(r.resolved, 0, "🔴 надіслано «відновилось» про тривогу, якої людина не бачила");
+    assert.equal(sent.length, 0, `🔴 у канал пішло ${sent.length} повідомлень замість тиші`);
+
+    const row = (await query(`SELECT resolved_at IS NOT NULL AS res, resolved_notified
+                              FROM alert_state WHERE id = 'build:stale'`)).rows as unknown as
+      { res: boolean; resolved_notified: boolean }[];
+    assert.equal(row[0].res, true, "🔴 інцидент не закрито — наступна поява не рахуватиметься новою");
+    assert.equal(row[0].resolved_notified, false,
+      "🔴 позначено як «повідомлено про відбій», хоч у канал нічого не йшло");
+  });
 });
 
 /**

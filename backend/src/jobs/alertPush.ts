@@ -22,9 +22,11 @@ import type { Alert } from "../health/alerts.js";
 import { sendAdminAlert } from "../bot/notify.js";
 import {
   REPEAT_AFTER_MIN, repeatAfterMin, isPointEvent, humanDuration, formatAlert, formatResolved,
+  suppressedByGrace, hasDeployGrace, DEPLOY_GRACE_MIN,
 } from "./alertRules.js";
 // Ре-експорт, щоб споживачам не треба було знати про поділ «правила / зʼєднання».
-export { REPEAT_AFTER_MIN, repeatAfterMin, isPointEvent, humanDuration, formatAlert, formatResolved };
+export { REPEAT_AFTER_MIN, repeatAfterMin, isPointEvent, humanDuration, formatAlert, formatResolved,
+  suppressedByGrace, hasDeployGrace, DEPLOY_GRACE_MIN };
 
 export interface PushResult { sent: number; repeated: number; resolved: number; open: number }
 
@@ -80,14 +82,36 @@ export async function alertPush(deps?: Partial<PushDeps>): Promise<PushResult> {
     // лічильники обнуляються, інакше «нагадування #7» стосувалося б минулої події.
     const isNewEpisode = !k || k.resolved_at != null;
     if (isNewEpisode) {
+      // 🔴 РЯДОК ЗАВОДИТЬСЯ З `last_sent_at = NULL, sent_count = 0` — «побачили, ще
+      // не казали». Без цього ВІК УМОВИ не було б з чого рахувати: фора вимагає
+      // памʼятати момент першої появи НАВІТЬ тоді, коли ми промовчали.
       await query(
         `INSERT INTO alert_state (id, severity, title, first_seen_at, last_seen_at, last_sent_at, sent_count,
                                   resolved_at, resolved_notified)
-         VALUES ($1, $2, $3, now(), now(), now(), 1, NULL, false)
+         VALUES ($1, $2, $3, now(), now(), NULL, 0, NULL, false)
          ON CONFLICT (id) DO UPDATE SET severity = EXCLUDED.severity, title = EXCLUDED.title,
-           first_seen_at = now(), last_seen_at = now(), last_sent_at = now(), sent_count = 1,
+           first_seen_at = now(), last_seen_at = now(), last_sent_at = NULL, sent_count = 0,
            resolved_at = NULL, resolved_notified = false`,
         [a.id, a.severity, a.title.slice(0, 300)]);
+    }
+
+    // ── ПЕРШЕ ПОВІДОМЛЕННЯ ЕПІЗОДУ (можливо, відкладене форою).
+    // `neverSent` відрізняє «ще не казали» від «казали давно»: інакше перший показ
+    // події з форою поїхав би гілкою повтору й прийшов із написом «ВСЕ ЩЕ» — тобто
+    // першою фразою про неї було б слово «все ще».
+    const firstSeenAt = isNewEpisode ? new Date() : k!.first_seen_at;
+    const neverSent = isNewEpisode || k!.last_sent_at == null;
+    if (neverSent) {
+      const ageMin = (Date.now() - firstSeenAt.getTime()) / 60000;
+      if (suppressedByGrace(a.id, ageMin)) {
+        // Тиха фора: умову бачимо й памʼятаємо, людину не смикаємо. Якщо вона
+        // переживе поріг — приїде наступним тіком уже як звичайна нова тривога.
+        await query(`UPDATE alert_state SET last_seen_at = now() WHERE id = $1`, [a.id]);
+        continue;
+      }
+      await query(
+        `UPDATE alert_state SET last_seen_at = now(), last_sent_at = now(), sent_count = 1 WHERE id = $1`,
+        [a.id]);
       await send(formatAlert(a, null));
       res.sent++;
       continue;
@@ -113,10 +137,15 @@ export async function alertPush(deps?: Partial<PushDeps>): Promise<PushResult> {
   // дорого, як мовчазна поломка.
   for (const k of rows) {
     if (byId.has(k.id) || k.resolved_at != null) continue;
+    // 🔴 ПРО ЩО НЕ КАЗАЛИ — ПРО ТЕ Й ВІДБОЮ НЕ БУВАЄ. Умова з форою, що прожила
+    // менше порога й зникла (звичайний викат), закривається МОВЧКИ: «✅ відновилось»
+    // про подію, якої людина не бачила, — це половина шуму назад, тобто фора
+    // прибрала б рівно 2 повідомлення з 4 замість усіх чотирьох.
+    const silent = k.sent_count === 0;
     await query(
       `UPDATE alert_state SET resolved_at = now(), resolved_notified = $2 WHERE id = $1`,
-      [k.id, !isPointEvent(k.id)]);
-    if (isPointEvent(k.id)) continue;
+      [k.id, !silent && !isPointEvent(k.id)]);
+    if (silent || isPointEvent(k.id)) continue;
     await send(formatResolved(k.title, k.first_seen_at));
     res.resolved++;
   }
