@@ -284,9 +284,25 @@ test("#124 G3 Σ 1С == Σ БАЗИ, Δ0 (і РЯДКИ, і сума)", { ...nee
 test("#125 G3b ЖИВІ НОТАТКИ НЕ ВТРАТИЛИ ПАРИ", { ...needsApi() }, async () => {
   const { config } = await import("../config.js");
   const { pool } = await import("../db/pool.js");
+  const { CASH_RECEIVABLE_CLIENTS } = await import("./syncReceivables.js");
   const res = await fetch(config.receivables1cUrl);
   const { rows } = parse1cPayload(await res.json());
-  const keys = new Set(rows.map((r) => r.clientKey));
+
+  // 🔴 ОЧІКУВАНА МНОЖИНА — З ДВОХ ДЖЕРЕЛ, БО `receivables` НАПОВНЮЮТЬ ДВІ ГІЛКИ
+  // ОДНІЄЇ ДЖОБИ: рядки з 1С і готівкові з CRM (`insertCashReceivables`).
+  // Готівка не має безнальних рахунків у принципі (правило з CLAUDE.md), тож
+  // готівковий клієнт законно є в дебіторці й законно відсутній у 1С. Поки гейт
+  // звіряв лише з 1С, він червонів САМЕ ТОМУ, що обидві гілки відпрацювали як
+  // задумано: заміряно на проді 21.08.2026 — «45 ≠ 44», і вся різниця це
+  // «МГЕР (готівка)» на 231 417 ₴ із 25 угодами типу «Наличные».
+  //
+  // ⚠️ ЧОМУ НЕ ПРОСТО ВЗЯТИ КЛЮЧІ З `receivables`. Це перетворило б перевірку на
+  // «A == A»: таблиця звірялася б сама з собою і зеленіла б за будь-якого зсуву
+  // ключів у синку — тобто рівно тоді, коли гейт і потрібен. Тому обидві половини
+  // очікуваного беруться з ДЖЕРЕЛ: 1С — живим запитом через те саме ядро розбору,
+  // готівка — з реєстру `CASH_RECEIVABLE_CLIENTS`, за яким синк і пише рядок.
+  const cashKeys = CASH_RECEIVABLE_CLIENTS.map((c) => c.keys[0]);
+  const keys = new Set([...rows.map((r) => r.clientKey), ...cashKeys]);
   const pairs = new Set(rows.map((r) => `${r.clientKey}|${r.invoiceNo}`));
 
   const inDbKeys = await pool.query<{ n: string }>(
@@ -299,16 +315,27 @@ test("#125 G3b ЖИВІ НОТАТКИ НЕ ВТРАТИЛИ ПАРИ", { ...nee
   // і має мати пару в базі. Різниця означає, що синк порахував ключ інакше, ніж
   // ядро, — тобто рівно та тиха поломка, від якої гейт і стоїть.
   assert.equal(Number(inDbKeys.rows[0].n), expectKeys,
-    "нотаток по клієнту з живою парою: база vs 1С");
+    "нотаток по клієнту з живою парою: база vs джерела (1С ∪ готівка)");
 
   const invRows = await pool.query<{ client_key: string; invoice_no: string }>(
     `SELECT client_key, invoice_no FROM receivable_invoice_notes`
   );
   const expectInv = invRows.rows.filter((n) => pairs.has(`${n.client_key}|${n.invoice_no}`)).length;
+  // ⚠️ ТА САМА АСИМЕТРІЯ, ЩО Й ВИЩЕ, тільки на рівні рахунків: готівкові рахунки
+  // теж пише `insertCashReceivables` (їхній `invoice_no` — це `kommo_id` угоди), і
+  // в 1С їх немає. Очікувана сторона їх не бачить, фактична бачила б — тобто гейт
+  // почервонів би від першої ж нотатки на готівковому рахунку.
+  // 🔴 ЧЕСНА МЕЖА, НАЗВАНА ВГОЛОС: нотатки до ГОТІВКОВИХ рахунків цей гейт не
+  // перевіряє взагалі — обидві сторони їх виключають однаково. Прибирати їх лише
+  // з однієї сторони означало б підганяти число; тягнути очікування з таблиці —
+  // знову «A == A». Ризик тут малий: `invoice_no` готівкового рахунку це id угоди
+  // Kommo, а не нормалізований ключ, тож «зсунутись» йому нема від чого.
   const haveInv = await pool.query<{ n: string }>(
     `SELECT COUNT(*) AS n FROM receivable_invoice_notes nn
       WHERE EXISTS (SELECT 1 FROM receivable_invoices ri
-                     WHERE ri.client_key = nn.client_key AND COALESCE(ri.invoice_no,'') = nn.invoice_no)`
+                     WHERE ri.client_key = nn.client_key AND COALESCE(ri.invoice_no,'') = nn.invoice_no
+                       AND NOT (ri.client_key = ANY($1)))`,
+    [cashKeys]
   );
   assert.equal(Number(haveInv.rows[0].n), expectInv,
     "нотаток до рахунків з живою парою: база vs 1С");

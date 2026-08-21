@@ -12,7 +12,14 @@ import { loadReceivables1c, resolveManagerId } from "../core/receivables1c.js";
 // yet — i.e. anything before «Оплата отримана»/«Успішно». The row recomputes on
 // every sync, so a deal drops off automatically once it reaches a paid stage.
 // Keyed by every client_key variant the client appears under in CRM.
-const CASH_RECEIVABLE_CLIENTS: { label: string; keys: string[] }[] = [
+// 🔴 ЕКСПОРТОВАНО НАВМИСНО: `receivables` = рядки з 1С ∪ ЦЕЙ реєстр, і гейт `#125`
+// мусить знати обидві половини. Поки реєстр був приватним, гейт звіряв нотатки
+// лише з 1С — і готівковий МГЕР, законно присутній у дебіторці й законно
+// відсутній у 1С, давав хибне «45 ≠ 44» на цілком справному синку.
+// Читати замість цього `receivables` було б «A == A»: таблиця перевіряла б саму
+// себе, і зсув ключа в синку — те, заради чого гейт існує, — став би невидимим.
+// Ключ рядка — `keys[0]` (див. `clientKey` нижче), решта варіантів лише збирають угоди.
+export const CASH_RECEIVABLE_CLIENTS: { label: string; keys: string[] }[] = [
   { label: "МГЕР (готівка)", keys: ["мгер", "0668339283"] },
 ];
 const FULL_CYCLE_PIPELINES = [8921932, 155304];
