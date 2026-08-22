@@ -50,6 +50,7 @@ import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween,
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
+import { recomputeOwners } from "../core/receivablesOwnerStore.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -1777,6 +1778,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
   type Client = {
     clientKey: string | null; clientName: string | null; amount: number;
     limitDays: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
+    ownerSource: string; majorityName: string | null;
   };
   const byManager = new Map<number | null, { managerId: number | null; managerName: string; clients: Client[]; total: number }>();
   for (const r of rows) {
@@ -1787,6 +1789,11 @@ dashboardRouter.get("/receivables", async (req, res) => {
       clientKey: r.clientKey, clientName: r.clientName, amount: r.amount,
       limitDays: r.limitDays, overdueDays: r.overdueDays,
       comment: n?.comment ?? null, dueDate: n?.due_date ?? null,
+      // 🔴 ЧОМУ саме цей відповідальний — їде НА ЕКРАН, а не лишається в ядрі.
+      // Без цього «звільнений мажоритар без команди» і «в рахунках узагалі немає
+      // менеджера» виглядали б однаково порожньо, і людина не мала б як їх
+      // розрізнити. Порожнє місце читається як «нічого немає», а не як відповідь.
+      ownerSource: r.ownerSource, majorityName: r.majorityName,
     });
     entry.total += r.amount;
   }
@@ -2686,6 +2693,63 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
     [clientKey, comment, dueDate, auth.userId]
   );
   res.json({ ok: true });
+});
+
+/**
+ * 👤 РУЧНЕ ПРИЗНАЧЕННЯ ВІДПОВІДАЛЬНОГО ЗА БОРГ КЛІЄНТА (рішення власника 22.08.2026).
+ *
+ * `managerId: null` — СВІДОМИЙ вибір «без відповідального» (бухгалтерські рахунки),
+ * а не порожнє поле: рядок у таблиці вимикає авто-правило, його відсутність —
+ * вмикає. Тому «зняти призначення» — це DELETE, а не PUT з порожнім менеджером.
+ *
+ * Примітка обовʼязкова і стережеться `CHECK`-ом у БД; 400 тут — лише щоб людина
+ * побачила зрозумілу відмову раніше, ніж помилку драйвера.
+ */
+dashboardRouter.put("/receivables/owner", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminScope(auth)) return res.status(403).json({ error: "Лише КВП, ОД або адміністратор" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const note = String(req.body?.note ?? "").trim();
+  if (!note) return res.status(400).json({ error: "Примітка обовʼязкова — призначення без причини через місяць не відрізнити від помилки" });
+  const raw = req.body?.managerId;
+  const managerId = raw === null || raw === undefined || raw === "" ? null : Number(raw);
+  if (managerId != null && !Number.isFinite(managerId)) return res.status(400).json({ error: "managerId має бути числом або null" });
+
+  // ⚠️ Готівкові рядки CRM перебудовує щосинку, тож ручне призначення там
+  // відкотилось би саме — «кнопка, що не тримає» гірша за відсутню.
+  const target = await pool.query(
+    `SELECT 1 FROM receivables WHERE client_key = $1 AND source = 'sheet' LIMIT 1`, [clientKey]);
+  if (!target.rowCount) return res.status(404).json({ error: "Клієнта немає в безготівковій дебіторці" });
+
+  try {
+    await pool.query(
+      `INSERT INTO receivable_manager_override (client_key, manager_id, note, set_by, set_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (client_key) DO UPDATE SET
+         manager_id = EXCLUDED.manager_id, note = EXCLUDED.note,
+         set_by = EXCLUDED.set_by, set_at = now()`,
+      [clientKey, managerId, note.slice(0, 300), auth.userId]
+    );
+  } catch (e) {
+    const msg = String((e as Error).message ?? e);
+    if (/foreign key/i.test(msg)) return res.status(400).json({ error: "Такого менеджера немає" });
+    throw e;
+  }
+  // Той самий перерахунок, що й у синку: інакше екран до 15 хв показував би старого.
+  const r = await recomputeOwners(pool, [clientKey]);
+  res.json({ ok: true, recomputed: r.clients });
+});
+
+/** Зняти ручне призначення — авто-правило вмикається назад. */
+dashboardRouter.delete("/receivables/owner/:clientKey", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminScope(auth)) return res.status(403).json({ error: "Лише КВП, ОД або адміністратор" });
+  const clientKey = String(req.params.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  await pool.query(`DELETE FROM receivable_manager_override WHERE client_key = $1`, [clientKey]);
+  const r = await recomputeOwners(pool, [clientKey]);
+  res.json({ ok: true, recomputed: r.clients });
 });
 
 // Kommo-sync health for the admin Settings indicator: when the data was last

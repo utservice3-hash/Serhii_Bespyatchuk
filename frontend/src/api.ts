@@ -1204,6 +1204,9 @@ export async function fetchLoyalty(params: {
   return data;
 }
 
+/** Чому саме цей відповідальний за борг. `none` — нікого, і екран мусить сказати ЧОМУ. */
+export type ReceivableOwnerSource = "override" | "auto-majority" | "auto-teamlead" | "none";
+
 export interface ReceivableClient {
   clientKey: string;
   clientName: string;
@@ -1212,6 +1215,23 @@ export interface ReceivableClient {
   overdueDays: number | null;
   comment: string | null;
   dueDate: string | null;
+  ownerSource: ReceivableOwnerSource;
+  /** Мажоритар до перевірки активності — щоб підпис назвав, кого замінили. */
+  majorityName: string | null;
+}
+
+/** Ручне призначення відповідального. `managerId: null` — свідоме «без відповідального». */
+export async function setReceivableOwner(payload: {
+  clientKey: string;
+  managerId: number | null;
+  note: string;
+}): Promise<void> {
+  await api.put("/dashboard/receivables/owner", payload);
+}
+
+/** Зняти ручне призначення — вмикається авто-правило. */
+export async function clearReceivableOwner(clientKey: string): Promise<void> {
+  await api.delete(`/dashboard/receivables/owner/${encodeURIComponent(clientKey)}`);
 }
 
 export async function saveReceivableNote(payload: {

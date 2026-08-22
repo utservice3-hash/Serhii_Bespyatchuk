@@ -525,6 +525,109 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       await c.query(`DELETE FROM deals WHERE kommo_id = 990`);
       await c.query(`DELETE FROM loyalty_overrides WHERE client_key IN ('сплячий','межа60')`);
     });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 👤 ВІДПОВІДАЛЬНИЙ ЗА БОРГ — проти СПРАВЖНЬОЇ БД (#131, #132, #132b)
+    //
+    // 🔴 ЖИВУТЬ САМЕ ТУТ, а не окремим файлом, і це не зручність. `db/pool.js` —
+    // модульний синглтон: другий `provisionScratch` у своєму файлі перевизначив би
+    // `DATABASE_URL` ПІСЛЯ того, як пул уже вказує на чужу базу, а його `pool.end()`
+    // закрив би пул усім. Заміряно раніше: один такий файл поклав 13 чужих тестів.
+    // ─────────────────────────────────────────────────────────────────────────
+    await t.test("#131 ПЕРЕПРИВʼЯЗКА НЕ РУХАЄ ГРОШІ, а override б'є авто", async () => {
+      const store = await import("./receivablesOwnerStore.js");
+      await c.query(`INSERT INTO teams (id, name) VALUES (77,'Команда 77') ON CONFLICT (id) DO NOTHING`);
+      await c.query(`INSERT INTO managers (id, name, team_id, is_team_lead, is_active)
+                     VALUES (901,'Мажоритар',77,false,true), (902,'Інший',77,false,true),
+                            (903,'Тімлід 77',77,true,true) ON CONFLICT (id) DO NOTHING`);
+      await c.query(`INSERT INTO receivables (client_key, client_name, amount, source)
+                     VALUES ('овнерклієнт','ТОВ Овнер',300,'sheet')`);
+      await c.query(`INSERT INTO receivable_invoices (client_key, client_name, manager_id, amount, invoice_date)
+                     VALUES ('овнерклієнт','ТОВ Овнер',901,200,'2026-07-01'),
+                            ('овнерклієнт','ТОВ Овнер',902,100,'2026-08-01')`);
+      const sumBefore = (await c.query<{ s: string }>(`SELECT SUM(amount) s FROM receivables`)).rows[0].s;
+      const read = async () => (await c.query<{ manager_id: number | null; owner_source: string; majority_manager_id: number | null }>(
+        `SELECT manager_id, owner_source, majority_manager_id FROM receivables WHERE client_key='овнерклієнт'`)).rows[0];
+
+      // 1 · авто: виграє більша СУМА (901), а не свіжіший рахунок (902).
+      await store.recomputeOwners(c, ["овнерклієнт"]);
+      let row = await read();
+      assert.equal(row.manager_id, 901, "мажоритар за сумою");
+      assert.equal(row.owner_source, "auto-majority", "🔴 source не доїхав у таблицю");
+
+      // 2 · override б'є авто — і доїжджає до ТАБЛИЦІ, а не лишається в ядрі.
+      await c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note, set_by)
+                     VALUES ('овнерклієнт',902,'ручне призначення',NULL)`);
+      await store.recomputeOwners(c, ["овнерклієнт"]);
+      row = await read();
+      assert.equal(row.manager_id, 902, "🔴 override НЕ переміг авто");
+      assert.equal(row.owner_source, "override", "🔴 source не доїхав у таблицю");
+      assert.equal(row.majority_manager_id, 901,
+        "🔴 мажоритар не збережений — екран не зможе сказати, кого перекрили");
+
+      // 3 · 🪞 «свідомо нікого» — це РІШЕННЯ, а не порожнеча.
+      await c.query(`UPDATE receivable_manager_override SET manager_id = NULL WHERE client_key='овнерклієнт'`);
+      await store.recomputeOwners(c, ["овнерклієнт"]);
+      row = await read();
+      assert.equal(row.manager_id, null);
+      assert.equal(row.owner_source, "override",
+        "🔴 NULL-рядок ≠ «ще не дивились»: source мусить лишитись override");
+
+      // 4 · 🪞 зняли призначення — авто вмикається НАЗАД.
+      await c.query(`DELETE FROM receivable_manager_override WHERE client_key='овнерклієнт'`);
+      await store.recomputeOwners(c, ["овнерклієнт"]);
+      row = await read();
+      assert.equal(row.manager_id, 901, "🔴 авто не повернулось після зняття override");
+      assert.equal(row.owner_source, "auto-majority");
+
+      // 5 · 🔴 ГРОШІ НЕ ЗРУШИЛИСЬ ЖОДНОГО РАЗУ. Переприв'язка людини — це підпис,
+      // а не переказ: якби перерахунок чіпав `amount`, Σ дебіторки поїхала б тихо.
+      const sumAfter = (await c.query<{ s: string }>(`SELECT SUM(amount) s FROM receivables`)).rows[0].s;
+      assert.equal(sumAfter, sumBefore, "🔴 Σ боргу змінилась від переприв'язки відповідального");
+    });
+
+    await t.test("#132 АУДИТ: хто і коли призначив — записано, і оновлення рухає час", async () => {
+      await c.query(`INSERT INTO users (id, email, password_hash, role, is_active)
+                     VALUES (9001,'own@test','x','admin',true) ON CONFLICT (id) DO NOTHING`);
+      await c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note, set_by)
+                     VALUES ('аудитклієнт',901,'перше призначення',9001)`);
+      const first = (await c.query<{ set_by: number | null; set_at: Date; note: string }>(
+        `SELECT set_by, set_at, note FROM receivable_manager_override WHERE client_key='аудитклієнт'`)).rows[0];
+      assert.equal(first.set_by, 9001, "🔴 автор не записаний — «хто» невідомо");
+      assert.equal(first.note, "перше призначення");
+
+      // Повторне призначення — ТИМ САМИМ виразом, що в роуті (ON CONFLICT DO UPDATE).
+      await new Promise((r) => setTimeout(r, 10));
+      await c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note, set_by)
+                     VALUES ('аудитклієнт',902,'перепризначено',9001)
+                     ON CONFLICT (client_key) DO UPDATE SET manager_id=EXCLUDED.manager_id,
+                       note=EXCLUDED.note, set_by=EXCLUDED.set_by, set_at=now()`);
+      const second = (await c.query<{ set_at: Date; note: string }>(
+        `SELECT set_at, note FROM receivable_manager_override WHERE client_key='аудитклієнт'`)).rows[0];
+      assert.equal(second.note, "перепризначено");
+      assert.ok(second.set_at > first.set_at,
+        "🔴 час не зрушив — «коли» бреше про останню зміну");
+      await c.query(`DELETE FROM receivable_manager_override WHERE client_key='аудитклієнт'`);
+    });
+
+    await t.test("#132b ПРИМІТКА ОБОВʼЯЗКОВА — і це стереже БД, а не роут", async () => {
+      // 🔴 ТЕСТ НА ВІДХИЛЕННЯ, а не «очима». `CHECK` виглядає бездоганно й тоді,
+      // коли не працює: на цьому ми вже спіймались двічі (NULL-пастка `#38`).
+      await assert.rejects(
+        () => c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note)
+                       VALUES ('безпримітки',901,'')`),
+        /check|note/i, "🔴 БД пустила призначення з ПОРОЖНЬОЮ приміткою");
+      await assert.rejects(
+        () => c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note)
+                       VALUES ('безпримітки',901,'   ')`),
+        /check|note/i, "🔴 БД пустила примітку з самих пробілів");
+      // 🪞 ДЗЕРКАЛО: зі справжньою приміткою вставка ПРОХОДИТЬ — інакше CHECK міг би
+      // забороняти все підряд, а гейт читався б як надійність.
+      await c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note)
+                     VALUES ('зпримiткою',901,'клієнт перейшов до іншого менеджера')`);
+      assert.equal((await c.query(`SELECT 1 FROM receivable_manager_override WHERE client_key='зпримiткою'`)).rowCount, 1);
+      await c.query(`DELETE FROM receivable_manager_override WHERE client_key='зпримiткою'`);
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();

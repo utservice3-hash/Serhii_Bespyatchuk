@@ -2460,6 +2460,10 @@ export interface ClientDebt {
   amount: number;
   limitDays: number | null;
   overdueDays: number | null;
+  /** `override | auto-majority | auto-teamlead | none` — ЧОМУ саме цей відповідальний. */
+  ownerSource: string;
+  /** Мажоритар до перевірки активності — щоб підпис міг назвати, кого замінили. */
+  majorityName: string | null;
 }
 
 /** Борг по клієнту (знімок). Неатрибутовані клієнти теж показуються (managerName =
@@ -2467,9 +2471,12 @@ export interface ClientDebt {
  *  в роуті (це не метрика, а редаговане поле). */
 export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[]> {
   const { where, params } = debtWhere(s);
-  const r = await pool.query<{ manager_id: number | null; manager_name: string | null; client_key: string | null; client_name: string | null; amount: string; limit_days: number | null; overdue_days: number | null }>(
-    `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount, r.limit_days, r.overdue_days
-     FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
+  const r = await pool.query<{ manager_id: number | null; manager_name: string | null; client_key: string | null; client_name: string | null; amount: string; limit_days: number | null; overdue_days: number | null; owner_source: string | null; majority_name: string | null }>(
+    `SELECT r.manager_id, m.name AS manager_name, r.client_key, r.client_name, r.amount, r.limit_days, r.overdue_days,
+            r.owner_source, mj.name AS majority_name
+     FROM receivables r
+     LEFT JOIN managers m ON m.id = r.manager_id
+     LEFT JOIN managers mj ON mj.id = r.majority_manager_id
      ${where}
      ORDER BY r.amount DESC`,
     params
@@ -2477,6 +2484,7 @@ export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[
   return r.rows.map((x) => ({
     managerId: x.manager_id, managerName: x.manager_name ?? "Без менеджера", clientKey: x.client_key, clientName: x.client_name,
     amount: Number(x.amount), limitDays: x.limit_days, overdueDays: x.overdue_days,
+    ownerSource: x.owner_source ?? "none", majorityName: x.majority_name,
   }));
 }
 

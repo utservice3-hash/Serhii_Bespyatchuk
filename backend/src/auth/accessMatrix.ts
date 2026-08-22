@@ -280,6 +280,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "PUT", path: "/api/dashboard/receivables/note", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  // 👤 Ручне призначення відповідального за борг — `isAdminScope` (рішення власника
+  // 22.08.2026). Тімлід і менеджер відмовляються: борг клієнта переприв'язує той,
+  // хто бачить картину цілком.
+  { method: "PUT", path: "/api/dashboard/receivables/owner", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
+  { method: "DELETE", path: "/api/dashboard/receivables/owner/:clientKey", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
   { method: "GET", path: "/api/dashboard/regular-clients", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/repeat-client-history", cls: "GET",

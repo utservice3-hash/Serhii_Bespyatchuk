@@ -2,11 +2,51 @@ import { useState, type Dispatch, type SetStateAction, Fragment } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   saveReceivableNote, saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
-  type ReceivableInvoice, type ReceivableManager, type Team,
+  type ReceivableInvoice, type ReceivableManager, type ReceivableClient, type Team,
 } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { teamOptions } from "../teamColors";
 import { CommentField } from "../../../components/CommentField";
+
+/**
+ * 👤 ВІДПОВІДАЛЬНИЙ + ЧОМУ САМЕ ВІН.
+ *
+ * 🔴 «Немає відповідального» мусить читатись як ВІДПОВІДЬ, а не як порожня
+ * клітинка. Випадків два, і вони різні: мажоритар звільнений і команди в нього
+ * немає — проти «в рахунках узагалі немає менеджера». Без підпису обидва
+ * виглядали б однаково порожньо, і людина пішла б шукати поломку там, де її
+ * немає. Той самий урок, що «невідоме має читатись як невідоме».
+ *
+ * Джерело підпису — СЕРВЕР (`ownerSource`), а не здогад фронта по порожньому
+ * імені: інакше екран мав би власну думку про правило, і вона б розійшлась.
+ */
+function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
+  if (c.ownerSource === "none") {
+    const why = c.majorityName
+      ? `${c.majorityName} — звільнений, команди немає`
+      : "немає менеджера в рахунках";
+    return (
+      <span>
+        <span style={{ color: "var(--warn)", fontWeight: 600 }}>без відповідального</span>
+        <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>{why}</span>
+      </span>
+    );
+  }
+  const mark =
+    c.ownerSource === "override" ? { icon: "📌", hint: "призначено вручну" }
+    : c.ownerSource === "auto-teamlead"
+      ? { icon: "👥", hint: c.majorityName ? `тімлід — замість звільненого ${c.majorityName}` : "тімлід команди" }
+      : { icon: "", hint: "найбільша сума боргу по клієнту" };
+  return (
+    <span title={mark.hint}>
+      {mark.icon && <span style={{ marginRight: 4 }}>{mark.icon}</span>}
+      {c.managerName}
+      {c.ownerSource !== "auto-majority" && (
+        <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>{mark.hint}</span>
+      )}
+    </span>
+  );
+}
 
 const inputStyle: React.CSSProperties = {
   font: "inherit", fontSize: 12, padding: "3px 6px", borderRadius: 6,
@@ -247,7 +287,9 @@ export function ReceivablesSection({
                               {caret(c.clientKey)}{c.clientName}
                             </button>
                           </td>
-                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12, verticalAlign: "top" }}>{c.managerName}</td>
+                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12, verticalAlign: "top" }}>
+                            <OwnerCell c={c} />
+                          </td>
                           <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top" }}>{formatAmount(c.amount)}</td>
                           <td style={{ textAlign: "center", verticalAlign: "top", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>{c.overdueDays ?? "—"}</td>
                           <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "top" }}>{c.limitDays ?? "—"}</td>

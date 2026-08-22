@@ -693,6 +693,40 @@ INSERT INTO app_settings (id, data) VALUES (1, '{}') ON CONFLICT (id) DO NOTHING
 ALTER TABLE receivables ADD COLUMN IF NOT EXISTS limit_days INTEGER;
 ALTER TABLE receivables ADD COLUMN IF NOT EXISTS overdue_days INTEGER;
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 👤 ВІДПОВІДАЛЬНИЙ ЗА БОРГ КЛІЄНТА (рішення власника 22.08.2026)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Рядок дебіторки = ОДИН клієнт. Відповідальний рахується ланцюгом
+-- override → мажоритар за сумою → тімлід його команди → нікого
+-- (правило цілком — `core/receivablesOwner.ts`).
+--
+-- 🔴 `owner_source` ЛЕЖИТЬ У ТАБЛИЦІ, А НЕ ЛИШЕ В ЯДРІ. Без нього екран не може
+-- відрізнити «звільнений мажоритар, команди немає» від «в рахунках узагалі немає
+-- менеджера»: обидва дали б порожню клітинку, а порожнє місце читається як
+-- «нічого немає», а не як «ми знаємо, чому нікого». Той самий урок, що «невідоме
+-- має читатись як невідоме».
+ALTER TABLE receivables ADD COLUMN IF NOT EXISTS owner_source TEXT NOT NULL DEFAULT 'none';
+-- Мажоритар ДО перевірки активності — щоб підпис міг назвати, КОГО замінили.
+ALTER TABLE receivables ADD COLUMN IF NOT EXISTS majority_manager_id INTEGER REFERENCES managers(id);
+
+-- Ручне призначення адміном. ОКРЕМА таблиця, бо `receivables` TRUNCATE-иться
+-- щосинку — той самий механізм виживання, що в `receivable_notes`, уже доведений
+-- роботою: PK по ключу клієнта + LEFT JOIN при перерахунку.
+CREATE TABLE IF NOT EXISTS receivable_manager_override (
+  client_key TEXT PRIMARY KEY,
+  -- 🔴 NULL = «адмін подивився й вирішив, що відповідального немає» (бухгалтерські
+  -- рахунки). Це ІНША відповідь, ніж відсутність рядка: перша ВИМИКАЄ авто-правило,
+  -- друга його вмикає. Саме тому стан несе наявність РЯДКА, а не значення поля.
+  manager_id INTEGER REFERENCES managers(id),
+  note       TEXT NOT NULL,
+  set_by     INTEGER REFERENCES users(id),
+  set_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Примітку стереже БД, а не роут: роут обходить будь-який скрипт. Прецедент —
+  -- `loyalty_overrides.archive_reason`: дія без причини через місяць нічим не
+  -- відрізняється від помилки.
+  CHECK (length(btrim(note)) > 0)
+);
+
 -- Team-lead feedback / bug reports. Team-leads submit corrections; an admin
 -- approves or rejects each item, and the dev resolves the approved ones.
 CREATE TABLE IF NOT EXISTS feedback (

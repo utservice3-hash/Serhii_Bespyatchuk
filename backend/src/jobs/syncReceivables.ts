@@ -5,7 +5,7 @@ import { fetchLeadsByIds, extractIncomeAmount } from "../kommo/client.js";
 import { normalizeClientName } from "../utils/clientName.js";
 import { parseCsv } from "../utils/csv.js";
 import { loadReceivables1c, resolveManagerId, type Receivable1cRow } from "../core/receivables1c.js";
-import { resolveOwner, type ManagerFact, type OwnerRow } from "../core/receivablesOwner.js";
+import { recomputeOwners } from "../core/receivablesOwnerStore.js";
 
 // Cash ("готівка") clients tracked directly from CRM rather than the accounting
 // sheet: they pay cash, so their debt isn't in the безнал receivables file. We
@@ -182,26 +182,8 @@ export async function syncReceivables(): Promise<void> {
     fetchClientLimits(),
   ]);
 
-  // Менеджери разом із ФАКТАМИ, потрібними для вибору відповідального: команда,
-  // ознака тімліда й активність за ОБОМА джерелами (`managers.is_active` з Kommo
-  // + `users.is_active` від адміна). Стани логінів беремо переліком, а не готовим
-  // булевим: правило «логіна немає ≠ звільнений» живе в `core/activeManager`,
-  // і другої його копії тут бути не має.
-  const managerRows = await pool.query<{
-    id: number; name: string; team_id: number | null; is_team_lead: boolean;
-    is_active: boolean; logins: boolean[] | null;
-  }>(
-    `SELECT m.id, m.name, m.team_id, m.is_team_lead, m.is_active,
-            array_remove(array_agg(u.is_active), NULL) AS logins
-       FROM managers m LEFT JOIN users u ON u.manager_id = m.id
-      GROUP BY m.id, m.name, m.team_id, m.is_team_lead, m.is_active`
-  );
+  const managerRows = await pool.query<{ id: number; name: string }>(`SELECT id, name FROM managers`);
   const managerIdByName = new Map(managerRows.rows.map((m) => [m.name, m.id]));
-  const managerNameById = new Map(managerRows.rows.map((m) => [m.id, m.name]));
-  const facts = new Map<number, ManagerFact>(managerRows.rows.map((m) => [m.id, {
-    teamId: m.team_id, isTeamLead: m.is_team_lead,
-    kommoActive: m.is_active, loginStates: m.logins ?? [],
-  }]));
 
   // № угоди з коментаря 1С → менеджер угоди. ОДИН запит по всіх id одразу:
   // рахунків три сотні, і по одному це були б три сотні походів у БД.
@@ -224,35 +206,21 @@ export async function syncReceivables(): Promise<void> {
   // Групуємо ТІЛЬКИ по `client_key`. Раніше ключем була пара «клієнт::менеджер»,
   // успадкована від гугл-таблиці, — саме через неї 73 клієнти давали 80 рядків,
   // а борг клієнта ніде не показувався одним числом.
+  //
+  // 🔴 ВІДПОВІДАЛЬНОГО ТУТ НЕ РАХУЄМО. Він проставляється нижче тим самим
+  // `recomputeOwners`, яким користується адмін-роут, — щоб правило не жило двічі
+  // і щоб «після синку» і «після кнопки» не могли розійтись у принципі.
   const invByClient = new Map<string, { row: Receivable1cRow; managerId: number | null }[]>();
   for (const p of priced) {
     const a = invByClient.get(p.row.clientKey) ?? [];
     a.push(p);
     invByClient.set(p.row.clientKey, a);
   }
-
-  type Aggregate = { clientKey: string; clientName: string; managerId: number | null; ownerName: string; amount: number };
-  const aggregates: Aggregate[] = [];
-  const bySource = { "auto-majority": 0, "auto-teamlead": 0, none: 0, override: 0 };
-  for (const [clientKey, list] of invByClient) {
-    const ownerRows: OwnerRow[] = list.map((p) => ({
-      managerId: p.managerId, amount: p.row.amount, invoiceDate: p.row.invoiceDate,
-    }));
-    // ⚠️ `override` поки завжди `null`: таблиця ручного призначення приїде
-    // НАСТУПНИМ комітом. Саме правило вже вміє її враховувати й покрите гейтом —
-    // тут бракує лише читання з БД, і це названо, щоб гілка не читалась як мертва.
-    const owner = resolveOwner(ownerRows, facts, null);
-    bySource[owner.source]++;
-    aggregates.push({
-      clientKey,
-      clientName: list[0].row.clientName,
-      managerId: owner.managerId,
-      // Підпис відповідального — імʼя з `managers`, а не ПІБ із коментаря 1С:
-      // друге називає ТВОРЦЯ рахунку, і в рядку клієнта воно казало б не про того.
-      ownerName: owner.managerId != null ? (managerNameById.get(owner.managerId) ?? "") : "",
-      amount: list.reduce((s, p) => s + p.row.amount, 0),
-    });
-  }
+  const aggregates = [...invByClient.entries()].map(([clientKey, list]) => ({
+    clientKey,
+    clientName: list[0].row.clientName,
+    amount: list.reduce((s, p) => s + p.row.amount, 0),
+  }));
 
   const client = await pool.connect();
   try {
@@ -277,10 +245,16 @@ export async function syncReceivables(): Promise<void> {
       await client.query(
         `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [entry.clientKey, entry.clientName, entry.managerId, entry.ownerName, entry.amount,
+        // Відповідальний лишається NULL до `recomputeOwners` нижче — у ТІЙ САМІЙ
+        // транзакції, тож зовні проміжного стану не існує.
+        [entry.clientKey, entry.clientName, null, "", entry.amount,
          limit?.limitDays ?? null, limit?.overdueDays ?? null]
       );
     }
+    // Відповідальний — ОДНИМ проходом, тим самим кодом, що й адмін-кнопка.
+    // Стоїть ДО готівки навмисно: готівкові рядки перебудовує CRM щосинку, тож
+    // ручне призначення там відкотилось би саме.
+    const owners = await recomputeOwners(client);
     const cashClients = await insertCashReceivables(client);
     await client.query("COMMIT");
     // 🟢 ОБСЯГ У ЛОЗІ, А НЕ ЛИШЕ «відпрацювала»: для джоби-імпортера «успіх» без
@@ -289,7 +263,8 @@ export async function syncReceivables(): Promise<void> {
     console.log(
       `Synced ${aggregates.length} клієнтів + ${cashClients} CRM cash clients from ${rows.length} 1C invoice rows ` +
       `(менеджер рахунку: за угодою ${byDeal}, без менеджера ${priced.filter((p) => p.managerId == null).length}; ` +
-      `відповідальний: мажоритар ${bySource["auto-majority"]}, тімлід ${bySource["auto-teamlead"]}, немає ${bySource.none}).`
+      `відповідальний: вручну ${owners.bySource.override}, мажоритар ${owners.bySource["auto-majority"]}, ` +
+      `тімлід ${owners.bySource["auto-teamlead"]}, немає ${owners.bySource.none}).`
     );
     return;
   } catch (err) {
