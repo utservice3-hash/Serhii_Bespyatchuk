@@ -823,6 +823,136 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       await c.query(`TRUNCATE app_boot`);
       await c.query(`TRUNCATE deploy_intent`);
     });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 💵 ГОТІВКОВИЙ РЯДОК: ОДИН ВІДПОВІДАЛЬНИЙ У СПИСКУ Й У ПІДСУМКУ (#136…#136c)
+    //
+    // 🔴 Знайшов ОКО на живому екрані, не гейт. «МГЕР (готівка)» показував «без
+    // відповідального · немає менеджера в рахунках», а підсумок «По
+    // відповідальних» зараховував ті самі 224 917 ₴ Семенюку Дмитру. Обидва
+    // числа з ОДНОГО рядка: список читав `owner_source`, підсумок — `manager_id`.
+    // ─────────────────────────────────────────────────────────────────────────
+    await t.test("#136 ІНВАРІАНТ: рядок не може бути «без відповідального» і водночас під менеджером", async () => {
+      const store = await import("./receivablesOwnerStore.js");
+      await c.query(`TRUNCATE receivables`);
+      await c.query(`TRUNCATE receivable_invoices`);
+
+      // Безготівковий клієнт — звичайний шлях, мажоритар за сумою.
+      await c.query(`INSERT INTO receivable_invoices
+          (client_key, client_key_raw, client_name, manager_id, invoice_no, invoice_date, amount)
+        VALUES ('безнал','безнал','ТОВ Безнал',901,'B1','2026-08-01',5000)`);
+      await c.query(`INSERT INTO receivables (client_key, client_name, amount, source)
+        VALUES ('безнал','ТОВ Безнал',5000,'sheet')`);
+
+      // 🔴 ГОТІВКА ЯК У ПРОДІ: рядок агрегату з МЕНЕДЖЕРОМ, але `owner_source`
+      // лишається дефолтним. Саме цей стан і давав розбіжність на екрані.
+      await c.query(`INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, source)
+        VALUES ('готівка','МГЕР (готівка)',902,'Менеджер Готівковий',224917,'cash')`);
+      await c.query(`INSERT INTO receivable_invoices
+          (client_key, client_name, manager_id, invoice_no, invoice_date, amount)
+        VALUES ('готівка','МГЕР (готівка)',902,'C1','2026-08-02',224917)`);
+
+      const before = (await c.query<{ s: string }>(`SELECT SUM(amount)::text AS s FROM receivables`)).rows[0].s;
+      const res = await store.recomputeOwners(c);
+
+      const rows = (await c.query<{ client_key: string; source: string; manager_id: number | null;
+        owner_source: string; manager_name_raw: string | null; majority_manager_id: number | null; amount: string }>(
+        `SELECT client_key, source, manager_id, owner_source, manager_name_raw, majority_manager_id, amount
+           FROM receivables ORDER BY client_key`)).rows;
+
+      // ── ІНВАРІАНТ ВЛАСНИКА: жодного рядка «none + названий менеджер».
+      const contradictory = rows.filter((r) => r.owner_source === "none" && r.manager_id != null);
+      assert.deepEqual(contradictory.map((r) => `${r.client_key}:${r.manager_id}`), [],
+        "🔴 РЯДОК КАЖЕ «БЕЗ ВІДПОВІДАЛЬНОГО», А ПІДСУМОК ЗАРАХОВУЄ ЙОГО НАЗВАНІЙ ЛЮДИНІ — "
+        + "саме це власник побачив на МГЕР: підпис і сума розповідають різне про одну людину");
+
+      const cash = rows.find((r) => r.source === "cash")!;
+      assert.equal(cash.owner_source, "cash-invoice",
+        "🔴 готівковий рядок не отримав джерела — або перерахунок його не бачить, або фільтр 'sheet' повернувся");
+      assert.equal(cash.manager_id, 902, "🔴 відомий із CRM менеджер загубився");
+      assert.ok(cash.manager_name_raw && cash.manager_name_raw.length > 0,
+        "🔴 підпис порожній — на екрані буде порожня клітинка замість імені");
+      assert.equal(cash.majority_manager_id, null,
+        "🔴 готівці приписано мажоритара, якого ніхто не рахував");
+
+      const sheet = rows.find((r) => r.source === "sheet")!;
+      assert.equal(sheet.owner_source, "auto-majority",
+        "🔴 звичайний шлях зламано — правка готівки не сміє чіпати безнал");
+      assert.equal(sheet.manager_id, 901);
+
+      // #136c Δ0 — переприв'язка людини не сміє рухати гроші.
+      const after = (await c.query<{ s: string }>(`SELECT SUM(amount)::text AS s FROM receivables`)).rows[0].s;
+      assert.equal(Number(after), Number(before),
+        `🔴 суми зрушили: було ${before}, стало ${after} — перерахунок відповідального чіпає гроші`);
+      assert.equal(res.bySource["cash-invoice"], 1, "🔴 розклад у лозі не рахує готівку — обсяг невидимий");
+      assert.equal(res.clients, 2, "🔴 оновлено не всі рядки");
+
+      await c.query(`TRUNCATE receivables`); await c.query(`TRUNCATE receivable_invoices`);
+    });
+
+    await t.test("#136b ДЗЕРКАЛО: готівка БЕЗ менеджера — чесний none в ОБОХ місцях", async () => {
+      const store = await import("./receivablesOwnerStore.js");
+      await c.query(`TRUNCATE receivables`);
+      await c.query(`TRUNCATE receivable_invoices`);
+      // `insertCashReceivables` ставить NULL, коли в жодної угоди немає виконавця.
+      await c.query(`INSERT INTO receivables (client_key, client_name, manager_id, amount, source)
+        VALUES ('готівка0','Готівка без менеджера',NULL,1000,'cash')`);
+
+      await store.recomputeOwners(c);
+      const r = (await c.query<{ owner_source: string; manager_id: number | null }>(
+        `SELECT owner_source, manager_id FROM receivables WHERE client_key='готівка0'`)).rows[0];
+
+      // 🔴 Без цього дзеркала #136 зеленів би й тоді, коли ми роздаємо
+      // 'cash-invoice' УСІМ підряд — включно з рядками, де відповідального
+      // справді немає. Тоді екран показував би імʼя, якого не існує.
+      assert.equal(r.owner_source, "none",
+        "🔴 готівці без менеджера видано 'cash-invoice' — підпис обіцяє людину, якої немає");
+      assert.equal(r.manager_id, null,
+        "🔴 менеджер узявся нізвідки — і підсумок зарахує гроші комусь випадковому");
+
+      await c.query(`TRUNCATE receivables`);
+    });
+
+    await t.test("#136c Δ0: зміна ВІДПОВІДАЛЬНОГО не рухає жодної суми", async () => {
+      const store = await import("./receivablesOwnerStore.js");
+      await c.query(`TRUNCATE receivables`);
+      await c.query(`TRUNCATE receivable_invoices`);
+      await c.query(`INSERT INTO receivable_invoices
+          (client_key, client_key_raw, client_name, manager_id, invoice_no, invoice_date, amount)
+        VALUES ('δклієнт','δклієнт','ТОВ Дельта',901,'D1','2026-08-01',7000),
+               ('δклієнт','δклієнт','ТОВ Дельта',902,'D2','2026-08-02',3000)`);
+      await c.query(`INSERT INTO receivables (client_key, client_name, amount, source)
+        VALUES ('δклієнт','ТОВ Дельта',10000,'sheet')`);
+      await c.query(`INSERT INTO receivables (client_key, client_name, manager_id, amount, source)
+        VALUES ('δготівка','Готівка Дельта',902,4000,'cash')`);
+
+      const snap = async () => (await c.query<{ k: string; a: string }>(
+        `SELECT client_key || ':' || source AS k, amount::text AS a FROM receivables ORDER BY 1`)).rows;
+      const before = await snap();
+
+      await store.recomputeOwners(c);
+      const mid = (await c.query<{ manager_id: number | null }>(
+        `SELECT manager_id FROM receivables WHERE client_key='δклієнт'`)).rows[0];
+      assert.equal(mid.manager_id, 901, "🔴 мажоритар за сумою не спрацював — фікстура не те перевіряє");
+
+      // 🔴 ТЕПЕР ВІДПОВІДАЛЬНОГО ЗМІНЮЄМО РУКАМИ. Саме тут гроші й могли б поїхати:
+      // якби перерахунок торкався `amount`, це було б видно як зсув суми при
+      // незмінних рахунках. `#131` перевіряє те саме для безналу; тут — разом із
+      // готівкою, бо саме її шлях ми щойно переписали.
+      await c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note)
+                     VALUES ('δклієнт',902,'ручне призначення для гейта')`);
+      await store.recomputeOwners(c);
+      const after = (await c.query<{ manager_id: number | null; owner_source: string }>(
+        `SELECT manager_id, owner_source FROM receivables WHERE client_key='δклієнт'`)).rows[0];
+      assert.equal(after.manager_id, 902, "🔴 override не спрацював — зміни відповідального не сталося");
+      assert.equal(after.owner_source, "override");
+
+      assert.deepEqual(await snap(), before,
+        "🔴 СУМИ ЗРУШИЛИ ПІСЛЯ ЗМІНИ ВІДПОВІДАЛЬНОГО — переприв'язка людини чіпає гроші");
+
+      await c.query(`DELETE FROM receivable_manager_override WHERE client_key='δклієнт'`);
+      await c.query(`TRUNCATE receivables`); await c.query(`TRUNCATE receivable_invoices`);
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();

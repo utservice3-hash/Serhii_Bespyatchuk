@@ -1205,7 +1205,11 @@ export async function fetchLoyalty(params: {
 }
 
 /** Чому саме цей відповідальний за борг. `none` — нікого, і екран мусить сказати ЧОМУ. */
-export type ReceivableOwnerSource = "override" | "auto-majority" | "auto-teamlead" | "none";
+export type ReceivableOwnerSource =
+  | "override" | "auto-majority" | "auto-teamlead"
+  /** Готівковий клієнт: менеджер приходить з УГОД CRM, а не з рахунків дебіторки. */
+  | "cash-invoice"
+  | "none";
 
 export interface ReceivableClient {
   clientKey: string;

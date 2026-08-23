@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   majorityByAmount, resolveOwner, activeTeamLead, sliceByManager,
   type ManagerFact, type OwnerRow,
+  resolveCashOwner,
 } from "./receivablesOwner.js";
 
 /**
@@ -136,4 +137,30 @@ test("#127 OVERRIDE Б'Є АВТО, і «свідомо нікого» ≠ «щ�
   assert.equal(explicit.source, "override", "«свідомо без відповідального» — не `none`");
   assert.notEqual(explicit.source, resolveOwner([], facts, null).source,
     "«ми не дивились» і «ми вирішили, що нікого» мусять розрізнятись");
+});
+
+/**
+ * #136e — ГОТІВКА НЕ ВИГАДУЄ МАЖОРИТАРА (чиста функція).
+ *
+ * 🔴 Спокуса була поставити `majorityId = managerId`, «щоб поле не пустувало».
+ * Тоді екран міг би сказати «замість звільненого X» про людину, яку ніхто не
+ * заміщав: мажоритар рахується по рахунках дебіторки, а готівковий менеджер
+ * приходить із УГОД CRM. Порожнє тут — ЧЕСНА відповідь, а не прогалина.
+ *
+ * 🧨 САБОТАЖ (виконано): повернути `majorityId: managerId` → червоніє друга
+ * перевірка; віддати `auto-majority` замість `cash-invoice` → червоніє перша.
+ */
+test("#136e ГОТІВКА: власне джерело, і жодного вигаданого мажоритара", () => {
+  const withMgr = resolveCashOwner(87);
+  assert.equal(withMgr.managerId, 87, "🔴 відомий менеджер загубився");
+  assert.equal(withMgr.source, "cash-invoice",
+    "🔴 готівку подано як мажоритара — правильне число під неправильним поясненням");
+  assert.equal(withMgr.majorityId, null,
+    "🔴 вигаданий мажоритар: екран скаже «замість звільненого X» про того, кого не заміщали");
+
+  const noMgr = resolveCashOwner(null);
+  assert.equal(noMgr.source, "none",
+    "🔴 готівка без менеджера має бути ЧЕСНИМ none, а не тихим 'cash-invoice' з порожнім імʼям");
+  assert.equal(noMgr.managerId, null, "🔴 менеджер узявся нізвідки");
+  assert.equal(noMgr.majorityId, null);
 });

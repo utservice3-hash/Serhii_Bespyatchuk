@@ -43,13 +43,41 @@ export interface ManagerFact {
   loginStates: boolean[];
 }
 
-export type OwnerSource = "override" | "auto-majority" | "auto-teamlead" | "none";
+export type OwnerSource = "override" | "auto-majority" | "auto-teamlead" | "cash-invoice" | "none";
 
 export interface Responsible {
   managerId: number | null;
   source: OwnerSource;
   /** Мажоритар ДО перевірки активності — щоб екран міг сказати «замість звільненого X». */
   majorityId: number | null;
+}
+
+/**
+ * 💵 ГОТІВКОВИЙ РЯДОК — менеджер уже ВІДОМИЙ, рахувати мажоритара нема чого.
+ *
+ * 🔴 ПРИВІД, ЗАМІРЯНИЙ НА ПРОДІ 23.08.2026. Рядок «МГЕР (готівка)» показував
+ * «без відповідального · немає менеджера в рахунках», а підсумок «По
+ * відповідальних» ТОЙ САМИЙ рядок зараховував Семенюку Дмитру — 224 917 ₴.
+ * Обидва числа бралися з одного рядка `receivables`: список читав `owner_source`
+ * (який лишався дефолтним `none`), підсумок — `manager_id` (заповнений із CRM).
+ * Підпис і сума розповідали різне про одну людину.
+ *
+ * 🔴 ОКРЕМЕ ЗНАЧЕННЯ, А НЕ `auto-majority`. Мажоритар рахується по рахунках
+ * дебіторки; готівковий менеджер приходить із УГОД CRM. Це різне походження, і
+ * підпис на екрані мусить це казати — інакше ми знову маємо правильне число під
+ * неправильним поясненням.
+ *
+ * ⚠️ `majorityId` тут ЗАВЖДИ `null`: жодного мажоритара не рахували, і вигадане
+ * значення змусило б екран сказати «замість звільненого X» про людину, яку
+ * ніхто не заміщав.
+ *
+ * Заміряно 23.08: cash-рядків 1, усі 11 його рахунків на одному менеджері;
+ * cash-рядків БЕЗ менеджера — 0, але гілка потрібна: `insertCashReceivables`
+ * ставить `null`, коли в жодної угоди немає виконавця.
+ */
+export function resolveCashOwner(managerId: number | null): Responsible {
+  if (managerId == null) return { managerId: null, source: "none", majorityId: null };
+  return { managerId, source: "cash-invoice", majorityId: null };
 }
 
 /** Явне рішення адміна. Сам факт наявності обʼєкта = override заданий. */

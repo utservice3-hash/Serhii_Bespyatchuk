@@ -11,13 +11,26 @@
  * ВІДПОВІДАЛЬНОГО в `receivables`. Суми не чіпає взагалі: переприв'язка людини
  * не сміє рухати гроші, і це перевіряє `#131`.
  *
- * ⚠️ Готівкові рядки (`insertCashReceivables`) сюди свідомо не потрапляють: у
- * синку вони вставляються ПІСЛЯ перерахунку, а роут відмовляє по їхньому ключу
- * явно. Причина не технічна — їх щосинку перебудовує CRM, тож будь-яке ручне
- * призначення там відкотилось би саме, а «кнопка, що не тримає» гірша за відсутню.
+ * 🔴 ГОТІВКОВІ РЯДКИ ТЕПЕР ТЕЖ ТУТ (23.08.2026). Раніше вони сюди не потрапляли
+ * ДВІЧІ: у синку вставлялись ПІСЛЯ перерахунку, та ще й `UPDATE` мав
+ * `AND source = 'sheet'`. Наслідок бачив власник на живому екрані: «МГЕР
+ * (готівка)» стояв «без відповідального», а в підсумку «По відповідальних» його
+ * 224 917 ₴ зараховувались Семенюку. Список читав `owner_source` (дефолтний
+ * `none`), підсумок — `manager_id` (заповнений із CRM).
+ *
+ * ⚠️ Прибрати лише фільтр `'sheet'` було б НЕДОСТАТНЬО — рядка ще не існувало б
+ * на момент виклику. Порядок і межа — дві причини одного бага, і лікуються разом.
+ *
+ * ⚠️ Ручне призначення для готівки і далі не приймається (роут відмовляє по
+ * їхньому ключу явно): їх щосинку перебудовує CRM, тож override відкотився б сам,
+ * а «кнопка, що не тримає» гірша за відсутню. Змінилось лише те, що підпис
+ * тепер каже правду про АВТОМАТИЧНОГО відповідального.
  */
 
-import { resolveOwner, type ManagerFact, type OwnerOverride, type OwnerRow, type OwnerSource } from "./receivablesOwner.js";
+import {
+  resolveOwner, resolveCashOwner,
+  type ManagerFact, type OwnerOverride, type OwnerRow, type OwnerSource, type Responsible,
+} from "./receivablesOwner.js";
 
 /** Мінімум, потрібний від `pg`: підходять і `Pool`, і `PoolClient` (усередині транзакції). */
 export interface Queryable {
@@ -102,10 +115,31 @@ export async function recomputeOwners(c: Queryable, clientKeys?: string[]): Prom
     byClient.set(row.client_key, a);
   }
 
-  const bySource: Record<OwnerSource, number> = { override: 0, "auto-majority": 0, "auto-teamlead": 0, none: 0 };
+  /**
+   * 🔴 ЦИКЛ ІДЕ ПО РЯДКАХ `receivables`, А НЕ ПО ГРУПАХ РАХУНКІВ. Раніше він
+   * перебирав рахунки й сподівався, що для кожної групи знайдеться рядок
+   * агрегату. Для готівки це не так: її рядок будується з УГОД, і «немає групи
+   * рахунків» тихо означало «нікого не оновили». Тепер перебираємо саме те, що
+   * оновлюємо, — і рядок без відповідника видно як `none`, а не як пропуск.
+   *
+   * `source` їде в `WHERE` разом із ключем: той самий `client_key` може мати і
+   * готівковий рядок, і рядок із 1С, і оновити треба саме свій.
+   */
+  const agg = await c.query<{ client_key: string; source: string; manager_id: number | null }>(
+    `SELECT client_key, source, manager_id FROM receivables
+      WHERE ($1::text[] IS NULL OR client_key = ANY($1))`,
+    [clientKeys ?? null]
+  );
+
+  const bySource: Record<OwnerSource, number> = {
+    override: 0, "auto-majority": 0, "auto-teamlead": 0, "cash-invoice": 0, none: 0,
+  };
   let clients = 0;
-  for (const [clientKey, rows] of byClient) {
-    const owner = resolveOwner(rows, facts, overrides.get(clientKey) ?? null);
+  for (const row of agg.rows) {
+    const owner: Responsible = row.source === "cash"
+      // Готівка: менеджер уже відомий із CRM, мажоритара не рахуємо.
+      ? resolveCashOwner(row.manager_id)
+      : resolveOwner(byClient.get(row.client_key) ?? [], facts, overrides.get(row.client_key) ?? null);
     bySource[owner.source]++;
     const res = await c.query(
       `UPDATE receivables
@@ -113,12 +147,12 @@ export async function recomputeOwners(c: Queryable, clientKeys?: string[]): Prom
               manager_name_raw = $3,
               owner_source = $4,
               majority_manager_id = $5
-        WHERE client_key = $1 AND source = 'sheet'`,
-      [clientKey, owner.managerId,
+        WHERE client_key = $1 AND source = $6`,
+      [row.client_key, owner.managerId,
        // Підпис — імʼя з `managers`, а не ПІБ із коментаря 1С: друге називає
        // ТВОРЦЯ рахунку, і в рядку клієнта воно казало б не про ту людину.
        owner.managerId != null ? (nameById.get(owner.managerId) ?? "") : "",
-       owner.source, owner.majorityId]
+       owner.source, owner.majorityId, row.source]
     );
     clients += res.rowCount ?? 0;
   }

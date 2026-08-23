@@ -262,11 +262,20 @@ export async function syncReceivables(): Promise<void> {
          limit?.limitDays ?? null, limit?.overdueDays ?? null]
       );
     }
-    // Відповідальний — ОДНИМ проходом, тим самим кодом, що й адмін-кнопка.
-    // Стоїть ДО готівки навмисно: готівкові рядки перебудовує CRM щосинку, тож
-    // ручне призначення там відкотилось би саме.
-    const owners = await recomputeOwners(client);
+    // 🔴 ГОТІВКА ПЕРШОЮ, ПЕРЕРАХУНОК ДРУГИМ — і порядок тут НЕ косметика
+    // (виправлено 23.08.2026). Було навпаки, тож `recomputeOwners` фізично не
+    // бачив готівкових рядків: їх ще не існувало. У парі з фільтром
+    // `AND source = 'sheet'` це давало рядок «МГЕР (готівка)» з підписом «без
+    // відповідального» і одночасним зарахуванням 224 917 ₴ Семенюку в підсумку.
+    //
+    // ⚠️ `owner_source` у самому `INSERT` навмисно НЕ ставимо, хоч це й виглядало
+    // б надійніше. Тоді значення рахувалося б у ДВОХ місцях, і одного дня вони
+    // розійшлися б — рівно те, від чого береже правило «жоден показник не має
+    // двох джерел». Єдиний писар — `recomputeOwners` нижче, у ТІЙ САМІЙ
+    // транзакції, тож зовні проміжного стану не існує.
     const cashClients = await insertCashReceivables(client);
+    // Відповідальний — ОДНИМ проходом, тим самим кодом, що й адмін-кнопка.
+    const owners = await recomputeOwners(client);
     await client.query("COMMIT");
     // 🟢 ОБСЯГ У ЛОЗІ, А НЕ ЛИШЕ «відпрацювала»: для джоби-імпортера «успіх» без
     // числа привезеного нічого не означає (правило з CLAUDE.md, урок `syncCalls`).
@@ -275,7 +284,8 @@ export async function syncReceivables(): Promise<void> {
       `Synced ${grouped.rows.length} клієнтів + ${cashClients} CRM cash clients from ${rows.length} 1C invoice rows ` +
       `(злито псевдонімами ${merged.rowCount ?? 0} рах.; менеджер рахунку: за угодою ${byDeal}, без менеджера ${priced.filter((p) => p.managerId == null).length}; ` +
       `відповідальний: вручну ${owners.bySource.override}, мажоритар ${owners.bySource["auto-majority"]}, ` +
-      `тімлід ${owners.bySource["auto-teamlead"]}, немає ${owners.bySource.none}).`
+      `тімлід ${owners.bySource["auto-teamlead"]}, готівка ${owners.bySource["cash-invoice"]}, ` +
+      `немає ${owners.bySource.none}).`
     );
     return;
   } catch (err) {
