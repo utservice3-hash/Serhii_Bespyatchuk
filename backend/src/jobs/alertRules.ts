@@ -105,18 +105,78 @@ export function formatResolved(title: string, since: Date): string {
   return `✅ <b>Відновилось:</b> ${title}\nІнцидент тривав ${humanDuration(Date.now() - since.getTime())}.`;
 }
 
-export type BootKind = "first" | "deploy" | "crash";
+export type BootKind = "first" | "deploy" | "crash" | "deploy-intent";
+
+/** Заявлений намір викату, ЗАБРАНИЙ цим стартом. `null` — забирати не було чого. */
+export interface ClaimedIntent {
+  /** Стеля часу. Намір без стелі — це прапорець, що застряг (урок «успіх за 0 мс»). */
+  expiresAt: Date;
+}
 
 /**
  * 🔴 КРАХ І ВИКАТ РОЗРІЗНЯЮТЬСЯ ЗА sha (рішення власника 21.08.2026). Рестарт із
  * НОВИМ sha — плановий викат, який ми щойно зробили самі; кричати про нього
  * означало б слати фальшиву аварію на КОЖЕН деплой, а алерт, що регулярно бреше,
  * вимикають — і разом із ним вимикають справжні.
+ *
+ * 🔴 НАШ ВЛАСНИЙ МЕТОД ДЕПЛОЮ sha НЕ МІНЯЄ (рішення власника 23.08.2026). Ми
+ * збираємо на місці й перезапускаємо процес (`kill -TERM` → респавн конвеєром),
+ * тож `prevSha === sha` — і кожен наш викат приходив як «АВАРІЯ». Тому ДРУГИЙ
+ * сигнал: заявлений НАМІР (`deploy_intent`), який ставиться ПЕРЕД kill.
+ *
+ * 🔴 НАМІР ЗАБИРАЄ РІВНО ОДИН СТАРТ — і це не деталь реалізації, а суть рішення.
+ * «Вікно, всередині якого мовчимо» мало б дірку: петля рестартів, що почалась у
+ * вікні викату, була б невидима — рівно те, що ми щойно пережили (16 рестартів
+ * поспіль). Забирає перший старт → другий і далі у тому самому вікні знову
+ * `crash`. Тобто лічильник, а не таймер.
+ *
+ * ⚠️ `now` — параметр, а не `new Date()` усередині: інакше гейт на протермінований
+ * намір довелося б писати очікуванням у реальному часі, тобто не писати взагалі.
  */
-export function classifyBoot(prevSha: string | null | undefined, sha: string): BootKind {
+export function classifyBoot(
+  prevSha: string | null | undefined,
+  sha: string,
+  claimed?: ClaimedIntent | null,
+  now: Date = new Date(),
+): BootKind {
   if (!prevSha) return "first";
-  return prevSha === sha ? "crash" : "deploy";
+  if (prevSha !== sha) return "deploy";
+  if (claimed && claimed.expiresAt.getTime() > now.getTime()) return "deploy-intent";
+  return "crash";
 }
 
 /** Скільки хвилин вважаємо старт «свіжим» — рівно стільки тривога й видима. */
 export const BOOT_FRESH_MIN = 60;
+
+/** Скільки хвилин живе намір викату за замовчуванням. */
+export const DEPLOY_INTENT_MIN = 15;
+
+/** Від скількох рестартів у вікні це вже ПЕТЛЯ, а не окремі падіння. */
+export const BOOT_LOOP_MIN = 3;
+
+export type BurstKind = "single" | "repeat" | "loop";
+
+export interface RestartBurst {
+  count: number;
+  spanMin: number;
+  kind: BurstKind;
+  /** Частота між подіями, разів/год. `null`, коли подія одна — в однієї точки частоти немає. */
+  perHour: number | null;
+}
+
+/**
+ * 🔴 «ВПАЛО РАЗ» І «ПАДАЄ ЩОХВИЛИНИ ВЖЕ 16 ХВИЛИН» — РІЗНІ АВАРІЇ (рішення
+ * власника 23.08.2026). Досі банер брав ОСТАННІЙ старт і тільки його, тож петля
+ * з 16 рестартів виглядала точно так само, як одиничний рестарт: той самий
+ * заголовок, той самий текст. Заміряно на проді 23.08: `app_boot` id 9…24 —
+ * 16 стартів за 16 хвилин, рівно раз на хвилину, і жодного слова про це на екрані.
+ *
+ * ⚠️ `perHour` рахується по ІНТЕРВАЛАХ (`count - 1`), а не по подіях: 16 подій за
+ * 16 хв — це 15 проміжків, тобто 56/год, а не 60. Різниця мала, але «частота»,
+ * порахована по точках, завищує тим сильніше, чим коротше вікно.
+ */
+export function summarizeRestarts(count: number, spanMin: number): RestartBurst {
+  const kind: BurstKind = count >= BOOT_LOOP_MIN ? "loop" : count === 2 ? "repeat" : "single";
+  const perHour = count >= 2 && spanMin > 0 ? Math.round(((count - 1) / spanMin) * 60) : null;
+  return { count, spanMin, kind, perHour };
+}

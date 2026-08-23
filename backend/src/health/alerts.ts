@@ -338,7 +338,7 @@ async function checkBuildStale(): Promise<Alert[]> {
  * `isPointEvent` у поштарі): «✅ рестарт відновився» — беззмістовна фраза.
  */
 async function checkAppBoot(): Promise<Alert[]> {
-  const { BOOT_FRESH_MIN } = await import("../jobs/appBoot.js");
+  const { BOOT_FRESH_MIN, summarizeRestarts } = await import("../jobs/appBoot.js");
   const r = await pool.query<{ id: string; kind: string; booted_at: Date; short_sha: string;
     prev_booted_at: Date | null; age_min: number }>(
     `SELECT id, kind, booted_at, short_sha, prev_booted_at,
@@ -346,15 +346,53 @@ async function checkAppBoot(): Promise<Alert[]> {
        FROM app_boot ORDER BY booted_at DESC LIMIT 1`);
   const b = r.rows[0];
   if (!b || b.kind !== "crash" || Number(b.age_min) > BOOT_FRESH_MIN) return [];
+
+  /**
+   * 🔴 СКІЛЬКИ ЇХ БУЛО — окремим запитом, бо останній рядок цього не знає.
+   * Вікно те саме, що й видимість тривоги: питання «чи це триває» має ту саму
+   * межу, що й питання «чи це свіже».
+   */
+  const w = await pool.query<{ n: string; first_at: Date | null; span_min: number | null }>(
+    `SELECT count(*) AS n, min(booted_at) AS first_at,
+            EXTRACT(EPOCH FROM (max(booted_at) - min(booted_at)))/60 AS span_min
+       FROM app_boot
+      WHERE kind = 'crash' AND booted_at > now() - ($1 || ' minutes')::interval`,
+    [BOOT_FRESH_MIN]);
+  const burst = summarizeRestarts(Number(w.rows[0]?.n ?? 1), Number(w.rows[0]?.span_min ?? 0));
+
   const lived = b.prev_booted_at
     ? Math.round((new Date(b.booted_at).getTime() - new Date(b.prev_booted_at).getTime()) / 60000)
     : null;
+
+  /**
+   * 🔴 ПЕТЛЯ — ЦЕ СТАН, ЩО ТРИВАЄ, А ОДИНИЧНИЙ РЕСТАРТ — ПОДІЯ, ЩО СТАЛАСЬ.
+   * Тому й `id` різні: `app:restart:<n>` ловиться `isPointEvent` (відбою немає,
+   * бо «✅ рестарт відновився» — беззмістовно), а `app:restart-loop` під нього
+   * НЕ підпадає навмисно — «✅ петля рестартів припинилась» це справжня новина,
+   * і її треба сказати. Стабільний `id` заразом не дає слати новий алерт на
+   * кожен оберт петлі.
+   */
+  if (burst.kind === "loop") {
+    return [{
+      id: "app:restart-loop", severity: "critical",
+      title: "ПЕТЛЯ РЕСТАРТІВ — застосунок падає й піднімається знову",
+      detail: `${burst.count} рестартів без викату за ${Math.round(burst.spanMin)} хв`
+        + (burst.perHour != null ? ` (~${burst.perHour}/год)` : "")
+        + `, останній ${Math.round(Number(b.age_min))} хв тому на коді ${b.short_sha}.`
+        + " Це НЕ одиничне падіння: процес не тримається.",
+      action: "Скопіювати лог поза шлях ротації ПЕРШОЮ дією. Перевірити, чи не піднято ДРУГИЙ"
+        + " процес (хост убиває зайвий node за 1-2 хв) і чи немає UNCAUGHT/OOM перед стартами.",
+      since: ISO(w.rows[0]?.first_at ?? b.booted_at),
+    }];
+  }
+
   return [{
     id: `app:restart:${b.id}`, severity: "critical",
     title: "Застосунок перезапустився без викату",
     detail: `Процес піднявся ${Math.round(Number(b.age_min))} хв тому на ТОМУ САМОМУ коді (${b.short_sha}) — `
       + `тобто це не деплой, а падіння з респавном.`
       + (lived != null ? ` Попередній процес прожив ${lived} хв.` : "")
+      + (burst.count > 1 ? ` За останню годину таких рестартів ${burst.count}.` : "")
       + " Причина в лозі ДО моменту старту.",
     action: "Скопіювати лог поза шлях ротації ПЕРШОЮ дією, далі шукати UNCAUGHT/OOM перед стартом.",
     since: ISO(b.booted_at),

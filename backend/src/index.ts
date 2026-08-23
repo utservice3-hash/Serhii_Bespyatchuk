@@ -179,6 +179,15 @@ app.get("/api/health", async (_req, res) => {
     const dc = await pool.query<{ ran_at: Date; warnings: number }>(
       `SELECT ran_at, warnings FROM data_check_state WHERE id = 1`
     ).catch(() => ({ rows: [] as { ran_at: Date; warnings: number }[] }));
+    // 🔴 ЧИНЕ ВІКНО ВИКАТУ — видиме, бо саме воно ГЛУШИТЬ тривогу про рестарт.
+    // Механізм, що вимикає сигналізацію і сам себе не показує, — це той самий
+    // «гудок від'єднаний»: поки намір висить, аварію не буде видно, і про це
+    // треба знати, дивлячись на health, а не читаючи код.
+    const di = await pool.query<{ expires_at: Date; note: string | null }>(
+      `SELECT expires_at, note FROM deploy_intent
+        WHERE consumed_at IS NULL AND expires_at > now()
+        ORDER BY created_at DESC LIMIT 1`
+    ).catch(() => ({ rows: [] as { expires_at: Date; note: string | null }[] }));
     res.json({
       ok: true,
       sync: {
@@ -203,6 +212,11 @@ app.get("/api/health", async (_req, res) => {
       // це мовчав — знав тільки те, що процес прочитав на старті.
       buildOnDisk: buildIsStale() ? onDiskVersion() : null,
       buildStale: buildIsStale(),
+      // Заявлений намір викату: поки він чинний, ПЕРШИЙ старт не вважається аварією.
+      // `null` — наміру немає, тобто будь-який рестарт зараз кричатиме, як і має.
+      deployIntent: di.rows[0]
+        ? { expiresAt: di.rows[0].expires_at, note: di.rows[0].note }
+        : null,
       // 🔔 ЧИ ПІДКЛЮЧЕНИЙ ГУДОК. Аварія 10.08.2026: вартовий свіжості СПРАЦЮВАВ і
       // 15 годин слав алерти в `sendAdminAlert`, який мовчки виходив — у `.env`
       // немає ні TELEGRAM_BOT_TOKEN, ні TELEGRAM_ADMIN_IDS. Про аварію двічі

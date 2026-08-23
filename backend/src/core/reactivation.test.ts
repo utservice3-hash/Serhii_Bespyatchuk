@@ -753,6 +753,76 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       await c.query(`DELETE FROM client_key_alias WHERE alias_key='синкаліас'`);
       await c.query(`TRUNCATE receivables`); await c.query(`TRUNCATE receivable_invoices`);
     });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 🔌 НАМІР ВИКАТУ ЗАБИРАЄ РІВНО ОДИН СТАРТ (#135d) — проти СПРАВЖНЬОЇ БД.
+    //
+    // 🔴 Чисті гейти `#135`/`#135b`/`#135c` перевіряють РІШЕННЯ (`classifyBoot`),
+    // але одноразовість живе не в них, а в атомарному `UPDATE … RETURNING`. Саме
+    // вона закриває дірку «краш усередині вікна викату», заради якої власник і
+    // обрав лічильник замість таймера. Перевіряти її без БД неможливо в принципі.
+    // ─────────────────────────────────────────────────────────────────────────
+    await t.test("#135d НАМІР ВИКАТУ ОДНОРАЗОВИЙ: перший старт викат, другий — аварія", async () => {
+      const { recordBoot } = await import("../jobs/appBoot.js");
+      const { buildVersion } = await import("../version.js");
+      const { sha } = buildVersion();
+
+      const reset = async () => {
+        await c.query(`TRUNCATE app_boot`);
+        await c.query(`TRUNCATE deploy_intent`);
+        // Попередній старт із ТИМ САМИМ sha — саме та ситуація, що дає `crash`
+        // без наміру. Інакше перевірка звелась би до тривіального `deploy`.
+        await c.query(`INSERT INTO app_boot (sha, short_sha, kind, booted_at)
+                       VALUES ($1, 'prev', 'crash', now() - interval '5 minutes')`, [sha]);
+      };
+
+      // ── 1. ЧИННИЙ НАМІР: перший старт мовчить, ДРУГИЙ у тому ж вікні — ні.
+      await reset();
+      await c.query(`INSERT INTO deploy_intent (expires_at, note, created_by)
+                     VALUES (now() + interval '15 minutes', 'гейт #135d', 'test')`);
+
+      const first = await recordBoot();
+      assert.ok(first, "🔴 recordBoot нічого не повернув — журнал стартів не ведеться");
+      assert.equal(first.kind, "deploy-intent",
+        "🔴 заявлений викат прийшов як аварія — банер знову кричатиме на кожному деплої");
+
+      const second = await recordBoot();
+      assert.ok(second);
+      assert.equal(second.kind, "crash",
+        "🔴 ДРУГИЙ старт у вікні наміру теж визнано викатом — це і є дірка, "
+        + "заради якої обрано лічильник замість таймера: петля всередині деплою стала б невидимою");
+
+      // Намір справді забраний, і видно КИМ.
+      const di = (await c.query<{ consumed_at: Date | null; consumed_boot_id: string | null }>(
+        `SELECT consumed_at, consumed_boot_id FROM deploy_intent`)).rows;
+      assert.equal(di.length, 1, "🔴 наміри розмножились");
+      assert.ok(di[0].consumed_at, "🔴 намір не позначено забраним — наступний старт забрав би його вдруге");
+      assert.equal(Number(di[0].consumed_boot_id), first.id,
+        "🔴 намір не вказує на старт, що його забрав — аудит викату порожній");
+
+      // 🔴 ДЗЕРКАЛО МІГРАЦІЇ: `deploy-intent` реально ДОЇХАВ у CHECK таблиці.
+      // `CREATE TABLE IF NOT EXISTS` на живій базі не робить нічого, тож без
+      // окремого ALTER цей INSERT падав би на обмеженні — мовчки, вже в проді.
+      const kinds = (await c.query<{ kind: string }>(`SELECT kind FROM app_boot ORDER BY id`)).rows.map((x) => x.kind);
+      assert.ok(kinds.includes("deploy-intent"),
+        "🔴 у журналі немає жодного 'deploy-intent' — CHECK не розширено, міграція не доїхала");
+
+      // ── 2. ПРОТЕРМІНОВАНИЙ НАМІР: забирається, але НЕ глушить.
+      await reset();
+      await c.query(`INSERT INTO deploy_intent (expires_at, note, created_by)
+                     VALUES (now() - interval '1 minute', 'мертвий намір', 'test')`);
+      const stale = await recordBoot();
+      assert.ok(stale);
+      assert.equal(stale.kind, "crash",
+        "🔴 мертвий намір усе ще глушить аварію — прапорець без стелі, той самий клас, що «успіх за 0 мс»");
+      const consumed = (await c.query<{ consumed_at: Date | null }>(
+        `SELECT consumed_at FROM deploy_intent`)).rows[0];
+      assert.ok(consumed.consumed_at,
+        "🔴 протермінований намір лишився в черзі — він забрав би НАСТУПНИЙ, уже справжній старт");
+
+      await c.query(`TRUNCATE app_boot`);
+      await c.query(`TRUNCATE deploy_intent`);
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();

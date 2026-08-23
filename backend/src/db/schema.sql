@@ -2042,6 +2042,44 @@ CREATE TABLE IF NOT EXISTS app_boot (
 );
 CREATE INDEX IF NOT EXISTS idx_app_boot_at ON app_boot(booted_at DESC);
 
+-- 🔴 РОЗШИРЕННЯ CHECK ОКРЕМИМ ОПЕРАТОРОМ, А НЕ ПРАВКОЮ CREATE TABLE ВИЩЕ.
+-- `CREATE TABLE IF NOT EXISTS` на живій базі не робить НІЧОГО — таблиця вже є, і
+-- новий варіант `kind` мовчки не доїхав би, а `INSERT` падав би на обмеженні.
+-- Той самий клас, що `ON CONFLICT DO NOTHING`, який три доби друкував «Migration
+-- applied» і не застосовував нічого.
+ALTER TABLE app_boot DROP CONSTRAINT IF EXISTS app_boot_kind_check;
+ALTER TABLE app_boot ADD CONSTRAINT app_boot_kind_check
+  CHECK (kind IN ('first', 'deploy', 'crash', 'deploy-intent'));
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- НАМІР ВИКАТУ — щоб наш власний деплой перестав приходити як «АВАРІЯ».
+--
+-- 🔴 ПРИВІД (23.08.2026). Наш метод деплою sha НЕ МІНЯЄ: збірка на місці +
+-- `kill -TERM` + респавн конвеєром. Для `classifyBoot` це `prevSha === sha`,
+-- тобто «процес пішов і піднявся без нашої участі» — і кожен викат кричав
+-- аварією. Алерт, що бреше на кожному деплої, вимикають разом зі справжніми.
+--
+-- 🔴 ЧОМУ «ЗАБРАТИ ОДИН СТАРТ», А НЕ «МОВЧАТИ У ВІКНІ». Вікно тиші мало б дірку
+-- рівно там, де болить: петля рестартів, що почалась усередині викату, була б
+-- невидима. Намір ЗАБИРАЄТЬСЯ першим стартом (`consumed_at`), тож другий і далі
+-- у тому самому вікні знову класифікуються як `crash`.
+--
+-- 🔴 СТЕЛЯ ЧАСУ ОБОВʼЯЗКОВА. Намір, що не згорає, — це in-process прапорець без
+-- стелі, який 10.08.2026 коштував 14 год 52 хв простою: поки він стоїть, аварія
+-- невидима. `expires_at` перевіряється ПРИ КЛАСИФІКАЦІЇ, а не лише при вибірці.
+CREATE TABLE IF NOT EXISTS deploy_intent (
+  id BIGSERIAL PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  note TEXT,
+  created_by TEXT,
+  -- Момент, коли намір забрав старт. NULL = ще не забраний.
+  consumed_at TIMESTAMPTZ,
+  consumed_boot_id BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_deploy_intent_open
+  ON deploy_intent(created_at DESC) WHERE consumed_at IS NULL;
+
 -- ═════════════════════════════════════════════════════════════════════════════
 -- ПРИВІЛЕЇ РОЛЕЙ — ЗАВЖДИ В КІНЦІ ФАЙЛА.
 --
