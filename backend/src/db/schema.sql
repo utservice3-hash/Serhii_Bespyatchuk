@@ -1794,6 +1794,33 @@ UPDATE roles SET permissions = permissions || '{"merge_clients": true}'::jsonb
 UPDATE roles SET permissions = permissions - 'merge_clients'
  WHERE key IN ('ceo', 'financier');
 
+-- 🔗 СКЛЕЙКА В ДЕБІТОРЦІ — ОКРЕМЕ ПРАВО (рішення власника 22.08.2026, варіант A).
+--
+-- Чому не `merge_clients` і не `isAdminScope`, а третя межа: жодна з двох
+-- наявних не дорівнює тому, що просив власник. Заміряно в живій `roles`:
+--   isAdminScope  = {admin, ceo, financier, kvp, opdir} — зайвий ФІНАНСИСТ;
+--   merge_clients = {admin, kvp, opdir} + тімлід у своїй команді — бракує СЕО
+--                   і є тімлідська гілка, яку тут мати не має.
+-- Підганяти `admin_scope` було б скасуванням іншого рішення власника
+-- («ФІНАНСИСТ = РІВЕНЬ АДМІНА», 31.07.2026) у 50 місцях; правити `merge_clients`
+-- забрало б у тімлідів склейку на екрані «Клієнти» (рішення 04.08.2026).
+-- Тому: один РЕЄСТР псевдонімів, дві двері з різними межами.
+--
+-- 🔴 СТОЇТЬ ПІСЛЯ ВСІХ ТРЬОХ СИНКІВ РОЛЕЙ — з тієї самої причини, що й
+-- `merge_clients` вище: рядки синку копіюють `permissions` адміна ЦІЛКОМ, тож
+-- право, дане раніше, автоматично розтеклося б і на фінансиста. Зняття потрібне
+-- окремо, бо наступний прогін інакше знову скопіює його з admin.
+UPDATE roles SET permissions = permissions || '{"merge_receivables": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp');
+UPDATE roles SET permissions = permissions - 'merge_receivables'
+ WHERE key IN ('financier', 'hr', 'team_lead', 'manager');
+
+-- 🔗 Сирий ключ клієнта в рахунках дебіторки — дзеркально до `deals.client_key_raw`.
+-- Без нього склейка НЕОБОРОТНА: `revoke` не має звідки взяти вихідне значення.
+-- `client_key` = COALESCE(активний псевдонім, raw), як і в угодах.
+ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS client_key_raw TEXT;
+CREATE INDEX IF NOT EXISTS idx_receivable_invoices_raw ON receivable_invoices(client_key_raw);
+
 
 -- 2) БЕКФІЛ below_min для рядків, поданих ДО викату фічі (вони мають DEFAULT false).
 --

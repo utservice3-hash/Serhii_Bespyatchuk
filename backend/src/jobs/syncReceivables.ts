@@ -6,6 +6,7 @@ import { normalizeClientName } from "../utils/clientName.js";
 import { parseCsv } from "../utils/csv.js";
 import { loadReceivables1c, resolveManagerId, type Receivable1cRow } from "../core/receivables1c.js";
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
+import { RECOMPUTE_RECEIVABLES_SQL } from "./clientKeySql.js";
 
 // Cash ("готівка") clients tracked directly from CRM rather than the accounting
 // sheet: they pay cash, so their debt isn't in the безнал receivables file. We
@@ -210,17 +211,7 @@ export async function syncReceivables(): Promise<void> {
   // 🔴 ВІДПОВІДАЛЬНОГО ТУТ НЕ РАХУЄМО. Він проставляється нижче тим самим
   // `recomputeOwners`, яким користується адмін-роут, — щоб правило не жило двічі
   // і щоб «після синку» і «після кнопки» не могли розійтись у принципі.
-  const invByClient = new Map<string, { row: Receivable1cRow; managerId: number | null }[]>();
-  for (const p of priced) {
-    const a = invByClient.get(p.row.clientKey) ?? [];
-    a.push(p);
-    invByClient.set(p.row.clientKey, a);
-  }
-  const aggregates = [...invByClient.entries()].map(([clientKey, list]) => ({
-    clientKey,
-    clientName: list[0].row.clientName,
-    amount: list.reduce((s, p) => s + p.row.amount, 0),
-  }));
+
 
   const client = await pool.connect();
   try {
@@ -234,20 +225,40 @@ export async function syncReceivables(): Promise<void> {
       const serviceUrl = row.dealId != null ? `${config.kommo.baseUrl}/leads/detail/${row.dealId}` : null;
       await client.query(
         `INSERT INTO receivable_invoices
-           (client_key, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+           (client_key, client_key_raw, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note)
+         VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        // `client_key` = `client_key_raw` на вставці; реєстр псевдонімів
+        // застосовується наступним оператором, тим самим виразом, що й для угод.
         [row.clientKey, row.clientName, managerId, row.managerHint, row.invoiceNo, row.invoiceDate,
          row.amount, row.edrpou, serviceUrl, row.comment]
       );
     }
-    for (const entry of aggregates) {
-      const limit = limitsByKey.get(entry.clientKey);
+    // 🔗 СКЛЕЙКА КЛІЄНТІВ. Той самий реєстр `client_key_alias`, що й в угодах, і
+    // той самий вираз (`canonicalKeyExpr`), лише з іншим псевдонімом таблиці.
+    // Стоїть ПЕРЕД агрегатом: інакше злиті юрособи дали б два рядки на екрані.
+    const merged = await client.query(RECOMPUTE_RECEIVABLES_SQL);
+
+    // 🔴 АГРЕГАТ — ПОХІДНИЙ ВІД ТАБЛИЦІ, а не від памʼяті. Доти він будувався з
+    // розібраних рядків 1С, і склейка на нього не впливала б узагалі: злиті ключі
+    // існують лише ПІСЛЯ застосування реєстру вище. Тепер джерело одне — рахунки.
+    // Імʼя клієнта беремо в тієї юрособи, чий сирий ключ і є канонічним (тобто
+    // «переможця» злиття); якщо такої немає — будь-яке, аби не порожнє.
+    const grouped = await client.query<{ client_key: string; client_name: string; amount: string }>(
+      `SELECT ri.client_key,
+              COALESCE(MIN(ri.client_name) FILTER (WHERE ri.client_key_raw = ri.client_key),
+                       MIN(ri.client_name)) AS client_name,
+              SUM(ri.amount) AS amount
+         FROM receivable_invoices ri
+        GROUP BY ri.client_key`
+    );
+    for (const entry of grouped.rows) {
+      const limit = limitsByKey.get(entry.client_key);
       await client.query(
         `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         // Відповідальний лишається NULL до `recomputeOwners` нижче — у ТІЙ САМІЙ
         // транзакції, тож зовні проміжного стану не існує.
-        [entry.clientKey, entry.clientName, null, "", entry.amount,
+        [entry.client_key, entry.client_name, null, "", Number(entry.amount),
          limit?.limitDays ?? null, limit?.overdueDays ?? null]
       );
     }
@@ -261,8 +272,8 @@ export async function syncReceivables(): Promise<void> {
     // числа привезеного нічого не означає (правило з CLAUDE.md, урок `syncCalls`).
     const byDeal = priced.filter((p) => p.row.dealId != null && managerIdByDeal.get(p.row.dealId!) != null).length;
     console.log(
-      `Synced ${aggregates.length} клієнтів + ${cashClients} CRM cash clients from ${rows.length} 1C invoice rows ` +
-      `(менеджер рахунку: за угодою ${byDeal}, без менеджера ${priced.filter((p) => p.managerId == null).length}; ` +
+      `Synced ${grouped.rows.length} клієнтів + ${cashClients} CRM cash clients from ${rows.length} 1C invoice rows ` +
+      `(злито псевдонімами ${merged.rowCount ?? 0} рах.; менеджер рахунку: за угодою ${byDeal}, без менеджера ${priced.filter((p) => p.managerId == null).length}; ` +
       `відповідальний: вручну ${owners.bySource.override}, мажоритар ${owners.bySource["auto-majority"]}, ` +
       `тімлід ${owners.bySource["auto-teamlead"]}, немає ${owners.bySource.none}).`
     );

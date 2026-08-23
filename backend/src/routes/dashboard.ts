@@ -51,6 +51,7 @@ import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
+import { RECOMPUTE_RECEIVABLES_SQL } from "../jobs/clientKeySql.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -1816,9 +1817,13 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   if (auth.role === "manager") { params.push(auth.managerId); conds.push(`ri.manager_id = $${params.length}`); }
   else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
 
-  const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; due_date: string | null; inv_comment: string | null }>(
+  const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null }>(
     `SELECT ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
             ri.amount, ri.service_url, ri.note,
+            -- 🔗 Юрособа, з якої прийшов рахунок. Для злитого клієнта їх кілька,
+            -- і людина мусить бачити, ЩО саме всередині одного рядка — інакше
+            -- склейка виглядає як зникнення другої компанії.
+            ri.client_name AS entity_name, ri.client_key_raw AS entity_key,
             to_char(nn.due_date, 'YYYY-MM-DD') AS due_date, nn.comment AS inv_comment
      FROM receivable_invoices ri
      LEFT JOIN managers m ON m.id = ri.manager_id
@@ -1837,6 +1842,8 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
       note: x.note,
       dueDate: x.due_date,
       comment: x.inv_comment,
+      entityName: x.entity_name,
+      entityKey: x.entity_key,
     })),
   });
 });
@@ -2738,6 +2745,78 @@ dashboardRouter.put("/receivables/owner", async (req, res) => {
   }
   // Той самий перерахунок, що й у синку: інакше екран до 15 хв показував би старого.
   const r = await recomputeOwners(pool, [clientKey]);
+  res.json({ ok: true, recomputed: r.clients });
+});
+
+/**
+ * 🔗 СКЛЕЙКА КЛІЄНТІВ У ДЕБІТОРЦІ (рішення власника 22.08.2026, варіант A).
+ *
+ * Пише в ТОЙ САМИЙ реєстр `client_key_alias`, що й екран «Клієнти»: спільні
+ * тригер проти ланцюжків, `CHECK` на причину і `revoke`. Це не другий механізм —
+ * один реєстр, дві двері з різними межами.
+ *
+ * 🔴 МЕЖА ОКРЕМА, І ЦЕ НЕ ДУБЛЮВАННЯ. `merge_clients` не має СЕО і має тімлідську
+ * гілку; `isAdminScope` має зайвого ФІНАНСИСТА. Підганяти будь-яку з них означало б
+ * скасувати інше рішення власника — про адмінство фінансиста (31.07) або про
+ * тімлідів у «Клієнтах» (04.08). Тому третє право: `merge_receivables`.
+ *
+ * ⚠️ ВІДКІТ — СПІЛЬНИЙ (`POST /client-merge/revoke`), і він оновлює УГОДИ негайно,
+ * а дебіторку — на наступному синку (≤15 хв), бо вираз застосовується там.
+ * Другої кнопки відкоту тут навмисно немає: два відкоти до одного реєстру
+ * розійшлися б у поведінці швидше, ніж ми про це дізнались би.
+ */
+dashboardRouter.post("/receivables/merge", async (req, res) => {
+  const auth = req.auth!;
+  // Гейт — ПЕРШИЙ значущий оператор. Валідація тіла перед ним дала б 400 замість
+  // 403 і зламала б гарантію матриці «403 = спрацював гейт» (на цьому вже
+  // відкочували прод 04.08.2026).
+  if (!roleHasPerm(auth.roleKey, "merge_receivables")) {
+    return res.status(403).json({ error: "Обʼєднання в дебіторці доступне КВП, СЕО, Опер. директору та адміну" });
+  }
+  const alias = String(req.body?.alias ?? "").trim();
+  const canonical = String(req.body?.canonical ?? "").trim();
+  const reason = String(req.body?.reason ?? "").trim();
+  if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
+  if (!reason) return res.status(400).json({ error: "Причина обовʼязкова — реєстр без причини стає смітником" });
+
+  try {
+    await pool.query(
+      `INSERT INTO client_key_alias (alias_key, canonical_key, reason, evidence, approved_by)
+       VALUES ($1,$2,$3,$4::jsonb,$5)`,
+      [alias, canonical, reason.slice(0, 300),
+       JSON.stringify({ source: "receivables", approvedAt: new Date().toISOString().slice(0, 10) }), auth.userId]);
+  } catch (e) {
+    const msg = String((e as Error).message ?? e);
+    if (/ланцюжок заборонено/.test(msg)) return res.status(409).json({ error: msg });
+    if (/duplicate key/.test(msg)) return res.status(409).json({ error: "Такий псевдонім уже є в реєстрі" });
+    if (/alias_key <> canonical_key/.test(msg)) return res.status(400).json({ error: "Не можна зливати ключ сам із собою" });
+    throw e;
+  }
+
+  // Застосовуємо реєстр і перебудовуємо рядок — тим самим виразом, що й синк.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(RECOMPUTE_RECEIVABLES_SQL);
+    // Агрегат злитого клієнта: сума обох юросіб, ліміти лишаються від канонічного.
+    await client.query(`DELETE FROM receivables WHERE client_key IN ($1, $2) AND source = 'sheet'`, [alias, canonical]);
+    await client.query(
+      `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
+       SELECT ri.client_key,
+              COALESCE(MIN(ri.client_name) FILTER (WHERE ri.client_key_raw = ri.client_key), MIN(ri.client_name)),
+              NULL, '', SUM(ri.amount), NULL, NULL
+         FROM receivable_invoices ri
+        WHERE ri.client_key = $1
+        GROUP BY ri.client_key`,
+      [canonical]);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+  const r = await recomputeOwners(pool, [canonical]);
   res.json({ ok: true, recomputed: r.clients });
 });
 

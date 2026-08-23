@@ -287,6 +287,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager", "team_lead"] },
   { method: "DELETE", path: "/api/dashboard/receivables/owner/:clientKey", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead"] },
+  // 🔗 Склейка в дебіторці — окреме право `merge_receivables` = {admin, ceo, opdir, kvp}.
+  // ФІНАНСИСТ у deny СВІДОМО: він має `admin_scope` (рішення 31.07), але склейки
+  // в дебіторці власник йому не давав. Тімлід — теж ні; на екрані «Клієнти» його
+  // гілка (рішення 04.08) лишається недоторканою.
+  { method: "POST", path: "/api/dashboard/receivables/merge", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "GET", path: "/api/dashboard/regular-clients", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/repeat-client-history", cls: "GET",

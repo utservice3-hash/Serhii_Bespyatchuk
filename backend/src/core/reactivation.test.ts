@@ -628,6 +628,131 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       assert.equal((await c.query(`SELECT 1 FROM receivable_manager_override WHERE client_key='зпримiткою'`)).rowCount, 1);
       await c.query(`DELETE FROM receivable_manager_override WHERE client_key='зпримiткою'`);
     });
+
+    await t.test("#133 МЕЖА ПРАВА: merge_receivables — рівно {admin, ceo, opdir, kvp}", async () => {
+      // 🔴 ПЕРЕВІРЯЄМО МІГРАЦІЮ, А НЕ ЖИВІ ТУМБЛЕРИ. `permissions` адмін крутить
+      // щодня, тож строга звірка з продом стала б шумом; тут база піднята зі
+      // `schema.sql` З НУЛЯ, і питання рівно одне: чи роздала міграція право саме
+      // тим чотирьом. Це та сама пастка, на якій `merge_clients` двічі просочився
+      // в ceo/financier — синки ролей копіюють `permissions` адміна ЦІЛКОМ.
+      const got = (await c.query<{ key: string }>(
+        `SELECT key FROM roles WHERE (permissions->>'merge_receivables')::bool IS TRUE ORDER BY key`
+      )).rows.map((r) => r.key);
+      assert.deepEqual(got, ["admin", "ceo", "kvp", "opdir"],
+        `🔴 межа права поїхала: ${got.join(", ")}`);
+      // 🪞 ДЗЕРКАЛО, і воно тут ГОЛОВНЕ: фінансист має `admin_scope`, тож будь-яка
+      // спроба збудувати склейку на ньому мовчки дала б йому право. Перевіряємо
+      // ОБИДВА факти одночасно — інакше «фінансиста немає» зеленіло б і тоді,
+      // коли він просто не існує в базі.
+      const fin = (await c.query<{ a: boolean | null; m: boolean | null }>(
+        `SELECT (permissions->>'admin_scope')::bool AS a, (permissions->>'merge_receivables')::bool AS m
+           FROM roles WHERE key = 'financier'`)).rows[0];
+      assert.equal(fin?.a, true, "фінансист МАЄ admin_scope — інакше дзеркало нічого не доводить");
+      assert.notEqual(fin?.m, true, "🔴 фінансист дістав склейку в дебіторці");
+      const lead = (await c.query<{ m: boolean | null }>(
+        `SELECT (permissions->>'merge_receivables')::bool AS m FROM roles WHERE key = 'team_lead'`)).rows[0];
+      assert.notEqual(lead?.m, true, "🔴 тімлід дістав склейку в дебіторці");
+      // 🔗 А на екрані «Клієнти» тімлід склейку ЗБЕРІГАЄ — рішення 04.08.2026
+      // не скасовано. Без цього рядка коміт міг би тихо забрати її і там.
+      const leadClients = (await c.query<{ m: boolean | null }>(
+        `SELECT (permissions->>'merge_clients')::bool AS m FROM roles WHERE key = 'team_lead'`)).rows[0];
+      assert.notEqual(leadClients?.m, true, "тімлід і не мав merge_clients — його гілка окрема (mergeScope)");
+    });
+
+    await t.test("#130 СКЛЕЙКА: два ключі → ОДИН рядок, у розкритті обидві юрособи", async () => {
+      const { RECOMPUTE_RECEIVABLES_SQL } = await import("../jobs/clientKeySql.js");
+      const store = await import("./receivablesOwnerStore.js");
+      await c.query(`INSERT INTO receivable_invoices
+          (client_key, client_key_raw, client_name, manager_id, invoice_no, invoice_date, amount)
+        VALUES ('групакомпанійавтострада','групакомпанійавтострада','ГК АВТОСТРАДА ТОВ',901,'A1','2026-08-01',486400),
+               ('автострадавк','автострадавк','АВТОСТРАДА ВК',902,'A2','2026-08-02',1034500)`);
+      await c.query(`INSERT INTO receivables (client_key, client_name, amount, source) VALUES
+               ('групакомпанійавтострада','ГК АВТОСТРАДА ТОВ',486400,'sheet'),
+               ('автострадавк','АВТОСТРАДА ВК',1034500,'sheet')`);
+      const sumBefore = (await c.query<{ s: string }>(`SELECT SUM(amount) s FROM receivables`)).rows[0].s;
+      const rows = () => c.query<{ client_key: string }>(
+        `SELECT client_key FROM receivables WHERE client_key IN ('автострадавк','групакомпанійавтострада')`);
+      assert.equal((await rows()).rowCount, 2, "до склейки — два рядки");
+
+      // ── СКЛЕЙКА через ТОЙ САМИЙ реєстр, що й екран «Клієнти».
+      await c.query(`INSERT INTO client_key_alias (alias_key, canonical_key, reason)
+                     VALUES ('групакомпанійавтострада','автострадавк','одна компанія')`);
+      await c.query(RECOMPUTE_RECEIVABLES_SQL);
+      await c.query(`DELETE FROM receivables WHERE client_key IN ('групакомпанійавтострада','автострадавк') AND source='sheet'`);
+      await c.query(`INSERT INTO receivables (client_key, client_name, amount, source)
+        SELECT ri.client_key,
+               COALESCE(MIN(ri.client_name) FILTER (WHERE ri.client_key_raw = ri.client_key), MIN(ri.client_name)),
+               SUM(ri.amount), 'sheet'
+          FROM receivable_invoices ri WHERE ri.client_key = 'автострадавк' GROUP BY ri.client_key`);
+      const after = await rows();
+      assert.equal(after.rowCount, 1, "🔴 після склейки має лишитись ОДИН рядок");
+      assert.equal(after.rows[0].client_key, "автострадавк");
+
+      // 🔴 ЮРОСОБИ ВСЕРЕДИНІ ВИДНО. Без цього склейка читається як зникнення
+      // другої компанії, а не як обʼєднання.
+      const inside = await c.query<{ entity: string; raw: string }>(
+        `SELECT DISTINCT client_name AS entity, client_key_raw AS raw
+           FROM receivable_invoices WHERE client_key = 'автострадавк' ORDER BY 1`);
+      assert.equal(inside.rowCount, 2, "🔴 у розкритті мусять бути ОБИДВІ юрособи");
+      assert.deepEqual(inside.rows.map((x) => x.raw).sort(),
+        ["автострадавк", "групакомпанійавтострада"], "сирі ключі збережені — інакше відкіт неможливий");
+
+      // Σ не змінилась: склейка — це перегрупування, а не переказ грошей.
+      assert.equal((await c.query<{ s: string }>(`SELECT SUM(amount) s FROM receivables`)).rows[0].s, sumBefore,
+        "🔴 Σ боргу змінилась від склейки");
+
+      // ── 🪞 ВІДКІТ повертає ДВА рядки. Спільний `revoke` знімає псевдонім, і той
+      // САМИЙ вираз повертає `client_key` до `client_key_raw` — без бекапу.
+      await c.query(`UPDATE client_key_alias SET revoked_at = now() WHERE alias_key='групакомпанійавтострада'`);
+      await c.query(RECOMPUTE_RECEIVABLES_SQL);
+      await c.query(`DELETE FROM receivables WHERE client_key IN ('групакомпанійавтострада','автострадавк') AND source='sheet'`);
+      await c.query(`INSERT INTO receivables (client_key, client_name, amount, source)
+        SELECT ri.client_key, MIN(ri.client_name), SUM(ri.amount), 'sheet'
+          FROM receivable_invoices ri
+         WHERE ri.client_key IN ('групакомпанійавтострада','автострадавк') GROUP BY ri.client_key`);
+      assert.equal((await rows()).rowCount, 2, "🔴 відкіт не повернув два рядки — склейка НЕОБОРОТНА");
+      assert.equal((await c.query<{ s: string }>(`SELECT SUM(amount) s FROM receivables`)).rows[0].s, sumBefore,
+        "🔴 Σ поїхала після відкоту");
+      await store.recomputeOwners(c, ["автострадавк", "групакомпанійавтострада"]);
+      await c.query(`DELETE FROM client_key_alias WHERE alias_key='групакомпанійавтострада'`);
+      await c.query(`DELETE FROM receivable_invoices WHERE invoice_no IN ('A1','A2')`);
+      await c.query(`DELETE FROM receivables WHERE client_key IN ('групакомпанійавтострада','автострадавк')`);
+    });
+
+    await t.test("#129 OVERRIDE І СКЛЕЙКА ПЕРЕЖИВАЮТЬ СИНК (TRUNCATE обох таблиць)", async () => {
+      const { RECOMPUTE_RECEIVABLES_SQL } = await import("../jobs/clientKeySql.js");
+      const store = await import("./receivablesOwnerStore.js");
+      await c.query(`INSERT INTO client_key_alias (alias_key, canonical_key, reason)
+                     VALUES ('синкаліас','синкканон','перевірка виживання')`);
+      await c.query(`INSERT INTO receivable_manager_override (client_key, manager_id, note)
+                     VALUES ('синкканон',902,'закріплено вручну')`);
+
+      // ── ІМІТАЦІЯ СИНКУ: обидві таблиці зносяться повністю, як щопівгодини в проді.
+      await c.query(`TRUNCATE receivables`);
+      await c.query(`TRUNCATE receivable_invoices`);
+      await c.query(`INSERT INTO receivable_invoices
+          (client_key, client_key_raw, client_name, manager_id, invoice_no, invoice_date, amount)
+        VALUES ('синкаліас','синкаліас','Юрособа А',901,'S1','2026-08-01',900),
+               ('синкканон','синкканон','Юрособа Б',901,'S2','2026-08-02',100)`);
+      await c.query(RECOMPUTE_RECEIVABLES_SQL);
+      await c.query(`INSERT INTO receivables (client_key, client_name, amount, source)
+        SELECT ri.client_key, MIN(ri.client_name), SUM(ri.amount), 'sheet'
+          FROM receivable_invoices ri GROUP BY ri.client_key`);
+      await store.recomputeOwners(c);
+
+      const row = (await c.query<{ client_key: string; manager_id: number | null; owner_source: string; amount: string }>(
+        `SELECT client_key, manager_id, owner_source, amount FROM receivables`)).rows;
+      assert.equal(row.length, 1, "🔴 склейка не пережила TRUNCATE — два рядки замість одного");
+      assert.equal(row[0].client_key, "синкканон");
+      assert.equal(Number(row[0].amount), 1000, "сума обох юросіб");
+      // 🔴 Мажоритар тут — 901 (900 ₴ проти 100 ₴). Якщо override не пережив синк,
+      // відповідальним стане саме він, і гейт назве це поіменно.
+      assert.equal(row[0].manager_id, 902, "🔴 override не пережив TRUNCATE — авто перебило ручне призначення");
+      assert.equal(row[0].owner_source, "override");
+      await c.query(`DELETE FROM receivable_manager_override WHERE client_key='синкканон'`);
+      await c.query(`DELETE FROM client_key_alias WHERE alias_key='синкаліас'`);
+      await c.query(`TRUNCATE receivables`); await c.query(`TRUNCATE receivable_invoices`);
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();

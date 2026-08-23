@@ -50,6 +50,13 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/dashboard/client-merge": "merge_clients — право КВП/ОД/admin; financier і ceo його не мають",
   "POST /api/dashboard/client-merge/revoke": "merge_clients — те саме",
   "POST /api/dashboard/client-manager": "merge_clients — те саме",
+  // 🔗 Склейка в ДЕБІТОРЦІ — окреме право `merge_receivables` = {admin, ceo, opdir, kvp}
+  // (рішення власника 22.08.2026, варіант A). `financier` має `admin_scope`, але
+  // склейки в дебіторці власник йому не давав — отже це відмова по ПРАВУ, і вона
+  // мусить бути названа, інакше #11b не відрізнить політику від зламаної проби.
+  // `ceo` тут НЕМАЄ навмисно: на відміну від `client-merge`, він це право МАЄ,
+  // тож запис був би мертвим — а мертвий запис глушить справжню розбіжність (#15e).
+  "POST /api/dashboard/receivables/merge": "merge_receivables — право КВП/СЕО/ОД/admin; financier його не має",
 };
 
 const GHOST = "__zzz_neisnuyucha_cil_9999__";
