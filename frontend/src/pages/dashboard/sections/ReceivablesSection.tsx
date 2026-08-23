@@ -22,8 +22,13 @@ import { CommentField } from "../../../components/CommentField";
  */
 function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
   if (c.ownerSource === "none") {
+    // 🔴 ФОРМУЛЮВАННЯ НЕЙТРАЛЬНЕ ЗА РОДОМ І ВІДМІНКОМ, і це не косметика.
+    // Перша редакція казала «${імʼя} — звільнений, команди немає» і на живому
+    // екрані дала «Гаркушина Юлія Олексіївна — звільненОГО»: узгодити рід із ПІБ
+    // у коді неможливо. Імʼя після двокрапки лишається в називному, і підпис
+    // читається однаково правильно для будь-кого. Спіймав СКРІНШОТ, не тест.
     const why = c.majorityName
-      ? `${c.majorityName} — звільнений, команди немає`
+      ? `мажоритар не в активних: ${c.majorityName} · команди немає`
       : "немає менеджера в рахунках";
     return (
       <span>
@@ -35,7 +40,9 @@ function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
   const mark =
     c.ownerSource === "override" ? { icon: "📌", hint: "призначено вручну" }
     : c.ownerSource === "auto-teamlead"
-      ? { icon: "👥", hint: c.majorityName ? `тімлід — замість звільненого ${c.majorityName}` : "тімлід команди" }
+      ? { icon: "👥", hint: c.majorityName
+          ? `тімлід команди · мажоритар не в активних: ${c.majorityName}`
+          : "тімлід команди" }
       : { icon: "", hint: "найбільша сума боргу по клієнту" };
   return (
     <span title={mark.hint}>
@@ -127,6 +134,12 @@ export function ReceivablesSection({
   const renderInvoices = (clientKey: string, colSpan: number) => {
     if (openKey !== clientKey) return null;
     const inv = invCache[clientKey];
+    // Юрособи всередині клієнта. Кілька — означає, що клієнта ОБʼЄДНАЛИ, і це
+    // треба сказати вголос: інакше на екрані один рядок там, де компанії дві.
+    const entities = Array.isArray(inv)
+      ? [...new Set(inv.map((x) => x.entityName).filter((n): n is string => !!n))]
+      : [];
+    const merged = entities.length > 1;
     return (
       <tr>
         <td colSpan={colSpan} style={{ background: "var(--bg-subtle, rgba(127,127,127,0.05))", padding: "10px 12px 14px 28px" }}>
@@ -139,9 +152,20 @@ export function ReceivablesSection({
               <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 6px" }}>
                 📅 Постав дедлайн оплати по рахунку — якщо мине, а оплата не надійде, менеджеру автоматично створиться задача «отримати оплату».
               </p>
+              {merged && (
+                /* 🔗 ОБʼЄДНАНИЙ КЛІЄНТ. Без цього рядка склейка читається як
+                   зникнення другої компанії: на екрані один рядок, а юросіб дві.
+                   Колонка «Юрособа» показується ЛИШЕ тут — у звичайного клієнта
+                   вона повторювала б його ж назву в кожному рядку. */
+                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
+                  🔗 Обʼєднаний клієнт — усередині {entities.length} юрособи:{" "}
+                  <b style={{ color: "var(--text)" }}>{entities.join(" · ")}</b>
+                </p>
+              )}
               <table className="data-table compact" style={{ fontSize: 12, minWidth: 680 }}>
                 <thead>
                   <tr>
+                    {merged && <th style={{ textAlign: "left" }}>Юрособа</th>}
                     <th style={{ textAlign: "left" }}>Рахунок №</th>
                     <th>Дата</th>
                     <th style={{ textAlign: "right" }}>Сума</th>
@@ -155,6 +179,11 @@ export function ReceivablesSection({
                     const overdue = x.dueDate != null && x.dueDate < today;
                     return (
                       <tr key={i}>
+                        {merged && (
+                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 11.5 }}>
+                            {x.entityName ?? "—"}
+                          </td>
+                        )}
                         <td style={{ textAlign: "left", fontWeight: 600 }}>{x.invoiceNo ?? "—"}</td>
                         <td>{x.invoiceDate ? new Date(x.invoiceDate).toLocaleDateString("uk-UA") : "—"}</td>
                         <td style={{ textAlign: "right", fontWeight: 600 }} title={formatAmountFull(x.amount)}>{formatAmount(x.amount)}</td>
@@ -266,7 +295,7 @@ export function ReceivablesSection({
                   <tr>
                     <th style={{ textAlign: "center", width: 36 }}>#</th>
                     <th style={{ textAlign: "left" }}>Клієнт</th>
-                    <th style={{ textAlign: "left" }}>Менеджер</th>
+                    <th style={{ textAlign: "left" }}>Відповідальний</th>
                     <th style={{ textAlign: "right" }}>Сума боргу</th>
                     <th style={{ textAlign: "center" }}>Днів без оплати</th>
                     <th style={{ textAlign: "center" }}>Ліміт</th>
@@ -325,12 +354,12 @@ export function ReceivablesSection({
 
           {receivablesData.length > 1 && (
             <div className="chart-card" style={{ marginBottom: 16 }}>
-              <h2 className="chart-title">По менеджерах</h2>
+              <h2 className="chart-title">По відповідальних</h2>
               <div style={{ overflowX: "auto" }}>
                 <table className="data-table compact" style={{ minWidth: 420 }}>
                   <thead>
                     <tr>
-                      <th style={{ textAlign: "left" }}>Менеджер</th>
+                      <th style={{ textAlign: "left" }}>Відповідальний</th>
                       <th style={{ textAlign: "right" }}>Борг</th>
                       <th style={{ textAlign: "right" }}>Клієнтів</th>
                       <th style={{ textAlign: "right" }}>Прострочено</th>

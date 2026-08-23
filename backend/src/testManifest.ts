@@ -68,6 +68,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/clientPlansRoster.test.js",
   "jobs/alertPush.test.js",
   "jobs/receivables1c.test.js",
+  "routes/receivablesContract.test.js",
   "core/receivablesOwner.test.js",
   "routes/uiEntry.test.js",
   "core/priorPaid.test.js",
@@ -601,4 +602,7 @@ export const MANIFEST_TESTS: string[] = [
   "#133 МЕЖА ПРАВА: merge_receivables — рівно {admin, ceo, opdir, kvp}",
   "#130 СКЛЕЙКА: два ключі → ОДИН рядок, у розкритті обидві юрособи",
   "#129 OVERRIDE І СКЛЕЙКА ПЕРЕЖИВАЮТЬ СИНК (TRUNCATE обох таблиць)",
+  "#134 ЮРОСОБИ обʼєднаного клієнта доходять від SQL до екрана",
+  "#134b 🪞 ДЗЕРКАЛО: колонка «Юрособа» — лише для ОБʼЄДНАНОГО клієнта",
+  "#134c ПІДПИСИ ВІДПОВІДАЛЬНОГО НЕЙТРАЛЬНІ ЗА РОДОМ",
 ];

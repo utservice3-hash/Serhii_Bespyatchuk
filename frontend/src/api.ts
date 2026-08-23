@@ -1250,6 +1250,9 @@ export interface ReceivableInvoice {
   note: string | null;
   dueDate: string | null;
   comment: string | null;
+  /** Юрособа, з якої прийшов рахунок. Для обʼєднаного клієнта їх кілька. */
+  entityName: string | null;
+  entityKey: string | null;
 }
 
 export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoice[]> {

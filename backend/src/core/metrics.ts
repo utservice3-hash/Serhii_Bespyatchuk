@@ -2482,7 +2482,12 @@ export async function receivablesByClient(s: SnapshotScope): Promise<ClientDebt[
     params
   );
   return r.rows.map((x) => ({
-    managerId: x.manager_id, managerName: x.manager_name ?? "Без менеджера", clientKey: x.client_key, clientName: x.client_name,
+    managerId: x.manager_id,
+    // «Без ВІДПОВІДАЛЬНОГО», а не «без менеджера»: у рядку клієнта стоїть саме
+    // відповідальний, і два різні слова про одне й те саме на одному екрані
+    // читаються як два різні стани. `receivablesByManager` (/teams) лишається
+    // «Без менеджера» — там і справді про менеджера, і ту межу ми не рухаємо.
+    managerName: x.manager_name ?? "Без відповідального", clientKey: x.client_key, clientName: x.client_name,
     amount: Number(x.amount), limitDays: x.limit_days, overdueDays: x.overdue_days,
     ownerSource: x.owner_source ?? "none", majorityName: x.majority_name,
   }));
