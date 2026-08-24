@@ -349,16 +349,18 @@ dashboardRouter.get("/overview", async (req, res) => {
   //   paidOnly  = етап 9 без 142 у періоді → received = success ⊎ paidOnly (disjoint).
   //   expected  = етап 8 «Очікуємо оплату» (НЕ «Виставлення рахунку»!).
   const moneyScope: money.MoneyScope = { from, to, managerId, teamId };
-  const [receivedTot, successTot, paidOnlyTot, expectedTot,
-         receivedTeamAgg, receivedMgrAgg, awaitingNow] = await Promise.all([
-    money.receivedMoney(moneyScope),
-    money.successMoney(moneyScope),
-    money.paidOnlyMoney(moneyScope),
-    money.expectedMoney(moneyScope),
+  // ⚡ Чотири тотали — ОДНИМ проходом (`moneyTotals`), а не чотирма запитами.
+  // Означення грошей не змінилось ані на символ: та сама `sourceSql`, ті самі
+  // умови скоупу; `received` і далі агрегується по обʼєднанню success+paidOnly,
+  // а не додається як два числа. Рівність двох форм на живих даних — гейт #137.
+  const [totals, receivedTeamAgg, receivedMgrAgg, awaitingNow] = await Promise.all([
+    money.moneyTotals(moneyScope),
     money.receivedByTeam(moneyScope),
     money.receivedByMgr(moneyScope),
     money.awaitingNowSnapshot(moneyScope),
   ]);
+  const receivedTot = totals.received, successTot = totals.success;
+  const paidOnlyTot = totals.paidOnly, expectedTot = totals.expected;
 
   // «Отримані кошти» по командах / менеджерах — анкеровані, дедуп (див. moneyScope).
   const byTeam = {
@@ -382,9 +384,12 @@ dashboardRouter.get("/overview", async (req, res) => {
   // КРОК 9: загальний борг = core/metrics.receivablesTotal (LEFT JOIN — включає
   // неатрибутований борг при адмін-розрізі; скоуп по менеджеру/команді природно
   // виключає null-рядки, тож роль-скоуп не змінюється).
-  const receivablesTotalValue = await metrics.receivablesTotal({ managerId, teamId });
-  // Готівкова дебіторка з CRM — ОКРЕМА позначка (НЕ в основному тоталі, який 1:1 з таблицею).
-  const receivablesCashValue = await metrics.receivablesCash({ managerId, teamId });
+  // ⚡ Борг і готівка — ОДНИМ запитом: та сама таблиця, той самий скоуп, різниця
+  // лише в `source='cash'`, що й виражає FILTER. Готівкова дебіторка з CRM —
+  // ОКРЕМА позначка (НЕ в основному тоталі, який 1:1 з таблицею).
+  const debtSnap = await metrics.receivablesSnapshot({ managerId, teamId });
+  const receivablesTotalValue = debtSnap.total;
+  const receivablesCashValue = debtSnap.cash;
 
   // Plan (monthly payment_amount targets) prorated to the SELECTED period by
   // day-overlap, so the gauge responds to week/month/quarter just like the
@@ -780,8 +785,11 @@ dashboardRouter.get("/overview", async (req, res) => {
   // Стару adConversion/leadgenConversion-логіку не видалено (Фаза 3); тут лише
   // перемикаємо, що ВІДДАЄ роут. entered<10 → «—».
   const adsMonthlyOv = await metrics.conversionAdsByMonth({ managerId, teamId }, adSources);
-  const pzMonthlyOv = await metrics.conversionProdzvinByMonth({ managerId, teamId });
-  const reMonthlyOv = await metrics.conversionReactivationByMonth({ managerId, teamId });
+  // ⚡ Обидві лідоген-конверсії — з одного проходу по handoff (замість двох
+  // однакових запитів із різними конфігами). Won-когорти й злиття ті самі.
+  const leadgenConv = await metrics.leadgenConversionsByMonth({ managerId, teamId });
+  const pzMonthlyOv = leadgenConv.prodzvin;
+  const reMonthlyOv = leadgenConv.reactivation;
   // Крок В #4: «Конверсія лідогену» = КОГОРТА переданих заявок (transferred_at) →
   // дійшли до MONEY_ZONE (когортна, стеля ≤100%, ⏳). Замінює стару period-ratio.
   const trMonthlyOv = await metrics.conversionTransferredByMonth({ managerId, teamId });

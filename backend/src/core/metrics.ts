@@ -2130,6 +2130,16 @@ const PRODZVIN_PIPELINES = [8921936, 7337048]; // холодний лідоге�
 const PZ_TAKEN = 69693696;                     // Продзвін «ВЗЯТО В РОБОТУ» — entry-анкер
 const REACTIVATION_PIPELINES = [8921948];      // реактивація існуючих клієнтів
 const REACT_WARMING = 69693740;                // Реактивація «Клієнт підігрівається» — entry-анкер
+
+/**
+ * Конфіги handoff-у в ОДНОМУ місці. Ними користується і прод-шлях, і гейт `#137b`:
+ * інакше гейт звіряв би дві форми на конфігах, ПЕРЕПИСАНИХ руками, — тобто доводив
+ * би узгодженість своєї копії, а не проду (урок `#21c`).
+ */
+export const HANDOFF_CFGS: { entryPipelines: number[]; entryStatus: number }[] = [
+  { entryPipelines: PRODZVIN_PIPELINES, entryStatus: PZ_TAKEN },
+  { entryPipelines: REACTIVATION_PIPELINES, entryStatus: REACT_WARMING },
+];
 const STATUS_142 = 142;                        // handoff (Продзвін/Реактивація) + won (FC) «Успішна»
 
 export interface LeadgenConversionRow {
@@ -2219,6 +2229,102 @@ async function handoffByMonth(
 }
 
 /**
+ * 🔀 HANDOFF ПО КІЛЬКОХ КОНФІГАХ — ОДНИМ ЗАПИТОМ (перф-прохід 23.08.2026).
+ *
+ * `handoffByMonth` вище лишається БЕЗ ЗМІН і є еталоном: гейт `#137b` звіряє,
+ * що ця форма дає для кожного конфіга те саме, що окремий виклик. Двох означень
+ * handoff-у в коді немає — є одне, розгорнуте на N конфігів через `cfgs`.
+ *
+ * 🔴 ЧОМУ КОНФІГИ ЇДУТЬ ПАРАЛЕЛЬНИМИ МАСИВАМИ, А НЕ МАСИВОМ МАСИВІВ. У Postgres
+ * `int[][]` мусить бути прямокутним, а набори воронок у конфігів різної довжини
+ * (Продзвін — дві, Реактивація — одна). Тому «плоска» пара (idx, pipeline).
+ */
+async function handoffByMonthMulti(
+  s: MetricScope,
+  cfgs: { entryPipelines: number[]; entryStatus: number }[]
+): Promise<HandoffRow[][]> {
+  if (cfgs.length === 0) return [];
+  const idxs = cfgs.map((_, i) => i);
+  const statuses = cfgs.map((c) => c.entryStatus);
+  const pipeIdx: number[] = [], pipeVal: number[] = [];
+  cfgs.forEach((c, i) => c.entryPipelines.forEach((p) => { pipeIdx.push(i); pipeVal.push(p); }));
+
+  // $1..$4 — конфіги, $5 — 142
+  const params: unknown[] = [idxs, statuses, pipeIdx, pipeVal, STATUS_142];
+  const scopeConds: string[] = [];
+  if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  const scopeJoin = s.teamId ? "LEFT JOIN managers m ON m.id = d.manager_id" : "";
+  const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+
+  const r = await pool.query<{
+    idx: number; ym: string; entered: string; handoff_eventually: string; handoff_in_month: string; mature: boolean;
+  }>(
+    `WITH cfgs AS (
+       SELECT UNNEST($1::int[]) AS idx, UNNEST($2::int[]) AS status
+     ),
+     cfg_pipes AS (
+       SELECT UNNEST($3::int[]) AS idx, UNNEST($4::int[]) AS pipe
+     ),
+     entered AS (
+       SELECT c.idx, d.client_key, MIN(e.changed_at) AS entered_at
+         FROM deal_stage_events e
+         JOIN deals d ON d.kommo_id = e.kommo_id ${scopeJoin}
+         JOIN cfgs c ON e.status_id = c.status
+        WHERE e.pipeline_id IN (SELECT pipe FROM cfg_pipes cp WHERE cp.idx = c.idx)
+          AND d.client_key IS NOT NULL ${scopeWhere}
+        GROUP BY c.idx, d.client_key
+     ),
+     handoff AS (
+       SELECT en.idx, en.client_key, MIN(e.changed_at) AS handoff_at
+         FROM entered en
+         JOIN deals d ON d.client_key = en.client_key
+         JOIN deal_stage_events e ON e.kommo_id = d.kommo_id
+        WHERE e.status_id = $5
+          AND e.pipeline_id IN (SELECT pipe FROM cfg_pipes cp WHERE cp.idx = en.idx)
+          AND e.changed_at >= en.entered_at
+        GROUP BY en.idx, en.client_key
+     ),
+     pop AS (
+       SELECT en.idx, en.entered_at, h.handoff_at
+         FROM entered en LEFT JOIN handoff h ON h.client_key = en.client_key AND h.idx = en.idx
+     ),
+     months AS (
+       SELECT generate_series(
+         date_trunc('month', (now() ${KYIV})) - INTERVAL '11 months',
+         date_trunc('month', (now() ${KYIV})),
+         INTERVAL '1 month') AS m
+     )
+     SELECT c.idx, to_char(mo.m, 'YYYY-MM') AS ym,
+       COUNT(*) FILTER (WHERE p.entered_at IS NOT NULL
+                          AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS entered,
+       COUNT(*) FILTER (WHERE p.handoff_at IS NOT NULL
+                          AND date_trunc('month', (p.entered_at ${KYIV})) = mo.m)::int AS handoff_eventually,
+       COUNT(*) FILTER (WHERE p.handoff_at IS NOT NULL
+                          AND date_trunc('month', (p.handoff_at ${KYIV})) = mo.m)::int AS handoff_in_month,
+       ((mo.m + INTERVAL '1 month') <= (now() ${KYIV}) - INTERVAL '90 days') AS mature
+     FROM months mo
+     CROSS JOIN cfgs c
+     LEFT JOIN pop p ON p.idx = c.idx
+     GROUP BY c.idx, mo.m ORDER BY c.idx, mo.m`,
+    params
+  );
+  const out: HandoffRow[][] = cfgs.map(() => []);
+  for (const x of r.rows) {
+    out[x.idx].push({
+      ym: x.ym, entered: Number(x.entered), handoffEventually: Number(x.handoff_eventually),
+      handoffInMonth: Number(x.handoff_in_month), mature: x.mature,
+    });
+  }
+  return out;
+}
+
+/** Форма для гейта `#137b`: та сама мульти-функція, викликана на ОДНОМУ конфізі. */
+export const handoffByMonthForGate = (s: MetricScope, cfg: { entryPipelines: number[]; entryStatus: number }) =>
+  handoffByMonth(s, cfg);
+export const handoffByMonthMultiForGate = handoffByMonthMulti;
+
+/**
  * Зливає won-когорту (наскрізь до MONEY_ZONE, з `conversionByCohort`) + handoff
  * (термінал власної воронки, з `handoffByMonth`) у `LeadgenConversionRow`.
  * Знаменник = `won.entered` (той самий entered у обох джерел). Стеля ≤100%.
@@ -2249,7 +2355,7 @@ function mergeLeadgen(won: ConversionCohortRow[], handoff: HandoffRow[]): Leadge
 export const conversionProdzvinByMonth = async (s: MetricScope): Promise<LeadgenConversionRow[]> => {
   const [won, handoff] = await Promise.all([
     conversionByCohort(s, { grain: "client", kind: "stage", entryStatuses: [PZ_TAKEN], entryPipelines: PRODZVIN_PIPELINES }),
-    handoffByMonth(s, { entryPipelines: PRODZVIN_PIPELINES, entryStatus: PZ_TAKEN }),
+    handoffByMonth(s, HANDOFF_CFGS[0]),
   ]);
   return mergeLeadgen(won, handoff);
 };
@@ -2260,10 +2366,34 @@ export const conversionProdzvinByMonth = async (s: MetricScope): Promise<Leadgen
  * MONEY_ZONE у Повному циклі; **handoff** = 142 «Відправлено у відділ продажів»
  * у своїй воронці. Категорії відмов не фільтруємо.
  */
+/**
+ * ⚡ ОБИДВІ ЛІДОГЕН-КОНВЕРСІЇ ОДНИМ ПРОХОДОМ ПО handoff (перф-прохід 23.08.2026).
+ *
+ * Окремі `conversionProdzvinByMonth` / `conversionReactivationByMonth` лишаються
+ * НЕДОТОРКАНИМИ — їх кличуть інші роути, і саме вони є еталоном для `#137b`.
+ * Тут інша ЛИШЕ форма запиту handoff-у: замість двох однакових запитів із
+ * різними конфігами — один, розгорнутий по `HANDOFF_CFGS`. Won-когорти
+ * рахуються тими самими викликами `conversionByCohort`, що й раніше, і навіть
+ * зливаються тією самою `mergeLeadgen`.
+ */
+export async function leadgenConversionsByMonth(s: MetricScope): Promise<{
+  prodzvin: LeadgenConversionRow[]; reactivation: LeadgenConversionRow[];
+}> {
+  const [wonPz, wonRe, handoffs] = await Promise.all([
+    conversionByCohort(s, { grain: "client", kind: "stage", entryStatuses: [PZ_TAKEN], entryPipelines: PRODZVIN_PIPELINES }),
+    conversionByCohort(s, { grain: "client", kind: "stage", entryStatuses: [REACT_WARMING], entryPipelines: REACTIVATION_PIPELINES }),
+    handoffByMonthMulti(s, HANDOFF_CFGS),
+  ]);
+  return {
+    prodzvin: mergeLeadgen(wonPz, handoffs[0]),
+    reactivation: mergeLeadgen(wonRe, handoffs[1]),
+  };
+}
+
 export const conversionReactivationByMonth = async (s: MetricScope): Promise<LeadgenConversionRow[]> => {
   const [won, handoff] = await Promise.all([
     conversionByCohort(s, { grain: "client", kind: "stage", entryStatuses: [REACT_WARMING], entryPipelines: REACTIVATION_PIPELINES }),
-    handoffByMonth(s, { entryPipelines: REACTIVATION_PIPELINES, entryStatus: REACT_WARMING }),
+    handoffByMonth(s, HANDOFF_CFGS[1]),
   ]);
   return mergeLeadgen(won, handoff);
 };
@@ -2400,6 +2530,29 @@ function debtWhere(s: SnapshotScope): { where: string; params: unknown[] } {
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   return { where, params };
+}
+
+/**
+ * 🧾 БОРГ + ГОТІВКА ОДНИМ ЗАПИТОМ (перф-прохід 23.08.2026).
+ *
+ * `receivablesTotal` і `receivablesCash` читають ТУ САМУ таблицю з ТИМ САМИМ
+ * скоупом; уся різниця — додаткова умова `source = 'cash'`. Це рівно те, що
+ * виражає `FILTER`, тож обидва числа тут ті самі, що й окремо, а не «схожі».
+ *
+ * ⚠️ Обидві початкові функції ЗАЛИШЕНІ: їх кличуть інші місця, і чіпати їх
+ * заради перфу Огляду означало б розширити радіус зміни без потреби.
+ * Еквівалентність тримає `#137`.
+ */
+export async function receivablesSnapshot(s: SnapshotScope): Promise<{ total: number; cash: number }> {
+  const { where, params } = debtWhere(s);
+  const r = await pool.query<{ total: string; cash: string }>(
+    `SELECT COALESCE(SUM(r.amount), 0) AS total,
+            COALESCE(SUM(r.amount) FILTER (WHERE r.source = 'cash'), 0) AS cash
+     FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
+     ${where}`,
+    params
+  );
+  return { total: Number(r.rows[0]?.total ?? 0), cash: Number(r.rows[0]?.cash ?? 0) };
 }
 
 /** Готівкова дебіторка з CRM (`source='cash'`) — під-рядок «з них готівка»

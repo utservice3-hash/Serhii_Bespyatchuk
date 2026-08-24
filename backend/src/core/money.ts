@@ -123,14 +123,32 @@ function sourceSql(kind: Kind, p: unknown[]): string {
   return `${successSrc} UNION ALL ${currentStageSrc(STAGE_PAID)}`; // received
 }
 
-async function query<T>(kind: Kind, s: MoneyScope, extraSelect: string, groupBy: string): Promise<T[]> {
-  const p: unknown[] = [];
-  const src = sourceSql(kind, p);
+/**
+ * Умови скоупу + JOIN-и — ОДИН вираз на два виклики (`query` і `moneyTotals`).
+ *
+ * 🔴 Винесено, а не скопійовано. Друга копія цих десяти рядків розійшлася б із
+ * першою рівно тоді, коли хтось поправить одну (урок «чипи новий/постійний»:
+ * копія збігалася з ІНШОЮ копією, а не з правилом).
+ */
+function scopeClause(s: MoneyScope, p: unknown[], extraSelect: string, groupBy: string): {
+  where: string; joins: string;
+} {
   const conds: string[] = [];
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
   if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const activeJoin = s.activeOnly ? "AND m.is_active" : "";
+  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? "LEFT JOIN teams t ON t.id = m.team_id" : "";
+  return {
+    where: conds.length ? "WHERE " + conds.join(" AND ") : "",
+    joins: `JOIN managers m ON m.id = src.manager_id ${activeJoin}\n    ${teamsJoin}`,
+  };
+}
+
+async function query<T>(kind: Kind, s: MoneyScope, extraSelect: string, groupBy: string): Promise<T[]> {
+  const p: unknown[] = [];
+  const src = sourceSql(kind, p);
   // 🔴 `is_active` КЕРУЄ СПИСКАМИ Й ВИБОРОМ, А НЕ ІСТОРИЧНИМИ СУМАМИ
   // (рішення власника 05.08.2026). Гроші зароблені тоді, коли людина працювала, і
   // заднім числом не зникають. Жоден грошовий розріз більше не ставить `activeOnly`.
@@ -139,17 +157,85 @@ async function query<T>(kind: Kind, s: MoneyScope, extraSelect: string, groupBy:
   // перепризначили лише за пів години. У цю щілину `Σ(менеджери)` стало на
   // **16 567 ₴** менше за `Σ(команди)` — бо по менеджерах фільтр стояв, по командах
   // ні. Гейт `#37` тримає: деактивація НЕ рухає жодної історичної суми.
-  const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? "LEFT JOIN teams t ON t.id = m.team_id" : "";
+  const { where, joins } = scopeClause(s, p, extraSelect, groupBy);
   const sql = `
     SELECT ${extraSelect}
     FROM (${src}) src
-    JOIN managers m ON m.id = src.manager_id ${activeJoin}
-    ${teamsJoin}
-    ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
+    ${joins}
+    ${where}
     ${groupBy}`;
   const r = await pool.query(sql, p);
   return r.rows as T[];
+}
+
+/**
+ * 💰 ЧОТИРИ ГРОШОВІ ТОТАЛИ ОДНИМ ПРОХОДОМ (перф-прохід 23.08.2026).
+ *
+ * 🔴 ЩО ЦЕ **НЕ** Є. Це не нова метрика й не нова формула. Кожен доданок
+ * читається З ТОГО САМОГО джерела, що й раніше: `success` — угоди в 142 по
+ * `closed_at`; `paidOnly` — поточний етап 9 по даті входу; `expected` — етап 8;
+ * `received` — ОБʼЄДНАННЯ перших двох, рівно як його й означено в `sourceSql`
+ * (`successSrc UNION ALL currentStageSrc(STAGE_PAID)`).
+ *
+ * 🔴 ЧОМУ `received` РАХУЄТЬСЯ ЧЕРЕЗ `FILTER`, А НЕ ЯК `success + paidOnly`.
+ * Додавання двох чисел було б ПРИПУЩЕННЯМ про диз'юнктність. Тут `received`
+ * агрегується по тих самих рядках union-у, що й окремий запит, — тобто це та
+ * сама операція, а не арифметика над її результатом. Якби диз'юнктність колись
+ * порушилась, обидві форми зламались би ОДНАКОВО, а не розійшлись мовчки.
+ *
+ * 📐 ПРИВІД (заміряно): `/overview` робив 34 запити; чотири з них — це чотири
+ * окремі проходи по `deals`/`deal_stage_events` (success, paidOnly, expected і
+ * received, що сам сканує двічі) = 5 сканів джерела. Тут їх 3. Під ×4
+ * паралельними запитами саме ОБСЯГ роботи визначає час: заміряно, що самі
+ * запити роздуваються 2.41×, тоді як черга пулу непорожня лише 3% часу.
+ *
+ * ⚠️ Старі `receivedMoney`/`successMoney`/`paidOnlyMoney`/`expectedMoney`
+ * ЗАЛИШЕНІ НЕДОТОРКАНИМИ і далі використовуються Звітом, КВП-звітом і рештою.
+ * Ця функція — додаткова форма для тих місць, де потрібні всі чотири одразу.
+ * Еквівалентність двох форм на ЖИВИХ даних тримає гейт `#137`.
+ */
+export interface MoneyTotals {
+  received: MoneyAgg;
+  success: MoneyAgg;
+  paidOnly: MoneyAgg;
+  expected: MoneyAgg;
+}
+
+export async function moneyTotals(s: MoneyScope): Promise<MoneyTotals> {
+  const p: unknown[] = [];
+  // Три ДЖЕРЕЛА з мітками. `sourceSql` викликається тим самим кодом, що й для
+  // окремих запитів, — інакше тут зʼявилася б друга копія означення грошей.
+  const src =
+    `SELECT 'success'::text AS kind, x.* FROM (${sourceSql("success", p)}) x`
+    + ` UNION ALL SELECT 'paidOnly'::text, x.* FROM (${sourceSql("paidOnly", p)}) x`
+    + ` UNION ALL SELECT 'expected'::text, x.* FROM (${sourceSql("expected", p)}) x`;
+  const { where, joins } = scopeClause(s, p, "", "");
+  const r = await pool.query<{
+    s_rev: string; s_deals: string; p_rev: string; p_deals: string;
+    e_rev: string; e_deals: string; r_rev: string; r_deals: string;
+  }>(
+    `SELECT
+       COALESCE(SUM(src.price) FILTER (WHERE src.kind = 'success'), 0) AS s_rev,
+       COUNT(*) FILTER (WHERE src.kind = 'success') AS s_deals,
+       COALESCE(SUM(src.price) FILTER (WHERE src.kind = 'paidOnly'), 0) AS p_rev,
+       COUNT(*) FILTER (WHERE src.kind = 'paidOnly') AS p_deals,
+       COALESCE(SUM(src.price) FILTER (WHERE src.kind = 'expected'), 0) AS e_rev,
+       COUNT(*) FILTER (WHERE src.kind = 'expected') AS e_deals,
+       COALESCE(SUM(src.price) FILTER (WHERE src.kind IN ('success','paidOnly')), 0) AS r_rev,
+       COUNT(*) FILTER (WHERE src.kind IN ('success','paidOnly')) AS r_deals
+     FROM (${src}) src
+     ${joins}
+     ${where}`,
+    p
+  );
+  const x = r.rows[0];
+  const n = (v: string | undefined) => Number(v ?? 0);
+  return {
+    received: { revenue: n(x?.r_rev), deals: n(x?.r_deals) },
+    success:  { revenue: n(x?.s_rev), deals: n(x?.s_deals) },
+    paidOnly: { revenue: n(x?.p_rev), deals: n(x?.p_deals) },
+    expected: { revenue: n(x?.e_rev), deals: n(x?.e_deals) },
+  };
 }
 
 async function agg(kind: Kind, s: MoneyScope): Promise<MoneyAgg> {
@@ -658,7 +744,11 @@ export interface RevenueProjection {
  * контекст, не прогноз. Період [from,to] — місяць або тиждень.
  */
 export async function revenueProjection(s: MoneyScope): Promise<RevenueProjection> {
-  const [succ, recv] = await Promise.all([successMoney(s), receivedMoney(s)]);
+  // ⚡ Обидва тотали — з одного проходу (`moneyTotals`) замість двох запитів.
+  // Значення ті самі: `moneyTotals` агрегує ті самі джерела тими самими умовами
+  // (рівність двох форм на живих даних тримає `#137`).
+  const t = await moneyTotals(s);
+  const succ = t.success, recv = t.received;
   const fact = recv.revenue;
   const paidOnly = recv.revenue - succ.revenue;
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
