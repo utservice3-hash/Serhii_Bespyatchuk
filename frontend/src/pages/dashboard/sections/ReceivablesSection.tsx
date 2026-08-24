@@ -7,7 +7,7 @@ import {
 import { ReceivablesTiles } from "./ReceivablesTiles";
 import { ReceivablesFilters } from "./ReceivablesFilters";
 import {
-  CARRIER_LABEL, CARRIER_REASON_LABEL, EMPTY_FILTERS, entitySummary, isOverdue,
+  CARRIER_LABEL, CARRIER_REASON_LABEL, EMPTY_FILTERS, entityBreakdown, isOverdue,
   originBadges, passesFilters, t, type Filters,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
@@ -87,7 +87,7 @@ function CarrierCell({ facts }: { facts: ReceivableClient["facts"] }) {
   if (na.n) parts.push(<span key="n" style={{ color: "var(--text-muted)" }} title={`н/д · ${formatAmount(na.amount)}`}>н/д {na.n}</span>);
   return (
     <span>
-      <span style={{ display: "flex", gap: 8 }}>{parts.length ? parts : "—"}</span>
+      <span style={{ display: "flex", gap: 8, whiteSpace: "nowrap" }}>{parts.length ? parts : "—"}</span>
       {facts.carrierReasons.length > 0 && (
         <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>
           {facts.carrierReasons.map((r) => CARRIER_REASON_LABEL[r]).join(" · ")}
@@ -340,7 +340,7 @@ export function ReceivablesSection({
                     <th style={{ textAlign: "left" }}>Відповідальний</th>
                     <th style={{ textAlign: "left" }} title="Наша юрособа, від якої виставлено рахунок — з «форми оплати» Kommo">Юрособа</th>
                     <th style={{ textAlign: "left" }} title="Чи оплачено перевізника по угоді рахунку. «н/д» = не знаємо, а НЕ «не оплачено»">Перевізник</th>
-                    <th style={{ textAlign: "right" }}>Сума боргу</th>
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap" }}>Сума боргу</th>
                     <th style={{ textAlign: "center" }}>Днів без оплати</th>
                     <th style={{ textAlign: "center" }}>Ліміт</th>
                     <th style={{ textAlign: "center" }}>Дата оплати (клієнт)</th>
@@ -351,7 +351,7 @@ export function ReceivablesSection({
                   {shown.map((c, i) => {
                     const over = isOverdue(c);
                     const badges = originBadges(c.facts);
-                    const ent = entitySummary(c.facts);
+                    const ent = entityBreakdown(c.facts);
                     return (
                       <Fragment key={`${c.clientKey}-${i}`}>
                         <tr style={over ? { background: "rgba(220,38,38,0.04)" } : undefined}>
@@ -379,16 +379,19 @@ export function ReceivablesSection({
                           </td>
                           <td style={{ textAlign: "left", verticalAlign: "top", fontSize: 12 }}>
                             {ent ? (
-                              <span title={ent.hint}>
-                                {ent.label}
-                                {ent.mixed && <span style={{ color: "var(--text-muted)", fontSize: 11 }}> +ще</span>}
+                              <span title={ent.hint} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                {ent.rows.map((r) => (
+                                  <span key={r.key} style={{ color: r.key === "unknown" ? "var(--text-muted)" : "var(--text)" }}>
+                                    {r.label} {r.n}
+                                  </span>
+                                ))}
                               </span>
                             ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
                           </td>
                           <td style={{ textAlign: "left", verticalAlign: "top", fontSize: 12 }}>
                             <CarrierCell facts={c.facts} />
                           </td>
-                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top" }} title={formatAmountFull(c.amount)}>{formatAmount(c.amount)}</td>
+                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top", whiteSpace: "nowrap" }} title={formatAmountFull(c.amount)}>{formatAmount(c.amount)}</td>
                           <td style={{ textAlign: "center", verticalAlign: "top", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>{c.overdueDays ?? "—"}</td>
                           <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "top" }}>{c.limitDays ?? "—"}</td>
                           <td style={{ textAlign: "center", verticalAlign: "top" }}>

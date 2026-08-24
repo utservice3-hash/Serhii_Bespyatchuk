@@ -110,15 +110,22 @@ export function originBadges(f: ReceivableClientFacts | null): RowBadge[] {
   return out;
 }
 
-/** Домінантна юрособа + чи їх кілька (клієнта могли обʼєднати). */
-export function entitySummary(f: ReceivableClientFacts | null): { label: string; hint: string; mixed: boolean } | null {
+/**
+ * Розклад юросіб клієнта — СПИСКОМ, а не «домінанта + ще».
+ *
+ * 🔴 Заголовок за найбільшою сумою бреше саме там, де болить: у ПВК АРСЕНАЛ
+ * 29 рахунків із 40 — ЮТС, але 11 через 1С важать більше грошима, тож підпис
+ * ставав «невідомо». Клієнт читався б як повністю невідомий, хоча про три
+ * чверті його рахунків ми знаємо все. Розклад цього не робить у принципі.
+ */
+export function entityBreakdown(f: ReceivableClientFacts | null): { rows: { key: ReceivableEntity; label: string; n: number; amount: number }[]; hint: string } | null {
   if (!f) return null;
   const rows = (Object.keys(ENTITY_LABEL) as ReceivableEntity[])
-    .map((k) => ({ k, ...t(f.entity[k]) })).filter((x) => x.n > 0)
+    .map((k) => ({ key: k, label: ENTITY_LABEL[k], ...t(f.entity[k]) }))
+    .filter((x) => x.n > 0)
     .sort((a, b) => b.amount - a.amount);
   if (rows.length === 0) return null;
-  const top = rows[0];
-  const hint = rows.map((r) => `${ENTITY_LABEL[r.k]}: ${r.n} рах.`).join(" · ")
+  const hint = rows.map((r) => `${r.label}: ${r.n} рах.`).join(" · ")
     + (f.entityReasons.length ? ` · невідомо тому, що ${f.entityReasons.map((r) => ENTITY_REASON_LABEL[r]).join(", ")}` : "");
-  return { label: ENTITY_LABEL[top.k], hint, mixed: rows.length > 1 };
+  return { rows, hint };
 }
