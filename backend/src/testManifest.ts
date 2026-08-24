@@ -73,6 +73,7 @@ export const MANIFEST_FILES: string[] = [
   "core/overviewMerges.test.js",
   "core/receivablesFacts.test.js",
   "core/receivablesActions.test.js",
+  "routes/clickReality.test.js",
   "routes/taskCommentKeep.test.js",
   "routes/leadgenChannelFact.test.js",
   "core/leadgenChannelOnly.test.js",
@@ -678,6 +679,9 @@ export const MANIFEST_TESTS: string[] = [
   "#158 /receivables робить не більше 4 запитів до БД",
   // core/receivablesActions.test.ts — редизайн дебіторки, Е3: кнопки зміни
   // відповідального і склейки. Права віддає СЕРВЕР; фронт свого правила не має.
+  "#191 зниклий асет дає 404, а не index.html із кодом 200",
+  "#192 SPA-фолбек лишається для МАРШРУТІВ, і це не той самий випадок",
+  "#193 клік МИШЕЮ: контроли реагують, ПВК АРСЕНАЛ розгортається",
   "#159 canSetOwner/canMerge == предикати, що гейтять роути",
   "#159b ФІНАНСИСТ: зміна відповідального Є, склейки НЕМАЄ — очікувано",
   "#159c СЕО може і зліпити, і роз\'єднати — двері не односторонні",

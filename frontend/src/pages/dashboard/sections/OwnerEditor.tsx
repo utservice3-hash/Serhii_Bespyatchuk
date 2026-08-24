@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { setReceivableOwner, clearReceivableOwner, type ManagerOption, type ReceivableClient } from "../../../api";
 import { NOTE_MAX, noteIsValid, ownerState } from "../receivablesView";
 
@@ -25,6 +25,16 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
   onDone: () => void;
   onClose: () => void;
 }) {
+  // ⌨️ ESC ЗАКРИВАЄ. Не було — і модалку можна було покинути, лише знайшовши
+  // «Скасувати». Знайдено власним гейтом `#193`: він тиснув Escape, діалог
+  // лишався, його підкладка накривала таблицю — і наступний клік по клієнту
+  // «не проходив». Тобто відсутність Esc виглядала як зламане розкриття.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const state = ownerState(client);
   const [managerId, setManagerId] = useState<number | "">("");
   const [note, setNote] = useState("");

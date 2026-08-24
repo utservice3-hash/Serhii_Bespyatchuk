@@ -559,6 +559,25 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
 // щоб НЕ виставити backend/, .env, docs/, .git, *.php (relay!). У старому режимі цей блок
 // нешкідливий (Apache віддає статику першим, node отримує лише /api через proxy).
 app.use("/assets", express.static(path.join(SITE_ROOT, "assets"), { immutable: true, maxAge: "1y" }));
+
+/**
+ * 🔴 ЗНИКЛИЙ АСЕТ МУСИТЬ ДАВАТИ 404, А НЕ index.html (знайдено 24.08.2026).
+ *
+ * Нижче стоїть SPA-фолбек `app.get(/^(?!\/api).*​/)`, який віддає `index.html` на
+ * БУДЬ-ЯКИЙ шлях поза `/api`. Разом із кроком деплою «прибрати старий бандл» це
+ * давало тихий і дуже підступний стан: браузер користувача з закешованим старим
+ * `index.html` просить `/assets/index-СТАРИЙ.js`, отримує **HTML із кодом 200**,
+ * давиться ним (`Unexpected token '<'`) — і сторінка лишається намальованою, але
+ * БЕЗ ЖОДНОГО обробника. Тобто рівно симптом «кнопки не натискаються».
+ *
+ * Заміряно на живому проді: `/assets/zzz-neisnuye.js` → `200 text/html`.
+ *
+ * ⚠️ Це той самий клас, що знесений CSS у малому викаті: там сторінка лишалась
+ * без стилів і це було ВИДНО, тут вона лишається без поведінки — і це не видно
+ * ніяк. 404 перетворює мовчазну поломку на гучну: у консолі буде чесна помилка
+ * завантаження, а не синтаксична помилка десь усередині «JS».
+ */
+app.use("/assets", (_req, res) => res.status(404).type("text/plain").send("asset not found"));
 app.get(["/favicon.svg", "/icons.svg"], (req, res) => res.sendFile(path.join(SITE_ROOT, req.path)));
 app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(SITE_ROOT, "index.html")));
 

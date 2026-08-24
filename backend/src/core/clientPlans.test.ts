@@ -264,6 +264,20 @@ test("#23e ПРАВО merge_clients НЕ ПРОСОЧУЄТЬСЯ через с�
   // `permissions` адміна в ceo/opdir і (мінус два права) у kvp — і право
   // розтеклось на ПʼЯТЬ ролей замість трьох: admin, ceo, financier, kvp, opdir.
   // Перевіряємо на схемі З НУЛЯ, бо на живій базі результат маскується історією.
+  //
+  // 🔵 СКЛАД ЗМІНЕНО 24.08.2026: СЕО тепер МАЄ це право (рішення власника).
+  // Причина — не «розширили про всяк випадок»: `merge_receivables` у СЕО вже було,
+  // а ВІДКІТ склейки гейтиться `merge_clients`, тож він міг зліпити двох клієнтів
+  // і не міг роз'єднати їх ніде. Односторонні двері.
+  //
+  // 🔴 І САМЕ ТОМУ ГЕЙТ ПЕРЕПИСАНО, А НЕ ЗНЯТО. Він стереже ДВА твердження, і
+  // змінилось лише перше:
+  //   (1) склад права — тепер чотири ролі, не три;
+  //   (2) ФІНАНСИСТ його НЕ має — і це рішення власника ЧИННЕ.
+  // Знести гейт разом із першим твердженням означало б тихо втратити друге —
+  // рівно той клас, що «прибираєш інваріанту — знайди всіх, хто на неї спирався».
+  // Тому нижче окремий, ІМЕННИЙ assert про фінансиста: він переживе будь-яку
+  // наступну правку списку.
   const { provisionScratch } = await import("../db/scratchDb.js");
   const { readFileSync } = await import("node:fs");
   const path = await import("node:path");
@@ -277,13 +291,21 @@ test("#23e ПРАВО merge_clients НЕ ПРОСОЧУЄТЬСЯ через с�
     await c.query(readFileSync(schema, "utf8"));
     const have = async () => (await c.query<{ key: string }>(
       `SELECT key FROM roles WHERE (permissions->>'merge_clients')::boolean ORDER BY key`)).rows.map((r) => r.key);
-    assert.deepEqual(await have(), ["admin", "kvp", "opdir"],
-      "🔴 право дісталось не тим ролям. Власник назвав рівно три; ceo/financier його НЕ мають");
+
+    const EXPECTED = ["admin", "ceo", "kvp", "opdir"];
+    assert.deepEqual(await have(), EXPECTED,
+      "🔴 право дісталось не тим ролям. Власник назвав рівно ці чотири");
+    assert.ok(!(await have()).includes("financier"),
+      "🔴 ФІНАНСИСТ дістав merge_clients — власник склейку клієнтів йому НЕ давав "
+      + "(на відміну від manage_credit_limits, яке він має свідомо)");
+
     // ДЗЕРКАЛО: повторна міграція нічого не змінює. Без цього перевірка зеленіла б
     // на першому прогоні, а на другому synс знову розлив би право по чотирьох.
     await c.query(readFileSync(schema, "utf8"));
-    assert.deepEqual(await have(), ["admin", "kvp", "opdir"],
+    assert.deepEqual(await have(), EXPECTED,
       "🔴 ДРУГИЙ прогін міграції розширив право — саме так воно й просочилось уперше");
+    assert.ok(!(await have()).includes("financier"),
+      "🔴 другий прогін віддав merge_clients фінансисту — блок зняття перестав тримати");
   } finally {
     await c.end();
     scratch.dispose();

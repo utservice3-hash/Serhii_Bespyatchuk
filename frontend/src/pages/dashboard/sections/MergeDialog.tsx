@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { mergeReceivableClients } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { mergeProblem, NOTE_MAX, type MergeSide } from "../receivablesView";
@@ -26,6 +26,16 @@ export function MergeDialog({ sides, onDone, onClose }: {
   onDone: () => void;
   onClose: () => void;
 }) {
+  // ⌨️ ESC ЗАКРИВАЄ. Не було — і модалку можна було покинути, лише знайшовши
+  // «Скасувати». Знайдено власним гейтом `#193`: він тиснув Escape, діалог
+  // лишався, його підкладка накривала таблицю — і наступний клік по клієнту
+  // «не проходив». Тобто відсутність Esc виглядала як зламане розкриття.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const [aliasKey, setAliasKey] = useState("");
   const [canonicalKey, setCanonicalKey] = useState("");
   const [reason, setReason] = useState("");
