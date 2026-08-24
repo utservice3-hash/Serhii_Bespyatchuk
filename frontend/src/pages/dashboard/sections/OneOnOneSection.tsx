@@ -2,10 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import {
   fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps, fetchO2OConductTypes,
   fetchO2OMeetings, fetchO2OOpenTasks, createO2OTask, reviewO2OTask,
-  type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type O2OEnpsPoint, type OneOnOneRecord,
-  type O2OMeeting, type O2OOpenTask, type O2OTaskOutcome,
+  type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type OneOnOneRecord,
+  type O2OMeeting, type O2OOpenTask, type O2OTaskOutcome, type O2OEnpsResponse, type O2OEnpsSummary,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
+import { DateRangeFilter, QuickPeriods, getDateRange } from "../../../components/DateRangeFilter";
+import { enpsColor, CLASS_UI, BAND_COLOR, SCALE_CAPTION } from "./enpsScale";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
 import { saveErrorText, draftKey, hasUnsavedEdits, UNSAVED_PROMPT, UNSAVED_BEFOREUNLOAD, type O2ODraft } from "./oneOnOneSave";
 
@@ -33,7 +35,6 @@ const curMonthStr = () => { const n = new Date(); return `${n.getFullYear()}-${S
 const kyivToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
 const dmy = (iso: string) => { const [y, m, d] = iso.split("-"); return `${d}.${m}.${y}`; };
 const scoreColor = (v: number | null) => (v == null ? "var(--text-muted)" : v >= 8 ? "#16a34a" : v >= 6 ? "#d97706" : "#dc2626");
-const enpsColor = (v: number) => (v >= 9 ? "#16a34a" : v >= 7 ? "#d97706" : "#dc2626");
 
 function initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("").toUpperCase(); }
 function avatarHue(name: string) { return [...name].reduce((a, c) => a + c.charCodeAt(0), 0) % 360; }
@@ -145,7 +146,11 @@ export function OneOnOneSection() {
   // Відбиток стану, який СЕРВЕР уже знає. Проти нього рахуємо «є незбережене».
   const [savedSnap, setSavedSnap] = useState<string | null>(null);
   const [stats, setStats] = useState<OneOnOneStatRow[]>([]);
-  const [enpsSeries, setEnpsSeries] = useState<O2OEnpsPoint[]>([]);
+  // eNPS: період ДОВІЛЬНИЙ (1×1 не тримаються меж місяця). Стан локальний для вкладки —
+  // спільний фільтр періоду живе в контейнері, а він цим проходом не чіпається.
+  const [enpsData, setEnpsData] = useState<O2OEnpsResponse | null>(null);
+  const [enpsRange, setEnpsRange] = useState(() => getDateRange("quarter"));
+  const [enpsPreset, setEnpsPreset] = useState<string | null>("quarter");
   const [hist, setHist] = useState<{ managerId: number; name: string; date: string } | null>(null);
   const [person, setPerson] = useState<{ managerId: number; name: string } | null>(null);
   // Задачі з 1×1: відкриті з МИНУЛИХ зустрічей (рев'ю) + форма постановки нової
@@ -171,7 +176,15 @@ export function OneOnOneSection() {
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
   useEffect(() => { setSelId(null); setMeetings([]); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
   useEffect(() => { if (tab === "stats") fetchOneOnOneStats(type, 6).then(setStats).catch(() => setStats([])); }, [tab, type, monthSel]);
-  useEffect(() => { if (tab === "enps") fetchO2OEnps(12).then(setEnpsSeries).catch(() => setEnpsSeries([])); }, [tab, monthSel]);
+  useEffect(() => {
+    if (tab !== "enps") return;
+    // «Весь час» дає порожні кінці, а сервер вимагає обидва — підставляємо найширші.
+    const from = enpsRange.from || "2000-01-01";
+    const to = enpsRange.to || kyivToday();
+    let live = true;
+    fetchO2OEnps(from, to).then((d) => live && setEnpsData(d)).catch(() => live && setEnpsData(null));
+    return () => { live = false; };
+  }, [tab, enpsRange]);
 
   // Обрали субʼєкта → журнал його зустрічей + дата за замовчуванням: поточний місяць → СЬОГОДНІ
   // (нова зустріч), минулий → остання зустріч того місяця (читаємо, що було).
@@ -542,7 +555,7 @@ export function OneOnOneSection() {
                     </h3>
                     <label style={{ display: "block", fontSize: 14.5, lineHeight: 1.5, marginBottom: 8 }}>Наскільки ймовірно порекомендуєш компанію як місце роботи? (0-10)</label>
                     <ScoreTrack value={enpsScore ?? undefined} onChange={setEnpsScore} from={0} to={10} enps />
-                    <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "8px 0 10px" }}>0-6 критик · 7-8 нейтрал · 9-10 промоутер</div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", margin: "8px 0 10px" }}>{SCALE_CAPTION}</div>
                     <AutoTextarea value={enpsReason} onChange={(e) => setEnpsReason(e.target.value)} placeholder="Чому саме така оцінка?" style={FIELD} />
                   </div>
                 )}
@@ -587,7 +600,8 @@ export function OneOnOneSection() {
         <StatsView stats={stats} isV={isV} onOpen={(managerId, name, date) => setHist({ managerId, name, date })}
           onOpenPerson={(managerId, name) => setPerson({ managerId, name })} />
       ) : tab === "enps" ? (
-        <EnpsView series={enpsSeries} />
+        <EnpsView data={enpsData} range={enpsRange} preset={enpsPreset}
+          onRange={(r, preset) => { setEnpsRange(r); setEnpsPreset(preset); }} />
       ) : (
         <OneOnOneFormsEditor type={type} />
       )}
@@ -831,59 +845,158 @@ function HistoryRecordModal({ type, managerId, name, date, onClose }: { type: O2
   );
 }
 
-/** eNPS-аналітика (тип В): тренд по місяцях + розклад промоутери/нейтрали/критики. */
-function EnpsView({ series }: { series: O2OEnpsPoint[] }) {
-  if (series.length === 0) return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Ще немає даних eNPS.</p></div>;
-  const last = series[series.length - 1];
-  const maxAbs = Math.max(50, ...series.map((s) => Math.abs(s.enps ?? 0)));
+/** Підпис бакета тренду: день · тиждень (Пн-Нд) · місяць — за грануляцією з сервера. */
+function bucketLabel(bucket: string, gran: "day" | "week" | "month"): string {
+  const [y, m, d] = bucket.split("-");
+  if (gran === "month") return `${m}.${y}`;
+  if (gran === "day") return `${d}.${m}`;
+  const end = new Date(`${bucket}T12:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + 6);
+  return `${d}.${m}–${String(end.getUTCDate()).padStart(2, "0")}.${String(end.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+const GRAN_LABEL: Record<"day" | "week" | "month", string> = {
+  day: "по днях", week: "по тижнях", month: "по місяцях",
+};
+
+/** Смуга-бейдж: межі й підпис приходять із СЕРВЕРА, фронт лише фарбує за `tone`. */
+function BandBadge({ band, big }: { band: NonNullable<O2OEnpsSummary["band"]>; big?: boolean }) {
+  const col = BAND_COLOR[band.tone];
   return (
-    <div style={CARD}>
-      <h2 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 800 }}>eNPS (тип В) — %промоутерів − %критиків</h2>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "6px 0 18px" }}>
-        <Kpi label="Поточний eNPS" value={last.enps == null ? "—" : `${last.enps}`} color={last.enps == null ? undefined : last.enps >= 0 ? "#16a34a" : "#dc2626"} big />
-        <Kpi label="Промоутери" value={`${last.promoters}`} color="#16a34a" />
-        <Kpi label="Нейтрали" value={`${last.passives}`} color="#d97706" />
-        <Kpi label="Критики" value={`${last.detractors}`} color="#dc2626" />
-        <Kpi label="Відповідей" value={`${last.total}`} />
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: big ? "7px 16px" : "3px 10px",
+      borderRadius: 20, background: `${col}1f`, color: col, fontWeight: 800, fontSize: big ? 15 : 12 }}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: col }} />{band.label}
+    </span>
+  );
+}
+
+/** Одна частка структури: 😊 Промоутери 60% · 12 осіб. */
+function ShareTile({ kind, pct, count }: { kind: "promoter" | "passive" | "detractor"; pct: number; count: number }) {
+  const ui = CLASS_UI[kind];
+  return (
+    <div style={{ flex: "1 1 150px", minWidth: 140, padding: "12px 16px", borderRadius: 16, background: `${ui.color}12` }}>
+      <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{ui.emoji} {ui.label}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <b style={{ fontSize: 26, fontWeight: 800, color: ui.color }}>{pct}%</b>
+        <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{count} {count === 1 ? "оцінка" : "оцінок"}</span>
       </div>
-      <div style={{ overflowX: "auto" }}>
-        <table className="data-table compact" style={{ minWidth: 560 }}>
-          <thead><tr><th style={{ textAlign: "left" }}>Місяць</th><th style={{ textAlign: "center" }}>Пром.</th><th style={{ textAlign: "center" }}>Нейтр.</th><th style={{ textAlign: "center" }}>Крит.</th><th style={{ textAlign: "center" }}>Всього</th><th style={{ textAlign: "left" }}>eNPS</th></tr></thead>
-          <tbody>
-            {series.map((s) => (
-              <tr key={s.month}>
-                <td style={{ textAlign: "left", fontWeight: 600 }}>{s.month}</td>
-                <td style={{ textAlign: "center", color: "#16a34a", fontWeight: 700 }}>{s.promoters}</td>
-                <td style={{ textAlign: "center", color: "#d97706", fontWeight: 700 }}>{s.passives}</td>
-                <td style={{ textAlign: "center", color: "#dc2626", fontWeight: 700 }}>{s.detractors}</td>
-                <td style={{ textAlign: "center" }}>{s.total}</td>
-                <td style={{ textAlign: "left" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ display: "inline-block", width: 120, height: 8, background: "rgba(128,128,128,.14)", borderRadius: 4, position: "relative" }}>
-                      <span style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "var(--text-muted)" }} />
-                      {s.enps != null && <span style={{ position: "absolute", top: 0, bottom: 0, borderRadius: 4,
-                        background: s.enps >= 0 ? "#16a34a" : "#dc2626",
-                        left: s.enps >= 0 ? "50%" : `${50 - (Math.abs(s.enps) / maxAbs) * 50}%`,
-                        width: `${(Math.abs(s.enps) / maxAbs) * 50}%` }} />}
-                    </span>
-                    <b style={{ color: s.enps == null ? "var(--text-muted)" : s.enps >= 0 ? "#16a34a" : "#dc2626" }}>{s.enps ?? "—"}</b>
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "10px 0 0" }}>eNPS = %промоутерів (9-10) − %критиків (0-6). Нейтрали (7-8) у формулу не входять.</p>
     </div>
   );
 }
 
-function Kpi({ label, value, color, big }: { label: string; value: string; color?: string; big?: boolean }) {
+/**
+ * eNPS-аналітика (тип В) за ДОВІЛЬНИЙ період.
+ *
+ * 🔴 ЖОДНОГО ПОРОГА ТУТ НЕМАЄ. Відсотки, сам eNPS і смугу рахує сервер
+ * (`oneOnOne/enps.ts`); цей компонент їх лише малює. Доти «Поточний eNPS» показував
+ * ОСТАННІЙ МІСЯЦЬ ряду, а не період — і при довільному періоді це було б просто
+ * неправдою.
+ */
+function EnpsView({ data, range, preset, onRange }: {
+  data: O2OEnpsResponse | null;
+  range: { from: string; to: string };
+  preset: string | null;
+  onRange: (r: { from: string; to: string }, preset: string | null) => void;
+}) {
+  const s = data?.summary;
+  const maxAbs = Math.max(50, ...(data?.series ?? []).map((x) => Math.abs(x.enps ?? 0)));
   return (
-    <div style={{ minWidth: 110, padding: "12px 16px", borderRadius: 16, background: "rgba(128,128,128,.06)" }}>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
-      <div style={{ fontSize: big ? 30 : 24, fontWeight: 800, color: color ?? "var(--text)" }}>{value}</div>
+    <div style={CARD}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>eNPS · %промоутерів − %критиків</h2>
+          <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
+            Період довільний — від дня до дня. {data ? `Показано ${data.from} — ${data.to}.` : ""}
+          </p>
+        </div>
+        <DateRangeFilter value={range} onChange={(r) => onRange(r, null)} />
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <QuickPeriods active={preset} onSelect={(id, r) => onRange(r, id)} />
+      </div>
+
+      {!data ? (
+        <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>
+      ) : !s || s.total === 0 ? (
+        /* 🔴 «Оцінок немає», а НЕ «0»: нуль читається як результат опитування. */
+        <p className="loading-text" style={{ margin: "8px 0 0" }}>
+          За цей період оцінок немає.{s && s.invalid > 0 ? ` (${s.invalid} поза шкалою 0-10 — у розрахунок не входять.)` : ""}
+        </p>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", margin: "16px 0 14px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+              <span style={{ fontSize: 54, fontWeight: 800, lineHeight: 1,
+                color: s.band ? BAND_COLOR[s.band.tone] : "var(--text)" }}>
+                {s.enps! > 0 ? `+${s.enps}` : s.enps}
+              </span>
+              {s.band && <BandBadge band={s.band} big />}
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+              {s.total} {s.total === 1 ? "оцінка" : "оцінок"} у періоді
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+            <ShareTile kind="promoter"  pct={s.promotersPct}  count={s.promoters} />
+            <ShareTile kind="passive"   pct={s.passivesPct}   count={s.passives} />
+            <ShareTile kind="detractor" pct={s.detractorsPct} count={s.detractors} />
+          </div>
+
+          {/* 🔴 БАЛИ ПОЗА ШКАЛОЮ НАЗВАНІ ЧИСЛОМ (рішення власника). Доти такий бал мовчки
+              потрапляв у знаменник як нейтрал і ЗАНИЖУВАВ eNPS. */}
+          {s.invalid > 0 && (
+            <div style={{ marginBottom: 14, padding: "9px 13px", borderRadius: 12, fontSize: 12.5,
+              background: "rgba(220,38,38,.08)", color: "#b91c1c" }}>
+              ⚠️ {s.invalid} {s.invalid === 1 ? "оцінка" : "оцінок"} поза шкалою 0-10 — у розрахунок НЕ входять.
+            </div>
+          )}
+
+          <h3 style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 800 }}>
+            Тренд <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>({GRAN_LABEL[data.granularity]}, обрано за довжиною періоду)</span>
+          </h3>
+          <div style={{ overflowX: "auto" }}>
+            <table className="data-table compact" style={{ minWidth: 560 }}>
+              <thead><tr>
+                <th style={{ textAlign: "left" }}>Період</th>
+                <th style={{ textAlign: "center" }}>{CLASS_UI.promoter.emoji}</th>
+                <th style={{ textAlign: "center" }}>{CLASS_UI.passive.emoji}</th>
+                <th style={{ textAlign: "center" }}>{CLASS_UI.detractor.emoji}</th>
+                <th style={{ textAlign: "center" }}>Всього</th>
+                <th style={{ textAlign: "left" }}>eNPS</th>
+              </tr></thead>
+              <tbody>
+                {data.series.map((x) => (
+                  <tr key={x.bucket}>
+                    <td style={{ textAlign: "left", fontWeight: 600 }}>{bucketLabel(x.bucket, data.granularity)}</td>
+                    <td style={{ textAlign: "center", color: CLASS_UI.promoter.color, fontWeight: 700 }}>{x.promoters}</td>
+                    <td style={{ textAlign: "center", color: CLASS_UI.passive.color, fontWeight: 700 }}>{x.passives}</td>
+                    <td style={{ textAlign: "center", color: CLASS_UI.detractor.color, fontWeight: 700 }}>{x.detractors}</td>
+                    <td style={{ textAlign: "center" }}>{x.total}</td>
+                    <td style={{ textAlign: "left" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ display: "inline-block", width: 120, height: 8, background: "rgba(128,128,128,.14)", borderRadius: 4, position: "relative" }}>
+                          <span style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "var(--text-muted)" }} />
+                          {x.enps != null && <span style={{ position: "absolute", top: 0, bottom: 0, borderRadius: 4,
+                            background: x.enps >= 0 ? CLASS_UI.promoter.color : CLASS_UI.detractor.color,
+                            left: x.enps >= 0 ? "50%" : `${50 - (Math.abs(x.enps) / maxAbs) * 50}%`,
+                            width: `${(Math.abs(x.enps) / maxAbs) * 50}%` }} />}
+                        </span>
+                        <b style={{ color: x.enps == null ? "var(--text-muted)" : x.band ? BAND_COLOR[x.band.tone] : "var(--text)" }}>
+                          {x.enps == null ? "—" : x.enps > 0 ? `+${x.enps}` : x.enps}
+                        </b>
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "10px 0 0" }}>
+            Класи: {SCALE_CAPTION}. eNPS = %промоутерів − %критиків; нейтрали у формулу не входять.
+          </p>
+        </>
+      )}
     </div>
   );
 }
+

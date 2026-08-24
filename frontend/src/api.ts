@@ -2339,10 +2339,26 @@ export async function reviewO2OTask(id: number, outcome: O2OTaskOutcome, meeting
   await api.post(`/one-on-ones/task/${id}/review`, { outcome, meetingDate });
 }
 
-export interface O2OEnpsPoint { month: string; promoters: number; detractors: number; passives: number; total: number; enps: number | null }
-export async function fetchO2OEnps(months = 12): Promise<O2OEnpsPoint[]> {
-  const { data } = await api.get<{ series: O2OEnpsPoint[] }>("/one-on-ones/enps", { params: { months } });
-  return data?.series ?? [];
+/** Смуга оцінки eNPS — межі рахує СЕРВЕР; фронт отримує ключ, підпис і тон. */
+export interface O2OEnpsBand { key: string; label: string; tone: "green" | "amber" | "orange" | "red"; from: number; to: number }
+export interface O2OEnpsSummary {
+  total: number; promoters: number; passives: number; detractors: number;
+  /** Бали поза шкалою 0-10: у знаменник НЕ входять, але мусять бути названі числом. */
+  invalid: number;
+  promotersPct: number; passivesPct: number; detractorsPct: number;
+  /** null = оцінок немає (це НЕ нуль: нуль читався б як результат). */
+  enps: number | null;
+  band: O2OEnpsBand | null;
+}
+export interface O2OEnpsPoint extends O2OEnpsSummary { bucket: string }
+export interface O2OEnpsResponse {
+  from: string; to: string; granularity: "day" | "week" | "month";
+  summary: O2OEnpsSummary; series: O2OEnpsPoint[];
+}
+/** Період ДОВІЛЬНИЙ, обидва кінці включно (1×1 не тримаються меж місяця). */
+export async function fetchO2OEnps(from: string, to: string): Promise<O2OEnpsResponse> {
+  const { data } = await api.get<O2OEnpsResponse>("/one-on-ones/enps", { params: { from, to } });
+  return data;
 }
 
 // ── Статистики ───────────────────────────────────────────────────────────────

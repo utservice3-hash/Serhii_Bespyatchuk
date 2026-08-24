@@ -40,12 +40,8 @@ export interface FormDef {
 /** Текст питання задоволеності — один на всі типи (блок структурний, не редагується як питання). */
 export const SATISFACTION_LABEL = "Наскільки ти задоволений роботою в компанії? (1-10)";
 
-// eNPS-класифікація (шкала 0-10).
-export const ENPS = {
-  isDetractor: (s: number) => s >= 0 && s <= 6,
-  isPassive: (s: number) => s === 7 || s === 8,
-  isPromoter: (s: number) => s === 9 || s === 10,
-} as const;
+// eNPS-класифікація живе в `oneOnOne/enps.ts` — ЄДИНОМУ джерелі шкали.
+// Тут вона колись дублювалась і не імпортувалась нікуди, тобто вже нічого не стерегла.
 
 /** score-питання типу (для overall = середнє пікерів). score_text теж має score. */
 export function scoreKeys(form: FormDef): string[] {

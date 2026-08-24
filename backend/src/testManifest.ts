@@ -77,6 +77,7 @@ export const MANIFEST_FILES: string[] = [
   "core/leadgenChannelOnly.test.js",
   "routes/uiEntry.test.js",
   "routes/oneOnOneSaveGuard.test.js",
+  "oneOnOne/enps.test.js",
   "core/priorPaid.test.js",
   "jobs/calls.test.js",
   "utils/phone.test.js",
@@ -671,4 +672,10 @@ export const MANIFEST_TESTS: string[] = [
   //    Номери з #140: #137 тримає перф-прохід, #138/#138b/#139 — Задачник.
   "#140 помилка збереження 1×1 не зникає мовчки",
   "#140b перехід між датою/людиною/типом не викидає набране",
+  // ── 1×1 · eNPS за довільний період (oneOnOne/enps.test.ts, 24.08.2026).
+  //    Номери: #141-142 тримає лідген-фікс, eNPS — резерв #143-149.
+  "#143 смуги eNPS покривають −100..100 рівно один раз",
+  "#143b eNPS = %промоутерів − %критиків, і рахується з сирих лічильників",
+  "#143c шкала на фронті збігається з ядром — бал у бал",
+  "#143d період eNPS: довільний, обидва кінці включно, грануляція за довжиною",
 ];

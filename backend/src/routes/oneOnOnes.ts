@@ -3,6 +3,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { ONE_ON_ONE_TYPES, type OneOnOneType } from "../oneOnOne/catalog.js";
+import { parseEnpsRange, granularityFor, summarizeEnps, buildEnpsSeries } from "../oneOnOne/enps.js";
 
 /**
  * Ван-ту-вани (1×1) — три типи (A: тімлід→менеджер, B: керівник→тімлід, V: HR→всі).
@@ -400,26 +401,37 @@ oneOnOnesRouter.get("/stats/scores", async (req, res) => {
   res.json({ type, rows: r.rows });
 });
 
-/** eNPS-агрегат за місяцями (тип В): %промоутерів − %критиків (0-6 крит /7-8 нейтр /9-10 пром). */
+/**
+ * eNPS (тип В) за ДОВІЛЬНИЙ період: `?from=YYYY-MM-DD&to=YYYY-MM-DD`, обидва кінці
+ * ВКЛЮЧНО. `?months=N` лишається як фолбек для старого бандла, що ще крутиться в
+ * браузерах у момент викату.
+ *
+ * 🔴 ЗАПИТ БІЛЬШЕ НЕ КЛАСИФІКУЄ. Він віддає ГІСТОГРАМУ (день × бал × кількість), а хто
+ * промоутер, які відсотки, яка смуга й на які бакети різати тренд — вирішує
+ * `oneOnOne/enps.ts`. Доти пороги «9-10/7-8/0-6» жили в чотирьох місцях (тут, у
+ * `enpsColor`, у підписі під пікером і в мертвому `ENPS` каталогу) — і розійшлися б
+ * тихо, бо кожне число окремо виглядало б правильним.
+ */
 oneOnOnesRouter.get("/enps", async (req, res) => {
-  const months = Math.min(24, Math.max(1, Number(req.query.months) || 12));
+  const range = parseEnpsRange(req.query, kyivToday());
+  if ("error" in range) return res.status(400).json({ error: range.error });
   const vs = viewScope(req.auth!, "o");
   const params: unknown[] = [];
   let vsFrag = vs.frag;
   if (vs.params.length) { params.push(vs.params[0]); vsFrag = vs.frag.replace("$P", `$${params.length}`); }
-  params.push(months - 1);
-  const r = await pool.query<{ month: string; prom: number; det: number; total: number }>(
-    `SELECT to_char(date_trunc('month', o.meeting_date),'YYYY-MM') AS month,
-            count(*) FILTER (WHERE o.enps_score BETWEEN 9 AND 10)::int AS prom,
-            count(*) FILTER (WHERE o.enps_score BETWEEN 0 AND 6)::int  AS det,
-            count(*) FILTER (WHERE o.enps_score IS NOT NULL)::int      AS total
+  params.push(range.from, range.to);
+  const fromP = `$${params.length - 1}`, toP = `$${params.length}`;
+  const r = await pool.query<{ day: string; score: number; count: number }>(
+    `SELECT to_char(o.meeting_date,'YYYY-MM-DD') AS day, o.enps_score AS score, count(*)::int AS count
        FROM one_on_ones o
       WHERE o.type='V' AND o.enps_score IS NOT NULL AND (${vsFrag})
-        AND o.meeting_date >= (date_trunc('month', now()) - make_interval(months => $${params.length}))
-      GROUP BY date_trunc('month', o.meeting_date) ORDER BY date_trunc('month', o.meeting_date)`, params);
-  const series = r.rows.map((x) => ({
-    month: x.month, promoters: x.prom, detractors: x.det, passives: x.total - x.prom - x.det,
-    total: x.total, enps: x.total ? Math.round(((x.prom - x.det) / x.total) * 100) : null,
-  }));
-  res.json({ series });
+        AND o.meeting_date >= ${fromP}::date AND o.meeting_date <= ${toP}::date
+      GROUP BY 1, 2 ORDER BY 1`, params);
+  const granularity = granularityFor(range.from, range.to);
+  const rows = r.rows.map((x) => ({ day: x.day, score: Number(x.score), count: Number(x.count) }));
+  res.json({
+    from: range.from, to: range.to, granularity,
+    summary: summarizeEnps(rows),
+    series: buildEnpsSeries(rows, granularity),
+  });
 });
