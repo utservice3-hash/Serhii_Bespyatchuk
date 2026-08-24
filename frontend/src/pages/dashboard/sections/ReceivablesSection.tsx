@@ -2,8 +2,14 @@ import { useState, type Dispatch, type SetStateAction, Fragment } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   saveReceivableNote, saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
-  type ReceivableInvoice, type ReceivableManager, type ReceivableClient, type Team,
+  type ReceivableInvoice, type ReceivableManager, type ReceivableClient, type ReceivableTotals, type Team,
 } from "../../../api";
+import { ReceivablesTiles } from "./ReceivablesTiles";
+import { ReceivablesFilters } from "./ReceivablesFilters";
+import {
+  CARRIER_LABEL, CARRIER_REASON_LABEL, EMPTY_FILTERS, entitySummary, isOverdue,
+  originBadges, passesFilters, t, type Filters,
+} from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
 import { teamOptions } from "../teamColors";
 import { CommentField } from "../../../components/CommentField";
@@ -61,6 +67,36 @@ function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
   );
 }
 
+/**
+ * 🚚 СТАН ПЕРЕВІЗНИКА В РЯДКУ КЛІЄНТА.
+ *
+ * 🔴 «н/д» ТУТ — ЦЕ ВІДПОВІДЬ, А НЕ ПОРОЖНЄ МІСЦЕ, і воно НІКОЛИ не зливається
+ * з «не оплачено». Заміряно на живому проді 24.08.2026: рахунки, виставлені
+ * напряму в 1С, — 1 589 000 ₴; назви їх «не оплачено», і фінансист побачив би
+ * 28% фальшивої неоплати зверху до справжніх 5 663 227 ₴.
+ *
+ * Причина «н/д» підписана завжди: виставлено через 1С · лінк не веде на угоду ·
+ * воронка поза мапою етапів. Три різні діагнози — три різні дії різних людей.
+ */
+function CarrierCell({ facts }: { facts: ReceivableClient["facts"] }) {
+  if (!facts) return <span style={{ color: "var(--text-muted)" }}>—</span>;
+  const paid = t(facts.carrier.paid), unpaid = t(facts.carrier.unpaid), na = t(facts.carrier.na);
+  const parts: React.ReactNode[] = [];
+  if (paid.n) parts.push(<span key="p" style={{ color: "#16a34a" }} title={`${CARRIER_LABEL.paid} · ${formatAmount(paid.amount)}`}>✓ {paid.n}</span>);
+  if (unpaid.n) parts.push(<span key="u" style={{ color: "#f59e0b" }} title={`${CARRIER_LABEL.unpaid} · ${formatAmount(unpaid.amount)}`}>◷ {unpaid.n}</span>);
+  if (na.n) parts.push(<span key="n" style={{ color: "var(--text-muted)" }} title={`н/д · ${formatAmount(na.amount)}`}>н/д {na.n}</span>);
+  return (
+    <span>
+      <span style={{ display: "flex", gap: 8 }}>{parts.length ? parts : "—"}</span>
+      {facts.carrierReasons.length > 0 && (
+        <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>
+          {facts.carrierReasons.map((r) => CARRIER_REASON_LABEL[r]).join(" · ")}
+        </span>
+      )}
+    </span>
+  );
+}
+
 const inputStyle: React.CSSProperties = {
   font: "inherit", fontSize: 12, padding: "3px 6px", borderRadius: 6,
   border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
@@ -80,6 +116,7 @@ export function ReceivablesSection({
   receivablesSyncedAt,
   receivablesLoading,
   receivablesData,
+  receivablesTotals,
   canEditReceivables,
   patchReceivableNote,
   onRefresh,
@@ -91,6 +128,7 @@ export function ReceivablesSection({
   receivablesSyncedAt: string | null;
   receivablesLoading: boolean;
   receivablesData: ReceivableManager[];
+  receivablesTotals: ReceivableTotals | null;
   canEditReceivables: boolean;
   patchReceivableNote: (clientKey: string, patch: { comment?: string; dueDate?: string | null }) => void;
   onRefresh?: () => void;
@@ -234,9 +272,16 @@ export function ReceivablesSection({
   const all = receivablesData
     .flatMap((m) => m.clients.map((c) => ({ ...c, managerName: m.managerName })))
     .sort((a, b) => b.amount - a.amount);
+  // 🔴 `total` рахується по ВСЬОМУ списку, а не по відфільтрованому: плитка
+  // «Загальний борг» описує стан дебіторки, а не стан фільтра. Підсумок видимих
+  // рядків стоїть ОКРЕМО, під таблицею, і підписаний як видимий.
   const total = all.reduce((s, c) => s + c.amount, 0);
-  const overdueClients = all.filter((c) => c.overdueDays != null && c.limitDays != null && c.overdueDays > c.limitDays);
+  const overdueClients = all.filter(isOverdue);
   const overdueSum = overdueClients.reduce((s, c) => s + c.amount, 0);
+
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const shown = all.filter((c) => passesFilters(c, filters));
+  const shownSum = shown.reduce((s, c) => s + c.amount, 0);
 
   return (
     <>
@@ -272,29 +317,20 @@ export function ReceivablesSection({
         <p className="loading-text">Немає даних.</p>
       ) : (
         <>
-          <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginBottom: 16 }}>
-            <div className="kpi-card" style={{ borderTop: "3px solid #c5141c" }}>
-              <span className="kpi-label">Загальний борг</span>
-              <span className="kpi-value">{formatAmount(total)}</span>
-            </div>
-            <div className="kpi-card">
-              <span className="kpi-label">Боржників</span>
-              <span className="kpi-value">{all.length}</span>
-            </div>
-            <div className="kpi-card" style={{ borderTop: `3px solid ${overdueClients.length ? "#dc2626" : "#16a34a"}` }}>
-              <span className="kpi-label">Прострочено (понад ліміт)</span>
-              <span className="kpi-value" style={{ color: overdueClients.length ? "#dc2626" : "#16a34a" }}>
-                {overdueClients.length}
-              </span>
-              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{overdueClients.length ? formatAmount(overdueSum) : "усе в межах ліміту"}</span>
-            </div>
-          </div>
+          <ReceivablesTiles
+            totals={receivablesTotals}
+            debtTotal={total}
+            clientCount={all.length}
+            overdueCount={overdueClients.length}
+            overdueSum={overdueSum}
+          />
 
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ marginBottom: 4 }}>Боржники ({all.length})</h2>
             <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 10px" }}>
               Клік по клієнту — неоплачені рахунки з дедлайном і коментарем до кожного. Червоні дні — прострочка понад ліміт.
             </p>
+            <ReceivablesFilters filters={filters} setFilters={setFilters} shown={shown.length} totalRows={all.length} />
             <div style={{ overflowX: "auto" }}>
               <table className="data-table">
                 <thead>
@@ -302,6 +338,8 @@ export function ReceivablesSection({
                     <th style={{ textAlign: "center", width: 36 }}>#</th>
                     <th style={{ textAlign: "left" }}>Клієнт</th>
                     <th style={{ textAlign: "left" }}>Відповідальний</th>
+                    <th style={{ textAlign: "left" }} title="Наша юрособа, від якої виставлено рахунок — з «форми оплати» Kommo">Юрособа</th>
+                    <th style={{ textAlign: "left" }} title="Чи оплачено перевізника по угоді рахунку. «н/д» = не знаємо, а НЕ «не оплачено»">Перевізник</th>
                     <th style={{ textAlign: "right" }}>Сума боргу</th>
                     <th style={{ textAlign: "center" }}>Днів без оплати</th>
                     <th style={{ textAlign: "center" }}>Ліміт</th>
@@ -310,8 +348,10 @@ export function ReceivablesSection({
                   </tr>
                 </thead>
                 <tbody>
-                  {all.map((c, i) => {
-                    const over = c.overdueDays != null && c.limitDays != null && c.overdueDays > c.limitDays;
+                  {shown.map((c, i) => {
+                    const over = isOverdue(c);
+                    const badges = originBadges(c.facts);
+                    const ent = entitySummary(c.facts);
                     return (
                       <Fragment key={`${c.clientKey}-${i}`}>
                         <tr style={over ? { background: "rgba(220,38,38,0.04)" } : undefined}>
@@ -321,11 +361,34 @@ export function ReceivablesSection({
                               style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", fontWeight: 600, padding: 0, textAlign: "left" }}>
                               {caret(c.clientKey)}{c.clientName}
                             </button>
+                            {/* 🔴 ЯРЛИК ІЗ ЧИСЛОМ, бо клієнт БУВАЄ ЗМІШАНИЙ: у ПВК
+                                АРСЕНАЛ 11 рахунків із 40 виставлені через 1С, решта
+                                29 — звичайні угоди Kommo. Ярлик без числа стверджував
+                                би, що весь клієнт такий, — неправда рівно про той
+                                випадок, заради якого категорію й заводили. */}
+                            {badges.map((b) => (
+                              <span key={b.icon} title={b.hint}
+                                style={{ display: "block", fontSize: 11, marginTop: 2,
+                                         color: b.tone === "warn" ? "var(--warn)" : "var(--text-muted)" }}>
+                                {b.icon} {b.text}
+                              </span>
+                            ))}
                           </td>
                           <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12, verticalAlign: "top" }}>
                             <OwnerCell c={c} />
                           </td>
-                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top" }}>{formatAmount(c.amount)}</td>
+                          <td style={{ textAlign: "left", verticalAlign: "top", fontSize: 12 }}>
+                            {ent ? (
+                              <span title={ent.hint}>
+                                {ent.label}
+                                {ent.mixed && <span style={{ color: "var(--text-muted)", fontSize: 11 }}> +ще</span>}
+                              </span>
+                            ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                          </td>
+                          <td style={{ textAlign: "left", verticalAlign: "top", fontSize: 12 }}>
+                            <CarrierCell facts={c.facts} />
+                          </td>
+                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top" }} title={formatAmountFull(c.amount)}>{formatAmount(c.amount)}</td>
                           <td style={{ textAlign: "center", verticalAlign: "top", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>{c.overdueDays ?? "—"}</td>
                           <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "top" }}>{c.limitDays ?? "—"}</td>
                           <td style={{ textAlign: "center", verticalAlign: "top" }}>
@@ -349,13 +412,30 @@ export function ReceivablesSection({
                             />
                           </td>
                         </tr>
-                        {renderInvoices(c.clientKey, 8)}
+                        {renderInvoices(c.clientKey, 10)}
                       </Fragment>
                     );
                   })}
                 </tbody>
               </table>
             </div>
+            {/* 🔴 ПІДСУМОК ВИДИМИХ РЯДКІВ — ОКРЕМО від плитки «Загальний борг» і
+                підписаний як видимий. Якби плитка їздила за фільтром, «загальний
+                борг» означав би різне залежно від щойно натиснутого, а якби цього
+                рядка не було — сума на екрані не сходилась би з плиткою, і це
+                читалось би як поломка. */}
+            {shown.length !== all.length && (
+              <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "10px 0 0" }}>
+                Видимих рядків: <b style={{ color: "var(--text)" }}>{shown.length}</b> із {all.length} ·
+                сума видимих <b style={{ color: "var(--text)" }} title={formatAmountFull(shownSum)}>{formatAmount(shownSum)}</b> із {formatAmount(total)}.
+                Плитки вгорі показують УСЮ дебіторку у скоупі й за фільтром не змінюються.
+              </p>
+            )}
+            {shown.length === 0 && (
+              <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "12px 0 0" }}>
+                Під цими фільтрами боржників немає — але в скоупі їх {all.length}. Зніміть фільтр, щоб побачити всіх.
+              </p>
+            )}
           </div>
 
           {receivablesData.length > 1 && (

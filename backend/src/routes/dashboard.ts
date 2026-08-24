@@ -45,6 +45,7 @@ import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClient
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
+import * as receivablesFacts from "../core/receivablesFacts.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
@@ -1781,10 +1782,18 @@ dashboardRouter.get("/receivables", async (req, res) => {
   );
   const syncedAt = syncRes.rows[0]?.synced_at ?? null;
 
+  // 📇 ФАКТИ ПРО РАХУНКИ — юрособа, стан перевізника, вік, звʼязок із CRM.
+  // ОДИН запит на всі зрізи екрана (RTT до Neon = 30 мс, тож ціна тут — кількість
+  // походів, а не важкість; `#158`). Скоуп — по ключах УЖЕ відфільтрованих
+  // клієнтів, а не по `ri.manager_id`: інакше Σ плиток розійшлася б із Σ рядків.
+  const facts = await receivablesFacts.loadInvoiceFacts(pool, clientKeys);
+  const folded = receivablesFacts.foldFacts(facts);
+
   type Client = {
     clientKey: string | null; clientName: string | null; amount: number;
     limitDays: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
+    facts: receivablesFacts.ClientFacts | null;
   };
   const byManager = new Map<number | null, { managerId: number | null; managerName: string; clients: Client[]; total: number }>();
   for (const r of rows) {
@@ -1800,11 +1809,14 @@ dashboardRouter.get("/receivables", async (req, res) => {
       // менеджера» виглядали б однаково порожньо, і людина не мала б як їх
       // розрізнити. Порожнє місце читається як «нічого немає», а не як відповідь.
       ownerSource: r.ownerSource, majorityName: r.majorityName,
+      // 🔖 Ярлики рядка — з ТОГО САМОГО зведення, з якого рахуються плитки вгорі.
+      // Два вирази для одного числа розходяться мовчки; тут вираз один.
+      facts: r.clientKey ? folded.byClient.get(r.clientKey) ?? null : null,
     });
     entry.total += r.amount;
   }
 
-  res.json({ syncedAt, managers: Array.from(byManager.values()) });
+  res.json({ syncedAt, managers: Array.from(byManager.values()), totals: folded.totals });
 });
 
 /**

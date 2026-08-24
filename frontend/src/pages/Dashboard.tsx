@@ -45,6 +45,7 @@ import {
   type ExecutiveOverview,
   type LeadgenGroup,
   type ReceivableManager,
+  type ReceivableTotals,
   type Task,
   type TaskPriority,
   type Team,
@@ -186,6 +187,10 @@ export function Dashboard() {
   const [receivablesTeamId, setReceivablesTeamId] = useState<number | "">("");
   const [receivablesData, setReceivablesData] = useState<ReceivableManager[]>([]);
   const [receivablesSyncedAt, setReceivablesSyncedAt] = useState<string | null>(null);
+  // 📊 Підсумки для плиток — приїжджають ТИМ САМИМ запитом, що й рядки, і з того
+  // самого зведення. Рахувати їх на фронті окремо означало б завести другий вираз
+  // для одного числа (див. «Команда за місяць 12%» проти плитки «11.8%»).
+  const [receivablesTotals, setReceivablesTotals] = useState<ReceivableTotals | null>(null);
   const [receivablesLoading, setReceivablesLoading] = useState(false);
   // Live refresh: bump a nonce every 5 min so data-loading effects re-fetch
   // fresh CRM data without a manual page reload.
@@ -523,11 +528,12 @@ export function Dashboard() {
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setReceivablesLoading(true);
     fetchReceivables({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
-      .then(({ syncedAt, managers }) => {
+      .then(({ syncedAt, managers, totals }) => {
         setReceivablesData(managers);
         setReceivablesSyncedAt(syncedAt);
+        setReceivablesTotals(totals ?? null);
       })
-      .catch(() => setReceivablesData([]))
+      .catch(() => { setReceivablesData([]); setReceivablesTotals(null); })
       .finally(() => setReceivablesLoading(false));
   }, [section, receivablesTeamId, teams, auth, refreshNonce]);
 
@@ -1044,6 +1050,7 @@ export function Dashboard() {
           receivablesSyncedAt={receivablesSyncedAt}
           receivablesLoading={receivablesLoading}
           receivablesData={receivablesData}
+          receivablesTotals={receivablesTotals}
           canEditReceivables={canEditReceivables}
           patchReceivableNote={patchReceivableNote}
           onRefresh={() => setRefreshNonce((n) => n + 1)}

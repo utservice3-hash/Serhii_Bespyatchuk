@@ -1211,6 +1211,51 @@ export type ReceivableOwnerSource =
   | "cash-invoice"
   | "none";
 
+/** Звʼязок рахунку з угодою Kommo. Три РІЗНІ діагнози, не один «немає даних». */
+export type ReceivableLinkState =
+  | "kommo"        // № угоди є, угода знайдена
+  | "one_c"        // виставлено через 1С повз CRM — угоди немає ЗА ЗАДУМОМ
+  | "broken_link"; // № угоди є, а угоди немає — це вже проблема, не задум
+
+export type ReceivableEntity = "uts" | "avtomuv" | "fop" | "unknown";
+export type ReceivableEntityReason = "one_c" | "broken_link" | "no_payment_type";
+/** `na` = «не знаємо», НЕ «не оплачено». Різниця — 1.59 млн фальшивої неоплати. */
+export type ReceivableCarrierPaid = "paid" | "unpaid" | "na";
+export type ReceivableCarrierReason = "one_c" | "broken_link" | "out_of_map";
+export type ReceivableAging = "0-30" | "31-60" | "61-90" | "90+";
+
+export interface ReceivableTally { n: number; amount: number }
+type TallyMap<K extends string> = Partial<Record<K, ReceivableTally>>;
+
+/** Зведення по клієнту — джерело ЯРЛИКІВ у його рядку. */
+export interface ReceivableClientFacts {
+  clientKey: string;
+  invoices: number;
+  amount: number;
+  link: TallyMap<ReceivableLinkState>;
+  entity: TallyMap<ReceivableEntity>;
+  carrier: TallyMap<ReceivableCarrierPaid>;
+  aging: TallyMap<ReceivableAging>;
+  entityReasons: ReceivableEntityReason[];
+  carrierReasons: ReceivableCarrierReason[];
+  /** Воронки поза `pipeline_stage_map` — НАЗИВАЄМО їх, а не ховаємо. */
+  pipelinesOutOfMap: number[];
+  oldestAgeDays: number | null;
+}
+
+/** Ті самі числа, що в ярликах рядків, — джерело ПЛИТОК. Вираз один на обох. */
+export interface ReceivableTotals {
+  invoices: number;
+  amount: number;
+  link: TallyMap<ReceivableLinkState>;
+  entity: TallyMap<ReceivableEntity>;
+  carrier: TallyMap<ReceivableCarrierPaid>;
+  aging: TallyMap<ReceivableAging>;
+  entityReason: TallyMap<ReceivableEntityReason>;
+  carrierReason: TallyMap<ReceivableCarrierReason>;
+  pipelinesOutOfMap: number[];
+}
+
 export interface ReceivableClient {
   clientKey: string;
   clientName: string;
@@ -1222,6 +1267,8 @@ export interface ReceivableClient {
   ownerSource: ReceivableOwnerSource;
   /** Мажоритар до перевірки активності — щоб підпис назвав, кого замінили. */
   majorityName: string | null;
+  /** `null` лише коли в клієнта немає жодного рахунку в деталізації. */
+  facts: ReceivableClientFacts | null;
 }
 
 /** Ручне призначення відповідального. `managerId: null` — свідоме «без відповідального». */
@@ -1340,8 +1387,8 @@ export interface ReceivableManager {
 export async function fetchReceivables(params: {
   managerId?: number;
   teamId?: number;
-}): Promise<{ syncedAt: string | null; managers: ReceivableManager[] }> {
-  const { data } = await api.get<{ syncedAt: string | null; managers: ReceivableManager[] }>(
+}): Promise<{ syncedAt: string | null; managers: ReceivableManager[]; totals: ReceivableTotals | null }> {
+  const { data } = await api.get<{ syncedAt: string | null; managers: ReceivableManager[]; totals: ReceivableTotals | null }>(
     "/dashboard/receivables",
     { params }
   );
