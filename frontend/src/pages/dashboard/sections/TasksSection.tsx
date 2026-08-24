@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import {
-  updateTask,
   createReactivationTask,
   fetchReactivationCandidates,
   type ManagerOption,
@@ -15,10 +14,10 @@ import { CommentField } from "../../../components/CommentField";
 
 /** Підзадачі задачі — довільний чекліст, кожен пункт трекається виконано/ні.
  *  Зберігається on-change у tasks.subtasks_json. */
-function SubtasksEditor({ task, patchTaskLocal }: { task: Task; patchTaskLocal: (id: number, patch: Partial<Task>) => void }) {
+function SubtasksEditor({ task, patchTaskLocal, commitTask }: { task: Task; patchTaskLocal: (id: number, patch: Partial<Task>) => void; commitTask: (id: number, patch: Partial<Task>) => void }) {
   const list: Subtask[] = task.subtasksJson ?? [];
   const [draft, setDraft] = useState("");
-  const save = (next: Subtask[]) => { patchTaskLocal(task.id, { subtasksJson: next }); updateTask(task.id, { subtasksJson: next }); };
+  const save = (next: Subtask[]) => { patchTaskLocal(task.id, { subtasksJson: next }); commitTask(task.id, { subtasksJson: next }); };
   const done = list.filter((s) => s.done).length;
   const add = () => { const t = draft.trim(); if (!t) return; save([...list, { title: t, done: false }]); setDraft(""); };
   return (
@@ -264,6 +263,7 @@ export function TasksSection({
   tasks,
   managerOptions,
   patchTaskLocal,
+  commitTask,
   handleDeleteTask,
   handleSubmitTaskModal,
   refreshTasks,
@@ -285,6 +285,8 @@ export function TasksSection({
   tasks: Task[];
   managerOptions: ManagerOption[];
   patchTaskLocal: (id: number, patch: Partial<Task>) => void;
+  /** Збереження на сервер із ВИДИМОЮ помилкою: мовчазний 403/500 читався як «збережено». */
+  commitTask: (id: number, patch: Partial<Task>) => void;
   handleDeleteTask: (id: number) => void;
   handleSubmitTaskModal: () => void;
   refreshTasks?: () => Promise<void>;
@@ -540,7 +542,7 @@ export function TasksSection({
                         <AutoTextarea
                           value={task.title}
                           onLocal={(v) => patchTaskLocal(task.id, { title: v })}
-                          onCommit={(v) => updateTask(task.id, { title: v })}
+                          onCommit={(v) => commitTask(task.id, { title: v })}
                         />
                       </div>
                       {/* Задача з 1×1: бейдж + закріплення + замок. Видалення блокує сервер (403). */}
@@ -562,7 +564,7 @@ export function TasksSection({
                       <div style={{ paddingLeft: 22, marginTop: 2 }}>
                         <select
                           value={task.department ?? ""}
-                          onChange={(e) => { const department = e.target.value || null; patchTaskLocal(task.id, { department }); updateTask(task.id, { department }); }}
+                          onChange={(e) => { const department = e.target.value || null; patchTaskLocal(task.id, { department }); commitTask(task.id, { department }); }}
                           title="Команда / департамент"
                           style={task.department
                             ? { ...deptPillStyle(task.department), fontSize: 10.5, padding: "1px 8px" }
@@ -605,7 +607,7 @@ export function TasksSection({
                                   <input type="checkbox" checked={!!c.done} onChange={() => {
                                     const next = list.map((x, j) => (j === i ? { ...x, done: !x.done } : x));
                                     patchTaskLocal(task.id, { checklistJson: next });
-                                    updateTask(task.id, { checklistJson: next });
+                                    commitTask(task.id, { checklistJson: next });
                                   }} />
                                   <span style={{ flex: 1, textDecoration: c.done ? "line-through" : "none", opacity: c.done ? 0.55 : 1 }}>🏢 {c.clientName}</span>
                                   <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
@@ -622,7 +624,7 @@ export function TasksSection({
                                       if (v === (c.comment ?? null)) return;
                                       const updated = list.map((x, j) => (j === i ? { ...x, comment: v } : x));
                                       patchTaskLocal(task.id, { checklistJson: updated });
-                                      updateTask(task.id, { checklistJson: updated });
+                                      commitTask(task.id, { checklistJson: updated });
                                     }}
                                   />
                                 </div>
@@ -662,16 +664,16 @@ export function TasksSection({
                         value={task.status}
                         onChange={(status) => {
                           patchTaskLocal(task.id, { status });
-                          updateTask(task.id, { status });
+                          commitTask(task.id, { status });
                         }}
                       />
                     </td>
                     <td>
-                      <EditableDate value={task.deadline} onChange={(deadline) => { patchTaskLocal(task.id, { deadline }); updateTask(task.id, { deadline }); }} />
+                      <EditableDate value={task.deadline} onChange={(deadline) => { patchTaskLocal(task.id, { deadline }); commitTask(task.id, { deadline }); }} />
                     </td>
                     <td>
                       <AssigneeCell value={task.assigneeId} name={task.assigneeName} options={managerOptions}
-                        onChange={(assigneeId) => { const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(task.id, { assigneeId, assigneeName }); updateTask(task.id, { assigneeId }); }} />
+                        onChange={(assigneeId) => { const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(task.id, { assigneeId, assigneeName }); commitTask(task.id, { assigneeId }); }} />
                     </td>
                     <td>
                       <select
@@ -679,7 +681,7 @@ export function TasksSection({
                         onChange={(e) => {
                           const priority = e.target.value as TaskPriority;
                           patchTaskLocal(task.id, { priority });
-                          updateTask(task.id, { priority });
+                          commitTask(task.id, { priority });
                         }}
                         style={{ ...priorityPillStyle(task.priority), fontSize: 11, padding: "3px 6px" }}
                         title="Пріоритет"
@@ -694,7 +696,7 @@ export function TasksSection({
                         value={task.comments ?? ""}
                         placeholder="—"
                         onLocal={(v) => patchTaskLocal(task.id, { comments: v })}
-                        onCommit={(v) => updateTask(task.id, { comments: v })}
+                        onCommit={(v) => commitTask(task.id, { comments: v })}
                       />
                     </td>
                     <td>
@@ -735,7 +737,7 @@ export function TasksSection({
               <textarea
                 value={openTask.title}
                 onChange={(e) => patchTaskLocal(openTask.id, { title: e.target.value })}
-                onBlur={(e) => updateTask(openTask.id, { title: e.target.value })}
+                onBlur={(e) => commitTask(openTask.id, { title: e.target.value })}
                 rows={Math.max(1, Math.ceil((openTask.title?.length ?? 0) / 34))}
                 style={{ border: "none", width: "100%", resize: "vertical", font: "inherit", fontSize: 20, fontWeight: 700, background: "transparent", lineHeight: 1.3 }}
               />
@@ -752,16 +754,16 @@ export function TasksSection({
               return (
                 <>
                   <F icon="👤" label="Виконавець">
-                    <select value={openTask.assigneeId ?? ""} onChange={(e) => { const assigneeId = e.target.value ? Number(e.target.value) : null; const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(openTask.id, { assigneeId, assigneeName }); updateTask(openTask.id, { assigneeId }); }} style={{ width: "100%" }}>
+                    <select value={openTask.assigneeId ?? ""} onChange={(e) => { const assigneeId = e.target.value ? Number(e.target.value) : null; const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(openTask.id, { assigneeId, assigneeName }); commitTask(openTask.id, { assigneeId }); }} style={{ width: "100%" }}>
                       <option value="">— (моя / без виконавця)</option>
                       {managerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>
                   </F>
                   <F icon="📅" label="Дедлайн">
-                    <input type="date" value={openTask.deadline ?? ""} onChange={(e) => { const deadline = e.target.value || null; patchTaskLocal(openTask.id, { deadline }); updateTask(openTask.id, { deadline }); }} />
+                    <input type="date" value={openTask.deadline ?? ""} onChange={(e) => { const deadline = e.target.value || null; patchTaskLocal(openTask.id, { deadline }); commitTask(openTask.id, { deadline }); }} />
                   </F>
                   <F icon="🏷️" label="Департамент">
-                    <select value={openTask.department ?? ""} onChange={(e) => { const department = e.target.value || null; patchTaskLocal(openTask.id, { department }); updateTask(openTask.id, { department }); }} style={{ width: "100%" }}>
+                    <select value={openTask.department ?? ""} onChange={(e) => { const department = e.target.value || null; patchTaskLocal(openTask.id, { department }); commitTask(openTask.id, { department }); }} style={{ width: "100%" }}>
                       <option value="">—</option>
                       {openTask.department && !deptOptions.includes(openTask.department) && (
                         <option value={openTask.department}>{openTask.department}</option>
@@ -770,13 +772,13 @@ export function TasksSection({
                     </select>
                   </F>
                   <F icon="⚑" label="Пріоритет">
-                    <select value={openTask.priority} onChange={(e) => { const priority = e.target.value as TaskPriority; patchTaskLocal(openTask.id, { priority }); updateTask(openTask.id, { priority }); }} style={{ width: "100%" }}>
+                    <select value={openTask.priority} onChange={(e) => { const priority = e.target.value as TaskPriority; patchTaskLocal(openTask.id, { priority }); commitTask(openTask.id, { priority }); }} style={{ width: "100%" }}>
                       {Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                     </select>
                   </F>
                   <F icon="◔" label="Статус">
                     <StatusPicker value={openTask.status} fullWidth
-                      onChange={(status) => { patchTaskLocal(openTask.id, { status }); updateTask(openTask.id, { status }); }} />
+                      onChange={(status) => { patchTaskLocal(openTask.id, { status }); commitTask(openTask.id, { status }); }} />
                   </F>
                 </>
               );
@@ -805,7 +807,7 @@ export function TasksSection({
               </div>
             )}
 
-            <SubtasksEditor task={openTask} patchTaskLocal={patchTaskLocal} />
+            <SubtasksEditor task={openTask} patchTaskLocal={patchTaskLocal} commitTask={commitTask} />
 
             <div style={{ marginTop: 18 }}>
               <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 6px" }}>💬 Коментарі</h3>
@@ -813,7 +815,7 @@ export function TasksSection({
                 value={openTask.comments ?? ""}
                 placeholder="Додати коментар…"
                 onChange={(e) => patchTaskLocal(openTask.id, { comments: e.target.value })}
-                onBlur={(e) => updateTask(openTask.id, { comments: e.target.value })}
+                onBlur={(e) => commitTask(openTask.id, { comments: e.target.value })}
                 rows={5}
                 style={{ width: "100%", resize: "vertical", font: "inherit", padding: 10, lineHeight: 1.5, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
               />

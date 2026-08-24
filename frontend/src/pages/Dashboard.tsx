@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePolling } from "../hooks/usePolling";
+import { mergeTasksPreservingEdits, type TaskDirtyFields } from "./dashboard/taskMerge";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   createTask,
@@ -31,6 +32,7 @@ import {
   fetchPersonalDashboard,
   fetchReceivables,
   fetchTasks,
+  updateTask,
   fetchTeams,
   fetchTeamsRanking,
   type TeamRanking,
@@ -258,7 +260,13 @@ export function Dashboard() {
       Notification.requestPermission().catch(() => {});
     }
   }, []);
-  usePolling(() => { fetchTasks().then(setTasks).catch(() => {}); }, 45000);
+  // Фоновий рефетч ЗЛИВАЄТЬСЯ з незбереженими правками, а не замінює їх:
+  // `setTasks` навпростець стирав текст, який людина ще набирає.
+  usePolling(() => {
+    fetchTasks()
+      .then((fresh) => setTasks((prev) => mergeTasksPreservingEdits(prev, fresh, dirtyTaskFields.current)))
+      .catch(() => {});
+  }, 45000);
 
   // Poll unread messages in the background (any section) so the sidebar badge
   // stays live and we sound/toast a new incoming message even when the user is
@@ -313,7 +321,38 @@ export function Dashboard() {
     return () => clearTimeout(t);
   }, [toasts]);
 
+  // 🔴 ПОЗНАЧКА «РЕДАГУЄТЬСЯ» — інакше фоновий рефетч затирає незбережене.
+  // Правка живе в локальному стані до `onBlur`, а поллер замінював увесь масив
+  // відповіддю сервера; довгий коментар не переживав це вікно (див. taskMerge.ts).
+  const dirtyTaskFields = useRef<TaskDirtyFields>(new Map());
+
+  /**
+   * 🔴 ЗБЕРЕЖЕННЯ, ЯКЕ ВПАЛО, МУСИТЬ БУТИ ВИДИМИМ. Секція кликала `updateTask`
+   * напряму — проміс без `await` і без `.catch()`, у 17 місцях. Якщо PATCH
+   * віддавав 403/500, інтерфейс мовчав, значення лишалось на екрані, і людина
+   * читала це як «збережено». Мовчазна невдача гірша за видиму помилку: про неї
+   * дізнаються тоді, коли текст уже втрачено.
+   *
+   * ⚠️ Позначку «редагується» НЕ знімаємо на помилці — навпаки, вона й тримає
+   * набране на екрані (див. taskMerge.ts). Тост пояснює, ЧОМУ воно там висить.
+   */
+  async function commitTask(id: number, patch: Partial<Task>) {
+    try {
+      await updateTask(id, patch as Parameters<typeof updateTask>[1]);
+    } catch (err) {
+      const what = Object.keys(patch)[0] ?? "поле";
+      const detail = err instanceof Error && err.message ? ` (${err.message})` : "";
+      setToasts((cur) => [...cur, {
+        id: Date.now() + id,
+        text: `⚠️ Не вдалося зберегти «${what}» задачі #${id}${detail}. Текст на екрані НЕ втрачено — спробуйте ще раз.`,
+      }]);
+    }
+  }
+
   function patchTaskLocal(id: number, patch: Partial<Task>) {
+    const keys = dirtyTaskFields.current.get(id) ?? new Set<keyof Task>();
+    for (const k of Object.keys(patch) as (keyof Task)[]) keys.add(k);
+    dirtyTaskFields.current.set(id, keys);
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }
 
@@ -1333,6 +1372,7 @@ export function Dashboard() {
           tasks={tasks}
           managerOptions={managerOptions}
           patchTaskLocal={patchTaskLocal}
+          commitTask={commitTask}
           handleDeleteTask={handleDeleteTask}
           handleSubmitTaskModal={handleSubmitTaskModal}
           refreshTasks={async () => { const fresh = await fetchTasks(); setTasks(fresh); }}
