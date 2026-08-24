@@ -6522,10 +6522,14 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
   // #4 ср.чек Звіту = пул `reportChain` (угоди ЗАРАЗ у «авто працює→оплата» ⊎ виграні
   // за період) — signed Σ÷count per manager; команда/відділ = Σsum÷Σcount (glance нижче).
-  const [recv, succ, paid, disp, ads, lg, conv, avgc, expZone, split, expDays, convAd, convLg, recvKl, expKl] = await Promise.all([
+  const [recv, succ, paid, disp, ads, conv, avgc, expZone, split, expDays, convAd, convLg, recvKl, expKl] = await Promise.all([
     money.receivedByMgr(scope), money.successByMgr(scope), money.paidOnlyByMgr(scope),
     metrics.dispatchedByManager(scope),
-    metrics.adsAcceptedByMgr(scope, adSources), metrics.leadgenByManager(scope),
+    metrics.adsAcceptedByMgr(scope, adSources),
+    // 🗑 `leadgenByManager` (реєстр бота) ЗВІДСИ ПРИБРАНО РАЗОМ ІЗ ПЕРЕХОДОМ НА КАНАЛ:
+    // після зміни його результат не читав ніхто, а живий виклик до обваленого
+    // джерела читається як робочий — рівно те, чим колись був мертвий `expected`
+    // у /teams. Мінус один запит на кожен /report-plan.
     metrics.conversionByManager(scope), money.avgCheckPerManager("reportChain", scope),
     metrics.expectedZoneByScope({ managerId, teamId }, "manager"),
     metrics.createdSplitByManager(scope),
@@ -6590,7 +6594,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // частини лишається видимим (`factSuccess`/`factPaid`) — саме щоб «гроші прийшли,
   // угода не закрита» читалось як окремий стан, а не розчинялось у сумі.
   const recvM = mapBy(recv), dispM = mapBy(disp), adsM = new Map(ads.map((a) => [a.managerId, a.count])),
-    lgM = mapBy(lg), convM = mapBy(conv), avgM = mapBy(avgc),
+    convM = mapBy(conv), avgM = mapBy(avgc),
     convAdM = mapBy(convAd), convLgM = mapBy(convLg);
   /** Розклад за класом → мапа `managerId → {new, repeat, undef}` (гроші й угоди). */
   const klMap = <T extends { managerId: number; klass: string }>(rows: T[], pick: (r: T) => number) => {
@@ -6865,7 +6869,28 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       spark: last5Weeks.map((w) => Math.round(sparkByMgr.get(m.id)?.get(w) ?? 0)),
       kpi: {
         ads: { fact: adsM.get(m.id) ?? 0, target: Math.round(pl.ads_count ?? 0) },
-        leadgen: { fact: lgM.get(m.id)?.deals ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
+        /**
+         * 🔀 ЛІДГЕН-ФАКТ — ЗА КАНАЛОМ, А НЕ ЗА РЕЄСТРОМ БОТА (рішення власника 24.08.2026).
+         *
+         * 🔴 БУЛО: `leadgenByManager` → `leadgen_touch` ← `leadgen_registry` (аркуш
+         * лідоген-бота), анкер `transfer_date`. Заміряно: реєстр веде лише від
+         * 15.06.2026, тож до червня Звіт показував НЕ «мало лідгену», а НУЛЬ через
+         * відсутність даних (бер 0, кві 0, тра 0 — при 107/134/121 за каналом). А з
+         * 10.08 реєстр обвалився зі ~130 передач на тиждень до 11-20, і факт поїхав
+         * за ним: у Матюніна 1 при 15 у цілі.
+         *
+         * ✅ СТАЛО: `splitM.leadgenCount` — FC-угоди з `lead_channel='leadgen'`,
+         * створені у вікні. Це ТОЙ САМИЙ вираз, що вже живить `srcLeadgen` двома
+         * десятками рядків вище: одне джерело на один показник екрана, а не двоє
+         * поруч (урок «жоден показник не має двох джерел на одному екрані»).
+         * Вхід у «нову заявку від лідогенератора» окремим доданком НЕ потрібен —
+         * він уже всередині виведення `lead_channel` у `reclassifyAdChannel`.
+         *
+         * ⚠️ ОЗНАЧЕННЯ ЗМІНИЛОСЬ → МИНУЛІ ЧИСЛА ЗРОСЛИ, і це очікувано: чер 260→344,
+         * лип 571→637, сер 166→339. До обвалу канал і реєстр розходились на 7-20%,
+         * тож це не нова величина, а та сама без сліпоти. Тримають `#141`/`#141b`.
+         */
+        leadgen: { fact: splitM.get(m.id)?.leadgenCount ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
         dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0),
           // Розбивка авто за джерелом (постійний / лідоген / реклама / невизн). Σ = fact.
           repeat: dispM.get(m.id)?.repeat ?? 0, leadgen: dispM.get(m.id)?.leadgen ?? 0, ad: dispM.get(m.id)?.ad ?? 0, undef: dispM.get(m.id)?.undef ?? 0 },
@@ -7328,17 +7353,24 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // #3 ЛАЙФТАЙМ-КОНВЕРСІЯ РНК/РПК (Варіант A — чесна воронка ≤100%; знаменник за весь час,
   // майже не «дозріває»). Чисельник ТОГО САМОГО каналу, що знаменник (reachedAutoByManager):
   //   РНК = рекламні угоди → «авто працює» ÷ adsAccepted (весь час);
-  //   РПК = лідген-угоди   → «авто працює» ÷ leadgen (leadgen_touch, весь час).
+  //   РПК = лідген-угоди   → «авто працює» ÷ leadgen (lead_channel, весь час).
+  // 🔴 ЗНАМЕННИК ПЕРЕВЕДЕНО НА КАНАЛ (рішення власника 24.08.2026) — і це ЛАГОДИТЬ
+  // ЩЕ ОДИН ДЕФЕКТ, а не лише узгоджує означення. Чисельник `reachedAutoByManager`
+  // рахував за `lead_channel` ЗАВЖДИ, а знаменник брався з `leadgen_touch`, який
+  // веде лише від 15.06.2026 — тобто велика верхівка ділилась на куций низ, і
+  // лайфтайм-конверсія РПК була ЗАВИЩЕНА. Заміряно: знаменник 997 (реєстр) проти
+  // 4289 (канал), тобто ×4.3. Рядок вище раніше стверджував «чисельник того самого
+  // каналу, що знаменник» — це було НЕПРАВДОЮ; тепер стало правдою. Тримає `#143`.
   // per-manager → команда = Σ (Σ-інваріант). Тонкий знаменник (0) → «—», не «0%».
   const [reachedAuto, adsAllTime, lgAllTime, mgrTeamRows] = await Promise.all([
     metrics.reachedAutoByManager(adSources),
     metrics.adsAcceptedByMgr({}, adSources),
-    metrics.leadgenByManager({}),
+    metrics.conversionByManager({}, "leadgen"),
     pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers WHERE is_active`),
   ]);
   const teamOfMgr = new Map(mgrTeamRows.rows.map((r) => [r.id, r.team_id]));
   const adsByMgr = new Map(adsAllTime.map((x) => [x.managerId, x.count]));
-  const lgByMgr = new Map(lgAllTime.map((x) => [x.managerId, x.deals]));
+  const lgByMgr = new Map(lgAllTime.map((x) => [x.managerId, x.taken]));
   const convLT = new Map<number, { numAd: number; numLg: number; adsDen: number; lgDen: number }>();
   const bumpLT = (tid: number | null, f: (e: { numAd: number; numLg: number; adsDen: number; lgDen: number }) => void) => {
     if (tid == null) return; const e = convLT.get(tid) ?? { numAd: 0, numLg: 0, adsDen: 0, lgDen: 0 }; f(e); convLT.set(tid, e);

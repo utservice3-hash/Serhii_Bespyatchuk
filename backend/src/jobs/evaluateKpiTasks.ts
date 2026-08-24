@@ -8,8 +8,8 @@ import * as money from "../core/money.js";
  * більше не розходяться (принцип власника). Визначення (рішення власника):
  *   ads_count      → metrics.adsAcceptedByMgr  (adDealSql: client_source∈adSources
  *                    АБО lead_channel='ad', без реактивації; created у періоді)
- *   leadgen_count  → metrics.leadgenByManager  (ПЕРСИСТ leadgen_touch за transfer_date,
- *                    НЕ жива leadgen_registry — та обрізається ~5 тижнів)
+ *   leadgen_count  → metrics.createdSplitByManager (lead_channel='leadgen', FC-угоди,
+ *                    створені у вікні) — ТЕ САМЕ, що показує Звіт
  *   dispatch_count → metrics.dispatchedByManager (АВТО за load_at — фактична відправка)
  *   avg_check      → money.avgCheckByManager   (success_rev ÷ success_deals, 2600–2900)
  *   payment_amount → money.receivedByMgr        (received = 142∪етап9 — «Отримано»)
@@ -22,7 +22,12 @@ async function factFor(metric: string, managerId: number, day: string, adSources
   const pick = <T extends { managerId: number }>(rows: T[]): T | undefined => rows.find((r) => r.managerId === managerId);
   switch (metric) {
     case "ads_count": return pick(await metrics.adsAcceptedByMgr(scope, adSources))?.count ?? 0;
-    case "leadgen_count": return pick(await metrics.leadgenByManager(scope))?.deals ?? 0;
+    // 🔀 ЗА КАНАЛОМ, А НЕ ЗА РЕЄСТРОМ (рішення власника 24.08.2026) — і саме ТУТ
+    // це критично: факт задачі й факт Звіту задумані як ОДНЕ число, тож означення
+    // мусять переїхати разом. Лишити тут реєстр означало б, що задача рахує одне,
+    // а екран поруч — інше, і розбіжність нічим не ловилась би. Тримає `#142`.
+    case "leadgen_count":
+      return pick(await metrics.createdSplitByManager(scope))?.leadgenCount ?? 0;
     case "dispatch_count": return pick(await metrics.dispatchedByManager(scope))?.deals ?? 0;
     case "avg_check": return pick(await money.avgCheckByManager(scope))?.avgCheck ?? 0;
     case "payment_amount": return Math.round(pick(await money.receivedByMgr(scope))?.revenue ?? 0);
