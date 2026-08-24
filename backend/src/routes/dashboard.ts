@@ -785,11 +785,8 @@ dashboardRouter.get("/overview", async (req, res) => {
   // Стару adConversion/leadgenConversion-логіку не видалено (Фаза 3); тут лише
   // перемикаємо, що ВІДДАЄ роут. entered<10 → «—».
   const adsMonthlyOv = await metrics.conversionAdsByMonth({ managerId, teamId }, adSources);
-  // ⚡ Обидві лідоген-конверсії — з одного проходу по handoff (замість двох
-  // однакових запитів із різними конфігами). Won-когорти й злиття ті самі.
-  const leadgenConv = await metrics.leadgenConversionsByMonth({ managerId, teamId });
-  const pzMonthlyOv = leadgenConv.prodzvin;
-  const reMonthlyOv = leadgenConv.reactivation;
+  const pzMonthlyOv = await metrics.conversionProdzvinByMonth({ managerId, teamId });
+  const reMonthlyOv = await metrics.conversionReactivationByMonth({ managerId, teamId });
   // Крок В #4: «Конверсія лідогену» = КОГОРТА переданих заявок (transferred_at) →
   // дійшли до MONEY_ZONE (когортна, стеля ≤100%, ⏳). Замінює стару period-ratio.
   const trMonthlyOv = await metrics.conversionTransferredByMonth({ managerId, teamId });

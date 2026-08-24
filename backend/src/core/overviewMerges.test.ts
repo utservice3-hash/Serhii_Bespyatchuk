@@ -56,22 +56,15 @@ test("#137 ЗЛИТІ ГРОШІ == ЧОТИРИ ОКРЕМІ ЗАПИТИ (жи
     `🔴 у всіх зрізах гроші нульові (${nonZero} ненульових) — гейт порівнював порожнечу`);
 });
 
-test("#137b ЗЛИТИЙ HANDOFF == ОКРЕМІ ВИКЛИКИ, по кожному конфігу (живі дані)", needsDb(), async () => {
-  const m = await import("./metrics.js");
-  const cfgs = m.HANDOFF_CFGS;
-  assert.ok(cfgs.length >= 2, "🔴 конфігів handoff менше двох — зливати нема чого");
-  let entered = 0;
-  for (const sc of [{ managerId: null, teamId: null }, { managerId: null, teamId: 5 }]) {
-    const multi = await m.handoffByMonthMultiForGate(sc, cfgs);
-    for (let i = 0; i < cfgs.length; i++) {
-      const one = await m.handoffByMonthForGate(sc, cfgs[i]);
-      assert.deepEqual(multi[i], one,
-        `🔴 конфіг ${i}: мульти-форма розійшлася з окремим викликом — когортні числа лідогену зрушать`);
-      entered += one.reduce((a, x) => a + x.entered, 0);
-    }
-  }
-  assert.ok(entered > 0, "🔴 жодного входу в когорту — порівнювали порожні масиви");
-});
+/**
+ * ⚠️ #137b (злиття двох викликів handoff в один запит) БУВ НАПИСАНИЙ І ВІДКОЧЕНИЙ.
+ * Мульти-конфіг форма давала байт-у-байт ті самі числа (перевірено на живих
+ * даних, 3 зрізи × 2 конфіги), але коштувала **1.62× ДОРОЖЧЕ**: 437 → 710 мс.
+ * Причина — корельований `IN (SELECT pipe FROM cfg_pipes WHERE idx = c.idx)`
+ * замість `= ANY($1)`: плановик втрачає індексний доступ. Це той самий клас, що
+ * «дешевий фрагмент отруює план великого запиту». Правильна форма злиття тут не
+ * знайдена, тож handoff лишається двома запитами — свідомо, а не забуто.
+ */
 
 test("#137c ЗЛИТА ДЕБІТОРКА == ДВА ОКРЕМІ ЗАПИТИ (живі дані)", needsDb(), async () => {
   const m = await import("./metrics.js");
@@ -95,7 +88,7 @@ test("#137c ЗЛИТА ДЕБІТОРКА == ДВА ОКРЕМІ ЗАПИТИ (�
  * абсолютна латентність гуляє в 1.8×. Кількість запитів не гуляє — вона або
  * зменшена, або ні. Тому durable-гарантія тут структурна, а не часова.
  */
-test("#137d /overview робить не більше 28 запитів до БД", needsDb(), async () => {
+test("#137d /overview робить не більше 29 запитів до БД", needsDb(), async () => {
   const { pool } = await import("../db/pool.js");
   const { dashboardRouter } = await import("../routes/dashboard.js");
   const layer = (dashboardRouter as unknown as { stack: { route?: { path: string; methods: Record<string, boolean>;
@@ -119,8 +112,8 @@ test("#137d /overview робить не більше 28 запитів до БД
   // 34 було до злиття; 28 — після. Стеля трохи вище виміряного, щоб гейт ловив
   // ПОВЕРНЕННЯ розділених запитів, а не дрижання на один службовий запит.
   assert.ok(n > 0, "🔴 жодного запиту не перехоплено — лічильник не працює, а не роут дешевий");
-  assert.ok(n <= 29,
-    `🔴 /overview робить ${n} запитів (стеля 29, після злиття було 28) — злиття роз'їхалось назад: `
+  assert.ok(n <= 30,
+    `🔴 /overview робить ${n} запитів (стеля 30, після злиття було 29) — злиття роз'їхалось назад: `
     + "хтось повернув окремі виклики moneyTotals / receivablesSnapshot / handoffByMonthMulti");
 });
 
