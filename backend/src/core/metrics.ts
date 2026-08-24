@@ -1459,44 +1459,20 @@ export async function leadsByManagerBucket(s: MetricScope, granularity: "day" | 
   return [...m.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
 }
 
-/** «Прийняв лідогенераторів» ПО МЕНЕДЖЕРУ — з ПЕРСИСТОВАНОГО `leadgen_touch` (не з
- *  живої leadgen_registry, що обрізається ~5 тижнів → історія давала б 0). Те саме
- *  джерело, що класифікує лідоген у проді. Джойн touch→угода→менеджер, DISTINCT
- *  lead_kommo_id за `transfer_date` у [from,to]. Period-total. */
-export async function leadgenByManager(s: MetricScope): Promise<MgrN[]> {
-  const params: unknown[] = [];
-  const conds = ["d.manager_id IS NOT NULL"];
-  if (s.from) { params.push(s.from); conds.push(`lt.transfer_date >= $${params.length}`); }
-  if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
-  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
-  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
-  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
-  const r = await pool.query<{ manager_id: number; deals: string }>(
-    `SELECT d.manager_id, COUNT(DISTINCT lt.lead_kommo_id) deals
-       FROM leadgen_touch lt JOIN deals d ON d.kommo_id = lt.lead_kommo_id ${join}
-      WHERE ${conds.join(" AND ")} GROUP BY d.manager_id`, params);
-  return r.rows.map((x) => ({ managerId: x.manager_id, deals: Number(x.deals) }));
-}
-
-/** «Прийняв лідогенераторів» ПО (менеджер × бакет) за `transfer_date`. Additive. */
-export async function leadgenByManagerBucket(s: MetricScope, granularity: "day" | "week" | "month"): Promise<MgrBucketN[]> {
-  const params: unknown[] = [];
-  const conds = ["d.manager_id IS NOT NULL"];
-  if (s.from) { params.push(s.from); conds.push(`lt.transfer_date >= $${params.length}`); }
-  if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
-  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
-  // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
-  // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
-  const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
-  const r = await pool.query<{ manager_id: number; bucket: string; deals: string }>(
-    `SELECT d.manager_id, to_char(date_trunc('${granularity}', lt.transfer_date)::date,'YYYY-MM-DD') bucket, COUNT(DISTINCT lt.lead_kommo_id) deals
-       FROM leadgen_touch lt JOIN deals d ON d.kommo_id = lt.lead_kommo_id ${join}
-      WHERE ${conds.join(" AND ")} GROUP BY d.manager_id, 2 ORDER BY 2`, params);
-  return r.rows.map((x) => ({ managerId: x.manager_id, bucket: x.bucket, deals: Number(x.deals) }));
-}
+// 🗑 `leadgenByManager` / `leadgenByManagerBucket` ВИДАЛЕНО 24.08.2026.
+// Обидві рахували «прийняв лідогенераторів» із реєстру бота (`leadgen_touch` за
+// `transfer_date`). Після переходу факту лідгену на КАНАЛ (`createdSplitByManager`,
+// коміт `aa183de`) у першої не лишилось жодного читача, а друга не мала їх ніколи.
+//
+// 🔴 ЧОМУ ВИДАЛЕНО, А НЕ ЛИШЕНО «ПРО ЗАПАС». Мертва функція з правильною назвою і
+// зеленим `tsc` читається як робоча — рівно так у нас прожив `expected` у `/teams`
+// і наперед написаний `BandHead`. Наступний, кому знадобиться «лідген по менеджеру»,
+// узяв би саме її й отримав реєстр із історією у пʼять тижнів. Потрібне число тепер
+// віддає `createdSplitByManager(...).leadgenCount` (канал, історія з 2024).
+//
+// ⚠️ `leadgen_touch` НЕ чіпаємо: її пише `syncKommo` і читає `reclassifyAdChannel`
+// (саме вона й перетворює дотик на `lead_channel='leadgen'`). Прибрано читачів
+// таблиці в МЕТРИКАХ, а не саму таблицю.
 
 export interface MgrConvTaken { managerId: number; taken: number; won: number; cohortPct: number | null }
 /**
@@ -3018,10 +2994,27 @@ export async function repeatForecastByManager(s: MetricScope = {}, months = REPE
 
 /**
  * `conversion_leadgen` ПО МЕНЕДЖЕРУ — пара до `conversionAdsByManager` (для РПК).
- *   знаменник — лідоген-заявки менеджера (`leadgen_touch` за `transfer_date` у періоді,
- *               DISTINCT lead_kommo_id — той самий вираз, що в `leadgenByManager`);
- *   чисельник — ТІ САМІ заявки, чия угода БУДЬ-КОЛИ дійшла до **MONEY_ZONE**
+ *   знаменник — FC-угоди менеджера з КАНАЛОМ `lead_channel='leadgen'`, СТВОРЕНІ в
+ *               періоді (`created_at_kommo` за Києвом);
+ *   чисельник — ТІ САМІ угоди, що БУДЬ-КОЛИ дійшли до **MONEY_ZONE**
  *               (`EXPECT_ZONE ∪ PAID ∪ {142}`) у Повному циклі.
+ *
+ * 🔴 ЗНАМЕННИК ПЕРЕВЕДЕНО З РЕЄСТРУ БОТА НА КАНАЛ (24.08.2026, рішення власника —
+ * той самий перехід, що вже зробив факт лідгену в Звіті). Було `leadgen_touch` за
+ * `transfer_date`, тобто аркуш лідоген-бота. Дві причини, обидві заміряні:
+ *   • **історія реєстру коротша за екран** — він існує лише з 15.06.2026, тож за
+ *     березень-травень знаменник давав 0 при 107/134/121 угодах за каналом;
+ *   • **знаменник і чисельник жили в різних світах** — чисельник рахувався по
+ *     угодах, знаменник по переданих лідах, і РПК-конверсія через це була завищена
+ *     у ~4.3 рази (997 проти 4290 за 25.07-24.08; Яцика 48.9%→9.1%).
+ * Тепер обидві половини дробу — та сама множина рядків `deals`, тож розійтись їм
+ * нема як (той самий прийом, що в `conversionByManager`).
+ *
+ * ⚠️ ЗНАМЕННИК ТЕПЕР ДОСЛІВНО ЗБІГАЄТЬСЯ З ФАКТОМ ЛІДГЕНУ ЗІ ЗВІТУ
+ * (`createdSplitByManager(...).leadgenCount`: FC + `lead_channel='leadgen'` +
+ * `created_at_kommo` у періоді). Це вимога, а не збіг: людині показують «взяв N
+ * лідгенів» і «конверсія лідгену X%» на сусідніх екранах, і різні N читались би
+ * як поломка. Тримає `#160b`.
  *
  * 🔴 ФІНІШНА ЛІНІЯ ВИРІВНЯНА З РЕКЛАМНОЮ (30.07.2026). Було `AUTO_WORKING` («авто
  * працює», етап 5 з 11), тоді як рекламна рахує до MONEY_ZONE (етапи 4 і 8-10). Через
@@ -3036,20 +3029,24 @@ export async function repeatForecastByManager(s: MetricScope = {}, months = REPE
  */
 export async function conversionLeadgenByManager(s: MetricScope): Promise<MgrConversion[]> {
   const params: unknown[] = [MONEY_ZONE, FC_PIPELINES];
-  const conds = ["d.manager_id IS NOT NULL"];
-  if (s.from) { params.push(s.from); conds.push(`lt.transfer_date >= $${params.length}`); }
-  if (s.to) { params.push(s.to); conds.push(`lt.transfer_date <= $${params.length}`); }
+  const conds = [
+    "d.pipeline_id = ANY($2)",
+    `d.lead_channel = 'leadgen'`,
+    "d.manager_id IS NOT NULL",
+    "d.created_at_kommo IS NOT NULL",
+  ];
+  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; entered: string; won: string }>(
     `SELECT d.manager_id, m.name, m.team_id,
-            COUNT(DISTINCT lt.lead_kommo_id) AS entered,
-            COUNT(DISTINCT lt.lead_kommo_id) FILTER (
+            COUNT(*) AS entered,
+            COUNT(*) FILTER (
               WHERE EXISTS (SELECT 1 FROM deal_stage_events e
                              WHERE e.kommo_id = d.kommo_id AND e.status_id = ANY($1)
                                AND e.pipeline_id = ANY($2))) AS won
-       FROM leadgen_touch lt
-       JOIN deals d ON d.kommo_id = lt.lead_kommo_id
+       FROM deals d
        JOIN managers m ON m.id = d.manager_id AND m.is_active
       WHERE ${conds.join(" AND ")}
       GROUP BY d.manager_id, m.name, m.team_id`,
@@ -3072,7 +3069,12 @@ export interface MgrMaxLeads { ad: number; leadgen: number }
  * Знаменники — ТІ САМІ, що в конверсіях (інакше порівнювали б різні сутності):
  *   • ad      — вхід у рекламну зону (`ADZONE_TAKEN`), платний новий лід (`paidAdSql`+SEGMENT='new'),
  *               помісячно за датою входу — тобто знаменник `conversionAdsByManager`;
- *   • leadgen — `leadgen_touch` за `transfer_date` — знаменник `conversionLeadgenByManager`.
+ *   • leadgen — FC-угоди `lead_channel='leadgen'` за `created_at_kommo` — знаменник
+ *               `conversionLeadgenByManager` (переведено з реєстру бота 24.08.2026
+ *               РАЗОМ із ним: максимум і конверсія множаться в одній формулі
+ *               «залишок ÷ (конверсія × чек)», тож рахувати їх по різних множинах
+ *               означало б порівнювати потребу з максимумом ІНШОЇ сутності —
+ *               саме так «треба 601, максимум 0» і виглядало правдоподібно).
  * Поточний (неповний) місяць ВИКЛЮЧЕНО: інакше максимум занижувався б у першій половині
  * місяця й позначка спрацьовувала б хибно.
  */
@@ -3099,14 +3101,16 @@ export async function maxMonthlyLeadsByManager(adSources: string[], months = 6):
       [ADZONE_TAKEN, adSources]),
     pool.query<{ manager_id: number; mx: string }>(
       `WITH per_month AS (
-          SELECT d.manager_id, date_trunc('month', lt.transfer_date) AS mth,
-                 COUNT(DISTINCT lt.lead_kommo_id) AS n
-            FROM leadgen_touch lt
-            JOIN deals d ON d.kommo_id = lt.lead_kommo_id
+          SELECT d.manager_id, date_trunc('month', (d.created_at_kommo ${KYIV})) AS mth,
+                 COUNT(*) AS n
+            FROM deals d
             JOIN managers m ON m.id = d.manager_id AND m.is_active
-           WHERE lt.transfer_date >= ${since} AND lt.transfer_date < ${curMonth}
+           WHERE d.pipeline_id = ANY($1) AND d.lead_channel = 'leadgen'
+             AND d.created_at_kommo IS NOT NULL
+             AND (d.created_at_kommo ${KYIV}) >= ${since} AND (d.created_at_kommo ${KYIV}) < ${curMonth}
            GROUP BY 1, 2)
-       SELECT manager_id, MAX(n) AS mx FROM per_month GROUP BY manager_id`),
+       SELECT manager_id, MAX(n) AS mx FROM per_month GROUP BY manager_id`,
+      [FC_PIPELINES]),
   ]);
   const out = new Map<number, MgrMaxLeads>();
   const put = (id: number, k: "ad" | "leadgen", v: number) => {

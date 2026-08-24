@@ -156,7 +156,7 @@ export const METRICS: MetricDef[] = [
     desc: "Конверсія реклами по командах (Σ менеджерів = команда за побудовою).",
     run: (s, _a, src) => metrics.conversionAdsByTeam(s, src) },
   { name: "conversion_leadgen_by_manager", source: "core.metrics.conversionLeadgenByManager",
-    desc: "Конверсія ЛІДОГЕНУ по менеджерах (знаменник leadgen_touch за transfer_date).",
+    desc: "Конверсія ЛІДОГЕНУ по менеджерах (знаменник — FC-угоди з каналом lead_channel='leadgen', створені в періоді; НЕ реєстр бота).",
     run: (s) => metrics.conversionLeadgenByManager(s) },
   { name: "conversion_prodzvin_by_month", source: "core.metrics.conversionProdzvinByMonth",
     desc: "Конверсія воронки Продзвін помісячно.", run: (s) => metrics.conversionProdzvinByMonth(s) },

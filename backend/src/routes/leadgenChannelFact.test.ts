@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { needsApi } from "../testMode.js";
+import { needsApi, needsDbWritable } from "../testMode.js";
 
 /**
  * 🔀 #141–#143 — ЛІДГЕН МАЄ ОДНЕ ОЗНАЧЕННЯ: КАНАЛ (рішення власника 24.08.2026).
@@ -135,8 +135,17 @@ test("#142 факт KPI-задачі бере те саме канальне д�
  * жоден grep не доводить — і рівно те, що зламалось у серпні.
  *
  * 🧨 САБОТАЖ (виконано): порахувати факт реєстровим виразом → число падає, червоніє.
+ *
+ * 🔴 РЕЖИМ `needsDbWritable`, А НЕ `needsApi` — ВИПРАВЛЕНО 24.08.2026 ПІСЛЯ
+ * ЧЕРВОНОГО ПРОГОНУ. Гейт робить `DELETE FROM leadgen_touch` (нехай і під
+ * `ROLLBACK`), а `test:prod` ходить у бойову базу під роллю `test_readonly` — тож
+ * він падав із `permission denied for table leadgen_touch`. Це ламався ХАРНЕС, не
+ * продукт, але вивід виглядав як регрес продукту.
+ *
+ * ⚠️ І окремо, бо на цьому я вже спіймався: запис у `ALLOWED_PROD_SKIPS` НЕ
+ * лікував — він лише ДОЗВОЛЯЄ скіп, а не спричиняє його. Скіп спричиняє режим.
  */
-test("#142b підміна leadgen_touch не рухає канальний факт", { ...needsApi() }, async () => {
+test("#142b підміна leadgen_touch не рухає канальний факт", { ...needsDbWritable() }, async () => {
   const { pool } = await import("../db/pool.js");
   const m = await import("../core/metrics.js");
 

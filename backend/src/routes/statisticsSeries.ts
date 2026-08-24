@@ -53,14 +53,42 @@ const COMPUTERS: Record<string, Computer> = {
       if (r.channel === "ad") agg.set(r.bucket, (agg.get(r.bucket) ?? 0) + Number(r.deals));
     return [...agg].map(([period, v]) => P(period, v));
   },
-  // Прорахунки лідгенів — leadgen_registry.transferred_at, COUNT(DISTINCT lead). Company-level.
+  // Прорахунки лідгенів — ПЕРЕДАЧІ ліда, COUNT(DISTINCT lead). Company-level.
+  //
+  // 🔴 ДЖЕРЕЛО ЗМІНЕНО 24.08.2026: `leadgen_registry` → `leadgen_touch`. МЕТРИКА ТА
+  // САМА (передані ліди за датою передачі) — змінилась лише таблиця, з якої вона
+  // читається, і саме тому це правка, а не нова метрика.
+  //   • `leadgen_registry` — дзеркало Google-аркуша бота, і `syncLeadgenRegistry`
+  //     робить йому `TRUNCATE` щосинку. Тобто ряд обрізаний до того, що зараз
+  //     лежить в аркуші (заміряно 24.08: найраніший запис 15.06.2026), а екран
+  //     «Статистики» малює місяці й роки. Усе, що старше, читалось як НУЛЬ —
+  //     тобто як «лідген нічого не передавав», а не як «ми туди не дивились».
+  //   • `leadgen_touch` — той самий факт передачі, персистований append-only
+  //     (`ON CONFLICT DO NOTHING`, пише `syncKommo` з того ж реєстру + бекфіл із
+  //     `lead_transfer_events`). Ряд лише зростає.
+  // 📐 Сьогодні обидві таблиці дають ІДЕНТИЧНИЙ ряд (15.06-24.08, 999 лідів) — тож
+  // ця правка НЕ рухає жодного числа на екрані зараз; вона прибирає майбутню
+  // обрізку. Записано навмисно: «нуль розбіжностей» тут — очікуваний результат,
+  // а не доказ, що правка нічого не робить (тримає `#162`).
+  //
+  // ⚠️ ЩО СВІДОМО НЕ ЗРОБЛЕНО: цей ряд НЕ переведено на `lead_channel='leadgen'`,
+  // як три сусідні лідген-місця. Він міряє ПЕРЕДАЧІ (дію лідоген-бота), а не
+  // угоди з лідоген-каналом; підмінивши джерело на канал, ми зробили б назву
+  // «Прорахунки лідгенів» неправдою і, головне, СХОВАЛИ б операційний обвал
+  // передач (з ~130/тиждень до 11/20/1 з 10.08.2026) за рівним каналом. Розбіжність
+  // із формулюванням задачі названа вголос у звіті проходу, а не залатана мовчки.
   lg_transfers: async (g, from, to, teamId, managerId) => {
     if (teamId != null || managerId != null) return []; // per-team поки не розрізаємо (лише компанія)
     const r = await pool.query<{ period: string; v: string }>(
-      `SELECT to_char(date_trunc($1, (transferred_at AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') period,
-              COUNT(DISTINCT lead_id) v
-         FROM leadgen_registry
-        WHERE (transferred_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2 AND $3
+      // ⚠️ БЕЗ `AT TIME ZONE`: `leadgen_touch.transfer_date` — це вже DATE, зведений
+      // до Києва НА ЗАПИСІ (`syncKommo.upsertLeadgenTouch`). Друга конверсія над
+      // готовою датою зсунула б ряд на добу — той самий клас, що «дати завжди
+      // по-київськи», лише в інший бік: тут TZ уже застосована, і застосувати її
+      // вдруге означає збрехати рівно на один день.
+      `SELECT to_char(date_trunc($1, transfer_date::timestamp)::date, 'YYYY-MM-DD') AS period,
+              COUNT(DISTINCT lead_kommo_id) AS v
+         FROM leadgen_touch
+        WHERE transfer_date BETWEEN $2 AND $3
         GROUP BY 1 ORDER BY 1`,
       [g, from, to]
     );

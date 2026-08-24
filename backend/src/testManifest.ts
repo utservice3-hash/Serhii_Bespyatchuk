@@ -73,6 +73,7 @@ export const MANIFEST_FILES: string[] = [
   "core/overviewMerges.test.js",
   "routes/taskCommentKeep.test.js",
   "routes/leadgenChannelFact.test.js",
+  "core/leadgenChannelOnly.test.js",
   "routes/uiEntry.test.js",
   "core/priorPaid.test.js",
   "jobs/calls.test.js",
@@ -349,6 +350,18 @@ export const MANIFEST_TESTS: string[] = [
   "#142 факт KPI-задачі бере те саме канальне джерело, що й Звіт",
   "#142b підміна leadgen_touch не рухає канальний факт",
   "#143 знаменник лайфтайм-конверсії РПК — канальний, як і чисельник",
+  // 🔀 Добір за реєстром: чотири місця, названі власником, + дві мертві функції.
+  // #160b/#161b/#162b ходять у живу БД → у ALLOWED_PROD_SKIPS їх НЕМАЄ (вони мусять
+  // виконатись у test:prod); решта читає ДЖЕРЕЛО і біжить у будь-якому режимі.
+  "#160 conversionLeadgenByManager рахує знаменник за КАНАЛОМ, не за реєстром",
+  "#160b знаменник конверсії лідгену == факт лідгену Звіту, по кожному менеджеру",
+  "#160c core/metrics.ts не читає leadgen_touch — але писар таблиці живий",
+  "#161 максимум лідгену за місяць — канальний (джерело)",
+  "#161b максимум лідгену == найбільший місячний знаменник конверсії",
+  "#162 lg_transfers читає append-only leadgen_touch, а не обрізаний реєстр",
+  "#162b ряд передач непорожній і збігається з реєстровим за перекритий період",
+  "#163 leadgenByManager / leadgenByManagerBucket не існують і ніким не кличуться",
+  "#163b опис conversion_leadgen_by_manager описує КАНАЛ, а не реєстр",
   "#116 health чесно каже, чи підключений канал сповіщень",
   "#116b рестарт із НОВИМ sha — це викат, а не падіння",
   // FIX 1 (23.08.2026) — наш власний викат перестає приходити як «АВАРІЯ»,
