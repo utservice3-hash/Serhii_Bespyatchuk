@@ -1,14 +1,17 @@
-import { useState, type Dispatch, type SetStateAction, Fragment } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction, Fragment } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   saveReceivableNote, saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
+  fetchManagerOptions, type ManagerOption,
   type ReceivableInvoice, type ReceivableManager, type ReceivableClient, type ReceivableTotals, type Team,
 } from "../../../api";
 import { ReceivablesTiles } from "./ReceivablesTiles";
 import { ReceivablesFilters } from "./ReceivablesFilters";
+import { OwnerEditor } from "./OwnerEditor";
+import { MergeDialog } from "./MergeDialog";
 import {
   CARRIER_LABEL, CARRIER_REASON_LABEL, EMPTY_FILTERS, entityBreakdown, isOverdue,
-  originBadges, passesFilters, t, type Filters,
+  originBadges, ownerState, passesFilters, t, type Filters, type MergeSide,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
 import { teamOptions } from "../teamColors";
@@ -48,6 +51,21 @@ function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
   // сума боргу по клієнту» — неправду: готівковий менеджер береться з УГОД CRM,
   // жодного мажоритара по рахунках для нього не рахували. Правильне число під
   // неправильним поясненням — це той самий клас, що ми тут і лікуємо.
+  // 🔴 «СВІДОМО НІКОГО» — ОКРЕМИЙ ВИГЛЯД, а не «📌 Без відповідального».
+  // Ядро вже розрізняє ці стани (`override` із `managerId: null` дає source
+  // `override`, а не `none` — див. `resolveOwner`), тож екран зобовʼязаний
+  // показати різницю: «нікого, бо так вирішили» і «нікого, бо ще не дивились» —
+  // різні відповіді, і плутати їх означає стерти рішення людини.
+  if (ownerState(c) === "manual-none") {
+    return (
+      <span title="Адмін свідомо зняв відповідального; авто-правило вимкнене">
+        <span style={{ fontWeight: 600 }}>📌 нікого — свідомо</span>
+        <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>
+          рішення адміна, авто-правило вимкнене
+        </span>
+      </span>
+    );
+  }
   const mark =
     c.ownerSource === "override" ? { icon: "📌", hint: "призначено вручну" }
     : c.ownerSource === "cash-invoice" ? { icon: "💵", hint: "готівковий клієнт · менеджер з угод CRM" }
@@ -117,6 +135,8 @@ export function ReceivablesSection({
   receivablesLoading,
   receivablesData,
   receivablesTotals,
+  canSetOwner,
+  canMerge,
   canEditReceivables,
   patchReceivableNote,
   onRefresh,
@@ -129,6 +149,10 @@ export function ReceivablesSection({
   receivablesLoading: boolean;
   receivablesData: ReceivableManager[];
   receivablesTotals: ReceivableTotals | null;
+  /** Право віддає СЕРВЕР (`isAdminScope`) — фронт свого правила не має. */
+  canSetOwner: boolean;
+  /** Право віддає СЕРВЕР (`merge_receivables`). Фінансиста тут немає. */
+  canMerge: boolean;
   canEditReceivables: boolean;
   patchReceivableNote: (clientKey: string, patch: { comment?: string; dueDate?: string | null }) => void;
   onRefresh?: () => void;
@@ -279,6 +303,17 @@ export function ReceivablesSection({
   const overdueClients = all.filter(isOverdue);
   const overdueSum = overdueClients.reduce((s, c) => s + c.amount, 0);
 
+  // ✏️ Хто зараз редагується (ключ клієнта) і чи відкритий діалог склейки.
+  const [ownerFor, setOwnerFor] = useState<string | null>(null);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mgrOptions, setMgrOptions] = useState<ManagerOption[]>([]);
+  useEffect(() => {
+    // Список тягнемо ОДИН раз і лише тим, хто має право призначати: інакше це
+    // запит, який нікому не потрібен, на кожному відкритті екрана.
+    if (!canSetOwner || mgrOptions.length) return;
+    fetchManagerOptions().then(setMgrOptions).catch(() => setMgrOptions([]));
+  }, [canSetOwner, mgrOptions.length]);
+
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const shown = all.filter((c) => passesFilters(c, filters));
   const shownSum = shown.reduce((s, c) => s + c.amount, 0);
@@ -331,6 +366,17 @@ export function ReceivablesSection({
               Клік по клієнту — неоплачені рахунки з дедлайном і коментарем до кожного. Червоні дні — прострочка понад ліміт.
             </p>
             <ReceivablesFilters filters={filters} setFilters={setFilters} shown={shown.length} totalRows={all.length} />
+            {/* Кнопки НЕМАЄ ВЗАГАЛІ без права — не «є, але дає 403». Право рахує
+                сервер тим самим виразом, що гейтить роут. */}
+            {canMerge && (
+              <button onClick={() => setMergeOpen(true)}
+                title="Дві юрособи виявились одним клієнтом — обʼєднати в один рядок"
+                style={{ font: "inherit", fontSize: 12.5, fontWeight: 600, padding: "5px 12px",
+                         borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)",
+                         color: "var(--text)", cursor: "pointer", marginBottom: 12 }}>
+                🔗 Обʼєднати клієнтів
+              </button>
+            )}
             <div style={{ overflowX: "auto" }}>
               <table className="data-table">
                 <thead>
@@ -374,8 +420,32 @@ export function ReceivablesSection({
                               </span>
                             ))}
                           </td>
-                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12, verticalAlign: "top" }}>
+                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12, verticalAlign: "top", position: "relative" }}>
                             <OwnerCell c={c} />
+                            {/* 🔴 ГОТІВКОВИЙ РЯДОК КОНТРОЛА НЕ ДІСТАЄ, і це не забудькуватість.
+                                `PUT /receivables/owner` віддає 404 на `source='cash'`: ці рядки CRM
+                                перебудовує щосинку, тож ручне призначення відкотилось би саме.
+                                Пропонувати дію, яка ГАРАНТОВАНО впаде, гірше, ніж її не мати. */}
+                            {canSetOwner && (c.ownerSource === "cash-invoice" ? (
+                              <span style={{ display: "block", fontSize: 10.5, color: "var(--text-muted)", marginTop: 2 }}>
+                                готівка · менеджер із угод CRM, змінюється в CRM
+                              </span>
+                            ) : (
+                              <button onClick={() => setOwnerFor(ownerFor === c.clientKey ? null : c.clientKey)}
+                                title="Змінити відповідального за борг"
+                                style={{ border: "none", background: "none", cursor: "pointer", padding: 0,
+                                         marginTop: 2, fontSize: 12, color: "var(--text-muted)" }}>
+                                ✏️ змінити
+                              </button>
+                            ))}
+                            {ownerFor === c.clientKey && (
+                              <OwnerEditor client={c} managers={mgrOptions}
+                                onClose={() => setOwnerFor(null)}
+                                // 🔴 ПЕРЕЧИТУЄМО, а не малюємо своє: сервер після запису
+                                // робить `recomputeOwners`, тож правильний відповідальний
+                                // відомий лише з наступної відповіді (`#166`).
+                                onDone={() => { setOwnerFor(null); onRefresh?.(); }} />
+                            )}
                           </td>
                           <td style={{ textAlign: "left", verticalAlign: "top", fontSize: 12 }}>
                             {ent ? (
@@ -440,6 +510,20 @@ export function ReceivablesSection({
               </p>
             )}
           </div>
+
+          {mergeOpen && (
+            /* Сторони — з того, що ВЖЕ на екрані (див. шапку MergeDialog про
+               `/client-search` і `merge_clients`). `facts` дають кількість
+               рахунків, тобто людина бачить обсяг, а не лише суму. */
+            <MergeDialog
+              sides={all.map<MergeSide>((c) => ({
+                clientKey: c.clientKey, clientName: c.clientName,
+                amount: c.amount, invoices: c.facts?.invoices ?? 0,
+              }))}
+              onClose={() => setMergeOpen(false)}
+              onDone={() => { setMergeOpen(false); onRefresh?.(); }}
+            />
+          )}
 
           {receivablesData.length > 1 && (
             <div className="chart-card" style={{ marginBottom: 16 }}>

@@ -1476,6 +1476,17 @@ ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS bank_edrpou   TEXT; -- ЄДР
 -- ПІСЛЯ сид-INSERT рахунків (інакше на порожній базі UPDATE не має що оновлювати).
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS key_card      TEXT;
 
+-- 🔗 СЕО дістає `merge_clients` (рішення власника 24.08.2026).
+-- ЧОМУ: `merge_receivables` у СЕО вже було, а ВІДКІТ склейки (`/client-merge/revoke`)
+-- гейтиться `merge_clients` через `mergePairScope`. Тобто СЕО міг зліпити двох
+-- клієнтів у дебіторці й НЕ МІГ роз'єднати їх ніде — односторонні двері, а це
+-- прямо суперечить правилу «дія, доступна в інтерфейсі, мусить бути скасовною
+-- тим самим інтерфейсом». Власник обрав закрити відкіт, а не забирати склейку.
+-- ⚠️ Рядок БЕЗУМОВНИЙ, тож застосовується на КОЖНОМУ `migrate`. Якщо колись
+-- вирішать право забрати — треба видалити І цей рядок, інакше він поверне його
+-- наступним деплоєм. Той самий компроміс, що в `view_balances` нижче.
+UPDATE roles SET permissions = permissions || '{"merge_clients":true}'::jsonb WHERE key = 'ceo';
+
 -- Право «бачити баланси» — ЛИШЕ вбудованій ролі admin; решті доступ НЕ змінюємо.
 UPDATE roles SET permissions = permissions || '{"view_balances":true}'::jsonb WHERE key = 'admin';
 -- Право «бачити підсумки виписки» (агрегати надходжень/платежів) — ЛИШЕ admin; решті не чіпаємо.

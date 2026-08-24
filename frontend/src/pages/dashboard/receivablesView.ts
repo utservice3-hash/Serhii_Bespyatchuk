@@ -129,3 +129,59 @@ export function entityBreakdown(f: ReceivableClientFacts | null): { rows: { key:
     + (f.entityReasons.length ? ` · невідомо тому, що ${f.entityReasons.map((r) => ENTITY_REASON_LABEL[r]).join(", ")}` : "");
   return { rows, hint };
 }
+
+// ───────────────────── ДІЇ: ВІДПОВІДАЛЬНИЙ І СКЛЕЙКА ─────────────────────
+
+/**
+ * 🔴 ТРИ СТАНИ ВІДПОВІДАЛЬНОГО, А НЕ ДВА.
+ *
+ * `auto` — правило вирішило само (мажоритар / тімлід / менеджер з угод CRM).
+ * `manual` — людина СВІДОМО призначила когось.
+ * `manual-none` — людина СВІДОМО сказала «нікого».
+ *
+ * Третій стан не можна зводити до першого: «нікого, бо так вирішили» і «нікого,
+ * бо ще не дивились» — різні відповіді на одне питання, і саме їх розрізняє
+ * `receivable_manager_override` (рядок є проти рядка немає). Той самий поділ
+ * стереже `#127` у ядрі; тут його стереже `#162`.
+ */
+export type OwnerState = "auto" | "manual" | "manual-none";
+
+export function ownerState(c: { ownerSource: string; managerName?: string }): OwnerState {
+  if (c.ownerSource !== "override") return "auto";
+  // Override стоїть, але людини немає → це свідоме «нікого».
+  return c.managerName && c.managerName !== "Без відповідального" ? "manual" : "manual-none";
+}
+
+/**
+ * Примітка при override ОБОВʼЯЗКОВА — і це `CHECK` у БД, а не побажання.
+ *
+ * 🔴 Та сама умова, що на сервері (`btrim(note) <> ''`), і перевіряється ДО
+ * відправки. Не щоб «підстрахувати» сервер, а щоб людина побачила зрозумілу
+ * відмову замість помилки з мережі. Рубежів три: кнопка → 400 роуту → `CHECK`.
+ */
+export const noteIsValid = (note: string): boolean => note.trim().length > 0;
+
+/** Скільки лишилось до ліміту роуту (він ріже `note.slice(0, 300)`). */
+export const NOTE_MAX = 300;
+
+export interface MergeSide {
+  clientKey: string;
+  clientName: string;
+  amount: number;
+  invoices: number;
+}
+
+/**
+ * Чи можна зливати цю пару — рівно ті випадки, які сервер відхилив би, тільки
+ * сказані людині ДО запиту.
+ *
+ * 🔴 Ключ сам із собою — окремий випадок: у БД його ловить `CHECK
+ * (alias_key <> canonical_key)`, тобто 400. Показати це в діалозі дешевше, ніж
+ * пояснювати помилку драйвера.
+ */
+export function mergeProblem(a: MergeSide | null, b: MergeSide | null, reason: string): string | null {
+  if (!a || !b) return "Оберіть обидві сторони";
+  if (a.clientKey === b.clientKey) return "Не можна обʼєднати клієнта із самим собою";
+  if (!reason.trim()) return "Причина обовʼязкова — реєстр без причини стає смітником";
+  return null;
+}

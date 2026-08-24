@@ -191,6 +191,10 @@ export function Dashboard() {
   // самого зведення. Рахувати їх на фронті окремо означало б завести другий вираз
   // для одного числа (див. «Команда за місяць 12%» проти плитки «11.8%»).
   const [receivablesTotals, setReceivablesTotals] = useState<ReceivableTotals | null>(null);
+  // 🔴 Права на дії віддає СЕРВЕР тими самими виразами, що гейтять роути.
+  // Дефолт `false`: поки відповіді немає, кнопок немає — «закрито, поки не
+  // сказано інакше» безпечніше за зворотне.
+  const [receivablesPerms, setReceivablesPerms] = useState({ canSetOwner: false, canMerge: false });
   const [receivablesLoading, setReceivablesLoading] = useState(false);
   // Live refresh: bump a nonce every 5 min so data-loading effects re-fetch
   // fresh CRM data without a manual page reload.
@@ -528,12 +532,14 @@ export function Dashboard() {
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setReceivablesLoading(true);
     fetchReceivables({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
-      .then(({ syncedAt, managers, totals }) => {
+      .then(({ syncedAt, managers, totals, canSetOwner, canMerge }) => {
         setReceivablesData(managers);
         setReceivablesSyncedAt(syncedAt);
         setReceivablesTotals(totals ?? null);
+        setReceivablesPerms({ canSetOwner: !!canSetOwner, canMerge: !!canMerge });
       })
-      .catch(() => { setReceivablesData([]); setReceivablesTotals(null); })
+      .catch(() => { setReceivablesData([]); setReceivablesTotals(null);
+                     setReceivablesPerms({ canSetOwner: false, canMerge: false }); })
       .finally(() => setReceivablesLoading(false));
   }, [section, receivablesTeamId, teams, auth, refreshNonce]);
 
@@ -1051,6 +1057,8 @@ export function Dashboard() {
           receivablesLoading={receivablesLoading}
           receivablesData={receivablesData}
           receivablesTotals={receivablesTotals}
+          canSetOwner={receivablesPerms.canSetOwner}
+          canMerge={receivablesPerms.canMerge}
           canEditReceivables={canEditReceivables}
           patchReceivableNote={patchReceivableNote}
           onRefresh={() => setRefreshNonce((n) => n + 1)}

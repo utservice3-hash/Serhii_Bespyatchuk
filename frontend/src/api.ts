@@ -1285,6 +1285,22 @@ export async function clearReceivableOwner(clientKey: string): Promise<void> {
   await api.delete(`/dashboard/receivables/owner/${encodeURIComponent(clientKey)}`);
 }
 
+/**
+ * 🔗 Обʼєднати двох клієнтів у дебіторці. Пише в ТОЙ САМИЙ реєстр
+ * `client_key_alias`, що й екран «Клієнти» — це одні двері до одного реєстру,
+ * а не другий механізм.
+ *
+ * ⚠️ Роз'єднання ЗВІДСИ немає навмисно (в роуті прямо написано, чому: два
+ * відкоти до одного реєстру розійшлися б у поведінці швидше, ніж ми про це
+ * дізнались би). Скасувати можна на екрані «Клієнти»; дебіторка підхопить
+ * відкіт на наступному синку (≤15 хв).
+ */
+export async function mergeReceivableClients(payload: {
+  alias: string; canonical: string; reason: string;
+}): Promise<void> {
+  await api.post("/dashboard/receivables/merge", payload);
+}
+
 export async function saveReceivableNote(payload: {
   clientKey: string;
   comment?: string | null;
@@ -1377,6 +1393,23 @@ export async function fetchLeadgenRegulars(): Promise<LeadgenRegulars> {
   return data;
 }
 
+/**
+ * Відповідь екрана дебіторки.
+ *
+ * 🔴 `canSetOwner` / `canMerge` рахує СЕРВЕР тими самими виразами, що гейтять
+ * роути. Фронт свого правила про доступ не має і мати не повинен: інакше екран
+ * матиме власну думку, і вона розійдеться з сервером мовчки.
+ */
+export interface ReceivablesResponse {
+  syncedAt: string | null;
+  managers: ReceivableManager[];
+  totals: ReceivableTotals | null;
+  /** `isAdminScope` — admin · ceo · opdir · kvp · ФІНАНСИСТ (рішення власника 31.07). */
+  canSetOwner?: boolean;
+  /** `merge_receivables` — admin · ceo · opdir · kvp. Фінансиста тут НЕМАЄ. */
+  canMerge?: boolean;
+}
+
 export interface ReceivableManager {
   managerId: number;
   managerName: string;
@@ -1387,8 +1420,8 @@ export interface ReceivableManager {
 export async function fetchReceivables(params: {
   managerId?: number;
   teamId?: number;
-}): Promise<{ syncedAt: string | null; managers: ReceivableManager[]; totals: ReceivableTotals | null }> {
-  const { data } = await api.get<{ syncedAt: string | null; managers: ReceivableManager[]; totals: ReceivableTotals | null }>(
+}): Promise<ReceivablesResponse> {
+  const { data } = await api.get<ReceivablesResponse>(
     "/dashboard/receivables",
     { params }
   );

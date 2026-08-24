@@ -1816,7 +1816,22 @@ dashboardRouter.get("/receivables", async (req, res) => {
     entry.total += r.amount;
   }
 
-  res.json({ syncedAt, managers: Array.from(byManager.values()), totals: folded.totals });
+  // 🔴 ПРАВО ВІДДАЄ СЕРВЕР, І ТИМИ САМИМИ ВИРАЗАМИ, ЩО ГЕЙТЯТЬ РОУТИ.
+  //
+  // Фронт свого правила не має — інакше екран мав би власну думку про доступ,
+  // і вона розійшлася б із сервером мовчки (урок `canHide` у `#30l`). Кнопки,
+  // якої не має бути, тут просто НЕМАЄ — це не «є, але дає 403».
+  //
+  // ⚠️ `canSetOwner` ІСТИННИЙ і для ФІНАНСИСТА, і це ОЧІКУВАНО, а не діра:
+  // рішення власника 31.07.2026 підняло фінансиста до рівня адміна (`admin_scope`),
+  // а `isAdminScope` саме його й читає. Підтверджено власником 24.08.2026 окремо.
+  // Слід лишається: override без примітки не приймає ні роут, ні `CHECK` у БД.
+  // Склейки у фінансиста НЕМАЄ — `merge_receivables` він не має. Тримає `#159b`.
+  res.json({
+    syncedAt, managers: Array.from(byManager.values()), totals: folded.totals,
+    canSetOwner: isAdminScope(auth),
+    canMerge: roleHasPerm(auth.roleKey, "merge_receivables"),
+  });
 });
 
 /**
