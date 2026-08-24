@@ -43,11 +43,32 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
   };
 
   const noteOk = noteIsValid(note);
-  const box: React.CSSProperties = {
-    position: "absolute", zIndex: 30, marginTop: 4, width: 320, padding: 12,
-    background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10,
-    boxShadow: "0 8px 24px rgba(0,0,0,0.18)", textAlign: "left",
-  };
+
+  // 🔴 НА ВУЗЬКОМУ ЕКРАНІ — ФІКСОВАНА КАРТКА, НЕ ПОПОВЕР.
+  //
+  // Таблиця боржників скролиться горизонтально (`overflow-x: auto`), а поповер
+  // лежить ВСЕРЕДИНІ неї. На 430px його правий край обрізався контейнером —
+  // кнопки «Призначити» й «Скасувати» ставали недосяжні, тобто контрол просто
+  // не працював. Знайдено скріншотом живого прода: жоден гейт цього не бачить,
+  // бо в DOM кнопки є, і клік по них із коду проходить.
+  //
+  // Механізм узятий ТОЙ САМИЙ, що вже доведено в `MergeDialog` (фіксована картка
+  // поверх усього) — а не «схожий»: два різні способи вилізти зі скрол-контейнера
+  // розійшлися б у поведінці рівно тоді, коли на це ніхто не дивиться.
+  const narrow = typeof window !== "undefined" && window.innerWidth < 900;
+  const box: React.CSSProperties = narrow
+    ? {
+        position: "fixed", zIndex: 60, left: "50%", top: "50%",
+        transform: "translate(-50%, -50%)", width: "min(340px, calc(100vw - 32px))",
+        maxHeight: "calc(100vh - 32px)", overflowY: "auto", padding: 14,
+        background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12,
+        boxShadow: "0 18px 50px rgba(0,0,0,0.45)", textAlign: "left",
+      }
+    : {
+        position: "absolute", zIndex: 30, marginTop: 4, width: 320, padding: 12,
+        background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.18)", textAlign: "left",
+      };
   const btn = (bg: string): React.CSSProperties => ({
     font: "inherit", fontSize: 12.5, fontWeight: 600, padding: "6px 10px", borderRadius: 8,
     border: "1px solid var(--border)", background: bg, color: "var(--text)",
@@ -55,6 +76,11 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
   });
 
   return (
+    <>
+      {narrow && (
+        <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 59,
+          background: "rgba(0,0,0,0.45)" }} />
+      )}
     <div style={box}>
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2 }}>Відповідальний за борг</div>
       {/* 🔴 Відкритий стан ПРОДОВЖУЄ підпис закритого, а не стирає його: людина
@@ -119,5 +145,6 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
           onClick={onClose}>Скасувати</button>
       </div>
     </div>
+    </>
   );
 }
