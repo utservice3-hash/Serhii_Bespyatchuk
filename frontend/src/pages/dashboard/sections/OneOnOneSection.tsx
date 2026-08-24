@@ -8,6 +8,7 @@ import {
 import { DatePicker } from "../../../components/DatePicker";
 import { DateRangeFilter, QuickPeriods, getDateRange } from "../../../components/DateRangeFilter";
 import { enpsColor, CLASS_UI, BAND_COLOR, SCALE_CAPTION } from "./enpsScale";
+import { legacySections, unmappedKeys, averageOfScores, sameScore, isFullyUnmapped } from "./oneOnOneLegacy";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
 import { saveErrorText, draftKey, hasUnsavedEdits, UNSAVED_PROMPT, UNSAVED_BEFOREUNLOAD, type O2ODraft } from "./oneOnOneSave";
 
@@ -778,6 +779,12 @@ function HistoryRecordModal({ type, managerId, name, date, onClose }: { type: O2
   }, [type, managerId, date]);
   const answers = rec?.answers ?? {};
   const notes = (rec?.notes ?? {}) as O2ONotes;
+  // Відповіді, яких форма запису не показує (див. oneOnOneLegacy.ts).
+  const legacy = legacySections(answers, form?.questions);
+  const legacyAvg = averageOfScores(answers, unmappedKeys(answers, form?.questions));
+  // Жодна відповідь не мапиться на форму → малювати її порожні питання немає сенсу:
+  // це екран прочерків, під яким ховається справжній зміст.
+  const onlyLegacy = isFullyUnmapped(answers, form?.questions);
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,20,30,.45)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 16px", overflowY: "auto" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ ...CARD, maxWidth: 760, width: "100%", maxHeight: "none" }}>
@@ -797,7 +804,7 @@ function HistoryRecordModal({ type, managerId, name, date, onClose }: { type: O2
           <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>
         ) : (
           <div>
-            {form.questions.sections.map((sec, i) => (
+            {!onlyLegacy && form.questions.sections.map((sec, i) => (
               <div key={sec.key} style={{ marginBottom: 18 }}>
                 <h3 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 10px", fontWeight: 800 }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: SECTION_DOTS[i % SECTION_DOTS.length] }} />{sec.title}
@@ -815,6 +822,48 @@ function HistoryRecordModal({ type, managerId, name, date, onClose }: { type: O2
                 ))}
               </div>
             ))}
+            {/* 🕰 ВІДПОВІДІ, ЯКИХ ФОРМА ЗАПИСУ НЕ ПОКАЗУЄ. Чотири зустрічі від 01.07 писались
+                ДО появи реєстру форм: 59 полів лежали в базі й не рендерились ніде, а число
+                в «Історії» стверджувало, що зміст є. Тексти питань відновлені з коміту
+                e31c0bf, а не вигадані (див. oneOnOneLegacy.ts). */}
+            {legacy.length > 0 && (
+              <div style={{ marginBottom: 18, padding: 14, borderRadius: 14, background: "rgba(99,102,241,.07)" }}>
+                <h3 style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 4px", fontWeight: 800 }}>
+                  🕰 Анкета старішого зразка
+                </h3>
+                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
+                  Ці відповіді збережені до того, як зʼявився реєстр форм, тож поточна форма їх не
+                  містить. Тексти питань відновлені з версії 08.07.2026.
+                  {legacyAvg != null && (
+                    <> Середнє по пікерах нижче — <b style={{ color: "var(--text)" }}>{legacyAvg}</b>
+                      {rec.overall != null && (sameScore(legacyAvg, rec.overall)
+                        ? <>, і воно збігається з оцінкою в «Історії».</>
+                        : <>, а в «Історії» стоїть <b style={{ color: "var(--text)" }}>{rec.overall}</b> — числа різні.</>)}
+                    </>
+                  )}
+                </p>
+                {legacy.map((sec) => (
+                  <div key={sec.title} style={{ marginBottom: 14 }}>
+                    <h4 style={{ fontSize: 12, fontWeight: 800, margin: "0 0 8px", color: "var(--text)" }}>{sec.title}</h4>
+                    {sec.questions.map((q) => (
+                      <div key={q.qKey} style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 13.5, lineHeight: 1.5, marginBottom: 6, color: "var(--text-muted)", overflowWrap: "anywhere" }}>
+                          {q.label}
+                          {!q.known && <span style={{ marginLeft: 8, fontSize: 10.5, color: "#b45309", background: "rgba(217,119,6,.15)", padding: "2px 8px", borderRadius: 20 }}>питання не збереглося</span>}
+                        </div>
+                        {q.field === "score"
+                          ? <ReadTrack value={answers[q.qKey]?.score ?? null} />
+                          : (
+                            <div style={{ fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere", background: "rgba(128,128,128,.06)", borderRadius: 12, padding: "10px 12px", minHeight: 8 }}>
+                              {answers[q.qKey]?.text?.trim() ? answers[q.qKey]!.text : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                            </div>
+                          )}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
             {form.questions.enps && (
               <div style={{ marginBottom: 18, padding: 14, borderRadius: 14, background: "rgba(22,163,74,.06)" }}>
                 <h3 style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", margin: "0 0 10px", fontWeight: 800 }}>eNPS</h3>
