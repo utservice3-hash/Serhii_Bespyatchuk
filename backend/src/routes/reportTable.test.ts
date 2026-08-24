@@ -49,7 +49,7 @@ function mgr(over: Record<string, any> = {}): any {
     byPace: 0, byPaceEarly: false, expectThisMonth: 20000, expectNextMonth: 0, dobir: 1000,
     cohort: { deals: 0, sum: 0, paidDeals: 0, paidSum: 0, awaitDeals: 0, awaitSum: 0, awaitDatedSum: 0, awaitNoDateSum: 3000 },
     week: {} as any, projected: 70000, monthInProgress: true,
-    created: 30, new: 10, rep: 20, srcAd: 1, srcLeadgen: 2,
+    created: 30, new: 10, rep: 20, srcAd: 1, srcLeadgen: 2, srcOther: 27, srcNoChannel: 0,
     status: "a", needPerDay: 5000, remainingWorkdays: 10, spark: [],
     kpi: {
       ads: { fact: 4, target: 0 }, leadgen: { fact: 3, target: 0 },
@@ -216,23 +216,44 @@ test("#96 КАНАЛЬНІ КОЛОНКИ НАЗВАНІ «ПРИЙНЯТО» І
       `🔴 у «${c.title}» зникло застереження, що це не частина колонки «Створено»`);
 });
 
-test("#96b РОЗКЛАД СТВОРЕНИХ — НАКЛАДКА, і підписаний саме так", async () => {
+/**
+ * 🔴 ПЕРЕПИСАНО 24.08.2026 (Е1 моделі каналів): сімʼя стала ПАРТИЦІЄЮ.
+ *
+ * Гейт вимагав, щоб кожна колонка розкладу звалась «накладкою» і щоб їхня сума
+ * була ≤ «Створено». Тоді це була правда: віддавались дві гілки `dealSourceCase`
+ * з чотирьох, тож 43.2% створених угод не мали імені на екрані взагалі. Е1 додав
+ * решту дві, і сімʼя тепер покриває набір — вимога «назви це накладкою» стала
+ * вимогою применшити те, що колонки насправді роблять.
+ *
+ * 🔴 ЩО ЛИШИЛОСЬ НЕДОТОРКАНИМ, бо саме воно й було уроком інциденту: розклад
+ * створених ≠ «Прийнято реклами/лідоген» (заміряно 248 проти 228 за тиждень).
+ * Ця межа стереже далі й посилена — тепер обидві сімʼї названі в `help` явно.
+ * Числа `srcAd`/`srcLeadgen` не зрушили ні на одиницю: перевіряємо це прямо.
+ *
+ * 🧨 САБОТАЖ: прибрати `srcOther` з реєстру → партиція неповна, червоніє;
+ * зробити будь-яку з колонок `core` або ввімкненою за замовчуванням → червоніє.
+ */
+test("#96b РОЗКЛАД СТВОРЕНИХ — ПАРТИЦІЯ джерела, і підписаний саме так", async () => {
   const { REPORT_COLS, DEFAULT_OPT_ON } = await loadCols();
-  const cols = ["srcAd", "srcLeadgen"].map((k) => REPORT_COLS.find((c: any) => c.key === k));
-  for (const c of cols) {
-    assert.ok(c, "🔴 колонки розкладу створених за джерелом немає");
+  const KEYS = ["srcAd", "srcLeadgen", "srcOther", "srcNoChannel"];
+  const cols = KEYS.map((k) => REPORT_COLS.find((c: any) => c.key === k));
+  for (const [i, c] of cols.entries()) {
+    assert.ok(c, `🔴 у реєстрі немає колонки розкладу «${KEYS[i]}» — партиція неповна, `
+      + "а неповна партиція читається як повна: людина складе три числа й недоотримає четверте");
     assert.equal(c.core, false, `🔴 «${c.title}» стала обовʼязковою — власник просив опційну`);
     assert.equal(DEFAULT_OPT_ON[c.key], false, `🔴 «${c.title}» увімкнена за замовчуванням`);
-    assert.ok(/накладк/i.test(c.help), `🔴 «${c.title}» не підписана як накладка на «Створено»`);
+    assert.ok(/партиці/i.test(c.help), `🔴 «${c.title}» не підписана як частина партиції джерела`);
+    assert.ok(/Прийнято|ОКРЕМА метрика|канал не заповнен/i.test(c.help),
+      `🔴 «${c.title}» більше не розводить себе з «Прийнято реклами/лідоген» — саме на цьому `
+      + "збігу «15 = 13+0+2» колись прочиталось як розклад");
   }
-  // Накладка, а не партиція: сума двох ≤ створених. Партиція — це нов/пост/невизн.
+  // ПАРТИЦІЯ: Σ чотирьох == створених (на живих даних це тримає #164).
   const { sortRows } = await loadCols();
-  const rows = [mgr({ created: 30, srcAd: 12, srcLeadgen: 5 })];
-  const a = REPORT_COLS.find((c: any) => c.key === "srcAd").val(rows[0]);
-  const l = REPORT_COLS.find((c: any) => c.key === "srcLeadgen").val(rows[0]);
-  assert.equal(a, 12); assert.equal(l, 5);
-  assert.ok(a + l <= rows[0].created,
-    "🔴 накладка більша за «Створено» — значить читає не ті поля");
+  const rows = [mgr({ created: 30, srcAd: 12, srcLeadgen: 5, srcOther: 13, srcNoChannel: 0 })];
+  const vals = KEYS.map((k) => REPORT_COLS.find((c: any) => c.key === k).val(rows[0]));
+  assert.deepEqual(vals, [12, 5, 13, 0], "🔴 колонки читають не ті поля рядка");
+  assert.equal(vals.reduce((a: number, b: number) => a + b, 0), rows[0].created,
+    "🔴 Σ розкладу ≠ «Створено» — сімʼя перестала бути партицією");
   assert.ok(sortRows(rows, "srcAd", -1).length === 1, "🔴 сортування по колонці розкладу зламане");
 });
 

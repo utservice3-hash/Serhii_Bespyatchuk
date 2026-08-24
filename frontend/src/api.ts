@@ -685,7 +685,8 @@ export interface ReportPlanManager {
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
-  srcAd: number; srcLeadgen: number;
+  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ чотирьох == created (гейт #164).
+  srcAd: number; srcLeadgen: number; srcOther: number; srcNoChannel: number;
   /**
    * 🧬 ГРОШІ ЗА НОВИЗНОЮ КЛІЄНТА (канон `dealKlassSql`). `fact == factNew +
    * factRepeat + factUndef`, і те саме для очікувань. `undef` на екран не йде —

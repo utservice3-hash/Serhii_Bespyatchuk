@@ -486,9 +486,26 @@ export async function leadsTakenByBucket(s: MetricScope, granularity: "day" | "w
 export interface CreatedBucketRow { bucket: string; deals: number }
 
 /**
- * Рядок розколу СТВОРЕНИХ. `new + repeat + undef = created` — ПАРТИЦІЯ новизни.
- * `adCount`/`leadgenCount` — НАКЛАДКА джерела (підмножини партиції), у `created`
- * не додаються: джерело й новизна — різні виміри (див. `dealSourceCase`).
+ * Рядок розколу СТВОРЕНИХ — **ДВІ НЕЗАЛЕЖНІ ПАРТИЦІЇ ОДНОГО НАБОРУ**.
+ *
+ *   новизна : `newCount + repeatCount + undefCount   == created`
+ *   джерело : `adCount + leadgenCount + otherCount + noChannelCount == created`
+ *
+ * 🔴 ДЖЕРЕЛО СТАЛО ПАРТИЦІЄЮ 24.08.2026 (рішення власника), і це зміна ЧИТАННЯ,
+ * а не чисел. Раніше віддавались лише `adCount`/`leadgenCount` — дві з чотирьох
+ * гілок `dealSourceCase`, тобто НАКЛАДКА: їхня сума була ≤ `created`, і решта
+ * (43.2% угод) не мала імені взагалі. Тепер віддаються всі чотири, отже сімʼя
+ * покриває набір. `adCount` і `leadgenCount` при цьому НЕ зрушили ні на одиницю.
+ *
+ * 🔴 `undefCount` і `noChannelCount` — РІЗНІ РЕЧІ, і плутати їх не можна:
+ *   • `undefCount`     — невідома НОВИЗНА (`klass='undef'`): ні ключа клієнта, ні
+ *                        декларації CRM, тобто «не знаємо, вперше він чи ні»;
+ *   • `noChannelCount` — невідоме ДЖЕРЕЛО (`source='undef'`, `lead_channel IS NULL`).
+ * Перша редакція гейта `#164` склала їх в одну суму саме тому, що обидва звались
+ * «undef» — і це рівно той клас, що «архів» проти «давно втрачений».
+ *
+ * ⚠️ Дві партиції МІЖ СОБОЮ не складаються: це два розрізи того самого набору, а
+ * не шість кошиків. Заміряно: 84% лідген-угод — постійні клієнти.
  */
 export interface CreatedSplitRow {
   managerId: number;
@@ -500,10 +517,12 @@ export interface CreatedSplitRow {
   undefCount: number;
   adCount: number;
   leadgenCount: number;
+  otherCount: number;
+  noChannelCount: number;
 }
 export interface CreatedSplitBucketRow {
   bucket: string; created: number; newCount: number; repeatCount: number; undefCount: number;
-  adCount: number; leadgenCount: number;
+  adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
 }
 
 // Дженерик/порожні client_key, що НЕ беруть участі в матчингу історії клієнта
@@ -745,7 +764,7 @@ function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string)
 export async function createdSplitByManager(s: MetricScope): Promise<CreatedSplitRow[]> {
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params);
-  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string }>(
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; other_count: string; no_channel_count: string }>(
     `WITH ${cte}
      SELECT m.id AS manager_id, m.name, m.team_id,
             COUNT(*) AS created,
@@ -753,7 +772,9 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
             COUNT(*) FILTER (WHERE klass = 'repeat') AS repeat_count,
             COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count,
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
-            COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count
+            COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
+            COUNT(*) FILTER (WHERE source = 'other') AS other_count,
+            COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count
        FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
       GROUP BY m.id, m.name, m.team_id
       ORDER BY created DESC`,
@@ -763,6 +784,7 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
     managerId: x.manager_id, name: x.name, teamId: x.team_id,
     created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
     adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count),
+    otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
   }));
 }
 
@@ -779,7 +801,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
     : `to_char(date_trunc('${granularity === "month" ? "month" : "week"}', ${col})::date, 'YYYY-MM-DD')`;
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params, bucketExpr);
-  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string }>(
+  const r = await pool.query<{ bucket: string; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; other_count: string; no_channel_count: string }>(
     `WITH ${cte}
      SELECT bucket,
             COUNT(*) AS created,
@@ -787,7 +809,9 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
             COUNT(*) FILTER (WHERE klass = 'repeat') AS repeat_count,
             COUNT(*) FILTER (WHERE klass = 'undef') AS undef_count,
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
-            COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count
+            COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
+            COUNT(*) FILTER (WHERE source = 'other') AS other_count,
+            COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count
        FROM final
       GROUP BY bucket ORDER BY bucket`,
     params
@@ -795,6 +819,7 @@ export async function createdSplitByBucket(s: MetricScope, granularity: "day" | 
   return r.rows.map((x) => ({
     bucket: x.bucket, created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
     adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count),
+    otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
   }));
 }
 

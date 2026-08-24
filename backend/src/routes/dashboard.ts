@@ -6861,7 +6861,13 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       monthInProgress,
       created: splitM.get(m.id)?.created ?? 0, new: splitM.get(m.id)?.newCount ?? 0, rep: splitM.get(m.id)?.repeatCount ?? 0,
       // ДЖЕРЕЛО — накладка поверх партиції (⊂ created), у суму не додається.
+      // 🧺 РОЗКЛАД СТВОРЕНИХ ЗА ДЖЕРЕЛОМ — ПОВНИЙ, тобто ПАРТИЦІЯ (24.08.2026).
+      // `srcAd + srcLeadgen + srcOther + srcNoChannel == created`. Раніше віддавались
+      // лише перші дві гілки з чотирьох, і 43.2% угод не мали імені на екрані взагалі.
+      // ⚠️ `srcNoChannel` (канал не заповнено) — НЕ те саме, що невизначена НОВИЗНА:
+      // остання їде окремим полем і належить ІНШІЙ партиції. Тримає `#164`.
       srcAd: splitM.get(m.id)?.adCount ?? 0, srcLeadgen: splitM.get(m.id)?.leadgenCount ?? 0,
+      srcOther: splitM.get(m.id)?.otherCount ?? 0, srcNoChannel: splitM.get(m.id)?.noChannelCount ?? 0,
       /**
        * 🔀 Канальні конверсії — `taken`/`won` ЗАВЖДИ, відсоток лише при taken ≥ 10
        * (рішення власника 21.08.2026). Числа не брешуть при жодній вибірці, а
