@@ -2130,16 +2130,6 @@ const PRODZVIN_PIPELINES = [8921936, 7337048]; // холодний лідоге�
 const PZ_TAKEN = 69693696;                     // Продзвін «ВЗЯТО В РОБОТУ» — entry-анкер
 const REACTIVATION_PIPELINES = [8921948];      // реактивація існуючих клієнтів
 const REACT_WARMING = 69693740;                // Реактивація «Клієнт підігрівається» — entry-анкер
-
-/**
- * Конфіги handoff-у в ОДНОМУ місці. Ними користується і прод-шлях, і гейт `#137b`:
- * інакше гейт звіряв би дві форми на конфігах, ПЕРЕПИСАНИХ руками, — тобто доводив
- * би узгодженість своєї копії, а не проду (урок `#21c`).
- */
-export const HANDOFF_CFGS: { entryPipelines: number[]; entryStatus: number }[] = [
-  { entryPipelines: PRODZVIN_PIPELINES, entryStatus: PZ_TAKEN },
-  { entryPipelines: REACTIVATION_PIPELINES, entryStatus: REACT_WARMING },
-];
 const STATUS_142 = 142;                        // handoff (Продзвін/Реактивація) + won (FC) «Успішна»
 
 export interface LeadgenConversionRow {
@@ -2259,7 +2249,7 @@ function mergeLeadgen(won: ConversionCohortRow[], handoff: HandoffRow[]): Leadge
 export const conversionProdzvinByMonth = async (s: MetricScope): Promise<LeadgenConversionRow[]> => {
   const [won, handoff] = await Promise.all([
     conversionByCohort(s, { grain: "client", kind: "stage", entryStatuses: [PZ_TAKEN], entryPipelines: PRODZVIN_PIPELINES }),
-    handoffByMonth(s, HANDOFF_CFGS[0]),
+    handoffByMonth(s, { entryPipelines: PRODZVIN_PIPELINES, entryStatus: PZ_TAKEN }),
   ]);
   return mergeLeadgen(won, handoff);
 };
@@ -2273,7 +2263,7 @@ export const conversionProdzvinByMonth = async (s: MetricScope): Promise<Leadgen
 export const conversionReactivationByMonth = async (s: MetricScope): Promise<LeadgenConversionRow[]> => {
   const [won, handoff] = await Promise.all([
     conversionByCohort(s, { grain: "client", kind: "stage", entryStatuses: [REACT_WARMING], entryPipelines: REACTIVATION_PIPELINES }),
-    handoffByMonth(s, HANDOFF_CFGS[1]),
+    handoffByMonth(s, { entryPipelines: REACTIVATION_PIPELINES, entryStatus: REACT_WARMING }),
   ]);
   return mergeLeadgen(won, handoff);
 };
