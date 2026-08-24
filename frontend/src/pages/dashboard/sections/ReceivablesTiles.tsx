@@ -44,12 +44,15 @@ const C = { paid: "#16a34a", unpaid: "#f59e0b", na: "#94a3b8",
   a0: "#16a34a", a1: "#eab308", a2: "#f97316", a3: "#dc2626",
   uts: "#c5141c", avtomuv: "#2563eb", fop: "#7c3aed", unknown: "#94a3b8" };
 
-export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount, overdueSum }: {
+export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount, overdueSum,
+                                  overdueBeyondAgreed, overdueNoLimit }: {
   totals: ReceivableTotals | null;
   debtTotal: number;
   clientCount: number;
   overdueCount: number;
   overdueSum: number;
+  overdueBeyondAgreed: number;
+  overdueNoLimit: number;
 }) {
   const carrier = totals ? { paid: t(totals.carrier.paid), unpaid: t(totals.carrier.unpaid), na: t(totals.carrier.na) } : null;
   const naWhy = totals
@@ -75,6 +78,17 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
         <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
           {overdueCount ? formatAmount(overdueSum) : "усе в межах ліміту"}
         </span>
+        {/* 🔴 ДВІ ПРИЧИНИ ПІД ОДНИМ ЧИСЛОМ. «Понад термін» — класична прострочка;
+            «ліміт не узгоджено» — клієнти, яким відстрочку не давали (немає рядка
+            або 0 днів), тож будь-який несплачений рахунок для них прострочений.
+            Число одне (правило власника), але без цього розкладу воно читалось би
+            як «стільки клієнтів у біді», а серед них є рахунки віком 3 дні. */}
+        {overdueCount > 0 && (
+          <span style={{ fontSize: 10.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
+            понад узгоджений ліміт: <b>{overdueBeyondAgreed}</b>
+            <br />ліміт не узгоджено: <b>{overdueNoLimit}</b>
+          </span>
+        )}
       </div>
 
       {carrier && (

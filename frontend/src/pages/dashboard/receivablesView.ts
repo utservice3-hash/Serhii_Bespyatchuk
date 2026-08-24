@@ -53,9 +53,73 @@ export interface Filters {
 
 export const EMPTY_FILTERS: Filters = { tab: "all", entity: "", carrier: "", aging: "" };
 
-/** Прострочка понад узгоджений ліміт — той самий вираз, що й досі малює червоне. */
+/**
+ * Прострочка. ЄДИНИЙ вираз на весь екран — плитка, червоний рядок, фільтр
+ * «Прострочені» і підсумок менеджера беруть його, а не свою копію.
+ *
+ * 🔴 ПРАВИЛО ЗМІНЕНО В Е4 (рішення власника 24.08.2026): неузгоджений ліміт
+ * поводиться як НУЛЬОВИЙ. Було `limitDays != null && overdue > limitDays` —
+ * тобто клієнт без ліміту не потрапляв у прострочку НІЯК (`NULL > NULL` = NULL),
+ * і плитка мовчки рахувала 39% дебіторки: 45 боржників із 74 на 1 683 550 ₴
+ * не мали ліміту взагалі. Заміряно перед викатом: плитка 20 → 63.
+ *
+ * ⚠️ Дзеркалить `core/creditLimits.isOverdue` на бекенді. Дві мови — два файли,
+ * але твердження одне, і `#188` звіряє їх на живих даних. Інакше екран і API
+ * розійшлися б мовчки, як уже було з чипами «новий/постійний».
+ */
 export const isOverdue = (c: { overdueDays: number | null; limitDays: number | null }) =>
-  c.overdueDays != null && c.limitDays != null && c.overdueDays > c.limitDays;
+  c.overdueDays != null && c.overdueDays > (c.limitDays ?? 0);
+
+/** Три стани ліміту — і кожен має СВІЙ підпис, бо «чому» в них різне. */
+export type LimitState = "agreed" | "declined" | "never-set";
+
+export function limitState(limitDays: number | null): LimitState {
+  // ⚠️ Спершу null, потім нуль: `Number(null) === 0` дає true, і наївна
+  // перевірка порахувала б 45 «нулів», яких немає. Я на цьому спіймався у
+  // власному замірі — див. коментар у `core/creditLimits.ts`.
+  if (limitDays == null) return "never-set";
+  return Number(limitDays) === 0 ? "declined" : "agreed";
+}
+
+/**
+ * 🔴 «0 днів» НЕ ПИШЕМО. Рішення власника: нуль означає «ліміт розглянули і не
+ * дали», тобто перевізника ми не сплачуємо. Число «0» у колонці читалось би як
+ * незаповнена комірка — рівно та підміна підпису, від якої береже правило
+ * «невідоме має читатись як невідоме».
+ */
+export function limitLabel(limitDays: number | null): string {
+  switch (limitState(limitDays)) {
+    case "agreed": return `${limitDays} дн.`;
+    // 🔴 ОБИДВА НЕУЗГОДЖЕНІ СТАНИ ПІДПИСАНІ В КОЛОНЦІ ОДНАКОВО — так у макеті,
+    // затвердженому власником. І це не суперечить `#187`, а доповнює його:
+    // для ЛЮДИНИ, що дивиться на колонку, обидва означають рівно одне —
+    // відстрочки немає, перевізника не сплачуємо. Різниця «не дивились» проти
+    // «подивились і відмовили» — це відповідь на «чому», і вона живе в
+    // ПІДКАЗЦІ (`limitHint`), а не в двох схожих словах у вузькій клітинці.
+    //
+    // ⚠️ Стани в КОДІ лишаються різними (`declined` / `never-set`) — саме тому
+    // `#187` перевіряє `limitState` і `limitHint`, а не `limitLabel`. Звести їх
+    // в один стан «щоб простіше» означало б втратити відповідь назавжди.
+    case "declined":
+    case "never-set": return "не узгоджено";
+  }
+}
+
+export function limitHint(limitDays: number | null): string {
+  switch (limitState(limitDays)) {
+    case "agreed":
+      return `узгоджена відстрочка ${limitDays} дн. від дати рахунку`;
+    case "declined":
+      return "ліміт розглянули і не дали — перевізника не сплачуємо, поки клієнт не заплатить";
+    case "never-set":
+      return "ліміт цьому клієнту не встановлювали — перевізника не сплачуємо, поки клієнт не заплатить";
+  }
+}
+
+/** Рахунок 2023 року в колонці «днів без оплати» читається як збій. Підписуємо. */
+export const ANCIENT_DEBT_DAYS = 365;
+export const isAncientDebt = (ageDays: number | null) =>
+  ageDays != null && ageDays > ANCIENT_DEBT_DAYS;
 
 /**
  * Чи лишається клієнт у списку під фільтрами.

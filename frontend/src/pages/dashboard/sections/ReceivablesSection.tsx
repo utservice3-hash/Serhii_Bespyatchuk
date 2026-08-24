@@ -8,10 +8,12 @@ import {
 import { ReceivablesTiles } from "./ReceivablesTiles";
 import { ReceivablesFilters } from "./ReceivablesFilters";
 import { OwnerEditor } from "./OwnerEditor";
+import { LimitEditor } from "./LimitEditor";
 import { MergeDialog } from "./MergeDialog";
 import {
-  CARRIER_LABEL, CARRIER_REASON_LABEL, EMPTY_FILTERS, entityBreakdown, isOverdue,
-  originBadges, ownerState, passesFilters, t, type Filters, type MergeSide,
+  CARRIER_LABEL, CARRIER_REASON_LABEL, EMPTY_FILTERS, entityBreakdown, isAncientDebt, isOverdue,
+  limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters, t,
+  type Filters, type MergeSide,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
 import { teamOptions } from "../teamColors";
@@ -137,6 +139,7 @@ export function ReceivablesSection({
   receivablesTotals,
   canSetOwner,
   canMerge,
+  canSetLimit,
   canEditReceivables,
   patchReceivableNote,
   onRefresh,
@@ -151,6 +154,7 @@ export function ReceivablesSection({
   receivablesTotals: ReceivableTotals | null;
   /** Право віддає СЕРВЕР (`isAdminScope`) — фронт свого правила не має. */
   canSetOwner: boolean;
+  canSetLimit: boolean;
   /** Право віддає СЕРВЕР (`merge_receivables`). Фінансиста тут немає. */
   canMerge: boolean;
   canEditReceivables: boolean;
@@ -302,9 +306,16 @@ export function ReceivablesSection({
   const total = all.reduce((s, c) => s + c.amount, 0);
   const overdueClients = all.filter(isOverdue);
   const overdueSum = overdueClients.reduce((s, c) => s + c.amount, 0);
+  // 🔴 РОЗКЛАД НА ДВІ ПРИЧИНИ — щоб число не читалось як «усі ці клієнти в біді».
+  // Заміряно перед викатом Е4: із 45 нових прострочених 15 мають вік 1-7 днів —
+  // це свіжі рахунки клієнтів, яким просто не ставили ліміт. Правило рахує їх
+  // правильно (рішення власника), але без розкладу «63» лякало б дарма.
+  const overdueBeyondAgreed = overdueClients.filter((c) => limitState(c.limitDays) === "agreed").length;
+  const overdueNoLimit = overdueClients.length - overdueBeyondAgreed;
 
   // ✏️ Хто зараз редагується (ключ клієнта) і чи відкритий діалог склейки.
   const [ownerFor, setOwnerFor] = useState<string | null>(null);
+  const [limitFor, setLimitFor] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mgrOptions, setMgrOptions] = useState<ManagerOption[]>([]);
   useEffect(() => {
@@ -357,6 +368,8 @@ export function ReceivablesSection({
             debtTotal={total}
             clientCount={all.length}
             overdueCount={overdueClients.length}
+            overdueBeyondAgreed={overdueBeyondAgreed}
+            overdueNoLimit={overdueNoLimit}
             overdueSum={overdueSum}
           />
 
@@ -463,8 +476,37 @@ export function ReceivablesSection({
                             <CarrierCell facts={c.facts} />
                           </td>
                           <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top", whiteSpace: "nowrap" }} title={formatAmountFull(c.amount)}>{formatAmount(c.amount)}</td>
-                          <td style={{ textAlign: "center", verticalAlign: "top", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>{c.overdueDays ?? "—"}</td>
-                          <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "top" }}>{c.limitDays ?? "—"}</td>
+                          <td style={{ textAlign: "center", verticalAlign: "top", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>
+                            {c.overdueDays ?? "—"}
+                            {isAncientDebt(c.overdueDays) && (
+                              <span title="рахунок старший за рік — це факт, а не збій розрахунку"
+                                    style={{ display: "block", fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>
+                                🕰 старий рахунок
+                              </span>
+                            )}
+                          </td>
+                          <td title={limitHint(c.limitDays)}
+                              style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-muted)" : "var(--warn)",
+                                       textAlign: "center", verticalAlign: "top", position: "relative",
+                                       fontSize: limitState(c.limitDays) === "agreed" ? undefined : 11 }}>
+                            {limitLabel(c.limitDays)}
+                            {canSetLimit && (
+                              <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
+                                title="Змінити узгоджену відстрочку"
+                                style={{ display: "block", border: "none", background: "none", cursor: "pointer",
+                                         padding: 0, marginTop: 3, fontSize: 11, color: "var(--text-muted)",
+                                         textDecoration: "underline dotted", width: "100%" }}>
+                                ✏️ змінити
+                              </button>
+                            )}
+                            {limitFor === c.clientKey && (
+                              <LimitEditor client={c}
+                                onClose={() => setLimitFor(null)}
+                                // Перечитуємо: ліміт міняє не лише клітинку, а й прострочку
+                                // рядка, плитку і фільтр «Прострочені» — усе з одного виразу.
+                                onDone={() => { setLimitFor(null); onRefresh?.(); }} />
+                            )}
+                          </td>
                           <td style={{ textAlign: "center", verticalAlign: "top" }}>
                             {canEditReceivables ? (
                               <input
@@ -541,7 +583,9 @@ export function ReceivablesSection({
                   </thead>
                   <tbody>
                     {[...receivablesData].sort((a, b) => b.total - a.total).map((m) => {
-                      const od = m.clients.filter((c) => c.overdueDays != null && c.limitDays != null && c.overdueDays > c.limitDays);
+                      // Канонічний вираз, не власна копія: інлайн-дубль тут пережив зміну правила
+                      // в Е4 і показував би СТАРУ прострочку поруч із новою плиткою.
+                      const od = m.clients.filter(isOverdue);
                       return (
                         <tr key={m.managerId}>
                           <td style={{ textAlign: "left", fontWeight: 600 }}>{m.managerName}</td>

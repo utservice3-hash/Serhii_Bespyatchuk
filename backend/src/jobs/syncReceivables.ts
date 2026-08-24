@@ -146,7 +146,23 @@ function parseLimitRow(cells: string[]): { clientKey: string; limit: ClientLimit
   };
 }
 
-async function fetchClientLimits(): Promise<Map<string, ClientLimit>> {
+/**
+ * 🕰 ЛИСТ20 — БІЛЬШЕ НЕ ДЖЕРЕЛО, А ЛИШЕ ДРУГИЙ БІК ЗВІРКИ (Е4, 24.08.2026).
+ *
+ * Функція лишилась НАВМИСНО, хоч `limit_days` тепер приходить із
+ * `client_credit_limits`: гейт `#181` порівнює нове джерело зі старим, і без
+ * цього читання йому не було б із чим порівнювати.
+ *
+ * 🔴 ТЕРМІН ЖИТТЯ — ДВА ТИЖНІ, ДАЛІ ВИДАЛИТИ РАЗОМ ІЗ `#181`/`#182`,
+ * `parseLimitRow`, `parseAmount` і `receivablesLimitsSheetUrl`. Читання, що
+ * лишилось «про всяк випадок», через місяць читається як джерело — рівно так
+ * помер `expected` у /teams. Дата: після 07.09.2026.
+ *
+ * ⚠️ Результат цієї функції НІКУДИ, крім звірки, не йде. Якщо колись знову
+ * підставите його у `receivables` — ви повернули гугл-таблицю в контур, а
+ * власник її прибирав свідомо: він не знає, хто веде цей аркуш.
+ */
+export async function fetchSheetLimitsForReconcile(): Promise<Map<string, ClientLimit>> {
   const res = await fetch(config.receivablesLimitsSheetUrl);
   if (!res.ok) {
     throw new Error(`Failed to fetch receivables limits sheet: ${res.status}`);
@@ -174,14 +190,16 @@ export async function syncReceivables(): Promise<void> {
   // «половина минулого разу» виходить трохи СУВОРІШИМ, а не мʼякшим.
   const previousCount = Number(previousRes.rows[0]?.n ?? 0);
 
-  const [rows, limitsByKey] = await Promise.all([
-    loadReceivables1c(async () => {
-      const res = await fetch(config.receivables1cUrl);
-      if (!res.ok) throw new Error(`Failed to fetch 1C receivables: ${res.status}`);
-      return res.json();
-    }, previousCount),
-    fetchClientLimits(),
-  ]);
+  // 🧾 ЛІМІТИ — З НАШОЇ ТАБЛИЦІ (Е4). Гугл-аркуша в цьому шляху більше немає.
+  const limitRows = await pool.query<{ client_key: string; limit_days: number }>(
+    `SELECT client_key, limit_days FROM client_credit_limits`);
+  const limitDaysByKey = new Map(limitRows.rows.map((l) => [l.client_key, Number(l.limit_days)]));
+
+  const rows = await loadReceivables1c(async () => {
+    const res = await fetch(config.receivables1cUrl);
+    if (!res.ok) throw new Error(`Failed to fetch 1C receivables: ${res.status}`);
+    return res.json();
+  }, previousCount);
 
   const managerRows = await pool.query<{ id: number; name: string }>(`SELECT id, name FROM managers`);
   const managerIdByName = new Map(managerRows.rows.map((m) => [m.name, m.id]));
@@ -251,15 +269,33 @@ export async function syncReceivables(): Promise<void> {
          FROM receivable_invoices ri
         GROUP BY ri.client_key`
     );
+    // 🕰 ВІК БОРГУ РАХУЄМО САМІ — ЗА НАЙСТАРІШИМ НЕОПЛАЧЕНИМ РАХУНКОМ.
+    //
+    // Рішення власника 24.08.2026. До Е4 це поле («Макс дней») приходило з того
+    // самого гугл-аркуша, і заміряно перед переходом: воно не збігалось із нашими
+    // датами ЖОДНОГО разу з 29 (медіана розбіжності 26 днів, найбільша група —
+    // рівно +47 днів у 7 клієнтів, тобто аркуш частково застиг). Тримати щоденний
+    // факт у таблиці, яку ніхто свідомо не веде, означало показувати вік боргу
+    // станом на невідоме число.
+    //
+    // ⚠️ САМЕ MAX, А НЕ MIN. Питання «скільки клієнт нам винен найдовше» —
+    // це найстаріший рахунок; MIN відповідав би на «коли він купував востаннє».
+    // Заміряно: MAX дає 22 прострочених зі старим правилом, MIN — 14.
+    const ageRows = await client.query<{ client_key: string; max_age: number | null }>(
+      `SELECT client_key, MAX((CURRENT_DATE - invoice_date))::int AS max_age
+         FROM receivable_invoices GROUP BY client_key`);
+    const ageByKey = new Map(ageRows.rows.map((a) => [a.client_key, a.max_age]));
+
     for (const entry of grouped.rows) {
-      const limit = limitsByKey.get(entry.client_key);
+      const limitDays = limitDaysByKey.get(entry.client_key) ?? null;
+      const overdueDays = ageByKey.get(entry.client_key) ?? null;
       await client.query(
         `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         // Відповідальний лишається NULL до `recomputeOwners` нижче — у ТІЙ САМІЙ
         // транзакції, тож зовні проміжного стану не існує.
         [entry.client_key, entry.client_name, null, "", Number(entry.amount),
-         limit?.limitDays ?? null, limit?.overdueDays ?? null]
+         limitDays, overdueDays]
       );
     }
     // 🔴 ГОТІВКА ПЕРШОЮ, ПЕРЕРАХУНОК ДРУГИМ — і порядок тут НЕ косметика

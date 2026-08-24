@@ -194,7 +194,7 @@ export function Dashboard() {
   // 🔴 Права на дії віддає СЕРВЕР тими самими виразами, що гейтять роути.
   // Дефолт `false`: поки відповіді немає, кнопок немає — «закрито, поки не
   // сказано інакше» безпечніше за зворотне.
-  const [receivablesPerms, setReceivablesPerms] = useState({ canSetOwner: false, canMerge: false });
+  const [receivablesPerms, setReceivablesPerms] = useState({ canSetOwner: false, canMerge: false, canSetLimit: false });
   const [receivablesLoading, setReceivablesLoading] = useState(false);
   // Live refresh: bump a nonce every 5 min so data-loading effects re-fetch
   // fresh CRM data without a manual page reload.
@@ -532,14 +532,14 @@ export function Dashboard() {
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setReceivablesLoading(true);
     fetchReceivables({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
-      .then(({ syncedAt, managers, totals, canSetOwner, canMerge }) => {
+      .then(({ syncedAt, managers, totals, canSetOwner, canMerge, canSetLimit }) => {
         setReceivablesData(managers);
         setReceivablesSyncedAt(syncedAt);
         setReceivablesTotals(totals ?? null);
-        setReceivablesPerms({ canSetOwner: !!canSetOwner, canMerge: !!canMerge });
+        setReceivablesPerms({ canSetOwner: !!canSetOwner, canMerge: !!canMerge, canSetLimit: !!canSetLimit });
       })
       .catch(() => { setReceivablesData([]); setReceivablesTotals(null);
-                     setReceivablesPerms({ canSetOwner: false, canMerge: false }); })
+                     setReceivablesPerms({ canSetOwner: false, canMerge: false, canSetLimit: false }); })
       .finally(() => setReceivablesLoading(false));
   }, [section, receivablesTeamId, teams, auth, refreshNonce]);
 
@@ -1058,6 +1058,7 @@ export function Dashboard() {
           receivablesData={receivablesData}
           receivablesTotals={receivablesTotals}
           canSetOwner={receivablesPerms.canSetOwner}
+          canSetLimit={receivablesPerms.canSetLimit}
           canMerge={receivablesPerms.canMerge}
           canEditReceivables={canEditReceivables}
           patchReceivableNote={patchReceivableNote}

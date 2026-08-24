@@ -1283,6 +1283,22 @@ export async function setReceivableOwner(payload: {
   await api.put("/dashboard/receivables/owner", payload);
 }
 
+/**
+ * 🧾 Записати узгоджену відстрочку. `limitDays = 0` — ПОВНОЦІННЕ значення
+ * («розглянули і не дали»), а не «порожньо»: щоб прибрати ліміт зовсім, є
+ * `clearReceivableLimit`, і це ТРЕТІЙ стан.
+ */
+export async function setReceivableLimit(payload: {
+  clientKey: string; limitDays: number; note: string;
+}): Promise<void> {
+  await api.put("/dashboard/receivables/limit", payload);
+}
+
+/** Прибрати ліміт зовсім → стан «не встановлювали». Дзеркальна дія до setReceivableLimit. */
+export async function clearReceivableLimit(clientKey: string): Promise<void> {
+  await api.delete(`/dashboard/receivables/limit/${encodeURIComponent(clientKey)}`);
+}
+
 /** Зняти ручне призначення — вмикається авто-правило. */
 export async function clearReceivableOwner(clientKey: string): Promise<void> {
   await api.delete(`/dashboard/receivables/owner/${encodeURIComponent(clientKey)}`);
@@ -1411,6 +1427,12 @@ export interface ReceivablesResponse {
   canSetOwner?: boolean;
   /** `merge_receivables` — admin · ceo · opdir · kvp. Фінансиста тут НЕМАЄ. */
   canMerge?: boolean;
+  /**
+   * 🧾 Чи можна правити узгоджену відстрочку (Е4). Право `manage_credit_limits`:
+   * СЕО · опердир · адмін · КВП · ФІНАНСИСТ. Рахує СЕРВЕР тим самим виразом, що
+   * гейтить роут — фронт своєї думки про доступ не має.
+   */
+  canSetLimit?: boolean;
 }
 
 export interface ReceivableManager {

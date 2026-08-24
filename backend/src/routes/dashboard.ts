@@ -1827,11 +1827,79 @@ dashboardRouter.get("/receivables", async (req, res) => {
   // а `isAdminScope` саме його й читає. Підтверджено власником 24.08.2026 окремо.
   // Слід лишається: override без примітки не приймає ні роут, ні `CHECK` у БД.
   // Склейки у фінансиста НЕМАЄ — `merge_receivables` він не має. Тримає `#159b`.
+  // 🧾 `canSetLimit` — ОКРЕМЕ право, а не `isAdminScope` (Е4, рішення власника
+  // 24.08.2026): СЕО · опердир · адмін · КВП · ФІНАНСИСТ. Фінансист тут Є свідомо —
+  // ліміт відстрочки це фінансове рішення; склейки клієнтів він так само свідомо
+  // НЕ має. Дві сусідні межі з різними відповідями — саме тому право, а не роль.
   res.json({
     syncedAt, managers: Array.from(byManager.values()), totals: folded.totals,
     canSetOwner: isAdminScope(auth),
     canMerge: roleHasPerm(auth.roleKey, "merge_receivables"),
+    canSetLimit: roleHasPerm(auth.roleKey, "manage_credit_limits"),
   });
+});
+
+/**
+ * 🧾 Узгоджена відстрочка платежу — записати або зняти (Е4).
+ *
+ * ЧОМУ ЦЕ РОУТ, А НЕ КОЛОНКА В `receivables`: `receivables` перебудовується
+ * щосинку (TRUNCATE+insert), тож будь-яка правка там жила б до 15 хвилин.
+ * Ліміт — НАЛАШТУВАННЯ, воно мусить пережити синк, тому окрема таблиця.
+ *
+ * 🔴 `limitDays = 0` — ПОВНОЦІННЕ ЗНАЧЕННЯ, а не «порожньо». Означає «розглянули
+ * і не дали», тобто перевізника не сплачуємо. Зняти ліміт зовсім — це DELETE,
+ * і це ТРЕТІЙ стан («не встановлювали»). Плутати їх не можна: обидва ведуть до
+ * однакового наслідку, але відповідають різне на питання «чому».
+ */
+dashboardRouter.put("/receivables/limit", async (req, res) => {
+  const auth = req.auth!;
+  if (!roleHasPerm(auth.roleKey, "manage_credit_limits")) {
+    return res.status(403).json({ error: "Немає права змінювати ліміт" });
+  }
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const note = String(req.body?.note ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!note) {
+    return res.status(400).json({
+      error: "Примітка обовʼязкова — ліміт без причини через місяць не відрізнити від помилки",
+    });
+  }
+  const raw = req.body?.limitDays;
+  const limitDays = raw === null || raw === undefined || raw === "" ? NaN : Number(raw);
+  if (!Number.isInteger(limitDays) || limitDays < 0) {
+    return res.status(400).json({ error: "Ліміт — ціле число днів, 0 або більше" });
+  }
+
+  const target = await pool.query(
+    `SELECT 1 FROM receivables WHERE client_key = $1 LIMIT 1`, [clientKey]);
+  if (!target.rowCount) return res.status(404).json({ error: "Клієнта немає в дебіторці" });
+
+  await pool.query(
+    `INSERT INTO client_credit_limits (client_key, limit_days, note, set_by, set_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (client_key) DO UPDATE SET
+       limit_days = EXCLUDED.limit_days, note = EXCLUDED.note,
+       set_by = EXCLUDED.set_by, set_at = now()`,
+    [clientKey, limitDays, note.slice(0, 300), auth.userId]
+  );
+  // Той самий перерахунок, що й у синку — інакше екран до 15 хв показував би старий
+  // ліміт при новому підписі. Вік боргу не чіпаємо: він похідний від дат рахунків.
+  await pool.query(
+    `UPDATE receivables SET limit_days = $2 WHERE client_key = $1`, [clientKey, limitDays]);
+  res.json({ ok: true, limitDays });
+});
+
+/** Зняти ліміт зовсім → стан «не встановлювали». Дзеркальна дія до PUT. */
+dashboardRouter.delete("/receivables/limit/:clientKey", async (req, res) => {
+  const auth = req.auth!;
+  if (!roleHasPerm(auth.roleKey, "manage_credit_limits")) {
+    return res.status(403).json({ error: "Немає права змінювати ліміт" });
+  }
+  const clientKey = String(req.params.clientKey ?? "").trim();
+  const r = await pool.query(`DELETE FROM client_credit_limits WHERE client_key = $1`, [clientKey]);
+  if (!r.rowCount) return res.status(404).json({ error: "Ліміт не встановлений" });
+  await pool.query(`UPDATE receivables SET limit_days = NULL WHERE client_key = $1`, [clientKey]);
+  res.json({ ok: true });
 });
 
 /**
