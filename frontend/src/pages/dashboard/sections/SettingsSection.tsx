@@ -13,15 +13,34 @@ import { NAV_GROUPS } from "../../../components/Layout";
 const SCREEN_TABS: { key: string; label: string }[] = NAV_GROUPS.flatMap((g) =>
   (g.items as readonly { key: string; label: string }[]).map((it) => ({ key: it.key, label: it.label }))
 );
-const PERMS: { key: string; label: string; hint?: string }[] = [
+/**
+ * 🗑 ПРАВА, ЩО НЕ ГЕЙТЯТЬ НІЧОГО — ЗНЯТІ З ЕКРАНА (рішення власника 24.08.2026).
+ *
+ * `approve_plans` · `submit_plans` · `manage_goals` · `enter_manual_stats` · `export`
+ *
+ * 🔴 ПРИВІД — НЕ ОХАЙНІСТЬ, А ХИБНА ВПЕВНЕНІСТЬ. Заміряно: НУЛЬ згадок у бекенді
+ * й у фронті — ні `requirePerm`, ні `roleHasPerm`, ні `perms.includes`. Тобто це
+ * були тумблери, які виглядають як права й не роблять нічого: адмін вимикає
+ * «Експорт у Excel / PDF» і йде далі, вважаючи, що заборонив вивантаження. Тумблер,
+ * який нічого не вимикає, гірший за відсутній — на нього РОЗРАХОВУЮТЬ, рівно як на
+ * сигналізацію без гудка.
+ *
+ * 🔴 ДАНІ В `roles.permissions` НЕ ЧІПАЄМО — прибрано ТІЛЬКИ контроли. Це безпечно
+ * саме тому, що `draft` — глибока копія серверного обʼєкта (`JSON.parse(JSON.stringify(r))`),
+ * а `save` шле `draft.permissions` ЦІЛКОМ: ключі, яких немає в цьому списку, їдуть
+ * назад незмінними. Перевірено перед правкою — інакше зняття контрола означало б
+ * тихе `UPDATE roles SET permissions=…` без них (роут робить повну заміну, не мердж).
+ *
+ * ⚠️ ПРАВИЛО НА МАЙБУТНЄ: коли якесь із цих прав справді знадобиться, його заводять
+ * РАЗОМ із перевіркою на роуті — ніколи окремо. Право без гейта не «підготовка
+ * ґрунту», а обіцянка, якої код не виконує.
+ */
+const RETIRED_PERMS = ["approve_plans", "submit_plans", "manage_goals", "enter_manual_stats", "export"] as const;
+
+const RAW_PERMS: { key: string; label: string; hint?: string }[] = [
   { key: "admin_scope", label: "Рівень адміністратора", hint: "роль проходить усі admin-перевірки; раніше цей перелік був зашитий у коді" },
-  { key: "approve_plans", label: "Затверджувати плани", hint: "пише в plans (зараз лише КВП/адмін)" },
-  { key: "submit_plans", label: "Редагувати грід планів" },
-  { key: "manage_goals", label: "Керувати цілями" },
-  { key: "enter_manual_stats", label: "Вносити ручні показники статистик", hint: "бюджети/фінанси/HR" },
   { key: "manage_users", label: "Керувати користувачами й ролями", hint: "лише адмін" },
   { key: "reset_passwords", label: "Скидати паролі", hint: "окреме право; лише СЕО/ОД/адмін" },
-  { key: "export", label: "Експорт у Excel / PDF" },
   { key: "view_hidden_payments", label: "Бачити приховані вихідні (Виписка)", hint: "інакше приховані отримувачі відсутні" },
   { key: "manage_bank_hidden", label: "Керувати списком прихованих (Виписка)" },
   { key: "manage_bank_accounts", label: "Керувати реквізитами рахунків (Виписка)" },
@@ -31,6 +50,15 @@ const PERMS: { key: string; label: string; hint?: string }[] = [
   { key: "view_all_1x1", label: "Наскрізний доступ до 1×1", hint: "усі типи/люди/історія/аналітика Ван-ту-ван; HR/СЕО/ОД" },
   { key: "edit_1x1_forms", label: "Редагувати питання 1×1", hint: "керувати наборами питань Ван-ту-ван у Налаштуваннях" },
 ];
+
+/**
+ * 🔴 ФІЛЬТР, А НЕ ДИСЦИПЛІНА. Зняте право не повернеться на екран навіть тоді, коли
+ * хтось допише його в список вище: щоб тумблер зʼявився, треба СПОЧАТКУ прибрати
+ * ключ із `RETIRED_PERMS`, а це видима, свідома дія — і саме там стоїть нагадування
+ * завести право РАЗОМ із перевіркою на роуті. Комента було б замало: його не видно
+ * тому, хто просто копіює сусідній рядок.
+ */
+const PERMS = RAW_PERMS.filter((p) => !(RETIRED_PERMS as readonly string[]).includes(p.key));
 const SCOPES: { key: "own" | "team" | "company"; label: string; sub: string }[] = [
   { key: "own", label: "Свої", sub: "лише власні" },
   { key: "team", label: "Команда", sub: "своя команда" },
