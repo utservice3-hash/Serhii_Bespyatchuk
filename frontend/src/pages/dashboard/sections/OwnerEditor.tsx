@@ -80,12 +80,17 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
           немає, — щоб людина побачила зрозумілу вимогу, а не помилку з мережі. */}
       <textarea value={note} maxLength={NOTE_MAX} disabled={busy}
         onChange={(e) => setNote(e.target.value)}
-        placeholder="Чому саме так? (обовʼязково — через місяць призначення без причини не відрізнити від помилки)"
+        // 🔴 Плейсхолдер КОРОТКИЙ, а пояснення — під полем. Довгий текст у
+        // textarea на 54px обрізався на півслові («…не відрізнити від помил»),
+        // тобто вимога звучала як недороблений інтерфейс. Спіймало око, не тест.
+        placeholder="Чому саме так?"
         style={{ font: "inherit", fontSize: 12, padding: "6px 8px", borderRadius: 8, width: "100%",
-                 minHeight: 54, resize: "vertical", border: "1px solid var(--border)",
+                 minHeight: 46, resize: "vertical", border: "1px solid var(--border)",
                  background: "var(--card-bg)", color: "var(--text)", marginBottom: 4 }} />
-      <div style={{ fontSize: 10.5, color: noteOk ? "var(--text-muted)" : "var(--warn)", marginBottom: 8 }}>
-        {noteOk ? `${note.trim().length}/${NOTE_MAX}` : "Без примітки зберегти не можна"}
+      <div style={{ fontSize: 10.5, color: noteOk ? "var(--text-muted)" : "var(--warn)", marginBottom: 8, lineHeight: 1.4 }}>
+        {noteOk
+          ? `${note.trim().length}/${NOTE_MAX}`
+          : "Обовʼязково: через місяць призначення без причини не відрізнити від помилки"}
       </div>
 
       {err && <div style={{ fontSize: 11.5, color: "#dc2626", marginBottom: 8 }}>🔴 {err}</div>}

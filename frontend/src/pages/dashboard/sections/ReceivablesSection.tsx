@@ -428,13 +428,14 @@ export function ReceivablesSection({
                                 Пропонувати дію, яка ГАРАНТОВАНО впаде, гірше, ніж її не мати. */}
                             {canSetOwner && (c.ownerSource === "cash-invoice" ? (
                               <span style={{ display: "block", fontSize: 10.5, color: "var(--text-muted)", marginTop: 2 }}>
-                                готівка · менеджер із угод CRM, змінюється в CRM
+                                ✏️ змінюється в CRM, не тут
                               </span>
                             ) : (
                               <button onClick={() => setOwnerFor(ownerFor === c.clientKey ? null : c.clientKey)}
                                 title="Змінити відповідального за борг"
-                                style={{ border: "none", background: "none", cursor: "pointer", padding: 0,
-                                         marginTop: 2, fontSize: 12, color: "var(--text-muted)" }}>
+                                style={{ display: "block", border: "none", background: "none", cursor: "pointer",
+                                         padding: 0, marginTop: 3, fontSize: 11.5, color: "var(--text-muted)",
+                                         textDecoration: "underline dotted" }}>
                                 ✏️ змінити
                               </button>
                             ))}
