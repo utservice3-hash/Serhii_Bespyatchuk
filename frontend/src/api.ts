@@ -685,7 +685,7 @@ export interface ReportPlanManager {
   projected: number; monthInProgress: boolean;
   created: number; new: number; rep: number;
   /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
-  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ чотирьох == created (гейт #164).
+  // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ чотирьох == created (гейт #174).
   srcAd: number; srcLeadgen: number; srcOther: number; srcNoChannel: number;
   /**
    * 🧬 ГРОШІ ЗА НОВИЗНОЮ КЛІЄНТА (канон `dealKlassSql`). `fact == factNew +
@@ -742,7 +742,7 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
 /** `src` — НОВИЗНА клієнта, `source` — ДЖЕРЕЛО угоди. Різні виміри: угода буває
  *  водночас `src:"rep"` і `source:"ad"` (постійний клієнт прийшов через рекламу). */
 // Джерело угоди — партиція з чотирьох (див. metrics.dealSourceCase). `null` НЕ
-// п'ятий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#165c`.
+// п'ятий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#175c`.
 export type DealSource = "ad" | "leadgen" | "other" | "undef" | null;
 export interface ReportPlanDeal {
   name: string; src: "new" | "rep" | null; source: DealSource; price: number; status: string;

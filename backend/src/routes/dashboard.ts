@@ -6865,7 +6865,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // `srcAd + srcLeadgen + srcOther + srcNoChannel == created`. Раніше віддавались
       // лише перші дві гілки з чотирьох, і 43.2% угод не мали імені на екрані взагалі.
       // ⚠️ `srcNoChannel` (канал не заповнено) — НЕ те саме, що невизначена НОВИЗНА:
-      // остання їде окремим полем і належить ІНШІЙ партиції. Тримає `#164`.
+      // остання їде окремим полем і належить ІНШІЙ партиції. Тримає `#174`.
       srcAd: splitM.get(m.id)?.adCount ?? 0, srcLeadgen: splitM.get(m.id)?.leadgenCount ?? 0,
       srcOther: splitM.get(m.id)?.otherCount ?? 0, srcNoChannel: splitM.get(m.id)?.noChannelCount ?? 0,
       /**
@@ -7213,7 +7213,7 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
       name: x.name, src: x.klass === "new" ? "new" : x.klass === "repeat" ? "rep" : null,
       // ⚠️ БІЛИЙ СПИСОК ІЗ ЧОТИРЬОХ, не з трьох: `undef` («канал не вказано») мусить
       // доїхати окремим станом, інакше він зіллється з `null` («джерело незастосовне»)
-      // і незнання читатиметься як відсутність питання. Тримає `#165`.
+      // і незнання читатиметься як відсутність питання. Тримає `#175`.
       source: x.source === "ad" || x.source === "leadgen" || x.source === "other" || x.source === "undef" ? x.source : null,
       price: Math.round(Number(x.price)), status: label(Number(x.status_id)),
     })),
