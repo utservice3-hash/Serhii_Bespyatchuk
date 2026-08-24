@@ -7211,7 +7211,10 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
       // фронт піддомену не знає.
       kommoId: Number(x.kommo_id), url: kommoLeadUrl(Number(x.kommo_id)),
       name: x.name, src: x.klass === "new" ? "new" : x.klass === "repeat" ? "rep" : null,
-      source: x.source === "ad" || x.source === "leadgen" || x.source === "other" ? x.source : null,
+      // ⚠️ БІЛИЙ СПИСОК ІЗ ЧОТИРЬОХ, не з трьох: `undef` («канал не вказано») мусить
+      // доїхати окремим станом, інакше він зіллється з `null` («джерело незастосовне»)
+      // і незнання читатиметься як відсутність питання. Тримає `#165`.
+      source: x.source === "ad" || x.source === "leadgen" || x.source === "other" || x.source === "undef" ? x.source : null,
       price: Math.round(Number(x.price)), status: label(Number(x.status_id)),
     })),
   });

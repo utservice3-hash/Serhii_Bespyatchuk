@@ -741,7 +741,9 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
 }
 /** `src` — НОВИЗНА клієнта, `source` — ДЖЕРЕЛО угоди. Різні виміри: угода буває
  *  водночас `src:"rep"` і `source:"ad"` (постійний клієнт прийшов через рекламу). */
-export type DealSource = "ad" | "leadgen" | "other" | null;
+// Джерело угоди — партиція з чотирьох (див. metrics.dealSourceCase). `null` НЕ
+// п'ятий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#165c`.
+export type DealSource = "ad" | "leadgen" | "other" | "undef" | null;
 export interface ReportPlanDeal {
   name: string; src: "new" | "rep" | null; source: DealSource; price: number; status: string;
   /** Картка угоди в Kommo — URL будує сервер, піддомен фронт не знає. */

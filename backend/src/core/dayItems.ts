@@ -1,6 +1,9 @@
 import { pool } from "../db/pool.js";
 import { FC_PIPELINES, STAGE_PAID, STAGE_SUCCESS, STAGE_RECEIVED, moneySourceSql, type MoneyKind } from "./money.js";
 import { dealKlassSql, dealSourceSql } from "./metrics.js";
+// 🔬 Предикат стану джерела — у ЧИСТОМУ модулі без БД, щоб гілку «канал не
+// вказано» можна було саботувати в `npm test` (на проді таких угод нуль).
+import { sourceOf, type DealSourceState } from "./dealSourceState.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 
 /**
@@ -49,8 +52,9 @@ export interface DayItem {
    * водночас — саме це ховала стара перша гілка класифікатора.
    */
   src: "new" | "rep" | null;
-  /** ДЖЕРЕЛО угоди — реклама / лідоген / інше; `null` = канал не заповнений. */
-  source: "ad" | "leadgen" | "other" | null;
+  /** ДЖЕРЕЛО угоди — партиція з чотирьох: реклама / лідоген / без джерела /
+   *  канал не вказано. `null` — НЕ пʼятий стан, а «питання незастосовне» (дзвінки). */
+  source: DealSourceState;
   /**
    * 🔴 СУМА ПОКАЗУЄТЬСЯ ЗАВЖДИ, СТАН — ОКРЕМИМ ПОЛЕМ (рішення власника 07.08.2026).
    * Було `price ? сума : статус` — тобто при нульовому бюджеті замість числа
@@ -100,10 +104,6 @@ const STATE_LABEL = (s: number): string =>
  */
 const srcOf = (klass: string | null): "new" | "rep" | null =>
   klass === "new" ? "new" : klass === "repeat" ? "rep" : null;
-
-/** Джерело з ядра: 'undef' (канал не заповнений) → `null`, як і невизначена новизна. */
-const sourceOf = (v: string | null): "ad" | "leadgen" | "other" | null =>
-  v === "ad" ? "ad" : v === "leadgen" ? "leadgen" : v === "other" ? "other" : null;
 
 /** SELECT-колонки складу угоди — спільні для всіх `kind`, щоб мітка не розʼїхалась. */
 const DEAL_COLS = `d.kommo_id, d.name, d.price, d.status_id,
