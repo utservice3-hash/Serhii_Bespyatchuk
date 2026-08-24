@@ -7,6 +7,7 @@ import {
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
+import { saveErrorText, draftKey, hasUnsavedEdits, UNSAVED_PROMPT, UNSAVED_BEFOREUNLOAD, type O2ODraft } from "./oneOnOneSave";
 
 type O2OType = "A" | "B" | "V";
 const TYPE_LABEL: Record<O2OType, string> = { A: "Тімлід → Менеджер", B: "Керівник → Тімлід", V: "HR → Всі" };
@@ -138,6 +139,11 @@ export function OneOnOneSection() {
   const [notes, setNotes] = useState<O2ONotes>({});
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  // 🔴 ПОМИЛКА ЗБЕРЕЖЕННЯ МУСИТЬ БУТИ ВИДИМОЮ. Раніше save/doReview/addTask стояли
+  // без `catch`, тож 403/500 не лишав на екрані ЖОДНОГО сліду.
+  const [err, setErr] = useState<string | null>(null);
+  // Відбиток стану, який СЕРВЕР уже знає. Проти нього рахуємо «є незбережене».
+  const [savedSnap, setSavedSnap] = useState<string | null>(null);
   const [stats, setStats] = useState<OneOnOneStatRow[]>([]);
   const [enpsSeries, setEnpsSeries] = useState<O2OEnpsPoint[]>([]);
   const [hist, setHist] = useState<{ managerId: number; name: string; date: string } | null>(null);
@@ -195,33 +201,76 @@ export function OneOnOneSection() {
   const doReview = async (id: number, outcome: O2OTaskOutcome) => {
     if (selId == null) return;
     setTaskBusy(true);
+    setErr(null);
     try { await reviewO2OTask(id, outcome, dateSel); await loadOpenTasks(selId, dateSel); }
+    catch (e) { setErr(saveErrorText(e, "Не вдалося позначити задачу")); }
     finally { setTaskBusy(false); }
   };
   const addTask = async () => {
     if (selId == null || !newTask.trim()) return;
-    setTaskBusy(true);
+    setTaskBusy(true); setErr(null);
     try {
       await createO2OTask({ type, subjectManagerId: selId, meetingDate: dateSel, title: newTask.trim(), deadline: newTaskDue || null });
       setNewTask(""); setNewTaskDue("");
-    } finally { setTaskBusy(false); }
+    } catch (e) { setErr(saveErrorText(e, "Задачу не поставлено")); }
+    finally { setTaskBusy(false); }
   };
 
   // Запис КОНКРЕТНОЇ зустрічі — ключ (субʼєкт, тип, дата).
   useEffect(() => {
     if (selId == null) return;
     let live = true;
+    // 🔴 ЗНІМОК СТАВИМО В ОБОХ ГІЛКАХ. Якщо лишити його `null` на збої завантаження,
+    // захист незбереженого мовчки вимкнеться саме там, де людина почне набирати заново.
+    const snap = (d: O2ODraft) => { setSavedSnap(draftKey(d)); };
     fetchOneOnOne(type, selId, dateSel).then((r) => {
       if (!live) return;
-      setAnswers(r.answers || {}); setEnpsScore(r.enps_score); setEnpsReason(r.enps_reason || "");
-      setSatisfaction(r.satisfaction_score ?? null);
-      setNotes(r.notes || {}); setSavedAt(r.updated_at ?? null);
-    }).catch(() => { if (live) { setAnswers({}); setEnpsScore(null); setEnpsReason(""); setSatisfaction(null); setNotes({}); setSavedAt(null); } });
+      const loaded: O2ODraft = {
+        answers: r.answers || {}, enpsScore: r.enps_score, enpsReason: r.enps_reason || "",
+        satisfaction: r.satisfaction_score ?? null, notes: (r.notes || {}) as O2ONotes,
+      };
+      setAnswers(loaded.answers); setEnpsScore(loaded.enpsScore); setEnpsReason(loaded.enpsReason);
+      setSatisfaction(loaded.satisfaction);
+      // Стара помилка знімається ТУТ, а не на початку ефекту: поки нового запису ще
+      // немає, ховати попереднє «не збереглося» нема підстав (а синхронний setState в
+      // тілі ефекту — ще й зайвий каскад рендерів).
+      setNotes(loaded.notes); setSavedAt(r.updated_at ?? null); snap(loaded); setErr(null);
+    }).catch((e) => {
+      if (!live) return;
+      const empty: O2ODraft = { answers: {}, enpsScore: null, enpsReason: "", satisfaction: null, notes: {} };
+      setAnswers(empty.answers); setEnpsScore(null); setEnpsReason(""); setSatisfaction(null);
+      setNotes(empty.notes); setSavedAt(null); snap(empty);
+      setErr(saveErrorText(e, "Не вдалося завантажити анкету"));
+    });
     return () => { live = false; };
   }, [selId, type, dateSel]);
 
   const setAns = (key: string, patch: { score?: number; text?: string }) =>
     setAnswers((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+
+  // ── НЕЗБЕРЕЖЕНЕ НЕ ЗНИКАЄ МОВЧКИ ──────────────────────────────────────────
+  // Анкета живе в локальному стані до кнопки «Зберегти», а перемикання дати/людини/
+  // типу перезавантажує запис із сервера — тобто набране зникало БЕЗ помилки, просто
+  // «штатно». Для типу В там нотатки HR, які вдруге ніхто не переказує.
+  const draft: O2ODraft = useMemo(
+    () => ({ answers, enpsScore, enpsReason, satisfaction, notes }),
+    [answers, enpsScore, enpsReason, satisfaction, notes]);
+  const dirty = hasUnsavedEdits(savedSnap, draft);
+  /** Єдиний замок переходу. Мовчить, коли втрачати нічого (див. `draftKey`: порядок
+   *  ключів і порожній текст правкою НЕ вважаються — інакше попередження стало б шумом,
+   *  а шум прощіпують не читаючи). */
+  const leaveGuard = () => !dirty || window.confirm(UNSAVED_PROMPT);
+  const pickSubject = (id: number) => { if (leaveGuard()) setSelId(id); };
+  const pickDate = (v: string) => { if (leaveGuard()) setDateSel(v); };
+  const pickType = (t: O2OType) => { if (!leaveGuard()) return; setType(t); setSelId(null); };
+
+  // Закриття вкладки/перезавантаження — теж вихід. Вішаємо ЛИШЕ поки є що втрачати.
+  useEffect(() => {
+    if (!dirty) return;
+    const onLeave = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = UNSAVED_BEFOREUNLOAD; };
+    window.addEventListener("beforeunload", onLeave);
+    return () => window.removeEventListener("beforeunload", onLeave);
+  }, [dirty]);
 
   const allQuestions = useMemo(() => (form?.questions.sections ?? []).flatMap((s) => s.questions), [form]);
   const scoreKeys = useMemo(() => allQuestions.filter((q) => q.field === "score" || q.field === "score_text").map((q) => q.qKey), [allQuestions]);
@@ -236,17 +285,20 @@ export function OneOnOneSection() {
 
   const save = async () => {
     if (selId == null) return;
-    setSaving(true);
+    setSaving(true); setErr(null);
     try {
       await saveOneOnOne({ type, subjectManagerId: selId, meetingDate: dateSel, answers,
         enpsScore: type === "V" ? enpsScore : null, enpsReason: type === "V" ? enpsReason : null, notes: type === "V" ? notes : null,
         satisfactionScore: type === "V" ? null : satisfaction });
       setSavedAt(new Date().toISOString());
+      // Знімок рухається ТІЛЬКИ тут: поки сервер не підтвердив, правка лишається незбереженою.
+      setSavedSnap(draftKey(draft));
       await Promise.all([loadSubjects(), loadMeetings(selId)]);
-    } finally { setSaving(false); }
+    } catch (e) { setErr(saveErrorText(e, "Зустріч не збережена")); }
+    finally { setSaving(false); }
   };
 
-  const pickMonth = (v: string) => { if (!v || v > curMonthStr()) return; setMonthSel(v); localStorage.setItem("o2oMonth", v); setSelId(null); };
+  const pickMonth = (v: string) => { if (!v || v > curMonthStr()) return; if (!leaveGuard()) return; setMonthSel(v); localStorage.setItem("o2oMonth", v); setSelId(null); };
   const selected = subjects.find((s) => s.id === selId);
   const isV = type === "V";
   // «нова зустріч» = на цю дату запису ще немає (журнал не містить її)
@@ -272,7 +324,7 @@ export function OneOnOneSection() {
           {availableTypes.length > 1 && (
             <div style={{ display: "flex", gap: 5 }}>
               {availableTypes.map((t) => (
-                <Pill key={t} active={type === t} onClick={() => { setType(t); setSelId(null); }} title={TYPE_LABEL[t]}>
+                <Pill key={t} active={type === t} onClick={() => pickType(t)} title={TYPE_LABEL[t]}>
                   {t === "A" ? "Тімлід→Менеджер" : t === "B" ? "КВП→Тімлід" : "HR→Всі"}
                 </Pill>
               ))}
@@ -299,7 +351,7 @@ export function OneOnOneSection() {
               <div key={team} style={{ marginBottom: 8 }}>
                 <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", fontWeight: 700, margin: "6px 8px 4px" }}>{team}</div>
                 {list.map((s) => (
-                  <button key={s.id} onClick={() => setSelId(s.id)}
+                  <button key={s.id} onClick={() => pickSubject(s.id)}
                     style={{ display: "flex", width: "100%", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 12, marginBottom: 2, cursor: "pointer", textAlign: "left",
                       border: "none", background: selId === s.id ? "rgba(197,20,28,0.07)" : "transparent", color: "var(--text)" }}>
                     <Avatar name={s.name} size={32} />
@@ -337,6 +389,7 @@ export function OneOnOneSection() {
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                     <Ring value={liveOverall} label={type === "V" ? "eNPS" : "оцінка"} />
+                    {dirty && <Chip>● незбережено</Chip>}
                     <button onClick={save} disabled={saving}
                       style={{ padding: "9px 22px", borderRadius: 12, border: "none", background: RED, color: "#fff", fontWeight: 700, fontSize: 14, cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1 }}>
                       {saving ? "Збереження…" : "Зберегти"}
@@ -344,17 +397,27 @@ export function OneOnOneSection() {
                   </div>
                 </div>
 
+                {/* 🔴 ПОМИЛКА ЗБЕРЕЖЕННЯ — НА ЕКРАНІ. Доти 403/500 виглядав рівно як успіх:
+                    кнопка переставала крутитись, підпис «збережено ЧЧ:ХХ» лишався старим. */}
+                {err && (
+                  <div role="alert" onClick={() => setErr(null)} title="Приховати"
+                    style={{ marginBottom: 14, padding: "11px 14px", borderRadius: 14, cursor: "pointer",
+                      background: "rgba(220,38,38,.10)", color: "#b91c1c", fontSize: 13.5, fontWeight: 600 }}>
+                    ⚠️ {err}
+                  </div>
+                )}
+
                 {/* ЖУРНАЛ ЗУСТРІЧЕЙ. Дата — АВТОРИТЕТНА: вона визначає, який саме запис
                     редагуємо. У місяці зустрічей може бути кілька; чипи ліворуч-направо — минулі. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16, padding: "12px 14px", borderRadius: 16, background: "rgba(128,128,128,.05)" }}>
                   <span style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".05em", fontWeight: 800, color: "var(--text-muted)" }}>📅 Дата зустрічі</span>
-                  <DatePicker mode="day" value={dateSel} onChange={(v) => v && setDateSel(v)} minWidth={150} />
+                  <DatePicker mode="day" value={dateSel} onChange={(v) => v && pickDate(v)} minWidth={150} />
                   <Chip>{isNewMeeting ? "нова зустріч" : "запис існує"}</Chip>
                   {meetings.length > 0 && (
                     <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center", marginLeft: "auto" }}>
                       <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>журнал:</span>
                       {meetings.slice(0, 10).map((m) => (
-                        <button key={m.meeting_date} onClick={() => setDateSel(m.meeting_date)}
+                        <button key={m.meeting_date} onClick={() => pickDate(m.meeting_date)}
                           title={`${dmy(m.meeting_date)}${m.conducted_by_name ? ` · провів: ${m.conducted_by_name}` : ""}`}
                           style={{ border: "none", cursor: "pointer", fontSize: 11.5, fontWeight: dateSel === m.meeting_date ? 700 : 500,
                             padding: "4px 9px", borderRadius: 20, color: dateSel === m.meeting_date ? "#fff" : "var(--text)",

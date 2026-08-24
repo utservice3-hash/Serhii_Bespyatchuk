@@ -76,6 +76,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/leadgenChannelFact.test.js",
   "core/leadgenChannelOnly.test.js",
   "routes/uiEntry.test.js",
+  "routes/oneOnOneSaveGuard.test.js",
   "core/priorPaid.test.js",
   "jobs/calls.test.js",
   "utils/phone.test.js",
@@ -666,4 +667,8 @@ export const MANIFEST_TESTS: string[] = [
   "#134b 🪞 ДЗЕРКАЛО: колонка «Юрособа» — лише для ОБʼЄДНАНОГО клієнта",
   "#134c ПІДПИСИ ВІДПОВІДАЛЬНОГО НЕЙТРАЛЬНІ ЗА РОДОМ",
   "#136d СИНК: insertCashReceivables стоїть ДО recomputeOwners",
+  // ── 1×1 · збереження анкети (routes/oneOnOneSaveGuard.test.ts, 24.08.2026).
+  //    Номери з #140: #137 тримає перф-прохід, #138/#138b/#139 — Задачник.
+  "#140 помилка збереження 1×1 не зникає мовчки",
+  "#140b перехід між датою/людиною/типом не викидає набране",
 ];
