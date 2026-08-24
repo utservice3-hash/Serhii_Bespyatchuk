@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { skipReason, type Unavailable } from "../db/scratchDb.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -60,7 +61,7 @@ test("#68 ОХОРОНЕЦЬ НЕ МОЖЕ ЗАЛИПНУТИ НАЗАВЖДИ",
  * міряла не те, що думала. Різні тести розведені різними ІМЕНАМИ джоб, а не
  * різними базами.
  */
-let shared: { url: string } | { unavailable: string } | null = null;
+let shared: { url: string } | Unavailable | null = null;
 async function withScratch(t: { skip: (m: string) => void },
   fn: (c: import("pg").Client) => Promise<void>): Promise<void> {
   if (!shared) {
@@ -78,7 +79,7 @@ async function withScratch(t: { skip: (m: string) => void },
       await boot.end();
     }
   }
-  if ("unavailable" in shared) return t.skip(shared.unavailable);
+  if ("unavailable" in shared) return t.skip(skipReason(shared));
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: shared.url });
   await c.connect();

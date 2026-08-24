@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { RECOMPUTE_SQL, CANONICAL_KEY_EXPR } from "./clientKeySql.js";
-import { provisionScratch } from "../db/scratchDb.js";
+import { provisionScratch, skipReason, type Unavailable } from "../db/scratchDb.js";
 
 /**
  * #21 — ЗВОРОТНІСТЬ ЗЛИТТЯ КЛІЄНТСЬКИХ КЛЮЧІВ.
@@ -24,7 +24,7 @@ const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 
 test("#21 ЗВОРОТНІСТЬ: злиття застосовується і ВІДКОЧУЄТЬСЯ байт-у-байт", async (t) => {
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
   await c.connect();
@@ -77,7 +77,7 @@ test("#21 ЗВОРОТНІСТЬ: злиття застосовується і �
 
 test("#21b ЗАБОРОНА ЛАНЦЮЖКІВ живе в БД, а не в дисципліні", async (t) => {
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
   await c.connect();

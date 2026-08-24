@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, cpSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { provisionScratch } from "./scratchDb.js";
+import { provisionScratch, skipReason, type Unavailable } from "./scratchDb.js";
 
 /**
  * ТЕСТ #8 — СХЕМА З НУЛЯ.
@@ -50,7 +50,7 @@ test("#8 міграція проходить на ПОРОЖНІЙ базі по
   if ("unavailable" in scratch) {
     // Скіп лишається можливим, але тепер він НАЗИВАЄ ПРИЧИНУ і не є станом за
     // замовчуванням: у дев-оточенні тест реально біжить.
-    t.skip(scratch.unavailable);
+    t.skip(skipReason(scratch));
     return;
   }
   try {
@@ -68,7 +68,7 @@ test("#8b ДЗЕРКАЛО: зламану схему тест ЛОВИТЬ, а 
   // би однаково. Ламаємо схему СВІДОМО тим самим способом, який реально стався —
   // GRANT на таблицю, якої ще немає, — і вимагаємо падіння.
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) { t.skip(scratch.unavailable); return; }
+  if ("unavailable" in scratch) { t.skip(skipReason(scratch)); return; }
   const dir = mkdtempSync(path.join(tmpdir(), "uts-badschema-"));
   try {
     // Копія всього dist: `migrate.js` читає `schema.sql` поруч із собою і тягне

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs');fs.readdirSync('src/db').filter(f=>f.endsWith('.sql')).forEach(f=>fs.copyFileSync('src/db/'+f,'dist/db/'+f))\" && node scripts/writeVersion.mjs",
-    "test": "node --test \"dist/**/*.test.js\"",
+    "test": "node --test-reporter=tap --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\"",
     "reconcile": "node dist/scripts/reconcile.js",
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { skipReason, type Unavailable } from "../db/scratchDb.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -26,7 +27,7 @@ const AD_SOURCES = ["uts.ua"];
 test("#33 РЕКЛАМНИЙ ДОТИК: мітка АБО новий клієнт — на ОБОХ шляхах", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   process.env.DATABASE_URL = scratch.url;
   process.env.JWT_SECRET ??= "test";
   process.env.KOMMO_BASE_URL ??= "https://x.invalid";

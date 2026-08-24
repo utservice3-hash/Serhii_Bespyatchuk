@@ -1,5 +1,6 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { skipReason, type Unavailable } from "../db/scratchDb.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -98,7 +99,7 @@ const TALKS: [string, number, number][] = [
  *
  * Побічно це вп'ятеро дешевше: було пʼять `initdb` на файл, стало один.
  */
-let shared: { url: string; dispose: () => void } | { unavailable: string } | null = null;
+let shared: { url: string; dispose: () => void } | Unavailable | null = null;
 /**
  * ⚠️ ПУЛ ЗАКРИВАЄМО ПЕРШИМ, кластер — другим. Знесений кластер обриває зʼєднання,
  * що лишились у пулі, і `Connection terminated unexpectedly` прилітає ПІСЛЯ
@@ -118,7 +119,7 @@ async function withScratch(t: { skip: (m: string) => void },
     shared = provisionScratch();
   }
   const scratch = shared;
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   // ⚠️ `metrics.js` тягне `db/pool.js` → `config.js`, який кидає на відсутньому
   // DATABASE_URL ще НА ІМПОРТІ (пастка спрацювала за сесію вже пʼятий раз).
   process.env.DATABASE_URL = scratch.url;

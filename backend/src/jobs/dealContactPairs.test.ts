@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { skipReason, type Unavailable } from "../db/scratchDb.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { dedupeDealContactPairs, dedupeById, type DealContactPair } from "./dealContactPairs.js";
@@ -12,7 +13,7 @@ import { dedupeDealContactPairs, dedupeById, type DealContactPair } from "./deal
 test("#24 БАТЧ ІЗ ДУБЛЕМ ПАРИ: вставляється ОДИН раз, без винятку", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
   await c.connect();

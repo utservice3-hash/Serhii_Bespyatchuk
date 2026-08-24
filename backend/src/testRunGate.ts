@@ -240,7 +240,22 @@ export const PROD_SKIP_CHILDREN: Record<string, string[]> = {
   ],
 };
 
-export interface RunTally { ran: number; failed: number; skipped: string[] }
+/**
+ * 🔴 МАРКЕР «ОТОЧЕННЯ ЗЛАМАНЕ» — ОДИН РЯДОК-КОНСТАНТА НА ВЕСЬ ПРОДУКТ (Б2, 24.08.2026).
+ *
+ * Його підставляє `db/scratchDb.ts` у причину скіпу, коли провізія впала не через
+ * природну відсутність (`no-binaries`), а через зламане оточення (`provision-failed`).
+ * Вартовий шукає САМЕ цей маркер — не розбирає вільний текст регуляркою: це була б
+ * друга копія правила, а ми щойно лікували рівно таку хворобу в лідгені.
+ *
+ * ⚠️ Живе ТУТ, а не в `scratchDb`, свідомо: `testRunGate` вантажиться репортером на
+ * КОЖНОМУ прогоні, а `scratchDb` тягне `node:child_process` і потрібен не всім.
+ * Імпорт у зворотний бік зробив би маркер залежним від модуля, який його читає.
+ */
+export const BROKEN_ENV_MARK = "⛔ОТОЧЕННЯ-ЗЛАМАНЕ";
+
+export interface SkipInfo { name: string; reason: string }
+export interface RunTally { ran: number; failed: number; skipped: string[]; broken?: SkipInfo[] }
 export interface Verdict { ok: boolean; ran: number; required: number; declared: number; unexpected: string[]; report: string }
 
 export function modeName(env: NodeJS.ProcessEnv = process.env): string {
@@ -259,7 +274,15 @@ export function modeName(env: NodeJS.ProcessEnv = process.env): string {
  */
 export function evaluateRun(t: RunTally, declared: number, env: NodeJS.ProcessEnv = process.env): Verdict {
   const allowed = allowedSkips(env);
-  const unexpected = t.skipped.filter((n) => !allowed.has(n));
+  /**
+   * 🔴 ЗЛАМАНЕ ОТОЧЕННЯ БʼЄ РЕЄСТР. `ALLOWED_PROD_SKIPS` звіряє ІМʼЯ тесту — і саме
+   * тому на проді скіп «тут немає PostgreSQL» (норма) та скіп «диск помер» падали в
+   * ОДНУ дозволену клітинку. Тепер дозвіл знімається з будь-якого скіпу, чия причина
+   * несе маркер: право пропустити дається за ПРИРОДОЮ перешкоди, а не за іменем.
+   */
+  const broken = t.broken ?? [];
+  const brokenNames = new Set(broken.map((b) => b.name));
+  const unexpected = t.skipped.filter((n) => !allowed.has(n) || brokenNames.has(n));
   const okSkips = t.skipped.length - unexpected.length;
   // Діти дозволено-скіпнутих батьків фізично не можуть зʼявитись у виводі.
   const skippedSet = new Set(t.skipped);
@@ -271,6 +294,12 @@ export function evaluateRun(t: RunTally, declared: number, env: NodeJS.ProcessEn
   const mode = modeName(env);
 
   let report = "\n"
+    + (broken.length
+      ? `🔴 ОТОЧЕННЯ ЗЛАМАНЕ — ${broken.length} гейт(ів) не виконались НЕ ЧЕРЕЗ РЕЖИМ:\n`
+        + broken.map((b) => `   ﹣ ${b.name}\n     ${b.reason.replace(BROKEN_ENV_MARK, "").trim()}\n`).join("")
+        + "   Це НЕ дозволений пропуск: перевірка не виконалась, і «0 падінь» тут\n"
+        + "   означало б «нічого не перевірено». Полагодь оточення й повтори.\n"
+      : "")
     + `🔒 РЕЖИМ ${mode}: ВИКОНАЛОСЬ ${t.ran} із ${required} обовʼязкових `
     + `(оголошено в маніфесті ${declared}, дозволених скіпів ${okSkips}`
     + (absentChildren ? `, підтестів скіпнутих батьків ${absentChildren}` : "")
@@ -305,15 +334,39 @@ export function evaluateRun(t: RunTally, declared: number, env: NodeJS.ProcessEn
 
 interface TestEvent { type: string; data: { name?: string; skip?: boolean | string } }
 
+/** Скіп через зламане оточення — за маркером у причині, а не за здогадом по тексту. */
+export const isBrokenEnvSkip = (skip: boolean | string | undefined): boolean =>
+  typeof skip === "string" && skip.includes(BROKEN_ENV_MARK);
+
 export default async function* runGate(source: AsyncIterable<TestEvent>) {
-  const tally: RunTally = { ran: 0, failed: 0, skipped: [] };
+  const tally: RunTally = { ran: 0, failed: 0, skipped: [], broken: [] };
   for await (const ev of source) {
     if (ev.type !== "test:pass" && ev.type !== "test:fail") continue;
     // `skip` приходить або true, або текстом причини — обидва означають «не виконався».
-    if (ev.data.skip === true || typeof ev.data.skip === "string") tally.skipped.push(ev.data.name ?? "");
+    if (ev.data.skip === true || typeof ev.data.skip === "string") {
+      const name = ev.data.name ?? "";
+      tally.skipped.push(name);
+      if (isBrokenEnvSkip(ev.data.skip)) tally.broken!.push({ name, reason: String(ev.data.skip) });
+    }
     else { tally.ran++; if (ev.type === "test:fail") tally.failed++; }
   }
-  if (process.env.TEST_SCOPE !== "prod") return;    // локальний `npm test`: скіпи законні
+  /**
+   * 🔴 ЛОКАЛЬНИЙ `npm test` БІЛЬШЕ НЕ МОВЧИТЬ ПРО ЗЛАМАНЕ ОТОЧЕННЯ (Б2).
+   *
+   * Решта скіпів у деві законна (немає БД, немає API) — це режим, а не поломка, і
+   * вартовий їх, як і раніше, не чіпає. Але скіп через ЗЛАМАНЕ оточення законним не
+   * буває ніде: саме він двічі за добу тихо вимкнув 41 гейт, і обидва рази числа
+   * знімали з набору, який їх не виконував.
+   */
+  if (tally.broken!.length > 0) {
+    process.exitCode = 1;
+    yield "\n🔴 ПРОГІН НЕ ЗАРАХОВАНО: ОТОЧЕННЯ ЗЛАМАНЕ\n"
+      + tally.broken!.map((b) => `   ﹣ ${b.name}\n     ${b.reason.replace(BROKEN_ENV_MARK, "").trim()}\n`).join("")
+      + `   Не виконалось ${tally.broken!.length} гейт(ів). «0 падінь» тут означає\n`
+      + "   «нічого не перевірено», а не «все гаразд».\n";
+    if (process.env.TEST_SCOPE !== "prod") return;
+  }
+  if (process.env.TEST_SCOPE !== "prod") return;    // локальний `npm test`: решта скіпів законна
 
   const { MANIFEST_TESTS, MANIFEST_SECURITY_TABLES } = await import("./testManifest.js");
   const v = evaluateRun(tally, MANIFEST_TESTS.length + MANIFEST_SECURITY_TABLES.length);

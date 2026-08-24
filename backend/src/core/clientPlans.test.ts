@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { skipReason, type Unavailable } from "../db/scratchDb.js";
 import { needsDb } from "../testMode.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -123,7 +124,7 @@ test("#22f ЦИКЛ ЗАТВЕРДЖЕННЯ на ПІСОЧНИЦІ: у пла�
   const { readFileSync } = await import("node:fs");
   const path = await import("node:path");
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
   await c.connect();
@@ -267,7 +268,7 @@ test("#23e ПРАВО merge_clients НЕ ПРОСОЧУЄТЬСЯ через с�
   const { readFileSync } = await import("node:fs");
   const path = await import("node:path");
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
   await c.connect();
