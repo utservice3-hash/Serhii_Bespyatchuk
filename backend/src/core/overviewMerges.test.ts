@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsDb, needsApiQuiet } from "../testMode.js";
+import { needsDb } from "../testMode.js";
 
 /**
  * #137* — ЗЛИТТЯ ЗАПИТІВ ОГЛЯДУ (перф-прохід 23.08.2026, частина A).
@@ -119,30 +119,15 @@ test("#137d /overview робить не більше 29 запитів до БД
 });
 
 /**
- * #137e ЛАТЕНТНІСТЬ ×4 — з МЕДІАНОЮ, а не одним прогоном.
+ * 🗑 #137e (латентність ×4) ЗНЯТО 24.08.2026 — рішення власника.
  *
- * ⚠️ Перший прогін після старту процесу — холодний (заміряно: 6 954 мс проти
- * 3 288 мс на прогрітому). Один такий вимір — не вимір; гейт бере медіану
- * раундів, інакше він падав би на власному прогріві.
+ * Він міряв не нашу зміну, а завантаження Neon: гейт ходить по HTTP до ЖИВОГО
+ * сервера, тож поки код не в проді, він взагалі не бачить того, що перевіряє.
+ * На ОДНОМУ й тому самому коді за добу: ×4 = 2 894 / 4 386 / 5 224 / 6 464 мс,
+ * а за одну годину — спершу зелено, далі «медіана 4 315 при стелі 4 200».
+ *
+ * Абсолютна стеля на спільній БД, що дриґається, — це гейт, який червоніє не з
+ * нашої вини, а такий за два тижні починають ігнорувати (той самий висновок, що
+ * й про поріг «% + абсолют» у звірці). Час у прийманні деплою міряє `#36`;
+ * durable-гарантія цього проходу — СТРУКТУРНИЙ `#137d` (детермінований).
  */
-test("#137e ЧАС ×4 тримається під стелею", needsApiQuiet(), async () => {
-  const { API_BASE } = await import("../testMode.js");
-  const { signToken } = await import("../auth/auth.js");
-  const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const hit = async () => {
-    const t0 = Date.now();
-    const r = await fetch(`${API_BASE}/api/dashboard/overview`, { headers: { Authorization: `Bearer ${token}` } });
-    await r.text();
-    return { ms: Date.now() - t0, status: r.status };
-  };
-  await hit(); await hit();                                   // прогрів
-  const rounds: number[] = [];
-  for (let i = 0; i < 3; i++) {
-    const four = await Promise.all([hit(), hit(), hit(), hit()]);
-    for (const f of four) assert.equal(f.status, 200, `🔴 /overview віддав ${f.status} під навантаженням`);
-    rounds.push(Math.max(...four.map((f) => f.ms)));
-  }
-  const median = [...rounds].sort((a, b) => a - b)[1];
-  assert.ok(median <= 4200,
-    `🔴 медіана найгіршого з ×4 = ${median} мс при стелі 4200 (раунди: ${rounds.join(", ")})`);
-});
