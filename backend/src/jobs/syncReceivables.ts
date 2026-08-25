@@ -269,33 +269,16 @@ export async function syncReceivables(): Promise<void> {
          FROM receivable_invoices ri
         GROUP BY ri.client_key`
     );
-    // 🕰 ВІК БОРГУ РАХУЄМО САМІ — ЗА НАЙСТАРІШИМ НЕОПЛАЧЕНИМ РАХУНКОМ.
-    //
-    // Рішення власника 24.08.2026. До Е4 це поле («Макс дней») приходило з того
-    // самого гугл-аркуша, і заміряно перед переходом: воно не збігалось із нашими
-    // датами ЖОДНОГО разу з 29 (медіана розбіжності 26 днів, найбільша група —
-    // рівно +47 днів у 7 клієнтів, тобто аркуш частково застиг). Тримати щоденний
-    // факт у таблиці, яку ніхто свідомо не веде, означало показувати вік боргу
-    // станом на невідоме число.
-    //
-    // ⚠️ САМЕ MAX, А НЕ MIN. Питання «скільки клієнт нам винен найдовше» —
-    // це найстаріший рахунок; MIN відповідав би на «коли він купував востаннє».
-    // Заміряно: MAX дає 22 прострочених зі старим правилом, MIN — 14.
-    const ageRows = await client.query<{ client_key: string; max_age: number | null }>(
-      `SELECT client_key, MAX((CURRENT_DATE - invoice_date))::int AS max_age
-         FROM receivable_invoices GROUP BY client_key`);
-    const ageByKey = new Map(ageRows.rows.map((a) => [a.client_key, a.max_age]));
 
     for (const entry of grouped.rows) {
       const limitDays = limitDaysByKey.get(entry.client_key) ?? null;
-      const overdueDays = ageByKey.get(entry.client_key) ?? null;
       await client.query(
         `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         // Відповідальний лишається NULL до `recomputeOwners` нижче — у ТІЙ САМІЙ
         // транзакції, тож зовні проміжного стану не існує.
         [entry.client_key, entry.client_name, null, "", Number(entry.amount),
-         limitDays, overdueDays]
+         limitDays, null]
       );
     }
     // 🔴 ГОТІВКА ПЕРШОЮ, ПЕРЕРАХУНОК ДРУГИМ — і порядок тут НЕ косметика
@@ -310,6 +293,31 @@ export async function syncReceivables(): Promise<void> {
     // двох джерел». Єдиний писар — `recomputeOwners` нижче, у ТІЙ САМІЙ
     // транзакції, тож зовні проміжного стану не існує.
     const cashClients = await insertCashReceivables(client);
+
+    // 🕰 ВІК БОРГУ — ОДНИМ ПРОХОДОМ І ПІСЛЯ ГОТІВКИ (виправлено 25.08.2026).
+    //
+    // Рішення власника 24.08: вік рахуємо САМІ, за НАЙСТАРІШИМ неоплаченим
+    // рахунком — питання «скільки нам винні найдовше», а не «коли купували
+    // востаннє». До Е4 це поле приходило з гугл-аркуша й не збігалось із нашими
+    // датами ЖОДНОГО разу з 29 (медіана 26 днів, найбільша група рівно +47 —
+    // аркуш частково застиг).
+    //
+    // 🔴 ЧОМУ САМЕ ТУТ, А НЕ У ВСТАВЦІ ВИЩЕ. Перша редакція рахувала вік ДО
+    // `insertCashReceivables` — і готівкові клієнти лишались із `NULL`, бо
+    // їхніх рахунків на той момент ще не існувало. Заміряно на проді: «МГЕР
+    // (готівка)», 11 рахунків із датами, 225 тис ₴, вік 101 день — і порожня
+    // клітинка «днів без оплати», тобто рядок випадав із прострочки взагалі.
+    //
+    // Це ТОЧНО та сама пастка порядку, що коштувала нам `recomputeOwners`
+    // 23.08 («ГОТІВКА ПЕРШОЮ, ПЕРЕРАХУНОК ДРУГИМ»), і я наступив на неї вдруге
+    // — з іншим полем. Тому обидва перерахунки тепер стоять поруч, після
+    // готівки: хто додасть третій, побачить, куди його класти.
+    await client.query(
+      `UPDATE receivables r SET overdue_days = a.max_age
+         FROM (SELECT client_key, MAX((CURRENT_DATE - invoice_date))::int AS max_age
+                 FROM receivable_invoices GROUP BY client_key) a
+        WHERE a.client_key = r.client_key`);
+
     // Відповідальний — ОДНИМ проходом, тим самим кодом, що й адмін-кнопка.
     const owners = await recomputeOwners(client);
     await client.query("COMMIT");
