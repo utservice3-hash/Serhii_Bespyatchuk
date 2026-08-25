@@ -73,7 +73,12 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
       </div>
 
       <div className="kpi-card" style={{ borderTop: `3px solid ${overdueCount ? "#dc2626" : "#16a34a"}` }}>
-        <span className="kpi-label">Прострочено (понад ліміт)</span>
+        {/* 🔴 «(понад ліміт)» ПРИБРАНО в Е4, і це не косметика. Після зміни правила
+            сюди входять і клієнти, у яких ліміту НЕМАЄ — тобто заголовок стверджував
+            би те, чого число вже не означає. Рівно той клас підміни, що «сер.чек ÷
+            авто» і «синхронізовано із Задачником»: підпис правдоподібний, величина
+            за ним інша. Що саме входить — каже розклад під числом. */}
+        <span className="kpi-label">Прострочено</span>
         <span className="kpi-value" style={{ color: overdueCount ? "#dc2626" : "#16a34a" }}>{overdueCount}</span>
         <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
           {overdueCount ? formatAmount(overdueSum) : "усе в межах ліміту"}
