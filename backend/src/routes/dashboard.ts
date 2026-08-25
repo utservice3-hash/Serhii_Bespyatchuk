@@ -7,6 +7,7 @@ import { mergePairAllowed, mergeDenyReason, type MergePairScope } from "../auth/
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
 import { klassOf } from "../core/klassFilter.js";
+import { overviewCache } from "../core/lazyCache.js";
 
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, otherCount: 0, noChannelCount: 0 } as const;
@@ -347,7 +348,18 @@ dashboardRouter.get("/overview", async (req, res) => {
   // same-deal) ВИДАЛЕНО — Огляд віддає КОГОРТНУ adConversion з ядра
   // (metrics.conversionAdsByMonth → MONEY_ZONE, стеля ≤100%, ⏳ дозрівання) нижче.
   // `adSources` лишається — потрібен для історії та core-конверсій.
-  const { adSources } = await getSettings();
+  //
+  // ⏱ ДАЛІ ПО ЦЬОМУ РОУТУ — ЛІНИВИЙ КЕШ (`overviewCache`, TTL 60 с, рішення власника
+  // 25.08.2026, обсяг V3′). Обгорнуто РІВНО девʼять іменованих викликів, що дають
+  // 11 із 29 запитів роуту; усі вони НЕ ЗАЛЕЖАТЬ ВІД ПЕРІОДУ **за побудовою** — дати
+  // не входять у їхній SQL узагалі, роут ріже період уже після (`sumConv`, проратація).
+  // Ключ будується з АРГУМЕНТІВ (`overviewCache.call`), тож забути `teamId` у ключі
+  // структурно неможливо; гейт `#211c` саботується саме цим.
+  // 🔴 `metrics.buildProjection` СВІДОМО НЕ КЕШУЄТЬСЯ, хоч її три запити теж сталі:
+  // вона приймає `planMonthTotal`, який залежить від `to`. Ціна відмови заміряна —
+  // ×4 2 421 проти 2 598 мс, тобто в межах шуму Neon; інваріант «набір ключів
+  // однаковий для будь-яких двох періодів» вартий більше.
+  const { adSources } = await overviewCache.call("getSettings", getSettings);
 
   // MASTER_PLAN КРОК 2: гроші анкеряться по ДАТІ ВХОДУ В ЕТАП (deal_stage_events),
   // дедуп по угоді — знімки прибрано (недатований знімок мутував минулі місяці).
@@ -365,7 +377,13 @@ dashboardRouter.get("/overview", async (req, res) => {
     money.moneyTotals(moneyScope),
     money.receivedByTeam(moneyScope),
     money.receivedByMgr(moneyScope),
-    money.awaitingNowSnapshot(moneyScope),
+    // 🔑 ЗВУЖЕНИЙ СКОУП, А НЕ `moneyScope` — І ЦЕ НЕ «ВІДКИНУТИ ЧАСТИНУ КЛЮЧА».
+    // `awaitingNowSnapshot` — знімок «станом на зараз»: у її SQL стоять лише
+    // `managerId`/`teamId`, а `from`/`to` вона не читає взагалі. Передавши повний
+    // скоуп, ми поклали б період у КЛЮЧ і кеш не влучив би НІКОЛИ — тобто мовчки
+    // виродився б у нуль. Що звуження безпечне, доводиться РІВНІСТЮ РЕЗУЛЬТАТІВ на
+    // живих даних (`#211e`), а не читанням тіла функції.
+    overviewCache.call("awaitingNowSnapshot", money.awaitingNowSnapshot, { managerId, teamId }),
   ]);
   const receivedTot = totals.received, successTot = totals.success;
   const paidOnlyTot = totals.paidOnly, expectedTot = totals.expected;
@@ -395,7 +413,7 @@ dashboardRouter.get("/overview", async (req, res) => {
   // ⚡ Борг і готівка — ОДНИМ запитом: та сама таблиця, той самий скоуп, різниця
   // лише в `source='cash'`, що й виражає FILTER. Готівкова дебіторка з CRM —
   // ОКРЕМА позначка (НЕ в основному тоталі, який 1:1 з таблицею).
-  const debtSnap = await metrics.receivablesSnapshot({ managerId, teamId });
+  const debtSnap = await overviewCache.call("receivablesSnapshot", metrics.receivablesSnapshot, { managerId, teamId });
   const receivablesTotalValue = debtSnap.total;
   const receivablesCashValue = debtSnap.cash;
 
@@ -408,13 +426,22 @@ dashboardRouter.get("/overview", async (req, res) => {
   const planParams: unknown[] = [];
   if (managerId) { planParams.push(managerId); planScope.push(`p.manager_id = $${planParams.length}`); }
   if (teamId) { planParams.push(teamId); planScope.push(`mp.team_id = $${planParams.length}`); }
-  const planMonthsRes = await pool.query<{ mon: string; plan: string }>(
-    `SELECT to_char(date_trunc('month', p.plan_date), 'YYYY-MM-DD') AS mon,
-            COALESCE(SUM(p.planned_value), 0) AS plan
-     FROM plans p JOIN managers mp ON mp.id = p.manager_id
-     WHERE p.metric = 'payment_amount'
-       ${planScope.length ? "AND " + planScope.join(" AND ") : ""}
-     GROUP BY 1`,
+  // ⏱ Кешується САМ ЗАПИТ (у ньому немає дат — плани лежать по місяцях), а
+  // ПРОРАТАЦІЯ під [from, to] лишається нижче, поза кешем. Ключ містить і текст
+  // умови скоупу, і її параметри: SQL тут будується рядком, тож ключ без `planScope`
+  // склеїв би адмінський запит із тімлідівським.
+  const planMonthsRes = await overviewCache.call(
+    "overviewPlanMonths",
+    (scopeSql: string, prms: unknown[]) => pool.query<{ mon: string; plan: string }>(
+      `SELECT to_char(date_trunc('month', p.plan_date), 'YYYY-MM-DD') AS mon,
+              COALESCE(SUM(p.planned_value), 0) AS plan
+       FROM plans p JOIN managers mp ON mp.id = p.manager_id
+       WHERE p.metric = 'payment_amount'
+         ${scopeSql}
+       GROUP BY 1`,
+      prms
+    ),
+    planScope.length ? "AND " + planScope.join(" AND ") : "",
     planParams
   );
   // Prorate each month's plan by how many of its days fall inside [from, to].
@@ -785,19 +812,19 @@ dashboardRouter.get("/overview", async (req, res) => {
   // ідентичний SQL з ідентичними параметрами, тобто чиста втрата зʼєднання й часу
   // (заміряно 05.08.2026). Число те саме за побудовою: один виклик, одне джерело.
   const expectedZone = proj.expectedZone;
-  const expectedZoneTeams = await metrics.expectedZoneByScope({ managerId, teamId }, "team");
+  const expectedZoneTeams = await overviewCache.call("expectedZoneByScope:team", metrics.expectedZoneByScope, { managerId, teamId }, "team");
 
   // КРОК 9-conv Фаза 1: конверсія — з ЯДРА (core/metrics), стеля ≤100%.
   //   Реклама → conversion_ads (cohort основне, period тренд).
   //   Лідоген → ДВІ окремі: Продзвін + Реактивація (won велике, handoff дрібне).
   // Стару adConversion/leadgenConversion-логіку не видалено (Фаза 3); тут лише
   // перемикаємо, що ВІДДАЄ роут. entered<10 → «—».
-  const adsMonthlyOv = await metrics.conversionAdsByMonth({ managerId, teamId }, adSources);
-  const pzMonthlyOv = await metrics.conversionProdzvinByMonth({ managerId, teamId });
-  const reMonthlyOv = await metrics.conversionReactivationByMonth({ managerId, teamId });
+  const adsMonthlyOv = await overviewCache.call("conversionAdsByMonth", metrics.conversionAdsByMonth, { managerId, teamId }, adSources);
+  const pzMonthlyOv = await overviewCache.call("conversionProdzvinByMonth", metrics.conversionProdzvinByMonth, { managerId, teamId });
+  const reMonthlyOv = await overviewCache.call("conversionReactivationByMonth", metrics.conversionReactivationByMonth, { managerId, teamId });
   // Крок В #4: «Конверсія лідогену» = КОГОРТА переданих заявок (transferred_at) →
   // дійшли до MONEY_ZONE (когортна, стеля ≤100%, ⏳). Замінює стару period-ratio.
-  const trMonthlyOv = await metrics.conversionTransferredByMonth({ managerId, teamId });
+  const trMonthlyOv = await overviewCache.call("conversionTransferredByMonth", metrics.conversionTransferredByMonth, { managerId, teamId });
   const adAgg = sumConv(adsMonthlyOv, from, to);
   const pzAgg = sumConv(pzMonthlyOv, from, to);
   const reAgg = sumConv(reMonthlyOv, from, to);
