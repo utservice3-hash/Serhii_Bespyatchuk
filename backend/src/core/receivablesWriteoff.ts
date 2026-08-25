@@ -77,3 +77,25 @@ export function writtenOffLabel(w: WriteoffTally): string | null {
   if (w.n === 0) return null;
   return `списано: ${w.n} на ${Math.round(w.amount).toLocaleString("uk-UA")} ₴`;
 }
+
+/**
+ * 🔴 SQL РОЗГОРТАННЯ СПИСАННЯ ЖИВЕ ТУТ, А НЕ В РОУТІ — щоб гейт міг прогнати
+ * ЙОГО САМОГО проти справжньої схеми, а не переписаний «схоже» текст. Переписаний
+ * SQL доводить рівно нічого (урок `#21c`).
+ *
+ * `GROUP BY` обовʼязковий і НЕ є оптимізацією. `invoice_no` буває порожнім, а ключ
+ * списання — пара (сирий ключ, номер): кілька безномерних рахунків одного клієнта
+ * згортаються в ОДИН ключ. Без агрегації `ON CONFLICT DO UPDATE` записав би суму
+ * ОСТАННЬОГО рядка, тимчасом як join на екрані накрив би ВСІ — плитка просіла б на
+ * повну суму, а журнал зберіг би частину. Розбіжність тиха: на екрані її не видно
+ * взагалі, тому вона й закрита тут, а не «поміченою на око».
+ *
+ * `$2` підставляється лише коли списують ОДИН рахунок; `WHERE_ONE` тримає цей
+ * фрагмент поруч, щоб гілки не розійшлись.
+ */
+export const WRITEOFF_TARGETS_SQL = (byInvoice: boolean): string =>
+  `SELECT COALESCE(client_key_raw, client_key) AS client_key_raw,
+          COALESCE(invoice_no, '') AS invoice_no, SUM(amount) AS amount
+     FROM receivable_invoices
+    WHERE client_key = $1 ${byInvoice ? "AND COALESCE(invoice_no, '') = $2" : ""}
+    GROUP BY 1, 2`;

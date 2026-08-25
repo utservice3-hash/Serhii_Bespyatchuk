@@ -50,7 +50,7 @@ import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
-import { WRITE_OFF_PERM, noteIsValid } from "../core/receivablesWriteoff.js";
+import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { fkErrorMessage } from "../core/creditLimits.js";
 import { activeManagerSql } from "../core/activeManager.js";
@@ -1895,11 +1895,16 @@ dashboardRouter.post("/receivables/writeoff", async (req, res) => {
   // означало б списати лише ЧАСТИНУ того, що людина бачить. Тому розгортаємо
   // канонічним, а пишемо кожному рядку його власний `client_key_raw`: майбутня
   // склейка не перетягне списання на чужий борг.
+  //
+  // 🔴 `GROUP BY` — НЕ ОПТИМІЗАЦІЯ, А УМОВА ЧЕСНОСТІ ЖУРНАЛУ. `invoice_no` у
+  // `receivable_invoices` буває порожнім, а ключ списання — пара (сирий ключ,
+  // номер). Кілька безномерних рахунків одного клієнта згортаються в ОДИН ключ,
+  // тож без агрегації `ON CONFLICT DO UPDATE` записав би суму ОСТАННЬОГО рядка.
+  // На екрані це не було б видно взагалі: join накриває всі рядки з тим самим
+  // ключем, і плитка просіла б на повну суму — а в журналі лежала б частина.
+  // Тобто розбіжність тиха, і саме тому вона тут і закрита.
   const target = await pool.query<{ client_key_raw: string; invoice_no: string; amount: string }>(
-    `SELECT COALESCE(client_key_raw, client_key) AS client_key_raw,
-            COALESCE(invoice_no, '') AS invoice_no, amount
-       FROM receivable_invoices
-      WHERE client_key = $1 ${invoiceNo ? "AND COALESCE(invoice_no, '') = $2" : ""}`,
+    WRITEOFF_TARGETS_SQL(invoiceNo != null),
     invoiceNo ? [clientKey, invoiceNo] : [clientKey]
   );
   // ⚠️ ПОРОЖНІЙ РЕЗУЛЬТАТ — ВІДМОВА, А НЕ ТИХИЙ УСПІХ: «списали 0 рахунків»

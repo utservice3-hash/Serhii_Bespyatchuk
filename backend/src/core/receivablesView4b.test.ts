@@ -699,3 +699,51 @@ test("#198f списання без причини не приймає БД, і 
     assert.match(del, /revoke_note/, "🔴 скасування не пише причину — журнал стає безіменним");
   } finally { await c.end(); scratch.dispose(); }
 });
+
+test("#198g рахунки БЕЗ номера згортаються в один ключ — і журнал це знає", needsDb(), async (t) => {
+  // 🔴 ТИХА РОЗБІЖНІСТЬ, ЯКУ НА ЕКРАНІ НЕ ВИДНО ВЗАГАЛІ.
+  //
+  // Ключ списання — пара (сирий ключ клієнта, номер рахунку), а `invoice_no` у
+  // `receivable_invoices` буває порожнім. Кілька безномерних рахунків одного
+  // клієнта згортаються в ОДИН ключ. Без агрегації `ON CONFLICT DO UPDATE`
+  // записав би суму ОСТАННЬОГО рядка — а join на екрані накрив би ВСІ, тож
+  // плитка просіла б на повну суму, і журнал розійшовся б із нею мовчки.
+  //
+  // ⚠️ Женемо САМ текст запиту з роута, а не переписаний «схоже»: переписаний
+  // SQL доводить рівно нічого (урок `#21c`).
+  const { WRITEOFF_TARGETS_SQL } = await import("./receivablesWriteoff.js");
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SRC("db/schema.sql"), "utf8"));
+    // Три безномерні рахунки (порожній рядок і NULL — обидві форми) + один із номером.
+    await c.query(`INSERT INTO receivable_invoices (client_key, client_key_raw, client_name, invoice_no, amount)
+                   VALUES ('к','к','К',NULL,100), ('к','к','К','',200), ('к','к','К',NULL,300), ('к','к','К','7',50)`);
+    const r = await c.query<{ invoice_no: string; amount: string }>(WRITEOFF_TARGETS_SQL(false), ["к"]);
+    const byNo = new Map(r.rows.map((x) => [x.invoice_no, Number(x.amount)]));
+    assert.equal(r.rowCount, 2, "🔴 безномерні рахунки не згорнулись в один ключ — журнал збереже лише останній");
+    assert.equal(byNo.get(""), 600, "🔴 сума безномерних не 600 — журнал розійдеться з тим, що зникне з екрана");
+    assert.equal(byNo.get("7"), 50, "🔴 рахунок із номером злився з безномерними");
+
+    // 🪞 ДЗЕРКАЛО: гілка «один рахунок» звужує, а не ігнорує номер — інакше
+    // списання ОДНОГО рахунку тихо забирало б увесь борг клієнта.
+    const one = await c.query<{ amount: string }>(WRITEOFF_TARGETS_SQL(true), ["к", "7"]);
+    assert.equal(one.rowCount, 1, "🔴 гілка по одному рахунку віддала не один рядок");
+    assert.equal(Number(one.rows[0].amount), 50, "🔴 списання одного рахунку захопило чужі суми");
+
+    // І ключ справді витримує вставку: пара унікальна, друга спроба ОНОВЛЮЄ.
+    for (const row of r.rows) {
+      await c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note)
+                     VALUES ('к', $1, $2, 'перевірка ключа')
+                     ON CONFLICT (client_key_raw, invoice_no) DO UPDATE SET amount = EXCLUDED.amount`,
+                    [row.invoice_no, Number(row.amount)]);
+    }
+    const w = await c.query<{ s: string }>(`SELECT SUM(amount) AS s FROM receivable_writeoffs WHERE client_key_raw='к'`);
+    assert.equal(Number(w.rows[0].s), 650,
+      "🔴 у журналі не вся списана сума — саме та тиха розбіжність, заради якої гейт існує");
+  } finally { await c.end(); scratch.dispose(); }
+});
