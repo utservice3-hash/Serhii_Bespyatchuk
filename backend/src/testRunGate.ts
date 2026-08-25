@@ -299,7 +299,37 @@ export const PROD_SKIP_CHILDREN: Record<string, string[]> = {
 export const BROKEN_ENV_MARK = "⛔ОТОЧЕННЯ-ЗЛАМАНЕ";
 
 export interface SkipInfo { name: string; reason: string }
-export interface RunTally { ran: number; failed: number; skipped: string[]; broken?: SkipInfo[] }
+export interface RunTally { ran: number; failed: number; skipped: string[]; broken?: SkipInfo[]; silentDeaths?: string[] }
+
+/**
+ * 💀 ФАЙЛ ПОМЕР БЕЗ ДІАГНОСТИКИ — і раннер про це нічого не каже.
+ *
+ * 🔴 ЯК ЦЕ ВИГЛЯДАЄ. `node --test` друкує `✖ dist/…/файл.test.js` і під ним рівно
+ * `'test failed'` — без стека, без тексту, без причини. Підтести при цьому можуть
+ * бути ВСІ зелені. Читається як загадковий збій «десь у тестах», хоча тести ні до
+ * чого: помер САМ ПРОЦЕС файлу.
+ *
+ * 📐 ЗАМІРЯНО 25.08.2026 на проді. Причина — ліміт памʼяті LVE (`lve_suwrapper`,
+ * cgroup `lvp1100/lve1100`). `nproc` там віддає 48 ХОСТОВИХ ядер, і `node --test`
+ * бере це за міру паралельності, тобто піднімає до 48 процесів; пʼять тест-файлів
+ * тягнуть компілятор TypeScript і важать ~50 МБ кожен. Поріг зняв прямий дослід:
+ * паралельно 4·8·12 → 0 смертей, 16 → 2, 24 → 12. Контроль на ТІЙ САМІЙ
+ * паралельності 24: важкий файл 13/24, легкий 0/24 — отже впирається памʼять,
+ * а не кількість процесів. Запущений напряму процес показав `SIGKILL` і ПОРОЖНІЙ
+ * stderr: ядро вбиває мовчки, а раннер не має що показати.
+ *
+ * 🔴 ЧОМУ ДЕТЕКТОР ЛИШАЄТЬСЯ, ХОЧ ПРИЧИНУ ВЖЕ УСУНУТО (`--test-concurrency`).
+ * Раннер, що ховає причину, — це СЛІПА ЗОНА, а не властивість цього одного випадку.
+ * Наступного разу вона сховає щось інше (пізню `unhandledRejection`, чужий OOM,
+ * ліміт хоста) — і ми знову шукатимемо ввечері те, що видно за секунду.
+ *
+ * ⚠️ ЧИМ ЦЕ ВІДРІЗНЯЄТЬСЯ ВІД ЗВИЧАЙНОГО ЧЕРВОНОГО (заміряно на подіях raw):
+ * у справжнього падіння `cause` — це `AssertionError` з текстом; у мертвого файлу
+ * `cause` — РІВНО рядок `"test failed"`. `nesting` НЕ підходить: у звичайного
+ * тесту верхнього рівня він теж `0`, тож розрізняти можна лише за причиною.
+ */
+export const isSilentFileDeath = (name: string, cause: unknown): boolean =>
+  /\.test\.(js|mjs|cjs)$/.test(name) && typeof cause === "string" && cause.trim() === "test failed";
 export interface Verdict { ok: boolean; ran: number; required: number; declared: number; unexpected: string[]; report: string }
 
 export function modeName(env: NodeJS.ProcessEnv = process.env): string {
@@ -376,7 +406,10 @@ export function evaluateRun(t: RunTally, declared: number, env: NodeJS.ProcessEn
   return { ok, ran: t.ran, required, declared, unexpected, report };
 }
 
-interface TestEvent { type: string; data: { name?: string; skip?: boolean | string } }
+interface TestEvent {
+  type: string;
+  data: { name?: string; skip?: boolean | string; details?: { error?: { cause?: unknown } } };
+}
 
 /** Скіп через зламане оточення — за маркером у причині, а не за здогадом по тексту. */
 export const isBrokenEnvSkip = (skip: boolean | string | undefined): boolean =>
@@ -392,7 +425,33 @@ export default async function* runGate(source: AsyncIterable<TestEvent>) {
       tally.skipped.push(name);
       if (isBrokenEnvSkip(ev.data.skip)) tally.broken!.push({ name, reason: String(ev.data.skip) });
     }
-    else { tally.ran++; if (ev.type === "test:fail") tally.failed++; }
+    else {
+      tally.ran++;
+      if (ev.type === "test:fail") {
+        tally.failed++;
+        // 💀 Контейнер файлу впав без причини — запамʼятовуємо ПОІМЕННО.
+        if (isSilentFileDeath(ev.data.name ?? "", ev.data.details?.error?.cause))
+          (tally.silentDeaths ??= []).push(ev.data.name ?? "?");
+      }
+    }
+  }
+
+  /**
+   * 💀 ГУЧНИЙ ДІАГНОЗ — ДО решти вироку і НЕЗАЛЕЖНО від режиму.
+   * У деві вартовий виходить раніше (скіпи там законні), але мовчазна смерть файлу
+   * незаконна ВСЮДИ: у `npm test` вона так само лишає перевірки невиконаними.
+   */
+  if (tally.silentDeaths?.length) {
+    yield "\n💀 ФАЙЛ ПОМЕР БЕЗ ДІАГНОСТИКИ — це не «загадковий збій у тестах»:\n"
+      + tally.silentDeaths.map((n) => `   ﹣ ${n}\n`).join("")
+      + "   Контейнер файлу впав, а причини немає: підтести могли бути ВСІ зелені.\n"
+      + "   Найімовірніше процес убито ядром за лімітом памʼяті (на проді це LVE).\n"
+      + "   📐 Заміряно 25.08.2026: `nproc` віддає 48 ХОСТОВИХ ядер, тож `node --test`\n"
+      + "   піднімає до 48 процесів, а пʼять файлів тягнуть компілятор TypeScript\n"
+      + "   (~50 МБ кожен). Поріг: 12 паралельно чисто, 16 → 2 смерті, 24 → 12.\n"
+      + "   ⚙️ Лікується `--test-concurrency` у скриптах; якщо він уже стоїть, а смерть\n"
+      + "   сталась — шукай ІНШУ причину (пізня unhandledRejection, чужий OOM), і не\n"
+      + "   списуй на памʼять за звичкою.\n";
   }
   /**
    * 🔴 ЛОКАЛЬНИЙ `npm test` БІЛЬШЕ НЕ МОВЧИТЬ ПРО ЗЛАМАНЕ ОТОЧЕННЯ (Б2).
