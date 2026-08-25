@@ -163,6 +163,16 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_call_at TIMESTAMPTZ;
 -- Блок B (логістика): «Тип запиту» (2097965 → напрямок) + «Канал продажу» (2099549).
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS request_type TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS sales_channel TEXT;
+
+-- 🚚 ВИПЛАТА ПЕРЕВІЗНИКУ (25.08.2026). Дві колонки, бо це ДВА різні твердження:
+-- `carrier_pay_type` — чи взагалі домовлені умови виплати (заповнений у 195 із
+-- 279 угод дебіторки), `carrier_pay_amount` — скільки саме. Тип без суми в
+-- Kommo не трапляється (заміряно: 0 випадків), але тримати їх однією колонкою
+-- означало б втратити різницю між «не домовлено» і «домовлено на нуль».
+-- Обидві NULLABLE: `syncKommo` пише їх щопрохід, і NOT NULL поклав би синк на
+-- першій же угоді без цих полів.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_pay_type TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_pay_amount NUMERIC;
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_activity_note_at TIMESTAMPTZ;
 
 -- Daily ad spend/results pulled from the Google Ads budget sheet (syncAdBudget).

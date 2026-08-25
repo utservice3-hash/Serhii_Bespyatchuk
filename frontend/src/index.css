@@ -806,3 +806,15 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
   max-height: 340px;
   overflow: auto;
 }
+
+/* 🔴 ШАПКА РОЗКРИТТЯ ЛИПКА — інакше прокрутка 41 рахунку лишає колонки без назв.
+   Побачено власним оком на знімку приймання 25.08.2026: числа є, підписів немає,
+   тобто рівно та проблема, від якої шапки й заводяться.
+   `background` обовʼязковий: без нього рядки просвічують крізь прозорий `th`. */
+.recv-detail thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card-bg);
+  box-shadow: inset 0 -1px 0 var(--border);
+}

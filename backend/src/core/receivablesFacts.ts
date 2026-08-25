@@ -70,6 +70,10 @@ export interface RawInvoiceRow {
   statusId: number | null;
   pipelineId: number | null;
   stageMapped: boolean;         // чи є (pipeline_id, status_id) у `pipeline_stage_map`
+  // 🚚 Скільки заплачено перевізнику і чи домовлені умови. `null` в обох —
+  // «не знаємо», і це ТРЕТІЙ стан, а не нуль (заміряно: тип порожній у 84 із 279).
+  carrierPayAmount: number | null;
+  carrierPayType: string | null;
   ageDays: number | null;       // днів від дати рахунку
 }
 
@@ -319,6 +323,7 @@ const INVOICE_FACTS_SQL = `
          dl.deal_id,
          (d.kommo_id IS NOT NULL)               AS deal_found,
          d.payment_type, d.status_id, d.pipeline_id,
+         d.carrier_pay_amount, d.carrier_pay_type,
          (psm.pipeline_id IS NOT NULL)          AS stage_mapped
     FROM receivable_invoices ri
     CROSS JOIN LATERAL (
@@ -340,6 +345,7 @@ export async function loadInvoiceFacts(
     client_key: string; client_name: string | null; amount: string; invoice_no: string | null;
     invoice_date: string | null; age_days: number | null; deal_id: string | null; deal_found: boolean;
     payment_type: string | null; status_id: string | null; pipeline_id: string | null; stage_mapped: boolean;
+    carrier_pay_amount: string | null; carrier_pay_type: string | null;
   }>(INVOICE_FACTS_SQL, [clientKeys]);
   return r.rows.map((x) => classifyInvoice({
     clientKey: x.client_key, clientName: x.client_name, amount: Number(x.amount),
@@ -350,6 +356,8 @@ export async function loadInvoiceFacts(
     statusId: x.status_id == null ? null : Number(x.status_id),
     pipelineId: x.pipeline_id == null ? null : Number(x.pipeline_id),
     stageMapped: x.stage_mapped === true,
+    carrierPayAmount: x.carrier_pay_amount == null ? null : Number(x.carrier_pay_amount),
+    carrierPayType: x.carrier_pay_type,
   }, resolver));
 }
 

@@ -14,7 +14,8 @@ import {
 const row = (p: Partial<RawInvoiceRow> = {}): RawInvoiceRow => ({
   clientKey: "к", clientName: "К", amount: 100, invoiceDate: "2026-08-01", invoiceNo: "1",
   dealId: 1, dealFound: true, paymentType: "Безнал с НДС", statusId: 69716304,
-  pipelineId: 8921932, stageMapped: true, ageDays: 10, ...p,
+  pipelineId: 8921932, stageMapped: true, ageDays: 10,
+  carrierPayAmount: null, carrierPayType: null, ...p,
 });
 
 /**

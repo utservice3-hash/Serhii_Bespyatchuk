@@ -1353,6 +1353,12 @@ export interface ReceivableInvoice {
    */
   carrierPaid: ReceivableCarrierPaid | null;
   carrierReason: ReceivableCarrierReason | null;
+  /**
+   * 🚚 Скільки заплачено перевізнику. `null` = «суму не вказано» — НЕ нуль і не
+   * «не оплачено»: умови виплати просто не заповнені в CRM (30% угод).
+   */
+  carrierPayAmount: number | null;
+  carrierPayType: string | null;
   /** № угоди й чи знайшлась вона. Лінк малюємо ЛИШЕ коли угода справді є. */
   dealId: number | null;
   dealFound: boolean;

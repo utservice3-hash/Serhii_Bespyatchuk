@@ -1,5 +1,5 @@
 import { pool } from "../db/pool.js";
-import { fetchLeadsByIds, fetchContactsByIds, extractPhone } from "../kommo/client.js";
+import { fetchLeadsByIds, fetchContactsByIds, extractPhone, LEADS_BY_IDS_MAX, type KommoDeal } from "../kommo/client.js";
 
 // Перевізники з CRM для калькулятора ставок. Правило (від власника): контакти
 // з ознаками реклами/таргету (гео-мітки) — це КЛІЄНТ; усі інші контакти в
@@ -29,7 +29,13 @@ export async function syncCarriers(): Promise<void> {
   if (deals.rowCount === 0) { console.log("syncCarriers: nothing new."); return; }
 
   const byId = new Map(deals.rows.map((r) => [Number(r.kommo_id), r]));
-  const leads = await fetchLeadsByIds([...byId.keys()]);
+  // Дрібнимо по 250 — `BATCH_DEALS` сьогодні 200, але межа не має триматись на
+  // тому, що дві константи випадково узгоджені.
+  const allIds = [...byId.keys()];
+  const leads: KommoDeal[] = [];
+  for (let i = 0; i < allIds.length; i += LEADS_BY_IDS_MAX) {
+    leads.push(...await fetchLeadsByIds(allIds.slice(i, i + LEADS_BY_IDS_MAX)));
+  }
 
   // Кандидати: НЕосновні контакти угоди (основний = клієнт).
   const candidateIds = new Set<number>();

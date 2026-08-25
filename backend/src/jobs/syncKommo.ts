@@ -15,6 +15,8 @@ import {
   extractWebTags,
   fetchAllDeals,
   fetchLeadsByIds,
+  extractCarrierPayType,
+  extractCarrierPayment,
   fetchContactsByIds,
   fetchCompaniesByIds,
   companyFieldValue,
@@ -679,14 +681,14 @@ export async function upsertDeal(
          price, created_at_kommo, updated_at_kommo, closed_at_kommo, synced_at,
          client_name, client_key_raw, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
          unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus, reject_reason,
-         request_type, sales_channel
+         request_type, sales_channel, carrier_pay_type, carrier_pay_amount
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12,
                  -- 🔴 КАНОНІЧНИЙ КЛЮЧ РАХУЄМО ТУТ, а не пишемо сирий. Інакше синк при
                  -- наступному оновленні угоди ЗАТЕР би канонічний ключ сирим, і аліас
                  -- тихо перестав би діяти — рівно для тих угод, що змінюються найчастіше.
                  COALESCE((SELECT a.canonical_key FROM client_key_alias a
                             WHERE a.alias_key = $12 AND a.revoked_at IS NULL), $12),
-                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -717,7 +719,11 @@ export async function upsertDeal(
          is_minus = EXCLUDED.is_minus,
          reject_reason = EXCLUDED.reject_reason,
          request_type = EXCLUDED.request_type,
-         sales_channel = EXCLUDED.sales_channel`,
+         sales_channel = EXCLUDED.sales_channel,
+         -- 🚚 Виплата перевізнику. Пишеться ЩОПРОХОДУ, як і решта: угода може
+         -- дістати умови виплати пізніше, ніж потрапила в дебіторку.
+         carrier_pay_type = EXCLUDED.carrier_pay_type,
+         carrier_pay_amount = EXCLUDED.carrier_pay_amount`,
       [
         deal.id,
         deal.name,
@@ -748,6 +754,8 @@ export async function upsertDeal(
         rejectReason,
         extractRequestType(deal),
         extractSalesChannel(deal),
+        extractCarrierPayType(deal),
+        extractCarrierPayment(deal),
       ]
     );
 }

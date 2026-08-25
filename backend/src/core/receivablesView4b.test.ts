@@ -202,7 +202,7 @@ test("#205 «угоди немає» читається як «не знаємо
 
   // І клітинка справді малюється ЦИМ правилом, а не власним ланцюжком `&&`.
   const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
-  assert.match(sec, /carrierCell\(x\.carrierPaid, x\.carrierReason\)/,
+  assert.match(sec, /carrierCell\(x\.carrierPaid, x\.carrierReason/,
     "🔴 колонка перевізника виводиться у верстці власними умовами — це друге правило");
   assert.ok(!/x\.carrierPaid === "unpaid" &&/.test(sec),
     "🔴 у верстці знову зʼявилась копія правила");
@@ -213,4 +213,129 @@ test("#205 «угоди немає» читається як «не знаємо
   const inv = route.slice(route.indexOf('"/receivables/invoices"'), route.indexOf('"/receivables/invoices"') + 5000);
   assert.match(inv, /carrierPaid: f\?\.carrierPaid/, "🔴 роут не віддає стан перевізника по рахунку");
   assert.match(inv, /carrierReason: f\?\.carrierReason/, "🔴 роут віддає стан без причини");
+});
+
+// ─────────────────────── ПРОХІД 1: ВИПЛАТА ПЕРЕВІЗНИКУ ───────────────────────
+
+test("#206 сума виплати читається ЗА ТИПОМ, і складена — це СУМА ОБОХ", async () => {
+  // 📐 Заміряно на живому Kommo 25.08.2026 по 279 угодах дебіторки:
+  // тип заповнений у 195 · тип є, а суми немає — 0 · обидві суми одночасно — 4.
+  // Останні чотири і є причина складати, а не вибирати «ту, що пасує типу».
+  //
+  // ⚠️ Правило живе в ЧИСТОМУ модулі саме щоб цей гейт біг без оточення:
+  // `kommo/client.ts` тягне `config.js`, який кидає без `JWT_SECRET` на імпорті.
+  const C = await import("./carrierPayment.js");
+
+  assert.equal(C.carrierPaymentFrom({ type: "Готівка", cash: 5000, general: null }), 5000);
+  assert.equal(C.carrierPaymentFrom({ type: "ТОВ", cash: null, general: 12000 }), 12000);
+  // 🔴 СКЛАДЕНА ВИПЛАТА: обидві заповнені → сума обох, а не одна з них.
+  assert.equal(C.carrierPaymentFrom({ type: "ТОВ", cash: 3000, general: 7000 }), 10000,
+    "🔴 складена виплата порахована однією половиною — недорахунок саме там, де платили двома шляхами");
+
+  // 🪞 ДЗЕРКАЛО: без типу — `null`, а не 0. «Не знаємо» ≠ «нуль»: таких угод 84
+  // із 279, і намалювати їм 0 ₴ означало б стверджувати, що виплати не було.
+  assert.equal(C.carrierPaymentFrom({ type: null, cash: 5000, general: 7000 }), null,
+    "🔴 сума без типу видається за факт — 84 угоди дістали б вигадану виплату");
+  assert.equal(C.carrierPaymentFrom({ type: "  ", cash: 5000, general: null }), null,
+    "🔴 порожній рядок прийнято за тип — та сама пастка, що utm_source: \"\"");
+  assert.equal(C.carrierPaymentFrom({ type: "ФОП", cash: null, general: null }), null);
+
+  // 🔴 `2097503` «Сумма запиту» НЕ бере участі ЖОДНИМ БОКОМ: із 128 заповнених
+  // вона збігається з «загальною» лише в 39, тобто це інша величина.
+  assert.equal(Object.values(C.CARRIER_PAY_FIELDS).includes(C.FORBIDDEN_REQUEST_SUM_FIELD as never), false,
+    "🔴 заборонене поле 2097503 потрапило в набір полів виплати");
+  // І його id не згадується в модулі синку взагалі.
+  const src = strip(readFileSync(SRC("kommo/client.ts"), "utf8"));
+  assert.equal(src.includes(String(C.FORBIDDEN_REQUEST_SUM_FIELD)), false,
+    "🔴 id 2097503 зʼявився в kommo/client.ts — синкати його ЗАБОРОНЕНО");
+  // 🪞 ДЗЕРКАЛО: три ДОЗВОЛЕНІ id там бути МУСЯТЬ — інакше перевірка вище
+  // зеленіла б і тоді, коли синк не читає полів узагалі.
+  const wired = readFileSync(SRC("kommo/client.ts"), "utf8");
+  assert.match(wired, /CARRIER_PAY_FIELDS/, "🔴 синк не підключений до полів виплати");
+});
+
+test("#207 стеля 250 кидає, а не обрізає мовчки", async () => {
+  // 🔴 ЗНАЙДЕНО ЗАМІРОМ, А НЕ ЧИТАННЯМ (25.08.2026). Запит іде з `limit=250` і
+  // БЕЗ пагінації: на 279 id Kommo віддав рівно 250, і виклик виглядав успішним.
+  // Мій власний зонд на цьому попався — порахував частки по обрізаній вибірці.
+  const C = await import("./carrierPayment.js");
+  assert.equal(C.LEADS_BY_IDS_MAX, 250);
+  assert.throws(() => C.assertLeadIdsWithinLimit(C.LEADS_BY_IDS_MAX + 1), /стеля|250/,
+    "🔴 понад стелю проходить мовчки — недорахунок буде невидимий");
+  // 🪞 ДЗЕРКАЛО: рівно стеля і менше — дозволено. Межа саме «понад», а не «від»;
+  // інакше сторож ламав би кожен нормальний батч.
+  assert.doesNotThrow(() => C.assertLeadIdsWithinLimit(C.LEADS_BY_IDS_MAX));
+  assert.doesNotThrow(() => C.assertLeadIdsWithinLimit(0));
+
+  // Сторож справді стоїть у запиті, а не лише існує.
+  const client = strip(readFileSync(SRC("kommo/client.ts"), "utf8"));
+  const fn = client.slice(client.indexOf("export async function fetchLeadsByIds"),
+    client.indexOf("export async function fetchLeadsByIds") + 400);
+  assert.match(fn, /assertLeadIdsWithinLimit/, "🔴 fetchLeadsByIds більше не питає стелю");
+
+  // І жодна джоба не шле список без дроблення: інакше сторож перетворив би
+  // тихе обрізання на падіння джоби — гірше, ніж було.
+  for (const f of ["jobs/syncReceivables.ts", "jobs/syncCarriers.ts"]) {
+    const src = strip(readFileSync(SRC(f), "utf8"));
+    const call = src.slice(src.indexOf("fetchLeadsByIds("), src.indexOf("fetchLeadsByIds(") + 140);
+    assert.match(call, /slice\(/, `🔴 ${f} шле список у fetchLeadsByIds без дроблення`);
+  }
+});
+
+test("#208 «суму не вказано» — окремий стан, а не нуль і не «не оплачено»", async () => {
+  const VIEW = "../../../frontend/src/pages/dashboard/receivablesView.ts";
+  const V = (await import(VIEW)) as {
+    carrierCell: (s: string | null, r: string | null, a?: number | null)
+      => { text: string; why: string | null; tone: string; amountText: string | null };
+  };
+  // Сума відома — показуємо число.
+  assert.match(V.carrierCell("paid", null, 12400).amountText!, /12\s?400/);
+  // 🔴 Сума НЕВІДОМА при відомому стані — окремий підпис, не «0 ₴».
+  assert.equal(V.carrierCell("paid", null, null).amountText, "суму не вказано");
+  assert.equal(V.carrierCell("unpaid", null, null).amountText, "суму не вказано");
+  // …і стан при цьому НЕ зʼїжджає в «не оплачено».
+  assert.equal(V.carrierCell("paid", null, null).tone, "paid",
+    "🔴 невідома сума перевела оплаченого перевізника в «не оплачено»");
+  // 🔴 При `na` суми немає ВЗАГАЛІ: не знаємо навіть, чи платили, — казати
+  // «скільки» означає видавати здогад за факт.
+  assert.equal(V.carrierCell("na", "one_c", 999).amountText, null);
+  // 🪞 ДЗЕРКАЛО: нуль — це число, а не «не вказано». Інакше правило ховало б
+  // справжні нулі під підписом «немає даних».
+  assert.match(V.carrierCell("paid", null, 0).amountText!, /0/);
+});
+
+test("#209 фільтр «н/д, що лагодиться» бере ПРИЧИНУ, а не стан", async () => {
+  // 📐 Заміряно 25.08.2026: із 21 «н/д» лагодяться рівно 2 (битий лінк + воронка
+  // поза мапою), решта 19 — 1С, де угоди немає в принципі. Поки вони в одній
+  // купі, ті два тонуть, і «н/д» читається як «нічого не вдіяти».
+  const VIEW = "../../../frontend/src/pages/dashboard/receivablesView.ts";
+  const V = (await import(VIEW)) as { passesFilters: (c: never, f: never) => boolean; EMPTY_FILTERS: never };
+  const cli = (reasons: string[]) => ({
+    facts: { carrierReasons: reasons, carrier: {}, entity: {}, aging: {} },
+  } as never);
+  const f = { ...(V.EMPTY_FILTERS as object), carrier: "na_fixable" } as never;
+
+  assert.equal(V.passesFilters(cli(["broken_link"]), f), true, "🔴 битий лінк не потрапив у «що лагодиться»");
+  assert.equal(V.passesFilters(cli(["out_of_map"]), f), true, "🔴 воронка поза мапою не потрапила");
+  // 🔴 1С — НЕ лагодиться: угоди немає в принципі, і слати туди людину означає
+  // посилати шукати те, чого не існує.
+  assert.equal(V.passesFilters(cli(["one_c"]), f), false, "🔴 1С затесався у «що лагодиться» — 19 із 21 стануть шумом");
+  assert.equal(V.passesFilters(cli([]), f), false);
+  // 🪞 ДЗЕРКАЛО: без фільтра проходять усі — інакше предикат різав би список завжди.
+  assert.equal(V.passesFilters(cli(["one_c"]), V.EMPTY_FILTERS), true);
+});
+
+test("#210 шапка розкриття липка — інакше прокрутка лишає колонки без назв", () => {
+  // Побачено власним оком на знімку приймання 25.08.2026: прокрутив 41 рахунок
+  // усередині блоку — числа є, підписів немає. Рівно та проблема, від якої
+  // шапки й заводяться; жоден гейт її не бачив, бо всі дивились на дані.
+  const css = readFileSync(FE("index.css"), "utf8");
+  const i = css.indexOf(".recv-detail thead th");
+  assert.ok(i > 0, "🔴 правила для шапки розкриття немає — при прокрутці вона поїде");
+  const block = css.slice(i, i + 300);
+  assert.match(block, /position:\s*sticky/, "🔴 шапка не липка");
+  assert.match(block, /top:\s*0/, "🔴 sticky без `top` не діє взагалі");
+  // 🔴 Фон обовʼязковий: без нього рядки просвічують крізь прозорий `th`, і
+  // липка шапка виглядає гірше за її відсутність.
+  assert.match(block, /background/, "🔴 липка шапка без фону — рядки просвічуватимуть");
 });

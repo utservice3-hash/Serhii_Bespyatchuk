@@ -1978,6 +1978,12 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         // означало б домалювати 1.6 млн неіснуючого факту.
         carrierPaid: f?.carrierPaid ?? null,
         carrierReason: f?.carrierReason ?? null,
+        // 🚚 СКІЛЬКИ заплачено перевізнику. `null` — «суму не вказано», і це
+        // ОКРЕМИЙ стан від «не оплачено»: заміряно 25.08.2026 — умови виплати
+        // не заповнені у 84 із 279 угод дебіторки (30%). Показати їх нулем
+        // означало б стверджувати, що перевізник отримав нуль.
+        carrierPayAmount: f?.carrierPayAmount ?? null,
+        carrierPayType: f?.carrierPayType ?? null,
         dealId: f?.dealId ?? null,
         dealFound: f?.dealFound ?? false,
       };

@@ -310,12 +310,21 @@ export function ReceivablesSection({
                             малюється сірим і з причиною під ним. */}
                         <td style={{ textAlign: "left", fontSize: 11.5 }}>
                           {(() => {
-                            const cc = carrierCell(x.carrierPaid, x.carrierReason);
+                            const cc = carrierCell(x.carrierPaid, x.carrierReason, x.carrierPayAmount);
                             const color = cc.tone === "paid" ? "#16a34a"
                               : cc.tone === "unpaid" ? "var(--text)" : "var(--text-muted)";
                             return (
-                              <span style={{ color }}>
+                              <span style={{ color }}
+                                title={cc.amountText && x.carrierPayType
+                                  ? `виплата перевізнику з CRM · тип «${x.carrierPayType}»`
+                                  : undefined}>
                                 {cc.text}
+                                {/* 🚚 Сума ОДНИМ рядком через «·», а не другим:
+                                    другий рядок тут коштує висоти всієї таблиці
+                                    (заміряно — саме так її з'їдає «✏️ змінити»). */}
+                                {cc.amountText && (
+                                  <span style={{ color: "var(--text-muted)" }}> · {cc.amountText}</span>
+                                )}
                                 {cc.why && <span style={{ display: "block", fontSize: 10 }}>{cc.why}</span>}
                               </span>
                             );

@@ -52,18 +52,36 @@ export interface CarrierCell {
   /** Чому «не знаємо». `null` для двох визначених станів. */
   why: string | null;
   tone: "paid" | "unpaid" | "unknown";
+  /** Сума виплати як ПІДПИС: число, «суму не вказано», або нічого при `na`. */
+  amountText: string | null;
 }
 
+/**
+ * 🚚 СУМА ВИПЛАТИ — ТРЕТІЙ АРГУМЕНТ, НЕОБОВʼЯЗКОВИЙ.
+ *
+ * 🔴 «Суму не вказано» — ОКРЕМИЙ стан, а не нуль і не «не оплачено». Заміряно
+ * на живому Kommo 25.08.2026: умови виплати заповнені у 195 із 279 угод
+ * дебіторки, тобто у 84 (30%) їх немає. Намалювати там «0 ₴» означало б
+ * стверджувати, що перевізник отримав нуль, — той самий клас, що «угоди немає»
+ * замість «не оплачено», який уже тримає `#205`.
+ *
+ * При `na` сума не показується взагалі: якщо ми не знаємо навіть ЧИ платили,
+ * казати СКІЛЬКИ — це видавати здогад за факт.
+ */
 export function carrierCell(
   state: ReceivableCarrierPaid | null,
   reason: ReceivableCarrierReason | null,
+  amount?: number | null,
 ): CarrierCell {
-  if (state === "paid") return { text: "✓ оплачений", why: null, tone: "paid" };
-  if (state === "unpaid") return { text: "ще не оплачено", why: null, tone: "unpaid" };
+  const amt = amount == null
+    ? (amount === undefined ? null : "суму не вказано")
+    : `${Math.round(amount).toLocaleString("uk-UA")} ₴`;
+  if (state === "paid") return { text: "✓ оплачений", why: null, tone: "paid", amountText: amt };
+  if (state === "unpaid") return { text: "ще не оплачено", why: null, tone: "unpaid", amountText: amt };
   // `na` І `null` — один і той самий випадок «ми не знаємо». `null` приходить,
   // коли рахунок не зіставився з фактом; мовчки показати його як «не оплачено»
   // було б тією самою підміною, тільки без причини.
-  return { text: "н/д", why: reason ? CARRIER_REASON_LABEL[reason] : null, tone: "unknown" };
+  return { text: "н/д", why: reason ? CARRIER_REASON_LABEL[reason] : null, tone: "unknown", amountText: null };
 }
 
 export const AGING_ORDER: ReceivableAging[] = ["0-30", "31-60", "61-90", "90+"];
@@ -80,7 +98,13 @@ export type Tab = "all" | "overdue" | "aged";
 export interface Filters {
   tab: Tab;
   entity: ReceivableEntity | "";
-  carrier: ReceivableCarrierPaid | "";
+  /**
+   * 🔧 `"na_fixable"` — НЕ стан, а ПІДМНОЖИНА «н/д» за ПРИЧИНОЮ: битий лінк і
+   * воронка поза мапою. Заміряно 25.08.2026: із 21 «н/д» лагодяться рівно 2,
+   * решта 19 — рахунки з 1С, де угоди немає В ПРИНЦИПІ. Поки вони в одній купі,
+   * ті два тонуть, і список «н/д» читається як «нічого не вдіяти».
+   */
+  carrier: ReceivableCarrierPaid | "na_fixable" | "";
   aging: ReceivableAging | "";
 }
 
@@ -169,7 +193,10 @@ export function passesFilters(c: ReceivableClient & { facts: ReceivableClientFac
   if (f.tab === "overdue" && !isOverdue(c)) return false;
   if (f.tab === "aged" && t(c.facts?.aging["90+"]).n === 0) return false;
   if (f.entity && t(c.facts?.entity[f.entity]).n === 0) return false;
-  if (f.carrier && t(c.facts?.carrier[f.carrier]).n === 0) return false;
+  if (f.carrier === "na_fixable") {
+    const why = c.facts?.carrierReasons ?? [];
+    if (!why.includes("broken_link") && !why.includes("out_of_map")) return false;
+  } else if (f.carrier && t(c.facts?.carrier[f.carrier]).n === 0) return false;
   if (f.aging && t(c.facts?.aging[f.aging]).n === 0) return false;
   return true;
 }

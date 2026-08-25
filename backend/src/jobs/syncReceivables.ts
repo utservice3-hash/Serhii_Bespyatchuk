@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { config } from "../config.js";
 import { pool } from "../db/pool.js";
-import { fetchLeadsByIds, extractIncomeAmount } from "../kommo/client.js";
+import { fetchLeadsByIds, extractIncomeAmount, LEADS_BY_IDS_MAX } from "../kommo/client.js";
 import { normalizeClientName } from "../utils/clientName.js";
 import { parseCsv } from "../utils/csv.js";
 import { loadReceivables1c, resolveManagerId, type Receivable1cRow } from "../core/receivables1c.js";
@@ -59,8 +59,13 @@ async function insertCashReceivables(client: PoolClient): Promise<number> {
     // from CRM; fall back to the stored budget if a deal has no приход field.
     const incomeById = new Map<number, number>();
     try {
-      const leads = await fetchLeadsByIds(deals.rows.map((r) => Number(r.kommo_id)));
-      for (const l of leads) { const inc = extractIncomeAmount(l); if (inc != null) incomeById.set(l.id, inc); }
+      // Дрібнимо по 250: `fetchLeadsByIds` має стелю, і без цього довгий список
+      // одного готівкового клієнта тихо обрізався б (тепер — кидав би).
+      const ids = deals.rows.map((r) => Number(r.kommo_id));
+      for (let i = 0; i < ids.length; i += LEADS_BY_IDS_MAX) {
+        const leads = await fetchLeadsByIds(ids.slice(i, i + LEADS_BY_IDS_MAX));
+        for (const l of leads) { const inc = extractIncomeAmount(l); if (inc != null) incomeById.set(l.id, inc); }
+      }
     } catch (err) {
       console.warn(`insertCashReceivables: приход fetch failed for ${cc.label}, using budget`, err);
     }

@@ -183,6 +183,11 @@ export interface KommoDeal {
 }
 
 // Kommo custom-field ids for lead-source attribution (leads/custom_fields).
+import {
+  CARRIER_PAY_FIELDS, carrierPaymentFrom, assertLeadIdsWithinLimit, LEADS_BY_IDS_MAX,
+} from "../core/carrierPayment.js";
+export { LEADS_BY_IDS_MAX };
+
 const FIELD_UTM_SOURCE = 481993;
 const FIELD_LEAD_GENERATOR = 2098037; // "Лидогенератор"
 const FIELD_CLIENT_SOURCE = 2098035; // "Источник клиента"
@@ -215,6 +220,12 @@ const FIELD_MINUS = 2098529;
 const FIELD_REQUEST_TYPE = 2097965;
 // «Канал продажу»: Нові клієнти / Постійні клієнти / Тендерний напрямок.
 const FIELD_SALES_CHANNEL = 2099549;
+// 🚚 ВИПЛАТА ПЕРЕВІЗНИКУ — ТИП КАЖЕ, ЯКУ СУМУ ЧИТАТИ.
+// 🔴 `2097503` «Сумма запиту» СЮДИ НЕ ВХОДИТЬ І ВХОДИТИ НЕ МАЄ: заміряно на
+// живому API 25.08.2026 — з 128 заповнених вона збігається з «загальною» лише
+// в 39, тобто це ІНША величина, а не дубль. Стереже гейт.
+// Id полів і саме правило — у `core/carrierPayment.ts` (чистий модуль без
+// імпортів), щоб гейт міг їх перевірити без `JWT_SECRET`.
 
 function fieldDate(deal: KommoDeal, fieldId: number): Date | null {
   const raw = fieldText(deal, fieldId);
@@ -246,6 +257,37 @@ export function extractIncomeAmount(deal: KommoDeal): number | null {
   if (Number.isFinite(total) && total > 0) return total;
   const first = Number(fieldText(deal, FIELD_INCOME_1) ?? "");
   return Number.isFinite(first) && first > 0 ? first : null;
+}
+
+/**
+ * 🚚 СКІЛЬКИ ЗАПЛАЧЕНО ПЕРЕВІЗНИКУ — сума ЗА ТИПОМ, і тип тут не прикраса.
+ *
+ * 📐 Заміряно на живому Kommo 25.08.2026 по 279 угодах дебіторки:
+ *   · тип заповнений у 195, порожній у 84 (30%);
+ *   · тип є, а суми немає — **0 випадків**, тож тип є надійним маркером;
+ *   · лише «загальна» 126 · лише «готівка» 65 · **обидві одночасно 4**.
+ *
+ * Останні чотири — складена виплата (частину віддали готівкою, частину
+ * безготівково), і тоді сума — це СУМА ОБОХ, а не одна з них. Взяти «ту, що
+ * підходить типу» означало б недорахувати саме там, де платили двома шляхами.
+ *
+ * Повертає `null`, коли типу немає: це «не знаємо», а не «нуль».
+ */
+export function extractCarrierPayment(deal: KommoDeal): number | null {
+  const num = (id: number) => {
+    const v = Number(fieldText(deal, id) ?? "");
+    return Number.isFinite(v) ? v : null;
+  };
+  return carrierPaymentFrom({
+    type: fieldText(deal, CARRIER_PAY_FIELDS.type),
+    cash: num(CARRIER_PAY_FIELDS.cash),
+    general: num(CARRIER_PAY_FIELDS.general),
+  });
+}
+
+/** Тип виплати перевізнику — потрібен як ПІДПИС, а не лише як маркер суми. */
+export function extractCarrierPayType(deal: KommoDeal): string | null {
+  return fieldText(deal, CARRIER_PAY_FIELDS.type);
 }
 
 /** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */
@@ -354,8 +396,25 @@ async function fetchLeadsPage(page: number, limit: number, filter: string): Prom
 const PAGE_FETCH_CONCURRENCY = 3;
 
 /** Fetches specific leads by id (up to 250 per call) with their custom fields. */
+/**
+ * 🔴 МЕЖА 250 — ЯВНА, А НЕ «ВСІ ТАК РОБЛЯТЬ» (25.08.2026).
+ *
+ * Запит іде з `limit=250` і БЕЗ пагінації, тож на довшому списку Kommo просто
+ * віддає перші 250, і виклик виглядає успішним. Заміряно на собі: передав 279
+ * id — отримав рівно 250 і мало не порахував частки по обрізаній вибірці.
+ *
+ * Майже всі виклики дрібнять самі (`ids.slice(i, i + 250)`), але тримається це
+ * на дисципліні, а не на межі: `syncReceivables.insertCashReceivables` і
+ * `syncCarriers` передають список як є. Сьогодні вони під лімітом (готівкова
+ * гілка — один клієнт; `syncCarriers` має `BATCH_DEALS = 200`), тобто це ризик
+ * ЛАТЕНТНИЙ, а не активний баг. Але «поки що вміщається» — не гарантія, і
+ * коли перестане, воно не впаде, а тихо недорахує.
+ *
+ * Тому кидаємо. Обрізаний результат гірший за помилку: помилку видно.
+ */
 export async function fetchLeadsByIds(ids: number[]): Promise<KommoDeal[]> {
   if (ids.length === 0) return [];
+  assertLeadIdsWithinLimit(ids.length);
   const idFilter = ids.map((id) => `filter[id][]=${id}`).join("&");
   const data = await kommoRequest<KommoListResponse<KommoDeal>>(
     `/api/v4/leads?limit=250&with=contacts,companies&${idFilter}`

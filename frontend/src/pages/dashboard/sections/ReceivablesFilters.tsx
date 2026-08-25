@@ -58,12 +58,15 @@ export function ReceivablesFilters({ filters, setFilters, shown, totalRows }: {
         ))}
       </select>
 
-      <select style={sel} value={filters.carrier} onChange={(e) => set("carrier", e.target.value as ReceivableCarrierPaid | "")}
+      <select style={sel} value={filters.carrier} onChange={(e) => set("carrier", e.target.value as Filters["carrier"])}
         title="Стан оплати перевізника по угоді рахунку">
         <option value="">Перевізник: будь-як</option>
         {(Object.keys(CARRIER_LABEL) as ReceivableCarrierPaid[]).map((k) => (
           <option key={k} value={k}>{CARRIER_LABEL[k]}</option>
         ))}
+        {/* 🔧 Підмножина «н/д», з якою МОЖНА щось зробити: битий лінк і воронка
+            поза мапою. 1С-рахунки сюди не входять — там угоди немає в принципі. */}
+        <option value="na_fixable">н/д, що лагодиться</option>
       </select>
 
       <select style={sel} value={filters.aging} onChange={(e) => set("aging", e.target.value as ReceivableAging | "")}
