@@ -992,3 +992,41 @@ export async function receivedByMgrKlass(s: MoneyScope): Promise<MoneyByKlass[]>
     deals: Number(x.n), revenue: Math.round(Number(x.s)),
   }));
 }
+
+/**
+ * 🧯 УГОДИ ТРЕТЬОГО КЛАСУ ПОІМЕННО — щоб будильник міг назвати ПРИЧИНУ, а не лише суму.
+ *
+ * 🔴 ТОЙ САМИЙ `src`, ЩО В `receivedByMgrKlass`, І ТОЙ САМИЙ `dealKlassSql`.
+ * Написати сюди власний SELECT по грошах означало б завести другий вираз «які
+ * гроші вважаються отриманими» — і через місяць список угод перестав би пояснювати
+ * ту суму, яку він нібито розкриває. Тут відрізняється РІВНО одне: замість
+ * `GROUP BY` віддаються рядки, і лише клас `undef`.
+ *
+ * Живить `#102b` (кожна така угода має відому названу причину). Саму причину
+ * вирішує чистий `core/undefMoneyReason.ts` — тут лише факти з бази.
+ */
+export interface UndefDealRow { kommoId: number; managerId: number | null; revenue: number; clientKey: string | null; salesChannel: string | null }
+export async function receivedUndefDeals(s: MoneyScope): Promise<UndefDealRow[]> {
+  const { dealKlassSql } = await import("./metrics.js");
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
+  if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const r = await pool.query<{ kommo_id: string; manager_id: number | null; s: string; client_key: string | null; sales_channel: string | null }>(
+    `WITH src AS (${src})
+     SELECT src.kommo_id, src.manager_id, src.price AS s, d.client_key, d.sales_channel
+       FROM src
+       JOIN deals d ON d.kommo_id = src.kommo_id
+       LEFT JOIN managers m ON m.id = src.manager_id
+      WHERE (${dealKlassSql("d")}) = 'undef'
+        ${conds.length ? `AND ${conds.join(" AND ")}` : ""}
+      ORDER BY src.price`, p);
+  return r.rows.map((x) => ({
+    kommoId: Number(x.kommo_id), managerId: x.manager_id,
+    revenue: Math.round(Number(x.s)), clientKey: x.client_key, salesChannel: x.sales_channel,
+  }));
+}
+

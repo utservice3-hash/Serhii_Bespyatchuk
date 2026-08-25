@@ -91,6 +91,14 @@ export const DEAD_ROUTE_CANDIDATES: DeadRouteCandidate[] = [
     why: "ConversionTrendCard → лише ReportSection.tsx (файл ніде не імпортується); рядка немає у прод-бандлі." },
   { method: "GET", path: "/api/dashboard/daily",
     why: "DailyProductivityCard → лише ReportSection.tsx; рядка немає у прод-бандлі." },
+  { method: "GET", path: "/api/dashboard/report-plan/deals",
+    why: "fetchReportPlanDeals не викликається ніде поза api.ts (0 згадок); компонента-"
+       + "споживача немає взагалі; рядка «report-plan/deals» немає у прод-бандлі — "
+       + "перевірено 25.08.2026 з КОНТРОЛЕМ: сусідній «report-plan/day-items» у тому ж "
+       + "файлі знаходиться (1 збіг), тобто grep не порожній. ⚠️ Роут ЖИВИЙ і віддає "
+       + "дані назовні — «фронт не кличе» ≠ «ніхто не кличе»; видалення це окреме "
+       + "рішення власника. Переведений на `klassOf` разом з Е3, бо `undef` мусить "
+       + "доїжджати окремим станом і тут теж." },
   { method: "GET", path: "/api/dashboard/expected-deals",
     why: "fetchExpectedDeals не викликається взагалі — навіть із мертвого файла." },
   { method: "GET", path: "/api/dashboard/funnel-weekly",
