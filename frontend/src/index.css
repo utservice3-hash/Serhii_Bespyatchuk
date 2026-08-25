@@ -275,6 +275,12 @@ button {
 .page-filters {
   display: flex;
   gap:var(--sp-5);
+  /* 🔴 БЕЗ `wrap` РЯД ФІЛЬТРІВ ВИЛІЗАВ ЗА ЕКРАН (успадковано з Е6-полірування).
+     `display:flex` без переносу тисне елементи в один рядок будь-якої ширини,
+     тож на вузькому екрані останній фільтр опинявся за межею видимої області —
+     і його не було ані видно, ані як натиснути. */
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 /* KPI cards */
@@ -779,3 +785,24 @@ button {
 .orph-pick { font-size: 12.5px; padding: 6px 10px; }
 .orph-more { text-align: center; color: var(--info); font-size: 13px; font-weight: 600; cursor: pointer; padding: 12px; }
 .orph-foot { font-size: 12px; color: var(--text-muted); margin: 12px 2px 0; }
+
+
+/* 🖱 РЯДОК ДЕБІТОРКИ — ПОВНОЦІННИЙ КОНТРОЛ (Е4b).
+   Раніше реагувала лише назва клієнта, і клік «у рядок» нічого не робив —
+   людина читала це як поломку. Підсвітка й курсор кажуть, що рядок натискний,
+   ДО того, як його натиснуть. */
+tr.recv-row:hover > td { background: var(--surface-2, rgba(127, 127, 127, 0.06)); }
+tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-offset: -2px; }
+
+/* Розкриття — окремий блок із власною рамкою і прокруткою ВСЕРЕДИНІ.
+   Без `max-height` сорок рядків вивалювались у сторінку й гнали решту
+   73 клієнтів кудись униз: щоб подивитись наступного, доводилось спершу
+   згорнути попереднього. */
+.recv-detail {
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent, #c5141c);
+  border-radius: 8px;
+  background: var(--card-bg);
+  max-height: 340px;
+  overflow: auto;
+}

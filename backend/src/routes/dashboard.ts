@@ -46,6 +46,7 @@ import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
+import { fkErrorMessage } from "../core/creditLimits.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
@@ -1933,18 +1934,54 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
      ORDER BY ri.invoice_date DESC NULLS LAST, ri.amount DESC`,
     params
   );
+  // 🏢 НАША ЮРОСОБА ПО КОЖНОМУ РАХУНКУ — З ТОГО САМОГО ЯДРА, ЩО Й ПЛИТКА (Е4b).
+  //
+  // Плитка «За нашою юрособою» обіцяє «ЮТС 26 · Автомув 3 · невідомо 11», а
+  // всередині клієнта цього видно не було — людина бачила підсумок і не бачила,
+  // ЯКІ саме рахунки складають «невідомо». Тому розкриття тягне `loadInvoiceFacts`,
+  // а не виводить юрособу вдруге з `payment_type`: друге виведення одного дня
+  // розійшлося б із плиткою, і кожна половина виглядала б правдоподібно.
+  //
+  // ⚠️ Ключ звірки — номер рахунку. Він унікальний у межах клієнта (на ньому вже
+  // стоять нотатки `receivable_invoice_notes`), тож нового припущення тут немає.
+  const ourFacts = await receivablesFacts.loadInvoiceFacts(pool, [clientKey]);
+  const factByNo = new Map(ourFacts.map((f) => [f.invoiceNo ?? "", f]));
+
   res.json({
-    invoices: r.rows.map((x) => ({
-      invoiceNo: x.invoice_no,
-      invoiceDate: x.invoice_date,
-      amount: Number(x.amount),
-      serviceUrl: x.service_url,
-      note: x.note,
-      dueDate: x.due_date,
-      comment: x.inv_comment,
-      entityName: x.entity_name,
-      entityKey: x.entity_key,
-    })),
+    invoices: r.rows.map((x) => {
+      const f = factByNo.get(x.invoice_no ?? "");
+      return {
+        invoiceNo: x.invoice_no,
+        invoiceDate: x.invoice_date,
+        amount: Number(x.amount),
+        serviceUrl: x.service_url,
+        note: x.note,
+        dueDate: x.due_date,
+        comment: x.inv_comment,
+        entityName: x.entity_name,
+        entityKey: x.entity_key,
+        // Наша юрособа (ЮТС / Автомув / ФОП / невідомо) і ПРИЧИНА, коли невідомо.
+        // Причина обовʼязкова: «невідомо» без «чому» — це порожнє місце, а воно
+        // читається як «нічого немає», а не як «ми не знаємо».
+        ourEntity: f?.entity ?? null,
+        ourEntityReason: f?.entityReason ?? null,
+        // Чи є за рахунком угода. Мертвий 🔗 у сорока рядках поспіль гірший за
+        // чесний підпис «угоди немає»: він обіцяє перехід, якого не буде.
+        // 🚚 ПЕРЕВІЗНИК ОПЛАЧЕНИЙ — ПО КОЖНОМУ РАХУНКУ, а не лише в плитці.
+        // Те саме ядро (`classifyCarrierPaid`), що живить плитку «Перевізник
+        // оплачений»: друге виведення з `status_id` у роуті одного дня
+        // розійшлося б із нею, і кожна половина виглядала б правдоподібно.
+        //
+        // 🔴 `na` НЕСЕ ПРИЧИНУ, і це не косметика: «угоди немає» — це НЕ ФАКТ
+        // НЕОПЛАТИ. Заміряно на живому проді 25.08.2026: 15 рахунків на
+        // 1 604 500 ₴ виставлено через 1С. Показати їх як «ще не оплачено»
+        // означало б домалювати 1.6 млн неіснуючого факту.
+        carrierPaid: f?.carrierPaid ?? null,
+        carrierReason: f?.carrierReason ?? null,
+        dealId: f?.dealId ?? null,
+        dealFound: f?.dealFound ?? false,
+      };
+    }),
   });
 });
 
@@ -2839,8 +2876,17 @@ dashboardRouter.put("/receivables/owner", async (req, res) => {
       [clientKey, managerId, note.slice(0, 300), auth.userId]
     );
   } catch (e) {
-    const msg = String((e as Error).message ?? e);
-    if (/foreign key/i.test(msg)) return res.status(400).json({ error: "Такого менеджера немає" });
+    // 🔴 ПОВІДОМЛЕННЯ НАЗИВАЄ ТУ КОЛОНКУ, ЩО СПРАВДІ ВПАЛА (успадковано з Е6).
+    //
+    // Було: БУДЬ-ЯКА FK-помилка ставала «Такого менеджера немає». У рядку два
+    // зовнішні ключі — `manager_id` і `set_by` — і коли впав другий, підпис
+    // звинувачував менеджера. Заміряно на собі: пішло два зайві заходи в
+    // діагностику, поки не прочитав текст помилки БД замість власного.
+    //
+    // Підпис, що показує не на ту причину, гірший за підпис «щось не так»:
+    // перший веде розслідування хибним шляхом, другий хоча б не веде.
+    const friendly = fkErrorMessage(String((e as Error).message ?? e));
+    if (friendly) return res.status(400).json({ error: friendly });
     throw e;
   }
   // Той самий перерахунок, що й у синку: інакше екран до 15 хв показував би старого.

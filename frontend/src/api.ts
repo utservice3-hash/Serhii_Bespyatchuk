@@ -1336,9 +1336,26 @@ export interface ReceivableInvoice {
   note: string | null;
   dueDate: string | null;
   comment: string | null;
-  /** Юрособа, з якої прийшов рахунок. Для обʼєднаного клієнта їх кілька. */
+  /** Юрособа КЛІЄНТА, з якої прийшов рахунок. Для обʼєднаного клієнта їх кілька. */
   entityName: string | null;
   entityKey: string | null;
+  /**
+   * 🏢 НАША юрособа по цьому рахунку (ЮТС / Автомув / ФОП) — те саме, що в
+   * плитці «За нашою юрособою». Не плутати з `entityName`: та про КЛІЄНТА,
+   * ця про НАС. Обидві потрібні, і саме тому названі по-різному.
+   */
+  ourEntity: ReceivableEntity | null;
+  /** Чому наша юрособа невідома. «Невідомо» без причини — порожнє місце. */
+  ourEntityReason: ReceivableEntityReason | null;
+  /**
+   * 🚚 Чи оплачений перевізник за цим рахунком. `na` — «не знаємо», і воно
+   * ЗАВЖДИ приходить із причиною: відсутність угоди не є фактом неоплати.
+   */
+  carrierPaid: ReceivableCarrierPaid | null;
+  carrierReason: ReceivableCarrierReason | null;
+  /** № угоди й чи знайшлась вона. Лінк малюємо ЛИШЕ коли угода справді є. */
+  dealId: number | null;
+  dealFound: boolean;
 }
 
 export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoice[]> {

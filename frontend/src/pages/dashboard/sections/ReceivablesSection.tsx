@@ -11,7 +11,8 @@ import { OwnerEditor } from "./OwnerEditor";
 import { LimitEditor } from "./LimitEditor";
 import { MergeDialog } from "./MergeDialog";
 import {
-  CARRIER_LABEL, CARRIER_REASON_LABEL, EMPTY_FILTERS, entityBreakdown, isAncientDebt, isOverdue,
+  CARRIER_LABEL, CARRIER_REASON_LABEL, carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
+  entityBreakdown, isAncientDebt, isOverdue,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters, t,
   type Filters, type MergeSide,
 } from "../receivablesView";
@@ -221,8 +222,25 @@ export function ReceivablesSection({
             <span className="loading-text">Деталізації рахунків немає.</span>
           ) : (
             <>
+              {/* 🧾 ШАПКА РОЗКРИТТЯ (Е4b): скільки рахунків, на скільки грошей і
+                  який найстаріший. Без неї людина бачила перші пʼять рядків і не
+                  знала, скільки їх усього — а їх буває сорок. */}
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, margin: "0 0 8px" }}>
+                <b style={{ fontSize: 13 }}>Рахунки клієнта</b>
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  {inv.length} шт · {formatAmount(inv.reduce((a, x) => a + x.amount, 0))}
+                  {(() => {
+                    const ages = inv.map((x) => x.invoiceDate).filter((d): d is string => !!d);
+                    if (!ages.length) return null;
+                    const oldest = ages.reduce((m, d) => (d < m ? d : m), ages[0]);
+                    const days = Math.floor((Date.now() - new Date(oldest).getTime()) / 86400000);
+                    return ` · найстаріший ${days} дн.`;
+                  })()}
+                </span>
+              </div>
               <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 6px" }}>
-                📅 Постав дедлайн оплати по рахунку — якщо мине, а оплата не надійде, менеджеру автоматично створиться задача «отримати оплату».
+                📅 Постав <b>дедлайн оплати по рахунку</b> — якщо мине, а оплата не надійде, менеджеру автоматично створиться задача «отримати оплату».
+                {" "}Це <i>інший</i> рівень, ніж «обіцяна дата» у рядку клієнта: там домовленість <b>з клієнтом</b> загалом, тут — строк по <b>конкретному рахунку</b>.
               </p>
               {merged && (
                 /* 🔗 ОБʼЄДНАНИЙ КЛІЄНТ. Без цього рядка склейка читається як
@@ -234,16 +252,25 @@ export function ReceivablesSection({
                   <b style={{ color: "var(--text)" }}>{entities.join(" · ")}</b>
                 </p>
               )}
+              <div className="recv-detail">
               <table className="data-table compact" style={{ fontSize: 12, minWidth: 680 }}>
                 <thead>
                   <tr>
-                    {merged && <th style={{ textAlign: "left" }}>Юрособа</th>}
+                    {merged && <th style={{ textAlign: "left" }} title="Юрособа КЛІЄНТА — видно лише в обʼєднаного">Клієнт</th>}
                     <th style={{ textAlign: "left" }}>Рахунок №</th>
                     <th>Дата</th>
-                    <th style={{ textAlign: "right" }}>Сума</th>
+                    {/* 🏢 НАША юрособа по КОЖНОМУ рахунку. Плитка обіцяє
+                        «ЮТС 26 · Автомув 3 · невідомо 11», а всередині цього не
+                        було видно — підсумок є, складу немає. */}
+                    <th style={{ textAlign: "left" }} title="Наша юрособа, від якої виставлено рахунок">Наша юрособа</th>
+                    {/* 🚚 «Перевізник» — стан по КОЖНОМУ рахунку, з тієї самої
+                        плитки. Підпис навмисно не «оплачено?», бо колонка має
+                        ТРИ стани, і третій — «не знаємо», а не «ні». */}
+                    <th style={{ textAlign: "left" }} title="Чи оплачений перевізник за цим рахунком">Перевізник</th>
+                    <th style={{ textAlign: "right", width: 96, whiteSpace: "nowrap" }}>Сума</th>
                     <th>📅 Дедлайн оплати</th>
-                    <th style={{ textAlign: "left" }}>Коментар</th>
-                    <th>Лінк</th>
+                    <th style={{ textAlign: "left" }}>Коментар до рахунка</th>
+                    <th>Угода</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -258,7 +285,44 @@ export function ReceivablesSection({
                         )}
                         <td style={{ textAlign: "left", fontWeight: 600 }}>{x.invoiceNo ?? "—"}</td>
                         <td>{x.invoiceDate ? new Date(x.invoiceDate).toLocaleDateString("uk-UA") : "—"}</td>
-                        <td style={{ textAlign: "right", fontWeight: 600 }} title={formatAmountFull(x.amount)}>{formatAmount(x.amount)}</td>
+                        <td style={{ textAlign: "left", fontSize: 11.5 }}>
+                          {x.ourEntity && x.ourEntity !== "unknown" ? (
+                            <span style={{ color: "var(--text)" }}>{ENTITY_LABEL[x.ourEntity]}</span>
+                          ) : (
+                            /* 🔴 «НЕВІДОМО» З ПРИЧИНОЮ. Порожнє місце читається як
+                               «нічого немає», а тут це три різні речі з трьома
+                               різними діями: 1С-рахунок, битий лінк, не вказана
+                               форма оплати. */
+                            <span style={{ color: "var(--text-muted)" }}>
+                              невідомо
+                              {x.ourEntityReason && (
+                                <span style={{ display: "block", fontSize: 10 }}>
+                                  {ENTITY_REASON_LABEL[x.ourEntityReason]}
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </td>
+                        {/* 🔴 ТРИ СТАНИ, І ТРЕТІЙ НЕ ЗЛИВАЄТЬСЯ З ДРУГИМ.
+                            «Угоди немає» ≠ «перевізник не оплачений»: у першому
+                            випадку ми НЕ ЗНАЄМО. Заміряно 25.08.2026 — злиття
+                            додало б 1 604 500 ₴ вигаданої неоплати. Тому «н/д»
+                            малюється сірим і з причиною під ним. */}
+                        <td style={{ textAlign: "left", fontSize: 11.5 }}>
+                          {(() => {
+                            const cc = carrierCell(x.carrierPaid, x.carrierReason);
+                            const color = cc.tone === "paid" ? "#16a34a"
+                              : cc.tone === "unpaid" ? "var(--text)" : "var(--text-muted)";
+                            return (
+                              <span style={{ color }}>
+                                {cc.text}
+                                {cc.why && <span style={{ display: "block", fontSize: 10 }}>{cc.why}</span>}
+                              </span>
+                            );
+                          })()}
+                        </td>
+                        <td style={{ textAlign: "right", fontWeight: 600, width: 96, whiteSpace: "nowrap" }}
+                          title={formatAmountFull(x.amount)}>{formatAmount(x.amount)}</td>
                         <td>
                           <input
                             type="date"
@@ -276,18 +340,49 @@ export function ReceivablesSection({
                             onSave={(next) => patchInvoice(clientKey, x.invoiceNo ?? "", { comment: next || null })}
                           />
                         </td>
-                        <td>{x.serviceUrl ? <a href={x.serviceUrl} target="_blank" rel="noreferrer">🔗</a> : "—"}</td>
+                        {/* 🔗 ЛІНК ЛИШЕ ТАМ, ДЕ УГОДА Є. Мертва іконка в сорока
+                            рядках поспіль обіцяє перехід, якого не буде — і це
+                            гірше за чесний підпис. 1С-рахунок угоди не має в
+                            принципі, а не «десь загубив». */}
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          {x.serviceUrl && x.dealFound ? (
+                            <a href={x.serviceUrl} target="_blank" rel="noreferrer" title="Відкрити угоду в Kommo">🔗 угода</a>
+                          ) : (
+                            <span style={{ color: "var(--text-muted)", fontSize: 10.5 }}
+                              title={x.dealId == null ? "рахунок виставлено через 1С — угоди в Kommo немає"
+                                                      : "лінк веде на угоду, якої немає в базі"}>
+                              {x.dealId == null ? "угоди немає" : "лінк битий"}
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
+                  {/* 🔴 ПІДСУМКОВИЙ РЯДОК РАХУЄ КОЛОНКИ, А НЕ «ПРИБЛИЗНО».
+                      Був зсув: у ОБʼЄДНАНОГО клієнта шапка мала на одну колонку
+                      більше за підсумок, тож «Разом» опинялось під сусідньою
+                      колонкою. Тепер `merged` додає клітинку і сюди. */}
                   <tr>
+                    {merged && <td />}
                     <td style={{ fontWeight: 700, textAlign: "left" }}>Разом: {inv.length} рах.</td>
                     <td />
+                    <td />
+                    {/* 🚚 ПІДСУМОК ПО ПЕРЕВІЗНИКУ — КІЛЬКІСТЮ, А НЕ ₴, І ЦЕ
+                        СВІДОМО. Скільки саме заплачено перевізнику, ми НЕ
+                        ЗНАЄМО: суми лежать у полях Kommo, яких ми не синкаємо
+                        (перевірено 25.08.2026 — у `deals` 34 колонки і жодної
+                        про перевізника). Підписати сумою рахунків «заплачено
+                        перевізникам N ₴» означало б назвати БОРГ КЛІЄНТА нашою
+                        виплатою — дві різні величини під одним підписом. */}
+                    <td style={{ textAlign: "left", fontSize: 11, color: "var(--text-muted)" }}>
+                      оплачених: {inv.filter((x) => x.carrierPaid === "paid").length} з {inv.length}
+                    </td>
                     <td style={{ textAlign: "right", fontWeight: 700 }}>{formatAmount(inv.reduce((s, x) => s + x.amount, 0))}</td>
                     <td colSpan={3} />
                   </tr>
                 </tbody>
               </table>
+              </div>
             </>
           )}
         </td>
@@ -402,8 +497,18 @@ export function ReceivablesSection({
                     <th style={{ textAlign: "right", whiteSpace: "nowrap" }}>Сума боргу</th>
                     <th style={{ textAlign: "center" }}>Днів без оплати</th>
                     <th style={{ textAlign: "center" }}>Ліміт</th>
-                    <th style={{ textAlign: "center" }}>Дата оплати (клієнт)</th>
-                    <th style={{ textAlign: "left" }}>Коментар</th>
+                    {/* 🔴 ДВА РІВНІ ПОЛІВ РОЗВЕДЕНО ПІДПИСАМИ (Е4b).
+                        Тут — домовленість із КЛІЄНТОМ загалом; у розкритті —
+                        дедлайн і коментар по КОНКРЕТНОМУ рахунку. Раніше обидві
+                        пари звались однаково («дата оплати» / «коментар»), і
+                        людина не бачила, що це різні речі з різними наслідками:
+                        від дедлайну по рахунку створюється задача менеджеру. */}
+                    <th style={{ textAlign: "center" }} title="Коли клієнт пообіцяв заплатити — домовленість із ним загалом">
+                      Обіцяна дата
+                    </th>
+                    <th style={{ textAlign: "left" }} title="Домовленість із клієнтом. Строк по конкретному рахунку — у розкритті">
+                      Домовленість з клієнтом
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -413,13 +518,36 @@ export function ReceivablesSection({
                     const ent = entityBreakdown(c.facts);
                     return (
                       <Fragment key={`${c.clientKey}-${i}`}>
-                        <tr style={over ? { background: "rgba(220,38,38,0.04)" } : undefined}>
+                        {/* 🖱 КЛІКАБЕЛЬНИЙ УВЕСЬ РЯДОК (Е4b).
+                            Раніше реагувала вузька смужка на самій назві: людина
+                            тиснула в рядок і думала, що зламано. Тепер рядок —
+                            повноцінний контрол: курсор-палець, підсвітка, стрілка
+                            повертається, Enter/Space працюють із клавіатури.
+
+                            🔴 КЛІК ПО ПОЛЮ ВСЕРЕДИНІ НЕ РОЗГОРТАЄ. У рядку живуть
+                            input дати, textarea коментаря і кнопки «змінити» —
+                            без цієї умови кожен дотик до них згортав би клієнта
+                            просто в момент редагування. `closest` бере САМЕ той
+                            елемент, у який влучив користувач, а не той, на якому
+                            висить обробник. */}
+                        <tr role="button" tabIndex={0} aria-expanded={openKey === c.clientKey}
+                          onClick={(e) => {
+                            if ((e.target as HTMLElement).closest("input, textarea, button, select, a")) return;
+                            toggleClient(c.clientKey);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter" && e.key !== " ") return;
+                            if ((e.target as HTMLElement).closest("input, textarea, button, select, a")) return;
+                            e.preventDefault();
+                            toggleClient(c.clientKey);
+                          }}
+                          className="recv-row"
+                          style={{ cursor: "pointer", ...(over ? { background: "rgba(220,38,38,0.04)" } : {}) }}>
                           <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "top" }}>{i + 1}</td>
                           <td style={{ textAlign: "left", verticalAlign: "top" }}>
-                            <button onClick={() => toggleClient(c.clientKey)} title="Показати неоплачені рахунки"
-                              style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text)", font: "inherit", fontWeight: 600, padding: 0, textAlign: "left" }}>
+                            <span style={{ fontWeight: 600, color: "var(--text)" }}>
                               {caret(c.clientKey)}{c.clientName}
-                            </button>
+                            </span>
                             {/* 🔴 ЯРЛИК ІЗ ЧИСЛОМ, бо клієнт БУВАЄ ЗМІШАНИЙ: у ПВК
                                 АРСЕНАЛ 11 рахунків із 40 виставлені через 1С, решта
                                 29 — звичайні угоди Kommo. Ярлик без числа стверджував

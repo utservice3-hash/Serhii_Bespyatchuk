@@ -66,13 +66,31 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
 
   return (
     <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", marginBottom: 16 }}>
-      <div className="kpi-card" style={{ borderTop: "3px solid #c5141c" }}>
+      {/* 🔴 СМУГИ ЗВЕРХУ ПРИБРАНО З УСІХ ПʼЯТИ (Е4b). Пʼять різних кольорів у ряд
+          читались як світлофор — ніби плитки різного «стану». Насправді вони просто
+          різні метрики, і колір нічого про них не казав. Колір лишився там, де він
+          щось означає: червоне число прострочки й сегменти смужок. */}
+      <div className="kpi-card">
         <span className="kpi-label">Загальний борг</span>
         <span className="kpi-value" title={formatAmountFull(debtTotal)}>{formatAmount(debtTotal)}</span>
         {totals && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{totals.invoices} рахунків · {clientCount} боржників</span>}
+        {/* 🔴 ПЛИТКА БІЛЬШЕ НЕ ПОРОЖНЯ. Дві перші були білими плямами на початку
+            екрана, поки три сусідні несли розклад — читалось як «тут нема чого
+            показати». Розклад той самий, що й у сусідів, і з ТОГО САМОГО виразу
+            прострочки: гроші в межах домовленості проти грошей поза нею. */}
+        <Bar parts={[
+          { label: "ok", value: Math.max(0, debtTotal - overdueSum), color: C.paid,
+            hint: `у межах домовленості · ${clientCount - overdueCount} боржників` },
+          { label: "over", value: overdueSum, color: C.a3,
+            hint: `прострочено · ${overdueCount} боржників` },
+        ]} />
+        <Legend items={[
+          { label: "у межах домовленості", text: `${formatAmount(Math.max(0, debtTotal - overdueSum))} · ${clientCount - overdueCount}`, color: C.paid },
+          { label: "прострочено", text: `${formatAmount(overdueSum)} · ${overdueCount}`, color: C.a3 },
+        ]} />
       </div>
 
-      <div className="kpi-card" style={{ borderTop: `3px solid ${overdueCount ? "#dc2626" : "#16a34a"}` }}>
+      <div className="kpi-card">
         {/* 🔴 «(понад ліміт)» ПРИБРАНО в Е4, і це не косметика. Після зміни правила
             сюди входять і клієнти, у яких ліміту НЕМАЄ — тобто заголовок стверджував
             би те, чого число вже не означає. Рівно той клас підміни, що «сер.чек ÷
@@ -89,15 +107,23 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
             Число одне (правило власника), але без цього розкладу воно читалось би
             як «стільки клієнтів у біді», а серед них є рахунки віком 3 дні. */}
         {overdueCount > 0 && (
-          <span style={{ fontSize: 10.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
-            понад узгоджений ліміт: <b>{overdueBeyondAgreed}</b>
-            <br />ліміт не узгоджено: <b>{overdueNoLimit}</b>
-          </span>
+          <>
+            <Bar parts={[
+              { label: "beyond", value: overdueBeyondAgreed, color: C.a3,
+                hint: `перевищили УЗГОДЖЕНИЙ термін · ${overdueBeyondAgreed}` },
+              { label: "nolimit", value: overdueNoLimit, color: C.unpaid,
+                hint: `ліміт не узгоджено — відстрочки не давали · ${overdueNoLimit}` },
+            ]} />
+            <Legend items={[
+              { label: "понад узгоджений ліміт", text: String(overdueBeyondAgreed), color: C.a3 },
+              { label: "ліміт не узгоджено", text: String(overdueNoLimit), color: C.unpaid },
+            ]} />
+          </>
         )}
       </div>
 
       {carrier && (
-        <div className="kpi-card" style={{ borderTop: "3px solid #16a34a" }}>
+        <div className="kpi-card">
           <span className="kpi-label">Перевізник оплачений</span>
           <span className="kpi-value" title={formatAmountFull(carrier.paid.amount)}>{formatAmount(carrier.paid.amount)}</span>
           <Bar parts={[
@@ -120,7 +146,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
       )}
 
       {totals && (
-        <div className="kpi-card" style={{ borderTop: "3px solid #f97316" }}>
+        <div className="kpi-card">
           <span className="kpi-label">Вік боргу</span>
           <span className="kpi-value" style={{ color: t(totals.aging["90+"]).n ? "#dc2626" : "var(--text)" }}>
             {t(totals.aging["90+"]).n ? formatAmount(t(totals.aging["90+"]).amount) : "—"}
@@ -138,7 +164,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
       )}
 
       {totals && (
-        <div className="kpi-card" style={{ borderTop: "3px solid #2563eb" }}>
+        <div className="kpi-card">
           <span className="kpi-label">За нашою юрособою</span>
           <span className="kpi-value" title={formatAmountFull(t(totals.entity.uts).amount)}>{formatAmount(t(totals.entity.uts).amount)}</span>
           <span style={{ fontSize: 11, color: "var(--text-muted)" }}>ЮТС · найбільша частка</span>

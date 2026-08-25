@@ -33,6 +33,39 @@ export const CARRIER_REASON_LABEL: Record<ReceivableCarrierReason, string> = {
   out_of_map: "воронка поза мапою етапів",
 };
 
+/**
+ * 🚚 КЛІТИНКА «ПЕРЕВІЗНИК» — ЧИСТЕ ПРАВИЛО, А НЕ ЛАНЦЮЖОК `&&` У ВЕРСТЦІ.
+ *
+ * 🔴 ТРИ СТАНИ, І ТРЕТІЙ НЕ Є ДРУГИМ. «Угоди немає» означає, що ми НЕ ЗНАЄМО,
+ * а не що перевізник не оплачений. Заміряно на живому проді 25.08.2026:
+ * рахунків 290 — оплачено 131 (3 240 342 ₴), не оплачено 142 (5 298 987 ₴),
+ * «н/д» 17 (1 604 500 ₴, з них 15 виставлені через 1С). Показати «н/д» як
+ * «ще не оплачено» означало б домалювати 1.6 млн неіснуючого факту — рівно та
+ * підміна, яку в плитці вже тримає `#152`.
+ *
+ * Правило винесено з JSX навмисно: поки воно жило трьома `&&` у розмітці,
+ * перевірити його можна було лише читанням тексту компонента, а гейт на текст
+ * не бачить, що код РОБИТЬ (урок `#203`).
+ */
+export interface CarrierCell {
+  text: string;
+  /** Чому «не знаємо». `null` для двох визначених станів. */
+  why: string | null;
+  tone: "paid" | "unpaid" | "unknown";
+}
+
+export function carrierCell(
+  state: ReceivableCarrierPaid | null,
+  reason: ReceivableCarrierReason | null,
+): CarrierCell {
+  if (state === "paid") return { text: "✓ оплачений", why: null, tone: "paid" };
+  if (state === "unpaid") return { text: "ще не оплачено", why: null, tone: "unpaid" };
+  // `na` І `null` — один і той самий випадок «ми не знаємо». `null` приходить,
+  // коли рахунок не зіставився з фактом; мовчки показати його як «не оплачено»
+  // було б тією самою підміною, тільки без причини.
+  return { text: "н/д", why: reason ? CARRIER_REASON_LABEL[reason] : null, tone: "unknown" };
+}
+
 export const AGING_ORDER: ReceivableAging[] = ["0-30", "31-60", "61-90", "90+"];
 export const AGING_LABEL: Record<ReceivableAging, string> = {
   "0-30": "до 30 днів", "31-60": "31–60", "61-90": "61–90", "90+": "понад 90",

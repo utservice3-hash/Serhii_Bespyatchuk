@@ -178,9 +178,12 @@ test("#193 клік МИШЕЮ: контроли реагують, ПВК АРС
     // (3) 🔴 САМЕ ПВК АРСЕНАЛ, а не «якийсь клієнт». Він єдиний ЗМІШАНИЙ:
     // 11 рахунків із 40 через 1С, битий лінк на угоду, воронка поза мапою етапів.
     // Якщо розкриття колись зламається на даних, зламається саме тут.
-    const pvk = page.locator("button", { hasText: "ПВК АРСЕНАЛ" }).first();
+    // 🔄 Е4b: розгортає тепер УВЕСЬ рядок, а не кнопка на назві. Клікаємо в
+    // клітинку з номером — навмисно НЕ в назву: якби обробник лишився на самій
+    // назві, цей клік нічого б не зробив, і гейт це побачив би.
+    const pvk = page.locator("tr", { hasText: "ПВК АРСЕНАЛ" }).first();
     await pvk.scrollIntoViewIfNeeded();
-    await pvk.click({ timeout: 8000 });
+    await pvk.locator("td").first().click({ timeout: 8000 });
     await page.waitForTimeout(2500);
     assert.ok(await page.locator("text=Разом:").count() > 0,
       "🔴 ПВК АРСЕНАЛ не розгорнувся — деталізації рахунків немає");
@@ -204,7 +207,7 @@ test("#193 клік МИШЕЮ: контроли реагують, ПВК АРС
     await narrow.goto(`${BASE}/receivables`, { waitUntil: "domcontentloaded" });
     await narrow.waitForSelector("text=Боржники", { timeout: 45_000 });
     await narrow.waitForTimeout(2000);
-    const nb = narrow.locator("button", { hasText: "ПВК АРСЕНАЛ" }).first();
+    const nb = narrow.locator("tr", { hasText: "ПВК АРСЕНАЛ" }).first().locator("td").first();
     await nb.evaluate((el: any) => el.scrollIntoView({ block: "center", behavior: "instant" }));
     await narrow.waitForTimeout(600);
     const box = await nb.boundingBox();
@@ -217,9 +220,35 @@ test("#193 клік МИШЕЮ: контроли реагують, ПВК АРС
       `🔴 у точці кнопки лежить «${topEl}» — сайдбар знову накриває таблицю на вузькому екрані`);
     await nb.click({ timeout: 8000 });
     await narrow.waitForTimeout(2500);
+    assert.ok(await narrow.locator("text=Рахунки клієнта").count() > 0,
+      "🔴 на вузькому екрані шапка розкриття не зʼявилась");
     assert.ok(await narrow.locator("text=Разом:").count() > 0,
       "🔴 на вузькому екрані клієнт не розгортається");
     await narrow.close();
+
+    // (5) 🔴 КЛІК У ПОЛЕ ВСЕРЕДИНІ РЯДКА НЕ ЗГОРТАЄ КЛІЄНТА (Е4b).
+    //
+    // Рядок став натискним цілком — і це створює нову небезпеку: у ньому живуть
+    // input дати, textarea домовленості й кнопки «змінити». Без `closest`-умови
+    // кожен дотик до них згортав би клієнта просто в момент редагування, тобто
+    // нова зручність зламала б стару роботу.
+    //
+    // Перевіряємо ДІЄЮ: розкриття вже відкрите, тиснемо мишею в поле коментаря
+    // того ж рядка — воно мусить лишитись відкритим.
+    // 🔴 БЕЗ `if (count > 0)`. Перша редакція мала цю умову — і саботаж
+    // «прибрати closest» вона НЕ спіймала: коли поля не знаходились, перевірка
+    // мовчки пропускалась, а гейт лишався зеленим. Мовчазний пропуск усередині
+    // тесту — це той самий фальшиво-зелений, що «порожній результат = pass».
+    // Тепер відсутність поля — ПРОВАЛ: у рядку клієнта поля є завжди.
+    const openRow = page.locator("tr", { hasText: "ПВК АРСЕНАЛ" }).first();
+    const field = openRow.locator("input[type='date'], textarea").first();
+    assert.ok(await field.count() > 0,
+      "🔴 у рядку клієнта немає полів — перевіряти «клік у поле не згортає» нема на чому");
+    await field.scrollIntoViewIfNeeded();
+    await field.click({ timeout: 8000 });
+    await page.waitForTimeout(700);
+    assert.ok(await page.locator("text=Рахунки клієнта").count() > 0,
+      "🔴 клік у поле всередині рядка ЗГОРНУВ клієнта — редагувати неможливо");
 
     assert.deepEqual(errors, [], `🔴 JS-помилки на сторінці: ${errors.slice(0, 3).join(" · ")}`);
   } finally {
