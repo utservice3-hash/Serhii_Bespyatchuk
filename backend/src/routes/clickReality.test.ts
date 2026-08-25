@@ -108,7 +108,16 @@ test("#193 клік МИШЕЮ: контроли реагують, ПВК АРС
   const exe = process.env.PLAYWRIGHT_CHROMIUM;
   const browser = await chromium.launch(exe ? { executablePath: exe } : undefined)
     .catch((e: unknown) => { console.log("   playwright launch:", String(e).slice(0, 140)); return null; });
-  if (!browser) return t.skip("браузер не стартував — клік мишею НЕ перевірено");
+  // 🔴 ЗЛАМАНЕ ОТОЧЕННЯ ≠ ПРИРОДНА ВІДСУТНІСТЬ, і після реєстрації цього гейта в
+  // дозволених прод-скіпах різниця стала критичною. «Playwright не встановлено» і
+  // «немає токена» — це чесне «тут браузера немає» (прод). А ось «браузер є, але
+  // НЕ СТАРТУВАВ» — це поламане оточення, і без маркера воно тихо проходило б як
+  // дозволений скіп: гейт мовчав би саме тоді, коли перевірити НЕ ВДАЛОСЬ.
+  // Той самий клас, що «успіх за 0 мс» і «папка бекапу є, копії немає».
+  if (!browser) {
+    const { BROKEN_ENV_MARK } = await import("../testRunGate.js");
+    return t.skip(`${BROKEN_ENV_MARK} браузер є, але не стартував — клік мишею НЕ перевірено`);
+  }
   try {
     const ctx = await browser.newContext({ viewport: { width: 1700, height: 1100 } });
 

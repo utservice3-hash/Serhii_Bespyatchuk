@@ -121,9 +121,9 @@ test("#190 висяк підписаний окремо, і поріг НЕ ду
 test("#185 примітка обовʼязкова на рівні БД, а не лише роуту", needsDb(), async (t) => {
   // Роут обходить будь-який скрипт; `CHECK` — ні. Той самий прецедент, що
   // `loyalty_overrides.archive_reason` і `receivable_manager_override.note`.
-  const { provisionScratch } = await import("../db/scratchDb.js");
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
   await c.connect();
@@ -153,9 +153,9 @@ test("#186 право manage_credit_limits має РІВНО пʼять роле
   // Тиждень тому «Migration applied.» надрукувалось, а права не було — грант
   // стояв ВИЩЕ за блок зняття й гасився тим самим прогоном. Тому склад права
   // перевіряється на схемі З НУЛЯ і ДВІЧІ (друга міграція не має нічого змінити).
-  const { provisionScratch } = await import("../db/scratchDb.js");
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
-  if ("unavailable" in scratch) return t.skip(scratch.unavailable);
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
   const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: scratch.url });
   await c.connect();
