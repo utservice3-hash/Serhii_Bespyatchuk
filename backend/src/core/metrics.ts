@@ -1305,7 +1305,9 @@ export async function newRepeatTotals(s: MetricScope): Promise<NewRepeatAgg> {
 
 // ───────────── ЛІДГЕН ТРИ ЯКОРІ — «ПОЇХАЛИ» за load_at (Крок Г #5) ─────────────
 // Три РІЗНІ якорі, які НЕ зводимо в межах місяця:
-//  • «Передані»  = `leadgen_registry.transferred_at` (conversionTransferredByMonth / transferred).
+//  • «Передані»  = `leadgen_touch.transfer_date` (conversionTransferredByMonth / transferred).
+//                  Той самий факт передачі, що в реєстрі бота, але персистований
+//                  append-only — реєстр `TRUNCATE`-иться щосинку (Е6, 25.08.2026).
 //  • «Поїхали»   = `deals.load_at` (Дата загрузки) — фактичне відправлення авто. Live
 //                  fill-rate: 100% на виграних (142), тож для won-популяції coalesce не
 //                  потрібен. Тут — саме дата ВІДПРАВЛЕННЯ, окремо від дати грошей.
@@ -1896,7 +1898,8 @@ export type ConversionCohortRow = ConversionAdsRow;
  *   • `client`+`stage` — зерно `client_key` (угода лідогену і виграна FC — РІЗНІ
  *     id, спільний client_key): ПРОДЗВІН / РЕАКТИВАЦІЯ. Вхід = стадія у своїй воронці.
  *   • `client`+`transferred` — зерно `client_key`: ЛІДОГЕН-ПЕРЕДАЧІ. Вхід =
- *     `leadgen_registry.transferred_at` (виключаючи лідоген-команди).
+ *     `leadgen_touch.transfer_date` (виключаючи лідоген-команди). Анкер зводиться
+ *     до КИЇВСЬКОЇ ПІВНОЧІ — див. розбір пастки `DATE` у тілі гілки.
  */
 type CohortEntry =
   | { grain: "deal"; entryStatuses: number[]; adSources: string[] }
@@ -2012,17 +2015,60 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
            FROM entered en LEFT JOIN won w ON w.client_key = en.client_key
        )`;
   } else {
-    // client / transferred — знаменник = передані заявки (leadgen_registry) за
-    // transferred_at, ВИКЛЮЧаючи лідоген-команди (передача = лідоген→продажі, а не
-    // раунд-робін усередині лідогену). Дедуп по client_key.
+    // client / transferred — знаменник = передані заявки за датою передачі,
+    // ВИКЛЮЧаючи лідоген-команди (передача = лідоген→продажі, а не раунд-робін
+    // усередині лідогену). Дедуп по client_key.
+    //
+    // 🔴 ДЖЕРЕЛО ЗМІНЕНО 25.08.2026: `leadgen_registry` → `leadgen_touch` (Е6).
+    // МЕТРИКА ТА САМА — змінилась лише таблиця, з якої береться факт передачі.
+    // Це той самий перехід, який `statisticsSeries.lg_transfers` зробив 24.08, і
+    // остання відкладена його частина: `#170c` тримав тут «рівно один читач
+    // реєстру» саме як заставу під цей прохід.
+    //   • `leadgen_registry` — дзеркало Google-аркуша бота, і `syncLeadgenRegistry`
+    //     робить йому `TRUNCATE` щосинку. Графік малює 12 МІСЯЦІВ із таблиці, що
+    //     тримає стільки, скільки зараз в аркуші.
+    //   • `leadgen_touch` — той самий факт передачі, персистований append-only
+    //     (`upsertLeadgenTouch`, `ON CONFLICT DO NOTHING`, анкер = `MIN(transferred_at)`).
+    //
+    // 📐 СЬОГОДНІ ЦЕ НЕ РУХАЄ ЖОДНОГО ЧИСЛА, І ЦЕ ОЧІКУВАНИЙ РЕЗУЛЬТАТ, А НЕ ДОКАЗ,
+    // ЩО ПРАВКА ПОРОЖНЯ. Заміряно 25.08.2026 на проді: 12 місяців × 3 числа —
+    // Δ0 у всіх 36 (Σ entered 814, Σ wonEv 73, тож рівність не тривіальна). Обидві
+    // таблиці мають той самий горизонт (15.06-25.08, 1005 лідів, 0 поза кожною), а
+    // анкери збігаються в 1005 із 1005 — бо писар кладе `MIN(transferred_at)::date`,
+    // і жоден із 71 ліда з кількома передачами не перетинає межу МІСЯЦЯ.
+    //
+    // 🔴 ЩО КУПУЄ ПЕРЕХІД — заміряно симуляцією обрізки аркуша до 35 днів. Реєстр
+    // тоді дав би червень 220→**0**, липень 461→193 і серпень 133→**146**. Останнє
+    // важливіше за два перші: дедуп по `client_key` бере `MIN` уже з обрізаної
+    // множини й ПЕРЕНОСИТЬ старих клієнтів у видиме вікно, тобто обрізка не лише
+    // зануляє минуле, а й ЗАВИЩУЄ поточний місяць. Графік брехав би в обидва боки.
+    //
+    // 🕳 ПАСТКА `timestamptz` ПРОТИ `DATE` — ВУЖЧА, НІЖ ЗАПИСАНО В `#170c`, І Я ЇЇ
+    // ВИПРАВЛЯЮ ЧИСЛОМ. Там сказано «зсув до доби»; заміряно — це не так:
+    //   • `TimeZone` сесії = GMT, і `pg_typeof(DATE … AT TIME ZONE 'Europe/Kyiv')`
+    //     = `timestamp` (date кастується в timestamptz), тож МІСЯЧНЕ ГРУПУВАННЯ
+    //     наївна редакція НЕ зсуває: 01.08 і 24.08 обидві дають `2026-08-01`;
+    //   • зсув РІВНО ОДИН — у `changed_at >= entered_at`: голий `DATE` = опівночі
+    //     GMT = **03:00 Києва**, тож виграші першої нічної тригодини дня передачі
+    //     тихо випадали б із чисельника (проба: `01:30+03 >= DATE` → false, а
+    //     `>= (DATE)::timestamp AT TIME ZONE 'Europe/Kyiv'` → true).
+    // Тому `::timestamp AT TIME ZONE 'Europe/Kyiv'` тут ОБОВʼЯЗКОВИЙ: він робить
+    // анкер київською північчю, і downstream `(entered_at AT TIME ZONE …)::date`
+    // віддає РІВНО ту дату, що лежить у таблиці.
+    //
+    // ⚠️ І ГОЛОВНЕ ПРО ПРИЙМАННЯ: ціна пастки на живих даних = **0 рядків**
+    // (передач у вікні 00:00-03:00 — 0; виграшів між північчю й моментом передачі
+    // — 0), тобто наївна редакція дає ТІ САМІ 36 чисел. Гейт на рівність її не
+    // ловить за побудовою — стереже `#214d`, який дивиться на ВИРАЗ і окремо
+    // доводить, що дві редакції справді різні. Не «спрощувати» цей каст.
     const scopeConds: string[] = ["t.name NOT ILIKE '%лідоген%'", "d.client_key IS NOT NULL"];
     if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
     if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
     const scopeWhere = scopeConds.join(" AND ");
     cte = `entered AS (
-         SELECT d.client_key, MIN(lr.transferred_at) AS entered_at
-           FROM leadgen_registry lr
-           JOIN deals d ON d.kommo_id = lr.lead_id
+         SELECT d.client_key, MIN(lt.transfer_date)::timestamp ${KYIV} AS entered_at
+           FROM leadgen_touch lt
+           JOIN deals d ON d.kommo_id = lt.lead_kommo_id
            JOIN managers m ON m.id = d.manager_id
            JOIN teams t ON t.id = m.team_id
           WHERE ${scopeWhere}
