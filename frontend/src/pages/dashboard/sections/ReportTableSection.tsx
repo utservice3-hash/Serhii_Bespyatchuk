@@ -86,7 +86,21 @@ export function ReportTableSection({
     if (mgrFilter !== "" && !data.managers.some((m) => m.managerId === mgrFilter)) setMgrFilter("");
   }, [data, mgrFilter]);
 
-  const cols = useMemo(() => REPORT_COLS.filter((c) => c.core || optOn[c.key]), [optOn]);
+  /**
+   * 🔴 «ОТРИМАНО · НЕВИЗНАЧЕНО» — УМОВНА КОЛОНКА (рішення власника 25.08.2026).
+   *
+   * Її не можна лишати звичайною опційною: тумблер, який показує колонку з нулями
+   * в кожному чистому місяці, — це та сама брехня, що заголовок «(понад ліміт)».
+   * Тому вона зʼявляється САМА, коли клас непорожній, і зникає разом із ним —
+   * і в таблиці, і в переліку тумблерів (нижче). Той самий предикат, що керує
+   * положенням перемикача: `visibleSlices`, тобто «непорожній».
+   */
+  const undefMoney = useMemo(
+    () => data.managers.reduce((a, m) => a + Math.abs(m.factUndef ?? 0), 0), [data.managers]);
+  const showUndef = undefMoney > 0;
+  const cols = useMemo(
+    () => REPORT_COLS.filter((c) => (c.key === "factUndef" ? showUndef : c.core || optOn[c.key])),
+    [optOn, showUndef]);
   const rows = useMemo(() => {
     const picked = mgrFilter === "" ? data.managers : data.managers.filter((m) => m.managerId === mgrFilter);
     /**
@@ -196,7 +210,7 @@ export function ReportTableSection({
       {/* ── Чипи колонок */}
       <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>Колонки:</span>
-        {OPTIONAL_COLS.map((c) => (
+        {OPTIONAL_COLS.filter((c) => c.key !== "factUndef").map((c) => (
           <button key={c.key} onClick={() => toggleCol(c.key)} aria-pressed={!!optOn[c.key]}
             style={{
               border: `1px solid ${optOn[c.key] ? "var(--brand)" : "var(--border)"}`,
@@ -406,6 +420,7 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
       return <td style={st}>{m.expectThisMonth ? `${money(m.expectThisMonth)} ₴` : none}</td>;
     case "factNew": return <td style={st}>{m.factNew ? `${money(m.factNew)} ₴` : none}</td>;
     case "factRepeat": return <td style={st}>{m.factRepeat ? `${money(m.factRepeat)} ₴` : none}</td>;
+    case "factUndef": return <td style={st}>{m.factUndef ? `${money(m.factUndef)} ₴` : none}</td>;
     case "expectNew": return <td style={st}>{m.expectThisMonthNew ? `${money(m.expectThisMonthNew)} ₴` : none}</td>;
     case "expectRepeat": return <td style={st}>{m.expectThisMonthRepeat ? `${money(m.expectThisMonthRepeat)} ₴` : none}</td>;
     case "awaitNoDate": {
@@ -473,7 +488,7 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
     const at = rows.reduce((s, m) => s + m.attempts, 0);
     return <td style={st}>{f.value}<span style={{ color: "var(--text-muted)", fontWeight: 500 }}> / {at}</span></td>;
   }
-  const MONEY_COLS: ColKey[] = ["avgCheck", "fact", "factNew", "factRepeat", "expectNew", "expectRepeat", "plan", "projected", "needPerDay",
+  const MONEY_COLS: ColKey[] = ["avgCheck", "fact", "factNew", "factRepeat", "factUndef", "expectNew", "expectRepeat", "plan", "projected", "needPerDay",
     "expectThisMonth", "awaitNoDate", "jam", "dobir"];
   if (col.key === "dispRevenue") return <td style={st}>{K(f.value)} ₴</td>;
   return <td style={st}>{money(f.value)}{MONEY_COLS.includes(col.key) ? " ₴" : ""}</td>;

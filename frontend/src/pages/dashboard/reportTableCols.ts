@@ -18,7 +18,7 @@ import type { ReportPlanManager } from "../../api";
 
 export type ColKey =
   | "rank" | "name" | "status" | "created" | "ads" | "leadgen" | "conv" | "convAd" | "convLg"
-  | "dispatch" | "avgCheck" | "fact" | "factNew" | "factRepeat" | "plan" | "pct"
+  | "dispatch" | "avgCheck" | "fact" | "factNew" | "factRepeat" | "factUndef" | "plan" | "pct"
   | "projected" | "needPerDay" | "expectThisMonth" | "expectNew" | "expectRepeat" | "awaitNoDate"
   | "jamDeals" | "jam" | "dobir" | "talks" | "dispRevenue" | "responseTime"
   | "srcAd" | "srcLeadgen" | "srcOther" | "srcNoChannel";
@@ -120,6 +120,15 @@ export const REPORT_COLS: ColDef[] = [
     help: "Частина колонки «Отримано», що прийшла від НОВИХ клієнтів. Джерело: money.receivedByMgrKlass — той самий вираз каси ②, розкладений каноном новизни (metrics.dealKlassSql: попередня ВИГРАНА угода того ж клієнта, закрита до створення цієї). «Отримано» = нові + постійні, Δ0." },
   { key: "factRepeat", title: "Отримано · постійні", core: false, val: (m) => m.factRepeat, foot: "add",
     help: "Частина колонки «Отримано» від ПОСТІЙНИХ клієнтів — доповнення до «Отримано · нові» тим самим виразом (money.receivedByMgrKlass). ⚠️ «Постійний» тут = у клієнта вже була виграна угода до створення цієї; це НЕ кваліфікація постійного клієнта з екрана лояльності, де правило 2+/3+ оплат." },
+  /**
+   * 🔴 ТРЕТЯ ГРОШОВА КОЛОНКА — УМОВНА (рішення власника 25.08.2026, варіант «а»).
+   * Показується ЛИШЕ коли клас непорожній. Доти «Отримано == нові + постійні» було
+   * правдою; щойно третій клас ожив, різниця почала б мовчки зникати між двома
+   * колонками, і жоден інший гейт цього не побачив би — кожне окреме число
+   * лишається правильним. Причина заміряна: сторно без `client_key`.
+   */
+  { key: "factUndef", title: "Отримано · невизначено", core: false, val: (m) => m.factUndef, foot: "add",
+    help: "Гроші, що не належать ні «новим», ні «постійним»: у клієнта немає ключа, і «Канал продажу» теж не заповнений. 📐 Заміряно 25.08.2026: 6 угод на −18 004 ₴, усі — сторно тендерних угод. Колонка зʼявляється ЛИШЕ коли клас непорожній: порожня колонка з нулем читалась би як «таких грошей не буває». ⚠️ Джерело проблеми лагодиться в CRM/синку (сторно не успадковує клієнта), а не тут." },
   { key: "plan", title: "План міс.", core: true, val: (m) => m.plan, foot: "add",
     help: "Місячний грошовий план, апорт по робочих днях періоду. Джерело: plans.managerPlan." },
   { key: "pct", title: "Викон.", core: true, val: (m) => m.pct, foot: "ratio:pct",
