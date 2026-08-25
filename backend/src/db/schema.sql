@@ -173,6 +173,51 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS sales_channel TEXT;
 -- першій же угоді без цих полів.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_pay_type TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_pay_amount NUMERIC;
+
+-- 💰 ПОВНА СУМА УГОДИ І ОБОВʼЯЗОК ПЕРЕД ПЕРЕВІЗНИКОМ (25.08.2026).
+-- `client_pay_amount` («Приход 1») — ЗНАМЕННИК маржинальності. Чисельник —
+-- `deals.price`, який у цьому продукті вже є МАРЖЕЮ (підтверджено власником),
+-- а не виручкою; саме тому він розходиться з сумою рахунків у 290 із 295 угод.
+-- `carrier_obligation` («Расход 1») — скільки МИ ВИННІ перевізнику. Не плутати з
+-- `carrier_pay_amount` (заявка на оплату): заміряно, вони різні в 99 угодах на
+-- 3 002 525 ₴, і бувають обовʼязок 70 000 при заявці 0.
+-- Обидві NULLABLE: syncKommo пише їх щопрохід, NOT NULL поклав би синк.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_pay_amount NUMERIC;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_obligation NUMERIC;
+
+-- 🗑 СПИСАННЯ БЕЗНАДІЙНОГО БОРГУ.
+--
+-- 🔴 ОКРЕМА ТАБЛИЦЯ, І ЦЕ НЕ СТИЛЬ. `syncReceivables` робить `TRUNCATE
+-- receivables` + `TRUNCATE receivable_invoices` кожні 15 хвилин — списання,
+-- покладене туди, зникло б за один прохід. Прецедент: `receivable_invoice_notes`
+-- заведено рівно з цієї причини.
+--
+-- 🔴 КЛЮЧ — `client_key_raw`, НЕ канонічний: канонічний рухає склейка
+-- (`client_key_alias`), і списання переїхало б на обʼєднаного клієнта, прибравши
+-- ЧУЖИЙ борг.
+--
+-- 🔴 ПРИМІТКА ОБОВʼЯЗКОВА НА РІВНІ БД. Роут обходить будь-який скрипт, `CHECK` —
+-- ні. `btrim` бо пробіли не є поясненням. Той самий прецедент, що
+-- `client_credit_limits.note`.
+CREATE TABLE IF NOT EXISTS receivable_writeoffs (
+  client_key_raw  TEXT NOT NULL,
+  invoice_no      TEXT NOT NULL,
+  amount          NUMERIC NOT NULL,
+  note            TEXT NOT NULL,
+  written_off_by  INTEGER REFERENCES users(id),
+  written_off_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Скасування — тим самим інтерфейсом. Незворотна кнопка на грошах це питання
+  -- часу до аварії (правило власника 06.08.2026). Рядок не видаляється: журнал
+  -- мусить лишитись поіменним.
+  revoked_by      INTEGER REFERENCES users(id),
+  revoked_at      TIMESTAMPTZ,
+  revoke_note     TEXT,
+  PRIMARY KEY (client_key_raw, invoice_no),
+  CONSTRAINT receivable_writeoffs_note_required
+    CHECK (note IS NOT NULL AND btrim(note) <> '')
+);
+CREATE INDEX IF NOT EXISTS idx_receivable_writeoffs_active
+  ON receivable_writeoffs(client_key_raw) WHERE revoked_at IS NULL;
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_activity_note_at TIMESTAMPTZ;
 
 -- Daily ad spend/results pulled from the Google Ads budget sheet (syncAdBudget).
@@ -1819,6 +1864,14 @@ UPDATE roles SET permissions = permissions - 'merge_clients'
 -- копіювання `permissions` адміна поверне його мовчки.
 UPDATE roles SET permissions = permissions || '{"manage_credit_limits": true}'::jsonb
  WHERE key IN ('admin', 'kvp', 'opdir', 'ceo', 'financier');
+
+-- 🗑 СПИСАННЯ БОРГУ — РІВНО ДВІ РОЛІ (рішення власника 25.08.2026).
+-- Не фінансист і не тімліди: це визнання втрати грошей, а не операційна дія.
+-- Склад стереже гейт; додавання третьої ролі має бути СВІДОМИМ, а не тихим.
+UPDATE roles SET permissions = permissions || '{"write_off_debt": true}'::jsonb
+ WHERE key IN ('ceo', 'opdir');
+UPDATE roles SET permissions = permissions - 'write_off_debt'
+ WHERE key NOT IN ('ceo', 'opdir');
 
 -- 🔗 СЕО ДОДАНО ДО ГРАНТУ ВИЩЕ (рішення власника 24.08.2026), а не окремим рядком.
 -- ЧОМУ: `merge_receivables` у СЕО вже було, а ВІДКІТ склейки (`/client-merge/revoke`)

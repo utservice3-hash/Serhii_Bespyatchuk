@@ -70,10 +70,21 @@ export interface RawInvoiceRow {
   statusId: number | null;
   pipelineId: number | null;
   stageMapped: boolean;         // чи є (pipeline_id, status_id) у `pipeline_stage_map`
+  /** 🗑 Рахунок списано як безнадійний — у суму НЕ входить, але видимий підписом. */
+  writtenOff: boolean;
   // 🚚 Скільки заплачено перевізнику і чи домовлені умови. `null` в обох —
   // «не знаємо», і це ТРЕТІЙ стан, а не нуль (заміряно: тип порожній у 84 із 279).
   carrierPayAmount: number | null;
   carrierPayType: string | null;
+  /**
+   * 💰 Скільки ЗАРОБИЛИ на угоді (`deals.price` — у цьому продукті це вже маржа)
+   * і ПОВНА сума угоди (знаменник). Обидва `null` — «рахувати нема з чого»,
+   * і це НЕ нуль: нуль означав би «заробили нічого».
+   */
+  earned: number | null;
+  clientPay: number | null;
+  /** Скільки МИ ВИННІ перевізнику («Расход 1») — не плутати із заявкою. */
+  carrierObligation: number | null;
   ageDays: number | null;       // днів від дати рахунку
 }
 
@@ -324,7 +335,9 @@ const INVOICE_FACTS_SQL = `
          (d.kommo_id IS NOT NULL)               AS deal_found,
          d.payment_type, d.status_id, d.pipeline_id,
          d.carrier_pay_amount, d.carrier_pay_type,
-         (psm.pipeline_id IS NOT NULL)          AS stage_mapped
+         d.price AS earned, d.client_pay_amount, d.carrier_obligation,
+         (psm.pipeline_id IS NOT NULL)          AS stage_mapped,
+         (wo.client_key_raw IS NOT NULL)        AS written_off
     FROM receivable_invoices ri
     CROSS JOIN LATERAL (
       SELECT NULLIF(regexp_replace(COALESCE(ri.service_url, ''), '^.*/', ''), '')::bigint AS deal_id
@@ -332,6 +345,16 @@ const INVOICE_FACTS_SQL = `
     LEFT JOIN deals d ON d.kommo_id = dl.deal_id
     LEFT JOIN pipeline_stage_map psm
            ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+    -- Списання приєднуємо ДО НАЯВНОГО запиту, а не окремим походом: гейт #158
+    -- стереже КІЛЬКІСТЬ запитів, і підняти його стелю «щоб пройшло» означало б
+    -- пустити наступний зайвий похід у БД непоміченим.
+    -- Ключ — client_key_raw: канонічний рухає склейка, і списання переїхало б
+    -- на обʼєднаного клієнта, прибравши ЧУЖИЙ борг.
+    -- (зворотні лапки тут заборонені — це тіло шаблонного рядка)
+    LEFT JOIN receivable_writeoffs wo
+           ON wo.client_key_raw = ri.client_key_raw
+          AND wo.invoice_no = COALESCE(ri.invoice_no, '')
+          AND wo.revoked_at IS NULL
    WHERE ri.client_key = ANY($1)
    ORDER BY ri.amount DESC`;
 
@@ -344,8 +367,9 @@ export async function loadInvoiceFacts(
   const r = await db.query<{
     client_key: string; client_name: string | null; amount: string; invoice_no: string | null;
     invoice_date: string | null; age_days: number | null; deal_id: string | null; deal_found: boolean;
-    payment_type: string | null; status_id: string | null; pipeline_id: string | null; stage_mapped: boolean;
+    payment_type: string | null; status_id: string | null; pipeline_id: string | null; stage_mapped: boolean; written_off: boolean;
     carrier_pay_amount: string | null; carrier_pay_type: string | null;
+    earned: string | null; client_pay_amount: string | null; carrier_obligation: string | null;
   }>(INVOICE_FACTS_SQL, [clientKeys]);
   return r.rows.map((x) => classifyInvoice({
     clientKey: x.client_key, clientName: x.client_name, amount: Number(x.amount),
@@ -356,8 +380,12 @@ export async function loadInvoiceFacts(
     statusId: x.status_id == null ? null : Number(x.status_id),
     pipelineId: x.pipeline_id == null ? null : Number(x.pipeline_id),
     stageMapped: x.stage_mapped === true,
+    writtenOff: x.written_off === true,
     carrierPayAmount: x.carrier_pay_amount == null ? null : Number(x.carrier_pay_amount),
     carrierPayType: x.carrier_pay_type,
+    earned: x.earned == null ? null : Number(x.earned),
+    clientPay: x.client_pay_amount == null ? null : Number(x.client_pay_amount),
+    carrierObligation: x.carrier_obligation == null ? null : Number(x.carrier_obligation),
   }, resolver));
 }
 

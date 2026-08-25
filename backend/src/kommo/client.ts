@@ -185,6 +185,7 @@ export interface KommoDeal {
 // Kommo custom-field ids for lead-source attribution (leads/custom_fields).
 import {
   CARRIER_PAY_FIELDS, carrierPaymentFrom, assertLeadIdsWithinLimit, LEADS_BY_IDS_MAX,
+  CLIENT_PAY_FIELD, CARRIER_OBLIGATION_FIELD,
 } from "../core/carrierPayment.js";
 export { LEADS_BY_IDS_MAX };
 
@@ -283,6 +284,18 @@ export function extractCarrierPayment(deal: KommoDeal): number | null {
     cash: num(CARRIER_PAY_FIELDS.cash),
     general: num(CARRIER_PAY_FIELDS.general),
   });
+}
+
+/** Повна сума угоди для клієнта («Приход 1») — знаменник маржинальності. */
+export function extractClientPayment(deal: KommoDeal): number | null {
+  const v = Number(fieldText(deal, CLIENT_PAY_FIELD) ?? "");
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/** Обовʼязок перед перевізником («Расход 1»). Нуль — це ЧИСЛО, а не «немає». */
+export function extractCarrierObligation(deal: KommoDeal): number | null {
+  const v = Number(fieldText(deal, CARRIER_OBLIGATION_FIELD) ?? "");
+  return Number.isFinite(v) ? v : null;
 }
 
 /** Тип виплати перевізнику — потрібен як ПІДПИС, а не лише як маркер суми. */
