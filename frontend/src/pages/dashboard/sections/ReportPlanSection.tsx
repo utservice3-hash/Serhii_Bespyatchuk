@@ -12,7 +12,7 @@ import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ReportTableSection } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#213`.
-import { keepByKlass, visibleSlices, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
+import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
 
 /**
  * 🔀 ПОЛОЖЕННЯ ПЕРЕМИКАЧА ЇДЕ КОНТЕКСТОМ, А НЕ ПРОПСОМ.
@@ -458,7 +458,7 @@ export function ReportPlanSection({ auth, teams }: {
                */
               renderCard={(m) => (
                 <MgrStrip
-                  m={m} mWeek={weekByMgr.get(m.managerId)}
+                  m={narrowToSlice(m, slice)} mWeek={weekByMgr.get(m.managerId)}
                   focusDay={focusDay} today={today}
                   elapsed={data.elapsed} remWd={data.remainingWorkdays}
                   weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`}
@@ -471,7 +471,7 @@ export function ReportPlanSection({ auth, teams }: {
             />
           ) : (<>
           {auth.role === "manager" && selfRow && (
-            <MgrStrip m={selfRow} mWeek={weekByMgr.get(selfRow.managerId)}
+            <MgrStrip m={narrowToSlice(selfRow, slice)} mWeek={weekByMgr.get(selfRow.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
               weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
               periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"} role={auth.role} isSelf
@@ -480,8 +480,15 @@ export function ReportPlanSection({ auth, teams }: {
           <div style={{ fontSize: 12, color: MUTED, margin: "0 2px 10px" }}>
             ↓ {auth.role === "manager" ? "Твоя команда" : "Відсортовано"} за станом <b>{periodLabel}</b> — хто відстає, той угорі
           </div>
+          {/* 🔴 ЗРІЗ ДІЄ Й НА КАРТКУ, А НЕ ЛИШЕ НА ТАБЛИЦЮ (знайдено скріншотом
+              приймання 25.08.2026). Перемикач стояв на «лише нові», підпис казав
+              «1539 із 2182», а картка менеджера показувала «77 створено · 25нов ·
+              51пост» — повне число під звуженим підписом. Розкриття дня всередині
+              картки при цьому ВЖЕ було звужене (воно читає контекст), тобто число
+              й склад сперечались усередині однієї картки. Жоден гейт цього не
+              бачив: вони дивились на таблицю й на ядро. */}
           {data.managers.map((m) => (
-            <MgrStrip key={m.managerId} m={m} mWeek={weekByMgr.get(m.managerId)}
+            <MgrStrip key={m.managerId} m={narrowToSlice(m, slice)} mWeek={weekByMgr.get(m.managerId)}
               focusDay={focusDay} today={today} elapsed={data.elapsed} remWd={data.remainingWorkdays}
               weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`} weekPeriod={weekPeriod} drillPeriod={selectedPeriod}
               periodLabel={periodLabel} isMonthMode={mode === "month"} weeksFirst={mode === "month" || mode === "range"} role={auth.role}

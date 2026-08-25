@@ -214,6 +214,20 @@ test("#213 зріз вирішується ОДНИМ означенням: фр
   assert.match(day, /keepByKlass\(/, "🔴 розкриття дня не кличе `keepByKlass` — значить вирішує саме");
   assert.doesNotMatch(day, /it\.src\s*===\s*"(new|rep|undef)"/,
     "🔴 у розкритті дня зʼявилось ВЛАСНЕ порівняння класу — це друге означення новизни");
+  /**
+   * 🔴 КАРТКА ТЕЖ Є ПОВЕРХНЕЮ, і це знайшов СКРІНШОТ, а не гейт (25.08.2026).
+   * Перемикач стояв на «лише нові», підпис казав «1539 із 2182», а картка
+   * менеджера показувала «77 створено · 25нов · 51пост» — повне число під
+   * звуженим підписом, тимчасом як розкриття дня ВСЕРЕДИНІ тієї ж картки вже
+   * було звужене. Гейти дивились на таблицю й на ядро, і картку не бачили.
+   * 🧨 САБОТАЖ: прибрати `narrowToSlice` з виклику `MgrStrip` — червоніє.
+   */
+  const cards = (day.match(/<MgrStrip/g) ?? []).length;
+  const narrowed = (day.match(/narrowToSlice\(/g) ?? []).length;
+  assert.ok(cards >= 3, `🔴 знайдено лише ${cards} викликів MgrStrip — розбір зламався`);
+  assert.equal(narrowed, cards,
+    `🔴 звужено ${narrowed} карток із ${cards}: щонайменше одна показує повне число під звуженим підписом`);
+
   const tbl = stripComments(SRC("sections/ReportTableSection.tsx"));
   assert.match(tbl, /narrowToSlice\(/, "🔴 таблиця не кличе `narrowToSlice` — значить звужує рядок сама");
   assert.doesNotMatch(tbl, /srcByKlass\s*\[/,
