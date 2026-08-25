@@ -12,7 +12,7 @@ import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ReportTableSection } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#208`.
-import { keepByKlass, SLICE_LABEL, KLASS_CHIP, SLICES, type Slice } from "../klassSlice";
+import { keepByKlass, visibleSlices, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
 
 /**
  * 🔀 ПОЛОЖЕННЯ ПЕРЕМИКАЧА ЇДЕ КОНТЕКСТОМ, А НЕ ПРОПСОМ.
@@ -529,7 +529,11 @@ function SliceSwitch({ data, slice, onSlice }: { data: ReportPlan; slice: Slice;
   // Третій клас існує, якщо він непорожній ХОЧ У КОГОСЬ: ховати положення через
   // те, що в одного менеджера нуль, означало б ховати саме ті угоди, які шукають.
   const undefCount = data.managers.reduce((a, m) => a + (m.srcByKlass?.undef.created ?? 0), 0);
-  const shown: Slice[] = SLICES.filter((s) => s !== "undef" || undefCount > 0);
+  // 🔴 РІШЕННЯ ПРО ВИДИМІСТЬ — НЕ ТУТ. `visibleSlices` живе в чистому модулі й
+  // звіряється з ядром поведінкою (`#207b`/`#207c`/`#208`); умова, написана у
+  // верстці, перевірялась би лише регуляркою по джерелу — тобто «що написано»,
+  // а не «що працює».
+  const shown: Slice[] = visibleSlices(undefCount);
   const total = data.managers.reduce((a, m) => a + m.created, 0);
   const inSlice = slice === "all" ? total
     : data.managers.reduce((a, m) => a + (m.srcByKlass?.[slice].created ?? 0), 0);

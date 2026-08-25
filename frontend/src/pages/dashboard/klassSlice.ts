@@ -25,6 +25,17 @@ export type Slice = "all" | "new" | "rep" | "undef";
 
 export const SLICES: readonly Slice[] = ["all", "new", "rep", "undef"];
 
+/**
+ * 🔀 ЯКІ ПОЛОЖЕННЯ ПОКАЗУВАТИ. Дзеркало `core/klassFilter.visibleSlices`; звіряє `#208`.
+ *
+ * 📐 Стан «третій клас порожній» на живих даних НЕ ТРАПЛЯЄТЬСЯ: за 13 місяців
+ * невизначених 6 · 8 · 12 · 4 · 5 · 8 · 11 · 8 · 146 · 60 · 84 · 69 · 55, нуля
+ * немає жодного разу. Тому гілка перевіряється ЧИСТИМ тестом, а не поведінкою
+ * проти прода — інакше «умовно» тихо стало б «завжди», і ніхто б не помітив.
+ */
+export const visibleSlices = (undefCount: number): Slice[] =>
+  SLICES.filter((s) => s !== "undef" || undefCount > 0);
+
 /** ЄДИНИЙ предикат. `null` не належить жодному звуженню — інакше дзвінки просочились би. */
 export const keepByKlass = (st: KlassState, slice: Slice): boolean =>
   slice === "all" ? true : st === slice;
