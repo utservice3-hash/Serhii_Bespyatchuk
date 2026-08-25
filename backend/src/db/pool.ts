@@ -14,6 +14,8 @@ assertTestHarnessReadOnly();
  * памʼять/квоту. Тримаємо мінімум конекшенів і швидко відпускаємо idle. Ліміт конекту
  * 10с — щоб буут не завис на Neon, а впав швидко й чисто (Supervisor підніме).
  */
+import { testPoolOptions } from "./poolTail.js";
+
 export const pool = new Pool({
   connectionString: config.databaseUrl,
   // 🔴 6 → 15 (рішення власника 05.08.2026, заміряно).
@@ -31,4 +33,5 @@ export const pool = new Pool({
   max: 15,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
+  ...testPoolOptions(),
 });
