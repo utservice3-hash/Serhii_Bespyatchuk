@@ -54,6 +54,7 @@ const TAIL = `,
    COUNT(*) FILTER (WHERE p.won_at IS NOT NULL AND date_trunc('month', (p.won_at ${KY})) = mo.m)::int AS won_in
  FROM months mo LEFT JOIN pop p ON TRUE GROUP BY mo.m ORDER BY mo.m`;
 
+/** ЕТАЛОН — стара, реєстрова редакція. Живе ЛИШЕ тут: у проді її більше немає. */
 const ENT_REGISTRY = `entered AS (
    SELECT d.client_key, MIN(lr.transferred_at) AS entered_at
      FROM leadgen_registry lr
@@ -62,37 +63,39 @@ const ENT_REGISTRY = `entered AS (
      JOIN teams t ON t.id = m.team_id
     WHERE t.name NOT ILIKE '%лідоген%' AND d.client_key IS NOT NULL
     GROUP BY d.client_key)`;
-const ENT_TOUCH = `entered AS (
-   SELECT d.client_key, MIN(lt.transfer_date)::timestamp ${KY} AS entered_at
-     FROM leadgen_touch lt
-     JOIN deals d ON d.kommo_id = lt.lead_kommo_id
-     JOIN managers m ON m.id = d.manager_id
-     JOIN teams t ON t.id = m.team_id
-    WHERE t.name NOT ILIKE '%лідоген%' AND d.client_key IS NOT NULL
-    GROUP BY d.client_key)`;
 
 /**
  * #214c — ПЕРЕХІД НЕ ЗРУШИВ ЖОДНОГО ЧИСЛА, І ЦЕ ДОВЕДЕНО ПОРЯДКОВО.
  *
- * Порівнюються ДВІ редакції ОДНОГО запиту на ОДНИХ даних, у процесі, без другого
- * сервера. Хвіст (`won`/`pop`/`months`) спільний рядково — інакше гейт міг би
- * зазеленіти на тому, що обидві гілки однаково зламані.
+ * 🔴 ПОРІВНЮЄТЬСЯ СПРАВЖНЯ `conversionTransferredByMonth`, А НЕ КОПІЯ ЇЇ SQL.
+ * Перша редакція цього гейта тримала ОБИДВІ гілки всередині тесту — і була
+ * непридатна: вона доводила рівність двох рядків, написаних поруч, а про те, що
+ * саме виконує прод, не свідчила нічого. Рівно те «друге означення», яке ми
+ * ловимо в чипах новизни й у зрізі Е3. Тепер ліворуч — виклик ядра, праворуч —
+ * реєстровий еталон, і він живе тільки тут, бо в проді його вже немає.
  *
  * 🪞 КОНТРОЛЬ НЕПОРОЖНОСТІ ОБОВʼЯЗКОВИЙ: 12 місяців нулів дали б «Δ0» без жодної
  * перевіреної рівності. Вимагаємо Σ entered > 0 І Σ wonEv > 0 — заміряно 814 і 73.
  *
- * 🧨 САБОТАЖ (виконано): зсунути анкер сліду на `+ INTERVAL '1 day'` → червоніє
- * на 2026-06/07/08; прибрати `t.name NOT ILIKE '%лідоген%'` в одній із гілок →
- * червоніє теж. Тобто гейт дивиться і на анкер, і на склад когорти.
+ * ⚠️ ЧОГО ЦЕЙ ГЕЙТ НЕ ДОВОДИТЬ, І ЦЕ НАЗВАНО ВГОЛОС: він НЕ ловить повернення
+ * ядра на реєстр — числа сьогодні однакові, тож обидва джерела дали б зелене.
+ * «Яка саме таблиця» стереже `#170c`, «яким саме виразом» — `#214d`. Троє разом
+ * покривають перехід; поодинці кожен має дірку, і саме тому їх троє.
+ *
+ * 🧨 САБОТАЖ (виконано): дописати `+ INTERVAL '1 day'` до анкера в `metrics.ts` →
+ * червоніє на 2026-06/07/08; прибрати `t.name NOT ILIKE '%лідоген%'` з гілки →
+ * червоніє теж. Тобто гейт дивиться і на анкер, і на склад когорти — у ПРОДІ.
  */
 test("#214c когортні передачі: слід дає ТІ САМІ числа, що реєстр (жива БД)", needsDb(), async () => {
   const { pool } = await import("../db/pool.js");
-  const run = async (ent: string) =>
-    (await pool.query<{ ym: string; entered: number; won_ev: number; won_in: number }>(
-      `WITH ${ent}${TAIL}`, [MONEY, FC])).rows;
+  const { conversionTransferredByMonth } = await import("./metrics.js");
 
-  const [reg, touch] = [await run(ENT_REGISTRY), await run(ENT_TOUCH)];
-  assert.equal(reg.length, touch.length, "🔴 різна кількість місяців — порівнюються різні запити");
+  const live = await conversionTransferredByMonth({});
+  const reg = (await pool.query<{ ym: string; entered: number; won_ev: number; won_in: number }>(
+    `WITH ${ENT_REGISTRY}${TAIL}`, [MONEY, FC])).rows;
+
+  assert.equal(live.length, reg.length,
+    `🔴 ядро віддало ${live.length} місяців, еталон ${reg.length} — порівнюються різні горизонти`);
 
   const sumEnt = reg.reduce((s, x) => s + x.entered, 0);
   const sumWon = reg.reduce((s, x) => s + x.won_ev, 0);
@@ -100,12 +103,12 @@ test("#214c когортні передачі: слід дає ТІ САМІ ч�
     `🔴 когорта порожня (entered ${sumEnt}, wonEv ${sumWon}) — «Δ0» нічого не доводить`);
 
   for (let i = 0; i < reg.length; i++) {
-    const a = reg[i], b = touch[i];
+    const a = reg[i], b = live[i];
     assert.deepEqual(
-      { ym: b.ym, entered: b.entered, wonEv: b.won_ev, wonIn: b.won_in },
+      { ym: b.ym, entered: b.entered, wonEv: b.wonEventually, wonIn: b.wonInMonth },
       { ym: a.ym, entered: a.entered, wonEv: a.won_ev, wonIn: a.won_in },
-      `🔴 ${a.ym}: перехід реєстр→слід зрушив числа. Реєстр ${a.entered}/${a.won_ev}/${a.won_in}, `
-      + `слід ${b.entered}/${b.won_ev}/${b.won_in}. Заміряно 25.08.2026: має бути Δ0 у всіх 36`);
+      `🔴 ${a.ym}: перехід реєстр→слід зрушив числа. Еталон (реєстр) ${a.entered}/${a.won_ev}/${a.won_in}, `
+      + `ядро (слід) ${b.entered}/${b.wonEventually}/${b.wonInMonth}. Заміряно 25.08.2026: Δ0 у всіх 36`);
   }
 });
 
