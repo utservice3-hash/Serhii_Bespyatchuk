@@ -790,7 +790,7 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
   const cte = createdSplitCte(s, params);
   // 🔀 Зріз джерела всередині класу — ЧОТИРИ `FILTER` на кожен із трьох класів.
   // Пари (klass, source) перелічені ЯВНО, без циклу по рядку SQL: перелік має
-  // збігатися з `dealSourceCase`, і `#207` це звіряє на живих даних.
+  // збігатися з `dealSourceCase`, і `#212` це звіряє на живих даних.
   const bySrc = (k: string): string => ["ad", "leadgen", "other", "undef"]
     .map((s, i) => `COUNT(*) FILTER (WHERE klass = '${k}' AND source = '${s}') AS ${k}_${["ad", "lg", "oth", "nch"][i]}`)
     .join(",\n            ");
