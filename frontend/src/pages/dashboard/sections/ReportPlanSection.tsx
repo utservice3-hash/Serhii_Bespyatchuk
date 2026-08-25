@@ -457,8 +457,14 @@ export function ReportPlanSection({ auth, teams }: {
                * тож картка завжди розгорнута.
                */
               renderCard={(m) => (
+                // 🔴 `m` ПЕРЕДАЄТЬСЯ БЕЗ ЗМІН — І ЦЕ НЕ ПРОПУСК ЗВУЖЕННЯ.
+                // `ReportTableSection` кличе `renderCard(rows[0])`, а `rows` уже
+                // пройшли `narrowToSlice`. Обгорнути вдруге означало б віддати
+                // КОПІЮ рядка — саме на цьому почервонів `#92b` («MgrStrip отримує
+                // не переданий рядок»), який стереже, що картка і рядок це ОДИН
+                // обʼєкт, а не дві копії, що розійдуться мовчки.
                 <MgrStrip
-                  m={narrowToSlice(m, slice)} mWeek={weekByMgr.get(m.managerId)}
+                  m={m} mWeek={weekByMgr.get(m.managerId)}
                   focusDay={focusDay} today={today}
                   elapsed={data.elapsed} remWd={data.remainingWorkdays}
                   weekLabel={`${ddmm(weekPeriod.from)}–${ddmm(weekPeriod.to)}`}

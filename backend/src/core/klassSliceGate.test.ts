@@ -223,10 +223,20 @@ test("#213 зріз вирішується ОДНИМ означенням: фр
    * 🧨 САБОТАЖ: прибрати `narrowToSlice` з виклику `MgrStrip` — червоніє.
    */
   const cards = (day.match(/<MgrStrip/g) ?? []).length;
-  const narrowed = (day.match(/narrowToSlice\(/g) ?? []).length;
+  const narrowed = (day.match(/m=\{narrowToSlice\(/g) ?? []).length;
   assert.ok(cards >= 3, `🔴 знайдено лише ${cards} викликів MgrStrip — розбір зламався`);
-  assert.equal(narrowed, cards,
-    `🔴 звужено ${narrowed} карток із ${cards}: щонайменше одна показує повне число під звуженим підписом`);
+  /**
+   * 🔴 ЗВУЖУЮТЬСЯ РІВНО ТІ КАРТКИ, ЩО БЕРУТЬ СИРИЙ РЯДОК. Їх дві (`selfRow` і
+   * список). Третя — усередині `renderCard`, і туди `ReportTableSection` подає
+   * `rows[0]`, ВЖЕ звужений; обгортати його вдруге означає віддати КОПІЮ, на
+   * чому й почервонів `#92b` після мого фіксу 25.08.2026. Тобто «звузити всі
+   * три» і «звузити правильно» — різні речі, і перше ламає сусідній гейт.
+   */
+  assert.equal(narrowed, cards - 1,
+    `🔴 звужено ${narrowed} карток із ${cards - 1}, що беруть сирий рядок`);
+  const rc = day.split("renderCard={")[1]?.slice(0, 900) ?? "";
+  assert.match(rc, /m=\{m\}/,
+    "🔴 у `renderCard` рядок обгорнуто — картка перестала бути ТИМ САМИМ обʼєктом (див. `#92b`)");
 
   const tbl = stripComments(SRC("sections/ReportTableSection.tsx"));
   assert.match(tbl, /narrowToSlice\(/, "🔴 таблиця не кличе `narrowToSlice` — значить звужує рядок сама");
