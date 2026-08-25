@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import {
-  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS,
+  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 
@@ -162,7 +162,19 @@ export async function main(argv: string[]): Promise<number> {
     done.push(r);
     const mark = r.skipped ? "﹣" : r.ok ? "✔" : "✖";
     console.log(`${mark} ${step.id.padEnd(16)} ${r.skipped ?? r.detail}`);
-    if (!r.ok) { console.error(`\n🔴 СТОП на кроці «${step.id}» — ${step.why}`); return 1; }
+    if (!r.ok) {
+      /**
+       * 🔴 НЕ ЛИШЕ ПРИЧИНА, А Й СТАН ПРОДА — СЛОВАМИ. Скрипт, що впав на кроці 9 із
+       * 15, інакше лишає прод у стані, якого ніхто не назве вголос; а не сказане
+       * вголос читається як благополуччя.
+       */
+      console.error(`\n🔴 СТОП на кроці «${step.id}» — ${step.why}`);
+      const ab = abortState(step.id, done.filter((d) => d.ok && !d.skipped).map((d) => d.id),
+        { prodSha: ctx.prod || "(невідомо)", targetSha: ctx.target, branch: ctx.branch });
+      console.error(`\n📍 СТАН ПРОДА: ${ab.state}`);
+      for (const l of ab.lines) console.error(`   ${l}`);
+      return ab.exitCode;
+    }
   }
   const skipped = done.filter((d) => d.skipped);
   console.log(`\n📋 ЗВІТ · фаза ${phase} · режим ${mode} · виконано ${done.length - skipped.length} із ${plan.length}`);

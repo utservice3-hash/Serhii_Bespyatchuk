@@ -121,3 +121,54 @@ export function verifyArtifact(
     return { ok: false, reason: `протух БІК ПРОДА: перевіряли проти ${a.prodSha}, зараз ${liveProdSha} — базу треба звірити заново` };
   return { ok: true };
 }
+
+/**
+ * 🔴 ОБІРВАНИЙ ПРОГІН МУСИТЬ НАЗВАТИ СТАН ПРОДА СЛОВАМИ.
+ *
+ * Ручний ритуал має властивість, якої скрипт легко позбувається: людина бачить, де
+ * саме зупинилась. Скрипт, що впав на кроці 9 із 15, лишає прод у стані, якого ніхто
+ * не назве вголос — а **не сказане вголос читається як благополуччя** (той самий клас,
+ * що «успіх за 0 мс» і «папка бекапу є, копії немає»).
+ *
+ * Стан ВИВОДИТЬСЯ з переліку виконаних кроків, а не вгадується: `copy` вже пройшов —
+ * докрут несе новий бандл; `healthVersion` пройшов — сервер уже новий; `pushBranch` ні
+ * — гілка ще не знає про те, що крутиться.
+ */
+export type AbortState = "prod-untouched" | "docroot-ahead" | "server-ahead";
+
+export interface AbortReport { state: AbortState; exitCode: number; lines: string[] }
+
+export function abortState(
+  failedStep: string, doneOk: readonly string[],
+  ctx: { prodSha: string; targetSha: string; branch: string; intentMinutes?: number },
+): AbortReport {
+  const did = (id: string) => doneOk.includes(id);
+  const intent = did("markDeploy")
+    ? [`Намір markDeploy виставлено — спливе через ~${ctx.intentMinutes ?? 15} хв і сам себе скасує.`]
+    : [];
+
+  if (did("healthVersion")) {
+    return { state: "server-ahead", exitCode: 13, lines: [
+      `Зупинено на «${failedStep}». СЕРВЕР УЖЕ КРУТИТЬ НОВИЙ КОД (${ctx.targetSha}), докрут теж новий.`,
+      `Розходження лише в тому, що ГІЛКА ${ctx.branch} про це не знає — а поки вона відстає,`,
+      "«повернути як було» повернуло б НЕ те, що працює.",
+      ...intent,
+      `Щоб завершити: git push origin HEAD:${ctx.branch} && git fetch origin -q && git rev-list --left-right --count origin/${ctx.branch}...HEAD`,
+      "Відкочувати НЕ треба: прод справний, бракує лише запису.",
+    ] };
+  }
+  if (did("copy")) {
+    return { state: "docroot-ahead", exitCode: 12, lines: [
+      `Зупинено на «${failedStep}». Прод крутить СТАРИЙ код (${ctx.prodSha}), але докрут уже несе НОВИЙ бандл.`,
+      "Сторінка й сервер розійшлись: банер «АВАРІЯ» спрацює, і спрацює ПРАВИЛЬНО.",
+      ...intent,
+      "Щоб завершити: npm run deploy:run -- --mode=<той самий> (кроки ідемпотентні, пройде з місця обриву).",
+      "Щоб відкотити: git merge --ff-only <старий sha> у прод-чекауті, перезібрати фронт і повторити копію з CSS-guard.",
+    ] };
+  }
+  return { state: "prod-untouched", exitCode: 11, lines: [
+    `Зупинено на «${failedStep}». ПРОД НЕ ЗМІНЕНО: ні докрут, ні сервер не чіпали.`,
+    ...intent,
+    "Нічого відкочувати не треба. Полагодь причину й запусти deploy:run заново.",
+  ] };
+}

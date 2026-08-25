@@ -77,3 +77,41 @@ test("#226d РЕЖИМ ЛИШЕ ЯВНО, і легкий каже, чого н�
   assert.deepEqual(silent, [], `🔴 кроки без пояснення: ${silent.join(", ")}`);
   assert.equal(typeof handlers.markDeploy, "function");
 });
+
+/**
+ * 📍 #226e — ОБІРВАНИЙ ПРОГІН НАЗИВАЄ СТАН ПРОДА, А НЕ ЛИШЕ ПРИЧИНУ.
+ *
+ * 🔴 Три стани мусять РОЗРІЗНЯТИСЬ, і кожен мати свій вихід. Гейт перевіряє саме
+ * розрізнення: доки всі три давали б один текст, скрипт «щось надрукував» — і читач
+ * усе одно не знав би, чи можна йти спати.
+ */
+test("#226e обірваний прогін розрізняє три стани прода і дає вихід для кожного", async () => {
+  const { abortState } = await import("./deployPlan.js");
+  const ctx = { prodSha: "7915551", targetSha: "4a5655f", branch: "claude/friendly-galileo-8pijhl" };
+
+  // 1 · Нічого не чіпали — найбезпечніший стан, і він мусить бути названий саме так.
+  const a = abortState("test", ["base", "buildBack"], ctx);
+  assert.equal(a.state, "prod-untouched");
+  assert.ok(a.lines.some((l) => /ПРОД НЕ ЗМІНЕНО/.test(l)), "🔴 не сказано, що прод цілий — читач шукатиме наслідки, яких немає");
+  assert.ok(a.lines.some((l) => /Нічого відкочувати/.test(l)));
+
+  // 2 · Докрут уже новий, сервер ще старий — саме тут банер «АВАРІЯ» спрацює правильно.
+  const b = abortState("kill", ["base", "ff", "copy", "cssGuard", "markDeploy"], ctx);
+  assert.equal(b.state, "docroot-ahead");
+  assert.ok(b.lines.some((l) => l.includes("7915551")), "🔴 не названо, який sha крутить прод");
+  assert.ok(b.lines.some((l) => /АВАРІЯ/.test(l)), "🔴 не попереджено, що банер спрацює — його приймуть за поломку скрипта");
+  assert.ok(b.lines.some((l) => /markDeploy/.test(l)), "🔴 не сказано про виставлений намір, який сам спливе");
+  assert.ok(b.lines.some((l) => /Щоб відкотити/.test(l)) && b.lines.some((l) => /Щоб завершити/.test(l)),
+    "🔴 у стані з розходженням мусять бути ОБИДВА виходи");
+
+  // 3 · Сервер уже новий, гілка не знає — відкочувати не треба, бракує запису.
+  const c = abortState("pushBranch", ["copy", "markDeploy", "kill", "healthVersion"], ctx);
+  assert.equal(c.state, "server-ahead");
+  assert.ok(c.lines.some((l) => /Відкочувати НЕ треба/.test(l)), "🔴 підштовхує відкочувати справний прод");
+  assert.ok(c.lines.some((l) => l.includes("git push origin HEAD:")), "🔴 немає команди, якою завершити");
+
+  // 4 · 🔴 ТРИ СТАНИ — ТРИ РІЗНІ ВИХОДИ. Однаковий код перетворив би розрізнення на текст.
+  const codes = [a.exitCode, b.exitCode, c.exitCode];
+  assert.equal(new Set(codes).size, 3, `🔴 стани не розрізняються кодом виходу: ${codes.join(", ")}`);
+  assert.ok(codes.every((x) => x !== 0), "🔴 обірваний прогін не сміє віддавати 0");
+});
