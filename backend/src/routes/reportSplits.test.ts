@@ -370,23 +370,75 @@ test("#102 РОЗКЛАД == ЧИСЛУ: нові + постійні + неви�
   assert.ok(split.some((r) => r.klass === "repeat" && r.revenue !== 0), "🔴 жодних грошей від постійних — доданок вироджений");
 });
 
-test("#102b БУДИЛЬНИК: гроші поза «нові/постійні» мусять бути ПОМІЧЕНІ (жива БД)", needsDb(), async () => {
+test("#102b БУДИЛЬНИК: кожна undef-угода має ВІДОМУ НАЗВАНУ ПРИЧИНУ (жива БД)", needsDb(), async () => {
   const money = await import("../core/money.js");
+  const { unexplainedUndef, explainUndefMoney, UNDEF_REASON_LABEL } = await import("../core/undefMoneyReason.js");
   const now = new Date();
   const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const split = await money.receivedByMgrKlass({ from: `${ym}-01`, to: `${ym}-31` });
-  const undef = split.filter((r) => r.klass === "undef");
-  const sum = undef.reduce((s, r) => s + r.revenue, 0), deals = undef.reduce((s, r) => s + r.deals, 0);
-  /**
-   * 🔴 НА ЕКРАНІ ДВІ КОЛОНКИ, А КЛАСІВ ТРИ. Поки третій порожній, «всього == нові +
-   * постійні» — правда. Щойно він оживе, різниця почне мовчки зникати між
-   * колонками, і жоден інший гейт цього не побачить: кожне окреме число
-   * лишатиметься правильним. Тому будильник, а не мовчазне згортання в «постійні».
-   * 📐 Заміряно 20.08.2026: 0 ₴ / 0 угод із 1 492 822 ₴ серпня.
-   */
-  assert.equal(sum, 0,
-    `🔴 ${Math.round(sum)} ₴ у ${deals} угодах не належать ні «новим», ні «постійним» — на екрані `
-    + "їх НЕМАЄ в жодній із двох колонок. Треба або показати третю колонку, або назвати причину.");
+  const scope = { from: `${ym}-01`, to: `${ym}-31` };
+
+  // Контроль осмисленості: каса місяця непорожня, інакше «жодної незрозумілої
+  // угоди» означало б «жодної угоди взагалі» — порожній результат як pass.
+  const split = await money.receivedByMgrKlass(scope);
+  assert.ok(split.reduce((a, r) => a + r.deals, 0) > 0,
+    "🔴 каса місяця порожня — перевіряти нема на чому (це ПРОВАЛ, а не «немає даних»)");
+
+  const rows = await money.receivedUndefDeals(scope);
+  // Σ поіменного списку == Σ агрегату по класу: інакше список пояснює НЕ ту суму.
+  const aggr = split.filter((r) => r.klass === "undef");
+  const aggrSum = aggr.reduce((a, r) => a + r.revenue, 0);
+  const listSum = rows.reduce((a, r) => a + r.revenue, 0);
+  assert.ok(Math.abs(listSum - aggrSum) <= 1 && rows.length === aggr.reduce((a, r) => a + r.deals, 0),
+    `🔴 список undef-угод (${rows.length} шт, ${listSum} ₴) не збігається з агрегатом `
+    + `(${aggr.reduce((a, r) => a + r.deals, 0)} шт, ${aggrSum} ₴) — це два різні означення однієї множини`);
+
+  const bad = unexplainedUndef(rows);
+  assert.deepEqual(bad.map((d) => d.kommoId), [],
+    "🔴 ЗʼЯВИВСЯ НОВИЙ ВИД ГРОШЕЙ ПОЗА «новими»/«постійними», якого ніхто не пояснював:\n  "
+    + bad.map((d) => `угода ${d.kommoId}: ${d.revenue} ₴, ключ «${d.clientKey ?? "—"}», `
+      + `канал «${d.salesChannel ?? "—"}»`).join("\n  ")
+    + "\n  Відомі причини: " + Object.values(UNDEF_REASON_LABEL).join(", ")
+    + ". Нова причина = нове рішення власника, а не мовчазне розширення предиката.");
+
+  // Дзеркало на ЖИВИХ даних: якщо клас непорожній, кожен рядок має НАЗВАНУ причину,
+  // а не просто «не потрапив у bad». Порожній клас — законний стан, тож м'яко.
+  for (const d of rows) {
+    assert.ok(explainUndefMoney(d) !== null, `🔴 угода ${d.kommoId} лишилась без причини`);
+  }
+});
+
+/**
+ * #102c — ЧИСТЕ ДЗЕРКАЛО: ПРЕДИКАТ ПРИЧИНИ НЕ БЕЗЗУБИЙ.
+ *
+ * 🔴 Без нього `#102b` зеленів би й тоді, коли `explainUndefMoney` повертає причину
+ * НА ЩО ЗАВГОДНО — а це рівно те, у що перетворюється будильник, якщо послабити
+ * умову «щоб уже не червонів». Обидві половини предиката перевіряються окремо, бо
+ * послабити можна кожну.
+ *
+ * 🔴 І ЦЕ ЧИСТИЙ ТЕСТ СВІДОМО: на живих даних усі шість угод ПОЯСНЕНІ, тож гілку
+ * «причини немає» проти прода не відтворити. Перевірка, яка не може провалитись
+ * на наявних даних, у прийманні не рахується.
+ *
+ * 🧨 САБОТАЖ (виконано): прибрати з предиката умову про ключ — червоніє на «сторно
+ * з ключем»; прибрати умову про знак — червоніє на «додатна без ключа»; лишити
+ * `() => "storno-no-key"` — червоніє на обох.
+ */
+test("#102c дзеркало: причина дається НЕ на що завгодно", async () => {
+  const { explainUndefMoney, unexplainedUndef } = await import("../core/undefMoneyReason.js");
+  const K = (kommoId: number, revenue: number, clientKey: string | null) => ({ kommoId, revenue, clientKey });
+
+  // Відомий вид — причина Є.
+  assert.equal(explainUndefMoney(K(1, -3164, null)), "storno-no-key");
+  assert.equal(explainUndefMoney(K(2, -1284, "   ")), "storno-no-key", "порожній ключ із пробілів — теж «немає ключа»");
+
+  // 🔴 ДОДАТНА сума без ключа — це НЕ сторно, причини немає.
+  assert.equal(explainUndefMoney(K(3, 5000, null)), null);
+  // 🔴 Відʼємна сума З ключем — звичайне сторно, воно має клас і сюди не потрапляє.
+  assert.equal(explainUndefMoney(K(4, -5000, "вкавтострада")), null);
+  assert.equal(explainUndefMoney(K(5, 0, null)), null, "нуль — не відʼємна сума");
+
+  assert.deepEqual(unexplainedUndef([K(1, -3164, null), K(3, 5000, null), K(4, -5000, "ключ")]).map((d) => d.kommoId),
+    [3, 4], "🔴 предикат не відсіює саме ті два види, заради яких будильник існує");
 });
 
 test("#103 ОЧІКУВАННЯ: нові + постійні == «Очікує (дата)», і ділиться саме воно (жива БД)", needsDb(), async () => {
