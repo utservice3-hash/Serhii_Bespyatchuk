@@ -32,8 +32,17 @@ const src = (rel: string): string => {
 };
 
 const KY = "AT TIME ZONE 'Europe/Kyiv'";
-const MONEY = [69716460, 60412544, 142];
-const FC = [8921932, 155304];
+
+/**
+ * 🔴 `MONEY_ZONE`/`FC_PIPELINES` БЕРУТЬСЯ З ЯДРА, А НЕ ПЕРЕПИСУЮТЬСЯ СЮДИ.
+ *
+ * Перша редакція зашила `[69716460, 60412544, 142]` — і гейт червонів на ЧИСТОМУ
+ * коді, бо справжня `MONEY_ZONE` = `[...EXPECT_ZONE, 69716460, 60412544, 142]`,
+ * тобто ширша. Це те саме «друге означення», через яке гейт і переписувався на
+ * виклик ядра: я прибрав копію SQL і тут-таки завів копію КОНСТАНТИ. Імпорт
+ * лінивий (усередині тесту) — `metrics.js` тягне `config.js`, який без
+ * `DATABASE_URL` кидає ще НА ІМПОРТІ, тобто раніше, ніж спрацює `skip`.
+ */
 
 /** Хвіст когортного запиту — БАЙТ-У-БАЙТ той самий для обох джерел, різниться лише `entered`. */
 const TAIL = `,
@@ -88,11 +97,11 @@ const ENT_REGISTRY = `entered AS (
  */
 test("#214c когортні передачі: слід дає ТІ САМІ числа, що реєстр (жива БД)", needsDb(), async () => {
   const { pool } = await import("../db/pool.js");
-  const { conversionTransferredByMonth } = await import("./metrics.js");
+  const { conversionTransferredByMonth, MONEY_ZONE, FC_PIPELINES } = await import("./metrics.js");
 
   const live = await conversionTransferredByMonth({});
   const reg = (await pool.query<{ ym: string; entered: number; won_ev: number; won_in: number }>(
-    `WITH ${ENT_REGISTRY}${TAIL}`, [MONEY, FC])).rows;
+    `WITH ${ENT_REGISTRY}${TAIL}`, [MONEY_ZONE, FC_PIPELINES])).rows;
 
   assert.equal(live.length, reg.length,
     `🔴 ядро віддало ${live.length} місяців, еталон ${reg.length} — порівнюються різні горизонти`);
