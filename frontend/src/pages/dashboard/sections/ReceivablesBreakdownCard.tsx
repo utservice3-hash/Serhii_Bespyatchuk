@@ -51,7 +51,7 @@ export function ReceivablesBreakdownCard({
     >
       <span className="kpi-label">{label}{hint && <InfoHint text={hint} />}</span>
       <span className="kpi-value" style={{ color: "#dc2626" }}>{value}</span>
-      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{open ? "згорнути ▲" : "показати борги ▼"}</span>
+      <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>{open ? "згорнути ▲" : "показати борги ▼"}</span>
 
       {open && (
         <div
@@ -70,16 +70,16 @@ export function ReceivablesBreakdownCard({
           ) : (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid var(--border)" }}>
-                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{clients.length} компаній{overdueCount > 0 ? ` · ${overdueCount} прострочено` : ""}</span>
+                <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>{clients.length} компаній{overdueCount > 0 ? ` · ${overdueCount} прострочено` : ""}</span>
                 <span style={{ fontWeight: 800, color: "#dc2626" }}>{formatAmount(total)}</span>
               </div>
               {clients.map((c) => {
                 const overdue = (c.overdueDays ?? 0) > 0;
                 return (
-                  <div key={c.clientKey} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13, padding: "3px 0" }}>
+                  <div key={c.clientKey} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: "var(--fs-13)", padding: "3px 0" }}>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.clientName}>
                       {overdue && <span title={`Прострочено ${c.overdueDays} дн.`}>🔴 </span>}{c.clientName}
-                      {overdue && <span style={{ color: "#dc2626", fontSize: 11 }}> · {c.overdueDays} дн.</span>}
+                      {overdue && <span style={{ color: "#dc2626", fontSize: "var(--fs-xs)" }}> · {c.overdueDays} дн.</span>}
                     </span>
                     <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{formatAmount(c.amount)}</span>
                   </div>

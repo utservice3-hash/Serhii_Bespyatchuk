@@ -45,7 +45,7 @@ function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
     return (
       <span>
         <span style={{ color: "var(--warn)", fontWeight: 600 }}>без відповідального</span>
-        <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>{why}</span>
+        <span style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>{why}</span>
       </span>
     );
   }
@@ -63,7 +63,7 @@ function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
     return (
       <span title="Адмін свідомо зняв відповідального; авто-правило вимкнене">
         <span style={{ fontWeight: 600 }}>📌 нікого — свідомо</span>
-        <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>
+        <span style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
           рішення адміна, авто-правило вимкнене
         </span>
       </span>
@@ -82,7 +82,7 @@ function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
       {mark.icon && <span style={{ marginRight: 4 }}>{mark.icon}</span>}
       {c.managerName}
       {c.ownerSource !== "auto-majority" && (
-        <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>{mark.hint}</span>
+        <span style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>{mark.hint}</span>
       )}
     </span>
   );
@@ -110,7 +110,7 @@ function CarrierCell({ facts }: { facts: ReceivableClient["facts"] }) {
     <span>
       <span style={{ display: "flex", gap: 8, whiteSpace: "nowrap" }}>{parts.length ? parts : "—"}</span>
       {facts.carrierReasons.length > 0 && (
-        <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>
+        <span style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
           {facts.carrierReasons.map((r) => CARRIER_REASON_LABEL[r]).join(" · ")}
         </span>
       )}
@@ -119,7 +119,7 @@ function CarrierCell({ facts }: { facts: ReceivableClient["facts"] }) {
 }
 
 const inputStyle: React.CSSProperties = {
-  font: "inherit", fontSize: 12, padding: "3px 6px", borderRadius: 6,
+  font: "inherit", fontSize: "var(--fs-sm)", padding: "3px 6px", borderRadius: 6,
   border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
 };
 
@@ -226,8 +226,8 @@ export function ReceivablesSection({
                   який найстаріший. Без неї людина бачила перші пʼять рядків і не
                   знала, скільки їх усього — а їх буває сорок. */}
               <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, margin: "0 0 8px" }}>
-                <b style={{ fontSize: 13 }}>Рахунки клієнта</b>
-                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                <b style={{ fontSize: "var(--fs-13)" }}>Рахунки клієнта</b>
+                <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
                   {inv.length} шт · {formatAmount(inv.reduce((a, x) => a + x.amount, 0))}
                   {(() => {
                     const ages = inv.map((x) => x.invoiceDate).filter((d): d is string => !!d);
@@ -238,7 +238,7 @@ export function ReceivablesSection({
                   })()}
                 </span>
               </div>
-              <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 6px" }}>
+              <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: "0 0 6px" }}>
                 📅 Постав <b>дедлайн оплати по рахунку</b> — якщо мине, а оплата не надійде, менеджеру автоматично створиться задача «отримати оплату».
                 {" "}Це <i>інший</i> рівень, ніж «обіцяна дата» у рядку клієнта: там домовленість <b>з клієнтом</b> загалом, тут — строк по <b>конкретному рахунку</b>.
               </p>
@@ -247,13 +247,13 @@ export function ReceivablesSection({
                    зникнення другої компанії: на екрані один рядок, а юросіб дві.
                    Колонка «Юрособа» показується ЛИШЕ тут — у звичайного клієнта
                    вона повторювала б його ж назву в кожному рядку. */
-                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 8px" }}>
+                <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: "0 0 8px" }}>
                   🔗 Обʼєднаний клієнт — усередині {entities.length} юрособи:{" "}
                   <b style={{ color: "var(--text)" }}>{entities.join(" · ")}</b>
                 </p>
               )}
               <div className="recv-detail">
-              <table className="data-table compact" style={{ fontSize: 12, minWidth: 680 }}>
+              <table className="data-table compact" style={{ fontSize: "var(--fs-sm)", minWidth: 680 }}>
                 <thead>
                   <tr>
                     {merged && <th style={{ textAlign: "left" }} title="Юрособа КЛІЄНТА — видно лише в обʼєднаного">Клієнт</th>}
@@ -279,13 +279,13 @@ export function ReceivablesSection({
                     return (
                       <tr key={i}>
                         {merged && (
-                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 11.5 }}>
+                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "var(--fs-sm)" }}>
                             {x.entityName ?? "—"}
                           </td>
                         )}
                         <td style={{ textAlign: "left", fontWeight: 600 }}>{x.invoiceNo ?? "—"}</td>
                         <td>{x.invoiceDate ? new Date(x.invoiceDate).toLocaleDateString("uk-UA") : "—"}</td>
-                        <td style={{ textAlign: "left", fontSize: 11.5 }}>
+                        <td style={{ textAlign: "left", fontSize: "var(--fs-sm)" }}>
                           {x.ourEntity && x.ourEntity !== "unknown" ? (
                             <span style={{ color: "var(--text)" }}>{ENTITY_LABEL[x.ourEntity]}</span>
                           ) : (
@@ -296,7 +296,7 @@ export function ReceivablesSection({
                             <span style={{ color: "var(--text-muted)" }}>
                               невідомо
                               {x.ourEntityReason && (
-                                <span style={{ display: "block", fontSize: 10 }}>
+                                <span style={{ display: "block", fontSize: "var(--fs-xs)" }}>
                                   {ENTITY_REASON_LABEL[x.ourEntityReason]}
                                 </span>
                               )}
@@ -308,7 +308,7 @@ export function ReceivablesSection({
                             випадку ми НЕ ЗНАЄМО. Заміряно 25.08.2026 — злиття
                             додало б 1 604 500 ₴ вигаданої неоплати. Тому «н/д»
                             малюється сірим і з причиною під ним. */}
-                        <td style={{ textAlign: "left", fontSize: 11.5 }}>
+                        <td style={{ textAlign: "left", fontSize: "var(--fs-sm)" }}>
                           {(() => {
                             const cc = carrierCell(x.carrierPaid, x.carrierReason, x.carrierPayAmount);
                             const color = cc.tone === "paid" ? "#16a34a"
@@ -325,7 +325,7 @@ export function ReceivablesSection({
                                 {cc.amountText && (
                                   <span style={{ color: "var(--text-muted)" }}> · {cc.amountText}</span>
                                 )}
-                                {cc.why && <span style={{ display: "block", fontSize: 10 }}>{cc.why}</span>}
+                                {cc.why && <span style={{ display: "block", fontSize: "var(--fs-xs)" }}>{cc.why}</span>}
                               </span>
                             );
                           })()}
@@ -340,7 +340,7 @@ export function ReceivablesSection({
                             style={{ ...inputStyle, ...(overdue ? { borderColor: "#dc2626", color: "#dc2626", fontWeight: 700 } : {}) }}
                             title={overdue ? "Дедлайн минув — менеджеру створено задачу отримати оплату" : "Дедлайн оплати рахунку"}
                           />
-                          {overdue && <span style={{ color: "#dc2626", fontSize: 10, display: "block" }}>прострочено</span>}
+                          {overdue && <span style={{ color: "#dc2626", fontSize: "var(--fs-xs)", display: "block" }}>прострочено</span>}
                         </td>
                         <td style={{ textAlign: "left", verticalAlign: "top", minWidth: 200 }}>
                           <CommentField
@@ -357,7 +357,7 @@ export function ReceivablesSection({
                           {x.serviceUrl && x.dealFound ? (
                             <a href={x.serviceUrl} target="_blank" rel="noreferrer" title="Відкрити угоду в Kommo">🔗 угода</a>
                           ) : (
-                            <span style={{ color: "var(--text-muted)", fontSize: 10.5 }}
+                            <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}
                               title={x.dealId == null ? "рахунок виставлено через 1С — угоди в Kommo немає"
                                                       : "лінк веде на угоду, якої немає в базі"}>
                               {x.dealId == null ? "угоди немає" : "лінк битий"}
@@ -383,7 +383,7 @@ export function ReceivablesSection({
                         про перевізника). Підписати сумою рахунків «заплачено
                         перевізникам N ₴» означало б назвати БОРГ КЛІЄНТА нашою
                         виплатою — дві різні величини під одним підписом. */}
-                    <td style={{ textAlign: "left", fontSize: 11, color: "var(--text-muted)" }}>
+                    <td style={{ textAlign: "left", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
                       оплачених: {inv.filter((x) => x.carrierPaid === "paid").length} з {inv.length}
                     </td>
                     <td style={{ textAlign: "right", fontWeight: 700 }}>{formatAmount(inv.reduce((s, x) => s + x.amount, 0))}</td>
@@ -449,12 +449,12 @@ export function ReceivablesSection({
           )}
           {canEditReceivables && (
             <button onClick={refreshFromSheet} disabled={syncing} title="Перечитати дебіторку прямо з 1С — оплачені рахунки зникнуть одразу"
-              style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: syncing ? "default" : "pointer", fontWeight: 600, fontSize: 13 }}>
+              style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: syncing ? "default" : "pointer", fontWeight: 600, fontSize: "var(--fs-13)" }}>
               {syncing ? "Оновлення…" : "🔄 Оновити з 1С"}
             </button>
           )}
           {receivablesSyncedAt && (
-            <span className="loading-text" style={{ fontSize: 12 }}>
+            <span className="loading-text" style={{ fontSize: "var(--fs-sm)" }}>
               Оновлено: {new Date(receivablesSyncedAt).toLocaleString("uk-UA")}
             </span>
           )}
@@ -479,7 +479,7 @@ export function ReceivablesSection({
 
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ marginBottom: 4 }}>Боржники ({all.length})</h2>
-            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 10px" }}>
+            <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: "0 0 10px" }}>
               Клік по клієнту — неоплачені рахунки з дедлайном і коментарем до кожного. Червоні дні — прострочка понад ліміт.
             </p>
             <ReceivablesFilters filters={filters} setFilters={setFilters} shown={shown.length} totalRows={all.length} />
@@ -488,24 +488,39 @@ export function ReceivablesSection({
             {canMerge && (
               <button onClick={() => setMergeOpen(true)}
                 title="Дві юрособи виявились одним клієнтом — обʼєднати в один рядок"
-                style={{ font: "inherit", fontSize: 12.5, fontWeight: 600, padding: "5px 12px",
+                style={{ font: "inherit", fontSize: "var(--fs-13)", fontWeight: 600, padding: "5px 12px",
                          borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)",
                          color: "var(--text)", cursor: "pointer", marginBottom: 12 }}>
                 🔗 Обʼєднати клієнтів
               </button>
             )}
             <div style={{ overflowX: "auto" }}>
-              <table className="data-table">
+              <table className="data-table recv-table">
                 <thead>
                   <tr>
+                    {/* 📐 ШИРИНИ ЗАМІРЯНІ, А НЕ ПІДІБРАНІ (25.08.2026, живий прод).
+                        Було: Клієнт 396px · Домовленість 220 · Відповідальний 163 —
+                        а Сума боргу 85 · Днів 66 · Ліміт 67. Найширше віддано тексту,
+                        найвужче — числам, заради яких екран існує.
+
+                        🔴 І ТА САМА ВУЗЬКІСТЬ ЛАМАЛА ЧИПИ: «Юрособа» (95px) і
+                        «Перевізник» (117px) уже мали `flex-wrap`, тож кожен чип
+                        переносився на власний рядок — 5 візуальних рядків у ПВК
+                        АРСЕНАЛ. Це не дві проблеми, а одна: колонкам бракує місця. */}
                     <th style={{ textAlign: "center", width: 36 }}>#</th>
-                    <th style={{ textAlign: "left" }}>Клієнт</th>
-                    <th style={{ textAlign: "left" }}>Відповідальний</th>
-                    <th style={{ textAlign: "left" }} title="Наша юрособа, від якої виставлено рахунок — з «форми оплати» Kommo">Юрособа</th>
-                    <th style={{ textAlign: "left" }} title="Чи оплачено перевізника по угоді рахунку. «н/д» = не знаємо, а НЕ «не оплачено»">Перевізник</th>
-                    <th style={{ textAlign: "right", whiteSpace: "nowrap" }}>Сума боргу</th>
-                    <th style={{ textAlign: "center" }}>Днів без оплати</th>
-                    <th style={{ textAlign: "center" }}>Ліміт</th>
+                    <th style={{ textAlign: "left", width: 300 }}>Клієнт</th>
+                    <th style={{ textAlign: "left", width: 150 }}>Відповідальний</th>
+                    <th style={{ textAlign: "left", width: 140 }} title="Наша юрособа, від якої виставлено рахунок — з «форми оплати» Kommo">Юрособа</th>
+                    <th style={{ textAlign: "left", width: 165 }} title="Чи оплачено перевізника по угоді рахунку. «н/д» = не знаємо, а НЕ «не оплачено»">Перевізник</th>
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 110 }}>Сума боргу</th>
+                    <th style={{ textAlign: "center", width: 84 }}>Днів без оплати</th>
+                    {/* 🔴 ШИРИНА ТУТ — ЦЕ І Є ВЕСЬ ВИГРАШ ВИСОТИ, а не косметика.
+                        Перший захід зробив кнопку інлайновою, але лишив колонку
+                        63px — і «14 дн. ✏️» усе одно переносилось. Замір після
+                        того заходу: медіана 73px замість 48, «Ліміт» досі тримав
+                        висоту в 66 рядках із 76. Тобто інлайн без ширини не
+                        робить нічого. */}
+                    <th style={{ textAlign: "center", width: 104 }}>Ліміт</th>
                     {/* 🔴 ДВА РІВНІ ПОЛІВ РОЗВЕДЕНО ПІДПИСАМИ (Е4b).
                         Тут — домовленість із КЛІЄНТОМ загалом; у розкритті —
                         дедлайн і коментар по КОНКРЕТНОМУ рахунку. Раніше обидві
@@ -515,7 +530,7 @@ export function ReceivablesSection({
                     <th style={{ textAlign: "center" }} title="Коли клієнт пообіцяв заплатити — домовленість із ним загалом">
                       Обіцяна дата
                     </th>
-                    <th style={{ textAlign: "left" }} title="Домовленість із клієнтом. Строк по конкретному рахунку — у розкритті">
+                    <th style={{ textAlign: "left", width: 180 }} title="Домовленість із клієнтом. Строк по конкретному рахунку — у розкритті">
                       Домовленість з клієнтом
                     </th>
                   </tr>
@@ -564,29 +579,40 @@ export function ReceivablesSection({
                                 випадок, заради якого категорію й заводили. */}
                             {badges.map((b) => (
                               <span key={b.icon} title={b.hint}
-                                style={{ display: "block", fontSize: 11, marginTop: 2,
+                                style={{ display: "block", fontSize: "var(--fs-xs)", marginTop: 2,
                                          color: b.tone === "warn" ? "var(--warn)" : "var(--text-muted)" }}>
                                 {b.icon} {b.text}
                               </span>
                             ))}
                           </td>
-                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12, verticalAlign: "top", position: "relative" }}>
+                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "var(--fs-sm)", verticalAlign: "top", position: "relative" }}>
                             <OwnerCell c={c} />
                             {/* 🔴 ГОТІВКОВИЙ РЯДОК КОНТРОЛА НЕ ДІСТАЄ, і це не забудькуватість.
                                 `PUT /receivables/owner` віддає 404 на `source='cash'`: ці рядки CRM
                                 перебудовує щосинку, тож ручне призначення відкотилось би саме.
                                 Пропонувати дію, яка ГАРАНТОВАНО впаде, гірше, ніж її не мати. */}
                             {canSetOwner && (c.ownerSource === "cash-invoice" ? (
-                              <span style={{ display: "block", fontSize: 10.5, color: "var(--text-muted)", marginTop: 2 }}>
+                              /* 🔴 ПОЯСНЕННЯ, А НЕ ЗАГАДКА. У проході 2 я був скоротив це до
+                                 «(з CRM)» заради висоти — і `#163` справедливо почервонів:
+                                 його предмет саме в тому, що людина має дізнатись ПРИЧИНУ
+                                 відсутності дії. Висоту тут економити нема на чому: гілка
+                                 стосується готівкових рядків, а їх сьогодні один. */
+                              <span title="Готівковий рядок CRM перебудовує щосинку — ручне призначення відкотилось би саме"
+                                style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", marginLeft: 6 }}>
                                 ✏️ змінюється в CRM, не тут
                               </span>
                             ) : (
+                              /* 🔴 В ТОМУ САМОМУ РЯДКУ, А НЕ ПІД ІМЕНЕМ. Заміряно на
+                                 живому проді: другий рядок тут і в «Ліміті» тримав
+                                 висоту в 66 рядках із 73, і саме його зняття дає
+                                 72 → 48px (−24% таблиці). Чипи, які виглядали
+                                 головною причиною, дають нуль. */
                               <button onClick={() => setOwnerFor(ownerFor === c.clientKey ? null : c.clientKey)}
-                                title="Змінити відповідального за борг"
-                                style={{ display: "block", border: "none", background: "none", cursor: "pointer",
-                                         padding: 0, marginTop: 3, fontSize: 11.5, color: "var(--text-muted)",
+                                title="Змінити відповідального за борг" aria-label="Змінити відповідального за борг"
+                                style={{ border: "none", background: "none", cursor: "pointer",
+                                         padding: 0, marginLeft: 6, fontSize: "var(--fs-sm)", color: "var(--text-muted)",
                                          textDecoration: "underline dotted" }}>
-                                ✏️ змінити
+                                ✏️
                               </button>
                             ))}
                             {ownerFor === c.clientKey && (
@@ -598,7 +624,7 @@ export function ReceivablesSection({
                                 onDone={() => { setOwnerFor(null); onRefresh?.(); }} />
                             )}
                           </td>
-                          <td style={{ textAlign: "left", verticalAlign: "top", fontSize: 12 }}>
+                          <td style={{ textAlign: "left", verticalAlign: "top", fontSize: "var(--fs-sm)" }}>
                             {ent ? (
                               <span title={ent.hint} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 {ent.rows.map((r) => (
@@ -609,7 +635,7 @@ export function ReceivablesSection({
                               </span>
                             ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
                           </td>
-                          <td style={{ textAlign: "left", verticalAlign: "top", fontSize: 12 }}>
+                          <td style={{ textAlign: "left", verticalAlign: "top", fontSize: "var(--fs-sm)" }}>
                             <CarrierCell facts={c.facts} />
                           </td>
                           <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top", whiteSpace: "nowrap" }} title={formatAmountFull(c.amount)}>{formatAmount(c.amount)}</td>
@@ -617,7 +643,7 @@ export function ReceivablesSection({
                             {c.overdueDays ?? "—"}
                             {isAncientDebt(c.overdueDays) && (
                               <span title="рахунок старший за рік — це факт, а не збій розрахунку"
-                                    style={{ display: "block", fontSize: 10, fontWeight: 400, color: "var(--text-muted)" }}>
+                                    style={{ display: "block", fontSize: "var(--fs-xs)", fontWeight: 400, color: "var(--text-muted)" }}>
                                 🕰 старий рахунок
                               </span>
                             )}
@@ -625,15 +651,15 @@ export function ReceivablesSection({
                           <td title={limitHint(c.limitDays)}
                               style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-muted)" : "var(--warn)",
                                        textAlign: "center", verticalAlign: "top", position: "relative",
-                                       fontSize: limitState(c.limitDays) === "agreed" ? undefined : 11 }}>
+                                       fontSize: limitState(c.limitDays) === "agreed" ? undefined : "var(--fs-xs)" }}>
                             {limitLabel(c.limitDays)}
                             {canSetLimit && (
                               <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
-                                title="Змінити узгоджену відстрочку"
-                                style={{ display: "block", border: "none", background: "none", cursor: "pointer",
-                                         padding: 0, marginTop: 3, fontSize: 11, color: "var(--text-muted)",
-                                         textDecoration: "underline dotted", width: "100%" }}>
-                                ✏️ змінити
+                                title="Змінити узгоджену відстрочку" aria-label="Змінити узгоджену відстрочку"
+                                style={{ border: "none", background: "none", cursor: "pointer",
+                                         padding: 0, marginLeft: 4, fontSize: "var(--fs-sm)", color: "var(--text-muted)",
+                                         textDecoration: "underline dotted" }}>
+                                ✏️
                               </button>
                             )}
                             {limitFor === c.clientKey && (
@@ -678,14 +704,14 @@ export function ReceivablesSection({
                 рядка не було — сума на екрані не сходилась би з плиткою, і це
                 читалось би як поломка. */}
             {shown.length !== all.length && (
-              <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "10px 0 0" }}>
+              <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: "10px 0 0" }}>
                 Видимих рядків: <b style={{ color: "var(--text)" }}>{shown.length}</b> із {all.length} ·
                 сума видимих <b style={{ color: "var(--text)" }} title={formatAmountFull(shownSum)}>{formatAmount(shownSum)}</b> із {formatAmount(total)}.
                 Плитки вгорі показують УСЮ дебіторку у скоупі й за фільтром не змінюються.
               </p>
             )}
             {shown.length === 0 && (
-              <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "12px 0 0" }}>
+              <p style={{ fontSize: "var(--fs-13)", color: "var(--text-muted)", margin: "12px 0 0" }}>
                 Під цими фільтрами боржників немає — але в скоупі їх {all.length}. Зніміть фільтр, щоб побачити всіх.
               </p>
             )}

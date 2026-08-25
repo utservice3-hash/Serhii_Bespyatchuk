@@ -24,7 +24,7 @@ const TABS: { key: Tab; label: string; hint: string }[] = [
   { key: "aged", label: "Старші за 90 днів", hint: "Має хоча б один рахунок віком понад 90 днів" },
 ];
 
-const sel: React.CSSProperties = { font: "inherit", fontSize: 12.5, padding: "4px 8px", borderRadius: 8 };
+const sel: React.CSSProperties = { font: "inherit", fontSize: "var(--fs-13)", padding: "4px 8px", borderRadius: 8 };
 
 export function ReceivablesFilters({ filters, setFilters, shown, totalRows }: {
   filters: Filters;
@@ -39,7 +39,7 @@ export function ReceivablesFilters({ filters, setFilters, shown, totalRows }: {
         {TABS.map((tb) => (
           <button key={tb.key} onClick={() => set("tab", tb.key)} title={tb.hint}
             style={{
-              font: "inherit", fontSize: 12.5, fontWeight: filters.tab === tb.key ? 700 : 500,
+              font: "inherit", fontSize: "var(--fs-13)", fontWeight: filters.tab === tb.key ? 700 : 500,
               padding: "5px 12px", borderRadius: 8, border: "none", cursor: "pointer",
               background: filters.tab === tb.key ? "var(--card-bg)" : "transparent",
               color: filters.tab === tb.key ? "var(--text)" : "var(--text-muted)",
@@ -78,13 +78,13 @@ export function ReceivablesFilters({ filters, setFilters, shown, totalRows }: {
       {hasActiveFilters(filters) && (
         <>
           <button onClick={() => setFilters(EMPTY_FILTERS)}
-            style={{ font: "inherit", fontSize: 12.5, padding: "4px 10px", borderRadius: 8, cursor: "pointer",
+            style={{ font: "inherit", fontSize: "var(--fs-13)", padding: "4px 10px", borderRadius: 8, cursor: "pointer",
                      border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
             ✕ скинути
           </button>
           {/* Скільки сховали — числом. «Показано 12» без «із 72» читається як
               «боржників дванадцять», тобто фільтр мовчки бреше про масштаб. */}
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
             показано <b style={{ color: "var(--text)" }}>{shown}</b> із {totalRows}
           </span>
         </>

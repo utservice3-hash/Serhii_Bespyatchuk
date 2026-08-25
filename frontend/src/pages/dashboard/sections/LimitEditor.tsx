@@ -59,7 +59,7 @@ export function LimitEditor({ client, onDone, onClose }: {
         boxShadow: "0 8px 24px rgba(0,0,0,0.18)", textAlign: "left" };
 
   const btn = (bg: string): React.CSSProperties => ({
-    font: "inherit", fontSize: 12.5, fontWeight: 600, padding: "6px 10px", borderRadius: 8,
+    font: "inherit", fontSize: "var(--fs-13)", fontWeight: 600, padding: "6px 10px", borderRadius: 8,
     border: "1px solid var(--border)", background: bg, color: "var(--text)",
     cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
   });
@@ -70,33 +70,33 @@ export function LimitEditor({ client, onDone, onClose }: {
         <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 59, background: "rgba(0,0,0,0.45)" }} />
       )}
       <div style={box}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2 }}>Узгоджена відстрочка</div>
-        <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 8 }}>
+        <div style={{ fontSize: "var(--fs-13)", fontWeight: 700, marginBottom: 2 }}>Узгоджена відстрочка</div>
+        <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 8 }}>
           Зараз: <b>{limitLabel(client.limitDays)}</b>
           <div style={{ marginTop: 2 }}>{limitHint(client.limitDays)}</div>
         </div>
 
-        <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 3 }}>
+        <label style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
           Днів відстрочки від дати рахунку
         </label>
         <input value={days} onChange={(e) => setDays(e.target.value)} inputMode="numeric"
           placeholder="напр. 14"
-          style={{ font: "inherit", fontSize: 13, padding: "5px 8px", borderRadius: 8, width: "100%",
+          style={{ font: "inherit", fontSize: "var(--fs-13)", padding: "5px 8px", borderRadius: 8, width: "100%",
                    border: "1px solid var(--border)", background: "var(--input-bg)",
                    color: "var(--text)", marginBottom: 8 }} />
 
         <textarea value={note} onChange={(e) => setNote(e.target.value.slice(0, 300))}
           placeholder="Чому саме так?"
-          style={{ font: "inherit", fontSize: 12, padding: "6px 8px", borderRadius: 8, width: "100%",
+          style={{ font: "inherit", fontSize: "var(--fs-sm)", padding: "6px 8px", borderRadius: 8, width: "100%",
                    minHeight: 46, resize: "vertical", border: "1px solid var(--border)",
                    background: "var(--input-bg)", color: "var(--text)", marginBottom: 4 }} />
-        <div style={{ fontSize: 10.5, color: noteOk ? "var(--text-muted)" : "var(--warn)",
+        <div style={{ fontSize: "var(--fs-xs)", color: noteOk ? "var(--text-muted)" : "var(--warn)",
                       marginBottom: 8, lineHeight: 1.4 }}>
           {noteOk ? `${note.trim().length}/300`
                   : "Обовʼязково: через місяць ліміт без причини не відрізнити від помилки"}
         </div>
 
-        {err && <div style={{ fontSize: 11, color: "var(--danger)", marginBottom: 6 }}>{err}</div>}
+        {err && <div style={{ fontSize: "var(--fs-xs)", color: "var(--danger)", marginBottom: 6 }}>{err}</div>}
 
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <button disabled={busy || !noteOk || !daysOk} style={btn("var(--accent-soft)")}
@@ -117,7 +117,7 @@ export function LimitEditor({ client, onDone, onClose }: {
             чого немає (урок Е3: «зняти призначення» без призначення). */}
         {state !== "never-set" && (
           <button disabled={busy} style={{ ...btn("transparent"), border: "none", marginTop: 6,
-                                           color: "var(--text-muted)", fontSize: 11.5 }}
+                                           color: "var(--text-muted)", fontSize: "var(--fs-sm)" }}
             title="Повернути стан «ліміт не встановлювали»"
             onClick={() => run(async () => { await clearReceivableLimit(client.clientKey); })}>
             Прибрати ліміт зовсім

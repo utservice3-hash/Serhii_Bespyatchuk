@@ -30,7 +30,7 @@ const Bar = ({ parts }: { parts: { label: string; value: number; color: string; 
 };
 
 const Legend = ({ items }: { items: { label: string; text: string; color?: string }[] }) => (
-  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5 }}>
+  <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5 }}>
     {items.map((i) => (
       <div key={i.label}>
         {i.color && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: i.color, marginRight: 5 }} />}
@@ -73,7 +73,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
       <div className="kpi-card">
         <span className="kpi-label">Загальний борг</span>
         <span className="kpi-value" title={formatAmountFull(debtTotal)}>{formatAmount(debtTotal)}</span>
-        {totals && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{totals.invoices} рахунків · {clientCount} боржників</span>}
+        {totals && <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>{totals.invoices} рахунків · {clientCount} боржників</span>}
         {/* 🔴 ПЛИТКА БІЛЬШЕ НЕ ПОРОЖНЯ. Дві перші були білими плямами на початку
             екрана, поки три сусідні несли розклад — читалось як «тут нема чого
             показати». Розклад той самий, що й у сусідів, і з ТОГО САМОГО виразу
@@ -98,7 +98,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
             за ним інша. Що саме входить — каже розклад під числом. */}
         <span className="kpi-label">Прострочено</span>
         <span className="kpi-value" style={{ color: overdueCount ? "#dc2626" : "#16a34a" }}>{overdueCount}</span>
-        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+        <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
           {overdueCount ? formatAmount(overdueSum) : "усе в межах ліміту"}
         </span>
         {/* 🔴 ДВІ ПРИЧИНИ ПІД ОДНИМ ЧИСЛОМ. «Понад термін» — класична прострочка;
@@ -138,7 +138,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
             { label: "н/д (не знаємо)", text: `${formatAmount(carrier.na.amount)} · ${carrier.na.n} рах.`, color: C.na },
           ]} />
           {naWhy.length > 0 && (
-            <span style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 4, display: "block" }}>
+            <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 4, display: "block" }}>
               н/д тому, що: {naWhy.map((x) => `${CARRIER_REASON_LABEL[x.k]} — ${x.n}`).join(" · ")}
             </span>
           )}
@@ -151,7 +151,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
           <span className="kpi-value" style={{ color: t(totals.aging["90+"]).n ? "#dc2626" : "var(--text)" }}>
             {t(totals.aging["90+"]).n ? formatAmount(t(totals.aging["90+"]).amount) : "—"}
           </span>
-          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>понад 90 днів</span>
+          <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>понад 90 днів</span>
           <Bar parts={AGING_ORDER.map((k, i) => ({
             label: k, value: t(totals.aging[k]).amount, color: [C.a0, C.a1, C.a2, C.a3][i],
             hint: `${AGING_LABEL[k]} · ${t(totals.aging[k]).n} рах. · ${formatAmount(t(totals.aging[k]).amount)}`,
@@ -167,7 +167,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
         <div className="kpi-card">
           <span className="kpi-label">За нашою юрособою</span>
           <span className="kpi-value" title={formatAmountFull(t(totals.entity.uts).amount)}>{formatAmount(t(totals.entity.uts).amount)}</span>
-          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>ЮТС · найбільша частка</span>
+          <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>ЮТС · найбільша частка</span>
           <Bar parts={(["uts", "avtomuv", "fop", "unknown"] as const).map((k) => ({
             label: k, value: t(totals.entity[k]).amount, color: C[k],
             hint: `${ENTITY_LABEL[k]} · ${t(totals.entity[k]).n} рах. · ${formatAmount(t(totals.entity[k]).amount)}`,
@@ -176,14 +176,14 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
             label: ENTITY_LABEL[k], text: `${formatAmount(t(totals.entity[k]).amount)} · ${t(totals.entity[k]).n}`, color: C[k],
           }))} />
           {entWhy.length > 0 && (
-            <span style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 4, display: "block" }}>
+            <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 4, display: "block" }}>
               невідомо тому, що: {entWhy.map((x) => `${ENTITY_REASON_LABEL[x.k]} — ${x.n}`).join(" · ")}
             </span>
           )}
           {totals.pipelinesOutOfMap.length > 0 && (
             /* 🔴 НАЗИВАЄМО воронку, а не ховаємо рахунок (рішення власника). Сховати
                означало б, що гроші зникли з екрана без жодного сліду. */
-            <span style={{ fontSize: 10.5, color: "var(--warn)", marginTop: 4, display: "block" }}>
+            <span style={{ fontSize: "var(--fs-xs)", color: "var(--warn)", marginTop: 4, display: "block" }}>
               ⚠️ воронка поза мапою етапів: {totals.pipelinesOutOfMap.join(", ")}
             </span>
           )}

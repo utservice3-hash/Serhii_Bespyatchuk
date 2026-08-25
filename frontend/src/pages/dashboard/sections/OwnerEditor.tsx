@@ -80,7 +80,7 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
         boxShadow: "0 8px 24px rgba(0,0,0,0.18)", textAlign: "left",
       };
   const btn = (bg: string): React.CSSProperties => ({
-    font: "inherit", fontSize: 12.5, fontWeight: 600, padding: "6px 10px", borderRadius: 8,
+    font: "inherit", fontSize: "var(--fs-13)", fontWeight: 600, padding: "6px 10px", borderRadius: 8,
     border: "1px solid var(--border)", background: bg, color: "var(--text)",
     cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
   });
@@ -92,10 +92,10 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
           background: "rgba(0,0,0,0.45)" }} />
       )}
     <div style={box}>
-      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2 }}>Відповідальний за борг</div>
+      <div style={{ fontSize: "var(--fs-13)", fontWeight: 700, marginBottom: 2 }}>Відповідальний за борг</div>
       {/* 🔴 Відкритий стан ПРОДОВЖУЄ підпис закритого, а не стирає його: людина
           мусить бачити, ЧОМУ зараз саме так, перш ніж це міняти. */}
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 8 }}>
+      <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 8 }}>
         Зараз: <b style={{ color: "var(--text)" }}>{client.managerName}</b>
         {state === "auto" && " · визначено правилом"}
         {state === "manual" && " · призначено вручну"}
@@ -107,7 +107,7 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
 
       <select value={managerId} onChange={(e) => setManagerId(e.target.value ? Number(e.target.value) : "")}
         disabled={busy}
-        style={{ font: "inherit", fontSize: 12.5, padding: "5px 8px", borderRadius: 8, width: "100%", marginBottom: 8 }}>
+        style={{ font: "inherit", fontSize: "var(--fs-13)", padding: "5px 8px", borderRadius: 8, width: "100%", marginBottom: 8 }}>
         <option value="">— оберіть менеджера —</option>
         {managers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
       </select>
@@ -120,16 +120,16 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
         // textarea на 54px обрізався на півслові («…не відрізнити від помил»),
         // тобто вимога звучала як недороблений інтерфейс. Спіймало око, не тест.
         placeholder="Чому саме так?"
-        style={{ font: "inherit", fontSize: 12, padding: "6px 8px", borderRadius: 8, width: "100%",
+        style={{ font: "inherit", fontSize: "var(--fs-sm)", padding: "6px 8px", borderRadius: 8, width: "100%",
                  minHeight: 46, resize: "vertical", border: "1px solid var(--border)",
                  background: "var(--card-bg)", color: "var(--text)", marginBottom: 4 }} />
-      <div style={{ fontSize: 10.5, color: noteOk ? "var(--text-muted)" : "var(--warn)", marginBottom: 8, lineHeight: 1.4 }}>
+      <div style={{ fontSize: "var(--fs-xs)", color: noteOk ? "var(--text-muted)" : "var(--warn)", marginBottom: 8, lineHeight: 1.4 }}>
         {noteOk
           ? `${note.trim().length}/${NOTE_MAX}`
           : "Обовʼязково: через місяць призначення без причини не відрізнити від помилки"}
       </div>
 
-      {err && <div style={{ fontSize: 11.5, color: "#dc2626", marginBottom: 8 }}>🔴 {err}</div>}
+      {err && <div style={{ fontSize: "var(--fs-sm)", color: "#dc2626", marginBottom: 8 }}>🔴 {err}</div>}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         <button disabled={busy || !noteOk || managerId === ""} style={btn("var(--card-bg)")}
