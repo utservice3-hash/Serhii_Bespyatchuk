@@ -156,8 +156,15 @@ test("#170c core/metrics.ts не читає реєстр, а слід — рів
     `🔴 читачів \`leadgen_touch\` у метриках ${touchReads}, а має бути рівно 1 (когортні передачі)`);
 
   // 🪞 Дзеркало: прибрано читачів, а не джерело.
+  //
+  // 🔴 МЕЖА СЛОВА `\b` — НЕ ПРИДИРКА, ЦЕ ДІРА, ЗНАЙДЕНА САБОТАЖЕМ 25.08.2026.
+  // Було `/INSERT INTO leadgen_touch/` без межі, і перейменування писаря на
+  // `leadgen_touch_OFF` дзеркало ПРОПУСКАЛО: підрядок збігався. Тобто воно ловило
+  // лише повне видалення рядка — а найімовірніша поломка тут якраз перейменування
+  // таблиці. Гейт читався сильнішим, ніж був; спіймалось тільки тим, що саботаж
+  // мав почервоніти й не почервонів.
   const sync = src("jobs/syncKommo.ts");
-  assert.match(sync, /INSERT INTO leadgen_touch/,
+  assert.match(sync, /INSERT INTO leadgen_touch\b(?!_)/,
     "🔴 зник писар `leadgen_touch` — разом із ним зникне лідоген-дотик, з якого `reclassifyAdChannel` робить `lead_channel='leadgen'`");
   assert.match(src("db/schema.sql"), /CREATE TABLE IF NOT EXISTS leadgen_touch/,
     "🔴 таблицю `leadgen_touch` знесли зі схеми — прибирали читачів, а не джерело");
