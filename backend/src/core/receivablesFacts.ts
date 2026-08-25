@@ -243,11 +243,26 @@ export interface ClientFacts {
   /** Воронки поза `pipeline_stage_map` — НАЗИВАЄМО, а не ховаємо (рішення власника). */
   pipelinesOutOfMap: number[];
   oldestAgeDays: number | null;
+  /**
+   * 💰 Заробіток і повна сума угод — ЗА УГОДАМИ, а не за рахунками.
+   * Кілька рахунків можуть указувати на ОДНУ угоду, і тоді підсумовування по
+   * рахунках порахувало б заробіток двічі. Той самий дедуп, що в грошових
+   * метриках ядра (етапи 9∪10 рахуються РАЗ по угоді).
+   */
+  earned: number | null;
+  clientPay: number | null;
+  /** 🗑 Списано як безнадійне: скільки рядків і на скільки. У `amount` НЕ входить. */
+  writtenOffN: number;
+  writtenOffAmount: number;
 }
 
 export interface FactTotals {
   invoices: number;
   amount: number;
+  earned: number | null;
+  clientPay: number | null;
+  writtenOffN: number;
+  writtenOffAmount: number;
   link: TallyBy<LinkState>;
   entity: TallyBy<Entity>;
   carrier: TallyBy<CarrierPaid>;
@@ -262,6 +277,7 @@ const emptyClient = (clientKey: string): ClientFacts => ({
   link: {} as TallyBy<LinkState>, entity: {} as TallyBy<Entity>,
   carrier: {} as TallyBy<CarrierPaid>, aging: {} as TallyBy<AgingBucket>,
   entityReasons: [], carrierReasons: [], pipelinesOutOfMap: [], oldestAgeDays: null,
+  earned: null, clientPay: null, writtenOffN: 0, writtenOffAmount: 0,
 });
 
 /**
@@ -275,8 +291,11 @@ const emptyClient = (clientKey: string): ClientFacts => ({
  */
 export function foldFacts(facts: InvoiceFact[]): { byClient: Map<string, ClientFacts>; totals: FactTotals } {
   const byClient = new Map<string, ClientFacts>();
+  // Дедуп угод — СПІЛЬНИЙ для клієнта й підсумку: одна угода рахується раз.
+  const seenDeal = new Set<number>();
   const totals: FactTotals = {
-    invoices: 0, amount: 0,
+    invoices: 0, amount: 0, earned: null, clientPay: null,
+    writtenOffN: 0, writtenOffAmount: 0,
     link: {} as TallyBy<LinkState>, entity: {} as TallyBy<Entity>,
     carrier: {} as TallyBy<CarrierPaid>, aging: {} as TallyBy<AgingBucket>,
     entityReason: {} as TallyBy<EntityUnknownReason>, carrierReason: {} as TallyBy<CarrierNaReason>,
@@ -286,8 +305,28 @@ export function foldFacts(facts: InvoiceFact[]): { byClient: Map<string, ClientF
     let c = byClient.get(f.clientKey);
     if (!c) { c = emptyClient(f.clientKey); byClient.set(f.clientKey, c); }
 
+    // 🔴 СПИСАНЕ НЕ ВХОДИТЬ У СУМУ, АЛЕ ВИДНО ОКРЕМИМ ЧИСЛОМ.
+    // Рішення власника: списання ЗМЕНШУЄ плитку — це визнання втрати, а не
+    // «сховати з очей». Але плитка, що мовчки просіла, читається як поломка,
+    // тому поруч завжди «списано: N на X ₴» (урок «Прострочено (понад ліміт)»).
+    if (f.writtenOff) {
+      c.writtenOffN++; c.writtenOffAmount += f.amount;
+      totals.writtenOffN++; totals.writtenOffAmount += f.amount;
+      continue;
+    }
+
     c.invoices++; c.amount += f.amount;
     totals.invoices++; totals.amount += f.amount;
+
+    // 💰 Заробіток і знаменник — РАЗ НА УГОДУ. Два рахунки однієї угоди інакше
+    // подвоїли б маржу, і вона виглядала б правдоподібно.
+    if (f.dealId != null && f.dealFound && !seenDeal.has(f.dealId)) {
+      seenDeal.add(f.dealId);
+      if (f.earned != null) c.earned = (c.earned ?? 0) + f.earned;
+      if (f.clientPay != null) c.clientPay = (c.clientPay ?? 0) + f.clientPay;
+      if (f.earned != null) totals.earned = (totals.earned ?? 0) + f.earned;
+      if (f.clientPay != null) totals.clientPay = (totals.clientPay ?? 0) + f.clientPay;
+    }
 
     add(c.link, f.linkState, f.amount);       add(totals.link, f.linkState, f.amount);
     add(c.entity, f.entity, f.amount);        add(totals.entity, f.entity, f.amount);

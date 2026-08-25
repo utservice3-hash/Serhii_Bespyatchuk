@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { needsApi } from "../testMode.js";
+import { needsApi, needsDb } from "../testMode.js";
 
 const srcOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url).href.replace("/dist/", "/src/"));
 const SRC = (p: string) => srcOf(`../${p}`);
@@ -22,10 +22,16 @@ test("#197 плитки без кольорових смуг, і жодна не
     "🔴 кольорова смуга повернулась — пʼять кольорів у ряд читаються як світлофор");
 
   // Розклад є в ОБОХ колишніх порожніх плитках: кожна має свій `Bar` і `Legend`.
-  const total = tiles.slice(tiles.indexOf("Загальний борг"), tiles.indexOf("Прострочено"));
+  // ⚠️ РІЖЕМО ПО ОЧИЩЕНОМУ ДЖЕРЕЛУ, а не по сирому. Межа плитки шукається за
+  // словом «Прострочено», а воно трапляється й у КОМЕНТАРЯХ («урок „Прострочено
+  // (понад ліміт)“»): перший же такий коментар у сусідній плитці обрізав зріз
+  // раніше за `<Bar/>`, і гейт червонів на власній крихкості, а не на дефекті.
+  // Той самий урок, що з пошуком `<th>` за відступом у символах нижче.
+  const body = strip(tiles);
+  const total = body.slice(body.indexOf("Загальний борг"), body.indexOf("Прострочено"));
   assert.match(total, /<Bar/, "🔴 «Загальний борг» знову без розкладу");
   assert.match(total, /<Legend/, "🔴 «Загальний борг» має смужку без підписів — колір без пояснення");
-  const over = tiles.slice(tiles.indexOf("Прострочено"), tiles.indexOf("Перевізник оплачений"));
+  const over = body.slice(body.indexOf("Прострочено"), body.indexOf("Перевізник оплачений"));
   assert.match(over, /<Bar/, "🔴 «Прострочено» знову без розкладу");
   assert.match(over, /понад узгоджений ліміт/, "🔴 зникла перша половина розкладу");
   assert.match(over, /ліміт не узгоджено/, "🔴 зникла друга половина розкладу");
@@ -443,4 +449,253 @@ test("#199d висоту рядка тримає ОДИН рядок, а не д
     assert.match(th!, /width:\s*1[0-9]{2}/,
       `🔴 колонці «${col}» знову бракує ширини — чипи мають flex-wrap і без неї посиплються в стовпчик`);
   }
+});
+
+/* ══════════════ 💰 МАРЖИНАЛЬНІСТЬ І 🗑 СПИСАННЯ (25.08.2026) ══════════════ */
+
+test("#197h маржа рахується від «Приход 1», а НЕ від боргу", async () => {
+  // 🔴 ЦЕ НЕ СМАК, І ЦИФРА ЦЕ ДОВОДИТЬ. Борг — це ЗАЛИШОК: він падає з кожною
+  // оплатою, тож `заробили / борг` вибухає. Заміряно на живому проді 25.08.2026:
+  // максимум 6 667% (клієнт заборгував 3 ₴ і «заробив» 200), плюс 110% і −10%.
+  // Проти цього `заробили / Приход 1`: медіана 12.3%, максимум РІВНО 100.0%,
+  // поза діапазоном один рядок — законне сторно.
+  const { marginCell } = await import("./receivablesMargin.js");
+  const { CLIENT_PAY_FIELD, CARRIER_OBLIGATION_FIELD } = await import("./carrierPayment.js");
+
+  // 200 заробили при повній сумі 1000 → 20%. Якби знаменником був борг (3 ₴),
+  // вийшло б 6 667% — саме те число, що ми на проді й побачили.
+  assert.equal(marginCell(200, 1000).pct, 20);
+  assert.notEqual(marginCell(200, 1000).pct, marginCell(200, 3).pct,
+    "🔴 знаменник підмінили боргом — відношення до залишку вибухає");
+
+  // Знаменник приходить із ПОЛЯ «Приход 1», а не з `receivable_invoices.amount`.
+  assert.equal(CLIENT_PAY_FIELD, 2097627, "🔴 знаменник переїхав на інше поле CRM");
+  assert.notEqual(CLIENT_PAY_FIELD, CARRIER_OBLIGATION_FIELD,
+    "🔴 знаменником став обовʼязок перед перевізником — це витрата, не сума угоди");
+
+  // І САМЕ ЦЕ ПОЛЕ ЇДЕ В ЗАПИТІ ЕКРАНА, а не сума боргу.
+  const { __INVOICE_FACTS_SQL_FOR_TESTS: sql } = await import("./receivablesFacts.js");
+  assert.match(sql, /d\.client_pay_amount/,
+    "🔴 запит більше не тягне «Приход 1» — знаменника нема з чого взяти");
+  assert.ok(!/ri\.amount\s+AS\s+(base|client_pay)/i.test(sql),
+    "🔴 знаменником підставили суму боргу — рівно та підміна, від якої гейт стоїть");
+
+  // 🪞 ДЗЕРКАЛО: синк справді пише це поле, інакше знаменник був би вічно NULL
+  // і «—» стояло б у ВСІХ рядках — гейт вище лишався б зеленим на мертвій фічі.
+  const sync = readFileSync(SRC("jobs/syncKommo.ts"), "utf8");
+  assert.match(sync, /client_pay_amount/, "🔴 синк не пише «Приход 1» — маржі не буде в жодного клієнта");
+});
+
+test("#197i невідома маржа — це «—» з причиною, а НЕ нуль", async () => {
+  // 🔴 НУЛЬ У ЧИСЕЛЬНИКУ Й НУЛЬ У ЗНАМЕННИКУ — РІЗНІ ТВЕРДЖЕННЯ.
+  // «Заробили 0» означає «не заробили»; «знаменник 0» означає «не знаємо, з чого
+  // рахувати». Заміряно 25.08.2026: 5 клієнтів із 76 не мають жодної звʼязаної
+  // угоди, а угод із `price = 0` — дві. Тобто обидва випадки реальні.
+  const { marginCell, MARGIN_UNKNOWN_LABEL } = await import("./receivablesMargin.js");
+
+  assert.equal(marginCell(null, 1000).pct, null, "🔴 клієнт без угоди дістав відсоток нізвідки");
+  assert.equal(marginCell(null, 1000).why, "no_deal");
+  assert.equal(marginCell(500, null).pct, null, "🔴 без «Приход 1» рахувати нема з чого");
+  assert.equal(marginCell(500, null).why, "no_base");
+
+  // 🪞 ДЗЕРКАЛО: нуль у ЧИСЕЛЬНИКУ дає ЧЕСНІ 0.0%, а не «—». Інакше правило
+  // з'їхало б у другий бік — «не заробили» читалось би як «не знаємо».
+  assert.equal(marginCell(0, 1000).pct, 0, "🔴 «заробили нуль» перетворилось на «не знаємо»");
+  assert.equal(marginCell(0, 1000).why, null);
+
+  // Причина названа СЛОВАМИ. Порожнє місце читається як «нічого немає».
+  for (const k of ["no_deal", "no_base"] as const) {
+    assert.ok(MARGIN_UNKNOWN_LABEL[k].length > 5, `🔴 причина «${k}» не пояснює нічого`);
+  }
+
+  // І екран показує саме «—», а не 0: фронт друкує `null` як прочерк.
+  // Специфікатор У ЗМІННІЙ — той самий прийом, що вище: `tsc` бекенду не має
+  // права тягнути файл поза своїм `rootDir`, а рантайм node роздягає типи.
+  const VIEW = "../../../frontend/src/pages/dashboard/receivablesView.ts";
+  const V = (await import(VIEW)) as {
+    marginPctText: (m: { pct: number | null } | null) => string;
+  };
+  assert.equal(V.marginPctText({ earned: null, base: 1000, pct: null, why: "no_deal" } as never), "—");
+  assert.equal(V.marginPctText(null), "—", "🔴 клієнт без рахунків дістав число замість прочерку");
+  assert.equal(V.marginPctText({ earned: 0, base: 1000, pct: 0, why: null } as never), "0.0%",
+    "🔴 чесний нуль сховали за прочерком");
+});
+
+test("#197j нульовий знаменник не дає ні Infinity, ні NaN, ні «0%»", async () => {
+  // 🔴 ДІЛЕННЯ НА НУЛЬ ТУТ НЕ ПАДАЄ ГОЛОСНО — воно дає `Infinity`/`NaN`, і на
+  // екрані зʼявляється «∞» або порожнеча без жодного пояснення. Тому нуль і
+  // `null` у знаменнику — ОДИН стан «рахувати нема з чого», названий словами.
+  const { marginCell } = await import("./receivablesMargin.js");
+  for (const base of [0, null]) {
+    const c = marginCell(500, base as number | null);
+    assert.equal(c.pct, null, `🔴 знаменник ${base} дав число`);
+    assert.equal(c.why, "no_base", `🔴 знаменник ${base} лишився без пояснення`);
+  }
+  // Дзеркало до самої арифметики: якби перевірку на нуль прибрали, вийшло б
+  // саме це — і воно НЕ дорівнює тому, що ми віддаємо.
+  assert.equal(500 / 0, Infinity);
+  assert.notEqual(marginCell(500, 0).pct, Infinity, "🔴 нуль пройшов у ділення");
+  assert.equal(marginCell(0, 0).pct, null, "🔴 0/0 дало NaN замість чесного «не знаємо»");
+});
+
+test("#199f підпис колонки НАЗИВАЄ знаменник і не прикидається звітом про прибутки", () => {
+  // 🔴 ПІДПИС «маржинальність, %» БЕЗ ЗНАМЕННИКА ЧИТАВСЯ Б ЯК «% від боргу» —
+  // той самий клас, що «Прострочено (понад ліміт)» і «сер.чек ÷ авто»: підпис
+  // технічно правдивий, величина за ним інша.
+  //
+  // 🔴 І СЛОВО «PnL» ЗАБОРОНЕНЕ ОКРЕМО. Це не звіт про прибутки: у знаменнику
+  // одне поле CRM, у чисельнику друге, витрат компанії тут немає взагалі.
+  // Назвати це «PnL» означало б пообіцяти те, чого екран не рахує.
+  const sec = readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8");
+  const tiles = readFileSync(FE("pages/dashboard/sections/ReceivablesTiles.tsx"), "utf8");
+  const view = readFileSync(FE("pages/dashboard/receivablesView.ts"), "utf8");
+
+  for (const [what, src] of [["рядок клієнта", sec], ["плитка", tiles]] as const) {
+    assert.match(strip(src), /від суми рахунків/,
+      `🔴 ${what}: знаменник більше не названий — «маржинальність, %» прочитають як «% від боргу»`);
+  }
+  for (const [what, src] of [["рядок клієнта", sec], ["плитка", tiles], ["правила", view]] as const) {
+    assert.ok(!/PnL|P&L|прибуток компанії/i.test(strip(src)),
+      `🔴 ${what}: зʼявилось «PnL» — екран обіцяє звіт про прибутки, якого не рахує`);
+  }
+  // Ядро несе той самий підпис, тож розійтись фронту з ним нема як.
+  const core = readFileSync(SRC("core/receivablesMargin.ts"), "utf8");
+  assert.match(core, /% від суми рахунків/, "🔴 у ядрі підпис уже без знаменника");
+});
+
+test("#198d ключ списання — сирий ключ клієнта + номер рахунку, а не канонічний", () => {
+  // 🔴 КАНОНІЧНИЙ КЛЮЧ РУХАЄ СКЛЕЙКА (`client_key_alias`). Списали клієнта,
+  // потім злили його з іншим — і списання «переїхало» б на обʼєднаного,
+  // прибравши ЧУЖИЙ борг. Сирий ключ склейка не рухає.
+  const schema = readFileSync(SRC("db/schema.sql"), "utf8");
+  const tbl = schema.slice(schema.indexOf("CREATE TABLE IF NOT EXISTS receivable_writeoffs"),
+                           schema.indexOf("CREATE TABLE IF NOT EXISTS receivable_writeoffs") + 1400);
+  assert.ok(tbl.length > 100, "🔴 таблиці списань у схемі немає");
+  assert.match(tbl, /PRIMARY KEY \(client_key_raw, invoice_no\)/,
+    "🔴 ключ списання змінився — або він канонічний (переїде при склейці), або не поіменний");
+
+  // І JOIN на екрані бере ТОЙ САМИЙ сирий ключ, а не канонічний: інакше запис
+  // лежав би правильно, а екран читав би його не тим ключем.
+  const facts = readFileSync(SRC("core/receivablesFacts.ts"), "utf8");
+  assert.match(facts, /wo\.client_key_raw = ri\.client_key_raw/,
+    "🔴 списання приєднується канонічним ключем — після склейки воно накриє чужий борг");
+  assert.match(facts, /wo\.revoked_at IS NULL/,
+    "🔴 join не фільтрує скасовані — повернений борг лишиться списаним назавжди");
+});
+
+test("#198e списання переживає TRUNCATE синку — воно в ОКРЕМІЙ таблиці", () => {
+  // 🔴 `syncReceivables` робить TRUNCATE обох таблиць дебіторки КОЖНІ 15 ХВИЛИН.
+  // Прапорець `written_off` у `receivable_invoices` зник би за один прохід —
+  // гарантовано, не «можливо». Прецедент у проєкті вже є: `receivable_invoice_notes`
+  // заведено рівно з цієї причини.
+  const sync = readFileSync(SRC("jobs/syncReceivables.ts"), "utf8");
+  const truncated = [...sync.matchAll(/TRUNCATE\s+(?:TABLE\s+)?([a-z_,\s]+)/gi)]
+    .flatMap((m) => m[1].split(",").map((x) => x.trim()));
+  assert.ok(truncated.length > 0, "🔴 у синку немає жодного TRUNCATE — вимір не має що перевіряти");
+  assert.ok(!truncated.includes("receivable_writeoffs"),
+    "🔴 синк тепер зносить списання — вони проживуть максимум 15 хвилин");
+  // 🪞 ДЗЕРКАЛО: TRUNCATE справді зачіпає ті таблиці, ЧЕРЕЗ ЯКІ гейт і існує.
+  // Інакше він зеленів би на синку, що взагалі нічого не чистить.
+  assert.ok(truncated.includes("receivable_invoices"),
+    "🔴 синк більше не чистить рахунки — привід для окремої таблиці зник, перевір заново");
+
+  // І сама колонка `written_off` НЕ живе в таблиці, що зноситься.
+  const schema = readFileSync(SRC("db/schema.sql"), "utf8");
+  const invTbl = schema.slice(schema.indexOf("CREATE TABLE IF NOT EXISTS receivable_invoices"),
+                              schema.indexOf("CREATE TABLE IF NOT EXISTS receivable_invoices") + 700);
+  assert.ok(!/written_off/.test(invTbl),
+    "🔴 списання переїхало в `receivable_invoices` — його зітре найближчий синк");
+});
+
+test("#199g право write_off_debt має РІВНО дві ролі, і адміна серед них немає", needsDb(), async (t) => {
+  // 🔴 РІШЕННЯ ВЛАСНИКА 25.08.2026: СЕО й опердир. Не фінансист (хоч він має
+  // `admin_scope` з 31.07), не КВП, не тімліди — і НЕ АДМІН. Списання зменшує
+  // суму на плитці, тобто це визнання втрати грошей, а не операційна дія.
+  //
+  // Склад перевіряється на схемі З НУЛЯ і ДВІЧІ: `#186` уже показав, що грант,
+  // який стоїть вище за блок зняття, гаситься тим самим прогоном і «Migration
+  // applied.» друкується при незастосованій зміні.
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    const schema = readFileSync(SRC("db/schema.sql"), "utf8");
+    await c.query(schema);
+    const have = async () => (await c.query<{ key: string }>(
+      `SELECT key FROM roles WHERE (permissions->>'write_off_debt')::boolean ORDER BY key`)
+    ).rows.map((r) => r.key);
+    assert.deepEqual(await have(), ["ceo", "opdir"], "🔴 право дісталось не тим ролям");
+    // 🪞 ДЗЕРКАЛО ДО ГОЛОВНОЇ ПАСТКИ: `permissions` адміна копіюють у нові ролі,
+    // тож право могло б розтектись мовчки. Називаємо це окремо.
+    assert.ok(!(await have()).includes("admin"),
+      "🔴 адмін дістав право списувати — рішення власника назвало РІВНО дві ролі");
+    assert.ok(!(await have()).includes("financier"),
+      "🔴 фінансист дістав право через `admin_scope` — списання це не фінансова операція, "
+      + "а визнання втрати грошей");
+    await c.query(schema);
+    assert.deepEqual(await have(), ["ceo", "opdir"], "🔴 другий прогін міграції змінив склад права");
+    // 📐 ЗНАХІДКА САБОТАЖУ 25.08.2026, записана тут, бо вона неочевидна:
+    // дописати `admin` В ОДИН ЛИШЕ ГРАНТ — і гейт лишається ЗЕЛЕНИМ. Це не
+    // діра: блок зняття нижче (`NOT IN ('ceo','opdir')`) забирає право назад
+    // тим самим прогоном. Тобто помилка «розширив грант і забув про зняття»
+    // наслідків не має в принципі — рівно та властивість, через яку `#186`
+    // колись показав протилежне (грант СТОЯВ вище за зняття й гасився).
+    // Почервоніти гейт змушує лише свідоме розширення В ОБОХ операторах — і
+    // саме воно й є тим, що ми стережемо.
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+test("#198f списання без причини не приймає БД, і воно оборотне з журналом", needsDb(), async (t) => {
+  // 🔴 ТРИ ВИМОГИ ВЛАСНИКА В ОДНОМУ ГЕЙТІ, бо вони й тримаються разом:
+  //   ІЗ ПРИЧИНОЮ — `CHECK`, а не валідація роуту: роут обходить будь-який скрипт;
+  //   ОБОРОТНЕ   — скасування ТИМ САМИМ інтерфейсом (правило власника 06.08.2026:
+  //                незворотна кнопка — пастка, навіть коли працює правильно);
+  //   ІЗ ЖУРНАЛОМ — рядок НЕ видаляється, обидві дії лишаються поіменними.
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SRC("db/schema.sql"), "utf8"));
+    // ТЕСТ НА ВІДХИЛЕННЯ, а не «очима»: `CHECK` виглядає бездоганно й тоді, коли
+    // не стереже нічого — на цьому ми вже спіймались із NULL у `IN`.
+    await assert.rejects(
+      () => c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note)
+                     VALUES ('т', '1', 100, '   ')`),
+      /check|порушує/i, "🔴 БД прийняла списання з порожньою приміткою");
+    await assert.rejects(
+      () => c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount)
+                     VALUES ('т', '1', 100)`),
+      /null|not-null|порушує/i, "🔴 БД прийняла списання БЕЗ примітки взагалі");
+
+    // 🪞 ДЗЕРКАЛО: правильний рядок ПРОХОДИТЬ — інакше `CHECK` міг би різати все
+    // підряд, а гейт читався б як надійність.
+    await c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note)
+                   VALUES ('т', '1', 100, 'банкрут, виконавче провадження закрито')`);
+
+    // ОБОРОТНІСТЬ: скасування лишає рядок і додає ДРУГИЙ слід, а не стирає перший.
+    await c.query(`UPDATE receivable_writeoffs SET revoked_at = now(), revoke_note = 'помилились клієнтом'
+                    WHERE client_key_raw = 'т' AND invoice_no = '1'`);
+    const j = await c.query<{ note: string; revoke_note: string | null; written_off_at: string }>(
+      `SELECT note, revoke_note, written_off_at FROM receivable_writeoffs WHERE client_key_raw = 'т'`);
+    assert.equal(j.rowCount, 1, "🔴 скасування ВИДАЛИЛО рядок — журнал двох дій зник");
+    assert.match(j.rows[0].note, /банкрут/, "🔴 причина списання стерлась при скасуванні");
+    assert.match(j.rows[0].revoke_note ?? "", /помилились/, "🔴 причини скасування в журналі немає");
+
+    // І роут справді ПОЗНАЧАЄ, а не видаляє: інакше схема дозволяла б журнал,
+    // а код усе одно стирав би слід.
+    const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+    const del = routes.slice(routes.indexOf(`dashboardRouter.delete("/receivables/writeoff"`),
+                             routes.indexOf(`dashboardRouter.delete("/receivables/writeoff"`) + 1600);
+    assert.ok(del.length > 100, "🔴 роут скасування зник");
+    assert.match(del, /UPDATE receivable_writeoffs/, "🔴 скасування більше не UPDATE");
+    assert.ok(!/DELETE FROM receivable_writeoffs/.test(del),
+      "🔴 скасування видаляє рядок — слід дії на грошах зникає");
+    assert.match(del, /revoke_note/, "🔴 скасування не пише причину — журнал стає безіменним");
+  } finally { await c.end(); scratch.dispose(); }
 });

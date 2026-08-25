@@ -1,6 +1,7 @@
 import type {
   ReceivableAging, ReceivableCarrierPaid, ReceivableCarrierReason, ReceivableClient,
-  ReceivableClientFacts, ReceivableEntity, ReceivableEntityReason, ReceivableTally,
+  ReceivableClientFacts, ReceivableEntity, ReceivableEntityReason, ReceivableMargin,
+  ReceivableMarginUnknown, ReceivableTally,
 } from "../../api";
 
 /**
@@ -307,5 +308,68 @@ export function mergeProblem(a: MergeSide | null, b: MergeSide | null, reason: s
   if (!a || !b) return "Оберіть обидві сторони";
   if (a.clientKey === b.clientKey) return "Не можна обʼєднати клієнта із самим собою";
   if (!reason.trim()) return "Причина обовʼязкова — реєстр без причини стає смітником";
+  return null;
+}
+
+
+// ───────────────────── 💰 МАРЖИНАЛЬНІСТЬ І 🗑 СПИСАННЯ ─────────────────────
+
+/**
+ * 🔴 ПІДПИС КОЛОНКИ НАЗИВАЄ ЗНАМЕННИК, І ЦЕ НЕ ПЕДАНТИЗМ.
+ *
+ * Просто «маржинальність, %» читалась би як «% від боргу» — той самий клас, що
+ * «Прострочено (понад ліміт)»: підпис технічно правдивий, а величина за ним
+ * інша. Слово «PnL» тут заборонене окремо (`#199f`): це не звіт про прибутки,
+ * а відношення двох полів CRM.
+ */
+export const MARGIN_LABEL = "маржинальність, % від суми рахунків";
+export const EARNED_LABEL = "заробили";
+
+export const MARGIN_UNKNOWN_LABEL: Record<ReceivableMarginUnknown, string> = {
+  no_deal: "немає звʼязку з угодою",
+  no_base: "у CRM не вказана сума угоди",
+};
+
+/**
+ * Текст відсотка. `—` там, де рахувати нема з чого, і НІКОЛИ нуль: нуль означав
+ * би «не заробили», а ми не знаємо. Заміряно: 5 клієнтів із 76 без звʼязаної
+ * угоди — саме вони мусять дати «—».
+ *
+ * Відʼємні показуються ЯК Є: 3 угоди з відʼємним `price`, усі три з
+ * `is_minus = true` — це коректне сторно, і ховати правильне число, бо воно
+ * негарне, ми не будемо.
+ */
+export function marginPctText(m: ReceivableMargin | null): string {
+  if (!m || m.pct == null) return "—";
+  return `${m.pct.toFixed(1)}%`;
+}
+
+/** Чому «—». Порожнє місце читається як «нічого немає», а не як «не знаємо». */
+export function marginHint(m: ReceivableMargin | null): string {
+  if (!m) return "рахунків у деталізації немає";
+  if (m.why) return MARGIN_UNKNOWN_LABEL[m.why];
+  return `заробили ${Math.round(m.earned ?? 0).toLocaleString("uk-UA")} ₴ від суми рахунків `
+    + `${Math.round(m.base ?? 0).toLocaleString("uk-UA")} ₴`;
+}
+
+/**
+ * 🗑 ПІДПИС СПИСАНОГО. `null` — нічого не списано, і тоді рядка на екрані немає:
+ * «списано: 0 на 0 ₴» у кожному рядку перетворив би сигнал на шум (той самий
+ * висновок, що з «у т.ч. від менеджерів без плану» — підпис лише коли ≠ 0).
+ *
+ * 🔴 І ВІН ОБОВʼЯЗКОВИЙ ТАМ, ДЕ СПИСАННЯ Є. Списання ЗМЕНШУЄ суму; плитка, що
+ * мовчки просіла, читається як поломка, а не як рішення людини.
+ */
+export function writtenOffLabel(n: number, amount: number): string | null {
+  if (!n) return null;
+  return `списано: ${n} на ${Math.round(amount).toLocaleString("uk-UA")} ₴`;
+}
+
+/**
+ * Чи можна відправляти списання. Ті самі умови, що на сервері, тільки сказані
+ * людині ДО запиту: рубежів три — кнопка → 400 роуту → `CHECK` у БД.
+ */
+export function writeoffProblem(note: string): string | null {
+  if (!noteIsValid(note)) return "Причина обовʼязкова — списання без «чому» через місяць не відрізнити від помилки";
   return null;
 }

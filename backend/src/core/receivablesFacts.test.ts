@@ -274,6 +274,11 @@ test("#158 /receivables робить не більше 4 запитів до Б�
   assert.ok(n > 0, "🔴 жодного запиту не перехоплено — лічильник не працює, а не роут дешевий");
   // 4 = клієнти + нотатки + syncedAt + факти. Було 3 до редизайну; факти додали
   // РІВНО ОДИН похід на всі зрізи разом (юрособа, перевізник, вік, звʼязок).
+  //
+  // 📐 СТЕЛЯ НЕ ЗМІНИЛАСЬ І ПІСЛЯ МАРЖІ ЗІ СПИСАННЯМ (25.08.2026) — і це не
+  // збіг, а рішення. Списання приєднано `LEFT JOIN`-ом до НАЯВНОГО запиту, а
+  // маржа складається з уже привезених полів у памʼяті. Підняти стелю «щоб
+  // пройшло» означало б пустити наступний зайвий похід непоміченим.
   assert.ok(n <= 4,
     `🔴 /receivables робить ${n} запитів (стеля 4) — хтось додав блок ОКРЕМИМ запитом замість того, `
     + "щоб скласти його з уже привезених фактів. Кожен такий блок коштує +30 мс RTT.");
@@ -296,6 +301,11 @@ test("#156 у роутах дебіторки перевірка права — 
     { route: 'dashboardRouter.put("/receivables/owner"', guard: "isAdminScope" },
     { route: 'dashboardRouter.post("/receivables/merge"', guard: "merge_receivables" },
     { route: 'dashboardRouter.delete("/receivables/owner/:clientKey"', guard: "isAdminScope" },
+    // 🗑 Списання — та сама межа й та сама гарантія «403 == спрацював гейт».
+    // Дія зменшує суму боргу, тож 400 замість 403 тут читався б як «не вийшло
+    // через дані», хоча насправді права немає.
+    { route: 'dashboardRouter.post("/receivables/writeoff"', guard: "WRITE_OFF_PERM" },
+    { route: 'dashboardRouter.delete("/receivables/writeoff"', guard: "WRITE_OFF_PERM" },
   ];
   for (const c of cases) {
     const at = src.indexOf(c.route);

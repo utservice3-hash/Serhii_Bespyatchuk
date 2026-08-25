@@ -50,6 +50,8 @@ import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
+import { WRITE_OFF_PERM, noteIsValid } from "../core/receivablesWriteoff.js";
+import { marginCell } from "../core/receivablesMargin.js";
 import { fkErrorMessage } from "../core/creditLimits.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf } from "../core/dates.js";
@@ -1799,6 +1801,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
     limitDays: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
     facts: receivablesFacts.ClientFacts | null;
+    margin: ReturnType<typeof marginCell> | null;
   };
   const byManager = new Map<number | null, { managerId: number | null; managerName: string; clients: Client[]; total: number }>();
   for (const r of rows) {
@@ -1817,6 +1820,13 @@ dashboardRouter.get("/receivables", async (req, res) => {
       // 🔖 Ярлики рядка — з ТОГО САМОГО зведення, з якого рахуються плитки вгорі.
       // Два вирази для одного числа розходяться мовчки; тут вираз один.
       facts: r.clientKey ? folded.byClient.get(r.clientKey) ?? null : null,
+      // 💰 МАРЖИНАЛЬНІСТЬ РАХУЄ СЕРВЕР — ОДНИМ ВИРАЗОМ ДЛЯ РЯДКА Й ДЛЯ ПЛИТКИ.
+      // Фронт лише форматує. Якби він рахував сам, правило існувало б у двох
+      // місцях, і копії збігалися б одна з одною, а не з правилом — рівно те,
+      // що дало чипи «новий/постійний» (12.6% угод серпня розходились).
+      margin: r.clientKey
+        ? (() => { const f = folded.byClient.get(r.clientKey!); return marginCell(f?.earned ?? null, f?.clientPay ?? null); })()
+        : null,
     });
     entry.total += r.amount;
   }
@@ -1837,11 +1847,106 @@ dashboardRouter.get("/receivables", async (req, res) => {
   // ліміт відстрочки це фінансове рішення; склейки клієнтів він так само свідомо
   // НЕ має. Дві сусідні межі з різними відповідями — саме тому право, а не роль.
   res.json({
-    syncedAt, managers: Array.from(byManager.values()), totals: folded.totals,
+    syncedAt, managers: Array.from(byManager.values()),
+    // Плитка бере ТУ САМУ функцію, що й рядок. Два вирази для одного числа
+    // розходяться мовчки — саме так «Команда за місяць 12%» жила поруч із
+    // плиткою «11.8%».
+    totals: { ...folded.totals, margin: marginCell(folded.totals.earned, folded.totals.clientPay) },
     canSetOwner: isAdminScope(auth),
     canMerge: roleHasPerm(auth.roleKey, "merge_receivables"),
     canSetLimit: roleHasPerm(auth.roleKey, "manage_credit_limits"),
+    // 🗑 СПИСАННЯ — РІВНО ДВІ РОЛІ (рішення власника 25.08.2026): СЕО й опердир.
+    // Не фінансист і не тімліди: це визнання втрати грошей, а не операційна дія.
+    // Право в БД окремим записом, як `merge_receivables`, — не список у коді.
+    canWriteOff: roleHasPerm(auth.roleKey, WRITE_OFF_PERM),
   });
+});
+
+/**
+ * 🗑 СПИСАННЯ БЕЗНАДІЙНОГО БОРГУ — рівень рахунка або клієнта цілком.
+ *
+ * 🔴 ЧОМУ ОКРЕМА ТАБЛИЦЯ, А НЕ ПРАПОРЕЦЬ У `receivable_invoices`:
+ * `syncReceivables` робить `TRUNCATE` обох таблиць дебіторки кожні 15 хвилин —
+ * прапорець зник би за один прохід. Прецедент: `receivable_invoice_notes`.
+ *
+ * 🔴 КЛЮЧ — `client_key_raw`: канонічний рухає склейка, і списання переїхало б
+ * на обʼєднаного клієнта, прибравши ЧУЖИЙ борг.
+ *
+ * 🔴 СПИСАННЯ КЛІЄНТА РОЗГОРТАЄТЬСЯ В ПЕРЕЛІК ЙОГО РАХУНКІВ У МОМЕНТ ДІЇ.
+ * Інакше завтрашній НОВИЙ рахунок цього клієнта теж мовчки вважався б списаним —
+ * дія в минулому тихо застосовувалась би до майбутнього.
+ */
+dashboardRouter.post("/receivables/writeoff", async (req, res) => {
+  const auth = req.auth!;
+  // 🔴 ГЕЙТ ПЕРШИМ ЗНАЧУЩИМ ОПЕРАТОРОМ. Валідація тіла перед ним дала б 400
+  // замість 403 і зламала гарантію «403 == спрацював гейт» (на цьому вже раз
+  // відкочували прод 04.08.2026).
+  if (!roleHasPerm(auth.roleKey, WRITE_OFF_PERM)) return res.status(403).json({ error: "Немає права списувати борг" });
+
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const invoiceNo = req.body?.invoiceNo == null ? null : String(req.body.invoiceNo).trim();
+  const note = String(req.body?.note ?? "");
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!noteIsValid(note)) return res.status(400).json({ error: "Причина списання обовʼязкова" });
+
+  // 🔴 ПРИЙМАЄМО КАНОНІЧНИЙ КЛЮЧ, А ЗБЕРІГАЄМО СИРИЙ — і це не суперечність, а
+  // рівно те, що робить дію правильною в обидва боки. На екрані клієнт ОДИН
+  // рядок; після склейки за ним стоять кілька сирих ключів, і приймати сирий
+  // означало б списати лише ЧАСТИНУ того, що людина бачить. Тому розгортаємо
+  // канонічним, а пишемо кожному рядку його власний `client_key_raw`: майбутня
+  // склейка не перетягне списання на чужий борг.
+  const target = await pool.query<{ client_key_raw: string; invoice_no: string; amount: string }>(
+    `SELECT COALESCE(client_key_raw, client_key) AS client_key_raw,
+            COALESCE(invoice_no, '') AS invoice_no, amount
+       FROM receivable_invoices
+      WHERE client_key = $1 ${invoiceNo ? "AND COALESCE(invoice_no, '') = $2" : ""}`,
+    invoiceNo ? [clientKey, invoiceNo] : [clientKey]
+  );
+  // ⚠️ ПОРОЖНІЙ РЕЗУЛЬТАТ — ВІДМОВА, А НЕ ТИХИЙ УСПІХ: «списали 0 рахунків»
+  // виглядало б як спрацювала дія, і людина вважала б борг списаним.
+  if (target.rowCount === 0) return res.status(404).json({ error: "Таких рахунків немає" });
+
+  for (const row of target.rows) {
+    await pool.query(
+      `INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note, written_off_by)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (client_key_raw, invoice_no) DO UPDATE SET
+         amount = EXCLUDED.amount, note = EXCLUDED.note,
+         written_off_by = EXCLUDED.written_off_by, written_off_at = now(),
+         revoked_by = NULL, revoked_at = NULL, revoke_note = NULL`,
+      [row.client_key_raw, row.invoice_no, Number(row.amount), note, auth.userId]
+    );
+  }
+  res.json({ ok: true, written: target.rowCount });
+});
+
+/** Скасувати списання — тим самим інтерфейсом, із тим самим журналом. */
+dashboardRouter.delete("/receivables/writeoff", async (req, res) => {
+  const auth = req.auth!;
+  if (!roleHasPerm(auth.roleKey, WRITE_OFF_PERM)) return res.status(403).json({ error: "Немає права списувати борг" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const invoiceNo = req.body?.invoiceNo == null ? null : String(req.body.invoiceNo).trim();
+  const note = String(req.body?.note ?? "");
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!noteIsValid(note)) return res.status(400).json({ error: "Причина скасування обовʼязкова" });
+
+  // 🔴 РЯДОК НЕ ВИДАЛЯЄМО — журнал мусить лишитись поіменним. Дія на грошах,
+  // сліду якої не лишилось, через місяць нічим не відрізняється від помилки.
+  //
+  // Сирі ключі беремо з ТИХ САМИХ рахунків, якими розгорталось списання, — так
+  // скасування покриває рівно те, що покрила дія, включно зі злитим клієнтом.
+  const r = await pool.query(
+    `UPDATE receivable_writeoffs w
+        SET revoked_by = $1, revoked_at = now(), revoke_note = $2
+      WHERE w.revoked_at IS NULL
+        AND w.client_key_raw IN (
+          SELECT COALESCE(client_key_raw, client_key) FROM receivable_invoices WHERE client_key = $3
+        )
+        ${invoiceNo ? "AND w.invoice_no = $4" : ""}`,
+    invoiceNo ? [auth.userId, note, clientKey, invoiceNo] : [auth.userId, note, clientKey]
+  );
+  if (r.rowCount === 0) return res.status(404).json({ error: "Активних списань не знайдено" });
+  res.json({ ok: true, revoked: r.rowCount });
 });
 
 /**
@@ -1990,6 +2095,10 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         carrierPayType: f?.carrierPayType ?? null,
         dealId: f?.dealId ?? null,
         dealFound: f?.dealFound ?? false,
+        // 🗑 Списаний рахунок лишається ВИДИМИМ у розкритті — просто не входить
+        // у суму. Сховати його означало б, що зменшення плитки нічим не
+        // пояснюється, а число, що змінилось без сліду, читається як поломка.
+        writtenOff: f?.writtenOff ?? false,
       };
     }),
   });

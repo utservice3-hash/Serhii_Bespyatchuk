@@ -1,6 +1,7 @@
 import { pool } from "../db/pool.js";
 import {
   fetchLeadsByIds, extractCarrierPayType, extractCarrierPayment, LEADS_BY_IDS_MAX,
+  extractClientPayment, extractCarrierObligation,
 } from "../kommo/client.js";
 import { withHeavyJobLock } from "./jobLock.js";
 
@@ -25,7 +26,7 @@ import { withHeavyJobLock } from "./jobLock.js";
  *   node dist/jobs/backfillCarrierPayment.js --write    # із записом
  */
 export async function backfillCarrierPayment(opts: { write?: boolean } = {}): Promise<{
-  scanned: number; withType: number; updated: number;
+  scanned: number; withType: number; withBase: number; updated: number;
 }> {
   // 🔴 № УГОДИ БЕРЕМО З ЯДРА, А НЕ ВЛАСНИМ SQL.
   //
@@ -43,7 +44,7 @@ export async function backfillCarrierPayment(opts: { write?: boolean } = {}): Pr
   console.log(`backfillCarrierPayment: ${ids.length} угод, батчів ${Math.ceil(ids.length / LEADS_BY_IDS_MAX)}`
     + `, режим ${opts.write ? "ЗАПИС" : "сухий прогін"}`);
 
-  let withType = 0, updated = 0;
+  let withType = 0, withBase = 0, updated = 0;
   for (let i = 0; i < ids.length; i += LEADS_BY_IDS_MAX) {
     // 🔴 Дрібнимо ЗАВЖДИ: `fetchLeadsByIds` має стелю 250 і тепер кидає на
     // довшому списку. До сторожа він тихо віддавав перші 250 — на цьому самому
@@ -51,24 +52,41 @@ export async function backfillCarrierPayment(opts: { write?: boolean } = {}): Pr
     const deals = await fetchLeadsByIds(ids.slice(i, i + LEADS_BY_IDS_MAX));
     for (const deal of deals) {
       const type = extractCarrierPayType(deal);
-      if (type == null) continue;
-      withType++;
+      const clientPay = extractClientPayment(deal);
+      const obligation = extractCarrierObligation(deal);
+      if (type != null) withType++;
+      if (clientPay != null) withBase++;
+      // 🔴 ПИШЕМО НАВІТЬ БЕЗ ТИПУ ВИПЛАТИ. Перша редакція виходила через
+      // `continue`, коли типу немає, — і тоді 89 угод не дістали б ані повної
+      // суми (знаменник маржі), ані обовʼязку перед перевізником. Заміряно:
+      // тип заповнений у 206 із 295, «Приход 1» — у 294, «Расход 1» — у 289.
+      // Тобто вихід по типу викинув би дані, ширші за сам тип.
+      if (type == null && clientPay == null && obligation == null) continue;
       if (!opts.write) continue;
       const res = await pool.query(
-        `UPDATE deals SET carrier_pay_type = $1, carrier_pay_amount = $2 WHERE kommo_id = $3`,
-        [type, extractCarrierPayment(deal), deal.id]
+        `UPDATE deals SET carrier_pay_type = $1, carrier_pay_amount = $2,
+                          client_pay_amount = $3, carrier_obligation = $4
+          WHERE kommo_id = $5`,
+        [type, extractCarrierPayment(deal), clientPay, obligation, deal.id]
       );
       updated += res.rowCount ?? 0;
     }
   }
-  console.log(`backfillCarrierPayment: угод ${ids.length}, з умовами виплати ${withType}, оновлено ${updated}`);
+  console.log(`backfillCarrierPayment: угод ${ids.length}, з умовами виплати ${withType}`
+    + `, з повною сумою ${withBase}, оновлено ${updated}`);
   // ⚠️ ПОРОЖНІЙ РЕЗУЛЬТАТ — ПРОВАЛ, А НЕ УСПІХ. Заміряно: тип заповнений у 195
   // із 279. Нуль означає, що екстрактор читає не те поле, а не що даних немає.
   if (ids.length > 0 && withType === 0) {
     throw new Error("backfillCarrierPayment: жодної угоди з умовами виплати — "
-      + "перевірте id полів, бо заміряно 195 із 279");
+      + "перевірте id полів, бо заміряно 206 із 295");
   }
-  return { scanned: ids.length, withType, updated };
+  // Той самий сторож на ЗНАМЕННИК: без «Приход 1» маржинальність не рахується
+  // взагалі, і мовчазний нуль тут означав би порожню колонку на всьому екрані.
+  if (ids.length > 0 && withBase === 0) {
+    throw new Error("backfillCarrierPayment: жодної угоди з повною сумою — "
+      + "перевірте поле 2097627, бо заміряно 294 із 295");
+  }
+  return { scanned: ids.length, withType, withBase, updated };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

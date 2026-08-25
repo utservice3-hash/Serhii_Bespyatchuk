@@ -2,6 +2,7 @@ import type { ReceivableTotals } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import {
   AGING_LABEL, AGING_ORDER, CARRIER_REASON_LABEL, ENTITY_LABEL, ENTITY_REASON_LABEL, t,
+  marginHint, marginPctText, writtenOffLabel,
 } from "../receivablesView";
 
 /**
@@ -74,6 +75,18 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
         <span className="kpi-label">Загальний борг</span>
         <span className="kpi-value" title={formatAmountFull(debtTotal)}>{formatAmount(debtTotal)}</span>
         {totals && <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>{totals.invoices} рахунків · {clientCount} боржників</span>}
+        {/* 🔴 ПЛИТКА, ЩО ПРОСІЛА МОВЧКИ, ЧИТАЄТЬСЯ ЯК ПОЛОМКА.
+            Списання ЗМЕНШУЄ це число (рішення власника 25.08.2026) — отже поруч
+            мусить стояти, на скільки саме. Той самий урок, що «Прострочено
+            (понад ліміт)»: число без сліду про свою зміну гірше за незручне.
+            Підпису немає, коли списань немає: «списано 0 на 0 ₴» перетворив би
+            сигнал на шум. */}
+        {totals && writtenOffLabel(totals.writtenOffN, totals.writtenOffAmount) && (
+          <span style={{ fontSize: "var(--fs-xs)", color: "var(--warn)" }}
+                title="Списаний борг у це число не входить — його визнали безнадійним">
+            {writtenOffLabel(totals.writtenOffN, totals.writtenOffAmount)}
+          </span>
+        )}
         {/* 🔴 ПЛИТКА БІЛЬШЕ НЕ ПОРОЖНЯ. Дві перші були білими плямами на початку
             екрана, поки три сусідні несли розклад — читалось як «тут нема чого
             показати». Розклад той самий, що й у сусідів, і з ТОГО САМОГО виразу
@@ -187,6 +200,32 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
               ⚠️ воронка поза мапою етапів: {totals.pipelinesOutOfMap.join(", ")}
             </span>
           )}
+        </div>
+      )}
+
+      {/* 💰 СКІЛЬКИ ЗАРОБЛЕНО НА ТОМУ, ЩО ЩЕ НЕ ОПЛАЧЕНЕ (25.08.2026).
+          🔴 ЗНАМЕННИК НАЗВАНО В ПІДПИСІ, І ЦЕ ГОЛОВНЕ В ЦІЙ ПЛИТЦІ. «% від
+          боргу» був би технічно правдивий і саме тому небезпечний: борг падає
+          з кожною оплатою, тож заміряний максимум — 6 667% (клієнт заборгував
+          3 ₴ і «заробив» 200). Проти цього «% від суми рахунків» дає медіану
+          12.3% і максимум 100.0%.
+          Слово «PnL» тут заборонене: це не звіт про прибутки, а відношення
+          двох полів CRM. Тримає гейт. */}
+      {totals && (
+        <div className="kpi-card">
+          <span className="kpi-label">Заробили на цих угодах</span>
+          <span className="kpi-value" title={marginHint(totals.margin)}>
+            {totals.margin?.earned == null ? "—" : formatAmount(totals.margin.earned)}
+          </span>
+          <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
+            {/* «—» тут ВІДПОВІДЬ, а не порожнє місце: причина названа словами. */}
+            {totals.margin?.pct == null
+              ? marginHint(totals.margin)
+              : `${marginPctText(totals.margin)} від суми рахунків (${formatAmount(totals.margin.base ?? 0)})`}
+          </span>
+          <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 4, display: "block" }}>
+            Знаменник — «Приход 1» із CRM, тобто ПОВНА сума угод, а не залишок боргу.
+          </span>
         </div>
       )}
     </div>

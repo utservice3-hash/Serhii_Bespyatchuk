@@ -293,6 +293,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // гілка (рішення 04.08) лишається недоторканою.
   { method: "POST", path: "/api/dashboard/receivables/merge", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
+  // 🗑 Списання безнадійного боргу — право `write_off_debt` = {ceo, opdir}, і
+  // АДМІН тут у deny СВІДОМО. Це не недогляд і не «забули додати»: рішення
+  // власника 25.08.2026 назвало рівно дві ролі, а списання зменшує суму на
+  // плитці, тобто це визнання втрати грошей, а не операційна дія. Розширення
+  // складу має бути свідомим — тому й записане тут поіменно, а не виведене з
+  // `admin_scope` (фінансист має його з 31.07 і права все одно не отримує).
+  { method: "POST", path: "/api/dashboard/receivables/writeoff", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead", "financier", "kvp", "admin"] },
+  { method: "DELETE", path: "/api/dashboard/receivables/writeoff", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead", "financier", "kvp", "admin"] },
   { method: "GET", path: "/api/dashboard/regular-clients", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/repeat-client-history", cls: "GET",

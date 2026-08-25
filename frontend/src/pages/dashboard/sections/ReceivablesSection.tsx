@@ -5,6 +5,7 @@ import {
   fetchManagerOptions, type ManagerOption,
   type ReceivableInvoice, type ReceivableManager, type ReceivableClient, type ReceivableTotals, type Team,
 } from "../../../api";
+import { WriteoffDialog } from "./WriteoffDialog";
 import { ReceivablesTiles } from "./ReceivablesTiles";
 import { ReceivablesFilters } from "./ReceivablesFilters";
 import { OwnerEditor } from "./OwnerEditor";
@@ -14,6 +15,7 @@ import {
   CARRIER_LABEL, CARRIER_REASON_LABEL, carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
   entityBreakdown, isAncientDebt, isOverdue,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters, t,
+  marginHint, marginPctText, writtenOffLabel,
   type Filters, type MergeSide,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
@@ -141,6 +143,7 @@ export function ReceivablesSection({
   canSetOwner,
   canMerge,
   canSetLimit,
+  canWriteOff,
   canEditReceivables,
   patchReceivableNote,
   onRefresh,
@@ -156,6 +159,11 @@ export function ReceivablesSection({
   /** Право віддає СЕРВЕР (`isAdminScope`) — фронт свого правила не має. */
   canSetOwner: boolean;
   canSetLimit: boolean;
+  /**
+   * 🗑 Право віддає СЕРВЕР (`write_off_debt` = СЕО · опердир). Кнопки в решти
+   * НЕМАЄ — це не «є, але дає 403»: екран своєї думки про доступ не має.
+   */
+  canWriteOff: boolean;
   /** Право віддає СЕРВЕР (`merge_receivables`). Фінансиста тут немає. */
   canMerge: boolean;
   canEditReceivables: boolean;
@@ -171,6 +179,9 @@ export function ReceivablesSection({
 
   // Розгортання рахунків клієнта (лінива підгрузка) + локальні правки нотаток рахунків.
   const [openKey, setOpenKey] = useState<string | null>(null);
+  // 🗑 Що зараз списуємо. `invoiceNo: null` — клієнта цілком. Один стан на обидва
+  // рівні: два незалежні стани розійшлися б, і поповер зміг би відкритись двічі.
+  const [writeoffFor, setWriteoffFor] = useState<{ clientKey: string; invoiceNo: string | null } | null>(null);
   const [invCache, setInvCache] = useState<Record<string, ReceivableInvoice[] | "loading">>({});
   const loadInvoices = (clientKey: string) => {
     fetchReceivableInvoices(clientKey)
@@ -204,7 +215,7 @@ export function ReceivablesSection({
   };
 
   const today = new Date().toISOString().slice(0, 10);
-  const renderInvoices = (clientKey: string, colSpan: number) => {
+  const renderInvoices = (clientKey: string, clientName: string, colSpan: number) => {
     if (openKey !== clientKey) return null;
     const inv = invCache[clientKey];
     // Юрособи всередині клієнта. Кілька — означає, що клієнта ОБʼЄДНАЛИ, і це
@@ -330,8 +341,34 @@ export function ReceivablesSection({
                             );
                           })()}
                         </td>
-                        <td style={{ textAlign: "right", fontWeight: 600, width: 96, whiteSpace: "nowrap" }}
-                          title={formatAmountFull(x.amount)}>{formatAmount(x.amount)}</td>
+                        {/* 🗑 СПИСАНИЙ РАХУНОК ЛИШАЄТЬСЯ ВИДИМИМ — просто не входить
+                            у суму. Сховати його означало б, що зменшення плитки
+                            нічим не пояснюється; закреслення каже те саме, що
+                            підпис у рядку клієнта, тільки поіменно. */}
+                        <td style={{ textAlign: "right", fontWeight: 600, width: 96, whiteSpace: "nowrap", position: "relative",
+                                     ...(x.writtenOff ? { textDecoration: "line-through", color: "var(--text-muted)" } : {}) }}
+                          title={x.writtenOff ? "Списано як безнадійний — у суму боргу не входить" : formatAmountFull(x.amount)}>
+                          {formatAmount(x.amount)}
+                          {canWriteOff && (x.invoiceNo ?? "") !== "" && (
+                            <button onClick={() => setWriteoffFor(
+                              writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === x.invoiceNo
+                                ? null : { clientKey, invoiceNo: x.invoiceNo })}
+                              title={x.writtenOff ? "Скасувати списання цього рахунку" : "Списати цей рахунок як безнадійний"}
+                              aria-label="Списати цей рахунок як безнадійний"
+                              style={{ border: "none", background: "none", cursor: "pointer", padding: 0,
+                                       marginLeft: 4, fontSize: "var(--fs-sm)", color: "var(--text-muted)",
+                                       textDecoration: "none" }}>
+                              🗑
+                            </button>
+                          )}
+                          {writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === x.invoiceNo && (
+                            <WriteoffDialog clientKey={clientKey} clientName={clientName}
+                              invoiceNo={x.invoiceNo} amount={x.amount}
+                              alreadyWritten={{ n: x.writtenOff ? 1 : 0, amount: x.writtenOff ? x.amount : 0 }}
+                              onClose={() => setWriteoffFor(null)}
+                              onDone={() => { setWriteoffFor(null); loadInvoices(clientKey); onRefresh?.(); }} />
+                          )}
+                        </td>
                         <td>
                           <input
                             type="date"
@@ -386,7 +423,20 @@ export function ReceivablesSection({
                     <td style={{ textAlign: "left", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
                       оплачених: {inv.filter((x) => x.carrierPaid === "paid").length} з {inv.length}
                     </td>
-                    <td style={{ textAlign: "right", fontWeight: 700 }}>{formatAmount(inv.reduce((s, x) => s + x.amount, 0))}</td>
+                    {/* 🔴 ПІДСУМОК РОЗКРИТТЯ РАХУЄ ТЕ САМЕ, ЩО РЯДОК КЛІЄНТА —
+                        тобто БЕЗ списаних. Інакше два числа на одному екрані
+                        розійшлися б, і кожне виглядало б правдоподібно (рівно
+                        так «Команда за місяць 12%» жила поруч із плиткою 11.8%). */}
+                    <td style={{ textAlign: "right", fontWeight: 700 }}>
+                      {formatAmount(inv.filter((x) => !x.writtenOff).reduce((s, x) => s + x.amount, 0))}
+                      {writtenOffLabel(inv.filter((x) => x.writtenOff).length,
+                                       inv.filter((x) => x.writtenOff).reduce((s, x) => s + x.amount, 0)) && (
+                        <span style={{ display: "block", fontSize: "var(--fs-xs)", fontWeight: 400, color: "var(--warn)" }}>
+                          {writtenOffLabel(inv.filter((x) => x.writtenOff).length,
+                                           inv.filter((x) => x.writtenOff).reduce((s, x) => s + x.amount, 0))}
+                        </span>
+                      )}
+                    </td>
                     <td colSpan={3} />
                   </tr>
                 </tbody>
@@ -513,6 +563,22 @@ export function ReceivablesSection({
                     <th style={{ textAlign: "left", width: 140 }} title="Наша юрособа, від якої виставлено рахунок — з «форми оплати» Kommo">Юрособа</th>
                     <th style={{ textAlign: "left", width: 165 }} title="Чи оплачено перевізника по угоді рахунку. «н/д» = не знаємо, а НЕ «не оплачено»">Перевізник</th>
                     <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 110 }}>Сума боргу</th>
+                    {/* 💰 ЗАРОБІТОК І МАРЖИНАЛЬНІСТЬ (25.08.2026).
+                        🔴 ЗНАМЕННИК НАЗВАНО В ПІДПИСІ. Просто «маржинальність, %»
+                        читалось би як «% від боргу» — і це був би той самий клас,
+                        що «Прострочено (понад ліміт)»: підпис правдивий, величина
+                        за ним інша. Борг падає з кожною оплатою, тож `заробили /
+                        борг` вибухає: заміряно на живому проді максимум 6 667%.
+                        Проти цього «% від суми рахунків» дає медіану 12.3% і
+                        максимум 100.0%. */}
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 100 }}
+                        title="Скільки ми заробили на угодах цього клієнта. Рахується РАЗ НА УГОДУ: два рахунки однієї угоди інакше подвоїли б маржу">
+                      Заробили
+                    </th>
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 96 }}
+                        title="Заробили ÷ повна сума угод («Приход 1» з CRM). НЕ від боргу: борг — це залишок, і відношення до нього вибухає">
+                      Маржа, % від суми рахунків
+                    </th>
                     <th style={{ textAlign: "center", width: 84 }}>Днів без оплати</th>
                     {/* 🔴 ШИРИНА ТУТ — ЦЕ І Є ВЕСЬ ВИГРАШ ВИСОТИ, а не косметика.
                         Перший захід зробив кнопку інлайновою, але лишив колонку
@@ -638,7 +704,62 @@ export function ReceivablesSection({
                           <td style={{ textAlign: "left", verticalAlign: "top", fontSize: "var(--fs-sm)" }}>
                             <CarrierCell facts={c.facts} />
                           </td>
-                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top", whiteSpace: "nowrap" }} title={formatAmountFull(c.amount)}>{formatAmount(c.amount)}</td>
+                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top", whiteSpace: "nowrap", position: "relative" }} title={formatAmountFull(c.amount)}>
+                            {formatAmount(c.amount)}
+                            {/* 🗑 КНОПКА ПОРУЧ ІЗ ЧИСЛОМ, ЯКЕ ВОНА ЗМІНЮЄ. Дія, що
+                                зменшує суму, мусить стояти біля суми: інакше
+                                людина шукає, звідки просіла цифра. Той самий
+                                принцип, що ✏️ біля ліміту. */}
+                            {canWriteOff && (
+                              <button onClick={(e) => { e.stopPropagation(); setWriteoffFor(
+                                writeoffFor?.clientKey === c.clientKey && writeoffFor.invoiceNo === null
+                                  ? null : { clientKey: c.clientKey, invoiceNo: null }); }}
+                                title="Списати безнадійний борг клієнта" aria-label="Списати безнадійний борг клієнта"
+                                style={{ border: "none", background: "none", cursor: "pointer",
+                                         padding: 0, marginLeft: 4, fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
+                                🗑
+                              </button>
+                            )}
+                            {/* 🔴 ПІДПИС ОБОВʼЯЗКОВИЙ ТАМ, ДЕ Є СПИСАННЯ, і його
+                                НЕМАЄ там, де списань нема: «списано: 0 на 0 ₴» у
+                                кожному рядку перетворив би сигнал на шум. Сума
+                                вище вже ЗМЕНШЕНА — без цього рядка вона просіла б
+                                мовчки, а число, що змінилось без сліду, читається
+                                як поломка. */}
+                            {c.facts && writtenOffLabel(c.facts.writtenOffN, c.facts.writtenOffAmount) && (
+                              <span style={{ display: "block", fontSize: "var(--fs-xs)", fontWeight: 400, color: "var(--warn)" }}
+                                    title="Списаний борг у суму не входить, але рахунки лишаються видимими в розкритті">
+                                {writtenOffLabel(c.facts.writtenOffN, c.facts.writtenOffAmount)}
+                              </span>
+                            )}
+                            {writeoffFor?.clientKey === c.clientKey && writeoffFor.invoiceNo === null && (
+                              <WriteoffDialog clientKey={c.clientKey} clientName={c.clientName}
+                                invoiceNo={null} amount={c.amount}
+                                alreadyWritten={{ n: c.facts?.writtenOffN ?? 0, amount: c.facts?.writtenOffAmount ?? 0 }}
+                                onClose={() => setWriteoffFor(null)}
+                                // Перечитуємо весь екран: списання рухає і рядок, і
+                                // плитки, і фільтри — усе з одного виразу.
+                                onDone={() => { setWriteoffFor(null); setInvCache((x) => { const n = { ...x }; delete n[c.clientKey]; return n; }); if (openKey === c.clientKey) loadInvoices(c.clientKey); onRefresh?.(); }} />
+                            )}
+                          </td>
+                          {/* 💰 «—» ТУТ — ЦЕ ВІДПОВІДЬ, А НЕ ПОРОЖНЄ МІСЦЕ.
+                              Заміряно 25.08.2026: 5 клієнтів із 76 не мають жодної
+                              звʼязаної угоди. Намалювати їм 0 ₴ означало б заявити
+                              «не заробили», хоча ми просто не знаємо. Причина —
+                              у підказці, бо порожнє місце читається як «нічого
+                              немає», а не як «ми не знаємо». */}
+                          <td style={{ textAlign: "right", verticalAlign: "top", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}
+                              title={marginHint(c.margin)}>
+                            {c.margin?.earned == null
+                              ? <span style={{ color: "var(--text-muted)" }}>—</span>
+                              : formatAmount(c.margin.earned)}
+                          </td>
+                          <td style={{ textAlign: "right", verticalAlign: "top", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}
+                              title={marginHint(c.margin)}>
+                            {c.margin?.pct == null
+                              ? <span style={{ color: "var(--text-muted)" }}>—</span>
+                              : marginPctText(c.margin)}
+                          </td>
                           <td style={{ textAlign: "center", verticalAlign: "top", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>
                             {c.overdueDays ?? "—"}
                             {isAncientDebt(c.overdueDays) && (
@@ -691,7 +812,7 @@ export function ReceivablesSection({
                             />
                           </td>
                         </tr>
-                        {renderInvoices(c.clientKey, 10)}
+                        {renderInvoices(c.clientKey, c.clientName, 12)}
                       </Fragment>
                     );
                   })}

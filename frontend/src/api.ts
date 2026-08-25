@@ -1247,6 +1247,22 @@ export type ReceivableCarrierPaid = "paid" | "unpaid" | "na";
 export type ReceivableCarrierReason = "one_c" | "broken_link" | "out_of_map";
 export type ReceivableAging = "0-30" | "31-60" | "61-90" | "90+";
 
+/**
+ * 💰 КЛІТИНКА МАРЖИНАЛЬНОСТІ — РАХУЄ СЕРВЕР, фронт лише форматує.
+ *
+ * `pct = null` означає «—», і це НЕ нуль: `why` називає, чого саме бракує.
+ * Заміряно 25.08.2026 на живому проді — знаменник це «Приход 1» (повна сума
+ * угоди), а НЕ борг: борг падає з кожною оплатою, і `заробили / борг` давало
+ * до 6 667%.
+ */
+export type ReceivableMarginUnknown = "no_deal" | "no_base";
+export interface ReceivableMargin {
+  earned: number | null;
+  base: number | null;
+  pct: number | null;
+  why: ReceivableMarginUnknown | null;
+}
+
 export interface ReceivableTally { n: number; amount: number }
 type TallyMap<K extends string> = Partial<Record<K, ReceivableTally>>;
 
@@ -1264,6 +1280,21 @@ export interface ReceivableClientFacts {
   /** Воронки поза `pipeline_stage_map` — НАЗИВАЄМО їх, а не ховаємо. */
   pipelinesOutOfMap: number[];
   oldestAgeDays: number | null;
+  /**
+   * 💰 Скільки ЗАРОБИЛИ на угодах цього клієнта (`deals.price` — у цьому
+   * продукті це вже маржа) і ПОВНА сума тих угод («Приход 1»), яка й є
+   * знаменником маржинальності. Рахуються РАЗ НА УГОДУ: два рахунки однієї
+   * угоди інакше подвоїли б маржу, і вона виглядала б правдоподібно.
+   *
+   * `null` — «рахувати нема з чого», і це НЕ нуль: нуль означав би «заробили
+   * нічого». Заміряно 25.08.2026: 5 клієнтів із 76 не мають жодної звʼязаної
+   * угоди, і саме вони мусять дати «—», а не 0.0%.
+   */
+  earned: number | null;
+  clientPay: number | null;
+  /** 🗑 Списано як безнадійне. У `amount` НЕ входить, але видно підписом. */
+  writtenOffN: number;
+  writtenOffAmount: number;
 }
 
 /** Ті самі числа, що в ярликах рядків, — джерело ПЛИТОК. Вираз один на обох. */
@@ -1277,6 +1308,12 @@ export interface ReceivableTotals {
   entityReason: TallyMap<ReceivableEntityReason>;
   carrierReason: TallyMap<ReceivableCarrierReason>;
   pipelinesOutOfMap: number[];
+  /** 💰 Ті самі величини, що в рядках, — по всьому екрану. Вираз один на обох. */
+  earned: number | null;
+  clientPay: number | null;
+  margin: ReceivableMargin | null;
+  writtenOffN: number;
+  writtenOffAmount: number;
 }
 
 export interface ReceivableClient {
@@ -1292,6 +1329,8 @@ export interface ReceivableClient {
   majorityName: string | null;
   /** `null` лише коли в клієнта немає жодного рахунку в деталізації. */
   facts: ReceivableClientFacts | null;
+  /** 💰 Заробіток / повна сума / %. Рахує сервер тим самим виразом, що плитку. */
+  margin: ReceivableMargin | null;
 }
 
 /** Ручне призначення відповідального. `managerId: null` — свідоме «без відповідального». */
@@ -1382,6 +1421,34 @@ export interface ReceivableInvoice {
   /** № угоди й чи знайшлась вона. Лінк малюємо ЛИШЕ коли угода справді є. */
   dealId: number | null;
   dealFound: boolean;
+  /**
+   * 🗑 Рахунок списано як безнадійний. У сумі клієнта його НЕМАЄ, а в розкритті
+   * він лишається видимим: плитка, що просіла без сліду, читається як поломка.
+   */
+  writtenOff: boolean;
+}
+
+/**
+ * 🗑 Списати безнадійний борг — рахунок або клієнта цілком (`invoiceNo` не
+ * передано). Право `write_off_debt` = {СЕО, опердир}; кнопки в решти НЕМАЄ,
+ * а не «є, але дає 403» — право віддає сервер полем `canWriteOff`.
+ *
+ * Примітка обовʼязкова, і її вимагає не лише роут, а `CHECK` у БД: списання без
+ * «чому» через місяць нічим не відрізняється від помилки.
+ */
+export async function writeOffReceivable(payload: {
+  clientKey: string; invoiceNo?: string | null; note: string;
+}): Promise<{ written: number }> {
+  const { data } = await api.post<{ written: number }>("/dashboard/receivables/writeoff", payload);
+  return data;
+}
+
+/** Скасувати списання — тим самим інтерфейсом, із тим самим журналом. */
+export async function revokeReceivableWriteoff(payload: {
+  clientKey: string; invoiceNo?: string | null; note: string;
+}): Promise<{ revoked: number }> {
+  const { data } = await api.delete<{ revoked: number }>("/dashboard/receivables/writeoff", { data: payload });
+  return data;
 }
 
 export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoice[]> {
@@ -1476,6 +1543,13 @@ export interface ReceivablesResponse {
    * гейтить роут — фронт своєї думки про доступ не має.
    */
   canSetLimit?: boolean;
+  /**
+   * 🗑 Чи можна списати безнадійний борг. Право `write_off_debt` — РІВНО ДВІ
+   * ролі: СЕО й опердир. Адміна тут НЕМАЄ свідомо (рішення власника
+   * 25.08.2026): списання зменшує суму на плитці, тобто це визнання втрати
+   * грошей, а не операційна дія.
+   */
+  canWriteOff?: boolean;
 }
 
 export interface ReceivableManager {
