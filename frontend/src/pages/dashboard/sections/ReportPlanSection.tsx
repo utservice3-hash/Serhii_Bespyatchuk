@@ -1,9 +1,9 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
   fetchResponseTimeByManager,
   type ReportPlan, type ReportPlanManager, type KvpManagerDetail, type KvpDetailCell, type Team,
-  type DayItemKind, type DayItems, type DealSource,
+  type DayItemKind, type DayItems, type DealSource, type DealKlass,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
@@ -11,6 +11,17 @@ import { InfoHint } from "../widgets";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ReportTableSection } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
+// 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#208`.
+import { keepByKlass, SLICE_LABEL, KLASS_CHIP, SLICES, type Slice } from "../klassSlice";
+
+/**
+ * 🔀 ПОЛОЖЕННЯ ПЕРЕМИКАЧА ЇДЕ КОНТЕКСТОМ, А НЕ ПРОПСОМ.
+ *
+ * `DayDrill` живе всередині `MgrStrip`, а той викликається з ТРЬОХ місць. Пробивати
+ * проп крізь два рівні й три виклики означало б три шанси забути один — рівно те,
+ * як розкриття і число розходяться. Контекст читає той, кому воно треба.
+ */
+const SliceCtx = createContext<Slice>("all");
 
 // Статуси-кольори (зарезервовані, з іконкою+підписом — не колір-наодинці). Тема-безпечні.
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BAR = "#2f6fdb", MUTED = "var(--text-muted)";
@@ -27,9 +38,14 @@ const SLBL: Record<string, string> = { g: "В нормі", a: "Відстає", 
  * Це той самий клас помилки, який ми тут і виправляємо: невідоме зʼїжджає в
  * конкретну відповідь. Тепер «невизначено» видно, і воно сіре.
  */
-function SrcChip({ src, source }: { src: "new" | "rep" | null; source?: DealSource }) {
+function SrcChip({ src, source }: { src: DealKlass; source?: DealSource }) {
   const c = src === "new" ? BAR : src === "rep" ? GREEN : MUTED;
-  const t = src === "new" ? "новий" : src === "rep" ? "постійний" : "невизначено";
+  // 🔴 ПІДПИС — З ЄДИНОГО РЕЄСТРУ (`KLASS_CHIP`), а не потрійний вираз тут.
+  // Доти `'undef'` і `null` малювались однаково «невизначено», хоч це різні речі:
+  // перше — ядро не змогло визначити клас угоди, друге — рядок узагалі не угода
+  // (дзвінок). Поки третій клас був порожній, різниці не було видно; 25.08.2026
+  // він ожив (6 угод сторно, −18 004 ₴).
+  const t = src == null ? "новизна незастосовна" : KLASS_CHIP[src];
   // 🔴 ДЖЕРЕЛО — ДРУГА, ОКРЕМА ПОЗНАЧКА (18.08.2026). Доти канал угоди ВИРІШУВАВ
   // новизну: усе з реклами й лідогену друкувалось «новий», навіть якщо клієнт возив
   // із нами роками (заміряно: 296 угод за 12 міс). Тепер новизну рахує канон, а
@@ -129,6 +145,13 @@ export function ReportPlanSection({ auth, teams }: {
 }) {
   const today = todayKyiv();
   const [mode, setMode] = useState<Mode>("month");
+  /**
+   * 🔀 Е3 — ЗРІЗ ЗА НОВИЗНОЮ КЛІЄНТА. Звужує «Створено» і розклад його джерела,
+   * а також СКЛАД розкриття того самого числа. Інші числа (гроші, дзвінки,
+   * відправлені авто) НЕ звужуються — і їхні розкриття теж, інакше ми б завели
+   * рівно ту розбіжність «число проти складу», від якої цей перемикач і береже.
+   */
+  const [slice, setSlice] = useState<Slice>("all");
   /**
    * 🖥 ВИГЛЯД: картки (як було) або таблиця. Перемикач СУТО презентаційний —
    * обидва вигляди читають той самий `periodData`, тож перемикання не робить
@@ -411,8 +434,9 @@ export function ReportPlanSection({ auth, teams }: {
           </button>
         </div>
       ) : busy && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
-        <>
+        <SliceCtx.Provider value={slice}>
           <Glance data={data} focus={focus} focusDay={focusDay} today={today} periodLabel={periodLabel} />
+          <SliceSwitch data={data} slice={slice} onSlice={setSlice} />
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
               бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
@@ -423,7 +447,7 @@ export function ReportPlanSection({ auth, teams }: {
               data={data} teams={teams} auth={auth}
               teamIds={teamIds} onTeamIds={setTeamIds}
               periodLabel={periodLabel} hideTeams={HIDE_TEAMS}
-              responseByMgr={respByMgr} month={selectedPeriod.from.slice(0, 7)}
+              responseByMgr={respByMgr} month={selectedPeriod.from.slice(0, 7)} slice={slice}
               /**
                * 🧍 ОДИН МЕНЕДЖЕР — ПОВНА КАРТКА (рішення власника 20.08.2026).
                * Рендерить КОНТЕЙНЕР і віддає готовий вузол: `MgrStrip` лишається
@@ -467,7 +491,7 @@ export function ReportPlanSection({ auth, teams }: {
           {data.managers.length === 0 && <div style={{ color: MUTED, padding: 20 }}>Немає менеджерів у цьому розрізі.</div>}
           </>)}
           <Legend />
-        </>
+        </SliceCtx.Provider>
       )}
     </div>
   );
@@ -487,6 +511,53 @@ const navBtn: React.CSSProperties = { border: "1px solid var(--border)", backgro
  * місячна (`expectedByManagerDay` за плановою датою оплати) і від обраного періоду
  * не залежить. Її підпис уже чесний, і міняти його означало б збрехати навпаки.
  */
+/**
+ * 🔀 ПЕРЕМИКАЧ ЗРІЗУ ЗА НОВИЗНОЮ (Е3, рішення власника 25.08.2026).
+ *
+ * 🔴 ТРЕТЄ ПОЛОЖЕННЯ — УМОВНЕ, і це не дрібниця. «Невизначено» показується ЛИШЕ
+ * тоді, коли клас непорожній: у липні його нуль, у серпні — 6 угод на −18 004 ₴
+ * (сторно без `client_key`). Постійно висяче положення з нулем бреше рівно так
+ * само, як заголовок плитки «(понад ліміт)» над списком, куди входять і клієнти
+ * без ліміту. Тримають `#207b` (є → видно) і `#207c` (немає → не видно) — двома
+ * саботажами в протилежні боки, на липні й серпні відповідно.
+ *
+ * 🔴 ПІДПИС У ВВІМКНЕНОМУ СТАНІ ОБОВʼЯЗКОВИЙ. Без нього звужені числа читаються
+ * як повні — це той самий клас, що дві правильні метрики без підпису, які
+ * читаються як поломка. Тримає `#209`.
+ */
+function SliceSwitch({ data, slice, onSlice }: { data: ReportPlan; slice: Slice; onSlice: (v: Slice) => void }) {
+  // Третій клас існує, якщо він непорожній ХОЧ У КОГОСЬ: ховати положення через
+  // те, що в одного менеджера нуль, означало б ховати саме ті угоди, які шукають.
+  const undefCount = data.managers.reduce((a, m) => a + (m.srcByKlass?.undef.created ?? 0), 0);
+  const shown: Slice[] = SLICES.filter((s) => s !== "undef" || undefCount > 0);
+  const total = data.managers.reduce((a, m) => a + m.created, 0);
+  const inSlice = slice === "all" ? total
+    : data.managers.reduce((a, m) => a + (m.srcByKlass?.[slice].created ?? 0), 0);
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
+      <span style={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }}>Створені угоди:</span>
+      {shown.map((s) => (
+        <button key={s} type="button" onClick={() => onSlice(s)}
+          title={s === "undef" ? SLICE_LABEL.undef : undefined}
+          style={{ padding: "5px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 650,
+            border: `1px solid ${slice === s ? BAR : "var(--border)"}`,
+            background: slice === s ? BAR + "18" : "transparent",
+            color: slice === s ? BAR : "var(--text)" }}>
+          {s === "undef" ? "невизначено" : SLICE_LABEL[s]}
+          {s === "undef" && <span style={{ color: MUTED, fontWeight: 500 }}> · {undefCount}</span>}
+        </button>
+      ))}
+      {slice !== "all" && (
+        <span style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8, background: AMBER + "14",
+          border: `1px solid ${AMBER}44` }}>
+          ⚠️ показано <b>{SLICE_LABEL[slice]}</b> — {inSlice} із {total} створених;
+          <span style={{ color: MUTED }}> звужено і числа, і склад розкриття дня. Гроші, дзвінки й відправлені авто НЕ звужуються.</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPlan; focus: ReportPlan | null; focusDay: string; today: string; periodLabel: string }) {
   const g = data.glance;
   const pct = g.plan > 0 ? Math.round((g.fact / g.plan) * 100) : 0;
@@ -1041,7 +1112,38 @@ function WeekMoney({ mWeek, managerId, period }: {
  * самого числа — рівно те, від чого ми лікували чипи «новий/постійний» і розкриття
  * дня. Розкриття мусить пояснювати число, а не сперечатися з ним.
  */
+/**
+ * 🔀 ЗВУЖЕНИЙ НАБІР РЯДКІВ РОЗКРИТТЯ + ЙОГО ВЛАСНИЙ ПІДСУМОК.
+ *
+ * 🔴 ОДНА функція на обидві потреби — і рядки, і підсумок. Якби підсумок рахувався
+ * окремо, зʼявився б рівно той розрив, який ця фіча й лікує, лише всередині
+ * розкриття: угод показано 6, а «разом» — за 24.
+ *
+ * Рішення про клас НЕ приймається тут: `keepByKlass` — єдине місце, і воно
+ * звіряється з ядром (`#208`). Тут лише «до якого числа зріз узагалі стосується».
+ */
+function sliceView(r: DayItems | null | undefined, kind: DayItemKind, slice: Slice): {
+  items: DayItems["items"]; count: number; sum: number; narrowed: boolean;
+} {
+  const all = r?.items ?? [];
+  const narrowed = slice !== "all" && kind === "created";
+  if (!narrowed) return { items: all, count: r?.total.count ?? 0, sum: r?.total.sum ?? 0, narrowed: false };
+  const items = all.filter((it) => keepByKlass(it.src, slice));
+  return { items, count: items.length, sum: items.reduce((a, x) => a + x.price, 0), narrowed: true };
+}
+
 function DayDrill({ managerId, period, focusDay, today, weeksFirst }: { managerId: number; period: { from: string; to: string }; focusDay: string; today: string; weeksFirst: boolean }) {
+  /**
+   * 🔀 ЗРІЗ ДІЄ ЛИШЕ НА `created` — І ЦЕ НЕ ЛІНЬ, А ТА САМА ВИМОГА.
+   *
+   * Перемикач звужує ЧИСЛО «Створено». Розкриття, що пояснює саме це число,
+   * зобовʼязане звузитись разом із ним. Але розкриття ГРОШЕЙ, ДЗВІНКІВ і
+   * ВІДПРАВЛЕНИХ АВТО пояснюють числа, яких перемикач НЕ чіпає, — відфільтрувати
+   * їх означало б завести розбіжність «число проти складу» в дзеркальний бік.
+   * Дзвінки до того ж не мають новизни взагалі (`src: null`), тож звуження
+   * спорожнило б їх геть.
+   */
+  const slice = useContext(SliceCtx);
   const [d, setD] = useState<KvpManagerDetail | null>(null);
   const [err, setErr] = useState(false);
   const [open, setOpen] = useState<DrillKey | null>(null);
@@ -1130,6 +1232,7 @@ function DayDrill({ managerId, period, focusDay, today, weeksFirst }: { managerI
   /** Рядок-розкриття: позиції + ОБОВʼЯЗКОВИЙ підсумок — він і є доказом, що число зійшлося. */
   const DrillRow = ({ day, kind }: { day: string; kind: DayItemKind }) => {
     const r = items[`${day}|${kind}`];
+    const view = sliceView(r, kind, slice);
     return (
       <tr>
         <td colSpan={12} style={{ padding: 0, background: AMBER + "0e" }}>
@@ -1139,11 +1242,18 @@ function DayDrill({ managerId, period, focusDay, today, weeksFirst }: { managerI
           </div>
           {r === null || r === undefined ? (
             <div style={{ padding: "8px 14px", color: MUTED, fontSize: 12 }}>Завантаження…</div>
-          ) : r.items.length === 0 ? (
-            <div style={{ padding: "8px 14px", color: MUTED, fontSize: 12 }}>Порожньо.</div>
+          ) : view.items.length === 0 ? (
+            <div style={{ padding: "8px 14px", color: MUTED, fontSize: 12 }}>
+              {view.narrowed ? `У зрізі «${SLICE_LABEL[slice]}» угод цього дня немає.` : "Порожньо."}
+            </div>
           ) : (
             <>
-              {r.items.map((it, i) => (
+              {view.narrowed && (
+                <div style={{ padding: "6px 14px", fontSize: 11, color: AMBER, background: AMBER + "12" }}>
+                  ⚠️ зріз «{SLICE_LABEL[slice]}» — показано {view.items.length} із {r.items.length} угод дня
+                </div>
+              )}
+              {view.items.map((it, i) => (
                 <div key={i} style={{ display: "grid",
                   gridTemplateColumns: kind === "calls" ? "1fr 150px 110px 120px" : "1fr 110px 190px 120px",
                   gap: 10, padding: "7px 14px", borderBottom: "1px solid var(--border)", fontSize: 12, alignItems: "center" }}>
@@ -1182,8 +1292,11 @@ function DayDrill({ managerId, period, focusDay, today, weeksFirst }: { managerI
               ))}
               <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 14px",
                 fontSize: 12, fontWeight: 750, background: AMBER + "18" }}>
-                <span>разом за {ddmm(day)} · {r.total.count} поз.</span>
-                <span>{kind === "calls" ? `${r.items.filter((x) => x.call?.answered).length} розмов · ${r.items.filter((x) => !x.call?.answered).length} спроб` : `${fmt(r.total.sum)} ₴`}</span>
+                {/* 🔴 ПІДСУМОК — ІЗ ТОГО САМОГО НАБОРУ, ЩО РЯДКИ. Брати `r.total`
+                    при звуженому складі означало б, що розкриття сперечається
+                    саме з собою: угод 6, а підсумок за 24. */}
+                <span>разом за {ddmm(day)} · {view.count} поз.</span>
+                <span>{kind === "calls" ? `${view.items.filter((x) => x.call?.answered).length} розмов · ${view.items.filter((x) => !x.call?.answered).length} спроб` : `${fmt(view.sum)} ₴`}</span>
               </div>
             </>
           )}

@@ -6,6 +6,10 @@ import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rb
 import { mergePairAllowed, mergeDenyReason, type MergePairScope } from "../auth/mergeScope.js";
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
+import { klassOf } from "../core/klassFilter.js";
+
+/** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
+const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl } from "../core/kommoLinks.js";
 import { accumulateKpiTargets } from "../core/kpiTargets.js";
 
@@ -6988,6 +6992,12 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // остання їде окремим полем і належить ІНШІЙ партиції. Тримає `#174`.
       srcAd: splitM.get(m.id)?.adCount ?? 0, srcLeadgen: splitM.get(m.id)?.leadgenCount ?? 0,
       srcOther: splitM.get(m.id)?.otherCount ?? 0, srcNoChannel: splitM.get(m.id)?.noChannelCount ?? 0,
+      // 🔀 Е3: той самий розклад ВСЕРЕДИНІ кожного класу новизни. Їде разом із
+      // рядком, бо перемикач «усі / лише нові / лише постійні» НЕ ходить на
+      // сервер (`/overview` ×4 вже 4 940-5 168 мс при стелі 5 000 — `#36`).
+      // Плоскі поля вище лишаються зрізом «усі» і сюди НЕ дублюються.
+      srcByKlass: splitM.get(m.id)?.sourceByKlass
+        ?? { new: EMPTY_SRC, rep: EMPTY_SRC, undef: EMPTY_SRC },
       /**
        * 🔀 Канальні конверсії — `taken`/`won` ЗАВЖДИ, відсоток лише при taken ≥ 10
        * (рішення власника 21.08.2026). Числа не брешуть при жодній вибірці, а
@@ -7330,7 +7340,12 @@ dashboardRouter.get("/report-plan/deals", async (req, res) => {
       // мусить шукати ту саму угоду в CRM руками. URL будує сервер (`kommoLeadUrl`),
       // фронт піддомену не знає.
       kommoId: Number(x.kommo_id), url: kommoLeadUrl(Number(x.kommo_id)),
-      name: x.name, src: x.klass === "new" ? "new" : x.klass === "repeat" ? "rep" : null,
+      // 🔴 ВІДОБРАЖЕННЯ КЛАСУ — З `core/klassFilter.klassOf`, а не свій потрійний
+      // вираз тут. Тут стояла копія, яка зводила `'undef'` у `null` — тобто третій
+      // клас (сторно без ключа клієнта, 6 угод / −18 004 ₴ у серпні) ставав на
+      // екрані нерозрізненним із «питання незастосовне». Перемикач Е3 фільтрує
+      // ЦИМ станом, тож копія означала б два означення новизни на одному екрані.
+      name: x.name, src: klassOf(x.klass),
       // ⚠️ БІЛИЙ СПИСОК ІЗ ЧОТИРЬОХ, не з трьох: `undef` («канал не вказано») мусить
       // доїхати окремим станом, інакше він зіллється з `null` («джерело незастосовне»)
       // і незнання читатиметься як відсутність питання. Тримає `#175`.

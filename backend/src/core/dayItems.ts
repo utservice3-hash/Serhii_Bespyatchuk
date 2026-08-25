@@ -4,6 +4,10 @@ import { dealKlassSql, dealSourceSql } from "./metrics.js";
 // 🔬 Предикат стану джерела — у ЧИСТОМУ модулі без БД, щоб гілку «канал не
 // вказано» можна було саботувати в `npm test` (на проді таких угод нуль).
 import { sourceOf, type DealSourceState } from "./dealSourceState.js";
+// 🔬 Стан НОВИЗНИ — теж у чистому модулі, і з тієї ж причини: третій клас
+// (`undef`) на проді існує лічені дні на місяць, тож перевіряти його поведінкою
+// ненадійно. Перемикач Е3 фільтрує РІВНО цим станом.
+import { klassOf, type DealKlassState } from "./klassFilter.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 
 /**
@@ -51,7 +55,7 @@ export interface DayItem {
    * 🔴 ОКРЕМО ВІД ДЖЕРЕЛА (18.08.2026): угода може бути `src:'rep'` і `source:'ad'`
    * водночас — саме це ховала стара перша гілка класифікатора.
    */
-  src: "new" | "rep" | null;
+  src: DealKlassState;
   /** ДЖЕРЕЛО угоди — партиція з чотирьох: реклама / лідоген / без джерела /
    *  канал не вказано. `null` — НЕ пʼятий стан, а «питання незастосовне» (дзвінки). */
   source: DealSourceState;
@@ -99,11 +103,15 @@ const STATE_LABEL = (s: number): string =>
  * без історії клієнта — це НОВИЙ, а скорочення робило його постійним.
  *
  * Тепер SQL віддає готовий `klass` через `dealKlassSql()`, тож мітка й лічильник
- * рахуються ОДНИМ виразом. `'undef'` → `null`: «не знаємо» мусить бути видно, а не
- * зʼїжджати в «постійний» (саме таке мовчазне зʼїжджання ми тут і виправляємо).
+ * рахуються ОДНИМ виразом.
+ *
+ * 🔴 ВІДОБРАЖЕННЯ ПЕРЕЇХАЛО В `core/klassFilter.klassOf` (25.08.2026), і разом із
+ * ним ЗМІНИВСЯ ОДИН СТАН: було `'undef' → null`, стало `'undef' → 'undef'`.
+ * Тутешня локальна копія мала рівно ту ваду, яку Е2 виправив на осі ДЖЕРЕЛА:
+ * невідоме зводилось у «незастосовне», тож угода без класу ставала на екрані
+ * нерозрізненною з рядком-дзвінком. Поки третій клас був порожній, ціна була нуль;
+ * 25.08 він ожив (6 угод, −18 004 ₴), і перемикач Е3 мусить уміти його показати.
  */
-const srcOf = (klass: string | null): "new" | "rep" | null =>
-  klass === "new" ? "new" : klass === "repeat" ? "rep" : null;
 
 /** SELECT-колонки складу угоди — спільні для всіх `kind`, щоб мітка не розʼїхалась. */
 const DEAL_COLS = `d.kommo_id, d.name, d.price, d.status_id,
@@ -122,7 +130,7 @@ const mapDeals = (rows: DealRow[]): DayItem[] => rows.map((x) => ({
   // має знати (у нього вже є одна зашита копія, і саме так вони й розходяться).
   kommoId: Number(x.kommo_id),
   url: kommoLeadUrl(Number(x.kommo_id)),
-  src: srcOf(x.klass),
+  src: klassOf(x.klass),
   source: sourceOf(x.source),
   price: Math.round(Number(x.price ?? 0)),
   state: STATE_LABEL(Number(x.status_id)),

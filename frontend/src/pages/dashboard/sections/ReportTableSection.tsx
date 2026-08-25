@@ -5,6 +5,7 @@ import {
   REPORT_COLS, OPTIONAL_COLS, DEFAULT_OPT_ON, sortRows, footValue,
   type ColDef, type ColKey,
 } from "../reportTableCols";
+import { narrowToSlice, type Slice } from "../klassSlice";
 
 /**
  * 📊 ТАБЛИЧНИЙ ВИГЛЯД ЗВІТУ — рядок на менеджера за обраний період.
@@ -31,7 +32,7 @@ const STATUS_LBL: Record<string, string> = { g: "В нормі", a: "Відст�
 
 export function ReportTableSection({
   data, teams, auth, teamIds, onTeamIds, periodLabel, hideTeams,
-  responseByMgr, month, renderCard,
+  responseByMgr, month, renderCard, slice,
 }: {
   data: ReportPlan;
   teams: Team[];
@@ -44,6 +45,13 @@ export function ReportTableSection({
   responseByMgr?: Map<number, number | null>;
   /** Місяць для розкриття тижнів (YYYY-MM) — береться від початку обраного періоду. */
   month: string;
+  /**
+   * 🔀 Зріз за новизною (Е3). Звужує «Створено» і ПАРТИЦІЮ його джерела — рівно ті
+   * колонки, склад яких розкриття дня показує окремо. Решта колонок не залежить від
+   * новизни й НЕ звужується: звузити їх означало б показати гроші періоду за
+   * підписом «лише нові», хоч гроші за новизною тут узагалі не діляться.
+   */
+  slice: Slice;
   /**
    * ПОВНА КАРТКА обраного менеджера — рендерить КОНТЕЙНЕР, а не таблиця.
    *
@@ -80,12 +88,24 @@ export function ReportTableSection({
 
   const cols = useMemo(() => REPORT_COLS.filter((c) => c.core || optOn[c.key]), [optOn]);
   const rows = useMemo(() => {
-    const base = mgrFilter === "" ? data.managers : data.managers.filter((m) => m.managerId === mgrFilter);
+    const picked = mgrFilter === "" ? data.managers : data.managers.filter((m) => m.managerId === mgrFilter);
+    /**
+     * 🔀 ЗРІЗ ЗАСТОСОВУЄТЬСЯ ДО РЯДКА ОДИН РАЗ — ТУТ, ПЕРЕД СОРТУВАННЯМ І ПЕРЕД
+     * РЕЄСТРОМ КОЛОНОК.
+     *
+     * 🔴 Не в `val` кожної колонки: там це були б ЧОТИРИ місця, де можна забути
+     * одне — і тоді «зі створених: реклама» показувала б зріз, а «Створено» —
+     * усе. Реєстр колонок про зріз узагалі не знає й не має знати; його сигнатура
+     * не змінюється, тож `#81b`/`#104` лишаються чинними. Сортування теж рахується
+     * вже по звужених числах — інакше «найбільші зверху» сортувало б за
+     * прихованими величинами.
+     */
+    const base = picked.map((m) => narrowToSlice(m, slice));
     // Контекст потрібен, бо частка повільних лідів приходить окремим запитом і не
     // лежить у рядку менеджера. Без нього клік по цій колонці нічого не робив би —
     // чип є, сортування мертве.
     return sortRows(base, sortKey, sortDir, { slowByMgr: responseByMgr });
-  }, [data.managers, mgrFilter, sortKey, sortDir, responseByMgr]);
+  }, [data.managers, mgrFilter, sortKey, sortDir, responseByMgr, slice]);
 
   const onSort = (k: ColKey) => {
     if (k === "rank") return;

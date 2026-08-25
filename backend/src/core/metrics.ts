@@ -519,6 +519,30 @@ export interface CreatedSplitRow {
   leadgenCount: number;
   otherCount: number;
   noChannelCount: number;
+  /**
+   * 🔀 ТОЙ САМИЙ РОЗКЛАД ДЖЕРЕЛА, АЛЕ ВСЕРЕДИНІ КОЖНОГО КЛАСУ НОВИЗНИ (Е3).
+   *
+   * 🔴 ЧОМУ ЦЕ ЇДЕ В ТІЙ САМІЙ ВІДПОВІДІ, А НЕ ОКРЕМИМ ЗАПИТОМ ПО КЛІКУ.
+   * Перемикач «усі / лише нові / лише постійні» мусив би інакше перезапитувати
+   * `/report-plan` на кожне натискання. Заміряно 25.08.2026: `/overview` ×4 дає
+   * 4 940-5 168 мс при стелі 5 000 (`#36`), тобто запас вичерпано; перемикач, що
+   * ходить на сервер, упреться саме туди. Тут це 12 додаткових `FILTER` у ВЖЕ
+   * наявному агрегаті — жодного зайвого проходу по `final`.
+   *
+   * ⚠️ Плоскі поля вище лишаються зрізом `'all'` і НЕ дублюються сюди: інакше на
+   * одному екрані було б два джерела одного числа, і виправлення лягало б в одну
+   * копію (той самий клас, що «Команда за місяць» проти плитки «Виконано»).
+   */
+  sourceByKlass: Record<"new" | "rep" | "undef", SourceCounts>;
+}
+
+/** Розклад джерела всередині одного класу новизни. `created` — Σ чотирьох. */
+export interface SourceCounts {
+  created: number;
+  adCount: number;
+  leadgenCount: number;
+  otherCount: number;
+  noChannelCount: number;
 }
 export interface CreatedSplitBucketRow {
   bucket: string; created: number; newCount: number; repeatCount: number; undefCount: number;
@@ -764,7 +788,13 @@ function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string)
 export async function createdSplitByManager(s: MetricScope): Promise<CreatedSplitRow[]> {
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params);
-  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; created: string; new_count: string; repeat_count: string; undef_count: string; ad_count: string; leadgen_count: string; other_count: string; no_channel_count: string }>(
+  // 🔀 Зріз джерела всередині класу — ЧОТИРИ `FILTER` на кожен із трьох класів.
+  // Пари (klass, source) перелічені ЯВНО, без циклу по рядку SQL: перелік має
+  // збігатися з `dealSourceCase`, і `#207` це звіряє на живих даних.
+  const bySrc = (k: string): string => ["ad", "leadgen", "other", "undef"]
+    .map((s, i) => `COUNT(*) FILTER (WHERE klass = '${k}' AND source = '${s}') AS ${k}_${["ad", "lg", "oth", "nch"][i]}`)
+    .join(",\n            ");
+  const r = await pool.query<Record<string, string> & { manager_id: number; name: string; team_id: number | null }>(
     `WITH ${cte}
      SELECT m.id AS manager_id, m.name, m.team_id,
             COUNT(*) AS created,
@@ -774,17 +804,26 @@ export async function createdSplitByManager(s: MetricScope): Promise<CreatedSpli
             COUNT(*) FILTER (WHERE source = 'ad') AS ad_count,
             COUNT(*) FILTER (WHERE source = 'leadgen') AS leadgen_count,
             COUNT(*) FILTER (WHERE source = 'other') AS other_count,
-            COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count
+            COUNT(*) FILTER (WHERE source = 'undef') AS no_channel_count,
+            ${bySrc("new")},
+            ${bySrc("repeat")},
+            ${bySrc("undef")}
        FROM final f JOIN managers m ON m.id = f.manager_id AND m.is_active
       GROUP BY m.id, m.name, m.team_id
       ORDER BY created DESC`,
     params
   );
+  const slice = (x: Record<string, string>, k: string): SourceCounts => {
+    const n = (suf: string): number => Number(x[`${k}_${suf}`]);
+    const ad = n("ad"), lg = n("lg"), oth = n("oth"), nch = n("nch");
+    return { created: ad + lg + oth + nch, adCount: ad, leadgenCount: lg, otherCount: oth, noChannelCount: nch };
+  };
   return r.rows.map((x) => ({
     managerId: x.manager_id, name: x.name, teamId: x.team_id,
     created: Number(x.created), newCount: Number(x.new_count), repeatCount: Number(x.repeat_count), undefCount: Number(x.undef_count),
     adCount: Number(x.ad_count), leadgenCount: Number(x.leadgen_count),
     otherCount: Number(x.other_count), noChannelCount: Number(x.no_channel_count),
+    sourceByKlass: { new: slice(x, "new"), rep: slice(x, "repeat"), undef: slice(x, "undef") },
   }));
 }
 

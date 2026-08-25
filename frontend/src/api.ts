@@ -647,6 +647,10 @@ export interface ReportPlanKpi { fact: number | null; target: number; taken?: nu
   repeat?: number; leadgen?: number; ad?: number; undef?: number;
   // Тільки для «avgCheck» (#4): пул reportChain — signed Σ÷count (revenue/deals для Σ/Σ).
   deals?: number }
+/** Розклад джерела всередині одного класу новизни (`created` == Σ чотирьох). */
+export interface SrcCounts {
+  created: number; adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
+}
 export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";
@@ -687,6 +691,13 @@ export interface ReportPlanManager {
   /** накладка ДЖЕРЕЛА (⊂ created), у суму не додається */
   // Розклад створених за ДЖЕРЕЛОМ — партиція: Σ чотирьох == created (гейт #174).
   srcAd: number; srcLeadgen: number; srcOther: number; srcNoChannel: number;
+  /**
+   * 🔀 Той самий розклад ВСЕРЕДИНІ кожного класу новизни (Е3). Приїжджає разом
+   * із рядком, бо перемикач НЕ ходить на сервер: `/overview` ×4 вже 4 940-5 168 мс
+   * при стелі 5 000 (`#36`). Плоскі поля вище — це зріз «усі», і вони НЕ
+   * дублюються сюди: два джерела одного числа на одному екрані розходяться мовчки.
+   */
+  srcByKlass: Record<"new" | "rep" | "undef", SrcCounts>;
   /**
    * 🧬 ГРОШІ ЗА НОВИЗНОЮ КЛІЄНТА (канон `dealKlassSql`). `fact == factNew +
    * factRepeat + factUndef`, і те саме для очікувань. `undef` на екран не йде —
@@ -744,8 +755,17 @@ export async function fetchReportPlan(params: { from: string; to: string; manage
 // Джерело угоди — партиція з чотирьох (див. metrics.dealSourceCase). `null` НЕ
 // п'ятий стан, а «питання незастосовне»: так позначені рядки-дзвінки. Тримає `#175c`.
 export type DealSource = "ad" | "leadgen" | "other" | "undef" | null;
+/**
+ * НОВИЗНА клієнта — ДЗЕРКАЛО `core/klassFilter.DealKlassState`. `"undef"` став
+ * окремим станом 25.08.2026: до того сервер зводив його в `null`, тож 6 угод
+ * сторно (−18 004 ₴) були на екрані нерозрізненні з рядком-дзвінком, до якого
+ * питання про новизну не стосується. Тримає `#207b`/`#207c`.
+ */
+export type DealKlass = "new" | "rep" | "undef" | null;
+/** Положення перемикача зрізу. `"all"` — не клас, а відсутність звуження. */
+export type KlassSlice = "all" | "new" | "rep" | "undef";
 export interface ReportPlanDeal {
-  name: string; src: "new" | "rep" | null; source: DealSource; price: number; status: string;
+  name: string; src: DealKlass; source: DealSource; price: number; status: string;
   /** Картка угоди в Kommo — URL будує сервер, піддомен фронт не знає. */
   kommoId: number; url: string;
 }
@@ -762,7 +782,7 @@ export interface DayItem {
   /** Картка угоди в Kommo (для дзвінків — `null`). */
   kommoId: number | null;
   url: string | null;
-  src: "new" | "rep" | null;
+  src: DealKlass;
   /** ДЖЕРЕЛО угоди — окремий вимір від новизни (`src`). */
   source: DealSource;
   /** Сума показується ЗАВЖДИ; стан — окремим полем, а не замість числа. */
