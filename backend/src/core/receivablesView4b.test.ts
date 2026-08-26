@@ -1196,3 +1196,158 @@ test("#199k нерозбірна або відсутня дата НЕ вали�
   assert.ok(!/return null|return <\/>|children\s*:\s*null/.test(rb),
     "🔴 межа ХОВАЄ зламаний рядок — він зник би з таблиці, а Σ розійшлася б із плиткою мовчки");
 });
+
+
+/* ═══════════ 🗄 АРХІВ: СПИСАНЕ ВИХОДИТЬ З ОЧІКУВАНИХ (26.08.2026) ═══════════ */
+
+/**
+ * 🔴 ОКРЕМИЙ ГЕЙТ НА КОЖНУ ФУНКЦІЮ — ВИМОГА ВЛАСНИКА, І ВОНА ПРАВИЛЬНА.
+ *
+ * Один загальний гейт «предикат десь є» зеленів би, поки хоч одна функція його
+ * має. А розходяться екрани саме поштучно: додав функцію — забув предикат, і
+ * один екран показує очікувані з урахуванням списань, інший без. Розбіжність
+ * тиха, тобто найдорожчий клас.
+ *
+ * 📐 ПЕРЕЛІК — РЕЗУЛЬТАТ ЗАМІРУ, А НЕ ПАМʼЯТІ. Мій власний замір назвав ПʼЯТЬ
+ * функцій, і його прийняли; насправді їх ДВАНАДЦЯТЬ. Дві знайшлись випадково
+ * (масова заміна влучила в шосту, сьома мала багаторядковий `conds`), решта —
+ * коли я перелічив їх скриптом замість оком.
+ *
+ * ⚠️ ГЕЙТИ ВИПИСАНІ ПОШТУЧНО, А НЕ ЦИКЛОМ. Перша редакція генерувала їх у
+ * `for` із шаблонним іменем — і маніфест справедливо почервонів: динамічні
+ * імена він статично НЕ БАЧИТЬ, тобто такий гейт міг би зникнути з набору
+ * непоміченим. Рівно те, від чого маніфест і заведений.
+ */
+function assertExcludesWrittenOff(fn: string) {
+  const src = readFileSync(SRC("core/metrics.ts"), "utf8");
+  const at = src.indexOf(`export async function ${fn}`);
+  assert.ok(at > 0, `🔴 функції ${fn} більше немає — або перейменували, або перелік протух`);
+  const next = src.indexOf("\nexport ", at + 10);
+  const body = src.slice(at, next > 0 ? next : src.length);
+  assert.match(body, /EXPECT_ZONE/, `🔴 ${fn} більше не читає EXPECT_ZONE — перевір, чи гейт іще про те саме`);
+  assert.match(body, /DEAL_NOT_WRITTEN_OFF/,
+    `🔴 ${fn} рахує очікувані БЕЗ виключення списаних — цей екран покаже більше за сусідні, і розбіжність буде тиха`);
+}
+
+test("#199l expectedZoneByScope виключає списані борги з очікуваних", () => assertExcludesWrittenOff("expectedZoneByScope"));
+
+test("#199m expectedPaymentsByPlanned виключає списані борги з очікуваних", () => assertExcludesWrittenOff("expectedPaymentsByPlanned"));
+
+test("#199n expectedByManagerDay виключає списані борги з очікуваних", () => assertExcludesWrittenOff("expectedByManagerDay"));
+
+test("#199o expectedByPlannedBucket виключає списані борги з очікуваних", () => assertExcludesWrittenOff("expectedByPlannedBucket"));
+
+test("#199p expectedBySegment виключає списані борги з очікуваних", () => assertExcludesWrittenOff("expectedBySegment"));
+
+test("#199q expectedMonthByScope виключає списані борги з очікуваних", () => assertExcludesWrittenOff("expectedMonthByScope"));
+
+test("#199r expectedThisMonthByScope виключає списані борги з очікуваних", () => assertExcludesWrittenOff("expectedThisMonthByScope"));
+
+test("#199s expectedThisMonthByMgrKlass виключає списані борги з очікуваних", () => assertExcludesWrittenOff("expectedThisMonthByMgrKlass"));
+
+test("#199t repeatForecastByManager виключає списані борги з очікуваних", () => assertExcludesWrittenOff("repeatForecastByManager"));
+
+test("#199u carryoverByScope виключає списані борги з очікуваних", () => assertExcludesWrittenOff("carryoverByScope"));
+
+test("#199v carryoverByManager виключає списані борги з очікуваних", () => assertExcludesWrittenOff("carryoverByManager"));
+
+test("#199w awaitingNowSnapshot виключає списані борги («станом на зараз»)", () => {
+  const src = readFileSync(SRC("core/money.ts"), "utf8");
+  const at = src.indexOf("export async function awaitingNowSnapshot");
+  const body = src.slice(at, src.indexOf("\nexport ", at + 10));
+  assert.match(body, /DEAL_NOT_WRITTEN_OFF/,
+    "🔴 знімок «станом на зараз» рахує списані — прогноз-картка розійдеться з рештою екранів");
+});
+
+test("#199x перелік функцій очікуваних ПОВНИЙ — жодної без предиката", () => {
+  // 🔴 ЦЕЙ ГЕЙТ ІСНУЄ ТОМУ, ЩО МІЙ ЗАМІР БУВ НЕПОВНИЙ НА СІМ ФУНКЦІЙ.
+  // Перелічувати оком — це те, як зʼявляються пропущені. Тут перелік будується
+  // З ДЖЕРЕЛА: усе, що читає EXPECT_ZONE і сумує `d.price`, мусить мати предикат.
+  // Нова функція без нього почервонить гейт у день народження.
+  const scan = (path: string) => {
+    const s = readFileSync(SRC(path), "utf8");
+    const fns = [...s.matchAll(/export (?:async )?function (\w+)/g)].map((m) => ({ at: m.index!, name: m[1] }));
+    const bad: string[] = [];
+    for (let i = 0; i < fns.length; i++) {
+      const b = s.slice(fns[i].at, i + 1 < fns.length ? fns[i + 1].at : s.length);
+      const zone = /EXPECT_ZONE|STAGE_EXPECTED/.test(b);
+      const money = /SUM\(d\.price\)|sum\(d\.price\)/.test(b);
+      if (zone && money && !b.includes("DEAL_NOT_WRITTEN_OFF")) bad.push(fns[i].name);
+    }
+    return bad;
+  };
+  const bad = [...scan("core/metrics.ts"), ...scan("core/money.ts")];
+  assert.deepEqual(bad, [],
+    `🔴 функції очікуваних БЕЗ виключення списаних: ${bad.join(", ")} — цей екран покаже більше за сусідні`);
+
+  // 🪞 ДЗЕРКАЛО: скан МАЄ ЩО ЗНАХОДИТИ. Порожній результат інакше означав би
+  // «регулярка нічого не матчить», а не «все гаразд».
+  const hits = (readFileSync(SRC("core/metrics.ts"), "utf8").match(/DEAL_NOT_WRITTEN_OFF/g) ?? []).length;
+  assert.ok(hits >= 11, `🔴 предикат знайдено лише ${hits} разів — скан або перелік зламані`);
+});
+
+test("#199y предикат NULL-безпечний і вимагає ВСІХ рахунків угоди", async () => {
+  const { DEAL_NOT_WRITTEN_OFF, FULLY_WRITTEN_OFF_DEALS } = await import("./writeoffScope.js");
+
+  // 🔴 `NOT EXISTS`, А НЕ `NOT IN`. З NULL у підзапиті `NOT IN` виключає ВСЕ —
+  // очікувані стали б нулем, і це читалось би як «списали все». Та сама
+  // NULL-пастка, що вже двічі коштувала нам замірів.
+  assert.match(DEAL_NOT_WRITTEN_OFF, /NOT EXISTS/,
+    "🔴 предикат перейшов на NOT IN — з NULL у підзапиті він вимкне очікувані ЦІЛКОМ");
+  assert.ok(!/NOT IN/.test(DEAL_NOT_WRITTEN_OFF), "🔴 у предикаті зʼявився NOT IN");
+  assert.match(FULLY_WRITTEN_OFF_DEALS, /deal_id IS NOT NULL/,
+    "🔴 зник захист від NULL-угод — рахунки без лінка потрапили б у вибірку");
+
+  // 🔴 ВСІ рахунки, а не один: інакше списання копійки з десяти вимикало б угоду.
+  assert.match(FULLY_WRITTEN_OFF_DEALS, /HAVING count\(\*\) = count\(\*\) FILTER/,
+    "🔴 умова більше не вимагає, щоб списаними були ВСІ рахунки угоди");
+  assert.match(FULLY_WRITTEN_OFF_DEALS, /w\.revoked_at IS NULL/,
+    "🔴 скасовані списання знову рахуються — повернений борг лишився б поза очікуваними");
+  assert.match(FULLY_WRITTEN_OFF_DEALS, /client_key_raw/,
+    "🔴 предикат зіставляє не за сирим ключем — після склейки він накриє чужі угоди");
+});
+
+test("#199z розбіжність із CRM НАЗВАНА числом, а не схована", async () => {
+  // 🔴 УМОВА, ПІД ЯКОЮ ВЛАСНИК ПОГОДИВСЯ НА ЦЕЙ ВАРІАНТ. Списана угода лишається
+  // в Kommo на грошовій стадії, а в нас її вже немає — дашборд показує МЕНШЕ за
+  // CRM, що прямо суперечить «дашборд це дзеркало CRM». Суперечність закрито не
+  // забороною, а видимістю; прибрати лічильник = скасувати умову рішення.
+  const { WRITTEN_OFF_STILL_IN_ZONE } = await import("./writeoffScope.js");
+  assert.match(WRITTEN_OFF_STILL_IN_ZONE, /EXISTS \(SELECT 1 FROM \(/,
+    "🔴 лічильник рахує не ті угоди — він мусить брати САМЕ виключені зі своїх очікуваних");
+  const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  assert.match(routes, /WRITTEN_OFF_STILL_IN_ZONE/, "🔴 роут архіву більше не рахує розбіжність");
+  assert.match(routes, /stillInZone/, "🔴 розбіжність не їде на екран — вона стає тихою");
+  const arch = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesArchive.tsx"), "utf8"));
+  assert.match(arch, /Списані борги, чиї угоди досі в грошовій зоні/,
+    "🔴 на екрані немає підпису розбіжності — число без назви нічого не пояснює");
+  assert.match(arch, /stillInZone\.deals > 0 &&/,
+    "🔴 підпис показується завжди — «розбіжності 0» у кожному відкритті стає шумом");
+});
+
+test("#198k списаний рахунок зникає з активного списку ПОВНІСТЮ", () => {
+  // 🔴 РІШЕННЯ ВЛАСНИКА 26.08.2026, І ВОНО СКАСОВУЄ ПОПЕРЕДНЄ. Було: рахунок
+  // лишається закресленим із підписом «списано», а плитка каже, на скільки
+  // просіла. Стало: зникає з активного списку повністю, сліду в рядку клієнта
+  // немає — усе про нього живе у вкладці «Архів».
+  const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  assert.match(routes, /writtenOffNos/, "🔴 роут розкриття більше не ховає списані рахунки");
+  assert.match(routes, /\.filter\(\(x\) => !writtenOffNos\.has/,
+    "🔴 списані рахунки знову їдуть у розкриття активної дебіторки");
+
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  const tiles = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesTiles.tsx"), "utf8"));
+  assert.ok(!/writtenOffLabel/.test(sec), "🔴 слід списання повернувся в рядок клієнта");
+  assert.ok(!/writtenOffLabel/.test(tiles), "🔴 слід списання повернувся в плитку боргу");
+
+  // 🪞 ДЗЕРКАЛО: борг НЕ зник з обліку — він у вкладці «Архів», і вкладка є.
+  assert.match(sec, /<ReceivablesArchive/, "🔴 вкладки «Архів» немає — борг зник би БЕЗ СЛІДУ, а це вже втрата");
+  assert.match(sec, /role="tablist"/, "🔴 зникли вкладки — архів нема як відкрити");
+  const arch = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesArchive.tsx"), "utf8"));
+  for (const col of ["Клієнт", "Рахунок №", "Сума", "Списав", "Коли", "Причина", "Повернути в активні"]) {
+    assert.ok(arch.includes(col), `🔴 в архіві немає колонки «${col}» — журнал неповний`);
+  }
+  // Дія оборотна ТИМ САМИМ інтерфейсом (правило власника 06.08.2026).
+  assert.match(arch, /revokeReceivableWriteoff/, "🔴 з архіву не можна повернути борг — незворотна кнопка на грошах");
+  assert.match(arch, /d\.canWriteOff &&/, "🔴 кнопка повернення показується без права — «є, але дає 403»");
+});

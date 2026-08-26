@@ -6,6 +6,7 @@ import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf } from "./dates.js";
+import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 
 /**
  * ЄДИНЕ місце в проєкті з SQL по НЕ-грошових бізнес-метриках (гроші — `core/money.ts`).
@@ -1072,7 +1073,8 @@ export async function expectedByPlannedBucket(s: SnapshotScope, granularity: "da
   const col = `(d.planned_payment_at ${KYIV})`;
   const bucket = granularity === "day" ? `${col}::date` : `date_trunc('week', ${col})::date`;
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
-  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL"];
+  // 🗑 Списаний борг виходить із очікуваних — той самий СПІЛЬНИЙ предикат.
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL", DEAL_NOT_WRITTEN_OFF];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
@@ -1402,7 +1404,8 @@ export interface MgrDayExp { managerId: number; day: string; deals: number; sum:
  */
 export async function expectedByManagerDay(s: SnapshotScope): Promise<MgrDayExp[]> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
-  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL"];
+  // 🗑 Списаний борг виходить із очікуваних — той самий СПІЛЬНИЙ предикат.
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL", DEAL_NOT_WRITTEN_OFF];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const r = await pool.query<{ manager_id: number; day: string; deals: string; sum: string }>(
@@ -1722,6 +1725,9 @@ export async function receivablesAging(): Promise<AgingResult> {
 export async function expectedMonthByScope(s: SnapshotScope, by: "team" | "manager", monthOffset: number): Promise<ExpectedScopeRow[]> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
   const conds = [
+    // 🗑 Списаний борг виходить із очікуваних — СПІЛЬНИЙ предикат на всі функції.
+    DEAL_NOT_WRITTEN_OFF,
+   
     "d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL",
     `to_char((d.planned_payment_at ${KYIV}), 'YYYY-MM') = to_char((now() ${KYIV}) + INTERVAL '${monthOffset} months', 'YYYY-MM')`,
   ];
@@ -3069,6 +3075,9 @@ export async function repeatForecastByManager(s: MetricScope = {}, months = REPE
   const N = Math.max(1, months);
   const params: unknown[] = [FC_PIPELINES];
   const conds = [
+    // 🗑 Списаний борг виходить із очікуваних — СПІЛЬНИЙ предикат на всі функції.
+    DEAL_NOT_WRITTEN_OFF,
+   
     "d.status_id = 142", "d.pipeline_id = ANY($1)",
     "d.closed_at_kommo IS NOT NULL", "d.client_key IS NOT NULL",
     // вікно = N ПОВНИХ календарних місяців до поточного; поточний неповний виключено,
@@ -3258,7 +3267,10 @@ export interface ExpectedPaymentsByPlanned {
 export interface ExpectedByKlass { managerId: number; klass: "new" | "repeat" | "undef"; deals: number; sum: number }
 export async function expectedThisMonthByMgrKlass(s: SnapshotScope): Promise<ExpectedByKlass[]> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
-  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL",
+  const conds = [
+    // 🗑 Списаний борг виходить із очікуваних — СПІЛЬНИЙ предикат на всі функції.
+    DEAL_NOT_WRITTEN_OFF,
+   "d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL",
     `to_char((d.planned_payment_at ${KYIV}), 'YYYY-MM') = to_char((now() ${KYIV}), 'YYYY-MM')`];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
@@ -3275,7 +3287,10 @@ export async function expectedThisMonthByMgrKlass(s: SnapshotScope): Promise<Exp
 
 export async function expectedPaymentsByPlanned(s: SnapshotScope): Promise<ExpectedPaymentsByPlanned> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
-  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
+  // 🗑 Списаний борг виходить із очікуваних (рішення власника 26.08.2026).
+  // Предикат СПІЛЬНИЙ на всі пʼять функцій: власна копія в кожній розійшлася б
+  // мовчки, і два екрани показували б різні «очікуємо».
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", DEAL_NOT_WRITTEN_OFF];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
@@ -3329,7 +3344,10 @@ export interface CarryoverResult { amount: number; deals: number }
  */
 export async function carryoverByScope(s: SnapshotScope, monthStart: string): Promise<CarryoverResult> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE, monthStart];
-  const conds: string[] = [];
+  const conds: string[] = [
+    // 🗑 Списаний борг виходить із очікуваних — СПІЛЬНИЙ предикат на всі функції.
+    DEAL_NOT_WRITTEN_OFF,
+   ];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   // stage_at = остання подія стадії КОЖНОЇ угоди ДО 00:00 дня-1 місяця (київський інстант).
@@ -3362,7 +3380,10 @@ export interface CarryoverMgrRow { managerId: number; amount: number; deals: num
  */
 export async function carryoverByManager(s: SnapshotScope, monthStart: string): Promise<CarryoverMgrRow[]> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE, monthStart];
-  const conds: string[] = ["d.manager_id IS NOT NULL"];
+  const conds: string[] = [
+    // 🗑 Списаний борг виходить із очікуваних — СПІЛЬНИЙ предикат на всі функції.
+    DEAL_NOT_WRITTEN_OFF,
+   "d.manager_id IS NOT NULL"];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const r = await pool.query<{ manager_id: number; amt: string; dl: string }>(
@@ -3395,6 +3416,9 @@ export interface ExpectedScopeRow { id: number; name: string; teamId: number | n
 export async function expectedThisMonthByScope(s: SnapshotScope, by: "team" | "manager"): Promise<ExpectedScopeRow[]> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
   const conds = [
+    // 🗑 Списаний борг виходить із очікуваних — СПІЛЬНИЙ предикат на всі функції.
+    DEAL_NOT_WRITTEN_OFF,
+   
     "d.pipeline_id = ANY($1)", "d.status_id = ANY($2)",
     "d.planned_payment_at IS NOT NULL",
     `to_char((d.planned_payment_at ${KYIV}), 'YYYY-MM') = to_char((now() ${KYIV}), 'YYYY-MM')`,
@@ -3423,7 +3447,10 @@ export async function expectedThisMonthByScope(s: SnapshotScope, by: "team" | "m
  */
 export async function expectedZoneByScope(s: SnapshotScope, by: "team" | "manager"): Promise<ExpectedScopeRow[]> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
-  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
+  // 🗑 Списаний борг виходить із очікуваних (рішення власника 26.08.2026).
+  // Предикат СПІЛЬНИЙ на всі пʼять функцій: власна копія в кожній розійшлася б
+  // мовчки, і два екрани показували б різні «очікуємо».
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", DEAL_NOT_WRITTEN_OFF];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const sel = by === "team"
@@ -3453,7 +3480,10 @@ export interface ExpectedSegment { newSeg: ExpectedBucket; repeatSeg: ExpectedBu
  */
 export async function expectedBySegment(s: { managerId?: number | null; teamId?: number | null; from?: string | null }): Promise<ExpectedSegment> {
   const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
-  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
+  // 🗑 Списаний борг виходить із очікуваних (рішення власника 26.08.2026).
+  // Предикат СПІЛЬНИЙ на всі пʼять функцій: власна копія в кожній розійшлася б
+  // мовчки, і два екрани показували б різні «очікуємо».
+  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", DEAL_NOT_WRITTEN_OFF];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
   if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
   const fromRef = s.from ? (params.push(s.from), `$${params.length}`) : "NULL";

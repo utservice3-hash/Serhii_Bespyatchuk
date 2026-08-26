@@ -2,7 +2,7 @@ import type { ReceivableTotals } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import {
   AGING_LABEL, AGING_ORDER, CARRIER_REASON_LABEL, ENTITY_LABEL, ENTITY_REASON_LABEL, t,
-  marginHint, marginPctText, writtenOffLabel,
+  marginHint, marginPctText,
 } from "../receivablesView";
 
 /**
@@ -75,18 +75,14 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
         <span className="kpi-label">Загальний борг</span>
         <span className="kpi-value" title={formatAmountFull(debtTotal)}>{formatAmount(debtTotal)}</span>
         {totals && <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>{totals.invoices} рахунків · {clientCount} боржників</span>}
-        {/* 🔴 ПЛИТКА, ЩО ПРОСІЛА МОВЧКИ, ЧИТАЄТЬСЯ ЯК ПОЛОМКА.
-            Списання ЗМЕНШУЄ це число (рішення власника 25.08.2026) — отже поруч
-            мусить стояти, на скільки саме. Той самий урок, що «Прострочено
-            (понад ліміт)»: число без сліду про свою зміну гірше за незручне.
-            Підпису немає, коли списань немає: «списано 0 на 0 ₴» перетворив би
-            сигнал на шум. */}
-        {totals && writtenOffLabel(totals.writtenOffN, totals.writtenOffAmount) && (
-          <span style={{ fontSize: "var(--fs-xs)", color: "var(--warn)" }}
-                title="Списаний борг у це число не входить — його визнали безнадійним">
-            {writtenOffLabel(totals.writtenOffN, totals.writtenOffAmount)}
-          </span>
-        )}
+        {/* 🗑 ПІДПИС «СПИСАНО» ЗВІДСИ ПРИБРАНО — рішення власника 26.08.2026,
+            і воно СКАСОВУЄ попереднє «плитка мусить казати, на скільки просіла».
+            Причина: списаний борг зникає з активної дебіторки повністю, а все
+            про нього живе у вкладці «Архів» — із сумою, причиною, автором, датою
+            й кнопкою повернення. Підпис тут дублював би вкладку й лишав борг
+            наполовину видимим у двох місцях, тобто саме тим «двома джерелами
+            одного числа», від якого ми весь тиждень і лікуємось.
+            ⚠️ Число НЕ просідає мовчки: поруч є вкладка «Архів» із лічильником. */}
         {/* 🔴 ПЛИТКА БІЛЬШЕ НЕ ПОРОЖНЯ. Дві перші були білими плямами на початку
             екрана, поки три сусідні несли розклад — читалось як «тут нема чого
             показати». Розклад той самий, що й у сусідів, і з ТОГО САМОГО виразу

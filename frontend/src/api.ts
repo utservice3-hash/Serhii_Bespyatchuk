@@ -1400,6 +1400,31 @@ export async function fetchReceivableNoteHistory(clientKey: string): Promise<Rec
   return data.entries;
 }
 
+/** Один рядок архіву списаних боргів. */
+export interface ReceivableWriteoff {
+  clientKeyRaw: string; clientName: string | null; invoiceNo: string;
+  amount: number; note: string; author: string | null; at: string;
+}
+
+/**
+ * 🗄 Архів списаних боргів + лічильник розбіжності з CRM.
+ *
+ * `stillInZone` — угоди, які ми зі СВОЇХ очікуваних прибрали, а в Kommo вони
+ * досі на грошовій стадії. Дашборд у цьому місці показує МЕНШЕ за CRM, і це
+ * названо числом навмисно: тиха розбіжність — найдорожчий клас помилок.
+ */
+export interface ReceivableArchive {
+  writeoffs: ReceivableWriteoff[];
+  totals: { n: number; amount: number; thisMonth: number; oldestAt: string | null; clients: number };
+  stillInZone: { deals: number; amount: number };
+  canWriteOff: boolean;
+}
+
+export async function fetchReceivableArchive(): Promise<ReceivableArchive> {
+  const { data } = await api.get<ReceivableArchive>("/dashboard/receivables/writeoffs");
+  return data;
+}
+
 export async function saveReceivableNote(payload: {
   clientKey: string;
   comment?: string | null;

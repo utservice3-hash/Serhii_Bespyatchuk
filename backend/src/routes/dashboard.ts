@@ -53,6 +53,7 @@ import * as reportCuts from "../core/reportCuts.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { marginCell } from "../core/receivablesMargin.js";
+import { WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { fkErrorMessage } from "../core/creditLimits.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf } from "../core/dates.js";
@@ -1979,6 +1980,64 @@ dashboardRouter.post("/receivables/writeoff", async (req, res) => {
   res.json({ ok: true, written: target.rowCount });
 });
 
+/**
+ * 🗄 АРХІВ СПИСАНИХ БОРГІВ — окрема вкладка (рішення власника 26.08.2026).
+ *
+ * Списаний рахунок зникає з активного списку ПОВНІСТЮ й сліду в рядку клієнта
+ * не лишає. Але зникнути з очей і зникнути з обліку — різні речі: тут він лежить
+ * із причиною, автором і датою, і повертається однією кнопкою.
+ *
+ * 🔴 ЛІЧИЛЬНИК РОЗБІЖНОСТІ З CRM — НЕ ПРИКРАСА, А УМОВА ЧЕСНОСТІ. Списана угода
+ * лишається в Kommo на грошовій стадії, а в нас її вже немає: дашборд показує
+ * МЕНШЕ за CRM, що прямо суперечить «дашборд — дзеркало CRM». Власник закрив цю
+ * суперечність не забороною, а ВИДИМІСТЮ. Сховати її було б найгіршим варіантом:
+ * тиха розбіжність — найдорожчий клас помилок, який у нас є.
+ */
+dashboardRouter.get("/receivables/writeoffs", async (req, res) => {
+  const auth = req.auth!;
+  const rows = await pool.query<{
+    client_key_raw: string; client_name: string | null; invoice_no: string;
+    amount: string; note: string; author: string | null; at: string;
+  }>(
+    `SELECT w.client_key_raw, w.invoice_no, w.amount, w.note,
+            u.email AS author,
+            to_char(w.written_off_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
+            (SELECT min(ri.client_name) FROM receivable_invoices ri
+              WHERE COALESCE(ri.client_key_raw, ri.client_key) = w.client_key_raw) AS client_name
+       FROM receivable_writeoffs w
+       LEFT JOIN users u ON u.id = w.written_off_by
+      WHERE w.revoked_at IS NULL
+      ORDER BY w.written_off_at DESC`
+  );
+  // Лічильник розбіжності — тим самим виразом, що виключає угоди з очікуваних.
+  const div = await pool.query<{ deals: number; amount: number }>(
+    WRITTEN_OFF_STILL_IN_ZONE, [metrics.FC_PIPELINES, metrics.EXPECT_ZONE]
+  );
+  const list = rows.rows.map((x) => ({
+    clientKeyRaw: x.client_key_raw, clientName: x.client_name, invoiceNo: x.invoice_no,
+    amount: Number(x.amount), note: x.note, author: x.author, at: x.at,
+  }));
+  res.json({
+    writeoffs: list,
+    totals: {
+      n: list.length,
+      amount: list.reduce((a, x) => a + x.amount, 0),
+      // Плитка «за цей місяць» — київський місяць, як усі періоди продукту.
+      thisMonth: list.filter((x) => x.at.slice(0, 7) === new Date().toISOString().slice(0, 7))
+        .reduce((a, x) => a + x.amount, 0),
+      oldestAt: list.length ? list[list.length - 1].at : null,
+      clients: new Set(list.map((x) => x.clientKeyRaw)).size,
+    },
+    /**
+     * 🔴 РОЗБІЖНІСТЬ ІЗ CRM, НАЗВАНА ЧИСЛОМ. Ці угоди ми зі своїх очікуваних
+     * прибрали, а в Kommo вони досі на грошовій стадії — тобто їх треба закрити
+     * і там. Поки не закриті, наші числа менші за CRM, і це видно.
+     */
+    stillInZone: { deals: div.rows[0]?.deals ?? 0, amount: div.rows[0]?.amount ?? 0 },
+    canWriteOff: roleHasPerm(auth.roleKey, WRITE_OFF_PERM),
+  });
+});
+
 /** Скасувати списання — тим самим інтерфейсом, із тим самим журналом. */
 dashboardRouter.delete("/receivables/writeoff", async (req, res) => {
   const auth = req.auth!;
@@ -2120,9 +2179,14 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   // стоять нотатки `receivable_invoice_notes`), тож нового припущення тут немає.
   const ourFacts = await receivablesFacts.loadInvoiceFacts(pool, [clientKey]);
   const factByNo = new Map(ourFacts.map((f) => [f.invoiceNo ?? "", f]));
+  // 🗑 СПИСАНИЙ РАХУНОК ЗНИКАЄ З АКТИВНОГО РОЗКРИТТЯ ПОВНІСТЮ (рішення власника
+  // 26.08.2026, скасовує попереднє «лишається закресленим із підписом»). Зникнути
+  // з очей і зникнути з обліку — різні речі: він лежить у вкладці «Архів» із
+  // причиною, автором і датою, і повертається однією кнопкою.
+  const writtenOffNos = new Set(ourFacts.filter((f) => f.writtenOff).map((f) => f.invoiceNo ?? ""));
 
   res.json({
-    invoices: r.rows.map((x) => {
+    invoices: r.rows.filter((x) => !writtenOffNos.has(x.invoice_no ?? "")).map((x) => {
       const f = factByNo.get(x.invoice_no ?? "");
       return {
         invoiceNo: x.invoice_no,

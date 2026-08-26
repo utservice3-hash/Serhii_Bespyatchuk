@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 // одне одного лише всередині функцій (не на рівні модуля), тож ESM-live-binding резолвиться
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
 import { adDealSql } from "./metrics.js";
+import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 
 /**
  * ЄДИНЕ джерело грошових метрик (MASTER_PLAN КРОК 2, виправлено КРОКОМ 4 — опція Б).
@@ -703,7 +704,8 @@ export async function awaitingNowSnapshot(s: MoneyScope): Promise<{ deals: numbe
   const r = await pool.query<{ team_id: number; team_name: string; revenue: string; deals: string }>(
     `SELECT t.id AS team_id, t.name AS team_name, COALESCE(SUM(d.price),0) AS revenue, COUNT(*) AS deals
        FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
-      WHERE d.pipeline_id = ANY($1) AND d.status_id = ANY($2) ${scope.length ? "AND " + scope.join(" AND ") : ""}
+      WHERE d.pipeline_id = ANY($1) AND d.status_id = ANY($2) AND ${DEAL_NOT_WRITTEN_OFF}
+            ${scope.length ? "AND " + scope.join(" AND ") : ""}
       GROUP BY t.id, t.name ORDER BY revenue DESC`,
     p
   );

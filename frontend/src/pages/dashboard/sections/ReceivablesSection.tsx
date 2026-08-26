@@ -8,6 +8,7 @@ import {
 import { WriteoffDialog } from "./WriteoffDialog";
 import { WriteoffButton } from "./WriteoffButton";
 import { RowBoundary } from "./RowBoundary";
+import { ReceivablesArchive } from "./ReceivablesArchive";
 import { NoteHistoryDialog } from "./NoteHistoryDialog";
 import { Hint, Tip, TipLayer } from "../../../components/Hint";
 import { ReceivablesTiles } from "./ReceivablesTiles";
@@ -160,6 +161,10 @@ export function ReceivablesSection({
   // рівні: два незалежні стани розійшлися б, і поповер зміг би відкритись двічі.
   const [writeoffFor, setWriteoffFor] = useState<{ clientKey: string; invoiceNo: string | null } | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
+  // 🗄 Вкладка. Архів — окремий екран, а не фільтр: списаний борг зникає з
+  // активного списку ПОВНІСТЮ, тож змішувати їх в одній таблиці означало б
+  // повернути те, що власник щойно скасував.
+  const [tab, setTab] = useState<"active" | "archive">("active");
   // 🗓 Один якір часу на весь рендер: інакше рядки, порахувані на різних
   // мілісекундах, могли б розійтись на самій межі понеділка.
   const now = new Date();
@@ -450,7 +455,25 @@ export function ReceivablesSection({
         </div>
       </div>
 
-      {receivablesLoading ? (
+      {/* 🗄 ДВІ ВКЛАДКИ (макет v5). Архів — окремий екран, а не фільтр: списаний
+          борг зникає з активного списку ПОВНІСТЮ, тож тримати їх в одній таблиці
+          означало б повернути те, що власник щойно скасував. */}
+      <div role="tablist" aria-label="Розділи дебіторки"
+        style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 16 }}>
+        {([["active", "Активна дебіторка"], ["archive", "Архів"]] as const).map(([k, label]) => (
+          <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+            style={{ font: "inherit", fontSize: "var(--fs-base)", background: "none", border: "none",
+                     borderBottom: `2px solid ${tab === k ? "var(--brand, #c5141c)" : "transparent"}`,
+                     color: tab === k ? "var(--text)" : "var(--text-muted)",
+                     fontWeight: tab === k ? 600 : 500, padding: "10px 12px", cursor: "pointer" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "archive" ? (
+        <ReceivablesArchive onRestored={() => onRefresh?.()} />
+      ) : receivablesLoading ? (
         <p className="loading-text">Завантаження...</p>
       ) : receivablesData.length === 0 ? (
         <p className="loading-text">Немає даних.</p>
