@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MANIFEST_TESTS, collidingNumbers, KNOWN_NUMBER_COLLISIONS } from "./testManifest.js";
+import { MANIFEST_TESTS, collidingNumbers, KNOWN_NUMBER_COLLISIONS, gateNames, diffGates } from "./testManifest.js";
+import { parseManifestTests } from "./tools/gateCount.js";
 
 /**
  * 🔢 #223–#223b — ОДИН НОМЕР = ОДИН ГЕЙТ.
@@ -49,4 +50,30 @@ test("#223b ДЗЕРКАЛО: гейт ловить підкинуте зітк�
   assert.deepEqual(dead, [],
     `🔴 у реєстрі є мертві записи: ${dead.join(", ")}. Зіткнення розчищене — прибери рядок, `
     + "інакше він тихо дозволить НОВЕ зіткнення на тому самому номері.");
+});
+
+test("#223c РАХУНОК ГЕЙТІВ · зниклий гейт називається ІМЕНЕМ, а не дельтою", () => {
+  // 🔴 Критерій приймання — НЕ «число не впало». Число росте й тоді, коли хтось
+  // тихо виніс гейт сусіда, а свої додав. Тому `diffGates` віддає імена.
+  const before = ["#42 A", "#43 B", "не гейт"];
+  const d = diffGates(before, ["#43 B", "#99 C"]);
+  assert.deepEqual(d.onlyBefore, ["#42 A"], "🔴 зниклий гейт не названо — приймання осліпло");
+  assert.deepEqual(d.onlyAfter, ["#99 C"]);
+  assert.equal(d.countBefore, 2, "🔴 у рахунок потрапило те, що не є гейтом");
+  // Дзеркало: однакові списки не мусять давати «зникло».
+  assert.deepEqual(diffGates(before, before).onlyBefore, [], "🔴 детектор червоніє на тотожності");
+  assert.ok(gateNames().length > 500, "рахунок по реальному маніфесту виродився");
+});
+
+test("#223d РАХУНОК ГЕЙТІВ · екрановану лапку розекрановано, інакше гейт «зник і додався»", () => {
+  // 📐 Спіймано на живому #159c: у джерелі стоїть `роз\'єднати`, і без розекранування
+  // той самий гейт читався ОДНОЧАСНО як зниклий і як доданий. Тобто інструмент,
+  // створений заради «не втратити гейт», сам вигадував втрату.
+  const src = 'export const MANIFEST_TESTS: string[] = [\n  "#1 СЕО може роз\\\'єднати",\n  "#2 звичайний",\n];\n';
+  assert.deepEqual(parseManifestTests(src), ["#1 СЕО може роз'єднати", "#2 звичайний"]);
+  assert.deepEqual(diffGates(parseManifestTests(src), ["#1 СЕО може роз'єднати", "#2 звичайний"]).onlyBefore, [],
+    "🔴 розбір і живий маніфест дають різні імена — інструмент вигадує втрату");
+  // Порожній результат = провал: розбір мусить ГОЛОСНО падати, а не віддавати [].
+  assert.throws(() => parseManifestTests("нічого схожого", "фікстура"), /не знайшов MANIFEST_TESTS/,
+    "🔴 зламаний розбір віддав порожній список — це читалось би як «гейтів немає»");
 });
