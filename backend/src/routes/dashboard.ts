@@ -6801,7 +6801,6 @@ function resolveKvpScope(preset: string, date: string, from?: string | null, to?
   return { from: f, to: t, prevFrom: pf, prevTo: pt, label, isCurrent };
 }
 
-const RNK_MGR_TEAMS = new Set([13, 15]);
 
 /**
  * КРОК Д фінал A — ЛІНИВИЙ ДЕТАЛЬНИЙ дрил менеджера (weeks→days). Admin-only. Тижні
@@ -6829,7 +6828,6 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: "from/to (YYYY-MM-DD) обовʼязкові" });
   const scope: metrics.MetricScope = { managerId, from, to };
   const mRow = (await pool.query<{ name: string; team_id: number | null }>(`SELECT name, team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
-  const isRnk = mRow?.team_id != null && RNK_MGR_TEAMS.has(mRow.team_id);
 
   // 📊 Розгортка по днях за макетом 06.08.2026 читається ТИМИ САМИМИ смугами, що
   // рядок менеджера, тож день мусить нести той самий набір: активність (створено /
@@ -6850,12 +6848,17 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
     reportCuts.dispatchCohortByManagerDay(from, to, { managerId }),
   ]);
 
-  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number; dispSum: number; dispPaid: { deals: number; sum: number }; dispAwait: { deals: number; sum: number }; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
-  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispUndef: 0, dispSum: 0, dispPaid: { deals: 0, sum: 0 }, dispAwait: { deals: 0, sum: 0 }, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
+  // 🔀 Е4: `crAd/crLeadgen/crOther/crNoChannel` — партиція СТВОРЕНОГО за каналом.
+  // 🔴 НЕ плутати з `leadsAd/leadsLeadgen/leadsOther`: ті рахують ЛІДИ (інша
+  // популяція, інший запит). Дві сімʼї поруч мусять лишатись підписаними окремо —
+  // саме тому вони й названі по-різному, а не «ad/leadgen» двічі.
+  type Cell = { created: number; newCount: number; repeatCount: number; undefCount: number; crAd: number; crLeadgen: number; crOther: number; crNoChannel: number; leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number; dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number; dispSum: number; dispPaid: { deals: number; sum: number }; dispAwait: { deals: number; sum: number }; received: { deals: number; revenue: number }; expected: { deals: number; sum: number }; success: { deals: number; revenue: number }; paid: { deals: number; revenue: number }; talks: number; attempts: number; invoiced: { deals: number; sum: number } };
+  const zero = (): Cell => ({ created: 0, newCount: 0, repeatCount: 0, undefCount: 0, crAd: 0, crLeadgen: 0, crOther: 0, crNoChannel: 0, leadsAd: 0, leadsLeadgen: 0, leadsOther: 0, dispatched: 0, dispRepeat: 0, dispLeadgen: 0, dispAd: 0, dispUndef: 0, dispSum: 0, dispPaid: { deals: 0, sum: 0 }, dispAwait: { deals: 0, sum: 0 }, received: { deals: 0, revenue: 0 }, expected: { deals: 0, sum: 0 }, success: { deals: 0, revenue: 0 }, paid: { deals: 0, revenue: 0 }, talks: 0, attempts: 0, invoiced: { deals: 0, sum: 0 } });
   const dayMap = new Map<string, Cell>();
   const dget = (d: string) => { let e = dayMap.get(d); if (!e) { e = zero(); dayMap.set(d, e); } return e; };
   for (const r of createdRows) dget(r.bucket).created += r.deals;
-  for (const r of splitRows) { const e = dget(r.bucket); e.newCount += r.newCount; e.repeatCount += r.repeatCount; e.undefCount += r.undefCount; }
+  for (const r of splitRows) { const e = dget(r.bucket); e.newCount += r.newCount; e.repeatCount += r.repeatCount; e.undefCount += r.undefCount;
+    e.crAd += r.adCount; e.crLeadgen += r.leadgenCount; e.crOther += r.otherCount; e.crNoChannel += r.noChannelCount; }
   for (const r of leadsRows) { const e = dget(r.bucket); const c = (r as { channel?: string }).channel; if (c === "ad") e.leadsAd += r.deals; else if (c === "leadgen") e.leadsLeadgen += r.deals; else e.leadsOther += r.deals; }
   for (const r of dispRows) { const e = dget(r.ym); e.dispatched += r.deals; e.dispRepeat += r.repeat; e.dispLeadgen += r.leadgen; e.dispAd += r.ad; e.dispUndef += r.undef; }
   for (const r of recvRows) if (r.managerId === managerId) { const e = dget(r.bucket); e.received.deals += r.deals; e.received.revenue += r.revenue; }
@@ -6871,7 +6874,7 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
     e.dispPaid.deals += r.paidDeals; e.dispPaid.sum += r.paidSum;
     e.dispAwait.deals += r.awaitDeals; e.dispAwait.sum += r.awaitSum; }
 
-  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, dispSum: a.dispSum + b.dispSum, dispPaid: { deals: a.dispPaid.deals + b.dispPaid.deals, sum: a.dispPaid.sum + b.dispPaid.sum }, dispAwait: { deals: a.dispAwait.deals + b.dispAwait.deals, sum: a.dispAwait.sum + b.dispAwait.sum }, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
+  const addCell = (a: Cell, b: Cell): Cell => ({ created: a.created + b.created, newCount: a.newCount + b.newCount, repeatCount: a.repeatCount + b.repeatCount, undefCount: a.undefCount + b.undefCount, crAd: a.crAd + b.crAd, crLeadgen: a.crLeadgen + b.crLeadgen, crOther: a.crOther + b.crOther, crNoChannel: a.crNoChannel + b.crNoChannel, leadsAd: a.leadsAd + b.leadsAd, leadsLeadgen: a.leadsLeadgen + b.leadsLeadgen, leadsOther: a.leadsOther + b.leadsOther, dispatched: a.dispatched + b.dispatched, dispRepeat: a.dispRepeat + b.dispRepeat, dispLeadgen: a.dispLeadgen + b.dispLeadgen, dispAd: a.dispAd + b.dispAd, dispUndef: a.dispUndef + b.dispUndef, dispSum: a.dispSum + b.dispSum, dispPaid: { deals: a.dispPaid.deals + b.dispPaid.deals, sum: a.dispPaid.sum + b.dispPaid.sum }, dispAwait: { deals: a.dispAwait.deals + b.dispAwait.deals, sum: a.dispAwait.sum + b.dispAwait.sum }, received: { deals: a.received.deals + b.received.deals, revenue: a.received.revenue + b.received.revenue }, expected: { deals: a.expected.deals + b.expected.deals, sum: a.expected.sum + b.expected.sum }, success: { deals: a.success.deals + b.success.deals, revenue: a.success.revenue + b.success.revenue }, paid: { deals: a.paid.deals + b.paid.deals, revenue: a.paid.revenue + b.paid.revenue }, talks: a.talks + b.talks, attempts: a.attempts + b.attempts, invoiced: { deals: a.invoiced.deals + b.invoiced.deals, sum: a.invoiced.sum + b.invoiced.sum } });
   const kyivToday = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   /**
    * 🔴 БЛОКИ — ПО ЗАПИТАНОМУ ДІАПАЗОНУ, А НЕ ПО МІСЯЦЮ `from` (20.08.2026).
@@ -6889,7 +6892,13 @@ dashboardRouter.get("/kvp-report/manager-detail", async (req, res) => {
     return { idx: w.idx, from: w.from, to: w.to, isCurrent: w.from <= kyivToday && kyivToday <= w.to, isFuture: w.from > kyivToday, total, days };
   });
   const monthTotals = weeks.reduce((acc, w) => addCell(acc, w.total), zero());
-  res.json({ managerId, name: mRow?.name ?? "", isRnk, from, to, weeks, monthTotals });
+  // 🔴 Е4: поле `isRnk` ПРИБРАНО. Воно їхало з роуту в тип `api.ts`, звідти пропсом
+  // у `ManagerDetailDrill` — і НЕ ЧИТАЛОСЬ ніде: у компоненті воно навіть не
+  // діструктурувалось, лише стояло в типі. Разом із ним пішов `RNK_MGR_TEAMS` —
+  // захардкожений дубль `metrics.RNK_TEAM_IDS`, який існував лише заради нього.
+  // ⚠️ Тип команди лишається в рушії РЕКОМЕНДАЦІЇ (`/lead-recommendation`) — там він
+  // за задумом власника, і його НЕ чіпаємо. Прибрано лише те, що підміняло ФАКТ.
+  res.json({ managerId, name: mRow?.name ?? "", from, to, weeks, monthTotals });
 });
 
 /**
@@ -7853,7 +7862,11 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
       expectedThisMonth: expMgrThis.get(mid) ?? 0, expectedNextMonth: expMgrNext.get(mid) ?? 0,
       // Розкол створеного (3 сигнали): created N (нові · постійні · невизн).
-      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, ad: s?.adCount ?? 0, leadgen: s?.leadgenCount ?? 0 }; })(),
+      // 🔀 Е4: ТРИ КАНАЛИ, А НЕ ДВА. Проєкція віддавала лише `ad`/`leadgen`, хоч ядро
+      // рахує всі чотири — і 44% створеного (999-1010 угод серпня, у РПК 74.4%) не
+      // потрапляло на екран узагалі. `other`/`noChannel` беруться з ТОГО САМОГО
+      // `splitByMgr`: жодного нового запиту, лише перестала губитись частина.
+      createdSplit: (() => { const s = splitByMgr.get(mid); return { created: s?.created ?? 0, new: s?.newCount ?? 0, repeat: s?.repeatCount ?? 0, undef: s?.undefCount ?? 0, ad: s?.adCount ?? 0, leadgen: s?.leadgenCount ?? 0, other: s?.otherCount ?? 0, noChannel: s?.noChannelCount ?? 0 }; })(),
       daily: mgrDailyMap.get(mid) ?? [],   // Крок Д #4: денний дрил (received по днях)
       weeks: weeksForMgr(mid, mp.plan),    // Крок Д фінал #2: тижневий розріз Т1–Т5
     });
@@ -8191,9 +8204,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     createdSplit: {
       totals: createdSplitMgr.reduce((a, x) => ({
         created: a.created + x.created, new: a.new + x.newCount, repeat: a.repeat + x.repeatCount, undef: a.undef + x.undefCount,
-        ad: a.ad + x.adCount, leadgen: a.leadgen + x.leadgenCount,
-      }), { created: 0, new: 0, repeat: 0, undef: 0, ad: 0, leadgen: 0 }),
-      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, ad: x.adCount, leadgen: x.leadgenCount })),
+        ad: a.ad + x.adCount, leadgen: a.leadgen + x.leadgenCount, other: a.other + x.otherCount, noChannel: a.noChannel + x.noChannelCount,
+      }), { created: 0, new: 0, repeat: 0, undef: 0, ad: 0, leadgen: 0, other: 0, noChannel: 0 }),
+      byManager: createdSplitMgr.map((x) => ({ managerId: x.managerId, name: x.name, teamId: x.teamId, created: x.created, new: x.newCount, repeat: x.repeatCount, undef: x.undefCount, ad: x.adCount, leadgen: x.leadgenCount, other: x.otherCount, noChannel: x.noChannelCount })),
     },
     money: { received: { deals: received.deals, revenue: received.revenue }, success: { deals: success.deals, revenue: success.revenue }, paidOnly: { deals: paidOnly.deals, revenue: paidOnly.revenue }, awaitingNow, expectedThis: expectedZone.thisMonth, expectedNext: expectedZone.nextMonth, expectedZoneTotal: { deals: expectedZone.total.deals, sum: expectedZone.total.sum } },
     funnel: funnel.map((r) => ({ stage: r.stage, deals: r.deals, revenue: r.revenue })),

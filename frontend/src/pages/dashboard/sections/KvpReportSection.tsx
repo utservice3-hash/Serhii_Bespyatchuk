@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek } from "../../../api";
+import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek, type CreatedSplit } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
@@ -532,7 +532,7 @@ export function KvpReportSection() {
 // Крок Д фінал A — ЛІНИВИЙ ДЕТАЛЬНИЙ дрил менеджера weeks→days (fetch при розкритті).
 // Тижні Т1–Т5, «Разом» = Σ днів; клік тижня → дні. Поточний тиждень відкрито; майбутні
 // — лише очікування. Колонки: створено · ліди р/лг · авто · отримано · очікування.
-function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: string; to: string; isRnk: boolean }) {
+function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: string; to: string }) {
   const [d, setD] = useState<KvpManagerDetail | null>(null);
   const [err, setErr] = useState(false);
   const [openW, setOpenW] = useState<Set<number>>(new Set());
@@ -545,10 +545,16 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
   if (!d) return <div style={{ fontSize: 12, color: MUTED }}>Завантаження деталі…</div>;
   // Середній чек = отримано ÷ авто (ПОХІДНИЙ, не сумується — перераховується на кожному
   // рівні з received.revenue ÷ dispatched; «—» де авто=0).
-  const cell = (c: { created: number; newCount: number; repeatCount: number; undefCount: number; leadsAd: number; leadsLeadgen: number; dispatched: number; received: { revenue: number; deals: number }; expected: { sum: number } }, future: boolean) => (<>
+  // 🔴 Е4: розкриття мусить пояснювати РЯДОК, а не сперечатись із ним. Рядок менеджера
+  // показує партицію СТВОРЕНОГО за каналом; тут — та сама партиція по тижнях/днях
+  // (`crAd/crLeadgen/crOther`, Σ == created). Дані вже приходили з `createdSplitByBucket`
+  // і мовчки відкидались. Сусідні «Ліди рекл./лідоген» — ІНША популяція (ліди), тому
+  // й підписані інакше: дві сімʼї не мають права зливатись в одну назву.
+  const cell = (c: { created: number; newCount: number; repeatCount: number; undefCount: number; crAd: number; crLeadgen: number; crOther: number; leadsAd: number; leadsLeadgen: number; dispatched: number; received: { revenue: number; deals: number }; expected: { sum: number } }, future: boolean) => (<>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.created || "—")}{!future && c.undefCount > 0 && <span style={{ color: MUTED, fontSize: 10, fontWeight: 400 }}> ·{c.undefCount} невизн</span>}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.newCount || "—")}</td>
     <td style={{ textAlign: "right", color: c.repeatCount > 0 ? GREEN : undefined }}>{future ? "—" : (c.repeatCount || "—")}</td>
+    <td style={{ textAlign: "right", color: MUTED, fontSize: 11 }}>{future ? "—" : `${c.crAd || 0} / ${c.crLeadgen || 0} / ${c.crOther || 0}`}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsAd || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.leadsLeadgen || "—")}</td>
     <td style={{ textAlign: "right" }}>{future ? "—" : (c.dispatched || "—")}</td>
@@ -559,7 +565,7 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
-        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Нові</th><th style={{ textAlign: "right" }}>Постійні <InfoHint text={HINT.createdSplit} /></th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
+        <thead><tr><th>Тиждень / день</th><th style={{ textAlign: "right" }}>Створено</th><th style={{ textAlign: "right" }}>Нові</th><th style={{ textAlign: "right" }}>Постійні <InfoHint text={HINT.createdSplit} /></th><th style={{ textAlign: "right" }} title="Партиція СТВОРЕНОГО за каналом: реклама / лідген / не реклама і не лідген. Σ = Створено.">Канал ств.<InfoHint text={`Розклад стовпця «Створено» за каналом угоди: реклама / лідген / ${NO_CH_LABEL}. Сума = Створено. НЕ плутати з «Ліди рекл./лідоген» — то інша популяція (ліди Кваліфікації), а не створені угоди повного циклу.`} /></th><th style={{ textAlign: "right" }}>Ліди рекл.</th><th style={{ textAlign: "right" }}>Ліди лідоген</th><th style={{ textAlign: "right" }}>Авто</th><th style={{ textAlign: "right" }}>Отримано</th><th style={{ textAlign: "right" }}>Чек</th><th style={{ textAlign: "right" }}>Очікування</th></tr></thead>
         <tbody>
           {d.weeks.map((w) => {
             const open = openW.has(w.idx);
@@ -587,6 +593,52 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
 }
 
 // ── Спокійний вигляд менеджерів (макет kvp_managers_calm_mockup) + рушій рекомендацій ──
+/**
+ * 🔀 ФАКТ МЕНЕДЖЕРА: ТРИ КАНАЛИ + НОВИЗНА — ОДНИМ КОМПОНЕНТОМ, ОДНАКОВО ВСІМ (Е4).
+ *
+ * 🔴 ПІДПИС І НОВИЗНА ЇДУТЬ РАЗОМ — це умова власника, а не оформлення. Сама назва
+ * «не реклама і не лідген» менеджеру нічого не пояснює: вона лише чесна. Пояснює її
+ * сусіднє число — «735, із них 523 постійні». Якби назва поїхала без новизни, екран
+ * став би гіршим, ніж був. Тому обидві половини живуть в ОДНОМУ виразі: рознести їх
+ * по різних місцях означало б дозволити їм розійтись.
+ *
+ * 📐 ЧОМУ ТРЕТІЙ КАНАЛ ВЗАГАЛІ ЗʼЯВИВСЯ. Проєкція `/kvp-report` віддавала лише
+ * `ad`/`leadgen`, і 44% створеного (999-1010 угод серпня) не було на екрані ніде;
+ * у РПК це 74.4% — три чверті роботи людини. Ядро рахувало всі чотири кошики завжди.
+ *
+ * 📐 ЧОМУ ПІДПИС ОПИСУЄ ПРЕДИКАТ, А НЕ СЕНС (рішення власника 26.08.2026 за заміром):
+ * жоден позитивний підпис не переживає перевірки на ВСЬОМУ каналі. «Створено вручну»
+ * — 131 із 1010 (13%). «Постійні» — правда для РПК (71% за каноном ядра) і НЕПРАВДА
+ * для РНК (19%; там 222 нові з 273). Ділити канал за `client_source` теж не можна:
+ * заміряно, що всередині РПК ця межа дає 92% проти 95% повторних, тобто не розрізняє
+ * нічого. Єдина межа, що працює, — тип команди, а ФАКТ від нього залежати не має.
+ * Тому канал ОДИН, підпис описовий, а розрізняє новизна поруч.
+ *
+ * ⚠️ Новизна — ТІЛЬКИ канон ядра (`priorClientSql`, поле `createdSplit`). Своє
+ * означення «є рання угода» дає для РПК 92% замість 71% — інше число під тією самою
+ * назвою. Одне правило, записане двічі, розходиться мовчки.
+ */
+const NO_CH_LABEL = "не реклама і не лідген";
+function MgrFactLine({ cs }: { cs: CreatedSplit }) {
+  if (!cs || cs.created <= 0) return null;
+  const chip = (label: string, v: number, color?: string) =>
+    v > 0 ? <span style={{ color: color ?? MUTED }}>{label} <b style={{ color: "var(--text)" }}>{v}</b></span> : null;
+  return (
+    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 10.5, color: MUTED, marginTop: 3, lineHeight: 1.4 }}>
+      <span>створено <b style={{ color: "var(--text)" }}>{cs.created}</b></span>
+      {chip("нові", cs.new, BLUE)}
+      {chip("постійні", cs.repeat, GREEN)}
+      {chip("невизн.", cs.undef)}
+      <span style={{ color: "var(--border)" }}>|</span>
+      {chip("реклама", cs.ad)}
+      {chip("лідген", cs.leadgen)}
+      {chip(NO_CH_LABEL, cs.other)}
+      {chip("без каналу", cs.noChannel)}
+      <InfoHint text={HINT.createdSplit} />
+    </div>
+  );
+}
+
 const CALM_COLS = "1fr 82px 116px 50px 78px 50px 122px"; // імʼя·план·факт·вик·очік·конв·спарклайн
 
 // Спарклайн 5 тижнів — ТОНКІ бари ЛИШЕ кольором (зелений≥100/жовтий70-99/червоний<70/сірий нуль),
@@ -663,7 +715,10 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
           <Fragment key={m.managerId}>
             <div onClick={() => setOpenMgr(open ? null : m.managerId)}
               style={{ display: "grid", gridTemplateColumns: CALM_COLS, gap: 8, alignItems: "center", padding: "9px 16px 9px 30px", borderBottom: "1px solid var(--border)", cursor: "pointer", background: open ? "rgba(37,99,235,0.05)" : undefined }}>
-              <span style={{ ...clip, fontWeight: 560, fontSize: 12.5 }}><span style={{ color: MUTED, fontSize: 10 }}>{open ? "▾" : "▸"}</span> {m.name}</span>
+              <span style={{ ...clip, fontWeight: 560, fontSize: 12.5 }}>
+                <span><span style={{ color: MUTED, fontSize: 10 }}>{open ? "▾" : "▸"}</span> {m.name}</span>
+                <MgrFactLine cs={m.createdSplit} />
+              </span>
               <span style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.plan)}</span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}><span style={{ width: 40, height: 6, background: "var(--bg)", borderRadius: 4, overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, m.pct ?? 0)}%`, background: zero ? "var(--border)" : pctColr, borderRadius: 4 }} /></span><b>{fmtMoney(m.revenue)}</b></span>
               <span style={{ textAlign: "right", fontWeight: 700, color: pctColr }}>{m.plan > 0 ? `${m.pct ?? 0}%` : "—"}</span>
@@ -683,7 +738,7 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
                   <span>чек в очікуванні <b style={{ color: "var(--text)" }}>{m.avgCheckAwaiting == null ? "—" : fmtMoney(m.avgCheckAwaiting)}</b> <span style={{ fontSize: 10 }}>({m.awaitingDeals} угод)</span></span>
                   <span>очікуємо (план. дата) <b style={{ color: AMBER }}>{fmtMoney(m.expectedThisMonth)}</b> цей · <b>{fmtMoney(m.expectedNextMonth)}</b> наст. міс</span>
                 </div>
-                <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} isRnk={team.kind === "rnk"} />
+                <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} />
               </div>
             )}
           </Fragment>
@@ -745,7 +800,10 @@ function WeekCell({ w, prev, mode, onClick, active }: { w: WeekLike | undefined;
 function WeekManagerDrill({ team, weekIdx, weekBlocks }: { team: KvpTeam; weekIdx: number; weekBlocks: KvpReport["weekBlocks"] }) {
   const [openMgr, setOpenMgr] = useState<number | null>(null);
   const wb = weekBlocks.find((x) => x.idx === weekIdx);
-  const cols = 4 + (team.kind === "rnk" ? 1 : 0);
+  // 🔴 Е4: було `4 + (kind === "rnk" ? 1 : 0)` — тобто colSpan=5 у таблиці, що має
+  // РІВНО 4 `<th>` (Менеджер · План тижня · Факт тижня · %). Зайвої колонки, яку
+  // це нібито компенсувало, тут не існує; тип команди на структуру не впливає.
+  const cols = 4;
   if (!wb) return null;
   const from = wb.from, to = wb.to;
   const rows = team.managers.map((m) => {
@@ -771,7 +829,7 @@ function WeekManagerDrill({ team, weekIdx, weekBlocks }: { team: KvpTeam; weekId
                 </tr>
                 {open && (
                   <tr><td colSpan={cols} style={{ padding: "8px 8px 12px 40px", background: "var(--card-bg)" }}>
-                    <ManagerDetailDrill managerId={m.managerId} from={from} to={to} isRnk={team.kind === "rnk"} />
+                    <ManagerDetailDrill managerId={m.managerId} from={from} to={to} />
                   </td></tr>
                 )}
               </Fragment>

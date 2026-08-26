@@ -530,7 +530,14 @@ export interface KvpWeek { idx: number; from: string; to: string; plan: number; 
 export interface KvpDeptWeek { idx: number; from: string; to: string; plan: number; fact: number; expected: number; auto: number; autoRevenue: number; leadsAd: number; leadsLeadgen: number; success: number; newRecv: number; repeatRecv: number; lostDeals: number; lostSum: number; expectedPlanned: number; isCurrent: boolean; isFuture: boolean; pace: number | null }
 /** `new+repeat+undef = created` — партиція НОВИЗНИ. `ad`/`leadgen` — накладка
  *  ДЖЕРЕЛА: підмножини партиції, у `created` НЕ додаються. */
-export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number }
+/**
+ * 🔀 Е4: ЧОТИРИ КАНАЛИ, А НЕ ДВА. `other` — «не реклама і не лідген» (рішення власника
+ * 26.08.2026): підпис описує ПРЕДИКАТ, бо жоден позитивний підпис не переживає
+ * перевірки на всьому каналі — «створено вручну» це 13%, а «постійні» правда для РПК
+ * (71%) і неправда для РНК (19%, там 222 нові). Сенс несе НОВИЗНА поруч, не назва.
+ * `noChannel` = `lead_channel IS NULL`; на живих даних 0, але кошик існує в ядрі.
+ */
+export interface CreatedSplit { created: number; new: number; repeat: number; undef: number; ad: number; leadgen: number; other: number; noChannel: number }
 export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
@@ -543,6 +550,9 @@ export interface KvpExpBucket { deals: number; sum: number }
 // Крок Д фінал A — детальний дрил менеджера weeks→days (лінивий фетч)
 export interface KvpDetailCell {
   created: number; newCount: number; repeatCount: number; undefCount: number;
+  // 🔴 crAd/crLeadgen/crOther — партиція СТВОРЕНОГО за каналом (Σ == created).
+  // НЕ плутати з leadsAd/leadsLeadgen/leadsOther: ті рахують ЛІДИ — інша популяція.
+  crAd: number; crLeadgen: number; crOther: number; crNoChannel: number;
   leadsAd: number; leadsLeadgen: number; leadsOther: number; dispatched: number;
   // Розбивка відправлених авто за джерелом (постійний / лідоген / реклама / невизн). Σ = dispatched.
   dispRepeat: number; dispLeadgen: number; dispAd: number; dispUndef: number;
@@ -561,7 +571,7 @@ export interface KvpDetailCell {
 }
 export interface KvpDetailWeek { idx: number; from: string; to: string; isCurrent: boolean; isFuture: boolean; total: KvpDetailCell; days: (KvpDetailCell & { day: string })[] }
 export interface KvpManagerDetail {
-  managerId: number; name: string; isRnk: boolean; from: string; to: string;
+  managerId: number; name: string; from: string; to: string;
   weeks: KvpDetailWeek[]; monthTotals: KvpDetailCell;
 }
 export async function fetchManagerDetail(params: { managerId: number; from: string; to: string }): Promise<KvpManagerDetail> {
