@@ -18,7 +18,6 @@ import { StuckDealsCard } from "./StuckDealsCard";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ConversionTrendCard } from "./ConversionTrendCard";
 import { ReceivablesBreakdownCard } from "./ReceivablesBreakdownCard";
-import { ReactivationGrid } from "./ReactivationGrid";
 import { teamOptions } from "../teamColors";
 
 const STATUS_LBL: Record<string, string> = {
@@ -659,16 +658,10 @@ export function ReportSection({
         teamId={canPickManager && reportTeamId ? Number(reportTeamId) : undefined}
       />
 
-      {/* Реактивація: менеджер бачить своїх, тімлід — команду / обраного менеджера. */}
-      {!canPickManager && <ReactivationGrid readOnly title="🔄 Мої клієнти в реактивації" />}
-      {canPickManager && (
-        <ReactivationGrid
-          readOnly
-          managerId={reportManagerId ? Number(reportManagerId) : undefined}
-          teamId={reportTeamId ? Number(reportTeamId) : undefined}
-          title={reportManagerId ? "🔄 Реактивація менеджера" : "🔄 Реактивація — по команді"}
-        />
-      )}
+      {/* 🪦 Грід реактивації прибрано 26.08.2026 разом із роутом
+          `GET /dashboard/reactivation`, який рахував гроші повз ядро.
+          Заміна давно працює: `/dashboard/reactivation-list` + задачі
+          `reactivation_client`. */}
 
       {loading ? (
         <p className="loading-text">Завантаження...</p>

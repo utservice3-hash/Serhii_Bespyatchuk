@@ -2401,64 +2401,33 @@ dashboardRouter.put("/receivables/invoice-note", async (req, res) => {
 });
 
 // ── Реактивація клієнтів (сплячі/втрачені → в роботу менеджеру) ─────────────
-/** Роль-скоуп списку реактивації: менеджер — свої, тімлід — команда, адмін — усі. */
-dashboardRouter.get("/reactivation", async (req, res) => {
-  const auth = req.auth!;
-  const conds: string[] = [];
-  const params: unknown[] = [];
-  if (auth.role === "manager") { params.push(auth.managerId); conds.push(`rc.manager_id = $${params.length}`); }
-  else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
-  else {
-    if (req.query.teamId) { params.push(Number(req.query.teamId)); conds.push(`m.team_id = $${params.length}`); }
-  }
-  if (req.query.managerId) { params.push(Number(req.query.managerId)); conds.push(`rc.manager_id = $${params.length}`); }
-
-  const r = await pool.query<{
-    client_key: string; client_name: string; manager_id: number; manager_name: string;
-    category: string | null; plan: string; contact1_date: string | null; contact1_result: string | null;
-    contact2_date: string | null; contact2_result: string | null; status: string; comment: string | null;
-    added_at: string; fact: string; fact_deals: string; last_paid: string | null;
-  }>(
-    `SELECT rc.client_key, rc.client_name, rc.manager_id, m.name AS manager_name,
-            rc.category, rc.plan,
-            to_char(rc.contact1_date, 'YYYY-MM-DD') AS contact1_date, rc.contact1_result,
-            to_char(rc.contact2_date, 'YYYY-MM-DD') AS contact2_date, rc.contact2_result,
-            rc.status, rc.comment, rc.added_at,
-            -- Факт = отримані кошти від клієнта ПІСЛЯ взяття в реактивацію:
-            -- «Успішно» (142), закриті після added_at + «Оплата отримана» (снапшот).
-            COALESCE(f.fact, 0) AS fact, COALESCE(f.fact_deals, 0) AS fact_deals,
-            to_char(lp.last_paid, 'YYYY-MM-DD') AS last_paid
-     FROM reactivation_clients rc
-     JOIN managers m ON m.id = rc.manager_id
-     LEFT JOIN LATERAL (
-       SELECT SUM(d.price) AS fact, COUNT(*) AS fact_deals
-       FROM deals d
-       WHERE d.client_key = rc.client_key
-         AND ((d.status_id = 142 AND d.closed_at_kommo >= rc.added_at)
-              OR d.status_id IN (69716460, 60412544))
-     ) f ON TRUE
-     LEFT JOIN LATERAL (
-       SELECT MAX(d.created_at_kommo) AS last_paid
-       FROM deals d
-       JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-       WHERE d.client_key = rc.client_key AND psm.funnel_stage = 'paid'
-     ) lp ON TRUE
-     ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
-     ORDER BY rc.status = 'in_progress' DESC, rc.added_at DESC`,
-    params
-  );
-  res.json({
-    clients: r.rows.map((x) => ({
-      clientKey: x.client_key, clientName: x.client_name,
-      managerId: x.manager_id, managerName: x.manager_name,
-      category: x.category, plan: Number(x.plan),
-      contact1Date: x.contact1_date, contact1Result: x.contact1_result,
-      contact2Date: x.contact2_date, contact2Result: x.contact2_result,
-      status: x.status, comment: x.comment, addedAt: x.added_at,
-      fact: Number(x.fact), factDeals: Number(x.fact_deals), lastPaid: x.last_paid,
-    })),
-  });
-});
+/*
+ * 🪦 ТУТ СТОЯВ `GET /api/dashboard/reactivation` — ВИДАЛЕНО 26.08.2026.
+ *
+ * Грід «🔄 Реактивація — клієнти в роботі» прибрано ще 04.08.2026; роут відтоді
+ * лежав у `DEAD_ROUTE_CANDIDATES` з терміном перегляду 01.10.2026.
+ *
+ * 🔴 ЧОМУ НЕ ДОЧЕКАЛИСЬ ТЕРМІНУ. Він рахував ГРОШІ ВЛАСНИМ SQL — «Успішно (142)
+ * закриті після added_at + Оплата отримана», тобто повз `core/money.ts` з його
+ * анкером по даті входу й дедупом 9∪10. Ворота `#17c` цього не бачили: їхній
+ * розбір SQL мовчки пропускав дві третини запитів файла (54 зі 158 — заміряно
+ * 26.08.2026), і запит виплив лише тоді, коли стороння правка зсунула парність
+ * беклапок. Тримати заради терміну код, який ворота щойно назвали порушенням,
+ * означало б або узаконити виняток, або лишити гілку червоною.
+ *
+ * МЕРТВІСТЬ ДОВЕДЕНА, А НЕ ПРИПУЩЕНА (усе — по ЗІБРАНОМУ бандлу, за РЯДКОВИМИ
+ * літералами, бо в мініфікованому бандлі греп по імені дає нуль для будь-чого):
+ *   · голий шлях `/dashboard/reactivation` — 0 входжень (усі 4 збіги виявились
+ *     дефісними сусідами: `-candidates`, `-list`, `-task`, `-task/close`);
+ *   · власні тексти гріда — «з реактивації?», «Мої клієнти в реактивації»,
+ *     «1-й контакт», «2-й контакт» — 0 · 0 · 0 · 0;
+ *   · `ReportSection.tsx`, єдиний споживач гріда, не імпортує ніхто.
+ *
+ * ⚠️ ДАНІ НЕ ЧІПАЛИ: у `reactivation_clients` лишаються 6 рядків (рішення
+ * власника 04.08.2026 — СПИСАТИ, не переносити). `POST`/`PUT`/`DELETE` на цьому
+ * шляху теж без жодного споживача, але вони ПИШУТЬ, тож знімаються окремим
+ * словом власника, а не побічним ефектом прибирання читача.
+ */
 
 /** Додати клієнта в реактивацію (тімлід — менеджеру СВОЄЇ команди, адмін — будь-кому). */
 dashboardRouter.post("/reactivation", async (req, res) => {

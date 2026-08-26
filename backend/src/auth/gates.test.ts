@@ -4,11 +4,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { tabsForPath, hasTabBoundary } from "./routeTab.js";
+import { ACCESS_MATRIX } from "./accessMatrix.js";
 import { MOUNTS } from "./routeInventory.js";
 import {
   ROUTE_BOUNDARY_EXEMPTIONS, CORE_BYPASS_EXEMPTIONS, ROW_SPREAD_EXEMPTIONS,
   CREATED_COHORT_EXEMPTIONS, CLIENT_KEY_WRITERS, classifySql, METRIC_SQL, exemptionsWithoutReason,
-  KNOWN_SQL_DEBT, knownDebtFor, normSql,
+  KNOWN_SQL_DEBT, knownDebtFor, normSql, DEAD_ROUTE_CANDIDATES,
 } from "./gates.js";
 import { lexTemplates, queryCallOffsets } from "./sqlLex.js";
 
@@ -314,4 +315,72 @@ test("#17f ДЗЕРКАЛО: жоден реєстр винятків не по�
   assert.deepEqual(
     [{ file: "x", frag: "y", why: "  " }].filter((e) => !e.why.trim()).map((e) => e.file),
     ["x"], "🔴 детектор порожньої причини не працює");
+});
+
+test("#19h РЕЄСТР МЕРТВИХ РОУТІВ ЗВІРЯЄТЬСЯ САМ — запис про неіснуючий роут ЧЕРВОНИЙ", () => {
+  // 🔴 ДІРА, ЗНАЙДЕНА 26.08.2026 ПІД ЧАС ПРИБИРАННЯ РОУТУ, І ВОНА ТИПОВА ДЛЯ
+  // РЕЄСТРІВ. `DEAD_ROUTE_CANDIDATES` перевірявся лише на непорожній `why`
+  // (`gates.ts`), тобто на ЯКІСТЬ тексту — і жодного разу на те, чи описаний
+  // роут узагалі існує. Щойно роут прибирають, його запис лишається назавжди:
+  // мертвий рядок у реєстрі виглядає як робочий і глушить справжні (урок #15e,
+  // де рівно це сталося з ACCEPTED_DIVERGENCES).
+  //
+  // ⚠️ ЗВІРКА В ОДИН БІК, І ЦЕ СВІДОМО. «Кожен запис описує ІСНУЮЧИЙ роут» —
+  // так. Зворотне («кожен мертвий роут внесено») перевірити тут неможливо:
+  // мертвість доводиться грепом по ЗІБРАНОМУ бандлу фронта, а він не завжди
+  // зібраний у момент прогону. Цей бік тримає `uiEntry.test.ts`.
+  const declared = DEAD_ROUTE_CANDIDATES.map((e) => ({ method: e.method, path: e.path }));
+  assert.ok(declared.length >= 3,
+    `🔴 у реєстрі лише ${declared.length} записів — звіряти нема чого, і зелений колір це ховає`);
+
+  // Збираємо реально оголошені роути з КОЖНОГО файла роутів.
+  const declaredRoutes = new Set<string>();
+  for (const f of routeFiles()) {
+    const src = readFileSync(path.join(ROUTES, f), "utf8");
+    for (const m of src.matchAll(/(\w+)Router\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]/g)) {
+      declaredRoutes.add(`${m[2].toUpperCase()} ${m[3]}`);
+    }
+  }
+  assert.ok(declaredRoutes.size > 50,
+    `🔴 розбір знайшов лише ${declaredRoutes.size} роутів — регулярка зламалась, і перевірка стала беззубою`);
+
+  // Шлях у реєстрі — повний (`/api/dashboard/...`), у коді — від кореня роутера.
+  // Тому звіряємо ХВІСТ: запис вважається живим, якщо якийсь оголошений роут
+  // того самого методу є суфіксом його шляху.
+  const stale: string[] = [];
+  for (const e of declared) {
+    const hit = [...declaredRoutes].some((r) => {
+      const [m, p] = r.split(" ");
+      return m === e.method && p !== "/" && e.path.endsWith(p);
+    });
+    if (!hit) stale.push(`${e.method} ${e.path}`);
+  }
+  assert.deepEqual(stale, [],
+    "🔴 У РЕЄСТРІ МЕРТВИХ РОУТІВ Є ЗАПИС ПРО РОУТ, ЯКОГО ВЖЕ НЕМАЄ. Прибрали роут — "
+    + "прибери й запис: інакше реєстр обростає рядками, які нічого не описують, і "
+    + "серед них губиться справжній кандидат:\n  " + stale.join("\n  "));
+
+  // 🔴 ТА САМА ХВОРОБА В МАТРИЦІ ДОСТУПУ, І ВОНА ЗНАЙШЛАСЬ ТОГО САМОГО ДНЯ.
+  // Після видалення роуту рядок `GET /api/dashboard/reactivation` лишився в
+  // `ACCESS_MATRIX`, і `accessMatrix.test` цього не побачив: він перевіряє, що
+  // кожен рядок дає очікуваний код, а не що роут узагалі існує. Наслідок тихий:
+  // зліпок раз за разом проби́ває неіснуючий шлях, отримує 404 і рахує це
+  // «нормою», а справжня прогалина серед таких рядків непомітна.
+  // ⚠️ Шлях у матриці несе QUERY-РЯДОК — це готова проба (`?clientKey=zzz`), а не
+  // маршрут. Перша редакція порівнювала його як є й видала пʼять «зниклих»
+  // роутів, які насправді живі. Хибний позитив спіймав сам гейт, і це той
+  // випадок, коли червоне належить виправити, а не оголосити знахідкою.
+  const matrixStale = ACCESS_MATRIX
+    .filter((e) => e.path.startsWith("/api/dashboard/"))
+    .filter((e) => {
+      const bare = e.path.split("?")[0];
+      return ![...declaredRoutes].some((r) => {
+        const [m, p] = r.split(" ");
+        return m === e.method && p !== "/" && bare.endsWith(p);
+      });
+    })
+    .map((e) => `${e.method} ${e.path}`);
+  assert.deepEqual(matrixStale, [],
+    "🔴 У МАТРИЦІ ДОСТУПУ Є РЯДОК ПРО РОУТ, ЯКОГО НЕМАЄ. Зліпок описує те, що існує:\n  "
+    + matrixStale.join("\n  "));
 });

@@ -1550,25 +1550,11 @@ export interface ReactivationClient {
   addedAt: string;
   lastPaid: string | null;
 }
-export async function fetchReactivation(params?: { teamId?: number; managerId?: number }): Promise<ReactivationClient[]> {
-  const { data } = await api.get<{ clients: ReactivationClient[] }>("/dashboard/reactivation", { params });
-  return data.clients;
-}
-export async function addReactivationClient(payload: {
-  clientKey: string; clientName: string; managerId: number; category?: "sleeping" | "lost";
-}): Promise<void> {
-  await api.post("/dashboard/reactivation", payload);
-}
-export async function updateReactivationClient(payload: { clientKey: string } & Partial<{
-  plan: number; contact1Date: string | null; contact1Result: string | null;
-  contact2Date: string | null; contact2Result: string | null;
-  status: string; comment: string | null; managerId: number;
-}>): Promise<void> {
-  await api.put("/dashboard/reactivation", payload);
-}
-export async function removeReactivationClient(clientKey: string): Promise<void> {
-  await api.delete(`/dashboard/reactivation/${encodeURIComponent(clientKey)}`);
-}
+/* 🪦 Обгортки `/dashboard/reactivation` (GET/POST/PUT/DELETE) прибрано
+   26.08.2026: єдиним споживачем був `ReactivationGrid.tsx`, знятий разом із
+   ними. Читальний роут на бекенді видалено (рахував гроші повз `core/money.ts`);
+   пишучі лишились без споживачів і знімаються окремим рішенням власника. */
+
 
 /** «Постійні від лідогену» — накопичений ефект за весь час. */
 export interface LeadgenRegulars {

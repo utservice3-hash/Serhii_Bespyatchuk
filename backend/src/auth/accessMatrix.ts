@@ -262,8 +262,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/plans-grid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
-  { method: "GET", path: "/api/dashboard/reactivation", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 🪦 `GET /api/dashboard/reactivation` видалено 26.08.2026 — рядок знято РАЗОМ
+  // із роутом. Зліпок доступу описує те, що існує; рядок про неіснуючий роут
+  // роздуває матрицю пробами в нікуди й ховає справжню прогалину. Тримає `#19h`.
   { method: "POST", path: "/api/dashboard/reactivation", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   { method: "PUT", path: "/api/dashboard/reactivation", cls: "deny-only",
