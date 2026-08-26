@@ -830,7 +830,6 @@ test("#198i Σ колонки «заробили» в розкритті == «З
     earnedShownTotal: (c: { kind: string; earned?: number }[]) => number;
     earnedCellText: (c: { kind: string; why?: string }) => string | null;
     earnedCellHint: (c: { kind: string; why?: string }) => string;
-    EARNED_COL_LABEL: string;
   };
   const { foldFacts, classifyInvoice } = await import("./receivablesFacts.js");
   const mk = (invoiceNo: string, amount: number, dealId: number | null, earned: number | null,
@@ -881,9 +880,19 @@ test("#198i Σ колонки «заробили» в розкритті == «З
     assert.ok(V.earnedCellHint(c).length > 10, `🔴 клітинка «${c.kind}» без пояснення причини`);
   }
 
-  // Підпис НЕ обіцяє бюджет: у цьому продукті `deals.price` — уже МАРЖА
-  // (підтверджено власником 25.08.2026), і колонка мусить називати те, що несе.
-  assert.match(V.EARNED_COL_LABEL, /[Зз]аробили/, "🔴 підпис колонки більше не називає величину");
+  // 🔴 ПІДПИС ЗВІРЯЄМО НА ЕКРАНІ, А НЕ В КОНСТАНТІ.
+  // Перша редакція перевіряла `EARNED_COL_LABEL` — і та константа після
+  // переверстки стала МЕРТВОЮ (розкриття більше не має власної шапки, колонка
+  // підписана спільним заголовком). Гейт лишався зеленим, стережучи те, чого на
+  // екрані немає; спіймав це `grep` по БАНДЛУ — маркер дав нуль збігів, бо
+  // tree-shaking вирізав мертвий експорт. Той самий клас, що `BandHead`.
+  const th = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  const head = th.slice(th.indexOf("<thead>"), th.indexOf("</thead>"));
+  assert.match(head, /Заробили/, "🔴 колонка заробітку втратила підпис у шапці");
+  assert.match(head, /поля «Бюджет» в угоді CRM/,
+    "🔴 підказка більше не називає джерело словами власника — людина не впізнає поле");
+  assert.match(head, /від суми рахунків/,
+    "🔴 знаменник не названий: «Заробили %» прочитають як «% від боргу»");
 
   // І верстка справді бере ці функції, а не рахує колонку своїм виразом.
   const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
