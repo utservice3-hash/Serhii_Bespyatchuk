@@ -55,6 +55,7 @@ import { syncDealActivity, syncContactActivity, recomputeActivity } from "./jobs
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
+import { overviewCache, OVERVIEW_TTL_MS } from "./core/lazyCache.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
@@ -227,6 +228,12 @@ app.get("/api/health", async (_req, res) => {
           && (process.env.TELEGRAM_ADMIN_IDS ?? "").trim().length > 0,
         note: "false = алерти нікуди не йдуть; потрібні TELEGRAM_BOT_TOKEN і TELEGRAM_ADMIN_IDS у backend/.env",
       },
+      // ⏱ ЛІНИВИЙ КЕШ `/overview` — БАЧИТИ ЙОГО ОБОВʼЯЗКОВО. Він робить 11 із 29
+      // чисел роуту до хвилини старішими, ніж БД. Це прийнятно (дані оновлюються
+      // раз на 30 хв, тобто в 30 разів рідше), але механізм, що зсуває свіжість,
+      // не має права бути невидимим — той самий принцип, що `deployIntent` і
+      // `alertChannel`. `oldestAgeSec` > TTL не буває: протухле не рахується.
+      overviewCache: { ttlSec: Math.round(OVERVIEW_TTL_MS / 1000), ...overviewCache.stats() },
       statistics: getStatisticsStatus(),
       ringostat: getRingostatStatus(),
       cashIncome: getCashIncomeStatus(),
