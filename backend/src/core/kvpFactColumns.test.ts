@@ -80,6 +80,13 @@ test("#211f чотири канали == створено по кожному м
     + "Заміряно 26.08.2026: 1010 угод серпня, 44% створеного");
 
   // ── друга половина: число доїхало у ВІДПОВІДЬ, а не лишилось у ядрі ──
+  //
+  // 🔴 `refreshRoles()` ОБОВʼЯЗКОВИЙ, і це не формальність: роль-кеш fail-closed, тож
+  // без нього `roleHasTab` відмовляє й роут віддає порожнє тіло. Гейт тоді падає з
+  // «немає команд» — тобто на власній помилці, а виглядає як дефект коду. Кеш
+  // модульний: один виклик не лікує іншу збірку (той самий урок, що в golden-master).
+  const rbac = await import("../auth/rbac.js");
+  await rbac.refreshRoles();
   const { dashboardRouter } = await import("../routes/dashboard.js");
   const layer = (dashboardRouter as unknown as { stack: { route?: { path: string; methods: Record<string, boolean>;
     stack: { handle: (req: unknown, res: unknown, next: (e?: unknown) => void) => void }[] } }[] })
