@@ -752,6 +752,41 @@ test("#198g рахунки БЕЗ номера згортаються в оди�
     assert.equal(one.rowCount, 1, "🔴 гілка по одному рахунку віддала не один рядок");
     assert.equal(Number(one.rows[0].amount), 50, "🔴 списання одного рахунку захопило чужі суми");
 
+    // 💵 ГОТІВКОВИЙ РЯДОК: `client_key_raw` = NULL, І САМЕ ЙОГО ФІКСТУРА НЕ
+    // ПРОХОДИЛА ЖОДНОГО РАЗУ (знахідка нічного аудиту, підтверджена).
+    //
+    // `insertCashReceivables` вставляє в `receivable_invoices` БЕЗ `client_key_raw`
+    // — заміряно на проді: у МГЕР (готівка) 12 рахунків, `client_key_raw`
+    // заповнений у НУЛЯ з них. Уся фікстура вище ставила `'к'`, тож гілка
+    // `COALESCE(…, client_key)` не виконувалась ніколи: гейт благословляв
+    // випадок, якого не бачив.
+    //
+    // ⚠️ Висновок аудиту («списати готівкового неможливо») при цьому НЕ
+    // підтвердився: запис і читання беруть ОДИН вираз `COALESCE`, тож NULL
+    // вироджується симетрично. Перевірено повним циклом у транзакції з ROLLBACK
+    // проти прода — 12 цілей, 12 у розкритті, 12 в архіві з назвою, скасування
+    // повертає 0. Але фікстуру це не виправдовує: сліпа пляма була справжня.
+    await c.query(`INSERT INTO receivable_invoices (client_key, client_key_raw, client_name, invoice_no, amount)
+                   VALUES ('готівка', NULL, 'МГЕР', '900', 700), ('готівка', NULL, 'МГЕР', NULL, 300)`);
+    const cash = await c.query<{ client_key_raw: string; invoice_no: string; amount: string }>(
+      WRITEOFF_TARGETS_SQL(false), ["готівка"]);
+    assert.equal(cash.rowCount, 2, "🔴 готівкові рахунки не дали цілей списання");
+    for (const row of cash.rows) {
+      assert.equal(row.client_key_raw, "готівка",
+        "🔴 при NULL у `client_key_raw` ключем стало не `client_key` — запис і читання розійдуться, "
+        + "і списання готівкового клієнта стане невидимим");
+    }
+    // І ЧИТАННЯ бачить його тим самим виразом — інакше запис ліг би, а екран мовчав.
+    await c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note)
+                   VALUES ('готівка', '900', 700, 'готівкова проба')`);
+    const seen = await c.query<{ n: string }>(
+      `SELECT count(*) AS n FROM receivable_invoices ri
+        WHERE ri.client_key = 'готівка' AND EXISTS (SELECT 1 FROM receivable_writeoffs w
+          WHERE w.client_key_raw = COALESCE(ri.client_key_raw, ri.client_key)
+            AND w.invoice_no = COALESCE(ri.invoice_no,'') AND w.revoked_at IS NULL)`);
+    assert.equal(Number(seen.rows[0].n), 1,
+      "🔴 списаний готівковий рахунок не видно на боці ЧИТАННЯ — запис і читання беруть різні вирази ключа");
+
     // І ключ справді витримує вставку: пара унікальна, друга спроба ОНОВЛЮЄ.
     for (const row of r.rows) {
       await c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note)
