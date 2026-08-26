@@ -619,6 +619,30 @@ function ManagerDetailDrill({ managerId, from, to }: { managerId: number; from: 
  * назвою. Одне правило, записане двічі, розходиться мовчки.
  */
 const NO_CH_LABEL = "не реклама і не лідген";
+
+/**
+ * 🕐 ПІДПИС ПРО ДРЕЙФ КАНАЛІВ — рішення власника 26.08.2026, варіант «підпис біля блоку».
+ *
+ * 📐 ФАКТ, А НЕ ВИБАЧЕННЯ. `reclassifyAdChannel` ганяється ЩОСИНКУ по всій таблиці й
+ * переставляє канал ЗАДНІМ ЧИСЛОМ: «останній дотик» за побудовою переоцінюється,
+ * щойно зʼявляється новіший. Заміряно 26.08.2026: між двома замірами з різницею ~40 хв
+ * «Реактивація закриті» в третьому каналі зросла 110 → 112, а `updated_at_kommo`
+ * зрушив у 81 угоди серпня за годину. Тобто той самий місяць, відкритий двічі, може
+ * дати різні числа — на одиниці, не на порядки.
+ *
+ * 🔴 ЧОМУ САМЕ ТУТ І САМЕ ТЕКСТОМ (три умови власника):
+ *   • біля БЛОКУ каналів, а не внизу сторінки: число, що змінюється, і пояснення,
+ *     чому воно змінюється, мусять бути видимі ОДНОЧАСНО;
+ *   • НЕ тултип: людина, яка вже помітила розбіжність і засумнівалась, підказку при
+ *     наведенні не шукатиме — вона піде питати, чи екран бреше;
+ *   • не в кожному рядку: підпис під кожним менеджером перетворився б на шпалери,
+ *     які перестають читати (той самий урок, що з «невідомим» у 77% рядків).
+ * Тому — один рядок на розгорнуту команду, просто над її менеджерами.
+ *
+ * ⚠️ Заморожування каналу для закритих місяців НЕ робимо — це окрема будова, вона
+ * піде в етап «Лідген» (рішення власника).
+ */
+const DRIFT_NOTE = "Канали уточнюються: атрибуція перераховується щопівгодини, тому числа за минулі періоди можуть змінитись на одиниці.";
 function MgrFactLine({ cs }: { cs: CreatedSplit }) {
   if (!cs || cs.created <= 0) return null;
   const chip = (label: string, v: number, color?: string) =>
@@ -702,6 +726,9 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
         <span>Ср. чек команди:</span>
         <span>успішно реалізовано <b style={{ color: "var(--text)" }}>{team.avgCheckSuccess == null ? "—" : fmtMoney(team.avgCheckSuccess)}</b><InfoHint text="Виграні угоди (142) за місяць по даті закриття: Σ суми ÷ Σ угод. Звірка з листом 2600–2900." /></span>
         <span>в очікуванні оплат <b style={{ color: "var(--text)" }}>{team.avgCheckAwaiting == null ? "—" : fmtMoney(team.avgCheckAwaiting)}</b><InfoHint text="Угоди ЗАРАЗ у роботі (авто працює→оплата отримана, без 142), знімок «станом на зараз»: Σ суми ÷ Σ угод." /></span>
+      </div>
+      <div style={{ padding: "5px 16px 6px 30px", fontSize: 10.5, color: MUTED, lineHeight: 1.45, borderBottom: "1px solid var(--border)" }}>
+        🕐 {DRIFT_NOTE}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: CALM_COLS, gap: 8, padding: "6px 16px 6px 30px", color: MUTED, fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".04em", borderBottom: "1px solid var(--border)" }}>
         <span>Менеджер</span><span style={{ textAlign: "right" }}>План</span><span style={{ textAlign: "right" }}>Факт</span><span style={{ textAlign: "right" }}>Вик</span><span style={{ textAlign: "right" }}>Очік</span><span style={{ textAlign: "right" }}>Конв</span><span style={{ textAlign: "right" }}>Тижні Т1–Т{rep.weekBlocks.length}</span>
