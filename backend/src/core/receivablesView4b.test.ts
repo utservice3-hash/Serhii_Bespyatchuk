@@ -1441,6 +1441,40 @@ test("#199aa предикат ВИКОНУЄТЬСЯ проти БД і спра
       WRITTEN_OFF_STILL_IN_ZONE, [[8921932, 155304], [100274340, 69716312, 69716300]])).rows[0];
     assert.equal(div.deals, 1, "🔴 лічильник розбіжності не бачить виключеної угоди — розбіжність стала тихою");
     assert.equal(div.amount, 1000, "🔴 лічильник називає не ту суму, що пішла з очікуваних");
+
+    // ⑦ Σ ПО МЕНЕДЖЕРАХ == КОМАНДА == КОМПАНІЯ, ПІСЛЯ СПИСАННЯ (вимога власника).
+    //
+    // 🔴 ЖИВІ ДАНІ ЦЬОГО НЕ ПОКАЗУЮТЬ І НЕ ПОКАЖУТЬ: на проді 26.08.2026 угод із
+    // повністю списаними рахунками НУЛЬ, тож «до» і «після» там байт-у-байт
+    // однакові (заміряно старим і новим `dist` — 0 розбіжностей у трьох пулах).
+    // Рівність на живих даних тримається, але вона тримається й на зламаному
+    // предикаті — тобто доводить рівно нічого. Тут випадок сконструйовано.
+    //
+    // ⚠️ Три зерна (компанія / команда / менеджер) — це і є предмет перевірки,
+    // тож GROUP BY у тесті свій. Ліворуч у КОЖНОМУ з них стоїть ПРОДАКШН-вираз
+    // `DEAL_NOT_WRITTEN_OFF`, а не переписаний «схоже»: інакше гейт порівнював би
+    // дві копії, написані поруч (урок `#214c`).
+    await c.query(`INSERT INTO teams (id, name) VALUES (900, 'Ф') ON CONFLICT DO NOTHING`);
+    await c.query(`INSERT INTO managers (id, kommo_user_id, name, team_id, is_active)
+                   VALUES (901, 9901, 'М1', 900, true), (902, 9902, 'М2', 900, true)
+                   ON CONFLICT DO NOTHING`);
+    await c.query(`UPDATE deals SET manager_id = CASE WHEN kommo_id IN (111,222) THEN 901 ELSE 902 END`);
+    const ZONE = [100274340, 69716312, 69716300];
+    const grain = async (extra: string, group: string) => (await c.query<Record<string, string>>(
+      `SELECT ${extra} FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+        WHERE d.pipeline_id = ANY($1) AND d.status_id = ANY($2) AND ${DEAL_NOT_WRITTEN_OFF} ${group}`,
+      [[8921932, 155304], ZONE])).rows;
+    const company = Number((await grain("COALESCE(SUM(d.price),0) AS revenue", ""))[0].revenue);
+    const byTeam = (await grain("m.team_id, COALESCE(SUM(d.price),0) AS revenue", "GROUP BY m.team_id"))
+      .reduce((a, x) => a + Number(x.revenue), 0);
+    const byMgr = (await grain("m.id, COALESCE(SUM(d.price),0) AS revenue", "GROUP BY m.id"))
+      .reduce((a, x) => a + Number(x.revenue), 0);
+    assert.equal(company, byTeam, "🔴 Σ команд ≠ компанії ПІСЛЯ списання — предикат ріже зерна по-різному");
+    assert.equal(company, byMgr, "🔴 Σ менеджерів ≠ компанії ПІСЛЯ списання");
+    // І це НЕ вироджена рівність «0 == 0»: списана угода 111 (1000 ₴) вийшла,
+    // решта лишилась. Без цієї перевірки гейт зеленів би на предикаті, що ріже все.
+    assert.equal(company, 3000,
+      `🔴 після списання лишилось ${company} ₴ замість 3000 — або не вийшла та угода, або вийшли зайві`);
   } finally { await c.end(); scratch.dispose(); }
 });
 
