@@ -230,7 +230,13 @@ test("#197c «угоди немає» читається як «не знаєм�
   // 🔗 І роут це віддає — інакше колонка отримувала б `undefined` і мовчки
   // показувала «н/д» усім 290 рахункам, виглядаючи при цьому справною.
   const route = readFileSync(SRC("routes/dashboard.ts"), "utf8");
-  const inv = route.slice(route.indexOf('"/receivables/invoices"'), route.indexOf('"/receivables/invoices"') + 5000);
+  // ⚠️ МЕЖА ЗРІЗУ — ЗА ЗМІСТОМ, А НЕ ЗА ЛІЧИЛЬНИКОМ СИМВОЛІВ. Перша редакція
+  // брала фіксовані 5000 символів від початку роуту, і перший же доданий
+  // коментар виштовхнув `carrierPaid` за вікно: гейт почервонів на правці, яка
+  // його предмета не чіпала. Тепер зріз іде до НАСТУПНОГО роуту.
+  const invStart = route.indexOf('"/receivables/invoices"');
+  const invEnd = route.indexOf("dashboardRouter.", invStart + 40);
+  const inv = route.slice(invStart, invEnd > invStart ? invEnd : route.length);
   assert.match(inv, /carrierPaid: f\?\.carrierPaid/, "🔴 роут не віддає стан перевізника по рахунку");
   assert.match(inv, /carrierReason: f\?\.carrierReason/, "🔴 роут віддає стан без причини");
 });
@@ -2041,4 +2047,267 @@ test("#199av подвійне натискання не створює друг�
     "🔴 роут не віддає наявну задачу — фронт не має що показати, і людина натисне втретє");
   assert.ok(!/INSERT INTO tasks/.test(body),
     "🔴 роут САМ створює задачу — а власник сказав, що виконавця й дедлайн обирає тімлід у формі");
+});
+
+test("#199aw вік боргу — по ЖИВИХ рахунках, і саме це чинний дефект", needsDb(), async (t) => {
+  // 🔴 ЧИННИЙ ДЕФЕКТ НА ПРОДІ, ЗАМІРЯНО 26.08.2026, А НЕ МАЙБУТНЯ ФІЧА.
+  // УКРЕНЕРГО-АЛЬЯНС: екран показував 1128 днів при ліміті 25 — тобто клієнта
+  // «у межах» (найстаріший ЖИВИЙ рахунок 22 дні) малювало простроченим на 1103
+  // дні понад ліміт і ще й «висяком» (поріг 365). Тягнув списаний рахунок
+  // `00000003074` від 25.07.2023: списання прибрало 28 000 ₴ із суми — і
+  // лишило по них годинник.
+  //
+  // Фікстура ВЛАСНА: на проді списання одне, тож жива перевірка мовчала б, а
+  // зелений колір нічого не довів би (на цьому вже спіймались із golden-master).
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { CLIENT_DEBT_AGE_SQL } = await import("./receivablesAge.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SRC("db/schema.sql"), "utf8"));
+    const K = "укр";
+    await c.query(`INSERT INTO receivable_invoices (client_key, client_key_raw, client_name, invoice_no, invoice_date, amount)
+                   VALUES ($1,$1,'У','старий', CURRENT_DATE - 1128, 28000),
+                          ($1,$1,'У','свіжий', CURRENT_DATE - 22, 100000),
+                          ($1,$1,'У','вчора',  CURRENT_DATE - 1,  5000)`, [K]);
+    await c.query(`INSERT INTO receivables (client_key, client_name, amount, limit_days) VALUES ($1,'У',133000,25)`, [K]);
+    const age = async () => {
+      await c.query(`UPDATE receivables r SET overdue_days = a.max_age
+                       FROM (${CLIENT_DEBT_AGE_SQL}) a WHERE a.client_key = r.client_key`);
+      return (await c.query<{ d: number | null }>(
+        `SELECT overdue_days AS d FROM receivables WHERE client_key = $1`, [K])).rows[0].d;
+    };
+    const off = (no: string) => c.query(
+      `INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note) VALUES ($1,$2,1,'ф')`, [K, no]);
+
+    // ① Нічого не списано — вік по найстарішому, як і було.
+    assert.equal(await age(), 1128, "🔴 без списань вік змінився — фікс зачепив звичайний випадок");
+
+    // ② ЧАСТКОВО СПИСАНО: пішов найстаріший → вік за найстарішим ІЗ РЕШТИ.
+    //    Це і є прод-випадок: 1128 → 22.
+    await off("старий");
+    assert.equal(await age(), 22,
+      "🔴 списаний рахунок далі тягне годинник — саме це на проді малює клієнта «у межах» простроченим на 1103 дні");
+
+    // ③ СПИСАНО ВСІ — віку немає. `null`, а не застигле старе значення:
+    //    з `WHERE` замість `FILTER` рядок просто не оновився б, і «списали все»
+    //    читалось би як «вік застиг», причому бездоганно правдоподібно.
+    await off("свіжий"); await off("вчора");
+    assert.equal(await age(), null,
+      "🔴 у клієнта зі СПИСАНИМИ ВСІМА рахунками вік не занулився — найімовірніше `WHERE` замість `FILTER`");
+
+    // ④ СКАСУВАННЯ повертає — байт-у-байт до стану ②, потім до ①.
+    await c.query(`UPDATE receivable_writeoffs SET revoked_at = now() WHERE invoice_no IN ('свіжий','вчора')`);
+    assert.equal(await age(), 22, "🔴 скасування списання не повернуло вік");
+    await c.query(`UPDATE receivable_writeoffs SET revoked_at = now() WHERE invoice_no = 'старий'`);
+    assert.equal(await age(), 1128, "🔴 повне скасування не повернуло вихідний вік");
+
+    // 💵 ГОТІВКОВИЙ ВИПАДОК: `client_key_raw = NULL`. Ключ мусить вироджуватись
+    // симетрично, інакше списання готівкового не вплине на вік узагалі.
+    const C = "готівка";
+    await c.query(`INSERT INTO receivable_invoices (client_key, client_key_raw, client_name, invoice_no, invoice_date, amount)
+                   VALUES ($1,NULL,'Г','g1', CURRENT_DATE - 500, 1000), ($1,NULL,'Г','g2', CURRENT_DATE - 3, 1000)`, [C]);
+    await c.query(`INSERT INTO receivables (client_key, client_name, amount) VALUES ($1,'Г',2000)`, [C]);
+    await c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note) VALUES ($1,'g1',1,'ф')`, [C]);
+    await c.query(`UPDATE receivables r SET overdue_days = a.max_age
+                     FROM (${CLIENT_DEBT_AGE_SQL}) a WHERE a.client_key = r.client_key`);
+    const g = (await c.query<{ d: number | null }>(
+      `SELECT overdue_days AS d FROM receivables WHERE client_key = $1`, [C])).rows[0].d;
+    assert.equal(g, 3, "🔴 списання ГОТІВКОВОГО рахунка не вплинуло на вік — ключ розійшовся на NULL");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+test("#199ay вік боргу ВИРОБЛЯЄТЬСЯ в одному місці — шапка розкриття не рахує сама", async () => {
+  // 🔴 ДРУГЕ ДЖЕРЕЛО ОДНОГО ЧИСЛА, ЯКОГО НІХТО НЕ НАЗИВАВ. Шапка розкриття мала
+  // власний `Math.floor((Date.now() - min) / 86400000)`, і на УКРЕНЕРГО-АЛЬЯНСІ
+  // екран казав двома голосами ОДНОЧАСНО: рядок «1128 дн.», шапка під ним —
+  // «найстаріший 22 дн.». Обидва правильні кожен у своєму всесвіті — саме тому
+  // їх ніхто не помітив.
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  const head = sec.slice(sec.indexOf("const renderInvoices"), sec.indexOf("Рахунки клієнта"));
+  assert.ok(!/86400000/.test(head),
+    "🔴 шапка розкриття знову рахує вік сама — два джерела одного числа на одному екрані");
+  assert.match(head, /invAge\[clientKey\]/, "🔴 шапка більше не бере вік із сервера");
+
+  // Сервер його справді віддає, і саме з ядра.
+  const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  assert.match(routes, /oldestAliveDays/, "🔴 роут не віддає вік — шапці нема звідки його взяти");
+  assert.match(routes, /debtAgeDays\(/, "🔴 роут рахує вік власним виразом замість ядра");
+
+  // 🪞 ДЗЕРКАЛО: вік ВСЕ ЩЕ показується. Без нього гейт зеленів би й тоді, коли
+  // «найстаріший N дн.» прибрали з екрана зовсім.
+  assert.match(sec, /найстаріший \$\{oldest\}/, "🔴 вік зник із шапки розкриття взагалі");
+});
+
+test("#199ba кнопка «Списати» ВИДИМА в рядку рахунка", () => {
+  // 🔴 ЧЕСНА МЕЖА ЦЬОГО ГЕЙТА, ПЕРШИМ РЯДКОМ: він читає СТИЛІ, з яких видимість
+  // виходить, а піксель бачить тільки екран. Сьогоднішній випадок доводить, чому
+  // цього мало: CSS був синтаксично бездоганний, селектор теж, а зламане було
+  // саме те, чого правило не бачить — що `<tr>` рахунка не має класу `.recv-row`.
+  // Тому доказом лишається СКРІНШОТ розкриття з наведенням, а не зелений гейт.
+  //
+  // 📐 Заміряно в браузері `getComputedStyle` перед фіксом: 117 кнопок у DOM
+  // (76 у рядках клієнта + 41 у рядках рахунків), видимих після наведення на
+  // рядок рахунка — НУЛЬ. Власник: «я не можу списувати саме певні рахунки».
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  const css = readFileSync(FE("index.css"), "utf8");
+
+  assert.match(sec, /<tr key=\{`\$\{clientKey\}-inv-\$\{i\}`\} className="recv-inv">/,
+    "🔴 рядок рахунка втратив клас `recv-inv` — кнопка знову не зможе стати видимою");
+  assert.match(css, /\.recv-inv:hover \.recv-wo/,
+    "🔴 зникло правило видимості для рядка рахунка");
+  assert.match(css, /\.recv-inv:focus-within \.recv-wo/,
+    "🔴 зникла видимість із КЛАВІАТУРИ — до кнопки не дійти без миші");
+
+  // 🪞 ДЗЕРКАЛО: правило для рядка КЛІЄНТА не послаблене й не прибране.
+  // Односторонній фікс міг би зробити `.recv-wo` видимою скрізь — тобто 74
+  // червоні кнопки постійно на екрані, від чого приховування й заводилось.
+  assert.match(css, /\.recv-row:hover \.recv-wo/, "🔴 зникло правило для рядка клієнта");
+  assert.ok(!/^\s*\.recv-wo\s*\{[^}]*visibility:\s*visible/m.test(css),
+    "🔴 `.recv-wo` зробили видимою БЕЗУМОВНО — це 74 постійні червоні кнопки, а не фікс");
+});
+
+test("#199bb порахункове списання ≠ компанійському", () => {
+  // 🔴 ДВІ РІЗНІ ДІЇ З ОДНОГО ЕКРАНА, І ПЛУТАТИ ЇХ НЕ МОЖНА: кнопка в рядку
+  // рахунка списує ОДИН, кнопка в рядку клієнта — УСІ, що лишились. Якби
+  // `invoiceNo` губився дорогою, клік по одному рахунку тихо забирав би весь
+  // борг клієнта — і виглядало б це як «спрацювало».
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  assert.match(sec, /\{ clientKey, invoiceNo: no \}/,
+    "🔴 кнопка рахунка більше не передає номер — вона списала б усього клієнта");
+  assert.match(sec, /\{ clientKey: c\.clientKey, invoiceNo: null \}/,
+    "🔴 кнопка клієнта більше не передає `null` — компанійське списання зламане");
+
+  const dlg = strip(readFileSync(FE("pages/dashboard/sections/WriteoffDialog.tsx"), "utf8"));
+  assert.match(dlg, /УСІ рахунки клієнта/,
+    "🔴 діалог не називає обсяг компанійського списання — «списати борг» прочитають як один рахунок");
+  assert.match(dlg, /рахунок № \$\{invoiceNo\}/,
+    "🔴 діалог не називає НОМЕР при порахунковому списанні — обсяг знову не видно");
+
+  // Безномерний рядок: кнопки НЕМАЄ, а пояснення Є (рішення власника 26.08.2026).
+  assert.match(sec, /canWriteOff && no !== ""/,
+    "🔴 кнопка зʼявилась у безномерному рядку — вона діяла б на кілька рядків одразу");
+  assert.match(sec, /списання недоступне: рахунок без номера/,
+    "🔴 на місці кнопки порожнеча — відсутня дія мусить бути ПОЯСНЕНА, а не просто відсутня");
+});
+
+test("#199bd два `isOverdue` дають ОДНЕ І ТЕ САМЕ — розходження неможливе тихо", async () => {
+  // 🔴 РІШЕННЯ 26.08.2026: не зводимо в цьому проході, але й боргом без
+  // механізму не лишаємо. Означення прострочки живе ДВІЧІ — у ядрі
+  // (`core/creditLimits.isOverdue`) і у фронті (`receivablesView.isOverdue`).
+  // Поки їх дві, вони мусять збігатися на спільній таблиці випадків; зведення —
+  // окремий прохід, коли чіпатимемо `ReceivablesBreakdownCard` із її третьою
+  // умовою `(overdueDays ?? 0) > 0`.
+  const core = await import("./creditLimits.js");
+  const fe = await import(FE_SPEC("pages/dashboard/receivablesView.ts"));
+
+  const CASES: { age: number | null; limit: number | null; why: string }[] = [
+    { age: 22, limit: 25, why: "у межах — прод-випадок УКРЕНЕРГО після фіксу" },
+    { age: 1128, limit: 25, why: "далеко за межею — той самий клієнт до фіксу" },
+    { age: 25, limit: 25, why: "РІВНО на межі: це межа, а не її перехід" },
+    { age: 26, limit: 25, why: "на день за межею" },
+    { age: 0, limit: 0, why: "нуль проти нуля" },
+    { age: 1, limit: 0, why: "«розглянули і не дали» = нульовий ліміт" },
+    { age: 1, limit: null, why: "ліміту НІКОЛИ не ставили — теж нульовий" },
+    { age: null, limit: 25, why: "віку немає (усі рахунки списані) — НЕ прострочка" },
+    { age: null, limit: null, why: "нічого не відомо" },
+    { age: 0, limit: null, why: "виставлений сьогодні, ліміту немає" },
+  ];
+  const diff: string[] = [];
+  for (const c of CASES) {
+    const a = core.isOverdue(c.age, c.limit);
+    const b = fe.isOverdue({ overdueDays: c.age, limitDays: c.limit });
+    if (a !== b) diff.push(`${c.why}: ядро=${a}, фронт=${b} (вік ${c.age}, ліміт ${c.limit})`);
+  }
+  assert.deepEqual(diff, [],
+    "🔴 ДВА ОЗНАЧЕННЯ ПРОСТРОЧКИ РОЗІЙШЛИСЬ. Вони живуть у ядрі й у фронті окремо; поки їх два, "
+    + "вони мусять давати те саме на кожному випадку — інакше рядок і плитка одного екрана "
+    + "почнуть казати різне, і кожне число виглядатиме правдоподібно:\n  " + diff.join("\n  "));
+
+  // Порожня таблиця = провал: `deepEqual([], [])` істинний і при нулі випадків.
+  assert.ok(CASES.length >= 8, `🔴 випадків лише ${CASES.length} — звіряти нема на чому`);
+  // І щонайменше один випадок мусить давати `true`, а один `false`: інакше
+  // збіг тримався б на тому, що обидві функції завжди повертають одне й те саме.
+  assert.ok(CASES.some((c) => core.isOverdue(c.age, c.limit)), "🔴 жоден випадок не дає прострочки");
+  assert.ok(CASES.some((c) => !core.isOverdue(c.age, c.limit)), "🔴 жоден випадок не дає «у межах»");
+});
+
+/**
+ * 🔎 ПЕРЕЛІЧУВАЧ РОДИНИ ПРОСТРОЧКИ.
+ *
+ * КРИТЕРІЙ СЛОВАМИ, щоб наступний не реконструював його з регулярки:
+ * місце ВИРОБЛЯЄ вік боргу, якщо воно рахує його з ДАТИ РАХУНКА —
+ *   · у SQL: різниця з `invoice_date` (`CURRENT_DATE - invoice_date` тощо);
+ *   · у TS: арифметика по мілісекундах доби (`86400000`) над датами рахунків.
+ * Місце, яке лише ЧИТАЄ готовий `overdue_days` / `overdueDays`, виробником НЕ
+ * є — таких на екрані півдюжини, і вимагати від них чогось безглуздо.
+ *
+ * 🔴 НАВІЩО ПОВЕРХ ПОІМЕННИХ ГЕЙТІВ. Виробників було ДВА, і другого ніхто не
+ * називав: SQL у синку рахував по всіх рахунках, шапка розкриття — по живих,
+ * і на УКРЕНЕРГО-АЛЬЯНСІ екран казав «1128 дн.» і «найстаріший 22 дн.»
+ * ОДНОЧАСНО. Поіменні гейти стережуть двох відомих; третього, ще не
+ * написаного, не бачить жоден.
+ */
+const AGE_PRODUCER_FILES = [
+  "jobs/syncReceivables.ts", "routes/dashboard.ts", "core/receivablesAge.ts",
+  "core/receivablesFacts.ts", "core/creditLimits.ts", "core/metrics.ts",
+] as const;
+const FE_AGE_PRODUCER_FILES = [
+  "pages/dashboard/sections/ReceivablesSection.tsx",
+  "pages/dashboard/sections/ReceivablesBreakdownCard.tsx",
+  "pages/dashboard/sections/ReceivablesTiles.tsx",
+  "pages/dashboard/receivablesView.ts",
+] as const;
+
+/** Виробники, яким МОЖНА: саме вони і є єдиним джерелом. */
+const AGE_PRODUCER_ALLOWED: { file: string; why: string }[] = [
+  { file: "core/receivablesAge.ts",
+    why: "ЄДИНЕ джерело віку: `CLIENT_DEBT_AGE_SQL` для синку і `debtAgeDays` для фронта. Тут виробляти й треба" },
+];
+
+test("#199bc перелічувач: вік боргу виробляє РІВНО одне місце", () => {
+  const found: { file: string; how: string }[] = [];
+  const scan = (rel: string, src: string, isFe: boolean) => {
+    const code = strip(src);
+    // Рахунковий рядок розкриття показує вік ОДНОГО рахунка — це не «вік боргу
+    // клієнта», а підпис рядка; він живиться тією самою датою й нікуди не
+    // агрегується. Виключаємо іменем змінної, а не «схожістю».
+    const body = code.replace(/const age = iDate \? Math\.floor\(\(Date\.now\(\) - iDate\.getTime\(\)\) \/ 86400000\) : null;/g, "");
+    if (/CURRENT_DATE\s*-\s*(ri\.)?invoice_date/.test(body)) { found.push({ file: rel, how: "SQL по invoice_date" }); return; }
+    // ⚠️ `86400000` САМЕ ПО СОБІ виробником не є: тією ж константою рахується
+    // тижнева межа коментарів (`weekStartKyiv`). Перша редакція критерію на
+    // ній і спіймалась — і це був ХИБНИЙ ПОЗИТИВ мого гейта, а не знахідка.
+    // Тому вимагаємо, щоб поруч (±2 рядки) стояла ДАТА РАХУНКА — рівно як
+    // критерій і сформульований словами вище.
+    if (!isFe) return;
+    const lines = body.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].includes("86400000")) continue;
+      const near = lines.slice(Math.max(0, i - 2), i + 3).join(" ");
+      if (/invoiceDate|invoice_date/.test(near)) { found.push({ file: rel, how: "арифметика діб над датою рахунка" }); return; }
+    }
+  };
+  for (const f of AGE_PRODUCER_FILES) scan(f, readFileSync(SRC(f), "utf8"), false);
+  for (const f of FE_AGE_PRODUCER_FILES) scan(f, readFileSync(FE(f), "utf8"), true);
+
+  // Порожній перебір = провал: спершу доводимо, що йому БУЛО що знайти.
+  assert.ok(found.length >= 1,
+    "🔴 перебір не знайшов ЖОДНОГО виробника віку — критерій розсипався, і зелене тут означає «не перевірено нічого»");
+
+  const allowed = new Set(AGE_PRODUCER_ALLOWED.map((a) => a.file));
+  const extra = found.filter((f) => !allowed.has(f.file)).map((f) => `${f.file} (${f.how})`);
+  assert.deepEqual(extra, [],
+    "🔴 ЗʼЯВИВСЯ ДРУГИЙ ВИРОБНИК ВІКУ БОРГУ. Вік мусить приходити з `core/receivablesAge.ts`; "
+    + "друге місце одного дня розійдеться з першим, і екран казатиме два числа одночасно — "
+    + "рівно як «1128 дн.» у рядку проти «найстаріший 22 дн.» у шапці під ним:\n  " + extra.join("\n  "));
+
+  // 🪞 РЕЄСТР НЕ СМІТНИК: дозволений виробник мусить існувати й справді виробляти.
+  for (const a of AGE_PRODUCER_ALLOWED) {
+    assert.ok(found.some((f) => f.file === a.file),
+      `🔴 «${a.file}» оголошений виробником, але нічого не виробляє — запис протух`);
+    assert.ok(a.why.length > 30, `🔴 «${a.file}» без пояснення`);
+  }
 });

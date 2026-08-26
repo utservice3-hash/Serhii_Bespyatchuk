@@ -1519,9 +1519,16 @@ export async function revokeReceivableWriteoff(payload: {
   return data;
 }
 
-export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoice[]> {
-  const { data } = await api.get<{ invoices: ReceivableInvoice[] }>("/dashboard/receivables/invoices", { params: { clientKey } });
-  return data.invoices;
+/**
+ * 🕰 `oldestAliveDays` їде РАЗОМ із рахунками — це те саме число, що в колонці
+ * «Днів» рядка клієнта, і рахує його сервер одним виразом. Раніше шапка
+ * розкриття рахувала вік сама, і на списаному рахунку екран казав двома
+ * голосами: «1128 дн.» у рядку і «найстаріший 22 дн.» у шапці під ним.
+ */
+export interface ReceivableInvoicesResp { invoices: ReceivableInvoice[]; oldestAliveDays: number | null }
+export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoicesResp> {
+  const { data } = await api.get<ReceivableInvoicesResp>("/dashboard/receivables/invoices", { params: { clientKey } });
+  return { invoices: data.invoices, oldestAliveDays: data.oldestAliveDays ?? null };
 }
 
 /** Дедлайн оплати + коментар до конкретного рахунку (менеджер — свої клієнти). */

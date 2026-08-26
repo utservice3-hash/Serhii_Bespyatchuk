@@ -174,9 +174,14 @@ export function ReceivablesSection({
     fontSize: "var(--fs-sm)", color: "var(--text-muted)", textDecoration: "underline dotted",
   };
   const [invCache, setInvCache] = useState<Record<string, ReceivableInvoice[] | "loading">>({});
+  /** Вік боргу по клієнту — з СЕРВЕРА, поруч із рахунками. Див. `receivablesAge`. */
+  const [invAge, setInvAge] = useState<Record<string, number | null>>({});
   const loadInvoices = (clientKey: string) => {
     fetchReceivableInvoices(clientKey)
-      .then((inv) => setInvCache((c) => ({ ...c, [clientKey]: inv })))
+      .then((r) => {
+        setInvCache((c) => ({ ...c, [clientKey]: r.invoices }));
+        setInvAge((a) => ({ ...a, [clientKey]: r.oldestAliveDays }));
+      })
       .catch(() => setInvCache((c) => ({ ...c, [clientKey]: [] })));
   };
   const toggleClient = (clientKey: string) => {
@@ -236,10 +241,10 @@ export function ReceivablesSection({
     const eCells = earnedCells(inv);
     const eTotal = earnedShownTotal(eCells);
     const debt = inv.reduce((a, x) => a + (x.writtenOff ? 0 : x.amount), 0);
-    const ages = inv.map((x) => parseDateSafe(x.invoiceDate)).filter((d): d is Date => d != null);
-    const oldest = ages.length
-      ? Math.floor((Date.now() - Math.min(...ages.map((d) => d.getTime()))) / 86400000)
-      : null;
+    /* 🕰 ВІК — ІЗ СЕРВЕРА, ОДНИМ ВИРАЗОМ ІЗ РЯДКОМ КЛІЄНТА. Свій підрахунок тут
+       давав ДРУГИЙ ГОЛОС: на УКРЕНЕРГО-АЛЬЯНСІ рядок казав «1128 дн.», а ця
+       шапка — «найстаріший 22 дн.», обидва на одному екрані. */
+    const oldest = invAge[clientKey] ?? null;
     const entities = [...new Set(inv.map((x) => x.entityName).filter((n): n is string => !!n))];
 
     return (
@@ -274,7 +279,7 @@ export function ReceivablesSection({
           const iDate = parseDateSafe(x.invoiceDate);
           const age = iDate ? Math.floor((Date.now() - iDate.getTime()) / 86400000) : null;
           return (
-            <tr key={`${clientKey}-inv-${i}`}>
+            <tr key={`${clientKey}-inv-${i}`} className="recv-inv">
               <td style={cell} />
               {/* Клієнт → рахунок */}
               <td style={{ ...cell, paddingLeft: 28 }}>
@@ -359,6 +364,22 @@ export function ReceivablesSection({
                   <WriteoffButton onClick={() => setWriteoffFor(
                     writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === no
                       ? null : { clientKey, invoiceNo: no })} />
+                )}
+                {/* 🔴 ВІДСУТНЯ ДІЯ МУСИТЬ БУТИ ПОЯСНЕНА, А НЕ ПРОСТО ВІДСУТНЯ
+                    (рішення власника 26.08.2026). Ключ списання — пара (клієнт,
+                    номер), тож усі безномерні рахунки клієнта згортаються в ОДИН
+                    ключ: кнопка стояла б у рядку, а діяла на кілька. Це рівно та
+                    форма, від якої ми найбільше постраждали — технічно правдивий
+                    підпис, що читається як інше. Тому кнопки тут немає, і
+                    порожнечі теж немає.
+                    ⏳ Знімається разом із ключуванням по `id` (борг, парна зміна):
+                    тоді зʼявиться кнопка, а це пояснення зникне. */}
+                {canWriteOff && no === "" && (
+                  <Tip title="Списання недоступне"
+                    style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", whiteSpace: "nowrap" }}
+                    body="Ключ списання — номер рахунку, а тут його немає: усі безномерні рахунки цього клієнта мають спільний ключ, тож кнопка в одному рядку списала б і сусідні. Списати можна цілим клієнтом.">
+                    списання недоступне: рахунок без номера
+                  </Tip>
                 )}
                 {writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === no && (
                   <WriteoffDialog clientKey={clientKey} clientName={clientName}

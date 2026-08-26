@@ -7,6 +7,7 @@ import { parseCsv } from "../utils/csv.js";
 import { loadReceivables1c, resolveManagerId, type Receivable1cRow } from "../core/receivables1c.js";
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
 import { RECOMPUTE_RECEIVABLES_SQL } from "./clientKeySql.js";
+import { CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 
 // Cash ("готівка") clients tracked directly from CRM rather than the accounting
 // sheet: they pay cash, so their debt isn't in the безнал receivables file. We
@@ -326,10 +327,15 @@ export async function syncReceivables(): Promise<void> {
     // 23.08 («ГОТІВКА ПЕРШОЮ, ПЕРЕРАХУНОК ДРУГИМ»), і я наступив на неї вдруге
     // — з іншим полем. Тому обидва перерахунки тепер стоять поруч, після
     // готівки: хто додасть третій, побачить, куди його класти.
+    //
+    // 🔴 ВІК — ПО ЖИВИХ РАХУНКАХ, І ВИРАЗ ПРИЇЖДЖАЄ З ЯДРА (`core/receivablesAge`).
+    // Було `MAX` по ВСІХ рахунках: списаний рахунок далі тягнув годинник, хоч
+    // його гроші вже пішли із суми. Заміряно на проді 26.08.2026 —
+    // УКРЕНЕРГО-АЛЬЯНС показував 1128 днів при 22 справжніх і ліміті 25, тобто
+    // клієнт «у межах» малювався простроченим на 1103 дні понад ліміт.
     await client.query(
       `UPDATE receivables r SET overdue_days = a.max_age
-         FROM (SELECT client_key, MAX((CURRENT_DATE - invoice_date))::int AS max_age
-                 FROM receivable_invoices GROUP BY client_key) a
+         FROM (${CLIENT_DEBT_AGE_SQL}) a
         WHERE a.client_key = r.client_key`);
 
     // Відповідальний — ОДНИМ проходом, тим самим кодом, що й адмін-кнопка.

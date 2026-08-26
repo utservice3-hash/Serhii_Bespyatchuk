@@ -52,6 +52,7 @@ import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
+import { debtAgeDays } from "../core/receivablesAge.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import {
@@ -2305,8 +2306,23 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   // причиною, автором і датою, і повертається однією кнопкою.
   const writtenOffNos = new Set(ourFacts.filter((f) => f.writtenOff).map((f) => f.invoiceNo ?? ""));
 
+  const alive = r.rows.filter((x) => !writtenOffNos.has(x.invoice_no ?? ""));
+
+  /**
+   * 🕰 ВІК БОРГУ ЇДЕ З СЕРВЕРА, А НЕ РАХУЄТЬСЯ ШАПКОЮ РОЗКРИТТЯ.
+   *
+   * 🔴 Шапка мала власний `Math.floor((Date.now() - min) / 86400000)`, і на
+   * УКРЕНЕРГО-АЛЬЯНСІ це давало ДВА ГОЛОСИ НА ОДНОМУ ЕКРАНІ: рядок клієнта
+   * «1128 дн.» (вік по ВСІХ рахунках, включно зі списаним), шапка розкриття
+   * під ним — «найстаріший 22 дн.». Обидва правильні кожен у своєму всесвіті,
+   * і саме тому їх ніхто не помітив. Тепер число одне й приходить звідси.
+   */
+  const oldestAliveDays = debtAgeDays(
+    alive.map((x) => (x.invoice_date ? new Date(String(x.invoice_date)) : null)), new Date());
+
   res.json({
-    invoices: r.rows.filter((x) => !writtenOffNos.has(x.invoice_no ?? "")).map((x) => {
+    oldestAliveDays,
+    invoices: alive.map((x) => {
       const f = factByNo.get(x.invoice_no ?? "");
       return {
         invoiceNo: x.invoice_no,
