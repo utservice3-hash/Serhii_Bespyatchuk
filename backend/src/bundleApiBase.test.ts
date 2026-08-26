@@ -90,3 +90,51 @@ test("#225d ДЗЕРКАЛО: dev-фолбек у бандл не потрапи
     );
   }
 });
+
+/**
+ * 🔒 #225e–#225f — ЗАПОБІЖНИК, А НЕ СІТКА. `#225c`/`#225d` вище ловлять уже зібраний
+ * отруєний бандл; ці двоє не дають його зібрати. Різні речі, і жоден не заміняє іншого:
+ * бандл може приїхати чужим інструментом, що нашого конфігу не читав.
+ */
+
+/** Транспілює `frontend/buildEnvGuard.ts` і віддає чисту функцію — без збірки й без vite. */
+async function loadGuard(): Promise<(mode: string, env: Record<string, string | undefined>) => void> {
+  const ts = await import("typescript");
+  const src = readFileSync(fileURLToPath(new URL("../../frontend/buildEnvGuard.ts", import.meta.url)), "utf8");
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const mod = await import(`data:text/javascript;base64,${Buffer.from(js, "utf8").toString("base64")}`);
+  return mod.requireApiBase as (mode: string, env: Record<string, string | undefined>) => void;
+}
+
+test("#225e прод-збірка без VITE_API_URL валиться, dev — ні", async () => {
+  const requireApiBase = await loadGuard();
+
+  // 1 · ПРОД без значення — мусить кинути, і причина мусить НАЗВАТИ файл і те, що його немає в git.
+  let err: Error | null = null;
+  try { requireApiBase("production", {}); } catch (e) { err = e as Error; }
+  assert.ok(err, "🔴 прод-збірка без VITE_API_URL пройшла — запобіжника немає");
+  assert.match(err!.message, /\.env\.production/, "причина не називає файл, який треба покласти");
+  assert.match(err!.message, /НЕМАЄ В GIT/, "причина не каже головного: файла немає в git, тож у клоні його не буде");
+
+  // 2 · Порожнє й пробільне значення — той самий випадок, що відсутнє.
+  for (const bad of ["", "   "])
+    assert.throws(() => requireApiBase("production", { VITE_API_URL: bad }), `порожнє значення «${bad}» пропущено`);
+
+  // 3 · ДЗЕРКАЛО: зі значенням прод збирається.
+  assert.doesNotThrow(() => requireApiBase("production", { VITE_API_URL: "https://dashboard.uts.ua/api" }));
+
+  // 4 · ДЗЕРКАЛО, важливіше за попереднє: dev БЕЗ значення НЕ падає.
+  //    Заміряно: у dev-режимі `.env.production` не читається взагалі, тож перевірка,
+  //    не привʼязана до режиму, вбила б `npm run dev` усім.
+  assert.doesNotThrow(() => requireApiBase("development", {}), "🔴 dev зламано: збірка розробника вимагає прод-конфіг");
+  assert.doesNotThrow(() => requireApiBase("test", {}));
+});
+
+test("#225f vite.config справді кличе запобіжник, а не просто імпортує", () => {
+  const cfg = readFileSync(fileURLToPath(new URL("../../frontend/vite.config.ts", import.meta.url)), "utf8");
+  // Межа слова обовʼязкова: `requireApiBase_OFF(...)` — типова підміна, і підрядок її пропустив би.
+  assert.match(cfg, /\brequireApiBase\b(?!\w)\s*\(/, "🔴 vite.config.ts не викликає requireApiBase — запобіжник мертвий");
+  assert.match(cfg, /\bloadEnv\b(?!\w)\s*\(/, "🔴 конфіг не читає env через loadEnv — перевіряти буде нічого");
+  // Режим мусить приходити з vite, а не бути зашитим: інакше запобіжник або завжди мовчить, або вбиває dev.
+  assert.match(cfg, /\{\s*mode\s*\}/, "🔴 конфіг не бере mode від vite — перевірка втратить звʼязок із режимом збірки");
+});
