@@ -9,3 +9,8 @@ build/
 .DS_Store
 
 backups/
+
+# Замок прод-чекауту (див. backend/src/tools/checkoutLock.ts) — локальний стан, не код
+.deploy-lock
+.deploy-lock.log
+.deploy-lock.*.tmp

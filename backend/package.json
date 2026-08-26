@@ -22,7 +22,8 @@
     "deploy:run": "node dist/tools/deploy.js run",
     "test:prod": "TEST_SCOPE=prod node --test-concurrency=8 --import ./dist/testReadOnly.js --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\"",
     "test:ai": "TEST_SCOPE=prod TEST_AI=1 node --test-concurrency=8 --import ./dist/testReadOnly.js --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\"",
-    "test:matrix": "TEST_SCOPE=prod TEST_MATRIX=1 node --test-concurrency=8 --import ./dist/testReadOnly.js --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\""
+    "test:matrix": "TEST_SCOPE=prod TEST_MATRIX=1 node --test-concurrency=8 --import ./dist/testReadOnly.js --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./dist/testRunGate.js --test-reporter-destination=stdout --test \"dist/**/*.test.js\"",
+    "lock": "node dist/tools/checkoutLock.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

@@ -18,6 +18,7 @@ import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
+import { cli as lockCli } from "./checkoutLock.js";
 
 export const ARTIFACT_PATH = "/tmp/uts-deploy-check.json";
 const HEALTH = "https://dashboard.uts.ua/api/health";
@@ -89,6 +90,17 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return { id: "artifact", ok: true, detail: `гілка ${art.branchSha} · прод ${art.prodSha}` };
   },
   // ── RUN ───────────────────────────────────────────────────────────────────
+  /** Замок бере САМ скрипт: памʼятка не механізм, а ручний дотик має лишатись дорожчим. */
+  lockTake: (c) => {
+    const who = process.env.UTS_ACTOR ?? "deploy:run";
+    const r = lockCli(["--take", `--who=${who}`, `--reason=викат ${c.target}`], c.repo);
+    return { id: "lockTake", ok: r.code === 0, detail: r.out.join(" · ") };
+  },
+  lockRelease: (c) => {
+    const who = process.env.UTS_ACTOR ?? "deploy:run";
+    const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], c.repo);
+    return { id: "lockRelease", ok: r.code === 0, detail: r.out.join(" · ") };
+  },
   buildFresh: async (c) => {
     const h = await health();
     const disk = c.be ? `${c.be}/dist/version.json` : "";
