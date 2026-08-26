@@ -747,3 +747,55 @@ test("#198g рахунки БЕЗ номера згортаються в оди�
       "🔴 у журналі не вся списана сума — саме та тиха розбіжність, заради якої гейт існує");
   } finally { await c.end(); scratch.dispose(); }
 });
+
+test("#198h списане віднімається і від РЯДКА, а не лише від плитки", async () => {
+  // 🔴 ЩО САМЕ ТУТ ЛАМАЛОСЬ, І ЧОМУ ЦЕ ОКРЕМИЙ ГЕЙТ.
+  //
+  // Борг рядка приходить із `receivables` (ядро `metrics.receivablesByClient`),
+  // а плитка складається з ФАКТІВ по рахунках. Це ДВА РІЗНІ ДЖЕРЕЛА одного
+  // числа. Поки списання зменшувало лише факти, екран показував просілу плитку
+  // й НЕзмінений рядок: Σ рядків ≠ плитці, а в самому рядку одночасно стояли
+  // «борг 3 ₴» і «списано: 1 на 3 ₴».
+  //
+  // 📐 Знайшов це чужий гейт (`#150c`, Δ 3.00 на живих даних приймання), а не я.
+  // Мій власний цикл різницю ДРУКУВАВ — `рядок.сума` лишалась 3 у всіх трьох
+  // станах — і я її не побачив, бо міряв Δ плитки, яку сам і перевіряв.
+  //
+  // 🔴 І САМЕ ТОМУ ГЕЙТ ТУТ, А НЕ «`#150c` уже ловить». `#150c` червоніє лише
+  // коли списання ФАКТИЧНО існує в базі; сьогодні їх нуль, отже на зламаному
+  // коді він був би зелений. Це рівно та пастка, що `#56b`/`#61b`: перевірка,
+  // привʼязана до наявності стану, стереже лише в ті дні, коли стан є.
+  const { foldFacts, classifyInvoice } = await import("./receivablesFacts.js");
+  const row = (invoiceNo: string, amount: number, writtenOff: boolean) => classifyInvoice({
+    clientKey: "к", clientName: "К", amount, invoiceDate: "2026-08-01", invoiceNo,
+    dealId: 1, dealFound: true, paymentType: "Безнал с НДС", statusId: 142, pipelineId: 8921932,
+    stageMapped: true, writtenOff, carrierPayAmount: null, carrierPayType: null,
+    earned: 10, clientPay: 100, carrierObligation: null, ageDays: 5,
+  });
+  const { byClient, totals } = foldFacts([row("1", 100, false), row("2", 30, true)]);
+  const c = byClient.get("к")!;
+
+  // Факти: у сумі лишилось 100, списане пораховане окремо.
+  assert.equal(totals.amount, 100, "🔴 списане знову потрапило в суму плитки");
+  assert.equal(c.writtenOffAmount, 30, "🔴 списане не пораховане окремим числом");
+
+  // 🔴 ГОЛОВНЕ ТВЕРДЖЕННЯ: борг рядка (130 із `receivables`) МІНУС списане має
+  // дорівнювати плитці. Інакше на одному екрані два числа про одне й те саме.
+  const rowDebtFromReceivables = 130;
+  const visible = rowDebtFromReceivables - c.writtenOffAmount;
+  assert.equal(visible, totals.amount,
+    "🔴 рядок і плитка розійшлись — Σ рядків не дорівнює плитці, і кожне число виглядає правдоподібно");
+
+  // І роут справді рахує рядок ТИМ САМИМ виразом, а не `r.amount` напряму:
+  // без цього функція вище була б правильною, а екран — ні.
+  const src = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  const at = src.indexOf('dashboardRouter.get("/receivables"');
+  const body = strip(src.slice(at, src.indexOf("res.json({", at)));
+  assert.match(body, /const visibleAmount = r\.amount - \(cf\?\.writtenOffAmount \?\? 0\)/,
+    "🔴 роут більше не віднімає списане від боргу рядка");
+  assert.match(body, /amount: visibleAmount/, "🔴 рядок клієнта знову віддає невіднятий борг");
+  assert.match(body, /entry\.total \+= visibleAmount/,
+    "🔴 підсумок менеджера рахує невіднятий борг — Σ по екрану розійдеться з плиткою");
+  assert.ok(!/amount: r\.amount\b/.test(body), "🔴 у рядку лишився прямий `r.amount`");
+  assert.ok(!/entry\.total \+= r\.amount\b/.test(body), "🔴 у підсумку лишився прямий `r.amount`");
+});

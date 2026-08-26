@@ -1808,8 +1808,23 @@ dashboardRouter.get("/receivables", async (req, res) => {
     let entry = byManager.get(r.managerId);
     if (!entry) { entry = { managerId: r.managerId, managerName: r.managerName, clients: [], total: 0 }; byManager.set(r.managerId, entry); }
     const n = r.clientKey ? notes.get(r.clientKey) : undefined;
+    const cf = r.clientKey ? folded.byClient.get(r.clientKey) ?? null : null;
+    // 🔴 СПИСАНЕ ВІДНІМАЄТЬСЯ І ВІД РЯДКА, А НЕ ЛИШЕ ВІД ПЛИТКИ.
+    //
+    // Борг рядка приходить із `receivables` (ядро `metrics.receivablesByClient`),
+    // а плитка складається з ФАКТІВ по рахунках — це два різні джерела одного
+    // числа. Поки списання зменшувало лише факти, екран показував просілу плитку
+    // й НЕзмінений рядок, тобто Σ рядків ≠ плитці, а в самому рядку одночасно
+    // стояли «борг 3 ₴» і «списано: 1 на 3 ₴».
+    //
+    // 📐 ЗНАЙШОВ ЦЕ НЕ Я, А ЧУЖИЙ ГЕЙТ `#150c` на живих даних приймання
+    // (Δ 3.00) і `#157` поіменно. Мій власний цикл цю різницю ДРУКУВАВ —
+    // `рядок.сума` лишалась 3 у всіх трьох станах — і я її не побачив, бо
+    // дивився на Δ плитки, яку сам і перевіряв. Рівно те, від чого береже
+    // правило «жоден показник не має двох джерел на одному екрані».
+    const visibleAmount = r.amount - (cf?.writtenOffAmount ?? 0);
     entry.clients.push({
-      clientKey: r.clientKey, clientName: r.clientName, amount: r.amount,
+      clientKey: r.clientKey, clientName: r.clientName, amount: visibleAmount,
       limitDays: r.limitDays, overdueDays: r.overdueDays,
       comment: n?.comment ?? null, dueDate: n?.due_date ?? null,
       // 🔴 ЧОМУ саме цей відповідальний — їде НА ЕКРАН, а не лишається в ядрі.
@@ -1819,16 +1834,14 @@ dashboardRouter.get("/receivables", async (req, res) => {
       ownerSource: r.ownerSource, majorityName: r.majorityName,
       // 🔖 Ярлики рядка — з ТОГО САМОГО зведення, з якого рахуються плитки вгорі.
       // Два вирази для одного числа розходяться мовчки; тут вираз один.
-      facts: r.clientKey ? folded.byClient.get(r.clientKey) ?? null : null,
+      facts: cf,
       // 💰 МАРЖИНАЛЬНІСТЬ РАХУЄ СЕРВЕР — ОДНИМ ВИРАЗОМ ДЛЯ РЯДКА Й ДЛЯ ПЛИТКИ.
       // Фронт лише форматує. Якби він рахував сам, правило існувало б у двох
       // місцях, і копії збігалися б одна з одною, а не з правилом — рівно те,
       // що дало чипи «новий/постійний» (12.6% угод серпня розходились).
-      margin: r.clientKey
-        ? (() => { const f = folded.byClient.get(r.clientKey!); return marginCell(f?.earned ?? null, f?.clientPay ?? null); })()
-        : null,
+      margin: r.clientKey ? marginCell(cf?.earned ?? null, cf?.clientPay ?? null) : null,
     });
-    entry.total += r.amount;
+    entry.total += visibleAmount;
   }
 
   // 🔴 ПРАВО ВІДДАЄ СЕРВЕР, І ТИМИ САМИМИ ВИРАЗАМИ, ЩО ГЕЙТЯТЬ РОУТИ.
