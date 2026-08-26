@@ -799,3 +799,89 @@ test("#198h списане віднімається і від РЯДКА, а н�
   assert.ok(!/amount: r\.amount\b/.test(body), "🔴 у рядку лишився прямий `r.amount`");
   assert.ok(!/entry\.total \+= r\.amount\b/.test(body), "🔴 у підсумку лишився прямий `r.amount`");
 });
+
+test("#198i Σ колонки «заробили» в розкритті == «Заробили» в рядку клієнта", async () => {
+  // 🔴 ПРАВИЛО, СФОРМУЛЬОВАНЕ ВЧОРА: перевіряй не те число, яке змінив, а те,
+  // яке МУСИТЬ ІЗ НИМ ЗІЙТИСЬ. Ми додали колонку в розкритті — отже стерегти
+  // треба її рівність із «Заробили» рядка клієнта, а не саму її наявність.
+  //
+  // Заробіток належить УГОДІ, а не рахунку. Кілька рахунків на одну угоду →
+  // число малюється ЛИШЕ на першому, решта дістають «та сама угода». Намалюй
+  // у кожному — і Σ перевищить рядок клієнта рівно на кількість дублів.
+  //
+  // 📐 ЗАМІР ЗМІНИВ ФОРМУ ГЕЙТА, а не лише підтвердив її. На живому проді
+  // 26.08.2026: 302 рахунки · 283 з лінком · **283 УНІКАЛЬНІ угоди** · рядків
+  // «та сама угода» — НУЛЬ. Розрив «315 проти 295» — це рахунки БЕЗ лінка, а не
+  // дублі. Тобто гейт, що спирався б на наявність дублів у проді, був би
+  // зелений незалежно від коду — рівно пастка `#56b`/`#61b`. Тому механізм
+  // стоїть на ВЛАСНІЙ фікстурі й червоніє в будь-який день.
+  const VIEW = "../../../frontend/src/pages/dashboard/receivablesView.ts";
+  const V = (await import(VIEW)) as {
+    earnedCells: (r: { dealId: number | null; dealFound: boolean; earned: number | null; writtenOff: boolean }[]) => { kind: string; earned?: number; why?: string }[];
+    earnedShownTotal: (c: { kind: string; earned?: number }[]) => number;
+    earnedCellText: (c: { kind: string; why?: string }) => string | null;
+    earnedCellHint: (c: { kind: string; why?: string }) => string;
+    EARNED_COL_LABEL: string;
+  };
+  const { foldFacts, classifyInvoice } = await import("./receivablesFacts.js");
+  const mk = (invoiceNo: string, amount: number, dealId: number | null, earned: number | null,
+              opts: { dealFound?: boolean; writtenOff?: boolean } = {}) => ({
+    clientKey: "к", clientName: "К", amount, invoiceDate: "2026-08-01", invoiceNo,
+    dealId, dealFound: opts.dealFound ?? (dealId != null), paymentType: "Безнал с НДС",
+    statusId: 142, pipelineId: 8921932, stageMapped: true, writtenOff: opts.writtenOff ?? false,
+    carrierPayAmount: null, carrierPayType: null, earned, clientPay: 1000,
+    carrierObligation: null, ageDays: 5,
+  });
+
+  // ФІКСТУРА, яка містить УСІ п'ять випадків одночасно:
+  //   два рахунки однієї угоди · окрема угода · рахунок без лінка (1С) ·
+  //   битий лінк · списаний рахунок ТІЄЇ САМОЇ угоди, що й живий.
+  const rows = [
+    mk("1", 100, 501, 40),                         // перший рахунок угоди 501 → число
+    mk("2", 200, 501, 40),                         // ДРУГИЙ рахунок тієї ж угоди → «та сама угода»
+    mk("3", 300, 502, 55),                         // інша угода → число
+    mk("4", 400, null, null),                      // 1С, угоди немає за задумом → «—»
+    mk("5", 500, 777, 999, { dealFound: false }),  // битий лінк → «—»
+    mk("6", 600, 503, 70, { writtenOff: true }),   // списаний → числа НЕ несе
+  ];
+  const cells = V.earnedCells(rows);
+  assert.deepEqual(cells.map((c) => c.kind),
+    ["value", "same-deal", "value", "unknown", "unknown", "written-off"],
+    "🔴 розподіл клітинок змінився — перевір, кому дістається число");
+
+  // 🔴 ГОЛОВНЕ ТВЕРДЖЕННЯ: Σ намальованого == «Заробили» рядка клієнта.
+  const { byClient } = foldFacts(rows.map((r) => classifyInvoice(r)));
+  const rowEarned = byClient.get("к")!.earned;
+  assert.equal(V.earnedShownTotal(cells), rowEarned,
+    "🔴 Σ колонки розійшлась із «Заробили» рядка клієнта — це друге джерело одного числа");
+  assert.equal(rowEarned, 95, "🔴 еталон зсунувся: 40 (угода 501, раз) + 55 (угода 502); списана 503 не входить");
+
+  // 🪞 ДЗЕРКАЛО ДО САМОГО ДЕФЕКТУ: «намалювати в кожному рядку» дає БІЛЬШЕ.
+  // Без цього гейт лишався б зеленим і тоді, коли ловити нічого (напр. якби
+  // фікстура випадково не мала дубля) — а живі дані сьогодні саме такі.
+  const naive = rows.filter((r) => r.dealId != null && r.dealFound && !r.writtenOff)
+    .reduce((s, r) => s + (r.earned ?? 0), 0);
+  assert.equal(naive, 135, "🔴 наївна сума мала б подвоїти угоду 501");
+  assert.notEqual(naive, rowEarned,
+    "🔴 фікстура втратила дубль — гейт більше не має що ловити, це ПРОВАЛ, а не успіх");
+
+  // Порожнє місце — заборонене: кожен не-числовий стан має текст І причину.
+  for (const c of cells) {
+    if (c.kind === "value") continue;
+    assert.ok((V.earnedCellText(c) ?? "").length > 0, `🔴 клітинка «${c.kind}» порожня — читатиметься як «нічого немає»`);
+    assert.ok(V.earnedCellHint(c).length > 10, `🔴 клітинка «${c.kind}» без пояснення причини`);
+  }
+
+  // Підпис НЕ обіцяє бюджет: у цьому продукті `deals.price` — уже МАРЖА
+  // (підтверджено власником 25.08.2026), і колонка мусить називати те, що несе.
+  assert.match(V.EARNED_COL_LABEL, /[Зз]аробили/, "🔴 підпис колонки більше не називає величину");
+
+  // І верстка справді бере ці функції, а не рахує колонку своїм виразом.
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  assert.match(sec, /const eCells = Array\.isArray\(inv\) \? earnedCells\(inv\) : \[\]/,
+    "🔴 розкриття більше не бере клітинки з ядра правила");
+  assert.match(sec, /const eTotal = earnedShownTotal\(eCells\)/,
+    "🔴 підсумок рахується не з намальованих клітинок — він зможе розійтись із колонкою");
+  assert.ok(!/inv\.reduce\(\([^)]*\) => [^)]*earned/.test(sec),
+    "🔴 у верстці зʼявився ДРУГИЙ вираз для Σ заробленого");
+});

@@ -373,3 +373,98 @@ export function writeoffProblem(note: string): string | null {
   if (!noteIsValid(note)) return "Причина обовʼязкова — списання без «чому» через місяць не відрізнити від помилки";
   return null;
 }
+
+// ───────────────── 💰 ЗАРОБІТОК ПО КОЖНОМУ РАХУНКУ В РОЗКРИТТІ ─────────────────
+
+/**
+ * 🔴 ЗАРОБІТОК НАЛЕЖИТЬ УГОДІ, А НЕ РАХУНКУ — І САМЕ ЦЕ РОБИТЬ ПРАВИЛО ПОТРІБНИМ.
+ *
+ * Кілька рахунків можуть посилатись на ОДНУ угоду. Намалювати число в кожному
+ * рядку означало б, що Σ колонки перевищить «заробили» в рядку клієнта рівно на
+ * кількість дублів — тобто ми власними руками завели б ЩЕ ОДНЕ «два джерела
+ * одного числа», через добу після того, як полагодили попереднє.
+ *
+ * Тому значення несе ПЕРШИЙ рядок угоди, решта отримують позначку «та сама
+ * угода» БЕЗ числа. Підсумок у шапці рахується ЛИШЕ з намальованих значень
+ * (`earnedShownTotal`), тож розійтись із колонкою він не може в принципі.
+ *
+ * 📐 ЗАМІРЯНО НА ЖИВОМУ ПРОДІ 26.08.2026, І ЗАМІР ЗМІНИВ ГЕЙТ: 302 рахунки ·
+ * 283 з лінком · 283 УНІКАЛЬНІ угоди · рядків «та сама угода» — **НУЛЬ**.
+ * Розрив «315 рахунків проти 295 угод» — це рахунки БЕЗ лінка, а не дублі.
+ * Отже гейт, побудований на наявності дублів у проді, був би зелений незалежно
+ * від коду — рівно пастка `#56b`/`#61b`. Тому механізм перевіряється на ВЛАСНІЙ
+ * фікстурі, а живі дані — РІВНІСТЮ (істинна і при нулі дублів).
+ *
+ * 🔴 СПИСАНИЙ РЯДОК ЧИСЛА НЕ НЕСЕ, і це не косметика: `foldFacts` виключає
+ * списані рахунки ДО дедупу угод, тож у «заробили» рядка клієнта їхня угода
+ * входить лише через НЕсписаний рахунок. Дай списаному рядку число — і Σ
+ * колонки перевищить «заробили» рівно на нього.
+ */
+export type EarnedUnknown = "one_c" | "broken_link" | "no_price";
+
+export type EarnedCell =
+  | { kind: "value"; earned: number }
+  | { kind: "same-deal" }
+  | { kind: "written-off" }
+  | { kind: "unknown"; why: EarnedUnknown };
+
+export const EARNED_UNKNOWN_LABEL: Record<EarnedUnknown, string> = {
+  one_c: "виставлено через 1С — угоди немає за задумом",
+  broken_link: "лінк не веде на угоду",
+  no_price: "у CRM не вказано суму угоди",
+};
+
+export const EARNED_SAME_DEAL_LABEL = "та сама угода";
+export const EARNED_WRITTEN_OFF_LABEL = "списано";
+/** Підпис колонки. Величина — та сама, що «Заробили» в рядку клієнта. */
+export const EARNED_COL_LABEL = "Заробили на угоді";
+
+export interface EarnedRow {
+  dealId: number | null;
+  dealFound: boolean;
+  earned: number | null;
+  writtenOff: boolean;
+}
+
+/**
+ * Клітинки колонки в ПОРЯДКУ ВІДОБРАЖЕННЯ. Дедуп мусить іти тим самим порядком,
+ * у якому людина читає таблицю, — інакше «перший рядок угоди» на екрані й у
+ * розрахунку були б різними рядками.
+ */
+export function earnedCells(rows: EarnedRow[]): EarnedCell[] {
+  const seen = new Set<number>();
+  return rows.map((r) => {
+    if (r.dealId == null) return { kind: "unknown", why: "one_c" } as const;
+    if (!r.dealFound) return { kind: "unknown", why: "broken_link" } as const;
+    if (r.writtenOff) return { kind: "written-off" } as const;
+    if (seen.has(r.dealId)) return { kind: "same-deal" } as const;
+    seen.add(r.dealId);
+    if (r.earned == null) return { kind: "unknown", why: "no_price" } as const;
+    return { kind: "value", earned: r.earned } as const;
+  });
+}
+
+/**
+ * 🔴 ПІДСУМОК СКЛАДАЄТЬСЯ З ТОГО, ЩО НАМАЛЬОВАНО, а не рахується вдруге з
+ * вихідних рядків. Другий вираз для одного числа розходиться мовчки — саме так
+ * плитка дебіторки просідала при незміненому рядку клієнта.
+ */
+export function earnedShownTotal(cells: EarnedCell[]): number {
+  return cells.reduce((s, c) => s + (c.kind === "value" ? c.earned : 0), 0);
+}
+
+/** Текст клітинки — усе, крім числа; число форматує верстка своїм `formatAmount`. */
+export function earnedCellText(c: EarnedCell): string | null {
+  if (c.kind === "value") return null;
+  if (c.kind === "same-deal") return EARNED_SAME_DEAL_LABEL;
+  if (c.kind === "written-off") return EARNED_WRITTEN_OFF_LABEL;
+  return "—";
+}
+
+/** Підказка. «—» без пояснення — порожнє місце, а воно читається як «нічого немає». */
+export function earnedCellHint(c: EarnedCell): string {
+  if (c.kind === "value") return "заробіток на цій угоді (той самий, що в рядку клієнта)";
+  if (c.kind === "same-deal") return "цей рахунок належить угоді, заробіток якої вже показано вище — щоб Σ колонки не подвоїлась";
+  if (c.kind === "written-off") return "рахунок списано як безнадійний — у «заробили» він не входить";
+  return EARNED_UNKNOWN_LABEL[c.why];
+}

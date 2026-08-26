@@ -16,6 +16,7 @@ import {
   entityBreakdown, isAncientDebt, isOverdue,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters, t,
   marginHint, marginPctText, writtenOffLabel,
+  earnedCells, earnedCellHint, earnedCellText, earnedShownTotal, EARNED_COL_LABEL,
   type Filters, type MergeSide,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
@@ -224,6 +225,11 @@ export function ReceivablesSection({
       ? [...new Set(inv.map((x) => x.entityName).filter((n): n is string => !!n))]
       : [];
     const merged = entities.length > 1;
+    // 💰 Клітинки колонки «Заробили на угоді» — ОДИН прохід у ПОРЯДКУ ВІДОБРАЖЕННЯ.
+    // Порядок значущий: «перший рахунок угоди» на екрані й у розрахунку мусить
+    // бути тим самим рядком, інакше число зʼїде на сусідній.
+    const eCells = Array.isArray(inv) ? earnedCells(inv) : [];
+    const eTotal = earnedShownTotal(eCells);
     return (
       <tr>
         <td colSpan={colSpan} style={{ background: "var(--bg-subtle, rgba(127,127,127,0.05))", padding: "10px 12px 14px 28px" }}>
@@ -247,6 +253,15 @@ export function ReceivablesSection({
                     const days = Math.floor((Date.now() - new Date(oldest).getTime()) / 86400000);
                     return ` · найстаріший ${days} дн.`;
                   })()}
+                </span>
+                {/* 🔴 ПІДСУМОК СКЛАДЕНО З ТОГО, ЩО НАМАЛЬОВАНО В КОЛОНЦІ
+                    (`earnedShownTotal` рахує лише клітинки-значення), тож
+                    розійтись із нею він не може в принципі. І він МУСИТЬ
+                    дорівнювати «Заробили» в рядку клієнта — це те число, з яким
+                    він зобовʼязаний зійтись, а не те, яке ми щойно додали. */}
+                <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}
+                      title="Σ колонки «Заробили на угоді». Дорівнює числу «Заробили» в рядку клієнта: кілька рахунків однієї угоди рахуються РАЗ">
+                  · заробили <b>{formatAmount(eTotal)}</b>
                 </span>
               </div>
               <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: "0 0 6px" }}>
@@ -279,6 +294,13 @@ export function ReceivablesSection({
                         ТРИ стани, і третій — «не знаємо», а не «ні». */}
                     <th style={{ textAlign: "left" }} title="Чи оплачений перевізник за цим рахунком">Перевізник</th>
                     <th style={{ textAlign: "right", width: 96, whiteSpace: "nowrap" }}>Сума</th>
+                    {/* 💰 ГРОШОВІ КОЛОНКИ СТОЯТЬ ПОРУЧ: борг рахунку і заробіток
+                        його угоди. Величина — ТА САМА, що «Заробили» в рядку
+                        клієнта; підпис це називає, а не натякає. */}
+                    <th style={{ textAlign: "right", width: 116, whiteSpace: "nowrap" }}
+                        title="Заробіток УГОДИ, до якої привʼязаний рахунок. Кілька рахунків однієї угоди — число лише на першому, інакше Σ колонки подвоїлась би">
+                      {EARNED_COL_LABEL}
+                    </th>
                     <th>📅 Дедлайн оплати</th>
                     <th style={{ textAlign: "left" }}>Коментар до рахунка</th>
                     <th>Угода</th>
@@ -369,6 +391,26 @@ export function ReceivablesSection({
                               onDone={() => { setWriteoffFor(null); loadInvoices(clientKey); onRefresh?.(); }} />
                           )}
                         </td>
+                        {/* 💰 ЧИСЛО НЕСЕ ЛИШЕ ПЕРШИЙ РАХУНОК УГОДИ. На решті —
+                            «та сама угода» приглушено: інакше Σ колонки
+                            перевищила б «Заробили» рядка клієнта рівно на
+                            кількість дублів, і ми завели б друге джерело одного
+                            числа через добу після того, як полагодили попереднє.
+                            «—» завжди з причиною: порожнє місце читається як
+                            «нічого немає», а не як «ми не знаємо». */}
+                        {(() => {
+                          const cell = eCells[i] ?? { kind: "unknown" as const, why: "one_c" as const };
+                          const txt = earnedCellText(cell);
+                          return (
+                            <td style={{ textAlign: "right", width: 116, whiteSpace: "nowrap",
+                                         fontWeight: cell.kind === "value" ? 600 : 400,
+                                         color: cell.kind === "value" ? undefined : "var(--text-muted)",
+                                         fontSize: cell.kind === "value" ? undefined : "var(--fs-xs)" }}
+                                title={earnedCellHint(cell)}>
+                              {txt ?? formatAmount(cell.kind === "value" ? cell.earned : 0)}
+                            </td>
+                          );
+                        })()}
                         <td>
                           <input
                             type="date"
@@ -436,6 +478,12 @@ export function ReceivablesSection({
                                            inv.filter((x) => x.writtenOff).reduce((s, x) => s + x.amount, 0))}
                         </span>
                       )}
+                    </td>
+                    {/* Той самий вираз, що в шапці розкриття: підсумок складається
+                        з намальованих клітинок, іншого джерела в нього немає. */}
+                    <td style={{ textAlign: "right", fontWeight: 700 }}
+                        title="Σ колонки. Дорівнює «Заробили» в рядку клієнта">
+                      {formatAmount(eTotal)}
                     </td>
                     <td colSpan={3} />
                   </tr>
