@@ -1114,3 +1114,85 @@ test("#199j тижнева межа не робить старі комента�
     assert.equal(empty.rows[0].n, 0, "🔴 порожній коментар потрапив у журнал — історія заросте нічим");
   } finally { await c.end(); scratch.dispose(); }
 });
+
+test("#199k нерозбірна або відсутня дата НЕ валить екран", async () => {
+  // 🔴 ЦЕЙ ГЕЙТ ПИШЕТЬСЯ ПІСЛЯ АВАРІЇ НА ПРОДІ 26.08.2026, І ЦЕ ВАЖЛИВО НАЗВАТИ:
+  // `test:prod` дав 500 із 500, усі гейти були зелені, приймання числами
+  // зійшлося — а розділ дебіторки не відкривався ВЗАГАЛІ: «Invalid time value»
+  // замість таблиці. Числа й екран перевіряють різні речі.
+  //
+  // МЕХАНІЗМ: Postgres `to_char(..., 'OF')` віддає ДВОЗНАЧНЕ зміщення (`+03`), а
+  // ECMAScript вимагає `±HH:mm`. `new Date("2026-08-26T10:21:50+03")` → Invalid
+  // Date, `Intl.format` на ньому КИДАЄ, і виняток усередині `.map` по рядках
+  // убиває всю секцію — не клітинку, не рядок, а екран.
+  //
+  // ⚠️ ГІПОТЕЗА «падають ті, у кого дати НЕМА» була ХИБНОЮ — там стоїть сторож.
+  // Падали ті, у кого дата Є: 49 із 76. Перевіряти треба відтворюване.
+  const VIEW = "../../../frontend/src/pages/dashboard/receivablesView.ts";
+  const V = (await import(VIEW)) as {
+    parseDateSafe: (v: string | null | undefined) => Date | null;
+    formatDateSafe: (v: string | null | undefined, f?: string) => string;
+    isCurrentWeekNote: (at: string | null, now: Date) => boolean;
+    activeNote: (c: string | null, at: string | null, now: Date) => string;
+    kyivDate: (d: Date) => string;
+  };
+  const now = new Date("2026-08-26T09:00:00Z");
+
+  // ── САМЕ ТОЙ ФОРМАТ, ЩО ПОКЛАВ ПРОД. Голий `new Date` його не бере.
+  assert.ok(Number.isNaN(new Date("2026-08-26T10:21:50+03").getTime()),
+    "🔴 рушій раптом почав розбирати двозначне зміщення — перевір, чи гейт іще про щось");
+  assert.throws(() => V.kyivDate(new Date("2026-08-26T10:21:50+03")), /Invalid time value/,
+    "🔴 форматування більше не кидає на Invalid Date — гейт стереже те, чого немає");
+
+  // 🔴 ГОЛОВНЕ: жоден вхід НЕ кидає, і кожен має свій стан.
+  for (const bad of [null, undefined, "", "не дата", "2026-13-45T99:99:99Z", "0000-00-00"]) {
+    assert.doesNotThrow(() => V.parseDateSafe(bad), `🔴 parseDateSafe кидає на ${JSON.stringify(bad)}`);
+    assert.equal(V.parseDateSafe(bad), null, `🔴 ${JSON.stringify(bad)} дав Date замість null`);
+    assert.doesNotThrow(() => V.formatDateSafe(bad), `🔴 formatDateSafe кидає на ${JSON.stringify(bad)}`);
+    assert.doesNotThrow(() => V.isCurrentWeekNote(bad as string | null, now),
+      `🔴 isCurrentWeekNote кидає на ${JSON.stringify(bad)} — це і є падіння всієї секції`);
+    assert.doesNotThrow(() => V.activeNote("текст", bad as string | null, now),
+      `🔴 activeNote кидає на ${JSON.stringify(bad)}`);
+  }
+
+  // Двозначне зміщення Postgres добирається до канонічного й ПРАЦЮЄ, а не просто
+  // не падає: інакше 49 клієнтів мовчки втратили б свою домовленість.
+  const d = V.parseDateSafe("2026-08-26T10:21:50+03");
+  assert.ok(d, "🔴 `+03` не розібрано — 49 клієнтів утратили б дату домовленості");
+  assert.equal(V.kyivDate(d!), "2026-08-26");
+  assert.equal(V.isCurrentWeekNote("2026-08-26T10:21:50+03", now), true,
+    "🔴 запис цього тижня у форматі Postgres не вважається активним");
+
+  // 🪞 ДЗЕРКАЛО: сторож не перетворює ВСЕ на «немає». Канонічні формати живі.
+  assert.ok(V.parseDateSafe("2026-08-26T10:21:50Z"), "🔴 сторож зарізав канонічний ISO");
+  assert.ok(V.parseDateSafe("2026-08-24"), "🔴 сторож зарізав звичайну дату");
+  assert.equal(V.formatDateSafe(null), "дати немає", "🔴 порожній стан без підпису — читається як «нічого немає»");
+
+  // ── ДРУГИЙ РУБІЖ: бекенд більше не віддає формат, який рушій не бере.
+  const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  const notes = routes.slice(routes.indexOf("FROM receivable_notes n WHERE n.client_key") - 1200,
+                             routes.indexOf("FROM receivable_notes n WHERE n.client_key"));
+  assert.ok(!/HH24:MI:SSOF/.test(notes),
+    "🔴 `updated_at` знову віддається з двозначним зміщенням OF — саме воно поклало прод");
+  assert.match(notes, /AT TIME ZONE 'UTC'[\s\S]{0,80}HH24:MI:SS"Z"/,
+    "🔴 `updated_at` віддається не в UTC із Z — єдиному форматі, який усі рушії читають однаково");
+
+  // І у ВЕРСТЦІ немає голого `new Date(поле)` — кожна дата йде через сторож.
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  const naked = [...sec.matchAll(/new Date\(([^)]*)\)/g)].map((m) => m[1].trim())
+    .filter((arg) => arg !== "" && !arg.startsWith("now.getTime"));
+  assert.deepEqual(naked, [],
+    `🔴 у верстці лишився голий new Date(${naked.join(", ")}) — одна нерозбірна дата вб'є всю секцію`);
+
+  // ── ТРЕТІЙ РУБІЖ: межа на рівні РЯДКА. Сторожі ловлять відоме; межа ловить
+  // те, чого ми не передбачили, і не дає одному клієнту забрати з собою решту
+  // 75. Вона НЕ ховає дефект — називає клієнта поіменно, інакше рядок мовчки
+  // зникав би з таблиці, а Σ по екрану розійшлася б із плиткою.
+  assert.match(sec, /<RowBoundary key=\{`\$\{c\.clientKey\}-\$\{i\}`\} label=\{c\.clientName\} cols=\{11\}>/,
+    "🔴 рядок клієнта більше не обгорнутий межею — одна погана дата знову вб'є всю секцію");
+  const rb = strip(readFileSync(FE("pages/dashboard/sections/RowBoundary.tsx"), "utf8"));
+  assert.match(rb, /getDerivedStateFromError/, "🔴 межа не ловить помилки рендеру");
+  assert.match(rb, /this\.props\.label/, "🔴 межа не називає клієнта — «щось зламалось» не веде до причини");
+  assert.ok(!/return null|return <\/>|children\s*:\s*null/.test(rb),
+    "🔴 межа ХОВАЄ зламаний рядок — він зник би з таблиці, а Σ розійшлася б із плиткою мовчки");
+});

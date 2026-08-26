@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchReceivableNoteHistory, type ReceivableNoteEntry } from "../../../api";
-import { weekStartKyiv } from "../receivablesView";
+import { weekStartKyiv, parseDateSafe } from "../receivablesView";
 
 /**
  * 🗓 ЖУРНАЛ ДОМОВЛЕНОСТЕЙ — доказ того, що «очищення» нічого не втратило.
@@ -27,7 +27,9 @@ export function NoteHistoryDialog({ clientKey, clientName, onClose }: {
     borderRadius: 12, boxShadow: "0 18px 50px rgba(0,0,0,0.45)", textAlign: "left",
   };
   const thisWeek = weekStartKyiv(new Date());
-  const weekOf = (at: string) => weekStartKyiv(new Date(at));
+  // 🔴 Сторож і тут: журнал дістає дати з БД, і одна нерозбірна серед них
+  // убила б ВЕСЬ діалог. Той самий механізм, що поклав розділ 26.08.2026.
+  const weekOf = (at: string) => { const d = parseDateSafe(at); return d ? weekStartKyiv(d) : ""; };
 
   return (
     <>
@@ -53,13 +55,13 @@ export function NoteHistoryDialog({ clientKey, clientName, onClose }: {
             <div key={i} style={{ marginBottom: 10 }}>
               {head && (
                 <div style={{ fontSize: "var(--fs-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: 2 }}>
-                  Тиждень із {new Date(w).toLocaleDateString("uk-UA")}
+                  {w ? `Тиждень із ${new Date(w).toLocaleDateString("uk-UA")}` : "Дата запису невідома"}
                   {w === thisWeek && <span style={{ color: "var(--info, #1d4ed8)" }}> · поточний</span>}
                 </div>
               )}
               <div style={{ fontSize: "var(--fs-sm)" }}>{e.comment}</div>
               <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
-                {new Date(e.at).toLocaleString("uk-UA")} · {e.author ?? "автор невідомий"}
+                {parseDateSafe(e.at)?.toLocaleString("uk-UA") ?? "дата невідома"} · {e.author ?? "автор невідомий"}
               </div>
             </div>
           );

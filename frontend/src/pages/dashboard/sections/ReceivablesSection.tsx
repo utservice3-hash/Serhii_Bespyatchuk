@@ -1,4 +1,4 @@
-import { useEffect, useState, type Dispatch, type SetStateAction, Fragment } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   saveReceivableNote, saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
@@ -7,6 +7,7 @@ import {
 } from "../../../api";
 import { WriteoffDialog } from "./WriteoffDialog";
 import { WriteoffButton } from "./WriteoffButton";
+import { RowBoundary } from "./RowBoundary";
 import { NoteHistoryDialog } from "./NoteHistoryDialog";
 import { Hint, Tip, TipLayer } from "../../../components/Hint";
 import { ReceivablesTiles } from "./ReceivablesTiles";
@@ -17,6 +18,7 @@ import { MergeDialog } from "./MergeDialog";
 import {
   carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
   isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
+  formatDateSafe, parseDateSafe,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters,
   marginHint, marginPctText,
   earnedCells, earnedCellHint, earnedCellText, earnedShownTotal,
@@ -229,9 +231,9 @@ export function ReceivablesSection({
     const eCells = earnedCells(inv);
     const eTotal = earnedShownTotal(eCells);
     const debt = inv.reduce((a, x) => a + (x.writtenOff ? 0 : x.amount), 0);
-    const ages = inv.map((x) => x.invoiceDate).filter((d): d is string => !!d);
+    const ages = inv.map((x) => parseDateSafe(x.invoiceDate)).filter((d): d is Date => d != null);
     const oldest = ages.length
-      ? Math.floor((Date.now() - new Date(ages.reduce((m, d) => (d < m ? d : m), ages[0])).getTime()) / 86400000)
+      ? Math.floor((Date.now() - Math.min(...ages.map((d) => d.getTime()))) / 86400000)
       : null;
     const entities = [...new Set(inv.map((x) => x.entityName).filter((n): n is string => !!n))];
 
@@ -264,7 +266,8 @@ export function ReceivablesSection({
           const ec = eCells[i] ?? { kind: "unknown" as const, why: "one_c" as const };
           const eTxt = earnedCellText(ec);
           const overdue = x.dueDate != null && x.dueDate < today;
-          const age = x.invoiceDate ? Math.floor((Date.now() - new Date(x.invoiceDate).getTime()) / 86400000) : null;
+          const iDate = parseDateSafe(x.invoiceDate);
+          const age = iDate ? Math.floor((Date.now() - iDate.getTime()) / 86400000) : null;
           return (
             <tr key={`${clientKey}-inv-${i}`}>
               <td style={cell} />
@@ -297,7 +300,7 @@ export function ReceivablesSection({
                   )}
                 </span>
                 <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>
-                  {x.invoiceDate ? new Date(x.invoiceDate).toLocaleDateString("uk-UA") : "дати немає"}
+                  {formatDateSafe(x.invoiceDate)}
                 </span>
               </td>
               {/* Відповідальний → хто створив рахунок */}
@@ -438,7 +441,10 @@ export function ReceivablesSection({
           )}
           {receivablesSyncedAt && (
             <span className="loading-text" style={{ fontSize: "var(--fs-sm)" }}>
-              Оновлено: {new Date(receivablesSyncedAt).toLocaleString("uk-UA")}
+              {/* Сторож і тут, хоч це поле й не моє: клас той самий, і воно
+                  рендериться в тій самій секції — одна нерозбірна дата з БД
+                  поклала б увесь екран так само, як 26.08.2026. */}
+              Оновлено: {parseDateSafe(receivablesSyncedAt)?.toLocaleString("uk-UA") ?? "час невідомий"}
             </span>
           )}
         </div>
@@ -549,7 +555,11 @@ export function ReceivablesSection({
                     // затирається — змінюється те, що вважається актуальним.
                     const noteNow = activeNote(c.comment, c.noteUpdatedAt ?? null, now);
                     return (
-                      <Fragment key={`${c.clientKey}-${i}`}>
+                      /* 🛡 МЕЖА НА РІВНІ РЯДКА (26.08.2026). Одна нерозбірна дата
+                         вбила всю секцію — 75 справних рядків загинули з одним.
+                         Межа не ховає дефект: вона називає клієнта й лишає решту
+                         таблиці живою. Другий рубіж, а не заміна сторожам. */
+                      <RowBoundary key={`${c.clientKey}-${i}`} label={c.clientName} cols={11}>
                         {/* 🖱 Клікабельний увесь рядок; клік по полю всередині НЕ
                             згортає — інакше кожен дотик до input/textarea закривав
                             би клієнта просто в момент редагування. */}
@@ -678,7 +688,7 @@ export function ReceivablesSection({
                               ПОТОЧНОГО тижня; історія не гине — вона під полем. */}
                           <td style={{ textAlign: "left", verticalAlign: "middle", minWidth: 210 }}>
                             <span style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
-                              {c.dueDate ? `обіцяли ${new Date(c.dueDate).toLocaleDateString("uk-UA")}` : "дати немає"}
+                              {c.dueDate ? `обіцяли ${formatDateSafe(c.dueDate)}` : "дати немає"}
                             </span>
                             {canEditReceivables ? (
                               <input type="date" value={c.dueDate ?? ""}
@@ -723,7 +733,7 @@ export function ReceivablesSection({
                           </td>
                         </tr>
                         {renderInvoices(c.clientKey, c.clientName, 11)}
-                      </Fragment>
+                      </RowBoundary>
                     );
                   })}
                 </tbody>

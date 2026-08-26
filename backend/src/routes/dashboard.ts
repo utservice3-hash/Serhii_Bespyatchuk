@@ -1810,7 +1810,13 @@ dashboardRouter.get("/receivables", async (req, res) => {
         // фронт мусив би вгадувати, і торішній текст читався б як сьогоднішня
         // обіцянка — рівно те, від чого власник і просив позбутись.
         `SELECT n.client_key, n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date,
-                to_char(n.updated_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS updated_at,
+                -- 🔴 OF ВІДДАЄ ДВОЗНАЧНЕ ЗМІЩЕННЯ (+03), А ECMAScript ВИМАГАЄ +HH:MM.
+                -- new Date("2026-08-26T10:21:50+03") дає Invalid Date, Intl.format
+                -- кидає, і виняток усередині .map по рядках убиває ВСЮ секцію —
+                -- саме це поклало розділ дебіторки 26.08.2026. Віддаємо UTC із Z:
+                -- єдиний формат, який усі рушії читають однаково.
+                -- (зворотні лапки тут заборонені — це тіло шаблонного рядка)
+                to_char(n.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
                 (SELECT count(*)::int FROM receivable_note_history h WHERE h.client_key = n.client_key) AS hist
            FROM receivable_notes n WHERE n.client_key = ANY($1)`,
         [clientKeys]

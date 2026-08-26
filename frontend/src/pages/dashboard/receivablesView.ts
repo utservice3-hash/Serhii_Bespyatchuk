@@ -545,6 +545,44 @@ export const foldCarrier = (f: ReceivableClientFacts | null): Folded | null =>
  */
 export const KYIV_TZ = "Europe/Kyiv";
 
+/**
+ * 🔴 РОЗБІР ДАТИ, ЩО НЕ КИДАЄ — І ЦЕ НЕ ПЕРЕСТРАХОВКА, А ЗАКРИТА АВАРІЯ.
+ *
+ * 26.08.2026 розділ дебіторки ліг ЦІЛКОМ: «Invalid time value» замість таблиці.
+ * Причина — Postgres `to_char(..., 'OF')` віддає ДВОЗНАЧНЕ зміщення (`+03`), а
+ * ECMAScript вимагає `±HH:mm`. `new Date("2026-08-26T10:21:50+03")` дає Invalid
+ * Date, `Intl.format` на ньому КИДАЄ, і виняток усередині `.map` по рядках
+ * убиває всю секцію — не клітинку, не рядок, а екран.
+ *
+ * ⚠️ І ГІПОТЕЗА «падають ті, у кого дати НЕМА» була ХИБНОЮ: саме там стоїть
+ * сторож і все гаразд. Падали ті, у кого дата Є — 49 із 76. Перевіряти треба
+ * не правдоподібне, а відтворюване.
+ *
+ * Тому: `null` там, де дати немає АБО вона нерозбірна. Відсутнє значення має
+ * свій СТАН, а не виняток — те саме правило, що «н/д» ≠ нуль.
+ */
+export function parseDateSafe(v: string | null | undefined): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  if (!Number.isNaN(d.getTime())) return d;
+  // Добираємо двозначне зміщення Postgres до канонічного `±HH:mm`.
+  const m = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})([+-]\d{2})$/.exec(v);
+  if (m) {
+    const d2 = new Date(`${m[1].replace(" ", "T")}${m[2]}:00`);
+    if (!Number.isNaN(d2.getTime())) return d2;
+  }
+  return null;
+}
+
+/**
+ * Формат дати для екрана, що НЕ кидає. `fallback` — те, що людина побачить
+ * замість числа: порожнє місце читається як «нічого немає», а не як «не знаємо».
+ */
+export function formatDateSafe(v: string | null | undefined, fallback = "дати немає"): string {
+  const d = parseDateSafe(v);
+  return d ? d.toLocaleDateString("uk-UA") : fallback;
+}
+
 /** Київська дата (YYYY-MM-DD) моменту — без залежності від часу браузера. */
 export function kyivDate(at: Date): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -573,8 +611,14 @@ export function weekStartKyiv(now: Date): string {
  * виглядав би як актуальна обіцянка.
  */
 export function isCurrentWeekNote(updatedAt: string | null, now: Date): boolean {
-  if (!updatedAt) return false;
-  return kyivDate(new Date(updatedAt)) >= weekStartKyiv(now);
+  // 🔴 ДРУГИЙ РУБІЖ. Бекенд тепер віддає канонічний ISO, але правило не має
+  // права падати від формату: виняток тут убиває ВЕСЬ екран, а не одну дату.
+  // Нерозбірна дата = «не цього тижня», тобто запис поводиться як старий і
+  // лишається досяжним в історії — найгірше, що станеться, це зайвий перехід
+  // у журнал. Проти мертвої секції це не ціна.
+  const d = parseDateSafe(updatedAt);
+  if (!d) return false;
+  return kyivDate(d) >= weekStartKyiv(now);
 }
 
 /** Що показувати в полі: текст поточного тижня або порожнеча. */
