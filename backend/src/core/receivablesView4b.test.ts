@@ -1507,9 +1507,13 @@ const EXPECTED_MONEY_ZONES = ["EXPECT_ZONE", "STAGE_EXPECTED", "CHAIN_INFLIGHT"]
  * знахідку.
  */
 const EXPECTED_MONEY_NO_PREDICATE: { name: string; why: string }[] = [
-  { name: "avgCheck", why: "ВІДКРИТЕ ПИТАННЯ до власника: очікуваний середній чек — це СЕРЕДНЄ, а не сума. Рішення 26.08.2026 стосувалось «очікуваних КОШТІВ»; чи виходить списана угода зі знаменника чека — не наше рішення" },
-  { name: "avgCheckByTeam", why: "той самий очікуваний чек у розрізі команд — питання спільне з avgCheck, і відповідь на нього мусить бути одна на всі три розрізи, інакше команда й компанія рахуватимуть чек по-різному" },
-  { name: "avgCheckPerManager", why: "той самий очікуваний чек у розрізі менеджерів — вносити предикат лише сюди означало б, що Σ по людях перестане сходитись із компанією; рішення потрібне одне на всі три" },
+  // 🟢 ПОРОЖНІЙ — І ЦЕ РЕЗУЛЬТАТ, А НЕ ЗАБУТИЙ РЕЄСТР. Три розрізи чека
+  // (`avgCheck`, `avgCheckByTeam`, `avgCheckPerManager`) лежали тут як ВІДКРИТЕ
+  // ПИТАННЯ; власник закрив його 26.08.2026 словами «вона зникає з усіх етапів
+  // і екранів у дашборді» — тобто зі знаменника очікуваного чека теж.
+  // Предикат поставлено в ОДИН спільний `snapshotBy`, крізь який ходять усі
+  // три, тож рівність Σ(менеджери) == команда == компанія тримається за
+  // побудовою. Реєстр лишається жити для наступного випадку.
 ];
 
 /**
@@ -1522,18 +1526,46 @@ const EXPECTED_MONEY_OUTSIDE_CRITERION: { name: string; why: string }[] = [
 ];
 
 function enumerateExpectedMoneyFns(read: (p: string) => string) {
-  const out: { file: string; name: string; zones: string[]; hasPredicate: boolean }[] = [];
+  const out: { file: string; name: string; zones: string[]; hasPredicate: boolean; via: string | null }[] = [];
   for (const f of ["core/metrics.ts", "core/money.ts"]) {
     const s = read(f);
-    const heads = [...s.matchAll(/^export (?:async )?(?:function|const|interface|type) (\w+)/gm)];
+    // Тіла ВСІХ функцій файла, включно з НЕекспортованими: предикат може жити в
+    // спільному хелпері, і саме так воно й правильно.
+    const heads = [...s.matchAll(/^(?:export )?(?:async )?(?:function|const|interface|type) (\w+)/gm)];
+    const bodies = new Map<string, string>();
+    /** Кандидатом є лише ЕКСПОРТОВАНА функція: хелпери всередині модуля — це
+     *  реалізація, і вимагати предикат від кожного означало б вимагати копій. */
+    const isCandidate = new Map<string, boolean>();
     for (let i = 0; i < heads.length; i++) {
       const start = heads[i].index!;
       const end = i + 1 < heads.length ? heads[i + 1].index! : s.length;
       const raw = s.slice(start, end);
-      if (!/^export (?:async )?function/.test(raw)) continue;
-      const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-      const zones = EXPECTED_MONEY_ZONES.filter((z) => new RegExp(`\\b${z}\\b`).test(code));
-      if (zones.length) out.push({ file: f, name: heads[i][1], zones, hasPredicate: /\bDEAL_NOT_WRITTEN_OFF\b/.test(code) });
+      bodies.set(heads[i][1], raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, ""));
+      isCandidate.set(heads[i][1], /^export (?:async )?function/.test(raw));
+    }
+    /**
+     * Предикат зараховується, якщо він у САМІЙ функції АБО в локальному хелпері,
+     * який вона кличе (глибина 2). Інакше гейт вимагав би КОПІЇ правила в кожній
+     * функції — тобто карав би саме ту архітектуру, до якої ми йдемо.
+     */
+    const covered = (name: string, depth = 0): string | null => {
+      const body = bodies.get(name);
+      if (body == null || depth > 2) return null;
+      if (/\bDEAL_NOT_WRITTEN_OFF\b/.test(body)) return depth === 0 ? name : name;
+      for (const m of body.matchAll(/\b(\w+)\s*\(/g)) {
+        const callee = m[1];
+        if (callee === name || !bodies.has(callee)) continue;
+        const hit = covered(callee, depth + 1);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    for (const [name, body] of bodies) {
+      if (!isCandidate.get(name)) continue;
+      const zones = EXPECTED_MONEY_ZONES.filter((z) => new RegExp(`\\b${z}\\b`).test(body));
+      if (!zones.length) continue;
+      const via = covered(name);
+      out.push({ file: f, name, zones, hasPredicate: via != null, via: via === name ? null : via });
     }
   }
   return out;

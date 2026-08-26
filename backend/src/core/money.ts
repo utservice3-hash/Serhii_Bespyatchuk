@@ -487,7 +487,24 @@ export async function avgCheckByManager(s: MoneyScope): Promise<MgrAvgCheck[]> {
  */
 async function snapshotBy(stages: number[], s: MoneyScope, extraSelect: string, groupBy: string): Promise<Record<string, string>[]> {
   const p: unknown[] = [FC_PIPELINES, stages];
-  const conds = ["d.pipeline_id = ANY($1)", "d.status_id = ANY($2)"];
+  const conds = [
+    "d.pipeline_id = ANY($1)", "d.status_id = ANY($2)",
+    // 🗑 СПИСАНИЙ БОРГ ВИХОДИТЬ І ЗІ ЗНАМЕННИКА ОЧІКУВАНОГО ЧЕКА (рішення власника
+    // 26.08.2026: «вона зникає з усіх етапів і екранів у дашборді»).
+    //
+    // 🔴 ПРЕДИКАТ СТОЇТЬ САМЕ ТУТ, В ОДНОМУ МІСЦІ, І ЦЕ НЕ ЗРУЧНІСТЬ. Усі три
+    // розрізи чека — загальний, командний, поменеджерний — ходять через цю
+    // функцію. Поставити його в кожну з трьох окремо означало б завести три
+    // копії правила, які одного дня розійдуться, і тоді Σ по менеджерах
+    // перестане дорівнювати команді, а команда — компанії. Тут рівність
+    // тримається ЗА ПОБУДОВОЮ, а не збігом.
+    //
+    // ⚠️ МЕЖА СВІДОМА: це знімок `CHAIN_INFLIGHT`, тобто ОЧІКУВАНА половина
+    // чека. Пул `success` (142) предикатом НЕ накривається — гроші, зароблені
+    // тоді, коли людина працювала, заднім числом не зникають (правило
+    // 05.08.2026). Списання прощає БОРГ, а не скасовує виграну угоду.
+    DEAL_NOT_WRITTEN_OFF,
+  ];
   if (s.managerId) { p.push(s.managerId); conds.push(`d.manager_id = $${p.length}`); }
   if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
   const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? "LEFT JOIN teams t ON t.id = m.team_id" : "";
