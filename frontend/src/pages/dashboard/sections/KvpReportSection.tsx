@@ -715,8 +715,12 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
           <Fragment key={m.managerId}>
             <div onClick={() => setOpenMgr(open ? null : m.managerId)}
               style={{ display: "grid", gridTemplateColumns: CALM_COLS, gap: 8, alignItems: "center", padding: "9px 16px 9px 30px", borderBottom: "1px solid var(--border)", cursor: "pointer", background: open ? "rgba(37,99,235,0.05)" : undefined }}>
-              <span style={{ ...clip, fontWeight: 560, fontSize: 12.5 }}>
-                <span><span style={{ color: MUTED, fontSize: 10 }}>{open ? "▾" : "▸"}</span> {m.name}</span>
+              {/* 🔴 `clip` (nowrap+overflow:hidden) — ЛИШЕ на імені. На обгортці він
+                  обрізав рядок факту праворуч, і на вузькому екрані зникало саме
+                  «не реклама і не лідген» — те єдине число, заради якого прохід.
+                  Спіймав скріншот вузького екрана, жоден гейт цього не бачить. */}
+              <span style={{ fontWeight: 560, fontSize: 12.5, minWidth: 0 }}>
+                <span style={clip}><span style={{ color: MUTED, fontSize: 10 }}>{open ? "▾" : "▸"}</span> {m.name}</span>
                 <MgrFactLine cs={m.createdSplit} />
               </span>
               <span style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.plan)}</span>
