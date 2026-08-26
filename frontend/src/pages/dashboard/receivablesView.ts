@@ -28,6 +28,28 @@ export const CARRIER_LABEL: Record<ReceivableCarrierPaid, string> = {
   paid: "перевізник оплачений", unpaid: "ще не оплачено", na: "н/д",
 };
 
+/**
+ * 🔴 ДРУГИЙ НАБІР ПІДПИСІВ — НЕ ДУБЛЬ, А ІНШЕ ТВЕРДЖЕННЯ (макет v6, 26.08.2026).
+ *
+ * `CARRIER_LABEL` описує СТАН ОДНОГО рахунка («перевізник оплачений»), і в
+ * рядку рахунка лишається дослівно — саме його стереже `#197c`.
+ * Тут — ПІДСУМОК по клієнту («не оплачено · 28»), де число вже несе «скільки»,
+ * а слово «перевізник» повторюється в кожному з 78 рядків, не додаючи нічого:
+ * колонка й так зветься «Перевізник».
+ *
+ * 📐 Чому взагалі скорочуємо: заміряно в браузері — клітинка 106px, а
+ * «перевізник оплачений 10» у неї не влазить і переносить рядок, тобто
+ * найдовший підпис задає висоту всій таблиці. У макеті колонка ширша (143px)
+ * І підпис коротший; беремо обидва.
+ *
+ * ⚠️ «н/д» НЕ скорочується й не розшифровується: це третій стан «не знаємо»,
+ * і будь-яке «зрозуміліше» слово тут перетворило б незнання на факт неоплати —
+ * рівно те, від чого береже `#197c`.
+ */
+export const CARRIER_LABEL_SHORT: Record<ReceivableCarrierPaid, string> = {
+  paid: "оплачено", unpaid: "не оплачено", na: "н/д",
+};
+
 export const CARRIER_REASON_LABEL: Record<ReceivableCarrierReason, string> = {
   one_c: "виставлено через 1С",
   broken_link: "лінк не веде на угоду",
@@ -84,6 +106,34 @@ export function carrierCell(
   // було б тією самою підміною, тільки без причини.
   return { text: "н/д", why: reason ? CARRIER_REASON_LABEL[reason] : null, tone: "unknown", amountText: null };
 }
+
+/**
+ * 🔢 УКРАЇНСЬКИЙ ЧИСЛІВНИК — ТРИ ФОРМИ, А НЕ ОДНА.
+ *
+ * Знайшло ОКО на власному екрані: плитка архіву писала «**1 рахунків ·
+ * 1 клієнтів**». Жоден гейт цього не бачить — рядок склеюється з числа й
+ * зашитого слова, обидва по-своєму правильні. Той самий клас, що «амсфарм»
+ * у колонці «Клієнт»: текст у списку не перевіряє ніщо.
+ *
+ * Правило стандартне для української: 11-14 — завжди форма «багато».
+ *
+ * @param one   1 рахунок · 1 клієнт
+ * @param few   2-4 рахунки · 2-4 клієнти
+ * @param many  5-20, 0, 11-14 → рахунків · клієнтів
+ */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const a = Math.abs(Math.trunc(n));
+  const mod100 = a % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  const mod10 = a % 10;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}
+
+/** `1 рахунок` · `2 рахунки` · `5 рахунків` — число разом зі своєю формою. */
+export const nPlural = (n: number, one: string, few: string, many: string): string =>
+  `${n} ${plural(n, one, few, many)}`;
 
 export const AGING_ORDER: ReceivableAging[] = ["0-30", "31-60", "61-90", "90+"];
 export const AGING_LABEL: Record<ReceivableAging, string> = {
@@ -524,7 +574,7 @@ export const foldEntity = (f: ReceivableClientFacts | null): Folded | null =>
   f ? foldTally(f.entity, (k) => ENTITY_LABEL[k], ENTITY_ORDER) : null;
 
 export const foldCarrier = (f: ReceivableClientFacts | null): Folded | null =>
-  f ? foldTally(f.carrier, (k) => CARRIER_LABEL[k], CARRIER_ORDER) : null;
+  f ? foldTally(f.carrier, (k) => CARRIER_LABEL_SHORT[k], CARRIER_ORDER) : null;
 
 // ───────────── 🗓 КОМЕНТАР ТИЖНЯ: ЛІНИВА МЕЖА, БЕЗ ЖОДНОЇ ДЖОБИ ─────────────
 

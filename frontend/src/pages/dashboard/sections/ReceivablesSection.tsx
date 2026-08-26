@@ -25,6 +25,7 @@ import {
   amountLimitHint, amountLimitLabel, amountLimitState, isOverAmount,
   marginHint, marginPctText,
   earnedCells, earnedCellHint, earnedCellText, earnedShownTotal,
+  nPlural,
   type Filters, type MergeSide,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
@@ -174,10 +175,6 @@ export function ReceivablesSection({
   // мілісекундах, могли б розійтись на самій межі понеділка.
   const now = new Date();
   /** Олівець правки — один стиль на всі клітинки, щоб вони не роз'їхались. */
-  const pencilStyle: React.CSSProperties = {
-    border: "none", background: "none", cursor: "pointer", padding: 0, marginLeft: 4,
-    fontSize: "var(--fs-sm)", color: "var(--text-muted)", textDecoration: "underline dotted",
-  };
   const [invCache, setInvCache] = useState<Record<string, ReceivableInvoice[] | "loading">>({});
   /** Вік боргу по клієнту — з СЕРВЕРА, поруч із рахунками. Див. `receivablesAge`. */
   const [invAge, setInvAge] = useState<Record<string, number | null>>({});
@@ -337,10 +334,10 @@ export function ReceivablesSection({
                 </Tip>
               </td>
               {/* Сума боргу → сума рахунку */}
-              <td style={{ ...cell, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}
+              <td className="recv-num" style={{ ...cell, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}
                   title={formatAmountFull(x.amount)}>{formatAmount(x.amount)}</td>
               {/* Заробили → заробили на цій угоді */}
-              <td style={{ ...cell, textAlign: "right", whiteSpace: "nowrap",
+              <td className="recv-num" style={{ ...cell, textAlign: "right", whiteSpace: "nowrap",
                            fontWeight: ec.kind === "value" ? 600 : 400,
                            color: ec.kind === "value" ? undefined : "var(--text-muted)" }}>
                 {eTxt == null
@@ -348,7 +345,7 @@ export function ReceivablesSection({
                   : <Tip body={earnedCellHint(ec)}>{eTxt}</Tip>}
               </td>
               {/* Днів → вік цього рахунку */}
-              <td style={{ ...cell, textAlign: "center", ...(age != null && age > 30 ? { color: "#dc2626", fontWeight: 600 } : {}) }}>
+              <td className="recv-num" style={{ ...cell, textAlign: "center", ...(age != null && age > 30 ? { color: "#dc2626", fontWeight: 600 } : {}) }}>
                 {age ?? "—"}
               </td>
               {/* Ліміт → дедлайн оплати ПО РАХУНКУ */}
@@ -364,7 +361,7 @@ export function ReceivablesSection({
                   onSave={(next) => patchInvoice(clientKey, no, { comment: next })} />
               </td>
               {/* Дія */}
-              <td style={{ ...cell, textAlign: "right", position: "relative" }}>
+              <td className="recv-act" style={{ ...cell, textAlign: "right", position: "relative" }}>
                 {canWriteOff && no !== "" && (
                   <WriteoffButton onClick={() => setWriteoffFor(
                     writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === no
@@ -402,12 +399,12 @@ export function ReceivablesSection({
         <tr>
           <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
           <td colSpan={4} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", paddingLeft: 28, fontWeight: 600 }}>
-            Разом по {inv.length} рах.
+            Разом по {nPlural(inv.length, "рахунку", "рахунках", "рахунках")}
           </td>
-          <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
+          <td className="recv-num" style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
             {formatAmount(debt)}
           </td>
-          <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
+          <td className="recv-num" style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
             {formatAmount(eTotal)}
           </td>
           <td colSpan={4} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
@@ -592,7 +589,7 @@ export function ReceivablesSection({
                       <Hint title="Дата й суть домовленості з клієнтом"
                         body="Поле показує лише запис ПОТОЧНОГО тижня (від понеділка 00:00 за Києвом), щоб торішня обіцянка не читалась як сьогоднішня. Нічого не видаляється — попередні записи під полем, кнопка «історія»." />
                     </th>
-                    <th style={{ width: 90 }} aria-label="дії" />
+                    <th className="recv-act" aria-label="дії" />
                   </tr>
                 </thead>
                 <tbody>
@@ -661,7 +658,7 @@ export function ReceivablesSection({
                             ) : (
                               <button onClick={() => setOwnerFor(ownerFor === c.clientKey ? null : c.clientKey)}
                                 title="Змінити відповідального за борг" aria-label="Змінити відповідального за борг"
-                                style={pencilStyle}>✏️</button>
+                                className="recv-ico">✏️</button>
                             ))}
                             {ownerFor === c.clientKey && (
                               <OwnerEditor client={c} managers={mgrOptions}
@@ -682,11 +679,18 @@ export function ReceivablesSection({
                             ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
                           </td>
 
+                          {/* 🚚 ПІДПИС СКОРОЧЕНО (макет v6): «не оплачено · 28» замість
+                              «ще не оплачено 28». Слово «перевізник» повторювалось у
+                              78 рядках, хоч колонка так і зветься, а найдовший варіант
+                              не влазив у 106px і переносив рядок.
+                              ⚠️ Скорочується САМЕ ПІДСУМОК по клієнту. Стан ОДНОГО
+                              рахунка (`carrierCell` у розкритті) лишається дослівним —
+                              його стереже `#197c`, і «н/д» там окремий третій стан. */}
                           <td style={{ textAlign: "left", verticalAlign: "middle", fontSize: "var(--fs-sm)" }}>
                             {car ? (
                               <Tip title="Перевізники по цих угодах"
                                 body={`${car.full}. «н/д» означає «не знаємо» — у CRM не заповнена форма оплати, а не те, що перевізник не оплачений.`}>
-                                {car.head} {car.n}
+                                {car.head} · <span className="recv-num">{car.n}</span>
                               </Tip>
                             ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
                           </td>
@@ -695,7 +699,7 @@ export function ReceivablesSection({
                               САМЕ ТУТ (рішення власника 26.08.2026): ліміт задається
                               поклієнтно, отже й запит поклієнтний. У плитці «Загальний
                               борг» кнопки немає — там сума по всьому екрану. */}
-                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle",
+                          <td className="recv-num" style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle",
                                        whiteSpace: "nowrap", position: "relative" }}
                               title={formatAmountFull(c.amount)}>
                             {/* 🔴 СУМА Й КНОПКА — В ОДНОМУ РЯДКУ, СТАН — ПІД НИМИ.
@@ -709,7 +713,7 @@ export function ReceivablesSection({
                                 <button onClick={() => setLimitReqFor(limitReqFor === c.clientKey ? null : c.clientKey)}
                                   title="Поставити задачу на перегляд ліміту"
                                   aria-label={`Запит на перегляд ліміту: ${c.clientName}`}
-                                  style={{ ...pencilStyle, position: "static", margin: 0 }}>🧾</button>
+                                  className="recv-ico" style={{ minHeight: 24 }}>🧾</button>
                               )}
                             </span>
                             {/* 🔴 ТРИ СТАНИ, А НЕ ДВА. Колонка нова, тож у момент викату
@@ -734,7 +738,7 @@ export function ReceivablesSection({
                           {/* 💰 ЗАРОБІТОК І МАРЖА — ОДНА КОЛОНКА. Сума й відсоток
                               читаються разом; двома стовпцями вони змушували
                               стрибати очима туди-сюди по одному твердженню. */}
-                          <td style={{ textAlign: "right", verticalAlign: "middle", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}>
+                          <td className="recv-num" style={{ textAlign: "right", verticalAlign: "middle", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}>
                             <Tip body={marginHint(c.margin)}>
                               {c.margin?.earned == null
                                 ? <span style={{ color: "var(--text-muted)" }}>—</span>
@@ -745,7 +749,7 @@ export function ReceivablesSection({
                             </Tip>
                           </td>
 
-                          <td style={{ textAlign: "center", verticalAlign: "middle", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>
+                          <td className="recv-num" style={{ textAlign: "center", verticalAlign: "middle", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>
                             {c.overdueDays ?? "—"}
                             {isAncientDebt(c.overdueDays) && (
                               <Tip title="Старий рахунок" body="Рахунок старший за рік — це факт, а не збій розрахунку."
@@ -753,15 +757,25 @@ export function ReceivablesSection({
                             )}
                           </td>
 
+                          {/* 📐 ОЛІВЕЦЬ БІЛЬШЕ НЕ ЇДЕ ЗА ТЕКСТОМ. Заміряно в браузері:
+                              x у пʼяти сусідніх рядках `1240·1240·1240·1240·1216` —
+                              він стояв інлайново одразу за значенням, тож «14 дн.» і
+                              «не узгоджено» ставили його в різні місця. Тепер значення
+                              ліворуч, олівець притиснутий до правого краю комірки
+                              (`.recv-limitcell`), і позиція не залежить від тексту. */}
                           <td style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-muted)" : "var(--warn)",
                                        textAlign: "center", verticalAlign: "middle", position: "relative",
                                        fontSize: limitState(c.limitDays) === "agreed" ? undefined : "var(--fs-xs)" }}>
-                            <Tip body={limitHint(c.limitDays)}>{limitLabel(c.limitDays)}</Tip>
-                            {canSetLimit && (
-                              <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
-                                title="Змінити узгоджену відстрочку" aria-label="Змінити узгоджену відстрочку"
-                                style={pencilStyle}>✏️</button>
-                            )}
+                            <div className="recv-limitcell">
+                              <span className="recv-limitval">
+                                <Tip body={limitHint(c.limitDays)}>{limitLabel(c.limitDays)}</Tip>
+                              </span>
+                              {canSetLimit && (
+                                <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
+                                  title="Змінити узгоджену відстрочку" aria-label="Змінити узгоджену відстрочку"
+                                  className="recv-ico">✏️</button>
+                              )}
+                            </div>
                             {limitFor === c.clientKey && (
                               <LimitEditor client={c}
                                 onClose={() => setLimitFor(null)}
@@ -816,7 +830,12 @@ export function ReceivablesSection({
                               кошик читається як «видалити назавжди», а дія
                               оборотна й із журналом. Зʼявляється при наведенні,
                               щоб не шуміти в 74 рядках. */}
-                          <td style={{ textAlign: "right", verticalAlign: "middle", position: "relative", whiteSpace: "nowrap" }}>
+                          {/* 🗑 ШИРИНА ЗАРЕЗЕРВОВАНА КЛАСОМ, а не вмістом: кнопка
+                              зʼявляється лише на наведенні, і без резерву поява
+                              розсувала б сусідні колонки — таблиця «дихала» б під
+                              курсором. Видимістю керують правила `.recv-wo`, які
+                              стереже `#199ba`; тут тільки місце. */}
+                          <td className="recv-act" style={{ textAlign: "right", verticalAlign: "middle", position: "relative", whiteSpace: "nowrap" }}>
                             {canWriteOff && (
                               <WriteoffButton onClick={() => setWriteoffFor(
                                 writeoffFor?.clientKey === c.clientKey && writeoffFor.invoiceNo === null

@@ -66,7 +66,10 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
     : [];
 
   return (
-    <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", marginBottom: 16 }}>
+    /* 🧱 СІТКА — КЛАСОМ, А НЕ ІНЛАЙНОМ: `auto-fit` давав 2 ряди на 1440 і 1600
+       (заміряно), і полагодити його інлайновим стилем неможливо — потрібні
+       медіазапити, а їх у `style` не буває. Числа й підстава — в `index.css`. */
+    <div className="kpi-grid recv-kpis" style={{ marginBottom: 16 }}>
       {/* 🔴 СМУГИ ЗВЕРХУ ПРИБРАНО З УСІХ ПʼЯТИ (Е4b). Пʼять різних кольорів у ряд
           читались як світлофор — ніби плитки різного «стану». Насправді вони просто
           різні метрики, і колір нічого про них не казав. Колір лишився там, де він

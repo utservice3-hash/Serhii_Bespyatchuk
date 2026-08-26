@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchReceivableArchive, revokeReceivableWriteoff, type ReceivableArchive } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
-import { formatDateSafe, parseDateSafe } from "../receivablesView";
+import { formatDateSafe, nPlural, parseDateSafe } from "../receivablesView";
 import { Hint, Tip } from "../../../components/Hint";
 
 /**
@@ -61,8 +61,8 @@ export function ReceivablesArchive({ onRestored }: { onRestored?: () => void }) 
 
   return (
     <>
-      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", marginBottom: 16 }}>
-        {tile("Списано в архів", formatAmount(t.amount), `${t.n} рахунків · ${t.clients} клієнтів`,
+      <div className="kpi-grid recv-kpis" style={{ marginBottom: 16 }}>
+        {tile("Списано в архів", formatAmount(t.amount), `${nPlural(t.n, "рахунок", "рахунки", "рахунків")} · ${nPlural(t.clients, "клієнт", "клієнти", "клієнтів")}`,
           { title: "Борги, які ми визнали безнадійними",
             body: "Вони не входять ні в загальний борг, ні в очікувані кошти — ніде на дашборді. Але лежать тут із причиною й автором, і повертаються однією кнопкою." })}
         {tile("За цей місяць", formatAmount(t.thisMonth), new Date().toLocaleDateString("uk-UA", { month: "long", year: "numeric" }),
@@ -96,6 +96,14 @@ export function ReceivablesArchive({ onRestored }: { onRestored?: () => void }) 
           Списаних боргів немає. Списати можна в активній дебіторці — кнопкою «Списати» в рядку клієнта або рахунку.
         </div>
       ) : (
+        /* 🔴 ТА САМА ОБГОРТКА `chart-card`, ЩО В АКТИВНІЙ ВКЛАДЦІ — І ЦЕ НЕ
+           КОСМЕТИКА, А ПРИЧИНА РІЗНОЇ ШИРИНИ. Заміряно ланцюгом предків у
+           браузері @1600: активна таблиця лежить у `.chart-card` (падінг 20px з
+           боків), архівна — просто в `main-content`. Звідси **1274 проти 1316**:
+           різниця рівно `2×20 + рамка`. Дві вкладки одного екрана з таблицями
+           різної ширини читаються як два різні екрани, а вкладка мала б міняти
+           ВМІСТ, не рамку. Тепер ширину задає одна й та сама обгортка. */
+        <div className="chart-card">
         <div style={{ overflowX: "auto" }}>
           <table className="data-table recv-archive">
             <thead>
@@ -149,6 +157,7 @@ export function ReceivablesArchive({ onRestored }: { onRestored?: () => void }) 
               </tr>
             </tfoot>
           </table>
+        </div>
         </div>
       )}
     </>

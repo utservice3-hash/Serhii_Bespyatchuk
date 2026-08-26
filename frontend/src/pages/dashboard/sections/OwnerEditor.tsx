@@ -123,7 +123,10 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
         style={{ font: "inherit", fontSize: "var(--fs-sm)", padding: "6px 8px", borderRadius: 8, width: "100%",
                  minHeight: 46, resize: "vertical", border: "1px solid var(--border)",
                  background: "var(--card-bg)", color: "var(--text)", marginBottom: 4 }} />
-      <div style={{ fontSize: "var(--fs-xs)", color: noteOk ? "var(--text-muted)" : "var(--warn)", marginBottom: 8, lineHeight: 1.4 }}>
+      {/* Той самий слот, що в поповері ліміту, і з тієї самої причини: підказка
+          зникає з потоку на першому символі й тягне кнопки вгору на 15px. */}
+      <div className="recv-hintslot"
+           style={{ color: noteOk ? "var(--text-muted)" : "var(--warn)", marginBottom: 8 }}>
         {noteOk
           ? `${note.trim().length}/${NOTE_MAX}`
           : "Обовʼязково: через місяць призначення без причини не відрізнити від помилки"}

@@ -122,8 +122,15 @@ export function LimitEditor({ client, onDone, onClose }: {
           style={{ font: "inherit", fontSize: "var(--fs-sm)", padding: "6px 8px", borderRadius: 8, width: "100%",
                    minHeight: 46, resize: "vertical", border: "1px solid var(--border)",
                    background: "var(--input-bg)", color: "var(--text)", marginBottom: 4 }} />
-        <div style={{ fontSize: "var(--fs-xs)", color: noteOk ? "var(--text-muted)" : "var(--warn)",
-                      marginBottom: 8, lineHeight: 1.4 }}>
+        {/* 🔴 ПІДЛОГА ВИСОТИ — ЩОБ КНОПКИ НЕ ЇХАЛИ ПІД КУРСОРОМ.
+            Заміряно на власній геометрії поповера: причина порожня → «Зберегти»
+            на `y = 933`, введено ОДИН символ → `y = 918`. Двохрядкова підказка
+            стискається в однорядковий лічильник, і всі чотири кнопки стрибають
+            на **15px** — рівно тоді, коли до них тягнеться рука.
+            Клас, а не інлайн: те саме правило треба й сусідньому поповеру, а
+            двічі написане число розійшлось би. */}
+        <div className="recv-hintslot"
+             style={{ color: noteOk ? "var(--text-muted)" : "var(--warn)", marginBottom: 8 }}>
           {noteOk ? `${note.trim().length}/300`
                   : "Обовʼязково: через місяць ліміт без причини не відрізнити від помилки"}
         </div>
