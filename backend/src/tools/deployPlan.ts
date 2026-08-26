@@ -42,6 +42,10 @@ export interface Step {
  */
 export const REQUIRED_STEPS: readonly Step[] = [
   // ── ФАЗА CHECK (контейнер) ────────────────────────────────────────────────
+  { id: "toolsCheck", phase: "check", title: "середовище вміє запустити збірку (npm/node/git)",
+    why: "перевірка ПЕРЕД першим `rm`, а не після: 26.08.2026 ланцюг зробив `rm -rf dist` і аж тоді впав на "
+       + "`npm: command not found` (relay — не логін-шелл). `&&` рятує від продовження після збою, але НЕ від того, "
+       + "що вже виконалось до нього" },
   { id: "base", phase: "check", title: "база проти health.version",
     why: "проти ЖИВОГО прода, а не проти памʼяті чи HEAD~1: інакше викат тихо відкотить чужий прохід" },
   { id: "lightAdmission", phase: "check", lightOnly: true, title: "умова допуску легкого режиму",
@@ -57,6 +61,9 @@ export const REQUIRED_STEPS: readonly Step[] = [
   { id: "artifact", phase: "check", title: "записати артефакт (sha гілки + sha прода)",
     why: "склейка двох фаз: run без нього не стартує" },
   // ── ФАЗА RUN (прод) ───────────────────────────────────────────────────────
+  { id: "toolsRun", phase: "run", title: "середовище вміє запустити збірку (npm/node/git)",
+    why: "той самий крок на боці прода, і саме тут він критичний: `buildBackProd` починається з `rm -rf dist`, "
+       + "тож збій PATH лишає прод БЕЗ збірки на диску — сайт живий із памʼяті, а рестарт не підняв би нічого" },
   { id: "artifactFresh", phase: "run", title: "артефакт свіжий за ОБОМА sha",
     why: "перевірка тригодинної давності могла звірятись із продом, що відтоді зрушив вісім разів" },
   { id: "ff", phase: "run", title: "git fetch + merge --ff-only",
@@ -81,6 +88,11 @@ export const REQUIRED_STEPS: readonly Step[] = [
     why: "між двома викликами pid протухає; pgrep -f матчить власний командний рядок і «знаходить» себе" },
   { id: "healthVersion", phase: "run", title: "health.version == задеплоєний sha",
     why: "ЄДИНИЙ достовірний доказ рестарту: кнопки й pid брешуть, health із самим ok:true колись 11 годин підтверджував старий код" },
+  { id: "buildFresh", phase: "run", title: "buildStale == false і version.json == health.version",
+    why: "детектор «на диску не те, що в памʼяті» ІСНУЄ — бракувало ТВЕРДЖЕННЯ. Обірваний ланцюг лишає чекаут у "
+       + "стані, який болить не зараз, а при наступній дії: health 200, test:prod зелений, а рестарт підняв би "
+       + "не те або нічого. Різниця між «я подивився на вивід» і «крок відмовився» — це різниця між уважним "
+       + "виконавцем і ним же о третій ночі" },
   { id: "bootKind", phase: "run", title: "app_boot класифіковано як deploy, не crash",
     why: "фальшивий crash — це і хибний банер, і зіпсована статистика аварій" },
   { id: "pushBranch", phase: "run", title: "пуш sha у прод-гілку (fetch ПЕРЕД заміром)",

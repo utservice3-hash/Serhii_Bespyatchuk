@@ -28,10 +28,25 @@ const sh = (cmd: string, args: string[], cwd?: string): string =>
 /** Результат кроку. `skipped` НЕ є успіхом: він друкується окремо з причиною. */
 export interface StepResult { id: string; ok: boolean; skipped?: string; detail: string }
 
-async function prodSha(): Promise<string> {
+interface Health { version: { shortSha: string }; buildStale?: boolean }
+async function health(): Promise<Health> {
   const r = await fetch(HEALTH);
   if (!r.ok) throw new Error(`health віддав ${r.status}`);
-  return ((await r.json()) as { version: { shortSha: string } }).version.shortSha;
+  return (await r.json()) as Health;
+}
+async function prodSha(): Promise<string> {
+  return (await health()).version.shortSha;
+}
+
+/** Чи є в PATH те, без чого крок зі збіркою зробить `rm` і зупиниться на півдорозі. */
+function toolsPresent(id: string): StepResult {
+  const missing = ["npm", "node", "git"].filter((t) => {
+    try { sh(t, ["--version"]); return false; } catch { return true; }
+  });
+  return { id, ok: missing.length === 0,
+    detail: missing.length
+      ? `🔴 у PATH немає: ${missing.join(", ")} — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\``
+      : "npm, node, git на місці" };
 }
 
 /**
@@ -43,6 +58,12 @@ async function prodSha(): Promise<string> {
  */
 export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepResult> = {
   // ── CHECK ─────────────────────────────────────────────────────────────────
+  /**
+   * 🛠 СЕРЕДОВИЩЕ — ПЕРЕД ПЕРШИМ `rm`, А НЕ ПІСЛЯ. Обробник один на обидві фази:
+   * розходження між ними було б рівно тією дірою, яку крок закриває.
+   */
+  toolsCheck: () => toolsPresent("toolsCheck"),
+  toolsRun: () => toolsPresent("toolsRun"),
   base: async (c) => {
     const live = await prodSha();
     c.prod = live;
@@ -68,6 +89,19 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return { id: "artifact", ok: true, detail: `гілка ${art.branchSha} · прод ${art.prodSha}` };
   },
   // ── RUN ───────────────────────────────────────────────────────────────────
+  buildFresh: async (c) => {
+    const h = await health();
+    const disk = c.be ? `${c.be}/dist/version.json` : "";
+    const onDisk: { sha?: string } | null = disk && existsSync(disk) ? JSON.parse(readFileSync(disk, "utf8")) : null;
+    const stale = h.buildStale === true;
+    const same = !!onDisk?.sha && onDisk.sha.startsWith(h.version.shortSha);
+    const ok = !stale && !!onDisk && same;
+    return { id: "buildFresh", ok,
+      detail: ok ? `buildStale=false · version.json ${h.version.shortSha}`
+        : !onDisk ? "🔴 dist/version.json НЕМАЄ — на диску немає збірки взагалі; сайт живий лише з памʼяті процесу"
+        : stale ? `🔴 buildStale=true — на диску ${onDisk.sha?.slice(0, 7)}, у памʼяті ${h.version.shortSha}: зібрано й не рестартнуто`
+        : `🔴 version.json ${onDisk.sha?.slice(0, 7)} ≠ health ${h.version.shortSha}` };
+  },
   artifactFresh: async (c) => {
     const a: Artifact | null = existsSync(ARTIFACT_PATH) ? JSON.parse(readFileSync(ARTIFACT_PATH, "utf8")) : null;
     const live = await prodSha();

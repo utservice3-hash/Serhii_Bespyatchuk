@@ -194,3 +194,39 @@ test("#226h run вимагає явну ціль, і артефакт звіря
   const wrongTarget = verifyArtifact(art, "ccc3333", "bbb2222");
   assert.equal(wrongTarget.ok, false, "🔴 чужу ціль пропущено");
 });
+
+test("#226i ПЕРЕВІРКА СЕРЕДОВИЩА — ПЕРЕД ПЕРШИМ РУЙНІВНИМ КРОКОМ", () => {
+  // 🔴 26.08.2026 ланцюг зробив `rm -rf dist` на ПРОДІ й аж тоді впав на
+  // `npm: command not found` (relay — не логін-шелл). Прод лишився без збірки на
+  // диску: сайт жив із памʼяті процесу, рестарт не підняв би нічого.
+  // `&&` рятує від продовження ПІСЛЯ збою, але не від того, що вже виконалось ДО.
+  for (const [phase, tool, destroyer] of [
+    ["check", "toolsCheck", "buildBack"], ["run", "toolsRun", "buildBackProd"],
+  ] as const) {
+    const ids = planSteps(phase, "full").map((x) => x.id);
+    const t = ids.indexOf(tool), d = ids.indexOf(destroyer);
+    assert.ok(t >= 0, `🔴 у фазі ${phase} немає перевірки середовища взагалі`);
+    assert.ok(d >= 0, `🔴 у фазі ${phase} зник крок збірки — тест звіряє порядок із порожнечею`);
+    assert.ok(t < d,
+      `🔴 у фазі ${phase} перевірка середовища стоїть ПІСЛЯ «${destroyer}», який починається з rm -rf dist. `
+      + "Це рівно та послідовність, що лишила прод без збірки.");
+  }
+  // Дзеркало: детектор порядку вміє побачити порушення, інакше він завжди зелений.
+  const swapped = ["buildBackProd", "toolsRun"];
+  assert.ok(swapped.indexOf("toolsRun") > swapped.indexOf("buildBackProd"),
+    "🔴 сам детектор порядку не працює");
+});
+
+test("#226j ФІНАЛЬНЕ ТВЕРДЖЕННЯ: buildStale == false — крок, а не спостереження", () => {
+  // Детектор існував увесь час (`/api/health.buildStale`) — бракувало ТВЕРДЖЕННЯ.
+  // Обірваний ланцюг лишає стан, який болить не зараз, а при наступній дії.
+  const ids = planSteps("run", "full").map((x) => x.id);
+  assert.ok(ids.includes("buildFresh"), "🔴 у плані немає перевірки свіжості збірки на диску");
+  assert.ok(ids.indexOf("buildFresh") > ids.indexOf("healthVersion"),
+    "🔴 buildFresh мусить іти ПІСЛЯ рестарту: до нього buildStale=true — це НОРМА, а не поломка");
+  // І в легкому режимі теж: косметичний викат так само здатен лишити диск і памʼять різними.
+  assert.ok(planSteps("run", "light").map((x) => x.id).includes("buildFresh"),
+    "🔴 легкий режим не перевіряє свіжість збірки — саме там її й забувають");
+  assert.deepEqual(missingHandlers().map((x) => x.id), [],
+    "🔴 крок у реєстрі БЕЗ обробника: він мовчки не виконається, а звіт покаже план цілим");
+});
