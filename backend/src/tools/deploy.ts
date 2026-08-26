@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import {
-  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState,
+  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 
@@ -70,7 +70,9 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   // ── RUN ───────────────────────────────────────────────────────────────────
   artifactFresh: async (c) => {
     const a: Artifact | null = existsSync(ARTIFACT_PATH) ? JSON.parse(readFileSync(ARTIFACT_PATH, "utf8")) : null;
-    const v = verifyArtifact(a, sh("git", ["rev-parse", "--short", "HEAD"], c.repo), await prodSha());
+    const live = await prodSha();
+    c.prod = live;   // диф для `migrate` рахується проти ТОГО, що крутить прод ЗАРАЗ — до ff
+    const v = verifyArtifact(a, sh("git", ["rev-parse", "--short", "HEAD"], c.repo), live);
     return { id: "artifactFresh", ok: v.ok, detail: v.ok ? "артефакт свіжий за обома sha" : `🔴 ${v.reason}` };
   },
   ff: (c) => run("ff", () => { sh("git", ["fetch", "origin", c.branch], c.repo); sh("git", ["merge", "--ff-only", c.target], c.repo); }, "перемотка"),
@@ -87,8 +89,12 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   },
   contentType: (c) => run("contentType", () => sh("bash", ["-lc", `cd ${c.repo} && for a in $(grep -o "assets/index-[A-Za-z0-9_-]*\\.\\(js\\|css\\)" index.html); do t=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "https://dashboard.uts.ua/$a?cb=$(date +%s)"); case "$t" in 200*javascript*|200*css*) ;; *) echo "🔴 $a → $t"; exit 1;; esac; done`]), "усі асети віддають свій тип"),
   migrate: (c) => {
-    if (!c.hasMigrations) return { id: "migrate", ok: true, skipped: "міграцій у діфі немає — крок НЕ виконувався (це не «міграції пройшли»)", detail: "" };
-    return run("migrate", () => sh("bash", ["-lc", `cd ${c.be} && set -a && . ./.env && set +a && npm run migrate`]), "міграції застосовано — ОБОВʼЯЗКОВО звірити результат ОКРЕМИМ запитом");
+    // 🔴 ДИВИМОСЬ У ДІФ, а не в прапорець: інакше звіт стверджує факт, якого ніхто не перевіряв.
+    c.changed = sh("git", ["diff", "--name-only", `${c.prod}..HEAD`], c.repo).split("\n").filter(Boolean);
+    const migs = migrationsInDiff(c.changed);
+    if (migs.length === 0) return { id: "migrate", ok: true, detail: "",
+      skipped: `файлів схеми у діфі ${c.prod}..HEAD немає (переглянуто ${c.changed.length}) — крок НЕ виконувався (це не «міграції пройшли»)` };
+    return run("migrate", () => sh("bash", ["-lc", `cd ${c.be} && set -a && . ./.env && set +a && npm run migrate`]), `міграції застосовано (${migs.join(", ")}) — 🔴 звірити результат ОКРЕМИМ запитом: «Migration applied» друкується й тоді, коли частина роботи відкотилась`);
   },
   markDeploy: (c) => run("markDeploy", () => sh("bash", ["-lc", `cd ${c.be} && set -a && . ./.env && set +a && node dist/tools/markDeploy.js --note="викат ${c.target}"`]), "намір заявлено ПЕРЕД kill"),
   kill: () => run("kill", () => sh("bash", ["-lc", `PID=$(ps -eo pid,args | awk '$2=="node" && $3=="dist/index.js" {print $1}' | head -1); [ -n "$PID" ] || { echo "процес не знайдено"; exit 1; }; kill -TERM "$PID"; echo "TERM → $PID"`]), "pid і kill однією командою"),
@@ -111,7 +117,9 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
 
 export interface Ctx {
   repo: string; be: string; fe: string; branch: string; target: string;
-  mode: Mode; prod: string; now: string; hasMigrations: boolean;
+  mode: Mode; prod: string; now: string;
+  /** Файли дифу проти прода — джерело для migrate. */
+  changed: string[];
 }
 
 function run(id: string, fn: () => void, detail: string): StepResult {
@@ -151,8 +159,7 @@ export async function main(argv: string[]): Promise<number> {
     repo, be: `${repo}/backend`, fe: `${repo}/frontend`,
     branch: process.env.UTS_PROD_BRANCH ?? "claude/friendly-galileo-8pijhl",
     target: sh("git", ["rev-parse", "--short", "HEAD"], repo),
-    mode, prod: "", now: new Date().toISOString(),
-    hasMigrations: false,
+    mode, prod: "", now: new Date().toISOString(), changed: [],
   };
   const done: StepResult[] = [];
   for (const step of plan) {
@@ -182,7 +189,21 @@ export async function main(argv: string[]): Promise<number> {
     console.log("﹣ НЕ ВИКОНУВАЛИСЬ (це НЕ «пройшло»):");
     for (const s of skipped) console.log(`   ${s.id}: ${s.skipped}`);
   }
-  console.log(JSON.stringify({ phase, mode, steps: done.map((d) => ({ id: d.id, ok: d.ok, skipped: d.skipped ?? null })) }));
+  /**
+   * 🔴 «СКРИПТ ВІДПРАЦЮВАВ» ≠ «ПРИЙНЯТО». Скрипт закінчується на `report`; прогрів і
+   * `test:prod` лишаються ЛЮДСЬКОЮ дією. Не сказати цього вголос означає віддати
+   * зелений вивід, який прочитають як приймання — той самий клас, що «0 падінь»,
+   * коли третина тестів не виконалась.
+   */
+  if (phase === "run") {
+    console.log("\n🔴 ПРИЙМАННЯ НЕ ЗРОБЛЕНО — це не входить у скрипт:");
+    console.log("   ﹣ прогрів ~13 хв (перший запит після рестарту холодний)");
+    console.log("   ﹣ npm run test:prod з API_BASE");
+    if (done.some((d) => d.id === "migrate" && !d.skipped))
+      console.log("   ﹣ 🔴 БУЛА МІГРАЦІЯ: звірити результат ОКРЕМИМ запитом, а не за виводом «Migration applied»");
+  }
+  console.log(JSON.stringify({ phase, mode, acceptanceDone: false,
+    steps: done.map((d) => ({ id: d.id, ok: d.ok, skipped: d.skipped ?? null })) }));
   return 0;
 }
 

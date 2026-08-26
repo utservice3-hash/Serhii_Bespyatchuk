@@ -115,3 +115,33 @@ test("#226e обірваний прогін розрізняє три стани
   assert.equal(new Set(codes).size, 3, `🔴 стани не розрізняються кодом виходу: ${codes.join(", ")}`);
   assert.ok(codes.every((x) => x !== 0), "🔴 обірваний прогін не сміє віддавати 0");
 });
+
+/**
+ * 🧬 #226f — КРОК `migrate` ВИВОДИТЬСЯ З ДІФУ, А НЕ З ПРАПОРЦЯ.
+ *
+ * 🔴 ГЕЙТ ЧЕРЕЗ НАСЛІДОК, а не «у файлі є hasMigrations»: підсовуємо диф зі схемою і
+ * вимагаємо, щоб крок НЕ вважався пропущеним. Перша редакція мала зашитий `false` — крок
+ * не виконався б НІКОЛИ, а звіт упевнено стверджував би «міграцій немає», тобто факт про
+ * диф, якого ніхто не дивився. Знайшов це читач, а не тест — тому тест тепер є.
+ */
+test("#226f міграція у діфі НЕ може бути прочитана як «міграцій немає»", async () => {
+  const { migrationsInDiff } = await import("./deployPlan.js");
+
+  // 1 · Диф зі схемою — крок МУСИТЬ бути визнаний потрібним.
+  assert.deepEqual(migrationsInDiff(["backend/src/routes/x.ts", "backend/src/db/schema.sql"]),
+    ["backend/src/db/schema.sql"],
+    "🔴 міграцію у діфі не помічено — саме так крок не виконався б НІКОЛИ, а звіт казав би «міграцій немає»");
+
+  // 2 · Інші .sql у db/ теж рахуються: сид мапінгу — теж зміна БД.
+  assert.equal(migrationsInDiff(["backend/src/db/seedKommoMapping.sql"]).length, 1);
+
+  // 3 · 🪞 ДЗЕРКАЛО: звичайний діф НЕ вигадує міграцію — інакше крок ганявся б щоразу,
+  //     «завжди зелений» став би новим фоном, і ми втратили б сигнал.
+  assert.deepEqual(migrationsInDiff(["backend/src/tools/deploy.ts", "CLAUDE.md", "frontend/src/App.tsx"]), [],
+    "🔴 міграцію вигадано на порожньому місці");
+  assert.deepEqual(migrationsInDiff(["backend/src/fixtures/sample.sql", "docs/sql/diagnostics.sql"]), [],
+    "🔴 .sql поза src/db прийнято за схему");
+
+  // 4 · Порожній диф — це порожній диф, а не «є міграція».
+  assert.deepEqual(migrationsInDiff([]), []);
+});
