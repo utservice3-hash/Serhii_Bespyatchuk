@@ -97,7 +97,7 @@ export function ReceivablesArchive({ onRestored }: { onRestored?: () => void }) 
         </div>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table className="data-table">
+          <table className="data-table recv-archive">
             <thead>
               <tr>
                 <th style={{ textAlign: "left" }}>Клієнт</th>
@@ -114,8 +114,13 @@ export function ReceivablesArchive({ onRestored }: { onRestored?: () => void }) 
                 <tr key={`${w.clientKeyRaw}-${w.invoiceNo}`}>
                   <td style={{ textAlign: "left", fontWeight: 600 }}>{w.clientName ?? w.clientKeyRaw}</td>
                   <td style={{ textAlign: "left", textDecoration: "line-through", color: "var(--text-muted)" }}>{w.invoiceNo || "—"}</td>
-                  <td style={{ textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}
-                      title={formatAmountFull(w.amount)}>{formatAmount(w.amount)}</td>
+                  {/* 🔴 СУМА ТУТ — ТОЧНА, А НЕ СКОРОЧЕНА, І ЦЕ НЕ ДРІБНИЦЯ.
+                      Плитка згори показує ПОРЯДОК величини — їй скорочення
+                      доречне. Рядок реєстру — запис про ДІЮ над конкретними
+                      грошима: «28тис ₴» однаково читається і для 28 000, і для
+                      28 400, тобто ховає рівно те, за що людина відповідає
+                      підписом. Скорочення побачив на екрані в браузері. */}
+                  <td style={{ textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{formatAmountFull(w.amount)}</td>
                   <td style={{ textAlign: "left", fontSize: "var(--fs-sm)" }}>{w.author ?? "—"}</td>
                   <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>{formatDateSafe(w.at)}</td>
                   <td style={{ textAlign: "left", fontSize: "var(--fs-sm)" }}>{w.note}</td>
@@ -139,7 +144,7 @@ export function ReceivablesArchive({ onRestored }: { onRestored?: () => void }) 
             <tfoot>
               <tr>
                 <td colSpan={2} style={{ fontWeight: 700 }}>Разом в архіві</td>
-                <td style={{ textAlign: "right", fontWeight: 700 }}>{formatAmount(t.amount)}</td>
+                <td style={{ textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{formatAmountFull(t.amount)}</td>
                 <td colSpan={4} />
               </tr>
             </tfoot>

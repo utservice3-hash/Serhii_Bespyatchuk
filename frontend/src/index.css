@@ -847,3 +847,18 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
 .recv-wo { visibility: hidden; }
 .recv-row:hover .recv-wo,
 .recv-row:focus-within .recv-wo { visibility: visible; }
+
+/* 🔴 АРХІВ СПИСАНЬ: ВЛАСНІ ГОРИЗОНТАЛЬНІ ВІДСТУПИ, І ЦЕ НЕ КОСМЕТИКА.
+   Базовий `.data-table th/td` має падінг `… 0` — по горизонталі НУЛЬ. На решті
+   екранів це не видно, бо колонки й так широкі; тут правовирівняна «Сума»
+   впритул торкалась лівовирівняного «Списав», і шапка читалась як одне слово
+   «СумаСписав», а клітинка — як «28тис ₴utservice3@gmail.com».
+   🔴 Знайшло це ОКО в браузері, а не гейт: жодна перевірка не дивиться, чи
+   сусідні колонки не злиплись. Правило скоуповане класом — глобальний
+   `.data-table` не чіпаємо, інакше зрушаться всі таблиці продукту. */
+.recv-archive th,
+.recv-archive td { padding-left: var(--sp-3); padding-right: var(--sp-3); }
+.recv-archive th:first-child,
+.recv-archive td:first-child { padding-left: 0; }
+.recv-archive th:last-child,
+.recv-archive td:last-child { padding-right: 0; }

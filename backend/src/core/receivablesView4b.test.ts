@@ -1351,3 +1351,121 @@ test("#198k списаний рахунок зникає з активного �
   assert.match(arch, /revokeReceivableWriteoff/, "🔴 з архіву не можна повернути борг — незворотна кнопка на грошах");
   assert.match(arch, /d\.canWriteOff &&/, "🔴 кнопка повернення показується без права — «є, але дає 403»");
 });
+
+test("#199aa предикат ВИКОНУЄТЬСЯ проти БД і справді виключає — на власній фікстурі", needsDb(), async (t) => {
+  // 🔴 ЦЕЙ ГЕЙТ ІСНУЄ ТОМУ, ЩО РЕШТА #199* — ПЕРЕВІРКИ РЯДКА, А НЕ ПОВЕДІНКИ.
+  //
+  // Заміряно на проді 26.08.2026, і число незручне: угод, у яких списані ВСІ
+  // рахунки, — **нуль**. Єдине живе списання (28 000 ₴, УКРЕНЕРГО-АЛЬЯНС) стоїть
+  // на рахунку з `service_url IS NULL` — саме тому, що він, словами власника,
+  // «виставлений не через срм». Отже предикат на проді не спрацьовує НІ РАЗУ,
+  // і golden-master «12 функцій, 0 розбіжностей» доводить лише те, що SQL
+  // ПАРСИТЬСЯ. Про те, що він щось виключає, він не свідчить нічого.
+  //
+  // Це рівно «порожній результат = провал, а не успіх»: перевірка мовчить, бо
+  // їй не було що знаходити. Тому механізм — на ВЛАСНІЙ фікстурі (рецепт #220),
+  // де випадок сконструйовано, а не виловлено з живих даних.
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { DEAL_NOT_WRITTEN_OFF, FULLY_WRITTEN_OFF_DEALS, WRITTEN_OFF_STILL_IN_ZONE } =
+    await import("./writeoffScope.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SRC("db/schema.sql"), "utf8"));
+    const K = "фікстура";
+    const inv = (no: string, deal: string | null) =>
+      c.query(`INSERT INTO receivable_invoices (client_key, client_key_raw, client_name, invoice_no, amount, service_url)
+               VALUES ($1,$1,'Ф',$2,100,$3)`,
+        [K, no, deal === null ? null : `https://x.kommo.com/leads/detail/${deal}`]);
+    const off = (no: string) =>
+      c.query(`INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note)
+               VALUES ($1,$2,100,'фікстура')`, [K, no]);
+    // 111 — ДВА рахунки (саме на цьому перевіряється «ВСІ, а не один»);
+    // 222 — один; 333 — один, чистий; 444 — рахунок БЕЗ угоди, як на проді.
+    await inv("i1", "111"); await inv("i2", "111"); await inv("i3", "222");
+    await inv("i4", "333"); await inv("i5", null);
+    for (const [id, st] of [[111, 100274340], [222, 69716312], [333, 69716300], [444, 69716300]] as const)
+      await c.query(`INSERT INTO deals (kommo_id, pipeline_id, status_id, price) VALUES ($1,8921932,$2,1000)`, [id, st]);
+    const excluded = async () => (await c.query<{ deal_id: string }>(FULLY_WRITTEN_OFF_DEALS))
+      .rows.map((r) => Number(r.deal_id)).sort((a, b) => a - b);
+    const zone = async () => (await c.query<{ c: number; s: number }>(
+      `SELECT count(*)::int c, COALESCE(sum(d.price),0)::float s FROM deals d
+        WHERE d.pipeline_id = ANY($1) AND d.status_id = ANY($2) AND ${DEAL_NOT_WRITTEN_OFF}`,
+      [[8921932, 155304], [100274340, 69716312, 69716300]])).rows[0];
+
+    // ① Нічого не списано — предикат не виключає нікого.
+    assert.deepEqual(await excluded(), [], "🔴 без жодного списання предикат уже когось виключає");
+    assert.equal((await zone()).c, 4, "🔴 предикат ріже угоди на порожньому журналі списань");
+
+    // ② Списано ОДИН із двох рахунків угоди 111 — угода лишається.
+    await off("i1");
+    assert.deepEqual(await excluded(), [],
+      "🔴 досить одного списаного рахунку — списання копійки вимикало б усю угоду");
+    assert.equal((await zone()).c, 4, "🔴 угода вийшла з очікуваних за одним списаним рахунком з двох");
+
+    // ③ Списано ДРУГИЙ — тепер угода 111 виключається, і саме вона.
+    await off("i2");
+    assert.deepEqual(await excluded(), [111],
+      "🔴 усі рахунки угоди списані, а предикат її не виключає — механізм мертвий");
+    const z3 = await zone();
+    assert.equal(z3.c, 3, "🔴 очікувані не зменшились після списання ВСІХ рахунків угоди");
+    assert.equal(z3.s, 3000, "🔴 з очікуваних пішла не та сума — вийшла не одна угода");
+
+    // ④ Рахунок БЕЗ угоди (`service_url IS NULL`) — саме прод-випадок. Списання
+    //    такого рахунка не має виключати НІЧОГО і не має валити запит: без
+    //    `deal_id IS NOT NULL` він дав би NULL-рядок у вибірці.
+    await off("i5");
+    assert.deepEqual(await excluded(), [111],
+      "🔴 списання рахунка без лінка на угоду зачепило чужі угоди");
+
+    // ⑤ Скасування повертає угоду в очікувані — байт-у-байт до стану ②.
+    await c.query(`UPDATE receivable_writeoffs SET revoked_at = now() WHERE invoice_no = 'i2'`);
+    assert.deepEqual(await excluded(), [],
+      "🔴 скасоване списання й далі тримає угоду поза очікуваними — гроші не повернулись");
+    assert.equal((await zone()).c, 4, "🔴 скасування не повернуло угоду в очікувані");
+
+    // ⑥ Лічильник розбіжності рахує ТУ САМУ множину, що виключає предикат.
+    await c.query(`UPDATE receivable_writeoffs SET revoked_at = NULL WHERE invoice_no = 'i2'`);
+    const div = (await c.query<{ deals: number; amount: number }>(
+      WRITTEN_OFF_STILL_IN_ZONE, [[8921932, 155304], [100274340, 69716312, 69716300]])).rows[0];
+    assert.equal(div.deals, 1, "🔴 лічильник розбіжності не бачить виключеної угоди — розбіжність стала тихою");
+    assert.equal(div.amount, 1000, "🔴 лічильник називає не ту суму, що пішла з очікуваних");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+test("#199ab архів: сума ТОЧНА, і колонки мають власні відступи", () => {
+  // 🔴 ОБИДВІ ПРАВКИ ЗНАЙШЛО ОКО В БРАУЗЕРІ, А НЕ ГЕЙТ — і це чесна межа: жодна
+  // перевірка не дивиться, чи сусідні колонки не злиплись. Записую їх РІШЕННЯМИ,
+  // щоб наступний прохід не «спростив» назад.
+  //
+  // (а) Базовий `.data-table th/td` має горизонтальний падінг НУЛЬ. На інших
+  //     екранах не видно, тут правовирівняна «Сума» торкалась лівовирівняного
+  //     «Списав»: шапка читалась «СумаСписав», клітинка — «28тис ₴utservice3@…».
+  //     Скоуповано класом; глобальний `.data-table` не чіпаємо — він під усіма
+  //     таблицями продукту.
+  // (б) Сума в рядку реєстру — ТОЧНА. «28тис ₴» однаково читається для 28 000
+  //     і 28 400, тобто ховає саме те, за що людина відповідає підписом.
+  //     Плитка згори лишається скороченою: вона про порядок величини.
+  const arch = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesArchive.tsx"), "utf8"));
+  const css = readFileSync(FE("index.css"), "utf8");
+
+  assert.match(arch, /className="data-table recv-archive"/,
+    "🔴 таблиця архіву втратила власний скоуп — колонки знову зліпляться");
+  assert.match(css, /\.recv-archive th,\s*\n\.recv-archive td\s*\{[^}]*padding-left/,
+    "🔴 зникло правило відступів архіву — «Сума» знову торкнеться «Списав»");
+
+  // Рядок і підсумок реєстру — ТОЧНА сума. Дозволяємо `formatAmount` лише в плитках.
+  const body = arch.slice(arch.indexOf("<tbody>"));
+  assert.ok(!/\{formatAmount\(/.test(body),
+    "🔴 у реєстрі повернулась скорочена сума — «28тис ₴» ховає, за що саме підписалась людина");
+  assert.match(body, /formatAmountFull\(w\.amount\)/, "🔴 рядок архіву більше не показує точну суму");
+  assert.match(body, /formatAmountFull\(t\.amount\)/, "🔴 підсумок архіву більше не показує точну суму");
+
+  // 🪞 ДЗЕРКАЛО: плитки СКОРОЧУЮТЬ — інакше «точно скрізь» перетворило б
+  // заголовок плитки на 9 цифр і зламало б верхній ряд.
+  const tiles = arch.slice(0, arch.indexOf("<tbody>"));
+  assert.match(tiles, /formatAmount\(/, "🔴 плитки архіву перейшли на повний формат — верхній ряд розповзеться");
+});
