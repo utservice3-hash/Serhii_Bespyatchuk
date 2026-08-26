@@ -628,3 +628,60 @@ export function activeNote(
 
 /** Підпис порожнього стану — він мусить бути ВІДПОВІДДЮ, а не порожнім місцем. */
 export const NOTE_EMPTY_PLACEHOLDER = "на цей тиждень ще не записано…";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   💰 ЛІМІТ ПО СУМІ — ДЗЕРКАЛО `core/creditLimits` ДРУГОЮ МОВОЮ
+
+   ⚠️ Дві мови — два файли, і саме тому `#199be` звіряє ЗНАЧЕННЯ обох копій,
+   а не текст. Дзеркало підказок маржі (`#199af`) вже показало, чим це
+   закінчується інакше: гейти читали копію ядра, а екран малював фронтову, і
+   саботаж «поміняти причини місцями У ФРОНТІ» лишав усе зеленим.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+export type AmountLimitState = "agreed" | "declined" | "never-set";
+
+/**
+ * ⚠️ NULL-ПАСТКА, ТА САМА, ЩО В ДНЯХ, І ТУТ ВОНА ДОРОЖЧА: `Number(null) === 0`,
+ * тож наївне порівняння зробило б «розглянули і не дали» ВСІМ, кому суму просто
+ * не ставили — а на момент викату це всі 78 боржників до одного.
+ */
+export function amountLimitState(limitAmount: number | null): AmountLimitState {
+  if (limitAmount == null) return "never-set";
+  return Number(limitAmount) === 0 ? "declined" : "agreed";
+}
+
+/** Борг перейшов узгоджену суму. Неузгоджений ліміт = нульовий (рішення 26.08.2026). */
+export const isOverAmount = (c: { amount: number | null; limitAmount: number | null }) =>
+  c.amount != null && Number(c.amount) > Number(c.limitAmount ?? 0);
+
+/** Підпис у клітинці. Не «0 ₴» — це число читається як помилка заповнення. */
+export function amountLimitLabel(limitAmount: number | null): string {
+  switch (amountLimitState(limitAmount)) {
+    case "agreed": return `${Math.round(Number(limitAmount)).toLocaleString("uk-UA")} ₴`;
+    case "declined":
+    case "never-set": return "не узгоджено";
+  }
+}
+
+/** Розгорнуте «чому» — у підказці, як і в днях. */
+export function amountLimitHint(limitAmount: number | null): string {
+  switch (amountLimitState(limitAmount)) {
+    case "agreed":
+      return `узгоджений ліміт боргу ${Math.round(Number(limitAmount)).toLocaleString("uk-UA")} ₴`;
+    case "declined":
+      return "ліміт суми розглянули і не дали — будь-який борг вважається перевищенням";
+    case "never-set":
+      return "ліміт суми цьому клієнту не встановлювали — будь-який борг вважається перевищенням";
+  }
+}
+
+/**
+ * 🧾 Заголовок задачі на перегляд ліміту — дзеркало `core/creditLimits.limitRequestTitle`.
+ * Тімлід читає його в списку своєї команди; без клієнта й суми це «дайте ліміт»
+ * без предмета — задача, яку неможливо виконати, не відкривши її.
+ */
+export function limitRequestTitle(clientName: string, debt: number, limitAmount: number | null): string {
+  const money = (n: number) => `${Math.round(n).toLocaleString("uk-UA")} ₴`;
+  const lim = amountLimitState(limitAmount) === "agreed" ? money(Number(limitAmount)) : "не встановлено";
+  return `Ліміт по сумі: ${clientName} — борг ${money(debt)}, ліміт ${lim}`;
+}

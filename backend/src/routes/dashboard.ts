@@ -2181,9 +2181,9 @@ dashboardRouter.put("/receivables/limit", async (req, res) => {
  * існують (`task_type`, `client_key`, `title`, `description`), без жодної
  * зміни контракту. Нових обовʼязкових полів не додано.
  */
-dashboardRouter.post("/receivables/limit-request", async (req, res) => {
+dashboardRouter.get("/receivables/limit-request", async (req, res) => {
   const auth = req.auth!;
-  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const clientKey = String(req.query.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
 
   // Клієнт + його команда — потрібні ОБИДВА: команда гейтить тімліда.
@@ -2213,8 +2213,15 @@ dashboardRouter.post("/receivables/limit-request", async (req, res) => {
       WHERE task_type = $1 AND client_key = $2 AND status <> 'done' LIMIT 1`,
     [LIMIT_REQUEST_TASK_TYPE, clientKey]);
   if (open.rowCount) {
-    return res.json({ ok: true, existing: open.rows[0], draft: null,
-      note: "Запит на цього клієнта вже відкритий" });
+    const e = open.rows[0];
+    // ⚠️ Ключі назовні — camelCase, як у решті API. Віддати рядок БД «як є»
+    // означало б протягнути `assignee_id` у контракт: фронт мовчки читав би
+    // `undefined` і показував «без виконавця» там, де виконавець є.
+    return res.json({
+      ok: true, draft: null,
+      existing: { id: e.id, title: e.title, assigneeId: e.assignee_id, status: e.status },
+      note: "Запит на цього клієнта вже відкритий",
+    });
   }
 
   res.json({
@@ -2234,6 +2241,89 @@ dashboardRouter.post("/receivables/limit-request", async (req, res) => {
         + `Ліміт суми: ${amountLimitLabel(limitAmount)}.`,
     },
   });
+});
+
+/**
+ * 🧾 СТВОРЕННЯ ЗАДАЧІ ПРО ЛІМІТ — окремий роут, а не режим заготовки.
+ *
+ * 🔴 КОНТРАКТ ЗАДАЧНИКА НЕ ЧІПАЄМО. `POST /tasks` не приймає `task_type`,
+ * `client_key` і `description`, а `routes/tasks.ts` — файл контракту, який
+ * правиться лише окремою задачею з окремим прийманням. Тому пишемо тим самим
+ * способом, що вже існує поруч: `POST /reactivation-task` у цьому ж файлі
+ * створює задачу з тими самими трьома полями й теж не чіпає `routes/tasks.ts`.
+ * Форма прецеденту скопійована свідомо, включно з перевіркою відкритої задачі.
+ *
+ * 🔴 ВИКОНАВЦЯ Й ДЕДЛАЙН ОБИРАЄ ТОЙ, ХТО СТАВИТЬ (рішення власника 26.08.2026).
+ * Нічого не проставляємо за нього: дефолт, вигаданий нами, через тиждень стане
+ * цифрою, якій вірять.
+ */
+dashboardRouter.post("/receivables/limit-task", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+
+  const row = await pool.query<{ client_name: string; amount: string; limit_amount: string | null; team_id: number | null }>(
+    `SELECT r.client_name, r.amount, r.limit_amount, m.team_id
+       FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
+      WHERE r.client_key = $1 LIMIT 1`, [clientKey]);
+  if (!row.rowCount) return res.status(404).json({ error: "Клієнта немає в дебіторці" });
+  const c = row.rows[0];
+
+  // 🔴 ГЕЙТ ПЕРШИМ ЗНАЧУЩИМ ОПЕРАТОРОМ ПІСЛЯ СКОУПУ — див. пояснення в
+  // `/receivables/limit-request`: валідація тіла перед ним дала б 400 замість
+  // 403 і зламала гарантію зліпка `#11`.
+  if (!canRequestLimitFor({ role: auth.role, teamId: auth.teamId }, c.team_id)) {
+    return res.status(403).json({ error: "Задачу про ліміт ставить тімлід у межах своєї команди" });
+  }
+
+  const assigneeId = req.body?.assigneeId == null ? null : Number(req.body.assigneeId);
+  if (assigneeId == null || !Number.isInteger(assigneeId)) {
+    return res.status(400).json({ error: "Оберіть виконавця" });
+  }
+  // Тімлід ставить задачу лише СВОЇЙ команді — тією ж межею, що й у Задачнику.
+  if (auth.role === "team_lead") {
+    const ok = await pool.query(
+      `SELECT 1 FROM managers WHERE id = $1 AND team_id = $2`, [assigneeId, auth.teamId]);
+    if (!ok.rowCount) return res.status(403).json({ error: "Можна ставити задачі лише своїй команді" });
+  }
+
+  // Наявний ВІДКРИТИЙ запит — віддаємо його, а не робимо другий. Друга лінія
+  // оборони — частковий унікальний індекс `idx_tasks_credit_limit_open`: гонка
+  // двох вкладок пройде повз цю перевірку, але не повз БД.
+  const open = await pool.query<{ id: number }>(
+    `SELECT id FROM tasks WHERE task_type = $1 AND client_key = $2 AND status <> 'done' LIMIT 1`,
+    [LIMIT_REQUEST_TASK_TYPE, clientKey]);
+  if (open.rowCount) {
+    return res.status(409).json({ error: "Запит на цього клієнта вже відкритий", taskId: open.rows[0].id });
+  }
+
+  const debt = Number(c.amount);
+  const limitAmount = c.limit_amount == null ? null : Number(c.limit_amount);
+  const dept = await pool.query<{ name: string | null }>(
+    `SELECT t.name FROM managers m LEFT JOIN teams t ON t.id = m.team_id WHERE m.id = $1`, [assigneeId]);
+  const priority = ["low", "medium", "high"].includes(String(req.body?.priority))
+    ? String(req.body.priority) : "medium";
+  const deadline = req.body?.deadline ? String(req.body.deadline) : null;
+
+  try {
+    const r = await pool.query<{ id: number }>(
+      `INSERT INTO tasks (title, status, deadline, assignee_id, priority, department, created_by,
+                          task_type, client_key, description)
+       VALUES ($1,'not_started',$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [limitRequestTitle(c.client_name, debt, limitAmount), deadline, assigneeId, priority,
+       dept.rows[0]?.name ?? null, auth.userId, LIMIT_REQUEST_TASK_TYPE, clientKey,
+       `Переглянути ліміт по сумі для клієнта «${c.client_name}».\n`
+       + `Поточний борг: ${Math.round(debt).toLocaleString("uk-UA")} ₴.\n`
+       + `Ліміт суми: ${amountLimitLabel(limitAmount)}.`]);
+    res.json({ id: r.rows[0].id });
+  } catch (e) {
+    // Гонка: індекс спрацював між перевіркою й вставкою. Це НЕ помилка користувача
+    // і не мовчазний успіх — кажемо те саме, що й перевірка вище.
+    if (/idx_tasks_credit_limit_open/.test(String((e as { message?: string }).message ?? ""))) {
+      return res.status(409).json({ error: "Запит на цього клієнта вже відкритий" });
+    }
+    throw e;
+  }
 });
 
 /** Зняти ліміт зовсім → стан «не встановлювали». Дзеркальна дія до PUT. */

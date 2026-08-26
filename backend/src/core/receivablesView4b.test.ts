@@ -2036,17 +2036,29 @@ test("#199av подвійне натискання не створює друг�
   assert.match(idx, /status <> 'done'/,
     "🔴 індекс тримає й ЗАКРИТІ запити — після виконання новий запит став би неможливим назавжди");
 
-  // 🔴 І РОУТ НЕ БРЕШЕ ПРО УСПІХ: при наявному відкритому він віддає ЙОГО,
-  // а не мовчазне «ок». Мовчазний успіх — це «операція, що звітує про роботу,
-  // якої не зробила».
+  // 🔴 І РОУТ ЗАГОТОВКИ НЕ БРЕШЕ ПРО УСПІХ: при наявному відкритому він віддає
+  // ЙОГО, а не мовчазне «ок». Мовчазний успіх — це «операція, що звітує про
+  // роботу, якої не зробила».
+  //
+  // ⚠️ ДІЯ РОЗДІЛЕНА НА ДВА РОУТИ 26.08.2026, І ГЕЙТ СТЕРЕЖЕ ОБИДВА. Заготовка
+  // стала `GET /receivables/limit-request` — вона нічого не змінює, тож і
+  // методом мусить бути читальним; створення живе в `POST
+  // /receivables/limit-task`, як пара `reactivation-task` поруч. Тут
+  // перевіряється головне: ЗАГОТОВКА не створює нічого.
   const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
-  const body = routes.slice(routes.indexOf('post("/receivables/limit-request"'),
-                            routes.indexOf('post("/receivables/limit-request"') + 3000);
-  assert.match(body, /status <> 'done'/, "🔴 роут не шукає наявний відкритий запит");
-  assert.match(body, /existing: open\.rows\[0\]/,
-    "🔴 роут не віддає наявну задачу — фронт не має що показати, і людина натисне втретє");
-  assert.ok(!/INSERT INTO tasks/.test(body),
-    "🔴 роут САМ створює задачу — а власник сказав, що виконавця й дедлайн обирає тімлід у формі");
+  const cut = (m: string) => {
+    const i = routes.indexOf(m);
+    const j = routes.indexOf("dashboardRouter.", i + 40);
+    return routes.slice(i, j > i ? j : routes.length);
+  };
+  const draft = cut('get("/receivables/limit-request"');
+  assert.match(draft, /status <> 'done'/, "🔴 заготовка не шукає наявний відкритий запит");
+  assert.match(draft, /existing: \{ id: e\.id/,
+    "🔴 заготовка не віддає наявну задачу — фронт не має що показати, і людина натисне втретє");
+  assert.ok(!/INSERT INTO tasks/.test(draft),
+    "🔴 ЗАГОТОВКА САМА створює задачу — а власник сказав, що виконавця й дедлайн обирає той, хто ставить");
+  assert.ok(!/INSERT|UPDATE|DELETE/.test(draft),
+    "🔴 заготовка щось ПИШЕ — вона має лише читати, інакше `GET` бреше про свою природу");
 });
 
 test("#199aw вік боргу — по ЖИВИХ рахунках, і саме це чинний дефект", needsDb(), async (t) => {
@@ -2310,4 +2322,127 @@ test("#199bc перелічувач: вік боргу виробляє РІВН
       `🔴 «${a.file}» оголошений виробником, але нічого не виробляє — запис протух`);
     assert.ok(a.why.length > 30, `🔴 «${a.file}» без пояснення`);
   }
+});
+
+test("#199be ліміт суми: копія фронта == копії ядра, значення в значення", async () => {
+  // 🔴 ТОЙ САМИЙ КЛАС, ЩО `#199af` (підказки маржі): правило живе ДВІЧІ — у
+  // ядрі й у фронті, — і гейти читали б лише копію ядра. Саботаж «поміняти
+  // `declined` і `never-set` місцями У ФРОНТІ» лишав би все зеленим, а екран
+  // пояснював би навпаки: «не встановлювали» там, де свідомо відмовили.
+  const core = await import("./creditLimits.js");
+  const fe = await import(FE_SPEC("pages/dashboard/receivablesView.ts"));
+
+  const AMOUNTS: (number | null)[] = [null, 0, 1, 50_000, 325_500];
+  const diff: string[] = [];
+  for (const a of AMOUNTS) {
+    if (core.amountLimitState(a) !== fe.amountLimitState(a))
+      diff.push(`стан(${a}): ядро=${core.amountLimitState(a)}, фронт=${fe.amountLimitState(a)}`);
+    if (core.amountLimitLabel(a) !== fe.amountLimitLabel(a))
+      diff.push(`підпис(${a}): ядро=«${core.amountLimitLabel(a)}», фронт=«${fe.amountLimitLabel(a)}»`);
+    if (core.amountLimitHint(a) !== fe.amountLimitHint(a))
+      diff.push(`підказка(${a}) розійшлась`);
+  }
+  // Перевищення — теж дві копії, з різними формами виклику.
+  for (const [debt, lim] of [[100, null], [100, 0], [100, 50], [50, 50], [49, 50], [0, null]] as const) {
+    const a = core.isOverAmount(debt, lim);
+    const b = fe.isOverAmount({ amount: debt, limitAmount: lim });
+    if (a !== b) diff.push(`переліміт(борг ${debt}, ліміт ${lim}): ядро=${a}, фронт=${b}`);
+  }
+  // Заголовок задачі — теж дзеркало: тімлід читає ТОЙ САМИЙ рядок, що пише роут.
+  for (const [n, d, l] of [["УКРЕНЕРГО", 325500, null], ["МГЕР", 100, 50000]] as const) {
+    if (core.limitRequestTitle(n, d, l) !== fe.limitRequestTitle(n, d, l))
+      diff.push(`заголовок(${n}): ядро=«${core.limitRequestTitle(n, d, l)}», фронт=«${fe.limitRequestTitle(n, d, l)}»`);
+  }
+  assert.deepEqual(diff, [],
+    "🔴 ДВІ КОПІЇ ПРАВИЛА ЛІМІТУ СУМИ РОЗІЙШЛИСЬ. Гейти, що читають ядро, цього не побачать, "
+    + "а на екрані малюється копія фронта:\n  " + diff.join("\n  "));
+  assert.ok(AMOUNTS.length >= 4, "🔴 випадків замало — звіряти нема на чому");
+});
+
+test("#199bf кнопка запиту — у РЯДКУ клієнта, і лише в того, хто може ставити задачу", () => {
+  // 🔴 ЧЕСНА МЕЖА ПЕРШИМ РЯДКОМ: гейт читає ДЖЕРЕЛО, а видимість бачить лише
+  // екран. Сьогодні це вже коштувало власнику робочої дії: кнопка списання
+  // рахунка була в DOM і не могла стати видимою через селектор, якого правило
+  // не перевіряє. Тому доказом лишається скріншот із наведенням і кліком.
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  const tiles = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesTiles.tsx"), "utf8"));
+
+  assert.match(sec, /<LimitRequestDialog clientKey=\{c\.clientKey\}/,
+    "🔴 діалог запиту не підключений у рядку клієнта");
+  assert.match(sec, /canRequestLimit &&/,
+    "🔴 кнопка малюється без перевірки права — її побачив би менеджер, якому власник її не давав");
+  // 🔴 У ПЛИТЦІ КНОПКИ НЕМАЄ (рішення власника): ліміт задається поклієнтно,
+  // отже й запит поклієнтний. Кнопка над сумою всього екрана означала б «запит
+  // про весь борг компанії» — предмета, якого не існує.
+  assert.ok(!/LimitRequestDialog|canRequestLimit/.test(tiles),
+    "🔴 кнопка запиту зʼявилась у плитці «Загальний борг» — там сума по ВСЬОМУ екрану, а ліміт поклієнтний");
+
+  // Право віддає СЕРВЕР тим самим виразом, яким гейтить роут.
+  const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  assert.match(routes, /canRequestLimit: canAssignTaskToOthers\(/,
+    "🔴 сервер рахує право кнопки не тим виразом, що гейтить роут");
+});
+
+test("#199bg задача створюється БЕЗ правки контракту Задачника", () => {
+  // 🔴 ПРАВИЛО ВЛАСНИКА: «Її поля й логіка не змінюються правками Звіту; будь-яка
+  // зміна контракту — окрема задача з окремим прийманням.» `POST /tasks` не
+  // приймає `task_type`, `client_key` і `description`, а `routes/tasks.ts` —
+  // файл контракту. Тому пишемо тим самим способом, що вже існує ПОРУЧ:
+  // `POST /reactivation-task` у `dashboard.ts` створює задачу з тими самими
+  // трьома полями й контракту не чіпає.
+  const tasks = readFileSync(SRC("routes/tasks.ts"), "utf8");
+  assert.ok(!/credit_limit_request/.test(tasks),
+    "🔴 тип запиту ліміту заїхав у `routes/tasks.ts` — це правка контракту Задачника");
+  assert.ok(!/limitRequestTitle|limit-request|limit-task/.test(tasks),
+    "🔴 логіка ліміту заїхала в контракт Задачника");
+
+  const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  const body = routes.slice(routes.indexOf('post("/receivables/limit-task"'),
+                            routes.indexOf('post("/receivables/limit-task"') + 4500);
+  assert.match(body, /INSERT INTO tasks \([^)]*task_type, client_key, description\)/,
+    "🔴 роут не створює задачу з предметом — без клієнта й опису це «дайте ліміт» без предмета");
+  assert.match(body, /LIMIT_REQUEST_TASK_TYPE/, "🔴 тип задачі не з ядра — розійдеться з індексом у схемі");
+  // Виконавця й дедлайн НЕ проставляємо за людину.
+  assert.match(body, /Оберіть виконавця/,
+    "🔴 задача створюється без виконавця — вона нікому не належить");
+  assert.ok(!/deadline = .*now\(\)|INTERVAL '\d+ day'/.test(body),
+    "🔴 дедлайн проставляється автоматично — власник сказав, що його обирає той, хто ставить");
+});
+
+test("#199bh подвійне натискання: перевірка + індекс, і жодного мовчазного успіху", () => {
+  // 🔴 МЕХАНІЗМ, А НЕ ВИГЛЯД. Заблокована кнопка нікого не зупиняє: дві вкладки,
+  // повтор запиту, швидкі пальці — і задач дві. Тому оборони ДВІ:
+  //   (1) перевірка «чи є відкрита» в роуті — вона дає зрозумілу відповідь;
+  //   (2) частковий унікальний індекс у БД — він ловить ГОНКУ, що проходить
+  //       повз перевірку між SELECT і INSERT.
+  // 🔴 ЧИТАЄМО ПО ОЧИЩЕНОМУ ДЖЕРЕЛУ Й ДО МЕЖІ РОУТУ, А НЕ ФІКСОВАНИМ ВІКНОМ.
+  // Обидві помилки спіймано САБОТАЖЕМ того самого дня, і кожна робила гейт
+  // зеленим на зламаному коді:
+  //   · зріз «+4500 символів» їде разом із будь-яким доданим коментарем — рівно
+  //     те, на чому вже спіймався `#197c`;
+  //   · пошук по СИРОМУ тексту знаходив `idx_tasks_credit_limit_open` у моєму ж
+  //     КОМЕНТАРІ, тож саботаж «прибрати обробку гонки» лишався непоміченим.
+  const routes = strip(readFileSync(SRC("routes/dashboard.ts"), "utf8"));
+  const i = routes.indexOf('post("/receivables/limit-task"');
+  const j = routes.indexOf("dashboardRouter.", i + 40);
+  const body = routes.slice(i, j > i ? j : routes.length);
+
+  assert.match(body, /status <> 'done' LIMIT 1/, "🔴 роут не шукає наявний відкритий запит");
+  // 🔴 НЕ ПРОСТО «SELECT Є», А ЩО ЙОГО РЕЗУЛЬТАТ ЗУПИНЯЄ ВСТАВКУ. Саботаж F4
+  // прибрав саме гілку `if (open.rowCount) return 409`, лишивши запит на місці —
+  // і гейт, що перевіряв лише наявність SELECT, цього не побачив.
+  assert.match(body, /if \(open\.rowCount\)[\s\S]{0,200}?return res\.status\(409\)/,
+    "🔴 наявний відкритий запит НЕ зупиняє створення — SELECT є, а рішення по ньому немає");
+  assert.match(body, /catch[\s\S]{0,400}?idx_tasks_credit_limit_open[\s\S]{0,200}?409/,
+    "🔴 гонка двох вкладок не обробляється — індекс кине помилку, і користувач побачить 500");
+
+  const schema = readFileSync(SRC("db/schema.sql"), "utf8");
+  assert.match(schema, /CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_credit_limit_open/,
+    "🔴 зник унікальний індекс — лишилась сама перевірка, яку гонка обходить");
+
+  // 🪞 І ФРОНТ ПОКАЗУЄ НАЯВНУ, а не бадьоре «готово».
+  const dlg = strip(readFileSync(FE("pages/dashboard/sections/LimitRequestDialog.tsx"), "utf8"));
+  assert.match(dlg, /Запит на цього клієнта вже відкритий/,
+    "🔴 діалог мовчить про наявний запит — людина натисне втретє");
+  assert.match(dlg, /existing\.id/, "🔴 діалог не називає НОМЕР наявної задачі — її нема як знайти");
 });

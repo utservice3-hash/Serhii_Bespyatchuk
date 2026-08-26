@@ -310,7 +310,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // HR відмовляється вкладкою, як і на решті дебіторки.
   // ⚠️ Тімлід тут ДОЗВОЛЕНИЙ на рівні матриці й звужується вже в роуті — до
   // клієнтів СВОЄЇ команди. Матриця перевіряє роль, а не конкретного клієнта.
-  { method: "POST", path: "/api/dashboard/receivables/limit-request", cls: "deny-only",
+  { method: "GET", path: "/api/dashboard/receivables/limit-request?clientKey=zzz", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/receivables/limit-task", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/regular-clients", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },

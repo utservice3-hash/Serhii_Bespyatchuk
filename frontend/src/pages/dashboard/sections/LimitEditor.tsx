@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { setReceivableLimit, clearReceivableLimit, type ReceivableClient } from "../../../api";
-import { limitHint, limitLabel, limitState } from "../receivablesView";
+import { limitHint, limitLabel, limitState,
+  amountLimitHint, amountLimitLabel, amountLimitState } from "../receivablesView";
 
 /**
  * 🧾 РЕДАКТОР УЗГОДЖЕНОЇ ВІДСТРОЧКИ (Е4).
@@ -28,13 +29,25 @@ export function LimitEditor({ client, onDone, onClose }: {
 }) {
   const state = limitState(client.limitDays);
   const [days, setDays] = useState(state === "agreed" ? String(client.limitDays) : "");
+  /**
+   * 💰 ДРУГИЙ ЛІМІТ — ПО СУМІ, НЕЗАЛЕЖНИЙ ВІД ДЕННОГО (рішення власника 26.08.2026).
+   * Порожнє поле означає «зняти цей ліміт», а не «не чіпати»: обидва поля
+   * заповнені поточним станом, тож спорожнене читається однозначно.
+   */
+  const aState = amountLimitState(client.limitAmount);
+  const [amount, setAmount] = useState(aState === "agreed" ? String(client.limitAmount) : "");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const noteOk = note.trim().length > 0;
   const daysNum = days.trim() === "" ? NaN : Number(days);
-  const daysOk = Number.isInteger(daysNum) && daysNum >= 0;
+  const daysOk = days.trim() === "" || (Number.isInteger(daysNum) && daysNum >= 0);
+  const amtNum = amount.trim() === "" ? NaN : Number(amount.replace(/\s/g, ""));
+  const amtOk = amount.trim() === "" || (Number.isFinite(amtNum) && amtNum >= 0);
+  // Хоча б один ліміт мусить бути названий: порожня форма з приміткою нічого не
+  // означає, а роут на неї відповість 400 — краще не давати натиснути.
+  const anyGiven = days.trim() !== "" || amount.trim() !== "";
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true); setErr(null);
@@ -72,8 +85,10 @@ export function LimitEditor({ client, onDone, onClose }: {
       <div style={box}>
         <div style={{ fontSize: "var(--fs-13)", fontWeight: 700, marginBottom: 2 }}>Узгоджена відстрочка</div>
         <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 8 }}>
-          Зараз: <b>{limitLabel(client.limitDays)}</b>
+          Днів: <b>{limitLabel(client.limitDays)}</b>
           <div style={{ marginTop: 2 }}>{limitHint(client.limitDays)}</div>
+          <div style={{ marginTop: 6 }}>Сума: <b>{amountLimitLabel(client.limitAmount)}</b></div>
+          <div style={{ marginTop: 2 }}>{amountLimitHint(client.limitAmount)}</div>
         </div>
 
         <label style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
@@ -84,6 +99,23 @@ export function LimitEditor({ client, onDone, onClose }: {
           style={{ font: "inherit", fontSize: "var(--fs-13)", padding: "5px 8px", borderRadius: 8, width: "100%",
                    border: "1px solid var(--border)", background: "var(--input-bg)",
                    color: "var(--text)", marginBottom: 8 }} />
+
+        {/* 💰 ЛІМІТ ПО СУМІ. База — ЗАГАЛЬНИЙ БОРГ (виставлене рахунками), а НЕ
+            «Очікуємо»: в очікуваннях є готівка, а готівка кредитом не є, і це
+            два різні всесвіти з різницею в 11 разів (борг 8.6 млн ₴ проти
+            внеску тих самих угод в очікувані 754 тис ₴).
+            🔴 Ліміти НЕЗАЛЕЖНІ: клієнт може порушити один, обидва або жоден. */}
+        <label style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
+          Ліміт боргу, ₴ — більше якого не даємо заходити
+        </label>
+        <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric"
+          placeholder="напр. 50000"
+          style={{ font: "inherit", fontSize: "var(--fs-13)", padding: "5px 8px", borderRadius: 8, width: "100%",
+                   border: "1px solid var(--border)", background: "var(--input-bg)",
+                   color: "var(--text)", marginBottom: 4 }} />
+        <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 8, lineHeight: 1.4 }}>
+          Порожнє поле = зняти цей ліміт. Перевищення нічого не блокує — воно просто видно на екрані.
+        </div>
 
         <textarea value={note} onChange={(e) => setNote(e.target.value.slice(0, 300))}
           placeholder="Чому саме так?"
@@ -99,28 +131,44 @@ export function LimitEditor({ client, onDone, onClose }: {
         {err && <div style={{ fontSize: "var(--fs-xs)", color: "var(--danger)", marginBottom: 6 }}>{err}</div>}
 
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <button disabled={busy || !noteOk || !daysOk} style={btn("var(--accent-soft)")}
+          <button disabled={busy || !noteOk || !daysOk || !amtOk || !anyGiven} style={btn("var(--accent-soft)")}
             onClick={() => run(async () => {
-              await setReceivableLimit({ clientKey: client.clientKey, limitDays: daysNum, note: note.trim() });
+              // Порожнє поле = `null` = «зняти саме цей ліміт». Поле, якого немає
+              // в тілі, роут не чіпає — але тут обидва завжди є, бо форма їх
+              // показує заповненими поточним станом.
+              await setReceivableLimit({
+                clientKey: client.clientKey, note: note.trim(),
+                limitDays: days.trim() === "" ? null : daysNum,
+                limitAmount: amount.trim() === "" ? null : amtNum,
+              });
             })}>Зберегти</button>
 
-          {/* 🔴 ОКРЕМА КНОПКА, а не «введіть 0»: свідома відмова — це рішення, і воно
-              має бути одним кліком, а не числом, яке легко прийняти за порожнє поле. */}
+          {/* 🔴 ОКРЕМІ КНОПКИ, а не «введіть 0»: свідома відмова — це рішення, і воно
+              має бути одним кліком, а не числом, яке легко прийняти за порожнє поле.
+              По одній на кожен ліміт, бо вони НЕЗАЛЕЖНІ: відмовити в сумі й лишити
+              узгоджені дні — законний стан. */}
           <button disabled={busy || !noteOk} style={btn("transparent")}
-            title="Ліміт розглянули і не дали — перевізника не сплачуємо"
+            title="Відстрочку розглянули і не дали — перевізника не сплачуємо"
             onClick={() => run(async () => {
               await setReceivableLimit({ clientKey: client.clientKey, limitDays: 0, note: note.trim() });
-            })}>Не давати ліміт</button>
+            })}>Не давати днів</button>
+
+          <button disabled={busy || !noteOk} style={btn("transparent")}
+            title="Ліміт суми розглянули і не дали — будь-який борг вважається перевищенням"
+            onClick={() => run(async () => {
+              await setReceivableLimit({ clientKey: client.clientKey, limitAmount: 0, note: note.trim() });
+            })}>Не давати суми</button>
         </div>
 
-        {/* Дію видно, лише коли є що знімати — інакше ми пропонували б скасувати те,
-            чого немає (урок Е3: «зняти призначення» без призначення). */}
-        {state !== "never-set" && (
+        {/* Дію видно, лише коли є що знімати. Умова дивиться на ОБИДВА ліміти:
+            рядок у БД один на клієнта, тож «прибрати зовсім» знімає їх разом —
+            і мусить бути доступна, якщо встановлений хоч один. */}
+        {(state !== "never-set" || aState !== "never-set") && (
           <button disabled={busy} style={{ ...btn("transparent"), border: "none", marginTop: 6,
                                            color: "var(--text-muted)", fontSize: "var(--fs-sm)" }}
-            title="Повернути стан «ліміт не встановлювали»"
+            title="Повернути стан «ліміт не встановлювали» — обидва ліміти"
             onClick={() => run(async () => { await clearReceivableLimit(client.clientKey); })}>
-            Прибрати ліміт зовсім
+            Прибрати обидва ліміти
           </button>
         )}
 

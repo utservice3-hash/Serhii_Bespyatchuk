@@ -15,12 +15,14 @@ import { ReceivablesTiles } from "./ReceivablesTiles";
 import { ReceivablesFilters } from "./ReceivablesFilters";
 import { OwnerEditor } from "./OwnerEditor";
 import { LimitEditor } from "./LimitEditor";
+import { LimitRequestDialog } from "./LimitRequestDialog";
 import { MergeDialog } from "./MergeDialog";
 import {
   carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
   isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
   formatDateSafe, parseDateSafe,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters,
+  amountLimitHint, amountLimitLabel, amountLimitState, isOverAmount,
   marginHint, marginPctText,
   earnedCells, earnedCellHint, earnedCellText, earnedShownTotal,
   type Filters, type MergeSide,
@@ -121,6 +123,7 @@ export function ReceivablesSection({
   canSetOwner,
   canMerge,
   canSetLimit,
+  canRequestLimit,
   canWriteOff,
   canEditReceivables,
   patchReceivableNote,
@@ -137,6 +140,8 @@ export function ReceivablesSection({
   /** Право віддає СЕРВЕР (`isAdminScope`) — фронт свого правила не має. */
   canSetOwner: boolean;
   canSetLimit: boolean;
+  /** 🧾 Чи малювати кнопку запиту ліміту. Право віддає СЕРВЕР і ним же гейтить роут. */
+  canRequestLimit: boolean;
   /**
    * 🗑 Право віддає СЕРВЕР (`write_off_debt` = СЕО · опердир). Кнопки в решти
    * НЕМАЄ — це не «є, але дає 403»: екран своєї думки про доступ не має.
@@ -432,6 +437,7 @@ export function ReceivablesSection({
   // ✏️ Хто зараз редагується (ключ клієнта) і чи відкритий діалог склейки.
   const [ownerFor, setOwnerFor] = useState<string | null>(null);
   const [limitFor, setLimitFor] = useState<string | null>(null);
+  const [limitReqFor, setLimitReqFor] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mgrOptions, setMgrOptions] = useState<ManagerOption[]>([]);
   useEffect(() => {
@@ -685,8 +691,45 @@ export function ReceivablesSection({
                             ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
                           </td>
 
-                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle", whiteSpace: "nowrap" }}
-                              title={formatAmountFull(c.amount)}>{formatAmount(c.amount)}</td>
+                          {/* 💰 СУМА БОРГУ + СТАН ЛІМІТУ ПО СУМІ. Кнопка запиту стоїть
+                              САМЕ ТУТ (рішення власника 26.08.2026): ліміт задається
+                              поклієнтно, отже й запит поклієнтний. У плитці «Загальний
+                              борг» кнопки немає — там сума по всьому екрану. */}
+                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle",
+                                       whiteSpace: "nowrap", position: "relative" }}
+                              title={formatAmountFull(c.amount)}>
+                            {/* 🔴 СУМА Й КНОПКА — В ОДНОМУ РЯДКУ, СТАН — ПІД НИМИ.
+                                Спіймано скріншотом: кнопка, поставлена після
+                                блокового підпису стану, переносилась під нього й
+                                губилась у клітинці. Гейт цього не бачить — він
+                                читає джерело, а перенос вирішує браузер. */}
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                              {formatAmount(c.amount)}
+                              {canRequestLimit && (
+                                <button onClick={() => setLimitReqFor(limitReqFor === c.clientKey ? null : c.clientKey)}
+                                  title="Поставити задачу на перегляд ліміту"
+                                  aria-label={`Запит на перегляд ліміту: ${c.clientName}`}
+                                  style={{ ...pencilStyle, position: "static", margin: 0 }}>🧾</button>
+                              )}
+                            </span>
+                            {/* 🔴 ТРИ СТАНИ, А НЕ ДВА. Колонка нова, тож у момент викату
+                                вона порожня в УСІХ: пара «в межах / переліміт» збрехала б
+                                78 разів поспіль, бо `null` перетворився б на нуль.
+                                Ліміт суми й ліміт днів НЕЗАЛЕЖНІ — тут лише про суму. */}
+                            <Tip body={amountLimitHint(c.limitAmount)}
+                              style={{ display: "block", fontWeight: 400, fontSize: "var(--fs-xs)",
+                                       color: isOverAmount(c) ? "#dc2626"
+                                            : amountLimitState(c.limitAmount) === "agreed" ? "var(--text-muted)" : "var(--warn)" }}>
+                              {isOverAmount(c) ? "переліміт" : "у межах"} · {amountLimitLabel(c.limitAmount)}
+                            </Tip>
+                            {/* 🧾 Кнопку бачить лише той, хто може поставити задачу ІНШОМУ.
+                                Право віддає СЕРВЕР (`canRequestLimit`), і він же гейтить
+                                роут: схована кнопка правом не є. Сама кнопка — вище,
+                                поряд із сумою. */}
+                            {limitReqFor === c.clientKey && (
+                              <LimitRequestDialog clientKey={c.clientKey} onClose={() => setLimitReqFor(null)} />
+                            )}
+                          </td>
 
                           {/* 💰 ЗАРОБІТОК І МАРЖА — ОДНА КОЛОНКА. Сума й відсоток
                               читаються разом; двома стовпцями вони змушували

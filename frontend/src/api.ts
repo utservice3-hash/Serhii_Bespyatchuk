@@ -1331,6 +1331,8 @@ export interface ReceivableClient {
   clientName: string;
   amount: number;
   limitDays: number | null;
+  /** 💰 Ліміт по СУМІ — незалежний від денного (рішення власника 26.08.2026). */
+  limitAmount: number | null;
   overdueDays: number | null;
   comment: string | null;
   dueDate: string | null;
@@ -1365,10 +1367,50 @@ export async function setReceivableOwner(payload: {
  * («розглянули і не дали»), а не «порожньо»: щоб прибрати ліміт зовсім, є
  * `clearReceivableLimit`, і це ТРЕТІЙ стан.
  */
+/**
+ * 🔴 `undefined` І `null` ТУТ РІЗНІ, І ПЛУТАТИ ЇХ НЕ МОЖНА.
+ * Поле відсутнє = «не чіпай цей ліміт»; `null` = «зняти саме його». Частковий
+ * upsert, що трактує відсутнє як `null`, тихо зніс би сусідній ліміт — рівно та
+ * поломка, що вже була в `loyalty-override` (затирало `pinned_manager_id`).
+ */
 export async function setReceivableLimit(payload: {
-  clientKey: string; limitDays: number; note: string;
+  clientKey: string; note: string; limitDays?: number | null; limitAmount?: number | null;
 }): Promise<void> {
   await api.put("/dashboard/receivables/limit", payload);
+}
+
+/**
+ * 🧾 Запит на перегляд ліміту → ЗАГОТОВКА задачі, а не створена задача.
+ * Виконавця й дедлайн обирає той, хто ставить (рішення власника 26.08.2026).
+ * `existing` — уже відкритий запит на цього клієнта: сервер віддає ЙОГО, а не
+ * мовчазний успіх і не другу задачу (унікальність тримає частковий індекс у БД).
+ */
+export interface LimitRequestDraft {
+  taskType: string; clientKey: string; clientName: string; debt: number;
+  limitAmount: number | null; limitState: string; title: string; description: string;
+}
+export interface LimitRequestResp {
+  ok: boolean;
+  existing: { id: number; title: string; assigneeId: number | null; status: string } | null;
+  draft: LimitRequestDraft | null;
+  note?: string;
+}
+export async function requestCreditLimit(clientKey: string): Promise<LimitRequestResp> {
+  const { data } = await api.get<LimitRequestResp>("/dashboard/receivables/limit-request", { params: { clientKey } });
+  return data;
+}
+
+/**
+ * Створення задачі про ліміт. Окремий роут, а НЕ `POST /tasks`: контракт
+ * Задачника (`routes/tasks.ts`) правиться лише окремою задачею з окремим
+ * прийманням, а він не приймає `task_type`/`client_key`/`description`.
+ * Форма скопійована з наявного `POST /reactivation-task`, який робить те саме.
+ */
+export async function createLimitTask(payload: {
+  clientKey: string; assigneeId: number; deadline?: string | null; priority?: "low" | "medium" | "high";
+}): Promise<{ id: number }> {
+  const { data } = await api.post<{ id: number }>("/dashboard/receivables/limit-task", payload);
+  return data;
 }
 
 /** Прибрати ліміт зовсім → стан «не встановлювали». Дзеркальна дія до setReceivableLimit. */
@@ -1428,6 +1470,8 @@ export interface ReceivableArchive {
   totals: { n: number; amount: number; thisMonth: number; oldestAt: string | null; clients: number };
   stillInZone: { deals: number; amount: number };
   canWriteOff: boolean;
+  /** 🧾 Чи є сенс малювати кнопку запиту ліміту (тімлід і вище). Право гейтить роут. */
+  canRequestLimit: boolean;
 }
 
 export async function fetchReceivableArchive(): Promise<ReceivableArchive> {
@@ -1611,6 +1655,13 @@ export interface ReceivablesResponse {
    * грошей, а не операційна дія.
    */
   canWriteOff?: boolean;
+  /**
+   * 🧾 Чи є сенс малювати кнопку ЗАПИТУ на перегляд ліміту (рішення власника
+   * 26.08.2026: «Кнопка тільки в тімліда»). Це ПІДКАЗКА фронту, а не право:
+   * роут гейтить сам і ще й звужує тімліда до СВОЄЇ команди по конкретному
+   * клієнту. Схована кнопка правом не є.
+   */
+  canRequestLimit?: boolean;
 }
 
 export interface ReceivableManager {
