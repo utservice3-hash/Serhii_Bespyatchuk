@@ -1777,12 +1777,18 @@ dashboardRouter.get("/receivables", async (req, res) => {
 
   const clientKeys = rows.map((r) => r.clientKey).filter((k): k is string => k != null);
   const notesRes = clientKeys.length
-    ? await pool.query<{ client_key: string; comment: string | null; due_date: string | null }>(
-        `SELECT client_key, comment, to_char(due_date, 'YYYY-MM-DD') AS due_date
-           FROM receivable_notes WHERE client_key = ANY($1)`,
+    ? await pool.query<{ client_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }>(
+        // 🗓 `updated_at` їде НА ЕКРАН, бо саме він вирішує, чи домовленість ще
+        // актуальна: активним є запис ПІСЛЯ понеділка 00:00 за Києвом. Без нього
+        // фронт мусив би вгадувати, і торішній текст читався б як сьогоднішня
+        // обіцянка — рівно те, від чого власник і просив позбутись.
+        `SELECT n.client_key, n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date,
+                to_char(n.updated_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS updated_at,
+                (SELECT count(*)::int FROM receivable_note_history h WHERE h.client_key = n.client_key) AS hist
+           FROM receivable_notes n WHERE n.client_key = ANY($1)`,
         [clientKeys]
       )
-    : { rows: [] as { client_key: string; comment: string | null; due_date: string | null }[] };
+    : { rows: [] as { client_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }[] };
   const notes = new Map(notesRes.rows.map((n) => [n.client_key, n]));
   const syncRes = await pool.query<{ synced_at: string | null }>(
     `SELECT MAX(synced_at) AS synced_at FROM receivables`
@@ -1800,6 +1806,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
     clientKey: string | null; clientName: string | null; amount: number;
     limitDays: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
+    noteUpdatedAt: string | null; noteHistoryCount: number;
     facts: receivablesFacts.ClientFacts | null;
     margin: ReturnType<typeof marginCell> | null;
   };
@@ -1827,6 +1834,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
       clientKey: r.clientKey, clientName: r.clientName, amount: visibleAmount,
       limitDays: r.limitDays, overdueDays: r.overdueDays,
       comment: n?.comment ?? null, dueDate: n?.due_date ?? null,
+      noteUpdatedAt: n?.updated_at ?? null, noteHistoryCount: n?.hist ?? 0,
       // 🔴 ЧОМУ саме цей відповідальний — їде НА ЕКРАН, а не лишається в ядрі.
       // Без цього «звільнений мажоритар без команди» і «в рахунках узагалі немає
       // менеджера» виглядали б однаково порожньо, і людина не мала б як їх
@@ -2045,9 +2053,15 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   if (auth.role === "manager") { params.push(auth.managerId); conds.push(`ri.manager_id = $${params.length}`); }
   else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
 
-  const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null }>(
+  const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; invoice_manager: string | null }>(
     `SELECT ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
             ri.amount, ri.service_url, ri.note,
+            -- 👤 Менеджер САМОГО РАХУНКУ (колонка «Відповідальний» у розкритті).
+            -- Це НЕ той, хто веде клієнта: після override або склейки це різні
+            -- люди, і саме тому колонка стоїть під «Відповідальним» — щоб різницю
+            -- було ВИДНО, а не щоб її згладити. Сире імʼя з 1С — фолбек: рахунок
+            -- буває на людині, якої в наших менеджерах немає.
+            COALESCE(m.name, ri.manager_name_raw) AS invoice_manager,
             -- 🔗 Юрособа, з якої прийшов рахунок. Для злитого клієнта їх кілька,
             -- і людина мусить бачити, ЩО саме всередині одного рядка — інакше
             -- склейка виглядає як зникнення другої компанії.
@@ -2087,6 +2101,7 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         comment: x.inv_comment,
         entityName: x.entity_name,
         entityKey: x.entity_key,
+        managerName: x.invoice_manager,
         // Наша юрособа (ЮТС / Автомув / ФОП / невідомо) і ПРИЧИНА, коли невідомо.
         // Причина обовʼязкова: «невідомо» без «чому» — це порожнє місце, а воно
         // читається як «нічого немає», а не як «ми не знаємо».
@@ -2981,7 +2996,36 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
        updated_by = EXCLUDED.updated_by, updated_at = now()`,
     [clientKey, comment, dueDate, auth.userId]
   );
+  // 🗓 ІСТОРІЯ ДОПИСУЄТЬСЯ, А НЕ ЗАМІНЮЄТЬСЯ. Поле щотижня «порожніє» правилом
+  // (`isCurrentWeekNote`), і без цього рядка минулі домовленості справді б
+  // зникали — тобто «очищення» стало б тим, чого власник прямо не хоче.
+  // Порожній коментар у журнал не пишемо: «стер текст» не є домовленістю.
+  if (comment && comment.trim()) {
+    await pool.query(
+      `INSERT INTO receivable_note_history (client_key, comment, written_by) VALUES ($1, $2, $3)`,
+      [clientKey, comment.trim(), auth.userId]
+    );
+  }
   res.json({ ok: true });
+});
+
+/**
+ * 🗓 ІСТОРІЯ ДОМОВЛЕНОСТЕЙ ПО КЛІЄНТУ — по тижнях, з датами й авторами.
+ * Межу тримає `ROUTE_TAB` (вкладка `receivables`), як і в решти роутів екрана.
+ */
+dashboardRouter.get("/receivables/note-history", async (req, res) => {
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const r = await pool.query<{ comment: string; author: string | null; at: string }>(
+    `SELECT h.comment, u.email AS author,
+            to_char(h.written_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD"T"HH24:MI:SS') AS at
+       FROM receivable_note_history h
+       LEFT JOIN users u ON u.id = h.written_by
+      WHERE h.client_key = $1
+      ORDER BY h.written_at DESC LIMIT 100`,
+    [clientKey]
+  );
+  res.json({ entries: r.rows });
 });
 
 /**

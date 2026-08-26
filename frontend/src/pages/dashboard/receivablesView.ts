@@ -478,3 +478,108 @@ export function earnedCellHint(c: EarnedCell): string {
   if (c.kind === "written-off") return "рахунок списано як безнадійний — у «заробили» він не входить";
   return EARNED_UNKNOWN_LABEL[c.why];
 }
+
+// ───────────── 🗜 ЗГОРНУТІ КОЛОНКИ: ОДИН РЯДОК + РОЗКЛАД У ПІДКАЗЦІ ─────────────
+
+/**
+ * 🔴 БАГАТОРЯДКОВИЙ БЛОК У КЛІТИНЦІ РОЗДУВАВ ВИСОТУ ВСЬОГО РЯДКА.
+ *
+ * «ЮТС 27 / Автомув 3 / невідомо 11» трьома рядками робить рядок клієнта втричі
+ * вищим — а таких колонок дві, юрособа й перевізник. Заміряно в проході 2:
+ * саме чипи, а не другий рядок під контролом, тримали висоту в 66 рядках із 76.
+ *
+ * Тому в клітинці — НАЙБІЛЬША складова одним рядком, повний розклад у підказці.
+ * Це не приховування: підказка є біля кожного показника (правило власника), і
+ * саме там живе відповідь на «з чого це число».
+ */
+export interface Folded {
+  /** Що показати в клітинці: найбільша складова. */
+  head: string;
+  /** Скільки рахунків у ній. */
+  n: number;
+  /** Повний розклад для підказки — усі складові через «·». */
+  full: string;
+  /** Скільки складових усього: 1 → підказка не додає нічого нового. */
+  parts: number;
+}
+
+const foldTally = <K extends string>(
+  m: Partial<Record<K, ReceivableTally>>, label: (k: K) => string, order: readonly K[],
+): Folded | null => {
+  const rows = order.map((k) => ({ k, ...t(m[k]) })).filter((x) => x.n > 0)
+    .sort((a, b) => b.n - a.n);
+  if (!rows.length) return null;
+  return {
+    head: label(rows[0].k), n: rows[0].n,
+    full: rows.map((r) => `${label(r.k)} ${r.n}`).join(" · "),
+    parts: rows.length,
+  };
+};
+
+const ENTITY_ORDER: readonly ReceivableEntity[] = ["uts", "avtomuv", "fop", "unknown"];
+const CARRIER_ORDER: readonly ReceivableCarrierPaid[] = ["paid", "unpaid", "na"];
+
+export const foldEntity = (f: ReceivableClientFacts | null): Folded | null =>
+  f ? foldTally(f.entity, (k) => ENTITY_LABEL[k], ENTITY_ORDER) : null;
+
+export const foldCarrier = (f: ReceivableClientFacts | null): Folded | null =>
+  f ? foldTally(f.carrier, (k) => CARRIER_LABEL[k], CARRIER_ORDER) : null;
+
+// ───────────── 🗓 КОМЕНТАР ТИЖНЯ: ЛІНИВА МЕЖА, БЕЗ ЖОДНОЇ ДЖОБИ ─────────────
+
+/**
+ * 🔴 НІЧОГО НЕ ЗАТИРАЄМО — ЗМІНЮЄТЬСЯ ЛИШЕ ТЕ, ЩО ВВАЖАЄТЬСЯ АКТИВНИМ.
+ *
+ * Джоба, що щопонеділка чистить поле, — це незворотна втрата даних заради
+ * косметики, і вона ще й не спрацює, якщо в понеділок сервер лежав. Правило
+ * натомість чисте: активним є запис, зроблений ПІСЛЯ початку поточного тижня.
+ * Тоді нічого не гине, крона немає, і межа працює навіть після простою.
+ *
+ * 🔴 ПОНЕДІЛОК 00:00 ЗА КИЄВОМ, а не за UTC і не за часом браузера. Той самий
+ * якір, що в усіх періодах продукту; за UTC у ніч на понеділок межа зсунулась би
+ * на 2-3 години, і запис, зроблений о 01:00 у понеділок, читався б як минулого
+ * тижня.
+ */
+export const KYIV_TZ = "Europe/Kyiv";
+
+/** Київська дата (YYYY-MM-DD) моменту — без залежності від часу браузера. */
+export function kyivDate(at: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: KYIV_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(at);
+}
+
+/** Київський день тижня: 1 = понеділок … 7 = неділя. */
+export function kyivWeekday(at: Date): number {
+  const s = new Intl.DateTimeFormat("en-US", { timeZone: KYIV_TZ, weekday: "short" }).format(at);
+  return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(s) + 1;
+}
+
+/** Київський понеділок поточного тижня, як YYYY-MM-DD. */
+export function weekStartKyiv(now: Date): string {
+  const back = kyivWeekday(now) - 1;
+  const d = new Date(now.getTime() - back * 86400000);
+  return kyivDate(d);
+}
+
+/**
+ * Чи є цей запис домовленістю ПОТОЧНОГО тижня.
+ *
+ * `null`/порожньо — ні; торішній текст — теж ні, і саме в цьому сенс: порожнє
+ * поле чесно каже «на цей тиждень домовленості ще немає», а старий текст
+ * виглядав би як актуальна обіцянка.
+ */
+export function isCurrentWeekNote(updatedAt: string | null, now: Date): boolean {
+  if (!updatedAt) return false;
+  return kyivDate(new Date(updatedAt)) >= weekStartKyiv(now);
+}
+
+/** Що показувати в полі: текст поточного тижня або порожнеча. */
+export function activeNote(
+  comment: string | null, updatedAt: string | null, now: Date,
+): string {
+  return isCurrentWeekNote(updatedAt, now) ? (comment ?? "") : "";
+}
+
+/** Підпис порожнього стану — він мусить бути ВІДПОВІДДЮ, а не порожнім місцем. */
+export const NOTE_EMPTY_PLACEHOLDER = "на цей тиждень ще не записано…";

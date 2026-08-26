@@ -1324,6 +1324,14 @@ export interface ReceivableClient {
   overdueDays: number | null;
   comment: string | null;
   dueDate: string | null;
+  /**
+   * 🗓 Коли домовленість записали. Саме це поле вирішує, чи вона ще актуальна:
+   * активним є запис ПІСЛЯ понеділка 00:00 за Києвом (`isCurrentWeekNote`).
+   * Нічого не затирається — змінюється лише те, що вважається активним.
+   */
+  noteUpdatedAt: string | null;
+  /** Скільки записів у журналі домовленостей. 0 → кнопки «історія» немає. */
+  noteHistoryCount: number;
   ownerSource: ReceivableOwnerSource;
   /** Мажоритар до перевірки активності — щоб підпис назвав, кого замінили. */
   majorityName: string | null;
@@ -1379,6 +1387,19 @@ export async function mergeReceivableClients(payload: {
   await api.post("/dashboard/receivables/merge", payload);
 }
 
+/** Один запис журналу домовленостей — із датою й автором. */
+export interface ReceivableNoteEntry { comment: string; author: string | null; at: string }
+
+/**
+ * 🗓 Історія домовленостей по клієнту. Поле на екрані показує лише поточний
+ * тиждень; усе старіше живе тут і НЕ гине — тому «очищення» безпечне.
+ */
+export async function fetchReceivableNoteHistory(clientKey: string): Promise<ReceivableNoteEntry[]> {
+  const { data } = await api.get<{ entries: ReceivableNoteEntry[] }>(
+    "/dashboard/receivables/note-history", { params: { clientKey } });
+  return data.entries;
+}
+
 export async function saveReceivableNote(payload: {
   clientKey: string;
   comment?: string | null;
@@ -1398,6 +1419,11 @@ export interface ReceivableInvoice {
   /** Юрособа КЛІЄНТА, з якої прийшов рахунок. Для обʼєднаного клієнта їх кілька. */
   entityName: string | null;
   entityKey: string | null;
+  /**
+   * 👤 Менеджер САМОГО РАХУНКУ — не той, хто веде клієнта. Після override або
+   * склейки це різні люди, і колонка існує саме щоб різницю було видно.
+   */
+  managerName: string | null;
   /**
    * 🏢 НАША юрособа по цьому рахунку (ЮТС / Автомув / ФОП) — те саме, що в
    * плитці «За нашою юрособою». Не плутати з `entityName`: та про КЛІЄНТА,

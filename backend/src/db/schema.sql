@@ -381,6 +381,27 @@ CREATE TABLE IF NOT EXISTS receivable_invoice_notes (
 -- Анти-дубль авто-задачі і для КЛІЄНТСЬКОГО дедлайну (receivable_notes.due_date).
 ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS task_created_at TIMESTAMPTZ;
 
+-- 🗓 ІСТОРІЯ ДОМОВЛЕНОСТЕЙ — ДОПИСУВАНА, НІКОЛИ НЕ ЗАТИРАЄТЬСЯ.
+--
+-- 🔴 НАВІЩО ОКРЕМА ТАБЛИЦЯ. `receivable_notes` має `PRIMARY KEY (client_key)`,
+-- тобто рівно ОДИН рядок на клієнта: кожне збереження затирає попереднє, і
+-- історії там немає НЕ ТОМУ, що її стерли, а тому, що її ніколи й не було.
+--
+-- 🔴 І САМЕ ЦЕ РОБИТЬ «ТИЖНЕВЕ ОЧИЩЕННЯ» БЕЗПЕЧНИМ. Поле порожніє не джобою, а
+-- правилом «активним є запис після понеділка 00:00 Київ» (`isCurrentWeekNote`).
+-- Джоба, що затирає поле, — незворотна втрата даних заради косметики, і вона ще
+-- й не спрацює, якщо в понеділок сервер лежав. Тут не гине нічого: старий запис
+-- просто перестає вважатись актуальним, а лежить тут із датою й автором.
+CREATE TABLE IF NOT EXISTS receivable_note_history (
+  id         SERIAL PRIMARY KEY,
+  client_key TEXT NOT NULL,
+  comment    TEXT NOT NULL,
+  written_by INTEGER REFERENCES users(id),
+  written_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_receivable_note_history_client
+  ON receivable_note_history(client_key, written_at DESC);
+
 -- Реактивація: сплячі/втрачені клієнти, яких тімлід передав менеджеру в роботу.
 -- Обовʼязкові робочі поля: план/факт, 1-й контакт → результат, 2-й контакт → результат.
 CREATE TABLE IF NOT EXISTS reactivation_clients (

@@ -6,17 +6,20 @@ import {
   type ReceivableInvoice, type ReceivableManager, type ReceivableClient, type ReceivableTotals, type Team,
 } from "../../../api";
 import { WriteoffDialog } from "./WriteoffDialog";
+import { WriteoffButton } from "./WriteoffButton";
+import { NoteHistoryDialog } from "./NoteHistoryDialog";
+import { Hint, Tip, TipLayer } from "../../../components/Hint";
 import { ReceivablesTiles } from "./ReceivablesTiles";
 import { ReceivablesFilters } from "./ReceivablesFilters";
 import { OwnerEditor } from "./OwnerEditor";
 import { LimitEditor } from "./LimitEditor";
 import { MergeDialog } from "./MergeDialog";
 import {
-  CARRIER_LABEL, CARRIER_REASON_LABEL, carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
-  entityBreakdown, isAncientDebt, isOverdue,
-  limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters, t,
-  marginHint, marginPctText, writtenOffLabel,
-  earnedCells, earnedCellHint, earnedCellText, earnedShownTotal, EARNED_COL_LABEL,
+  carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
+  isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
+  limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters,
+  marginHint, marginPctText,
+  earnedCells, earnedCellHint, earnedCellText, earnedShownTotal,
   type Filters, type MergeSide,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
@@ -91,35 +94,6 @@ function OwnerCell({ c }: { c: ReceivableClient & { managerName: string } }) {
   );
 }
 
-/**
- * 🚚 СТАН ПЕРЕВІЗНИКА В РЯДКУ КЛІЄНТА.
- *
- * 🔴 «н/д» ТУТ — ЦЕ ВІДПОВІДЬ, А НЕ ПОРОЖНЄ МІСЦЕ, і воно НІКОЛИ не зливається
- * з «не оплачено». Заміряно на живому проді 24.08.2026: рахунки, виставлені
- * напряму в 1С, — 1 589 000 ₴; назви їх «не оплачено», і фінансист побачив би
- * 28% фальшивої неоплати зверху до справжніх 5 663 227 ₴.
- *
- * Причина «н/д» підписана завжди: виставлено через 1С · лінк не веде на угоду ·
- * воронка поза мапою етапів. Три різні діагнози — три різні дії різних людей.
- */
-function CarrierCell({ facts }: { facts: ReceivableClient["facts"] }) {
-  if (!facts) return <span style={{ color: "var(--text-muted)" }}>—</span>;
-  const paid = t(facts.carrier.paid), unpaid = t(facts.carrier.unpaid), na = t(facts.carrier.na);
-  const parts: React.ReactNode[] = [];
-  if (paid.n) parts.push(<span key="p" style={{ color: "#16a34a" }} title={`${CARRIER_LABEL.paid} · ${formatAmount(paid.amount)}`}>✓ {paid.n}</span>);
-  if (unpaid.n) parts.push(<span key="u" style={{ color: "#f59e0b" }} title={`${CARRIER_LABEL.unpaid} · ${formatAmount(unpaid.amount)}`}>◷ {unpaid.n}</span>);
-  if (na.n) parts.push(<span key="n" style={{ color: "var(--text-muted)" }} title={`н/д · ${formatAmount(na.amount)}`}>н/д {na.n}</span>);
-  return (
-    <span>
-      <span style={{ display: "flex", gap: 8, whiteSpace: "nowrap" }}>{parts.length ? parts : "—"}</span>
-      {facts.carrierReasons.length > 0 && (
-        <span style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
-          {facts.carrierReasons.map((r) => CARRIER_REASON_LABEL[r]).join(" · ")}
-        </span>
-      )}
-    </span>
-  );
-}
 
 const inputStyle: React.CSSProperties = {
   font: "inherit", fontSize: "var(--fs-sm)", padding: "3px 6px", borderRadius: 6,
@@ -183,6 +157,15 @@ export function ReceivablesSection({
   // 🗑 Що зараз списуємо. `invoiceNo: null` — клієнта цілком. Один стан на обидва
   // рівні: два незалежні стани розійшлися б, і поповер зміг би відкритись двічі.
   const [writeoffFor, setWriteoffFor] = useState<{ clientKey: string; invoiceNo: string | null } | null>(null);
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
+  // 🗓 Один якір часу на весь рендер: інакше рядки, порахувані на різних
+  // мілісекундах, могли б розійтись на самій межі понеділка.
+  const now = new Date();
+  /** Олівець правки — один стиль на всі клітинки, щоб вони не роз'їхались. */
+  const pencilStyle: React.CSSProperties = {
+    border: "none", background: "none", cursor: "pointer", padding: 0, marginLeft: 4,
+    fontSize: "var(--fs-sm)", color: "var(--text-muted)", textDecoration: "underline dotted",
+  };
   const [invCache, setInvCache] = useState<Record<string, ReceivableInvoice[] | "loading">>({});
   const loadInvoices = (clientKey: string) => {
     fetchReceivableInvoices(clientKey)
@@ -216,284 +199,186 @@ export function ReceivablesSection({
   };
 
   const today = new Date().toISOString().slice(0, 10);
-  const renderInvoices = (clientKey: string, clientName: string, colSpan: number) => {
+  /**
+   * 🧾 РАХУНКИ — РЯДКИ ТІЄЇ САМОЇ ТАБЛИЦІ, А НЕ ВКЛАДЕНА (рішення власника 26.08.2026).
+   *
+   * 🔴 ЧОМУ ЦЕ НЕ КОСМЕТИКА. Вкладена таблиця має ВЛАСНІ колонки, і збігалися
+   * вони з батьківськими лише «на око» — рівно тому на проді заробіток стояв
+   * ПЕРЕД сумою, і числа читались навхрест; власник це й помітив. Коли рахунок —
+   * рядок тієї самої таблиці, колонка стоїть під своєю колонкою ЗА ПОБУДОВОЮ,
+   * а не за уважністю того, хто верстав.
+   *
+   * Відповідність згори донизу: сума боргу → сума рахунку · заробили → заробили
+   * на угоді · перевізник → стан і сума по цьому рахунку · юрособа → юрособа
+   * рахунку · днів → вік цього рахунку · ліміт → дедлайн оплати · домовленість →
+   * коментар до рахунка · відповідальний → хто створив рахунок.
+   */
+  const renderInvoices = (clientKey: string, clientName: string, cols: number) => {
     if (openKey !== clientKey) return null;
     const inv = invCache[clientKey];
-    // Юрособи всередині клієнта. Кілька — означає, що клієнта ОБʼЄДНАЛИ, і це
-    // треба сказати вголос: інакше на екрані один рядок там, де компанії дві.
-    const entities = Array.isArray(inv)
-      ? [...new Set(inv.map((x) => x.entityName).filter((n): n is string => !!n))]
-      : [];
-    const merged = entities.length > 1;
+    const cell: React.CSSProperties = { background: "var(--surface-2, rgba(127,127,127,0.05))", fontSize: "var(--fs-sm)", verticalAlign: "middle" };
+    const wide = (text: string) => (
+      <tr><td colSpan={cols} style={{ ...cell, color: "var(--text-muted)", paddingLeft: 28 }}>{text}</td></tr>
+    );
+    if (inv === "loading" || inv === undefined) return wide("Завантаження рахунків…");
+    if (inv.length === 0) return wide("Деталізації рахунків немає.");
+
     // 💰 Клітинки колонки «Заробили на угоді» — ОДИН прохід у ПОРЯДКУ ВІДОБРАЖЕННЯ.
     // Порядок значущий: «перший рахунок угоди» на екрані й у розрахунку мусить
     // бути тим самим рядком, інакше число зʼїде на сусідній.
-    const eCells = Array.isArray(inv) ? earnedCells(inv) : [];
+    const eCells = earnedCells(inv);
     const eTotal = earnedShownTotal(eCells);
+    const debt = inv.reduce((a, x) => a + (x.writtenOff ? 0 : x.amount), 0);
+    const ages = inv.map((x) => x.invoiceDate).filter((d): d is string => !!d);
+    const oldest = ages.length
+      ? Math.floor((Date.now() - new Date(ages.reduce((m, d) => (d < m ? d : m), ages[0])).getTime()) / 86400000)
+      : null;
+    const entities = [...new Set(inv.map((x) => x.entityName).filter((n): n is string => !!n))];
+
     return (
-      <tr>
-        <td colSpan={colSpan} style={{ background: "var(--bg-subtle, rgba(127,127,127,0.05))", padding: "10px 12px 14px 28px" }}>
-          {inv === "loading" || inv === undefined ? (
-            <span className="loading-text">Завантаження рахунків…</span>
-          ) : inv.length === 0 ? (
-            <span className="loading-text">Деталізації рахунків немає.</span>
-          ) : (
-            <>
-              {/* 🧾 ШАПКА РОЗКРИТТЯ (Е4b): скільки рахунків, на скільки грошей і
-                  який найстаріший. Без неї людина бачила перші пʼять рядків і не
-                  знала, скільки їх усього — а їх буває сорок. */}
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, margin: "0 0 8px" }}>
-                <b style={{ fontSize: "var(--fs-13)" }}>Рахунки клієнта</b>
-                <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
-                  {inv.length} шт · {formatAmount(inv.reduce((a, x) => a + x.amount, 0))}
-                  {(() => {
-                    const ages = inv.map((x) => x.invoiceDate).filter((d): d is string => !!d);
-                    if (!ages.length) return null;
-                    const oldest = ages.reduce((m, d) => (d < m ? d : m), ages[0]);
-                    const days = Math.floor((Date.now() - new Date(oldest).getTime()) / 86400000);
-                    return ` · найстаріший ${days} дн.`;
-                  })()}
+      <>
+        {/* Шапка групи. Підсумок «заробили» складено з НАМАЛЬОВАНИХ клітинок
+            (`earnedShownTotal`), тож розійтись із колонкою він не може. */}
+        <tr>
+          <td colSpan={cols} style={{ ...cell, paddingTop: 12, borderBottom: "none", color: "var(--text-muted)" }}>
+            <b style={{ color: "var(--text)", fontSize: "var(--fs-13)" }}>Рахунки клієнта</b>
+            <span style={{ marginLeft: 10 }}>
+              {inv.length} шт · {formatAmount(debt)}
+              {oldest != null && ` · найстаріший ${oldest} дн.`}
+            </span>
+            <Hint title="Ті самі колонки, дрібнішим зерном"
+              body="Кожна колонка стоїть під тією самою колонкою рядка клієнта: сума під сумою, заробіток під заробітком. Дедлайн оплати по рахунку створює менеджеру задачу, якщо мине без оплати — на відміну від домовленості з клієнтом загалом." />
+            {entities.length > 1 && (
+              /* 🔗 Склейка інакше читається як зникнення другої компанії:
+                 на екрані один рядок, а юросіб дві. */
+              <span style={{ display: "block", fontSize: "var(--fs-xs)", marginTop: 2 }}>
+                🔗 Обʼєднаний клієнт — усередині {entities.length} юрособи: <b style={{ color: "var(--text)" }}>{entities.join(" · ")}</b>
+              </span>
+            )}
+          </td>
+        </tr>
+
+        {inv.map((x, i) => {
+          const no = x.invoiceNo ?? "";
+          const cc = carrierCell(x.carrierPaid, x.carrierReason, x.carrierPayAmount);
+          const ec = eCells[i] ?? { kind: "unknown" as const, why: "one_c" as const };
+          const eTxt = earnedCellText(ec);
+          const overdue = x.dueDate != null && x.dueDate < today;
+          const age = x.invoiceDate ? Math.floor((Date.now() - new Date(x.invoiceDate).getTime()) / 86400000) : null;
+          return (
+            <tr key={`${clientKey}-inv-${i}`}>
+              <td style={cell} />
+              {/* Клієнт → рахунок */}
+              <td style={{ ...cell, paddingLeft: 28 }}>
+                {/* 🔗 ЛІНК НА УГОДУ — ЛИШЕ ТАМ, ДЕ УГОДА Є (#198b). Мертвий
+                    значок у сорока рядках поспіль обіцяє перехід, якого не буде.
+                    `serviceUrl` є і в 1С-рахунків, тож умова — `dealFound`, а не
+                    наявність URL.
+                    🔴 І ДВА «НЕМА» — РІЗНІ РЕЧІ, підписані окремо: «угоди немає»
+                    (рахунок виставлено повз CRM, так і задумано) проти «лінк
+                    битий» (угода МАЛА Б бути — одруківка в 1С або видалили в
+                    Kommo). Звести їх в одне означало б послати двох різних
+                    людей робити дві різні дії за однією порожньою клітинкою. */}
+                <span style={{ fontWeight: 600, display: "block" }}>
+                  {no || "—"}
+                  {x.serviceUrl && x.dealFound && (
+                    <a href={x.serviceUrl} target="_blank" rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      title={`Відкрити угоду ${x.dealId} в CRM`}
+                      style={{ marginLeft: 6, fontSize: "var(--fs-xs)", textDecoration: "none" }}>🔗</a>
+                  )}
+                  {x.dealId == null && (
+                    <Tip title="Угоди немає" style={{ marginLeft: 6, fontWeight: 400, fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}
+                      body="Рахунок виставлено напряму в 1С, повз CRM — угоди не існує за задумом, це не втрачений лінк.">угоди немає</Tip>
+                  )}
+                  {x.dealId != null && !x.dealFound && (
+                    <Tip title="Лінк битий" style={{ marginLeft: 6, fontWeight: 400, fontSize: "var(--fs-xs)", color: "var(--warn)" }}
+                      body="№ угоди в рахунку є, а самої угоди в базі немає: одруківка в 1С або угоду видалили в Kommo. Це ІНШИЙ діагноз, ніж «угоди немає».">лінк битий</Tip>
+                  )}
                 </span>
-                {/* 🔴 ПІДСУМОК СКЛАДЕНО З ТОГО, ЩО НАМАЛЬОВАНО В КОЛОНЦІ
-                    (`earnedShownTotal` рахує лише клітинки-значення), тож
-                    розійтись із нею він не може в принципі. І він МУСИТЬ
-                    дорівнювати «Заробили» в рядку клієнта — це те число, з яким
-                    він зобовʼязаний зійтись, а не те, яке ми щойно додали. */}
-                <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}
-                      title="Σ колонки «Заробили на угоді». Дорівнює числу «Заробили» в рядку клієнта: кілька рахунків однієї угоди рахуються РАЗ">
-                  · заробили <b>{formatAmount(eTotal)}</b>
+                <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>
+                  {x.invoiceDate ? new Date(x.invoiceDate).toLocaleDateString("uk-UA") : "дати немає"}
                 </span>
-              </div>
-              <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: "0 0 6px" }}>
-                📅 Постав <b>дедлайн оплати по рахунку</b> — якщо мине, а оплата не надійде, менеджеру автоматично створиться задача «отримати оплату».
-                {" "}Це <i>інший</i> рівень, ніж «обіцяна дата» у рядку клієнта: там домовленість <b>з клієнтом</b> загалом, тут — строк по <b>конкретному рахунку</b>.
-              </p>
-              {merged && (
-                /* 🔗 ОБʼЄДНАНИЙ КЛІЄНТ. Без цього рядка склейка читається як
-                   зникнення другої компанії: на екрані один рядок, а юросіб дві.
-                   Колонка «Юрособа» показується ЛИШЕ тут — у звичайного клієнта
-                   вона повторювала б його ж назву в кожному рядку. */
-                <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: "0 0 8px" }}>
-                  🔗 Обʼєднаний клієнт — усередині {entities.length} юрособи:{" "}
-                  <b style={{ color: "var(--text)" }}>{entities.join(" · ")}</b>
-                </p>
-              )}
-              <div className="recv-detail">
-              <table className="data-table compact" style={{ fontSize: "var(--fs-sm)", minWidth: 680 }}>
-                <thead>
-                  <tr>
-                    {merged && <th style={{ textAlign: "left" }} title="Юрособа КЛІЄНТА — видно лише в обʼєднаного">Клієнт</th>}
-                    <th style={{ textAlign: "left" }}>Рахунок №</th>
-                    <th>Дата</th>
-                    {/* 🏢 НАША юрособа по КОЖНОМУ рахунку. Плитка обіцяє
-                        «ЮТС 26 · Автомув 3 · невідомо 11», а всередині цього не
-                        було видно — підсумок є, складу немає. */}
-                    <th style={{ textAlign: "left" }} title="Наша юрособа, від якої виставлено рахунок">Наша юрособа</th>
-                    {/* 🚚 «Перевізник» — стан по КОЖНОМУ рахунку, з тієї самої
-                        плитки. Підпис навмисно не «оплачено?», бо колонка має
-                        ТРИ стани, і третій — «не знаємо», а не «ні». */}
-                    <th style={{ textAlign: "left" }} title="Чи оплачений перевізник за цим рахунком">Перевізник</th>
-                    <th style={{ textAlign: "right", width: 96, whiteSpace: "nowrap" }}>Сума</th>
-                    {/* 💰 ГРОШОВІ КОЛОНКИ СТОЯТЬ ПОРУЧ: борг рахунку і заробіток
-                        його угоди. Величина — ТА САМА, що «Заробили» в рядку
-                        клієнта; підпис це називає, а не натякає. */}
-                    <th style={{ textAlign: "right", width: 116, whiteSpace: "nowrap" }}
-                        title="Наш заробіток по цій угоді — поле «Бюджет» з картки угоди в CRM. Це не борг і не виручка. Кілька рахунків однієї угоди — число лише на першому, інакше Σ колонки подвоїлась би">
-                      {EARNED_COL_LABEL}
-                    </th>
-                    <th>📅 Дедлайн оплати</th>
-                    <th style={{ textAlign: "left" }}>Коментар до рахунка</th>
-                    <th>Угода</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inv.map((x, i) => {
-                    const overdue = x.dueDate != null && x.dueDate < today;
-                    return (
-                      <tr key={i}>
-                        {merged && (
-                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "var(--fs-sm)" }}>
-                            {x.entityName ?? "—"}
-                          </td>
-                        )}
-                        <td style={{ textAlign: "left", fontWeight: 600 }}>{x.invoiceNo ?? "—"}</td>
-                        <td>{x.invoiceDate ? new Date(x.invoiceDate).toLocaleDateString("uk-UA") : "—"}</td>
-                        <td style={{ textAlign: "left", fontSize: "var(--fs-sm)" }}>
-                          {x.ourEntity && x.ourEntity !== "unknown" ? (
-                            <span style={{ color: "var(--text)" }}>{ENTITY_LABEL[x.ourEntity]}</span>
-                          ) : (
-                            /* 🔴 «НЕВІДОМО» З ПРИЧИНОЮ. Порожнє місце читається як
-                               «нічого немає», а тут це три різні речі з трьома
-                               різними діями: 1С-рахунок, битий лінк, не вказана
-                               форма оплати. */
-                            <span style={{ color: "var(--text-muted)" }}>
-                              невідомо
-                              {x.ourEntityReason && (
-                                <span style={{ display: "block", fontSize: "var(--fs-xs)" }}>
-                                  {ENTITY_REASON_LABEL[x.ourEntityReason]}
-                                </span>
-                              )}
-                            </span>
-                          )}
-                        </td>
-                        {/* 🔴 ТРИ СТАНИ, І ТРЕТІЙ НЕ ЗЛИВАЄТЬСЯ З ДРУГИМ.
-                            «Угоди немає» ≠ «перевізник не оплачений»: у першому
-                            випадку ми НЕ ЗНАЄМО. Заміряно 25.08.2026 — злиття
-                            додало б 1 604 500 ₴ вигаданої неоплати. Тому «н/д»
-                            малюється сірим і з причиною під ним. */}
-                        <td style={{ textAlign: "left", fontSize: "var(--fs-sm)" }}>
-                          {(() => {
-                            const cc = carrierCell(x.carrierPaid, x.carrierReason, x.carrierPayAmount);
-                            const color = cc.tone === "paid" ? "#16a34a"
-                              : cc.tone === "unpaid" ? "var(--text)" : "var(--text-muted)";
-                            return (
-                              <span style={{ color }}
-                                title={cc.amountText && x.carrierPayType
-                                  ? `виплата перевізнику з CRM · тип «${x.carrierPayType}»`
-                                  : undefined}>
-                                {cc.text}
-                                {/* 🚚 Сума ОДНИМ рядком через «·», а не другим:
-                                    другий рядок тут коштує висоти всієї таблиці
-                                    (заміряно — саме так її з'їдає «✏️ змінити»). */}
-                                {cc.amountText && (
-                                  <span style={{ color: "var(--text-muted)" }}> · {cc.amountText}</span>
-                                )}
-                                {cc.why && <span style={{ display: "block", fontSize: "var(--fs-xs)" }}>{cc.why}</span>}
-                              </span>
-                            );
-                          })()}
-                        </td>
-                        {/* 🗑 СПИСАНИЙ РАХУНОК ЛИШАЄТЬСЯ ВИДИМИМ — просто не входить
-                            у суму. Сховати його означало б, що зменшення плитки
-                            нічим не пояснюється; закреслення каже те саме, що
-                            підпис у рядку клієнта, тільки поіменно. */}
-                        <td style={{ textAlign: "right", fontWeight: 600, width: 96, whiteSpace: "nowrap", position: "relative",
-                                     ...(x.writtenOff ? { textDecoration: "line-through", color: "var(--text-muted)" } : {}) }}
-                          title={x.writtenOff ? "Списано як безнадійний — у суму боргу не входить" : formatAmountFull(x.amount)}>
-                          {formatAmount(x.amount)}
-                          {canWriteOff && (x.invoiceNo ?? "") !== "" && (
-                            <button onClick={() => setWriteoffFor(
-                              writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === x.invoiceNo
-                                ? null : { clientKey, invoiceNo: x.invoiceNo })}
-                              title={x.writtenOff ? "Скасувати списання цього рахунку" : "Списати цей рахунок як безнадійний"}
-                              aria-label="Списати цей рахунок як безнадійний"
-                              style={{ border: "none", background: "none", cursor: "pointer", padding: 0,
-                                       marginLeft: 4, fontSize: "var(--fs-sm)", color: "var(--text-muted)",
-                                       textDecoration: "none" }}>
-                              🗑
-                            </button>
-                          )}
-                          {writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === x.invoiceNo && (
-                            <WriteoffDialog clientKey={clientKey} clientName={clientName}
-                              invoiceNo={x.invoiceNo} amount={x.amount}
-                              alreadyWritten={{ n: x.writtenOff ? 1 : 0, amount: x.writtenOff ? x.amount : 0 }}
-                              onClose={() => setWriteoffFor(null)}
-                              onDone={() => { setWriteoffFor(null); loadInvoices(clientKey); onRefresh?.(); }} />
-                          )}
-                        </td>
-                        {/* 💰 ЧИСЛО НЕСЕ ЛИШЕ ПЕРШИЙ РАХУНОК УГОДИ. На решті —
-                            «та сама угода» приглушено: інакше Σ колонки
-                            перевищила б «Заробили» рядка клієнта рівно на
-                            кількість дублів, і ми завели б друге джерело одного
-                            числа через добу після того, як полагодили попереднє.
-                            «—» завжди з причиною: порожнє місце читається як
-                            «нічого немає», а не як «ми не знаємо». */}
-                        {(() => {
-                          const cell = eCells[i] ?? { kind: "unknown" as const, why: "one_c" as const };
-                          const txt = earnedCellText(cell);
-                          return (
-                            <td style={{ textAlign: "right", width: 116, whiteSpace: "nowrap",
-                                         fontWeight: cell.kind === "value" ? 600 : 400,
-                                         color: cell.kind === "value" ? undefined : "var(--text-muted)",
-                                         fontSize: cell.kind === "value" ? undefined : "var(--fs-xs)" }}
-                                title={earnedCellHint(cell)}>
-                              {txt ?? formatAmount(cell.kind === "value" ? cell.earned : 0)}
-                            </td>
-                          );
-                        })()}
-                        <td>
-                          <input
-                            type="date"
-                            value={x.dueDate ?? ""}
-                            onChange={(e) => patchInvoice(clientKey, x.invoiceNo ?? "", { dueDate: e.target.value || null })}
-                            style={{ ...inputStyle, ...(overdue ? { borderColor: "#dc2626", color: "#dc2626", fontWeight: 700 } : {}) }}
-                            title={overdue ? "Дедлайн минув — менеджеру створено задачу отримати оплату" : "Дедлайн оплати рахунку"}
-                          />
-                          {overdue && <span style={{ color: "#dc2626", fontSize: "var(--fs-xs)", display: "block" }}>прострочено</span>}
-                        </td>
-                        <td style={{ textAlign: "left", verticalAlign: "top", minWidth: 200 }}>
-                          <CommentField
-                            value={x.comment}
-                            editable={canEditReceivables}
-                            onSave={(next) => patchInvoice(clientKey, x.invoiceNo ?? "", { comment: next || null })}
-                          />
-                        </td>
-                        {/* 🔗 ЛІНК ЛИШЕ ТАМ, ДЕ УГОДА Є. Мертва іконка в сорока
-                            рядках поспіль обіцяє перехід, якого не буде — і це
-                            гірше за чесний підпис. 1С-рахунок угоди не має в
-                            принципі, а не «десь загубив». */}
-                        <td style={{ whiteSpace: "nowrap" }}>
-                          {x.serviceUrl && x.dealFound ? (
-                            <a href={x.serviceUrl} target="_blank" rel="noreferrer" title="Відкрити угоду в Kommo">🔗 угода</a>
-                          ) : (
-                            <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}
-                              title={x.dealId == null ? "рахунок виставлено через 1С — угоди в Kommo немає"
-                                                      : "лінк веде на угоду, якої немає в базі"}>
-                              {x.dealId == null ? "угоди немає" : "лінк битий"}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {/* 🔴 ПІДСУМКОВИЙ РЯДОК РАХУЄ КОЛОНКИ, А НЕ «ПРИБЛИЗНО».
-                      Був зсув: у ОБʼЄДНАНОГО клієнта шапка мала на одну колонку
-                      більше за підсумок, тож «Разом» опинялось під сусідньою
-                      колонкою. Тепер `merged` додає клітинку і сюди. */}
-                  <tr>
-                    {merged && <td />}
-                    <td style={{ fontWeight: 700, textAlign: "left" }}>Разом: {inv.length} рах.</td>
-                    <td />
-                    <td />
-                    {/* 🚚 ПІДСУМОК ПО ПЕРЕВІЗНИКУ — КІЛЬКІСТЮ, А НЕ ₴, І ЦЕ
-                        СВІДОМО. Скільки саме заплачено перевізнику, ми НЕ
-                        ЗНАЄМО: суми лежать у полях Kommo, яких ми не синкаємо
-                        (перевірено 25.08.2026 — у `deals` 34 колонки і жодної
-                        про перевізника). Підписати сумою рахунків «заплачено
-                        перевізникам N ₴» означало б назвати БОРГ КЛІЄНТА нашою
-                        виплатою — дві різні величини під одним підписом. */}
-                    <td style={{ textAlign: "left", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
-                      оплачених: {inv.filter((x) => x.carrierPaid === "paid").length} з {inv.length}
-                    </td>
-                    {/* 🔴 ПІДСУМОК РОЗКРИТТЯ РАХУЄ ТЕ САМЕ, ЩО РЯДОК КЛІЄНТА —
-                        тобто БЕЗ списаних. Інакше два числа на одному екрані
-                        розійшлися б, і кожне виглядало б правдоподібно (рівно
-                        так «Команда за місяць 12%» жила поруч із плиткою 11.8%). */}
-                    <td style={{ textAlign: "right", fontWeight: 700 }}>
-                      {formatAmount(inv.filter((x) => !x.writtenOff).reduce((s, x) => s + x.amount, 0))}
-                      {writtenOffLabel(inv.filter((x) => x.writtenOff).length,
-                                       inv.filter((x) => x.writtenOff).reduce((s, x) => s + x.amount, 0)) && (
-                        <span style={{ display: "block", fontSize: "var(--fs-xs)", fontWeight: 400, color: "var(--warn)" }}>
-                          {writtenOffLabel(inv.filter((x) => x.writtenOff).length,
-                                           inv.filter((x) => x.writtenOff).reduce((s, x) => s + x.amount, 0))}
-                        </span>
-                      )}
-                    </td>
-                    {/* Той самий вираз, що в шапці розкриття: підсумок складається
-                        з намальованих клітинок, іншого джерела в нього немає. */}
-                    <td style={{ textAlign: "right", fontWeight: 700 }}
-                        title="Σ колонки. Дорівнює «Заробили» в рядку клієнта">
-                      {formatAmount(eTotal)}
-                    </td>
-                    <td colSpan={3} />
-                  </tr>
-                </tbody>
-              </table>
-              </div>
-            </>
-          )}
-        </td>
-      </tr>
+              </td>
+              {/* Відповідальний → хто створив рахунок */}
+              <td style={{ ...cell, color: "var(--text-muted)" }}>{x.managerName ?? "—"}</td>
+              {/* Юрособа → НАША юрособа цього рахунку (та сама, що в плитці) */}
+              <td style={cell} title="Наша юрособа, від якої виставлено цей рахунок">
+                {x.ourEntity && x.ourEntity !== "unknown"
+                  ? ENTITY_LABEL[x.ourEntity]
+                  : <Tip body={x.ourEntityReason ? ENTITY_REASON_LABEL[x.ourEntityReason] : "юрособа невідома"}
+                         title="Юрособа невідома" style={{ color: "var(--text-muted)" }}>невідомо</Tip>}
+              </td>
+              {/* Перевізник → стан і сума по ЦЬОМУ рахунку */}
+              <td style={cell}>
+                <Tip title={cc.text} body={(cc.why ?? "") + (cc.amountText ? ` · ${cc.amountText}` : "")}>
+                  <span style={{ color: cc.tone === "paid" ? "var(--ok, #166534)" : cc.tone === "unpaid" ? "var(--warn)" : "var(--text-muted)" }}>
+                    {cc.text}
+                  </span>
+                  {cc.amountText && <span style={{ color: "var(--text-muted)" }}> · {cc.amountText}</span>}
+                </Tip>
+              </td>
+              {/* Сума боргу → сума рахунку */}
+              <td style={{ ...cell, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}
+                  title={formatAmountFull(x.amount)}>{formatAmount(x.amount)}</td>
+              {/* Заробили → заробили на цій угоді */}
+              <td style={{ ...cell, textAlign: "right", whiteSpace: "nowrap",
+                           fontWeight: ec.kind === "value" ? 600 : 400,
+                           color: ec.kind === "value" ? undefined : "var(--text-muted)" }}>
+                {eTxt == null
+                  ? formatAmount(ec.kind === "value" ? ec.earned : 0)
+                  : <Tip body={earnedCellHint(ec)}>{eTxt}</Tip>}
+              </td>
+              {/* Днів → вік цього рахунку */}
+              <td style={{ ...cell, textAlign: "center", ...(age != null && age > 30 ? { color: "#dc2626", fontWeight: 600 } : {}) }}>
+                {age ?? "—"}
+              </td>
+              {/* Ліміт → дедлайн оплати ПО РАХУНКУ */}
+              <td style={{ ...cell, textAlign: "center" }}>
+                <input type="date" value={x.dueDate ?? ""} disabled={!canEditReceivables}
+                  aria-label={`Дедлайн оплати рахунка ${no}`}
+                  onChange={(e) => patchInvoice(clientKey, no, { dueDate: e.target.value || null })}
+                  style={{ ...inputStyle, ...(overdue ? { borderColor: "#dc2626" } : {}) }} />
+              </td>
+              {/* Домовленість → коментар до рахунка */}
+              <td style={{ ...cell, minWidth: 180 }}>
+                <CommentField value={x.comment} editable={canEditReceivables}
+                  onSave={(next) => patchInvoice(clientKey, no, { comment: next })} />
+              </td>
+              {/* Дія */}
+              <td style={{ ...cell, textAlign: "right", position: "relative" }}>
+                {canWriteOff && no !== "" && (
+                  <WriteoffButton onClick={() => setWriteoffFor(
+                    writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === no
+                      ? null : { clientKey, invoiceNo: no })} />
+                )}
+                {writeoffFor?.clientKey === clientKey && writeoffFor.invoiceNo === no && (
+                  <WriteoffDialog clientKey={clientKey} clientName={clientName}
+                    invoiceNo={no} amount={x.amount}
+                    alreadyWritten={{ n: x.writtenOff ? 1 : 0, amount: x.writtenOff ? x.amount : 0 }}
+                    onClose={() => setWriteoffFor(null)}
+                    onDone={() => { setWriteoffFor(null); loadInvoices(clientKey); onRefresh?.(); }} />
+                )}
+              </td>
+            </tr>
+          );
+        })}
+
+        {/* Підсумковий рядок — У ТИХ САМИХ колонках, що й рахунки. */}
+        <tr>
+          <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
+          <td colSpan={4} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", paddingLeft: 28, fontWeight: 600 }}>
+            Разом по {inv.length} рах.
+          </td>
+          <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
+            {formatAmount(debt)}
+          </td>
+          <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
+            {formatAmount(eTotal)}
+          </td>
+          <td colSpan={4} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
+        </tr>
+      </>
     );
   };
   const caret = (clientKey: string) => (openKey === clientKey ? "▾ " : "▸ ");
@@ -607,68 +492,69 @@ export function ReceivablesSection({
                         АРСЕНАЛ. Це не дві проблеми, а одна: колонкам бракує місця. */}
                     <th style={{ textAlign: "center", width: 36 }}>#</th>
                     <th style={{ textAlign: "left", width: 300 }}>Клієнт</th>
-                    <th style={{ textAlign: "left", width: 150 }}>Відповідальний</th>
-                    <th style={{ textAlign: "left", width: 140 }} title="Наша юрособа, від якої виставлено рахунок — з «форми оплати» Kommo">Юрособа</th>
-                    <th style={{ textAlign: "left", width: 165 }} title="Чи оплачено перевізника по угоді рахунку. «н/д» = не знаємо, а НЕ «не оплачено»">Перевізник</th>
-                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 110 }}>Сума боргу</th>
-                    {/* 💰 ЗАРОБІТОК І МАРЖИНАЛЬНІСТЬ (25.08.2026).
-                        🔴 ЗНАМЕННИК НАЗВАНО В ПІДПИСІ. Просто «маржинальність, %»
-                        читалось би як «% від боргу» — і це був би той самий клас,
-                        що «Прострочено (понад ліміт)»: підпис правдивий, величина
-                        за ним інша. Борг падає з кожною оплатою, тож `заробили /
-                        борг` вибухає: заміряно на живому проді максимум 6 667%.
-                        Проти цього «% від суми рахунків» дає медіану 12.3% і
-                        максимум 100.0%. */}
-                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 100 }}
-                        title="Скільки ми заробили на угодах цього клієнта. Рахується РАЗ НА УГОДУ: два рахунки однієї угоди інакше подвоїли б маржу">
+                    <th style={{ textAlign: "left", width: 150 }}>
+                      Відповідальний
+                      <Hint title="Мажоритар за сумою боргу"
+                        body="Менеджер, на якого припадає найбільша частина рахунків цього клієнта. Олівець дозволяє призначити вручну — з обовʼязковою приміткою." />
+                    </th>
+                    <th style={{ textAlign: "left", width: 130 }}>
+                      Юрособа
+                      <Hint title="Наша компанія, на яку виставлені рахунки"
+                        body="Якщо їх кілька — показано ту, на яку припадає найбільше; повний розклад при наведенні на саме значення. Виводиться з «форми оплати» в CRM." />
+                    </th>
+                    <th style={{ textAlign: "left", width: 150 }}>
+                      Перевізник
+                      <Hint title="Чи розрахувались ми з перевізником по цих угодах"
+                        body="«н/д» означає «не знаємо» — у CRM не заповнена форма оплати. Це НЕ те саме, що «не оплачено»: заміряно 1.6 млн ₴ рахунків, які показувались би фальшивою неоплатою." />
+                    </th>
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 110 }}>
+                      Сума боргу
+                      <Hint title="Скільки цей клієнт винен зараз"
+                        body="Залишок за неоплаченими рахунками з 1С. Списані в архів сюди не входять." />
+                    </th>
+                    {/* 💰 ЗАРОБІТОК І МАРЖА — ОДНА КОЛОНКА (макет v5): сума й
+                        відсоток читаються разом, а не двома стовпцями про одне. */}
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 130 }}>
                       Заробили
+                      <Hint title="Наш заробіток по угодах цього клієнта"
+                        body="Береться з поля «Бюджет» в угоді CRM — це не борг і не виручка. Відсоток — від суми рахунків, тобто від ПОВНОЇ суми угод, а не від залишку боргу: борг падає з кожною оплатою, і відношення до нього вибухає (заміряно максимум 6 667%)." />
                     </th>
-                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 96 }}
-                        title="Заробили ÷ повна сума угод («Приход 1» з CRM). НЕ від боргу: борг — це залишок, і відношення до нього вибухає">
-                      Маржа, % від суми рахунків
+                    <th style={{ textAlign: "center", width: 70 }}>
+                      Днів
+                      <Hint title="Скільки днів найстаріший рахунок лишається неоплаченим"
+                        body="Червоне — вже понад узгоджений ліміт відстрочки." />
                     </th>
-                    <th style={{ textAlign: "center", width: 84 }}>Днів без оплати</th>
-                    {/* 🔴 ШИРИНА ТУТ — ЦЕ І Є ВЕСЬ ВИГРАШ ВИСОТИ, а не косметика.
-                        Перший захід зробив кнопку інлайновою, але лишив колонку
-                        63px — і «14 дн. ✏️» усе одно переносилось. Замір після
-                        того заходу: медіана 73px замість 48, «Ліміт» досі тримав
-                        висоту в 66 рядках із 76. Тобто інлайн без ширини не
-                        робить нічого. */}
-                    <th style={{ textAlign: "center", width: 104 }}>Ліміт</th>
-                    {/* 🔴 ДВА РІВНІ ПОЛІВ РОЗВЕДЕНО ПІДПИСАМИ (Е4b).
-                        Тут — домовленість із КЛІЄНТОМ загалом; у розкритті —
-                        дедлайн і коментар по КОНКРЕТНОМУ рахунку. Раніше обидві
-                        пари звались однаково («дата оплати» / «коментар»), і
-                        людина не бачила, що це різні речі з різними наслідками:
-                        від дедлайну по рахунку створюється задача менеджеру. */}
-                    <th style={{ textAlign: "center" }} title="Коли клієнт пообіцяв заплатити — домовленість із ним загалом">
-                      Обіцяна дата
+                    <th style={{ textAlign: "center", width: 104 }}>
+                      Ліміт
+                      <Hint title="Скільки днів відстрочки ми дали цьому клієнту"
+                        body="«Не узгоджено» означає, що рахунок виставили, а відстрочку не погодили — таких клієнтів ми не кредитуємо. Це НЕ те саме, що «розглянули і не дали»: різницю видно в підказці самого значення." />
                     </th>
-                    <th style={{ textAlign: "left", width: 180 }} title="Домовленість із клієнтом. Строк по конкретному рахунку — у розкритті">
-                      Домовленість з клієнтом
+                    {/* 🗓 «Обіцяна дата» і «Домовленість» злиті: це одна думка,
+                        а займала два стовпці (макет v5). */}
+                    <th style={{ textAlign: "left", width: 220 }}>
+                      Домовленість
+                      <Hint title="Дата й суть домовленості з клієнтом"
+                        body="Поле показує лише запис ПОТОЧНОГО тижня (від понеділка 00:00 за Києвом), щоб торішня обіцянка не читалась як сьогоднішня. Нічого не видаляється — попередні записи під полем, кнопка «історія»." />
                     </th>
+                    <th style={{ width: 90 }} aria-label="дії" />
                   </tr>
                 </thead>
                 <tbody>
                   {shown.map((c, i) => {
                     const over = isOverdue(c);
                     const badges = originBadges(c.facts);
-                    const ent = entityBreakdown(c.facts);
+                    const ent = foldEntity(c.facts);
+                    const car = foldCarrier(c.facts);
+                    // 🗓 Активним є ЛИШЕ запис поточного тижня. Нічого не
+                    // затирається — змінюється те, що вважається актуальним.
+                    const noteNow = activeNote(c.comment, c.noteUpdatedAt ?? null, now);
                     return (
                       <Fragment key={`${c.clientKey}-${i}`}>
-                        {/* 🖱 КЛІКАБЕЛЬНИЙ УВЕСЬ РЯДОК (Е4b).
-                            Раніше реагувала вузька смужка на самій назві: людина
-                            тиснула в рядок і думала, що зламано. Тепер рядок —
-                            повноцінний контрол: курсор-палець, підсвітка, стрілка
-                            повертається, Enter/Space працюють із клавіатури.
-
-                            🔴 КЛІК ПО ПОЛЮ ВСЕРЕДИНІ НЕ РОЗГОРТАЄ. У рядку живуть
-                            input дати, textarea коментаря і кнопки «змінити» —
-                            без цієї умови кожен дотик до них згортав би клієнта
-                            просто в момент редагування. `closest` бере САМЕ той
-                            елемент, у який влучив користувач, а не той, на якому
-                            висить обробник. */}
+                        {/* 🖱 Клікабельний увесь рядок; клік по полю всередині НЕ
+                            згортає — інакше кожен дотик до input/textarea закривав
+                            би клієнта просто в момент редагування. */}
                         <tr role="button" tabIndex={0} aria-expanded={openKey === c.clientKey}
+                          className="recv-row"
                           onClick={(e) => {
                             if ((e.target as HTMLElement).closest("input, textarea, button, select, a")) return;
                             toggleClient(c.clientKey);
@@ -679,194 +565,181 @@ export function ReceivablesSection({
                             e.preventDefault();
                             toggleClient(c.clientKey);
                           }}
-                          className="recv-row"
-                          style={{ cursor: "pointer", ...(over ? { background: "rgba(220,38,38,0.04)" } : {}) }}>
-                          <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "top" }}>{i + 1}</td>
-                          <td style={{ textAlign: "left", verticalAlign: "top" }}>
-                            <span style={{ fontWeight: 600, color: "var(--text)" }}>
-                              {caret(c.clientKey)}{c.clientName}
+                          style={{ cursor: "pointer" }}>
+                          <td style={{ color: "var(--text-muted)", textAlign: "center", verticalAlign: "middle" }}>{i + 1}</td>
+
+                          <td style={{ textAlign: "left", verticalAlign: "middle" }}>
+                            <span style={{ fontWeight: 600 }}>
+                              <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)", marginRight: 4 }}>{caret(c.clientKey)}</span>
+                              {c.clientName}
                             </span>
-                            {/* 🔴 ЯРЛИК ІЗ ЧИСЛОМ, бо клієнт БУВАЄ ЗМІШАНИЙ: у ПВК
-                                АРСЕНАЛ 11 рахунків із 40 виставлені через 1С, решта
-                                29 — звичайні угоди Kommo. Ярлик без числа стверджував
-                                би, що весь клієнт такий, — неправда рівно про той
-                                випадок, заради якого категорію й заводили. */}
-                            {badges.map((b) => (
-                              <span key={b.icon} title={b.hint}
-                                style={{ display: "block", fontSize: "var(--fs-xs)", marginTop: 2,
-                                         color: b.tone === "warn" ? "var(--warn)" : "var(--text-muted)" }}>
-                                {b.icon} {b.text}
+                            {badges.length > 0 && (
+                              <span style={{ display: "block", marginTop: 2 }}>
+                                {badges.map((b) => (
+                                  <Tip key={b.text} title={b.text} body={b.hint}
+                                    style={{ fontSize: "var(--fs-xs)", marginRight: 6,
+                                             color: b.tone === "warn" ? "var(--warn)" : "var(--text-muted)" }}>
+                                    {b.icon} {b.text}
+                                  </Tip>
+                                ))}
                               </span>
-                            ))}
+                            )}
                           </td>
-                          <td style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "var(--fs-sm)", verticalAlign: "top", position: "relative" }}>
+
+                          <td style={{ textAlign: "left", verticalAlign: "middle", fontSize: "var(--fs-sm)", position: "relative" }}>
                             <OwnerCell c={c} />
-                            {/* 🔴 ГОТІВКОВИЙ РЯДОК КОНТРОЛА НЕ ДІСТАЄ, і це не забудькуватість.
-                                `PUT /receivables/owner` віддає 404 на `source='cash'`: ці рядки CRM
-                                перебудовує щосинку, тож ручне призначення відкотилось би саме.
-                                Пропонувати дію, яка ГАРАНТОВАНО впаде, гірше, ніж її не мати. */}
+                            {/* 🔴 ГІЛКА ДЛЯ ГОТІВКИ ОБОВʼЯЗКОВА (#163). `PUT /receivables/owner`
+                                віддає 404 на готівковому рядку — його CRM перебудовує щосинку,
+                                тож override відкотився б сам. Кнопка, що гарантовано впаде,
+                                гірша за відсутню; людина має дізнатись ПРИЧИНУ, а не загадку.
+                                Я загубив цю гілку в переверстці — упіймав `#163`, не око. */}
                             {canSetOwner && (c.ownerSource === "cash-invoice" ? (
-                              /* 🔴 ПОЯСНЕННЯ, А НЕ ЗАГАДКА. У проході 2 я був скоротив це до
-                                 «(з CRM)» заради висоти — і `#163` справедливо почервонів:
-                                 його предмет саме в тому, що людина має дізнатись ПРИЧИНУ
-                                 відсутності дії. Висоту тут економити нема на чому: гілка
-                                 стосується готівкових рядків, а їх сьогодні один. */
                               <span title="Готівковий рядок CRM перебудовує щосинку — ручне призначення відкотилось би саме"
                                 style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", marginLeft: 6 }}>
                                 ✏️ змінюється в CRM, не тут
                               </span>
                             ) : (
-                              /* 🔴 В ТОМУ САМОМУ РЯДКУ, А НЕ ПІД ІМЕНЕМ. Заміряно на
-                                 живому проді: другий рядок тут і в «Ліміті» тримав
-                                 висоту в 66 рядках із 73, і саме його зняття дає
-                                 72 → 48px (−24% таблиці). Чипи, які виглядали
-                                 головною причиною, дають нуль. */
                               <button onClick={() => setOwnerFor(ownerFor === c.clientKey ? null : c.clientKey)}
                                 title="Змінити відповідального за борг" aria-label="Змінити відповідального за борг"
-                                style={{ border: "none", background: "none", cursor: "pointer",
-                                         padding: 0, marginLeft: 6, fontSize: "var(--fs-sm)", color: "var(--text-muted)",
-                                         textDecoration: "underline dotted" }}>
-                                ✏️
-                              </button>
+                                style={pencilStyle}>✏️</button>
                             ))}
                             {ownerFor === c.clientKey && (
                               <OwnerEditor client={c} managers={mgrOptions}
                                 onClose={() => setOwnerFor(null)}
-                                // 🔴 ПЕРЕЧИТУЄМО, а не малюємо своє: сервер після запису
-                                // робить `recomputeOwners`, тож правильний відповідальний
-                                // відомий лише з наступної відповіді (`#166`).
                                 onDone={() => { setOwnerFor(null); onRefresh?.(); }} />
                             )}
                           </td>
-                          <td style={{ textAlign: "left", verticalAlign: "top", fontSize: "var(--fs-sm)" }}>
+
+                          {/* 🗜 ОДИН РЯДОК + РОЗКЛАД У ПІДКАЗЦІ. Багаторядковий блок
+                              «ЮТС 27 / Автомув 3 / невідомо 11» роздував висоту
+                              рядка втричі, а таких колонок дві. */}
+                          <td style={{ textAlign: "left", verticalAlign: "middle", fontSize: "var(--fs-sm)" }}>
                             {ent ? (
-                              <span title={ent.hint} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                {ent.rows.map((r) => (
-                                  <span key={r.key} style={{ color: r.key === "unknown" ? "var(--text-muted)" : "var(--text)" }}>
-                                    {r.label} {r.n}
-                                  </span>
-                                ))}
-                              </span>
+                              <Tip title="Юрособи цього клієнта"
+                                body={ent.parts > 1 ? ent.full : "усі рахунки виставлені на цю нашу компанію"}>
+                                {ent.head} {ent.n}
+                              </Tip>
                             ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
                           </td>
-                          <td style={{ textAlign: "left", verticalAlign: "top", fontSize: "var(--fs-sm)" }}>
-                            <CarrierCell facts={c.facts} />
+
+                          <td style={{ textAlign: "left", verticalAlign: "middle", fontSize: "var(--fs-sm)" }}>
+                            {car ? (
+                              <Tip title="Перевізники по цих угодах"
+                                body={`${car.full}. «н/д» означає «не знаємо» — у CRM не заповнена форма оплати, а не те, що перевізник не оплачений.`}>
+                                {car.head} {car.n}
+                              </Tip>
+                            ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
                           </td>
-                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "top", whiteSpace: "nowrap", position: "relative" }} title={formatAmountFull(c.amount)}>
-                            {formatAmount(c.amount)}
-                            {/* 🗑 КНОПКА ПОРУЧ ІЗ ЧИСЛОМ, ЯКЕ ВОНА ЗМІНЮЄ. Дія, що
-                                зменшує суму, мусить стояти біля суми: інакше
-                                людина шукає, звідки просіла цифра. Той самий
-                                принцип, що ✏️ біля ліміту. */}
-                            {canWriteOff && (
-                              <button onClick={(e) => { e.stopPropagation(); setWriteoffFor(
-                                writeoffFor?.clientKey === c.clientKey && writeoffFor.invoiceNo === null
-                                  ? null : { clientKey: c.clientKey, invoiceNo: null }); }}
-                                title="Списати безнадійний борг клієнта" aria-label="Списати безнадійний борг клієнта"
-                                style={{ border: "none", background: "none", cursor: "pointer",
-                                         padding: 0, marginLeft: 4, fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
-                                🗑
+
+                          <td style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle", whiteSpace: "nowrap" }}
+                              title={formatAmountFull(c.amount)}>{formatAmount(c.amount)}</td>
+
+                          {/* 💰 ЗАРОБІТОК І МАРЖА — ОДНА КОЛОНКА. Сума й відсоток
+                              читаються разом; двома стовпцями вони змушували
+                              стрибати очима туди-сюди по одному твердженню. */}
+                          <td style={{ textAlign: "right", verticalAlign: "middle", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}>
+                            <Tip body={marginHint(c.margin)}>
+                              {c.margin?.earned == null
+                                ? <span style={{ color: "var(--text-muted)" }}>—</span>
+                                : <>
+                                    {formatAmount(c.margin.earned)}
+                                    <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>{marginPctText(c.margin)}</span>
+                                  </>}
+                            </Tip>
+                          </td>
+
+                          <td style={{ textAlign: "center", verticalAlign: "middle", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>
+                            {c.overdueDays ?? "—"}
+                            {isAncientDebt(c.overdueDays) && (
+                              <Tip title="Старий рахунок" body="Рахунок старший за рік — це факт, а не збій розрахунку."
+                                style={{ display: "block", fontSize: "var(--fs-xs)", fontWeight: 400, color: "var(--text-muted)" }}>🕰</Tip>
+                            )}
+                          </td>
+
+                          <td style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-muted)" : "var(--warn)",
+                                       textAlign: "center", verticalAlign: "middle", position: "relative",
+                                       fontSize: limitState(c.limitDays) === "agreed" ? undefined : "var(--fs-xs)" }}>
+                            <Tip body={limitHint(c.limitDays)}>{limitLabel(c.limitDays)}</Tip>
+                            {canSetLimit && (
+                              <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
+                                title="Змінити узгоджену відстрочку" aria-label="Змінити узгоджену відстрочку"
+                                style={pencilStyle}>✏️</button>
+                            )}
+                            {limitFor === c.clientKey && (
+                              <LimitEditor client={c}
+                                onClose={() => setLimitFor(null)}
+                                onDone={() => { setLimitFor(null); onRefresh?.(); }} />
+                            )}
+                          </td>
+
+                          {/* 🗓 «Обіцяна дата» і «Домовленість» — ОДНА колонка: це
+                              одна думка, а займала два стовпці. Дата стоїть
+                              підписом НАД полем. Поле показує лише запис
+                              ПОТОЧНОГО тижня; історія не гине — вона під полем. */}
+                          <td style={{ textAlign: "left", verticalAlign: "middle", minWidth: 210 }}>
+                            <span style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
+                              {c.dueDate ? `обіцяли ${new Date(c.dueDate).toLocaleDateString("uk-UA")}` : "дати немає"}
+                            </span>
+                            {canEditReceivables ? (
+                              <input type="date" value={c.dueDate ?? ""}
+                                aria-label={`Обіцяна дата ${c.clientName}`}
+                                onChange={(e) => patchReceivableNote(c.clientKey, { dueDate: e.target.value || null })}
+                                onBlur={(e) => saveReceivableNote({ clientKey: c.clientKey, dueDate: e.target.value || null, comment: c.comment })}
+                                style={{ ...inputStyle, marginBottom: 3 }} />
+                            ) : null}
+                            <CommentField
+                              value={noteNow || null}
+                              placeholder={NOTE_EMPTY_PLACEHOLDER}
+                              editable={canEditReceivables}
+                              onSave={(next) => { patchReceivableNote(c.clientKey, { comment: next }); saveReceivableNote({ clientKey: c.clientKey, comment: next, dueDate: c.dueDate }); }}
+                            />
+                            {(c.noteHistoryCount ?? 0) > 0 && (
+                              <button onClick={() => setHistoryFor(c.clientKey)}
+                                style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                                         font: "inherit", fontSize: "var(--fs-xs)", color: "var(--info, #1d4ed8)",
+                                         textDecoration: "underline dotted" }}>
+                                історія · {c.noteHistoryCount}
                               </button>
                             )}
-                            {/* 🔴 ПІДПИС ОБОВʼЯЗКОВИЙ ТАМ, ДЕ Є СПИСАННЯ, і його
-                                НЕМАЄ там, де списань нема: «списано: 0 на 0 ₴» у
-                                кожному рядку перетворив би сигнал на шум. Сума
-                                вище вже ЗМЕНШЕНА — без цього рядка вона просіла б
-                                мовчки, а число, що змінилось без сліду, читається
-                                як поломка. */}
-                            {c.facts && writtenOffLabel(c.facts.writtenOffN, c.facts.writtenOffAmount) && (
-                              <span style={{ display: "block", fontSize: "var(--fs-xs)", fontWeight: 400, color: "var(--warn)" }}
-                                    title="Списаний борг у суму не входить, але рахунки лишаються видимими в розкритті">
-                                {writtenOffLabel(c.facts.writtenOffN, c.facts.writtenOffAmount)}
-                              </span>
+                          </td>
+
+                          {/* 🗑 КНОПКА З ПІДПИСОМ, А НЕ КОШИК (рішення власника):
+                              кошик читається як «видалити назавжди», а дія
+                              оборотна й із журналом. Зʼявляється при наведенні,
+                              щоб не шуміти в 74 рядках. */}
+                          <td style={{ textAlign: "right", verticalAlign: "middle", position: "relative", whiteSpace: "nowrap" }}>
+                            {canWriteOff && (
+                              <WriteoffButton onClick={() => setWriteoffFor(
+                                writeoffFor?.clientKey === c.clientKey && writeoffFor.invoiceNo === null
+                                  ? null : { clientKey: c.clientKey, invoiceNo: null })} />
                             )}
                             {writeoffFor?.clientKey === c.clientKey && writeoffFor.invoiceNo === null && (
                               <WriteoffDialog clientKey={c.clientKey} clientName={c.clientName}
                                 invoiceNo={null} amount={c.amount}
                                 alreadyWritten={{ n: c.facts?.writtenOffN ?? 0, amount: c.facts?.writtenOffAmount ?? 0 }}
                                 onClose={() => setWriteoffFor(null)}
-                                // Перечитуємо весь екран: списання рухає і рядок, і
-                                // плитки, і фільтри — усе з одного виразу.
-                                onDone={() => { setWriteoffFor(null); setInvCache((x) => { const n = { ...x }; delete n[c.clientKey]; return n; }); if (openKey === c.clientKey) loadInvoices(c.clientKey); onRefresh?.(); }} />
+                                onDone={() => { setWriteoffFor(null); setInvCache((x) => { const nn = { ...x }; delete nn[c.clientKey]; return nn; }); if (openKey === c.clientKey) loadInvoices(c.clientKey); onRefresh?.(); }} />
                             )}
-                          </td>
-                          {/* 💰 «—» ТУТ — ЦЕ ВІДПОВІДЬ, А НЕ ПОРОЖНЄ МІСЦЕ.
-                              Заміряно 25.08.2026: 5 клієнтів із 76 не мають жодної
-                              звʼязаної угоди. Намалювати їм 0 ₴ означало б заявити
-                              «не заробили», хоча ми просто не знаємо. Причина —
-                              у підказці, бо порожнє місце читається як «нічого
-                              немає», а не як «ми не знаємо». */}
-                          <td style={{ textAlign: "right", verticalAlign: "top", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}
-                              title={marginHint(c.margin)}>
-                            {c.margin?.earned == null
-                              ? <span style={{ color: "var(--text-muted)" }}>—</span>
-                              : formatAmount(c.margin.earned)}
-                          </td>
-                          <td style={{ textAlign: "right", verticalAlign: "top", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}
-                              title={marginHint(c.margin)}>
-                            {c.margin?.pct == null
-                              ? <span style={{ color: "var(--text-muted)" }}>—</span>
-                              : marginPctText(c.margin)}
-                          </td>
-                          <td style={{ textAlign: "center", verticalAlign: "top", ...(over ? { color: "#dc2626", fontWeight: 700 } : {}) }}>
-                            {c.overdueDays ?? "—"}
-                            {isAncientDebt(c.overdueDays) && (
-                              <span title="рахунок старший за рік — це факт, а не збій розрахунку"
-                                    style={{ display: "block", fontSize: "var(--fs-xs)", fontWeight: 400, color: "var(--text-muted)" }}>
-                                🕰 старий рахунок
-                              </span>
-                            )}
-                          </td>
-                          <td title={limitHint(c.limitDays)}
-                              style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-muted)" : "var(--warn)",
-                                       textAlign: "center", verticalAlign: "top", position: "relative",
-                                       fontSize: limitState(c.limitDays) === "agreed" ? undefined : "var(--fs-xs)" }}>
-                            {limitLabel(c.limitDays)}
-                            {canSetLimit && (
-                              <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
-                                title="Змінити узгоджену відстрочку" aria-label="Змінити узгоджену відстрочку"
-                                style={{ border: "none", background: "none", cursor: "pointer",
-                                         padding: 0, marginLeft: 4, fontSize: "var(--fs-sm)", color: "var(--text-muted)",
-                                         textDecoration: "underline dotted" }}>
-                                ✏️
-                              </button>
-                            )}
-                            {limitFor === c.clientKey && (
-                              <LimitEditor client={c}
-                                onClose={() => setLimitFor(null)}
-                                // Перечитуємо: ліміт міняє не лише клітинку, а й прострочку
-                                // рядка, плитку і фільтр «Прострочені» — усе з одного виразу.
-                                onDone={() => { setLimitFor(null); onRefresh?.(); }} />
-                            )}
-                          </td>
-                          <td style={{ textAlign: "center", verticalAlign: "top" }}>
-                            {canEditReceivables ? (
-                              <input
-                                type="date"
-                                value={c.dueDate ?? ""}
-                                onChange={(e) => patchReceivableNote(c.clientKey, { dueDate: e.target.value || null })}
-                                onBlur={(e) => saveReceivableNote({ clientKey: c.clientKey, dueDate: e.target.value || null, comment: c.comment })}
-                                style={inputStyle}
-                              />
-                            ) : (
-                              c.dueDate ? new Date(c.dueDate).toLocaleDateString("uk-UA") : "—"
-                            )}
-                          </td>
-                          <td style={{ textAlign: "left", verticalAlign: "top", minWidth: 220 }}>
-                            <CommentField
-                              value={c.comment}
-                              editable={canEditReceivables}
-                              onSave={(next) => { patchReceivableNote(c.clientKey, { comment: next }); saveReceivableNote({ clientKey: c.clientKey, comment: next, dueDate: c.dueDate }); }}
-                            />
                           </td>
                         </tr>
-                        {renderInvoices(c.clientKey, c.clientName, 12)}
+                        {renderInvoices(c.clientKey, c.clientName, 11)}
                       </Fragment>
                     );
                   })}
                 </tbody>
               </table>
             </div>
+            {/* 💬 ОДИН шар підказок на весь екран — у `body`, `position:fixed`.
+                Усередині `overflow-x:auto` будь-який `absolute` обрізається
+                контейнером, тобто підказка над правою колонкою була б відрізана
+                рівно там, де вона потрібна. Єдиний прийом, узятий з макета
+                дослівно. */}
+            <TipLayer />
+            {historyFor && (
+              <NoteHistoryDialog clientKey={historyFor}
+                clientName={shown.find((x) => x.clientKey === historyFor)?.clientName ?? historyFor}
+                onClose={() => setHistoryFor(null)} />
+            )}
             {/* 🔴 ПІДСУМОК ВИДИМИХ РЯДКІВ — ОКРЕМО від плитки «Загальний борг» і
                 підписаний як видимий. Якби плитка їздила за фільтром, «загальний
                 борг» означав би різне залежно від щойно натиснутого, а якби цього
