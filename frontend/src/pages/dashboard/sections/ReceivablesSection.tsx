@@ -727,10 +727,22 @@ export function ReceivablesSection({
                               onSave={(next) => { patchReceivableNote(c.clientKey, { comment: next }); saveReceivableNote({ clientKey: c.clientKey, comment: next, dueDate: c.dueDate }); }}
                             />
                             {(c.noteHistoryCount ?? 0) > 0 && (
+                              /* 🔴 ЗОНА НАТИСКАННЯ ≥32×32 (вимога власника 26.08.2026).
+                                 Заміряно в браузері ДО правки: 56×17 — удвічі нижче
+                                 порога, тобто в неї треба цілитись. Розмір бачить
+                                 ТІЛЬКИ екран: жоден гейт не міряє піксель, тому
+                                 число знято `boundingBox()` і в тесті звіряються
+                                 саме ті стилі, з яких воно виходить.
+                                 Підкреслення лишається — це й далі читається як
+                                 посилання, збільшилась лише площа, куди можна влучити. */
                               <button onClick={() => setHistoryFor(c.clientKey)}
-                                style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                                className="recv-hist"
+                                aria-label={`Історія домовленостей: ${c.clientName}, записів ${c.noteHistoryCount}`}
+                                style={{ background: "none", border: "none", cursor: "pointer",
                                          font: "inherit", fontSize: "var(--fs-xs)", color: "var(--info, #1d4ed8)",
-                                         textDecoration: "underline dotted" }}>
+                                         textDecoration: "underline dotted",
+                                         minWidth: 32, minHeight: 32, padding: "8px 6px",
+                                         display: "inline-flex", alignItems: "center" }}>
                                 історія · {c.noteHistoryCount}
                               </button>
                             )}

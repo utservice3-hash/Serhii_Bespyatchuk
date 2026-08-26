@@ -1469,3 +1469,133 @@ test("#199ab архів: сума ТОЧНА, і колонки мають вл�
   const tiles = arch.slice(0, arch.indexOf("<tbody>"));
   assert.match(tiles, /formatAmount\(/, "🔴 плитки архіву перейшли на повний формат — верхній ряд розповзеться");
 });
+
+/**
+ * 🔎 МЕХАНІЧНИЙ ПЕРЕБІР ФУНКЦІЙ ОЧІКУВАНИХ ГРОШЕЙ.
+ *
+ * КРИТЕРІЙ СЛОВАМИ, щоб наступний не реконструював його з регулярки:
+ * функція вважається такою, що рахує очікувані гроші, якщо вона
+ *   (а) експортована з `core/metrics.ts` або `core/money.ts`, І
+ *   (б) у СВОЄМУ КОДІ (не в коментарі) звʼязує хоч одну константу зони
+ *       очікування: `EXPECT_ZONE` · `STAGE_EXPECTED` · `CHAIN_INFLIGHT`.
+ *
+ * Три константи, а не одна, бо зона записана в продукті трьома різними
+ * виразами — і саме тому критерій «шукати EXPECT_ZONE» був би дірявим:
+ * `awaitingNowSnapshot` бере `[...STAGE_EXPECTED, ...STAGE_PAID]` і в такий
+ * перебір не потрапила б.
+ *
+ * 🔴 РІЗАТИ ТІЛА ТРЕБА ПО `^export ` БУДЬ-ЯКОГО ВИДУ, А НЕ ПО `export function`.
+ * Перша редакція різала лише по функціях — і тіло `responseTime` проковтнуло
+ * оголошення `export const EXPECT_ZONE`, що лежить нижче. Перебір бадьоро
+ * доповів про функцію очікуваних, якої не існує. Той самий клас, що «порожній
+ * результат = успіх», тільки навиворіт: зайва знахідка замість зниклої.
+ */
+const EXPECTED_MONEY_ZONES = ["EXPECT_ZONE", "STAGE_EXPECTED", "CHAIN_INFLIGHT"] as const;
+
+/**
+ * Функції, що ПРОХОДЯТЬ критерій, але предиката НЕ мають — і це рішення, а не
+ * недогляд. Реєстр не «ковдра»: дзеркало нижче вимагає, щоб кожен запис справді
+ * існував і справді був без предиката, інакше мертвий рядок глушив би справжню
+ * знахідку.
+ */
+const EXPECTED_MONEY_NO_PREDICATE: { name: string; why: string }[] = [
+  { name: "avgCheck", why: "ВІДКРИТЕ ПИТАННЯ до власника: очікуваний середній чек — це СЕРЕДНЄ, а не сума. Рішення 26.08.2026 стосувалось «очікуваних КОШТІВ»; чи виходить списана угода зі знаменника чека — не наше рішення" },
+  { name: "avgCheckByTeam", why: "той самий очікуваний чек у розрізі команд — питання спільне з avgCheck, і відповідь на нього мусить бути одна на всі три розрізи, інакше команда й компанія рахуватимуть чек по-різному" },
+  { name: "avgCheckPerManager", why: "той самий очікуваний чек у розрізі менеджерів — вносити предикат лише сюди означало б, що Σ по людях перестане сходитись із компанією; рішення потрібне одне на всі три" },
+];
+
+/**
+ * Функції, що предикат МАЮТЬ, але під критерій не підпадають — тобто перебір
+ * їх не стереже, і стереже лише поіменний гейт. Записані, щоб було видно межу
+ * механічного перебору, а не щоб її замовчати.
+ */
+const EXPECTED_MONEY_OUTSIDE_CRITERION: { name: string; why: string }[] = [
+  { name: "repeatForecastByManager", why: "фільтрує `status_id = 142` (історія виграних), а не зону очікування — це ПРОГНОЗ на історичній базі. Внести 142 в критерій означало б затягнути в перебір усі функції виручки" },
+];
+
+function enumerateExpectedMoneyFns(read: (p: string) => string) {
+  const out: { file: string; name: string; zones: string[]; hasPredicate: boolean }[] = [];
+  for (const f of ["core/metrics.ts", "core/money.ts"]) {
+    const s = read(f);
+    const heads = [...s.matchAll(/^export (?:async )?(?:function|const|interface|type) (\w+)/gm)];
+    for (let i = 0; i < heads.length; i++) {
+      const start = heads[i].index!;
+      const end = i + 1 < heads.length ? heads[i + 1].index! : s.length;
+      const raw = s.slice(start, end);
+      if (!/^export (?:async )?function/.test(raw)) continue;
+      const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+      const zones = EXPECTED_MONEY_ZONES.filter((z) => new RegExp(`\\b${z}\\b`).test(code));
+      if (zones.length) out.push({ file: f, name: heads[i][1], zones, hasPredicate: /\bDEAL_NOT_WRITTEN_OFF\b/.test(code) });
+    }
+  }
+  return out;
+}
+
+test("#199ac перелічувач: КОЖНА функція очікуваних має предикат — включно з ненаписаною", () => {
+  // 🔴 НАВІЩО ЦЕ ПОВЕРХ ДВАНАДЦЯТИ ПОІМЕННИХ ГЕЙТІВ. Перелік місць, куди треба
+  // вставити правило, я отримав ПРИГАДУВАННЯМ і дістав 5 із 12; механічний
+  // перебір дав 12. Дванадцять поіменних гейтів не бачать ТРИНАДЦЯТОЇ функції:
+  // завтра хтось додає `expectedSomethingNew`, предиката в ній немає, гейта на
+  // неї немає, і жоден із дванадцяти не почервоніє.
+  const found = enumerateExpectedMoneyFns((p) => readFileSync(SRC(p), "utf8"));
+
+  // Порожній перебір = провал, а не успіх: спершу доводимо, що йому БУЛО що знайти.
+  assert.ok(found.length >= 12,
+    `🔴 перебір знайшов лише ${found.length} функцій — критерій розсипався, і мовчазне «усе гаразд» тут означає, що не перевірено НІЧОГО`);
+
+  const allowed = new Set(EXPECTED_MONEY_NO_PREDICATE.map((x) => x.name));
+  const guilty = found.filter((f) => !f.hasPredicate && !allowed.has(f.name));
+  assert.deepEqual(guilty.map((f) => `${f.file}:${f.name}`), [],
+    `🔴 функція рахує очікувані гроші (зона ${guilty.map((f) => f.zones.join("+")).join(", ")}), але списаний борг із неї НЕ виключено. `
+    + `Або постав ${"DEAL_NOT_WRITTEN_OFF"}, або внеси у EXPECTED_MONEY_NO_PREDICATE з поясненням ЧОМУ.`);
+
+  // 🪞 РЕЄСТР НЕ СМІТНИК (обидва). Мертвий запис глушив би справжню знахідку.
+  for (const e of EXPECTED_MONEY_NO_PREDICATE) {
+    const hit = found.find((f) => f.name === e.name);
+    assert.ok(hit, `🔴 «${e.name}» у реєстрі винятків, але перебір її не бачить — запис протух`);
+    assert.ok(!hit!.hasPredicate,
+      `🔴 «${e.name}» уже МАЄ предикат, а лежить у винятках — прибери з реєстру, інакше він накриє наступну справжню дірку`);
+    assert.ok(e.why.length > 40, `🔴 виняток «${e.name}» без пояснення — через місяць його не відрізнити від помилки`);
+  }
+  const metrics = readFileSync(SRC("core/metrics.ts"), "utf8");
+  const money = readFileSync(SRC("core/money.ts"), "utf8");
+  for (const e of EXPECTED_MONEY_OUTSIDE_CRITERION) {
+    const src = new RegExp(`export (?:async )?function ${e.name}\\b`).test(metrics) ? metrics : money;
+    assert.match(src, new RegExp(`export (?:async )?function ${e.name}\\b`),
+      `🔴 «${e.name}» зникла — запис у реєстрі поза критерієм протух`);
+    const body = src.slice(src.search(new RegExp(`export (?:async )?function ${e.name}\\b`)));
+    assert.match(body.slice(0, 4000), /DEAL_NOT_WRITTEN_OFF/,
+      `🔴 «${e.name}» втратила предикат, а механічний перебір її НЕ СТЕРЕЖЕ — саме тому вона тут і записана`);
+  }
+});
+
+test("#199ad кнопка «історія» має зону натискання не менше 32×32", () => {
+  // 🔴 ЧЕСНА МЕЖА ЦЬОГО ГЕЙТА, НАЗВАНА ПЕРШИМ РЯДКОМ: він читає ДЖЕРЕЛО, а
+  // піксель бачить лише екран. Справжній замір зроблено `boundingBox()` у
+  // браузері: ДО правки **56×17**, після — **68×33**, рядок клієнта 140→150.
+  // Гейт стереже стилі, З ЯКИХ це число виходить, а не саме число — і якщо
+  // завтра їх перекриє зовнішній CSS, він цього не побачить. Тому в приймання
+  // лишається погляд на екран, а не «гейт зелений».
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  const i = sec.indexOf("setHistoryFor(c.clientKey)");
+  assert.ok(i > 0, "🔴 кнопка «історія» зникла — перевіряти нема чого");
+  const btn = sec.slice(i, i + 900);
+
+  for (const [prop, min] of [["minWidth", 32], ["minHeight", 32]] as const) {
+    const m = new RegExp(`${prop}:\\s*(\\d+)`).exec(btn);
+    assert.ok(m, `🔴 у кнопки «історія» немає ${prop} — зона натискання знову стиснеться до тексту (було 56×17)`);
+    assert.ok(Number(m![1]) >= min,
+      `🔴 ${prop} = ${m![1]} < ${min}: у кнопку треба цілитись, а вона відкриває журнал домовленостей`);
+  }
+  // Падінг обовʼязковий разом із min-розміром: без нього inline-текст лишається
+  // приліплений до сусідів, і «32 пікселі» дістаються за рахунок порожнечі збоку.
+  assert.match(btn, /padding:\s*"\d+px \d+px"/, "🔴 зник падінг — текст знову зліпиться із сусідніми контролами");
+  assert.match(btn, /display:\s*"inline-flex"/,
+    "🔴 без inline-flex min-height у інлайновій кнопці не працює — вона лишиться 17px заввишки, а гейт зеленів би");
+
+  // 🪞 ДЗЕРКАЛО: кнопка й далі ЧИТАЄТЬСЯ як посилання, а не як панель. Виросла
+  // площа влучання, не вигляд — інакше «полагодили» перетворилось би на нову
+  // кнопку в кожному з 74 рядків.
+  assert.match(btn, /textDecoration:\s*"underline dotted"/, "🔴 кнопка перестала читатись як посилання");
+  assert.match(btn, /aria-label=/, "🔴 зник aria-label — з клавіатури й читалкою «історія · 1» не пояснює, чия саме");
+});
