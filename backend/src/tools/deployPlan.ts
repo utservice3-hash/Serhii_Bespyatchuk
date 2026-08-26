@@ -195,3 +195,26 @@ export const MIGRATION_GLOB = /(^|\/)src\/db\/.*\.sql$/;
 export function migrationsInDiff(changedFiles: readonly string[]): string[] {
   return changedFiles.filter((f) => MIGRATION_GLOB.test(f.trim()));
 }
+
+/**
+ * 🛑 `deploy:check` РУЙНІВНИЙ У ПРОД-ЧЕКАУТІ — І ЦЕ ВЖЕ СТАЛОСЬ.
+ *
+ * Фаза `check` робить `rm -rf dist && npm run build`. Запущена в прод-чекауті, вона
+ * перезбирає `dist` ПРОДА з тієї гілки, що там зараз лежить — 26.08.2026 це зробили
+ * з чужої незапушеної гілки: прод лишився на старому sha, а на диску опинився бандл
+ * ІНШОГО коду. Рестарт підняв би не те, що всі думають.
+ *
+ * ⚠️ Ознака прод-чекауту — НЕ шлях (він може змінитись), а ДОКРУТ: Apache віддає
+ * корінь репозиторію, тож там лежать `index.html` і `assets/` поруч із `backend/`.
+ * У дев-клоні їх немає. Шлях лишається другим сигналом, не єдиним.
+ */
+export function isProdCheckout(o: { rootIndexHtml: boolean; rootAssets: boolean; path: string }): boolean {
+  return (o.rootIndexHtml && o.rootAssets) || /\/home\/evraziat\//.test(o.path);
+}
+
+export const PROD_CHECKOUT_REFUSAL =
+  "🛑 Це ПРОД-ЧЕКАУТ: `deploy:check` тут ЗАБОРОНЕНО.\n"
+  + "   Він робить `rm -rf dist && npm run build` — тобто перезбере dist ПРОДА з тієї\n"
+  + "   гілки, що зараз у чекауті. 26.08.2026 так уже зробили з чужої незапушеної гілки:\n"
+  + "   прод лишився на старому sha, а на диску опинився бандл іншого коду.\n"
+  + "   Фаза `check` біжить У КОНТЕЙНЕРІ, на своїй гілці. На проді — лише `deploy:run`.";

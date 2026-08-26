@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import {
-  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff,
+  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 
@@ -72,7 +72,13 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const a: Artifact | null = existsSync(ARTIFACT_PATH) ? JSON.parse(readFileSync(ARTIFACT_PATH, "utf8")) : null;
     const live = await prodSha();
     c.prod = live;   // диф для `migrate` рахується проти ТОГО, що крутить прод ЗАРАЗ — до ff
-    const v = verifyArtifact(a, sh("git", ["rev-parse", "--short", "HEAD"], c.repo), live);
+    /**
+     * 🔴 ЗВІРЯЄМО З ЦІЛЛЮ, А НЕ З HEAD ЧЕКАУТУ. До `ff` прод-чекаут стоїть на СТАРОМУ
+     * sha, тож порівняння з його HEAD не збіглося б НІКОЛИ — і `deploy:run` вимагав би
+     * ручної перемотки перед собою, якої немає в жодній інструкції. Ціль передається
+     * явно (`--target=`), бо «те, що зараз у чекауті» не є наміром викату.
+     */
+    const v = verifyArtifact(a, c.target, live);
     return { id: "artifactFresh", ok: v.ok, detail: v.ok ? "артефакт свіжий за обома sha" : `🔴 ${v.reason}` };
   },
   ff: (c) => run("ff", () => { sh("git", ["fetch", "origin", c.branch], c.repo); sh("git", ["merge", "--ff-only", c.target], c.repo); }, "перемотка"),
@@ -155,10 +161,19 @@ export async function main(argv: string[]): Promise<number> {
   if (dry) { console.log(plan.map((s, i) => `${i + 1}. ${s.id} — ${s.title}`).join("\n")); return 0; }
 
   const repo = process.env.UTS_REPO ?? process.cwd().replace(/\/backend$/, "");
+  if (phase === "check" && isProdCheckout({
+    rootIndexHtml: existsSync(`${repo}/index.html`), rootAssets: existsSync(`${repo}/assets`), path: repo,
+  })) { console.error(PROD_CHECKOUT_REFUSAL); return 3; }
+  const targetArg = argv.find((a) => a.startsWith("--target="))?.slice(9);
+  if (phase === "run" && !targetArg) {
+    console.error("🔴 `deploy:run` потребує --target=<sha> — те, що ЗАРАЗ у чекауті, не є наміром викату.\n"
+      + "   Візьми sha з артефакта `deploy:check` (поле branchSha).");
+    return 2;
+  }
   const ctx: Ctx = {
     repo, be: `${repo}/backend`, fe: `${repo}/frontend`,
     branch: process.env.UTS_PROD_BRANCH ?? "claude/friendly-galileo-8pijhl",
-    target: sh("git", ["rev-parse", "--short", "HEAD"], repo),
+    target: targetArg ?? sh("git", ["rev-parse", "--short", "HEAD"], repo),
     mode, prod: "", now: new Date().toISOString(), changed: [],
   };
   const done: StepResult[] = [];

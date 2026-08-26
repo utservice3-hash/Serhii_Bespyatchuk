@@ -145,3 +145,52 @@ test("#226f міграція у діфі НЕ може бути прочитан
   // 4 · Порожній диф — це порожній диф, а не «є міграція».
   assert.deepEqual(migrationsInDiff([]), []);
 });
+
+/**
+ * 🛑 #226g — `deploy:check` НЕ ЗАПУСКАЄТЬСЯ У ПРОД-ЧЕКАУТІ.
+ *
+ * 🔴 Це не теорія: 26.08.2026 фазу `check` запустили на проді, і `rm -rf dist &&
+ * npm run build` перезібрав dist ПРОДА з чужої незапушеної гілки. Прод лишився на
+ * старому sha, а на диску опинився бандл іншого коду — рестарт підняв би не те.
+ * Ознака — ДОКРУТ (Apache віддає корінь репо), а не шлях: шлях може змінитись.
+ */
+test("#226g фаза check упізнає прод-чекаут за докрутом, а не лише за шляхом", async () => {
+  const { isProdCheckout, PROD_CHECKOUT_REFUSAL } = await import("./deployPlan.js");
+
+  // 1 · Докрут поруч із кодом — це прод, хоч би де він лежав.
+  assert.equal(isProdCheckout({ rootIndexHtml: true, rootAssets: true, path: "/будь/де" }), true,
+    "🔴 прод не впізнано за докрутом — саме так check і перезібрав чужий dist");
+  // 2 · Шлях — ДРУГИЙ сигнал, а не єдиний.
+  assert.equal(isProdCheckout({ rootIndexHtml: false, rootAssets: false, path: "/home/evraziat/uts.ua/dashboard" }), true);
+  // 3 · 🪞 ДЗЕРКАЛО: звичайний дев-клон НЕ блокується, інакше check не запуститься ніде.
+  assert.equal(isProdCheckout({ rootIndexHtml: false, rootAssets: false, path: "/home/user/Serhii_Bespyatchuk" }), false,
+    "🔴 дев-клон прийнято за прод — фаза check стала б невиконуваною");
+  // Половина ознаки — ще не прод (у фронті теж є свій index.html, але не в корені репо).
+  assert.equal(isProdCheckout({ rootIndexHtml: true, rootAssets: false, path: "/home/user/x" }), false);
+  // 4 · Відмова мусить ПОЯСНЮВАТИ, а не просто зупиняти.
+  assert.match(PROD_CHECKOUT_REFUSAL, /rm -rf dist/);
+  assert.match(PROD_CHECKOUT_REFUSAL, /У КОНТЕЙНЕРІ/, "🔴 відмова не каже, ДЕ ж тоді запускати check");
+});
+
+/**
+ * 🔗 #226h — ФАЗИ СТИКУЮТЬСЯ БЕЗ РУЧНОГО КРОКУ.
+ *
+ * 🔴 Було: `artifactFresh` звіряв артефакт із HEAD прод-чекауту — а до `ff` там стоїть
+ * СТАРИЙ sha. Отже `deploy:run` не міг збігтися НІКОЛИ й мовчки вимагав ручної
+ * перемотки, якої немає в жодній інструкції. Тепер ціль передається явно.
+ */
+test("#226h run вимагає явну ціль, і артефакт звіряється саме з нею", async () => {
+  const { main } = await import("./deploy.js");
+  const { verifyArtifact } = await import("./deployPlan.js");
+
+  // Без --target фаза run не стартує: «те, що зараз у чекауті» не є наміром викату.
+  assert.equal(await main(["run", "--mode=full"]), 2,
+    "🔴 run стартував без цілі — він узяв би HEAD чекауту, тобто СТАРИЙ sha прода");
+
+  // Артефакт звіряється з ЦІЛЛЮ, а не з тим, що лежить у чекауті до перемотки.
+  const art = { branchSha: "aaa1111", prodSha: "bbb2222", mode: "full" as const, at: "2026-08-26T00:00:00Z" };
+  assert.deepEqual(verifyArtifact(art, "aaa1111", "bbb2222"), { ok: true },
+    "🔴 ціль == артефакт, а перевірка не пройшла");
+  const wrongTarget = verifyArtifact(art, "ccc3333", "bbb2222");
+  assert.equal(wrongTarget.ok, false, "🔴 чужу ціль пропущено");
+});
