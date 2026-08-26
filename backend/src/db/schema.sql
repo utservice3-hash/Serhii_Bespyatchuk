@@ -402,6 +402,28 @@ CREATE TABLE IF NOT EXISTS receivable_note_history (
 CREATE INDEX IF NOT EXISTS idx_receivable_note_history_client
   ON receivable_note_history(client_key, written_at DESC);
 
+-- 🔴 БЕКФІЛ ЖУРНАЛУ З НАЯВНИХ КОМЕНТАРІВ — УМОВА КОРЕКТНОСТІ, А НЕ ЗРУЧНІСТЬ.
+--
+-- Заміряно на проді 26.08.2026 одразу після викату: з 77 заповнених коментарів
+-- **59 старіші за поточний тиждень**, тобто правило ховає їх із поля. Журнал при
+-- цьому був ПОРОЖНІЙ (він наповнюється лише новими збереженнями), і ті 59 текстів
+-- ставали НЕДОСЯЖНИМИ: ні в полі, ні в історії. У БД вони лежать — побачити їх не
+-- може ніхто. Це рівно той клас, який ми весь час лікуємо: дані є, відповіді немає.
+--
+-- Тому наявні коментарі переносяться в журнал зі СВОЄЮ датою й автором, а не з
+-- `now()`: дата запису — це те, що робить історію історією.
+--
+-- Ідемпотентність через `NOT EXISTS` по парі (клієнт, момент): унікального ключа
+-- в журналі немає навмисно (одного дня можна записати двічі), тож `ON CONFLICT`
+-- тут не працює, а повторний прогін міграції інакше подвоїв би записи.
+INSERT INTO receivable_note_history (client_key, comment, written_by, written_at)
+SELECT n.client_key, btrim(n.comment), n.updated_by, n.updated_at
+  FROM receivable_notes n
+ WHERE n.comment IS NOT NULL AND btrim(n.comment) <> ''
+   AND NOT EXISTS (
+     SELECT 1 FROM receivable_note_history h
+      WHERE h.client_key = n.client_key AND h.written_at = n.updated_at);
+
 -- Реактивація: сплячі/втрачені клієнти, яких тімлід передав менеджеру в роботу.
 -- Обовʼязкові робочі поля: план/факт, 1-й контакт → результат, 2-й контакт → результат.
 CREATE TABLE IF NOT EXISTS reactivation_clients (

@@ -1049,3 +1049,59 @@ test("#197k «н/д» у розкритті — прочерк із причин
     "🔴 відсутній заробіток малюється нулем — це твердження «не заробили», якого ми не знаємо");
   assert.match(inv, /age \?\? "—"/, "🔴 вік рахунку без дати став нулем замість прочерку");
 });
+
+
+test("#199j тижнева межа не робить старі коментарі НЕДОСЯЖНИМИ", needsDb(), async (t) => {
+  // 🔴 ДІРА, ЯКУ Я СТВОРИВ САМ І ЗНАЙШОВ ЗАМІРОМ ПІСЛЯ ВИКАТУ.
+  //
+  // Правило ховає з поля все, що старіше за поточний тиждень, — так і задумано.
+  // Але журнал наповнюється ЛИШЕ новими збереженнями, тож у момент викату він
+  // порожній: заміряно на проді 26.08.2026 — з 77 заповнених коментарів **59
+  // старіші за тиждень**, і всі 59 ставали недосяжними. Ні в полі, ні в історії;
+  // у БД лежать, побачити не може ніхто. Це не «сховали», це «загубили на екрані».
+  //
+  // Інваріант, який тепер тримається: у КОЖНОГО непорожнього коментаря є
+  // щонайменше один запис у журналі. Тоді «сховати з поля» завжди означає
+  // «перенести в історію», а не «прибрати з очей».
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    const schema = readFileSync(SRC("db/schema.sql"), "utf8");
+    await c.query(schema);
+    // Сіємо коментар, ЯКИЙ БУВ БИ схований: місячної давності.
+    await c.query(`INSERT INTO receivable_notes (client_key, comment, updated_at)
+                   VALUES ('к', 'обіцяв 400 до пʼятниці', now() - interval '30 days')`);
+    // Друга міграція = той самий бекфіл, що поїде на прод.
+    await c.query(schema);
+    const h = await c.query<{ comment: string; written_at: string }>(
+      `SELECT comment, written_at FROM receivable_note_history WHERE client_key = 'к'`);
+    assert.equal(h.rowCount, 1,
+      "🔴 старий коментар не потрапив у журнал — правило сховало б його з поля, і він став би недосяжним");
+    assert.match(h.rows[0].comment, /400 до пʼятниці/);
+
+    // 🔴 ДАТА — СВОЯ, А НЕ `now()`. Інакше вся історія злиплась би в момент
+    // міграції, і «тиждень 18-24.08» став би «тиждень викату».
+    const age = await c.query<{ d: number }>(
+      `SELECT EXTRACT(day FROM now() - written_at)::int AS d FROM receivable_note_history WHERE client_key='к'`);
+    assert.ok(age.rows[0].d >= 29,
+      `🔴 запис датований моментом міграції (вік ${age.rows[0].d} дн.) — історія втратила свої дати`);
+
+    // 🪞 ІДЕМПОТЕНТНІСТЬ: унікального ключа в журналі немає навмисно (одного дня
+    // можна записати двічі), тож `ON CONFLICT` не працює — захист через NOT EXISTS.
+    // Без нього кожен прогін міграції подвоював би історію.
+    await c.query(schema);
+    await c.query(schema);
+    const again = await c.query(`SELECT count(*)::int n FROM receivable_note_history WHERE client_key='к'`);
+    assert.equal(again.rows[0].n, 1, "🔴 повторна міграція подвоїла журнал");
+
+    // Дзеркало: порожній коментар у журнал НЕ пишеться — «стер текст» не є домовленістю.
+    await c.query(`INSERT INTO receivable_notes (client_key, comment, updated_at) VALUES ('порожній', '   ', now())`);
+    await c.query(schema);
+    const empty = await c.query(`SELECT count(*)::int n FROM receivable_note_history WHERE client_key='порожній'`);
+    assert.equal(empty.rows[0].n, 0, "🔴 порожній коментар потрапив у журнал — історія заросте нічим");
+  } finally { await c.end(); scratch.dispose(); }
+});
