@@ -789,6 +789,10 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 INSERT INTO app_settings (id, data) VALUES (1, '{}') ON CONFLICT (id) DO NOTHING;
 ALTER TABLE receivables ADD COLUMN IF NOT EXISTS limit_days INTEGER;
+-- 💰 Похідний КЕШ ліміту суми — так само, як `limit_days`. Джерело правди —
+-- `client_credit_limits`; ця таблиця TRUNCATE-иться щосинку, тож усе людське
+-- живе поза нею, а сюди лише переноситься.
+ALTER TABLE receivables ADD COLUMN IF NOT EXISTS limit_amount NUMERIC;
 ALTER TABLE receivables ADD COLUMN IF NOT EXISTS overdue_days INTEGER;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -2327,6 +2331,46 @@ CREATE TABLE IF NOT EXISTS client_credit_limits (
   -- прецедент, що `receivable_manager_override.note` і `loyalty_overrides`.
   CHECK (length(btrim(note)) > 0)
 );
+
+-- 💰 ЛІМІТ ПО СУМІ — ДРУГИЙ, НЕЗАЛЕЖНИЙ ЛІМІТ (рішення власника 26.08.2026).
+--
+-- Сума, більше якої ми не дозволяємо клієнту заходити в борг. Класичний
+-- кредитний ліміт. Перевищення НІЧОГО НЕ БЛОКУЄ — ні заборон, ні підтверджень:
+-- на екрані просто видно, що ліміт перейдено.
+--
+-- 🔑 БАЗА — ЗАГАЛЬНИЙ БОРГ (виставлене рахунками), а НЕ «Очікуємо». В
+-- «Очікуємо» входить готівка, а готівка кредитом не є; до того ж це два різні
+-- всесвіти з різницею в 11 разів (заміряно 26.08.2026: борг 8 632 419 ₴ проти
+-- внеску тих самих угод в очікувані 754 172 ₴).
+--
+-- 🔴 ЛІМІТИ ДНІВ І СУМИ НЕЗАЛЕЖНІ. Клієнт може порушити один, обидва або
+-- жоден — усі чотири комбінації законні й малюються окремо.
+ALTER TABLE client_credit_limits ADD COLUMN IF NOT EXISTS limit_amount NUMERIC
+  CHECK (limit_amount IS NULL OR limit_amount >= 0);
+
+-- 🔴 ДВЕРІ В ОДИН БІК, І ЦЕ ФАКТ ПРО СИСТЕМУ, А НЕ РИЗИК.
+--
+-- `limit_days` був `NOT NULL`, а PK тут — `client_key`, один рядок на клієнта.
+-- Отже задати СУМУ, не задавши ДНІВ, було неможливо в принципі — тобто
+-- «незалежні ліміти» не існували б, хоч би що казав код вище.
+--
+-- ⚠️ `SET NOT NULL` назад УПАДЕ, щойно зʼявиться перший рядок із NULL у днях.
+-- Тобто revert коду цього не відкотить: код той самий, стан інший (урок
+-- 05.08.2026 про `TEAM_OVERRIDES`). Відкочувати довелось би даними —
+-- проставити днями щось усім, у кого NULL, а «щось» тут вигадати нема з чого.
+--
+-- Семантика сходиться без правок: `limitState(null)` уже читає NULL як
+-- «ліміт НІКОЛИ не ставили», і рядок із самою лише сумою читається саме так.
+ALTER TABLE client_credit_limits ALTER COLUMN limit_days DROP NOT NULL;
+
+-- 🔒 ОДИН ВІДКРИТИЙ ЗАПИТ НА ЛІМІТ НА КЛІЄНТА — УНІКАЛЬНІСТЬ У БД, А НЕ
+-- ЗАБЛОКОВАНА КНОПКА. Заблокована кнопка це ВИГЛЯД: подвійне натискання,
+-- два відкриті вікна, повтор запиту — і задач дві. Прецедент часткових
+-- індексів на цій таблиці вже є (`idx_tasks_o2o_open`, `idx_tasks_client_key`).
+-- Наявних 1 434 задач не зачіпає: такого `task_type` ще не існувало.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_credit_limit_open
+  ON tasks (client_key)
+  WHERE task_type = 'credit_limit_request' AND status <> 'done' AND client_key IS NOT NULL;
 
 ALTER TABLE deals             SET (autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE deal_stage_events SET (autovacuum_analyze_scale_factor = 0.02);

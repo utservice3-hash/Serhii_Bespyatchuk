@@ -303,6 +303,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager", "team_lead", "financier", "kvp", "admin"] },
   { method: "DELETE", path: "/api/dashboard/receivables/writeoff", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead", "financier", "kvp", "admin"] },
+  // 🧾 ЗАПИТ НА ПЕРЕГЛЯД ЛІМІТУ (рішення власника 26.08.2026: «Кнопка тільки в
+  // тімліда»). Менеджер відмовляється НЕ вкладкою — дебіторку він бачить, — а
+  // тим, що не може ставити задачу іншій людині (`canAssignTaskToOthers`).
+  // HR відмовляється вкладкою, як і на решті дебіторки.
+  // ⚠️ Тімлід тут ДОЗВОЛЕНИЙ на рівні матриці й звужується вже в роуті — до
+  // клієнтів СВОЄЇ команди. Матриця перевіряє роль, а не конкретного клієнта.
+  { method: "POST", path: "/api/dashboard/receivables/limit-request", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/regular-clients", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/repeat-client-history", cls: "GET",

@@ -1790,3 +1790,255 @@ test("#199af підказки маржі: копія фронта == копії 
   assert.ok(Object.keys(a).length >= 2,
     `🔴 у ядрі лишилось ${Object.keys(a).length} причин — порівнювати нема чого, а зелений колір це ховає`);
 });
+
+test("#199ap факт за виграну угоду НЕ зменшується заднім числом", async () => {
+  // 🔴 ПРАВИЛО ВЛАСНИКА 26.08.2026, ДОСЛІВНО: «Ні, факт лишається.»
+  //
+  // Питання ставилось прямо: чи зменшується заднім числом факт менеджера за
+  // виграну угоду, якщо борг по ній списали. За відповіддю стоять закриті
+  // місяці, KPI й уже виплачені премії.
+  //
+  // Гейт існує проти ОДНІЄЇ конкретної помилки, і вона правдоподібна: рішення
+  // про списання звучить «вона зникає з усіх етапів і екранів у дашборді».
+  // Прочитавши це без контексту, наступний розширить предикат на пул `success`
+  // (142) і вважатиме, що доробляє незакінчене. Наслідок — зрушений факт Звіту,
+  // «Виконано плану» і премії за вже закриті місяці.
+  const money = readFileSync(SRC("core/money.ts"), "utf8");
+
+  // ① Правило записане поруч із предикатом — саме там, де його прочитають.
+  const i = money.indexOf("DEAL_NOT_WRITTEN_OFF,");
+  assert.ok(i > 0, "🔴 предикат зник зі спільного знімка");
+  const around = money.slice(Math.max(0, i - 2200), i);
+  assert.match(around, /Ні, факт лишається/,
+    "🔴 зникла дослівна відповідь власника — лишилось «зникає з усіх екранів», і наступний розширить предикат");
+  assert.match(around, /закрит[іи] місяц|прем/i,
+    "🔴 зникла ПРИЧИНА (закриті місяці, премії) — правило без причини скасовують першим");
+
+  // ② `successAggActive` / `agg("success", …)` предиката НЕ несуть.
+  const succ = money.slice(money.indexOf("const successAggActive"), money.indexOf("const successAggActive") + 400);
+  assert.ok(!/DEAL_NOT_WRITTEN_OFF/.test(succ),
+    "🔴 предикат заїхав у пул `success` — факт за виграну угоду почав зменшуватись заднім числом");
+
+  // ③ І в самому `agg` теж — це спільне ядро грошей, звідки живиться Звіт.
+  const aggSrc = money.slice(money.indexOf("async function agg("), money.indexOf("async function agg(") + 1400);
+  assert.ok(!/DEAL_NOT_WRITTEN_OFF/.test(aggSrc),
+    "🔴 предикат у `agg` — зрушаться successMoney, successByMgr, successByTeam, тобто факт Звіту й «Виконано плану»");
+
+  // 🪞 ДЗЕРКАЛО: предикат ПРИСУТНІЙ там, де має бути. Без нього гейт зеленів би
+  // і на коді, з якого предикат прибрали ЗОВСІМ.
+  assert.match(money, /DEAL_NOT_WRITTEN_OFF/,
+    "🔴 предиката немає ніде — списане повернулось в очікувані");
+});
+
+test("#199aq ліміт суми має ТРИ стани, і «не ставили» ≠ «відмовили» ≠ 0", async () => {
+  // 🔴 ПАСТКА, ЯКУ ВЛАСНИК ВИМАГАВ ЗАКРИТИ ЗА ПОБУДОВОЮ. Колонка нова, отже в
+  // момент викату вона порожня в УСІХ клієнтів. Пара станів «у межах /
+  // переліміт» збрехала б 77 разів поспіль: `NULL` став би нулем, і кожен
+  // боржник — перелімітником.
+  //
+  // 📐 Прецедент поруч, на живих даних 26.08.2026: у ДНЯХ «порожньо» — це вже
+  // 61% (47 не ставили + 8 відмовили з 77 боржників). Тобто третій стан там не
+  // теоретичний, а більшість — і в сумі буде так само.
+  const { amountLimitState, amountLimitLabel, amountLimitHint, isOverAmount, splitOverAmount } =
+    await import("./creditLimits.js");
+
+  assert.equal(amountLimitState(null), "never-set", "🔴 NULL перестав бути окремим станом");
+  assert.equal(amountLimitState(undefined), "never-set", "🔴 undefined читається не як «не ставили»");
+  assert.equal(amountLimitState(0), "declined", "🔴 нуль перестав означати «розглянули і не дали»");
+  assert.equal(amountLimitState(50000), "agreed");
+
+  // 🔴 NULL-ПАСТКА: `Number(null) === 0` істинне. Наївне порівняння зробило б
+  // «відмовлено» ВСІМ, кому суму просто не ставили. У днях це вже коштувало
+  // заміру (54 замість 9); тут ціна вища — всі 77.
+  assert.notEqual(amountLimitState(null), amountLimitState(0),
+    "🔴 «не ставили» і «відмовили» злились — це різні відповіді на питання ЧОМУ");
+
+  // Підписи: «0 ₴» на екрані читається як помилка заповнення, тому його немає.
+  assert.equal(amountLimitLabel(null), "не узгоджено");
+  assert.equal(amountLimitLabel(0), "не узгоджено");
+  assert.ok(!/^0/.test(amountLimitLabel(0)), "🔴 нуль друкується числом");
+  assert.match(amountLimitLabel(50000), /50\s*000/, "🔴 узгоджена сума не показується числом");
+  // А ось ПІДКАЗКИ мусять розрізняти — саме там живе «чому».
+  assert.notEqual(amountLimitHint(null), amountLimitHint(0),
+    "🔴 підказка однакова для «не дивились» і «подивились і відмовили»");
+
+  // Неузгоджений = нульовий (одне правило на обидва ліміти, рішення 26.08.2026).
+  assert.equal(isOverAmount(1, null), true, "🔴 без ліміту борг перестав вважатись перевищенням");
+  assert.equal(isOverAmount(1, 0), true);
+  assert.equal(isOverAmount(0, null), false, "🔴 нульовий борг став перевищенням");
+  // Строго БІЛЬШЕ: борг, що дорівнює ліміту, — це межа, а не перехід.
+  assert.equal(isOverAmount(50000, 50000), false, "🔴 борг РІВНО на ліміт зарахований як перевищення");
+  assert.equal(isOverAmount(50001, 50000), true);
+  assert.equal(isOverAmount(null, 50000), false, "🔴 невідомий борг став перевищенням");
+
+  // 🔴 РОЗКЛАД ОБОВʼЯЗКОВИЙ. Без нього перше відкриття після викату покаже
+  // «77 перелімітників» — правду, яка бреше.
+  const split = splitOverAmount([
+    { debt: 100, limitAmount: null }, { debt: 100, limitAmount: 0 },
+    { debt: 200, limitAmount: 50 }, { debt: 10, limitAmount: 50 },
+  ]);
+  assert.equal(split.total, 3);
+  assert.equal(split.beyondAgreed, 1, "🔴 перейшли УЗГОДЖЕНУ суму пораховані невірно");
+  assert.equal(split.noLimitAgreed, 2, "🔴 «ліміту не узгоджено» злилось із класичним перевищенням");
+  assert.equal(split.total, split.beyondAgreed + split.noLimitAgreed, "🔴 розклад не сходиться з числом");
+});
+
+test("#199ar ліміти днів і суми НЕЗАЛЕЖНІ — усі чотири комбінації", async () => {
+  // 🔴 НЕЗАЛЕЖНІСТЬ — ЧАСТИНА ПРАВИЛА, А НЕ НАСЛІДОК (рішення власника
+  // 26.08.2026). Клієнт може порушити один ліміт, обидва або жоден.
+  const { isOverdue, isOverAmount } = await import("./creditLimits.js");
+  const cases = [
+    { назва: "жоден", age: 5, days: 30, debt: 100, amount: 50000, дні: false, сума: false },
+    { назва: "лише дні", age: 40, days: 30, debt: 100, amount: 50000, дні: true, сума: false },
+    { назва: "лише сума", age: 5, days: 30, debt: 90000, amount: 50000, дні: false, сума: true },
+    { назва: "обидва", age: 40, days: 30, debt: 90000, amount: 50000, дні: true, сума: true },
+  ];
+  for (const c of cases) {
+    assert.equal(isOverdue(c.age, c.days), c.дні, `🔴 «${c.назва}»: денний ліміт спрацював не так`);
+    assert.equal(isOverAmount(c.debt, c.amount), c.сума, `🔴 «${c.назва}»: ліміт суми спрацював не так`);
+  }
+  // 🔴 І ГОЛОВНЕ — ОДИН НЕ ЗАЛЕЖИТЬ ВІД ДРУГОГО СТРУКТУРНО, а не за збігом:
+  // функція суми не приймає `limitDays` навіть аргументом, тож написати
+  // залежність випадково неможливо. Перевіряємо саме сигнатуру.
+  assert.equal(isOverAmount.length, 2,
+    "🔴 у `isOverAmount` зʼявився третій аргумент — найімовірніше `limitDays`, і це вже залежність");
+  assert.equal(isOverdue.length, 2, "🔴 у `isOverdue` змінилась сигнатура");
+
+  // Дзеркало: сума працює й тоді, коли ДНІВ немає зовсім (саме заради цього
+  // знімався `NOT NULL` з `limit_days`).
+  assert.equal(isOverAmount(90000, 50000), true, "🔴 без денного ліміту сума перестала рахуватись");
+  assert.equal(isOverdue(40, null), true, "🔴 без ліміту суми дні перестали рахуватись");
+});
+
+test("#199as заголовок задачі несе КЛІЄНТА і СУМУ — інакше це «дайте ліміт»", async () => {
+  // Тімлід читає його в списку своєї команди. Без предмета задачу неможливо
+  // виконати, не відкривши її, — а в списку їх десятки.
+  const { limitRequestTitle } = await import("./creditLimits.js");
+  const t = limitRequestTitle("ПВК АРСЕНАЛ ТОВ", 2_600_000, null);
+  assert.match(t, /ПВК АРСЕНАЛ ТОВ/, "🔴 у заголовку немає клієнта");
+  assert.match(t, /2\s*600\s*000/, "🔴 у заголовку немає суми боргу");
+  assert.match(t, /не встановлено/, "🔴 стан «ліміту немає» не названий — читач вирішить, що ліміт є");
+  const t2 = limitRequestTitle("МГЕР", 100, 50000);
+  assert.match(t2, /50\s*000/, "🔴 наявний ліміт не показаний — тімлід не бачить, що переглядає");
+  assert.ok(!/не встановлено/.test(t2), "🔴 наявний ліміт підписаний як відсутній");
+});
+
+test("#199at ліміт суми ПЕРЕЖИВАЄ TRUNCATE синку", needsDb(), async (t) => {
+  // 🔴 НАЙТИХІШИЙ ДЕФЕКТ ЦЬОГО ПРОХОДУ, І Я НАЗВАВ ЙОГО САМ У ПЛАНІ.
+  // `receivables` TRUNCATE-иться кожні 15 хв. Якби в синк їхав лише
+  // `limit_days`, ліміт суми зникав би після КОЖНОГО проходу і зʼявлявся знову
+  // при перезаході в редактор — на екрані це читається як «іноді працює», а не
+  // як поломка, і ловиться місяцями.
+  //
+  // Перевіряється на СПРАВЖНІЙ схемі: людське мусить лежати поза синковими
+  // таблицями, і саме це тут доводиться, а не «в коді є слово limit_amount».
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SRC("db/schema.sql"), "utf8"));
+    await c.query(`INSERT INTO client_credit_limits (client_key, limit_days, limit_amount, note)
+                   VALUES ('к', 14, 50000, 'узгоджено'), ('лише-сума', NULL, 30000, 'днів не ставили')`);
+    await c.query(`INSERT INTO receivables (client_key, client_name, amount, limit_days, limit_amount)
+                   VALUES ('к','К',100,14,50000), ('лише-сума','Л',100,NULL,30000)`);
+
+    // Синк: TRUNCATE + перенесення з людської таблиці.
+    await c.query("TRUNCATE receivables");
+    const lim = await c.query<{ client_key: string; limit_days: number | null; limit_amount: string | null }>(
+      `SELECT client_key, limit_days, limit_amount FROM client_credit_limits`);
+    for (const l of lim.rows) {
+      await c.query(`INSERT INTO receivables (client_key, client_name, amount, limit_days, limit_amount)
+                     VALUES ($1,'X',100,$2,$3)`, [l.client_key, l.limit_days, l.limit_amount]);
+    }
+    const after = await c.query<{ client_key: string; limit_amount: string | null; limit_days: number | null }>(
+      `SELECT client_key, limit_amount, limit_days FROM receivables ORDER BY client_key`);
+    const byKey = new Map(after.rows.map((x) => [x.client_key, x]));
+    assert.equal(Number(byKey.get("к")!.limit_amount), 50000,
+      "🔴 ліміт суми не пережив TRUNCATE — він зникатиме кожні 15 хв і повертатиметься при перезаході");
+    assert.equal(byKey.get("к")!.limit_days, 14, "🔴 денний ліміт зламався разом із додаванням суми");
+
+    // 🔴 І САМЕ ЗАРАДИ ЦЬОГО РЯДКА ЗНІМАВСЯ `NOT NULL` З `limit_days`:
+    // клієнт може мати ЛИШЕ суму. Якби обмеження лишилось, вставка впала б.
+    assert.equal(Number(byKey.get("лише-сума")!.limit_amount), 30000);
+    assert.equal(byKey.get("лише-сума")!.limit_days, null,
+      "🔴 клієнт із самою лише сумою не існує — `limit_days` знову NOT NULL, і ліміти перестали бути незалежними");
+
+    // 🪞 ДЗЕРКАЛО: сам синк СПРАВДІ переносить обидва — інакше фікстура
+    // доводила б лише те, що схема це вміє, а джоба тим часом возила один.
+    const job = readFileSync(SRC("jobs/syncReceivables.ts"), "utf8");
+    assert.match(job, /SELECT client_key, limit_days, limit_amount FROM client_credit_limits/,
+      "🔴 синк перестав читати ліміт суми з людської таблиці");
+    assert.match(job, /INSERT INTO receivables \([^)]*limit_amount/,
+      "🔴 синк не пише `limit_amount` у `receivables` — ліміт зникатиме щопроходу");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+test("#199au право на запит ліміту — на API, а не на кнопці", async () => {
+  // 🔴 РІШЕННЯ ВЛАСНИКА 26.08.2026, І ВОНО СКАСУВАЛО ПОПЕРЕДНЄ («бачать усі,
+  // виконавець — опердир»). Стало: «задачі не операційний отримує, а тім-лід в
+  // межах своєї команди», «Кнопка тільки в тімліда».
+  //
+  // ⚠️ СХОВАНА КНОПКА НЕ Є ПРАВОМ — гейт стоїть на роуті. Тому перевіряється
+  // предикат, яким гейтить роут, а не наявність кнопки у верстці.
+  const { canAssignTaskToOthers, canRequestLimitFor } = await import("../auth/taskAssignScope.js");
+
+  // Менеджер не бачить і не може — він ставить задачі лише собі.
+  assert.equal(canAssignTaskToOthers({ role: "manager", teamId: 5 }), false,
+    "🔴 менеджер отримав кнопку — власник сказав «тільки в тімліда»");
+  assert.equal(canRequestLimitFor({ role: "manager", teamId: 5 }, 5), false,
+    "🔴 менеджер може поставити задачу про ліміт навіть у своїй команді");
+
+  // 🪞 ДЗЕРКАЛО: тімлід МОЖЕ — інакше гейт зеленів би на фічі, вимкненій усім.
+  assert.equal(canRequestLimitFor({ role: "team_lead", teamId: 5 }, 5), true,
+    "🔴 тімлід не може поставити задачу про СВОГО клієнта — фіча мертва");
+  // …але лише в межах СВОЄЇ команди.
+  assert.equal(canRequestLimitFor({ role: "team_lead", teamId: 5 }, 7), false,
+    "🔴 тімлід ставить задачі про ЧУЖИХ боржників — «в межах своєї команди» не працює");
+  assert.equal(canRequestLimitFor({ role: "team_lead", teamId: 5 }, null), false,
+    "🔴 клієнт без команди дістався тімліду — межу неможливо перевірити, отже це відмова");
+  // Тімлід без команди — не тімлід: інакше `teamId === clientTeamId` при обох
+  // `null` відкрило б йому всіх нічийних клієнтів.
+  assert.equal(canAssignTaskToOthers({ role: "team_lead", teamId: null }), false,
+    "🔴 тімлід без команди отримав право — і накрив би всіх клієнтів без команди");
+
+  // Адмінський рівень — може будь-якого клієнта.
+  for (const role of ["admin", "company"] as const) {
+    assert.equal(canRequestLimitFor({ role, teamId: null }, 7), true, `🔴 «${role}» втратив право`);
+  }
+
+  // І роут справді кличе САМЕ цей предикат, а не свою копію умови.
+  const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  assert.match(routes, /canRequestLimitFor\(\{ role: auth\.role, teamId: auth\.teamId \}, c\.team_id\)/,
+    "🔴 роут завів власну копію умови — вона розійдеться з кнопкою й гейтом");
+});
+
+test("#199av подвійне натискання не створює другої задачі — тримає БД", async () => {
+  // 🔴 МЕХАНІЗМ, А НЕ ВИГЛЯД (рішення 26.08.2026). Заблокована кнопка нікого не
+  // зупиняє: два відкриті вікна, повтор запиту, швидкі пальці — і задач дві.
+  // Тому унікальність стоїть у БД частковим індексом.
+  const schema = readFileSync(SRC("db/schema.sql"), "utf8");
+  assert.match(schema, /CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_credit_limit_open/,
+    "🔴 зник унікальний індекс — подвійне натискання знову дасть дві задачі");
+  const idx = schema.slice(schema.indexOf("idx_tasks_credit_limit_open"),
+                           schema.indexOf("idx_tasks_credit_limit_open") + 400);
+  assert.match(idx, /ON tasks \(client_key\)/, "🔴 індекс більше не по клієнту");
+  assert.match(idx, /task_type = 'credit_limit_request'/,
+    "🔴 індекс накрив УСІ задачі про клієнта — тімлід не зміг би завести жодної другої задачі");
+  assert.match(idx, /status <> 'done'/,
+    "🔴 індекс тримає й ЗАКРИТІ запити — після виконання новий запит став би неможливим назавжди");
+
+  // 🔴 І РОУТ НЕ БРЕШЕ ПРО УСПІХ: при наявному відкритому він віддає ЙОГО,
+  // а не мовчазне «ок». Мовчазний успіх — це «операція, що звітує про роботу,
+  // якої не зробила».
+  const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  const body = routes.slice(routes.indexOf('post("/receivables/limit-request"'),
+                            routes.indexOf('post("/receivables/limit-request"') + 3000);
+  assert.match(body, /status <> 'done'/, "🔴 роут не шукає наявний відкритий запит");
+  assert.match(body, /existing: open\.rows\[0\]/,
+    "🔴 роут не віддає наявну задачу — фронт не має що показати, і людина натисне втретє");
+  assert.ok(!/INSERT INTO tasks/.test(body),
+    "🔴 роут САМ створює задачу — а власник сказав, що виконавця й дедлайн обирає тімлід у формі");
+});

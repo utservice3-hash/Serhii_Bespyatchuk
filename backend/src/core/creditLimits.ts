@@ -76,6 +76,135 @@ export function limitHint(limitDays: number | null | undefined): string {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   💰 ЛІМІТ ПО СУМІ — ДЗЕРКАЛО ДЕННОГО, У ТОМУ САМОМУ ФАЙЛІ
+
+   🔴 ЧОМУ ТУТ, А НЕ В НОВОМУ МОДУЛІ. Це друге правило ТІЄЇ САМОЇ природи:
+   «узгоджена межа проти факту». Розвести їх по файлах означало б завести дві
+   логіки, які одного дня розійдуться в означенні «не узгоджено», і кожна
+   половина екрана виглядатиме правдоподібно. Рівно так розійшлись чипи
+   «новий/постійний»: правило існувало тричі, дві копії збігались одна з одною,
+   а не з правилом.
+
+   🔴 НЕЗАЛЕЖНІСТЬ — ЧАСТИНА ПРАВИЛА, А НЕ НАСЛІДОК. Ліміт днів і ліміт суми
+   діють ОДНОЧАСНО й НЕ впливають один на одного: клієнт може порушити один,
+   обидва або жоден. Функції нижче НЕ приймають `limitDays` навіть аргументом —
+   так «залежність» неможливо написати випадково.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Три РІЗНІ шляхи до «межі немає» — рівно ті самі, що в днях.
+ *
+ * 🔴 ДВОХ СТАНІВ ТУТ МАЛО, І ЦЕ НЕ ТЕОРІЯ. Колонка нова, отже в момент викату
+ * вона порожня в УСІХ клієнтів. Пара «в межах / переліміт» збрехала б 77 разів
+ * поспіль: `NULL` перетворився б на 0, і кожен боржник став би перелімітником.
+ * Прецедент поруч: у днях «порожньо» це сьогодні 61% (47 не ставили + 8
+ * відмовили з 77 боржників, заміряно 26.08.2026).
+ */
+export type AmountLimitState =
+  | "agreed"        // ліміт узгоджено: N ₴
+  | "declined"      // limit_amount = 0 — розглянули і СВІДОМО не дали
+  | "never-set";    // NULL — суму цьому клієнту НІКОЛИ не ставили
+
+/**
+ * ⚠️ ТА САМА NULL-ПАСТКА, ЩО В ДНЯХ, І ВОНА ТУТ ДОРОЖЧА. `Number(null) === 0`
+ * істинне, тож наївний `Number(limitAmount) === 0` порахував би «відмовлено»
+ * ВСІМ, кому суму просто не ставили. У днях це коштувало заміру (54 замість 9);
+ * тут воно зробило б перелімітниками всіх до одного.
+ */
+export function amountLimitState(limitAmount: number | null | undefined): AmountLimitState {
+  if (limitAmount == null) return "never-set";
+  return Number(limitAmount) === 0 ? "declined" : "agreed";
+}
+
+/**
+ * Чи борг перейшов узгоджену суму.
+ *
+ * 🔴 НЕУЗГОДЖЕНИЙ ЛІМІТ ПОВОДИТЬСЯ ЯК НУЛЬОВИЙ — рішення власника 26.08.2026,
+ * «одне правило на обидва ліміти», точно як 24.08 для днів. Наслідок той самий
+ * і його треба знати наперед: щойно колонка зʼявиться порожньою, перелімітними
+ * стануть ВСІ, у кого борг > 0. Тому число на екрані обовʼязково йде з
+ * розкладом (`splitOverAmount`), інакше «77 перелімітників» прочитають як
+ * катастрофу, а не як «ліміт нікому не ставили».
+ *
+ * ⚠️ Строго БІЛЬШЕ, як і в днях (`ageDays > limitDays`): борг, що дорівнює
+ * ліміту, — це межа, а не її перехід.
+ */
+export function isOverAmount(debt: number | null | undefined,
+                             limitAmount: number | null | undefined): boolean {
+  if (debt == null) return false;
+  return Number(debt) > Number(limitAmount ?? 0);
+}
+
+/** Підпис у рядку. Не «0 ₴» — це число читається як помилка заповнення. */
+export function amountLimitLabel(limitAmount: number | null | undefined): string {
+  switch (amountLimitState(limitAmount)) {
+    case "agreed": return `${Math.round(Number(limitAmount)).toLocaleString("uk-UA")} ₴`;
+    case "declined":
+    case "never-set": return "не узгоджено";
+  }
+}
+
+/** Розгорнуте пояснення — у підказці, з наслідком. */
+export function amountLimitHint(limitAmount: number | null | undefined): string {
+  switch (amountLimitState(limitAmount)) {
+    case "agreed":
+      return `узгоджений ліміт боргу ${Math.round(Number(limitAmount)).toLocaleString("uk-UA")} ₴`;
+    case "declined":
+      return "ліміт суми розглянули і не дали — будь-який борг вважається перевищенням";
+    case "never-set":
+      return "ліміт суми цьому клієнту не встановлювали — будь-який борг вважається перевищенням";
+  }
+}
+
+/**
+ * Розклад «перелімітників» на дві причини — той самий прийом, що `splitOverdue`.
+ *
+ * 🔴 НАВІЩО. Без нього перше ж відкриття екрана після викату покаже «77
+ * перелімітників», і це буде правда, яка бреше: 77 з них — це «ліміт не
+ * ставили», а не «клієнт заборгував понад дозволене». Власник окремо просив на
+ * це не наступати ще в днях («щоб не вийшло, що ми лякаємо людей дрібницею»).
+ */
+export interface OverAmountSplit {
+  total: number;
+  /** перейшли УЗГОДЖЕНУ суму — класичне перевищення кредитного ліміту */
+  beyondAgreed: number;
+  /** ліміту суми не узгоджено (NULL або 0) — перевищення за визначенням */
+  noLimitAgreed: number;
+}
+
+export function splitOverAmount(
+  rows: ReadonlyArray<{ debt: number | null; limitAmount: number | null }>
+): OverAmountSplit {
+  let beyondAgreed = 0;
+  let noLimitAgreed = 0;
+  for (const r of rows) {
+    if (!isOverAmount(r.debt, r.limitAmount)) continue;
+    if (amountLimitState(r.limitAmount) === "agreed") beyondAgreed++;
+    else noLimitAgreed++;
+  }
+  return { total: beyondAgreed + noLimitAgreed, beyondAgreed, noLimitAgreed };
+}
+
+/**
+ * 🧾 ЗАГОЛОВОК ЗАДАЧІ НА ПЕРЕГЛЯД ЛІМІТУ — тут, а не в роуті.
+ *
+ * Тімлід читає його в списку своєї команди. Без клієнта й суми це «дайте
+ * ліміт» без предмета — задача, яку неможливо виконати, не відкривши її.
+ * Живе в ядрі, бо роут тягне `db/pool.js` → `config.js`, який кидає без
+ * `DATABASE_URL` ще на імпорті; гейт не дістав би звідти навіть чистої функції.
+ */
+export function limitRequestTitle(
+  clientName: string, debt: number, limitAmount: number | null | undefined
+): string {
+  const money = (n: number) => `${Math.round(n).toLocaleString("uk-UA")} ₴`;
+  const lim = amountLimitState(limitAmount) === "agreed" ? money(Number(limitAmount)) : "не встановлено";
+  return `Ліміт по сумі: ${clientName} — борг ${money(debt)}, ліміт ${lim}`;
+}
+
+/** Тип задачі-запиту. Один рядок, бо його знають і роут, і частковий індекс у схемі. */
+export const LIMIT_REQUEST_TASK_TYPE = "credit_limit_request";
+
 /**
  * 🕰 ВИСЯК — окрема позначка, а не «дуже великий вік».
  *

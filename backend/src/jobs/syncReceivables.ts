@@ -196,9 +196,18 @@ export async function syncReceivables(): Promise<void> {
   const previousCount = Number(previousRes.rows[0]?.n ?? 0);
 
   // 🧾 ЛІМІТИ — З НАШОЇ ТАБЛИЦІ (Е4). Гугл-аркуша в цьому шляху більше немає.
-  const limitRows = await pool.query<{ client_key: string; limit_days: number }>(
-    `SELECT client_key, limit_days FROM client_credit_limits`);
-  const limitDaysByKey = new Map(limitRows.rows.map((l) => [l.client_key, Number(l.limit_days)]));
+  //
+  // 🔴 ПЕРЕНОСЯТЬСЯ ОБИДВА ЛІМІТИ, І ЗАБУТИ ДРУГИЙ — НАЙТИХІШИЙ ДЕФЕКТ У ЦЬОМУ
+  // ПРОХОДІ. `receivables` TRUNCATE-иться кожні 15 хв; якби сюди їхав лише
+  // `limit_days`, ліміт суми зникав би після КОЖНОГО синку і зʼявлявся знову
+  // при перезаході в редактор. На екрані це читається як «іноді працює», а не
+  // як поломка, і ловиться місяцями. Тримає `#199at` на справжній схемі.
+  const limitRows = await pool.query<{ client_key: string; limit_days: number | null; limit_amount: string | null }>(
+    `SELECT client_key, limit_days, limit_amount FROM client_credit_limits`);
+  const limitByKey = new Map(limitRows.rows.map((l) => [l.client_key, {
+    days: l.limit_days == null ? null : Number(l.limit_days),
+    amount: l.limit_amount == null ? null : Number(l.limit_amount),
+  }]));
 
   const rows = await loadReceivables1c(async () => {
     const res = await fetch(config.receivables1cUrl);
@@ -276,14 +285,14 @@ export async function syncReceivables(): Promise<void> {
     );
 
     for (const entry of grouped.rows) {
-      const limitDays = limitDaysByKey.get(entry.client_key) ?? null;
+      const lim = limitByKey.get(entry.client_key);
       await client.query(
-        `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, limit_amount, overdue_days)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         // Відповідальний лишається NULL до `recomputeOwners` нижче — у ТІЙ САМІЙ
         // транзакції, тож зовні проміжного стану не існує.
         [entry.client_key, entry.client_name, null, "", Number(entry.amount),
-         limitDays, null]
+         lim?.days ?? null, lim?.amount ?? null, null]
       );
     }
     // 🔴 ГОТІВКА ПЕРШОЮ, ПЕРЕРАХУНОК ДРУГИМ — і порядок тут НЕ косметика

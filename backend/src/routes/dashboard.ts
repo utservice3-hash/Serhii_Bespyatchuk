@@ -54,7 +54,11 @@ import * as receivablesFacts from "../core/receivablesFacts.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
-import { fkErrorMessage } from "../core/creditLimits.js";
+import {
+  fkErrorMessage, limitRequestTitle, amountLimitState, amountLimitLabel,
+  LIMIT_REQUEST_TASK_TYPE,
+} from "../core/creditLimits.js";
+import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
@@ -1838,7 +1842,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
 
   type Client = {
     clientKey: string | null; clientName: string | null; amount: number;
-    limitDays: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
+    limitDays: number | null; limitAmount: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
     noteUpdatedAt: string | null; noteHistoryCount: number;
     facts: receivablesFacts.ClientFacts | null;
@@ -1866,7 +1870,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
     const visibleAmount = r.amount - (cf?.writtenOffAmount ?? 0);
     entry.clients.push({
       clientKey: r.clientKey, clientName: r.clientName, amount: visibleAmount,
-      limitDays: r.limitDays, overdueDays: r.overdueDays,
+      limitDays: r.limitDays, limitAmount: r.limitAmount, overdueDays: r.overdueDays,
       comment: n?.comment ?? null, dueDate: n?.due_date ?? null,
       noteUpdatedAt: n?.updated_at ?? null, noteHistoryCount: n?.hist ?? 0,
       // 🔴 ЧОМУ саме цей відповідальний — їде НА ЕКРАН, а не лишається в ядрі.
@@ -1914,6 +1918,14 @@ dashboardRouter.get("/receivables", async (req, res) => {
     // Не фінансист і не тімліди: це визнання втрати грошей, а не операційна дія.
     // Право в БД окремим записом, як `merge_receivables`, — не список у коді.
     canWriteOff: roleHasPerm(auth.roleKey, WRITE_OFF_PERM),
+    /**
+     * 🧾 ЧИ МАЛЮВАТИ КНОПКУ «ЗАПИТ НА ЛІМІТ» (рішення власника 26.08.2026:
+     * «Кнопка тільки в тімліда»). Це ПІДКАЗКА ФРОНТУ, а не право: право
+     * гейтить роут, і тімлід ще й звужується до СВОЄЇ команди вже там, по
+     * конкретному клієнту. Поле відповідає лише на питання «чи є сенс
+     * показувати кнопку взагалі» — менеджеру її не видно ніде.
+     */
+    canRequestLimit: canAssignTaskToOthers({ role: auth.role, teamId: auth.teamId }),
   });
 });
 
@@ -2092,29 +2104,135 @@ dashboardRouter.put("/receivables/limit", async (req, res) => {
       error: "Примітка обовʼязкова — ліміт без причини через місяць не відрізнити від помилки",
     });
   }
-  const raw = req.body?.limitDays;
-  const limitDays = raw === null || raw === undefined || raw === "" ? NaN : Number(raw);
-  if (!Number.isInteger(limitDays) || limitDays < 0) {
-    return res.status(400).json({ error: "Ліміт — ціле число днів, 0 або більше" });
+  /**
+   * 🔴 ОБИДВА ЛІМІТИ НЕОБОВʼЯЗКОВІ ПООКРЕМО, АЛЕ ХОЧА Б ОДИН МУСИТЬ БУТИ.
+   * `undefined` = «поле не передали, не чіпай», `null` = «зняти цей ліміт».
+   * Плутати їх не можна: частковий upsert, що трактує відсутнє поле як `null`,
+   * тихо зніс би сусідній ліміт — рівно та поломка, що вже була в
+   * `loyalty-override` (затирало `pinned_manager_id`).
+   */
+  const parseLimit = (raw: unknown, whole: boolean): number | null | "skip" | "bad" => {
+    if (raw === undefined) return "skip";
+    if (raw === null || raw === "") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return "bad";
+    return whole && !Number.isInteger(n) ? "bad" : n;
+  };
+  const days = parseLimit(req.body?.limitDays, true);
+  const amount = parseLimit(req.body?.limitAmount, false);
+  if (days === "bad") return res.status(400).json({ error: "Ліміт днів — ціле число, 0 або більше" });
+  if (amount === "bad") return res.status(400).json({ error: "Ліміт суми — число, 0 або більше" });
+  if (days === "skip" && amount === "skip") {
+    return res.status(400).json({ error: "Передайте ліміт днів або ліміт суми" });
   }
 
   const target = await pool.query(
     `SELECT 1 FROM receivables WHERE client_key = $1 LIMIT 1`, [clientKey]);
   if (!target.rowCount) return res.status(404).json({ error: "Клієнта немає в дебіторці" });
 
+  /**
+   * 🔴 `COALESCE(EXCLUDED.x, cl.x)` НЕ ГОДИТЬСЯ: він не вміє ЗНЯТИ ліміт —
+   * `null` у EXCLUDED означав би «лиши як було», і кнопка «зняти» мовчки не
+   * працювала б. Тому передані поля перелічуються явно, як у
+   * `core/loyaltyOverride.ts`: оновлюється РІВНО те, що прийшло.
+   */
+  const sets: string[] = ["note = EXCLUDED.note", "set_by = EXCLUDED.set_by", "set_at = now()"];
+  if (days !== "skip") sets.push("limit_days = EXCLUDED.limit_days");
+  if (amount !== "skip") sets.push("limit_amount = EXCLUDED.limit_amount");
   await pool.query(
-    `INSERT INTO client_credit_limits (client_key, limit_days, note, set_by, set_at)
-     VALUES ($1, $2, $3, $4, now())
-     ON CONFLICT (client_key) DO UPDATE SET
-       limit_days = EXCLUDED.limit_days, note = EXCLUDED.note,
-       set_by = EXCLUDED.set_by, set_at = now()`,
-    [clientKey, limitDays, note.slice(0, 300), auth.userId]
+    `INSERT INTO client_credit_limits (client_key, limit_days, limit_amount, note, set_by, set_at)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (client_key) DO UPDATE SET ${sets.join(", ")}`,
+    [clientKey, days === "skip" ? null : days, amount === "skip" ? null : amount,
+     note.slice(0, 300), auth.userId]
   );
   // Той самий перерахунок, що й у синку — інакше екран до 15 хв показував би старий
   // ліміт при новому підписі. Вік боргу не чіпаємо: він похідний від дат рахунків.
+  const cur = await pool.query<{ limit_days: number | null; limit_amount: string | null }>(
+    `SELECT limit_days, limit_amount FROM client_credit_limits WHERE client_key = $1`, [clientKey]);
+  const row = cur.rows[0];
   await pool.query(
-    `UPDATE receivables SET limit_days = $2 WHERE client_key = $1`, [clientKey, limitDays]);
-  res.json({ ok: true, limitDays });
+    `UPDATE receivables SET limit_days = $2, limit_amount = $3 WHERE client_key = $1`,
+    [clientKey, row?.limit_days ?? null, row?.limit_amount ?? null]);
+  res.json({ ok: true, limitDays: row?.limit_days ?? null,
+             limitAmount: row?.limit_amount == null ? null : Number(row.limit_amount) });
+});
+
+/**
+ * 🧾 ЗАПИТ НА ПЕРЕГЛЯД ЛІМІТУ → ЗАДАЧА В ЗАДАЧНИКУ.
+ *
+ * 🔴 РОУТ НЕ СТВОРЮЄ ЗАДАЧУ МОВЧКИ. Він повертає ЗАГОТОВКУ — клієнта, борг,
+ * стан ліміту й готовий заголовок, — а виконавця й дедлайн обирає тімлід у
+ * формі задачі (рішення власника 26.08.2026). Ми нічого не проставляємо за
+ * нього: дефолтний дедлайн, вигаданий нами, через тиждень стане цифрою, якій
+ * вірять.
+ *
+ * 🔴 ПОДВІЙНЕ НАТИСКАННЯ НЕ СТВОРЮЄ ДРУГОЇ ЗАДАЧІ, І ТРИМАЄ ЦЕ БД, А НЕ КНОПКА.
+ * Заблокована кнопка — це ВИГЛЯД: два відкриті вікна, повтор запиту, швидкі
+ * пальці — і задач дві. Частковий унікальний індекс
+ * `idx_tasks_credit_limit_open` не дає існувати другому ВІДКРИТОМУ запиту на
+ * того самого клієнта. Роут не «мовчазно успішний»: він віддає 200 із
+ * `existing`, тобто НАЯВНУ задачу, і фронт показує саме її.
+ * ⚠️ Мовчазний успіх тут був би тією самою «операцією, що звітує про роботу,
+ * якої не зробила», що й «успіх за 0 мс».
+ *
+ * ЗАДАЧНИК — ЗОВНІШНЯ СИСТЕМА: пишемо в `tasks` рівно тими колонками, що вже
+ * існують (`task_type`, `client_key`, `title`, `description`), без жодної
+ * зміни контракту. Нових обовʼязкових полів не додано.
+ */
+dashboardRouter.post("/receivables/limit-request", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+
+  // Клієнт + його команда — потрібні ОБИДВА: команда гейтить тімліда.
+  const row = await pool.query<{
+    client_name: string; amount: string; limit_amount: string | null; team_id: number | null;
+  }>(
+    `SELECT r.client_name, r.amount, r.limit_amount, m.team_id
+       FROM receivables r LEFT JOIN managers m ON m.id = r.manager_id
+      WHERE r.client_key = $1 LIMIT 1`, [clientKey]);
+  if (!row.rowCount) return res.status(404).json({ error: "Клієнта немає в дебіторці" });
+  const c = row.rows[0];
+
+  // 🔴 ГЕЙТ — ПЕРШИМ ЗНАЧУЩИМ ОПЕРАТОРОМ ПІСЛЯ ЗЧИТУВАННЯ СКОУПУ. Валідація
+  // тіла перед гейтом дала б 400 замість 403 і зламала б гарантію зліпка #11
+  // («403 = спрацював гейт») — на цьому ми вже раз відкотили прод 04.08.2026.
+  if (!canRequestLimitFor({ role: auth.role, teamId: auth.teamId }, c.team_id)) {
+    return res.status(403).json({ error: "Задачу про ліміт ставить тімлід у межах своєї команди" });
+  }
+
+  const debt = Number(c.amount);
+  const limitAmount = c.limit_amount == null ? null : Number(c.limit_amount);
+  const title = limitRequestTitle(c.client_name, debt, limitAmount);
+
+  // Наявний ВІДКРИТИЙ запит — віддаємо його, а не робимо другий.
+  const open = await pool.query<{ id: number; title: string; assignee_id: number | null; status: string }>(
+    `SELECT id, title, assignee_id, status FROM tasks
+      WHERE task_type = $1 AND client_key = $2 AND status <> 'done' LIMIT 1`,
+    [LIMIT_REQUEST_TASK_TYPE, clientKey]);
+  if (open.rowCount) {
+    return res.json({ ok: true, existing: open.rows[0], draft: null,
+      note: "Запит на цього клієнта вже відкритий" });
+  }
+
+  res.json({
+    ok: true,
+    existing: null,
+    draft: {
+      taskType: LIMIT_REQUEST_TASK_TYPE,
+      clientKey,
+      clientName: c.client_name,
+      debt,
+      limitAmount,
+      limitState: amountLimitState(limitAmount),
+      title,
+      // Дедлайн, пріоритет і виконавця НЕ проставляємо — їх обирає тімлід.
+      description: `Переглянути ліміт по сумі для клієнта «${c.client_name}».\n`
+        + `Поточний борг: ${Math.round(debt).toLocaleString("uk-UA")} ₴.\n`
+        + `Ліміт суми: ${amountLimitLabel(limitAmount)}.`,
+    },
+  });
 });
 
 /** Зняти ліміт зовсім → стан «не встановлювали». Дзеркальна дія до PUT. */
@@ -2126,7 +2244,9 @@ dashboardRouter.delete("/receivables/limit/:clientKey", async (req, res) => {
   const clientKey = String(req.params.clientKey ?? "").trim();
   const r = await pool.query(`DELETE FROM client_credit_limits WHERE client_key = $1`, [clientKey]);
   if (!r.rowCount) return res.status(404).json({ error: "Ліміт не встановлений" });
-  await pool.query(`UPDATE receivables SET limit_days = NULL WHERE client_key = $1`, [clientKey]);
+  // Знімаються ОБИДВА — рядок один на клієнта, і його більше немає.
+  await pool.query(
+    `UPDATE receivables SET limit_days = NULL, limit_amount = NULL WHERE client_key = $1`, [clientKey]);
   res.json({ ok: true });
 });
 
