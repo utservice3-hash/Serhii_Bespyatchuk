@@ -56,27 +56,18 @@ export interface WriteoffTally {
   amount: number;
 }
 
-export function splitWrittenOff<T extends { amount: number }>(
-  rows: T[], isWrittenOff: (row: T) => boolean,
-): { visible: T[]; written: WriteoffTally } {
-  const visible: T[] = [];
-  const written: WriteoffTally = { n: 0, amount: 0 };
-  for (const r of rows) {
-    if (isWrittenOff(r)) { written.n++; written.amount += Number(r.amount) || 0; }
-    else visible.push(r);
-  }
-  return { visible, written };
-}
-
-/**
- * Підпис списаного. `null` — нічого не списано, і тоді рядка на екрані немає:
- * підпис «списано 0 на 0 ₴» у кожному рядку перетворив би сигнал на шум (той
- * самий висновок, що з «у т.ч. від менеджерів без плану»).
+/*
+ * 🪦 ТУТ СТОЯЛИ `splitWrittenOff` і `writtenOffLabel` — прибрані 26.08.2026.
+ *
+ * Вони обслуговували ПОПЕРЕДНЄ рішення: списаний рахунок лишався в списку
+ * закресленим, а плитка несла підпис «списано: N на X ₴». Рішення власника
+ * скасувало його — списане зникає з активного повністю й живе у вкладці
+ * «Архів». Функції лишились без жодного читача.
+ *
+ * Прибрані НАВМИСНО, а не «прибрались»: мертвий код тут читається як робочий
+ * рівно так само, як читався `expected` у /teams і `EARNED_COL_LABEL`. `WriteoffTally`
+ * лишається — його використовує решта модуля.
  */
-export function writtenOffLabel(w: WriteoffTally): string | null {
-  if (w.n === 0) return null;
-  return `списано: ${w.n} на ${Math.round(w.amount).toLocaleString("uk-UA")} ₴`;
-}
 
 /**
  * 🔴 SQL РОЗГОРТАННЯ СПИСАННЯ ЖИВЕ ТУТ, А НЕ В РОУТІ — щоб гейт міг прогнати

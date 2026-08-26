@@ -322,8 +322,6 @@ export function mergeProblem(a: MergeSide | null, b: MergeSide | null, reason: s
  * інша. Слово «PnL» тут заборонене окремо (`#199f`): це не звіт про прибутки,
  * а відношення двох полів CRM.
  */
-export const MARGIN_LABEL = "маржинальність, % від суми рахунків";
-export const EARNED_LABEL = "заробили";
 
 export const MARGIN_UNKNOWN_LABEL: Record<ReceivableMarginUnknown, string> = {
   no_deal: "немає звʼязку з угодою",

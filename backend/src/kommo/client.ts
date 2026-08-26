@@ -186,6 +186,7 @@ export interface KommoDeal {
 import {
   CARRIER_PAY_FIELDS, carrierPaymentFrom, assertLeadIdsWithinLimit, LEADS_BY_IDS_MAX,
   CLIENT_PAY_FIELD, CARRIER_OBLIGATION_FIELD,
+  carrierObligationFrom, clientPaymentFrom,
 } from "../core/carrierPayment.js";
 export { LEADS_BY_IDS_MAX };
 
@@ -288,14 +289,29 @@ export function extractCarrierPayment(deal: KommoDeal): number | null {
 
 /** Повна сума угоди для клієнта («Приход 1») — знаменник маржинальності. */
 export function extractClientPayment(deal: KommoDeal): number | null {
-  const v = Number(fieldText(deal, CLIENT_PAY_FIELD) ?? "");
-  return Number.isFinite(v) && v > 0 ? v : null;
+  return clientPaymentFrom(fieldText(deal, CLIENT_PAY_FIELD));
 }
 
-/** Обовʼязок перед перевізником («Расход 1»). Нуль — це ЧИСЛО, а не «немає». */
+/**
+ * Обовʼязок перед перевізником («Расход 1»). Нуль — це ЧИСЛО, а не «немає».
+ *
+ * 🔴 І САМЕ ТОМУ ВІДСУТНЄ ПОЛЕ НЕ СМІЄ СТАВАТИ НУЛЕМ. Було
+ * `Number(fieldText(…) ?? "")`, тобто `Number("")` → **0**, а `Number.isFinite(0)`
+ * істинне. Отже «поля в угоді немає» і «платити перевізнику не треба» лягали в
+ * базу ОДНАКОВИМ значенням.
+ *
+ * Чому це гірше за звичайний баг: нуль тут ЛЕГІТИМНИЙ, тож після запису два
+ * сенси зливаються безповоротно — ре-бекфіл їх уже не розрізнить, бо в базі не
+ * лишилось ознаки, з якого боку прийшов нуль. Псування йшло по колу кожні 30 хв
+ * разом із `syncKommo`. Заміряно 26.08.2026: **11 699 нулів проти 1 193
+ * додатних**, і лише за серпень нулів 5 754 з 8 672 угод.
+ *
+ * ⚠️ Сусідній `extractClientPayment` уцілів ВИПАДКОВО: його `&& v > 0` відсікає
+ * нуль, бо нуль-знаменник маржі все одно непридатний. Тобто сторожа там нема —
+ * є побічний ефект іншої вимоги, і копіювати його як зразок не можна.
+ */
 export function extractCarrierObligation(deal: KommoDeal): number | null {
-  const v = Number(fieldText(deal, CARRIER_OBLIGATION_FIELD) ?? "");
-  return Number.isFinite(v) ? v : null;
+  return carrierObligationFrom(fieldText(deal, CARRIER_OBLIGATION_FIELD));
 }
 
 /** Тип виплати перевізнику — потрібен як ПІДПИС, а не лише як маркер суми. */
