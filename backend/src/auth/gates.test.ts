@@ -8,7 +8,9 @@ import { MOUNTS } from "./routeInventory.js";
 import {
   ROUTE_BOUNDARY_EXEMPTIONS, CORE_BYPASS_EXEMPTIONS, ROW_SPREAD_EXEMPTIONS,
   CREATED_COHORT_EXEMPTIONS, CLIENT_KEY_WRITERS, classifySql, METRIC_SQL, exemptionsWithoutReason,
+  KNOWN_SQL_DEBT, knownDebtFor, normSql,
 } from "./gates.js";
+import { lexTemplates, queryCallOffsets } from "./sqlLex.js";
 
 /**
  * #17 — АРХІТЕКТУРНІ ВОРОТА. Правила, які раніше жили в промтах власника.
@@ -98,9 +100,20 @@ test("#17g ПОРЯДОК ПРЕФІКСІВ: специфічний шлях в
 
 // ─────────────────────── B3 · метрика лише через ядро ───────────────────────
 
-/** SQL-блоки файлу: вміст кожного шаблонного літерала (у dist вони збережені). */
+/**
+ * SQL-блоки файлу — ШАБЛОННІ ЛІТЕРАЛИ, розібрані сканером (`sqlLex.ts`).
+ *
+ * 🔴 Було `/`([^`]{20,8000})`/g`, і воно бачило 50 із 358 запитів. Регулярка не знає,
+ * який бектик відкривальний: літерал із `${…}` вона ріже навпіл, а підстановки має
+ * 386 із 659 літералів. Гірше — з 20 блоків, які `#17c` класифікував, ШІСТЬ не були
+ * літералами взагалі (обрізки й чистий JS): ворота рахували керуючий потік як SQL.
+ *
+ * ⚠️ Сирий текст, БЕЗ `strip()`. Сканер знає, що таке коментар, сам — а `strip`
+ * псував розбір (у `training.js` давав дві помилки синтаксису). Числа з ним і без
+ * нього однакові до одиниці (заміряно 26.08.2026: 52 · 38 · 2 · 5 · 7).
+ */
 function sqlBlocks(src: string): { q: string; at: number }[] {
-  return [...src.matchAll(/`([^`]{20,8000})`/g)].map((m) => ({ q: m[1], at: m.index ?? 0 }));
+  return lexTemplates(src).blocks;
 }
 const lineOf = (src: string, at: number) => src.slice(0, at).split("\n").length;
 
@@ -108,30 +121,48 @@ test("#17c ВОРОТА · метрика мимо ядра не проходи�
   const exempt = new Set(CORE_BYPASS_EXEMPTIONS.map((e) => e.file));
   const offenders: string[] = [];
   const unnamedCohorts: string[] = [];
-  let scanned = 0, lifetime = 0, cohorts = 0;
+  let scanned = 0, lifetime = 0, cohorts = 0, debt = 0;
+  const unparsed: string[] = [];
   for (const f of routeFiles()) {
     const rel = `routes/${f.replace(/\.js$/, ".ts")}`;
     if (exempt.has(rel)) continue;
-    const src = strip(readFileSync(path.join(ROUTES, f), "utf8"));
+    const src = readFileSync(path.join(ROUTES, f), "utf8");
+    // 🔴 СПЕРШУ «чи я взагалі розібрав», і лише потім «чи є порушення». Порожній
+    // результат зламаного розбору читається як «порушень немає» — а це найгірша з
+    // відповідей: ворота зеленіють саме тоді, коли осліпли.
+    for (const u of lexTemplates(src).unterminated) unparsed.push(`${rel}:${lineOf(src, u.at)} — ${u.kind}`);
     for (const { q, at } of sqlBlocks(src)) {
       const cls = classifySql(q);
       if (!cls) continue;
       scanned++;
       if (cls === "lifetime") { lifetime++; continue; }
       const where = `${rel}:${lineOf(src, at)}`;
-      if (cls === "money-period") { offenders.push(`${where} — ${q.replace(/\s+/g, " ").slice(0, 110)}`); continue; }
+      // ВІДОМИЙ БОРГ — названий поіменно, з якорем і датою. Не дозвіл: чекає на власника.
+      if (knownDebtFor(rel, q, cls)) { debt++; continue; }
+      if (cls === "money-period") { offenders.push(`${where} — ${normSql(q).slice(0, 110)}`); continue; }
       // created-cohort: законно, але має бути НАЗВАНА
       const named = CREATED_COHORT_EXEMPTIONS.some((e) => e.file === rel && q.includes(e.frag));
       if (named) cohorts++;
-      else unnamedCohorts.push(`${where} — ${q.replace(/\s+/g, " ").slice(0, 110)}`);
+      else unnamedCohorts.push(`${where} — ${normSql(q).slice(0, 110)}`);
     }
   }
+  assert.deepEqual(unparsed, [],
+    "🔴 НЕ ЗМІГ РОЗІБРАТИ. Сканер дійшов до кінця файла з незакритою конструкцією — отже "
+    + "частина запитів у ньому НЕ перевірена, і зелений колір тут означав би «ми не дивились», "
+    + "а не «порушень немає». Лагодь `sqlLex.ts` або джерело, але не читай цей файл як чистий:\n  "
+    + unparsed.join("\n  "));
   assert.ok(scanned > 10, `детектор знайшов лише ${scanned} блоків — розбір зламався`);
+  assert.equal(debt, KNOWN_SQL_DEBT.length,
+    `🔴 РЕЄСТР БОРГУ РОЗІЙШОВСЯ З КОДОМ: у ньому ${KNOWN_SQL_DEBT.length} записів, а в коді `
+    + `знайшлось ${debt}. Запис, під який більше немає порушення, глушив би справжнє — прибери його; `
+    + "якщо ж порушень стало більше, вони мали б бути в offenders, а не тут.");
   assert.deepEqual(offenders, [],
     "🔴 ГРОШІ ЗА ПЕРІОД ПОВЗ ЯДРО. У запиті є фільтр по ГРОШОВОМУ анкері (closed_at/"
     + "changed_at) і сума/стадія — отже це метрика проміжку, а її рахує ЛИШЕ core/money.ts "
     + "(анкер по даті входу + дедуп 9∪10). Свій SQL обходить обидва правила, і розбіжність "
-    + "спливає через місяці як «дашборд бреше»:\n  " + offenders.join("\n  "));
+    + "спливає через місяці як «дашборд бреше». Якщо це НОВЕ місце — переписуй на ядро; якщо "
+    + "старе, якого ще ніхто не чіпав, — рядок у KNOWN_SQL_DEBT із якорем, роутом і причиною "
+    + "(це БОРГ, а не дозвіл):\n  " + offenders.join("\n  "));
   assert.deepEqual(unnamedCohorts, [],
     "🔴 НЕНАЗВАНА КОГОРТА СТВОРЕННЯ. Фільтр періоду тут по `created_at` — це законно "
     + "(«скільки завели»), але саме в такому запиті колись і сховався грошовий анкер: "
@@ -199,7 +230,7 @@ test("#17h ВОРОТА · у deals.client_key пише лише перерах�
   let scanned = 0;
   for (const f of files) {
     const rel = f.slice(SRC.length + 1).replace(/\\/g, "/");
-    const src = strip(readFileSync(f, "utf8"));
+    const src = readFileSync(f, "utf8");   // сире: сканер сам знає коментарі
     for (const { q } of sqlBlocks(src)) {
       if (!writesDealsClientKey(q)) continue;
       scanned++;

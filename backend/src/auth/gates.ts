@@ -219,6 +219,111 @@ export const CREATED_COHORT_EXEMPTIONS: CohortExemption[] = [
        + "роботі. Грошового анкера в неї ще НЕ ІСНУЄ, бо вона не оплачена." },
 ];
 
+/**
+ * ВІДОМИЙ БОРГ `#17c` — ПО ПОРУШЕННЮ, А НЕ ПО ФАЙЛУ.
+ *
+ * 🔴 Чому не виняток по файлу. Саме так `#17c` колись і осліп: один сирий `SUM(price)`
+ * робив увесь `dashboard.ts` винятком, і ворота переставали дивитись на 5000 рядків.
+ * Реєстр іменний: збіг вимагає ФАЙЛУ + ЯКОРЯ + КЛАСУ одночасно, тож НОВЕ порушення
+ * поруч зі старим червоніє негайно.
+ *
+ * ⚠️ Якір — СТАБІЛЬНИЙ ФРАГМЕНТ SQL у нормалізованих пробілах, НЕ номер рядка.
+ * Номери в `dist` зсуває будь-яка правка вище, і реєстр протух би першим же чужим
+ * комітом. Нормалізація пробілів означає, що переформатування запиту теж нічого не
+ * зсуває — а от зміна самого SQL зсуває, і це правильно: змінив запит — перечитай борг.
+ *
+ * 📐 Дванадцять записів нижче — те, що ворота побачили, ЩОЙНО ПРОЗРІВ РОЗБІР
+ * (26.08.2026). Вони існували й до того; регулярка їх просто не бачила — 50 із 358
+ * викликів `.query(` доходили до класифікатора. Це БОРГ, а не дозвіл: кожен рядок
+ * чекає на власника, і жоден із них не є «законним винятком».
+ */
+export interface SqlDebt {
+  file: string;
+  /** Фрагмент SQL у нормалізованих пробілах — має траплятись у файлі РІВНО раз. */
+  anchor: string;
+  cls: Exclude<SqlClass, "lifetime">;
+  route: string;
+  why: string;
+  since: string;
+}
+export const KNOWN_SQL_DEBT: SqlDebt[] = [
+  { file: "routes/dashboard.ts", cls: "money-period", route: "GET /reactivation", since: "2026-08-26",
+    anchor: "to_char(rc.contact1_date, 'YYYY-MM-DD') AS contact1_date",
+    why: "Легасі-грід `reactivation_clients`: SUM(price) по 142 з `closed_at_kommo >= rc.added_at`. "
+       + "Вхід у нього з UI прибрано 04.08.2026, роут у DEAD_ROUTE_CANDIDATES — імовірно лагодиться "
+       + "видаленням, а не переписуванням на ядро." },
+  { file: "routes/dashboard.ts", cls: "money-period", route: "GET /daily", since: "2026-08-26",
+    anchor: "SELECT day, SUM(price) AS s FROM ( SELECT DISTINCT (dse.changed_at",
+    why: "Поденні гроші по `deal_stage_events.changed_at` власним SQL. Анкер той самий, що в ядрі, "
+       + "але дедуп 9∪10 і корзини тут свої — саме тут розбіжність визріває непомітно." },
+  { file: "routes/dashboard.ts", cls: "money-period", route: "GET /repeat-plans-grid", since: "2026-08-26",
+    anchor: "${REPEAT_CTE} SELECT d.manager_id AS id, COALESCE(SUM(d.price),0) AS s FROM deals d "
+          + "JOIN managers m ON m.id = d.manager_id AND m.is_active JOIN pipeline_stage_map psm",
+    why: "Факт по менеджерах для сітки планів по постійних: `status_id=142 AND closed_at_kommo` — "
+       + "це ① власним SQL замість `money.successByMgr`." },
+  { file: "routes/dashboard.ts", cls: "money-period", route: "GET /repeat-plans-grid", since: "2026-08-26",
+    anchor: "EXTRACT(DAY FROM (d.closed_at_kommo ${KYIV}))::int AS cday",
+    why: "Той самий факт у розрізі днів місяця. Пара до попереднього: розійдуться вони НЕ разом." },
+  { file: "routes/dashboard.ts", cls: "money-period", route: "GET /repeat-client-history", since: "2026-08-26",
+    anchor: "to_char(date_trunc('month', (d.closed_at_kommo ${KYIV})), 'YYYY-MM') AS month, COUNT(*) AS orders",
+    why: "12-місячний ряд по клієнту. Поруч у картці клієнта ті самі місяці рахує "
+       + "`money.successByClientBucket` — два джерела одного числа на сусідніх екранах." },
+
+  { file: "routes/dashboard.ts", cls: "created-cohort", route: "GET /managers", since: "2026-08-26",
+    anchor: "date_trunc('week', d.created_at_kommo AT TIME ZONE 'Europe/Kyiv') AS week_start",
+    why: "Тижневий розріз воронки по даті СТВОРЕННЯ. Разом із лічильниками їде `SUM(price)` — "
+       + "тобто гроші за когортою створення, і саме ця форма колись дала −27% у поточному місяці." },
+  { file: "routes/dashboard.ts", cls: "created-cohort", route: "GET /personal", since: "2026-08-26",
+    anchor: "SELECT psm.funnel_stage, COUNT(*) AS deal_count, COALESCE(SUM(d.price), 0) AS total_amount FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id WHERE d.manager_id = $1",
+    why: "Підсумок воронки менеджера за когортою створення." },
+  { file: "routes/dashboard.ts", cls: "created-cohort", route: "GET /personal", since: "2026-08-26",
+    anchor: "date_trunc('day', d.created_at_kommo AT TIME ZONE 'Europe/Kyiv') AS day, psm.funnel_stage",
+    why: "Той самий розріз по днях." },
+  { file: "routes/dashboard.ts", cls: "created-cohort", route: "GET /personal", since: "2026-08-26",
+    anchor: "date_trunc('month', d.created_at_kommo AT TIME ZONE 'Europe/Kyiv') AS month, psm.funnel_stage",
+    why: "Той самий розріз по місяцях." },
+  { file: "routes/dashboard.ts", cls: "created-cohort", route: "GET /loyalty", since: "2026-08-26",
+    anchor: "WITH scoped AS ( SELECT d.client_key, d.manager_id, m.name AS manager_name, d.client_name, d.created_at_kommo",
+    why: "Лояльність: когорта створення в CTE, далі суми по клієнту." },
+  { file: "routes/dashboard.ts", cls: "created-cohort", route: "GET /leadgen-regulars", since: "2026-08-26",
+    anchor: "WITH junk AS ( SELECT DISTINCT client_key FROM deals WHERE client_name ILIKE",
+    why: "Постійні від лідогену: `MIN(created_at_kommo)` як означення першого дотику." },
+  { file: "routes/dashboard.ts", cls: "created-cohort", route: "GET /regular-clients", since: "2026-08-26",
+    anchor: "array_agg(d.client_name ORDER BY d.created_at_kommo DESC))[1], 'Клієнт') AS name",
+    why: "Список постійних: `created_at_kommo` тут лише для вибору свіжої назви, але поруч "
+       + "`SUM(price)` і `MAX(closed_at_kommo)` — перевірити, чи не поїхав анкер." },
+];
+
+/**
+ * АУДИТ РЕЄСТРУ БОРГУ. Реєстр — не смітник: запис, під яким у коді вже немає
+ * порушення, глушив би СПРАВЖНЄ, що випадково збіглося формою; а якір, що влучає у
+ * два різні запити, робить із документа здогад.
+ *
+ * `byFile`: файл → тексти блоків у нормалізованих пробілах.
+ */
+export function auditSqlDebt(
+  byFile: ReadonlyMap<string, readonly string[]>,
+  debts: readonly SqlDebt[] = KNOWN_SQL_DEBT,
+): { dead: string[]; ambiguous: string[] } {
+  const dead: string[] = [];
+  const ambiguous: string[] = [];
+  for (const d of debts) {
+    const hits = (byFile.get(d.file) ?? []).filter((q) => q.includes(d.anchor)).length;
+    if (hits === 0) dead.push(`${d.file} — «${d.anchor.slice(0, 60)}…»`);
+    else if (hits > 1) ambiguous.push(`${d.file} — «${d.anchor.slice(0, 60)}…» (${hits} збігів)`);
+  }
+  return { dead, ambiguous };
+}
+
+/** Нормалізація для звірки з якорем: пробіли не мають вирішувати, чи це те саме порушення. */
+export const normSql = (q: string): string => q.replace(/\s+/g, " ").trim();
+
+/** Чи ВІДОМИЙ це борг: файл + якір + клас мусять збігтися ВСІ ТРИ. */
+export function knownDebtFor(file: string, q: string, cls: SqlClass): SqlDebt | null {
+  const n = normSql(q);
+  return KNOWN_SQL_DEBT.find((d) => d.file === file && d.cls === cls && n.includes(d.anchor)) ?? null;
+}
+
 /** Місця, де сирий SQL із грошима/стадіями лишається свідомо. */
 export const CORE_BYPASS_EXEMPTIONS: CoreExemption[] = [
   { file: "routes/statistics.ts",
@@ -331,5 +436,6 @@ export function exemptionsWithoutReason(): string[] {
   for (const e of ROW_SPREAD_EXEMPTIONS) if (!e.why.trim()) bad.push(`спред: ${e.file} ${e.frag}`);
   for (const e of DEAD_ROUTE_CANDIDATES) if (!e.why.trim()) bad.push(`мертвий: ${e.method} ${e.path}`);
   for (const e of CREATED_COHORT_EXEMPTIONS) if (!e.why.trim()) bad.push(`когорта: ${e.file} ${e.frag}`);
+  for (const e of KNOWN_SQL_DEBT) if (!e.why.trim()) bad.push(`борг: ${e.file} ${e.anchor.slice(0, 40)}`);
   return bad;
 }
