@@ -2425,8 +2425,24 @@ dashboardRouter.delete("/receivables/limit/:clientKey", requirePerm("manage_cred
  */
 dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const auth = req.auth!;
+  /**
+   * 📋 ДВА РЕЖИМИ, ОДИН ОБРОБНИК (реєстр рахунків, 27.08.2026).
+   *   `?clientKey=…` — розкриття одного клієнта (як було);
+   *   без ключа      — ПЛАСКИЙ РЕЄСТР усіх рахунків у скоупі.
+   *
+   * 🔴 ЧОМУ НЕ ОКРЕМИЙ РОУТ. Два роути означали б два предикати «живий
+   * рахунок», два скоупи й два набори полів — тобто рівно ту конструкцію, яка
+   * щойно дала «рядок 2 323 000 проти розкриття 691 000». Тут один запит,
+   * одна умова відмінності (`ri.client_key = $1` або нічого) і спільний хвіст.
+   *
+   * 📐 Ціна плаского режиму ЗАМІРЯНА, не оцінена (27.08.2026, жива БД):
+   * `loadInvoiceFacts` робить ОДИН запит незалежно від кількості ключів —
+   * 1 ключ 34 мс / 1 запит, 73 ключі 95 мс / **1 запит**, 298 рядків. Тобто
+   * реєстр коштує +61 мс і НУЛЬ додаткових запитів. Я називав це головним
+   * ризиком проходу — замір це спростував.
+   */
   const clientKey = String(req.query.clientKey ?? "").trim();
-  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const flat = clientKey === "";
 
   /**
    * 🔴 СКОУП ПО КЛІЄНТУ, А НЕ ПО РАХУНКУ (рішення власника 27.08.2026).
@@ -2457,17 +2473,23 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const sc = receivablesScope(auth, req.query);
   if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
   const mine = await metrics.receivablesByClient(sc);
-  if (!mine.some((r) => r.clientKey === clientKey))
+  const visibleKeys = mine.map((r) => r.clientKey).filter((k): k is string => k != null);
+  if (!flat && !visibleKeys.includes(clientKey))
     return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
 
-  // Умова рівно одна: рахунки ЦЬОГО клієнта. Хто їх виставив — інформація в
-  // колонці «Менеджер», а не критерій видимості.
-  const conds = ["ri.client_key = $1"];
-  const params: unknown[] = [clientKey];
+  // Умова рівно одна: рахунки клієнтів у скоупі. Хто їх виставив — інформація
+  // в колонці «Менеджер», а не критерій видимості.
+  const conds = [flat ? "ri.client_key = ANY($1)" : "ri.client_key = $1"];
+  const params: unknown[] = [flat ? visibleKeys : clientKey];
 
-  const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; invoice_manager: string | null }>(
-    `SELECT ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
-            ri.amount, ri.service_url, ri.note,
+  const r = await pool.query<{ client_key: string; invoice_time: string | null; invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; edrpou: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; invoice_manager: string | null }>(
+    `SELECT ri.client_key, ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
+            -- 🕐 ЧАС ВИСТАВЛЕННЯ. NULL = часу не записано (сентинел 00:00:00 у
+            -- 1С — 121 із 293 рядків), і це «не знаємо», а не «опівночі».
+            -- Київ накладається ТУТ, у SQL; парсер зони не знає навмисно.
+            -- ⚠️ Без бектиків: усередині шаблонного літерала вони обірвали б рядок.
+            to_char(ri.invoice_at AT TIME ZONE 'Europe/Kyiv', 'HH24:MI:SS') AS invoice_time,
+            ri.amount, ri.service_url, ri.note, ri.edrpou,
             -- 👤 Менеджер САМОГО РАХУНКУ (колонка «Відповідальний» у розкритті).
             -- Це НЕ той, хто веде клієнта: після override або склейки це різні
             -- люди, і саме тому колонка стоїть під «Відповідальним» — щоб різницю
@@ -2484,7 +2506,10 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
      LEFT JOIN receivable_invoice_notes nn
             ON nn.client_key = ri.client_key AND nn.invoice_no = COALESCE(ri.invoice_no, '')
      WHERE ${conds.join(" AND ")}
-     ORDER BY ri.invoice_date DESC NULLS LAST, ri.amount DESC`,
+     -- Час бере участь у сортуванні там, де він є; де немає — рахунок стає в
+     -- кінець свого дня, а не на його початок (NULLS LAST), бо «не знаємо»
+     -- не має вдавати найранішу мить доби.
+     ORDER BY ri.invoice_date DESC NULLS LAST, ri.invoice_at DESC NULLS LAST, ri.amount DESC`,
     params
   );
   // 🏢 НАША ЮРОСОБА ПО КОЖНОМУ РАХУНКУ — З ТОГО САМОГО ЯДРА, ЩО Й ПЛИТКА (Е4b).
@@ -2497,15 +2522,33 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   //
   // ⚠️ Ключ звірки — номер рахунку. Він унікальний у межах клієнта (на ньому вже
   // стоять нотатки `receivable_invoice_notes`), тож нового припущення тут немає.
-  const ourFacts = await receivablesFacts.loadInvoiceFacts(pool, [clientKey]);
-  const factByNo = new Map(ourFacts.map((f) => [f.invoiceNo ?? "", f]));
+  // 🔴 ОДИН ВИКЛИК НА ВЕСЬ СПИСОК, а не цикл по клієнтах: функція приймає масив
+  // і робить `= ANY($1)`, тож запит один незалежно від кількості ключів
+  // (заміряно: 73 ключі → 1 запит, 95 мс). Цикл дав би 73 запити — саме це
+  // стереже `#158`.
+  const factKeys = flat ? visibleKeys : [clientKey];
+  const ourFacts = await receivablesFacts.loadInvoiceFacts(pool, factKeys);
+  /**
+   * 🔴 КЛЮЧ — ПАРА (КЛІЄНТ, №), А НЕ САМ №. Номер унікальний У МЕЖАХ КЛІЄНТА —
+   * так і написано в коментарі нижче, і для розкриття одного клієнта голого
+   * номера вистачало. У ПЛАСКОМУ режимі клієнтів 72, і голий номер зліпив би
+   * рахунки різних клієнтів в один запис.
+   *
+   * 📐 Заміряно 27.08.2026: однакових номерів у різних клієнтів СЬОГОДНІ нуль —
+   * але це властивість ДАНИХ, не гарантія. І одна колізія існує вже зараз:
+   * рахунки БЕЗ номера згортаються в ключ `""` — усі, у всіх клієнтів. Живих
+   * таких нуль, списаних два; тобто на плаский список це впливає, щойно
+   * зʼявиться перший безномерний живий.
+   */
+  const fkey = (ck: string, no: string | null) => `${ck}\u0000${no ?? ""}`;
+  const factByNo = new Map(ourFacts.map((f) => [fkey(f.clientKey, f.invoiceNo), f]));
   // 🗑 СПИСАНИЙ РАХУНОК ЗНИКАЄ З АКТИВНОГО РОЗКРИТТЯ ПОВНІСТЮ (рішення власника
   // 26.08.2026, скасовує попереднє «лишається закресленим із підписом»). Зникнути
   // з очей і зникнути з обліку — різні речі: він лежить у вкладці «Архів» із
   // причиною, автором і датою, і повертається однією кнопкою.
-  const writtenOffNos = new Set(ourFacts.filter((f) => f.writtenOff).map((f) => f.invoiceNo ?? ""));
+  const writtenOffNos = new Set(ourFacts.filter((f) => f.writtenOff).map((f) => fkey(f.clientKey, f.invoiceNo)));
 
-  const alive = r.rows.filter((x) => !writtenOffNos.has(x.invoice_no ?? ""));
+  const alive = r.rows.filter((x) => !writtenOffNos.has(fkey(x.client_key, x.invoice_no)));
 
   /**
    * 🕰 ВІК БОРГУ ЇДЕ З СЕРВЕРА, А НЕ РАХУЄТЬСЯ ШАПКОЮ РОЗКРИТТЯ.
@@ -2522,13 +2565,20 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   res.json({
     oldestAliveDays,
     invoices: alive.map((x) => {
-      const f = factByNo.get(x.invoice_no ?? "");
+      const f = factByNo.get(fkey(x.client_key, x.invoice_no));
       return {
+        // 🔗 Ключ клієнта — у ПЛАСКОМУ режимі рядок мусить знати, чий він.
+        clientKey: x.client_key,
+        clientName: x.entity_name,
         invoiceNo: x.invoice_no,
         invoiceDate: x.invoice_date,
+        // 🕐 «HH:MM:SS» або `null` = часу не записано. Порожнеча тут — ВІДПОВІДЬ,
+        // і екран мусить сказати її словами, а не показати «00:00».
+        invoiceTime: x.invoice_time,
         amount: Number(x.amount),
         serviceUrl: x.service_url,
         note: x.note,
+        edrpou: x.edrpou,
         dueDate: x.due_date,
         comment: x.inv_comment,
         entityName: x.entity_name,

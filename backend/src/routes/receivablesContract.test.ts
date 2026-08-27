@@ -37,8 +37,15 @@ test("#134 ЮРОСОБИ обʼєднаного клієнта доходять
 
   // ── 2 · API-ТИП знає поле. Якщо його нема в типі, фронт не зможе його прочитати
   //        без `any`, і зникнення пройде мовчки на компіляції.
-  const iface = api.slice(api.indexOf("export interface ReceivableInvoice"));
-  assert.ok(/entityName: string \| null/.test(iface.slice(0, 500)),
+  // ⚠️ ЗРІЗ ДО КІНЦЯ ІНТЕРФЕЙСА, А НЕ «ПЕРШІ 500 СИМВОЛІВ» (виправлено 27.08.2026).
+  // Прибитий розмір — таймер на хибну тривогу: щойно в інтерфейс дописали поля
+  // реєстру (`clientKey`, `invoiceTime`, `edrpou`) з поясненнями, `entityName`
+  // виїхав за межу, і гейт почервонів на робочому коді. Це ЧЕТВЕРТИЙ випадок
+  // цього класу (#197c, #199bh, #197b), тож межа тепер змістова — закривна
+  // дужка інтерфейса.
+  const ifaceFrom = api.indexOf("export interface ReceivableInvoice");
+  const iface = api.slice(ifaceFrom, api.indexOf("\n}", ifaceFrom));
+  assert.ok(/entityName: string \| null/.test(iface),
     "🔴 `entityName` зник із типу ReceivableInvoice — фронт осліп на це поле");
 
   // ── 3 · 🔴 ГОЛОВНЕ: ЕКРАН ЙОГО ПОКАЗУЄ. Саме цієї ланки бракувало.

@@ -658,6 +658,29 @@ CREATE TABLE IF NOT EXISTS receivable_invoices (
 );
 CREATE INDEX IF NOT EXISTS idx_receivable_invoices_client ON receivable_invoices(client_key);
 
+-- 🕐 ЧАС ВИСТАВЛЕННЯ РАХУНКУ — ОКРЕМА КОЛОНКА, `invoice_date` НЕ ЧІПАЄТЬСЯ.
+--
+-- 1С віддає його в полі `Account` («… від 26.08.2026 14:46:16»), а ми два роки
+-- відкидали: у regex не було групи часу, а колонка типу DATE. Заміряно на
+-- живому фіді 27.08.2026: із 293 рядків **172 мають справжній час**, ще
+-- **121 — сентинел 00:00:00** («часу не записано», доведено розподілом: у
+-- годині 00 немає ЖОДНОГО іншого значення). Сентинел стає `NULL` у парсері.
+--
+-- `invoice_date` лишається як була: її читають розкриття клієнта,
+-- `loadInvoiceFacts`, сортування й `#124`. Зміна її типу зрушила б їх усі.
+--
+-- 🔴 ВІДКАТ — ОКРЕМОЮ ДІЄЮ, `git revert` КОДУ КОЛОНКУ НЕ ПРИБЕРЕ:
+--     ALTER TABLE receivable_invoices DROP COLUMN invoice_at;
+--   Це безпечно: дані в колонці не унікальні, вона повністю відновлюється з
+--   фіду за один прохід `syncReceivables` (≤15 хв), бо таблиця TRUNCATE-иться.
+--
+-- ⚠️ `ALTER` — ПІД ВІКНОМ СИНКУ. Таблицю пише джоба кожні 15 хв (прохід ~18 с,
+--   заміряно). Порядок: прочитати `job_runs.last_success_at` для
+--   `syncReceivables`, переконатись, що вік < 60 с, і аж тоді `ALTER` — тоді в
+--   запасі ~14.5 хв. Якщо заблокувалось — віддати й доповісти, а не чекати
+--   наосліп: `ALTER` у черзі сам стає блокувальником для наступного синку.
+ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS invoice_at TIMESTAMPTZ;
+
 -- Per-regular-client monthly plan (the team-lead's "план по постійних клієнтах"
 -- replicated from the manual sheet). Plan is a monthly target per client that the
 -- frontend decomposes by week; fact is auto-filled from CRM. The metadata columns

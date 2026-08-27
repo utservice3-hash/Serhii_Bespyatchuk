@@ -257,13 +257,20 @@ export async function syncReceivables(): Promise<void> {
       // порожньо, і на екрані чесне «—», а не лінк, що нікуди не веде.
       const serviceUrl = row.dealId != null ? `${config.kommo.baseUrl}/leads/detail/${row.dealId}` : null;
       await client.query(
+        // 🕐 `invoice_at` — НАЇВНИЙ рядок «YYYY-MM-DD HH:MM:SS» із парсера, і Київ
+        // накладається ТУТ, у SQL. Парсер зони не знає навмисно: у нього два
+        // споживачі (ця вставка і `#124`), і зона, записана двічі, розійшлася б.
+        // `NULL` = часу не записано (сентинел 00:00:00 або його немає взагалі) —
+        // це «не знаємо», а не «опівночі».
         `INSERT INTO receivable_invoices
-           (client_key, client_key_raw, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note)
-         VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+           (client_key, client_key_raw, client_name, manager_id, manager_name_raw, invoice_no, invoice_date, amount, edrpou, service_url, note, invoice_at)
+         VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                 CASE WHEN $11::text IS NULL THEN NULL
+                      ELSE ($11::timestamp AT TIME ZONE 'Europe/Kyiv') END)`,
         // `client_key` = `client_key_raw` на вставці; реєстр псевдонімів
         // застосовується наступним оператором, тим самим виразом, що й для угод.
         [row.clientKey, row.clientName, managerId, row.managerHint, row.invoiceNo, row.invoiceDate,
-         row.amount, row.edrpou, serviceUrl, row.comment]
+         row.amount, row.edrpou, serviceUrl, row.comment, row.invoiceAt]
       );
     }
     // 🔗 СКЛЕЙКА КЛІЄНТІВ. Той самий реєстр `client_key_alias`, що й в угодах, і

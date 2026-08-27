@@ -1488,8 +1488,21 @@ export async function saveReceivableNote(payload: {
 }
 
 export interface ReceivableInvoice {
+  /** Чий це рахунок. У розкритті клієнта надлишковий, у ПЛАСКОМУ реєстрі — ключ. */
+  clientKey: string;
+  clientName: string | null;
   invoiceNo: string | null;
   invoiceDate: string | null;
+  /**
+   * 🕐 «HH:MM:SS» або `null` — часу не записано.
+   * 🔴 `null` НЕ ДОРІВНЮЄ «00:00». 1С пише сентинел `00:00:00`, коли часу немає
+   * (заміряно 27.08.2026: 121 із 293 рядків), і парсер перетворює його на `null`
+   * ОДИН раз. Показувати тут «00:00» означало б стверджувати мить доби, якої ми
+   * не знаємо.
+   */
+  invoiceTime: string | null;
+  /** ЄДРПОУ контрагента з фіду 1С. Порожній у 14 із 298 рядків. */
+  edrpou: string | null;
   amount: number;
   serviceUrl: string | null;
   note: string | null;
@@ -1572,6 +1585,19 @@ export async function revokeReceivableWriteoff(payload: {
 export interface ReceivableInvoicesResp { invoices: ReceivableInvoice[]; oldestAliveDays: number | null }
 export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoicesResp> {
   const { data } = await api.get<ReceivableInvoicesResp>("/dashboard/receivables/invoices", { params: { clientKey } });
+  return { invoices: data.invoices, oldestAliveDays: data.oldestAliveDays ?? null };
+}
+
+/**
+ * 📋 РЕЄСТР РАХУНКІВ — ПЛАСКИЙ СПИСОК УСІХ ЖИВИХ РАХУНКІВ У СКОУПІ.
+ *
+ * 🔴 ТОЙ САМИЙ РОУТ, що й розкриття клієнта, просто без `clientKey`. Окремий
+ * роут означав би другий предикат «живий рахунок», другий скоуп і другий набір
+ * полів — тобто рівно ту конструкцію, що дала «рядок 2 323 000 проти розкриття
+ * 691 000». Тут одне джерело, отже розійтись їм нема як.
+ */
+export async function fetchInvoiceRegistry(): Promise<ReceivableInvoicesResp> {
+  const { data } = await api.get<ReceivableInvoicesResp>("/dashboard/receivables/invoices");
   return { invoices: data.invoices, oldestAliveDays: data.oldestAliveDays ?? null };
 }
 

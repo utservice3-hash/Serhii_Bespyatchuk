@@ -27,6 +27,25 @@ type Opts = { skip?: string };
 export const needsDb = (): Opts =>
   HAS_DB ? {} : { skip: "потрібен DATABASE_URL (npm test без БД пропускає)" };
 
+/**
+ * Потрібне ОТОЧЕННЯ БЕКЕНДА, а не лише БД.
+ *
+ * 🔴 НАВІЩО ОКРЕМО ВІД `needsDb`. Гейт, що кличе обробник роуту в процесі,
+ * імпортує `routes/dashboard.js` → `config.js`, а той кидає `Missing required
+ * env var: JWT_SECRET` ЩЕ НА ІМПОРТІ. `DATABASE_URL` у контейнері є (роль
+ * `kk_ro`), а `JWT_SECRET` — ні, тож `needsDb()` пропускає такий гейт до
+ * виконання, і той падає не на дефекті, а на оточенні.
+ *
+ * ⚠️ Наявні `#150c`/`#157`/`#158` живуть саме так — вони в числі відомих падінь
+ * контейнера. Переводити ЇХ на цей гейт означало б змінити базу порівняння
+ * падінь у чужому проході; тому guard додано, а старих не чіпано. Нові гейти
+ * до цієї родини не дописуються.
+ */
+export const needsBackendEnv = (): Opts =>
+  !HAS_DB ? { skip: "потрібен DATABASE_URL" }
+    : process.env.JWT_SECRET ? {}
+      : { skip: "потрібен JWT_SECRET: гейт кличе обробник роуту, а `config` кидає ще на імпорті" };
+
 /** Потрібне живе API: `TEST_SCOPE=prod` + доступний API_BASE. */
 export const needsApi = (): Opts =>
   IS_PROD_SCOPE

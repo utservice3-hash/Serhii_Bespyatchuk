@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 /** Тести біжать із `dist`, а звіряти треба ДЖЕРЕЛО — той самий приймач, що в сусідніх гейтах. */
 const srcOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url).href.replace("/dist/", "/src/"));
-import { needsDb } from "../testMode.js";
+import { needsDb, needsBackendEnv } from "../testMode.js";
 import {
   CARRIER_PAID_STAGES, agingBucket, classifyCarrierPaid, classifyInvoice, classifyLink,
   foldFacts, fromKommoPaymentType, type EntityResolver, type RawInvoiceRow,
@@ -319,5 +319,98 @@ test("#156 у роутах дебіторки перевірка права — 
     assert.ok(bodyRead === -1 || guardAt < bodyRead,
       `🔴 у ${c.route} тіло запиту читається (позиція ${bodyRead}) РАНІШЕ за гейт «${c.guard}» (${guardAt}) `
       + "— відмова прийде як 400 замість 403");
+  }
+});
+
+/**
+ * #158b — ПЛАСКИЙ РЕЄСТР КОШТУЄ СТІЛЬКИ Ж ЗАПИТІВ, ЩО Й ОДИН КЛІЄНТ.
+ *
+ * 🔴 ЦЕ І Є ГОЛОВНИЙ СТРУКТУРНИЙ РИЗИК РЕЄСТРУ, і його треба стерегти саме
+ * числом запитів, а не часом. Спокуса написати `for (const k of keys)
+ * loadInvoiceFacts(pool, [k])` велика — код читається природно й працює. Ціна
+ * заміряна 24.08.2026: RTT до Neon = 30 мс, отже 72 клієнти × 30 мс = **+2.2 с**
+ * на кожне відкриття вкладки, і жоден тест на час цього надійно не спіймав би
+ * (число визначає завантаження Neon, а не ми — саме тому знято `#137e`).
+ *
+ * 📐 Заміряно 27.08.2026 на живій БД: `loadInvoiceFacts` робить ОДИН запит
+ * незалежно від кількості ключів — 1 ключ 34 мс / 1 запит, 73 ключі 95 мс /
+ * **1 запит**, 298 рядків. Тобто реєстр коштує +61 мс і НУЛЬ зайвих походів.
+ *
+ * ⚠️ РІВНІСТЬ, а не «не більше»: обидва режими — один обробник, тож розбіжність
+ * у числі запитів означає, що хтось завів у плаский режим окрему гілку.
+ */
+test("#158b реєстр робить ТУ САМУ кількість запитів, що й розкриття одного клієнта", needsBackendEnv(), async () => {
+  const { pool } = await import("../db/pool.js");
+  const h = await handler("/receivables/invoices");
+  const orig = pool.query.bind(pool);
+  const countCalls = async (query: Record<string, string>) => {
+    let n = 0;
+    (pool as unknown as { query: unknown }).query = function (t: unknown, p: unknown) { n++; return orig(t as string, p as unknown[]); };
+    try {
+      await new Promise<void>((ok, bad) => {
+        const res = { json() { ok(); }, status() { return this; }, send() { ok(); }, setHeader() {} };
+        try { h({ auth: ADMIN, query, params: {} } as never, res as never, (e?: unknown) => bad(e ?? new Error("next()"))); }
+        catch (e) { bad(e); }
+      });
+    } finally { (pool as unknown as { query: unknown }).query = orig; }
+    return n;
+  };
+
+  // Клієнт беремо з живого списку — прибитий ключ протух би першим же синком.
+  const list = await call(await handler("/receivables"), ADMIN);
+  const someKey = list.managers.flatMap((m: any) => m.clients)[0]?.clientKey;
+  assert.ok(someKey, "🔴 у `receivables` немає жодного клієнта — гейт міряє порожнечу");
+
+  const one = await countCalls({ clientKey: someKey });
+  const flat = await countCalls({});
+  assert.ok(one > 0, "🔴 жодного запиту не перехоплено — лічильник не працює, а не роут дешевий");
+  assert.equal(flat, one,
+    `🔴 РЕЄСТР РОБИТЬ ${flat} ЗАПИТІВ ПРОТИ ${one} У РОЗКРИТТІ. Майже напевно `
+    + "`loadInvoiceFacts` кличеться в циклі по клієнтах: функція приймає МАСИВ і робить "
+    + "`= ANY($1)`, тож правильна ціна — один похід на весь список. При 72 клієнтах "
+    + "цикл коштує +2.2 с (RTT до Neon 30 мс).");
+  // Дзеркало: реєстр справді щось привіз, а не «дешевий, бо порожній».
+  const body = await new Promise<any>((ok, bad) => {
+    const res = { json(b: unknown) { ok(b); }, status() { return this; }, send(b: unknown) { ok(b); }, setHeader() {} };
+    try { h({ auth: ADMIN, query: {}, params: {} } as never, res as never, (e?: unknown) => bad(e ?? new Error("next()"))); }
+    catch (e) { bad(e); }
+  });
+  assert.ok((body.invoices ?? []).length > 0,
+    "🔴 реєстр порожній — рівність запитів нічого не доводить, поки він нічого не віддає");
+});
+
+/**
+ * #199ce — РЕЄСТР І РОЗКРИТТЯ КАЖУТЬ ПРО ОДИН РАХУНОК ОДНЕ Й ТЕ САМЕ.
+ *
+ * 🔴 Обидва режими — один обробник, і саме це твердження гейт і стереже: підмножина
+ * реєстру по клієнту мусить БАЙТ-У-БАЙТ дорівнювати розкриттю того ж клієнта.
+ * Щойно хтось заведе для реєстру власний предикат «живий рахунок» або власний
+ * набір полів, вони почнуть розходитись — так і зʼявився дефект 27.08.2026.
+ */
+test("#199ce підмножина реєстру по клієнту == розкриттю того ж клієнта", needsBackendEnv(), async () => {
+  const h = await handler("/receivables/invoices");
+  const one = (q: Record<string, string>) => new Promise<any>((ok, bad) => {
+    const res = { json(b: unknown) { ok(b); }, status() { return this; }, send(b: unknown) { ok(b); }, setHeader() {} };
+    try { h({ auth: ADMIN, query: q, params: {} } as never, res as never, (e?: unknown) => bad(e ?? new Error("next()"))); }
+    catch (e) { bad(e); }
+  });
+
+  const reg = await one({});
+  const rows: any[] = reg.invoices ?? [];
+  assert.ok(rows.length > 0, "🔴 реєстр порожній — звіряти нема з чим");
+  const keys = [...new Set(rows.map((x) => x.clientKey))].slice(0, 5);
+  assert.ok(keys.length > 0, "🔴 у рядках реєстру немає ключа клієнта — реєстр не знає, чий рядок");
+
+  const norm = (x: any) => JSON.stringify({
+    no: x.invoiceNo, date: x.invoiceDate, time: x.invoiceTime, amount: Number(x.amount),
+    edrpou: x.edrpou, mgr: x.managerName, deal: x.dealId, found: x.dealFound,
+  });
+  for (const k of keys) {
+    const detail = await one({ clientKey: k });
+    const a = rows.filter((x) => x.clientKey === k).map(norm).sort();
+    const b = (detail.invoices ?? []).map(norm).sort();
+    assert.deepEqual(a, b,
+      `🔴 «${k}»: реєстр і розкриття кажуть різне. Два режими — ОДИН обробник; `
+      + "розбіжність означає, що комусь із них завели власний предикат або власний набір полів.");
   }
 });

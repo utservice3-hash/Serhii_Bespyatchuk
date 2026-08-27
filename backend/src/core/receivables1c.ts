@@ -39,6 +39,10 @@ export interface Receivable1cRow {
   clientName: string;
   invoiceNo: string | null;
   invoiceDate: string | null; // ISO YYYY-MM-DD
+  /** «YYYY-MM-DD HH:MM:SS», НАЇВНИЙ локальний. `null` = часу не записано
+   *  (сентинел 00:00:00 — 121 із 293 рядків, заміряно 27.08.2026). Зону
+   *  накладає споживач, не парсер. */
+  invoiceAt: string | null;
   /** Гривнева сума. Для -362 це гривневий еквівалент. */
   amount: number;
   /** Сума у валюті (`SumVal`); для -361 завжди 0. */
@@ -58,21 +62,79 @@ export interface Parse1cResult {
   skipped: { noName: number; noAmount: number; noDetail: number };
 }
 
+export interface InvoiceRef {
+  no: string | null;
+  /** ISO `YYYY-MM-DD`. */
+  date: string | null;
+  /** `HH:MM:SS` або `null` — і для відсутнього часу, і для сентинела 00:00:00. */
+  time: string | null;
+  /** `YYYY-MM-DD HH:MM:SS` — НАЇВНИЙ локальний, БЕЗ зони. `null`, якщо часу немає. */
+  at: string | null;
+}
+
 /**
- * № рахунку й дата з поля `Account`.
- * 🔴 Regex НЕ переписаний — це буквально той самий вираз, яким два роки жив
- * `parseInvoice` для гугл-таблиці, і саме тому ключ `receivable_invoice_notes`
- * (`client_key, invoice_no`) переживає зміну джерела. Заміряно на живій
- * відповіді: № витягується у 308 із 308 рядків, дата — теж, дублів нуль.
+ * № рахунку, дата й ЧАС із поля `Account`.
+ *
+ * 🔴 Regex дати й номера НЕ переписаний — це буквально той самий вираз, яким два
+ * роки жив `parseInvoice` для гугл-таблиці, і саме тому ключ
+ * `receivable_invoice_notes` (`client_key, invoice_no`) переживає зміну джерела.
+ * Час доданий ОКРЕМОЮ НЕОБОВʼЯЗКОВОЮ групою — старі два поля не зрушено.
+ *
+ * ═══ 🔴 ПІВНІЧ — ЦЕ ЗАГЛУШКА, А НЕ ЧАС (доведено 27.08.2026) ═══
+ *
+ * Заміряно на живому фіді 1С, 73 контрагенти → **293 рядки-рахунки**:
+ *
+ *   без часу в рядку взагалі:   0
+ *   рівно 00:00:00:           121
+ *   справжній час:            172
+ *
+ * Доказ, що це сентинел, а не «виписали опівночі»: у годині `00` НЕМАЄ ЖОДНОГО
+ * іншого значення — ні `00:07`, ні `00:41`. Одне значення, повторене 121 раз.
+ * Решта годин дає нормальний робочий день:
+ *
+ *   08h:1  09h:20 10h:24 11h:14 12h:19 13h:19 14h:10
+ *   15h:18 16h:15 17h:9  18h:5  19h:7  20h:5  21h:1  23h:5
+ *
+ * Якби північ була часом, вона мала б такий самий розкид. Вона його не має.
+ * І це не «старі рахунки»: за 2026 рік — 120 півночей проти 167 із часом.
+ *
+ * Той самий клас, що `utm_source: ""` у Ringostat: **поле заповнене значенням,
+ * яке не означає значення**. Сентинел перетворюється на `null` ТУТ, один раз, а
+ * не тлумачиться кожним читачем окремо.
+ *
+ * ═══ ⚠️ ЗОНА СЮДИ НЕ ЗАПІКАЄТЬСЯ ═══
+ *
+ * `at` — наївний локальний рядок без зони. 1С віддає СТІННИЙ київський час.
+ * Київ накладає СПОЖИВАЧ (`AT TIME ZONE 'Europe/Kyiv'` у SQL), і робить це
+ * кожен у себе. Інакше зона існувала б у двох місцях і одного дня розійшлася б.
+ *
+ * ═══ 🔗 ЦЕ СПІЛЬНИЙ ПАРСЕР — У НЬОГО ДВА СПОЖИВАЧІ ═══
+ *
+ * `syncReceivables` (колонка `invoice_at`) і `#124` (виключення рахунків,
+ * виписаних ПІЗНІШЕ за останній синк). Другий кличе цю функцію, а не пише свою:
+ * два вирази одного правила розходяться мовчки.
+ *
+ * 🔴 ПАСТКА ДЛЯ СПОЖИВАЧА, НАЗВАНА ТУТ: `time === null` означає **НЕВІДОМО**, а
+ * НЕ «00:00». Порівняння «виписано пізніше за X», яке підставить нуль, дасть
+ * 121 рахунку найранішу можливу мітку доби — тобто рівно ті рахунки, про які ми
+ * нічого не знаємо, будуть впевнено класифіковані. Це те саме, що «`NULL` у
+ * `CHECK` проходить».
  */
-export function invoiceRefOf(cell: unknown): { no: string | null; date: string | null } {
+export function invoiceRefOf(cell: unknown): InvoiceRef {
   const s = typeof cell === "string" ? cell : "";
-  if (!s) return { no: null, date: null };
+  if (!s) return { no: null, date: null, time: null, at: null };
   const noMatch = s.match(/(\d{5,})/);
-  const dateMatch = s.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+  const m = s.match(/(\d{2})\.(\d{2})\.(\d{4})(?:[ T]+(\d{2}):(\d{2}):(\d{2}))?/);
+  const date = m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+  const hasTime = !!m && !!m[4];
+  // Сентинел 1С: рівно 00:00:00 = «час не записаний».
+  const sentinel = hasTime && m![4] === "00" && m![5] === "00" && m![6] === "00";
+  const time = hasTime && !sentinel ? `${m![4]}:${m![5]}:${m![6]}` : null;
   return {
     no: noMatch ? noMatch[1] : null,
-    date: dateMatch ? `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}` : null,
+    date,
+    time,
+    at: date && time ? `${date} ${time}` : null,
   };
 }
 
@@ -163,6 +225,7 @@ export function parse1cPayload(payload: unknown): Parse1cResult {
         clientName,
         invoiceNo: inv.no,
         invoiceDate: inv.date,
+        invoiceAt: inv.at,
         amount: uah,
         amountVal: val,
         edrpou: edrpou || null,
