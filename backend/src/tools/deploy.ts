@@ -70,17 +70,41 @@ export const NODE_BIN = process.env.UTS_NODE_BIN ?? "/usr/local/node26/bin";
 export const BACKUP_DIR = process.env.UTS_BACKUP_DIR ?? "/home/evraziat/uts.ua/deploy-backups";
 export const BACKUP_KEEP = 2;
 
-function toolsPresent(id: string): StepResult {
+/**
+ * Перевірка інструментів. `namedBin` — каталог, у якому node/npm мусять лежати
+ * ПОІМЕННО, або `null`, якщо досить будь-яких у `PATH`.
+ *
+ * 🔴 РІЗНИЦЯ МІЖ ФАЗАМИ — НЕ ПРИДИРКА, І `3655602` НА ЦЬОМУ ЗГОРІВ. Я вимагав
+ * прод-специфічного `/usr/local/node26/bin` в ОБОХ фазах — а `check` за задумом
+ * біжить у контейнері чи стенді, де node лежить деінде. Тобто той викат зробив
+ * `deploy:check` невиконуваним поза продом: рівно та хвороба, яку ми перед тим два
+ * дні лікували («інструмент, який неможливо виконати, не захищає нікого»).
+ * Знайшов HR, читаючи диф.
+ *
+ * Кому що потрібно:
+ *   `check` — БУДЬ-ЯКІ node/npm/git: фаза лише збирає й ганяє тести, а артефакт від
+ *             мажора не залежить (заміряно на одному sha: node24 і node26 дають
+ *             однаковий бандл і однаковий бекенд, md5 збігається);
+ *   `run`   — САМЕ прод-бінарник: після `kill` процес підіймає конвеєр саме ним, і
+ *             якщо його немає, сайт не повернеться. Перевірка стоїть ПЕРЕД першим
+ *             `rm -rf dist`, бо 26.08.2026 ланцюг зробив `rm` і аж тоді впав на
+ *             `npm: command not found`.
+ */
+export function toolsPresent(id: string, namedBin: string | null): StepResult {
   const missing = ["npm", "node", "git"].filter((t) => {
     try { sh(t, ["--version"]); return false; } catch { return true; }
   });
-  const named = existsSync(`${NODE_BIN}/node`) && existsSync(`${NODE_BIN}/npm`);
-  if (!named) return { id, ok: false,
-    detail: `🔴 у ${NODE_BIN} немає node/npm — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\`` };
-  return { id, ok: missing.length === 0,
-    detail: missing.length
-      ? `🔴 у PATH немає: ${missing.join(", ")} — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\``
-      : "npm, node, git на місці" };
+  if (missing.length) return { id, ok: false,
+    detail: `🔴 у PATH немає: ${missing.join(", ")} — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\`` };
+  /**
+   * 🔴 ВІДМОВА МУСИТЬ НАЗИВАТИ ВЛАСНИЙ ВИХІД. Гачок `UTS_NODE_BIN` існував і до цього,
+   * але текст його не згадував — HR знайшов його, лише пішовши читати диф. Відмова,
+   * що не називає, як її зняти, коштує наступному годину.
+   */
+  if (namedBin && !(existsSync(`${namedBin}/node`) && existsSync(`${namedBin}/npm`))) return { id, ok: false,
+    detail: `🔴 у ${namedBin} немає node/npm — далі йти НЕ МОЖНА: після \`kill\` процес підіймає конвеєр саме цим бінарником.\n`
+      + `   Інший шлях задається змінною UTS_NODE_BIN (напр. UTS_NODE_BIN=/usr/local/node24/bin).` };
+  return { id, ok: true, detail: namedBin ? `npm, node, git на місці (${namedBin})` : "npm, node, git на місці (PATH)" };
 }
 
 /**
@@ -96,8 +120,10 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * 🛠 СЕРЕДОВИЩЕ — ПЕРЕД ПЕРШИМ `rm`, А НЕ ПІСЛЯ. Обробник один на обидві фази:
    * розходження між ними було б рівно тією дірою, яку крок закриває.
    */
-  toolsCheck: () => toolsPresent("toolsCheck"),
-  toolsRun: () => toolsPresent("toolsRun"),
+  // check біжить у контейнері/стенді — там node лежить де завгодно, і це нормально.
+  toolsCheck: () => toolsPresent("toolsCheck", null),
+  // run убиває процес прода — прод-бінарник мусить БУТИ, інакше сайт не повернеться.
+  toolsRun: () => toolsPresent("toolsRun", NODE_BIN),
   base: async (c) => {
     const live = await prodSha();
     c.prod = live;
