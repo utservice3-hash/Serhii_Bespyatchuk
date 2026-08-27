@@ -3372,27 +3372,27 @@ test("#199cd2 скоуп розкриття — ТОЙ САМИЙ вираз, щ
  * стоїть `receivablesScope` + `receivablesByClient`, і ніде — власний фільтр по
  * `ri.manager_id` чи `m.team_id`.
  *
- * ПʼЯТЬ МІСЦЬ (рішення власника 27.08.2026; пʼяте додано того ж дня разом із
- * обʼєднанням N клієнтів):
+ * ЧОТИРИ МІСЦЯ (рішення власника 27.08.2026, запис переведено разом із читанням):
  *   1 · GET  /receivables            — список клієнтів
  *   2 · GET  /receivables/invoices   — розкриття + плаский реєстр
  *   3 · GET  /receivables/writeoffs  — архів списань
  *   4 · PUT  /receivables/invoice-note — ЗАПИС дедлайну по рахунку
- *   5 · POST /receivables/merge      — ОБʼЄДНАННЯ клієнтів
  *
- * ⚠️ ЧЕСНА МЕЖА ПʼЯТОГО МІСЦЯ: усі ролі, що мають `merge_receivables`
- * (КВП/СЕО/ОД/адмін), мають ПОВНИЙ скоуп, тож СЬОГОДНІ ця перевірка нікого не
- * зупиняє. Вона там не заради сьогодні: щойно право дістане тімлід, межа
- * звузиться сама, а не чекатиме, поки хтось згадає дописати фільтр.
+ * 🔗 ПʼЯТЕ МІСЦЕ — `POST /receivables/merge` (обʼєднання клієнтів, 27.08.2026) —
+ * живе в ОКРЕМОМУ гейті `#248`, а не дописане сюди. Причина не косметична: у
+ * нього є те, чого немає в цих чотирьох — гейт ПРАВА перед скоупом, і порядок
+ * між ними окреме твердження. Перейменувати цей гейт заради «пʼяти» означало б
+ * зробити його зниклим у порівнянні прогонів: `deploy:check` рахує приріст по
+ * ІМЕНАХ, і рядок «перестав виконуватись» він показав би там, де нічого не
+ * ламали. Заміряно на собі того ж дня.
  */
-test("#199cg вираз скоупу дебіторки — ОДИН на всі пʼять місць", () => {
+test("#199cg вираз скоупу дебіторки — ОДИН на всі чотири місця", () => {
   const src = strip(readFileSync(SRC("routes/dashboard.ts"), "utf8"));
   const places: [string, string][] = [
     ["GET /receivables", 'dashboardRouter.get("/receivables"'],
     ["GET /receivables/invoices", 'dashboardRouter.get("/receivables/invoices"'],
     ["GET /receivables/writeoffs", 'dashboardRouter.get("/receivables/writeoffs"'],
     ["PUT /receivables/invoice-note", 'dashboardRouter.put("/receivables/invoice-note"'],
-    ["POST /receivables/merge", 'dashboardRouter.post("/receivables/merge"'],
   ];
   const missing: string[] = [];
   const ownFilter: string[] = [];
