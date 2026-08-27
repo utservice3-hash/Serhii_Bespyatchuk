@@ -110,3 +110,26 @@ export function mergedLimitNote(rows: readonly MergeLimitRow[], isoDate: string)
   if (hadDaysRefusal(rows)) parts.push(`серед злитих була відмова по днях (0 дн.)`);
   return parts.join("; ");
 }
+
+/**
+ * 🧾 РЯДОК ЗЛИТОГО КЛІЄНТА — ОДИН ТЕКСТ ЗАПИТУ, ДОСТУПНИЙ ГЕЙТУ.
+ *
+ * 🔴 ЧОМУ КОНСТАНТА, А НЕ РЯДОК УСЕРЕДИНІ РОУТА. Дефект, який цей запит
+ * лагодить, був НЕ в логіці, а в переліку колонок: `limit_amount` у ньому не
+ * було взагалі, а `limit_days` вставлявся як NULL. Тобто до наступного синку
+ * (до 15 хв) злитий клієнт стояв «ліміт не узгоджено» і — за правилом власника
+ * «неузгоджений ліміт поводиться як нульовий» — ПЕРЕЛІМІТНИКОМ. Перевірити таке
+ * можна лише ВИКОНАННЯМ проти справжньої схеми; переписаний «схоже» SQL — доказ
+ * ні про що (урок `#21c`, прецедент `#198g`).
+ *
+ * $1 — канонічний ключ · $2 — зведені дні · $3 — зведена сума.
+ */
+export const MERGED_RECEIVABLE_ROW_SQL = `
+  INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw,
+                           amount, limit_days, limit_amount, overdue_days)
+  SELECT ri.client_key,
+         COALESCE(MIN(ri.client_name) FILTER (WHERE ri.client_key_raw = ri.client_key), MIN(ri.client_name)),
+         NULL, '', SUM(ri.amount), $2, $3, NULL
+    FROM receivable_invoices ri
+   WHERE ri.client_key = $1
+   GROUP BY ri.client_key`;

@@ -3729,16 +3729,7 @@ dashboardRouter.post("/receivables/merge", async (req, res) => {
      * «неузгоджений ліміт поводиться як нульовий», ПЕРЕЛІМІТНИКОМ. Вікно
      * коротке, число неправильне, і ніщо на екрані про це не казало.
      */
-    await client.query(
-      `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw,
-                                amount, limit_days, limit_amount, overdue_days)
-       SELECT ri.client_key,
-              COALESCE(MIN(ri.client_name) FILTER (WHERE ri.client_key_raw = ri.client_key), MIN(ri.client_name)),
-              NULL, '', SUM(ri.amount), $2, $3, NULL
-         FROM receivable_invoices ri
-        WHERE ri.client_key = $1
-        GROUP BY ri.client_key`,
-      [canonical, mergedDays, mergedAmount]);
+    await client.query(mergeLimits.MERGED_RECEIVABLE_ROW_SQL, [canonical, mergedDays, mergedAmount]);
     // Вік боргу — ТИМ САМИМ виразом ядра, що й синк. Другий вираз для «скільки
     // нам винні найдовше» розійшовся б із синком мовчки.
     await client.query(

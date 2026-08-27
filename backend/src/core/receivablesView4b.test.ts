@@ -3372,19 +3372,27 @@ test("#199cd2 скоуп розкриття — ТОЙ САМИЙ вираз, щ
  * стоїть `receivablesScope` + `receivablesByClient`, і ніде — власний фільтр по
  * `ri.manager_id` чи `m.team_id`.
  *
- * ЧОТИРИ МІСЦЯ (рішення власника 27.08.2026, запис переведено разом із читанням):
+ * ПʼЯТЬ МІСЦЬ (рішення власника 27.08.2026; пʼяте додано того ж дня разом із
+ * обʼєднанням N клієнтів):
  *   1 · GET  /receivables            — список клієнтів
  *   2 · GET  /receivables/invoices   — розкриття + плаский реєстр
  *   3 · GET  /receivables/writeoffs  — архів списань
  *   4 · PUT  /receivables/invoice-note — ЗАПИС дедлайну по рахунку
+ *   5 · POST /receivables/merge      — ОБʼЄДНАННЯ клієнтів
+ *
+ * ⚠️ ЧЕСНА МЕЖА ПʼЯТОГО МІСЦЯ: усі ролі, що мають `merge_receivables`
+ * (КВП/СЕО/ОД/адмін), мають ПОВНИЙ скоуп, тож СЬОГОДНІ ця перевірка нікого не
+ * зупиняє. Вона там не заради сьогодні: щойно право дістане тімлід, межа
+ * звузиться сама, а не чекатиме, поки хтось згадає дописати фільтр.
  */
-test("#199cg вираз скоупу дебіторки — ОДИН на всі чотири місця", () => {
+test("#199cg вираз скоупу дебіторки — ОДИН на всі пʼять місць", () => {
   const src = strip(readFileSync(SRC("routes/dashboard.ts"), "utf8"));
   const places: [string, string][] = [
     ["GET /receivables", 'dashboardRouter.get("/receivables"'],
     ["GET /receivables/invoices", 'dashboardRouter.get("/receivables/invoices"'],
     ["GET /receivables/writeoffs", 'dashboardRouter.get("/receivables/writeoffs"'],
     ["PUT /receivables/invoice-note", 'dashboardRouter.put("/receivables/invoice-note"'],
+    ["POST /receivables/merge", 'dashboardRouter.post("/receivables/merge"'],
   ];
   const missing: string[] = [];
   const ownFilter: string[] = [];

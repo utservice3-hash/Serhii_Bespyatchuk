@@ -378,42 +378,6 @@ CREATE TABLE IF NOT EXISTS receivable_invoice_notes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (client_key, invoice_no)
 );
--- 🔗 НОТАТКА ДО РАХУНКА ПЕРЕЖИВАЄ ОБʼЄДНАННЯ КЛІЄНТІВ (27.08.2026).
---
--- 🔴 ЧОМУ КОЛОНКА ЗʼЯВИЛАСЬ. `client_key` тут — КАНОНІЧНИЙ ключ, а канонічний
--- рухає склейка (`client_key_alias`). Після обʼєднання рахунок переїжджає під
--- новий ключ, а нотатка лишається під старим — тобто дедлайн і коментар просто
--- зникають з екрана. Мовчки: рядок є, поле порожнє, і ніщо не каже, що запис
--- існує. Той самий клас, що `receivable_writeoffs` (там ключ від початку сирий
--- саме з цієї причини).
---
--- 🔴 СИРИЙ КЛЮЧ НЕ РУХАЄТЬСЯ НІКОЛИ, тому нотатка чіпляється за нього, а
--- `client_key` лишається як ІСТОРІЯ («під яким клієнтом її писали»).
---
--- 🧾 БЕКФІЛ — ЛИШЕ ЖИВІ ЗВʼЯЗКИ (заміряно 27.08.2026: із 24 нотаток рівно 4
--- мають рахунок у `receivable_invoices`). Решта 20 — ОСИРОТІЛІ: їхніх рахунків
--- у 1С більше немає, тож сирого ключа взяти НЕМА ЗВІДКИ. Рішення власника
--- 27.08.2026: **осиротілі не чіпаємо** — вигадати їм `client_key_raw` можна
--- лише припущенням «ключ тоді дорівнював сирому», а припущення, записане в
--- дані, через місяць читається як факт.
-ALTER TABLE receivable_invoice_notes ADD COLUMN IF NOT EXISTS client_key_raw TEXT;
-
-UPDATE receivable_invoice_notes n
-   SET client_key_raw = ri.client_key_raw
-  FROM receivable_invoices ri
- WHERE ri.client_key = n.client_key
-   AND COALESCE(ri.invoice_no, '') = n.invoice_no
-   AND n.client_key_raw IS NULL;
-
--- 🔒 ОДНА НОТАТКА НА РАХУНОК — У БД, А НЕ В РОУТІ. Без цього індексу запис
--- після склейки створив би ДРУГИЙ рядок на той самий рахунок (старий під
--- псевдонімом, новий під канонічним), і розкриття показало б рахунок ДВІЧІ:
--- `LEFT JOIN` множить рядки, а не обирає один.
--- Частковий, бо осиротілі (`client_key_raw IS NULL`) лишаються поза цим світом.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_recv_invoice_notes_raw
-  ON receivable_invoice_notes (client_key_raw, invoice_no)
-  WHERE client_key_raw IS NOT NULL;
-
 -- Анти-дубль авто-задачі і для КЛІЄНТСЬКОГО дедлайну (receivable_notes.due_date).
 ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS task_created_at TIMESTAMPTZ;
 
@@ -2042,6 +2006,49 @@ UPDATE roles SET permissions = permissions - 'merge_receivables'
 -- `client_key` = COALESCE(активний псевдонім, raw), як і в угодах.
 ALTER TABLE receivable_invoices ADD COLUMN IF NOT EXISTS client_key_raw TEXT;
 CREATE INDEX IF NOT EXISTS idx_receivable_invoices_raw ON receivable_invoices(client_key_raw);
+
+-- ⚠️ БЛОК СТОЇТЬ ТУТ, А НЕ ПОРУЧ ІЗ `receivable_invoice_notes`, І ЦЕ НЕ ОХАЙНІСТЬ:
+-- бекфіл нижче читає `receivable_invoices.client_key_raw`, а ця КОЛОНКА зʼявляється
+-- рядком вище. На ЖИВІЙ базі порядок непомітний, на ПОРОЖНІЙ міграція падає —
+-- спершу «relation does not exist», потім «column does not exist». Той самий клас,
+-- що блок `GRANT` для `ai_readonly` і сид `key_card`; обидва рази спіймав гейт
+-- `#241` на схемі з нуля, а не читання.
+-- 🔗 НОТАТКА ДО РАХУНКА ПЕРЕЖИВАЄ ОБʼЄДНАННЯ КЛІЄНТІВ (27.08.2026).
+--
+-- 🔴 ЧОМУ КОЛОНКА ЗʼЯВИЛАСЬ. `client_key` тут — КАНОНІЧНИЙ ключ, а канонічний
+-- рухає склейка (`client_key_alias`). Після обʼєднання рахунок переїжджає під
+-- новий ключ, а нотатка лишається під старим — тобто дедлайн і коментар просто
+-- зникають з екрана. Мовчки: рядок є, поле порожнє, і ніщо не каже, що запис
+-- існує. Той самий клас, що `receivable_writeoffs` (там ключ від початку сирий
+-- саме з цієї причини).
+--
+-- 🔴 СИРИЙ КЛЮЧ НЕ РУХАЄТЬСЯ НІКОЛИ, тому нотатка чіпляється за нього, а
+-- `client_key` лишається як ІСТОРІЯ («під яким клієнтом її писали»).
+--
+-- 🧾 БЕКФІЛ — ЛИШЕ ЖИВІ ЗВʼЯЗКИ (заміряно 27.08.2026: із 24 нотаток рівно 4
+-- мають рахунок у `receivable_invoices`). Решта 20 — ОСИРОТІЛІ: їхніх рахунків
+-- у 1С більше немає, тож сирого ключа взяти НЕМА ЗВІДКИ. Рішення власника
+-- 27.08.2026: **осиротілі не чіпаємо** — вигадати їм `client_key_raw` можна
+-- лише припущенням «ключ тоді дорівнював сирому», а припущення, записане в
+-- дані, через місяць читається як факт.
+ALTER TABLE receivable_invoice_notes ADD COLUMN IF NOT EXISTS client_key_raw TEXT;
+
+UPDATE receivable_invoice_notes n
+   SET client_key_raw = ri.client_key_raw
+  FROM receivable_invoices ri
+ WHERE ri.client_key = n.client_key
+   AND COALESCE(ri.invoice_no, '') = n.invoice_no
+   AND n.client_key_raw IS NULL;
+
+-- 🔒 ОДНА НОТАТКА НА РАХУНОК — У БД, А НЕ В РОУТІ. Без цього індексу запис
+-- після склейки створив би ДРУГИЙ рядок на той самий рахунок (старий під
+-- псевдонімом, новий під канонічним), і розкриття показало б рахунок ДВІЧІ:
+-- `LEFT JOIN` множить рядки, а не обирає один.
+-- Частковий, бо осиротілі (`client_key_raw IS NULL`) лишаються поза цим світом.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recv_invoice_notes_raw
+  ON receivable_invoice_notes (client_key_raw, invoice_no)
+  WHERE client_key_raw IS NOT NULL;
+
 
 
 -- 2) БЕКФІЛ below_min для рядків, поданих ДО викату фічі (вони мають DEFAULT false).
