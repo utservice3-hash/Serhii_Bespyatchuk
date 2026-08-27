@@ -1835,25 +1835,31 @@ dashboardRouter.get("/receivables", async (req, res) => {
       )
     : { rows: [] as { client_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }[] };
   const notes = new Map(notesRes.rows.map((n) => [n.client_key, n]));
-  const syncRes = await pool.query<{ synced_at: string | null }>(
-    `SELECT MAX(synced_at) AS synced_at FROM receivables`
+  /**
+   * 🔗 ДВА ФАКТИ В ОДНОМУ ПОХОДІ — І ЦЕ НЕ ОХАЙНІСТЬ, А `#158`.
+   *
+   * `synced_at` і реєстр псевдонімів не звʼязані нічим, окрім того, що обидва
+   * потрібні цьому екрану й обидва — крихітні агрегати. Окремим запитом реєстр
+   * коштував би +30 мс RTT на КОЖНЕ відкриття списку (заміряно 24.08.2026), а
+   * стеля `#158` — 4 походи. 🔴 Підняти стелю «щоб пройшло» заборонено окремо:
+   * вона тоді пропустить наступний зайвий похід непоміченим. Я цей регрес уже
+   * зробив — саме він і почервонів у `test:prod` викату `d6f7edf`.
+   *
+   * 🔗 НАВІЩО РЕЄСТР ТУТ. Тригер `client_key_alias_no_chain` забороняє ланцюжок:
+   * ключ, що вже є канонічним, псевдонімом стати не може. Без цієї позначки
+   * людина обирає такий рядок, тисне «Обʼєднати» і дізнається правило з тексту
+   * помилки 409. Заміряно 27.08.2026: канонічних із псевдонімами 16, один тримає 11.
+   */
+  const syncRes = await pool.query<{ synced_at: string | null; canonical_of: Record<string, number> }>(
+    `SELECT MAX(r.synced_at) AS synced_at,
+            (SELECT COALESCE(jsonb_object_agg(a.canonical_key, a.n), '{}'::jsonb)
+               FROM (SELECT canonical_key, COUNT(*)::int AS n
+                       FROM client_key_alias WHERE revoked_at IS NULL
+                      GROUP BY canonical_key) a) AS canonical_of
+       FROM receivables r`
   );
   const syncedAt = syncRes.rows[0]?.synced_at ?? null;
-
-  /**
-   * 🔗 ХТО ВЖЕ ПРИЙМАЄ ПСЕВДОНІМИ — щоб діалог не пропонував приречену дію.
-   *
-   * 🔴 НАВІЩО. Тригер `client_key_alias_no_chain` забороняє ланцюжок: ключ, що
-   * вже є канонічним, не може стати псевдонімом. Без цієї позначки людина
-   * обирає такий рядок, тисне «Обʼєднати» і дістає 409 про ланцюжки — тобто
-   * дізнається правило з тексту помилки. Заміряно 27.08.2026: канонічних із
-   * псевдонімами 16, один із них тримає 11.
-   */
-  const aliasRes = await pool.query<{ canonical_key: string; n: number }>(
-    `SELECT canonical_key, COUNT(*)::int AS n FROM client_key_alias
-      WHERE revoked_at IS NULL GROUP BY canonical_key`);
-  const canonicalOf: Record<string, number> = {};
-  for (const a of aliasRes.rows) canonicalOf[a.canonical_key] = Number(a.n);
+  const canonicalOf: Record<string, number> = syncRes.rows[0]?.canonical_of ?? {};
 
   // 📇 ФАКТИ ПРО РАХУНКИ — юрособа, стан перевізника, вік, звʼязок із CRM.
   // ОДИН запит на всі зрізи екрана (RTT до Neon = 30 мс, тож ціна тут — кількість
@@ -1951,9 +1957,11 @@ dashboardRouter.get("/receivables", async (req, res) => {
     totals: { ...folded.totals, margin: marginCell(folded.totals.earned, folded.totals.clientPay) },
     canSetOwner: isAdminScope(auth),
     canMerge: roleHasPerm(auth.roleKey, "merge_receivables"),
-    // Скільки псевдонімів уже зібрано під кожним канонічним ключем. Порожньо —
-    // означає «ще нікого», а не «невідомо»: реєстр читається цілком.
-    canonicalOf,
+    // 🔒 Реєстр їде ЛИШЕ тому, хто має право зливати: решті він ні до чого, а
+    // «віддамо всім, бо не таємниця» — це те, як поле одного дня опиняється на
+    // екрані, для якого його не робили. Порожньо у merge-ролі означає «ще
+    // нікого», а не «невідомо»: реєстр читається цілком.
+    ...(roleHasPerm(auth.roleKey, "merge_receivables") ? { canonicalOf } : {}),
     canSetLimit: roleHasPerm(auth.roleKey, "manage_credit_limits"),
     // 🗑 СПИСАННЯ — РІВНО ДВІ РОЛІ (рішення власника 25.08.2026): СЕО й опердир.
     // Не фінансист і не тімліди: це визнання втрати грошей, а не операційна дія.
