@@ -44,7 +44,9 @@ export interface StepResult { id: string; ok: boolean; skipped?: string; detail:
 interface Health { version: { shortSha: string }; buildStale?: boolean }
 async function health(): Promise<Health> {
   const r = await fetch(HEALTH);
-  if (!r.ok) throw new Error(`health віддав ${r.status}`);
+  if (!r.ok) throw new Error(
+    `health віддав ${r.status}. Прод або лежить, або підіймається після рестарту.\n`
+    + "   Подивись лог прода й app_boot; якщо це ПІСЛЯ kill — дай ~15 с і повтори крок.");
   return (await r.json()) as Health;
 }
 async function prodSha(): Promise<string> {
@@ -95,7 +97,11 @@ export function toolsPresent(id: string, namedBin: string | null): StepResult {
     try { sh(t, ["--version"]); return false; } catch { return true; }
   });
   if (missing.length) return { id, ok: false,
-    detail: `🔴 у PATH немає: ${missing.join(", ")} — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\`` };
+    detail: `🔴 у PATH немає: ${missing.join(", ")} — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\`.\n`
+      + "   Найчастіша причина: relay — НЕ логін-шелл, і npm у його PATH немає взагалі.\n"
+      + "   Лікується одним із двох, і перше надійніше:\n"
+      + "     export PATH=/usr/local/node26/bin:$PATH   (на початку КОЖНОГО relay-ланцюга)\n"
+      + "     bash -lc \"…\"                              (логін-шелл підтягне профіль)" };
   /**
    * 🔴 ВІДМОВА МУСИТЬ НАЗИВАТИ ВЛАСНИЙ ВИХІД. Гачок `UTS_NODE_BIN` існував і до цього,
    * але текст його не згадував — HR знайшов його, лише пішовши читати диф. Відмова,
@@ -192,7 +198,9 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       if (baseTap.length === 0 || treeTap.length === 0) {
         return { id: "test", ok: false, detail:
           `🔴 порожній TAP (база ${baseTap.length}, дерево ${treeTap.length}) — прогін не відбувся. `
-          + "Порожній результат = провал, а не «падінь немає»." };
+          + "Порожній результат = провал, а не «падінь немає».\n"
+          + "   Прожени `npm test` руками в тому ж каталозі й подивись на ПЕРШІ рядки виводу: "
+          + "зазвичай це збірка, що не відбулась, або відсутній dist." };
       }
       const lost = diffGates(testsAtRef(c.prod), MANIFEST_TESTS).onlyBefore;
       const d = judgeDelta(baseTap, treeTap, lost);
@@ -342,7 +350,9 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const head = sh("git", ["rev-parse", "HEAD"], c.buildRepo);
     const vPath = c.be + "/dist/version.json";
     if (!existsSync(vPath)) {
-      return { id: "baseAgain", ok: false, detail: "🔴 у стенді немає " + vPath + " — доставляти нічого, збірки не було" };
+      return { id: "baseAgain", ok: false, detail:
+        "🔴 у стенді немає " + vPath + " — доставляти нічого, збірки не було.\n"
+        + "   Прожени фазу check у стенді: npm run deploy:check -- --mode=full" };
     }
     const built = String((JSON.parse(readFileSync(vPath, "utf8")) as { sha?: string }).sha ?? "");
     if (built !== head) {
@@ -422,13 +432,26 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       try { if ((await prodSha()) === c.target) return { id: "healthVersion", ok: true, detail: `health.version == ${c.target}` }; } catch { /* сервер підіймається */ }
       await new Promise((r) => setTimeout(r, 6000));
     }
-    return { id: "healthVersion", ok: false, detail: `🔴 health не показав ${c.target} — РЕСТАРТУ НЕ БУЛО, скільки б кнопка не звітувала` };
+    return { id: "healthVersion", ok: false, detail:
+      `🔴 health не показав ${c.target} за 60 с — РЕСТАРТУ НЕ БУЛО, скільки б кнопка не звітувала.\n`
+      + "   Прод зараз крутить СТАРИЙ код при НОВОМУ dist на диску (buildStale=true) — сайт живий.\n"
+      + "   Далі: подивись лог прода; повтори kill через relay (див. INFRASTRUCTURE §7 крок 5);\n"
+      + "   якщо процес не підіймається — відкат розпакуванням тарбола з /home/evraziat/uts.ua/deploy-backups.\n"
+      + "   🔒 Замок НЕ віддавай: недороблений викат і є те, заради чого він узятий." };
   },
   bootKind: (c) => run("bootKind", () => sh("bash", ["-lc", `cd ${c.prodBe} && set -a && . ./.env && set +a && node -e '
     const { pool } = await import("./dist/db/pool.js");
     const r = await pool.query("SELECT kind, short_sha FROM app_boot ORDER BY booted_at DESC LIMIT 1");
     const row = r.rows[0]; await pool.end();
-    if (row.kind !== "deploy") { console.error("🔴 останній старт класифіковано як " + row.kind); process.exit(1); }
+    if (row.kind !== "deploy") {
+      console.error("🔴 останній старт класифіковано як " + row.kind + ", а не deploy.");
+      console.error("   Причина майже завжди одна: markDeploy не відпрацював ПЕРЕД kill,");
+      console.error("   тож classifyBoot побачив той самий sha і вирішив, що процес упав сам.");
+      console.error("   Наслідок: банер «застосунок перезапустився без викату» користувачам");
+      console.error("   і зіпсована статистика аварій. Полагодь порядок кроків і повтори викат;");
+      console.error("   намір живе 15 хв, тож повторний markDeploy без kill нічого не дасть.");
+      process.exit(1);
+    }
     console.log("app_boot: " + row.kind + " " + row.short_sha);'`]), "старт класифіковано як deploy"),
   pushBranch: (c) => run("pushBranch", () => sh("bash", ["-lc", `cd ${c.docRoot} && git push origin HEAD:${c.branch} && git fetch origin -q && git rev-list --left-right --count origin/${c.branch}...HEAD`]), "sha у прод-гілці, ahead/behind заміряно ПІСЛЯ fetch"),
   report: () => ({ id: "report", ok: true, detail: "звіт нижче" }),
