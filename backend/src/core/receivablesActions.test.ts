@@ -22,8 +22,23 @@ const call = (h: Awaited<ReturnType<typeof handler>>, auth: Auth) =>
     const res = { json(b: unknown) { ok(b); }, status() { return this; }, send(b: unknown) { ok(b); }, setHeader() {} };
     try { h({ auth, query: {}, params: {} }, res, (e?: unknown) => bad(e ?? new Error("next()"))); } catch (e) { bad(e); }
   });
+/**
+ * 🔴 ПРОБА МУСИТЬ МАТИ СКОУП, І ДО 27.08.2026 ВОНА ЙОГО НЕ МАЛА.
+ *
+ * Було `managerId: null, teamId: null` для ВСІХ ролей — і `/receivables` віддавав
+ * такому «менеджерові» ПОВНИЙ список компанії: `debtWhere` додає умову лише при
+ * істинному значенні, тож порожній скоуп давав порожній `WHERE`. Тобто гейт
+ * несвідомо користувався саме тією дірою, яку закрив fail-closed
+ * (`auth/receivablesScope.ts`), і зеленів на ній.
+ *
+ * `-1`, а не `0`: нуль ХИБНИЙ, і умова знову не додалась би — та сама пастка,
+ * тільки під іншим числом. Рядків такий скоуп не дає жодного, а ці два гейти
+ * читають `canSetOwner`/`canMerge`, тобто ПРАВО, а не дані.
+ */
 const as = (roleKey: string, role = "company"): Auth =>
-  ({ role, roleKey, managerId: null, teamId: null, userId: 0 });
+  ({ role, roleKey, userId: 0,
+     managerId: role === "manager" ? -1 : null,
+     teamId: role === "team_lead" ? -1 : null });
 
 /**
  * #159 — ПРАВО НА ДІЮ РАХУЄ СЕРВЕР ТИМИ САМИМИ ВИРАЗАМИ, ЩО ГЕЙТЯТЬ РОУТИ.
