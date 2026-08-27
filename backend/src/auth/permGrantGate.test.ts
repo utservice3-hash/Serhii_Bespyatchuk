@@ -6,7 +6,7 @@ import { validateGrant, catalogGaps, PERMISSION_CATALOG } from "./permGrant.js";
 import { viewDenied, ONE_ON_ONE_DENY } from "../oneOnOne/visibility.js";
 
 /**
- * 🔒 #230–#230g — ПІДВИЩЕННЯ ПРИВІЛЕЇВ І МОВЧАЗНІ ДВЕРІ.
+ * 🔒 #231–#231g — ПІДВИЩЕННЯ ПРИВІЛЕЇВ І МОВЧАЗНІ ДВЕРІ.
  *
  * Дірка заміряна 27.08.2026 і доведена читанням джерела: `validRolePayload`
  * пропускав права БЕЗ перевірки, а `PATCH /users/:id` приймає будь-який наявний
@@ -17,7 +17,7 @@ import { viewDenied, ONE_ON_ONE_DENY } from "../oneOnOne/visibility.js";
 
 const SRC = (rel: string) => readFileSync(fileURLToPath(new URL(`../../src/${rel}`, import.meta.url)), "utf8");
 
-test("#230 невідомий ключ права відхиляється", () => {
+test("#231 невідомий ключ права відхиляється", () => {
   const v = validateGrant({ view_balances: true, супер_право: true }, PERMISSION_CATALOG);
   assert.equal(v.ok, false, "🔴 сито пропустило ключ, якого немає в каталозі");
   if (v.ok) return;
@@ -25,7 +25,7 @@ test("#230 невідомий ключ права відхиляється", () 
   assert.match(v.error, /супер_право/, "причина мусить НАЗВАТИ ключ, інакше її не полагодити");
 });
 
-test("#230b відоме право, якого актор НЕ має, видати не можна", () => {
+test("#231b відоме право, якого актор НЕ має, видати не можна", () => {
   const v = validateGrant({ write_off_debt: true }, ["view_balances", "manage_users"]);
   assert.equal(v.ok, false, "🔴 актор видав право, якого не має сам — це і є самопідвищення");
   if (v.ok) return;
@@ -33,7 +33,7 @@ test("#230b відоме право, якого актор НЕ має, вида
   assert.match(v.error, /write_off_debt/);
 });
 
-test("#230c ДЗЕРКАЛО: право, яке актор МАЄ, проходить — і зняття теж", () => {
+test("#231c ДЗЕРКАЛО: право, яке актор МАЄ, проходить — і зняття теж", () => {
   // Без цього дзеркала сито означало б «нічого не можна», а #230b був би зелений
   // на мертвій функції, що відмовляє завжди.
   const ok = validateGrant({ view_balances: true }, ["view_balances"]);
@@ -44,7 +44,7 @@ test("#230c ДЗЕРКАЛО: право, яке актор МАЄ, проход
   if (off.ok) assert.equal(off.perms.write_off_debt, false);
 });
 
-test("#230d каталог ПОКРИВАЄ всі ключі, що є в roles (напрямок: БД ⊆ каталог)", async (t) => {
+test("#231d каталог ПОКРИВАЄ всі ключі, що є в roles (напрямок: БД ⊆ каталог)", async (t) => {
   // ⚠️ Скіп через try/catch, а не через перевірку однієї змінної: `db/pool.js` тягне
   // `config.js`, який кидає ще НА ІМПОРТІ на будь-якій відсутній змінній (не лише
   // DATABASE_URL — спіймано на JWT_SECRET у чистому контейнері). Перевірка одного
@@ -63,7 +63,7 @@ test("#230d каталог ПОКРИВАЄ всі ключі, що є в roles 
   );
 });
 
-test("#230e гейт manage_users спрацьовує ДО сита — 403, а не 400", () => {
+test("#231e гейт manage_users спрацьовує ДО сита — 403, а не 400", () => {
   const s = SRC("routes/settings.ts");
   for (const route of [/post\(\s*"\/roles"/, /put\(\s*"\/roles\/:key"/]) {
     const i = s.search(route);
@@ -78,7 +78,7 @@ test("#230e гейт manage_users спрацьовує ДО сита — 403, а
   }
 });
 
-test("#230f МІГРАЦІЯ ДВІЧІ: КВП і адмін дістають 1×1, фінансист — НІ", async (t) => {
+test("#231f МІГРАЦІЯ ДВІЧІ: КВП і адмін дістають 1×1, фінансист — НІ", async (t) => {
   const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));
@@ -120,7 +120,7 @@ test("#230f МІГРАЦІЯ ДВІЧІ: КВП і адмін дістають 1
   }
 });
 
-test("#230g порожньо ≠ відмова: три двері 1×1 відповідають словами", () => {
+test("#231g порожньо ≠ відмова: три двері 1×1 відповідають словами", () => {
   // Чиста функція: відмовляємо лише тому, чия вибірка не може бути непорожньою.
   assert.equal(viewDenied(false, false), ONE_ON_ONE_DENY, "🔴 роль без права й без проведення дістає порожнечу замість відмови");
   assert.equal(viewDenied(true, false), null, "🔴 наскрізний перегляд заблоковано");
