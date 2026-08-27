@@ -98,7 +98,7 @@ export function LimitEditor({ client, onDone, onClose }: {
       {narrow && (
         <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 59, background: "rgba(0,0,0,0.45)" }} />
       )}
-      <div ref={narrow ? undefined : clamp.ref} style={box}>
+      <div className="recv-pop" ref={narrow ? undefined : clamp.ref} style={box}>
         <div style={{ fontSize: "var(--fs-13)", fontWeight: 700, marginBottom: 2 }}>Узгоджена відстрочка</div>
         <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 8 }}>
           Днів: <b>{limitLabel(client.limitDays)}</b>

@@ -104,7 +104,16 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
         <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 59,
           background: "rgba(0,0,0,0.45)" }} />
       )}
-    <div style={box}>
+    {/* 🔴 `ref` ЗАТИСКАЧА ОБОВʼЯЗКОВИЙ, І ЙОГО ТУТ НЕ БУЛО (знайдено 27.08.2026).
+        Без нього `useLayoutEffect` виходить першим рядком, координати не
+        рахуються НІКОЛИ, і `clamp.style` назавжди лишається `visibility:
+        hidden; left: 0; top: 0` — тобто редактор просто не зʼявляється.
+        Доведено ДІЄЮ на БАЙТАХ ПРОДА (`index-BvNEf9xS.js`, sha звірено з
+        докрутом): клік по олівцю → `visibility: "hidden"`, `left: 0, top: 0`.
+        Гейти мовчали, бо перевіряли, що стеля висоти й прокрутка ЗАДАНІ — вони
+        й були задані, приїхавши з того самого `clamp.style`. Той самий клас, що
+        «успіх за 0 мс»: механізм оголошений, роботи не робить. */}
+    <div className="recv-pop" ref={narrow ? undefined : clamp.ref} style={box}>
       <div style={{ fontSize: "var(--fs-13)", fontWeight: 700, marginBottom: 2 }}>Відповідальний за борг</div>
       {/* 🔴 Відкритий стан ПРОДОВЖУЄ підпис закритого, а не стирає його: людина
           мусить бачити, ЧОМУ зараз саме так, перш ніж це міняти. */}

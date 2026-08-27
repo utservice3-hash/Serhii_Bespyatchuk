@@ -44,10 +44,29 @@ export function AgreementEditor({ client, note, onPatch, onDone, onClose }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // ⌨️ Фокус усередину — інакше «Enter відкрив» і нічого не сталось: поповер є,
-  // а вводити нікуди, поки не клацнеш мишею.
+  // Той самий затискач, що в `LimitEditor`/`OwnerEditor`: поповер, який не
+  // вміщається у вікні, ховає власні кнопки — заміряно 300×561 при вікні 736.
+  const narrow = typeof window !== "undefined" && window.innerWidth < 900;
+  const clamp = usePopoverClamp(320);
+
+  // ⌨️ ФОКУС УСЕРЕДИНУ — І ЛИШЕ КОЛИ ПОПОВЕР УЖЕ ВИДИМИЙ.
+  // 🔴 Перша редакція фокусувала на монтуванні, і це НЕ ПРАЦЮВАЛО: до заміру
+  // затискач тримає `visibility: hidden`, а `focus()` на прихованому елементі
+  // браузер мовчки ігнорує. Гейт бачив виклик у джерелі й був зелений; спіймала
+  // ДІЯ (Tab → Enter → `document.activeElement` лишався кнопкою, що відкрила).
+  // Той самий клас, що «успіх за 0 мс»: виклик є, роботи немає.
   const firstRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => { firstRef.current?.focus(); }, []);
+  useEffect(() => { if (narrow || clamp.ready) firstRef.current?.focus(); }, [narrow, clamp.ready]);
+
+  // ⌨️ І ФОКУС ПОВЕРТАЄТЬСЯ ТУДИ, ЗВІДКИ ПРИЙШОВ. Без цього клавіатурний шлях
+  // обривається на виході: поповер зник, фокус на `body`, і наступний `Tab`
+  // починає обхід таблиці спочатку — тобто людина, яка дійшла до сорокового
+  // рядка, повертається на перший. Спіймано ДІЄЮ: `document.activeElement`
+  // після `Esc` був порожній.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    return () => opener?.focus?.();
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
@@ -72,10 +91,6 @@ export function AgreementEditor({ client, note, onPatch, onDone, onClose }: {
     }
   };
 
-  // Той самий затискач, що в `LimitEditor`/`OwnerEditor`: поповер, який не
-  // вміщається у вікні, ховає власні кнопки — заміряно 300×561 при вікні 736.
-  const narrow = typeof window !== "undefined" && window.innerWidth < 900;
-  const clamp = usePopoverClamp(320);
   const box: React.CSSProperties = narrow
     ? { position: "fixed", zIndex: 60, left: "50%", top: "50%", transform: "translate(-50%, -50%)",
         width: "min(360px, calc(100vw - 32px))", maxHeight: "calc(100dvh - 32px)", overflowY: "auto",
@@ -102,7 +117,7 @@ export function AgreementEditor({ client, note, onPatch, onDone, onClose }: {
       {narrow && (
         <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 59, background: "rgba(0,0,0,0.45)" }} />
       )}
-      <div ref={narrow ? undefined : clamp.ref} style={box} role="dialog"
+      <div className="recv-pop" ref={narrow ? undefined : clamp.ref} style={box} role="dialog"
            aria-label={`Домовленість: ${client.clientName}`}>
         <div style={{ fontSize: "var(--fs-13)", fontWeight: 700, marginBottom: 2 }}>Домовленість з клієнтом</div>
         {/* 🔴 ЩО САМЕ ПРАВИМО — СКАЗАНО ВГОЛОС. Поле показує запис поточного

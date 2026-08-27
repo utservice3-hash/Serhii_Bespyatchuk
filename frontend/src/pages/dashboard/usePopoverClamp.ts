@@ -29,6 +29,15 @@ import { useLayoutEffect, useRef, useState } from "react";
 export interface ClampedPopover {
   ref: React.RefObject<HTMLDivElement | null>;
   style: React.CSSProperties;
+  /**
+   * 🔴 ПОПОВЕР УЖЕ ВИДИМИЙ. Потрібно тому, що до заміру він `visibility: hidden`,
+   * а **`focus()` на прихованому елементі браузер мовчки ігнорує**. Спіймано
+   * ДІЄЮ 27.08.2026: `AgreementEditor` кликав фокус у `useEffect` на монтуванні,
+   * гейт бачив цей виклик у джерелі й був зелений — а в браузері фокус лишався
+   * на кнопці, що відкрила. Тобто «Enter відкрив» і вводити нікуди.
+   * Той самий клас, що «успіх за 0 мс»: виклик є, роботи немає.
+   */
+  ready: boolean;
 }
 
 /** Відступ від краю вікна — щоб поповер не торкався межі й не читався як обрізаний. */
@@ -73,6 +82,7 @@ export function usePopoverClamp(width = 300): ClampedPopover {
 
   return {
     ref,
+    ready: pos != null,
     style: {
       position: "fixed",
       zIndex: 60,

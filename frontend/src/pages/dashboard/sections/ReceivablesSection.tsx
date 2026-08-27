@@ -596,7 +596,7 @@ export function ReceivablesSection({
                       <Hint title="Наш заробіток по угодах цього клієнта"
                         body="Береться з поля «Бюджет» в угоді CRM — це не борг і не виручка. Відсоток — від суми рахунків, тобто від ПОВНОЇ суми угод, а не від залишку боргу: борг падає з кожною оплатою, і відношення до нього вибухає (заміряно максимум 6 667%)." />
                     </th>
-                    <th style={{ textAlign: "center", width: 70 }}
+                    <th className="recv-days" style={{ textAlign: "center", width: 70 }}
                         aria-sort={ariaSort(sort, "days")}>
                       <button type="button" className="recv-sort"
                         onClick={() => setSort(nextSort(sort, "days"))}
@@ -677,7 +677,7 @@ export function ReceivablesSection({
                               <span className="recv-cname" title={c.clientName}>{c.clientName}</span>
                             </span>
                             {badges.length > 0 && (
-                              <span style={{ display: "block", marginTop: 2 }}>
+                              <span className="recv-badges">
                                 {badges.map((b) => (
                                   <Tip key={b.text} title={b.text} body={b.hint}
                                     style={{ fontSize: "var(--fs-xs)", marginRight: 6,
@@ -689,7 +689,16 @@ export function ReceivablesSection({
                             )}
                           </td>
 
+                          {/* 📐 ІМʼЯ Й ОЛІВЕЦЬ — В ОДНОМУ РЯДІ (прохід B).
+                              Заміряно в браузері до правки: `OwnerCell` — блок на
+                              ДВА рядки (імʼя + причина, і причина обовʼязкова, це
+                              рішення `#136`), а олівець 32×32 падав ПІД нього.
+                              ХЕВІ БУІЛД: 33 + 32 = 65px у клітинці, рядок **72**
+                              при цільових 48 — тобто найвищим був не «Клієнт» і не
+                              «Домовленість», а саме цей стовпець. Той самий засіб,
+                              що для лімітів: значення ліворуч, кнопка праворуч. */}
                           <td style={{ textAlign: "left", verticalAlign: "middle", fontSize: "var(--fs-sm)", position: "relative" }}>
+                            <div className="recv-ownercell">
                             <OwnerCell c={c} />
                             {/* 🔴 ГІЛКА ДЛЯ ГОТІВКИ ОБОВʼЯЗКОВА (#163). `PUT /receivables/owner`
                                 віддає 404 на готівковому рядку — його CRM перебудовує щосинку,
@@ -706,6 +715,7 @@ export function ReceivablesSection({
                                 title="Змінити відповідального за борг" aria-label="Змінити відповідального за борг"
                                 className="recv-ico">✏️</button>
                             ))}
+                            </div>
                             {ownerFor === c.clientKey && (
                               <OwnerEditor client={c} managers={mgrOptions}
                                 onClose={() => setOwnerFor(null)}
