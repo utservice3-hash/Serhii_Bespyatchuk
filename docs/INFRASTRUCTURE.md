@@ -884,7 +884,9 @@ grep -E "^✔|^✖|^﹣|ЗВІТ|СТОП" /tmp/run.log
    Тримає `#250n`.
 
    **Коли звільняє людина** — легкий режим і розібрана аварія (в обох `lockRelease`
-   не виконується): node backend/dist/tools/checkoutLock.js --release --who=<чат> --reason="викат <sha> прийнято"
+   не виконується):
+   ```
+   node backend/dist/tools/checkoutLock.js --release --who=<чат> --reason="викат <sha> прийнято"
    ```
    ⚠️ Явно й із причиною: журнал append-only, і через тиждень «хто і навіщо» читають саме з нього.
 
