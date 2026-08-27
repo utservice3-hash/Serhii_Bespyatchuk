@@ -132,7 +132,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       }
       const lost = diffGates(testsAtRef(c.prod), MANIFEST_TESTS).onlyBefore;
       const d = judgeDelta(baseTap, treeTap, lost);
-      return { id: "test", ok: d.ok, detail: d.lines.join("\n   ") };
+      return { id: "test", ok: d.ok, detail: d.lines.join("\n") };
     } catch (e) {
       return { id: "test", ok: false, detail: `🔴 приріст не порахований: ${String((e as Error).message).slice(0, 300)}` };
     } finally {
@@ -285,7 +285,16 @@ export async function main(argv: string[]): Promise<number> {
     const r = await h(ctx);
     done.push(r);
     const mark = r.skipped ? "﹣" : r.ok ? "✔" : "✖";
-    console.log(`${mark} ${step.id.padEnd(16)} ${r.skipped ?? r.detail}`);
+    /**
+     * 🔴 ЗВІТ ВОЛОДІЄ СВОЇМ ФОРМАТУВАННЯМ, А НЕ СКЛЕЮЄ ЧУЖЕ. Раніше багаторядкова
+     * деталь приїжджала вже склеєною, і кожен крок сам вирішував, скільки в неї
+     * відступів, — а рядки з ІМЕНАМИ (нові падіння, зниклі гейти) губились рівно
+     * тоді, коли вони найпотрібніші: «① НОВІ ПАДІННЯ (1)» без жодного імені.
+     * Це та сама поломка, проти якої весь критерій і будувався.
+     */
+    const body = (r.skipped ?? r.detail).split("\n");
+    console.log(`${mark} ${step.id.padEnd(16)} ${body[0]}`);
+    for (const line of body.slice(1)) console.log(`  ${line.trimStart()}`);
     if (!r.ok) {
       /**
        * 🔴 НЕ ЛИШЕ ПРИЧИНА, А Й СТАН ПРОДА — СЛОВАМИ. Скрипт, що впав на кроці 9 із
