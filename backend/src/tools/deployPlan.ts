@@ -280,6 +280,54 @@ export function isProdCheckout(o: { rootIndexHtml: boolean; rootAssets: boolean;
   return (o.rootIndexHtml && o.rootAssets) || sameTree;
 }
 
+/**
+ * 📍 ДЕ ЛЕЖИТЬ СТЕНД І ЯК ЙОГО ЗНАЙТИ.
+ *
+ * 🔴 Заміряно 27.08.2026 після того, як HR доповів «стенда на проді немає»:
+ * стенд БУВ (`/home/evraziat/fwt` — повний клон, `origin` на GitHub, свої
+ * `node_modules`, `.env.production`), а `UTS_*` не задані НІДЕ: ні в профілях,
+ * ні в оточенні. І виявилось, що вони й НЕ ПОТРІБНІ — обидві фази проходять зі
+ * стенда без жодної змінної, бо `buildRepo` виводиться з `cwd`, а `docRoot` має
+ * правильний дефолт. HR уперся не у брак дерева, а у ВІДМОВУ, ЩО НЕ КАЖЕ, ЩО РОБИТИ.
+ *
+ * 🔑 Третій випадок того самого класу за добу (після `UTS_NODE_BIN` і кроку 0):
+ * відмова, яка не називає власного виходу, коштує наступному години.
+ *
+ * ⚠️ І ГОЛОВНЕ, ЧОГО РОБИТИ НЕ МОЖНА: задавати `UTS_BUILD_REPO` глобально в профілі.
+ * Стенд у КОЖНОГО чату свій — саме тому винесення й дало паралельну підготовку.
+ * Один глобальний шлях загнав би всі три чати в ОДНЕ дерево й повернув би змагання
+ * за HEAD, тобто рівно ту біду, від якої ми пішли. Глобальним може бути лише
+ * `UTS_DOC_ROOT` — він і так константа, і так дефолт.
+ */
+export const STAND_RECIPE =
+  "Стенд — це звичайний клон, свій у кожного чату. Змінні задавати НЕ треба:\n"
+  + "  git clone /home/evraziat/uts.ua/dashboard /home/evraziat/<твій-стенд>\n"
+  + "  cd /home/evraziat/<твій-стенд>\n"
+  + "  git remote set-url origin git@github.com:utservice3-hash/Serhii_Bespyatchuk.git   # ОБОВʼЯЗКОВО\n"
+  + "  (cd backend && npm ci) && (cd frontend && npm ci)\n"
+  + "далі кликати обидві фази З НЬОГО: cd <стенд>/backend && npm run deploy:check -- --mode=full\n"
+  + "Наявні стенди: /home/evraziat/fwt (Допоміжний).";
+
+export interface Trees { buildRepo: string; docRoot: string }
+
+/** Чисте розвʼязання дерев — щоб гейт міг питати «а що буде з ТАКОГО каталогу». */
+export function resolveTrees(env: Record<string, string | undefined>, cwd: string): Trees {
+  return {
+    buildRepo: env.UTS_BUILD_REPO ?? env.UTS_REPO ?? cwd.replace(/\/backend$/, ""),
+    docRoot: env.UTS_DOC_ROOT ?? "/home/evraziat/uts.ua/dashboard",
+  };
+}
+
+/** Текст відмови «одне дерево» — окремо, бо його звіряє гейт і читає людина. */
+export const SAME_TREE_REFUSAL = (t: Trees): string =>
+  "🔴 UTS_BUILD_REPO і UTS_DOC_ROOT — це ОДИН каталог:\n"
+  + `   ${t.buildRepo}\n`
+  + "   Фаза run доставляє те, що зібрав СТЕНД; збирати й доставляти в одному дереві\n"
+  + "   означає повернути чекаут у стан «зайнятий 21 хвилину».\n\n"
+  + "   ✅ НАЙЧАСТІША ПРИЧИНА: ти в ПРОД-ЧЕКАУТІ. Просто перейди у свій стенд —\n"
+  + "      жодних змінних задавати не треба, шлях береться з поточного каталогу.\n\n"
+  + STAND_RECIPE;
+
 export const PROD_CHECKOUT_REFUSAL =
   "🛑 Це ПРОД-ЧЕКАУТ: `deploy:check` тут ЗАБОРОНЕНО.\n"
   + "   Він робить `rm -rf dist && npm run build` — тобто перезбере dist ПРОДА з тієї\n"

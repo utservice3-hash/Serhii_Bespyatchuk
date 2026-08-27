@@ -260,8 +260,13 @@ test("#250h тарбол виїжджаючого: перед deliver, ім'я �
   const b = stepBody(s, "backupOutgoing");
 
   // ① Каталог ПОЗА докрутом — докрут роздається вебом.
-  const docDefault = s.match(/UTS_DOC_ROOT \?\? "([^"]+)"/)?.[1];
-  assert.ok(docDefault, "🔴 не знайшов дефолт docRoot — нема з чим порівнювати");
+  // 🔴 Дефолт беремо ВІД САМОЇ ФУНКЦІЇ, а не регуляркою по джерелу. Перша редакція
+  // шукала /UTS_DOC_ROOT \?\? "…"/ у deploy.ts — і впала, щойно вираз переїхав у
+  // `resolveTrees`, хоча поведінка не змінилась. Другий такий випадок за прохід
+  // (перший — #250e): твердження робиться про ту саму сутність, про яку говорить.
+  const { resolveTrees } = await import("./deployPlan.js");
+  const docDefault = resolveTrees({}, "/будь-де/backend").docRoot;
+  assert.ok(docDefault.startsWith("/"), "🔴 дефолт docRoot не абсолютний — нема з чим порівнювати");
   assert.ok(!BACKUP_DIR.startsWith(docDefault + "/") && BACKUP_DIR !== docDefault,
     `🔴 тарболи лежать У ДОКРУТІ (${BACKUP_DIR} всередині ${docDefault}).\n` +
     "   Заміряно 27.08.2026: по HTTP такий файл не віддається — але тримається це на правилі\n" +
@@ -499,4 +504,68 @@ test("#250o check вимагає БУДЬ-ЯКІ бінарі, run — прод-
     "🔴 run перестав вимагати прод-бінарник: після `kill` процес підіймає конвеєр саме ним,\n" +
     "   і його відсутність означає сайт, що не повернувся");
   assert.ok(NODE_BIN.startsWith("/"), `🔴 NODE_BIN не абсолютний: ${NODE_BIN}`);
+});
+
+/**
+ * 🌍 #250p–#250q — СВІТ ВІДПОВІДАЄ РИТУАЛУ, А НЕ ЛИШЕ ТЕКСТ.
+ *
+ * 🔴 HR доповів «стенда на проді немає» і викочувався ручним ланцюгом. Замір показав
+ * інше й точніше: стенд Є (`/home/evraziat/fwt` — клон, origin на GitHub, свої
+ * node_modules), змінні `UTS_*` не задані НІДЕ — і вони НЕ ПОТРІБНІ: обидві фази
+ * проходять зі стенда без жодної змінної. HR уперся не у брак дерева, а у ВІДМОВУ,
+ * ЯКА НЕ КАЖЕ, ЩО РОБИТИ, — третій випадок цього класу за добу.
+ *
+ * ⚠️ Тому гейт НЕ вимагає «змінна задана»: глобальний `UTS_BUILD_REPO` загнав би всі
+ * три чати в ОДНЕ дерево й повернув змагання за HEAD. Вимагається інше — щоб зі
+ * стенда ритуал працював, а з докрута відмова була ДІЄВОЮ.
+ */
+test("#250p зі стенда ритуал працює без змінних; із докрута відмова каже, що робити", async () => {
+  const { resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE } = await import("./deployPlan.js");
+  const DOC = "/home/evraziat/uts.ua/dashboard";
+
+  // ① Зі СТЕНДА, з порожнім оточенням, дерева РІЗНІ — тобто змінні не потрібні.
+  const fromStand = resolveTrees({}, "/home/evraziat/fwt/backend");
+  assert.equal(fromStand.buildRepo, "/home/evraziat/fwt", "🔴 buildRepo не виводиться з cwd");
+  assert.equal(fromStand.docRoot, DOC, "🔴 docRoot втратив дефолт — тоді змінна стає обовʼязковою");
+  assert.notEqual(fromStand.buildRepo, fromStand.docRoot,
+    "🔴 зі стенда ланцюг відхилив би сам себе — ритуал невиконуваний без ручних змінних");
+
+  // ② З ДОКРУТА дерева збігаються — і це правильно, там будувати не можна.
+  const fromDoc = resolveTrees({}, `${DOC}/backend`);
+  assert.equal(fromDoc.buildRepo, fromDoc.docRoot, "🔴 докрут перестав розпізнаватись як одне дерево");
+
+  // ③ 🔑 Але відмова мусить бути ДІЄВОЮ: назвати шлях, сказати найчастішу причину
+  //    і дати рецепт. Саме цього бракувало HR.
+  const refusal = SAME_TREE_REFUSAL(fromDoc);
+  assert.match(refusal, /\/home\/evraziat\/uts\.ua\/dashboard/, "🔴 відмова не називає шляху, на якому спіткнулась");
+  assert.match(refusal, /ПРОД-ЧЕКАУТІ/, "🔴 відмова не називає найчастішої причини — а вона одна й та сама");
+  assert.match(refusal, /git clone/, "🔴 відмова не дає рецепту стенда: наступний шукатиме його стільки ж, скільки HR");
+  assert.match(refusal, /жодних змінних задавати не треба|Змінні задавати НЕ треба/,
+    "🔴 відмова не каже головного: змінні НЕ потрібні, досить перейти у стенд");
+  assert.match(STAND_RECIPE, /remote set-url origin/,
+    "🔴 рецепт не містить перепризначення origin — клон із локального шляху успадкує ЦЕЙ ШЛЯХ (спіймано 26.08)");
+});
+
+test("#250q стенд справді існує окремим деревом — або скіп, що НАЗИВАЄ причину", async (t) => {
+  const { execFileSync } = await import("node:child_process");
+  const DOC = "/home/evraziat/uts.ua/dashboard";
+  const STAND = "/home/evraziat/fwt";
+  // ⚠️ Скіп ГУЧНИЙ і з причиною: у контейнері прод-дерев немає, і мовчазний pass
+  //    тут означав би «ритуал перевірено», не перевіривши нічого.
+  if (!existsSync(`${DOC}/.git`)) return t.skip("не прод-хост: прод-чекауту немає, перевіряти відповідність світу ритуалу нема на чому");
+  if (!existsSync(`${STAND}/.git`)) assert.fail(
+    `🔴 СТЕНДА НЕМАЄ (${STAND}), хоча прод-чекаут тут. §7 описує дворівневий ритуал,\n` +
+    "   а в світі одне дерево — тоді `deploy:run` відхиляє сам себе, і наступний\n" +
+    "   викочується ручним ланцюгом, як довелось HR 27.08.2026.");
+
+  const git = (a: string[], cwd: string) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
+  // Окреме дерево, а не симлінк і не той самий репозиторій.
+  assert.notEqual(git(["rev-parse", "--show-toplevel"], STAND), git(["rev-parse", "--show-toplevel"], DOC),
+    "🔴 стенд і докрут — ОДНЕ дерево: збірка знову тримала б чекаут усі ~21 хв");
+  // origin мусить дивитись на GitHub, інакше пуш поїде в прод-репозиторій (спіймано 26.08).
+  assert.match(git(["remote", "get-url", "origin"], STAND), /github\.com/,
+    "🔴 origin стенда не GitHub — клон із локального шляху успадковує ЦЕЙ ШЛЯХ, і пуш створює гілку в проді");
+  // І те, без чого збірка тихо підставить localhost.
+  assert.ok(existsSync(`${STAND}/frontend/.env.production`), "🔴 у стенді немає frontend/.env.production");
+  assert.ok(existsSync(`${STAND}/backend/node_modules`), "🔴 у стенді немає backend/node_modules — збирати нічим");
 });

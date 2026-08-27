@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
-  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL,
+  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
@@ -508,8 +508,7 @@ export async function main(argv: string[]): Promise<number> {
    * Дефолти лишають СТАРУ поведінку (обидва = поточний каталог), щоб перехід був
    * оборотним; але фаза run на злитих шляхах ВІДМОВЛЯЄ — див. нижче.
    */
-  const buildRepo = process.env.UTS_BUILD_REPO ?? process.env.UTS_REPO ?? process.cwd().replace(/\/backend$/, "");
-  const docRoot = process.env.UTS_DOC_ROOT ?? "/home/evraziat/uts.ua/dashboard";
+  const { buildRepo, docRoot } = resolveTrees(process.env, process.cwd());
   if (phase === "check" && isProdCheckout({
     rootIndexHtml: existsSync(`${buildRepo}/index.html`), rootAssets: existsSync(`${buildRepo}/assets`), path: buildRepo, docRoot,
   })) { console.error(PROD_CHECKOUT_REFUSAL); return 3; }
@@ -533,9 +532,7 @@ export async function main(argv: string[]): Promise<number> {
    * збірки не торкається докрута» стане беззмістовним: торкатись буде нічого.
    */
   if (phase === "run" && buildRepo === docRoot) {
-    console.error("🔴 UTS_BUILD_REPO і UTS_DOC_ROOT — це ОДИН каталог.\n"
-      + "   Фаза run доставляє те, що зібрав СТЕНД; збирати й доставляти в одному дереві\n"
-      + "   означає повернути чекаут у стан «зайнятий 21 хвилину». Признач стенд явно.");
+    console.error(SAME_TREE_REFUSAL({ buildRepo, docRoot }));
     return 3;
   }
   const ctx: Ctx = {
