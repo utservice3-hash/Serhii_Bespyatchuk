@@ -44,10 +44,29 @@ export const READONLY_DB_ROLES: readonly string[] = [
   "ai_readonly",  // AI-оракул
 ];
 
+/**
+ * Хости, які ми вважаємо БОЙОВИМИ.
+ *
+ * 🔴 ЦЕ ТВЕРДЖЕННЯ ПРО СЬОГОДНІШНІЙ СВІТ, А НЕ ПРО ПРИРОДУ РЕЧЕЙ. Переїде прод із
+ * Neon — сторож **тихо перестане сторожити**, не змінившись жодним символом: умова
+ * лишиться синтаксично тією самою і почне повертати `false` на бойовому рядку.
+ * Мовчазна втрата сторожа гірша за його відсутність, тому поруч стоїть гейт `#232i`,
+ * який щоразу звіряє це припущення з ЖИВИМ рядком підключення.
+ */
+export const PROD_DB_HOST_RE = /\.neon\.tech$/i;
+
+/** Локальні хости — не прод і не привід червоніти в дев-оточенні. */
+export const LOCAL_DB_HOSTS = ["localhost", "127.0.0.1", "::1", ""];
+
+/** Хост із рядка підключення. Unix-сокет → порожньо (хоста немає за побудовою). */
+export function dbHost(url: string | undefined): string {
+  if (!url) return "";
+  try { return new URL(url).hostname; } catch { return ""; }
+}
+
 /** Чи дивиться рядок підключення на БОЙОВУ базу. Unix-сокет → false за побудовою. */
 export function isProdDbHost(url: string | undefined): boolean {
-  if (!url) return false;
-  try { return /\.neon\.tech$/i.test(new URL(url).hostname); } catch { return false; }
+  return PROD_DB_HOST_RE.test(dbHost(url));
 }
 
 /** Роль із рядка підключення (username). Порожньо — коли її там немає. */

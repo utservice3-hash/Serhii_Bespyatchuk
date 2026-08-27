@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsApi } from "./testMode.js";
+import { needsApi, needsDb } from "./testMode.js";
 
 /**
  * #13 — САМОПЕРЕВІРКА ЗАПОБІЖНИКА: харнес НЕ МОЖЕ писати в прод.
@@ -164,4 +164,62 @@ test("#232g РЕЄСТР READ-ONLY РОЛЕЙ: названа проходить
     /kk_rw/, "🔴 реєстр пропускає будь-що, схоже на назву");
   // І PGOPTIONS із правильною роллю теж проходить — це шлях `test:prod`.
   assertGuard({ ...NT, DATABASE_URL: PROD, PGOPTIONS: "-c role=test_readonly" } as NodeJS.ProcessEnv);
+});
+
+test("#232h РОЛЬ РЕЄСТРУ СПРАВДІ НЕ ПИШЕ — заміряно, а не оголошено", needsDb(), async (t) => {
+  const { isProdDbHost, READONLY_DB_ROLES } = await import("./db/readOnlyGuard.js");
+  if (!isProdDbHost(process.env.DATABASE_URL)) {
+    t.skip("рядок підключення не бойовий (scratch або локальна БД) — права прода перевіряти нема на чому");
+    return;
+  }
+  /**
+   * 🔴 ІМʼЯ — ЦЕ НЕ ПРАВО. `READONLY_DB_ROLES` перелічує НАЗВИ; якщо комусь у Neon
+   * видадуть `kk_ro` право запису, реєстр і далі казатиме «можна». Реєстр, якому ми
+   * просто віримо, — це та сама «папка бекапу є, копії немає».
+   */
+  /**
+   * ⚠️ ІМПОРТ ПУЛУ — ЧЕРЕЗ try/catch. `config.js` кидає ще НА ІМПОРТІ на БУДЬ-ЯКІЙ
+   * відсутній змінній, не лише на `DATABASE_URL` (заміряно тут: `KOMMO_BASE_URL`),
+   * тобто раніше, ніж спрацював би `needsDb()`. Без цього гейт ПАДАЄ там, де мав би
+   * чесно скіпнутись, і псує базову лінію контейнера чужою причиною.
+   */
+  let pool;
+  try { pool = await load(); }
+  catch (e) { t.skip(`оточення неповне: ${String((e as Error).message).slice(0, 80)}`); return; }
+  const who = await pool.query<{ r: string }>("SELECT current_user AS r");
+  const role = who.rows[0].r;
+  const priv = await pool.query<{ ins: boolean; upd: boolean; del: boolean; sel: boolean }>(
+    `SELECT has_table_privilege(current_user,'receivables','INSERT') AS ins,
+            has_table_privilege(current_user,'receivables','UPDATE') AS upd,
+            has_table_privilege(current_user,'deals','DELETE')       AS del,
+            has_table_privilege(current_user,'deals','SELECT')       AS sel`);
+  const p = priv.rows[0];
+  assert.equal(p.ins, false, `🔴 роль «${role}» МАЄ право INSERT у бойовій базі — реєстр read-only ролей бреше`);
+  assert.equal(p.upd, false, `🔴 роль «${role}» МАЄ право UPDATE`);
+  assert.equal(p.del, false, `🔴 роль «${role}» МАЄ право DELETE`);
+  // 🪞 Дзеркало: «жодних прав» виглядало б як «надійно read-only», а насправді
+  // означало б, що набір осліп. Той самий урок, що #13c.
+  assert.equal(p.sel, true, `🔴 роль «${role}» не читає навіть deals — набір нічого не перевіряє`);
+  // І сама роль мусить бути НАЗВАНОЮ: інакше «права зійшлись» тільки цього разу.
+  assert.ok(READONLY_DB_ROLES.includes(role) || role === "test_readonly",
+    `🔴 ходимо в прод під незареєстрованою роллю «${role}» — додай її в READONLY_DB_ROLES з причиною`);
+});
+
+test("#232i ПРИПУЩЕННЯ ПРО ПРОД-ХОСТ ЩЕ ІСТИННЕ — інакше сторож мовчки помер", needsDb(), async (t) => {
+  const { dbHost, isProdDbHost, LOCAL_DB_HOSTS, PROD_DB_HOST_RE } = await import("./db/readOnlyGuard.js");
+  const host = dbHost(process.env.DATABASE_URL);
+  if (LOCAL_DB_HOSTS.includes(host)) {
+    t.skip(`хост «${host || "(unix-сокет)"}» локальний — це не бойовий рядок, звіряти припущення нема з чим`);
+    return;
+  }
+  /**
+   * 🔴 УМОВА ПРО СЬОГОДНІШНІЙ СВІТ. Переїде прод із Neon — `isProdDbHost` почне
+   * повертати `false` на бойовому рядку, і сторож перестане сторожити, НЕ ЗМІНИВШИСЬ
+   * ЖОДНИМ СИМВОЛОМ. Це не гіпотетика: того ж дня чинна умова почала брехати від
+   * того, що поруч завели ДРУГЕ дерево — ніхто нічого не прибирав.
+   */
+  assert.equal(isProdDbHost(process.env.DATABASE_URL), true,
+    `🔴 ЖИВИЙ рядок підключення веде на «${host}», якого ${PROD_DB_HOST_RE} НЕ впізнає як бойовий.\n`
+    + "   Отже другий рубіж readOnlyGuard зараз НЕ спрацьовує ні на чому — він живий на вигляд і мертвий по суті.\n"
+    + "   Онови PROD_DB_HOST_RE під новий хост (і перечитай, що ще спиралось на Neon).");
 });
