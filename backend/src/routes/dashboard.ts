@@ -2428,10 +2428,42 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const clientKey = String(req.query.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
 
+  /**
+   * 🔴 СКОУП ПО КЛІЄНТУ, А НЕ ПО РАХУНКУ (рішення власника 27.08.2026).
+   * «Показуємо повністю всю обʼєктивну картину: відкрив клієнта — бачиш УСІ
+   * виставлені й неоплачені рахунки».
+   *
+   * 📐 ЩО ЦЕ ЛІКУЄ — ЖИВИЙ ДЕФЕКТ, ЗАМІРЯНИЙ НА ПРОДІ 27.08.2026. Фільтр по
+   * `ri.manager_id` різав рахунки ВСЕРЕДИНІ клієнта, а рядок клієнта показував
+   * повний борг. ПВК АРСЕНАЛ ТОВ, той самий екран, три ролі:
+   *
+   *   адмін     рядок 2 323 000 ₴ · розкриття 33 рах. · Σ 2 323 000 ₴ · Δ 0
+   *   тімлід    рядок 2 323 000 ₴ · розкриття 22 рах. · Σ   763 000 ₴ · Δ 1 560 000
+   *   менеджер  рядок 2 323 000 ₴ · розкриття 19 рах. · Σ   691 000 ₴ · Δ 1 632 000
+   *
+   * Тобто Яцик бачив «2.3М ₴» у рядку і «691 тис ₴» у шапці розкриття — два
+   * числа про одне на одному екрані, різниця 1.6 млн. Причина: 11 рахунків ПВК
+   * виставлені напряму в 1С, повз CRM, тож `ri.manager_id` у них NULL, і фільтр
+   * відрізав їх усім, крім адміна.
+   *
+   * 🔴 ВИРАЗ СКОУПУ — ОДИН НА ТРИ МІСЦЯ: список клієнтів, це розкриття і реєстр.
+   * Той самий `receivablesScope` + `receivablesByClient`, що вже стоїть у
+   * `/receivables` і `/receivables/writeoffs`. Другий вираз тут одного дня
+   * розійшовся б із першим — і саме так цей дефект і зʼявився.
+   *
+   * ⚠️ Клієнт поза скоупом дістає 403, а не порожній список: «нічого немає» і
+   * «вам не видно» — різні відповіді, і перша читається як відсутність боргу.
+   */
+  const sc = receivablesScope(auth, req.query);
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  const mine = await metrics.receivablesByClient(sc);
+  if (!mine.some((r) => r.clientKey === clientKey))
+    return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
+
+  // Умова рівно одна: рахунки ЦЬОГО клієнта. Хто їх виставив — інформація в
+  // колонці «Менеджер», а не критерій видимості.
   const conds = ["ri.client_key = $1"];
   const params: unknown[] = [clientKey];
-  if (auth.role === "manager") { params.push(auth.managerId); conds.push(`ri.manager_id = $${params.length}`); }
-  else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
 
   const r = await pool.query<{ invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; invoice_manager: string | null }>(
     `SELECT ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,

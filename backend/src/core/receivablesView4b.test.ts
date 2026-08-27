@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { needsApi, needsDb } from "../testMode.js";
+import { needsApi, needsDb, API_BASE } from "../testMode.js";
 
 const srcOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url).href.replace("/dist/", "/src/"));
 const SRC = (p: string) => srcOf(`../${p}`);
@@ -100,7 +100,14 @@ test("#197b у розкритті — НАША юрособа по кожном�
   // `payment_type` одного дня розійшлося б із плиткою, і кожна половина
   // виглядала б правдоподібно — рівно так розійшлись чипи «новий/постійний».
   const route = readFileSync(SRC("routes/dashboard.ts"), "utf8");
-  const inv = route.slice(route.indexOf('"/receivables/invoices"'), route.indexOf('"/receivables/invoices"') + 4000);
+  // ⚠️ ЗРІЗ ДО КІНЦЯ РОУТА, А НЕ «+4000 СИМВОЛІВ» (виправлено 27.08.2026).
+  // Прибитий розмір — таймер на хибну тривогу: щойно в роут дописали пояснення
+  // скоупу, `loadInvoiceFacts` виїхав за межу, і гейт почервонів на цілком
+  // робочому коді. Це вже ТРЕТІЙ випадок того самого класу (`#197c`, `#199bh`),
+  // тож межа тепер змістова — наступний `dashboardRouter.`.
+  const invFrom = route.indexOf('"/receivables/invoices"');
+  const invTo = route.indexOf("dashboardRouter.", invFrom + 40);
+  const inv = route.slice(invFrom, invTo > invFrom ? invTo : undefined);
   assert.match(inv, /loadInvoiceFacts/, "🔴 розкриття виводить юрособу власним кодом, а не ядром");
   assert.ok(!/payment_type/.test(strip(inv)),
     "🔴 у роуті розкриття зʼявився власний розбір payment_type — це друге джерело");
@@ -3259,4 +3266,95 @@ test("#199cc КОЖЕН споживач затискача приєднує й�
   const css = readFileSync(FE("index.css"), "utf8");
   assert.match(css, /\.recv-pop \{ white-space: normal; \}/,
     "🔴 зникло правило .recv-pop — клас у розмітці лишився, а сенсу за ним немає");
+});
+
+/**
+ * #199cd — Σ ЖИВИХ РАХУНКІВ У РОЗКРИТТІ == БОРГ КЛІЄНТА В РЯДКУ, ДЛЯ КОЖНОЇ РОЛІ.
+ *
+ * 🔴 ЦЕЙ ГЕЙТ ПИШЕТЬСЯ ПІСЛЯ ЖИВОГО ДЕФЕКТУ, ЗАМІРЯНОГО НА ПРОДІ 27.08.2026.
+ * Розкриття фільтрувало рахунки по `ri.manager_id`, а рядок клієнта показував
+ * повний борг. ПВК АРСЕНАЛ ТОВ:
+ *
+ *   адмін     рядок 2 323 000 ₴ · 33 рах. · Σ 2 323 000 ₴ · Δ 0
+ *   тімлід    рядок 2 323 000 ₴ · 22 рах. · Σ   763 000 ₴ · Δ 1 560 000
+ *   менеджер  рядок 2 323 000 ₴ · 19 рах. · Σ   691 000 ₴ · Δ 1 632 000
+ *
+ * Кожне число окремо було «правильне», і саме тому це не бачив ніхто: рядок
+ * чесно казав борг клієнта, розкриття чесно казало суму видимих рахунків.
+ * Той самий клас, що два «очікуємо» і чипи «новий/постійний».
+ *
+ * ⚠️ ФОРМА — РІВНІСТЬ, а не «≥N рахунків»: істинна і при 33 рядках, і при
+ * нулі (урок `#220`). Порожній скоуп дає гучний `skip` із названою причиною.
+ */
+test("#199cd Σ живих рахунків у розкритті == борг клієнта в рядку, для КОЖНОЇ ролі", needsApi(), async (t) => {
+  const { signToken } = await import("../auth/auth.js");
+  const { pool } = await import("../db/pool.js");
+  const mgr = (await pool.query<{ id: number; team_id: number | null; name: string }>(
+    `SELECT m.id, m.team_id, m.name FROM managers m
+      WHERE EXISTS (SELECT 1 FROM receivables r WHERE r.manager_id = m.id)
+      ORDER BY (SELECT SUM(r.amount) FROM receivables r WHERE r.manager_id = m.id) DESC NULLS LAST
+      LIMIT 1`)).rows[0];
+  if (!mgr) return t.skip("у `receivables` немає жодного клієнта з відповідальним — звіряти нема на чому");
+
+  const tok = (role: "company" | "team_lead" | "manager", roleKey: string,
+               managerId: number | null, teamId: number | null) =>
+    signToken({ userId: 0, role, roleKey, managerId, teamId });
+  const roles: [string, string][] = [
+    ["адмін", tok("company", "admin", null, null)],
+    ["тімлід", tok("team_lead", "team_lead", null, mgr.team_id)],
+    ["менеджер", tok("manager", "manager", mgr.id, null)],
+  ];
+
+  const bad: string[] = [];
+  let checked = 0;
+  for (const [who, token] of roles) {
+    const H = { Authorization: `Bearer ${token}` };
+    const list = await (await fetch(`${API_BASE}/api/dashboard/receivables`, { headers: H })).json() as
+      { managers: { clients: { clientKey: string; clientName: string; amount: number }[] }[] };
+    const clients = (list.managers ?? []).flatMap((m) => m.clients ?? []);
+    for (const c of clients.slice(0, 6)) {
+      const r = await fetch(
+        `${API_BASE}/api/dashboard/receivables/invoices?clientKey=${encodeURIComponent(c.clientKey)}`,
+        { headers: H });
+      assert.equal(r.status, 200,
+        `🔴 ${who}: клієнт «${c.clientName}» видимий у списку, а розкриття віддало ${r.status} — `
+        + "два скоупи розійшлись");
+      const b = await r.json() as { invoices: { amount: number; writtenOff: boolean }[] };
+      const sum = (b.invoices ?? []).filter((x) => !x.writtenOff).reduce((s, x) => s + Number(x.amount), 0);
+      checked++;
+      const delta = Math.round(c.amount - sum);
+      if (Math.abs(delta) > 1)
+        bad.push(`${who} · «${c.clientName}»: рядок ${Math.round(c.amount)} ₴, розкриття ${Math.round(sum)} ₴, Δ ${delta}`);
+    }
+  }
+  await pool.end();
+  if (checked === 0) return t.skip("жодна роль не побачила клієнтів — звіряти нема на чому");
+  assert.deepEqual(bad, [],
+    "🔴 РЯДОК І РОЗКРИТТЯ КАЖУТЬ РІЗНЕ ПРО ОДНОГО КЛІЄНТА:\n  " + bad.join("\n  ")
+    + "\n  Причина майже напевно та сама, що 27.08.2026: у розкриття повернувся фільтр по "
+    + "менеджеру рахунка. Скоуп мусить бути ПО КЛІЄНТУ — див. коментар у роуті.");
+});
+
+test("#199cd2 скоуп розкриття — ТОЙ САМИЙ вираз, що список і списання", () => {
+  // 🔴 Гейт на ДЖЕРЕЛО, і він потрібен окремо від `#199cd`: той порівнює ЧИСЛА
+  // на живих даних, тобто мовчить, коли даних немає. Цей стверджує, що трьох
+  // окремих виразів більше не існує — а саме поява другого виразу й дала дефект.
+  const src = strip(readFileSync(SRC("routes/dashboard.ts"), "utf8"));
+  const i = src.indexOf('dashboardRouter.get("/receivables/invoices"');
+  assert.ok(i > 0, "🔴 роут розкриття не знайдено — гейт міряє порожнечу");
+  const body = src.slice(i, src.indexOf("dashboardRouter.", i + 40));
+
+  assert.match(body, /receivablesScope\(auth, req\.query\)/,
+    "🔴 розкриття більше не бере спільний скоуп — заведено другий вираз");
+  assert.match(body, /metrics\.receivablesByClient\(sc\)/,
+    "🔴 видимість клієнта визначається не тим виразом, що будує список");
+  // 🔴 І ГОЛОВНЕ: фільтра по менеджеру рахунка більше НЕМАЄ.
+  assert.ok(!/ri\.manager_id\s*=\s*\$/.test(body),
+    "🔴 у розкриття ПОВЕРНУВСЯ фільтр по `ri.manager_id` — саме він давав "
+    + "«ПВК АРСЕНАЛ ТОВ: рядок 2 323 000 ₴, розкриття 691 000 ₴»");
+  assert.ok(!/m\.team_id\s*=\s*\$/.test(body),
+    "🔴 у розкриття повернувся фільтр по команді менеджера рахунка");
+  // Дзеркало: межа не зникла зовсім — клієнт поза скоупом дістає 403, не порожнечу.
+  assert.match(body, /status\(403\)/,
+    "🔴 зникла відмова для чужого клієнта — «нічого немає» читалось би як «боргу немає»");
 });
