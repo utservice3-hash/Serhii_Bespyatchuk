@@ -162,17 +162,18 @@ test("#226f міграція у діфі НЕ може бути прочитан
  */
 test("#226g фаза check упізнає прод-чекаут за докрутом, а не лише за шляхом", async () => {
   const { isProdCheckout, PROD_CHECKOUT_REFUSAL } = await import("./deployPlan.js");
+  const DOC = "/home/evraziat/uts.ua/dashboard";
 
   // 1 · Докрут поруч із кодом — це прод, хоч би де він лежав.
-  assert.equal(isProdCheckout({ rootIndexHtml: true, rootAssets: true, path: "/будь/де" }), true,
+  assert.equal(isProdCheckout({ rootIndexHtml: true, rootAssets: true, path: "/будь/де", docRoot: DOC }), true,
     "🔴 прод не впізнано за докрутом — саме так check і перезібрав чужий dist");
-  // 2 · Шлях — ДРУГИЙ сигнал, а не єдиний.
-  assert.equal(isProdCheckout({ rootIndexHtml: false, rootAssets: false, path: "/home/evraziat/uts.ua/dashboard" }), true);
+  // 2 · Шлях — ДРУГИЙ сигнал, а не єдиний. Звірка з docRoot, не з хостом (див. #250f).
+  assert.equal(isProdCheckout({ rootIndexHtml: false, rootAssets: false, path: DOC, docRoot: DOC }), true);
   // 3 · 🪞 ДЗЕРКАЛО: звичайний дев-клон НЕ блокується, інакше check не запуститься ніде.
-  assert.equal(isProdCheckout({ rootIndexHtml: false, rootAssets: false, path: "/home/user/Serhii_Bespyatchuk" }), false,
+  assert.equal(isProdCheckout({ rootIndexHtml: false, rootAssets: false, path: "/home/user/Serhii_Bespyatchuk", docRoot: DOC }), false,
     "🔴 дев-клон прийнято за прод — фаза check стала б невиконуваною");
   // Половина ознаки — ще не прод (у фронті теж є свій index.html, але не в корені репо).
-  assert.equal(isProdCheckout({ rootIndexHtml: true, rootAssets: false, path: "/home/user/x" }), false);
+  assert.equal(isProdCheckout({ rootIndexHtml: true, rootAssets: false, path: "/home/user/x", docRoot: DOC }), false);
   // 4 · Відмова мусить ПОЯСНЮВАТИ, а не просто зупиняти.
   assert.match(PROD_CHECKOUT_REFUSAL, /rm -rf dist/);
   assert.match(PROD_CHECKOUT_REFUSAL, /У КОНТЕЙНЕРІ/, "🔴 відмова не каже, ДЕ ж тоді запускати check");
@@ -207,19 +208,23 @@ test("#226i ПЕРЕВІРКА СЕРЕДОВИЩА — ПЕРЕД ПЕРШИМ 
   // диску: сайт жив із памʼяті процесу, рестарт не підняв би нічого.
   // `&&` рятує від продовження ПІСЛЯ збою, але не від того, що вже виконалось ДО.
   for (const [phase, tool, destroyer] of [
-    ["check", "toolsCheck", "buildBack"], ["run", "toolsRun", "buildBackProd"],
+    // ⚠️ У фазі run першим руйнівним кроком став `deliver` (27.08.2026): збірку винесено
+    // у стенд, і `buildBackProd` більше не існує. Твердження те саме й кусає так само —
+    // `deliver` теж починається з `rm -rf` у ДОКРУТІ, тобто ціна помилки не змінилась.
+    // Правити довелось саме тому, що інваріанта спиралась на крок, який я прибрав.
+    ["check", "toolsCheck", "buildBack"], ["run", "toolsRun", "deliver"],
   ] as const) {
     const ids = planSteps(phase, "full").map((x) => x.id);
     const t = ids.indexOf(tool), d = ids.indexOf(destroyer);
     assert.ok(t >= 0, `🔴 у фазі ${phase} немає перевірки середовища взагалі`);
-    assert.ok(d >= 0, `🔴 у фазі ${phase} зник крок збірки — тест звіряє порядок із порожнечею`);
+    assert.ok(d >= 0, `🔴 у фазі ${phase} зник руйнівний крок — тест звіряє порядок із порожнечею`);
     assert.ok(t < d,
       `🔴 у фазі ${phase} перевірка середовища стоїть ПІСЛЯ «${destroyer}», який починається з rm -rf dist. `
       + "Це рівно та послідовність, що лишила прод без збірки.");
   }
   // Дзеркало: детектор порядку вміє побачити порушення, інакше він завжди зелений.
-  const swapped = ["buildBackProd", "toolsRun"];
-  assert.ok(swapped.indexOf("toolsRun") > swapped.indexOf("buildBackProd"),
+  const swapped = ["deliver", "toolsRun"];
+  assert.ok(swapped.indexOf("toolsRun") > swapped.indexOf("deliver"),
     "🔴 сам детектор порядку не працює");
 });
 
@@ -242,7 +247,7 @@ test("#226k АВАРІЙНИЙ ВИХІД КАЖЕ ПРО ЗАМОК, який �
   const ctx = { prodSha: "7915551", targetSha: "4a5655f", branch: "claude/friendly-galileo-8pijhl" };
   // Замок узято, робота обірвана — він мусить лишитись, і про це треба сказати вголос:
   // мовчазний замок за годину читається як забуте сміття, і його почнуть зривати.
-  const a = abortState("buildBackProd", ["toolsRun", "lockTake"], ctx);
+  const a = abortState("deliver", ["toolsRun", "lockTake"], ctx);
   const txt = a.lines.join("\n");
   assert.match(txt, /ЗАМОК ЧЕКАУТУ ЛИШАЄТЬСЯ ВЗЯТИМ/, "🔴 про взятий замок не сказано — його зірвуть як сміття");
   assert.match(txt, /--release/, "🔴 не дано команди звільнення — звільнятимуть `rm`, і журнал не побачить нічого");
