@@ -543,8 +543,11 @@ git remote -v                                                                   
 
 0. **🔴 КРОК 0 ВИКОНУЄТЬСЯ `deploy:check`, А НЕ ГОЛИМ `npm test` (виправлено 27.08.2026).**
    ```
-   cd backend && npm run deploy:check -- --mode=full     # або --mode=light
+   cd <стенд>/backend && npm run deploy:check -- --mode=full     # або --mode=light
    ```
+   ⚠️ **У СТЕНДІ, не в прод-чекауті** (з появою двох дерев, `3655602`): `deploy:check`
+   робить `rm -rf dist && npm run build`, а в прод-чекауті він і без того відмовляється
+   (`#226g`). `UTS_REPO` = стенд, `UTS_DOC_ROOT` = прод-чекаут.
    Плоский `npm test` — це те, що біжить УСЕРЕДИНІ нього, двічі: на базі й на дереві.
    Запустиш його руками — отримаєш «N pass · M fail», тобто **старий критерій**, і
    новий не спрацює взагалі.
