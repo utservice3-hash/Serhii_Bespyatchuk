@@ -92,6 +92,29 @@ export const BACKUP_KEEP = 2;
  *             `rm -rf dist`, бо 26.08.2026 ланцюг зробив `rm` і аж тоді впав на
  *             `npm: command not found`.
  */
+/**
+ * 🔴 ЛАНЦЮГ НЕ СТАВИТЬ ЗАЛЕЖНОСТЕЙ І НЕ ПОВИНЕН — але мусить сказати це вголос.
+ *
+ * 📐 Привід: 27.08.2026 два чати заміряли `node_modules` у стенді й дістали різні
+ * відповіді. Розгадка виявилась не в помилці жодного: стендів на хості ДВА, і другий
+ * (`stand-osnovnyi`) створили за сім хвилин до заміру — між `git clone` і `npm ci`
+ * є вікно в кілька хвилин, коли залежностей справді немає. Стан реальний і
+ * відтворюваний, тож перший, хто прийде на свіжий стенд, вирішить, що той зламаний.
+ *
+ * Ланцюг не робить `npm ci` НІДЕ (перевірено: нуль викликів) — навпаки, крок `test`
+ * СИМЛІНКУЄ `node_modules` стенда в базовий worktree, тобто на них спирається.
+ * Тихий `npm ci` тут був би гірший за відмову: три хвилини мовчання й мовчазна зміна
+ * дерева, у якому саме міряють приріст падінь.
+ */
+function needDeps(dir: string, what: string): void {
+  if (existsSync(`${dir}/node_modules`)) return;
+  throw new Error(
+    `у ${what} немає node_modules — ланцюг залежностей НЕ ставить і не буде.\n`
+    + `   Свіжий клон живе так кілька хвилин, поки не проженеш:\n`
+    + `     (cd ${dir} && npm ci)\n`
+    + "   Це не поломка стенда — це його ненаповнений стан.");
+}
+
 export function toolsPresent(id: string, namedBin: string | null): StepResult {
   const missing = ["npm", "node", "git"].filter((t) => {
     try { sh(t, ["--version"]); return false; } catch { return true; }
@@ -145,7 +168,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return { id: "lightAdmission", ok: outside.length === 0,
       detail: outside.length ? `🔴 поза frontend/: ${outside.join(", ")} — режим ПОВНИЙ` : "діф лише у frontend/" };
   },
-  buildBack: (c) => run("buildBack", () => { sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
+  buildBack: (c) => run("buildBack", () => { needDeps(c.be, "backend"); sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
   tscFront: (c) => run("tscFront", () => sh("npx", ["tsc", "-b"], c.fe), "tsc -b фронту (НЕ --noEmit: він там нічого не перевіряє)"),
   /**
    * 🔴 БАНДЛ ФРОНТУ. `tscFront` поруч — це ТИПИ (`tsc -b`), він нічого не емітить;
@@ -153,7 +176,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * Крок стоїть у фазі CHECK, тобто у стенді: у докруті йому не місце — саме заради
    * цього збірку й виносили.
    */
-  buildFront: (c) => run("buildFront", () => sh("npm", ["run", "build"], c.fe), "бандл фронту (vite) — у СТЕНДІ"),
+  buildFront: (c) => run("buildFront", () => { needDeps(c.fe, "frontend"); sh("npm", ["run", "build"], c.fe); }, "бандл фронту (vite) — у СТЕНДІ"),
   /**
    * 🔴 КРИТЕРІЙ — ПРИРІСТ, А НЕ КОД 0. Розгорнуто в `testDelta.ts`; тут — механіка
    * двох прогонів. Ціна заміряна: +78 с (worktree+збірка 12.4 с, прогін бази 65.8 с).
@@ -204,6 +227,28 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       }
       const lost = diffGates(testsAtRef(c.prod), MANIFEST_TESTS).onlyBefore;
       const d = judgeDelta(baseTap, treeTap, lost);
+      /**
+       * 🔴 ПРИРІСТ НУЛЬ ≠ ПОВНЕ ПОКРИТТЯ, І ЦЬОГО НЕ БУЛО ВИДНО ЗІ ЗВІТУ.
+       *
+       * 📐 Заміряно 27.08.2026 на ОДНІЙ базі: у стенді «падінь 2, виконано 446», у
+       * контейнері «падінь 104, виконано 595». Різниця не в коді — у стенді немає
+       * `.env`, тож ~149 БД-гейтів чесно скіпаються. Критерій приросту в обох
+       * оточеннях виконано (він порівнює однакові), і саме тому «8 із 8» читалось
+       * як повне покриття, будучи покриттям НА 149 ПЕРЕВІРОК МЕНШИМ.
+       *
+       * Рішення власника: розрив НАЗВАТИ, а не закрити. Число тут — не привід
+       * підкладати бойовий `.env` у стенд (це другий екземпляр доступів на диску);
+       * це підпис під тим, чого прогін не бачив.
+       */
+      const ran = treeTap.filter((t) => !t.skipped).length;
+      const skipped = treeTap.length - ran;
+      const noEnv = !existsSync(`${c.be}/.env`);
+      d.lines.push(
+        `📐 ПОКРИТТЯ: виконано ${ran} із ${treeTap.length}, скіпнуто ${skipped}`
+        + (noEnv
+          ? " — у стенді немає backend/.env, тож БД-гейти не виконувались.\n"
+            + "   «Приріст 0» тут означає «не гірше за базу В ЦЬОМУ Ж оточенні», а НЕ «перевірено все»."
+          : "."));
       return { id: "test", ok: d.ok, detail: d.lines.join("\n") };
     } catch (e) {
       return { id: "test", ok: false, detail: `🔴 приріст не порахований: ${String((e as Error).message).slice(0, 300)}` };
