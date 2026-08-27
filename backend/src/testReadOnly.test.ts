@@ -110,3 +110,58 @@ test("#14d ГЕЙТ ловить підміну через options= у DATABASE_
     DATABASE_URL: "postgres://u@h/db?sslmode=require&options=-c%20role%3Dneondb_owner" } as NodeJS.ProcessEnv),
     /options=/);
 });
+
+/**
+ * 🔒 #232e–#232g — ДРУГИЙ РУБІЖ: ПРОД-ХОСТ ПІД `node --test`.
+ *
+ * `#14*` вище стережуть режим `TEST_SCOPE=prod`. Ці троє — випадок, коли його НЕ
+ * виставлено взагалі: саме так `npm test` у контейнері ходить у бойову Neon-базу, і
+ * сьогодні його спиняє лише те, що в рядку підключення випадково стоїть `kk_ro`.
+ * Безпека на «випадково» — це везіння, а не механізм.
+ */
+const NT = { NODE_TEST_CONTEXT: "child-v8" };
+const PROD = "postgres://neondb_owner:x@ep-plain-rice-asm5535t-pooler.c-4.eu-central-1.aws.neon.tech/neondb";
+const SCRATCH = "postgresql://scratch@/utsscratch?host=/tmp/scratch-abc";
+
+test("#232e ПРОД-ХОСТ під `node --test` із НЕназваною роллю — відмова", async () => {
+  const assertGuard = await guard();
+  assert.throws(() => assertGuard({ ...NT, DATABASE_URL: PROD } as NodeJS.ProcessEnv),
+    /neondb_owner/, "🔴 набір пішов би в бойову базу під write-роллю, і ніщо б не спинило");
+  // Повідомлення мусить НАЗВАТИ роль: «щось не так із доступом» відправить читача не туди.
+  try { assertGuard({ ...NT, DATABASE_URL: PROD } as NodeJS.ProcessEnv); assert.fail("не кинув"); }
+  catch (e) { assert.match(String((e as Error).message), /read-only/, "🔴 не сказано, ЧОГО бракує"); }
+});
+
+test("#232f ДЗЕРКАЛО: scratch-кластер і бойовий процес гейт НЕ чіпає", async () => {
+  const assertGuard = await guard();
+  // 🔴 Головна межа правки. Одноразовий кластер (#8, #231f) ходить через unix-сокет:
+  // хоста немає ВЗАГАЛІ. Ознака «є DATABASE_URL» накрила б і його — тобто зламала б
+  // чужі гейти заради свого.
+  assertGuard({ ...NT, DATABASE_URL: SCRATCH } as NodeJS.ProcessEnv);
+  const { isProdDbHost } = await import("./db/readOnlyGuard.js");
+  assert.equal(isProdDbHost(SCRATCH), false, "🔴 unix-сокет прийнято за прод-хост");
+  assert.equal(isProdDbHost(PROD), true, "🔴 прод-хост не впізнано — гейт мовчав би завжди");
+  // Бойовий процес: прод-хост є, `node --test` немає → жодного втручання.
+  assertGuard({ DATABASE_URL: PROD } as NodeJS.ProcessEnv);
+});
+
+test("#232g РЕЄСТР READ-ONLY РОЛЕЙ: названа проходить, чужа — ні", async () => {
+  const assertGuard = await guard();
+  const { READONLY_DB_ROLES, urlRole } = await import("./db/readOnlyGuard.js");
+  // `kk_ro` — те, що стоїть у контейнері сьогодні. Гейт не сміє його ламати, інакше
+  // ми полагодили б безпеку ціною робочого прогону.
+  assertGuard({ ...NT, DATABASE_URL: PROD.replace("neondb_owner", "kk_ro") } as NodeJS.ProcessEnv);
+  // …але саме ТОМУ, що вона НАЗВАНА, а не тому, що «виглядає безпечно».
+  assert.ok(READONLY_DB_ROLES.includes("kk_ro"), "🔴 роль контейнера не названа в реєстрі");
+  assert.equal(urlRole(PROD), "neondb_owner", "🔴 роль із рядка не читається");
+  // ⚠️ Для сокетного рядка `URL` віддає порожній username (заміряно: "" замість
+  // "scratch") — і це не має значення НІ ДЛЯ ЧОГО: перевірка ролі туди не доходить,
+  // бо `isProdDbHost` уже сказав «не прод». Записано, щоб наступний не полагодив
+  // розбір ролі, вирішивши, що тут баг.
+  assert.equal(urlRole(SCRATCH), "", "🔴 поведінка розбору сокетного рядка змінилась — перечитай межу");
+  // Реєстр не ковдра: вигадана роль не проходить.
+  assert.throws(() => assertGuard({ ...NT, DATABASE_URL: PROD.replace("neondb_owner", "kk_rw") } as NodeJS.ProcessEnv),
+    /kk_rw/, "🔴 реєстр пропускає будь-що, схоже на назву");
+  // І PGOPTIONS із правильною роллю теж проходить — це шлях `test:prod`.
+  assertGuard({ ...NT, DATABASE_URL: PROD, PGOPTIONS: "-c role=test_readonly" } as NodeJS.ProcessEnv);
+});
