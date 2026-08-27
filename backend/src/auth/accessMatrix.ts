@@ -310,6 +310,33 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // HR відмовляється вкладкою, як і на решті дебіторки.
   // ⚠️ Тімлід тут ДОЗВОЛЕНИЙ на рівні матриці й звужується вже в роуті — до
   // клієнтів СВОЄЇ команди. Матриця перевіряє роль, а не конкретного клієнта.
+  // ══════ ПʼЯТЬ РОУТІВ, ЯКИХ МАТРИЦЯ НЕ БАЧИЛА В ПРИНЦИПІ (26.08.2026) ══════
+  //
+  // 🔴 Заміряно, а не оцінено: роутів у коді **213**, рядків тут було **208**.
+  // Ці пʼятеро не мали запису, тож зліпок `#11` не пробував їх ЖОДНОЮ роллю —
+  // і саме тому «дебіторка звужується бездоганно» співіснувало з тим, що
+  // `/writeoffs` віддавав менеджеру ті самі 8 списань на 68 178 ₴, що адміну.
+  // Порожнє місце в реєстрі читається як «перевірено», а означає «не дивились».
+  //
+  // ⚠️ Дві поправки до діагнозу, обидві заміряні:
+  // • роути ліміту НЕ були відкриті — `roleHasPerm("manage_credit_limits")`
+  //   стояв першим значущим оператором; `#17` бачить його в тілі й вважав межею.
+  //   Переїзд у `requirePerm` нічого не змінив у поведінці, лише зробив межу
+  //   видимою й для матриці.
+  // • `/report-plan/day-items` теж мав межу — `canDrillManager` + вкладку
+  //   `report` через `pre(...)`. Бракувало саме РЯДКА тут, а не захисту.
+  { method: "GET", path: "/api/dashboard/receivables/writeoffs", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // ⚠️ Тімлід і менеджер ДОЗВОЛЕНІ на рівні ролі й звужуються вже в роуті — до
+  // своїх клієнтів. Матриця перевіряє РОЛЬ, звуження ДАНИХ тримає `#227`.
+  { method: "GET", path: "/api/dashboard/receivables/note-history?clientKey=zzz", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  // 🧾 Ліміт правлять пʼять ролей — те саме право `manage_credit_limits`, що
+  // стереже `#186`. Тімлід має КНОПКУ ЗАПИТУ, а це інша дія (створює задачу).
+  { method: "PUT", path: "/api/dashboard/receivables/limit", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "DELETE", path: "/api/dashboard/receivables/limit/:clientKey", cls: "DELETE-ghost",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/receivables/limit-request?clientKey=zzz", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/receivables/limit-task", cls: "deny-only",
@@ -330,6 +357,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/report", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 🔍 Розкриття дня у Звіті. Проба несе параметри, інакше роут віддає 400 ще
+  // до перевірки прав — і зліпок міряв би валідацію, а не межу.
+  { method: "GET", path: "/api/dashboard/report-plan/day-items?managerId=1&date=2026-01-01&kind=created", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/report-plan", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/report-plan/deals", cls: "GET",

@@ -54,7 +54,8 @@ import * as receivablesFacts from "../core/receivablesFacts.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays } from "../core/receivablesAge.js";
 import { marginCell } from "../core/receivablesMargin.js";
-import { WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
+import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
+import { receivablesScope } from "../auth/receivablesScope.js";
 import {
   fkErrorMessage, limitRequestTitle, amountLimitState, amountLimitLabel,
   LIMIT_REQUEST_TASK_TYPE,
@@ -1794,12 +1795,15 @@ dashboardRouter.get("/receivables", async (req, res) => {
   let managerId = req.query.managerId ? Number(req.query.managerId) : null;
   let teamId = req.query.teamId ? Number(req.query.teamId) : null;
 
-  if (auth.role === "manager") {
-    managerId = auth.managerId;
-    teamId = null;
-  } else if (auth.role === "team_lead") {
-    teamId = auth.teamId;
-  }
+  // 🔒 Скоуп — СПІЛЬНИЙ вираз (`auth/receivablesScope.ts`), а не правило,
+  // записане в цьому обробнику. Поки воно жило тут, сусідні двері тієї самої
+  // вкладки (`/writeoffs`, `/note-history`) відчинились БЕЗ нього — і це не
+  // недбалість, а властивість: копіювати нема чого, бо копіювати нічого не видно.
+  const sc = receivablesScope(auth, req.query);
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  managerId = sc.managerId;
+  teamId = sc.teamId;
+
 
   // КРОК 9: борг рахує core/metrics.receivablesByClient (LEFT JOIN — неатрибутований
   // борг БІЛЬШЕ не ховається; при адмін-розрізі додається група «Без менеджера»,
@@ -1868,6 +1872,22 @@ dashboardRouter.get("/receivables", async (req, res) => {
     // `рядок.сума` лишалась 3 у всіх трьох станах — і я її не побачив, бо
     // дивився на Δ плитки, яку сам і перевіряв. Рівно те, від чого береже
     // правило «жоден показник не має двох джерел на одному екрані».
+    // 🗑 КЛІЄНТ, У ЯКОГО СПИСАНІ ВСІ РАХУНКИ, У ВІДПОВІДЬ НЕ ПОТРАПЛЯЄ ВЗАГАЛІ.
+    //
+    // 🔴 САМЕ ТУТ, А НЕ НА ФРОНТІ, І НЕ ДВОМА ФІЛЬТРАМИ. Заголовок «Боржники (N)»
+    // і плитка «N боржників» обидва рахують `all.length` — одну й ту саму
+    // множину, що приходить звідси. Прибрати рядок у ВІДПОВІДІ означає, що
+    // обидва лічильники, `total`, `overdueClients` і підсумок менеджера підуть
+    // за ним самі. Фільтр на фронті завів би ДРУГЕ джерело тієї самої множини —
+    // рівно те, від чого береже правило «жоден показник не має двох джерел».
+    //
+    // 📐 Заміряно 26.08.2026: пʼятеро таких клієнтів стояли з боргом 0 ₴ і
+    // датою «—», заголовок казав 78 замість 73. Сума при цьому була ПРАВИЛЬНА
+    // (їхній видимий борг уже нуль) — тому Σ-гейти мовчали, і мовчали чесно.
+    //
+    // ⚠️ Частково списаний клієнт ЛИШАЄТЬСЯ: УКРЕНЕРГО (списано 28 000 з
+    // 325 500) видно з боргом 297 500 і віком 22 дні. Умова — ВСІ рахунки.
+    if (clientFullyWrittenOff(cf)) continue;
     const visibleAmount = r.amount - (cf?.writtenOffAmount ?? 0);
     entry.clients.push({
       clientKey: r.clientKey, clientName: r.clientName, amount: visibleAmount,
@@ -2008,6 +2028,29 @@ dashboardRouter.post("/receivables/writeoff", async (req, res) => {
  */
 dashboardRouter.get("/receivables/writeoffs", async (req, res) => {
   const auth = req.auth!;
+  /**
+   * 🔒 ЗВУЖЕННЯ ТИМ САМИМ МЕХАНІЗМОМ, ЩО ЗА СУСІДНІМИ ДВЕРИМА (26.08.2026).
+   *
+   * 🔴 ЩО БУЛО ВІДКРИТО, І ЦЕ ЗАМІРЯНО ВІДПОВІДЯМИ СЕРВЕРА, А НЕ ЧИТАННЯМ:
+   * менеджер отримував БАЙТ-У-БАЙТ ту саму відповідь, що адмін — усі 8 списань
+   * на 68 178 ₴ разом із `clientName`, `amount`, `note` й автором. Тобто хто,
+   * кому й скільки простив, із припискою «чому». Вкладковий гейт на цих дверях
+   * діяв (HR отримує 403), а звуження ДАНИХ не було жодного.
+   *
+   * ⚠️ НЕ НОВИЙ ВИРАЗ, А ТА САМА ФУНКЦІЯ. Множину «мої клієнти» дає
+   * `metrics.receivablesByClient` — рівно те, чим будується список на екрані.
+   * Другий вираз для того самого питання розійшовся б зі списком тихо: людина
+   * бачила б клієнта в таблиці й не бачила його списань, або навпаки.
+   *
+   * 🔴 КЛЮЧ СПИСАННЯ — СИРИЙ, А СКОУП — КАНОНІЧНИЙ, і зводить їх `receivable_invoices`,
+   * де є обидва. Порівнювати `client_key_raw` із `client_key` навпростець можна
+   * рівно доти, доки клієнта не склеїли аліасом — а тоді списання мовчки випало б
+   * із видимості власного менеджера.
+   */
+  const sc = receivablesScope(auth, req.query);
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  const mine = await metrics.receivablesByClient(sc);
+  const myKeys = mine.map((r) => r.clientKey).filter((k): k is string => k != null);
   const rows = await pool.query<{
     client_key_raw: string; client_name: string | null; invoice_no: string;
     amount: string; note: string; author: string | null; at: string;
@@ -2020,7 +2063,11 @@ dashboardRouter.get("/receivables/writeoffs", async (req, res) => {
        FROM receivable_writeoffs w
        LEFT JOIN users u ON u.id = w.written_off_by
       WHERE w.revoked_at IS NULL
-      ORDER BY w.written_off_at DESC`
+        AND EXISTS (SELECT 1 FROM receivable_invoices ri
+                     WHERE COALESCE(ri.client_key_raw, ri.client_key) = w.client_key_raw
+                       AND ri.client_key = ANY($1))
+      ORDER BY w.written_off_at DESC`,
+    [myKeys]
   );
   // Лічильник розбіжності — тим самим виразом, що виключає угоди з очікуваних.
   const div = await pool.query<{ deals: number; amount: number }>(
@@ -2092,11 +2139,26 @@ dashboardRouter.delete("/receivables/writeoff", async (req, res) => {
  * і це ТРЕТІЙ стан («не встановлювали»). Плутати їх не можна: обидва ведуть до
  * однакового наслідку, але відповідають різне на питання «чому».
  */
-dashboardRouter.put("/receivables/limit", async (req, res) => {
+dashboardRouter.put("/receivables/limit", requirePerm("manage_credit_limits"), async (req, res) => {
+  /**
+   * 🔒 ПРАВО — В MIDDLEWARE, А НЕ В ТІЛІ (переїзд 26.08.2026).
+   *
+   * ⚠️ ПОВЕДІНКА НЕ ЗМІНИЛАСЬ, І ЦЕ ТРЕБА СКАЗАТИ ПРЯМО: перевірка
+   * `roleHasPerm(auth.roleKey, "manage_credit_limits")` стояла тут ПЕРШИМ
+   * значущим оператором і віддавала ті самі 403. Тобто «менеджер знімає чужий
+   * ліміт» НЕ був відкритий — він був закритий іншим механізмом.
+   *
+   * 🔴 Переїзд потрібен не заради безпеки, а заради ВИДИМОСТІ: ворота `#17`
+   * вимагають, щоб у роута була МЕЖА — `ROUTE_TAB` або `requirePerm` у стеку.
+   * Перевірку всередині тіла вони не бачать у принципі, тож роут числився
+   * «без межі» й був невидимий для `ACCESS_MATRIX`. Правило, якого не видно
+   * інструменту, наступні двері відчиняють без нього — рівно те, що сталося зі
+   * `/writeoffs` і `/note-history` за сусідніми дверима.
+   *
+   * ⚠️ Дубль усередині тіла ПРИБРАНО, а не лишено «про всяк випадок»: два
+   * записи одного правила розходяться, і тоді незрозуміло, котрий чинний.
+   */
   const auth = req.auth!;
-  if (!roleHasPerm(auth.roleKey, "manage_credit_limits")) {
-    return res.status(403).json({ error: "Немає права змінювати ліміт" });
-  }
   const clientKey = String(req.body?.clientKey ?? "").trim();
   const note = String(req.body?.note ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
@@ -2327,11 +2389,26 @@ dashboardRouter.post("/receivables/limit-task", async (req, res) => {
 });
 
 /** Зняти ліміт зовсім → стан «не встановлювали». Дзеркальна дія до PUT. */
-dashboardRouter.delete("/receivables/limit/:clientKey", async (req, res) => {
+dashboardRouter.delete("/receivables/limit/:clientKey", requirePerm("manage_credit_limits"), async (req, res) => {
+  /**
+   * 🔒 ПРАВО — В MIDDLEWARE, А НЕ В ТІЛІ (переїзд 26.08.2026).
+   *
+   * ⚠️ ПОВЕДІНКА НЕ ЗМІНИЛАСЬ, І ЦЕ ТРЕБА СКАЗАТИ ПРЯМО: перевірка
+   * `roleHasPerm(auth.roleKey, "manage_credit_limits")` стояла тут ПЕРШИМ
+   * значущим оператором і віддавала ті самі 403. Тобто «менеджер знімає чужий
+   * ліміт» НЕ був відкритий — він був закритий іншим механізмом.
+   *
+   * 🔴 Переїзд потрібен не заради безпеки, а заради ВИДИМОСТІ: ворота `#17`
+   * вимагають, щоб у роута була МЕЖА — `ROUTE_TAB` або `requirePerm` у стеку.
+   * Перевірку всередині тіла вони не бачать у принципі, тож роут числився
+   * «без межі» й був невидимий для `ACCESS_MATRIX`. Правило, якого не видно
+   * інструменту, наступні двері відчиняють без нього — рівно те, що сталося зі
+   * `/writeoffs` і `/note-history` за сусідніми дверима.
+   *
+   * ⚠️ Дубль усередині тіла ПРИБРАНО, а не лишено «про всяк випадок»: два
+   * записи одного правила розходяться, і тоді незрозуміло, котрий чинний.
+   */
   const auth = req.auth!;
-  if (!roleHasPerm(auth.roleKey, "manage_credit_limits")) {
-    return res.status(403).json({ error: "Немає права змінювати ліміт" });
-  }
   const clientKey = String(req.params.clientKey ?? "").trim();
   const r = await pool.query(`DELETE FROM client_credit_limits WHERE client_key = $1`, [clientKey]);
   if (!r.rowCount) return res.status(404).json({ error: "Ліміт не встановлений" });
@@ -3306,8 +3383,29 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
  * Межу тримає `ROUTE_TAB` (вкладка `receivables`), як і в решти роутів екрана.
  */
 dashboardRouter.get("/receivables/note-history", async (req, res) => {
+  const auth = req.auth!;
   const clientKey = String(req.query.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  /**
+   * 🔒 ЖУРНАЛ ДОМОВЛЕНОСТЕЙ — ТІЛЬКИ ПО СВОЇХ КЛІЄНТАХ (26.08.2026).
+   *
+   * 🔴 Було відкрито ВСІМ: коментар тімліда про будь-якого клієнта читав будь-який
+   * менеджер, і ключі не таємниця — їх віддає `client-search`. Це не гірше й не
+   * краще за списання: це та сама діра за сусідніми дверима.
+   *
+   * ⚠️ ЧОМУ 403, А НЕ ПОРОЖНІЙ СПИСОК. Порожньо означає «записів немає» —
+   * відповідь про ДАНІ. Тут відповідь про ПРАВО, і плутати їх не можна: інакше
+   * «чужий клієнт» і «свій клієнт без історії» виглядають однаково, а це два
+   * різні стани, з яких лише один — привід щось робити.
+   */
+  const sc = receivablesScope(auth, {});
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  if (sc.managerId != null || sc.teamId != null) {
+    const mine = await metrics.receivablesByClient(sc);
+    if (!mine.some((r) => r.clientKey === clientKey)) {
+      return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
+    }
+  }
   const r = await pool.query<{ comment: string; author: string | null; at: string }>(
     `SELECT h.comment, u.email AS author,
             to_char(h.written_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD"T"HH24:MI:SS') AS at

@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { usePopoverClamp } from "../usePopoverClamp";
 import { setReceivableOwner, clearReceivableOwner, type ManagerOption, type ReceivableClient } from "../../../api";
 import { NOTE_MAX, noteIsValid, ownerState } from "../receivablesView";
 
@@ -41,7 +42,14 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const noteRef = useRef<HTMLTextAreaElement | null>(null);
   const run = async (fn: () => Promise<void>) => {
+    // 🔴 ВІДМОВА ВИДИМА, А НЕ МОВЧАЗНА — те саме, що в поповері ліміту.
+    if (!noteIsValid(note)) {
+      setErr("Спершу вкажіть причину — без неї призначення через місяць не відрізнити від помилки");
+      noteRef.current?.focus();
+      return;
+    }
     setBusy(true); setErr(null);
     try { await fn(); onDone(); }
     catch (e: unknown) {
@@ -66,16 +74,21 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
   // поверх усього) — а не «схожий»: два різні способи вилізти зі скрол-контейнера
   // розійшлися б у поведінці рівно тоді, коли на це ніхто не дивиться.
   const narrow = typeof window !== "undefined" && window.innerWidth < 900;
+  const clamp = usePopoverClamp(320);
   const box: React.CSSProperties = narrow
     ? {
         position: "fixed", zIndex: 60, left: "50%", top: "50%",
         transform: "translate(-50%, -50%)", width: "min(340px, calc(100vw - 32px))",
-        maxHeight: "calc(100vh - 32px)", overflowY: "auto", padding: 14,
+        maxHeight: "calc(100dvh - 32px)", overflowY: "auto", padding: 14,
         background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12,
         boxShadow: "0 18px 50px rgba(0,0,0,0.45)", textAlign: "left",
       }
     : {
-        position: "absolute", zIndex: 30, marginTop: 4, width: 320, padding: 12,
+        // 🔴 ТОЙ САМИЙ ДЕФЕКТ, ЩО В `LimitEditor`, І ТОЙ САМИЙ ЗАТИСКАЧ.
+        // Широка гілка була `position: absolute` без стелі висоти, тож кнопки
+        // виїжджали за екран. Це один поповер, написаний двічі; полагодити один
+        // і лишити другий означало б розвести їх мовчки.
+        ...clamp.style, padding: 12,
         background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10,
         boxShadow: "0 8px 24px rgba(0,0,0,0.18)", textAlign: "left",
       };
@@ -114,7 +127,7 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
 
       {/* 🔴 ПРИМІТКА ОБОВʼЯЗКОВА, і це `CHECK` у БД. Кнопки неактивні, поки її
           немає, — щоб людина побачила зрозумілу вимогу, а не помилку з мережі. */}
-      <textarea value={note} maxLength={NOTE_MAX} disabled={busy}
+      <textarea ref={noteRef} value={note} maxLength={NOTE_MAX} disabled={busy}
         onChange={(e) => setNote(e.target.value)}
         // 🔴 Плейсхолдер КОРОТКИЙ, а пояснення — під полем. Довгий текст у
         // textarea на 54px обрізався на півслові («…не відрізнити від помил»),
@@ -135,12 +148,12 @@ export function OwnerEditor({ client, managers, onDone, onClose }: {
       {err && <div style={{ fontSize: "var(--fs-sm)", color: "#dc2626", marginBottom: 8 }}>🔴 {err}</div>}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        <button disabled={busy || !noteOk || managerId === ""} style={btn("var(--card-bg)")}
+        <button disabled={busy || managerId === ""} style={btn("var(--card-bg)")}
           title={!noteOk ? "Спершу примітка" : "Призначити обраного менеджера"}
           onClick={() => run(() => setReceivableOwner({ clientKey: client.clientKey, managerId: Number(managerId), note }))}>
           Призначити
         </button>
-        <button disabled={busy || !noteOk} style={btn("var(--card-bg)")}
+        <button disabled={busy} style={btn("var(--card-bg)")}
           title="Свідоме «нікого»: авто-правило вимикається, і це видно в підписі"
           onClick={() => run(() => setReceivableOwner({ clientKey: client.clientKey, managerId: null, note }))}>
           Свідомо нікого
