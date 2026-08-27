@@ -423,6 +423,20 @@ export async function main(argv: string[]): Promise<number> {
   if (phase === "check" && isProdCheckout({
     rootIndexHtml: existsSync(`${buildRepo}/index.html`), rootAssets: existsSync(`${buildRepo}/assets`), path: buildRepo, docRoot,
   })) { console.error(PROD_CHECKOUT_REFUSAL); return 3; }
+  const targetArg = argv.find((a) => a.startsWith("--target="))?.slice(9);
+  if (phase === "run" && !targetArg) {
+    console.error("🔴 `deploy:run` потребує --target=<sha> — те, що ЗАРАЗ у чекауті, не є наміром викату.\n"
+      + "   Візьми sha з артефакта `deploy:check` (поле branchSha).");
+    return 2;
+  }
+  /**
+   * ⚠️ ПОРЯДОК: помилка АРГУМЕНТА — раніше за помилку КОНФІГУРАЦІЇ.
+   * 🔴 Спіймано прийманням 27.08.2026: відмова «одне дерево» (код 3) стояла ВИЩЕ і
+   * перехоплювала випадок «run без --target» (код 2). У прод-чекауті
+   * `buildRepo === docRoot` виконується завжди, тож гейт #226h там діставав 3 замість 2
+   * і червонів — не тому, що зламалась його перевірка, а тому, що до неї не доходило.
+   * Обидві відмови до-руйнівні, тож переставити їх безпечно; повідомлення точніше.
+   */
   /**
    * 🔴 ЗБИРАТИ Й ДОСТАВЛЯТИ В ОДНОМУ ДЕРЕВІ — ЦЕ РІВНО ТЕ, ВІД ЧОГО МИ ЙШЛИ.
    * Якщо шляхи збіглись, чекаут знову буде зайнятий усі ~21 хв, а гейт «жоден крок
@@ -433,12 +447,6 @@ export async function main(argv: string[]): Promise<number> {
       + "   Фаза run доставляє те, що зібрав СТЕНД; збирати й доставляти в одному дереві\n"
       + "   означає повернути чекаут у стан «зайнятий 21 хвилину». Признач стенд явно.");
     return 3;
-  }
-  const targetArg = argv.find((a) => a.startsWith("--target="))?.slice(9);
-  if (phase === "run" && !targetArg) {
-    console.error("🔴 `deploy:run` потребує --target=<sha> — те, що ЗАРАЗ у чекауті, не є наміром викату.\n"
-      + "   Візьми sha з артефакта `deploy:check` (поле branchSha).");
-    return 2;
   }
   const ctx: Ctx = {
     buildRepo, docRoot,
