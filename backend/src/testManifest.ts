@@ -54,6 +54,7 @@ export const MANIFEST_FILES: string[] = [
   "tools/deployPlan.test.js",
   "tools/checkoutLock.test.js",
   "tools/testDelta.test.js",
+  "tools/sabotage.test.js",
   "routes/weekChain.test.js",
   "routes/callMerge.test.js",
   "routes/snapshotLabel.test.js",
@@ -73,6 +74,7 @@ export const MANIFEST_FILES: string[] = [
   "core/stuckRule.test.js",
   "core/stuckTalk.test.js",
   "core/reactivation.test.js",
+  "core/receivables1c.test.js",
   "core/loyaltyOverride.test.js",
   "core/adTouch.test.js",
   "core/autodeal.test.js",
@@ -279,6 +281,15 @@ export const MANIFEST_TESTS: string[] = [
   "#232g РЕЄСТР READ-ONLY РОЛЕЙ: названа проходить, чужа — ні",
   "#232h РОЛЬ РЕЄСТРУ СПРАВДІ НЕ ПИШЕ — заміряно, а не оголошено",
   "#232i ПРИПУЩЕННЯ ПРО ПРОД-ХОСТ ЩЕ ІСТИННЕ — інакше сторож мовчки помер",
+
+  // core/receivables1c.test.ts — «ЩО СИНК МІГ ЗАБРАТИ». #124 звіряв два зрізи, зняті в
+  // різні моменти, і червонів на дрейфі між синками; тепер питання інше.
+  "#234 ВИКЛЮЧЕННЯ ЗА ЧАСОМ: виписане ПІСЛЯ синку не вимагається в базі",
+  "#234b 🔴 ДЗЕРКАЛО: виписане РАНІШЕ за синк лишається обовʼязковим",
+  "#234c СЕНТИНЕЛ: без часу — лишається в перевірці Й НАЗВАНИЙ окремо",
+  "#234d ЗОНА накладається ОДИН раз і береться з Intl, а не зашита",
+  "#234e САБОТАЖ БЕЗ ЗБІГУ — ВІДМОВА, а не тихий зелений прогін",
+  "#234f ДЗЕРКАЛО: справжній саботаж ПРОХОДИТЬ, інакше обгортка забороняє все",
   // testRunGate.test.ts — ВОРОТА РЕЖИМУ ПРОГОНУ (третій хибно-зелений)
   "#19 РЕЖИМ: скіп ПОЗА списком дозволених — прогін НЕ зараховано",
   "#19b ДЗЕРКАЛО: лише дозволені скіпи — прогін зараховано",

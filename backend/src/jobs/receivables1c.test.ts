@@ -4,17 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { needsApi } from "../testMode.js";
-import {
-  parse1cPayload,
-  payloadVerdict,
-  resolveManagerId,
-  invoiceRefOf,
-  dealIdOf,
-  managerHintOf,
-  MIN_ROWS_ABS,
-  MIN_ROWS_RATIO,
-  loadReceivables1c,
-} from "../core/receivables1c.js";
+import { parse1cPayload, payloadVerdict, resolveManagerId, invoiceRefOf, dealIdOf, managerHintOf, MIN_ROWS_ABS, MIN_ROWS_RATIO, loadReceivables1c, splitByLastSync } from "../core/receivables1c.js";
 import { normalizeClientName } from "../utils/clientName.js";
 
 /**
@@ -264,7 +254,23 @@ test("#124 G3 Σ 1С == Σ БАЗИ, Δ0 (і РЯДКИ, і сума)", { ...nee
   // множину не потрапляють за побудовою, тож окремий фільтр по них не потрібен —
   // а той, що я написав спершу (по вигляду `service_url`), після міграції
   // перестав би фільтрувати будь-що: лінк на угоду тепер і в 1С-рядків.
-  const pairs = rows.map((r) => `${r.clientKey}|${r.invoiceNo}`);
+  /**
+   * 🕰 ЗВІРЯЄМО НЕ ДВА ЗРІЗИ, А «ЩО СИНК МІГ ЗАБРАТИ». Живу стрічку і знімок у базі
+   * знято в РІЗНІ моменти, тож рахунок, виписаний у 15-хвилинному вікні між синками,
+   * робив гейт червоним не з нашої вини — а постійно червоний гейт перестає бути
+   * гейтом. Джерело часу — `job_runs['syncReceivables']`, і саме воно: `health.sync`
+   * це `syncKommo` (`jobEveryMin: 30`), інша джоба (заміряно 27.08: 17:24:52 проти
+   * 17:00-ї серії `syncKommo`).
+   */
+  const sync = await pool.query<{ at: Date | null }>(
+    `SELECT last_success_at AS at FROM job_runs WHERE name = 'syncReceivables'`);
+  const lastSync = sync.rows[0]?.at ?? null;
+  assert.ok(lastSync, "🔴 job_runs не знає про syncReceivables — виключати за часом нема від чого");
+  const split = splitByLastSync(rows, lastSync);
+  assert.ok(split.expected.length > 0,
+    "🔴 після виключення не лишилось ЖОДНОГО рядка — порожня перевірка читалась би як «розбіжностей немає»");
+
+  const pairs = split.expected.map((r) => `${r.clientKey}|${r.invoiceNo}`);
   const db = await pool.query<{ n: string; sum: string }>(
     `SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS sum
        FROM receivable_invoices
@@ -273,9 +279,13 @@ test("#124 G3 Σ 1С == Σ БАЗИ, Δ0 (і РЯДКИ, і сума)", { ...nee
   );
   // 🔴 І КІЛЬКІСТЬ, І СУМА. Сама лише сума зеленіла б, якби один рядок зник, а
   // інший подвоївся — рівно той клас, від якого рятує дедуп у грошових метриках.
-  assert.equal(Number(db.rows[0].n), rows.length,
-    `рядків: 1С ${rows.length}, у базі ${db.rows[0].n}`);
-  const fromSource = rows.reduce((s, r) => s + r.amount, 0);
+  assert.equal(Number(db.rows[0].n), split.expected.length,
+    `рядків: 1С ${split.expected.length} (із ${rows.length}; після синку ${split.afterSync.length} — `
+    + `законно ще не в базі), у базі ${db.rows[0].n}.\n`
+    + `   ⚠️ із них ${split.unknownTime.length} БЕЗ ЧАСУ ВИПИСКИ (сентинел 1С 00:00:00) — виключити їх `
+    + `за часом неможливо, тож вони лишаються в перевірці НАВМИСНО: інакше «не знаємо» тихо стало б `
+    + `«виписано до синку». Якщо бракує саме їх — це не теча, а межа даних.`);
+  const fromSource = split.expected.reduce((s, r) => s + r.amount, 0);
   const delta = Math.abs(Number(db.rows[0].sum) - fromSource);
   assert.ok(delta < 1,
     `Σ 1С ${fromSource.toFixed(2)} vs Σ бази ${Number(db.rows[0].sum).toFixed(2)}, Δ ${delta.toFixed(2)}`);
