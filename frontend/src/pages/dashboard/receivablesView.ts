@@ -344,22 +344,68 @@ export interface MergeSide {
   clientName: string;
   amount: number;
   invoices: number;
+  /**
+   * 🔗 Скільки псевдонімів цей ключ УЖЕ приймає (0 — жодного). Приходить із
+   * сервера (`canonicalOf`), фронт цього не виводить: реєстр знає лише БД.
+   */
+  alreadyCanonical: number;
 }
 
 /**
- * Чи можна зливати цю пару — рівно ті випадки, які сервер відхилив би, тільки
+ * Чи можна зливати цей НАБІР — рівно ті випадки, які сервер відхилив би, тільки
  * сказані людині ДО запиту.
  *
  * 🔴 Ключ сам із собою — окремий випадок: у БД його ловить `CHECK
  * (alias_key <> canonical_key)`, тобто 400. Показати це в діалозі дешевше, ніж
  * пояснювати помилку драйвера.
+ *
+ * 🔴 І ЛАНЦЮЖОК — ТЕЖ. Ключ, що вже є канонічним, псевдонімом стати не може:
+ * тригер `client_key_alias_no_chain` відхиляє це в БД. Без перевірки тут людина
+ * дізнавалась би правило з тексту 409 — тобто вчилась би на приреченій дії.
+ * Заборона однобічна: приймати ще одного псевдоніма такий ключ МОЖЕ (на проді
+ * один тримає 11), тож перевіряється саме роль «псевдонім», а не участь.
  */
-export function mergeProblem(a: MergeSide | null, b: MergeSide | null, reason: string): string | null {
-  if (!a || !b) return "Оберіть обидві сторони";
-  if (a.clientKey === b.clientKey) return "Не можна обʼєднати клієнта із самим собою";
+export function mergeProblem(
+  aliases: readonly MergeSide[], canonical: MergeSide | null, reason: string
+): string | null {
+  if (!canonical) return "Оберіть основного клієнта";
+  if (!aliases.length) return "Оберіть, кого приєднати";
+  if (aliases.some((a) => a.clientKey === canonical.clientKey))
+    return "Не можна обʼєднати клієнта із самим собою";
+  const chained = aliases.find((a) => a.alreadyCanonical > 0);
+  if (chained) {
+    return `«${chained.clientName}» уже обʼєднує ${chained.alreadyCanonical} — він може бути лише основним`;
+  }
   if (!reason.trim()) return "Причина обовʼязкова — реєстр без причини стає смітником";
   return null;
 }
+
+/**
+ * Підсумок «що стане після обʼєднання». Одне джерело для рядка підтвердження —
+ * інакше сума в підсумку і сума в списку одного дня розійдуться.
+ */
+export function mergeSummary(aliases: readonly MergeSide[], canonical: MergeSide | null) {
+  const all = canonical ? [canonical, ...aliases] : aliases;
+  return {
+    parties: all.length,
+    amount: all.reduce((s, x) => s + x.amount, 0),
+    invoices: all.reduce((s, x) => s + x.invoices, 0),
+  };
+}
+
+/**
+ * 🧾 ПРАВИЛО ЗВЕДЕННЯ ЛІМІТІВ — СЛОВАМИ, А НЕ ЧИСЛОМ.
+ *
+ * 🔴 І ЦЕ СВІДОМА ВІДМОВА ВІД ПЕРЕДПОКАЗУ. Показати тут ГОТОВЕ зведене число
+ * означало б порахувати його вдруге — на фронті, копією правила, що живе в
+ * `backend/src/core/mergeLimits.ts`. Дві копії одного правила збігаються рівно
+ * доти, доки ніхто не правив одну з них, і розходяться мовчки (12.6% угод у
+ * чипах «новий/постійний»). Число приходить із відповіді сервера ПІСЛЯ дії;
+ * до дії людина читає ПРАВИЛО.
+ */
+export const MERGE_LIMIT_RULE =
+  "Ліміти зведуться: днів — менший із погоджених, сума — складеться (відмова «0 ₴» додає нуль). "
+  + "У примітці ліміту лишиться запис про зведення.";
 
 
 // ───────────────────── 💰 МАРЖИНАЛЬНІСТЬ І 🗑 СПИСАННЯ ─────────────────────

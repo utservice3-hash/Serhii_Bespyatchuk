@@ -1424,7 +1424,7 @@ export async function clearReceivableOwner(clientKey: string): Promise<void> {
 }
 
 /**
- * 🔗 Обʼєднати двох клієнтів у дебіторці. Пише в ТОЙ САМИЙ реєстр
+ * 🔗 Обʼєднати N клієнтів у дебіторці ОДНІЄЮ транзакцією. Пише в ТОЙ САМИЙ реєстр
  * `client_key_alias`, що й екран «Клієнти» — це одні двері до одного реєстру,
  * а не другий механізм.
  *
@@ -1434,9 +1434,11 @@ export async function clearReceivableOwner(clientKey: string): Promise<void> {
  * відкіт на наступному синку (≤15 хв).
  */
 export async function mergeReceivableClients(payload: {
-  alias: string; canonical: string; reason: string;
-}): Promise<void> {
-  await api.post("/dashboard/receivables/merge", payload);
+  aliases: string[]; canonical: string; reason: string;
+}): Promise<{ merged: number; limitDays: number | null; limitAmount: number | null }> {
+  const { data } = await api.post<{ merged: number; limitDays: number | null; limitAmount: number | null }>(
+    "/dashboard/receivables/merge", payload);
+  return data;
 }
 
 /** Один запис журналу домовленостей — із датою й автором. */
@@ -1688,6 +1690,13 @@ export interface ReceivablesResponse {
    * клієнту. Схована кнопка правом не є.
    */
   canRequestLimit?: boolean;
+  /**
+   * 🔗 Скільки псевдонімів уже зібрано під кожним канонічним ключем. Діалог
+   * обʼєднання читає це, щоб не пропонувати приречену дію: ключ, який уже є
+   * канонічним, псевдонімом стати НЕ МОЖЕ — тригер `client_key_alias_no_chain`
+   * відхилить, і людина дізналась би правило з тексту помилки 409.
+   */
+  canonicalOf?: Record<string, number>;
 }
 
 export interface ReceivableManager {
