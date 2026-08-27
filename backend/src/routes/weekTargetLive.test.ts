@@ -25,7 +25,7 @@ import { needsApi, API_BASE } from "../testMode.js";
  */
 
 /** Рядок БД: парасолька `period_kind='week'`, що покриває сьогодні. */
-export interface WeekUmbrella { assigneeId: number; manual: number }
+export interface WeekUmbrella { assigneeId: number; manual: number; periodStart: string; taskId: number }
 /** Менеджер із відповіді `/report-plan`. */
 export interface ApiManager {
   managerId: number; name: string;
@@ -60,11 +60,46 @@ export function decideWeekTargetCheck(
   const byId = new Map(api.map((m) => [m.managerId, m]));
   const compared: { db: WeekUmbrella; api: ApiManager }[] = [];
   const outOfRoster: number[] = [];
-  for (const row of db) {
+  for (const row of pickEffectiveUmbrella(db)) {
     const m = byId.get(row.assigneeId);
     if (m) compared.push({ db: row, api: m }); else outOfRoster.push(row.assigneeId);
   }
   return { kind: "check", compared, outOfRoster };
+}
+
+/**
+ * 🗓 ПРИ ПЕРЕКРИТТІ ЧИННА ОСТАННЯ ЗАВЕДЕНА ПАРАСОЛЬКА — рішення власника 27.08.2026.
+ *
+ * 🔴 ЦЕ ПРАВИЛО, А НЕ СОРТУВАННЯ ЗАРАДИ ЗРУЧНОСТІ. Тімлід може завести вужчу
+ * парасольку поверх ширшої на спільні дні — це УТОЧНЕННЯ цілі, і чинним є
+ * уточнення. Через місяць `ORDER BY period_start` унизу читатиметься як
+ * випадковість, якщо не написати тут, що це рішення.
+ *
+ * 📐 ЖИВИЙ ВИПАДОК, НА ЯКОМУ ЦЕ ЗНАЙШЛОСЬ (27.08.2026, Пехньо Олександра):
+ *     id 1890 · 24-28.08 · 8000
+ *     id 2109 · 27-28.08 · 6000   ← заведена того ж дня
+ * Обидві покривають 27.08. API брав ОСТАННЮ (6000) і був ПРАВИЙ; гейт брав усі
+ * підряд і червонів на першій. Тобто відстав гейт, а не роут.
+ *
+ * 🔴 ГЕЙТ КОДУЄ ПРАВИЛО САМ І НЕ ПИТАЄ В API, ЯКА ПАРАСОЛЬКА ЧИННА. Перевірка,
+ * що годується виходом перевіряного, зеленіє на зламаному писарі — це рівно та
+ * пастка, через яку golden-master колись дав «403/403 → 0 розбіжностей».
+ *
+ * ⚠️ НЕОДНОЗНАЧНІСТЬ НЕ ЗНИКЛА, лише отримала правило читання: ніщо не заважає
+ * завести ТРЕТЮ парасольку на ті самі дні. Це борг на боці Задачника, і він
+ * названий окремо — тут ми домовились, ЯК читати, а не прибрали причину.
+ *
+ * Вхід уже впорядкований `period_start ASC, id ASC`, тож «остання» — це остання
+ * зустрінута; сортування дублюємо явно, щоб правило не залежало від чужого ORDER BY.
+ */
+export function pickEffectiveUmbrella(db: WeekUmbrella[]): WeekUmbrella[] {
+  // Сортуємо САМІ, а не покладаємось на `ORDER BY` виклику: інакше правило
+  // жило б у чужому запиті, і зміна порядку там тихо змінила б сенс тут.
+  const sorted = [...db].sort((a, b) =>
+    a.periodStart === b.periodStart ? a.taskId - b.taskId : a.periodStart < b.periodStart ? -1 : 1);
+  const byAssignee = new Map<number, WeekUmbrella>();
+  for (const row of sorted) byAssignee.set(row.assigneeId, row);
+  return [...byAssignee.values()];
 }
 
 /** Розбіжності «база проти екрана» — переліком, а не лічильником. */
@@ -95,8 +130,9 @@ test("#221 ручна тижнева ціль доходить від бази �
   const weekday = WEEKDAYS[new Date(`${today}T12:00:00Z`).getUTCDay()];
 
   // Той самий предикат, що в `core/plans.effectiveWeekTargets` — тільки читання.
-  const dbRows = (await pool.query<{ assignee_id: number; target: string }>(
-    `SELECT t.assignee_id,
+  const dbRows = (await pool.query<{ assignee_id: number; task_id: number; period_start: string; target: string }>(
+    `SELECT t.assignee_id, t.id AS task_id,
+            to_char(t.period_start, 'YYYY-MM-DD') AS period_start,
             (SELECT x->>'target' FROM jsonb_array_elements(t.metrics_json) x
               WHERE x->>'metric' = 'payment_amount' LIMIT 1) AS target
        FROM tasks t
@@ -105,7 +141,8 @@ test("#221 ручна тижнева ціль доходить від бази �
         AND t.period_start <= $1 AND COALESCE(t.period_end, t.period_start) >= $1
       ORDER BY t.period_start ASC, t.id ASC`, [today])).rows
     .filter((r) => r.target != null)
-    .map((r) => ({ assigneeId: r.assignee_id, manual: Number(r.target) || 0 }));
+    .map((r) => ({ assigneeId: r.assignee_id, taskId: r.task_id, periodStart: r.period_start,
+                   manual: Number(r.target) || 0 }));
 
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const monthStart = today.slice(0, 7) + "-01";
@@ -149,7 +186,9 @@ test("#221b порожнє покриття → skip із причиною; зл
   assert.match(empty.reason, /#220/, "🔴 причина не каже, ХТО тепер стереже механізм — читач вирішить, що не стереже ніхто");
 
   // 2 · СТАН «ПАРАСОЛЬКИ Є» — перевіряємо, а не скіпаємо.
-  const db = [{ assigneeId: 1, manual: 15000 }, { assigneeId: 2, manual: 7000 }];
+  const u = (assigneeId: number, manual: number, periodStart = "2026-08-24", taskId = assigneeId): WeekUmbrella =>
+    ({ assigneeId, manual, periodStart, taskId });
+  const db = [u(1, 15000), u(2, 7000)];
   const good = decideWeekTargetCheck(db, [mk(1, "А", 15000, 15000), mk(2, "Б", 7000, 7000)], "2026-08-25", "вівторок");
   assert.equal(good.kind, "check");
   if (good.kind !== "check") return;
@@ -172,6 +211,29 @@ test("#221b порожнє покриття → skip із причиною; зл
   };
   assert.equal(badCount([mk(1, "А", null, 30000), mk(2, "Б", 7000, 7000)]), 1,
     "🔴 зникла позначка isManual не помічена");
+  // 5 · 🗓 ПЕРЕКРИТТЯ ПАРАСОЛЬОК: чинна ОСТАННЯ (рішення власника 27.08.2026).
+  //     Живий випадок: Пехньо, 1890 (24-28.08, 8000) проти 2109 (27-28.08, 6000).
+  //     Гейт мусить брати 6000 — і, головне, ЧЕРВОНІТИ, якщо API віддасть 8000.
+  const overlap = [u(1, 8000, "2026-08-24", 1890), u(1, 6000, "2026-08-27", 2109)];
+  const eff = pickEffectiveUmbrella(overlap);
+  assert.equal(eff.length, 1, "🔴 дві парасольки одного менеджера дали дві пари — правило не застосоване");
+  assert.equal(eff[0].manual, 6000, "🔴 чинною визнано НЕ останню — це протилежне рішенню власника");
+  // 🪞 ДЗЕРКАЛО, БЕЗ ЯКОГО ЦЕ БУЛО Б ПІДГАНЯННЯМ ПІД СЬОГОДНІШНЮ ВІДПОВІДЬ:
+  //     API, що віддає СТАРУ парасольку, мусить дати розбіжність.
+  const okNew = decideWeekTargetCheck(overlap, [mk(1, "Пехньо", 6000, 6000)], "2026-08-27", "четвер");
+  assert.equal(okNew.kind, "check");
+  if (okNew.kind !== "check") return;
+  assert.deepEqual(weekTargetMismatches(okNew.compared), [],
+    "🔴 API з ОСТАННЬОЮ парасолькою визнано розбіжністю — гейт вимагає неправильного");
+  const oldOne = decideWeekTargetCheck(overlap, [mk(1, "Пехньо", 8000, 8000)], "2026-08-27", "четвер");
+  assert.equal(oldOne.kind, "check");
+  if (oldOne.kind !== "check") return;
+  assert.equal(weekTargetMismatches(oldOne.compared).length, 1,
+    "🔴 API, що віддає СТАРУ парасольку, пройшов — гейт перестав бути оракулом і став дзеркалом");
+  // 🔴 І порядок у вході не має значення: правило сортує САМЕ, а не довіряє ORDER BY.
+  assert.equal(pickEffectiveUmbrella([...overlap].reverse())[0].manual, 6000,
+    "🔴 результат залежить від порядку рядків — тоді правило живе в чужому запиті, а не тут");
+
   assert.equal(badCount([mk(1, "А", 12345, 12345), mk(2, "Б", 7000, 7000)]), 1,
     "🔴 інше число в API не помічене");
 
