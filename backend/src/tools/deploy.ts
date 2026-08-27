@@ -20,8 +20,8 @@ import {
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
 import { parseTap, judgeDelta } from "./testDelta.js";
-import { MANIFEST_TESTS, diffGates } from "../testManifest.js";
-import { testsAtRef } from "./gateCount.js";
+import { diffGates } from "../testManifest.js";
+import { testsAtRef, parseManifestTests } from "./gateCount.js";
 import { rmSync, symlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -225,7 +225,23 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
           + "   Прожени `npm test` руками в тому ж каталозі й подивись на ПЕРШІ рядки виводу: "
           + "зазвичай це збірка, що не відбулась, або відсутній dist." };
       }
-      const lost = diffGates(testsAtRef(c.prod), MANIFEST_TESTS).onlyBefore;
+      /**
+       * 🔴 МАНІФЕСТ ЧИТАЄМО З ДЖЕРЕЛА В ЦЮ МИТЬ, А НЕ З ІМПОРТУ.
+       *
+       * 📐 Спіймано першим прогоном після ребейзу (27.08.2026): крок доповів
+       * «ЗНИКЛИ ГЕЙТИ (11)» — #240-#248 Основного, які насправді лежали в дереві.
+       * `deploy.ts` імпортує маніфест на ЗАВАНТАЖЕННІ МОДУЛЯ, а `buildBack` уже потім
+       * робить `rm -rf dist && npm run build`. Тобто порівнювався прод із маніфестом
+       * зі СТАРОГО dist: у ньому (база f6891b0) тих гейтів було 0, у проді — 11.
+       *
+       * 🔑 Найгірше тут не хибна тривога, а те, ЩО САМЕ вона стереже: детектор
+       * зниклих гейтів, який сам залежить від свіжості збірки, робить недовірливим
+       * саме той сигнал, заради якого існує. Рідня «несвіжого dist», але всередині
+       * інструмента приймання.
+       */
+      const manifestNow = parseManifestTests(
+        readFileSync(`${c.be}/src/testManifest.ts`, "utf8"), "дерево (джерело, не dist)");
+      const lost = diffGates(testsAtRef(c.prod), manifestNow).onlyBefore;
       const d = judgeDelta(baseTap, treeTap, lost);
       /**
        * 🔴 ПРИРІСТ НУЛЬ ≠ ПОВНЕ ПОКРИТТЯ, І ЦЬОГО НЕ БУЛО ВИДНО ЗІ ЗВІТУ.
