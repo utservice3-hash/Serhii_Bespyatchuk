@@ -27,6 +27,13 @@ import { tmpdir } from "node:os";
 
 export const ARTIFACT_PATH = "/tmp/uts-deploy-check.json";
 const HEALTH = "https://dashboard.uts.ua/api/health";
+/** Базовий URL для приймання — той самий хост, що й health. */
+const API_BASE = HEALTH.replace(/\/api\/health$/, "");
+/**
+ * ⏱ Скільки чекати від РЕСТАРТУ до приймання. Заміряно 23.08.2026: 5 хв → /overview
+ * 3.0-4.2 с, 12 хв → 2.35 с. Раніше — червоне без регресу.
+ */
+const WARM_MS = 12 * 60 * 1000;
 
 const sh = (cmd: string, args: string[], cwd?: string): string =>
   execFileSync(cmd, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
@@ -183,6 +190,51 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const r = lockCli(["--take", `--who=${who}`, `--reason=викат ${c.target}`], CANON_LOCK_DIR);
     return { id: "lockTake", ok: r.code === 0, detail: r.out.join(" · ") };
   },
+  /**
+   * 🧪 ПРИЙМАННЯ — ЧАСТИНА ЛАНЦЮГА, А НЕ ЛЮДСЬКА ДИСЦИПЛІНА.
+   *
+   * 🔴 Привід переозначує чужий інцидент. 26.08.2026 HR ганяв `test:prod`, а журнал
+   * казав «звільнено о 21:08», і два дні ми вважали це питанням дисципліни й писали
+   * про це в промтах. Насправді **інструмент відпускав замок сам**, у кінці фази run:
+   * `lockRelease` стояв ПІСЛЯ `pushBranch` і ПЕРЕД будь-яким прийманням, якого в
+   * скрипті не було взагалі. Тобто дисципліну вимагали там, де її щоразу скасовував код.
+   *
+   * Тепер приймання — крок, а `lockRelease` стоїть ОДРАЗУ за ним. Провалилось
+   * приймання — крок падає, ланцюг обривається, і замок лишається взятим САМ,
+   * без жодної згадки про уважність.
+   *
+   * ⏱ Прогрів обовʼязковий і рахується від МОМЕНТУ РЕСТАРТУ, а не від початку кроку:
+   * заміряно 23.08.2026 — процес віком 5 хв віддає /overview за 3.0-4.2 с, 12 хв — за
+   * 2.35 с, і лише тоді `#36` зеленіє. Приймання, запущене раніше, червонить без
+   * жодного регресу — а червоне, що не з нашої вини, за два тижні починають гортати.
+   */
+  accept: async (c) => {
+    const since = c.restartedAt ?? Date.now();
+    while (Date.now() - since < WARM_MS) {
+      try { await fetch(HEALTH); } catch { /* прогрів, а не перевірка */ }
+      await new Promise((r) => setTimeout(r, 20_000));
+    }
+    const log = "/tmp/deploy-accept.log";
+    // `|| true`: ненульовий код тут — НОРМА (падіння тесту), а вирок вимовляє гейт прогону.
+    const out = sh("bash", ["-lc",
+      `cd ${c.prodBe} && set -a && . ./.env && set +a && `
+      + `API_BASE=${API_BASE} npm run test:prod > ${log} 2>&1 || true; `
+      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1`]);
+    const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
+    /**
+     * 🔴 Немає підсумкового рядка — це ПРОВАЛ, а не «нічого не знайшлось». Прогін,
+     * що не дійшов до власного гейта, не є прийманням (той самий клас, що «успіх за 0 мс»).
+     */
+    if (!m) return { id: "accept", ok: false,
+      detail: `🔴 гейт прогону не надрукував підсумку — приймання не дійшло до кінця. Лог: ${log}` };
+    const [, doneN, needN, fails] = m;
+    // Недобір і падіння — РІЗНІ вироки: перший каже «ми не дивились», другий «зламано».
+    if (doneN !== needN) return { id: "accept", ok: false,
+      detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
+    if (fails !== "0") return { id: "accept", ok: false,
+      detail: `🔴 падінь ${fails} при ${doneN} із ${needN}. Лог: ${log}` };
+    return { id: "accept", ok: true, detail: `${doneN} із ${needN}, падінь 0` };
+  },
   lockRelease: (c) => {
     const who = process.env.UTS_ACTOR ?? "deploy:run";
     const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], CANON_LOCK_DIR);
@@ -338,7 +390,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return run("migrate", () => sh("bash", ["-lc", `cd ${c.prodBe} && set -a && . ./.env && set +a && npm run migrate`]), `міграції застосовано (${migs.join(", ")}) — 🔴 звірити результат ОКРЕМИМ запитом: «Migration applied» друкується й тоді, коли частина роботи відкотилась`);
   },
   markDeploy: (c) => run("markDeploy", () => sh("bash", ["-lc", `cd ${c.prodBe} && set -a && . ./.env && set +a && node dist/tools/markDeploy.js --note="викат ${c.target}"`]), "намір заявлено ПЕРЕД kill"),
-  kill: () => run("kill", () => sh("bash", ["-lc", `PID=$(ps -eo pid,args | awk '$2=="node" && $3=="dist/index.js" {print $1}' | head -1); [ -n "$PID" ] || { echo "процес не знайдено"; exit 1; }; kill -TERM "$PID"; echo "TERM → $PID"`]), "pid і kill однією командою"),
+  kill: (c) => runStamp(c, "kill", () => sh("bash", ["-lc", `PID=$(ps -eo pid,args | awk '$2=="node" && $3=="dist/index.js" {print $1}' | head -1); [ -n "$PID" ] || { echo "процес не знайдено"; exit 1; }; kill -TERM "$PID"; echo "TERM → $PID"`]), "pid і kill однією командою"),
   healthVersion: async (c) => {
     for (let i = 0; i < 10; i++) {
       try { if ((await prodSha()) === c.target) return { id: "healthVersion", ok: true, detail: `health.version == ${c.target}` }; } catch { /* сервер підіймається */ }
@@ -375,8 +427,20 @@ export interface Ctx {
   prodBe: string;
   branch: string; target: string;
   mode: Mode; prod: string; now: string;
+  /**
+   * Мить успішного `kill`. Прогрів рахується ВІД НЕЇ, а не від початку кроку
+   * приймання: інакше кожен крок між ними мовчки з'їдав би частину прогріву.
+   */
+  restartedAt?: number;
   /** Файли дифу проти прода — джерело для migrate. */
   changed: string[];
+}
+
+/** `run`, що на успіху штампує мить рестарту — від неї рахується прогрів. */
+function runStamp(c: Ctx, id: string, fn: () => void, detail: string): StepResult {
+  const r = run(id, fn, detail);
+  if (r.ok) c.restartedAt = Date.now();
+  return r;
 }
 
 function run(id: string, fn: () => void, detail: string): StepResult {
@@ -498,14 +562,16 @@ export async function main(argv: string[]): Promise<number> {
    * зелений вивід, який прочитають як приймання — той самий клас, що «0 падінь»,
    * коли третина тестів не виконалась.
    */
-  if (phase === "run") {
-    console.log("\n🔴 ПРИЙМАННЯ НЕ ЗРОБЛЕНО — це не входить у скрипт:");
+  const accepted = done.some((x) => x.id === "accept" && x.ok && !x.skipped);
+  if (phase === "run" && !accepted) {
+    console.log("\n🔴 ПРИЙМАННЯ НЕ ЗРОБЛЕНО — і замок НЕ звільнено (це навмисно):");
     console.log("   ﹣ прогрів ~13 хв (перший запит після рестарту холодний)");
     console.log("   ﹣ npm run test:prod з API_BASE");
+    console.log("   ﹣ і аж потім: npm run lock -- --release --who=<ти> --reason=\"…\"");
     if (done.some((d) => d.id === "migrate" && !d.skipped))
       console.log("   ﹣ 🔴 БУЛА МІГРАЦІЯ: звірити результат ОКРЕМИМ запитом, а не за виводом «Migration applied»");
   }
-  console.log(JSON.stringify({ phase, mode, acceptanceDone: false,
+  console.log(JSON.stringify({ phase, mode, acceptanceDone: accepted,
     steps: done.map((d) => ({ id: d.id, ok: d.ok, skipped: d.skipped ?? null })) }));
   return 0;
 }
