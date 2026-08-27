@@ -113,6 +113,26 @@ export function dismissedReason(m: DismissedRow): "deactivated" | "no-team" | "u
   return "unknown";
 }
 
+/**
+ * 🔴 ПРЕДИКАТ САМОПЕРЕВІРКИ — ЧИСТИЙ, І ЦЕ НЕ ОХАЙНІСТЬ.
+ *
+ * Перша редакція тримала цю логіку ВСЕРЕДИНІ `#59c`, який без API скіпається. На
+ * саботажі «прибрати причину `no-team`» прогін дав `pass 0 · fail 0` — тобто
+ * гейта просто не було, і саботаж не довів нічого. Той самий клас, що ловив
+ * `#59b`: перевірка, яку неможливо зламати без прода, не є перевіркою.
+ *
+ * Повертає текст поломки або `null`. Поломка = рядок, чию присутність у
+ * `dismissed` правило пояснити НЕ МОЖЕ (активний, і команда в нього Є).
+ */
+export function unknownDismissedReasons(rows: DismissedRow[]): string | null {
+  const unknown = rows.filter((m) => m.fact && dismissedReason(m) === "unknown");
+  if (unknown.length === 0) return null;
+  return "🔴 ПРАВИЛО БІЛЬШЕ НЕ ОПИСУЄ ДІЙСНІСТЬ: у `dismissed` є активний менеджер ІЗ командою ("
+    + unknown.map((m) => `${m.name}, team ${m.teamId}`).join("; ")
+    + "). Це третя причина, якої правило не знає — воно заглушить її мовчки. "
+    + "Перевір `commercialManagerSql`: склад ростера змінився.";
+}
+
 test("#59 гроші звільнених не висять у сумі без рядка на екрані", needsApi(), async () => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
@@ -180,6 +200,25 @@ test("#59b саботаж: справді звільнений дзвонить 
   // Дзеркало: поле не приїхало → це «не знаємо», і будити на ньому не можна.
   assert.equal(unexplainedDismissedMoney([{ name: "Без поля", fact: 50_000 }], false, 347_116), null,
     "🔴 будильник дзвонить, не знаючи, чи людина звільнена — це та сама помилка, яку він лікує");
+
+  // ── 🧭 КЛАСИФІКАТОР ПРИЧИН — ТУТ, А НЕ В `#59c`.
+  //    `#59c` ходить по API і без нього скіпається; логіка, яку неможливо зламати
+  //    без прода, перевіркою не є (заміряно саботажем: `pass 0 · fail 0`).
+  assert.equal(dismissedReason(REAL[0]), "deactivated");
+  assert.equal(dismissedReason(NO_TEAM[0]), "no-team");
+  assert.equal(dismissedReason({ name: "Третій", fact: 1, deactivated: false, teamId: 5 }), "unknown",
+    "🔴 активний ІЗ командою мусить читатись як НЕВІДОМА причина — саме її правило "
+    + "заглушило б мовчки");
+
+  // І самоперевірка бачить рівно цю третю причину, а на двох відомих мовчить.
+  assert.equal(unknownDismissedReasons([...REAL, ...NO_TEAM]), null,
+    "🔴 самоперевірка червоніє на ВІДОМИХ причинах — вона будила б щомісяця");
+  const stale = unknownDismissedReasons([
+    ...NO_TEAM, { name: "Третій", fact: 42_000, deactivated: false, teamId: 5 }]);
+  assert.ok(stale && stale.includes("Третій") && stale.includes("team 5"),
+    "🔴 самоперевірка не помітила активного ІЗ командою — правило осліпло б беззвучно");
+  assert.ok(!stale.includes("Операційний директор"),
+    "🔴 у скаргу потрапила відома причина — читач шукав би поломку там, де її немає");
 });
 
 /**
@@ -226,10 +265,6 @@ test("#59c кожен заглушений рядок має ВІДОМУ при
       `🔴 у рядка «${m.name}» немає поля \`deactivated\` — правило не має на чому працювати `
       + "і мовчить про ВСІХ, зокрема про справді звільнених");
 
-  const unknown = withMoney.filter((m) => dismissedReason(m) === "unknown");
-  assert.deepEqual(unknown.map((m) => m.name), [],
-    `🔴 ПРАВИЛО БІЛЬШЕ НЕ ОПИСУЄ ДІЙСНІСТЬ: у \`dismissed\` є активний менеджер ІЗ командою `
-    + `(${unknown.map((m) => `${m.name}, team ${m.teamId}`).join("; ")}). `
-    + "Це третя причина, якої правило не знає — воно заглушить її мовчки. "
-    + "Перевір `commercialManagerSql`: склад ростера змінився.");
+  const problem = unknownDismissedReasons(withMoney);
+  assert.equal(problem, null, problem ?? "");
 });
