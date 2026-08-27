@@ -328,7 +328,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/dashboard/receivables/writeoffs", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   // ⚠️ Тімлід і менеджер ДОЗВОЛЕНІ на рівні ролі й звужуються вже в роуті — до
-  // своїх клієнтів. Матриця перевіряє РОЛЬ, звуження ДАНИХ тримає `#227`.
+  // своїх клієнтів. Матриця перевіряє РОЛЬ, звуження ДАНИХ тримає `#229`.
   { method: "GET", path: "/api/dashboard/receivables/note-history?clientKey=zzz", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   // 🧾 Ліміт правлять пʼять ролей — те саме право `manage_credit_limits`, що
