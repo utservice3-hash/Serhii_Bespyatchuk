@@ -56,20 +56,61 @@ async function screenShowsDismissed(): Promise<boolean> {
  * без прода і без деактивації живої людини. Повертає текст поломки або `null`.
  * Саме її кличуть обидва тести: `#59` — на живих даних, `#59b` — на підкинутих.
  */
+export interface DismissedRow {
+  name: string;
+  fact: number;
+  /** Знято хоч один прапорець активності — СПРАВЖНЄ звільнення. */
+  deactivated?: boolean;
+  /** `null` = менеджер поза командами; саме через це він і випав із ростера. */
+  teamId?: number | null;
+}
+
+/**
+ * 🔴 ПРАВИЛО ВИНЯТКУ — БЕЗ ПЕРЕЛІКУ ІМЕН (рішення власника 27.08.2026).
+ *
+ * **Активний менеджер поза ростером** (немає команди) НЕ є звільненим, і його
+ * гроші входять у `glance.fact` НАВМИСНО. Причина правдива й записана тут, а не
+ * в списку `kommo_user_id`: список довелося б дописувати щоразу, коли зʼявиться
+ * новий безкомандний акаунт, а причина в усіх них одна.
+ *
+ * 📐 Чому саме правило, а не чотири імені — заміряно 27.08.2026 по 12 місяцях:
+ * дзвонили б `904923` Операційний директор (9 міс, 610 313 ₴), `12812476`
+ * Сердюк Ярослав (3 міс), `13656180` Крупник Аліна (1), `8458577` Ковтонюк
+ * Тетяна (1). **Справді деактивованих серед них НУЛЬ.** Зареєструвати одного
+ * означало б заглушити 9 місяців із 12 і лишити три імені, що задзвонять знову.
+ *
+ * ⚠️ І ЩО САМЕ ТУТ ГЛУШИТЬСЯ: не сума й не рядок. `glance.fact` не чіпається —
+ * число правильне (рішення власника: 9 865 ₴ ОД входять у факт, окремого рядка
+ * у Звіті немає). Глушиться ТРИВОГА, і лише для тієї причини, яка тривогою не є.
+ */
 export function unexplainedDismissedMoney(
-  dismissed: { name: string; fact: number }[],
+  dismissed: DismissedRow[],
   showsDismissed: boolean,
   glanceFact: number,
 ): string | null {
-  const money = dismissed.reduce((s, m) => s + (m.fact ?? 0), 0);
-  if (money === 0) return null;      // немає грошей — немає розбіжності
-  if (showsDismissed) return null;   // є де показати — теж немає
+  if (showsDismissed) return null;   // є де показати — розбіжності немає
+  // 🔴 Тривожні — ЛИШЕ справді деактивовані. `deactivated !== true` (а не `=== false`)
+  // навмисно: якщо поле не приїхало взагалі, ми НЕ знаємо, що людина звільнена, і
+  // будити на «не знаємо» означало б повторити те, що цей гейт і лікує.
+  const alarming = dismissed.filter((m) => m.deactivated === true && m.fact);
+  const money = alarming.reduce((s, m) => s + (m.fact ?? 0), 0);
+  if (money === 0) return null;
   return `🔴 ГРОШІ ЗВІЛЬНЕНИХ У СУМІ, АЛЕ НЕ НА ЕКРАНІ: ${fmtUah(money)} від `
-    + `${dismissed.filter((m) => m.fact).length} осіб `
-    + `(${dismissed.filter((m) => m.fact).map((m) => m.name).join(", ")}) входять у `
+    + `${alarming.length} осіб `
+    + `(${alarming.map((m) => m.name).join(", ")}) входять у `
     + `glance.fact ${fmtUah(glanceFact)}, а верстка Звіту не читає масив \`dismissed\` — `
     + "жоден видимий рядок цієї суми не пояснює. Або показати їх окремим рядком, або "
     + "свідомо виключити з `glance.fact` (і тоді Σ по екрану розійдеться з ядром).";
+}
+
+/**
+ * 🧭 ЧОМУ РЯДОК ОПИНИВСЯ В `dismissed` — три відповіді, і дві з них не тривога.
+ * Виділено окремою функцією, щоб `#59c` міг перевіряти ПРИЧИНУ, а не наслідок.
+ */
+export function dismissedReason(m: DismissedRow): "deactivated" | "no-team" | "unknown" {
+  if (m.deactivated === true) return "deactivated";
+  if (m.teamId == null) return "no-team";
+  return "unknown";
 }
 
 test("#59 гроші звільнених не висять у сумі без рядка на екрані", needsApi(), async () => {
@@ -82,7 +123,7 @@ test("#59 гроші звільнених не висять у сумі без �
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${to}`,
     { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);
-  const b = await r.json() as { glance: { fact: number }; dismissed: { name: string; fact: number }[] };
+  const b = await r.json() as { glance: { fact: number }; dismissed: DismissedRow[] };
   assert.ok(Array.isArray(b.dismissed),
     "🔴 у відповіді нема масиву `dismissed` — будильник перевіряє не те, що думає");
 
@@ -103,20 +144,92 @@ test("#59 гроші звільнених не висять у сумі без �
  * зелений незалежно від того, працює предикат чи ні. Тому саботуємо ВХІД
  * предиката, а не стан бази: перевіряється та сама логіка, тільки чесно.
  */
-test("#59b саботаж: звільнений із грішми робить предикат червоним", async () => {
-  const SABOTAGE = [{ name: "Шевчук Назар", fact: 71_896 }];
+test("#59b саботаж: справді звільнений дзвонить і НАЗИВАЄ ІМʼЯМ, активний без команди — мовчить", async () => {
+  // Той самий стан, що був 06.08: СПРАВДІ деактивований Шевчук із 71 896 ₴.
+  const REAL = [{ name: "Шевчук Назар", fact: 71_896, deactivated: true, teamId: 5 }];
 
-  const red = unexplainedDismissedMoney(SABOTAGE, false, 347_116);
+  const red = unexplainedDismissedMoney(REAL, false, 347_116);
   assert.ok(red && red.includes("71 896"),
-    "🔴 предикат НЕ помітив 71 896 ₴ у звільненого при верстці без `dismissed` — будильник глухий");
+    "🔴 предикат НЕ помітив 71 896 ₴ у ЗВІЛЬНЕНОГО при верстці без `dismissed` — будильник глухий");
   assert.ok(red.includes("Шевчук Назар"),
     "🔴 повідомлення не називає, ЧИЇ це гроші — з такого тексту не почати розбір");
 
-  // Дзеркало 1: верстка вміє показати → мовчить.
-  assert.equal(unexplainedDismissedMoney(SABOTAGE, true, 347_116), null,
-    "🔴 предикат червоніє навіть тоді, коли звільнених Є ДЕ показати — він би будив дарма "
-    + "й за два тижні його вимкнули б");
-  // Дзеркало 2: звільнені є, але без грошей → теж мовчить (сам факт звільнення не поломка).
-  assert.equal(unexplainedDismissedMoney([{ name: "Хтось", fact: 0 }], false, 347_116), null,
-    "🔴 предикат вважає поломкою звільненого БЕЗ грошей — а він нічого не спотворює");
+  // 🔴 ГОЛОВНЕ ДЗЕРКАЛО ПРАВИЛА: активний без команди мовчить...
+  const NO_TEAM = [{ name: "Операційний директор", fact: 9_865, deactivated: false, teamId: null }];
+  assert.equal(unexplainedDismissedMoney(NO_TEAM, false, 2_030_964), null,
+    "🔴 будильник дзвонить на АКТИВНОГО без команди — саме через це він за 12 місяців "
+    + "жодного разу не спрацював на справжню причину");
+
+  // ...але виняток НЕ ковдра: справжній звільнений ПОРУЧ із ним усе одно дзвонить,
+  // і в тексті стоїть саме він, а не сума обох.
+  const BOTH = [...NO_TEAM, ...REAL];
+  const red2 = unexplainedDismissedMoney(BOTH, false, 2_030_964);
+  assert.ok(red2, "🔴 виняток написаний надто широко: поруч зі звільненим він заглушив і його");
+  assert.ok(red2.includes("Шевчук Назар"), "🔴 тривога не називає звільненого");
+  assert.ok(!red2.includes("Операційний директор"),
+    "🔴 у тривозі опинився активний без команди — його гроші входять у факт навмисно");
+  assert.ok(red2.includes("71 896") && !red2.includes("81 761"),
+    "🔴 сума тривоги склала обидві причини — має бути ЛИШЕ звільнений");
+
+  // Дзеркало: верстка вміє показати → мовчить незалежно від причини.
+  assert.equal(unexplainedDismissedMoney(REAL, true, 347_116), null,
+    "🔴 предикат червоніє навіть тоді, коли звільнених Є ДЕ показати — він будив би дарма");
+  // Дзеркало: звільнений БЕЗ грошей нічого не спотворює.
+  assert.equal(unexplainedDismissedMoney([{ name: "Хтось", fact: 0, deactivated: true }], false, 347_116), null,
+    "🔴 предикат вважає поломкою звільненого БЕЗ грошей");
+  // Дзеркало: поле не приїхало → це «не знаємо», і будити на ньому не можна.
+  assert.equal(unexplainedDismissedMoney([{ name: "Без поля", fact: 50_000 }], false, 347_116), null,
+    "🔴 будильник дзвонить, не знаючи, чи людина звільнена — це та сама помилка, яку він лікує");
+});
+
+/**
+ * #59c — САМОПЕРЕВІРКА ПРАВИЛА НА ЖИВИХ ДАНИХ.
+ *
+ * 🔴 Виняток мусить сам казати, коли перестав описувати дійсність. Форма — не
+ * «мусить бути ≥N таких акаунтів» (це червоніло б за календарем, урок `#220`),
+ * а РІВНІСТЬ: кожен заглушений рядок мусить мати ВІДОМУ причину. Твердження
+ * істинне і при 4 рядках, і при нулі.
+ *
+ * Що воно ловить: якщо ростер колись почне пускати безкомандних (зміниться
+ * `commercialManagerSql`), у `dismissed` зʼявиться активний менеджер ІЗ командою
+ * — тобто третя, неназвана причина. Правило заглушить його мовчки, а `#59c`
+ * скаже, що причину більше не знає.
+ */
+test("#59c кожен заглушений рядок має ВІДОМУ причину — інакше правило осліпло", needsApi(), async (t) => {
+  const { signToken } = await import("../auth/auth.js");
+  const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
+  const now = new Date();
+  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${to}`,
+    { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);
+  const b = await r.json() as { dismissed: DismissedRow[] };
+  assert.ok(Array.isArray(b.dismissed), "🔴 масиву `dismissed` немає — перевіряти нема чого");
+
+  const withMoney = b.dismissed.filter((m) => m.fact);
+  if (withMoney.length === 0) {
+    // 🔊 ГУЧНИЙ `skip` ІЗ НАЗВАНОЮ ПРИЧИНОЮ, а не тихий `return`: порожньо буває
+    // законно — місяць, у якому жоден поза-ростерний нічого не заробив. Тихий
+    // вихід зарахувався б як ПРОЙДЕНО, тобто перевірка, якої не було, виглядала б
+    // як перевірка, що вдалась. Це рівно те, що ми лікуємо в решті набору.
+    //
+    // ⚠️ Причина — СИРИЙ РЯДОК, а не `skipReason()`, і це навмисно: `skipReason`
+    // позначає ЗЛАМАНЕ оточення (`#201`), а тут оточення справне й даних просто
+    // немає. Прецедент і форма запису — `#221`.
+    return t.skip("у `dismissed` цього місяця нікого з грішми — правило перевіряти нема на чому "
+      + "(законна порожнеча: поза-ростерні не завжди щось заробляють)");
+  }
+  // 🔴 Поле мусить приїхати. Без нього правило вироджується в «мовчати завжди».
+  for (const m of withMoney)
+    assert.equal(typeof m.deactivated, "boolean",
+      `🔴 у рядка «${m.name}» немає поля \`deactivated\` — правило не має на чому працювати `
+      + "і мовчить про ВСІХ, зокрема про справді звільнених");
+
+  const unknown = withMoney.filter((m) => dismissedReason(m) === "unknown");
+  assert.deepEqual(unknown.map((m) => m.name), [],
+    `🔴 ПРАВИЛО БІЛЬШЕ НЕ ОПИСУЄ ДІЙСНІСТЬ: у \`dismissed\` є активний менеджер ІЗ командою `
+    + `(${unknown.map((m) => `${m.name}, team ${m.teamId}`).join("; ")}). `
+    + "Це третя причина, якої правило не знає — воно заглушить її мовчки. "
+    + "Перевір `commercialManagerSql`: склад ростера змінився.");
 });

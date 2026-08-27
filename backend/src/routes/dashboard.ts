@@ -7467,12 +7467,33 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const rosterIds = new Set(roster.map((m) => m.id));
   const dismissedIds = [...new Set([...recv, ...succ, ...paid].map((r) => r.managerId))]
     .filter((id) => !rosterIds.has(id));
+  /**
+   * 🔴 `dismissed` ОЗНАЧАЄ НЕ «ЗВІЛЬНЕНИЙ», А «ПОЗА РОСТЕРОМ» — і назва бреже
+   * (знайдено 27.08.2026). Ростер вимагає `commercialManagerSql`, тобто
+   * `team_id IS NOT NULL`; отже сюди потрапляє і АКТИВНИЙ менеджер, у якого
+   * просто немає команди.
+   *
+   * 📐 Заміряно по 12 місяцях: будильник `#59` спрацював би на **4 акаунти, з
+   * них справді деактивованих НУЛЬ**. Операційний директор (`kommo 904923`,
+   * `is_active = true`, `team_id = NULL`) дзвонив би **9 місяців із 12** на
+   * 610 313 ₴. Тобто за весь час гейт жодного разу не спрацював на те, заради
+   * чого стояв, — а постановник, читаючи назву, ухвалив рішення про «звільненого»
+   * власника, якого не існує.
+   *
+   * Тому рядок несе `deactivated` — ЧИ ЛЮДИНА СПРАВДІ ЗВІЛЬНЕНА (за обома
+   * прапорцями, `activeManagerSql`). Без цього поля відрізнити дві причини
+   * неможливо в принципі, і будильник дзвонить на обидві.
+   */
   const dismissed = dismissedIds.length
-    ? (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
-        `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m
+    ? (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null; active: boolean }>(
+        `SELECT m.id, m.name, m.team_id, t.name AS team_name,
+                (${activeManagerSql("m")}) AS active
+           FROM managers m
            LEFT JOIN teams t ON t.id = m.team_id WHERE m.id = ANY($1) ORDER BY m.name`, [dismissedIds])).rows
       .map((m) => ({
         managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
+        // `true` = знято хоч один прапорець активності, тобто СПРАВЖНЄ звільнення.
+        deactivated: !m.active,
         fact: Math.round(recvM.get(m.id)?.revenue ?? 0),
         factSuccess: Math.round(succM.get(m.id)?.revenue ?? 0),
         factPaid: Math.round(paidM.get(m.id)?.revenue ?? 0),
