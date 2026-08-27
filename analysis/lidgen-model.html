@@ -1,0 +1,527 @@
+<title>Новий режим лідгенів</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root{
+    --paper:#F2F5F7; --card:#FFFFFF; --ink:#15202A; --ink-2:#3D4C5A; --muted:#6B7B8A;
+    --line:#D9E0E6; --line-soft:#E8EDF1;
+    --accent:#0E6E78; --accent-soft:#E2F0F1;
+    --bad:#B3302A; --bad-soft:#FBE7E5;
+    --warn:#9A6410; --warn-soft:#FBF0DC;
+    --good:#276B4A; --good-soft:#E2F0E8;
+    --shadow:0 1px 2px rgba(21,32,42,.06), 0 8px 24px -18px rgba(21,32,42,.35);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#0F171E; --card:#161F28; --ink:#E6EDF2; --ink-2:#B4C2CE; --muted:#8496A5;
+      --line:#2A3641; --line-soft:#212C36;
+      --accent:#4FBAC4; --accent-soft:#12333A;
+      --bad:#F08279; --bad-soft:#3A1F1D;
+      --warn:#E0AC5C; --warn-soft:#372A14;
+      --good:#6FC79A; --good-soft:#17301F;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0F171E; --card:#161F28; --ink:#E6EDF2; --ink-2:#B4C2CE; --muted:#8496A5;
+    --line:#2A3641; --line-soft:#212C36;
+    --accent:#4FBAC4; --accent-soft:#12333A;
+    --bad:#F08279; --bad-soft:#3A1F1D;
+    --warn:#E0AC5C; --warn-soft:#372A14;
+    --good:#6FC79A; --good-soft:#17301F;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.9);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1140px;margin:0 auto;padding:32px 20px 96px;display:flex;flex-direction:column;gap:44px}
+
+  .mast{display:flex;flex-direction:column;gap:14px;padding-bottom:26px;border-bottom:2px solid var(--ink)}
+  .eyebrow{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11.5px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px 18px}
+  h1{font-family:"Zilla Slab",Georgia,serif;font-weight:700;font-size:clamp(30px,5.2vw,46px);
+    line-height:1.08;margin:0;text-wrap:balance;letter-spacing:-.01em}
+  .standfirst{font-size:17px;color:var(--ink-2);max-width:68ch;margin:0}
+
+  section{display:flex;flex-direction:column;gap:18px}
+  .sec-head{display:flex;gap:14px;align-items:flex-start;border-left:3px solid var(--accent);padding-left:14px}
+  .sec-no{font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:600;color:var(--accent);
+    padding-top:9px;white-space:nowrap}
+  .sec-txt{display:flex;flex-direction:column;gap:4px}
+  .sec-kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);font-weight:600}
+  h2{font-family:"Zilla Slab",Georgia,serif;font-weight:600;font-size:clamp(22px,3.2vw,29px);
+    line-height:1.16;margin:0;text-wrap:balance}
+  h3{font-family:"Zilla Slab",Georgia,serif;font-weight:600;font-size:18px;margin:0}
+  p{margin:0;max-width:74ch}
+  .lede{color:var(--ink-2)}
+
+  .tbl-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow)}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:540px}
+  caption{caption-side:top;text-align:left;padding:14px 16px 10px;font-family:"IBM Plex Mono",monospace;
+    font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  th,td{padding:9px 14px;text-align:right;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);background:var(--card)}
+  tbody td{font-variant-numeric:tabular-nums;font-family:"IBM Plex Mono",monospace;color:var(--ink-2)}
+  tbody td:first-child{font-family:"IBM Plex Sans",sans-serif;color:var(--ink);font-weight:500}
+  tbody tr:last-child td{border-bottom:none}
+  tr.total td{border-top:2px solid var(--line);font-weight:600;color:var(--ink);background:var(--line-soft)}
+  tr.sep td{background:var(--line-soft);font-weight:600;color:var(--ink);font-family:"IBM Plex Sans",sans-serif;text-align:left}
+  td.flag{color:var(--bad);font-weight:600}
+  td.ok{color:var(--good);font-weight:600}
+  td.mid{color:var(--warn);font-weight:600}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:3px;overflow:hidden}
+  .stat{background:var(--card);padding:16px 16px 18px;display:flex;flex-direction:column;gap:3px}
+  .stat-n{font-family:"IBM Plex Mono",monospace;font-size:25px;font-weight:600;line-height:1.1;
+    font-variant-numeric:tabular-nums;color:var(--ink)}
+  .stat-n.bad{color:var(--bad)} .stat-n.good{color:var(--good)} .stat-n.warn{color:var(--warn)}
+  .stat-l{font-size:12.5px;color:var(--muted);line-height:1.35}
+
+  .callout{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:3px;padding:16px 18px;display:flex;flex-direction:column;gap:8px;box-shadow:var(--shadow)}
+  .callout.bad{border-left-color:var(--bad)}
+  .callout.good{border-left-color:var(--good)}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout p{font-size:14.5px;color:var(--ink-2)}
+  .callout strong{color:var(--ink)}
+
+  ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:14.5px;
+    color:var(--ink-2);max-width:74ch}
+  li strong{color:var(--ink)}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--accent);
+    border-radius:3px;padding:16px 18px 18px;display:flex;flex-direction:column;gap:9px;box-shadow:var(--shadow)}
+  .card.z1{border-top-color:var(--bad)}
+  .card.z2{border-top-color:var(--warn)}
+  .card.z3{border-top-color:var(--good)}
+  .card.z4{border-top-color:var(--accent)}
+  .card-tag{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;font-weight:600;color:var(--muted)}
+  .card p{font-size:14px;color:var(--ink-2)}
+  .card dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+  .card dt{color:var(--muted)}
+  .card dd{margin:0;font-family:"IBM Plex Mono",monospace;color:var(--ink);font-variant-numeric:tabular-nums}
+
+  .steps{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);
+    border-radius:3px;overflow:hidden}
+  .step{background:var(--card);padding:16px 18px;display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start}
+  .step-k{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--accent);padding-top:3px;white-space:nowrap;min-width:96px}
+  .step p{font-size:14.5px;color:var(--ink-2)}
+  .step strong{color:var(--ink)}
+
+  .ask{background:var(--warn-soft);border:1px solid var(--line);border-left:3px solid var(--warn);
+    border-radius:3px;padding:16px 18px;display:flex;flex-direction:column;gap:8px}
+  .ask p,.ask li{font-size:14.5px;color:var(--ink-2)}
+  .ask strong{color:var(--ink)}
+
+  footer{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:13px;
+    display:flex;flex-direction:column;gap:8px}
+  footer p{max-width:80ch;font-size:13px}
+  code{font-family:"IBM Plex Mono",monospace;font-size:.9em;background:var(--line-soft);
+    padding:1px 5px;border-radius:2px;color:var(--ink)}
+  @media (max-width:600px){ .step{grid-template-columns:1fr;gap:6px} .sec-head{flex-direction:column;gap:6px} }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">
+      <span>Для: Олександр</span>
+      <span>Від: Сергій</span>
+      <span>29.08.2026</span>
+      <span>База: 8 місяців даних, 12 лідгенів</span>
+    </div>
+    <h1>Режим роботи лідгенів: де мінус і що змінюємо</h1>
+    <p class="standfirst">Відділ дає 177 тис. ₴ маржі на місяць і працює на межі окупності. Причина не в тому, що люди мало дзвонять — дзвонять вони більше, ніж будь-коли. Причина в тому, що з квітня 40% усієї роботи йде в канал, який дає 4% результату, і що половина відділу не заробляє власної вартості. Нижче — цифри, зони, KPI, джерела та схема оплати.</p>
+  </header>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">01</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Головне</span>
+        <h2>Мінус складається з трьох речей, і найбільша з них — одна</h2>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span class="stat-n">1 241 198 ₴</span><span class="stat-l">маржа відділу за лютий–серпень</span></div>
+      <div class="stat"><span class="stat-n">177 314 ₴</span><span class="stat-l">у середньому на місяць</span></div>
+      <div class="stat"><span class="stat-n bad">≈ 195 000 ₴</span><span class="stat-l">маржа 8 основних лідгенів на місяць</span></div>
+      <div class="stat"><span class="stat-n bad">−5…−45 тис. ₴</span><span class="stat-l">місячний результат при вартості лідгена 25–30 тис.</span></div>
+    </div>
+
+    <div class="callout bad">
+      <p><strong>Мінус тонкий, а не катастрофічний</strong> — відділ балансує на нулі. Це означає, що його не треба перебудовувати з нуля: достатньо закрити три конкретні діри, і він виходить у стабільний плюс.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">02</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Джерело мінусу · головне</span>
+        <h2>Канал реактивації помер у квітні — і забрав із собою 40% робочого часу</h2>
+      </div>
+    </div>
+    <p class="lede">У відділі два канали: холодна база і реактивація закритих (у тому числі тих, кого кинули після першого перевезення). До березня реактивація давала кожен другий прорахунок. З квітня вона дає майже нуль — при тому, що людей на неї витрачають стільки ж.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Конверсія «лід → переданий прорахунок» по каналах, 2026</caption>
+        <thead>
+          <tr><th>Місяць</th><th>Холодна: лідів</th><th>прорах.</th><th>конверсія</th><th>Реактивація: лідів</th><th>прорах.</th><th>конверсія</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Січень</td><td>2 718</td><td>385</td><td>14,2%</td><td>1 013</td><td>259</td><td class="ok">25,6%</td></tr>
+          <tr><td>Лютий</td><td>2 722</td><td>529</td><td>19,4%</td><td>1 368</td><td>387</td><td class="ok">28,3%</td></tr>
+          <tr><td>Березень</td><td>2 691</td><td>523</td><td>19,4%</td><td>1 009</td><td>353</td><td class="ok">35,0%</td></tr>
+          <tr><td>Квітень</td><td>2 045</td><td>673</td><td>32,9%</td><td>431</td><td>0</td><td class="flag">0,0%</td></tr>
+          <tr><td>Травень</td><td>1 645</td><td>496</td><td>30,2%</td><td>1 150</td><td>22</td><td class="flag">1,9%</td></tr>
+          <tr><td>Червень</td><td>1 261</td><td>555</td><td>44,0%</td><td>1 668</td><td>16</td><td class="flag">1,0%</td></tr>
+          <tr><td>Липень</td><td>2 729</td><td>520</td><td>19,1%</td><td>2 448</td><td>59</td><td class="flag">2,4%</td></tr>
+          <tr><td>Серпень</td><td>2 062</td><td>548</td><td>26,6%</td><td>895</td><td>28</td><td class="flag">3,1%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span class="stat-n">6 592</span><span class="stat-l">лідів реактивації опрацьовано з квітня по серпень</span></div>
+      <div class="stat"><span class="stat-n bad">125</span><span class="stat-l">прорахунків із них — 1,9%</span></div>
+      <div class="stat"><span class="stat-n bad">40%</span><span class="stat-l">усього обсягу лідів іде в цей канал</span></div>
+      <div class="stat"><span class="stat-n bad">4,3%</span><span class="stat-l">результату він дає</span></div>
+    </div>
+
+    <div class="callout bad">
+      <p><strong>Скільки це коштує в грошах.</strong> Якби канал тримав свою колишню конверсію 29,5%, ці 6 592 ліди дали б близько 1 945 прорахунків замість 125. За фактичною конверсією відділу «прорахунок → машина» 7,6% це приблизно <strong>138 машин</strong>, або <strong>близько 400 тис. ₴ маржі за п'ять місяців — 80 тис. ₴ на місяць.</strong></p>
+      <p>Тобто одна ця діра більша за весь місячний мінус відділу. Закриваємо її — відділ виходить у плюс без жодного нового найму.</p>
+    </div>
+
+    <div class="callout warn">
+      <p><strong>Що саме зламалось — потрібно підтвердити на зустрічі.</strong> Розрив припадає рівно на квітень, коли канал перейменували з «Продзвін 2.0» на «Реактивація закриті». Три версії, які треба перевірити: (1) базу вичерпали — усіх придатних уже передзвонили; (2) змінилось визначення, і в канал почали вантажити безнадійні закриті; (3) прорахунки з цього каналу перестали позначати як реактивацію і вони «переїхали» в холодну — на це натякає стрибок конверсії холодної з 19% до 33–44% рівно з квітня.</p>
+      <p>Третя версія найімовірніша, і вона добра новина: тоді втрачено не 400 тис. ₴, а лише правильний облік. Перевіряється за півгодини вибіркою по Kommo.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">03</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Джерело мінусу · друге</span>
+        <h2>Половина відділу не заробляє власної вартості</h2>
+      </div>
+    </div>
+    <p class="lede">Головна цифра для оцінки лідгена — скільки маржі він приносить за робочий день. Вона одразу показує, хто окупається, а хто ні.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Маржа на робочий день, лютий — 27 серпня 2026</caption>
+        <thead>
+          <tr><th>Лідген</th><th>Днів</th><th>Машин</th><th>Маржа, ₴</th><th>₴ / день</th><th>≈ ₴ / місяць</th><th>Окупність при 25 тис.</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Демчук Вікторія</td><td>153</td><td>64</td><td>355 605</td><td>2 324</td><td>48 800</td><td class="ok">+23 800</td></tr>
+          <tr><td>Сердюк Ярослав</td><td>150</td><td>81</td><td>255 028</td><td>1 700</td><td>35 700</td><td class="ok">+10 700</td></tr>
+          <tr><td>Ковтонюк Тетяна</td><td>139</td><td>52</td><td>162 963</td><td>1 172</td><td>24 600</td><td class="mid">−400</td></tr>
+          <tr><td>Крупник Аліна</td><td>149</td><td>57</td><td>166 919</td><td>1 120</td><td>23 500</td><td class="mid">−1 500</td></tr>
+          <tr><td>Корнійчук Яна</td><td>47</td><td>15</td><td>48 653</td><td>1 035</td><td>21 700</td><td class="mid">−3 300</td></tr>
+          <tr><td>Ніколаєнко Анастасія</td><td>123</td><td>36</td><td>119 600</td><td>972</td><td>20 400</td><td class="flag">−4 600</td></tr>
+          <tr><td>Шевчук Мирослава</td><td>145</td><td>46</td><td>118 154</td><td>815</td><td>17 100</td><td class="flag">−7 900</td></tr>
+          <tr><td>Єресько Олександр</td><td>40</td><td>2</td><td>6 000</td><td>150</td><td>3 150</td><td class="flag">−21 850</td></tr>
+          <tr><td>Мілінчук Інеса</td><td>6</td><td>1</td><td>5 726</td><td>954</td><td>20 000</td><td class="flag">−5 000</td></tr>
+          <tr><td>Янчевський Едуард</td><td>20</td><td>1</td><td>2 550</td><td>128</td><td>2 700</td><td class="flag">−22 300</td></tr>
+          <tr><td>Бодак Дмитро-Богдан</td><td>20</td><td>0</td><td>0</td><td>0</td><td>0</td><td class="flag">−25 000</td></tr>
+          <tr class="total"><td>Разом основні 8</td><td>—</td><td>358</td><td>1 241 198</td><td>—</td><td>≈ 195 000</td><td class="flag">−5 000</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <p><strong>Двоє з дванадцяти дають половину відділу.</strong> Демчук (28,7% маржі) і Сердюк (20,5%) — це 49,2% усього результату. Ще четверо тримаються біля нуля. Решта шестеро за пів року дали разом 1,2% маржі, відпрацювавши при цьому 86 людино-днів.</p>
+      <p><strong>Точка беззбитковості:</strong> при повній вартості лідгена 20 тис. ₴ окупаються шестеро з восьми, при 25 тис. — двоє, при 30 тис. — двоє. Тобто весь відділ тримається на тому, наскільки дешево обходиться людина.</p>
+    </div>
+
+    <div class="callout bad">
+      <p><strong>Найдорожчий рядок — Єресько і Бодак.</strong> 60 робочих днів на двох, 2 машини, 6 000 ₴ маржі. При цьому Єресько робить 148 наборів на день — найбільше у відділі. Людина виконує норму по дзвінках і не дає результату: 60 наборів на один прорахунок при середньому 16–22 по відділу. Це не лінь — це неправильна норма, яка вимірює не те.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">04</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Джерело мінусу · третє</span>
+        <h2>Сама цифра мінусу неточна</h2>
+      </div>
+    </div>
+    <p class="lede">Перш ніж різати відділ за поганий серпень — серпнева цифра занижена, і це видно в таблицях.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Машини, поставлені без записаної маржі</caption>
+        <thead>
+          <tr><th>Місяць</th><th>Машин</th><th>Із сумою</th><th>Без суми</th><th>% без суми</th><th>Записана маржа, ₴</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Січень</td><td>27</td><td>26</td><td>1</td><td>4%</td><td>91 311</td></tr>
+          <tr><td>Лютий</td><td>40</td><td>35</td><td>5</td><td>12%</td><td>110 566</td></tr>
+          <tr><td>Березень</td><td>59</td><td>57</td><td>2</td><td>3%</td><td>340 366</td></tr>
+          <tr><td>Квітень</td><td>70</td><td>68</td><td>2</td><td>3%</td><td>237 991</td></tr>
+          <tr><td>Травень</td><td>36</td><td>36</td><td>0</td><td>0%</td><td>109 814</td></tr>
+          <tr><td>Червень</td><td>48</td><td>47</td><td>1</td><td>2%</td><td>148 891</td></tr>
+          <tr><td>Липень</td><td>61</td><td>59</td><td>2</td><td>3%</td><td>190 503</td></tr>
+          <tr><td>Серпень</td><td>44</td><td>27</td><td class="flag">17</td><td class="flag">39%</td><td class="flag">83 710</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <p><strong>17 із 44 серпневих машин записані без суми.</strong> За медіанною маржею це приблизно <strong>50 тис. ₴, яких у звіті немає</strong>. Реальний серпень — близько 135 тис. ₴, тобто на рівні червня, а не провал удвічі.</p>
+      <p>Плюс два менші дефекти обліку: 31 прорахунок Ковтонюк у звіті без підтвердження посиланням і 15 днів, де кількість успішних дзвінків дорівнює або перевищує кількість спроб набору. Разом це означає, що <strong>звітність відділу дає похибку в межах 5–10% — і рішення на її основі приймати ризиковано.</strong></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">05</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Що НЕ є причиною</span>
+        <h2>Ціни і маржа з рейсу — чіпати не треба</h2>
+      </div>
+    </div>
+    <p class="lede">Найчастіша реакція на мінус — «підняти маржу з рейсу». Дані кажуть, що проблема не тут.</p>
+    <div class="stats">
+      <div class="stat"><span class="stat-n good">2 000–2 820 ₴</span><span class="stat-l">медіанна маржа з машини, кожен місяць року</span></div>
+      <div class="stat"><span class="stat-n good">±12%</span><span class="stat-l">увесь розкид за 8 місяців</span></div>
+      <div class="stat"><span class="stat-n">385</span><span class="stat-l">машин поставлено за рік</span></div>
+      <div class="stat"><span class="stat-n">2 917</span><span class="stat-l">прорахунків передано за квітень–серпень</span></div>
+    </div>
+    <div class="callout good">
+      <p><strong>Маржа з рейсу стабільна весь рік</strong> — медіана тримається в коридорі 2,0–2,8 тис. ₴ без жодного тренду вниз. Обсяг машин теж не падає: серпень 44 машини проти 36 у травні. Отже, ринок і ціноутворення працюють. Ламається воронка до угоди, а не угода.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">06</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Пропозиція · 1 з 4</span>
+        <h2>Зони: чотири, з різною ціною входу і різними нормами</h2>
+      </div>
+    </div>
+    <p class="lede">Зараз усі лідгени працюють однаково по двох змішаних каналах, і норма в них одна — кількість дзвінків. Через це найдорожчий канал і найдешевший вимірюються однією лінійкою. Пропоную розділити.</p>
+
+    <div class="cards">
+      <div class="card z1">
+        <span class="card-tag">Зона 1 · найдорожча</span>
+        <h3>Холодна база</h3>
+        <p>Нові компанії, яких у CRM не було. Довгий цикл, багато наборів на один прорахунок.</p>
+        <dl>
+          <dt>Факт конверсії</dt><dd>19–44% лід→прорахунок</dd>
+          <dt>Норма набору</dt><dd>110–130 / день</dd>
+          <dt>Хто веде</dt><dd>новачки + 1 досвідчений</dd>
+        </dl>
+      </div>
+      <div class="card z3">
+        <span class="card-tag">Зона 2 · найдешевша</span>
+        <h3>Кинуті після першого перевезення</h3>
+        <p>Клієнт уже їздив з нами один раз і не повернувся. Знає ціну, знає сервіс, довіра вже є. Зараз цю зону не веде ніхто окремо.</p>
+        <dl>
+          <dt>Історична конверсія</dt><dd>25–35% лід→прорахунок</dd>
+          <dt>Норма набору</dt><dd>60–80 / день</dd>
+          <dt>Хто веде</dt><dd>окрема виділена людина</dd>
+        </dl>
+      </div>
+      <div class="card z2">
+        <span class="card-tag">Зона 3</span>
+        <h3>Реактивація інших закритих</h3>
+        <p>Ті, хто був у CRM, але до перевезення не дійшов. Саме тут конверсія впала до 2% — зону треба або перезапустити, або згорнути.</p>
+        <dl>
+          <dt>Поточна конверсія</dt><dd>1,0–3,1%</dd>
+          <dt>Рішення</dt><dd>аудит бази перед стартом</dd>
+          <dt>Хто веде</dt><dd>ніхто, поки не підтверджена якість</dd>
+        </dl>
+      </div>
+      <div class="card z4">
+        <span class="card-tag">Зона 4</span>
+        <h3>Вхідні та повторні</h3>
+        <p>Заявки, що приходять самі, і клієнти, які вже возять регулярно. Найвища конверсія, найменше зусиль — але і найменше приросту.</p>
+        <dl>
+          <dt>Пріоритет</dt><dd>обробка в день звернення</dd>
+          <dt>Норма</dt><dd>час реакції, не кількість</dd>
+          <dt>Хто веде</dt><dd>ТЛ або черга</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="callout">
+      <p><strong>Логіка розділення:</strong> зона 2 — це готові гроші, які зараз ніхто не піднімає. Клієнт, який уже возив, коштує в рази дешевше за холодний контакт, і саме про нього питання в задачі. Виділяємо на неї одну людину повністю — і це найшвидший спосіб закрити мінус.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">07</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Пропозиція · 2 з 4</span>
+        <h2>KPI: головний показник — маржа за день, а не дзвінки</h2>
+      </div>
+    </div>
+    <p class="lede">Поточна система міряє успішні дзвінки. Це показник, який (а) не перевіряється, (б) враховує автовідповідач як успіх, (в) дозволяє Єреську мати найкращу активність у відділі при двох машинах за 40 днів. Пропоную триярусну систему.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Нова система показників</caption>
+        <thead>
+          <tr><th>Ярус</th><th>Показник</th><th>Норма</th><th>Що робить</th></tr>
+        </thead>
+        <tbody>
+          <tr class="sep"><td colspan="4">Ярус 1 — від нього рахується оплата</td></tr>
+          <tr><td>Гроші</td><td>Маржа за робочий день, ₴</td><td>від 1 500</td><td>єдина цифра, прив'язана до P&amp;L</td></tr>
+          <tr class="sep"><td colspan="4">Ярус 2 — випереджальні, за ними видно проблему до того, як вона стала грошима</td></tr>
+          <tr><td>Обсяг</td><td>Прорахунків за день</td><td>4–5</td><td>показує, чи наповнюється воронка</td></tr>
+          <tr><td>Якість</td><td>Конверсія прорахунок → машина</td><td>від 8%</td><td>показує, чи прорахунки живі</td></tr>
+          <tr><td>Якість</td><td>Наборів на 1 прорахунок</td><td>до 22</td><td>ловить холостий хід (у Єреська 60)</td></tr>
+          <tr class="sep"><td colspan="4">Ярус 3 — гігієна, не оплачується, але без неї не приймається звіт</td></tr>
+          <tr><td>Активність</td><td>Наборів за день (за зоною)</td><td>60–130</td><td>контрольний, не цільовий</td></tr>
+          <tr><td>Дисципліна</td><td>Розмов &gt; 15 сек, % від наборів</td><td>звітується</td><td>відсікає автовідповідачі</td></tr>
+          <tr><td>Дисципліна</td><td>Кожна машина має записану суму</td><td>100%</td><td>закриває дірку 39% у серпні</td></tr>
+          <tr><td>Дисципліна</td><td>Кожен прорахунок має посилання в Kommo</td><td>100%</td><td>закриває 31 непідтверджений</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <p><strong>Ключова зміна — «успішні дзвінки» перестають бути KPI.</strong> Рінгостат ставить «Відповіли» за фактом підняття трубки: автовідповідач і миттєвий скид рахуються як успіх. Поки поріг тривалості не введено, цей показник не можна класти в основу оплати. Він залишається як контрольний, з обов'язковим полем «кількість спроб» — інакше його нічим перевірити.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">08</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Пропозиція · 3 з 4</span>
+        <h2>Джерело клієнтів: пріоритет — ті, кого вже возили</h2>
+      </div>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <span class="step-k">Пріоритет 1</span>
+        <p><strong>Кинуті після першого перевезення.</strong> Вивантажити з Kommo усіх, у кого рівно одна закрита успішна угода і немає активності 60+ днів. Це найтепліша база в компанії, і зараз вона не опрацьовується системно. Виділити одну людину повністю, дати окрему норму (60–80 наборів) і окремий рахунок конверсії.</p>
+      </div>
+      <div class="step">
+        <span class="step-k">Пріоритет 2</span>
+        <p><strong>Аудит бази реактивації перед перезапуском.</strong> Перш ніж знову вантажити туди людей, перевірити вибіркою 50 лідів: чому конверсія впала з 29,5% до 1,9%. Якщо база вичерпана — зону закриваємо і людей переводимо. Якщо зламався облік — виправляємо облік, а не людей.</p>
+      </div>
+      <div class="step">
+        <span class="step-k">Пріоритет 3</span>
+        <p><strong>Холодна база — тільки з сегментацією.</strong> Зараз холодна конверсія стрибає 19% → 44% → 19% без пояснення. Це означає, що якість завантажуваних списків не контролюється. Ввести відповідального за якість бази і фіксувати конверсію кожної партії.</p>
+      </div>
+      <div class="step">
+        <span class="step-k">Пріоритет 4</span>
+        <p><strong>Вхідні — регламент часу реакції.</strong> Найдорожчий лід губиться найпростіше. Норма — контакт у день звернення, вимірюється часом, а не кількістю.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">09</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Пропозиція · 4 з 4</span>
+        <h2>Схема оплати: ставка плюс відсоток від маржі понад поріг окупності</h2>
+      </div>
+    </div>
+    <p class="lede">Поточна проблема: людина отримує за активність, а не за результат, тому Бодак і Єресько коштують стільки ж, скільки Демчук, приносячи в 50 разів менше. Пропоную прив'язати змінну частину до маржі з порогом.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Модель оплати</caption>
+        <thead>
+          <tr><th>Складова</th><th>Розмір</th><th>Умова</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Ставка</td><td>фіксована, узгодити</td><td>виплачується за виконання ярусу 3 (гігієна звітності). Не виконав — ставка утримується частково.</td></tr>
+          <tr><td>Поріг окупності</td><td>маржа = повна вартість людини</td><td>до порога бонус не нараховується. Це і є точка, з якої лідген перестає бути витратою.</td></tr>
+          <tr><td>Бонус, базовий</td><td>% від маржі понад поріг</td><td>нараховується з першої гривні понад поріг</td></tr>
+          <tr><td>Бонус, прогресивний</td><td>підвищений % від 150% порога</td><td>щоб Демчук з її 48,8 тис. заробляла помітно більше, ніж людина на 25 тис.</td></tr>
+          <tr><td>Коефіцієнт зони</td><td>×1,3 холодна · ×1,0 теплі</td><td>вирівнює складність: холодний контакт коштує втричі більше зусиль</td></tr>
+          <tr><td>Стоп-фактор</td><td>бонус = 0</td><td>якщо в місяці є машини без записаної суми або прорахунки без посилання</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout good">
+      <p><strong>Що це змінює одразу.</strong> Людина, яка не доходить до порога, перестає бути невидимою — це видно в першому ж місяці, без аудиту. Людина, яка дає 48 тис., отримує помітно більше і не йде до конкурента. І головне: стоп-фактор за звітність робить облік питанням власного гаманця, а не дисципліни — це найдешевший спосіб закрити всі три дефекти обліку з розділу 04.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">10</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Що це дає</span>
+        <h2>Прогноз: вихід у плюс без нових наймів</h2>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <caption>Ефект від трьох змін, на місяць</caption>
+        <thead>
+          <tr><th>Захід</th><th>Ефект, ₴/міс</th><th>Строк</th><th>Впевненість</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Виділена людина на «кинутих після першого перевезення»</td><td class="ok">+40 000 … +80 000</td><td>4–6 тижнів</td><td>середня — залежить від розміру бази</td></tr>
+          <tr><td>Закриття дефектів обліку (суми, посилання, спроби)</td><td class="ok">+50 000 разово, далі точність</td><td>1 тиждень</td><td>висока — це вже зароблені гроші</td></tr>
+          <tr><td>Вивести з відділу тих, хто не доходить до порога</td><td class="ok">+25 000 … +50 000</td><td>1 місяць</td><td>висока</td></tr>
+          <tr><td>Підняти Ковтонюк з 70 до 85 наборів/день</td><td class="ok">+5 000 … +8 000</td><td>2 тижні</td><td>висока — вона тримала 94 в липні</td></tr>
+          <tr class="total"><td>Разом до поточних 177 тис.</td><td class="ok">+120 000 … +190 000</td><td>до 6 тижнів</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="lede">Навіть за нижньою межею відділ виходить із мінусу в стабільний плюс. Жоден із заходів не потребує нового найму, нової системи чи бюджету — усе робиться на наявних людях і наявних таблицях.</p>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">11</span>
+      <div class="sec-txt">
+        <span class="sec-kicker">Рішення</span>
+        <h2>Що потрібно від Олександра на цій зустрічі</h2>
+      </div>
+    </div>
+    <div class="steps">
+      <div class="step"><span class="step-k">Рішення 1</span><p><strong>Затвердити маржу за день як головний KPI</strong> замість успішних дзвінків. Без цього решта моделі не працює.</p></div>
+      <div class="step"><span class="step-k">Рішення 2</span><p><strong>Дати добро на виділену людину під зону «кинуті після першого перевезення»</strong> — з наявного складу, без найму.</p></div>
+      <div class="step"><span class="step-k">Рішення 3</span><p><strong>Погодити поріг окупності і відсотки бонусу.</strong> Потрібна одна цифра — повна вартість лідгена на місяць.</p></div>
+      <div class="step"><span class="step-k">Рішення 4</span><p><strong>Погодити стоп-фактор за звітність.</strong> Це те, що зробить цифри придатними для рішень.</p></div>
+      <div class="step"><span class="step-k">Рішення 5</span><p><strong>Дати два тижні на аудит бази реактивації</strong> перед тим, як щось у ній закривати.</p></div>
+    </div>
+
+    <div class="ask">
+      <p><strong>Три цифри, яких немає в таблицях і без яких модель неповна:</strong></p>
+      <ul>
+        <li><strong>Повна вартість лідгена на місяць</strong> — ставка + податки + робоче місце + телефонія. Від неї рахується поріг окупності і весь розділ 03.</li>
+        <li><strong>Що саме означає «Сума з поставлених машин»</strong> — маржа з рейсу чи виручка. У розрахунках вище прийнято, що це маржа (медіана 2,3 тис. ₴ на машину узгоджується саме з маржею). Якщо це виручка — усі висновки про мінус треба перерахувати.</li>
+        <li><strong>Поточна схема оплати</strong> — ставка і бонус як є зараз, щоб показати Олександру різницю «було / стало», а не абстрактну модель.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <p><strong>Джерела.</strong> «Щоденна звітність26 UTS_лідогенератори Таня Ковтонюк» і «Щоденна звітність26 UTS_лідогенератори 2» — щоденні показники 12 лідгенів за січень–серпень 2026; «Прорахунки ТЛ Таня Ковтонюк» і «прорахунки ТЛ Сердюк Ярослав» — 12 350 прорахунків з посиланнями на угоди в Kommo. Дані станом на 27.08.2026.</p>
+    <p><strong>Як рахувалось.</strong> Маржа — колонка «Сума з поставлених машин». Маржа на день — сума маржі поділена на кількість днів, де заповнено хоч один показник роботи. Конверсія каналу — «Передано на прорахунок» поділене на «Кількість опрацьованих нових лідів» у межах того самого блоку колонок. Оцінка втрат по реактивації — різниця між фактичною конверсією квітня–серпня та середньою конверсією січня–березня, перерахована через фактичну конверсію «прорахунок → машина» 7,6%.</p>
+    <p><strong>Чого тут немає.</strong> Витрат на персонал і телефонію — цих даних у таблицях немає, тому мінус показано як діапазон при вартості лідгена 25–30 тис. ₴. Фактичної тривалості розмов із Рінгостату — без вивантаження неможливо відділити реальні розмови від автовідповідачів у жодного співробітника відділу.</p>
+  </footer>
+
+</div>
