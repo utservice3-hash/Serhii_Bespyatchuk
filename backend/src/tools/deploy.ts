@@ -13,7 +13,7 @@
  * весь час лікуємось («успіх за 0 мс», «порожній результат = pass»).
  */
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL,
   type Mode, type Phase, type Step, type Artifact,
@@ -55,6 +55,13 @@ async function prodSha(): Promise<string> {
  * й повторюваності, а не тому, що збірка різна.
  */
 export const NODE_BIN = process.env.UTS_NODE_BIN ?? "/usr/local/node26/bin";
+
+/**
+ * 📦 Каталог копій виїжджаючого — ПОЗА докрутом (докрут роздається вебом).
+ * Тримаємо два покоління: одного мало (відкат відкату), трьох не треба.
+ */
+export const BACKUP_DIR = process.env.UTS_BACKUP_DIR ?? "/home/evraziat/uts.ua/deploy-backups";
+export const BACKUP_KEEP = 2;
 
 function toolsPresent(id: string): StepResult {
   const missing = ["npm", "node", "git"].filter((t) => {
@@ -101,6 +108,13 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   },
   buildBack: (c) => run("buildBack", () => { sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
   tscFront: (c) => run("tscFront", () => sh("npx", ["tsc", "-b"], c.fe), "tsc -b фронту (НЕ --noEmit: він там нічого не перевіряє)"),
+  /**
+   * 🔴 БАНДЛ ФРОНТУ. `tscFront` поруч — це ТИПИ (`tsc -b`), він нічого не емітить;
+   * `vite build` типів не перевіряє. Два різні кроки, і жоден не заміняє іншого.
+   * Крок стоїть у фазі CHECK, тобто у стенді: у докруті йому не місце — саме заради
+   * цього збірку й виносили.
+   */
+  buildFront: (c) => run("buildFront", () => sh("npm", ["run", "build"], c.fe), "бандл фронту (vite) — у СТЕНДІ"),
   /**
    * 🔴 КРИТЕРІЙ — ПРИРІСТ, А НЕ КОД 0. Розгорнуто в `testDelta.ts`; тут — механіка
    * двох прогонів. Ціна заміряна: +78 с (worktree+збірка 12.4 с, прогін бази 65.8 с).
@@ -255,6 +269,40 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * й перевірено кроком baseAgain. Саме це і звільняє чекаут — у ньому лишаються
    * копія, guard і рестарт (~1.5 хв замість ~21).
    */
+  /**
+   * 📦 ТАРБОЛ ТОГО, ЩО ВИЇЖДЖАЄ. Останній крок, що ще бачить старий стан.
+   *
+   * 🔴 Ім'я містить sha З VERSION.JSON, а не git HEAD. Крок іде ПІСЛЯ `ff`, тож HEAD
+   * докрута вже НОВИЙ — назва за ним описувала б те, чого в тарболі немає, тобто
+   * брехала б рівно про те, заради чого тарбол існує.
+   *
+   * 🔴 Каталог — ПОЗА докрутом. Заміряно 27.08.2026: тарбол у докруті по HTTP НЕ
+   * віддається (обидві проби дали SPA-фолбек `<!doctype html>`, а не gzip). Але
+   * тримається це на правилі перезапису в НЕВІДСТЕЖУВАНОМУ `.htaccess`, а не на межі
+   * каталогу; винести коштує нуль, тож виносимо.
+   */
+  backupOutgoing: (c) => run("backupOutgoing", () => {
+    sh("mkdir", ["-p", BACKUP_DIR]);
+    let inner = "unknown";
+    try { inner = String(JSON.parse(readFileSync(`${c.prodBe}/dist/version.json`, "utf8")).sha ?? "").slice(0, 7) || "unknown"; }
+    catch { /* немає dist або version.json — тарболити все одно, але чесно назвати */ }
+    const name = `pre-${inner}-${c.now.replace(/[:.]/g, "-")}.tgz`;
+    // Тарболимо ЛИШЕ те, що наступні кроки знищать: dist (rm -rf), assets і index.html (copy/cssGuard).
+    const parts = ["backend/dist", "assets", "index.html"].filter((p) => existsSync(`${c.docRoot}/${p}`));
+    if (parts.length === 0) throw new Error("нема чого зберігати: ні dist, ні assets, ні index.html — це САМО ПО СОБІ дивно, спинись");
+    sh("tar", ["czf", `${BACKUP_DIR}/${name}`, "-C", c.docRoot, ...parts]);
+    const size = statSync(`${BACKUP_DIR}/${name}`).size;
+    if (size < 1024) throw new Error(`тарбол ${size} Б — порожній результат це ПРОВАЛ, а не успіх`);
+    /**
+     * Ретенція — у ЦЬОМУ ж кроці, а не окремою джобою: інакше каталог росте тихо,
+     * і про це дізнаються з «no space left on device» під час викату.
+     */
+    const keep = readdirSync(BACKUP_DIR).filter((f) => /^pre-.*\.tgz$/.test(f)).sort().reverse();
+    const drop = keep.slice(BACKUP_KEEP);
+    for (const f of drop) sh("rm", ["-f", `${BACKUP_DIR}/${f}`]);
+    return `${name} · ${(size / 1048576).toFixed(1)} МБ · тримаємо ${Math.min(keep.length, BACKUP_KEEP)}`
+      + (drop.length ? ` · прибрано ${drop.length}` : "");
+  }, "копія виїжджаючого — відкат без перезбору"),
   deliver: (c) => run("deliver", () => {
     sh("rm", ["-rf", c.prodBe + "/dist"]);
     sh("cp", ["-r", c.be + "/dist", c.prodBe + "/dist"]);

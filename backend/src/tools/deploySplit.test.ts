@@ -27,6 +27,23 @@ function stepBody(src: string, id: string): string {
   return next < 0 ? rest : rest.slice(0, next + 1);
 }
 
+/**
+ * Тіло БЕЗ коментарів. 🔴 Написано після того, як саботаж T6 лишився зеленим:
+ * перевірка `/\brm\b/` збіглася з коментарем «dist (rm -rf)» усередині кроку, а не з
+ * кодом видалення. Присутність, перевірена в прозі, стереже прозу.
+ */
+function code(body: string): string {
+  return body.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/** Ідентифікатори всіх обробників кроків — щоб питати «а ХТО це робить», не перелічуючи руками. */
+function HANDLER_IDS(src: string): Record<string, true> {
+  const from = src.indexOf("const handlers");
+  const out: Record<string, true> = {};
+  for (const m of src.slice(from).matchAll(/\n {2}([A-Za-z_][\w]*): \(c\) =>/g)) out[m[1]] = true;
+  return out;
+}
+
 test("#250 збірка і докрут — РІЗНІ дерева, і жоден крок збірки докрута не торкається", () => {
   const s = DEPLOY();
   assert.match(s, /\bbuildRepo\b/, "у Ctx немає buildRepo");
@@ -47,16 +64,33 @@ test("#250 збірка і докрут — РІЗНІ дерева, і жоде
   }
 });
 
-test("#250b фаза run НЕ збирає — вона доставляє", () => {
+test("#250b фаза run НЕ збирає — вона доставляє; але БАНДЛ хтось таки збирає", () => {
   const s = DEPLOY();
-  assert.ok(!/buildBackProd|buildFront:/.test(s),
+  assert.ok(!/buildBackProd|buildFront: \(c\) => run\("buildFront"[\s\S]{0,200}c\.docRoot/.test(s),
     "🔴 у run-фазі лишилась збірка. Поки вона там, чекаут тримається всі ~21 хв, і винесення нічого не дало");
   const d = stepBody(s, "deliver");
   assert.match(d, /c\.be\b/, "deliver не бере dist зі стенда");
   assert.match(d, /c\.prodBe\b/, "deliver не кладе dist у докрут");
-  // Реєстр кроків мусить знати обидва нові — інакше #226 побачить крок без опису.
+
+  /**
+   * 🔴 ПАРНЕ ТВЕРДЖЕННЯ — «А ДЕ ВОНО ТЕПЕР». Без нього ця перевірка ВИНАГОРОДЖУЄ
+   * зникнення: «у run немає збірки» однаково істинне і коли крок переїхав у стенд, і
+   * коли його не стало ніде. Саме так і сталось 27.08.2026 — я прибрав `buildFront`
+   * із run і не додав у check, `vite build` не кликав ніхто, а гейт був зелений.
+   * Ціна: перший викат обірвався б на `distNotEmpty` — ОДРАЗУ ПІСЛЯ `deliver`.
+   */
+  const FE_BUILDERS = Object.keys(HANDLER_IDS(s)).filter((id) => {
+    const b = stepBody(s, id);
+    return /\bc\.fe\b/.test(b) && /"build"/.test(b);
+  });
+  assert.deepEqual(FE_BUILDERS, ["buildFront"],
+    `🔴 бандл фронту збирають кроки [${FE_BUILDERS.join(", ") || "ЖОДЕН"}], а має рівно один — buildFront.\n` +
+    "   Порожньо = vite build не кликає ніхто: `tscFront` поруч робить `tsc -b`, тобто ТИПИ, і нічого не емітить.");
+
   const plan = SRC("tools/deployPlan.ts");
-  for (const id of ["baseAgain", "deliver"]) assert.ok(plan.includes(`id: "${id}"`), `крок «${id}» не оголошено в реєстрі`);
+  assert.match(plan, /id: "buildFront", phase: "check"/,
+    "🔴 buildFront не у фазі check — або його немає, або він знову в докруті");
+  for (const id of ["baseAgain", "deliver", "backupOutgoing"]) assert.ok(plan.includes(`id: "${id}"`), `крок «${id}» не оголошено в реєстрі`);
   assert.ok(!plan.includes(`id: "buildBackProd"`), "реєстр досі оголошує збірку в run-фазі");
 });
 
@@ -168,4 +202,83 @@ test("#250f стенд на прод-хості не приймається за
   assert.ok(!/\bdocRoot\s*:/.test(call),
     "🔴 у виклик підставлено ЛІТЕРАЛ замість docRoot — гейт звіряється не з тим деревом,\n" +
     "   куди ланцюг реально доставляє, і мовчить рівно тоді, коли мав би спинити");
+});
+
+/**
+ * 🚦 #250g — УСЕ, ЩО ВМІЄ СКАЗАТИ «НІ», КАЖЕ ЦЕ ДО ПЕРШОЇ НЕЗВОРОТНОЇ ДІЇ.
+ *
+ * 🔴 Привід заміряний, а не уявний. У першій редакції `distNotEmpty` стояв ПІСЛЯ
+ * `deliver`: незібраний фронт спинив би ланцюг рівно там, де бекенд прода вже
+ * підмінено, докрут уже перемотано, а бандл лишився старий. Це рідня випадку
+ * 26.08.2026, коли `rm -rf dist` виконався ПЕРЕД `npm: command not found`.
+ * Правило одне: відмова, що приходить після руйнування, — не гейт, а звіт про збиток.
+ */
+test("#250g відмовні кроки — перед першим руйнівним", async () => {
+  const { planSteps } = await import("./deployPlan.js");
+  const ids = planSteps("run", "full").map((x) => x.id);
+  const at = (id: string) => { const i = ids.indexOf(id); assert.ok(i >= 0, `🔴 крок «${id}» зник із фази run`); return i; };
+
+  // ① Порядок: три перевірки → перша мутація докрута → тарбол → доставка.
+  const order = ["artifactFresh", "baseAgain", "distNotEmpty", "ff", "backupOutgoing", "deliver", "copy"];
+  const got = order.map(at);
+  assert.deepEqual(got, [...got].sort((a, b) => a - b),
+    `🔴 порядок порушено: ${order.map((id, i) => `${id}@${got[i]}`).join(" · ")}`);
+
+  // ② І сильніше за порядок: жодна з трьох перевірок не сміє ТОРКАТИСЬ докрута.
+  //    Крок, що встиг щось змінити, вже не може «просто відмовити».
+  const s = DEPLOY();
+  for (const id of ["artifactFresh", "baseAgain", "distNotEmpty"]) {
+    const b = stepBody(s, id);
+    assert.ok(!/\bc\.docRoot\b|\bc\.prodBe\b/.test(b),
+      `🔴 відмовний крок «${id}» чіпає докрут — тоді його «ні» приходить уже після сліду`);
+  }
+  // ③ Дзеркало: `deliver` справді руйнівний, інакше весь порядок стереже порожнечу.
+  assert.match(stepBody(s, "deliver"), /rm -rf|"-rf"/,
+    "🔴 deliver більше не руйнівний — тоді твердження про «перед першим руйнівним» ні про що");
+});
+
+/**
+ * 📦 #250h — КОПІЯ ВИЇЖДЖАЮЧОГО. Нова ціна нового ланцюга, названа вголос.
+ *
+ * Старий ланцюг збирав ПОВЕРХ, тож при невдачі попередній `dist` лишався майже цілим.
+ * Новий робить `rm -rf` ПЕРЕД копією — попереднього стану не лишається ніде, і відкат
+ * коштував би повного перезбору (≈169 с) замість розпакування (≈10 с).
+ */
+test("#250h тарбол виїжджаючого: перед deliver, ім'я з version.json, поза докрутом, ретенція", async () => {
+  const { BACKUP_DIR, BACKUP_KEEP } = await import("./deploy.js");
+  const s = DEPLOY();
+  const b = stepBody(s, "backupOutgoing");
+
+  // ① Каталог ПОЗА докрутом — докрут роздається вебом.
+  const docDefault = s.match(/UTS_DOC_ROOT \?\? "([^"]+)"/)?.[1];
+  assert.ok(docDefault, "🔴 не знайшов дефолт docRoot — нема з чим порівнювати");
+  assert.ok(!BACKUP_DIR.startsWith(docDefault + "/") && BACKUP_DIR !== docDefault,
+    `🔴 тарболи лежать У ДОКРУТІ (${BACKUP_DIR} всередині ${docDefault}).\n` +
+    "   Заміряно 27.08.2026: по HTTP такий файл не віддається — але тримається це на правилі\n" +
+    "   перезапису в НЕвідстежуваному .htaccess, а не на межі каталогу.");
+
+  // ② Ім'я — sha З АРТЕФАКТА, а не git HEAD. Крок іде ПІСЛЯ `ff`, тож HEAD уже НОВИЙ,
+  //    і назва за ним описувала б те, чого в тарболі немає.
+  assert.match(b, /version\.json/,
+    "🔴 ім'я не бере sha з version.json — тоді воно бреше саме про те, заради чого тарбол існує");
+  assert.ok(!/c\.target|rev-parse/.test(b),
+    "🔴 ім'я береться з HEAD/target — це sha, що ПРИЇХАВ, а в тарболі лежить той, що ВИЇХАВ");
+
+  // ③ Порожній результат — провал, а не успіх.
+  // 🔴 Перша редакція була АЛЬТЕРНАТИВОЮ `size < 1024|throw new Error` — і лишалась
+  // зеленою, коли прибрати саме перевірку розміру: у кроці є ДРУГИЙ throw («нема чого
+  // зберігати»), і він її підміняв. Альтернатива в гейті означає «будь-що з двох згодиться».
+  assert.match(code(b), /size\s*<\s*1024/,
+    "🔴 крок не перевіряє РОЗМІР тарбола — «tar відпрацював» не означає «щось збережено»");
+
+  // ④ Ретенція — у тому ж кроці, і саме два покоління.
+  assert.equal(BACKUP_KEEP, 2, "🔴 глибина ретенції змінилась — рішення власника було «останні два»");
+  // 🔴 Не «слово BACKUP_KEEP десь у кроці» — а ЗРІЗ за ним і ВИДАЛЕННЯ зрізаного, у коді.
+  // Саботаж T6 (зняти ретенцію) лишав перше зеленим: BACKUP_KEEP згадувався у рядку звіту,
+  // а `rm` збігався з коментарем. Обидві присутності були правдиві й нічого не стерегли.
+  const c4 = code(b);
+  assert.match(c4, /slice\(\s*BACKUP_KEEP\s*\)/,
+    "🔴 крок не робить зріз за BACKUP_KEEP — старі тарболи нікуди не діваються");
+  assert.match(c4, /for\s*\(\s*const\s+\w+\s+of\s+drop\s*\)[\s\S]{0,120}\brm\b/,
+    "🔴 зріз є, а видалення немає: каталог росте тихо до «no space left on device» посеред викату");
 });
