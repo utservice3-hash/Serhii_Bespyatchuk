@@ -3358,3 +3358,60 @@ test("#199cd2 скоуп розкриття — ТОЙ САМИЙ вираз, щ
   assert.match(body, /status\(403\)/,
     "🔴 зникла відмова для чужого клієнта — «нічого немає» читалось би як «боргу немає»");
 });
+
+/**
+ * #199cg — ОДИН ВИРАЗ СКОУПУ НА ЧОТИРИ МІСЦЯ.
+ *
+ * 🔴 ЧОМУ ЦЕ СИЛЬНІШЕ ЗА «КОЖЕН ОКРЕМО ПРАВИЛЬНИЙ». Дефект 27.08.2026 виник не
+ * з помилки в скоупі, а з того, що виразів було ДВА: список клієнтів рахував
+ * видимість по відповідальному за клієнта, розкриття — по менеджеру рахунка.
+ * Обидва працювали. Разом вони давали «рядок 2 323 000 ₴ проти розкриття
+ * 691 000 ₴» — і жоден окремо не був неправильним.
+ *
+ * Тому гейт стверджує ТОТОЖНІСТЬ, а не правильність: у всіх чотирьох місцях
+ * стоїть `receivablesScope` + `receivablesByClient`, і ніде — власний фільтр по
+ * `ri.manager_id` чи `m.team_id`.
+ *
+ * ЧОТИРИ МІСЦЯ (рішення власника 27.08.2026, запис переведено разом із читанням):
+ *   1 · GET  /receivables            — список клієнтів
+ *   2 · GET  /receivables/invoices   — розкриття + плаский реєстр
+ *   3 · GET  /receivables/writeoffs  — архів списань
+ *   4 · PUT  /receivables/invoice-note — ЗАПИС дедлайну по рахунку
+ */
+test("#199cg вираз скоупу дебіторки — ОДИН на всі чотири місця", () => {
+  const src = strip(readFileSync(SRC("routes/dashboard.ts"), "utf8"));
+  const places: [string, string][] = [
+    ["GET /receivables", 'dashboardRouter.get("/receivables"'],
+    ["GET /receivables/invoices", 'dashboardRouter.get("/receivables/invoices"'],
+    ["GET /receivables/writeoffs", 'dashboardRouter.get("/receivables/writeoffs"'],
+    ["PUT /receivables/invoice-note", 'dashboardRouter.put("/receivables/invoice-note"'],
+  ];
+  const missing: string[] = [];
+  const ownFilter: string[] = [];
+  for (const [label, anchor] of places) {
+    const from = src.indexOf(anchor);
+    assert.ok(from > 0, `🔴 роут ${label} не знайдено — гейт міряє порожнечу`);
+    const to = src.indexOf("dashboardRouter.", from + anchor.length);
+    const body = src.slice(from, to > from ? to : undefined);
+    if (!/receivablesScope\(auth/.test(body) || !/receivablesByClient\(/.test(body)) missing.push(label);
+    // 🔴 Власний фільтр — саме те, чим дефект і був: другий вираз поруч із першим.
+    if (/ri\.manager_id\s*=\s*\$/.test(body) || /\bm\.team_id\s*=\s*\$/.test(body)) ownFilter.push(label);
+  }
+  assert.deepEqual(missing, [],
+    "🔴 НЕ ВСІ ЧОТИРИ МІСЦЯ БЕРУТЬ СПІЛЬНИЙ ВИРАЗ: " + missing.join(", ")
+    + ". Другий вираз скоупу поруч із першим — це рівно те, що дало «рядок 2 323 000 ₴ "
+    + "проти розкриття 691 000 ₴»: обидва працювали, разом брехали.");
+  assert.deepEqual(ownFilter, [],
+    "🔴 У ЦИХ МІСЦЯХ ПОВЕРНУВСЯ ВЛАСНИЙ ФІЛЬТР по менеджеру/команді рахунка: "
+    + ownFilter.join(", ") + ". Скоуп дебіторки — ПО КЛІЄНТУ (рішення власника 27.08.2026).");
+
+  // 🪞 ДЗЕРКАЛО: межа не зникла зовсім. Кожне з чотирьох місць уміє відмовити —
+  // інакше «один вираз» означало б «жодного».
+  for (const [label, anchor] of places) {
+    const from = src.indexOf(anchor);
+    const to = src.indexOf("dashboardRouter.", from + anchor.length);
+    const body = src.slice(from, to > from ? to : undefined);
+    assert.match(body, /status\(sc\.status\)|status\(403\)/,
+      `🔴 ${label}: спільний скоуп узято, а відмовляти нікому — межа зникла разом із дублем`);
+  }
+});

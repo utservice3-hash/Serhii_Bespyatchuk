@@ -2639,15 +2639,34 @@ dashboardRouter.put("/receivables/invoice-note", async (req, res) => {
   const invoiceNo = String(req.body?.invoiceNo ?? "").trim();
   if (!clientKey || !invoiceNo) return res.status(400).json({ error: "clientKey та invoiceNo обовʼязкові" });
 
-  // Право редагувати: рахунок має належати менеджеру / команді тімліда.
-  const conds = ["ri.client_key = $1", "COALESCE(ri.invoice_no,'') = $2"];
-  const p: unknown[] = [clientKey, invoiceNo];
-  if (auth.role === "manager") { p.push(auth.managerId); conds.push(`ri.manager_id = $${p.length}`); }
-  else if (auth.role === "team_lead") { p.push(auth.teamId); conds.push(`m.team_id = $${p.length}`); }
+  /**
+   * 🔴 ПРАВО ПИСАТИ — ЗА КЛІЄНТОМ, А НЕ ЗА МЕНЕДЖЕРОМ РАХУНКА
+   * (рішення власника 27.08.2026). «Відповідаєш за клієнта — ведеш усі його
+   * рахунки; домовленість про оплату стосується КЛІЄНТА, а не того, хто набрав
+   * рахунок у 1С».
+   *
+   * 📐 ЩО БУЛО Б ІНАКШЕ. Читання перевели на скоуп клієнта тим самим проходом,
+   * і без цієї правки виникла б асиметрія: Яцик БАЧИТЬ 30 рахунків ПВК АРСЕНАЛ,
+   * а дедлайн може поставити на 19 — бо 11 із них виставлені напряму в 1С і
+   * `manager_id` у них NULL. «Видно, але не чіпай» без жодного пояснення на
+   * екрані — це той самий клас, що 41 кнопка в DOM із нуля видимих.
+   *
+   * 🔗 ЧЕТВЕРТЕ МІСЦЕ ОДНОГО ВИРАЗУ: список клієнтів, розкриття, реєстр і цей
+   * запис. Тотожність усіх чотирьох стереже `#199cg`.
+   */
+  const sc = receivablesScope(auth, {});
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  const mine = await metrics.receivablesByClient(sc);
+  if (!mine.some((r) => r.clientKey === clientKey))
+    return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
+
+  // Рахунок мусить існувати В ЦЬОГО клієнта: інакше нотатка осіла б під ключем,
+  // якому нічого не відповідає, і зникла б з екрана мовчки.
   const own = await pool.query(
-    `SELECT 1 FROM receivable_invoices ri LEFT JOIN managers m ON m.id = ri.manager_id
-     WHERE ${conds.join(" AND ")} LIMIT 1`, p);
-  if (!own.rowCount) return res.status(403).json({ error: "Немає доступу до цього рахунку" });
+    `SELECT 1 FROM receivable_invoices ri
+      WHERE ri.client_key = $1 AND COALESCE(ri.invoice_no,'') = $2 LIMIT 1`,
+    [clientKey, invoiceNo]);
+  if (!own.rowCount) return res.status(404).json({ error: "Такого рахунку в цього клієнта немає" });
 
   const dueDate = req.body?.dueDate ? String(req.body.dueDate).slice(0, 10) : null;
   const comment = req.body?.comment != null ? String(req.body.comment) : null;
