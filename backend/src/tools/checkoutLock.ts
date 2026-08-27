@@ -122,6 +122,44 @@ export function lossFor(me: string, events: readonly LockEvent[]): LockEvent | n
 export const claimPath = (repo: string) => `${repo}/.deploy-lock`;
 export const logPath = (repo: string) => `${repo}/.deploy-lock.log`;
 
+/**
+ * 📍 КАНОНІЧНИЙ КАТАЛОГ ЗАМКА — АБСОЛЮТНИЙ, а не `process.cwd()`.
+ *
+ * 🔴 Заміряно 27.08.2026, і це найгірша знахідка дня: замок НЕ СЕРІАЛІЗУВАВ.
+ * Вхідний рядок CLI резолвив каталог як `process.cwd()`, тож шлях залежав від того,
+ * ЗВІДКИ покликали. На диску жили ДВА комплекти, обидва «робочі»:
+ *   <докрут>/.deploy-lock.log          — 4 записи, останній 27.08 09:40 UTC
+ *   <докрут>/backend/.deploy-lock(.log) — живий, там усі take/release від 26.08
+ * Тобто чати писали в різні журнали в один день із різницею в годину, і кожен
+ * бачив «вільно» у своїй половині диска.
+ *
+ * ⚠️ Ланцюг деплою при цьому кликав замок із `docRoot`, тобто в МЕРТВИЙ шлях:
+ * `deploy:run` відзвітував би «замок мій» і поїхав `rm -rf dist` крізь чуже
+ * приймання. Канонічним обрано `backend/` — той, де вже лежить жива історія,
+ * щоб нічого не мігрувати.
+ */
+export const CANON_LOCK_DIR = process.env.UTS_LOCK_DIR ?? "/home/evraziat/uts.ua/dashboard/backend";
+
+/** Шляхи, за якими замок жив РАНІШЕ. Перевіряються при взятті — див. `foreignHold`. */
+export const LEGACY_LOCK_DIRS: readonly string[] = ["/home/evraziat/uts.ua/dashboard"];
+
+/**
+ * Чужа заявка за ІНШИМ відомим шляхом. `null` = ніде більше нікого.
+ *
+ * 🔴 Це і є ліки від «двох наглядачів, кожен у своє»: не довіра одному джерелу, а
+ * ПРЯМЕ ПОРІВНЯННЯ двох. Одного лише канонічного шляху мало — він полагодив би
+ * сьогоднішній випадок і лишив механізм, що розійдеться, щойно хтось покличе
+ * інструмент із іншого каталогу.
+ *
+ * Чиста функція: заявки читає той, хто кличе, тож гейт саботажить ВХІД.
+ */
+export function foreignHold(
+  others: readonly { dir: string; claim: Claim | null }[],
+): { dir: string; claim: Claim } | null {
+  for (const o of others) if (o.claim) return { dir: o.dir, claim: o.claim };
+  return null;
+}
+
 export function readClaim(repo: string): Claim | null {
   const p = claimPath(repo);
   if (!existsSync(p)) return null;
@@ -186,6 +224,15 @@ export function cli(argv: string[], repo: string, now = new Date()): { code: num
       : ["🔓 ВІЛЬНО"];
     if (me) { const l = lossFor(me, readEvents(repo)); if (l) out.push(`⚠️ твій замок забрав ${l.who} (${l.kind}) ${l.at}: ${l.reason}`); }
     if (has("log")) for (const e of readEvents(repo).slice(-20)) out.push(`   ${e.at} ${e.kind} ${e.who}${e.lostBy ? ` ← ${e.lostBy}` : ""}: ${e.reason}`);
+    /**
+     * ℹ️ Сказати ОДИН РАЗ, що за старим шляхом лишився журнал. Інакше через тиждень
+     * хтось вирішить, що історія загубилась, — вона append-only і нікуди не дінеться.
+     */
+    for (const d of LEGACY_LOCK_DIRS) {
+      if (d === repo) continue;
+      const ev = readEvents(d);
+      if (ev.length) out.push(`ℹ️ старий шлях ${d}: журнал на ${ev.length} записів, останній ${ev[ev.length - 1].at} — історія там, не загубилась`);
+    }
     return { code: 0, out };
   }
 
@@ -194,6 +241,25 @@ export function cli(argv: string[], repo: string, now = new Date()): { code: num
   if (!me) return { code: 2, out: ["🔴 --who= обовʼязково: замок без імені тримача не відповідає на єдине питання, заради якого існує"] };
   if (op === "take" && !reason.trim()) return { code: 2, out: ["🔴 --take без --reason= заборонено: той, хто прийде, має бачити НЕ лише що зайнято, а й що саме робиться"] };
 
+  /**
+   * 🔴 ПЕРЕД ВЗЯТТЯМ — ПОДИВИТИСЬ ЗА ДРУГИМ ВІДОМИМ ШЛЯХОМ.
+   * Мовчки взяти свою заявку, коли чужа лежить поруч, — це рівно та поведінка,
+   * через яку замок не серіалізував. Відмова НАЗИВАЄ шлях і тримача.
+   */
+  if (op === "take") {
+    const alien = foreignHold(
+      LEGACY_LOCK_DIRS.filter((d) => d !== repo).map((d) => ({ dir: d, claim: readClaim(d) })),
+    );
+    if (alien) return { code: 4, out: [
+      `🔴 ЗА СТАРИМ ШЛЯХОМ ЛЕЖИТЬ ЧУЖА ЗАЯВКА — не беру.`,
+      `   ${alien.dir}/.deploy-lock`,
+      `   тримає: ${alien.claim.who} (${alien.claim.at})`,
+      `   робить: ${alien.claim.reason}`,
+      `   Каталог замка колись залежав від cwd, тож ця заявка справжня, просто не там.`,
+      `   Домовитись із тримачем; зняти можна лише руками, з того ж каталогу.`,
+    ] };
+  }
+
   const v = decide(op, view, me, reason, has("after-ttl"));
   if (!v.ok) return { code: v.code, out: v.lines };
   applyVerdict(repo, v, me, reason, view.claim);
@@ -201,7 +267,10 @@ export function cli(argv: string[], repo: string, now = new Date()): { code: num
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const r = cli(process.argv.slice(2), process.env.UTS_REPO ?? process.cwd());
+  // 🔴 НЕ process.cwd(): саме він робив шлях залежним від того, звідки покликали.
+  // `cli(argv, repo)` і далі бере каталог аргументом, тож тести з власними tmp-каталогами
+  // не зачеплені — змінюється РІВНО вхід у CLI.
+  const r = cli(process.argv.slice(2), CANON_LOCK_DIR);
   console.log(r.out.join("\n"));
   process.exit(r.code);
 }

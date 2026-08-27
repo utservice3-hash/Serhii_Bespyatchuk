@@ -18,7 +18,7 @@ import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
-import { cli as lockCli } from "./checkoutLock.js";
+import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
 import { parseTap, judgeDelta } from "./testDelta.js";
 import { MANIFEST_TESTS, diffGates } from "../testManifest.js";
 import { testsAtRef } from "./gateCount.js";
@@ -180,12 +180,12 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   /** Замок бере САМ скрипт: памʼятка не механізм, а ручний дотик має лишатись дорожчим. */
   lockTake: (c) => {
     const who = process.env.UTS_ACTOR ?? "deploy:run";
-    const r = lockCli(["--take", `--who=${who}`, `--reason=викат ${c.target}`], c.docRoot);
+    const r = lockCli(["--take", `--who=${who}`, `--reason=викат ${c.target}`], CANON_LOCK_DIR);
     return { id: "lockTake", ok: r.code === 0, detail: r.out.join(" · ") };
   },
   lockRelease: (c) => {
     const who = process.env.UTS_ACTOR ?? "deploy:run";
-    const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], c.docRoot);
+    const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], CANON_LOCK_DIR);
     return { id: "lockRelease", ok: r.code === 0, detail: r.out.join(" · ") };
   },
   buildFresh: async (c) => {
