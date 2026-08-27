@@ -214,7 +214,19 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const v = verifyArtifact(a, c.target, live);
     return { id: "artifactFresh", ok: v.ok, detail: v.ok ? "артефакт свіжий за обома sha" : `🔴 ${v.reason}` };
   },
-  ff: (c) => run("ff", () => { sh("git", ["fetch", "origin", c.branch], c.docRoot); sh("git", ["merge", "--ff-only", c.target], c.docRoot); }, "перемотка докрута"),
+  /**
+   * 🔴 ТЯГНЕМО ВСІ РЕФИ, А НЕ ЛИШЕ ПРОД-ГІЛКУ — інакше цілі просто немає в докруті.
+   *
+   * 📐 Спіймано першим живим запуском фази run (27.08.2026): крок робив
+   * `git fetch origin <прод-гілка>`, а мерджив `c.target` — sha, що живе на ГІЛЦІ
+   * РОЗРОБКИ. Докрут такого обʼєкта не має, і `merge --ff-only` падає з
+   * «not something we can merge». Заміряно тоді ж: у докруті
+   * `origin/claude/git-log-review-872eh2` стояв на ace4d2a, тобто на два коміти позаду.
+   *
+   * Крок міг спрацювати лише тоді, коли ціль уже випадково досяжна — тобто фаза run
+   * ніколи не доходила до кінця. Повний `fetch` дешевий і нічого не змінює в дереві.
+   */
+  ff: (c) => run("ff", () => { sh("git", ["fetch", "origin"], c.docRoot); sh("git", ["merge", "--ff-only", c.target], c.docRoot); }, "перемотка докрута"),
 
   /**
    * 🔴 ДРУГА ПЕРЕВІРКА БАЗИ — ПІД ЗАМКОМ, БЕЗПОСЕРЕДНЬО ПЕРЕД ДОСТАВКОЮ.
