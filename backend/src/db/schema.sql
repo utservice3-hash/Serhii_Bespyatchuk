@@ -2227,6 +2227,53 @@ CREATE INDEX IF NOT EXISTS idx_deploy_intent_open
   ON deploy_intent(created_at DESC) WHERE consumed_at IS NULL;
 
 -- ═════════════════════════════════════════════════════════════════════════════
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 1×1 ДЛЯ КВП І АДМІНА + ЗНЯТТЯ МЕРТВИХ ПРАВ (рішення власника 27.08.2026)
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 🔴 СТОЇТЬ ПІСЛЯ ВСІХ ТРЬОХ СИНКІВ РОЛЕЙ (ceo/opdir · kvp · financier), і це не
+-- стиль, а УМОВА КОРЕКТНОСТІ. Ті рядки копіюють `permissions` адміна ЦІЛКОМ; якщо
+-- поставити видачу вище, то на ДРУГОМУ прогоні `npm run migrate` право розтечеться
+-- на фінансиста — тобто саме туди, куди власник його не давав.
+UPDATE roles SET permissions = permissions || '{"view_all_1x1":true}'::jsonb
+ WHERE key IN ('admin', 'kvp');
+UPDATE roles SET permissions = permissions || '{"edit_1x1_forms":true}'::jsonb
+ WHERE key = 'kvp';
+
+-- 🔴 ЗНЯТТЯ ОБОВʼЯЗКОВЕ — І САМЕ ТОМУ, ЩО ВИДАЧА ВИЩЕ ІДЕМПОТЕНТНА.
+-- З другого прогону admin уже має право, а синк фінансиста (вище за файлом) копіює
+-- набір адміна. Без цього рядка фінансист дістав би наскрізний перегляд 1×1 мовчки,
+-- на рівному місці, через міграцію — і жоден гейт не сказав би, коли це сталось.
+-- Той самий механізм, що вже описаний біля `merge_receivables`.
+UPDATE roles SET permissions = permissions - 'view_all_1x1' - 'edit_1x1_forms'
+ WHERE key IN ('financier', 'team_lead', 'manager');
+
+-- 🗑 МЕРТВІ ПРАВА: жоден роут їх не перевіряє (заміряно 27.08.2026, поіменно).
+-- Право, що нічого не стереже, гірше за відсутнє: воно є в списку, його видають
+-- людям, і воно створює враження контролю. `submit_plans`/`manage_goals` мали
+-- тімліди — людина могла вважати, що подання плану чимось обмежене.
+UPDATE roles SET permissions = permissions
+  - 'approve_plans' - 'submit_plans' - 'manage_goals' - 'enter_manual_stats' - 'export';
+
+-- ✍️ СЛІД У ЖУРНАЛІ. Міграція — єдиний шлях, що обходить API, тож автора треба
+-- назвати руками: зміна прав без автора це рівно те, що ми лікуємо в `db/audit.ts`.
+-- `NOT EXISTS` робить вставку ідемпотентною.
+INSERT INTO access_audit (actor_user_id, actor_email, action, target_type, target_id, target_label, details)
+SELECT u.id, u.email, 'role.update', 'role', 'kvp,admin', '1×1: наскрізний перегляд + форми (КВП)',
+       '{"granted":{"kvp":["view_all_1x1","edit_1x1_forms"],"admin":["view_all_1x1"]},
+         "revoked_dead":["approve_plans","submit_plans","manage_goals","enter_manual_stats","export"],
+         "decided_by":"власник","date":"2026-08-27","via":"міграція schema.sql"}'::jsonb
+  FROM users u
+ WHERE u.email = 'utservice3@gmail.com'
+   AND NOT EXISTS (SELECT 1 FROM access_audit a
+                    WHERE a.action = 'role.update' AND a.target_id = 'kvp,admin');
+
+-- ⚠️ ВІДКАТ — ДЗЕРКАЛЬНА МІГРАЦІЯ, А НЕ `git revert`. Права житимуть у `roles` і
+-- після повернення коду; revert коду НЕ відкочує дані. Щоб відкотити, виконати:
+--   UPDATE roles SET permissions = permissions - 'view_all_1x1' WHERE key IN ('admin','kvp');
+--   UPDATE roles SET permissions = permissions - 'edit_1x1_forms' WHERE key = 'kvp';
+-- (мертві права назад не повертаємо — їх ніхто не читає)
+
 -- ПРИВІЛЕЇ РОЛЕЙ — ЗАВЖДИ В КІНЦІ ФАЙЛА.
 --
 -- 🔴 Чому саме тут. `GRANT/REVOKE ON <таблиця>` вимагає, щоб таблиця ВЖЕ існувала.

@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { provisionUsers, resetPassword, generatePassword } from "../db/userProvisioning.js";
 import { roleHasPerm, getRoleDef, refreshRoles, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
+import { validateGrant } from "../auth/permGrant.js";
 import { wouldOrphanAdmin, otherActiveAdminCount } from "../auth/adminGuard.js";
 import { writeAudit } from "../db/audit.js";
 
@@ -362,6 +363,15 @@ settingsRouter.get("/roles", async (req, res) => {
   res.json({ roles: r.rows });
 });
 
+/**
+ * Права, які актор МАЄ САМ — джерело живе (`roles`), не знімок у токені: інакше
+ * підвищення трималося б на свіжості JWT, а не на стані бази.
+ */
+function actorPerms(req: import("express").Request): string[] {
+  const def = getRoleDef(req.auth!.roleKey);
+  return def ? Object.keys(def.permissions).filter((k) => def.permissions[k] === true) : [];
+}
+
 function validRolePayload(b: Record<string, unknown>) {
   const dataScope = ["own", "team", "company"].includes(String(b.dataScope)) ? String(b.dataScope) : "own";
   const screen = (b.screenAccess && typeof b.screenAccess === "object") ? b.screenAccess : {};
@@ -379,10 +389,16 @@ settingsRouter.post("/roles", async (req, res) => {
   const clonedFrom = typeof req.body?.cloneFrom === "string" ? req.body.cloneFrom : null;
   const base = clonedFrom ? getRoleDef(clonedFrom) : null;
   const { dataScope, screen, perms } = validRolePayload(req.body ?? {});
+  // 🔴 СИТО НАКРИВАЄ І КЛОН. Клонування бере `base.permissions` цілком, тож без цієї
+  // перевірки адмін клонував би СЕО й діставав `view_all_1x1`/`write_off_debt` — тобто
+  // рівно ту саму ескалацію, лише в обхід поля `permissions`.
+  const wanted = base ? base.permissions : perms;
+  const v = validateGrant(wanted, actorPerms(req));
+  if (!v.ok) return res.status(v.status).json({ error: v.error });
   await pool.query(
     `INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions, cloned_from)
      VALUES ($1,$2,false,$3,$4,$5,$6)`,
-    [key, name, base ? base.dataScope : dataScope, JSON.stringify(base ? base.screenAccess : screen), JSON.stringify(base ? base.permissions : perms), clonedFrom]
+    [key, name, base ? base.dataScope : dataScope, JSON.stringify(base ? base.screenAccess : screen), JSON.stringify(v.perms), clonedFrom]
   );
   await refreshRoles();
   await writeAudit({ ...audit(req), action: clonedFrom ? "role.clone" : "role.create", targetType: "role", targetId: key, targetLabel: name, details: { clonedFrom } });
@@ -398,9 +414,11 @@ settingsRouter.put("/roles/:key", async (req, res) => {
   if (def.builtIn) return res.status(403).json({ error: "Вбудовану роль змінювати не можна" });
   const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim() : def.name;
   const { dataScope, screen, perms } = validRolePayload(req.body ?? {});
+  const v = validateGrant(perms, actorPerms(req));
+  if (!v.ok) return res.status(v.status).json({ error: v.error });
   await pool.query(
     `UPDATE roles SET name=$1, data_scope=$2, screen_access=$3, permissions=$4 WHERE key=$5`,
-    [name, dataScope, JSON.stringify(screen), JSON.stringify(perms), key]
+    [name, dataScope, JSON.stringify(screen), JSON.stringify(v.perms), key]
   );
   await refreshRoles();
   await writeAudit({ ...audit(req), action: "role.update", targetType: "role", targetId: key, targetLabel: name });

@@ -463,8 +463,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "GET", path: "/api/one-on-ones/forms/:type", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
+  // 🔴 КВП вийшов із deny 27.08.2026: власник дав йому `edit_1x1_forms` разом із
+  // наскрізним переглядом. АДМІН лишається в deny — рішення відкрило адміну ЛИШЕ
+  // перегляд (`view_all_1x1`), форми йому як не давали, так і не даємо.
+  //
+  // ⚠️ КВП саме ВИЙШОВ зі списку, а НЕ переїхав у `allow` — і це не дрібниця.
+  // Клас `deny-only` означає роут на ЗАПИС: проба дозволеної ролі створила б нову
+  // версію форми в бойовій базі. Тому дозволені ролі тут не перелічуються взагалі —
+  // так само, як ceo/opdir/hr, які право мають давно. Спіймав `#11b`, а не я.
   { method: "PUT", path: "/api/one-on-ones/forms/:type", cls: "deny-only",
-    allow: [], deny: ["admin", "kvp", "financier", "team_lead", "manager"] },
+    allow: [], deny: ["admin", "financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/one-on-ones/forms/:type/versions", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "GET", path: "/api/one-on-ones/meetings/:type/:managerId", cls: "GET",

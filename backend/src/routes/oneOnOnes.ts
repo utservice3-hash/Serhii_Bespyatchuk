@@ -3,6 +3,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { ONE_ON_ONE_TYPES, type OneOnOneType } from "../oneOnOne/catalog.js";
+import { viewDenied } from "../oneOnOne/visibility.js";
 import { parseEnpsRange, granularityFor, summarizeEnps, buildEnpsSeries } from "../oneOnOne/enps.js";
 
 /**
@@ -160,6 +161,8 @@ oneOnOnesRouter.get("/subjects", async (req, res) => {
 oneOnOnesRouter.get("/meetings/:type/:managerId", async (req, res) => {
   const type = req.params.type;
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
+  const deny = viewDenied(crossview(req.auth!), canConduct(req.auth!, type));
+  if (deny) return res.status(403).json({ error: deny });
   const managerId = Number(req.params.managerId);
   const months = Math.min(36, Math.max(1, Number(req.query.months) || 12));
   const p: unknown[] = [managerId, type];
@@ -381,6 +384,8 @@ oneOnOnesRouter.post("/task/:id/review", async (req, res) => {
 oneOnOnesRouter.get("/stats/scores", async (req, res) => {
   const type = String(req.query.type || "A");
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
+  const deny = viewDenied(crossview(req.auth!), canConduct(req.auth!, type));
+  if (deny) return res.status(403).json({ error: deny });
   const months = Math.min(24, Math.max(1, Number(req.query.months) || 6));
   const vs = viewScope(req.auth!, "o");
   const params: unknown[] = [type];
@@ -415,6 +420,9 @@ oneOnOnesRouter.get("/stats/scores", async (req, res) => {
 oneOnOnesRouter.get("/enps", async (req, res) => {
   const range = parseEnpsRange(req.query, kyivToday());
   if ("error" in range) return res.status(400).json({ error: range.error });
+  // eNPS рахується ЛИШЕ по типу V — тож і право питаємо саме про нього.
+  const deny = viewDenied(crossview(req.auth!), canConduct(req.auth!, "V"));
+  if (deny) return res.status(403).json({ error: deny });
   const vs = viewScope(req.auth!, "o");
   const params: unknown[] = [];
   let vsFrag = vs.frag;
