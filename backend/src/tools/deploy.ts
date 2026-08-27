@@ -19,6 +19,11 @@ import {
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli } from "./checkoutLock.js";
+import { parseTap, judgeDelta } from "./testDelta.js";
+import { MANIFEST_TESTS, diffGates } from "../testManifest.js";
+import { testsAtRef } from "./gateCount.js";
+import { rmSync, symlinkSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 export const ARTIFACT_PATH = "/tmp/uts-deploy-check.json";
 const HEALTH = "https://dashboard.uts.ua/api/health";
@@ -82,7 +87,58 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   },
   buildBack: (c) => run("buildBack", () => { sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
   tscFront: (c) => run("tscFront", () => sh("npx", ["tsc", "-b"], c.fe), "tsc -b фронту (НЕ --noEmit: він там нічого не перевіряє)"),
-  test: (c) => run("test", () => sh("npm", ["test"], c.be), "npm test"),
+  /**
+   * 🔴 КРИТЕРІЙ — ПРИРІСТ, А НЕ КОД 0. Розгорнуто в `testDelta.ts`; тут — механіка
+   * двох прогонів. Ціна заміряна: +78 с (worktree+збірка 12.4 с, прогін бази 65.8 с).
+   */
+  test: (c) => {
+    let base = "";
+    try {
+      // 🔗 База — worktree на sha з health.version У МОМЕНТ ДІЇ (`c.prod`), не з памʼяті.
+      base = mkdtempSync(`${tmpdir()}/deploy-base-`);
+      rmSync(base, { recursive: true, force: true });
+      sh("git", ["worktree", "add", "-f", base, c.prod, "-q"], c.repo);
+
+      // 🔴 СИМЛІНК node_modules — ЛИШЕ ПОКИ ЛОК-ФАЙЛИ ЗБІГАЮТЬСЯ. Розійшлись —
+      // кажемо це ВГОЛОС і зупиняємось: тихий `npm ci` на 3 хв мовчки змінив би
+      // те, що ми міряємо, а тиха збірка чужими залежностями зробила б порівняння
+      // безглуздим при бездоганному вигляді.
+      const lockBase = sh("git", ["show", `${c.prod}:backend/package-lock.json`], c.repo);
+      const lockTree = readFileSync(`${c.be}/package-lock.json`, "utf8");
+      if (lockBase.trim() !== lockTree.trim()) {
+        return { id: "test", ok: false, detail:
+          `🔴 package-lock.json бази (${c.prod}) і дерева РІЗНІ — порівнювати прогони не можна: `
+          + "залежності відрізняються, і різниця падінь скаже не про твій діф. "
+          + "Постав залежності бази явно (npm ci у worktree) і повтори." };
+      }
+      symlinkSync(`${c.be}/node_modules`, `${base}/backend/node_modules`);
+
+      const beBase = `${base}/backend`;
+      sh("rm", ["-rf", "dist"], beBase);
+      sh("npm", ["run", "build"], beBase);
+
+      // ⚠️ `npm test` віддає ненульовий код за будь-якого падіння — це НОРМА тут,
+      // тож вивід ЛОВИМО, а не даємо йому обірвати крок.
+      const runTests = (cwd: string): string => {
+        try { return sh("npm", ["test"], cwd); }
+        catch (e) { return String((e as { stdout?: string }).stdout ?? ""); }
+      };
+      const baseTap = parseTap(runTests(beBase));
+      const treeTap = parseTap(runTests(c.be));
+      if (baseTap.length === 0 || treeTap.length === 0) {
+        return { id: "test", ok: false, detail:
+          `🔴 порожній TAP (база ${baseTap.length}, дерево ${treeTap.length}) — прогін не відбувся. `
+          + "Порожній результат = провал, а не «падінь немає»." };
+      }
+      const lost = diffGates(testsAtRef(c.prod), MANIFEST_TESTS).onlyBefore;
+      const d = judgeDelta(baseTap, treeTap, lost);
+      return { id: "test", ok: d.ok, detail: d.lines.join("\n   ") };
+    } catch (e) {
+      return { id: "test", ok: false, detail: `🔴 приріст не порахований: ${String((e as Error).message).slice(0, 300)}` };
+    } finally {
+      if (base) { try { sh("git", ["worktree", "remove", "--force", base], c.repo); } catch { /* прибирання не сміє маскувати причину */ } }
+    }
+  },
   recount: (c) => run("recount", () => sh("git", ["rev-parse", c.prod], c.repo), `перерахунок проти ${c.prod}`),
   artifact: (c) => {
     const art: Artifact = { branchSha: sh("git", ["rev-parse", "--short", "HEAD"], c.repo), prodSha: c.prod, mode: c.mode, at: c.now };
