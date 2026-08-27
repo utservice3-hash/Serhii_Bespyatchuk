@@ -45,9 +45,14 @@ test("#230c ДЗЕРКАЛО: право, яке актор МАЄ, проход
 });
 
 test("#230d каталог ПОКРИВАЄ всі ключі, що є в roles (напрямок: БД ⊆ каталог)", async (t) => {
-  if (!process.env.DATABASE_URL) return t.skip("немає DATABASE_URL — перевірка проти живих ролей неможлива");
-  const { pool } = await import("../db/pool.js");
-  const rows = (await pool.query<{ permissions: Record<string, unknown> }>("SELECT permissions FROM roles")).rows;
+  // ⚠️ Скіп через try/catch, а не через перевірку однієї змінної: `db/pool.js` тягне
+  // `config.js`, який кидає ще НА ІМПОРТІ на будь-якій відсутній змінній (не лише
+  // DATABASE_URL — спіймано на JWT_SECRET у чистому контейнері). Перевірка одного
+  // імені дала б не скіп, а падіння з причиною, що не пояснює нічого.
+  let pool: { query: (q: string) => Promise<{ rows: { permissions: Record<string, unknown> }[] }> };
+  try { ({ pool } = await import("../db/pool.js") as never); }
+  catch (e) { return t.skip(`немає оточення БД: ${(e as Error).message}`); }
+  const rows = (await pool.query("SELECT permissions FROM roles")).rows;
   const keys = rows.flatMap((r) => Object.keys(r.permissions ?? {}));
   assert.ok(keys.length > 0, "🔴 у roles жодного права — перевіряти нема чого, це провал, а не успіх");
   assert.deepEqual(
