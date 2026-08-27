@@ -1,7 +1,7 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
-  saveReceivableNote, saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
+  saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
   fetchManagerOptions, type ManagerOption,
   type ReceivableInvoice, type ReceivableManager, type ReceivableClient, type ReceivableTotals, type Team,
 } from "../../../api";
@@ -20,7 +20,7 @@ import { MergeDialog } from "./MergeDialog";
 import {
   carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
   isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
-  formatDateSafe, parseDateSafe,
+  formatDateSafe, parseDateSafe, agreementLine, AGREEMENT_EMPTY_LABEL,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters,
   amountLimitHint, amountLimitLabel, amountLimitState, isOverAmount,
   marginHint, marginPctText,
@@ -31,6 +31,7 @@ import {
 import { formatAmount, formatAmountFull } from "../format";
 import { teamOptions } from "../teamColors";
 import { CommentField } from "../../../components/CommentField";
+import { AgreementEditor } from "./AgreementEditor";
 
 /**
  * 👤 ВІДПОВІДАЛЬНИЙ + ЧОМУ САМЕ ВІН.
@@ -355,6 +356,11 @@ export function ReceivablesSection({
                   onChange={(e) => patchInvoice(clientKey, no, { dueDate: e.target.value || null })}
                   style={{ ...inputStyle, ...(overdue ? { borderColor: "#dc2626" } : {}) }} />
               </td>
+              {/* 💰 Ліміт суми → у рахунка аналога НЕМАЄ: ліміт задається
+                  ПОКЛІЄНТНО, а не по рахунку. Клітинка порожня свідомо —
+                  підставити сюди клієнтський ліміт означало б повторити одне
+                  число в сорока рядках, ніби воно про кожен рахунок окремо. */}
+              <td style={cell} aria-hidden="true" />
               {/* Домовленість → коментар до рахунка */}
               <td style={{ ...cell, minWidth: 180 }}>
                 <CommentField value={x.comment} editable={canEditReceivables}
@@ -407,7 +413,7 @@ export function ReceivablesSection({
           <td className="recv-num" style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
             {formatAmount(eTotal)}
           </td>
-          <td colSpan={4} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
+          <td colSpan={5} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
         </tr>
       </>
     );
@@ -434,6 +440,8 @@ export function ReceivablesSection({
   // ✏️ Хто зараз редагується (ключ клієнта) і чи відкритий діалог склейки.
   const [ownerFor, setOwnerFor] = useState<string | null>(null);
   const [limitFor, setLimitFor] = useState<string | null>(null);
+  /** Який клієнт зараз редагує домовленість — редактор переїхав у поповер (прохід B). */
+  const [agreeFor, setAgreeFor] = useState<string | null>(null);
   const [limitReqFor, setLimitReqFor] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mgrOptions, setMgrOptions] = useState<ManagerOption[]>([]);
@@ -577,17 +585,27 @@ export function ReceivablesSection({
                       <Hint title="Скільки днів найстаріший рахунок лишається неоплаченим"
                         body="Червоне — вже понад узгоджений ліміт відстрочки." />
                     </th>
-                    <th style={{ textAlign: "center", width: 104 }}>
-                      Ліміт
+                    <th style={{ textAlign: "center", width: 138 }}>
+                      Ліміт днів
                       <Hint title="Скільки днів відстрочки ми дали цьому клієнту"
                         body="«Не узгоджено» означає, що рахунок виставили, а відстрочку не погодили — таких клієнтів ми не кредитуємо. Це НЕ те саме, що «розглянули і не дали»: різницю видно в підказці самого значення." />
+                    </th>
+                    {/* 💰 ЛІМІТ СУМИ — ВЛАСНА КОЛОНКА (макет v6, прохід B).
+                        Він жив ДРУГИМ РЯДКОМ під сумою боргу — і саме тому
+                        клітинка боргу міряла 150px там, де даних на 18. Два
+                        незалежні ліміти стоять поруч, кожен зі своїм олівцем:
+                        клієнт може порушити один, обидва або жоден. */}
+                    <th style={{ textAlign: "center", width: 143 }}>
+                      Ліміт суми
+                      <Hint title="Більше якої суми ми не даємо клієнту заходити в борг"
+                        body="База — загальний борг за виставленими рахунками. Перевищення НІЧОГО не блокує: воно просто видно. «Не задано» і «відмова · 0 ₴» — різні стани й різні рішення." />
                     </th>
                     {/* 🗓 «Обіцяна дата» і «Домовленість» злиті: це одна думка,
                         а займала два стовпці (макет v5). */}
                     <th style={{ textAlign: "left", width: 220 }}>
                       Домовленість
                       <Hint title="Дата й суть домовленості з клієнтом"
-                        body="Поле показує лише запис ПОТОЧНОГО тижня (від понеділка 00:00 за Києвом), щоб торішня обіцянка не читалась як сьогоднішня. Нічого не видаляється — попередні записи під полем, кнопка «історія»." />
+                        body="Показано лише запис ПОТОЧНОГО тижня (від понеділка 00:00 за Києвом), щоб торішня обіцянка не читалась як сьогоднішня. Натисніть на рядок, щоб змінити; нічого не видаляється — попередні записи в «історії»." />
                     </th>
                     <th className="recv-act" aria-label="дії" />
                   </tr>
@@ -601,12 +619,17 @@ export function ReceivablesSection({
                     // 🗓 Активним є ЛИШЕ запис поточного тижня. Нічого не
                     // затирається — змінюється те, що вважається актуальним.
                     const noteNow = activeNote(c.comment, c.noteUpdatedAt ?? null, now);
+                    // 🔴 РЯДОК І ПОПОВЕР БЕРУТЬ ОДНЕ Й ТЕ САМЕ `noteNow`. Якби
+                    // згорнутий рядок читав `c.comment`, а редактор — звужений
+                    // запис (чи навпаки), людина бачила б торішню обіцянку й
+                    // правила б цьоготижневу. Тижнева межа лишається однією.
+                    const agree = agreementLine(c.dueDate ?? null, noteNow);
                     return (
                       /* 🛡 МЕЖА НА РІВНІ РЯДКА (26.08.2026). Одна нерозбірна дата
                          вбила всю секцію — 75 справних рядків загинули з одним.
                          Межа не ховає дефект: вона називає клієнта й лишає решту
                          таблиці живою. Другий рубіж, а не заміна сторожам. */
-                      <RowBoundary key={`${c.clientKey}-${i}`} label={c.clientName} cols={11}>
+                      <RowBoundary key={`${c.clientKey}-${i}`} label={c.clientName} cols={12}>
                         {/* 🖱 Клікабельний увесь рядок; клік по полю всередині НЕ
                             згортає — інакше кожен дотик до input/textarea закривав
                             би клієнта просто в момент редагування. */}
@@ -628,7 +651,9 @@ export function ReceivablesSection({
                           <td style={{ textAlign: "left", verticalAlign: "middle" }}>
                             <span style={{ fontWeight: 600 }}>
                               <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)", marginRight: 4 }}>{caret(c.clientKey)}</span>
-                              {c.clientName}
+                              {/* 📐 ОБРІЗАННЯ НА 170px (макет v6.1). Повна назва —
+                                  у `title`: обрізання не має ховати зміст. */}
+                              <span className="recv-cname" title={c.clientName}>{c.clientName}</span>
                             </span>
                             {badges.length > 0 && (
                               <span style={{ display: "block", marginTop: 2 }}>
@@ -716,16 +741,6 @@ export function ReceivablesSection({
                                   className="recv-ico" style={{ minHeight: 24 }}>🧾</button>
                               )}
                             </span>
-                            {/* 🔴 ТРИ СТАНИ, А НЕ ДВА. Колонка нова, тож у момент викату
-                                вона порожня в УСІХ: пара «в межах / переліміт» збрехала б
-                                78 разів поспіль, бо `null` перетворився б на нуль.
-                                Ліміт суми й ліміт днів НЕЗАЛЕЖНІ — тут лише про суму. */}
-                            <Tip body={amountLimitHint(c.limitAmount)}
-                              style={{ display: "block", fontWeight: 400, fontSize: "var(--fs-xs)",
-                                       color: isOverAmount(c) ? "#dc2626"
-                                            : amountLimitState(c.limitAmount) === "agreed" ? "var(--text-muted)" : "var(--warn)" }}>
-                              {isOverAmount(c) ? "переліміт" : "у межах"} · {amountLimitLabel(c.limitAmount)}
-                            </Tip>
                             {/* 🧾 Кнопку бачить лише той, хто може поставити задачу ІНШОМУ.
                                 Право віддає СЕРВЕР (`canRequestLimit`), і він же гейтить
                                 роут: схована кнопка правом не є. Сама кнопка — вище,
@@ -783,28 +798,72 @@ export function ReceivablesSection({
                             )}
                           </td>
 
-                          {/* 🗓 «Обіцяна дата» і «Домовленість» — ОДНА колонка: це
-                              одна думка, а займала два стовпці. Дата стоїть
-                              підписом НАД полем. Поле показує лише запис
-                              ПОТОЧНОГО тижня; історія не гине — вона під полем. */}
-                          <td style={{ textAlign: "left", verticalAlign: "middle", minWidth: 210 }}>
-                            <span style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
-                              {c.dueDate ? `обіцяли ${formatDateSafe(c.dueDate)}` : "дати немає"}
-                            </span>
-                            {canEditReceivables ? (
-                              <input type="date" value={c.dueDate ?? ""}
-                                aria-label={`Обіцяна дата ${c.clientName}`}
-                                onChange={(e) => patchReceivableNote(c.clientKey, { dueDate: e.target.value || null })}
-                                onBlur={(e) => saveReceivableNote({ clientKey: c.clientKey, dueDate: e.target.value || null, comment: c.comment })}
-                                style={{ ...inputStyle, marginBottom: 3 }} />
-                            ) : null}
-                            <CommentField
-                              value={noteNow || null}
-                              placeholder={NOTE_EMPTY_PLACEHOLDER}
-                              editable={canEditReceivables}
-                              onSave={(next) => { patchReceivableNote(c.clientKey, { comment: next }); saveReceivableNote({ clientKey: c.clientKey, comment: next, dueDate: c.dueDate }); }}
-                            />
-                            {(c.noteHistoryCount ?? 0) > 0 && (
+                          {/* 💰 ЛІМІТ СУМИ — ТРИ СТАНИ, А НЕ ДВА, і колонка своя.
+                              Пара «в межах / переліміт» збрехала б там, де ліміту
+                              просто не ставили: `null` перетворився б на нуль.
+                              🔴 Редактор ОДИН на обидва ліміти (рядок у БД один на
+                              клієнта), тож олівець відкриває той самий `LimitEditor`
+                              — сам поповер живе в сусідній клітинці, і другого тут
+                              немає навмисно: два екземпляри одного редактора
+                              розійшлися б станом. */}
+                          <td className="recv-num"
+                              style={{ textAlign: "center", verticalAlign: "middle",
+                                       fontSize: "var(--fs-xs)",
+                                       color: isOverAmount(c) ? "#dc2626"
+                                            : amountLimitState(c.limitAmount) === "agreed" ? "var(--text-muted)" : "var(--warn)" }}>
+                            <div className="recv-limitcell">
+                              <span className="recv-limitval">
+                                <Tip body={amountLimitHint(c.limitAmount)}>
+                                  {amountLimitLabel(c.limitAmount)}
+                                  {amountLimitState(c.limitAmount) === "agreed" && (
+                                    <span style={{ display: "block", color: isOverAmount(c) ? "#dc2626" : "var(--text-muted)" }}>
+                                      {isOverAmount(c) ? "переліміт" : "у межах"}
+                                    </span>
+                                  )}
+                                </Tip>
+                              </span>
+                              {canSetLimit && (
+                                <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
+                                  title="Змінити ліміт суми" aria-label="Змінити ліміт суми"
+                                  className="recv-ico">✏️</button>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* 🗓 «Обіцяна дата» і «Домовленість» — ОДНА колонка, і
+                              з проходу B вона згорнута в ОДИН рядок: дата, початок
+                              коментаря, «історія · N». Заміряно, чому: три контроли
+                              в рядку давали 117px клітинки при 18px даних і тримали
+                              ритм УСІЄЇ таблиці. Редагування переїхало в поповер;
+                              показується й далі лише запис ПОТОЧНОГО тижня. */}
+                          <td style={{ textAlign: "left", verticalAlign: "middle", position: "relative" }}>
+                            <div className="recv-agree">
+                              {/* 🔴 УСЯ ДІЛЯНКА «ДАТА + КОМЕНТАР» — ОДНА КНОПКА
+                                  (макет v6.1). Окремий олівець зʼїдав 38px і лишав
+                                  тексту 12px — один символ і трикрапка, тобто
+                                  колонка була, а прочитати в ній було нічого.
+                                  Повний текст іде в `title`: обрізання не має
+                                  ховати зміст.
+                                  ⚠️ Кнопка є і для того, хто редагувати НЕ може —
+                                  вона тоді просто не відкриває редактор. Ховати її
+                                  означало б, що менеджер без права не бачить навіть
+                                  того, про що домовились: право керує ДІЄЮ, а не
+                                  видимістю факту. */}
+                              <button type="button" className="recv-agree-open"
+                                title={agree.tip}
+                                aria-label={`Домовленість: ${c.clientName}`}
+                                disabled={!canEditReceivables}
+                                onClick={() => setAgreeFor(agreeFor === c.clientKey ? null : c.clientKey)}>
+                                {agree.empty ? (
+                                  <span className="recv-agree-empty">{AGREEMENT_EMPTY_LABEL}</span>
+                                ) : (
+                                  <>
+                                    <span className="recv-agree-date recv-num">{agree.dateText || "—"}</span>
+                                    <span className="recv-agree-text">{agree.text || NOTE_EMPTY_PLACEHOLDER}</span>
+                                  </>
+                                )}
+                              </button>
+                              {(c.noteHistoryCount ?? 0) > 0 && (
                               /* 🔴 ЗОНА НАТИСКАННЯ ≥32×32 (вимога власника 26.08.2026).
                                  Заміряно в браузері ДО правки: 56×17 — удвічі нижче
                                  порога, тобто в неї треба цілитись. Розмір бачить
@@ -819,10 +878,17 @@ export function ReceivablesSection({
                                 style={{ background: "none", border: "none", cursor: "pointer",
                                          font: "inherit", fontSize: "var(--fs-xs)", color: "var(--info, #1d4ed8)",
                                          textDecoration: "underline dotted",
-                                         minWidth: 32, minHeight: 32, padding: "8px 6px",
+                                         minWidth: 32, minHeight: 32, padding: "8px 6px", flex: "0 0 auto",
                                          display: "inline-flex", alignItems: "center" }}>
                                 історія · {c.noteHistoryCount}
                               </button>
+                              )}
+                            </div>
+                            {agreeFor === c.clientKey && (
+                              <AgreementEditor client={c} note={noteNow}
+                                onPatch={(patch) => patchReceivableNote(c.clientKey, patch)}
+                                onClose={() => setAgreeFor(null)}
+                                onDone={() => { setAgreeFor(null); onRefresh?.(); }} />
                             )}
                           </td>
 
@@ -850,7 +916,7 @@ export function ReceivablesSection({
                             )}
                           </td>
                         </tr>
-                        {renderInvoices(c.clientKey, c.clientName, 11)}
+                        {renderInvoices(c.clientKey, c.clientName, 12)}
                       </RowBoundary>
                     );
                   })}

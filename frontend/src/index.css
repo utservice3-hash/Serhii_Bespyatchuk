@@ -977,6 +977,88 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
    розтягувалась на всю ширину й читалась як окремий блок.
    `auto-fit` тут не «гнучкіший», він НЕДЕТЕРМІНОВАНИЙ: результат залежить від
    заокруглень контейнера, тож те саме число плиток дає різну сітку. */
+
+/* ═══════════ СТРУКТУРА ЗА МАКЕТОМ v6.1 (прохід B, 27.08.2026) ═══════════════
+   Прохід A прибрав те, що стрибало; B прибирає те, що ТРИМАЛО ВИСОТУ. Заміряно
+   на живому проді до нього: рядок клієнта **117..156px** при даних на 18px, на
+   екран @1600 влазило **0** боржників із 78, сторінка **11 790px**. Ритм задавала
+   ОДНА клітинка — «Домовленість» із трьома контролами всередині
+   (`span 16 + input 27 + CommentField 42 + button 32 = 117`).
+   Цільове число макета — **48..48** (46 + підлога кнопок 32×32, яку власник
+   вимагав 26.08 і яка додає 2px). */
+
+/* 🔴 ВИСОТА — НА КЛІТИНКАХ РЯДКА КЛІЄНТА, А НЕ НА `tr`.
+   `height` на `tr` браузер трактує як побажання й ігнорує, щойно вміст вищий;
+   на `td` воно працює як ПІДЛОГА, тобто рядок не може стати нижчим, але й не
+   росте на порожньому місці. Скоуповано `tr.recv-row` навмисно: рядки рахунків
+   мають власний ритм (38px за макетом), і спільне правило звело б їх докупи. */
+.recv-table tbody > tr.recv-row > td {
+  height: 48px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  /* 🔴 БЕЗ `nowrap` ПІДЛОГА НІЧОГО НЕ ГАРАНТУЄ: довга назва клієнта або текст
+     домовленості переносяться на другий рядок, і 48 стає 72. Обрізання разом
+     із `title` (див. `.recv-cname`, `.recv-agree-text`) — це те, що робить
+     заборону переносу чесною: зміст не зникає, він переїжджає в підказку. */
+  white-space: nowrap;
+}
+
+/* 📐 НАЗВА КЛІЄНТА ОБРІЗАЄТЬСЯ НА 170px (макет v6.1; у v6 було 190 — звузилось
+   разом із рештою колонок). Повний текст у `title` рядка. */
+.recv-cname {
+  display: inline-block;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+/* 🗓 ДОМОВЛЕНІСТЬ — ОДИН РЯДОК, І ВІДКРИВАЄ ЙОГО ВСЯ ДІЛЯНКА.
+   🔴 Чому не окремий олівець, як у лімітів. Заміряно на макеті: після того, як
+   кнопки дістали підлогу 32×32, олівець зʼїдав 38px, і тексту коментаря
+   лишалось **12px** — один символ і трикрапка. Тобто колонка була, а прочитати
+   в ній було нічого. Кнопкою стала сама ділянка «дата + текст»; коментар
+   отримав 69px, а повний текст — підказку при наведенні. */
+.recv-agree {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 232px;
+  max-width: 240px;
+}
+.recv-agree-open {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 0 4px;
+  margin: 0;
+  text-align: left;
+  min-height: 32px;
+  border-radius: var(--r-sm, 4px);
+  font-size: var(--fs-13);
+  color: inherit;
+  cursor: pointer;
+}
+.recv-agree-open:hover { background: var(--surface-3, rgba(127, 127, 127, 0.1)); }
+/* Той, хто редагувати не може, ділянку БАЧИТЬ — вона просто не натискна.
+   Право керує дією, а не видимістю факту, про який домовились. */
+.recv-agree-open:disabled { cursor: default; }
+.recv-agree-open:disabled:hover { background: none; }
+.recv-agree-date { font-weight: 600; flex: 0 0 auto; }
+.recv-agree-text {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.recv-agree-empty { color: var(--text-muted); font-style: italic; }
+
 .recv-kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 @media (max-width: 1500px) { .recv-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 860px)  { .recv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
