@@ -3099,3 +3099,105 @@ test("#199bl2 рядок і поповер беруть ОДИН вираз до
   assert.doesNotThrow(() => line("не-дата", "текст"), "🔴 agreementLine кидає на нерозбірній даті");
   assert.equal(line("не-дата", "текст").empty, false, "🔴 нерозбірна дата зʼїла разом із собою коментар");
 });
+
+/* ═════════ ПРОХІД B · СОРТУВАННЯ (окремий коміт, рішення власника) ══════════
+   Вимога власника дослівно: «хочу тиснути на суму, к-сть днів і бачити зверху
+   більше, а знизу найменше». Три пастки нижче ламали б це ТИХО — числа лишились
+   би правильними, а помітив би лише той, хто дивиться на порядок рядків. */
+
+test("#199ca сортування: три пастки — рахунки за клієнтом, «—» у кінці, стабільність", async () => {
+  const V = (await import(FE_SPEC("pages/dashboard/receivablesView.ts"))) as {
+    sortClients: <T extends { amount: number; overdueDays: number | null }>(
+      rows: readonly T[], s: { key: "amount" | "days"; dir: "desc" | "asc" }) => T[];
+    nextSort: (c: { key: string; dir: string }, k: string) => { key: string; dir: string };
+    sortMark: (c: { key: string; dir: string }, k: string) => string;
+    ariaSort: (c: { key: string; dir: string }, k: string) => string;
+    DEFAULT_SORT: { key: string; dir: string };
+  };
+  type R = { id: string; amount: number; overdueDays: number | null };
+  const rows: R[] = [
+    { id: "a", amount: 300, overdueDays: 10 },
+    { id: "b", amount: 100, overdueDays: null },
+    { id: "c", amount: 200, overdueDays: 90 },
+    { id: "d", amount: 200, overdueDays: null },
+    { id: "e", amount: 50, overdueDays: 0 },
+  ];
+  const ids = (s: { key: "amount" | "days"; dir: "desc" | "asc" }) =>
+    V.sortClients(rows, s).map((r) => r.id).join("");
+
+  // ── ПАСТКА 2: «—» НЕ Є НУЛЕМ. Окрема група В КІНЕЦЬ в ОБИДВА боки.
+  const desc = V.sortClients(rows, { key: "days", dir: "desc" });
+  const asc = V.sortClients(rows, { key: "days", dir: "asc" });
+  for (const [name, out] of [["спадне", desc], ["зростаюче", asc]] as const) {
+    const tail = out.slice(-2).map((r) => r.id).sort().join("");
+    assert.equal(tail, "bd", `🔴 ${name}: «—» не в кінці — «не знаємо» злиплось із «нуль днів»`);
+    assert.ok(out[out.length - 1].overdueDays == null && out[out.length - 2].overdueDays == null,
+      `🔴 ${name}: порожні розкидані по списку`);
+  }
+  // І дзеркало: 0 днів — НЕ порожнеча, він лишається серед чисел.
+  assert.ok(asc[0].id === "e", "🔴 нуль днів утік у групу «не знаємо» — це різні відповіді");
+  assert.equal(ids({ key: "days", dir: "desc" }).slice(0, 2), "ca",
+    "🔴 спадне за днями дало не найбільші зверху");
+
+  // ── ПАСТКА 3: СТАБІЛЬНІСТЬ. Рівні значення лишаються у вхідному порядку —
+  //    і обидва порожні теж, інакше рядок стрибав би під курсором.
+  assert.equal(ids({ key: "amount", dir: "desc" }), "acdbe",
+    "🔴 рівні 200 переставились — сортування нестабільне, рядки стрибатимуть між перерендерами");
+  assert.equal(V.sortClients(rows, { key: "days", dir: "desc" }).filter((r) => r.overdueDays == null)
+    .map((r) => r.id).join(""), "bd", "🔴 порожні між собою переставились");
+  // Двічі поспіль — той самий результат (детермінізм, не «здалось»).
+  assert.equal(ids({ key: "amount", dir: "asc" }), ids({ key: "amount", dir: "asc" }));
+
+  // ── Дефолт дорівнює тому, що вже було на екрані: борг спадно.
+  assert.deepEqual(V.DEFAULT_SORT, { key: "amount", dir: "desc" },
+    "🔴 дефолт змінився — прохід мав дати КЕРУВАННЯ, а не інший порядок за замовчуванням");
+
+  // ── Перемикання: та сама колонка перевертає, інша бере зі СПАДНОГО.
+  assert.deepEqual(V.nextSort({ key: "amount", dir: "desc" }, "amount"), { key: "amount", dir: "asc" });
+  assert.deepEqual(V.nextSort({ key: "amount", dir: "asc" }, "amount"), { key: "amount", dir: "desc" });
+  assert.deepEqual(V.nextSort({ key: "amount", dir: "asc" }, "days"), { key: "days", dir: "desc" },
+    "🔴 нова колонка успадкувала напрям — власник просив «зверху більше» першим кліком");
+
+  // ── ВИДНО, ЗА ЧИМ І В ЯКИЙ БІК. Дві числові колонки без позначки не
+  //    відрізнити одну від одної — це не прикраса, а умова читаності.
+  assert.notEqual(V.sortMark({ key: "amount", dir: "desc" }, "amount"), "",
+    "🔴 активна колонка без позначки — сортування за днями не відрізнити від сортування за сумою");
+  assert.notEqual(V.sortMark({ key: "amount", dir: "desc" }, "amount"),
+                  V.sortMark({ key: "amount", dir: "asc" }, "amount"),
+    "🔴 обидва напрями позначені однаково");
+  assert.equal(V.sortMark({ key: "amount", dir: "desc" }, "days"), "",
+    "🔴 неактивна колонка теж позначена — позначені всі, отже не позначено жодну");
+  assert.equal(V.ariaSort({ key: "days", dir: "asc" }, "days"), "ascending");
+  assert.equal(V.ariaSort({ key: "days", dir: "asc" }, "amount"), "none");
+});
+
+test("#199cb сортуються КЛІЄНТИ, а заголовки — кнопки, не div", () => {
+  // 🔴 ПАСТКА 1, І ВОНА ПЕРЕВІРЯЄТЬСЯ В ДЖЕРЕЛІ, БО ЖИВЕ САМЕ ТАМ. Розкриття
+  // рендериться рядками ТІЄЇ САМОЇ таблиці — задум, щоб колонки збігались за
+  // побудовою. Наївне сортування плаского списку рядків відірвало б рахунки від
+  // клієнта й розкидало по таблиці. Тому сортується список КЛІЄНТІВ, а
+  // `renderInvoices` кличеться ВСЕРЕДИНІ `.map` по ньому.
+  const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
+  assert.match(sec, /const shown = sortClients\(all\.filter\(\(c\) => passesFilters\(c, filters\)\), sort\);/,
+    "🔴 сортується не список клієнтів — рахунки відірвуться від свого клієнта");
+  const rowStart = sec.indexOf("shown.map((c, i) => {");
+  assert.ok(rowStart > 0, "🔴 не знайдено `.map` по клієнтах");
+  const mapBody = sec.slice(rowStart, sec.indexOf("</table>", rowStart));
+  assert.ok(mapBody.includes("renderInvoices(c.clientKey"),
+    "🔴 розкриття малюється поза `.map` по клієнтах — рахунки більше не прив'язані до свого рядка");
+
+  // Заголовки — КНОПКИ. `div` з `onClick` довелось би вручну наділяти `role`,
+  // `tabIndex` і обробником Enter/Space, і саме там щось незмінно губиться.
+  for (const [label, key] of [["Сума боргу", "amount"], ["Днів", "days"]] as const) {
+    const re = new RegExp(`<button type="button" className="recv-sort"[\\s\\S]{0,200}nextSort\\(sort, "${key}"\\)`);
+    assert.match(sec, re, `🔴 «${label}» більше не кнопка сортування`);
+    const aria = new RegExp(`aria-sort=\\{ariaSort\\(sort, "${key}"\\)\\}`);
+    assert.match(sec, aria, `🔴 «${label}»: <th> без aria-sort — порядок видно, але не чути`);
+    const mark = new RegExp(`sortMark\\(sort, "${key}"\\)`);
+    assert.match(sec, mark, `🔴 «${label}»: у заголовку немає позначки напряму`);
+  }
+  // 🪞 І сортування НЕ розповзлось на решту колонок: власник просив дві.
+  const marks = (sec.match(/className="recv-sort"/g) ?? []).length;
+  assert.equal(marks, 2,
+    `🔴 кнопок сортування ${marks}, а рішення власника — рівно дві («Сума боргу» і «Днів»)`);
+});

@@ -1059,6 +1059,25 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
 }
 .recv-agree-empty { color: var(--text-muted); font-style: italic; }
 
+/* ↕️ ЗАГОЛОВОК, ЯКИЙ СОРТУЄ. Виглядає як заголовок, поводиться як кнопка:
+   успадковує шрифт і колір `<th>`, не має власного тла — інакше два числові
+   стовпці читались би як «щось інше», ніж решта шапки. Підсвітка при наведенні
+   каже, що він натискний, ДО того, як його натиснуть. */
+.recv-sort {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  margin: 0;
+  cursor: pointer;
+  border-radius: var(--r-sm, 4px);
+}
+.recv-sort:hover { color: var(--text); text-decoration: underline; }
+.recv-sort:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-offset: 2px; }
+
 .recv-kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 @media (max-width: 1500px) { .recv-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 860px)  { .recv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

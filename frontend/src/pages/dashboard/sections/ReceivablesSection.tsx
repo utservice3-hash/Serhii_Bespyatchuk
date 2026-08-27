@@ -21,6 +21,7 @@ import {
   carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
   isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
   formatDateSafe, parseDateSafe, agreementLine, AGREEMENT_EMPTY_LABEL,
+  sortClients, nextSort, sortMark, ariaSort, DEFAULT_SORT, type SortState,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters,
   amountLimitHint, amountLimitLabel, amountLimitState, isOverAmount,
   marginHint, marginPctText,
@@ -453,7 +454,12 @@ export function ReceivablesSection({
   }, [canSetOwner, mgrOptions.length]);
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const shown = all.filter((c) => passesFilters(c, filters));
+  /* ↕️ Дефолт дорівнює тому, що вже було на екрані (борг спадно) — будується
+     КЕРУВАННЯ, а не нова поведінка. Сортуються КЛІЄНТИ; рахунки малюються
+     одразу за своїм клієнтом (`renderInvoices` усередині `.map`), тож відірвати
+     їх від нього неможливо за побудовою. */
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+  const shown = sortClients(all.filter((c) => passesFilters(c, filters)), sort);
   const shownSum = shown.reduce((s, c) => s + c.amount, 0);
 
   return (
@@ -568,8 +574,18 @@ export function ReceivablesSection({
                       <Hint title="Чи розрахувались ми з перевізником по цих угодах"
                         body="«н/д» означає «не знаємо» — у CRM не заповнена форма оплати. Це НЕ те саме, що «не оплачено»: заміряно 1.6 млн ₴ рахунків, які показувались би фальшивою неоплатою." />
                     </th>
-                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 110 }}>
-                      Сума боргу
+                    {/* ↕️ ЗАГОЛОВОК — КНОПКА, А НЕ `div` З `onClick` (вимога).
+                        Кнопка приходить у Tab-обхід і жме з клавіатури сама;
+                        `div` довелось би вручну наділяти `role`, `tabIndex` і
+                        обробником `Enter`/`Space` — тобто відтворювати кнопку,
+                        і саме в цьому відтворенні щось незмінно губиться. */}
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 110 }}
+                        aria-sort={ariaSort(sort, "amount")}>
+                      <button type="button" className="recv-sort"
+                        onClick={() => setSort(nextSort(sort, "amount"))}
+                        title="Сортувати за сумою боргу">
+                        Сума боргу{sortMark(sort, "amount")}
+                      </button>
                       <Hint title="Скільки цей клієнт винен зараз"
                         body="Залишок за неоплаченими рахунками з 1С. Списані в архів сюди не входять." />
                     </th>
@@ -580,10 +596,15 @@ export function ReceivablesSection({
                       <Hint title="Наш заробіток по угодах цього клієнта"
                         body="Береться з поля «Бюджет» в угоді CRM — це не борг і не виручка. Відсоток — від суми рахунків, тобто від ПОВНОЇ суми угод, а не від залишку боргу: борг падає з кожною оплатою, і відношення до нього вибухає (заміряно максимум 6 667%)." />
                     </th>
-                    <th style={{ textAlign: "center", width: 70 }}>
-                      Днів
+                    <th style={{ textAlign: "center", width: 70 }}
+                        aria-sort={ariaSort(sort, "days")}>
+                      <button type="button" className="recv-sort"
+                        onClick={() => setSort(nextSort(sort, "days"))}
+                        title="Сортувати за днями без оплати">
+                        Днів{sortMark(sort, "days")}
+                      </button>
                       <Hint title="Скільки днів найстаріший рахунок лишається неоплаченим"
-                        body="Червоне — вже понад узгоджений ліміт відстрочки." />
+                        body="Червоне — вже понад узгоджений ліміт відстрочки. «—» означає «не знаємо» і при сортуванні йде В КІНЕЦЬ в обидва боки: це не нуль днів." />
                     </th>
                     <th style={{ textAlign: "center", width: 138 }}>
                       Ліміт днів
