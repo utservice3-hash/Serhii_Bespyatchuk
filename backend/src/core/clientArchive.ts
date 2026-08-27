@@ -1,4 +1,5 @@
 import { CLOSE_REASONS, CLOSE_REASON_KEYS } from "./reactivationRules.js";
+import { lastOrderCte } from "./clientOrder.js";
 
 /**
  * 🗄 АРХІВ КЛІЄНТА — ОДНА ДІЯ ЗАМІСТЬ `hidden` (рішення власника 05.08.2026).
@@ -56,12 +57,6 @@ export function archivedSql(lo = "lo", paid = "ap"): string {
  * коштував `/overview` 9.5 с.
  */
 export const LAST_PAID_CTE = `
-  arch_paid AS (
-    SELECT d.client_key, MAX(d.closed_at_kommo) AS last_paid
-      FROM deals d
-      JOIN pipeline_stage_map psm_ap ON psm_ap.pipeline_id = d.pipeline_id
-                                    AND psm_ap.status_id = d.status_id
-     WHERE psm_ap.funnel_stage = 'paid' AND d.client_key IS NOT NULL
-     GROUP BY d.client_key
-  )`;
+  ${lastOrderCte("arch_orders")},
+  arch_paid AS (SELECT client_key, last_order_at AS last_paid FROM arch_orders)`;
 export const LAST_PAID_JOIN = "LEFT JOIN arch_paid ap ON ap.client_key = a.client_key";

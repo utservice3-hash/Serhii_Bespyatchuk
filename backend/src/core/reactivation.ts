@@ -17,8 +17,9 @@ import { normalizeClientName } from "../utils/clientName.js";
 export * from "./reactivationRules.js";
 import { SLEEPING_DAYS, LOST_DAYS, valueScore, type ClientState,
          type ClientSegment } from "./reactivationRules.js";
-import { loadClientSegments, factsFor, keepInReactivation } from "./clientSegments.js";
+import { loadClientSegments, factsFor, inReactivationTab } from "./clientSegments.js";
 import { archivedSql, LAST_PAID_CTE, LAST_PAID_JOIN } from "./clientArchive.js";
+import { lastOrderCte, daysSinceOrderSql, PAID_DEAL_JOIN, PAID_DEAL_WHERE } from "./clientOrder.js";
 export type { ClientState, ClientSegment };
 void SLEEPING_DAYS; void LOST_DAYS;
 
@@ -194,16 +195,12 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
     `WITH ${LAST_PAID_CTE},
      paid AS (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
-         FROM deals d
-         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+         FROM deals d ${PAID_DEAL_JOIN}
+        WHERE ${PAID_DEAL_WHERE}
           AND NOT (d.client_key = ANY($1))
      ),
-     agg AS (
-       SELECT client_key, COUNT(*)::int AS orders, COALESCE(SUM(price),0) AS revenue,
-              MAX(closed_at_kommo) AS last_paid
-         FROM paid GROUP BY client_key HAVING COUNT(*) >= 2
-     ),
+     ${lastOrderCte("agg_raw", { extraWhere: "AND NOT (d.client_key = ANY($1))", having: "HAVING COUNT(*) >= 2" })},
+     agg AS (SELECT client_key, orders, revenue, last_order_at AS last_paid FROM agg_raw),
      per_cm AS (SELECT client_key, manager_id, COUNT(*) AS n, MAX(closed_at_kommo) AS mx FROM paid GROUP BY 1,2),
      primary_mgr AS (SELECT DISTINCT ON (client_key) client_key, manager_id FROM per_cm ORDER BY client_key, n DESC, mx DESC),
      tasks_in AS (
@@ -211,7 +208,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
      )
      SELECT a.client_key, nm.client_name, a.orders, a.revenue,
             to_char(a.last_paid ${KYIV}, 'YYYY-MM-DD') AS last_paid,
-            GREATEST(0, (CURRENT_DATE - (a.last_paid ${KYIV})::date))::int AS days_since,
+            GREATEST(0, ${daysSinceOrderSql("a.last_paid")})::int AS days_since,
             COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id, mm.name AS manager_name,
             mm.team_id, tm.name AS team_name,
             lo.pinned_manager_id, lo.seasonal, lo.seasonal_note,
@@ -276,10 +273,7 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
   // 05.08.2026): реактивувати того, хто ніколи не був постійним, нема сенсу —
   // це не повернення клієнта, а холодний дзвінок. Скільки їх — каже екран планів
   // (`totals.oneOff`), щоб число не зникло мовчки.
-  return rows.filter((r) => {
-    const f = factsFor(seg, r.client_key);
-    return f.qualified && keepInReactivation(f);
-  }).map((r) => {
+  return rows.filter((r) => inReactivationTab(factsFor(seg, r.client_key))).map((r) => {
     const tk = taskMap.get(r.client_key);
     const f = factsFor(seg, r.client_key);
     const days = Number(r.days_since);

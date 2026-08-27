@@ -2,8 +2,12 @@ import { pool } from "../db/pool.js";
 import { GENERIC_CLIENT_KEYS } from "./metrics.js";
 import {
   segmentOf, stateOf, payModeOf, qualifiesAsRepeat, LONG_LAPSED_DAYS,
+  inReactivationTab, keepInReactivation,
   type ClientSegment, type ClientState, type ClientPayMode,
 } from "./reactivationRules.js";
+// Обидва предикати вкладок живуть у ЧИСТОМУ модулі правил (він не тягне `db/pool`),
+// а сюди лише ре-експортуються — щоб виклики лишились на місці, а копії не зʼявилось.
+export { inReactivationTab, keepInReactivation };
 
 /**
  * 🧭 СЕГМЕНТ І СТАН КЛІЄНТА — ОДНЕ ДЖЕРЕЛО НА ДВА ЕКРАНИ.
@@ -186,21 +190,4 @@ export function factsFor(map: Map<string, ClientSegmentRow>, clientKey: string):
     segment: segmentOf(null, 0), state: stateOf(0), longLapsed: false, qualified: false,
     forcedRegular: false, forceNote: null,
   };
-}
-
-/**
- * 📵 ТЕЛЕФОННІ ДЖЕНЕРИКИ — геть із реактивації, КРІМ безготівкових
- * (рішення власника 05.08.2026, записане в CLAUDE.md).
- *
- * Клієнт із ключем-телефоном («380685263085») — це переважно разовий фізик, а не
- * клієнт із історією. Але серед них є й реальні фірми з кривим ключем — їх видає
- * форма оплати «Безнал з ПДВ / без ПДВ».
- *
- * 🟢 СТРАХОВКА ЗАМІРЯНА (прод, 05.08.2026): прибирається 294 із 388, лишається 94.
- * Топ-10 прибраних за грошима — усі з ПОРОЖНЬОЮ формою оплати і давністю
- * 1 034-2 246 днів, тобто легасі до появи поля. Цінного не викинули.
- * (Повторний замір 05.08.2026 на списку реактивації: 1 137 → 842, тобто 295.)
- */
-export function keepInReactivation(f: ClientSegmentRow): boolean {
-  return !f.phoneKey || (f.paymentType ?? "").toLowerCase().includes("езнал");
 }
