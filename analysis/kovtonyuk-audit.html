@@ -1,0 +1,558 @@
+<title>Аудит ТЛ Ковтонюк</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root{
+    --paper:#F2F5F7;
+    --card:#FFFFFF;
+    --ink:#15202A;
+    --ink-2:#3D4C5A;
+    --muted:#6B7B8A;
+    --line:#D9E0E6;
+    --line-soft:#E8EDF1;
+    --accent:#0E6E78;
+    --accent-soft:#E2F0F1;
+    --bad:#B3302A;
+    --bad-soft:#FBE7E5;
+    --warn:#9A6410;
+    --warn-soft:#FBF0DC;
+    --good:#276B4A;
+    --good-soft:#E2F0E8;
+    --shadow:0 1px 2px rgba(21,32,42,.06), 0 8px 24px -18px rgba(21,32,42,.35);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#0F171E;
+      --card:#161F28;
+      --ink:#E6EDF2;
+      --ink-2:#B4C2CE;
+      --muted:#8496A5;
+      --line:#2A3641;
+      --line-soft:#212C36;
+      --accent:#4FBAC4;
+      --accent-soft:#12333A;
+      --bad:#F08279;
+      --bad-soft:#3A1F1D;
+      --warn:#E0AC5C;
+      --warn-soft:#372A14;
+      --good:#6FC79A;
+      --good-soft:#17301F;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0F171E;
+    --card:#161F28;
+    --ink:#E6EDF2;
+    --ink-2:#B4C2CE;
+    --muted:#8496A5;
+    --line:#2A3641;
+    --line-soft:#212C36;
+    --accent:#4FBAC4;
+    --accent-soft:#12333A;
+    --bad:#F08279;
+    --bad-soft:#3A1F1D;
+    --warn:#E0AC5C;
+    --warn-soft:#372A14;
+    --good:#6FC79A;
+    --good-soft:#17301F;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.9);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:16px;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1120px;margin:0 auto;padding:32px 20px 96px;display:flex;flex-direction:column;gap:40px}
+
+  /* ---- masthead ---- */
+  .mast{display:flex;flex-direction:column;gap:14px;padding-bottom:28px;border-bottom:2px solid var(--ink)}
+  .eyebrow{
+    font-family:"IBM Plex Mono",ui-monospace,monospace;
+    font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);
+    display:flex;flex-wrap:wrap;gap:8px 18px;
+  }
+  h1{
+    font-family:"Zilla Slab",Georgia,serif;font-weight:700;
+    font-size:clamp(30px,5.2vw,46px);line-height:1.08;margin:0;text-wrap:balance;letter-spacing:-.01em;
+  }
+  .standfirst{font-size:17px;color:var(--ink-2);max-width:66ch;margin:0}
+
+  /* ---- verdict ---- */
+  .verdicts{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+  .v{
+    background:var(--card);border:1px solid var(--line);border-radius:3px;
+    padding:18px 18px 20px;display:flex;flex-direction:column;gap:8px;box-shadow:var(--shadow);
+    border-top:3px solid var(--line);
+  }
+  .v.bad{border-top-color:var(--bad)}
+  .v.good{border-top-color:var(--good)}
+  .v.warn{border-top-color:var(--warn)}
+  .v-tag{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.13em;text-transform:uppercase;font-weight:600;
+  }
+  .v.bad .v-tag{color:var(--bad)} .v.good .v-tag{color:var(--good)} .v.warn .v-tag{color:var(--warn)}
+  .v-title{font-family:"Zilla Slab",Georgia,serif;font-size:19px;font-weight:600;line-height:1.25;margin:0}
+  .v-body{font-size:14.5px;color:var(--ink-2);margin:0}
+
+  /* ---- sections ---- */
+  section{display:flex;flex-direction:column;gap:18px}
+  .sec-head{display:flex;flex-direction:column;gap:6px;border-left:3px solid var(--accent);padding-left:14px}
+  .sec-kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h2{font-family:"Zilla Slab",Georgia,serif;font-weight:600;font-size:clamp(22px,3.2vw,28px);line-height:1.18;margin:0;text-wrap:balance}
+  h3{font-family:"Zilla Slab",Georgia,serif;font-weight:600;font-size:18px;margin:0 0 2px}
+  p{margin:0;max-width:72ch}
+  .lede{color:var(--ink-2)}
+
+  /* ---- tables ---- */
+  .tbl-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow)}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:520px}
+  caption{
+    caption-side:top;text-align:left;padding:14px 16px 10px;
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  }
+  th,td{padding:9px 14px;text-align:right;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  thead th{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);background:var(--card);
+  }
+  tbody td{font-variant-numeric:tabular-nums;font-family:"IBM Plex Mono",monospace;color:var(--ink-2)}
+  tbody td:first-child{font-family:"IBM Plex Sans",sans-serif;color:var(--ink);font-weight:500}
+  tbody tr:last-child td{border-bottom:none}
+  tr.total td{border-top:2px solid var(--line);font-weight:600;color:var(--ink);background:var(--line-soft)}
+  td.flag{color:var(--bad);font-weight:600}
+  td.ok{color:var(--good)}
+  .lead-col{color:var(--ink)!important;font-weight:600!important}
+
+  /* ---- chips ---- */
+  .chip{
+    display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:2px;
+    font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  }
+  .chip.bad{background:var(--bad-soft);color:var(--bad)}
+  .chip.warn{background:var(--warn-soft);color:var(--warn)}
+  .chip.good{background:var(--good-soft);color:var(--good)}
+
+  /* ---- callout ---- */
+  .callout{
+    background:var(--card);border:1px solid var(--line);border-left:3px solid var(--bad);
+    border-radius:3px;padding:16px 18px;display:flex;flex-direction:column;gap:8px;box-shadow:var(--shadow);
+  }
+  .callout.good{border-left-color:var(--good)}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout p{font-size:14.5px;color:var(--ink-2)}
+  .callout strong{color:var(--ink)}
+
+  /* ---- finding cards ---- */
+  .finding{background:var(--card);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow);overflow:hidden}
+  .finding-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 14px;padding:16px 18px;border-bottom:1px solid var(--line-soft)}
+  .finding-num{font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:600;color:var(--muted)}
+  .finding-body{padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+  .finding-body p{font-size:14.5px;color:var(--ink-2)}
+  ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:14.5px;color:var(--ink-2);max-width:72ch}
+  li strong{color:var(--ink)}
+
+  /* ---- stat row ---- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+  .stat{background:var(--card);padding:16px 16px 18px;display:flex;flex-direction:column;gap:3px}
+  .stat-n{font-family:"IBM Plex Mono",monospace;font-size:26px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .stat-n.bad{color:var(--bad)} .stat-n.good{color:var(--good)} .stat-n.warn{color:var(--warn)}
+  .stat-l{font-size:12.5px;color:var(--muted);line-height:1.35}
+
+  /* ---- bar compare ---- */
+  .bars{display:flex;flex-direction:column;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:3px;padding:18px;box-shadow:var(--shadow)}
+  .bar-row{display:grid;grid-template-columns:minmax(120px,1fr) 3fr;gap:14px;align-items:center}
+  .bar-label{font-size:13.5px;color:var(--ink-2)}
+  .bar-pair{display:flex;flex-direction:column;gap:5px}
+  .bar{display:flex;align-items:center;gap:8px}
+  .bar-fill{height:15px;border-radius:1px;min-width:2px}
+  .bar-fill.t{background:var(--accent)}
+  .bar-fill.y{background:var(--muted)}
+  .bar-val{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);padding-top:2px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .swatch{width:11px;height:11px;border-radius:1px;display:inline-block}
+  .swatch.t{background:var(--accent)} .swatch.y{background:var(--muted)}
+
+  /* ---- actions ---- */
+  .actions{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+  .action{background:var(--card);padding:16px 18px;display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start}
+  .action-when{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--accent);padding-top:3px;white-space:nowrap
+  }
+  .action p{font-size:14.5px;color:var(--ink-2)}
+
+  footer{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:13px;display:flex;flex-direction:column;gap:8px}
+  footer p{max-width:78ch;font-size:13px}
+  code{font-family:"IBM Plex Mono",monospace;font-size:.9em;background:var(--line-soft);padding:1px 5px;border-radius:2px;color:var(--ink)}
+  @media (max-width:560px){
+    .action{grid-template-columns:1fr;gap:6px}
+    .bar-row{grid-template-columns:1fr}
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">
+      <span>Внутрішній аудит</span>
+      <span>Період: лютий — 27 серпня 2026</span>
+      <span>Джерела: 4 таблиці</span>
+    </div>
+    <h1>Ковтонюк Тетяна: перевірка якості роботи ТЛ</h1>
+    <p class="standfirst">Перевірено 152 робочі дні особистої звітності, 485 прорахунків, показники команди та зіставлення з ТЛ Сердюком Ярославом за той самий період. Питання про якість — підтвердилось частково: проблема не в обсязі роботи, а в достовірності звітності та в нерівномірному контролі команди.</p>
+  </header>
+
+  <div class="verdicts">
+    <div class="v bad">
+      <span class="v-tag">Підтверджено</span>
+      <p class="v-title">Серпнева звітність по дзвінках недостовірна</p>
+      <p class="v-body">13 із 17 робочих днів серпня містять дефектні дані: у 12 з них успішних дзвінків стільки ж або більше, ніж спроб набору, ще в одному — 40 наборів і нуль успішних. У Сердюка за 144 дні — жодного такого дня.</p>
+    </div>
+    <div class="v warn">
+      <span class="v-tag">Підтверджено частково</span>
+      <p class="v-title">Особисті показники слабші за Сердюка</p>
+      <p class="v-body">За лютий–серпень: 52 машини проти 81, дохід 163 тис. проти 255 тис. При цьому конверсія і середній чек майже однакові — різниця в обсязі, а не в умінні продавати.</p>
+    </div>
+    <div class="v good">
+      <span class="v-tag">Спростовано</span>
+      <p class="v-title">«Команда слабка» — ні</p>
+      <p class="v-body">Її команда дала 138 машин і 579 тис. проти 84 машин і 244 тис. у команди Сердюка при зіставленій чисельності. Як керівник за результатом команди вона сильніша.</p>
+    </div>
+  </div>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-kicker">Знахідка 01 · критично</span>
+      <h2>Дані по дзвінках за серпень не можна використовувати</h2>
+    </div>
+    <p class="lede">У щоденній звітності дві колонки: «Кількість спроб» і «Кількість успішних». Успішних за визначенням не може бути більше, ніж спроб. У серпні в Тетяни це правило порушується систематично.</p>
+
+    <div class="stats">
+      <div class="stat"><span class="stat-n bad">13&nbsp;/&nbsp;17</span><span class="stat-l">днів серпня з дефектними даними</span></div>
+      <div class="stat"><span class="stat-n bad">638</span><span class="stat-l">спроб заявлено за серпень</span></div>
+      <div class="stat"><span class="stat-n bad">737</span><span class="stat-l">успішних заявлено — більше, ніж спроб</span></div>
+      <div class="stat"><span class="stat-n good">0&nbsp;/&nbsp;144</span><span class="stat-l">таких днів у Сердюка</span></div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Кожен проблемний день серпня — з таблиці «Щоденна звітність26 UTS_лідогенератори», аркуш «Ковтонюк Тетяна»</caption>
+        <thead>
+          <tr><th>Дата</th><th>Спроб</th><th>Успішних</th><th>% успіху</th><th>Що не так</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>06.08</td><td>40</td><td>0</td><td class="flag">0%</td><td>40 наборів і жодного успішного — не заповнено</td></tr>
+          <tr><td>10.08</td><td>42</td><td>42</td><td class="flag">100%</td><td>кожен набір «успішний»</td></tr>
+          <tr><td>11.08</td><td>27</td><td>27</td><td class="flag">100%</td><td>кожен набір «успішний»</td></tr>
+          <tr><td>12.08</td><td>—</td><td>100</td><td class="flag">∞</td><td>спроб не вказано, успішних 100</td></tr>
+          <tr><td>13.08</td><td>11</td><td>11</td><td class="flag">100%</td><td>кожен набір «успішний»</td></tr>
+          <tr><td>14.08</td><td>52</td><td>52</td><td class="flag">100%</td><td>кожен набір «успішний»</td></tr>
+          <tr><td>17.08</td><td>—</td><td>94</td><td class="flag">∞</td><td>спроб не вказано, успішних 94</td></tr>
+          <tr><td>18.08</td><td>1</td><td>1</td><td class="flag">100%</td><td>за весь день 1 набір</td></tr>
+          <tr><td>19.08</td><td>1</td><td>1</td><td class="flag">100%</td><td>за весь день 1 набір</td></tr>
+          <tr><td>20.08</td><td>4</td><td>4</td><td class="flag">100%</td><td>за весь день 4 набори</td></tr>
+          <tr><td>21.08</td><td>95</td><td>95</td><td class="flag">100%</td><td>кожен набір «успішний»</td></tr>
+          <tr><td>24.08</td><td>98</td><td>98</td><td class="flag">100%</td><td>кожен набір «успішний»</td></tr>
+          <tr><td>25.08</td><td>48</td><td>48</td><td class="flag">100%</td><td>кожен набір «успішний»</td></tr>
+          <tr class="total"><td>Разом</td><td>419</td><td>573</td><td class="flag">137%</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <p><strong>Це почалося саме 10 серпня.</strong> До 6 серпня її дані виглядають нормально: 03.08 — 66/50 (76%), 04.08 — 81/60 (74%), 05.08 — 35/18 (51%). З 10 серпня і далі два числа збігаються майже щодня. Найімовірніше пояснення — в обидві колонки вноситься одне й те саме число, найшвидше за все підсумок з Рінгостату без розділення на «набрано» і «підняли трубку».</p>
+      <p><strong>За межами серпня це не системно:</strong> за весь 2026 рік у неї 15 проблемних днів зі 152 (9,9%), з них 12 — у серпні. Тобто це не багаторічна звичка, а зрив останніх трьох тижнів.</p>
+    </div>
+
+    <div class="callout warn">
+      <p><strong>Важливий контекст, який знімає частину підозр.</strong> Метрика «успішні дзвінки» в Рінгостаті ставить статус «Відповіли» за фактом підняття трубки — автовідповідач і миттєвий скид теж потрапляють в «успішні». Це діра методики, спільна для всього відділу, а не персональна вигадка Тетяни. Але вона пояснює завищення на 10–20%, а не показник 100% успіху в кожен робочий день з 10 по 25 серпня. Тому серпневі цифри — це окрема проблема заповнення, і її треба закривати незалежно від Рінгостату.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-kicker">Знахідка 02 · середньо</span>
+      <h2>Дві її таблиці не сходяться між собою</h2>
+    </div>
+    <p class="lede">Кількість переданих на прорахунок є у двох незалежних місцях: у щоденному звіті (цифра) і у файлі прорахунків (поіменні посилання на угоди). У Сердюка ці два джерела майже ідеально збігаються. У Тетяни — розходяться щомісяця.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Передано на прорахунок: щоденний звіт проти файлу прорахунків</caption>
+        <thead>
+          <tr><th>Місяць</th><th>Таня: звіт</th><th>Таня: файл</th><th>Розбіжність</th><th>Ярослав: звіт</th><th>Ярослав: файл</th><th>Розбіжність</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Березень</td><td>91</td><td>87</td><td class="flag">4</td><td>125</td><td>126</td><td class="ok">1</td></tr>
+          <tr><td>Квітень</td><td>81</td><td>75</td><td class="flag">6</td><td>103</td><td>103</td><td class="ok">0</td></tr>
+          <tr><td>Травень</td><td>66</td><td>65</td><td class="ok">1</td><td>97</td><td>97</td><td class="ok">0</td></tr>
+          <tr><td>Червень</td><td>68</td><td>61</td><td class="flag">7</td><td>118</td><td>120</td><td class="ok">2</td></tr>
+          <tr><td>Липень</td><td>52</td><td>52</td><td class="ok">0</td><td>125</td><td>125</td><td class="ok">0</td></tr>
+          <tr><td>Серпень</td><td>104</td><td>91</td><td class="flag">13</td><td>94</td><td>94</td><td class="ok">0</td></tr>
+          <tr class="total"><td>Разом</td><td>462</td><td>431</td><td class="flag">31</td><td>662</td><td>665</td><td class="ok">3</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="lede">Сумарно за пів року в неї 31 «зайвий» прорахунок у звіті без підтвердження посиланням — 6,7% від заявленого. У Сердюка розбіжність 3 угоди, тобто 0,5%. Це не обов'язково приписки: частіше буває, що прорахунок зроблено, а посилання забули внести. Але для керівника, який сам вимагає від команди вести цей файл, це показова неакуратність.</p>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-kicker">Знахідка 03 · середньо</span>
+      <h2>Контроль команди нерівномірний</h2>
+    </div>
+    <p class="lede">У файлі прорахунків біля кожного співробітника є колонка «перевірка» — туди ТЛ ставить відмітку, що угоду переглянуто. Це прямий вимірювач того, наскільки керівник реально контролює роботу, а не просто збирає цифри.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Частка прорахунків з відміткою про перевірку</caption>
+        <thead>
+          <tr><th>Кого перевіряють</th><th>Липень</th><th>Серпень</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="lead-col">Команда Ковтонюк</td><td></td><td></td></tr>
+          <tr><td>Демчук Вікторія</td><td class="flag">26,0%</td><td class="ok">97,8%</td></tr>
+          <tr><td>Крупник Аліна</td><td class="flag">29,8%</td><td class="flag">2,0%</td></tr>
+          <tr><td>Бодак Дмитро</td><td class="flag">32,0%</td><td>—</td></tr>
+          <tr><td>Ковтонюк Тетяна (сама)</td><td class="flag">26,9%</td><td>70,3%</td></tr>
+          <tr><td class="lead-col">Команда Сердюка</td><td></td><td></td></tr>
+          <tr><td>Шевчук Мирослава</td><td class="flag">30,9%</td><td class="ok">95,3%</td></tr>
+          <tr><td>Єресько Олександр</td><td class="flag">28,2%</td><td class="ok">88,9%</td></tr>
+          <tr><td>Ніколаєнко Анастасія</td><td class="flag">39,4%</td><td>—</td></tr>
+          <tr><td>Сердюк Ярослав (сам)</td><td class="ok">100%</td><td class="ok">87,2%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="lede">У липні провал був у обох — це радше говорить про те, що дисципліна перевірок у відділі просіла загалом. Але в серпні Сердюк вирівняв усю свою команду до 87–95%, а в Тетяни Демчук перевірена на 97,8%, тоді як Крупник — на 2%: 97 прорахунків зі 99 пішли без жодного погляду керівника. Це не «мало часу»: час знайшовся на одного підлеглого і не знайшовся на другого.</p>
+
+    <div class="callout warn">
+      <p><strong>Що саме пропустив цей неконтроль.</strong> У щоденній звітності Крупник Аліни з травня по серпень кількість успішних дзвінків 56 днів із 85 потрапляє у вузьке вікно 65–75 (розкид σ&nbsp;=&nbsp;7,4), тоді як кількість спроб гуляє від 77 до 188 (σ&nbsp;=&nbsp;25,3). Реальна відповідь клієнтів так не поводиться — вона має йти слідом за кількістю наборів. Схоже, що підлегла звітує «до норми», а не за фактом. Це рівно те, що ТЛ мав би побачити першим — і рівно той підлеглий, якого не перевіряли.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-kicker">Порівняння</span>
+      <h2>Ковтонюк проти Сердюка: особисті показники</h2>
+    </div>
+    <p class="lede">Обидва — тімліди з власним планом продажів. Період узято з лютого, коли Сердюк почав вести окрему таблицю, по 27 серпня. * Середнє по наборах у Тетяни рахується без серпня — серпневі дані по дзвінках недостовірні.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Особисті результати по місяцях, 2026</caption>
+        <thead>
+          <tr><th>Місяць</th><th>Т: днів</th><th>Т: спроб/день</th><th>Т: прорах.</th><th>Т: машин</th><th>Т: сума, ₴</th><th>Я: днів</th><th>Я: спроб/день</th><th>Я: прорах.</th><th>Я: машин</th><th>Я: сума, ₴</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Лютий</td><td>20</td><td>59</td><td>87</td><td>9</td><td>20 999</td><td>20</td><td>93</td><td>103</td><td>9</td><td>15 086</td></tr>
+          <tr><td>Березень</td><td>22</td><td>59</td><td>91</td><td>10</td><td>39 770</td><td>22</td><td>72</td><td>125</td><td>14</td><td>37 120</td></tr>
+          <tr><td>Квітень</td><td>21</td><td>69</td><td>81</td><td>10</td><td>43 130</td><td>22</td><td>76</td><td>103</td><td>11</td><td>43 525</td></tr>
+          <tr><td>Травень</td><td>21</td><td>63</td><td>66</td><td>6</td><td>22 922</td><td>23</td><td>69</td><td>97</td><td>9</td><td>39 592</td></tr>
+          <tr><td>Червень</td><td>21</td><td>75</td><td>68</td><td class="flag">2</td><td class="flag">5 140</td><td>22</td><td>86</td><td>118</td><td>12</td><td>57 023</td></tr>
+          <tr><td>Липень</td><td class="flag">17</td><td>77</td><td>52</td><td>8</td><td>14 782</td><td>24</td><td>78</td><td>125</td><td>11</td><td>39 233</td></tr>
+          <tr><td>Серпень</td><td>17</td><td class="flag">н/д</td><td>104</td><td>7</td><td>16 220</td><td>17</td><td>71</td><td>94</td><td>15</td><td>23 449</td></tr>
+          <tr class="total"><td>Разом</td><td>139</td><td>~67*</td><td>549</td><td>52</td><td>162 963</td><td>150</td><td>~78</td><td>765</td><td>81</td><td>255 028</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bars">
+      <div class="bar-row">
+        <span class="bar-label">Поставлено машин</span>
+        <div class="bar-pair">
+          <div class="bar"><span class="bar-fill t" style="width:64%"></span><span class="bar-val">52</span></div>
+          <div class="bar"><span class="bar-fill y" style="width:100%"></span><span class="bar-val">81</span></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">Дохід, ₴</span>
+        <div class="bar-pair">
+          <div class="bar"><span class="bar-fill t" style="width:64%"></span><span class="bar-val">162 963</span></div>
+          <div class="bar"><span class="bar-fill y" style="width:100%"></span><span class="bar-val">255 028</span></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">Прорахунків</span>
+        <div class="bar-pair">
+          <div class="bar"><span class="bar-fill t" style="width:72%"></span><span class="bar-val">549</span></div>
+          <div class="bar"><span class="bar-fill y" style="width:100%"></span><span class="bar-val">765</span></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">Конверсія прорахунок → машина</span>
+        <div class="bar-pair">
+          <div class="bar"><span class="bar-fill t" style="width:90%"></span><span class="bar-val">9,5%</span></div>
+          <div class="bar"><span class="bar-fill y" style="width:100%"></span><span class="bar-val">10,6%</span></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">Середній чек, ₴</span>
+        <div class="bar-pair">
+          <div class="bar"><span class="bar-fill t" style="width:99.5%"></span><span class="bar-val">3 134</span></div>
+          <div class="bar"><span class="bar-fill y" style="width:100%"></span><span class="bar-val">3 148</span></div>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="swatch t"></i> Ковтонюк Тетяна</span>
+        <span><i class="swatch y"></i> Сердюк Ярослав</span>
+      </div>
+    </div>
+
+    <div class="callout warn">
+      <p><strong>Головне з цієї таблиці:</strong> конверсія (9,5% проти 10,6%) і середній чек (3 134 ₴ проти 3 148 ₴) у них практично однакові. Тобто працює вона з клієнтом не гірше. Весь розрив у 29 машин — це розрив у кількості: 549 прорахунків проти 765, тобто на 216 менше, і 67 наборів на день проти 78.</p>
+      <p><strong>Два провали, які варто розібрати окремо:</strong> червень — 2 машини і 5 140 ₴ при нормальній активності (75 наборів/день і 68 прорахунків); липень — 17 робочих днів проти 24 у Сердюка, дані починаються з 13 числа. Якщо перша половина липня — це відпустка, питання знято; якщо ні, це 7 неврахованих днів.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-kicker">На її користь</span>
+      <h2>Як керівник вона результативніша за Сердюка</h2>
+    </div>
+    <p class="lede">Це та частина, яку не видно, якщо дивитись тільки на особисті цифри ТЛ. За результатом команди вона виграє з великим відривом.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>Результат команд без урахування самих ТЛ, лютий — 27 серпня 2026</caption>
+        <thead>
+          <tr><th>Місяць</th><th>Команда Тані: машин</th><th>сума, ₴</th><th>Команда Ярослава: машин</th><th>сума, ₴</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Лютий</td><td>19</td><td>79 521</td><td>0</td><td>0</td></tr>
+          <tr><td>Березень</td><td>22</td><td>238 771</td><td>13</td><td>39 022</td></tr>
+          <tr><td>Квітень</td><td>26</td><td>69 988</td><td>23</td><td>81 348</td></tr>
+          <tr><td>Травень</td><td>14</td><td>34 520</td><td>7</td><td>12 780</td></tr>
+          <tr><td>Червень</td><td>23</td><td>58 153</td><td>11</td><td>28 575</td></tr>
+          <tr><td>Липень</td><td>21</td><td>59 039</td><td>21</td><td>77 449</td></tr>
+          <tr><td>Серпень</td><td>13</td><td>39 461</td><td>9</td><td>4 580</td></tr>
+          <tr class="total"><td>Разом</td><td>138</td><td>579 453</td><td>84</td><td>243 754</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <ul>
+      <li><strong>Чисельність зіставна.</strong> З травня по серпень в обох по двоє основних підлеглих. За ці чотири місяці її команда дала 71 машину і 191 тис. ₴, команда Сердюка — 48 машин і 123 тис. ₴.</li>
+      <li><strong>Середній чек команди вищий:</strong> 4 199 ₴ проти 2 902 ₴. Її люди возять дорожчі рейси.</li>
+      <li><strong>Демчук Вікторія — сильний результат виховання:</strong> 164 робочі дні без жодної аномалії у звітності, стабільні 58–73% успішних дзвінків, у березні одна угода на 193 тис. ₴.</li>
+      <li><strong>Заперечення, яке треба врахувати чесно:</strong> частину розриву дає березневий викид Демчук. Навіть без нього (579 − 194 = 385 тис. ₴) її команда все одно попереду.</li>
+    </ul>
+
+    <div class="callout good">
+      <p><strong>Висновок по цьому блоку:</strong> версія «Таня погано працює» даними не підтверджується. Вона гірше виконує особистий план і гірше веде документи — але краще будує результат через людей. Це типовий профіль керівника, який перерозподілив увагу з власних продажів на команду, тільки зробив це не до кінця акуратно.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-kicker">Точки росту</span>
+      <h2>Чотири зони, з яких складається весь розрив</h2>
+    </div>
+
+    <div class="finding">
+      <div class="finding-head">
+        <span class="finding-num">01</span>
+        <h3>Достовірність власної звітності</h3>
+        <span class="chip bad">критично</span>
+      </div>
+      <div class="finding-body">
+        <p>13 із 17 днів серпня з дефектними цифрами — це не «похибка», це втрата довіри до всього її блоку даних. Поки так, будь-яка її цифра на зустрічі потребує перевірки, і це б'є по ній сильніше, ніж реальний недобір по машинах.</p>
+        <p><strong>Що має змінитись:</strong> «Спроб» = загальна кількість набраних номерів, «Успішних» = тільки ті, де була розмова. Ці два числа не можуть бути рівні. Один день, де вони рівні — привід перепитати; дванадцять поспіль — привід не приймати звіт.</p>
+      </div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-head">
+        <span class="finding-num">02</span>
+        <h3>Рівномірність контролю підлеглих</h3>
+        <span class="chip warn">суттєво</span>
+      </div>
+      <div class="finding-body">
+        <p>Демчук перевірена на 97,8%, Крупник — на 2%. Перевірка потрібна саме тому, кого перевіряють рідше: у Крупник рівно там і виявився підозрілий рівний показник успішних дзвінків, який ТЛ мав побачити.</p>
+        <p><strong>Що має змінитись:</strong> мінімальний поріг перевірки — не менше 80% прорахунків у кожного підлеглого, а не в середньому по команді.</p>
+      </div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-head">
+        <span class="finding-num">03</span>
+        <h3>Особистий обсяг дзвінків</h3>
+        <span class="chip warn">суттєво</span>
+      </div>
+      <div class="finding-body">
+        <p>67 наборів на день проти 78 у Сердюка, 549 прорахунків проти 765. Оскільки конверсія в неї така сама, кожні додаткові 100 прорахунків — це приблизно 9–10 машин і 30 тис. ₴. Розрив у 216 прорахунків пояснює майже весь розрив у 29 машин.</p>
+        <p><strong>Що має змінитись:</strong> це найдешевша точка росту — не потрібно вчити продавати, потрібно підняти вхідний обсяг. Реалістична ціль: 75 наборів на день і 100+ прорахунків на місяць.</p>
+      </div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-head">
+        <span class="finding-num">04</span>
+        <h3>Провал червня та неповний липень</h3>
+        <span class="chip warn">потребує пояснення</span>
+      </div>
+      <div class="finding-body">
+        <p>Червень: активність нормальна (75 наборів/день, 68 прорахунків), а на виході 2 машини і 5 140 ₴ — найгірший місяць за весь рік при середньому 8–10 машин. Липень: 17 робочих днів проти 24, дані з 13 числа.</p>
+        <p><strong>Що має змінитись:</strong> це єдині два пункти, які я не можу закрити самими таблицями. Червень — питання «що сталося з угодами», липень — питання до кадрового обліку: відпустка чи ні.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-kicker">План</span>
+      <h2>Що робити далі</h2>
+    </div>
+    <div class="actions">
+      <div class="action">
+        <span class="action-when">Сьогодні</span>
+        <p>Попросити Тетяну переподати дзвінки за 06–26 серпня з розділенням «набрано / була розмова». До цього серпневий звіт по ній не приймати. Розмову вести як про заповнення, а не як про обман — до 10 серпня її дані нормальні, і це схоже на зміну способу вивантаження з Рінгостату.</p>
+      </div>
+      <div class="action">
+        <span class="action-when">Цього тижня</span>
+        <p>Закрити перевірку 97 прорахунків Крупник Аліни за серпень і окремо розібрати, чому в неї кількість успішних дзвінків не залежить від кількості спроб.</p>
+      </div>
+      <div class="action">
+        <span class="action-when">Цього тижня</span>
+        <p>Отримати відповіді по червню (чому 2 машини) і по липню (відпустка чи пропущені дні). Це прибере або підтвердить останні дві претензії.</p>
+      </div>
+      <div class="action">
+        <span class="action-when">До кінця місяця</span>
+        <p>Закрити діру в самій метриці: в Рінгостаті «Відповіли» ставиться за фактом підняття трубки, тож автовідповідачі падають в «успішні» у всьому відділі. Ввести поріг тривалості розмови (від 15 секунд) — і перерахувати за ним обидві команди, щоб порівняння було чесним.</p>
+      </div>
+      <div class="action">
+        <span class="action-when">Постійно</span>
+        <p>Ввести автоперевірку в самій таблиці: підсвічувати рядок, де успішних ≥ спроб. Це закрило б усі 15 знайдених днів у момент внесення, без жодного аудиту.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-kicker">Загальний висновок</span>
+      <h2>Відповідь на поставлене питання</h2>
+    </div>
+    <div class="callout warn">
+      <p><strong>Претензія до якості обґрунтована, але не в тому місці, де очікувалось.</strong> Тетяна не «погано працює» — вона недбало звітує і вибірково контролює. Її команда дає найкращий результат у відділі, її конверсія і середній чек на рівні Сердюка. Але 13 днів неможливих цифр, 31 непідтверджений прорахунок і один підлеглий, перевірений на 2%, — це реальні прогалини керівника, а не статистичний шум.</p>
+      <p><strong>Розрив із Сердюком за пів року — це 216 прорахунків і 11 наборів на день.</strong> Не вміння, а обсяг. І це зона, яка виправляється планом, а не заміною людини.</p>
+    </div>
+  </section>
+
+  <footer>
+    <p><strong>Джерела.</strong> «Щоденна звітність26 UTS_лідогенератори Таня Ковтонюк» (152 дні даних по Ковтонюк, 164 по Демчук, 169 по Крупник); «Щоденна звітність26 UTS_лідогенератори 2» (144 дні по Сердюку); «Прорахунки ТЛ Таня Ковтонюк» (23 місячні аркуші, грудень 2024 — серпень 2026); «прорахунки ТЛ Сердюк Ярослав» (7 аркушів, лютий — серпень 2026). Дані станом на 27.08.2026.</p>
+    <p><strong>Як рахувалось.</strong> Кожна цифра взята з клітинок таблиць без ручного втручання. «День з даними» — день, де заповнено хоч один із показників: дзвінки, ліди, машини. Аномалією вважався день, де <code>успішних &gt; спроб</code>, або <code>успішних = спроб &gt; 0</code>, або <code>спроб = 0 при успішних &gt; 0</code>. Прорахунки рахувались як кількість унікальних посилань на угоди в Kommo.</p>
+    <p><strong>Чого тут немає.</strong> Фактичної тривалості розмов із Рінгостату — доступу до вивантаження не було, тому питання «скільки з успішних дзвінків реальні розмови» залишається відкритим для всього відділу, а не тільки для Тетяни. Також не оцінювалась якість самих комунікацій із клієнтом — таблиці цього не містять.</p>
+  </footer>
+
+</div>
