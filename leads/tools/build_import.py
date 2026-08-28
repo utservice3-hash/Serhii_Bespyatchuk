@@ -59,6 +59,9 @@ NOT_A_COMPANY = {
     "M&A", "Fintech", "FinTech", "Payments", "Banking", "Licensing", "Advisor",
     "Consultant", "Board", "Group", "Partner", "Partners", "Capital", "The",
     "Independent", "Strategic", "Corporate", "Investment", "Interim", "NED",
+    # department names: "Head of Legal" must not become the company "Legal"
+    "Legal", "Compliance", "Risk", "Sales", "Operations", "Product", "Finance",
+    "Regulatory", "Marketing", "Growth", "Technology", "Engineering", "Business",
 }
 
 
