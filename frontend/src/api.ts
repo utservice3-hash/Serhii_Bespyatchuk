@@ -1351,6 +1351,12 @@ export interface ReceivableClient {
   facts: ReceivableClientFacts | null;
   /** 💰 Заробіток / повна сума / %. Рахує сервер тим самим виразом, що плитку. */
   margin: ReceivableMargin | null;
+  /**
+   * 💰 Скільки рахунків клієнта вже мають гроші у виписці. Та сама функція ядра,
+   * що дає бейджі в розкритті — інакше «2 з 5» у рядку й бейджі під ним
+   * розійшлися б мовчки.
+   */
+  paymentSeen: PaymentSeenRoll | null;
 }
 
 /** Ручне призначення відповідального. `managerId: null` — свідоме «без відповідального». */
@@ -1533,6 +1539,13 @@ export interface ReceivableInvoice {
   carrierPaid: ReceivableCarrierPaid | null;
   carrierReason: ReceivableCarrierReason | null;
   /**
+   * 💰 Чи прийшли гроші за цим рахунком (виписка приходить РАНІШЕ, ніж
+   * бухгалтерія рознесе рахунки). Рахує СЕРВЕР — `core/paymentMatch`; фронт
+   * лише форматує. Друге виведення тут одного дня розійшлося б зі згорткою
+   * «2 з 5» у рядку клієнта, і кожна половина лишилась би правдоподібною.
+   */
+  paymentSeen: PaymentSeen | null;
+  /**
    * 🚚 Скільки заплачено перевізнику. `null` = «суму не вказано» — НЕ нуль і не
    * «не оплачено»: умови виплати просто не заповнені в CRM (30% угод).
    */
@@ -1584,6 +1597,26 @@ export async function revokeReceivableWriteoff(payload: {
  * розкриття рахувала вік сама, і на списаному рахунку екран казав двома
  * голосами: «1128 дн.» у рядку і «найстаріший 22 дн.» у шапці під ним.
  */
+/**
+ * 💰 СТАН «ГРОШІ ЗАЙШЛИ» — ЧОТИРИ ВІДПОВІДІ, І ЖОДНА НЕ ПОРОЖНЯ.
+ *
+ * 🔴 `ambiguous` існує ОКРЕМО від `none` за рішенням власника 28.08.2026:
+ * людина бачить ПРИЧИНУ («платіж називає кілька рахунків») і розвʼязує це
+ * очима за дві секунди, тоді як спільне «не зіставлено» відправило б її
+ * шукати наосліп. Той самий клас, що «архів ≠ давно втрачений».
+ */
+export type PaymentSeenKind = "seen" | "stale" | "ambiguous" | "none";
+export interface PaymentSeen {
+  kind: PaymentSeenKind;
+  bookedOn: string | null;
+  amount: number | null;
+  txId: number | null;
+  /** Робочих днів від платежу; після стелі стан стає `stale` і каже про себе. */
+  workdays: number | null;
+}
+/** Скільки рахунків клієнта в якому стані — згортка для рядка списку. */
+export interface PaymentSeenRoll { seen: number; stale: number; ambiguous: number; total: number }
+
 export interface ReceivableInvoicesResp { invoices: ReceivableInvoice[]; oldestAliveDays: number | null }
 export async function fetchReceivableInvoices(clientKey: string): Promise<ReceivableInvoicesResp> {
   const { data } = await api.get<ReceivableInvoicesResp>("/dashboard/receivables/invoices", { params: { clientKey } });

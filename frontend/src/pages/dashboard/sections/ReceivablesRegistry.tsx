@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchInvoiceRegistry, type ReceivableInvoice } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
-import { invoiceStamp, nPlural } from "../receivablesView";
+import { invoiceStamp, nPlural, seenCell } from "../receivablesView";
 import { Hint, Tip } from "../../../components/Hint";
 
 /**
@@ -74,6 +74,10 @@ export function ReceivablesRegistry() {
               </th>
               <th style={{ textAlign: "left" }}>Коментар</th>
               <th style={{ textAlign: "center", width: 90 }}>Угода</th>
+              {/* 💰 Виписка приходить РАНІШЕ, ніж бухгалтерія рознесе рахунки.
+                  Колонка каже, чи гроші вже видно — і НІКОЛИ не буває порожньою:
+                  «не зіставлено» це відповідь, порожня клітинка — ні. */}
+              <th style={{ textAlign: "left", width: 170 }}>Гроші</th>
               <th className="recv-num" style={{ textAlign: "right", width: 130 }}>Сума</th>
             </tr>
           </thead>
@@ -131,6 +135,17 @@ export function ReceivablesRegistry() {
                         битий
                       </Tip>
                     )}
+                  </td>
+                  {/* 💰 ЧОТИРИ СТАНИ, І ЖОДЕН НЕ ПОРОЖНІЙ. Підпис бере ядро
+                      (`seenCell`) — фронт своєї думки про зіставлення не має. */}
+                  <td style={{ textAlign: "left", fontSize: "var(--fs-sm)" }}>
+                    {(() => { const c = seenCell(x.paymentSeen); return (
+                      <Tip title="Гроші за рахунком" body={c.why ?? ""}
+                        style={{ color: c.tone === "ok" ? "var(--ok, #16a34a)"
+                                      : c.tone === "warn" ? "var(--warn)" : "var(--text-muted)",
+                                 whiteSpace: "nowrap" }}>
+                        {c.text}
+                      </Tip>); })()}
                   </td>
                   <td className="recv-num" style={{ textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}
                       title={formatAmountFull(x.amount)}>
