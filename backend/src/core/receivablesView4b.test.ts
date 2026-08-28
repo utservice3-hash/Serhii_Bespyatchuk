@@ -862,7 +862,7 @@ test("#198h списане віднімається і від РЯДКА, а н�
   // привʼязана до наявності стану, стереже лише в ті дні, коли стан є.
   const { foldFacts, classifyInvoice } = await import("./receivablesFacts.js");
   const row = (invoiceNo: string, amount: number, writtenOff: boolean) => classifyInvoice({
-    clientKey: "к", clientName: "К", amount, invoiceDate: "2026-08-01", invoiceNo,
+    clientKey: "к", clientName: "К", amount, invoiceDate: "2026-08-01", invoiceNo, edrpou: null,
     dealId: 1, dealFound: true, paymentType: "Безнал с НДС", statusId: 142, pipelineId: 8921932,
     stageMapped: true, writtenOff, carrierPayAmount: null, carrierPayType: null,
     earned: 10, clientPay: 100, carrierObligation: null, ageDays: 5,
@@ -920,7 +920,7 @@ test("#198i Σ колонки «заробили» в розкритті == «З
   const { foldFacts, classifyInvoice } = await import("./receivablesFacts.js");
   const mk = (invoiceNo: string, amount: number, dealId: number | null, earned: number | null,
               opts: { dealFound?: boolean; writtenOff?: boolean } = {}) => ({
-    clientKey: "к", clientName: "К", amount, invoiceDate: "2026-08-01", invoiceNo,
+    clientKey: "к", clientName: "К", amount, invoiceDate: "2026-08-01", invoiceNo, edrpou: null,
     dealId, dealFound: opts.dealFound ?? (dealId != null), paymentType: "Безнал с НДС",
     statusId: 142, pipelineId: 8921932, stageMapped: true, writtenOff: opts.writtenOff ?? false,
     carrierPayAmount: null, carrierPayType: null, earned, clientPay: 1000,

@@ -64,6 +64,8 @@ export interface RawInvoiceRow {
   amount: number;
   invoiceDate: string | null;   // YYYY-MM-DD
   invoiceNo: string | null;
+  /** ЄДРПОУ клієнта з 1С. Другий барʼєр зіставлення платежу — див. `core/paymentMatch`. */
+  edrpou: string | null;
   dealId: number | null;        // № угоди з коментаря 1С (з `service_url`)
   dealFound: boolean;           // чи знайшлась ця угода в `deals`
   paymentType: string | null;   // «форма оплати» Kommo
@@ -367,7 +369,7 @@ export function foldFacts(facts: InvoiceFact[]): { byClient: Map<string, ClientF
  * розійшлася б із Σ рядків. Гейт `#150` ловить саме це.
  */
 const INVOICE_FACTS_SQL = `
-  SELECT ri.client_key, ri.client_name, ri.amount, ri.invoice_no,
+  SELECT ri.client_key, ri.client_name, ri.amount, ri.invoice_no, ri.edrpou,
          to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
          (now()::date - ri.invoice_date)        AS age_days,
          dl.deal_id,
@@ -405,14 +407,14 @@ export async function loadInvoiceFacts(
   if (clientKeys.length === 0) return [];
   const r = await db.query<{
     client_key: string; client_name: string | null; amount: string; invoice_no: string | null;
-    invoice_date: string | null; age_days: number | null; deal_id: string | null; deal_found: boolean;
+    invoice_date: string | null; age_days: number | null; deal_id: string | null; deal_found: boolean; edrpou: string | null;
     payment_type: string | null; status_id: string | null; pipeline_id: string | null; stage_mapped: boolean; written_off: boolean;
     carrier_pay_amount: string | null; carrier_pay_type: string | null;
     earned: string | null; client_pay_amount: string | null; carrier_obligation: string | null;
   }>(INVOICE_FACTS_SQL, [clientKeys]);
   return r.rows.map((x) => classifyInvoice({
     clientKey: x.client_key, clientName: x.client_name, amount: Number(x.amount),
-    invoiceDate: x.invoice_date, invoiceNo: x.invoice_no,
+    invoiceDate: x.invoice_date, invoiceNo: x.invoice_no, edrpou: x.edrpou,
     dealId: x.deal_id == null ? null : Number(x.deal_id),
     dealFound: x.deal_found === true,
     paymentType: x.payment_type, ageDays: x.age_days == null ? null : Number(x.age_days),

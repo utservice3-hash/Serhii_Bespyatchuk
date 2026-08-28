@@ -55,6 +55,7 @@ import * as receivablesFacts from "../core/receivablesFacts.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
+import * as paymentMatch from "../core/paymentMatch.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { receivablesScope } from "../auth/receivablesScope.js";
@@ -64,7 +65,7 @@ import {
 } from "../core/creditLimits.js";
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
-import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf } from "../core/dates.js";
+import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -1850,16 +1851,26 @@ dashboardRouter.get("/receivables", async (req, res) => {
    * людина обирає такий рядок, тисне «Обʼєднати» і дізнається правило з тексту
    * помилки 409. Заміряно 27.08.2026: канонічних із псевдонімами 16, один тримає 11.
    */
-  const syncRes = await pool.query<{ synced_at: string | null; canonical_of: Record<string, number> }>(
+  const syncRes = await pool.query<{
+    synced_at: string | null; canonical_of: Record<string, number>;
+    payments: paymentMatch.RawPaymentRow[] | null;
+  }>(
     `SELECT MAX(r.synced_at) AS synced_at,
             (SELECT COALESCE(jsonb_object_agg(a.canonical_key, a.n), '{}'::jsonb)
                FROM (SELECT canonical_key, COUNT(*)::int AS n
                        FROM client_key_alias WHERE revoked_at IS NULL
-                      GROUP BY canonical_key) a) AS canonical_of
-       FROM receivables r`
+                      GROUP BY canonical_key) a) AS canonical_of,
+            -- 💰 ВХІДНІ ПЛАТЕЖІ — ТИМ САМИМ ПОХОДОМ. Стеля #158 — чотири запити,
+            -- і пʼятий заборонено її ж текстом. Текст підзапиту приїжджає з ядра
+            -- (invoicePaymentsSql), а не написаний тут удруге.
+            -- (зворотні лапки тут заборонені — це тіло шаблонного рядка)
+            (SELECT COALESCE(jsonb_agg(p), '[]'::jsonb)
+               FROM (${paymentMatch.invoicePaymentsSql(1)}) p) AS payments
+       FROM receivables r`, [paymentMatch.PAYMENT_LOOKBACK_DAYS]
   );
   const syncedAt = syncRes.rows[0]?.synced_at ?? null;
   const canonicalOf: Record<string, number> = syncRes.rows[0]?.canonical_of ?? {};
+  const incoming = paymentMatch.toPayments(syncRes.rows[0]?.payments ?? []);
 
   // 📇 ФАКТИ ПРО РАХУНКИ — юрособа, стан перевізника, вік, звʼязок із CRM.
   // ОДИН запит на всі зрізи екрана (RTT до Neon = 30 мс, тож ціна тут — кількість
@@ -1868,6 +1879,30 @@ dashboardRouter.get("/receivables", async (req, res) => {
   const facts = await receivablesFacts.loadInvoiceFacts(pool, clientKeys);
   const folded = receivablesFacts.foldFacts(facts);
 
+  /**
+   * 💰 «ГРОШІ ЗАЙШЛИ» — рішення ухвалює ЯДРО, роут лише зводить операнди.
+   *
+   * 🔴 ЗІСТАВЛЯЄМО ПАКЕТОМ І ПО ВСІХ ВІДКРИТИХ РАХУНКАХ СКОУПУ, а не по одному:
+   * стан «платіж називає кілька рахунків» — це питання про ПЛАТІЖ, і з одного
+   * рахунка його не видно. Списані сюди не входять: у них гроші вже не чекають.
+   */
+  const openForMatch = facts
+    .filter((f) => !f.writtenOff && (f.invoiceNo ?? "") !== "")
+    .map((f) => ({ invoiceNo: f.invoiceNo as string, amount: f.amount, edrpou: f.edrpou }));
+  const seenByInvoice = paymentMatch.matchAll(openForMatch, incoming, kyivToday());
+  // Згортка по клієнту — ТИМ САМИМ виразом ядра, що й бейджі в розкритті.
+  const seenPerClient = new Map<string, paymentMatch.PaymentSeen[]>();
+  for (const f of facts) {
+    if (f.writtenOff || !f.invoiceNo) continue;
+    const st = seenByInvoice.get(f.invoiceNo);
+    if (!st) continue;
+    const bucket = seenPerClient.get(f.clientKey) ?? [];
+    bucket.push(st);
+    seenPerClient.set(f.clientKey, bucket);
+  }
+  const seenRoll = new Map<string, paymentMatch.SeenRoll>();
+  for (const [k, v] of seenPerClient) seenRoll.set(k, paymentMatch.rollUp(v));
+
   type Client = {
     clientKey: string | null; clientName: string | null; amount: number;
     limitDays: number | null; limitAmount: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
@@ -1875,6 +1910,8 @@ dashboardRouter.get("/receivables", async (req, res) => {
     noteUpdatedAt: string | null; noteHistoryCount: number;
     facts: receivablesFacts.ClientFacts | null;
     margin: ReturnType<typeof marginCell> | null;
+    /** 💰 Скільки рахунків клієнта вже мають гроші у виписці; `null` — не рахували. */
+    paymentSeen: paymentMatch.SeenRoll | null;
   };
   const byManager = new Map<number | null, { managerId: number | null; managerName: string; clients: Client[]; total: number }>();
   for (const r of rows) {
@@ -1925,6 +1962,13 @@ dashboardRouter.get("/receivables", async (req, res) => {
       // 🔖 Ярлики рядка — з ТОГО САМОГО зведення, з якого рахуються плитки вгорі.
       // Два вирази для одного числа розходяться мовчки; тут вираз один.
       facts: cf,
+      /**
+       * 💰 ЗГОРТКА «ГРОШІ ЗАЙШЛИ» ПО КЛІЄНТУ — з ТОГО САМОГО зведення, що й
+       * бейджі в розкритті. Два вирази для одного числа розходяться мовчки.
+       * `total` — скільки живих рахунків узагалі, щоб «2 з 5» читалось як
+       * частка, а не як загадкове число.
+       */
+      paymentSeen: r.clientKey ? seenRoll.get(r.clientKey) ?? null : null,
       // 💰 МАРЖИНАЛЬНІСТЬ РАХУЄ СЕРВЕР — ОДНИМ ВИРАЗОМ ДЛЯ РЯДКА Й ДЛЯ ПЛИТКИ.
       // Фронт лише форматує. Якби він рахував сам, правило існувало б у двох
       // місцях, і копії збігалися б одна з одною, а не з правилом — рівно те,
@@ -2559,6 +2603,25 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   // стереже `#158`.
   const factKeys = flat ? visibleKeys : [clientKey];
   const ourFacts = await receivablesFacts.loadInvoiceFacts(pool, factKeys);
+
+  /**
+   * 💰 «ГРОШІ ЗАЙШЛИ» — ТЕ САМЕ ЯДРО, ЩО В СПИСКУ КЛІЄНТІВ.
+   *
+   * 🔴 Другого виразу тут бути не може: список показує згортку «2 з 5», а
+   * розкриття — які саме два. Розійдуться вони мовчки, і кожна половина
+   * лишиться правдоподібною — рівно так «Команда за місяць 12%» жила поруч із
+   * плиткою «11.8%».
+   *
+   * ⚠️ Тут це ОКРЕМИЙ запит, і це не суперечність зі списком: стеля `#158`
+   * стереже `/receivables`, а не цей роут. У списку той самий текст їде
+   * підзапитом, і саме тому він живе однією функцією в ядрі.
+   */
+  const payRows = await pool.query<paymentMatch.RawPaymentRow>(
+    paymentMatch.invoicePaymentsSql(1), [paymentMatch.PAYMENT_LOOKBACK_DAYS]);
+  const seenByInvoice = paymentMatch.matchAll(
+    ourFacts.filter((f) => !f.writtenOff && (f.invoiceNo ?? "") !== "")
+      .map((f) => ({ invoiceNo: f.invoiceNo as string, amount: f.amount, edrpou: f.edrpou })),
+    paymentMatch.toPayments(payRows.rows), kyivToday());
   /**
    * 🔴 КЛЮЧ — ПАРА (КЛІЄНТ, №), А НЕ САМ №. Номер унікальний У МЕЖАХ КЛІЄНТА —
    * так і написано в коментарі нижче, і для розкриття одного клієнта голого
@@ -2633,6 +2696,15 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         // означало б домалювати 1.6 млн неіснуючого факту.
         carrierPaid: f?.carrierPaid ?? null,
         carrierReason: f?.carrierReason ?? null,
+        /**
+         * 💰 ЧИ ПРИЙШЛИ ГРОШІ ЗА ЦИМ РАХУНКОМ (28.08.2026).
+         *
+         * Чотири стани, і жоден не порожній: `seen` · `stale` (зайшли давно,
+         * рознесення не сталося) · `ambiguous` (платіж називає кілька рахунків) ·
+         * `none` (не зіставлено). 🔴 Порожня клітинка тут заборонена: вона
+         * читається як «нічого немає», а не як «ми не зіставили».
+         */
+        paymentSeen: x.invoice_no ? seenByInvoice.get(x.invoice_no) ?? null : null,
         // 🚚 СКІЛЬКИ заплачено перевізнику. `null` — «суму не вказано», і це
         // ОКРЕМИЙ стан від «не оплачено»: заміряно 25.08.2026 — умови виплати
         // не заповнені у 84 із 279 угод дебіторки (30%). Показати їх нулем
@@ -5094,7 +5166,7 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
  * Team-lead sees only their team; admin sees all (optional teamId).
  */
 /** Сьогодні по-київськи, YYYY-MM-DD. */
-const kyivToday = (): string => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+
 
 /**
  * Чи має роль право бачити цього клієнта. МЕЖА ОДНА для читання і для запису
