@@ -19,6 +19,20 @@ The agreed plan is therefore to run it on your **GPU server**, which has the
 credentials, network access, and the hardware the transcription stage needs.
 See *Running it* below.
 
+## What the reports told us
+
+The four shared spreadsheets answered two of the three open questions outright:
+
+- **Kommo subdomain:** `utsercice` (read from the deal links).
+- **Who the lead-gens are:** 27 named people, with every deal they logged.
+
+In the last three months the reports carry **1,725 quoted deals** across eight
+active lead-gens — Сердюк Ярослав (346), Крупник Аліна (324), Демчук Вікторія
+(301), Шевчук Мирослава (258), Ковтонюк Тетяна (208), Ніколаєнко Анастасія
+(157), Єресько Олександр (103), Бодак Дмитро (25). How many of those are *won*
+is a CRM question, and answering it needs the Kommo API — but 1,725 candidates
+clears the brief's "200+ won deals" target at any plausible win rate.
+
 ## What it produces
 
 For every call, all three required fields plus context:
@@ -84,21 +98,27 @@ cp .env.example .env               # then fill in the four required values
 
 Then work through these four steps in order:
 
-**1. Identify the lead-gen managers.** In this account lead-gen deals are
-distinguished by who is responsible for them, so the export is selected by
-manager. This lists every manager with their won-deal count for the window:
+**1. The deal list is already built.** The lead-gen daily reports name the
+exact deals, so there is nothing to infer from the CRM. Four reports have been
+parsed into `data/leadgen_deals.csv` — 12,252 distinct deals mapped to 27
+named lead-gens, spanning 2024-12 to 2026-08:
+
+| Report | Deals |
+|---|---|
+| Прорахунки ТЛ Таня Ковтонюк | 10,264 |
+| Прорахунки ТЛ Сердюк Ярослав | 1,971 |
+| Щоденна звітність26 (×2, KPI dashboards) | 179 (21 not in the above) |
+
+Set `LEAD_GENS` to narrow to specific people, or leave it blank for all of
+them. To refresh after the reports gain a new month, re-export them and run:
 
 ```bash
-python src/discover.py users
+python src/build_lead_index.py <drive-export>.txt ...
 ```
 
-Put the lead-gen ones into `KOMMO_MANAGERS` — names or numeric ids, comma
-separated. Names match case-insensitively on a substring, so `Олег` finds
-`Олег Коваленко`. A name that matches nobody, or more than one person, stops
-the run with an error rather than quietly exporting the wrong set.
-
-`KOMMO_PIPELINE_IDS` is available as optional extra narrowing
-(`python src/discover.py pipelines` lists them), but is not required.
+Selecting by responsible manager (`KOMMO_MANAGERS`) still exists as a fallback
+for when the index is missing, but the index is more precise and should be
+preferred.
 
 **2. Check the Ringostat field mapping.** The Ringostat API docs were not
 reachable from the machine this was written on, so the response parser tries a
@@ -155,10 +175,11 @@ if the account is single-language.
 
 ## Selection rules
 
-- Deals: `status_id = 142` ("Closed – won"), `closed_at` inside the last
-  `MONTHS_BACK` months, restricted to the managers in `KOMMO_MANAGERS` (and to
-  `KOMMO_PIPELINE_IDS` if set). The run warns if fewer than 200 deals match, so
-  a mis-set manager list is visible immediately rather than after the transcription.
+- Deals: taken from `data/leadgen_deals.csv`, then looked up in Kommo and kept
+  only if `status_id = 142` ("Closed – won") and `closed_at` falls inside the
+  last `MONTHS_BACK` months. The report-date pre-filter reaches one month
+  further back than the window, because a deal quoted in May can close in June.
+  The run warns if fewer than 200 deals survive.
 - Phone numbers come from the linked contacts' `PHONE` custom field.
 - Matching is on the **last 9 digits**, so `+38 (067) 123-45-67`, `0671234567`
   and `380671234567` all join correctly.
@@ -177,15 +198,20 @@ if the account is single-language.
 | `src/transcribe.py` | channel split, Whisper, role assignment |
 | `src/export.py` | txt files, CSV, XLSX, summary |
 | `src/phones.py` | number normalisation and the join key |
+| `src/leadgen_sheets.py` | parses the lead-gen report spreadsheets |
+| `src/build_lead_index.py` | reports → `data/leadgen_deals.csv` |
+| `src/lead_index.py` | reads the index, filters by lead-gen and report date |
 | `src/discover.py` | manager/pipeline listing + Ringostat schema dump |
 | `src/verify_roles.py` | one-off channel/role spot-check |
-| `tests/test_pipeline.py` | 19 offline tests, no network needed |
+| `tests/test_pipeline.py` | 27 offline tests, no network needed |
 
 ```bash
 python tests/test_pipeline.py
 ```
 
-Covers phone-format collapsing, won/lost, pipeline and manager filtering,
+Covers report-sheet parsing (column attribution, date carry-down, mid-sheet
+header remapping, duplicate deals), won-and-in-window filtering of deals looked
+up by id, phone-format collapsing, won/lost, pipeline and manager filtering,
 manager-name resolution (including the unknown and ambiguous cases),
 pagination, Kommo's `204` empty response, direction-based client-number
 resolution, the "5 most recent" cut, short/unrecorded call filtering, role

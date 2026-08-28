@@ -17,6 +17,7 @@ WON_STATUS_ID = 142      # system status "Closed - won", present in every pipeli
 LOST_STATUS_ID = 143     # system status "Closed - lost"
 PAGE_LIMIT = 250         # API maximum
 CONTACT_BATCH = 50       # ids per contacts request
+LEAD_ID_BATCH = 50       # ids per leads-by-id request
 
 
 @dataclass
@@ -163,6 +164,52 @@ class KommoClient:
                 contact_ids=[c["id"] for c in contacts if c.get("id")],
             ))
         log.info("Kommo: %d won leads in window", len(leads))
+        return leads
+
+    def leads_by_id(self, lead_ids: list[int], won_only: bool = True,
+                    closed_from: int = 0, closed_to: int = 0) -> list[Lead]:
+        """Fetch specific deals by id, optionally keeping only won ones.
+
+        This is the path used when the deal universe comes from the lead-gen
+        reports: those name the exact deals, so there is nothing to infer -
+        we look each one up and keep those that are won inside the window.
+        Ids that no longer exist in Kommo are simply absent from the result.
+        """
+        unique = sorted({i for i in lead_ids if i})
+        leads: list[Lead] = []
+        seen: set[int] = set()
+        for start in range(0, len(unique), LEAD_ID_BATCH):
+            batch = unique[start:start + LEAD_ID_BATCH]
+            params: dict[str, Any] = {"with": "contacts"}
+            for i, lid in enumerate(batch):
+                params[f"filter[id][{i}]"] = lid
+            for raw in self._paginate("/api/v4/leads", params, "leads"):
+                if raw["id"] in seen:
+                    continue
+                seen.add(raw["id"])
+                if won_only and raw.get("status_id") != WON_STATUS_ID:
+                    continue
+                closed = raw.get("closed_at") or 0
+                if closed_from and closed < closed_from:
+                    continue
+                if closed_to and closed > closed_to:
+                    continue
+                contacts = raw.get("_embedded", {}).get("contacts", [])
+                leads.append(Lead(
+                    id=raw["id"],
+                    name=raw.get("name") or "",
+                    price=raw.get("price") or 0,
+                    pipeline_id=raw.get("pipeline_id") or 0,
+                    status_id=raw.get("status_id") or 0,
+                    responsible_user_id=raw.get("responsible_user_id") or 0,
+                    created_at=raw.get("created_at") or 0,
+                    closed_at=closed,
+                    contact_ids=[c["id"] for c in contacts if c.get("id")],
+                ))
+            log.info("Kommo: looked up %d/%d deals, %d won so far",
+                     min(start + LEAD_ID_BATCH, len(unique)), len(unique), len(leads))
+        log.info("Kommo: %d of %d report deals are won inside the window",
+                 len(leads), len(unique))
         return leads
 
     def resolve_managers(self, names: list[str]) -> list[int]:

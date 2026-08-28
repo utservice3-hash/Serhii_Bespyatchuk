@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from config import Config
 from kommo_client import KommoClient, KommoError, attach_phones
 from phones import match_key, to_e164_ua
+from leadgen_sheets import detect_subdomain, merge, parse_sheet
 from ringostat_client import Call, RingostatClient, index_by_phone
 from transcribe import CLIENT, MANAGER, Segment, Transcript, roles_for_channels
 
@@ -147,6 +148,86 @@ def make_call(cid, date_str, caller, callee, direction, duration=60,
     return Call(id=cid, date=date_str, caller=caller, callee=callee,
                 direction=direction, duration=duration,
                 recording_url=recording, employee="", raw={})
+
+
+SHEET = """|  |  |  |
+| :-: | :-: | :-: |
+| Сердюк Ярослав | Шевчук Мирослава |  |
+| \\[merged\\] 06.02.2026 | \\[merged\\] 06.02.2026 | \\[merged\\] 06.02.2026 |
+| https://utsercice.kommo.com/leads/detail/61512525 | https://utsercice.kommo.com/leads/detail/61768893 |  |
+| https://utsercice.kommo.com/leads/detail/61774673 |  |  |
+| \\[merged\\] 09.02.2026 | \\[merged\\] 09.02.2026 | \\[merged\\] 09.02.2026 |
+| https://utsercice.kommo.com/leads/detail/61781539 | https://utsercice.kommo.com/leads/detail/61780853 |  |
+| Ніколаєнко Анастасія | Єресько Олександр |  |
+| \\[merged\\] 03.03.2026 | \\[merged\\] 03.03.2026 | \\[merged\\] 03.03.2026 |
+| https://utsercice.kommo.com/leads/detail/61999001 | https://utsercice.kommo.com/leads/detail/61999002 |  |
+"""
+
+
+class TestLeadGenSheets(unittest.TestCase):
+    def setUp(self):
+        self.deals = {d.lead_id: d for d in parse_sheet(SHEET, "report")}
+
+    def test_deals_are_attributed_to_their_column_owner(self):
+        self.assertEqual(self.deals[61512525].lead_gen, "Сердюк Ярослав")
+        self.assertEqual(self.deals[61768893].lead_gen, "Шевчук Мирослава")
+        self.assertEqual(self.deals[61774673].lead_gen, "Сердюк Ярослав")
+
+    def test_date_rows_carry_down_to_the_deals_below_them(self):
+        self.assertEqual(self.deals[61512525].report_date, "2026-02-06")
+        self.assertEqual(self.deals[61774673].report_date, "2026-02-06")
+        self.assertEqual(self.deals[61781539].report_date, "2026-02-09")
+
+    def test_a_later_header_remaps_the_columns(self):
+        # A new month block re-declares who owns each column.
+        self.assertEqual(self.deals[61999001].lead_gen, "Ніколаєнко Анастасія")
+        self.assertEqual(self.deals[61999002].lead_gen, "Єресько Олександр")
+        self.assertEqual(self.deals[61999001].report_date, "2026-03-03")
+
+    def test_subdomain_is_read_from_the_links(self):
+        self.assertEqual(detect_subdomain(SHEET), "utsercice")
+
+    def test_a_deal_listed_twice_is_counted_once(self):
+        twice = SHEET + ("| https://utsercice.kommo.com/leads/detail/61512525 "
+                         "|  |  |\n")
+        ids = [d.lead_id for d in parse_sheet(twice)]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_merge_prefers_an_attributed_record(self):
+        from leadgen_sheets import SheetDeal
+        blind = [SheetDeal(1, "(unattributed)", "2026-01-01", "dashboard")]
+        named = [SheetDeal(1, "Крупник Аліна", "2026-01-01", "report")]
+        self.assertEqual(merge([blind, named])[0].lead_gen, "Крупник Аліна")
+        self.assertEqual(merge([named, blind])[0].lead_gen, "Крупник Аліна")
+
+
+class TestLeadsById(unittest.TestCase):
+    def setUp(self):
+        self.client = KommoClient("acme", "token", rate_limit_per_sec=0)
+
+    def _raw(self, lead_id, status, closed_at):
+        return {"id": lead_id, "name": f"deal-{lead_id}", "status_id": status,
+                "pipeline_id": 7, "closed_at": closed_at,
+                "responsible_user_id": 1, "_embedded": {"contacts": []}}
+
+    def test_keeps_only_won_deals_closed_inside_the_window(self):
+        raw = [
+            self._raw(1, 142, 500),    # won, inside
+            self._raw(2, 143, 500),    # lost
+            self._raw(3, 142, 50),     # won but closed before the window
+            self._raw(4, 142, 5000),   # won but closed after the window
+            self._raw(5, 142, 900),    # won, inside
+        ]
+        with patch.object(self.client.session, "get", return_value=lead_page(raw)):
+            leads = self.client.leads_by_id([1, 2, 3, 4, 5], won_only=True,
+                                            closed_from=100, closed_to=1000)
+        self.assertEqual([l.id for l in leads], [1, 5])
+
+    def test_ids_missing_from_kommo_are_simply_absent(self):
+        with patch.object(self.client.session, "get",
+                          return_value=lead_page([self._raw(1, 142, 500)])):
+            leads = self.client.leads_by_id([1, 2, 3], won_only=True)
+        self.assertEqual([l.id for l in leads], [1])
 
 
 class TestConfig(unittest.TestCase):

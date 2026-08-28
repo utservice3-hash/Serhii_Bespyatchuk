@@ -20,7 +20,7 @@ from transcribe import Transcript
 log = logging.getLogger(__name__)
 
 COLUMNS = [
-    "deal_id", "deal_name", "deal_closed_at", "manager",
+    "deal_id", "deal_name", "deal_closed_at", "lead_gen", "manager",
     "phone", "call_date", "direction", "duration_sec",
     "role_confidence", "language", "recording_url", "transcript_file",
     "transcript",
@@ -34,6 +34,7 @@ class CallRecord:
     deal_id: int
     deal_name: str
     deal_closed_at: str
+    lead_gen: str
     manager: str
     phone: str
     call_date: str
@@ -48,6 +49,7 @@ class CallRecord:
             "deal_id": self.deal_id,
             "deal_name": self.deal_name,
             "deal_closed_at": self.deal_closed_at,
+            "lead_gen": self.lead_gen,
             "manager": self.manager,
             "phone": self.phone,
             "call_date": self.call_date,
@@ -75,6 +77,7 @@ def write_transcript_file(rec: CallRecord, root: Path) -> Path:
 
     header = [
         f"Угода:        {rec.deal_id} — {rec.deal_name}",
+        f"Лідоген:      {rec.lead_gen or '—'}",
         f"Менеджер:     {rec.manager or '—'}",
         f"Телефон:      {rec.phone}",
         f"Дата дзвінка: {rec.call_date}",
@@ -111,7 +114,7 @@ def write_xlsx(records: list[CallRecord], root: Path) -> Path | None:
         log.warning("openpyxl not installed - skipping .xlsx (CSV still written)")
         return None
 
-    widths = {"deal_name": 30, "manager": 20, "phone": 18, "call_date": 20,
+    widths = {"deal_name": 30, "lead_gen": 22, "manager": 20, "phone": 18, "call_date": 20,
               "recording_url": 40, "transcript_file": 34, "transcript": 120}
     wb = Workbook()
     ws = wb.active

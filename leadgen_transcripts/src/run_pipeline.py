@@ -16,7 +16,7 @@ import json
 import logging
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import Config, load_dotenv
 from export import (CallRecord, write_csv, write_summary, write_transcript_file,
                     write_xlsx)
+import lead_index
 from kommo_client import KommoClient, attach_phones
 from ringostat_client import Call, RingostatClient, index_by_phone
 from transcribe import Transcript, Segment, WhisperEngine, transcribe_call
@@ -99,20 +100,36 @@ def main() -> int:
         log.warning("could not load users (%s) - manager column will be blank", exc)
         users = {}
 
-    manager_ids, manager_names = cfg.split_managers()
-    if manager_names:
-        manager_ids += kommo.resolve_managers(manager_names)
-    if manager_ids:
-        log.info("lead-gen managers: %s",
-                 ", ".join(f"{users.get(i, '?')} ({i})" for i in manager_ids))
+    # Preferred path: the lead-gen reports name the exact deals, so look those
+    # up directly. Falls back to filtering by responsible manager if the index
+    # has not been built.
+    gen_by_lead: dict[int, str] = {}
+    manager_ids: list[int] = []
+    if cfg.lead_index.exists():
+        # Deals quoted a little before the window can still close inside it,
+        # so the pre-filter reaches one month further back than the window.
+        report_from = date_from - timedelta(days=31)
+        gen_by_lead = lead_index.load(cfg.lead_index, cfg.lead_gens, report_from)
+        if cfg.lead_gens:
+            log.info("restricted to lead-gens: %s", ", ".join(cfg.lead_gens))
+        leads = kommo.leads_by_id(list(gen_by_lead), won_only=True,
+                                  closed_from=unix_from, closed_to=unix_to)
     else:
-        log.warning("KOMMO_MANAGERS is empty - taking won deals from ALL "
-                    "managers. Set it to restrict the export to lead-gen.")
+        log.warning("%s not found - falling back to manager filtering. "
+                    "Build the index for an exact lead-gen deal set.",
+                    cfg.lead_index)
+        manager_ids, manager_names = cfg.split_managers()
+        if manager_names:
+            manager_ids += kommo.resolve_managers(manager_names)
+        if not manager_ids:
+            log.warning("KOMMO_MANAGERS is empty - taking won deals from ALL "
+                        "managers.")
+        leads = kommo.won_leads(unix_from, unix_to, cfg.kommo_pipeline_ids,
+                                manager_ids)
 
-    leads = kommo.won_leads(unix_from, unix_to, cfg.kommo_pipeline_ids, manager_ids)
     if not leads:
-        log.error("No won deals found. Check KOMMO_MANAGERS, "
-                  "KOMMO_PIPELINE_IDS and the date window.")
+        log.error("No won deals found. Check the lead index, LEAD_GENS "
+                  "and the date window.")
         return 1
     attach_phones(kommo, leads)
 
@@ -139,7 +156,10 @@ def main() -> int:
 
     stats = {
         "window": [str(date_from), str(date_to)],
-        "managers": [users.get(i, str(i)) for i in manager_ids],
+        "lead_gens": sorted({gen_by_lead[l.id] for l in leads
+                             if l.id in gen_by_lead}) or
+                     [users.get(i, str(i)) for i in manager_ids],
+        "report_deals_considered": len(gen_by_lead),
         "deals_won": len(leads),
         "deals_with_phone": sum(1 for l in leads if l.phones),
         "phone_numbers": len(wanted),
@@ -201,6 +221,7 @@ def main() -> int:
             deal_id=lead.id,
             deal_name=lead.name,
             deal_closed_at=_ts(lead.closed_at),
+            lead_gen=gen_by_lead.get(lead.id, ""),
             manager=users.get(lead.responsible_user_id, ""),
             phone=call.client_number,
             call_date=call.date,

@@ -40,7 +40,12 @@ class Config:
     kommo_token: str = ""
     kommo_pipeline_ids: list[int] = field(default_factory=list)
     # Lead-gen managers: numeric user ids and/or names, mixed freely.
+    # Only used when no deal index is available (LEAD_INDEX below takes over).
     kommo_managers: list[str] = field(default_factory=list)
+    # CSV produced by build_lead_index.py - the authoritative deal universe.
+    lead_index: Path = Path("data/leadgen_deals.csv")
+    # Restrict to these lead-gens; blank = every lead-gen in the index.
+    lead_gens: list[str] = field(default_factory=list)
 
     # --- Ringostat ---------------------------------------------------------
     ringostat_key: str = ""
@@ -68,6 +73,8 @@ class Config:
             kommo_token=os.getenv("KOMMO_ACCESS_TOKEN", ""),
             kommo_pipeline_ids=_int_list(os.getenv("KOMMO_PIPELINE_IDS")),
             kommo_managers=_str_list(os.getenv("KOMMO_MANAGERS")),
+            lead_index=Path(os.getenv("LEAD_INDEX", "data/leadgen_deals.csv")),
+            lead_gens=_str_list(os.getenv("LEAD_GENS")),
             ringostat_key=os.getenv("RINGOSTAT_AUTH_KEY", ""),
             ringostat_base=os.getenv("RINGOSTAT_BASE_URL", "https://api.ringostat.net"),
             months_back=int(os.getenv("MONTHS_BACK", "3")),
