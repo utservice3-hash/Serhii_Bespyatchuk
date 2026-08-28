@@ -290,7 +290,7 @@ test("#24m платежі не коштують зайвого походу, і 
 test("#24n matchAll == поштучно, і кілька рахунків видно лише пакетом", () => {
   const a = inv("7001"), b = inv("7002");
   const p = pay({ purpose: "зг. рах. № 7001, № 7002" });
-  const all = matchAll([a, b], [p], "2026-08-28");
+  const all = matchAll([a, b], [a, b], [p], "2026-08-28");
   assert.equal(all.get("7001")!.kind, "ambiguous");
   assert.equal(all.get("7002")!.kind, "ambiguous");
   // 🔴 А ПООДИНЦІ — той самий платіж однозначний, і саме тому зіставляти по
@@ -298,5 +298,72 @@ test("#24n matchAll == поштучно, і кілька рахунків вид
   assert.equal(matchPayment(a, [p], openMap(a), "2026-08-28").kind, "seen",
     "🔴 фікстура не показує різниці — гейт нічого не доводить");
   // Ключі мапи — сирі номери рахунків, як їх бачить екран.
-  assert.deepEqual([...matchAll([inv("000007003")], [], "2026-08-28").keys()], ["000007003"]);
+  assert.deepEqual([...matchAll([inv("000007003")], [inv("000007003")], [], "2026-08-28").keys()],
+    ["000007003"]);
 });
+
+/**
+ * #24o — ВІДПОВІДЬ НЕ ЗАЛЕЖИТЬ ВІД ТОГО, ХТО ДИВИТЬСЯ.
+ *
+ * 🔴 СПІЙМАНО ПИТАННЯМ КООРДИНАТОРА, ДО ВИКАТУ, І ЦЕ БУЛА СПРАВЖНЯ ПОЛОМКА В
+ * МОЄМУ КОДІ. Згортка «💰 3 з 5» у рядку клієнта рахувалась у `/receivables`, а
+ * бейджі — у `/receivables/invoices`, і КОЖЕН будував всесвіт неоднозначності
+ * зі СВОГО набору рахунків. Наслідок: той самий платіж діставав різні відмітки
+ * залежно від скоупу — менеджеру «зайшли», адміну «кілька рахунків», у
+ * розкритті одного клієнта знову «зайшли». Три екрани, три відповіді про один
+ * платіж, і кожна поодинці правильна.
+ *
+ * Тепер всесвіт — УСІ живі рахунки (`OPEN_UNIVERSE_SQL`), однаковий для всіх, а
+ * `reported` лише каже, про кого відповідати.
+ */
+test("#24o відмітка не залежить від скоупу: звужений набір дає ТУ САМУ відповідь", () => {
+  const mine = inv("8001"), other = inv("8002");
+  const universe = [mine, other];
+  const p = pay({ purpose: "зг. рах. № 8001, № 8002" });
+
+  const wide = matchAll([mine, other], universe, [p], "2026-08-28");
+  const narrow = matchAll([mine], universe, [p], "2026-08-28");
+  assert.equal(wide.get("8001")!.kind, "ambiguous");
+  assert.equal(narrow.get("8001")!.kind, wide.get("8001")!.kind,
+    "🔴 звужений скоуп дав ІНШУ відповідь про той самий платіж — менеджер і адмін "
+    + "побачили б різні відмітки, і кожна виглядала б правильною");
+
+  // 🪞 ДЗЕРКАЛО: коли всесвіт справді вужчий (другого рахунка НЕ існує),
+  // відповідь законно інша. Інакше «завжди ambiguous» було б зеленим.
+  const alone = matchAll([mine], [mine], [p], "2026-08-28");
+  assert.equal(alone.get("8001")!.kind, "seen");
+
+  // 🔴 ЗГОРТКА == СКЛАД РОЗКРИТТЯ. Одна функція на обидва екрани; порахувати
+  // згортку окремим виразом означало б завести другу копію тієї самої величини.
+  const states = [...narrow.values()];
+  assert.deepEqual(rollUp(states), { seen: 0, stale: 0, ambiguous: 1, total: 1 });
+  const both = [...wide.values()];
+  assert.deepEqual(rollUp(both), { seen: 0, stale: 0, ambiguous: 2, total: 2 });
+});
+
+/** #24o2 — обидва роути беруть ОДИН всесвіт, а не свій набір. */
+test("#24o2 обидва екрани будують неоднозначність з УСІХ живих рахунків", () => {
+  const src = readFileSync(SRC("routes/dashboard.ts"), "utf8");
+  const calls = [...src.matchAll(/paymentMatch\.matchAll\(/g)];
+  assert.equal(calls.length, 2, `🔴 викликів matchAll ${calls.length}, а не 2 — гейт міряє не те`);
+  // Обидва мусять годувати ВСЕСВІТ, а не показуваний набір.
+  assert.equal((src.match(/paymentMatch\.OPEN_UNIVERSE_SQL/g) ?? []).length, 2,
+    "🔴 хтось із двох екранів рахує неоднозначність зі СВОГО набору рахунків — "
+    + "той самий платіж дістане різні відмітки на сусідніх екранах");
+  assert.match(src, /openUniverse/, "🔴 у списку зник спільний всесвіт");
+  assert.match(src, /paymentMatch\.toUniverse\(uniRows\.rows\)/,
+    "🔴 у розкритті зник спільний всесвіт");
+  // Всесвіт не звужується скоупом: у його SQL немає ні менеджера, ні команди.
+  assert.doesNotMatch(paymentMatchUniverse(), /manager_id|team_id|client_key = ANY/,
+    "🔴 всесвіт звузили скоупом — і відмітка знову залежить від того, хто дивиться");
+  // 🗑 Списані — не суперники: у них гроші вже не чекають.
+  assert.match(paymentMatchUniverse(), /receivable_writeoffs/,
+    "🔴 списані рахунки стали суперниками — однозначне почне читатись як неоднозначне");
+});
+
+function paymentMatchUniverse(): string {
+  const core = readFileSync(SRC("core/paymentMatch.ts"), "utf8");
+  const i = core.indexOf("export const OPEN_UNIVERSE_SQL");
+  assert.ok(i > 0, "🔴 всесвіту більше немає");
+  return core.slice(i, core.indexOf("export interface RawOpenRow", i));
+}

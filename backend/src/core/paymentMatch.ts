@@ -309,16 +309,57 @@ export function toPayments(rows: readonly RawPaymentRow[]): IncomingPayment[] {
  * будується РАЗ і передається в кожне рішення.
  */
 export function matchAll(
-  invoices: readonly OpenInvoice[], payments: readonly IncomingPayment[], today: string,
+  reported: readonly OpenInvoice[],
+  universe: readonly OpenInvoice[],
+  payments: readonly IncomingPayment[],
+  today: string,
 ): Map<string, PaymentSeen> {
   const openByNo = new Map<string, OpenInvoice>();
-  for (const i of invoices) {
+  for (const i of universe) {
     const k = stripLeadingZeros(i.invoiceNo);
     if (k) openByNo.set(k, i);
   }
   const out = new Map<string, PaymentSeen>();
-  for (const i of invoices) out.set(i.invoiceNo, matchPayment(i, payments, openByNo, today));
+  for (const i of reported) out.set(i.invoiceNo, matchPayment(i, payments, openByNo, today));
   return out;
+}
+
+/**
+ * 🌍 УСІ ЖИВІ РАХУНКИ — ВСЕСВІТ ДЛЯ НЕОДНОЗНАЧНОСТІ, БЕЗ ЖОДНОГО СКОУПУ.
+ *
+ * 🔴 ЧОМУ ЦЕ ОКРЕМИЙ ЗАПИТ, А НЕ «ТІ, КОГО ПОКАЗУЄМО». Спіймано питанням
+ * координатора 28.08.2026, ДО викату. `ambiguous` означає «цей ПЛАТІЖ називає
+ * кілька живих рахунків» — твердження про платіж, а не про глядача. Поки
+ * всесвіт будувався з показуваних рахунків, та сама відмітка залежала від того,
+ * ХТО дивиться:
+ *   · менеджер бачить лише своїх → платіж однозначний → «зайшли»;
+ *   · адмін бачить усіх → той самий платіж називає два рахунки → «неоднозначно»;
+ *   · розкриття ОДНОГО клієнта → знову «зайшли».
+ * Тобто три екрани давали три різні відповіді про ОДИН платіж, і кожна окремо
+ * виглядала правильною. Рівно те, від чого береже правило «жоден показник не
+ * має двох джерел на одному екрані» — тут джерел було навіть не два, а стільки,
+ * скільки скоупів.
+ *
+ * ⚠️ Це НЕ розширення видимості: чужий рахунок ніде не показується, з нього
+ * береться лише факт «він існує й живий».
+ *
+ * 🗑 Списані виключені: у них гроші вже не чекають, і вважати їх суперниками
+ * означало б робити неоднозначним те, що однозначне.
+ */
+export const OPEN_UNIVERSE_SQL = `
+  SELECT ri.invoice_no, ri.amount, ri.edrpou
+    FROM receivable_invoices ri
+    LEFT JOIN receivable_writeoffs wo
+           ON wo.client_key_raw = ri.client_key_raw
+          AND wo.invoice_no = COALESCE(ri.invoice_no, '')
+          AND wo.revoked_at IS NULL
+   WHERE COALESCE(ri.invoice_no, '') <> '' AND wo.client_key_raw IS NULL`;
+
+/** Рядок всесвіту, як його віддає SQL. */
+export interface RawOpenRow { invoice_no: string; amount: string | number; edrpou: string | null }
+
+export function toUniverse(rows: readonly RawOpenRow[]): OpenInvoice[] {
+  return rows.map((r) => ({ invoiceNo: r.invoice_no, amount: Number(r.amount), edrpou: r.edrpou }));
 }
 
 /**

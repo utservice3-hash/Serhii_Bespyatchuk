@@ -1854,6 +1854,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
   const syncRes = await pool.query<{
     synced_at: string | null; canonical_of: Record<string, number>;
     payments: paymentMatch.RawPaymentRow[] | null;
+    open_universe: paymentMatch.RawOpenRow[] | null;
   }>(
     `SELECT MAX(r.synced_at) AS synced_at,
             (SELECT COALESCE(jsonb_object_agg(a.canonical_key, a.n), '{}'::jsonb)
@@ -1865,12 +1866,18 @@ dashboardRouter.get("/receivables", async (req, res) => {
             -- (invoicePaymentsSql), а не написаний тут удруге.
             -- (зворотні лапки тут заборонені — це тіло шаблонного рядка)
             (SELECT COALESCE(jsonb_agg(p), '[]'::jsonb)
-               FROM (${paymentMatch.invoicePaymentsSql(1)}) p) AS payments
+               FROM (${paymentMatch.invoicePaymentsSql(1)}) p) AS payments,
+            -- 🌍 УСІ живі рахунки, БЕЗ скоупу: «платіж називає кілька рахунків» —
+            -- твердження про ПЛАТІЖ, а не про глядача. Поки всесвіт будувався зі
+            -- скоупу, менеджер і адмін бачили різні відмітки на одному платежі.
+            (SELECT COALESCE(jsonb_agg(u), '[]'::jsonb)
+               FROM (${paymentMatch.OPEN_UNIVERSE_SQL}) u) AS open_universe
        FROM receivables r`, [paymentMatch.PAYMENT_LOOKBACK_DAYS]
   );
   const syncedAt = syncRes.rows[0]?.synced_at ?? null;
   const canonicalOf: Record<string, number> = syncRes.rows[0]?.canonical_of ?? {};
   const incoming = paymentMatch.toPayments(syncRes.rows[0]?.payments ?? []);
+  const openUniverse = paymentMatch.toUniverse(syncRes.rows[0]?.open_universe ?? []);
 
   // 📇 ФАКТИ ПРО РАХУНКИ — юрособа, стан перевізника, вік, звʼязок із CRM.
   // ОДИН запит на всі зрізи екрана (RTT до Neon = 30 мс, тож ціна тут — кількість
@@ -1889,7 +1896,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
   const openForMatch = facts
     .filter((f) => !f.writtenOff && (f.invoiceNo ?? "") !== "")
     .map((f) => ({ invoiceNo: f.invoiceNo as string, amount: f.amount, edrpou: f.edrpou }));
-  const seenByInvoice = paymentMatch.matchAll(openForMatch, incoming, kyivToday());
+  const seenByInvoice = paymentMatch.matchAll(openForMatch, openUniverse, incoming, kyivToday());
   // Згортка по клієнту — ТИМ САМИМ виразом ядра, що й бейджі в розкритті.
   const seenPerClient = new Map<string, paymentMatch.PaymentSeen[]>();
   for (const f of facts) {
@@ -2618,9 +2625,15 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
    */
   const payRows = await pool.query<paymentMatch.RawPaymentRow>(
     paymentMatch.invoicePaymentsSql(1), [paymentMatch.PAYMENT_LOOKBACK_DAYS]);
+  // 🌍 ВСЕСВІТ — ТОЙ САМИЙ, ЩО В СПИСКУ, і саме тому окремим запитом: якби
+  // неоднозначність рахувалась із рахунків ЦЬОГО клієнта, розкриття казало б
+  // «зайшли» там, де список каже «кілька рахунків». Дві відповіді про один
+  // платіж на сусідніх екранах — і кожна виглядала б правильною.
+  const uniRows = await pool.query<paymentMatch.RawOpenRow>(paymentMatch.OPEN_UNIVERSE_SQL);
   const seenByInvoice = paymentMatch.matchAll(
     ourFacts.filter((f) => !f.writtenOff && (f.invoiceNo ?? "") !== "")
       .map((f) => ({ invoiceNo: f.invoiceNo as string, amount: f.amount, edrpou: f.edrpou })),
+    paymentMatch.toUniverse(uniRows.rows),
     paymentMatch.toPayments(payRows.rows), kyivToday());
   /**
    * 🔴 КЛЮЧ — ПАРА (КЛІЄНТ, №), А НЕ САМ №. Номер унікальний У МЕЖАХ КЛІЄНТА —
