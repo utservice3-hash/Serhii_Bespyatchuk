@@ -3,7 +3,8 @@ import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
-import { mergePairAllowed, mergeDenyReason, type MergePairScope } from "../auth/mergeScope.js";
+import { mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
+         type MergePairScope } from "../auth/mergeScope.js";
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
 import { klassOf } from "../core/klassFilter.js";
@@ -52,7 +53,8 @@ import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
-import { debtAgeDays } from "../core/receivablesAge.js";
+import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
+import * as mergeLimits from "../core/mergeLimits.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { receivablesScope } from "../auth/receivablesScope.js";
@@ -1833,10 +1835,31 @@ dashboardRouter.get("/receivables", async (req, res) => {
       )
     : { rows: [] as { client_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }[] };
   const notes = new Map(notesRes.rows.map((n) => [n.client_key, n]));
-  const syncRes = await pool.query<{ synced_at: string | null }>(
-    `SELECT MAX(synced_at) AS synced_at FROM receivables`
+  /**
+   * 🔗 ДВА ФАКТИ В ОДНОМУ ПОХОДІ — І ЦЕ НЕ ОХАЙНІСТЬ, А `#158`.
+   *
+   * `synced_at` і реєстр псевдонімів не звʼязані нічим, окрім того, що обидва
+   * потрібні цьому екрану й обидва — крихітні агрегати. Окремим запитом реєстр
+   * коштував би +30 мс RTT на КОЖНЕ відкриття списку (заміряно 24.08.2026), а
+   * стеля `#158` — 4 походи. 🔴 Підняти стелю «щоб пройшло» заборонено окремо:
+   * вона тоді пропустить наступний зайвий похід непоміченим. Я цей регрес уже
+   * зробив — саме він і почервонів у `test:prod` викату `d6f7edf`.
+   *
+   * 🔗 НАВІЩО РЕЄСТР ТУТ. Тригер `client_key_alias_no_chain` забороняє ланцюжок:
+   * ключ, що вже є канонічним, псевдонімом стати не може. Без цієї позначки
+   * людина обирає такий рядок, тисне «Обʼєднати» і дізнається правило з тексту
+   * помилки 409. Заміряно 27.08.2026: канонічних із псевдонімами 16, один тримає 11.
+   */
+  const syncRes = await pool.query<{ synced_at: string | null; canonical_of: Record<string, number> }>(
+    `SELECT MAX(r.synced_at) AS synced_at,
+            (SELECT COALESCE(jsonb_object_agg(a.canonical_key, a.n), '{}'::jsonb)
+               FROM (SELECT canonical_key, COUNT(*)::int AS n
+                       FROM client_key_alias WHERE revoked_at IS NULL
+                      GROUP BY canonical_key) a) AS canonical_of
+       FROM receivables r`
   );
   const syncedAt = syncRes.rows[0]?.synced_at ?? null;
+  const canonicalOf: Record<string, number> = syncRes.rows[0]?.canonical_of ?? {};
 
   // 📇 ФАКТИ ПРО РАХУНКИ — юрособа, стан перевізника, вік, звʼязок із CRM.
   // ОДИН запит на всі зрізи екрана (RTT до Neon = 30 мс, тож ціна тут — кількість
@@ -1934,6 +1957,11 @@ dashboardRouter.get("/receivables", async (req, res) => {
     totals: { ...folded.totals, margin: marginCell(folded.totals.earned, folded.totals.clientPay) },
     canSetOwner: isAdminScope(auth),
     canMerge: roleHasPerm(auth.roleKey, "merge_receivables"),
+    // 🔒 Реєстр їде ЛИШЕ тому, хто має право зливати: решті він ні до чого, а
+    // «віддамо всім, бо не таємниця» — це те, як поле одного дня опиняється на
+    // екрані, для якого його не робили. Порожньо у merge-ролі означає «ще
+    // нікого», а не «невідомо»: реєстр читається цілком.
+    ...(roleHasPerm(auth.roleKey, "merge_receivables") ? { canonicalOf } : {}),
     canSetLimit: roleHasPerm(auth.roleKey, "manage_credit_limits"),
     // 🗑 СПИСАННЯ — РІВНО ДВІ РОЛІ (рішення власника 25.08.2026): СЕО й опердир.
     // Не фінансист і не тімліди: це визнання втрати грошей, а не операційна дія.
@@ -2503,8 +2531,11 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
             to_char(nn.due_date, 'YYYY-MM-DD') AS due_date, nn.comment AS inv_comment
      FROM receivable_invoices ri
      LEFT JOIN managers m ON m.id = ri.manager_id
+     -- 🔗 ПО СИРОМУ КЛЮЧУ, А НЕ ПО КАНОНІЧНОМУ (27.08.2026). Канонічний рухає
+     -- склейка, тож після обʼєднання нотатка мовчки відчепилась би від свого
+     -- рахунка: рядок є, дедлайн порожній, і ніщо не каже, що запис існує.
      LEFT JOIN receivable_invoice_notes nn
-            ON nn.client_key = ri.client_key AND nn.invoice_no = COALESCE(ri.invoice_no, '')
+            ON nn.client_key_raw = ri.client_key_raw AND nn.invoice_no = COALESCE(ri.invoice_no, '')
      WHERE ${conds.join(" AND ")}
      -- Час бере участь у сортуванні там, де він є; де немає — рахунок стає в
      -- кінець свого дня, а не на його початок (NULLS LAST), бо «не знаємо»
@@ -2662,24 +2693,49 @@ dashboardRouter.put("/receivables/invoice-note", async (req, res) => {
 
   // Рахунок мусить існувати В ЦЬОГО клієнта: інакше нотатка осіла б під ключем,
   // якому нічого не відповідає, і зникла б з екрана мовчки.
-  const own = await pool.query(
-    `SELECT 1 FROM receivable_invoices ri
-      WHERE ri.client_key = $1 AND COALESCE(ri.invoice_no,'') = $2 LIMIT 1`,
+  //
+  // 🔗 ЗВІДСИ Ж БЕРЕМО СИРИЙ КЛЮЧ, ПІД ЯКИМ НОТАТКА ЖИТИМЕ. Приймаємо
+  // канонічний (людина бачить ОДИН рядок), зберігаємо сирий (він не рухається
+  // ніколи) — рівно як списання. Без цього обʼєднання відчіпляло б нотатку від
+  // рахунка мовчки.
+  //
+  // ⚠️ `ORDER BY` — не косметика: `invoice_no` у 1С буває ПОРОЖНІМ, і в злитого
+  // клієнта такі рахунки є під кількома сирими ключами. Без сортування нотатка
+  // чіплялась би до випадкового з них, і те саме збереження двічі поспіль
+  // лягало б у різні рядки.
+  const own = await pool.query<{ client_key_raw: string }>(
+    `SELECT ri.client_key_raw FROM receivable_invoices ri
+      WHERE ri.client_key = $1 AND COALESCE(ri.invoice_no,'') = $2
+      ORDER BY ri.client_key_raw LIMIT 1`,
     [clientKey, invoiceNo]);
   if (!own.rowCount) return res.status(404).json({ error: "Такого рахунку в цього клієнта немає" });
+  const rawKey = own.rows[0].client_key_raw;
 
   const dueDate = req.body?.dueDate ? String(req.body.dueDate).slice(0, 10) : null;
   const comment = req.body?.comment != null ? String(req.body.comment) : null;
+  // 🪤 ВОСКРЕСЛА ОСИРОТІЛА НОТАТКА. Із 24 наявних 20 не мають живого рахунка,
+  // тож сирого ключа в них NULL (рішення власника: не вигадувати його). Якщо
+  // 1С колись поверне такий рахунок, вставка нижче зіткнулась би зі СТАРИМ PK
+  // `(client_key, invoice_no)`, якого `ON CONFLICT (client_key_raw, …)` не
+  // бачить — і роут віддав би 500 замість збереження. Рядок усиновлюється
+  // рівно в цю мить і рівно тому, що його рахунок ожив.
   await pool.query(
-    `INSERT INTO receivable_invoice_notes (client_key, invoice_no, due_date, comment, updated_by, updated_at)
-     VALUES ($1, $2, $3, $4, $5, now())
-     ON CONFLICT (client_key, invoice_no) DO UPDATE SET
+    `UPDATE receivable_invoice_notes SET client_key_raw = $3
+      WHERE client_key = $1 AND invoice_no = $2 AND client_key_raw IS NULL`,
+    [clientKey, invoiceNo, rawKey]);
+  await pool.query(
+    `INSERT INTO receivable_invoice_notes (client_key, client_key_raw, invoice_no, due_date, comment, updated_by, updated_at)
+     VALUES ($1, $6, $2, $3, $4, $5, now())
+     ON CONFLICT (client_key_raw, invoice_no) DO UPDATE SET
        due_date = EXCLUDED.due_date, comment = EXCLUDED.comment,
+       -- Канонічний ключ — ІСТОРІЯ «під ким писали», і він оновлюється разом із
+       -- записом: після склейки нотатка мусить називати ПОТОЧНОГО клієнта.
+       client_key = EXCLUDED.client_key,
        -- зміна дедлайну знімає анти-дубль, щоб нова прострочка знову створила задачу
        task_created_at = CASE WHEN receivable_invoice_notes.due_date IS DISTINCT FROM EXCLUDED.due_date
                               THEN NULL ELSE receivable_invoice_notes.task_created_at END,
        updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, invoiceNo, dueDate, comment, auth.userId]
+    [clientKey, invoiceNo, dueDate, comment, auth.userId, rawKey]
   );
   res.json({ ok: true });
 });
@@ -3599,51 +3655,125 @@ dashboardRouter.post("/receivables/merge", async (req, res) => {
   if (!roleHasPerm(auth.roleKey, "merge_receivables")) {
     return res.status(403).json({ error: "Обʼєднання в дебіторці доступне КВП, СЕО, Опер. директору та адміну" });
   }
-  const alias = String(req.body?.alias ?? "").trim();
+  /**
+   * 🔗 N ПСЕВДОНІМІВ ЗА РАЗ (рішення власника 27.08.2026).
+   *
+   * Модель `client_key_alias` це вміла завжди — заміряно на проді:
+   * «компаніяштайнерукраїна» тримає 11 псевдонімів. Роут не вмів, тож людина
+   * робила N запитів поспіль, і кожен НЕПОВНИЙ стан між ними був видимий на
+   * екрані. Одиничне поле лишається прийнятним ВХОДОМ, щоб не зламати нічого,
+   * що ще шле старе тіло.
+   */
+  const rawAliases: unknown[] = Array.isArray(req.body?.aliases)
+    ? req.body.aliases
+    : req.body?.alias != null ? [req.body.alias] : [];
+  const aliases = [...new Set(rawAliases.map((a) => String(a ?? "").trim()).filter(Boolean))];
   const canonical = String(req.body?.canonical ?? "").trim();
   const reason = String(req.body?.reason ?? "").trim();
-  if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
+  if (!aliases.length || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
+  if (aliases.includes(canonical)) return res.status(400).json({ error: "Не можна зливати ключ сам із собою" });
   if (!reason) return res.status(400).json({ error: "Причина обовʼязкова — реєстр без причини стає смітником" });
 
+  /**
+   * 🔒 ПʼЯТЕ МІСЦЕ ОДНОГО ВИРАЗУ СКОУПУ (`#199cg`). Зливати можна лише тих
+   * клієнтів, яких ти БАЧИШ — інакше дія над невидимим об'єктом.
+   *
+   * ⚠️ Чесна межа: для ролей, що мають `merge_receivables` (КВП/СЕО/ОД/адмін),
+   * скоуп повний, тож СЬОГОДНІ ця перевірка нікого не зупиняє. Вона тут не
+   * заради сьогодні: щойно право дістане тімлід, межа звузиться сама, а не
+   * чекатиме, поки хтось згадає дописати сюди фільтр.
+   */
+  const sc = receivablesScope(auth, {});
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  const mine = await metrics.receivablesByClient(sc);
+  const visibleKeys = new Set(mine.map((r) => r.clientKey));
+  const unseen = [canonical, ...aliases].filter((k) => !visibleKeys.has(k));
+  if (unseen.length) return res.status(403).json({ error: `Поза вашим скоупом: ${unseen.join(", ")}` });
+
+  /**
+   * 🧾 ЛІМІТИ ЗВОДЯТЬСЯ ЯДРОМ (`core/mergeLimits.ts`), А НЕ SQL-ЕМ ТУТ.
+   * Дні — менший із погоджених; сума — СУМА, включно з відмовою «0 ₴»
+   * (рішення власника 27.08.2026, причина записана над самою функцією).
+   * Слід відмови по сумі лишається СЛОВАМИ в примітці — з числа він зникає.
+   */
+  const keys = [canonical, ...aliases];
+  const limRows = await pool.query<{ client_key: string; limit_days: number | null; limit_amount: string | null }>(
+    `SELECT client_key, limit_days, limit_amount FROM client_credit_limits WHERE client_key = ANY($1)`, [keys]);
+  const limitSides: mergeLimits.MergeLimitRow[] = limRows.rows.map((l) => ({
+    clientKey: l.client_key,
+    limitDays: l.limit_days == null ? null : Number(l.limit_days),
+    limitAmount: l.limit_amount == null ? null : Number(l.limit_amount),
+  }));
+  const mergedDays = mergeLimits.mergedLimitDays(limitSides);
+  const mergedAmount = mergeLimits.mergedLimitAmount(limitSides);
+  const today = new Date().toISOString().slice(0, 10);
+
+  /**
+   * 🔴 УСЕ В ОДНІЙ ТРАНЗАКЦІЇ, ВКЛЮЧНО З РЕЄСТРОМ.
+   *
+   * Раніше запис у `client_key_alias` стояв ОКРЕМИМ запитом ПЕРЕД транзакцією:
+   * падіння перебудови лишало псевдонім у реєстрі, а рядок дебіторки —
+   * старим. Наступна спроба діставала 409 «такий псевдонім уже є», тобто
+   * дія була і незавершеною, і неповторюваною одночасно.
+   */
+  const client = await pool.connect();
   try {
-    await pool.query(
-      `INSERT INTO client_key_alias (alias_key, canonical_key, reason, evidence, approved_by)
-       VALUES ($1,$2,$3,$4::jsonb,$5)`,
-      [alias, canonical, reason.slice(0, 300),
-       JSON.stringify({ source: "receivables", approvedAt: new Date().toISOString().slice(0, 10) }), auth.userId]);
+    await client.query("BEGIN");
+    for (const alias of aliases) {
+      await client.query(
+        `INSERT INTO client_key_alias (alias_key, canonical_key, reason, evidence, approved_by)
+         VALUES ($1,$2,$3,$4::jsonb,$5)`,
+        [alias, canonical, reason.slice(0, 300),
+         JSON.stringify({ source: "receivables", approvedAt: today }), auth.userId]);
+    }
+    await client.query(RECOMPUTE_RECEIVABLES_SQL);
+    await client.query(`DELETE FROM receivables WHERE client_key = ANY($1) AND source = 'sheet'`, [keys]);
+    /**
+     * 🧾 РЯДОК ПЕРЕБУДОВУЄТЬСЯ З ЛІМІТАМИ Й ВІКОМ, А НЕ З NULL-АМИ.
+     *
+     * 🔴 ЩО БУЛО ЗЛАМАНО. `limit_days` вставлявся як NULL, `limit_amount` не
+     * було в переліку колонок узагалі — тобто рівно до наступного синку (до
+     * 15 хв) злитий клієнт стояв «ліміт не узгоджено» і, за правилом власника
+     * «неузгоджений ліміт поводиться як нульовий», ПЕРЕЛІМІТНИКОМ. Вікно
+     * коротке, число неправильне, і ніщо на екрані про це не казало.
+     */
+    await client.query(mergeLimits.MERGED_RECEIVABLE_ROW_SQL, [canonical, mergedDays, mergedAmount]);
+    // Вік боргу — ТИМ САМИМ виразом ядра, що й синк. Другий вираз для «скільки
+    // нам винні найдовше» розійшовся б із синком мовчки.
+    await client.query(
+      `UPDATE receivables r SET overdue_days = a.max_age
+         FROM (${CLIENT_DEBT_AGE_SQL}) a
+        WHERE a.client_key = r.client_key AND r.client_key = $1`, [canonical]);
+    // 🧾 Зведений ліміт лягає і в САМУ таблицю лімітів — інакше найближчий синк
+    // перезаписав би рядок старим значенням канонічного, і виправлення вікна
+    // прожило б 15 хвилин. Пишемо лише тоді, коли є що зводити: рядок із
+    // порожніми лімітами означав би «ліміт розглядали», а його не розглядали.
+    if (mergedDays != null || mergedAmount != null) {
+      await client.query(
+        `INSERT INTO client_credit_limits (client_key, limit_days, limit_amount, note, set_by, set_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (client_key) DO UPDATE SET
+           limit_days = EXCLUDED.limit_days, limit_amount = EXCLUDED.limit_amount,
+           note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_at = now()`,
+        [canonical, mergedDays, mergedAmount,
+         mergeLimits.mergedLimitNote(limitSides, today).slice(0, 300), auth.userId]);
+    }
+    // Відповідальний — у ТІЙ САМІЙ транзакції: інакше зовні існував би стан
+    // «рядок є, відповідального немає».
+    const owners = await recomputeOwners(client, [canonical]);
+    await client.query("COMMIT");
+    res.json({ ok: true, merged: aliases.length, recomputed: owners.clients,
+               limitDays: mergedDays, limitAmount: mergedAmount });
   } catch (e) {
+    await client.query("ROLLBACK");
     const msg = String((e as Error).message ?? e);
     if (/ланцюжок заборонено/.test(msg)) return res.status(409).json({ error: msg });
     if (/duplicate key/.test(msg)) return res.status(409).json({ error: "Такий псевдонім уже є в реєстрі" });
     if (/alias_key <> canonical_key/.test(msg)) return res.status(400).json({ error: "Не можна зливати ключ сам із собою" });
     throw e;
-  }
-
-  // Застосовуємо реєстр і перебудовуємо рядок — тим самим виразом, що й синк.
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(RECOMPUTE_RECEIVABLES_SQL);
-    // Агрегат злитого клієнта: сума обох юросіб, ліміти лишаються від канонічного.
-    await client.query(`DELETE FROM receivables WHERE client_key IN ($1, $2) AND source = 'sheet'`, [alias, canonical]);
-    await client.query(
-      `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days)
-       SELECT ri.client_key,
-              COALESCE(MIN(ri.client_name) FILTER (WHERE ri.client_key_raw = ri.client_key), MIN(ri.client_name)),
-              NULL, '', SUM(ri.amount), NULL, NULL
-         FROM receivable_invoices ri
-        WHERE ri.client_key = $1
-        GROUP BY ri.client_key`,
-      [canonical]);
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
   } finally {
     client.release();
   }
-  const r = await recomputeOwners(pool, [canonical]);
-  res.json({ ok: true, recomputed: r.clients });
 });
 
 /** Зняти ручне призначення — авто-правило вмикається назад. */
@@ -6306,10 +6436,19 @@ dashboardRouter.post("/client-merge/revoke", async (req, res) => {
   // Роз'єднання — той самий кламп, що й злиття, і так само ПЕРШИМ оператором
   // (див. коментар у /client-merge). Канонічний бік беремо з реєстру, бо в тілі
   // запиту його немає — інакше «своє» визначав би той, хто просить.
-  const row = (await pool.query<{ canonical_key: string }>(
-    `SELECT canonical_key FROM client_key_alias WHERE alias_key = $1 AND revoked_at IS NULL`, [alias])).rows[0];
+  const row = (await pool.query<{ canonical_key: string; evidence: unknown }>(
+    `SELECT canonical_key, evidence FROM client_key_alias WHERE alias_key = $1 AND revoked_at IS NULL`, [alias])).rows[0];
+  // 🔓 ПРАВО НА ВІДКІТ — ЗА ДЖЕРЕЛОМ ЗЛИТТЯ (рішення власника 27.08.2026).
+  // Реєстр спільний, а дверей до нього двоє, і гейтяться вони різними правами;
+  // одне правило на відкіт ламало правило «скасовне тим самим інтерфейсом» в
+  // обидва боки одразу. Розбір — чиста функція, деталі в `auth/mergeScope.ts`.
+  const source = mergeSourceOf(row?.evidence);
   const scope = await mergePairScope(req.auth!, alias, row?.canonical_key ?? alias);
-  if (!mergePairAllowed(scope)) return res.status(403).json({ error: mergeDenyReason(scope) });
+  const revokeInput = {
+    source, pair: scope,
+    hasMergeReceivables: roleHasPerm(req.auth!.roleKey, "merge_receivables"),
+  };
+  if (!revokeAllowed(revokeInput)) return res.status(403).json({ error: revokeDenyReason(revokeInput) });
   if (!alias) return res.status(400).json({ error: "alias обовʼязковий" });
   const upd = await pool.query(
     `UPDATE client_key_alias SET revoked_at = now() WHERE alias_key = $1 AND revoked_at IS NULL`, [alias]);

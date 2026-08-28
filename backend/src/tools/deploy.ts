@@ -15,18 +15,25 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
-  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL,
+  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
 import { parseTap, judgeDelta } from "./testDelta.js";
-import { MANIFEST_TESTS, diffGates } from "../testManifest.js";
-import { testsAtRef } from "./gateCount.js";
+import { diffGates } from "../testManifest.js";
+import { testsAtRef, parseManifestTests } from "./gateCount.js";
 import { rmSync, symlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 export const ARTIFACT_PATH = "/tmp/uts-deploy-check.json";
 const HEALTH = "https://dashboard.uts.ua/api/health";
+/** Базовий URL для приймання — той самий хост, що й health. */
+const API_BASE = HEALTH.replace(/\/api\/health$/, "");
+/**
+ * ⏱ Скільки чекати від РЕСТАРТУ до приймання. Заміряно 23.08.2026: 5 хв → /overview
+ * 3.0-4.2 с, 12 хв → 2.35 с. Раніше — червоне без регресу.
+ */
+const WARM_MS = 12 * 60 * 1000;
 
 const sh = (cmd: string, args: string[], cwd?: string): string =>
   execFileSync(cmd, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
@@ -37,7 +44,9 @@ export interface StepResult { id: string; ok: boolean; skipped?: string; detail:
 interface Health { version: { shortSha: string }; buildStale?: boolean }
 async function health(): Promise<Health> {
   const r = await fetch(HEALTH);
-  if (!r.ok) throw new Error(`health віддав ${r.status}`);
+  if (!r.ok) throw new Error(
+    `health віддав ${r.status}. Прод або лежить, або підіймається після рестарту.\n`
+    + "   Подивись лог прода й app_boot; якщо це ПІСЛЯ kill — дай ~15 с і повтори крок.");
   return (await r.json()) as Health;
 }
 async function prodSha(): Promise<string> {
@@ -63,17 +72,68 @@ export const NODE_BIN = process.env.UTS_NODE_BIN ?? "/usr/local/node26/bin";
 export const BACKUP_DIR = process.env.UTS_BACKUP_DIR ?? "/home/evraziat/uts.ua/deploy-backups";
 export const BACKUP_KEEP = 2;
 
-function toolsPresent(id: string): StepResult {
+/**
+ * Перевірка інструментів. `namedBin` — каталог, у якому node/npm мусять лежати
+ * ПОІМЕННО, або `null`, якщо досить будь-яких у `PATH`.
+ *
+ * 🔴 РІЗНИЦЯ МІЖ ФАЗАМИ — НЕ ПРИДИРКА, І `3655602` НА ЦЬОМУ ЗГОРІВ. Я вимагав
+ * прод-специфічного `/usr/local/node26/bin` в ОБОХ фазах — а `check` за задумом
+ * біжить у контейнері чи стенді, де node лежить деінде. Тобто той викат зробив
+ * `deploy:check` невиконуваним поза продом: рівно та хвороба, яку ми перед тим два
+ * дні лікували («інструмент, який неможливо виконати, не захищає нікого»).
+ * Знайшов HR, читаючи диф.
+ *
+ * Кому що потрібно:
+ *   `check` — БУДЬ-ЯКІ node/npm/git: фаза лише збирає й ганяє тести, а артефакт від
+ *             мажора не залежить (заміряно на одному sha: node24 і node26 дають
+ *             однаковий бандл і однаковий бекенд, md5 збігається);
+ *   `run`   — САМЕ прод-бінарник: після `kill` процес підіймає конвеєр саме ним, і
+ *             якщо його немає, сайт не повернеться. Перевірка стоїть ПЕРЕД першим
+ *             `rm -rf dist`, бо 26.08.2026 ланцюг зробив `rm` і аж тоді впав на
+ *             `npm: command not found`.
+ */
+/**
+ * 🔴 ЛАНЦЮГ НЕ СТАВИТЬ ЗАЛЕЖНОСТЕЙ І НЕ ПОВИНЕН — але мусить сказати це вголос.
+ *
+ * 📐 Привід: 27.08.2026 два чати заміряли `node_modules` у стенді й дістали різні
+ * відповіді. Розгадка виявилась не в помилці жодного: стендів на хості ДВА, і другий
+ * (`stand-osnovnyi`) створили за сім хвилин до заміру — між `git clone` і `npm ci`
+ * є вікно в кілька хвилин, коли залежностей справді немає. Стан реальний і
+ * відтворюваний, тож перший, хто прийде на свіжий стенд, вирішить, що той зламаний.
+ *
+ * Ланцюг не робить `npm ci` НІДЕ (перевірено: нуль викликів) — навпаки, крок `test`
+ * СИМЛІНКУЄ `node_modules` стенда в базовий worktree, тобто на них спирається.
+ * Тихий `npm ci` тут був би гірший за відмову: три хвилини мовчання й мовчазна зміна
+ * дерева, у якому саме міряють приріст падінь.
+ */
+function needDeps(dir: string, what: string): void {
+  if (existsSync(`${dir}/node_modules`)) return;
+  throw new Error(
+    `у ${what} немає node_modules — ланцюг залежностей НЕ ставить і не буде.\n`
+    + `   Свіжий клон живе так кілька хвилин, поки не проженеш:\n`
+    + `     (cd ${dir} && npm ci)\n`
+    + "   Це не поломка стенда — це його ненаповнений стан.");
+}
+
+export function toolsPresent(id: string, namedBin: string | null): StepResult {
   const missing = ["npm", "node", "git"].filter((t) => {
     try { sh(t, ["--version"]); return false; } catch { return true; }
   });
-  const named = existsSync(`${NODE_BIN}/node`) && existsSync(`${NODE_BIN}/npm`);
-  if (!named) return { id, ok: false,
-    detail: `🔴 у ${NODE_BIN} немає node/npm — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\`` };
-  return { id, ok: missing.length === 0,
-    detail: missing.length
-      ? `🔴 у PATH немає: ${missing.join(", ")} — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\``
-      : "npm, node, git на місці" };
+  if (missing.length) return { id, ok: false,
+    detail: `🔴 у PATH немає: ${missing.join(", ")} — далі йти НЕ МОЖНА: наступний крок починається з \`rm -rf dist\`.\n`
+      + "   Найчастіша причина: relay — НЕ логін-шелл, і npm у його PATH немає взагалі.\n"
+      + "   Лікується одним із двох, і перше надійніше:\n"
+      + "     export PATH=/usr/local/node26/bin:$PATH   (на початку КОЖНОГО relay-ланцюга)\n"
+      + "     bash -lc \"…\"                              (логін-шелл підтягне профіль)" };
+  /**
+   * 🔴 ВІДМОВА МУСИТЬ НАЗИВАТИ ВЛАСНИЙ ВИХІД. Гачок `UTS_NODE_BIN` існував і до цього,
+   * але текст його не згадував — HR знайшов його, лише пішовши читати диф. Відмова,
+   * що не називає, як її зняти, коштує наступному годину.
+   */
+  if (namedBin && !(existsSync(`${namedBin}/node`) && existsSync(`${namedBin}/npm`))) return { id, ok: false,
+    detail: `🔴 у ${namedBin} немає node/npm — далі йти НЕ МОЖНА: після \`kill\` процес підіймає конвеєр саме цим бінарником.\n`
+      + `   Інший шлях задається змінною UTS_NODE_BIN (напр. UTS_NODE_BIN=/usr/local/node24/bin).` };
+  return { id, ok: true, detail: namedBin ? `npm, node, git на місці (${namedBin})` : "npm, node, git на місці (PATH)" };
 }
 
 /**
@@ -89,8 +149,10 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * 🛠 СЕРЕДОВИЩЕ — ПЕРЕД ПЕРШИМ `rm`, А НЕ ПІСЛЯ. Обробник один на обидві фази:
    * розходження між ними було б рівно тією дірою, яку крок закриває.
    */
-  toolsCheck: () => toolsPresent("toolsCheck"),
-  toolsRun: () => toolsPresent("toolsRun"),
+  // check біжить у контейнері/стенді — там node лежить де завгодно, і це нормально.
+  toolsCheck: () => toolsPresent("toolsCheck", null),
+  // run убиває процес прода — прод-бінарник мусить БУТИ, інакше сайт не повернеться.
+  toolsRun: () => toolsPresent("toolsRun", NODE_BIN),
   base: async (c) => {
     const live = await prodSha();
     c.prod = live;
@@ -106,7 +168,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return { id: "lightAdmission", ok: outside.length === 0,
       detail: outside.length ? `🔴 поза frontend/: ${outside.join(", ")} — режим ПОВНИЙ` : "діф лише у frontend/" };
   },
-  buildBack: (c) => run("buildBack", () => { sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
+  buildBack: (c) => run("buildBack", () => { needDeps(c.be, "backend"); sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
   tscFront: (c) => run("tscFront", () => sh("npx", ["tsc", "-b"], c.fe), "tsc -b фронту (НЕ --noEmit: він там нічого не перевіряє)"),
   /**
    * 🔴 БАНДЛ ФРОНТУ. `tscFront` поруч — це ТИПИ (`tsc -b`), він нічого не емітить;
@@ -114,7 +176,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * Крок стоїть у фазі CHECK, тобто у стенді: у докруті йому не місце — саме заради
    * цього збірку й виносили.
    */
-  buildFront: (c) => run("buildFront", () => sh("npm", ["run", "build"], c.fe), "бандл фронту (vite) — у СТЕНДІ"),
+  buildFront: (c) => run("buildFront", () => { needDeps(c.fe, "frontend"); sh("npm", ["run", "build"], c.fe); }, "бандл фронту (vite) — у СТЕНДІ"),
   /**
    * 🔴 КРИТЕРІЙ — ПРИРІСТ, А НЕ КОД 0. Розгорнуто в `testDelta.ts`; тут — механіка
    * двох прогонів. Ціна заміряна: +78 с (worktree+збірка 12.4 с, прогін бази 65.8 с).
@@ -159,10 +221,50 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       if (baseTap.length === 0 || treeTap.length === 0) {
         return { id: "test", ok: false, detail:
           `🔴 порожній TAP (база ${baseTap.length}, дерево ${treeTap.length}) — прогін не відбувся. `
-          + "Порожній результат = провал, а не «падінь немає»." };
+          + "Порожній результат = провал, а не «падінь немає».\n"
+          + "   Прожени `npm test` руками в тому ж каталозі й подивись на ПЕРШІ рядки виводу: "
+          + "зазвичай це збірка, що не відбулась, або відсутній dist." };
       }
-      const lost = diffGates(testsAtRef(c.prod), MANIFEST_TESTS).onlyBefore;
+      /**
+       * 🔴 МАНІФЕСТ ЧИТАЄМО З ДЖЕРЕЛА В ЦЮ МИТЬ, А НЕ З ІМПОРТУ.
+       *
+       * 📐 Спіймано першим прогоном після ребейзу (27.08.2026): крок доповів
+       * «ЗНИКЛИ ГЕЙТИ (11)» — #240-#248 Основного, які насправді лежали в дереві.
+       * `deploy.ts` імпортує маніфест на ЗАВАНТАЖЕННІ МОДУЛЯ, а `buildBack` уже потім
+       * робить `rm -rf dist && npm run build`. Тобто порівнювався прод із маніфестом
+       * зі СТАРОГО dist: у ньому (база f6891b0) тих гейтів було 0, у проді — 11.
+       *
+       * 🔑 Найгірше тут не хибна тривога, а те, ЩО САМЕ вона стереже: детектор
+       * зниклих гейтів, який сам залежить від свіжості збірки, робить недовірливим
+       * саме той сигнал, заради якого існує. Рідня «несвіжого dist», але всередині
+       * інструмента приймання.
+       */
+      const manifestNow = parseManifestTests(
+        readFileSync(`${c.be}/src/testManifest.ts`, "utf8"), "дерево (джерело, не dist)");
+      const lost = diffGates(testsAtRef(c.prod), manifestNow).onlyBefore;
       const d = judgeDelta(baseTap, treeTap, lost);
+      /**
+       * 🔴 ПРИРІСТ НУЛЬ ≠ ПОВНЕ ПОКРИТТЯ, І ЦЬОГО НЕ БУЛО ВИДНО ЗІ ЗВІТУ.
+       *
+       * 📐 Заміряно 27.08.2026 на ОДНІЙ базі: у стенді «падінь 2, виконано 446», у
+       * контейнері «падінь 104, виконано 595». Різниця не в коді — у стенді немає
+       * `.env`, тож ~149 БД-гейтів чесно скіпаються. Критерій приросту в обох
+       * оточеннях виконано (він порівнює однакові), і саме тому «8 із 8» читалось
+       * як повне покриття, будучи покриттям НА 149 ПЕРЕВІРОК МЕНШИМ.
+       *
+       * Рішення власника: розрив НАЗВАТИ, а не закрити. Число тут — не привід
+       * підкладати бойовий `.env` у стенд (це другий екземпляр доступів на диску);
+       * це підпис під тим, чого прогін не бачив.
+       */
+      const ran = treeTap.filter((t) => !t.skipped).length;
+      const skipped = treeTap.length - ran;
+      const noEnv = !existsSync(`${c.be}/.env`);
+      d.lines.push(
+        `📐 ПОКРИТТЯ: виконано ${ran} із ${treeTap.length}, скіпнуто ${skipped}`
+        + (noEnv
+          ? " — у стенді немає backend/.env, тож БД-гейти не виконувались.\n"
+            + "   «Приріст 0» тут означає «не гірше за базу В ЦЬОМУ Ж оточенні», а НЕ «перевірено все»."
+          : "."));
       return { id: "test", ok: d.ok, detail: d.lines.join("\n") };
     } catch (e) {
       return { id: "test", ok: false, detail: `🔴 приріст не порахований: ${String((e as Error).message).slice(0, 300)}` };
@@ -182,6 +284,51 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const who = process.env.UTS_ACTOR ?? "deploy:run";
     const r = lockCli(["--take", `--who=${who}`, `--reason=викат ${c.target}`], CANON_LOCK_DIR);
     return { id: "lockTake", ok: r.code === 0, detail: r.out.join(" · ") };
+  },
+  /**
+   * 🧪 ПРИЙМАННЯ — ЧАСТИНА ЛАНЦЮГА, А НЕ ЛЮДСЬКА ДИСЦИПЛІНА.
+   *
+   * 🔴 Привід переозначує чужий інцидент. 26.08.2026 HR ганяв `test:prod`, а журнал
+   * казав «звільнено о 21:08», і два дні ми вважали це питанням дисципліни й писали
+   * про це в промтах. Насправді **інструмент відпускав замок сам**, у кінці фази run:
+   * `lockRelease` стояв ПІСЛЯ `pushBranch` і ПЕРЕД будь-яким прийманням, якого в
+   * скрипті не було взагалі. Тобто дисципліну вимагали там, де її щоразу скасовував код.
+   *
+   * Тепер приймання — крок, а `lockRelease` стоїть ОДРАЗУ за ним. Провалилось
+   * приймання — крок падає, ланцюг обривається, і замок лишається взятим САМ,
+   * без жодної згадки про уважність.
+   *
+   * ⏱ Прогрів обовʼязковий і рахується від МОМЕНТУ РЕСТАРТУ, а не від початку кроку:
+   * заміряно 23.08.2026 — процес віком 5 хв віддає /overview за 3.0-4.2 с, 12 хв — за
+   * 2.35 с, і лише тоді `#36` зеленіє. Приймання, запущене раніше, червонить без
+   * жодного регресу — а червоне, що не з нашої вини, за два тижні починають гортати.
+   */
+  accept: async (c) => {
+    const since = c.restartedAt ?? Date.now();
+    while (Date.now() - since < WARM_MS) {
+      try { await fetch(HEALTH); } catch { /* прогрів, а не перевірка */ }
+      await new Promise((r) => setTimeout(r, 20_000));
+    }
+    const log = "/tmp/deploy-accept.log";
+    // `|| true`: ненульовий код тут — НОРМА (падіння тесту), а вирок вимовляє гейт прогону.
+    const out = sh("bash", ["-lc",
+      `cd ${c.prodBe} && set -a && . ./.env && set +a && `
+      + `API_BASE=${API_BASE} npm run test:prod > ${log} 2>&1 || true; `
+      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1`]);
+    const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
+    /**
+     * 🔴 Немає підсумкового рядка — це ПРОВАЛ, а не «нічого не знайшлось». Прогін,
+     * що не дійшов до власного гейта, не є прийманням (той самий клас, що «успіх за 0 мс»).
+     */
+    if (!m) return { id: "accept", ok: false,
+      detail: `🔴 гейт прогону не надрукував підсумку — приймання не дійшло до кінця. Лог: ${log}` };
+    const [, doneN, needN, fails] = m;
+    // Недобір і падіння — РІЗНІ вироки: перший каже «ми не дивились», другий «зламано».
+    if (doneN !== needN) return { id: "accept", ok: false,
+      detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
+    if (fails !== "0") return { id: "accept", ok: false,
+      detail: `🔴 падінь ${fails} при ${doneN} із ${needN}. Лог: ${log}` };
+    return { id: "accept", ok: true, detail: `${doneN} із ${needN}, падінь 0` };
   },
   lockRelease: (c) => {
     const who = process.env.UTS_ACTOR ?? "deploy:run";
@@ -264,7 +411,9 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const head = sh("git", ["rev-parse", "HEAD"], c.buildRepo);
     const vPath = c.be + "/dist/version.json";
     if (!existsSync(vPath)) {
-      return { id: "baseAgain", ok: false, detail: "🔴 у стенді немає " + vPath + " — доставляти нічого, збірки не було" };
+      return { id: "baseAgain", ok: false, detail:
+        "🔴 у стенді немає " + vPath + " — доставляти нічого, збірки не було.\n"
+        + "   Прожени фазу check у стенді: npm run deploy:check -- --mode=full" };
     }
     const built = String((JSON.parse(readFileSync(vPath, "utf8")) as { sha?: string }).sha ?? "");
     if (built !== head) {
@@ -338,19 +487,32 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return run("migrate", () => sh("bash", ["-lc", `cd ${c.prodBe} && set -a && . ./.env && set +a && npm run migrate`]), `міграції застосовано (${migs.join(", ")}) — 🔴 звірити результат ОКРЕМИМ запитом: «Migration applied» друкується й тоді, коли частина роботи відкотилась`);
   },
   markDeploy: (c) => run("markDeploy", () => sh("bash", ["-lc", `cd ${c.prodBe} && set -a && . ./.env && set +a && node dist/tools/markDeploy.js --note="викат ${c.target}"`]), "намір заявлено ПЕРЕД kill"),
-  kill: () => run("kill", () => sh("bash", ["-lc", `PID=$(ps -eo pid,args | awk '$2=="node" && $3=="dist/index.js" {print $1}' | head -1); [ -n "$PID" ] || { echo "процес не знайдено"; exit 1; }; kill -TERM "$PID"; echo "TERM → $PID"`]), "pid і kill однією командою"),
+  kill: (c) => runStamp(c, "kill", () => sh("bash", ["-lc", `PID=$(ps -eo pid,args | awk '$2=="node" && $3=="dist/index.js" {print $1}' | head -1); [ -n "$PID" ] || { echo "процес не знайдено"; exit 1; }; kill -TERM "$PID"; echo "TERM → $PID"`]), "pid і kill однією командою"),
   healthVersion: async (c) => {
     for (let i = 0; i < 10; i++) {
       try { if ((await prodSha()) === c.target) return { id: "healthVersion", ok: true, detail: `health.version == ${c.target}` }; } catch { /* сервер підіймається */ }
       await new Promise((r) => setTimeout(r, 6000));
     }
-    return { id: "healthVersion", ok: false, detail: `🔴 health не показав ${c.target} — РЕСТАРТУ НЕ БУЛО, скільки б кнопка не звітувала` };
+    return { id: "healthVersion", ok: false, detail:
+      `🔴 health не показав ${c.target} за 60 с — РЕСТАРТУ НЕ БУЛО, скільки б кнопка не звітувала.\n`
+      + "   Прод зараз крутить СТАРИЙ код при НОВОМУ dist на диску (buildStale=true) — сайт живий.\n"
+      + "   Далі: подивись лог прода; повтори kill через relay (див. INFRASTRUCTURE §7 крок 5);\n"
+      + "   якщо процес не підіймається — відкат розпакуванням тарбола з /home/evraziat/uts.ua/deploy-backups.\n"
+      + "   🔒 Замок НЕ віддавай: недороблений викат і є те, заради чого він узятий." };
   },
   bootKind: (c) => run("bootKind", () => sh("bash", ["-lc", `cd ${c.prodBe} && set -a && . ./.env && set +a && node -e '
     const { pool } = await import("./dist/db/pool.js");
     const r = await pool.query("SELECT kind, short_sha FROM app_boot ORDER BY booted_at DESC LIMIT 1");
     const row = r.rows[0]; await pool.end();
-    if (row.kind !== "deploy") { console.error("🔴 останній старт класифіковано як " + row.kind); process.exit(1); }
+    if (row.kind !== "deploy") {
+      console.error("🔴 останній старт класифіковано як " + row.kind + ", а не deploy.");
+      console.error("   Причина майже завжди одна: markDeploy не відпрацював ПЕРЕД kill,");
+      console.error("   тож classifyBoot побачив той самий sha і вирішив, що процес упав сам.");
+      console.error("   Наслідок: банер «застосунок перезапустився без викату» користувачам");
+      console.error("   і зіпсована статистика аварій. Полагодь порядок кроків і повтори викат;");
+      console.error("   намір живе 15 хв, тож повторний markDeploy без kill нічого не дасть.");
+      process.exit(1);
+    }
     console.log("app_boot: " + row.kind + " " + row.short_sha);'`]), "старт класифіковано як deploy"),
   pushBranch: (c) => run("pushBranch", () => sh("bash", ["-lc", `cd ${c.docRoot} && git push origin HEAD:${c.branch} && git fetch origin -q && git rev-list --left-right --count origin/${c.branch}...HEAD`]), "sha у прод-гілці, ahead/behind заміряно ПІСЛЯ fetch"),
   report: () => ({ id: "report", ok: true, detail: "звіт нижче" }),
@@ -375,8 +537,20 @@ export interface Ctx {
   prodBe: string;
   branch: string; target: string;
   mode: Mode; prod: string; now: string;
+  /**
+   * Мить успішного `kill`. Прогрів рахується ВІД НЕЇ, а не від початку кроку
+   * приймання: інакше кожен крок між ними мовчки з'їдав би частину прогріву.
+   */
+  restartedAt?: number;
   /** Файли дифу проти прода — джерело для migrate. */
   changed: string[];
+}
+
+/** `run`, що на успіху штампує мить рестарту — від неї рахується прогрів. */
+function runStamp(c: Ctx, id: string, fn: () => void, detail: string): StepResult {
+  const r = run(id, fn, detail);
+  if (r.ok) c.restartedAt = Date.now();
+  return r;
 }
 
 function run(id: string, fn: () => void, detail: string): StepResult {
@@ -418,8 +592,7 @@ export async function main(argv: string[]): Promise<number> {
    * Дефолти лишають СТАРУ поведінку (обидва = поточний каталог), щоб перехід був
    * оборотним; але фаза run на злитих шляхах ВІДМОВЛЯЄ — див. нижче.
    */
-  const buildRepo = process.env.UTS_BUILD_REPO ?? process.env.UTS_REPO ?? process.cwd().replace(/\/backend$/, "");
-  const docRoot = process.env.UTS_DOC_ROOT ?? "/home/evraziat/uts.ua/dashboard";
+  const { buildRepo, docRoot } = resolveTrees(process.env, process.cwd());
   if (phase === "check" && isProdCheckout({
     rootIndexHtml: existsSync(`${buildRepo}/index.html`), rootAssets: existsSync(`${buildRepo}/assets`), path: buildRepo, docRoot,
   })) { console.error(PROD_CHECKOUT_REFUSAL); return 3; }
@@ -443,9 +616,7 @@ export async function main(argv: string[]): Promise<number> {
    * збірки не торкається докрута» стане беззмістовним: торкатись буде нічого.
    */
   if (phase === "run" && buildRepo === docRoot) {
-    console.error("🔴 UTS_BUILD_REPO і UTS_DOC_ROOT — це ОДИН каталог.\n"
-      + "   Фаза run доставляє те, що зібрав СТЕНД; збирати й доставляти в одному дереві\n"
-      + "   означає повернути чекаут у стан «зайнятий 21 хвилину». Признач стенд явно.");
+    console.error(SAME_TREE_REFUSAL({ buildRepo, docRoot }));
     return 3;
   }
   const ctx: Ctx = {
@@ -498,14 +669,16 @@ export async function main(argv: string[]): Promise<number> {
    * зелений вивід, який прочитають як приймання — той самий клас, що «0 падінь»,
    * коли третина тестів не виконалась.
    */
-  if (phase === "run") {
-    console.log("\n🔴 ПРИЙМАННЯ НЕ ЗРОБЛЕНО — це не входить у скрипт:");
+  const accepted = done.some((x) => x.id === "accept" && x.ok && !x.skipped);
+  if (phase === "run" && !accepted) {
+    console.log("\n🔴 ПРИЙМАННЯ НЕ ЗРОБЛЕНО — і замок НЕ звільнено (це навмисно):");
     console.log("   ﹣ прогрів ~13 хв (перший запит після рестарту холодний)");
     console.log("   ﹣ npm run test:prod з API_BASE");
+    console.log("   ﹣ і аж потім: npm run lock -- --release --who=<ти> --reason=\"…\"");
     if (done.some((d) => d.id === "migrate" && !d.skipped))
       console.log("   ﹣ 🔴 БУЛА МІГРАЦІЯ: звірити результат ОКРЕМИМ запитом, а не за виводом «Migration applied»");
   }
-  console.log(JSON.stringify({ phase, mode, acceptanceDone: false,
+  console.log(JSON.stringify({ phase, mode, acceptanceDone: accepted,
     steps: done.map((d) => ({ id: d.id, ok: d.ok, skipped: d.skipped ?? null })) }));
   return 0;
 }

@@ -126,6 +126,7 @@ export function ReceivablesSection({
   receivablesTotals,
   canSetOwner,
   canMerge,
+  canonicalOf,
   canSetLimit,
   canRequestLimit,
   canWriteOff,
@@ -153,6 +154,12 @@ export function ReceivablesSection({
   canWriteOff: boolean;
   /** Право віддає СЕРВЕР (`merge_receivables`). Фінансиста тут немає. */
   canMerge: boolean;
+  /**
+   * 🔗 Скільки псевдонімів уже приймає кожен канонічний ключ. Реєстр знає лише
+   * БД, тож число приходить із сервера; діалог обʼєднання позначає ним рядки,
+   * які псевдонімом стати не можуть (ланцюжок заборонено тригером).
+   */
+  canonicalOf: Record<string, number>;
   canEditReceivables: boolean;
   patchReceivableNote: (clientKey: string, patch: { comment?: string; dueDate?: string | null }) => void;
   onRefresh?: () => void;
@@ -1009,6 +1016,10 @@ export function ReceivablesSection({
               sides={all.map<MergeSide>((c) => ({
                 clientKey: c.clientKey, clientName: c.clientName,
                 amount: c.amount, invoices: c.facts?.invoices ?? 0,
+                // 🔗 Реєстр знає лише БД — фронт цього не виводить. Порожнє
+                // поле означає «ще нікого не приймає», а не «невідомо»:
+                // сервер читає реєстр цілком.
+                alreadyCanonical: canonicalOf[c.clientKey] ?? 0,
               }))}
               onClose={() => setMergeOpen(false)}
               onDone={() => { setMergeOpen(false); onRefresh?.(); }}

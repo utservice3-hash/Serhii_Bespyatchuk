@@ -39,3 +39,60 @@ export function mergeDenyReason(s: MergePairScope): string {
   if (s.canonicalTeamId !== s.leadTeamId) bad.push("основний");
   return `Поза вашою командою: ${bad.join(" і ")}. Міжкомандне обʼєднання робить КВП або Опер. директор`;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   🔓 РОЗʼЄДНАННЯ — ПРАВО ЗАЛЕЖИТЬ ВІД ТОГО, ДЕ ЗЛИТТЯ ЗРОБИЛИ (27.08.2026)
+
+   🔴 ЧОМУ НЕ ОДНЕ ПРАВИЛО НА ВСІХ. Реєстр `client_key_alias` СПІЛЬНИЙ, а
+   дверей до нього ДВОЄ, і вони гейтяться РІЗНИМИ правами: «Клієнти» —
+   `merge_clients` (+ тімлід, коли обидва боки його команди), дебіторка —
+   `merge_receivables`. Поки відкіт мав ОДНЕ правило, обидві половини правила
+   «дія має бути скасовною тим самим інтерфейсом» ламались одночасно:
+
+   · тімлід, у якого обидва боки свої, міг ВІДКОТИТИ злиття, зроблене в
+     дебіторці, — тобто скасувати дію, яку сам зробити не міг;
+   · роль із `merge_receivables`, але без `merge_clients`, могла ЗЛИТИ й не
+     могла роз'єднати — та сама незворотна кнопка, через яку Шевчука Назара
+     довелось повертати SQL-ом по проду.
+
+   ⚠️ Сьогодні жодна з двох дірок не спрацьовує: `merge_receivables` мають
+   КВП/СЕО/ОД/адмін, і всі вони мають `merge_clients` теж. Це не привід не
+   робити — це причина записати ЧИСЛО: заміряно 27.08.2026, у реєстрі 178
+   злиттів і **жодного** скасованого, тобто відкіт на живих даних не
+   перевірявся НІ РАЗУ. Механізм, який ніколи не вмикали, тримається лише на
+   тому, що написано.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Де зроблено злиття. Пишеться в `client_key_alias.evidence.source`. */
+export type MergeSource = "receivables" | "clients";
+
+/**
+ * `evidence` — довільний JSON із БД, тож розбір мусить бути fail-safe і
+ * fail-**closed** у бік суворішого: невідоме джерело читається як «Клієнти»,
+ * бо це історичний дефолт (усі 178 наявних записів або мають
+ * `source:"receivables"`, або не мають поля взагалі).
+ */
+export function mergeSourceOf(evidence: unknown): MergeSource {
+  const src = (evidence as { source?: unknown } | null | undefined)?.source;
+  return src === "receivables" ? "receivables" : "clients";
+}
+
+export interface RevokeInput {
+  source: MergeSource;
+  /** Чи має роль право `merge_receivables` (ті самі двері, що й злиття). */
+  hasMergeReceivables: boolean;
+  /** Рішення про пару за правилами «Клієнтів» — для злиттів звідти. */
+  pair: MergePairScope;
+}
+
+export function revokeAllowed(i: RevokeInput): boolean {
+  return i.source === "receivables" ? i.hasMergeReceivables : mergePairAllowed(i.pair);
+}
+
+/** Причина відмови називає ті двері, у які людина не проходить. */
+export function revokeDenyReason(i: RevokeInput): string {
+  if (i.source === "receivables") {
+    return "Це обʼєднання зроблене в дебіторці — роз'єднати може той, хто має право обʼєднувати там (КВП, СЕО, Опер. директор, адміністратор)";
+  }
+  return mergeDenyReason(i.pair);
+}
