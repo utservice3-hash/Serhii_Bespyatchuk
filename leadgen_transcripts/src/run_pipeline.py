@@ -93,16 +93,28 @@ def main() -> int:
 
     # -- stage 1: won lead-gen deals from Kommo ------------------------------
     kommo = KommoClient(cfg.kommo_subdomain, cfg.kommo_token)
-    leads = kommo.won_leads(unix_from, unix_to, cfg.kommo_pipeline_ids)
-    if not leads:
-        log.error("No won deals found. Check KOMMO_PIPELINE_IDS and the window.")
-        return 1
-    attach_phones(kommo, leads)
     try:
         users = kommo.users()
     except Exception as exc:
         log.warning("could not load users (%s) - manager column will be blank", exc)
         users = {}
+
+    manager_ids, manager_names = cfg.split_managers()
+    if manager_names:
+        manager_ids += kommo.resolve_managers(manager_names)
+    if manager_ids:
+        log.info("lead-gen managers: %s",
+                 ", ".join(f"{users.get(i, '?')} ({i})" for i in manager_ids))
+    else:
+        log.warning("KOMMO_MANAGERS is empty - taking won deals from ALL "
+                    "managers. Set it to restrict the export to lead-gen.")
+
+    leads = kommo.won_leads(unix_from, unix_to, cfg.kommo_pipeline_ids, manager_ids)
+    if not leads:
+        log.error("No won deals found. Check KOMMO_MANAGERS, "
+                  "KOMMO_PIPELINE_IDS and the date window.")
+        return 1
+    attach_phones(kommo, leads)
 
     # phone key -> the most recently closed deal carrying that number
     lead_by_key: dict[str, object] = {}
@@ -110,7 +122,11 @@ def main() -> int:
         for key in lead.match_keys:
             lead_by_key[key] = lead
     wanted = set(lead_by_key)
-    log.info("stage 1: %d won deals, %d distinct phone numbers", len(leads), len(wanted))
+    log.info("stage 1: %d won deals, %d distinct phone numbers",
+             len(leads), len(wanted))
+    if len(leads) < 200:
+        log.warning("only %d won deals in the window - the brief expects 200+. "
+                    "Widen MONTHS_BACK or re-check KOMMO_MANAGERS.", len(leads))
 
     # -- stage 2: matching calls from Ringostat ------------------------------
     ringostat = RingostatClient(cfg.ringostat_key, cfg.ringostat_base)
@@ -123,6 +139,7 @@ def main() -> int:
 
     stats = {
         "window": [str(date_from), str(date_to)],
+        "managers": [users.get(i, str(i)) for i in manager_ids],
         "deals_won": len(leads),
         "deals_with_phone": sum(1 for l in leads if l.phones),
         "phone_numbers": len(wanted),

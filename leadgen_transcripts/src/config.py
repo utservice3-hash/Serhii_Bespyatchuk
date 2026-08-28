@@ -27,12 +27,20 @@ def _int_list(raw: str | None) -> list[int]:
     return [int(x) for x in raw.replace(";", ",").split(",") if x.strip()]
 
 
+def _str_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [x.strip() for x in raw.replace(";", ",").split(",") if x.strip()]
+
+
 @dataclass
 class Config:
     # --- Kommo -------------------------------------------------------------
     kommo_subdomain: str = ""
     kommo_token: str = ""
     kommo_pipeline_ids: list[int] = field(default_factory=list)
+    # Lead-gen managers: numeric user ids and/or names, mixed freely.
+    kommo_managers: list[str] = field(default_factory=list)
 
     # --- Ringostat ---------------------------------------------------------
     ringostat_key: str = ""
@@ -59,6 +67,7 @@ class Config:
             kommo_subdomain=os.getenv("KOMMO_SUBDOMAIN", ""),
             kommo_token=os.getenv("KOMMO_ACCESS_TOKEN", ""),
             kommo_pipeline_ids=_int_list(os.getenv("KOMMO_PIPELINE_IDS")),
+            kommo_managers=_str_list(os.getenv("KOMMO_MANAGERS")),
             ringostat_key=os.getenv("RINGOSTAT_AUTH_KEY", ""),
             ringostat_base=os.getenv("RINGOSTAT_BASE_URL", "https://api.ringostat.net"),
             months_back=int(os.getenv("MONTHS_BACK", "3")),
@@ -85,6 +94,12 @@ class Config:
         to_ts = lambda d: int(datetime(d.year, d.month, d.day,
                                        tzinfo=timezone.utc).timestamp())
         return to_ts(start), to_ts(end) + 86399
+
+    def split_managers(self) -> tuple[list[int], list[str]]:
+        """Separate the manager list into numeric ids and names to resolve."""
+        ids = [int(m) for m in self.kommo_managers if m.isdigit()]
+        names = [m for m in self.kommo_managers if not m.isdigit()]
+        return ids, names
 
     def missing(self) -> list[str]:
         """Names of required settings that are still empty."""

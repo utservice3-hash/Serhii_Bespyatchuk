@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Inspect the two accounts before committing to a full run.
 
+    python src/discover.py users       # Kommo managers + their won-deal counts
     python src/discover.py pipelines   # Kommo pipeline ids + names, won-deal counts
     python src/discover.py ringostat   # dump one raw call row + field mapping
 
@@ -21,6 +22,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import Config, load_dotenv
 from kommo_client import KommoClient, WON_STATUS_ID
 from ringostat_client import FIELD_CANDIDATES, RingostatClient, _extract_rows, _pick
+
+
+def show_users(cfg: Config) -> None:
+    """List managers ranked by won deals, so the lead-gen team is easy to spot."""
+    client = KommoClient(cfg.kommo_subdomain, cfg.kommo_token)
+    unix_from, unix_to = cfg.window_unix()
+    users = client.users()
+    leads = client.won_leads(unix_from, unix_to, cfg.kommo_pipeline_ids)
+
+    counts: dict[int, int] = {}
+    for lead in leads:
+        counts[lead.responsible_user_id] = counts.get(lead.responsible_user_id, 0) + 1
+
+    print(f"Won deals per manager, {cfg.window()[0]} .. {cfg.window()[1]}\n")
+    print(f"{'id':<10} {'manager':<34} {'won deals':>10}")
+    print("-" * 58)
+    for uid, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+        print(f"{uid:<10} {users.get(uid, '(unknown)')[:33]:<34} {count:>10}")
+    print("-" * 58)
+    print(f"{'TOTAL':<45} {len(leads):>10}")
+    print("\nPut the lead-gen managers into KOMMO_MANAGERS (ids or names, "
+          "comma-separated).")
 
 
 def show_pipelines(cfg: Config) -> None:
@@ -66,7 +89,9 @@ def main() -> int:
     load_dotenv()
     cfg = Config.from_env()
     what = sys.argv[1] if len(sys.argv) > 1 else ""
-    if what == "pipelines":
+    if what == "users":
+        show_users(cfg)
+    elif what == "pipelines":
         show_pipelines(cfg)
     elif what == "ringostat":
         show_ringostat(cfg)

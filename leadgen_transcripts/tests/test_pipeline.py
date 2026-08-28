@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from kommo_client import KommoClient, attach_phones
+from config import Config
+from kommo_client import KommoClient, KommoError, attach_phones
 from phones import match_key, to_e164_ua
 from ringostat_client import Call, RingostatClient, index_by_phone
 from transcribe import CLIENT, MANAGER, Segment, Transcript, roles_for_channels
@@ -80,6 +81,45 @@ class TestKommoLeadSelection(unittest.TestCase):
             leads = self.client.won_leads(0, 999, pipeline_ids=[7])
         self.assertEqual([l.id for l in leads], [1, 2, 3, 4])
 
+    def test_only_lead_gen_managers_survive(self):
+        raw = [
+            {"id": 1, "status_id": 142, "pipeline_id": 7, "closed_at": 1,
+             "responsible_user_id": 501, "_embedded": {"contacts": []}},
+            {"id": 2, "status_id": 142, "pipeline_id": 7, "closed_at": 1,
+             "responsible_user_id": 999, "_embedded": {"contacts": []}},
+            {"id": 3, "status_id": 142, "pipeline_id": 7, "closed_at": 1,
+             "responsible_user_id": 502, "_embedded": {"contacts": []}},
+        ]
+        with patch.object(self.client.session, "get", return_value=lead_page(raw)):
+            leads = self.client.won_leads(0, 999, responsible_user_ids=[501, 502])
+        self.assertEqual([l.id for l in leads], [1, 3])
+
+    def test_manager_names_resolve_to_ids(self):
+        users = FakeResponse({"_embedded": {"users": [
+            {"id": 501, "name": "Олег Коваленко"},
+            {"id": 502, "name": "Ірина Мельник"},
+            {"id": 999, "name": "Богдан Сидоренко"},
+        ]}, "_links": {}})
+        with patch.object(self.client.session, "get", return_value=users):
+            self.assertEqual(
+                self.client.resolve_managers(["олег", "Ірина Мельник"]),
+                [501, 502])
+
+    def test_unknown_manager_name_is_an_error_not_a_silent_skip(self):
+        users = FakeResponse({"_embedded": {"users": [
+            {"id": 501, "name": "Олег Коваленко"}]}, "_links": {}})
+        with patch.object(self.client.session, "get", return_value=users):
+            with self.assertRaises(KommoError):
+                self.client.resolve_managers(["Не Існує"])
+
+    def test_ambiguous_manager_name_is_an_error(self):
+        users = FakeResponse({"_embedded": {"users": [
+            {"id": 501, "name": "Олег Коваленко"},
+            {"id": 502, "name": "Олег Шевченко"}]}, "_links": {}})
+        with patch.object(self.client.session, "get", return_value=users):
+            with self.assertRaises(KommoError):
+                self.client.resolve_managers(["Олег"])
+
     def test_204_means_no_results(self):
         with patch.object(self.client.session, "get",
                           return_value=FakeResponse(None, status=204)):
@@ -107,6 +147,12 @@ def make_call(cid, date_str, caller, callee, direction, duration=60,
     return Call(id=cid, date=date_str, caller=caller, callee=callee,
                 direction=direction, duration=duration,
                 recording_url=recording, employee="", raw={})
+
+
+class TestConfig(unittest.TestCase):
+    def test_managers_split_into_ids_and_names(self):
+        cfg = Config(kommo_managers=["123", "Олег Коваленко", "456"])
+        self.assertEqual(cfg.split_managers(), ([123, 456], ["Олег Коваленко"]))
 
 
 class TestCallSelection(unittest.TestCase):

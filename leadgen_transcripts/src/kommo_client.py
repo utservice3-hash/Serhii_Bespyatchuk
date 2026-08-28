@@ -114,12 +114,17 @@ class KommoClient:
     # ------------------------------------------------------------------ queries
 
     def won_leads(self, closed_from: int, closed_to: int,
-                  pipeline_ids: list[int] | None = None) -> list[Lead]:
+                  pipeline_ids: list[int] | None = None,
+                  responsible_user_ids: list[int] | None = None) -> list[Lead]:
         """Leads that reached "Closed - won" with ``closed_at`` inside the window.
 
-        ``closed_at`` is filtered server-side; the won status and the pipeline
-        are re-checked client-side because accounts differ in which filter
-        combinations the API accepts.
+        Optionally narrowed to given pipelines and/or responsible managers -
+        which is how lead-gen deals are identified when they share a pipeline
+        with everything else.
+
+        Filters are sent server-side and then re-checked client-side, because
+        accounts differ in which filter combinations the API honours; the
+        client-side pass guarantees the result set regardless.
         """
         params: dict[str, Any] = {
             "with": "contacts",
@@ -132,13 +137,18 @@ class KommoClient:
                 params[f"filter[statuses][{i}][status_id]"] = WON_STATUS_ID
         else:
             params["filter[statuses][0][status_id]"] = WON_STATUS_ID
+        for i, uid in enumerate(responsible_user_ids or []):
+            params[f"filter[responsible_user_id][{i}]"] = uid
 
         wanted = set(pipeline_ids or [])
+        managers = set(responsible_user_ids or [])
         leads: list[Lead] = []
         for raw in self._paginate("/api/v4/leads", params, "leads"):
             if raw.get("status_id") != WON_STATUS_ID:
                 continue
             if wanted and raw.get("pipeline_id") not in wanted:
+                continue
+            if managers and raw.get("responsible_user_id") not in managers:
                 continue
             contacts = raw.get("_embedded", {}).get("contacts", [])
             leads.append(Lead(
@@ -154,6 +164,34 @@ class KommoClient:
             ))
         log.info("Kommo: %d won leads in window", len(leads))
         return leads
+
+    def resolve_managers(self, names: list[str]) -> list[int]:
+        """Turn manager names from config into user ids.
+
+        Matching is case-insensitive and substring-based so "Олег" finds
+        "Олег Коваленко". Ambiguous or unknown names raise rather than
+        silently narrowing the export to the wrong people.
+        """
+        if not names:
+            return []
+        users = self.users()
+        resolved: list[int] = []
+        for name in names:
+            needle = name.strip().casefold()
+            hits = [uid for uid, full in users.items()
+                    if needle in full.casefold()]
+            if not hits:
+                raise KommoError(
+                    f"No Kommo user matches {name!r}. "
+                    "Run `python src/discover.py users` to see the list.")
+            if len(hits) > 1:
+                options = ", ".join(f"{users[h]} (id={h})" for h in hits)
+                raise KommoError(
+                    f"{name!r} matches several users: {options}. "
+                    "Use the exact name or the numeric id in KOMMO_MANAGERS.")
+            resolved.append(hits[0])
+        log.info("Kommo: lead-gen managers resolved to ids %s", resolved)
+        return resolved
 
     def contact_phones(self, contact_ids: list[int]) -> dict[int, list[str]]:
         """Map contact id -> phone numbers, read from the PHONE custom field."""

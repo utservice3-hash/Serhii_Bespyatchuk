@@ -15,8 +15,8 @@ extracted yet**. Two things are missing, both outside the code:
    `api.ringostat.net`, `*.kommo.com`, and every external speech-to-text API.
    Only package registries are reachable.
 
-So the pipeline has to run somewhere with credentials and open egress — a
-laptop, a VM, or a Claude environment whose network policy allows those hosts.
+The agreed plan is therefore to run it on your **GPU server**, which has the
+credentials, network access, and the hardware the transcription stage needs.
 See *Running it* below.
 
 ## What it produces
@@ -84,17 +84,21 @@ cp .env.example .env               # then fill in the four required values
 
 Then work through these four steps in order:
 
-**1. Find the lead-gen pipeline.** "Lead-gen deals" is an account-specific
-notion — it is usually a dedicated pipeline. This lists every pipeline with its
-won-deal count for the window, so you can pick the right id:
+**1. Identify the lead-gen managers.** In this account lead-gen deals are
+distinguished by who is responsible for them, so the export is selected by
+manager. This lists every manager with their won-deal count for the window:
 
 ```bash
-python src/discover.py pipelines
+python src/discover.py users
 ```
 
-Put the id(s) into `KOMMO_PIPELINE_IDS`. If lead-gen is marked some other way
-in your account (a source field, a tag, a set of responsible managers), say so
-and the filter is a small change in `kommo_client.won_leads`.
+Put the lead-gen ones into `KOMMO_MANAGERS` — names or numeric ids, comma
+separated. Names match case-insensitively on a substring, so `Олег` finds
+`Олег Коваленко`. A name that matches nobody, or more than one person, stops
+the run with an error rather than quietly exporting the wrong set.
+
+`KOMMO_PIPELINE_IDS` is available as optional extra narrowing
+(`python src/discover.py pipelines` lists them), but is not required.
 
 **2. Check the Ringostat field mapping.** The Ringostat API docs were not
 reachable from the machine this was written on, so the response parser tries a
@@ -134,11 +138,16 @@ where it stopped instead of re-transcribing.
 ## Runtime expectations
 
 200+ deals × up to 5 calls is up to ~1000 recordings, and each is transcribed
-twice (once per channel). On a **GPU**, `large-v3` handles this in roughly
-2–4 hours. On **CPU** the same run is measured in days — if no GPU is
-available, either set `WHISPER_MODEL=medium` and accept somewhat lower accuracy
-on noisy calls, or run against a hosted Whisper API. The model is only loaded
-if there is uncached work to do.
+twice (once per channel). On the target GPU box, `large-v3` should handle this
+in roughly 2–4 hours; `WHISPER_DEVICE=auto` picks CUDA automatically when a GPU
+is visible. Audio never leaves the machine — transcription is entirely local,
+which matters given these are real customer conversations.
+
+Check the GPU is actually being used before starting the full run: the startup
+line reads `loading faster-whisper large-v3 on cuda (float16)`. If it says
+`cpu`, the CUDA build of ctranslate2 is missing and the run would take days.
+The model is only loaded if there is uncached work to do, and transcripts are
+cached per call, so the run is safe to interrupt and resume.
 
 Language is auto-detected per call, which handles the Ukrainian/Russian
 code-switching typical of these conversations. Pin it with `WHISPER_LANGUAGE`
@@ -147,7 +156,9 @@ if the account is single-language.
 ## Selection rules
 
 - Deals: `status_id = 142` ("Closed – won"), `closed_at` inside the last
-  `MONTHS_BACK` months, restricted to `KOMMO_PIPELINE_IDS`.
+  `MONTHS_BACK` months, restricted to the managers in `KOMMO_MANAGERS` (and to
+  `KOMMO_PIPELINE_IDS` if set). The run warns if fewer than 200 deals match, so
+  a mis-set manager list is visible immediately rather than after the transcription.
 - Phone numbers come from the linked contacts' `PHONE` custom field.
 - Matching is on the **last 9 digits**, so `+38 (067) 123-45-67`, `0671234567`
   and `380671234567` all join correctly.
@@ -166,15 +177,17 @@ if the account is single-language.
 | `src/transcribe.py` | channel split, Whisper, role assignment |
 | `src/export.py` | txt files, CSV, XLSX, summary |
 | `src/phones.py` | number normalisation and the join key |
-| `src/discover.py` | pipeline listing + Ringostat schema dump |
+| `src/discover.py` | manager/pipeline listing + Ringostat schema dump |
 | `src/verify_roles.py` | one-off channel/role spot-check |
-| `tests/test_pipeline.py` | 14 offline tests, no network needed |
+| `tests/test_pipeline.py` | 19 offline tests, no network needed |
 
 ```bash
 python tests/test_pipeline.py
 ```
 
-Covers phone-format collapsing, won/lost and pipeline filtering, pagination,
-Kommo's `204` empty response, direction-based client-number resolution, the
-"5 most recent" cut, short/unrecorded call filtering, role assignment and
-overrides, chronological channel merging, and cache round-tripping.
+Covers phone-format collapsing, won/lost, pipeline and manager filtering,
+manager-name resolution (including the unknown and ambiguous cases),
+pagination, Kommo's `204` empty response, direction-based client-number
+resolution, the "5 most recent" cut, short/unrecorded call filtering, role
+assignment and overrides, chronological channel merging, and cache
+round-tripping.
