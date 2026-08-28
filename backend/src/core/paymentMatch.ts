@@ -208,8 +208,23 @@ export function matchPayment(
   const numberless = payments.filter((p) => invoiceNoCandidates(p.purpose).length === 0);
   const byAmount = numberless.filter((p) => edrpouAgrees(p, invoice)
     && Math.abs(Math.abs(p.amount) - invoice.amount) < 0.01);
-  if (byAmount.length === 1) return seenOf(byAmount[0], today);
   if (byAmount.length > 1) return { ...NONE, kind: "ambiguous" };
+  if (byAmount.length === 1) {
+    /**
+     * 🔴 НЕОДНОЗНАЧНІСТЬ ТУТ — ВЛАСТИВІСТЬ ПЛАТЕЖУ, А НЕ РАХУНКА, і побачити її
+     * з одного рахунка неможливо. Спіймано власним гейтом `#24g`: два відкриті
+     * рахунки по 5 000 ₴, платіж на 5 000 ₴ без номера — з погляду КОЖНОГО
+     * рахунка збіг рівно один, і обидва впевнено відмічались.
+     *
+     * «Рівно один рахунок із такою сумою» означає ОДИН СЕРЕД УСІХ ВІДКРИТИХ,
+     * а не «цьому рахунку підійшло».
+     */
+    const rivals = [...openByNo.values()].filter((o) =>
+      Math.abs(o.amount - Math.abs(byAmount[0].amount)) < 0.01
+      && normalizeEdrpou(o.edrpou) === normalizeEdrpou(byAmount[0].payerEdrpou));
+    if (rivals.length > 1) return { ...NONE, kind: "ambiguous" };
+    return seenOf(byAmount[0], today);
+  }
 
   // ③ Сума неповна і номера немає → нічого. Чекаємо рознесення.
   return NONE;
