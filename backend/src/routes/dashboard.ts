@@ -4052,14 +4052,33 @@ dashboardRouter.get("/report", async (req, res) => {
   actP.push(reportAdSources);
   const actAdIdx = actP.length;
   const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; success: string; success_sum: string }>(
-    `SELECT m.id, m.name,
-       COUNT(*) FILTER (WHERE ${metrics.adDealSql(`$${actAdIdx}`)}) AS ad_leads,
+    // 🚀 JOIN-ФОРМА ПРЕДИКАТА, А НЕ КОРЕЛЬОВАНА (31.08.2026). Корельований
+    // `EXISTS` виконувався ТУТ 28 728 разів і давав 97% усіх буферів запиту —
+    // рівно та поломка, заради якої 05.08.2026 переписували `/overview`
+    // (8 090 → 2 695 мс). Форму `joined` тоді написали й довели, але сюди вона
+    // не доїхала: правило, застосоване в одному місці, не застосоване ніде.
+    // Еквівалентність форм порядково стереже `#35`, ad_leads по менеджерах — `#24p`.
+    //
+    // 📐 ЗАМІРЯНО НА ЖИВОМУ ПРОДІ (7 прогонів на форму, з переставленим порядком пар):
+    //   · без періоду (скан усієї історії, 53 619 угод): 347 → 93 мс, −250 мс, 3.7×;
+    //     `SubPlan` зникає, buffers −90.6%, план стає паралельним;
+    //   · серпень (2 762 угоди): 79 → 95 мс, тобто joined на ~15 мс ПОВІЛЬНІШИЙ —
+    //     CTE `first_paid` агрегує ВСЮ `deals` незалежно від періоду, і на вузькому
+    //     вікні ця фіксована ціна більша за виграш.
+    // 🔴 ГІЛКУ «вузький період → correlated» СВІДОМО НЕ РОБИМО, хоч вона й швидша
+    // на 15 мс: тоді гейт `#36` (він б'є БЕЗ періоду) міряв би шлях, яким не ходить
+    // жоден користувач — рівно та хвороба, яку цей прохід і лікує. Один шлях для
+    // всіх, ціна названа.
+    `WITH ${metrics.FIRST_PAID_CTE}
+     SELECT m.id, m.name,
+       COUNT(*) FILTER (WHERE ${metrics.adDealSqlMode(`$${actAdIdx}`, "joined")}) AS ad_leads,
        COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes
      FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
      -- LEFT JOIN: «Прийнято реклами» рахує ВСІ ад-угоди повного циклу незалежно від
      -- поточного етапу (мапиться лише 5 із 15 статусів); quotes/dispatched і далі
      -- фільтрують по funnel_stage, тож null-етап їх природно виключає.
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${metrics.FIRST_PAID_JOIN}
      WHERE ${actConds.join(" AND ")}
      GROUP BY m.id, m.name`, actP);
 
