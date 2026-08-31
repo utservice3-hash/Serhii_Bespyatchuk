@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
 import { CommandPalette } from "./CommandPalette";
-import { heartbeat } from "../api";
+import { heartbeat, trackerSsoUrl } from "../api";
 import { usePolling } from "../hooks/usePolling";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
@@ -93,6 +93,40 @@ export const NAV_ITEMS: { key: NavKey; label: string; icon: string }[] = NAV_GRO
   .flatMap((g) => g.items as readonly { key: NavKey; label: string; icon: string }[])
   .filter((it) => !HIDDEN_NAV.has(it.key));
 
+/**
+ * Пункт «Time tracker» — НЕ у NAV_GROUPS, і це не недогляд.
+ *
+ * `navGroupsForRole` при наявному `screens` віддає лише те, що є в `screen_access` ролі, а
+ * `screens` кладеться в токен для КОЖНОЇ ролі. Ключа `tracker` немає в жодному screen_access,
+ * тож пункт у NAV_GROUPS не побачив би НІХТО — протилежність тому, що потрібно («видно всім»).
+ * Щоб зробити його видимим, довелося б міграцією дописати ключ у кожен рядок таблиці ролей.
+ *
+ * Плюс NAV_GROUPS живить ще три речі, яким цей ключ зашкодив би: NAV_ITEMS (Ctrl+K і валідація
+ * адреси в Dashboard.tsx — ключ без екрана дав би порожню сторінку) і SCREEN_TABS у редакторі
+ * ролей (перетворив би пункт на рольовий перемикач, тобто знову на гейт).
+ *
+ * Взірець — кнопка «Вийти» нижче: теж поза NAV_GROUPS і поза фільтром. Різниця лише в тому, що
+ * цей пункт має стояти ВСЕРЕДИНІ групи «Аналітика» — це аналітика по часу.
+ */
+export const TRACKER_KEY = "tracker";
+const TRACKER_GROUP = "Аналітика";
+
+/**
+ * Вставити пункт у «Аналітику», створивши групу, якщо фільтр її вичистив.
+ *
+ * Створення потрібне саме тому, що групи без пунктів відкидаються: кастомна роль, якій не
+ * відкрито жодного аналітичного екрана, інакше втратила б і кнопку — хоча свій власний день у
+ * трекері їй бачити можна.
+ */
+function withTracker(groups: { label: string; items: NavItem[] }[]) {
+  const item: NavItem = { key: TRACKER_KEY, label: "Time tracker", icon: "" };
+  const found = groups.find((g) => g.label === TRACKER_GROUP);
+  if (found) {
+    return groups.map((g) => (g === found ? { ...g, items: [...g.items, item] } : g));
+  }
+  return [{ label: TRACKER_GROUP, items: [item] }, ...groups];
+}
+
 export function Layout({
   children,
   active,
@@ -111,11 +145,47 @@ export function Layout({
   messengerUnread?: number;
 }) {
   const navigate = useNavigate();
-  const navGroups = navGroupsForRole(role, screens);
+  const navGroups = withTracker(navGroupsForRole(role, screens));
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1"
   );
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") ?? "light");
+  const [trackerBusy, setTrackerBusy] = useState(false);
+  const [trackerError, setTrackerError] = useState<string | null>(null);
+
+  /**
+   * Відкрити трекер уже залогіненим.
+   *
+   * 🔴 Вкладка відкривається СИНХРОННО, до `await`. Це не стиль, а єдиний спосіб, щоб кнопка
+   * працювала: `window.open` після очікування вже поза жестом користувача, і Safari з Chrome
+   * ріжуть його як спливне вікно. Помилка була б тихою — у розробника з вимкненим блокувальником
+   * усе працює.
+   *
+   * Через це не можна передати `noopener` рядком опцій (він позбавляє нас посилання на вкладку),
+   * тому `opener` знімаємо руками — щоб сторінка трекера не мала доступу до вікна дашборду.
+   */
+  async function openTracker() {
+    if (trackerBusy) return;
+    setTrackerBusy(true);
+    setTrackerError(null);
+    const tab = window.open("", "_blank");
+    try {
+      const { url } = await trackerSsoUrl();
+      if (tab) {
+        tab.opener = null;
+        tab.location.replace(url);
+      } else {
+        // Блокувальник не дав відкрити вкладку взагалі — тоді краще піти в поточній, ніж мовчки
+        // нічого не зробити.
+        window.location.href = url;
+      }
+    } catch (e) {
+      tab?.close();
+      setTrackerError(e instanceof Error ? e.message : "Не вдалося відкрити трекер часу.");
+    } finally {
+      setTrackerBusy(false);
+    }
+  }
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -172,6 +242,22 @@ export function Layout({
               )}
               {collapsed && <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "6px 12px" }} />}
               {group.items.map((item) => {
+                // Зовнішній перехід, а не вкладка застосунку: onSelect тут не годиться, а адреса
+                // невідома, доки не відповість сервер, — тому кнопка, а не <a href>.
+                if (item.key === TRACKER_KEY) {
+                  return (
+                    <button
+                      key={item.key}
+                      className="sidebar-nav-item"
+                      onClick={openTracker}
+                      disabled={trackerBusy}
+                      title="Трекер часу — відкриється вже під вашим акаунтом"
+                    >
+                      <span className="sidebar-nav-icon"><NavIcon k={TRACKER_KEY} /></span>
+                      {!collapsed && (trackerBusy ? "Відкриваємо…" : item.label)}
+                    </button>
+                  );
+                }
                 const badge = item.key === "messenger" && messengerUnread > 0 ? messengerUnread : 0;
                 return (
                 <button
@@ -211,6 +297,11 @@ export function Layout({
             </div>
           ))}
         </nav>
+        {trackerError && !collapsed && (
+          <div role="status" style={{ padding: "0 16px 8px", fontSize: 11, lineHeight: 1.4, opacity: 0.85 }}>
+            {trackerError}
+          </div>
+        )}
         {/* 🔒 «Вийти» — дія АКАУНТА, не «екран». НАВМИСНО поза <nav>/NAV_GROUPS і поза
             фільтром screens[] — рендериться ЗАВЖДИ, для будь-якої ролі (вбудованої чи
             кастомної), незалежно від screen_access/permissions. НЕ переносити в NAV_GROUP. */}

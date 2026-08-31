@@ -3190,3 +3190,36 @@ export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {
 export async function claimOrphanClient(clientKey: string, managerId: number): Promise<void> {
   await api.post("/dashboard/orphan-clients/claim", { clientKey, managerId });
 }
+
+/**
+ * Адреса, за якою відкривається трекер часу — уже під акаунтом того, хто увійшов сюди.
+ *
+ * Повертає РІВНО одне поле. Тіло відповіді трекера сюди не просочується: поле, що приїхало б без
+ * рішення, — це той самий клас помилки, який на сервері стереже реєстр ROW_SPREAD.
+ *
+ * Помилки перекладаються тут, а не в компоненті, бо їх бачить людина, і «409» їй нічого не каже.
+ */
+export async function trackerSsoUrl(): Promise<{ url: string }> {
+  try {
+    const { data } = await api.get<{ url: string }>("/auth/tracker-sso");
+    return data;
+  } catch (e: unknown) {
+    const err = e as { response?: { status?: number; data?: { error?: string } } };
+    const status = err.response?.status;
+    const code = err.response?.data?.error;
+
+    if (status === 409 && code === "account_disabled") {
+      throw new Error("Ваш обліковий запис у трекері часу вимкнено.");
+    }
+    if (status === 409) {
+      throw new Error("У трекері часу для вас ще не створено обліковий запис. Зверніться до Романа.");
+    }
+    if (status === 503) {
+      throw new Error("Трекер часу ще не підключено до дашборду.");
+    }
+    if (status === 504) {
+      throw new Error("Трекер часу зараз не відповідає. Спробуйте за хвилину.");
+    }
+    throw new Error("Не вдалося відкрити трекер часу.");
+  }
+}

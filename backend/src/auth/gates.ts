@@ -47,6 +47,17 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Вихід із сесії — доступний будь-кому автентифікованому, межа не потрібна." },
   { method: "GET", path: "/api/auth/me", permanent: true,
     why: "Профіль ВЛАСНОГО токена. Скоуп визначено самим токеном, чужого не віддає." },
+  { method: "GET", path: "/api/auth/tracker-sso", permanent: true,
+    why: "Кнопка «Time tracker». Межі бути не може: пункт видно КОЖНОМУ, хто увійшов, бо "
+       + "розмежування робить сам трекер за своєю роллю. Віддає лише адресу з одноразовим "
+       + "квитком для ВЛАСНОГО акаунта — чужого назвати не можна, параметрів не приймає." },
+  { method: "POST", path: "/api/auth/tracker-assertion", permanent: true,
+    why: "Те саме для агента на ноутбуці: посвідчення про ВЛАСНУ особу на дві хвилини. "
+       + "Скоуп визначено токеном, чужого не видає." },
+  { method: "POST", path: "/api/auth/tracker-identity", permanent: true,
+    why: "Сюди стукає сервер трекера, а не браузер: обліковка — спільний ключ у заголовку "
+       + "X-Dashboard-Sso-Key ПЛЮС дійсне посвідчення. Вкладки в нього немає й бути не може, "
+       + "як і в /api/tracker/* нижче." },
   { method: "GET", path: "/api/dashboard/sync-status", permanent: false,
     why: "Стан синку (не дані). Відкритий усім автентифікованим — борг, пропозиція: tab «settings»." },
   { method: "GET", path: "/api/dashboard/leadgen-regulars", permanent: false,
