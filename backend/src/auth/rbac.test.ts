@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { classifyMatrixAnswer, isMatrixProblem, matrixProblemText } from "./matrixAnswer.js";
 import assert from "node:assert/strict";
 import { needsApi, needsDb, API_BASE } from "../testMode.js";
 
@@ -152,11 +153,14 @@ test("#5.3 МАТРИЦЯ ЕНДПОІНТІВ: сервер відмовляє 
   for (const ep of ENDPOINTS) {
     for (const role of ROLES) {
       const res = await fetch(`${API_BASE}${ep.path}`, { headers: { Authorization: `Bearer ${tok(role)}` } });
-      const ok2xx = res.status >= 200 && res.status < 300;
       const shouldAllow = ep.allow.includes(role);
       checked++;
-      if (shouldAllow && !ok2xx) problems.push(`${role} МАЄ доступ до ${ep.path} → отримав ${res.status} (${ep.note})`);
-      if (!shouldAllow && ok2xx) problems.push(`🔴 ${role} НЕ має доступу до ${ep.path} → сервер віддав ${res.status} (${ep.note})`);
+      // 🚦 ТРИ ВІДПОВІДІ, НЕ ДВІ — див. `auth/matrixAnswer.ts`. Донедавна 5xx
+      // дозволеній ролі читався як пробита межа, а НЕДОЗВОЛЕНІЙ — як законна
+      // відмова, тобто проба проходила мовчки, нічого не перевіривши.
+      const verdict = classifyMatrixAnswer(res.status, shouldAllow);
+      if (isMatrixProblem(verdict))
+        problems.push(matrixProblemText(verdict, role, ep.path, res.status, ep.note));
     }
   }
   assert.ok(checked > 0, "жодного виклику не зроблено — тест нічого не довів");
