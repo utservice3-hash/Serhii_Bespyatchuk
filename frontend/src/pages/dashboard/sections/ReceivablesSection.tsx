@@ -26,7 +26,7 @@ import {
   amountLimitHint, amountLimitLabel, amountLimitState, isOverAmount,
   marginHint, marginPctText,
   earnedCells, earnedCellHint, earnedCellText, earnedShownTotal,
-  nPlural,
+  nPlural, seenCell, seenRollLabel,
   type Filters, type MergeSide,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
@@ -324,6 +324,18 @@ export function ReceivablesSection({
                 <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>
                   {formatDateSafe(x.invoiceDate)}
                 </span>
+                {/* 💰 ЧИ ПРИЙШЛИ ГРОШІ. Виписка приходить РАНІШЕ, ніж бухгалтерія
+                    рознесе рахунок, тож рядок може перестати тривожити ще до
+                    рознесення. Чотири стани, і ЖОДЕН не порожній: порожня
+                    клітинка читається як «нічого немає», а не як «не зіставили».
+                    Підпис бере ядро — фронт своєї думки про зіставлення не має. */}
+                {(() => { const sc = seenCell(x.paymentSeen); return (
+                  <Tip title="Гроші за рахунком" body={sc.why ?? ""}
+                    style={{ display: "block", fontSize: "var(--fs-xs)",
+                             color: sc.tone === "ok" ? "var(--ok, #16a34a)"
+                                  : sc.tone === "warn" ? "var(--warn)" : "var(--text-muted)" }}>
+                    {sc.text}
+                  </Tip>); })()}
               </td>
               {/* 👤 Менеджер САМОГО РАХУНКУ — інформація, а не критерій видимості
                   (рішення власника 27.08.2026). Скоуп тепер по КЛІЄНТУ: відкрив
@@ -711,6 +723,21 @@ export function ReceivablesSection({
                                 ))}
                               </span>
                             )}
+                            {/* 💰 ЗГОРТКА «ГРОШІ ЗАЙШЛИ» — та сама функція ядра, що
+                                й бейджі в розкритті. Показуємо ЛИШЕ коли є про що
+                                казати: «0 з 5» у кожному рядку перетворило б сигнал
+                                на шпалери, які перестають читати.
+                                🔴 `не рознесено` і `неоднозначних` названі ОКРЕМО —
+                                саме вони і є привід відкрити клієнта. */}
+                            {(() => { const rl = seenRollLabel(c.paymentSeen); return rl ? (
+                              <span className="recv-badges">
+                                <Tip title="Гроші за рахунками" style={{ fontSize: "var(--fs-xs)",
+                                       color: rl.tone === "warn" ? "var(--warn)" : "var(--ok, #16a34a)" }}
+                                  body="Виписка приходить раніше, ніж бухгалтерія рознесе рахунки. Розгорніть клієнта, щоб побачити, за якими саме рахунками гроші вже видно.">
+                                  {rl.text}
+                                </Tip>
+                              </span>
+                            ) : null; })()}
                           </td>
 
                           {/* 📐 ІМʼЯ Й ОЛІВЕЦЬ — В ОДНОМУ РЯДІ (прохід B).

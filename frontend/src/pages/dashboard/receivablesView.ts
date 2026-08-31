@@ -931,3 +931,71 @@ export function limitRequestTitle(clientName: string, debt: number, limitAmount:
   const lim = amountLimitState(limitAmount) === "agreed" ? money(Number(limitAmount)) : "не встановлено";
   return `Ліміт по сумі: ${clientName} — борг ${money(debt)}, ліміт ${lim}`;
 }
+
+
+// ─────────────────────── 💰 «ГРОШІ ЗАЙШЛИ» (28.08.2026) ───────────────────────
+
+/**
+ * 🔴 ЧОТИРИ ВІДПОВІДІ, І ЖОДНА НЕ ПОРОЖНЯ.
+ *
+ * Порожня клітинка читається як «нічого немає», а не як «ми не зіставили» —
+ * тому «не зіставлено» тут ТЕКСТ, а не відсутність. Це те саме правило, через
+ * яке «н/д» у перевізнику носить причину.
+ *
+ * 🔴 І `ambiguous` НЕ ЗВОДИТЬСЯ до «не зіставлено» (рішення власника
+ * 28.08.2026): там є ПРИЧИНА, і назвати її означає дати людині розвʼязати це
+ * очима за дві секунди замість пошуку наосліп.
+ *
+ * ⚠️ ФРОНТ НІЧОГО НЕ ВИРІШУЄ. `kind` приходить із сервера (`core/paymentMatch`);
+ * тут лише підпис. Друге рішення на фронті розійшлося б із сервером мовчки —
+ * рівно те, що дало чипи «новий/постійний».
+ */
+export type SeenTone = "ok" | "warn" | "muted";
+
+export interface SeenCell { text: string; why: string | null; tone: SeenTone }
+
+export function seenCell(s: PaymentSeenLike | null | undefined): SeenCell {
+  const kind = s?.kind ?? "none";
+  const on = s?.bookedOn ? formatDateSafe(s.bookedOn) : null;
+  switch (kind) {
+    case "seen":
+      return { text: on ? `💰 зайшли ${on}` : "💰 зайшли", tone: "ok",
+        why: "гроші видно у виписці; рахунок зникне, щойно бухгалтерія його рознесе" };
+    case "stale":
+      // 🔴 НЕ ЗНИКАЄ, А КАЖЕ ПРО СЕБЕ. Мовчазне зникнення забрало б єдиний слід
+      // того, що гроші прийшли не за цим рахунком.
+      return { text: on ? `💰 зайшли ${on} · не рознесено` : "💰 не рознесено", tone: "warn",
+        why: `гроші видно ${s?.workdays ?? "?"} роб. дн., а рознесення не сталося — перевірте, чи це оплата саме цього рахунку` };
+    case "ambiguous":
+      return { text: "платіж називає кілька рахунків", tone: "warn",
+        why: "один платіж посилається на кілька відкритих рахунків — ми не вгадуємо, який саме оплачено" };
+    default:
+      return { text: "не зіставлено", tone: "muted",
+        why: "у виписці немає платежу, який однозначно вказує на цей рахунок" };
+  }
+}
+
+/** Мінімум, потрібний підпису. Ширший тип живе в `api.ts`. */
+export interface PaymentSeenLike {
+  kind: "seen" | "stale" | "ambiguous" | "none";
+  bookedOn?: string | null;
+  workdays?: number | null;
+}
+
+/**
+ * Згортка в рядку клієнта: «💰 2 з 5». `null` — рахунків немає, і тоді нічого
+ * не показуємо: це не «не зіставлено», а «нема чого зіставляти».
+ *
+ * 🔴 `stale` І `ambiguous` НАЗИВАЮТЬСЯ ОКРЕМО, а не тонуть у «2 з 5»: саме вони
+ * і є привід відкрити клієнта.
+ */
+export function seenRollLabel(r: { seen: number; stale: number; ambiguous: number; total: number } | null | undefined):
+  { text: string; tone: SeenTone } | null {
+  if (!r || r.total === 0) return null;
+  const withMoney = r.seen + r.stale;
+  if (withMoney === 0 && r.ambiguous === 0) return null;
+  const parts = [`💰 ${withMoney} з ${r.total}`];
+  if (r.stale) parts.push(`${r.stale} не рознесено`);
+  if (r.ambiguous) parts.push(`${r.ambiguous} неоднозначних`);
+  return { text: parts.join(" · "), tone: r.stale || r.ambiguous ? "warn" : "ok" };
+}

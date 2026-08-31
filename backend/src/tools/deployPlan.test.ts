@@ -93,7 +93,7 @@ test("#226d РЕЖИМ ЛИШЕ ЯВНО, і легкий каже, чого н�
  */
 test("#226e обірваний прогін розрізняє три стани прода і дає вихід для кожного", async () => {
   const { abortState } = await import("./deployPlan.js");
-  const ctx = { prodSha: "7915551", targetSha: "4a5655f", branch: "claude/friendly-galileo-8pijhl" };
+  const ctx = { prodSha: "7915551", targetSha: "4a5655f", branch: "main" };
 
   // 1 · Нічого не чіпали — найбезпечніший стан, і він мусить бути названий саме так.
   const a = abortState("test", ["base", "buildBack"], ctx);
@@ -245,7 +245,7 @@ test("#226j ФІНАЛЬНЕ ТВЕРДЖЕННЯ: buildStale == false — кр�
 
 test("#226k АВАРІЙНИЙ ВИХІД КАЖЕ ПРО ЗАМОК, який лишився взятим", async () => {
   const { abortState } = await import("./deployPlan.js");
-  const ctx = { prodSha: "7915551", targetSha: "4a5655f", branch: "claude/friendly-galileo-8pijhl" };
+  const ctx = { prodSha: "7915551", targetSha: "4a5655f", branch: "main" };
   // Замок узято, робота обірвана — він мусить лишитись, і про це треба сказати вголос:
   // мовчазний замок за годину читається як забуте сміття, і його почнуть зривати.
   const a = abortState("deliver", ["toolsRun", "lockTake"], ctx);

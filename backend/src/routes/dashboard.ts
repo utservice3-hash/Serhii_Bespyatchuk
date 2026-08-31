@@ -55,6 +55,7 @@ import * as receivablesFacts from "../core/receivablesFacts.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
+import * as paymentMatch from "../core/paymentMatch.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { receivablesScope } from "../auth/receivablesScope.js";
@@ -64,7 +65,7 @@ import {
 } from "../core/creditLimits.js";
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
-import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf } from "../core/dates.js";
+import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -1850,16 +1851,33 @@ dashboardRouter.get("/receivables", async (req, res) => {
    * людина обирає такий рядок, тисне «Обʼєднати» і дізнається правило з тексту
    * помилки 409. Заміряно 27.08.2026: канонічних із псевдонімами 16, один тримає 11.
    */
-  const syncRes = await pool.query<{ synced_at: string | null; canonical_of: Record<string, number> }>(
+  const syncRes = await pool.query<{
+    synced_at: string | null; canonical_of: Record<string, number>;
+    payments: paymentMatch.RawPaymentRow[] | null;
+    open_universe: paymentMatch.RawOpenRow[] | null;
+  }>(
     `SELECT MAX(r.synced_at) AS synced_at,
             (SELECT COALESCE(jsonb_object_agg(a.canonical_key, a.n), '{}'::jsonb)
                FROM (SELECT canonical_key, COUNT(*)::int AS n
                        FROM client_key_alias WHERE revoked_at IS NULL
-                      GROUP BY canonical_key) a) AS canonical_of
-       FROM receivables r`
+                      GROUP BY canonical_key) a) AS canonical_of,
+            -- 💰 ВХІДНІ ПЛАТЕЖІ — ТИМ САМИМ ПОХОДОМ. Стеля #158 — чотири запити,
+            -- і пʼятий заборонено її ж текстом. Текст підзапиту приїжджає з ядра
+            -- (invoicePaymentsSql), а не написаний тут удруге.
+            -- (зворотні лапки тут заборонені — це тіло шаблонного рядка)
+            (SELECT COALESCE(jsonb_agg(p), '[]'::jsonb)
+               FROM (${paymentMatch.invoicePaymentsSql(1)}) p) AS payments,
+            -- 🌍 УСІ живі рахунки, БЕЗ скоупу: «платіж називає кілька рахунків» —
+            -- твердження про ПЛАТІЖ, а не про глядача. Поки всесвіт будувався зі
+            -- скоупу, менеджер і адмін бачили різні відмітки на одному платежі.
+            (SELECT COALESCE(jsonb_agg(u), '[]'::jsonb)
+               FROM (${paymentMatch.OPEN_UNIVERSE_SQL}) u) AS open_universe
+       FROM receivables r`, [paymentMatch.PAYMENT_LOOKBACK_DAYS]
   );
   const syncedAt = syncRes.rows[0]?.synced_at ?? null;
   const canonicalOf: Record<string, number> = syncRes.rows[0]?.canonical_of ?? {};
+  const incoming = paymentMatch.toPayments(syncRes.rows[0]?.payments ?? []);
+  const openUniverse = paymentMatch.toUniverse(syncRes.rows[0]?.open_universe ?? []);
 
   // 📇 ФАКТИ ПРО РАХУНКИ — юрособа, стан перевізника, вік, звʼязок із CRM.
   // ОДИН запит на всі зрізи екрана (RTT до Neon = 30 мс, тож ціна тут — кількість
@@ -1868,6 +1886,30 @@ dashboardRouter.get("/receivables", async (req, res) => {
   const facts = await receivablesFacts.loadInvoiceFacts(pool, clientKeys);
   const folded = receivablesFacts.foldFacts(facts);
 
+  /**
+   * 💰 «ГРОШІ ЗАЙШЛИ» — рішення ухвалює ЯДРО, роут лише зводить операнди.
+   *
+   * 🔴 ЗІСТАВЛЯЄМО ПАКЕТОМ І ПО ВСІХ ВІДКРИТИХ РАХУНКАХ СКОУПУ, а не по одному:
+   * стан «платіж називає кілька рахунків» — це питання про ПЛАТІЖ, і з одного
+   * рахунка його не видно. Списані сюди не входять: у них гроші вже не чекають.
+   */
+  const openForMatch = facts
+    .filter((f) => !f.writtenOff && (f.invoiceNo ?? "") !== "")
+    .map((f) => ({ invoiceNo: f.invoiceNo as string, amount: f.amount, edrpou: f.edrpou }));
+  const seenByInvoice = paymentMatch.matchAll(openForMatch, openUniverse, incoming, kyivToday());
+  // Згортка по клієнту — ТИМ САМИМ виразом ядра, що й бейджі в розкритті.
+  const seenPerClient = new Map<string, paymentMatch.PaymentSeen[]>();
+  for (const f of facts) {
+    if (f.writtenOff || !f.invoiceNo) continue;
+    const st = seenByInvoice.get(f.invoiceNo);
+    if (!st) continue;
+    const bucket = seenPerClient.get(f.clientKey) ?? [];
+    bucket.push(st);
+    seenPerClient.set(f.clientKey, bucket);
+  }
+  const seenRoll = new Map<string, paymentMatch.SeenRoll>();
+  for (const [k, v] of seenPerClient) seenRoll.set(k, paymentMatch.rollUp(v));
+
   type Client = {
     clientKey: string | null; clientName: string | null; amount: number;
     limitDays: number | null; limitAmount: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
@@ -1875,6 +1917,8 @@ dashboardRouter.get("/receivables", async (req, res) => {
     noteUpdatedAt: string | null; noteHistoryCount: number;
     facts: receivablesFacts.ClientFacts | null;
     margin: ReturnType<typeof marginCell> | null;
+    /** 💰 Скільки рахунків клієнта вже мають гроші у виписці; `null` — не рахували. */
+    paymentSeen: paymentMatch.SeenRoll | null;
   };
   const byManager = new Map<number | null, { managerId: number | null; managerName: string; clients: Client[]; total: number }>();
   for (const r of rows) {
@@ -1925,6 +1969,13 @@ dashboardRouter.get("/receivables", async (req, res) => {
       // 🔖 Ярлики рядка — з ТОГО САМОГО зведення, з якого рахуються плитки вгорі.
       // Два вирази для одного числа розходяться мовчки; тут вираз один.
       facts: cf,
+      /**
+       * 💰 ЗГОРТКА «ГРОШІ ЗАЙШЛИ» ПО КЛІЄНТУ — з ТОГО САМОГО зведення, що й
+       * бейджі в розкритті. Два вирази для одного числа розходяться мовчки.
+       * `total` — скільки живих рахунків узагалі, щоб «2 з 5» читалось як
+       * частка, а не як загадкове число.
+       */
+      paymentSeen: r.clientKey ? seenRoll.get(r.clientKey) ?? null : null,
       // 💰 МАРЖИНАЛЬНІСТЬ РАХУЄ СЕРВЕР — ОДНИМ ВИРАЗОМ ДЛЯ РЯДКА Й ДЛЯ ПЛИТКИ.
       // Фронт лише форматує. Якби він рахував сам, правило існувало б у двох
       // місцях, і копії збігалися б одна з одною, а не з правилом — рівно те,
@@ -2559,6 +2610,31 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   // стереже `#158`.
   const factKeys = flat ? visibleKeys : [clientKey];
   const ourFacts = await receivablesFacts.loadInvoiceFacts(pool, factKeys);
+
+  /**
+   * 💰 «ГРОШІ ЗАЙШЛИ» — ТЕ САМЕ ЯДРО, ЩО В СПИСКУ КЛІЄНТІВ.
+   *
+   * 🔴 Другого виразу тут бути не може: список показує згортку «2 з 5», а
+   * розкриття — які саме два. Розійдуться вони мовчки, і кожна половина
+   * лишиться правдоподібною — рівно так «Команда за місяць 12%» жила поруч із
+   * плиткою «11.8%».
+   *
+   * ⚠️ Тут це ОКРЕМИЙ запит, і це не суперечність зі списком: стеля `#158`
+   * стереже `/receivables`, а не цей роут. У списку той самий текст їде
+   * підзапитом, і саме тому він живе однією функцією в ядрі.
+   */
+  const payRows = await pool.query<paymentMatch.RawPaymentRow>(
+    paymentMatch.invoicePaymentsSql(1), [paymentMatch.PAYMENT_LOOKBACK_DAYS]);
+  // 🌍 ВСЕСВІТ — ТОЙ САМИЙ, ЩО В СПИСКУ, і саме тому окремим запитом: якби
+  // неоднозначність рахувалась із рахунків ЦЬОГО клієнта, розкриття казало б
+  // «зайшли» там, де список каже «кілька рахунків». Дві відповіді про один
+  // платіж на сусідніх екранах — і кожна виглядала б правильною.
+  const uniRows = await pool.query<paymentMatch.RawOpenRow>(paymentMatch.OPEN_UNIVERSE_SQL);
+  const seenByInvoice = paymentMatch.matchAll(
+    ourFacts.filter((f) => !f.writtenOff && (f.invoiceNo ?? "") !== "")
+      .map((f) => ({ invoiceNo: f.invoiceNo as string, amount: f.amount, edrpou: f.edrpou })),
+    paymentMatch.toUniverse(uniRows.rows),
+    paymentMatch.toPayments(payRows.rows), kyivToday());
   /**
    * 🔴 КЛЮЧ — ПАРА (КЛІЄНТ, №), А НЕ САМ №. Номер унікальний У МЕЖАХ КЛІЄНТА —
    * так і написано в коментарі нижче, і для розкриття одного клієнта голого
@@ -2633,6 +2709,15 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         // означало б домалювати 1.6 млн неіснуючого факту.
         carrierPaid: f?.carrierPaid ?? null,
         carrierReason: f?.carrierReason ?? null,
+        /**
+         * 💰 ЧИ ПРИЙШЛИ ГРОШІ ЗА ЦИМ РАХУНКОМ (28.08.2026).
+         *
+         * Чотири стани, і жоден не порожній: `seen` · `stale` (зайшли давно,
+         * рознесення не сталося) · `ambiguous` (платіж називає кілька рахунків) ·
+         * `none` (не зіставлено). 🔴 Порожня клітинка тут заборонена: вона
+         * читається як «нічого немає», а не як «ми не зіставили».
+         */
+        paymentSeen: x.invoice_no ? seenByInvoice.get(x.invoice_no) ?? null : null,
         // 🚚 СКІЛЬКИ заплачено перевізнику. `null` — «суму не вказано», і це
         // ОКРЕМИЙ стан від «не оплачено»: заміряно 25.08.2026 — умови виплати
         // не заповнені у 84 із 279 угод дебіторки (30%). Показати їх нулем
@@ -3967,14 +4052,45 @@ dashboardRouter.get("/report", async (req, res) => {
   actP.push(reportAdSources);
   const actAdIdx = actP.length;
   const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; success: string; success_sum: string }>(
-    `SELECT m.id, m.name,
-       COUNT(*) FILTER (WHERE ${metrics.adDealSql(`$${actAdIdx}`)}) AS ad_leads,
+    // 🚀 JOIN-ФОРМА ПРЕДИКАТА, А НЕ КОРЕЛЬОВАНА (31.08.2026). Корельований
+    // `EXISTS` виконувався ТУТ 28 728 разів і давав 97% усіх буферів запиту —
+    // рівно та поломка, заради якої 05.08.2026 переписували `/overview`
+    // (8 090 → 2 695 мс). Форму `joined` тоді написали й довели, але сюди вона
+    // не доїхала: правило, застосоване в одному місці, не застосоване ніде.
+    // Еквівалентність форм порядково стереже `#35`, ad_leads по менеджерах — `#24p`.
+    //
+    // 📐 ЗАМІРЯНО НА ЖИВОМУ ПРОДІ (7 прогонів на форму, з переставленим порядком пар):
+    //   · без періоду (скан усієї історії, 53 619 угод): 347 → 93 мс, −250 мс, 3.7×;
+    //     `SubPlan` зникає, buffers −90.6%, план стає паралельним;
+    //   · серпень (2 762 угоди): 79 → 95 мс, тобто joined на ~15 мс ПОВІЛЬНІШИЙ —
+    //     CTE `first_paid` агрегує ВСЮ `deals` незалежно від періоду, і на вузькому
+    //     вікні ця фіксована ціна більша за виграш.
+    //
+    // 🔴 І ГОЛОВНЕ, ЩОБ НАСТУПНИЙ НЕ ПРОЧИТАВ ЦЕ ЯК «РОУТ ШВИДШИЙ НА 250 мс».
+    // A/B двох збірок в ОДНОМУ процесі, чергуючи, 5 прогонів: сам `actByMgr` без
+    // періоду впав 543 → 227 мс (−58%), а КРИТИЧНИЙ ШЛЯХ роута — лише 1974 → 1840
+    // (−7%); із періодом — 0. Запитів як було 21, так і лишилось.
+    // Причина: 21 запит іде хвилями через `Promise.all`, тож виграш в одному з них
+    // ховається за сусідами, і після фіксу вузьким місцем став ІНШИЙ запит —
+    // `stage_at` з `DISTINCT ON (dse.kommo_id)` (~500 мс, сортування виливається
+    // на диск). Тобто цей коміт `#36` сам по собі НЕ закриває.
+    // Це той самий урок, що вже записаний у CLAUDE.md: «заміряй ЕНДПОІНТ, а не
+    // фрагмент». Я на ньому спіймався: оцінку −250 мс роуту вивів із заміру
+    // ФРАГМЕНТА, і вона виявилась завищеною вп'ятеро.
+    // 🔴 ГІЛКУ «вузький період → correlated» СВІДОМО НЕ РОБИМО, хоч вона й швидша
+    // на 15 мс: тоді гейт `#36` (він б'є БЕЗ періоду) міряв би шлях, яким не ходить
+    // жоден користувач — рівно та хвороба, яку цей прохід і лікує. Один шлях для
+    // всіх, ціна названа.
+    `WITH ${metrics.FIRST_PAID_CTE}
+     SELECT m.id, m.name,
+       COUNT(*) FILTER (WHERE ${metrics.adDealSqlMode(`$${actAdIdx}`, "joined")}) AS ad_leads,
        COUNT(*) FILTER (WHERE psm.funnel_stage IN ('quote_requested','approved','invoiced','paid')) AS quotes
      FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
      -- LEFT JOIN: «Прийнято реклами» рахує ВСІ ад-угоди повного циклу незалежно від
      -- поточного етапу (мапиться лише 5 із 15 статусів); quotes/dispatched і далі
      -- фільтрують по funnel_stage, тож null-етап їх природно виключає.
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     ${metrics.FIRST_PAID_JOIN}
      WHERE ${actConds.join(" AND ")}
      GROUP BY m.id, m.name`, actP);
 
@@ -5094,7 +5210,7 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
  * Team-lead sees only their team; admin sees all (optional teamId).
  */
 /** Сьогодні по-київськи, YYYY-MM-DD. */
-const kyivToday = (): string => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+
 
 /**
  * Чи має роль право бачити цього клієнта. МЕЖА ОДНА для читання і для запису

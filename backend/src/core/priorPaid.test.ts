@@ -168,3 +168,102 @@ test("#36 ЧАС ВІДПОВІДІ: /overview і /report тримаються �
   // 🔴 Падаємо ОДИН раз, назвавши ВСЕ. Список порожній — гейт зелений.
   assert.deepEqual(problems, [], `\n${problems.join("\n")}`);
 });
+
+/**
+ * #24p / #24q — ПЕРЕХІД `actByMgr` НА JOIN-ФОРМУ (31.08.2026).
+ *
+ * `#35` вище доводить, що дві форми предиката дають однакові ПОРЯДКОВІ значення
+ * по `deals`. Цього НЕ досить для приймання цього проходу: питання власника
+ * звучить «чи не змінилось "Прийнято реклами" в жодного менеджера», а це вже
+ * АГРЕГАТ поверх предиката — з join-ом на `managers`, фільтром активності й
+ * групуванням. Форми могли б збігатись порядково і розійтись у сумі, якби нова
+ * `LEFT JOIN first_paid` розмножила рядки. Тому окремий гейт.
+ *
+ * 🔴 І ЧОМУ ЇХ ДВА. `#24p` доводить, що форми РІВНІ; він лишиться зеленим і тоді,
+ * коли роут не використає жодну з них. `#24q` доводить, що роут кличе САМЕ
+ * швидку — без нього фікс міг би тихо не доїхати, а гейт рівності бадьоро
+ * підтверджував би рівність того, чим ніхто не користується.
+ */
+test("#24p ad_leads ПО КОЖНОМУ МЕНЕДЖЕРУ не змінився від переходу на joined", needsDb(), async () => {
+  const m = await import("./metrics.js");
+  const { pool } = await import("../db/pool.js");
+  const { getSettings } = await import("../routes/settings.js");
+  // 🔴 Джерела реклами — з БД, тим самим викликом, що й у роуті. Зашитий список
+  // тут зробив би гейт перевіркою власної фікстури.
+  const { adSources } = await getSettings();
+  assert.ok(Array.isArray(adSources) && adSources.length > 0,
+    "🔴 adSources порожній — гейт міряв би предикат, який нікого не пропускає");
+
+  /** Оточення запиту ідентичне для обох форм; різниться РІВНО форма предиката. */
+  const q = (mode: "correlated" | "joined", period: boolean) => {
+    const p: unknown[] = [[8921932, 155304]];
+    const conds = ["d.pipeline_id = ANY($1)"];
+    if (period) {
+      p.push("2026-08-01"); conds.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`);
+      p.push("2026-08-31"); conds.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`);
+    }
+    p.push(adSources);
+    const sql = `${mode === "joined" ? `WITH ${m.FIRST_PAID_CTE}` : ""}
+      SELECT m.id, COUNT(*) FILTER (WHERE ${m.adDealSqlMode(`$${p.length}`, mode)})::int AS ad_leads,
+             COUNT(*)::int AS total
+        FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active
+        ${mode === "joined" ? m.FIRST_PAID_JOIN : ""}
+       WHERE ${conds.join(" AND ")}
+       GROUP BY m.id ORDER BY m.id`;
+    return pool.query<{ id: number; ad_leads: number; total: number }>(sql, p);
+  };
+
+  for (const period of [false, true]) {
+    const label = period ? "серпень 2026" : "без періоду";
+    const [c, j] = await Promise.all([q("correlated", period), q("joined", period)]);
+
+    // ⚠️ Спершу доводимо, що вибірці БУЛО що показати. Збіг на порожньому або
+    // виродженому наборі — це «порожній результат = pass», а не доказ.
+    assert.ok(c.rows.length >= 10,
+      `🔴 ${label}: менеджерів у вибірці ${c.rows.length} — замало, щоб щось довести`);
+    const ad = c.rows.reduce((a, r) => a + r.ad_leads, 0);
+    const tot = c.rows.reduce((a, r) => a + r.total, 0);
+    assert.ok(ad > 0 && ad < tot,
+      `🔴 ${label}: ad_leads = ${ad} при загалі ${tot} — предикат вироджений `
+      + "(пропускає всіх або нікого), і збіг форм нічого не доводить");
+
+    assert.equal(j.rows.length, c.rows.length,
+      `🔴 ${label}: join-форма дала ${j.rows.length} менеджерів проти ${c.rows.length} — `
+      + "LEFT JOIN first_paid змінив СКЛАД рядків, а не лише предикат");
+    for (let i = 0; i < c.rows.length; i++) {
+      assert.equal(j.rows[i].id, c.rows[i].id, `🔴 ${label}: розʼїхався порядок менеджерів`);
+      assert.equal(j.rows[i].total, c.rows[i].total,
+        `🔴 ${label}: менеджер ${c.rows[i].id} — join розмножив рядки: `
+        + `${c.rows[i].total} → ${j.rows[i].total}`);
+      assert.equal(j.rows[i].ad_leads, c.rows[i].ad_leads,
+        `🔴 ${label}: менеджер ${c.rows[i].id} — «Прийнято реклами» ЗМІНИЛОСЬ: `
+        + `${c.rows[i].ad_leads} → ${j.rows[i].ad_leads}. Це не оптимізація, це інша метрика`);
+    }
+  }
+});
+
+test("#24q РОУТ КЛИЧЕ САМЕ ШВИДКУ ФОРМУ — інакше фікс не доїхав", async () => {
+  const fs = await import("node:fs/promises");
+  const url = await import("node:url");
+  const src = await fs.readFile(
+    url.fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
+
+  // 🔴 МЕЖА ЗРІЗУ — СЕМАНТИЧНА, а не «N символів»: беремо рівно запит actByMgr,
+  // від його параметрів до його ж GROUP BY. Зріз по довжині вже одного разу
+  // зробив гейт беззубим — саботаж просто не потрапляв у вікно.
+  const from = src.indexOf("const actP: unknown[]");
+  assert.ok(from > 0, "🔴 не знайдено початок запиту actByMgr — гейт втратив предмет");
+  const to = src.indexOf("GROUP BY m.id, m.name`, actP);", from);
+  assert.ok(to > from, "🔴 не знайдено кінець запиту actByMgr — зріз розповзся");
+  const block = src.slice(from, to);
+
+  assert.match(block, /adDealSqlMode\([^)]*"joined"\)/,
+    "🔴 actByMgr не кличе join-форму предиката — корельований EXISTS повернувся "
+    + "(28 728 loops, 97% буферів запиту)");
+  assert.match(block, /\bFIRST_PAID_CTE\b/,
+    "🔴 у запиті немає CTE `first_paid` — join-форма без нього не має на що спиратись");
+  assert.match(block, /\bFIRST_PAID_JOIN\b/,
+    "🔴 у запиті немає `LEFT JOIN first_paid` — предикат читав би відсутню таблицю");
+  assert.doesNotMatch(block, /metrics\.adDealSql\(/,
+    "🔴 у actByMgr лишився виклик correlated-дефолту `adDealSql(` — дві форми в одному запиті");
+});

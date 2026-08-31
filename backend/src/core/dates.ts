@@ -79,3 +79,18 @@ export function monthEndOf(mo: string): string {
   const [y, mm] = mo.split("-").map(Number);
   return new Date(Date.UTC(y, mm, 0)).toISOString().slice(0, 10);
 }
+
+/**
+ * Сьогоднішня дата ЗА КИЄВОМ, `YYYY-MM-DD`.
+ *
+ * 🔴 ЖИВЕ ТУТ, БО КОПІЙ УЖЕ ТРИ (`ai/oracle.ts`, `jobs/evaluateKpiTasks.ts` і
+ * далі), і четверта — це той самий спосіб, яким у нас народжувалась друга копія
+ * правила. Нові споживачі беруть звідси; старі перевести окремою правкою, бо це
+ * зміна поведінки в місцях, які цим проходом не приймаються.
+ *
+ * ⚠️ `sv-SE` дає рівно `YYYY-MM-DD` — саме тому він, а не `toISOString()`, який
+ * віддає UTC і в Києві до 03:00 показує ВЧОРАШНЮ добу.
+ */
+export function kyivToday(): string {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+}
