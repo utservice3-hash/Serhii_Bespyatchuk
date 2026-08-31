@@ -1038,6 +1038,26 @@ export async function receivedByMgrKlass(s: MoneyScope): Promise<MoneyByKlass[]>
  * вирішує чистий `core/undefMoneyReason.ts` — тут лише факти з бази.
  */
 export interface UndefDealRow { kommoId: number; managerId: number | null; revenue: number; clientKey: string | null; salesChannel: string | null }
+/**
+ * 🪆 СКЛАД «ОТРИМАНИХ» ЗА ПЕРІОД — ПАРИ (менеджер, угода), без сум.
+ *
+ * 🔴 НАВІЩО ОКРЕМА ФУНКЦІЯ, А НЕ ПІДРАХУНОК У ГЕЙТІ. Інваріант «тиждень ⊆ місяць»
+ * (`core/periodNesting.ts`) питає про СКЛАД, а не про гроші, і склад мусить
+ * приїхати з того самого виразу, що й суми, — інакше гейт порівнював би власну
+ * копію означення з ядром і збігався б із копією, а не з правилом.
+ * Тому тут той самий `sourceSql("received")` і той самий `scopeClause`, що живлять
+ * `receivedByMgr`; своя SQL-копія по виручці заборонена (DoD п.1).
+ *
+ * `DISTINCT` — бо `received` це `success UNION ALL paidOnly`, і угода, що встигла
+ * побувати в обох гілках, прийшла б двічі. Для множини це шум, для суми — ні,
+ * тож дедуп живе тут, а не в споживача.
+ */
+export async function receivedDealIds(s: MoneyScope): Promise<{ managerId: number | null; kommoId: number }[]> {
+  const rows = await query<{ manager_id: number | null; kommo_id: string }>(
+    "received", s, "DISTINCT src.manager_id AS manager_id, src.kommo_id AS kommo_id", "");
+  return rows.map((r) => ({ managerId: r.manager_id, kommoId: Number(r.kommo_id) }));
+}
+
 export async function receivedUndefDeals(s: MoneyScope): Promise<UndefDealRow[]> {
   const { dealKlassSql } = await import("./metrics.js");
   const p: unknown[] = [];
