@@ -726,3 +726,77 @@ test("#250t маніфест для звірки читається з ДЖЕР�
   assert.match(b, /testsAtRef\(c\.prod\)/,
     "🔴 бік прода читається не з git-ref: порівняння дерева із самим собою завжди зелене");
 });
+
+/**
+ * 🌿 #250u–#250w — ПЕРЕЇЗД ПРОДА НА `main` (31.08.2026, рішення власника за пропозицією Романа).
+ *
+ * 📐 Заміряно ПЕРЕД переїздом, і твердження постановки не витримало перевірки в числі,
+ * але витримало у властивості: `origin/main` = `c7092b6 Initial commit`, **0 попереду**
+ * і **1023 позаду** прод-гілки (не 921), `merge-base --is-ancestor` → ТАК в обидва боки.
+ * Тобто перенесення було ПЕРЕМОТКОЮ — без злиття й без переписування історії.
+ */
+test("#250u ланцюг цілиться в main, і старої назви в коді немає", async () => {
+  const { PROD_BRANCH, OLD_PROD_BRANCH } = await import("./deployPlan.js");
+  assert.equal(PROD_BRANCH, "main", `🔴 прод-гілка не main, а «${PROD_BRANCH}»`);
+
+  const s = code(DEPLOY());
+  assert.match(s, /branch: process\.env\.UTS_PROD_BRANCH \?\? PROD_BRANCH/,
+    "🔴 дефолт гілки не бере PROD_BRANCH — тоді назва живе двома копіями, і вони розійдуться");
+  // Стара назва дозволена РІВНО в одному місці — константі страховки.
+  const plan = SRC("tools/deployPlan.ts");
+  const hits = [...plan.matchAll(/claude\/friendly-galileo-8pijhl/g)].length;
+  assert.equal(hits, 1,
+    `🔴 стара назва трапляється ${hits} раз(и) — дозволена лише як OLD_PROD_BRANCH (страховка на тиждень)`);
+  assert.match(plan, /OLD_PROD_BRANCH = "claude\/friendly-galileo-8pijhl"/, "🔴 константу страховки перейменували або прибрали");
+  assert.ok(!code(SRC("tools/deploy.ts")).includes("claude/friendly-galileo-8pijhl"),
+    "🔴 стара назва повернулась у deploy.ts — ланцюг знову пушитиме в гілку, яку ми лишили лише читати");
+  assert.notEqual(PROD_BRANCH, OLD_PROD_BRANCH, "🔴 нова й стара гілки збіглися — переїзду не сталося");
+});
+
+test("#250v пуш у СТАРУ гілку відмовляє, у нову — ні", async () => {
+  const { OLD_PROD_BRANCH, PROD_BRANCH } = await import("./deployPlan.js");
+  const b = code(stepBody(DEPLOY(), "pushBranch"));
+
+  // ① Відмова існує і спрацьовує саме на старій гілці.
+  assert.match(b, /c\.branch === OLD_PROD_BRANCH/,
+    "🔴 pushBranch не порівнює гілку зі старою — три чати це три способи забути,\n" +
+    "   і саме тому це відмова в інструменті, а не домовленість");
+  assert.match(b, /ok: false/, "🔴 крок не вміє відмовити — тоді це напис, а не заборона");
+  // ② Відмова називає наступний крок (правило #250r).
+  assert.match(b, /UTS_PROD_BRANCH/,
+    "🔴 не названо найчастішої причини: стара назва лишилась у змінній оточення");
+  assert.match(b, /страховк/i, "🔴 не сказано, ЧОМУ стара гілка ще існує — її приймуть за сміття і видалять");
+
+  // ③ 🪞 ДЗЕРКАЛО: у нову гілку пуш іде. Без нього гейт зеленів би на кроці,
+  //    що відмовляє ЗАВЖДИ, тобто на мертвому викаті.
+  assert.match(b, /git push origin HEAD:\$\{c\.branch\}/, "🔴 пуш у поточну гілку зник");
+  assert.match(b, /c\.docRoot/, "🔴 пуш поїхав не з докрута — саме там дерево дорівнює тому, що крутить прод");
+  assert.notEqual(PROD_BRANCH, OLD_PROD_BRANCH, "🔴 нова гілка дорівнює старій — відмова заборонить будь-який пуш");
+});
+
+test("#250w ланцюг НАЗИВАЄ чужі коміти поіменно, а порожнечу — словами", async () => {
+  const { planSteps } = await import("./deployPlan.js");
+  const b = code(stepBody(DEPLOY(), "foreignCommits"));
+
+  // ① Дві множини, обидві від спільної гілки — жодних здогадів про авторство.
+  assert.match(b, /origin\/\$\{c\.branch\}\.\.HEAD/, "🔴 «мої» коміти не рахуються від спільної гілки");
+  assert.match(b, /\$\{c\.prod\}\.\.origin\/\$\{c\.branch\}/,
+    "🔴 «чужі» рахуються не так: це коміти, що ВЖЕ у спільній гілці, а на проді їх ще немає —\n" +
+    "   саме вони поїдуть усередині твого приймання");
+  assert.match(b, /"fetch"/, "🔴 немає fetch — списки будуть проти застарілого ref і мовчки коротшими");
+
+  // ② Поіменно, і без обрізання: «і ще 7» — це форма, у якій чужу зміну не помічають.
+  assert.match(b, /--oneline/, "🔴 коміти не називаються, а лише рахуються");
+  assert.ok(!/slice\(0,|\.slice\(\s*0/.test(b), "🔴 список обрізається — обрізаний перелік читають як повний");
+
+  // ③ 🪞 ДЗЕРКАЛО: порожньо мусить бути СКАЗАНО словами.
+  assert.match(b, /foreign\.length === 0/, "🔴 порожній випадок не розрізняється");
+  assert.match(b, /чужих НЕМАЄ/, "🔴 порожній список мовчить — за тиждень на нього перестануть дивитись");
+
+  // ④ Крок мусить бути у фазі CHECK і ПІСЛЯ `base` (йому потрібен c.prod).
+  const chk = planSteps("check", "full").map((x) => x.id);
+  const at = chk.indexOf("foreignCommits"), base = chk.indexOf("base");
+  assert.ok(at >= 0, `🔴 кроку немає у фазі check. Є: ${chk.join(", ")}`);
+  assert.ok(base >= 0 && at > base,
+    "🔴 крок стоїть ДО `base`, а той заповнює c.prod — діапазон рахувався б від порожнечі");
+});

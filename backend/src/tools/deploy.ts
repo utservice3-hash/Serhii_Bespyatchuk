@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
-  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE,
+  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
@@ -178,6 +178,37 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return { id: "lightAdmission", ok: outside.length === 0,
       detail: outside.length ? `🔴 поза frontend/: ${outside.join(", ")} — режим ПОВНИЙ` : "діф лише у frontend/" };
   },
+  /**
+   * 🧾 ЧУЖІ КОМІТИ — НАЗВАТИ ПОІМЕННО, А НЕ ПОРАХУВАТИ.
+   *
+   * Дві множини, обидві від `origin/main`, тож жодних здогадів про авторство:
+   *   мої    = `origin/main..HEAD` — те, чого у спільній гілці ще немає;
+   *   чужі   = `<прод>..origin/main` — те, що у спільній гілці вже є, а на проді ще ні.
+   * Друге і є «поїде разом із твоїм»: чужий пул-реквест, злитий у `main`.
+   *
+   * ⏱ Крок стоїть у фазі CHECK, і це не послаблення: набір `прод..HEAD` ПРИШПИЛЕНИЙ
+   * HEAD-ом, а HEAD — артефактом (`version.json == HEAD`, крок `baseAgain`). Тобто
+   * між check і run цей список змінитись не може, не завалив би артефакт.
+   *
+   * 🪞 Порожньо — кажемо СЛОВАМИ. Мовчазний порожній список читається як «перевірка
+   * не працює», і за тиждень на нього перестають дивитись.
+   */
+  foreignCommits: (c) => run("foreignCommits", () => {
+    sh("git", ["fetch", "origin", "-q"], c.buildRepo);
+    const list = (range: string): string[] =>
+      sh("git", ["log", "--oneline", "--no-merges", range], c.buildRepo).split("\n").filter(Boolean);
+    const mine = list(`origin/${c.branch}..HEAD`);
+    const foreign = list(`${c.prod}..origin/${c.branch}`);
+    if (foreign.length === 0) {
+      return `твоїх ${mine.length}, чужих НЕМАЄ — у ${c.branch} після ${c.prod} нічого не зʼявилось`;
+    }
+    /**
+     * 🔴 НЕ обрізаємо список. «І ще 7» — це рівно та форма, у якій чужу зміну
+     * не помічають; ціна повного переліку — кілька рядків у звіті.
+     */
+    return `твоїх ${mine.length}, а ПОЇДЕ ЩЕ ${foreign.length} чужих — їх немає у твоєму списку «чисел, названих наперед»:\n`
+      + foreign.map((l) => `      ${l}`).join("\n");
+  }, "чужі коміти названо поіменно"),
   buildBack: (c) => run("buildBack", () => { needDeps(c.be, "backend"); sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
   tscFront: (c) => run("tscFront", () => sh("npx", ["tsc", "-b"], c.fe), "tsc -b фронту (НЕ --noEmit: він там нічого не перевіряє)"),
   /**
@@ -524,7 +555,20 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       process.exit(1);
     }
     console.log("app_boot: " + row.kind + " " + row.short_sha);'`]), "старт класифіковано як deploy"),
-  pushBranch: (c) => run("pushBranch", () => sh("bash", ["-lc", `cd ${c.docRoot} && git push origin HEAD:${c.branch} && git fetch origin -q && git rev-list --left-right --count origin/${c.branch}...HEAD`]), "sha у прод-гілці, ahead/behind заміряно ПІСЛЯ fetch"),
+  /**
+   * 🔒 ПУШ У СТАРУ ГІЛКУ ВІДМОВЛЯЄ — З ПЕРШОЇ ХВИЛИНИ ПІСЛЯ ПЕРЕЇЗДУ.
+   * Стара гілка лишається тиждень СТРАХОВКОЮ, тобто її треба читати, а не писати.
+   * Тримати це домовленістю між трьома чатами означає три способи забути; тому —
+   * відмова в інструменті. Правильніший був би git-хук, але хуків у нас немає.
+   */
+  pushBranch: (c) => {
+    if (c.branch === OLD_PROD_BRANCH) return { id: "pushBranch", ok: false,
+      detail: `🔴 ПУШ У СТАРУ ПРОД-ГІЛКУ «${OLD_PROD_BRANCH}» ЗАБОРОНЕНО.\n`
+        + `   З 31.08.2026 прод тягне «${PROD_BRANCH}»; стара лишається ТИЖНЕМ страховки — читати, не писати.\n`
+        + `   Найчастіша причина: у оточенні стоїть UTS_PROD_BRANCH зі старим значенням — прибери її.\n`
+        + "   Якщо страховку знімають раніше — це окреме рішення власника, а не правка на місці." };
+    return run("pushBranch", () => sh("bash", ["-lc", `cd ${c.docRoot} && git push origin HEAD:${c.branch} && git fetch origin -q && git rev-list --left-right --count origin/${c.branch}...HEAD`]), "sha у прод-гілці, ahead/behind заміряно ПІСЛЯ fetch");
+  },
   report: () => ({ id: "report", ok: true, detail: "звіт нижче" }),
 };
 
@@ -632,7 +676,7 @@ export async function main(argv: string[]): Promise<number> {
   const ctx: Ctx = {
     buildRepo, docRoot,
     be: `${buildRepo}/backend`, fe: `${buildRepo}/frontend`, prodBe: `${docRoot}/backend`,
-    branch: process.env.UTS_PROD_BRANCH ?? "claude/friendly-galileo-8pijhl",
+    branch: process.env.UTS_PROD_BRANCH ?? PROD_BRANCH,
     target: targetArg ?? sh("git", ["rev-parse", "--short", "HEAD"], buildRepo),
     mode, prod: "", now: new Date().toISOString(), changed: [],
   };
