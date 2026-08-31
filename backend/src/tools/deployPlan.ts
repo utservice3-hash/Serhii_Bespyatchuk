@@ -355,6 +355,22 @@ export const PROD_BRANCH = "main";
  */
 export const OLD_PROD_BRANCH = "claude/friendly-galileo-8pijhl";
 
+/**
+ * 🔒 Відмова пушити у стару прод-гілку. `null` = пуш дозволено.
+ *
+ * Чиста функція, а не гілка всередині кроку, — щоб її можна було довести ДІЄЮ:
+ * крок `pushBranch` стоїть після рестарту, тож ізольовано його не викликати, і
+ * перевірка неминуче звелася б до читання джерела. Той самий прийом, що
+ * `viewDenied` і `foreignHold`.
+ */
+export function pushRefusal(branch: string): string | null {
+  if (branch !== OLD_PROD_BRANCH) return null;
+  return `🔴 ПУШ У СТАРУ ПРОД-ГІЛКУ «${OLD_PROD_BRANCH}» ЗАБОРОНЕНО.\n`
+    + `   З 31.08.2026 прод тягне «${PROD_BRANCH}»; стара лишається ТИЖНЕМ страховки — читати, не писати.\n`
+    + `   Найчастіша причина: у оточенні стоїть UTS_PROD_BRANCH зі старим значенням — прибери її.\n`
+    + "   Якщо страховку знімають раніше — це окреме рішення власника, а не правка на місці.";
+}
+
 export const PROD_CHECKOUT_REFUSAL =
   "🛑 Це ПРОД-ЧЕКАУТ: `deploy:check` тут ЗАБОРОНЕНО.\n"
   + "   Він робить `rm -rf dist && npm run build` — тобто перезбере dist ПРОДА з тієї\n"

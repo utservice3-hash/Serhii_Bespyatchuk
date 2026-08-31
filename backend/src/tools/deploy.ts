@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
-  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH,
+  REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
@@ -193,22 +193,40 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * 🪞 Порожньо — кажемо СЛОВАМИ. Мовчазний порожній список читається як «перевірка
    * не працює», і за тиждень на нього перестають дивитись.
    */
-  foreignCommits: (c) => run("foreignCommits", () => {
-    sh("git", ["fetch", "origin", "-q"], c.buildRepo);
-    const list = (range: string): string[] =>
-      sh("git", ["log", "--oneline", "--no-merges", range], c.buildRepo).split("\n").filter(Boolean);
-    const mine = list(`origin/${c.branch}..HEAD`);
-    const foreign = list(`${c.prod}..origin/${c.branch}`);
-    if (foreign.length === 0) {
-      return `твоїх ${mine.length}, чужих НЕМАЄ — у ${c.branch} після ${c.prod} нічого не зʼявилось`;
-    }
+  foreignCommits: (c) => {
     /**
-     * 🔴 НЕ обрізаємо список. «І ще 7» — це рівно та форма, у якій чужу зміну
-     * не помічають; ціна повного переліку — кілька рядків у звіті.
+     * 🔴 ДЕТАЛЬ ОБЧИСЛЮЄТЬСЯ, А НЕ ОГОЛОШУЄТЬСЯ — і саме тут я вже раз спіткнувся.
+     * Перша редакція загортала крок у `run(id, fn, detail)`, а той приймає
+     * `fn: () => void` і ПОВЕРНЕНЕ ЗНАЧЕННЯ ВІДКИДАЄ, друкуючи статичний підпис.
+     * Крок чесно рахував обидва списки — і викидав їх. У звіті стояло зелене
+     * «чужі коміти названо поіменно», а названо не було НІЧОГО.
+     * Спіймало приймання, не гейт: гейт читав ТІЛО кроку, а не те, що доходить у звіт.
      */
-    return `твоїх ${mine.length}, а ПОЇДЕ ЩЕ ${foreign.length} чужих — їх немає у твоєму списку «чисел, названих наперед»:\n`
-      + foreign.map((l) => `      ${l}`).join("\n");
-  }, "чужі коміти названо поіменно"),
+    try {
+      sh("git", ["fetch", "origin", "-q"], c.buildRepo);
+      const list = (range: string): string[] =>
+        sh("git", ["log", "--oneline", range], c.buildRepo).split("\n").filter(Boolean);
+      const mine = list(`origin/${c.branch}..HEAD`);
+      const foreign = list(`${c.prod}..origin/${c.branch}`);
+      if (foreign.length === 0) {
+        return { id: "foreignCommits", ok: true,
+          detail: `твоїх ${mine.length}, чужих НЕМАЄ — у ${c.branch} після ${c.prod} нічого не зʼявилось` };
+      }
+      /**
+       * 🔴 НЕ обрізаємо й НЕ фільтруємо злиття. «І ще 7» — рівно та форма, у якій
+       * чужу зміну не помічають; `--no-merges` — та сама втрата, лише непомітніша:
+       * злиття приводить чужу гілку цілком, і саме воно робить число не тим,
+       * що людина очікує побачити.
+       */
+      return { id: "foreignCommits", ok: true,
+        detail: `твоїх ${mine.length}, а ПОЇДЕ ЩЕ ${foreign.length} чужих — їх немає у твоєму списку «чисел, названих наперед»:\n`
+          + foreign.map((l) => `   ${l}`).join("\n") };
+    } catch (e) {
+      return { id: "foreignCommits", ok: false,
+        detail: `🔴 не вдалось порахувати чужі коміти: ${String((e as Error).message).slice(0, 200)}\n`
+          + `   Найчастіша причина: у стенді немає гілки origin/${c.branch} — прожени git fetch origin.` };
+    }
+  },
   buildBack: (c) => run("buildBack", () => { needDeps(c.be, "backend"); sh("rm", ["-rf", "dist"], c.be); sh("npm", ["run", "build"], c.be); }, "чиста збірка бекенда"),
   tscFront: (c) => run("tscFront", () => sh("npx", ["tsc", "-b"], c.fe), "tsc -b фронту (НЕ --noEmit: він там нічого не перевіряє)"),
   /**
@@ -562,11 +580,8 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * відмова в інструменті. Правильніший був би git-хук, але хуків у нас немає.
    */
   pushBranch: (c) => {
-    if (c.branch === OLD_PROD_BRANCH) return { id: "pushBranch", ok: false,
-      detail: `🔴 ПУШ У СТАРУ ПРОД-ГІЛКУ «${OLD_PROD_BRANCH}» ЗАБОРОНЕНО.\n`
-        + `   З 31.08.2026 прод тягне «${PROD_BRANCH}»; стара лишається ТИЖНЕМ страховки — читати, не писати.\n`
-        + `   Найчастіша причина: у оточенні стоїть UTS_PROD_BRANCH зі старим значенням — прибери її.\n`
-        + "   Якщо страховку знімають раніше — це окреме рішення власника, а не правка на місці." };
+    const refusal = pushRefusal(c.branch);
+    if (refusal) return { id: "pushBranch", ok: false, detail: refusal };
     return run("pushBranch", () => sh("bash", ["-lc", `cd ${c.docRoot} && git push origin HEAD:${c.branch} && git fetch origin -q && git rev-list --left-right --count origin/${c.branch}...HEAD`]), "sha у прод-гілці, ahead/behind заміряно ПІСЛЯ fetch");
   },
   report: () => ({ id: "report", ok: true, detail: "звіт нижче" }),
