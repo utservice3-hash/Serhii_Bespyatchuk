@@ -49,7 +49,8 @@ export type MatrixAnswer =
 export function classifyMatrixAnswer(status: number, shouldAllow: boolean): MatrixAnswer {
   if (status >= 500) return "not-measured";
   const ok2xx = status >= 200 && status < 300;
-  return "not-measured";
+  if (shouldAllow) return ok2xx ? "ok" : "wrongly-refused";
+  return ok2xx ? "wrongly-allowed" : "ok";
 }
 
 /** Чи цей висновок мусить валити прогін. «Не виміряно» — мусить. */
