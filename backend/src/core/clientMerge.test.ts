@@ -6,6 +6,7 @@ import { needsDb } from "../testMode.js";
 import {
   MERGED_RECEIVABLE_ROW_SQL, hadAmountRefusal, hadDaysRefusal, mergeDateLabel,
   mergedLimitAmount, mergedLimitDays, mergedLimitNote, type MergeLimitRow,
+  limitsBeforeSnapshot,
 } from "./mergeLimits.js";
 import { mergeSourceOf, revokeAllowed, revokeDenyReason, type MergePairScope } from "../auth/mergeScope.js";
 
@@ -465,4 +466,102 @@ test("#249 реєстр псевдонімів їде тим самим запи
   assert.match(body, /canonical_of/,
     "🔴 реєстр не читається взагалі — позначка «уже обʼєднує N» зникне, і людина "
     + "дізнаватиметься про заборону ланцюжка з тексту помилки 409");
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   📸 ЗНІМОК ЛІМІТІВ ДО ЗЛИТТЯ — #262 / #263 / #264 (01.09.2026)
+
+   Привід не гіпотетичний. Заміряно на проді: зведення лімітів перезаписує рядок
+   канонічного `ON CONFLICT DO UPDATE`, таблиці історії лімітів немає (контроль —
+   чотири ІНШІ таблиці історії в базі є, тобто пошуку було що знаходити), а
+   різниця `set_at` і моменту злиття — рівно 0 с. Для двох уже злитих груп
+   попередній ліміт втрачено назавжди.
+
+   Три РІЗНІ твердження, і третє не є переказом перших двох:
+     #262 — знімок несе стан УСІХ сторін;
+     #263 — дзеркало: «лімітів не було» ≠ «знімка не робили»;
+     #264 — роут справді кладе знімок у реєстр (без цього перші два стерегли б
+            функцію, якою ніхто не користується).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test("#262 ЗНІМОК НЕСЕ ЛІМІТИ ВСІХ СТОРІН — жодна не губиться", () => {
+  const keys = ["канон", "псевдо1", "псевдо2"];
+  const rows = [
+    { client_key: "канон", limit_days: 14, limit_amount: "50000", note: "з листа", set_by: 7, set_at: "2026-08-25T05:38:00.000Z" },
+    { client_key: "псевдо2", limit_days: 10, limit_amount: null, note: "імпорт", set_by: 7, set_at: "2026-08-25T05:38:00.000Z" },
+  ];
+  const snap = limitsBeforeSnapshot(keys, rows, "2026-09-01T10:00:00.000Z");
+
+  assert.equal(snap.sides.length, keys.length,
+    `🔴 сторін у знімку ${snap.sides.length}, а учасників злиття ${keys.length} — `
+    + "знімок мовчки втратив сторону, і саме її ліміт не буде з чого відновити");
+  assert.deepEqual(snap.sides.map((s) => s.clientKey), keys,
+    "🔴 порядок сторін розʼїхався — канонічний мусить лишатись першим");
+
+  const canon = snap.sides[0];
+  assert.equal(canon.limitDays, 14, "🔴 втрачено дні канонічного — рівно те, що ми й лікуємо");
+  assert.equal(canon.limitAmount, 50000, "🔴 сума прийшла не числом (у БД вона NUMERIC → рядок)");
+  assert.equal(canon.setBy, 7, "🔴 втрачено автора: «було 14» без «хто поставив» не дає перепитати");
+  assert.equal(canon.setAt, "2026-08-25T05:38:00.000Z", "🔴 втрачено дату");
+  assert.equal(canon.hadNoRow, false, "🔴 сторону з лімітом позначено як таку, що його не мала");
+
+  const missing = snap.sides[1];
+  assert.equal(missing.hadNoRow, true,
+    "🔴 сторона БЕЗ рядка не позначена `hadNoRow` — «не було ліміту» стало нерозрізнюваним із «було 0»");
+  assert.equal(missing.limitDays, null, "🔴 відсутній ліміт подано нулем — нуль це значення, а не відсутність");
+  assert.ok(snap.capturedAt, "🔴 знімок без часу — не відрізнити від `set_at` сторін");
+});
+
+test("#263 ДЗЕРКАЛО: «лімітів не було» — це ЗАПИСАНИЙ факт, а не порожній обʼєкт", () => {
+  const keys = ["канон", "псевдо"];
+  // Жодна сторона не мала ліміту — найчастіший випадок (на проді така 1 з 3 груп).
+  const snap = limitsBeforeSnapshot(keys, [], "2026-09-01T10:00:00.000Z");
+
+  // 🔴 Головне: порожнеча тут ЗАБОРОНЕНА. Порожній масив мусить означати рівно
+  // одне — «знімок не робився»; якщо ним же позначати «лімітів не було», два
+  // різні стани зіллються, і наступний читач не відрізнить факт від прогалини.
+  assert.equal(snap.sides.length, keys.length,
+    "🔴 знімок порожній там, де лімітів просто не було. Тоді «нічого не було» і "
+    + "«нічого не зберегли» виглядають однаково — та сама хвороба, що «порожній результат = pass»");
+  assert.ok(snap.sides.every((s) => s.hadNoRow === true),
+    "🔴 сторони без лімітів не позначені `hadNoRow` — факт не записано");
+  assert.ok(snap.sides.every((s) => s.limitDays === null && s.limitAmount === null),
+    "🔴 відсутні ліміти матеріалізувались у нулі");
+
+  // І дзеркало до дзеркала: нульовий ліміт — це ЗНАЧЕННЯ, не відсутність.
+  const zero = limitsBeforeSnapshot(["к"],
+    [{ client_key: "к", limit_days: 0, limit_amount: null }], "2026-09-01T10:00:00.000Z");
+  assert.equal(zero.sides[0].hadNoRow, false,
+    "🔴 явну відмову (0 днів) прийнято за відсутність рядка — а це рішення людини, і воно має слід");
+  assert.equal(zero.sides[0].limitDays, 0, "🔴 нуль зник — саме він і є «відмова»");
+});
+
+test("#264 ЗЛИТТЯ СПРАВДІ КЛАДЕ ЗНІМОК У РЕЄСТР — інакше функція стереже сама себе", async () => {
+  const fs = await import("node:fs/promises");
+  const url = await import("node:url");
+  const src = await fs.readFile(
+    url.fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
+
+  // 🔴 Межа зрізу СЕМАНТИЧНА: рівно тіло злиття в дебіторці, від його ключів до
+  // INSERT-у в реєстр. Зріз по довжині вже одного разу зробив гейт беззубим.
+  const from = src.indexOf("const keys = [canonical, ...aliases];");
+  assert.ok(from > 0, "🔴 не знайдено початок злиття — гейт втратив предмет");
+  const to = src.indexOf("await client.query(RECOMPUTE_RECEIVABLES_SQL);", from);
+  assert.ok(to > from, "🔴 не знайдено кінець блоку — зріз розповзся");
+  const block = src.slice(from, to);
+
+  assert.match(block, /limitsBeforeSnapshot\(\s*keys\s*,/,
+    "🔴 знімок не робиться по ВСІХ ключах злиття — або його немає, або він бачить не всіх");
+  // 🔴 ПЕРЕВІРЯЄМО ВЖИВАННЯ, А НЕ НАЯВНІСТЬ ІМЕНІ. Перша редакція цього гейта
+  // шукала слово `limitsBefore` будь-де в блоці — і лишалась ЗЕЛЕНОЮ, коли поле
+  // прибрали з `evidence`: оголошення змінної нікуди не поділось. Спіймано
+  // саботажем 01.09.2026. Тепер зріз вужчий — саме тіло `JSON.stringify`.
+  const payload = block.slice(block.indexOf("JSON.stringify({"));
+  assert.ok(payload.length > 0, "🔴 не знайдено тіла evidence — гейт втратив предмет");
+  assert.match(payload.slice(0, payload.indexOf("}")), /limitsBefore/,
+    "🔴 знімок не потрапляє в evidence — реєстр лишиться без стану, і наступне злиття "
+    + "повторить ту саму незворотність");
+  // Порядок: знімок мусить бути ДО зведення, інакше він зафіксує вже перезаписане.
+  assert.ok(block.indexOf("limitsBeforeSnapshot") < block.indexOf("INSERT INTO client_key_alias"),
+    "🔴 знімок робиться ПІСЛЯ запису в реєстр — до моменту зведення він уже нічого не доводить");
 });
