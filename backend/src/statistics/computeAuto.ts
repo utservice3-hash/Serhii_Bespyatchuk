@@ -1,5 +1,8 @@
 // Обчислення auto-метрик відділів leadgen/marketing/logistics із CRM (наша БД,
 // БЕЗ звернень до Kommo). Дзеркалить перевірені предикати з routes/dashboard.ts.
+// 01.09.2026 сюди ж додано finance.receivables — але ОКРЕМОЮ функцією
+// (`computeFinanceSnapshot`), бо це ЗНІМОК, а не період: у `computeDeptAuto`
+// він не поміщається ні за семантикою, ні за білим списком.
 // Використовується і бекфілом, і живим перерахунком. Усі метрики — рівня ВІДДІЛУ
 // (team_lead = NULL). Повертає Map<`${dept}|${ptype}|${period_start}|${metric}`→value>.
 //
@@ -11,7 +14,7 @@ import { pool } from "../db/pool.js";
 import { getSettings } from "../routes/settings.js";
 // КРОК 9 Фаза 3: `adDealSql` — єдине джерело `core/metrics.ts` (прибрано локальний дубль).
 // КРОК Г #1: нецільові — теж із ядра (nonTargetLeadsByBucket), спільний предикат із /lead-quality.
-import { adDealSql, nonTargetLeadsByBucket } from "../core/metrics.js";
+import { adDealSql, nonTargetLeadsByBucket, receivablesTotal } from "../core/metrics.js";
 
 const FULL_CYCLE = [8921932, 155304];
 
@@ -94,4 +97,47 @@ export async function computeDeptAuto(since: string): Promise<Map<string, number
     }
   }
   return out;
+}
+
+/**
+ * 💰 `finance.receivables` — ЄДИНИЙ ПИСАР (01.09.2026, рішення власника).
+ *
+ * Показник стояв у каталозі як `auto`, писаря не мав, і руками його заповнити
+ * теж не можна: `PUT /api/statistics/manual` відхиляє все, чиє джерело не
+ * `manual`. Тобто цифру не можна було ні порахувати, ні ввести — вона стояла
+ * замороженим імпортом на 2026-06 при живій дебіторці в базі.
+ *
+ * 🔴 ЦЕ ЗНІМОК, А НЕ ПЕРІОД — І ЦЕ НЕ ВИБІР, А ПРИРОДА ДАНИХ.
+ * `receivables` `TRUNCATE`-иться синком кожні 15 хв і має лише `synced_at`;
+ * історії боргу в базі НЕМАЄ. Порахувати «дебіторку за червень» ретроспективно
+ * нема з чого. Тому пишемо рівно те, що можна стверджувати чесно: **борг станом
+ * на останній знімок УСЕРЕДИНІ бакета**. Для закритого місяця це його останній
+ * запис перед північчю, тобто «на кінець періоду»; для поточного — «зараз».
+ * Підпис у каталозі це називає (`label`), інакше знімок читався б як період —
+ * рівно та хиба, що вже живе в `payment_received`/`invoiced_amount`/
+ * `managers_count`, які підписані періодними, а рахуються без фільтра дати.
+ *
+ * 🔴 ЗАКРИТІ ПЕРІОДИ НЕ ЧІПАЮТЬСЯ. Функція віддає рівно два записи — за
+ * переданими анкерами ПОТОЧНОГО місяця й тижня, і жодного іншого `period_start`.
+ * Це не акуратність, а захист: писар із вікном «останні 40 днів» вписав би
+ * СЬОГОДНІШНІЙ борг у минулі бакети й мовчки переписав історію. Стереже `#24w`.
+ *
+ * 🧮 ЧИСЛО БЕРЕТЬСЯ З ЯДРА (`metrics.receivablesTotal`), а не власним SQL:
+ * своя копія означення зійшлася б із копією, а не з правилом, і розійшлася б із
+ * екраном Дебіторки через місяці. Стереже `#24v` — саботаж по ядру червонить.
+ *
+ * ⚠️ У `DEPT_AUTO_ENABLED` НЕ вноситься свідомо: той білий список означає
+ * «періодні метрики, звірені з Google-листом», а тут ні періоду, ні листа.
+ *
+ * @param curMonth `YYYY-MM-DD` — початок ПОТОЧНОГО місяця (київський).
+ * @param curWeek  `YYYY-MM-DD` — початок ПОТОЧНОГО тижня (київський).
+ */
+export async function computeFinanceSnapshot(
+  curMonth: string, curWeek: string,
+): Promise<Map<string, number>> {
+  const total = await receivablesTotal({});
+  return new Map<string, number>([
+    [`finance|month|${curMonth}|receivables`, total],
+    [`finance|week|${curWeek}|receivables`, total],
+  ]);
 }

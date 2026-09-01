@@ -115,6 +115,7 @@ export const MANIFEST_FILES: string[] = [
   "auth/gates.test.js",
   "auth/sqlLex.test.js",
   "auth/mergeScope.test.js",
+  "statistics/financeSnapshot.test.js",
   "auth/matrixAnswer.test.js",
   "auth/rbac.test.js",
   "auth/scopeInvariants.test.js",
@@ -166,6 +167,10 @@ export const MANIFEST_TESTS: string[] = [
   "форми назви: називний, родовий, англійська, число",
   "страхувальна сітка: період цілком у майбутньому зсувається на рік і ГУЧНО",
   "страхувальна сітка НЕ чіпає нормальний період",
+  // statistics/financeSnapshot.test.ts
+  "#24v ЧИСЛО З ЯДРА, а не власна копія SQL",
+  "#24w ЗАКРИТІ ПЕРІОДИ НЕ ЧІПАЮТЬСЯ — тому їхнє число незмінне",
+  "#24y ДЖОБА КЛИЧЕ ПИСАРЯ — і саме з поточними анкерами",
   // auth/matrixAnswer.test.ts
   "#24r ТРИ ВІДПОВІДІ, НЕ ДВІ: 5xx не каже про доступ НІЧОГО",
   "#24s ДЗЕРКАЛО: справжні порушення далі ловляться в ОБИДВА боки",

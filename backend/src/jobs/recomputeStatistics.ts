@@ -6,12 +6,14 @@
 // revenue_won / machines_success / machines_dispatched від STATS_AUTO_FROM.
 // Готівка/оплата/рахунки/інші відділи — imported/manual (auto ще не звірено).
 // Розширювати — коли відповідні метрики пройдуть звірку (Крок 5).
+// 01.09.2026 додано finance.receivables — ЗНІМОК боргу в поточні бакети
+// (`computeFinanceSnapshot`); історії в `receivables` немає за побудовою.
 
 import { pool } from "../db/pool.js";
 import {
   canonTeamLead, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, STATS_AUTO_FROM,
 } from "../statistics/catalog.js";
-import { computeDeptAuto } from "../statistics/computeAuto.js";
+import { computeDeptAuto, computeFinanceSnapshot } from "../statistics/computeAuto.js";
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number);
@@ -144,6 +146,13 @@ async function run(): Promise<void> {
   // за поточний період — межа ~40 днів покриває поточний+попередній бакет.
   const since = new Date(Date.now() - 40 * 864e5).toISOString().slice(0, 10);
   const dept = await computeDeptAuto(since < STATS_AUTO_FROM ? STATS_AUTO_FROM : since);
+
+  // 💰 finance.receivables — знімок боргу в ПОТОЧНІ бакети. Анкери беремо ті
+  // самі, що й снапшот-метрики продажів вище (`curMonth`/`curWeek` з ОДНОГО
+  // запиту `now()`), щоб у проході не завелось двох різних «сьогодні». Їде тим
+  // самим INSERT-ом, що й відділові метрики: `team_lead = NULL`, `source='auto'`.
+  for (const [k, v] of await computeFinanceSnapshot(curMonth, curWeek)) dept.set(k, v);
+
   const dRows = [...dept.entries()];
   if (dRows.length) {
     const vals: unknown[] = [];

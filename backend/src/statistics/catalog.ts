@@ -146,7 +146,14 @@ export const CATALOG: DepartmentDef[] = [
       { key: "paid_dispatched_costs", label: "Витрати з оплачених поставлених, грн", unit: "uah", source: "manual", aggregation: "sum", csvIndexMonth: 10, csvIndexWeek: 10, order: 10 },
       { key: "paid_dispatched_commission", label: "Комісійні з оплачених поставлених, грн", unit: "uah", source: "manual", aggregation: "sum", csvIndexMonth: 11, csvIndexWeek: 11, order: 11 },
       { key: "total_costs", label: "Загальні витрати, грн", unit: "uah", source: "manual", aggregation: "sum", csvIndexMonth: 12, csvIndexWeek: 12, order: 12 },
-      { key: "receivables", label: "Дебіторка, грн", unit: "uah", source: "auto", aggregation: "last", csvIndexMonth: 13, csvIndexWeek: 13, order: 13, note: "з таблиці receivables (снапшот)" },
+      { key: "receivables", label: "Дебіторка (знімок), грн", unit: "uah", source: "auto", aggregation: "last", csvIndexMonth: 13, csvIndexWeek: 13, order: 13,
+        // 🔴 Підпис каже «знімок» СВІДОМО. `receivables` TRUNCATE-иться синком кожні
+        // 15 хв і має лише `synced_at` — історії боргу в базі немає, тож «дебіторка за
+        // червень» ретроспективно не рахується. У бакеті лежить ОСТАННІЙ знімок
+        // усередині нього: для закритого місяця це його кінець, для поточного — «зараз».
+        // Без цього слова знімок читався б як період — та сама хиба, що вже живе в
+        // payment_received / invoiced_amount / managers_count, підписаних періодними.
+        note: "ЗНІМОК, не період: борг станом на останній перерахунок усередині бакета (для закритого місяця — на його кінець). Джерело — ядро дебіторки, те саме, що на екрані «Дебіторка»" },
       { key: "net_profit", label: "Чистий прибуток, грн", unit: "uah", source: "manual", aggregation: "sum", csvIndexMonth: 14, csvIndexWeek: 14, order: 14 },
     ],
   },
