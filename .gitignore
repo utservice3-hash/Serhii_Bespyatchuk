@@ -20,3 +20,7 @@ backups/
 .deploy-lock
 .deploy-lock.log
 .deploy-lock.*.tmp
+
+# Знімок сесії від хука PreCompact (.claude/hooks/save-handoff.mjs) — стан РОЗМОВИ,
+# а не проєкту: переписується щокомпакту й у кожного чату свій.
+docs/SESSION_HANDOFF.md
