@@ -321,17 +321,113 @@ test("#181 нове джерело лімітів НЕ розходиться з
     `🔴 у client_credit_limits лише ${ours.rowCount} рядків — імпорт не відпрацював, і порівнювати нічого`);
   assert.ok(sheet.size > 10, `🔴 аркуш віддав ${sheet.size} рядків — читання зламалось`);
 
+  /**
+   * 🔗 ГЕЙТ ЗНАЄ ПРАВИЛО ЗВЕДЕННЯ — інакше він порівнює дві РІЗНІ речі.
+   *
+   * В аркуші ліміт кожної ЮРОСОБИ окремо; у нас після обʼєднання — ліміт ГРУПИ,
+   * зведений `mergedLimitDays` (менший виграє, і нуль-«відмовили» виграє сам).
+   * Заміряно 01.09.2026: `автострадавк` [10, 0] → 0, `смартекс` [15, 0, 10] → 0 —
+   * рівно те, що в нас. Наш нуль ВИВОДИТЬСЯ з чисел аркуша, щойно застосувати
+   * правило; без цього гейт місяцями показував би «розбіжність», якої немає.
+   */
+  const { sheetExpectedDays } = await import("./mergeLimits.js");
+  const al = await pool.query<{ alias_key: string; canonical_key: string }>(
+    `SELECT alias_key, canonical_key FROM client_key_alias WHERE revoked_at IS NULL`);
+  const aliasesBy = new Map<string, string[]>();
+  const isAlias = new Set<string>();
+  for (const r of al.rows) {
+    aliasesBy.set(r.canonical_key, [...(aliasesBy.get(r.canonical_key) ?? []), r.alias_key]);
+    isAlias.add(r.alias_key);
+  }
+  const sheetDays = (k: string): number | null | undefined => sheet.get(k)?.limitDays;
+
   const diffs: string[] = [];
+  let merged = 0;
   for (const [key, lim] of sheet) {
     if (lim.limitDays == null) continue;
+    /**
+     * 🔴 ПОГЛИНУТА ЮРОСОБА ВЛАСНОГО РЯДКА НЕ МАЄ — і не мусить. Її ліміт уже
+     * врахований у зведенні групи; вимагати від неї окремого рядка означало б
+     * вимагати, щоб обʼєднання не відбулось.
+     */
+    if (isAlias.has(key)) continue;
     const row = ours.rows.find((r) => r.client_key === key);
     // Клієнта може не бути в нашій таблиці лише тому, що його вже прибрали
     // руками — це РІШЕННЯ людини, а не розходження.
     if (!row) continue;
-    if (Number(row.limit_days) !== Number(lim.limitDays)) {
-      diffs.push(`${key}: аркуш ${lim.limitDays} / наше ${row.limit_days}`);
+    const group = aliasesBy.get(key);
+    const expected = group?.length
+      ? sheetExpectedDays(key, sheetDays, (c) => aliasesBy.get(c) ?? [])
+      : Number(lim.limitDays);
+    if (group?.length) merged++;
+    if (Number(row.limit_days) !== Number(expected)) {
+      diffs.push(group?.length
+        ? `${key}: група з ${group.length + 1} юросіб, зведено з [${[key, ...group].map((m) => sheetDays(m) ?? "—").join(", ")}] → ${expected} / наше ${row.limit_days}`
+        : `${key}: аркуш ${lim.limitDays} / наше ${row.limit_days}`);
     }
   }
+  /**
+   * 🪞 ДЗЕРКАЛО ДО ЗНАННЯ ПРАВИЛА: якщо злитих груп у вибірці немає ЗОВСІМ, то
+   * гілка зведення не виконувалась, і «розбіжностей нуль» нічого про неї не каже.
+   */
+  assert.ok(merged > 0,
+    "🔴 серед звірених немає ЖОДНОЇ злитої групи — правило зведення не перевірялось, "
+    + "і зелене тут означає лише «прямі ліміти збіглись»");
   assert.deepEqual(diffs, [],
     `🔴 ${diffs.length} лімітів розійшлись із Лист20 у день викату: ${diffs.slice(0, 5).join(" · ")}`);
+});
+
+/**
+ * 🔗 #239d–#239e — ЗНАННЯ ПРАВИЛА НЕ СМІЄ СТАТИ КОВДРОЮ.
+ *
+ * 🔴 `#181` тепер знає зведення — і саме тому потрібне доведення в ОБИДВА боки на
+ * фікстурі: живий прод сьогодні має рівно дві злиті групи й жодної справжньої
+ * розбіжності, тож на ньому «червоніє, коли треба» перевірити нічим.
+ */
+test("#239d ЗВЕДЕННЯ: очікуване для групи рахується з членів, а не береться з аркуша", async () => {
+  const { sheetExpectedDays } = await import("./mergeLimits.js");
+  const sheet = new Map<string, number | null>([
+    ["автострадавк", 10], ["групакомпанійавтострада", 0],
+    ["смартекс", 15], ["курєрукраїни", 0], ["тексгруп", 10],
+    ["безвідмов", 30], ["безвідмовб", 20],
+  ]);
+  const days = (k: string) => sheet.get(k);
+  const al = new Map<string, string[]>([
+    ["автострадавк", ["групакомпанійавтострада"]],
+    ["смартекс", ["курєрукраїни", "тексгруп"]],
+    ["безвідмов", ["безвідмовб"]],
+  ]);
+  const of = (c: string) => al.get(c) ?? [];
+  // Живі числа з прода 01.09.2026 — обидві групи дають 0, і це збігається з нашим.
+  assert.equal(sheetExpectedDays("автострадавк", days, of), 0, "🔴 [10, 0] мусить звестись у 0");
+  assert.equal(sheetExpectedDays("смартекс", days, of), 0, "🔴 [15, 0, 10] мусить звестись у 0");
+  /**
+   * 🪞 БЕЗ ВІДМОВИ ПРАВИЛО НЕ ВИРОДЖУЄТЬСЯ В НУЛЬ. Якби воно завжди давало 0,
+   * гейт зеленів би на будь-якій групі — тобто перестав би щось перевіряти.
+   */
+  assert.equal(sheetExpectedDays("безвідмов", days, of), 20, "🔴 [30, 20] дало не менший, а щось інше");
+  // `null` — «ліміт НІКОЛИ не ставили» — не є відмовою й не тягне групу в нуль.
+  const noneSet = new Map<string, number | null>([["x", null], ["y", null]]);
+  assert.equal(sheetExpectedDays("x", (k) => noneSet.get(k), () => ["y"]), null,
+    "🔴 «ніколи не ставили» перетворилось на «відмовили» — та сама пастка, що коштувала 54 клієнтів");
+});
+
+test("#239e 🔴 ДЗЕРКАЛО: справжня розбіжність по НЕзлитому клієнту лишається ЧЕРВОНОЮ", () => {
+  /**
+   * Відтворюємо саме те рішення, яке ухвалює `#181`: для клієнта БЕЗ групи
+   * очікуване — значення аркуша навпростець, і розбіжність із нашим є дефектом.
+   * Якби знання правила накрило й таких, гейт став би ковдрою.
+   */
+  const aliasesBy = new Map<string, string[]>([["злитий", ["алія"]]]);
+  const decide = (key: string, sheetVal: number, ourVal: number): boolean => {
+    const group = aliasesBy.get(key);
+    const expected = group?.length ? 0 : sheetVal;   // для групи правило дало б 0 (є відмова)
+    return Number(ourVal) !== Number(expected);      // true = розбіжність, гейт червоніє
+  };
+  assert.equal(decide("одинак", 10, 0), true,
+    "🔴 незлитий клієнт із аркушем 10 і нашим 0 ПРОЙШОВ — знання правила стало ковдрою");
+  assert.equal(decide("одинак", 10, 10), false, "🔴 збіг по незлитому оголошено розбіжністю");
+  assert.equal(decide("злитий", 10, 0), false, "🔴 злита група все ще читається як розбіжність");
+  assert.equal(decide("злитий", 10, 7), true,
+    "🔴 злита група з НЕПРАВИЛЬНИМ зведенням пройшла — правило перевіряється, а не вимикається");
 });
