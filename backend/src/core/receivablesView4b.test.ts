@@ -866,6 +866,7 @@ test("#198h списане віднімається і від РЯДКА, а н�
     dealId: 1, dealFound: true, paymentType: "Безнал с НДС", statusId: 142, pipelineId: 8921932,
     stageMapped: true, writtenOff, carrierPayAmount: null, carrierPayType: null,
     earned: 10, clientPay: 100, carrierObligation: null, ageDays: 5,
+    counterpartyKey: "к",
   });
   const { byClient, totals } = foldFacts([row("1", 100, false), row("2", 30, true)]);
   const c = byClient.get("к")!;
@@ -924,7 +925,7 @@ test("#198i Σ колонки «заробили» в розкритті == «З
     dealId, dealFound: opts.dealFound ?? (dealId != null), paymentType: "Безнал с НДС",
     statusId: 142, pipelineId: 8921932, stageMapped: true, writtenOff: opts.writtenOff ?? false,
     carrierPayAmount: null, carrierPayType: null, earned, clientPay: 1000,
-    carrierObligation: null, ageDays: 5,
+    carrierObligation: null, ageDays: 5, counterpartyKey: "к",
   });
 
   // ФІКСТУРА, яка містить УСІ п'ять випадків одночасно:

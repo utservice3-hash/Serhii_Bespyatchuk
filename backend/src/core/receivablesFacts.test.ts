@@ -16,7 +16,9 @@ const row = (p: Partial<RawInvoiceRow> = {}): RawInvoiceRow => ({
   dealId: 1, dealFound: true, paymentType: "Безнал с НДС", statusId: 69716304,
   pipelineId: 8921932, stageMapped: true, ageDays: 10,
   carrierPayAmount: null, carrierPayType: null,
-  earned: null, clientPay: null, carrierObligation: null, writtenOff: false, ...p,
+  earned: null, clientPay: null, carrierObligation: null, writtenOff: false,
+  // Незлитий клієнт: сирий ключ юрособи збігається з канонічним.
+  counterpartyKey: "к", ...p,
 });
 
 /**

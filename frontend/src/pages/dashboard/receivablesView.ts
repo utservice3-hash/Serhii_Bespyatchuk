@@ -767,6 +767,62 @@ export function agreementLine(dueDate: string | null, note: string): AgreementLi
 export const AGREEMENT_EMPTY_LABEL = "записів немає";
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   🏢 РОЗКЛАД «ЮРОСОБА → СУМА» У ЗГОРНУТОМУ РЯДКУ
+
+   Скарга власника дослівно: «коли обʼєднуємо клієнтів, в загальному списку не
+   зрозуміло стає по якій компанії борг». Отже підпис потрібен САМЕ в списку,
+   без кліку — у розкритті юрособа була видна й до цього.
+
+   🔴 ЗАЛИШОК НАЗИВАЄТЬСЯ ЧИСЛОМ. Сума рядка приходить із `receivables`, розклад
+   — із `receivable_invoices`; це різні таблиці, і по всіх 63 рядках вони
+   розходяться в 11 (заміряно 01.09.2026). Показати доданки під сумою, якій
+   вони не дорівнюють, — це «гарна неправда»: вона переконлива саме тим, що не
+   сходиться непомітно. Тож або Δ = 0 і залишку немає, або залишок видно.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+export interface BreakdownPart { key: string; name: string | null; n: number; amount: number }
+export interface BreakdownIn { parts: BreakdownPart[]; remainder: number; ok: boolean; show: boolean }
+
+export interface BreakdownLine {
+  /** Готові підписи «НАЗВА — сума ₴», у порядку ядра. */
+  items: { key: string; label: string }[];
+  /** Підпис нерознесеного залишку або `null`, коли розклад сходиться. */
+  remainderLabel: string | null;
+}
+
+/** Той самий підпис, що в ядрі: юрособи в рахунку не вказано. */
+export const BREAKDOWN_UNKNOWN = "юрособу не вказано";
+
+const uah = (n: number): string =>
+  `${Math.round(n).toLocaleString("uk-UA")} ₴`;
+
+/**
+ * Готує розклад до показу. `null` — показувати нічого (юрособа одна або їх
+ * немає); саме так виглядають 61 рядок із 63, і вони не змінюються взагалі.
+ */
+export function breakdownLine(b: BreakdownIn | null | undefined): BreakdownLine | null {
+  if (!b || !b.show || b.parts.length === 0) return null;
+  const items = b.parts.map((p) => ({
+    key: p.key,
+    label: `${(p.name ?? "").trim() || BREAKDOWN_UNKNOWN} — ${uah(p.amount)}`,
+  }));
+  // Округлення до гривні може зробити копійчану різницю невидимою — тому
+  // вирішує `ok` із ядра (епсилон), а не порівняння вже відформатованих рядків.
+  return { items, remainderLabel: b.ok ? null : `не рознесено — ${uah(b.remainder)}` };
+}
+
+/**
+ * Підпис «ще N» для нотаток, узятих із набору псевдонімів.
+ *
+ * 🔴 З НАЗВАМИ, А НЕ САМИМ ЧИСЛОМ. «Ще 2» без назв — та сама хвороба, з якої
+ * почалась заявка: людина бачить, що чогось не видно, і не знає чого.
+ */
+export function noteOthersLabel(names: readonly string[] | null | undefined): string | null {
+  const list = (names ?? []).filter((s) => (s ?? "").trim() !== "");
+  return list.length === 0 ? null : `ще ${list.length}: ${list.join(", ")}`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    🕐 ШТАМП РАХУНКУ: ДАТА + ЧАС, І ПОРОЖНІЙ ЧАС — ЦЕ ВІДПОВІДЬ
 
    🔴 `null` У ЧАСІ НЕ ДОРІВНЮЄ «00:00». 1С пише сентинел `00:00:00`, коли часу

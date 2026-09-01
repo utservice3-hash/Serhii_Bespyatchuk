@@ -20,6 +20,7 @@ import { MergeDialog } from "./MergeDialog";
 import {
   carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
   isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
+  breakdownLine, noteOthersLabel,
   formatDateSafe, parseDateSafe, agreementLine, AGREEMENT_EMPTY_LABEL,
   sortClients, nextSort, sortMark, ariaSort, DEFAULT_SORT, type SortState,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters,
@@ -724,6 +725,25 @@ export function ReceivablesSection({
                                   у `title`: обрізання не має ховати зміст. */}
                               <span className="recv-cname" title={c.clientName}>{c.clientName}</span>
                             </span>
+                            {/* 🏢 РОЗКЛАД ПО ЮРОСОБАХ — лише коли їх БІЛЬШЕ ОДНІЄЇ.
+                                Заміряно 01.09.2026: таких рядків 2 із 63, решта 61
+                                виглядає точно як раніше. Підпис під назвою, бо саме
+                                в загальному списку його бракувало: у розкритті
+                                юрособа була видна й до цього.
+                                🔴 Нерознесений залишок називається ЧИСЛОМ і стоїть
+                                поруч — доданки під сумою, якій вони не дорівнюють,
+                                переконливі саме тим, що не сходяться непомітно. */}
+                            {(() => { const bl = breakdownLine(c.counterparties); return bl ? (
+                              <span className="recv-breakdown" style={{ display: "block",
+                                     fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 2 }}>
+                                {bl.items.map((it, k) => (
+                                  <span key={it.key}>{k > 0 ? " · " : ""}{it.label}</span>
+                                ))}
+                                {bl.remainderLabel && (
+                                  <span style={{ color: "var(--warn)" }}> · {bl.remainderLabel}</span>
+                                )}
+                              </span>
+                            ) : null; })()}
                             {badges.length > 0 && (
                               <span className="recv-badges">
                                 {badges.map((b) => (
@@ -957,6 +977,26 @@ export function ReceivablesSection({
                                   </>
                                 )}
                               </button>
+                              {/* 🗒 ЗВІДКИ ЦЕЙ ЗАПИС І ЩО ЩЕ Є В НАБОРІ.
+                                  Після обʼєднання нотатки лишаються на ключах, які
+                                  були канонічними в мить запису, і зникали з екрана
+                                  (заміряно 01.09.2026: таких 3, усі з дедлайнами).
+                                  Тепер вони видні — але підписані юрособою, інакше
+                                  чужий запис читався б як запис цього клієнта.
+                                  🔴 «Ще N» іде З НАЗВАМИ: саме число без назв — та
+                                  сама хвороба, з якої почалась заявка. */}
+                              {(c.noteFrom || noteOthersLabel(c.noteOthers)) && (
+                                <span className="recv-note-from" style={{ fontSize: "var(--fs-xs)",
+                                       color: "var(--text-muted)", flex: "0 0 auto" }}
+                                  title={[c.noteFrom ? `Запис узято з юрособи «${c.noteFrom}».` : "",
+                                          noteOthersLabel(c.noteOthers) ? `У наборі є інші записи: ${(c.noteOthers ?? []).join(", ")}.` : "",
+                                          "Тижневе правило не змінилось: як коментар показується лише запис поточного тижня."]
+                                         .filter(Boolean).join(" ")}>
+                                  {c.noteFrom ? `з «${c.noteFrom}»` : ""}
+                                  {c.noteFrom && noteOthersLabel(c.noteOthers) ? " · " : ""}
+                                  {noteOthersLabel(c.noteOthers) ?? ""}
+                                </span>
+                              )}
                               {(c.noteHistoryCount ?? 0) > 0 && (
                               /* 🔴 ЗОНА НАТИСКАННЯ ≥32×32 (вимога власника 26.08.2026).
                                  Заміряно в браузері ДО правки: 56×17 — удвічі нижче

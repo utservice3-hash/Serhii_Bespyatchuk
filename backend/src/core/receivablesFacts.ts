@@ -74,6 +74,21 @@ export interface RawInvoiceRow {
   stageMapped: boolean;         // чи є (pipeline_id, status_id) у `pipeline_stage_map`
   /** 🗑 Рахунок списано як безнадійний — у суму НЕ входить, але видимий підписом. */
   writtenOff: boolean;
+  /**
+   * 🏢 ЮРОСОБА КЛІЄНТА, ВІД ЯКОЇ ПРИЙШОВ РАХУНОК (`receivable_invoices.client_key_raw`).
+   *
+   * 🔴 НЕ ПЛУТАТИ З `entity` НИЖЧЕ. `Entity` у цьому модулі — це НАША компанія
+   * (ЮТС / Автомув / ФОП), тобто хто виставив рахунок. `counterpartyKey` — це
+   * ЧИЯ компанія винна, тобто клієнт. Слово «юрособа» на екрані вживається до
+   * обох, і саме тому тут воно не вживається до жодного: одне слово на два
+   * значення — та сама хвороба, яку ми вже ловили.
+   *
+   * Ключ сирий і НІКОЛИ не перезаписується склейкою — на відміну від
+   * `clientKey`, який після обʼєднання стає канонічним. Саме тому розклад
+   * «яка компанія скільки винна» відтворюється й ПІСЛЯ злиття, а розʼєднання
+   * поверне старий вигляд без жодного розплутування даних.
+   */
+  counterpartyKey: string | null;
   // 🚚 Скільки заплачено перевізнику і чи домовлені умови. `null` в обох —
   // «не знаємо», і це ТРЕТІЙ стан, а не нуль (заміряно: тип порожній у 84 із 279).
   carrierPayAmount: number | null;
@@ -256,6 +271,20 @@ export interface ClientFacts {
   /** 🗑 Списано як безнадійне: скільки рядків і на скільки. У `amount` НЕ входить. */
   writtenOffN: number;
   writtenOffAmount: number;
+  /**
+   * 🏢 РОЗКЛАД БОРГУ ПО ЮРОСОБАХ КЛІЄНТА — ключ `client_key_raw`, назва всередині.
+   *
+   * 🔴 ОДНА СТРУКТУРА, А НЕ ДВІ ПОРУЧ. Спокуса тримати суми в `TallyBy` і назви
+   * в окремій мапі велика, бо `add()` уже є. Але два джерела одного факту
+   * розходяться мовчки — рівно те, від чого застерігає доккоментар `foldFacts`
+   * («порахуй їх окремо — і одного дня вони розійдуться»). Тому назва їде разом
+   * із сумою, в тому самому запису.
+   *
+   * Списані рахунки сюди НЕ входять — так само, як не входять у `amount`.
+   * Через це Σ розкладу == `amount` за побудовою, і це не збіг, а інваріант:
+   * обидва числа набираються в одному циклі після того самого `continue`.
+   */
+  counterparty: Record<string, { name: string | null; n: number; amount: number }>;
 }
 
 export interface FactTotals {
@@ -280,6 +309,7 @@ const emptyClient = (clientKey: string): ClientFacts => ({
   carrier: {} as TallyBy<CarrierPaid>, aging: {} as TallyBy<AgingBucket>,
   entityReasons: [], carrierReasons: [], pipelinesOutOfMap: [], oldestAgeDays: null,
   earned: null, clientPay: null, writtenOffN: 0, writtenOffAmount: 0,
+  counterparty: {},
 });
 
 /**
@@ -330,6 +360,17 @@ export function foldFacts(facts: InvoiceFact[]): { byClient: Map<string, ClientF
       if (f.clientPay != null) totals.clientPay = (totals.clientPay ?? 0) + f.clientPay;
     }
 
+    // 🏢 Розклад по юрособах клієнта — В ТОМУ САМОМУ проході, після того самого
+    // `continue`, що виключає списані. Інакше Σ розкладу і `amount` набирались би
+    // за різними правилами й розійшлись би на першому ж списанні.
+    // Ключ — сирий; його брак («рахунок без raw-ключа») має власне значення
+    // «невідома юрособа», а не тихе злиття з канонічним.
+    {
+      const ck = f.counterpartyKey ?? "";
+      const cur = c.counterparty[ck] ?? { name: f.clientName, n: 0, amount: 0 };
+      c.counterparty[ck] = { name: cur.name ?? f.clientName, n: cur.n + 1, amount: cur.amount + f.amount };
+    }
+
     add(c.link, f.linkState, f.amount);       add(totals.link, f.linkState, f.amount);
     add(c.entity, f.entity, f.amount);        add(totals.entity, f.entity, f.amount);
     add(c.carrier, f.carrierPaid, f.amount);  add(totals.carrier, f.carrierPaid, f.amount);
@@ -370,6 +411,10 @@ export function foldFacts(facts: InvoiceFact[]): { byClient: Map<string, ClientF
  */
 const INVOICE_FACTS_SQL = `
   SELECT ri.client_key, ri.client_name, ri.amount, ri.invoice_no, ri.edrpou,
+         -- 🏢 Сирий ключ юрособи клієнта. КОЛОНКА В НАЯВНОМУ ЗАПИТІ, а не пʼятий
+         -- похід: стеля #158 — чотири, і піднімати її «щоб пройшло» заборонено
+         -- її ж текстом. COALESCE — бо в незлитого клієнта raw і канонічний збігаються.
+         COALESCE(ri.client_key_raw, ri.client_key) AS counterparty_key,
          to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
          (now()::date - ri.invoice_date)        AS age_days,
          dl.deal_id,
@@ -409,6 +454,7 @@ export async function loadInvoiceFacts(
     client_key: string; client_name: string | null; amount: string; invoice_no: string | null;
     invoice_date: string | null; age_days: number | null; deal_id: string | null; deal_found: boolean; edrpou: string | null;
     payment_type: string | null; status_id: string | null; pipeline_id: string | null; stage_mapped: boolean; written_off: boolean;
+    counterparty_key: string | null;
     carrier_pay_amount: string | null; carrier_pay_type: string | null;
     earned: string | null; client_pay_amount: string | null; carrier_obligation: string | null;
   }>(INVOICE_FACTS_SQL, [clientKeys]);
@@ -422,6 +468,7 @@ export async function loadInvoiceFacts(
     pipelineId: x.pipeline_id == null ? null : Number(x.pipeline_id),
     stageMapped: x.stage_mapped === true,
     writtenOff: x.written_off === true,
+    counterpartyKey: x.counterparty_key,
     carrierPayAmount: x.carrier_pay_amount == null ? null : Number(x.carrier_pay_amount),
     carrierPayType: x.carrier_pay_type,
     earned: x.earned == null ? null : Number(x.earned),

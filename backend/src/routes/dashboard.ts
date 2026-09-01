@@ -52,6 +52,8 @@ import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
+import * as receivablesCounterparty from "../core/receivablesCounterparty.js";
+import * as receivableNotePick from "../core/receivableNotePick.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
@@ -1817,12 +1819,22 @@ dashboardRouter.get("/receivables", async (req, res) => {
 
   const clientKeys = rows.map((r) => r.clientKey).filter((k): k is string => k != null);
   const notesRes = clientKeys.length
-    ? await pool.query<{ client_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }>(
+    ? await pool.query<{ client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }>(
         // 🗓 `updated_at` їде НА ЕКРАН, бо саме він вирішує, чи домовленість ще
         // актуальна: активним є запис ПІСЛЯ понеділка 00:00 за Києвом. Без нього
         // фронт мусив би вгадувати, і торішній текст читався б як сьогоднішня
         // обіцянка — рівно те, від чого власник і просив позбутись.
-        `SELECT n.client_key, n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date,
+        // 🔗 НАБІР, А НЕ ОДИН КЛЮЧ: канонічний ∪ його живі псевдоніми. Нотатка
+        // лежить на тому ключі, який був канонічним у мить запису, тож після
+        // обʼєднання частина записів опиняється на псевдонімах і зникає з екрана
+        // — хоча нікуди не поділась (заміряно 01.09.2026: таких 3, усі з
+        // дедлайнами). Реєстр приєднується ТИМ САМИМ запитом: стеля `#158` —
+        // чотири походи, і пʼятий заборонено її ж текстом.
+        // ⚠️ `hist` навмисно лишається ПО СВОЄМУ ключу: журнал (`/note-history`)
+        // теж читає канонічний ключ, і лічильник, більший за вміст діалогу, був
+        // би двома джерелами одного числа. Розширення журналу — окремий обсяг.
+        `SELECT n.client_key, COALESCE(a.canonical_key, n.client_key) AS canon_key,
+                n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date,
                 -- 🔴 OF ВІДДАЄ ДВОЗНАЧНЕ ЗМІЩЕННЯ (+03), А ECMAScript ВИМАГАЄ +HH:MM.
                 -- new Date("2026-08-26T10:21:50+03") дає Invalid Date, Intl.format
                 -- кидає, і виняток усередині .map по рядках убиває ВСЮ секцію —
@@ -1831,11 +1843,19 @@ dashboardRouter.get("/receivables", async (req, res) => {
                 -- (зворотні лапки тут заборонені — це тіло шаблонного рядка)
                 to_char(n.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
                 (SELECT count(*)::int FROM receivable_note_history h WHERE h.client_key = n.client_key) AS hist
-           FROM receivable_notes n WHERE n.client_key = ANY($1)`,
+           FROM receivable_notes n
+           LEFT JOIN client_key_alias a
+                  ON a.alias_key = n.client_key AND a.revoked_at IS NULL
+          WHERE n.client_key = ANY($1) OR a.canonical_key = ANY($1)`,
         [clientKeys]
       )
-    : { rows: [] as { client_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }[] };
-  const notes = new Map(notesRes.rows.map((n) => [n.client_key, n]));
+    : { rows: [] as { client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }[] };
+  // 🗒 Групуємо ПО КАНОНІЧНОМУ ключу — рядок один, записів у наборі може бути кілька.
+  const notesByCanon = new Map<string, typeof notesRes.rows>();
+  for (const n of notesRes.rows) {
+    const bucket = notesByCanon.get(n.canon_key);
+    if (bucket) bucket.push(n); else notesByCanon.set(n.canon_key, [n]);
+  }
   /**
    * 🔗 ДВА ФАКТИ В ОДНОМУ ПОХОДІ — І ЦЕ НЕ ОХАЙНІСТЬ, А `#158`.
    *
@@ -1915,6 +1935,12 @@ dashboardRouter.get("/receivables", async (req, res) => {
     limitDays: number | null; limitAmount: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
     noteUpdatedAt: string | null; noteHistoryCount: number;
+    /** Юрособа, з ключа якої взято показаний запис; `null` — запис канонічний. */
+    noteFrom: string | null;
+    /** Назви юросіб решти записів набору — для підпису «ще N». */
+    noteOthers: string[];
+    /** 🏢 Розклад боргу по юрособах клієнта + звірка з сумою рядка. */
+    counterparties: receivablesCounterparty.Reconciled;
     facts: receivablesFacts.ClientFacts | null;
     margin: ReturnType<typeof marginCell> | null;
     /** 💰 Скільки рахунків клієнта вже мають гроші у виписці; `null` — не рахували. */
@@ -1924,8 +1950,26 @@ dashboardRouter.get("/receivables", async (req, res) => {
   for (const r of rows) {
     let entry = byManager.get(r.managerId);
     if (!entry) { entry = { managerId: r.managerId, managerName: r.managerName, clients: [], total: 0 }; byManager.set(r.managerId, entry); }
-    const n = r.clientKey ? notes.get(r.clientKey) : undefined;
     const cf = r.clientKey ? folded.byClient.get(r.clientKey) ?? null : null;
+    /**
+     * 🗒 ЗАПИС ДЛЯ РЯДКА — З УСЬОГО НАБОРУ ПСЕВДОНІМІВ, за порядком ядра.
+     *
+     * Назва юрособи береться з ТИХ САМИХ фактів, що й розклад сум нижче
+     * (`cf.counterparty`), а не окремим запитом: два джерела однієї назви
+     * розійшлись би мовчки, і підпис «ще 1 · X» суперечив би рядку розкладу «X».
+     */
+    const noteSet = (r.clientKey ? notesByCanon.get(r.clientKey) ?? [] : []).map((x) => ({
+      clientKey: x.client_key,
+      counterpartyName: cf?.counterparty[x.client_key]?.name ?? null,
+      comment: x.comment, dueDate: x.due_date, updatedAt: x.updated_at,
+      isCanonical: x.client_key === r.clientKey,
+    }));
+    const picked = receivableNotePick.pickRowNote(noteSet);
+    const n = picked.primary;
+    // 📚 Журнал лишається канонічним — див. коментар біля запиту.
+    const canonHist = r.clientKey
+      ? notesRes.rows.find((x) => x.client_key === r.clientKey)?.hist ?? 0
+      : 0;
     // 🔴 СПИСАНЕ ВІДНІМАЄТЬСЯ І ВІД РЯДКА, А НЕ ЛИШЕ ВІД ПЛИТКИ.
     //
     // Борг рядка приходить із `receivables` (ядро `metrics.receivablesByClient`),
@@ -1959,8 +2003,17 @@ dashboardRouter.get("/receivables", async (req, res) => {
     entry.clients.push({
       clientKey: r.clientKey, clientName: r.clientName, amount: visibleAmount,
       limitDays: r.limitDays, limitAmount: r.limitAmount, overdueDays: r.overdueDays,
-      comment: n?.comment ?? null, dueDate: n?.due_date ?? null,
-      noteUpdatedAt: n?.updated_at ?? null, noteHistoryCount: n?.hist ?? 0,
+      comment: n?.comment ?? null, dueDate: n?.dueDate ?? null,
+      noteUpdatedAt: n?.updatedAt ?? null, noteHistoryCount: canonHist,
+      // 🏢 Звідки саме цей запис і скільки їх іще в наборі. Порожній масив —
+      // звичайний незлитий клієнт, і рядок виглядає точно як раніше.
+      noteFrom: n && !n.isCanonical ? n.counterpartyName ?? n.clientKey : null,
+      noteOthers: picked.otherNames,
+      // 🏢 РОЗКЛАД БОРГУ ПО ЮРОСОБАХ — рахує ядро, роут лише подає.
+      // Звіряється з сумою рядка ТУТ, поки обидва числа поруч; залишок їде на
+      // екран числом, а не ховається (див. `core/receivablesCounterparty.ts`).
+      counterparties: receivablesCounterparty.reconcileBreakdown(
+        visibleAmount, receivablesCounterparty.counterpartyBreakdown(cf)),
       // 🔴 ЧОМУ саме цей відповідальний — їде НА ЕКРАН, а не лишається в ядрі.
       // Без цього «звільнений мажоритар без команди» і «в рахунках узагалі немає
       // менеджера» виглядали б однаково порожньо, і людина не мала б як їх
