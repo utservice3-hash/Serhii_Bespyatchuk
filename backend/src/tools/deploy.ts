@@ -20,7 +20,7 @@ import {
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
 import { parseTap, judgeDelta } from "./testDelta.js";
-import { diffGates } from "../testManifest.js";
+import { diffGates, acceptRetired } from "../testManifest.js";
 import { testsAtRef, parseManifestTests } from "./gateCount.js";
 import { rmSync, symlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -300,8 +300,29 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
        */
       const manifestNow = parseManifestTests(
         readFileSync(`${c.be}/src/testManifest.ts`, "utf8"), "дерево (джерело, не dist)");
-      const lost = diffGates(testsAtRef(c.prod), manifestNow).onlyBefore;
-      const d = judgeDelta(baseTap, treeTap, lost);
+      /**
+       * 🗑 ЗНИКНЕННЯ, ОГОЛОШЕНЕ В РЕЄСТРІ, — ЗАКОННЕ; РЕШТА ЗУПИНЯЄ ЛАНЦЮГ.
+       *
+       * 🔴 Дві множини, а не одна, і плутати їх не можна: `unaccounted` — це «гейт
+       * зник, і ніхто цього не оголошував», а `problems` — це «сам реєстр бреше»
+       * (запис без причини або запис про ЖИВИЙ гейт). Друге гірше: реєстр-ковдра
+       * пропустив би наступне СПРАВЖНЄ зникнення під тим самим записом.
+       * `alive` беремо з ДЖЕРЕЛА дерева в цю мить — з того самого тексту, що й
+       * `manifestNow`, інакше «живий» звірялося б зі старим `dist` (та сама пастка,
+       * що вже дала хибне «ЗНИКЛИ ГЕЙТИ (11)» 27.08.2026).
+       */
+      const lostRaw = diffGates(testsAtRef(c.prod), manifestNow).onlyBefore;
+      const retire = acceptRetired(lostRaw, manifestNow);
+      if (retire.problems.length) {
+        return { id: "test", ok: false, detail:
+          ["🔴 РЕЄСТР ЗНЯТИХ ГЕЙТІВ САМ НЕСПРАВНИЙ — це зупинка ДО будь-яких висновків про приріст:",
+            ...retire.problems.map((x) => `   ${x}`)].join("\n") };
+      }
+      const d = judgeDelta(baseTap, treeTap, retire.unaccounted);
+      if (retire.accepted.length) {
+        d.lines.push(`🗑 ЗНЯТО СВІДОМО, прийнято реєстром ПОІМЕННО (${retire.accepted.length}):`,
+          ...retire.accepted.map((n) => `   ﹣ ${n}`));
+      }
       /**
        * 🔴 ПРИРІСТ НУЛЬ ≠ ПОВНЕ ПОКРИТТЯ, І ЦЬОГО НЕ БУЛО ВИДНО ЗІ ЗВІТУ.
        *
