@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
-import { trackerAssertion } from "../api";
+import { Navigate, useParams } from "react-router-dom";
+import { TrackerAssertionError, trackerAssertion } from "../api";
 import { Logo } from "../components/Logo";
 
 /**
@@ -16,9 +16,12 @@ import { Logo } from "../components/Logo";
  * anyone could aim anywhere.
  */
 export function TrackerAuth() {
-  const params = new URLSearchParams(window.location.search);
-  const port = Number(params.get("port"));
-  const state = params.get("state") ?? "";
+  // Path segments rather than a query string: the agent hands this URL to the OS, and on
+  // Windows that goes through `cmd /C start`, where `&` separates commands. No query, no
+  // problem — its own guard rejects a URL containing one.
+  const { port: portParam, state: stateParam } = useParams();
+  const port = Number(portParam);
+  const state = stateParam ?? "";
   const token = localStorage.getItem("token");
 
   const [error, setError] = useState<string | null>(null);
@@ -31,18 +34,26 @@ export function TrackerAuth() {
     if (!usable || !token) return;
     let cancelled = false;
 
+    // Both outcomes go back to the agent. Telling it about a failure matters as much as telling
+    // it about success: without this the agent sat for two minutes and then said only "no answer
+    // from the browser", while this page knew the reason within a second.
+    const handBack = (params: Record<string, string>) => {
+      const back = new URL(`http://127.0.0.1:${port}/callback`);
+      back.searchParams.set("state", state);
+      for (const [k, v] of Object.entries(params)) back.searchParams.set(k, v);
+      window.location.replace(back.toString());
+    };
+
     (async () => {
       try {
         const { assertion } = await trackerAssertion();
         if (cancelled) return;
-        const back = new URL(`http://127.0.0.1:${port}/callback`);
-        back.searchParams.set("state", state);
-        back.searchParams.set("assertion", assertion);
-        window.location.replace(back.toString());
+        handBack({ assertion });
       } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Не вдалося підтвердити вхід.");
-        }
+        if (cancelled) return;
+        const code = e instanceof TrackerAssertionError ? e.code : "failed";
+        setError(e instanceof Error ? e.message : "Не вдалося підтвердити вхід.");
+        handBack({ error: code });
       }
     })();
 
