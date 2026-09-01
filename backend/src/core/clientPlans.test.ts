@@ -4,6 +4,7 @@ import { skipReason, type Unavailable } from "../db/scratchDb.js";
 import { needsDb } from "../testMode.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { monthEndOf } from "./dates.js";
 
 /**
  * ГЕЙТИ ФАЗИ A — «Постійні клієнти · план місяця».
@@ -65,7 +66,7 @@ test("#22b ТИЖНІ ПЛАНУ == ТИЖНІ ЗВІТУ, байт-у-байт"
 
 test("#22c Σ ФАКТУ ПО КЛІЄНТАХ == successByMgr того ж місяця", needsDb(), async () => {
   const M = await loadMoney();
-  const scope = { from: `${MONTH}-01`, to: `${MONTH}-31` };
+  const scope = { from: `${MONTH}-01`, to: monthEndOf(MONTH) };
   const [byMgr, byClient, total] = await Promise.all([
     M.successByMgr(scope), M.successByClientKey(scope), M.successMoney(scope),
   ]);
@@ -86,7 +87,7 @@ test("#22d ДЗЕРКАЛО: тижневий факт СУМУЄТЬСЯ в м�
   // Без цього #22c зеленів би й тоді, коли тижнева розкладка зламана повністю
   // (наприклад, усі тижні віддають нуль): місячна сума рахується окремим викликом.
   const M = await loadMoney();
-  const scope = { from: `${MONTH}-01`, to: `${MONTH}-31` };
+  const scope = { from: `${MONTH}-01`, to: monthEndOf(MONTH) };
   const [byClient, byWeek] = await Promise.all([
     M.successByClientKey(scope), M.successByClientWeek(scope),
   ]);

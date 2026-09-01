@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { needsDb, needsApi, API_BASE } from "../testMode.js";
-import { fixedWeekBlocks } from "../core/dates.js";
+import { needsDb, needsApi, API_BASE, emptyPeriodSkip } from "../testMode.js";
+import { fixedWeekBlocks, kyivMonthBounds } from "../core/dates.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 
 /**
@@ -80,11 +80,11 @@ test("#85b ПЛАН ТИЖНЯ — ЗІ ЗНІМКА, А НЕ ПЕРЕРАХОВ
 
 // ─────────────────── #89 · час реакції: розріз == агрегат ───────────────────
 
-test("#89 ЧАСТКА ПОВІЛЬНИХ == НЕЗАЛЕЖНОМУ ПІДРАХУНКУ НА ТОМУ САМОМУ СКОУПІ", needsDb(), async () => {
+test("#89 ЧАСТКА ПОВІЛЬНИХ == НЕЗАЛЕЖНОМУ ПІДРАХУНКУ НА ТОМУ САМОМУ СКОУПІ", needsDb(), async (t) => {
   const m = await import("../core/metrics.js");
   const { pool } = await import("../db/pool.js");
   const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`, to = now.toISOString().slice(0, 10);
 
   const rows = await m.responseTimeByManager({ from, to });
@@ -112,6 +112,14 @@ test("#89 ЧАСТКА ПОВІЛЬНИХ == НЕЗАЛЕЖНОМУ ПІДРАХ
 
   // Найактивніші: у менеджера з одним лідом частка збіглася б випадково.
   const top = [...rows].sort((a, b) => b.n - a.n).slice(0, 5);
+  /**
+   * 🈳 РОЗРІЗНЯЄМО ДВА НУЛІ. «Лідів у періоді НЕМА ЗОВСІМ» — законна відсутність на
+   * початку місяця, і це скіп. «Ліди є, але в найактивнішого менше 20» — це вже
+   * замала ВИБІРКА при живих даних, і воно лишається падінням: саме там гейт
+   * перестає щось доводити, а дані для нього існують.
+   */
+  const skip = emptyPeriodSkip("лідів у періоді", rows.reduce((a, r) => a + r.n, 0), `${from}..${to}`);
+  if (skip) return t.skip(skip);
   assert.ok(top.some((r) => r.n >= 20),
     "🔴 у найактивнішого менеджера менше 20 лідів — вибірка замала, щоб гейт щось доводив");
   for (const r of top) {
@@ -148,9 +156,9 @@ test("#57c SMOKE: розкриття тижнів і час реакції ві�
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const H = { Authorization: `Bearer ${token}` };
   const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const to = kyivMonthBounds().to;
 
   const rp = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, { headers: H });
   assert.equal(rp.status, 200, `🔴 /report-plan віддав ${rp.status}`);

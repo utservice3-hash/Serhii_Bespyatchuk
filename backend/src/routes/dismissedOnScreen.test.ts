@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { needsApi, API_BASE } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #59 — БУДИЛЬНИК: ГРОШІ ЗВІЛЬНЕНИХ У СУМІ, АЛЕ НЕ НА ЕКРАНІ.
@@ -136,9 +137,8 @@ export function unknownDismissedReasons(rows: DismissedRow[]): string | null {
 test("#59 гроші звільнених не висять у сумі без рядка на екрані", needsApi(), async () => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const ym = kyivMonthBounds().ym;
+  const to = kyivMonthBounds().to;
 
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${to}`,
     { headers: { Authorization: `Bearer ${token}` } });
@@ -237,9 +237,8 @@ test("#59b саботаж: справді звільнений дзвонить 
 test("#59c кожен заглушений рядок має ВІДОМУ причину — інакше правило осліпло", needsApi(), async (t) => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const ym = kyivMonthBounds().ym;
+  const to = kyivMonthBounds().to;
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${to}`,
     { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);

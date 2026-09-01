@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDb } from "../testMode.js";
+import { monthEndOf } from "./dates.js";
 
 /**
  * ГЕЙТИ КАРТКИ КЛІЄНТА — «як він платив» (12 міс. + останні угоди).
@@ -83,7 +84,7 @@ test("#29c Σ МІСЯЦІВ КАРТКИ == ФАКТУ КЛІЄНТА того 
 test("#29d МІСЯЦЬ КАРТКИ == МІСЯЦЮ ЕКРАНА ПЛАНІВ (одна цифра, не дві схожі)", needsDb(), async () => {
   const M = await loadMoney();
   const { key } = await biggestClient();
-  const monthScope = { from: `${MONTH}-01`, to: `${MONTH}-31` };
+  const monthScope = { from: `${MONTH}-01`, to: monthEndOf(MONTH) };
   const [fromCard, fromPlans] = await Promise.all([
     M.successByClientBucket(monthScope, "month", key),
     M.successByClientKey(monthScope),

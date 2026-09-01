@@ -2,8 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { needsDb } from "../testMode.js";
+import { needsDb, emptyPeriodSkip } from "../testMode.js";
 import { keepByKlass, visibleSlices, KLASS_SLICES, klassOf, SLICE_LABEL, type KlassSlice, type DealKlassState } from "./klassFilter.js";
+import { kyivMonthBounds, monthEndOf } from "./dates.js";
 
 /**
  * 🔀 Е3 — ЗРІЗ ЗА НОВИЗНОЮ КЛІЄНТА (25.08.2026).
@@ -25,8 +26,8 @@ const stripComments = (src: string): string =>
   src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
 
 const KYIV_MONTH = (d: Date): { from: string; to: string } => {
-  const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-  return { from: `${ym}-01`, to: `${ym}-31` };
+  const ym = kyivMonthBounds().ym;
+  return { from: `${ym}-01`, to: monthEndOf(ym) };
 };
 
 /**
@@ -39,7 +40,7 @@ const KYIV_MONTH = (d: Date): { from: string; to: string } => {
  * 🧨 САБОТАЖ: застосувати зріз до числа й не застосувати до розкриття (тобто
  * порівнювати `slice`-число з НЕфільтрованим складом) — червоніє на 638 угодах.
  */
-test("#211 зріз: число рядка == склад розкриття при КОЖНОМУ положенні (жива БД)", needsDb(), async () => {
+test("#211 зріз: число рядка == склад розкриття при КОЖНОМУ положенні (жива БД)", needsDb(), async (t) => {
   const { pool } = await import("../db/pool.js");
   const metrics = await import("./metrics.js");
   const { from, to } = KYIV_MONTH(new Date());
@@ -50,6 +51,13 @@ test("#211 зріз: число рядка == склад розкриття пр
        FROM deals d WHERE d.pipeline_id = ANY($1) AND d.manager_id IS NOT NULL
         AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2 AND $3
       GROUP BY 1,2 HAVING COUNT(*) >= 3 ORDER BY COUNT(*) DESC LIMIT 10`, [FC, from, to])).rows;
+  /**
+   * 🈳 Нуль пар — порожній місяць (законно). Одна-дві пари — дані Є, але вибірка
+   * замала, і це лишається падінням: різниця між «нема чого перевіряти» і
+   * «перевіряю на замалому» і є та межа, яку скіп не сміє стерти.
+   */
+  const skipPairs = emptyPeriodSkip("пар (менеджер, день) із ≥3 угодами", days.length, `${from}..${to}`);
+  if (skipPairs) return t.skip(skipPairs);
   assert.ok(days.length >= 3,
     `🔴 знайшлось лише ${days.length} пар (менеджер, день) з ≥3 угодами — перевіряти нема на чому`);
 
@@ -112,10 +120,13 @@ test("#211b дзеркало: положення «усі» не звужує ж
  * 🧨 САБОТАЖ: викинути `undef` із зрізу — червоніє на 6 угодах серпня; порахувати
  * `sourceByKlass` без фільтра по класу — червоніє на кожному менеджері.
  */
-test("#212 зріз джерела за класом — партиція, і Σ класів == створено (жива БД)", needsDb(), async () => {
+test("#212 зріз джерела за класом — партиція, і Σ класів == створено (жива БД)", needsDb(), async (t) => {
   const metrics = await import("./metrics.js");
   const { from, to } = KYIV_MONTH(new Date());
   const rows = await metrics.createdSplitByManager({ from, to });
+  /** 🈳 Порожній місяць: створених ще немає. Гучний скіп, а не падіння. */
+  const skipRows = emptyPeriodSkip("менеджерів у розкладі створених", rows.length, `${from}..${to}`);
+  if (skipRows) return t.skip(skipRows);
   assert.ok(rows.length > 0, "🔴 у розкладі створених жодного менеджера — перевіряти нема на чому");
 
   const bad: string[] = [];

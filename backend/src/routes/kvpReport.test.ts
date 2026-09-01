@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { needsApi, API_BASE } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * K1-K3 — ЗВІТ КВП: ВІДСОТОК ПЛАНУ РАХУЄТЬСЯ ОДНИМ ВИРАЗОМ І ДРУКУЄТЬСЯ ЧЕРЕЗ `fmtPct`.
@@ -340,8 +341,7 @@ test("K10c ОЧІКУВАННЯ НЕМА — сегмента немає, а н�
 test("K10d ЖИВА ВІДПОВІДЬ /kvp-report має всі шляхи, які читає смуга", needsApi(), async () => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const r = await fetch(`${API_BASE}/api/dashboard/kvp-report?preset=month&date=${ym}-01`,
     { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(r.status, 200, `🔴 /kvp-report віддав ${r.status}`);

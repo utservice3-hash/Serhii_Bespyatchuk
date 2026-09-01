@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { needsApi, API_BASE } from "../testMode.js";
+import { needsApi, API_BASE, planGraceSkip, emptyPeriodSkip } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #65 — СМУГИ ПРОГРЕСУ: ЩО МОЖНА СКЛАДАТИ, А ЩО НІ.
@@ -22,12 +23,11 @@ const FE = fileURLToPath(new URL(
   "../../../frontend/src/pages/dashboard/sections/ReportPlanSection.tsx", import.meta.url));
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
 
-test("#65 прогноз == факт + очікується цього місяця, без carryover", needsApi(), async () => {
+test("#65 прогноз == факт + очікується цього місяця, без carryover", needsApi(), async (t) => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const ym = kyivMonthBounds().ym;
+  const to = kyivMonthBounds().to;
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${to}`,
     { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);
@@ -35,6 +35,13 @@ test("#65 прогноз == факт + очікується цього міся�
     expectThisMonth: number; projected: number; monthInProgress: boolean }[] };
 
   const live = b.managers.filter((m) => m.plan > 0 && m.monthInProgress);
+  /**
+   * 🗓 ПЛАНІВ НЕМАЄ — СКІП ЛИШЕ У ВІКНІ ЗАВЕДЕННЯ (перші 2 робочі дні, доменний
+   * факт власника). Після вікна `planGraceSkip` віддає null, гейт біжить далі й
+   * падає власним вироком — саме він і є сигнал «плани забули завести».
+   */
+  const graced = planGraceSkip("менеджерів із планом у поточному місяці", live.length);
+  if (graced) return t.skip(graced);
   assert.ok(live.length >= 5,
     `🔴 лише ${live.length} менеджерів із планом у поточному місяці — смугу нема на чому перевірити`);
 
@@ -123,12 +130,11 @@ test("#65b смужки тижня окремі, у місячній смузі 
  * ⚠️ Заміряно 07.08: «чекає без дати» у ЗОНІ ВИЗНАННЯ = 0 в обох перевірених —
  * саме тому сегмент 3 береться з КОГОРТИ (ті гроші стоять на стадіях поза зоною).
  */
-test("#65c три сегменти місяця не перетинаються", needsApi(), async () => {
+test("#65c три сегменти місяця не перетинаються", needsApi(), async (t) => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const ym = kyivMonthBounds().ym;
+  const to = kyivMonthBounds().to;
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${to}`,
     { headers: { Authorization: `Bearer ${token}` } });
   const b = await r.json() as { managers: { name: string; plan: number; fact: number;
@@ -136,6 +142,13 @@ test("#65c три сегменти місяця не перетинаються"
     cohort: { sum: number; awaitNoDateSum: number; awaitDatedSum: number } }[] };
 
   const live = b.managers.filter((m) => m.plan > 0 && (m.cohort?.sum ?? 0) > 0);
+  /**
+   * 🗓 ПЛАНІВ НЕМАЄ — СКІП ЛИШЕ У ВІКНІ ЗАВЕДЕННЯ (перші 2 робочі дні, доменний
+   * факт власника). Після вікна `planGraceSkip` віддає null, гейт біжить далі й
+   * падає власним вироком — саме він і є сигнал «плани забули завести».
+   */
+  const graced3 = planGraceSkip("менеджерів із планом і рухом", live.length);
+  if (graced3) return t.skip(graced3);
   assert.ok(live.length >= 3, `🔴 лише ${live.length} менеджерів із планом і рухом — перевіряти нема на чому`);
 
   const bad: string[] = [];

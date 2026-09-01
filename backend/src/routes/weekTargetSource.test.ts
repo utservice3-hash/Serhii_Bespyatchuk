@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsApi, needsDb, API_BASE } from "../testMode.js";
+import { needsApi, needsDb, API_BASE, planGraceSkip } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #61 — ТИЖНЕВА ЦІЛЬ БЕРЕТЬСЯ ТІЛЬКИ З ТИЖНЕВОЇ ЗАДАЧІ.
@@ -29,18 +30,25 @@ interface Mgr {
 async function managers(): Promise<Mgr[]> {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const ym = kyivMonthBounds().ym;
+  const to = kyivMonthBounds().to;
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${to}`,
     { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);
   return ((await r.json()) as { managers: Mgr[] }).managers ?? [];
 }
 
-test("#61 місячний план не підставляється як тижнева ціль", needsApi(), async () => {
+test("#61 місячний план не підставляється як тижнева ціль", needsApi(), async (t) => {
   const mgrs = await managers();
   assert.ok(mgrs.length >= 3, "🔴 менш як три менеджери — перевіряти нема на кому");
+  /**
+   * 🗓 Порожній місяць: планів ще НЕМАЄ. У вікні заведення це норма й гейт скіпає
+   * себе ГУЧНО; після вікна `planGraceSkip` віддає null, і нижній вирок «лише 0
+   * менеджерів мають план» лишається справжнім червоним — саме він і є сигнал
+   * «плани забули завести».
+   */
+  const graced = planGraceSkip("менеджерів із місячним планом", mgrs.filter((m) => m.plan > 0).length);
+  if (graced) return t.skip(graced);
 
   /**
    * Ознака бага в чистому вигляді: ціль ПОЗНАЧЕНА як ручна і при цьому дорівнює

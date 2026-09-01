@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { needsApi, API_BASE } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #64 — ЗНІМКОВІ ПОКАЗНИКИ ПРИ НЕПОТОЧНОМУ ПЕРІОДІ ПІДПИСАНІ.
@@ -30,9 +31,8 @@ test("#64 API розрізняє поточний і непоточний пер
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const H = { Authorization: `Bearer ${token}` };
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const ym = kyivMonthBounds().ym;
+  const to = kyivMonthBounds().to;
 
   const cur = await (await fetch(`${API_BASE}/api/dashboard/overview?from=${ym}-01&to=${to}`, { headers: H })).json() as
     { scope?: { isCurrent: boolean }; receivablesTotal: number };

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { needsApi } from "../testMode.js";
+import { kyivMonthBounds, monthEndOf } from "./dates.js";
 
 /**
  * 🔀 #170–#173 — ДОБІР ЗА РЕЄСТРОМ ЛІДОГЕН-БОТА (24.08.2026, рішення власника).
@@ -199,12 +200,16 @@ test("#171b максимум лідгену == найбільший місячн
   { ...needsApi() }, async () => {
     const m = await import("./metrics.js");
     // Те саме вікно, що в ядрі: 3 ПОВНІ місяці назад, поточний виключено.
-    const now = new Date();
+    /**
+     * 🇺🇦 Місяці відлічуємо від КИЇВСЬКОГО «сьогодні», як і ядро. `getUTC*` тут
+     * зсувало б вікно на добу з 21:00 UTC до опівночі — рівно те, що 01.09 змусило
+     * три гейти вимагати, щоб СЕРПЕНЬ був поточним місяцем.
+     */
+    const [cy, cm] = kyivMonthBounds().ym.split("-").map(Number);
     const months: { from: string; to: string }[] = [];
     for (let i = 3; i >= 1; i--) {
-      const s = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-      const e = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i + 1, 0));
-      months.push({ from: s.toISOString().slice(0, 10), to: e.toISOString().slice(0, 10) });
+      const ym = `${new Date(Date.UTC(cy, cm - 1 - i, 1)).toISOString().slice(0, 7)}`;
+      months.push({ from: `${ym}-01`, to: monthEndOf(ym) });
     }
     const perMonth = await Promise.all(months.map((p) => m.conversionLeadgenByManager(p)));
     const expected = new Map<number, number>();

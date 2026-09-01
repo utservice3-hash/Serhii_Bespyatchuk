@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { needsDb, needsApi, API_BASE } from "../testMode.js";
+import { needsDb, needsApi, API_BASE, emptyPeriodSkip } from "../testMode.js";
+import { kyivMonthBounds, monthEndOf } from "../core/dates.js";
 
 /**
  * #99 / #99b — МУЛЬТИВИБІР КОМАНД У «ОБСЯЗІ» (21.08.2026).
@@ -114,15 +115,18 @@ test("#99b2 ЕКРАН: групи рахуються з ТИХ САМИХ ря�
  * різницю в 2.3 раза між каналами.
  */
 
-test("#100 РОЗБИТТЯ ЗА ДЖЕРЕЛОМ АДИТИВНЕ: ad + leadgen == combined (жива БД)", needsDb(), async () => {
+test("#100 РОЗБИТТЯ ЗА ДЖЕРЕЛОМ АДИТИВНЕ: ad + leadgen == combined (жива БД)", needsDb(), async (t) => {
   const m = await import("../core/metrics.js");
   const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const scope = { from: `${ym}-01`, to: `${ym}-31` };
+  const ym = kyivMonthBounds().ym;
+  const scope = { from: `${ym}-01`, to: monthEndOf(ym) };
 
   const [all, ad, lg] = await Promise.all([
     m.conversionByManager(scope), m.conversionByManager(scope, "ad"), m.conversionByManager(scope, "leadgen"),
   ]);
+  /** 🈳 Порожній місяць — законна відсутність; гейт називає її вголос і скіпає себе. */
+  const skipAll = emptyPeriodSkip("рядків у combined", all.length, `${ym}`);
+  if (skipAll) return t.skip(skipAll);
   assert.ok(all.length > 0, "🔴 combined порожній — перевіряти нема на чому (це ПРОВАЛ, а не «немає даних»)");
 
   const idx = (rows: typeof all) => new Map(rows.map((r) => [r.managerId, r]));
@@ -310,8 +314,8 @@ test("#106 ШЛЯХИ РЕЄСТРУ КОЛОНОК ІСНУЮТЬ У ЖИВІЙ
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${ym}-31`,
+  const ym = kyivMonthBounds().ym;
+  const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${ym}-01&to=${monthEndOf(ym)}`,
     { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);
   const body = await r.json() as { managers: Record<string, unknown>[] };
@@ -345,13 +349,20 @@ test("#106 ШЛЯХИ РЕЄСТРУ КОЛОНОК ІСНУЮТЬ У ЖИВІЙ
  * відділу. «Очікує (дата)» 902 222 ₴ = 119 912 + 782 310, теж Δ0.
  */
 
-test("#102 РОЗКЛАД == ЧИСЛУ: нові + постійні + невизн == «Отримано» (жива БД)", needsDb(), async () => {
+test("#102 РОЗКЛАД == ЧИСЛУ: нові + постійні + невизн == «Отримано» (жива БД)", needsDb(), async (t) => {
   const money = await import("../core/money.js");
   const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const scope = { from: `${ym}-01`, to: `${ym}-31` };
+  const ym = kyivMonthBounds().ym;
+  const scope = { from: `${ym}-01`, to: monthEndOf(ym) };
 
   const [core, split] = await Promise.all([money.receivedByMgr(scope), money.receivedByMgrKlass(scope)]);
+  /**
+   * 🈳 Порожня каса на початку місяця — стан даних. А ось «каса є, але жодних грошей
+   * від нових/постійних» нижче лишається падінням: там доданок вироджений при
+   * ЖИВИХ даних, і це вже дефект розкладу, а не календар.
+   */
+  const skipCore = emptyPeriodSkip("рядків у касі", core.length, `${ym}`);
+  if (skipCore) return t.skip(skipCore);
   assert.ok(core.length > 0, "🔴 каса порожня — перевіряти нема на чому (це ПРОВАЛ, а не «немає даних»)");
   const agg = new Map<number, number>();
   for (const r of split) agg.set(r.managerId, (agg.get(r.managerId) ?? 0) + r.revenue);
@@ -370,16 +381,19 @@ test("#102 РОЗКЛАД == ЧИСЛУ: нові + постійні + неви�
   assert.ok(split.some((r) => r.klass === "repeat" && r.revenue !== 0), "🔴 жодних грошей від постійних — доданок вироджений");
 });
 
-test("#102b БУДИЛЬНИК: кожна undef-угода має ВІДОМУ НАЗВАНУ ПРИЧИНУ (жива БД)", needsDb(), async () => {
+test("#102b БУДИЛЬНИК: кожна undef-угода має ВІДОМУ НАЗВАНУ ПРИЧИНУ (жива БД)", needsDb(), async (t) => {
   const money = await import("../core/money.js");
   const { unexplainedUndef, explainUndefMoney, UNDEF_REASON_LABEL } = await import("../core/undefMoneyReason.js");
   const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const scope = { from: `${ym}-01`, to: `${ym}-31` };
+  const ym = kyivMonthBounds().ym;
+  const scope = { from: `${ym}-01`, to: monthEndOf(ym) };
 
   // Контроль осмисленості: каса місяця непорожня, інакше «жодної незрозумілої
   // угоди» означало б «жодної угоди взагалі» — порожній результат як pass.
   const split = await money.receivedByMgrKlass(scope);
+  /** 🈳 Порожня каса місяця — законна відсутність на його початку. */
+  const skipCash = emptyPeriodSkip("угод у касі місяця", split.reduce((a, r) => a + r.deals, 0), ym);
+  if (skipCash) return t.skip(skipCash);
   assert.ok(split.reduce((a, r) => a + r.deals, 0) > 0,
     "🔴 каса місяця порожня — перевіряти нема на чому (це ПРОВАЛ, а не «немає даних»)");
 

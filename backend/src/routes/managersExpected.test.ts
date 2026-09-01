@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsApi, API_BASE } from "../testMode.js";
+import { needsApi, API_BASE, planGraceSkip } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #47 — «ОЧІКУВАННЯ» В РЕЙТИНГУ МЕНЕДЖЕРІВ РЕАЛЬНО ПРИЇЖДЖАЄ.
@@ -19,12 +20,11 @@ import { needsApi, API_BASE } from "../testMode.js";
  * тоді «є» нічого не доводить (нуль виглядає точно так само, як мовчазний
  * фолбек). Тому окремо вимагаємо, щоб хоч в одного менеджера воно було ≠ 0.
  */
-test("#47 /dashboard/managers віддає expected у КОЖНОМУ рядку", needsApi(), async () => {
+test("#47 /dashboard/managers віддає expected у КОЖНОМУ рядку", needsApi(), async (t) => {
   const { signToken } = await import("../auth/auth.js");
   const { pool } = await import("../db/pool.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const now = new Date();
-  const month = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const month = kyivMonthBounds().ym;
 
   // ⚠️ Роут ВИМАГАЄ `teamId` (без нього 400), тож ідемо по ВСІХ командах: перевірка
   // «поле є» має триматись усюди, а не в одній вгаданій команді.
@@ -62,6 +62,13 @@ test("#47 /dashboard/managers віддає expected у КОЖНОМУ рядку
    * стан; нуль У ВСІХ одночасно — ось це вже або мовчазний фолбек, або зламане
    * джерело, і саме його ми й ловимо.
    */
+  /**
+   * 🗓 `expected` рахується від ПЛАНУ, тож на початку місяця нуль у всіх — це «планів
+   * ще не завели», а не фолбек. Скіп діє ЛИШЕ у вікні заведення; після нього той
+   * самий нуль лишається падінням, бо тоді він означає саме те, що написано нижче.
+   */
+  const graced = planGraceSkip("менеджерів із ненульовим `expected`", nonZero);
+  if (graced) return t.skip(graced);
   assert.ok(nonZero > 0,
     `🔴 \`expected\` дорівнює нулю у ВСІХ ${seen} менеджерів усіх ${teams.length} команд — `
     + "перевірка «поле є» нічого не доводить: рівно так само виглядав би мовчазний фолбек на нуль");

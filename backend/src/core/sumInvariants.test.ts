@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsDb } from "../testMode.js";
+import { needsDb, planGraceSkip } from "../testMode.js";
 
 /**
  * #49 — ДОБІР АДИТИВНИЙ: Σ(менеджери) == команда == компанія.
@@ -46,7 +46,7 @@ test("#49b саботаж: повторне усереднення розход�
  * #49c — ПЛАН ТИЖНЯ АДИТИВНИЙ на ЖИВИХ даних: Σ(менеджери) == команда == компанія.
  * Перерозподіл залишку не має ані створювати, ані губити гроші при агрегації.
  */
-test("#49c план тижня: Σ по менеджерах == Σ по командах == компанія", needsDb(), async () => {
+test("#49c план тижня: Σ по менеджерах == Σ по командах == компанія", needsDb(), async (t) => {
   const { weekPlansForMonth } = await import("./weekPlan.js");
   const { managerPlan } = await import("./plans.js");
   const { pool } = await import("../db/pool.js");
@@ -61,6 +61,9 @@ test("#49c план тижня: Σ по менеджерах == Σ по кома
   // у момент прогону тестів, тобто змінював би прод самим фактом перевірки.
   const all = await weekPlansForMonth({}, month, planByMgr, { freeze: false });
   assert.ok(all.length > 0, "🔴 план тижня порожній");
+  /** 🗓 Тижневих планів ще немає — у вікні заведення це норма, після нього ні. */
+  const graced = planGraceSkip("менеджерів із ненульовим тижневим планом", all.filter((r) => r.plan > 0).length);
+  if (graced) return t.skip(graced);
   assert.ok(all.some((r) => r.plan > 0), "🔴 усі тижневі плани нульові — рівність зійшлась би тривіально");
 
   const teams = new Map(mp.rows.map((r) => [r.managerId, r.teamId]));
