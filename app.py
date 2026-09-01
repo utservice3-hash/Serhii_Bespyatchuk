@@ -3245,6 +3245,23 @@ def test_admin_stats():
     })
 
 
+@app.route("/transcribe-url", methods=["GET"])
+def transcribe_url():
+    """Транскрибує один запис дзвінка за URL (Groq Whisper). Службовий ендпоінт
+    для разових звітів (напр. транскрипти лідоген-дзвінків). ?url=<mp3-url>"""
+    import traceback
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "url required"})
+    if not transcriber.GROQ_API_KEY:
+        return jsonify({"ok": False, "error": "GROQ_API_KEY не заданий у env"})
+    try:
+        text = transcriber.transcribe_call(url)
+        return jsonify({"ok": True, "len": len(text or ""), "transcript": text or ""})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.route("/sheet-link", methods=["GET"])
 def sheet_link():
     """Повертає посилання на основну Google-таблицю і пряме посилання на
