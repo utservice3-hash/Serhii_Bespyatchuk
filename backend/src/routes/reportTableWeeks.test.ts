@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { needsDb, needsApi, API_BASE, emptyPeriodSkip } from "../testMode.js";
+import { needsDb, needsApi, API_BASE, emptyPeriodSkip, smallSampleSkip } from "../testMode.js";
 import { fixedWeekBlocks, kyivMonthBounds } from "../core/dates.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
+import { responseViolations, NEED_LEADS } from "./responseSlice.js";
 
 /**
  * #85 / #85b / #89 / #57c — РОЗКРИТТЯ ТИЖНІВ І ЧАС РЕАКЦІЇ ПО МЕНЕДЖЕРАХ.
@@ -120,18 +121,16 @@ test("#89 ЧАСТКА ПОВІЛЬНИХ == НЕЗАЛЕЖНОМУ ПІДРАХ
    */
   const skip = emptyPeriodSkip("лідів у періоді", rows.reduce((a, r) => a + r.n, 0), `${from}..${to}`);
   if (skip) return t.skip(skip);
-  assert.ok(top.some((r) => r.n >= 20),
-    "🔴 у найактивнішого менеджера менше 20 лідів — вибірка замала, щоб гейт щось доводив");
-  for (const r of top) {
-    const w = want.get(r.managerId);
-    assert.ok(w, `🔴 менеджер ${r.managerId} є в розрізі, але не в контрольному запиті`);
-    assert.equal(r.n, w!.n, `🔴 менеджер ${r.managerId}: лідів ${r.n} проти ${w!.n} у контролі`);
-    assert.equal(r.slow, w!.slow,
-      `🔴 менеджер ${r.managerId}: повільних ${r.slow} проти ${w!.slow} у контролі — `
-      + "поріг «повільно» в ядрі більше не 60 хвилин");
-    assert.equal(r.pctSlow, Math.round((w!.slow / w!.n) * 1000) / 10,
-      `🔴 менеджер ${r.managerId}: частка не дорівнює slow/n`);
-  }
+  /**
+   * 📉 ВИБІРКИ МОЖЕ НЕ ВИСТАЧАТИ — і це НОРМА, а не дефект (рішення власника: «може
+   * бути і 2 ліди, це не проблема»). Поріг 20 — межа придатності ЦІЄЇ перевірки:
+   * на двох лідах частка збіглася б із контролем випадково.
+   */
+  const sample = smallSampleSkip("лідів у найактивнішого менеджера",
+    top.reduce((a, r) => Math.max(a, r.n), 0), NEED_LEADS, `${from}..${to}`);
+  if (sample) return t.skip(sample);
+  assert.deepEqual(responseViolations(top, want), [],
+    "🔴 РОЗРІЗ РОЗІЙШОВСЯ З КОНТРОЛЬНИМ ПІДРАХУНКОМ на тому самому скоупі");
 
   // Дзеркало: сама метрика не вироджена — хоча б в одного менеджера повільні Є.
   // Інакше гейт лишався б зеленим і у світі, де фільтр не працює взагалі.

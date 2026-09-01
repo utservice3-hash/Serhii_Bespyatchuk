@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { kyivMonthBounds, withinPlanGrace, monthEndOf } from "./dates.js";
-import { emptyPeriodSkip, planGraceSkip } from "../testMode.js";
+import { emptyPeriodSkip, planGraceSkip, smallSampleSkip } from "../testMode.js";
 import { EMPTY_PERIOD_MARK } from "../testRunGate.js";
+import { responseViolations, NEED_LEADS, type RtRow } from "../routes/responseSlice.js";
 
 /**
  * 🇺🇦🈳 #237–#237d — ЧАС ПО-КИЇВСЬКИ І ПОРОЖНІЙ ПЕРІОД, НА ШТУЧНИХ ДАНИХ.
@@ -66,4 +67,50 @@ test("#237d ПЛАНИ: у вікні — скіп, ПІСЛЯ вікна — п
   // 🪞 І дані б'ють вікно: якщо плани Є, скіпу немає навіть у перший день.
   assert.equal(planGraceSkip("менеджерів із планом", 7, "2026-09-01"), null,
     "🔴 скіп при НАЯВНИХ планах — вікно стало важливішим за дані");
+});
+
+/**
+ * 📉 #238–#238b — ЗАМАЛА ВИБІРКА: СКІП, АЛЕ НЕ ЦІНОЮ ПРОҐАВЛЕНОГО ДЕФЕКТУ.
+ *
+ * 🔴 Рішення власника, дослівно: «може бути і 2 ліди, це не проблема». Отже `#89`
+ * падав на ЗАКОННОМУ стані світу. Але перетворити це на скіп можна лише разом із
+ * доказом другої половини — інакше ми обміняли б хибне червоне на хибне зелене.
+ */
+test("#238 ЗАМАЛА ВИБІРКА → скіп, і текст називає межу ПЕРЕВІРКИ, а не вимогу до людини", () => {
+  const skip = smallSampleSkip("лідів у найактивнішого", 2, NEED_LEADS, "2026-09");
+  assert.ok(skip, "🔴 два ліди дали падіння — а власник сказав, що це норма");
+  assert.ok(skip!.includes(EMPTY_PERIOD_MARK), "🔴 без маркера вартовий скіп не зарахує");
+  assert.ok(skip!.includes("придатності"), "🔴 текст не називає, що поріг — про ГЕЙТ");
+  assert.ok(/НЕ вимога|не вимога/.test(skip!),
+    "🔴 через півроку це прочитають як «менеджеру треба 20 лідів» — саме цього ми й уникаємо");
+  // 🪞 Досить вибірки — скіпу немає, гейт зобовʼязаний бігти.
+  assert.equal(smallSampleSkip("лідів", NEED_LEADS, NEED_LEADS, "2026-09"), null,
+    "🔴 гейт скіпнувся при ДОСТАТНІЙ вибірці — це вже хибне зелене");
+});
+
+test("#238b 🔴 ДЗЕРКАЛО: ДОСТАТНЯ вибірка + порушена властивість = ЧЕРВОНЕ", () => {
+  /**
+   * Живі дані такого стану сьогодні не дають (лідів мало), а чекати місяць не є
+   * прийманням — тож порушення підставляється фікстурою. Саме тут доводиться, що
+   * скіп НЕ ковтає дефект.
+   */
+  const want = new Map([[1, { n: 40, slow: 10 }]]);
+  const good: RtRow[] = [{ managerId: 1, n: 40, slow: 10, pctSlow: 25 }];
+  assert.deepEqual(responseViolations(good, want), [], "🔴 гейт червоніє на СХОДНИХ числах");
+  assert.equal(smallSampleSkip("лідів", 40, NEED_LEADS, "x"), null, "🔴 40 лідів визнано замалою вибіркою");
+
+  for (const [label, row] of [
+    ["лідів", { managerId: 1, n: 39, slow: 10, pctSlow: 25 }],
+    ["повільних", { managerId: 1, n: 40, slow: 11, pctSlow: 25 }],
+    ["частки", { managerId: 1, n: 40, slow: 10, pctSlow: 26 }],
+  ] as [string, RtRow][]) {
+    assert.equal(responseViolations([row], want).length, 1, `🔴 порушення «${label}» не спіймано`);
+  }
+  // Менеджер, якого немає в контролі, — теж порушення, а не тиша.
+  assert.equal(responseViolations([{ managerId: 99, n: 40, slow: 1, pctSlow: 2.5 }], want).length, 1,
+    "🔴 зайвий менеджер у розрізі пройшов мовчки");
+  // 🔴 І порожній знаменник: `null` не має дорівнювати нулю.
+  assert.deepEqual(responseViolations([{ managerId: 2, n: 0, slow: 0, pctSlow: 0 }],
+    new Map([[2, { n: 0, slow: 0 }]])), ["менеджер 2: частка 0 не дорівнює slow/n = null"],
+    "🔴 «0%» прийнято за відсутню відповідь — саме та підміна, від якої ми лікували Звіт");
 });
