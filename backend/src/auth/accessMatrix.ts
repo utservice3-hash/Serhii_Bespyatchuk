@@ -585,6 +585,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/teams/managers", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 🔴 ТРИ РОУТИ SSO ТРЕКЕРА ДОДАНО 02.09.2026 — ЇХ ТУТ НЕ БУЛО ВЗАГАЛІ.
+  // Знайдено заміром під `#280`: із 218 оголошених роутів у матриці бракувало рівно цих
+  // трьох, і вони вже ЖИЛИ В ПРОДІ. `#17` їх не бачив, бо дивиться в інший реєстр
+  // (`ROUTE_BOUNDARY_EXEMPTIONS`), а `#11` — лише в режимі test:matrix. Обліковка в усіх
+  // трьох не рольова (ключ X-Dashboard-Sso-Key або посвідчення), тож списки порожні —
+  // та сама форма, що в `/api/tracker/*` нижче.
+  { method: "GET", path: "/api/auth/tracker-sso", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/auth/tracker-assertion", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/auth/tracker-identity", cls: "deny-only",
+    allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/tracker/auth", cls: "deny-only",
