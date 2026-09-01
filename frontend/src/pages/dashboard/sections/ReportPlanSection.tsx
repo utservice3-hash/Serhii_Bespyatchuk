@@ -2,7 +2,7 @@ import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, u
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
   fetchResponseTimeByManager,
-  type ReportPlan, type ReportPlanManager, type KvpManagerDetail, type KvpDetailCell, type Team,
+  type ReportPlan, type ReportPlanManager, type ReportPlanDismissed, type KvpManagerDetail, type KvpDetailCell, type Team,
   type DayItemKind, type DayItems, type DealSource, type DealKlass,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
@@ -503,10 +503,48 @@ export function ReportPlanSection({ auth, teams }: {
               open={openMgr === m.managerId} onToggle={() => setOpenMgr(openMgr === m.managerId ? null : m.managerId)} />
           ))}
           {data.managers.length === 0 && <div style={{ color: MUTED, padding: 20 }}>Немає менеджерів у цьому розрізі.</div>}
+          <DismissedRows rows={data.dismissed ?? []} />
           </>)}
           <Legend />
         </SliceCtx.Provider>
       )}
+    </div>
+  );
+}
+
+/**
+ * 💸 ЛЮДИ ПОЗА РОСТЕРОМ, АЛЕ З ГРІШМИ — ВИДИМИЙ РЯДОК, А НЕ ЛИШЕ ДОДАНОК У СУМІ.
+ *
+ * 🔴 ПРИВІД, І ВІН НЕ ГІПОТЕТИЧНИЙ. `glance.fact` включає їхні гроші (інакше Σ по
+ * екрану розійшлася б із ядром), а верстка масив `dismissed` не знала — тобто кільце
+ * показувало суму, частину якої НЕ ПОЯСНЮВАВ ЖОДЕН ВИДИМИЙ РЯДОК. Заміряно 06.08.2026,
+ * поки Шевчук був деактивований: 71 896 ₴ у сумі компанії без рядка на екрані.
+ *
+ * Рішення власника 01.09.2026 зробило цей рядок обовʼязковим: стан «завершує» означає
+ * «плану немає, результат рахується й людина ПОКАЗУЄТЬСЯ з позначкою». Без цього блоку
+ * переведення людини в «завершує» просто ховало б її з екрана разом із її роботою.
+ *
+ * ⚠️ Плану, %, світлофора й темпу тут НЕМАЄ навмисно: ставити план тому, кому його не
+ * ставлять, безглуздо, а порожня шкала читалась би як «зрив».
+ */
+function DismissedRows({ rows }: { rows: ReportPlanDismissed[] }) {
+  if (rows.length === 0) return null;
+  const total = rows.reduce((s, r) => s + r.fact, 0);
+  return (
+    <div style={{ marginTop: 14, border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", background: "var(--card-bg)" }}>
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>
+        Поза ростером, але з результатом — <b style={{ color: "var(--text)" }}>{fmt(total)} ₴</b>
+        <span style={{ marginLeft: 6 }}>· ці гроші ВХОДЯТЬ у суму команди й компанії, плану в цих людей немає</span>
+      </div>
+      {rows.map((r) => (
+        <div key={r.managerId} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "4px 0", fontSize: 13, borderTop: "1px solid var(--border)" }}>
+          <span style={{ fontWeight: 600 }}>{r.name}</span>
+          {r.badge && <span style={{ fontSize: 11, padding: "1px 7px", borderRadius: 999, border: "1px solid var(--border)", color: MUTED }}>{r.badge}</span>}
+          <span style={{ fontSize: 11, color: MUTED }}>{r.teamName ?? "без команди"}</span>
+          <span style={{ marginLeft: "auto", fontWeight: 600 }}>{fmt(r.fact)} ₴</span>
+          <span style={{ fontSize: 11, color: MUTED }}>{r.factSuccessDeals + r.factPaidDeals} угод</span>
+        </div>
+      ))}
     </div>
   );
 }

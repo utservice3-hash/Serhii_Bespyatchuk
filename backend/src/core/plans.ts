@@ -2,6 +2,7 @@ import { pool } from "../db/pool.js";
 import { workingDaysBetween, monthEndOf, fixedWeekBlocks } from "./dates.js";
 import { weekPlansForMonth } from "./weekPlan.js";
 import { receivedByMgr } from "./money.js";
+import { hasPlanSql, stateJoinSql } from "./managerState.js";
 
 /**
  * ЄДИНЕ ДЖЕРЕЛО «плану на менеджера для ДИСПЛЕЮ» (цеглина 1 міграції, рішення власника).
@@ -42,29 +43,42 @@ export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
   const teamCond = s.teamId ? `AND m.team_id = $2` : "";
   if (s.teamId) params.push(s.teamId);
 
+  /**
+   * 🔴 ЗНАМЕННИК «МЕНЕДЖЕРІВ ІЗ ПЛАНОМ» — ЗА СТАНОМ, А НЕ ЗА ПРАПОРЦЕМ (01.09.2026).
+   * Стан «ЗАВЕРШУЄ» означає «плану немає ВЗАГАЛІ», тож така людина мусить поводитись
+   * тут рівно як деактивована: випадати з власного плану, з ростера й зі знаменника.
+   * Механіку перерозподілу залишку на одноплемінників НЕ ЧІПАЄМО — вона працює й
+   * стережеться `#4.4`; сюди додано лише третій стан.
+   * ⚠️ Активність береться СТАРИМ виразом (`m.is_active`), а не двопрапорцевим: перевід
+   * решти запитів на `activeManagerSql` — окремий борг зі своїм прийманням, і змішувати
+   * його з цією зміною означало б зрушити склад списків двома причинами одночасно.
+   */
+  const PLANNED = hasPlanSql("m", "m.is_active");
   const [ownRes, aggRes, namesRes] = await Promise.all([
-    // власний план АКТИВНИХ менеджерів
+    // власний план тих, кому план ставиться (стан = active)
     pool.query<{ manager_id: number; s: string }>(
       `SELECT p.manager_id, COALESCE(SUM(p.planned_value),0) s
-         FROM plans p JOIN managers m ON m.id = p.manager_id
+         FROM plans p JOIN managers m ON m.id = p.manager_id ${stateJoinSql("m")}
         WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date
-          AND m.is_active ${teamCond}
+          AND ${PLANNED} ${teamCond}
         GROUP BY p.manager_id`, params),
-    // по команді: Σ планів ДЕАКТИВОВАНИХ + к-сть АКТИВНИХ (для розподілу)
+    // по команді: Σ планів тих, кому план БІЛЬШЕ НЕ СТАВИТЬСЯ + к-сть тих, кому ставиться
     pool.query<{ team_id: number; deact: string; nactive: string }>(
       `SELECT m.team_id,
-              COALESCE(SUM(p.planned_value) FILTER (WHERE NOT m.is_active),0) deact,
-              COUNT(DISTINCT m.id) FILTER (WHERE m.is_active) nactive
-         FROM managers m
+              COALESCE(SUM(p.planned_value) FILTER (WHERE NOT ${PLANNED}),0) deact,
+              COUNT(DISTINCT m.id) FILTER (WHERE ${PLANNED}) nactive
+         FROM managers m ${stateJoinSql("m")}
          LEFT JOIN plans p ON p.manager_id = m.id AND p.metric='payment_amount'
                           AND date_trunc('month',p.plan_date) = $1::date
         WHERE m.team_id IS NOT NULL ${teamCond}
         GROUP BY m.team_id`, params),
-    // активні менеджери (ростер) — ORDER BY id, щоб залишок ішов першому по id (як fix #3)
+    // ростер тих, кому план ставиться — ORDER BY id, щоб залишок ішов першому по id (як fix #3)
     pool.query<{ id: number; name: string; team_id: number | null }>(
       s.teamId
-        ? `SELECT id, name, team_id FROM managers WHERE is_active AND team_id = $1 ORDER BY id`
-        : `SELECT id, name, team_id FROM managers WHERE is_active ORDER BY id`,
+        ? `SELECT m.id, m.name, m.team_id FROM managers m ${stateJoinSql("m")}
+            WHERE ${PLANNED} AND m.team_id = $1 ORDER BY m.id`
+        : `SELECT m.id, m.name, m.team_id FROM managers m ${stateJoinSql("m")}
+            WHERE ${PLANNED} ORDER BY m.id`,
       s.teamId ? [s.teamId] : []),
   ]);
 

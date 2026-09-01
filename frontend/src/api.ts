@@ -755,6 +755,11 @@ export interface ReportPlanDismissed {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   fact: number; factSuccess: number; factPaid: number;
   factPaidDeals: number; factSuccessDeals: number;
+  /** Стан людини: чому вона поза ростером. Три РІЗНІ причини, не одна. */
+  state?: "active" | "finishing" | "dismissed";
+  /** Готова позначка з ядра («завершує» / «звільнений» / ""). Фронт її не вигадує. */
+  badge?: string;
+  deactivated?: boolean;
 }
 export async function fetchReportPlan(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<ReportPlan> {
   const { data } = await api.get<ReportPlan>("/dashboard/report-plan", { params });
