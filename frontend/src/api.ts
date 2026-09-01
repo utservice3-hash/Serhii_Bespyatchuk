@@ -3192,12 +3192,10 @@ export async function claimOrphanClient(clientKey: string, managerId: number): P
 }
 
 /**
- * Адреса, за якою відкривається трекер часу — уже під акаунтом того, хто увійшов сюди.
+ * The URL that opens the time tracker already signed in as the current user.
  *
- * Повертає РІВНО одне поле. Тіло відповіді трекера сюди не просочується: поле, що приїхало б без
- * рішення, — це той самий клас помилки, який на сервері стереже реєстр ROW_SPREAD.
- *
- * Помилки перекладаються тут, а не в компоненті, бо їх бачить людина, і «409» їй нічого не каже.
+ * Returns exactly one field; the tracker's own body never leaks through. Errors are translated
+ * here rather than in the component, because a person reads them and "409" says nothing.
  */
 export async function trackerSsoUrl(): Promise<{ url: string }> {
   try {

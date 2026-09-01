@@ -72,31 +72,26 @@ authRouter.post("/login", async (req, res) => {
   res.json({ token });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// ТРЕКЕР ЧАСУ — єдиний вхід
+// Time tracker SSO. The tracker is a separate system with its own server and user table; the
+// dashboard supplies identity only. See auth/trackerSso.ts.
 //
-// Трекер це окрема наша система з власним сервером і власною базою користувачів. Тут дашборд
-// виступає постачальником ОСОБИ: він каже, хто людина, і ніколи не каже, що їй можна. Ролі
-// дашборду в трекер не їдуть — див. коментар у `auth/trackerSso.ts`.
-//
-// Усі три ендпоінти самовимкнені: без TRACKER_URL і TRACKER_SSO_KEY вони віддають 503, а пункт
-// меню не рендериться. Тобто цей код можна злити задовго до того, як трекер буде готовий.
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// All three endpoints are self-disabling: without TRACKER_URL and TRACKER_SSO_KEY they answer
+// 503 and the nav item does not render, so this can merge long before the tracker is ready.
 
-/** Скільки чекати на трекер, перш ніж сказати людині «недоступний». Клік не має висіти. */
+/** How long to wait on the tracker before telling the user it is unavailable. */
 const TRACKER_TIMEOUT_MS = 4000;
 
 /**
- * Адреса, за якою людина потрапляє в трекер уже залогіненою.
+ * The URL that drops a person into the tracker already signed in.
  *
- * 🔴 ЖОДНОГО параметра. Ні `next`, ні `return_to`. Адреса будується з конфігу, і саме це не дає
- * ендпоінту стати відкритим редиректом. «Додати next» — очевидне наступне прохання, і воно ж
- * єдиний спосіб це зламати.
+ * Takes no parameters at all — no `next`, no `return_to`. The target is built from config, which
+ * is what keeps this from becoming an open redirect. Adding `next` is the obvious next request
+ * and the only way to break it.
  *
- * Чому JSON, а не 302: у дашборді немає кук. Обліковка — Bearer у localStorage, який чіпляє
- * axios. Навігація верхнього рівня заголовка Authorization не несе, тож редирект-ендпоінт просто
- * не знав би, кому видавати квиток. Побічна вигода — квиток не потрапляє ні в рядок запиту, ні в
- * заголовок Location, тобто в лог nginx його не буде.
+ * JSON rather than a 302 because the dashboard has no cookies: the credential is a Bearer token
+ * in localStorage that axios attaches, and a top-level navigation carries no Authorization
+ * header. Side benefit: the ticket lands in neither the request line nor a Location header, so
+ * it never reaches the nginx log.
  */
 authRouter.get("/tracker-sso", requireAuth, async (req, res) => {
   if (!ssoConfigured()) {
@@ -129,15 +124,15 @@ authRouter.get("/tracker-sso", requireAuth, async (req, res) => {
       signal: AbortSignal.timeout(TRACKER_TIMEOUT_MS),
     });
   } catch {
-    // Мережа, таймаут, TLS. Людині кажемо «недоступний» і НІКУДИ не ведемо: відкрити вкладку,
-    // яка все одно попросить пароль, гірше за чесну відмову на місці.
+    // Network, timeout, TLS. Say so and navigate nowhere: a tab that then asks for a password is
+    // worse than an honest refusal here.
     return res.status(504).json({ error: "tracker_unreachable" });
   }
 
   if (answer.status === 403) {
     const body = (await answer.json().catch(() => ({}))) as { error?: string };
-    // 409, а не проксі-403: це не «вам не можна сюди», а «вас там ще немає». Дашборд показує це
-    // своїми словами й ДО того, як кудись перекине — у цьому й сенс зворотного каналу.
+    // 409 rather than proxying the 403: this is "you are not there yet", not "you may not". The
+    // dashboard explains it in its own words before navigating anywhere.
     return res.status(409).json({
       error: body.error === "account_disabled" ? "account_disabled" : "no_tracker_account",
     });
@@ -151,17 +146,16 @@ authRouter.get("/tracker-sso", requireAuth, async (req, res) => {
     return res.status(502).json({ error: "tracker_refused" });
   }
 
-  // Рівно один ключ у відповіді. Нічого не розпаковуємо з тіла трекера: поле, що приїхало б сюди
-  // без рішення, — це той самий клас помилки, який стереже ROW_SPREAD_EXEMPTIONS.
+  // Exactly one key. Nothing is spread out of the tracker's body: a field arriving without a
+  // decision is the class of mistake ROW_SPREAD_EXEMPTIONS exists for.
   res.json({ url: `${config.tracker.url}/#ticket=${body.ticket}` });
 });
 
 /**
- * Посвідчення для агента на ноутбуці: «це наша людина, ось хто саме».
+ * An assertion for the desktop agent: this is our person, and here is who.
  *
- * Живе дві хвилини й нікуди не записується. Обмінює його не агент, а САМ трекер — див. наступний
- * ендпоінт. Через це вкрадене посвідчення саме по собі нічого не дає: без нашого спільного ключа
- * обміняти його нікому.
+ * Lives two minutes and is stored nowhere. The tracker redeems it, not the agent — so a stolen
+ * assertion alone is useless without the shared key.
  */
 authRouter.post("/tracker-assertion", requireAuth, (req, res) => {
   if (!ssoConfigured()) {
@@ -175,15 +169,15 @@ authRouter.post("/tracker-assertion", requireAuth, (req, res) => {
 });
 
 /**
- * Трекер питає: чиє це посвідчення?
+ * The tracker asking whose assertion this is.
  *
- * Без `requireAuth` — сюди стукає сервер трекера, а не браузер, і обліковка тут заголовок
- * X-Dashboard-Sso-Key. Потрібні ОБИДВА: ключ і посвідчення. Ключ без посвідчення не називає
- * нікого, посвідчення без ключа не обмінюється — тобто крадіжка одного з двох марна.
+ * No requireAuth: the caller is the tracker's server, not a browser, and the credential is the
+ * X-Dashboard-Sso-Key header. Both are required — a key names nobody, an assertion redeems
+ * nowhere — so stealing either one alone is useless.
  *
- * Навіщо цей крок узагалі, якщо посвідчення підписане: щоб JWT_SECRET лишався всередині
- * дашборду. Трекер, який уміє перевіряти наш підпис, уміє й підписати собі АДМІНСЬКИЙ токен
- * дашборду. Заразом тут ще раз перевіряється `is_active` — у момент обміну, а не видачі.
+ * The round trip exists so JWT_SECRET stays inside the dashboard: a tracker able to verify our
+ * signature is also able to mint dashboard admin tokens. It also re-checks is_active at
+ * redemption rather than at issue.
  */
 authRouter.post("/tracker-identity", async (req, res) => {
   if (!ssoConfigured()) {

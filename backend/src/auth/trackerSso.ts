@@ -3,27 +3,24 @@ import jwt from "jsonwebtoken";
 import { config } from "../config.js";
 
 /**
- * Єдиний вхід у трекер часу — криптографічна частина.
+ * SSO into the time tracker — the crypto half.
  *
- * Трекер це ОКРЕМА наша система (репозиторій `timeTrackerManager`, власний сервер, власна база
- * користувачів). Дашборд для нього — постачальник особи: він каже, ХТО людина, і ніколи не каже,
- * що їй можна. Ролі сюди не їдуть свідомо: `provisionUsers()` переписує роль із Kommo кожні
- * 30 хвилин, тож мапінг ролей означав би, що правка в CRM тихо відкриває комусь чужий робочий
- * час через півгодини.
+ * The tracker is a separate system of ours with its own server and user table. The dashboard
+ * only asserts who someone is; it never asserts what they may see. Roles are not mapped:
+ * provisionUsers() rewrites role from Kommo every 30 minutes, so a mapping would open someone
+ * else's working hours half an hour after a CRM edit.
  *
- * Винесено в окремий файл із однієї причини: перевірка `purpose` мусить бути в ОДНОМУ місці.
+ * Separate file so the purpose check below lives in exactly one place.
  */
 
 /**
- * 🔴 Мітка призначення. Без її перевірки при обміні звичайний 12-годинний токен входу теж
- * пройшов би — і повнопривілейна обліковка дашборду опинилась би ще в двох процесах.
- *
- * Саме тому `signAssertion`/`verifyAssertion` існують окремо від `signToken`/`verifyToken`:
- * викликати не той не вийде навіть неуважно, бо типи різні.
+ * Without this check an ordinary 12-hour login token would pass as an assertion, putting a
+ * full-privilege credential into two more processes. Kept apart from signToken/verifyToken so
+ * the wrong one cannot be called by accident — the types differ.
  */
 const PURPOSE = "tracker-sso";
 
-/** Дві хвилини: рівно стільки, скільки агент іде від входу в дашборд до трекера. */
+/** Two minutes: the agent's trip from dashboard login to tracker. */
 const TTL_SECONDS = 120;
 
 interface AssertionPayload {
@@ -32,7 +29,7 @@ interface AssertionPayload {
   email?: string;
 }
 
-/** Хто це — за словом дашборду, на дві хвилини. */
+/** Who this is, by the dashboard's word, for two minutes. */
 export function signAssertion(userId: number, email?: string): string {
   const payload: AssertionPayload = { purpose: PURPOSE, userId, email };
   return jwt.sign(payload, config.jwtSecret, { expiresIn: TTL_SECONDS });
@@ -41,10 +38,8 @@ export function signAssertion(userId: number, email?: string): string {
 export const ASSERTION_TTL_SECONDS = TTL_SECONDS;
 
 /**
- * Перевірити посвідчення.
- *
- * @returns `null` на будь-яку невдачу — прострочене, підроблене, чи з чужим призначенням.
- * Свідомо без розрізнення причин: той, хто пробує, не має дізнатися, чим саме не підійшло.
+ * `null` on any failure — expired, forged, or issued for something else. Reasons are not
+ * distinguished: whoever is probing should not learn which part failed.
  */
 export function verifyAssertion(token: string): { userId: number; email?: string } | null {
   try {
@@ -59,12 +54,9 @@ export function verifyAssertion(token: string): { userId: number; email?: string
 }
 
 /**
- * Чи це наш спільний із трекером ключ.
- *
- * `timingSafeEqual` над SHA-256, а не порівняння рядків: звичайне `===` зупиняється на першому
- * розбіжному символі, і час відповіді підказує, скільки початкових символів вгадано. Хешуємо
- * перед порівнянням, бо `timingSafeEqual` кидає на буферах різної довжини — а сама довжина
- * ключа теж не має витікати.
+ * timingSafeEqual over SHA-256 rather than `===`: string comparison stops at the first
+ * mismatching character, and the response time leaks how much was guessed. Hashing first
+ * because timingSafeEqual throws on differing lengths, and the key length should not leak either.
  */
 export function ssoKeyAccepted(presented: string | undefined): boolean {
   const expected = config.tracker.ssoKey;
@@ -76,7 +68,7 @@ export function ssoKeyAccepted(presented: string | undefined): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
-/** Чи налаштований єдиний вхід узагалі. Без цього кнопки в меню немає, а ендпоінти дають 503. */
+/** Unconfigured means: no nav item, and every endpoint answers 503. */
 export function ssoConfigured(): boolean {
   return Boolean(config.tracker.url && config.tracker.ssoKey);
 }
