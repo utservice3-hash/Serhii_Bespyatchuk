@@ -579,6 +579,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/teams/managers", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
+    allow: [], deny: [] },
   { method: "POST", path: "/api/tracker/auth", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/tracker/heartbeat", cls: "deny-only",

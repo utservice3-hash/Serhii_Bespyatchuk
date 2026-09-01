@@ -226,3 +226,67 @@ authRouter.post("/tracker-identity", async (req, res) => {
     active: user.is_active,
   });
 });
+
+/**
+ * The roster the time tracker pulls to learn who exists.
+ *
+ * Same shared key as tracker-identity, same order: unconfigured before key check, so a
+ * deployment without the key never reaches the comparison.
+ *
+ * Identity only. The tracker creates accounts from this and switches them on itself; nothing
+ * here grants access there. `trackerEnabled` is the flag from Settings and travels as a hint,
+ * not as a decision.
+ *
+ * Sends `scope` rather than the role key. There are eight roles today and an admin can create
+ * more at runtime, so any hardcoded list on the far side goes stale; data_scope is the axis that
+ * survives — the same collapse scopeCompatRole already does in auth/rbac.ts.
+ */
+authRouter.get("/tracker-users", async (req, res) => {
+  if (!ssoConfigured()) {
+    return res.status(503).json({ error: "not_configured" });
+  }
+  if (!ssoKeyAccepted(req.header("X-Dashboard-Sso-Key"))) {
+    return res.status(401).json({ error: "bad_key" });
+  }
+
+  // Columns named one by one: gate #17e forbids SELECT *, and #17e2 forbids spreading a row into
+  // a response. Both exist so a column added later cannot ride out to another system unnoticed.
+  const rows = await pool.query<{
+    id: number;
+    email: string;
+    name: string | null;
+    is_active: boolean;
+    tracker_enabled: boolean;
+    team_name: string | null;
+    data_scope: string | null;
+  }>(
+    `SELECT u.id,
+            u.email,
+            COALESCE(m.name, u.full_name, u.email) AS name,
+            u.is_active,
+            u.tracker_enabled,
+            t.name AS team_name,
+            r.data_scope
+       FROM users u
+       LEFT JOIN managers m ON m.id = u.manager_id
+       LEFT JOIN teams t ON t.id = u.team_id
+       LEFT JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
+      ORDER BY u.email`
+  );
+
+  res.json({
+    people: rows.rows.map((r) => ({
+      // The tracker stores this in dashboard_user_id so that changing an email on either side
+      // later does not split one person into two accounts. Matching is still done by email.
+      id: r.id,
+      email: r.email,
+      name: r.name ?? r.email,
+      active: r.is_active,
+      trackerEnabled: r.tracker_enabled === true,
+      team: r.team_name,
+      // An unknown role means the least privilege, never the most: a role deleted from the table
+      // must not silently promote whoever held it.
+      scope: r.data_scope === "company" || r.data_scope === "team" ? r.data_scope : "own",
+    })),
+  });
+});
