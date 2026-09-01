@@ -18,11 +18,33 @@ import { ROUTE_BOUNDARY_EXEMPTIONS } from "../auth/gates.js";
 
 /**
  * Роут `/tracker-assertion` мовчить 503 без налаштованого трекера, тож гейтам #311/#311b
- * потрібні НЕПОРОЖНІ значення. Ставимо лише те, чого немає: на прод-сервері `.env` уже
- * несе справжні, і перетирати їх не можна. Жодного мережевого виклику цей роут не робить.
+ * потрібні НЕПОРОЖНІ значення. Ставимо лише те, чого немає; жодного мережевого виклику
+ * цей роут не робить.
+ *
+ * 🔴 І ЦЬОГО НЕ ДОСИТЬ У `test:prod`, ЩО ЗАМІРЯНО, А НЕ ВГАДАНО. Там набір іде через
+ * `--import ./dist/testReadOnly.js`, а той тягне `db/pool` → `config` ЩЕ ДО тіла цього
+ * модуля. Тобто присвоєння нижче спізнюється, і `config.tracker` лишається таким, яким
+ * його зробив `.env`. 01.09.2026 це дало два ЧЕРВОНИХ гейти при HTTP 503 замість
+ * очікуваних кодів. Тому нижче стоїть ще й перевірка на налаштованість — присвоєння
+ * лікує лише дев-прогін, а прод-режим мусить чесно СКІПАТИ.
  */
 process.env.TRACKER_URL ||= "https://tracker.invalid";
 process.env.TRACKER_SSO_KEY ||= "test-only-not-a-secret";
+
+/**
+ * Трекер ще не підключено — гейт нема на чому перевіряти, і це ЗАКОННИЙ стан світу,
+ * а не поломка: обидві змінні порожні, всі три роути свідомо віддають 503.
+ * Заміряно живим запитом 01.09.2026: `POST /api/auth/tracker-identity` (перевіряє конфіг
+ * ДО будь-якої авторизації) віддав `503 not_configured` — тобто на проді їх немає, попри
+ * те що в PR сказано протилежне. Обидва імені названі в `ALLOWED_PROD_SKIPS`.
+ */
+async function skipUnlessTracker(t: { skip: (why?: string) => void }): Promise<boolean> {
+  const { ssoConfigured } = await import("../auth/trackerSso.js");
+  if (ssoConfigured()) return false;
+  t.skip("трекер не налаштовано: TRACKER_URL/TRACKER_SSO_KEY порожні, всі три роути віддають 503. "
+    + "Це законна ВІДСУТНІСТЬ, а не «перевірено»: щойно змінні зʼявляться, гейт побіжить сам.");
+  return true;
+}
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
@@ -205,7 +227,8 @@ async function callRouter(method: string, url: string, headers: Record<string, s
   });
 }
 
-test("#311 посвідчення НЕ продовжує саме себе: /tracker-assertion його ВІДХИЛЯЄ", needsBackendEnv(), async () => {
+test("#311 посвідчення НЕ продовжує саме себе: /tracker-assertion його ВІДХИЛЯЄ", needsBackendEnv(), async (t) => {
+  if (await skipUnlessTracker(t)) return;
   const { signAssertion } = await import("../auth/trackerSso.js");
   /**
    * 🔴 ЗАМІРЯНО ЖИВИМ ВИКЛИКОМ 01.09.2026, ДО ПРАВКИ: посвідчення підписане тим самим
@@ -220,7 +243,8 @@ test("#311 посвідчення НЕ продовжує саме себе: /tr
   assert.equal(r.body?.error, "assertion_not_accepted");
 });
 
-test("#311b 🪞 ДЗЕРКАЛО: справжній токен входу роут ПРИЙМАЄ — інакше правка обірвала б трекер", needsBackendEnv(), async () => {
+test("#311b 🪞 ДЗЕРКАЛО: справжній токен входу роут ПРИЙМАЄ — інакше правка обірвала б трекер", needsBackendEnv(), async (t) => {
+  if (await skipUnlessTracker(t)) return;
   const { signToken } = await import("../auth/auth.js");
   const { verifyAssertion } = await import("../auth/trackerSso.js");
   /**
