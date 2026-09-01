@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsApi, API_BASE } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 interface Row { name: string; plan: number; fact: number }
 interface Body {
@@ -12,10 +13,9 @@ interface Body {
 async function load(): Promise<Body> {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const to = kyivMonthBounds().to;
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`,
     { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { needsDb } from "../testMode.js";
+import { kyivMonthBounds } from "./dates.js";
 
 /**
  * 🔎 #175 — РОЗКРИТТЯ ПОЯСНЮЄ ЧИСЛО ДЖЕРЕЛА, А НЕ СПЕРЕЧАЄТЬСЯ З НИМ (Е2, 24.08.2026).
@@ -50,7 +51,7 @@ test("#175 склад розкриття за ДЖЕРЕЛОМ == числу д�
   const { pool } = await import("../db/pool.js");
 
   const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`, to = now.toISOString().slice(0, 10);
 
   // Менеджер із НАЙБІЛЬШОЮ кількістю створених угод місяця: вибірка не випадкова —

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsApi, API_BASE } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #62 — ЛАНЦЮГ «ГРОШІ ТИЖНЯ» СХОДИТЬСЯ: ОЧІКУЄ + ОПЛАЧЕНО == ВІДПРАВЛЕНО.
@@ -27,10 +28,9 @@ async function weekManagers(): Promise<{ H: Record<string, string>; from: string
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const H = { Authorization: `Bearer ${token}` };
   // Поточний місяць цілком — щоб напевно застати період із рухом.
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const to = kyivMonthBounds().to;
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, { headers: H });
   assert.equal(r.status, 200, `🔴 /report-plan віддав ${r.status}`);
   return { H, from, to, mgrs: ((await r.json()) as { managers: Mgr[] }).managers ?? [] };

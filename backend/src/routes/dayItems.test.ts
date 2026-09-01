@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsApi, API_BASE } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #60 — Σ РЯДКІВ РОЗКРИТТЯ == ЧИСЛО В КОМІРЦІ. Для КОЖНОГО типу, на живих даних.
@@ -42,10 +43,9 @@ async function ctx() {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const H = { Authorization: `Bearer ${token}` };
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const to = kyivMonthBounds().to;
   const rp = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, { headers: H });
   const body = await rp.json() as { managers: { managerId: number; name: string }[] };
   /**

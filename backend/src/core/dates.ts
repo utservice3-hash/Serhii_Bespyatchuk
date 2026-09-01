@@ -94,3 +94,31 @@ export function monthEndOf(mo: string): string {
 export function kyivToday(): string {
   return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
 }
+
+/**
+ * 🇺🇦 МЕЖІ ПОТОЧНОГО МІСЯЦЯ ЗА КИЄВОМ — один вираз на всіх.
+ *
+ * 🔴 ПРИВІД, ЗАМІРЯНИЙ. Гейти рахували місяць через `getUTCFullYear/getUTCMonth`
+ * (29 місць), а продукт живе по-київськи. Прогін о 21:07 UTC = 00:07 EEST питав
+ * про СЕРПЕНЬ і вимагав, щоб той був поточним; продукт правий — серпень уже не
+ * поточний, вересень так. Тобто гейт червонів від власного календаря.
+ * Дві копії правила про час — це майбутнє розходження, і воно в нас уже було.
+ */
+export function kyivMonthBounds(today: string = kyivToday()): { ym: string; from: string; to: string } {
+  const ym = today.slice(0, 7);
+  return { ym, from: `${ym}-01`, to: monthEndOf(ym) };
+}
+
+/**
+ * 🗓 ВІКНО ЗАВЕДЕННЯ ПЛАНІВ — доменний факт власника, дослівно: «плани у нас
+ * виставляються на протязі 2х днів, це норма».
+ *
+ * 🔴 ЧОМУ ЦЕ НЕ ЗВИЧАЙНИЙ ПОРОЖНІЙ ПЕРІОД. Глухий скіп «планів немає» сховав би
+ * аварію «плани ЗАБУЛИ завести»: різниця між нормою і аварією тут не в даних, а в
+ * ДАТІ. Тому перші `workdays` робочих днів місяця — скіп, а після вікна нуль
+ * планів це СПРАВЖНЄ червоне.
+ */
+export function withinPlanGrace(today: string = kyivToday(), workdays = 2): boolean {
+  const monthStart = `${today.slice(0, 7)}-01`;
+  return workingDaysBetween(monthStart, today) <= workdays;
+}

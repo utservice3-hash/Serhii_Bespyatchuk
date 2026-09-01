@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { needsDb, needsApi, API_BASE } from "../testMode.js";
-import { fixedWeekBlocks, weekBlocksForRange } from "../core/dates.js";
+import { fixedWeekBlocks, weekBlocksForRange, kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #93 / #93b / #93c / #98 — ДВА РІВНІ РОЗКРИТТЯ КАРТКИ (тижні → дні) + АВТО ПО ТИЖНЯХ.
@@ -139,7 +139,7 @@ test("#93c SMOKE: Σ тижнів == Σ днів == підсумку розкр�
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const H = { Authorization: `Bearer ${token}` };
   const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`, to = now.toISOString().slice(0, 10);
 
   const rp = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, { headers: H });

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsApi, needsDb, needsDbWritable, API_BASE } from "../testMode.js";
+import { kyivMonthBounds } from "../core/dates.js";
 
 /**
  * #50 — ГРОШІ НЕ ЗНИКАЮТЬ РАЗОМ ІЗ ЛЮДИНОЮ.
@@ -21,10 +22,9 @@ test("#50 Σ факту на екрані == receivedMoney ядра (звіль�
   const money = await import("../core/money.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
 
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const to = kyivMonthBounds().to;
 
   const r = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`,
     { headers: { Authorization: `Bearer ${token}` } });
@@ -68,10 +68,9 @@ test("#50c саботаж у ДАШБОРДІ: гроші звільненого
   const { pool } = await import("../db/pool.js");
   const money = await import("../core/money.js");
   const { activeManagerSql } = await import("../core/activeManager.js");
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const to = kyivMonthBounds().to;
 
   const rows = await money.receivedByMgr({ from, to });
   const withMoney = rows.filter((r) => r.revenue !== 0);
@@ -115,10 +114,9 @@ test("#50c саботаж у ДАШБОРДІ: гроші звільненого
 test("#50b звільнені з грішми: або їх нема, або вони НАЗВАНІ", needsDb(), async () => {
   const { pool } = await import("../db/pool.js");
   const money = await import("../core/money.js");
-  const now = new Date();
-  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const ym = kyivMonthBounds().ym;
   const from = `${ym}-01`;
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const to = kyivMonthBounds().to;
 
   const rows = await money.receivedByMgr({ from, to });
   const inactive = new Set((await pool.query<{ id: number }>(

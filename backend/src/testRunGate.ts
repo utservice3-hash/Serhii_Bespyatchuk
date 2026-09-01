@@ -355,8 +355,62 @@ export const PROD_SKIP_CHILDREN: Record<string, string[]> = {
  */
 export const BROKEN_ENV_MARK = "⛔ОТОЧЕННЯ-ЗЛАМАНЕ";
 
+/**
+ * 🈳 ПОРОЖНІЙ ПЕРІОД — ТРЕТІЙ ВИД ПРОПУСКУ, і він не такий, як два перші.
+ *
+ * 🔴 ПРИВІД, ЗАМІРЯНИЙ ДВІЧІ 01.09.2026. Із 17-18 падінь приймання **одинадцять**
+ * були НАШІ гейти, що червоніли від відсутності даних вересня, а не від дефекту:
+ * сім казали це прямо («лише 0 менеджерів мають план», «expected = 0 у всіх 42»),
+ * пʼять помирали на `DateTimeParseError`, бо дату діставали з живих даних, а в
+ * порожньому місяці вона порожня. Тобто НА КОЖНІЙ МЕЖІ МІСЯЦЯ критерій приймання
+ * перестає працювати за побудовою і блокує викати всім трьом чатам.
+ *
+ * ⚠️ ЧОМУ ОКРЕМИЙ МАРКЕР, А НЕ ЗАПИС У `ALLOWED_PROD_SKIPS`. Той реєстр звіряє
+ * ІМʼЯ, тобто дозволяє гейту скіпнутись ІЗ БУДЬ-ЯКОЇ причини. Для порожнього
+ * періоду це було б рівно та ковдра, від якої нас береже `BROKEN_ENV_MARK`:
+ * гейт, що сьогодні скіпнувся «бо вересень порожній», завтра скіпнеться «бо
+ * оточення лягло» — і дозвіл покриє обидва. Тому право пропустити дається за
+ * ПРИРОДОЮ перешкоди: імʼя в реєстрі нижче + маркер у причині, обидва разом.
+ */
+export const EMPTY_PERIOD_MARK = "🈳ПОРОЖНІЙ-ПЕРІОД";
+
+/**
+ * Гейти, яким дозволено скіпнутись на порожньому періоді — і ЛИШЕ на ньому.
+ * Скіп із будь-якою іншою причиною цим записом НЕ покривається.
+ */
+export const EMPTY_PERIOD_SKIPS: { name: string; why: string }[] = [
+  { name: "#61 місячний план не підставляється як тижнева ціль",
+    why: "планів ще не завели — скіп ЛИШЕ у вікні 2 робочих днів (`planGraceSkip`), після нього падіння" },
+  { name: "#65 прогноз == факт + очікується цього місяця, без carryover",
+    why: "те саме вікно заведення планів; після нього нуль планів — справжня аварія" },
+  { name: "#65c три сегменти місяця не перетинаються",
+    why: "те саме вікно заведення планів" },
+  { name: "#49c план тижня: Σ по менеджерах == Σ по командах == компанія",
+    why: "тижневі плани ще нульові — вікно заведення" },
+  { name: "#47 /dashboard/managers віддає expected у КОЖНОМУ рядку",
+    why: "`expected` рахується від плану, тож нуль у всіх — вікно заведення" },
+  { name: "#89 ЧАСТКА ПОВІЛЬНИХ == НЕЗАЛЕЖНОМУ ПІДРАХУНКУ НА ТОМУ САМОМУ СКОУПІ",
+    why: "лідів у періоді ще немає; «є, але мало» лишається падінням" },
+  { name: "#94b СКЛАД == ЧИСЛУ по кожному дню місяця (жива БД)",
+    why: "угод 142∩етап 9 ще немає" },
+  { name: "#94c УГОДА, ЩО ПЕРЕЙШЛА МІЖ ЕТАПАМИ, ПОТРАПЛЯЄ РІВНО В ОДИН ДЕНЬ",
+    why: "угоди з різними датами входу в базі може не бути" },
+  { name: "#211 зріз: число рядка == склад розкриття при КОЖНОМУ положенні (жива БД)",
+    why: "пар (менеджер, день) ще немає; «мало» лишається падінням" },
+  { name: "#212 зріз джерела за класом — партиція, і Σ класів == створено (жива БД)",
+    why: "створених у місяці ще немає" },
+  { name: "#100 РОЗБИТТЯ ЗА ДЖЕРЕЛОМ АДИТИВНЕ: ad + leadgen == combined (жива БД)",
+    why: "combined порожній на початку місяця" },
+  { name: "#102 РОЗКЛАД == ЧИСЛУ: нові + постійні + невизн == «Отримано» (жива БД)",
+    why: "каса порожня; «є, але доданок вироджений» лишається падінням" },
+  { name: "#102b БУДИЛЬНИК: кожна undef-угода має ВІДОМУ НАЗВАНУ ПРИЧИНУ (жива БД)",
+    why: "каса місяця порожня" },
+];
+
 export interface SkipInfo { name: string; reason: string }
-export interface RunTally { ran: number; failed: number; skipped: string[]; broken?: SkipInfo[]; silentDeaths?: string[] }
+export interface RunTally { ran: number; failed: number; skipped: string[]; broken?: SkipInfo[];
+  /** Скіпи з маркером порожнього періоду — дозвіл дійсний ЛИШЕ для них. */
+  emptyPeriod?: SkipInfo[]; silentDeaths?: string[] }
 
 /**
  * 💀 ФАЙЛ ПОМЕР БЕЗ ДІАГНОСТИКИ — і раннер про це нічого не каже.
@@ -413,7 +467,16 @@ export function evaluateRun(t: RunTally, declared: number, env: NodeJS.ProcessEn
    */
   const broken = t.broken ?? [];
   const brokenNames = new Set(broken.map((b) => b.name));
-  const unexpected = t.skipped.filter((n) => !allowed.has(n) || brokenNames.has(n));
+  /**
+   * 🈳 ДРУГИЙ ДОЗВІЛ — ДВОСКЛАДОВИЙ, І САМЕ ЦЕ РОБИТЬ ЙОГО НЕ КОВДРОЮ.
+   * Гейт мусить бути НАЗВАНИЙ у `EMPTY_PERIOD_SKIPS` І його причина мусить нести
+   * маркер. Одного імені мало: інакше той самий запис покрив би скіп із будь-якої
+   * іншої причини — рівно та діра, яку `BROKEN_ENV_MARK` уже одного разу закривав.
+   */
+  const emptyNamed = new Set(EMPTY_PERIOD_SKIPS.map((s) => s.name));
+  const emptyMarked = new Set((t.emptyPeriod ?? []).map((e) => e.name));
+  const emptyOk = (n: string): boolean => emptyNamed.has(n) && emptyMarked.has(n);
+  const unexpected = t.skipped.filter((n) => !(allowed.has(n) || emptyOk(n)) || brokenNames.has(n));
   const okSkips = t.skipped.length - unexpected.length;
   // Діти дозволено-скіпнутих батьків фізично не можуть зʼявитись у виводі.
   const skippedSet = new Set(t.skipped);
@@ -482,8 +545,12 @@ interface TestEvent {
 export const isBrokenEnvSkip = (skip: boolean | string | undefined): boolean =>
   typeof skip === "string" && skip.includes(BROKEN_ENV_MARK);
 
+/** Скіп «у періоді немає даних» — законна ВІДСУТНІСТЬ, а не зламане оточення. */
+export const isEmptyPeriodSkip = (skip: unknown): boolean =>
+  typeof skip === "string" && skip.includes(EMPTY_PERIOD_MARK);
+
 export default async function* runGate(source: AsyncIterable<TestEvent>) {
-  const tally: RunTally = { ran: 0, failed: 0, skipped: [], broken: [] };
+  const tally: RunTally = { ran: 0, failed: 0, skipped: [], broken: [], emptyPeriod: [] };
   for await (const ev of source) {
     if (ev.type !== "test:pass" && ev.type !== "test:fail") continue;
     // `skip` приходить або true, або текстом причини — обидва означають «не виконався».
@@ -491,6 +558,7 @@ export default async function* runGate(source: AsyncIterable<TestEvent>) {
       const name = ev.data.name ?? "";
       tally.skipped.push(name);
       if (isBrokenEnvSkip(ev.data.skip)) tally.broken!.push({ name, reason: String(ev.data.skip) });
+      else if (isEmptyPeriodSkip(ev.data.skip)) tally.emptyPeriod!.push({ name, reason: String(ev.data.skip) });
     }
     else {
       tally.ran++;

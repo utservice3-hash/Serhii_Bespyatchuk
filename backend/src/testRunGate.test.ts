@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateRun, allowedSkips, ALLOWED_PROD_SKIPS, modeName } from "./testRunGate.js";
+import { evaluateRun, allowedSkips, ALLOWED_PROD_SKIPS, modeName, EMPTY_PERIOD_MARK, EMPTY_PERIOD_SKIPS, isEmptyPeriodSkip, BROKEN_ENV_MARK } from "./testRunGate.js";
 
 /**
  * #19 — ВОРОТА РЕЖИМУ ПРОГОНУ. Третій (і останній) закритий випадок хибно-зеленого.
@@ -127,4 +127,58 @@ test("#12h ДЗЕРКАЛО: батько ВІДПРАЦЮВАВ — діти з
   const v = evaluateRun({ ran: 10, failed: 0, skipped: [] }, 15, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
   assert.equal(v.required, 15, "нічого не скіпнулось — знижок бути не може");
   assert.equal(v.ok, false, "🔴 недолік 5 тестів зарахований як успіх");
+});
+
+/**
+ * 🈳 #236–#236d — ПОРОЖНІЙ ПЕРІОД: ГУЧНИЙ СКІП ЗАМІСТЬ ПАДІННЯ.
+ *
+ * 🔴 ПРИВІД, ЗАМІРЯНИЙ ДВІЧІ 01.09.2026: із 17-18 падінь приймання **одинадцять**
+ * були наші гейти, що червоніють від відсутності даних вересня. Тобто на кожній межі
+ * місяця критерій приймання перестає працювати за побудовою і блокує викати всім
+ * трьом чатам.
+ *
+ * ⚠️ ГОЛОВНЕ ТУТ — НЕ ДОЗВІЛ, А ЙОГО МЕЖА, і вона двоскладова: імʼя в реєстрі І
+ * маркер у причині. Скіп, що ковтає справжній дефект, гірший за падіння; односторонній
+ * предикат у нас за тиждень спрацював тричі.
+ */
+test("#236 порожній період: імʼя в реєстрі + маркер = дозволений скіп", () => {
+  const name = EMPTY_PERIOD_SKIPS[0].name;
+  const v = evaluateRun(
+    { ran: 10, failed: 0, skipped: [name], emptyPeriod: [{ name, reason: `${EMPTY_PERIOD_MARK} нема даних` }] },
+    11, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
+  assert.equal(v.ok, true, "🔴 законний скіп на порожньому періоді не зарахувався");
+});
+
+test("#236b 🔴 ДЗЕРКАЛО: ІМʼЯ БЕЗ МАРКЕРА не дозволене — реєстр не ковдра", () => {
+  const name = EMPTY_PERIOD_SKIPS[0].name;
+  // Той самий гейт, той самий реєстр — але скіпнувся він З ІНШОЇ ПРИЧИНИ.
+  const v = evaluateRun(
+    { ran: 10, failed: 0, skipped: [name], emptyPeriod: [] },
+    11, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
+  assert.equal(v.ok, false,
+    "🔴 запис у реєстрі покрив скіп із ЧУЖОЇ причини — саме так дозвіл стає ковдрою");
+});
+
+test("#236c 🔴 МАРКЕР БЕЗ ІМЕНІ теж не дозволений — інакше маркер сам себе дозволяє", () => {
+  const v = evaluateRun(
+    { ran: 10, failed: 0, skipped: ["#999 гейт поза реєстром"],
+      emptyPeriod: [{ name: "#999 гейт поза реєстром", reason: `${EMPTY_PERIOD_MARK} нема даних` }] },
+    11, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
+  assert.equal(v.ok, false,
+    "🔴 будь-який гейт зміг би пропустити себе сам, просто додавши маркер у причину");
+});
+
+test("#236d ЗЛАМАНЕ ОТОЧЕННЯ БʼЄ І ЦЕЙ ДОЗВІЛ — маркери не змішуються", () => {
+  const name = EMPTY_PERIOD_SKIPS[0].name;
+  const v = evaluateRun(
+    { ran: 10, failed: 0, skipped: [name],
+      broken: [{ name, reason: `${BROKEN_ENV_MARK} кластер не встав` }],
+      emptyPeriod: [{ name, reason: `${EMPTY_PERIOD_MARK} нема даних` }] },
+    11, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
+  assert.equal(v.ok, false,
+    "🔴 зламане оточення проїхало під дозволом на порожній період — два різні стани "
+    + "в одній клітинці, рівно те, від чого нас береже маркер");
+  // 🪞 І розпізнавач маркера не вироджений: він мусить казати «ні» на чужий текст.
+  assert.equal(isEmptyPeriodSkip(`${EMPTY_PERIOD_MARK} x`), true);
+  assert.equal(isEmptyPeriodSkip("просто причина"), false);
 });
