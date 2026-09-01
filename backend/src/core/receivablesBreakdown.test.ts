@@ -148,3 +148,53 @@ test("#252d розклад НЕ рахує списані рахунки — і�
   assert.equal(partial.find((p) => p.key === "псевдо-а")?.amount, 300,
     "🔴 частково списана юрособа або зникла цілком, або принесла списану суму");
 });
+
+test("#254 юрособа стоїть біля номера рахунку — і ЛИШЕ у злитого клієнта", async () => {
+  // 📐 Скарга власника дослівно: «треба бачити навпроти кожного рахунку яка
+  // компанія». Підпис «усередині 3 юрособи» називає СКЛАД, але не каже, який
+  // рахунок чий, — а в розкритті їх 64.
+  const V = await import(FE_SPEC("pages/dashboard/receivablesView.ts"));
+
+  const merged = [
+    { entityKey: "смартекс", entityName: "СМАР ТЕКС ТОВ" },
+    { entityKey: "курєрукраїни", entityName: "КУР'ЄР УКРАЇНИ ТОВ" },
+    { entityKey: "смартекс", entityName: "СМАР ТЕКС ТОВ" },
+  ];
+  assert.equal(V.invoiceEntityShown(merged), true,
+    "🔴 у клієнта з двома юрособами підпис не показується — заявку не закрито");
+  assert.equal(V.invoiceEntityLabel(merged[1], true), "КУР'ЄР УКРАЇНИ ТОВ",
+    "🔴 підпис не називає юрособу рахунка");
+
+  // 🏷 Рахунок без назви юрособи має ВЛАСНИЙ підпис, а не порожнечу: порожнє
+  // місце читається як «нічого немає», а не як «не знаємо».
+  assert.equal(V.invoiceEntityLabel({ entityKey: "", entityName: null }, true), V.BREAKDOWN_UNKNOWN,
+    "🔴 рахунок без юрособи лишився без підпису");
+
+  // 🔴 УМОВА — ВЛАСТИВІСТЬ КЛІЄНТА, А НЕ РЯДКА. Питати «чи юросіб кілька» в
+  // кожного рахунка окремо означало б дати різну відповідь на сусідніх рядках —
+  // той самий дефект, що «рівно один серед тих, хто спитав».
+  for (const inv of merged) {
+    assert.equal(V.invoiceEntityLabel(inv, V.invoiceEntityShown(merged)) != null, true,
+      "🔴 підпис зʼявляється не на всіх рахунках злитого клієнта");
+  }
+});
+
+test("#254b 🪞 ДЗЕРКАЛО: у незлитого клієнта юрособи біля рахунків НЕМАЄ", async () => {
+  // Односторонній гейт тут коштує дорого: «показувати завжди» проходить #254 і
+  // додає підпис у кожен рядок 62 незлитих клієнтів — шум замість сигналу.
+  const V = await import(FE_SPEC("pages/dashboard/receivablesView.ts"));
+
+  const plain = [
+    { entityKey: "арсенал", entityName: "ПВК АРСЕНАЛ ТОВ" },
+    { entityKey: "арсенал", entityName: "ПВК АРСЕНАЛ ТОВ" },
+  ];
+  assert.equal(V.invoiceEntityShown(plain), false,
+    "🔴 у клієнта з ОДНІЄЮ юрособою підпис показується — це шпалери, а не сигнал");
+  assert.equal(V.invoiceEntityLabel(plain[0], false), null,
+    "🔴 підпис віддається навіть тоді, коли показувати його не треба");
+
+  assert.equal(V.invoiceEntityShown([]), false, "🔴 порожній список дав підпис");
+  assert.equal(V.invoiceEntityShown(null), false, "🔴 відсутній список дав підпис");
+  assert.equal(V.invoiceEntityShown([{ entityKey: "к", entityName: "К" }]), false,
+    "🔴 один рахунок дав підпис");
+});

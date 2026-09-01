@@ -817,6 +817,39 @@ export function breakdownLine(b: BreakdownIn | null | undefined): BreakdownLine 
  * 🔴 З НАЗВАМИ, А НЕ САМИМ ЧИСЛОМ. «Ще 2» без назв — та сама хвороба, з якої
  * почалась заявка: людина бачить, що чогось не видно, і не знає чого.
  */
+/**
+ * 🏢 ЮРОСОБА НАВПРОТИ КОЖНОГО РАХУНКУ — лише коли їх у клієнта БІЛЬШЕ ОДНІЄЇ.
+ *
+ * Скарга власника дослівно: «треба бачити навпроти кожного рахунку яка компанія».
+ * Підпис «усередині 3 юрособи» називає СКЛАД, але не каже, ЯКИЙ рахунок чий, — а в
+ * розкритті їх 64.
+ *
+ * 🔴 УМОВУ РАХУЄМО ПО ВСЬОМУ СПИСКУ РАХУНКІВ, А НЕ ПО ОДНОМУ. «Чи юросіб більше
+ * однієї» — властивість КЛІЄНТА, і питати про неї в кожного рахунка окремо означало б
+ * дати різну відповідь на різних рядках. Той самий урок, що «рівно один» рахується
+ * серед усіх кандидатів, а не серед тих, хто спитав.
+ *
+ * У 62 незлитих клієнтів підпису немає взагалі: там юрособа одна, і підпис у кожному
+ * рядку був би шумом — правило «невідоме має бути видимим ТАМ, ДЕ ЙОГО ВИДНО».
+ */
+export function invoiceEntityShown(
+  invoices: readonly { entityKey?: string | null; entityName?: string | null }[] | null | undefined,
+): boolean {
+  const keys = new Set<string>();
+  for (const x of invoices ?? []) keys.add((x.entityKey ?? "").trim());
+  return keys.size > 1;
+}
+
+/** Підпис юрособи для одного рахунка. `null` — показувати нічого. */
+export function invoiceEntityLabel(
+  inv: { entityKey?: string | null; entityName?: string | null },
+  shown: boolean,
+): string | null {
+  if (!shown) return null;
+  const n = (inv.entityName ?? "").trim();
+  return n === "" ? BREAKDOWN_UNKNOWN : n;
+}
+
 export function noteOthersLabel(names: readonly string[] | null | undefined): string | null {
   const list = (names ?? []).filter((s) => (s ?? "").trim() !== "");
   return list.length === 0 ? null : `ще ${list.length}: ${list.join(", ")}`;
