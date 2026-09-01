@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { kyivMonthBounds, withinPlanGrace, monthEndOf } from "./dates.js";
 import { emptyPeriodSkip, planGraceSkip, smallSampleSkip } from "../testMode.js";
-import { EMPTY_PERIOD_MARK } from "../testRunGate.js";
+import { EMPTY_PERIOD_MARK, EMPTY_PERIOD_SKIPS } from "../testRunGate.js";
 import { responseViolations, NEED_LEADS, type RtRow } from "../routes/responseSlice.js";
 
 /**
@@ -113,4 +113,27 @@ test("#238b 🔴 ДЗЕРКАЛО: ДОСТАТНЯ вибірка + поруш�
   assert.deepEqual(responseViolations([{ managerId: 2, n: 0, slow: 0, pctSlow: 0 }],
     new Map([[2, { n: 0, slow: 0 }]])), ["менеджер 2: частка 0 не дорівнює slow/n = null"],
     "🔴 «0%» прийнято за відсутню відповідь — саме та підміна, від якої ми лікували Звіт");
+});
+
+/**
+ * 🛡 #238c — РОДИНА НЕ МОЖЕ СТАТИ ВСЯ-СКІПОМ: у кожної пари «живе дзеркало + вирок»
+ * той, ХТО ТРИМАЄ ВИРОК, у реєстрі скіпів відсутній.
+ *
+ * 🔴 НАВІЩО ОКРЕМЕ ТВЕРДЖЕННЯ. Цього тижня ми перевели в скіпи чотирнадцять гейтів,
+ * і кожен раз доказом було «правило стереже хтось інший». Це трималось на моєму
+ * слові в коментарі — а слово не гейт. Тут воно стає перевіркою: якщо колись у
+ * реєстр потрапить `#58` (джерельний вирок про знаменник) або `#46b` (грошова
+ * тотожність), правило лишиться без ЖОДНОГО охоронця, і ніхто цього не помітить.
+ */
+test("#238c ВИРОК НЕ СКІПАЄТЬСЯ: джерельні гейти родин відсутні в реєстрі порожнього періоду", () => {
+  const named = EMPTY_PERIOD_SKIPS.map((x) => x.name);
+  for (const guard of ["#58 сер.чек дня ділить гроші на УГОДИ, а не на авто",
+    "#46b факт місяця == успішно + оплачено (розклад ②)"]) {
+    assert.equal(named.some((n) => n === guard), false,
+      `🔴 «${guard}» опинився серед дозволених скіпів — правило лишилось без охоронця, `
+      + "а його живе дзеркало має право мовчати");
+  }
+  // 🪞 Дзеркало: перевірка не вироджена — дзеркала в реєстрі БУТИ мають.
+  assert.ok(named.some((n) => n.startsWith("#58b ")), "🔴 живе дзеркало #58b не в реєстрі — тоді воно й далі падатиме");
+  assert.ok(named.length >= 14, `🔴 у реєстрі лише ${named.length} записів — перевірка дивиться не туди`);
 });

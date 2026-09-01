@@ -318,7 +318,9 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
           ["🔴 РЕЄСТР ЗНЯТИХ ГЕЙТІВ САМ НЕСПРАВНИЙ — це зупинка ДО будь-яких висновків про приріст:",
             ...retire.problems.map((x) => `   ${x}`)].join("\n") };
       }
-      const d = judgeDelta(baseTap, treeTap, retire.unaccounted);
+      // Прийняті поіменно зняття не рахуються ні як «зник гейт» (③), ні як
+      // «перестав виконуватись» (②) — інакше свідоме зняття спиняло б ланцюг двічі.
+      const d = judgeDelta(baseTap, treeTap, retire.unaccounted, retire.accepted);
       if (retire.accepted.length) {
         d.lines.push(`🗑 ЗНЯТО СВІДОМО, прийнято реєстром ПОІМЕННО (${retire.accepted.length}):`,
           ...retire.accepted.map((n) => `   ﹣ ${n}`));

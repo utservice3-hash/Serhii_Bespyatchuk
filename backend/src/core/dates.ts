@@ -122,3 +122,13 @@ export function withinPlanGrace(today: string = kyivToday(), workdays = 2): bool
   const monthStart = `${today.slice(0, 7)}-01`;
   return workingDaysBetween(monthStart, today) <= workdays;
 }
+
+/**
+ * Чи існує така календарна дата. `new Date("2026-09-31")` не кидає — воно
+ * НОРМАЛІЗУЄ у 1 жовтня; тому порівнюємо зворотний рядок, а не ловимо виняток.
+ */
+export function isRealDate(day: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  const d = new Date(`${day}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === day;
+}

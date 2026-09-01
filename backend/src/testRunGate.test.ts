@@ -182,3 +182,25 @@ test("#236d ЗЛАМАНЕ ОТОЧЕННЯ БʼЄ І ЦЕЙ ДОЗВІЛ — м
   assert.equal(isEmptyPeriodSkip(`${EMPTY_PERIOD_MARK} x`), true);
   assert.equal(isEmptyPeriodSkip("просто причина"), false);
 });
+
+/**
+ * 🗑 #235e — ПРИЙНЯТЕ ЗНЯТТЯ НЕ РАХУЄТЬСЯ ДВІЧІ: ані ③, ані ②.
+ *
+ * 🔴 Знайдено ДРУГИМ ужитком реєстру: `#305` знято поіменно, ③ промовчав, а ② сказав
+ * «перестало виконуватись» — і ланцюг усе одно став. Першого разу (`#46`) не спливло
+ * випадково: той гейт скіпався по обидва боки й у «виконаних» не був ніколи.
+ */
+test("#235e знятий поіменно гейт не є порушенням «перестало виконуватись»", async () => {
+  const { judgeDelta } = await import("./tools/testDelta.js");
+  const base = [{ name: "#305 старий", ok: true, skipped: false }, { name: "#1 живий", ok: true, skipped: false }];
+  const tree = [{ name: "#1 живий", ok: true, skipped: false }];
+  assert.equal(judgeDelta(base, tree, [], ["#305 старий"]).ok, true,
+    "🔴 свідоме зняття спиняє ланцюг критерієм ②, хоч ③ його вже прийняв");
+  // 🪞 ДЗЕРКАЛО: незаявлене зникнення лишається порушенням — виняток вузький.
+  const v = judgeDelta(base, tree, [], []);
+  assert.equal(v.ok, false, "🔴 будь-який зниклий тест тепер проїжджає — виняток став ковдрою");
+  assert.deepEqual(v.stoppedExecuting, ["#305 старий"]);
+  // 🪞 І чуже зникнення не покривається дозволом на СВОЄ.
+  const w = judgeDelta([...base, { name: "#7 чужий", ok: true, skipped: false }], tree, [], ["#305 старий"]);
+  assert.deepEqual(w.stoppedExecuting, ["#7 чужий"], "🔴 під одним дозволом проїхало друге зникнення");
+});

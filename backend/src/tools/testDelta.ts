@@ -95,14 +95,29 @@ export interface Delta {
  * покращення означало б повторити «105 проти 106»: голе число сховало б регресію під
  * виглядом поліпшення. Небезпечний варіант (тест зник або став скіпом) ловить ②.
  */
+/**
+ * 🗑 ЗНЯТИЙ ГЕЙТ ПЕРЕСТАЄ ВИКОНУВАТИСЬ — І ЦЕ НЕ ПОРУШЕННЯ ②.
+ *
+ * 🔴 ДІРА, ЗНАЙДЕНА ДРУГИМ СПРАВЖНІМ УЖИТКОМ РЕЄСТРУ (01.09.2026). `RETIRED_GATES`
+ * покривав критерій ③ («жоден гейт не зник»), але ② рахується з TAP окремо: гейт,
+ * якого більше немає, на базі ВИКОНУВАВСЯ, а в дереві ні. Тобто будь-яке свідоме
+ * зняття однаково спиняло ланцюг — просто іншим номером критерію.
+ * Першого разу (`#46`) це не спливло ВИПАДКОВО: той гейт ходить у живе API і в
+ * стенді скіпався по обидва боки, тож у «виконаних» не був ніколи.
+ *
+ * ⚠️ Виняток вузький: віднімаються РІВНО ті імена, які реєстр уже прийняв поіменно.
+ * Скіп чи зникнення будь-чого іншого лишається порушенням ②.
+ */
 export function judgeDelta(
   base: readonly TapLine[], tree: readonly TapLine[], lostGates: readonly string[] = [],
+  retired: readonly string[] = [],
 ): Delta {
   const bf = failed(base), tf = failed(tree);
   const be = executed(base), te = executed(tree);
+  const gone = new Set(retired);
   const newFailures = [...tf].filter((n) => !bf.has(n)).sort();
-  const vanishedFailures = [...bf].filter((n) => !tf.has(n)).sort();
-  const stoppedExecuting = [...be].filter((n) => !te.has(n)).sort();
+  const vanishedFailures = [...bf].filter((n) => !tf.has(n) && !gone.has(n)).sort();
+  const stoppedExecuting = [...be].filter((n) => !te.has(n) && !gone.has(n)).sort();
   const lost = [...lostGates].sort();
   const ok = newFailures.length === 0 && stoppedExecuting.length === 0 && lost.length === 0;
 

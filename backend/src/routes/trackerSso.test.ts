@@ -131,16 +131,32 @@ test("#304 ендпоінт НЕ читає параметрів запиту �
 
 // nav
 
-test("#305 пункт видно ролі з ПОРОЖНІМ screens — тобто всім", () => {
+/**
+ * 🪦 `#305 пункт видно ролі з ПОРОЖНІМ screens — тобто всім` ЗНЯТО 01.09.2026.
+ *
+ * 🔴 Перевірки всередині лишились ІСТИННИМИ — бреше НАЗВА. Після рішення власника
+ * «питати кнопку» пункт бачать не всі, а лише ті, у кого `users.tracker_enabled`
+ * (заміряно 38 із 48). За правилом 46b назву не уточнюють: змінилось твердження —
+ * новий номер. Замінений на `#313`, зняття оголошено в `RETIRED_GATES`.
+ */
+test("#313 пункт вливається ПІСЛЯ фільтра ролей і лише за ознакою tracker_enabled", () => {
   const src = read("frontend/src/components/Layout.tsx");
 
-  // In NAV_GROUPS this item would be filtered out for everyone: navGroupsForRole returns only
-  // what a role's screen_access lists, and no role lists "tracker". Hence: after the filter.
+  // Порядок: у NAV_GROUPS пункт відсіявся б у всіх — жодна роль не має екрана "tracker".
   assert.match(src, /const navGroups = withTracker\(navGroupsForRole\(/,
     "пункт мусить вливатися після фільтра screens, інакше він невидимий для всіх");
   const fn = src.slice(src.indexOf("function withTracker"), src.indexOf("export function Layout"));
   assert.match(fn, /return \[\{ label: TRACKER_GROUP/,
     "якщо фільтр вичистив «Аналітику», групу треба створити — інакше кастомна роль втрачає кнопку");
+  /**
+   * 🔴 НОВЕ ТВЕРДЖЕННЯ, ЗАРАДИ ЯКОГО Й НОВИЙ НОМЕР: видимість питає ОЗНАКУ.
+   * Було — бачили всі 8 ролей (48 активних), зокрема 10 людей, яким трекер свідомо
+   * не вмикали.
+   */
+  assert.match(fn, /if \(!enabled\) return groups;/,
+    "🔴 кнопку знову видно без ознаки `tracker_enabled` — повернувся стан «бачать усі»");
+  assert.match(src, /withTracker\(navGroupsForRole\(role, screens\), trackerEnabled\)/,
+    "🔴 ознака не доїжджає до `withTracker` — тоді умова всередині нічого не вирішує");
 });
 
 test("#306 ключ tracker НЕ потрапив у NAV_GROUPS", () => {
