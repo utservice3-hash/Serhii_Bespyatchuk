@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { adoptsExternal } from "./commentDraft";
 
 /**
  * Єдине поле коментаря по всьому проєкту: текст ВИДНО ПОВНІСТЮ (перенос рядків,
@@ -22,9 +23,20 @@ export function CommentField({
 }) {
   const [v, setV] = useState(value ?? "");
   const ref = useRef<HTMLTextAreaElement>(null);
+  /**
+   * 🔴 «Брудна» чернетка = людина щось набрала й ще не зберегла (збереження на `blur`).
+   * Прапорець у ref, а не в state: він не має спричиняти перемальовування, і мусить
+   * бути актуальним у момент, коли прилітає зовнішнє значення.
+   */
+  const dirty = useRef(false);
 
-  // Синхронізуємось із зовнішнім значенням, якщо його змінили деінде.
-  useEffect(() => { setV(value ?? ""); }, [value]);
+  // Синхронізуємось із зовнішнім значенням — але НЕ поверх незбереженої чернетки.
+  useEffect(() => {
+    if (adoptsExternal(dirty.current, value ?? "", v)) setV(value ?? "");
+    // `v` навмисно не в залежностях: реагуємо на зміну ЗОВНІШНЬОГО значення,
+    // а не на власний набір — інакше ефект бігав би на кожну літеру.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
 
   const grow = () => {
     const el = ref.current;
@@ -42,13 +54,13 @@ export function CommentField({
     );
   }
 
-  const commit = () => { if (v !== (value ?? "")) onSave?.(v); };
+  const commit = () => { dirty.current = false; if (v !== (value ?? "")) onSave?.(v); };
   return (
     <textarea
       ref={ref}
       value={v}
       placeholder={placeholder}
-      onChange={(e) => setV(e.target.value)}
+      onChange={(e) => { dirty.current = true; setV(e.target.value); }}
       onInput={grow}
       onBlur={commit}
       rows={1}

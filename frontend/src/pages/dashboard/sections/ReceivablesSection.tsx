@@ -28,6 +28,7 @@ import {
   earnedCells, earnedCellHint, earnedCellText, earnedShownTotal,
   nPlural, seenCell, seenRollLabel,
   type Filters, type MergeSide,
+  receivableRowKey,
 } from "../receivablesView";
 import { formatAmount, formatAmountFull } from "../format";
 import { teamOptions } from "../teamColors";
@@ -165,7 +166,7 @@ export function ReceivablesSection({
   onRefresh?: () => void;
 }) {
   const [syncing, setSyncing] = useState(false);
-  const refreshFromSheet = async () => {
+  const refreshFrom1c = async () => {
     setSyncing(true);
     try { await triggerReceivablesSync(); onRefresh?.(); }
     finally { setSyncing(false); }
@@ -204,7 +205,18 @@ export function ReceivablesSection({
     }
   };
   const patchInvoice = (clientKey: string, invoiceNo: string, patch: { dueDate?: string | null; comment?: string | null }) => {
-    // Оптимістично оновлюємо кеш, зберігаємо на бекенді, потім тихо перечитуємо.
+    /**
+     * Оптимістично оновлюємо кеш і зберігаємо на бекенді.
+     *
+     * 🧾 БОРГ, НАЗВАНИЙ ЧЕСНО: перечитування ПІСЛЯ збереження тут НЕМАЄ. Раніше цей
+     * коментар обіцяв «потім тихо перечитуємо» — у коді такого не було жодного разу,
+     * тобто коментар описував намір, а не поведінку. Наслідок: якщо збереження впало
+     * (`.catch(() => {})` ковтає помилку), екран і далі показує оптимістичне значення,
+     * і людина вважає зміну збереженою.
+     * ⚠️ УМОВА ПОВЕРНЕННЯ: щойно зʼявиться скарга «зміна не збереглась» — дописуємо
+     * перечитування. Робити це зараз означало б змінити поведінку в проході, який
+     * лагодить втрату чернетки, а не поведінку збереження.
+     */
     setInvCache((c) => {
       const list = c[clientKey];
       if (!Array.isArray(list)) return c;
@@ -508,7 +520,7 @@ export function ReceivablesSection({
             </select>
           )}
           {canEditReceivables && (
-            <button onClick={refreshFromSheet} disabled={syncing} title="Перечитати дебіторку прямо з 1С — оплачені рахунки зникнуть одразу"
+            <button onClick={refreshFrom1c} disabled={syncing} title="Перечитати дебіторку прямо з 1С — оплачені рахунки зникнуть одразу"
               style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: syncing ? "default" : "pointer", fontWeight: 600, fontSize: "var(--fs-13)" }}>
               {syncing ? "Оновлення…" : "🔄 Оновити з 1С"}
             </button>
@@ -686,7 +698,7 @@ export function ReceivablesSection({
                          вбила всю секцію — 75 справних рядків загинули з одним.
                          Межа не ховає дефект: вона називає клієнта й лишає решту
                          таблиці живою. Другий рубіж, а не заміна сторожам. */
-                      <RowBoundary key={`${c.clientKey}-${i}`} label={c.clientName} cols={12}>
+                      <RowBoundary key={receivableRowKey(c)} label={c.clientName} cols={12}>
                         {/* 🖱 Клікабельний увесь рядок; клік по полю всередині НЕ
                             згортає — інакше кожен дотик до input/textarea закривав
                             би клієнта просто в момент редагування. */}
