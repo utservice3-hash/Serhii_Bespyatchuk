@@ -1257,8 +1257,27 @@ test("#199k нерозбірна або відсутня дата НЕ вали�
 
   // ── ДРУГИЙ РУБІЖ: бекенд більше не віддає формат, який рушій не бере.
   const routes = readFileSync(SRC("routes/dashboard.ts"), "utf8");
-  const notes = routes.slice(routes.indexOf("FROM receivable_notes n WHERE n.client_key") - 1200,
-                             routes.indexOf("FROM receivable_notes n WHERE n.client_key"));
+  /**
+   * 🔴 ЯКІР ЗА ЗМІСТОМ І З ДОВЕДЕНИМ ІСНУВАННЯМ — а не вікно за ДОВЖИНОЮ.
+   *
+   * Перша редакція брала 1200 символів ПЕРЕД буквальним рядком
+   * «FROM receivable_notes n WHERE n.client_key». 01.09.2026 у той запит додався
+   * `LEFT JOIN client_key_alias` (нотатки читаються по набору псевдонімів), рядок
+   * розпався на два — `indexOf` віддав **−1**, а `slice(-1201, -1)` мовчки віддав
+   * ХВІСТ ФАЙЛА. Гейт почервонів, показавши в «actual» код зовсім іншого роуту.
+   *
+   * ⚠️ І гірший бік того самого дефекту: на випадковому хвості цей гейт міг би й
+   * ПОЗЕЛЕНІТИ — у файлі є інші `AT TIME ZONE 'UTC' … HH24:MI:SS"Z"`. Тобто
+   * вікно за довжиною не лише крихке, воно ще й сліпе.
+   *
+   * Тому: обидві межі — змістові, обидві мусять ІСНУВАТИ, і це стверджується
+   * ДО зрізу, а не після.
+   */
+  const qStart = routes.indexOf("SELECT n.client_key");
+  const qEnd = routes.indexOf("FROM receivable_notes n");
+  assert.ok(qStart > 0 && qEnd > qStart,
+    `🔴 запит нотаток не знайдено (початок ${qStart}, кінець ${qEnd}) — гейт міряв би не той текст, а не відсутність помилки`);
+  const notes = routes.slice(qStart, qEnd);
   assert.ok(!/HH24:MI:SSOF/.test(notes),
     "🔴 `updated_at` знову віддається з двозначним зміщенням OF — саме воно поклало прод");
   assert.match(notes, /AT TIME ZONE 'UTC'[\s\S]{0,80}HH24:MI:SS"Z"/,
