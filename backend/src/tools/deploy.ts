@@ -21,6 +21,7 @@ import {
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
 import { parseTap, judgeDelta } from "./testDelta.js";
 import { diffGates, acceptRetired } from "../testManifest.js";
+import { FAIL_MARK, failureNames } from "../testRunGate.js";
 import { testsAtRef, parseManifestTests } from "./gateCount.js";
 import { rmSync, symlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -393,10 +394,19 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     }
     const log = "/tmp/deploy-accept.log";
     // `|| true`: ненульовий код тут — НОРМА (падіння тесту), а вирок вимовляє гейт прогону.
+    /**
+     * 🏷 ПЕРЕЛІК ІМЕН БЕРЕТЬСЯ З НАШОГО МАРКЕРА, А НЕ З СИМВОЛА РЕПОРТЕРА (#270).
+     * До 01.09.2026 імена падінь виловлювали грепом по `✖` — символу, який малює
+     * `spec`. Вирок від цього не залежав (його дає рядок «ВИКОНАЛОСЬ» + код кроку),
+     * а от перелік мовчки порожнів би при зміні репортера чи версії node — і
+     * порожній список читався б як «нічого не впало». Того ж дня це коштувало
+     * іншому чату одинадцяти «зелених» саботажів.
+     */
     const out = sh("bash", ["-lc",
       `cd ${c.prodBe} && set -a && . ./.env && set +a && `
       + `API_BASE=${API_BASE} npm run test:prod > ${log} 2>&1 || true; `
-      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1`]);
+      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true`]);
+    const named = failureNames(out);
     const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
     /**
      * 🔴 Немає підсумкового рядка — це ПРОВАЛ, а не «нічого не знайшлось». Прогін,
@@ -408,8 +418,19 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     // Недобір і падіння — РІЗНІ вироки: перший каже «ми не дивились», другий «зламано».
     if (doneN !== needN) return { id: "accept", ok: false,
       detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
-    if (fails !== "0") return { id: "accept", ok: false,
-      detail: `🔴 падінь ${fails} при ${doneN} із ${needN}. Лог: ${log}` };
+    if (fails !== "0") {
+      /**
+       * 🔴 ЧИСЛО Й ПЕРЕЛІК МУСЯТЬ ЗІЙТИСЬ. Розбіжність означає, що імена читаються не
+       * звідти — саме той стан, коли список порожній, а падіння є. Тоді кажемо про це
+       * прямо, а не мовчки друкуємо коротший перелік.
+       */
+      const mismatch = named.length !== Number(fails)
+        ? ` ⚠️ перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт`
+        : "";
+      return { id: "accept", ok: false,
+        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}`
+          + (named.length ? `\n${named.map((n) => `   ﹣ ${n}`).join("\n")}` : "") };
+    }
     return { id: "accept", ok: true, detail: `${doneN} із ${needN}, падінь 0` };
   },
   lockRelease: (c) => {

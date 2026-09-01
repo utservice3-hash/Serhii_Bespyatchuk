@@ -66,14 +66,14 @@ export const CATALOG: DepartmentDef[] = [
     metrics: [
       { key: "revenue_won", label: "Успішно реалізовано, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 3, csvIndexWeek: 2, order: 1 },
       { key: "payment_received", label: "Оплата отримана (знімок), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 5, csvIndexWeek: 3, order: 2 },
-      { key: "invoiced_amount", label: "Очікувані оплати (рахунки), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 7, csvIndexWeek: 4, order: 3 },
+      { key: "invoiced_amount", label: "Очікувані оплати (рахунки, знімок), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 7, csvIndexWeek: 4, order: 3 , note: "ЗНІМОК, не період: рахується без фільтра дати (поточний стан deals) і кладеться в бакет ПОТОЧНОГО місяця й тижня. Рядок «липень» для цієї колонки — не липень, а стан бази в останню годину липня"},
       { key: "avg_check", label: "Середній чек, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 9, csvIndexWeek: 5, order: 4, note: "Один якір (Правило №1): успішна виручка ÷ машини; уточнено 13.07 (ПРОМТ 0.9)" },
       { key: "calls", label: "Кількість дзвінків", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 11, csvIndexWeek: 6, order: 5, note: "Ringostat live: employee_fio→тімлід, результативні (billsec>0)" },
-      { key: "managers_count", label: "К-ть менеджерів з продажів", unit: "count", source: "auto", aggregation: "last", csvIndexMonth: 13, csvIndexWeek: 7, order: 6 },
+      { key: "managers_count", label: "К-ть менеджерів (знімок)", unit: "count", source: "auto", aggregation: "last", csvIndexMonth: 13, csvIndexWeek: 7, order: 6 , note: "ЗНІМОК, не період: COUNT активних менеджерів команди СЬОГОДНІ, покладений у поточний бакет"},
       { key: "machines_success", label: "Кількість успішних угод (авто)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 14, csvIndexWeek: 8, order: 7 },
       { key: "cash_deals_amount", label: "Успішні угоди готівкою (приход), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 15, csvIndexWeek: 9, order: 8 },
-      { key: "machines_dispatched", label: "Кількість поставлених машин", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 16, csvIndexWeek: 10, order: 9 },
-      { key: "avg_check_income", label: "Сер. чек на поставлену, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 17, csvIndexWeek: 11, order: 10 },
+      { key: "machines_dispatched", label: "Поставлені машини (зараз = успішні — означення не реалізовано)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 16, csvIndexWeek: 10, order: 9 , note: "🔴 ЗЛАМАНО. Означення власника (01.09.2026): «відправлені машини — це угоди, створені в цьому місяці, які поїхали і по яких ще НЕ зайшла оплата; вони можуть лишатись у воронці як неуспішні». Колонка ж рахує тих, хто ПЕРЕЙШОВ В УСПІХ, тобто у кого оплата ЗАЙШЛА, — перетин двох множин НУЛЬ за побудовою, це не завищення, а інша множина. Заміряно 01.09.2026: серпень 955 замість 213 (unload_at) / 310 (load_at); липень 1 004 замість 79 / 150. Правильне означення чекає на рішення власника: спецознаки «поїхала» в CRM немає — стадійні події покривають лише 35% доведено-поїхавших, а з двох 100%-их дат load_at ставиться наперед (завищує), unload_at після акта (занижує ~10%)"},
+      { key: "avg_check_income", label: "Сер. чек на поставлену (= сер. чек), грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 17, csvIndexWeek: 11, order: 10 , note: "= «Середній чек»: обидві колонки рахують revenue_won / machines_dispatched. Тотожність — НАСЛІДОК дефекту machines_dispatched (він зараз дорівнює machines_success), а не задум. Щойно «поставлені» почнуть рахувати обіцяне, ця колонка ділитиме виручку ОПЛАЧЕНИХ на кількість НЕоплачених і стане беззмістовною — власне означення для неї потрібне ОДНОЧАСНО з виправленням"},
     ],
   },
   {
@@ -104,7 +104,21 @@ export const CATALOG: DepartmentDef[] = [
     //  12 нові з прорахунків,13 дохід нових Л,14 конв Л,15 бюджет лідогенів,16 сер.чек прорах,
     //  17 собів.ліда прорах,18 к-ть лідогенів,19 дохід усіх,20 сума продажів
     metrics: [
-      { key: "ad_leads", label: "Ліди з реклами (з листа)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 1, csvIndexWeek: 1, order: 1 },
+      { key: "ad_leads", label: "Ліди з реклами (лист, не оновлюється)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 1, csvIndexWeek: 1, order: 1,
+        // 🔴 ПІДПИС КАЖЕ «НЕ ОНОВЛЮЄТЬСЯ» СВІДОМО. Колонка живиться разовим імпортом
+        // Google-листа; останні дані — 06.2026 (заміряно 01.09.2026). Показувати старе
+        // число без цього слова означає видавати заморожене за поточне — та сама брехня
+        // на екрані, що «знімок, підписаний періодом».
+        //
+        // Джерелом істини стане РЕКЛАМНИЙ КАБІНЕТ через API (рішення власника 01.09.2026,
+        // доступ очікується). Наше CRM-означення розходиться з листом на ~30% і свідомо
+        // НЕ вмикається — це вибір означення, а не технічна прогалина.
+        //
+        // 🔗 Підпис і стан звʼязані гейтом `#26f`: доки ключа немає в `DEPT_AUTO_ENABLED`,
+        // мітка мусить стояти; щойно джерело зʼявиться і ключ увімкнуть — мітку треба
+        // зняти, і гейт це вимагатиме. Дата в мітці не стоїть саме тому, що вона старіла б
+        // мовчки; «не оновлюється» перевіряється станом, а не памʼяттю.
+        note: "Джерело — разовий імпорт Google-листа, останні дані 06.2026. Живим джерелом стане рекламний кабінет через API; наше CRM-означення розходиться з листом на ~30% і свідомо не використовується" },
       { key: "non_target_leads", label: "Кількість не цільових лідів", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 2, csvIndexWeek: 2, order: 2 },
       { key: "ad_paid_clients", label: "Оплачені авто (реклама)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 3, csvIndexWeek: 3, order: 3 },
       { key: "ad_new_revenue", label: "Дохід з нових клієнтів (Р), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 4, csvIndexWeek: 4, order: 4 },
