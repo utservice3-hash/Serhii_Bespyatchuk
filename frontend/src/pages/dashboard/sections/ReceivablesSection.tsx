@@ -120,6 +120,7 @@ const inputStyle: React.CSSProperties = {
  * «отримати оплату» (щоденний джоб).
  */
 export function ReceivablesSection({
+  onEditorsChange,
   auth,
   teams,
   receivablesTeamId,
@@ -166,6 +167,12 @@ export function ReceivablesSection({
   canonicalOf: Record<string, number>;
   canEditReceivables: boolean;
   patchReceivableNote: (clientKey: string, patch: { comment?: string; dueDate?: string | null }) => void;
+  /**
+   * 🛑 Скільки редакторів відкрито ЗАРАЗ — щоб фоновий рефетч не смикав екран
+   * під руками. Рішення приймає `refreshGate`, секція лише називає свій стан:
+   * контейнер не має права здогадуватись про поповери, а секція — про поллер.
+   */
+  onEditorsChange?: (n: number) => void;
   onRefresh?: () => void;
 }) {
   const [syncing, setSyncing] = useState(false);
@@ -386,6 +393,22 @@ export function ReceivablesSection({
                   й перевізник. Ті самі три факти, що були трьома колонками:
                   розкриття лягає в ТУ САМУ сітку, що й рядок клієнта, інакше
                   колонки розʼїхались би (тримає `#199h`). */}
+              <td className="recv-num" style={{ ...cell, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}
+                  title={formatAmountFull(x.amount)}>
+                {formatAmount(x.amount)}
+                {/* Вік рахунка — другим рядком під сумою, дзеркально до рядка клієнта. */}
+                <div style={{ marginTop: 3, fontWeight: 400, fontSize: "var(--fs-xs)",
+                       fontVariantNumeric: "tabular-nums",
+                       ...(age != null && age > 30 ? { color: "#dc2626", fontWeight: 600 } : { color: "var(--text-muted)" }) }}>
+                  {age ?? "—"} дн.
+                </div>
+              </td>
+              {/* Заробили → заробили на цій угоді */}
+              <td style={{ ...cell, minWidth: 180 }}>
+                <CommentField value={x.comment} editable={canEditReceivables}
+                  onSave={(next) => patchInvoice(clientKey, no, { comment: next })} />
+              </td>
+              {/* Дія */}
               <td style={{ ...cell, color: "var(--text-muted)" }}>
                 {x.managerName ?? <i>без менеджера</i>}
                 <div style={{ marginTop: 3, fontSize: "var(--fs-xs)", display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -404,17 +427,13 @@ export function ReceivablesSection({
                 </div>
               </td>
               {/* Сума боргу → сума рахунку */}
-              <td className="recv-num" style={{ ...cell, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}
-                  title={formatAmountFull(x.amount)}>
-                {formatAmount(x.amount)}
-                {/* Вік рахунка — другим рядком під сумою, дзеркально до рядка клієнта. */}
-                <div style={{ marginTop: 3, fontWeight: 400, fontSize: "var(--fs-xs)",
-                       fontVariantNumeric: "tabular-nums",
-                       ...(age != null && age > 30 ? { color: "#dc2626", fontWeight: 600 } : { color: "var(--text-muted)" }) }}>
-                  {age ?? "—"} дн.
-                </div>
+              <td style={{ ...cell, textAlign: "center" }}>
+                <input type="date" value={x.dueDate ?? ""} disabled={!canEditReceivables}
+                  aria-label={`Дедлайн оплати рахунка ${no}`}
+                  onChange={(e) => patchInvoice(clientKey, no, { dueDate: e.target.value || null })}
+                  style={{ ...inputStyle, ...(overdue ? { borderColor: "#dc2626" } : {}) }} />
               </td>
-              {/* Заробили → заробили на цій угоді */}
+              {/* Домовленість → коментар до рахунка */}
               <td className="recv-num" style={{ ...cell, textAlign: "right", whiteSpace: "nowrap",
                            fontWeight: ec.kind === "value" ? 600 : 400,
                            color: ec.kind === "value" ? undefined : "var(--text-muted)" }}>
@@ -425,18 +444,6 @@ export function ReceivablesSection({
               {/* Ліміти → дедлайн оплати ПО РАХУНКУ. Клієнтський ліміт сюди НЕ
                   підставляється: він задається поклієнтно, і повторення одного
                   числа в сорока рядках читалось би як факт про кожен рахунок. */}
-              <td style={{ ...cell, textAlign: "center" }}>
-                <input type="date" value={x.dueDate ?? ""} disabled={!canEditReceivables}
-                  aria-label={`Дедлайн оплати рахунка ${no}`}
-                  onChange={(e) => patchInvoice(clientKey, no, { dueDate: e.target.value || null })}
-                  style={{ ...inputStyle, ...(overdue ? { borderColor: "#dc2626" } : {}) }} />
-              </td>
-              {/* Домовленість → коментар до рахунка */}
-              <td style={{ ...cell, minWidth: 180 }}>
-                <CommentField value={x.comment} editable={canEditReceivables}
-                  onSave={(next) => patchInvoice(clientKey, no, { comment: next })} />
-              </td>
-              {/* Дія */}
               <td className="recv-act" style={{ ...cell, textAlign: "right", position: "relative" }}>
                 {canWriteOff && no !== "" && (
                   <WriteoffButton onClick={() => setWriteoffFor(
@@ -516,6 +523,17 @@ export function ReceivablesSection({
   const [mergeOpen, setMergeOpen] = useState(false);
   // 🔓 Яку злиту групу зараз розʼєднують (ключ канонічного) — null поки жодну.
   const [unmergeFor, setUnmergeFor] = useState<{ key: string; name: string } | null>(null);
+
+  /**
+   * 🔢 РАХУЄМО ВІДКРИТІ РЕДАКТОРИ Й ВІДДАЄМО ЧИСЛО НАГОРУ.
+   * Перелік ПОІМЕННИЙ, без catch-all: новий поповер, не дописаний сюди, не
+   * захистить себе мовчки — і це видно на першому ж саботажі, а не через місяць.
+   */
+  useEffect(() => {
+    const open = [ownerFor, limitFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor]
+      .filter((x) => x != null).length;
+    onEditorsChange?.(open);
+  }, [ownerFor, limitFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor, onEditorsChange]);
   const [mgrOptions, setMgrOptions] = useState<ManagerOption[]>([]);
   useEffect(() => {
     // Список тягнемо ОДИН раз і лише тим, хто має право призначати: інакше це
@@ -603,6 +621,16 @@ export function ReceivablesSection({
             overdueSum={overdueSum}
           />
 
+          {/* 📐 `recv-screen` — ОКРЕМА обгортка, а не другий клас на `chart-card`.
+              Заміряно: 32+32 (main-content) і 20+20 (chart-card) з'їдали 106 px
+              від 1440 — майже колонка «Дії».
+              🔴 Чому саме обгортка: `#199bq` вимагає, щоб таблиця лежала в
+              `.chart-card` — це те, що тримає ОДНАКОВУ ширину активної та
+              архівної вкладок. Дописати клас поруч означало б зламати гейт
+              заради відступу; винести назовні — лишити обидва твердження
+              істинними. Правило застосовується до ОБОХ вкладок, тож ширини й
+              далі збігаються. */}
+          <div className="recv-screen">
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ marginBottom: 4 }}>Боржники ({all.length})</h2>
             <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: "0 0 10px" }}>
@@ -639,11 +667,6 @@ export function ReceivablesSection({
                       <Hint title="Назва клієнта, а під нею — розклад боргу по юрособах"
                         body="Розклад показується ЛИШЕ у обʼєднаних клієнтів (заміряно 01.09.2026: 2 рядки з 64). Сума розкладу дорівнює сумі рядка; якщо частину боргу не рознесено по рахунках, залишок називається числом, а не ховається." />
                     </th>
-                    <th style={{ textAlign: "left", width: 190 }}>
-                      Відповідальний
-                      <Hint title="Мажоритар за сумою боргу · юрособа · перевізник"
-                        body="Менеджер, на якого припадає найбільша частина рахунків цього клієнта; олівець дозволяє призначити вручну — з обовʼязковою приміткою. Другим рядком: наша компанія, на яку виставлені рахунки, і чи розрахувались ми з перевізником. «н/д» означає «не знаємо», а НЕ «не оплачено»." />
-                    </th>
                     <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 140 }}
                         aria-sort={sort.key === "days" ? ariaSort(sort, "days") : ariaSort(sort, "amount")}>
                       <button type="button" className="recv-sort"
@@ -664,20 +687,25 @@ export function ReceivablesSection({
                       <Hint title="Скільки цей клієнт винен зараз і скільки днів чекає"
                         body="Залишок за неоплаченими рахунками з 1С; списані в архів сюди не входять. Другим рядком — вік найстарішого неоплаченого рахунка. Червоне — вже понад узгоджений ліміт відстрочки. «—» означає «не знаємо» і при сортуванні йде В КІНЕЦЬ в обидва боки: це не нуль днів." />
                     </th>
-                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 120 }}>
-                      Заробили
-                      <Hint title="Наш заробіток по угодах цього клієнта"
-                        body="Береться з поля «Бюджет» в угоді CRM — це не борг і не виручка. Відсоток — від суми рахунків, тобто від ПОВНОЇ суми угод, а не від залишку боргу: борг падає з кожною оплатою, і відношення до нього вибухає (заміряно максимум 6 667%)." />
+                    <th style={{ textAlign: "left", width: 300 }}>
+                      Домовленість
+                      <Hint title="Дата й суть домовленості з клієнтом"
+                        body="Показано лише запис ПОТОЧНОГО тижня (від понеділка 00:00 за Києвом), щоб торішня обіцянка не читалась як сьогоднішня. Коментар видно до двох рядків без наведення. Натисніть, щоб змінити; нічого не видаляється — попередні записи в «історії»." />
+                    </th>
+                    <th style={{ textAlign: "left", width: 190 }}>
+                      Відповідальний
+                      <Hint title="Мажоритар за сумою боргу · юрособа · перевізник"
+                        body="Менеджер, на якого припадає найбільша частина рахунків цього клієнта; олівець дозволяє призначити вручну — з обовʼязковою приміткою. Другим рядком: наша компанія, на яку виставлені рахунки, і чи розрахувались ми з перевізником. «н/д» означає «не знаємо», а НЕ «не оплачено»." />
                     </th>
                     <th style={{ textAlign: "left", width: 165 }}>
                       Ліміти
                       <Hint title="Два НЕЗАЛЕЖНІ ліміти: відстрочка в днях і стеля боргу"
                         body="«Не узгоджено» означає, що рахунок виставили, а умову не погодили — це НЕ те саме, що «розглянули і не дали». Перевищення нічого не блокує: воно просто видно. Клієнт може порушити один ліміт, обидва або жоден." />
                     </th>
-                    <th style={{ textAlign: "left", width: 300 }}>
-                      Домовленість
-                      <Hint title="Дата й суть домовленості з клієнтом"
-                        body="Показано лише запис ПОТОЧНОГО тижня (від понеділка 00:00 за Києвом), щоб торішня обіцянка не читалась як сьогоднішня. Коментар видно до двох рядків без наведення. Натисніть, щоб змінити; нічого не видаляється — попередні записи в «історії»." />
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 120 }}>
+                      Заробили
+                      <Hint title="Наш заробіток по угодах цього клієнта"
+                        body="Береться з поля «Бюджет» в угоді CRM — це не борг і не виручка. Відсоток — від суми рахунків, тобто від ПОВНОЇ суми угод, а не від залишку боргу: борг падає з кожною оплатою, і відношення до нього вибухає (заміряно максимум 6 667%)." />
                     </th>
                     <th className="recv-act" style={{ width: 130 }}>
                       Дії
@@ -800,59 +828,6 @@ export function ReceivablesSection({
                               при цільових 48 — тобто найвищим був не «Клієнт» і не
                               «Домовленість», а саме цей стовпець. Той самий засіб,
                               що для лімітів: значення ліворуч, кнопка праворуч. */}
-                          <td style={{ textAlign: "left", verticalAlign: "middle", fontSize: "var(--fs-sm)", position: "relative" }}>
-                            <div className="recv-ownercell">
-                            <OwnerCell c={c} />
-                            {/* 🔴 ГІЛКА ДЛЯ ГОТІВКИ ОБОВʼЯЗКОВА (#163). `PUT /receivables/owner`
-                                віддає 404 на готівковому рядку — його CRM перебудовує щосинку,
-                                тож override відкотився б сам. Кнопка, що гарантовано впаде,
-                                гірша за відсутню; людина має дізнатись ПРИЧИНУ, а не загадку.
-                                Я загубив цю гілку в переверстці — упіймав `#163`, не око. */}
-                            {canSetOwner && (c.ownerSource === "cash-invoice" ? (
-                              <span title="Готівковий рядок CRM перебудовує щосинку — ручне призначення відкотилось би саме"
-                                style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", marginLeft: 6 }}>
-                                ✏️ змінюється в CRM, не тут
-                              </span>
-                            ) : (
-                              <button onClick={() => setOwnerFor(ownerFor === c.clientKey ? null : c.clientKey)}
-                                title="Змінити відповідального за борг" aria-label="Змінити відповідального за борг"
-                                className="recv-ico">✏️</button>
-                            ))}
-                            </div>
-                            {/* 🗜 ЮРОСОБА Й ПЕРЕВІЗНИК — ДРУГИМ РЯДКОМ ТУТ, А НЕ
-                                ДВОМА КОЛОНКАМИ (макет власника 01.09.2026).
-                                🔴 Зникають КОЛОНКИ, а не дані: обидва значення
-                                лишаються на екрані з тими самими підказками. Ширина,
-                                яку вони тримали (68 + 106 px), іде «Клієнту» й
-                                «Домовленості» — двом полям зі ЗМІННОЮ довжиною тексту.
-                                Заміряно, навіщо: коментар показував медіану 9 символів
-                                із 30, а у двох рядках був задавлений до НУЛЯ. */}
-                            <div className="recv-ownermeta" style={{ marginTop: 4, fontSize: "var(--fs-xs)",
-                                   color: "var(--text-muted)", display: "flex", gap: 10, flexWrap: "wrap" }}>
-                              {ent ? (
-                                <Tip title="Юрособи цього клієнта"
-                                  body={ent.parts > 1 ? ent.full : "усі рахунки виставлені на цю нашу компанію"}>
-                                  {ent.head} {ent.n}
-                                </Tip>
-                              ) : <span>юрособа —</span>}
-                              {car ? (
-                                <Tip title="Перевізники по цих угодах"
-                                  body={`${car.full}. «н/д» означає «не знаємо» — у CRM не заповнена форма оплати, а не те, що перевізник не оплачений.`}>
-                                  {car.head} · <span className="recv-num">{car.n}</span>
-                                </Tip>
-                              ) : <span>перевізник —</span>}
-                            </div>
-                            {ownerFor === c.clientKey && (
-                              <OwnerEditor client={c} managers={mgrOptions}
-                                onClose={() => setOwnerFor(null)}
-                                onDone={() => { setOwnerFor(null); onRefresh?.(); }} />
-                            )}
-                          </td>
-
-                          {/* 💰 СУМА БОРГУ + СТАН ЛІМІТУ ПО СУМІ. Кнопка запиту стоїть
-                              САМЕ ТУТ (рішення власника 26.08.2026): ліміт задається
-                              поклієнтно, отже й запит поклієнтний. У плитці «Загальний
-                              борг» кнопки немає — там сума по всьому екрану. */}
                           <td className="recv-num" style={{ textAlign: "right", fontWeight: 700, verticalAlign: "middle",
                                        whiteSpace: "nowrap", position: "relative" }}
                               title={formatAmountFull(c.amount)}>
@@ -897,85 +872,6 @@ export function ReceivablesSection({
                           {/* 💰 ЗАРОБІТОК І МАРЖА — ОДНА КОЛОНКА. Сума й відсоток
                               читаються разом; двома стовпцями вони змушували
                               стрибати очима туди-сюди по одному твердженню. */}
-                          <td className="recv-num" style={{ textAlign: "right", verticalAlign: "middle", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}>
-                            <Tip body={marginHint(c.margin)}>
-                              {c.margin?.earned == null
-                                ? <span style={{ color: "var(--text-muted)" }}>—</span>
-                                : <>
-                                    {formatAmount(c.margin.earned)}
-                                    <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>{marginPctText(c.margin)}</span>
-                                  </>}
-                            </Tip>
-                          </td>
-
-                          {/* 💰 ДВА ЛІМІТИ — ОДНА КЛІТИНКА НА ДВА РЯДКИ (макет 01.09.2026).
-                              Вони й далі НЕЗАЛЕЖНІ (клієнт може порушити один, обидва
-                              або жоден) і кожен зберігає свої ТРИ стани — зникла лише
-                              друга колонка, а не другий ліміт.
-                              🔴 Редактор ОДИН на обидва: рядок у БД один на клієнта,
-                              і два екземпляри `LimitEditor` розійшлися б станом.
-                              📐 Олівець притиснутий до правого краю (`.recv-limitcell`),
-                              бо інлайново він їхав за текстом: заміряно `1240·1240·1240·1216`. */}
-                          <td style={{ textAlign: "left", verticalAlign: "middle", position: "relative",
-                                       fontSize: "var(--fs-xs)" }}>
-                            <div className="recv-limitcell">
-                              <span className="recv-limitval" style={{ display: "flex", gap: 6 }}>
-                                <span style={{ color: "var(--text-muted)", minWidth: 34 }}>дні</span>
-                                <span style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-2, inherit)" : "var(--warn)" }}>
-                                  <Tip body={limitHint(c.limitDays)}>{limitLabel(c.limitDays)}</Tip>
-                                </span>
-                              </span>
-                              {canSetLimit && (
-                                <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
-                                  title="Змінити узгоджену відстрочку" aria-label="Змінити узгоджену відстрочку"
-                                  className="recv-ico">✏️</button>
-                              )}
-                            </div>
-                            <div className="recv-limitcell" style={{ marginTop: 3 }}>
-                              <span className="recv-limitval" style={{ display: "flex", gap: 6 }}>
-                                <span style={{ color: "var(--text-muted)", minWidth: 34 }}>сума</span>
-                                <span className="recv-num"
-                                  style={{ color: isOverAmount(c) ? "#dc2626"
-                                                : amountLimitState(c.limitAmount) === "agreed" ? "var(--text-2, inherit)" : "var(--warn)" }}>
-                                  <Tip body={amountLimitHint(c.limitAmount)}>
-                                    {amountLimitLabel(c.limitAmount)}
-                                    {amountLimitState(c.limitAmount) === "agreed" && (
-                                      <span style={{ marginLeft: 4, color: isOverAmount(c) ? "#dc2626" : "var(--text-muted)" }}>
-                                        {isOverAmount(c) ? "переліміт" : "у межах"}
-                                      </span>
-                                    )}
-                                  </Tip>
-                                </span>
-                              </span>
-                              {canSetLimit && (
-                                <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
-                                  title="Змінити ліміт суми" aria-label="Змінити ліміт суми"
-                                  className="recv-ico">✏️</button>
-                              )}
-                            </div>
-                            {limitFor === c.clientKey && (
-                              <LimitEditor client={c}
-                                onClose={() => setLimitFor(null)}
-                                onDone={() => { setLimitFor(null); onRefresh?.(); }} />
-                            )}
-                          </td>
-
-                          {/* 🗓 ДОМОВЛЕНІСТЬ — ТРИ ЯРУСИ, А НЕ ОДИН ФЛЕКС-РЯДОК.
-                              📐 Заміряно 01.09.2026 на живому проді, чому це змінено:
-                              з 39 коментарів на екрані ОБРІЗАНО 39, медіана видимого —
-                              9 символів із 30 («на цей ти…»), а на ДВОХ рядках підпис
-                              «ще N» задавив коментар до НУЛЯ (кнопка домовленості
-                              стиснулась із 166 px до 8 px) і виштовхнув «історію» на
-                              111 px ЗА праву межу таблиці.
-                              🔴 Причина конструктивна: підпис ЗМІННОЇ довжини стояв у
-                              флекс-рядку колонки ФІКСОВАНОЇ ширини поруч із трьома
-                              контролами. Тому:
-                                ① дата — власний рядок;
-                                ② коментар — до двох рядків на ПОВНУ ширину колонки,
-                                   далі багатокрапка (читається без наведення й кліку);
-                                ③ «ще N» — власний рядок під коментарем, з тонкою межею.
-                              «Історія» переїхала в окрему колонку дій: дія над грошима
-                              не може опинятись за межею таблиці. */}
                           <td style={{ textAlign: "left", verticalAlign: "middle", position: "relative" }}>
                             <div className="recv-agree" style={{ display: "block" }}>
                               {/* 🔴 УСЯ ДІЛЯНКА «ДАТА + КОМЕНТАР» — ОДНА КНОПКА.
@@ -1048,6 +944,138 @@ export function ReceivablesSection({
                               розсувала б сусідні колонки — таблиця «дихала» б під
                               курсором. Видимістю керують правила `.recv-wo`, які
                               стереже `#199ba`; тут тільки місце. */}
+                          <td style={{ textAlign: "left", verticalAlign: "middle", fontSize: "var(--fs-sm)", position: "relative" }}>
+                            <div className="recv-ownercell">
+                            <OwnerCell c={c} />
+                            {/* 🔴 ГІЛКА ДЛЯ ГОТІВКИ ОБОВʼЯЗКОВА (#163). `PUT /receivables/owner`
+                                віддає 404 на готівковому рядку — його CRM перебудовує щосинку,
+                                тож override відкотився б сам. Кнопка, що гарантовано впаде,
+                                гірша за відсутню; людина має дізнатись ПРИЧИНУ, а не загадку.
+                                Я загубив цю гілку в переверстці — упіймав `#163`, не око. */}
+                            {canSetOwner && (c.ownerSource === "cash-invoice" ? (
+                              <span title="Готівковий рядок CRM перебудовує щосинку — ручне призначення відкотилось би саме"
+                                style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", marginLeft: 6 }}>
+                                ✏️ змінюється в CRM, не тут
+                              </span>
+                            ) : (
+                              <button onClick={() => setOwnerFor(ownerFor === c.clientKey ? null : c.clientKey)}
+                                title="Змінити відповідального за борг" aria-label="Змінити відповідального за борг"
+                                className="recv-ico">✏️</button>
+                            ))}
+                            </div>
+                            {/* 🗜 ЮРОСОБА Й ПЕРЕВІЗНИК — ДРУГИМ РЯДКОМ ТУТ, А НЕ
+                                ДВОМА КОЛОНКАМИ (макет власника 01.09.2026).
+                                🔴 Зникають КОЛОНКИ, а не дані: обидва значення
+                                лишаються на екрані з тими самими підказками. Ширина,
+                                яку вони тримали (68 + 106 px), іде «Клієнту» й
+                                «Домовленості» — двом полям зі ЗМІННОЮ довжиною тексту.
+                                Заміряно, навіщо: коментар показував медіану 9 символів
+                                із 30, а у двох рядках був задавлений до НУЛЯ. */}
+                            <div className="recv-ownermeta" style={{ marginTop: 4, fontSize: "var(--fs-xs)",
+                                   color: "var(--text-muted)", display: "flex", gap: 10, flexWrap: "wrap" }}>
+                              {ent ? (
+                                <Tip title="Юрособи цього клієнта"
+                                  body={ent.parts > 1 ? ent.full : "усі рахунки виставлені на цю нашу компанію"}>
+                                  {ent.head} {ent.n}
+                                </Tip>
+                              ) : <span>юрособа —</span>}
+                              {car ? (
+                                <Tip title="Перевізники по цих угодах"
+                                  body={`${car.full}. «н/д» означає «не знаємо» — у CRM не заповнена форма оплати, а не те, що перевізник не оплачений.`}>
+                                  {car.head} · <span className="recv-num">{car.n}</span>
+                                </Tip>
+                              ) : <span>перевізник —</span>}
+                            </div>
+                            {ownerFor === c.clientKey && (
+                              <OwnerEditor client={c} managers={mgrOptions}
+                                onClose={() => setOwnerFor(null)}
+                                onDone={() => { setOwnerFor(null); onRefresh?.(); }} />
+                            )}
+                          </td>
+
+                          {/* 💰 СУМА БОРГУ + СТАН ЛІМІТУ ПО СУМІ. Кнопка запиту стоїть
+                              САМЕ ТУТ (рішення власника 26.08.2026): ліміт задається
+                              поклієнтно, отже й запит поклієнтний. У плитці «Загальний
+                              борг» кнопки немає — там сума по всьому екрану. */}
+                          <td style={{ textAlign: "left", verticalAlign: "middle", position: "relative",
+                                       fontSize: "var(--fs-xs)" }}>
+                            <div className="recv-limitcell">
+                              <span className="recv-limitval" style={{ display: "flex", gap: 6 }}>
+                                <span style={{ color: "var(--text-muted)", minWidth: 34 }}>дні</span>
+                                <span style={{ color: limitState(c.limitDays) === "agreed" ? "var(--text-2, inherit)" : "var(--warn)" }}>
+                                  <Tip body={limitHint(c.limitDays)}>{limitLabel(c.limitDays)}</Tip>
+                                </span>
+                              </span>
+                              {canSetLimit && (
+                                <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
+                                  title="Змінити узгоджену відстрочку" aria-label="Змінити узгоджену відстрочку"
+                                  className="recv-ico">✏️</button>
+                              )}
+                            </div>
+                            <div className="recv-limitcell" style={{ marginTop: 3 }}>
+                              <span className="recv-limitval" style={{ display: "flex", gap: 6 }}>
+                                <span style={{ color: "var(--text-muted)", minWidth: 34 }}>сума</span>
+                                <span className="recv-num"
+                                  style={{ color: isOverAmount(c) ? "#dc2626"
+                                                : amountLimitState(c.limitAmount) === "agreed" ? "var(--text-2, inherit)" : "var(--warn)" }}>
+                                  <Tip body={amountLimitHint(c.limitAmount)}>
+                                    {amountLimitLabel(c.limitAmount)}
+                                    {amountLimitState(c.limitAmount) === "agreed" && (
+                                      <span style={{ marginLeft: 4, color: isOverAmount(c) ? "#dc2626" : "var(--text-muted)" }}>
+                                        {isOverAmount(c) ? "переліміт" : "у межах"}
+                                      </span>
+                                    )}
+                                  </Tip>
+                                </span>
+                              </span>
+                              {canSetLimit && (
+                                <button onClick={() => setLimitFor(limitFor === c.clientKey ? null : c.clientKey)}
+                                  title="Змінити ліміт суми" aria-label="Змінити ліміт суми"
+                                  className="recv-ico">✏️</button>
+                              )}
+                            </div>
+                            {limitFor === c.clientKey && (
+                              <LimitEditor client={c}
+                                onClose={() => setLimitFor(null)}
+                                onDone={() => { setLimitFor(null); onRefresh?.(); }} />
+                            )}
+                          </td>
+
+                          {/* 🗓 ДОМОВЛЕНІСТЬ — ТРИ ЯРУСИ, А НЕ ОДИН ФЛЕКС-РЯДОК.
+                              📐 Заміряно 01.09.2026 на живому проді, чому це змінено:
+                              з 39 коментарів на екрані ОБРІЗАНО 39, медіана видимого —
+                              9 символів із 30 («на цей ти…»), а на ДВОХ рядках підпис
+                              «ще N» задавив коментар до НУЛЯ (кнопка домовленості
+                              стиснулась із 166 px до 8 px) і виштовхнув «історію» на
+                              111 px ЗА праву межу таблиці.
+                              🔴 Причина конструктивна: підпис ЗМІННОЇ довжини стояв у
+                              флекс-рядку колонки ФІКСОВАНОЇ ширини поруч із трьома
+                              контролами. Тому:
+                                ① дата — власний рядок;
+                                ② коментар — до двох рядків на ПОВНУ ширину колонки,
+                                   далі багатокрапка (читається без наведення й кліку);
+                                ③ «ще N» — власний рядок під коментарем, з тонкою межею.
+                              «Історія» переїхала в окрему колонку дій: дія над грошима
+                              не може опинятись за межею таблиці. */}
+                          <td className="recv-num" style={{ textAlign: "right", verticalAlign: "middle", whiteSpace: "nowrap", fontSize: "var(--fs-sm)" }}>
+                            <Tip body={marginHint(c.margin)}>
+                              {c.margin?.earned == null
+                                ? <span style={{ color: "var(--text-muted)" }}>—</span>
+                                : <>
+                                    {formatAmount(c.margin.earned)}
+                                    <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>{marginPctText(c.margin)}</span>
+                                  </>}
+                            </Tip>
+                          </td>
+
+                          {/* 💰 ДВА ЛІМІТИ — ОДНА КЛІТИНКА НА ДВА РЯДКИ (макет 01.09.2026).
+                              Вони й далі НЕЗАЛЕЖНІ (клієнт може порушити один, обидва
+                              або жоден) і кожен зберігає свої ТРИ стани — зникла лише
+                              друга колонка, а не другий ліміт.
+                              🔴 Редактор ОДИН на обидва: рядок у БД один на клієнта,
+                              і два екземпляри `LimitEditor` розійшлися б станом.
+                              📐 Олівець притиснутий до правого краю (`.recv-limitcell`),
+                              бо інлайново він їхав за текстом: заміряно `1240·1240·1240·1216`. */}
                           <td className="recv-act" style={{ textAlign: "left", verticalAlign: "middle", position: "relative", whiteSpace: "nowrap" }}>
                             {/* 📚 «ІСТОРІЯ» ПЕРЕЇХАЛА СЮДИ З «ДОМОВЛЕНОСТІ».
                                 🔴 Причина заміряна, а не естетична: у флекс-рядку
@@ -1124,6 +1152,7 @@ export function ReceivablesSection({
                 Під цими фільтрами боржників немає — але в скоупі їх {all.length}. Зніміть фільтр, щоб побачити всіх.
               </p>
             )}
+          </div>
           </div>
 
           {/* 🔓 Розʼєднання злитої групи — превʼю наслідків ДО дії. Кнопка стоїть

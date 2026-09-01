@@ -1144,3 +1144,58 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
 .recv-kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 @media (max-width: 1500px) { .recv-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 860px)  { .recv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   📌 ДВА ЗАКРІПЛЕНІ КРАЇ + ЧЕСНА ГОРИЗОНТАЛЬНА ПРОКРУТКА (01.09.2026)
+
+   📐 ПРИЧИНА, ЗАМІРЯНА НА ПРОДІ. При вікні 1440 контейнер таблиці має 1114 px
+   (меню 220 + відступи 106), а сума колонок — 1451. Тобто прокрутки було
+   **337 px**, і за краєм екрана опинялись «Домовленість» (240) і «Дії» (105)
+   ЦІЛКОМ: 19+535+139+116+92+206 = 1107 при контейнері 1114.
+   🔴 Саме це, а не кегль, і було скаргою «коментарі малі, нічого не видно» —
+   вони не малі, вони ЗА КРАЄМ. І кнопка «Списати» теж.
+
+   🔴 ЧОМУ НЕ РІЗАЛИ КОЛОНКИ. Два ухвалені важелі (прибрати «Заробили» + згорнути
+   меню) дають 92 + 156 = 248 px при дефіциті 337 — тобто платили б даними й
+   ЧУЖИМ налаштуванням і мети однаково не досягли. Згортання меню при вході й
+   розгортання при виході — ще й рух інтерфейсу, тобто пряме порушення вимоги
+   «поки людина на вкладці, екран не смикається».
+
+   ✅ ЩО ЗРОБЛЕНО НАТОМІСТЬ: порядок колонок за ЧАСТОТОЮ ЧИТАННЯ (Клієнт → Борг →
+   Домовленість спереду; Відповідальний, Ліміти, Заробили — далі), «Клієнт»
+   закріплено ЛІВОРУЧ, «Дії» — ПРАВОРУЧ. Остання колонка при прокрутці за
+   визначенням за краєм, тож вимогу «Дії лишаються правою колонкою І видимі»
+   інакше задовольнити неможливо.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.recv-table th:first-child, .recv-table td:first-child,
+.recv-table th:nth-child(2), .recv-table td:nth-child(2) {
+  position: sticky;
+  z-index: 2;
+  background: var(--surface, #fff);
+}
+.recv-table th:first-child, .recv-table td:first-child { left: 0; }
+.recv-table th:nth-child(2), .recv-table td:nth-child(2) { left: 36px; }
+.recv-table th:last-child, .recv-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: var(--surface, #fff);
+}
+/* 🔴 ТІНЬ — НЕ ПРИКРАСА, А ЄДИНА ОЗНАКА, ЩО ТАМ Є ЩЕ ТЕКСТ. Без неї закріплена
+   колонка виглядає як край таблиці, і людина не здогадається прокрутити. */
+.recv-table th:nth-child(2), .recv-table td:nth-child(2) { box-shadow: 6px 0 6px -6px rgba(0,0,0,.18); }
+.recv-table th:last-child, .recv-table td:last-child { box-shadow: -6px 0 6px -6px rgba(0,0,0,.18); }
+
+/* 📏 МАСШТАБ САМЕ ЦІЄЇ ТАБЛИЦІ (скарга власника «не подобається малий масштаб»).
+   Кегль, інтервал і відступи ростуть ЛИШЕ тут; решта дашборда не чіпається.
+   Числа лишаються моноширинними з табличними цифрами — інакше суми перестають
+   вишиковуватись у стовпчик і їх не можна порівняти очима. */
+.recv-table { font-size: 15.5px; line-height: 1.55; }
+.recv-table tbody > tr.recv-row > td { padding: 8px 10px; }
+.recv-table thead th { padding: 10px 10px; font-size: 12px; }
+.recv-table .recv-cname { font-size: 16px; font-weight: 600; }
+.recv-table .recv-num { font-variant-numeric: tabular-nums; }
+
+/* 📐 ВІДСТУПИ САМЕ НА ЦЬОМУ ЕКРАНІ. Заміряно: `main-content` 32+32 і
+   `chart-card` 20+20 з'їдали 106 px від 1440 — це майже колонка «Дії». */
+.recv-screen .chart-card { padding-left: 8px; padding-right: 8px; }
