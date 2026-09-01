@@ -12,9 +12,8 @@
 
 import { pool } from "../db/pool.js";
 import { getSettings } from "../routes/settings.js";
-// КРОК 9 Фаза 3: `adDealSql` — єдине джерело `core/metrics.ts` (прибрано локальний дубль).
 // КРОК Г #1: нецільові — теж із ядра (nonTargetLeadsByBucket), спільний предикат із /lead-quality.
-import { adDealSql, nonTargetLeadsByBucket, receivablesTotal, conversionCohortByBucket } from "../core/metrics.js";
+import { nonTargetLeadsByBucket, receivablesTotal, conversionCohortByBucket } from "../core/metrics.js";
 
 const FULL_CYCLE = [8921932, 155304];
 
@@ -45,13 +44,23 @@ export async function computeDeptAuto(since: string): Promise<Map<string, number
   };
 
   for (const [ptype, trunc] of [["month", "month"], ["week", "week"]] as const) {
-    // ── marketing.ad_leads (full-cycle adDealSql, за створенням) ──
-    const adLeads = await pool.query<Row>(
-      `SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS v
-         FROM deals d
-        WHERE d.pipeline_id = ANY($1) AND ${adDealSql("$2")} AND d.created_at_kommo IS NOT NULL
-        GROUP BY bucket`, [FULL_CYCLE, adSources]);
-    for (const r of adLeads.rows) set("marketing", ptype, r.bucket, "ad_leads", Number(r.v));
+    // ── marketing.ad_leads — НЕ РАХУЄМО (01.09.2026) ──
+    //
+    // 🔴 ТУТ БУВ ЗАПИТ, ЯКИЙ ЩОГОДИНИ ВИКОНУВАВСЯ І ВИКИДАВСЯ. Він рахував
+    // `ad_leads` по `adDealSql` за створенням — і `set()` мовчки відкидав
+    // результат першим же рядком, бо ключа `marketing|ad_leads` немає в
+    // `DEPT_AUTO_ENABLED`. Двічі на годину (місяць+тиждень) повний прохід по
+    // `deals` з КОРЕЛЬОВАНИМ предикатом `adDealSql` — заради нуля.
+    //
+    // 🔴 ЧОМУ НЕ «ПРОСТО ВВІМКНУТИ». Причина відключення записана поруч, у самому
+    // `DEPT_AUTO_ENABLED`: наше означення розходиться з листом на ~30%. Це не
+    // технічна прогалина, а РІЗНЕ ОЗНАЧЕННЯ — тобто питання до власника, а не наше.
+    // Поки воно не вирішене, колонка чесно підписана «Ліди з реклами (з листа)»
+    // і живиться імпортом; екран не бреше, брехав саме код — він виглядав так,
+    // ніби показник обчислюється.
+    //
+    // Щоб увімкнути: додати "marketing|ad_leads" у `DEPT_AUTO_ENABLED` і
+    // повернути запит (він у git-історії цього файла). Стереже `#26e`.
 
     // ── marketing.non_target_leads (КРОК Г #1: реклама ∩ reject_reason {Дубль|Перевізник},
     //    з ядра — спільний предикат із /lead-quality; стара Кваліфікація-143-усе знято) ──

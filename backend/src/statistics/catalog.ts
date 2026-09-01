@@ -66,14 +66,14 @@ export const CATALOG: DepartmentDef[] = [
     metrics: [
       { key: "revenue_won", label: "Успішно реалізовано, грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 3, csvIndexWeek: 2, order: 1 },
       { key: "payment_received", label: "Оплата отримана (знімок), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 5, csvIndexWeek: 3, order: 2 },
-      { key: "invoiced_amount", label: "Очікувані оплати (рахунки), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 7, csvIndexWeek: 4, order: 3 },
+      { key: "invoiced_amount", label: "Очікувані оплати (рахунки, знімок), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 7, csvIndexWeek: 4, order: 3 , note: "ЗНІМОК, не період: рахується без фільтра дати (поточний стан deals) і кладеться в бакет ПОТОЧНОГО місяця й тижня. Рядок «липень» для цієї колонки — не липень, а стан бази в останню годину липня"},
       { key: "avg_check", label: "Середній чек, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 9, csvIndexWeek: 5, order: 4, note: "Один якір (Правило №1): успішна виручка ÷ машини; уточнено 13.07 (ПРОМТ 0.9)" },
       { key: "calls", label: "Кількість дзвінків", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 11, csvIndexWeek: 6, order: 5, note: "Ringostat live: employee_fio→тімлід, результативні (billsec>0)" },
-      { key: "managers_count", label: "К-ть менеджерів з продажів", unit: "count", source: "auto", aggregation: "last", csvIndexMonth: 13, csvIndexWeek: 7, order: 6 },
+      { key: "managers_count", label: "К-ть менеджерів (знімок)", unit: "count", source: "auto", aggregation: "last", csvIndexMonth: 13, csvIndexWeek: 7, order: 6 , note: "ЗНІМОК, не період: COUNT активних менеджерів команди СЬОГОДНІ, покладений у поточний бакет"},
       { key: "machines_success", label: "Кількість успішних угод (авто)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 14, csvIndexWeek: 8, order: 7 },
       { key: "cash_deals_amount", label: "Успішні угоди готівкою (приход), грн", unit: "uah", source: "auto", aggregation: "sum", csvIndexMonth: 15, csvIndexWeek: 9, order: 8 },
-      { key: "machines_dispatched", label: "Кількість поставлених машин", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 16, csvIndexWeek: 10, order: 9 },
-      { key: "avg_check_income", label: "Сер. чек на поставлену, грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 17, csvIndexWeek: 11, order: 10 },
+      { key: "machines_dispatched", label: "Поставлені машини (= успішні)", unit: "count", source: "auto", aggregation: "sum", csvIndexMonth: 16, csvIndexWeek: 10, order: 9 , note: "= «Кількість успішних угод»: Правило №1 глосарію означує «поставлені» як «перейшли в успіх у періоді», тобто це та сама величина під іншою назвою. Заміряно 01.09.2026: 246 із 246 auto-рядків збігаються. Дві колонки, одне число — прибирати чи лишати вирішує власник"},
+      { key: "avg_check_income", label: "Сер. чек на поставлену (= сер. чек), грн", unit: "uah", source: "derived", aggregation: "avg", formula: "revenue_won / machines_dispatched", csvIndexMonth: 17, csvIndexWeek: 11, order: 10 , note: "= «Середній чек»: обидві колонки рахують revenue_won / machines_dispatched. Тотожність похідна від machines_dispatched = machines_success; щойно вони розійдуться, розійдуться й ці дві"},
     ],
   },
   {

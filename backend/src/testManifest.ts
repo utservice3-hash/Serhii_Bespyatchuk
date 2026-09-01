@@ -95,6 +95,7 @@ export const MANIFEST_FILES: string[] = [
   "core/receivablesBreakdown.test.js",
   "core/receivableNotePick.test.js",
   "routes/clickReality.test.js",
+  "statistics/labelsTellTruth.test.js",
   "core/unmergePreview.test.js",
   "core/clientMerge.test.js",
   "core/paymentMatch.test.js",
@@ -899,6 +900,11 @@ export const MANIFEST_TESTS: string[] = [
   "#247 обʼєднання НЕ рухає суму боргу",
   "#248 у обʼєднанні право стоїть ПЕРЕД скоупом і перед будь-яким походом у БД",
   "#249 реєстр псевдонімів їде тим самим запитом, що synced_at — і лише merge-ролі",
+  // statistics/labelsTellTruth.test.ts
+  "#26a ЗНІМОК НАЗИВАЄ СЕБЕ — і мітка не стоїть на справжньому періоді",
+  "#26c ДВІ КОЛОНКИ З ОДНИМ ЧИСЛОМ ЦЕ НАЗИВАЮТЬ",
+  "#26d ДЗЕРКАЛО: тотожність СПРАВДІ існує — підпис не бреше в інший бік",
+  "#26e AD_LEADS БІЛЬШЕ НЕ РАХУЄТЬСЯ-І-ВИКИДАЄТЬСЯ",
   // core/unmergePreview.test.ts
   "#265 ПРЕВʼЮ ОБІЦЯЄ ТЕ САМЕ, ЩО СТАНЕТЬСЯ",
   "#266 НОТАТКИ НЕ ПЕРЕНОСЯТЬСЯ — і це видно у СТРУКТУРІ, а не в наміреннях",
