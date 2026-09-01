@@ -3782,8 +3782,11 @@ dashboardRouter.post("/receivables/merge", async (req, res) => {
    * Слід відмови по сумі лишається СЛОВАМИ в примітці — з числа він зникає.
    */
   const keys = [canonical, ...aliases];
-  const limRows = await pool.query<{ client_key: string; limit_days: number | null; limit_amount: string | null }>(
-    `SELECT client_key, limit_days, limit_amount FROM client_credit_limits WHERE client_key = ANY($1)`, [keys]);
+  // 📸 Тягнемо НЕ лише значення, а й авторство з датою: знімок мусить дати змогу
+  // сказати «ліміт стояв 10 дн., поставив N, 25.08», а не лише «було 10».
+  const limRows = await pool.query<mergeLimits.RawLimitRow>(
+    `SELECT client_key, limit_days, limit_amount, note, set_by, set_at
+       FROM client_credit_limits WHERE client_key = ANY($1)`, [keys]);
   const limitSides: mergeLimits.MergeLimitRow[] = limRows.rows.map((l) => ({
     clientKey: l.client_key,
     limitDays: l.limit_days == null ? null : Number(l.limit_days),
@@ -3792,6 +3795,19 @@ dashboardRouter.post("/receivables/merge", async (req, res) => {
   const mergedDays = mergeLimits.mergedLimitDays(limitSides);
   const mergedAmount = mergeLimits.mergedLimitAmount(limitSides);
   const today = new Date().toISOString().slice(0, 10);
+
+  /**
+   * 📸 ЗНІМОК ЛІМІТІВ ДО ЗВЕДЕННЯ — у реєстр, ПЕРШ ніж їх перезаписати.
+   *
+   * Заміряно 01.09.2026: `ON CONFLICT DO UPDATE` затирає рядок канонічного, а
+   * таблиці історії лімітів у базі немає, і `min(x, 0) = 0` не лишає з чого
+   * вивести попереднє. Для двох уже злитих груп це втрачено назавжди; знімок
+   * робить так, щоб наступне злиття цієї незворотності не створювало.
+   *
+   * 🔴 Один запис на КОЖНУ сторону, навіть без ліміту (`hadNoRow: true`), щоб
+   * порожній масив означав рівно одне — «знімок не робився». Стереже `#263`.
+   */
+  const limitsBefore = mergeLimits.limitsBeforeSnapshot(keys, limRows.rows, new Date().toISOString());
 
   /**
    * 🔴 УСЕ В ОДНІЙ ТРАНЗАКЦІЇ, ВКЛЮЧНО З РЕЄСТРОМ.
@@ -3809,7 +3825,7 @@ dashboardRouter.post("/receivables/merge", async (req, res) => {
         `INSERT INTO client_key_alias (alias_key, canonical_key, reason, evidence, approved_by)
          VALUES ($1,$2,$3,$4::jsonb,$5)`,
         [alias, canonical, reason.slice(0, 300),
-         JSON.stringify({ source: "receivables", approvedAt: today }), auth.userId]);
+         JSON.stringify({ source: "receivables", approvedAt: today, limitsBefore }), auth.userId]);
     }
     await client.query(RECOMPUTE_RECEIVABLES_SQL);
     await client.query(`DELETE FROM receivables WHERE client_key = ANY($1) AND source = 'sheet'`, [keys]);

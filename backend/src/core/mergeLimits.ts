@@ -133,3 +133,92 @@ export const MERGED_RECEIVABLE_ROW_SQL = `
     FROM receivable_invoices ri
    WHERE ri.client_key = $1
    GROUP BY ri.client_key`;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   📸 ЗНІМОК ЛІМІТІВ ДО ЗЛИТТЯ (01.09.2026, рішення власника)
+
+   🔴 ЧОМУ ЦЕ ЗАВЕДЕНО. Заміряно на проді: зведення лімітів перезаписує рядок
+   канонічного клієнта `ON CONFLICT (client_key) DO UPDATE`, а таблиці історії
+   лімітів у базі НЕМАЄ (87 таблиць; контроль — чотири інші таблиці історії
+   існують, тобто пошуку було що знаходити). Різниця між `set_at` канонічного
+   рядка й моментом злиття — РІВНО 0 секунд у обох живих випадках.
+
+   І попереднє число не виводиться навіть теоретично: `mergedLimitDays` — це
+   мінімум, а серед злитих буває відмова (0), тож `min(x, 0) = 0` при будь-якому
+   `x ≥ 0`. Зведений нуль не несе про канонічного ЖОДНОЇ інформації.
+
+   Наслідок, названий прямо: для двох уже злитих груп ліміт до злиття втрачено
+   НАЗАВЖДИ. Цей знімок не лікує минуле — він робить так, щоб наступне злиття
+   більше не створювало тієї самої незворотності.
+
+   🔴 ОДИН ЗАПИС НА КОЖНУ СТОРОНУ, ЗАВЖДИ — І ЦЕ ГОЛОВНА ВЛАСТИВІСТЬ.
+   Порожній масив мусить означати РІВНО ОДНЕ: «знімок не робився». Тому сторона
+   БЕЗ ліміту теж отримує запис, із `hadNoRow: true` — це ФАКТ («ліміту не було»),
+   а не прогалина («не записали»). Інакше два різні стани злились би в один
+   порожній обʼєкт, і наступний читач не відрізнив би «нічого не було» від
+   «нічого не зберегли» — та сама хвороба, що «порожній результат = pass».
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Сирий рядок `client_credit_limits` — як його віддає БД. */
+export interface RawLimitRow {
+  client_key: string;
+  limit_days: number | string | null;
+  limit_amount: number | string | null;
+  note?: string | null;
+  set_by?: number | null;
+  set_at?: string | Date | null;
+}
+
+export interface LimitBeforeSide {
+  clientKey: string;
+  limitDays: number | null;
+  limitAmount: number | null;
+  note: string | null;
+  setBy: number | null;
+  setAt: string | null;
+  /** `true` — рядка в `client_credit_limits` не було ВЗАГАЛІ. Це факт, не прогалина. */
+  hadNoRow: boolean;
+}
+
+export interface LimitsBefore {
+  /** Коли знімок зроблено (ISO). Дозволяє відрізнити його від `set_at` сторін. */
+  capturedAt: string;
+  /** Рівно один запис на КОЖЕН переданий ключ, у тому самому порядку. */
+  sides: LimitBeforeSide[];
+}
+
+const numOrNull = (v: unknown): number | null =>
+  v == null || v === "" ? null : Number(v);
+
+/**
+ * Знімок лімітів усіх сторін ДО зведення.
+ *
+ * @param keys       усі учасники злиття — канонічний ПЕРШИМ, далі псевдоніми.
+ * @param rows       те, що віддала `client_credit_limits` по цих ключах.
+ * @param capturedAt мить знімка (ISO).
+ */
+export function limitsBeforeSnapshot(
+  keys: readonly string[], rows: readonly RawLimitRow[], capturedAt: string,
+): LimitsBefore {
+  const byKey = new Map(rows.map((r) => [r.client_key, r]));
+  return {
+    capturedAt,
+    sides: keys.map((clientKey) => {
+      const r = byKey.get(clientKey);
+      if (!r) {
+        return { clientKey, limitDays: null, limitAmount: null, note: null,
+                 setBy: null, setAt: null, hadNoRow: true };
+      }
+      return {
+        clientKey,
+        limitDays: numOrNull(r.limit_days),
+        limitAmount: numOrNull(r.limit_amount),
+        note: r.note ?? null,
+        setBy: r.set_by ?? null,
+        setAt: r.set_at == null ? null
+             : (r.set_at instanceof Date ? r.set_at.toISOString() : String(r.set_at)),
+        hadNoRow: false,
+      };
+    }),
+  };
+}
