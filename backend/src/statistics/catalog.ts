@@ -120,6 +120,18 @@ export const CATALOG: DepartmentDef[] = [
       { key: "lg_avg_check", label: "Сер. чек (з прорахунків), грн", unit: "uah", source: "derived", aggregation: "avg", formula: "lg_new_revenue / lg_new_clients", csvIndexMonth: 16, order: 14 },
       { key: "lg_cost_per_lead", label: "Собівартість ліда (прорах.), грн", unit: "uah", source: "derived", aggregation: "avg", formula: "lg_budget / lg_quotes", csvIndexMonth: 17, order: 15 },
       { key: "lg_count", label: "К-ть лідогенераторів", unit: "count", source: "auto", aggregation: "last", csvIndexMonth: 18, order: 16 },
+      // 🎯 ДВІ КОГОРТНІ КОНВЕРСІЇ З CRM (01.09.2026, рішення власника). Стоять ПОРУЧ
+      // із «Конверсія Р/Л», але це ІНШІ метрики, а не полагоджені старі:
+      //   · там — відношення двох НЕЗАЛЕЖНИХ чисел із листа (чисельник і знаменник
+      //     можуть стосуватись різних угод), заморожених на 2026-06;
+      //   · тут — КОГОРТА: ті самі угоди по обидва боки, вхід = створення угоди,
+      //     чисельник = дійшли до MONEY_ZONE, поріг знаменника ≥10 → інакше «—».
+      // Старі поля свідомо НЕ оживлюємо: це дало б шов усередині однієї колонки.
+      // Ім'я з суфіксом `_crm` — щоб на екрані було видно, що джерело інше.
+      { key: "conversion_new_crm", label: "Конверсія нових (CRM, когорта), %", unit: "percent", source: "auto", aggregation: "avg", order: 20,
+        note: "Когорта: FC-угоди сегмента «новий» (клієнт не мав попередньої оплаченої), створені в періоді → скільки з них дійшло до зони грошей. Поріг ≥10 угод, інакше «—». Джерело — CRM, не Google-лист" },
+      { key: "conversion_leadgen_crm", label: "Конверсія лідогенів (CRM, когорта), %", unit: "percent", source: "auto", aggregation: "avg", order: 21,
+        note: "Когорта: FC-угоди з lead_channel='leadgen', створені в періоді → скільки з них дійшло до зони грошей. Поріг ≥10 угод, інакше «—». Джерело — CRM, не Google-лист" },
       { key: "total_revenue", label: "Дохід з усіх клієнтів, грн", unit: "uah", source: "derived", aggregation: "sum", formula: "ad_new_revenue + lg_new_revenue", csvIndexMonth: 19, order: 17 },
     ],
   },

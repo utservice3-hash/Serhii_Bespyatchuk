@@ -14,7 +14,7 @@ import { pool } from "../db/pool.js";
 import { getSettings } from "../routes/settings.js";
 // КРОК 9 Фаза 3: `adDealSql` — єдине джерело `core/metrics.ts` (прибрано локальний дубль).
 // КРОК Г #1: нецільові — теж із ядра (nonTargetLeadsByBucket), спільний предикат із /lead-quality.
-import { adDealSql, nonTargetLeadsByBucket, receivablesTotal } from "../core/metrics.js";
+import { adDealSql, nonTargetLeadsByBucket, receivablesTotal, conversionCohortByBucket } from "../core/metrics.js";
 
 const FULL_CYCLE = [8921932, 155304];
 
@@ -140,4 +140,38 @@ export async function computeFinanceSnapshot(
     [`finance|month|${curMonth}|receivables`, total],
     [`finance|week|${curWeek}|receivables`, total],
   ]);
+}
+
+/**
+ * 🎯 ДВІ КОГОРТНІ КОНВЕРСІЇ У «СТАТИСТИКАХ» (01.09.2026, рішення власника).
+ *
+ *   `conversion_new_crm`     — по НОВИХ клієнтах (сегмент `new` за `segmentCase`);
+ *   `conversion_leadgen_crm` — по ЛІДОГЕНЕРАТОРАХ (`lead_channel = 'leadgen'`).
+ *
+ * 🔴 ТУТ НЕМАЄ ЖОДНОГО SQL, І ЦЕ НАВМИСНО. Усе означення — знаменник, чисельник,
+ * анкер, поріг — живе в `core/metrics.conversionCohortByBucket`. Своя копія
+ * зійшлася б із копією, а не з правилом, і розійшлася б із Оглядом через місяці.
+ * Стереже `#24u`: він читає тіло цієї функції й червоніє на появі `pool.query`.
+ *
+ * 🔴 БАКЕТ НИЖЧЕ ПОРОГА НЕ ПИШЕТЬСЯ ВЗАГАЛІ. `pct === null` означає «замало
+ * даних», і рядка бути не повинно — відсутність екран малює «—». Записати нуль
+ * означало б стверджувати «конверсія нульова», тобто вигадати вимір. Стереже
+ * `#24t` з обох боків межі: 9 → «—», 10 → число.
+ *
+ * ⚠️ Ці метрики НЕ вносяться в `DEPT_AUTO_ENABLED`: той білий список означає
+ * «звірені з Google-листом», а рішення власника прямо каже — «по лідгенах не
+ * рівняємось на таблицю», нова метрика свідомо інша.
+ */
+export async function computeCohortConversions(since: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const metricOf = { new: "conversion_new_crm", leadgen: "conversion_leadgen_crm" } as const;
+  for (const kind of ["new", "leadgen"] as const) {
+    for (const [ptype, trunc] of [["month", "month"], ["week", "week"]] as const) {
+      for (const row of await conversionCohortByBucket(kind, trunc, since)) {
+        if (row.pct == null) continue; // нижче порога — «—», а не нуль
+        out.set(`marketing|${ptype}|${row.bucket}|${metricOf[kind]}`, row.pct);
+      }
+    }
+  }
+  return out;
 }

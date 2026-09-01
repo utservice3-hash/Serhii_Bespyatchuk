@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { cohortPct } from "./cohortRule.js";
 import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckClock,
   stageMoveCte, STAGE_MOVE, ASOF_SQL, ASOF_JOB_SQL,
   asOfStaleAfterMin, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
@@ -1920,6 +1921,71 @@ type CohortEntry =
  * до однакової межі. `pop` віддає manager_id/team_id (для групування) — помісячна
  * агрегація їх ігнорує. Вимагає $1=MONEY_ZONE, $2=FC у `params`.
  */
+// 📐 Поріг когортної конверсії живе в `core/cohortRule.ts` — окремому модулі БЕЗ
+// залежності від `db/pool`, щоб гейт на нього виконувався і там, де немає `.env`.
+export { COHORT_MIN_ENTERED, cohortPct } from "./cohortRule.js";
+
+/** Що саме утворює когорту. Обидва — рішення власника 01.09.2026. */
+export type CohortKind =
+  /** Сегмент `new` за `segmentCase`: не лідоген І клієнт не мав ПОПЕРЕДНЬОЇ оплаченої угоди. */
+  | "new"
+  /** Канал лідогенерації: `lead_channel = 'leadgen'`. */
+  | "leadgen";
+
+export interface CohortConvRow { bucket: string; entered: number; won: number; pct: number | null }
+
+/**
+ * 🎯 КОГОРТНА КОНВЕРСІЯ ПО БАКЕТАХ — нові клієнти й лідогенератори (01.09.2026).
+ *
+ * 🔴 ЧОМУ ЦЕ НЕ «ПОЛАГОДЖЕНІ» СТАРІ ПОЛЯ. `leadgen.conversion` і
+ * `marketing.lg_conversion` у Статистиках — це відношення ДВОХ НЕЗАЛЕЖНИХ чисел
+ * із Google-листа: чисельник і знаменник можуть стосуватись різних угод, і
+ * зійтись вони можуть лише випадково. Тут — КОГОРТА: ті самі угоди по обидва
+ * боки дробу, тож `won ⊆ entered` за побудовою, а не за домовленістю. Рішення
+ * власника: нова метрика свідомо ІНША, старі не оживляємо — оживлення дало б
+ * шов усередині однієї колонки (до 2026-06 лист, після — CRM).
+ *
+ * 🔴 ВХІД = СТВОРЕННЯ УГОДИ, і це теж рішення власника. Рекламна конверсія
+ * анкериться на вході в `ADZONE_TAKEN`, але для лідгену й «нових» такої зони в
+ * CRM не означено, і вигадувати її в цьому проході заборонено. Тому анкер —
+ * `created_at_kommo` по-київськи.
+ *
+ * 🧮 ЧИСЕЛЬНИК — та сама межа, що в решти конверсій: `MONEY_ZONE` (зона визнання
+ * доходу ∪ виграні). Константа спільна, тож «дійшла до грошей» тут означає
+ * рівно те саме, що в Огляді й рейтингу менеджерів.
+ *
+ * 📐 Заміряно на серпні 2026 ДО реалізації: когорта 2 769 угод ·
+ * лідоген 456 → 82 = 18.0% · сегмент «новий» 1 670 → 199 = 11.9%.
+ * Розбіжність із цими числами — привід зупинитись, а не «уточнити».
+ */
+export async function conversionCohortByBucket(
+  kind: CohortKind, trunc: "month" | "week", since: string,
+): Promise<CohortConvRow[]> {
+  const needsFirstPaid = kind === "new";
+  const params: unknown[] = [FC_PIPELINES, MONEY_ZONE, since];
+  const predicate = needsFirstPaid
+    ? `(${segmentCase("joined")}) = 'new'`
+    : `d.lead_channel = 'leadgen'`;
+  const r = await pool.query<{ bucket: string; entered: number; won: number }>(
+    `${needsFirstPaid ? `WITH ${FIRST_PAID_CTE}` : ""}
+     SELECT to_char(date_trunc('${trunc}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket,
+            COUNT(*)::int AS entered,
+            COUNT(*) FILTER (WHERE d.status_id = ANY($2))::int AS won
+       FROM deals d ${needsFirstPaid ? FIRST_PAID_JOIN : ""}
+      WHERE d.pipeline_id = ANY($1)
+        AND d.created_at_kommo IS NOT NULL
+        AND (d.created_at_kommo ${KYIV})::date >= $3::date
+        AND ${predicate}
+      GROUP BY bucket
+      ORDER BY bucket`,
+    params
+  );
+  return r.rows.map((x) => {
+    const entered = Number(x.entered), won = Number(x.won);
+    return { bucket: x.bucket, entered, won, pct: cohortPct(won, entered) };
+  });
+}
+
 // Конверсія реклами ПО НАПРЯМКУ (Тип запиту) — той самий когортний контракт, що
 // conversionAdsByManager (вхід ADZONE → дійшли MONEY_ZONE, ad-new), лише GROUP BY request_type.
 export interface DirConversion { key: string; entered: number; won: number; cohortPct: number | null }

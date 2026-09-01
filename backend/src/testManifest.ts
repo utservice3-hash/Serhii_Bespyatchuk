@@ -115,6 +115,7 @@ export const MANIFEST_FILES: string[] = [
   "auth/gates.test.js",
   "auth/sqlLex.test.js",
   "auth/mergeScope.test.js",
+  "statistics/cohortConversion.test.js",
   "statistics/financeSnapshot.test.js",
   "auth/matrixAnswer.test.js",
   "auth/rbac.test.js",
@@ -167,6 +168,10 @@ export const MANIFEST_TESTS: string[] = [
   "форми назви: називний, родовий, англійська, число",
   "страхувальна сітка: період цілком у майбутньому зсувається на рік і ГУЧНО",
   "страхувальна сітка НЕ чіпає нормальний період",
+  // statistics/cohortConversion.test.ts
+  "#24z ОДНА КОГОРТА: чисельник — підмножина знаменника, а не окреме число",
+  "#24t ПОРІГ ≥10 ВІДДАЄ «—», А НЕ НУЛЬ — обидва боки межі",
+  "#24u ПИСАР КЛИЧЕ ЯДРО — власного SQL у ньому немає",
   // statistics/financeSnapshot.test.ts
   "#24v ЧИСЛО З ЯДРА, а не власна копія SQL",
   "#24w ЗАКРИТІ ПЕРІОДИ НЕ ЧІПАЮТЬСЯ — тому їхнє число незмінне",

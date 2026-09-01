@@ -13,7 +13,7 @@ import { pool } from "../db/pool.js";
 import {
   canonTeamLead, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, STATS_AUTO_FROM,
 } from "../statistics/catalog.js";
-import { computeDeptAuto, computeFinanceSnapshot } from "../statistics/computeAuto.js";
+import { computeDeptAuto, computeFinanceSnapshot, computeCohortConversions } from "../statistics/computeAuto.js";
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number);
@@ -152,6 +152,13 @@ async function run(): Promise<void> {
   // запиту `now()`), щоб у проході не завелось двох різних «сьогодні». Їде тим
   // самим INSERT-ом, що й відділові метрики: `team_lead = NULL`, `source='auto'`.
   for (const [k, v] of await computeFinanceSnapshot(curMonth, curWeek)) dept.set(k, v);
+
+  // 🎯 Дві когортні конверсії (нові клієнти · лідогенератори) — те саме вікно
+  // `since`, що й решта відділових метрик. Значення приходять із ядра; бакети
+  // нижче порога ≥10 писар не віддає взагалі, тож екран малює «—», а не нуль.
+  for (const [k, v] of await computeCohortConversions(
+    since < STATS_AUTO_FROM ? STATS_AUTO_FROM : since,
+  )) dept.set(k, v);
 
   const dRows = [...dept.entries()];
   if (dRows.length) {
