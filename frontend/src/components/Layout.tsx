@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
 import { CommandPalette } from "./CommandPalette";
-import { heartbeat } from "../api";
+import { heartbeat, trackerSsoUrl } from "../api";
 import { usePolling } from "../hooks/usePolling";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
@@ -93,6 +93,34 @@ export const NAV_ITEMS: { key: NavKey; label: string; icon: string }[] = NAV_GRO
   .flatMap((g) => g.items as readonly { key: NavKey; label: string; icon: string }[])
   .filter((it) => !HIDDEN_NAV.has(it.key));
 
+/**
+ * Deliberately outside NAV_GROUPS.
+ *
+ * navGroupsForRole returns only what a role's screen_access lists, and screens is in every
+ * token. No role lists "tracker", so in NAV_GROUPS nobody would see it — the opposite of what
+ * is wanted. Making it visible would need a migration touching every row of the roles table.
+ *
+ * NAV_GROUPS also feeds NAV_ITEMS (Ctrl+K and the URL validator, where a key with no screen is
+ * a blank page) and SCREEN_TABS in the role editor, which would turn it back into a gate.
+ *
+ * Same pattern as the logout button below, except this one belongs inside the analytics group.
+ */
+export const TRACKER_KEY = "tracker";
+const TRACKER_GROUP = "Аналітика";
+
+/**
+ * Adds the item to the analytics group, creating that group when the filter emptied it —
+ * empty groups are dropped, and a role with no analytics screens should still get the button.
+ */
+function withTracker(groups: { label: string; items: NavItem[] }[]) {
+  const item: NavItem = { key: TRACKER_KEY, label: "Time tracker", icon: "" };
+  const found = groups.find((g) => g.label === TRACKER_GROUP);
+  if (found) {
+    return groups.map((g) => (g === found ? { ...g, items: [...g.items, item] } : g));
+  }
+  return [{ label: TRACKER_GROUP, items: [item] }, ...groups];
+}
+
 export function Layout({
   children,
   active,
@@ -111,11 +139,43 @@ export function Layout({
   messengerUnread?: number;
 }) {
   const navigate = useNavigate();
-  const navGroups = navGroupsForRole(role, screens);
+  const navGroups = withTracker(navGroupsForRole(role, screens));
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1"
   );
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") ?? "light");
+  const [trackerBusy, setTrackerBusy] = useState(false);
+  const [trackerError, setTrackerError] = useState<string | null>(null);
+
+  /**
+   * The tab is opened synchronously, before the await. window.open after one is outside the
+   * user gesture and Safari and Chrome block it as a popup — a failure a developer with popups
+   * allowed never sees.
+   *
+   * That rules out the noopener option string, which would cost us the handle, so opener is
+   * cleared by hand instead.
+   */
+  async function openTracker() {
+    if (trackerBusy) return;
+    setTrackerBusy(true);
+    setTrackerError(null);
+    const tab = window.open("", "_blank");
+    try {
+      const { url } = await trackerSsoUrl();
+      if (tab) {
+        tab.opener = null;
+        tab.location.replace(url);
+      } else {
+        // Popup blocked outright: better to navigate here than to do nothing silently.
+        window.location.href = url;
+      }
+    } catch (e) {
+      tab?.close();
+      setTrackerError(e instanceof Error ? e.message : "Не вдалося відкрити трекер часу.");
+    } finally {
+      setTrackerBusy(false);
+    }
+  }
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -172,6 +232,22 @@ export function Layout({
               )}
               {collapsed && <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "6px 12px" }} />}
               {group.items.map((item) => {
+                // Leaves the app, so not onSelect; and the URL is unknown until the server
+                // answers, so a button rather than an <a href>.
+                if (item.key === TRACKER_KEY) {
+                  return (
+                    <button
+                      key={item.key}
+                      className="sidebar-nav-item"
+                      onClick={openTracker}
+                      disabled={trackerBusy}
+                      title="Трекер часу — відкриється вже під вашим акаунтом"
+                    >
+                      <span className="sidebar-nav-icon"><NavIcon k={TRACKER_KEY} /></span>
+                      {!collapsed && (trackerBusy ? "Відкриваємо…" : item.label)}
+                    </button>
+                  );
+                }
                 const badge = item.key === "messenger" && messengerUnread > 0 ? messengerUnread : 0;
                 return (
                 <button
@@ -211,6 +287,11 @@ export function Layout({
             </div>
           ))}
         </nav>
+        {trackerError && !collapsed && (
+          <div role="status" style={{ padding: "0 16px 8px", fontSize: 11, lineHeight: 1.4, opacity: 0.85 }}>
+            {trackerError}
+          </div>
+        )}
         {/* 🔒 «Вийти» — дія АКАУНТА, не «екран». НАВМИСНО поза <nav>/NAV_GROUPS і поза
             фільтром screens[] — рендериться ЗАВЖДИ, для будь-якої ролі (вбудованої чи
             кастомної), незалежно від screen_access/permissions. НЕ переносити в NAV_GROUP. */}

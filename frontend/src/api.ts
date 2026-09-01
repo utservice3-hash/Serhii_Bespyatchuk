@@ -3190,3 +3190,50 @@ export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {
 export async function claimOrphanClient(clientKey: string, managerId: number): Promise<void> {
   await api.post("/dashboard/orphan-clients/claim", { clientKey, managerId });
 }
+
+/**
+ * The URL that opens the time tracker already signed in as the current user.
+ *
+ * Returns exactly one field; the tracker's own body never leaks through. Errors are translated
+ * here rather than in the component, because a person reads them and "409" says nothing.
+ */
+export async function trackerSsoUrl(): Promise<{ url: string }> {
+  try {
+    const { data } = await api.get<{ url: string }>("/auth/tracker-sso");
+    return data;
+  } catch (e: unknown) {
+    const err = e as { response?: { status?: number; data?: { error?: string } } };
+    const status = err.response?.status;
+    const code = err.response?.data?.error;
+
+    if (status === 409 && code === "account_disabled") {
+      throw new Error("Ваш обліковий запис у трекері часу вимкнено.");
+    }
+    if (status === 409) {
+      throw new Error("У трекері часу для вас ще не створено обліковий запис. Зверніться до Романа.");
+    }
+    if (status === 503) {
+      throw new Error("Трекер часу ще не підключено до дашборду.");
+    }
+    if (status === 504) {
+      throw new Error("Трекер часу зараз не відповідає. Спробуйте за хвилину.");
+    }
+    throw new Error("Не вдалося відкрити трекер часу.");
+  }
+}
+
+/**
+ * A two-minute assertion the desktop tracker can exchange for its own device token.
+ *
+ * Carries identity only. The tracker decides what that person may see.
+ */
+export async function trackerAssertion(): Promise<{ assertion: string }> {
+  try {
+    const { data } = await api.post<{ assertion: string }>("/auth/tracker-assertion");
+    return data;
+  } catch (e: unknown) {
+    const status = (e as { response?: { status?: number } }).response?.status;
+    if (status === 503) throw new Error("Трекер часу ще не підключено до дашборду.");
+    throw new Error("Не вдалося підтвердити вхід.");
+  }
+}

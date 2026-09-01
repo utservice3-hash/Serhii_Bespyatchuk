@@ -40,6 +40,18 @@ export const config = {
     token: process.env.LARDI_API_TOKEN ?? "",
     lang: process.env.LARDIWEB_LANG ?? "ru",
   },
+  // Time tracker: a separate system of ours with its own server and user table. Both optional
+  // and empty by default — the nav item then does not render and the endpoints answer 503.
+  // Deliberately not required(): the dashboard must boot without the tracker, which deploys on
+  // its own pipeline and can be down when we deploy.
+  tracker: {
+    // One address, not two. Both the back-channel call to /api/v1/sso/ticket and the browser URL
+    // with #ticket= are built from it. Same origin is what makes the ticket-for-cookie exchange
+    // work, and one variable makes it structurally impossible to break them apart.
+    url: (process.env.TRACKER_URL ?? "").replace(/\/+$/, ""),
+    // Secret: env only, never in the repo. Generated on the host with openssl rand -hex 32.
+    ssoKey: process.env.TRACKER_SSO_KEY ?? "",
+  },
   ringostat: {
     // Auth-key з Ringostat («Налаштування» → «Інтеграції» → «Ringostat API»).
     // СЕКРЕТ — лише з env, у репо не тримати. Порожньо → джоба дзвінків спить.

@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
+import { TrackerAuth } from "./pages/TrackerAuth";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem("token");
@@ -11,6 +12,9 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      {/* Before /:section, which would otherwise swallow it. No RequireAuth: the page sends an
+          unauthenticated visitor through /login itself and comes back. */}
+      <Route path="/tracker-auth" element={<TrackerAuth />} />
       {/* Розділ у URL (/report, /kvp, …) — щоб працювали посилання, «назад/вперед»,
           закладки. «/» = Звіт (лендинг). Обидва шляхи рендерять один Dashboard. */}
       <Route
