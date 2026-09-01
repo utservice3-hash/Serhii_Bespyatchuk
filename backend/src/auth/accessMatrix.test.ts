@@ -57,6 +57,9 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   // `ceo` тут НЕМАЄ навмисно: на відміну від `client-merge`, він це право МАЄ,
   // тож запис був би мертвим — а мертвий запис глушить справжню розбіжність (#15e).
   "POST /api/dashboard/receivables/merge": "merge_receivables — право КВП/СЕО/ОД/admin; financier його не має",
+  // 🔓 Превʼю розʼєднання гейтиться ТИМ САМИМ правом, що й сама дія: воно показує
+  // склад групи, суми й тексти нотаток, тож читання не має бути ширшим за запис.
+  "GET /api/dashboard/receivables/unmerge-preview?canonical=смартекс": "merge_receivables — та сама межа, що в самої дії розʼєднання",
   // 🗑 СПИСАННЯ БОРГУ — право `write_off_debt` = РІВНО {ceo, opdir} (рішення
   // власника 25.08.2026). Тут у deny стоять ТРИ ролі адмінського рівня —
   // `admin`, `kvp`, `financier` — і жодна з них не виняток: списання зменшує

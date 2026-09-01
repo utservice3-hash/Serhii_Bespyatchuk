@@ -57,6 +57,7 @@ import * as receivableNotePick from "../core/receivableNotePick.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
+import * as unmergePreview from "../core/unmergePreview.js";
 import * as paymentMatch from "../core/paymentMatch.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
@@ -6640,6 +6641,106 @@ dashboardRouter.post("/client-merge/revoke", async (req, res) => {
   if (!upd.rowCount) return res.status(409).json({ error: "Активного псевдоніма з таким ключем немає" });
   const r = await recomputeClientKeys();
   res.json({ ok: true, recomputed: r.changed });
+});
+
+/**
+ * 🔓 ПРЕВʼЮ РОЗʼЄДНАННЯ — наслідки ДО дії, не після (01.09.2026).
+ *
+ * Симетрично до `mergeSummary`, який показує сторони перед обʼєднанням. Сама дія
+ * лишається наявним `POST /client-merge/revoke` — його НЕ переписуємо: він уже
+ * знімає псевдонім і кличе перерахунок, а дебіторку синк розводить сам за ≤15 хв.
+ *
+ * 🔴 ГЕЙТ — ТОЙ САМИЙ, ЩО В САМОЇ ДІЇ (`revokeAllowed` за джерелом злиття).
+ * Превʼю показує склад групи, суми й тексти нотаток; віддати це тому, хто не має
+ * права розʼєднувати, означало б відчинити читання там, де зачинено запис.
+ * Стереже `#269`.
+ *
+ * ⏳ МЕЖА, НАЗВАНА ВГОЛОС: значення з Лист20 читається тим самим
+ * `fetchSheetLimitsForReconcile`, який позначено як страховку до 07.09.2026 і
+ * тоді прибирається. Коли він зникне або впаде, превʼю НЕ мовчить — стан
+ * переходить у `unknown` із причиною. Порожній рядок тут коштував би найдорожче.
+ */
+dashboardRouter.get("/receivables/unmerge-preview", async (req, res) => {
+  const canonical = String(req.query.canonical ?? "").trim();
+  if (!canonical) return res.status(400).json({ error: "canonical обовʼязковий" });
+
+  const al = await pool.query<{ alias_key: string; evidence: unknown; created_at: string }>(
+    `SELECT alias_key, evidence, created_at FROM client_key_alias
+      WHERE canonical_key = $1 AND revoked_at IS NULL ORDER BY alias_key`, [canonical]);
+  if (!al.rowCount) return res.status(404).json({ error: "Активних псевдонімів у цього клієнта немає" });
+
+  // Право — за джерелом злиття, тим самим розбором, що й у самої дії.
+  const source = mergeSourceOf(al.rows[0].evidence);
+  const scope = await mergePairScope(req.auth!, al.rows[0].alias_key, canonical);
+  const input = { source, pair: scope,
+    hasMergeReceivables: roleHasPerm(req.auth!.roleKey, "merge_receivables") };
+  if (!revokeAllowed(input)) return res.status(403).json({ error: revokeDenyReason(input) });
+
+  const aliasKeys = al.rows.map((r) => r.alias_key);
+  const keys = [canonical, ...aliasKeys];
+  const mergedAt = al.rows[0].created_at;
+
+  const [inv, lim, notes, hidden] = await Promise.all([
+    pool.query<{ client_key_raw: string; name: string; amount: string; n: string }>(
+      `SELECT ri.client_key_raw, MIN(ri.client_name) AS name,
+              COALESCE(SUM(ri.amount),0) AS amount, COUNT(*) AS n
+         FROM receivable_invoices ri WHERE ri.client_key_raw = ANY($1)
+        GROUP BY ri.client_key_raw`, [keys]),
+    pool.query<{ client_key: string; limit_days: number | null; limit_amount: string | null; note: string }>(
+      `SELECT client_key, limit_days, limit_amount, note FROM client_credit_limits WHERE client_key = ANY($1)`, [keys]),
+    pool.query<{ comment: string | null; due_date: string | null; updated_at: string }>(
+      `SELECT comment, to_char(due_date,'YYYY-MM-DD') AS due_date,
+              to_char(updated_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS updated_at
+         FROM receivable_notes WHERE client_key = $1 AND updated_at > $2`, [canonical, mergedAt]),
+    pool.query<{ client_key: string; n: string }>(
+      `SELECT client_key, COUNT(*) AS n FROM receivable_notes
+        WHERE client_key = ANY($1) GROUP BY client_key`, [aliasKeys]),
+  ]);
+
+  const invBy = new Map(inv.rows.map((r) => [r.client_key_raw, r]));
+  const limBy = new Map(lim.rows.map((r) => [r.client_key, r]));
+  const hidBy = new Map(hidden.rows.map((r) => [r.client_key, Number(r.n)]));
+  const num = (v: string | number | null): number | null => v == null ? null : Number(v);
+
+  // 📸 Знімок із реєстру — якщо злиття робилось уже після `#262`.
+  const snap = (al.rows[0].evidence as { limitsBefore?: { sides?: { clientKey: string;
+    limitDays: number | null; limitAmount: number | null; setAt: string | null }[] } } | null)?.limitsBefore;
+  const snapCanon = snap?.sides?.find((x) => x.clientKey === canonical);
+
+  let limitBefore: unmergePreview.LimitBefore;
+  if (snapCanon) {
+    limitBefore = { kind: "recorded", days: snapCanon.limitDays, amount: snapCanon.limitAmount, setAt: snapCanon.setAt };
+  } else {
+    // 🔴 Аркуш — ПОКАЗАТИ, не підставити. І будь-який його збій дає названий
+    // `unknown`, а не тишу: читання поза базою, воно має право зникнути.
+    try {
+      const { fetchSheetLimitsForReconcile } = await import("../jobs/syncReceivables.js");
+      const sheet = await fetchSheetLimitsForReconcile();
+      const days = sheet.get(canonical)?.limitDays;
+      limitBefore = days == null
+        ? { kind: "unknown", why: "ні знімка в реєстрі, ні рядка в Лист20" }
+        : { kind: "sheet", days };
+    } catch {
+      limitBefore = { kind: "unknown", why: "знімка немає, а Лист20 зараз недоступний" };
+    }
+  }
+
+  const canonLim = limBy.get(canonical);
+  res.json(unmergePreview.buildUnmergePreview({
+    canonicalKey: canonical,
+    sides: keys.map((k) => {
+      const i = invBy.get(k), l = limBy.get(k);
+      return { clientKey: k, name: i?.name ?? k, amount: Number(i?.amount ?? 0), invoices: Number(i?.n ?? 0),
+               ownLimitDays: l ? num(l.limit_days) : null, ownLimitAmount: l ? num(l.limit_amount) : null,
+               hiddenNotes: hidBy.get(k) ?? 0 };
+    }),
+    canonicalLimitNow: { days: canonLim ? num(canonLim.limit_days) : null,
+                         amount: canonLim ? num(canonLim.limit_amount) : null,
+                         note: canonLim?.note ?? null },
+    limitBefore,
+    ownerlessNotes: notes.rows.map((n) => ({
+      text: n.comment ?? "", dueDate: n.due_date, createdAt: n.updated_at })),
+  }));
 });
 
 dashboardRouter.get("/client-merge/journal", async (req, res) => {

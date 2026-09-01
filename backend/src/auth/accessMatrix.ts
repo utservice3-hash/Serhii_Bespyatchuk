@@ -294,6 +294,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // гілка (рішення 04.08) лишається недоторканою.
   { method: "POST", path: "/api/dashboard/receivables/merge", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
+  // 🔓 Превʼю РОЗʼЄДНАННЯ — межа та сама, що в самої дії. Воно показує склад
+  // групи, суми й ТЕКСТИ нотаток; віддати це тому, хто розʼєднувати не може,
+  // означало б відчинити читання там, де зачинено запис. Тімлід сюди не
+  // потрапляє: у дебіторці його гілки немає (на відміну від екрана «Клієнти»).
+  { method: "GET", path: "/api/dashboard/receivables/unmerge-preview?canonical=смартекс", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
   // 🗑 Списання безнадійного боргу — право `write_off_debt` = {ceo, opdir}, і
   // АДМІН тут у deny СВІДОМО. Це не недогляд і не «забули додати»: рішення
   // власника 25.08.2026 назвало рівно дві ролі, а списання зменшує суму на
