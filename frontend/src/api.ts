@@ -3221,3 +3221,19 @@ export async function trackerSsoUrl(): Promise<{ url: string }> {
     throw new Error("Не вдалося відкрити трекер часу.");
   }
 }
+
+/**
+ * A two-minute assertion the desktop tracker can exchange for its own device token.
+ *
+ * Carries identity only. The tracker decides what that person may see.
+ */
+export async function trackerAssertion(): Promise<{ assertion: string }> {
+  try {
+    const { data } = await api.post<{ assertion: string }>("/auth/tracker-assertion");
+    return data;
+  } catch (e: unknown) {
+    const status = (e as { response?: { status?: number } }).response?.status;
+    if (status === 503) throw new Error("Трекер часу ще не підключено до дашборду.");
+    throw new Error("Не вдалося підтвердити вхід.");
+  }
+}

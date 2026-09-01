@@ -15,7 +15,11 @@ export function Login() {
     try {
       const token = await login(email, password);
       localStorage.setItem("token", token);
-      navigate("/");
+      // Somewhere asked to be returned to after signing in — currently only /tracker-auth,
+      // which loses its query otherwise and leaves the agent waiting on a port for nothing.
+      const back = sessionStorage.getItem("afterLogin");
+      sessionStorage.removeItem("afterLogin");
+      navigate(back ?? "/", { replace: true });
     } catch {
       setError("Невірний email або пароль");
     }

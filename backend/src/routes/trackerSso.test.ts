@@ -115,6 +115,31 @@ test("#307 іконку для пункту описано", () => {
     "без запису в мапі пункт малюється нейтральним колом — «іконки не описано»");
 });
 
+// the browser hand-back page
+
+test("#309 маршрут /tracker-auth оголошено ПЕРЕД /:section", () => {
+  const src = read("frontend/src/App.tsx");
+  const auth = src.indexOf('path="/tracker-auth"');
+  const section = src.indexOf('path="/:section"');
+
+  // /:section збігається з будь-яким одним сегментом, тож оголошений раніше він проковтнув би
+  // /tracker-auth — і агент чекав би на порту відповідь, якої ніхто не надішле.
+  assert.ok(auth > 0, "маршрут /tracker-auth зник");
+  assert.ok(section > 0, "маршрут /:section зник — тест втратив предмет");
+  assert.ok(auth < section, "/tracker-auth мусить бути раніше за /:section");
+});
+
+test("#310 адреса повернення будується з жорсткого хоста, а не з запиту", () => {
+  const src = read("frontend/src/pages/TrackerAuth.tsx");
+
+  // З запиту береться ЛИШЕ номер порту. Готова адреса в параметрі перетворила б сторінку на
+  // відкритий редирект, яким будь-хто скерував би людину куди завгодно.
+  assert.match(src, /new URL\(`http:\/\/127\.0\.0\.1:\$\{port\}\/callback`\)/,
+    "хост мусить бути зашитий у код");
+  assert.doesNotMatch(src, /params\.get\("(url|next|return|redirect)/,
+    "адреса повернення не може приходити параметром");
+});
+
 // the one that matters most
 
 test("#308 звичайний токен входу НЕ приймається як посвідчення для трекера", async () => {
