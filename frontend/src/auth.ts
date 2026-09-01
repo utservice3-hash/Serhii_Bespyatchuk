@@ -7,6 +7,7 @@ export interface AuthPayload {
   perms?: string[];      // надані права (permissions) — косметика UX; сервер гейтить через requirePerm
   managerId: number | null;
   teamId: number | null;
+  trackerEnabled?: boolean;  // users.tracker_enabled — косметика nav; сервер гейтить
 }
 
 export function getAuthPayload(): AuthPayload | null {

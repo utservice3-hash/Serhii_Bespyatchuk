@@ -8,7 +8,9 @@ import { requireAuth } from "../auth/middleware.js";
 import { config } from "../config.js";
 import {
   ASSERTION_TTL_SECONDS,
+  isLoginToken,
   signAssertion,
+  trackerAllowed,
   ssoConfigured,
   ssoKeyAccepted,
   verifyAssertion,
@@ -40,8 +42,9 @@ authRouter.post("/login", async (req, res) => {
     manager_id: number | null;
     team_id: number | null;
     is_active: boolean;
+    tracker_enabled: boolean;
   }>(
-    `SELECT id, password_hash, role, role_override, manager_id, team_id, is_active FROM users WHERE lower(email) = $1`,
+    `SELECT id, password_hash, role, role_override, manager_id, team_id, is_active, tracker_enabled FROM users WHERE lower(email) = $1`,
     [email]
   );
   const user = result.rows[0];
@@ -68,6 +71,9 @@ authRouter.post("/login", async (req, res) => {
     perms,
     managerId: user.manager_id,
     teamId: user.team_id,
+    // Косметика nav, як `screens` і `perms`: ховає кнопку в тих, кому трекер не вмикали.
+    // МЕЖУ тримає сервер (перевірка нижче) — на приховування у FE ми не покладаємось.
+    trackerEnabled: user.tracker_enabled,
   });
   res.json({ token });
 });
@@ -99,13 +105,19 @@ authRouter.get("/tracker-sso", requireAuth, async (req, res) => {
   }
 
   const auth = req.auth!;
-  const who = await pool.query<{ email: string; full_name: string | null }>(
-    `SELECT email, full_name FROM users WHERE id = $1`,
+  const who = await pool.query<{ email: string; full_name: string | null; tracker_enabled: boolean }>(
+    `SELECT email, full_name, tracker_enabled FROM users WHERE id = $1`,
     [auth.userId]
   );
   const person = who.rows[0];
   if (!person) {
     return res.status(503).json({ error: "not_configured" });
+  }
+  // 🔴 МЕЖА, А НЕ КОСМЕТИКА. Кнопку в меню ховає прапорець із токена, але ховання у FE
+  // нічого не закриває: адресу можна попросити напряму. Колонка вже існує і нею керують
+  // `routes/settings.ts`; її ж читає наявний `routes/tracker.ts` — другої ознаки не заводимо.
+  if (!trackerAllowed(person)) {
+    return res.status(403).json({ error: "tracker_not_enabled" });
   }
 
   let answer: Response;
@@ -160,6 +172,11 @@ authRouter.get("/tracker-sso", requireAuth, async (req, res) => {
 authRouter.post("/tracker-assertion", requireAuth, (req, res) => {
   if (!ssoConfigured()) {
     return res.status(503).json({ error: "not_configured" });
+  }
+  // 🔴 Обриваємо РІВНО ланцюг «посвідчення → нове посвідчення» (див. isLoginToken).
+  // Браузерна сесія — звичайний токен входу — проходить далі без змін.
+  if (!isLoginToken(req.auth)) {
+    return res.status(403).json({ error: "assertion_not_accepted" });
   }
   const auth = req.auth!;
   res.json({

@@ -112,7 +112,11 @@ const TRACKER_GROUP = "Аналітика";
  * Adds the item to the analytics group, creating that group when the filter emptied it —
  * empty groups are dropped, and a role with no analytics screens should still get the button.
  */
-function withTracker(groups: { label: string; items: NavItem[] }[]) {
+export function withTracker(groups: { label: string; items: NavItem[] }[], enabled?: boolean) {
+  // 🔴 Рішення власника 01.09.2026: «питати кнопку». Заміряно до правки — пункт бачили ВСІ
+  // 8 ролей (48 активних), зокрема 10 людей, яким трекер свідомо не вмикали. Ознака вже
+  // існує (`users.tracker_enabled`, нею керує екран налаштувань), другої не заводимо.
+  if (!enabled) return groups;
   const item: NavItem = { key: TRACKER_KEY, label: "Time tracker", icon: "" };
   const found = groups.find((g) => g.label === TRACKER_GROUP);
   if (found) {
@@ -128,6 +132,7 @@ export function Layout({
   onBack,
   role,
   screens,
+  trackerEnabled,
   messengerUnread = 0,
 }: {
   children: React.ReactNode;
@@ -136,10 +141,11 @@ export function Layout({
   onBack?: () => void;
   role?: string;
   screens?: string[];
+  trackerEnabled?: boolean;
   messengerUnread?: number;
 }) {
   const navigate = useNavigate();
-  const navGroups = withTracker(navGroupsForRole(role, screens));
+  const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1"
   );

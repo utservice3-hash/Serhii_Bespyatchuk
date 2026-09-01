@@ -833,6 +833,7 @@ export function Dashboard() {
       onBack={canGoBack ? goBack : undefined}
       role={auth?.role}
       screens={auth?.screens}
+      trackerEnabled={auth?.trackerEnabled}
       messengerUnread={chatUnread}
     >
       <ErrorBoundary resetKey={`${section}:${teamId}:${selectedManagerId}:${dateRange.from}:${dateRange.to}:${refreshNonce}`}>

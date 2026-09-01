@@ -54,6 +54,24 @@ export function verifyAssertion(token: string): { userId: number; email?: string
 }
 
 /**
+ * 🔴 ПОСВІДЧЕННЯ НЕ Є ОБЛІКОВКОЮ ДЛЯ ВИДАЧІ ПОСВІДЧЕНЬ.
+ *
+ * Заміряно 01.09.2026 живим викликом обробника: посвідчення підписане тим самим
+ * `JWT_SECRET`, що й токен входу, а `verifyToken` — це голий `jwt.verify` без перевірки
+ * призначення. Тому посвідчення проходило як Bearer, і `POST /tracker-assertion` видавав
+ * за ним НОВЕ посвідчення: три продовження поспіль дали HTTP 200. Двохвилинний строк
+ * життя був декоративним — хто здобув одне, тримав його безстроково.
+ *
+ * 🔴 ТВЕРДЖЕННЯ САМЕ ТАКЕ: роут вимагає токен БЕЗ поля `purpose`, тобто справжній токен
+ * входу. Формулювання «не пускати токени з purpose» описувало б те саме сьогодні й
+ * розійшлося б завтра, щойно зʼявиться друге призначення: обривати треба РІВНО ланцюг
+ * «посвідчення → нове посвідчення», а браузерна сесія мусить працювати далі.
+ */
+export function isLoginToken(auth: unknown): boolean {
+  return typeof auth === "object" && auth !== null && !("purpose" in (auth as Record<string, unknown>));
+}
+
+/**
  * timingSafeEqual over SHA-256 rather than `===`: string comparison stops at the first
  * mismatching character, and the response time leaks how much was guessed. Hashing first
  * because timingSafeEqual throws on differing lengths, and the key length should not leak either.
@@ -66,6 +84,18 @@ export function ssoKeyAccepted(presented: string | undefined): boolean {
   const a = crypto.createHash("sha256").update(presented, "utf8").digest();
   const b = crypto.createHash("sha256").update(expected, "utf8").digest();
   return crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * 🔴 КОМУ ДАШБОРД ВІДКРИВАЄ ТРЕКЕР — ОДНЕ МІСЦЕ НА FE І СЕРВЕР.
+ *
+ * Рішення власника 01.09.2026: «питати кнопку». Ознака вже існує — `users.tracker_enabled`,
+ * нею керує екран налаштувань, і її ж читає наявний `routes/tracker.ts`; другої не заводимо.
+ * Предикат окремо, бо ховання пункту в меню НІЧОГО не закриває: адресу можна попросити
+ * напряму, тож те саме рішення мусить стояти й на сервері.
+ */
+export function trackerAllowed(person: { tracker_enabled?: boolean } | null | undefined): boolean {
+  return Boolean(person?.tracker_enabled);
 }
 
 /** Unconfigured means: no nav item, and every endpoint answers 503. */

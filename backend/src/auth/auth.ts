@@ -16,6 +16,8 @@ export interface AuthPayload {
   perms?: string[];   // надані права (permissions=true) — ЛИШЕ для косметики FE; сервер гейтить через requirePerm
   managerId: number | null;
   teamId: number | null;
+  /** `users.tracker_enabled` — ЛИШЕ косметика nav (ховає кнопку); межу тримає сервер. */
+  trackerEnabled?: boolean;
 }
 
 export function signToken(payload: AuthPayload): string {
