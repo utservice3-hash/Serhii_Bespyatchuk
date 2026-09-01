@@ -17,6 +17,7 @@ import { OwnerEditor } from "./OwnerEditor";
 import { LimitEditor } from "./LimitEditor";
 import { LimitRequestDialog } from "./LimitRequestDialog";
 import { MergeDialog } from "./MergeDialog";
+import { UnmergeDialog } from "./UnmergeDialog";
 import {
   carrierCell, EMPTY_FILTERS, ENTITY_LABEL, ENTITY_REASON_LABEL,
   isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
@@ -489,6 +490,8 @@ export function ReceivablesSection({
   const [agreeFor, setAgreeFor] = useState<string | null>(null);
   const [limitReqFor, setLimitReqFor] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
+  // 🔓 Яку злиту групу зараз розʼєднують (ключ канонічного) — null поки жодну.
+  const [unmergeFor, setUnmergeFor] = useState<{ key: string; name: string } | null>(null);
   const [mgrOptions, setMgrOptions] = useState<ManagerOption[]>([]);
   useEffect(() => {
     // Список тягнемо ОДИН раз і лише тим, хто має право призначати: інакше це
@@ -724,6 +727,20 @@ export function ReceivablesSection({
                               {/* 📐 ОБРІЗАННЯ НА 170px (макет v6.1). Повна назва —
                                   у `title`: обрізання не має ховати зміст. */}
                               <span className="recv-cname" title={c.clientName}>{c.clientName}</span>
+                              {/* 🔓 РОЗʼЄДНАТИ — лише на злитій групі й лише з правом.
+                                  Кнопки НЕМАЄ ВЗАГАЛІ без права, а не «є, але 403»:
+                                  те саме правило, що в кнопки обʼєднання вище. */}
+                              {canMerge && (canonicalOf[c.clientKey] ?? 0) > 0 && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setUnmergeFor({ key: c.clientKey, name: c.clientName }); }}
+                                  title={`Обʼєднано ${(canonicalOf[c.clientKey] ?? 0) + 1} юросіб — розʼєднати (покаже наслідки до дії)`}
+                                  aria-label={`Розʼєднати ${c.clientName}`}
+                                  style={{ font: "inherit", fontSize: "var(--fs-xs)", marginLeft: 6, padding: "1px 6px",
+                                           borderRadius: 6, border: "1px solid var(--border)", background: "transparent",
+                                           color: "var(--text-muted)", cursor: "pointer" }}>
+                                  🔓 розʼєднати
+                                </button>
+                              )}
                             </span>
                             {/* 🏢 РОЗКЛАД ПО ЮРОСОБАХ — лише коли їх БІЛЬШЕ ОДНІЄЇ.
                                 Заміряно 01.09.2026: таких рядків 2 із 63, решта 61
@@ -1087,6 +1104,12 @@ export function ReceivablesSection({
             )}
           </div>
 
+          {/* 🔓 Розʼєднання злитої групи — превʼю наслідків ДО дії. Кнопка стоїть
+              у рядку самої групи, тож діалог знає, кого саме розʼєднують. */}
+          {unmergeFor && (
+            <UnmergeDialog canonical={unmergeFor.key} canonicalName={unmergeFor.name}
+              onClose={() => setUnmergeFor(null)} onDone={() => { setUnmergeFor(null); onRefresh?.(); }} />
+          )}
           {mergeOpen && (
             /* Сторони — з того, що ВЖЕ на екрані (див. шапку MergeDialog про
                `/client-search` і `merge_clients`). `facts` дають кількість
