@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { needsBackendEnv, emptyPeriodSkip } from "../testMode.js";
 import {
-  reaches, divergenceKlass, scopeDivergence, tallyFor, KLASS_LABEL,
+  reaches, divergenceKlass, scopeDivergence, tallyFor, withinScope, outsideAnyTeam, KLASS_LABEL,
   type ZoneDeal, type DivergenceKlass,
 } from "./expectScope.js";
 
@@ -168,4 +168,103 @@ test("#270d плитка «Очікуємо» на КВП підписана с�
   // ⓘ мусить казати те саме словами — інакше правило живе лише в одному місці.
   assert.ok(/ПЕРІОД НА НЕЇ НЕ ДІЄ/.test(src),
     "🔴 підказка ⓘ більше не називає, що період на цю плитку не діє");
+});
+
+/** Друга команда — щоб «звузили до команди» відрізнялось від «віддали компанію». */
+const OK_T4: ZoneDeal = { kommoId: 6, price: 60_000, managerId: 11, managerActive: true, teamId: 4 };
+const TWO_TEAMS = [...MIXED, OK_T4];
+
+/**
+ * #271 — ФІЛЬТР ЕКРАНА ДОХОДИТЬ ДО ЯДРА, І ПОРОЖНІЙ ФІЛЬТР ВІДДАЄ КОМПАНІЮ.
+ *
+ * 🔴 ДВОБІЧНО, І ДРУГА СТОРОНА НЕ МЕНШ ВАЖЛИВА. Одностороння перевірка «звуження
+ * працює» зеленіє й тоді, коли фільтр застосовується ЗАВЖДИ, — а це рівно та поломка,
+ * що вбила б КВП: його порожній фільтр ПРАВИЛЬНИЙ (екран показує всі команди рядками),
+ * і «завжди фільтрувати» лишило б там одну команду з пʼяти.
+ *
+ * 🔴 ВЛАСТИВІСТЬ, А НЕ СЬОГОДНІШНІЙ СТАН. Фікстура тримає ДВІ команди і непорожню
+ * множину розбіжності: на живих даних 01.09.2026 обидві сторони істинні самі собою
+ * (розбіжність порожня), тож гейт на них не доводив би нічого.
+ */
+test("#271 ФІЛЬТР ДОХОДИТЬ: звуження ≠ компанія, а порожній фільтр == компанія", () => {
+  const company = tallyFor(TWO_TEAMS, "zoneTeam");
+  const team3 = tallyFor(TWO_TEAMS, "zoneTeam", { teamId: 3 });
+  const team4 = tallyFor(TWO_TEAMS, "zoneTeam", { teamId: 4 });
+
+  // ⬅ СТОРОНА 1: фільтр справді звужує. Саботаж «повернути {}» (тобто ігнорувати
+  //    scope) робить team3 == company — червоніє тут.
+  assert.deepEqual(team3, { deals: 1, sum: 10_000 }, "🔴 звуження до команди 3 віддало не її");
+  assert.deepEqual(team4, { deals: 1, sum: 60_000 }, "🔴 звуження до команди 4 віддало не її");
+  assert.notDeepEqual(team3, company,
+    "🔴 звужений виклик дорівнює компанії — фільтр до ядра НЕ доходить");
+
+  // ➡ СТОРОНА 2: порожній фільтр віддає КОМПАНІЮ, а не одну команду. Саботаж
+  //   «фільтрувати завжди» робить company == team3 — червоніє тут.
+  assert.deepEqual(company, { deals: 2, sum: 70_000 },
+    "🔴 порожній фільтр віддав не компанію — на КВП це п’ять команд перетворилось би на одну");
+  assert.equal(team3.deals + team4.deals, company.deals,
+    "🔴 команди не складаються в компанію — звуження або губить, або дублює");
+  assert.equal(team3.sum + team4.sum, company.sum);
+
+  // Скоуп НЕ має права підміняти форму JOIN: менеджерський читач бачить і безкомандних.
+  assert.equal(tallyFor(TWO_TEAMS, "zoneManager").deals, 3,
+    "🔴 читач по менеджерах втратив безкомандного — це вже не скоуп, а JOIN");
+  // Обидві умови скоупу — незалежні, і кожна мусить різати сама.
+  assert.equal(withinScope(OK, { managerId: 7 }), true);
+  assert.equal(withinScope(OK, { managerId: 8 }), false, "🔴 фільтр по менеджеру не ріже");
+  assert.equal(withinScope(OK, { teamId: 4 }), false, "🔴 фільтр по команді не ріже");
+  assert.equal(withinScope(OK, {}), true, "🔴 порожній фільтр щось відрізав");
+});
+
+test("#271b 🪞 ВІДСТАВАННЯ Σ КОМАНД ВІД КОМПАНІЇ НАЗВАНЕ ЯВНО, а не списане на скоуп", () => {
+  /**
+   * Σ по командах МЕНША за компанію рівно на тих, кого жоден командний зріз не підбере.
+   * Без цієї рівності «Σ команд ≠ компанія» читається як загублений фільтр — і хтось
+   * піде «лагодити» скоуп, який працює. Той самий клас, що службовий акаунт із
+   * `team_id IS NULL` на 2 781 851 ₴.
+   */
+  const outside = TWO_TEAMS.filter(outsideAnyTeam);
+  assert.equal(outside.length, 3, "🔴 фікстура вироджена: немає кого лишити поза командами");
+  const planned = tallyFor(TWO_TEAMS, "planned");
+  const teamsSum = [3, 4].reduce((a, t) => a + tallyFor(TWO_TEAMS, "zoneTeam", { teamId: t }).sum, 0);
+  const inactiveWithTeam = TWO_TEAMS.filter((d) => !outsideAnyTeam(d) && !reaches(d, "zoneTeam"));
+  assert.equal(inactiveWithTeam.length, 1, "🔴 неактивний із командою зник — гейт втратив третій доданок");
+  assert.equal(
+    teamsSum + outside.reduce((a, d) => a + d.price, 0) + inactiveWithTeam.reduce((a, d) => a + d.price, 0),
+    planned.sum,
+    "🔴 компанія не розкладається на «команди + поза командами + неактивні» — доданок не названий");
+});
+
+/**
+ * #271c — ЖИВА ПЕРЕВІРКА, ЩО МОДЕЛЬ СКОУПУ ВІДПОВІДАЄ СПРАВЖНЬОМУ SQL.
+ *
+ * `#271` доводить властивість на фікстурі; сам по собі він лишився б зеленим, якби
+ * SQL звужував інакше, ніж модель. Тут ті самі два твердження перевіряються ВИКЛИКОМ
+ * ядра — покомандно, а не сумарно: сумарна рівність зійшлася б і тоді, коли зріз
+ * поїхав не тій команді.
+ *
+ * 🧨 САБОТАЖ ⬅ повернути `{}` замість `s` у `expectedZoneByScope` → звужений виклик
+ *    віддає ВСІ команди → червоне.
+ * 🧨 САБОТАЖ ➡ дописувати умову команди завжди → виклик без фільтра віддає ОДНУ
+ *    команду → червоне.
+ */
+test("#271c ЖИВЕ ЯДРО: звуження по команді == рядок тієї команди, а без фільтра — усі", needsBackendEnv(), async (t) => {
+  const metrics = await import("./metrics.js");
+  const company = await metrics.expectedZoneByScope({}, "team");
+  const skip = emptyPeriodSkip("команд із угодами в зоні очікувань", company.length, "знімок «зараз»");
+  if (skip) return t.skip(skip);
+
+  // ➡ Порожній фільтр віддає КОМПАНІЮ. Одна команда тут означала б «фільтр стоїть завжди».
+  assert.ok(company.length > 1,
+    `🔴 без фільтра ядро віддало ${company.length} команд(и) — на КВП це весь екран з однієї команди`);
+
+  // ⬅ Кожне звуження віддає РІВНО свою команду, і те саме число, що в рядку компанії.
+  for (const row of company) {
+    const one = await metrics.expectedZoneByScope({ teamId: row.id }, "team");
+    assert.equal(one.length, 1,
+      `🔴 звуження до команди «${row.name}» віддало ${one.length} рядків — фільтр до ядра не доходить`);
+    assert.equal(one[0].id, row.id, `🔴 звуження до «${row.name}» віддало чужу команду`);
+    assert.deepEqual({ deals: one[0].deals, sum: one[0].sum }, { deals: row.deals, sum: row.sum },
+      `🔴 «${row.name}» у звуженому виклику ≠ свій рядок у компанії — звуження змінює число, а не набір`);
+  }
 });

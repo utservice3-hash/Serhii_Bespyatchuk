@@ -94,8 +94,34 @@ export function scopeDivergence(deals: readonly ZoneDeal[]): DivergenceGroup[] {
 export interface ReachTally { deals: number; sum: number }
 
 /** Скільки бачить конкретний читач — саме те число, що потрапляє на екран. */
-export function tallyFor(deals: readonly ZoneDeal[], by: ExpectReader): ReachTally {
+export function tallyFor(deals: readonly ZoneDeal[], by: ExpectReader, scope: ExpectFilter = {}): ReachTally {
   let n = 0, s = 0;
-  for (const d of deals) if (reaches(d, by)) { n += 1; s += d.price; }
+  for (const d of deals) if (reaches(d, by) && withinScope(d, scope)) { n += 1; s += d.price; }
   return { deals: n, sum: s };
+}
+
+/**
+ * 🎯 СКОУП, ЯКИЙ ЕКРАН ПЕРЕДАЄ В ЯДРО. Модель тих самих двох умов, які всі три функції
+ * очікувань дописують у WHERE:
+ *   if (s.managerId) conds.push(`d.manager_id = $n`);
+ *   if (s.teamId)    conds.push(`m.team_id = $n`);
+ * Тримається окремо від `reaches` навмисно: то форма JOIN (кого читач бачить у принципі),
+ * а це — звуження (кого з видимих лишає фільтр). Плутати їх не можна: у КВП порожній
+ * фільтр ПРАВИЛЬНИЙ (екран показує всі команди рядками), а форма JOIN — ні.
+ */
+export interface ExpectFilter { managerId?: number | null; teamId?: number | null }
+
+export function withinScope(d: ZoneDeal, s: ExpectFilter): boolean {
+  if (s.managerId && d.managerId !== s.managerId) return false;
+  if (s.teamId && d.teamId !== s.teamId) return false;
+  return true;
+}
+
+/**
+ * Угода, яку ЖОДЕН командний зріз не підбере: без менеджера, з осиротілим посиланням
+ * або в менеджера без команди. Саме на цю величину Σ по командах відстає від компанії —
+ * і саме її треба назвати ЯВНО, інакше «Σ команд ≠ компанія» читається як помилка.
+ */
+export function outsideAnyTeam(d: ZoneDeal): boolean {
+  return d.managerId === null || d.managerActive === null || d.teamId === null;
 }
