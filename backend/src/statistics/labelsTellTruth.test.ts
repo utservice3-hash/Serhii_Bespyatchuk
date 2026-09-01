@@ -116,3 +116,44 @@ test("#26e AD_LEADS БІЛЬШЕ НЕ РАХУЄТЬСЯ-І-ВИКИДАЄТЬС
   assert.doesNotMatch(importLine, /adDealSql/,
     "🔴 у computeAuto повернувся імпорт adDealSql — єдиним його читачем був викинутий запит ad_leads");
 });
+
+test("#26f ЗАМОРОЖЕНЕ ДЖЕРЕЛО ПОЗНАЧЕНЕ — і мітка знімається разом із розморожуванням", async () => {
+  const fs = await import("node:fs/promises");
+  const url = await import("node:url");
+  const src = await fs.readFile(
+    url.fileURLToPath(new URL("../../src/statistics/computeAuto.ts", import.meta.url)), "utf8");
+
+  const whitelist = src.slice(src.indexOf("DEPT_AUTO_ENABLED"), src.indexOf("]);", src.indexOf("DEPT_AUTO_ENABLED")));
+  assert.ok(whitelist.length > 0, "🔴 не знайдено білого списку — гейт втратив предмет");
+  const живе = /marketing\|ad_leads/.test(whitelist);
+
+  const m = getMetric("marketing", "ad_leads");
+  assert.ok(m, "🔴 метрики ad_leads у каталозі немає");
+  const МІТКА_ЗАМОРОЗКИ = /не оновлюється/i;
+
+  /**
+   * 🔴 ПІДПИС ЗВʼЯЗАНИЙ ЗІ СТАНОМ, А НЕ З ПАМʼЯТТЮ. Дати в мітці немає свідомо:
+   * зашите «заморожено 06.2026» протухло б МОВЧКИ, щойно джерело зʼявиться, і
+   * ми знову показували б неправду — лише в інший бік. Тому мітка перевіряється
+   * ПРОТИ БІЛОГО СПИСКУ: доки ключ вимкнений, вона мусить стояти; щойно його
+   * увімкнуть — мусить зникнути, і гейт цього вимагатиме сам.
+   */
+  if (живе) {
+    assert.doesNotMatch(m.label, МІТКА_ЗАМОРОЗКИ,
+      `🔴 ad_leads УВІМКНЕНО в DEPT_AUTO_ENABLED, але підпис «${m.label}» досі каже, що не `
+      + "оновлюється. Мітка пережила свою причину — це брехня в інший бік");
+  } else {
+    assert.match(m.label, МІТКА_ЗАМОРОЗКИ,
+      `🔴 ad_leads НЕ рахується (ключа немає в білому списку), а підпис «${m.label}» цього не `
+      + "каже. Читач бачить старе число як поточне — джерелом істини стане рекламний кабінет "
+      + "через API, а до того колонка мусить називати себе замороженою");
+  }
+
+  // Дзеркало: мітка не розповзлась на живі метрики того самого відділу.
+  for (const key of ["non_target_leads", "ad_budget_total"]) {
+    const live = getMetric("marketing", key);
+    assert.ok(live, `🔴 метрики ${key} немає`);
+    assert.doesNotMatch(live.label, МІТКА_ЗАМОРОЗКИ,
+      `🔴 «${live.label}» рахується щогодини, але підписана як заморожена`);
+  }
+});
