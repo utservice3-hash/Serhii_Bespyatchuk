@@ -78,3 +78,58 @@ test("#26j ЖИВИЙ: предикат ріже рівно те, що обіц�
     `🔴 ${f[0].z_nyh_poihaly} угод із датою завантаження В МАЙБУТНЬОМУ порахувались як поїхавші. `
     + "Машина не могла поїхати датою, яка ще не настала — це уточнення власника від 02.09.2026");
 });
+
+/**
+ * 🚧 #26n — МЕЖА ОЗНАЧЕННЯ ТРИМАЄТЬСЯ В ТРЬОХ МІСЦЯХ ОДНАКОВО.
+ *
+ * 📐 Куплено регресією 02.09.2026, за годину після власного ж викату: джоба писала
+ * рядок лише тим парам «бакет × тімлід», де відправлені угоди є, а `upsert` не
+ * чистить пари, що випали. Червень став сумішшю трьох поколінь — 828 → 408.
+ * Гейт стереже саме обидві половини лікування, бо одна без одної не працює.
+ */
+test("#26n МЕЖА ОЗНАЧЕННЯ: підпис == константа · джоба не пише нижче межі · у зоні жоден лід не застоюється",
+  { ...needsBackendEnv() }, async () => {
+  const { pool } = await import("../db/pool.js");
+  const { DISPATCH_FROM, DISPATCH_FROM_LABEL } = await import("./dispatched.js");
+  const { getMetric, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, canonTeamLead } = await import("../statistics/catalog.js");
+
+  // ① ПІДПИС ПОХОДИТЬ ІЗ КОНСТАНТИ, а не з другої копії дати. Зашите «07.2026»
+  //    розійшлося б із межею мовчки — клас «підпис стверджує чужу причину».
+  const m = getMetric("sales", "machines_dispatched");
+  assert.ok(m, "🔴 machines_dispatched зник із каталогу — гейт втратив предмет");
+  assert.ok(m.label.includes(DISPATCH_FROM_LABEL),
+    `🔴 підпис «${m.label}» не називає межу «${DISPATCH_FROM_LABEL}», яку тримає код`);
+  assert.equal(DISPATCH_FROM_LABEL, `${DISPATCH_FROM.slice(5, 7)}.${DISPATCH_FROM.slice(0, 4)}`,
+    "🔴 мітка розійшлась із самою межею");
+
+  // ② ДЖОБА НЕ ПИШЕ НИЖЧЕ МЕЖІ — перевіряється НАСЛІДКОМ у базі, а не читанням коду.
+  //    Спершу контроль: свіжі записи взагалі є, інакше твердження порожнє.
+  const { rows: w } = await pool.query<{ n: string; nyzhche: string }>(
+    `SELECT COUNT(*) AS n,
+            COUNT(*) FILTER (WHERE period_start < $1::date) AS nyzhche
+       FROM statistics_values
+      WHERE department='sales' AND metric_key='machines_dispatched' AND source='auto'
+        AND updated_at > now() - interval '3 hours'`, [DISPATCH_FROM]);
+  assert.ok(Number(w[0].n) > 0,
+    "🔴 за 3 години джоба не записала ЖОДНОГО рядка machines_dispatched — твердження нижче "
+    + "стало б істинним ні про що (джоба ходить раз на ~30 хв)");
+  assert.equal(Number(w[0].nyzhche), 0,
+    `🔴 джоба щойно переписала ${w[0].nyzhche} рядків ДО межі ${DISPATCH_FROM}. Там свідомо лежить `
+    + "старе означення, і дотик до нього робить із місяця суміш поколінь — саме так червень "
+    + "став 408 замість 828");
+
+  // ③ У ЗОНІ ЖОДЕН ЛІД НЕ ЗАСТОЮЄТЬСЯ: рядок мусить бути в КОЖНОГО, хай і з нулем.
+  //    Без цієї половини пара, що випала з результату, застигає на старому числі назавжди.
+  const leads = [...new Set([...Object.values(SALES_TEAM_LEAD).map(canonTeamLead), SALES_FALLBACK_LEAD])];
+  const { rows: z } = await pool.query<{ bucket: string; n: string }>(
+    `SELECT to_char(period_start,'YYYY-MM-DD') AS bucket, COUNT(DISTINCT team_lead) AS n
+       FROM statistics_values
+      WHERE department='sales' AND period_type='month' AND metric_key='machines_dispatched'
+        AND source='auto' AND period_start >= $1::date
+      GROUP BY 1 ORDER BY 1`, [DISPATCH_FROM]);
+  assert.ok(z.length > 0, `🔴 у зоні від ${DISPATCH_FROM} немає жодного бакета — перевіряти нема чого`);
+  const діряві = z.filter((r) => Number(r.n) < leads.length);
+  assert.deepEqual(діряві.map((r) => `${r.bucket}: ${r.n} із ${leads.length}`), [],
+    "🔴 у цих бакетах зони рядок є не в кожного тімліда — той, кого бракує, або показує старе "
+    + "число, або зникає з суми, і жодне з двох не видно на екрані");
+});
