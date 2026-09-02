@@ -15,6 +15,14 @@ import {
  * тож червоніють у будь-який день тижня і в будь-якому оточенні (урок #220-#221b).
  */
 const scratch = () => mkdtempSync(path.join(tmpdir(), "lock-"));
+
+/** Джерело ланцюга — читаємо `.ts`, бо набір біжить із `dist`. */
+function SRC_DEPLOY(): string {
+  for (const r of [path.join(import.meta.dirname, "..", ".."), path.join(import.meta.dirname, "..", "..", "..")]) {
+    try { return readFileSync(path.join(r, "src/tools/deploy.ts"), "utf8"); } catch { /* далі */ }
+  }
+  throw new Error("не знайдено src/tools/deploy.ts — гейт міряв би порожнечу");
+}
 const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const claim = (who: string, min: number, reason = "викат"): Claim => ({ who, at: at(min), reason });
 
@@ -188,4 +196,45 @@ test("#317b 🪞 ДЗЕРКАЛО: дотик продовжує ЛИШЕ сві
   for (let i = 0; i < 5; i++) cli(["--touch", "--who=Допоміжний"], repo);
   assert.equal(readEvents(repo).length, before,
     "🔴 дотик пише подію в журнал — за одне коло він потоне в шумі, і `lossFor` почне брехати");
+});
+
+/**
+ * 🛑 #318/#318b — ДОТИК ЖИВЕ У ФАЗІ, ДЕ `lockTake` НЕМАЄ.
+ *
+ * 📐 Заміряно на ЖИВОМУ викаті 9781c12 (02.09.2026), і це був дефект автора змін.
+ * Дотик вмикався прапорцем після власного кроку `lockTake`. Щойно той крок переїхав
+ * у фазу `check`, фаза `run` лишилась без дотиків узагалі: `touchedAt` 20:41:22 при
+ * поточних 20:52:25 — 11 хв бездіяльності на замку, який у ту саму мить активно
+ * працював, при TTL 20 хв. Ланцюг при цьому виглядав здоровим: кроки зеленіли.
+ *
+ * 🔴 УРОК ШИРШИЙ ЗА ВИПАДОК: памʼять про власну дію — гірше джерело, ніж стан на
+ * диску. Крок може переїхати, а прапорець лишиться там, де був.
+ */
+test("#318 ланцюг питає замок, ЧИЙ ВІН, а не памʼятає власний крок", async () => {
+  const { heldByMe } = await import("./checkoutLock.js");
+  assert.equal(heldByMe(claim("Допоміжний", 3), "Допоміжний"), true,
+    "🔴 власний замок не впізнано — у фазі run дотику не буде, бо lockTake там немає");
+  assert.equal(heldByMe(claim("Основний", 3), "Допоміжний"), false,
+    "🔴 чужий замок визнано своїм — ланцюг мовчки поїхав би під ним");
+  assert.equal(heldByMe(null, "Допоміжний"), false,
+    "🔴 відсутню заявку визнано своєю — робота без замка виглядала б як робота із замком");
+
+  // Джерело — ДИСК, а не прапорець від власного кроку.
+  const dep = SRC_DEPLOY();
+  assert.match(dep, /let lockOurs = heldByMe\(readClaim\(/,
+    "🔴 стан замка знову виводиться з власного кроку — крок переїде, і захист вимкнеться мовчки");
+});
+
+test("#318b 🪞 ДЗЕРКАЛО: у run немає lockTake, і саме тому ініціалізація — єдиний шлях", async () => {
+  const { planSteps } = await import("./deployPlan.js");
+  const run = planSteps("run", "full").map((s) => s.id);
+  assert.ok(!run.includes("lockTake"),
+    "🔴 lockTake повернувся в run — тоді #318 доводить порожнечу: прапорець і так вмикався б там");
+  assert.ok(run.includes("lockRelease"), "🔴 звільнення зникло з run");
+
+  // 🔴 І друга половина: у `check` прапорець МУСИТЬ вмикатись після lockTake, інакше
+  // кроки до нього (їх там лише toolsCheck) і після нього поводились би однаково.
+  const dep = SRC_DEPLOY();
+  assert.match(dep, /step\.id === "lockTake" && r\.ok\) lockOurs = true/,
+    "🔴 у фазі check прапорець більше не вмикається власним кроком — на вільному замку дотику не буде ніколи");
 });

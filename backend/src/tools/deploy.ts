@@ -19,7 +19,7 @@ import {
   MARK_REPORT, MARK_STOP,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
-import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
+import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim } from "./checkoutLock.js";
 import { parseTap, judgeDelta } from "./testDelta.js";
 import { diffGates, acceptRetired } from "../testManifest.js";
 import { FAIL_MARK, failureNames, EXPECTED_PASS_MARK, expectedPassNames } from "../testRunGate.js";
@@ -771,7 +771,13 @@ export async function main(argv: string[]): Promise<number> {
    *      спільному дереві опинився чужий ланцюг.
    * Дотик стоїть ПІСЛЯ `lockTake` (до нього замка ще немає) і не пише в журнал.
    */
-  let lockOurs = false;
+  /**
+   * 🔴 СТАН ВИЗНАЧАЄТЬСЯ З ДИСКА, А НЕ З ВЛАСНОГО КРОКУ. `false` тут означало «дотик
+   * вмикає лише наш `lockTake`» — і фаза `run`, де того кроку більше немає, лишалась
+   * БЕЗ дотиків. Заміряно на живому викаті 9781c12: 11 хв бездіяльності на замку, що
+   * працював, при TTL 20 хв. Тепер ланцюг питає замок, чий він, а не памʼятає це.
+   */
+  let lockOurs = heldByMe(readClaim(CANON_LOCK_DIR), process.env.UTS_ACTOR ?? "deploy");
   for (const step of plan) {
     const h = handlers[step.id];
     if (!h) { console.error(`🔴 КРОК БЕЗ ОБРОБНИКА: ${step.id} — зупиняюсь`); return 1; }
