@@ -110,7 +110,16 @@ async function run(): Promise<void> {
      *   ② `zeroed` — явний нуль кожному лідові зони. `upsert` не видаляє рядків, тож
      *     пара, що випала з результату, інакше застигає на старому числі НАЗАВЖДИ.
      */
-    const zone = `${bucket} >= date_trunc('${trunc}', $5::date)`;
+    /**
+     * 🔴 МЕЖА — ПО ВЛАСНІЙ ДАТІ БАКЕТА, БЕЗ `date_trunc`. Перша редакція обрізала межу
+     * до гранульованості бакета, і на тижнях `date_trunc('week','2026-07-01')` дало
+     * ПОНЕДІЛОК 29.06 — тобто тижневий бакет із червневою датою заліз у зону й отримав
+     * засів нулів. Спіймав власний `#26n` на прод-даних за хвилини після викату.
+     * Правило одне й без винятків: нижче DISPATCH_FROM не пишеться нічого, хай яка
+     * гранульованість. Ціна — тиждень 29.06-05.07 лишається зі старим означенням, і це
+     * рівно те, що обіцяє підпис «означення з 07.2026».
+     */
+    const zone = `${bucket} >= $5::date`;
     const q2 = await pool.query<{ team_id: number | null; bucket: string; n: string }>(
       `SELECT m.team_id AS team_id, to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS n
          FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
