@@ -1455,14 +1455,46 @@ export async function clearReceivableOwner(clientKey: string): Promise<void> {
  *
  * ⚠️ Роз'єднання ЗВІДСИ немає навмисно (в роуті прямо написано, чому: два
  * відкоти до одного реєстру розійшлися б у поведінці швидше, ніж ми про це
- * дізнались би). Скасувати можна на екрані «Клієнти»; дебіторка підхопить
- * відкіт на наступному синку (≤15 хв).
+ * дізнались би). Розʼєднати можна ТУТ-ТАКИ (кнопка в рядку злитої групи, з
+ * превʼю наслідків), а також на екрані «Клієнти»; дебіторка підхопить відкіт на
+ * наступному синку (≤15 хв) — не миттєво.
  */
 export async function mergeReceivableClients(payload: {
   aliases: string[]; canonical: string; reason: string;
 }): Promise<{ merged: number; limitDays: number | null; limitAmount: number | null }> {
   const { data } = await api.post<{ merged: number; limitDays: number | null; limitAmount: number | null }>(
     "/dashboard/receivables/merge", payload);
+  return data;
+}
+
+/**
+ * 🔓 ПРЕВʼЮ РОЗʼЄДНАННЯ — що саме станеться, ДО дії.
+ *
+ * Дію робить наявний `revokeMerge` (той самий, що на екрані «Клієнти»), тож тут
+ * лише показ. Межа читання та сама, що в дії: сервер гейтить обидва
+ * `revokeAllowed` за джерелом злиття.
+ */
+export interface UnmergePreviewData {
+  canonicalKey: string;
+  splitsInto: { clientKey: string; name: string; amount: number; invoices: number }[];
+  parties: number;
+  amount: number;
+  invoices: number;
+  aliasLimitsRestored: { clientKey: string; days: number | null; amount: number | null }[];
+  canonicalLimit: {
+    now: { days: number | null; amount: number | null; note: string | null };
+    before: { kind: "recorded" | "sheet" | "unknown"; days?: number | null; why?: string };
+    /** Ніколи не порожній — сервер це гарантує (`#268`). */
+    warning: string;
+  };
+  ownerlessNotes: { text: string; dueDate: string | null; createdAt: string }[];
+  notesBecomingVisible: number;
+  rebuildMinutes: number;
+}
+
+export async function fetchUnmergePreview(canonical: string): Promise<UnmergePreviewData> {
+  const { data } = await api.get<UnmergePreviewData>(
+    "/dashboard/receivables/unmerge-preview", { params: { canonical } });
   return data;
 }
 
