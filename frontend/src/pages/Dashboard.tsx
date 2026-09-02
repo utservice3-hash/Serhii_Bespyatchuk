@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePolling } from "../hooks/usePolling";
 import { mergeTasksPreservingEdits, type TaskDirtyFields } from "./dashboard/taskMerge";
+import { isBusy, shouldApplyRefresh } from "./dashboard/refreshGate";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   createTask,
@@ -201,8 +202,35 @@ export function Dashboard() {
   // Live refresh: bump a nonce every 5 min so data-loading effects re-fetch
   // fresh CRM data without a manual page reload.
   const [refreshNonce, setRefreshNonce] = useState(0);
-  // Пауза на фоні + джитер; повернення фокуса → один рефетч (bump nonce).
-  usePolling(() => setRefreshNonce((n) => n + 1), 5 * 60 * 1000);
+  /**
+   * 🛑 ОНОВЛЕННЯ НЕ СМИКАЄ ЕКРАН, ПОКИ ЛЮДИНА НА НЬОМУ ПРАЦЮЄ.
+   *
+   * Було: бамп нонсу раз на 5 хв ±25% І НЕГАЙНО на кожне повернення фокуса —
+   * ефект перезаписував дані цілком, тож переїжджали рядки, згорталось
+   * розкриття, закривався редактор і зникав набраний текст.
+   *
+   * 🔴 РІШЕННЯ ПРИЙМАЄ ЧИСТА ФУНКЦІЯ (`refreshGate`), а не умова в тілі
+   * колбека: інакше її неможливо ані просаботувати, ані перевірити без DOM —
+   * а перевіряти тут треба ОБИДВА боки, бо односторонній «не оновлювати, коли
+   * зайнято» зеленіє і на екрані, що не оновлюється ніколи.
+   *
+   * ⚠️ Гейт стоїть ЛИШЕ на цьому поллері. Задачник, месенджер і heartbeat
+   * («чи живий бекенд») мають власні `usePolling` і не зачеплені — heartbeat
+   * узагалі не про дані й таблиці не малює.
+   */
+  const receivablesFetchedAt = useRef(Date.now());
+  const receivablesEditors = useRef(0);
+  usePolling(() => {
+    const busy = isBusy({
+      openEditors: receivablesEditors.current,
+      activeTag: typeof document === "undefined" ? null
+        : (document.activeElement?.tagName ?? null),
+    });
+    const d = shouldApplyRefresh({ busy, ageMs: Date.now() - receivablesFetchedAt.current });
+    if (!d.apply) return;
+    receivablesFetchedAt.current = Date.now();
+    setRefreshNonce((n) => n + 1);
+  }, 5 * 60 * 1000);
   const canEditReceivables = auth?.role === "admin" || auth?.role === "team_lead";
   function patchReceivableNote(clientKey: string, patch: { comment?: string; dueDate?: string | null }) {
     setReceivablesData((prev) =>
@@ -1056,6 +1084,7 @@ export function Dashboard() {
 
       {section === "receivables" && (
         <ReceivablesSection
+          onEditorsChange={(n) => { receivablesEditors.current = n; }}
           auth={auth}
           teams={teams}
           receivablesTeamId={receivablesTeamId}
