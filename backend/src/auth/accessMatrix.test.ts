@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { needsApi, needsMatrix, API_BASE } from "../testMode.js";
 import { ACCESS_MATRIX, ACCESS_ROLES } from "./accessMatrix.js";
 import { MOUNTS } from "./routeInventory.js";
+import { appPaths, readIndex } from "./routeScan.js";
 
 /**
  * #11 — ЕМПІРИЧНА МАТРИЦЯ ДОСТУПУ (450 пар роль×ендпоінт).
@@ -154,7 +155,15 @@ test("#11c ФОРМАТ ШЛЯХІВ: зліпок і проба говорят�
   // розійшлись у тому, чи шлях уже містить `/api`. Мережі не треба — тому перевірка
   // виконується в кожному `npm test`, а не лише в матричному режимі.
   const mounts = [...new Set(MOUNTS.map((m) => m.mount))];
+  // 🔴 ДРУГЕ ДЖЕРЕЛО ЖИВИХ АДРЕС — index.ts (додано 02.09.2026). Не всі роути ростуть із
+  // app.use: три `/api/health*` оголошені ПРЯМО на `app`, тобто не належать жодному
+  // префіксу з MOUNTS. Поки #11c знав лише про MOUNTS, він червонів на цих рядках
+  // ХИБНО — стверджував «проба піде в неіснуючий URL», хоча URL живий. Твердження гейта
+  // не змінилось (проба мусить бити в живу адресу), змінилось те, звідки він бере
+  // перелік живих адрес.
+  const onApp = new Set(appPaths(readIndex()));
   const bad = ACCESS_MATRIX
+    .filter((r) => !onApp.has(r.path))
     .filter((r) => !mounts.some((m) => r.path === m || r.path.startsWith(m + "/")))
     .map((r) => `${r.method} ${r.path}`);
   assert.deepEqual(bad, [],
