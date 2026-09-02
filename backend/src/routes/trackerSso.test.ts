@@ -179,14 +179,14 @@ test("#307 іконку для пункту описано", () => {
 
 test("#309 маршрут /tracker-auth оголошено ПЕРЕД /:section", () => {
   const src = read("frontend/src/App.tsx");
-  const auth = src.indexOf('path="/tracker-auth"');
-  const section = src.indexOf('path="/:section"');
 
-  // /:section збігається з будь-яким одним сегментом, тож оголошений раніше він проковтнув би
-  // /tracker-auth — і агент чекав би на порту відповідь, якої ніхто не надішле.
-  assert.ok(auth > 0, "маршрут /tracker-auth зник");
-  assert.ok(section > 0, "маршрут /:section зник — тест втратив предмет");
-  assert.ok(auth < section, "/tracker-auth мусить бути раніше за /:section");
+  // Сегментами, а не рядком запиту: агент віддає цю адресу операційній системі, і на Windows
+  // вона йде через `cmd /C start`, де `&` розділяє команди. Власний запобіжник агента таку
+  // адресу відкидає — і саме так кнопка одного разу приїхала людям неробочою.
+  assert.match(src, /path="\/tracker-auth\/:port\/:state"/,
+    "маршрут мусить брати порт і state сегментами шляху");
+  assert.ok(src.indexOf('path="/tracker-auth') < src.indexOf('path="/:section"'),
+    "оголошення лишається раніше за /:section");
 });
 
 test("#310 адреса повернення будується з жорсткого хоста, а не з запиту", () => {
