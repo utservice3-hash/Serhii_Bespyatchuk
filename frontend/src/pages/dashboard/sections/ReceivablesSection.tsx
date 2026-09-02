@@ -755,8 +755,12 @@ export function ReceivablesSection({
                           <td style={{ textAlign: "left", verticalAlign: "middle" }}>
                             <span style={{ fontWeight: 600 }}>
                               <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)", marginRight: 4 }}>{caret(c.clientKey)}</span>
-                              {/* 📐 ОБРІЗАННЯ НА 170px (макет v6.1). Повна назва —
-                                  у `title`: обрізання не має ховати зміст. */}
+                              {/* 📐 ОБРІЗАННЯ ЗНЯТО 01.09.2026 — назва ПЕРЕНОСИТЬСЯ, а не
+                                  ховається (стеля 170px була залишком 13-колонкової
+                                  розкладки). `title` лишається ДРУГИМ рубежем для
+                                  аномально довгих назв, а не єдиним способом прочитати.
+                                  ⚠️ Коментар описував стелю ще добу після її зняття —
+                                  саме той клас, коли твердження переживає свою причину. */}
                               <span className="recv-cname" title={c.clientName}>{c.clientName}</span>
                               {/* 🔓 РОЗʼЄДНАТИ — лише на злитій групі й лише з правом.
                                   Кнопки НЕМАЄ ВЗАГАЛІ без права, а не «є, але 403»:
