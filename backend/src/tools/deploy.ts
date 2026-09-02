@@ -439,6 +439,43 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], CANON_LOCK_DIR);
     return { id: "lockRelease", ok: r.code === 0, detail: r.out.join(" · ") };
   },
+  /**
+   * 🗺 ЖИВА ПРОБА ЗЛІПКА ДОСТУПУ. Той самий розбір, що в `accept`, але режим інший:
+   * `test:matrix` вмикає `#11`, який у `test:prod` законно скіпається (`#19e`).
+   *
+   * 🔴 ЛОГ ОКРЕМИЙ. Пише в `/tmp/deploy-matrix.log`, а не в лог приймання: інакше другий
+   * прогін затер би перший, і на розборі аварії ми мали б лише останній.
+   */
+  acceptMatrix: (c) => {
+    const log = "/tmp/deploy-matrix.log";
+    const out = sh("bash", ["-lc",
+      `cd ${c.prodBe} && set -a && . ./.env && set +a && `
+      + `API_BASE=${API_BASE} npm run test:matrix > ${log} 2>&1 || true; `
+      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true`]);
+    const named = failureNames(out);
+    const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
+    if (!m) return { id: "acceptMatrix", ok: false,
+      detail: `🔴 гейт прогону не надрукував підсумку — матрична проба не дійшла до кінця. Лог: ${log}` };
+    const [, doneN, needN, fails] = m;
+    if (doneN !== needN) return { id: "acceptMatrix", ok: false,
+      detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
+    if (fails !== "0") {
+      const mismatch = named.length !== Number(fails)
+        ? ` ⚠️ перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт`
+        : "";
+      /**
+       * 🔴 ДРЕЙФ ЗЛІПКА — НЕ «ПОЛАГОДЬ ТЕСТ». Кожна клітинка означає, що жива поведінка
+       * доступу розійшлась із записаною. Перезнімати зліпок можна ЛИШЕ рішенням власника
+       * і з причиною в рядку — інакше перезняття читається як замітання сигналу.
+       */
+      return { id: "acceptMatrix", ok: false,
+        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}`
+          + (named.length ? `\n${named.map((n) => `   ﹣ ${n}`).join("\n")}` : "")
+          + "\n   Якщо серед них #11 — це ДРЕЙФ ДОСТУПУ: зліпок і прод розійшлись."
+          + "\n   Не перезнімай зліпок сам: кожна клітинка потребує «так, ми цього хотіли»." };
+    }
+    return { id: "acceptMatrix", ok: true, detail: `${doneN} із ${needN}, падінь 0 — зліпок доступу збігається з живим продом` };
+  },
   buildFresh: async (c) => {
     const h = await health();
     const disk = c.prodBe ? `${c.prodBe}/dist/version.json` : "";
