@@ -78,3 +78,70 @@ test("#26j ЖИВИЙ: предикат ріже рівно те, що обіц�
     `🔴 ${f[0].z_nyh_poihaly} угод із датою завантаження В МАЙБУТНЬОМУ порахувались як поїхавші. `
     + "Машина не могла поїхати датою, яка ще не настала — це уточнення власника від 02.09.2026");
 });
+
+/**
+ * 🚧 #26n — МЕЖА ОЗНАЧЕННЯ ТРИМАЄТЬСЯ В ТРЬОХ МІСЦЯХ ОДНАКОВО.
+ *
+ * 📐 Куплено регресією 02.09.2026, за годину після власного ж викату: джоба писала
+ * рядок лише тим парам «бакет × тімлід», де відправлені угоди є, а `upsert` не
+ * чистить пари, що випали. Червень став сумішшю трьох поколінь — 828 → 408.
+ * Гейт стереже саме обидві половини лікування, бо одна без одної не працює.
+ */
+test("#26n МЕЖА ОЗНАЧЕННЯ: підпис == константа · джоба не пише нижче межі · у зоні жоден лід не застоюється",
+  { ...needsBackendEnv() }, async () => {
+  const { pool } = await import("../db/pool.js");
+  const { DISPATCH_FROM, DISPATCH_FROM_LABEL } = await import("./dispatched.js");
+  const { getMetric, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, canonTeamLead } = await import("../statistics/catalog.js");
+
+  // ① ПІДПИС ПОХОДИТЬ ІЗ КОНСТАНТИ, а не з другої копії дати. Зашите «07.2026»
+  //    розійшлося б із межею мовчки — клас «підпис стверджує чужу причину».
+  const m = getMetric("sales", "machines_dispatched");
+  assert.ok(m, "🔴 machines_dispatched зник із каталогу — гейт втратив предмет");
+  assert.ok(m.label.includes(DISPATCH_FROM_LABEL),
+    `🔴 підпис «${m.label}» не називає межу «${DISPATCH_FROM_LABEL}», яку тримає код`);
+  assert.equal(DISPATCH_FROM_LABEL, `${DISPATCH_FROM.slice(5, 7)}.${DISPATCH_FROM.slice(0, 4)}`,
+    "🔴 мітка розійшлась із самою межею");
+
+  /**
+   * ② ДЖОБА НЕ ПИШЕ НИЖЧЕ МЕЖІ — і перевіряється це ВІДБИТКОМ, а не часом запису.
+   *
+   * 🔴 ПЕРША РЕДАКЦІЯ ДИВИЛАСЬ НА `updated_at` І БУЛА ХИБНОЮ ТРИВОГОЮ ЗА ПОБУДОВОЮ:
+   * власник санкціонував разове відновлення шести рядків червня зі знімка, тобто
+   * ЗАКОННИЙ запис нижче межі. Гейт на «нічого свіжого нижче межі» червонів би саме
+   * на дозволеній дії — той самий клас, що знятий `#137e`: перевірка, яка червоніє
+   * не з нашої вини, за два тижні починає ігноруватись.
+   *
+   * Відбиток протікання інший і однозначний: якщо межу зони прибрати, туди поїде
+   * ЗАСІВ НУЛІВ (половина ③), бо в старих місяцях у більшості лідів відправлених
+   * немає. Заміряно 02.09.2026 перед правкою: нижче межі **189 рядків і в жодного
+   * значення 0** — тобто нуль під межею не може взятись нізвідки, крім протікання.
+   * Відновлення зі знімка пише ненульові числа (71 / 214 / 61 / 28 / 96 / 358) і
+   * цього відбитка не лишає.
+   */
+  const { rows: b } = await pool.query<{ n: string; nuli: string }>(
+    `SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE value = 0) AS nuli
+       FROM statistics_values
+      WHERE department='sales' AND metric_key='machines_dispatched' AND source='auto'
+        AND period_start < $1::date`, [DISPATCH_FROM]);
+  assert.ok(Number(b[0].n) > 0,
+    `🔴 нижче межі ${DISPATCH_FROM} немає жодного auto-рядка — твердження про протікання `
+    + "стало б істинним ні про що (заміряно 02.09: 189 рядків)");
+  assert.equal(Number(b[0].nuli), 0,
+    `🔴 нижче межі ${DISPATCH_FROM} лежить ${b[0].nuli} нулів — туди протік засів нулів, тобто `
+    + "джоба знову рахує старі місяці за новим означенням. Саме так червень став 408 замість 828");
+
+  // ③ У ЗОНІ ЖОДЕН ЛІД НЕ ЗАСТОЮЄТЬСЯ: рядок мусить бути в КОЖНОГО, хай і з нулем.
+  //    Без цієї половини пара, що випала з результату, застигає на старому числі назавжди.
+  const leads = [...new Set([...Object.values(SALES_TEAM_LEAD).map(canonTeamLead), SALES_FALLBACK_LEAD])];
+  const { rows: z } = await pool.query<{ bucket: string; n: string }>(
+    `SELECT to_char(period_start,'YYYY-MM-DD') AS bucket, COUNT(DISTINCT team_lead) AS n
+       FROM statistics_values
+      WHERE department='sales' AND period_type='month' AND metric_key='machines_dispatched'
+        AND source='auto' AND period_start >= $1::date
+      GROUP BY 1 ORDER BY 1`, [DISPATCH_FROM]);
+  assert.ok(z.length > 0, `🔴 у зоні від ${DISPATCH_FROM} немає жодного бакета — перевіряти нема чого`);
+  const діряві = z.filter((r) => Number(r.n) < leads.length);
+  assert.deepEqual(діряві.map((r) => `${r.bucket}: ${r.n} із ${leads.length}`), [],
+    "🔴 у цих бакетах зони рядок є не в кожного тімліда — той, кого бракує, або показує старе "
+    + "число, або зникає з суми, і жодне з двох не видно на екрані");
+});
