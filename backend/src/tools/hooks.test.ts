@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, mkdtempSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,7 @@ const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const HOOKS_DIR = `${ROOT}.claude/hooks`;
 const hook1 = () => import(`${HOOKS_DIR}/no-commit-with-sabotage.mjs`);
 const hook2 = () => import(`${HOOKS_DIR}/save-handoff.mjs`);
+const hook3 = () => import(`${HOOKS_DIR}/no-abs-symlink.mjs`);
 
 test("#261 обидва хуки оголошені в .claude/settings.json і показують на наявні файли — у ОБИДВА боки", () => {
   const p = `${ROOT}.claude/settings.json`;
@@ -119,4 +121,77 @@ test("#261d передача перед стисненням несе стан, 
     "🔴 останню вказівку обрізано — саме в ній критерій приймання, і читач продовжити не зміг би");
   assert.ok(!two.includes(стара) && two.includes("[…обрізано…]"),
     "🔴 старі репліки не обрізаються — передача розпухне й витіснить те, заради чого пишеться");
+});
+
+/**
+ * 🪝 #261e–#261f — СИМЛІНК З АБСОЛЮТНОЮ ЦІЛЛЮ НЕ ЙДЕ В КОМІТ.
+ *
+ * 🔴 ПРИВІД ЗАМІРЯНИЙ: у `77e0d72` поїхав `backend/node_modules` — blob режиму 120000 на
+ * `/home/user/…`, шлях контейнера. У прод-чекауті його немає, тобто дерево з таким
+ * записом не збирається. `.gitignore` не спинив: `node_modules/` із косою матчить лише
+ * КАТАЛОГ, а симлінк — не каталог (доведено обома боками в порожньому репозиторії).
+ *
+ * 🔴 ДВА ГЕЙТИ, А НЕ ОДИН, І ПОДІЛ НЕ КОСМЕТИЧНИЙ. `#261e` перевіряє РІШЕННЯ (чиста
+ * функція, без файлової системи). `#261f` перевіряє ЗБІР — що хук справді бачить симлінк
+ * у справжньому git-дереві. Без другого перше доводило б лише, що функція вміє судити
+ * про масив, який їй хтось подав; саме там і живе відмова «нічого не знайшов».
+ */
+test("#261e відмова називає КОЖЕН абсолютний симлінк і як його зняти — а на відносному мовчить", async () => {
+  const { decideLinks, isAddOrCommit, outsideRepo } = await hook3();
+  const links = [
+    { path: "backend/node_modules", target: "/home/user/Serhii_Bespyatchuk/backend/node_modules", staged: true },
+    { path: "frontend/assets", target: "/opt/assets", staged: false },
+  ];
+
+  const blocked = decideLinks("git commit -m 'щось'", links, "/tmp/w");
+  assert.equal(blocked.block, true, "🔴 коміт з абсолютним симлінком мусить блокуватись");
+  for (const l of links)
+    assert.ok(blocked.reason.includes(l.path) && blocked.reason.includes(l.target),
+      `🔴 відмова не назвала ${l.path} → людина не дізнається, ЩО саме прибирати`);
+  assert.ok(blocked.reason.includes("git rm --cached"),
+    "🔴 відмова не каже, ЯК прибрати — заборона без виходу коштує як сама аварія");
+  assert.ok(!blocked.reason.includes("docs/HANDOFF.md"),
+    "🔴 у відмові зʼявився файл, якого немає в наборі — те саме звинувачення невинного, що спіймав S1");
+
+  // 🔴 ДЗЕРКАЛО ПО ОБИДВА БОКИ МЕЖІ. Односторонній предикат зеленів би й тоді, коли
+  // блокує ВСЕ: відносний симлінк переносний, і забороняти його не можна.
+  assert.equal(decideLinks("git add -A", [{ path: "a", target: "../b", staged: false }], "/tmp/w").block, false,
+    "🔴 відносний симлінк заблоковано — правило накрило те, що переносне за побудовою");
+  assert.equal(decideLinks("git status", links, "/tmp/w").block, false, "🔴 не-add/commit блокувати не можна");
+  assert.equal(decideLinks("git commit -m x", [], "/tmp/w").block, false, "🔴 чисте дерево коміт не блокує");
+  assert.equal(isAddOrCommit("git -c core.pager=cat add ."), true, "🔴 форма `git -c … add` пройшла б повз хук");
+  assert.equal(isAddOrCommit("echo 'git add' > f"), false, "🔴 згадка в тексті — не команда");
+
+  // Обидва боки межі «назовні / всередині»: без другого це доводило б лише, що функція щось віддає.
+  assert.equal(outsideRepo("/tmp/w", "/home/user/x"), true, "🔴 ціль поза деревом не розпізнано");
+  assert.equal(outsideRepo("/tmp/w", "/tmp/w/backend/x"), false, "🔴 ціль усередині дерева названо зовнішньою");
+});
+
+test("#261f 🪞 ЗБІР ПРАЦЮЄ НА СПРАВЖНЬОМУ РЕПОЗИТОРІЇ — і розрізняє абсолютний та відносний", async () => {
+  const { collectLinks, decideLinks } = await hook3();
+  const dir = mkdtempSync(join(tmpdir(), "lnk-"));
+  try {
+    const sh = (...a: string[]) =>
+      execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    sh("init", "-q", "."); sh("config", "user.email", "t@t"); sh("config", "user.name", "t");
+    writeFileSync(join(dir, "real.txt"), "x");
+    symlinkSync("/etc/hosts", join(dir, "abs-link"));      // абсолютний — має блокувати
+    symlinkSync("real.txt", join(dir, "rel-link"));        // відносний — має пройти
+    sh("add", "-A");
+
+    const links = collectLinks(dir);
+    // 🔴 ПОРОЖНІЙ ЗБІР = ПРОВАЛ. Без цього «нуль порушень» не відрізнити від «нуль знайдених».
+    assert.equal(links.length, 2,
+      `🔴 збір знайшов ${links.length} симлінк(ів) замість 2 — розбір ls-files зламався, і хук мовчав би завжди`);
+    const abs = links.find((l: { path: string }) => l.path === "abs-link");
+    assert.equal(abs?.target, "/etc/hosts", "🔴 ціль абсолютного симлінка прочитано неправильно");
+    assert.equal(abs?.staged, true, "🔴 симлінк в індексі не позначено як staged");
+    assert.equal(links.find((l: { path: string }) => l.path === "rel-link")?.target, "real.txt",
+      "🔴 ціль відносного симлінка прочитано неправильно");
+
+    assert.equal(decideLinks("git commit -m x", links, dir).block, true,
+      "🔴 на справжньому дереві з абсолютним симлінком хук мусить блокувати");
+    assert.equal(decideLinks("git commit -m x", links.filter((l: { path: string }) => l.path === "rel-link"), dir).block, false,
+      "🔴 дерево лише з відносним симлінком блокувати не можна");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
