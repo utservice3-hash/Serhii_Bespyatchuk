@@ -618,17 +618,24 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/teams/managers", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
-  // 🔴 ТРИ РОУТИ SSO ТРЕКЕРА ДОДАНО 02.09.2026 — ЇХ ТУТ НЕ БУЛО ВЗАГАЛІ.
-  // Знайдено заміром під `#280`: із 217 оголошених роутів у зліпку бракувало рівно цих
-  // трьох, і вони вже ЖИЛИ В ПРОДІ з першого PR трекера. `#17` їх не бачив, бо дивиться
-  // в інший реєстр (`ROUTE_BOUNDARY_EXEMPTIONS`), а `#11` — лише в режимі test:matrix.
-  // Обліковка в усіх трьох не рольова (ключ `X-Dashboard-Sso-Key` або посвідчення), тож
-  // списки порожні — та сама форма, що в `/api/tracker/*` нижче.
+  // 🔴 ЧОТИРИ РОУТИ ТРЕКЕРА. Три перші додано 02.09.2026 — їх тут не було ВЗАГАЛІ:
+  // знайдено заміром під `#280`, і вони вже ЖИЛИ В ПРОДІ з першого PR трекера. `#17` їх
+  // не бачив, бо дивиться в інший реєстр (`ROUTE_BOUNDARY_EXEMPTIONS`), а `#11` — лише в
+  // режимі test:matrix. Четвертий (`tracker-users`) приносить другий PR трекера.
+  // Обліковка в усіх чотирьох не рольова (ключ `X-Dashboard-Sso-Key` або посвідчення),
+  // тож списки порожні — та сама форма, що в `/api/tracker/*` нижче.
+  //
+  // ⚠️ РОЗВʼЯЗАНО РУКАМИ 02.09.2026, І ЦЕ НЕ ПРИДИРКА. Обидві сторони мержу вставляли
+  // рядок у ТУ САМУ точку, тож межа конфлікту різала обʼєктний літерал: рядок
+  // `allow: [], deny: [] },` після маркера належав ОСТАННЬОМУ рядку обох сторін
+  // одночасно. Механічне «беремо обидві сторони» давало TS1136 — заміряно.
   { method: "GET", path: "/api/auth/tracker-sso", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/auth/tracker-assertion", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/auth/tracker-identity", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/tracker/auth", cls: "deny-only",
     allow: [], deny: [] },
