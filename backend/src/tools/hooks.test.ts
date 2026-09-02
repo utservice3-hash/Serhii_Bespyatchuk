@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync, mkdtempSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -175,8 +175,16 @@ test("#261f 🪞 ЗБІР ПРАЦЮЄ НА СПРАВЖНЬОМУ РЕПОЗИ�
       execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     sh("init", "-q", "."); sh("config", "user.email", "t@t"); sh("config", "user.name", "t");
     writeFileSync(join(dir, "real.txt"), "x");
-    symlinkSync("/etc/hosts", join(dir, "abs-link"));      // абсолютний — має блокувати
-    symlinkSync("real.txt", join(dir, "rel-link"));        // відносний — має пройти
+    // 🔴 ЦІЛЬ АБСОЛЮТНА, АЛЕ ВСЕРЕДИНІ ТИМЧАСОВОГО ДЕРЕВА — і це не спрощення, а урок.
+    // Перша редакція вказувала на `/etc/hosts`; у контейнері зелено, а на прод-сервері
+    // `EACCES: symlink '/etc/hosts'` — там заборонено створювати симлінки НАЗОВНІ
+    // домашнього каталогу (заміряно 02.09.2026: у /tmp і /home/evraziat — можна, на /etc —
+    // ні). Гейт червонів через оточення, а не через предмет; спіймав це крок `test` у
+    // deploy:check, тобто до прода.
+    // Побічно фікстура стала ТОЧНІШОЮ: абсолютний шлях, що лежить ПІД коренем дерева, —
+    // рівно той випадок, який пропускала вужча редакція предиката («абсолютний і назовні»).
+    symlinkSync(join(dir, "real.txt"), join(dir, "abs-link")); // абсолютний — має блокувати
+    symlinkSync("real.txt", join(dir, "rel-link"));            // відносний — має пройти
     sh("add", "-A");
 
     const links = collectLinks(dir);
@@ -184,7 +192,8 @@ test("#261f 🪞 ЗБІР ПРАЦЮЄ НА СПРАВЖНЬОМУ РЕПОЗИ�
     assert.equal(links.length, 2,
       `🔴 збір знайшов ${links.length} симлінк(ів) замість 2 — розбір ls-files зламався, і хук мовчав би завжди`);
     const abs = links.find((l: { path: string }) => l.path === "abs-link");
-    assert.equal(abs?.target, "/etc/hosts", "🔴 ціль абсолютного симлінка прочитано неправильно");
+    assert.equal(abs?.target, join(dir, "real.txt"), "🔴 ціль абсолютного симлінка прочитано неправильно");
+    assert.equal(isAbsolute(abs?.target ?? ""), true, "🔴 фікстура перестала бути абсолютною — гейт перевіряв би не те");
     assert.equal(abs?.staged, true, "🔴 симлінк в індексі не позначено як staged");
     assert.equal(links.find((l: { path: string }) => l.path === "rel-link")?.target, "real.txt",
       "🔴 ціль відносного симлінка прочитано неправильно");
