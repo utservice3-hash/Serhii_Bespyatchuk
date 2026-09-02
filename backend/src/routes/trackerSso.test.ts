@@ -400,6 +400,15 @@ test("#323b 🪞 ДЗЕРКАЛО: мапер — БІЛИЙ СПИСОК, і р
   assert.equal(rosterPerson({ ...base, data_scope: "company" }).scope, "company");
   assert.equal(rosterPerson(base).name, "a@b", "🔴 порожнє імʼя мусить падати на пошту, а не бути null");
 
+  // 🔴 ВЛАСНЕ «БІЛИЙ СПИСОК» — доданий 02.09.2026, бо дзеркало його НЕ перевіряло.
+  // Заміряно саботажем при мержі PR: підміна тіла на `{ ...(r as …), id: r.id, … }`
+  // зробила ЧЕРВОНИМ лише `#323`, а `#323b` лишився зеленим — тобто його назва обіцяла
+  // більше, ніж він стверджував. Перейменовувати не можна (правило 13: уточнена назва
+  // читається як зниклий гейт), тож гейт дотягнуто до власної назви.
+  const withJunk = { ...base, role_key: "hr", password_hash: "x" } as typeof base;
+  assert.deepEqual(Object.keys(rosterPerson(withJunk)).sort(), Object.keys(rosterPerson(base)).sort(),
+    "🔴 зайва колонка рядка стала ключем відповіді — це вже не білий список, а копія рядка");
+
   // Роут не має права додавати поля ПІСЛЯ мапера — інакше множина вище нічого не стереже.
   const body = handlerBody(read("backend/src/routes/auth.ts"), 'authRouter.get("/tracker-users"');
   assert.match(body, /res\.json\(\{ people: rows\.rows\.map\(rosterPerson\) \}\);/,
