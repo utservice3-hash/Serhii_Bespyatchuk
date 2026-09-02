@@ -443,6 +443,35 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "PATCH", path: "/api/goals/:id", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  // ── ТРИ РОУТИ /api/health ДОДАНО 02.09.2026. Їх знайшов #280 після того, як навчився
+  // читати index.ts: вони оголошені прямо на `app`, тобто не належать жодному модулю з
+  // MOUNTS, і тому не потрапляли у зліпок ЖОДНОГО разу з моменту його створення.
+  //
+  // 🔴 ЦЕ ЗЛІПОК «ЯК Є», А НЕ «ЯК МАЄ БУТИ» — три рядки нижче описують ПОТОЧНУ
+  // поведінку прода, знову ж таки за призначенням цього файла (див. шапку). Політику
+  // вони не змінюють і не мають права: зміна політики робиться окремо й свідомо.
+  //
+  // 🔴 /api/health БЕЗ СУФІКСА ВІДКРИТИЙ, І ЦЕ СВІДОМИЙ ВИНЯТОК (рішення власника
+  // 02.09.2026), а не недогляд. Його читає НАШ ВЛАСНИЙ ланцюг деплою, щоб дізнатись sha
+  // прода: крок `base` бере версію саме звідси і ходить БЕЗ заголовка Authorization
+  // (заміряно: у tools/deploy.ts жодного Bearer/Authorization немає). Закрити його =
+  // зламати викат усім чотирьом чатам одночасно.
+  // ⚠️ ЯКЩО ЧИТАЄШ ЦЕ ЧЕРЕЗ ПІВРОКУ: не «лагодь» відкритість цього роута з найкращих
+  // намірів. Спершу перенеси ланцюг деплою на інше джерело sha, і лише потім.
+  { method: "GET", path: "/api/health", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  // Тривоги: у коді стоїть явний список ["admin","ceo","opdir","kvp"], і він уже
+  // закріплений з ОБОХ боків — #10.4 (ці четверо → 200) і #10.5 (manager, team_lead,
+  // hr, financier → 403). Рядок лише переносить це у зліпок.
+  { method: "GET", path: "/api/health/alerts", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  // 🔴 ЗВІРКА ВІДДАЄТЬСЯ БЕЗ АВТОРИЗАЦІЇ ВЗАГАЛІ — у неї немає навіть requireAuth
+  // (index.ts: `app.get("/api/health/reconciliation", async (_req, res)`). Тобто це не
+  // «бачить будь-хто авторизований», а «бачить будь-хто». Віддає операційні нутрощі:
+  // rows_over_threshold, max_delta_pct, integrity_orphans, worst_json, healed_count.
+  // Рядок описує це «як є»; ВІДКРИТЕ ПИТАННЯ про закриття винесено власнику окремо.
+  { method: "GET", path: "/api/health/reconciliation", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/messages/:userId", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "POST", path: "/api/messages/:userId", cls: "deny-only",
@@ -553,6 +582,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/settings/users/:id", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
+  // 👤 Стан менеджера (активний / завершує / звільнений) — та сама межа, що й решта
+  //    керування людьми: ставить лише той, хто керує користувачами.
+  { method: "PATCH", path: "/api/settings/managers/:id/work-state", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reactivate", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reset-password", cls: "deny-only",
@@ -585,7 +618,21 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/teams/managers", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 🔴 ТРИ РОУТИ SSO ТРЕКЕРА ДОДАНО 02.09.2026 — ЇХ ТУТ НЕ БУЛО ВЗАГАЛІ.
+  // Знайдено заміром під `#280`: із 217 оголошених роутів у зліпку бракувало рівно цих
+  // трьох, і вони вже ЖИЛИ В ПРОДІ з першого PR трекера. `#17` їх не бачив, бо дивиться
+  // в інший реєстр (`ROUTE_BOUNDARY_EXEMPTIONS`), а `#11` — лише в режимі test:matrix.
+  // Обліковка в усіх трьох не рольова (ключ `X-Dashboard-Sso-Key` або посвідчення), тож
+  // списки порожні — та сама форма, що в `/api/tracker/*` нижче.
+  // Четвертий роут тієї ж родини (PR #tracker-user-sync): список людей для синхронізації.
+  // Той самий ключ, та сама порожня обліковка — деталі в ROUTE_BOUNDARY_EXEMPTIONS.
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "GET", path: "/api/auth/tracker-sso", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/auth/tracker-assertion", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/auth/tracker-identity", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/tracker/auth", cls: "deny-only",
     allow: [], deny: [] },
