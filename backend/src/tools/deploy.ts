@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
+  MARK_REPORT, MARK_STOP,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
@@ -762,7 +763,7 @@ export async function main(argv: string[]): Promise<number> {
        * 15, інакше лишає прод у стані, якого ніхто не назве вголос; а не сказане
        * вголос читається як благополуччя.
        */
-      console.error(`\n🔴 СТОП на кроці «${step.id}» — ${step.why}`);
+      console.error(`\n${MARK_STOP} на кроці «${step.id}» — ${step.why}`);
       const ab = abortState(step.id, done.filter((d) => d.ok && !d.skipped).map((d) => d.id),
         { prodSha: ctx.prod || "(невідомо)", targetSha: ctx.target, branch: ctx.branch });
       console.error(`\n📍 СТАН ПРОДА: ${ab.state}`);
@@ -771,7 +772,7 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
   const skipped = done.filter((d) => d.skipped);
-  console.log(`\n📋 ЗВІТ · фаза ${phase} · режим ${mode} · виконано ${done.length - skipped.length} із ${plan.length}`);
+  console.log(`\n${MARK_REPORT} · фаза ${phase} · режим ${mode} · виконано ${done.length - skipped.length} із ${plan.length}`);
   if (skipped.length) {
     console.log("﹣ НЕ ВИКОНУВАЛИСЬ (це НЕ «пройшло»):");
     for (const s of skipped) console.log(`   ${s.id}: ${s.skipped}`);

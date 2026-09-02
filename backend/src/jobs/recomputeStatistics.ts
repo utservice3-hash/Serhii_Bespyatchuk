@@ -14,6 +14,8 @@ import {
   canonTeamLead, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, STATS_AUTO_FROM,
 } from "../statistics/catalog.js";
 import { computeDeptAuto, computeFinanceSnapshot, computeCohortConversions } from "../statistics/computeAuto.js";
+import { dispatchedWhere, cohortMonth, DISPATCH_FROM } from "../core/dispatched.js";
+import { STAGE_RECEIVED } from "../core/money.js";
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number);
@@ -53,6 +55,11 @@ export async function recomputeStatistics(): Promise<void> {
 const teamLeadOf = (teamId: number | null) =>
   teamId != null && SALES_TEAM_LEAD[teamId] ? canonTeamLead(SALES_TEAM_LEAD[teamId]) : SALES_FALLBACK_LEAD;
 
+/** Усі канонічні тімліди — кому мусить дістатись рядок, навіть якщо в нього нуль. */
+const DISPATCH_LEADS = [...new Set([
+  ...Object.values(SALES_TEAM_LEAD).map(canonTeamLead), SALES_FALLBACK_LEAD,
+])];
+
 async function run(): Promise<void> {
   // ключ `${pt}|${ps}|${lead}|${metric}` → value
   const out = new Map<string, number>();
@@ -78,10 +85,64 @@ async function run(): Promise<void> {
       const lead = teamLeadOf(r.team_id);
       add(ptype, r.bucket, lead, "revenue_won", Number(r.rev));
       add(ptype, r.bucket, lead, "machines_success", Number(r.succ));
-      // Правило №1 словника: «Поставлені машини» = перейшли в успіх у періоді
-      // (той самий якір, що й дохід). Снапшот-проксі видалено.
-      add(ptype, r.bucket, lead, "machines_dispatched", Number(r.succ));
     }
+  }
+
+  /**
+   * 🚚 «ВІДПРАВЛЕНІ МАШИНИ» — окремий запит, бо це ІНША МНОЖИНА, а не інший зріз
+   * тієї самої. До 02.09.2026 сюди клалось `Number(r.succ)`, тобто число успішних:
+   * колонка обіцяла відвантажене-й-неоплачене, а показувала оплачене. Означення й
+   * усі заміряні факти — `core/dispatched.ts`; свого SQL по якорю тут немає навмисно.
+   *
+   * ⚠️ Якір когорти — МІСЯЦЬ СТВОРЕННЯ, а не `closed_at` (там анкер доходу). Тому
+   * вікно `RECENT_DAYS` теж міряється по `created_at_kommo`, інакше свіжа угода
+   * старого місяця мовчки випала б із власного бакета.
+   */
+  for (const [ptype, trunc] of [["month", "month"], ["week", "week"]] as const) {
+    const bucket = ptype === "month" ? cohortMonth("d")
+      : `date_trunc('week', (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv'))`;
+    /**
+     * 🚧 ДВІ УМОВИ, ЯКИХ НЕ БУЛО В ПЕРШІЙ РЕДАКЦІЇ, І ЯКІ КУПЛЕНІ РЕГРЕСІЄЮ 02.09.2026
+     * (розбір — `core/dispatched.ts`, шапка `DISPATCH_FROM`):
+     *   ① `>= DISPATCH_FROM` — нижче межі лежить СТАРЕ означення, і воно там лишається
+     *     свідомо; без цієї умови вікно 75 днів залазить у граничний місяць і робить
+     *     із нього суміш поколінь (червень: 828 → 408);
+     *   ② `zeroed` — явний нуль кожному лідові зони. `upsert` не видаляє рядків, тож
+     *     пара, що випала з результату, інакше застигає на старому числі НАЗАВЖДИ.
+     */
+    /**
+     * 🔴 МЕЖА — ПО ВЛАСНІЙ ДАТІ БАКЕТА, БЕЗ `date_trunc`. Перша редакція обрізала межу
+     * до гранульованості бакета, і на тижнях `date_trunc('week','2026-07-01')` дало
+     * ПОНЕДІЛОК 29.06 — тобто тижневий бакет із червневою датою заліз у зону й отримав
+     * засів нулів. Спіймав власний `#26n` на прод-даних за хвилини після викату.
+     * Правило одне й без винятків: нижче DISPATCH_FROM не пишеться нічого, хай яка
+     * гранульованість. Ціна — тиждень 29.06-05.07 лишається зі старим означенням, і це
+     * рівно те, що обіцяє підпис «означення з 07.2026».
+     */
+    const zone = `${bucket} >= $5::date`;
+    const q2 = await pool.query<{ team_id: number | null; bucket: string; n: string }>(
+      `SELECT m.team_id AS team_id, to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS n
+         FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+        WHERE d.pipeline_id = ANY($1)
+          AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= (CURRENT_DATE - $3::int)
+          AND (m.team_id IS NULL OR m.team_id = ANY($2))
+          AND ${zone}
+          AND ${dispatchedWhere("d", "$4")}
+        GROUP BY m.team_id, bucket`,
+      [FULL_CYCLE, SALES_TEAM_IDS, RECENT_DAYS, STAGE_RECEIVED, DISPATCH_FROM]
+    );
+    // Бакети, за які джоба ВІДПОВІДАЄ, беруться з ДАНИХ, а не з календаря: календар
+    // розійшовся б із вікном при першій же зміні RECENT_DAYS.
+    const qb = await pool.query<{ bucket: string }>(
+      `SELECT DISTINCT to_char(${bucket}, 'YYYY-MM-DD') AS bucket
+         FROM deals d
+        WHERE d.pipeline_id = ANY($1)
+          AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= (CURRENT_DATE - $2::int)
+          AND ${zone.replace("$5", "$3")}`,
+      [FULL_CYCLE, RECENT_DAYS, DISPATCH_FROM]
+    );
+    for (const b of qb.rows) for (const lead of DISPATCH_LEADS) add(ptype, b.bucket, lead, "machines_dispatched", 0);
+    for (const r of q2.rows) add(ptype, r.bucket, teamLeadOf(r.team_id), "machines_dispatched", Number(r.n));
   }
 
   // Снапшот-метрики (поточний стан, без фільтра дати) — пишемо в ПОТОЧНИЙ місяць
