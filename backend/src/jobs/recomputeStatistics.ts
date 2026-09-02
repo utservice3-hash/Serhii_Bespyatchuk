@@ -14,6 +14,8 @@ import {
   canonTeamLead, SALES_TEAM_LEAD, SALES_FALLBACK_LEAD, STATS_AUTO_FROM,
 } from "../statistics/catalog.js";
 import { computeDeptAuto, computeFinanceSnapshot, computeCohortConversions } from "../statistics/computeAuto.js";
+import { dispatchedWhere, cohortMonth } from "../core/dispatched.js";
+import { STAGE_RECEIVED } from "../core/money.js";
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number);
@@ -78,10 +80,33 @@ async function run(): Promise<void> {
       const lead = teamLeadOf(r.team_id);
       add(ptype, r.bucket, lead, "revenue_won", Number(r.rev));
       add(ptype, r.bucket, lead, "machines_success", Number(r.succ));
-      // Правило №1 словника: «Поставлені машини» = перейшли в успіх у періоді
-      // (той самий якір, що й дохід). Снапшот-проксі видалено.
-      add(ptype, r.bucket, lead, "machines_dispatched", Number(r.succ));
     }
+  }
+
+  /**
+   * 🚚 «ВІДПРАВЛЕНІ МАШИНИ» — окремий запит, бо це ІНША МНОЖИНА, а не інший зріз
+   * тієї самої. До 02.09.2026 сюди клалось `Number(r.succ)`, тобто число успішних:
+   * колонка обіцяла відвантажене-й-неоплачене, а показувала оплачене. Означення й
+   * усі заміряні факти — `core/dispatched.ts`; свого SQL по якорю тут немає навмисно.
+   *
+   * ⚠️ Якір когорти — МІСЯЦЬ СТВОРЕННЯ, а не `closed_at` (там анкер доходу). Тому
+   * вікно `RECENT_DAYS` теж міряється по `created_at_kommo`, інакше свіжа угода
+   * старого місяця мовчки випала б із власного бакета.
+   */
+  for (const [ptype, trunc] of [["month", "month"], ["week", "week"]] as const) {
+    const bucket = ptype === "month" ? cohortMonth("d")
+      : `date_trunc('week', (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv'))`;
+    const q2 = await pool.query<{ team_id: number | null; bucket: string; n: string }>(
+      `SELECT m.team_id AS team_id, to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS n
+         FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
+        WHERE d.pipeline_id = ANY($1)
+          AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= (CURRENT_DATE - $3::int)
+          AND (m.team_id IS NULL OR m.team_id = ANY($2))
+          AND ${dispatchedWhere("d", "$4")}
+        GROUP BY m.team_id, bucket`,
+      [FULL_CYCLE, SALES_TEAM_IDS, RECENT_DAYS, STAGE_RECEIVED]
+    );
+    for (const r of q2.rows) add(ptype, r.bucket, teamLeadOf(r.team_id), "machines_dispatched", Number(r.n));
   }
 
   // Снапшот-метрики (поточний стан, без фільтра дати) — пишемо в ПОТОЧНИЙ місяць
