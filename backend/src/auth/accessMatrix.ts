@@ -582,6 +582,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/settings/users/:id", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
+  // 👤 Стан менеджера (активний / завершує / звільнений) — та сама межа, що й решта
+  //    керування людьми: ставить лише той, хто керує користувачами.
+  { method: "PATCH", path: "/api/settings/managers/:id/work-state", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reactivate", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reset-password", cls: "deny-only",

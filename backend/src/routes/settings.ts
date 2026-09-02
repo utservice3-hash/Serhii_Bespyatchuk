@@ -283,6 +283,51 @@ settingsRouter.post("/users/:id/reactivate", async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * 👤 СТАН МЕНЕДЖЕРА — СТАВИТЬ АДМІН ТУТ (рішення власника 01.09.2026: «так, стан в
+ * налаштуванні повністю підходить»), із записом ХТО і КОЛИ.
+ *
+ * 🔴 ЧОМУ НЕ `users.is_active` І НЕ `managers.is_active`. Обидва прапорці перераховує
+ * `syncKommo` кожні 30 хвилин: `managers` — зашитим `is_active = true` в `ON CONFLICT`,
+ * `users` — через `provisionUsers`, який дописує туди значення з `managers`. Заміряно
+ * 01.09.2026: розбіжність між двома прапорцями — 0 рядків із 57 логінів, а деактивація
+ * Шевчука адміном 06.08 11:11 зникла після ≈1 250 проходів синку. Тобто рішення,
+ * покладене в будь-який із них, живе щонайбільше півгодини.
+ *
+ * `state: null` — зняти рішення (людина знову АКТИВНА). Це не третє значення в таблиці,
+ * а видалення рядка: «активний» = відсутність відхилення.
+ */
+settingsRouter.patch("/managers/:id/work-state", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const id = Number(req.params.id);
+  const st = req.body?.state ?? null;
+  if (st !== null && st !== "finishing" && st !== "dismissed") {
+    return res.status(400).json({ error: "state: 'finishing' | 'dismissed' | null" });
+  }
+  const mgr = await pool.query<{ name: string }>(`SELECT name FROM managers WHERE id = $1`, [id]);
+  if (!mgr.rows[0]) return res.status(404).json({ error: "Менеджера не знайдено" });
+  const note = typeof req.body?.note === "string" && req.body.note.trim() ? req.body.note.trim() : null;
+
+  if (st === null) {
+    await pool.query(`DELETE FROM manager_work_state WHERE manager_id = $1`, [id]);
+  } else {
+    // ⚠️ `since` у DO UPDATE НЕ перелічено свідомо: це дата, з якої людина в цьому
+    //    стані, і переписати її на кожній правці примітки означало б стерти історію
+    //    одним дотиком. Оновлюються лише стан, примітка й підпис «хто/коли».
+    await pool.query(
+      `INSERT INTO manager_work_state (manager_id, state, note, set_by, set_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (manager_id) DO UPDATE SET
+         state = EXCLUDED.state, note = EXCLUDED.note,
+         set_by = EXCLUDED.set_by, set_at = now()`,
+      [id, st, note, req.auth?.userId ?? null]
+    );
+  }
+  await writeAudit({ ...audit(req), action: "manager.work_state", targetType: "manager",
+    targetId: String(id), targetLabel: `${mgr.rows[0].name} → ${st ?? "active"}` });
+  res.json({ ok: true, state: st ?? "active" });
+});
+
 // Зміна override-ролі / активності / ПІБ(ручним). Само-блокування → 409.
 settingsRouter.patch("/users/:id", async (req, res) => {
   if (!requireManageUsers(req, res)) return;
