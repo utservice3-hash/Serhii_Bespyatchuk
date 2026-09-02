@@ -20,6 +20,7 @@ export const MANIFEST_FILES: string[] = [
   "ai/oracle.test.js",
   "ai/period.test.js",
   "auth/accessMatrix.test.js",
+  "auth/matrixCoverage.test.js",
   "jobs/dealContactPairs.test.js",
   "core/clientPlans.test.js",
   "core/forecast.test.js",
@@ -215,6 +216,9 @@ export const MANIFEST_TESTS: string[] = [
   "#11 МАТРИЦЯ ДОСТУПУ: жодна клітинка не змінилась",
   "#11b ЗЛІПОК ЦІЛИЙ: усі ролі відомі, класи проби коректні",
   "#11c ФОРМАТ ШЛЯХІВ: зліпок і проба говорять однією мовою",
+  // auth/matrixCoverage.test.ts — покриття зліпка (структурно, без мережі)
+  "#280 кожен оголошений роут має рядок у ACCESS_MATRIX",
+  "#280b 🪞 ДЗЕРКАЛО: гейт ловить ПІДКИНУТЕ зникнення, а на цілому зліпку мовчить",
   // auth/gates.test.ts — АРХІТЕКТУРНІ ВОРОТА (крок B). Працюють БЕЗ БД і мережі.
   "#17 ВОРОТА · кожен роут має МЕЖУ (tab, право) або запис у реєстрі",
   "#17b ДЗЕРКАЛО: ворота межі ВМІЮТЬ спрацювати",
