@@ -9,6 +9,7 @@ import { sourceOf, type DealSourceState } from "./dealSourceState.js";
 // ненадійно. Перемикач Е3 фільтрує РІВНО цим станом.
 import { klassOf, type DealKlassState } from "./klassFilter.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
+import { mergedNotExists } from "./callMerge.js";
 
 /**
  * 🔎 ДРУГИЙ РІВЕНЬ РОЗГОРТКИ ПО ДНЯХ — склад КОЖНОГО числа в рядку дня.
@@ -224,10 +225,11 @@ export async function dayItems(kind: DayItemKind, managerId: number, from: strin
     case "calls": {
       const r = await pool.query<{ name: string | null; phone: string | null; billsec: number;
         at: string; recording: string | null }>(
-        // 🔗 ТА САМА СКЛЕЙКА, ЩО В АГРЕГАТІ (`callsByManagerDay`): плече, що почалось
-        // у межах 120 с від попереднього до того самого номера, — це продовження
-        // ТОГО САМОГО дзвінка, а не новий. Якби список склеювали інакше, ніж число
-        // над ним, розкриття перестало б пояснювати своє ж число.
+        // 🔗 ТА САМА СКЛЕЙКА, ЩО В АГРЕГАТІ — і з 02.09.2026 це справді так, бо вираз
+        // приходить із `core/callMerge.js`, спільного для трьох місць. До того тут
+        // жила ВЛАСНА копія правила зі строгим «<», і на однакових позначках часу вона
+        // лишала ОБИДВА плеча, тоді як агрегат лишав одне: заміряно завищення на 128
+        // дзвінків за 25.07-24.08. Коментар стверджував рівність, якої не було.
         `SELECT COALESCE(d.name, rc.client_key) AS name, rc.client_phone AS phone,
                 rc.billsec, to_char((rc.calldate ${K}), 'YYYY-MM-DD HH24:MI') AS at, rc.recording
            FROM ringostat_calls rc
@@ -236,12 +238,7 @@ export async function dayItems(kind: DayItemKind, managerId: number, from: strin
               WHERE dd.client_key = rc.client_key AND rc.client_key IS NOT NULL
               ORDER BY dd.created_at_kommo DESC LIMIT 1) d ON true
           WHERE rc.manager_id = $1 AND (rc.calldate ${K})::date BETWEEN $2::date AND $3::date
-            AND NOT EXISTS (
-              SELECT 1 FROM ringostat_calls p
-               WHERE p.manager_id = rc.manager_id AND p.client_phone IS NOT DISTINCT FROM rc.client_phone
-                 AND (p.billsec > 0) = (rc.billsec > 0)
-                 AND p.calldate < rc.calldate
-                 AND rc.calldate - p.calldate <= interval '120 seconds')
+            AND ${mergedNotExists("rc")}
           ORDER BY rc.calldate`,
         [managerId, from, to]
       );

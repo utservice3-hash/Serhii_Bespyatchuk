@@ -117,6 +117,7 @@ export const MANIFEST_FILES: string[] = [
   "core/kvpFactColumns.test.js",
   "core/dayItemsSource.test.js",
   "core/dispatched.test.js",
+  "core/callMergeOne.test.js",
   "routes/uiEntry.test.js",
   "routes/oneOnOneSaveGuard.test.js",
   "oneOnOne/enps.test.js",
@@ -922,6 +923,8 @@ export const MANIFEST_TESTS: string[] = [
   "#26i «ВІДПРАВЛЕНО» РАХУЄ ЯДРО — джоба не має власного предиката",
   "#26j ЖИВИЙ: предикат ріже рівно те, що обіцяє — інваріант одним викликом",
   "#26n МЕЖА ОЗНАЧЕННЯ: підпис == константа · джоба не пише нижче межі · у зоні жоден лід не застоюється",
+  "#26l ТРИ МІСЦЯ — ОДНЕ ЧИСЛО: дві форми збігаються, період == Σ днів, обидві менші за сире",
+  "#26m ДЗЕРКАЛО НА НІЧИЇЙ: однакові позначки в даних Є, і обидві форми дають на них одне",
   // core/unmergePreview.test.ts
   "#265 ПРЕВʼЮ ОБІЦЯЄ ТЕ САМЕ, ЩО СТАНЕТЬСЯ",
   "#266 НОТАТКИ НЕ ПЕРЕНОСЯТЬСЯ — і це видно у СТРУКТУРІ, а не в наміреннях",
