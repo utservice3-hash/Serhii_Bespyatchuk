@@ -2502,6 +2502,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_credit_limit_open
   ON tasks (client_key)
   WHERE task_type = 'credit_limit_request' AND status <> 'done' AND client_key IS NOT NULL;
 
+-- 👤 СТАН МЕНЕДЖЕРА — ОКРЕМА ТАБЛИЦЯ, І ЦЕ НЕ СТИЛЬОВЕ РІШЕННЯ.
+--
+-- 🔴 ЧОМУ НЕ КОЛОНКА В `managers`. `syncKommo` робить по цій таблиці
+-- `INSERT … ON CONFLICT (kommo_user_id) DO UPDATE SET …` КОЖНІ 30 ХВИЛИН, і в
+-- тому `SET` уже стоїть зашите `is_active = true` (а не `EXCLUDED.is_active`).
+-- Колонка поруч житиме рівно доти, доки хтось не допише її в той самий `SET` —
+-- тобто до першого рефакторингу синку. Окремої таблиці синк не бачить
+-- ЗА ПОБУДОВОЮ, а не за домовленістю.
+--
+-- 📐 ЗАМІРЯНО 01.09.2026, і саме цей замір і породив таблицю: розбіжність
+-- `users.is_active` ≠ `managers.is_active` — 0 рядків із 57 логінів. Тобто
+-- ЖОДЕН із двох наявних прапорців не вміє тримати рішення людини: обидва
+-- перераховуються з Kommo щотіка (`userProvisioning` дописує `users.is_active`
+-- значенням `managers.is_active`). Деактивація Шевчука адміном 06.08 11:11
+-- зникла — її затерли ≈1 250 проходів синку.
+--
+-- ⚠️ РЯДОК ТУТ = ВІДХИЛЕННЯ ВІД НОРМИ. «Активний» — це ВІДСУТНІСТЬ рядка, а не
+-- третє значення: інакше кожного нового менеджера довелося б заводити ще й тут,
+-- і забутий рядок читався б як «стану не питали».
+CREATE TABLE IF NOT EXISTS manager_work_state (
+  manager_id INTEGER PRIMARY KEY REFERENCES managers(id),
+  state      TEXT NOT NULL CHECK (state IN ('finishing', 'dismissed')),
+  since      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  note       TEXT,
+  set_by     INTEGER REFERENCES users(id),
+  set_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 ALTER TABLE deals             SET (autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE deal_stage_events SET (autovacuum_analyze_scale_factor = 0.02);
 

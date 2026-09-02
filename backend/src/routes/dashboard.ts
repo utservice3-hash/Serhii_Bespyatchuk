@@ -68,6 +68,7 @@ import {
 } from "../core/creditLimits.js";
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
+import * as managerState from "../core/managerState.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
@@ -7766,11 +7767,16 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // і досі ця його дія на Звіт не впливала ЖОДНИМ чином: звільнений і далі стояв
   // із планом, відсотком і світлофором. Тепер він випадає з ростера й потрапляє в
   // рядок «звільнені» нижче — разом зі своїми грошима. Деталі — `core/activeManager.ts`.
-  const rConds = [activeManagerSql("m"), metrics.commercialManagerSql("m")];
+  // 🔴 РОСТЕР = ТІ, КОМУ СТАВИТЬСЯ ПЛАН (01.09.2026). «Завершує» плану не має ВЗАГАЛІ —
+  //    отже випадає звідси і потрапляє нижче в `dismissed`, тобто РАЗОМ ЗІ СВОЇМИ
+  //    ГРІШМИ в суму команди. Це не «сховати людину», це рівно правило власника:
+  //    «план його зникає, але результат залишається».
+  const rConds = [managerState.hasPlanSql("m", activeManagerSql("m")), metrics.commercialManagerSql("m")];
   if (managerId) { rp.push(managerId); rConds.push(`m.id = $${rp.length}`); }
   if (teamId) { rp.push(teamId); rConds.push(`m.team_id = $${rp.length}`); }
   const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
-    `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m LEFT JOIN teams t ON t.id = m.team_id
+    `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m
+       LEFT JOIN teams t ON t.id = m.team_id ${managerState.stateJoinSql("m")}
       WHERE ${rConds.join(" AND ")} ORDER BY m.name`, rp
   )).rows;
 
@@ -8011,13 +8017,23 @@ dashboardRouter.get("/report-plan", async (req, res) => {
    * неможливо в принципі, і будильник дзвонить на обидві.
    */
   const dismissed = dismissedIds.length
-    ? (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null; active: boolean }>(
+    ? (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null; active: boolean; state: string }>(
         `SELECT m.id, m.name, m.team_id, t.name AS team_name,
-                (${activeManagerSql("m")}) AS active
+                (${activeManagerSql("m")}) AS active,
+                (${managerState.stateSql("m", activeManagerSql("m"))}) AS state
            FROM managers m
-           LEFT JOIN teams t ON t.id = m.team_id WHERE m.id = ANY($1) ORDER BY m.name`, [dismissedIds])).rows
+           LEFT JOIN teams t ON t.id = m.team_id ${managerState.stateJoinSql("m")}
+          WHERE m.id = ANY($1) ORDER BY m.name`, [dismissedIds])).rows
       .map((m) => ({
         managerId: m.id, name: m.name, teamId: m.team_id, teamName: m.team_name,
+        /**
+         * 🔴 ТРИ ПРИЧИНИ БУТИ ТУТ, І ВОНИ РІЗНІ — під одним підписом жили б усі три.
+         * `state` називає ту, що є: 'dismissed' — звільнений, 'finishing' — завершує
+         * свої угоди (плану немає, гроші рахуються), 'active' — активний, але поза
+         * ростером із ІНШОЇ причини (немає команди — Операційний директор).
+         */
+        state: m.state as managerState.WorkState,
+        badge: managerState.STATE_BADGE[m.state as managerState.WorkState],
         // `true` = знято хоч один прапорець активності, тобто СПРАВЖНЄ звільнення.
         deactivated: !m.active,
         fact: Math.round(recvM.get(m.id)?.revenue ?? 0),

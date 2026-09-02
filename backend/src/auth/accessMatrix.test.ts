@@ -39,6 +39,9 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/settings/users": "manage_users — те саме",
   "PATCH /api/settings/users/:id": "manage_users — те саме",
   "POST /api/settings/users/:id/reactivate": "manage_users — те саме",
+  // 👤 Стан менеджера (активний / завершує / звільнений) — той самий guard
+  // `requireManageUsers`, що й решта керування людьми, отже та сама відмова по праву.
+  "PATCH /api/settings/managers/:id/work-state": "manage_users — те саме",
   "POST /api/settings/users/:id/reset-password": "reset_passwords — окреме право, лише СЕО/ОД/адмін",
   "POST /api/settings/users/provision": "manage_users — те саме",
   // ФАЗА B. `merge_clients` мають КВП, ОД і admin (зміна політики 03.08.2026).
