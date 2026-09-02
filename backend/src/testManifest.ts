@@ -115,6 +115,7 @@ export const MANIFEST_FILES: string[] = [
   "core/overviewCache.test.js",
   "core/kvpFactColumns.test.js",
   "core/dayItemsSource.test.js",
+  "core/dispatched.test.js",
   "routes/uiEntry.test.js",
   "routes/oneOnOneSaveGuard.test.js",
   "oneOnOne/enps.test.js",
