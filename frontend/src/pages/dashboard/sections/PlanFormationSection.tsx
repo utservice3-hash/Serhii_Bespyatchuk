@@ -421,7 +421,16 @@ function PlanSeg({ m, month, data, onChanged, onValue }: { m: PFManager; month: 
   const minPer = data.minPerManager ?? 0;
   const belowMin = minPer > 0 && num() < minPer;
   const hasReason = Boolean((comment || f.comment || "").trim());
-  const blockSubmit = belowMin && !hasReason;
+  /**
+   * 🔓 МЕЖА БІЛЬШЕ НЕ БЛОКУЄ КНОПКУ (рішення власника 02.09.2026). Попередження
+   * `belowMin` нижче лишається — прибрано рівно заборону, а не підказку.
+   * 📐 Чому це терміново: заміряно 02.09 — «Подати» була заблокована у 12 із 12
+   * менеджерів без вересневого подання, тобто межа не стримувала від заниження, а
+   * не давала завести план узагалі. `hasReason` лишається читаним: обґрунтування
+   * далі можна написати, воно просто більше не обовʼязкове.
+   */
+  void hasReason;
+  const blockSubmit = false;
 
   const doSubmit = async () => { setBusy(true); try { await submitFormationPlan(m.managerId, month, num(), comment || undefined); onChanged(); } finally { setBusy(false); } };
   const doApprove = async () => { setBusy(true); try {
