@@ -20,7 +20,19 @@ import {
   MARK_REPORT, MARK_STOP,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
-import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim } from "./checkoutLock.js";
+import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim, actorRefusal } from "./checkoutLock.js";
+
+/**
+ * 🏷 ПІДПИС ЛАНЦЮГА — ОДИН НА ВЕСЬ ПРОГІН, І БЕЗ ЖОДНОГО ДЕФОЛТУ.
+ *
+ * 📐 Було ЧОТИРИ місця з `?? "deploy:run"` / `?? "deploy"`, і дефолти РІЗНІ. Тобто
+ * без `UTS_ACTOR` ланцюг брав замок як `deploy:run`, наступним кроком не впізнавав
+ * себе як `deploy`, падав кодом 7 — і лишав замок ВЗЯТИМ на імʼя, якого немає в
+ * жодній черзі й якого ніхто не звільнить. Тепер значення одне, і його відсутність
+ * зупиняє ланцюг ДО першого кроку, а не посеред нього.
+ */
+const ACTOR = (process.env.UTS_ACTOR ?? "").trim();
+
 import { parseTap, judgeDelta } from "./testDelta.js";
 import { diffGates, acceptRetired } from "../testManifest.js";
 import { FAIL_MARK, failureNames, EXPECTED_PASS_MARK, expectedPassNames } from "../testRunGate.js";
@@ -398,7 +410,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   // ── RUN ───────────────────────────────────────────────────────────────────
   /** Замок бере САМ скрипт: памʼятка не механізм, а ручний дотик має лишатись дорожчим. */
   lockTake: (c) => {
-    const who = process.env.UTS_ACTOR ?? "deploy:run";
+    const who = ACTOR;
     const r = lockCli(["--take", `--who=${who}`, `--reason=викат ${c.target}`], CANON_LOCK_DIR);
     return { id: "lockTake", ok: r.code === 0, detail: r.out.join(" · ") };
   },
@@ -486,7 +498,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return { id: "accept", ok: true, detail: `${doneN} із ${needN}, падінь 0` };
   },
   lockRelease: (c) => {
-    const who = process.env.UTS_ACTOR ?? "deploy:run";
+    const who = ACTOR;
     const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], CANON_LOCK_DIR);
     return { id: "lockRelease", ok: r.code === 0, detail: r.out.join(" · ") };
   },
@@ -748,6 +760,14 @@ export async function main(argv: string[]): Promise<number> {
       + "   Мовчазного дефолту немає навмисно: дешевий викат розбещує.");
     return 2;
   }
+  // 🔴 ПІДПИС ПЕРЕВІРЯЄТЬСЯ ДО ПЛАНУ, а не в мить першого запису в журнал: інакше
+  // ланцюг устигає взяти замок фантомним імʼям, і прибирати це доводиться руками.
+  const actorBad = actorRefusal(ACTOR);
+  if (actorBad) {
+    console.error(actorBad);
+    console.error("   Черга доводиться ЖУРНАЛОМ, а підпис у журналі — це UTS_ACTOR запуску.");
+    return 2;
+  }
   const plan = planSteps(phase, mode);
   if (mode === "light") {
     console.log("⚠️ ЛЕГКИЙ РЕЖИМ НЕ РОБИТЬ:");
@@ -815,12 +835,12 @@ export async function main(argv: string[]): Promise<number> {
    * БЕЗ дотиків. Заміряно на живому викаті 9781c12: 11 хв бездіяльності на замку, що
    * працював, при TTL 20 хв. Тепер ланцюг питає замок, чий він, а не памʼятає це.
    */
-  let lockOurs = heldByMe(readClaim(CANON_LOCK_DIR), process.env.UTS_ACTOR ?? "deploy");
+  let lockOurs = heldByMe(readClaim(CANON_LOCK_DIR), ACTOR);
   for (const step of plan) {
     const h = handlers[step.id];
     if (!h) { console.error(`🔴 КРОК БЕЗ ОБРОБНИКА: ${step.id} — зупиняюсь`); return 1; }
     if (lockOurs) {
-      const t = lockCli(["--touch", `--who=${process.env.UTS_ACTOR ?? "deploy"}`], CANON_LOCK_DIR);
+      const t = lockCli(["--touch", `--who=${ACTOR}`], CANON_LOCK_DIR);
       if (t.code !== 0) {
         console.error(`✖ ${"lockTouch".padEnd(16)} перед кроком «${step.id}»`);
         for (const l of t.out) console.error(`  ${l}`);
