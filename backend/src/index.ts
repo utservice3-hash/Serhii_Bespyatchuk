@@ -38,6 +38,7 @@ import { statisticsRouter } from "./routes/statistics.js";
 import { statsSeriesRouter } from "./routes/statisticsSeries.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
 import { reconcileNightly } from "./jobs/reconcileNightly.js";
+import { run as freezeWeekPlanSnapshots } from "./jobs/backfillWeekPlans.js";
 import { freshnessWatch, abandonedStagesWatch } from "./jobs/freshnessWatch.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
@@ -448,6 +449,27 @@ cron.schedule("30 7 * * *", () => {
 // (незамаплені статуси, дублі менеджерів, застій синку) і сигналить КВП задачею.
 cron.schedule("30 3 * * *", () => {
   void runJob("runDataReconciliation", () => runDataReconciliation());
+});
+
+/**
+ * 🧊 ЗНІМКИ ТИЖНЕВОГО ПЛАНУ — ТЕПЕР ЇХ ПИШЕ ДЖОБА, А НЕ ВІДКРИТТЯ ЕКРАНА.
+ *
+ * 📐 ЦІНА, ВЗЯТА РАЗОМ ІЗ ЛІКУВАННЯМ (03.09.2026). `weekPlansForMonth` більше не вміє
+ * морозити — читання не пише. Але якщо на цьому спинитись, знімки перестануть
+ * зʼявлятися ВЗАГАЛІ: раніше їх створювало саме відкриття КВП. Тому єдиний писар
+ * (`backfillWeekPlans`) переїхав сюди, у розклад.
+ *
+ * 🔑 ЧОМУ 3 МІСЯЦІ, А НЕ ОДИН. Дірку створює НОВИЙ МЕНЕДЖЕР: у нього немає рядків за
+ * місяці до найму, і кожен такий місяць лишається неповним. Заміряно на проді: серпень
+ * 290 рядків при очікуваних 300 (50 менеджерів × 6 тижнів). Один місяць закрив би лише
+ * поточну дірку й лишив попередні — а саме на них і падав `#211f`.
+ *
+ * ⏱ 04:50 — між `recomputeActivity` (04:40) і `syncTransfers` (05:20), у тиху годину.
+ * Ідемпотентно: `ON CONFLICT DO NOTHING`, тож повторний прогін нічого не перезаписує.
+ * 🟢 Джоба друкує ОБСЯГ (скільки знімків відновлено), а не «відпрацювала».
+ */
+cron.schedule("50 4 * * *", () => {
+  void runJob("freezeWeekPlanSnapshots", () => freezeWeekPlanSnapshots(3));
 });
 
 // Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».

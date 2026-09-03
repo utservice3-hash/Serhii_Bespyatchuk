@@ -57,9 +57,10 @@ test("#49c план тижня: Σ по менеджерах == Σ по кома
   const planByMgr = new Map(mp.rows.map((r) => [r.managerId, r.plan]));
   assert.ok(planByMgr.size > 0, "🔴 у місяці нема жодного плану — перевіряти нічого");
 
-  // freeze:false — гейт НЕ має писати знімків: інакше він сам заморозив би тижні
-  // у момент прогону тестів, тобто змінював би прод самим фактом перевірки.
-  const all = await weekPlansForMonth({}, month, planByMgr, { freeze: false });
+  // 🟢 Аргумент `freeze:false` більше не потрібен: `weekPlansForMonth` НЕ ВМІЄ писати
+  // взагалі (03.09.2026). Занепокоєння автора цього гейта — «інакше він сам заморозив
+  // би тижні самим фактом перевірки» — тепер властивість функції, а не прапорець.
+  const all = await weekPlansForMonth({}, month, planByMgr);
   assert.ok(all.length > 0, "🔴 план тижня порожній");
   /** 🗓 Тижневих планів ще немає — у вікні заведення це норма, після нього ні. */
   const graced = planGraceSkip("менеджерів із ненульовим тижневим планом", all.filter((r) => r.plan > 0).length);

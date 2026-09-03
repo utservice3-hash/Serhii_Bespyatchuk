@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { weekPlanOf, weekWorkingDays } from "./weekPlanMath.js";
 import { fixedWeekBlocks, workingDaysBetween, monthEndOf } from "./dates.js";
 import { needsDb, needsDbWritable } from "../testMode.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /** Серпень 2026 — місяць власника з прикладу: 1-ше субота, 31-ше понеділок-одинак. */
 const AUG = "2026-08-01";
@@ -130,4 +132,57 @@ test("#48e знімок плану тижня не переписується", 
   } finally {
     await pool.query(`DELETE FROM weekly_plan_snapshots WHERE month_start = $1`, [MONTH]);
   }
+});
+const src = (rel: string): string =>
+  readFileSync(fileURLToPath(new URL(`../../src/${rel}`, import.meta.url)), "utf8");
+const noComments = (s: string): string =>
+  s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+
+/**
+ * 🧊 #331–#331b — ЧИТАННЯ НЕ ПИШЕ, І ПИСАР ЛИШИВСЯ РІВНО ОДИН.
+ *
+ * 📐 Привід заміряно на проді 03.09.2026: `GET /kvp-report` за липень під роллю
+ * `test_readonly` давав `permission denied for table weekly_plan_snapshots` зі стеку
+ * `freezeWeekPlans <- weekPlansForMonth <- effectiveWeekTargets`. Тобто ВІДКРИТТЯ
+ * ЕКРАНА писало в базу; під повними правами воно тихо добивало рядки, і червоне
+ * зникало само — одноразове, тобто нерозрізненне з флаком.
+ *
+ * 🔴 ЧОМУ ГЕЙТ ЧИТАЄ ДЖЕРЕЛО, А НЕ ПОВЕДІНКУ. Довести «функція НЕ пише» поведінкою
+ * можна лише проти живої БД під read-only — тобто гейт існував би тільки в `test:prod`
+ * і мовчав у звичайному прогоні. Тут перевіряється СТРУКТУРНА властивість: у тілі
+ * читача немає виклику писаря. Це не проксі на форматування — це відсутність РЕБРА
+ * у графі викликів, і саме воно було дефектом.
+ */
+test("#331 читач тижневих планів НЕ кличе писаря і не має прапорця freeze", () => {
+  const wp = noComments(src("core/weekPlan.ts"));
+  const body = wp.slice(wp.indexOf("export async function weekPlansForMonth("),
+    wp.indexOf("export async function freezeWeekPlans("));
+  assert.ok(body.length > 200, "🔴 тіло читача не знайдено — гейт втратив предмет");
+  assert.doesNotMatch(body, /\bfreezeWeekPlans\s*\(/,
+    "🔴 читач знову кличе писаря: відкриття екрана пише в базу, і під read-only це "
+    + "permission denied, а під повними правами — тихий запис, якого ніхто не просив");
+  assert.doesNotMatch(body, /\bfreeze\b\s*[?:]/,
+    "🔴 повернувся прапорець `freeze` — дефект лікується ВІДСУТНІСТЮ можливості, а не "
+    + "дефолтом: наступний виклик просто не передасть його знову");
+});
+
+test("#331b 🪞 ДЗЕРКАЛО: писар ЖИВИЙ, стоїть у розкладі й позначає день старту як live", () => {
+  // Без цієї половини «читання не пише» задовольнялось би й тим, що знімки не
+  // зʼявляються ВЗАГАЛІ — тобто ми прибрали б побічний ефект і не поставили нічого.
+  const wp = noComments(src("core/weekPlan.ts"));
+  const writer = wp.slice(wp.indexOf("export async function backfillWeekPlans("));
+  assert.match(writer, /\bfreezeWeekPlans\s*\(/,
+    "🔴 єдиний писар більше не пише — знімки не зʼявляться ніколи");
+  assert.match(writer, /weekStart === today \? "live" : "backfill"/,
+    "🔴 ярлик перестав розрізняти «спіймано в день старту» і «відновлено заднім числом» — "
+    + "це тиха брехня про історію в обидва боки");
+
+  // І писар мусить бути В РОЗКЛАДІ: джоба, яку ніхто не запускає, — це гудок,
+  // відʼєднаний від сигналізації.
+  const idx = noComments(src("index.ts"));
+  assert.match(idx, /cron\.schedule\([^)]*\)[\s\S]{0,200}?freezeWeekPlanSnapshots\(/,
+    "🔴 джоба знімків не стоїть у розкладі — читання вже не пише, а писати нікому");
+  assert.match(idx, /freezeWeekPlanSnapshots\(\s*[2-9]\d*\s*\)/,
+    "🔴 джоба закриває менше двох місяців: дірку створює НОВИЙ менеджер, і вона лежить "
+    + "у місяцях ДО його найму — саме на них падав #211f");
 });

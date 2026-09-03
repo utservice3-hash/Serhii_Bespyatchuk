@@ -71,6 +71,32 @@ async function kyivToday(): Promise<string> {
 }
 
 /**
+ * 🔴 ЧИТАННЯ НЕ ПИШЕ. ФУНКЦІЯ БІЛЬШЕ НЕ ВМІЄ МОРОЗИТИ — НЕ «за замовчуванням», А ВЗАГАЛІ.
+ *
+ * 📐 ЗАМІРЯНО НА ПРОДІ 03.09.2026, ОБИДВІ ПОЛОВИНИ ОДНИМ ПРОГОНОМ. Ця функція мала
+ * `opts.freeze` з дефолтом «морозити», і два ЧИТАЛЬНІ шляхи його не передавали:
+ * `effectiveWeekTargets` (а через неї `/report-plan`, `/kvp-report`, `/manager-report`)
+ * і `/kvp-report` напряму. Тобто відкриття екрана ПИСАЛО в базу.
+ *
+ * Наслідок, спійманий гейтом `#211f` і доведений заміром:
+ *     GET /kvp-report за ЛИПЕНЬ під роллю test_readonly
+ *     → error: permission denied for table weekly_plan_snapshots
+ *       at freezeWeekPlans (weekPlan.js:164) <- weekPlansForMonth <- effectiveWeekTargets
+ *
+ * 🔑 І ЧОМУ ЦЕ ВИГЛЯДАЛО ВИПАДКОВИМ. Морозиться пара (АКТИВНИЙ менеджер × тиждень).
+ * Менеджер, найнятий пізніше, не має рядків за раніші місяці — отже КОЖЕН місяць до
+ * його найму пише на першому ж читанні. Під повними правами воно тихо добиває рядки,
+ * місяць стає повним, і червоне зникає само. Одноразове червоне, що самолікується, —
+ * тобто рівно те, що читається як флак. Заміряно: серпень 290 рядків при очікуваних
+ * 300, найсвіжіший перший знімок — 01.08.2026; вікно гейта (серпень) через це зелене,
+ * а липень червонів.
+ *
+ * ⚠️ ЧОМУ ПРИБРАНО ОПЦІЮ, А НЕ ПОСТАВЛЕНО `freeze: false` У ДВОХ ВИКЛИКАХ. Прапорець
+ * із дефолтом «писати» — це запрошення повернути дефект: наступний виклик, написаний
+ * через місяць, знову його не передасть. Тепер ЄДИНИЙ писар — `backfillWeekPlans`,
+ * і він викликається джобою, а не екраном.
+ */
+/**
  * План тижня для всіх менеджерів у скоупі, із ЗАМОРОЖЕННЯМ.
  *
  * Порядок навмисний: спершу дивимось у знімки, і лише за їх відсутності рахуємо.
@@ -93,7 +119,6 @@ export async function weekPlansForMonth(
    * плану: тижневий похідний від нього і власного плану не має.
    */
   planByMgr: Map<number, number>,
-  opts: { freeze?: boolean } = {}
 ): Promise<WeekPlanRow[]> {
   const today = await kyivToday();
   const weeks = fixedWeekBlocks(monthStart);
@@ -120,7 +145,6 @@ export async function weekPlansForMonth(
   }
 
   const out: WeekPlanRow[] = [];
-  const toInsert: WeekPlanRow[] = [];
   for (const id of ids) {
     const monthPlan = planByMgr.get(id) ?? 0;
     for (const w of weeks) {
@@ -145,27 +169,8 @@ export async function weekPlansForMonth(
         monthPlan, factBefore: fb, wdWeek, wdRest, source: null, reconstructed: false,
       };
       out.push(row);
-      // Морозимо ЛИШЕ тижні, що вже почались. Майбутній тиждень навмисно лишається
-      // живим: заморозити його зараз означало б зафіксувати ціль за даними, яких
-      // на момент його старту ще не буде.
-      //
-      // 🔴 ЯРЛИК МУСИТЬ БУТИ ЧЕСНИЙ, І ЦЕ НЕ ДРІБНИЦЯ. `live` = «зафіксовано в
-      // момент старту тижня»; `backfill` = «відновлено ретроспективно». Тиждень,
-      // що почався ДО цього запуску (напр. викат у четвер), ми ловимо вже заднім
-      // числом — тобто це РЕКОНСТРУКЦІЯ, хай і точна. Ставити їй `live` означало б
-      // тихо назвати відновлене збереженим, а саме цю різницю UI і показує людині.
-      //
-      // ⚠️ САМЕ ЧИСЛО від моменту запуску НЕ залежить: `factBefore` рахується за
-      // ІСТОРИЧНИЙ діапазон [1-ше … день перед стартом тижня], тож викат о 13:00
-      // у четвер зафіксує залишок станом на ПОНЕДІЛОК, а не на момент відкриття
-      // екрана. Різниця з тодішнім станом можлива лише там, де угода відтоді
-      // переїхала між стадіями (реоупен) — і саме про це попереджає `backfill`.
-      if (opts.freeze !== false && w.from <= today) {
-        toInsert.push({ ...row, source: w.from === today ? "live" : "backfill" });
-      }
     }
   }
-  if (toInsert.length) await freezeWeekPlans(monthStart, toInsert, "live");
   return out;
 }
 
@@ -201,10 +206,20 @@ export async function freezeWeekPlans(monthStart: string, rows: WeekPlanRow[], s
  * що приховати цю різницю було б тихою брехнею про історію.
  */
 export async function backfillWeekPlans(monthStart: string, planByMgr: Map<number, number>): Promise<{ inserted: number; weeks: number }> {
-  const rows = await weekPlansForMonth({}, monthStart, planByMgr, { freeze: false });
+  const rows = await weekPlansForMonth({}, monthStart, planByMgr);
   const today = await kyivToday();
-  const past = rows.filter((r) => r.weekStart <= today && r.source === null)
-    .map((r) => ({ ...r, source: "backfill" as const }));
-  const inserted = await freezeWeekPlans(monthStart, past, "backfill");
-  return { inserted, weeks: new Set(past.map((r) => r.weekStart)).size };
+  /**
+   * 🔴 ЯРЛИК ЛИШАЄТЬСЯ ЧЕСНИМ, І ПРАВИЛО ТУТ ТЕ САМЕ, ЩО РАНІШЕ БУЛО НА ЧИТАННІ.
+   * `live` = «зафіксовано В ДЕНЬ старту тижня»; `backfill` = «відновлено заднім
+   * числом». Джоба ходить щодня, тож тиждень, що починається СЬОГОДНІ, вона ловить
+   * саме в момент старту — це `live` за визначенням, і назвати його `backfill` було б
+   * применшенням, таким самим тихим, як зворотна брехня.
+   *
+   * ⚠️ Для ручного прогону за минулі місяці (`--months=N`) `weekStart === today` не
+   * настає ніколи, тож там усе лишається `backfill` — контракт не змінився.
+   */
+  const due = rows.filter((r) => r.weekStart <= today && r.source === null)
+    .map((r) => ({ ...r, source: (r.weekStart === today ? "live" : "backfill") as "live" | "backfill" }));
+  const inserted = await freezeWeekPlans(monthStart, due, "backfill");
+  return { inserted, weeks: new Set(due.map((r) => r.weekStart)).size };
 }
