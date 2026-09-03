@@ -624,6 +624,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // в інший реєстр (`ROUTE_BOUNDARY_EXEMPTIONS`), а `#11` — лише в режимі test:matrix.
   // Обліковка в усіх трьох не рольова (ключ `X-Dashboard-Sso-Key` або посвідчення), тож
   // списки порожні — та сама форма, що в `/api/tracker/*` нижче.
+  // Четвертий роут тієї ж родини (PR #tracker-user-sync): список людей для синхронізації.
+  // Той самий ключ, та сама порожня обліковка — деталі в ROUTE_BOUNDARY_EXEMPTIONS.
+  { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",
+    allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-sso", cls: "deny-only",
     allow: [], deny: [] },
   { method: "POST", path: "/api/auth/tracker-assertion", cls: "deny-only",

@@ -180,14 +180,14 @@ test("#307 іконку для пункту описано", () => {
 
 test("#309 маршрут /tracker-auth оголошено ПЕРЕД /:section", () => {
   const src = read("frontend/src/App.tsx");
-  const auth = src.indexOf('path="/tracker-auth"');
-  const section = src.indexOf('path="/:section"');
 
-  // /:section збігається з будь-яким одним сегментом, тож оголошений раніше він проковтнув би
-  // /tracker-auth — і агент чекав би на порту відповідь, якої ніхто не надішле.
-  assert.ok(auth > 0, "маршрут /tracker-auth зник");
-  assert.ok(section > 0, "маршрут /:section зник — тест втратив предмет");
-  assert.ok(auth < section, "/tracker-auth мусить бути раніше за /:section");
+  // Сегментами, а не рядком запиту: агент віддає цю адресу операційній системі, і на Windows
+  // вона йде через `cmd /C start`, де `&` розділяє команди. Власний запобіжник агента таку
+  // адресу відкидає — і саме так кнопка одного разу приїхала людям неробочою.
+  assert.match(src, /path="\/tracker-auth\/:port\/:state"/,
+    "маршрут мусить брати порт і state сегментами шляху");
+  assert.ok(src.indexOf('path="/tracker-auth') < src.indexOf('path="/:section"'),
+    "оголошення лишається раніше за /:section");
 });
 
 /**
@@ -366,3 +366,66 @@ test("#312b рішення «кому відкривати трекер» — о
     "кому НЕ вмикали — не пускати: до правки кнопку бачили всі 8 ролей, зокрема 10 таких людей");
   assert.equal(trackerAllowed(undefined), false, "невідомий рядок — не привід відкривати трекер");
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #320-#323 — реєстр людей для трекера. Номери з #320: #300-#310 мої, #311-#312
+// зайняті правками власника, тож беру з запасом, а не наступні вільні.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("#320 без ключа реєстр людей не віддається", needsBackendEnv(), async () => {
+  const r = await callRouter("GET", "/api/auth/tracker-users", {});
+
+  // Реєстр — це пошти й імена всієї компанії. Єдине, що стоїть між ним і будь-ким, — цей ключ.
+  assert.equal(r.code, 401);
+  assert.equal(r.body?.error, "bad_key");
+});
+
+test("#321 чужий ключ теж не проходить", needsBackendEnv(), async () => {
+  const r = await callRouter("GET", "/api/auth/tracker-users",
+    { "x-dashboard-sso-key": "не-наш-ключ" });
+
+  assert.equal(r.code, 401);
+  assert.equal(r.body?.error, "bad_key");
+});
+
+/**
+ * Дзеркало до двох попередніх.
+ *
+ * Без нього #320 і #321 лишалися б зеленими й тоді, якби ендпоінт відмовляв УСІМ — тобто
+ * перевірка ключа виглядала б справною, не пропускаючи навіть свого. Це та сама однобічність,
+ * про яку попереджає #311b.
+ *
+ * Заразом це перший тест на `ssoKeyAccepted` узагалі: досі її не перевіряв ніхто.
+ */
+test("#322 🪞 ДЗЕРКАЛО: правильний ключ приймається", needsBackendEnv(), async () => {
+  const { ssoKeyAccepted } = await import("../auth/trackerSso.js");
+
+  assert.equal(ssoKeyAccepted(process.env.TRACKER_SSO_KEY), true, "свій ключ мусить проходити");
+  assert.equal(ssoKeyAccepted(process.env.TRACKER_SSO_KEY + "x"), false);
+  assert.equal(ssoKeyAccepted(""), false);
+  assert.equal(ssoKeyAccepted(undefined), false);
+});
+
+test("#323 реєстр віддає особу й підказки, але не роль і не права", () => {
+  const body = handlerBody(read("backend/src/routes/auth.ts"),
+    'authRouter.get("/tracker-users"');
+
+  // scope з data_scope, а не з ключа ролі: ролей вісім, адмін створює нові через інтерфейс, і
+  // будь-який захардкоджений перелік на боці трекера застаріє мовчки.
+  assert.match(body, /r\.data_scope/, "scope мусить братися з roles.data_scope");
+  assert.doesNotMatch(body, /role_override\s*\}/, "ключ ролі за межі дашборду не їде");
+
+  // Ті самі два правила, що стережуть гейти #17e і #17e2, але названі тут поіменно.
+  //
+  // Дивимось на КОД без коментарів: перша редакція цього тесту впала на власному ж коментарі,
+  // де слова «SELECT *» стояли як пояснення заборони. Рівно та вада, про яку попереджає #304 —
+  // перевіряти треба властивість, а не написання.
+  const code = body.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(code, /\bu\.id\b/, "віддаємо id — під нього в трекері є dashboard_user_id");
+  assert.doesNotMatch(code, /SELECT \*/i, "колонки перелічуються поіменно");
+  assert.doesNotMatch(code, /\.\.\.r\b/, "рядок БД не розпаковується у відповідь");
+
+  // Невідома роль мусить давати НАЙМЕНШІ права, а не найбільші.
+  assert.match(body, /: "own"/, "невідомий data_scope згортається в own");
+});
+
