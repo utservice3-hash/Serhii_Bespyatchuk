@@ -22,12 +22,11 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
   const pre = (prefix: string) => (p: string) => p === prefix || p.startsWith(prefix + "/");
   return [
     // ⚠️ `pre()` матчить лише по СЛЕШУ, тож `pre("/api/dashboard/kvp")` НЕ покриває
-    // `kvp-report`/`kvp-plan`/`kvp-extra` — там дефіс. Патерн лишаємо як є (він
+    // `kvp-report`/`kvp-plan` — там дефіс. Патерн лишаємо як є (він
     // правильний: «сусід через дефіс» — це інший роут), а дефісних сусідів прописуємо
     // ЯВНО. Точний перелік важливіший за спритний патерн.
     { test: pre("/api/dashboard/kvp"), tabs: ["kvp"] },
     { test: pre("/api/dashboard/kvp-plan"), tabs: ["kvp"] },
-    { test: pre("/api/dashboard/kvp-extra"), tabs: ["kvp"] },
     // ДВА СПОЖИВАЧІ — єдиний такий роут у застосунку (перевірено обходом фронту):
     // `KvpReportSection` (вкладка kvp) і `ReportPlanSection` (вкладка report).
     // Найбільш специфічний шлях мусить іти ПЕРЕД `/api/dashboard/kvp-report`.

@@ -507,19 +507,9 @@ export async function saveKvpPlan(month: string, plans: Record<string, number | 
   await api.post("/dashboard/kvp-plan", { month, plans });
 }
 
-/** Додаткові факти Звіту КВП: відправлені авто (події), канали, менеджери. */
-export interface KvpExtra {
-  dispatched: { count: number; revenue: number };
-  ad: { revenue: number; dispatched: number; dispatchedSum: number };
-  leadgen: { revenue: number; dispatched: number; dispatchedSum: number };
-  managersCount: number;
-  /** Потік за період (надійшло В період, за подіями) — для тижневих зрізів. */
-  flow: { received: number; ad: number; leadgen: number };
-}
-export async function fetchKvpExtra(params: { from?: string; to?: string }): Promise<KvpExtra> {
-  const { data } = await api.get<KvpExtra>("/dashboard/kvp-extra", { params });
-  return data;
-}
+// 🪦 KvpExtra / fetchKvpExtra знято 03.09.2026 разом із роутом /dashboard/kvp-extra:
+// функція не мала жодного виклику (контроль: сусіди fetchKvpReport/fetchKvpPlan по 2),
+// літерала шляху в прод-бандлі — 0. «Відправлені авто» живуть у Статистиках.
 
 // ── КРОК Д: композитний Звіт КВП (/kvp-report) ──
 export interface KvpAgg { deals: number; revenue: number }

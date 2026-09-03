@@ -30,7 +30,7 @@ const EXPECTED_STAGES =
 
 // КРОК 9 Фаза 3: `adDealSql` більше НЕ дублюється тут — єдине джерело `core/metrics.ts`
 // (`metrics.adDealSql`). Усі усе ще-інлайнові вжитки (конверсія /conversion,
-// /conversion-timeseries, /overview.adConversion, /report.adLeads, /kvp-extra) — це
+// /conversion-timeseries, /overview.adConversion, /report.adLeads) — це
 // свідомо-лишена КОНВЕРСІЯ (КРОК 6, блок В2/В3/В4) + денумератор реклами; логіку не
 // чіпаємо, лише централізуємо хелпер.
 import { getSettings } from "./settings.js";
@@ -7511,68 +7511,14 @@ dashboardRouter.post("/kvp-plan", async (req, res) => {
   res.json({ ok: true });
 });
 
-/**
- * Додаткові факти для Звіту КВП (рядки з ручного файлу керівника, яких немає
- * в /overview): відправлені авто за період (перший вхід угоди в «Авто працює»
- * за подіями CRM — кількість і сума, загалом та по каналах реклама/лідоген),
- * отримані кошти по каналах (успішно 142 закриті в періоді + оплата-снапшот),
- * кількість активних менеджерів продажу. Admin (КВП) only.
- */
-dashboardRouter.get("/kvp-extra", async (req, res) => {
-  const auth = req.auth!;
-  if (!isAdminScope(auth)) return res.status(403).json({ error: "Forbidden" });
-  const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
-  const from = (req.query.from as string) || today.slice(0, 7) + "-01";
-  const to = (req.query.to as string) || today;
-  const { adSources } = await getSettings();
-  const params: unknown[] = [[8921932, 155304], from, to, adSources];
-
-  // Відправлені авто: угоди, що ВПЕРШЕ увійшли в «Авто працює» у періоді.
-  const disp = await pool.query<{ c: string; s: string; ad_c: string; ad_s: string; lg_c: string; lg_s: string }>(
-    `WITH first_avto AS (
-       SELECT kommo_id, MIN(changed_at) AS t FROM deal_stage_events
-       WHERE status_id IN (69716300, 98470988, 10937178) GROUP BY kommo_id
-     )
-     SELECT COUNT(*) AS c, COALESCE(SUM(d.price), 0) AS s,
-            COUNT(*) FILTER (WHERE ${metrics.adDealSql("$4")}) AS ad_c,
-            COALESCE(SUM(d.price) FILTER (WHERE ${metrics.adDealSql("$4")}), 0) AS ad_s,
-            COUNT(*) FILTER (WHERE d.lead_channel = 'leadgen') AS lg_c,
-            COALESCE(SUM(d.price) FILTER (WHERE d.lead_channel = 'leadgen'), 0) AS lg_s
-     FROM first_avto f JOIN deals d ON d.kommo_id = f.kommo_id
-     WHERE d.pipeline_id = ANY($1) AND (f.t ${KYIV})::date BETWEEN $2 AND $3`,
-    params
-  );
-
-  // 🔴 Крок А: отримані кошти по каналах — ЯДРО money.receivedByChannel (датований
-  // received: 142 по closed_at ⊎ etap9 по останньому входу; дедуп; signed). Прибрано
-  // недатований paidOnly-знімок (він додавав ~46 600 ₴ поза-періодних оплат у кожен місяць).
-  const chan = await money.receivedByChannel({ from, to }, adSources);
-
-  // Активні менеджери продажу (з командою, без лідоген-команд).
-  const mgr = await pool.query<{ c: string }>(
-    `SELECT COUNT(*) AS c FROM managers m LEFT JOIN teams t ON t.id = m.team_id
-     WHERE m.is_active AND m.team_id IS NOT NULL AND COALESCE(t.name, '') NOT ILIKE '%лідоген%'`
-  );
-
-  // Потік грошей за період = ЯДРО money.receivedMoney (той самий датований received).
-  // Замінює колишній first_paid-знімок; тепер flow == канал-розбивка вище == Огляд/Звіт.
-  const totalRecv = await money.receivedMoney({ from, to });
-
-  const d = disp.rows[0];
-  res.json({
-    from, to,
-    dispatched: { count: Number(d?.c ?? 0), revenue: Number(d?.s ?? 0) },
-    ad: { revenue: chan.ad.revenue, dispatched: Number(d?.ad_c ?? 0), dispatchedSum: Number(d?.ad_s ?? 0) },
-    leadgen: { revenue: chan.leadgen.revenue, dispatched: Number(d?.lg_c ?? 0), dispatchedSum: Number(d?.lg_s ?? 0) },
-    managersCount: Number(mgr.rows[0]?.c ?? 0),
-    flow: {
-      received: totalRecv.revenue,
-      ad: chan.ad.revenue,
-      leadgen: chan.leadgen.revenue,
-    },
-  });
-});
+// 🪦 /kvp-extra ЗНЯТО 03.09.2026 — рішення власника: «на Звіті КВП відправлені авто НЕ
+// потрібні, у Статистиках — так». А ДЕ ЦЕ ТЕПЕР: «відправлені авто» живуть РІВНО в
+// Статистиках (`machines_dispatched`, означення з 07.2026 — `core/dispatched.ts`).
+// Споживачів не мав, доведено ТРИЧІ з контролем предиката: `fetchKvpExtra` 0 викликів у
+// джерелі (сусіди `fetchKvpReport`/`fetchKvpPlan` по 2), літерала «/dashboard/kvp-extra» у
+// прод-бандлі 0 (ті самі сусіди по 2), і те саме незалежно записав інший чат у `gates.ts`.
+// Ядрові функції, які він кликав (`money.receivedByChannel`, `money.receivedMoney`),
+// лишаються — у кожної по 7 інших вживань, зняття роута нікого не осиротило.
 
 // ───────────────────────── КРОК Д: КОМПОЗИТНИЙ ЗВІТ КВП (/kvp-report) ─────────────────────────
 
@@ -9110,7 +9056,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
  * Р4a — ЄДИНИЙ звіт (менеджер / тімлід / КВП) з фільтром рівня. Чистий шар
  * ЗБІРКИ: усі секції з наявних core-функцій (money/metrics), сам майже нічого не
  * рахує. scope-резолвер жорстко обмежує за роллю (403 при виході за межі).
- * Легасі (/report,/overview,/kvp-extra) не чіпаємо — приберемо окремим кроком.
+ * Легасі (/report,/overview) не чіпаємо — приберемо окремим кроком.
+ * (/kvp-extra зі списку прибрано 03.09.2026 разом із самим роутом — див. мітку 🪦 вище.)
  */
 dashboardRouter.get("/manager-report", async (req, res) => {
   const auth = req.auth!;

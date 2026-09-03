@@ -137,8 +137,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/funnel-weekly", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
-  { method: "GET", path: "/api/dashboard/kvp-extra", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/kvp-plan", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/dashboard/kvp-plan", cls: "deny-only",
