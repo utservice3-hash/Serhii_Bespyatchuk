@@ -472,6 +472,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       + `API_BASE=${API_BASE} npm run test:matrix > ${log} 2>&1 || true; `
       + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true`]);
     const named = failureNames(out);
+    const passedFromRegistry = expectedPassNames(out);
     const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
     if (!m) return { id: "acceptMatrix", ok: false,
       detail: `🔴 гейт прогону не надрукував підсумку — матрична проба не дійшла до кінця. Лог: ${log}` };
@@ -479,18 +480,31 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     if (doneN !== needN) return { id: "acceptMatrix", ok: false,
       detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
     if (fails !== "0") {
+      /**
+       * ⚖️ ВИРОК — ТОЙ САМИЙ, ЩО В `accept`, І ЦЕ НЕ ОХАЙНІСТЬ (зведено 02.09.2026).
+       * Два кроки зійшлись у одному дереві з РІЗНИХ проходів: `accept` навчився судити
+       * за `EXPECTED_REDS`, а цей крок лишався з власним «падінь != 0». Наслідок був би
+       * тихий і шкідливий саме тут: матрична проба червоніла б від ЧОТИРЬОХ уже
+       * погоджених червоних, і справжній дрейф доступу (#11) потонув би серед них —
+       * тобто крок, зроблений заради дрейфу, перестав би про дрейф говорити.
+       * Одне правило на обидва кроки; копія правила — це друге правило.
+       */
       const mismatch = named.length !== Number(fails)
         ? ` ⚠️ перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт`
         : "";
+      const verdict = acceptExpectedReds(named, passedFromRegistry);
+      if (verdict.ok) {
+        return { id: "acceptMatrix", ok: true,
+          detail: `${doneN} із ${needN}, падінь ${fails} — УСІ очікувані поіменно, дрейфу зліпка немає\n${verdict.lines.join("\n")}` };
+      }
       /**
        * 🔴 ДРЕЙФ ЗЛІПКА — НЕ «ПОЛАГОДЬ ТЕСТ». Кожна клітинка означає, що жива поведінка
        * доступу розійшлась із записаною. Перезнімати зліпок можна ЛИШЕ рішенням власника
        * і з причиною в рядку — інакше перезняття читається як замітання сигналу.
        */
       return { id: "acceptMatrix", ok: false,
-        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}`
-          + (named.length ? `\n${named.map((n) => `   ﹣ ${n}`).join("\n")}` : "")
-          + "\n   Якщо серед них #11 — це ДРЕЙФ ДОСТУПУ: зліпок і прод розійшлись."
+        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}\n${verdict.lines.join("\n")}`
+          + "\n   Якщо серед НЕПОКРИТИХ є #11 — це ДРЕЙФ ДОСТУПУ: зліпок і прод розійшлись."
           + "\n   Не перезнімай зліпок сам: кожна клітинка потребує «так, ми цього хотіли»." };
     }
     return { id: "acceptMatrix", ok: true, detail: `${doneN} із ${needN}, падінь 0 — зліпок доступу збігається з живим продом` };
