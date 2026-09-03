@@ -1,7 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, type Artifact } from "./deployPlan.js";
+import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, standToRefusal, type Artifact } from "./deployPlan.js";
 import { executablePlan, missingHandlers, handlers } from "./deploy.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+/** Джерело ланцюга — читаємо `.ts`, бо набір біжить із `dist`. */
+function SRC_DEP(): string {
+  for (const r of [path.join(import.meta.dirname, "..", ".."), path.join(import.meta.dirname, "..", "..", "..")]) {
+    try { return readFileSync(path.join(r, "src/tools/deploy.ts"), "utf8"); } catch { /* далі */ }
+  }
+  throw new Error("не знайдено src/tools/deploy.ts — гейт міряв би порожнечу");
+}
 
 /**
  * 🚀 #226–#226d — ЖОДЕН ОБОВʼЯЗКОВИЙ КРОК ВИКАТУ НЕ МОЖЕ ЗНИКНУТИ НЕПОМІЧЕНИМ.
@@ -286,4 +296,64 @@ test("#316 lockTake — у фазі check і ПЕРЕД будь-яким дот
     "🔴 звільнення зникло з run — замок не віддавався б узагалі");
   assert.ok(run.indexOf("lockRelease") > run.indexOf("accept"),
     "🔴 замок віддають ДО приймання — це та сама помилка 26.08.2026, за яку вже заплачено");
+});
+
+/**
+ * 🛑 #319/#319b — СТЕНД СТАВИТЬ ЛАНЦЮГ, А НЕ СКРИПТ У /tmp.
+ *
+ * 📐 Заміряно 02.09.2026, і розрив був не в коді, а у ВІДСУТНОСТІ коду: у `src/tools/`
+ * не існувало жодного інструмента, що рухає стенд (`grep checkout` порожній), а в
+ * процедурі §7 крок 0 — просто `deploy:check`, без жодного слова про те, що стенд
+ * спершу треба поставити на свій sha. Кожен чат рухав його власним скриптом у /tmp,
+ * тобто гарантія жила окремо в кожного й зникала разом із контейнером.
+ *
+ * ⚠️ Ланцюг ловив наслідок ПІЗНО і двічі — `artifactFresh` і `baseAgain`, — але вже
+ * після повного циклу (check 62 с, run 18 хв 24 с). Тепер переміщення стоїть ПІД
+ * замком і ДО першої збірки.
+ */
+test("#319 standTo — у check, ПІСЛЯ замка і ПЕРЕД першою збіркою", () => {
+  const check = planSteps("check", "full").map((s) => s.id);
+  assert.ok(check.includes("standTo"), "🔴 кроку немає — стенд знову рухають скриптом іззовні");
+  assert.ok(check.indexOf("lockTake") < check.indexOf("standTo"),
+    "🔴 стенд рухають ДО замка — це дотик до спільного дерева без замка, тобто рівно той розрив");
+  assert.ok(check.indexOf("standTo") < check.indexOf("base"),
+    "🔴 базу міряють раніше, ніж дерево поставлене на ціль — замір чужого коду");
+  assert.ok(check.indexOf("standTo") < check.indexOf("buildBack"),
+    "🔴 `rm -rf dist` іде перед переміщенням — зберемо не те, а слід затремо");
+  assert.ok(!planSteps("run", "full").map((s) => s.id).includes("standTo"),
+    "🔴 standTo просочився у run — стенд рухали б ПІСЛЯ того, як артефакт уже перевірено");
+});
+
+test("#319b 🪞 ДЗЕРКАЛО: без --target не рухає, на брудному дереві ВІДМОВЛЯЄ", () => {
+  const src = SRC_DEP();
+  // ① Без явної цілі — `skipped`, а не тихе «пройшло»: стара поведінка ціла.
+  assert.match(src, /if \(!c\.targetExplicit\) return \{ id: "standTo", ok: true, detail: "",\s*\n?\s*skipped:/,
+    "🔴 без --target крок або рухає стенд за здогадом, або зеленіє мовчки — обидва стани брехливі");
+  assert.match(src, /targetExplicit: Boolean\(targetArg\)/,
+    "🔴 «ціль» більше не відрізняється від «те, що зараз у дереві»");
+
+  // ② 🔴 БРУДНЕ ДЕРЕВО — ВІДМОВА, І ЦЕ ПЕРЕВІРЯЄТЬСЯ ПОВЕДІНКОЮ, А НЕ ТЕКСТОМ.
+  //    Перша редакція цього гейта шукала повідомлення у ДЖЕРЕЛІ й лишилась ЗЕЛЕНОЮ,
+  //    коли саботаж замінив умову на `if (false)`: рядок нікуди не подівся, він просто
+  //    перестав виконуватись. Гейт доводив, що текст НАПИСАНО, а не що він СПРАЦЬОВУЄ.
+  assert.equal(standToRefusal({ target: "abc1234", commitExists: true, dirty: [] }), null,
+    "🔴 чисте дерево з наявним комітом відхилено — стенд не поставити взагалі");
+  const brudne = standToRefusal({ target: "abc1234", commitExists: true, dirty: [" M backend/src/x.ts"] });
+  assert.ok(brudne && /БРУДНЕ/.test(brudne),
+    "🔴 брудне дерево пропущено — checkout зітер би або потягнув чуже у СПІЛЬНОМУ стенді");
+  assert.ok(brudne!.includes("backend/src/x.ts"),
+    "🔴 відмова не називає, ЩО саме заважає — людина не знатиме, що розбирати");
+  const немаКоміта = standToRefusal({ target: "deadbee", commitExists: false, dirty: [] });
+  assert.ok(немаКоміта && /не існує/.test(немаКоміта),
+    "🔴 неіснуючий коміт пропущено — checkout лишив би дерево як було, а крок «зробленим»");
+  assert.ok(standToRefusal({ target: "  ", commitExists: true, dirty: [] }),
+    "🔴 порожня ціль прийнята — рухали б стенд у нікуди");
+  assert.ok(!/checkout[^\n]*--force/.test(src),
+    "🔴 зʼявився --force: саме він перетворює відмову на мовчазну втрату чужої роботи");
+
+  // ③ Існування коміта доводиться ДО дії, а результат — ПІСЛЯ неї.
+  assert.match(src, /cat-file", "-e"/,
+    "🔴 не перевіряється існування коміта — checkout на неіснуючий лишив би дерево як було, а крок «зробленим»");
+  assert.match(src, /після checkout HEAD стенда/,
+    "🔴 не перевіряється, що дерево справді переїхало: «команда не впала» ≠ «HEAD там, де треба»");
 });

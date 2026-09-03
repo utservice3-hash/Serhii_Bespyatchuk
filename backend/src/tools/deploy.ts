@@ -16,15 +16,28 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
+  standToRefusal,
   MARK_REPORT, MARK_STOP,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
-import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
+import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim, actorRefusal } from "./checkoutLock.js";
+
+/**
+ * 🏷 ПІДПИС ЛАНЦЮГА — ОДИН НА ВЕСЬ ПРОГІН, І БЕЗ ЖОДНОГО ДЕФОЛТУ.
+ *
+ * 📐 Було ЧОТИРИ місця з `?? "deploy:run"` / `?? "deploy"`, і дефолти РІЗНІ. Тобто
+ * без `UTS_ACTOR` ланцюг брав замок як `deploy:run`, наступним кроком не впізнавав
+ * себе як `deploy`, падав кодом 7 — і лишав замок ВЗЯТИМ на імʼя, якого немає в
+ * жодній черзі й якого ніхто не звільнить. Тепер значення одне, і його відсутність
+ * зупиняє ланцюг ДО першого кроку, а не посеред нього.
+ */
+const ACTOR = (process.env.UTS_ACTOR ?? "").trim();
+
 import { parseTap, judgeDelta } from "./testDelta.js";
 import { diffGates, acceptRetired } from "../testManifest.js";
 import { FAIL_MARK, failureNames, EXPECTED_PASS_MARK, expectedPassNames } from "../testRunGate.js";
 import { acceptExpectedReds } from "../expectedReds.js";
-import { testsAtRef, parseManifestTests } from "./gateCount.js";
+import { testsAtRef, parseManifestTests, freshManifest } from "./gateCount.js";
 import { rmSync, symlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -166,6 +179,37 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   toolsCheck: () => toolsPresent("toolsCheck", null),
   // run убиває процес прода — прод-бінарник мусить БУТИ, інакше сайт не повернеться.
   toolsRun: () => toolsPresent("toolsRun", NODE_BIN),
+  /**
+   * 🔴 ПЕРЕМІЩЕННЯ СТЕНДА — КРОК ЛАНЦЮГА, А НЕ СКРИПТ У /tmp. Стоїть одразу за
+   * `lockTake`: під замком і ДО першого `rm -rf dist`. Причина розриву — в реєстрі кроків.
+   *
+   * ⚠️ БЕЗ `--target` НІЧОГО НЕ РУХАЄМО, і це `skipped`, а не «пройшло»: стара поведінка
+   * лишається цілою, інакше ми зламали б усі наявні виклики в один момент.
+   *
+   * 🔴 НА БРУДНОМУ ДЕРЕВІ — ВІДМОВА, БЕЗ ЖОДНОГО `--force`. Чуже незакомічене у
+   * спільному стенді дорожче за зручність: `checkout` його або зітре, або потягне за
+   * собою в чужу збірку. Відмова НАЗИВАЄ, що саме заважає.
+   */
+  standTo: (c) => {
+    if (!c.targetExplicit) return { id: "standTo", ok: true, detail: "",
+      skipped: "sha не названо через --target= — стенд лишається як є (це НЕ «поставлено на ціль»)" };
+    return run("standTo", () => {
+      sh("git", ["fetch", "origin", "-q"], c.buildRepo);
+      const commitExists = (() => {
+        try { sh("git", ["cat-file", "-e", c.target + "^{commit}"], c.buildRepo); return true; } catch { return false; }
+      })();
+      const dirty = sh("git", ["status", "--porcelain"], c.buildRepo).split("\n").filter(Boolean);
+      // 🔴 Рішення — у ЧИСТІЙ функції (`standToRefusal`), тож його можна саботувати
+      // входом. Умова, вбудована сюди, давала гейт, зелений на `if (false)`.
+      const refusal = standToRefusal({ target: c.target, commitExists, dirty });
+      if (refusal) throw new Error(refusal);
+      sh("git", ["checkout", "--detach", "-q", c.target], c.buildRepo);
+      const head = sh("git", ["rev-parse", "--short", "HEAD"], c.buildRepo);
+      // Твердження перевіряється ПІСЛЯ дії: «команда не впала» і «дерево там, де треба» — різні речі.
+      if (!head.startsWith(c.target.slice(0, 7)) && !c.target.startsWith(head))
+        throw new Error("після checkout HEAD стенда " + head + ", а ціль " + c.target);
+    }, "стенд на " + c.target);
+  },
   base: async (c) => {
     const live = await prodSha();
     c.prod = live;
@@ -243,7 +287,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * 🔴 КРИТЕРІЙ — ПРИРІСТ, А НЕ КОД 0. Розгорнуто в `testDelta.ts`; тут — механіка
    * двох прогонів. Ціна заміряна: +78 с (worktree+збірка 12.4 с, прогін бази 65.8 с).
    */
-  test: (c) => {
+  test: async (c) => {
     let base = "";
     try {
       // 🔗 База — worktree на sha з health.version У МОМЕНТ ДІЇ (`c.prod`), не з памʼяті.
@@ -314,8 +358,22 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
        * `manifestNow`, інакше «живий» звірялося б зі старим `dist` (та сама пастка,
        * що вже дала хибне «ЗНИКЛИ ГЕЙТИ (11)» 27.08.2026).
        */
-      const lostRaw = diffGates(testsAtRef(c.prod), manifestNow).onlyBefore;
-      const retire = acceptRetired(lostRaw, manifestNow);
+      /**
+       * 🔴 РЕЄСТР ЗНЯТИХ — ТЕЖ ІЗ СВІЖОЇ ЗБІРКИ, А НЕ З ПАМʼЯТІ ПРОЦЕСУ (03.09.2026, HR).
+       *
+       * 📐 27.08 полікували `manifestNow` (рядок вище) і лишили поруч ДРУГОГО читача тієї
+       * самої несвіжості: `acceptRetired`/`RETIRED_GATES` приходять верхнім імпортом, тобто
+       * із `dist`, який `buildBack` (крок 6) знищив і перезібрав ПІСЛЯ того, як цей процес
+       * стартував. Заміряно в одному процесі: на старті реєстр 9 записів, після `buildBack`
+       * у памʼяті ті самі 9, у свіжому `dist` — 10; законне зняття дало `unaccounted` і
+       * зупинку ланцюга, а з другого запуску зникло само. Флак у детекторі втрат.
+       *
+       * ⚠️ Беремо весь модуль, а не лише реєстр: логіка `acceptRetired`/`diffGates` теж
+       * могла змінитись цим самим проходом, і судити нею з памʼяті — та сама помилка.
+       */
+      const fresh = await freshManifest(c.be);
+      const lostRaw = fresh.diffGates(testsAtRef(c.prod), manifestNow).onlyBefore;
+      const retire = fresh.acceptRetired(lostRaw, manifestNow);
       if (retire.problems.length) {
         return { id: "test", ok: false, detail:
           ["🔴 РЕЄСТР ЗНЯТИХ ГЕЙТІВ САМ НЕСПРАВНИЙ — це зупинка ДО будь-яких висновків про приріст:",
@@ -366,7 +424,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   // ── RUN ───────────────────────────────────────────────────────────────────
   /** Замок бере САМ скрипт: памʼятка не механізм, а ручний дотик має лишатись дорожчим. */
   lockTake: (c) => {
-    const who = process.env.UTS_ACTOR ?? "deploy:run";
+    const who = ACTOR;
     const r = lockCli(["--take", `--who=${who}`, `--reason=викат ${c.target}`], CANON_LOCK_DIR);
     return { id: "lockTake", ok: r.code === 0, detail: r.out.join(" · ") };
   },
@@ -454,7 +512,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     return { id: "accept", ok: true, detail: `${doneN} із ${needN}, падінь 0` };
   },
   lockRelease: (c) => {
-    const who = process.env.UTS_ACTOR ?? "deploy:run";
+    const who = ACTOR;
     const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], CANON_LOCK_DIR);
     return { id: "lockRelease", ok: r.code === 0, detail: r.out.join(" · ") };
   },
@@ -720,6 +778,11 @@ export interface Ctx {
    */
   prodBe: string;
   branch: string; target: string;
+  /**
+   * Чи sha названо ЯВНО через `--target=`. Без цього прапорця «ціль» невідрізненна
+   * від «те, що зараз у дереві», а `standTo` не має права рухати стенд за здогадом.
+   */
+  targetExplicit: boolean;
   mode: Mode; prod: string; now: string;
   /**
    * Мить успішного `kill`. Прогрів рахується ВІД НЕЇ, а не від початку кроку
@@ -760,6 +823,14 @@ export async function main(argv: string[]): Promise<number> {
   if (mode !== "full" && mode !== "light") {
     console.error("🔴 РЕЖИМ ЛИШЕ ЯВНО: --mode=full | --mode=light.\n"
       + "   Мовчазного дефолту немає навмисно: дешевий викат розбещує.");
+    return 2;
+  }
+  // 🔴 ПІДПИС ПЕРЕВІРЯЄТЬСЯ ДО ПЛАНУ, а не в мить першого запису в журнал: інакше
+  // ланцюг устигає взяти замок фантомним імʼям, і прибирати це доводиться руками.
+  const actorBad = actorRefusal(ACTOR);
+  if (actorBad) {
+    console.error(actorBad);
+    console.error("   Черга доводиться ЖУРНАЛОМ, а підпис у журналі — це UTS_ACTOR запуску.");
     return 2;
   }
   const plan = planSteps(phase, mode);
@@ -808,6 +879,7 @@ export async function main(argv: string[]): Promise<number> {
     be: `${buildRepo}/backend`, fe: `${buildRepo}/frontend`, prodBe: `${docRoot}/backend`,
     branch: process.env.UTS_PROD_BRANCH ?? PROD_BRANCH,
     target: targetArg ?? sh("git", ["rev-parse", "--short", "HEAD"], buildRepo),
+    targetExplicit: Boolean(targetArg),
     mode, prod: "", now: new Date().toISOString(), changed: [],
   };
   const done: StepResult[] = [];
@@ -822,12 +894,18 @@ export async function main(argv: string[]): Promise<number> {
    *      спільному дереві опинився чужий ланцюг.
    * Дотик стоїть ПІСЛЯ `lockTake` (до нього замка ще немає) і не пише в журнал.
    */
-  let lockOurs = false;
+  /**
+   * 🔴 СТАН ВИЗНАЧАЄТЬСЯ З ДИСКА, А НЕ З ВЛАСНОГО КРОКУ. `false` тут означало «дотик
+   * вмикає лише наш `lockTake`» — і фаза `run`, де того кроку більше немає, лишалась
+   * БЕЗ дотиків. Заміряно на живому викаті 9781c12: 11 хв бездіяльності на замку, що
+   * працював, при TTL 20 хв. Тепер ланцюг питає замок, чий він, а не памʼятає це.
+   */
+  let lockOurs = heldByMe(readClaim(CANON_LOCK_DIR), ACTOR);
   for (const step of plan) {
     const h = handlers[step.id];
     if (!h) { console.error(`🔴 КРОК БЕЗ ОБРОБНИКА: ${step.id} — зупиняюсь`); return 1; }
     if (lockOurs) {
-      const t = lockCli(["--touch", `--who=${process.env.UTS_ACTOR ?? "deploy"}`], CANON_LOCK_DIR);
+      const t = lockCli(["--touch", `--who=${ACTOR}`], CANON_LOCK_DIR);
       if (t.code !== 0) {
         console.error(`✖ ${"lockTouch".padEnd(16)} перед кроком «${step.id}»`);
         for (const l of t.out) console.error(`  ${l}`);

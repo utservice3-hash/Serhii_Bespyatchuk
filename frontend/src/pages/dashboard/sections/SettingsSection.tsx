@@ -161,6 +161,22 @@ function GeneralTab({ syncStatus, syncing, onManualSync, canSync }: { syncStatus
                   style={{ display: "block", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", width: 140, background: "var(--card-bg)", color: "var(--text)" }} />
               </label>
             ))}
+            {/* 🔌 МЕЖА ПЛАНУ — ОКРЕМО ВІД `NUMS`, І ЦЕ НЕ ПРИКРАСА.
+                Загальний рендер робить `Number(e.target.value)`, а `Number("")` це **0**.
+                Для решти полів нуль безглуздий і шкоди не робить; тут він ЗАКОННЕ значення
+                «межу свідомо знято», тож стерте поле мовчки знімало б поріг усім. Порожній
+                інпут шле `null` = «повернути дефолт», нуль треба ввести ЯВНО. Три стани
+                розбирає `core/settingWire.ts` — той самий зразок, що стан менеджера. */}
+            <label style={{ fontSize: 13, fontWeight: 600 }}>Мінімальний план на менеджера, ₴
+              <input type="number" value={form.planMinPerManager ?? ""} placeholder="дефолт"
+                onChange={(e) => setForm({ ...form, planMinPerManager: e.target.value.trim() === "" ? null : Number(e.target.value) })}
+                style={{ display: "block", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", width: 140, background: "var(--card-bg)", color: "var(--text)" }} />
+              <span style={{ display: "block", marginTop: 4, fontSize: 11, fontWeight: 400, color: "var(--text-muted)" }}>
+                <b>0</b> — межу знято, план будь-якого розміру подається без обґрунтування.
+                <br />Порожнє поле — повернути значення за замовчуванням.
+                <br />Це <b>не заборона</b>: нижче межі план подається й далі, просто з позначкою.
+              </span>
+            </label>
           </div>
           <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center" }}>
             <button onClick={save} disabled={saving} style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer" }}>{saving ? "Збереження…" : "Зберегти"}</button>

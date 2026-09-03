@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MANIFEST_TESTS, collidingNumbers, KNOWN_NUMBER_COLLISIONS, gateNames, diffGates,
   acceptRetired, RETIRED_GATES, type RetiredGate } from "./testManifest.js";
-import { parseManifestTests } from "./tools/gateCount.js";
+import { parseManifestTests, treeTests, freshManifest } from "./tools/gateCount.js";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * 🔢 #223–#223b — ОДИН НОМЕР = ОДИН ГЕЙТ.
@@ -77,6 +80,132 @@ test("#223d РАХУНОК ГЕЙТІВ · екрановану лапку ро�
   // Порожній результат = провал: розбір мусить ГОЛОСНО падати, а не віддавати [].
   assert.throws(() => parseManifestTests("нічого схожого", "фікстура"), /не знайшов MANIFEST_TESTS/,
     "🔴 зламаний розбір віддав порожній список — це читалось би як «гейтів немає»");
+});
+
+/**
+ * 🧭 #326–#326b — ДЕРЕВО В `gateCount` БЕРЕТЬСЯ З ДЖЕРЕЛА, А НЕ З `dist`.
+ *
+ * 📐 Привід і межі — у доккоментарі `treeTests`. Тут важлива форма перевірки:
+ * 🔴 ФІКСТУРА МУСИТЬ РОЗХОДИТИСЬ ІЗ ЗІБРАНИМ МАНІФЕСТОМ, інакше гейт зеленів би й на
+ * реалізації, що повернулась до `MANIFEST_TESTS` — обидва джерела дали б те саме, і
+ * перевірка доводила б лише «функція щось повертає» (правило 11).
+ */
+const FIXTURE = (names: string[]) => {
+  const dir = mkdtempSync(join(tmpdir(), "gatecount-"));
+  mkdirSync(join(dir, "src"));
+  writeFileSync(join(dir, "src", "testManifest.ts"),
+    "export const MANIFEST_TESTS: string[] = [\n"
+    + names.map((n) => `  ${JSON.stringify(n)},\n`).join("") + "];\n");
+  return dir;
+};
+
+test("#326 дерево читається з ДЖЕРЕЛА — фікстура перемагає зібраний маніфест", () => {
+  const dir = FIXTURE(["#901 вигаданий гейт фікстури", "#902 другий", "не гейт"]);
+  try {
+    const got = treeTests(dir);
+    assert.deepEqual(got, ["#901 вигаданий гейт фікстури", "#902 другий", "не гейт"],
+      "🔴 повернуто не те, що лежить у ДЖЕРЕЛІ фікстури");
+    // 🧨 Осердя: якби реалізація читала `dist`, тут був би бойовий маніфест на 800+.
+    assert.ok(!got.some((n) => MANIFEST_TESTS.includes(n)),
+      "🔴 у відповіді імена БОЙОВОГО маніфеста — тобто дерево знову береться з dist, "
+      + "і хибне «зникло N гейтів» від несвіжої збірки повертається");
+    assert.ok(got.length < 10, `🔴 замість фікстури прочитано щось на ${got.length} імен`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("#326b 🪞 ДЗЕРКАЛО: відсутнє джерело ПАДАЄ з іменем файлу, справжнє дерево читається", () => {
+  // 1 · Порожній результат = провал: «немає файлу» не сміє прочитатись як «гейтів немає».
+  const empty = mkdtempSync(join(tmpdir(), "gatecount-порожньо-"));
+  try {
+    assert.throws(() => treeTests(empty), /не прочитав маніфест дерева.*testManifest\.ts/s,
+      "🔴 відсутнє джерело віддало список замість падіння — це читалось би як втрата ВСІХ гейтів");
+  } finally { rmSync(empty, { recursive: true, force: true }); }
+  // 2 · Другий бік межі: на СПРАВЖНЬОМУ дереві функція не падає й не вироджується —
+  // інакше перша половина зеленіла б від того, що вона падає завжди.
+  const real = treeTests();
+  assert.ok(gateNames(real).length > 500,
+    `🔴 на бойовому дереві прочитано лише ${gateNames(real).length} гейтів`);
+  // 3 · І воно збігається зі зібраним маніфестом ПРЯМО ЗАРАЗ: розбіжність тут означає
+  // або несвіжий dist, або що розбір джерела втратив рядки. Обидва варіанти — стоп.
+  assert.deepEqual(diffGates(real, MANIFEST_TESTS).onlyBefore, [],
+    "🔴 джерело й зібраний маніфест розійшлись — перезбери dist перед висновками");
+});
+
+/**
+ * 🧭 #328–#328b — РЕЄСТР ЗНЯТИХ БЕРЕТЬСЯ ЗІ СВІЖОЇ ЗБІРКИ, А НЕ З ПАМʼЯТІ ПРОЦЕСУ.
+ *
+ * 📐 Привід — у доккоментарі `freshManifest`: `deploy.js` виконується з `dist`, який сам
+ * зносить кроком `buildBack`, тож усі його верхньорівневі імпорти лишаються старими.
+ * Законне зняття гейта через це читалось як диверсія РІВНО ОДИН РАЗ і зникало з другого
+ * запуску — тобто виглядало флаком.
+ *
+ * 🔴 ФІКСТУРА МУСИТЬ ЗМІНИТИСЬ МІЖ ДВОМА ВИКЛИКАМИ. Інакше «свіжий» і «з памʼяті» дали б
+ * те саме, і гейт доводив би лише, що функція щось повертає.
+ */
+const distFixture = (names: string[], retired: string[], into?: string): string => {
+  // 🔴 `into` — НЕ зручність, а суть гейта. Кеш модулів Node вʼяжеться до ШЛЯХУ, тож
+  // фікстура у НОВОМУ каталозі імпортується свіжою й БЕЗ обходу кешу: саботаж
+  // «прибрати ?bust=» лишав гейт зеленим, поки я не переписав його на ПЕРЕЗАПИС
+  // ТОГО САМОГО файлу. Реальний `buildBack` робить саме це — перезбирає `dist` на місці.
+  const dir = into ?? mkdtempSync(join(tmpdir(), "fresh-"));
+  if (!into) { mkdirSync(join(dir, "src")); mkdirSync(join(dir, "dist")); }
+  const body = names.map((n) => `  ${JSON.stringify(n)},\n`).join("");
+  writeFileSync(join(dir, "src", "testManifest.ts"),
+    `export const MANIFEST_TESTS: string[] = [\n${body}];\n`);
+  writeFileSync(join(dir, "dist", "testManifest.js"),
+    `export const MANIFEST_TESTS = [\n${body}];\n`
+    + `export const RETIRED_GATES = ${JSON.stringify(
+      retired.map((n) => ({ name: n, since: "2026-09-03", reason: "фікстура" })))};\n`
+    + "export const diffGates = (b, a) => ({ onlyBefore: b.filter(x => !a.includes(x)),"
+    + " onlyAfter: a.filter(x => !b.includes(x)), countBefore: b.length, countAfter: a.length });\n"
+    + "export const acceptRetired = (lost, alive) => {\n"
+    + "  const known = new Set(RETIRED_GATES.map(r => r.name));\n"
+    + "  return { problems: [], accepted: lost.filter(x => known.has(x)),"
+    + " unaccounted: lost.filter(x => !known.has(x)) };\n};\n");
+  return dir;
+};
+
+test("#328 реєстр зняття береться зі СВІЖОГО dist — перезбірка між викликами видима", async () => {
+  const dir = distFixture(["#901 живий"], []);
+  try {
+    const first = await freshManifest(dir);
+    assert.deepEqual(first.RETIRED_GATES.map((r) => r.name), [],
+      "🔴 фікстура стартувала не з порожнього реєстру — вимір нічого не покаже");
+    // 🧨 Осердя: перезбірка ТОГО САМОГО файлу в тому самому процесі — рівно те, що
+    // робить крок `buildBack`. Без обходу кешу модулів другий імпорт віддасть перший.
+    distFixture(["#901 живий"], ["#902 знятий у цьому ж проході"], dir);
+    const second = await freshManifest(dir);
+    assert.deepEqual(second.RETIRED_GATES.map((r) => r.name), ["#902 знятий у цьому ж проході"],
+      "🔴 повернувся реєстр із КЕШУ модулів — саме тут законне зняття читається як диверсія");
+    // І вирок на законному знятті мусить бути «дозволено», а не «unaccounted».
+    const v = second.acceptRetired(["#902 знятий у цьому ж проході"], ["#901 живий"]);
+    assert.deepEqual(v.unaccounted, [], "🔴 законне зняття все одно спиняє ланцюг");
+    assert.deepEqual(v.accepted, ["#902 знятий у цьому ж проході"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("#328b 🪞 ДЗЕРКАЛО: dist, що розійшовся з джерелом, — це СТОП, а не мовчазний вирок", async () => {
+  // Джерело має два гейти, dist — один: рівно стан «забули перезібрати».
+  const dir = mkdtempSync(join(tmpdir(), "fresh-stale-"));
+  try {
+    mkdirSync(join(dir, "src")); mkdirSync(join(dir, "dist"));
+    writeFileSync(join(dir, "src", "testManifest.ts"),
+      'export const MANIFEST_TESTS: string[] = [\n  "#901 живий",\n  "#903 доданий у джерелі",\n];\n');
+    writeFileSync(join(dir, "dist", "testManifest.js"),
+      'export const MANIFEST_TESTS = [\n  "#901 живий",\n];\nexport const RETIRED_GATES = [];\n'
+      + "export const diffGates = () => ({ onlyBefore: [], onlyAfter: [], countBefore: 0, countAfter: 0 });\n"
+      + "export const acceptRetired = () => ({ problems: [], accepted: [], unaccounted: [] });\n");
+    await assert.rejects(() => freshManifest(dir), /РОЗІЙШОВСЯ З ДЖЕРЕЛОМ.*#903 доданий у джерелі/s,
+      "🔴 несвіжий dist прийнято мовчки — тоді вирок про зниклі гейти виноситься за двома "
+      + "різними моментами часу, і це рівно та аварія, яку крок мав ловити");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  // 🪞 Другий бік межі: на ЗБІЖНИХ джерелі й dist функція не кидає — інакше вона
+  // падала б завжди, і перша половина зеленіла б ні від чого.
+  const ok = distFixture(["#901 живий"], []);
+  try {
+    const m = await freshManifest(ok);
+    assert.deepEqual(m.MANIFEST_TESTS, ["#901 живий"], "🔴 на збіжній парі функція не віддала маніфест");
+  } finally { rmSync(ok, { recursive: true, force: true }); }
 });
 
 /**

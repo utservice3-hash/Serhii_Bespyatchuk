@@ -82,6 +82,107 @@ export interface AccessRow {
 
 export const ACCESS_ROLES = ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] as const;
 
+/**
+ * 🔁 ЗРУШЕНІ КЛІТИНКИ ЗЛІПКА — УЗАКОНЕНІ ПОІМЕННО, А НЕ ПЕРЕЗНЯТІ МОВЧКИ.
+ *
+ * 🔴 НАВІЩО РЕЄСТР, А НЕ ПРОСТО НОВИЙ ЗЛІПОК. Перезняти фотографію легко, і саме тому
+ * небезпечно: наступний читач не відрізнить «ми це вирішили» від «хтось затер сигнал».
+ * Форма та сама, що в `RETIRED_GATES` і `EXPECTED_REDS` — причина, дата, автор рішення.
+ *
+ * 📐 ПОВОД ЗАМІРЯНИЙ. `#11` у режимі test:matrix 03.09.2026 назвав РІВНО 11 клітинок у
+ * 10 рядках (`/api/one-on-ones/enps` рухається двома ролями). Джерело — два свідомі
+ * проходи, `ec0d12f` (01.09) і `be6d453` (27.08); неправильним було лише те, що після
+ * них не перезняли зліпок. Дрейф прожив шість днів, і знайшла його випадковість.
+ *
+ * ⚠️ У РЯДКАХ КЛАСУ `deny-only` РОЛЬ ВИДАЛЕНО З `deny` І НЕ ДОДАНО В `allow` — і це не
+ * охайність. `#11` пробує `[...allow, ...deny]`, тобто ОБИДВА списки; безпеку deny-only
+ * дає саме ПОРОЖНІЙ `allow`, і тримає її `#11b`. Записати `ceo` в `allow` рядка
+ * `POST /api/dashboard/client-merge` означало б, що наступний прогін `#11` виконає
+ * справжнє обʼєднання клієнтів на проді. Прецедент 31.07 описано в шапці нижче.
+ */
+export interface MatrixShift {
+  method: string; path: string; role: string;
+  /** Куди клітинка поїхала: роль стала дозволеною, забороненою, або зникла з deny-only. */
+  to: "allow" | "deny" | "dropped";
+  decidedOn: string; decidedBy: string; why: string;
+}
+
+const CEO_MERGE = "власник: CEO веде обʼєднання клієнтів разом із розʼєднанням і зміною "
+  + "менеджера. Джерело зміни — ec0d12f (01.09.2026), «розʼєднання злитих клієнтів»";
+const MGR_LIMIT = "власник: менеджер подає заявку на кредитний ліміт і ставить задачу по "
+  + "ліміту сам. Джерело зміни — ec0d12f (01.09.2026)";
+const NO_ENPS = "власник: eNPS і бали ванʼту-ванів — не для фінансиста й тімліда. Джерело "
+  + "зміни — be6d453 (27.08.2026), «біле сито прав»";
+
+export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  /**
+   * Рішення власника 03.09.2026, дослівно: «менеджер подає, тім-лід затверджує плани
+   * по клієнтах, такий задум». До цього дня менеджер не міг подати НАВІТЬ СВІЙ план —
+   * 53 людини з 61. Це ЄДИНА клітинка, яку рухає прохід #279: інші ролі відсікаються
+   * `mayEverSubmit` ДО розбору тіла й лишаються на 403.
+   * ⚠️ Дозвіл тут НЕ означає «подавай кому хочеш»: межа за парою «актор → ціль» живе
+   * в `core/planScope.ts`, і менеджер за колегу далі дістає 403 («Лише свій план»).
+   */
+  { method: "POST", path: "/api/plans/formation/submit", role: "manager", to: "dropped",
+    decidedOn: "2026-09-03", decidedBy: "власник через координатора (HR)",
+    why: "менеджер подає свій план; межа звузилась із ролі на пару «актор → ціль» (#279)" },
+  { method: "GET", path: "/api/dashboard/client-search?q=zz", role: "ceo", to: "allow",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: CEO_MERGE },
+  { method: "GET", path: "/api/dashboard/client-merge/preview?alias=a&canonical=b", role: "ceo", to: "allow",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: CEO_MERGE },
+  { method: "GET", path: "/api/dashboard/client-merge/journal", role: "ceo", to: "allow",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: CEO_MERGE },
+  { method: "POST", path: "/api/dashboard/client-merge", role: "ceo", to: "dropped",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: CEO_MERGE },
+  { method: "POST", path: "/api/dashboard/client-merge/revoke", role: "ceo", to: "dropped",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: CEO_MERGE },
+  { method: "POST", path: "/api/dashboard/client-manager", role: "ceo", to: "dropped",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: CEO_MERGE },
+  { method: "GET", path: "/api/dashboard/receivables/limit-request?clientKey=zzz", role: "manager", to: "allow",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: MGR_LIMIT },
+  { method: "POST", path: "/api/dashboard/receivables/limit-task", role: "manager", to: "dropped",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: MGR_LIMIT },
+  { method: "GET", path: "/api/one-on-ones/enps", role: "financier", to: "deny",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: NO_ENPS },
+  { method: "GET", path: "/api/one-on-ones/enps", role: "team_lead", to: "deny",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: NO_ENPS },
+  { method: "GET", path: "/api/one-on-ones/stats/scores", role: "financier", to: "deny",
+    decidedOn: "2026-09-02", decidedBy: "власник", why: NO_ENPS },
+];
+
+/**
+ * Дефекти реєстру зрушень. Порожній масив = кожен запис указує на РЕАЛЬНУ клітинку,
+ * і зліпок справді в тому стані, який запис оголошує.
+ *
+ * 🔴 РЕЄСТР — НЕ КОВДРА. Запис про клітинку, яка не рухалась (або рядка якої немає),
+ * гірший за відсутність реєстру: під ним мовчки пройде наступний справжній дрейф.
+ * Тому перевіряються ОБИДВА боки, як у `acceptRetired`.
+ */
+export function auditShifts(
+  rows: readonly AccessRow[], registry: readonly MatrixShift[] = ACCEPTED_MATRIX_SHIFTS,
+): string[] {
+  const out: string[] = [];
+  if (registry.length === 0) return out;
+  const seen = new Set<string>();
+  for (const r of registry) {
+    const key = `${r.method} ${r.path} · ${r.role}`;
+    if (seen.has(key)) out.push(`🔴 подвійний запис про ${key}`);
+    seen.add(key);
+    if (!r.why.trim() || !r.decidedBy.trim() || !r.decidedOn.trim())
+      out.push(`🔴 запис про ${key} без причини/автора/дати — тоді це не рішення, а тиша`);
+    const row = rows.find((x) => x.method === r.method && x.path === r.path);
+    if (!row) { out.push(`🔴 запис про ${key}, а такого рядка у зліпку НЕМАЄ`); continue; }
+    const inAllow = row.allow.includes(r.role), inDeny = row.deny.includes(r.role);
+    if (r.to === "allow" && !inAllow) out.push(`🔴 ${key}: оголошено дозволеним, а в зліпку його там немає`);
+    if (r.to === "deny" && !inDeny) out.push(`🔴 ${key}: оголошено забороненим, а в зліпку його там немає`);
+    if (r.to === "dropped" && (inAllow || inDeny))
+      out.push(`🔴 ${key}: оголошено прибраним із deny-only рядка, а він досі в списках`);
+    if (r.to === "dropped" && row.allow.length > 0)
+      out.push(`🔴 ${key}: рядок deny-only має НЕПОРОЖНІЙ allow — #11 виконав би дію по-справжньому`);
+  }
+  return out;
+}
+
 export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/ai-work", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
@@ -180,7 +281,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // них це справжня відмова по праву, і вона лишається. `manager` теж 403:
   // вкладку `loyalty` він має, тож tab-гейт його пропустив би — відмова явна.
   { method: "GET", path: "/api/dashboard/client-search?q=zz", cls: "GET",
-    allow: ["admin", "kvp", "opdir", "team_lead"], deny: ["hr", "manager", "financier", "ceo"] },
+    allow: ["admin", "kvp", "opdir", "team_lead", "ceo"], deny: ["hr", "manager", "financier"] },
   { method: "POST", path: "/api/dashboard/client-comments", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-plan", cls: "deny-only",
@@ -222,17 +323,17 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // матриця тут СТОРОЖУЄ кламп, а не описує намір. Намір доводять #30h/#30i
   // (реальна пара «свій+чужий» проти «свій+свій») і #31 (чистий предикат).
   { method: "GET", path: "/api/dashboard/client-merge/preview?alias=a&canonical=b", cls: "GET",
-    allow: ["admin", "kvp", "opdir"], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
+    allow: ["admin", "kvp", "opdir", "ceo"], deny: ["hr", "manager", "team_lead", "financier"] },
   // Журнал ключів не приймає, тож клітинка стабільна: тімлід читає (свої записи —
   // фільтр усередині роута), решта — 403.
   { method: "GET", path: "/api/dashboard/client-merge/journal", cls: "GET",
-    allow: ["admin", "kvp", "opdir", "team_lead"], deny: ["hr", "manager", "financier", "ceo"] },
+    allow: ["admin", "kvp", "opdir", "team_lead", "ceo"], deny: ["hr", "manager", "financier"] },
   { method: "POST", path: "/api/dashboard/client-merge", cls: "deny-only",
-    allow: [], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
+    allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "POST", path: "/api/dashboard/client-merge/revoke", cls: "deny-only",
-    allow: [], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
+    allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "POST", path: "/api/dashboard/client-manager", cls: "deny-only",
-    allow: [], deny: ["hr", "manager", "team_lead", "financier", "ceo"] },
+    allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "GET", path: "/api/dashboard/client-manager/history?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/loyalty", cls: "GET",
@@ -342,9 +443,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "DELETE", path: "/api/dashboard/receivables/limit/:clientKey", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/receivables/limit-request?clientKey=zzz", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/receivables/limit-task", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/regular-clients", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/repeat-client-history", cls: "GET",
@@ -493,7 +594,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/one-on-ones/conduct-types", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "GET", path: "/api/one-on-ones/enps", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["manager", "financier", "team_lead"] },
   { method: "GET", path: "/api/one-on-ones/forms/:type", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   // 🔴 КВП вийшов із deny 27.08.2026: власник дав йому `edit_1x1_forms` разом із
@@ -517,7 +618,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/one-on-ones/record/:type/:managerId", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "GET", path: "/api/one-on-ones/stats/scores", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["manager", "financier"] },
   { method: "GET", path: "/api/one-on-ones/subjects", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "POST", path: "/api/one-on-ones/task", cls: "deny-only",
@@ -536,8 +637,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/plans/formation/return", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🔓 `manager` ПРИБРАНО З deny 03.09.2026 — зсув узаконений вище (реєстр
+  //    ACCEPTED_MATRIX_SHIFTS). Зліпок описує «як Є», тож він мусить рухатись РАЗОМ
+  //    зі зміною поведінки: запис у реєстрі без руху в зліпку — це саме та мертва
+  //    ковдра, під якою наступний справжній дрейф пройде мовчки (#325).
+  //    `hr` лишається: цю роль прохід не чіпав.
   { method: "POST", path: "/api/plans/formation/submit", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/rates/analyze", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/rates/bodytypes", cls: "GET",

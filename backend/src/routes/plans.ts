@@ -5,6 +5,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import type { AuthPayload } from "../auth/auth.js";
 import * as money from "../core/money.js";
+import { maySubmit, mayEverSubmit, submitRefusal } from "../core/planScope.js";
 import { getSettings } from "./settings.js";
 import * as metrics from "../core/metrics.js";
 import { planRecommendation, baseMonthsFor } from "../core/plans.js";
@@ -176,6 +177,13 @@ plansRouter.get("/formation", async (req, res) => {
         entered: Math.round(Number(repeatMap.get(m.id)?.total_sum ?? 0)),
         declared: Math.round(Number(repeatPlanMap.get(m.id) ?? 0)),
       },
+      /**
+       * 🔐 ПОРЯДКОВЕ рішення про подання, а не одне на відповідь. Менеджер бачить
+       * усю свою команду, тож глобальний прапорець дав би «Подати» на чужих рядках.
+       * Означення одне — `core/planScope.ts`; тут лише застосування до конкретного рядка.
+       */
+      canSubmit: maySubmit({ role: auth.role, managerId: auth.managerId, teamId: auth.teamId },
+        { managerId: m.id, teamId: m.team_id }),
       formation: f ? {
         status: f.status, proposedValue: Math.round(Number(f.proposed_value)), comment: f.comment, returnComment: f.return_comment,
         belowMin: f.below_min === true,
@@ -223,16 +231,35 @@ plansRouter.get("/formation/repeat-clients", async (req, res) => {
 });
 
 const submitSchema = z.object({ managerId: z.number(), month: z.string(), proposedValue: z.number(), comment: z.string().optional() });
-plansRouter.post("/formation/submit", requireRole("admin", "team_lead"), async (req, res) => {
+/**
+ * 🔐 МЕЖА ПОДАННЯ ПЕРЕЇХАЛА З РОЛІ НА ПАРУ «АКТОР → ЦІЛЬ» (рішення власника 03.09.2026).
+ *
+ * Було: `requireRole("admin", "team_lead")`, тобто менеджер не міг подати НАВІТЬ СВІЙ
+ * план — 53 людини з 61 за заміром того дня. Стало: адмін — усіх, тімлід — свою
+ * команду, менеджер — ЛИШЕ СЕБЕ.
+ *
+ * 🔴 `requireRole` ПРИБРАНО НЕ ЗАРАДИ ПОСЛАБЛЕННЯ: він відповідав на питання «яка
+ * роль», а питання насправді «чий це рядок». Роль лишається в означенні
+ * (`core/planScope.ts`), просто вона там більше не одна. Межа роута —
+ * `submitRefusal`, і вона стоїть ДО будь-якого запису; порядковий прапорець у GET —
+ * дзеркало ТІЄЇ САМОЇ функції, а не друга правда поруч.
+ */
+plansRouter.post("/formation/submit", async (req, res) => {
   const auth = req.auth!;
+  // Ролі, що не подають нікому й ніколи, — ДО розбору тіла: інакше 403 у них тихо
+  // стало б 400, і зліпок матриці зрушився б там, де прохід цього не замовляв.
+  if (!mayEverSubmit(auth.role)) return res.status(403).json({ error: "Подання плану недоступне для цієї ролі" });
   const parsed = submitSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { managerId, proposedValue, comment } = parsed.data;
   const month = monthStartOf(parsed.data.month);
-  if (auth.role === "team_lead") {
-    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
-    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
-  }
+  const tgt = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+  if (!tgt.rows[0]) return res.status(404).json({ error: "Менеджера не знайдено" });
+  const refusal = submitRefusal(
+    { role: auth.role, managerId: auth.managerId, teamId: auth.teamId },
+    { managerId, teamId: tgt.rows[0].team_id },
+  );
+  if (refusal) return res.status(403).json({ error: refusal });
   /**
    * 🔓 МЕЖА БІЛЬШЕ НЕ ЗАБОРОНЯЄ ПОДАННЯ (рішення власника 02.09.2026, дослівно:
    * «логіка така що план не може бути менший 30 тисяч, хочу зняти це обмеження»).

@@ -27,8 +27,10 @@
  * а не віддавати порожній список — інакше «гейтів немає» читатиметься як норма.
  */
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
-import { MANIFEST_TESTS, gateNames, diffGates } from "../testManifest.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, resolve } from "node:path";
+import { diffGates } from "../testManifest.js";
 
 /** Розбір маніфеста як ТЕКСТУ (для чужого коміту). Винесено, щоб гейт міг перевірити його без git. */
 export function parseManifestTests(src: string, whence = "джерело"): string[] {
@@ -45,12 +47,103 @@ export function testsAtRef(ref: string): string[] {
     execFileSync("git", ["show", `${ref}:backend/src/testManifest.ts`], { encoding: "utf8" }), ref);
 }
 
+/** Корінь `backend/` цього дерева: `dist/tools/gateCount.js` → на два рівні вгору. */
+const BE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * 🔴 ДЕРЕВО ЧИТАЄТЬСЯ З ДЖЕРЕЛА, А НЕ З `dist` — І САМЕ ЦЕ РОБИТЬ ІНСТРУМЕНТ СИМЕТРИЧНИМ.
+ *
+ * 📐 АВАРІЯ, ЯКА ЦЕ КУПИЛА (03.09.2026, інший чат). `gateCount --base=` порівнював
+ * СВІЖИЙ git-текст бази з іменами, взятими з `import { MANIFEST_TESTS }`, тобто зі
+ * СТАРОГО `dist`. У стенді без перезбірки це дало «🔴 ЗНИКЛО 17 ГЕЙТІВ» — і людину
+ * відправило шукати диверсію в чужому коміті. Після `rm -rf dist && npm run build`:
+ * 844 → 847, не зникло жодного.
+ *
+ * 🔑 Найгірше тут не хибне число, а те, ЩО САМЕ воно стереже: детектор ВТРАТ, який сам
+ * залежить від свіжості збірки, робить недовірливим той єдиний сигнал, заради якого
+ * існує. Хибна тривога в ньому дорожча за пропуск — це вже записано вище, у пункті ②
+ * доккоментаря, і ось той самий висновок повернувся третім випадком.
+ *
+ * ⚠️ І ЦЕ НЕ НОВЕ ЛІКУВАННЯ, А НЕДОНЕСЕНЕ. Крок `test` у `deploy.ts` перейшов на
+ * джерело ще 27.08.2026 — після хибного «ЗНИКЛИ ГЕЙТИ (11)». Полікували ОДНОГО
+ * читача, а сам інструмент лишили з тією ж асиметрією; наступний, хто покликав його
+ * напряму, купив ту саму аварію вдруге. Рівно клас «прибираєш інваріанту — знайди
+ * ВСІХ, хто на неї спирався», тільки в інший бік: додав ліки — рознеси їх усім.
+ *
+ * 🧾 Межа: `dist` тут не «гірше джерела взагалі». Для питання «чи існує тест» правий
+ * саме `dist` (`manifest.test.ts` і далі звіряє зібраний набір). Для питання «чи зник
+ * РЯДОК маніфеста» правильне джерело — текст, і обидві сторони мусять брати його
+ * однаково, інакше порівнюються два різні моменти часу.
+ */
+export function treeTests(beRoot: string = BE_ROOT): string[] {
+  const file = resolve(beRoot, "src", "testManifest.ts");
+  let src: string;
+  try {
+    src = readFileSync(file, "utf8");
+  } catch {
+    // Порожній список тут читався б як «гейтів немає» — тобто як втрата всього.
+    throw new Error(`не прочитав маніфест дерева: ${file} — рахувати нема з чого`);
+  }
+  return parseManifestTests(src, `дерево (джерело ${file}, не dist)`);
+}
+
+/**
+ * 🔴 ТРЕТІЙ ВИПАДОК ТІЄЇ САМОЇ АСИМЕТРІЇ, І ВІН ВИГЛЯДАЄ ЯК ФЛАК (знайшов HR, 03.09.2026).
+ *
+ * 📐 ЗАМІРЯНО, А НЕ ВИВЕДЕНО З МІРКУВАННЯ. Крок `test` — девʼятий, `buildBack`
+ * (`rm -rf dist && npm run build`) — шостий. Тобто `deploy.js` виконується з `dist`,
+ * який САМ і зносить, а всі його верхньорівневі імпорти лишаються тими, що
+ * завантажились на старті. Відтворено в одному процесі:
+ *   ① на старті: RETIRED_GATES = 9
+ *   ② після buildBack: стара памʼять 9 · свіжий dist 10
+ *   ③ СТАРИЙ реєстр → unaccounted ["#999"] → ланцюг СТАЄ 🔴
+ *      СВІЖИЙ реєстр → unaccounted [] → ланцюг іде далі
+ *
+ * 🔑 ЧОМУ ЦЕ ГІРШЕ ЗА ПРОСТО ПОМИЛКУ: воно САМОЛІКУЄТЬСЯ з другого разу — наступний
+ * запуск стартує вже з новим `dist`. Отже законне зняття гейта читається як диверсія
+ * РІВНО ОДИН РАЗ, а потім зникає. Це і є визначення флака, і флак у детекторі втрат
+ * навчає гортати його очима.
+ *
+ * ⚠️ ЧОМУ НЕ РОЗБІР ДЖЕРЕЛА, як для `MANIFEST_TESTS`. Там масив РЯДКІВ, тут масив
+ * ОБʼЄКТІВ; регулярка по ньому була б крихким розбором усередині детектора втрат —
+ * саме того місця, де хибна тривога дорожча за пропуск. Тому: імпорт СВІЖОГО `dist`
+ * із обходом кешу модулів ПЛЮС доказ, що він справді свіжий — його `MANIFEST_TESTS`
+ * мусить збігтися з розбором ДЖЕРЕЛА. Розійшлись — це СТОП «перезбери», а не вирок.
+ */
+export interface FreshManifest {
+  MANIFEST_TESTS: string[];
+  RETIRED_GATES: readonly { name: string; since: string; reason: string }[];
+  acceptRetired: (lost: readonly string[], alive: readonly string[])
+    => { problems: string[]; accepted: string[]; unaccounted: string[] };
+  diffGates: (before: readonly string[], after: readonly string[])
+    => { onlyBefore: string[]; onlyAfter: string[]; countBefore: number; countAfter: number };
+}
+
+export async function freshManifest(beRoot: string = BE_ROOT): Promise<FreshManifest> {
+  const file = resolve(beRoot, "dist", "testManifest.js");
+  // 🔴 Обхід кешу обовʼязковий: без нього повернеться той самий обʼєкт, що завантажився
+  // на старті процесу, і вся перевірка стане тавтологією «стара памʼять == стара памʼять».
+  const mod = await import(`${pathToFileURL(file).href}?bust=${Date.now()}`);
+  const fromSource = treeTests(beRoot);
+  const d = diffGates(fromSource, mod.MANIFEST_TESTS as string[]);
+  if (d.onlyBefore.length || d.onlyAfter.length) {
+    throw new Error(
+      "🔴 ЗІБРАНИЙ МАНІФЕСТ РОЗІЙШОВСЯ З ДЖЕРЕЛОМ — судити нема за чим, спершу `rm -rf dist && npm run build`.\n"
+      + `   у джерелі, але не в dist (${d.onlyBefore.length}): ${d.onlyBefore.slice(0, 5).join(" · ")}\n`
+      + `   у dist, але не в джерелі (${d.onlyAfter.length}): ${d.onlyAfter.slice(0, 5).join(" · ")}`);
+  }
+  return mod as FreshManifest;
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 const base = process.argv.find((a) => a.startsWith("--base="))?.slice(7);
+// 🔴 ОБИДВІ ГІЛКИ БЕРУТЬ ДЕРЕВО З ДЖЕРЕЛА. Голий рахунок теж: інакше `gateCount` і
+// `gateCount --base=` розходились би у відповіді на питання «скільки в дереві», і
+// це була б нова неузгодженість замість вилікуваної.
 if (!base) {
-  console.log(`гейтів у дереві: ${gateNames().length}`);
+  console.log(`гейтів у дереві: ${treeTests().filter((t) => t.startsWith("#")).length}`);
 } else {
-  const d = diffGates(testsAtRef(base), MANIFEST_TESTS);
+  const d = diffGates(testsAtRef(base), treeTests());
   console.log(`база ${base}: ${d.countBefore} · дерево: ${d.countAfter}`);
   console.log(d.onlyBefore.length
     ? `🔴 ЗНИКЛО ${d.onlyBefore.length}:\n  ` + d.onlyBefore.join("\n  ")
