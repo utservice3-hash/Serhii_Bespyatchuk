@@ -502,6 +502,57 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], CANON_LOCK_DIR);
     return { id: "lockRelease", ok: r.code === 0, detail: r.out.join(" · ") };
   },
+  /**
+   * 🗺 ЖИВА ПРОБА ЗЛІПКА ДОСТУПУ. Той самий розбір, що в `accept`, але режим інший:
+   * `test:matrix` вмикає `#11`, який у `test:prod` законно скіпається (`#19e`).
+   *
+   * 🔴 ЛОГ ОКРЕМИЙ. Пише в `/tmp/deploy-matrix.log`, а не в лог приймання: інакше другий
+   * прогін затер би перший, і на розборі аварії ми мали б лише останній.
+   */
+  acceptMatrix: (c) => {
+    const log = "/tmp/deploy-matrix.log";
+    const out = sh("bash", ["-lc",
+      `cd ${c.prodBe} && set -a && . ./.env && set +a && `
+      + `API_BASE=${API_BASE} npm run test:matrix > ${log} 2>&1 || true; `
+      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true`]);
+    const named = failureNames(out);
+    const passedFromRegistry = expectedPassNames(out);
+    const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
+    if (!m) return { id: "acceptMatrix", ok: false,
+      detail: `🔴 гейт прогону не надрукував підсумку — матрична проба не дійшла до кінця. Лог: ${log}` };
+    const [, doneN, needN, fails] = m;
+    if (doneN !== needN) return { id: "acceptMatrix", ok: false,
+      detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
+    if (fails !== "0") {
+      /**
+       * ⚖️ ВИРОК — ТОЙ САМИЙ, ЩО В `accept`, І ЦЕ НЕ ОХАЙНІСТЬ (зведено 02.09.2026).
+       * Два кроки зійшлись у одному дереві з РІЗНИХ проходів: `accept` навчився судити
+       * за `EXPECTED_REDS`, а цей крок лишався з власним «падінь != 0». Наслідок був би
+       * тихий і шкідливий саме тут: матрична проба червоніла б від ЧОТИРЬОХ уже
+       * погоджених червоних, і справжній дрейф доступу (#11) потонув би серед них —
+       * тобто крок, зроблений заради дрейфу, перестав би про дрейф говорити.
+       * Одне правило на обидва кроки; копія правила — це друге правило.
+       */
+      const mismatch = named.length !== Number(fails)
+        ? ` ⚠️ перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт`
+        : "";
+      const verdict = acceptExpectedReds(named, passedFromRegistry);
+      if (verdict.ok) {
+        return { id: "acceptMatrix", ok: true,
+          detail: `${doneN} із ${needN}, падінь ${fails} — УСІ очікувані поіменно, дрейфу зліпка немає\n${verdict.lines.join("\n")}` };
+      }
+      /**
+       * 🔴 ДРЕЙФ ЗЛІПКА — НЕ «ПОЛАГОДЬ ТЕСТ». Кожна клітинка означає, що жива поведінка
+       * доступу розійшлась із записаною. Перезнімати зліпок можна ЛИШЕ рішенням власника
+       * і з причиною в рядку — інакше перезняття читається як замітання сигналу.
+       */
+      return { id: "acceptMatrix", ok: false,
+        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}\n${verdict.lines.join("\n")}`
+          + "\n   Якщо серед НЕПОКРИТИХ є #11 — це ДРЕЙФ ДОСТУПУ: зліпок і прод розійшлись."
+          + "\n   Не перезнімай зліпок сам: кожна клітинка потребує «так, ми цього хотіли»." };
+    }
+    return { id: "acceptMatrix", ok: true, detail: `${doneN} із ${needN}, падінь 0 — зліпок доступу збігається з живим продом` };
+  },
   buildFresh: async (c) => {
     const h = await health();
     const disk = c.prodBe ? `${c.prodBe}/dist/version.json` : "";

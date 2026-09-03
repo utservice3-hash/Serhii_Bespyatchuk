@@ -12,9 +12,9 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      {/* Before /:section, which would otherwise swallow it. No RequireAuth: the page sends an
+      {/* Three segments, so /:section cannot swallow it. No RequireAuth: the page sends an
           unauthenticated visitor through /login itself and comes back. */}
-      <Route path="/tracker-auth" element={<TrackerAuth />} />
+      <Route path="/tracker-auth/:port/:state" element={<TrackerAuth />} />
       {/* Розділ у URL (/report, /kvp, …) — щоб працювали посилання, «назад/вперед»,
           закладки. «/» = Звіт (лендинг). Обидва шляхи рендерять один Dashboard. */}
       <Route
