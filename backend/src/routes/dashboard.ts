@@ -46,6 +46,7 @@ import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
+import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
@@ -8459,7 +8460,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const months = monthsInRange(from, to);
 
   const [
-    received, receivedPrev, success, paidOnly, expectedZone, awaitingNow,
+    received, receivedPrev, success, paidOnly, expectedZone, awaitingNow, expectedSplit,
     projection, receivedTeams, expectedTeams, convTeams, convMgrs,
     newRepeatTot, newRepeatMgr, newRepeatTeam, receivedByCh,
     dispatchedAllSeries, dispatchedLgSeries, transferredSeries,
@@ -8473,6 +8474,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     money.receivedMoney(mScope), money.receivedMoney({ from: sc.prevFrom, to: sc.prevTo }),
     money.successMoney(mScope), money.paidOnlyMoney(mScope),
     metrics.expectedPaymentsByPlanned({}), money.awaitingNowSnapshot(mScope),
+    expectSplit.expectedZoneSplit({}),
     metrics.buildProjection({ from, to, granularity: "month" }, null),
     money.receivedByTeam(mScope), metrics.expectedZoneByScope({}, "team"),
     metrics.conversionAdsByTeam(scope, adSources), metrics.conversionAdsByManager(scope, adSources),
@@ -8885,7 +8887,14 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     },
     lifecycle: {
       sent: { deals: dispatchedAll.deals, revenue: dispatchedAll.revenue },
-      awaiting: { deals: expectedZone.total.deals, revenue: expectedZone.total.sum },
+      // 🔴 РОЗБИВКА ЙДЕ РАЗОМ ІЗ ПІДСУМКОМ І З ОДНОГО ЗАПИТУ (`core/expectSplit.ts`).
+      // Зона живе — заміряно 03.09.2026: за 15 хв її сума зрушила на 6 495 ₴, тож
+      // частини й ціле, взяті окремо, розійшлися б без жодного дефекту.
+      awaiting: {
+        deals: expectedSplit.total.deals, revenue: expectedSplit.total.sum,
+        today: expectedSplit.today,
+        split: expectedSplit.buckets,
+      },
       received: { deals: received.deals, revenue: received.revenue },
     },
     derived: plans.deriveMonthlyTarget(receivedPrev.revenue),

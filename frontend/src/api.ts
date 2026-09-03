@@ -512,6 +512,7 @@ export async function saveKvpPlan(month: string, plans: Record<string, number | 
 // літерала шляху в прод-бандлі — 0. «Відправлені авто» живуть у Статистиках.
 
 // ── КРОК Д: композитний Звіт КВП (/kvp-report) ──
+export type KvpExpectBucket = "overdue" | "thisMonth" | "later" | "noDate";
 export interface KvpAgg { deals: number; revenue: number }
 export interface KvpEngineTeam { plan: number; revenue: number; expected: number; expectedThisMonth: number;
   pct: number | null; forecastPct: number | null; conversion: number | null; entered: number }
@@ -596,7 +597,11 @@ export interface KvpReport {
   verdict: {
     received: KvpAgg; receivedPrev: { revenue: number }; strategicPlan: number; planPct: number | null;
     projection: { fact: number; projected: number; projectedPct: number | null; expectedThisMonth: number; dobir: number; pace: number | null; pacePct: number | null; elapsedWorkingDays: number; totalWorkingDays: number };
-    lifecycle: { sent: KvpAgg; awaiting: KvpAgg; received: KvpAgg };
+    lifecycle: { sent: KvpAgg; received: KvpAgg;
+      /** Зона очікування + розбивка за датою очікуваного платежу (`core/expectSplit.ts`).
+       *  `today` — київська дата межі «прострочено»; вона рухається щодня, тому приходить
+       *  із сервера, а не рахується у браузері. */
+      awaiting: KvpAgg & { today: string; split: Record<KvpExpectBucket, { bucket: KvpExpectBucket; deals: number; sum: number }> } };
     derived: { base: number; low: number; target: number; high: number };
   };
   signals: KvpSignal[];
