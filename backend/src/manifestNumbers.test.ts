@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MANIFEST_TESTS, collidingNumbers, KNOWN_NUMBER_COLLISIONS, gateNames, diffGates,
   acceptRetired, RETIRED_GATES, type RetiredGate } from "./testManifest.js";
-import { parseManifestTests, treeTests, freshManifest } from "./tools/gateCount.js";
+import { parseManifestTests, treeTests, freshManifest, bustToken } from "./tools/gateCount.js";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -164,6 +164,20 @@ const distFixture = (names: string[], retired: string[], into?: string): string 
     + " unaccounted: lost.filter(x => !known.has(x)) };\n};\n");
   return dir;
 };
+
+test("#328c токен обходу кешу УНІКАЛЬНИЙ у межах однієї мілісекунди", () => {
+  // 📐 Куплено живим прийманням 03.09.2026: токеном був `Date.now()`, а `#328` виконується
+  // за 2.4 мс — на швидкому хості обидва виклики лягли в ОДНУ мілісекунду, URL збігся, кеш
+  // модулів віддав старий модуль. У повільнішому контейнері це не відтворювалось НІКОЛИ,
+  // тобто дефект був невидимий саме там, де його перевіряли.
+  //
+  // 🔴 Тому твердження — не «зазвичай різні», а «різні ЗАВЖДИ»: беремо пачку підряд, у
+  // межах одного тіку, і вимагаємо стільки ж УНІКАЛЬНИХ значень, скільки викликів.
+  const many = Array.from({ length: 200 }, () => bustToken());
+  assert.equal(new Set(many).size, many.length,
+    "🔴 токени повторюються в межах тіку — обхід кешу модулів працює лише поки хост повільний, "
+    + "а на швидкому мовчки віддає СТАРИЙ модуль");
+});
 
 test("#328 реєстр зняття береться зі СВІЖОГО dist — перезбірка між викликами видима", async () => {
   const dir = distFixture(["#901 живий"], []);
