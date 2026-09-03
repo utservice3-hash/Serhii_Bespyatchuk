@@ -17,7 +17,7 @@ import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "
 import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
   standToRefusal,
-  MARK_REPORT, MARK_STOP,
+  MARK_REPORT, MARK_STOP, nextLockOurs,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim, actorRefusal } from "./checkoutLock.js";
@@ -918,7 +918,7 @@ export async function main(argv: string[]): Promise<number> {
       }
     }
     const r = await h(ctx);
-    if (step.id === "lockTake" && r.ok) lockOurs = true;
+    lockOurs = nextLockOurs(lockOurs, step.id, r.ok);
     done.push(r);
     const mark = r.skipped ? "﹣" : r.ok ? "✔" : "✖";
     /**

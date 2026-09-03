@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, standToRefusal, type Artifact } from "./deployPlan.js";
+import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, standToRefusal, nextLockOurs, type Artifact } from "./deployPlan.js";
 import { executablePlan, missingHandlers, handlers } from "./deploy.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -356,4 +356,40 @@ test("#319b 🪞 ДЗЕРКАЛО: без --target не рухає, на бру�
     "🔴 не перевіряється існування коміта — checkout на неіснуючий лишив би дерево як було, а крок «зробленим»");
   assert.match(src, /після checkout HEAD стенда/,
     "🔴 не перевіряється, що дерево справді переїхало: «команда не впала» ≠ «HEAD там, де треба»");
+});
+
+/**
+ * 🔒 #329–#329b — ПЕРЕХІД «ЗАМОК НАШ» МАЄ ОБИДВІ ПОЛОВИНИ.
+ *
+ * 📐 Привід — у доккоментарі `nextLockOurs`: на живому викаті 25d184a ланцюг став
+ * рівно перед `acceptMatrix` із ✖ lockTouch, бо прапорець умикався на `lockTake` і
+ * не вимикався на `lockRelease`, а `acceptMatrix` стоїть ПІСЛЯ звільнення.
+ */
+test("#329 замок: take вмикає, release ВИМИКАЄ, провалений крок не перемикає", () => {
+  assert.equal(nextLockOurs(false, "lockTake", true), true, "🔴 take не увімкнув");
+  assert.equal(nextLockOurs(true, "lockRelease", true), false,
+    "🔴 release НЕ вимкнув — саме ця половина була відсутня, і ланцюг ставав перед acceptMatrix");
+  assert.equal(nextLockOurs(true, "accept", true), true, "🔴 сторонній крок перемкнув стан");
+  assert.equal(nextLockOurs(false, "base", true), false);
+  // Провалений крок нічого не перемикає: невдалий take не робить замок нашим,
+  // невдалий release не знімає обовʼязок торкатись.
+  assert.equal(nextLockOurs(false, "lockTake", false), false, "🔴 ПРОВАЛЕНИЙ take увімкнув замок");
+  assert.equal(nextLockOurs(true, "lockRelease", false), true,
+    "🔴 ПРОВАЛЕНИЙ release вимкнув дотик — далі ланцюг їхав би під замком, не питаючи, чий він");
+});
+
+test("#329b 🪞 ДЗЕРКАЛО: у плані Є крок ПІСЛЯ lockRelease — інакше дефект недосяжний", () => {
+  // Без цього твердження #329 доводив би властивість функції, якої ніхто не досягає:
+  // поки `lockRelease` останній, відсутня половина переходу нічим себе не виявляє.
+  const ids = planSteps("run", "full").map((s) => s.id);
+  const rel = ids.indexOf("lockRelease");
+  assert.ok(rel >= 0, "🔴 у плані немає lockRelease — гейт втратив предмет");
+  assert.ok(rel < ids.length - 1,
+    `🔴 lockRelease останній у плані (${ids.length} кроків) — тоді відсутнє вимкнення нічим не виявиться, `
+    + "і цей гейт стереже недосяжний стан. Якщо крок після звільнення прибрали свідомо — гейт треба переписати.");
+  // Змістовне твердження — саме ПЕРШИЙ крок після звільнення, бо дотик перед ним і падав.
+  // ⚠️ Перша редакція вимагала, щоб після release не було НІЧОГО, крім acceptMatrix, — і
+  // впала на власній надмірності: там ще `report`. Гейт мусить стерегти дефект, а не склад плану.
+  assert.equal(ids[rel + 1], "acceptMatrix",
+    `🔴 одразу після lockRelease стоїть «${ids[rel + 1]}», а дефект купили на acceptMatrix`);
 });
