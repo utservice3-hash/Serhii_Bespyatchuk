@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
+  standToRefusal,
   MARK_REPORT, MARK_STOP,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
@@ -166,6 +167,37 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
   toolsCheck: () => toolsPresent("toolsCheck", null),
   // run убиває процес прода — прод-бінарник мусить БУТИ, інакше сайт не повернеться.
   toolsRun: () => toolsPresent("toolsRun", NODE_BIN),
+  /**
+   * 🔴 ПЕРЕМІЩЕННЯ СТЕНДА — КРОК ЛАНЦЮГА, А НЕ СКРИПТ У /tmp. Стоїть одразу за
+   * `lockTake`: під замком і ДО першого `rm -rf dist`. Причина розриву — в реєстрі кроків.
+   *
+   * ⚠️ БЕЗ `--target` НІЧОГО НЕ РУХАЄМО, і це `skipped`, а не «пройшло»: стара поведінка
+   * лишається цілою, інакше ми зламали б усі наявні виклики в один момент.
+   *
+   * 🔴 НА БРУДНОМУ ДЕРЕВІ — ВІДМОВА, БЕЗ ЖОДНОГО `--force`. Чуже незакомічене у
+   * спільному стенді дорожче за зручність: `checkout` його або зітре, або потягне за
+   * собою в чужу збірку. Відмова НАЗИВАЄ, що саме заважає.
+   */
+  standTo: (c) => {
+    if (!c.targetExplicit) return { id: "standTo", ok: true, detail: "",
+      skipped: "sha не названо через --target= — стенд лишається як є (це НЕ «поставлено на ціль»)" };
+    return run("standTo", () => {
+      sh("git", ["fetch", "origin", "-q"], c.buildRepo);
+      const commitExists = (() => {
+        try { sh("git", ["cat-file", "-e", c.target + "^{commit}"], c.buildRepo); return true; } catch { return false; }
+      })();
+      const dirty = sh("git", ["status", "--porcelain"], c.buildRepo).split("\n").filter(Boolean);
+      // 🔴 Рішення — у ЧИСТІЙ функції (`standToRefusal`), тож його можна саботувати
+      // входом. Умова, вбудована сюди, давала гейт, зелений на `if (false)`.
+      const refusal = standToRefusal({ target: c.target, commitExists, dirty });
+      if (refusal) throw new Error(refusal);
+      sh("git", ["checkout", "--detach", "-q", c.target], c.buildRepo);
+      const head = sh("git", ["rev-parse", "--short", "HEAD"], c.buildRepo);
+      // Твердження перевіряється ПІСЛЯ дії: «команда не впала» і «дерево там, де треба» — різні речі.
+      if (!head.startsWith(c.target.slice(0, 7)) && !c.target.startsWith(head))
+        throw new Error("після checkout HEAD стенда " + head + ", а ціль " + c.target);
+    }, "стенд на " + c.target);
+  },
   base: async (c) => {
     const live = await prodSha();
     c.prod = live;
@@ -669,6 +701,11 @@ export interface Ctx {
    */
   prodBe: string;
   branch: string; target: string;
+  /**
+   * Чи sha названо ЯВНО через `--target=`. Без цього прапорця «ціль» невідрізненна
+   * від «те, що зараз у дереві», а `standTo` не має права рухати стенд за здогадом.
+   */
+  targetExplicit: boolean;
   mode: Mode; prod: string; now: string;
   /**
    * Мить успішного `kill`. Прогрів рахується ВІД НЕЇ, а не від початку кроку
@@ -757,6 +794,7 @@ export async function main(argv: string[]): Promise<number> {
     be: `${buildRepo}/backend`, fe: `${buildRepo}/frontend`, prodBe: `${docRoot}/backend`,
     branch: process.env.UTS_PROD_BRANCH ?? PROD_BRANCH,
     target: targetArg ?? sh("git", ["rev-parse", "--short", "HEAD"], buildRepo),
+    targetExplicit: Boolean(targetArg),
     mode, prod: "", now: new Date().toISOString(), changed: [],
   };
   const done: StepResult[] = [];
