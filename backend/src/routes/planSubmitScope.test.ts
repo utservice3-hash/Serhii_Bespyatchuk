@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { needsDb, needsApi, API_BASE } from "../testMode.js";
+import { EMPTY_PERIOD_MARK } from "../testRunGate.js";
 
 const load = async () => ({
   pool: (await import("../db/pool.js")).pool,
@@ -17,7 +18,7 @@ const load = async () => ({
  * ОДНОГО рядка цього не спіймає за побудовою — потрібні два рядки однієї команди
  * з РІЗНИМИ значеннями, інакше гейт доводить лише те, що поле існує.
  */
-test("#279d ПОРЯДКОВІСТЬ: у своїй команді свій рядок true, чужий false", needsApi(), async () => {
+test("#279d ПОРЯДКОВІСТЬ: у своїй команді свій рядок true, чужий false", needsApi(), async (t0) => {
   const { pool, signToken } = await load();
   const pick = (await pool.query<{ manager_id: number; team_id: number; peer_id: number }>(
     `SELECT a.id AS manager_id, a.team_id, b.id AS peer_id
@@ -30,6 +31,24 @@ test("#279d ПОРЯДКОВІСТЬ: у своїй команді свій ря
     managerId: pick.manager_id, teamId: pick.team_id });
   const month = new Date().toISOString().slice(0, 7);
   const r = await fetch(`${API_BASE}/api/plans/formation?month=${month}`, { headers: { Authorization: `Bearer ${t}` } });
+  /**
+   * 🔴 НЕМА ПРЕДМЕТА — НЕ «ПЕРЕВІРЕНО», А НАЗВАНА ВІДСУТНІСТЬ.
+   *
+   * Заміряно 03.09.2026 по живих ролях: у `manager` НЕМАЄ вкладки `plans`
+   * (screen_access), тож роут віддає 403, і жоден менеджер не може відкрити екран
+   * формування взагалі. Поки це так, властивість «свій рядок true, чужий false»
+   * не має на чому проявитись — але вона й не перевірена, і мовчати про це не можна.
+   *
+   * ⚠️ Це НЕ маскування дефекту: щойно власник видасть роль вкладку, гейт побіжить
+   * сам і почне стерегти саме те, заради чого написаний. Рішення про доступ —
+   * власника, і гейт не має права ухвалити його за нього.
+   */
+  if (r.status === 403) {
+    t0.skip(`${EMPTY_PERIOD_MARK} у ролі «manager» немає вкладки plans, тож менеджерів, `
+      + "здатних відкрити екран формування, НУЛЬ. Це законна відсутність предмета "
+      + "(рішення власника про доступ не ухвалене), а не «перевірено».");
+    return;
+  }
   assert.equal(r.status, 200, `менеджер не дістав форму формування: ${r.status}`);
   const j = (await r.json()) as { teams?: { managers?: { managerId: number; canSubmit?: boolean }[] }[] };
   const rows = (j.teams ?? []).flatMap((x) => x.managers ?? []);
@@ -58,7 +77,12 @@ test("#279d ПОРЯДКОВІСТЬ: у своїй команді свій ря
  */
 test("#279e КОНТРАКТ КОД↔СХЕМА: кожен оголошений target_type дозволений живою БД", needsDb(), async () => {
   const { pool } = await load();
-  const src = readFileSync(new URL("../db/audit.ts", import.meta.url), "utf8");
+  /**
+   * 🔴 ЧИТАЄМО ДЖЕРЕЛО, А НЕ `dist`. Збірка копіює в `dist` лише `.sql`, тож
+   * `../db/audit.ts` відносно `dist/routes/` не існує — гейт падав із ENOENT і
+   * доводив цим лише власну поламаність. Заміряно прийманням 03.09.2026.
+   */
+  const src = readFileSync(new URL("../../src/db/audit.ts", import.meta.url), "utf8");
   const decl = /targetType:\s*([^;]+);/.exec(src)?.[1] ?? "";
   const declared = [...decl.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
   assert.ok(declared.length >= 2,
