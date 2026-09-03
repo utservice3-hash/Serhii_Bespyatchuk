@@ -464,7 +464,12 @@ function PlanSeg({ m, month, data, onChanged, onValue }: { m: PFManager; month: 
   });
   const doReturn = async () => { setBusy(true); try { await returnFormationPlan(m.managerId, month, retComment || undefined); setReturning(false); onChanged(); } finally { setBusy(false); } };
 
-  const canSubmit = data.canSubmit;   // тімлід/адмін своєї команди
+  /**
+   * 🔐 РЯДКОВЕ, А НЕ ВІДПОВІДНЕ. `data.canSubmit` каже лише «чи є в цій відповіді
+   * хоч один рядок, який актор може подати», і для менеджера, що бачить усю свою
+   * команду, це означало б кнопку на чужих рядках. Правду про рядок несе сервер.
+   */
+  const canSubmit = m.canSubmit;
   const canApprove = data.canApprove; // лише адмін
 
   const subtitle = (

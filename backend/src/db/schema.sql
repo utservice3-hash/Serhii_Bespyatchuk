@@ -1718,9 +1718,17 @@ UPDATE bank_transactions SET is_bank_fee = true
   );
 
 -- access_audit — розширюємо типи цілей на банк-обʼєкти.
+-- 🔴 'manager' ДОДАНО 03.09.2026 — і це виправлення ДЕФЕКТУ, а не розширення.
+-- `db/audit.ts` оголосив тип `targetType: … | "manager"` разом із роутом
+-- PATCH /settings/managers/:id/work-state, а констрейнту не розширив. Наслідок
+-- заміряний на проді: роут писав стан, а ПОТІМ падав на аудиті — поза транзакцією,
+-- тобто стан лягав, а людина бачила 500. Доки це живе, задача «завершує» для
+-- звільненого НЕПОБУДОВНА: позначку неможливо поставити взагалі.
+-- Урок ширший за фікс: розширений ТИП і розширена КОНСТРЕЙНТА — дві різні дії,
+-- і гейт на чисту функцію (#274*) другої не бачить. Тому #279e бʼє РОУТ проти живої БД.
 ALTER TABLE access_audit DROP CONSTRAINT IF EXISTS access_audit_target_type_check;
 ALTER TABLE access_audit ADD CONSTRAINT access_audit_target_type_check
-  CHECK (target_type IN ('user','role','bank_account','bank_payee'));
+  CHECK (target_type IN ('user','role','bank_account','bank_payee','manager'));
 
 -- Сид 4 відомих рахунків (лише структурні поля + env_key_name; реквізити адмін заповнює в
 -- панелі). Bootstrap: сидимо ЛИШЕ коли таблиця порожня → ідемпотентно, не дублює на ре-міграції

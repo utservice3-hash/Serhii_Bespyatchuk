@@ -324,6 +324,11 @@ export interface PFManager {
   recommendation: PFRecommendation;
   clients: PFClients;
   carryover: number; currentPlan: number;
+  /**
+   * 🔐 Чи МОЖНА подати САМЕ ЦЕЙ рядок. Порядкове, бо менеджер бачить усю свою
+   * команду: одне значення на відповідь малювало б «Подати» на чужих рядках.
+   */
+  canSubmit: boolean;
   /** Довідково з екрана «Постійні клієнти»: що заявлено вручну і що погоджено по клієнтах. */
   repeatClients?: { approved: number; approvedClients: number; entered: number; declared: number };
   formation: PFState;
