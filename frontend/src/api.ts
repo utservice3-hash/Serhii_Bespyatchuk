@@ -3305,6 +3305,22 @@ export async function trackerSsoUrl(): Promise<{ url: string }> {
 }
 
 /**
+ * Carries a machine-readable code alongside the message, because the failure has to travel back
+ * to the desktop agent, and a translated sentence is not something to parse on the far side.
+ */
+export class TrackerAssertionError extends Error {
+  // Declared explicitly rather than as a constructor parameter property: this project builds
+  // with erasableSyntaxOnly, which rejects the shorthand.
+  code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "TrackerAssertionError";
+    this.code = code;
+  }
+}
+
+/**
  * A two-minute assertion the desktop tracker can exchange for its own device token.
  *
  * Carries identity only. The tracker decides what that person may see.
@@ -3315,7 +3331,12 @@ export async function trackerAssertion(): Promise<{ assertion: string }> {
     return data;
   } catch (e: unknown) {
     const status = (e as { response?: { status?: number } }).response?.status;
-    if (status === 503) throw new Error("Трекер часу ще не підключено до дашборду.");
-    throw new Error("Не вдалося підтвердити вхід.");
+    if (status === 503) {
+      throw new TrackerAssertionError("not_configured", "Трекер часу ще не підключено до дашборду.");
+    }
+    if (status === 401) {
+      throw new TrackerAssertionError("unauthenticated", "Сесія в дашборді завершилась. Увійдіть знову.");
+    }
+    throw new TrackerAssertionError("failed", "Не вдалося підтвердити вхід.");
   }
 }

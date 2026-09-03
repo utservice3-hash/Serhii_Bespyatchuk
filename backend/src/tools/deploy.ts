@@ -22,7 +22,8 @@ import {
 import { cli as lockCli, CANON_LOCK_DIR } from "./checkoutLock.js";
 import { parseTap, judgeDelta } from "./testDelta.js";
 import { diffGates, acceptRetired } from "../testManifest.js";
-import { FAIL_MARK, failureNames } from "../testRunGate.js";
+import { FAIL_MARK, failureNames, EXPECTED_PASS_MARK, expectedPassNames } from "../testRunGate.js";
+import { acceptExpectedReds } from "../expectedReds.js";
 import { testsAtRef, parseManifestTests } from "./gateCount.js";
 import { rmSync, symlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -406,8 +407,10 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const out = sh("bash", ["-lc",
       `cd ${c.prodBe} && set -a && . ./.env && set +a && `
       + `API_BASE=${API_BASE} npm run test:prod > ${log} 2>&1 || true; `
-      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true`]);
+      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true; `
+      + `grep "^${EXPECTED_PASS_MARK}" ${log} || true`]);
     const named = failureNames(out);
+    const passedFromRegistry = expectedPassNames(out);
     const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
     /**
      * 🔴 Немає підсумкового рядка — це ПРОВАЛ, а не «нічого не знайшлось». Прогін,
@@ -424,13 +427,29 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
        * 🔴 ЧИСЛО Й ПЕРЕЛІК МУСЯТЬ ЗІЙТИСЬ. Розбіжність означає, що імена читаються не
        * звідти — саме той стан, коли список порожній, а падіння є. Тоді кажемо про це
        * прямо, а не мовчки друкуємо коротший перелік.
+       *
+       * 🔴 І ЦЕ ПЕРЕВІРЯЄТЬСЯ ДО РЕЄСТРУ, А НЕ ПІСЛЯ. Порожній перелік при `падінь > 0`
+       * означав би «жодного імені не покрито» — і реєстр видав би зелене на прогоні,
+       * про який ми не знаємо нічого. Той самий «порожній результат = провал».
        */
-      const mismatch = named.length !== Number(fails)
-        ? ` ⚠️ перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт`
-        : "";
+      if (named.length !== Number(fails)) {
+        return { id: "accept", ok: false,
+          detail: `🔴 падінь ${fails}, а перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт. `
+            + `Вирок за реєстром НЕ виноситься: судити нема за чим. Лог: ${log}` };
+      }
+      /**
+       * ⚖️ МАШИННИЙ ВИРОК: зелено ⇔ кожне падіння названо в `EXPECTED_REDS` І реєстр
+       * без дефектів. Доти «очікувані червоні» жили в чаті, тобто для ланцюга не
+       * існували: він чесно червонів, замок лишався взятим, і людину доводилось
+       * будити заради висновку, який уже був відомий.
+       */
+      const v = acceptExpectedReds(named, passedFromRegistry);
+      if (v.ok) {
+        return { id: "accept", ok: true,
+          detail: `${doneN} із ${needN}, падінь ${fails} — УСІ очікувані поіменно\n${v.lines.join("\n")}` };
+      }
       return { id: "accept", ok: false,
-        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}`
-          + (named.length ? `\n${named.map((n) => `   ﹣ ${n}`).join("\n")}` : "") };
+        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}. Лог: ${log}\n${v.lines.join("\n")}` };
     }
     return { id: "accept", ok: true, detail: `${doneN} із ${needN}, падінь 0` };
   },
@@ -438,6 +457,57 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     const who = process.env.UTS_ACTOR ?? "deploy:run";
     const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], CANON_LOCK_DIR);
     return { id: "lockRelease", ok: r.code === 0, detail: r.out.join(" · ") };
+  },
+  /**
+   * 🗺 ЖИВА ПРОБА ЗЛІПКА ДОСТУПУ. Той самий розбір, що в `accept`, але режим інший:
+   * `test:matrix` вмикає `#11`, який у `test:prod` законно скіпається (`#19e`).
+   *
+   * 🔴 ЛОГ ОКРЕМИЙ. Пише в `/tmp/deploy-matrix.log`, а не в лог приймання: інакше другий
+   * прогін затер би перший, і на розборі аварії ми мали б лише останній.
+   */
+  acceptMatrix: (c) => {
+    const log = "/tmp/deploy-matrix.log";
+    const out = sh("bash", ["-lc",
+      `cd ${c.prodBe} && set -a && . ./.env && set +a && `
+      + `API_BASE=${API_BASE} npm run test:matrix > ${log} 2>&1 || true; `
+      + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true`]);
+    const named = failureNames(out);
+    const passedFromRegistry = expectedPassNames(out);
+    const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
+    if (!m) return { id: "acceptMatrix", ok: false,
+      detail: `🔴 гейт прогону не надрукував підсумку — матрична проба не дійшла до кінця. Лог: ${log}` };
+    const [, doneN, needN, fails] = m;
+    if (doneN !== needN) return { id: "acceptMatrix", ok: false,
+      detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
+    if (fails !== "0") {
+      /**
+       * ⚖️ ВИРОК — ТОЙ САМИЙ, ЩО В `accept`, І ЦЕ НЕ ОХАЙНІСТЬ (зведено 02.09.2026).
+       * Два кроки зійшлись у одному дереві з РІЗНИХ проходів: `accept` навчився судити
+       * за `EXPECTED_REDS`, а цей крок лишався з власним «падінь != 0». Наслідок був би
+       * тихий і шкідливий саме тут: матрична проба червоніла б від ЧОТИРЬОХ уже
+       * погоджених червоних, і справжній дрейф доступу (#11) потонув би серед них —
+       * тобто крок, зроблений заради дрейфу, перестав би про дрейф говорити.
+       * Одне правило на обидва кроки; копія правила — це друге правило.
+       */
+      const mismatch = named.length !== Number(fails)
+        ? ` ⚠️ перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт`
+        : "";
+      const verdict = acceptExpectedReds(named, passedFromRegistry);
+      if (verdict.ok) {
+        return { id: "acceptMatrix", ok: true,
+          detail: `${doneN} із ${needN}, падінь ${fails} — УСІ очікувані поіменно, дрейфу зліпка немає\n${verdict.lines.join("\n")}` };
+      }
+      /**
+       * 🔴 ДРЕЙФ ЗЛІПКА — НЕ «ПОЛАГОДЬ ТЕСТ». Кожна клітинка означає, що жива поведінка
+       * доступу розійшлась із записаною. Перезнімати зліпок можна ЛИШЕ рішенням власника
+       * і з причиною в рядку — інакше перезняття читається як замітання сигналу.
+       */
+      return { id: "acceptMatrix", ok: false,
+        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}\n${verdict.lines.join("\n")}`
+          + "\n   Якщо серед НЕПОКРИТИХ є #11 — це ДРЕЙФ ДОСТУПУ: зліпок і прод розійшлись."
+          + "\n   Не перезнімай зліпок сам: кожна клітинка потребує «так, ми цього хотіли»." };
+    }
+    return { id: "acceptMatrix", ok: true, detail: `${doneN} із ${needN}, падінь 0 — зліпок доступу збігається з живим продом` };
   },
   buildFresh: async (c) => {
     const h = await health();
@@ -741,10 +811,36 @@ export async function main(argv: string[]): Promise<number> {
     mode, prod: "", now: new Date().toISOString(), changed: [],
   };
   const done: StepResult[] = [];
+  /**
+   * 🔴 ДОТИК ДО ЗАМКА ПЕРЕД КОЖНИМ КРОКОМ — обидві половини рішення про TTL одним
+   * рухом (рішення власника 02.09.2026):
+   *   ① TTL міряє БЕЗДІЯЛЬНІСТЬ: поки ланцюг робить кроки, замок не старіє. Доти
+   *      нормальне коло (`run` ~18 хв, з них 16 хв прогріву) впритул підходило до
+   *      порогу 20 хв — і замок, що активно працював, називався покинутим;
+   *   ② FAIL-CLOSED: якщо замок уже не наш, крок НЕ виконується. Робота під чужим
+   *      замком і є те, що робить крадіжку невидимою — 02.09.2026 саме так у
+   *      спільному дереві опинився чужий ланцюг.
+   * Дотик стоїть ПІСЛЯ `lockTake` (до нього замка ще немає) і не пише в журнал.
+   */
+  let lockOurs = false;
   for (const step of plan) {
     const h = handlers[step.id];
     if (!h) { console.error(`🔴 КРОК БЕЗ ОБРОБНИКА: ${step.id} — зупиняюсь`); return 1; }
+    if (lockOurs) {
+      const t = lockCli(["--touch", `--who=${process.env.UTS_ACTOR ?? "deploy"}`], CANON_LOCK_DIR);
+      if (t.code !== 0) {
+        console.error(`✖ ${"lockTouch".padEnd(16)} перед кроком «${step.id}»`);
+        for (const l of t.out) console.error(`  ${l}`);
+        // 🔴 МАРКЕР — З МНОЖИНИ, А НЕ ЛІТЕРАЛОМ (`#26h`). Втрата замка це ТЕРМІНАЛЬНИЙ
+        // стан: ланцюг далі не піде. Літерал зробив би його видимим людині й невидимим
+        // тому, хто чекає закінчення полінгом, — 02.09.2026 такий стан коштував 40 хв
+        // полінгу повз померлий процес при замку, що весь той час тримався.
+        console.error(`\n${MARK_STOP}: замок перестав бути нашим — далі не йдемо.`);
+        return 7;
+      }
+    }
     const r = await h(ctx);
+    if (step.id === "lockTake" && r.ok) lockOurs = true;
     done.push(r);
     const mark = r.skipped ? "﹣" : r.ok ? "✔" : "✖";
     /**

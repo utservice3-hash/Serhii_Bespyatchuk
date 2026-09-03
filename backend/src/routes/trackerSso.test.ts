@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { needsApi, needsBackendEnv, API_BASE } from "../testMode.js";
 import { ROUTE_BOUNDARY_EXEMPTIONS } from "../auth/gates.js";
+import { pageFaults, scanTrackerPage } from "../auth/trackerPageScan.js";
 
 /**
  * Tests #300-#308 — SSO into the time tracker.
@@ -179,25 +180,84 @@ test("#307 іконку для пункту описано", () => {
 
 test("#309 маршрут /tracker-auth оголошено ПЕРЕД /:section", () => {
   const src = read("frontend/src/App.tsx");
-  const auth = src.indexOf('path="/tracker-auth"');
-  const section = src.indexOf('path="/:section"');
 
-  // /:section збігається з будь-яким одним сегментом, тож оголошений раніше він проковтнув би
-  // /tracker-auth — і агент чекав би на порту відповідь, якої ніхто не надішле.
-  assert.ok(auth > 0, "маршрут /tracker-auth зник");
-  assert.ok(section > 0, "маршрут /:section зник — тест втратив предмет");
-  assert.ok(auth < section, "/tracker-auth мусить бути раніше за /:section");
+  // Сегментами, а не рядком запиту: агент віддає цю адресу операційній системі, і на Windows
+  // вона йде через `cmd /C start`, де `&` розділяє команди. Власний запобіжник агента таку
+  // адресу відкидає — і саме так кнопка одного разу приїхала людям неробочою.
+  assert.match(src, /path="\/tracker-auth\/:port\/:state"/,
+    "маршрут мусить брати порт і state сегментами шляху");
+  assert.ok(src.indexOf('path="/tracker-auth') < src.indexOf('path="/:section"'),
+    "оголошення лишається раніше за /:section");
 });
 
+/**
+ * 🔴 #310 ДОТЯГНУТО ДО ВЛАСНОЇ НАЗВИ 02.09.2026 — ПЕРЕЙМЕНУВАННЯ ЗАБОРОНЕНЕ (правило 13).
+ *
+ * Гейт стверджував два боки, і другий ПОМЕР МОВЧКИ. Він забороняв підрядок
+ * `params.get("url|next|return|redirect")`, а сторінка перейшла з рядка запиту на сегменти
+ * шляху (`useParams()`) — заміряно на голові гілки Романа: входжень `params.get` у файлі
+ * НУЛЬ. Тобто заборонене написання зникло разом із транспортом, і твердження перестало
+ * мати змогу спрацювати: адреса, що прийшла б сегментом шляху, пройшла б повз нього.
+ *
+ * Назва «з жорсткого хоста, А НЕ З ЗАПИТУ» покриває обидва транспорти, тож міняти її не
+ * можна й не треба — треба, щоб твердження їй відповідало. Замість заборони НАПИСАННЯ
+ * стоїть властивість МНОЖИНИ: **усі** `new URL(` у файлі мусять мати зашитий хост. Тоді
+ * будь-яка друга адреса — хоч із запиту, хоч із сегмента, хоч зі змінної — червонить.
+ */
 test("#310 адреса повернення будується з жорсткого хоста, а не з запиту", () => {
-  const src = read("frontend/src/pages/TrackerAuth.tsx");
+  const scan = scanTrackerPage(read("frontend/src/pages/TrackerAuth.tsx"));
+  assert.ok(scan.urlCount > 0, "🔴 у сторінці не знайдено жодного `new URL(` — розбір зламався");
+  assert.equal(scan.hardcoded, scan.urlCount,
+    `🔴 адрес переходу ${scan.urlCount}, із зашитим loopback-хостом лише ${scan.hardcoded}. `
+    + "Готова адреса ЗВІДКИ ЗАВГОДНО — з запиту, із сегмента шляху, зі змінної — робить "
+    + "сторінку відкритим редиректом, яким будь-хто скерував би людину куди завгодно.");
+});
 
-  // З запиту береться ЛИШЕ номер порту. Готова адреса в параметрі перетворила б сторінку на
-  // відкритий редирект, яким будь-хто скерував би людину куди завгодно.
-  assert.match(src, /new URL\(`http:\/\/127\.0\.0\.1:\$\{port\}\/callback`\)/,
-    "хост мусить бути зашитий у код");
-  assert.doesNotMatch(src, /params\.get\("(url|next|return|redirect)/,
-    "адреса повернення не може приходити параметром");
+/**
+ * 🔢 #324–#324b — НОМЕР ПОРТУ ОБМЕЖЕНИЙ ЧИСЛОМ, І САМЕ ЦИМ ЗАКРИТО ПЕРЕХІД.
+ *
+ * 🔴 ПРИВІД ЗАМІРЯНИЙ 02.09.2026: `grep` по `65536|usable` у ВСІХ тестах давав НУЛЬ.
+ * Тобто діапазон `port > 1024 && port < 65536` не стеріг ніхто: прибери його — і сторінка
+ * почала б віддавати посвідчення на будь-який порт, включно з привілейованими, а жоден
+ * гейт не почервонів би. `#310` цього не бачить: він про ХОСТ, а не про те, що підставляють.
+ *
+ * ⚠️ ЧОМУ НЕ РОЗШИРЕННЯ `#304`. Той про БЕКЕНДНИЙ `/api/auth/tracker-sso` («не читає
+ * параметрів запиту»). `/tracker-auth/:port/:state` — фронтова сторінка, вона взагалі не
+ * роут бекенду. Дотягувати назву `#304` до іншого предмета означало б зробити її неправдою.
+ *
+ * ⚠️ І параметри в цю сторінку не «повернулись» — вони були там завжди: до зміни
+ * `params.get("port")`, після — `useParams()`. Змінився транспорт, не захист.
+ */
+test("#324 номер порту обмежений числом з ОБОХ боків, і саме цією умовою закрито перехід", () => {
+  const faults = pageFaults(scanTrackerPage(read("frontend/src/pages/TrackerAuth.tsx")));
+  assert.deepEqual(faults, [], faults.join("\n"));
+});
+
+test("#324b 🪞 ДЗЕРКАЛО: предикат ловить КОЖНУ з чотирьох поломок, а на цілому мовчить", () => {
+  const ok = [
+    'const usable = Number.isInteger(port) && port > 1024 && port < 65536 && state.length > 0;',
+    'if (!usable || !token) return;',
+    'const back = new URL(`http://127.0.0.1:${port}/callback`);',
+  ].join("\n");
+  assert.deepEqual(pageFaults(scanTrackerPage(ok)), [], "🔴 на справному джерелі предикат мусить мовчати");
+
+  // 🔴 По ОДНІЙ поломці за раз — інакше «щось червоніє» не означає «червоніє від цього».
+  const broken: [string, string, RegExp][] = [
+    ["немає нижньої межі", ok.replace("port > 1024 && ", ""), /ЗНИЗУ/],
+    ["немає верхньої межі", ok.replace(" && port < 65536", ""), /ЗВЕРХУ/],
+    ["перехід нічим не закрито", ok.replace("if (!usable || !token) return;", "const go = true;"), /не закритий жодною умовою/],
+    ["друга адреса з чужого джерела", ok + "\nconst evil = new URL(base);", /із зашитим хостом лише/],
+  ];
+  for (const [name, src, expect] of broken) {
+    const f = pageFaults(scanTrackerPage(src));
+    assert.ok(f.length > 0, `🔴 поломку «${name}» предикат НЕ побачив — гейт зеленів би на ній`);
+    assert.ok(f.some((x) => expect.test(x)),
+      `🔴 поломку «${name}» названо не тим вироком: ${f.join(" · ")}`);
+  }
+
+  // Порожній скоуп теж мусить бути ПРОВАЛОМ, а не «порушень нуль».
+  assert.ok(pageFaults(scanTrackerPage("// сторінку переписано")).length > 0,
+    "🔴 файл без жодного `new URL(` пройшов як справний — це і є «нуль, бо не дивились»");
 });
 
 // the one that matters most
@@ -306,3 +366,112 @@ test("#312b рішення «кому відкривати трекер» — о
     "кому НЕ вмикали — не пускати: до правки кнопку бачили всі 8 ролей, зокрема 10 таких людей");
   assert.equal(trackerAllowed(undefined), false, "невідомий рядок — не привід відкривати трекер");
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #320-#323 — реєстр людей для трекера. Номери з #320: #300-#310 мої, #311-#312
+// зайняті правками власника, тож беру з запасом, а не наступні вільні.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("#320 без ключа реєстр людей не віддається", needsBackendEnv(), async (t) => {
+  if (await skipUnlessTracker(t)) return;
+  const r = await callRouter("GET", "/api/auth/tracker-users", {});
+
+  // Реєстр — це пошти й імена всієї компанії. Єдине, що стоїть між ним і будь-ким, — цей ключ.
+  assert.equal(r.code, 401);
+  assert.equal(r.body?.error, "bad_key");
+});
+
+test("#321 чужий ключ теж не проходить", needsBackendEnv(), async (t) => {
+  if (await skipUnlessTracker(t)) return;
+  const r = await callRouter("GET", "/api/auth/tracker-users",
+    { "x-dashboard-sso-key": "не-наш-ключ" });
+
+  assert.equal(r.code, 401);
+  assert.equal(r.body?.error, "bad_key");
+});
+
+/**
+ * Дзеркало до двох попередніх.
+ *
+ * Без нього #320 і #321 лишалися б зеленими й тоді, якби ендпоінт відмовляв УСІМ — тобто
+ * перевірка ключа виглядала б справною, не пропускаючи навіть свого. Це та сама однобічність,
+ * про яку попереджає #311b.
+ *
+ * Заразом це перший тест на `ssoKeyAccepted` узагалі: досі її не перевіряв ніхто.
+ */
+test("#322 🪞 ДЗЕРКАЛО: правильний ключ приймається", needsBackendEnv(), async (t) => {
+  if (await skipUnlessTracker(t)) return;
+  const { ssoKeyAccepted } = await import("../auth/trackerSso.js");
+
+  assert.equal(ssoKeyAccepted(process.env.TRACKER_SSO_KEY), true, "свій ключ мусить проходити");
+  assert.equal(ssoKeyAccepted(process.env.TRACKER_SSO_KEY + "x"), false);
+  assert.equal(ssoKeyAccepted(""), false);
+  assert.equal(ssoKeyAccepted(undefined), false);
+});
+
+/**
+ * 🔴 ПЕРША РЕДАКЦІЯ #323 БУЛА ТВЕРДЖЕННЯМ ПРО ОРФОГРАФІЮ, А НЕ ГЕЙТОМ.
+ *
+ * Вона забороняла підрядок `role_override }` і лишалась ЗЕЛЕНОЮ на РОБОЧОМУ витоку:
+ * заміряно 01.09.2026 — я додав у SELECT `COALESCE(u.role_override, u.role) AS role_key`,
+ * у відповідь `roleKey`, викликав обробник і отримав
+ * `{"id":7,…,"scope":"company","roleKey":"hr"}`. Гейт не помітив. Той самий клас, що #304.
+ *
+ * Тепер твердження про ВЛАСТИВІСТЬ: множина ключів кожного елемента звіряється ТОЧНО.
+ * Будь-яке зайве поле червонить, як би його не написали.
+ *
+ * ⚠️ ДОЗВОЛЕНИЙ ПЕРЕЛІК ЖИВЕ ТУТ, А НЕ ІМПОРТУЄТЬСЯ З КОДУ, ЩО ПЕРЕВІРЯЄТЬСЯ. Інакше це
+ * була б перевірка «A = B», де B — те, чим щойно означили A: додавши поле і в мапер, і в
+ * експортований перелік, автор отримав би зелене. Список звіряється з рішенням власника
+ * («лише особа й підказки»), і міняти його можна лише свідомо, разом із цим коментарем.
+ */
+const ДОЗВОЛЕНІ_ПОЛЯ = ["active", "email", "id", "name", "scope", "team", "trackerEnabled"];
+
+test("#323 реєстр віддає РІВНО дозволені поля — множина ключів звіряється точно", async () => {
+  const { rosterPerson } = await import("../auth/trackerRoster.js");
+
+  // Рядок навмисно несе КОЛОНКИ, ЯКИХ ВІДДАВАТИ НЕ МОЖНА: якби мапер був копією рядка,
+  // вони приїхали б у відповідь. Саме так виглядав би витік ролі, який гейт мусить ловити.
+  const row = {
+    id: 7, email: "hto@uts.ua", name: "Хтось", is_active: true, tracker_enabled: false,
+    team_name: "РПК", data_scope: "company",
+    role_key: "hr", password_hash: "$2b$СЕКРЕТ", role_override: "admin",
+  } as unknown as Parameters<typeof rosterPerson>[0];
+
+  // Через JSON — рівно те, що піде дротом: `undefined` зникає, геттери розгортаються.
+  const people = JSON.parse(JSON.stringify({ people: [rosterPerson(row)] })).people;
+  assert.equal(people.length, 1, "🔴 мапер не віддав елемента — перевіряти множину нема на чому");
+
+  const keys = Object.keys(people[0]).sort();
+  assert.ok(keys.length > 0, "🔴 порожній обʼєкт: рівність множин зійшлася б тривіально");
+  assert.deepEqual(keys, ДОЗВОЛЕНІ_ПОЛЯ,
+    `🔴 набір полів реєстру змінився: ${keys.join(", ")}. Зайве поле їде у ЧУЖУ систему за спільним ключем — `
+    + "додавати можна лише свідомо, разом із рішенням власника про те, що трекеру можна знати.");
+});
+
+test("#323b 🪞 ДЗЕРКАЛО: мапер — БІЛИЙ СПИСОК, і роут віддає саме його", async () => {
+  const { rosterPerson } = await import("../auth/trackerRoster.js");
+
+  // Обидва боки межі: невідомий scope згортається в НАЙМЕНШІ права, відомі проходять.
+  const base = { id: 1, email: "a@b", name: null, is_active: false, tracker_enabled: true,
+    team_name: null, data_scope: null };
+  assert.equal(rosterPerson(base).scope, "own", "🔴 невідома роль мусить давати own, не company");
+  assert.equal(rosterPerson({ ...base, data_scope: "team" }).scope, "team");
+  assert.equal(rosterPerson({ ...base, data_scope: "company" }).scope, "company");
+  assert.equal(rosterPerson(base).name, "a@b", "🔴 порожнє імʼя мусить падати на пошту, а не бути null");
+
+  // 🔴 ВЛАСНЕ «БІЛИЙ СПИСОК» — доданий 02.09.2026, бо дзеркало його НЕ перевіряло.
+  // Заміряно саботажем при мержі PR: підміна тіла на `{ ...(r as …), id: r.id, … }`
+  // зробила ЧЕРВОНИМ лише `#323`, а `#323b` лишився зеленим — тобто його назва обіцяла
+  // більше, ніж він стверджував. Перейменовувати не можна (правило 13: уточнена назва
+  // читається як зниклий гейт), тож гейт дотягнуто до власної назви.
+  const withJunk = { ...base, role_key: "hr", password_hash: "x" } as typeof base;
+  assert.deepEqual(Object.keys(rosterPerson(withJunk)).sort(), Object.keys(rosterPerson(base)).sort(),
+    "🔴 зайва колонка рядка стала ключем відповіді — це вже не білий список, а копія рядка");
+
+  // Роут не має права додавати поля ПІСЛЯ мапера — інакше множина вище нічого не стереже.
+  const body = handlerBody(read("backend/src/routes/auth.ts"), 'authRouter.get("/tracker-users"');
+  assert.match(body, /res\.json\(\{ people: rows\.rows\.map\(rosterPerson\) \}\);/,
+    "🔴 відповідь збирається не рівно мапером — множина ключів перестає бути гарантією");
+});
+
