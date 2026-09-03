@@ -1080,6 +1080,23 @@ export interface LoyaltyDynamics {
   latestAmount: number;
 }
 
+export interface TrackerConfig {
+  idleThresholdSec: number; heartbeatIntervalSec: number; trackApps: boolean;
+  collectHost: boolean; sendTitles: boolean; coalesceSameSource: boolean;
+  maxIntervalSec: number; maxClockSkewSec: number;
+}
+/**
+ * 🔴 ЦЕЙ ТИП МУСИТЬ ВІДПОВІДАТИ БЕКЕНДНОМУ ПОЛЕ В ПОЛЕ — тримає гейт `#277`.
+ *
+ * До 02.09.2026 тут було ШІСТЬ полів із девʼяти: бракувало `planMinPerManager`,
+ * `tracker` і `adSources`. `saveSettings` шле САМЕ цей обʼєкт, тобто екран Налаштувань
+ * щоразу надсилав неповний набір. Не втрачалось нічого лише тому, що PUT написаний
+ * оборонно — кожне поле має фолбек `current.X`, а `tracker` по кожному підполю окремо.
+ * Тобто ми були зелені ЗАВДЯКИ ДІРЦІ: варто комусь дописати нове поле без фолбека — і
+ * перше ж збереження стерло б його всім, а фронт би цього не помітив.
+ *
+ * ⚠️ Фолбеки в PUT НЕ прибрано — вони лишаються ДРУГИМ шаром. Перший шар тепер тут.
+ */
 export interface AppSettings {
   loyaltyThreshold: number;
   loyaltyWindowMonths: number;
@@ -1087,6 +1104,10 @@ export interface AppSettings {
   receivablesOverdueWarnDays: number;
   ratesFallbackFullPerKm: number;
   ratesFallbackPartPerKm: number;
+  /** Мʼяка нижня межа плану, ₴. 0 = межу свідомо знято. `null` = повернути дефолт. */
+  planMinPerManager: number | null;
+  tracker: TrackerConfig;
+  adSources: string[];
 }
 
 export async function fetchSettings(): Promise<AppSettings> {

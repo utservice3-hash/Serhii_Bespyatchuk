@@ -36,14 +36,13 @@ const PLAN_SNAPSHOT: Record<string, { managers: number; total: number }> = {
   "2026-08": { managers: 30, total: 2_754_000 },
 };
 
-test("#4.1 МІНІМУМ: planMinPerManager приходить із налаштувань і дорівнює 30 000", needsDb(), async () => {
-  const { getSettings } = await load();
-  const s = await getSettings();
-  assert.equal(typeof s.planMinPerManager, "number", "planMinPerManager відсутній у налаштуваннях");
-  assert.equal(s.planMinPerManager, 30000,
-    `мінімум ${s.planMinPerManager} ≠ 30 000 — або змінили свідомо (онови тест), або він загубився`);
-});
-
+/**
+ * 🗑 #4.1 ЗНЯТО 02.09.2026 (див. `RETIRED_GATES`). Він стверджував, що межа дорівнює
+ * САМЕ 30 000 — а власник тепер може змінити її з екрана Налаштувань, і «0» означає
+ * «межу свідомо знято». Гейт червонів би на законній дії.
+ * А ДЕ ЦЕ ТЕПЕР: `#276d` (дефолт існує й у діапазоні), `#276b` («очистити» повертає
+ * саме його), `#276e` (бекфіл читає поріг лише з налаштувань).
+ */
 test("#4.2 МІНІМУМ доходить до API формування плану", needsApi(), async () => {
   const { signToken } = await load();
   const t = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });

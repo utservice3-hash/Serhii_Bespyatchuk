@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { FC_PIPELINES, STAGE_RECEIVED } from "./money.js";
+import { mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 
 /**
  * 📊 РОЗРІЗИ ЗВІТУ, ЯКИХ НЕ БУЛО В ЯДРІ (макет 06.08.2026).
@@ -42,16 +43,27 @@ export async function callsByManager(from: string, to: string, scope: { managerI
   if (scope.managerId) { p.push(scope.managerId); conds.push(`rc.manager_id = $${p.length}`); }
   if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
   const r = await pool.query<{ manager_id: number; talks: string; attempts: string }>(
-    `SELECT rc.manager_id,
-            COUNT(*) FILTER (WHERE rc.billsec > 0)::int talks,
-            COUNT(*) FILTER (WHERE rc.billsec = 0)::int attempts
-       FROM ringostat_calls rc JOIN managers m ON m.id = rc.manager_id
-      WHERE ${conds.join(" AND ")} GROUP BY 1`, p);
+    `WITH marked AS (
+       SELECT rc.manager_id, rc.billsec, ${mergedLagGapExpr("rc")} AS gap
+         FROM ringostat_calls rc JOIN managers m ON m.id = rc.manager_id
+        WHERE ${conds.join(" AND ")}
+     )
+     SELECT manager_id,
+            COUNT(*) FILTER (WHERE billsec > 0 AND ${mergedLagFirst()})::int talks,
+            COUNT(*) FILTER (WHERE billsec = 0 AND ${mergedLagFirst()})::int attempts
+       FROM marked GROUP BY 1`, p);
   return r.rows.map((x) => ({ managerId: x.manager_id, talks: Number(x.talks), attempts: Number(x.attempts) }));
 }
 
 export interface CallsDayRow { managerId: number; day: string; talks: number; attempts: number }
-/** Ті самі дві цифри, що `callsByManager`, лише в розрізі днів — для розгортки рядка. */
+/**
+ * Ті самі дві цифри, що `callsByManager`, лише в розрізі днів — для розгортки рядка.
+ *
+ * 📐 До 02.09.2026 цей рядок був НЕПРАВДОЮ на 7.40%: `callsByManager` не склеював
+ * плечі взагалі, а тут склейка була. Обидві функції тепер беруть вираз із
+ * `core/callMerge.js`, тож рівність, яку стверджує цей коментар, справді існує —
+ * і її стереже `#26l` (період == Σ денних комірок), а не добра воля.
+ */
 export async function callsByManagerDay(from: string, to: string, scope: { managerId?: number | null; teamId?: number | null }): Promise<CallsDayRow[]> {
   const p: unknown[] = [from, to];
   const conds = [`(rc.calldate ${K})::date BETWEEN $1 AND $2`, "rc.manager_id IS NOT NULL"];
@@ -76,15 +88,13 @@ export async function callsByManagerDay(from: string, to: string, scope: { manag
    */
   const r = await pool.query<{ manager_id: number; day: string; talks: string; attempts: string }>(
     `WITH marked AS (
-       SELECT rc.manager_id, rc.calldate, rc.billsec,
-              rc.calldate - LAG(rc.calldate) OVER (
-                PARTITION BY rc.manager_id, rc.client_phone, (rc.billsec > 0) ORDER BY rc.calldate) AS gap
+       SELECT rc.manager_id, rc.calldate, rc.billsec, ${mergedLagGapExpr("rc")} AS gap
          FROM ringostat_calls rc JOIN managers m ON m.id = rc.manager_id
         WHERE ${conds.join(" AND ")}
      )
      SELECT manager_id, to_char((calldate ${K})::date,'YYYY-MM-DD') AS day,
-            COUNT(*) FILTER (WHERE billsec > 0 AND (gap IS NULL OR gap > interval '120 seconds'))::int talks,
-            COUNT(*) FILTER (WHERE billsec = 0 AND (gap IS NULL OR gap > interval '120 seconds'))::int attempts
+            COUNT(*) FILTER (WHERE billsec > 0 AND ${mergedLagFirst()})::int talks,
+            COUNT(*) FILTER (WHERE billsec = 0 AND ${mergedLagFirst()})::int attempts
        FROM marked GROUP BY 1, 2`, p);
   return r.rows.map((x) => ({ managerId: x.manager_id, day: x.day, talks: Number(x.talks), attempts: Number(x.attempts) }));
 }

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { wireValue, DEFAULT_PLAN_MIN, PLAN_MIN_BOUNDS } from "../core/settingWire.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
@@ -75,7 +76,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // §3b словника: adSources НЕ має дефолту в коді — список живе в БД
   // (сид у schema.sql). Відсутність = помилка конфігурації, видима як [].
   adSources: [] as string[],
-  planMinPerManager: 30000,
+  planMinPerManager: DEFAULT_PLAN_MIN,
   tracker: {
     idleThresholdSec: 300,
     heartbeatIntervalSec: 60,
@@ -131,8 +132,18 @@ settingsRouter.put("/", async (req, res) => {
     receivablesOverdueWarnDays: clampInt(body.receivablesOverdueWarnDays, 0, 365, current.receivablesOverdueWarnDays),
     ratesFallbackFullPerKm: clampInt(body.ratesFallbackFullPerKm, 1, 500, current.ratesFallbackFullPerKm),
     ratesFallbackPartPerKm: clampInt(body.ratesFallbackPartPerKm, 1, 500, current.ratesFallbackPartPerKm),
-    // 0 = вимкнути перевірку зовсім; стеля 1 млн, щоб помилковий ввід не заблокував подачу.
-    planMinPerManager: clampInt(body.planMinPerManager, 0, 1_000_000, current.planMinPerManager),
+    /**
+     * 🔌 ТРИ СТАНИ, а не два (рішення власника 02.09.2026). Поле нарешті виходить на
+     * екран Налаштувань, і щойно екран почне слати його ЗАВЖДИ, стан «не задано» став
+     * би недосяжним — після першого ж збереження він зник би назавжди. Тому:
+     *   поля немає → лишити поточне · `null`/`""` → повернути ДЕФОЛТ · число → число.
+     * 🔴 Нуль тут ЗАКОННИЙ і означає «межу свідомо знято» — саме тому «очистити поле»
+     * НЕ може означати нуль. `clampInt` цього не вміє: `Number("")` це 0, тобто стерте
+     * поле мовчки знімало б поріг усім. Деталі — `core/settingWire.ts`.
+     * ⚠️ Стеля 1 млн лишається: помилковий ввід не має заблокувати подачу.
+     */
+    planMinPerManager: wireValue(body.planMinPerManager, PLAN_MIN_BOUNDS,
+      current.planMinPerManager, DEFAULT_PLAN_MIN),
     // ⏱ Трекер: кожне поле клампиться окремо, а не приймається як є — конфіг їде на
     // 38 машин і поганим значенням (heartbeat раз на секунду) можна покласти сервер.
     // Відсутнє поле = лишається поточне, тому часткове збереження безпечне.
