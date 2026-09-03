@@ -17,7 +17,7 @@ import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "
 import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
   standToRefusal,
-  MARK_REPORT, MARK_STOP, nextLockOurs,
+  MARK_REPORT, MARK_STOP, nextLockOurs, notMeasuredWhen, matrixOutcome,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim, actorRefusal } from "./checkoutLock.js";
@@ -523,20 +523,41 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * 🔴 ЛОГ ОКРЕМИЙ. Пише в `/tmp/deploy-matrix.log`, а не в лог приймання: інакше другий
    * прогін затер би перший, і на розборі аварії ми мали б лише останній.
    */
-  acceptMatrix: (c) => {
+  acceptMatrix: async (c) => {
     const log = "/tmp/deploy-matrix.log";
+    /**
+     * 🚦 ТРЕТІЙ СТАН — див. `notMeasuredWhen`/`matrixOutcome`. Знімаємо sha прода ДО і
+     * ПІСЛЯ прогону: крок стоїть після `lockRelease`, тож наступний чат може взяти
+     * замок і перезапустити прод просто під пробою. Розміщення кроку й логіку вироку
+     * це НЕ чіпає — додається рівно один вихід, і лише для НЕзеленого результату.
+     */
+    const shaOrNull = async (): Promise<string | null> => {
+      try { return await prodSha(); } catch { return null; }
+    };
+    const beforeSha = await shaOrNull();
     const out = sh("bash", ["-lc",
       `cd ${c.prodBe} && set -a && . ./.env && set +a && `
       + `API_BASE=${API_BASE} npm run test:matrix > ${log} 2>&1 || true; `
       + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true`]);
+    const afterSha = await shaOrNull();
+    const moved = notMeasuredWhen(beforeSha, afterSha);
+    /** Незелений вирок, що стався ПІД зміною коду, — «не виміряно», а не «порушено». */
+    const orNotMeasured = (redDetail: string): StepResult =>
+      matrixOutcome(moved !== null, true) === "notMeasured"
+        ? { id: "acceptMatrix", ok: true, detail: "",
+            skipped: `НЕ ВИМІРЯНО (${moved}). Лог: ${log}\n`
+              + "   Це НЕ зелене: матрична проба по цьому викату не зроблена, і дрейф\n"
+              + "   доступу лишається невідомим. Прогнати `npm run test:matrix` окремо,\n"
+              + "   на тихому проді, і назвати результат." }
+        : { id: "acceptMatrix", ok: false, detail: redDetail };
     const named = failureNames(out);
     const passedFromRegistry = expectedPassNames(out);
     const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
-    if (!m) return { id: "acceptMatrix", ok: false,
-      detail: `🔴 гейт прогону не надрукував підсумку — матрична проба не дійшла до кінця. Лог: ${log}` };
+    if (!m) return orNotMeasured(
+      `🔴 гейт прогону не надрукував підсумку — матрична проба не дійшла до кінця. Лог: ${log}`);
     const [, doneN, needN, fails] = m;
-    if (doneN !== needN) return { id: "acceptMatrix", ok: false,
-      detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
+    if (doneN !== needN) return orNotMeasured(
+      `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}`);
     if (fails !== "0") {
       /**
        * ⚖️ ВИРОК — ТОЙ САМИЙ, ЩО В `accept`, І ЦЕ НЕ ОХАЙНІСТЬ (зведено 02.09.2026).
@@ -560,10 +581,10 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
        * доступу розійшлась із записаною. Перезнімати зліпок можна ЛИШЕ рішенням власника
        * і з причиною в рядку — інакше перезняття читається як замітання сигналу.
        */
-      return { id: "acceptMatrix", ok: false,
-        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}\n${verdict.lines.join("\n")}`
+      return orNotMeasured(
+        `🔴 падінь ${fails} при ${doneN} із ${needN}${mismatch}. Лог: ${log}\n${verdict.lines.join("\n")}`
           + "\n   Якщо серед НЕПОКРИТИХ є #11 — це ДРЕЙФ ДОСТУПУ: зліпок і прод розійшлись."
-          + "\n   Не перезнімай зліпок сам: кожна клітинка потребує «так, ми цього хотіли»." };
+          + "\n   Не перезнімай зліпок сам: кожна клітинка потребує «так, ми цього хотіли».");
     }
     return { id: "acceptMatrix", ok: true, detail: `${doneN} із ${needN}, падінь 0 — зліпок доступу збігається з живим продом` };
   },

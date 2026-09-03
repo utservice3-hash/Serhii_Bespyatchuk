@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, standToRefusal, nextLockOurs, type Artifact } from "./deployPlan.js";
+import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, standToRefusal, nextLockOurs, notMeasuredWhen, matrixOutcome, type Artifact } from "./deployPlan.js";
 import { executablePlan, missingHandlers, handlers } from "./deploy.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -392,4 +392,43 @@ test("#329b 🪞 ДЗЕРКАЛО: у плані Є крок ПІСЛЯ lockRele
   // впала на власній надмірності: там ще `report`. Гейт мусить стерегти дефект, а не склад плану.
   assert.equal(ids[rel + 1], "acceptMatrix",
     `🔴 одразу після lockRelease стоїть «${ids[rel + 1]}», а дефект купили на acceptMatrix`);
+});
+
+/**
+ * 🚦 #330–#330b — «НЕ ВИМІРЯНО» ЯК ТРЕТІЙ СТАН МАТРИЧНОЇ ПРОБИ.
+ *
+ * 📐 Привід — у доккоментарі `notMeasuredWhen`: крок стоїть після `lockRelease`, тож
+ * наступний чат бере замок і перезапускає прод просто під пробою (спостережено 03.09:
+ * замок віддано о 12:55, узято іншим чатом о 12:55:35). Червоне з такої проби — хибна
+ * тривога в детекторі ДОСТУПУ, а вона дорожча за пропуск.
+ */
+test("#330 змінився код під пробою → НЕ ВИМІРЯНО; не змінився → червоне лишається червоним", () => {
+  // Незелений результат під зміною коду більше не «порушено».
+  assert.equal(matrixOutcome(true, true), "notMeasured",
+    "🔴 червоне під зміною коду лишилось червоним — це хибна тривога в детекторі доступу");
+  // 🔴 І межа, без якої третій стан став би глушником: на тихому проді червоне ЧЕРВОНЕ.
+  assert.equal(matrixOutcome(false, true), "red",
+    "🔴 червоне на НЕЗМІННОМУ коді оголошено «не виміряно» — так ланцюг перестав би міряти взагалі");
+  // Зелене не перетворюється на «не виміряно» ЖОДНОГО разу — інакше зʼявився б спосіб
+  // не звітувати про успіх так само, як про провал.
+  assert.equal(matrixOutcome(true, false), "ok", "🔴 зелене під зміною коду стало «не виміряно»");
+  assert.equal(matrixOutcome(false, false), "ok");
+});
+
+test("#330b 🪞 ДЗЕРКАЛО: причина називає ОБИДВА sha, а однаковий sha не дає приводу", () => {
+  // Однаковий sha — приводу немає. Без цієї половини предикат міг би кидати завжди,
+  // і кожне червоне ставало б «не виміряно».
+  assert.equal(notMeasuredWhen("abc1234", "abc1234"), null,
+    "🔴 незмінний sha визнано зміною — третій стан накрив би геть усе");
+
+  // Зміна — причина НАЗИВАЄ обидва значення, інакше читач не відрізнить її від збою.
+  const moved = notMeasuredWhen("abc1234", "def5678");
+  assert.match(moved ?? "", /abc1234/, "🔴 у причині немає sha ДО");
+  assert.match(moved ?? "", /def5678/, "🔴 у причині немає sha ПІСЛЯ");
+
+  // Непрочитаний health — теж «не виміряно», і сторона названа поіменно.
+  assert.match(notMeasuredWhen(null, "def5678") ?? "", /ДО/,
+    "🔴 нечитаний health ДО прогону не названо — довести незмінність коду нічим");
+  assert.match(notMeasuredWhen("abc1234", null) ?? "", /ПІСЛЯ/,
+    "🔴 нечитаний health ПІСЛЯ прогону не названо");
 });
