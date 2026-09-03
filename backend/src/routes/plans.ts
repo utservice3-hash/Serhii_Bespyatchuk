@@ -5,7 +5,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import type { AuthPayload } from "../auth/auth.js";
 import * as money from "../core/money.js";
-import { maySubmit, submitRefusal } from "../core/planScope.js";
+import { maySubmit, mayEverSubmit, submitRefusal } from "../core/planScope.js";
 import { getSettings } from "./settings.js";
 import * as metrics from "../core/metrics.js";
 import { planRecommendation, baseMonthsFor } from "../core/plans.js";
@@ -246,6 +246,9 @@ const submitSchema = z.object({ managerId: z.number(), month: z.string(), propos
  */
 plansRouter.post("/formation/submit", async (req, res) => {
   const auth = req.auth!;
+  // Ролі, що не подають нікому й ніколи, — ДО розбору тіла: інакше 403 у них тихо
+  // стало б 400, і зліпок матриці зрушився б там, де прохід цього не замовляв.
+  if (!mayEverSubmit(auth.role)) return res.status(403).json({ error: "Подання плану недоступне для цієї ролі" });
   const parsed = submitSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { managerId, proposedValue, comment } = parsed.data;

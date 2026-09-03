@@ -115,6 +115,17 @@ const NO_ENPS = "власник: eNPS і бали ванʼту-ванів — н
   + "зміни — be6d453 (27.08.2026), «біле сито прав»";
 
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  /**
+   * Рішення власника 03.09.2026, дослівно: «менеджер подає, тім-лід затверджує плани
+   * по клієнтах, такий задум». До цього дня менеджер не міг подати НАВІТЬ СВІЙ план —
+   * 53 людини з 61. Це ЄДИНА клітинка, яку рухає прохід #279: інші ролі відсікаються
+   * `mayEverSubmit` ДО розбору тіла й лишаються на 403.
+   * ⚠️ Дозвіл тут НЕ означає «подавай кому хочеш»: межа за парою «актор → ціль» живе
+   * в `core/planScope.ts`, і менеджер за колегу далі дістає 403 («Лише свій план»).
+   */
+  { method: "POST", path: "/api/plans/formation/submit", role: "manager", to: "dropped",
+    decidedOn: "2026-09-03", decidedBy: "власник через координатора (HR)",
+    why: "менеджер подає свій план; межа звузилась із ролі на пару «актор → ціль» (#279)" },
   { method: "GET", path: "/api/dashboard/client-search?q=zz", role: "ceo", to: "allow",
     decidedOn: "2026-09-02", decidedBy: "власник", why: CEO_MERGE },
   { method: "GET", path: "/api/dashboard/client-merge/preview?alias=a&canonical=b", role: "ceo", to: "allow",

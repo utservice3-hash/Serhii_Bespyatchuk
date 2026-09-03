@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { maySubmit, mayApprove, submitRefusal } from "./planScope.js";
+import { maySubmit, mayApprove, mayEverSubmit, submitRefusal } from "./planScope.js";
 
 /**
  * ГЕЙТИ МЕЖІ ПОДАННЯ ПЛАНУ (#279…#279c).
@@ -47,4 +47,19 @@ test("#279c ТІМЛІД І АДМІН: обидва боки межі, і по�
     "company-роль дістала подання — це зрушення клітинки матриці, якого прохід не замовляв");
   assert.equal(mayApprove(LEAD(3)), false, "затвердження лишається адміну — прохід його не рухав");
   assert.equal(mayApprove(ADMIN), true, "адмін мусить затверджувати");
+});
+
+/**
+ * #279h — ГРУБИЙ ФІЛЬТР РОЛІ, і він існує заради ЗЛІПКА, а не заради безпеки.
+ *
+ * Межу тримає `maySubmit`; цей фільтр лише не дає 403 перетворитись на 400 у ролей,
+ * яких прохід не замовляв. Без нього дельта матриці була б у кількох клітинках
+ * замість однієї — а зсув, якого ніхто не хотів, помічають найпізніше.
+ */
+test("#279h ГРУБИЙ ФІЛЬТР: подання взагалі недоступне ролям поза трійкою", () => {
+  for (const r of ["admin", "team_lead", "manager"])
+    assert.equal(mayEverSubmit(r), true, `${r} мусить доходити до перевірки цілі`);
+  for (const r of ["company", "ceo", "hr", "financier", "opdir", ""])
+    assert.equal(mayEverSubmit(r), false,
+      `🔴 роль «${r}» пройшла грубий фільтр — її 403 стане 400, і клітинка зліпка зрушиться мовчки`);
 });
