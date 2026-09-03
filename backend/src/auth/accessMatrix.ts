@@ -639,8 +639,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/plans/formation/return", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🔓 `manager` ПРИБРАНО З deny 03.09.2026 — зсув узаконений вище (реєстр
+  //    ACCEPTED_MATRIX_SHIFTS). Зліпок описує «як Є», тож він мусить рухатись РАЗОМ
+  //    зі зміною поведінки: запис у реєстрі без руху в зліпку — це саме та мертва
+  //    ковдра, під якою наступний справжній дрейф пройде мовчки (#325).
+  //    `hr` лишається: цю роль прохід не чіпав.
   { method: "POST", path: "/api/plans/formation/submit", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/rates/analyze", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/rates/bodytypes", cls: "GET",
