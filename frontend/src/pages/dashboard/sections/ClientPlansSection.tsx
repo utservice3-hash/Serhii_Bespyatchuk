@@ -232,7 +232,32 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
     setOpenTeams(new Set(data.clients.map((c) => c.teamName)));
   }, [data, auth.role]);
 
-  const act = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); load(); } finally { setBusy(false); } };
+  /**
+   * 🔴 ВІДМОВА СЕРВЕРА МУСИТЬ БУТИ ВИДИМОЮ (борг 15, той самий, що на екрані формування).
+   *
+   * До цього `act` не мав `catch` ЗОВСІМ: будь-яка відмова — 500, 409 «План затверджено»,
+   * 403 скоупу, 400 «на цей ключ план поставити не можна» — летіла в порожнечу, і на
+   * екрані НЕ ВІДБУВАЛОСЬ НІЧОГО.
+   *
+   * 📐 Ціна заміряна, і вона не гіпотетична: `POST /client-plan` падав із 500 на КОЖНОМУ
+   * збереженні від дня переїзду на цей екран (29.07), і саме мовчання ховало це пʼять
+   * тижнів. Власник вписував 50 000 і не отримував ані числа, ані помилки; півдня пішло
+   * на пошук поломки там, де її не було.
+   *
+   * ⚠️ ОКРЕМИЙ СТАН, А НЕ `err`: той рендериться на `:237` ЗАМІСТЬ усього екрана — доречно
+   * для збою завантаження, але для відмови дії це сховало б таблицю разом із помилкою.
+   */
+  const [actErr, setActErr] = useState<string | null>(null);
+  const explain = (e: unknown): string => {
+    const r = (e as { response?: { status?: number; data?: { error?: unknown } } }).response;
+    const raw = r?.data?.error;
+    const txt = typeof raw === "string" ? raw : raw ? JSON.stringify(raw) : null;
+    return txt ?? (r?.status ? `Сервер відмовив (код ${r.status}). Зміну НЕ збережено.` : "Не вдалося звʼязатися з сервером. Зміну НЕ збережено.");
+  };
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true); setActErr(null);
+    try { await fn(); load(); } catch (e) { setActErr(explain(e)); } finally { setBusy(false); }
+  };
 
   if (err) return <div style={{ ...S.card, color: "#dc2626" }}>{err}</div>;
   if (!data) return <div style={{ ...S.card, color: "#6b7280" }}>завантаження…</div>;
@@ -535,6 +560,14 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
       </div>
 
       {/* ── ТАБЛИЦЯ */}
+      {actErr && (
+        <div role="alert" style={{ ...S.card, marginBottom: 8, borderLeft: "3px solid #dc2626",
+                                   color: "#b91c1c", fontSize: 13, fontWeight: 600, display: "flex", gap: 8, alignItems: "center" }}>
+          <span>⚠️</span><span style={{ flex: 1 }}>{actErr}</span>
+          <button onClick={() => setActErr(null)} title="сховати"
+            style={{ border: "none", background: "transparent", cursor: "pointer", color: "#b91c1c", fontSize: 15 }}>×</button>
+        </div>
+      )}
       <div style={{ ...S.card, padding: 0, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
           <thead>

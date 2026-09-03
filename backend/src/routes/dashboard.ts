@@ -5844,10 +5844,30 @@ dashboardRouter.post("/client-plan", async (req, res) => {
     `SELECT manager_id FROM repeat_client_plans WHERE client_key = $1 AND month = $2`, [clientKey, month]);
   const managerId = mgr.rows[0]?.manager_id ?? (auth.role === "manager" ? auth.managerId ?? null : null);
 
+  /**
+   * 🔴 `$6::int` — НЕ КОСМЕТИКА, А ЄДИНА ПРИЧИНА, ЧОМУ ЕКРАН СТОЯВ ПʼЯТЬ ТИЖНІВ.
+   *
+   * Без приведення Postgres відмовляє ще на РОЗБОРІ: `inconsistent types deduced for
+   * parameter $6`. `$6` (це `auth.userId`) стоїть у двох контекстах — прямо як
+   * `updated_by` і всередині `CASE … THEN $6 END` для `approved_by`; обидві колонки
+   * `integer` (заміряно), але вивід типу параметра робиться ОДИН раз і на цьому
+   * вираженні не сходиться.
+   *
+   * 🔴 ЦЕ ПОМИЛКА РОЗБОРУ, А НЕ ДАНИХ: запит падав ЗАВЖДИ, за будь-яких значень і
+   * будь-якої ролі. Тобто `POST /client-plan` не працював ЖОДНОГО разу з того дня,
+   * як `LoyaltySection` переїхав із мертвої сітки `RepeatPlanGrid` на цей екран.
+   *
+   * 📐 Заміряно 03.09.2026, і сходиться все: останній запис у `repeat_client_plan_history`
+   * — 29.07; за серпень і вересень рядків НЕМАЄ ЖОДНОГО; чернеток не існує в принципі,
+   * тож «Подати» сіра (`canSubmit = byStatus.draft > 0`) — не через дефект кнопки, а
+   * через порожній стан, якого не могло не бути. Власник вписував 50 000 у ЗАХІД-СОЛОД
+   * і не отримував нічого: 500 летіла в порожнечу, бо `act()` на фронті не мав `catch`.
+   * Обидві половини лікуються цим проходом — інакше видима помилка лише показала б аварію.
+   */
   await pool.query(
     `INSERT INTO repeat_client_plans (client_key, month, manager_id, plan, status, updated_by, updated_at,
                                       approved_by, approved_at, submitted_at, returned_at, review_note)
-     VALUES ($1,$2,$3,$4,$5,$6, now(), CASE WHEN $5='approved' THEN $6 END,
+     VALUES ($1,$2,$3,$4,$5,$6::int, now(), CASE WHEN $5='approved' THEN $6::int END,
              CASE WHEN $5='approved' THEN now() END, NULL, NULL, NULL)
      ON CONFLICT (client_key, month) DO UPDATE SET
        plan = EXCLUDED.plan, status = EXCLUDED.status, manager_id = COALESCE(repeat_client_plans.manager_id, EXCLUDED.manager_id),
