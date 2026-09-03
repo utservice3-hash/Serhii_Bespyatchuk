@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MANIFEST_TESTS, collidingNumbers, KNOWN_NUMBER_COLLISIONS, gateNames, diffGates,
   acceptRetired, RETIRED_GATES, type RetiredGate } from "./testManifest.js";
-import { parseManifestTests } from "./tools/gateCount.js";
+import { parseManifestTests, treeTests } from "./tools/gateCount.js";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * 🔢 #223–#223b — ОДИН НОМЕР = ОДИН ГЕЙТ.
@@ -77,6 +80,55 @@ test("#223d РАХУНОК ГЕЙТІВ · екрановану лапку ро�
   // Порожній результат = провал: розбір мусить ГОЛОСНО падати, а не віддавати [].
   assert.throws(() => parseManifestTests("нічого схожого", "фікстура"), /не знайшов MANIFEST_TESTS/,
     "🔴 зламаний розбір віддав порожній список — це читалось би як «гейтів немає»");
+});
+
+/**
+ * 🧭 #326–#326b — ДЕРЕВО В `gateCount` БЕРЕТЬСЯ З ДЖЕРЕЛА, А НЕ З `dist`.
+ *
+ * 📐 Привід і межі — у доккоментарі `treeTests`. Тут важлива форма перевірки:
+ * 🔴 ФІКСТУРА МУСИТЬ РОЗХОДИТИСЬ ІЗ ЗІБРАНИМ МАНІФЕСТОМ, інакше гейт зеленів би й на
+ * реалізації, що повернулась до `MANIFEST_TESTS` — обидва джерела дали б те саме, і
+ * перевірка доводила б лише «функція щось повертає» (правило 11).
+ */
+const FIXTURE = (names: string[]) => {
+  const dir = mkdtempSync(join(tmpdir(), "gatecount-"));
+  mkdirSync(join(dir, "src"));
+  writeFileSync(join(dir, "src", "testManifest.ts"),
+    "export const MANIFEST_TESTS: string[] = [\n"
+    + names.map((n) => `  ${JSON.stringify(n)},\n`).join("") + "];\n");
+  return dir;
+};
+
+test("#326 дерево читається з ДЖЕРЕЛА — фікстура перемагає зібраний маніфест", () => {
+  const dir = FIXTURE(["#901 вигаданий гейт фікстури", "#902 другий", "не гейт"]);
+  try {
+    const got = treeTests(dir);
+    assert.deepEqual(got, ["#901 вигаданий гейт фікстури", "#902 другий", "не гейт"],
+      "🔴 повернуто не те, що лежить у ДЖЕРЕЛІ фікстури");
+    // 🧨 Осердя: якби реалізація читала `dist`, тут був би бойовий маніфест на 800+.
+    assert.ok(!got.some((n) => MANIFEST_TESTS.includes(n)),
+      "🔴 у відповіді імена БОЙОВОГО маніфеста — тобто дерево знову береться з dist, "
+      + "і хибне «зникло N гейтів» від несвіжої збірки повертається");
+    assert.ok(got.length < 10, `🔴 замість фікстури прочитано щось на ${got.length} імен`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("#326b 🪞 ДЗЕРКАЛО: відсутнє джерело ПАДАЄ з іменем файлу, справжнє дерево читається", () => {
+  // 1 · Порожній результат = провал: «немає файлу» не сміє прочитатись як «гейтів немає».
+  const empty = mkdtempSync(join(tmpdir(), "gatecount-порожньо-"));
+  try {
+    assert.throws(() => treeTests(empty), /не прочитав маніфест дерева.*testManifest\.ts/s,
+      "🔴 відсутнє джерело віддало список замість падіння — це читалось би як втрата ВСІХ гейтів");
+  } finally { rmSync(empty, { recursive: true, force: true }); }
+  // 2 · Другий бік межі: на СПРАВЖНЬОМУ дереві функція не падає й не вироджується —
+  // інакше перша половина зеленіла б від того, що вона падає завжди.
+  const real = treeTests();
+  assert.ok(gateNames(real).length > 500,
+    `🔴 на бойовому дереві прочитано лише ${gateNames(real).length} гейтів`);
+  // 3 · І воно збігається зі зібраним маніфестом ПРЯМО ЗАРАЗ: розбіжність тут означає
+  // або несвіжий dist, або що розбір джерела втратив рядки. Обидва варіанти — стоп.
+  assert.deepEqual(diffGates(real, MANIFEST_TESTS).onlyBefore, [],
+    "🔴 джерело й зібраний маніфест розійшлись — перезбери dist перед висновками");
 });
 
 /**
