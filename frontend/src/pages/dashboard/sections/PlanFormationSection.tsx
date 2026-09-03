@@ -432,11 +432,36 @@ function PlanSeg({ m, month, data, onChanged, onValue }: { m: PFManager; month: 
   void hasReason;
   const blockSubmit = false;
 
-  const doSubmit = async () => { setBusy(true); try { await submitFormationPlan(m.managerId, month, num(), comment || undefined); onChanged(); } finally { setBusy(false); } };
-  const doApprove = async () => { setBusy(true); try {
+  /**
+   * 🔴 ПОМИЛКА СЕРВЕРА МУСИТЬ БУТИ ВИДИМОЮ (борг 15, рішення власника 02.09.2026).
+   *
+   * До цього `catch` тут не було ЖОДНОГО, а четвертий аргумент `btn` — це `solid`, а не
+   * `off`, тож кнопка лишалась клікабельною. Людина тисне, запит падає, і на екрані НЕ
+   * ВІДБУВАЄТЬСЯ НІЧОГО. Саме так виглядала межа 30 000 на «Змінити»: власник тиснув і
+   * не отримував жодного повідомлення, а ми пів дня шукали «зламану кнопку».
+   *
+   * ⚠️ Зняття межі прибрало РІВНО ОДНУ 400 із десяти відмов роуту. Лишаються 403 за
+   * скоупом («Лише своя команда»), 400 валідації і 409 — і всі вони були б так само
+   * німими. Тому лікуємо не конкретну відмову, а МОВЧАННЯ.
+   */
+  const [err, setErr] = useState<string | null>(null);
+  const explain = (e: unknown): string => {
+    const r = (e as { response?: { status?: number; data?: { error?: unknown } } }).response;
+    const raw = r?.data?.error;
+    const txt = typeof raw === "string" ? raw : raw ? JSON.stringify(raw) : null;
+    return txt ?? (r?.status ? `Сервер відмовив (код ${r.status}).` : "Не вдалося звʼязатися з сервером.");
+  };
+  const guard = async (fn: () => Promise<void>) => {
+    setBusy(true); setErr(null);
+    try { await fn(); } catch (e) { setErr(explain(e)); } finally { setBusy(false); }
+  };
+  const doSubmit = () => guard(async () => {
+    await submitFormationPlan(m.managerId, month, num(), comment || undefined); onChanged();
+  });
+  const doApprove = () => guard(async () => {
     if (f.status !== "submitted" || num() !== (f.proposedValue ?? 0)) await submitFormationPlan(m.managerId, month, num(), f.comment || comment || undefined);
     await approveFormationPlan({ managerId: m.managerId, month }); onChanged();
-  } finally { setBusy(false); } };
+  });
   const doReturn = async () => { setBusy(true); try { await returnFormationPlan(m.managerId, month, retComment || undefined); setReturning(false); onChanged(); } finally { setBusy(false); } };
 
   const canSubmit = data.canSubmit;   // тімлід/адмін своєї команди
@@ -554,6 +579,14 @@ function PlanSeg({ m, month, data, onChanged, onValue }: { m: PFManager; month: 
                     style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 12.5 }} />
                 )}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{input}{btn("↑ Подати знову", RED, doSubmit, true, blockSubmit)}</div>
+              </div>
+            )}
+            {/* 🔴 РЯДОК ПОМИЛКИ — ВИДИМИЙ ЛЮДИНІ, а не код у консолі. Приймання боргу 15
+                робиться саме цим рядком: «маршрут повертає 403» доказом не рахується. */}
+            {err && (
+              <div role="alert" style={{ marginTop: 6, fontSize: 12.5, color: RED, background: "rgba(220,38,38,0.08)",
+                                         border: "1px solid rgba(220,38,38,0.35)", borderRadius: 8, padding: "7px 10px" }}>
+                ⚠️ {err}
               </div>
             )}
             {/* approved → адмін може змінити; інші — read-only */}
