@@ -449,7 +449,9 @@ export interface RunTally { ran: number; failed: number; skipped: string[]; brok
   /** Скіпи з маркером порожнього періоду — дозвіл дійсний ЛИШЕ для них. */
   emptyPeriod?: SkipInfo[]; silentDeaths?: string[];
   /** Імена ВСІХ падінь — джерело стабільного переліку (`FAIL_MARK`). */
-  failures?: string[] }
+  failures?: string[];
+  /** Імена З РЕЄСТРУ `EXPECTED_REDS`, що ПРОЙШЛИ — дані дзеркала, не весь прогін. */
+  passed?: string[] }
 
 /**
  * 🏷 МАРКЕР ПЕРЕЛІКУ ПАДІНЬ — НАШ ВЛАСНИЙ РЯДОК, А НЕ СИМВОЛ РЕПОРТЕРА.
@@ -468,6 +470,17 @@ export interface RunTally { ran: number; failed: number; skipped: string[]; brok
  * разу вже зникло. Префікс латиницею, бо його читає grep, а не людина.
  */
 export const FAIL_MARK = "FAIL-GATE:";
+
+/** Маркер дзеркала: імʼя з `EXPECTED_REDS`, яке цього прогону ПРОЙШЛО. */
+export const EXPECTED_PASS_MARK = "EXPECTED-PASS:";
+
+/** Імена з `EXPECTED_REDS`, що пройшли. Порожньо = дзеркалу нема на що спиратись. */
+export function expectedPassNames(output: string): string[] {
+  return output.split("\n")
+    .filter((l) => l.startsWith(EXPECTED_PASS_MARK))
+    .map((l) => l.slice(EXPECTED_PASS_MARK.length).trim())
+    .filter((n) => n.length > 0);
+}
 
 /** Імена падінь із будь-якого виводу, де працювали ці ворота. Порожньо = падінь не було. */
 export function failureNames(output: string): string[] {
@@ -616,6 +629,19 @@ export const isEmptyPeriodSkip = (skip: unknown): boolean =>
 
 export default async function* runGate(source: AsyncIterable<TestEvent>) {
   const tally: RunTally = { ran: 0, failed: 0, skipped: [], broken: [], emptyPeriod: [] };
+  /**
+   * 🔴 ІМПОРТ ЛІНИВИЙ, ЯК У `testManifest` НИЖЧЕ, І ЦЕ НЕ СТИЛЬ. Цей файл не має
+   * ЖОДНОГО верхньорівневого імпорту навмисно: він вантажиться раннером найпершим,
+   * і падіння на імпорті вбило б САМОГО сторожа — тобто прогін лишився б без вироку
+   * рівно тоді, коли вирок найпотрібніший.
+   * ⚠️ Порожній реєстр — законний стан: тоді дзеркалу нема на що спиратись, і
+   * маркер `EXPECTED-PASS:` просто не друкується.
+   */
+  const EXPECTED_RED_NAMES = new Set<string>(
+    await import("./expectedReds.js")
+      .then((m) => m.EXPECTED_REDS.map((r) => r.name))
+      .catch(() => []),
+  );
   for await (const ev of source) {
     if (ev.type !== "test:pass" && ev.type !== "test:fail") continue;
     // `skip` приходить або true, або текстом причини — обидва означають «не виконався».
@@ -627,6 +653,10 @@ export default async function* runGate(source: AsyncIterable<TestEvent>) {
     }
     else {
       tally.ran++;
+      // 🪞 Пройшло І стоїть у реєстрі очікуваних червоних — це дефект реєстру, і
+      // побачити його може лише той, хто бачить подію `test:pass`.
+      if (ev.type === "test:pass" && EXPECTED_RED_NAMES.has(ev.data.name ?? ""))
+        (tally.passed ??= []).push(ev.data.name ?? "?");
       if (ev.type === "test:fail") {
         tally.failed++;
         (tally.failures ??= []).push(ev.data.name ?? "?");
@@ -664,7 +694,26 @@ export default async function* runGate(source: AsyncIterable<TestEvent>) {
   }
 
   /**
-   * 🔴 НУЛЬ ВИКОНАНИХ НАЗИВАЄ СЕБЕ — У БУДЬ-ЯКОМУ РЕЖИМІ (#273).
+   * 🪞 ДАНІ ДЗЕРКАЛА ДЛЯ `EXPECTED_REDS` — друкує той, хто бачить події раннера.
+   *
+   * Реєстр очікуваних червоних мусить ловити СВІЙ дефект: запис на гейт, який
+   * насправді ПРОЙШОВ, — це вимкнений гейт, а не порядок. Щоб це побачити, вироку
+   * потрібні імена, що пройшли; вивести їх із малюнка репортера не можна (той самий
+   * `#270`, що вже коштував 11 «зелених» саботажів). Тому маркер друкується тут.
+   *
+   * ⚠️ ДРУКУЄМО ЛИШЕ ІМЕНА З РЕЄСТРУ, а не всі 800 — вивід приймання не має рости
+   * від механізму, який його лише судить. Реєстр порожній → рядків немає взагалі.
+   */
+  if (tally.passed?.length) {
+    yield "\n" + tally.passed.map((n) => `${EXPECTED_PASS_MARK} ${n}\n`).join("");
+  }
+
+  /**
+   * 🔴 НУЛЬ ВИКОНАНИХ НАЗИВАЄ СЕБЕ — У БУДЬ-ЯКОМУ РЕЖИМІ (#271).
+   * ⚠️ НОМЕР ТУТ #271, А НЕ #273. Перенумерування 02.09 (`0a9c632`) механічно зсунуло
+   * цю ЗГАДКУ, але сам гейт у маніфесті лишився «#271 нуль виконаних НАЗИВАЄ СЕБЕ…»,
+   * а #273 — зовсім інше твердження («ФІЛЬТР ДОХОДИТЬ»). Посилання на неіснуючий
+   * предмет читається як правда, доки хтось не піде його шукати.
    *
    * `#19c` стереже це для ПОВНОГО набору, але разові команди (`node --test dist/x.test.js`)
    * сторожа не мали: файл, що не зібрався або відсіявся глобом, друкує «pass 0, fail 0»

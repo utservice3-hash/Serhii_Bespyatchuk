@@ -6,6 +6,7 @@ import { rolesCacheState } from "../auth/rbac.js";
 import { buildVersion, buildIsStale, onDiskVersion } from "../version.js";
 import { runReadOnly } from "../ai/readQuery.js";
 import { MONITORED_JOBS } from "../jobs/monitoredJobs.js";
+import { actionWithAdvice } from "./jobErrorKind.js";
 
 /**
  * 🚨 СИГНАЛІЗАЦІЯ — щоб про поломку система казала САМА (Крок 2).
@@ -145,7 +146,7 @@ async function checkSync(): Promise<Alert[]> {
       id: "sync:never", severity: "critical",
       title: "Синхронізація з Kommo жодного разу не пройшла успішно",
       detail: `Остання помилка: ${row.last_error ?? "—"}`,
-      action: "Перевірити доступ до Kommo API (не в бані?) і KOMMO_PAUSED.",
+      action: actionWithAdvice("Перевірити доступ до Kommo API (не в бані?) і KOMMO_PAUSED.", row.last_error),
       since: null,
     });
   } else {
@@ -156,7 +157,8 @@ async function checkSync(): Promise<Alert[]> {
         title: "Дані з CRM застаріли",
         detail: `Останній успішний синк ${ageMin} хв тому (норма ≤${SYNC_STALE_MIN} при частоті 30 хв).`
           + (row.last_error ? ` Остання помилка: ${row.last_error}` : ""),
-        action: "Перевірити /api/health, чи не активний KOMMO_PAUSED і чи не висить job_locks.",
+        action: actionWithAdvice(
+          "Перевірити /api/health, чи не активний KOMMO_PAUSED і чи не висить job_locks.", row.last_error),
         since: ISO(row.last_success_at),
       });
     }
@@ -166,7 +168,12 @@ async function checkSync(): Promise<Alert[]> {
       id: "sync:failing", severity: Number(row.consecutive_failures) >= 3 ? "critical" : "warning",
       title: `Синхронізація падає поспіль (${row.consecutive_failures})`,
       detail: `Остання помилка: ${row.last_error ?? "—"}`,
-      action: "Подивитись лог процесу; при 403/429 від Kommo — знизити темп.",
+      // 🔴 ТУТ БЕЗУМОВНО РАДИЛИ ЗНИЖУВАТИ ТЕМП CRM — і 02.09.2026 це прозвучало на
+      // помилці `timeout exceeded when trying to connect`, яка до Kommo не дійшла
+      // взагалі. Причина тепер виводиться з тексту помилки (`jobErrorKind.ts`).
+      // ⚠️ Сам той літерал тут НЕ відтворюється: `#314b` шукає його по всьому файлу,
+      // і першу редакцію цього ж коментаря він законно завалив.
+      action: actionWithAdvice("Подивитись лог процесу.", row.last_error),
       since: null,
     });
   }

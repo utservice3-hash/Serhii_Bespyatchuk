@@ -30,26 +30,45 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, re
 
 export const TTL_MIN = 20;
 
-export interface Claim { who: string; at: string; reason: string }
+/**
+ * `touchedAt` — мить ОСТАННЬОГО ДОТИКУ ланцюга до замка.
+ *
+ * 🔴 TTL МІРЯЄ БЕЗДІЯЛЬНІСТЬ, А НЕ ВІК (рішення власника 02.09.2026). Доти
+ * прострочення рахувалось від `at`, тобто від ВЗЯТТЯ, — і це називало «покинутим»
+ * замок, який активно працював: заміряно того дня, що один прохід `run` триває
+ * ~18 хв (з них 16 хв самого лише прогріву) при TTL 20 хв, тож нормальне коло
+ * впритул підходило до порогу. Уся плутанина з перехопленнями звідти.
+ * Тепер 25 хв посеред живого прогону — не покинутий замок, а 184 хв без жодного
+ * кроку — покинутий.
+ *
+ * ⚠️ ПОЛЕ НЕОБОВʼЯЗКОВЕ, і це навмисно: старі заявки на диску його не мають, тож
+ * `touchedAt ?? at` дає РІВНО стару поведінку. Міграції не потрібно.
+ */
+export interface Claim { who: string; at: string; reason: string; touchedAt?: string }
 export type EventKind = "take" | "take-after-ttl" | "steal" | "release";
 export interface LockEvent extends Claim { kind: EventKind; lostBy?: string }
 
 export interface LockView {
   held: boolean;
   claim: Claim | null;
+  /** Вік від ВЗЯТТЯ — лише для показу людині («тримає 184 хв»). */
   ageMin: number;
+  /** Скільки хвилин ланцюг НЕ торкався замка. Саме це й судить TTL. */
+  idleMin: number;
   /** Прострочений ≠ вільний. Обчислюється НА ЧИТАННІ й сам нічого не звільняє. */
   expired: boolean;
 }
 
 export function viewLock(claim: Claim | null, now: Date): LockView {
-  if (!claim) return { held: false, claim: null, ageMin: 0, expired: false };
+  if (!claim) return { held: false, claim: null, ageMin: 0, idleMin: 0, expired: false };
   const ageMin = Math.floor((now.getTime() - new Date(claim.at).getTime()) / 60_000);
-  return { held: true, claim, ageMin, expired: ageMin >= TTL_MIN };
+  // 🔴 Немає `touchedAt` (стара заявка) → рахуємо від взяття, тобто як було.
+  const idleMin = Math.floor((now.getTime() - new Date(claim.touchedAt ?? claim.at).getTime()) / 60_000);
+  return { held: true, claim, ageMin, idleMin, expired: idleMin >= TTL_MIN };
 }
 
 export type Verdict =
-  | { ok: true; kind: EventKind; note: string }
+  | { ok: true; kind: EventKind | "touch"; note: string }
   | { ok: false; code: number; lines: string[] };
 
 /**
@@ -60,12 +79,33 @@ export type Verdict =
  * лишається ЗАЙНЯТИМ, і забрати його можна лише ЯВНОЮ дією, яка лишає подію.
  */
 export function decide(
-  op: "take" | "release" | "steal",
+  op: "take" | "release" | "steal" | "touch",
   view: LockView,
   me: string,
   reason: string,
   afterTtl: boolean,
 ): Verdict {
+  /**
+   * 🔴 ДОТИК — FAIL-CLOSED, І ЦЕ ДРУГА ПОЛОВИНА РІШЕННЯ ПРО TTL. Ланцюг торкається
+   * замка на кожному кроці: доти, доки він працює, замок не старіє. І та сама дія
+   * відповідає на питання «а він іще мій?» — якщо замок перехопили, крок ПАДАЄ, а не
+   * їде далі мовчки під чужим замком. Тиха робота під чужим замком і є те, що
+   * робить крадіжку невидимою.
+   */
+  if (op === "touch") {
+    if (!view.held) return { ok: false, code: 6, lines: [
+      "🔴 ДОТИК ДО ПОРОЖНЬОГО ЗАМКА: заявки немає — отже ланцюг працює без замка.",
+      "   Це не дрібниця: далі йдуть кроки, що чіпають спільне дерево.",
+    ] };
+    const c = view.claim!;
+    if (c.who !== me) return { ok: false, code: 7, lines: [
+      `🔴 ЗАМОК УЖЕ НЕ ТВІЙ — його тримає ${c.who} з ${c.at} (${view.ageMin} хв).`,
+      `   робить: ${c.reason}`,
+      "   Ланцюг зупиняється: працювати під чужим замком не можна навіть «дочитавши крок».",
+    ] };
+    return { ok: true, kind: "touch", note: `дотик ${me}` };
+  }
+
   if (op === "take") {
     if (!view.held) return { ok: true, kind: "take", note: "замок вільний" };
     const c = view.claim!;
@@ -76,17 +116,17 @@ export function decide(
     ];
     if (!view.expired) {
       return { ok: false, code: 4, lines: [...head,
-        `   TTL ${TTL_MIN} хв ще не вийшов. Не бери руками — спитай ${c.who}.`,
+        `   TTL ${TTL_MIN} хв БЕЗДІЯЛЬНОСТІ ще не вийшов (без дотику ${view.idleMin} хв). Не бери руками — спитай ${c.who}.`,
         `   Якщо це аварія: --steal --reason="…" (лишить слід, який видно ПОТІМ).`] };
     }
     if (!afterTtl) {
       return { ok: false, code: 5, lines: [...head,
-        `   ⏳ TTL ${TTL_MIN} хв ВИЙШОВ (${view.ageMin} хв), але замок НЕ звільнився сам:`,
+        `   ⏳ TTL ${TTL_MIN} хв ВИЙШОВ: без жодного дотику ${view.idleMin} хв (узято ${view.ageMin} хв тому), але замок НЕ звільнився сам:`,
         "   мовчазне звільнення за таймером — це крадіжка без імені й без причини.",
         `   Перехопити явно: --take --after-ttl (подію запишу я, причину теж).`] };
     }
     return { ok: true, kind: "take-after-ttl",
-      note: `перехоплено після TTL: тримач ${c.who}, вік ${view.ageMin} хв (${c.at}), робив: ${c.reason}` };
+      note: `перехоплено після TTL: тримач ${c.who}, без дотику ${view.idleMin} хв, вік ${view.ageMin} хв (${c.at}), робив: ${c.reason}` };
   }
 
   if (op === "steal") {
@@ -192,7 +232,23 @@ export function claimOver(repo: string, c: Claim): void {
 
 export function applyVerdict(repo: string, v: Extract<Verdict, { ok: true }>, me: string, reason: string, prev: Claim | null): void {
   const now = new Date().toISOString();
-  const c: Claim = { who: me, at: now, reason: reason.trim() || v.note };
+  /**
+   * 🔴 ДОТИК НЕ ПИШЕ В ЖУРНАЛ І НЕ ПЕРЕПИСУЄ ЗАЯВКУ. Він оновлює РІВНО одне поле —
+   * `touchedAt`, — зберігаючи `who`/`at`/`reason` як були. Дві причини, обидві
+   * заміряні на цьому ж проєкті:
+   *   · журнал append-only і є ІСТОРІЄЮ; дотик на кожному кроці залив би його
+   *     сотнями рядків за коло і зробив нечитанним саме тоді, коли по ньому
+   *     відновлюють хід подій;
+   *   · `lossFor` шукає в журналі take/steal — зайві події зламали б відповідь на
+   *     питання «хто в мене забрав».
+   * Тобто дотик змінює СТАН, а не історію.
+   */
+  if (v.kind === "touch") {
+    if (!prev) throw new Error("дотик без заявки — стан замка змінився між рішенням і записом");
+    writeFileSync(claimPath(repo), JSON.stringify({ ...prev, touchedAt: now }));
+    return;
+  }
+  const c: Claim = { who: me, at: now, reason: reason.trim() || v.note, touchedAt: now };
   if (v.kind === "release") { unlinkSync(claimPath(repo)); }
   else if (v.kind === "take") { if (!claimFresh(repo, c)) throw new Error("гонка на взятті: замок перехопили між читанням і записом — спробуй ще раз"); }
   else { claimOver(repo, c); }
@@ -236,10 +292,13 @@ export function cli(argv: string[], repo: string, now = new Date()): { code: num
     return { code: 0, out };
   }
 
-  const op = has("take") ? "take" : has("release") ? "release" : has("steal") ? "steal" : null;
-  if (!op) return { code: 2, out: ["🔴 потрібна дія: --status | --take | --release | --steal"] };
+  const op = has("take") ? "take" : has("release") ? "release" : has("steal") ? "steal"
+    : has("touch") ? "touch" : null;
+  if (!op) return { code: 2, out: ["🔴 потрібна дія: --status | --take | --release | --steal | --touch"] };
   if (!me) return { code: 2, out: ["🔴 --who= обовʼязково: замок без імені тримача не відповідає на єдине питання, заради якого існує"] };
   if (op === "take" && !reason.trim()) return { code: 2, out: ["🔴 --take без --reason= заборонено: той, хто прийде, має бачити НЕ лише що зайнято, а й що саме робиться"] };
+
+
 
   /**
    * 🔴 ПЕРЕД ВЗЯТТЯМ — ПОДИВИТИСЬ ЗА ДРУГИМ ВІДОМИМ ШЛЯХОМ.
@@ -258,6 +317,21 @@ export function cli(argv: string[], repo: string, now = new Date()): { code: num
       `   Каталог замка колись залежав від cwd, тож ця заявка справжня, просто не там.`,
       `   Домовитись із тримачем; зняти можна лише руками, з того ж каталогу.`,
     ] };
+  }
+
+  /**
+   * 🔴 ДОТИК ІДЕ ОКРЕМИМ ШЛЯХОМ, ПІСЛЯ перевірки чужих заявок і ПЕРЕД спільним `decide`.
+   * Порядок не випадковий і не косметичний: `#250j` бере зріз джерела МІЖ гілкою
+   * `take` і викликом `decide`, тож блок, вставлений між ними, вирізає з того зрізу
+   * перевірку `foreignHold` — гейт червонів на робочому коді. Це та сама крихка межа,
+   * від якої застерігає правило 9. Дотику ця сусідство нічим не заважає: `foreignHold`
+   * працює лише під `op === "take"`.
+   */
+  if (op === "touch") {
+    const v = decide("touch", view, me, reason, false);
+    if (!v.ok) return { code: v.code, out: v.lines };
+    applyVerdict(repo, v, me, reason, view.claim);
+    return { code: 0, out: [`✅ дотик: замок твій, TTL бездіяльності відлічується наново`] };
   }
 
   const v = decide(op, view, me, reason, has("after-ttl"));
