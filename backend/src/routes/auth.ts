@@ -15,6 +15,7 @@ import {
   ssoKeyAccepted,
   verifyAssertion,
 } from "../auth/trackerSso.js";
+import { rosterPerson, type RosterRow } from "../auth/trackerRoster.js";
 
 export const authRouter = Router();
 
@@ -225,4 +226,71 @@ authRouter.post("/tracker-identity", async (req, res) => {
     fullName: user.full_name,
     active: user.is_active,
   });
+});
+
+/**
+ * The roster the time tracker pulls to learn who exists.
+ *
+ * Same shared key as tracker-identity, same order: unconfigured before key check, so a
+ * deployment without the key never reaches the comparison.
+ *
+ * Identity only. The tracker creates accounts from this and switches them on itself; nothing
+ * here grants access there. `trackerEnabled` is the flag from Settings and travels as a hint,
+ * not as a decision.
+ *
+ * Sends `scope` rather than the role key. There are eight roles today and an admin can create
+ * more at runtime, so any hardcoded list on the far side goes stale; data_scope is the axis that
+ * survives — the same collapse scopeCompatRole already does in auth/rbac.ts.
+ */
+/**
+ * 🔴 ВІДОМА МЕЖА, ЧИННА ПІСЛЯ ЗАПУСКУ: ВІДПОВІДЬ НЕ МАЄ `updatedAt` І ETag.
+ *
+ * Записано в коді навмисно, а не в переписці: рішення запускати ухвалене свідомо
+ * (власник, 02.09.2026), а обмеження лишилось і побачити його має ТОЙ, ХТО ЧИТАТИМЕ
+ * ЦЕЙ РОУТ, а не той, хто був у тому чаті.
+ *
+ * ЩО САМЕ НЕ ПРАЦЮЄ. Реєстр віддає скоуп людини (`scope`, `team`, `active`,
+ * `trackerEnabled`), але не каже, КОЛИ ці поля востаннє змінювались. Отже трекер не
+ * може ні спитати «чи змінилось» (немає ETag / If-None-Match), ні порівняти мітку часу.
+ * Наслідок конкретний: людину перевели в іншу команду, звузили роль або вимкнули —
+ * трекер триматиме СТАРИЙ доступ до наступного ПОВНОГО опитування. Скільки це триває,
+ * визначає розклад на боці трекера, і ми ним не керуємо.
+ *
+ * ⚠️ ЦЕ НЕ «повільна синхронізація», а розширений доступ у вікні між зміною і
+ * опитуванням. Звуження прав доїжджає рівно так само повільно, як розширення.
+ *
+ * ЩО ЗАКРИЄ: поле часу зміни в рядку (`updated_at` у `users`/`roles`, зведене в
+ * максимум по вибірці) або ETag на весь реєстр — і `If-None-Match` на боці трекера.
+ * Питання відкрите до Романа з 02.09.2026; поки його немає, межу тримає цей коментар.
+ */
+authRouter.get("/tracker-users", async (req, res) => {
+  if (!ssoConfigured()) {
+    return res.status(503).json({ error: "not_configured" });
+  }
+  if (!ssoKeyAccepted(req.header("X-Dashboard-Sso-Key"))) {
+    return res.status(401).json({ error: "bad_key" });
+  }
+
+  // Columns named one by one: gate #17e forbids SELECT *, and #17e2 forbids spreading a row into
+  // a response. Both exist so a column added later cannot ride out to another system unnoticed.
+  const rows = await pool.query<RosterRow>(
+    `SELECT u.id,
+            u.email,
+            COALESCE(m.name, u.full_name, u.email) AS name,
+            u.is_active,
+            u.tracker_enabled,
+            t.name AS team_name,
+            r.data_scope
+       FROM users u
+       LEFT JOIN managers m ON m.id = u.manager_id
+       LEFT JOIN teams t ON t.id = u.team_id
+       LEFT JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
+      ORDER BY u.email`
+  );
+
+  // 🔴 Формування відповіді — у `rosterPerson` (auth/trackerRoster.ts), і це не косметика:
+  // поки воно жило тут, `#323` не мав ЧОГО перевіряти множиною і стеріг лише написання.
+  // Трекер зберігає `id` у `dashboard_user_id`, щоб зміна пошти з будь-якого боку не
+  // розділила людину на два акаунти; зіставлення все одно йде поштою.
+  res.json({ people: rows.rows.map(rosterPerson) });
 });
