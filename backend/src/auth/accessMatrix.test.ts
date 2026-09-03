@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsApi, needsMatrix, API_BASE } from "../testMode.js";
-import { ACCESS_MATRIX, ACCESS_ROLES } from "./accessMatrix.js";
+import { ACCESS_MATRIX, ACCESS_ROLES , ACCEPTED_MATRIX_SHIFTS, auditShifts} from "./accessMatrix.js";
 import { MOUNTS } from "./routeInventory.js";
 import { appPaths, readIndex } from "./routeScan.js";
 
@@ -171,6 +171,47 @@ test("#11c ФОРМАТ ШЛЯХІВ: зліпок і проба говорят�
     + "зберігає шлях БЕЗ `/api`, або зʼявився новий mount, не записаний у MOUNTS. Проба "
     + "піде в неіснуючий URL і поверне 404 — тобто «дозволено» для кожного рядка:\n  "
     + bad.join("\n  "));
+});
+
+/**
+ * 🔁 #325–#325b — КОЖНЕ ЗРУШЕННЯ ЗЛІПКА НАЗВАНЕ ПОІМЕННО, І РЕЄСТР НЕ КОВДРА.
+ *
+ * 🔴 ПРИВІД ЗАМІРЯНИЙ. `#11` проти живого прода 03.09.2026 назвав 11 клітинок у 10
+ * рядках; власник узаконив усі одинадцять. Перезняти зліпок мовчки означало б стерти
+ * єдиний сигнал, який їх виявив, — тому кожна клітинка має запис із причиною, датою
+ * й автором рішення, як у `RETIRED_GATES` і `EXPECTED_REDS`.
+ *
+ * ⚠️ ДРУГИЙ БІК ВАЖЛИВІШИЙ ЗА ПЕРШИЙ: запис про клітинку, яка не рухалась, гірший за
+ * відсутність реєстру — під ним мовчки пройде наступний справжній дрейф. Тому
+ * `auditShifts` звіряє реєстр ЗІ ЗЛІПКОМ, а не сам із собою.
+ */
+test("#325 кожне узаконене зрушення справді лежить у зліпку в оголошеному стані", () => {
+  // Порожній скоуп = ПРОВАЛ: 11 клітинок узаконено цим же комітом, тож реєстр не може бути порожнім.
+  assert.ok(ACCEPTED_MATRIX_SHIFTS.length >= 11,
+    `🔴 у реєстрі ${ACCEPTED_MATRIX_SHIFTS.length} записів — узаконено було 11, значить реєстр схуд мовчки`);
+  const problems = auditShifts(ACCESS_MATRIX);
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+test("#325b 🪞 ДЗЕРКАЛО: аудит ловить і мертвий запис, і незастосоване зрушення", () => {
+  const rows: typeof ACCESS_MATRIX = [
+    { method: "GET", path: "/api/x", cls: "GET", allow: ["ceo"], deny: ["hr"] },
+    { method: "POST", path: "/api/y", cls: "deny-only", allow: [], deny: ["hr"] },
+  ];
+  const ok = { decidedOn: "2026-09-02", decidedBy: "власник", why: "причина" };
+  assert.deepEqual(auditShifts(rows, [{ method: "GET", path: "/api/x", role: "ceo", to: "allow", ...ok }]), [],
+    "🔴 на справному наборі аудит мусить мовчати");
+
+  const bad: [string, Parameters<typeof auditShifts>[1]][] = [
+    ["запис про неіснуючий рядок", [{ method: "GET", path: "/api/НЕМА", role: "ceo", to: "allow", ...ok }]],
+    ["оголошено дозволеним, а він у deny", [{ method: "GET", path: "/api/x", role: "hr", to: "allow", ...ok }]],
+    ["оголошено прибраним, а він на місці", [{ method: "POST", path: "/api/y", role: "hr", to: "dropped", ...ok }]],
+    ["запис без причини", [{ method: "GET", path: "/api/x", role: "ceo", to: "allow", ...ok, why: " " }]],
+    ["подвійний запис", [{ method: "GET", path: "/api/x", role: "ceo", to: "allow", ...ok },
+                         { method: "GET", path: "/api/x", role: "ceo", to: "allow", ...ok }]],
+  ];
+  for (const [name, reg] of bad)
+    assert.ok(auditShifts(rows, reg).length > 0, `🔴 «${name}» аудит НЕ побачив — реєстр став ковдрою`);
 });
 
 test("#11b ЗЛІПОК ЦІЛИЙ: усі ролі відомі, класи проби коректні", () => {
