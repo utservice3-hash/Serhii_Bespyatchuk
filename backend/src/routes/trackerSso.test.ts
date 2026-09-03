@@ -372,7 +372,8 @@ test("#312b рішення «кому відкривати трекер» — о
 // зайняті правками власника, тож беру з запасом, а не наступні вільні.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("#320 без ключа реєстр людей не віддається", needsBackendEnv(), async () => {
+test("#320 без ключа реєстр людей не віддається", needsBackendEnv(), async (t) => {
+  if (await skipUnlessTracker(t)) return;
   const r = await callRouter("GET", "/api/auth/tracker-users", {});
 
   // Реєстр — це пошти й імена всієї компанії. Єдине, що стоїть між ним і будь-ким, — цей ключ.
@@ -380,7 +381,8 @@ test("#320 без ключа реєстр людей не віддається",
   assert.equal(r.body?.error, "bad_key");
 });
 
-test("#321 чужий ключ теж не проходить", needsBackendEnv(), async () => {
+test("#321 чужий ключ теж не проходить", needsBackendEnv(), async (t) => {
+  if (await skipUnlessTracker(t)) return;
   const r = await callRouter("GET", "/api/auth/tracker-users",
     { "x-dashboard-sso-key": "не-наш-ключ" });
 
@@ -397,7 +399,8 @@ test("#321 чужий ключ теж не проходить", needsBackendEnv(
  *
  * Заразом це перший тест на `ssoKeyAccepted` узагалі: досі її не перевіряв ніхто.
  */
-test("#322 🪞 ДЗЕРКАЛО: правильний ключ приймається", needsBackendEnv(), async () => {
+test("#322 🪞 ДЗЕРКАЛО: правильний ключ приймається", needsBackendEnv(), async (t) => {
+  if (await skipUnlessTracker(t)) return;
   const { ssoKeyAccepted } = await import("../auth/trackerSso.js");
 
   assert.equal(ssoKeyAccepted(process.env.TRACKER_SSO_KEY), true, "свій ключ мусить проходити");
@@ -406,26 +409,60 @@ test("#322 🪞 ДЗЕРКАЛО: правильний ключ приймаєт
   assert.equal(ssoKeyAccepted(undefined), false);
 });
 
-test("#323 реєстр віддає особу й підказки, але не роль і не права", () => {
-  const body = handlerBody(read("backend/src/routes/auth.ts"),
-    'authRouter.get("/tracker-users"');
+/**
+ * 🔴 ПЕРША РЕДАКЦІЯ #323 БУЛА ТВЕРДЖЕННЯМ ПРО ОРФОГРАФІЮ, А НЕ ГЕЙТОМ.
+ *
+ * Вона забороняла підрядок `role_override }` і лишалась ЗЕЛЕНОЮ на РОБОЧОМУ витоку:
+ * заміряно 01.09.2026 — я додав у SELECT `COALESCE(u.role_override, u.role) AS role_key`,
+ * у відповідь `roleKey`, викликав обробник і отримав
+ * `{"id":7,…,"scope":"company","roleKey":"hr"}`. Гейт не помітив. Той самий клас, що #304.
+ *
+ * Тепер твердження про ВЛАСТИВІСТЬ: множина ключів кожного елемента звіряється ТОЧНО.
+ * Будь-яке зайве поле червонить, як би його не написали.
+ *
+ * ⚠️ ДОЗВОЛЕНИЙ ПЕРЕЛІК ЖИВЕ ТУТ, А НЕ ІМПОРТУЄТЬСЯ З КОДУ, ЩО ПЕРЕВІРЯЄТЬСЯ. Інакше це
+ * була б перевірка «A = B», де B — те, чим щойно означили A: додавши поле і в мапер, і в
+ * експортований перелік, автор отримав би зелене. Список звіряється з рішенням власника
+ * («лише особа й підказки»), і міняти його можна лише свідомо, разом із цим коментарем.
+ */
+const ДОЗВОЛЕНІ_ПОЛЯ = ["active", "email", "id", "name", "scope", "team", "trackerEnabled"];
 
-  // scope з data_scope, а не з ключа ролі: ролей вісім, адмін створює нові через інтерфейс, і
-  // будь-який захардкоджений перелік на боці трекера застаріє мовчки.
-  assert.match(body, /r\.data_scope/, "scope мусить братися з roles.data_scope");
-  assert.doesNotMatch(body, /role_override\s*\}/, "ключ ролі за межі дашборду не їде");
+test("#323 реєстр віддає РІВНО дозволені поля — множина ключів звіряється точно", async () => {
+  const { rosterPerson } = await import("../auth/trackerRoster.js");
 
-  // Ті самі два правила, що стережуть гейти #17e і #17e2, але названі тут поіменно.
-  //
-  // Дивимось на КОД без коментарів: перша редакція цього тесту впала на власному ж коментарі,
-  // де слова «SELECT *» стояли як пояснення заборони. Рівно та вада, про яку попереджає #304 —
-  // перевіряти треба властивість, а не написання.
-  const code = body.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.match(code, /\bu\.id\b/, "віддаємо id — під нього в трекері є dashboard_user_id");
-  assert.doesNotMatch(code, /SELECT \*/i, "колонки перелічуються поіменно");
-  assert.doesNotMatch(code, /\.\.\.r\b/, "рядок БД не розпаковується у відповідь");
+  // Рядок навмисно несе КОЛОНКИ, ЯКИХ ВІДДАВАТИ НЕ МОЖНА: якби мапер був копією рядка,
+  // вони приїхали б у відповідь. Саме так виглядав би витік ролі, який гейт мусить ловити.
+  const row = {
+    id: 7, email: "hto@uts.ua", name: "Хтось", is_active: true, tracker_enabled: false,
+    team_name: "РПК", data_scope: "company",
+    role_key: "hr", password_hash: "$2b$СЕКРЕТ", role_override: "admin",
+  } as unknown as Parameters<typeof rosterPerson>[0];
 
-  // Невідома роль мусить давати НАЙМЕНШІ права, а не найбільші.
-  assert.match(body, /: "own"/, "невідомий data_scope згортається в own");
+  // Через JSON — рівно те, що піде дротом: `undefined` зникає, геттери розгортаються.
+  const people = JSON.parse(JSON.stringify({ people: [rosterPerson(row)] })).people;
+  assert.equal(people.length, 1, "🔴 мапер не віддав елемента — перевіряти множину нема на чому");
+
+  const keys = Object.keys(people[0]).sort();
+  assert.ok(keys.length > 0, "🔴 порожній обʼєкт: рівність множин зійшлася б тривіально");
+  assert.deepEqual(keys, ДОЗВОЛЕНІ_ПОЛЯ,
+    `🔴 набір полів реєстру змінився: ${keys.join(", ")}. Зайве поле їде у ЧУЖУ систему за спільним ключем — `
+    + "додавати можна лише свідомо, разом із рішенням власника про те, що трекеру можна знати.");
+});
+
+test("#323b 🪞 ДЗЕРКАЛО: мапер — БІЛИЙ СПИСОК, і роут віддає саме його", async () => {
+  const { rosterPerson } = await import("../auth/trackerRoster.js");
+
+  // Обидва боки межі: невідомий scope згортається в НАЙМЕНШІ права, відомі проходять.
+  const base = { id: 1, email: "a@b", name: null, is_active: false, tracker_enabled: true,
+    team_name: null, data_scope: null };
+  assert.equal(rosterPerson(base).scope, "own", "🔴 невідома роль мусить давати own, не company");
+  assert.equal(rosterPerson({ ...base, data_scope: "team" }).scope, "team");
+  assert.equal(rosterPerson({ ...base, data_scope: "company" }).scope, "company");
+  assert.equal(rosterPerson(base).name, "a@b", "🔴 порожнє імʼя мусить падати на пошту, а не бути null");
+
+  // Роут не має права додавати поля ПІСЛЯ мапера — інакше множина вище нічого не стереже.
+  const body = handlerBody(read("backend/src/routes/auth.ts"), 'authRouter.get("/tracker-users"');
+  assert.match(body, /res\.json\(\{ people: rows\.rows\.map\(rosterPerson\) \}\);/,
+    "🔴 відповідь збирається не рівно мапером — множина ключів перестає бути гарантією");
 });
 

@@ -15,6 +15,7 @@ import {
   ssoKeyAccepted,
   verifyAssertion,
 } from "../auth/trackerSso.js";
+import { rosterPerson, type RosterRow } from "../auth/trackerRoster.js";
 
 export const authRouter = Router();
 
@@ -251,15 +252,7 @@ authRouter.get("/tracker-users", async (req, res) => {
 
   // Columns named one by one: gate #17e forbids SELECT *, and #17e2 forbids spreading a row into
   // a response. Both exist so a column added later cannot ride out to another system unnoticed.
-  const rows = await pool.query<{
-    id: number;
-    email: string;
-    name: string | null;
-    is_active: boolean;
-    tracker_enabled: boolean;
-    team_name: string | null;
-    data_scope: string | null;
-  }>(
+  const rows = await pool.query<RosterRow>(
     `SELECT u.id,
             u.email,
             COALESCE(m.name, u.full_name, u.email) AS name,
@@ -274,19 +267,9 @@ authRouter.get("/tracker-users", async (req, res) => {
       ORDER BY u.email`
   );
 
-  res.json({
-    people: rows.rows.map((r) => ({
-      // The tracker stores this in dashboard_user_id so that changing an email on either side
-      // later does not split one person into two accounts. Matching is still done by email.
-      id: r.id,
-      email: r.email,
-      name: r.name ?? r.email,
-      active: r.is_active,
-      trackerEnabled: r.tracker_enabled === true,
-      team: r.team_name,
-      // An unknown role means the least privilege, never the most: a role deleted from the table
-      // must not silently promote whoever held it.
-      scope: r.data_scope === "company" || r.data_scope === "team" ? r.data_scope : "own",
-    })),
-  });
+  // 🔴 Формування відповіді — у `rosterPerson` (auth/trackerRoster.ts), і це не косметика:
+  // поки воно жило тут, `#323` не мав ЧОГО перевіряти множиною і стеріг лише написання.
+  // Трекер зберігає `id` у `dashboard_user_id`, щоб зміна пошти з будь-якого боку не
+  // розділила людину на два акаунти; зіставлення все одно йде поштою.
+  res.json({ people: rows.rows.map(rosterPerson) });
 });
