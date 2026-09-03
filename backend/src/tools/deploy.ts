@@ -37,7 +37,7 @@ import { parseTap, judgeDelta } from "./testDelta.js";
 import { diffGates, acceptRetired } from "../testManifest.js";
 import { FAIL_MARK, failureNames, EXPECTED_PASS_MARK, expectedPassNames } from "../testRunGate.js";
 import { acceptExpectedReds } from "../expectedReds.js";
-import { testsAtRef, parseManifestTests } from "./gateCount.js";
+import { testsAtRef, parseManifestTests, freshManifest } from "./gateCount.js";
 import { rmSync, symlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -287,7 +287,7 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
    * 🔴 КРИТЕРІЙ — ПРИРІСТ, А НЕ КОД 0. Розгорнуто в `testDelta.ts`; тут — механіка
    * двох прогонів. Ціна заміряна: +78 с (worktree+збірка 12.4 с, прогін бази 65.8 с).
    */
-  test: (c) => {
+  test: async (c) => {
     let base = "";
     try {
       // 🔗 База — worktree на sha з health.version У МОМЕНТ ДІЇ (`c.prod`), не з памʼяті.
@@ -358,8 +358,22 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
        * `manifestNow`, інакше «живий» звірялося б зі старим `dist` (та сама пастка,
        * що вже дала хибне «ЗНИКЛИ ГЕЙТИ (11)» 27.08.2026).
        */
-      const lostRaw = diffGates(testsAtRef(c.prod), manifestNow).onlyBefore;
-      const retire = acceptRetired(lostRaw, manifestNow);
+      /**
+       * 🔴 РЕЄСТР ЗНЯТИХ — ТЕЖ ІЗ СВІЖОЇ ЗБІРКИ, А НЕ З ПАМʼЯТІ ПРОЦЕСУ (03.09.2026, HR).
+       *
+       * 📐 27.08 полікували `manifestNow` (рядок вище) і лишили поруч ДРУГОГО читача тієї
+       * самої несвіжості: `acceptRetired`/`RETIRED_GATES` приходять верхнім імпортом, тобто
+       * із `dist`, який `buildBack` (крок 6) знищив і перезібрав ПІСЛЯ того, як цей процес
+       * стартував. Заміряно в одному процесі: на старті реєстр 9 записів, після `buildBack`
+       * у памʼяті ті самі 9, у свіжому `dist` — 10; законне зняття дало `unaccounted` і
+       * зупинку ланцюга, а з другого запуску зникло само. Флак у детекторі втрат.
+       *
+       * ⚠️ Беремо весь модуль, а не лише реєстр: логіка `acceptRetired`/`diffGates` теж
+       * могла змінитись цим самим проходом, і судити нею з памʼяті — та сама помилка.
+       */
+      const fresh = await freshManifest(c.be);
+      const lostRaw = fresh.diffGates(testsAtRef(c.prod), manifestNow).onlyBefore;
+      const retire = fresh.acceptRetired(lostRaw, manifestNow);
       if (retire.problems.length) {
         return { id: "test", ok: false, detail:
           ["🔴 РЕЄСТР ЗНЯТИХ ГЕЙТІВ САМ НЕСПРАВНИЙ — це зупинка ДО будь-яких висновків про приріст:",

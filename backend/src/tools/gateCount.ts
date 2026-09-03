@@ -87,6 +87,54 @@ export function treeTests(beRoot: string = BE_ROOT): string[] {
   return parseManifestTests(src, `дерево (джерело ${file}, не dist)`);
 }
 
+/**
+ * 🔴 ТРЕТІЙ ВИПАДОК ТІЄЇ САМОЇ АСИМЕТРІЇ, І ВІН ВИГЛЯДАЄ ЯК ФЛАК (знайшов HR, 03.09.2026).
+ *
+ * 📐 ЗАМІРЯНО, А НЕ ВИВЕДЕНО З МІРКУВАННЯ. Крок `test` — девʼятий, `buildBack`
+ * (`rm -rf dist && npm run build`) — шостий. Тобто `deploy.js` виконується з `dist`,
+ * який САМ і зносить, а всі його верхньорівневі імпорти лишаються тими, що
+ * завантажились на старті. Відтворено в одному процесі:
+ *   ① на старті: RETIRED_GATES = 9
+ *   ② після buildBack: стара памʼять 9 · свіжий dist 10
+ *   ③ СТАРИЙ реєстр → unaccounted ["#999"] → ланцюг СТАЄ 🔴
+ *      СВІЖИЙ реєстр → unaccounted [] → ланцюг іде далі
+ *
+ * 🔑 ЧОМУ ЦЕ ГІРШЕ ЗА ПРОСТО ПОМИЛКУ: воно САМОЛІКУЄТЬСЯ з другого разу — наступний
+ * запуск стартує вже з новим `dist`. Отже законне зняття гейта читається як диверсія
+ * РІВНО ОДИН РАЗ, а потім зникає. Це і є визначення флака, і флак у детекторі втрат
+ * навчає гортати його очима.
+ *
+ * ⚠️ ЧОМУ НЕ РОЗБІР ДЖЕРЕЛА, як для `MANIFEST_TESTS`. Там масив РЯДКІВ, тут масив
+ * ОБʼЄКТІВ; регулярка по ньому була б крихким розбором усередині детектора втрат —
+ * саме того місця, де хибна тривога дорожча за пропуск. Тому: імпорт СВІЖОГО `dist`
+ * із обходом кешу модулів ПЛЮС доказ, що він справді свіжий — його `MANIFEST_TESTS`
+ * мусить збігтися з розбором ДЖЕРЕЛА. Розійшлись — це СТОП «перезбери», а не вирок.
+ */
+export interface FreshManifest {
+  MANIFEST_TESTS: string[];
+  RETIRED_GATES: readonly { name: string; since: string; reason: string }[];
+  acceptRetired: (lost: readonly string[], alive: readonly string[])
+    => { problems: string[]; accepted: string[]; unaccounted: string[] };
+  diffGates: (before: readonly string[], after: readonly string[])
+    => { onlyBefore: string[]; onlyAfter: string[]; countBefore: number; countAfter: number };
+}
+
+export async function freshManifest(beRoot: string = BE_ROOT): Promise<FreshManifest> {
+  const file = resolve(beRoot, "dist", "testManifest.js");
+  // 🔴 Обхід кешу обовʼязковий: без нього повернеться той самий обʼєкт, що завантажився
+  // на старті процесу, і вся перевірка стане тавтологією «стара памʼять == стара памʼять».
+  const mod = await import(`${pathToFileURL(file).href}?bust=${Date.now()}`);
+  const fromSource = treeTests(beRoot);
+  const d = diffGates(fromSource, mod.MANIFEST_TESTS as string[]);
+  if (d.onlyBefore.length || d.onlyAfter.length) {
+    throw new Error(
+      "🔴 ЗІБРАНИЙ МАНІФЕСТ РОЗІЙШОВСЯ З ДЖЕРЕЛОМ — судити нема за чим, спершу `rm -rf dist && npm run build`.\n"
+      + `   у джерелі, але не в dist (${d.onlyBefore.length}): ${d.onlyBefore.slice(0, 5).join(" · ")}\n`
+      + `   у dist, але не в джерелі (${d.onlyAfter.length}): ${d.onlyAfter.slice(0, 5).join(" · ")}`);
+  }
+  return mod as FreshManifest;
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 const base = process.argv.find((a) => a.startsWith("--base="))?.slice(7);
 // 🔴 ОБИДВІ ГІЛКИ БЕРУТЬ ДЕРЕВО З ДЖЕРЕЛА. Голий рахунок теж: інакше `gateCount` і
