@@ -142,6 +142,7 @@ export const MANIFEST_FILES: string[] = [
   "statistics/financeSnapshot.test.js",
   "auth/matrixAnswer.test.js",
   "auth/rbac.test.js",
+  "auth/roleScopeInput.test.js",
   "auth/scopeInvariants.test.js",
   "core/conversion.test.js",
   "core/money.test.js",

@@ -33,9 +33,16 @@ test("#341 ОБСЯГ РОЛІ: відсутнє значення дає null, �
 });
 
 test("#341b 🪞 ДЗЕРКАЛО: жоден роут не розбирає обсяг самотужки", () => {
-  const dir = path.join(import.meta.dirname, "..", "routes");
+  /**
+   * 🔴 ДЖЕРЕЛО, А НЕ `dist` — і це не дрібниця, а урок цього ж гейта.
+   * Перша редакція брала `import.meta.dirname/../routes`, тобто `dist/routes`, де лежать
+   * зібрані `.js`. Фільтр по `.ts` не знаходив нічого, і гейт «проходив» над ПОРОЖНІМ
+   * простором. Спіймала його власна перевірка на непорожність — саме для цього вона й є.
+   */
+  const dir = path.join(import.meta.dirname, "..", "..", "..", "backend", "src", "routes");
   const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
-  assert.ok(files.length > 0, "🔴 каталог роутів порожній — гейту не було що перевіряти");
+  assert.ok(files.length > 5,
+    `🔴 у ${dir} знайдено ${files.length} файлів роутів — гейту не було що перевіряти`);
 
   const offenders: string[] = [];
   for (const f of files) {
