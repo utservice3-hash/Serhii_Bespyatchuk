@@ -10,6 +10,28 @@ import path from "node:path";
  */
 const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 
+/**
+ * 🔴 ЧИСТА ФУНКЦІЯ НЕ СМІЄ ЗАЛЕЖАТИ ВІД `.env` — а `#27b` і `#29` залежали.
+ *
+ * Обидва перевіряють чисту логіку: розбір телефонів контакту і київський штамп
+ * вікна. Ні БД, ні Kommo вони не торкаються. Але ланцюг імпортів тягне `config.js`
+ * (`kommo/client.ts:2`, `syncCalls.ts:12`), а той вимагає `DATABASE_URL` ЩЕ НА
+ * ЗАВАНТАЖЕННІ модуля — тож у стенді, де `.env` немає, обидва ПАДАЛИ, а не скіпались.
+ *
+ * 📐 Заміряно 04.09.2026 у стенді: 900 тестів, 623 pass, **2 fail — рівно ці два**.
+ * Різниця між «впав» і «скіпнувся» тут не косметична: постійне червоне читається як
+ * «та воно завжди червоніє», і наступна СПРАВЖНЯ регресія поїде тим самим рядком.
+ * Скіп теж не підходить — це гейти, які МОЖУТЬ виконатись будь-де, і мусять.
+ *
+ * `??=` навмисне: де оточення справжнє, воно й лишається, і тест бачить прод-значення.
+ */
+function stubEnvForPureImport(): void {
+  process.env.DATABASE_URL ??= "postgresql://stub@localhost/stub";
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "x";
+}
+
 test("#27 ДЗВІНКИ: запис, дедуп батча, звʼязка номер→клієнт", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
@@ -151,6 +173,7 @@ test("#27 ДЗВІНКИ: запис, дедуп батча, звʼязка но
 });
 
 test("#27b ТЕЛЕФОНИ КОНТАКТУ: беремо ВСІ, не лише перший", async () => {
+  stubEnvForPureImport();
   const { allPhones } = await import("./backfillContactPhones.js");
   const c = { id: 1, name: "К", custom_fields_values: [
     { field_code: "PHONE", values: [{ value: "+38 (067) 111-22-33" }, { value: "0509998877" }, { value: "—" }] },
@@ -169,6 +192,7 @@ test("#29 ВІКНО ДЛЯ RINGOSTAT — КИЇВСЬКЕ, а не UTC", async 
   // місцевий час. Живий A/B проти API: UTC-вікно → 1 дзвінок, київське → 530.
   // Симптом був підступний: `job_runs` зелений, помилок нема, просто порожня
   // відповідь. Тест ловить саме розбіжність, а не «джоба відпрацювала».
+  stubEnvForPureImport();
   const { __kyivStampForTest } = await import("./syncCalls.js");
   // 2026-08-05T08:50:00Z — це 11:50 у Києві (UTC+3 влітку).
   const d = new Date("2026-08-05T08:50:00.000Z");
