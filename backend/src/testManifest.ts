@@ -27,6 +27,7 @@ export const MANIFEST_FILES: string[] = [
   "core/clientCard.test.js",
   "versionStale.test.js",
   "clientStale.test.js",
+  "bundleBuildSha.test.js",
   "tools/deploySplit.test.js",
   "tools/zoneMap.test.js",
   "tools/hooks.test.js",
@@ -460,6 +461,9 @@ export const MANIFEST_TESTS: string[] = [
   "#330 РІЗНІ ЗБІРКИ — ВКЛАДКА СТАРА",
   "#330b 🪞 ДЗЕРКАЛО: ОДНАКОВІ ЗБІРКИ — ПЛАШКИ НЕМАЄ",
   "#330c НЕВІДОМЕ ЛИШАЄТЬСЯ НЕВІДОМИМ, А НЕ СТАЄ «ЗБІГАЄТЬСЯ»",
+  // bundleBuildSha.test.ts — артефакт: без вшитої sha плашка мертва тихо
+  "#331 БАНДЛ НЕСЕ SHA СВОЄЇ ЗБІРКИ",
+  "#331b 🪞 ДЗЕРКАЛО: «unknown» замість sha — це НЕ збірка з версією",
   // core/companyCode.test.ts — що вважаємо кодом підприємства
   "#41 НОРМАЛІЗАЦІЯ КОДУ: беремо лише осмислені довжини",
   "#41b КЛАС КОДУ: ЄДРПОУ й ІПН — РІЗНІ ключі, не зводяться в один",

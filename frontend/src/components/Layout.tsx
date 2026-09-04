@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { HealthBanner } from "./HealthBanner";
+import { VersionBanner } from "./VersionBanner";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
@@ -383,6 +384,13 @@ export function Layout({
         {/* 🚨 Банер тривог — лише керівництву (scope-compat "admin" = admin/ceo/opdir/kvp).
             Гейт потрібен і тут, і на бекенді: без фронтового менеджер отримав би 403
             і побачив банер «сигналізація недоступна» — шум замість сигналу. */}
+        {/* 🖥 Стара збірка у ВКЛАДЦІ — показуємо ВСІМ ролям, на відміну від сусіда
+            нижче. Той про несправність системи (це справа керівництва), а цей —
+            про конкретну вкладку конкретної людини; найчастіше тижнями відкритий
+            дашборд саме в менеджера. Стоїть ВИЩЕ за банер тривог свідомо: якщо
+            людина бачить старий продукт, решта сигналів на екрані теж можуть бути
+            старими, і читати їх треба вже після оновлення. */}
+        <VersionBanner />
         {role === "admin" && <HealthBanner />}
         {children}
       </main>
