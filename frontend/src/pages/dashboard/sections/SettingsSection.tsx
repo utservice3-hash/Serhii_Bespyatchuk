@@ -356,9 +356,11 @@ function RolesTab() {
     const scope = window.prompt(
       "Обсяг даних — чиї показники бачить роль?\n"
         + SCOPES.map((s2, i) => `${i + 1} — ${s2.label} (${s2.sub})`).join("\n"),
-      "1");
+      "");
     if (!scope) return;
     const picked = SCOPES[Number(scope) - 1];
+    // 🔴 БЕЗ ПЕРЕДЗАПОВНЕННЯ: попередня редакція підставляла "1" (= «свої»), тобто Enter
+    // без читання знову давав найвужчий обсяг мовчки — рівно те, від чого ми й ішли.
     if (!picked) { alert("Обсяг не обрано — роль не створено. Введіть 1, 2 або 3."); return; }
     try { await createRole({ key, name, dataScope: picked.key, screenAccess: {}, permissions: {} }); await reload(); setSel(key.replace(/[^a-z0-9_]/g, "")); }
     catch (e) { alert(err(e)); }

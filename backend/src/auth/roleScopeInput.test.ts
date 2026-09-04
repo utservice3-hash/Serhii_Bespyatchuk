@@ -60,3 +60,51 @@ test("#341b 🪞 ДЗЕРКАЛО: жоден роут не розбирає о�
     "🔴 роут розбирає обсяг даних сам. Копія розійдеться з оригіналом тихо — саме так "
     + "мовчазний `own` і прожив непоміченим:\n  " + offenders.join("\n  "));
 });
+
+/**
+ * #342 / #342b — ВІДСУТНІЙ ОБСЯГ РОЗВʼЯЗУЄТЬСЯ В НАЙВУЖЧЕ, А НЕ У «ВСЮ КОМПАНІЮ».
+ *
+ * 🔴 ЧОМУ ЦЕ ОКРЕМО ВІД #341. Той стереже ДВЕРІ ЗАПИСУ: що приймає роут. А рішення
+ * «яким є обсяг ролі, коли його немає» ухвалюється на ЧИТАННІ — `rbac.scopeCompatRole`
+ * має власний фолбек. Заміряно 04.09.2026: заміна там `?? "own"` на `?? "company"`
+ * лишала #341, #341b і матричні гейти ЗЕЛЕНИМИ. Тобто рівно та умова червоніння, якої
+ * вимагає ТЗ 5.3 («зроби відсутність значення рівносильною company → червоніє»), не
+ * стереглася нічим.
+ *
+ * ⚠️ Напрям має значення: `own` тут — не «дефолт зі смаку», а fail-closed. Помилка в цей
+ * бік ховає дані від того, кому можна (видно одразу, скаржаться). Помилка в інший —
+ * роздає чужі дані мовчки, і не скаржиться ніхто.
+ */
+const stubEnv = (): void => {
+  process.env.DATABASE_URL ??= "postgresql://stub@localhost/stub";
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "x";
+};
+
+test("#342 НЕВІДОМИЙ ОБСЯГ РОЛІ → найвужче, а не «вся компанія»", async () => {
+  stubEnv();
+  const { scopeCompatRole } = await import("./rbac.js");
+  type Def = Parameters<typeof scopeCompatRole>[1];
+  // Роль, якої немає в кеші, — найчастіший шлях сюди: fail-closed при збої завантаження.
+  assert.equal(scopeCompatRole("роль_якої_немає", undefined), "manager",
+    "🔴 невідома роль отримала ширший за найвужчий обсяг — збій кеша ролей роздав би дані");
+  // Роль є, але обсяг не оголошений — той самий випадок, що завів нас сюди.
+  const noScope = { key: "x", name: "x", builtIn: false, screenAccess: {}, permissions: {} } as unknown as Def;
+  assert.equal(scopeCompatRole("x", noScope), "manager",
+    "🔴 роль без оголошеного обсягу бачить більше за найвужче — саме це забороняє ТЗ 5.3");
+});
+
+test("#342b 🪞 ДЗЕРКАЛО: оголошені обсяги працюють, і admin_scope далі підіймає", async () => {
+  stubEnv();
+  const { scopeCompatRole } = await import("./rbac.js");
+  type Def = Parameters<typeof scopeCompatRole>[1];
+  const def = (dataScope: string, permissions: Record<string, boolean> = {}) =>
+    ({ key: "x", name: "x", builtIn: false, dataScope, screenAccess: {}, permissions }) as unknown as Def;
+  // Без цього боку #342 задовольнявся б кодом, що звужує ВСІХ до менеджера.
+  assert.equal(scopeCompatRole("x", def("company")), "company", "🔴 company-обсяг не доїхав");
+  assert.equal(scopeCompatRole("x", def("team")), "team_lead", "🔴 team-обсяг не доїхав");
+  assert.equal(scopeCompatRole("x", def("own")), "manager", "🔴 own-обсяг не доїхав");
+  assert.equal(scopeCompatRole("x", def("own", { admin_scope: true })), "admin",
+    "🔴 право admin_scope перестало підіймати роль — це вже інша поломка, і вона теж наша");
+});
