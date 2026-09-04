@@ -38,7 +38,7 @@ import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
 import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
-  isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached } from "./clientPlanRules.js";
+  isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL } from "./clientPlanRules.js";
 import * as reactivation from "../core/reactivation.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
@@ -5865,15 +5865,7 @@ dashboardRouter.post("/client-plan", async (req, res) => {
    * Обидві половини лікуються цим проходом — інакше видима помилка лише показала б аварію.
    */
   await pool.query(
-    `INSERT INTO repeat_client_plans (client_key, month, manager_id, plan, status, updated_by, updated_at,
-                                      approved_by, approved_at, submitted_at, returned_at, review_note)
-     VALUES ($1,$2,$3,$4,$5,$6::int, now(), CASE WHEN $5='approved' THEN $6::int END,
-             CASE WHEN $5='approved' THEN now() END, NULL, NULL, NULL)
-     ON CONFLICT (client_key, month) DO UPDATE SET
-       plan = EXCLUDED.plan, status = EXCLUDED.status, manager_id = COALESCE(repeat_client_plans.manager_id, EXCLUDED.manager_id),
-       updated_by = EXCLUDED.updated_by, updated_at = now(),
-       approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at,
-       submitted_at = NULL, returned_at = NULL, review_note = NULL`,
+    SAVE_SQL,
     [clientKey, month, managerId, plan, status, auth.userId]);
   await pool.query(
     `INSERT INTO repeat_client_plan_history (client_key, month, changed_by, action, plan, status)

@@ -112,6 +112,42 @@ export function planTotals(rows: PlanRow[]): PlanTotals {
   return { planTotal, planApproved, byStatus };
 }
 
+/**
+ * ЗБЕРЕЖЕННЯ ПЛАНУ — той самий текст, що виконує `POST /client-plan`.
+ *
+ * 🔴 ЧОМУ КОНСТАНТА, А НЕ РЯДОК У РОУТІ (урок `#21c`). Гейт `#279i` тримав ВЛАСНУ копію
+ * цього запиту — і копія розійшлась із роутом (у роуті `DO UPDATE` мав
+ * `manager_id = COALESCE(...)`, у копії ні). Доказ на переписаному вручну тексті є
+ * доказом ні про що: саботаж у роуті лишав гейт зеленим. Тепер джерело одне.
+ *
+ * 📐 `$6::int` — не косметика. Без приведення Postgres відмовляє ще на РОЗБОРІ
+ * (`42P08 inconsistent types deduced for parameter $6`): `$6` стоїть і як `updated_by`,
+ * і всередині `CASE … THEN $6 END`, а вивід типу робиться один раз. Саме це тримало
+ * екран мертвим пʼять тижнів — з 29.07.2026, за будь-яких значень і будь-якої ролі.
+ */
+export const SAVE_SQL = `
+  INSERT INTO repeat_client_plans (client_key, month, manager_id, plan, status, updated_by, updated_at,
+                                   approved_by, approved_at, submitted_at, returned_at, review_note)
+  VALUES ($1,$2,$3,$4,$5,$6::int, now(), CASE WHEN $5='approved' THEN $6::int END,
+          CASE WHEN $5='approved' THEN now() END, NULL, NULL, NULL)
+  ON CONFLICT (client_key, month) DO UPDATE SET
+    plan = EXCLUDED.plan, status = EXCLUDED.status,
+    manager_id = COALESCE(repeat_client_plans.manager_id, EXCLUDED.manager_id),
+    updated_by = EXCLUDED.updated_by, updated_at = now(),
+    approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at,
+    submitted_at = NULL, returned_at = NULL, review_note = NULL`;
+
+/**
+ * ДОФІКСОВИЙ варіант — існує ВИКЛЮЧНО для дзеркала `#279j`, яке доводить, що гейт
+ * `#279i` уміє провалитись. Виводиться з `SAVE_SQL`, а не пишеться поруч: друга копія
+ * розійшлася б із першою рівно так само, як копія в тесті розійшлась із роутом.
+ *
+ * ⚠️ Межа `\b` навмисна: без неї `$6::integer` перетворилось би на `$6eger` і дзеркало
+ * червоніло б із брехливим підписом «немає виводу типів». Заміна функцією, а не рядком,
+ * бо `$6` у рядку заміни означав би шосту групу захоплення.
+ */
+export const __SAVE_SQL_NO_CAST_FOR_TESTS = SAVE_SQL.replace(/\$6::int\b/g, () => "$6");
+
 /** Менеджер подає ПАКЕТОМ: усі його чернетки за місяць → «подано». */
 export const SUBMIT_SQL = `
   UPDATE repeat_client_plans SET status='pending', submitted_at = now(), updated_at = now(), updated_by = $3
