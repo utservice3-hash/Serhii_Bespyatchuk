@@ -26,6 +26,7 @@ export const MANIFEST_FILES: string[] = [
   "core/forecast.test.js",
   "core/clientCard.test.js",
   "versionStale.test.js",
+  "clientStale.test.js",
   "tools/deploySplit.test.js",
   "tools/zoneMap.test.js",
   "tools/hooks.test.js",
@@ -455,6 +456,10 @@ export const MANIFEST_TESTS: string[] = [
   // versionStale.test.ts — «зібрано, але не перезапущено» видно в health
   "#42 HEALTH ПОРІВНЮЄ ЗАВАНТАЖЕНУ ЗБІРКУ З ТІЄЮ, ЩО НА ДИСКУ",
   "#42b НЕВІДОМА ВЕРСІЯ НЕ ВВАЖАЄТЬСЯ РОЗБІЖНІСТЮ",
+  // clientStale.test.ts — стара збірка у ВКЛАДЦІ (сусід #42, але про браузер)
+  "#330 РІЗНІ ЗБІРКИ — ВКЛАДКА СТАРА",
+  "#330b 🪞 ДЗЕРКАЛО: ОДНАКОВІ ЗБІРКИ — ПЛАШКИ НЕМАЄ",
+  "#330c НЕВІДОМЕ ЛИШАЄТЬСЯ НЕВІДОМИМ, А НЕ СТАЄ «ЗБІГАЄТЬСЯ»",
   // core/companyCode.test.ts — що вважаємо кодом підприємства
   "#41 НОРМАЛІЗАЦІЯ КОДУ: беремо лише осмислені довжини",
   "#41b КЛАС КОДУ: ЄДРПОУ й ІПН — РІЗНІ ключі, не зводяться в один",
