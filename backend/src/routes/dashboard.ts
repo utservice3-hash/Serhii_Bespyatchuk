@@ -6258,6 +6258,39 @@ dashboardRouter.get("/client-card", async (req, res) => {
     months.push({ month: ym, revenue: Math.round(b?.revenue ?? 0), deals: b?.deals ?? 0 });
   }
   const h = head.rows[0];
+  /**
+   * 📞 ДЗВІНКИ ПО РОКАХ (запит власника 04.09.2026). Беруться по канонічному
+   * `client_key` — тобто по номерах, закріплених за компанією; звʼязок робить
+   * `linkCalls`, і своє правило склейки ми тут НЕ пишемо (CLAUDE.md, борг 4).
+   *
+   * ⚠️ ГЛИБИНА ПАМʼЯТІ НАЗВАНА ЧИСЛОМ, А НЕ ЗАМОВЧАНА: заміряно 04.09.2026 —
+   * найраніший дзвінок у базі 01.09.2025, тож «порожньо за 2024» означає «даних не
+   * існує», а не «клієнт не дзвонив». Без цього підпису порожній рік читався б як факт.
+   *
+   * 🟢 РОЗМОВА vs СПРОБА: `billsec > 0` — розмова, решта — недодзвін. Це два різні
+   * факти (рішення власника 04.08.2026), і зливати їх в одне число не можна.
+   */
+  const callsRes = await pool.query<{
+    year: string; calls: string; talks: string; total_sec: string; last_at: string | null;
+  }>(
+    `SELECT date_part('year', calldate AT TIME ZONE 'Europe/Kyiv')::int::text AS year,
+            COUNT(*)::text AS calls,
+            COUNT(*) FILTER (WHERE billsec > 0)::text AS talks,
+            COALESCE(SUM(billsec), 0)::text AS total_sec,
+            MAX(calldate)::text AS last_at
+       FROM ringostat_calls WHERE client_key = $1
+      GROUP BY 1 ORDER BY 1 DESC`, [clientKey]);
+  const sinceRes = await pool.query<{ since: string | null }>(
+    "SELECT MIN(calldate)::date::text AS since FROM ringostat_calls");
+  const CALLS_LIMIT = 300;
+  const callListRes = await pool.query<{
+    calldate: string; call_type: string; billsec: number; disposition: string | null; manager: string | null;
+  }>(
+    `SELECT rc.calldate::text, rc.call_type, rc.billsec, rc.disposition,
+            COALESCE(m.name, rc.employee_fio) AS manager
+       FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
+      WHERE rc.client_key = $1 ORDER BY rc.calldate DESC LIMIT ${CALLS_LIMIT}`, [clientKey]);
+
   res.json({
     clientKey,
     clientName: h?.client_name ?? clientKey,
@@ -6271,6 +6304,22 @@ dashboardRouter.get("/client-card", async (req, res) => {
     lastPaid: h?.last_paid ?? null,
     months,
     monthsTotal: months.reduce((s2, m) => s2 + m.revenue, 0),
+    callsByYear: callsRes.rows.map((r) => ({
+      year: Number(r.year), calls: Number(r.calls), talks: Number(r.talks),
+      totalSec: Number(r.total_sec), lastAt: r.last_at,
+    })),
+    calls: callListRes.rows.map((r) => ({
+      at: r.calldate, direction: r.call_type.includes("out") ? "out" : "in",
+      billsec: r.billsec, answered: r.billsec > 0, disposition: r.disposition, manager: r.manager,
+    })),
+    /** Скільки показано з усіх — мовчазне обрізання читалось би як «більше не було». */
+    callsShown: callListRes.rows.length,
+    callsLimit: CALLS_LIMIT,
+    /**
+     * Глибина памʼяті — ЗАПИТОМ, а не константою. Записане число протухає мовчки:
+     * бекфіл поглибить історію, а підпис і далі казатиме «з вересня 2025».
+     */
+    callsSince: sinceRes.rows[0]?.since ?? null,
     deals: dealsRes.rows.map((d) => ({
       kommoId: Number(d.kommo_id),
       crmUrl: kommoLeadUrl(Number(d.kommo_id)),

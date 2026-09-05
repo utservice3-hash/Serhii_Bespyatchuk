@@ -3108,7 +3108,18 @@ export interface ClientCardDeal {
   kommoId: number; crmUrl: string; name: string | null; date: string | null;
   dateKind: "closed" | "created"; price: number; stage: string; won: boolean; manager: string | null;
 }
+export interface ClientCallYear { year: number; calls: number; talks: number; totalSec: number; lastAt: string | null }
+export interface ClientCall {
+  at: string; direction: "in" | "out"; billsec: number; answered: boolean;
+  disposition: string | null; manager: string | null;
+}
 export interface ClientCard {
+  /** 📞 Дзвінки по роках. `callsSince` — глибина памʼяті: порожній рік до неї означає «даних немає». */
+  callsByYear?: ClientCallYear[];
+  calls?: ClientCall[];
+  callsShown?: number;
+  callsLimit?: number;
+  callsSince?: string | null;
   clientKey: string; clientName: string; managerName: string | null; teamName: string | null;
   pinned: boolean; paymentType: string | null; orders: number; lifetimeRevenue: number;
   firstPaid: string | null; lastPaid: string | null;

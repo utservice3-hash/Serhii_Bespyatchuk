@@ -16,7 +16,8 @@ import { formatAmountFull } from "../format";
  * незакритих — створення) і показує ВСІ стадії, не лише виграні. Тому Σ списку не
  * дорівнює Σ стовпчиків, і зводити їх не треба.
  */
-export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; onChanged?: () => void }) {
+export function ClientCardPanel({
+  const [openYear, setOpenYear] = useState<number | null>(null); clientKey, onChanged }: { clientKey: string; onChanged?: () => void }) {
   const [card, setCard] = useState<ClientCard | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -189,6 +190,42 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
             </BarChart>
           </ResponsiveContainer>
         </div>
+      )}
+
+      {card.callsByYear && card.callsByYear.length > 0 && (
+        <>
+          <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>📞 Дзвінки по роках</div>
+          {card.callsByYear.map((y) => (
+            <div key={y.year} style={{ borderBottom: "1px solid #f1f5f9" }}>
+              <button onClick={() => setOpenYear(openYear === y.year ? null : y.year)}
+                style={{ display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left",
+                         background: "none", border: "none", cursor: "pointer", padding: "7px 2px", fontSize: 12 }}>
+                <span style={{ color: "#6b7280" }}>{openYear === y.year ? "▾" : "▸"}</span>
+                <b style={{ minWidth: 42 }}>{y.year}</b>
+                <span>розмов <b>{y.talks}</b> із {y.calls}</span>
+                <span style={{ color: "#6b7280" }}>· {Math.round(y.totalSec / 60)} хв</span>
+                {y.lastAt && <span style={{ color: "#6b7280" }}>· останній {y.lastAt.slice(0, 10)}</span>}
+              </button>
+              {openYear === y.year && card.calls && (
+                <div style={{ maxHeight: 190, overflowY: "auto", margin: "0 0 8px 22px" }}>
+                  {card.calls.filter((c) => new Date(c.at).getFullYear() === y.year).map((c, i) => (
+                    <div key={i} style={{ fontSize: 12, padding: "3px 0", color: c.answered ? "#111827" : "#9ca3af" }}>
+                      {c.at.slice(0, 16).replace("T", " ")} · {c.direction === "out" ? "вих" : "вх"}
+                      {c.answered ? ` · ${c.billsec} с` : " · не додзвонились"}
+                      {c.manager && ` · ${c.manager}`}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          {/* 🔴 Обрізання й глибина памʼяті НАЗВАНІ. Порожній рік без цього підпису
+              читався б як «клієнт не дзвонив», хоча даних просто не існує. */}
+          <div style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 2px" }}>
+            {card.callsShown === card.callsLimit && `показано останні ${card.callsLimit} · `}
+            {card.callsSince ? `історія дзвінків у системі — з ${card.callsSince}` : ""}
+          </div>
+        </>
       )}
 
       <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>🧾 Успішні угоди</div>
