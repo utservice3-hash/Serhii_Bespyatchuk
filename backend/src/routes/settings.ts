@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { parseDataScope, SCOPE_REQUIRED_CREATE, SCOPE_REQUIRED_UPDATE } from "../auth/roleScopeInput.js";
 import { wireValue, DEFAULT_PLAN_MIN, PLAN_MIN_BOUNDS } from "../core/settingWire.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
@@ -428,8 +429,24 @@ function actorPerms(req: import("express").Request): string[] {
   return def ? Object.keys(def.permissions).filter((k) => def.permissions[k] === true) : [];
 }
 
+/**
+ * 🔴 ОБСЯГ ДАНИХ НЕ МАЄ МОВЧАЗНОГО ЗНАЧЕННЯ (04.09.2026).
+ *
+ * Тут стояло `: "own"` — відсутнє або невалідне значення тихо ставало найвужчим.
+ * Ціна, заміряна на живому проді: роль «Бухгалтерія» завели з екранами `receivables`
+ * і `bank` та правами на виписку, а обсяг лишився `own`. `auth/middleware.ts` вивів
+ * із нього робочу роль `manager`, `receivablesScope` звузив дебіторку до одного
+ * менеджера — і екран віддав НУЛЬ рядків БЕЗ жодної помилки (заміряно: власник 72
+ * рядки, бухгалтерія 0 — замір 04.09.2026, число живе). Пʼять тижнів це читалось
+ * як «доступ не працює».
+ *
+ * ⚠️ І ЦЕ НЕ ЛІКУЄТЬСЯ ДЕФОЛТОМ `company` — то протилежна помилка, дорожча за першу:
+ * порожній фільтр, що означає «вся компанія», роздає чужі дані мовчки. Тому обсяг
+ * ОБОВʼЯЗКОВИЙ і називається явно; `null` тут означає «не передали», і роут відмовляє
+ * видимо, замість вирішувати за людину.
+ */
 function validRolePayload(b: Record<string, unknown>) {
-  const dataScope = ["own", "team", "company"].includes(String(b.dataScope)) ? String(b.dataScope) : "own";
+  const dataScope = parseDataScope(b.dataScope);
   const screen = (b.screenAccess && typeof b.screenAccess === "object") ? b.screenAccess : {};
   const perms = (b.permissions && typeof b.permissions === "object") ? b.permissions : {};
   return { dataScope, screen, perms };
@@ -448,6 +465,21 @@ settingsRouter.post("/roles", async (req, res) => {
   // 🔴 СИТО НАКРИВАЄ І КЛОН. Клонування бере `base.permissions` цілком, тож без цієї
   // перевірки адмін клонував би СЕО й діставав `view_all_1x1`/`write_off_debt` — тобто
   // рівно ту саму ескалацію, лише в обхід поля `permissions`.
+  // 🔴 Обсяг обовʼязковий, КРІМ клонування: клон свідомо успадковує обсяг джерела
+  // (`base.dataScope` нижче), тож вимагати його ще й у тілі означало б відмовляти
+  // на законному шляху.
+  //
+  // 📌 РІШЕННЯ 04.09.2026 (Роман), записане, щоб наступний не «лагодив» це як прогалину:
+  // клонування — другий шлях «створити роль», і воно обсягу НЕ питає навмисно. Клон
+  // означає «як у джерела, далі підправлю»; питати там обсяг окремо — це або дублювати
+  // питання, або дозволити клону мовчки розійтись із джерелом. ⚠️ Ціна названа: людина,
+  // що клонує company-роль, отримує company-обсяг, не побачивши про це жодного слова.
+  // Другий бік цієї межі стереже сам клон — він тягне `base.dataScope`, а не дефолт.
+  if (!base && dataScope === null) {
+    return res.status(400).json({
+      error: SCOPE_REQUIRED_CREATE,
+    });
+  }
   const wanted = base ? base.permissions : perms;
   const v = validateGrant(wanted, actorPerms(req));
   if (!v.ok) return res.status(v.status).json({ error: v.error });
@@ -470,6 +502,13 @@ settingsRouter.put("/roles/:key", async (req, res) => {
   if (def.builtIn) return res.status(403).json({ error: "Вбудовану роль змінювати не можна" });
   const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim() : def.name;
   const { dataScope, screen, perms } = validRolePayload(req.body ?? {});
+  // 🔴 Мовчазний дефолт тут був НЕБЕЗПЕЧНІШИЙ, ніж у створенні: збереження ролі без
+  // поля ЗВУЖУВАЛО б наявну роль до `own`, тобто відбирало доступ у тих, хто його вже мав.
+  if (dataScope === null) {
+    return res.status(400).json({
+      error: SCOPE_REQUIRED_UPDATE,
+    });
+  }
   const v = validateGrant(perms, actorPerms(req));
   if (!v.ok) return res.status(v.status).json({ error: v.error });
   await pool.query(

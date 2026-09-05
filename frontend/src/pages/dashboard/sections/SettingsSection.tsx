@@ -349,7 +349,20 @@ function RolesTab() {
   const newRole = async () => {
     const name = window.prompt("Назва нової ролі:"); if (!name) return;
     const key = window.prompt("Ключ (латиниця/цифри/_):", name.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 24)); if (!key) return;
-    try { await createRole({ key, name, dataScope: "own", screenAccess: {}, permissions: {} }); await reload(); setSel(key.replace(/[^a-z0-9_]/g, "")); }
+    // 🔴 ОБСЯГ ПИТАЄМО ТУТ, А НЕ «ПОТІМ У РЕДАГУВАННІ» (04.09.2026). Тут стояло зашите
+    // `dataScope: "own"`: роль народжувалась найвужчою, і людина, яка роздала їй екрани,
+    // про друге рішення навіть не дізнавалась. Заміряно на проді: «Бухгалтерія» з
+    // екранами дебіторки й виписки бачила НУЛЬ рядків, бо обсяг лишився «свої».
+    const scope = window.prompt(
+      "Обсяг даних — чиї показники бачить роль?\n"
+        + SCOPES.map((s2, i) => `${i + 1} — ${s2.label} (${s2.sub})`).join("\n"),
+      "");
+    if (!scope) return;
+    const picked = SCOPES[Number(scope) - 1];
+    // 🔴 БЕЗ ПЕРЕДЗАПОВНЕННЯ: попередня редакція підставляла "1" (= «свої»), тобто Enter
+    // без читання знову давав найвужчий обсяг мовчки — рівно те, від чого ми й ішли.
+    if (!picked) { alert("Обсяг не обрано — роль не створено. Введіть 1, 2 або 3."); return; }
+    try { await createRole({ key, name, dataScope: picked.key, screenAccess: {}, permissions: {} }); await reload(); setSel(key.replace(/[^a-z0-9_]/g, "")); }
     catch (e) { alert(err(e)); }
   };
   const del = async () => {
