@@ -445,9 +445,15 @@ test("#111 · роут `/client-plan` справді кличе перевірк
   const src = readSrc("src/routes/dashboard.ts");
   const at = src.indexOf('dashboardRouter.post("/client-plan"');
   assert.ok(at > 0, "🔴 роут /client-plan не знайдено — гейт стеріг би неіснуюче");
-  const body = src.slice(at, at + 4000);
+  // 🔴 МЕЖА ЗМІСТОВА, А НЕ ЗА ДОВЖИНОЮ: кінець роута — наступний `dashboardRouter.`,
+  // а не «4000 символів». Зріз за довжиною рухається від чужого коментаря й червоніє
+  // на робочому коді — правило 9, і цей гейт уже раз так почервонів (05.09.2026),
+  // коли текст запиту переїхав у константу `SAVE_SQL`.
+  const nextRoute = src.indexOf("dashboardRouter.", at + 20);
+  const body = src.slice(at, nextRoute > at ? nextRoute : src.length);
   const guard = body.indexOf("isPlannableClientKey");
-  const write = body.indexOf("INSERT INTO repeat_client_plans");
+  // Запис — це ВИКЛИК із текстом запиту, хай текст лежить у константі поруч.
+  const write = body.search(/SAVE_SQL|INSERT INTO repeat_client_plans/);
   assert.ok(guard > 0, "🔴 у /client-plan немає виклику isPlannableClientKey — план на дженерик пройде");
   assert.ok(write > 0 && guard < write,
     "🔴 перевірка стоїть ПІСЛЯ запису — вона нічого не стереже");
