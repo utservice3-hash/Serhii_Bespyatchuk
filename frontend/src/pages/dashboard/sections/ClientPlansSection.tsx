@@ -28,6 +28,10 @@ const S = {
   th: { textAlign: "left", fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280",
         fontWeight: 600, padding: "8px 10px", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" } as const,
   td: { padding: "10px", borderBottom: "1px solid #f1f5f9", fontSize: 13, verticalAlign: "middle" } as const,
+  /** Той самий вигляд кнопки, що був на вкладці реактивації — щоб дія не змінила подачу. */
+  btn: (primary?: boolean) => ({ fontSize: 12, fontWeight: primary ? 700 : 500, padding: "6px 12px",
+        borderRadius: 8, cursor: "pointer", border: primary ? "none" : "1px solid #d1d5db",
+        background: primary ? "#111827" : "#fff", color: primary ? "#fff" : "#374151" } as const),
   chip: (bg: string, fg: string) => ({ display: "inline-block", padding: "1px 7px", borderRadius: 999,
         fontSize: 10, fontWeight: 700, background: bg, color: fg, whiteSpace: "nowrap" } as const),
 };
