@@ -40,6 +40,7 @@ import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL } from "./clientPlanRules.js";
 import * as reactivation from "../core/reactivation.js";
+import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS } from "../core/clientArchive.js";
@@ -5511,7 +5512,17 @@ dashboardRouter.get("/client-plans", async (req, res) => {
            LEFT JOIN managers m ON m.id = rp.manager_id
           WHERE rp.month = $1 ${cond}`, pp);
     })(),
+    /**
+     * 🔗 ЗБАГАЧЕННЯ, А НЕ ДЖЕРЕЛО РЯДКІВ. Задачі, останню розмову, цінність і
+     * сезонність бере та сама `clientStates`, яку кличе колишня вкладка — з
+     * прапорцем, що не відсіює активних. Рядки списку й далі приходять з
+     * основного запиту: інакше в ростер потрапили б клієнти з `teamName: null`
+     * (у реактиваційному запиті команда не мапиться на «Без команди»), і `#30c`
+     * почервонів би на цілком робочому коді.
+     */
+    reactivation.clientStates({ managerId, teamId }, { includeActive: true }),
   ]);
+  const reactByKey = new Map(reactRows.map((r) => [r.clientKey, r]));
   const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
   const weekByKey = new Map<string, number[]>();
   for (const w of weekFact) {
@@ -5646,6 +5657,22 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        */
       state: stateOf(c.client_key),
       inRoster: rosterOf(c.client_key),
+      // 🔁 Дані колишньої вкладки реактивації — у тому самому рядку. `null` там, де
+      // клієнта немає в добірці (наприклад, разовий): порожнеча тут означає «не
+      // стосується», і фронт підписує це словом, а не лишає порожню клітинку.
+      daysSince: reactByKey.get(c.client_key)?.daysSince ?? null,
+      value: reactByKey.get(c.client_key)?.value ?? null,
+      seasonal: reactByKey.get(c.client_key)?.seasonal ?? false,
+      seasonalNote: reactByKey.get(c.client_key)?.seasonalNote ?? null,
+      lastTalk: reactByKey.get(c.client_key)?.lastTalk ?? null,
+      lastTalkDays: reactByKey.get(c.client_key)?.lastTalkDays ?? null,
+      attempts: reactByKey.get(c.client_key)?.attempts ?? 0,
+      taskId: reactByKey.get(c.client_key)?.taskId ?? null,
+      taskStatus: reactByKey.get(c.client_key)?.taskStatus ?? null,
+      taskDeadline: reactByKey.get(c.client_key)?.taskDeadline ?? null,
+      taskAssignee: reactByKey.get(c.client_key)?.taskAssignee ?? null,
+      closeReason: reactByKey.get(c.client_key)?.closeReason ?? null,
+      returned: reactByKey.get(c.client_key)?.returned ?? false,
       planOnly: planOnlyKeys.has(c.client_key),
       // ⭐ Позначка «включений вручну» + примітка. Без примітки поруч позначка
       // через місяць нічим не відрізняється від помилки — тому обидва поля, а
@@ -5726,6 +5753,17 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   res.json({
     month: monthStr,
     historyMonths: histMonths,
+    /**
+     * Довідники для дій, які переїхали з колишньої вкладки реактивації. Беруться
+     * з ЯДРА, а не переписуються у фронті: підпис на екрані не сміє стати другою
+     * редакцією правила — саме через це пороги вже одного разу розійшлись.
+     */
+    closeReasons: reactivationRules.CLOSE_REASONS,
+    thresholds: {
+      sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
+      lostDays: reactivationRules.LOST_DAYS,
+      longLapsedDays: reactivationRules.LONG_LAPSED_DAYS,
+    },
     weeks: weeks.map((w) => ({ label: w.label, from: w.from, to: w.to, status: w.status, workingDays: w.workingDays })),
     clients,
     totals: {
