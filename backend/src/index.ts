@@ -41,6 +41,7 @@ import { reconcileNightly } from "./jobs/reconcileNightly.js";
 import { freshnessWatch, abandonedStagesWatch } from "./jobs/freshnessWatch.js";
 import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js";
 import { syncKommo } from "./jobs/syncKommo.js";
+import * as reactivation from "./core/reactivation.js";
 import { refreshRoles, rolesCacheSize } from "./auth/rbac.js";
 import { seedOneOnOneForms } from "./oneOnOne/catalog.js";
 import { bankRouter } from "./routes/bank.js";
@@ -338,6 +339,20 @@ cron.schedule("*/30 * * * *", () => {
 cron.schedule("0 4 * * *", () => {
   if (isKommoPaused()) return;
   void runJob("syncKommo", () => syncKommo({ reconcileDays: 10 }));
+});
+
+/**
+ * 🔁 Задача реактивації закривається САМА, коли клієнт повернувся (рішення власника
+ * 04.09.2026). О 04:20 — після нічного синку о 04:00, інакше ми закривали б задачі
+ * за вчорашніми оплатами й пропускали свіжі. Позначка закриття — не з довідника
+ * причин, тож ручне й автоматичне закриття лишаються різними фактами (`#334`).
+ */
+cron.schedule("20 4 * * *", () => {
+  void runJob("closeReturnedTasks", async () => {
+    const n = await reactivation.closeTasksForReturnedClients();
+    console.log(`closeReturnedTasks: закрито ${n}`);
+    return { closed: n };
+  });
 });
 
 // КРОК 4 (Звірка) + AUTO-HEAL. ЩОНОЧІ 03:35 — лише ОСТАННІ 2 МІСЯЦІ: швидко/дешево,

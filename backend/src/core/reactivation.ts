@@ -365,3 +365,31 @@ export async function returnedAfterTask(days: number, s: ReactivationScope): Pro
         ${cond}`, p)).rows[0];
   return { clients: Number(r?.clients ?? 0), revenue: Number(r?.revenue ?? 0) };
 }
+
+/**
+ * 🔁 АВТОЗАКРИТТЯ ЗАДАЧІ, КОЛИ КЛІЄНТ ПОВЕРНУВСЯ (рішення власника 04.09.2026:
+ * «закрити, але щоб було видно, що вона була закрита»).
+ *
+ * 🔴 ПРИЧИНА НАВМИСНО ПОЗА ДОВІДНИКОМ `CLOSE_REASONS`. Людина обирає причину зі
+ * списку — і «повернувся» там бути не сміє: це не пояснення, ЧОМУ клієнт не
+ * повернувся, а протилежний факт. Якби ключ лежав у довіднику, менеджер міг би
+ * закрити ним живу задачу руками, і ми втратили б різницю між «система побачила
+ * оплату» і «людина натиснула кнопку». Тримає `#334`.
+ *
+ * ⚠️ Задача закривається лише тоді, коли оплата ПІЗНІША за її створення. Оплата
+ * до створення нічого не доводить: саме тому задачу й ставили.
+ */
+export const RETURNED_CLOSE_REASON = "returned: клієнт повернувся — задачу закрито автоматично";
+
+export async function closeTasksForReturnedClients(): Promise<number> {
+  const r = await pool.query(
+    `UPDATE tasks t SET status = 'done', close_reason = $1, closed_at = now(), updated_at = now()
+      WHERE t.task_type = 'reactivation_client' AND t.status <> 'done' AND t.client_key IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM deals d
+            JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+           WHERE d.client_key = t.client_key AND psm.funnel_stage = 'paid'
+             AND d.closed_at_kommo IS NOT NULL AND d.closed_at_kommo > t.created_at)`,
+    [RETURNED_CLOSE_REASON]);
+  return r.rowCount ?? 0;
+}

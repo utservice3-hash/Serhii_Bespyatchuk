@@ -397,7 +397,12 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
               </div>
             </div>
           ) : c.taskId ? (
-            <span style={{ color: "#6b7280" }}>закрита</span>
+            /* 🔁 Автозакриття підписане ОКРЕМО: «закрита» і «клієнт повернувся» — різні
+               факти, і злити їх в одне слово означало б втратити те, заради чого власник
+               просив залишити слід. */
+            <span style={{ color: c.closeReason?.startsWith("returned") ? "#047857" : "#6b7280" }}>
+              {c.closeReason?.startsWith("returned") ? "закрита — клієнт повернувся" : "закрита"}
+            </span>
           ) : c.seasonal ? (
             <span style={{ color: "#9ca3af" }}>сезонний — задача не потрібна</span>
           ) : (
