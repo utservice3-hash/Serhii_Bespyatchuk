@@ -17,7 +17,7 @@
  * Запуск: `node dist/tools/backfillPackChildren.js [--apply]`
  */
 import { pool } from "../db/pool.js";
-import { PACK_CHILD_SQL, PACK_DEPARTMENT } from "../core/reactivationPack.js";
+import { PACK_CHILD_SQL, PACK_DEPARTMENT, packChildStatus } from "../core/reactivationPack.js";
 import { normalizeClientName } from "../utils/clientName.js";
 
 type Item = { clientKey?: string; clientName?: string; done?: boolean;
@@ -42,7 +42,7 @@ export async function backfillPackChildren(apply: boolean): Promise<{
       const raw = (it?.clientKey ?? "").trim();
       if (!raw) { skippedNoKey++; continue; }
       const key = normalizeClientName(raw) ?? raw;
-      const status = it.done ? "done" : p.status === "done" ? "done" : "not_started";
+      const status = packChildStatus(it.done, p.status);
       if (status === "done") alreadyDone++;
       children++;
       if (!apply) continue;

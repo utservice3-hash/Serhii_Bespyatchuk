@@ -90,3 +90,18 @@ export async function createReactivationPack(a: {
     return { id: parentId, clients: children.length };
   } catch (e) { await cl.query("ROLLBACK"); throw e; } finally { cl.release(); }
 }
+
+/**
+ * СТАН ДИТИНИ — З ПРАПОРЦЯ ЕЛЕМЕНТА, А НЕ З БАТЬКА. Винесено окремою чистою функцією
+ * саме тому, що вона вирішує долю 347 рядків ОДИН раз і незворотно.
+ *
+ * 🔴 ЗАКРИТА ПАЧКА ЗАКРИВАЄ ВСІХ СВОЇХ, навіть невідмічених. Інакше перенесення
+ * ВОСКРЕСИЛО Б роботу: 11 закритих пачок дали б 59 живих задач у списках менеджерів —
+ * тобто дія «прибрати технічний борг» створила б людям новий.
+ *
+ * 🔴 ВІДМІЧЕНИЙ ЕЛЕМЕНТ ЗАКРИТИЙ І В ЖИВІЙ ПАЧЦІ. Взяти статус батька на всіх означало б
+ * переписати минуле: наполовину пройдена пачка виглядала б незайманою.
+ */
+export function packChildStatus(itemDone: boolean | undefined, parentStatus: string): string {
+  return itemDone || parentStatus === "done" ? "done" : "not_started";
+}
