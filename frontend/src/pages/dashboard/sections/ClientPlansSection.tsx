@@ -206,6 +206,15 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
   const [busy, setBusy] = useState(false);
   const [payFilter, setPayFilter] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"in-plan" | "all" | "stale">("all");
+  /**
+   * 🧭 ВІСЬ СТАНУ — окрема від осі `view`, і це не примха. `view` відповідає на
+   * «що я хочу побачити зі своєї роботи» (у плані / без замовлень 30+), а стан —
+   * «хто ця людина для нас» (замовляє / спить / втрачений). Змішати їх в одну
+   * вісь означало б, що «сплячі» й «у плані» стають взаємовиключними, хоча саме
+   * сплячий із планом — найцікавіший рядок екрана.
+   * Дефолт «усі» — рішення власника 04.09.2026 («все в одному місці»).
+   */
+  const [stateFilter, setStateFilter] = useState<"all" | "active" | "sleeping" | "lost">("all");
   // 🔴 ДЕФОЛТ — «НАЙГІРШІ ЗВЕРХУ» (рішення власника 04.08.2026): екран планування
   // існує, щоб бачити проблеми, а не щоб милуватись лідерами. Другий режим —
   // «найбільші зверху» (факт ①), коли треба дивитись на обсяг.
@@ -272,8 +281,12 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
     if (payFilter.size && !payFilter.has(c.paymentType ?? "")) return false;
     if (view === "in-plan" && c.plan <= 0) return false;
     if (view === "stale" && !(c.lastOrderDays != null && c.lastOrderDays >= 30)) return false;
+    if (stateFilter !== "all" && c.state !== stateFilter) return false;
     return true;
   });
+  /** Лічильники беруться з ТИХ САМИХ рядків, що й список, — інакше підпис розійдеться з ним. */
+  const byState = data.clients.reduce((a, c) => { a[c.state] = (a[c.state] ?? 0) + 1; return a; },
+    {} as Record<string, number>);
 
   /**
    * 🔴 ІЄРАРХІЯ — ЦЕ ПОДАЧА, А НЕ СКОУП. Групуємо ТІ САМІ рядки, що прийшли з
@@ -331,7 +344,10 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
           <div style={{ fontWeight: 700 }}>{c.clientName}</div>
           <div style={{ marginTop: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <SegmentBadge segment={c.segment} />
-            {c.planOnly && <StateChip state={c.state} />}
+            {/* 🔴 БЕЗУМОВНО. До обʼєднання вкладок чип малювався лише в рядках, доданих
+                через план, — бо решта за побудовою була активною. Тепер у списку живуть
+                сплячі й втрачені, і рядок без підпису читався б як «активний» (`#330`). */}
+            <StateChip state={c.state} />
             {c.forcedRegular && <ForcedBadge note={c.forceNote} />}
             {/* 💬 Коментар прямо тут: клієнт може мовчати 55 днів і формально
                 лишатись «активним» — причину треба записати, не розгортаючи рядок. */}
@@ -359,7 +375,10 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
         <td style={S.td}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input value={val} disabled={locked || busy}
-              onChange={(e) => setEdits({ ...edits, [c.clientKey]: e.target.value })}
+              /* 📐 Функційне оновлення, а не копія всього `edits`: інакше кожна натиснута
+                 клавіша перемальовує СЕКЦІЮ цілком (в адміна це сотні рядків), і власник
+                 просить проставити план кожній компанії — тобто це і є головний сценарій. */
+              onChange={(e) => { const v = e.target.value; setEdits((prev) => ({ ...prev, [c.clientKey]: v })); }}
               onBlur={() => {
                 const n = Number(val.replace(/\s/g, ""));
                 if (!Number.isFinite(n) || n === c.plan) return;
@@ -528,6 +547,20 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
                      border: `1px solid ${view === k ? "#2563eb" : "#d1d5db"}`, background: view === k ? "#eff6ff" : "#fff",
                      color: view === k ? "#1d4ed8" : "#374151" }}>{label}</button>
         ))}
+        <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Стан:</span>
+        {([["all", "усі"], ["active", "замовляють"], ["sleeping", "сплячі"], ["lost", "втрачені"]] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setStateFilter(k)}
+            title={k === "all" ? "показати всіх, включно з тими, хто не замовляє" : undefined}
+            style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                     border: `1px solid ${stateFilter === k ? "#2563eb" : "#d1d5db"}`,
+                     background: stateFilter === k ? "#eff6ff" : "#fff",
+                     color: stateFilter === k ? "#1d4ed8" : "#374151" }}>
+            {label}{k !== "all" && byState[k] ? ` · ${byState[k]}` : ""}
+          </button>
+        ))}
+        <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>
+          показано {rows.length} із {data.clients.length}
+        </span>
         {grouped && (
           <>
             <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Сортувати:</span>

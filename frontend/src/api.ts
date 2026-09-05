@@ -3013,6 +3013,8 @@ export interface ClientPlanRow {
    */
   state: "active" | "sleeping" | "lost" | "oneoff";
   planOnly: boolean;
+  /** Звідки рядок у списку: активний · не замовляє (колишня вкладка) · лише через план. */
+  inRoster: "active" | "reactivation" | "planOnly";
 }
 /** 🕳 План, під яким немає клієнтського рядка (дженерик-ключ Kommo). */
 export interface UnattachedPlan {
@@ -3031,6 +3033,8 @@ export interface ClientPlansResp {
     byStatus: Record<string, number>; canSubmit: boolean; canApprove: boolean;
     /** Скільки рядків у списку — ЛИШЕ через план (клієнт уже не активний). */
     planOnlyClients: number;
+    rosterClients: number;
+    byState: { active: number; reactivation: number; planOnly: number };
     /** 🕳 Плани без клієнтського рядка. `canSee` вирішує СЕРВЕР (isAdminScope). */
     unattached: { canSee: boolean; count: number; sum: number; rows: UnattachedPlan[] };
     /** 💡 «минулого місяця було N планів на X ₴» — контекст для порожнього місяця. */
