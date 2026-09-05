@@ -417,9 +417,20 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
                  клавіша перемальовує СЕКЦІЮ цілком (в адміна це сотні рядків), і власник
                  просить проставити план кожній компанії — тобто це і є головний сценарій. */
               onChange={(e) => { const v = e.target.value; setEdits((prev) => ({ ...prev, [c.clientKey]: v })); }}
+              /* 🔴 ТИХІ ВІДМОВИ НАЗВАНІ. Обидві виходили з функції мовчки, і людина не
+                 відрізняла їх ані одну від одної, ані від успішного збереження — рівно
+                 та хвороба, що ховала поломку пʼять тижнів, тільки дрібніша. */
               onBlur={() => {
-                const n = Number(val.replace(/\s/g, ""));
-                if (!Number.isFinite(n) || n === c.plan) return;
+                const raw = val.replace(/\s/g, "");
+                const n = Number(raw);
+                if (!Number.isFinite(n) || raw === "") {
+                  setActErr(`«${val}» — не число. План не збережено; введіть суму цифрами.`);
+                  return;
+                }
+                /* «Те саме число» — НЕ відмова: чип стану поруч уже каже, збережено воно
+                   чи ні. Гасити тут `actErr` не можна — стерли б повідомлення, яке людина
+                   ще не прочитала. */
+                if (n === c.plan) return;
                 act(() => saveClientPlan({ clientKey: c.clientKey, month, plan: n }));
               }}
               title={locked ? "План затверджено — зміна лише через тімліда" : ""}
