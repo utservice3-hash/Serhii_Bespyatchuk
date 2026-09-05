@@ -296,7 +296,7 @@ tasksRouter.post("/reactivation", async (req, res) => {
   const groups = new Map<number, typeof clients>();
   const orphans: typeof clients = [];
   for (const c of clients) {
-    const owner = splitByOwner ? ownerOf.get(c.clientKey ?? "") : assigneeId;
+    const owner = splitByOwner ? ownerOf.get(c.clientKey) : assigneeId;
     if (owner == null) { orphans.push(c); continue; }
     groups.set(owner, [...(groups.get(owner) ?? []), c]);
   }
@@ -304,7 +304,7 @@ tasksRouter.post("/reactivation", async (req, res) => {
     if (assigneeId == null) {
       return res.status(400).json({
         error: `У ${orphans.length} клієнтів немає закріпленого менеджера — оберіть, кому їх передати`,
-        orphans: orphans.map((c) => c.name ?? c.clientKey),
+        orphans: orphans.map((c) => c.clientName || c.clientKey),
       });
     }
     groups.set(assigneeId, [...(groups.get(assigneeId) ?? []), ...orphans]);
