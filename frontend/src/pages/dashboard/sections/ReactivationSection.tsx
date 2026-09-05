@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   fetchReactivationList, setClientSeasonal,
@@ -8,7 +8,7 @@ import {
 import { formatAmountFull } from "../format";
 import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
-import { Modal, CreateTaskDialog, CloseTaskDialog } from "./ReactivationBits";
+import { CreateTaskDialog, CloseTaskDialog } from "./ReactivationBits";
 
 /**
  * ФАЗА B · «РЕАКТИВАЦІЯ · СПЛЯЧІ ТА ВТРАЧЕНІ» (макет 2).
