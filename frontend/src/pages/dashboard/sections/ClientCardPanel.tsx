@@ -16,6 +16,13 @@ import { formatAmountFull } from "../format";
  * незакритих — створення) і показує ВСІ стадії, не лише виграні. Тому Σ списку не
  * дорівнює Σ стовпчиків, і зводити їх не треба.
  */
+/** Підписи дій журналу. Ключі — рівно ті, що пише `core/clientAdminLog.ts`. */
+const ADMIN_ACTION_LABEL: Record<string, string> = {
+  archive: "🗄 в архів",
+  unarchive: "↩ повернено з архіву",
+  manager_change: "👤 зміна відповідального",
+};
+
 export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; onChanged?: () => void }) {
   const [openYear, setOpenYear] = useState<number | null>(null);
   const [card, setCard] = useState<ClientCard | null>(null);
@@ -224,6 +231,27 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
           <div style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 2px" }}>
             {card.callsShown === card.callsLimit && `показано останні ${card.callsLimit} · `}
             {card.callsSince ? `історія дзвінків у системі — з ${card.callsSince}` : ""}
+          </div>
+        </>
+      )}
+
+      {/* 🗒 ЖУРНАЛ КЕРІВНИЦЬКИХ ДІЙ. Показуємо лише коли він НЕ порожній: постійний
+          заголовок «дій не було» на сотнях карток — шум, а не інформація. */}
+      {card.adminLog && card.adminLog.length > 0 && (
+        <>
+          <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>🗒 Дії керівника</div>
+          <div style={{ border: "1px solid #f1f5f9", borderRadius: 8 }}>
+            {card.adminLog.map((l, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, padding: "5px 8px", fontSize: 12,
+                                    borderBottom: i === card.adminLog!.length - 1 ? "none" : "1px solid #f1f5f9" }}>
+                <span style={{ color: "#9ca3af", whiteSpace: "nowrap" }}>{l.at}</span>
+                <span style={{ fontWeight: 600 }}>{ADMIN_ACTION_LABEL[l.action] ?? l.action}</span>
+                <span style={{ color: "#6b7280" }}>{l.actor ?? "—"}</span>
+                {typeof l.details?.reason === "string" && (
+                  <span style={{ color: "#b45309" }}>· {l.details.reason}</span>
+                )}
+              </div>
+            ))}
           </div>
         </>
       )}

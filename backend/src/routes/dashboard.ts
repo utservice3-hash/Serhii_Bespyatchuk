@@ -44,6 +44,7 @@ import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS } from "../core/clientArchive.js";
+import { logClientAdmin, clientAdminLog } from "../core/clientAdminLog.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
@@ -3309,6 +3310,9 @@ dashboardRouter.post("/client-archive", async (req, res) => {
       `UPDATE loyalty_overrides SET archived_at = NULL, archive_reason = NULL, archived_by = NULL,
               updated_by = $2, updated_at = now() WHERE client_key = $1`,
       [clientKey, req.auth!.userId]);
+    // 🔴 Слід ПЕРЕД тим, як стан затреться: рядок вище занулює `archived_at`,
+    // `archive_reason` і `archived_by`, тобто сам факт архівації зникає з бази.
+    await logClientAdmin("unarchive", clientKey, req.auth!.userId);
     return res.json({ ok: true, archived: false });
   }
   const reason = String(req.body?.reason ?? "").trim();
@@ -3321,6 +3325,7 @@ dashboardRouter.post("/client-archive", async (req, res) => {
        SET archived_at = now(), archive_reason = EXCLUDED.archive_reason,
            archived_by = EXCLUDED.archived_by, updated_by = EXCLUDED.updated_by, updated_at = now()`,
     [clientKey, reason, req.auth!.userId]);
+  await logClientAdmin("archive", clientKey, req.auth!.userId, { reason });
   res.json({ ok: true, archived: true });
 });
 
@@ -6298,6 +6303,10 @@ dashboardRouter.get("/client-card", async (req, res) => {
        FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
       WHERE rc.client_key = $1 ORDER BY rc.calldate DESC LIMIT ${CALLS_LIMIT}`, [clientKey]);
 
+  /* 🗒 Журнал керівницьких дій — окремою стрічкою, бо стан їх НЕ памʼятає:
+     повернення з архіву занулює і причину, і того, хто архівував. */
+  const adminLog = await clientAdminLog(clientKey);
+
   res.json({
     clientKey,
     clientName: h?.client_name ?? clientKey,
@@ -6327,6 +6336,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
      * бекфіл поглибить історію, а підпис і далі казатиме «з вересня 2025».
      */
     callsSince: sinceRes.rows[0]?.since ?? null,
+    adminLog,
     deals: dealsRes.rows.map((d) => ({
       kommoId: Number(d.kommo_id),
       crmUrl: kommoLeadUrl(Number(d.kommo_id)),
@@ -6949,6 +6959,11 @@ dashboardRouter.post("/client-manager", requirePerm("merge_clients"), async (req
   await pool.query(
     `INSERT INTO client_manager_history (client_key, from_manager_id, to_manager_id, effective_from, reason, changed_by)
      VALUES ($1,$2,$3,$4,$5,$6)`, [clientKey, from, toManagerId, effectiveFrom, reason, auth.userId]);
+  // 🔴 Два записи, і вони НЕ дублікати: `client_manager_history` — ДІЮЧИЙ стан передачі
+  // (з якого місяця чий клієнт), його читає логіка ростерів. Журнал — слід дії, його не
+  // читає ніхто, крім людини. Злиття зробило б із розрахункової таблиці смітник подій.
+  await logClientAdmin("manager_change", clientKey, auth.userId,
+    { fromManagerId: from, toManagerId, effectiveFrom, reason });
 
   res.json({ ok: true, effectiveFrom, note: "Поточний місяць лишається за попереднім менеджером" });
 });

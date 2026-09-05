@@ -2551,6 +2551,30 @@ CREATE TABLE IF NOT EXISTS manager_work_state (
   set_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 🗒 ЖУРНАЛ КЕРІВНИЦЬКИХ ДІЙ ПО КЛІЄНТУ (рішення власника 05.09.2026: окремий журнал).
+--
+-- 🔴 ЧОМУ НЕ `access_audit`. Він про доступи: `target_type` має CHECK IN ('user','role'),
+-- тобто клієнт туди не влазить без послаблення обмеження на таблиці прав. Послаблювати
+-- обмеження контролю доступу заради запису про клієнта — ціна, якої дія не варта.
+--
+-- 🔴 ЧОМУ ОКРЕМО ВІД `client_manager_history`. Той запис — ДІЮЧИЙ стан передачі
+-- (з якого місяця чий клієнт), і він читається логікою. Журнал — слід ДІЇ, його ніхто
+-- не читає для розрахунку. Злиття зробило б із розрахункової таблиці смітник подій.
+--
+-- 📐 Привід, заміряний 05.09.2026: повернення з архіву ЗАНУЛЯЄ `archived_at`,
+-- `archive_reason` і `archived_by`. Тобто після повернення не лишається сліду, що клієнт
+-- узагалі був в архіві, хто його поклав і чому. Стан не є історією — і тут це видно
+-- буквально: історія стиралась дією.
+CREATE TABLE IF NOT EXISTS client_admin_log (
+  id            SERIAL PRIMARY KEY,
+  at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  client_key    TEXT NOT NULL,
+  action        TEXT NOT NULL CHECK (action IN ('archive','unarchive','manager_change')),
+  actor_user_id INTEGER REFERENCES users(id),
+  details       JSONB NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS client_admin_log_client_idx ON client_admin_log (client_key, at DESC);
+
 ALTER TABLE deals             SET (autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE deal_stage_events SET (autovacuum_analyze_scale_factor = 0.02);
 

@@ -3120,6 +3120,8 @@ export interface ClientCard {
   callsShown?: number;
   callsLimit?: number;
   callsSince?: string | null;
+  /** 🗒 Журнал керівницьких дій: архів, повернення з архіву, зміна відповідального. */
+  adminLog?: { at: string; action: string; actor: string | null; details: Record<string, unknown> }[];
   clientKey: string; clientName: string; managerName: string | null; teamName: string | null;
   pinned: boolean; paymentType: string | null; orders: number; lifetimeRevenue: number;
   firstPaid: string | null; lastPaid: string | null;
