@@ -248,12 +248,6 @@ const reactivationSchema = z.object({
   /** Явний виконавець — лишається для сумісності й для клієнтів без закріпленого менеджера. */
   assigneeId: z.number().optional(),
   clients: z.array(checklistItem).min(1),
-  /**
-   * Розподілити пачку по ВІДПОВІДАЛЬНИХ (рішення власника 04.09.2026: «менеджер, який
-   * був зафіксований; якщо такого немає — тімлід сам обирає»). Без прапорця поведінка
-   * стара: одна задача на явно названого виконавця.
-   */
-  splitByOwner: z.boolean().optional(),
 });
 tasksRouter.post("/reactivation", async (req, res) => {
   const auth = req.auth!;
@@ -262,71 +256,24 @@ tasksRouter.post("/reactivation", async (req, res) => {
   }
   const parsed = reactivationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { assigneeId, clients, splitByOwner } = parsed.data;
+  const { assigneeId, clients } = parsed.data;
+  if (assigneeId == null) return res.status(400).json({ error: "Оберіть виконавця" });
 
-  /**
-   * 🔀 РОЗПОДІЛ ПО ВІДПОВІДАЛЬНИХ. Відповідальний — той самий COALESCE(закріплений,
-   * основний за оплатами), що й скрізь на екрані клієнтів: інакше «менеджер біля
-   * клієнта» і «виконавець задачі» розійшлись би, і кожна відповідь окремо була б
-   * правильною. Клієнти без відповідального йдуть на `assigneeId` — той, кого тімлід
-   * назвав явно (рішення власника 04.09.2026); без нього — відмова з переліком, а не
-   * тихе призначення «комусь».
-   */
-  const ownerOf = new Map<string, number>();
-  if (splitByOwner) {
-    const keys = clients.map((c) => c.clientKey).filter(Boolean) as string[];
-    const own = await pool.query<{ client_key: string; manager_id: number }>(
-      `WITH per_cm AS (
-         SELECT d.client_key, d.manager_id, COUNT(*) AS n
-           FROM deals d JOIN pipeline_stage_map psm
-             ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-          WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1) AND d.manager_id IS NOT NULL
-          GROUP BY 1, 2),
-       primary_mgr AS (
-         SELECT DISTINCT ON (client_key) client_key, manager_id
-           FROM per_cm ORDER BY client_key, n DESC, manager_id)
-       SELECT k AS client_key, COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id
-         FROM unnest($1::text[]) AS k
-         LEFT JOIN loyalty_overrides lo ON lo.client_key = k
-         LEFT JOIN primary_mgr pm ON pm.client_key = k
-        WHERE COALESCE(lo.pinned_manager_id, pm.manager_id) IS NOT NULL`, [keys]);
-    for (const r of own.rows) ownerOf.set(r.client_key, r.manager_id);
+  const mgr = await pool.query<{ name: string; team_id: number | null }>(
+    `SELECT name, team_id FROM managers WHERE id = $1`, [assigneeId]
+  );
+  if (!mgr.rows[0]) return res.status(400).json({ error: "Менеджера не знайдено" });
+  if (auth.role === "team_lead" && mgr.rows[0].team_id !== auth.teamId) {
+    return res.status(403).json({ error: "Лише своя команда" });
   }
 
-  const groups = new Map<number, typeof clients>();
-  const orphans: typeof clients = [];
-  for (const c of clients) {
-    const owner = splitByOwner ? ownerOf.get(c.clientKey) : assigneeId;
-    if (owner == null) { orphans.push(c); continue; }
-    groups.set(owner, [...(groups.get(owner) ?? []), c]);
-  }
-  if (orphans.length) {
-    if (assigneeId == null) {
-      return res.status(400).json({
-        error: `У ${orphans.length} клієнтів немає закріпленого менеджера — оберіть, кому їх передати`,
-        orphans: orphans.map((c) => c.clientName || c.clientKey),
-      });
-    }
-    groups.set(assigneeId, [...(groups.get(assigneeId) ?? []), ...orphans]);
-  }
-  if (!groups.size) return res.status(400).json({ error: "Нема кому ставити задачу" });
-
-  const ids: number[] = [];
-  for (const [owner, list] of groups) {
-    const mgr = await pool.query<{ name: string; team_id: number | null }>(
-      `SELECT name, team_id FROM managers WHERE id = $1`, [owner]);
-    if (!mgr.rows[0]) return res.status(400).json({ error: `Менеджера ${owner} не знайдено` });
-    if (auth.role === "team_lead" && mgr.rows[0].team_id !== auth.teamId) {
-      return res.status(403).json({ error: "Лише своя команда" });
-    }
-    const checklist = list.map((c) => ({ ...c, done: false }));
-    const r = await pool.query<{ id: number }>(
-      `INSERT INTO tasks (title, status, assignee_id, created_by, priority, department, task_type, checklist_json)
-       VALUES ($1,'not_started',$2,$3,'high','Реактивація','reactivation',$4) RETURNING id`,
-      [`🔄 Реактивація клієнтів (${list.length}) — ${mgr.rows[0].name}`, owner, auth.userId, JSON.stringify(checklist)]);
-    ids.push(r.rows[0].id);
-  }
-  res.status(201).json({ id: ids[0], ids, tasks: ids.length });
+  const checklist = clients.map((c) => ({ ...c, done: false }));
+  const r = await pool.query<{ id: number }>(
+    `INSERT INTO tasks (title, status, assignee_id, created_by, priority, department, task_type, checklist_json)
+     VALUES ($1,'not_started',$2,$3,'high','Реактивація','reactivation',$4) RETURNING id`,
+    [`🔄 Реактивація клієнтів (${clients.length}) — ${mgr.rows[0].name}`, assigneeId, auth.userId, JSON.stringify(checklist)]
+  );
+  res.status(201).json({ id: r.rows[0].id });
 });
 
 tasksRouter.post("/", async (req, res) => {

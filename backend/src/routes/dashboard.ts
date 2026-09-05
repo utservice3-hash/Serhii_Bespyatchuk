@@ -3496,13 +3496,20 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
          FROM scoped GROUP BY client_key, manager_id
        ) z WHERE rn = 1
      )
-     SELECT pm.manager_id, mm.name AS manager_name, a.client_key, a.name, a.orders, a.revenue, a.last_paid,
+     -- 🔴 ВІДПОВІДАЛЬНИЙ — COALESCE(ЗАКРІПЛЕНИЙ, основний за оплатами), як і скрізь на
+     -- екрані клієнтів (рішення власника 04.09.2026: «менеджер, який був зафіксований»).
+     -- До 05.09.2026 тут стояв ЛИШЕ основний із угод, тож клієнта з вручну закріпленим
+     -- менеджером пропонували НЕ тому — і «менеджер біля клієнта» розходився з
+     -- «виконавцем задачі», причому кожна відповідь окремо виглядала правильною.
+     SELECT COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
+            mm.name AS manager_name, a.client_key, a.name, a.orders, a.revenue, a.last_paid,
             a.payment_type,
             (SELECT MAX(last_activity_at) FROM deals dd WHERE dd.client_key = a.client_key) AS last_activity,
             CASE WHEN a.orders = 1 THEN 'oneshot_bg' ELSE 'lapsed' END AS category
      FROM agg a
      JOIN primary_mgr pm ON pm.client_key = a.client_key
-     JOIN managers mm ON mm.id = pm.manager_id
+     LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
+     JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
      -- ЛИШЕ компанії (ключ по назві). Фізосіб (ключ по телефону) не пропонуємо.
      WHERE a.client_key !~ '^\\d{9,}$'
        AND a.client_key NOT IN (SELECT client_key FROM receivables WHERE client_key IS NOT NULL)
