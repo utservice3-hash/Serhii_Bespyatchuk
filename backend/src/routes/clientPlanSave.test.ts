@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDb } from "../testMode.js";
-import { SAVE_SQL, __SAVE_SQL_NO_CAST_FOR_TESTS } from "./clientPlanRules.js";
+import { SAVE_SQL, __SAVE_SQL_NO_CAST_FOR_TESTS, SUBMIT_SQL, approveAllSql, RETURN_SQL } from "./clientPlanRules.js";
 
 const load = async () => ({ pool: (await import("../db/pool.js")).pool });
 
@@ -9,12 +9,12 @@ const load = async () => ({ pool: (await import("../db/pool.js")).pool });
 const VALUES = ["гейт-279-неіснуючий", "2099-01-01", null, 1, "draft", 1];
 
 /** Одна проба на обидва гейти: виконати текст і повернути код помилки, нічого не лишивши. */
-const probe = async (sql: string): Promise<{ code: string; msg: string }> => {
+const probe = async (sql: string, values: unknown[] = VALUES): Promise<{ code: string; msg: string }> => {
   const { pool } = await load();
   const cl = await pool.connect();
   try {
     await cl.query("BEGIN");
-    await cl.query(sql, VALUES);
+    await cl.query(sql, values);
     return { code: "", msg: "" };
   } catch (e) {
     return { code: String((e as { code?: unknown }).code ?? ""), msg: (e as Error).message };
@@ -85,4 +85,47 @@ test("#279j 🪞 ДЗЕРКАЛО: без ::int той самий запит Н�
   assert.match(msg, /inconsistent types|parameter \$6/i,
     `🔴 версія БЕЗ приведення пройшла (повідомлення: «${msg}») — отже #279i доводить не те, `
     + "що ми думаємо, і наступний такий дефект пройде повз нього");
+});
+
+/**
+ * #337 — ТРИ РЕШТА КРОКІВ ЛАНЦЮГА ТЕЖ РОЗБИРАЮТЬСЯ ЖИВОЮ БАЗОЮ.
+ *
+ * 🔴 ЧОМУ САМЕ ЗАРАЗ. `submit`, `approve-all` і `return` перестали бути простими `UPDATE`:
+ * кожен тепер пише слід у `repeat_client_plan_history` ТИМ САМИМ запитом (через CTE), тож
+ * кожен параметр у них ужитий ДВІЧІ — раз в `UPDATE`, раз в `INSERT`. Це рівно та
+ * конструкція, на якій зламався `$6` і через яку екран мовчав пʼять тижнів: помилка
+ * ВИВОДУ ТИПІВ падає на розборі, тобто завжди, за будь-яких значень і будь-якої ролі.
+ *
+ * ✅ `42501` (права) — зелене: розбір і планування пройшли, ми впершись у read-only роль.
+ * Будь-який інший код — червоне з названим кодом. Той самий критерій, що в `#279i`.
+ */
+test("#337 подання, затвердження й повернення плану РОЗБИРАЮТЬСЯ живою БД", needsDb(), async () => {
+  const cases: [string, string, unknown[]][] = [
+    ["SUBMIT_SQL", SUBMIT_SQL, ["2099-01-01", -1, 1]],
+    ["approveAllSql", approveAllSql(""), ["2099-01-01", 1]],
+    ["RETURN_SQL", RETURN_SQL, ["гейт-337-неіснуючий", "2099-01-01", "коментар", 1]],
+  ];
+  for (const [name, sql, values] of cases) {
+    const { code, msg } = await probe(sql, values);
+    assert.ok(code === "" || code === "42501",
+      `🔴 ${name} не дійшов до виконання: ${code} ${msg}. Крок ланцюга «подав → затвердив» `
+      + "упав би на КОЖНОМУ натисканні, як це вже було зі збереженням.");
+  }
+});
+
+/**
+ * #338 — 🪞 ДЗЕРКАЛО ДО #337: слід справді пишеться тим самим запитом.
+ *
+ * Без нього `#337` зеленів би й на голому `UPDATE` без історії — тобто доводив би, що
+ * запит справний, і мовчав би про те, заради чого його міняли. Питання «хто і коли подав»
+ * не мало відповіді саме тому, що `UPDATE` був сам по собі.
+ */
+test("#338 🪞 подання/затвердження/повернення пишуть слід тим самим запитом", () => {
+  for (const [name, sql] of [["SUBMIT_SQL", SUBMIT_SQL], ["approveAllSql", approveAllSql("")],
+                             ["RETURN_SQL", RETURN_SQL]] as const) {
+    assert.match(sql, /INSERT INTO repeat_client_plan_history/,
+      `🔴 ${name} не пише історію — отже «хто і коли це зробив» знову не має відповіді`);
+    assert.match(sql, /WITH upd AS \(/,
+      `🔴 ${name} пише історію ОКРЕМИМ запитом: лишається стан «зроблено, сліду немає»`);
+  }
 });

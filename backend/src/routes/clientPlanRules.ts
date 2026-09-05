@@ -159,19 +159,38 @@ export const SAVE_SQL = `
  */
 export const __SAVE_SQL_NO_CAST_FOR_TESTS = SAVE_SQL.replace(/\$6::int\b/g, () => "$6");
 
-/** Менеджер подає ПАКЕТОМ: усі його чернетки за місяць → «подано». */
+/**
+ * Менеджер подає ПАКЕТОМ: усі його чернетки за місяць → «подано».
+ *
+ * 🔴 СЛІД ПИШЕТЬСЯ ТИМ САМИМ ЗАПИТОМ, а не сусіднім викликом. Досі історію писало лише
+ * збереження, тож на питання «хто і коли подав цей план» відповіді не існувало в принципі
+ * — той самий клас, що «історії прогонів джоб немає». Окремий `INSERT` після `UPDATE` дав
+ * би стан, у якому плани подані, а сліду немає (і навпаки при відкоті), — тому один запит.
+ */
 export const SUBMIT_SQL = `
-  UPDATE repeat_client_plans SET status='pending', submitted_at = now(), updated_at = now(), updated_by = $3
-   WHERE month = $1 AND manager_id = $2 AND status = 'draft'`;
+  WITH upd AS (
+    UPDATE repeat_client_plans SET status='pending', submitted_at = now(), updated_at = now(), updated_by = $3
+     WHERE month = $1 AND manager_id = $2 AND status = 'draft'
+     RETURNING client_key, plan, status)
+  INSERT INTO repeat_client_plan_history (client_key, month, changed_by, action, plan, status)
+  SELECT client_key, $1, $3, 'submit', plan, status FROM upd`;
 
 /** Тімлід затверджує ВСІ подані у своїй зоні. `scopeCond` дописується викликачем. */
 export const approveAllSql = (scopeCond: string): string => `
-  UPDATE repeat_client_plans rp SET status='approved', approved_by = $2, approved_at = now(), updated_at = now()
-    FROM managers m
-   WHERE m.id = rp.manager_id AND rp.month = $1 AND rp.status = 'pending' ${scopeCond}`;
+  WITH upd AS (
+    UPDATE repeat_client_plans rp SET status='approved', approved_by = $2, approved_at = now(), updated_at = now()
+      FROM managers m
+     WHERE m.id = rp.manager_id AND rp.month = $1 AND rp.status = 'pending' ${scopeCond}
+     RETURNING rp.client_key, rp.plan, rp.status)
+  INSERT INTO repeat_client_plan_history (client_key, month, changed_by, action, plan, status)
+  SELECT client_key, $1, $2, 'approve', plan, status FROM upd`;
 
 /** Повернення на доопрацювання — назад у чернетку, з обовʼязковим коментарем. */
 export const RETURN_SQL = `
-  UPDATE repeat_client_plans SET status='draft', returned_at = now(), review_note = $3,
-         approved_by = NULL, approved_at = NULL, submitted_at = NULL, updated_at = now(), updated_by = $4
-   WHERE client_key = $1 AND month = $2 AND status <> 'draft'`;
+  WITH upd AS (
+    UPDATE repeat_client_plans SET status='draft', returned_at = now(), review_note = $3,
+           approved_by = NULL, approved_at = NULL, submitted_at = NULL, updated_at = now(), updated_by = $4
+     WHERE client_key = $1 AND month = $2 AND status <> 'draft'
+     RETURNING client_key, plan, status)
+  INSERT INTO repeat_client_plan_history (client_key, month, changed_by, action, plan, status, comment)
+  SELECT client_key, $2, $4, 'return', plan, status, $3 FROM upd`;
