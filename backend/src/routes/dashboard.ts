@@ -5480,7 +5480,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         WHERE rp.month = $1 ${cond}`, pp);
   };
 
-  const [monthFact, weekFact, hist, plansRes, commentsRes, prevPlans] = await Promise.all([
+  const [monthFact, weekFact, hist, plansRes, commentsRes, prevPlans, reactRows] = await Promise.all([
     money.successByClientKey(scope),
     money.successByClientWeek(scope),
     money.successByClientBucket(histScope, "month"),
@@ -5520,7 +5520,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
      * (у реактиваційному запиті команда не мапиться на «Без команди»), і `#30c`
      * почервонів би на цілком робочому коді.
      */
-    reactivation.clientStates({ managerId, teamId }, { includeActive: true }),
+    reactivation.clientStates({ managerId: managerId ?? undefined, teamId: teamId ?? undefined },
+      { includeActive: true }),
   ]);
   const reactByKey = new Map(reactRows.map((r) => [r.clientKey, r]));
   const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
