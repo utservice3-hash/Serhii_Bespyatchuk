@@ -17,7 +17,7 @@ import { normalizeClientName } from "../utils/clientName.js";
 export * from "./reactivationRules.js";
 import { SLEEPING_DAYS, LOST_DAYS, valueScore, type ClientState,
          type ClientSegment } from "./reactivationRules.js";
-import { loadClientSegments, factsFor, inReactivationTab } from "./clientSegments.js";
+import { loadClientSegments, factsFor, inReactivationTab, inClientsScreen } from "./clientSegments.js";
 import { archivedSql, LAST_PAID_CTE, LAST_PAID_JOIN } from "./clientArchive.js";
 import { lastOrderCte, daysSinceOrderSql, PAID_DEAL_JOIN, PAID_DEAL_WHERE } from "./clientOrder.js";
 export type { ClientState, ClientSegment };
@@ -172,7 +172,16 @@ const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
  * Клієнти з їхнім станом. Беремо ВСІХ, у кого 2+ оплат lifetime (та сама межа
  * «постійного», що на екрані планів — інакше два екрани рахували б різних людей).
  */
-export async function clientStates(s: ReactivationScope): Promise<ReactivationClient[]> {
+/**
+ * `includeActive` — той самий добір, але БЕЗ відсіву активних. Потрібен злитому
+ * екрану клієнтів (05.09.2026): він показує один список, де стан став колонкою, а
+ * не вкладкою. Дефолт лишає стару поведінку, тож `/reactivation-list` і шість
+ * гейтів, що кличуть цю функцію напряму, не зрушили ні на рядок.
+ */
+export async function clientStates(
+  s: ReactivationScope,
+  opts: { includeActive?: boolean } = {}
+): Promise<ReactivationClient[]> {
   const taskMap = await reactivationTasksByClient();
   const taskKeys = [...taskMap.keys()];
   const taskDates = taskKeys.map((k) => taskMap.get(k)!.createdAt);
@@ -273,7 +282,8 @@ export async function clientStates(s: ReactivationScope): Promise<ReactivationCl
   // 05.08.2026): реактивувати того, хто ніколи не був постійним, нема сенсу —
   // це не повернення клієнта, а холодний дзвінок. Скільки їх — каже екран планів
   // (`totals.oneOff`), щоб число не зникло мовчки.
-  return rows.filter((r) => inReactivationTab(factsFor(seg, r.client_key))).map((r) => {
+  const belongs = opts.includeActive ? inClientsScreen : inReactivationTab;
+  return rows.filter((r) => belongs(factsFor(seg, r.client_key))).map((r) => {
     const tk = taskMap.get(r.client_key);
     const f = factsFor(seg, r.client_key);
     const days = Number(r.days_since);

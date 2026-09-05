@@ -5571,6 +5571,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    */
   const bridge = { sleeping: 0, lost: 0, longLapsed: 0, oneOff: 0, skippedGeneric: 0,
     bySegment: { vip: 0, regular: 0, episodic: 0, unknown: 0 } as Record<string, number> };
+  const reactivationRows: typeof clientsRes.rows = [];
   const activeRows = clientsRes.rows.filter((c) => {
     const f = factsFor(seg, c.client_key);
     // 🎯 РАЗОВІ — НЕ постійні (двошляхова кваліфікація, рішення власника 05.08.2026).
@@ -5581,6 +5582,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       if (!keepInReactivation(f)) { bridge.skippedGeneric++; return false; }
       if (f.longLapsed) bridge.longLapsed++;   // підмножина втрачених, не окрема купка
       if (f.state === "sleeping") bridge.sleeping++; else bridge.lost++;
+      // 🔗 Той самий рядок, який раніше просто зникав, тепер їде в ростер другим
+      // джерелом (обʼєднання вкладок 05.09.2026). Місток НЕ чіпаємо: він і далі
+      // відповідає «кому можна ставити НОВИЙ план», і саме тому лічильники не зрушать.
+      reactivationRows.push(c);
       return false;
     }
     bridge.bySegment[f.segment] = (bridge.bySegment[f.segment] ?? 0) + 1;
@@ -5600,15 +5605,25 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    * Дедуп — за побудовою (`rosterWithPlans` фільтрує другий список по ключах
    * першого), а не за домовленістю. `#108`.
    */
-  const { rows: rosterRows, planOnlyKeys } = rosterWithPlans(
-    activeRows, clientsRes.rows, (c) => c.client_key, (k) => planByKey.has(k));
+  const { rows: rosterRows, reactivationKeys, planOnlyKeys } = rosterWithPlans(
+    activeRows, reactivationRows, clientsRes.rows, (c) => c.client_key, (k) => planByKey.has(k));
+  /** Звідки рядок узявся в ростері — щоб лічильники й фільтри не гадали за станом. */
+  const rosterOf = (key: string): "active" | "reactivation" | "planOnly" =>
+    reactivationKeys.has(key) ? "reactivation" : planOnlyKeys.has(key) ? "planOnly" : "active";
 
-  /** Стан клієнта словом — для ВИДИМОЇ позначки в рядку (`#110`). */
+  /**
+   * Стан клієнта словом — ВИДИМА позначка в кожному рядку (`#330`).
+   *
+   * 🔴 КВАЛІФІКАЦІЯ ПЕРЕВІРЯЄТЬСЯ ПЕРШОЮ, І ЦЕ НЕ ПОРЯДОК ЗАРАДИ ПОРЯДКУ.
+   * `stateOf` у ядрі рахується від ДАТИ оплати й нічого не знає про кваліфікацію,
+   * тож разовий клієнт, що заплатив учора, має `state="active"`. Підписати його на
+   * екрані «активний» означало б написати неправду про людину, яку ми свідомо не
+   * вважаємо постійною, — і всі гейти лишились би зеленими. Тому спершу `qualified`.
+   */
   const stateOf = (key: string): "active" | "sleeping" | "lost" | "oneoff" => {
-    if (!planOnlyKeys.has(key)) return "active";
     const f = factsFor(seg, key);
     if (!f.qualified) return "oneoff";
-    return f.state === "sleeping" || f.state === "lost" ? f.state : "sleeping";
+    return f.state === "sleeping" || f.state === "lost" ? f.state : "active";
   };
 
   const lastComment = await latestCommentByClient();
@@ -5630,6 +5645,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        * тут: не «його можна планувати», а «за ним лишився план». Тримає `#110`.
        */
       state: stateOf(c.client_key),
+      inRoster: rosterOf(c.client_key),
       planOnly: planOnlyKeys.has(c.client_key),
       // ⭐ Позначка «включений вручну» + примітка. Без примітки поруч позначка
       // через місяць нічим не відрізняється від помилки — тому обидва поля, а
@@ -5699,7 +5715,13 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // клієнта, який почав мовчати; сплячі й втрачені там не новина, вони туди
   // потрапили б усі й одразу, перетворивши сигнал на шум. Тому `activeKeys`, а
   // не весь ростер: ростер виріс, питання плитки — ні.
-  const atRisk = clients.filter((c) => !c.planOnly && c.lastOrderDays != null && c.lastOrderDays > 30);
+  /**
+   * ⚠️ ПРЕДИКАТ — `inRoster === "active"`, А НЕ `!planOnly`. Після обʼєднання вкладок
+   * у списку зʼявились сплячі й втрачені (їх сотні), і `!planOnly` втягнув би сюди
+   * геть усіх: плитка «без замовлень понад 30 днів» із сигналу стала б шумом. Її
+   * питання не змінилось — «хто з ЖИВИХ почав відвалюватись».
+   */
+  const atRisk = clients.filter((c) => c.inRoster === "active" && c.lastOrderDays != null && c.lastOrderDays > 30);
 
   res.json({
     month: monthStr,
@@ -5720,6 +5742,13 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       totalClients: activeRows.length,
       /** Скільки рядків ростера тут ЛИШЕ через план — щоб різницю було видно числом. */
       planOnlyClients: planOnlyKeys.size,
+      rosterClients: clients.length,
+      /** Розбиття ростера ОДНИМ виміром — щоб інваріант брався в одну мить (`#332`). */
+      byState: {
+        active: clients.filter((c) => c.inRoster === "active").length,
+        reactivation: clients.filter((c) => c.inRoster === "reactivation").length,
+        planOnly: clients.filter((c) => c.inRoster === "planOnly").length,
+      },
       /**
        * 🌉 МІСТОК ДО РЕАКТИВАЦІЇ. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий
        * поділ), і без цієї цифри вони зникли б МОВЧКИ — виглядало б як «клієнти

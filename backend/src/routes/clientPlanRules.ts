@@ -55,19 +55,30 @@ export const NOT_PLANNABLE_MSG =
  * `activeKeys`, тож клієнт фізично не може потрапити в результат двічі — це
  * сильніше за «ми ж не додамо його вдруге» і саме це перевіряє `#108`.
  *
- * Порядок: спершу активні (у порядку, в якому прийшли), далі план-онлі. Активні
- * — це те, заради чого екран існує; плани мертвих клієнтів не мають витісняти
- * живих із першого екрана.
+ * Порядок: активні → ті, хто не замовляє → лише-план. Активні — це те, заради чого
+ * екран існує; плани мертвих клієнтів не мають витісняти живих із першого екрана.
+ *
+ * 🔴 ТРЕТЄ ДЖЕРЕЛО ДОДАНО 05.09.2026 (обʼєднання вкладок). Дедуп іде НАКОПИЧУВАЛЬНИМ
+ * `seen`, а не двома окремими перевірками: клієнт буває і активним, і в добірці
+ * реактивації в різні миті, а порівняння «з попереднім списком» пропустило б збіг
+ * через один. Двічі в ростері він потрапити не може ЗА ПОБУДОВОЮ — саме це стереже `#108`.
  */
 export function rosterWithPlans<T>(
   active: readonly T[],
+  reactivation: readonly T[],
   all: readonly T[],
   keyOf: (row: T) => string,
   hasPlan: (key: string) => boolean
-): { rows: T[]; planOnlyKeys: Set<string> } {
-  const activeKeys = new Set(active.map(keyOf));
-  const planOnly = all.filter((r) => !activeKeys.has(keyOf(r)) && hasPlan(keyOf(r)));
-  return { rows: [...active, ...planOnly], planOnlyKeys: new Set(planOnly.map(keyOf)) };
+): { rows: T[]; reactivationKeys: Set<string>; planOnlyKeys: Set<string> } {
+  const seen = new Set(active.map(keyOf));
+  const react = reactivation.filter((r) => !seen.has(keyOf(r)));
+  react.forEach((r) => seen.add(keyOf(r)));
+  const planOnly = all.filter((r) => !seen.has(keyOf(r)) && hasPlan(keyOf(r)));
+  return {
+    rows: [...active, ...react, ...planOnly],
+    reactivationKeys: new Set(react.map(keyOf)),
+    planOnlyKeys: new Set(planOnly.map(keyOf)),
+  };
 }
 
 /**

@@ -2,12 +2,12 @@ import { pool } from "../db/pool.js";
 import { GENERIC_CLIENT_KEYS } from "./metrics.js";
 import {
   segmentOf, stateOf, payModeOf, qualifiesAsRepeat, LONG_LAPSED_DAYS,
-  inReactivationTab, keepInReactivation,
+  inReactivationTab, inClientsScreen, keepInReactivation,
   type ClientSegment, type ClientState, type ClientPayMode,
 } from "./reactivationRules.js";
 // Обидва предикати вкладок живуть у ЧИСТОМУ модулі правил (він не тягне `db/pool`),
 // а сюди лише ре-експортуються — щоб виклики лишились на місці, а копії не зʼявилось.
-export { inReactivationTab, keepInReactivation };
+export { inReactivationTab, inClientsScreen, keepInReactivation };
 
 /**
  * 🧭 СЕГМЕНТ І СТАН КЛІЄНТА — ОДНЕ ДЖЕРЕЛО НА ДВА ЕКРАНИ.

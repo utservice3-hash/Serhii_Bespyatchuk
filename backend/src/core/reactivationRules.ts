@@ -175,10 +175,27 @@ export const CLOSE_REASON_KEYS: string[] = CLOSE_REASONS.map((r) => r.key);
  * годують лише «коли востаннє». Вирівнювати це вниз, на `paymentsDated`, ЗАБОРОНЕНО:
  * заміряно 27.08.2026 — перевернуло б 10 клієнтів, «Активних» 142 → 136.
  */
+/**
+ * Хто взагалі належить розділу «Клієнти»: кваліфікований постійний і не телефонний
+ * дженерик. Спільний знаменник обох половин екрана — активних і тих, хто не замовляє.
+ */
+export function inClientsScreen(f: {
+  qualified: boolean; phoneKey: boolean; paymentType: string | null;
+}): boolean {
+  return f.qualified && keepInReactivation(f);
+}
+
+/**
+ * 🔴 ВКЛАДКА РЕАКТИВАЦІЇ — ЦЕ ЕКРАН КЛІЄНТІВ МІНУС АКТИВНІ, І ЦЕ ВИВОДИТЬСЯ, А НЕ
+ * ПОВТОРЮЄТЬСЯ. Дві множини живуть на одному екрані (обʼєднання 05.09.2026), тож
+ * умова належності мусить бути ОДНА: інакше «схожі» предикати розійдуться, і
+ * клієнт зникне з обох списків або зʼявиться в обох — рівно те, що вже коштувало
+ * 134 рядків у двох вкладках водночас (виправлено 27.08.2026).
+ */
 export function inReactivationTab(f: {
   qualified: boolean; phoneKey: boolean; paymentType: string | null; state: ClientState;
 }): boolean {
-  return f.qualified && keepInReactivation(f) && f.state !== "active";
+  return inClientsScreen(f) && f.state !== "active";
 }
 
 /**

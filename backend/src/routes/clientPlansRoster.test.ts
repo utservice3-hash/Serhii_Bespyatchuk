@@ -52,13 +52,16 @@ const get = (path: string, token: string) =>
 
 interface Row {
   clientKey: string; plan: number; planStatus: string;
-  planOnly: boolean; state: "active" | "sleeping" | "lost" | "oneoff";
+  planOnly: boolean; inRoster: "active" | "reactivation" | "planOnly";
+  state: "active" | "sleeping" | "lost" | "oneoff";
 }
 interface Resp {
   clients: Row[];
   totals: {
     planTotal: number; planApproved: number; goesToManagerPlan: number;
     totalClients: number; planOnlyClients: number; filledClients: number;
+    rosterClients: number; byState: { active: number; reactivation: number; planOnly: number };
+    inReactivationSleeping: number; inReactivationLost: number;
     inReactivation: number; inReactivationSleeping: number; inReactivationLost: number;
     oneOff: number; skippedGeneric: number; activeBySegment: Record<string, number>;
     unattached: { canSee: boolean; count: number; sum: number;
@@ -85,8 +88,9 @@ function assertContract(b: Resp): void {
     "🔴 у відповіді немає `totals.prevMonth` — підказці про минулий місяць нічого показувати");
   assert.equal(typeof b.totals.planOnlyClients, "number",
     "🔴 у відповіді немає `totals.planOnlyClients` — різницю «ростер vs активні» нічим назвати");
-  assert.ok(b.clients.every((c) => typeof c.planOnly === "boolean" && typeof c.state === "string"),
-    "🔴 рядок клієнта без `planOnly`/`state` — екран не зможе підписати неактивного");
+  assert.ok(b.clients.every((c) => typeof c.planOnly === "boolean" && typeof c.state === "string"
+    && ["active", "reactivation", "planOnly"].includes(c.inRoster)),
+    "🔴 рядок клієнта без `planOnly`/`state`/`inRoster` — екран не зможе ані підписати стан, ані відфільтрувати");
 }
 
 /** Найсвіжіший місяць, у якому плани ВЗАГАЛІ є, — щоб гейт не протух на даті. */
@@ -229,7 +233,9 @@ test("#109 активні лічильники рахують АКТИВНИХ, 
   assertContract(b);
   const t = b.totals;
 
-  const active = b.clients.filter((c) => !c.planOnly);
+  // Після обʼєднання вкладок `!planOnly` — це вже НЕ «активні»: серед них є сплячі
+  // й втрачені. Джерело рядка каже прямо, звідки він, і саме воно тут доречне.
+  const active = b.clients.filter((c) => c.inRoster === "active");
   assert.equal(t.totalClients, active.length,
     `🔴 totalClients ${t.totalClients} ≠ активних рядків ${active.length}`);
   assert.ok(b.clients.length > t.totalClients,
@@ -274,26 +280,58 @@ test("#109b активні + сплячі + втрачені + разові == �
  * половини потрібні: поле може лишитись у відповіді й зникнути з екрана — це та
  * сама дзеркальна пастка, що в `#56`.
  */
-test("#110 неактивний клієнт із планом підписаний станом — і в API, і в рендері", needsApi(), async () => {
+test("#330 стан підписаний у КОЖНОМУ рядку — і в API, і в рендері", needsApi(), async () => {
   const m = await monthWithPlans();
   assert.ok(m, "🔴 планів немає взагалі");
   const token = await adminToken();
   const b = await (await get(`/api/dashboard/client-plans?month=${m.month}`, token)).json() as Resp;
   assertContract(b);
 
-  const planOnly = b.clients.filter((c) => c.planOnly);
-  assert.ok(planOnly.length > 0, "🔴 таких рядків немає — перевіряти нічого (порожнеча ≠ успіх)");
-  const unlabeled = planOnly.filter((c) => !["sleeping", "lost", "oneoff"].includes(c.state));
-  assert.deepEqual(unlabeled.map((c) => c.clientKey), [],
-    "🔴 рядок, доданий через план, має стан `active` — екран стверджує, що клієнт живий");
-  const active = b.clients.filter((c) => !c.planOnly);
-  assert.deepEqual(active.filter((c) => c.state !== "active").map((c) => c.clientKey), [],
+  // ① джерело рядка й підпис стану НЕ можуть суперечити одне одному — обидва боки.
+  const lyingActive = b.clients.filter((c) => c.inRoster !== "active" && c.state === "active");
+  assert.deepEqual(lyingActive.map((c) => c.clientKey), [],
+    "🔴 рядок, доданий НЕ як активний, підписаний станом «активний» — екран стверджує, що клієнт живий");
+  const lyingDead = b.clients.filter((c) => c.inRoster === "active" && c.state !== "active");
+  assert.deepEqual(lyingDead.map((c) => c.clientKey), [],
     "🔴 активний рядок підписаний неактивним станом — позначка втратила б сенс");
 
+  // ② словник станів закритий: «щось інше» читалося б як порожнеча.
+  const unknown = b.clients.filter((c) => !["active", "sleeping", "lost", "oneoff"].includes(c.state));
+  assert.deepEqual(unknown.map((c) => c.clientKey), [], "🔴 стан поза словником");
+
   // 🖥 ДЖЕРЕЛО ФРОНТА: поле мусить ДОЇХАТИ ДО ЕКРАНА, а не лише до відповіді.
+  // Чип тепер БЕЗУМОВНИЙ — стан має кожен рядок, а не лише доданий через план.
   const src = readSrc("frontend/src/pages/dashboard/sections/ClientPlansSection.tsx");
-  assert.match(src, /c\.planOnly\s*&&\s*<StateChip\s+state=\{c\.state\}/,
+  assert.match(src, /<StateChip\s+state=\{c\.state\}/,
     "🔴 у рядку клієнта немає <StateChip> від c.state — стан їде в API й не малюється");
+  assert.doesNotMatch(src, /c\.planOnly\s*&&\s*<StateChip/,
+    "🔴 чип стану знову під умовою `planOnly` — активні й сплячі лишились би без підпису");
+});
+
+/**
+ * #332 — РОЗБИТТЯ РОСТЕРА, ЗНЯТЕ ОДНИМ ВИКЛИКОМ.
+ *
+ * 📐 Правило 18: «було N — стало N+X» на живому знаменнику нічого не доводить, бо
+ * сторони бралися в різні миті. Тут усі числа приходять ОДНІЄЮ відповіддю, тож
+ * рівність або тримається, або ні — календар на неї не впливає.
+ *
+ * 🧨 САБОТАЖ: порахувати `totalClients` від ростера (а не від активних) → друга
+ * рівність червоніє; зліпити три джерела конкатенацією без `Set` → перша.
+ */
+test("#332 ростер == активні + реактивація + лише-план, і жодного дубля", needsApi(), async () => {
+  const token = await adminToken();
+  const b = await (await get("/api/dashboard/client-plans", token)).json() as Resp;
+  assertContract(b);
+  const t = b.totals;
+  assert.equal(t.rosterClients, t.byState.active + t.byState.reactivation + t.byState.planOnly,
+    "🔴 ростер не дорівнює сумі своїх частин — купки перетинаються або хтось загубився");
+  assert.equal(t.byState.active, t.totalClients,
+    "🔴 «активних» у розбитті не стільки, скільки в головній цифрі екрана");
+  assert.equal(t.byState.reactivation, t.inReactivationSleeping + t.inReactivationLost,
+    "🔴 друге джерело ростера розійшлось із містком — злитий список показує не тих, кого рахує плитка");
+  const keys = new Set(b.clients.map((c) => c.clientKey));
+  assert.equal(keys.size, b.clients.length, "🔴 клієнт у ростері двічі");
+  assert.equal(b.clients.length, t.rosterClients, "🔴 рядків не стільки, скільки каже лічильник");
 });
 
 /**
