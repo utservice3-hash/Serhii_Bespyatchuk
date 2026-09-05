@@ -45,8 +45,8 @@ export const PACK_PARENT_SQL = `
  */
 export const PACK_CHILD_SQL = `
   INSERT INTO tasks (title, status, assignee_id, created_by, priority, department, task_type,
-                     client_key, parent_id, metrics_json)
-  VALUES ($1,$8,$2,$3,'high',$4,'reactivation_client',$5,$6,$7)`;
+                     client_key, parent_id, metrics_json, close_reason)
+  VALUES ($1,$8,$2,$3,'high',$4,'reactivation_client',$5,$6,$7,$9)`;
 
 /**
  * Чиста частина: з переліку клієнтів — заголовок пачки й рядки дітей.
@@ -84,7 +84,7 @@ export async function createReactivationPack(a: {
     for (const ch of children) {
       await cl.query(PACK_CHILD_SQL,
         [ch.title, a.assigneeId, a.createdBy, PACK_DEPARTMENT, ch.clientKey, parentId,
-         JSON.stringify(ch.facts), "not_started"]);
+         JSON.stringify(ch.facts), "not_started", null]);
     }
     await cl.query("COMMIT");
     return { id: parentId, clients: children.length };
@@ -104,4 +104,33 @@ export async function createReactivationPack(a: {
  */
 export function packChildStatus(itemDone: boolean | undefined, parentStatus: string): string {
   return itemDone || parentStatus === "done" ? "done" : "not_started";
+}
+
+/**
+ * 🏷 ПРИЧИНА ЗАКРИТТЯ ДЛЯ ПЕРЕНЕСЕНОГО РЯДКА — і вона НЕ з довідника.
+ *
+ * 📐 Куплено відмовою бази 05.09.2026: `CHECK tasks_reactivation_close_reason` вимагає,
+ * щоб закрита задача реактивації казала ЧОМУ. Перенесення ставило `done` без причини —
+ * і база чесно відмовила (23514), не давши записати мовчазне закриття.
+ *
+ * 🔴 ЧОМУ НЕ ВЗЯТИ КЛЮЧ ІЗ ДОВІДНИКА. Там бізнес-причини — ціна, конкурент, сезонність.
+ * Приписати одну з них означало б ВИГАДАТИ, чому менеджер закрив клієнта, і за місяць
+ * ця вигадка читалась би як факт. Тут відомо рівно одне: пункт був відмічений у чеклісті
+ * пачки до переходу на рядки. Саме це й написано.
+ *
+ * ⚠️ Поза `CLOSE_REASON_KEYS` — навмисно, як і позначка автоповернення: інакше людина
+ * змогла б обрати «перенесено» руками, і ми перестали б відрізняти міграцію від рішення.
+ */
+export const MIGRATED_CLOSE_REASON = "migrated: відмічено в чеклісті пачки до переходу на рядки";
+
+/**
+ * Статус і причина ОДНІЄЮ функцією — бо база вимагає їх ПАРОЮ, а не окремо.
+ * Розвести їх по різних місцях означало б відтворити рівно ту помилку, на якій
+ * перенесення й упало: статус поставили, причину забули.
+ */
+export function packChildClose(itemDone: boolean | undefined, parentStatus: string): {
+  status: string; closeReason: string | null;
+} {
+  const status = packChildStatus(itemDone, parentStatus);
+  return { status, closeReason: status === "done" ? MIGRATED_CLOSE_REASON : null };
 }

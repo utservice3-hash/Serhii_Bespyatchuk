@@ -17,7 +17,7 @@
  * Запуск: `node dist/tools/backfillPackChildren.js [--apply]`
  */
 import { pool } from "../db/pool.js";
-import { PACK_CHILD_SQL, PACK_DEPARTMENT, packChildStatus } from "../core/reactivationPack.js";
+import { PACK_CHILD_SQL, PACK_DEPARTMENT, packChildClose } from "../core/reactivationPack.js";
 import { normalizeClientName } from "../utils/clientName.js";
 
 type Item = { clientKey?: string; clientName?: string; done?: boolean;
@@ -45,29 +45,35 @@ export async function backfillPackChildren(apply: boolean): Promise<{
      * таку пачку ВЖЕ ПРОПУСТИВ БИ. Сім клієнтів зникли б назовсім: читання віддає
      * перевагу дітям, тобто їхній чекліст більше ніхто не прочитав би. Тихо.
      */
-    const cl = apply ? await pool.connect() : null;
+    const cl = await pool.connect();
     try {
-      if (cl) await cl.query("BEGIN");
+      await cl.query("BEGIN");
       for (const it of items) {
         const raw = (it?.clientKey ?? "").trim();
         if (!raw) { skippedNoKey++; continue; }
         const key = normalizeClientName(raw) ?? raw;
-        const status = packChildStatus(it.done, p.status);
+        const { status, closeReason } = packChildClose(it.done, p.status);
         if (status === "done") alreadyDone++;
         children++;
-        if (!cl) continue;
         await cl.query(
           PACK_CHILD_SQL,
           [it.clientName || key, p.assignee_id, p.created_by, PACK_DEPARTMENT, key, p.id,
            JSON.stringify({ orders: it.orders ?? null, revenue: it.revenue ?? null,
                             lastPaid: it.lastPaid ?? null, category: it.category ?? null,
-                            paymentType: it.paymentType ?? null }), status]);
+                            paymentType: it.paymentType ?? null }), status, closeReason]);
       }
-      if (cl) await cl.query("COMMIT");
+      // 🔴 ПРОБНИЙ ПРОГІН ТЕЖ ПИШЕ — і саме тому він щось доводить.
+      // 📐 Куплено 05.09.2026: попередній «пробний» лише РАХУВАВ рядки, не питаючи базу.
+      // Він показав бездоганні 37/347/194/0 — і бойовий прогін одразу впав на `CHECK`
+      // (закрита задача мусить казати причину). Тобто зелений пробний прогін не знав
+      // нічого про те, чи база взагалі прийме ці рядки: він доводив мою арифметику,
+      // а не придатність даних. Тепер обидва режими виконують ТІ САМІ вставки, і
+      // різниця лише в останньому слові: `COMMIT` чи `ROLLBACK`.
+      await cl.query(apply ? "COMMIT" : "ROLLBACK");
     } catch (e) {
-      if (cl) await cl.query("ROLLBACK");
+      await cl.query("ROLLBACK");
       throw e;
-    } finally { cl?.release(); }
+    } finally { cl.release(); }
   }
   return { packs: packs.length, children, skippedNoKey, alreadyDone };
 }
@@ -76,7 +82,7 @@ if (process.argv[1]?.endsWith("backfillPackChildren.js")) {
   const apply = process.argv.includes("--apply");
   backfillPackChildren(apply)
     .then((r) => {
-      console.log(`${apply ? "✍️  ЗАПИСАНО" : "👀 ПРОБНИЙ ПРОГІН (нічого не записано)"}`);
+      console.log(`${apply ? "✍️  ЗАПИСАНО" : "👀 ПРОБНИЙ ПРОГІН — рядки СПРАВДІ вставлялись і відкочені (база їх прийняла)"}`);
       console.log(`   пачок до перенесення: ${r.packs}`);
       console.log(`   рядків-дітей:         ${r.children}  (з них уже виконаних: ${r.alreadyDone})`);
       console.log(`   елементів БЕЗ ключа:  ${r.skippedNoKey}  ← ці не переносяться, вони й у чеклісті нічиї`);
