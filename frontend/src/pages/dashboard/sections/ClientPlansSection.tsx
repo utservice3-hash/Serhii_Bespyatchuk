@@ -2,12 +2,14 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   fetchClientPlans, saveClientPlan, submitClientPlans, approveClientPlans, returnClientPlan,
+  createClientReactivationTask, closeReactivationTask,
   fetchClientComments, addClientComment,
   type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
 import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
+import { CreateTaskDialog, CloseTaskDialog } from "./ReactivationBits";
 import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
@@ -215,6 +217,8 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
    * Дефолт «усі» — рішення власника 04.09.2026 («все в одному місці»).
    */
   const [stateFilter, setStateFilter] = useState<"all" | "active" | "sleeping" | "lost">("all");
+  const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
+  const [closing, setClosing] = useState<{ taskId: number; name: string } | null>(null);
   // 🔴 ДЕФОЛТ — «НАЙГІРШІ ЗВЕРХУ» (рішення власника 04.08.2026): екран планування
   // існує, щоб бачити проблеми, а не щоб милуватись лідерами. Другий режим —
   // «найбільші зверху» (факт ①), коли треба дивитись на обсяг.
@@ -372,6 +376,31 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
         </td>
         <td style={S.td}><Spark values={c.history} months={data.historyMonths} /></td>
         <td style={S.td}><LastOrder days={c.lastOrderDays} /></td>
+        <td style={S.td}>
+          {/* 🔁 Перенесено з вкладки «Реактивація» дослівно. Єдина додана межа —
+              активним кнопки НЕМАЄ: задача реактивації ставиться тому, хто перестав
+              замовляти, і до злиття вкладок активний клієнт у цьому списку не бував
+              узагалі. Тобто це не нове правило, а збереження старого. */}
+          {c.state === "active" ? (
+            <span style={{ color: "#9ca3af" }}>—</span>
+          ) : c.taskId && c.taskStatus !== "done" ? (
+            <div>
+              <b>{c.taskAssignee ?? "—"}</b>
+              {c.taskDeadline && <span style={{ color: "#b45309" }}> · до {c.taskDeadline.slice(5)}</span>}
+              <div>
+                <button disabled={busy} style={{ ...S.btn(), marginTop: 5, fontSize: 11, padding: "4px 9px" }}
+                  onClick={() => setClosing({ taskId: c.taskId!, name: c.clientName })}>Закрити…</button>
+              </div>
+            </div>
+          ) : c.taskId ? (
+            <span style={{ color: "#6b7280" }}>закрита</span>
+          ) : c.seasonal ? (
+            <span style={{ color: "#9ca3af" }}>сезонний — задача не потрібна</span>
+          ) : (
+            <button disabled={busy} style={{ ...S.btn(true), fontSize: 11, padding: "5px 10px" }}
+              onClick={() => setCreating({ clientKey: c.clientKey, name: c.clientName })}>＋ Задача</button>
+          )}
+        </td>
         <td style={S.td}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input value={val} disabled={locked || busy}
@@ -608,6 +637,7 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
               <th style={S.th}>Клієнт</th>
               <th style={S.th}>Історія · 6 міс</th>
               <th style={S.th}>Останнє зам.</th>
+              <th style={S.th}>Задача</th>
               <th style={S.th}>План (міс)</th>
               <th style={S.th}>Тижні · план / факт</th>
               <th style={{ ...S.th, textAlign: "right" }}>Факт</th>
@@ -708,6 +738,23 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
         іде Σ <b>лише затверджених</b> планів. Клієнт = канонічний ключ: злиті телефони й назви
         рахуються разом.
       </div>
+
+      {creating && (
+        <CreateTaskDialog client={creating} busy={busy}
+          onCancel={() => setCreating(null)}
+          onSubmit={(deadline, comment) => act(async () => {
+            await createClientReactivationTask({ clientKey: creating.clientKey, deadline, comment });
+            setCreating(null);
+          })} />
+      )}
+      {closing && data.closeReasons && (
+        <CloseTaskDialog task={closing} reasons={data.closeReasons} busy={busy}
+          onCancel={() => setClosing(null)}
+          onSubmit={(reason, note) => act(async () => {
+            await closeReactivationTask({ taskId: closing.taskId, reason, note });
+            setClosing(null);
+          })} />
+      )}
     </div>
   );
 }

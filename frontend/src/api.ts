@@ -3015,6 +3015,23 @@ export interface ClientPlanRow {
   planOnly: boolean;
   /** Звідки рядок у списку: активний · не замовляє (колишня вкладка) · лише через план. */
   inRoster: "active" | "reactivation" | "planOnly";
+  /**
+   * Поля колишньої вкладки «Реактивація» — у тому самому рядку (обʼєднання 05.09.2026).
+   * `null` означає «не стосується цього клієнта», і екран підписує це словом.
+   */
+  daysSince: number | null;
+  value: number | null;
+  seasonal: boolean;
+  seasonalNote: string | null;
+  lastTalk: string | null;
+  lastTalkDays: number | null;
+  attempts: number;
+  taskId: number | null;
+  taskStatus: string | null;
+  taskDeadline: string | null;
+  taskAssignee: string | null;
+  closeReason: string | null;
+  returned: boolean;
 }
 /** 🕳 План, під яким немає клієнтського рядка (дженерик-ключ Kommo). */
 export interface UnattachedPlan {
@@ -3024,6 +3041,9 @@ export interface UnattachedPlan {
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
+  /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
+  closeReasons?: { key: string; label: string }[];
+  thresholds?: { sleepingDays: Record<string, number>; lostDays: number; longLapsedDays: number };
   clients: ClientPlanRow[];
   totals: {
     planTotal: number; planApproved: number; factTotal: number; pct: number | null;
