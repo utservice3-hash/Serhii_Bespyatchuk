@@ -16,8 +16,8 @@ import { formatAmountFull } from "../format";
  * незакритих — створення) і показує ВСІ стадії, не лише виграні. Тому Σ списку не
  * дорівнює Σ стовпчиків, і зводити їх не треба.
  */
-export function ClientCardPanel({
-  const [openYear, setOpenYear] = useState<number | null>(null); clientKey, onChanged }: { clientKey: string; onChanged?: () => void }) {
+export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; onChanged?: () => void }) {
+  const [openYear, setOpenYear] = useState<number | null>(null);
   const [card, setCard] = useState<ClientCard | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
