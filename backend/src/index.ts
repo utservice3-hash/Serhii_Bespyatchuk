@@ -6,7 +6,7 @@ import { requireAuth } from "./auth/middleware.js";
 import { runJob } from "./jobs/jobRuns.js";
 import { alertPush } from "./jobs/alertPush.js";
 import { recordBoot } from "./jobs/appBoot.js";
-import { buildVersion, buildIsStale, onDiskVersion } from "./version.js";
+import { buildVersion, buildIsStale, onDiskVersion, clientStale } from "./version.js";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
@@ -142,7 +142,7 @@ app.use("/api/tracker", trackerRouter); // Трекер часу — власн�
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or
 // a quick curl) can detect a stalled sync instead of trusting a bare "ok".
-app.get("/api/health", async (_req, res) => {
+app.get("/api/health", async (req, res) => {
   try {
     const r = await pool.query<{
       last_success_at: Date | null;
@@ -213,6 +213,19 @@ app.get("/api/health", async (_req, res) => {
       // це мовчав — знав тільки те, що процес прочитав на старті.
       buildOnDisk: buildIsStale() ? onDiskVersion() : null,
       buildStale: buildIsStale(),
+      /**
+       * 🖥 ЧИ КРУТИТЬ ВКЛАДКА СТАРУ ЗБІРКУ. Сусід зверху (`buildStale`) — про
+       * СЕРВЕР, цей — про БРАУЗЕР, і плутати їх не можна: серверний стан хтось
+       * полагодить рестартом, а вкладку не перезапустить ніхто.
+       *
+       * Параметра немає → `null` («не питали»), а не `false`. Це важливо:
+       * `/api/health` смикають і люди очима, і приймання після деплою, і жоден
+       * із них не має отримати «версія збігається» на порожньому питанні.
+       */
+      clientStale: clientStale(
+        typeof req.query.loaded === "string" ? req.query.loaded : null,
+        buildVersion().sha,
+      ),
       // Заявлений намір викату: поки він чинний, ПЕРШИЙ старт не вважається аварією.
       // `null` — наміру немає, тобто будь-який рестарт зараз кричатиме, як і має.
       deployIntent: di.rows[0]
@@ -239,7 +252,19 @@ app.get("/api/health", async (_req, res) => {
       cashIncome: getCashIncomeStatus(),
     });
   } catch {
-    res.json({ ok: true, sync: null, version: buildVersion() });
+    /**
+     * ⚠️ `clientStale` їде і в аварійній гілці. Вона спрацьовує, коли впала БД, —
+     * а плашка «оновіть сторінку» від БД не залежить взагалі. Без цього рядка
+     * єдиний момент, коли людину найлегше загнати в стару збірку (аварія →
+     * викат фікса → вкладка стара), лишився б без сигналу.
+     */
+    res.json({
+      ok: true, sync: null, version: buildVersion(),
+      clientStale: clientStale(
+        typeof req.query.loaded === "string" ? req.query.loaded : null,
+        buildVersion().sha,
+      ),
+    });
   }
 });
 

@@ -2990,6 +2990,38 @@ export async function fetchHealthAlerts(): Promise<{
   return data;
 }
 
+/**
+ * 🖥 SHA ЦЬОГО БАНДЛА — вшивається на збірці (`define` у `vite.config.ts`).
+ * `"unknown"` тут легальне: збірка без git. Бекенд прочитає його як «не знаю».
+ */
+declare const __BUILD_SHA__: string;
+export const BUILD_SHA: string = typeof __BUILD_SHA__ === "string" ? __BUILD_SHA__ : "unknown";
+
+/**
+ * Чи крутить ЦЯ вкладка стару збірку. Рішення ухвалює СЕРВЕР (`core`-правило
+ * `clientStale` у `backend/src/version.ts`) — фронт лише повідомляє свою версію
+ * і малює відповідь.
+ *
+ * 🔴 Правило свідомо НЕ дублюється тут. У фронті немає тестового прогону взагалі
+ * (нуль файлів `*.test.ts*`), тож копія правила була б неперевірюваною за
+ * побудовою — а дві копії одного правила в цьому проєкті вже розходились.
+ *
+ * `null` = «невідомо» (немає вшитої sha, сервер без версії, мережа впала).
+ * Невідоме НЕ є приводом показати плашку.
+ */
+export async function fetchClientStale(): Promise<boolean | null> {
+  try {
+    const { data } = await api.get<{ clientStale?: boolean | null }>("/health", {
+      params: { loaded: BUILD_SHA },
+    });
+    return data?.clientStale ?? null;
+  } catch {
+    // Мережа/челендж/500 — це «не знаю», а не «оновись». Плашка, що спалахує на
+    // кожному моргані звʼязку, навчає її ігнорувати.
+    return null;
+  }
+}
+
 // ── ФАЗА A · «Постійні клієнти · план місяця» ────────────────────────────────
 export interface ClientPlanWeek { label: string; from: string; to: string; status: "past" | "current" | "future"; plan: number; fact: number }
 export interface ClientPlanRow {
