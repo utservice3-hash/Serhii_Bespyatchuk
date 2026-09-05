@@ -220,3 +220,13 @@ export function inReactivationTab(f: {
 export function keepInReactivation(f: { phoneKey: boolean; paymentType: string | null }): boolean {
   return !f.phoneKey || (f.paymentType ?? "").toLowerCase().includes("езнал");
 }
+
+/**
+ * 🔁 ПОЗНАЧКА АВТОЗАКРИТТЯ — у ЧИСТОМУ модулі, а не поруч із запитом.
+ *
+ * 📐 Причина переїзду заміряна 05.09.2026: гейт `#334` перевіряє саме цю константу й
+ * жодного разу не торкається бази — але падав у кожному оточенні без `DATABASE_URL`,
+ * бо тягнув її з модуля, що імпортує пул. Тобто гейт доводив не своє твердження, а
+ * лише те, що модуль підвантажився. Значення НЕ змінилось — переїхав лише дім.
+ */
+export const RETURNED_CLOSE_REASON = "returned: клієнт повернувся — задачу закрито автоматично";

@@ -1107,8 +1107,10 @@ test("#333 includeActive: без прапорця активних немає, �
  * «повернувся» руками, і ми перестанемо відрізняти факт оплати від натискання кнопки).
  */
 test("#334 позначка автозакриття непорожня і поза довідником причин", async () => {
-  const { RETURNED_CLOSE_REASON } = await import("./reactivation.js");
-  const { CLOSE_REASON_KEYS } = await import("./reactivationRules.js");
+  /* 🔴 Обидві константи — з ЧИСТОГО модуля правил. Тягнути їх через `reactivation.js`
+     означало б підвантажити пул: гейт падав би без `DATABASE_URL`, не дійшовши до
+     власного твердження, і зелене читалось би як «перевірено». */
+  const { RETURNED_CLOSE_REASON, CLOSE_REASON_KEYS } = await import("./reactivationRules.js");
   assert.ok(RETURNED_CLOSE_REASON.trim().length > 0,
     "🔴 порожня позначка — CHECK у БД не дасть закрити задачу, і автозакриття тихо не спрацює");
   assert.ok(!CLOSE_REASON_KEYS.includes(RETURNED_CLOSE_REASON),

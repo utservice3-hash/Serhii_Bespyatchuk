@@ -13,6 +13,7 @@
 import { pool } from "../db/pool.js";
 import { GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { normalizeClientName } from "../utils/clientName.js";
+import { RETURNED_CLOSE_REASON } from "./reactivationRules.js";
 
 export * from "./reactivationRules.js";
 import { SLEEPING_DAYS, LOST_DAYS, valueScore, type ClientState,
@@ -382,7 +383,8 @@ export async function returnedAfterTask(days: number, s: ReactivationScope): Pro
  * ⚠️ Задача закривається лише тоді, коли оплата ПІЗНІША за її створення. Оплата
  * до створення нічого не доводить: саме тому задачу й ставили.
  */
-export const RETURNED_CLOSE_REASON = "returned: клієнт повернувся — задачу закрито автоматично";
+/* Значення переїхало в чистий модуль правил (доккоментар там). Реекспорт уже дає
+   `export * from "./reactivationRules.js"` вище, тож жоден наявний читач не змінився. */
 
 export async function closeTasksForReturnedClients(): Promise<number> {
   const r = await pool.query(
