@@ -636,6 +636,55 @@ export function TasksSection({
                           </div>
                         );
                       })()}
+                      {/* 🔄 ПАЧКА РЕАКТИВАЦІЇ НОВОГО ЗРАЗКА: клієнти — РЯДКИ-ДІТИ, не чекліст.
+                          Батько лишається одним рядком (рішення власника), а стан кожного
+                          клієнта живе у власній задачі — саме тому його видно на картці
+                          клієнта й саме тому автозакриття «клієнт повернувся» його бачить.
+                          Старі пачки й далі малюються чеклістом вище: обидва блоки
+                          взаємовиключні за даними, бо чекліст у нових пачок порожній. */}
+                      {task.taskType === "reactivation" && (() => {
+                        const kids = childrenOf(task.id);
+                        if (kids.length === 0) return null;
+                        const doneN = kids.filter((k) => k.status === "done").length;
+                        return (
+                          <div style={{ paddingLeft: 22, marginTop: 4, display: "flex", flexDirection: "column", gap: 6 }}>
+                            {kids.map((k) => {
+                              const kd = k.status === "done";
+                              const f = (k.metricsJson ?? {}) as { orders?: number | null; category?: string | null };
+                              return (
+                                <div key={k.id} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                                    <input type="checkbox" checked={kd} onChange={() => {
+                                      const next = kd ? "not_started" : "done";
+                                      patchTaskLocal(k.id, { status: next });
+                                      commitTask(k.id, { status: next });
+                                    }} />
+                                    <span style={{ flex: 1, textDecoration: kd ? "line-through" : "none", opacity: kd ? 0.55 : 1 }}>🏢 {k.title}</span>
+                                    <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                                      {f.category === "oneshot_bg" ? "1 перевез. (б/г)" : "замовклий"}{f.orders != null ? ` · ${f.orders} перевез.` : ""}
+                                    </span>
+                                  </label>
+                                  <div style={{ marginLeft: 22 }}>
+                                    <CommentField
+                                      value={k.comments}
+                                      placeholder="Коментар по клієнту (результат дзвінка)…"
+                                      onSave={(next) => {
+                                        const v = next.trim() || null;
+                                        if (v === (k.comments ?? null)) return;
+                                        patchTaskLocal(k.id, { comments: v });
+                                        commitTask(k.id, { comments: v });
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            <span style={{ fontSize: 11, color: doneN === kids.length ? "#16a34a" : "var(--text-muted)", fontWeight: 600 }}>
+                              Опрацьовано {doneN}/{kids.length}
+                            </span>
+                          </div>
+                        );
+                      })()}
                       {task.subtasksJson && task.subtasksJson.length > 0 && (() => {
                         const sd = task.subtasksJson.filter((s) => s.done).length;
                         const n = task.subtasksJson.length;

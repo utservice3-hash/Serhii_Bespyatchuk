@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
+import { createReactivationPack } from "../core/reactivationPack.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasPerm, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 
@@ -267,13 +268,10 @@ tasksRouter.post("/reactivation", async (req, res) => {
     return res.status(403).json({ error: "Лише своя команда" });
   }
 
-  const checklist = clients.map((c) => ({ ...c, done: false }));
-  const r = await pool.query<{ id: number }>(
-    `INSERT INTO tasks (title, status, assignee_id, created_by, priority, department, task_type, checklist_json)
-     VALUES ($1,'not_started',$2,$3,'high','Реактивація','reactivation',$4) RETURNING id`,
-    [`🔄 Реактивація клієнтів (${clients.length}) — ${mgr.rows[0].name}`, assigneeId, auth.userId, JSON.stringify(checklist)]
-  );
-  res.status(201).json({ id: r.rows[0].id });
+  const created = await createReactivationPack({
+    assigneeId, managerName: mgr.rows[0].name, createdBy: auth.userId, clients,
+  });
+  res.status(201).json(created);
 });
 
 tasksRouter.post("/", async (req, res) => {

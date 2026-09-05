@@ -59,7 +59,10 @@ export async function reactivationTasksByClient(): Promise<Map<string, TaskRef>>
     `SELECT t.id, t.status, to_char(t.deadline,'YYYY-MM-DD') AS deadline, t.close_reason,
             t.created_at, mgr.name AS assignee, t.checklist_json AS checklist
        FROM tasks t LEFT JOIN managers mgr ON mgr.id = t.assignee_id
-      WHERE t.task_type = 'reactivation' AND jsonb_typeof(t.checklist_json) = 'array'`)).rows;
+      WHERE t.task_type = 'reactivation' AND jsonb_typeof(t.checklist_json) = 'array'
+        -- 🔴 Пачка, яка ВЖЕ має рядки-діти, читається через них, а не через чекліст:
+        -- інакше один клієнт прийшов би двічі, і виграв би довільний із двох станів.
+        AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = t.id)`)).rows;
 
   const out = new Map<string, TaskRef>();
   const put = (key: string | null, t: Omit<TaskRef, "clientKey">) => {
