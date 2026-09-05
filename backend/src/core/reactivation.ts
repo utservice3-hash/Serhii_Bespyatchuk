@@ -32,9 +32,19 @@ export interface TaskRef {
 }
 
 /**
- * Найсвіжіша реактиваційна задача ПО КЛІЄНТУ — з ОБОХ типів:
- *   `reactivation_client` — одна задача = один клієнт (новий екран, Фаза B);
- *   `reactivation`        — стара ПАЧКА з чеклістом, клієнт усередині JSON.
+ * Найсвіжіша реактиваційна задача ПО КЛІЄНТУ — ОДНИМ запитом, по `client_key`.
+ *
+ * 🔴 ДРУГОЇ ГІЛКИ БІЛЬШЕ НЕМАЄ, І ОСЬ ДЕ ТОЙ ФОРМАТ ТЕПЕР. Тут читалися ще й старі
+ * ПАЧКИ, де клієнти лежали всередині `checklist_json`, — саме тому читання було
+ * роздвоєним. 05.09.2026 усі **37 пачок (347 клієнтів)** перенесено в рядки-діти
+ * (`tools/backfillPackChildren.ts`), заміряно після перенесення: неперенесених пачок
+ * НУЛЬ, напівперенесених НУЛЬ, жоден клієнт із чеклістів не зник із читання.
+ *
+ * ⚠️ ЧОМУ ЦЕ НЕ ПРОСТО ВИДАЛЕННЯ. Прибрана гілка була єдиним способом побачити клієнта
+ * всередині пачки; якби формат повернувся, його клієнти зникали б із карток МОВЧКИ.
+ * Тому разом із нею стоїть парне твердження — гейт `#347`, який стежить, що пачок без
+ * рядків-дітей у базі не існує. Прибирати перевірку на відсутність без такого
+ * твердження — це винагороджувати зникнення (правило 8).
  *
  * 🔴 ПАЧКИ ВРАХОВУЮТЬСЯ ЗА ЗАМІРОМ, НЕ ЗА ПРИПУЩЕННЯМ. Схема обіцяла `clientKey`
  * у чеклісті, але обіцянка схеми — це намір, а не дані. Замір (03.08.2026):
@@ -55,16 +65,6 @@ export async function reactivationTasksByClient(): Promise<Map<string, TaskRef>>
        FROM tasks t LEFT JOIN managers mgr ON mgr.id = t.assignee_id
       WHERE t.task_type = 'reactivation_client' AND t.client_key IS NOT NULL`)).rows;
 
-  const bundles = (await pool.query<{ id: number; status: string; deadline: string | null;
-    close_reason: string | null; created_at: Date; assignee: string | null; checklist: unknown }>(
-    `SELECT t.id, t.status, to_char(t.deadline,'YYYY-MM-DD') AS deadline, t.close_reason,
-            t.created_at, mgr.name AS assignee, t.checklist_json AS checklist
-       FROM tasks t LEFT JOIN managers mgr ON mgr.id = t.assignee_id
-      WHERE t.task_type = 'reactivation' AND jsonb_typeof(t.checklist_json) = 'array'
-        -- 🔴 Пачка, яка ВЖЕ має рядки-діти, читається через них, а не через чекліст:
-        -- інакше один клієнт прийшов би двічі, і виграв би довільний із двох станів.
-        AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = t.id)`)).rows;
-
   const out = new Map<string, TaskRef>();
   const put = (key: string | null, t: Omit<TaskRef, "clientKey">) => {
     if (!key) return;
@@ -75,16 +75,6 @@ export async function reactivationTasksByClient(): Promise<Map<string, TaskRef>>
     put(normalizeClientName(d.client_key) ?? d.client_key,
       { id: d.id, status: d.status, deadline: d.deadline, closeReason: d.close_reason,
         createdAt: d.created_at, assignee: d.assignee });
-  }
-  for (const b of bundles) {
-    const items = Array.isArray(b.checklist) ? (b.checklist as { clientKey?: string }[]) : [];
-    for (const it of items) {
-      const raw = (it?.clientKey ?? "").trim();
-      if (!raw) continue;
-      put(normalizeClientName(raw) ?? raw,
-        { id: b.id, status: b.status, deadline: b.deadline, closeReason: b.close_reason,
-          createdAt: b.created_at, assignee: b.assignee });
-    }
   }
   return out;
 }
