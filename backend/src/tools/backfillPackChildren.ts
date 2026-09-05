@@ -38,21 +38,36 @@ export async function backfillPackChildren(apply: boolean): Promise<{
   let children = 0, skippedNoKey = 0, alreadyDone = 0;
   for (const p of packs) {
     const items = Array.isArray(p.checklist) ? (p.checklist as Item[]) : [];
-    for (const it of items) {
-      const raw = (it?.clientKey ?? "").trim();
-      if (!raw) { skippedNoKey++; continue; }
-      const key = normalizeClientName(raw) ?? raw;
-      const status = packChildStatus(it.done, p.status);
-      if (status === "done") alreadyDone++;
-      children++;
-      if (!apply) continue;
-      await pool.query(
-        PACK_CHILD_SQL,
-        [it.clientName || key, p.assignee_id, p.created_by, PACK_DEPARTMENT, key, p.id,
-         JSON.stringify({ orders: it.orders ?? null, revenue: it.revenue ?? null,
-                          lastPaid: it.lastPaid ?? null, category: it.category ?? null,
-                          paymentType: it.paymentType ?? null }), status]);
-    }
+    /**
+     * 🔴 ПАЧКА ПЕРЕНОСИТЬСЯ ЦІЛКОМ АБО НІЯК — і це не педантизм, а дірка, яку я мало
+     * не лишив. Пропуск будується на «у пачки ЩЕ НЕМАЄ дітей», тож обрив посеред неї
+     * (рестарт, розрив звʼязку, чужий викат) лишив би 3 рядки з 10 — і ПОВТОРНИЙ прогін
+     * таку пачку ВЖЕ ПРОПУСТИВ БИ. Сім клієнтів зникли б назовсім: читання віддає
+     * перевагу дітям, тобто їхній чекліст більше ніхто не прочитав би. Тихо.
+     */
+    const cl = apply ? await pool.connect() : null;
+    try {
+      if (cl) await cl.query("BEGIN");
+      for (const it of items) {
+        const raw = (it?.clientKey ?? "").trim();
+        if (!raw) { skippedNoKey++; continue; }
+        const key = normalizeClientName(raw) ?? raw;
+        const status = packChildStatus(it.done, p.status);
+        if (status === "done") alreadyDone++;
+        children++;
+        if (!cl) continue;
+        await cl.query(
+          PACK_CHILD_SQL,
+          [it.clientName || key, p.assignee_id, p.created_by, PACK_DEPARTMENT, key, p.id,
+           JSON.stringify({ orders: it.orders ?? null, revenue: it.revenue ?? null,
+                            lastPaid: it.lastPaid ?? null, category: it.category ?? null,
+                            paymentType: it.paymentType ?? null }), status]);
+      }
+      if (cl) await cl.query("COMMIT");
+    } catch (e) {
+      if (cl) await cl.query("ROLLBACK");
+      throw e;
+    } finally { cl?.release(); }
   }
   return { packs: packs.length, children, skippedNoKey, alreadyDone };
 }
