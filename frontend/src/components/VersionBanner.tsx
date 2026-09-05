@@ -31,12 +31,24 @@ import { fetchClientStale } from "../api";
 const POLL_MS = 2 * 60 * 1000;
 
 /**
- * 🧱 ШАР. Заміряно по фронту: тости — 9999, найвищі живі діалоги — 2100 (решта
- * 2000 і нижче). Отже 2500 — вище за БУДЬ-ЯКИЙ діалог застосунку (інакше вікно
- * про версію ховалося б за екраном, з якого його викликали) і нижче за тости
- * (вони транзитні, перекривати їх нема потреби).
+ * 🧱 ШАР — 4000, і число куплене власною помилкою.
+ *
+ * 🔴 Перший замір дав «найвищі діалоги 2100», і на ньому стояло Z=2500. Замір був
+ * НЕПОВНИЙ: я взяв `zIndex` по всьому фронту, відсортував ЗА ЧАСТОТОЮ і подивився
+ * перші десять — а рідкісні значення саме тому й не потрапили у видачу. Це той
+ * самий клас, що «порожній результат при просторі, заданому здогадом»: простір
+ * обрізали, а висновок зробили про весь.
+ *
+ * 📐 Повний перелік того, що ВИЩЕ за 2100 (перевірено поіменно):
+ *   TasksSection.tsx:727  підкладка картки задачі — 2500  ← рівно стільки ж, скільки було тут
+ *   TasksSection.tsx:733  сама панель задачі        — 2600
+ *   CommandPalette.tsx:59 палітра команд            — 3000
+ *   Dashboard.tsx:849     тости                     — 9999
+ *
+ * Отже 2500 ховало вікно про версію ПІД карткою задачі. 4000 — вище за все, крім
+ * тостів: їх перекривати не треба, вони транзитні й нічого не блокують.
  */
-const Z = 2500;
+const Z = 4000;
 
 export function VersionBanner() {
   const [stale, setStale] = useState(false);
@@ -58,24 +70,40 @@ export function VersionBanner() {
   }, [stale]);
 
   /**
-   * Esc закриває — те саме, що «Закрити». Вікно перекриває екран, тож у людини має
-   * бути звичний спосіб прибрати його, не шукаючи кнопку очима.
+   * Esc закриває — те саме, що «Закрити».
+   *
+   * 🔴 ФАЗА ЗАХОПЛЕННЯ + `stopImmediatePropagation`, І ЦЕ НЕ ПРИДИРКА. У фронті вже
+   * висять ЧОТИРИ таких самих слухачі на `window` (`CommandPalette`, `MergeDialog`,
+   * `OwnerEditor`, `AgreementEditor`), і кожен на Escape закриває СВОЄ вікно. Без
+   * перехоплення один натиск Esc закрив би і це вікно, і діалог під ним — разом із
+   * набраним у ньому текстом (у `MergeDialog` це причина обʼєднання, у `OwnerEditor`
+   * — причина передачі). Тобто вікно, що прийшло непроханим, стирало б чужу роботу
+   * одним натиском. Ми найвищі на екрані — отже Esc адресований нам, і далі він не йде.
    */
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setClosed(true); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      setClosed(true);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
 
   if (!open) return null;
 
+  /**
+   * 🔴 КЛІК ПО ПІДКЛАДЦІ НЕ ЗАКРИВАЄ — свідомий відступ від решти діалогів проєкту.
+   * Там вікно відкриває САМА людина, знає про нього і закриває його теж свідомо.
+   * Це приходить непрохано, посеред роботи, під курсором — і закриття тут
+   * НЕЗВОРОТНЕ: після нього опитування вже спинене, тож сигнал зникає до кінця дня.
+   * Випадковий клік повз картку коштував би людині всього попередження. Закрити
+   * можна кнопкою або Esc — обидва потребують наміру.
+   */
   return (
     <div
       role="dialog" aria-modal="true" aria-labelledby="version-modal-title"
-      // Клік по підкладці = «Закрити». Той самий жест, що в діалогах розділу
-      // «Клієнти», — щоб вікно поводилось як решта вікон застосунку.
-      onClick={(e) => { if (e.target === e.currentTarget) setClosed(true); }}
       style={{
         position: "fixed", inset: 0, zIndex: Z, background: "rgba(15,23,42,.55)",
         display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px",
@@ -85,6 +113,9 @@ export function VersionBanner() {
         background: "#fff", borderRadius: 16, padding: "26px 26px 22px",
         maxWidth: 460, width: "100%", boxShadow: "0 18px 48px rgba(15,23,42,.28)",
         color: "#0f172a", lineHeight: 1.55,
+        // Низький вьюпорт (ноутбук із відкритою консоллю, телефон лежачи): без цього
+        // ряд кнопок їде за край екрана, і закрити вікно стає нічим.
+        maxHeight: "calc(100vh - 48px)", overflowY: "auto",
       }}>
         <div id="version-modal-title" style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>
           Вийшла нова версія дашборда
@@ -104,7 +135,15 @@ export function VersionBanner() {
           }}>
             Закрити
           </button>
-          <button onClick={() => location.reload()} autoFocus style={{
+          {/**
+            * 🔴 БЕЗ `autoFocus`, І ЦЕ ГОЛОВНА ПРАВКА ЦЬОГО ПРОХОДУ. React ставить фокус
+            * імперативно В МИТЬ МОНТУВАННЯ, а монтує вікно ТАЙМЕР опитування — тобто
+            * довільна мить, зокрема посеред набору тексту. Фокус переїхав би на
+            * «Оновити», і наступний пробіл або Enter перезавантажив би сторінку,
+            * стерши недописане. Це рівно те, від чого ми відмовились, коли свідомо не
+            * робили автоперезавантаження — тільки чужими руками й непомітно.
+            */}
+          <button onClick={() => location.reload()} style={{
             border: "none", background: "#1d4ed8", color: "#fff", borderRadius: 9,
             padding: "9px 22px", cursor: "pointer", fontSize: 14, fontWeight: 600,
           }}>
