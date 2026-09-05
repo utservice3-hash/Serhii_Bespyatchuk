@@ -61,7 +61,6 @@ interface Resp {
     planTotal: number; planApproved: number; goesToManagerPlan: number;
     totalClients: number; planOnlyClients: number; filledClients: number;
     rosterClients: number; byState: { active: number; reactivation: number; planOnly: number };
-    inReactivationSleeping: number; inReactivationLost: number;
     inReactivation: number; inReactivationSleeping: number; inReactivationLost: number;
     oneOff: number; skippedGeneric: number; activeBySegment: Record<string, number>;
     unattached: { canSee: boolean; count: number; sum: number;
@@ -393,21 +392,28 @@ test("#111b план на дженерик-ключі видно рядком «
  * відсіювання вже активних) → «б» трапляється двічі, друга перевірка червоніє.
  */
 test("#108 ростер = активні ∪ план-клієнти, без жодного дубля", () => {
-  const all = [{ k: "а" }, { k: "б" }, { k: "в" }, { k: "г" }];
+  // 📐 Фікстура накриває перетини по ОБИДВА боки (правило 11): «б» активний І має план,
+  // «в» у реактивації І має план, «г» — лише план. Одного перетину замало: він довів би
+  // дедуп для двох джерел і змовчав про третє, а саме воно додане 05.09.2026.
+  const all = [{ k: "а" }, { k: "б" }, { k: "в" }, { k: "г" }, { k: "д" }];
   const active = [{ k: "а" }, { k: "б" }];
-  const plans = new Set(["б", "в"]);          // «б» активний І має план — саме він і двоївся
-  const { rows, planOnlyKeys } = rosterWithPlans(active, all, (r) => r.k, (k) => plans.has(k));
+  const react = [{ k: "б" }, { k: "в" }];     // «б» уже активний — не сміє потрапити двічі
+  const plans = new Set(["б", "в", "г"]);
+  const { rows, reactivationKeys, planOnlyKeys } =
+    rosterWithPlans(active, react, all, (r) => r.k, (k) => plans.has(k));
 
   const keys = rows.map((r) => r.k);
-  assert.deepEqual(keys, ["а", "б", "в"], "🔴 ростер не дорівнює обʼєднанню (активні, далі план-онлі)");
+  assert.deepEqual(keys, ["а", "б", "в", "г"],
+    "🔴 ростер не дорівнює обʼєднанню (активні → реактивація → лише-план)");
   assert.equal(new Set(keys).size, keys.length,
     `🔴 клієнт трапляється двічі: ${keys.join(",")} — у дереві він потрапив би у дві гілки`);
-  assert.deepEqual([...planOnlyKeys], ["в"], "🔴 план-онлі визначено неправильно");
+  assert.deepEqual([...reactivationKeys], ["в"], "🔴 «б» зарахований у реактивацію, хоча він активний");
+  assert.deepEqual([...planOnlyKeys], ["г"], "🔴 план-онлі визначено неправильно");
 
-  // 🪞 Дзеркало: без планів ростер дорівнює активним — функція не вигадує рядків.
-  const none = rosterWithPlans(active, all, (r) => r.k, () => false);
+  // 🪞 Дзеркало: без планів і без реактивації ростер дорівнює активним — функція не вигадує рядків.
+  const none = rosterWithPlans(active, [], all, (r) => r.k, () => false);
   assert.deepEqual(none.rows.map((r) => r.k), ["а", "б"], "🔴 без планів ростер змінився");
-  assert.equal(none.planOnlyKeys.size, 0, "🔴 без планів зʼявились план-онлі");
+  assert.equal(none.planOnlyKeys.size + none.reactivationKeys.size, 0, "🔴 зʼявились зайві купки");
 });
 
 /**
