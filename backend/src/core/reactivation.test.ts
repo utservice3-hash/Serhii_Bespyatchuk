@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { skipReason, type Unavailable } from "../db/scratchDb.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { needsDb } from "../testMode.js";
 
 /**
  * #25 — ІНТЕГРАЦІЙНИЙ ТЕСТ `clientStates` ПРОТИ СПРАВЖНЬОЇ БД.
@@ -1063,4 +1064,36 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
     await c.end();
     scratch.dispose();
   }
+});
+
+/**
+ * #333 — ПРАПОРЕЦЬ `includeActive` МАЄ ОБИДВА БОКИ.
+ *
+ * 🔴 Односторонній гейт тут зеленів би на мертвій фічі: перевірка «з прапорцем активні
+ * є» проходить і тоді, коли фільтр не застосовується ВЗАГАЛІ. Тому стверджуємо обидві
+ * гілки — і, головне, спільну межу: некваліфікованих (разових) немає В ЖОДНІЙ із них.
+ * Саме через цю межу екран не має права підписати разового клієнта «активним».
+ *
+ * 🧨 САБОТАЖ: прибрати гілку прапорця (фільтрувати завжди) → падає «з прапорцем активні
+ * є»; пустити в добірку некваліфікованих → падає спільна межа в обох гілках.
+ */
+test("#333 includeActive: без прапорця активних немає, з ним є, разових немає ніде", needsDb(), async () => {
+  const { clientStates } = await import("./reactivation.js");
+  const strict = await clientStates({});
+  const wide = await clientStates({}, { includeActive: true });
+
+  assert.deepEqual(strict.filter((c) => c.state === "active").map((c) => c.clientKey), [],
+    "🔴 без прапорця у видачі є активні — фільтр вкладки не застосувався");
+  assert.ok(wide.length >= strict.length,
+    `🔴 з прапорцем вибірка МЕНША (${wide.length} проти ${strict.length}) — прапорець щось відсіює`);
+
+  // Порожнеча тут була б хибним зеленим: якщо активних немає в принципі, гейт нічого не доводить.
+  const active = wide.filter((c) => c.state === "active");
+  assert.ok(active.length > 0,
+    "🔴 з прапорцем активних НЕМАЄ — або прапорець не діє, або даних немає; порожній результат не є успіхом");
+
+  // Спільна межа обох гілок: разові не належать екрану клієнтів у жодному режимі.
+  const strictKeys = new Set(strict.map((c) => c.clientKey));
+  assert.ok([...strictKeys].every((k) => wide.some((c) => c.clientKey === k)),
+    "🔴 з прапорцем зник хтось із суворої вибірки — множини мусять бути вкладені");
 });
