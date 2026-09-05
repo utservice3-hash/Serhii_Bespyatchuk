@@ -119,11 +119,20 @@ export interface FreshManifest {
     => { onlyBefore: string[]; onlyAfter: string[]; countBefore: number; countAfter: number };
 }
 
+let bustSeq = 0;
+
 export async function freshManifest(beRoot: string = BE_ROOT): Promise<FreshManifest> {
   const file = resolve(beRoot, "dist", "testManifest.js");
   // 🔴 Обхід кешу обовʼязковий: без нього повернеться той самий обʼєкт, що завантажився
   // на старті процесу, і вся перевірка стане тавтологією «стара памʼять == стара памʼять».
-  const mod = await import(`${pathToFileURL(file).href}?bust=${Date.now()}`);
+  //
+  // 🔴 ЛІЧИЛЬНИК, А НЕ САМИЙ ЧАС. `Date.now()` має роздільність у МІЛІСЕКУНДУ, а два
+  // виклики поспіль укладаються в неї легко: заміряно 05.09.2026 — гейт `#328` виконується
+  // за ~2 мс і падав у 2 прогонах із 5 локально та в прийманні на проді. Однаковий URL →
+  // Node віддає модуль із КЕШУ → «свіжий» реєстр виявляється старим, і законне зняття
+  // гейта читається як диверсія. Тобто обхід кешу мовчки не спрацьовував саме тоді, коли
+  // був потрібен найбільше.
+  const mod = await import(`${pathToFileURL(file).href}?bust=${Date.now()}-${++bustSeq}`);
   const fromSource = treeTests(beRoot);
   const d = diffGates(fromSource, mod.MANIFEST_TESTS as string[]);
   if (d.onlyBefore.length || d.onlyAfter.length) {
