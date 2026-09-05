@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { AuthPayload } from "../../../auth";
 import { fetchOrphanClients, fetchManagerOptions, type OrphanPool, type ManagerOption } from "../../../api";
 import { ClientPlansSection } from "./ClientPlansSection";
-import { ReactivationSection } from "./ReactivationSection";
 import { OrphanPoolSection } from "./OrphanPoolSection";
 import { ArchiveSection } from "./ArchiveSection";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
@@ -24,18 +23,26 @@ import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
  * (КВП/ОД/адмін): показувати вкладку тому, кому сервер віддасть 403, означало б
  * запропонувати глухий кут.
  */
-type Tab = "plan" | "react" | "pool" | "archive";
+type Tab = "plan" | "pool" | "archive";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "plan", label: "План місяця" },
-  { key: "react", label: "Реактивація" },
   { key: "pool", label: "Нічийні" },
   { key: "archive", label: "Архів" },
 ];
 
+/**
+ * 🔗 `?tab=react` ЛИШАЄТЬСЯ ЖИВИМ ПОСИЛАННЯМ. Вкладку «Реактивація» обʼєднано з
+ * «Планом місяця» (рішення власника 04.09.2026), але посилання на неї вже роздані
+ * в чатах і задачах. Тихо кинути людину на інший екран означало б, що вона шукатиме
+ * зниклий список — тому переадресація СУПРОВОДЖУЄТЬСЯ підписом (див. `cameFromReact`).
+ */
 function readTab(): Tab {
   const t = new URLSearchParams(window.location.search).get("tab");
-  return t === "react" || t === "pool" || t === "archive" ? t : "plan";
+  return t === "pool" || t === "archive" ? t : "plan";
+}
+export function cameFromReact(): boolean {
+  return new URLSearchParams(window.location.search).get("tab") === "react";
 }
 
 export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
@@ -128,8 +135,7 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
         </div>
       )}
 
-      {active === "plan" && auth && <ClientPlansSection auth={auth} />}
-      {active === "react" && auth && <ReactivationSection auth={auth} />}
+      {active === "plan" && auth && <ClientPlansSection auth={auth} fromReact={cameFromReact()} />}
       {active === "pool" && canSeePool && <OrphanPoolSection auth={auth} managers={managers} />}
       {active === "archive" && canSeeArchive && <ArchiveSection auth={auth} />}
     </div>

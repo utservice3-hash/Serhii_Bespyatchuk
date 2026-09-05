@@ -203,7 +203,7 @@ function GroupRow({ level, title, sub, open, onToggle, totals }: {
   );
 }
 
-export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: ManagerOption[] }) {
+export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; managers?: ManagerOption[]; fromReact?: boolean }) {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [data, setData] = useState<ClientPlansResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -580,6 +580,12 @@ export function ClientPlansSection({ auth }: { auth: AuthPayload; managers?: Man
                      border: `1px solid ${view === k ? "#2563eb" : "#d1d5db"}`, background: view === k ? "#eff6ff" : "#fff",
                      color: view === k ? "#1d4ed8" : "#374151" }}>{label}</button>
         ))}
+        {fromReact && (
+          <span style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a",
+                         borderRadius: 8, padding: "4px 9px", marginRight: 6 }}>
+            Вкладку «Реактивація» обʼєднано з планом місяця — стан тепер фільтр нижче
+          </span>
+        )}
         <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Стан:</span>
         {([["all", "усі"], ["active", "замовляють"], ["sleeping", "сплячі"], ["lost", "втрачені"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setStateFilter(k)}
