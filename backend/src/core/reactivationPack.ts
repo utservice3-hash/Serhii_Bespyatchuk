@@ -1,5 +1,11 @@
-import { pool } from "../db/pool.js";
 import { normalizeClientName } from "../utils/clientName.js";
+
+/** ЛІНИВИЙ ПУЛ: модуль тримає ЧИСТІ функції й тексти запитів, і вони мусять
+ *  імпортуватись без бази — інакше гейт на них неможливо виконати в оточенні
+ *  без `DATABASE_URL`, тобто в найчастішому `npm test`. Спіймано на собі 05.09.2026:
+ *  обидва нові гейти падали не на твердженні, а на імпорті. */
+const db = async () => (await import("../db/pool.js")).pool;
+
 
 /** Факти про клієнта на момент постановки задачі — знімок, не жива цифра. */
 export type PackClient = {
@@ -69,7 +75,7 @@ export async function createReactivationPack(a: {
   assigneeId: number; managerName: string; createdBy: number | null; clients: readonly PackClient[];
 }): Promise<{ id: number; clients: number }> {
   const { title, children } = packRows(a.managerName, a.clients);
-  const cl = await pool.connect();
+  const cl = await (await db()).connect();
   try {
     await cl.query("BEGIN");
     const r = await cl.query<{ id: number }>(PACK_PARENT_SQL,

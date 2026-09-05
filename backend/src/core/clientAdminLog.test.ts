@@ -2,6 +2,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CLIENT_ADMIN_ACTIONS, CLIENT_ADMIN_LOG_SQL } from "./clientAdminLog.js";
 import { readFileSync } from "node:fs";
+import path from "node:path";
+
+/**
+ * Джерело шукається ПЕРЕБОРОМ коренів: набір біжить із `dist`, а перевіряти треба `.ts`.
+ * Не знайшли — `assert.fail`, а не мовчазний пропуск: перевірка, яка тихо не виконалась,
+ * гірша за її відсутність. Спіймано на собі 05.09.2026 — читання «поруч із dist» дало ENOENT.
+ */
+const SRC_ROOTS = [
+  path.join(import.meta.dirname, "..", ".."),
+  path.join(import.meta.dirname, "..", "..", ".."),
+  path.join(import.meta.dirname, "..", "..", "..", ".."),
+];
+function readSrc(rel: string): string {
+  for (const r of SRC_ROOTS) {
+    try { return readFileSync(path.join(r, rel), "utf8"); } catch { /* далі */ }
+  }
+  assert.fail(`не знайдено ${rel} — перевірка не має права мовчки пропускатись`);
+}
 
 /**
  * #339 — ЖУРНАЛ НАКРИВАЄ ВСІ ТРИ ДІЇ, І ЖОДНА З НИХ НЕ ПИШЕ «В НІКУДИ».
@@ -22,7 +40,7 @@ import { readFileSync } from "node:fs";
  * Названо прямо, щоб зелене тут не читали як «журнал працює».
  */
 test("#339 журнал накриває архів, повернення й зміну відповідального — і нічого зайвого", () => {
-  const src = readFileSync(new URL("../routes/dashboard.ts", import.meta.url), "utf8");
+  const src = readSrc("src/routes/dashboard.ts");
   const called = [...src.matchAll(/logClientAdmin\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
   assert.ok(called.length >= 3, `🔴 у роутах лише ${called.length} виклик(и) журналу — дія без сліду лишилась`);
   for (const a of CLIENT_ADMIN_ACTIONS) {
@@ -47,7 +65,7 @@ test("#340 🪞 дії по клієнтах ідуть в окрему табл
     "🔴 журнал пише не у свою таблицю");
   assert.doesNotMatch(CLIENT_ADMIN_LOG_SQL, /access_audit/,
     "🔴 дії по клієнту поїхали в журнал доступів — це послаблення таблиці прав заради запису про клієнта");
-  const schema = readFileSync(new URL("../db/schema.sql", import.meta.url), "utf8");
+  const schema = readSrc("src/db/schema.sql");
   assert.match(schema, /CREATE TABLE IF NOT EXISTS client_admin_log/,
     "🔴 таблиці журналу немає в схемі — на чистій базі запис падатиме, а журнал це проковтне мовчки");
   for (const a of CLIENT_ADMIN_ACTIONS) {

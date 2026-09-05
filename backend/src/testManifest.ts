@@ -80,6 +80,8 @@ export const MANIFEST_FILES: string[] = [
   "core/stuckRule.test.js",
   "core/stuckTalk.test.js",
   "core/reactivation.test.js",
+  "core/reactivationPack.test.js",
+  "core/clientAdminLog.test.js",
   "core/receivables1c.test.js",
   "core/clientOrder.test.js",
   "core/loyaltyOverride.test.js",

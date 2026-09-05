@@ -1,4 +1,8 @@
-import { pool } from "../db/pool.js";
+/** ЛІНИВИЙ ПУЛ: модуль тримає перелік дій і текст запиту — чисті речі, які мусять
+ *  імпортуватись без бази, інакше гейт на них не виконається в оточенні без
+ *  `DATABASE_URL` (найчастіший `npm test`). Спіймано на собі 05.09.2026: гейт падав
+ *  не на твердженні, а на імпорті — тобто доводив лише те, що модуль підвантажився. */
+const db = async () => (await import("../db/pool.js")).pool;
 
 /**
  * 🗒 СЛІД КЕРІВНИЦЬКОЇ ДІЇ ПО КЛІЄНТУ — хто, коли, з ким і чому.
@@ -24,7 +28,7 @@ export async function logClientAdmin(
   actorUserId: number | null, details: Record<string, unknown> = {},
 ): Promise<void> {
   try {
-    await pool.query(CLIENT_ADMIN_LOG_SQL, [clientKey, action, actorUserId, JSON.stringify(details)]);
+    await (await db()).query(CLIENT_ADMIN_LOG_SQL, [clientKey, action, actorUserId, JSON.stringify(details)]);
   } catch (e) {
     console.error("[client_admin_log] не записався:", (e as Error).message);
   }
@@ -35,7 +39,7 @@ export const CLIENT_ADMIN_LOG_LIMIT = 20;
 export async function clientAdminLog(clientKey: string): Promise<{
   at: string; action: string; actor: string | null; details: Record<string, unknown>;
 }[]> {
-  const r = await pool.query<{ at: string; action: string; actor: string | null; details: Record<string, unknown> }>(
+  const r = await (await db()).query<{ at: string; action: string; actor: string | null; details: Record<string, unknown> }>(
     `SELECT to_char(l.at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD HH24:MI') AS at, l.action,
             COALESCE(m.name, u.email) AS actor, l.details
        FROM client_admin_log l
