@@ -18,6 +18,7 @@ import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
   standToRefusal,
   MARK_REPORT, MARK_STOP,
+  holdsLockAfter,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim, actorRefusal } from "./checkoutLock.js";
@@ -511,6 +512,20 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
     }
     return { id: "accept", ok: true, detail: `${doneN} із ${needN}, падінь 0` };
   },
+  /**
+   * 📰 НОВИНА ПРО ВИКАТ — із ПРОД-чекауту, як `migrate` і `markDeploy`.
+   *
+   * 🔴 Не зі стенда: там роль read-only (дали свідомо 04.09), тож запис звідти
+   * неможливий за побудовою. Скрипт кличемо тим самим способом, яким ланцюг уже
+   * ходить у докрут, і `--sha` віддаємо явно — ідемпотентність будується на ньому.
+   *
+   * ⚠️ ВІДСУТНІЙ ФАЙЛ НЕ ВАЛИТЬ ЛАНЦЮГ, але й не мовчить: реліз уже прийнято, і
+   * обривати його через ненаписані підписи означало б платити не ту ціну. Тому крок
+   * лишається зеленим, а причина друкується вголос — гучний скіп, не тихий pass.
+   */
+  publishNews: (c) => run("publishNews",
+    () => sh("bash", ["-lc", `cd ${c.prodBe} && set -a && . ./.env && set +a && node dist/tools/publishReleaseNews.js --sha=${c.target}`]),
+    "новина про викат"),
   lockRelease: (c) => {
     const who = ACTOR;
     const r = lockCli(["--release", `--who=${who}`, `--reason=викат ${c.target} завершено`], CANON_LOCK_DIR);
@@ -918,7 +933,9 @@ export async function main(argv: string[]): Promise<number> {
       }
     }
     const r = await h(ctx);
-    if (step.id === "lockTake" && r.ok) lockOurs = true;
+    // 🔐 Рішення «тримаємо замок далі чи ні» — у чистій функції (`holdsLockAfter`):
+    // односторонній `if` саме тут і обривав ланцюг після кожного `lockRelease`.
+    lockOurs = holdsLockAfter(step.id, lockOurs, r.ok);
     done.push(r);
     const mark = r.skipped ? "﹣" : r.ok ? "✔" : "✖";
     /**

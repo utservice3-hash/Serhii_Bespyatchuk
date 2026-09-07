@@ -601,6 +601,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/news/:id", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  // 🔔 Лічильник непрочитаного й позначка «побачив» — доступні ВСІМ автентифікованим:
+  // новини бачать усі, отже і «чи є нове» теж. Обидва рядки — власна межа кожного роута,
+  // а не спільна: `deny-only` для запису, бо проба реально ПИШЕ мітку часу.
+  { method: "GET", path: "/api/news/unread", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "POST", path: "/api/news/seen", cls: "deny-only", allow: [], deny: [] },
   { method: "GET", path: "/api/news/km-prices", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "PUT", path: "/api/news/km-prices", cls: "deny-only",
