@@ -18,6 +18,7 @@ import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
   standToRefusal,
   MARK_REPORT, MARK_STOP,
+  holdsLockAfter,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim, actorRefusal } from "./checkoutLock.js";
@@ -918,7 +919,9 @@ export async function main(argv: string[]): Promise<number> {
       }
     }
     const r = await h(ctx);
-    if (step.id === "lockTake" && r.ok) lockOurs = true;
+    // 🔐 Рішення «тримаємо замок далі чи ні» — у чистій функції (`holdsLockAfter`):
+    // односторонній `if` саме тут і обривав ланцюг після кожного `lockRelease`.
+    lockOurs = holdsLockAfter(step.id, lockOurs, r.ok);
     done.push(r);
     const mark = r.skipped ? "﹣" : r.ok ? "✔" : "✖";
     /**

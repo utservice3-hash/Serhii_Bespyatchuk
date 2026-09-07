@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, standToRefusal, type Artifact } from "./deployPlan.js";
+import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, standToRefusal, holdsLockAfter,
+         type Artifact } from "./deployPlan.js";
 import { executablePlan, missingHandlers, handlers } from "./deploy.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -356,4 +357,36 @@ test("#319b 🪞 ДЗЕРКАЛО: без --target не рухає, на бру�
     "🔴 не перевіряється існування коміта — checkout на неіснуючий лишив би дерево як було, а крок «зробленим»");
   assert.match(src, /після checkout HEAD стенда/,
     "🔴 не перевіряється, що дерево справді переїхало: «команда не впала» ≠ «HEAD там, де треба»");
+});
+
+/**
+ * #352 — ПІСЛЯ `lockRelease` ЛАНЦЮГ БІЛЬШЕ НЕ ВВАЖАЄ ЗАМОК СВОЇМ.
+ *
+ * 📐 Куплено заміром 07.09.2026, і механізм точний: `deploy.ts` ставив `lockOurs` у
+ * `true` на `lockTake` і НІКОЛИ не повертав у `false`. Тому перший же крок після
+ * звільнення торкався замка, якого вже немає, і ланцюг обривався терміналом.
+ *
+ * Ціна, теж заміряна: `acceptMatrix` не виконався ЖОДНОГО разу за 5 викатів 05-07.09
+ * плюс чужу ранкову сесію — тобто жива проба зліпка доступу мовчала тиждень, а її
+ * власний доккоментар нагадує, що без неї 11 клітинок пливли непоміченими шість днів.
+ *
+ * 🔴 ФІКСТУРА ПО ОБИДВА БОКИ (правило 11) — саме односторонність тут і коштувала:
+ * взяли → тримаємо · звільнили → НЕ тримаємо · будь-який інший крок → без змін ·
+ * крок ІЗ ПОМИЛКОЮ → без змін (провал `lockRelease` означає, що замок лишився нашим,
+ * і торкатись його далі правильно).
+ */
+test("#352 стан замка: взяли → тримаємо, звільнили → ні, помилка → без змін", () => {
+  assert.equal(holdsLockAfter("lockTake", false, true), true,
+    "🔴 після взяття замок не вважається нашим — ланцюг перестане його торкатись");
+  assert.equal(holdsLockAfter("lockRelease", true, true), false,
+    "🔴 після звільнення ланцюг усе ще вважає замок своїм — саме так він обривався "
+    + "на кожному викаті, і acceptMatrix не біг жодного разу");
+  assert.equal(holdsLockAfter("accept", true, true), true,
+    "🔴 звичайний крок змінив стан замка — рішення розповзлось поза дві свої точки");
+  assert.equal(holdsLockAfter("deliver", false, true), false);
+  assert.equal(holdsLockAfter("lockRelease", true, false), true,
+    "🔴 ПРОВАЛЕНЕ звільнення прийнято за успішне: замок лишився нашим, а ланцюг "
+    + "перестав його торкатись — той самий обрив, тільки з іншого боку");
+  assert.equal(holdsLockAfter("lockTake", false, false), false,
+    "🔴 провалене взяття зараховане як успішне — ланцюг торкатиметься чужого замка");
 });
