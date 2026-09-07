@@ -1777,7 +1777,7 @@ export async function expectedMonthByScope(s: SnapshotScope, by: "team" | "manag
  * прогнозу. Спершу власник, потім код.
  *
  * ⚠️ Парна реалізація для рядків «менеджер × день» живе у
- * `forecast.expectedSplitByMonth` — межа там та сама, і гейт `#352d` це стереже.
+ * `forecast.expectedSplitByMonth` — межа там та сама, і гейт `#357d` це стереже.
  * Дві реалізації тут не дублювання правила, а SQL і JS над РІЗНИМИ входами.
  *
  * ⚠️ `expectedMonthByScope` НЕ чіпається: вересневі й жовтневі числа лишаються ті самі
