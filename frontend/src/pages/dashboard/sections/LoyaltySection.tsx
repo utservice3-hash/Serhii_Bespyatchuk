@@ -4,6 +4,7 @@ import { fetchOrphanClients, fetchManagerOptions, type OrphanPool, type ManagerO
 import { ClientPlansSection } from "./ClientPlansSection";
 import { OrphanPoolSection } from "./OrphanPoolSection";
 import { ArchiveSection } from "./ArchiveSection";
+import ClosedTasksSection from "./ClosedTasksSection";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 
 /**
@@ -23,12 +24,13 @@ import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
  * (КВП/ОД/адмін): показувати вкладку тому, кому сервер віддасть 403, означало б
  * запропонувати глухий кут.
  */
-type Tab = "plan" | "pool" | "archive";
+type Tab = "plan" | "pool" | "archive" | "closed";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "plan", label: "План місяця" },
   { key: "pool", label: "Нічийні" },
   { key: "archive", label: "Архів" },
+  { key: "closed", label: "Закриті задачі" },
 ];
 
 /**
@@ -39,7 +41,7 @@ const TABS: { key: Tab; label: string }[] = [
  */
 function readTab(): Tab {
   const t = new URLSearchParams(window.location.search).get("tab");
-  return t === "pool" || t === "archive" ? t : "plan";
+  return t === "pool" || t === "archive" || t === "closed" ? t : "plan";
 }
 export function cameFromReact(): boolean {
   return new URLSearchParams(window.location.search).get("tab") === "react";
@@ -74,13 +76,22 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
     fetchManagerOptions().then(setManagers).catch(() => setManagers([]));
   }, [canSeePool]);
 
-  // Архів — та сама межа, що на сервері (`isAdminScope`): КВП/ОД/адмін.
-  const canSeeArchive = auth != null && (auth.role === "admin" || auth.role === "company");
+  // Архів — та сама межа, що на сервері (`isAdminOrLead`): КВП/ОД/адмін + ТІМЛІД.
+  // 📐 Тімліда додано 07.09.2026 (ТЗ «тімлід має бачити результат своїх дій»): право
+  // закривати задачі в нього було, а результату не було видно — заміряно 0 клієнтів в
+  // архіві й 0 закриттів людиною за весь час. Скоуп ріже СЕРВЕР (кламп по команді
+  // власника клієнта), тут лише видимість вкладки: дублювати межу на фронті означало б
+  // завести друге джерело правди про доступ.
+  const canSeeArchive = auth != null && (auth.role === "admin" || auth.role === "company"
+                                          || auth.role === "team_lead");
   // Обʼєднання: КВП/ОД/адмін + тімлід (у межах своєї команди — межу тримає сервер).
   const canMerge = auth != null && auth.role !== "manager";
   const canAssignClients = auth != null && (auth.role === "admin" || auth.role === "company");
   const visible = useMemo(
-    () => TABS.filter((t) => (t.key !== "pool" || canSeePool) && (t.key !== "archive" || canSeeArchive)),
+    () => TABS.filter((t) => (t.key !== "pool" || canSeePool)
+                          && (t.key !== "archive" || canSeeArchive)
+                          // Реєстр закритих — та сама межа, що архів: адмін-рівень або тімлід.
+                          && (t.key !== "closed" || canSeeArchive)),
     [canSeePool, canSeeArchive]);
   const active = visible.some((t) => t.key === tab) ? tab : "plan";
 
@@ -138,6 +149,7 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
       {active === "plan" && auth && <ClientPlansSection auth={auth} fromReact={cameFromReact()} />}
       {active === "pool" && canSeePool && <OrphanPoolSection auth={auth} managers={managers} />}
       {active === "archive" && canSeeArchive && <ArchiveSection auth={auth} />}
+      {active === "closed" && canSeeArchive && <ClosedTasksSection />}
     </div>
   );
 }

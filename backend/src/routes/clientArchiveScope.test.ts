@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDb } from "../testMode.js";
 import { archiveListSql } from "../core/clientArchive.js";
-import { OWNER_TEAM_CTE, ownerTeamClamp } from "../core/reactivationClose.js";
+import { OWNER_TEAM_CTE, ownerTeamClamp, assigneeTeamClamp, closedListSql,
+         closeReasonClass } from "../core/reactivationClose.js";
 
 const db = async () => (await import("../db/pool.js")).pool;
 
@@ -61,4 +62,44 @@ test("#350b 🪞 кламп звужує набір, але не обнуляє 
     `🔴 кламп по команді ${teamId} дав НУЛЬ — він ріже все підряд, і тімлід не побачить нічого`);
   assert.ok(some < all,
     `🔴 кламп нічого не звузив (${some} із ${all}) — у видачу поїде чужа команда`);
+});
+
+/**
+ * #351 — РЕЄСТР ЗАКРИТИХ ВИКОНУЄТЬСЯ ЖИВОЮ БАЗОЮ Й НЕСЕ ПРИЧИНУ ТА АВТОРА.
+ *
+ * 🔴 Перевіряємо КОЛОНКИ ВІДПОВІДІ, а не текст запиту: гейт на присутність підрядка
+ * зеленів би й тоді, коли колонка є в `SELECT`, але запит падає (SQL у шаблонному
+ * рядку не типізується — урок зони `db-sql`). Тут база сама каже, що вона віддала.
+ *
+ * ⚠️ Обидві форми, як і в архіві: адмінська без параметрів, тімлідська з `$1`.
+ */
+test("#351 реєстр закритих виконується живою БД і віддає причину й автора",
+  needsDb(), async () => {
+  const pool = await db();
+  const r = await pool.query(closedListSql(""));
+  for (const col of ["close_reason", "closed_by", "closed_at", "client_key", "task_type"]) {
+    assert.ok(r.fields.some((f) => f.name === col),
+      `🔴 реєстр не віддає «${col}» — саме через таку відсутність причина й лишалась невидимою`);
+  }
+  await pool.query(closedListSql(assigneeTeamClamp(1, "$1")), [1]);
+});
+
+/**
+ * #351b — 🪞 ДЗЕРКАЛО: у базі СПРАВДІ є що показувати, і класи не зливаються в один.
+ *
+ * Без цього `#351` лишався б зеленим на порожній таблиці — тобто доводив би, що запит
+ * не падає, і мовчав би про те, заради чого реєстр робився. 📐 Заміряно 07.09.2026:
+ * 205 закритих задач, з них 194 службові, 11 без причини, 0 людських.
+ */
+test("#351b 🪞 закриті задачі в базі Є, і клас рахується не з одного значення",
+  needsDb(), async () => {
+  const pool = await db();
+  const r = await pool.query<{ close_reason: string | null }>(closedListSql(""));
+  assert.ok(r.rowCount && r.rowCount > 0,
+    "🔴 закритих задач немає ЗОВСІМ — реєстр показував би порожнечу, і зелене тут "
+    + "означало б «нема що ламати», а не «працює»");
+  const classes = new Set(r.rows.map((x) => closeReasonClass(x.close_reason)));
+  assert.ok(classes.size >= 2,
+    `🔴 усі ${r.rowCount} рядків потрапили в ОДИН клас (${[...classes]}) — розрізнення `
+    + "не працює, і саме так 194 службові мітки прочитались би як робота людей");
 });

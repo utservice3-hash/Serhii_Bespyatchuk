@@ -547,6 +547,12 @@ CREATE INDEX IF NOT EXISTS idx_cmh_client ON client_manager_history(client_key, 
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS client_key TEXT;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS close_reason TEXT;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+-- 🔴 ХТО ЗАКРИВ — ДОДАНО 07.09.2026, І ІСТОРІЯ ЦЬОГО НЕ ЗНАЄ. `tasks` мала `closed_at`,
+-- але автора закриття не зберігала ніде: на питання «хто закрив цю задачу» відповіді не
+-- існувало В ПРИНЦИПІ, а не «її важко дістати» (той самий клас, що історія прогонів джоб).
+-- Бекфіл неможливий: даних немає. Тому старі рядки лишаються NULL і реєстр каже про них
+-- «автора не записано» — замість підставляти виконавця, який відповідає на ІНШЕ питання.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS closed_by INTEGER REFERENCES users(id);
 CREATE INDEX IF NOT EXISTS idx_tasks_client_key ON tasks(client_key) WHERE client_key IS NOT NULL;
 -- Перелік причин живе в коді (`core/reactivation.ts`), а CHECK тут тримає межу:
 -- порожня причина у закритій реактиваційній задачі неможлива за побудовою.

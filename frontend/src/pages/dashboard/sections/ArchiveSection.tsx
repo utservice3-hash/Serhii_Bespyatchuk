@@ -31,10 +31,15 @@ export function ArchiveSection({ auth }: { auth: AuthPayload | null }) {
 
   if (err) return <div className="chart-card" style={{ padding: 20, color: "var(--danger)" }}>{err}</div>;
   if (!data) return <div className="loading-text" style={{ padding: 20 }}>Завантаження…</div>;
+  /* 🔴 ПОРОЖНЬО МУСИТЬ НАЗИВАТИ СВІЙ СКОУП. Відколи архів бачить тімлід, «порожньо»
+     має ДВІ різні причини: нікого не архівували взагалі — або нікого не архівували
+     У ВАШІЙ КОМАНДІ. Один текст на обидві читався б як «фічі немає». */
   if (data.clients.length === 0)
     return (
       <div className="chart-card" style={{ padding: 24, color: "var(--text-muted)" }}>
-        Архів порожній — жодного клієнта не прибрано з екранів.
+        {data.scope === "team"
+          ? "У вашій команді ніхто не в архіві. Ви бачите лише своїх клієнтів — по компанії тут може бути не порожньо."
+          : "Архів порожній — жодного клієнта не прибрано з екранів."}
       </div>
     );
 
@@ -42,7 +47,9 @@ export function ArchiveSection({ auth }: { auth: AuthPayload | null }) {
   return (
     <div>
       <div className="orph-tiles">
-        <Tile lab="В архіві" val={String(data.clients.length)} sub="прибрані з планування й реактивації" />
+        <Tile lab="В архіві" val={String(data.clients.length)}
+              sub={data.scope === "team" ? "ваша команда · прибрані з планування й реактивації"
+                                         : "прибрані з планування й реактивації"} />
         <Tile lab="Виручка за історію" val={formatAmountFull(total)} sub="зароблена, поки клієнт був наш" />
       </div>
 

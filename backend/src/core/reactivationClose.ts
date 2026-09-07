@@ -34,11 +34,27 @@ export const SERVICE_CLOSE_REASONS: readonly string[] = [
   MIGRATED_CLOSE_REASON,
 ];
 
+/**
+ * 🔴 ПРИЧИНА ЗБЕРІГАЄТЬСЯ ЯК «ключ: пояснення», А НЕ ГОЛИМ КЛЮЧЕМ — і це знайдено
+ * читанням ЗАПИСУВАЧА, а не здогадом. `POST /reactivation-task/close` складає рядок
+ * `${reasonKey}: ${note}`, коли менеджер дописав пояснення (а для «Інше» воно
+ * обовʼязкове). Перша редакція цього класифікатора порівнювала весь рядок із довідником
+ * і зарахувала б КОЖНУ причину з поясненням до «поза довідником» — тобто найдетальніші
+ * закриття, зроблені людиною, зникли б із класу «людські».
+ *
+ * ⚠️ Службові мітки звіряються ЦІЛКОМ, а не префіксом: їх пише лише код і пише дослівно.
+ * Префіксне порівняння тут відкрило б двері рядку «returned: щось своє» ззовні.
+ */
+export function closeReasonKey(reason: string): string {
+  const i = reason.indexOf(":");
+  return (i === -1 ? reason : reason.slice(0, i)).trim();
+}
+
 export function closeReasonClass(reason: string | null | undefined): CloseClass {
   const r = (reason ?? "").trim();
   if (!r) return "none";
   if (SERVICE_CLOSE_REASONS.includes(r)) return "service";
-  if (CLOSE_REASON_KEYS.includes(r)) return "human";
+  if (CLOSE_REASON_KEYS.includes(closeReasonKey(r))) return "human";
   return "unknown";
 }
 
@@ -90,4 +106,46 @@ export const OWNER_TEAM_CTE = `
  */
 export function ownerTeamClamp(leadTeamId: number | null, param: string): string {
   return leadTeamId == null ? "" : `AND ot.team_id = ${param}`;
+}
+
+/**
+ * 🔒 КЛАМП РЕЄСТРУ ЗАКРИТИХ — ПО КОМАНДІ ВИКОНАВЦЯ, А НЕ ВЛАСНИКА КЛІЄНТА.
+ *
+ * 🔴 І ЦЕ НЕ НЕДОГЛЯД, А РІЗНІ ПРЕДМЕТИ. Архів відповідає на «яких КЛІЄНТІВ прибрано
+ * з екрана», тож ріжеться по відповідальному за клієнта. Реєстр відповідає на «що
+ * зробила МОЯ КОМАНДА», тож ріжеться по виконавцю задачі. Зліпити їх в одне правило
+ * означало б, що тімлід не побачить власної закритої задачі на клієнті, якого встигли
+ * передати іншій команді, — тобто результат СВОЄЇ дії зник би саме тоді, коли він
+ * найпотрібніший.
+ *
+ * ⚠️ Друга причина, суто фактична: пачка (`task_type='reactivation'`) взагалі не має
+ * `client_key` — клієнти в ній усередині. По власнику клієнта її не звузити ніяк.
+ */
+export function assigneeTeamClamp(leadTeamId: number | null, param: string): string {
+  return leadTeamId == null ? "" : `AND m.team_id = ${param}`;
+}
+
+/**
+ * 📋 РЕЄСТР ЗАКРИТИХ ЗАДАЧ РЕАКТИВАЦІЇ — один текст на роут і на гейт.
+ *
+ * Віддає СИРУ причину; клас рахує `closeReasonClass` уже в коді. Класифікувати в SQL
+ * означало б завести друге місце, де живе те саме правило, — і воно розійшлося б із
+ * першим тихо, бо обидва «працюють».
+ */
+export function closedListSql(clamp: string): string {
+  return `
+    SELECT t.id, t.task_type, t.title, t.client_key, t.close_reason,
+           to_char(t.closed_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS closed_at,
+           COALESCE(cu.full_name, cu.email) AS closed_by,
+           m.name AS assignee, tm.name AS team_name,
+           (SELECT d.client_name FROM deals d
+             WHERE d.client_key = t.client_key AND d.client_name IS NOT NULL
+             ORDER BY d.closed_at_kommo DESC NULLS LAST LIMIT 1) AS client_name
+      FROM tasks t
+      LEFT JOIN managers m ON m.id = t.assignee_id
+      LEFT JOIN teams tm ON tm.id = m.team_id
+      LEFT JOIN users cu ON cu.id = t.closed_by
+     WHERE t.task_type IN ('reactivation','reactivation_client')
+       AND t.status = 'done' ${clamp}
+     ORDER BY t.closed_at DESC NULLS LAST, t.id DESC`;
 }

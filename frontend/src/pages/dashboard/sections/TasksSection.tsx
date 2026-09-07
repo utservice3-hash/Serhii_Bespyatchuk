@@ -685,6 +685,20 @@ export function TasksSection({
                           </div>
                         );
                       })()}
+                      {/* 🏷 ПРИЧИНА ЗАКРИТТЯ — ВИДИМА. Поле заповнювали з першого дня
+                          (`POST /reactivation-task/close` пише «ключ: пояснення»), а
+                          видача задач його не віддавала ЗОВСІМ: людина обирала причину
+                          зі списку, і та зникала з очей назавжди. Показуємо разом із
+                          датою й автором; автора на старих рядках немає — до 07.09.2026
+                          його не записували ніде, і підставляти виконавця замість нього
+                          означало б відповідати на інше питання. */}
+                      {task.status === "done" && task.closeReason && (
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", paddingLeft: 2 }}>
+                          🏷 {task.closeReason}
+                          {task.closedAt && ` · ${task.closedAt}`}
+                          {task.closedByName ? ` · ${task.closedByName}` : " · автора не записано"}
+                        </div>
+                      )}
                       {task.subtasksJson && task.subtasksJson.length > 0 && (() => {
                         const sd = task.subtasksJson.filter((s) => s.done).length;
                         const n = task.subtasksJson.length;

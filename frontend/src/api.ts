@@ -2297,6 +2297,10 @@ export interface Task {
   id: number;
   title: string;
   status: TaskStatus;
+  /** 🏷 Причина закриття їхала в базу й ніколи не поверталась — з 07.09.2026 віддається. */
+  closeReason?: string | null;
+  closedAt?: string | null;
+  closedByName?: string | null;
   deadline: string | null;
   assigneeId: number | null;
   assigneeName: string | null;
@@ -3193,6 +3197,8 @@ export interface ArchiveRow {
   orders: number; lifetimeRevenue: number; lastPaid: string | null;
 }
 export interface ArchiveResp {
+  /** Чий зріз показано: уся компанія чи лише команда тімліда. */
+  scope?: "company" | "team";
   reasons: { key: string; label: string }[];
   clients: ArchiveRow[];
 }
@@ -3408,4 +3414,34 @@ export async function trackerAssertion(): Promise<{ assertion: string }> {
     }
     throw new TrackerAssertionError("failed", "Не вдалося підтвердити вхід.");
   }
+}
+
+/** 📋 Рядок реєстру закритих задач реактивації. */
+export interface ClosedTaskRow {
+  taskId: number;
+  taskType: string;
+  title: string;
+  clientKey: string | null;
+  clientName: string | null;
+  closeReason: string | null;
+  /** human · service · none · unknown — див. `core/reactivationClose.ts`. */
+  closeClass: "human" | "service" | "none" | "unknown";
+  closeClassLabel: string;
+  closedAt: string | null;
+  closedBy: string | null;
+  assignee: string | null;
+  teamName: string | null;
+}
+
+export interface ClosedTasksResp {
+  scope: "company" | "team";
+  total: number;
+  /** Три числа окремо: «закрито» ≠ «зроблено людиною». */
+  byClass: Partial<Record<ClosedTaskRow["closeClass"], number>>;
+  rows: ClosedTaskRow[];
+}
+
+export async function fetchReactivationClosed(): Promise<ClosedTasksResp> {
+  const { data } = await api.get<ClosedTasksResp>("/dashboard/reactivation-closed");
+  return data;
 }

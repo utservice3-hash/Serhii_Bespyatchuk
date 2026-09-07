@@ -102,12 +102,19 @@ tasksRouter.get("/", async (req, res) => {
             t.o2o_type AS "o2oType", to_char(t.o2o_meeting_date, 'YYYY-MM-DD') AS "o2oMeetingDate",
             t.o2o_resolution AS "o2oResolution", t.o2o_resolved_at AS "o2oResolvedAt",
             COALESCE(rm.name, ru.email) AS "o2oResolvedByName",
-            t.created_at AS "createdAt", t.updated_at AS "updatedAt"
+            t.created_at AS "createdAt", t.updated_at AS "updatedAt",
+            -- 🏷 ПРИЧИНА ЗАКРИТТЯ ЇХАЛА В БАЗУ Й НІКОЛИ НЕ ПОВЕРТАЛАСЬ. Поле заповнює
+            -- POST /reactivation-task/close, а видача задач його не віддавала ЗОВСІМ —
+            -- тобто людина обирала причину зі списку, і та зникала з очей назавжди.
+            t.close_reason AS "closeReason",
+            to_char(t.closed_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS "closedAt",
+            COALESCE(cu.full_name, cu.email) AS "closedByName"
      FROM tasks t
      LEFT JOIN managers m ON m.id = t.assignee_id
      LEFT JOIN users u ON u.id = t.created_by
      LEFT JOIN users ru ON ru.id = t.o2o_resolved_by
      LEFT JOIN managers rm ON rm.id = ru.manager_id
+     LEFT JOIN users cu ON cu.id = t.closed_by
      ${where}
      ORDER BY t.pinned DESC, t.created_at DESC`,
     params

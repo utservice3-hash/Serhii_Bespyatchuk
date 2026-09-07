@@ -79,6 +79,11 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/loyalty"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-override"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-archive"), tabs: ["loyalty"] },
+    // 📋 Реєстр закритих задач реактивації живе на тому самому екрані клієнтів, що
+    // архів, — тож і вкладка та сама. Межа мусить бути ОГОЛОШЕНОЮ: перевірка ролі
+    // всередині обробника гейту #17 не видна, а дефолт «немає межі → дозволено» вже
+    // раз коштував інциденту (три оглядові роути відкрились HR).
+    { test: pre("/api/dashboard/reactivation-closed"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/loyalty-overrides"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/reactivation"), tabs: ["loyalty"] },
     // Кандидати на реактивацію малює ЗАДАЧНИК (`TasksSection`) — тип задачі

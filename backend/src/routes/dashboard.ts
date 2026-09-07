@@ -46,7 +46,8 @@ import { loadClientSegments, factsFor, keepInReactivation } from "../core/client
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS,
          archiveListSql } from "../core/clientArchive.js";
 import { logClientAdmin, clientAdminLog } from "../core/clientAdminLog.js";
-import { ownerTeamClamp } from "../core/reactivationClose.js";
+import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
+         CLOSE_CLASS_LABEL } from "../core/reactivationClose.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
@@ -6601,10 +6602,61 @@ dashboardRouter.post("/reactivation-task/close", async (req, res) => {
   if (!row.client_key || !(await canSeeClient(auth, row.client_key))) return res.status(403).json({ error: "Forbidden" });
 
   const stored = note ? `${reasonKey}: ${note}` : reasonKey;
+  /* 🔴 АВТОР ЗАКРИТТЯ ЗАПИСУЄТЬСЯ ТУТ І ТІЛЬКИ ТУТ. До 07.09.2026 його не зберігали
+     ніде: `closed_at` був, `closed_by` — ні, тож на питання «хто закрив» відповіді не
+     існувало В ПРИНЦИПІ. Бекфіл неможливий, і саме тому реєстр каже про старі рядки
+     «автора не записано», а не підставляє виконавця — той відповідає на інше питання. */
   await pool.query(
-    `UPDATE tasks SET status = 'done', close_reason = $2, closed_at = now(), updated_at = now() WHERE id = $1`,
-    [taskId, stored]);
+    `UPDATE tasks SET status = 'done', close_reason = $2, closed_at = now(),
+            closed_by = $3, updated_at = now() WHERE id = $1`,
+    [taskId, stored, auth.userId]);
   res.json({ ok: true, closeReason: stored });
+});
+
+/**
+ * 📋 РЕЄСТР ЗАКРИТИХ ЗАДАЧ РЕАКТИВАЦІЇ — «куди поділось те, що я закрив».
+ *
+ * 📐 Привід заміряний 07.09.2026, і він же задає форму екрана: закритих задач у базі
+ * 205, а закритих ЛЮДИНОЮ — жодної (194 — мітка нашого перенесення, 11 пачок закриті
+ * взагалі без причини). Реєстр, що показав би просто «закриті», відрапортував би
+ * 205 опрацьованих клієнтів там, де роботи не було. Тому клас причини їде в кожному
+ * рядку І окремою підсумковою трійкою.
+ *
+ * 🔒 СКОУП — ПО КОМАНДІ ВИКОНАВЦЯ (`assigneeTeamClamp`), а не власника клієнта, і це
+ * свідомо: реєстр відповідає на «що зробила МОЯ команда». Пояснення різниці — у
+ * доккоментарі самого клампа.
+ */
+dashboardRouter.get("/reactivation-closed", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише КВП, ОД, адміністратор або тімлід" });
+  const leadTeamId = isAdminScope(auth) ? null : auth.teamId ?? -1;
+  const params: unknown[] = [];
+  let clamp = "";
+  if (leadTeamId != null) { params.push(leadTeamId); clamp = assigneeTeamClamp(leadTeamId, `$${params.length}`); }
+
+  const r = await pool.query<{
+    id: number; task_type: string; title: string; client_key: string | null;
+    close_reason: string | null; closed_at: string | null; closed_by: string | null;
+    assignee: string | null; team_name: string | null; client_name: string | null;
+  }>(closedListSql(clamp), params);
+
+  const rows = r.rows.map((x) => {
+    const cls = closeReasonClass(x.close_reason);
+    return {
+      taskId: x.id, taskType: x.task_type, title: x.title,
+      clientKey: x.client_key, clientName: x.client_name ?? x.client_key,
+      closeReason: x.close_reason, closeClass: cls, closeClassLabel: CLOSE_CLASS_LABEL[cls],
+      closedAt: x.closed_at, closedBy: x.closed_by, assignee: x.assignee, teamName: x.team_name,
+    };
+  });
+  const byClass = rows.reduce<Record<string, number>>((m, x) => (m[x.closeClass] = (m[x.closeClass] ?? 0) + 1, m), {});
+  res.json({
+    scope: leadTeamId == null ? "company" : "team",
+    total: rows.length,
+    /** Три числа окремо — саме вони й були приводом: «закрито» ≠ «зроблено людиною». */
+    byClass,
+    rows,
+  });
 });
 
 /** Позначка «сезонний» — єдине, що ставиться руками (з дат її вивести неможливо). */

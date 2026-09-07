@@ -310,6 +310,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/reactivation-task", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 📋 Реєстр закритих (07.09.2026): читання, тому пробувати безпечно й team_lead —
+  // у `allow`. Скоуп ріже SQL по команді ВИКОНАВЦЯ; матриця відповідає лише на
+  // «пускати чи ні».
+  { method: "GET", path: "/api/dashboard/reactivation-closed", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/dashboard/reactivation-task/close", cls: "deny-only",
     allow: [], deny: ["hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника): тімлід ОБʼЄДНУЄ клієнтів, але
