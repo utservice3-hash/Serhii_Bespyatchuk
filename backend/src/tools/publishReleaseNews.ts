@@ -17,8 +17,16 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pool } from "../db/pool.js";
 import { parseReleaseNotes } from "../core/releaseNotes.js";
+
+/**
+ * ЛІНИВИЙ ПУЛ: `PUBLISH_SQL` — це ТЕКСТ, і гейт мусить читати його без бази. Верхній
+ * імпорт пула тягне `config.js`, який кидає на відсутньому `DATABASE_URL` ще НА ІМПОРТІ,
+ * тобто раніше, ніж спрацює `skip`. Спіймано на собі втретє за два дні: гейт падав не на
+ * твердженні, а на завантаженні модуля — і зелене означало б «модуль підвантажився».
+ */
+const db = async () => (await import("../db/pool.js")).pool;
+
 
 /** Файл лежить у корені репозиторію, а скрипт біжить із `backend/`. */
 export const NOTES_PATH = resolve(import.meta.dirname, "..", "..", "..", "RELEASE_NOTES.md");
@@ -40,7 +48,7 @@ export async function publishReleaseNews(sha: string): Promise<string> {
       ? `🔴 ${NOTES_PATH} не знайдено — новини не буде. Це НЕ штатна тиша: файл мав бути в репозиторії`
       : "тиша: у RELEASE_NOTES.md немає непорожнього верхнього блоку — цей викат нічого не оголошує (штатно)";
   }
-  const r = await pool.query<{ id: number }>(PUBLISH_SQL, [parsed.note.title, parsed.note.body, sha]);
+  const r = await (await db()).query<{ id: number }>(PUBLISH_SQL, [parsed.note.title, parsed.note.body, sha]);
   return r.rowCount
     ? `опубліковано «${parsed.note.title}» (id ${r.rows[0].id})`
     : `новина про ${sha} вже існує — повторний прогін нічого не додав`;
@@ -50,6 +58,6 @@ if (process.argv[1]?.endsWith("publishReleaseNews.js")) {
   const sha = process.argv.find((a) => a.startsWith("--sha="))?.slice(6) ?? "";
   if (!sha) { console.error("🔴 --sha= обовʼязковий: без нього немає ідемпотентності"); process.exit(2); }
   publishReleaseNews(sha)
-    .then((msg) => { console.log(msg); return pool.end(); })
+    .then(async (msg) => { console.log(msg); return (await db()).end(); })
     .catch((e) => { console.error(String(e)); process.exit(1); });
 }
