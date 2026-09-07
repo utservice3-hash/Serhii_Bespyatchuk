@@ -568,14 +568,6 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS closed_by INTEGER REFERENCES users(id
 -- появи, а не з початку часів.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS news_seen_at TIMESTAMPTZ DEFAULT now();
 
-ALTER TABLE news ADD COLUMN IF NOT EXISTS release_sha TEXT;
--- 🗞 МʼЯКЕ ВИДАЛЕННЯ НОВИН (07.09.2026). Хрестик робив `DELETE FROM news` — фізично, для
--- всіх, без сліду. Того ж дня новина про викат зникла за годину, і довести, що вона була,
--- можна було лише памʼяттю про її id. Тепер рядок лишається, а з видачі зникає.
-ALTER TABLE news ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE news ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);
-CREATE UNIQUE INDEX IF NOT EXISTS news_release_sha_uniq
-  ON news (release_sha) WHERE release_sha IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_client_key ON tasks(client_key) WHERE client_key IS NOT NULL;
 -- Перелік причин живе в коді (`core/reactivation.ts`), а CHECK тут тримає межу:
 -- порожня причина у закритій реактиваційній задачі неможлива за побудовою.
@@ -808,6 +800,22 @@ CREATE TABLE IF NOT EXISTS news (
 );
 CREATE INDEX IF NOT EXISTS idx_news_category ON news(category, created_at DESC);
 ALTER TABLE news ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+-- 📰 НОВИНА ПРО ВИКАТ + МʼЯКЕ ВИДАЛЕННЯ (07.09.2026).
+--
+-- 🔴 БЛОК СТОЇТЬ ПІСЛЯ `CREATE TABLE news`, І ЦЕ НЕ ПРИБИРАННЯ. Спершу він лежав на 230
+-- рядків ВИЩЕ — на проді це працювало, бо таблиця там давно є, а от база З НУЛЯ не
+-- будувалась узагалі: `ALTER TABLE news` падав із «relation news does not exist» і
+-- обривав ВЕСЬ файл (pg виконує багатооператорний запит однією транзакцією).
+-- Помітити було нічим: гейти на порожньому кластері (#274d, #358b) у цьому оточенні
+-- скіпались через зламану локаль, тобто дві різні поломки ховали одна одну.
+-- ⚠️ Звідси правило для наступного: `ALTER TABLE X` дописується ПІД блоком таблиці X,
+-- а не в кінець найближчого розділу — інакше `schema.sql` тихо перестає бути схемою.
+ALTER TABLE news ADD COLUMN IF NOT EXISTS release_sha TEXT;
+ALTER TABLE news ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE news ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);
+CREATE UNIQUE INDEX IF NOT EXISTS news_release_sha_uniq
+  ON news (release_sha) WHERE release_sha IS NOT NULL;
 
 -- Daily approximate price per km by truck tonnage.
 CREATE TABLE IF NOT EXISTS km_prices (

@@ -195,16 +195,64 @@ function pgBinDir(): string | null {
 }
 
 /**
+ * 🌍 ЛОКАЛЬ ЗАДАЄТЬСЯ ОБГОРТКОЮ, А НЕ КОЖНИМ ВИКЛИКОМ ОКРЕМО — інакше наступна
+ * команда, дописана сюди через півроку, забуде її й почне падати вибірково.
+ *
+ * 📐 ЗАМІРЯНО 07.09.2026, і симптом був оманливий двічі поспіль. macOS передає в
+ * оточення `LC_CTYPE=UTF-8`, яке PostgreSQL за локаль не вважає:
+ *   ① `initdb` падає з «invalid locale settings»;
+ *   ② полагодивши тільки його, дістаєш ДРУГЕ падіння — `pg_ctl` пише в лог
+ *      «postmaster became multithreaded during startup» із підказкою про `LC_ALL`.
+ * Обидва рази `provisionScratch` доповідав «немає бінарів PostgreSQL» — бінарі були,
+ * і через цю неправдиву причину **47 гейтів скіпались локально**, серед них головні
+ * гейти двох проходів (#274d, #358b). Тобто помилка не просто ховала гейти — вона
+ * називала себе чужим іменем, а це наштовхує шукати не там.
+ */
+/**
+ * 🔴 UTF-8, А НЕ ПРОСТО `C` — і це не педантизм, це впіймано гейтом. Під локаллю `C`
+ * PostgreSQL НЕ переводить кирилицю в нижній регістр: `lower('ПАЧКОВИЙ')` віддає
+ * `ПАЧКОВИЙ` (заміряно 07.09.2026). Кластер тоді відповідає інакше, ніж прод, і гейт
+ * `#25c` червоніє на РОБОЧОМУ коді — «ключ „пачко вий" не звівся до „пачковий"».
+ * Тобто гонитва за «аби стартувало» ледь не купила зелений старт ціною брехливої бази.
+ *
+ * Порядок проб: `C.UTF-8` (є і в сучасному glibc, і на цій машині) → `en_US.UTF-8`
+ * (macOS і старіші дистрибутиви) → `C` як останній рубіж: краще нехай кластер підніметься
+ * і `#25c` голосно почервоніє, ніж мовчазний скіп із неправдивою причиною.
+ */
+function pickLocale(): string {
+  const have = spawnSync("locale", ["-a"], { encoding: "utf8" });
+  const list = (have.stdout ?? "").split("\n").map((l) => l.trim().toLowerCase());
+  for (const cand of ["C.UTF-8", "en_US.UTF-8"]) {
+    if (list.includes(cand.toLowerCase()) || list.includes(cand.toLowerCase().replace("-", ""))) return cand;
+  }
+  return "C";
+}
+
+const LC = pickLocale();
+const LOCALE = `LC_ALL=${LC} LANG=${LC}`;
+
+/**
  * PostgreSQL відмовляється працювати з-під root. Якщо ми root — виконуємо команди
  * через `su` від службового користувача. Інакше запускаємо як є.
  */
 function runner(): { wrap: (cmd: string) => [string, string[]]; owner: string | null } | null {
   const amRoot = typeof process.getuid === "function" && process.getuid() === 0;
-  if (!amRoot) return { wrap: (cmd) => ["/bin/bash", ["-lc", cmd]], owner: null };
+  /**
+   * ⚠️ `-c`, А НЕ `-lc`, І ЦЕ ЗАМІРЯНО, А НЕ СМАК. Логін-шелл підтягує ПРОФІЛЬ
+   * розробника, а команди нижче й так ідуть АБСОЛЮТНИМ шляхом (`${bin}/initdb` тощо) —
+   * тобто профіль не давав нічого, крім чужого коду в дорозі до `initdb`.
+   *
+   * 📐 07.09.2026 він цю дорогу й перекрив: на машині власника профіль тягне sdkman,
+   * той під bash падає на zsh-ізмі (`${candidate_name^^}: bad substitution`), і
+   * `initdb` не встигає стартувати. Наслідок був не косметичний — **47 гейтів
+   * скіпались локально**, серед них головні гейти двох проходів (#274d, #358b), і
+   * причина в діагностиці читалась як «немає бінарів PostgreSQL», хоча бінарі були.
+   */
+  if (!amRoot) return { wrap: (cmd) => ["/bin/bash", ["-c", `${LOCALE} ${cmd}`]], owner: null };
   for (const user of ["postgres", "pgsql"]) {
     const probe = spawnSync("id", ["-u", user], { encoding: "utf8" });
     if (probe.status === 0) {
-      return { wrap: (cmd) => ["su", [user, "-s", "/bin/bash", "-c", cmd]], owner: user };
+      return { wrap: (cmd) => ["su", [user, "-s", "/bin/bash", "-c", `${LOCALE} ${cmd}`]], owner: user };
     }
   }
   return null;
@@ -268,7 +316,20 @@ export function provisionScratch(): Scratch | Unavailable {
 
     // trust-авторизація безпечна: кластер слухає ЛИШЕ unix-сокет усередині свого ж
     // тимчасового каталогу, TCP вимкнено (`listen_addresses=''`). Ззовні не видно.
-    execFileSync(...run.wrap(`${bin}/initdb -D ${data} -U scratch --auth=trust`),
+    /**
+     * ⚠️ ЛОКАЛЬ ЗАДАЄМО ЯВНО — інакше кластер успадковує локаль розробника, і тест
+     * починає залежати від налаштувань чужої машини.
+     *
+     * 📐 07.09.2026 саме це й ламало прогін: macOS передає в оточення `LC_CTYPE=UTF-8`,
+     * яке PostgreSQL за локаль не вважає, і `initdb` падав із «invalid locale settings».
+     * Діагностика при цьому казала «немає бінарів PostgreSQL» — бінарі були, і **47
+     * гейтів скіпались** із неправдивою причиною.
+     *
+     * 🔴 `--locale=C` + `--encoding=UTF8`: сортування нам байдуже (гейти порівнюють
+     * значення, не порядок), а от кирилиця у фікстурах мусить лягати без втрат.
+     */
+    execFileSync(...run.wrap(
+      `${bin}/initdb -D ${data} -U scratch --auth=trust --locale=${LC} --encoding=UTF8`),
       { encoding: "utf8", stdio: "pipe" });
     execFileSync(...run.wrap(
       `${bin}/pg_ctl -D ${data} -o "-k ${dir} -c listen_addresses=''" -w -l ${dir}/log start`),
