@@ -343,10 +343,19 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🗄 Архів клієнта — КВП/ОД/адмін (рішення власника 05.08.2026). Тімлід і
   // менеджер НЕ архівують: прибрати клієнта з екранів усієї компанії — не їхнє
   // рішення (те саме правило, що для «прибрати з постійних»).
+  // 🔁 ЗСУВ 07.09.2026 (рішення власника, ТЗ «тімлід має бачити результат своїх дій»):
+  // тімлід ПЕРЕЇХАВ із deny в allow на обох роутах — але ЛИШЕ в межах своєї команди,
+  // і межу тримає SQL-кламп у самому роуті, а не ця таблиця. Матриця відповідає на
+  // «пускати чи ні», не на «скільки рядків віддати».
+  // 📐 Привід заміряний: право закривати задачі є, а результату не видно — 0 клієнтів
+  // в архіві, 0 людських причин закриття за весь час. Механізм був побудований і мертвий.
+  // ⚠️ team_lead ЗНИК З ОБОХ СПИСКІВ, а не переїхав у `allow` — рядок реально ЗАПИСУЄ.
+  // Прецедент описаний у шапці цього файла (14 рядків із фінансистом): проба ролі, що
+  // проходить гейт, виконала б справжню архівацію клієнта проти прода. Спіймав #11b.
   { method: "POST", path: "/api/dashboard/client-archive", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/client-archive", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "DELETE", path: "/api/dashboard/loyalty-override/:clientKey", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/loyalty-overrides", cls: "GET",

@@ -60,3 +60,50 @@ export const LAST_PAID_CTE = `
   ${lastOrderCte("arch_orders")},
   arch_paid AS (SELECT client_key, last_order_at AS last_paid FROM arch_orders)`;
 export const LAST_PAID_JOIN = "LEFT JOIN arch_paid ap ON ap.client_key = a.client_key";
+
+import { OWNER_TEAM_CTE } from "./reactivationClose.js";
+
+/**
+ * 🗄 СПИСОК АРХІВУ — ОДИН ТЕКСТ НА РОУТ І НА ГЕЙТ.
+ *
+ * 🔴 ВИНЕСЕНО САМЕ ЗАРАДИ ДОКАЗУ. Правило зони каже прямо: SQL усередині шаблонного
+ * рядка НЕ типізується — `tsc` зелений, `npm test` зелений, а запит падає на першому
+ * ж кліку. Єдина перевірка, яка тут щось означає, — виконати ТОЙ САМИЙ текст проти
+ * живої бази. Поки він жив усередині роута, гейт мусив би тримати власну копію, а
+ * доказ на переписаному тексті є доказом ні про що (урок `#21c`).
+ *
+ * `clamp` — готова умова скоупу (`ownerTeamClamp`), порожня для адмін-рівня.
+ */
+export function archiveListSql(clamp: string): string {
+  return `WITH ${LAST_PAID_CTE},${OWNER_TEAM_CTE},
+     agg AS (
+       SELECT d.client_key, COUNT(*)::int AS orders, COALESCE(SUM(d.price),0) AS revenue
+         FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
+        GROUP BY d.client_key
+     )
+     SELECT o.client_key, COALESCE(o.client_name, nm.client_name) AS client_name,
+            o.archive_reason AS reason,
+            to_char(o.archived_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS archived_at,
+            COALESCE(u.full_name, u.email) AS by_name,
+            COALESCE(a.orders,0) AS orders, COALESCE(a.revenue,0) AS revenue,
+            to_char(ap.last_paid AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid
+       FROM loyalty_overrides o
+       LEFT JOIN arch_paid ap ON ap.client_key = o.client_key
+       LEFT JOIN agg a ON a.client_key = o.client_key
+       LEFT JOIN users u ON u.id = o.archived_by
+       -- 🔴 ІМʼЯ КЛІЄНТА БЕРЕТЬСЯ З deals, ТИМ САМИМ LATERAL, ЩО Й У РЕАКТИВАЦІЇ.
+       -- loyalty_overrides.client_name ніхто не заповнює (архівація пише лише
+       -- ключ і причину), тож фолбек "?? client_key" показував НОРМАЛІЗОВАНИЙ
+       -- ключ: «АМС ФАРМ ТОВ» на екрані виглядало як «амсфарм». Спіймано живою
+       -- пробою на проді, не читанням коду.
+       LEFT JOIN LATERAL (
+         SELECT d2.client_name FROM deals d2
+          WHERE d2.client_key = o.client_key AND d2.client_name IS NOT NULL
+          ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
+       ) nm ON true
+       LEFT JOIN owner_team ot ON ot.client_key = o.client_key
+      WHERE ${archivedSql("o", "ap")} ${clamp}
+      ORDER BY o.archived_at DESC`;
+}

@@ -43,8 +43,10 @@ import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
-import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS } from "../core/clientArchive.js";
+import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS,
+         archiveListSql } from "../core/clientArchive.js";
 import { logClientAdmin, clientAdminLog } from "../core/clientAdminLog.js";
+import { ownerTeamClamp } from "../core/reactivationClose.js";
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
@@ -3301,9 +3303,19 @@ dashboardRouter.post("/loyalty-override", async (req, res) => {
  * текстом) і `CHECK`-ом у БД (щоб її не обійшов скрипт повз роут).
  */
 dashboardRouter.post("/client-archive", async (req, res) => {
-  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише КВП, ОД або адміністратор" });
+  /* 🔴 РОЛЬОВИЙ ГЕЙТ ЛИШАЄТЬСЯ ПЕРШИМ ЗНАЧУЩИМ ОПЕРАТОРОМ — гарантія «403 = спрацював
+     гейт» (на порядку операторів уже раз відкочували прод 04.08.2026). Перевірка
+     КОМАНДИ стоїть після розбору ключа неминуче: щоб спитати «чий це клієнт», треба
+     спершу знати, який. Тому вона окрема й теж 403, а не 400. */
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише КВП, ОД, адміністратор або тімлід" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!isAdminScope(auth)) {
+    const team = await clientOwnerTeam(clientKey);
+    if (team == null || team !== auth.teamId)
+      return res.status(403).json({ error: "Клієнт не з вашої команди" });
+  }
   const restore = req.body?.restore === true;
   if (restore) {
     await pool.query(
@@ -3335,43 +3347,25 @@ dashboardRouter.post("/client-archive", async (req, res) => {
  * а не в чиїйсь памʼяті.
  */
 dashboardRouter.get("/client-archive", async (req, res) => {
-  if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише КВП, ОД або адміністратор" });
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише КВП, ОД, адміністратор або тімлід" });
+  /* 🔒 СКОУП РІЖЕТЬСЯ В SQL, А НЕ У ВІДПОВІДІ. Фільтр на фронті лишив би чужу команду
+     в тілі відповіді — тобто один `curl` віддав би те, що екран ховає. Тімлід без
+     команди отримує ПОРОЖНЬО (умова не збігається ні з чим) — і `scope` у відповіді
+     каже, чому саме, щоб порожнеча не читалась як «архів порожній». */
+  const leadTeamId = isAdminScope(auth) ? null : auth.teamId ?? -1;
+  const params: unknown[] = [];
+  let clamp = "";
+  if (leadTeamId != null) { params.push(leadTeamId); clamp = ownerTeamClamp(leadTeamId, `$${params.length}`); }
   const r = await pool.query<{
     client_key: string; client_name: string | null; reason: string; archived_at: string;
     by_name: string | null; orders: string; revenue: string; last_paid: string | null;
   }>(
-    `WITH ${LAST_PAID_CTE},
-     agg AS (
-       SELECT d.client_key, COUNT(*)::int AS orders, COALESCE(SUM(d.price),0) AS revenue
-         FROM deals d
-         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
-        GROUP BY d.client_key
-     )
-     SELECT o.client_key, COALESCE(o.client_name, nm.client_name) AS client_name,
-            o.archive_reason AS reason,
-            to_char(o.archived_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS archived_at,
-            COALESCE(u.full_name, u.email) AS by_name,
-            COALESCE(a.orders,0) AS orders, COALESCE(a.revenue,0) AS revenue,
-            to_char(ap.last_paid AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS last_paid
-       FROM loyalty_overrides o
-       LEFT JOIN arch_paid ap ON ap.client_key = o.client_key
-       LEFT JOIN agg a ON a.client_key = o.client_key
-       LEFT JOIN users u ON u.id = o.archived_by
-       -- 🔴 ІМʼЯ КЛІЄНТА БЕРЕТЬСЯ З deals, ТИМ САМИМ LATERAL, ЩО Й У РЕАКТИВАЦІЇ.
-       -- loyalty_overrides.client_name ніхто не заповнює (архівація пише лише
-       -- ключ і причину), тож фолбек "?? client_key" показував НОРМАЛІЗОВАНИЙ
-       -- ключ: «АМС ФАРМ ТОВ» на екрані виглядало як «амсфарм». Спіймано живою
-       -- пробою на проді, не читанням коду.
-       LEFT JOIN LATERAL (
-         SELECT d2.client_name FROM deals d2
-          WHERE d2.client_key = o.client_key AND d2.client_name IS NOT NULL
-          ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
-       ) nm ON true
-      WHERE ${archivedSql("o", "ap")}
-      ORDER BY o.archived_at DESC`);
+    archiveListSql(clamp), params);
   res.json({
     reasons: ARCHIVE_REASONS,
+    /** Чий зріз показано — щоб порожньо не читалось як «архів порожній». */
+    scope: leadTeamId == null ? "company" : "team",
     clients: r.rows.map((x) => ({
       clientKey: x.client_key, clientName: x.client_name ?? x.client_key,
       reason: x.reason, reasonLabel: ARCHIVE_REASONS.find((z) => z.key === x.reason)?.label ?? x.reason,
