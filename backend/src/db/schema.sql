@@ -569,6 +569,11 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS closed_by INTEGER REFERENCES users(id
 ALTER TABLE users ADD COLUMN IF NOT EXISTS news_seen_at TIMESTAMPTZ DEFAULT now();
 
 ALTER TABLE news ADD COLUMN IF NOT EXISTS release_sha TEXT;
+-- 🗞 МʼЯКЕ ВИДАЛЕННЯ НОВИН (07.09.2026). Хрестик робив `DELETE FROM news` — фізично, для
+-- всіх, без сліду. Того ж дня новина про викат зникла за годину, і довести, що вона була,
+-- можна було лише памʼяттю про її id. Тепер рядок лишається, а з видачі зникає.
+ALTER TABLE news ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE news ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);
 CREATE UNIQUE INDEX IF NOT EXISTS news_release_sha_uniq
   ON news (release_sha) WHERE release_sha IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_client_key ON tasks(client_key) WHERE client_key IS NOT NULL;

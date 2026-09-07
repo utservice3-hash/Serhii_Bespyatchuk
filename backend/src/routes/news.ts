@@ -2,6 +2,7 @@ import { Router } from "express";
 import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { UNREAD_COUNT_SQL, MARK_SEEN_SQL } from "../core/newsSeen.js";
+import { andAlive, DELETE_SQL } from "../core/newsVisibility.js";
 import { requireAuth } from "../auth/middleware.js";
 
 export const newsRouter = Router();
@@ -20,7 +21,7 @@ newsRouter.get("/", async (req, res) => {
   }
   const result = await pool.query(
     `SELECT id, category, title, body, author, image_url, created_at
-     FROM news ${where} ORDER BY created_at DESC LIMIT 100`,
+     FROM news ${where} ${andAlive(where.length > 0)} ORDER BY created_at DESC LIMIT 100`,
     params
   );
   res.json({ news: result.rows });
@@ -45,8 +46,12 @@ newsRouter.post("/", async (req, res) => {
 
 newsRouter.delete("/:id", async (req, res) => {
   if (!isAdminScope(req.auth!)) return res.status(403).json({ error: "Лише адміністратор" });
-  await pool.query(`DELETE FROM news WHERE id = $1`, [Number(req.params.id)]);
-  res.json({ ok: true });
+  /* 🔴 МʼЯКО: рядок лишається, з видачі зникає. Фізичне видалення не лишало ні сліду,
+     ні шляху назад — 07.09.2026 новина про викат зникла за годину, і єдиним доказом її
+     існування була моя памʼять про id. Повторне видалення вже видаленої нічого не
+     змінює (`AND deleted_at IS NULL`), тож дві вкладки не перезаписують одна одну. */
+  const r = await pool.query(DELETE_SQL, [Number(req.params.id), req.auth!.userId]);
+  res.json({ ok: true, removed: r.rowCount ?? 0 });
 });
 
 /** Today's approximate price per km by tonnage (latest available). */

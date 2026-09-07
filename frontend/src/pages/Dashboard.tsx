@@ -1400,15 +1400,32 @@ export function Dashboard() {
                     <h2 className="chart-title">{n.title}</h2>
                     {auth?.role === "admin" && (
                       <button
+                        /* 🔴 ПІДТВЕРДЖЕННЯ — БО ДІЯ ДЛЯ ВСІХ, А ЗНАЧОК ЧИТАВСЯ ЯК «ЗАКРИТИ».
+                           07.09.2026 новина про викат зникла за годину саме так: хрестик у
+                           кутку картки виглядає як «прибрати з очей», а робив видалення для
+                           всієї компанії. Текст питання називає обидва факти — для кого і
+                           чи зворотно. */
                         onClick={async () => {
+                          if (!confirm(`Видалити новину «${n.title}»?\n\nВона зникне В УСІХ, не лише у вас. Запис зберігається, і адміністратор може повернути його через базу.`)) return;
                           await deleteNews(n.id);
                           setNewsItems(await fetchNews(newsCategory));
                         }}
+                        title="Видалити новину для всіх"
                         style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)" }}
                       >
-                        ✕
+                        🗑
                       </button>
                     )}
+                  </div>
+                  {/* 🕒 Час новини. Поле `created_at` приходило з роута від самого початку —
+                      його просто ніхто не малював, тож стрічка не давала відповіді на
+                      «коли це було». Формат короткий: дата й година, без секунд. */}
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
+                    {new Date(n.created_at).toLocaleString("uk-UA", {
+                      day: "2-digit", month: "2-digit", year: "numeric",
+                      hour: "2-digit", minute: "2-digit",
+                    })}
+                    {n.author && ` · ${n.author}`}
                   </div>
                   {n.image_url && (
                     <img src={n.image_url} alt="" style={{ maxWidth: "100%", borderRadius: 8, marginBottom: 8 }} />
