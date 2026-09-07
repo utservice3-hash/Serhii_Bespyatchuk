@@ -135,6 +135,7 @@ export function Layout({
   screens,
   trackerEnabled,
   messengerUnread = 0,
+  newsUnread = 0,
 }: {
   children: React.ReactNode;
   active: NavKey;
@@ -144,6 +145,8 @@ export function Layout({
   screens?: string[];
   trackerEnabled?: boolean;
   messengerUnread?: number;
+  /** 🔔 Скільки новин зʼявилось після останнього візиту в розділ. */
+  newsUnread?: number;
 }) {
   const navigate = useNavigate();
   const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled);
@@ -255,7 +258,10 @@ export function Layout({
                     </button>
                   );
                 }
-                const badge = item.key === "messenger" && messengerUnread > 0 ? messengerUnread : 0;
+                // 🔔 ТОЙ САМИЙ механізм значка, що в месенджера, а не другий поруч:
+                // два різні способи показати «є нове» розійшлись би у вигляді й поведінці.
+                const badge = item.key === "messenger" ? messengerUnread
+                            : item.key === "news" ? newsUnread : 0;
                 return (
                 <button
                   key={item.key}

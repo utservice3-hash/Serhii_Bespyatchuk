@@ -559,6 +559,15 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS closed_by INTEGER REFERENCES users(id
 -- вставкою й відповіддю, ланцюг перезапускають руками, і «спершу подивись, чи вже є»
 -- програє гонці. Частковий унікальний — бо в новин, писаних людьми й джобою `syncNews`,
 -- sha немає й не буде, а `NULL` в унікальному індексі не конфліктує лише поодинці.
+-- 🔔 КОЛИ ЛЮДИНА ОСТАННІЙ РАЗ ЗАХОДИЛА В НОВИНИ.
+-- 🔴 `DEFAULT now()` тут не косметика, а рішення: `ADD COLUMN` із дефолтом заповнює
+-- НАЯВНІ рядки часом міграції, тобто вся історія новин вважається побаченою. Без цього
+-- в день викату кожен отримав би десятки непрочитаних за всі місяці — і навчився б
+-- ігнорувати значок із першого дня, тобто фіча вбила б себе на старті.
+-- Нова людина, створена пізніше, теж отримує `now()`: для неї «нове» починається з її
+-- появи, а не з початку часів.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS news_seen_at TIMESTAMPTZ DEFAULT now();
+
 ALTER TABLE news ADD COLUMN IF NOT EXISTS release_sha TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS news_release_sha_uniq
   ON news (release_sha) WHERE release_sha IS NOT NULL;

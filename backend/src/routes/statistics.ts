@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import {
   CATALOG, getDepartment, getMetric, canonTeamLead, SALES_TEAM_LEAD, STATS_AUTO_FROM,
+  visibleDepartments,
 } from "../statistics/catalog.js";
 
 /**
@@ -22,8 +23,11 @@ function ownTeamLead(teamId: number | null): string | null {
 }
 
 // Структура розділу — джерело правди для фронта.
+// 🙈 Ручні відділи не потрапляють у ВІДПОВІДЬ, а не ховаються на екрані: фільтр у фронті
+// лишив би їх у тілі, і те, що екран приховує, віддав би один `curl`. Каталог при цьому
+// цілий — `getMetric` для схованих відділів працює далі (ручний запис і CSV-імпорт).
 statisticsRouter.get("/catalog", (_req, res) => {
-  res.json({ departments: CATALOG, autoFrom: STATS_AUTO_FROM });
+  res.json({ departments: visibleDepartments(), autoFrom: STATS_AUTO_FROM });
 });
 
 // Значення. ?department=&period_type=month|week&from=YYYY-MM-DD&to=YYYY-MM-DD

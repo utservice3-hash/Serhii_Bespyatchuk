@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
+import { UNREAD_COUNT_SQL, MARK_SEEN_SQL } from "../core/newsSeen.js";
 import { requireAuth } from "../auth/middleware.js";
 
 export const newsRouter = Router();
@@ -49,6 +50,25 @@ newsRouter.delete("/:id", async (req, res) => {
 });
 
 /** Today's approximate price per km by tonnage (latest available). */
+/**
+ * 🔔 СКІЛЬКИ НОВИН ЗʼЯВИЛОСЬ ПІСЛЯ МОГО ВІЗИТУ — окремим роутом, а не полем у списку.
+ *
+ * Значок у меню треба ще ДО того, як людина відкрила вкладку; вішати його на видачу
+ * самого списку означало б, що лічильник зʼявляється лише там, де він уже не потрібен.
+ */
+newsRouter.get("/unread", async (req, res) => {
+  const u = await pool.query<{ news_seen_at: Date | null }>(
+    `SELECT news_seen_at FROM users WHERE id = $1`, [req.auth!.userId]);
+  const r = await pool.query<{ n: number }>(UNREAD_COUNT_SQL, [u.rows[0]?.news_seen_at ?? null]);
+  res.json({ unread: r.rows[0]?.n ?? 0 });
+});
+
+/** Відкрив вкладку — побачив. Час беремо СЕРВЕРНИЙ (див. `core/newsSeen.ts`). */
+newsRouter.post("/seen", async (req, res) => {
+  await pool.query(MARK_SEEN_SQL, [req.auth!.userId]);
+  res.json({ ok: true });
+});
+
 newsRouter.get("/km-prices", async (_req, res) => {
   const result = await pool.query(
     `SELECT price_date, t20, t10, t5, t2 FROM km_prices ORDER BY price_date DESC LIMIT 1`

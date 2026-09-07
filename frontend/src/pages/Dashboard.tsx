@@ -50,6 +50,7 @@ import {
   type Task,
   type TaskPriority,
   type Team,
+  fetchNewsUnread, markNewsSeen,
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { DateRangeFilter, QuickPeriods, getDateRange } from "../components/DateRangeFilter";
@@ -257,6 +258,16 @@ export function Dashboard() {
   // so we only beep/toast on a genuine increase (a new incoming message).
   const [chatUnread, setChatUnread] = useState(0);
   const prevChatUnread = useRef<number | null>(null);
+
+  /* 🔔 Лічильник непрочитаних новин. Береться ОДИН раз на завантаження й гаситься при
+     відкритті розділу: новини зʼявляються рідко (джоба о 08:00 і крок викату), тож
+     полінг тут був би платою без вигоди — на відміну від месенджера, де він виправданий. */
+  const [newsUnread, setNewsUnread] = useState(0);
+  useEffect(() => { fetchNewsUnread().then(setNewsUnread).catch(() => setNewsUnread(0)); }, []);
+  useEffect(() => {
+    if (section !== "news") return;
+    markNewsSeen().then(() => setNewsUnread(0)).catch(() => { /* значок лишиться — не біда */ });
+  }, [section]);
 
   const [newsCategory, setNewsCategory] = useState<"company" | "logistics" | "sales">("company");
   const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
@@ -863,6 +874,7 @@ export function Dashboard() {
       screens={auth?.screens}
       trackerEnabled={auth?.trackerEnabled}
       messengerUnread={chatUnread}
+      newsUnread={newsUnread}
     >
       <ErrorBoundary resetKey={`${section}:${teamId}:${selectedManagerId}:${dateRange.from}:${dateRange.to}:${refreshNonce}`}>
       {section === "overview" && (

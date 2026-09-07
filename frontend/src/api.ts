@@ -3445,3 +3445,14 @@ export async function fetchReactivationClosed(): Promise<ClosedTasksResp> {
   const { data } = await api.get<ClosedTasksResp>("/dashboard/reactivation-closed");
   return data;
 }
+
+/** 🔔 Скільки новин зʼявилось після останнього візиту в розділ. */
+export async function fetchNewsUnread(): Promise<number> {
+  const { data } = await api.get<{ unread: number }>("/news/unread");
+  return data.unread;
+}
+
+/** Відкрив розділ — побачив. Час ставить СЕРВЕР (див. `core/newsSeen.ts`). */
+export async function markNewsSeen(): Promise<void> {
+  await api.post("/news/seen");
+}
