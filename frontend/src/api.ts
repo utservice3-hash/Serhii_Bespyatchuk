@@ -2748,8 +2748,13 @@ export async function saveOneOnOne(p: {
   return { overall: data?.overall ?? null };
 }
 export interface OneOnOneStatRow { id: number; name: string; team_id: number | null; team_name: string | null; meeting_date: string; month: string; overall: number | null; enps_score: number | null; satisfaction_score: number | null; form_version: number; answers: OneOnOneAnswers; }
-export async function fetchOneOnOneStats(type: string, months = 6): Promise<OneOnOneStatRow[]> {
-  const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores", { params: { type, months } });
+/**
+ * 📅 `month` (YYYY-MM) звужує історію до ОДНОГО місяця. Без нього лишається старе
+ * «останні N місяців» — фолбек для бандла, що ще крутиться у відкритих вкладках.
+ */
+export async function fetchOneOnOneStats(type: string, months = 6, month?: string): Promise<OneOnOneStatRow[]> {
+  const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores",
+    { params: month ? { type, month } : { type, months } });
   return data?.rows ?? [];
 }
 // ── Задачі з 1×1 ─────────────────────────────────────────────────────────────
@@ -3148,6 +3153,8 @@ export interface ClientCallYear { year: number; calls: number; talks: number; to
 export interface ClientCall {
   at: string; direction: "in" | "out"; billsec: number; answered: boolean;
   disposition: string | null; manager: string | null;
+  /** 🎧 Пряме посилання на запис у кабінеті Ringostat. Відкривається без логіна. */
+  recording: string | null;
 }
 export interface ClientCard {
   /** 📞 Дзвінки по роках. `callsSince` — глибина памʼяті: порожній рік до неї означає «даних немає». */
