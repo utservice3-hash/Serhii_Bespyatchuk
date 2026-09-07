@@ -8222,6 +8222,10 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
       expectThisMonth: Math.round(expPlannedM.get(m.id)?.thisMonth ?? 0),
       expectNextMonth: Math.round(expPlannedM.get(m.id)?.nextMonth ?? 0),
+      // ⏰ ПРОСТРОЧЕНЕ — третє число, якого бракувало. Планова дата вже минула, гроші
+      // не надійшли. Не входить ні в прогноз, ні в два сусідні числа — саме тому й
+      // зникало з екрана (07.09.2026: 67% зони по відділу).
+      expectPastMonths: Math.round(expPlannedM.get(m.id)?.pastMonths ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       // 🔴 ПРОГНОЗ МІСЯЦЯ (рішення власника 06.08.2026) = ФАКТ ② + ОЧІКУВАННЯ З
       // ПЛАНОВОЮ ДАТОЮ ОПЛАТИ В ЦЬОМУ Ж МІСЯЦІ. Контрольне число власника, звірене
@@ -8366,6 +8370,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     expect: managers.reduce((s, m) => s + m.expect, 0),
     expectThisMonth: managers.reduce((s, m) => s + m.expectThisMonth, 0),
     expectNextMonth: managers.reduce((s, m) => s + m.expectNextMonth, 0),
+    expectPastMonths: managers.reduce((s, m) => s + m.expectPastMonths, 0),
     dispatched: managers.reduce((s, m) => s + m.kpi.dispatch.fact, 0),
     dispatchedRevenue: managers.reduce((s, m) => s + m.kpi.dispatch.revenue, 0),
     created: managers.reduce((s, m) => s + m.created, 0),
@@ -8663,7 +8668,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     dispatchedAllSeries, dispatchedLgSeries, transferredSeries,
     newToRepeat, activeBase, weeklyReg, nonTarget, planRes, funnel,
     receivedSeg, expectedSeg, mgrDaily,
-    expTeamThis, expTeamNext, mgrDayExp, mgrDayDisp, mgrDayLeads,
+    expTeamThis, expTeamNext, expTeamPast, mgrDayExp, mgrDayDisp, mgrDayLeads,
     overdue, avgCycle, lost,
     dirSplit, chanSplit, clientRev, transit, dso, aging,
     successDay, segDay, lostDay, dirConv, createdSplitMgr,
@@ -8689,7 +8694,10 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     Promise.all(months.map((m) => plans.managerPlan({ month: m }))),
     metrics.funnelByStage(scope),
     money.receivedBySegment(mScope), metrics.expectedBySegment({ from }), money.receivedByManagerBucket(mScope, "day"),
-    metrics.expectedMonthByScope({}, "team", 0), metrics.expectedMonthByScope({}, "team", 1), metrics.expectedByManagerDay({}),
+    metrics.expectedMonthByScope({}, "team", 0), metrics.expectedMonthByScope({}, "team", 1),
+    // ⏰ Прострочене — ТРЕТІМ числом, поруч із двома місячними. Без нього серпневі
+    // дати не потрапляли в жодне з них і зникали з екрана (07.09.2026: 67% зони).
+    metrics.expectedPastMonthsByScope({}, "team"), metrics.expectedByManagerDay({}),
     metrics.dispatchedByManagerDay(scope), metrics.leadsByManagerDay(scope),
     metrics.overduePayments(scope), metrics.avgDealCycleDays(scope), metrics.lostDeals(scope),
     money.receivedByRequestType(mScope), money.receivedBySalesChannel(mScope), money.receivedByClientKey(mScope),
@@ -8743,6 +8751,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     const isCurrent = w.from <= kyivTodayW && kyivTodayW <= w.to;
     return { idx: w.idx, from: w.from, to: w.to, plan, fact, expected, auto, autoRevenue, leadsAd, leadsLeadgen, met: fact >= plan && plan > 0, isCurrent, isFuture: w.from > kyivTodayW, pace: paceOf(w, isCurrent) };
   });
+  const expTeamPastMap = new Map(expTeamPast.map((r) => [r.id, r.sum]));
   const expTeamThisMap = new Map(expTeamThis.map((r) => [r.id, r.sum]));
   const expTeamNextMap = new Map(expTeamNext.map((r) => [r.id, r.sum]));
 
@@ -8796,14 +8805,17 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // #4 два середні чеки (одна параметризована avgCheck): «успішно» = success за період
   // (= succByMgr), «в очікуванні оплат» = ЗНІМОК chainInflight станом на зараз (per mgr+team).
   // #2 очікування за плановою датою — per manager (цей / наступний календарний місяць).
-  const [ciMgr, ciTeam, suTeam, expMgrThisR, expMgrNextR] = await Promise.all([
+  const [ciMgr, ciTeam, suTeam, expMgrThisR, expMgrNextR, expMgrPastR] = await Promise.all([
     money.avgCheckPerManager("chainInflight", {}), money.avgCheckByTeam("chainInflight", {}),
     money.avgCheckByTeam("success", mScope),
     metrics.expectedMonthByScope({}, "manager", 0), metrics.expectedMonthByScope({}, "manager", 1),
+    // ⏰ Прострочене по менеджеру — те, що досі не показував жоден екран.
+    metrics.expectedPastMonthsByScope({}, "manager"),
   ]);
   const ciMgrMap = new Map(ciMgr.map((x) => [x.managerId, x]));
   const ciTeamMap = new Map(ciTeam.map((x) => [x.teamId, x]));
   const suTeamMap = new Map(suTeam.map((x) => [x.teamId, x]));
+  const expMgrPast = new Map(expMgrPastR.map((x) => [x.id, x.sum]));
   const expMgrThis = new Map(expMgrThisR.map((x) => [x.id, x.sum]));
   const expMgrNext = new Map(expMgrNextR.map((x) => [x.id, x.sum]));
 
@@ -8862,6 +8874,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       expected: expByMgr.get(mid)?.sum ?? 0,
       // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
       expectedThisMonth: expMgrThis.get(mid) ?? 0, expectedNextMonth: expMgrNext.get(mid) ?? 0,
+      expectedPastMonths: expMgrPast.get(mid) ?? 0,
       // Розкол створеного (3 сигнали): created N (нові · постійні · невизн).
       // 🔀 Е4: ТРИ КАНАЛИ, А НЕ ДВА. Проєкція віддавала лише `ad`/`leadgen`, хоч ядро
       // рахує всі чотири — і 44% створеного (999-1010 угод серпня, у РПК 74.4%) не
@@ -8897,6 +8910,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       avgCheckSuccess: suTeamMap.get(t.teamId)?.avgCheck ?? null,
       avgCheckAwaiting: ciTeamMap.get(t.teamId)?.avgCheck ?? null,
       expectedThisMonth: expTeamThisMap.get(t.teamId) ?? 0, expectedNextMonth: expTeamNextMap.get(t.teamId) ?? 0,
+      expectedPastMonths: expTeamPastMap.get(t.teamId) ?? 0,
       weeks: teamWeeks,
       managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
     };

@@ -1744,6 +1744,67 @@ export async function expectedMonthByScope(s: SnapshotScope, by: "team" | "manag
   return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
 }
 
+//**
+ * 🗓 ОЧІКУВАННЯ З МИНУЛИХ МІСЯЦІВ — те, що досі не показував ЖОДЕН екран.
+ *
+ * 📐 ПРИВІД, ЗАМІРЯНИЙ 07.09.2026. Яцик: «пише, що очікування на цей місяць 18 450,
+ * а в CRM у мене 98 000». Його гіпотеза підтвердилась дослівно: у нього 43 угоди
+ * зони, з них **37 на 67 274 ₴ мають СЕРПНЕВУ планову дату**. Сусідня
+ * `expectedMonthByScope` фільтрує за НАЗВОЮ МІСЯЦЯ, тож серпневі не потрапляють ні в
+ * `monthOffset=0` (вересень), ні в `=1` (жовтень) — і зникають з екрана без сліду.
+ *
+ * 🔴 ЧОМУ ЦЕ ВИЛІЗЛО САМЕ ЗАРАЗ І ВИЛІЗАТИМЕ ЩОМІСЯЦЯ. У серпні ті самі 37 угод були
+ * «цього місяця» й показувались чесно. О 00:00 першого вересня вони одночасно стали
+ * минулим місяцем і випали з обох чисел. Це не дефект розрахунку — це календар, і
+ * без окремого відра він повторюватиметься кожного першого числа.
+ *
+ * 📊 Масштаб по відділу того ж дня: **301 угода / 747 252 ₴ = 67.1% усієї зони** не
+ * видно на жодній картці менеджера.
+ *
+ * 🔴 МЕЖА — ПОЧАТОК ПОТОЧНОГО МІСЯЦЯ, А НЕ «СЬОГОДНІ». Рішення власника 07.09.2026,
+ * і воно СВІДОМО розходиться з `expectSplit.expectBucketSql`, звідки я цю умову
+ * спершу й узяв. Причина названа числом: межа «сьогодні» забрала б із «цього місяця»
+ * всі дні, що вже минули, — тобто **зрушила б ПРОГНОЗ**, ухвалений окремо 06.08.2026.
+ * У Яцика це виглядало б як «цей місяць 0 ₴» замість 18 453 ₴, бо всі його вересневі
+ * угоди датовані 01.09.
+ *
+ * ⚠️ ТОМУ Й ІМʼЯ ІНШЕ — `pastMonths`, а не `overdue`. На плитці КВП «прострочено» =
+ * дата вже минула; тут «з минулих місяців» = дата в попередніх місяцях. Це два різні
+ * питання, і в межах одного місяця числа РІЗНІ. Назвати їх одним словом означало б
+ * пустити два екрани під однаковим підписом показувати різне — рівно та помилка, яку
+ * ми вже ловили на двох «очікуємо».
+ * 🔴 Наступному, хто захоче «звести їх до одного правила»: це не спрощення, а зміна
+ * прогнозу. Спершу власник, потім код.
+ *
+ * ⚠️ Парна реалізація для рядків «менеджер × день» живе у
+ * `forecast.expectedSplitByMonth` — межа там та сама, і гейт `#352d` це стереже.
+ * Дві реалізації тут не дублювання правила, а SQL і JS над РІЗНИМИ входами.
+ *
+ * ⚠️ `expectedMonthByScope` НЕ чіпається: вересневі й жовтневі числа лишаються ті самі
+ * до копійки. Це доповнення показу, а не зміна розрахунку.
+ */
+export async function expectedPastMonthsByScope(s: SnapshotScope, by: "team" | "manager"): Promise<ExpectedScopeRow[]> {
+  const params: unknown[] = [FC_PIPELINES, EXPECT_ZONE];
+  const conds = [
+    // 🗑 Той самий предикат списаного боргу, що в сусідніх функціях зони.
+    DEAL_NOT_WRITTEN_OFF,
+    "d.pipeline_id = ANY($1)", "d.status_id = ANY($2)", "d.planned_payment_at IS NOT NULL",
+    // Дата раніша за 1-ше число поточного місяця за Києвом. Обидва кінці київські —
+    // інакше в ніч на 1-ше UTC і Київ розійдуться на добу (правило дат проєкту).
+    `(d.planned_payment_at ${KYIV})::date < date_trunc('month', (now() ${KYIV}))::date`,
+  ];
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  const sel = by === "team" ? "t.id AS id, t.name AS name, NULL::int AS team_id" : "m.id AS id, m.name AS name, m.team_id";
+  const grp = by === "team" ? "GROUP BY t.id, t.name" : "GROUP BY m.id, m.name, m.team_id";
+  const join = by === "team" ? "JOIN teams t ON t.id = m.team_id" : "";
+  const r = await pool.query<{ id: number; name: string; team_id: number | null; deals: string; sum: string }>(
+    `SELECT ${sel}, COUNT(*)::int AS deals, COALESCE(SUM(d.price),0) AS sum
+       FROM deals d JOIN managers m ON m.id = d.manager_id AND m.is_active ${join}
+      WHERE ${conds.join(" AND ")} ${grp}`, params);
+  return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
+}
+
 // ───────────────────────── RETENTION-РОДИНА (Крок Г #4) ─────────────────────────
 // Скоуп-рівень (dept/team/manager через `s`). «Погашено дебіторки» НЕ будуємо —
 // `receivables` це TRUNCATE-знімок без історії погашень → метрика = «—» (ⓘ у UI).

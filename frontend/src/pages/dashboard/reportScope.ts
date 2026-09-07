@@ -22,6 +22,9 @@ import type { ReportPlan, ReportPlanManager } from "../../api";
 /** Адитивні поля `glance` — перелічені ПОШТУЧНО, без spread-суми. */
 const ADDITIVE = [
   "plan", "fact", "factSuccess", "factPaid", "expect", "expectThisMonth", "expectNextMonth",
+  // 🔴 Додано 07.09.2026 разом із самим полем. Забути тут = при виборі 2+ команд
+  //    показати число ПЕРШОЇ з них — мовчки, бо решта полів склеїлась би правильно.
+  "expectPastMonths",
   "dispatched", "dispatchedRevenue", "created", "expectNoDate", "jam", "jamDeals",
   "dobir", "byPace", "talks", "attempts", "factNoPlan",
 ] as const;

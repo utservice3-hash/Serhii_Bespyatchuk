@@ -538,7 +538,7 @@ export interface KvpManager {
   managerId: number; name: string; plan: number; revenue: number; pct: number | null;
   avgCheck: number; successDeals: number; conversion: number | null; convEntered: number; expected: number;
   // #4 «в очікуванні оплат» ср.чек (chainInflight знімок) · #2 очікування за план. датою.
-  avgCheckAwaiting: number | null; awaitingDeals: number; expectedThisMonth: number; expectedNextMonth: number;
+  avgCheckAwaiting: number | null; awaitingDeals: number; expectedThisMonth: number; expectedNextMonth: number; expectedPastMonths: number;
   createdSplit: CreatedSplit;
   daily: KvpDay[]; weeks: KvpWeek[];
 }
@@ -582,7 +582,7 @@ export interface KvpTeam {
   convLifetime: { num: number; den: number; pct: number | null };
   // #4 два чеки команди: «успішно» (success за місяць) + «в очікуванні» (chainInflight знімок).
   avgCheckSuccess: number | null; avgCheckAwaiting: number | null;
-  expectedThisMonth: number; expectedNextMonth: number; weeks: KvpWeek[];
+  expectedThisMonth: number; expectedNextMonth: number; expectedPastMonths: number; weeks: KvpWeek[];
 }
 export interface KvpSignal { severity: "critical" | "serious" | "warning" | "info"; icon: string; title: string; detail: string; action: string; expectedThisMonth?: number; expectedNextMonth?: number }
 export interface KvpSeriesRow { ym: string; [k: string]: number | string | boolean }
@@ -678,6 +678,9 @@ export interface ReportPlanManager {
   // `byPaceEarly` = перевищує 150% плану → на екрані «⚠ рано».
   byPace: number; byPaceEarly: boolean;
   expectThisMonth: number; expectNextMonth: number; // #2 за плановою датою оплати
+  // 🗓 Планова дата в МИНУЛИХ місяцях. Не входить у прогноз і не є «простроченим»
+  //    з плитки КВП (там межа — сьогодні). Заміряно 07.09.2026: 67.1% зони відділу.
+  expectPastMonths: number;
   // 🟡 Добір нового бізнесу. У `projected` з 06.08.2026 НЕ входить (рішення власника),
   // але лишається видимим числом — щоб зміна формули читалась, а не зникла тихо.
   dobir: number;
@@ -730,7 +733,7 @@ export interface ReportPlanManager {
 export interface ReportPlan {
   scope: { from: string; to: string; isCurrent: boolean; workingDaysTotal: number; workingDaysElapsed: number };
   role: string; viewerManagerId: number | null; elapsed: number; remainingWorkdays: number;
-  glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number;
+  glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number; expectPastMonths: number;
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
     /**
