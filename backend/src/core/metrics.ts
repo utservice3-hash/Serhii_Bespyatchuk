@@ -1744,7 +1744,7 @@ export async function expectedMonthByScope(s: SnapshotScope, by: "team" | "manag
   return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, deals: Number(x.deals), sum: Number(x.sum) }));
 }
 
-//**
+/**
  * 🗓 ОЧІКУВАННЯ З МИНУЛИХ МІСЯЦІВ — те, що досі не показував ЖОДЕН екран.
  *
  * 📐 ПРИВІД, ЗАМІРЯНИЙ 07.09.2026. Яцик: «пише, що очікування на цей місяць 18 450,
