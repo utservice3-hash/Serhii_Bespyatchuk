@@ -11,7 +11,8 @@ import { fetchReactivationClosed, type ClosedTasksResp, type ClosedTaskRow } fro
  */
 const CLASS_STYLE: Record<ClosedTaskRow["closeClass"], { bg: string; fg: string }> = {
   human: { bg: "#dcfce7", fg: "#166534" },
-  service: { bg: "#e0e7ff", fg: "#3730a3" },
+  auto: { bg: "#e0e7ff", fg: "#3730a3" },
+  legacy: { bg: "#f1f5f9", fg: "#334155" },
   none: { bg: "#f3f4f6", fg: "#4b5563" },
   unknown: { bg: "#fef3c7", fg: "#92400e" },
 };
@@ -55,15 +56,17 @@ export default function ClosedTasksSection() {
   return (
     <div>
       <div className="orph-tiles">
-        <Tile lab="Закрито людиною" val={String(n("human"))} sub="обрано причину зі списку" />
-        <Tile lab="Закрито системою" val={String(n("service"))} sub="автоповернення й перенесення" />
-        <Tile lab="Без причини" val={String(n("none") + n("unknown"))} sub="причину не записано" />
+        <Tile lab="Закрито менеджером" val={String(n("human"))} sub="обрано причину зі списку" />
+        <Tile lab="Опрацьовано до реєстру" val={String(n("legacy"))}
+              sub="робота людей, перенесена 05.09 — автора не збережено" />
+        <Tile lab="Закрито автоматично" val={String(n("auto"))} sub="клієнт повернувся, закрив крон" />
       </div>
 
       <div style={{ display: "flex", gap: 6, margin: "10px 0", flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 12, color: "var(--text-muted)" }}>показати:</span>
-        {([["all", "усі"], ["human", "людиною"], ["service", "системою"],
-           ["none", "без причини"], ["unknown", "поза довідником"]] as const).map(([k, lab]) => (
+        {([["all", "усі"], ["human", "менеджером"], ["legacy", "до реєстру"],
+           ["auto", "автоматично"], ["none", "без причини"],
+           ["unknown", "поза довідником"]] as const).map(([k, lab]) => (
           <button key={k} onClick={() => setOnly(k)}
             style={{ fontSize: 12, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
                      border: `1px solid ${only === k ? "#1d4ed8" : "var(--border)"}`,
@@ -115,7 +118,7 @@ export default function ClosedTasksSection() {
                     {/* 🔴 Не підставляємо виконавця замість автора: до 07.09.2026 автора
                         не записували ніде, і «хто закрив» на старих рядках відповіді не
                         має. Підстановка виглядала б як відповідь. */}
-                    {r.closedBy ?? (r.closeClass === "service" ? "система" : "автора не записано")}
+                    {r.closedBy ?? (r.closeClass === "auto" ? "система" : "автора не записано")}
                   </td>
                   <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{r.closedAt ?? "—"}</td>
                   <td style={{ padding: "8px 10px" }}>

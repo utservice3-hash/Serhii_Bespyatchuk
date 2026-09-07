@@ -26,7 +26,7 @@ import { MIGRATED_CLOSE_REASON } from "./reactivationPack.js";
  * бачити, а не приписувати людині. Правило 3: стан, що стверджує причину, не може
  * бути смітником для кількох різних відмов.
  */
-export type CloseClass = "human" | "service" | "none" | "unknown";
+export type CloseClass = "human" | "auto" | "legacy" | "none" | "unknown";
 
 /** Службові мітки — рівно ті, які ставить КОД, а не людина. */
 export const SERVICE_CLOSE_REASONS: readonly string[] = [
@@ -53,7 +53,14 @@ export function closeReasonKey(reason: string): string {
 export function closeReasonClass(reason: string | null | undefined): CloseClass {
   const r = (reason ?? "").trim();
   if (!r) return "none";
-  if (SERVICE_CLOSE_REASONS.includes(r)) return "service";
+  /* 🔴 ДВІ СЛУЖБОВІ МІТКИ — ДВА РІЗНІ ФАКТИ, І ЗЛИТИ ЇХ ЗНАЧИТЬ ОБМОВИТИ ЛЮДЕЙ.
+     `returned:` ставить крон за фактом оплати — це справді зробила система.
+     `migrated:` поставив скрипт перенесення 05.09, але РОБОТУ зробила людина: це ті
+     самі клієнти, яких менеджер відмітив у чеклісті пачки (заміряно 07.09: 198 із 347
+     елементів відмічені, 180 мають written коментар на кшталт «Зараз немає контракту»).
+     Спільний підпис «закрито системою» записав би 194 людські опрацювання на машину. */
+  if (r === RETURNED_CLOSE_REASON) return "auto";
+  if (r === MIGRATED_CLOSE_REASON) return "legacy";
   if (CLOSE_REASON_KEYS.includes(closeReasonKey(r))) return "human";
   return "unknown";
 }
@@ -61,7 +68,8 @@ export function closeReasonClass(reason: string | null | undefined): CloseClass 
 /** Підпис класу для екрана. Кожен називає СЕБЕ, а не вдає причину. */
 export const CLOSE_CLASS_LABEL: Record<CloseClass, string> = {
   human: "закрито менеджером",
-  service: "закрито системою",
+  auto: "закрито автоматично — клієнт повернувся",
+  legacy: "опрацьовано до реєстру, автора не збережено",
   none: "закрито без причини",
   unknown: "причина поза довідником",
 };
@@ -145,7 +153,11 @@ export function closedListSql(clamp: string): string {
       LEFT JOIN managers m ON m.id = t.assignee_id
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN users cu ON cu.id = t.closed_by
-     WHERE t.task_type IN ('reactivation','reactivation_client')
+     -- 🔴 ЛИШЕ ПОКЛІЄНТНІ РЯДКИ. Пачка-батько не є подією по клієнту: її 59 клієнтів
+     -- уже присутні в списку окремими рядками-дітьми, тож показувати ще й батька означало
+     -- б рахувати ту саму роботу двічі (205 рядків там, де 194 клієнти + 11 папок).
+     -- ⚠️ Безпечно рівно тому, що НЕперенесених пачок не існує — це стереже #347.
+     WHERE t.task_type = 'reactivation_client'
        AND t.status = 'done' ${clamp}
      ORDER BY t.closed_at DESC NULLS LAST, t.id DESC`;
 }

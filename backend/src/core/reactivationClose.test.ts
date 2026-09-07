@@ -21,10 +21,16 @@ import { MIGRATED_CLOSE_REASON } from "./reactivationPack.js";
 test("#348 клас причини розрізняє людину, систему, порожнечу й чуже значення", () => {
   assert.equal(closeReasonClass(CLOSE_REASON_KEYS[0]), "human",
     `🔴 довідникова причина «${CLOSE_REASON_KEYS[0]}» не зарахована людині`);
-  assert.equal(closeReasonClass(RETURNED_CLOSE_REASON), "service",
-    "🔴 автоповернення зараховане людині — на екрані це виглядатиме як її робота");
-  assert.equal(closeReasonClass(MIGRATED_CLOSE_REASON), "service",
-    "🔴 мітка перенесення зарахована людині — саме так 194 рядки стануть «опрацьованими»");
+  // 🔴 ДВІ СЛУЖБОВІ МІТКИ — РІЗНІ КЛАСИ, і це не педантизм. `returned:` ставить крон
+  // за фактом оплати; `migrated:` поставив скрипт, але роботу зробила ЛЮДИНА — це ті
+  // самі клієнти, яких менеджер відмітив у чеклісті. Спільний підпис записав би 194
+  // людські опрацювання на машину.
+  assert.equal(closeReasonClass(RETURNED_CLOSE_REASON), "auto",
+    "🔴 автоповернення не в класі «автоматично» — його переплутають із дією людини");
+  assert.equal(closeReasonClass(MIGRATED_CLOSE_REASON), "legacy",
+    "🔴 перенесене опрацювання зараховане системі — це обмова: роботу зробив менеджер");
+  assert.notEqual(closeReasonClass(RETURNED_CLOSE_REASON), closeReasonClass(MIGRATED_CLOSE_REASON),
+    "🔴 обидві мітки в одному класі — на екрані вони зіллються, і різниця зникне");
   assert.equal(closeReasonClass(null), "none");
   assert.equal(closeReasonClass("   "), "none",
     "🔴 пробіли прочитались як причина — порожнє мусить називати себе порожнім");
@@ -57,7 +63,7 @@ test("#348b 🪞 службові мітки — це самі констант�
       `🔴 службова мітка «${s}» потрапила в довідник — людина зможе обрати її руками, `
       + "і ми перестанемо відрізняти дію від механізму");
   }
-  assert.equal(new Set(Object.values(CLOSE_CLASS_LABEL)).size, 4,
+  assert.equal(new Set(Object.values(CLOSE_CLASS_LABEL)).size, 5,
     "🔴 два класи мають однаковий підпис — на екрані вони зіллються, і різниця зникне");
 });
 

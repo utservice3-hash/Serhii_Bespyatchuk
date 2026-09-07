@@ -3425,7 +3425,7 @@ export interface ClosedTaskRow {
   clientName: string | null;
   closeReason: string | null;
   /** human · service · none · unknown — див. `core/reactivationClose.ts`. */
-  closeClass: "human" | "service" | "none" | "unknown";
+  closeClass: "human" | "auto" | "legacy" | "none" | "unknown";
   closeClassLabel: string;
   closedAt: string | null;
   closedBy: string | null;
