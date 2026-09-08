@@ -113,6 +113,79 @@ export function LeadgenSection({ from, to }: { from: string; to: string }) {
         </table>
       </div>
 
+      <div className="chart-card" style={{ marginBottom: 16, overflowX: "auto" }}>
+        <h3 style={{ margin: "0 0 12px" }}>📅 По тижнях</h3>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <thead>
+            <tr>
+              <th style={{ ...head, textAlign: "left" }}>Тиждень від</th>
+              <th style={head}>Ліди</th><th style={head}>ОПР</th><th style={head}>Прорахунки</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.weeks.map((w) => (
+              <tr key={w.week} style={{ borderTop: "1px solid var(--border)" }}>
+                <td style={{ padding: "8px 10px" }}>{w.week}</td>
+                <td style={cell}>{w.leads.toLocaleString("uk-UA")}</td>
+                <td style={cell}>{w.opr.toLocaleString("uk-UA")}</td>
+                <td style={cell}>{w.quotes.toLocaleString("uk-UA")}</td>
+              </tr>
+            ))}
+            {d.weeks.length === 0 && <tr><td colSpan={4} style={{ padding: 14, color: "var(--text-muted)" }}>Порожньо за цей період.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="chart-card" style={{ marginBottom: 16 }}>
+        <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
+          ❌ Чому закривали
+          <InfoHint text="Причина з поля угоди, яке лідген проставляє руками при закритті. Рядок «Причину не проставили» показуємо навмисно: невидима прогалина читається як «таких немає»." />
+        </h3>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>
+          Разом {d.closures.reduce((a, c) => a + c.deals, 0).toLocaleString("uk-UA")} закриттів ·
+          зараз висить у «Клієнт підігрівається»: <b>{d.warmingNow.toLocaleString("uk-UA")}</b>
+        </p>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <tbody>
+            {d.closures.map((c) => (
+              <tr key={c.reason} style={{ borderTop: "1px solid var(--border)" }}>
+                <td style={{ padding: "8px 10px" }}>{c.reason}</td>
+                <td style={cell}>{c.deals.toLocaleString("uk-UA")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="chart-card" style={{ marginBottom: 16, overflowX: "auto" }}>
+        <h3 style={{ margin: "0 0 4px" }}>📋 Передані прорахунки</h3>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>
+          Те, що тімліди вклеюють у журнал руками. Показано {d.handoffs.length.toLocaleString("uk-UA")}
+          {d.handoffs.length >= d.handoffsLimit && ` (стеля ${d.handoffsLimit} — за період їх більше)`}.
+        </p>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <thead>
+            <tr>
+              <th style={{ ...head, textAlign: "left" }}>Дата</th>
+              <th style={{ ...head, textAlign: "left" }}>Угода</th>
+              <th style={{ ...head, textAlign: "left" }}>Відповідальний</th>
+              <th style={head}>Kommo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.handoffs.map((h) => (
+              <tr key={h.kommoId} style={{ borderTop: "1px solid var(--border)" }}>
+                <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{h.day}</td>
+                <td style={{ padding: "8px 10px" }}>{h.name ?? "без назви"}</td>
+                <td style={{ padding: "8px 10px" }}>{h.manager ?? "—"}</td>
+                <td style={cell}><a href={h.url} target="_blank" rel="noreferrer">відкрити ↗</a></td>
+              </tr>
+            ))}
+            {d.handoffs.length === 0 && <tr><td colSpan={4} style={{ padding: 14, color: "var(--text-muted)" }}>За цей період прорахунків не передавали.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
       <div className="chart-card">
         <h3 style={{ margin: "0 0 12px" }}>🧊 Звідки ліди</h3>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>

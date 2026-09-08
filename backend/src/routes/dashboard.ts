@@ -52,7 +52,8 @@ import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
-import { leadgenStats, pct, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
+import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly,
+  pct, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
@@ -323,10 +324,14 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
   const teamId = auth.role === "team_lead" ? (auth.teamId ?? -1) : null;
 
   const { adSources } = await overviewCache.call("getSettings", getSettings);
-  const [stats, dispatched, byChannel] = await Promise.all([
+  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks] = await Promise.all([
     leadgenStats(from, to),
     metrics.dispatchedByLoadBucket({ from, to }, "month", "leadgen"),
     money.receivedByChannel({ from, to }, adSources),
+    leadgenClosures(from, to),
+    leadgenHandoffs(from, to),
+    leadgenWarmingBacklog(),
+    leadgenWeekly(from, to),
   ]);
 
   const rows = teamId == null ? stats.rows : stats.rows.filter((r) => r.teamId === teamId);
@@ -354,6 +359,14 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
         + "тож поіменно машину віднести нема чим",
       anchors: "машини — за датою відправлення (load_at); отримані кошти — датований анкер ядра",
     },
+    weeks,
+    closures,
+    /**
+     * Список переданих прорахунків — те, що тімліди вклеюють у журнал руками. Стеля 500
+     * рядків названа ЧИСЛОМ у відповіді: мовчазне обрізання читається як «більше немає».
+     */
+    handoffs, handoffsLimit: 500,
+    warmingNow,
     callRule: `успішний дзвінок = вихідний від ${LEADGEN_CALL_MIN_SEC} с `
       + "(поріг виведено із заміру: 3 604 проти 3 627 у таблиці лідгенів за серпень)",
     scopedTo: teamId,

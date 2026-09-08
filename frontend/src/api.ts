@@ -167,6 +167,11 @@ export interface LeadgenStatsResp {
     machines: number; machinesRevenue: number; receivedRevenue: number; receivedDeals: number;
     note: string; anchors: string;
   };
+  weeks: { week: string; leads: number; opr: number; quotes: number }[];
+  closures: { reason: string; deals: number }[];
+  handoffs: { kommoId: number; day: string; name: string | null; manager: string | null; url: string }[];
+  handoffsLimit: number;
+  warmingNow: number;
   callRule: string;
   scopedTo: number | null;
 }
