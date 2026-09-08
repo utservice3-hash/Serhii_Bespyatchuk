@@ -3,6 +3,7 @@ import { AdsSection } from "./AdsSection";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, Brush,
 } from "recharts";
+import { effGranOf } from "../statsGran";
 import { fetchStatsSeries, saveStatsManual, type StatsSeriesResp, type StatsSeries } from "../../../api";
 import { InfoHint } from "../widgets";
 
@@ -118,7 +119,11 @@ export default function StatisticsChartsSection(
   const [catKey, setCatKey] = useState("money");
   const cat = CATS.find((c) => c.key === catKey)!;
   const [metricKey, setMetricKey] = useState("avg_check");
-  const metric = cat.metrics.find((m) => m.key === metricKey) ?? cat.metrics[0];
+  /* 📣 Категорія може НЕ мати метрик (custom-вкладка «Реклама» — `metrics: []`), і тоді
+     `metric` це undefined. Тип пишемо ЯВНО: без `noUncheckedIndexedAccess` вираз
+     `cat.metrics[0]` типізується як `Metric`, тож компілятор мовчить, а падає рантайм.
+     Саме так 08.09.2026 клік по «Рекламі» клав увесь екран Статистик на `metric.monthOnly`. */
+  const metric: Metric | undefined = cat.metrics.find((m) => m.key === metricKey) ?? cat.metrics[0];
   const [gran, setGran] = useState<"day" | "week" | "month">("week");
   const [range, setRange] = useState("12м");
   const [resp, setResp] = useState<StatsSeriesResp | null>(null);
@@ -128,13 +133,15 @@ export default function StatisticsChartsSection(
   const [win, setWin] = useState<{ lo: number; hi: number; key: string } | null>(null);
   const [drag, setDrag] = useState<{ a: string | null; b: string | null }>({ a: null, b: null });
 
-  const effGran = metric.monthOnly ? "month" : metric.weekOnly ? "week" : gran; // напрямок без місячних (ВЛТ) → тиждень
+  const effGran = effGranOf(metric, gran); // напрямок без місячних (ВЛТ) → тиждень
   useEffect(() => {
     let alive = true; setResp(null); setHidden(new Set()); setWin(null);
-    fetchStatsSeries({ block: metric.block, metric: metric.key, granularity: effGran, ...(metric.unitScope ? { unit: metric.unitScope } : {}) })
-      .then((d) => alive && setResp(d)).catch(() => alive && setResp({ block: metric.block, metric: metric.key, granularity: effGran, seam: SEAM, crmAble: false, live: false, series: [] }));
+    if (!metric) return; // категорія без метрик (custom-вкладка) серій не тягне
+    const m = metric;    // звужений локальний — далі жодного дотику до можливо-порожнього `metric`
+    fetchStatsSeries({ block: m.block, metric: m.key, granularity: effGran, ...(m.unitScope ? { unit: m.unitScope } : {}) })
+      .then((d) => alive && setResp(d)).catch(() => alive && setResp({ block: m.block, metric: m.key, granularity: effGran, seam: SEAM, crmAble: false, live: false, series: [] }));
     return () => { alive = false; };
-  }, [metric.block, metric.key, effGran, metric.unitScope]);
+  }, [metric?.block, metric?.key, effGran, metric?.unitScope]);
 
   // усі періоди (вісь X) + рядки для recharts
   const { rows, seriesList } = useMemo(() => {
@@ -235,7 +242,7 @@ export default function StatisticsChartsSection(
         ))}
       </div>
 
-      {!cat.manualForm && !cat.custom && (
+      {!cat.manualForm && !cat.custom && metric && (
         <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px" }}>
           {/* Чипи метрик + контролі */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>

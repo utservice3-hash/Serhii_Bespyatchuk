@@ -87,6 +87,7 @@ export const MANIFEST_FILES: string[] = [
   "core/reactivationClose.test.js",
   "core/releaseNotes.test.js",
   "statistics/catalogVisibility.test.js",
+  "statistics/statsGran.test.js",
   "core/newsSeen.test.js",
   "core/newsVisibility.test.js",
   "tools/publishReleaseNews.test.js",
@@ -298,6 +299,9 @@ export const MANIFEST_TESTS: string[] = [
   "#369b 🪞 ОРГАНІКА: cost 0 і НЕ роздуває суму витрат",
   "#369c Σ ВИТРАТ ПО ДНЯХ == Σ ПО КАМПАНІЯХ (інваріант групування)",
   "#369d НЕНАЛАШТОВАНА ІНТЕГРАЦІЯ — вид помилки `config`, а не `data`/`unknown`",
+  // 📅 Категорія без метрик (custom-вкладка «Реклама») клала екран Статистик на проді.
+  "#370 КАТЕГОРІЯ БЕЗ МЕТРИК: effGranOf(undefined) віддає вибір користувача, а не падає",
+  "#370b 🪞 КОМПОНЕНТ СПРАВДІ КЛИЧЕ ФУНКЦІЮ, і metric читається лише опційно",
   // 📣 Рольове рішення власника про вкладку «Реклама» (не механічна копія lead-quality).
   "#368 «Реклама» ЗАКРИТА для менеджера, HR і фінансиста",
   "#368b 🪞 …І ВІДКРИТА адміну, КВП і всім керівникам",
