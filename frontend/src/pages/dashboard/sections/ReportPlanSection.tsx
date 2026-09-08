@@ -636,9 +636,12 @@ function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPla
         </div>
       </div>
       <div>
-        <div style={lab}>💰 Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. Цей / наступний КАЛЕНДАРНИЙ місяць, знімок «зараз». Σ per-manager == КВП." /></div>
+        <div style={lab}>💰 Очікуємо за план. датою <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить угоду між місяцями. Цей / наступний КАЛЕНДАРНИЙ місяць, знімок «зараз». Σ per-manager == КВП. Окремо — «з минулих міс»: планова дата у МИНУЛИХ місяцях; у прогноз не входить і не дорівнює «прострочено» на КВП (там межа — сьогодні)." /></div>
         <div style={{ ...val, color: g.expectThisMonth > 0 ? GREEN : MUTED }}>{fmt(g.expectThisMonth)} <small style={{ fontSize: 12, color: MUTED }}>₴ цей міс</small></div>
         <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>наст. міс: {fmt(g.expectNextMonth)} ₴</div>
+        {/* 🔴 «З минулих місяців» — НЕ те саме, що «прострочено» на плитці КВП: там межа
+            «сьогодні», тут — початок місяця. Тому й підпис інший (рішення власника 07.09.2026). */}
+        {g.expectPastMonths !== 0 && <div style={{ fontSize: 12, color: AMBER, marginTop: 2 }}>з минулих міс: {fmt(g.expectPastMonths)} ₴</div>}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто · {periodLabel}: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
       </div>
       <div>
@@ -779,6 +782,15 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
                 період обрано вгорі — інакше його читали б як частину факту періоду. */}
             <div style={{ marginTop: 3, fontSize: 12.5, color: "var(--text)" }} title="Очікування за ПЛАНОВОЮ датою оплати, календарні місяці. НЕ залежить від обраного періоду.">
               💰 очікуємо <b style={{ color: GREEN }}>{k(m.expectThisMonth)}</b> цей · <b style={{ color: "var(--text)" }}>{k(m.expectNextMonth)}</b> наст. міс
+              {/* 🗓 Третє число, додане 07.09.2026. До нього планові дати МИНУЛИХ місяців не
+                  показував жоден екран: у Яцика так ховались 37 угод на 67 274 ₴ при видимих
+                  18 453 ₴, і він читав це як розходження дашборду з CRM. Показуємо ЛИШЕ коли
+                  ≠ 0 — у більшості рядків це нуль, і постійний підпис став би шумом. */}
+              {Math.abs(m.expectPastMonths) >= 500 && <> · <b style={{ color: AMBER }}>{k(m.expectPastMonths)}</b> з минулих міс</>}
+              {/* 🔴 Межа 500, а не 0: рядок рахує в тисячних (`k`), тож 1…499 ₴ надрукувались
+                  би як «0к з минулих міс» — нуль під підписом читається як помилка розрахунку.
+                  І по МОДУЛЮ: сторно (`is_minus`) робить суму законно відʼємною, а `> 0`
+                  ховало б її мовчки — те саме зникнення, яке цей рядок і лікує. */}
               <span style={{ color: MUTED }}> · поза обраним періодом</span>
             </div>
           </>} showTempo />

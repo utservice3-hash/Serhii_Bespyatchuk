@@ -497,7 +497,7 @@ export function KvpReportSection() {
                 </colgroup>
                 <thead><tr>
                   <th>Команда / менеджер</th>
-                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, низ — наступний. Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Конв. <InfoHint text="Лайфтайм-конверсія (весь час, чесна воронка): РНК = рекламні угоди, що досягли «авто працює» ÷ прийнята реклама; РПК = лідген-угоди, що досягли «авто працює» ÷ лідген-заявки. Команда = Σчисельників÷Σзнаменників. Тонкий знаменник (0) → «—»." /></th>
+                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, «наст» — наступний, «мин» — з МИНУЛИХ місяців (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Конв. <InfoHint text="Лайфтайм-конверсія (весь час, чесна воронка): РНК = рекламні угоди, що досягли «авто працює» ÷ прийнята реклама; РПК = лідген-угоди, що досягли «авто працює» ÷ лідген-заявки. Команда = Σчисельників÷Σзнаменників. Тонкий знаменник (0) → «—»." /></th>
                   {rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}
                 </tr></thead>
                 <tbody>
@@ -508,7 +508,7 @@ export function KvpReportSection() {
                         <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
                         <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}</td>
                         <td><div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Факт ${fmtPct(t.pct)} · з очікуванням за плановою датою ${fmtPct(t.forecastPct)}`}><PlanBar factPct={t.pct} forecastPct={t.forecastPct} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
-                        <td style={{ textAlign: "right", color: MUTED }} title={`Очікування за ПЛАНОВОЮ датою оплати. Цей міс: ${fmtMoney(t.expectedThisMonth)} · наступний: ${fmtMoney(t.expectedNextMonth)}. Ср.чек команди — успішно: ${t.avgCheckSuccess == null ? "—" : fmtMoney(t.avgCheckSuccess)} · в очікуванні: ${t.avgCheckAwaiting == null ? "—" : fmtMoney(t.avgCheckAwaiting)}.`}>{fmtMoney(t.expectedThisMonth)}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(t.expectedNextMonth)}</div></td>
+                        <td style={{ textAlign: "right", color: MUTED }} title={`Очікування за ПЛАНОВОЮ датою оплати. Цей міс: ${fmtMoney(t.expectedThisMonth)} · наступний: ${fmtMoney(t.expectedNextMonth)} · з МИНУЛИХ місяців: ${fmtMoney(t.expectedPastMonths)} (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Ср.чек команди — успішно: ${t.avgCheckSuccess == null ? "—" : fmtMoney(t.avgCheckSuccess)} · в очікуванні: ${t.avgCheckAwaiting == null ? "—" : fmtMoney(t.avgCheckAwaiting)}.`}>{fmtMoney(t.expectedThisMonth)}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(t.expectedNextMonth)}</div>{t.expectedPastMonths !== 0 && <div style={{ fontSize: 9.5, color: RED }}>мин {fmtMoney(t.expectedPastMonths)}</div>}</td>
                         <td style={{ textAlign: "right" }} title={`Лайфтайм (весь час): ${t.convLifetime.num} / ${t.convLifetime.den}${t.kind === "rnk" ? " (реклама)" : t.kind === "rpk" ? " (лідген)" : ""}`}>{t.kind === "rnk" || t.kind === "rpk" ? fmtPct(t.convLifetime.pct) : "—"}</td>
                         {rep.weekBlocks.map((w) => (
                           <WeekCell key={w.idx} mode={weekMode}
@@ -797,7 +797,7 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
               <span style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.plan)}</span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}><span style={{ width: 40, height: 6, background: "var(--bg)", borderRadius: 4, overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, m.pct ?? 0)}%`, background: zero ? "var(--border)" : pctColr, borderRadius: 4 }} /></span><b>{fmtMoney(m.revenue)}</b></span>
               <span style={{ textAlign: "right", fontWeight: 700, color: pctColr }}>{m.plan > 0 ? `${m.pct ?? 0}%` : "—"}</span>
-              <span style={{ textAlign: "right", color: m.expectedThisMonth > 0 ? AMBER : MUTED }} title={`За плановою датою оплати — цей міс: ${fmtMoney(m.expectedThisMonth)} · наступний: ${fmtMoney(m.expectedNextMonth)}`}>{m.expectedThisMonth > 0 ? fmtMoney(m.expectedThisMonth) : "—"}</span>
+              <span style={{ textAlign: "right", color: m.expectedThisMonth > 0 ? AMBER : MUTED }} title={`За плановою датою оплати — цей міс: ${fmtMoney(m.expectedThisMonth)} · наступний: ${fmtMoney(m.expectedNextMonth)} · з МИНУЛИХ місяців: ${fmtMoney(m.expectedPastMonths)}`}>{m.expectedThisMonth > 0 ? fmtMoney(m.expectedThisMonth) : "—"}</span>
               <span style={{ textAlign: "right", color: MUTED }}>{team.kind === "rnk" && m.conversion != null ? `${m.conversion}%` : "—"}</span>
               <Sparkline weeks={m.weeks} blocks={rep.weekBlocks} />
             </div>
@@ -811,7 +811,10 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
                 <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 11.5, color: MUTED, marginBottom: 8 }}>
                   <span>чек успішно <b style={{ color: "var(--text)" }}>{m.avgCheck > 0 ? fmtMoney(m.avgCheck) : "—"}</b> <span style={{ fontSize: 10 }}>({m.successDeals} угод)</span></span>
                   <span>чек в очікуванні <b style={{ color: "var(--text)" }}>{m.avgCheckAwaiting == null ? "—" : fmtMoney(m.avgCheckAwaiting)}</b> <span style={{ fontSize: 10 }}>({m.awaitingDeals} угод)</span></span>
-                  <span>очікуємо (план. дата) <b style={{ color: AMBER }}>{fmtMoney(m.expectedThisMonth)}</b> цей · <b>{fmtMoney(m.expectedNextMonth)}</b> наст. міс</span>
+                  {/* 🗓 07.09.2026 додано третє число. ⚠️ Це НЕ плитка «прострочено» вгорі
+                      цього ж екрана: там межа «сьогодні» (`expectSplit`), тут — початок
+                      місяця. У межах одного місяця числа різні, тому й підписи різні. */}
+                  <span>очікуємо (план. дата) <b style={{ color: AMBER }}>{fmtMoney(m.expectedThisMonth)}</b> цей · <b>{fmtMoney(m.expectedNextMonth)}</b> наст. міс{m.expectedPastMonths !== 0 && <> · <b style={{ color: RED }}>{fmtMoney(m.expectedPastMonths)}</b> з минулих міс</>}</span>
                 </div>
                 <ManagerDetailDrill managerId={m.managerId} from={rep.scope.from} to={rep.scope.to} />
               </div>
