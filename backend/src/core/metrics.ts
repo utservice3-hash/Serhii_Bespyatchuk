@@ -2345,11 +2345,14 @@ export async function conversionAdsByTeam(s: MetricScope, adSources: string[]): 
 
 // ───────────────────────── КОНВЕРСІЯ ЛІДОГЕНУ (Продзвін + Реактивація) ─────────────────────────
 
-const PRODZVIN_PIPELINES = [8921936, 7337048]; // холодний лідоген (NEW / old)
-const PZ_TAKEN = 69693696;                     // Продзвін «ВЗЯТО В РОБОТУ» — entry-анкер
-const REACTIVATION_PIPELINES = [8921948];      // реактивація існуючих клієнтів
-const REACT_WARMING = 69693740;                // Реактивація «Клієнт підігрівається» — entry-анкер
-const STATUS_142 = 142;                        // handoff (Продзвін/Реактивація) + won (FC) «Успішна»
+// 🔓 ЕКСПОРТОВАНІ 08.09.2026: їх читає ще й `core/leadgenStats.ts`. Копію в другому
+// модулі не заводимо — правило, що живе двічі, розходиться тихо (див. «чипи новий/постійний»).
+export const PRODZVIN_PIPELINES = [8921936, 7337048]; // холодний лідоген (NEW / old)
+export const PZ_TAKEN = 69693696;                     // Продзвін «ВЗЯТО В РОБОТУ» — entry-анкер
+export const PZ_OPR = 69716492;                       // Продзвін «ОТРИМАНО КОНТАКТИ ОПР»
+export const REACTIVATION_PIPELINES = [8921948];      // реактивація існуючих клієнтів
+export const REACT_WARMING = 69693740;                // Реактивація «Клієнт підігрівається» — entry-анкер
+export const STATUS_142 = 142;                        // handoff (Продзвін/Реактивація) + won (FC) «Успішна»
 
 export interface LeadgenConversionRow {
   ym: string;
