@@ -20,10 +20,12 @@ export const NAV_GROUPS = [
       { key: "plans", label: "Плани", icon: "💵", roles: ["admin", "team_lead"] },
       { key: "statistics", label: "Статистики", icon: "📊" },
       { key: "depstats", label: "Статистики (відділи)", icon: "🗂️" },
-      // 📊 Реклама — день × кампанія з GA4. Видимість керує `screen_access` у токені
-      // (сід у schema.sql: admin/kvp/ceo/opdir/team_lead), а НЕ поле `roles` тут:
-      // для сучасних токенів `screens` авторитетний, `roles` лишився фолбеком для
-      // старих. Тому тут `roles` свідомо НЕ ставимо — інакше два джерела правди.
+      // 📣 «Реклама» — НЕ пункт меню, а КЛЮЧ ДОЗВОЛУ (нижче в HIDDEN_NAV).
+      // Рішення власника 08.09.2026: блок живе ВКЛАДКОЮ всередині «Статистик»,
+      // після HR. Але запис тут лишається навмисно: з NAV_GROUPS будується список
+      // тумблерів у Налаштуваннях (SettingsSection.SCREEN_TABS), тож без нього
+      // «хто бачить Рекламу» не можна було б змінити інакше як комітом — рівно
+      // борг 18. Видимість вкладки і межа роута стоять на цьому ж ключі `ads`.
       { key: "ads", label: "Реклама", icon: "📣" },
       { key: "teams", label: "Команди", icon: "👥", roles: ["admin", "team_lead"] },
       { key: "managers", label: "Менеджери", icon: "🧑‍💼", roles: ["admin", "team_lead"] },
@@ -78,6 +80,8 @@ export type NavKey = (typeof NAV_GROUPS)[number]["items"][number]["key"];
 // NavKey і блоки рендера) — ховаємо тут, при вибірці.
 export const HIDDEN_NAV: ReadonlySet<string> = new Set<string>([
   "overview", "manager-report", "depstats", "teams", "managers", "reports",
+  // 📣 «Реклама» — вкладка всередині «Статистик», а не окремий пункт меню.
+  "ads",
 ]);
 
 /** Nav items visible to a given role. Якщо переданий `screens` (screen_access ефективної

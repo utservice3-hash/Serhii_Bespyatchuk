@@ -82,7 +82,6 @@ import { ReportPlanSection } from "./dashboard/sections/ReportPlanSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansTabs } from "./dashboard/sections/PlansTabs";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
-import { AdsSection } from "./dashboard/sections/AdsSection";
 
 /** Short pleasant beep via Web Audio (no asset needed, CSP-safe). Double for "done". */
 function beep(success: boolean) {
@@ -920,7 +919,12 @@ export function Dashboard() {
 
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
 
-      {section === "statistics" && <StatisticsChartsSection role={auth?.role} />}
+      {section === "statistics" && (
+        /* 📣 Вкладка «Реклама» всередині Статистик бере СПІЛЬНИЙ період-фільтр
+           (dateRange), а видимість — ключ `ads` зі `screens` токена. */
+        <StatisticsChartsSection role={auth?.role} screens={auth?.screens}
+          from={dateRange.from} to={dateRange.to} />
+      )}
       {section === "bank" && <BankSection />}
 
       {section === "teams" && auth?.role !== "manager" && (
@@ -1003,10 +1007,7 @@ export function Dashboard() {
       {section === "duty" && <DutySection role={auth?.role} />}
 
       {section === "depstats" && <StatisticsSection role={auth?.role} />}
-      {/* 📣 Реклама — день × кампанія з GA4. Статичний імпорт (без React.lazy):
-          динамічний import() дав би ДРУГИЙ JS-чанк, а докрут чистить старі асети —
-          людина без перезавантаження впіймала б 404 (гейт #225). */}
-      {section === "ads" && <AdsSection from={dateRange.from} to={dateRange.to} />}
+
 
       {section === "settings" && (
         <SettingsSection
