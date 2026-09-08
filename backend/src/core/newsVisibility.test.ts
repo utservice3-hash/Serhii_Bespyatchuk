@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { skipReason } from "../db/scratchDb.js";
 import { NEWS_ALIVE, andAlive, DELETE_SQL } from "./newsVisibility.js";
-import { UNREAD_COUNT_SQL } from "./newsSeen.js";
+import { UNREAD_COUNT_SQL, UNREAD_BY_ID_SQL, MAX_ALIVE_ID_SQL } from "./newsSeen.js";
+
+const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 
 /**
  * #361 — ВИДАЛЕНА НОВИНА ЗНИКАЄ З УСІХ ЧИТАЧІВ, А НЕ ЛИШЕ ЗІ СПИСКУ.
@@ -48,4 +53,80 @@ test("#361b 🪞 видалення оновлює рядок, а не знос�
     "🔴 автор видалення не записується — «хто прибрав новину» знову не матиме відповіді");
   assert.match(DELETE_SQL, /AND deleted_at IS NULL/,
     "🔴 повторне видалення перезапише час і автора першого — дві вкладки затруть історію");
+});
+
+/**
+ * 🔔 #362/#362b — НЕПРОЧИТАНЕ ПО id БРАУЗЕРА, А НЕ ПО КОЛОНЦІ АКАУНТА (08.09.2026).
+ *
+ * Привід власника: «коли хтось один читає новину, вона для всіх перестає підсвічуватися».
+ * Мітка «побачив» жила в `users.news_seen_at` — один рядок на логін, тож спільний акаунт
+ * ділив підсвітку. Тепер лічильник рахує проти id, який тримає БРАУЗЕР (`sinceId`).
+ *
+ * 🔴 ПОВЕДІНКОВО, А НЕ ПО ТЕКСТУ SQL: вставляємо новини, одну мʼяко видаляємо, і міряємо
+ * САМ підрахунок. Так ловиться і `id >= $1` замість `id > $1` (побачене рахувалось би
+ * знову), і втрата `NEWS_ALIVE` (значок рахував би те, чого не відкрити).
+ *
+ * 🧨 САБОТАЖ: `id > $1` → `id >= $1` (червоніє #362, бо мітка `a` дала б 2 замість 1);
+ *    прибрати `NEWS_ALIVE` (червоніє #362, бо видалена рахувалась би).
+ */
+test("#362 лічильник рахує ЖИВІ новини з id > мітки браузера", async (t) => {
+  const { provisionScratch } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    const ins = async (title: string) => (await c.query<{ id: number }>(
+      `INSERT INTO news (category, title, body, author) VALUES ('company',$1,'x','Дашборд') RETURNING id`,
+      [title])).rows[0].id;
+    const a = await ins("перша");
+    const b = await ins("друга");
+    const cc = await ins("третя");
+
+    // мітка = a: живих із id > a → тільки b і c → 2
+    let n = (await c.query<{ n: number }>(UNREAD_BY_ID_SQL, [a])).rows[0].n;
+    assert.equal(n, 2, "🔴 з мітки a має бути 2 непрочитані (b,c), а не інше");
+
+    // третю мʼяко видаляємо — вона зникає з лічильника
+    await c.query(DELETE_SQL, [cc, null]);
+    n = (await c.query<{ n: number }>(UNREAD_BY_ID_SQL, [a])).rows[0].n;
+    assert.equal(n, 1, "🔴 видалена новина досі рахується — значок рахує те, чого не відкрити");
+
+    // «побачене» (id == b) більше не рахується: строге `>`, не `>=`
+    n = (await c.query<{ n: number }>(UNREAD_BY_ID_SQL, [b])).rows[0].n;
+    assert.equal(n, 0, "🔴 мітка на останній живій дала непрочитані — це `>=` замість `>`");
+
+    // максимум ЖИВОГО id == b (третю видалено)
+    const maxId = (await c.query<{ max_id: number }>(MAX_ALIVE_ID_SQL)).rows[0].max_id;
+    assert.equal(maxId, b, "🔴 max живого id враховує видалену — браузер запамʼятає не те");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
+
+/**
+ * #362b — 🪞 ДЗЕРКАЛО: свіжа мітка (0 = браузер нічого не бачив) рахує ВСІ живі, тобто
+ * лічильник справді реагує на появу новин, а не «завжди 0». Без цієї половини #362
+ * лишався б зеленим на коді, що повертає нуль завжди.
+ */
+test("#362b 🪞 мітка 0 рахує всі живі — лічильник не «завжди нуль»", async (t) => {
+  const { provisionScratch } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    for (const tl of ["одна", "дві", "три"]) await c.query(
+      `INSERT INTO news (category, title, body, author) VALUES ('company',$1,'x','Дашборд')`, [tl]);
+    const n = (await c.query<{ n: number }>(UNREAD_BY_ID_SQL, [0])).rows[0].n;
+    assert.equal(n, 3, "🔴 з міткою 0 (нічого не бачив) лічильник має дати всі 3 — інакше він мертвий");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
 });

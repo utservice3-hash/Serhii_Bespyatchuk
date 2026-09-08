@@ -3469,13 +3469,20 @@ export async function fetchReactivationClosed(): Promise<ClosedTasksResp> {
   return data;
 }
 
-/** 🔔 Скільки новин зʼявилось після останнього візиту в розділ. */
-export async function fetchNewsUnread(): Promise<number> {
-  const { data } = await api.get<{ unread: number }>("/news/unread");
-  return data.unread;
+/**
+ * 🔔 Скільки новин зʼявилось після останнього візиту. `sinceId` — найбільший id, який
+ * ЦЕЙ браузер уже бачив (з localStorage): підсвітка стає на пристрій, і спільний логін
+ * її не поділяє. Без аргументу сервер падає на стару колонку акаунта (сумісність зі
+ * старим бандлом, не для нового). Повертає й `maxId` — «докуди долистати».
+ */
+export async function fetchNewsUnread(sinceId?: number): Promise<{ unread: number; maxId: number }> {
+  const { data } = await api.get<{ unread: number; maxId: number }>(
+    "/news/unread", { params: sinceId != null ? { sinceId } : {} });
+  return data;
 }
 
-/** Відкрив розділ — побачив. Час ставить СЕРВЕР (див. `core/newsSeen.ts`). */
-export async function markNewsSeen(): Promise<void> {
-  await api.post("/news/seen");
+/** Відкрив розділ — побачив усе. Повертає `maxId`, який браузер кладе в localStorage. */
+export async function markNewsSeen(): Promise<number> {
+  const { data } = await api.post<{ ok: true; maxId: number }>("/news/seen");
+  return data.maxId;
 }
