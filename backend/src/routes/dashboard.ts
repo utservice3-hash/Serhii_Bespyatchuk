@@ -53,6 +53,8 @@ import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
+import { mergeAdDays } from "../ga4/report.js";
+import { dateParam } from "../core/queryParams.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly,
   pct, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
 import * as expectSplit from "../core/expectSplit.js";
@@ -5210,8 +5212,10 @@ dashboardRouter.get("/ads", async (req, res) => {
   const auth = req.auth!;
   // Дзеркало межі `/lead-quality`: рекламні витрати — не менеджерська метрика.
   if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
-  const from = (req.query.from as string) ?? null;
-  const to = (req.query.to as string) ?? null;
+  // ⚠️ `dateParam`, а не `??`: швидкий період «Весь час» шле ПОРОЖНІ рядки
+  // (`?from=&to=`), і `??` їх не ловить — вони доходять до SQL як `('')::date`.
+  const from = dateParam(req.query.from);
+  const to = dateParam(req.query.to);
   const { adSources } = await getSettings();
 
   const [ga4, leads, sheet] = await Promise.all([
@@ -5249,25 +5253,10 @@ dashboardRouter.get("/ads", async (req, res) => {
     clicks: Number(r.clicks),
   }));
 
-  // Дні — згортка ТИХ САМИХ рядків (не окремий запит), тож Σ по днях == Σ по
-  // кампаніях за побудовою; це й стереже гейт про інваріант групування.
-  const byDay = new Map<string, { day: string; cost: number; clicks: number; sessions: number }>();
-  for (const c of campaigns) {
-    const e = byDay.get(c.day) ?? { day: c.day, cost: 0, clicks: 0, sessions: 0 };
-    e.cost += c.cost; e.clicks += c.clicks; e.sessions += c.sessions;
-    byDay.set(c.day, e);
-  }
-  // ⚠️ Поля перелічені ЯВНО, без спреду (ворота `#17e2`): спред виносить назовні те,
-  // чого автор не перелічив, і саме так у відповідь колись потрапляє зайве поле.
-  const days = [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day)).map((d) => ({
-    day: d.day,
-    cost: Math.round(d.cost * 100) / 100,
-    clicks: d.clicks,
-    sessions: d.sessions,
-    sheetCost: sheetByDay.get(d.day) ?? null,   // null = аркуш цього дня не має
-    leads: leadsByDay.get(d.day)?.entered ?? 0, // ліди з ЯДРА conversion_ads
-    won: leadsByDay.get(d.day)?.won ?? 0,
-  }));
+  // Дні збирає ЧИСТА функція над трьома джерелами (GA4 ∪ ліди ядра ∪ аркуш) —
+  // саме тому її можна прогнати фікстурою «GA4 порожній, ліди є» (ворота `#372`).
+  // Поля в ній перелічені ЯВНО, без спреду (ворота `#17e2`).
+  const days = mergeAdDays(campaigns, leadsByDay, sheetByDay);
 
   res.json({ days, campaigns, ga4Configured: ga4Configured() });
 });

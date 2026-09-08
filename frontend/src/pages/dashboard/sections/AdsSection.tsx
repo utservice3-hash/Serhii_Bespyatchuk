@@ -24,12 +24,19 @@ export function AdsSection({ from, to }: { from: string; to: string }) {
 
   useEffect(() => {
     setErr(null);
+    // ⚠️ Швидкий період «Весь час» віддає ПОРОЖНІ дати, і вони не безневинні:
+    // axios шле `?from=&to=`, сервер отримує `""`, і роут висить 20 с до 503.
+    // Та сама охорона стоїть у сусідньому `LeadgenSection`. Другий рубіж — на
+    // бекенді (`dateParam`), бо роут мусить витримувати будь-який запит.
+    if (!from || !to) return;
     fetchAds({ from, to })
       .then(setData)
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : "не вдалося завантажити"));
   }, [from, to]);
 
   if (err) return <div className="chart-card"><p style={{ color: "#dc2626" }}>Помилка: {err}</p></div>;
+  // Порожній період — це стан екрана, а не завантаження: кажемо словами, що робити.
+  if (!from || !to) return <div className="chart-card"><p>Оберіть період — «Весь час» тут не працює: рекламу показуємо по днях.</p></div>;
   if (!data) return <div className="chart-card"><p>Завантаження…</p></div>;
 
   const money = (n: number) => n.toLocaleString("uk-UA", { maximumFractionDigits: 0 });

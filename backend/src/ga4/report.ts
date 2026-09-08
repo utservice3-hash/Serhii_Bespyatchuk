@@ -97,3 +97,54 @@ export function syncWindow(today: Date, lookbackDays = LOOKBACK_DAYS): { from: s
 /** Текст, який `health/jobErrorKind.ts` класифікує як вид `config`. */
 export const GA4_NOT_CONFIGURED =
   "GA4 не налаштовано: порожній GA4_PROPERTY_ID або GA4_SERVICE_ACCOUNT_JSON";
+
+/**
+ * 📅 ДЕНЬ ЕКРАНА «РЕКЛАМА» — ОБʼЄДНАННЯ ТРЬОХ ДЖЕРЕЛ, А НЕ САМОГО GA4.
+ *
+ * 🔴 ПЕРША РЕДАКЦІЯ БУЛА ЗГОРТКОЮ САМИХ КАМПАНІЙ GA4 — і це давало брехливий
+ * нуль. Ліди рахує ядро (`conversionAdsByDay`), але вони лише ПРИЩЕПЛЮВАЛИСЬ до
+ * дня, який уже існує в `ad_ga4_daily`. Поки GA4 не підключено, таблиця порожня,
+ * тож днів нема — і плитка друкувала «Платних лідів: 0» там, де в CRM їх сотні.
+ * Частковий випадок ще підступніший: день, що є в CRM і в аркуші, але ще не
+ * приїхав із GA4, зникав ЦІЛКОМ разом зі своїми лідами — знаменник CPL занижений,
+ * отже CPL завищений, і на екрані це виглядає цілком правдоподібно.
+ * Клас «порожній результат читається як вимір» (CLAUDE.md, правила 15-17).
+ *
+ * ⚠️ ІНВАРІАНТ, ЩО ЛИШАЄТЬСЯ ЧИННИМ: Σ витрат по днях == Σ по кампаніях. Дні без
+ * GA4 приходять із витратами 0, тож обʼєднання суму не рухає — воно додає рядки,
+ * а не гроші.
+ */
+
+export type AdCampaignRow = { day: string; cost: number; clicks: number; sessions: number };
+export type AdLeadsRow = { entered: number; won: number };
+export type AdDay = {
+  day: string; cost: number; clicks: number; sessions: number;
+  sheetCost: number | null; leads: number; won: number;
+};
+
+export function mergeAdDays(
+  campaigns: readonly AdCampaignRow[],
+  leadsByDay: ReadonlyMap<string, AdLeadsRow>,
+  sheetByDay: ReadonlyMap<string, number>,
+): AdDay[] {
+  const ga4 = new Map<string, { cost: number; clicks: number; sessions: number }>();
+  for (const c of campaigns) {
+    const e = ga4.get(c.day) ?? { cost: 0, clicks: 0, sessions: 0 };
+    e.cost += c.cost; e.clicks += c.clicks; e.sessions += c.sessions;
+    ga4.set(c.day, e);
+  }
+  // День вважається таким, що БУВ, якщо про нього знає хоч одне джерело.
+  const all = new Set<string>([...ga4.keys(), ...leadsByDay.keys(), ...sheetByDay.keys()]);
+  return [...all].sort((a, b) => a.localeCompare(b)).map((day) => {
+    const g = ga4.get(day);
+    return {
+      day,
+      cost: Math.round((g?.cost ?? 0) * 100) / 100,
+      clicks: g?.clicks ?? 0,
+      sessions: g?.sessions ?? 0,
+      sheetCost: sheetByDay.get(day) ?? null, // null = аркуш цього дня не має
+      leads: leadsByDay.get(day)?.entered ?? 0,
+      won: leadsByDay.get(day)?.won ?? 0,
+    };
+  });
+}
