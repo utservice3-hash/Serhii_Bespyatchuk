@@ -13,7 +13,7 @@
  * весь час лікуємось («успіх за 0 мс», «порожній результат = pass»).
  */
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, existsSync, statSync, readdirSync, copyFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
   standToRefusal,
@@ -313,16 +313,29 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       }
       symlinkSync(`${c.be}/node_modules`, `${base}/backend/node_modules`);
       /**
-       * 🔴 `.env` ТЕЖ ЧАСТИНА СЕРЕДОВИЩА, І БЕЗ НЬОГО БАЗА НЕ ТОТОЖНА ДЕРЕВУ.
-       * 📐 Спіймано 08.09.2026: `core/leadgenStats.test.js` у базі падав ЦІЛИМ ФАЙЛОМ
-       * («Missing required env var: DATABASE_URL» — `#364b` тягне `metrics.js`, той — пул),
-       * а в дереві проходив усіма гейтами. Код обох чекаутів був тотожний; різнився лише
-       * `.env`, який лежить у стенді й не потрапляв у worktree. Крок доповідав «зникло
-       * падіння / перестали виконуватись» — і зупиняв викат, у якому цей файл ніхто не чіпав.
-       * Копія, а не симлінк: worktree прибирається `--force`, і посилання на файл із
-       * секретами лишати в `/tmp` не варто навіть на 80 секунд.
+       * 🔴 `.env` РОБИТЬ СЕРЕДОВИЩА НЕТОТОЖНИМИ ТАК САМО, ЯК `node_modules` ВИЩЕ.
+       *
+       * `config.ts` вантажить `backend/.env` НА ІМПОРТІ, тож без нього КОЖЕН модуль,
+       * чий ланцюг імпортів доходить до `config.js`, кидає ще до першого твердження —
+       * не «скіпається», а гине ЦІЛИМ ФАЙЛОМ. Стенд `.env` має з 04.09.2026 (рішення
+       * власника «тільки доступ до бази»), а свіжий worktree бази — ні. Отже дерево
+       * ходило в БД, база не ходила, і вся різниця приписувалась дифу.
+       *
+       * 📐 Заміряно 08.09.2026 на дифі з ОДНОГО markdown-файла: «база: падінь 1,
+       * виконано 660 / дерево: падінь 0, виконано 668 · ПЕРЕСТАЛИ ВИКОНУВАТИСЬ:
+       * dist/core/leadgenStats.test.js». Причина — `Missing required env var:
+       * DATABASE_URL` при імпорті. Код не був ні до чого причетний.
+       *
+       * 🔑 І це НЕ лагодиться з боку тесту: база береться з ПРОД-коду, тож поки прод
+       * несе файл, що гине, будь-яке лікування прибирає його імʼя з виконаних — і
+       * ланцюг спиняється знову, тепер критерієм ②. Симетрія оточень — єдиний вихід,
+       * що сходиться.
+       *
+       * ⚠️ СИМЛІНК, А НЕ КОПІЯ — свідомо: доккоментар покриття нижче фіксує рішення
+       * власника «не підкладати бойовий .env у стенд, це другий екземпляр доступів на
+       * диску». Симлінк другого екземпляра не створює.
        */
-      if (existsSync(`${c.be}/.env`)) copyFileSync(`${c.be}/.env`, `${base}/backend/.env`);
+      if (existsSync(`${c.be}/.env`)) symlinkSync(`${c.be}/.env`, `${base}/backend/.env`);
 
       const beBase = `${base}/backend`;
       sh("rm", ["-rf", "dist"], beBase);
