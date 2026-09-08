@@ -13,7 +13,7 @@
  * весь час лікуємось («успіх за 0 мс», «порожній результат = pass»).
  */
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, statSync, readdirSync, copyFileSync } from "node:fs";
 import {
   REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, abortState, migrationsInDiff, isProdCheckout, PROD_CHECKOUT_REFUSAL, resolveTrees, SAME_TREE_REFUSAL, STAND_RECIPE, PROD_BRANCH, OLD_PROD_BRANCH, pushRefusal,
   standToRefusal,
@@ -312,6 +312,17 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
           + "Постав залежності бази явно (npm ci у worktree) і повтори." };
       }
       symlinkSync(`${c.be}/node_modules`, `${base}/backend/node_modules`);
+      /**
+       * 🔴 `.env` ТЕЖ ЧАСТИНА СЕРЕДОВИЩА, І БЕЗ НЬОГО БАЗА НЕ ТОТОЖНА ДЕРЕВУ.
+       * 📐 Спіймано 08.09.2026: `core/leadgenStats.test.js` у базі падав ЦІЛИМ ФАЙЛОМ
+       * («Missing required env var: DATABASE_URL» — `#364b` тягне `metrics.js`, той — пул),
+       * а в дереві проходив усіма гейтами. Код обох чекаутів був тотожний; різнився лише
+       * `.env`, який лежить у стенді й не потрапляв у worktree. Крок доповідав «зникло
+       * падіння / перестали виконуватись» — і зупиняв викат, у якому цей файл ніхто не чіпав.
+       * Копія, а не симлінк: worktree прибирається `--force`, і посилання на файл із
+       * секретами лишати в `/tmp` не варто навіть на 80 секунд.
+       */
+      if (existsSync(`${c.be}/.env`)) copyFileSync(`${c.be}/.env`, `${base}/backend/.env`);
 
       const beBase = `${base}/backend`;
       sh("rm", ["-rf", "dist"], beBase);
