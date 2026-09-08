@@ -7502,7 +7502,12 @@ dashboardRouter.post("/repeat-client-plan", async (req, res) => {
        (client_key, month, manager_id, plan, forecast, realization_pct, international, we_do, call_link, comment, status, updated_by, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
      ON CONFLICT (client_key, month) DO UPDATE SET
-       manager_id = EXCLUDED.manager_id, plan = EXCLUDED.plan, forecast = EXCLUDED.forecast,
+       -- 🔴 COALESCE, А НЕ ПРИСВОЄННЯ (07.09.2026). Було `manager_id = EXCLUDED.manager_id`,
+       -- тобто один запит сюди ЗАТИРАВ уже проставленого власника на NULL — і скасовував би
+       -- бекфіл нічийних планів мовчки, без сліду в історії (`repeat_client_plan_history`
+       -- колонки `manager_id` не має). Той самий морозильний семантик, що в `SAVE_SQL`.
+       manager_id = COALESCE(repeat_client_plans.manager_id, EXCLUDED.manager_id),
+       plan = EXCLUDED.plan, forecast = EXCLUDED.forecast,
        realization_pct = EXCLUDED.realization_pct, international = EXCLUDED.international, we_do = EXCLUDED.we_do,
        call_link = EXCLUDED.call_link, comment = EXCLUDED.comment, status = EXCLUDED.status,
        updated_by = EXCLUDED.updated_by, updated_at = now()`,
