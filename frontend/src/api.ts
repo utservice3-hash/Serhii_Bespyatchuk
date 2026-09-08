@@ -148,13 +148,30 @@ export interface LeadgenResp {
   /** Розріз: менеджер-ОТРИМУВАЧ (імені лідогенератора в реєстрі немає). */
   dimensionNote: string;
 }
-export async function fetchLeadgen(params: {
-  managerId?: number;
-  teamId?: number;
-  from?: string;
-  to?: string;
-}): Promise<LeadgenResp> {
-  const { data } = await api.get<LeadgenResp>("/dashboard/leadgen", { params });
+
+/** 📞 Новий екран «Лідогенерація» — сім показників із подій CRM (ТЗ v2, 08.09.2026). */
+export interface LeadgenPersonRow {
+  managerId: number; name: string; teamId: number | null; teamName: string | null;
+  isActive: boolean; leads: number; opr: number; quotes: number; warming: number; calls: number;
+}
+export interface LeadgenStatsResp {
+  from: string; to: string;
+  rows: LeadgenPersonRow[];
+  bySource: { source: string; leads: number }[];
+  totals: { leads: number; opr: number; quotes: number; warming: number; calls: number };
+  conversions: {
+    oprOfLeads: number | null; quotesOfOpr: number | null;
+    targets: { oprOfLeads: number; quotesOfOpr: number; machinesOfQuotes: number };
+  };
+  department: {
+    machines: number; machinesRevenue: number; receivedRevenue: number; receivedDeals: number;
+    note: string; anchors: string;
+  };
+  callRule: string;
+  scopedTo: number | null;
+}
+export async function fetchLeadgenStats(params: { from: string; to: string }): Promise<LeadgenStatsResp> {
+  const { data } = await api.get<LeadgenStatsResp>("/dashboard/leadgen-stats", { params });
   return data;
 }
 

@@ -105,6 +105,12 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
  */
 export interface DeadRouteCandidate { method: string; path: string; why: string }
 export const DEAD_ROUTE_CANDIDATES: DeadRouteCandidate[] = [
+  { method: "GET", path: "/api/dashboard/leadgen",
+    why: "стару вкладку «Лідогенерація» знято 08.09.2026 — її замінив екран на подіях CRM "
+       + "(`/api/dashboard/leadgen-stats`). Причина заміни заміряна: реєстр бота, на якому "
+       + "стояв цей роут, обвалився зі ~130 до 11-20 передач на тиждень із 10.08.2026, тобто "
+       + "вкладка місяць показувала зламане число. `fetchLeadgen` більше не викликається "
+       + "ніде поза api.ts. ⚠️ Роут ЖИВИЙ і віддає дані — видалення окремим рішенням." },
   { method: "GET", path: "/api/dashboard/conversion-timeseries",
     why: "ConversionTrendCard → лише ReportSection.tsx (файл ніде не імпортується); рядка немає у прод-бандлі." },
   { method: "GET", path: "/api/dashboard/daily",

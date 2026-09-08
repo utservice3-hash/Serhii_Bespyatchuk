@@ -52,6 +52,7 @@ import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
+import { leadgenStats, pct, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
@@ -292,6 +293,70 @@ dashboardRouter.get("/leadgen", async (req, res) => {
      */
     dimensionNote: "розріз — менеджер, ЯКОМУ передали заявку (реєстр бота не містить "
       + "імені лідогенератора)",
+  });
+});
+
+/**
+ * 📞 «ЛІДОГЕНЕРАЦІЯ» — сім показників таблиці лідгенів із подій CRM (ТЗ v2 від 07.09.2026).
+ *
+ * Замінює стару вкладку, що жила на реєстрі бота. Причина заміни заміряна, а не естетична:
+ * `leadgen_registry` обвалився з ~130 до 11-20 передач на тиждень із 10.08.2026
+ * (`routes/leadgenChannelFact.test.ts:12-19`), тобто екран уже місяць показував зламане.
+ *
+ * 🔒 МЕЖА ТА САМА, ЩО В СТАРОГО РОУТА: менеджер — 403. ТЗ хоче, щоб лідген бачив свій
+ * рядок, але лідгени ходять як `manager`, окремої ролі немає — а розширення доступу це
+ * рішення ВЛАСНИКА, не наше. Поки не ухвалене, тримаємо наявну межу: fail-closed.
+ *
+ * ⚠️ Машини й гроші — ТІЛЬКИ рівень відділу, і це не спрощення. Звʼязку «машина →
+ * конкретний лідген» у CRM немає: поле «Лидогенератор» заповнене в 11 зі 103 машин
+ * серпня (замір `docs/LEADGEN_ETAP0.md`). Показувати його поіменно означало б вигадати
+ * число. Обидва якорі підписані окремо (правило №1): відправлення — `load_at`,
+ * отримані кошти — датований анкер ядра.
+ */
+dashboardRouter.get("/leadgen-stats", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+  if (!from || !to) return res.status(400).json({ error: "Потрібні from і to" });
+  // Тімлід — тільки своя команда, кламп на СЕРВЕРІ.
+  const teamId = auth.role === "team_lead" ? (auth.teamId ?? -1) : null;
+
+  const { adSources } = await overviewCache.call("getSettings", getSettings);
+  const [stats, dispatched, byChannel] = await Promise.all([
+    leadgenStats(from, to),
+    metrics.dispatchedByLoadBucket({ from, to }, "month", "leadgen"),
+    money.receivedByChannel({ from, to }, adSources),
+  ]);
+
+  const rows = teamId == null ? stats.rows : stats.rows.filter((r) => r.teamId === teamId);
+  const totals = teamId == null
+    ? stats.totals
+    : rows.reduce((a, r) => ({
+        leads: a.leads + r.leads, opr: a.opr + r.opr, quotes: a.quotes + r.quotes,
+        warming: a.warming + r.warming, calls: a.calls + r.calls,
+      }), { leads: 0, opr: 0, quotes: 0, warming: 0, calls: 0 });
+
+  res.json({
+    from, to,
+    rows, bySource: stats.bySource, totals,
+    conversions: {
+      oprOfLeads: pct(totals.opr, totals.leads),
+      quotesOfOpr: pct(totals.quotes, totals.opr),
+      targets: LEADGEN_CONVERSION_TARGETS,
+    },
+    department: {
+      machines: dispatched.reduce((s, b) => s + b.deals, 0),
+      machinesRevenue: dispatched.reduce((s, b) => s + b.revenue, 0),
+      receivedRevenue: byChannel.leadgen.revenue,
+      receivedDeals: byChannel.leadgen.deals,
+      note: "тільки рівень відділу: поле «Лидогенератор» заповнене в 11 зі 103 машин серпня, "
+        + "тож поіменно машину віднести нема чим",
+      anchors: "машини — за датою відправлення (load_at); отримані кошти — датований анкер ядра",
+    },
+    callRule: `успішний дзвінок = вихідний від ${LEADGEN_CALL_MIN_SEC} с `
+      + "(поріг виведено із заміру: 3 604 проти 3 627 у таблиці лідгенів за серпень)",
+    scopedTo: teamId,
   });
 });
 

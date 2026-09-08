@@ -257,6 +257,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // тобто дані про колег, а не власну роботу.
   { method: "GET", path: "/api/dashboard/leadgen", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 📞 НОВИЙ ЕКРАН «Лідогенерація» (ТЗ v2, 08.09.2026): сім показників із подій CRM.
+  // Межа СВІДОМО та сама, що в старого `/leadgen` — менеджер 403. ТЗ хоче, щоб лідген
+  // бачив свій рядок, але лідгени ходять як `manager`, окремої ролі немає, а розширення
+  // доступу — рішення власника. Поки його немає, тримаємо fail-closed.
+  { method: "GET", path: "/api/dashboard/leadgen-stats", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/leadgen-regulars", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   // ФАЗА A · «Постійні клієнти · план місяця». Межа — вкладка `loyalty`, якої в

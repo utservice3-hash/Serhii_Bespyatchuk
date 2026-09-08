@@ -10,7 +10,6 @@ import {
   fetchConversion,
   fetchFunnel,
   fetchOverview,
-  fetchLeadgen,
   fetchSyncStatus,
   triggerSync,
   type SyncStatus,
@@ -44,7 +43,6 @@ import {
   type PersonalDashboard,
   type ConversionChannel,
   type ExecutiveOverview,
-  type LeadgenGroup,
   type ReceivableManager,
   type ReceivableTotals,
   type Task,
@@ -59,6 +57,7 @@ import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, p
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
 import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSection";
 import SettingsSection from "./dashboard/sections/SettingsSection";
+import { LeadgenSection } from "./dashboard/sections/LeadgenSection";
 import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
@@ -82,7 +81,6 @@ import { GoalsSection } from "./dashboard/sections/GoalsSection";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ReportPlanSection } from "./dashboard/sections/ReportPlanSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
-import { LeadgenRegularsCard } from "./dashboard/sections/LeadgenRegularsCard";
 import { PlansTabs } from "./dashboard/sections/PlansTabs";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
 
@@ -242,10 +240,6 @@ export function Dashboard() {
     );
   }
 
-  const [leadgenTeamId, setLeadgenTeamId] = useState<number | "">("");
-  const [leadgenData, setLeadgenData] = useState<LeadgenGroup[]>([]);
-  const [leadgenNote, setLeadgenNote] = useState<string>("");
-  const [leadgenLoading, setLeadgenLoading] = useState(false);
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -686,21 +680,6 @@ export function Dashboard() {
     setTimeout(poll, 5000);
   }
 
-  useEffect(() => {
-    if (section !== "leadgen") return;
-    const teamIdToUse = auth?.role === "manager" ? undefined : leadgenTeamId || undefined;
-    const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
-    setLeadgenLoading(true);
-    fetchLeadgen({
-      teamId: teamIdToUse || undefined,
-      managerId: managerIdToUse,
-      from: dateRange.from || undefined,
-      to: dateRange.to || undefined,
-    })
-      .then((r) => { setLeadgenData(r.groups); setLeadgenNote(`${r.unit} · ${r.dimensionNote}`); })
-      .catch(() => { setLeadgenData([]); setLeadgenNote(""); })
-      .finally(() => setLeadgenLoading(false));
-  }, [section, leadgenTeamId, auth, dateRange]);
 
   useEffect(() => {
     setLoading(true);
@@ -962,136 +941,12 @@ export function Dashboard() {
       )}
 
       {section === "leadgen" && (
-        <>
-          <div className="page-header">
-            <h1 className="page-title">Лідогенерація</h1>
-            <div className="page-filters">
-              {/* 🔴 ТІМЛІДУ СЕЛЕКТОР НЕ ПОКАЗУЄМО — вказівка власника 05.08.2026.
-                  Це КОСМЕТИКА поверх серверного клампу, а не зміна доступу: сервер
-                  однаково клампить тімліда до власної команди (гейт #30m), тож
-                  список «Усі команди» був би тумблером, який нічого не вмикає — і
-                  збивав би з пантелику сильніше за його відсутність.
-                  Менеджер сюди не потрапляє взагалі. */}
-              {auth?.role !== "manager" && auth?.role !== "team_lead" && (
-                <select
-                  value={leadgenTeamId}
-                  onChange={(e) => setLeadgenTeamId(e.target.value ? Number(e.target.value) : "")}
-                >
-                  <option value="">Усі команди</option>
-                  {teamOptions(teams)}
-                </select>
-              )}
-              <DateRangeFilter
-                value={dateRange}
-                onChange={(r) => {
-                  setDateRange(r);
-                  setDatePreset(null);
-                }}
-              />
-            </div>
-          </div>
-
-          <QuickPeriods
-            active={datePreset}
-            onSelect={(id, range) => {
-              setDatePreset(id);
-              setDateRange(range);
-            }}
-          />
-
-          <LeadgenRegularsCard />
-
-          {/* 🔴 ПІДПИС ВІД СЕРВЕРА, не зашитий тут: одиниця лічби (передача) і
-              розріз (менеджер-ОТРИМУВАЧ) змінились разом із джерелом. Стара назва
-              над новою цифрою — рівно та підміна, від якої ми й ішли. */}
-          {leadgenNote && (
-            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
-              Одиниця лічби: {leadgenNote}.
-              {/* 🪧 МІСЦЕ ПІД МАЙБУТНІЙ РОЗРІЗ «хто згенерував». Реєстр бота такої
-                  колонки поки не має; коли зʼявиться в синкованих даних — сюди
-                  стане перемикач розрізу. Написано вголос, щоб через місяць це не
-                  читалось як недогляд і щоб ніхто не вигадав розріз із нічого. */}
-              {" "}Розріз «хто ЗГЕНЕРУВАВ» зʼявиться, коли бот почне віддавати
-              лідогенератора в реєстрі — зараз такої колонки в даних немає.
-            </p>
-          )}
-          {leadgenLoading ? (
-            <p className="loading-text">Завантаження...</p>
-          ) : leadgenData.length === 0 ? (
-            <p className="loading-text">Немає даних.</p>
-          ) : (
-            <>
-              {leadgenData.map((group) => (
-                <div key={group.teamName} style={{ marginBottom: 24 }}>
-                  <h2
-                    style={{
-                      fontSize: 18,
-                      margin: "8px 0 12px",
-                      paddingBottom: 6,
-                      borderBottom: "2px solid var(--border)",
-                      color: group.isLeadgen ? "#c5141c" : "var(--text)",
-                    }}
-                  >
-                    {group.isLeadgen ? "🎯 " : "🏢 "}
-                    {group.teamName}
-                    {!group.isLeadgen && " (комерційний відділ)"}
-                    <span style={{ fontSize: 13, fontWeight: 400, color: "var(--text-muted)", marginLeft: 10 }}>
-                      {/* 🔴 ПІДПИС ЧЕСНИЙ: одиниця лічби — ПЕРЕДАЧА заявки, а не
-                          унікальний лід (рішення власника 04.08.2026). Без цього
-                          підпису 358 і 260 читались би як та сама цифра. */}
-                      {group.leads.toLocaleString("uk-UA")} передач
-                      {group.uniqueLeads !== group.leads && ` (унікальних лідів ${group.uniqueLeads})`}
-                      {" · "}{group.reachedPaid} оплат
-                    </span>
-                  </h2>
-                  <div className="chart-grid">
-                    {group.generators.map((g) => (
-                      <div className="chart-card" key={g.managerId}>
-                        <h2 className="chart-title">{g.managerName}</h2>
-                        <div className="kpi-grid">
-                          <div className="kpi-card">
-                            <span className="kpi-label" title="рядки реєстру бота: кожна передача заявки менеджеру">
-                              Передач
-                            </span>
-                            <span className="kpi-value">{g.leads.toLocaleString("uk-UA")}</span>
-                          </div>
-                          <div className="kpi-card">
-                            <span className="kpi-label">Дійшло до оплати</span>
-                            <span className="kpi-value">{g.reachedPaid.toLocaleString("uk-UA")}</span>
-                          </div>
-                          <div className="kpi-card">
-                            <span className="kpi-label">Конверсія</span>
-                            <span className="kpi-value">{g.conversion}%</span>
-                          </div>
-                        </div>
-                        <table className="data-table">
-                          <thead>
-                            <tr>
-                              <th>Джерело клієнта</th>
-                              <th>Передач</th>
-                              <th>Оплат</th>
-                              <th>Конверсія</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {g.bySource.map((s) => (
-                              <tr key={s.source}>
-                                <td>{s.source}</td>
-                                <td>{s.leads}</td>
-                                <td>{s.reachedPaid}</td>
-                                <td>{s.conversion}%</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-        </>
+        /**
+         * Новий екран замість старої вкладки на реєстрі бота. Причина заміни ЗАМІРЯНА:
+         * реєстр обвалився зі ~130 до 11-20 передач/тиждень із 10.08.2026, тобто вкладка
+         * місяць показувала зламане число. Тепер сім показників рахуються з подій CRM.
+         */
+        <LeadgenSection from={dateRange.from} to={dateRange.to} />
       )}
 
       {section === "receivables" && (

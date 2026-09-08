@@ -93,6 +93,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/reactivation-candidates"), tabs: ["tasks"] },
     { test: pre("/api/dashboard/receivables"), tabs: ["receivables"] },
     { test: pre("/api/dashboard/sync-receivables"), tabs: ["receivables"] },
+    // ⚠️ ОКРЕМИЙ РЯДОК, А НЕ ПРЕФІКС ВИЩЕ: `pre()` не накриває дефіс — той самий урок,
+    // що з `reactivation-candidates`. Без цього новий екран лишився б без вкладкової межі.
+    { test: pre("/api/dashboard/leadgen-stats"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/stuck-deals"), tabs: ["dataquality"] },
     { test: pre("/api/dashboard/data-quality"), tabs: ["dataquality"] },
