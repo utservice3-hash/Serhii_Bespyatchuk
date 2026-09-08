@@ -189,8 +189,22 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
       </p>
 
       {/* Категорії */}
+      {/* 🙈 ВКЛАДКА «Ручні» (✍️) НЕ ПОКАЗУЄТЬСЯ — рішення власника 08.09.2026: «щоб у
+          ручному нічого не заповнювали». Саме її він і мав на увазі 07.09; тоді вказівку
+          розвʼязали проти іншого розділу й сховали `finance`/`hr` у «Статистиках
+          (відділах)» — тепер вони повернуті, а прибрано те, що просили.
+
+          🔴 ЗАПИС У `CATS` ЛИШАЄТЬСЯ, ПРИБРАНО ЛИШЕ ВХІД. На нього спирається
+          `ManualForm` (перелік метрик береться як `CATS.find(c => c.key === "manual")!`),
+          і видалення впало б на цьому `!`. Ховаємо подачу, а не зміст — той самий
+          принцип, що в `HIDDEN_DEPARTMENTS`.
+
+          ⚠️ МЕЖА, НАЗВАНА ВГОЛОС: це фронт, тож `POST /statistics/manual` лишається
+          живим для адміна. Тобто вхід прибрано з ЕКРАНА, а не з API. Заміряно 08.09:
+          у `stats_series` 9 892 рядки, ВСІ `source='sheet'`, ручних — нуль, тобто
+          формою жодного разу не скористались. Закривати сам роут — окреме рішення. */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "14px 0 16px" }}>
-        {CATS.map((c) => (
+        {CATS.filter((c) => !c.manualForm).map((c) => (
           <button key={c.key} onClick={() => { setCatKey(c.key); if (!c.manualForm) setMetricKey(c.metrics[0].key); }}
             style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 14, fontWeight: 700, padding: "9px 15px", borderRadius: 11, cursor: "pointer",
               border: catKey === c.key ? "1px solid #1f2330" : "1px solid var(--border)", background: catKey === c.key ? "#1f2330" : "var(--card-bg)", color: catKey === c.key ? "#fff" : "var(--text)" }}>
