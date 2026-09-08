@@ -20,6 +20,11 @@ export const NAV_GROUPS = [
       { key: "plans", label: "Плани", icon: "💵", roles: ["admin", "team_lead"] },
       { key: "statistics", label: "Статистики", icon: "📊" },
       { key: "depstats", label: "Статистики (відділи)", icon: "🗂️" },
+      // 📊 Реклама — день × кампанія з GA4. Видимість керує `screen_access` у токені
+      // (сід у schema.sql: admin/kvp/ceo/opdir/team_lead), а НЕ поле `roles` тут:
+      // для сучасних токенів `screens` авторитетний, `roles` лишився фолбеком для
+      // старих. Тому тут `roles` свідомо НЕ ставимо — інакше два джерела правди.
+      { key: "ads", label: "Реклама", icon: "📣" },
       { key: "teams", label: "Команди", icon: "👥", roles: ["admin", "team_lead"] },
       { key: "managers", label: "Менеджери", icon: "🧑‍💼", roles: ["admin", "team_lead"] },
       { key: "reports", label: "Мої звіти", icon: "📌" },

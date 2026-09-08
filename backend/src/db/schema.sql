@@ -1651,6 +1651,20 @@ UPDATE roles SET permissions = permissions ||
   '{"view_hidden_payments":true,"manage_bank_hidden":true,"manage_bank_accounts":true}'::jsonb
   WHERE key = 'admin';
 
+-- 📊 Вкладка «Реклама» (08.09.2026). Ролі — рішення власника ДОСЛІВНО: «всі в кого є
+-- адмін, квп, всі керівники». Тобто admin + kvp + керівники (ceo, opdir, team_lead);
+-- financier у це формулювання не входить, тож і не отримує (свідома різниця з
+-- дзеркалом /lead-quality, а не недогляд).
+--
+-- 🔴 БЕЗ ЦЬОГО РЯДКА ВКЛАДКУ НЕ ПОБАЧИВ БИ НІХТО, ВКЛЮЧНО З АДМІНОМ. Видимість пункту
+-- меню визначає `screen_access` у токені (`Layout.navGroupsForRole`: якщо `screens`
+-- переданий — він АВТОРИТЕТНИЙ), а не поле `roles` у NAV_GROUPS. Новий ключ, якого
+-- немає в жодній ролі, дає `screens.includes('ads') === false` для всіх. Це той самий
+-- клас, що борг 18 у CLAUDE.md: «UI дозволяє, а гейт вимагає коміт» — тільки навпаки.
+-- ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+UPDATE roles SET screen_access = screen_access || '{"ads":true}'::jsonb
+  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead') AND NOT (screen_access ? 'ads');
+
 -- Баланси рахунків: останній залишок з банк-API (mono client-info / privat closing-balance),
 -- оновлюється на циклі синку. Ідемпотентно; наявні рахунки не чіпаємо.
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_amount     NUMERIC;

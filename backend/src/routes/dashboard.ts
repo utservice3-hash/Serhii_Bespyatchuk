@@ -52,6 +52,7 @@ import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
+import { ga4Configured } from "../ga4/client.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly,
   pct, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
 import * as expectSplit from "../core/expectSplit.js";
@@ -5188,6 +5189,89 @@ dashboardRouter.get("/data-quality", async (req, res) => {
  *   non-target  = Кваліфікація 8921928 closed as lost (status 143) — rejected.
  * Both counts come from our synced `deals` (syncKommo pulls all pipelines).
  */
+/**
+ * 📊 РЕКЛАМА: день × кампанія (GA4) поруч із лідами CRM за той самий день.
+ *
+ * 🔴 ЩО ТУТ НОВОГО, А ЩО НІ (рішення власника 08.09.2026: «нова гранулярність»).
+ * ROMI/CPA/бюджет/дохід уже рахує КВП-звіт (`engines.ad`) — сюди їх НЕ переносимо й
+ * не дублюємо. Новим є рівень, якого не було ніде: **день × кампанія**. Тому екран
+ * показує витрати/кліки/сесії GA4, поруч факт із аркуша Сергія (він лишається другим
+ * джерелом — рішення власника), і ліди CRM за той самий день.
+ *
+ * 🔴 ЛІДИ БЕРЕ ЯДРО, А НЕ ЦЕЙ РОУТ. `metrics.conversionAdsByDay` — той самий
+ * `dealCohortCte`, що живить `conversion_ads`. Свій SQL по лідах тут розійшовся б із
+ * дашбордом через місяці (DoD п.1), і найтиповіше — через спрощений `paidAdSql`.
+ *
+ * ⚠️ РІВЕНЬ «клік → угода» НЕМОЖЛИВИЙ за побудовою: `gclid` у CRM заповнений у 0%
+ * (поле Kommo 482023, скан червня) і в нашій БД його свідомо немає (`schema.sql`).
+ * Тому зіставлення саме поденне, і на екрані це сказано словами, а не приховано.
+ */
+dashboardRouter.get("/ads", async (req, res) => {
+  const auth = req.auth!;
+  // Дзеркало межі `/lead-quality`: рекламні витрати — не менеджерська метрика.
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const from = (req.query.from as string) ?? null;
+  const to = (req.query.to as string) ?? null;
+  const { adSources } = await getSettings();
+
+  const [ga4, leads, sheet] = await Promise.all([
+    pool.query<{ day: string; campaign: string; channel_group: string | null;
+                 sessions: number; conversions: string; cost: string; clicks: number }>(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, campaign, channel_group,
+              sessions, conversions, cost, clicks
+         FROM ad_ga4_daily
+        WHERE ($1::date IS NULL OR day >= $1::date)
+          AND ($2::date IS NULL OR day <= $2::date)
+        ORDER BY day, campaign`,
+      [from, to]
+    ),
+    metrics.conversionAdsByDay({ from, to }, adSources),
+    // Другe джерело — аркуш Сергія. Читаємо, НЕ чіпаючи ні таблицю, ні її синк:
+    // у неї три читачі (/lead-quality, /kvp-report, statistics/computeAuto).
+    pool.query<{ day: string; budget_fact: string }>(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, budget_fact
+         FROM ad_budget_daily
+        WHERE ($1::date IS NULL OR day >= $1::date)
+          AND ($2::date IS NULL OR day <= $2::date)`,
+      [from, to]
+    ),
+  ]);
+
+  const leadsByDay = new Map(leads.map((l) => [l.day, l]));
+  const sheetByDay = new Map(sheet.rows.map((r) => [r.day, Number(r.budget_fact)]));
+  const campaigns = ga4.rows.map((r) => ({
+    day: r.day,
+    campaign: r.campaign,
+    channelGroup: r.channel_group,
+    sessions: Number(r.sessions),
+    conversions: Number(r.conversions),
+    cost: Number(r.cost),
+    clicks: Number(r.clicks),
+  }));
+
+  // Дні — згортка ТИХ САМИХ рядків (не окремий запит), тож Σ по днях == Σ по
+  // кампаніях за побудовою; це й стереже гейт про інваріант групування.
+  const byDay = new Map<string, { day: string; cost: number; clicks: number; sessions: number }>();
+  for (const c of campaigns) {
+    const e = byDay.get(c.day) ?? { day: c.day, cost: 0, clicks: 0, sessions: 0 };
+    e.cost += c.cost; e.clicks += c.clicks; e.sessions += c.sessions;
+    byDay.set(c.day, e);
+  }
+  // ⚠️ Поля перелічені ЯВНО, без спреду (ворота `#17e2`): спред виносить назовні те,
+  // чого автор не перелічив, і саме так у відповідь колись потрапляє зайве поле.
+  const days = [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day)).map((d) => ({
+    day: d.day,
+    cost: Math.round(d.cost * 100) / 100,
+    clicks: d.clicks,
+    sessions: d.sessions,
+    sheetCost: sheetByDay.get(d.day) ?? null,   // null = аркуш цього дня не має
+    leads: leadsByDay.get(d.day)?.entered ?? 0, // ліди з ЯДРА conversion_ads
+    won: leadsByDay.get(d.day)?.won ?? 0,
+  }));
+
+  res.json({ days, campaigns, ga4Configured: ga4Configured() });
+});
+
 dashboardRouter.get("/lead-quality", async (req, res) => {
   const auth = req.auth!;
   // Company-wide lead-quality is a КВП/lead metric — managers never see it.

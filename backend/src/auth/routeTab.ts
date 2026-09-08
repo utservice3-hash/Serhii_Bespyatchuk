@@ -109,6 +109,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // return 403`. Щойно HR отримав company-scope, кламп зник — і роль, у якої немає
     // ні «overview», ні «loyalty», ні «manager-report», побачила їх усі. Спіймав #11.
     { test: pre("/api/dashboard/lead-quality"), tabs: ["overview"] },
+    // 📊 Без цього рядка /ads лишився б БЕЗ tab-гейта — тобто в «відомій дірі»
+    // нижче. DoD п.2 вимагає МЕЖУ, а не лише запис у матриці.
+    { test: pre("/api/dashboard/ads"), tabs: ["ads"] },
     { test: pre("/api/dashboard/regular-clients"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/manager-report"), tabs: ["manager-report"] },
     // ⚠️ РЕШТА /api/dashboard/* ЛИШАЄТЬСЯ БЕЗ TAB-ГЕЙТА — і це ВІДОМА ДІРА, а не задум.

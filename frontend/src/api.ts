@@ -515,6 +515,39 @@ export async function saveRepeatPlan(managerId: number, month: string, plannedVa
   await api.post("/plans", { managerId, planDate: `${month}-01`, metric: "repeat_payment_amount", plannedValue });
 }
 
+/** 📊 Екран «Реклама»: день × кампанія з GA4 + ліди CRM за той самий день. */
+export interface AdsDay {
+  day: string;
+  cost: number;
+  clicks: number;
+  sessions: number;
+  /** Витрати з аркуша Сергія за той самий день; `null` = аркуш цього дня не має. */
+  sheetCost: number | null;
+  /** Ліди з ЯДРА conversion_ads (не свій SQL) — знаменник платних лідів. */
+  leads: number;
+  won: number;
+}
+export interface AdsCampaign {
+  day: string;
+  campaign: string;
+  channelGroup: string | null;
+  sessions: number;
+  conversions: number;
+  cost: number;
+  clicks: number;
+}
+export interface AdsReport {
+  days: AdsDay[];
+  campaigns: AdsCampaign[];
+  /** false → GA4 ще не ввімкнули; екран каже це словами, а не показує порожнечу. */
+  ga4Configured: boolean;
+}
+
+export async function fetchAds(params: { from?: string; to?: string }): Promise<AdsReport> {
+  const { data } = await api.get<AdsReport>("/dashboard/ads", { params });
+  return data;
+}
+
 export async function fetchLeadQuality(params: {
   from?: string;
   to?: string;
