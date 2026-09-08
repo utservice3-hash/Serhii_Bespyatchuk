@@ -136,6 +136,80 @@ export function planTotals(rows: PlanRow[]): PlanTotals {
  * і всередині `CASE … THEN $6 END`, а вивід типу робиться один раз. Саме це тримало
  * екран мертвим пʼять тижнів — з 29.07.2026, за будь-яких значень і будь-якої ролі.
  */
+/**
+ * 👤 ВЛАСНИК КЛІЄНТА ДЛЯ ЗАПИСУ ПЛАНУ — той самий вираз, яким його малює екран.
+ *
+ * 📐 ПРИВІД, ЗАМІРЯНИЙ 07.09.2026 (гейт `#107c`). `POST /client-plan` брав менеджера як
+ * `auth.role === "manager" ? auth.managerId : null`, тож КОЖЕН, хто зберігає план не
+ * будучи менеджером, писав `manager_id = NULL`. За вересень: **10 із 22 затверджених
+ * планів нічиї — 1 079 300 ₴ із 1 162 800 ₴ (92.8%)**. У липні таких нуль.
+ *
+ * 🔴 НАСЛІДОК БУВ НЕ «ДВІ ПЛИТКИ РОЗІЙШЛИСЬ», А МОВЧАЗНА ВТРАТА РОБОТИ. «Клієнти»
+ * такий план рахують (їм `manager_id` байдужий), «Формування плану» — ні
+ * (`AND manager_id IS NOT NULL`), і автор НЕ БАЧИТЬ ВЛАСНОГО ЗАПИСУ, бо його список
+ * скоупиться по `rp.manager_id`. Слід у базі однозначний: тімлід 19 зберіг «західсолод»
+ * СІМ разів за 51 хвилину 07.09, тричі поспіль те саме число — так виглядає введення в
+ * клітинку, яка лишається порожньою.
+ *
+ * 🔴 ЦЕ НЕ «БАГ ТІМЛІДА». `auth.role` — це `ScopeRole`, а не `users.role`. Заміряно:
+ * серед авторів сиріт є користувач із `users.role = 'manager'` і `role_override = 'kvp'`
+ * — його скоуп-роль не `manager`, тож він теж писав `NULL`. Тому умова тут — «резолвимо
+ * ЗАВЖДИ, коли рядка ще немає», а не перелік ролей: перелік розійдеться з `ScopeRole`
+ * на першій новій ролі, і мовчки.
+ *
+ * ⚠️ ВИРАЗ ПОВТОРЮЄ РОСТЕРНИЙ (`routes/dashboard.ts`, CTE `paid`→`per_cm`→`primary_mgr`,
+ * далі `COALESCE(lo.pinned_manager_id, pm.manager_id)` + `managers … AND is_active`) —
+ * ДОСЛІВНО, включно з `HAVING COUNT(*) >= 2` і виключенням дженерик-ключів. Копія тут
+ * свідома: витягувати ростерний запит у спільний хелпер означало б чіпати запит, який
+ * уже одного разу коштував 21.4 с на проді. Рівність двох текстів на ЖИВИХ даних
+ * стереже `#359e`; розійдуться — гейт назве клієнта поіменно.
+ *
+ * ⚠️ АРХІВ ТУТ НЕ ФІЛЬТРУЄТЬСЯ, і це навмисно. Ростер вирішує, кого ПОКАЗАТИ; ми
+ * вирішуємо, кому НАЛЕЖИТЬ уже створений план. Архівний клієнт власника не втрачає.
+ *
+ * 🔴 ПАСТКА, ЯКУ СВІДОМО НЕ ЛІКУЄМО ТУТ: `ORDER BY n DESC, mx DESC` у Postgres ставить
+ * NULL ПЕРШИМИ, тож угода без `closed_at_kommo` може виграти тайбрейк. Сьогодні не
+ * стріляє (заміряно: 0 таких серед сиріт), а «полагодити» на `NULLS LAST` означало б
+ * завести ДРУГЕ означення власника й розійтися з екраном — саме та хвороба, від якої
+ * цей модуль і лікує. Виправляти — разом і в ростері, окремим проходом.
+ *
+ * `$1` — client_key · `$2` — масив дженерик-ключів. Повертає 0 або 1 рядок.
+ */
+export const OWNER_SQL = `
+  WITH paid AS (
+    SELECT d.client_key, d.manager_id, d.closed_at_kommo
+      FROM deals d
+      JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+     WHERE psm.funnel_stage = 'paid' AND d.client_key = $1
+       AND NOT (d.client_key = ANY($2))
+  ),
+  agg AS (
+    SELECT client_key FROM paid GROUP BY client_key HAVING COUNT(*) >= 2
+  ),
+  per_cm AS (
+    SELECT client_key, manager_id, COUNT(*) AS n, MAX(closed_at_kommo) AS mx
+      FROM paid GROUP BY 1, 2
+  ),
+  primary_mgr AS (
+    SELECT DISTINCT ON (client_key) client_key, manager_id
+      FROM per_cm ORDER BY client_key, n DESC, mx DESC
+  )
+  SELECT mm.id AS manager_id
+    FROM agg a
+    JOIN primary_mgr pm ON pm.client_key = a.client_key
+    LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
+    JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active`;
+
+/**
+ * 🔴 ВІДМОВА МУСИТЬ НАЗИВАТИ СЕБЕ. Мовчазний `NULL` — це і був баг: рядок зберігався,
+ * виглядав збереженим і зникав з усіх екранів, крім одного. Якщо власника не знайти,
+ * правильна відповідь — сказати про це людині, а не покласти сироту.
+ */
+export const NO_OWNER_MSG =
+  "Не вдалося визначити менеджера цього клієнта — план не збережено. "
+  + "Так буває, якщо в клієнта менше двох оплачених угод або його менеджер деактивований. "
+  + "Скажіть адміністратору: план треба привʼязати вручну.";
+
 export const SAVE_SQL = `
   INSERT INTO repeat_client_plans (client_key, month, manager_id, plan, status, updated_by, updated_at,
                                    approved_by, approved_at, submitted_at, returned_at, review_note)

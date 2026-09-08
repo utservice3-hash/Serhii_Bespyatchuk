@@ -51,7 +51,7 @@ const get = (path: string, token: string) =>
   fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${token}` } });
 
 interface Row {
-  clientKey: string; plan: number; planStatus: string;
+  clientKey: string; plan: number; planStatus: string; managerId: number | null;
   planOnly: boolean; inRoster: "active" | "reactivation" | "planOnly";
   state: "active" | "sleeping" | "lost" | "oneoff";
 }
@@ -143,32 +143,52 @@ test("#107 Σ показаних планів місяця == Σ у БД за ц
 });
 
 /**
- * #107b — 🪞 ДЗЕРКАЛО: вибірка не порожня й не вироджена.
+ * #360 — 🪞 ДЗЕРКАЛО: вибірка не порожня й не вироджена.
  *
  * 🔴 НАВІЩО. `#107` зеленіє тривіально, якщо в місяці немає жодного плану, чий
  * клієнт зараз НЕ активний, — тобто саме в тому випадку, коли фікс нічого не
- * робить. Тоді гейт стеріг би порожнечу. Заміряно 21.08.2026: за липень таких
- * планів **65**, тож сьогодні вибірка змістовна.
+ * робить. Тоді гейт стеріг би порожнечу.
  *
- * 🧨 САБОТАЖ (виконано): підставити місяць БЕЗ планів → гейт червоніє «порожньо».
+ * 🔴 ЧОМУ НОВИЙ НОМЕР, А НЕ ПРАВКА `#107b` (правило 13). Твердження ЗМІНИЛОСЬ, а не
+ * уточнилось. `#107b` рахував `c.planOnly`, і до 05.09.2026 це означало «в ростері
+ * лише через план, тобто НЕ активний». Коміт `f44b824` завів ТРЕТЄ джерело ростера:
+ * сплячі й втрачені клієнти з планом тепер заходять як `inRoster:"reactivation"` із
+ * `planOnly:false`. Після цього `planOnly` звузився до «разовий або дженерик, що має
+ * план» — залишкового класу, якому `#111` не дає рости.
+ *
+ * 📐 Ціна дрейфу, заміряна 07.09.2026: `#107b` був ЧЕРВОНИЙ на проді, і його текст
+ * стверджував неправду — «у 2026-09 НЕМАЄ жодного плану на неактивному клієнті», тоді
+ * як 3 із 23 вересневих планів стоять на клієнтах у стані `reactivation/sleeping`.
+ * Тобто гейт не зловив дефект, а вигадав його: він міряв залишкову популяцію й називав
+ * її повною. Уточнити назву було не можна — реєстр звіряє ІМʼЯ, і «виправлений `#107b`»
+ * читався б як той самий гейт, що й раніше.
+ *
+ * ✅ ТЕПЕР КРИТЕРІЙ ВІД ПРЕДМЕТА, А НЕ ВІД ПОЛЯ: «клієнт, який у ростері НЕ як активний»
+ * — тобто `inRoster !== "active"`, що покриває й `reactivation`, й `planOnly` разом, і
+ * переживе появу ЧЕТВЕРТОГО джерела.
+ *
+ * 🧨 САБОТАЖ: підставити місяць БЕЗ планів → гейт червоніє «порожньо».
  */
-test("#107b дзеркало: у місяці Є план, чий клієнт зараз НЕ активний", needsApi(), async () => {
+test("#360 дзеркало: у місяці Є план на клієнті, який у ростері не активний", needsApi(), async () => {
   const m = await monthWithPlans();
   assert.ok(m, "🔴 планів немає взагалі");
   const token = await adminToken();
   const b = await (await get(`/api/dashboard/client-plans?month=${m.month}`, token)).json() as Resp;
   assertContract(b);
 
-  const planOnlyWithPlan = b.clients.filter((c) => c.planOnly && c.plan > 0);
-  const total = planOnlyWithPlan.length + b.totals.unattached.count;
+  const notActiveWithPlan = b.clients.filter((c) => c.inRoster !== "active" && c.plan > 0);
+  const total = notActiveWithPlan.length + b.totals.unattached.count;
   assert.ok(total > 0,
-    `🔴 у ${m.month} НЕМАЄ жодного плану на неактивному клієнті — #107 зеленів би, `
-    + "нічого не перевіряючи. Порожній результат це ПРОВАЛ, а не успіх");
-  assert.equal(b.totals.planOnlyClients, planOnlyWithPlan.length
-    + b.clients.filter((c) => c.planOnly && c.plan <= 0).length,
-    "🔴 лічильник `planOnlyClients` не дорівнює кількості таких рядків");
-  console.log(`   ℹ ${m.month}: неактивних із планом ${planOnlyWithPlan.length}`
-    + ` + не привʼязано ${b.totals.unattached.count}`);
+    `🔴 у ${m.month} НЕМАЄ жодного плану на клієнті, який у ростері не активний — #107 `
+    + "зеленів би, нічого не перевіряючи. Порожній результат це ПРОВАЛ, а не успіх");
+  // Лічильник `planOnlyClients` лишається про СВОЄ джерело — саме тому він більше не
+  // може бути мірою «неактивних»: це і був дрейф, що зробив `#107b` хибним.
+  assert.equal(b.totals.planOnlyClients, b.clients.filter((c) => c.planOnly).length,
+    "🔴 лічильник `planOnlyClients` не дорівнює кількості рядків із `planOnly`");
+  const bySrc = notActiveWithPlan.reduce<Record<string, number>>((a, c) => {
+    a[c.inRoster] = (a[c.inRoster] ?? 0) + 1; return a; }, {});
+  console.log(`   ℹ ${m.month}: неактивних із планом ${notActiveWithPlan.length} `
+    + `(${JSON.stringify(bySrc)}) + не привʼязано ${b.totals.unattached.count}`);
 });
 
 /**
@@ -481,4 +501,130 @@ test("#107 · підказка «минулого місяця» приходи�
   assert.match(src, /t\.prevMonth\.sum/, "🔴 фронт не читає prevMonth.sum");
   assert.doesNotMatch(src, /Минулого місяця[^]{0,80}\d{3}/,
     "🔴 у підказці зашите число — воно почне брехати мовчки");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #359* — ПЛАН НЕ БУВАЄ НІЧИЙНИМ
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 👤 #359 ЖИВИЙ — ЖОДНОГО ЗАТВЕРДЖЕНОГО ПЛАНУ БЕЗ ВЛАСНИКА.
+ *
+ * 📐 ПРИВІД, ЗАМІРЯНИЙ 07.09.2026. `POST /client-plan` писав `manager_id = NULL` кожному,
+ * хто зберігає план не будучи менеджером ЗА СКОУП-РОЛЛЮ. За вересень: **10 із 22
+ * затверджених планів нічиї — 1 079 300 ₴ із 1 162 800 ₴ (92.8%)**; за липень нуль.
+ * Такий рядок рахують «Клієнти», не бачить «Формування плану» і не бачить САМ АВТОР.
+ *
+ * 🔴 ЧОМУ ІНВАРІАНТ САМЕ `manager_id IS NOT NULL`, А НЕ «== резолвер». `SAVE_SQL`
+ * морозить власника першим записом (`COALESCE(наявний, новий)`), тож законні рядки, де
+ * клієнта відтоді передали, мають СТАРОГО менеджера — і «== резолвер» червонів би на
+ * правильних даних. Заміряно: такі рядки в липні є.
+ *
+ * 🧨 САБОТАЖ: створити план від тімліда на клієнті без резолву — гейт назве його поіменно.
+ */
+test("#359 ЖИВИЙ: жодного затвердженого плану без менеджера", needsApi(), async () => {
+  const m = await monthWithPlans();
+  assert.ok(m, "🔴 планів немає взагалі — гейту нема що перевіряти");
+  const { pool } = await import("../db/pool.js");
+
+  // 🔴 ЦІЛЕ Й ЧАСТИНИ ОДНИМ ЗАПИТОМ (правило 18): таблиця жива, і взяті окремо
+  //    «скільки всього» та «скільки сиріт» розійшлись би без жодного дефекту.
+  const r = await pool.query<{ approved: string; orphans: string; orphan_sum: string; keys: string[] }>(
+    `SELECT COUNT(*) FILTER (WHERE status = 'approved') AS approved,
+            COUNT(*) FILTER (WHERE status = 'approved' AND manager_id IS NULL) AS orphans,
+            COALESCE(SUM(plan) FILTER (WHERE status = 'approved' AND manager_id IS NULL), 0) AS orphan_sum,
+            COALESCE(ARRAY_AGG(client_key) FILTER (WHERE status = 'approved' AND manager_id IS NULL), '{}') AS keys
+       FROM repeat_client_plans WHERE to_char(month, 'YYYY-MM') = $1`, [m.month]);
+  const { approved, orphans, orphan_sum, keys } = r.rows[0];
+
+  // 🪞 ПОПУЛЯЦІЯ ДРУКУЄТЬСЯ ТИМ САМИМ ЗАПИТОМ. Нуль затверджених означав би, що
+  //    рівність нижче тримається на порожнечі — у цьому проєкті це ПРОВАЛ, не успіх.
+  assert.ok(Number(approved) > 0,
+    `🔴 у ${m.month} немає жодного ЗАТВЕРДЖЕНОГО плану — гейт зеленів би, нічого не перевіряючи`);
+  assert.equal(Number(orphans), 0,
+    `🔴 ${orphans} затверджених планів без менеджера на ${Math.round(Number(orphan_sum))} ₴ `
+    + `(${approved} затверджених усього). Такий план бачать «Клієнти» й не бачать ні «Формування `
+    + `плану», ні його власний автор. Ключі: ${keys.join(", ")}`);
+  console.log(`   ℹ ${m.month}: затверджених ${approved}, без менеджера ${orphans}`);
+});
+
+/**
+ * 🔗 #359b ЖИВИЙ — РЕЗОЛВЕР ЗАПИСУ Й ВЛАСНИК НА ЕКРАНІ — ОДНА ВІДПОВІДЬ.
+ *
+ * `OWNER_SQL` (шлях ЗАПИСУ) навмисно повторює ростерний вираз екрана. Копія свідома —
+ * витягувати ростерний запит у хелпер означало б чіпати запит, який уже коштував 21.4 с
+ * на проді. Але копія без гейта розійдеться мовчки, і тоді план поїде не тому менеджеру,
+ * якого людина бачила на екрані в мить збереження. Саме це гейт і стереже.
+ *
+ * 🧨 САБОТАЖ: прибрати `COALESCE(lo.pinned_manager_id, …)` з `OWNER_SQL` — клієнти з
+ * ручним закріпленням розійдуться, і гейт назве їх поіменно.
+ */
+test("#359b ЖИВИЙ: резолвер запису == власник на екрані, поіменно", needsApi(), async () => {
+  const m = await monthWithPlans();
+  assert.ok(m, "🔴 планів немає взагалі");
+  const { pool } = await import("../db/pool.js");
+  const { OWNER_SQL } = await import("./clientPlanRules.js");
+  const metrics = await import("../core/metrics.js");
+
+  const token = await adminToken();
+  const b = await (await get(`/api/dashboard/client-plans?month=${m.month}`, token)).json() as Resp;
+  assertContract(b);
+  const withPlan = b.clients.filter((c) => c.plan > 0);
+  assert.ok(withPlan.length > 0,
+    `🔴 у ${m.month} на екрані немає жодного рядка з планом — звіряти нема чого`);
+
+  const rozbizhni: string[] = [];
+  for (const c of withPlan) {
+    const own = await pool.query<{ manager_id: number }>(OWNER_SQL, [c.clientKey, metrics.GENERIC_CLIENT_KEYS]);
+    const resolved = own.rows[0]?.manager_id ?? null;
+    if (resolved !== c.managerId) rozbizhni.push(`${c.clientKey}: екран ${c.managerId} ≠ резолвер ${resolved}`);
+  }
+  assert.deepEqual(rozbizhni, [],
+    `🔴 шлях ЗАПИСУ й шлях ПОКАЗУ називають різних власників: ${rozbizhni.join("; ")}`);
+  console.log(`   ℹ звірено ${withPlan.length} клієнтів із планом`);
+});
+
+/**
+ * 🔌 #359c ПРОВОДКА — РЕЗОЛВЕР КЛИЧЕТЬСЯ, А ТИХОГО `null` БІЛЬШЕ НЕМАЄ.
+ *
+ * 🔴 Живі гейти вище дивляться на ДАНІ, тож обидва позеленіють від самого бекфілу —
+ * навіть якщо код повернути як був. Тобто без цього гейта відкат виправлення лишився б
+ * непоміченим до наступного збереження тімлідом. Той самий клас, що «гейт зелений, бо
+ * перевіряє не те місце».
+ *
+ * 🧨 САБОТАЖ: повернути `auth.role === "manager" ? auth.managerId : null` — червоніє.
+ */
+test("#359c ПРОВОДКА: роут резолвить власника, тихого null-фолбеку немає", () => {
+  const src = readSrc(path.join("backend", "src", "routes", "dashboard.ts"));
+  assert.match(src, /pool\.query<\{ manager_id: number \}>\(OWNER_SQL, \[clientKey, metrics\.GENERIC_CLIENT_KEYS\]\)/,
+    "🔴 роут більше не кличе `OWNER_SQL` — власник знову вгадується, а не резолвиться");
+  assert.match(src, /return res\.status\(400\)\.json\(\{ error: NO_OWNER_MSG \}\)/,
+    "🔴 зникла ВІДМОВА: нерозвʼязний клієнт знову ляже в базу сиротою замість гучної помилки");
+  assert.doesNotMatch(src, /manager_id \?\? \(auth\.role === "manager" \? auth\.managerId \?\? null : null\)/,
+    "🔴 повернувся тихий null-фолбек — саме той рядок, що зробив 10 планів нічийними");
+});
+
+/**
+ * 🪞 #359d ДЗЕРКАЛО — ПОВЕДІНКА МЕНЕДЖЕРА НЕ ЗМІНИЛАСЬ, А НАЯВНИЙ ВЛАСНИК ВИГРАЄ.
+ *
+ * 🔴 Односторонній гейт («резолвер кличеться») зеленів би й тоді, якби резолвер став
+ * БЕЗУМОВНИМ і почав перезаписувати чужий рядок — тобто виправлення видимості тихо
+ * стало б переприсвоєнням клієнтів. Порядок трьох джерел і є те, що тут стережеться.
+ */
+test("#359d 🪞 наявний власник виграє, менеджер лишається собою", () => {
+  const src = readSrc(path.join("backend", "src", "routes", "dashboard.ts"));
+  const i = src.indexOf("let managerId: number | null = mgr.rows[0]?.manager_id ?? null;");
+  assert.ok(i > 0, "🔴 зник вибір власника — гілки резолву більше немає де перевіряти");
+  // Межа ЗМІСТОВА, не за довжиною (правило 9): від вибору власника до самого запису.
+  const j = src.indexOf("SAVE_SQL", i);
+  assert.ok(j > i, "🔴 після вибору власника не видно запису — зріз втратив предмет");
+  const branch = src.slice(i, j);
+
+  assert.match(branch, /if \(managerId == null\)[\s\S]{0,120}auth\.role === "manager"/,
+    "🔴 менеджер більше не пише свій id першим — його поведінку змінили разом із чужою");
+  assert.ok(branch.indexOf('auth.role === "manager"') < branch.indexOf("OWNER_SQL"),
+    "🔴 резолвер став перед гілкою менеджера — тобто може перебити його власний id");
+  assert.doesNotMatch(branch, /team_lead|isAdminOrLead/,
+    "🔴 зʼявився ПЕРЕЛІК ролей: він розійдеться зі `ScopeRole` на першій новій ролі, і мовчки "
+    + "(заміряно: сироту записав користувач із role_override='kvp', списком його не спіймати)");
 });

@@ -38,7 +38,8 @@ import { syncKommo } from "../jobs/syncKommo.js";
 import { syncStageEvents } from "../jobs/syncStageEvents.js";
 import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
-  isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL } from "./clientPlanRules.js";
+  isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
+  OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
@@ -5915,9 +5916,40 @@ dashboardRouter.post("/client-plan", async (req, res) => {
     return res.status(409).json({ error: "План затверджено — зміна лише через тімліда (повернути на доопрацювання)" });
   }
   const status = isLead ? "approved" : "draft";
-  const mgr = await pool.query<{ manager_id: number }>(
+  const mgr = await pool.query<{ manager_id: number | null }>(
     `SELECT manager_id FROM repeat_client_plans WHERE client_key = $1 AND month = $2`, [clientKey, month]);
-  const managerId = mgr.rows[0]?.manager_id ?? (auth.role === "manager" ? auth.managerId ?? null : null);
+
+  /**
+   * 👤 ХТО ВЛАСНИК ПЛАНУ — три джерела, і порядок між ними НЕ довільний.
+   *
+   * 📐 Тут був рядок `mgr.rows[0]?.manager_id ?? (auth.role === "manager" ? auth.managerId
+   * : null)`, і його друга половина писала `NULL` КОЖНОМУ, хто не менеджер за скоуп-роллю.
+   * Заміряно 07.09.2026: 10 із 22 затверджених вересневих планів нічиї — 1 079 300 ₴
+   * із 1 162 800 ₴. Такий рядок бачать «Клієнти» і не бачать ні «Формування плану»
+   * (`AND manager_id IS NOT NULL`), ні САМ АВТОР (його список скоупиться по `manager_id`).
+   *
+   * ① Уже записаний власник виграє завжди — `SAVE_SQL` його й так морозить
+   *    (`COALESCE(наявний, новий)`), тож інший порядок розійшовся б із самим записом.
+   * ② Менеджер лишається собою — поведінка не змінюється ні на рядок.
+   * ③ Решта (тімлід, адмін, КВП, будь-яка майбутня роль) — РЕЗОЛВИМО, а не занулюємо.
+   *
+   * 🔴 Гілки «якщо тімлід» тут немає СВІДОМО: перелік ролей розійдеться зі `ScopeRole`
+   * на першій новій ролі, і зробить це мовчки. Заміряно: серед авторів сиріт є
+   * користувач із `users.role='manager'` та `role_override='kvp'` — списком ролей
+   * його не спіймати, «не менеджер за скоупом» — спіймати.
+   */
+  let managerId: number | null = mgr.rows[0]?.manager_id ?? null;
+  if (managerId == null) {
+    if (auth.role === "manager") managerId = auth.managerId ?? null;
+    else {
+      const own = await pool.query<{ manager_id: number }>(OWNER_SQL, [clientKey, metrics.GENERIC_CLIENT_KEYS]);
+      managerId = own.rows[0]?.manager_id ?? null;
+    }
+  }
+  // 🔴 ВІДМОВА ЗАМІСТЬ СИРОТИ. Мовчазний `NULL` виглядав як збереження й зникав з усіх
+  //    екранів, крім одного — саме через це людина перезберігала той самий план сім
+  //    разів. Краще гучне «не збережено» з причиною, ніж тихе «збережено в нікуди».
+  if (managerId == null) return res.status(400).json({ error: NO_OWNER_MSG });
 
   /**
    * 🔴 `$6::int` — НЕ КОСМЕТИКА, А ЄДИНА ПРИЧИНА, ЧОМУ ЕКРАН СТОЯВ ПʼЯТЬ ТИЖНІВ.
