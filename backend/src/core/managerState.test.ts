@@ -7,6 +7,7 @@ import { skipReason } from "../db/scratchDb.js";
 import {
   stateOf, hasPlan, countsResult, inOwnWorkLists, inNewWorkLists,
   STATE_BADGE, WORK_STATES, hasPlanSql, stateSql, stateJoinSql,
+  loginEnabledFor, LOGIN_LOOKUP_SQL,
   type WorkState,
 } from "./managerState.js";
 
@@ -224,4 +225,107 @@ test("#274e ЖИВА БД: у знаменнику немає нікого зі 
   assert.deepEqual(bad.rows.map((r) => `${r.name} (${r.state})`), [],
     "🔴 людина зі станом «завершує»/«звільнений» досі має план поточного місяця — " +
     "знаменник «менеджерів із планом» завищений рівно на цих людей");
+});
+
+/**
+ * 🔐 #358/#358b — «ЗВІЛЬНЕНИЙ ВИМИКАЄ ВХІД» (рішення власника 07.09.2026, дослівно).
+ *
+ * 🔴 ЧОМУ ДРУГИЙ ГЕЙТ ВАЖЛИВІШИЙ ЗА ПЕРШИЙ. Чиста функція нижче — тривіальна, і сама по
+ * собі вона доводить лише те, що ми вміємо порівнювати рядки. Уся ціна цієї зміни в
+ * ІНШОМУ твердженні: рішення не можна класти в прапорець, який перераховує синк.
+ * Перша редакція цього ж проходу дописала була в роут `UPDATE users SET is_active =
+ * false` — зібралось, протипізувалось, і прожило б рівно до найближчого тіка.
+ */
+test("#358 ВХІД: звільнений — ні; активний і «завершує» — так", () => {
+  assert.equal(loginEnabledFor("dismissed"), false,
+    "🔴 звільнений заходить у дашборд — пряме рішення власника не виконується");
+
+  // 🪞 ДРУГИЙ БІК, і він тут не для симетрії. Найправдоподібніша помилка — написати
+  //    `s === "active"`: вона виглядає точнішою й тихо забирає дашборд у людини, яка
+  //    ЩЕ ПРАЦЮЄ і доводить свої угоди (саме такий стан у Шевчука).
+  assert.equal(loginEnabledFor("finishing"), true,
+    "🔴 «завершує» втратив вхід — у того, хто ще працює, забрали інструмент");
+  assert.equal(loginEnabledFor("active"), true);
+
+  // І межа рахується ЧЕРЕЗ `stateOf`, а не з накладки: людина, прибрана з CRM, теж
+  // звільнена, хоч рядка в `manager_work_state` для неї ніхто не ставив.
+  assert.equal(loginEnabledFor(stateOf(ST["звільнений"])), false,
+    "🔴 прибраний із CRM усе ще заходить — рішення читає накладку замість стану");
+  assert.equal(loginEnabledFor(stateOf(ST["звільнений адміном"])), false);
+  assert.equal(loginEnabledFor(stateOf(ST["завершує"])), true);
+});
+
+/**
+ * #358b — 🔴 ГОЛОВНИЙ ГЕЙТ: ЗАКРИТИЙ ВХІД ПЕРЕЖИВАЄ ТІК СИНКУ.
+ *
+ * Не «ми впевнені, що не поклали рішення в `users.is_active`», а ПОВЕДІНКА: проганяємо
+ * ДОСЛІВНИЙ `UPDATE` із `provisionUsers` (`userProvisioning.ts:45`) і питаємо той самий
+ * `LOGIN_LOOKUP_SQL`, який питає вхід. Це відтворення аварії 06.08 11:11, коли
+ * деактивацію Шевчука затерли ≈1 250 проходів синку.
+ *
+ * 🧨 САБОТАЖ: покласти рішення в `users.is_active` — тік поверне `true`, і гейт червоніє.
+ */
+test("#358b ЗАКРИТИЙ ВХІД ПЕРЕЖИВАЄ ТІК СИНКУ (порожній кластер, справжній UPDATE)", async (t) => {
+  const { provisionScratch } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    await c.query(`INSERT INTO teams (id,name) VALUES (5,'РПК-Яцика') ON CONFLICT DO NOTHING`);
+    await c.query(
+      `INSERT INTO managers (id,name,team_id,is_active,kommo_user_id,email)
+       VALUES (33,'Шевчук Назар',5,true,'7181916','nazar@example.test') ON CONFLICT DO NOTHING`);
+    await c.query(
+      `INSERT INTO users (id,email,password_hash,role,manager_id,team_id,is_active)
+       VALUES (900,'nazar@example.test','x','manager',33,5,true)`);
+
+    /** Рішення про вхід читається РІВНО тим запитом, яким його читає логін. */
+    const decide = async () => {
+      const r = await c.query<{ is_active: boolean; work_state: "finishing" | "dismissed" | null }>(
+        LOGIN_LOOKUP_SQL, ["nazar@example.test"]);
+      assert.equal(r.rowCount, 1, "🔴 запит логіну не знайшов обліковку — гейт міряє порожнечу");
+      return loginEnabledFor(stateOf({ crmActive: r.rows[0].is_active, override: r.rows[0].work_state }));
+    };
+
+    // ⬅ КОНТРОЛЬ ПЕРЕД ТВЕРДЖЕННЯМ: без рішення вхід ВІДКРИТИЙ. Без цього «вхід закрито»
+    //    нижче могло б означати «запит завжди каже ні» (правило 7: зелене через дірку).
+    assert.equal(await decide(), true, "🔴 людина без стану вже не заходить — межа ріже всіх підряд");
+
+    await c.query(`INSERT INTO manager_work_state (manager_id, state, note) VALUES (33,'dismissed','гейт #358b')`);
+    assert.equal(await decide(), false, "🔴 звільнений заходить — стан не доходить до логіну");
+
+    /**
+     * ДОСЛІВНИЙ рядок із `provisionUsers`: синк дописує в `users.is_active` значення з
+     * `managers.is_active`, тобто `true`. Саме він і затирав рішення адміна.
+     */
+    const provisionTick = async () => c.query(
+      `UPDATE users SET role = $1, team_id = $2, manager_id = $3, is_active = $4 WHERE id = $5`,
+      ["manager", 5, 33, true, 900]);
+
+    // ⬅ КОНТРОЛЬ ДРУГИЙ: доводимо, що тіку БУЛО що затирати (правило 15 — інакше
+    //    «пережило» означає лише «нічого не виконалось»).
+    await c.query(`UPDATE users SET is_active = false WHERE id = 900`);
+    await provisionTick();
+    const flag = await c.query<{ is_active: boolean }>(`SELECT is_active FROM users WHERE id = 900`);
+    assert.equal(flag.rows[0].is_active, true,
+      "🔴 тік НЕ повернув `users.is_active` у true — саботажу не було що затирати, " +
+      "і «вхід лишився закритим» нижче нічого не доводить");
+
+    // ➡ І ГОЛОВНЕ: після тіка вхід ВСЕ ЩЕ закритий.
+    assert.equal(await decide(), false,
+      "🔴 ТІК СИНКУ ВІДКРИВ ВХІД ЗВІЛЬНЕНОМУ. Рішення покладене в прапорець, який " +
+      "перераховує `provisionUsers`, — воно живе щонайбільше 30 хвилин (аварія 06.08 11:11)");
+
+    // 🪞 І ЗВОРОТНА ПОЛОВИНА — та сама кнопка повертає вхід, без SQL по проду.
+    await c.query(`DELETE FROM manager_work_state WHERE manager_id = 33`);
+    assert.equal(await decide(), true,
+      "🔴 зняття стану НЕ повернуло вхід — відтворено пастку, через яку Шевчука " +
+      "довелось повертати SQL-ом по проду");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
 });

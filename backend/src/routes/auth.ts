@@ -1,6 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { LOGIN_LOOKUP_SQL, loginEnabledFor, stateOf } from "../core/managerState.js";
 import { pool } from "../db/pool.js";
 import { signToken } from "../auth/auth.js";
 import { effectiveRoleKey, getRoleDef, scopeCompatRole } from "../auth/rbac.js";
@@ -44,8 +45,9 @@ authRouter.post("/login", async (req, res) => {
     team_id: number | null;
     is_active: boolean;
     tracker_enabled: boolean;
+    work_state: "finishing" | "dismissed" | null;
   }>(
-    `SELECT id, password_hash, role, role_override, manager_id, team_id, is_active, tracker_enabled FROM users WHERE lower(email) = $1`,
+    LOGIN_LOOKUP_SQL,
     [email]
   );
   const user = result.rows[0];
@@ -54,6 +56,16 @@ authRouter.post("/login", async (req, res) => {
   }
   if (!user.is_active) {
     return res.status(403).json({ error: "Обліковий запис деактивовано" });
+  }
+  /* 🔐 ЗВІЛЬНЕНИЙ НЕ ЗАХОДИТЬ (рішення власника 07.09.2026: «звільнений вимикає вхід»).
+     🔴 Перевірка стоїть ТУТ, а не прапорцем у `users`, і це заміряна причина, не смак:
+     `provisionUsers` перезаписує `users.is_active` значенням із `managers` наприкінці
+     кожного тіка `syncKommo`, тож збережене «вимкнено» живе щонайбільше півгодини — саме
+     так зникла деактивація Шевчука 06.08. `manager_work_state` синк не бачить за побудовою.
+     ⚠️ Повідомлення НАВМИСНО інше, ніж у деактивації вище: людина, якій сказали «зверніться
+     до керівника», не піде писати в підтримку про зламаний пароль. */
+  if (!loginEnabledFor(stateOf({ crmActive: user.is_active, override: user.work_state }))) {
+    return res.status(403).json({ error: "Доступ закрито: працівника позначено як звільненого. Зверніться до керівника" });
   }
 
   // Ефективна роль = role_override ?? синкнута роль. У токен кладемо ключ ролі (для гейтів)

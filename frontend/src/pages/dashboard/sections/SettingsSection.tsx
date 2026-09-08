@@ -4,8 +4,7 @@ import {
   fetchUsers, createUser, provisionUsers, resetUserPassword, updateUser, reactivateUser, type DashboardUser,
   fetchRoles, createRole, updateRole, deleteRole, type RoleDef,
   fetchAudit, type AuditEntry,
-  type Team, type SyncStatus,
-} from "../../../api";
+  type Team, type SyncStatus, setWorkState } from "../../../api";
 import { NAV_GROUPS } from "../../../components/Layout";
 
 // Усі вкладки (ключ+назва) — беремо з реальної навігації, щоб screen_access-редактор
@@ -225,6 +224,26 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
     catch (e) { alert(err(e)); }
     finally { setBusy(null); }
   };
+  /**
+   * 👤 СТАН ПРАЦІВНИКА — і він же межа входу (рішення власника 07.09.2026:
+   * «звільнений вимикає вхід»). Підтвердження питаємо ЛИШЕ на «звільнений»:
+   * це єдиний варіант, що забирає людині доступ, а «завершує» й повернення в
+   * «активний» нічого не відбирають — зайве вікно там навчає тиснути «ОК» не читаючи.
+   */
+  const changeState = async (u: DashboardUser, v: string) => {
+    const st = v === "__active__" ? null : (v as "finishing" | "dismissed");
+    if (st === "dismissed" && !window.confirm(
+      `Позначити ${u.name ?? u.email} звільненим?\n\n` +
+      "• вхід у дашборд закриється\n" +
+      "• нової роботи не отримує, плану не має\n" +
+      "• результат і гроші ЛИШАЮТЬСЯ в сумах команди й компанії\n\n" +
+      "Скасовується цим самим списком — повернення в «активний» відкриває вхід назад.")) return;
+    if (!u.manager_id) return;
+    setBusy(u.id);
+    try { await setWorkState(u.manager_id, st); await reload(); }
+    catch (e) { alert(err(e)); }
+    finally { setBusy(null); }
+  };
   const deactivate = async (u: DashboardUser) => { if (!window.confirm(`Деактивувати ${u.email}?`)) return; try { await updateUser(u.id, { isActive: false }); await reload(); } catch (e) { alert(err(e)); } };
   const provision = async () => { try { const c = await provisionUsers(); setProvMsg(c.length ? `Створено логінів: ${c.length}` : "Нових немає — усі вже створені"); await reload(); } catch (e) { setProvMsg("✗ " + err(e)); } };
   const saveName = async (u: DashboardUser) => {
@@ -257,7 +276,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       {newCreds && <OneTimeCred text={newCreds} onClose={() => setNewCreds(null)} />}
 
       <table className="data-table">
-        <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>КОМАНДА</th><th>РОЛЬ</th><th>ПАРОЛЬ</th><th>АКТИВНИЙ</th><th title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ ТРЕКЕР</th><th></th></tr></thead>
+        <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>КОМАНДА</th><th>РОЛЬ</th><th>ПАРОЛЬ</th><th>АКТИВНИЙ</th><th title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ ТРЕКЕР</th><th></th></tr></thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
@@ -291,6 +310,22 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
               </td>
               <td style={{ fontFamily: "monospace" }}>{issued[u.id] ? <RevealCred text={issued[u.id]} /> : "••••••••"}</td>
               <td>{u.is_active ? "✓" : "—"}</td>
+              {/* 👤 Стан МЕНЕДЖЕРА, а не облікового запису: у ручного користувача картки
+                  в CRM немає, тож і стану бути не може — пишемо це словом, а не порожнечею
+                  (правило зони фронту: невідоме має читатись як невідоме). */}
+              <td>
+                {u.manager_id ? (
+                  <select value={u.work_state ?? "__active__"} disabled={busy === u.id}
+                    onChange={(e) => changeState(u, e.target.value)}
+                    style={{ borderRadius: 8, padding: "3px 8px", fontSize: 13, border: "1px solid var(--border)",
+                             background: "var(--card-bg)", fontWeight: u.work_state ? 700 : 400,
+                             color: u.work_state === "dismissed" ? "#dc2626" : "var(--text)" }}>
+                    <option value="__active__">активний</option>
+                    <option value="finishing">завершує</option>
+                    <option value="dismissed">звільнений</option>
+                  </select>
+                ) : <span style={{ color: "var(--text-muted)", fontSize: 12 }}>не з CRM</span>}
+              </td>
               {/* ⏱ Трекер: дозвіл на збір часу. Досі вмикався ЛИШЕ міграцією, тобто зняти
                   його з конкретної людини можна було тільки SQL-ом по проду. Для прапорця,
                   що вмикає спостереження за людиною, вимкнення має бути не важчим за вмикання. */}

@@ -184,12 +184,24 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       await c.query(
         `INSERT INTO tasks (title,status,assignee_id,task_type,client_key,created_at)
          VALUES ('Реактивація','in_progress',10,'reactivation_client','сплячий',$1)`, [daysAgo(100)]);
-      // (б) стара ПАЧКА з чеклістом — і ключ у ній зі СТАРОЮ нормалізацією (з пробілом).
-      // Саме такі 16 із 94 і не зіставлялись напряму на проді.
+      /* (б) КЛІЄНТ ІЗ ПАЧКИ — і ключ у нього зі СТАРОЮ нормалізацією (з пробілом).
+         Саме такі 16 із 94 і не зіставлялись напряму на проді.
+
+         ⚠️ ФІКСТУРУ ПЕРЕПИСАНО 07.09.2026, І ЦЕ НЕ ПОСЛАБЛЕННЯ ГЕЙТА. Раніше вона
+         створювала пачку з `checklist_json`; читання чеклістів прибрано ще 05.09
+         (`bdce6cd`), коли всі 37 пачок / 347 клієнтів перенесли в рядки-діти. Тобто
+         червоне тут означало «фікстура годує коду форму, якої в житті вже немає»,
+         а не дефект. Твердження лишається ТЕ САМЕ — застарілий ключ мусить звестись —
+         змінився лише транспорт: тепер клієнт приходить рядком-дитям.
+
+         📐 Чому цього не бачили два дні: гейт біжить лише там, де є бінарі PostgreSQL,
+         а таких оточень у нас не було ЖОДНОГО — на прод-сервері БД зовнішня (Neon),
+         локально кластер не піднімався через локаль. Знайшлось у мить, коли перше
+         таке оточення зʼявилось. */
       await c.query(
-        `INSERT INTO tasks (title,status,assignee_id,task_type,checklist_json,created_at)
-         VALUES ('Кампанія','in_progress',10,'reactivation',$1::jsonb,$2)`,
-        [JSON.stringify([{ clientKey: "пачко вий", clientName: "ТОВ Пачковий", done: false }]), daysAgo(40)]);
+        `INSERT INTO tasks (title,status,assignee_id,task_type,client_key,created_at)
+         VALUES ('Кампанія · ТОВ Пачковий','in_progress',10,'reactivation_client','пачко вий',$1)`,
+        [daysAgo(40)]);
       // оплата ПІСЛЯ створення пачкової задачі → клієнт «повернений»
       await c.query(
         `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo)

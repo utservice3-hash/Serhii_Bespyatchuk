@@ -386,12 +386,20 @@ oneOnOnesRouter.get("/stats/scores", async (req, res) => {
   if (!isType(type)) return res.status(400).json({ error: "Невідомий тип" });
   const deny = viewDenied(crossview(req.auth!), canConduct(req.auth!, type));
   if (deny) return res.status(403).json({ error: deny });
+  /* 📅 ОДИН МІСЯЦЬ, А НЕ «ОСТАННІ N», — рішення власника 07.09.2026: «воно все йде в
+     рядок, а зроби щоб тільки по місяцях було». На екрані вибір місяця БУВ, але вкладка
+     «Історія» його не передавала взагалі — запит ішов із жорстким `months=6`, тож
+     таблиця малювала колонку на КОЖНУ зустріч за півроку й виїжджала за екран.
+     ⚠️ `months` лишається фолбеком для старого бандла, що ще крутиться у вкладках у
+     мить викату, — той самий прийом, що вже застосований у сусідньому eNPS. */
+  const month = String(req.query.month ?? "");
+  const oneMonth = /^\d{4}-\d{2}$/.test(month);
   const months = Math.min(24, Math.max(1, Number(req.query.months) || 6));
   const vs = viewScope(req.auth!, "o");
   const params: unknown[] = [type];
   let vsFrag = vs.frag;
   if (vs.params.length) { params.push(vs.params[0]); vsFrag = vs.frag.replace("$P", `$${params.length}`); }
-  params.push(months - 1);
+  params.push(oneMonth ? `${month}-01` : months - 1);
   const r = await pool.query(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name,
             to_char(o.meeting_date,'YYYY-MM-DD') AS meeting_date,
@@ -401,9 +409,11 @@ oneOnOnesRouter.get("/stats/scores", async (req, res) => {
        JOIN managers m ON m.id = o.subject_manager_id
        LEFT JOIN teams t ON t.id = m.team_id
       WHERE o.type=$1 AND (${vsFrag})
-        AND o.meeting_date >= (date_trunc('month', now()) - make_interval(months => $${params.length}))
+        AND ${oneMonth
+              ? `date_trunc('month', o.meeting_date) = $${params.length}::date`
+              : `o.meeting_date >= (date_trunc('month', now()) - make_interval(months => $${params.length}))`}
       ORDER BY t.name NULLS LAST, m.name, o.meeting_date`, params);
-  res.json({ type, rows: r.rows });
+  res.json({ type, month: oneMonth ? month : null, rows: r.rows });
 });
 
 /**

@@ -255,11 +255,24 @@ export function Dashboard() {
   /* 🔔 Лічильник непрочитаних новин. Береться ОДИН раз на завантаження й гаситься при
      відкритті розділу: новини зʼявляються рідко (джоба о 08:00 і крок викату), тож
      полінг тут був би платою без вигоди — на відміну від месенджера, де він виправданий. */
+  /* 🔔 Мітка «долистав досюди» живе В БРАУЗЕРІ, а не в акаунті. Причина, названа власником
+     08.09: під спільним логіном один прочитав — і значок гас усім. Тепер підсвітка на
+     пристрій. Ключ — id (сервер присвоює монотонно), не час (годинник браузера зсунутий).
+     localStorage у try/catch: приватний режим кидає на самому доступі. */
+  const NEWS_SEEN_KEY = "utsNewsSeenId";
+  const readNewsSeenId = (): number => {
+    try { return Number(localStorage.getItem(NEWS_SEEN_KEY)) || 0; } catch { return 0; }
+  };
   const [newsUnread, setNewsUnread] = useState(0);
-  useEffect(() => { fetchNewsUnread().then(setNewsUnread).catch(() => setNewsUnread(0)); }, []);
+  useEffect(() => {
+    fetchNewsUnread(readNewsSeenId()).then((r) => setNewsUnread(r.unread)).catch(() => setNewsUnread(0));
+  }, []);
   useEffect(() => {
     if (section !== "news") return;
-    markNewsSeen().then(() => setNewsUnread(0)).catch(() => { /* значок лишиться — не біда */ });
+    markNewsSeen().then((maxId) => {
+      try { localStorage.setItem(NEWS_SEEN_KEY, String(maxId)); } catch { /* приватний режим — значок просто не запамʼятає, не біда */ }
+      setNewsUnread(0);
+    }).catch(() => { /* значок лишиться — не біда */ });
   }, [section]);
 
   const [newsCategory, setNewsCategory] = useState<"company" | "logistics" | "sales">("company");
@@ -1254,15 +1267,32 @@ export function Dashboard() {
                     <h2 className="chart-title">{n.title}</h2>
                     {auth?.role === "admin" && (
                       <button
+                        /* 🔴 ПІДТВЕРДЖЕННЯ — БО ДІЯ ДЛЯ ВСІХ, А ЗНАЧОК ЧИТАВСЯ ЯК «ЗАКРИТИ».
+                           07.09.2026 новина про викат зникла за годину саме так: хрестик у
+                           кутку картки виглядає як «прибрати з очей», а робив видалення для
+                           всієї компанії. Текст питання називає обидва факти — для кого і
+                           чи зворотно. */
                         onClick={async () => {
+                          if (!confirm(`Видалити новину «${n.title}»?\n\nВона зникне В УСІХ, не лише у вас. Запис зберігається, і адміністратор може повернути його через базу.`)) return;
                           await deleteNews(n.id);
                           setNewsItems(await fetchNews(newsCategory));
                         }}
+                        title="Видалити новину для всіх"
                         style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)" }}
                       >
-                        ✕
+                        🗑
                       </button>
                     )}
+                  </div>
+                  {/* 🕒 Час новини. Поле `created_at` приходило з роута від самого початку —
+                      його просто ніхто не малював, тож стрічка не давала відповіді на
+                      «коли це було». Формат короткий: дата й година, без секунд. */}
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
+                    {new Date(n.created_at).toLocaleString("uk-UA", {
+                      day: "2-digit", month: "2-digit", year: "numeric",
+                      hour: "2-digit", minute: "2-digit",
+                    })}
+                    {n.author && ` · ${n.author}`}
                   </div>
                   {n.image_url && (
                     <img src={n.image_url} alt="" style={{ maxWidth: "100%", borderRadius: 8, marginBottom: 8 }} />

@@ -6402,11 +6402,20 @@ dashboardRouter.get("/client-card", async (req, res) => {
   const CALLS_LIMIT = 300;
   const callListRes = await pool.query<{
     calldate: string; call_type: string; billsec: number; disposition: string | null; manager: string | null;
+    recording: string | null;
   }>(
-    `SELECT rc.calldate::text, rc.call_type, rc.billsec, rc.disposition,
+    /* 🎧 ЛИШЕ ВІДПОВІДАНІ, І ЦЕ РІШЕННЯ ВЛАСНИКА 07.09.2026 («показуй лише дзвінки, на
+       які відповіли»). 📐 Заміряно того ж дня за 30 днів: 37 995 дзвінків, відповіли
+       20 608 — тобто недодзвони заповнили б перелік майже наполовину рядками без запису,
+       які нічого не дають. Зведення ПО РОКАХ рахує далі всі, і там обидва числа названі
+       («розмов N із M»), тож зникнення недодзвонів із переліку не читається як втрата.
+       📐 І друге заміряне число, заради якого це безпечно: відповіданих БЕЗ запису — НУЛЬ.
+       Отже кожен рядок переліку має що прослухати, а не кнопку в нікуди. */
+    `SELECT rc.calldate::text, rc.call_type, rc.billsec, rc.disposition, rc.recording,
             COALESCE(m.name, rc.employee_fio) AS manager
        FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
-      WHERE rc.client_key = $1 ORDER BY rc.calldate DESC LIMIT ${CALLS_LIMIT}`, [clientKey]);
+      WHERE rc.client_key = $1 AND rc.billsec > 0
+      ORDER BY rc.calldate DESC LIMIT ${CALLS_LIMIT}`, [clientKey]);
 
   /* 🗒 Журнал керівницьких дій — окремою стрічкою, бо стан їх НЕ памʼятає:
      повернення з архіву занулює і причину, і того, хто архівував. */
@@ -6432,6 +6441,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
     calls: callListRes.rows.map((r) => ({
       at: r.calldate, direction: r.call_type.includes("out") ? "out" : "in",
       billsec: r.billsec, answered: r.billsec > 0, disposition: r.disposition, manager: r.manager,
+      recording: r.recording,
     })),
     /** Скільки показано з усіх — мовчазне обрізання читалось би як «більше не було». */
     callsShown: callListRes.rows.length,
