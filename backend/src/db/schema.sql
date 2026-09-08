@@ -232,6 +232,34 @@ CREATE TABLE IF NOT EXISTS ad_budget_daily (
   synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 📊 РЕКЛАМА З GA4 — день × КАМПАНІЯ (08.09.2026, `syncGa4Ads`).
+--
+-- 🔴 ЧОМУ ОКРЕМА ТАБЛИЦЯ, А НЕ КОЛОНКИ В `ad_budget_daily`. Та тримає ОДИН рядок на
+-- день (`day` — PRIMARY KEY) і живиться Google-аркушем Сергія. Тут потрібна розбивка
+-- по кампаніях, тобто складений ключ — у ту таблицю це не влазить за побудовою.
+--
+-- 🔴 ДВА ДЖЕРЕЛА ЛИШАЮТЬСЯ ПОРУЧ СВІДОМО (рішення власника 08.09.2026): аркуш
+-- лишається другим джерелом, і на екрані видно розбіжність між ним і GA4 числом.
+-- `ad_budget_daily` та її синк цей прохід НЕ чіпає — у неї три читачі
+-- (`/lead-quality`, `/kvp-report`, `statistics/computeAuto` → depstats), і будь-яка
+-- зміна її форми тихо зрушила б `ad_budget_total`/`ad_cost_per_lead`.
+--
+-- ⚠️ `cost`/`clicks` приходять із Google Ads ЧЕРЕЗ GA4 (звʼязка Ads→GA4), тому
+-- окремий Google Ads API не потрібен. Органічні рядки теж зберігаються — у них
+-- `cost = 0`, і це чесно видно на екрані, а не приховано фільтром.
+CREATE TABLE IF NOT EXISTS ad_ga4_daily (
+  day DATE NOT NULL,
+  campaign TEXT NOT NULL,
+  channel_group TEXT,
+  sessions INTEGER NOT NULL DEFAULT 0,
+  conversions NUMERIC NOT NULL DEFAULT 0,
+  cost NUMERIC NOT NULL DEFAULT 0,
+  clicks INTEGER NOT NULL DEFAULT 0,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (day, campaign)
+);
+CREATE INDEX IF NOT EXISTS idx_ad_ga4_daily_day ON ad_ga4_daily(day);
+
 CREATE TABLE IF NOT EXISTS lead_transfer_events (
   kommo_id BIGINT NOT NULL,
   changed_at TIMESTAMPTZ NOT NULL,

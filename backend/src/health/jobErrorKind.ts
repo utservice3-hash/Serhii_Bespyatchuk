@@ -24,6 +24,7 @@ export type JobErrorKind =
   | "kommo_http" // Kommo відмовив кодом (403/429/5xx)
   | "cancelled"  // запит перервано: deadlock, termination, statement timeout
   | "sheet"      // зовнішня таблиця (Google Sheets) не віддала дані
+  | "config"     // інтеграцію не налаштовано: бракує env-змінної або файла ключа
   | "data"       // дані не проходять типи/обмеження БД
   | "unknown";   // текст є, вид не розпізнано
 
@@ -46,6 +47,14 @@ export function classifyJobError(err: string | null | undefined): JobErrorKind {
   // Аркуш перевіряється РАНІШЕ за http-код: «sheet fetch failed: 502» містить
   // код, але це не Kommo, і порада про темп CRM тут була б такою самою брехнею.
   if (s.includes("sheet")) return "sheet";
+
+  // 🔴 КОНФІГ ПЕРЕВІРЯЄТЬСЯ РАНІШЕ ЗА `data`. Текст «не налаштовано / missing env»
+  // не містить нічого про дані, але без власного виду поїхав би в `unknown` — і
+  // тривога радила б «подивитись лог, причину не вгадувати» там, де причина вже
+  // названа дослівно. Вид заведено 08.09.2026 разом із GA4: у нас уже ТРИ опційні
+  // інтеграції (трекер, Ringostat, GA4), і в кожної цей стан штатний, не аварійний.
+  if (s.includes("missing required env var") || s.includes("не налаштовано")
+      || s.includes("not_configured")) return "config";
 
   if (/\b(403|429)\b/.test(s) || (s.includes("kommo") && /\b5\d\d\b/.test(s))) return "kommo_http";
   if (s.includes("deadlock") || s.includes("terminated") || s.includes("canceling statement")) return "cancelled";
@@ -72,6 +81,9 @@ export function adviceForError(kind: JobErrorKind): string {
         + "шукати, хто пише в ту саму таблицю одночасно.";
     case "sheet":
       return "Зовнішня таблиця (Google Sheets) не віддала дані — перевірити доступ до аркуша і код відповіді.";
+    case "config":
+      return "Інтеграцію НЕ НАЛАШТОВАНО: бракує env-змінної або файла ключа — це не поломка даних "
+        + "і не відмова зовнішнього сервісу. Дивитись `.env` на проді, а не логи запитів.";
     case "data":
       return "Дані не проходять типи чи обмеження БД — дивитись значення, назване в самій помилці.";
     case "unknown":

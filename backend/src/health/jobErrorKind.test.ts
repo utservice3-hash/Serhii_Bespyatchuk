@@ -31,6 +31,10 @@ const REAL = {
   data: 'date/time field value out of range: "2026-09-31"',
   kommo429: "Kommo API error 429: Too Many Requests",
   kommo403: "Request failed with status code 403",
+  // 08.09.2026, разом із GA4: стан «інтеграцію не налаштовано» став третім у нас
+  // (трекер, Ringostat, GA4) — і без власного виду він читався як «не розпізнано».
+  configEnv: "Missing required env var: GA4_SERVICE_ACCOUNT_JSON",
+  configOff: "GA4 не налаштовано: порожній GA4_PROPERTY_ID — джоба спить",
 } as const;
 
 test("#314 вид помилки визначається з тексту, і кожен дістає СВОЮ пораду", () => {
@@ -42,6 +46,8 @@ test("#314 вид помилки визначається з тексту, і к
   assert.equal(classifyJobError(REAL.data), "data");
   assert.equal(classifyJobError(REAL.kommo429), "kommo_http");
   assert.equal(classifyJobError(REAL.kommo403), "kommo_http");
+  assert.equal(classifyJobError(REAL.configEnv), "config");
+  assert.equal(classifyJobError(REAL.configOff), "config");
   assert.equal(classifyJobError(null), "none");
   assert.equal(classifyJobError("   "), "none");
 
@@ -53,6 +59,8 @@ test("#314 вид помилки визначається з тексту, і к
   assert.match(adviceForError("cancelled"), /deadlock|конкуренц/i);
   assert.match(adviceForError("sheet"), /аркуш|Sheets/i);
   assert.match(adviceForError("data"), /типи|обмеженн/i);
+  assert.match(adviceForError("config"), /налаштов|env/i,
+    "🔴 порада для ненастроєної інтеграції не згадує конфіг — читач піде шукати поломку даних");
 
   // Помилки немає — приписки немає взагалі, база лишається як була.
   assert.equal(actionWithAdvice("Перевірити X.", null), "Перевірити X.",
@@ -72,6 +80,14 @@ test("#314b 🪞 ДЗЕРКАЛО: чужа порада НЕ зʼявляєть
   assert.ok(!/пул/i.test(onKommo),
     "🔴 на відмові Kommo радять дивитись пул — підпис знову не розрізняє видів");
   assert.match(onKommo, /403|429/);
+
+  // 🪞 «Не налаштовано» — НЕ поломка даних і не відмова сервісу: порада не має слати
+  // ні в значення полів, ні в темп CRM, ні в аркуш.
+  const onConfig = actionWithAdvice("Подивитись лог процесу.", REAL.configEnv);
+  assert.ok(!/типи|обмеженн|403|429|аркуш|Sheets/i.test(onConfig),
+    "🔴 на ненастроєній інтеграції радять дивитись дані/CRM/аркуш — це чужа причина");
+  assert.match(onConfig, /налаштов/i,
+    "🔴 порада не каже прямо, що інтеграцію не налаштовано — а це вся суть виду");
 
   // Аркуш містить КОД 502 у тексті — і не має читатись як відмова Kommo.
   assert.equal(classifyJobError(REAL.sheet502), "sheet",

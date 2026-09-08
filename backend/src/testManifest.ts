@@ -158,6 +158,7 @@ export const MANIFEST_FILES: string[] = [
   "auth/roleScopeInput.test.js",
   "auth/scopeInvariants.test.js",
   "core/conversion.test.js",
+  "ga4/ga4Report.test.js",
   "core/money.test.js",
   "core/stageNames.test.js",
   "core/orphanClients.test.js",
@@ -291,6 +292,11 @@ export const MANIFEST_TESTS: string[] = [
   // що conversion_ads (dealCohortCte), а не свій SQL у роуті.
   "#366 ПОДЕННИЙ ЗНАМЕННИК == ПОМІСЯЧНОМУ: те саме ядро, жодного рядка не загублено",
   "#366b 🪞 РОЗРІЗ СПРАВДІ ПОДЕННИЙ — а не один кошик під виглядом місяця",
+  // 📊 Розбір відповіді GA4 — чиста функція, тож гейти біжать у БУДЬ-ЯКОМУ оточенні.
+  "#367 РОЗБІР GA4: рядки день×кампанія з правильними cost/clicks (метрики не за позицією)",
+  "#367b 🪞 ОРГАНІКА: cost 0 і НЕ роздуває суму витрат",
+  "#367c Σ ВИТРАТ ПО ДНЯХ == Σ ПО КАМПАНІЯХ (інваріант групування)",
+  "#367d НЕНАЛАШТОВАНА ІНТЕГРАЦІЯ — вид помилки `config`, а не `data`/`unknown`",
   // core/money.test.ts
   "received = success ⊎ paidOnly — дедуп, без подвійного рахунку (Ф9)",
   "avg_check_success_only: ядро 2431 ± і реконструкція смуги листа 2600–2900",
