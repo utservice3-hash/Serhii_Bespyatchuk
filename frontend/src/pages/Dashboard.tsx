@@ -51,7 +51,7 @@ import {
   fetchNewsUnread, markNewsSeen,
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
-import { DateRangeFilter, QuickPeriods, getDateRange } from "../components/DateRangeFilter";
+import { getDateRange } from "../components/DateRangeFilter";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
@@ -71,7 +71,6 @@ import { OneOnOneSection } from "./dashboard/sections/OneOnOneSection";
 import { DutySection } from "./dashboard/sections/DutySection";
 import { TrainingSection } from "./dashboard/sections/TrainingSection";
 import StatisticsSection from "./dashboard/sections/StatisticsSection";
-import { teamOptions } from "./dashboard/teamColors";
 import { TeamsSection } from "./dashboard/sections/TeamsSection";
 import { ManagersSection } from "./dashboard/sections/ManagersSection";
 import { LoyaltySection } from "./dashboard/sections/LoyaltySection";
