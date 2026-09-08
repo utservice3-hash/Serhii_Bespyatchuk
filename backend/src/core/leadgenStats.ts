@@ -1,17 +1,6 @@
+import { pool } from "../db/pool.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
-
-/**
- * 🔴 ЛІНИВИЙ ПУЛ — НЕ ОХАЙНІСТЬ, А УМОВА ВИКОНУВАНОСТІ ГЕЙТІВ.
- * Верхній `import { pool }` тягне `config.js`, який кидає на відсутньому `DATABASE_URL`
- * ще НА ЗАВАНТАЖЕННІ МОДУЛЯ — тобто раніше за будь-яке твердження. Через це `#364`…`#365b`,
- * яким база не потрібна взагалі (константи й текст джерела), гинули цілим файлом у
- * worktree без `.env` — саме там, де крок `test` знімає базу для порівняння.
- * 📐 Заміряно 08.09.2026: «база: падінь 1, виконано 660 / дерево: падінь 0, виконано 668»,
- * причина — `Missing required env var: DATABASE_URL` при імпорті. Той самий патерн уже
- * стоїть у `publishReleaseNews.ts`, `reactivationPack.ts`, `clientAdminLog.ts`.
- */
-const db = async () => (await import("../db/pool.js")).pool;
 
 /**
  * 📞 ЛІДОГЕНЕРАЦІЯ — сім показників таблиці лідгенів із подій CRM.
@@ -71,7 +60,7 @@ const K = "AT TIME ZONE 'Europe/Kyiv'";
  * Єресько зі списку ТЗ деактивований. Список protікає, події — ні.
  */
 export async function leadgenStats(from: string, to: string): Promise<LeadgenStats> {
-  const stages = await (await db()).query<{
+  const stages = await pool.query<{
     manager_id: number; name: string; team_id: number | null; team_name: string | null;
     is_active: boolean; leads: string; opr: string; quotes: string; warming: string;
   }>(
@@ -95,7 +84,7 @@ export async function leadgenStats(from: string, to: string): Promise<LeadgenSta
   const ids = stages.rows.map((r) => r.manager_id);
   const callsByMgr = new Map<number, number>();
   if (ids.length) {
-    const calls = await (await db()).query<{ manager_id: number; n: string }>(
+    const calls = await pool.query<{ manager_id: number; n: string }>(
       `SELECT c.manager_id, COUNT(*) AS n
          FROM ringostat_calls c
         WHERE c.manager_id = ANY($1)
@@ -111,7 +100,7 @@ export async function leadgenStats(from: string, to: string): Promise<LeadgenSta
    * Розріз за джерелом клієнта — Холодна база проти Реактивації, як просить ТЗ.
    * ⚠️ Порожнє джерело НЕ ховаємо: у серпні таких 17. Невідоме має читатись як невідоме.
    */
-  const src = await (await db()).query<{ source: string; leads: string }>(
+  const src = await pool.query<{ source: string; leads: string }>(
     `SELECT COALESCE(NULLIF(d.client_source, ''), 'Джерело не проставлене') AS source,
             COUNT(DISTINCT e.kommo_id) AS leads
        FROM deal_stage_events e
@@ -169,7 +158,7 @@ export function pct(part: number, whole: number): number | null {
 export interface LeadgenReasonRow { reason: string; deals: number }
 
 export async function leadgenClosures(from: string, to: string): Promise<LeadgenReasonRow[]> {
-  const r = await (await db()).query<{ reason: string; n: string }>(
+  const r = await pool.query<{ reason: string; n: string }>(
     `SELECT COALESCE(NULLIF(d.reject_reason, ''), 'Причину не проставили') AS reason,
             COUNT(DISTINCT e.kommo_id) AS n
        FROM deal_stage_events e
@@ -193,7 +182,7 @@ export interface LeadgenHandoffRow {
 }
 
 export async function leadgenHandoffs(from: string, to: string, limit = 500): Promise<LeadgenHandoffRow[]> {
-  const r = await (await db()).query<{ kommo_id: string; day: string; name: string | null; manager: string | null }>(
+  const r = await pool.query<{ kommo_id: string; day: string; name: string | null; manager: string | null }>(
     `SELECT e.kommo_id,
             to_char(MIN(e.changed_at) ${K}, 'YYYY-MM-DD') AS day,
             MIN(d.name) AS name, MIN(m.name) AS manager
@@ -219,7 +208,7 @@ export async function leadgenHandoffs(from: string, to: string, limit = 500): Pr
  * що накопичується, — тому й рахується станом на зараз, окремо від решти.
  */
 export async function leadgenWarmingBacklog(): Promise<number> {
-  const r = await (await db()).query<{ n: string }>(
+  const r = await pool.query<{ n: string }>(
     `SELECT COUNT(*) AS n FROM deals WHERE pipeline_id = ANY($1) AND status_id = $2`,
     [REACTIVATION_PIPELINES, REACT_WARMING]
   );
@@ -234,7 +223,7 @@ export async function leadgenWarmingBacklog(): Promise<number> {
 export interface LeadgenWeekRow { week: string; leads: number; opr: number; quotes: number }
 
 export async function leadgenWeekly(from: string, to: string): Promise<LeadgenWeekRow[]> {
-  const r = await (await db()).query<{ week: string; leads: string; opr: string; quotes: string }>(
+  const r = await pool.query<{ week: string; leads: string; opr: string; quotes: string }>(
     `SELECT to_char(date_trunc('week', (e.changed_at ${K})), 'YYYY-MM-DD') AS week,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = $4) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = $5) AS opr,
