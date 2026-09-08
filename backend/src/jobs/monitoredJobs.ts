@@ -16,6 +16,9 @@ export const MONITORED_JOBS: { name: string; everyMin: number; why: string }[] =
   { name: "syncKommo", everyMin: 30, why: "основний синк угод — без нього дашборд замерзає" },
   { name: "syncStageEvents", everyMin: 30, why: "живить core/money.ts: гроші анкеряться на подіях стадій" },
   { name: "syncReceivables", everyMin: 15, why: "дебіторка з Google Sheet" },
+  // Додано 08.09.2026 разом із фіксом «комісія затирає платіж»: рахунок, що падає з помилкою,
+  // синк тихо пропускає (`skipped`), і без цього рядка про це не дізнався б ніхто.
+  { name: "syncBank", everyMin: 15, why: "виписка → екран «Виписка», зіставлення платежів з рахунками" },
   { name: "syncDealActivity", everyMin: 180, why: "живить «застряглі угоди»" },
   { name: "recomputeStatistics", everyMin: 60, why: "розділ «Статистики (відділи)»" },
   { name: "syncAdBudget", everyMin: 60, why: "рекламний бюджет → CPL/ROMI" },
