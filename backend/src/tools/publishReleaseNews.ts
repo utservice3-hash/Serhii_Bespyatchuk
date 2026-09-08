@@ -48,6 +48,18 @@ export async function publishReleaseNews(sha: string): Promise<string> {
       ? `🔴 ${NOTES_PATH} не знайдено — новини не буде. Це НЕ штатна тиша: файл мав бути в репозиторії`
       : "тиша: у RELEASE_NOTES.md немає непорожнього верхнього блоку — цей викат нічого не оголошує (штатно)";
   }
+  /* 🔴 ТОЙ САМИЙ БЛОК — ТЕЖ ТИША, І ЦЕ НЕ ПЕДАНТИЗМ.
+     Ідемпотентність стоїть на `release_sha`, тобто на ВИКАТІ, а не на змісті. Отже інша
+     сесія, яка викотиться, не чіпавши `RELEASE_NOTES.md`, опублікувала б ЧУЖИЙ текст
+     ще раз — під своїм sha, тож конфлікт не спрацював би, і в стрічці зʼявився б дубль
+     із чужим підписом. Механізм не має залежати від того, чи кожен памʼятає про файл. */
+  const last = await (await db()).query<{ title: string; body: string | null }>(
+    `SELECT title, body FROM news WHERE release_sha IS NOT NULL ORDER BY id DESC LIMIT 1`);
+  const prev = last.rows[0];
+  if (prev && prev.title === parsed.note.title && (prev.body ?? "") === parsed.note.body) {
+    return "тиша: верхній блок RELEASE_NOTES.md не змінився з минулого викату — "
+      + "цей викат нічого нового не оголошує (штатно)";
+  }
   const r = await (await db()).query<{ id: number }>(PUBLISH_SQL, [parsed.note.title, parsed.note.body, sha]);
   return r.rowCount
     ? `опубліковано «${parsed.note.title}» (id ${r.rows[0].id})`

@@ -1,3 +1,5 @@
+import { NEWS_ALIVE } from "./newsVisibility.js";
+
 /**
  * 🔔 «Є ЩОСЬ НОВЕ ПІСЛЯ МОГО ОСТАННЬОГО ВІЗИТУ» — одна мітка часу на людину.
  *
@@ -15,6 +17,10 @@
  * зі значенням `now()` у самій міграції: інакше в день викату кожен отримав би десятки
  * непрочитаних за всю історію й навчився б ігнорувати значок із першого дня.
  */
+/* 🔴 ВИДАЛЕНЕ НЕ РАХУЄТЬСЯ. Лічильник і список читають ОДНЕ правило видимості: інакше
+   значок рахував би те, чого людина не може відкрити, і не згасав би НІКОЛИ — найгірший
+   стан для позначки, бо її просто перестають помічати. */
+
 export function isUnread(createdAt: Date | string, seenAt: Date | string | null): boolean {
   if (seenAt == null) return true;
   return new Date(createdAt).getTime() > new Date(seenAt).getTime();
@@ -23,7 +29,8 @@ export function isUnread(createdAt: Date | string, seenAt: Date | string | null)
 /** Скільки новин зʼявилось після візиту. `$1` — мітка часу людини (може бути NULL). */
 export const UNREAD_COUNT_SQL = `
   SELECT count(*)::int AS n FROM news
-   WHERE $1::timestamptz IS NULL OR created_at > $1::timestamptz`;
+   WHERE ${NEWS_ALIVE}
+     AND ($1::timestamptz IS NULL OR created_at > $1::timestamptz)`;
 
 /**
  * ⚠️ ПОЗНАЧАЄМО ЧАСОМ СЕРВЕРА, А НЕ ЧАСОМ КЛІЄНТА. Годинник браузера буває зсунутий на

@@ -1162,6 +1162,19 @@ export interface DashboardUser {
   team_name: string | null;
   deactivated_at?: string | null;
   deactivated_reason?: string | null;
+  manager_id?: number | null;                 // NULL = ручний користувач, стану не має
+  work_state?: "finishing" | "dismissed" | null; // NULL = активний (відсутність рішення)
+}
+
+/**
+ * 👤 Стан працівника. `state: null` — зняти рішення (людина знову активна).
+ * 🔴 «Звільнений» ЗАКРИВАЄ вхід у дашборд, а зняття — відкриває: сервер виводить це зі
+ * стану при кожному логіні, тож окремої кнопки «повернути доступ» не існує й не треба.
+ */
+export async function setWorkState(managerId: number, state: "finishing" | "dismissed" | null, note?: string) {
+  const { data } = await api.patch<{ ok: true; state: string; loginEnabled: boolean }>(
+    `/settings/managers/${managerId}/work-state`, { state, note });
+  return data;
 }
 
 export async function fetchUsers(archived = false): Promise<DashboardUser[]> {
@@ -2751,8 +2764,13 @@ export async function saveOneOnOne(p: {
   return { overall: data?.overall ?? null };
 }
 export interface OneOnOneStatRow { id: number; name: string; team_id: number | null; team_name: string | null; meeting_date: string; month: string; overall: number | null; enps_score: number | null; satisfaction_score: number | null; form_version: number; answers: OneOnOneAnswers; }
-export async function fetchOneOnOneStats(type: string, months = 6): Promise<OneOnOneStatRow[]> {
-  const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores", { params: { type, months } });
+/**
+ * 📅 `month` (YYYY-MM) звужує історію до ОДНОГО місяця. Без нього лишається старе
+ * «останні N місяців» — фолбек для бандла, що ще крутиться у відкритих вкладках.
+ */
+export async function fetchOneOnOneStats(type: string, months = 6, month?: string): Promise<OneOnOneStatRow[]> {
+  const { data } = await api.get<{ rows: OneOnOneStatRow[] }>("/one-on-ones/stats/scores",
+    { params: month ? { type, month } : { type, months } });
   return data?.rows ?? [];
 }
 // ── Задачі з 1×1 ─────────────────────────────────────────────────────────────
@@ -3151,6 +3169,8 @@ export interface ClientCallYear { year: number; calls: number; talks: number; to
 export interface ClientCall {
   at: string; direction: "in" | "out"; billsec: number; answered: boolean;
   disposition: string | null; manager: string | null;
+  /** 🎧 Пряме посилання на запис у кабінеті Ringostat. Відкривається без логіна. */
+  recording: string | null;
 }
 export interface ClientCard {
   /** 📞 Дзвінки по роках. `callsSince` — глибина памʼяті: порожній рік до неї означає «даних немає». */

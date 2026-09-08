@@ -8,6 +8,7 @@ import { provisionUsers, resetPassword, generatePassword } from "../db/userProvi
 import { roleHasPerm, getRoleDef, refreshRoles, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { validateGrant } from "../auth/permGrant.js";
 import { wouldOrphanAdmin, otherActiveAdminCount } from "../auth/adminGuard.js";
+import { loginEnabledFor } from "../core/managerState.js";
 import { writeAudit } from "../db/audit.js";
 
 export const settingsRouter = Router();
@@ -214,9 +215,16 @@ settingsRouter.get("/users", async (req, res) => {
             COALESCE(u.role_override, u.role) AS role_effective,
             u.is_active, u.deactivated_at, u.deactivated_reason,
             (u.manager_id IS NOT NULL) AS crm_linked, u.tracker_enabled,
+            /* 👤 Стан менеджера їде РАЗОМ зі списком: він керує і робочими списками, і
+               входом (loginEnabledFor), тож окремий запит означав би екран, на якому
+               два джерела правди про одну людину розходяться між двома завантаженнями.
+               ⚠️ Зворотних лапок тут бути НЕ МОЖЕ: коментар усередині шаблонного рядка,
+               і будь-яка з них обриває його — TS1005 на цьому вже ловив двічі. */
+            u.manager_id, mws.state AS work_state,
             t.name AS team_name
      FROM users u
      LEFT JOIN managers m ON m.id = u.manager_id
+     LEFT JOIN manager_work_state mws ON mws.manager_id = u.manager_id
      LEFT JOIN teams t ON t.id = u.team_id
      WHERE u.is_active = $1
      ORDER BY COALESCE(u.role_override,u.role)='admin' DESC, t.name NULLS LAST, u.email`,
@@ -335,9 +343,18 @@ settingsRouter.patch("/managers/:id/work-state", async (req, res) => {
       [id, st, note, req.auth?.userId ?? null]
     );
   }
+  /* 🔐 ВХІД НЕ ЗАПИСУЄТЬСЯ ПРАПОРЦЕМ — ВІН ВИВОДИТЬСЯ ЗІ СТАНУ ПІД ЧАС ЛОГІНУ.
+     Рішення власника 07.09.2026: «звільнений вимикає вхід». Спокуса тут одна — дописати
+     поруч `UPDATE users SET is_active = false`, і саме її забороняє доккоментар вище:
+     `provisionUsers` перезаписує `users.is_active` значенням із `managers` у кінці
+     КОЖНОГО тіка `syncKommo`, тож таке вимкнення прожило б щонайбільше півгодини —
+     рівно так зникла деактивація Шевчука 06.08. Тому межу тримає `routes/auth.ts`,
+     який щоразу читає `manager_work_state` (див. `loginEnabledFor`). */
   await writeAudit({ ...audit(req), action: "manager.work_state", targetType: "manager",
-    targetId: String(id), targetLabel: `${mgr.rows[0].name} → ${st ?? "active"}` });
-  res.json({ ok: true, state: st ?? "active" });
+    targetId: String(id),
+    targetLabel: `${mgr.rows[0].name} → ${st ?? "active"}`
+      + (loginEnabledFor(st ?? "active") ? "" : " · вхід закрито") });
+  res.json({ ok: true, state: st ?? "active", loginEnabled: loginEnabledFor(st ?? "active") });
 });
 
 // Зміна override-ролі / активності / ПІБ(ручним). Само-блокування → 409.

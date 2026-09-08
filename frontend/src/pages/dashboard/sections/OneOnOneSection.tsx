@@ -176,7 +176,11 @@ export function OneOnOneSection() {
   const loadMeetings = (mgrId: number) => fetchO2OMeetings(type, mgrId, 24).then(setMeetings).catch(() => setMeetings([]));
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
   useEffect(() => { setSelId(null); setMeetings([]); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
-  useEffect(() => { if (tab === "stats") fetchOneOnOneStats(type, 6).then(setStats).catch(() => setStats([])); }, [tab, type, monthSel]);
+  /* 📅 ОБРАНИЙ МІСЯЦЬ ЇДЕ В ЗАПИТ. Раніше тут стояло жорстке `6`, а `monthSel` був лише
+     у списку залежностей — тобто ефект перезапускався, а запит щоразу просив ті самі
+     півроку. Через це вкладка «Історія» малювала колонку на КОЖНУ зустріч за 6 місяців
+     і виїжджала за екран, попри обраний місяць у шапці. */
+  useEffect(() => { if (tab === "stats") fetchOneOnOneStats(type, 6, monthSel).then(setStats).catch(() => setStats([])); }, [tab, type, monthSel]);
   useEffect(() => {
     if (tab !== "enps") return;
     // «Весь час» дає порожні кінці, а сервер вимагає обидва — підставляємо найширші.

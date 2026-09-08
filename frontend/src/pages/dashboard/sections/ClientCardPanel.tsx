@@ -216,10 +216,23 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
               {openYear === y.year && card.calls && (
                 <div style={{ maxHeight: 190, overflowY: "auto", margin: "0 0 8px 22px" }}>
                   {card.calls.filter((c) => new Date(c.at).getFullYear() === y.year).map((c, i) => (
-                    <div key={i} style={{ fontSize: 12, padding: "3px 0", color: c.answered ? "#111827" : "#9ca3af" }}>
-                      {c.at.slice(0, 16).replace("T", " ")} · {c.direction === "out" ? "вих" : "вх"}
-                      {c.answered ? ` · ${c.billsec} с` : " · не додзвонились"}
-                      {c.manager && ` · ${c.manager}`}
+                    <div key={i} style={{ fontSize: 12, padding: "3px 0", display: "flex", gap: 6, alignItems: "center" }}>
+                      <span>
+                        {c.at.slice(0, 16).replace("T", " ")} · {c.direction === "out" ? "вих" : "вх"}
+                        {` · ${c.billsec} с`}
+                        {c.manager && ` · ${c.manager}`}
+                      </span>
+                      {/* 🎧 ПРЯМЕ ПОСИЛАННЯ, БЕЗ ПРОКСІ ЧЕРЕЗ НАШ СЕРВЕР (рішення власника
+                          05.08.2026): записи Ringostat відкриваються без логіна, тож проксі
+                          дав би ілюзію захисту ціною аудіотрафіку крізь нас.
+                          Перелік містить лише відповідані, і в них запис є завжди (заміряно
+                          07.09: відповіданих без запису — нуль), але саме «завжди» на живих
+                          даних завтра може стати «майже завжди» — тому кнопка умовна. */}
+                      {c.recording && (
+                        <a href={c.recording} target="_blank" rel="noreferrer"
+                           title="Прослухати запис"
+                           style={{ textDecoration: "none", fontSize: 13 }}>▶</a>
+                      )}
                     </div>
                   ))}
                 </div>
