@@ -78,3 +78,47 @@ test.after(async () => {
   const { pool } = await import("../db/pool.js");
   await pool.end();
 });
+
+/**
+ * 📅 #366/#366b — ПОДЕННИЙ ЗНАМЕННИК ДЛЯ ЕКРАНА «РЕКЛАМА» (08.09.2026).
+ *
+ * Екран показує витрати GA4 по днях поруч із лідами CRM. Щоб ці ліди не розійшлися з
+ * `conversion_ads`, поденна функція бере ТЕ САМЕ приватне ядро (`dealCohortCte`), а не
+ * свій SQL. Гейт це і доводить — рівністю з помісячним знаменником.
+ *
+ * 🔴 ЧОМУ ПОТРІБНЕ ДЗЕРКАЛО #366b. Сама рівність зеленіє й тоді, коли функція віддала
+ * ОДИН рядок із сумою місяця (тобто групування по днях не працює зовсім). Дзеркало
+ * вимагає, щоб днів було більше одного і жоден не дорівнював місяцю.
+ *
+ * 🧨 САБОТАЖ: додати `JOIN managers` у поденний запит — угоди з `manager_id IS NULL`
+ * випадуть, Σ по днях стане МЕНШОЮ за місяць, і #366 почервоніє.
+ */
+test("#366 ПОДЕННИЙ ЗНАМЕННИК == ПОМІСЯЧНОМУ: те саме ядро, жодного рядка не загублено", needsDb(), async () => {
+  const { metrics, getSettings } = await load();
+  const { adSources } = await getSettings();
+  const days = await metrics.conversionAdsByDay(monthRange(MATURE_YM), adSources);
+  assert.ok(days.length > 0,
+    `поденний знаменник за ${MATURE_YM} порожній — це ПРОВАЛ, а не «нуль»: перевірці не було що знаходити`);
+  const sum = days.reduce((s, d) => s + d.entered, 0);
+  const monthly = (await metrics.conversionAdsByMonth({}, adSources)).find((r) => r.ym === MATURE_YM);
+  assert.ok(monthly, `місяця ${MATURE_YM} немає в помісячному ряді — порівнювати нема з чим`);
+  assert.equal(sum, Number(monthly!.entered),
+    `Σ по днях ${sum} ≠ знаменник місяця ${monthly!.entered} — поденний розріз втратив або додав рядки. ` +
+    "Тоді екран «Реклама» показував би інші ліди, ніж conversion_ads, і розбіжність була б тихою");
+  const wonSum = days.reduce((s, d) => s + d.won, 0);
+  assert.ok(wonSum <= sum, `виграних ${wonSum} більше за вхідних ${sum} — чисельник вийшов за знаменник`);
+});
+
+test("#366b 🪞 РОЗРІЗ СПРАВДІ ПОДЕННИЙ — а не один кошик під виглядом місяця", needsDb(), async () => {
+  const { metrics, getSettings } = await load();
+  const { adSources } = await getSettings();
+  const days = await metrics.conversionAdsByDay(monthRange(MATURE_YM), adSources);
+  assert.ok(days.length > 1,
+    `у ${MATURE_YM} лише ${days.length} рядок — групування по днях не працює, і #366 зеленів би дарма`);
+  assert.match(days[0].day, /^\d{4}-\d{2}-\d{2}$/,
+    `день «${days[0].day}» не у форматі YYYY-MM-DD — екран не зможе зіставити його з днем GA4`);
+  const sum = days.reduce((s, d) => s + d.entered, 0);
+  const max = Math.max(...days.map((d) => d.entered));
+  assert.ok(max < sum,
+    `найбільший день (${max}) дорівнює всьому місяцю (${sum}) — розріз злипся в один рядок`);
+});

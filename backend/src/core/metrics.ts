@@ -2322,6 +2322,54 @@ export async function conversionAdsByManager(s: MetricScope, adSources: string[]
   });
 }
 
+export interface AdsDayCohort { day: string; entered: number; won: number }
+
+/**
+ * 📅 `conversion_ads` ПО ДНЯХ — знаменник платних лідів для екрана «Реклама» (08.09.2026).
+ *
+ * 🔴 ЧОМУ ЦЕ ЖИВЕ ТУТ, А НЕ В РОУТІ. Екран показує витрати GA4 по днях поруч із лідами
+ * CRM за той самий день. Спокуса — написати в роуті свій SQL «ліди по днях»; саме так
+ * метрика й розходиться з дашбордом через місяці (DoD п.1). Тому функція стоїть у ядрі
+ * й бере ТОЙ САМИЙ приватний `dealCohortCte`, що й помісячна, поменеджерна та по
+ * напрямках: знаменник = ADZONE_TAKEN-вхід **AND** `paidAdSql` **AND** сегмент `new`.
+ *
+ * ⚠️ СПРОЩЕНИЙ `paidAdSql` — НАЙТИПОВІША ПОМИЛКА ТУТ. Він НЕ дорівнює
+ * `traf_type='cpc' OR utm_medium='cpc'`: там ще `utm_campaign IS NOT NULL` і ЦІЛА
+ * друга гілка (рекламний коллтрекінг `adDealSqlMode` з вирізаною органікою). Хто
+ * відтворить коротку формулу в роуті — систематично ЗАНИЗИТЬ платні ліди, і розбіжність
+ * буде тихою. Саме тому тут виклик ядра, а не копія предиката.
+ *
+ * 🔴 БЕЗ `JOIN managers` — І ЦЕ НЕ НЕДОГЛЯД. `conversionAdsByManager` робить
+ * `FROM pop JOIN managers mm` (INNER), тож угоди з `manager_id IS NULL` у ньому
+ * ВИПАДАЮТЬ, і Σ по менеджерах менша за знаменник. Для поденного розрізу нам потрібні
+ * ВСІ рядки популяції — тому групуємо просто по `pop`, як `conversionAdsByDirection`.
+ *
+ * ⚠️ `AS day` обовʼязкове: `day` — ключове слово Postgres, без `AS` запит падає
+ * синтаксично (правило зони db-sql, куплене двічі).
+ */
+export async function conversionAdsByDay(s: MetricScope, adSources: string[]): Promise<AdsDayCohort[]> {
+  // $1 MONEY_ZONE (won), $2 FC, $3 ADZONE (вхід), $4 adSources — контракт dealCohortCte.
+  const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
+  const scopeConds: string[] = [];
+  if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  const fromRef = (params.push(s.from ?? null), `$${params.length}`);
+  const toRef = (params.push(s.to ?? null), `$${params.length}`);
+  const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
+
+  const r = await pool.query<{ day: string; entered: string; won: string }>(
+    `WITH ${dealCohortCte("$3", "$4", scopeWhere)}
+     SELECT to_char((pop.entered_at ${KYIV})::date, 'YYYY-MM-DD') AS day,
+            COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won
+       FROM pop
+      WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
+        AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
+      GROUP BY 1 ORDER BY 1`,
+    params
+  );
+  return r.rows.map((x) => ({ day: x.day, entered: Number(x.entered), won: Number(x.won) }));
+}
+
 export interface TeamConversion { teamId: number | null; entered: number; won: number; cohortPct: number | null }
 
 /**
