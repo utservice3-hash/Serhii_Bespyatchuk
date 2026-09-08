@@ -43,6 +43,25 @@ function parseDate(dat?: string, tim?: string): Date | null {
   return kyivWallToUtc(Number(m[3]), Number(m[2]), Number(m[1]), H, M);
 }
 
+/**
+ * 🔑 КЛЮЧ ЗАПИСУ — `ID`, І НЕ `REF`. Куплено 08.09.2026: Юля прийшла з платежем ГУТА-ТРАНС на
+ * 41 666,67 ₴, якого «немає на виписці». Він був у банку — і був у базі: під його ключем лежала
+ * комісія 3 грн «за дебетування рахунку».
+ *
+ * 📐 Механізм, заміряний напряму в API: на кожен вихідний платіж Приват віддає ДВА записи —
+ * платіж і комісію за нього — з ОДНАКОВИМ `REF` і різним `ID` (`REF + літера + дата`).
+ * Ключ за `REF` робив із них один рядок, і вигравав той, що прийшов другим; комісія ще й
+ * позначається `is_bank_fee` і ховається з виписки, тож платіж зникав повністю, а не
+ * показувався як «−3». За 30 днів: 400 таких пар, 370 платежів затерто — ЮТС 305, Автомув 93.
+ * Синк при цьому «зелений»: кожен upsert успішний.
+ *
+ * `REF` лишається ЗАПАСНИМ для записів без `ID` (у базі таких 0 із 5 001, але контракт
+ * API цього не обіцяє). Старі рядки з ключем за `REF` перезаводить `tools/rekeyPrivat.ts`.
+ */
+export function privatTxKey(it: PrivatItem, abs: number): string {
+  return it.ID ?? it.REF ?? `${it.DAT_OD}-${abs}-${it.AUT_CNTR_ACC ?? ""}`;
+}
+
 /** Чистий нормалізатор (тестується без мережі). Знак — з TRANTYPE (C=надходження, D=списання). */
 export function normalizePrivat(it: PrivatItem, accountCurrency: string): NormalizedTx {
   const sign = it.TRANTYPE === "C" ? 1 : -1;
@@ -54,7 +73,7 @@ export function normalizePrivat(it: PrivatItem, accountCurrency: string): Normal
   const processed = parseDate(it.DAT_OD, it.TIM_P);
   const fxRate = currency !== "UAH" && sumE != null && abs > 0 ? sumE / abs : null;
   return {
-    externalTxId: `privat:${it.REF ?? it.ID ?? `${it.DAT_OD}-${abs}-${it.AUT_CNTR_ACC ?? ""}`}`,
+    externalTxId: `privat:${privatTxKey(it, abs)}`,
     direction: sign > 0 ? "in" : "out",
     bookedAt: booked,
     processedAt: processed,
