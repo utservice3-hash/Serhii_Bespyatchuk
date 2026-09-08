@@ -262,11 +262,24 @@ export function Dashboard() {
   /* 🔔 Лічильник непрочитаних новин. Береться ОДИН раз на завантаження й гаситься при
      відкритті розділу: новини зʼявляються рідко (джоба о 08:00 і крок викату), тож
      полінг тут був би платою без вигоди — на відміну від месенджера, де він виправданий. */
+  /* 🔔 Мітка «долистав досюди» живе В БРАУЗЕРІ, а не в акаунті. Причина, названа власником
+     08.09: під спільним логіном один прочитав — і значок гас усім. Тепер підсвітка на
+     пристрій. Ключ — id (сервер присвоює монотонно), не час (годинник браузера зсунутий).
+     localStorage у try/catch: приватний режим кидає на самому доступі. */
+  const NEWS_SEEN_KEY = "utsNewsSeenId";
+  const readNewsSeenId = (): number => {
+    try { return Number(localStorage.getItem(NEWS_SEEN_KEY)) || 0; } catch { return 0; }
+  };
   const [newsUnread, setNewsUnread] = useState(0);
-  useEffect(() => { fetchNewsUnread().then(setNewsUnread).catch(() => setNewsUnread(0)); }, []);
+  useEffect(() => {
+    fetchNewsUnread(readNewsSeenId()).then((r) => setNewsUnread(r.unread)).catch(() => setNewsUnread(0));
+  }, []);
   useEffect(() => {
     if (section !== "news") return;
-    markNewsSeen().then(() => setNewsUnread(0)).catch(() => { /* значок лишиться — не біда */ });
+    markNewsSeen().then((maxId) => {
+      try { localStorage.setItem(NEWS_SEEN_KEY, String(maxId)); } catch { /* приватний режим — значок просто не запамʼятає, не біда */ }
+      setNewsUnread(0);
+    }).catch(() => { /* значок лишиться — не біда */ });
   }, [section]);
 
   const [newsCategory, setNewsCategory] = useState<"company" | "logistics" | "sales">("company");
