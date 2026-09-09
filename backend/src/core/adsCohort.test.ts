@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { needsBackendEnv } from "../testMode.js";
 
@@ -26,6 +26,19 @@ import { needsBackendEnv } from "../testMode.js";
 /** Вікно заміру: місяць — достатньо, щоб когорта була непорожня в будь-який день року. */
 const FROM = "2026-07-01";
 const TO = "2026-07-31";
+
+/**
+ * 🔴 ПУЛ ЗАКРИВАЄТЬСЯ ОДИН РАЗ НА ФАЙЛ, І ЦЕ КУПЛЕНО ДВІЧІ ЗА ОДНУ СЕСІЮ.
+ * `db/pool.js` — модульний СИНГЛТОН, тож `pool.end()` у тілі першого тесту лишає
+ * другий без зʼєднання: він падає з «Cannot use a pool after calling end on the pool»
+ * ще на `getSettings`, НЕ дійшовши до жодного твердження. Найгірше тут те, що вивід
+ * виглядає як провал ПЕРЕВІРКИ, хоча перевірка не виконувалась — тобто червоне
+ * означало «тест зламаний», а читалось як «продукт зламаний».
+ */
+after(async () => {
+  const { pool } = await import("../db/pool.js");
+  await pool.end().catch(() => {});
+});
 
 test("#392 ЖИВА БД: у роботі + оплачено + втрачено == узято в роботу, по КОЖНОМУ дню", needsBackendEnv(), async (t) => {
   const { pool } = await import("../db/pool.js");
@@ -55,8 +68,6 @@ test("#392 ЖИВА БД: у роботі + оплачено + втрачено 
   assert.ok(anyOverlap,
     "🔴 у жодному дні `дійшли до грошей` не перевищує `оплачено` — це означає, що грошова "
     + "зона звузилась до 142, і підпис «дійшли до грошей» на екрані став неправдою");
-
-  await pool.end();
 });
 
 test("#392b ЖИВА БД: склад розкриття дня == числу в комірці, поіменно", needsBackendEnv(), async (t) => {
@@ -86,6 +97,4 @@ test("#392b ЖИВА БД: склад розкриття дня == числу в
   assert.deepEqual(byState, { paid: busiest.paid, lost: busiest.lost, inWork: busiest.inWork },
     `🔴 ${busiest.day}: стани в розкритті не збігаються з лічильником — те саме число `
     + "рахується двома різними способами");
-
-  await pool.end();
 });
