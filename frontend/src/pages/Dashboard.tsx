@@ -921,9 +921,17 @@ export function Dashboard() {
 
       {section === "statistics" && (
         /* 📣 Вкладка «Реклама» всередині Статистик бере СПІЛЬНИЙ період-фільтр
-           (dateRange), а видимість — ключ `ads` зі `screens` токена. */
+           (dateRange), а видимість — ключ `ads` зі `screens` токена.
+           🔴 СЕТТЕРИ ЇДУТЬ РАЗОМ ІЗ ЗНАЧЕННЯМ, І ЦЕ НЕ ПРИКРАСА. Доти сюди
+           передавали лише `from`/`to` — екран періодом ЖИВ, але змінити його
+           не міг: `QuickPeriods` рендерять Огляд, Звіт, Команди й Ван-ту-ван,
+           а Статистики — ні. Через `localStorage` значення ще й переживало
+           перезавантаження, тож людина застрягала на періоді, поставленому
+           колись на іншому екрані (заміряно на проді: 14.07–14.07, і в смузі
+           днів «Реклами» був рівно один день). */
         <StatisticsChartsSection role={auth?.role} screens={auth?.screens}
-          from={dateRange.from} to={dateRange.to} />
+          from={dateRange.from} to={dateRange.to}
+          datePreset={datePreset} setDatePreset={setDatePreset} setDateRange={setDateRange} />
       )}
       {section === "bank" && <BankSection />}
 

@@ -6,6 +6,7 @@ import {
 import { effGranOf } from "../statsGran";
 import { fetchStatsSeries, saveStatsManual, type StatsSeriesResp, type StatsSeries } from "../../../api";
 import { InfoHint } from "../widgets";
+import { DateRangeFilter, QuickPeriods } from "../../../components/DateRangeFilter";
 
 const SEAM = "2026-07-01";
 // dataviz категорійна палітра (фіксований порядок; компанія завжди [0]). CVD-safe рампи.
@@ -113,8 +114,14 @@ function rangeWindow(rows: { period: string }[], range: string): { lo: number; h
 }
 
 export default function StatisticsChartsSection(
-  { role, screens, from, to }:
-  { role?: string; screens?: string[]; from?: string; to?: string }
+  { role, screens, from, to, datePreset, setDatePreset, setDateRange }:
+  { role?: string; screens?: string[]; from?: string; to?: string;
+    /* 📅 Період — не тільки ЗНАЧЕННЯ, а й право його змінити. Сеттери обовʼязкові
+       (не `?`), щоб компілятор ловив забуту проводку: екран, який показує вибір
+       періодів, але не вміє його застосувати, — гірший за екран без вибору. */
+    datePreset: string | null;
+    setDatePreset: (id: string | null) => void;
+    setDateRange: (r: { from: string; to: string }) => void }
 ) {
   const [catKey, setCatKey] = useState("money");
   const cat = CATS.find((c) => c.key === catKey)!;
@@ -344,15 +351,37 @@ export default function StatisticsChartsSection(
         </div>
       )}
 
+      {/* 📅 ВИБІР ПЕРІОДУ СТОЇТЬ САМЕ ТУТ — усередині вкладки «Реклама», а не над
+          усім розділом. Причина не косметична: решта вкладок Статистик періодом НЕ
+          керується взагалі (у них своя гранулярність день/тиждень/місяць і повзунок
+          по всій історії), тож контрол, підвішений на весь екран, на восьми вкладках
+          із девʼяти нічого б не робив. Мовчазний перемикач гірший за його відсутність:
+          людина крутить його й не розуміє, чому нічого не змінюється.
+          🔴 ЧОМУ ВЗАГАЛІ ЗʼЯВИВСЯ. «Реклама» — єдина вкладка тут, що живе періодом, і
+          довезли її БЕЗ перемикача: значення приходило з `dateRange`, який ставлять на
+          Звіті чи Огляді, і ще й переживало перезавантаження через `localStorage`. На
+          проді це виглядало як порожній екран: період 14.07–14.07, у смузі один день,
+          і жодного способу це виправити, не пішовши на інший розділ. */}
       {cat.custom === "ads" && (
-        /* Право змінювати план мусить збігатися з межами роуту PUT /settings/ad-plan
-           (deny: kvp, financier, hr, team_lead, manager). Показати кнопку тому, кому
-           сервер відмовить, — це обіцянка, якої інтерфейс не виконає. */
-        <AdsSection from={from ?? ""} to={to ?? ""}
-          canEditPlan={["admin", "ceo", "opdir"].includes(role ?? "")} />
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: ".8px",
+                           textTransform: "uppercase", color: MUTED }}>Період</span>
+            <DateRangeFilter
+              value={{ from: from ?? "", to: to ?? "" }}
+              onChange={(r) => { setDateRange(r); setDatePreset(null); }}
+            />
+          </div>
+          <QuickPeriods active={datePreset} onSelect={(id, range) => { setDatePreset(id); setDateRange(range); }} />
+          {/* Право змінювати план мусить збігатися з межами роуту PUT /settings/ad-plan
+              (deny: kvp, financier, hr, team_lead, manager). Показати кнопку тому, кому
+              сервер відмовить, — це обіцянка, якої інтерфейс не виконає. */}
+          <AdsSection from={from ?? ""} to={to ?? ""}
+            canEditPlan={["admin", "ceo", "opdir"].includes(role ?? "")} />
+        </>
       )}
 
-      {cat.manualForm && <ManualForm onClose={() => { setCatKey("money"); setMetricKey("avg_check"); }} isAdmin={role === "admin"} />}
+      <QuickPeriods active={null} onSelect={() => {}} />{cat.manualForm && <ManualForm onClose={() => { setCatKey("money"); setMetricKey("avg_check"); }} isAdmin={role === "admin"} />}
 
       {/* Міні-плитки */}
       {!cat.manualForm && !cat.custom && <MiniTiles onPick={(c, m) => { setCatKey(c); setMetricKey(m); }} />}
