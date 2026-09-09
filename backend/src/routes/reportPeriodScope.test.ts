@@ -22,6 +22,16 @@ import path from "node:path";
 const SEC = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src",
   "pages", "dashboard", "sections", "ReportPlanSection.tsx");
 const src = (): string => readFileSync(SEC, "utf8");
+const RULES = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src",
+  "pages", "dashboard", "periodRules.ts");
+/** Правило фронту ВИКОНУЄТЬСЯ, а не читається очима (той самий прийом, що в `#370`). */
+async function loadRules() {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(readFileSync(RULES, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return await import(`data:text/javascript,${encodeURIComponent(js)}`);
+}
 
 test("#79 ТІЛО ЗВІТУ ЧИТАЄ ОБРАНИЙ ПЕРІОД, А НЕ ЗАВЖДИ МІСЯЦЬ", () => {
   const s = src();
@@ -77,14 +87,30 @@ test("#79c КАРТКА ЧАСУ РЕАКЦІЇ ЙДЕ ЗА ПЕРІОДОМ, А
     "🔴 StuckBlock отримав період — застрягання не має періоду за визначенням");
 });
 
-test("#79d НАВІГАЦІЯ ← → ЗСУВАЄ ДІАПАЗОН НА ЙОГО ДОВЖИНУ", () => {
+test("#79d НАВІГАЦІЯ ← → ЗСУВАЄ ДІАПАЗОН НА ЙОГО ДОВЖИНУ", async () => {
   const s = src();
-  const nav = s.split("const nav = (dir: number) =>")[1]?.slice(0, 700) ?? "";
-  assert.ok(/mode === "range"/.test(nav) && /spanDays\(rangeFrom, rangeTo\)/.test(nav),
-    "🔴 гілка навігації для діапазону знову порожня — «минулі 3 дні» подивитись неможливо");
-  assert.ok(/setRangeFrom\(addDays\(rangeFrom, dir \* span\)\)/.test(nav)
-    && /setRangeTo\(addDays\(rangeTo, dir \* span\)\)/.test(nav),
-    "🔴 зсуваються не обидві межі — діапазон розтягнеться або схлопнеться");
+  /* 🔁 ПРАВИЛО ПЕРЕЇХАЛО 09.09.2026 у `periodRules.navBy` — його тепер ділять Звіт і
+     вкладка «Реклама» (спільний `PeriodNav`). Гейт через це почервонів БЕЗ дефекту:
+     він шукав текст `const nav = (dir: number) =>` у джерелі Звіту. Рівно те, від чого
+     застерігає правило 10 — «твердження через проксі падає від рефакторингу й мовчить
+     від дефекту». Тому тепер він ВИКОНУЄ правило, а не шукає рядок: твердження те саме,
+     доказ сильніший. */
+  const { navBy } = await loadRules();
+  const st = { mode: "range", anchor: "2026-08-20", focusDay: "2026-08-20", rangeFrom: "2026-08-11", rangeTo: "2026-08-13" };
+
+  assert.deepEqual(navBy(st, -1), { rangeFrom: "2026-08-08", rangeTo: "2026-08-10" },
+    "🔴 ← зсуває діапазон не на його довжину — «минулі 3 дні» або недосяжні, або з діркою");
+  assert.deepEqual(navBy(st, 1), { rangeFrom: "2026-08-14", rangeTo: "2026-08-16" },
+    "🔴 → зсуває діапазон не на його довжину");
+  // 🪞 Обидві межі рухаються НА ТУ САМУ величину: інакше діапазон тихо розтягнеться.
+  const back = navBy(st, -1);
+  assert.equal(
+    Date.parse(back.rangeTo) - Date.parse(back.rangeFrom),
+    Date.parse(st.rangeTo) - Date.parse(st.rangeFrom),
+    "🔴 довжина діапазону змінилась під час навігації — рухається лише одна межа");
+  // І Звіт справді вішає ←/→ на цей навігатор, а не малює власні кнопки.
+  assert.ok(/<PeriodNav\b/.test(s),
+    "🔴 Звіт більше не малює спільний навігатор — кнопки ←/→ поїхали на власну копію правила");
   assert.equal(/disabled=\{mode === "range"\}/.test(s), false,
     "🔴 кнопки ←/→ знову заблоковані для діапазону");
 });
