@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isUnread, UNREAD_COUNT_SQL, MARK_SEEN_SQL } from "./newsSeen.js";
+import { isUnread, unreadSinceQuery, MARK_SEEN_SQL } from "./newsSeen.js";
 
 /**
  * #356 — НЕПРОЧИТАНЕ РАХУЄТЬСЯ ВІД ВІЗИТУ, І ОБИДВА БОКИ МЕЖІ ПОТРІБНІ.
@@ -35,6 +35,9 @@ test("#356 новіша за візит — непрочитана, старіш
  * ховаються, або давно прочитані знову спливають.
  */
 test("#356b 🪞 запит рахує від тієї самої межі, а мітка — часом сервера", () => {
+  // Запит став БІЛДЕРОМ (адресність, 09.09.2026): твердження ті самі, читаємо
+  // згенерований текст. Порожні вкладки тут доречні — гейт про межу ЧАСУ, не про аудиторію.
+  const UNREAD_COUNT_SQL = unreadSinceQuery(null, []).text;
   assert.match(UNREAD_COUNT_SQL, /created_at > \$1/,
     "🔴 запит рахує не «пізніше за візит» — розійдеться з правилом, яке перевіряє #356");
   assert.match(UNREAD_COUNT_SQL, /\$1::timestamptz IS NULL OR/,

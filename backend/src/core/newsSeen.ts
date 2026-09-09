@@ -1,4 +1,4 @@
-import { NEWS_ALIVE } from "./newsVisibility.js";
+import { NEWS_ALIVE, newsScope } from "./newsVisibility.js";
 
 /**
  * 🔔 «Є ЩОСЬ НОВЕ ПІСЛЯ МОГО ОСТАННЬОГО ВІЗИТУ» — одна мітка часу на людину.
@@ -26,11 +26,18 @@ export function isUnread(createdAt: Date | string, seenAt: Date | string | null)
   return new Date(createdAt).getTime() > new Date(seenAt).getTime();
 }
 
-/** Скільки новин зʼявилось після візиту. `$1` — мітка часу людини (може бути NULL). */
-export const UNREAD_COUNT_SQL = `
-  SELECT count(*)::int AS n FROM news
-   WHERE ${NEWS_ALIVE}
-     AND ($1::timestamptz IS NULL OR created_at > $1::timestamptz)`;
+/**
+ * Скільки новин зʼявилось після візиту (мітка ЧАСУ, застарілі бандли).
+ *
+ * ⚠️ Досяжний лише з браузера, що тримає бандл, старіший за 08.09.2026: чинний фронт
+ * завжди шле `sinceId`, навіть 0. Фільтр аудиторії тут однаково обовʼязковий — застарілий
+ * бандл не має права рахувати рядки, яких його власник не може відкрити.
+ */
+export function unreadSinceQuery(seenAt: string | null, tabs: readonly string[]) {
+  const { where, params } = newsScope(
+    tabs, ["($1::timestamptz IS NULL OR created_at > $1::timestamptz)"], [seenAt]);
+  return { text: `SELECT count(*)::int AS n FROM news ${where}`, params };
+}
 
 /**
  * ⚠️ ПОЗНАЧАЄМО ЧАСОМ СЕРВЕРА, А НЕ ЧАСОМ КЛІЄНТА. Годинник браузера буває зсунутий на
@@ -56,9 +63,22 @@ export const MARK_SEEN_SQL = `UPDATE users SET news_seen_at = now() WHERE id = $
  * 🔴 ВИДАЛЕНЕ НЕ РАХУЄТЬСЯ — той самий `NEWS_ALIVE`, що й у списку та старому лічильнику
  * (див. `newsVisibility.ts`): значок не повинен рахувати те, чого людина не може відкрити.
  */
-export const UNREAD_BY_ID_SQL = `
-  SELECT count(*)::int AS n FROM news
-   WHERE ${NEWS_ALIVE} AND id > $1`;
+export function unreadByIdQuery(sinceId: number, tabs: readonly string[]) {
+  const { where, params } = newsScope(tabs, ["id > $1"], [sinceId]);
+  return { text: `SELECT count(*)::int AS n FROM news ${where}`, params };
+}
 
-/** «Долистав досюди» — найбільший ЖИВИЙ id. Береться в ту саму мить, що й лічильник. */
-export const MAX_ALIVE_ID_SQL = `SELECT COALESCE(max(id), 0)::int AS max_id FROM news WHERE ${NEWS_ALIVE}`;
+/**
+ * «Долистав досюди» — найбільший ВИДИМИЙ ЦЬОМУ ЧИТАЧЕВІ id. Береться в ту саму мить,
+ * що й лічильник.
+ *
+ * 🔴 НАЙТИХІШЕ МІСЦЕ З УСІХ ЧОТИРЬОХ, І ЙОГО ЛЕГКО ЛИШИТИ ГЛОБАЛЬНИМ. Саме це число
+ * браузер кладе в `localStorage` як «прочитано досюди». Якби воно рахувалось по ВСІХ
+ * новинах, людина, відкривши стрічку, перестрибнула б через адресні рядки, яких не
+ * бачила, — і якби її роль потім отримала ту вкладку, ті новини вже вважались би
+ * прочитаними. Назавжди й без сліду.
+ */
+export function maxVisibleIdQuery(tabs: readonly string[]) {
+  const { where, params } = newsScope(tabs);
+  return { text: `SELECT COALESCE(max(id), 0)::int AS max_id FROM news ${where}`, params };
+}

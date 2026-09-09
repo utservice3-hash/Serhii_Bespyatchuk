@@ -17,7 +17,28 @@
  */
 
 /** Верхній блок `RELEASE_NOTES.md`: заголовок `## …` і текст до наступного `## `. */
-export type ReleaseNote = { title: string; body: string };
+export type ReleaseNote = {
+  title: string;
+  body: string;
+  /** Вкладки-адресати. `null` = бачать усі (у нотатці написано `Кому: all`). */
+  audience: string[] | null;
+  /** Рядка `Кому:` не було ЗОВСІМ — це дефект нотатки, а не «для всіх». */
+  audienceMissing: boolean;
+};
+
+/**
+ * 🎯 РЯДОК «Кому:» — ОБОВʼЯЗКОВИЙ, І «ДЛЯ ВСІХ» ТЕЖ ПИШЕТЬСЯ ЯВНО (`all`).
+ *
+ * 🔴 ЧОМУ НЕ «НЕМАЄ РЯДКА = ДЛЯ ВСІХ». Тоді мовчання означало б одразу два різні стани —
+ * «автор вирішив, що це всім» і «автор забув» — а розрізняти їх треба. Рішення власника
+ * 09.09.2026: тег обовʼязковий, `all` — його законне значення.
+ *
+ * 📐 Що «забуде» станеться — не гіпотеза. У шапці `RELEASE_NOTES.md` першим абзацом
+ * стоїть «пишемо ДЛЯ ЛЮДЕЙ, без назв файлів і термінів», і попри це ТРИ проходи поспіль
+ * написали туди markdown із зірочками. Вимога, що стоїть у файлі, вже одного разу не
+ * спрацювала; тому цю тримає гейт, і тримає в момент НАПИСАННЯ, а не публікації.
+ */
+const AUDIENCE_RE = /^\s*Кому:\s*(.+?)\s*$/m;
 
 /** Чому новини не буде — назване, а не мовчазне `null`. */
 export type NoNoteReason = "no-file" | "empty-block";
@@ -45,7 +66,21 @@ export function parseReleaseNotes(raw: string | null): ParsedNotes {
   // 🔴 Заголовок БЕЗ тіла — теж «порожній блок». Новина з самою датою в назві не каже
   // людині нічого, а виглядає як повідомлення: гірше за відсутність.
   if (!title || !body) return { note: null, reason: "empty-block" };
-  return { note: { title: toPlainText(title), body: toPlainText(body) } };
+  const m = AUDIENCE_RE.exec(body);
+  const tag = m?.[1]?.trim() ?? null;
+  // Рядок-тег прибираємо з тіла: він службовий і людям у стрічці не потрібен.
+  const clean = m ? body.replace(m[0], "").replace(/\n{3,}/g, "\n\n").trim() : body;
+  const audience = tag === null || tag.toLowerCase() === "all"
+    ? null
+    : tag.split(",").map((t) => t.trim()).filter(Boolean);
+  return {
+    note: {
+      title: toPlainText(title),
+      body: toPlainText(clean),
+      audience,
+      audienceMissing: m === null,
+    },
+  };
 }
 
 /**
