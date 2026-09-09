@@ -52,6 +52,9 @@ import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
 import { recomputeClientKeys } from "../jobs/recomputeClientKeys.js";
 import { runJob } from "../jobs/jobRuns.js";
 import * as metrics from "../core/metrics.js";
+import { ga4Configured } from "../ga4/client.js";
+import { mergeAdDays } from "../ga4/report.js";
+import { dateParam } from "../core/queryParams.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly,
   pct, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
 import * as expectSplit from "../core/expectSplit.js";
@@ -5188,6 +5191,76 @@ dashboardRouter.get("/data-quality", async (req, res) => {
  *   non-target  = Кваліфікація 8921928 closed as lost (status 143) — rejected.
  * Both counts come from our synced `deals` (syncKommo pulls all pipelines).
  */
+/**
+ * 📊 РЕКЛАМА: день × кампанія (GA4) поруч із лідами CRM за той самий день.
+ *
+ * 🔴 ЩО ТУТ НОВОГО, А ЩО НІ (рішення власника 08.09.2026: «нова гранулярність»).
+ * ROMI/CPA/бюджет/дохід уже рахує КВП-звіт (`engines.ad`) — сюди їх НЕ переносимо й
+ * не дублюємо. Новим є рівень, якого не було ніде: **день × кампанія**. Тому екран
+ * показує витрати/кліки/сесії GA4, поруч факт із аркуша Сергія (він лишається другим
+ * джерелом — рішення власника), і ліди CRM за той самий день.
+ *
+ * 🔴 ЛІДИ БЕРЕ ЯДРО, А НЕ ЦЕЙ РОУТ. `metrics.conversionAdsByDay` — той самий
+ * `dealCohortCte`, що живить `conversion_ads`. Свій SQL по лідах тут розійшовся б із
+ * дашбордом через місяці (DoD п.1), і найтиповіше — через спрощений `paidAdSql`.
+ *
+ * ⚠️ РІВЕНЬ «клік → угода» НЕМОЖЛИВИЙ за побудовою: `gclid` у CRM заповнений у 0%
+ * (поле Kommo 482023, скан червня) і в нашій БД його свідомо немає (`schema.sql`).
+ * Тому зіставлення саме поденне, і на екрані це сказано словами, а не приховано.
+ */
+dashboardRouter.get("/ads", async (req, res) => {
+  const auth = req.auth!;
+  // Дзеркало межі `/lead-quality`: рекламні витрати — не менеджерська метрика.
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  // ⚠️ `dateParam`, а не `??`: швидкий період «Весь час» шле ПОРОЖНІ рядки
+  // (`?from=&to=`), і `??` їх не ловить — вони доходять до SQL як `('')::date`.
+  const from = dateParam(req.query.from);
+  const to = dateParam(req.query.to);
+  const { adSources } = await getSettings();
+
+  const [ga4, leads, sheet] = await Promise.all([
+    pool.query<{ day: string; campaign: string; channel_group: string | null;
+                 sessions: number; conversions: string; cost: string; clicks: number }>(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, campaign, channel_group,
+              sessions, conversions, cost, clicks
+         FROM ad_ga4_daily
+        WHERE ($1::date IS NULL OR day >= $1::date)
+          AND ($2::date IS NULL OR day <= $2::date)
+        ORDER BY day, campaign`,
+      [from, to]
+    ),
+    metrics.conversionAdsByDay({ from, to }, adSources),
+    // Другe джерело — аркуш Сергія. Читаємо, НЕ чіпаючи ні таблицю, ні її синк:
+    // у неї три читачі (/lead-quality, /kvp-report, statistics/computeAuto).
+    pool.query<{ day: string; budget_fact: string }>(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, budget_fact
+         FROM ad_budget_daily
+        WHERE ($1::date IS NULL OR day >= $1::date)
+          AND ($2::date IS NULL OR day <= $2::date)`,
+      [from, to]
+    ),
+  ]);
+
+  const leadsByDay = new Map(leads.map((l) => [l.day, l]));
+  const sheetByDay = new Map(sheet.rows.map((r) => [r.day, Number(r.budget_fact)]));
+  const campaigns = ga4.rows.map((r) => ({
+    day: r.day,
+    campaign: r.campaign,
+    channelGroup: r.channel_group,
+    sessions: Number(r.sessions),
+    conversions: Number(r.conversions),
+    cost: Number(r.cost),
+    clicks: Number(r.clicks),
+  }));
+
+  // Дні збирає ЧИСТА функція над трьома джерелами (GA4 ∪ ліди ядра ∪ аркуш) —
+  // саме тому її можна прогнати фікстурою «GA4 порожній, ліди є» (ворота `#372`).
+  // Поля в ній перелічені ЯВНО, без спреду (ворота `#17e2`).
+  const days = mergeAdDays(campaigns, leadsByDay, sheetByDay);
+
+  res.json({ days, campaigns, ga4Configured: ga4Configured() });
+});
+
 dashboardRouter.get("/lead-quality", async (req, res) => {
   const auth = req.auth!;
   // Company-wide lead-quality is a КВП/lead metric — managers never see it.

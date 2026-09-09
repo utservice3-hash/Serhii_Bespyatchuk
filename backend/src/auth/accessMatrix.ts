@@ -248,6 +248,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/lead-quality", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 📊 Екран «Реклама». Ролі — рішення власника 08.09.2026 дослівно: «всі в кого є
+  // адмін, квп, всі керівники». Тобто дзеркало /lead-quality МІНУС financier
+  // (він не керівник) — свідома різниця, не копіпаста.
+  { method: "GET", path: "/api/dashboard/ads", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.

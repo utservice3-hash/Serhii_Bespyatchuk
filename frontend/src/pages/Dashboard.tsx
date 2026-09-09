@@ -919,7 +919,12 @@ export function Dashboard() {
 
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
 
-      {section === "statistics" && <StatisticsChartsSection role={auth?.role} />}
+      {section === "statistics" && (
+        /* 📣 Вкладка «Реклама» всередині Статистик бере СПІЛЬНИЙ період-фільтр
+           (dateRange), а видимість — ключ `ads` зі `screens` токена. */
+        <StatisticsChartsSection role={auth?.role} screens={auth?.screens}
+          from={dateRange.from} to={dateRange.to} />
+      )}
       {section === "bank" && <BankSection />}
 
       {section === "teams" && auth?.role !== "manager" && (
@@ -1002,6 +1007,7 @@ export function Dashboard() {
       {section === "duty" && <DutySection role={auth?.role} />}
 
       {section === "depstats" && <StatisticsSection role={auth?.role} />}
+
 
       {section === "settings" && (
         <SettingsSection

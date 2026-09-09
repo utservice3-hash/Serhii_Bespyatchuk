@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { AdsSection } from "./AdsSection";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, Brush,
 } from "recharts";
+import { effGranOf } from "../statsGran";
 import { fetchStatsSeries, saveStatsManual, type StatsSeriesResp, type StatsSeries } from "../../../api";
 import { InfoHint } from "../widgets";
 
@@ -11,7 +13,9 @@ const COLORS = ["#2f6fdb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2"
 const MUTED = "var(--text-muted)";
 
 type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; weekOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string };
-type Cat = { key: string; icon: string; label: string; metrics: Metric[]; manualForm?: boolean; depstats?: boolean };
+type Cat = { key: string; icon: string; label: string; metrics: Metric[]; manualForm?: boolean; depstats?: boolean;
+  /** Вкладка з ВЛАСНИМ вмістом замість графіка з метрик (як `manualForm`). */
+  custom?: "ads" };
 
 const SEAM_CARS = "До лип 2026 — ручний лічильник таблиці; з лип 2026 — точний підрахунок CRM (тому рівень міг зміститись).";
 const CALLS_HINT = "Результативні дзвінки Ringostat (billsec>0); історія до лип 2026 — з таблиці (визначення могло відрізнятись).";
@@ -71,6 +75,12 @@ const CATS: Cat[] = [
     { key: "hr_fired", block: "hr", label: "Звільнено", hint: FINHR_HINT },
     { key: "hr_turnover_total", block: "hr", label: "Плинність", unit: "%", hint: FINHR_HINT },
   ] },
+  /* 📣 РЕКЛАМА — ПІСЛЯ HR (рішення власника 08.09.2026). Вкладка з ВЛАСНИМ вмістом,
+     а не з метрик: тут не часовий ряд одного показника, а таблиця день × кампанія з
+     GA4 поруч із лідами CRM. Механізм той самий, що в `manualForm` — категорія може
+     мати свій компонент; `metrics` порожній, тож перемикач показників для неї не
+     малюється (інакше він упав би на `metrics[0]`). */
+  { key: "ads", icon: "📣", label: "Реклама", custom: "ads", metrics: [] },
   { key: "manual", icon: "✍️", label: "Ручні", manualForm: true, metrics: [
     { key: "budget_yalogist", block: "marketing", label: "Бюджет Ялогист", unit: "₴", manual: true },
     { key: "budget_uts", block: "marketing", label: "Бюджет ЮТС", unit: "₴", manual: true },
@@ -102,11 +112,18 @@ function rangeWindow(rows: { period: string }[], range: string): { lo: number; h
   return { lo, hi };
 }
 
-export default function StatisticsChartsSection({ role }: { role?: string }) {
+export default function StatisticsChartsSection(
+  { role, screens, from, to }:
+  { role?: string; screens?: string[]; from?: string; to?: string }
+) {
   const [catKey, setCatKey] = useState("money");
   const cat = CATS.find((c) => c.key === catKey)!;
   const [metricKey, setMetricKey] = useState("avg_check");
-  const metric = cat.metrics.find((m) => m.key === metricKey) ?? cat.metrics[0];
+  /* 📣 Категорія може НЕ мати метрик (custom-вкладка «Реклама» — `metrics: []`), і тоді
+     `metric` це undefined. Тип пишемо ЯВНО: без `noUncheckedIndexedAccess` вираз
+     `cat.metrics[0]` типізується як `Metric`, тож компілятор мовчить, а падає рантайм.
+     Саме так 08.09.2026 клік по «Рекламі» клав увесь екран Статистик на `metric.monthOnly`. */
+  const metric: Metric | undefined = cat.metrics.find((m) => m.key === metricKey) ?? cat.metrics[0];
   const [gran, setGran] = useState<"day" | "week" | "month">("week");
   const [range, setRange] = useState("12м");
   const [resp, setResp] = useState<StatsSeriesResp | null>(null);
@@ -116,13 +133,15 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const [win, setWin] = useState<{ lo: number; hi: number; key: string } | null>(null);
   const [drag, setDrag] = useState<{ a: string | null; b: string | null }>({ a: null, b: null });
 
-  const effGran = metric.monthOnly ? "month" : metric.weekOnly ? "week" : gran; // напрямок без місячних (ВЛТ) → тиждень
+  const effGran = effGranOf(metric, gran); // напрямок без місячних (ВЛТ) → тиждень
   useEffect(() => {
     let alive = true; setResp(null); setHidden(new Set()); setWin(null);
-    fetchStatsSeries({ block: metric.block, metric: metric.key, granularity: effGran, ...(metric.unitScope ? { unit: metric.unitScope } : {}) })
-      .then((d) => alive && setResp(d)).catch(() => alive && setResp({ block: metric.block, metric: metric.key, granularity: effGran, seam: SEAM, crmAble: false, live: false, series: [] }));
+    if (!metric) return; // категорія без метрик (custom-вкладка) серій не тягне
+    const m = metric;    // звужений локальний — далі жодного дотику до можливо-порожнього `metric`
+    fetchStatsSeries({ block: m.block, metric: m.key, granularity: effGran, ...(m.unitScope ? { unit: m.unitScope } : {}) })
+      .then((d) => alive && setResp(d)).catch(() => alive && setResp({ block: m.block, metric: m.key, granularity: effGran, seam: SEAM, crmAble: false, live: false, series: [] }));
     return () => { alive = false; };
-  }, [metric.block, metric.key, effGran, metric.unitScope]);
+  }, [metric?.block, metric?.key, effGran, metric?.unitScope]);
 
   // усі періоди (вісь X) + рядки для recharts
   const { rows, seriesList } = useMemo(() => {
@@ -204,16 +223,26 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
           у `stats_series` 9 892 рядки, ВСІ `source='sheet'`, ручних — нуль, тобто
           формою жодного разу не скористались. Закривати сам роут — окреме рішення. */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "14px 0 16px" }}>
+        {/* ⚠️ ЛАНЦЮГ `CATS.filter((c) => !c.manualForm).map(` НЕ РОЗРИВАТИ: його читає
+            джерелом чужий гейт #363b («вкладка Ручні не має входу»). Тому дозвіл на
+            «Рекламу» перевіряється ВСЕРЕДИНІ map, а не ще одним `.filter` у ланцюгу —
+            інакше правильний гейт червоніє від переставляння коду (правило 10). */}
         {CATS.filter((c) => !c.manualForm).map((c) => (
-          <button key={c.key} onClick={() => { setCatKey(c.key); if (!c.manualForm) setMetricKey(c.metrics[0].key); }}
+          /* 📣 «Реклама» видима лише тим, кому дано ключ `ads` у screen_access
+             (сід: admin/kvp/ceo/opdir/team_lead — рішення власника). Це КОСМЕТИКА:
+             роут /api/dashboard/ads гейтить сервер незалежно. Фолбек для старих
+             токенів без `screens` — той самий, що в навігації: лише адмін. */
+          c.custom === "ads" && !(screens ? screens.includes("ads") : role === "admin") ? null : (
+          <button key={c.key} onClick={() => { setCatKey(c.key); if (c.metrics.length) setMetricKey(c.metrics[0].key); }}
             style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 14, fontWeight: 700, padding: "9px 15px", borderRadius: 11, cursor: "pointer",
               border: catKey === c.key ? "1px solid #1f2330" : "1px solid var(--border)", background: catKey === c.key ? "#1f2330" : "var(--card-bg)", color: catKey === c.key ? "#fff" : "var(--text)" }}>
             <span>{c.icon}</span> {c.label} {c.depstats && "✍️"}
           </button>
+          )
         ))}
       </div>
 
-      {!cat.manualForm && (
+      {!cat.manualForm && !cat.custom && metric && (
         <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px" }}>
           {/* Чипи метрик + контролі */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
@@ -315,10 +344,12 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
         </div>
       )}
 
+      {cat.custom === "ads" && <AdsSection from={from ?? ""} to={to ?? ""} />}
+
       {cat.manualForm && <ManualForm onClose={() => { setCatKey("money"); setMetricKey("avg_check"); }} isAdmin={role === "admin"} />}
 
       {/* Міні-плитки */}
-      {!cat.manualForm && <MiniTiles onPick={(c, m) => { setCatKey(c); setMetricKey(m); }} />}
+      {!cat.manualForm && !cat.custom && <MiniTiles onPick={(c, m) => { setCatKey(c); setMetricKey(m); }} />}
 
       {/* Пояснення */}
       <div style={{ background: "rgba(214,158,46,0.08)", border: "1px solid rgba(214,158,46,0.3)", borderRadius: 12, padding: "13px 16px", fontSize: 12.5, color: "var(--text)", lineHeight: 1.55, marginTop: 16 }}>

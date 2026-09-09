@@ -52,6 +52,14 @@ export const config = {
     // Secret: env only, never in the repo. Generated on the host with openssl rand -hex 32.
     ssoKey: process.env.TRACKER_SSO_KEY ?? "",
   },
+  // 📊 GA4 (Google Analytics 4) — витрати й кліки Google Ads по днях і кампаніях.
+  // Звʼязка Ads→GA4 віддає cost/clicks, тож окремий Google Ads API не потрібен.
+  // ОПЦІЙНО, як трекер і Ringostat: порожньо → джоба спить, дашборд стартує без GA4.
+  // Ключ сервісного акаунта — ФАЙЛ на диску (права 600), у репо його немає й не буде.
+  ga4: {
+    propertyId: process.env.GA4_PROPERTY_ID ?? "",
+    serviceAccountJsonPath: process.env.GA4_SERVICE_ACCOUNT_JSON ?? "",
+  },
   ringostat: {
     // Auth-key з Ringostat («Налаштування» → «Інтеграції» → «Ringostat API»).
     // СЕКРЕТ — лише з env, у репо не тримати. Порожньо → джоба дзвінків спить.

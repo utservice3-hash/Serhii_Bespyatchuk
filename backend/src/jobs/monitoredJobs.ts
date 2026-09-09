@@ -16,9 +16,15 @@ export const MONITORED_JOBS: { name: string; everyMin: number; why: string }[] =
   { name: "syncKommo", everyMin: 30, why: "основний синк угод — без нього дашборд замерзає" },
   { name: "syncStageEvents", everyMin: 30, why: "живить core/money.ts: гроші анкеряться на подіях стадій" },
   { name: "syncReceivables", everyMin: 15, why: "дебіторка з Google Sheet" },
+  // Додано 08.09.2026 разом із фіксом «комісія затирає платіж»: рахунок, що падає з помилкою,
+  // синк тихо пропускає (`skipped`), і без цього рядка про це не дізнався б ніхто.
+  { name: "syncBank", everyMin: 15, why: "виписка → екран «Виписка», зіставлення платежів з рахунками" },
   { name: "syncDealActivity", everyMin: 180, why: "живить «застряглі угоди»" },
   { name: "recomputeStatistics", everyMin: 60, why: "розділ «Статистики (відділи)»" },
   { name: "syncAdBudget", everyMin: 60, why: "рекламний бюджет → CPL/ROMI" },
+  // ⚠️ everyMin МУСИТЬ дорівнювати крону в index.ts (добово о 06:00) — сторож мовчання
+  // бʼє на 2× everyMin, тож розбіжність зробила б тривогу на саму себе.
+  { name: "syncGa4Ads", everyMin: 1440, why: "витрати й кліки Google Ads по кампаніях (GA4) → екран «Реклама»" },
   { name: "syncRingostatCalls", everyMin: 60, why: "дзвінки → «остання розмова»" },
   { name: "syncCalls", everyMin: 60, why: "покликові дзвінки → панель «Дзвінки» на екранах клієнтів; мовчання = панель показує вчорашнє" },
   { name: "recomputeClientKeys", everyMin: 60, why: "канонічний client_key: мовчання = аліаси застосовані наполовину, клієнт знову розколотий" },

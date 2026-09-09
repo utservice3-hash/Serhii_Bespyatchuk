@@ -54,6 +54,7 @@ import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.j
 import { syncTransfers } from "./jobs/syncTransfers.js";
 import { syncDealActivity, syncContactActivity, recomputeActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
+import { syncGa4Ads } from "./jobs/syncGa4Ads.js";
 import { syncReceivables } from "./jobs/syncReceivables.js";
 import { syncLeadgenRegistry } from "./jobs/syncLeadgenRegistry.js";
 import { overviewCache, OVERVIEW_TTL_MS } from "./core/lazyCache.js";
@@ -460,6 +461,26 @@ cron.schedule("15 * * * *", () => {
   void runJob("syncAdBudget", () => syncAdBudget());
 });
 void runJob("syncAdBudget", () => syncAdBudget());
+
+/**
+ * 📊 Реклама з GA4 — щодоби о 06:00 (Київ), день × кампанія.
+ *
+ * 🔴 БЕЗ СТАРТОВОГО ВИКЛИКУ, і це свідомо. ТЗ казало «старт відкладений як у решти»,
+ * але таких патернів у цьому файлі ТРИ: більшість джоб мають лише крон; `syncAdBudget`
+ * має ГОЛИЙ негайний виклик (рядок вище); справжній сходовий старт — це окремий масив
+ * `deferredStartup`. Додати сюди ще один негайний важкий fetch означало б працювати
+ * проти мети «старт без сплеску памʼяті», а класти добову джобу в сходи немає сенсу:
+ * вона однаково відпрацює о 06:00. Тому лише крон.
+ * ⚠️ Частота МУСИТЬ збігатися з `everyMin: 1440` у monitoredJobs.ts.
+ *
+ * ⚠️ ЄДИНА ДЖОБА З ЯВНИМ ЧАСОВИМ ПОЯСОМ — решта йде за годинником сервера. Тут пояс
+ * названо тому, що 06:00 обрано ВІДНОСНО КИЄВА (вікно, коли GA4 уже дорахував учора);
+ * без нього зміна TZ хоста тихо зсунула б час і разом із ним склад «учорашнього» дня.
+ * Опція підтримується node-cron@3 (`scheduled-task.js` передає її в Scheduler) — звірено.
+ */
+cron.schedule("0 6 * * *", () => {
+  void runJob("syncGa4Ads", () => syncGa4Ads());
+}, { timezone: "Europe/Kyiv" });
 
 // Prune stage events older than 24 months daily at 04:30 (bounded storage).
 cron.schedule("30 4 * * *", () => {
