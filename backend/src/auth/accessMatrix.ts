@@ -725,6 +725,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   //    керування людьми: ставить лише той, хто керує користувачами.
   { method: "PATCH", path: "/api/settings/managers/:id/work-state", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
+  // 💰 План реклами: ЧИТАТИ можуть усі, хто бачить екран «Реклама»; МІНЯТИ — лише ті,
+  // хто керує користувачами. Дивитись на план і ставити план — різні дії.
+  { method: "GET", path: "/api/settings/ad-plan", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["manager"] },
+  { method: "PUT", path: "/api/settings/ad-plan", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reactivate", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reset-password", cls: "deny-only",

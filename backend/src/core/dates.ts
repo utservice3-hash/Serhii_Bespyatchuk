@@ -132,3 +132,16 @@ export function isRealDate(day: string): boolean {
   const d = new Date(`${day}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === day;
 }
+
+/**
+ * Перше число місяця за Києвом: `2026-09-17` → `2026-09-01`.
+ *
+ * 🔴 ЖИВЕ ТУТ, А НЕ ПОРУЧ ІЗ ПЛАНОМ РЕКЛАМИ, І ЦЕ НЕ СТИЛЬ. `core/adBudget.ts` тягне
+ * `db/pool` → `config`, який КИДАЄ на відсутньому DATABASE_URL ще НА ІМПОРТІ. Гейт,
+ * що імпортував би звідти чисту функцію, падав би в кожному оточенні без бази — тобто
+ * не був би гейтом узагалі. `core/dates.ts` не імпортує нічого, тож перевірка біжить
+ * усюди. Той самий поділ уже зроблено для GA4 (`ga4/report.ts` проти `ga4/client.ts`).
+ */
+export function monthStartOf(day: string): string {
+  return `${day.slice(0, 7)}-01`;
+}

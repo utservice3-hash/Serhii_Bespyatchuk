@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { monthStartOf } from "./dates.js";
 
 /**
  * 💰 ПЛАН ВИТРАТ НА РЕКЛАМУ — ОДНЕ ДЖЕРЕЛО НА ВЕСЬ ПРОДУКТ.
@@ -21,11 +22,6 @@ import { pool } from "../db/pool.js";
  * а «перевитрата» показувала б 100% там, де плану просто не ставили. Нуль тут був би
  * рівно тим фальшивим значенням, від якого стереже правило про сентинели.
  */
-
-/** Перше число місяця за Києвом: `2026-09-17` → `2026-09-01`. */
-export function monthStart(day: string): string {
-  return `${day.slice(0, 7)}-01`;
-}
 
 /**
  * План на місяць(і), що покривають період. Ключ — перше число місяця.
@@ -63,6 +59,6 @@ export async function setAdPlan(day: string, plan: number, userId: number | null
     `INSERT INTO ad_budget_manual (month, plan, set_by, set_at)
      VALUES (($1)::date, $2, $3, now())
      ON CONFLICT (month) DO UPDATE SET plan = EXCLUDED.plan, set_by = EXCLUDED.set_by, set_at = now()`,
-    [monthStart(day), plan, userId]
+    [monthStartOf(day), plan, userId]
   );
 }
