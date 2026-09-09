@@ -266,3 +266,46 @@ test("#380j ВИГЛЯД: вкладка аналітики бере кольо�
     assert.ok(body.includes(cls), `🔴 вкладка не вживає спільний клас «${cls}»`);
   }
 });
+
+/**
+ * 🔗 #380k — КАЛЕНДАР НЕ ВИЛАЗИТЬ ЗА ЕКРАН І НЕ РОЗТЯГУЄ СТОРІНКУ.
+ *
+ * 🔴 Привід — власник 09.09.2026: місячний пікер на 1×1 розкривався за правим краєм, і
+ * до нього доводилось прокручувати сторінку вбік. Абсолютний елемент, що вийшов за
+ * контейнер, додається до `scrollWidth` документа — тобто ламає ширину ВСІЄЇ сторінки.
+ *
+ * 🔴 ТЕСТУЄТЬСЯ СПРАВЖНЯ ФУНКЦІЯ, а не її переказ: транспілюємо `popoverClamp.ts` і
+ * кличемо `clampPopoverLeft`. Написати арифметику вдруге в тесті означало б довести
+ * рівність двох рядків, написаних поруч (та сама пастка, що спіймала `#214c`).
+ *
+ * 📐 Межі, яких у живих даних не буває (вони залежать від ширини вікна читача), тому
+ * кожна перевіряється з ОБОХ боків: рівно вміщається / не вміщається на піксель.
+ */
+test("#380k КАЛЕНДАР: зсув тримає поповер у межах екрана з обох боків", async () => {
+  const ts = await import("typescript");
+  const src = readFileSync(fileURLToPath(new URL(
+    "../../../frontend/src/components/popoverClamp.ts", import.meta.url.replace("/dist/", "/src/"))), "utf8");
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const mod = await import(`data:text/javascript;base64,${Buffer.from(js, "utf8").toString("base64")}`);
+  const clamp = mod.clampPopoverLeft as (o: { anchorLeft: number; popWidth: number; viewportWidth: number; margin?: number }) => number;
+  const W = 268, M = 8, VP = 1440;
+
+  // ① Вміщається рівно — НУЛЬ, тобто стара поведінка збережена там, де вона правильна.
+  assert.equal(clamp({ anchorLeft: VP - M - W, popWidth: W, viewportWidth: VP }), 0,
+    "рівно вміщається — зсувати нічого не можна, інакше поповер поїде від своєї кнопки");
+  // ② Не вміщається на ОДИН піксель — зсув рівно на цей піксель, не більше.
+  assert.equal(clamp({ anchorLeft: VP - M - W + 1, popWidth: W, viewportWidth: VP }), -1);
+  // ③ Випадок зі скарги: кнопка в правому куті.
+  const anchor = 1190;
+  const shifted = clamp({ anchorLeft: anchor, popWidth: W, viewportWidth: VP });
+  assert.ok(shifted < 0, "поповер біля правого краю мусить тягнутись ліворуч");
+  assert.equal(anchor + shifted + W, VP - M, "після зсуву правий край стоїть рівно на відступі");
+
+  // ④ Лівий край сильніший за правий: на вузькому екрані показуємо ПОЧАТОК поповера.
+  const narrow = clamp({ anchorLeft: 100, popWidth: W, viewportWidth: 200 });
+  assert.equal(100 + narrow, M, "поповер ширший за екран — притиснути до лівого відступу, а не до правого");
+  // ⑤ Якір сам за лівим краєм (горизонтальна прокрутка) — тягнемо ПРАВОРУЧ.
+  assert.equal(clamp({ anchorLeft: 2, popWidth: W, viewportWidth: VP }), M - 2);
+  // ⑥ Дефолтний відступ узятий із того самого модуля, а не зашитий у виклику.
+  assert.equal(mod.POPOVER_EDGE_MARGIN, M, "змінили відступ у модулі — змініть і в гейті свідомо");
+});
