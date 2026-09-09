@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 import { NEWS_ALIVE, andAlive, DELETE_SQL } from "./newsVisibility.js";
-import { UNREAD_COUNT_SQL, UNREAD_BY_ID_SQL, MAX_ALIVE_ID_SQL } from "./newsSeen.js";
+import { unreadSinceQuery, unreadByIdQuery, maxVisibleIdQuery } from "./newsSeen.js";
+// 🎯 Три запити стали білдерами разом з адресністю (09.09.2026). Гейти нижче про
+//    ЖИВЕ/ВИДАЛЕНЕ, тож вкладки їм байдужі — передаємо порожні свідомо.
+const UNREAD_COUNT_SQL = unreadSinceQuery(null, []).text;
 
 const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 
@@ -86,20 +89,20 @@ test("#362 лічильник рахує ЖИВІ новини з id > мітк�
     const cc = await ins("третя");
 
     // мітка = a: живих із id > a → тільки b і c → 2
-    let n = (await c.query<{ n: number }>(UNREAD_BY_ID_SQL, [a])).rows[0].n;
+    let n = (await c.query<{ n: number }>(unreadByIdQuery(a, []).text, unreadByIdQuery(a, []).params)).rows[0].n;
     assert.equal(n, 2, "🔴 з мітки a має бути 2 непрочитані (b,c), а не інше");
 
     // третю мʼяко видаляємо — вона зникає з лічильника
     await c.query(DELETE_SQL, [cc, null]);
-    n = (await c.query<{ n: number }>(UNREAD_BY_ID_SQL, [a])).rows[0].n;
+    n = (await c.query<{ n: number }>(unreadByIdQuery(a, []).text, unreadByIdQuery(a, []).params)).rows[0].n;
     assert.equal(n, 1, "🔴 видалена новина досі рахується — значок рахує те, чого не відкрити");
 
     // «побачене» (id == b) більше не рахується: строге `>`, не `>=`
-    n = (await c.query<{ n: number }>(UNREAD_BY_ID_SQL, [b])).rows[0].n;
+    n = (await c.query<{ n: number }>(unreadByIdQuery(b, []).text, unreadByIdQuery(b, []).params)).rows[0].n;
     assert.equal(n, 0, "🔴 мітка на останній живій дала непрочитані — це `>=` замість `>`");
 
     // максимум ЖИВОГО id == b (третю видалено)
-    const maxId = (await c.query<{ max_id: number }>(MAX_ALIVE_ID_SQL)).rows[0].max_id;
+    const maxId = (await c.query<{ max_id: number }>(maxVisibleIdQuery([]).text, maxVisibleIdQuery([]).params)).rows[0].max_id;
     assert.equal(maxId, b, "🔴 max живого id враховує видалену — браузер запамʼятає не те");
   } finally {
     await c.end();
@@ -123,7 +126,7 @@ test("#362b 🪞 мітка 0 рахує всі живі — лічильник 
     await c.query(readFileSync(SCHEMA, "utf8"));
     for (const tl of ["одна", "дві", "три"]) await c.query(
       `INSERT INTO news (category, title, body, author) VALUES ('company',$1,'x','Дашборд')`, [tl]);
-    const n = (await c.query<{ n: number }>(UNREAD_BY_ID_SQL, [0])).rows[0].n;
+    const n = (await c.query<{ n: number }>(unreadByIdQuery(0, []).text, unreadByIdQuery(0, []).params)).rows[0].n;
     assert.equal(n, 3, "🔴 з міткою 0 (нічого не бачив) лічильник має дати всі 3 — інакше він мертвий");
   } finally {
     await c.end();
