@@ -9295,8 +9295,13 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       forecastPct: pctOf(revenue + expectedThisMonth, plan),
       conversion: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null, entered };
   };
-  const adBudget = (await pool.query<{ fact: string; plan: string; conv: string }>(
-    `SELECT COALESCE(SUM(budget_fact),0) fact, COALESCE(SUM(budget_plan),0) plan, COALESCE(SUM(conversions),0) conv FROM ad_budget_daily WHERE day >= $1 AND day <= $2`, [from, to])).rows[0];
+  // 💰 ПЛАН ТУТ НЕ ЧИТАЄТЬСЯ, І ЦЕ ПЕРЕВІРЕНО, А НЕ ПРИПУЩЕНО (09.09.2026).
+  // `SUM(budget_plan)` вибирався роками й НЕ мав жодного споживача: ROMI нижче рахується
+  // від `budgetFact`. Прибрано разом із появою ручного плану (`core/adBudget`), щоб
+  // наступний не вирішив, ніби КВП показує табличний план, і не пішов «узгоджувати» два
+  // джерела, яких насправді немає. Єдиний план у продукті — ручний, на екрані «Реклама».
+  const adBudget = (await pool.query<{ fact: string; conv: string }>(
+    `SELECT COALESCE(SUM(budget_fact),0) fact, COALESCE(SUM(conversions),0) conv FROM ad_budget_daily WHERE day >= $1 AND day <= $2`, [from, to])).rows[0];
   const adMonthly = await metrics.conversionAdsByMonth(scope, adSources);
   const adEntered = adMonthly.filter((r) => inRange(r.ym)).reduce((a, r) => a + r.entered, 0);
   const adWon = adMonthly.filter((r) => inRange(r.ym)).reduce((a, r) => a + r.wonEventually, 0);
