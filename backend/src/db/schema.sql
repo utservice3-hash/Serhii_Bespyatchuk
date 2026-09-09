@@ -247,18 +247,53 @@ CREATE TABLE IF NOT EXISTS ad_budget_daily (
 -- ⚠️ `cost`/`clicks` приходять із Google Ads ЧЕРЕЗ GA4 (звʼязка Ads→GA4), тому
 -- окремий Google Ads API не потрібен. Органічні рядки теж зберігаються — у них
 -- `cost = 0`, і це чесно видно на екрані, а не приховано фільтром.
+-- 🔴 КЛЮЧ — ТРИ КОЛОНКИ, І ЦЕ КУПЛЕНО ВТРАЧЕНИМИ ГРІШМИ (09.09.2026).
+-- Перша редакція мала `PRIMARY KEY (day, campaign)` — на дві колонки, тоді як GA4
+-- віддає рядки по ТРЬОХ вимірах (`date`, `sessionCampaignName`,
+-- `sessionDefaultChannelGroup`). Кампанія, що живе в кількох каналах — а Performance
+-- Max саме така, вона одночасно в `Cross-network` і `Paid Search`, — приходила двома
+-- рядками, і `ON CONFLICT (day, campaign) DO UPDATE SET cost = EXCLUDED.cost`
+-- ЗАТИРАВ перший другим замість зберегти обидва.
+-- 📐 Заміряно на бойових даних: той самий день між двома бекфілами дав 9 563 → 8 504,
+-- 8 369 → 6 985. Числа не просто занижені — вони НЕДЕТЕРМІНОВАНІ, бо перемагає той
+-- рядок, який GA4 віддав останнім, а порядок не гарантований.
+-- ⚠️ `channel_group` тому й `NOT NULL DEFAULT ''`: NULL у складеному ключі зробив би
+-- рядки без каналу невидимими для `ON CONFLICT` і повернув би те саме затирання
+-- з іншого боку.
 CREATE TABLE IF NOT EXISTS ad_ga4_daily (
   day DATE NOT NULL,
   campaign TEXT NOT NULL,
-  channel_group TEXT,
+  channel_group TEXT NOT NULL DEFAULT '',
   sessions INTEGER NOT NULL DEFAULT 0,
   conversions NUMERIC NOT NULL DEFAULT 0,
   cost NUMERIC NOT NULL DEFAULT 0,
   clicks INTEGER NOT NULL DEFAULT 0,
   synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (day, campaign)
+  PRIMARY KEY (day, campaign, channel_group)
 );
 CREATE INDEX IF NOT EXISTS idx_ad_ga4_daily_day ON ad_ga4_daily(day);
+
+-- Міграція наявної таблиці на трискладовий ключ. Ідемпотентна: на чистій базі
+-- умова не спрацьовує, бо ключ уже правильний.
+ALTER TABLE ad_ga4_daily ALTER COLUMN channel_group SET DEFAULT '';
+UPDATE ad_ga4_daily SET channel_group = '' WHERE channel_group IS NULL;
+ALTER TABLE ad_ga4_daily ALTER COLUMN channel_group SET NOT NULL;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'ad_ga4_daily'::regclass AND contype = 'p'
+       AND array_length(conkey, 1) = 2
+  ) THEN
+    -- Дані під старим ключем неповні за побудовою (частину затерто), тож
+    -- відновлюємо їх не «доливанням», а повторним бекфілом із GA4 — джерело
+    -- віддає весь період одним запитом, і це дешевше за спробу здогадатись,
+    -- що саме зникло.
+    DELETE FROM ad_ga4_daily;
+    ALTER TABLE ad_ga4_daily DROP CONSTRAINT ad_ga4_daily_pkey;
+    ALTER TABLE ad_ga4_daily ADD PRIMARY KEY (day, campaign, channel_group);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS lead_transfer_events (
   kommo_id BIGINT NOT NULL,

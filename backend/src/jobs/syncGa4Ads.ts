@@ -20,20 +20,34 @@ import { syncWindow, GA4_NOT_CONFIGURED, type Ga4AdsRow } from "../ga4/report.js
  * іде «привезла N рядків за M днів», а не «готово».
  */
 
-/** Запис рядків у `ad_ga4_daily`. Винесено, щоб бекфіл і щоденний прогін писали ОДНАКОВО. */
+/**
+ * Запис рядків у `ad_ga4_daily`. Винесено, щоб бекфіл і щоденний прогін писали ОДНАКОВО.
+ *
+ * 🔴 КЛЮЧ КОНФЛІКТУ — ТРИ КОЛОНКИ, І ЦЕ НЕ КОСМЕТИКА. GA4 віддає рядок на
+ * (`date`, `sessionCampaignName`, `sessionDefaultChannelGroup`), тож одна кампанія
+ * за один день приходить КІЛЬКОМА рядками, якщо живе в кількох каналах (Performance
+ * Max — одночасно `Cross-network` і `Paid Search`). Поки `ON CONFLICT` був на
+ * (day, campaign), другий рядок ЗАТИРАВ перший: витрати зникали, і — гірше — сума
+ * ставала недетермінованою, бо перемагав той рядок, який GA4 віддав останнім.
+ * 📐 Заміряно на бойових даних між двома бекфілами: 25.08 9 563 → 8 504,
+ * 01.09 8 369 → 6 985. Той самий день, той самий код, різні числа.
+ *
+ * ⚠️ `channelGroup` нормалізується до `""`, а не лишається NULL: у складеному ключі
+ * NULL ніколи не дорівнює NULL, тож рядки без каналу не ловились би `ON CONFLICT`
+ * і плодили б дублікати — те саме затирання, тільки навпаки.
+ */
 export async function upsertGa4Rows(rows: Ga4AdsRow[]): Promise<number> {
   for (const r of rows) {
     await pool.query(
       `INSERT INTO ad_ga4_daily (day, campaign, channel_group, sessions, conversions, cost, clicks, synced_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-       ON CONFLICT (day, campaign) DO UPDATE SET
-         channel_group = EXCLUDED.channel_group,
+       ON CONFLICT (day, campaign, channel_group) DO UPDATE SET
          sessions = EXCLUDED.sessions,
          conversions = EXCLUDED.conversions,
          cost = EXCLUDED.cost,
          clicks = EXCLUDED.clicks,
          synced_at = now()`,
-      [r.day, r.campaign, r.channelGroup, r.sessions, r.conversions, r.cost, r.clicks]
+      [r.day, r.campaign, r.channelGroup ?? "", r.sessions, r.conversions, r.cost, r.clicks]
     );
   }
   return rows.length;
