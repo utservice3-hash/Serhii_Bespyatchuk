@@ -364,13 +364,19 @@ export default function StatisticsChartsSection(
           і жодного способу це виправити, не пішовши на інший розділ. */}
       {cat.custom === "ads" && (
         <>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: ".8px",
-                           textTransform: "uppercase", color: MUTED }}>Період</span>
-            <DateRangeFilter
-              value={{ from: from ?? "", to: to ?? "" }}
-              onChange={(r) => { setDateRange(r); setDatePreset(null); }}
-            />
+          {/* 🎨 РІВНО ТА САМА РОЗМІТКА, ЩО НА ЗВІТІ Й ОГЛЯДІ: `page-header` > `page-filters`
+              з календарем, і `QuickPeriods` окремим рядком під ним. Своїх стилів тут немає
+              НАВМИСНО — перша редакція мала власну обгортку з підписом «ПЕРІОД», і це був
+              третій вигляд одного й того самого контрола в продукті. Спільні класи ще й
+              несуть куплені уроки: `page-filters` має `flex-wrap`, без якого ряд фільтрів
+              вилізав за екран і останній ставав недосяжним. */}
+          <div className="page-header">
+            <div className="page-filters">
+              <DateRangeFilter
+                value={{ from: from ?? "", to: to ?? "" }}
+                onChange={(r) => { setDateRange(r); setDatePreset(null); }}
+              />
+            </div>
           </div>
           <QuickPeriods active={datePreset} onSelect={(id, range) => { setDatePreset(id); setDateRange(range); }} />
           {/* Право змінювати план мусить збігатися з межами роуту PUT /settings/ad-plan
