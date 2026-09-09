@@ -622,6 +622,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "PUT", path: "/api/news/km-prices", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // Профіль ТОЙ САМИЙ, що в `/stats/scores`, і це не збіг: обидва стоять на `viewDenied`,
+  // тобто пускають наскрізного глядача або того, хто хоч один тип ПРОВОДИТЬ. Фінансист
+  // не проводить жодного й наскрізного не має — тому deny, як і на балах.
+  { method: "GET", path: "/api/one-on-ones/analytics", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["manager", "financier"] },
   { method: "GET", path: "/api/one-on-ones/conduct-types", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "GET", path: "/api/one-on-ones/enps", cls: "GET",
