@@ -2,6 +2,7 @@ import { Router } from "express";
 import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
+import { calendarAccountsSql, absencesSql, isMine, ownScopeSql, resolveOwner } from "../core/absences.js";
 
 /**
  * Графік чергування. Тімлід (РНК) призначає менеджерів своєї команди на дні,
@@ -167,25 +168,26 @@ dutyRouter.delete("/:id", async (req, res) => {
 const ABSENCE_KINDS = new Set(["day_off", "vacation", "sick", "short_day"]);
 type Auth = { role: string; roleKey: string; teamId: number | null; managerId: number | null; userId: number };
 
-/** Менеджери для FE-фільтра відсутностей — УСІ команди (не лише РНК). Роль-скоуп:
- *  admin → усі активні (або обрана команда); team_lead → своя команда; manager → лише себе. */
+/** АКАУНТИ для селекту відсутностей — усі, хто може мати відпустку, не лише CRM-менеджери
+ *  (рішення власника 09.09.2026, `core/absences.ts`). Роль-скоуп: admin → усі активні (або
+ *  обрана команда); team_lead → своя команда; manager → лише себе.
+ *  `id` = users.id (значення селекту); `managerId` — довідково. */
 async function calendarManagerScope(auth: Auth, teamId: number | null) {
   const params: unknown[] = [];
-  const conds = ["m.is_active"];
-  if (auth.role === "manager") { params.push(auth.managerId); conds.push(`m.id = $${params.length}`); }
+  const conds: string[] = [];
+  if (auth.role === "manager") { params.push(auth.userId); conds.push(`u.id = $${params.length}`); }
   else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`m.team_id = $${params.length}`); }
   else if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
-  const r = await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
-    `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m LEFT JOIN teams t ON t.id = m.team_id
-      WHERE ${conds.join(" AND ")} ORDER BY t.name NULLS LAST, m.name`, params);
-  return r.rows.map((x) => ({ id: x.id, name: x.name, teamId: x.team_id, teamName: x.team_name }));
+  const r = await pool.query<{ user_id: number; manager_id: number | null; name: string; team_id: number | null; team_name: string | null }>(
+    calendarAccountsSql(conds), params);
+  return r.rows.map((x) => ({ id: x.user_id, managerId: x.manager_id, name: x.name, teamId: x.team_id, teamName: x.team_name }));
 }
 
 /** Роль-скоуп відсутностей СЕРВЕРНО (сервер не віддає чужі дні):
  *  admin — усе (або ?teamId); team_lead — своя команда; manager — ЛИШЕ свої. */
 function absenceScope(auth: Auth, teamId: number | null, params: unknown[]): string {
   const conds: string[] = [];
-  if (auth.role === "manager") { params.push(auth.managerId); conds.push(`a.manager_id = $${params.length}`); }
+  if (auth.role === "manager") { params.push(auth.managerId, auth.userId); conds.push(ownScopeSql("a", params.length - 1, params.length)); }
   else if (auth.role === "team_lead") { params.push(auth.teamId); conds.push(`a.team_id = $${params.length}`); }
   else if (teamId) { params.push(teamId); conds.push(`a.team_id = $${params.length}`); }
   return conds.length ? " AND " + conds.join(" AND ") : "";
@@ -196,28 +198,17 @@ async function queryAbsences(auth: Auth, teamId: number | null, from: string, to
   const scope = absenceScope(auth, teamId, params);
   // Перетин діапазону відсутності з вікном [from,to]: start<=to AND end>=from.
   const r = await pool.query<{
-    id: number; manager_id: number; manager_name: string; team_id: number | null; team_name: string | null;
+    id: number; manager_id: number | null; user_id: number | null; owner_name: string; team_id: number | null; team_name: string | null;
     kind: string; start_date: string; end_date: string; hours: string | null; note: string | null;
     status: string; created_by: number | null; created_at: string; approved_by: number | null;
     approver_name: string | null; approved_at: string | null;
-  }>(
-    `SELECT a.id, a.manager_id, m.name AS manager_name, a.team_id, t.name AS team_name,
-            a.kind, to_char(a.start_date,'YYYY-MM-DD') AS start_date, to_char(a.end_date,'YYYY-MM-DD') AS end_date,
-            a.hours, a.note, a.status, a.created_by, to_char(a.created_at,'YYYY-MM-DD"T"HH24:MI:SSZ') AS created_at,
-            a.approved_by, COALESCE(am.name, au.email) AS approver_name, to_char(a.approved_at,'YYYY-MM-DD"T"HH24:MI:SSZ') AS approved_at
-       FROM team_calendar_absences a
-       JOIN managers m ON m.id = a.manager_id
-       LEFT JOIN teams t ON t.id = a.team_id
-       LEFT JOIN users au ON au.id = a.approved_by
-       LEFT JOIN managers am ON am.id = au.manager_id
-      WHERE a.start_date <= $2 AND a.end_date >= $1 ${scope}
-      ORDER BY a.start_date, m.name`, params);
+  }>(absencesSql(scope), params);
   return r.rows.map((x) => ({
-    id: x.id, managerId: x.manager_id, managerName: x.manager_name, teamId: x.team_id, teamName: x.team_name,
+    id: x.id, managerId: x.manager_id, userId: x.user_id, managerName: x.owner_name, teamId: x.team_id, teamName: x.team_name,
     kind: x.kind, startDate: x.start_date, endDate: x.end_date, hours: x.hours == null ? null : Number(x.hours),
     note: x.note, status: x.status, createdBy: x.created_by, createdAt: x.created_at,
     approvedBy: x.approved_by, approverName: x.approver_name, approvedAt: x.approved_at,
-    mine: x.manager_id === auth.managerId,
+    mine: isMine(x, auth),
   }));
 }
 
@@ -226,7 +217,7 @@ async function queryAbsences(auth: Auth, teamId: number | null, from: string, to
 async function countApprovablePending(auth: Auth, from: string, to: string): Promise<number> {
   const params: unknown[] = [from, to];
   let scope = "";
-  if (auth.role === "manager") { params.push(auth.managerId); scope = ` AND a.manager_id = $${params.length}`; }
+  if (auth.role === "manager") { params.push(auth.managerId, auth.userId); scope = ` AND ${ownScopeSql("a", params.length - 1, params.length)}`; }
   else if (auth.role === "team_lead") { params.push(auth.teamId); scope = ` AND a.team_id = $${params.length}`; }
   const r = await pool.query<{ n: string }>(
     `SELECT COUNT(*) n FROM team_calendar_absences a
@@ -240,7 +231,6 @@ dutyRouter.post("/absences", async (req, res) => {
   const auth = req.auth! as Auth;
   const kind = String(req.body?.kind ?? "");
   if (!ABSENCE_KINDS.has(kind)) return res.status(400).json({ error: "kind ∈ day_off|vacation|sick|short_day" });
-  let managerId = Number(req.body?.managerId);
   const start = String(req.body?.startDate ?? "").slice(0, 10);
   // Поденні типи (day_off/short_day) ігнорують end — end=start. Діапазонні беруть end.
   const isRange = kind === "vacation" || kind === "sick";
@@ -249,23 +239,37 @@ dutyRouter.post("/absences", async (req, res) => {
   const note = req.body?.note != null ? String(req.body.note).slice(0, 500) : null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return res.status(400).json({ error: "startDate/endDate (YYYY-MM-DD)" });
   if (end < start) return res.status(400).json({ error: "endDate < startDate" });
-  // Хто для кого:
-  if (auth.role === "manager") managerId = auth.managerId!;           // менеджер — лише собі
-  if (!managerId) return res.status(400).json({ error: "managerId обовʼязковий" });
-  const mgr = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1 AND is_active`, [managerId]);
-  if (!mgr.rowCount) return res.status(404).json({ error: "Менеджера не знайдено" });
-  const teamId = mgr.rows[0].team_id;
+  // Хто для кого. Нова збірка шле `userId`; стара збірка у відкритій вкладці — `managerId`.
+  // Менеджер і будь-який акаунт без прав апрувера — лише собі (власний userId), що б не прислали.
+  let userId = Number(req.body?.userId) || null;
+  let managerIdIn = Number(req.body?.managerId) || null;
+  if (!isAdminOrLead(auth)) { userId = auth.userId; managerIdIn = null; }
+  if (!userId && !managerIdIn) { userId = auth.userId; }   // апрувер без вибору — «на себе»
+  const [byUser, byManager] = await Promise.all([
+    userId ? pool.query<{ user_id: number; manager_id: number | null; team_id: number | null }>(
+      `SELECT u.id AS user_id, m.id AS manager_id, m.team_id
+         FROM users u LEFT JOIN managers m ON m.id = u.manager_id AND m.is_active
+        WHERE u.id = $1 AND u.is_active`, [userId]) : null,
+    !userId && managerIdIn ? pool.query<{ manager_id: number; user_id: number | null; team_id: number | null }>(
+      `SELECT m.id AS manager_id, u.id AS user_id, m.team_id
+         FROM managers m LEFT JOIN users u ON u.manager_id = m.id AND u.is_active
+        WHERE m.id = $1 AND m.is_active`, [managerIdIn]) : null,
+  ]);
+  const owner = resolveOwner({ byUser: byUser?.rows[0] ?? null, byManager: byManager?.rows[0] ?? null });
+  if (!owner) return res.status(404).json({ error: "Співробітника не знайдено або акаунт неактивний" });
+  const { teamId } = owner;
+  // Тімлід — лише своя команда; безкомандні акаунти (HR, бухгалтерія, адміни) — лише адмін-скоуп.
   if (auth.role === "team_lead" && teamId !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
   // 🔴 «Не погоджуєш сам себе»: відмітка АПРУВЕРА одразу approved, ОКРІМ власної відсутності
   // тімліда (він не погоджує себе → pending на адміна). Admin → завжди approved (сам собі теж:
   // адмін — найвищий рівень, вище нема). manager → завжди pending.
-  const isSelf = managerId === auth.managerId;
+  const isSelf = owner.userId === auth.userId || (owner.managerId != null && owner.managerId === auth.managerId);
   const approver = isAdminScope(auth) || (auth.role === "team_lead" && teamId === auth.teamId && !isSelf);
   const status = approver ? "approved" : "pending";
   const r = await pool.query<{ id: number }>(
-    `INSERT INTO team_calendar_absences (manager_id, team_id, kind, start_date, end_date, hours, note, status, created_by, approved_by, approved_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, ${approver ? "$9" : "NULL"}, ${approver ? "now()" : "NULL"}) RETURNING id`,
-    [managerId, teamId, kind, start, end, hours, note, status, auth.userId]);
+    `INSERT INTO team_calendar_absences (manager_id, user_id, team_id, kind, start_date, end_date, hours, note, status, created_by, approved_by, approved_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, ${approver ? "$10" : "NULL"}, ${approver ? "now()" : "NULL"}) RETURNING id`,
+    [owner.managerId, owner.userId, teamId, kind, start, end, hours, note, status, auth.userId]);
   res.json({ ok: true, id: r.rows[0].id, status });
 });
 
@@ -274,12 +278,13 @@ async function decide(req: import("express").Request, res: import("express").Res
   const auth = req.auth! as Auth;
   if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   const id = Number(req.params.id);
-  const row = await pool.query<{ team_id: number | null; manager_id: number; status: string }>(`SELECT team_id, manager_id, status FROM team_calendar_absences WHERE id = $1`, [id]);
+  const row = await pool.query<{ team_id: number | null; manager_id: number | null; user_id: number | null; status: string }>(`SELECT team_id, manager_id, user_id, status FROM team_calendar_absences WHERE id = $1`, [id]);
   if (!row.rowCount) return res.status(404).json({ error: "Не знайдено" });
   if (auth.role === "team_lead") {
+    // team_id NULL (безкомандний акаунт) ≠ teamId тімліда → 403: безкомандних погоджує адмін.
     if (row.rows[0].team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
     // 🔴 Тімлід НЕ погоджує власну відсутність — це робить адмін (рівень вище).
-    if (row.rows[0].manager_id === auth.managerId) return res.status(403).json({ error: "Власну відсутність погоджує адміністратор" });
+    if (isMine(row.rows[0], auth)) return res.status(403).json({ error: "Власну відсутність погоджує адміністратор" });
   }
   await pool.query(
     `UPDATE team_calendar_absences SET status = $1, approved_by = $2, approved_at = now(), updated_at = now() WHERE id = $3`,
@@ -293,13 +298,13 @@ dutyRouter.post("/absences/:id/reject", (req, res) => decide(req, res, "rejected
 dutyRouter.delete("/absences/:id", async (req, res) => {
   const auth = req.auth! as Auth;
   const id = Number(req.params.id);
-  const row = await pool.query<{ team_id: number | null; manager_id: number; created_by: number | null; status: string }>(
-    `SELECT team_id, manager_id, created_by, status FROM team_calendar_absences WHERE id = $1`, [id]);
+  const row = await pool.query<{ team_id: number | null; manager_id: number | null; user_id: number | null; created_by: number | null; status: string }>(
+    `SELECT team_id, manager_id, user_id, created_by, status FROM team_calendar_absences WHERE id = $1`, [id]);
   if (!row.rowCount) return res.json({ ok: true });
   const a = row.rows[0];
   const isAdmin = isAdminScope(auth);
   const isLeadOwn = auth.role === "team_lead" && a.team_id === auth.teamId;
-  const isOwnPending = a.manager_id === auth.managerId && a.status === "pending";
+  const isOwnPending = isMine(a, auth) && a.status === "pending";
   if (!isAdmin && !isLeadOwn && !isOwnPending) return res.status(403).json({ error: "Немає прав видалити цю відмітку" });
   await pool.query(`DELETE FROM team_calendar_absences WHERE id = $1`, [id]);
   res.json({ ok: true });

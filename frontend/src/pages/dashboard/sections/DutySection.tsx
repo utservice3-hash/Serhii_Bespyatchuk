@@ -305,7 +305,7 @@ function DayEditorModal({ range, data, role, canEditDuty, onClose, onChanged }: 
 
   const wrap = async (fn: () => Promise<void>) => { setBusy(true); setErr(null); try { await fn(); onChanged(); } catch (e) { setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка"); } finally { setBusy(false); } };
   const addAbsence = () => wrap(async () => {
-    await createAbsence({ managerId: isManager ? undefined : (absMgr ? Number(absMgr) : undefined), kind, startDate, endDate: rangeKind ? endDate : undefined, hours: kind === "short_day" ? hours : undefined, note: absNote.trim() || undefined });
+    await createAbsence({ userId: isManager ? undefined : (absMgr ? Number(absMgr) : undefined), kind, startDate, endDate: rangeKind ? endDate : undefined, hours: kind === "short_day" ? hours : undefined, note: absNote.trim() || undefined });
     setAbsNote("");
   });
   const addDuty = () => wrap(async () => { await assignDuty({ date: range.from, managerId: Number(dutyMgr), shift, note: dutyNote.trim() || undefined }); setDutyMgr(""); setDutyNote(""); });
@@ -366,7 +366,7 @@ function DayEditorModal({ range, data, role, canEditDuty, onClose, onChanged }: 
           </div>
           {!isManager && (
             <select value={absMgr} onChange={(e) => setAbsMgr(e.target.value ? Number(e.target.value) : "")}>
-              <option value="">{role === "admin" ? "Оберіть менеджера…" : "Оберіть (або лишіть — на себе)"}</option>
+              <option value="">{role === "admin" ? "Оберіть співробітника (або лишіть — на себе)" : "Оберіть (або лишіть — на себе)"}</option>
               {data.absenceManagers.map((m) => <option key={m.id} value={m.id}>{m.name}{m.teamName ? ` (${m.teamName})` : ""}</option>)}
             </select>
           )}

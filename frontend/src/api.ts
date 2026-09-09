@@ -998,13 +998,14 @@ export interface DutyManager {
 export type AbsenceKind = "day_off" | "vacation" | "sick" | "short_day";
 export type AbsenceStatus = "pending" | "approved" | "rejected";
 export interface Absence {
-  id: number; managerId: number; managerName: string; teamId: number | null; teamName: string | null;
+  id: number; managerId: number | null; userId: number | null; managerName: string; teamId: number | null; teamName: string | null;
   kind: AbsenceKind; startDate: string; endDate: string; hours: number | null; note: string | null;
   status: AbsenceStatus; createdBy: number | null; createdAt: string;
   approvedBy: number | null; approverName: string | null; approvedAt: string | null; mine: boolean;
 }
 export interface Holiday { id: number; date: string; name: string }
-export interface CalendarManager { id: number; name: string; teamId: number | null; teamName: string | null }
+/** `id` = users.id — акаунт; `managerId` довідково (null для ручних акаунтів: HR, бухгалтерія, адміни). */
+export interface CalendarManager { id: number; managerId: number | null; name: string; teamId: number | null; teamName: string | null }
 export interface DutySchedule {
   from: string;
   to: string;
@@ -1027,7 +1028,7 @@ export async function assignDuty(body: { date: string; managerId: number; shift?
 export async function removeDuty(id: number): Promise<void> {
   await api.delete(`/duty/${id}`);
 }
-export async function createAbsence(body: { managerId?: number; kind: AbsenceKind; startDate: string; endDate?: string; hours?: number; note?: string }): Promise<{ ok: boolean; id: number; status: AbsenceStatus }> {
+export async function createAbsence(body: { userId?: number; managerId?: number; kind: AbsenceKind; startDate: string; endDate?: string; hours?: number; note?: string }): Promise<{ ok: boolean; id: number; status: AbsenceStatus }> {
   const { data } = await api.post<{ ok: boolean; id: number; status: AbsenceStatus }>("/duty/absences", body);
   return data;
 }
