@@ -8,6 +8,7 @@ import {
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
 import { DateRangeFilter, QuickPeriods, getDateRange } from "../../../components/DateRangeFilter";
+import { InfoHint } from "../widgets";
 import { enpsColor, CLASS_UI, BAND_COLOR, SCALE_CAPTION } from "./enpsScale";
 import { legacySections, unmappedKeys, averageOfScores, sameScore, isFullyUnmapped } from "./oneOnOneLegacy";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
@@ -964,6 +965,13 @@ function ShareTile({ kind, pct, count }: { kind: "promoter" | "passive" | "detra
  * 🔴 ЧОГО РОЛЬ НЕ БАЧИТЬ — «НЕДОСТУПНО», А НЕ «0». eNPS живе в типі В, який проводить лише
  * наскрізний глядач. Тімліду показати «0 детракторів» означало б повідомити добру новину
  * там, де насправді немає доступу.
+ *
+ * 🎨 ВИГЛЯД — ТОЙ САМИЙ, ЩО В РЕШТІ ДАШБОРДА, і це не косметика. Плитки — `kpi-grid`/
+ * `kpi-card` з кольоровою смугою зверху (як «Постійні від лідогену» й «Архів дебіторки»),
+ * пояснення — `InfoHint`, таблиці — `data-table compact`. Перша редакція малювала власні
+ * плашки інлайновими `rgba(...)`: у СВІТЛІЙ темі вони виглядали схоже, а в темній ставали
+ * чужими плямами, бо проєкт має тематичні токени статусів (`--danger`/`--danger-bg`,
+ * `--warn`, `--ok`) саме для цього — і вони визначені для обох тем.
  */
 function AnalyticsView({ data, month }: { data: O2OAnalytics | null; month: string }) {
   if (!data) return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
@@ -971,7 +979,22 @@ function AnalyticsView({ data, month }: { data: O2OAnalytics | null; month: stri
   // Сигнал бере дані з типу В лише один — решта з A/Б. Право на кожен показуємо чесно.
   const visible = (k: O2OSignalKey) => (k === "enpsLow" ? sources.V : sources.A || sources.B);
   const order: O2OSignalKey[] = ["missed", "never", "avgLow", "drop", "enpsLow", "answerLow", "tasksOpen"];
-  const tone = (k: O2OSignalKey) => (k === "never" ? "rgba(128,128,128,.10)" : counts[k] > 0 ? "rgba(197,20,28,.09)" : "rgba(31,122,77,.09)");
+  /* Токени статусів, а не свої кольори: `never` — не провина тімліда, а питання власнику,
+     тож попередження, не тривога. Нуль — зелений: «цього місяця чисто» теж є відповіддю. */
+  const toneOf = (k: O2OSignalKey, n: number) =>
+    n === 0 ? { fg: "var(--ok)", bg: "var(--ok-bg)" }
+      : k === "never" ? { fg: "var(--warn)", bg: "var(--warn-bg)" }
+        : { fg: "var(--danger)", bg: "var(--danger-bg)" };
+
+  const chip = (k: O2OSignalKey, text: string, title: string) => {
+    const t = toneOf(k, 1);
+    return (
+      <span key={k} title={title}
+        style={{ fontSize: 11.5, fontWeight: 600, padding: "3px 9px", borderRadius: "var(--r-pill)",
+          background: t.bg, color: t.fg, maxWidth: "100%", overflow: "hidden",
+          textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text}</span>
+    );
+  };
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
@@ -981,23 +1004,27 @@ function AnalyticsView({ data, month }: { data: O2OAnalytics | null; month: stri
           У ростері {data.rosterSize} осіб (активні, з командою). Порівняння — з {data.prevMonth}.
           Тімліду належить зустріч типу Б, решті — типу A.
         </p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10 }}>
-          {order.map((k) => (
-            <div key={k} style={{ background: visible(k) ? tone(k) : "rgba(128,128,128,.06)", borderRadius: 12, padding: "10px 12px" }}>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>
-                {visible(k)
-                  ? (counts[k] > 0 ? counts[k] : <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)" }}>нікого</span>)
-                  : <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>недоступно вашій ролі</span>}
+        <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 0 }}>
+          {order.map((k) => {
+            const seen = visible(k);
+            const t = toneOf(k, seen ? counts[k] : 0);
+            return (
+              <div key={k} className="kpi-card" style={{ borderTop: `3px solid ${seen ? t.fg : "var(--border)"}` }}>
+                <span className="kpi-label">{labels[k]}<InfoHint text={notes[k]} /></span>
+                <span className="kpi-value" style={{ color: seen && counts[k] > 0 ? t.fg : undefined }}>
+                  {seen
+                    ? (counts[k] > 0 ? counts[k] : <span style={{ fontSize: 15, fontWeight: 600, color: "var(--text-muted)" }}>нікого</span>)
+                    : <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>недоступно вашій ролі</span>}
+                </span>
               </div>
-              <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 2 }}>{labels[k]}</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3, lineHeight: 1.35 }}>{notes[k]}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         {data.tasksWithoutDeadline > 0 && (
-          <p style={{ margin: "12px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
-            ⚠️ Ще {data.tasksWithoutDeadline} відкритих задач 1×1 <b>без дедлайну</b> — вони не належать жодному місяцю
-            й у сигнал вище не входять.
+          <p style={{ margin: "12px 0 0", fontSize: 12.5, color: "var(--warn)", background: "var(--warn-bg)",
+            borderRadius: "var(--r-lg)", padding: "10px 14px" }}>
+            Ще {data.tasksWithoutDeadline} відкритих задач 1×1 <b>без дедлайну</b> — вони не належать жодному
+            місяцю й у плитку «{labels.tasksOpen}» не входять.
           </p>
         )}
       </div>
@@ -1005,14 +1032,16 @@ function AnalyticsView({ data, month }: { data: O2OAnalytics | null; month: stri
       <div style={CARD}>
         <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>З ким саме</h2>
         <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--text-muted)" }}>
-          Людина без жодного сигналу в списку не показується — це перелік проблем, а не ростер.
+          Людина без жодного сигналу тут не показується — це перелік проблем, а не ростер.
         </p>
         {data.people.length === 0
           ? <p className="loading-text" style={{ margin: 0 }}>Жодного сигналу за цей місяць.</p>
           : (
-            <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "grid", gap: 2 }}>
               {data.people.map((p) => (
-                <div key={p.managerId} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderTop: "1px solid rgba(128,128,128,.12)" }}>
+                <div key={p.managerId}
+                  style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 0",
+                    borderTop: "1px solid var(--border)" }}>
                   <Avatar name={p.name} size={30} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 13.5 }}>
@@ -1021,13 +1050,8 @@ function AnalyticsView({ data, month }: { data: O2OAnalytics | null; month: stri
                         {p.teamName ?? "Поза командами"} · тип {p.owed}
                       </span>
                     </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                      {p.hits.map((h) => (
-                        <span key={h.key} title={h.detail}
-                          style={{ fontSize: 11.5, padding: "3px 8px", borderRadius: 8, background: tone(h.key), maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          <b>{labels[h.key]}</b>{h.detail ? ` — ${h.detail}` : ""}
-                        </span>
-                      ))}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 5 }}>
+                      {p.hits.map((h) => chip(h.key, h.detail || labels[h.key], `${labels[h.key]} — ${h.detail}`))}
                     </div>
                   </div>
                 </div>
@@ -1042,15 +1066,22 @@ function AnalyticsView({ data, month }: { data: O2OAnalytics | null; month: stri
           Найслабші питання форми за місяць — без порогу: це відповідь на «що покращити», а не «де біда».
         </p>
         {data.weakQuestions.length === 0
-          ? <p className="loading-text" style={{ margin: "0 0 14px" }}>За цей місяць оцінок немає.</p>
+          ? <p className="loading-text" style={{ margin: "0 0 16px" }}>За цей місяць оцінок немає.</p>
           : (
-            <div style={{ overflowX: "auto", marginBottom: 16 }}>
+            <div style={{ overflowX: "auto", marginBottom: 18 }}>
               <table className="data-table compact" style={{ minWidth: 420 }}>
-                <thead><tr><th style={{ textAlign: "left" }}>Питання</th><th style={{ textAlign: "center" }}>Середнє</th><th style={{ textAlign: "center" }}>Відповідей</th></tr></thead>
+                <thead><tr>
+                  <th style={{ textAlign: "left" }}>Питання</th>
+                  <th style={{ textAlign: "center" }}>Середнє</th>
+                  <th style={{ textAlign: "center" }}>Відповідей</th>
+                </tr></thead>
                 <tbody>
                   {data.weakQuestions.map((w) => (
                     <tr key={w.qKey}>
-                      <td style={{ textAlign: "left" }}>{w.label ?? <span title="Питання зняли з форми — лишився лише ключ" style={{ color: "var(--text-muted)" }}>{w.qKey} (питання зняте)</span>}</td>
+                      <td style={{ textAlign: "left" }}>
+                        {w.label ?? <span title="Питання зняли з форми — лишився лише ключ"
+                          style={{ color: "var(--text-muted)" }}>{w.qKey} (питання зняте)</span>}
+                      </td>
                       <td style={{ textAlign: "center", fontWeight: 700 }}>{w.avg}</td>
                       <td style={{ textAlign: "center", color: "var(--text-muted)" }}>{w.answers}</td>
                     </tr>
@@ -1064,15 +1095,22 @@ function AnalyticsView({ data, month }: { data: O2OAnalytics | null; month: stri
           ? <p className="loading-text" style={{ margin: 0 }}>Жодна команда не має сигналів.</p>
           : (
             <div style={{ overflowX: "auto" }}>
-              <table className="data-table compact" style={{ minWidth: 420 }}>
-                <thead><tr><th style={{ textAlign: "left" }}>Команда</th><th style={{ textAlign: "center" }}>Людей</th><th style={{ textAlign: "left" }}>Сигнали</th></tr></thead>
+              <table className="data-table compact" style={{ minWidth: 440 }}>
+                <thead><tr>
+                  <th style={{ textAlign: "left" }}>Команда</th>
+                  <th style={{ textAlign: "center" }}>Людей</th>
+                  <th style={{ textAlign: "left" }}>Сигнали</th>
+                </tr></thead>
                 <tbody>
                   {data.teams.map((t) => (
                     <tr key={String(t.teamId ?? "none")}>
                       <td style={{ textAlign: "left", fontWeight: 600 }}>{t.teamName}</td>
                       <td style={{ textAlign: "center", fontWeight: 700 }}>{t.people}</td>
-                      <td style={{ textAlign: "left", fontSize: 12 }}>
-                        {order.filter((k) => t.bySignal[k] > 0).map((k) => `${labels[k]} — ${t.bySignal[k]}`).join(" · ")}
+                      <td style={{ textAlign: "left" }}>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {order.filter((k) => t.bySignal[k] > 0)
+                            .map((k) => chip(k, `${labels[k]} — ${t.bySignal[k]}`, notes[k]))}
+                        </div>
                       </td>
                     </tr>
                   ))}

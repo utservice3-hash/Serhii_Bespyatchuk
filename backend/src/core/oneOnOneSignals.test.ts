@@ -6,6 +6,8 @@ import {
   type PersonInput, type SignalKey,
 } from "./oneOnOneSignals.js";
 import { needsBackendEnv } from "../testMode.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const T = SIGNAL_THRESHOLDS;
 
@@ -227,4 +229,40 @@ test("#380h ЖИВИЙ: ростер і розкол «пропустили/ні
   assert.ok(rows.filter((r) => r.is_team_lead).every((r) => r.owed === "B"), "тімлід мусить чекати тип Б");
   assert.ok(never > 0 || missed > 0 || met === rows.length,
     "хоч один із трьох станів мусить бути непорожнім — інакше запит нічого не поміряв");
+});
+
+/**
+ * 🔗 #380j — ВКЛАДКА ФАРБУЄТЬСЯ ТОКЕНАМИ ТЕМИ, А НЕ ВЛАСНИМИ КОЛЬОРАМИ.
+ *
+ * 🔴 Куплено зауваженням власника 09.09.2026: «дизайн має бути схожий згідно вже того, що
+ * є в дашборді». Перша редакція малювала плитки інлайновими `rgba(197,20,28,.09)`. У
+ * СВІТЛІЙ темі вони виглядали правдоподібно — і саме тому дефект був би непомітний: у
+ * проєкті є токени статусів (`--danger`/`--danger-bg`, `--warn`, `--ok`), визначені для
+ * ОБОХ тем, а зашитий колір лишається однаковим і в темній стає чужою плямою.
+ *
+ * 🔴 ПОРОЖНІЙ РЕЗУЛЬТАТ ТУТ БУВ БИ ПРОВАЛОМ, тому гейт спершу доводить, що шукач узагалі
+ * бачить кольори: у тому ж файлі, поза вкладкою, живе `const RED = "#c5141c"`. Якщо
+ * регулярка зламається, вона «не знайде» їх і там — і мовчазне зелене буде спіймане.
+ */
+test("#380j ВИГЛЯД: вкладка аналітики бере кольори лише з токенів теми", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/OneOnOneSection.tsx",
+      import.meta.url.replace("/dist/", "/src/"))), "utf8");
+  const COLOR = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)/g;
+
+  // ① Шукач працює: поза вкладкою у цьому ж файлі кольори Є (константи теми секції).
+  const outside = src.slice(0, src.indexOf("function AnalyticsView"));
+  assert.ok(outside.match(COLOR)?.length, "🔴 шукач кольорів нічого не бачить — регулярка зламана, а не файл чистий");
+
+  // ② Усередині вкладки — жодного.
+  const from = src.indexOf("function AnalyticsView"), to = src.indexOf("function EnpsView");
+  assert.ok(from > 0 && to > from, "🔴 вкладку AnalyticsView не знайдено — гейт стереже те, чого немає");
+  const body = src.slice(from, to);
+  const hard = body.match(COLOR) ?? [];
+  assert.deepEqual(hard, [], `🔴 зашиті кольори у вкладці: ${hard.join(", ")} — у темній темі вони стануть чужими`);
+
+  // ③ І вона справді користується мовою дашборда, а не своєю.
+  for (const cls of ["kpi-grid", "kpi-card", "kpi-label", "kpi-value", "data-table compact"]) {
+    assert.ok(body.includes(cls), `🔴 вкладка не вживає спільний клас «${cls}»`);
+  }
 });
