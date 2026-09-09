@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { needsBackendEnv } from "../testMode.js";
 
 /**
- * 🧮 #375–#375b — СКЛАД РЕКЛАМНОЇ КОГОРТИ СХОДИТЬСЯ, І РОЗКРИТТЯ НЕ СПЕРЕЧАЄТЬСЯ З ЧИСЛОМ.
+ * 🧮 #392–#392b — СКЛАД РЕКЛАМНОЇ КОГОРТИ СХОДИТЬСЯ, І РОЗКРИТТЯ НЕ СПЕРЕЧАЄТЬСЯ З ЧИСЛОМ.
  *
  * 🔴 ЩО САМЕ СТЕРЕЖЕТЬСЯ І ЧОМУ ЦЕ НЕ ОЧЕВИДНО. Екран «Реклама» показує чотири числа
  * дня: узято · у роботі · дійшли до грошей · оплачено. Три з них — НОВІ (09.09.2026), і
@@ -27,7 +27,7 @@ import { needsBackendEnv } from "../testMode.js";
 const FROM = "2026-07-01";
 const TO = "2026-07-31";
 
-test("#375 ЖИВА БД: у роботі + оплачено + втрачено == узято в роботу, по КОЖНОМУ дню", needsBackendEnv(), async (t) => {
+test("#392 ЖИВА БД: у роботі + оплачено + втрачено == узято в роботу, по КОЖНОМУ дню", needsBackendEnv(), async (t) => {
   const { pool } = await import("../db/pool.js");
   const { getSettings } = await import("../routes/settings.js");
   const metrics = await import("./metrics.js");
@@ -59,7 +59,7 @@ test("#375 ЖИВА БД: у роботі + оплачено + втрачено 
   await pool.end();
 });
 
-test("#375b ЖИВА БД: склад розкриття дня == числу в комірці, поіменно", needsBackendEnv(), async (t) => {
+test("#392b ЖИВА БД: склад розкриття дня == числу в комірці, поіменно", needsBackendEnv(), async (t) => {
   const { pool } = await import("../db/pool.js");
   const { getSettings } = await import("../routes/settings.js");
   const metrics = await import("./metrics.js");
