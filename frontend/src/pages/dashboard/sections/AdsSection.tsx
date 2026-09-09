@@ -59,6 +59,8 @@ export function AdsSection({ from, to }: { from: string; to: string }) {
         Витрати й кліки — з Google Ads через GA4. Ліди — з того самого ядра, що рахує
         конверсію реклами. Зіставлення <b>поденне</b>: звʼязати конкретний клік із
         конкретною угодою неможливо — мітка <code>gclid</code> у CRM порожня в усіх угодах.
+        {" "}Показано <b>всі канали з витратами</b>, включно з Performance Max — тому сума
+        може бути більшою за таблицю бюджету, і це не помилка.
       </p>
 
       <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" }}>
