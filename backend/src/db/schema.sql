@@ -877,6 +877,12 @@ ALTER TABLE news ADD COLUMN IF NOT EXISTS image_url TEXT;
 ALTER TABLE news ADD COLUMN IF NOT EXISTS release_sha TEXT;
 ALTER TABLE news ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE news ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);
+-- 🎯 Кому адресована новина: перелік ВКЛАДОК. NULL = бачать усі (у нотатці `Кому: all`).
+--    Nullable СВІДОМО: 207 наявних рядків лишаються NULL, тобто поведінка не міняється
+--    ні для кого. ⚠️ Не робити NOT NULL, не завівши окремого гейта: `#354` цього не
+--    зловить — він виконує PUBLISH_SQL роллю без права INSERT і впирається в 42501
+--    ще до перевірки обмежень (заміряно 09.09.2026).
+ALTER TABLE news ADD COLUMN IF NOT EXISTS audience_tabs TEXT[];
 CREATE UNIQUE INDEX IF NOT EXISTS news_release_sha_uniq
   ON news (release_sha) WHERE release_sha IS NOT NULL;
 

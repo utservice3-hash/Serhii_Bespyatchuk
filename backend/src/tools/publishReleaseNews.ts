@@ -32,8 +32,8 @@ const db = async () => (await import("../db/pool.js")).pool;
 export const NOTES_PATH = resolve(import.meta.dirname, "..", "..", "..", "RELEASE_NOTES.md");
 
 export const PUBLISH_SQL = `
-  INSERT INTO news (category, title, body, author, release_sha)
-  VALUES ('company', $1, $2, 'Дашборд', $3)
+  INSERT INTO news (category, title, body, author, release_sha, audience_tabs)
+  VALUES ('company', $1, $2, 'Дашборд', $3, $4::text[])
   ON CONFLICT (release_sha) WHERE release_sha IS NOT NULL DO NOTHING
   RETURNING id`;
 
@@ -60,9 +60,18 @@ export async function publishReleaseNews(sha: string): Promise<string> {
     return "тиша: верхній блок RELEASE_NOTES.md не змінився з минулого викату — "
       + "цей викат нічого нового не оголошує (штатно)";
   }
-  const r = await (await db()).query<{ id: number }>(PUBLISH_SQL, [parsed.note.title, parsed.note.body, sha]);
+  const r = await (await db()).query<{ id: number }>(
+    PUBLISH_SQL, [parsed.note.title, parsed.note.body, sha, parsed.note.audience]);
+  /* 🎯 Адресат називається В ЗВІТІ, а не лише пишеться в базу. Новина, що поїхала не тим
+     людям, помічається лише тоді, коли хтось не отримав очікуваного, — тобто пізно й
+     випадково. Рядок у виводі ланцюга робить це видимим одразу. */
+  const komu = parsed.note.audience === null ? "усім" : parsed.note.audience.join(", ");
+  const warn = parsed.note.audienceMissing
+    ? " ⚠️ рядка «Кому:» у блоці НЕ БУЛО — опубліковано всім; це дефект нотатки, і його "
+      + "мав спіймати гейт ще до коміту"
+    : "";
   return r.rowCount
-    ? `опубліковано «${parsed.note.title}» (id ${r.rows[0].id})`
+    ? `опубліковано «${parsed.note.title}» (id ${r.rows[0].id}) · кому: ${komu}${warn}`
     : `новина про ${sha} вже існує — повторний прогін нічого не додав`;
 }
 
