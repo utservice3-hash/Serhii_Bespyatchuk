@@ -253,6 +253,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // (він не керівник) — свідома різниця, не копіпаста.
   { method: "GET", path: "/api/dashboard/ads", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+  // Склад дня — ТІ САМІ межі, що в самого екрана: список угод не може бути
+  // доступніший за число, з якого він зроблений.
+  { method: "GET", path: "/api/dashboard/ads/deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.

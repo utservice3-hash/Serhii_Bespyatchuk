@@ -55,6 +55,7 @@ import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
+import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly,
   pct, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
 import * as expectSplit from "../core/expectSplit.js";
@@ -5271,7 +5272,54 @@ dashboardRouter.get("/ads", async (req, res) => {
   // Поля в ній перелічені ЯВНО, без спреду (ворота `#17e2`).
   const days = mergeAdDays(campaigns, leadsByDay, sheetByDay);
 
-  res.json({ days, campaigns, ga4Configured: ga4Configured() });
+  // 💰 ПЛАН і ДОХІД — обидва з ЄДИНИХ джерел, а не порахованi тут.
+  // План: `core/adBudget` (той самий модуль читає КВП — рішення «скрізь один план»).
+  // Дохід: `money.receivedByChannel` — той самий виклик, із якого КВП рахує ROMI, тож
+  // два екрани не можуть розійтись. Свій SQL по виручці заборонений (DoD п.1).
+  // ⚠️ Дохід — це гроші, ЩО НАДІЙШЛИ в періоді, від реклами будь-якого часу. Це НЕ
+  // «скільки принесли ліди цього періоду»: угода з ліда 4 липня оплатиться у серпні.
+  // Когортного доходу в ядрі немає, і вигадувати його тут не можна.
+  const [plan, revenue] = await Promise.all([
+    adPlanForPeriod(from, to),
+    money.receivedByChannel({ from, to }, adSources),
+  ]);
+
+  res.json({
+    days, campaigns, ga4Configured: ga4Configured(),
+    planMonth: plan,                       // null = на ці місяці плану не ставили
+    revenue: revenue.ad.revenue,
+    revenueDeals: revenue.ad.deals,
+  });
+});
+
+/**
+ * 📋 СКЛАД ОДНОГО ДНЯ — угоди, з яких зроблено число в комірці екрана «Реклама».
+ *
+ * 🔴 Список рахує ЯДРО (`metrics.adDealsByDay`) над тим самим `dealCohortCte`, що й
+ * лічильник. Свій SQL тут розійшовся б із числом тихо — саме так чипи «новий/постійний»
+ * розходились на 12.6% угод серпня.
+ *
+ * ⚠️ Атрибуції «цей лід із цієї кампанії» НЕМАЄ і бути не може: `gclid` у CRM порожній
+ * в усіх угодах. Тому це ліди ДНЯ, а не ліди кампанії, і на екрані так і підписано.
+ */
+dashboardRouter.get("/ads/deals", async (req, res) => {
+  const auth = req.auth!;
+  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const day = dateParam(req.query.day);
+  if (!day) return res.status(400).json({ error: "day required" });
+  const { adSources } = await getSettings();
+  const deals = await metrics.adDealsByDay(day, adSources);
+  res.json({
+    day,
+    deals: deals.map((d) => ({
+      kommoId: d.kommoId,
+      name: d.name,
+      price: d.price,
+      state: d.state,
+      reachedMoney: d.reachedMoney,
+      url: kommoLeadUrl(d.kommoId), // спільний хелпер: база береться з конфігу в одному місці
+    })),
+  });
 });
 
 dashboardRouter.get("/lead-quality", async (req, res) => {

@@ -116,10 +116,13 @@ export const GA4_NOT_CONFIGURED =
  */
 
 export type AdCampaignRow = { day: string; cost: number; clicks: number; sessions: number };
-export type AdLeadsRow = { entered: number; won: number };
+/** Стани когорти дня. `won` перетинається з `inWork` — див. AdsDayCohort у ядрі. */
+export type AdLeadsRow = { entered: number; won: number; paid: number; lost: number; inWork: number };
 export type AdDay = {
   day: string; cost: number; clicks: number; sessions: number;
   sheetCost: number | null; leads: number; won: number;
+  /** Оплачено (142) · програно (143) · у роботі (ні те, ні те) — разом дають `leads`. */
+  paid: number; lost: number; inWork: number;
 };
 
 export function mergeAdDays(
@@ -145,6 +148,9 @@ export function mergeAdDays(
       sheetCost: sheetByDay.get(day) ?? null, // null = аркуш цього дня не має
       leads: leadsByDay.get(day)?.entered ?? 0,
       won: leadsByDay.get(day)?.won ?? 0,
+      paid: leadsByDay.get(day)?.paid ?? 0,
+      lost: leadsByDay.get(day)?.lost ?? 0,
+      inWork: leadsByDay.get(day)?.inWork ?? 0,
     };
   });
 }

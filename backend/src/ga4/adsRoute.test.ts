@@ -48,7 +48,7 @@ test("#371 ПОРОЖНЯ ДАТА — це «не задано», а не зн�
 });
 
 test("#372 GA4 ПОРОЖНІЙ, А ЛІДИ Є — день усе одно в таблиці, і «0 лідів» не друкується", () => {
-  const leads = new Map([["2026-09-01", { entered: 17, won: 3 }]]);
+  const leads = new Map([["2026-09-01", { entered: 17, won: 3, paid: 2, lost: 4, inWork: 11 }]]);
   const sheet = new Map([["2026-09-02", 4200]]);
 
   // GA4 не підключено: кампаній нема ЗОВСІМ — саме той стан, що був на проді.
@@ -69,7 +69,7 @@ test("#372b 🪞 ІНВАРІАНТ ГРУПУВАННЯ ЖИВИЙ, і роут
     { day: "2026-09-01", cost: 200.25, clicks: 20, sessions: 60 },
     { day: "2026-09-03", cost: 50, clicks: 5, sessions: 15 },
   ];
-  const days = mergeAdDays(campaigns, new Map([["2026-09-02", { entered: 4, won: 1 }]]), new Map());
+  const days = mergeAdDays(campaigns, new Map([["2026-09-02", { entered: 4, won: 1, paid: 1, lost: 0, inWork: 3 }]]), new Map());
   const sumDays = days.reduce((s, d) => s + d.cost, 0);
   const sumCampaigns = campaigns.reduce((s, c) => s + c.cost, 0);
   assert.equal(Math.round(sumDays * 100), Math.round(sumCampaigns * 100),
