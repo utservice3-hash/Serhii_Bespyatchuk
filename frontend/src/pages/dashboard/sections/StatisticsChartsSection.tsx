@@ -344,7 +344,13 @@ export default function StatisticsChartsSection(
         </div>
       )}
 
-      {cat.custom === "ads" && <AdsSection from={from ?? ""} to={to ?? ""} />}
+      {cat.custom === "ads" && (
+        /* Право змінювати план мусить збігатися з межами роуту PUT /settings/ad-plan
+           (deny: kvp, financier, hr, team_lead, manager). Показати кнопку тому, кому
+           сервер відмовить, — це обіцянка, якої інтерфейс не виконає. */
+        <AdsSection from={from ?? ""} to={to ?? ""}
+          canEditPlan={["admin", "ceo", "opdir"].includes(role ?? "")} />
+      )}
 
       {cat.manualForm && <ManualForm onClose={() => { setCatKey("money"); setMetricKey("avg_check"); }} isAdmin={role === "admin"} />}
 

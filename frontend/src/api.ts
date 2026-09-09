@@ -517,6 +517,10 @@ export async function saveRepeatPlan(managerId: number, month: string, plannedVa
 
 /** 📊 Екран «Реклама»: день × кампанія з GA4 + ліди CRM за той самий день. */
 export interface AdsDay {
+  /** Оплачено (142) · програно (143) · у роботі. Разом дають `leads`. */
+  paid: number;
+  lost: number;
+  inWork: number;
   day: string;
   cost: number;
   clicks: number;
@@ -541,11 +545,38 @@ export interface AdsReport {
   campaigns: AdsCampaign[];
   /** false → GA4 ще не ввімкнули; екран каже це словами, а не показує порожнечу. */
   ga4Configured: boolean;
+  /** Місячний план (сума місяців періоду). `null` = плану на ці місяці не ставили — НЕ нуль. */
+  planMonth: number | null;
+  /** Гроші, ЩО НАДІЙШЛИ в періоді від реклами будь-якого часу. Не «принесли ці ліди». */
+  revenue: number;
+  revenueDeals: number;
+}
+
+/** Одна угода рекламної когорти дня — для розкриття. */
+export interface AdsDeal {
+  kommoId: number;
+  name: string;
+  price: number;
+  /** paid = 142 · lost = 143 · inWork = ні те, ні те (означення власника). */
+  state: "paid" | "lost" | "inWork";
+  /** Дійшла до грошової зони — може бути true і в стані inWork («Виставлення рахунку»). */
+  reachedMoney: boolean;
+  url: string;
 }
 
 export async function fetchAds(params: { from?: string; to?: string }): Promise<AdsReport> {
   const { data } = await api.get<AdsReport>("/dashboard/ads", { params });
   return data;
+}
+
+export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[] }> {
+  const { data } = await api.get<{ day: string; deals: AdsDeal[] }>("/dashboard/ads/deals", { params: { day } });
+  return data;
+}
+
+/** Запис місячного плану. `month` — будь-який день потрібного місяця. */
+export async function saveAdPlan(month: string, plan: number): Promise<void> {
+  await api.put("/settings/ad-plan", { month, plan });
 }
 
 export async function fetchLeadQuality(params: {

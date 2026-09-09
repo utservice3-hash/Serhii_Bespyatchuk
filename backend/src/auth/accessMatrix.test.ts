@@ -43,6 +43,10 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   // 👤 Стан менеджера (активний / завершує / звільнений) — той самий guard
   // `requireManageUsers`, що й решта керування людьми, отже та сама відмова по праву.
   "PATCH /api/settings/managers/:id/work-state": "manage_users — те саме",
+  // 💰 План витрат на рекламу — той самий guard `requireManageUsers`. Дивитись на план
+  // може кожен, хто бачить екран «Реклама» (окремий GET), а СТАВИТИ його — керування
+  // компанією, не аналітика. Тому 403 для kvp/financier тут по ПРАВУ, а не по рівню.
+  "PUT /api/settings/ad-plan": "manage_users — те саме",
   "POST /api/settings/users/:id/reset-password": "reset_passwords — окреме право, лише СЕО/ОД/адмін",
   "POST /api/settings/users/provision": "manage_users — те саме",
   // ФАЗА B. `merge_clients` мають КВП, ОД і admin (зміна політики 03.08.2026).
