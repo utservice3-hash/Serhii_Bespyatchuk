@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps, fetchO2OConductTypes,
+  fetchO2OAnalytics, type O2OAnalytics, type O2OSignalKey,
   fetchO2OMeetings, fetchO2OOpenTasks, createO2OTask, reviewO2OTask,
   type OneOnOneSubject, type OneOnOneAnswers, type OneOnOneStatRow, type O2OForm, type O2ONotes, type OneOnOneRecord,
   type O2OMeeting, type O2OOpenTask, type O2OTaskOutcome, type O2OEnpsResponse, type O2OEnpsSummary,
@@ -127,7 +128,7 @@ export function OneOnOneSection() {
   const [typesLoaded, setTypesLoaded] = useState(false);
 
   const [type, setType] = useState<O2OType>("A");
-  const [tab, setTab] = useState<"conduct" | "stats" | "enps" | "edit">("conduct");
+  const [tab, setTab] = useState<"conduct" | "stats" | "analytics" | "enps" | "edit">("conduct");
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("o2oMonth") || curMonthStr());
   const [form, setForm] = useState<O2OForm | null>(null);
   const [subjects, setSubjects] = useState<OneOnOneSubject[]>([]);
@@ -147,6 +148,8 @@ export function OneOnOneSection() {
   // Відбиток стану, який СЕРВЕР уже знає. Проти нього рахуємо «є незбережене».
   const [savedSnap, setSavedSnap] = useState<string | null>(null);
   const [stats, setStats] = useState<OneOnOneStatRow[]>([]);
+  // Коротка аналітика: сигнали за ОБРАНИЙ місяць (той самий пікер у шапці, що й решта вкладок).
+  const [analytics, setAnalytics] = useState<O2OAnalytics | null>(null);
   // eNPS: період ДОВІЛЬНИЙ (1×1 не тримаються меж місяця). Стан локальний для вкладки —
   // спільний фільтр періоду живе в контейнері, а він цим проходом не чіпається.
   const [enpsData, setEnpsData] = useState<O2OEnpsResponse | null>(null);
@@ -181,6 +184,11 @@ export function OneOnOneSection() {
      півроку. Через це вкладка «Історія» малювала колонку на КОЖНУ зустріч за 6 місяців
      і виїжджала за екран, попри обраний місяць у шапці. */
   useEffect(() => { if (tab === "stats") fetchOneOnOneStats(type, 6, monthSel).then(setStats).catch(() => setStats([])); }, [tab, type, monthSel]);
+  /* Аналітика НЕ залежить від обраного `type`: вона зводить типи A/Б (бали, задачі) і В
+     (eNPS) в одну картину — власник питав «які є проблеми», а не «які проблеми в типі A».
+     Тому в залежностях лише вкладка й місяць. Порожнеча при помилці — `null`, і вкладка
+     показує «Завантаження…», а не «нікого»: нуль тут читався б як добра новина. */
+  useEffect(() => { if (tab === "analytics") fetchO2OAnalytics(monthSel).then(setAnalytics).catch(() => setAnalytics(null)); }, [tab, monthSel]);
   useEffect(() => {
     if (tab !== "enps") return;
     // «Весь час» дає порожні кінці, а сервер вимагає обидва — підставляємо найширші.
@@ -349,7 +357,7 @@ export function OneOnOneSection() {
             </div>
           )}
           <div style={{ display: "flex", gap: 5 }}>
-            {([["conduct", "Провести"], ["stats", "Історія"], ...(type === "V" ? [["enps", "eNPS"]] as const : []), ...(canEdit ? [["edit", "✏️ Питання"]] as const : [])] as const).map(([t, lbl]) => (
+            {([["conduct", "Провести"], ["stats", "Історія"], ["analytics", "Коротка аналітика"], ...(type === "V" ? [["enps", "eNPS"]] as const : []), ...(canEdit ? [["edit", "✏️ Питання"]] as const : [])] as const).map(([t, lbl]) => (
               <Pill key={t} active={tab === t} onClick={() => setTab(t)}>{lbl}</Pill>
             ))}
           </div>
@@ -604,6 +612,8 @@ export function OneOnOneSection() {
       ) : tab === "stats" ? (
         <StatsView stats={stats} isV={isV} onOpen={(managerId, name, date) => setHist({ managerId, name, date })}
           onOpenPerson={(managerId, name) => setPerson({ managerId, name })} />
+      ) : tab === "analytics" ? (
+        <AnalyticsView data={analytics} month={monthSel} />
       ) : tab === "enps" ? (
         <EnpsView data={enpsData} range={enpsRange} preset={enpsPreset}
           onRange={(r, preset) => { setEnpsRange(r); setEnpsPreset(preset); }} />
@@ -944,6 +954,137 @@ function ShareTile({ kind, pct, count }: { kind: "promoter" | "passive" | "detra
  * ОСТАННІЙ МІСЯЦЬ ряду, а не період — і при довільному періоді це було б просто
  * неправдою.
  */
+/**
+ * 🚦 КОРОТКА АНАЛІТИКА за місяць. Усі правила й пороги рахує ядро на сервері — тут лише показ.
+ *
+ * 🔴 НУЛЬ ПИШЕТЬСЯ СЛОВАМИ, А НЕ ХОВАЄТЬСЯ. Сигнал, під який нікого не підпало, лишається
+ * на екрані з підписом «нікого» — інакше зникнення блока читалось би як «такого сигналу
+ * немає», а не як «цього місяця чисто».
+ *
+ * 🔴 ЧОГО РОЛЬ НЕ БАЧИТЬ — «НЕДОСТУПНО», А НЕ «0». eNPS живе в типі В, який проводить лише
+ * наскрізний глядач. Тімліду показати «0 детракторів» означало б повідомити добру новину
+ * там, де насправді немає доступу.
+ */
+function AnalyticsView({ data, month }: { data: O2OAnalytics | null; month: string }) {
+  if (!data) return <div style={CARD}><p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
+  const { counts, labels, notes, sources } = data;
+  // Сигнал бере дані з типу В лише один — решта з A/Б. Право на кожен показуємо чесно.
+  const visible = (k: O2OSignalKey) => (k === "enpsLow" ? sources.V : sources.A || sources.B);
+  const order: O2OSignalKey[] = ["missed", "never", "avgLow", "drop", "enpsLow", "answerLow", "tasksOpen"];
+  const tone = (k: O2OSignalKey) => (k === "never" ? "rgba(128,128,128,.10)" : counts[k] > 0 ? "rgba(197,20,28,.09)" : "rgba(31,122,77,.09)");
+
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div style={CARD}>
+        <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>Що підсвітити за {month}</h2>
+        <p style={{ margin: "0 0 14px", fontSize: 12, color: "var(--text-muted)" }}>
+          У ростері {data.rosterSize} осіб (активні, з командою). Порівняння — з {data.prevMonth}.
+          Тімліду належить зустріч типу Б, решті — типу A.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10 }}>
+          {order.map((k) => (
+            <div key={k} style={{ background: visible(k) ? tone(k) : "rgba(128,128,128,.06)", borderRadius: 12, padding: "10px 12px" }}>
+              <div style={{ fontSize: 20, fontWeight: 800 }}>
+                {visible(k)
+                  ? (counts[k] > 0 ? counts[k] : <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-muted)" }}>нікого</span>)
+                  : <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>недоступно вашій ролі</span>}
+              </div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 2 }}>{labels[k]}</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3, lineHeight: 1.35 }}>{notes[k]}</div>
+            </div>
+          ))}
+        </div>
+        {data.tasksWithoutDeadline > 0 && (
+          <p style={{ margin: "12px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+            ⚠️ Ще {data.tasksWithoutDeadline} відкритих задач 1×1 <b>без дедлайну</b> — вони не належать жодному місяцю
+            й у сигнал вище не входять.
+          </p>
+        )}
+      </div>
+
+      <div style={CARD}>
+        <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>З ким саме</h2>
+        <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--text-muted)" }}>
+          Людина без жодного сигналу в списку не показується — це перелік проблем, а не ростер.
+        </p>
+        {data.people.length === 0
+          ? <p className="loading-text" style={{ margin: 0 }}>Жодного сигналу за цей місяць.</p>
+          : (
+            <div style={{ display: "grid", gap: 8 }}>
+              {data.people.map((p) => (
+                <div key={p.managerId} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderTop: "1px solid rgba(128,128,128,.12)" }}>
+                  <Avatar name={p.name} size={30} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>
+                      {p.name}
+                      <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12, marginLeft: 8 }}>
+                        {p.teamName ?? "Поза командами"} · тип {p.owed}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                      {p.hits.map((h) => (
+                        <span key={h.key} title={h.detail}
+                          style={{ fontSize: 11.5, padding: "3px 8px", borderRadius: 8, background: tone(h.key), maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <b>{labels[h.key]}</b>{h.detail ? ` — ${h.detail}` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+      </div>
+
+      <div style={CARD}>
+        <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>Що покращити</h2>
+        <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--text-muted)" }}>
+          Найслабші питання форми за місяць — без порогу: це відповідь на «що покращити», а не «де біда».
+        </p>
+        {data.weakQuestions.length === 0
+          ? <p className="loading-text" style={{ margin: "0 0 14px" }}>За цей місяць оцінок немає.</p>
+          : (
+            <div style={{ overflowX: "auto", marginBottom: 16 }}>
+              <table className="data-table compact" style={{ minWidth: 420 }}>
+                <thead><tr><th style={{ textAlign: "left" }}>Питання</th><th style={{ textAlign: "center" }}>Середнє</th><th style={{ textAlign: "center" }}>Відповідей</th></tr></thead>
+                <tbody>
+                  {data.weakQuestions.map((w) => (
+                    <tr key={w.qKey}>
+                      <td style={{ textAlign: "left" }}>{w.label ?? <span title="Питання зняли з форми — лишився лише ключ" style={{ color: "var(--text-muted)" }}>{w.qKey} (питання зняте)</span>}</td>
+                      <td style={{ textAlign: "center", fontWeight: 700 }}>{w.avg}</td>
+                      <td style={{ textAlign: "center", color: "var(--text-muted)" }}>{w.answers}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800 }}>По командах</h3>
+        {data.teams.length === 0
+          ? <p className="loading-text" style={{ margin: 0 }}>Жодна команда не має сигналів.</p>
+          : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table compact" style={{ minWidth: 420 }}>
+                <thead><tr><th style={{ textAlign: "left" }}>Команда</th><th style={{ textAlign: "center" }}>Людей</th><th style={{ textAlign: "left" }}>Сигнали</th></tr></thead>
+                <tbody>
+                  {data.teams.map((t) => (
+                    <tr key={String(t.teamId ?? "none")}>
+                      <td style={{ textAlign: "left", fontWeight: 600 }}>{t.teamName}</td>
+                      <td style={{ textAlign: "center", fontWeight: 700 }}>{t.people}</td>
+                      <td style={{ textAlign: "left", fontSize: 12 }}>
+                        {order.filter((k) => t.bySignal[k] > 0).map((k) => `${labels[k]} — ${t.bySignal[k]}`).join(" · ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </div>
+    </div>
+  );
+}
+
 function EnpsView({ data, range, preset, onRange }: {
   data: O2OEnpsResponse | null;
   range: { from: string; to: string };
