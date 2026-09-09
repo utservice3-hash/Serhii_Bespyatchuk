@@ -248,11 +248,20 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/lead-quality", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
-  // 📊 Екран «Реклама». Ролі — рішення власника 08.09.2026 дослівно: «всі в кого є
-  // адмін, квп, всі керівники». Тобто дзеркало /lead-quality МІНУС financier
-  // (він не керівник) — свідома різниця, не копіпаста.
+  /* 📊 Екран «Реклама».
+     🟢 РІШЕННЯ ВЛАСНИКА 09.09.2026: **фінансист бачить**. Це ЗМІНА, а не дрейф — і
+     записана вона тут саме тому, що доти зліпок стверджував протилежне.
+     ⚠️ Було 08.09.2026: «всі в кого є адмін, квп, всі керівники», і `financier` свідомо
+     виключили як «не керівника». Рішення переглянуто: витрати на рекламу — фінансове
+     питання, і людина, що веде гроші, має їх бачити.
+     📐 ЯК ЦЕ ЗНАЙШЛОСЬ, і чому це аргумент за `acceptMatrix`. Доступ уже БУВ відкритий у
+     базі (`roles.screen_access.ads = true` у фінансиста — вкладка додалась ролі сама,
+     без чийогось рішення), а зліпок казав `deny`. Прохід, що вносив екран, свого
+     `acceptMatrix` не добіг — його ланцюг обірвався на `accept`. Тобто клітинка пливла
+     доти, доки чужий викат не дійшов до матриці. Це рівно той випадок, заради якого крок
+     і винесли окремо: «11 клітинок пливли непоміченими шість днів». */
   { method: "GET", path: "/api/dashboard/ads", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
