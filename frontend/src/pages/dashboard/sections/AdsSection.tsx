@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { fetchAds, type AdsReport } from "../../../api";
 
 /**
@@ -17,6 +17,28 @@ import { fetchAds, type AdsReport } from "../../../api";
  * ⚠️ НЕВІДОМЕ ЧИТАЄТЬСЯ ЯК НЕВІДОМЕ (правило зони фронту): день, якого немає в
  * аркуші, дає «—» з підписом, а не 0 — нуль означав би «витрат не було».
  */
+/* Стилі клітинок — числа ПРАВОРУЧ, підписи ліворуч. Це не смак: числа різної
+   довжини, вирівняні ліворуч, неможливо порівнювати оком по стовпчику. */
+const TH_L = { textAlign: "left" as const, padding: "10px 12px", whiteSpace: "nowrap" as const };
+const TH_R = { ...TH_L, textAlign: "right" as const };
+const TD_L = { padding: "10px 12px", whiteSpace: "nowrap" as const };
+const TD_R = { ...TD_L, textAlign: "right" as const };
+const DIM = { color: "var(--text-muted)" };
+
+/** `2026-07-14` → `14.07`. Рік у колонці днів зайвий — період і так обрано зверху. */
+function dayLabel(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[3]}.${m[2]}` : iso;
+}
+
+/** «кампанія / кампанії / кампаній» — щоб лічильник читався як речення. */
+function plural(n: number): string {
+  const t = n % 10, h = n % 100;
+  if (t === 1 && h !== 11) return "кампанія";
+  if (t >= 2 && t <= 4 && (h < 12 || h > 14)) return "кампанії";
+  return "кампаній";
+}
+
 export function AdsSection({ from, to }: { from: string; to: string }) {
   const [data, setData] = useState<AdsReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -59,6 +81,8 @@ export function AdsSection({ from, to }: { from: string; to: string }) {
         Витрати й кліки — з Google Ads через GA4. Ліди — з того самого ядра, що рахує
         конверсію реклами. Зіставлення <b>поденне</b>: звʼязати конкретний клік із
         конкретною угодою неможливо — мітка <code>gclid</code> у CRM порожня в усіх угодах.
+        {" "}Показано <b>всі канали з витратами</b>, включно з Performance Max — тому сума
+        може бути більшою за таблицю бюджету, і це не помилка.
       </p>
 
       <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" }}>
@@ -75,47 +99,75 @@ export function AdsSection({ from, to }: { from: string; to: string }) {
           перевірте період і стан кампаній.</p>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table>
-            <thead><tr>
-              <th>ДЕНЬ</th><th>ВИТРАТИ GA4</th><th>ТАБЛИЦЯ</th><th>Δ</th>
-              <th>КЛІКИ</th><th>СЕСІЇ</th><th>ЛІДИ CRM</th><th></th>
-            </tr></thead>
+          {/* `data-table` — спільний клас проєкту: без нього таблиця йде зовсім без
+              стилів і колонки злипаються. `tabular-nums` вирівнює цифри в стовпчик,
+              інакше числа різної ширини «пливуть» і суми важко порівнювати оком. */}
+          <table className="data-table" style={{ fontVariantNumeric: "tabular-nums", minWidth: 720 }}>
+            <thead>
+              <tr>
+                <th style={TH_L}>День</th>
+                <th style={TH_R}>Витрати GA4</th>
+                <th style={TH_R}>Таблиця бюджету</th>
+                <th style={TH_R}>Різниця</th>
+                <th style={TH_R}>Кліки</th>
+                <th style={TH_R}>Сесії</th>
+                <th style={TH_R}>Ліди CRM</th>
+                <th style={{ ...TH_R, width: 1 }} />
+              </tr>
+            </thead>
             <tbody>
               {data.days.map((d) => {
                 const diff = d.sheetCost === null ? null : Math.round(d.cost - d.sheetCost);
                 const rows = data.campaigns.filter((c) => c.day === d.day);
+                const isOpen = open === d.day;
                 return (
-                  <>
-                    <tr key={d.day}>
-                      <td>{d.day}</td>
-                      <td>{money(d.cost)} ₴</td>
-                      <td title={d.sheetCost === null ? "аркуш цього дня не містить" : undefined}>
-                        {d.sheetCost === null ? "—" : `${money(d.sheetCost)} ₴`}
+                  <Fragment key={d.day}>
+                    <tr onClick={() => setOpen(isOpen ? null : d.day)}
+                        style={{ cursor: rows.length ? "pointer" : "default",
+                                 background: isOpen ? "var(--surface-2, rgba(127,127,127,0.06))" : undefined }}>
+                      <td style={TD_L}>{dayLabel(d.day)}</td>
+                      <td style={TD_R}><b>{money(d.cost)} ₴</b></td>
+                      <td style={TD_R} title={d.sheetCost === null ? "аркуш бюджету не має цього дня" : undefined}>
+                        {d.sheetCost === null ? <span style={DIM}>немає в аркуші</span> : `${money(d.sheetCost)} ₴`}
                       </td>
-                      <td style={{ color: diff && Math.abs(diff) > 0 ? "#b45309" : undefined }}>
-                        {diff === null ? "—" : `${diff > 0 ? "+" : ""}${money(diff)} ₴`}
+                      <td style={{ ...TD_R, color: diff ? "#b45309" : undefined }}>
+                        {diff === null ? <span style={DIM}>—</span>
+                          : diff === 0 ? <span style={DIM}>збігається</span>
+                          : `${diff > 0 ? "+" : "−"}${money(Math.abs(diff))} ₴`}
                       </td>
-                      <td>{d.clicks}</td>
-                      <td>{d.sessions}</td>
-                      <td>{d.leads}</td>
-                      <td>
-                        <button onClick={() => setOpen(open === d.day ? null : d.day)}
-                          style={{ border: "none", background: "transparent", cursor: "pointer" }}>
-                          {open === d.day ? "▾" : "▸"} {rows.length}
-                        </button>
+                      <td style={TD_R}>{d.clicks}</td>
+                      <td style={TD_R}>{d.sessions}</td>
+                      <td style={TD_R}>{d.leads}</td>
+                      <td style={{ ...TD_R, whiteSpace: "nowrap" }}>
+                        {rows.length > 0 && (
+                          <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                            {isOpen ? "▾" : "▸"} {rows.length} {plural(rows.length)}
+                          </span>
+                        )}
                       </td>
                     </tr>
-                    {open === d.day && rows.map((c) => (
-                      <tr key={`${c.day}-${c.campaign}`} style={{ background: "var(--card-bg)" }}>
-                        <td style={{ paddingLeft: 24, color: "var(--text-muted)" }}>{c.campaign}</td>
-                        <td>{money(c.cost)} ₴</td>
-                        <td colSpan={2} style={{ color: "var(--text-muted)" }}>{c.channelGroup ?? "канал не вказано"}</td>
-                        <td>{c.clicks}</td>
-                        <td>{c.sessions}</td>
-                        <td colSpan={2} style={{ color: "var(--text-muted)" }}>конверсій GA4: {c.conversions}</td>
+                    {isOpen && rows.map((c) => (
+                      /* Дочірні рядки лягають у ТУ САМУ сітку, що й день (правило зони
+                         звітних екранів): дві різні сітки на одному екрані читаються
+                         як два різні звіти. Колонки, яких на рівні кампанії не існує,
+                         підписані словами, а не лишені порожніми. */
+                      <tr key={`${c.day}-${c.campaign}-${c.channelGroup ?? ""}`}>
+                        <td style={{ ...TD_L, paddingLeft: 26 }}>
+                          <div>{c.campaign}</div>
+                          <div style={{ ...DIM, fontSize: 11 }}>{c.channelGroup || "канал не вказано"}</div>
+                        </td>
+                        <td style={TD_R}>{money(c.cost)} ₴</td>
+                        <td style={TD_R}><span style={DIM}>аркуш не ділиться</span></td>
+                        <td style={TD_R}><span style={DIM}>—</span></td>
+                        <td style={TD_R}>{c.clicks}</td>
+                        <td style={TD_R}>{c.sessions}</td>
+                        <td style={TD_R} title="ліди не діляться по кампаніях: мітка gclid у CRM порожня">
+                          <span style={DIM}>не ділиться</span>
+                        </td>
+                        <td />
                       </tr>
                     ))}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>
