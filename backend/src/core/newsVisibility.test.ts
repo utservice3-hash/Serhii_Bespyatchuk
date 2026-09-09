@@ -10,8 +10,18 @@ import { unreadSinceQuery, unreadByIdQuery, maxVisibleIdQuery } from "./newsSeen
 const UNREAD_COUNT_SQL = unreadSinceQuery(null, []).text;
 
 const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
-/** Корінь зібраних джерел — для гейтів, що читають сусідні модулі. */
-const SRC = path.join(import.meta.dirname, "..");
+/** Читання ДЖЕРЕЛА (не збірки) — набір біжить із `dist`, а `.ts` лежать поруч. */
+const SRC_ROOTS = [
+  path.join(import.meta.dirname, "..", "..", "src"),
+  path.join(import.meta.dirname, "..", "..", "..", "backend", "src"),
+  path.join(import.meta.dirname, "..", "..", "..", "..", "backend", "src"),
+];
+function readSrcFile(...rel: string[]): string {
+  for (const r of SRC_ROOTS) {
+    try { return readFileSync(path.join(r, ...rel), "utf8"); } catch { /* далі */ }
+  }
+  assert.fail(`не знайдено ${rel.join("/")} — перевірка не має права мовчки пропускатись`);
+}
 
 /**
  * #361 — ВИДАЛЕНА НОВИНА ЗНИКАЄ З УСІХ ЧИТАЧІВ, А НЕ ЛИШЕ ЗІ СПИСКУ.
@@ -176,7 +186,7 @@ test("#375 білдер: аудиторія завжди ОСТАННІМ пар
  */
 test("#375b 🪞 машинні читачі новин фільтра НЕ мають", () => {
   for (const rel of [["jobs", "syncNews.ts"], ["tools", "publishReleaseNews.ts"]]) {
-    const src = readFileSync(path.join(SRC, ...rel), "utf8");
+    const src = readSrcFile(...rel);
     assert.doesNotMatch(src, /newsScope\s*\(/,
       `🔴 ${rel.join("/")} почав фільтрувати новини аудиторією — у нього немає читача, `
       + "тож фільтр там означає дублі (RSS) або повторні публікації (викат)");
