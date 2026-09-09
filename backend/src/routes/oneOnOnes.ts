@@ -447,17 +447,29 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
   const month = `${monthStr}-01`;
   const prev = `${signals.prevMonthOf(monthStr)}-01`;
 
-  /* 🔴 ПОЗИЦІЇ ПАРАМЕТРІВ ФІКСОВАНІ: $1 = місяць, $2 = попередній місяць, $3 = глядач,
-     $4 = команда глядача. Далі кожен запит додає СВОЄ, починаючи з $5. Перша редакція
-     будувала їх зрізом спільного масиву — і це рівно та конструкція, що ламається тихо:
-     зсунувся один параметр, запит лишається валідним SQL і повертає ЧУЖІ дані. */
-  const viewer = auth.userId;
-  const vs = viewScope(auth, "o").frag.replace(/\$P/g, "$3");   // наскрізний → "TRUE", $3 не читається
-  const base: unknown[] = [month, prev, viewer, auth.teamId];
+  /* 🔴 КОЖЕН ЗАПИТ НУМЕРУЄ СВОЇ ПАРАМЕТРИ САМ — і лише ті, які справді читає.
+     📐 Куплено тут же, на першому прогоні проти прод-бази: редакція з ФІКСОВАНИМИ
+     позиціями ($1 місяць, $2 попередній, $3 глядач, $4 команда) впала з `08P01`
+     «bind message supplies 4 parameters, but prepared statement requires 2». Причина —
+     у наскрізного глядача фрагмент скоупу стає `TRUE`, тож `$3`/`$4` у тексті не
+     зʼявляються взагалі, а Postgres відкидає ЗАЙВІ параметри, а не ігнорує їх.
+     Тому placeholder видає `add()` у мить використання: номер і значення не можуть
+     розійтись за побудовою. `vs` теж будується всередині кожного запиту — він або
+     споживає параметр, або ні, і тільки сам запит знає, який у того номер. */
+  const mk = () => {
+    const p: unknown[] = [];
+    const add = (v: unknown) => { p.push(v); return `$${p.length}`; };
+    /** Фрагмент скоупу перегляду: наскрізний — усе, інакше лише свої проведені. */
+    const scope = () => (cross ? "TRUE" : `o.conducted_by = ${add(auth.userId)}`);
+    return { p, add, scope };
+  };
+
+  const q0 = mk();
+  const mP = q0.add(month), pP = q0.add(prev), vs0 = q0.scope();
   // Ростер: стан `active` (двопрапорцева активність + накладка «завершує»/«звільнений»)
   // І є команда. Тімлід бачить лише свою команду — той самий скоуп, що й у «Провести».
   const rosterConds = [managerState.hasPlanSql("m", activeManagerSql("m")), "m.team_id IS NOT NULL"];
-  if (!cross) rosterConds.push("m.team_id = $4");
+  if (!cross) rosterConds.push(`m.team_id = ${q0.add(auth.teamId)}`);
 
   const roster = await pool.query<{
     id: number; name: string; team_id: number | null; team_name: string | null;
@@ -476,45 +488,50 @@ oneOnOnesRouter.get("/analytics", async (req, res) => {
      SELECT r.id AS id, r.name AS name, r.team_id AS team_id, r.team_name AS team_name,
             r.is_team_lead AS is_team_lead, r.owed AS owed,
             EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
-                      AND date_trunc('month', o.meeting_date) = $1::date AND (${vs})) AS met_this_month,
+                      AND date_trunc('month', o.meeting_date) = ${mP}::date AND (${vs0})) AS met_this_month,
             EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
-                      AND (${vs})) AS met_ever,
+                      AND (${vs0})) AS met_ever,
             (SELECT avg(o.overall) FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
-               AND date_trunc('month', o.meeting_date) = $1::date AND (${vs})) AS avg_this,
+               AND date_trunc('month', o.meeting_date) = ${mP}::date AND (${vs0})) AS avg_this,
             (SELECT avg(o.overall) FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
-               AND date_trunc('month', o.meeting_date) = $2::date AND (${vs})) AS avg_prev
-       FROM r ORDER BY r.name`, base);
+               AND date_trunc('month', o.meeting_date) = ${pP}::date AND (${vs0})) AS avg_prev
+       FROM r ORDER BY r.name`, q0.p);
 
   const ids = roster.rows.map((r) => r.id);
   const num = (x: string | null) => (x === null ? null : Number(x));
 
   // eNPS-детрактори (тип В) з причиною ДОСЛІВНО — вигадувати формулювання не можна.
+  const q1 = mk();
+  const m1 = q1.add(month), vs1 = q1.scope(), lo1 = q1.add(signals.SIGNAL_THRESHOLDS.enpsLow), id1 = q1.add(ids);
   const enps = await pool.query<{ manager_id: number; enps_score: number; enps_reason: string | null }>(
     `SELECT o.subject_manager_id AS manager_id, o.enps_score AS enps_score, o.enps_reason AS enps_reason
        FROM one_on_ones o
-      WHERE o.type='V' AND date_trunc('month', o.meeting_date) = $1::date AND (${vs})
-        AND o.enps_score IS NOT NULL AND o.enps_score <= $5
-        AND o.subject_manager_id = ANY($6::int[])
-      ORDER BY o.enps_score`, [...base, signals.SIGNAL_THRESHOLDS.enpsLow, ids]);
+      WHERE o.type='V' AND date_trunc('month', o.meeting_date) = ${m1}::date AND (${vs1})
+        AND o.enps_score IS NOT NULL AND o.enps_score <= ${lo1}
+        AND o.subject_manager_id = ANY(${id1}::int[])
+      ORDER BY o.enps_score`, q1.p);
 
   // Окремі низькі відповіді — середнє їх ховає, тому дивимось на кожну оцінку зустрічі.
+  const q2 = mk();
+  const m2 = q2.add(month), vs2 = q2.scope(), lo2 = q2.add(signals.SIGNAL_THRESHOLDS.answerLow), id2 = q2.add(ids);
   const lows = await pool.query<{ manager_id: number; qkey: string; score: string }>(
     `SELECT o.subject_manager_id AS manager_id, e.k AS qkey, (e.v->>'score') AS score
        FROM one_on_ones o, jsonb_each(o.answers) e(k, v)
-      WHERE o.type IN ('A','B') AND date_trunc('month', o.meeting_date) = $1::date AND (${vs})
+      WHERE o.type IN ('A','B') AND date_trunc('month', o.meeting_date) = ${m2}::date AND (${vs2})
         AND (e.v->>'score') ~ '^[0-9.]+$' AND (e.v->>'score')::numeric > 0
-        AND (e.v->>'score')::numeric <= $5
-        AND o.subject_manager_id = ANY($6::int[])`,
-    [...base, signals.SIGNAL_THRESHOLDS.answerLow, ids]);
+        AND (e.v->>'score')::numeric <= ${lo2}
+        AND o.subject_manager_id = ANY(${id2}::int[])`, q2.p);
 
   // Найслабші питання по відділу — без порогу, це відповідь на «що покращити».
+  const q3 = mk();
+  const m3 = q3.add(month), vs3 = q3.scope(), id3 = q3.add(ids);
   const weak = await pool.query<{ qkey: string; avg: string; answers: number }>(
     `SELECT e.k AS qkey, avg((e.v->>'score')::numeric) AS avg, count(*)::int AS answers
        FROM one_on_ones o, jsonb_each(o.answers) e(k, v)
-      WHERE o.type='A' AND date_trunc('month', o.meeting_date) = $1::date AND (${vs})
+      WHERE o.type='A' AND date_trunc('month', o.meeting_date) = ${m3}::date AND (${vs3})
         AND (e.v->>'score') ~ '^[0-9.]+$' AND (e.v->>'score')::numeric > 0
-        AND o.subject_manager_id = ANY($5::int[])
-      GROUP BY 1`, [...base, ids]);
+        AND o.subject_manager_id = ANY(${id3}::int[])
+      GROUP BY 1`, q3.p);
 
   // Підписи питань — з АКТИВНОЇ форми типу A. qKey, якого там уже немає (питання зняли),
   // лишається без підпису, і фронт покаже сам ключ: невідоме має читатись як невідоме.
