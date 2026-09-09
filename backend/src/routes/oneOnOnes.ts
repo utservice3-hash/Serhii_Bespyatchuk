@@ -5,6 +5,9 @@ import { roleHasPerm } from "../auth/rbac.js";
 import { ONE_ON_ONE_TYPES, type OneOnOneType } from "../oneOnOne/catalog.js";
 import { viewDenied } from "../oneOnOne/visibility.js";
 import { parseEnpsRange, granularityFor, summarizeEnps, buildEnpsSeries } from "../oneOnOne/enps.js";
+import * as signals from "../core/oneOnOneSignals.js";
+import * as managerState from "../core/managerState.js";
+import { activeManagerSql } from "../core/activeManager.js";
 
 /**
  * Ван-ту-вани (1×1) — три типи (A: тімлід→менеджер, B: керівник→тімлід, V: HR→всі).
@@ -414,6 +417,193 @@ oneOnOnesRouter.get("/stats/scores", async (req, res) => {
               : `o.meeting_date >= (date_trunc('month', now()) - make_interval(months => $${params.length}))`}
       ORDER BY t.name NULLS LAST, m.name, o.meeting_date`, params);
   res.json({ type, month: oneMonth ? month : null, rows: r.rows });
+});
+
+/**
+ * 🚦 КОРОТКА АНАЛІТИКА за ОДИН місяць: `?month=YYYY-MM` (без нього — поточний).
+ *
+ * Задача власника 07.09.2026: «підсвічує, які є проблеми, з ким ті проблеми, що покращити».
+ * Правило кожного сигналу й усі пороги — у `core/oneOnOneSignals.ts`; роут лише збирає
+ * рядки з бази й віддає результат ядра, щоб пороги можна було довести фікстурою.
+ *
+ * 🔴 ДВЕРІ ВІДЧИНЯЮТЬСЯ, ЯКЩО ВИБІРКА МОЖЕ БУТИ НЕПОРОЖНЬОЮ ХОЧ ПО ОДНОМУ ТИПУ — той
+ * самий вузький критерій, що в `visibility.ts`. Аналітика зводить типи A/Б (бали, задачі)
+ * і В (eNPS), тож тімлід, який проводить лише A, проходить — і бачить свою частину.
+ *
+ * 🔴 ЧОГО НЕ БАЧИШ — НЕ «НУЛЬ», А «НЕДОСТУПНО». Відповідь несе `sources`: по кожному типу
+ * прапорець, чи має цей користувач право його бачити. Без нього тімлід читав би «0
+ * детракторів eNPS» як добру новину, хоча насправді він тип В не бачить у принципі —
+ * рівно та підміна, від якої береже правило «порожній скоуп не виражається нулем».
+ */
+oneOnOnesRouter.get("/analytics", async (req, res) => {
+  const auth = req.auth!;
+  const cross = crossview(auth);
+  const canAny = ONE_ON_ONE_TYPES.some((t) => canConduct(auth, t));
+  const deny = viewDenied(cross, canAny);
+  if (deny) return res.status(403).json({ error: deny });
+
+  const monthStr = /^\d{4}-\d{2}$/.test(String(req.query.month ?? ""))
+    ? String(req.query.month) : kyivToday().slice(0, 7);
+  const month = `${monthStr}-01`;
+  const prev = `${signals.prevMonthOf(monthStr)}-01`;
+
+  /* 🔴 КОЖЕН ЗАПИТ НУМЕРУЄ СВОЇ ПАРАМЕТРИ САМ — і лише ті, які справді читає.
+     📐 Куплено тут же, на першому прогоні проти прод-бази: редакція з ФІКСОВАНИМИ
+     позиціями ($1 місяць, $2 попередній, $3 глядач, $4 команда) впала з `08P01`
+     «bind message supplies 4 parameters, but prepared statement requires 2». Причина —
+     у наскрізного глядача фрагмент скоупу стає `TRUE`, тож `$3`/`$4` у тексті не
+     зʼявляються взагалі, а Postgres відкидає ЗАЙВІ параметри, а не ігнорує їх.
+     Тому placeholder видає `add()` у мить використання: номер і значення не можуть
+     розійтись за побудовою. `vs` теж будується всередині кожного запиту — він або
+     споживає параметр, або ні, і тільки сам запит знає, який у того номер. */
+  const mk = () => {
+    const p: unknown[] = [];
+    const add = (v: unknown) => { p.push(v); return `$${p.length}`; };
+    /** Фрагмент скоупу перегляду: наскрізний — усе, інакше лише свої проведені. */
+    const scope = () => (cross ? "TRUE" : `o.conducted_by = ${add(auth.userId)}`);
+    return { p, add, scope };
+  };
+
+  const q0 = mk();
+  const mP = q0.add(month), pP = q0.add(prev), vs0 = q0.scope();
+  // Ростер: стан `active` (двопрапорцева активність + накладка «завершує»/«звільнений»)
+  // І є команда. Тімлід бачить лише свою команду — той самий скоуп, що й у «Провести».
+  const rosterConds = [managerState.hasPlanSql("m", activeManagerSql("m")), "m.team_id IS NOT NULL"];
+  if (!cross) rosterConds.push(`m.team_id = ${q0.add(auth.teamId)}`);
+
+  const roster = await pool.query<{
+    id: number; name: string; team_id: number | null; team_name: string | null;
+    is_team_lead: boolean; owed: OneOnOneType;
+    met_this_month: boolean; met_ever: boolean;
+    avg_this: string | null; avg_prev: string | null;
+  }>(
+    `WITH r AS (
+       SELECT m.id, m.name, m.team_id, m.is_team_lead, t.name AS team_name,
+              CASE WHEN m.is_team_lead THEN 'B' ELSE 'A' END AS owed
+         FROM managers m
+         LEFT JOIN teams t ON t.id = m.team_id
+         ${managerState.stateJoinSql("m")}
+        WHERE ${rosterConds.join(" AND ")}
+     )
+     SELECT r.id AS id, r.name AS name, r.team_id AS team_id, r.team_name AS team_name,
+            r.is_team_lead AS is_team_lead, r.owed AS owed,
+            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
+                      AND date_trunc('month', o.meeting_date) = ${mP}::date AND (${vs0})) AS met_this_month,
+            EXISTS (SELECT 1 FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
+                      AND (${vs0})) AS met_ever,
+            (SELECT avg(o.overall) FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
+               AND date_trunc('month', o.meeting_date) = ${mP}::date AND (${vs0})) AS avg_this,
+            (SELECT avg(o.overall) FROM one_on_ones o WHERE o.subject_manager_id = r.id AND o.type = r.owed
+               AND date_trunc('month', o.meeting_date) = ${pP}::date AND (${vs0})) AS avg_prev
+       FROM r ORDER BY r.name`, q0.p);
+
+  const ids = roster.rows.map((r) => r.id);
+  const num = (x: string | null) => (x === null ? null : Number(x));
+
+  // eNPS-детрактори (тип В) з причиною ДОСЛІВНО — вигадувати формулювання не можна.
+  const q1 = mk();
+  const m1 = q1.add(month), vs1 = q1.scope(), lo1 = q1.add(signals.SIGNAL_THRESHOLDS.enpsLow), id1 = q1.add(ids);
+  const enps = await pool.query<{ manager_id: number; enps_score: number; enps_reason: string | null }>(
+    `SELECT o.subject_manager_id AS manager_id, o.enps_score AS enps_score, o.enps_reason AS enps_reason
+       FROM one_on_ones o
+      WHERE o.type='V' AND date_trunc('month', o.meeting_date) = ${m1}::date AND (${vs1})
+        AND o.enps_score IS NOT NULL AND o.enps_score <= ${lo1}
+        AND o.subject_manager_id = ANY(${id1}::int[])
+      ORDER BY o.enps_score`, q1.p);
+
+  // Окремі низькі відповіді — середнє їх ховає, тому дивимось на кожну оцінку зустрічі.
+  const q2 = mk();
+  const m2 = q2.add(month), vs2 = q2.scope(), lo2 = q2.add(signals.SIGNAL_THRESHOLDS.answerLow), id2 = q2.add(ids);
+  const lows = await pool.query<{ manager_id: number; qkey: string; score: string }>(
+    `SELECT o.subject_manager_id AS manager_id, e.k AS qkey, (e.v->>'score') AS score
+       FROM one_on_ones o, jsonb_each(o.answers) e(k, v)
+      WHERE o.type IN ('A','B') AND date_trunc('month', o.meeting_date) = ${m2}::date AND (${vs2})
+        AND (e.v->>'score') ~ '^[0-9.]+$' AND (e.v->>'score')::numeric > 0
+        AND (e.v->>'score')::numeric <= ${lo2}
+        AND o.subject_manager_id = ANY(${id2}::int[])`, q2.p);
+
+  // Найслабші питання по відділу — без порогу, це відповідь на «що покращити».
+  const q3 = mk();
+  const m3 = q3.add(month), vs3 = q3.scope(), id3 = q3.add(ids);
+  const weak = await pool.query<{ qkey: string; avg: string; answers: number }>(
+    `SELECT e.k AS qkey, avg((e.v->>'score')::numeric) AS avg, count(*)::int AS answers
+       FROM one_on_ones o, jsonb_each(o.answers) e(k, v)
+      WHERE o.type='A' AND date_trunc('month', o.meeting_date) = ${m3}::date AND (${vs3})
+        AND (e.v->>'score') ~ '^[0-9.]+$' AND (e.v->>'score')::numeric > 0
+        AND o.subject_manager_id = ANY(${id3}::int[])
+      GROUP BY 1`, q3.p);
+
+  // Підписи питань — з АКТИВНОЇ форми типу A. qKey, якого там уже немає (питання зняли),
+  // лишається без підпису, і фронт покаже сам ключ: невідоме має читатись як невідоме.
+  const labels = await pool.query<{ qkey: string; label: string }>(
+    `SELECT x->>'qKey' AS qkey, x->>'label' AS label
+       FROM one_on_one_forms f,
+            jsonb_array_elements(f.questions->'sections') s,
+            jsonb_array_elements(s->'questions') x
+      WHERE f.type='A' AND f.is_active`);
+  const labelOf = new Map(labels.rows.map((r) => [r.qkey, r.label]));
+
+  // Задачі скоупляться ВИКОНАВЦЕМ (ростер), а не автором: тімлід уже звужений своєю
+  // командою вище, а задача, поставлена іншим ведучим, однаково лишається невиконаною.
+  const tasks = await pool.query<{ id: number; manager_id: number; title: string; deadline: string | null; status: string }>(
+    `SELECT t.id, t.assignee_id AS manager_id, t.title,
+            to_char(t.deadline,'YYYY-MM-DD') AS deadline, t.status
+       FROM tasks t
+      WHERE t.task_type='oneonone' AND t.o2o_resolution IS NULL AND t.status <> 'done'
+        AND t.deadline >= $1::date AND t.deadline < ($1::date + interval '1 month')
+        AND t.assignee_id = ANY($2::int[])`, [month, ids]);
+
+  /* ⚠️ ЗАДАЧА БЕЗ ДЕДЛАЙНУ НЕ НАЛЕЖИТЬ ЖОДНОМУ МІСЯЦЮ — і мовчки випала б із сигналу.
+     Заміряно на проді 09.09.2026: таких відкритих задач 1×1 — 2. Тому їх кількість їде
+     ОКРЕМИМ числом: «не потрапили у вибірку» має бути видимим, а не зникати. */
+  const noDeadline = await pool.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM tasks
+      WHERE task_type='oneonone' AND o2o_resolution IS NULL AND status <> 'done'
+        AND deadline IS NULL AND assignee_id = ANY($1::int[])`, [ids]);
+
+  const byMgr = <T extends { manager_id: number }>(rows: T[]) => {
+    const m = new Map<number, T[]>();
+    for (const r of rows) { const l = m.get(r.manager_id) ?? []; l.push(r); m.set(r.manager_id, l); }
+    return m;
+  };
+  const enpsBy = byMgr(enps.rows), lowsBy = byMgr(lows.rows), tasksBy = byMgr(tasks.rows);
+
+  const people: signals.PersonInput[] = roster.rows.map((r) => {
+    // Зустрічей типу В у місяці може бути кілька — беремо НАЙНИЖЧИЙ бал: сигнал про
+    // проблему, а середнє її б згладило.
+    const e = (enpsBy.get(r.id) ?? []).slice().sort((a, b) => a.enps_score - b.enps_score)[0];
+    return {
+      managerId: r.id, name: r.name, teamId: r.team_id, teamName: r.team_name,
+      isTeamLead: r.is_team_lead,
+      metThisMonth: r.met_this_month, metEver: r.met_ever,
+      avgThisMonth: num(r.avg_this), avgPrevMonth: num(r.avg_prev),
+      enpsScore: e ? Number(e.enps_score) : null,
+      enpsReason: e?.enps_reason ?? null,
+      lowAnswers: (lowsBy.get(r.id) ?? []).map((a) => ({
+        qKey: a.qkey, label: labelOf.get(a.qkey) ?? null, score: Number(a.score) })),
+      openTasks: (tasksBy.get(r.id) ?? []).map((t) => ({
+        id: t.id, title: t.title, deadline: t.deadline, status: t.status })),
+    };
+  });
+
+  const findings = signals.findingsOf(people);
+  res.json({
+    month: monthStr,
+    prevMonth: signals.prevMonthOf(monthStr),
+    rosterSize: roster.rows.length,
+    // Що саме цей користувач має право бачити — щоб порожнеча не читалась як «0 проблем».
+    sources: Object.fromEntries(ONE_ON_ONE_TYPES.map((t) => [t, cross || canConduct(auth, t)])),
+    thresholds: signals.SIGNAL_THRESHOLDS,
+    labels: signals.SIGNAL_LABEL,
+    notes: signals.SIGNAL_NOTE,
+    counts: signals.countBySignal(findings),
+    people: findings,
+    teams: signals.rollUpByTeam(findings),
+    weakQuestions: signals.weakestQuestions(
+      weak.rows.map((w) => ({ qKey: w.qkey, label: labelOf.get(w.qkey) ?? null,
+        avg: Number(w.avg), answers: Number(w.answers) }))),
+    tasksWithoutDeadline: noDeadline.rows[0]?.n ?? 0,
+  });
 });
 
 /**

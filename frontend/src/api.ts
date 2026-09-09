@@ -2859,6 +2859,38 @@ export async function fetchOneOnOneStats(type: string, months = 6, month?: strin
     { params: month ? { type, month } : { type, months } });
   return data?.rows ?? [];
 }
+// ── Коротка аналітика 1×1 (сигнали за місяць) ────────────────────────────────
+export type O2OSignalKey = "missed" | "never" | "avgLow" | "drop" | "enpsLow" | "answerLow" | "tasksOpen";
+export interface O2OSignalHit { key: O2OSignalKey; value: number | null; detail: string }
+export interface O2OPersonFinding {
+  managerId: number; name: string; teamId: number | null; teamName: string | null;
+  owed: string; hits: O2OSignalHit[];
+}
+export interface O2OTeamRollUp {
+  teamId: number | null; teamName: string; people: number;
+  bySignal: Record<O2OSignalKey, number>;
+}
+export interface O2OWeakQuestion { qKey: string; label: string | null; avg: number; answers: number }
+export interface O2OAnalytics {
+  month: string; prevMonth: string; rosterSize: number;
+  /** Які типи 1×1 ця роль має право бачити. Порожній блок при `false` — це «недоступно», а не «0». */
+  sources: Record<string, boolean>;
+  thresholds: Record<string, number>;
+  labels: Record<O2OSignalKey, string>;
+  notes: Record<O2OSignalKey, string>;
+  counts: Record<O2OSignalKey, number>;
+  people: O2OPersonFinding[];
+  teams: O2OTeamRollUp[];
+  weakQuestions: O2OWeakQuestion[];
+  /** Задачі 1×1 без дедлайну — у жоден місяць не потрапляють, тому названі окремо. */
+  tasksWithoutDeadline: number;
+}
+/** Сигнали за ОДИН місяць (`YYYY-MM`). Правила й пороги рахує ядро на сервері. */
+export async function fetchO2OAnalytics(month: string): Promise<O2OAnalytics> {
+  const { data } = await api.get<O2OAnalytics>("/one-on-ones/analytics", { params: { month } });
+  return data;
+}
+
 // ── Задачі з 1×1 ─────────────────────────────────────────────────────────────
 export interface O2OOpenTask {
   id: number; title: string; deadline: string | null; setAt: string; status: string;

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { LOGIN_LOOKUP_SQL, loginEnabledFor, stateOf } from "../core/managerState.js";
 import { pool } from "../db/pool.js";
 import { signToken } from "../auth/auth.js";
-import { effectiveRoleKey, getRoleDef, scopeCompatRole } from "../auth/rbac.js";
+import { effectiveRoleKey, getRoleDef, scopeCompatRole, tabsOfRole } from "../auth/rbac.js";
 import { requireAuth } from "../auth/middleware.js";
 import { config } from "../config.js";
 import {
@@ -73,7 +73,9 @@ authRouter.post("/login", async (req, res) => {
   // (для косметики nav у FE — сервер усе одно гейтить незалежно).
   const roleKey = effectiveRoleKey(user);
   const def = getRoleDef(roleKey);
-  const screens = def ? Object.keys(def.screenAccess).filter((k) => def.screenAccess[k] === true) : undefined;
+  // 🗂 Вкладки беремо СПІЛЬНОЮ функцією (`tabsOfRole`) — тим самим виразом, яким їх
+  //    рахує фільтр адресних новин. Друга копія тут розійшлася б із першою мовчки.
+  const screens = def ? tabsOfRole(roleKey) : undefined;
   const perms = def ? Object.keys(def.permissions).filter((k) => def.permissions[k] === true) : undefined;
   const token = signToken({
     userId: user.id,

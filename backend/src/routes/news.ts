@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
+import { isAdminScope, isAdminOrLead, tabsOfRole } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
-import { UNREAD_COUNT_SQL, MARK_SEEN_SQL, UNREAD_BY_ID_SQL, MAX_ALIVE_ID_SQL } from "../core/newsSeen.js";
-import { andAlive, DELETE_SQL } from "../core/newsVisibility.js";
+import { unreadSinceQuery, MARK_SEEN_SQL, unreadByIdQuery, maxVisibleIdQuery } from "../core/newsSeen.js";
+import { newsScope, DELETE_SQL } from "../core/newsVisibility.js";
 import { requireAuth } from "../auth/middleware.js";
 
 export const newsRouter = Router();
@@ -13,15 +13,16 @@ const CATEGORIES = ["company", "logistics", "sales"];
 /** Latest news, optionally filtered by category. */
 newsRouter.get("/", async (req, res) => {
   const category = req.query.category as string | undefined;
-  const params: unknown[] = [];
-  let where = "";
-  if (category && CATEGORIES.includes(category)) {
-    params.push(category);
-    where = `WHERE category = $1`;
-  }
+  // 🎯 Умови віддаємо БІЛДЕРУ разом із параметрами — він допише «живе» й аудиторію і
+  //    поверне готовий WHERE. Клеїти фрагмент тут не можна: категорія необовʼязкова,
+  //    тож номер параметра аудиторії плаває між $1 і $2.
+  const conds: string[] = [];
+  const pre: unknown[] = [];
+  if (category && CATEGORIES.includes(category)) { pre.push(category); conds.push(`category = $${pre.length}`); }
+  const { where, params } = newsScope(tabsOfRole(req.auth!.roleKey), conds, pre);
   const result = await pool.query(
     `SELECT id, category, title, body, author, image_url, created_at
-     FROM news ${where} ${andAlive(where.length > 0)} ORDER BY created_at DESC LIMIT 100`,
+     FROM news ${where} ORDER BY created_at DESC LIMIT 100`,
     params
   );
   res.json({ news: result.rows });
@@ -62,7 +63,11 @@ newsRouter.delete("/:id", async (req, res) => {
  * самого списку означало б, що лічильник зʼявляється лише там, де він уже не потрібен.
  */
 newsRouter.get("/unread", async (req, res) => {
-  const max = await pool.query<{ max_id: number }>(MAX_ALIVE_ID_SQL);
+  // 🎯 Вкладки читача рахуються ОДИН раз і йдуть в усі три запити цього роуту — інакше
+  //    лічильник і «долистав досюди» могли б розійтися між собою в межах однієї відповіді.
+  const tabs = tabsOfRole(req.auth!.roleKey);
+  const mq = maxVisibleIdQuery(tabs);
+  const max = await pool.query<{ max_id: number }>(mq.text, mq.params);
   const maxId = max.rows[0]?.max_id ?? 0;
 
   // 🔔 Свіжий бандл шле `sinceId` — мітку зі СВОГО браузера (localStorage), тож спільний
@@ -73,12 +78,14 @@ newsRouter.get("/unread", async (req, res) => {
   const sinceId = raw != null && raw !== "" ? Number(raw) : null;
   let unread: number;
   if (sinceId != null && Number.isFinite(sinceId)) {
-    const r = await pool.query<{ n: number }>(UNREAD_BY_ID_SQL, [Math.trunc(sinceId)]);
+    const q = unreadByIdQuery(Math.trunc(sinceId), tabs);
+    const r = await pool.query<{ n: number }>(q.text, q.params);
     unread = r.rows[0]?.n ?? 0;
   } else {
     const u = await pool.query<{ news_seen_at: Date | null }>(
       `SELECT news_seen_at FROM users WHERE id = $1`, [req.auth!.userId]);
-    const r = await pool.query<{ n: number }>(UNREAD_COUNT_SQL, [u.rows[0]?.news_seen_at ?? null]);
+    const q = unreadSinceQuery((u.rows[0]?.news_seen_at ?? null) as unknown as string | null, tabs);
+    const r = await pool.query<{ n: number }>(q.text, q.params);
     unread = r.rows[0]?.n ?? 0;
   }
   res.json({ unread, maxId });
@@ -91,7 +98,8 @@ newsRouter.get("/unread", async (req, res) => {
  */
 newsRouter.post("/seen", async (req, res) => {
   await pool.query(MARK_SEEN_SQL, [req.auth!.userId]);
-  const max = await pool.query<{ max_id: number }>(MAX_ALIVE_ID_SQL);
+  const mq = maxVisibleIdQuery(tabsOfRole(req.auth!.roleKey));
+  const max = await pool.query<{ max_id: number }>(mq.text, mq.params);
   res.json({ ok: true, maxId: max.rows[0]?.max_id ?? 0 });
 });
 
