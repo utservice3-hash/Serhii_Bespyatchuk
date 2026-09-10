@@ -208,7 +208,7 @@ export async function lardiSearch(path: string, req: AnalyzeBody, useArea: boole
 // червону → діапазон зеленої). Тарифи грн/км — з карти КВП (липень 2026).
 // Помаранчеві області карти (Закарпаття/Прикарпаття/Буковина) → жовтий тариф;
 // окуповані (Луганська/Донецька/Крим) зони не мають → фолбек на зону призначення.
-type Zone = "green" | "yellow" | "red";
+import { ZONE_RATES, type Zone } from "../core/zoneRates.js";
 const ZONE_LABEL: Record<Zone, string> = { green: "🟢 зелена", yellow: "🟡 жовта", red: "🔴 червона" };
 const AREA_ZONES: [RegExp, Zone][] = [
   [/волин/i, "green"], [/рівн|ровен/i, "green"], [/львів|львов/i, "green"],
@@ -221,12 +221,7 @@ const AREA_ZONES: [RegExp, Zone][] = [
   [/дніпр|днепр/i, "green"], // Дніпро — зелена (правка КВП 09.07.2026), довкола — червоні
   [/запор/i, "red"], [/херсон/i, "red"],
 ];
-const ZONE_RATES: { maxMass: number; label: string; rates: Record<Zone, [number, number]> }[] = [
-  { maxMass: 2.5, label: "до 2,5 т", rates: { green: [25, 25], yellow: [30, 30], red: [35, 35] } },
-  { maxMass: 5, label: "до 5 т", rates: { green: [30, 35], yellow: [35, 40], red: [40, 50] } },
-  { maxMass: 10, label: "до 10 т", rates: { green: [38, 45], yellow: [45, 55], red: [55, 60] } },
-  { maxMass: Infinity, label: "20 т (фура)", rates: { green: [55, 67], yellow: [67, 73], red: [73, 85] } },
-];
+// Тарифи — у `core/zoneRates.ts` (редакція КВП 04.09.2026), тут лише зони областей.
 function zoneOfArea(area: string | null | undefined): Zone | null {
   if (!area) return null;
   for (const [re, z] of AREA_ZONES) if (re.test(area)) return z;

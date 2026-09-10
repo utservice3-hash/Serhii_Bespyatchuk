@@ -155,6 +155,11 @@ export const CLOSE_REASONS = [
   { key: "own_transport", label: "Власний транспорт" },
   { key: "seasonality", label: "Сезонність" },
   { key: "closed_down", label: "Закрились" },
+  // Додано 10.09.2026 за списком Дарини Михальчевської (13 клієнтів з реактивації геть):
+  // 9 із 13 причин були «перевізник» або «разове перевезення», і жодна не лягала в словник —
+  // «інше» сховало б саме те, заради чого причину вимагав власник.
+  { key: "carrier", label: "Перевізник" },
+  { key: "one_off", label: "Разове перевезення" },
   { key: "other", label: "Інше" },
 ] as const;
 export const CLOSE_REASON_KEYS: string[] = CLOSE_REASONS.map((r) => r.key);

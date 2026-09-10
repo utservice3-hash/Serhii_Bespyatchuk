@@ -573,13 +573,17 @@ CREATE TABLE IF NOT EXISTS loyalty_overrides (
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archive_reason TEXT;
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archived_by INTEGER REFERENCES users(id);
+-- 10.09.2026: словник розширено (carrier, one_off) — перевірка перебудовується щоразу,
+-- інакше `duplicate_object` нижче мовчки лишив би СТАРИЙ перелік (той самий клас, що
+-- «міграція пройшла ≠ зміна застосувалась»).
+ALTER TABLE loyalty_overrides DROP CONSTRAINT IF EXISTS loyalty_overrides_archive_reason_chk;
 DO $$ BEGIN
   ALTER TABLE loyalty_overrides ADD CONSTRAINT loyalty_overrides_archive_reason_chk
     -- ⚠️ NULL-ПАСТКА, спіймана гейтом #38: `NULL IN (...)` дає NULL, а CHECK на NULL
     -- ПРОХОДИТЬ. Без явного `IS NOT NULL` архівація без причини тихо вставлялась би —
     -- тобто CHECK стояв би для вигляду. Той самий клас, що `traf_type = 'cpc'` при NULL.
     CHECK (archived_at IS NULL OR (archive_reason IS NOT NULL AND archive_reason IN
-           ('price','competitor','own_transport','seasonality','closed_down','other')));
+           ('price','competitor','own_transport','seasonality','closed_down','carrier','one_off','other')));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- 🔁 ПЕРЕНЕСЕННЯ СТАРИХ `hidden` В АРХІВ. Разова, з умовою на ще не перенесені —

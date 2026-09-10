@@ -38,6 +38,7 @@ export const MANIFEST_FILES: string[] = [
   "core/moneyBuckets.test.js",
   "core/absences.test.js",
   "core/clientPlansList.test.js",
+  "core/zoneRates.test.js",
   "core/activeManager.test.js",
   "core/weekPlan.test.js",
   "core/sumInvariants.test.js",
@@ -1323,6 +1324,8 @@ export const MANIFEST_TESTS: string[] = [
   "#394d ЖИВИЙ: рядків без user_id при наявному акаунті менеджера — нуль",
   "#396 СПИСОК КЛІЄНТІВ: умова скоупу стоїть ПІСЛЯ матеріалізованої бази",
   "#396b ЖИВИЙ 🪞: список менеджера == адмінський, звужений по ньому; обидва < 5 с",
+  "#397 ТАРИФИ КАЛЬКУЛЯТОРА == повідомлення КВП 04.09.2026, число в число",
+  "#397b СЛОВНИК ПРИЧИН == CHECK loyalty_overrides_archive_reason_chk, в обидва боки",
   // 🗑 РЕЄСТР ЗНЯТИХ ГЕЙТІВ (01.09.2026) — правило 13 вимагає нового номера, а крок 0
   // відмовляв на будь-якому зниклому імені; оголосити зняття законним не було чим.
   "#235 РЕЄСТР приймає зняття ПОІМЕННО — і лише його",
