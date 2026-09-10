@@ -217,7 +217,10 @@ test("#23c ПРИЧИНИ ЗАКРИТТЯ — закритий перелік, 
   const { readFileSync } = await import("node:fs");
   const path = await import("node:path");
   assert.deepEqual(R.CLOSE_REASON_KEYS,
-    ["price", "competitor", "own_transport", "seasonality", "closed_down", "other"],
+    // 10.09.2026: +carrier, +one_off — запит КВП (Дарина Михальчевська, зворотний звʼязок 04.09),
+    // погоджено Романом Денисюком; CHECK `loyalty_overrides_archive_reason_chk` розширено тим
+    // самим комітом, парність стереже #397b.
+    ["price", "competitor", "own_transport", "seasonality", "closed_down", "carrier", "one_off", "other"],
     "перелік причин змінився — це рішення власника, не рефакторинг");
   // 🔴 Дзеркало до переліку: межа має жити в БД, а не лише у формі. «Закрив і
   // забув» — це втрата єдиних даних про те, ЧОМУ клієнт не повернувся.
