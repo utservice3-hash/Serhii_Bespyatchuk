@@ -46,6 +46,7 @@ import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS,
          archiveListSql } from "../core/clientArchive.js";
+import { clientsListSql } from "../core/clientPlansList.js";
 import { logClientAdmin, clientAdminLog } from "../core/clientAdminLog.js";
 import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
          CLOSE_CLASS_LABEL } from "../core/reactivationClose.js";
@@ -5594,8 +5595,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // щоб два екрани не розійшлись у тому, що вважати клієнтом.
   const mgrParams: unknown[] = [metrics.GENERIC_CLIENT_KEYS];
   let mgrCond = "";
-  if (managerId != null) { mgrParams.push(managerId); mgrCond = `AND pm.manager_id = $${mgrParams.length}`; }
-  else if (teamId != null) { mgrParams.push(teamId); mgrCond = `AND mm.team_id = $${mgrParams.length}`; }
+  // 🔴 УМОВА СКОУПУ — ЗОВНІ, ПО МАТЕРІАЛІЗОВАНІЙ БАЗІ (10.09.2026). Ті самі колонки, що й
+  // були (`pm.manager_id` — основний за оплатами; `mm.team_id` — команда показаного
+  // менеджера), але накладені ПІСЛЯ збирання списку. Причина — в `clientsListSql`.
+  if (managerId != null) { mgrParams.push(managerId); mgrCond = `AND b.primary_manager_id = $${mgrParams.length}`; }
+  else if (teamId != null) { mgrParams.push(teamId); mgrCond = `AND b.team_id = $${mgrParams.length}`; }
 
   // 🔴 Сегмент/стан — зі СПІЛЬНОГО джерела (`core/clientSegments.ts`), того самого,
   // що живить реактивацію. Окремим запитом, а не CTE всередині запиту нижче:
@@ -5622,55 +5626,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     //
     // ⚠️ Урок ширший за цей роут: пісочниця на 18 тис. рядків НЕ доводить нічого
     // про 146 тис. Порядок даних — частина умов задачі, а не деталь.
-    `WITH ${LAST_PAID_CTE},
-     paid AS (
-       SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
-         FROM deals d
-         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
-        WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL
-          AND NOT (d.client_key = ANY($1))
-     ),
-     agg AS (
-       SELECT client_key, COUNT(*)::int AS orders, COALESCE(SUM(price),0) AS revenue,
-              MIN(closed_at_kommo) AS first_paid, MAX(closed_at_kommo) AS last_paid
-         FROM paid GROUP BY client_key HAVING COUNT(*) >= 2
-     ),
-     per_cm AS (
-       SELECT client_key, manager_id, COUNT(*) AS n, MAX(closed_at_kommo) AS mx
-         FROM paid GROUP BY 1, 2
-     ),
-     primary_mgr AS (
-       SELECT DISTINCT ON (client_key) client_key, manager_id
-         FROM per_cm ORDER BY client_key, n DESC, mx DESC
-     )
-     SELECT a.client_key, a.orders, a.revenue, nm.client_name AS name, nm.payment_type,
-            to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS first_paid,
-            to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS last_paid,
-            COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
-            mm.name AS manager_name, lo.pinned_manager_id,
-            mm.team_id, tt.name AS team_name
-       FROM agg a
-       JOIN primary_mgr pm ON pm.client_key = a.client_key
-       -- 🔴 БЕЗ умови AND NOT lo.hidden У ЦЬОМУ JOIN — І ЦЕ НЕ КОСМЕТИКА.
-       -- Було: LEFT JOIN … AND NOT lo.hidden, а нижче WHERE COALESCE(lo.hidden,false)=false.
-       -- Для ПРИХОВАНОГО клієнта join не давав рядка → lo.hidden = NULL →
-       -- COALESCE(NULL,false)=false → умова ІСТИННА, і клієнт лишався на екрані.
-       -- Тобто дія «прибрати з постійних» роками писалась у базу й не робила НІЧОГО.
-       -- Заміряно на живому сервері: hidden=true, а клієнт у видачі обох екранів.
-       LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
-       ${LAST_PAID_JOIN}
-       JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
-       LEFT JOIN teams tt ON tt.id = mm.team_id
-       LEFT JOIN LATERAL (
-         SELECT d2.client_name, d2.payment_type FROM deals d2
-           JOIN pipeline_stage_map p2 ON p2.pipeline_id = d2.pipeline_id AND p2.status_id = d2.status_id
-                                      AND p2.funnel_stage = 'paid'
-          WHERE d2.client_key = a.client_key
-          ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
-       ) nm ON true
-      -- 🗄 Архів замість hidden — те саме джерело, що в реактивації (гейт #38).
-      WHERE NOT ${archivedSql("lo", "ap")} ${mgrCond}
-      ORDER BY a.revenue DESC`,
+    clientsListSql(mgrCond),
     mgrParams
   );
   const clientKeys = clientsRes.rows.map((c) => c.client_key);
