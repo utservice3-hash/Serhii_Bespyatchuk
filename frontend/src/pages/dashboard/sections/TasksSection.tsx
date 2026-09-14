@@ -654,14 +654,11 @@ export function TasksSection({
                       </div>
                       {/* 📎 Що є в картці — числом, а не здогадом. Мітка групи видима
                           лише власнику групи: сервер віддає `groupName` тільки йому. */}
-                      {(task.groupName || (task.commentCount ?? 0) > 0 || (task.fileCount ?? 0) > 0) && (
+                      {((task.commentCount ?? 0) > 0 || (task.fileCount ?? 0) > 0) && (
                         <div style={{ paddingLeft: 22, marginTop: 2, display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", alignItems: "center" }}>
                           {/* Форма бейджа — та сама, що в сусідніх мітках 1×1 вище:
                               pill, 10.5px, приглушений фон. Новий вигляд поруч зі
                               старим читався б як інша сутність. */}
-                          {task.groupName && (
-                            <span style={{ fontSize: 10.5, color: "var(--text-muted)", background: "rgba(128,128,128,.10)", borderRadius: "var(--r-pill)", padding: "1px var(--sp-3)" }}>📁 {task.groupName}</span>
-                          )}
                           {(task.commentCount ?? 0) > 0 && (
                             <span title="доповнень у стрічці" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>💬 {task.commentCount}</span>
                           )}
@@ -685,8 +682,32 @@ export function TasksSection({
                           )}
                         </div>
                       )}
-                      {/* Команда/департамент — малий чіп ПІД назвою (не окрема колонка), редагований */}
-                      <div style={{ paddingLeft: 22, marginTop: 2 }}>
+                      {/* Команда/департамент + ГРУПА — малі чіпи ПІД назвою (не окремі
+                          колонки), обидва редаговані одним кліком.
+                          🔴 ГРУПА СТОЇТЬ САМЕ ТУТ, А НЕ ЛИШЕ В КАРТЦІ. Перша редакція
+                          дозволяла покласти задачу в папку тільки з відкритої картки —
+                          тобто розкласти двадцять задач означало двадцять відкриттів.
+                          Привʼязка мусить бути там, де людина дивиться на список, і
+                          виглядати так само, як сусідня «команда»: інакше фіча є, а
+                          способу нею скористатись немає. */}
+                      <div style={{ paddingLeft: 22, marginTop: 2, display: "flex", gap: "var(--sp-1)", flexWrap: "wrap", alignItems: "center" }}>
+                        <select
+                          value={task.groupId != null && groupName(task.groupId) ? String(task.groupId) : ""}
+                          onChange={(e) => {
+                            const groupId = e.target.value ? Number(e.target.value) : null;
+                            patchTaskLocal(task.id, { groupId });
+                            commitTask(task.id, { groupId });
+                          }}
+                          title={groups.length ? "Моя папка для цієї задачі" : "Спершу створіть групу смугою «📁 Групи» над списком"}
+                          style={task.groupId != null && groupName(task.groupId)
+                            ? { border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", borderRadius: "var(--r-pill)", fontSize: 10.5, padding: "1px var(--sp-3)", maxWidth: "100%" }
+                            : { border: "1px dashed var(--border)", background: "transparent", color: "var(--text-muted)", cursor: "pointer", borderRadius: "var(--r-pill)", fontSize: 10.5, padding: "1px var(--sp-3)", maxWidth: "100%" }}
+                        >
+                          {/* Порожній стан НАЗИВАЄ ПРИЧИНУ: «+ група» при нулі груп
+                              виглядало б як зламаний контрол. */}
+                          <option value="">{groups.length ? "+ група" : "+ група (спершу створіть)"}</option>
+                          {groups.map((g) => <option key={g.id} value={g.id}>📁 {g.name}</option>)}
+                        </select>
                         <select
                           value={task.department ?? ""}
                           onChange={(e) => { const department = e.target.value || null; patchTaskLocal(task.id, { department }); commitTask(task.id, { department }); }}
