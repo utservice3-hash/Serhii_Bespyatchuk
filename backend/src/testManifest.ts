@@ -38,6 +38,7 @@ export const MANIFEST_FILES: string[] = [
   "core/moneyBuckets.test.js",
   "core/absences.test.js",
   "core/clientPlansList.test.js",
+  "core/taskVisibility.test.js",
   "core/zoneRates.test.js",
   "core/activeManager.test.js",
   "core/weekPlan.test.js",
@@ -196,6 +197,7 @@ export const MANIFEST_FILES: string[] = [
 export const MANIFEST_SECURITY_TABLES: string[] = [
   "users", "access_audit", "bank_accounts", "one_on_ones",
   "one_on_one_forms", "tracker_devices", "tracker_intervals", "tasks",
+  "task_comments", "task_files", "task_status_log", "task_views", "task_groups",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -1325,6 +1327,13 @@ export const MANIFEST_TESTS: string[] = [
   "#396 СПИСОК КЛІЄНТІВ: умова скоупу стоїть ПІСЛЯ матеріалізованої бази",
   "#396b ЖИВИЙ 🪞: список менеджера == адмінський, звужений по ньому; обидва < 5 с",
   "#397 ТАРИФИ КАЛЬКУЛЯТОРА == повідомлення КВП 04.09.2026, число в число",
+  "#398 МЕЖА ЗАДАЧІ: хто може ЗМІНИТИ, той БАЧИТЬ — по всіх ролях і всіх видах задач",
+  "#398b 🪞 ОСОБИСТА ЗАДАЧА: автор бачить — решта, включно з наскрізним, НЕ бачить",
+  "#398c ВИКОНАВЕЦЬ-АКАУНТ: задача не особиста, видна виконавцю й наглядачу, чужому менеджеру — ні",
+  "#398e ВЬЮ ai_tasks == визначенню «не особиста» з ядра",
+  "#398f СУПУТНИКИ ЗАДАЧ: закриті і в схемі (REVOKE), і в переліку застосунку",
+  "#398g ЧИТАЧІ task_files НЕСУТЬ deleted_at IS NULL — мʼяке видалення не протікає",
+  "#398d 🪞 СХЕМА З НУЛЯ: SQL-скоуп == JS-правилу; CHECK одного виконавця; група не тягне задачі",
   "#397b СЛОВНИК ПРИЧИН == CHECK loyalty_overrides_archive_reason_chk, в обидва боки",
   // 🗑 РЕЄСТР ЗНЯТИХ ГЕЙТІВ (01.09.2026) — правило 13 вимагає нового номера, а крок 0
   // відмовляв на будь-якому зниклому імені; оголосити зняття законним не було чим.
