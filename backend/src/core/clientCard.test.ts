@@ -97,13 +97,13 @@ test("#29d МІСЯЦЬ КАРТКИ == МІСЯЦЮ ЕКРАНА ПЛАНІВ (
 });
 
 /**
- * #400 — ЗАПИС ДЗВІНКА ГРАЄ В КАРТЦІ, А НЕ В НОВІЙ ВКЛАДЦІ (рішення власника 08.09.2026).
+ * #403 — ЗАПИС ДЗВІНКА ГРАЄ В КАРТЦІ, А НЕ В НОВІЙ ВКЛАДЦІ (рішення власника 08.09.2026).
  * Читає джерело `ClientCardPanel.tsx`: біля `c.recording` стоїть `<audio src={c.recording}`,
  * і жодного `href={c.recording}` з `target="_blank"`. 🪞 Дзеркало: плеєр показується лише
  * коли запис Є (`open && c.recording`) — інакше кнопка «в нікуди» на дзвінку без файла.
  * Червоніє, якщо повернути посилання, прибрати <audio> або зняти умову на запис.
  */
-test("#400 КАРТКА: запис дзвінка грає у вбудованому <audio>, не відкривається новою вкладкою", async () => {
+test("#403 КАРТКА: запис дзвінка грає у вбудованому <audio>, не відкривається новою вкладкою", async () => {
   const { readFileSync } = await import("node:fs");
   const path = await import("node:path");
   const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ClientCardPanel.tsx"), "utf8");
