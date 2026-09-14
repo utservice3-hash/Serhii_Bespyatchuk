@@ -7,6 +7,17 @@ export type TaskForm = {
   deadline: string;
   assigneeId: number | "";
   assigneeId2: number | ""; // друга людина (задача одразу на двох менеджерів)
+  /** Виконавець-АКАУНТ (HR, бухгалтерія, рекрутер — кого немає в CRM). Разом із assigneeId неможливий. */
+  assigneeUserId: number | "";
+  /**
+   * 📎 Файл, обраний ЩЕ НА ЕТАПІ СТВОРЕННЯ (вимога власника 14.09.2026).
+   *
+   * 🔴 Живе у формі, а не вантажиться одразу: вкладення привʼязується до `task_id`,
+   * якого до `POST /tasks` ще не існує. Тому файл тримається тут і їде окремим
+   * запитом ПІСЛЯ того, як сервер назвав id. Скидається разом із формою —
+   * `emptyTaskForm` — інакше файл від попередньої задачі тихо поїхав би в наступну.
+   */
+  pendingFile: File | null;
   priority: TaskPriority;
   department: string;
   comments: string;
@@ -33,6 +44,8 @@ export const emptyTaskForm: TaskForm = {
   deadline: "",
   assigneeId: "",
   assigneeId2: "",
+  assigneeUserId: "",
+  pendingFile: null,
   priority: "medium",
   department: "",
   comments: "",

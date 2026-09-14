@@ -10,6 +10,7 @@ import { roleHasPerm, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import {
   canSeeTask, canTouchTask as mayTouch, visibilityCondSql,
+  isTaskOwner, ownerCondSql,
   TASK_OWNER_JOINS, ASSIGNEE_TEAM_SQL,
   type TaskViewer, type TaskOwnerRow,
 } from "../core/taskVisibility.js";
@@ -126,7 +127,18 @@ tasksRouter.get("/", async (req, res) => {
             -- назва папки колеги протікала б через кожну спільну задачу.
             CASE WHEN g.owner_id = $${me} THEN g.name END AS "groupName",
             COALESCE(tc.n, 0) AS "commentCount",
-            COALESCE(tf.n, 0) AS "fileCount",
+            -- 📎 ЛІЧИЛЬНИК ВКЛАДЕНЬ ЗНАЄ МЕЖУ ВЛАСНИКА (рішення власника 14.09.2026:
+            -- «файли тільки для власників цієї задачі»). Наглядач бачить задачу,
+            -- але не її файли.
+            -- 🔴 НЕ ВЛАСНИКУ — NULL, А НЕ НУЛЬ. Нуль означає «вкладень немає», і
+            -- екран написав би «—» на задачі, у якої файл Є: наглядач, що зайшов
+            -- перевірити, чи приклали акт, прочитав би пряму неправду. NULL —
+            -- це «не знаю, бо не моє», і колонка малює замок. Правило проєкту:
+            -- порожній скоуп НЕ виражається нулем (нуль falsy, і діра відтворюється
+            -- під іншим числом).
+            -- ⚠️ І БЕЗ БЕКТИКІВ: цей коментар живе ВСЕРЕДИНІ шаблонного літерала,
+            -- тож бектик тут — синтаксична помилка, а не форматування.
+            CASE WHEN ${ownerCondSql(viewerOf(auth), push)} THEN COALESCE(tf.n, 0) END AS "fileCount",
             -- 🔔 «Є НОВЕ» — це «зʼявилось ПІСЛЯ мого останнього перегляду і НЕ
             -- мною». Без task_views таке твердження було б здогадом, тому
             -- бейдж спирається на збережений момент перегляду, а не на
@@ -431,18 +443,14 @@ tasksRouter.post("/", async (req, res) => {
   // це задача БЕЗ виконавця взагалі (`core/taskVisibility.ts`).
   const assigneeUserId = parsed.data.assigneeUserId ?? null;
   if (assigneeUserId != null) {
-    if (!isAdminScope(auth) && assigneeUserId !== auth.userId) {
-      if (auth.role === "manager") {
-        return res.status(403).json({ error: "Менеджер не може передавати задачі іншим" });
-      }
-      if (auth.role === "team_lead") {
-        const chk = await pool.query<{ ok: boolean }>(
-          `SELECT (m.team_id = $1) AS ok FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $2`,
-          [auth.teamId, assigneeUserId]
-        );
-        if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна призначати лише своїй команді" });
-      }
-    }
+    /**
+     * 🔓 РІШЕННЯ ВЛАСНИКА 14.09.2026, дослівно: «всі можуть ставити один одному
+     * задачі». Доти менеджер отримував 403 «не може передавати задачі іншим», а
+     * тімлід — «лише своїй команді». Обидві заборони зняті ЯВНО; лишається єдина
+     * перевірка — що акаунт існує й активний, інакше FK впав би 500-ю.
+     */
+    const acc = await pool.query(`SELECT 1 FROM users WHERE id = $1 AND is_active`, [assigneeUserId]);
+    if (!acc.rowCount) return res.status(400).json({ error: "Акаунт-виконавця не знайдено" });
     const one = await pool.query<{ id: number }>(
       `INSERT INTO tasks (title, status, deadline, assignee_user_id, priority, comments, department, created_by, group_id)
        VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9)
@@ -453,25 +461,24 @@ tasksRouter.post("/", async (req, res) => {
     return res.status(201).json({ id: one.rows[0].id, ids: [one.rows[0].id] });
   }
 
-  // Список виконавців: assigneeIds (кілька) або один assigneeId. Менеджер завжди сам.
+  /**
+   * Список виконавців: assigneeIds (кілька) або один assigneeId.
+   *
+   * 🔓 РІШЕННЯ ВЛАСНИКА 14.09.2026: «всі можуть ставити один одному задачі». Доти
+   * менеджер ЗАВЖДИ був виконавцем сам (ідентифікатори з тіла ігнорувались), а тімлід
+   * не міг вийти за свою команду. Тепер одна гілка на всі ролі. Дефолт БЕЗ виконавця
+   * лишається старий: справжній менеджер (managerId>0) → собі, решта → особиста
+   * задача (assignee NULL, created_by = я). Тримає `#400h`.
+   */
+  const wanted = parsed.data.assigneeIds?.length ? parsed.data.assigneeIds : (parsed.data.assigneeId != null ? [parsed.data.assigneeId] : []);
   let assignees: (number | null)[];
-  if (auth.role === "manager") {
-    // Справжній менеджер (managerId>0) → задача собі (як було). HR/own-scope БЕЗ валідного
-    // менеджера (scope-clamp дає managerId=-1) → ОСОБИСТА задача (assignee NULL, created_by=я),
-    // а не падіння на assignee_id=-1 (FK). Створення особистої гейтить екран `tasks`, не scope.
-    assignees = auth.managerId && auth.managerId > 0 ? [auth.managerId] : [null];
+  if (wanted.length) {
+    const chk = await pool.query<{ id: number }>(`SELECT id FROM managers WHERE id = ANY($1)`, [wanted]);
+    const okIds = new Set(chk.rows.map((r) => r.id));
+    if (wanted.some((id) => !okIds.has(id))) return res.status(400).json({ error: "Виконавця не знайдено" });
+    assignees = wanted;
   } else {
-    const ids = parsed.data.assigneeIds?.length ? parsed.data.assigneeIds : (parsed.data.assigneeId != null ? [parsed.data.assigneeId] : []);
-    if (auth.role === "team_lead") {
-      if (!ids.length) return res.status(400).json({ error: "Оберіть менеджера" });
-      const chk = await pool.query<{ id: number }>(
-        `SELECT id FROM managers WHERE id = ANY($1) AND team_id = $2`, [ids, auth.teamId]);
-      const okIds = new Set(chk.rows.map((r) => r.id));
-      if (ids.some((id) => !okIds.has(id))) return res.status(403).json({ error: "Можна ставити задачі лише своїй команді" });
-      assignees = ids;
-    } else {
-      assignees = ids.length ? ids : [null]; // admin: без виконавця = особиста задача
-    }
+    assignees = auth.role === "manager" && auth.managerId && auth.managerId > 0 ? [auth.managerId] : [null];
   }
   const uniqueAssignees = [...new Set(assignees)];
 
@@ -635,50 +642,24 @@ tasksRouter.patch("/:id", async (req, res) => {
       }
     }
   }
-  // Reassignment is scoped like task creation: a manager only to themselves, a
-  // team-lead only within their team.
-  if (parsed.data.assigneeId !== undefined && !isAdminScope(auth)) {
-    const newAssignee = parsed.data.assigneeId;
-    if (auth.role === "manager" && newAssignee !== auth.managerId && newAssignee !== null) {
-      return res.status(403).json({ error: "Менеджер не може передавати задачі іншим" });
-    }
-    if (auth.role === "team_lead" && newAssignee != null) {
-      const chk = await pool.query<{ ok: boolean }>(
-        `SELECT (team_id = $1) AS ok FROM managers WHERE id = $2`,
-        [auth.teamId, newAssignee]
-      );
-      if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна призначати лише своїй команді" });
-    }
+  // 🔓 Перепризначення — як і створення: рішення власника 14.09.2026 «всі можуть
+  // ставити один одному задачі». Заборони «менеджер лише собі» і «тімлід лише своїй
+  // команді» зняті явно; лишається перевірка, що менеджер існує (інакше FK → 500).
+  if (parsed.data.assigneeId != null) {
+    const chk = await pool.query(`SELECT 1 FROM managers WHERE id = $1`, [parsed.data.assigneeId]);
+    if (!chk.rowCount) return res.status(400).json({ error: "Виконавця не знайдено" });
   }
-  // 👤 Виконавець-АКАУНТ — та сама межа, що для менеджера: собі завжди; тімлід —
-  // у межах команди (акаунт → його менеджер → команда); наскрізний — будь-кому.
-  if (parsed.data.assigneeUserId != null && !isAdminScope(auth)) {
-    const target = parsed.data.assigneeUserId;
-    if (target !== auth.userId) {
-      if (auth.role === "manager") {
-        return res.status(403).json({ error: "Менеджер не може передавати задачі іншим" });
-      }
-      if (auth.role === "team_lead") {
-        const chk = await pool.query<{ ok: boolean }>(
-          `SELECT (m.team_id = $1) AS ok FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $2`,
-          [auth.teamId, target]
-        );
-        if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна призначати лише своїй команді" });
-      }
-    }
+  // 🔴 ОДИН ВИКОНАВЕЦЬ НА ЗАДАЧУ — 400 ТУТ, а не 500 від CHECK `tasks_one_assignee`.
+  // Стан ПІСЛЯ патча: поле з тіла, якщо передане, інакше те, що в рядку.
+  const nextMgr = parsed.data.assigneeId !== undefined ? parsed.data.assigneeId : before.assigneeId;
+  const nextAcc = parsed.data.assigneeUserId !== undefined ? parsed.data.assigneeUserId : before.assigneeUserId;
+  if (nextMgr != null && nextAcc != null) {
+    return res.status(400).json({ error: "Один виконавець на задачу: спершу зніміть менеджера або акаунт" });
   }
-  // 🔴 ДВА ВИКОНАВЦІ РАЗОМ — ВІДМОВА, А НЕ 500 НА CHECK. Той самий інваріант,
-  // що в БД (`tasks_one_assignee`); тут він називає себе людською мовою.
-  const nextAssigneeId = parsed.data.assigneeId !== undefined ? parsed.data.assigneeId : before.assigneeId;
-  const nextAssigneeUser = parsed.data.assigneeUserId !== undefined ? parsed.data.assigneeUserId : before.assigneeUserId;
-  if (nextAssigneeId != null && nextAssigneeUser != null) {
-    return res.status(400).json({ error: "Виконавець один: або менеджер із CRM, або акаунт" });
-  }
-  // 📁 Група — ЛИШЕ ВЛАСНА. Інакше задачу можна було б покласти в чужу папку,
-  // і вона зникла б з екрана колеги в незрозумілий спосіб.
+  // 📁 Група — лише власна (та сама межа, що в POST): чужа папка означала б, що
+  // задача зникає з екрана колеги незрозумілим чином.
   if (parsed.data.groupId != null) {
-    const g = await pool.query<{ id: number }>(
-      `SELECT id FROM task_groups WHERE id = $1 AND owner_id = $2`, [parsed.data.groupId, auth.userId]);
+    const g = await pool.query(`SELECT 1 FROM task_groups WHERE id = $1 AND owner_id = $2`, [parsed.data.groupId, auth.userId]);
     if (!g.rowCount) return res.status(403).json({ error: "Групу не знайдено серед ваших" });
   }
 
@@ -774,19 +755,26 @@ tasksRouter.get("/assignees", async (_req, res) => {
 // СПІЛЬНА ЗАДАЧА · стрічка доповнень · історія статусу · вкладення
 //
 // 🔴 МЕЖА СУПУТНИКІВ — ЦЕ МЕЖА САМОЇ ЗАДАЧІ, І ВОНА ЗАПИТУЄТЬСЯ ЗАВЖДИ.
-// Читання (коментарі, історія, файли) — `canSeeTask`; запис (доповнення,
-// завантаження) — `canTouchTask`, тобто «учасник»: автор, виконавець, тімлід
-// виконавця, наскрізний. Різниця не косметична: роль `company` (HR,
-// бухгалтерія — «тільки перегляд») читає обговорення компанії, але не пише в
-// нього. Без окремої перевірки файл віддавався б за прямим `id` будь-кому
-// автентифікованому — рівно те, від чого тека лежить поза публічним static.
+// ТРИ режими, а не два:
+//   «see»   — обговорення й історія: `canSeeTask`. Роль `company` (HR,
+//             бухгалтерія — «тільки перегляд») читає, але не пише.
+//   «touch» — доповнення: `canTouchTask`, тобто «учасник»: автор, виконавець,
+//             тімлід виконавця, наскрізний.
+//   «own»   — ВКЛАДЕННЯ, усі чотири роути: `isTaskOwner` — лише автор і
+//             виконавець. Рішення власника 14.09.2026, дослівно: «файли мають
+//             бути доступними тільки для власників цієї задачі». Отже вкладення
+//             ВУЖЧІ за обговорення: назву задачі наглядач бачить, байти — ні.
+// ⚠️ «own» накриває і читання, і запис СВІДОМО: звузивши лише читання, ми дали б
+// тімліду право покласти файл і забрали право його відкрити.
+// Без цих перевірок файл віддавався б за прямим `id` будь-кому автентифікованому
+// — рівно те, від чого тека лежить поза публічним static.
 // ═════════════════════════════════════════════════════════════════════════════
 
 /** Спільний вхід для супутників: 400 на сміття в шляху, 404 на чужу/відсутню задачу. */
 async function openTask(
   req: Request,
   res: Response,
-  mode: "see" | "touch",
+  mode: "see" | "touch" | "own",
 ): Promise<{ id: number; meta: TaskMeta } | null> {
   const id = pathId(req.params.id);
   if (id == null) { res.status(400).json({ error: "Некоректний ідентифікатор задачі" }); return null; }
@@ -797,6 +785,21 @@ async function openTask(
   if (!seen.found || !seen.ok) { res.status(404).json({ error: "Задачу не знайдено" }); return null; }
   if (mode === "touch" && !mayTouch(viewerOf(auth), seen.meta!)) {
     res.status(403).json({ error: "Дописувати може автор, виконавець або керівник" });
+    return null;
+  }
+  /**
+   * 🔒 РЕЖИМ «own» — ВКЛАДЕННЯ. Рішення власника 14.09.2026: файли доступні лише
+   * власникам задачі (автор + виконавець), а не всім, хто задачу бачить.
+   *
+   * 🔴 ТУТ 403, А НЕ 404 — І ЦЕ НЕ НЕДОГЛЯД. Вище 404 приховує САМЕ ІСНУВАННЯ
+   * чужої особистої задачі, і це правильно. Але сюди глядач доходить лише тоді,
+   * коли задачу він уже бачить — вона в його списку. Промовчати 404 означало б
+   * «файла немає», тобто збрехати про дані; 403 називає причину, і людина
+   * розуміє, що бачить не все. Мовчазна відмова тут була б рівно тим класом, що
+   * «кнопка натиснута, нічого не сталось».
+   */
+  if (mode === "own" && !isTaskOwner(viewerOf(auth), seen.meta!)) {
+    res.status(403).json({ error: "Вкладення доступні лише автору та виконавцю задачі" });
     return null;
   }
   return { id, meta: seen.meta! };
@@ -866,7 +869,7 @@ tasksRouter.post("/:id/seen", async (req, res) => {
 
 /** 📎 Перелік вкладень задачі. */
 tasksRouter.get("/:id/files", async (req, res) => {
-  const t = await openTask(req, res, "see");
+  const t = await openTask(req, res, "own");
   if (!t) return;
   const r = await pool.query(
     `SELECT f.id, f.name, f.mime, f.size_bytes AS "sizeBytes", f.created_at AS "createdAt",
@@ -884,7 +887,7 @@ tasksRouter.get("/:id/files", async (req, res) => {
  * однієї форми означало б дві культури завантаження.
  */
 tasksRouter.post("/:id/files", async (req, res) => {
-  const t = await openTask(req, res, "touch");
+  const t = await openTask(req, res, "own");
   if (!t) return;
   const { filename, dataBase64 } = req.body ?? {};
   if (!dataBase64 || typeof dataBase64 !== "string") {
@@ -925,7 +928,7 @@ tasksRouter.post("/:id/files", async (req, res) => {
  * найгіршим із можливих виходів.
  */
 tasksRouter.get("/:id/files/:fileId", async (req, res) => {
-  const t = await openTask(req, res, "see");
+  const t = await openTask(req, res, "own");
   if (!t) return;
   const fid = pathId(req.params.fileId);
   if (fid == null) return res.status(400).json({ error: "Некоректний ідентифікатор файла" });
@@ -958,7 +961,7 @@ tasksRouter.get("/:id/files/:fileId", async (req, res) => {
  * повернути видалені вкладення на екран — тримає `#400h`.
  */
 tasksRouter.delete("/:id/files/:fileId", async (req, res) => {
-  const t = await openTask(req, res, "see");
+  const t = await openTask(req, res, "own");
   if (!t) return;
   const fid = pathId(req.params.fileId);
   if (fid == null) return res.status(400).json({ error: "Некоректний ідентифікатор файла" });

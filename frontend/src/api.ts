@@ -1699,6 +1699,8 @@ export interface ReceivableInvoice {
   /** Юрособа КЛІЄНТА, з якої прийшов рахунок. Для обʼєднаного клієнта їх кілька. */
   entityName: string | null;
   entityKey: string | null;
+  /** 🔗 Клієнт має активні псевдоніми в реєстрі злиття (сервер, не склад рахунків). */
+  clientMerged?: boolean;
   /**
    * 👤 Менеджер САМОГО РАХУНКУ — не той, хто веде клієнта. Після override або
    * склейки це різні люди, і колонка існує саме щоб різницю було видно.
@@ -1814,6 +1816,28 @@ export async function fetchReceivableInvoices(clientKey: string): Promise<Receiv
 export async function fetchInvoiceRegistry(): Promise<ReceivableInvoicesResp> {
   const { data } = await api.get<ReceivableInvoicesResp>("/dashboard/receivables/invoices");
   return { invoices: data.invoices, oldestAliveDays: data.oldestAliveDays ?? null };
+}
+
+/**
+ * 📋 РЕЄСТР ЗАЯВОК НА ОПЛАТУ ПЕРЕВІЗНИКАМ — угоди воронки «Оплата перевозчикам».
+ * Скоуп по менеджеру, що подав (рішення власника 07.09.2026). Лише читання.
+ */
+export type PaymentRequestKind = "unsorted" | "pending" | "accepted" | "problem" | "paid" | "rejected" | "unknown";
+export interface PaymentRequestRow {
+  kommoId: number; submittedOn: string;
+  clientKey: string | null; clientName: string | null;
+  carrierName: string | null; carrierEdrpou: string | null;
+  payType: string | null; amount: number | null;
+  statusId: number; status: string; kind: PaymentRequestKind;
+  managerId: number | null; managerName: string | null; crmUrl: string;
+}
+export interface PaymentRequestsResp {
+  from: string; to: string; rows: PaymentRequestRow[];
+  summary: Record<PaymentRequestKind, { n: number; amount: number }>;
+}
+export async function fetchPaymentRequests(params: { from?: string; to?: string; status?: string }): Promise<PaymentRequestsResp> {
+  const { data } = await api.get<PaymentRequestsResp>("/dashboard/receivables/payment-requests", { params });
+  return data;
 }
 
 /** Дедлайн оплати + коментар до конкретного рахунку (менеджер — свої клієнти). */
@@ -2435,7 +2459,13 @@ export interface Task {
   groupId?: number | null;
   groupName?: string | null;
   commentCount?: number;
-  fileCount?: number;
+  /**
+   * 📎 Скільки вкладень. `null` — НЕ «нуль», а «не моя задача»: вкладення бачать
+   * лише автор і виконавець (рішення власника 14.09.2026), і сервер свідомо не
+   * називає наглядачеві навіть кількість. Екран мусить показати це як невідоме
+   * (замок), а не як «файлів немає».
+   */
+  fileCount?: number | null;
   /** «Є нове»: доповнення або зміна статусу після мого останнього перегляду і НЕ мною. */
   hasUnseen?: boolean;
   metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;

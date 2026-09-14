@@ -5,6 +5,7 @@ import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 import {
   canSeeTask, canTouchTask, isPersonalTask, visibilityCondSql,
+  isTaskOwner, ownerCondSql,
   PERSONAL_COLUMNS, PERSONAL_TASK_SQL, ASSIGNED_TASK_SQL,
   TASK_OWNER_JOINS, ASSIGNEE_TEAM_SQL,
   type TaskViewer, type TaskOwnerRow,
@@ -291,4 +292,95 @@ test("#400d 🪞 СХЕМА З НУЛЯ: SQL-скоуп == JS-правилу; CH
     await c.end();
     scratch.dispose();
   }
+});
+
+/**
+ * #400p — ВКЛАДЕННЯ ДОСТУПНІ ЛИШЕ ВЛАСНИКАМ ЗАДАЧІ.
+ *
+ * 🔴 РІШЕННЯ ВЛАСНИКА 14.09.2026, дослівно: «файли мають бути доступними тільки
+ * для власників цієї задачі». Доти всі чотири файлові роути стояли на
+ * `canSeeTask`, тобто перелік і БАЙТИ вкладення чужої призначеної задачі віддавались
+ * наскрізним ролям (`admin`, `ceo`, `opdir`, `kvp`, `financier`), ролі `company`
+ * (HR, бухгалтерія) і тімліду команди виконавця.
+ *
+ * Гейт стереже ТРИ твердження, і кожне має свій саботаж:
+ *  ① `isTaskOwner ⊆ canSeeTask` — власник, що не бачить своєї задачі, це стан, де
+ *    файл доступний, а задача ні. Дзеркало інваріанти `#400` (`canTouch ⊆ canSee`).
+ *  ② межа справді ВУЖЧА — існує хоч один глядач, що задачу бачить і власником НЕ є.
+ *    Без цього твердження гейт лишався б зеленим, якби `isTaskOwner` повернули в
+ *    `canSeeTask`: підмножина виконується й для рівності (правило 7 — зелений
+ *    завдяки дірці).
+ *  ③ SQL-дзеркало: `ownerCondSql` читає ТІ САМІ три колонки, що й JS. Розійдуться —
+ *    лічильник «📎 2» у списку розійдеться з тим, що віддає роут.
+ *
+ * 🧨 Червоніє, якщо: дописати в `isTaskOwner` гілку `adminScope` (② впаде); прибрати
+ * з нього перевірку автора (① не впаде, а ② і фікстури власності — так); замінити в
+ * `ownerCondSql` колонку (③).
+ */
+test("#400p ВКЛАДЕННЯ · ВЛАСНИК: межа вужча за «бачить», і SQL каже те саме, що JS", () => {
+  // ① Підмножина: по ВСІХ ролях і ВСІХ видах задач.
+  for (const v of VIEWERS) {
+    for (const { name, t } of TASKS) {
+      if (isTaskOwner(v, t)) {
+        assert.ok(canSeeTask(v, t),
+          `🔴 ВЛАСНИК НЕ БАЧИТЬ СВОЄЇ ЗАДАЧІ: роль «${v.role}» власник «${name}», але canSeeTask=false. `
+          + "Це стан, у якому вкладення доступне, а задача — ні.");
+      }
+    }
+  }
+
+  // ② Межа ВУЖЧА, а не та сама: наглядач бачить, власником не є.
+  const foreign = row({ assigneeId: 50, assigneeTeamId: 9, createdBy: LEAD.userId });
+  assert.ok(canSeeTask(ADMIN, foreign), "фікстура зламана: наскрізний мусить бачити призначену задачу");
+  assert.equal(isTaskOwner(ADMIN, foreign), false,
+    "🔴 НАСКРІЗНИЙ СТАВ ВЛАСНИКОМ ЧУЖОЇ ЗАДАЧІ — межа вкладень перестала бути вужчою за видимість");
+  assert.ok(canSeeTask(HR, foreign), "фікстура зламана: company мусить бачити призначену задачу");
+  assert.equal(isTaskOwner(HR, foreign), false, "🔴 HR/бухгалтерія стали власниками чужої задачі");
+  const inMyTeam = row({ assigneeId: 40, assigneeTeamId: 7, createdBy: ADMIN.userId });
+  assert.ok(canSeeTask(LEAD, inMyTeam), "фікстура зламана: тімлід мусить бачити задачу своєї команди");
+  assert.equal(isTaskOwner(LEAD, inMyTeam), false,
+    "🔴 ТІМЛІД СТАВ ВЛАСНИКОМ задачі підлеглого — вкладення перестали бути приватними для пари автор/виконавець");
+
+  // Фікстури ВЛАСНОСТІ — по обидва боки кожної з трьох гілок (правило 11).
+  assert.equal(isTaskOwner(MGR, row({ createdBy: MGR.userId, assigneeId: 50, assigneeTeamId: 9 })), true, "автор — власник");
+  assert.equal(isTaskOwner(MGR, row({ assigneeId: 40, assigneeTeamId: 7, createdBy: ADMIN.userId })), true, "виконавець-менеджер — власник");
+  assert.equal(isTaskOwner(HR, row({ assigneeUserId: HR.userId, createdBy: LEAD.userId })), true, "виконавець-акаунт — власник");
+  assert.equal(isTaskOwner(OTHER_MGR, row({ assigneeId: 40, assigneeTeamId: 7, createdBy: ADMIN.userId })), false, "чужий менеджер — не власник");
+  // 🪞 `null` не має збігатися з `null`: задача без виконавця не робить власником
+  // кожного, у кого немає картки менеджера (`managerId: null` в наскрізного).
+  assert.equal(isTaskOwner(ADMIN, row({ createdBy: LEAD.userId })), false,
+    "🔴 NULL ЗІЙШОВСЯ З NULL: особиста задача чужого автора зробила власником того, у кого немає managerId");
+
+  // ③ SQL-дзеркало: ті самі три колонки, і жодної зайвої.
+  const vals: unknown[] = [];
+  const sql = ownerCondSql(MGR, (v) => { vals.push(v); return vals.length; });
+  for (const col of ["created_by", "assignee_user_id", "assignee_id"]) {
+    assert.ok(sql.includes(col), `🔴 SQL-умова власника не читає «${col}» — JS і SQL розійшлись`);
+  }
+  assert.deepEqual(vals, [MGR.userId, MGR.managerId],
+    "🔴 порядок/склад параметрів умови власника змінився — $-номери поїдуть");
+
+  /**
+   * ④ ЗАСТОСУВАННЯ. Правило без застосування нічого не стереже, а застосовує його
+   * РОУТ. Читаємо зібраний `dist/routes/tasks.js` (а не джерело: важливо те, що
+   * поїде на сервер) і вимагаємо режим «own» на ВСІХ ЧОТИРЬОХ файлових роутах.
+   *
+   * 🔴 ЧОМУ ЧОТИРИ, А НЕ «ХОЧА Б ОДИН». Звузивши лише читання, ми дали б тімліду
+   * право ПОКЛАСТИ файл і забрали право його прочитати — «хто кладе, той бачить»
+   * перестало б бути правдою. Тому число точне, і воно ж ловить появу пʼятого
+   * файлового роута, який забули поставити на межу.
+   */
+  const routes = readFileSync(path.join(import.meta.dirname, "..", "routes", "tasks.js"), "utf8");
+  const fileRouteLines = routes.split("\n").filter((l) => /["'`]\/:id\/files/.test(l));
+  assert.ok(fileRouteLines.length >= 4,
+    `🔴 ГЕЙТ ВТРАТИВ ПРЕДМЕТ: файлових роутів знайдено ${fileRouteLines.length} із очікуваних 4 — `
+    + "шлях роутів змінився, і перевірка більше не бачить того, що стереже");
+  const owns = (routes.match(/openTask\(req, res, "own"\)/g) ?? []).length;
+  assert.equal(owns, 4,
+    `🔴 ФАЙЛОВІ РОУТИ НА МЕЖІ ВЛАСНИКА: ${owns} із 4. Роут, що лишився на «see»/«touch», `
+    + "віддає вкладення чужої задачі наглядачеві — рішення власника 14.09.2026 порушено.");
+  // 🪞 І дзеркало: лічильник у СПИСКУ теж знає межу, інакше «📎 2» світиться тому,
+  // кому роут віддасть 403 — відмова, що виглядає як поломка.
+  assert.match(routes, /ownerCondSql\(viewerOf\(auth\), push\)[\s\S]{0,120}fileCount/,
+    "🔴 ЛІЧИЛЬНИК ВКЛАДЕНЬ НЕ ЗНАЄ МЕЖІ: `fileCount` у видачі списку не обгорнутий умовою власника");
 });

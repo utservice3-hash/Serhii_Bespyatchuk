@@ -76,6 +76,7 @@ import * as paymentMatch from "../core/paymentMatch.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { receivablesScope } from "../auth/receivablesScope.js";
+import { paymentRequestsSql, toPaymentRequestRows, summarize as summarizePaymentRequests, PAYMENT_REQUEST_STATUSES } from "../core/paymentRequests.js";
 import {
   fkErrorMessage, limitRequestTitle, amountLimitState, amountLimitLabel,
   LIMIT_REQUEST_TASK_TYPE,
@@ -2706,7 +2707,7 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
   const conds = [flat ? "ri.client_key = ANY($1)" : "ri.client_key = $1"];
   const params: unknown[] = [flat ? visibleKeys : clientKey];
 
-  const r = await pool.query<{ client_key: string; invoice_time: string | null; invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; edrpou: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; invoice_manager: string | null }>(
+  const r = await pool.query<{ client_key: string; invoice_time: string | null; invoice_no: string | null; invoice_date: string | null; amount: string; service_url: string | null; note: string | null; edrpou: string | null; due_date: string | null; inv_comment: string | null; entity_name: string | null; entity_key: string | null; client_merged: boolean; invoice_manager: string | null }>(
     `SELECT ri.client_key, ri.invoice_no, to_char(ri.invoice_date, 'YYYY-MM-DD') AS invoice_date,
             -- 🕐 ЧАС ВИСТАВЛЕННЯ. NULL = часу не записано (сентинел 00:00:00 у
             -- 1С — 121 із 293 рядків), і це «не знаємо», а не «опівночі».
@@ -2724,6 +2725,11 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
             -- і людина мусить бачити, ЩО саме всередині одного рядка — інакше
             -- склейка виглядає як зникнення другої компанії.
             ri.client_name AS entity_name, ri.client_key_raw AS entity_key,
+            -- 🔗 ЧИ КЛІЄНТ ОБʼЄДНАНИЙ — по реєстру псевдонімів, а не по складу відкритих
+            -- рахунків (рішення власника 14.09.2026, випадок Автострада: після рознесення
+            -- рахунків ГК лишилась одна юрособа, і підпис зникав, хоч клієнт злитий).
+            EXISTS (SELECT 1 FROM client_key_alias a
+                     WHERE a.canonical_key = ri.client_key AND a.revoked_at IS NULL) AS client_merged,
             to_char(nn.due_date, 'YYYY-MM-DD') AS due_date, nn.comment AS inv_comment
      FROM receivable_invoices ri
      LEFT JOIN managers m ON m.id = ri.manager_id
@@ -2835,6 +2841,7 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         comment: x.inv_comment,
         entityName: x.entity_name,
         entityKey: x.entity_key,
+        clientMerged: x.client_merged === true,
         managerName: x.invoice_manager,
         // Наша юрособа (ЮТС / Автомув / ФОП / невідомо) і ПРИЧИНА, коли невідомо.
         // Причина обовʼязкова: «невідомо» без «чому» — це порожнє місце, а воно
@@ -3766,6 +3773,36 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
     );
   }
   res.json({ ok: true });
+});
+
+/**
+ * 📋 РЕЄСТР ЗАЯВОК НА ОПЛАТУ ПЕРЕВІЗНИКАМ (рішення власника 07.09.2026).
+ * Джерело — угоди воронки «Оплата перевозчикам» (`core/paymentRequests.ts`).
+ * 🔴 СКОУП — ПО МЕНЕДЖЕРУ, ЩО ПОДАВ (менеджер вихідної угоди, `m.id` у SQL реєстру), а не по клієнту: власник
+ * сказав «бачить лише свої заявки, які він подав». Тімлід — команда, вище — усі.
+ * Період — дата подачі за Києвом, обидва кінці включно; дефолт — останні 30 днів.
+ * Межу тримає `ROUTE_TAB` (вкладка `receivables`).
+ */
+dashboardRouter.get("/receivables/payment-requests", async (req, res) => {
+  const auth = req.auth!;
+  const sc = receivablesScope(auth, req.query);
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from ?? "")) ? String(req.query.from) : new Date(Date.now() - 30 * 864e5).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to ?? "")) ? String(req.query.to) : today;
+  const params: unknown[] = [from, to];
+  const conds: string[] = [];
+  if (sc.managerId != null) { params.push(sc.managerId); conds.push(`AND m.id = $${params.length}`); }
+  if (sc.teamId != null) { params.push(sc.teamId); conds.push(`AND m.team_id = $${params.length}`); }
+  const status = String(req.query.status ?? "").trim();
+  if (status) {
+    const ids = Object.entries(PAYMENT_REQUEST_STATUSES).filter(([, v]) => v.kind === status).map(([id]) => Number(id));
+    if (ids.length === 0) return res.status(400).json({ error: `Невідомий стан: ${status}` });
+    params.push(ids); conds.push(`AND d.status_id = ANY($${params.length})`);
+  }
+  const r = await pool.query(paymentRequestsSql(conds.join("\n       ")), params);
+  const rows = toPaymentRequestRows(r.rows, config.kommo.baseUrl);
+  res.json({ from, to, rows, summary: summarizePaymentRequests(rows) });
 });
 
 /**
