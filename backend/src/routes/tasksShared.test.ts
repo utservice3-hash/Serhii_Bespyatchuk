@@ -144,6 +144,8 @@ test("#399h ДИМ: усі роути спільної задачі викону
     assert.equal((await call("POST", "/:id/files", { params: { id },
       body: { filename: "b.bin", dataBase64: Buffer.alloc(6 * 1024 * 1024).toString("base64") } })).code, 413,
       "🔴 файл понад 5 МБ прийнято");
+
+
     assert.equal((await call("PATCH", "/:id", { who: "mgr", params: { id }, body: { groupId: 1 } })).code, 403,
       "🔴 задачу покладено в ЧУЖУ групу — вона зникла б з екрана колеги незрозумілим чином");
 
@@ -191,10 +193,70 @@ test("#399h ДИМ: усі роути спільної задачі викону
     assert.equal((await rowFor("mgr")).hasUnseen, false,
       "🔴 власне доповнення підняло бейдж собі ж — умова автора не працює");
 
+    // ── 7. МЕЖА КІЛЬКОСТІ ВКЛАДЕНЬ — В КІНЦІ, бо вона МІНЯЄ склад файлів ──
+    /**
+     * 🔴 МЕЖА КІЛЬКОСТІ — ПО ОБИДВА БОКИ, інакше перевіряється лише те, що функція
+     * щось повертає. Ліміт 2 (рішення Романа 14.09): ДРУГИЙ файл мусить лягти,
+     * ТРЕТІЙ — отримати 409. Перевірка лише на 409 зеленіла б і при ліміті 1,
+     * тобто при зламаній фічі.
+     */
+    const second = await call("POST", "/:id/files", { params: { id },
+      body: { filename: "друге.txt", dataBase64: Buffer.from("другий").toString("base64") } });
+    assert.equal(second.code, 201, `🔴 ДРУГИЙ файл не прийнято — ліміт звузився: ${JSON.stringify(second.payload)}`);
+    const third = await call("POST", "/:id/files", { params: { id },
+      body: { filename: "третє.txt", dataBase64: Buffer.from("третій").toString("base64") } });
+    assert.equal(third.code, 409, "🔴 ТРЕТІЙ файл прийнято — ліміт 2 не тримається");
+    // Прибрали один → знову можна. Інакше межа була б пасткою без виходу.
+    const list2 = (await call("GET", "/:id/files", { params: { id } })).payload as unknown as { files: { id: number }[] };
+    assert.equal(list2.files.length, 2, "у переліку не два файли");
+    await call("DELETE", "/:id/files/:fileId", { params: { id, fileId: String(list2.files[1].id) } });
+    const again = await call("POST", "/:id/files", { params: { id },
+      body: { filename: "знову.txt", dataBase64: Buffer.from("знову").toString("base64") } });
+    assert.equal(again.code, 201, "🔴 після прибирання файла додати новий не вдається — межа стала пасткою");
+    // Мʼяке видалення не рахується в ліміті й не видно в переліку.
+    const afterList = (await call("GET", "/:id/files", { params: { id } })).payload as unknown as { files: unknown[] };
+    assert.equal(afterList.files.length, 2, "🔴 прибране вкладення повернулось у перелік");
+
     const { pool } = await import("../db/pool.js");
     await pool.end();
   } finally {
     await c.end();
     scratch.dispose();
   }
+});
+
+/**
+ * #399i — ЛІМІТИ ВКЛАДЕНЬ ОДНАКОВІ НА СЕРВЕРІ Й НА ЕКРАНІ.
+ *
+ * 🔴 Два числа в двох файлах розходяться МОВЧКИ, і розходження тут не косметичне:
+ * якщо екран обіцяє більше, ніж пускає сервер, людина тисне «Додати файл» і
+ * отримує «нічого не сталось» без причини; якщо навпаки — кнопка зникає раніше,
+ * ніж межа настала. Той самий клас, що дві копії `MONEY_ZONE` і правило
+ * класифікації, яке існувало тричі.
+ *
+ * 🧨 Червоніє, якщо змінити число в одному файлі й забути другий.
+ */
+test("#399i ЛІМІТИ ВКЛАДЕНЬ: сервер і екран називають ОДНІ Й ТІ САМІ числа", () => {
+  const be = readFileSync(path.join(import.meta.dirname, "tasks.js"), "utf8");
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "api.ts"), "utf8");
+
+  const num = (src: string, re: RegExp, what: string): string => {
+    const m = src.match(re);
+    assert.ok(m, `🔴 не знайдено ${what} — гейт втратив предмет`);
+    return m![1].replace(/[\s_]/g, "");
+  };
+  // Сервер: `const FILES_PER_TASK = 2;` і `5 * 1024 * 1024`.
+  const beCount = num(be, /FILES_PER_TASK\s*=\s*(\d+)/, "FILES_PER_TASK на сервері");
+  const beBytes = num(be, /FILE_MAX_BYTES\s*=\s*([\d\s*]+?);/, "FILE_MAX_BYTES на сервері");
+  const feCount = num(fe, /TASK_FILES_PER_TASK\s*=\s*(\d+)/, "TASK_FILES_PER_TASK на екрані");
+  const feBytes = num(fe, /TASK_FILE_MAX_BYTES\s*=\s*([\d\s*]+?);/, "TASK_FILE_MAX_BYTES на екрані");
+
+  assert.equal(feCount, beCount,
+    `🔴 КІЛЬКІСТЬ ФАЙЛІВ РОЗІЙШЛАСЬ: сервер ${beCount}, екран ${feCount}`);
+  assert.equal(feBytes, beBytes,
+    `🔴 РОЗМІР ФАЙЛА РОЗІЙШОВСЯ: сервер ${beBytes}, екран ${feBytes}`);
+  // Дзеркало: числа справді ті, що вирішив власник 14.09.2026 — інакше гейт
+  // доводив би лише рівність двох однаково зламаних копій.
+  assert.equal(beCount, "2", "🔴 ліміт кількості не 2 — рішення Романа 14.09.2026");
+  assert.equal(beBytes, "5*1024*1024", "🔴 ліміт розміру не 5 МБ — рішення Романа 14.09.2026");
 });

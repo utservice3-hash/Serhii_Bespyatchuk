@@ -25,8 +25,13 @@ tasksRouter.use(requireAuth);
 const TASK_FILES_DIR = path.join(UPLOAD_DIR, "..", "task-files");
 /** Ліміт файла — рішення Романа 14.09.2026. */
 const FILE_MAX_BYTES = 5 * 1024 * 1024;
-/** Ліміт кількості на задачу — щоб вкладення не стали сховищем. */
-const FILES_PER_TASK = 10;
+/**
+ * Ліміт кількості на задачу — рішення Романа 14.09.2026: **два**.
+ * 🔴 Дзеркалиться у фронті (`TASK_FILES_PER_TASK`), і цю пару звіряє гейт `#399i`:
+ * дві копії числа розходяться мовчки, а розходження тут означає, що екран обіцяє
+ * третій файл, а сервер відмовляє — тобто «нічого не сталось» без причини.
+ */
+const FILES_PER_TASK = 2;
 
 /** Погляд на межу з токена: одне перетворення на весь файл. */
 const viewerOf = (auth: {
@@ -888,7 +893,7 @@ tasksRouter.post("/:id/files", async (req, res) => {
   const cnt = await pool.query<{ n: string }>(
     `SELECT count(*) AS n FROM task_files WHERE task_id = $1 AND deleted_at IS NULL`, [t.id]);
   if (Number(cnt.rows[0].n) >= FILES_PER_TASK) {
-    return res.status(409).json({ error: `Більше ${FILES_PER_TASK} файлів на задачу не кладемо` });
+    return res.status(409).json({ error: `Більше ${FILES_PER_TASK} файлів на задачу не кладемо — приберіть зайвий` });
   }
   const base64 = dataBase64.includes(",") ? dataBase64.split(",")[1] : dataBase64;
   const buffer = Buffer.from(base64, "base64");

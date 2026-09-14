@@ -32,7 +32,21 @@ const DOCS_DIR = path.join(UPLOAD_DIR, "..", "documents");
 const MAX_BYTES = 50 * 1024 * 1024; // 50 МБ на файл
 const onlyAdmin = requireRole("admin");
 
-/** Уся структура: пласкі списки папок і файлів (дерево будує фронт). */
+/**
+ * Уся структура: пласкі списки папок і файлів (дерево будує фронт).
+ *
+ * 🔴 ЦЕЙ РОУТ ВІДДАВАВ 500, І ЕКРАН ПРИ ЦЬОМУ КАЗАВ «ПОРОЖНЬО».
+ * Заміряно проти прода 14.09.2026: `column u.name does not exist`. У `users` немає
+ * колонки `name` — є `full_name` (перелік колонок: id, email, password_hash, role,
+ * manager_id, team_id, created_at, is_active, initial_password, last_seen,
+ * role_override, deactivated_at, deactivated_reason, full_name, tracker_enabled,
+ * news_seen_at). Сусідній роут задач увесь час стояв із `cu.full_name` — правильний
+ * зразок лежав поруч, як `AS day` у випадку 06.08.
+ *
+ * ⚠️ Чому це не спіймав жоден гейт: SQL у шаблонному рядку не типізується, а
+ * матриця доступу перевіряє КОД ВІДПОВІДІ на 403/не-403 — 500 для неї «пройдений
+ * гейт». Тримає тепер `#399j`.
+ */
 documentsRouter.get("/tree", async (_req, res) => {
   const [folders, files] = await Promise.all([
     pool.query(
@@ -40,7 +54,7 @@ documentsRouter.get("/tree", async (_req, res) => {
     ),
     pool.query(
       `SELECT f.id, f.folder_id, f.name, f.category, f.mime, f.size_bytes, f.created_at,
-              COALESCE(u.name, u.email) AS author
+              COALESCE(u.full_name, u.email) AS author
          FROM doc_files f LEFT JOIN users u ON u.id = f.created_by
         ORDER BY f.name`
     ),

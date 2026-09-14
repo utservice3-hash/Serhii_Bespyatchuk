@@ -2607,8 +2607,8 @@ export interface TaskAssignee { id: number; name: string; nameIsLogin: boolean; 
 
 /** 🔴 Ліміт файла 5 МБ — рішення Романа 14.09.2026. Дзеркалить `FILE_MAX_BYTES` сервера. */
 export const TASK_FILE_MAX_BYTES = 5 * 1024 * 1024;
-/** Ліміт кількості на задачу — дзеркалить `FILES_PER_TASK` сервера. */
-export const TASK_FILES_PER_TASK = 10;
+/** Ліміт кількості на задачу — дзеркалить `FILES_PER_TASK` сервера (гейт `#399i`). */
+export const TASK_FILES_PER_TASK = 2;
 
 export async function fetchTaskGroups(): Promise<TaskGroup[]> {
   const { data } = await api.get<{ groups: TaskGroup[] }>("/tasks/groups");
