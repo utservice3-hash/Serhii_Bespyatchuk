@@ -411,6 +411,105 @@ function TaskFilesViewer({ taskId, taskTitle, onClose }: {
   );
 }
 
+/** Іконка за типом — щоб файл упізнавався ще до назви. */
+const fileGlyph = (mime: string | null | undefined, name: string) => {
+  if (mime?.startsWith("image/")) return "🖼";
+  if (mime?.startsWith("video/")) return "🎞";
+  if (mime === "application/pdf" || /\.pdf$/i.test(name)) return "📄";
+  if (/\.(xlsx?|csv)$/i.test(name)) return "📊";
+  if (/\.(docx?|txt|rtf)$/i.test(name)) return "📝";
+  return "📎";
+};
+const fmtKb = (bytes: number | string) => `${Math.max(1, Math.round(Number(bytes) / 1024))} КБ`;
+
+type ZoneFile = { key: string | number; name: string; sizeBytes: number | string; mime?: string | null; author?: string | null; canRemove: boolean };
+
+/**
+ * 📎 ЗОНА ВКЛАДЕНЬ — ОДИН ВИГЛЯД НА ВСІ МІСЦЯ (картка задачі, форма створення).
+ *
+ * Зразок — drop-зона «Регламентів та документів» (`DocumentsSection.tsx`), тобто
+ * прийом, який у дашборді ВЖЕ Є: пунктирна рамка, підсвітка при перетягуванні,
+ * клік по всій зоні відкриває вибір файла. Власник 14.09.2026: «unclear file
+ * attaching — make it with the best practices, copy from somewhere». Доти
+ * вкладення жили як таблиця з кнопкою під нею, а в рядку списку скріпка стояла
+ * ТРИЧІ — ніщо з цього не казало «сюди можна кинути файл».
+ *
+ * Межі (розмір, кількість) показуються ТЕКСТОМ у самій зоні, а коли місця немає —
+ * зона зникає, лишається список: вимкнена рамка без причини читається як поломка.
+ */
+function AttachmentZone({ files, remaining, onPickClick, onFile, onOpen, onRemove, busy, note }: {
+  files: ZoneFile[];
+  remaining: number;
+  onPickClick: () => void;
+  onFile: (f: File) => void;
+  onOpen?: (f: ZoneFile) => void;
+  onRemove?: (f: ZoneFile) => void;
+  busy?: boolean;
+  note?: string | null;
+}) {
+  const [over, setOver] = useState(false);
+  const maxMb = Math.round(TASK_FILE_MAX_BYTES / 1024 / 1024);
+  return (
+    <div style={{ display: "grid", gap: "var(--sp-2)" }}>
+      {files.length > 0 && (
+        <div style={{ display: "grid", gap: 4 }}>
+          {files.map((f) => (
+            <div key={f.key} style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", padding: "6px var(--sp-3)",
+              border: "1px solid var(--border)", borderRadius: "var(--r-md)", background: "var(--card-bg)", fontSize: "var(--fs-sm)" }}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>{fileGlyph(f.mime, f.name)}</span>
+              {onOpen ? (
+                <button type="button" onClick={() => onOpen(f)} title="Подивитися"
+                  style={{ background: "none", border: "none", padding: 0, font: "inherit", color: "var(--text)", cursor: "pointer",
+                    textAlign: "left", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {f.name}
+                </button>
+              ) : (
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+              )}
+              <span className="recv-num" style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)", flexShrink: 0 }}>
+                {fmtKb(f.sizeBytes)}{f.author ? ` · ${f.author}` : ""}
+              </span>
+              {onRemove && f.canRemove && (
+                <button type="button" title="Прибрати" onClick={() => onRemove(f)}
+                  style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {remaining > 0 ? (
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => { if (!busy) onPickClick(); }}
+          onKeyDown={(e) => { if (!busy && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onPickClick(); } }}
+          onDragOver={(e) => { e.preventDefault(); if (!busy) setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files?.[0]; if (f && !busy) onFile(f); }}
+          style={{
+            border: `1.5px dashed ${over ? "var(--brand)" : "var(--border)"}`,
+            background: over ? "var(--danger-bg)" : "transparent",
+            borderRadius: "var(--r-md)", padding: "var(--sp-4)", textAlign: "center",
+            cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, transition: "border-color .15s, background .15s",
+          }}
+        >
+          <div style={{ fontSize: "var(--fs-sm)", color: "var(--text)", fontWeight: "var(--fw-semibold)" as React.CSSProperties["fontWeight"] }}>
+            {busy ? "Завантаження…" : "📎 Перетягніть файл сюди або натисніть, щоб обрати"}
+          </div>
+          <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 2 }}>
+            до {maxMb} МБ · ще {remaining} із {TASK_FILES_PER_TASK}
+          </div>
+        </div>
+      ) : (
+        <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: 0 }}>
+          Ліміт {TASK_FILES_PER_TASK} файли на задачу — приберіть зайвий, щоб додати новий.
+        </p>
+      )}
+      {note && <p style={{ fontSize: "var(--fs-sm)", color: "var(--danger)", margin: 0 }}>⚠️ {note}</p>}
+    </div>
+  );
+}
+
 export function TasksSection({
   taskSearch,
   setTaskSearch,
@@ -518,6 +617,17 @@ export function TasksSection({
    * рівно той стан, що ми вичищаємо з цього файла.
    */
   const createFileRef = useRef<HTMLInputElement | null>(null);
+  /** Одна перевірка на обидва шляхи у формі — клік через інпут і перетягування в зону. */
+  const acceptCreateFile = (f: File) => {
+    if (f.size > TASK_FILE_MAX_BYTES) {
+      // 🔴 `setDetailErr` тут не годиться: він рендериться лише в картці задачі,
+      // а ми у формі створення — іншому оверлеї. Відмова летіла б у порожнечу.
+      setCreateErr(`Файл «${f.name}» завеликий: ${Math.round(f.size / 1024 / 1024)} МБ, межа ${Math.round(TASK_FILE_MAX_BYTES / 1024 / 1024)} МБ`);
+      return;
+    }
+    setCreateErr(null);
+    setTaskForm((cur) => ({ ...cur, pendingFile: f }));
+  };
   const uploadTargetRef = useRef<number | null>(null);
   const pickFileFor = (taskId: number) => { uploadTargetRef.current = taskId; fileInputRef.current?.click(); };
 
@@ -783,20 +893,7 @@ export function TasksSection({
       <input
         ref={createFileRef}
         type="file"
-        onChange={(e) => {
-          const f = e.target.files?.[0]; e.target.value = "";
-          if (!f) return;
-          if (f.size > TASK_FILE_MAX_BYTES) {
-            // 🔴 `setDetailErr` ТУТ НЕ ГОДИТЬСЯ: він рендериться лише всередині
-            // відкритої КАРТКИ задачі, а ми у формі створення — іншому оверлеї.
-            // Тобто відмова летіла в порожнечу, і завеликий файл просто «не
-            // прикріплявся» без жодного слова.
-            setCreateErr(`Файл «${f.name}» завеликий: ${Math.round(f.size / 1024 / 1024)} МБ, межа ${Math.round(TASK_FILE_MAX_BYTES / 1024 / 1024)} МБ`);
-            return;
-          }
-          setCreateErr(null);
-          setTaskForm((cur) => ({ ...cur, pendingFile: f }));
-        }}
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) acceptCreateFile(f); }}
         style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
         tabIndex={-1}
         aria-hidden
@@ -985,7 +1082,7 @@ export function TasksSection({
                       </div>
                       {/* 📎 Що є в картці — числом, а не здогадом. Мітка групи видима
                           лише власнику групи: сервер віддає `groupName` тільки йому. */}
-                      {((task.commentCount ?? 0) > 0 || (task.fileCount ?? 0) > 0) && (
+                      {(task.commentCount ?? 0) > 0 && (
                         <div style={{ paddingLeft: 22, marginTop: 2, display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", alignItems: "center" }}>
                           {/* Форма бейджа — та сама, що в сусідніх мітках 1×1 вище:
                               pill, 10.5px, приглушений фон. Новий вигляд поруч зі
@@ -993,9 +1090,7 @@ export function TasksSection({
                           {(task.commentCount ?? 0) > 0 && (
                             <span title="доповнень у стрічці" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>💬 {task.commentCount}</span>
                           )}
-                          {(task.fileCount ?? 0) > 0 && (
-                            <span title="вкладень" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>📎 {task.fileCount}</span>
-                          )}
+
                         </div>
                       )}
                       {/* Задача з 1×1: бейдж + закріплення + замок. Видалення блокує сервер (403). */}
@@ -1039,29 +1134,6 @@ export function TasksSection({
                           <option value="">{groups.length ? "+ група" : "+ група (спершу створіть)"}</option>
                           {groups.map((g) => <option key={g.id} value={g.id}>📁 {g.name}</option>)}
                         </select>
-                        {/* 📎 Прикріпити файл ПРЯМО ЗІ СПИСКУ. Лічильник поруч —
-                            щоб було видно, що вкладення взагалі є, без відкриття картки. */}
-                        <button
-                          onClick={() => pickFileFor(task.id)}
-                          /* 🔒 Не власник — кнопка вимкнена, і причина НАПИСАНА.
-                             Доти вона лишалась активною (бо `fileCount ?? 0` робив
-                             із «не моє» нуль), людина обирала файл і отримувала 403
-                             у порожнечу — відмова, яку неможливо відрізнити від
-                             «нічого не сталось». */
-                          disabled={busy || task.fileCount == null || task.fileCount >= TASK_FILES_PER_TASK}
-                          title={task.fileCount == null
-                            ? "Прикріпляти може автор або виконавець задачі"
-                            : task.fileCount >= TASK_FILES_PER_TASK
-                            ? `Уже ${TASK_FILES_PER_TASK} файли — приберіть зайвий у картці`
-                            : "Прикріпити файл (до 5 МБ)"}
-                          style={{
-                            border: "1px dashed var(--border)", background: "transparent",
-                            color: "var(--text-muted)", borderRadius: "var(--r-pill)",
-                            fontSize: 10.5, padding: "1px var(--sp-3)",
-                            cursor: busy || task.fileCount == null || task.fileCount >= TASK_FILES_PER_TASK ? "default" : "pointer",
-                            opacity: busy || task.fileCount == null ? 0.5 : 1,
-                          }}
-                        >📎{task.fileCount != null && task.fileCount > 0 ? ` ${task.fileCount}` : ""}</button>
                         <select
                           value={task.department ?? ""}
                           onChange={(e) => { const department = e.target.value || null; patchTaskLocal(task.id, { department }); commitTask(task.id, { department }); }}
@@ -1268,23 +1340,35 @@ export function TasksSection({
                         власника: сервер віддає 0 тому, кому файли не належать. */}
                     <td style={{ verticalAlign: "top" }}>
                       {task.fileCount == null ? (
-                        /* 🔒 «НЕ МОЄ» — НЕ ТЕ САМЕ, ЩО «НЕМАЄ». Сервер не називає
-                           наглядачеві навіть кількості вкладень (рішення власника
-                           14.09.2026), і прочерк тут прямо збрехав би: людина, що
-                           зайшла перевірити, чи приклали акт, прочитала б «файлів
-                           немає». Невідоме читається як невідоме. */
+                        /* 🔒 «НЕ МОЄ» — не те саме, що «немає»: сервер не називає наглядачеві
+                           навіть кількості (рішення власника 14.09.2026). Прочерк збрехав би. */
                         <span title="Вкладення доступні лише автору та виконавцю задачі"
                           style={{ color: "var(--text-muted)", fontSize: 11 }}>🔒</span>
-                      ) : task.fileCount > 0 ? (
-                        <button
-                          onClick={() => setFilesViewer(task.id)}
-                          title="Подивитися вкладення"
-                          style={{ border: "1px solid var(--border)", background: "var(--card-bg)",
-                            color: "var(--text)", borderRadius: "var(--r-pill)", cursor: "pointer",
-                            fontSize: 11, padding: "2px var(--sp-3)", whiteSpace: "nowrap" }}
-                        >👁 {task.fileCount}</button>
                       ) : (
-                        <span style={{ color: "var(--text-muted)", fontSize: 11 }}>—</span>
+                        /* ОДНЕ місце для файлів у рядку: чип відкриває перегляд, «+» додає.
+                           Доти скріпка стояла тричі (під назвою, кнопкою і тут) — і жодна
+                           не казала «сюди можна кинути файл». */
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          {task.fileCount > 0 && (
+                            <button
+                              onClick={() => setFilesViewer(task.id)}
+                              title="Подивитися вкладення"
+                              style={{ border: "1px solid var(--border)", background: "var(--card-bg)",
+                                color: "var(--text)", borderRadius: "var(--r-pill)", cursor: "pointer",
+                                fontSize: 11, padding: "2px var(--sp-3)", whiteSpace: "nowrap" }}
+                            >📎 {task.fileCount}</button>
+                          )}
+                          {task.fileCount < TASK_FILES_PER_TASK && (
+                            <button
+                              onClick={() => pickFileFor(task.id)}
+                              disabled={busy}
+                              title={`Прикріпити файл (до 5 МБ, ще ${TASK_FILES_PER_TASK - task.fileCount} із ${TASK_FILES_PER_TASK})`}
+                              style={{ border: "1px dashed var(--border)", background: "transparent",
+                                color: "var(--text-muted)", borderRadius: "var(--r-pill)", cursor: busy ? "default" : "pointer",
+                                fontSize: 11, padding: "2px var(--sp-3)", whiteSpace: "nowrap", opacity: busy ? 0.5 : 1 }}
+                            >{task.fileCount > 0 ? "+" : "+ файл"}</button>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td>
@@ -1471,87 +1555,32 @@ export function TasksSection({
                 <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: 0 }}>🔒 {filesErr}</p>
               ) : files == null ? (
                 <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>{detailErr ? "—" : "Завантаження…"}</p>
-              ) : files.length === 0 ? (
-                <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>Файлів ще немає.</p>
               ) : (
-                /* Компактна таблиця дашборду (`data-table compact`) — той самий
-                   клас, що вже стоїть у цій картці на блоці показників. Власна
-                   верстка списку виглядала б як чужа вставка. */
-                <table className="data-table compact" style={{ width: "100%", marginBottom: "var(--sp-3)" }}>
-                  <thead><tr>
-                    <th style={{ textAlign: "left" }}>Файл</th>
-                    <th style={{ textAlign: "right" }}>Розмір</th>
-                    <th style={{ textAlign: "left" }}>Поклав</th>
-                    <th style={{ width: 24 }} />
-                  </tr></thead>
-                  <tbody>
-                    {files.map((f) => (
-                      <tr key={f.id}>
-                        <td style={{ textAlign: "left" }}>
-                          <button
-                            onClick={async () => {
-                              try {
-                                const url = await fetchTaskFileBlobUrl(openTask.id, f.id);
-                                window.open(url, "_blank", "noopener");
-                              } catch (err) {
-                                setDetailErr(err instanceof Error ? err.message : "файл не відкрився");
-                              }
-                            }}
-                            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text)", textDecoration: "underline", padding: 0, font: "inherit", textAlign: "left" }}
-                          >{f.name}</button>
-                        </td>
-                        <td className="recv-num" style={{ textAlign: "right", color: "var(--text-muted)" }}>
-                          {Math.max(1, Math.round(Number(f.sizeBytes) / 1024))} КБ
-                        </td>
-                        <td style={{ textAlign: "left", color: "var(--text-muted)" }}>{f.author ?? "—"}</td>
-                        <td style={{ textAlign: "center" }}>
-                          {(f.createdById === currentUserId || isAdmin) && (
-                            <button
-                              title="Прибрати вкладення"
-                              onClick={async () => {
-                                if (!confirm(`Прибрати «${f.name}»?`)) return;
-                                try {
-                                  await deleteTaskFile(openTask.id, f.id);
-                                  setFiles((cur) => (cur ?? []).filter((x) => x.id !== f.id));
-                                  refreshTasks?.();
-                                } catch (err) {
-                                  setDetailErr(err instanceof Error ? err.message : "не вдалося прибрати файл");
-                                }
-                              }}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)" }}
-                            >✕</button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-              {/* 🔴 КНОПКА, А НЕ СИРИЙ `input[type=file]`: його малює БРАУЗЕР і в дашборд
-                  він не вписується. Інпут один на секцію (див. вище), і ця кнопка лише
-                  наводить його на цю задачу — так само, як кнопка в рядку списку.
-                  Межу «більше не можна» показуємо ТЕКСТОМ, а не мертвою кнопкою:
-                  вимкнений контрол без причини читається як поломка. */}
-              {/* 🔒 Не власник — кнопки «Додати файл» немає взагалі: сервер однаково
-                  відмовить (403), а контрол, що обіцяє неможливе, читається як
-                  поломка. Причина вже написана вище, у блоці вкладень. */}
-              {filesErr ? null : (files?.length ?? 0) >= TASK_FILES_PER_TASK ? (
-                <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: 0 }}>
-                  Більше {TASK_FILES_PER_TASK} файлів на задачу не кладемо — приберіть зайвий, щоб додати новий.
-                </p>
-              ) : (
-                <button
-                  onClick={() => pickFileFor(openTask.id)}
-                  disabled={busy}
-                  style={{ padding: "var(--sp-2) var(--sp-6)", borderRadius: "var(--r-md)",
-                           border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
-                           cursor: busy ? "default" : "pointer", fontSize: "var(--fs-sm)",
-                           fontWeight: "var(--fw-semibold)" as React.CSSProperties["fontWeight"], opacity: busy ? 0.5 : 1 }}
-                >{busy ? "Завантаження…" : "📎 Додати файл"}</button>
+                <AttachmentZone
+                  files={files.map((f) => ({ key: f.id, name: f.name, sizeBytes: f.sizeBytes, mime: f.mime, author: f.author,
+                    canRemove: f.createdById === currentUserId || isAdmin }))}
+                  remaining={TASK_FILES_PER_TASK - files.length}
+                  busy={busy}
+                  /* Клік — той самий схований інпут секції, що й у рядку списку:
+                     `pickFileFor(openTask.id)` наводить його на цю задачу. */
+                  onPickClick={() => pickFileFor(openTask.id)}
+                  /* Перетягування минає інпут — файл іде тим самим шляхом завантаження. */
+                  onFile={(f) => { uploadTargetRef.current = openTask.id; void attachPickedFile(f); }}
+                  onOpen={() => setFilesViewer(openTask.id)}
+                  onRemove={async (zf) => {
+                    if (!confirm(`Прибрати «${zf.name}»?`)) return;
+                    try {
+                      await deleteTaskFile(openTask.id, Number(zf.key));
+                      setFiles((cur) => (cur ?? []).filter((x) => x.id !== Number(zf.key)));
+                      refreshTasks?.();
+                    } catch (err) {
+                      setDetailErr(errText(err, "не вдалося прибрати файл"));
+                    }
+                  }}
+                />
               )}
               <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: "var(--sp-2) 0 0" }}>
-                До 5 МБ, не більше {TASK_FILES_PER_TASK} файлів на задачу. Прибране вкладення
-                зникає зі списку, але зберігається — відновлюється вручну.
+                Прибране вкладення зникає зі списку, але зберігається — відновлюється вручну.
               </p>
             </div>
 
@@ -1970,33 +1999,19 @@ export function TasksSection({
                   тобто «створи, знайди в списку, потім прикріпи». Файл тримається у
                   формі й їде окремим запитом ПІСЛЯ того, як сервер назвав id. */}
               {taskForm.taskType === "simple" && (
-                <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", flexWrap: "wrap", fontSize: 13 }}>
-                  <button
-                    type="button"
-                    onClick={() => createFileRef.current?.click()}
-                    style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
-                      borderRadius: "var(--r-md)", padding: "6px 12px", cursor: "pointer" }}
-                  >📎 {taskForm.pendingFile ? "Інший файл" : "Прикріпити файл"}</button>
-                  {taskForm.pendingFile ? (
-                    <>
-                      <span style={{ color: "var(--text)" }}>
-                        {taskForm.pendingFile.name} · {Math.max(1, Math.round(taskForm.pendingFile.size / 1024))} КБ
-                      </span>
-                      <button
-                        type="button"
-                        title="Не прикріпляти"
-                        onClick={() => setTaskForm((cur) => ({ ...cur, pendingFile: null }))}
-                        style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}
-                      >✕</button>
-                    </>
-                  ) : (
-                    <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>
-                      не обовʼязково · до {Math.round(TASK_FILE_MAX_BYTES / 1024 / 1024)} МБ
-                    </span>
-                  )}
-                  {createErr && (
-                    <span style={{ width: "100%", fontSize: "var(--fs-sm)", color: "var(--danger)" }}>⚠️ {createErr}</span>
-                  )}
+                <div style={{ display: "grid", gap: 4, fontSize: 13 }}>
+                  <span>Вкладення <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>· не обовʼязково</span></span>
+                  <AttachmentZone
+                    files={taskForm.pendingFile
+                      ? [{ key: "pending", name: taskForm.pendingFile.name, sizeBytes: taskForm.pendingFile.size, mime: taskForm.pendingFile.type, canRemove: true }]
+                      : []}
+                    /* У формі — один файл: другий докладається вже в картці. */
+                    remaining={taskForm.pendingFile ? 0 : 1}
+                    onPickClick={() => createFileRef.current?.click()}
+                    onFile={acceptCreateFile}
+                    onRemove={() => setTaskForm((cur) => ({ ...cur, pendingFile: null }))}
+                    note={createErr}
+                  />
                 </div>
               )}
 
