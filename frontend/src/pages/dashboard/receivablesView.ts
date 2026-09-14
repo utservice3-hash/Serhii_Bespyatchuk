@@ -833,11 +833,17 @@ export function breakdownLine(b: BreakdownIn | null | undefined): BreakdownLine 
  * рядку був би шумом — правило «невідоме має бути видимим ТАМ, ДЕ ЙОГО ВИДНО».
  */
 export function invoiceEntityShown(
-  invoices: readonly { entityKey?: string | null; entityName?: string | null }[] | null | undefined,
+  invoices: readonly { entityKey?: string | null; entityName?: string | null; clientMerged?: boolean }[] | null | undefined,
 ): boolean {
   const keys = new Set<string>();
-  for (const x of invoices ?? []) keys.add((x.entityKey ?? "").trim());
-  return keys.size > 1;
+  let merged = false;
+  for (const x of invoices ?? []) { keys.add((x.entityKey ?? "").trim()); if (x.clientMerged) merged = true; }
+  /* 🔗 ОБʼЄДНАНИЙ КЛІЄНТ ПІДПИСУЄТЬСЯ ЗАВЖДИ, а не лише поки відкрито 2+ юрособи
+     (рішення власника 14.09.2026, випадок Автострада 07.09: рахунки ГК рознесли,
+     лишилась одна ВК — і підпис зник, хоча клієнт злитий і людина чекала його
+     бачити). Прапорець приходить із сервера по реєстру псевдонімів; для незлитих
+     він хибний, і правило «одна юрособа — без підпису» для них не змінюється. */
+  return merged || keys.size > 1;
 }
 
 /** Підпис юрособи для одного рахунка. `null` — показувати нічого. */

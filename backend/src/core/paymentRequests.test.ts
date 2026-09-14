@@ -10,9 +10,12 @@ import { carrierNameFrom } from "./carrierPayment.js";
  * фільтр `pipeline_id`, поставити `cond` перед ним або віддати невідомому етапу чужий kind.
  */
 test("#401 РЕЄСТР ЗАЯВОК: фільтр по воронці 7341740, скоуп після нього, невідомий етап названий", () => {
-  const sql = paymentRequestsSql("AND d.manager_id = $3");
+  const sql = paymentRequestsSql("AND m.id = $3");
   assert.match(sql, /d\.pipeline_id = 7341740\b/, "реєстр не фільтрує по воронці «Оплата перевозчикам»");
-  assert.ok(sql.indexOf("pipeline_id") < sql.indexOf("AND d.manager_id = $3"), "скоуп стоїть перед фільтром воронки");
+  assert.ok(sql.indexOf("pipeline_id") < sql.indexOf("AND m.id = $3"), "скоуп стоїть перед фільтром воронки");
+  // 🧑 «Хто подав» — менеджер ВИХІДНОЇ угоди, не відповідальний за Автосделку (бухгалтерія).
+  assert.match(sql, /LEFT JOIN deals src ON src\.kommo_id = d\.source_deal_id/, "менеджер береться не з вихідної угоди");
+  assert.doesNotMatch(sql, /m\.id = d\.manager_id/, "скоуп знову по відповідальному за Автосделку — менеджери побачать порожньо");
   assert.match(sql, /AT TIME ZONE 'Europe\/Kyiv'\)::date BETWEEN \$1 AND \$2/, "період не за Києвом або не включно");
   assert.equal(PAYMENT_REQUEST_PIPELINE, 7341740);
   assert.equal(requestStatusOf(142).kind, "paid");
@@ -30,11 +33,12 @@ test("#401 РЕЄСТР ЗАЯВОК: фільтр по воронці 7341740, 
  */
 test("#401b РЕЄСТР ЗАЯВОК: підсумок по станах, порожній стан = 0, null-сума не ламає Σ", () => {
   const rows = toPaymentRequestRows([
-    { kommo_id: 1, name: "a", submitted_on: "2026-09-01", client_key: "k", client_name: "K", carrier_name: "ФОП", carrier_edrpou: null, carrier_pay_type: "ФОП", carrier_pay_amount: "1000", status_id: 60434924, manager_id: 1, manager_name: "М", team_id: 1 },
-    { kommo_id: 2, name: "b", submitted_on: "2026-09-02", client_key: "k", client_name: "K", carrier_name: null, carrier_edrpou: null, carrier_pay_type: "ТОВ", carrier_pay_amount: null, status_id: 142, manager_id: 1, manager_name: "М", team_id: 1 },
-    { kommo_id: 3, name: "c", submitted_on: "2026-09-03", client_key: null, client_name: null, carrier_name: "ТОВ", carrier_edrpou: "123", carrier_pay_type: "ТОВ", carrier_pay_amount: 2500, status_id: 142, manager_id: 2, manager_name: "Н", team_id: 1 },
+    { kommo_id: 1, name: "a", submitted_on: "2026-09-01", client_key: "k", client_name: "K", carrier_name: "ФОП", carrier_edrpou: null, carrier_pay_type: "ФОП", carrier_pay_amount: "1000", status_id: 60434924, source_deal_id: "77", manager_id: 1, manager_name: "М", team_id: 1 },
+    { kommo_id: 2, name: "b", submitted_on: "2026-09-02", client_key: "k", client_name: "K", carrier_name: null, carrier_edrpou: null, carrier_pay_type: "ТОВ", carrier_pay_amount: null, status_id: 142, source_deal_id: null, manager_id: 1, manager_name: "М", team_id: 1 },
+    { kommo_id: 3, name: "c", submitted_on: "2026-09-03", client_key: null, client_name: null, carrier_name: "ТОВ", carrier_edrpou: "123", carrier_pay_type: "ТОВ", carrier_pay_amount: 2500, status_id: 142, source_deal_id: 78, manager_id: 2, manager_name: "Н", team_id: 1 },
   ], "https://x.kommo.com/");
   assert.equal(rows[0].crmUrl, "https://x.kommo.com/leads/detail/1");
+  assert.equal(rows[0].sourceDealId, 77); assert.equal(rows[1].sourceDealId, null);
   const s = summarize(rows);
   assert.deepEqual(s.pending, { n: 1, amount: 1000 });
   assert.deepEqual(s.paid, { n: 2, amount: 2500 });

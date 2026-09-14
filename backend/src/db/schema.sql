@@ -191,6 +191,12 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_obligation NUMERIC;
 -- історія добирається `tools/backfillCarrierParty.ts` (по угодах воронки за 90 днів).
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_name TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_edrpou TEXT;
+-- Хто ПОДАВ заявку: відповідальний за Автосделку — бухгалтерія, а власник просив
+-- «менеджер бачить свої заявки, які він подав». Джерело — поля самої заявки:
+-- «ID исходной сделки» (2097401) і «Исходный ответственный» (2098197, ПІБ).
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS source_deal_id BIGINT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS source_responsible TEXT;
+CREATE INDEX IF NOT EXISTS idx_deals_source_deal ON deals(source_deal_id) WHERE source_deal_id IS NOT NULL;
 
 -- 🗑 СПИСАННЯ БЕЗНАДІЙНОГО БОРГУ.
 --

@@ -8,7 +8,7 @@
  * 📐 Заміряно на проді 14.09.2026: заявка в Kommo = угода-«Автосделка» у воронці
  * «Оплата перевозчикам» (7341740). За 30 днів 1 476 заявок, менеджер є в усіх,
  * клієнт у 1 455. Сума і тип оплати вже синкались (`carrier_pay_amount`/`_type`),
- * назва перевізника — з 14.09 (`carrier_name`, `carrier_edrpou`).
+ * назва перевізника і «хто подав» — з 14.09 (`carrier_name`, `source_deal_id`, `source_responsible`).
  *
  * 🔴 ЦІ УГОДИ ВСЮДИ ЗАХОВАНІ ЯК СЛУЖБОВІ (`notAutodealSql`, гейт #34). Реєстр — єдине
  * місце, що бере їх ЯВНО, по воронці, а не по префіксу назви. Тому `PIPELINE_ID` тут,
@@ -52,9 +52,16 @@ export function paymentRequestsSql(cond: string): string {
            d.carrier_name, d.carrier_edrpou,
            d.carrier_pay_type, d.carrier_pay_amount,
            d.status_id,
-           d.manager_id, m.name AS manager_name, m.team_id
+           d.source_deal_id,
+           m.id AS manager_id, COALESCE(m.name, d.source_responsible) AS manager_name, m.team_id
       FROM deals d
-      LEFT JOIN managers m ON m.id = d.manager_id
+      -- 🧑 ХТО ПОДАВ: менеджер ВИХІДНОЇ угоди; коли її в базі немає — за ПІБ із заявки.
+      -- Відповідальний за саму Автосделку — бухгалтерія, і скоуп по ньому показав би
+      -- менеджерам порожній реєстр (заміряно 14.09.2026).
+      LEFT JOIN deals src ON src.kommo_id = d.source_deal_id
+      LEFT JOIN managers m ON m.id = COALESCE(
+        src.manager_id,
+        (SELECT mm.id FROM managers mm WHERE mm.name = d.source_responsible ORDER BY mm.is_active DESC NULLS LAST, mm.id LIMIT 1))
      WHERE d.pipeline_id = ${PAYMENT_REQUEST_PIPELINE}
        AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1 AND $2
        ${cond}
@@ -75,6 +82,7 @@ export interface PaymentRequestRow {
   kind: PaymentRequestKind | "unknown";
   managerId: number | null;
   managerName: string | null;
+  sourceDealId: number | null;
   crmUrl: string;
 }
 
@@ -83,7 +91,7 @@ export interface RawPaymentRequestRow {
   client_key: string | null; client_name: string | null;
   carrier_name: string | null; carrier_edrpou: string | null;
   carrier_pay_type: string | null; carrier_pay_amount: string | number | null;
-  status_id: number | string; manager_id: number | null; manager_name: string | null; team_id: number | null;
+  status_id: number | string; source_deal_id: number | string | null; manager_id: number | null; manager_name: string | null; team_id: number | null;
 }
 
 export function toPaymentRequestRows(rows: RawPaymentRequestRow[], crmBase: string): PaymentRequestRow[] {
@@ -98,6 +106,7 @@ export function toPaymentRequestRows(rows: RawPaymentRequestRow[], crmBase: stri
       amount: r.carrier_pay_amount == null ? null : Number(r.carrier_pay_amount),
       statusId: Number(r.status_id), status: st.label, kind: st.kind,
       managerId: r.manager_id, managerName: r.manager_name,
+      sourceDealId: r.source_deal_id == null ? null : Number(r.source_deal_id),
       crmUrl: `${crmBase.replace(/\/$/, "")}/leads/detail/${r.kommo_id}`,
     };
   });

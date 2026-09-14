@@ -323,6 +323,16 @@ export function extractCarrierPayType(deal: KommoDeal): string | null {
 export function extractCarrierName(deal: KommoDeal): string | null {
   return carrierNameFrom(fieldText(deal, CARRIER_PARTY_FIELDS.name), fieldText(deal, CARRIER_PARTY_FIELDS.company));
 }
+/** Угода клієнта, з якої подано заявку («ID исходной сделки»); не число → null. */
+export function extractSourceDealId(deal: KommoDeal): number | null {
+  const v = Number((fieldText(deal, CARRIER_PARTY_FIELDS.sourceDeal) ?? "").trim());
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+/** ПІБ менеджера, що подав заявку («Исходный ответственный»); порожньо → null. */
+export function extractSourceResponsible(deal: KommoDeal): string | null {
+  const v = (fieldText(deal, CARRIER_PARTY_FIELDS.sourceResponsible) ?? "").trim();
+  return v || null;
+}
 /** ЄДРПОУ перевізника; порожньо → null. */
 export function extractCarrierEdrpou(deal: KommoDeal): string | null {
   const v = (fieldText(deal, CARRIER_PARTY_FIELDS.edrpou) ?? "").trim();

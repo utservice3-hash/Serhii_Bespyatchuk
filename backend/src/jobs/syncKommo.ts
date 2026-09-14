@@ -21,6 +21,8 @@ import {
   extractCarrierObligation,
   extractCarrierName,
   extractCarrierEdrpou,
+  extractSourceDealId,
+  extractSourceResponsible,
   fetchContactsByIds,
   fetchCompaniesByIds,
   companyFieldValue,
@@ -686,14 +688,14 @@ export async function upsertDeal(
          client_name, client_key_raw, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
          unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus, reject_reason,
          request_type, sales_channel, carrier_pay_type, carrier_pay_amount,
-         client_pay_amount, carrier_obligation, carrier_name, carrier_edrpou
+         client_pay_amount, carrier_obligation, carrier_name, carrier_edrpou, source_deal_id, source_responsible
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12,
                  -- 🔴 КАНОНІЧНИЙ КЛЮЧ РАХУЄМО ТУТ, а не пишемо сирий. Інакше синк при
                  -- наступному оновленні угоди ЗАТЕР би канонічний ключ сирим, і аліас
                  -- тихо перестав би діяти — рівно для тих угод, що змінюються найчастіше.
                  COALESCE((SELECT a.canonical_key FROM client_key_alias a
                             WHERE a.alias_key = $12 AND a.revoked_at IS NULL), $12),
-                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -734,7 +736,9 @@ export async function upsertDeal(
          carrier_obligation = EXCLUDED.carrier_obligation,
          -- 🚚 Хто перевізник — реєстр заявок на оплату.
          carrier_name = EXCLUDED.carrier_name,
-         carrier_edrpou = EXCLUDED.carrier_edrpou`,
+         carrier_edrpou = EXCLUDED.carrier_edrpou,
+         source_deal_id = EXCLUDED.source_deal_id,
+         source_responsible = EXCLUDED.source_responsible`,
       [
         deal.id,
         deal.name,
@@ -771,6 +775,8 @@ export async function upsertDeal(
         extractCarrierObligation(deal),
         extractCarrierName(deal),
         extractCarrierEdrpou(deal),
+        extractSourceDealId(deal),
+        extractSourceResponsible(deal),
       ]
     );
 }
