@@ -2559,6 +2559,118 @@ SELECT u.id, u.email, 'role.update', 'role', 'kvp,admin', '1×1: наскріз�
 --   UPDATE roles SET permissions = permissions - 'edit_1x1_forms' WHERE key = 'kvp';
 -- (мертві права назад не повертаємо — їх ніхто не читає)
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- ЗАДАЧНИК · 14.09.2026 · ГРУПИ · ФАЙЛИ · СПІЛЬНА ЗАДАЧА
+-- ТЗ: docs/TZ_TASKS_GROUPS_FILES_SHARED_2026-09-14.md (рішення Романа 14.09).
+--
+-- 🔴 ЧОМУ БЛОК СТОЇТЬ ТУТ, А НЕ ПОРУЧ ІЗ `tasks` (рядок 341). `tasks.group_id`
+-- посилається на `task_groups`, а `assignee_user_id` — на `users`; обидві
+-- таблиці мусять ІСНУВАТИ на момент ALTER. Поруч із `tasks` вони ще не
+-- створені, і на ПОРОЖНІЙ базі міграція впала б з «relation does not exist» —
+-- рівно те, що вже коштувало нам блоку `ai_readonly` з `tracker_devices` і
+-- сида `key_card`. Видно лише з нуля, тож саме тут.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- 📁 ГРУПИ — ОСОБИСТІ (рішення Романа 14.09.2026: «кожен акаунт створює свої
+-- групи без обмежень, чужих груп не бачить»). Група НЕ змінює доступ до задачі:
+-- вона розкладка на екрані власника. Задача, покладена в чужу групу, для іншого
+-- глядача виглядає як «без групи» — саме тому фільтр по групі завжди їде разом
+-- з `owner_id`, а не сам.
+CREATE TABLE IF NOT EXISTS task_groups (
+  id SERIAL PRIMARY KEY,
+  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- Вкладеність НЕ виводиться в інтерфейс (ТЗ §3.2) — поле є, щоб не мігрувати
+  -- таблицю вдруге, коли її попросять.
+  parent_id INTEGER REFERENCES task_groups(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_groups_owner ON task_groups(owner_id);
+-- Дві групи з однаковою назвою в одного власника — це помилка кліку, не задум.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_task_groups_owner_name ON task_groups(owner_id, lower(name));
+
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES task_groups(id) ON DELETE SET NULL;
+-- `SET NULL`, а не CASCADE: видалення ПАПКИ не має видаляти задачі — вони
+-- повертаються в «Без групи». Протилежне поводження втратило б роботу людини
+-- через прибирання на екрані.
+CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id) WHERE group_id IS NOT NULL;
+
+-- 👤 ВИКОНАВЕЦЬ-АКАУНТ. Старе поле `assignee_id → managers` НЕ чіпаємо: його
+-- читає Звіт (замок #56) і воно годує «одну цифру» на картці менеджера.
+-- Нове поле — для тих, кого в CRM немає: бухгалтерія, HR, рекрутер, власник.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_user_id INTEGER REFERENCES users(id);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee_user ON tasks(assignee_user_id) WHERE assignee_user_id IS NOT NULL;
+-- 🔴 ВИКОНАВЕЦЬ ОДИН. Два заповнені поля означали б два різні імені під одним
+-- підписом «Виконавець» — і екран мусив би вибирати, яке показати. Межа в БД,
+-- а не в акуратності роута.
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_one_assignee;
+ALTER TABLE tasks ADD CONSTRAINT tasks_one_assignee CHECK (
+  num_nonnulls(assignee_id, assignee_user_id) <= 1
+);
+
+-- 💬 СТРІЧКА ДОПОВНЕНЬ. Поле `tasks.comments` лишається як короткий коментар у
+-- рядку (його перезаписують, і це нормально для «однієї фрази»); стрічка — це
+-- ІСТОРІЯ з автором і часом, яку не можна затерти наступним збереженням.
+CREATE TABLE IF NOT EXISTS task_comments (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  author_id INTEGER REFERENCES users(id),
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id, created_at);
+
+-- 📜 ІСТОРІЯ СТАТУСУ. Питання «хто перевів задачу в done і коли» не мало
+-- відповіді в принципі: `tasks.status` — це ЗНІМОК, а знімок не має історії
+-- (той самий борг, що `job_runs` і невдала спроба збереження плану).
+CREATE TABLE IF NOT EXISTS task_status_log (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  changed_by INTEGER REFERENCES users(id),
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_status_log_task ON task_status_log(task_id, changed_at);
+
+-- 📎 ФАЙЛИ ЗАДАЧІ. Структура — за зразком `doc_files`; тека інша
+-- (`backend/task-files`), щоб публічний static `/api/files` не віддавав
+-- вкладення задач за прямим URL в обхід авторизації.
+--
+-- ⚠️ ЧЕСНА МЕЖА, ЗАМІРЯНА 14.09.2026: нічний бекап — ЛИШЕ БАЗА. `backupDb.ts`
+-- бере всі таблиці з `pg_tables` (90 із 90 у бекапі за 14.09), а файлових тек
+-- не бере ЖОДНА джоба й жоден крон — у теці бекапу нуль згадок `documents`,
+-- `uploads` і `tar`. Тобто рядок цієї таблиці в бекапі буде, а БАЙТИ файла —
+-- ні. Коментар у `routes/documents.ts` стверджував протилежне («потрапляє в
+-- нічний бекап») і був неправдою; його виправлено тим самим комітом.
+-- Наслідок прийнято свідомо, і саме тому віддача файла відповідає «файл
+-- відсутній на диску», а не порожнім 200: рядок без байтів мусить називати себе.
+CREATE TABLE IF NOT EXISTS task_files (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,          -- відображувана назва (оригінальне імʼя файла)
+  stored_name TEXT NOT NULL,   -- uuid-імʼя на диску
+  mime TEXT,
+  size_bytes BIGINT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Видалення задачі не зносить байти одразу (ТЗ §3.4): рядок помічається, а
+  -- чистка — окремим проходом. Поки джоби немає, поле лишається NULL завжди —
+  -- і це записано, щоб наступний не читав його як робочий механізм.
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_task_files_task ON task_files(task_id, created_at);
+
+-- 👁 ЩО ВЖЕ БАЧИВ ЦЕЙ АКАУНТ — для бейджа «є нове». Без цієї таблиці бейдж
+-- був би здогадом: «нове» означає «зʼявилось після мого останнього перегляду»,
+-- і без збереженого «останнього перегляду» відповіді не існує.
+CREATE TABLE IF NOT EXISTS task_views (
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (task_id, user_id)
+);
+
 -- ПРИВІЛЕЇ РОЛЕЙ — ЗАВЖДИ В КІНЦІ ФАЙЛА.
 --
 -- 🔴 Чому саме тут. `GRANT/REVOKE ON <таблиця>` вимагає, щоб таблиця ВЖЕ існувала.
@@ -2572,10 +2684,16 @@ SELECT u.id, u.email, 'role.update', 'role', 'kvp,admin', '1×1: наскріз�
 -- ═════════════════════════════════════════════════════════════════════════════
 -- Особисті задачі приховані НАВІТЬ ВІД АДМІНА (правило приватності) → модель бачить
 -- задачі лише через вью без них, а не базову таблицю.
+-- 🔴 УМОВА ВЬЮ = ВИЗНАЧЕННЯ «НЕ ОСОБИСТА» З `core/taskVisibility.ts`, і з
+-- 14.09.2026 вона ширша за `assignee_id IS NOT NULL`. Причина не косметична:
+-- задача, призначена АКАУНТУ (бухгалтеру, HR), має `assignee_id IS NULL` і
+-- особистою НЕ є. Лишивши стару умову, ми отримали б ДВА визначення приватності
+-- в одній системі — рівно той клас, що дав «чипи новий/постійний» і вічний
+-- банер джоби. Гейт `#400e` звіряє цей рядок із функцією `isPersonalTask`.
 CREATE OR REPLACE VIEW ai_tasks AS
   SELECT id, title, task_type, status, department, assignee_id, deadline,
          metric, target_value, actual_value, created_at
-    FROM tasks WHERE assignee_id IS NOT NULL;
+    FROM tasks WHERE assignee_id IS NOT NULL OR assignee_user_id IS NOT NULL;
 
 -- Спершу знімаємо все, потім видаємо на дозволене (ідемпотентно, щоразу на міграції).
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ai_readonly;
@@ -2583,8 +2701,16 @@ GRANT USAGE ON SCHEMA public TO ai_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;
 -- 🔴 ЗАБОРОНЕНІ: паролі, приватні 1×1, аудит доступу, налаштування (можуть містити
 -- ключі), env-імена банківських ключів, трекер часу, сира таблиця задач.
+--
+-- ⚠️ СУПУТНИКИ ЗАДАЧ (14.09.2026) — ТОЙ САМИЙ ЗАМОК, ІНАКШЕ ВІН ДЕКОРАТИВНИЙ.
+-- `GRANT SELECT ON ALL TABLES` вище накриває КОЖНУ нову таблицю, тож
+-- `task_comments`/`task_files` відкрились би моделі автоматично — а в них лежить
+-- ЗМІСТ обговорення й назви вкладень, у тому числі ОСОБИСТИХ задач, які вью
+-- `ai_tasks` спеціально ховає. Заборона на `tasks` без заборони на її супутників
+-- ховає заголовок і віддає розмову. Тримає `#400f`.
 REVOKE ALL ON users, access_audit, app_settings, bank_accounts,
-  one_on_ones, one_on_one_forms, tracker_devices, tracker_intervals, tasks
+  one_on_ones, one_on_one_forms, tracker_devices, tracker_intervals, tasks,
+  task_comments, task_files, task_status_log, task_views, task_groups
   FROM ai_readonly;
 GRANT SELECT ON ai_tasks TO ai_readonly;
 

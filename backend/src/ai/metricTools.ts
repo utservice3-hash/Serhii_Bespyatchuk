@@ -40,6 +40,12 @@ import { resolveNamedMonth, guardFuturePeriod, type ResolvedPeriod } from "./per
 export const FORBIDDEN_TABLES = [
   "users", "access_audit", "bank_accounts",
   "one_on_ones", "one_on_one_forms", "tracker_devices", "tracker_intervals", "tasks",
+  // 🔒 СУПУТНИКИ ЗАДАЧ (14.09.2026). Заборона на `tasks` без них була б
+  // декоративною: у `task_comments` лежить ЗМІСТ обговорення, у `task_files` —
+  // назви вкладень, і обидва адресуються через `task_id`, тобто ховати заголовок
+  // задачі й віддавати розмову. Дзеркало цього — REVOKE у `schema.sql`; тут
+  // рубіж застосунку, там рубіж БД.
+  "task_comments", "task_files", "task_status_log", "task_views", "task_groups",
 ];
 
 /**

@@ -39,6 +39,7 @@ export const MANIFEST_FILES: string[] = [
   "core/absences.test.js",
   "core/clientPlansList.test.js",
   "core/paymentRequests.test.js",
+  "core/taskVisibility.test.js",
   "core/zoneRates.test.js",
   "core/activeManager.test.js",
   "core/weekPlan.test.js",
@@ -51,6 +52,8 @@ export const MANIFEST_FILES: string[] = [
   "routes/reactivateCycle.test.js",
   "routes/noPlanShare.test.js",
   "routes/tasksContract.test.js",
+  "routes/tasksShared.test.js",
+  "routes/documentsTree.test.js",
   "routes/drillSmoke.test.js",
   "routes/avgCheckDay.test.js",
   "routes/dismissedOnScreen.test.js",
@@ -197,6 +200,7 @@ export const MANIFEST_FILES: string[] = [
 export const MANIFEST_SECURITY_TABLES: string[] = [
   "users", "access_audit", "bank_accounts", "one_on_ones",
   "one_on_one_forms", "tracker_devices", "tracker_intervals", "tasks",
+  "task_comments", "task_files", "task_status_log", "task_views", "task_groups",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -1333,7 +1337,21 @@ export const MANIFEST_TESTS: string[] = [
   "#401b РЕЄСТР ЗАЯВОК: підсумок по станах, порожній стан = 0, null-сума не ламає Σ",
   "#401c ЖИВИЙ: етапи воронки 7341740 == словнику; Σ реєстру == SUM по базі",
   "#397 ТАРИФИ КАЛЬКУЛЯТОРА == повідомлення КВП 04.09.2026, число в число",
+  "#400 МЕЖА ЗАДАЧІ: хто може ЗМІНИТИ, той БАЧИТЬ — по всіх ролях і всіх видах задач",
+  "#400b 🪞 ОСОБИСТА ЗАДАЧА: автор бачить — решта, включно з наскрізним, НЕ бачить",
+  "#400c ВИКОНАВЕЦЬ-АКАУНТ: задача не особиста, видна виконавцю й наглядачу, чужому менеджеру — ні",
+  "#400e ВЬЮ ai_tasks == визначенню «не особиста» з ядра",
+  "#400f СУПУТНИКИ ЗАДАЧ: закриті і в схемі (REVOKE), і в переліку застосунку",
+  "#400g ЧИТАЧІ task_files НЕСУТЬ deleted_at IS NULL — мʼяке видалення не протікає",
+  "#400h ДИМ: усі роути спільної задачі виконуються проти бази з нуля, межі віддають свої коди",
+  "#400i ЛІМІТИ ВКЛАДЕНЬ: сервер і екран називають ОДНІ Й ТІ САМІ числа",
+  "#400j ДЕРЕВО ДОКУМЕНТІВ: запит виконується проти бази з нуля й віддає автора",
+  "#400k ПРИВʼЯЗКА ДО ПАПКИ: доступна і зі СПИСКУ, і з КАРТКИ задачі",
+  "#400l ПРИКРІПЛЕННЯ ФАЙЛА: зі СПИСКУ і з КАРТКИ, інпут не display:none, вкладення вище стрічки",
+  "#400d 🪞 СХЕМА З НУЛЯ: SQL-скоуп == JS-правилу; CHECK одного виконавця; група не тягне задачі",
   "#397b СЛОВНИК ПРИЧИН == CHECK loyalty_overrides_archive_reason_chk, в обидва боки",
+  "#397c ДОВАНТАЖ == повідомлення КВП 11.09.2026 (2 м 15/18/20, 3 м 20/22/25), тоннажі на місці",
+  "#397d ОПЦІЇ: 4 авто + 2 довантажі, довантаж не обирається і без вигаданої маржі",
   // 🗑 РЕЄСТР ЗНЯТИХ ГЕЙТІВ (01.09.2026) — правило 13 вимагає нового номера, а крок 0
   // відмовляв на будь-якому зниклому імені; оголосити зняття законним не було чим.
   "#235 РЕЄСТР приймає зняття ПОІМЕННО — і лише його",

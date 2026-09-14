@@ -222,16 +222,20 @@ export function RatesSection() {
               <th style={{ textAlign: "right" }}>💰 Клієнту</th>
             </tr></thead>
             <tbody>
-              {(zr.options ?? []).map((o) => (
-                <tr key={o.tonnage} style={o.selected ? { background: `${zc}18`, fontWeight: 700 } : undefined}>
-                  <td style={{ textAlign: "left" }}>{o.selected ? "🚚 " : ""}{o.tonnage}</td>
+              {(zr.options ?? []).map((o, i, arr) => (
+                <tr key={o.tonnage} style={{
+                  ...(o.selected ? { background: `${zc}18`, fontWeight: 700 } : {}),
+                  /* 📦 Довантаж — окрема група: лінія над першим рядком, щоб не читався як тоннаж */
+                  ...(o.kind === "partial" && arr[i - 1]?.kind !== "partial" ? { borderTop: "2px solid var(--line)" } : {}),
+                }}>
+                  <td style={{ textAlign: "left", color: o.kind === "partial" ? "var(--text-muted)" : undefined }}>{o.selected ? "🚚 " : o.kind === "partial" ? "📦 " : ""}{o.tonnage}</td>
                   <td style={{ textAlign: "right", color: zc, fontWeight: o.selected ? 800 : 600 }}>
                     {o.per_km_min === o.per_km_max ? o.per_km_min : `${o.per_km_min}–${o.per_km_max}`}
                   </td>
                   <td style={{ textAlign: "right", color: "var(--text-muted)" }}>
                     {o.total_min ? (o.total_min === o.total_max ? `${fmt(o.total_min)}` : `${fmt(o.total_min)} – ${fmt(o.total_max ?? o.total_min)}`) : "—"}
                   </td>
-                  <td style={{ textAlign: "right", color: "var(--text-muted)" }}>+{fmt(o.margin)}</td>
+                  <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{o.margin == null ? "—" : `+${fmt(o.margin)}`}</td>
                   <td style={{ textAlign: "right", color: "#16a34a", fontWeight: 800 }}>
                     {o.client_min ? (o.client_min === o.client_max ? `${fmt(o.client_min)}` : `${fmt(o.client_min)} – ${fmt(o.client_max ?? o.client_min)}`) : "—"}
                   </td>
