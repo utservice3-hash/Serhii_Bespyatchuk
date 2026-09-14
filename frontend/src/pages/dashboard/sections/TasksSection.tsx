@@ -1786,7 +1786,7 @@ export function TasksSection({
               {taskForm.taskType === "reactivation" ? (
                 <ReactivationPlanner
                   teams={teams}
-                  canPickTeam={role === "admin"}
+                  canPickTeam={true} /* 🔓 14.09.2026: команду обирає будь-хто */
                   onDone={async () => { await refreshTasks?.(); setTaskForm(emptyTaskForm); setTaskModalOpen(false); }}
                 />
               ) : taskForm.taskType === "simple" ? (

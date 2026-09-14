@@ -3557,8 +3557,10 @@ dashboardRouter.get("/regular-clients", async (req, res) => {
  */
 dashboardRouter.get("/reactivation-candidates", async (req, res) => {
   const auth = req.auth!;
-  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Forbidden" });
-  const teamId: number | null = auth.role === "team_lead" ? (auth.teamId ?? null) : (req.query.teamId ? Number(req.query.teamId) : null);
+  // 🔓 Рішення власника 14.09.2026: кандидатів на реактивацію бачить будь-хто, і
+  // команду можна обрати будь-яку. Без параметра — своя команда (адмін без
+  // команди → усі), як зручний дефолт, а не як межа.
+  const teamId: number | null = req.query.teamId ? Number(req.query.teamId) : (auth.teamId ?? null);
   const activeMonths = (await getSettings()).sleepingWindowMonths;
 
   const params: unknown[] = [];

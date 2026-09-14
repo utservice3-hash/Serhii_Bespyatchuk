@@ -298,6 +298,18 @@ test("#400h ДИМ: усі роути спільної задачі викону
     const handed = await call("PATCH", "/:id", { who: "mgr", params: { id: String((own.payload as unknown as { id: number }).id) }, body: { assigneeId: 30 } });
     assert.equal(handed.code, 204, `🔴 МЕНЕДЖЕР НЕ МОЖЕ ПЕРЕДАТИ ЗАДАЧУ (код ${handed.code}): ${JSON.stringify(handed.payload)}`);
 
+    // ── 10. ПЛАН І РЕАКТИВАЦІЯ — ТЕЖ БЕЗ МЕЖ (рішення власника 14.09.2026, друге) ──
+    // Доти: план — менеджер лише собі, тімлід лише своїй команді; реактивація — лише
+    // тімлід/адмін і лише своя команда. 403 тут = повернута заборона.
+    const plan = await call("POST", "/plan", { who: "mgr", body: { assigneeId: 30, period: "week", days: ["2026-09-14"], adsCount: 1 } });
+    assert.notEqual(plan.code, 403, `🔴 МЕНЕДЖЕР НЕ МОЖЕ ПОСТАВИТИ ПЛАН КОЛЕЗІ: ${JSON.stringify(plan.payload)}`);
+    assert.ok(plan.code < 300, `🔴 план колезі не створився (код ${plan.code}): ${JSON.stringify(plan.payload)}`);
+    const planRow = ((await call("GET", "/", { who: "mgr" })).payload as unknown as { tasks: { taskType: string; assigneeId: number | null }[] })
+      .tasks.find((x) => x.taskType === "kpi_period");
+    assert.equal(planRow?.assigneeId, 30, `🔴 ПЛАН ТИХО ПІДМІНЕНО СОБІ: виконавець ${planRow?.assigneeId}, а просили 30`);
+    const react = await call("POST", "/reactivation", { who: "mgr", body: { assigneeId: 50, clients: [] } });
+    assert.notEqual(react.code, 403, `🔴 РЕАКТИВАЦІЯ ЛИШЕ ТІМЛІДУ/СВОЇЙ КОМАНДІ — заборона повернулась: ${JSON.stringify(react.payload)}`);
+
     const { pool } = await import("../db/pool.js");
     await pool.end();
   } finally {
