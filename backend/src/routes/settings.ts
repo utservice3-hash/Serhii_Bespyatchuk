@@ -3,7 +3,7 @@ import { parseDataScope, SCOPE_REQUIRED_CREATE, SCOPE_REQUIRED_UPDATE } from "..
 import { wireValue, DEFAULT_PLAN_MIN, PLAN_MIN_BOUNDS } from "../core/settingWire.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
-import { adPlanByMonth, setAdPlan } from "../core/adBudget.js";
+import { setAdPlan } from "../core/adBudget.js";
 import { monthStartOf } from "../core/dates.js";
 import { requireAuth } from "../auth/middleware.js";
 import { provisionUsers, resetPassword, generatePassword } from "../db/userProvisioning.js";
@@ -334,13 +334,16 @@ settingsRouter.post("/users/:id/reactivate", async (req, res) => {
  * дивитись на нього. Межі задекларовані в `accessMatrix`, інакше це було б «зелено
  * там, куди ми не дивились» (DoD п.2).
  */
-settingsRouter.get("/ad-plan", async (req, res) => {
-  const from = typeof req.query.from === "string" ? req.query.from : null;
-  const to = typeof req.query.to === "string" ? req.query.to : null;
-  const byMonth = await adPlanByMonth(from, to);
-  res.json({ months: [...byMonth.entries()].map(([month, plan]) => ({ month, plan })) });
-});
-
+/* 🗑 `GET /ad-plan` ПРИБРАНО 14.09.2026 — роут не кликав НІХТО від народження.
+   Я завів його «щоб екран міг прочитати план», а план приїжджає на екран усередині
+   `GET /dashboard/ads` полем `planMonth`; фронт звертався лише до `PUT` нижче
+   (`api.ts` → `saveAdPlan`). Заміряно перед видаленням: жодного споживача ні у фронті,
+   ні в бекенді, а на проді він чесно віддавав 200 і `{"months":[]}`.
+   🔴 ЧОМУ ЦЕ НЕ «ЗАЙВА ОБЕРЕЖНІСТЬ». Живий роут без споживача — це поверхня, яку ніхто
+   не дивиться: його межу я задекларував НЕПРАВИЛЬНО (обіцяв тімліду доступ, якого код не
+   дає), і спіймав це не огляд, а `#11` через тиждень. Менше дверей — менше місць, де
+   зліпок може розійтися з дійсністю. Знадобиться читати плани списком — завести наново
+   разом із тим, хто його кличе. */
 settingsRouter.put("/ad-plan", async (req, res) => {
   if (!requireManageUsers(req, res)) return;
   const day = typeof req.body?.month === "string" ? req.body.month : null;
