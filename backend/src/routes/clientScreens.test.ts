@@ -403,8 +403,35 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
   // Знаменник рахуємо НЕЗАЛЕЖНО від роуту — прямо з БД.
   const { pool } = await import("../db/pool.js");
   const metrics = await import("../core/metrics.js");
+  const { LAST_PAID_CTE, LAST_PAID_JOIN, archivedSql } = await import("../core/clientArchive.js");
+  /**
+   * 🔴 ВІДРІЗАНЕ — АРХІВ, А НЕ `hidden`, І ЦЕ ВИПРАВЛЕННЯ ГЕЙТА, А НЕ ПОСЛАБЛЕННЯ (14.09.2026).
+   *
+   * 📐 ЩО СТАЛОСЬ. `7685ef7` (10.09) свідомо перевів екран планів з `hidden` на архів —
+   * те саме джерело, що в реактивації (`#38`). Причина названа в тому коміті: попередній
+   * `LEFT JOIN … AND NOT lo.hidden` для ПРИХОВАНОГО клієнта не давав рядка, тож
+   * `COALESCE(NULL,false)=false` пропускало його на екран — тобто дія «прибрати з
+   * постійних» роками писалась у базу й не робила нічого.
+   *
+   * А цей гейт лишився на `hidden` — і почав стверджувати НЕПРАВДУ: «178 + 485 + 362 + 175
+   * ≠ 1213, хтось зник між екранами». Заміряно на проді 14.09: різниця рівно 13, і рівно 13
+   * клієнтів у цій базі мають архівну дату. Клієнтів не губили — гейт відстав від правила.
+   * Той самий клас, що `#107b` у `RETIRED_GATES`: предикат дрейфнув, і перевірка перетворилась
+   * на джерело хибної тривоги.
+   *
+   * ⚠️ `hidden` ПРИБРАНО, А НЕ ЛИШЕНО «про всяк випадок»: заміряно того ж дня — рядків із
+   * `hidden = true` у цій базі **нуль**, тобто умова не фільтрувала нікого й лише вдавала
+   * межу. Мертвий предикат у знаменнику гірший за відсутній: він читається як діюче правило.
+   *
+   * 🪞 ЗАПИТ ЛИШАЄТЬСЯ ВЛАСНИМ, А НЕ `clientsListSql()`. Спокуса взяти той самий текст
+   * велика — але тоді інваріант став би тавтологією: роут розкладає на купки саме рядки
+   * цього запиту, отже сума частин дорівнювала б цілому ЗАВЖДИ, хоч би що загубилось у SQL.
+   * Незалежність знаменника — і є те, що гейт доводить. Спільним береться лише ПРАВИЛО
+   * (`archivedSql`), а не його застосування.
+   */
   const whole = Number((await pool.query<{ n: string }>(
-    `WITH paid AS (
+    `WITH ${LAST_PAID_CTE},
+     paid AS (
        SELECT d.client_key, d.manager_id FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
         WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL AND NOT (d.client_key = ANY($1))
@@ -415,8 +442,9 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
      SELECT COUNT(*) AS n FROM agg a
        JOIN pm ON pm.client_key = a.client_key
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
+       ${LAST_PAID_JOIN}
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
-      WHERE COALESCE(lo.hidden, false) = false`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
+      WHERE NOT ${archivedSql("lo", "ap")}`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
   assert.equal(t.totalClients + t.inReactivation + t.oneOff + t.skippedGeneric, whole,
     `🔴 активні ${t.totalClients} + місток ${t.inReactivation} + разові ${t.oneOff}`
     + ` + дженерики ${t.skippedGeneric} ≠ база ${whole} — хтось зник між екранами, і без цієї`
