@@ -53,9 +53,20 @@ documentsRouter.get("/tree", async (_req, res) => {
       `SELECT id, parent_id, name, created_at FROM doc_folders ORDER BY name`
     ),
     pool.query(
+      // 👤 ІМʼЯ АВТОРА — КАНОНІЧНИЙ ТРИРІВНЕВИЙ ВИРАЗ (`core/absences.ts` → OWNER_NAME_SQL,
+      // той самий у `routes/auth.ts`, `routes/tracker.ts`, `routes/settings.ts`).
+      // 🔴 ДВОРІВНЕВИЙ ТУТ НЕ ПРАЦЮЄ, І ЦЕ ЗАМІРЯНО, А НЕ ЗДОГАД: `users.full_name` за
+      // побудовою заповнюють лише РУЧНИМ акаунтам — CRM-менеджерам ПІБ живе в
+      // `managers.name` (коментар до колонки в `schema.sql`). Замір прода 14.09.2026:
+      // 58 акаунтів привʼязані до CRM, і в УСІХ 58 `full_name` порожній. Тобто в
+      // колонці «автор» кожен такий завантажувач показувався б ПОШТОЮ.
+      // ⚠️ Сьогодні це ще не видно: у базі 2 файли одного не-CRM автора. Стане видно
+      // з першим же файлом, який заллє менеджер із CRM. Тримає #403.
       `SELECT f.id, f.folder_id, f.name, f.category, f.mime, f.size_bytes, f.created_at,
-              COALESCE(u.full_name, u.email) AS author
-         FROM doc_files f LEFT JOIN users u ON u.id = f.created_by
+              COALESCE(m.name, u.full_name, u.email) AS author
+         FROM doc_files f
+         LEFT JOIN users u ON u.id = f.created_by
+         LEFT JOIN managers m ON m.id = u.manager_id
         ORDER BY f.name`
     ),
   ]);
