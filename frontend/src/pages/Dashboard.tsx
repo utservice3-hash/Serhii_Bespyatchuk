@@ -5,6 +5,7 @@ import { isBusy, shouldApplyRefresh } from "./dashboard/refreshGate";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   createTask,
+  uploadTaskFile,
   createTaskPlan,
   deleteTask,
   fetchConversion,
@@ -412,6 +413,7 @@ export function Dashboard() {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }
 
+  /** Створює задачу й віддає її id — його чекає прикріплення файла з форми. */
   async function addTask(payload: {
     title: string;
     deadline?: string | null;
@@ -453,6 +455,9 @@ export function Dashboard() {
       },
       ...prev,
     ]);
+    // 📎 Повертаємо id: вкладення, обране у формі, можна прикріпити ЛИШЕ після того,
+    // як сервер назвав номер задачі. Доти воно нікуди не привʼязується.
+    return id;
   }
 
   // Builds the list of ISO working-day dates the team-lead picked, for a week
@@ -481,6 +486,34 @@ export function Dashboard() {
     return days;
   }
 
+  /**
+   * 📎 Довантажує файл, обраний у формі створення, до вже створених задач.
+   *
+   * 🔴 ПОМИЛКА ТУТ МУСИТЬ БУТИ ВИДИМОЮ, А НЕ ПРОГЛИНУТОЮ. Задача вже створена —
+   * тихий провал завантаження дав би «задача є, файла немає» без жодного слова,
+   * і людина вважала б, що вкладення на місці. Тому текст відмови сервера
+   * показується, а не гаситься (борг №15: «помилка сервера на екрані мусить бути
+   * видимою»).
+   */
+  async function attachPendingFile(ids: number[]) {
+    const file = taskForm.pendingFile;
+    if (!file || ids.length === 0) return;
+    const failed: string[] = [];
+    for (const id of ids) {
+      try { await uploadTaskFile(id, file); }
+      catch (err) { failed.push(err instanceof Error ? err.message : `задача ${id}`); }
+    }
+    if (failed.length) alert(`Задачу створено, але файл не прикріпився: ${failed.join("; ")}`);
+    /**
+     * 🔴 ПЕРЕЧИТАТИ СПИСОК ОБОВʼЯЗКОВО. Гілка одного виконавця вставляє рядок
+     * ОПТИМІСТИЧНО і `fileCount` у ньому не задає взагалі, тож нова колонка
+     * «Файли» малювала б «—» на задачі, до якої людина щойно прикріпила файл, —
+     * до наступного фонового опитування (до ~45 с). Тобто екран казав би «файла
+     * немає» відразу після успішного завантаження.
+     */
+    if (failed.length < ids.length) setTasks(await fetchTasks());
+  }
+
   async function handleSubmitTaskModal() {
     if (taskForm.taskType === "simple") {
       if (!taskForm.title.trim()) return;
@@ -488,7 +521,7 @@ export function Dashboard() {
         .filter((v) => v !== "").map(Number).filter((v, i, a) => a.indexOf(v) === i);
       if (ids.length > 1) {
         // Задача одразу на кількох менеджерів — створюємо копію кожному, refetch.
-        await createTask({
+        const made = await createTask({
           title: taskForm.title,
           deadline: taskForm.deadline || null,
           assigneeIds: ids,
@@ -496,9 +529,13 @@ export function Dashboard() {
           department: taskForm.department?.trim() || null,
           comments: taskForm.comments?.trim() || null,
         });
+        // 📎 Задача «одразу на двох» — це ДВІ окремі задачі, тож вкладення кладеться
+        // в КОЖНУ. Ціна названа вголос: байти дублюються (до 5 МБ на копію). Інакше
+        // файл побачив би лише один із двох виконавців, і другий не знав би, чому.
+        await attachPendingFile(made.ids ?? (made.id ? [made.id] : []));
         setTasks(await fetchTasks());
       } else {
-        await addTask({
+        const newId = await addTask({
           title: taskForm.title,
           deadline: taskForm.deadline,
           assigneeId: taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId),
@@ -506,6 +543,7 @@ export function Dashboard() {
           department: taskForm.department,
           comments: taskForm.comments,
         });
+        await attachPendingFile(newId != null ? [newId] : []);
       }
     } else {
       // Менеджер ставить план ЛИШЕ собі — виконавець форсується на себе.

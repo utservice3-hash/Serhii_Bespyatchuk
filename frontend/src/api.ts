@@ -2459,7 +2459,13 @@ export interface Task {
   groupId?: number | null;
   groupName?: string | null;
   commentCount?: number;
-  fileCount?: number;
+  /**
+   * 📎 Скільки вкладень. `null` — НЕ «нуль», а «не моя задача»: вкладення бачать
+   * лише автор і виконавець (рішення власника 14.09.2026), і сервер свідомо не
+   * називає наглядачеві навіть кількість. Екран мусить показати це як невідоме
+   * (замок), а не як «файлів немає».
+   */
+  fileCount?: number | null;
   /** «Є нове»: доповнення або зміна статусу після мого останнього перегляду і НЕ мною. */
   hasUnseen?: boolean;
   metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;
