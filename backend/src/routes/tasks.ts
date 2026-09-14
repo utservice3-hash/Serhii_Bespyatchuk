@@ -6,7 +6,7 @@ import path from "path";
 import { pool } from "../db/pool.js";
 import { createReactivationPack } from "../core/reactivationPack.js";
 import { requireAuth } from "../auth/middleware.js";
-import { roleHasPerm, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
+import { roleHasPerm, isAdminScope } from "../auth/rbac.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import {
   canSeeTask, canTouchTask as mayTouch, visibilityCondSql,
@@ -299,16 +299,13 @@ tasksRouter.post("/plan", async (req, res) => {
   //  • менеджер — ЛИШЕ собі (assignee форсується на себе);
   //  • тімлід — лише своїй команді;
   //  • адмін — будь-кому.
-  let assigneeId = parsed.data.assigneeId;
-  if (auth.role === "manager") {
-    if (!auth.managerId) return res.status(403).json({ error: "Обліковий запис без менеджера" });
-    assigneeId = auth.managerId;
-  } else if (auth.role === "team_lead") {
-    const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [assigneeId]);
-    if (chk.rows[0]?.team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
-  } else if (!isAdminScope(auth)) {
-    return res.status(403).json({ error: "Немає доступу" });
-  }
+  // 🔓 РІШЕННЯ ВЛАСНИКА 14.09.2026: «зніми обмеження і для планів та реактивації».
+  // Доти менеджера форсували на себе, тімліда — на свою команду, решту — 403.
+  // Тепер план ставить будь-хто будь-кому; без виконавця менеджер — собі (як було).
+  let assigneeId = parsed.data.assigneeId ?? (auth.role === "manager" && auth.managerId ? auth.managerId : undefined);
+  if (!assigneeId) return res.status(400).json({ error: "Оберіть менеджера" });
+  const exists = await pool.query(`SELECT 1 FROM managers WHERE id = $1`, [assigneeId]);
+  if (!exists.rowCount) return res.status(400).json({ error: "Менеджера не знайдено" });
 
   const sorted = [...days].sort();
   const periodStart = sorted[0];
@@ -400,9 +397,8 @@ const reactivationSchema = z.object({
 });
 tasksRouter.post("/reactivation", async (req, res) => {
   const auth = req.auth!;
-  if (!isAdminOrLead(auth)) {
-    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
-  }
+  // 🔓 Рішення власника 14.09.2026: реактиваційну задачу ставить будь-хто будь-кому
+  // (доти — лише тімлід/адмін і лише своїй команді).
   const parsed = reactivationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { assigneeId, clients } = parsed.data;
@@ -412,9 +408,6 @@ tasksRouter.post("/reactivation", async (req, res) => {
     `SELECT name, team_id FROM managers WHERE id = $1`, [assigneeId]
   );
   if (!mgr.rows[0]) return res.status(400).json({ error: "Менеджера не знайдено" });
-  if (auth.role === "team_lead" && mgr.rows[0].team_id !== auth.teamId) {
-    return res.status(403).json({ error: "Лише своя команда" });
-  }
 
   const created = await createReactivationPack({
     assigneeId, managerName: mgr.rows[0].name, createdBy: auth.userId, clients,

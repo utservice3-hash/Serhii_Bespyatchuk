@@ -564,7 +564,8 @@ export function Dashboard() {
       }
     } else {
       // Менеджер ставить план ЛИШЕ собі — виконавець форсується на себе.
-      const planAssignee = auth?.role === "manager" ? auth.managerId : (taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId));
+      // 🔓 14.09.2026: план ставить будь-хто будь-кому; порожній вибір у менеджера = собі.
+      const planAssignee = taskForm.assigneeId === "" ? (auth?.role === "manager" ? auth.managerId : null) : Number(taskForm.assigneeId);
       if (planAssignee == null) {
         alert("Оберіть виконавця (менеджера) для плану");
         return;

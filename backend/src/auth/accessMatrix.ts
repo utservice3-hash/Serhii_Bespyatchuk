@@ -416,8 +416,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager"] },
   { method: "PUT", path: "/api/dashboard/reactivation", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🔓 14.09.2026: кандидатів бачить кожен, хто ставить задачі (роут під вкладкою tasks,
+  // і GET /api/tasks дозволений усім вісьмом ролям).
   { method: "GET", path: "/api/dashboard/reactivation-candidates", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "DELETE", path: "/api/dashboard/reactivation/:clientKey", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/receivables", cls: "GET",
@@ -813,8 +815,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "POST", path: "/api/tasks/plan", cls: "deny-only",
     allow: [], deny: [] },
+  // 🔓 14.09.2026, рішення власника: реактиваційну задачу ставить будь-хто. Заміряно:
+  // POST /api/tasks не забороняє нікому, тож і тут deny порожній — інакше hr міг би
+  // створити звичайну задачу, але не реактиваційну, без жодної причини.
   { method: "POST", path: "/api/tasks/reactivation", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: [] },
   { method: "GET", path: "/api/teams", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/teams/managers", cls: "GET",
