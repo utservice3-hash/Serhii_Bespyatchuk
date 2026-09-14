@@ -95,3 +95,21 @@ test("#29d МІСЯЦЬ КАРТКИ == МІСЯЦЮ ЕКРАНА ПЛАНІВ (
     `🔴 «${MONTH}» у картці ${Math.round(cardSum)}, а в рядку клієнта на екрані планів `
     + `${Math.round(planSum)} — два «липні» на одному екрані`);
 });
+
+/**
+ * #400 — ЗАПИС ДЗВІНКА ГРАЄ В КАРТЦІ, А НЕ В НОВІЙ ВКЛАДЦІ (рішення власника 08.09.2026).
+ * Читає джерело `ClientCardPanel.tsx`: біля `c.recording` стоїть `<audio src={c.recording}`,
+ * і жодного `href={c.recording}` з `target="_blank"`. 🪞 Дзеркало: плеєр показується лише
+ * коли запис Є (`open && c.recording`) — інакше кнопка «в нікуди» на дзвінку без файла.
+ * Червоніє, якщо повернути посилання, прибрати <audio> або зняти умову на запис.
+ */
+test("#400 КАРТКА: запис дзвінка грає у вбудованому <audio>, не відкривається новою вкладкою", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ClientCardPanel.tsx"), "utf8");
+  assert.match(src, /<audio\s+src=\{c\.recording\}/, "плеєра з записом дзвінка немає в картці");
+  assert.doesNotMatch(src, /href=\{c\.recording\}/, "запис знову відкривається посиланням");
+  assert.match(src, /open && c\.recording && \(/, "плеєр не умовний на наявність запису");
+  // Один відкритий запис за раз: стан — один ключ, а не масив.
+  assert.match(src, /useState<string \| null>\(null\);\s*const \[rate/, "стан відкритого запису має бути ОДНИМ ключем");
+});

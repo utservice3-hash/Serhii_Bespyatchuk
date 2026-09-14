@@ -25,6 +25,12 @@ const ADMIN_ACTION_LABEL: Record<string, string> = {
 
 export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; onChanged?: () => void }) {
   const [openYear, setOpenYear] = useState<number | null>(null);
+  /* 🎧 ПЛЕЄР У КАРТЦІ, А НЕ В НОВІЙ ВКЛАДЦІ (рішення власника 08.09.2026: «зроби
+     програвач в системі»). Відкритий рівно ОДИН запис: місця в картці мало, і два
+     аудіо одночасно — це не прослуховування, а шум. Ключ — момент дзвінка + індекс,
+     бо у списку немає власного id. Швидкість — стан плеєра, не запису. */
+  const [openCall, setOpenCall] = useState<string | null>(null);
+  const [rate, setRate] = useState<1 | 1.5 | 2>(1);
   const [card, setCard] = useState<ClientCard | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -215,26 +221,49 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
               </button>
               {openYear === y.year && card.calls && (
                 <div style={{ maxHeight: 190, overflowY: "auto", margin: "0 0 8px 22px" }}>
-                  {card.calls.filter((c) => new Date(c.at).getFullYear() === y.year).map((c, i) => (
-                    <div key={i} style={{ fontSize: 12, padding: "3px 0", display: "flex", gap: 6, alignItems: "center" }}>
-                      <span>
-                        {c.at.slice(0, 16).replace("T", " ")} · {c.direction === "out" ? "вих" : "вх"}
-                        {` · ${c.billsec} с`}
-                        {c.manager && ` · ${c.manager}`}
-                      </span>
-                      {/* 🎧 ПРЯМЕ ПОСИЛАННЯ, БЕЗ ПРОКСІ ЧЕРЕЗ НАШ СЕРВЕР (рішення власника
-                          05.08.2026): записи Ringostat відкриваються без логіна, тож проксі
-                          дав би ілюзію захисту ціною аудіотрафіку крізь нас.
-                          Перелік містить лише відповідані, і в них запис є завжди (заміряно
-                          07.09: відповіданих без запису — нуль), але саме «завжди» на живих
-                          даних завтра може стати «майже завжди» — тому кнопка умовна. */}
-                      {c.recording && (
-                        <a href={c.recording} target="_blank" rel="noreferrer"
-                           title="Прослухати запис"
-                           style={{ textDecoration: "none", fontSize: 13 }}>▶</a>
+                  {card.calls.filter((c) => new Date(c.at).getFullYear() === y.year).map((c, i) => {
+                    const key = `${c.at}#${i}`;
+                    const open = openCall === key;
+                    return (
+                    <div key={i} style={{ fontSize: 12, padding: "3px 0" }}>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <span>
+                          {c.at.slice(0, 16).replace("T", " ")} · {c.direction === "out" ? "вих" : "вх"}
+                          {` · ${c.billsec} с`}
+                          {c.manager && ` · ${c.manager}`}
+                        </span>
+                        {/* 🎧 ПРЯМИЙ ЛІНК, БЕЗ ПРОКСІ ЧЕРЕЗ НАШ СЕРВЕР (рішення власника
+                            05.08.2026): записи Ringostat відкриваються без логіна, тож проксі
+                            дав би ілюзію захисту ціною аудіотрафіку крізь нас.
+                            Перелік містить лише відповідані, і в них запис є завжди (заміряно
+                            07.09: відповіданих без запису — нуль), але саме «завжди» на живих
+                            даних завтра може стати «майже завжди» — тому кнопка умовна. */}
+                        {c.recording && (
+                          <button type="button" onClick={() => setOpenCall(open ? null : key)}
+                                  title={open ? "Згорнути плеєр" : "Прослухати запис"}
+                                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: 0 }}>
+                            {open ? "⏹" : "▶"}
+                          </button>
+                        )}
+                      </div>
+                      {open && c.recording && (
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "4px 0 2px" }}>
+                          <audio src={c.recording} controls autoPlay preload="none"
+                                 ref={(el) => { if (el) el.playbackRate = rate; }}
+                                 style={{ height: 30, flex: 1, minWidth: 0 }} />
+                          {([1, 1.5, 2] as const).map((r) => (
+                            <button key={r} type="button" onClick={() => setRate(r)}
+                                    style={{ fontSize: 11, padding: "1px 6px", borderRadius: 4, cursor: "pointer",
+                                             border: "1px solid #d1d5db", background: rate === r ? "#111827" : "#fff",
+                                             color: rate === r ? "#fff" : "#374151" }}>
+                              {r}×
+                            </button>
+                          ))}
+                        </div>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
