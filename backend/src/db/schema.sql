@@ -2676,7 +2676,7 @@ CREATE TABLE IF NOT EXISTS task_views (
 -- задача, призначена АКАУНТУ (бухгалтеру, HR), має `assignee_id IS NULL` і
 -- особистою НЕ є. Лишивши стару умову, ми отримали б ДВА визначення приватності
 -- в одній системі — рівно той клас, що дав «чипи новий/постійний» і вічний
--- банер джоби. Гейт `#399e` звіряє цей рядок із функцією `isPersonalTask`.
+-- банер джоби. Гейт `#400e` звіряє цей рядок із функцією `isPersonalTask`.
 CREATE OR REPLACE VIEW ai_tasks AS
   SELECT id, title, task_type, status, department, assignee_id, deadline,
          metric, target_value, actual_value, created_at
@@ -2694,7 +2694,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;
 -- `task_comments`/`task_files` відкрились би моделі автоматично — а в них лежить
 -- ЗМІСТ обговорення й назви вкладень, у тому числі ОСОБИСТИХ задач, які вью
 -- `ai_tasks` спеціально ховає. Заборона на `tasks` без заборони на її супутників
--- ховає заголовок і віддає розмову. Тримає `#399f`.
+-- ховає заголовок і віддає розмову. Тримає `#400f`.
 REVOKE ALL ON users, access_audit, app_settings, bank_accounts,
   one_on_ones, one_on_one_forms, tracker_devices, tracker_intervals, tasks,
   task_comments, task_files, task_status_log, task_views, task_groups

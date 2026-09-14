@@ -5,7 +5,7 @@ import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 
 /**
- * #399j — ДЕРЕВО ДОКУМЕНТІВ ВИКОНУЄТЬСЯ, А НЕ «ПРОСТО ВІДПОВІДАЄ».
+ * #400j — ДЕРЕВО ДОКУМЕНТІВ ВИКОНУЄТЬСЯ, А НЕ «ПРОСТО ВІДПОВІДАЄ».
  *
  * 🔴 ПРИВІД ЗАМІРЯНИЙ, А НЕ ГІПОТЕТИЧНИЙ. `GET /api/documents/tree` віддавав **500**
  * на проді, і вкладка «Регламенти та документи» не працювала ні для кого. Причина
@@ -28,7 +28,7 @@ import { skipReason } from "../db/scratchDb.js";
  *
  * 🧨 Червоніє, якщо повернути будь-яку неіснуючу колонку в цей запит.
  */
-test("#399j ДЕРЕВО ДОКУМЕНТІВ: запит виконується проти бази з нуля й віддає автора", async (t) => {
+test("#400j ДЕРЕВО ДОКУМЕНТІВ: запит виконується проти бази з нуля й віддає автора", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));

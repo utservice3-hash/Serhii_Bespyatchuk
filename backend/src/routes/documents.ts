@@ -45,7 +45,7 @@ const onlyAdmin = requireRole("admin");
  *
  * ⚠️ Чому це не спіймав жоден гейт: SQL у шаблонному рядку не типізується, а
  * матриця доступу перевіряє КОД ВІДПОВІДІ на 403/не-403 — 500 для неї «пройдений
- * гейт». Тримає тепер `#399j`.
+ * гейт». Тримає тепер `#400j`.
  */
 documentsRouter.get("/tree", async (_req, res) => {
   const [folders, files] = await Promise.all([
