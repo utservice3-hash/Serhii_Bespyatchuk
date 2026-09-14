@@ -61,7 +61,7 @@ documentsRouter.get("/tree", async (_req, res) => {
       // 58 акаунтів привʼязані до CRM, і в УСІХ 58 `full_name` порожній. Тобто в
       // колонці «автор» кожен такий завантажувач показувався б ПОШТОЮ.
       // ⚠️ Сьогодні це ще не видно: у базі 2 файли одного не-CRM автора. Стане видно
-      // з першим же файлом, який заллє менеджер із CRM. Тримає #403.
+      // з першим же файлом, який заллє менеджер із CRM. Тримає #404.
       `SELECT f.id, f.folder_id, f.name, f.category, f.mime, f.size_bytes, f.created_at,
               COALESCE(m.name, u.full_name, u.email) AS author
          FROM doc_files f

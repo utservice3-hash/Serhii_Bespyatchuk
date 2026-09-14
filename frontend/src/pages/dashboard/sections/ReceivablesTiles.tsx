@@ -232,7 +232,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
               нічого, а в скоупі є й частково оплачені рахунки. Замість заяви про
               гроші стоїть те, що правдиве ЗА ПОБУДОВОЮ: рядок узагалі потрапляє в
               `receivable_invoices` лише з ненульовим залишком (1С) або як готівкова
-              угода на `approved`/`invoiced` поза `PAID_STATUSES`. Тримають #401/#401b. */}
+              угода на `approved`/`invoiced` поза `PAID_STATUSES`. Тримають #405/#405b. */}
           <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 4, display: "block" }}>
             Береться з поля «Бюджет» угоди в CRM — це готове число, а не наш розрахунок;
             показані лише угоди, по яких лишився непогашений борг.

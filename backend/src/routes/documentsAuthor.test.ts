@@ -5,7 +5,7 @@ import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 
 /**
- * 👤 #403 — АВТОР ФАЙЛА З CRM-АКАУНТА ПОКАЗУЄТЬСЯ ІМЕНЕМ, А НЕ ПОШТОЮ.
+ * 👤 #404 — АВТОР ФАЙЛА З CRM-АКАУНТА ПОКАЗУЄТЬСЯ ІМЕНЕМ, А НЕ ПОШТОЮ.
  *
  * 🔴 ЧОМУ ЦЕ ОКРЕМИЙ ГЕЙТ, ХОЧ Є `#400j`. Той доводить, що запит ВИКОНУЄТЬСЯ і віддає
  * автора — і це справжня перевірка. Але його фікстура сіє РУЧНИЙ акаунт (`full_name`
@@ -27,7 +27,7 @@ import { skipReason } from "../db/scratchDb.js";
  * 🧨 САБОТАЖ: у `documents.ts` замінити `COALESCE(m.name, u.full_name, u.email)` на
  * `COALESCE(u.full_name, u.email)` → автор приїде поштою, гейт червоніє.
  */
-test("#403 автор файла з CRM-акаунта — імʼя з managers, а не пошта", async (t) => {
+test("#404 автор файла з CRM-акаунта — імʼя з managers, а не пошта", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));
