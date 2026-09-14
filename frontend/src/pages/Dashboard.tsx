@@ -920,10 +920,13 @@ export function Dashboard() {
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
 
       {section === "statistics" && (
-        /* 📣 Вкладка «Реклама» всередині Статистик бере СПІЛЬНИЙ період-фільтр
-           (dateRange), а видимість — ключ `ads` зі `screens` токена. */
-        <StatisticsChartsSection role={auth?.role} screens={auth?.screens}
-          from={dateRange.from} to={dateRange.to} />
+        /* 📣 Вкладка «Реклама» всередині Статистик тримає ВЛАСНИЙ період, як Звіт, —
+           тому спільний `dateRange` сюди більше не їде взагалі, і це рішення, а не
+           спрощення. Саме спільний період і зламав екран: його ставлять на Звіті чи
+           Огляді, він переживає перезавантаження в `localStorage`, і «Реклама»
+           відкривалась із 14.07–14.07, привезеним із чужого екрана (заміряно на проді:
+           у смузі днів був рівно один день). Видимість вкладки — ключ `ads` зі `screens`. */
+        <StatisticsChartsSection role={auth?.role} screens={auth?.screens} />
       )}
       {section === "bank" && <BankSection />}
 

@@ -517,6 +517,10 @@ export async function saveRepeatPlan(managerId: number, month: string, plannedVa
 
 /** 📊 Екран «Реклама»: день × кампанія з GA4 + ліди CRM за той самий день. */
 export interface AdsDay {
+  /** Оплачено (142) · програно (143) · у роботі. Разом дають `leads`. */
+  paid: number;
+  lost: number;
+  inWork: number;
   day: string;
   cost: number;
   clicks: number;
@@ -541,11 +545,38 @@ export interface AdsReport {
   campaigns: AdsCampaign[];
   /** false → GA4 ще не ввімкнули; екран каже це словами, а не показує порожнечу. */
   ga4Configured: boolean;
+  /** Місячний план (сума місяців періоду). `null` = плану на ці місяці не ставили — НЕ нуль. */
+  planMonth: number | null;
+  /** Гроші, ЩО НАДІЙШЛИ в періоді від реклами будь-якого часу. Не «принесли ці ліди». */
+  revenue: number;
+  revenueDeals: number;
+}
+
+/** Одна угода рекламної когорти дня — для розкриття. */
+export interface AdsDeal {
+  kommoId: number;
+  name: string;
+  price: number;
+  /** paid = 142 · lost = 143 · inWork = ні те, ні те (означення власника). */
+  state: "paid" | "lost" | "inWork";
+  /** Дійшла до грошової зони — може бути true і в стані inWork («Виставлення рахунку»). */
+  reachedMoney: boolean;
+  url: string;
 }
 
 export async function fetchAds(params: { from?: string; to?: string }): Promise<AdsReport> {
   const { data } = await api.get<AdsReport>("/dashboard/ads", { params });
   return data;
+}
+
+export async function fetchAdsDeals(day: string): Promise<{ day: string; deals: AdsDeal[] }> {
+  const { data } = await api.get<{ day: string; deals: AdsDeal[] }>("/dashboard/ads/deals", { params: { day } });
+  return data;
+}
+
+/** Запис місячного плану. `month` — будь-який день потрібного місяця. */
+export async function saveAdPlan(month: string, plan: number): Promise<void> {
+  await api.put("/settings/ad-plan", { month, plan });
 }
 
 export async function fetchLeadQuality(params: {
@@ -967,13 +998,14 @@ export interface DutyManager {
 export type AbsenceKind = "day_off" | "vacation" | "sick" | "short_day";
 export type AbsenceStatus = "pending" | "approved" | "rejected";
 export interface Absence {
-  id: number; managerId: number; managerName: string; teamId: number | null; teamName: string | null;
+  id: number; managerId: number | null; userId: number | null; managerName: string; teamId: number | null; teamName: string | null;
   kind: AbsenceKind; startDate: string; endDate: string; hours: number | null; note: string | null;
   status: AbsenceStatus; createdBy: number | null; createdAt: string;
   approvedBy: number | null; approverName: string | null; approvedAt: string | null; mine: boolean;
 }
 export interface Holiday { id: number; date: string; name: string }
-export interface CalendarManager { id: number; name: string; teamId: number | null; teamName: string | null }
+/** `id` = users.id — акаунт; `managerId` довідково (null для ручних акаунтів: HR, бухгалтерія, адміни). */
+export interface CalendarManager { id: number; managerId: number | null; name: string; teamId: number | null; teamName: string | null }
 export interface DutySchedule {
   from: string;
   to: string;
@@ -996,7 +1028,7 @@ export async function assignDuty(body: { date: string; managerId: number; shift?
 export async function removeDuty(id: number): Promise<void> {
   await api.delete(`/duty/${id}`);
 }
-export async function createAbsence(body: { managerId?: number; kind: AbsenceKind; startDate: string; endDate?: string; hours?: number; note?: string }): Promise<{ ok: boolean; id: number; status: AbsenceStatus }> {
+export async function createAbsence(body: { userId?: number; managerId?: number; kind: AbsenceKind; startDate: string; endDate?: string; hours?: number; note?: string }): Promise<{ ok: boolean; id: number; status: AbsenceStatus }> {
   const { data } = await api.post<{ ok: boolean; id: number; status: AbsenceStatus }>("/duty/absences", body);
   return data;
 }
@@ -2828,6 +2860,38 @@ export async function fetchOneOnOneStats(type: string, months = 6, month?: strin
     { params: month ? { type, month } : { type, months } });
   return data?.rows ?? [];
 }
+// ── Коротка аналітика 1×1 (сигнали за місяць) ────────────────────────────────
+export type O2OSignalKey = "missed" | "never" | "avgLow" | "drop" | "enpsLow" | "answerLow" | "tasksOpen";
+export interface O2OSignalHit { key: O2OSignalKey; value: number | null; detail: string }
+export interface O2OPersonFinding {
+  managerId: number; name: string; teamId: number | null; teamName: string | null;
+  owed: string; hits: O2OSignalHit[];
+}
+export interface O2OTeamRollUp {
+  teamId: number | null; teamName: string; people: number;
+  bySignal: Record<O2OSignalKey, number>;
+}
+export interface O2OWeakQuestion { qKey: string; label: string | null; avg: number; answers: number }
+export interface O2OAnalytics {
+  month: string; prevMonth: string; rosterSize: number;
+  /** Які типи 1×1 ця роль має право бачити. Порожній блок при `false` — це «недоступно», а не «0». */
+  sources: Record<string, boolean>;
+  thresholds: Record<string, number>;
+  labels: Record<O2OSignalKey, string>;
+  notes: Record<O2OSignalKey, string>;
+  counts: Record<O2OSignalKey, number>;
+  people: O2OPersonFinding[];
+  teams: O2OTeamRollUp[];
+  weakQuestions: O2OWeakQuestion[];
+  /** Задачі 1×1 без дедлайну — у жоден місяць не потрапляють, тому названі окремо. */
+  tasksWithoutDeadline: number;
+}
+/** Сигнали за ОДИН місяць (`YYYY-MM`). Правила й пороги рахує ядро на сервері. */
+export async function fetchO2OAnalytics(month: string): Promise<O2OAnalytics> {
+  const { data } = await api.get<O2OAnalytics>("/one-on-ones/analytics", { params: { month } });
+  return data;
+}
+
 // ── Задачі з 1×1 ─────────────────────────────────────────────────────────────
 export interface O2OOpenTask {
   id: number; title: string; deadline: string | null; setAt: string; status: string;

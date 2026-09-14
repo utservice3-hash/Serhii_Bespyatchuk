@@ -6,6 +6,8 @@ import {
 import { effGranOf } from "../statsGran";
 import { fetchStatsSeries, saveStatsManual, type StatsSeriesResp, type StatsSeries } from "../../../api";
 import { InfoHint } from "../widgets";
+import { PeriodNav } from "../PeriodNav";
+import { monthStart, periodOf, todayKyiv, type PeriodState } from "../periodRules";
 
 const SEAM = "2026-07-01";
 // dataviz категорійна палітра (фіксований порядок; компанія завжди [0]). CVD-safe рампи.
@@ -113,9 +115,23 @@ function rangeWindow(rows: { period: string }[], range: string): { lo: number; h
 }
 
 export default function StatisticsChartsSection(
-  { role, screens, from, to }:
-  { role?: string; screens?: string[]; from?: string; to?: string }
+  { role, screens }: { role?: string; screens?: string[] }
 ) {
+  /**
+   * 📅 ПЕРІОД «РЕКЛАМИ» — ВЛАСНИЙ, як у Звіті, а не спільний `dateRange`.
+   *
+   * 🔴 ЧОМУ НЕ СПІЛЬНИЙ. Саме спільний і зламав екран: `dateRange` ставлять на Звіті чи
+   * Огляді, він переживає перезавантаження в `localStorage`, і «Реклама» відкривалась із
+   * періодом 14.07–14.07, привезеним із чужого екрана. Власний стан робить вкладку
+   * самодостатньою — і, дзеркально, крутити період тут більше не зсуває Звіт із Оглядом.
+   * Дефолт «Місяць»: у режимі «День» смуга днів має рівно одну кнопку, тобто відкривалась
+   * би рівно тим порожнім екраном, від якого ми лікуємось.
+   */
+  const today = todayKyiv();
+  const [nav, setNav] = useState<PeriodState>({
+    mode: "month", anchor: today, focusDay: today, rangeFrom: monthStart(today), rangeTo: today,
+  });
+  const adsPeriod = periodOf(nav);
   const [catKey, setCatKey] = useState("money");
   const cat = CATS.find((c) => c.key === catKey)!;
   const [metricKey, setMetricKey] = useState("avg_check");
@@ -344,7 +360,32 @@ export default function StatisticsChartsSection(
         </div>
       )}
 
-      {cat.custom === "ads" && <AdsSection from={from ?? ""} to={to ?? ""} />}
+      {/* 📅 ВИБІР ПЕРІОДУ СТОЇТЬ САМЕ ТУТ — усередині вкладки «Реклама», а не над
+          усім розділом. Причина не косметична: решта вкладок Статистик періодом НЕ
+          керується взагалі (у них своя гранулярність день/тиждень/місяць і повзунок
+          по всій історії), тож контрол, підвішений на весь екран, на восьми вкладках
+          із девʼяти нічого б не робив. Мовчазний перемикач гірший за його відсутність:
+          людина крутить його й не розуміє, чому нічого не змінюється.
+          🔴 ЧОМУ ВЗАГАЛІ ЗʼЯВИВСЯ. «Реклама» — єдина вкладка тут, що живе періодом, і
+          довезли її БЕЗ перемикача: значення приходило з `dateRange`, який ставлять на
+          Звіті чи Огляді, і ще й переживало перезавантаження через `localStorage`. На
+          проді це виглядало як порожній екран: період 14.07–14.07, у смузі один день,
+          і жодного способу це виправити, не пішовши на інший розділ. */}
+      {cat.custom === "ads" && (
+        <>
+          {/* 🎨 ТОЙ САМИЙ КОНТРОЛ, ЩО НА ЗВІТІ — не схожий, а буквально той самий модуль.
+              Дві попередні редакції ставили тут `QuickPeriods` (спершу з власним підписом
+              «ПЕРІОД», потім на спільних класах) — і обидві були НЕ тим контролом, який
+              просили. Копіювати розмітку втретє означало б завести другий навігатор, що
+              розійдеться зі Звітом на першій же правці. */}
+          <PeriodNav state={nav} onPatch={(patch) => setNav((s) => ({ ...s, ...patch }))} today={today} />
+          {/* Право змінювати план мусить збігатися з межами роуту PUT /settings/ad-plan
+              (deny: kvp, financier, hr, team_lead, manager). Показати кнопку тому, кому
+              сервер відмовить, — це обіцянка, якої інтерфейс не виконає. */}
+          <AdsSection from={adsPeriod.from} to={adsPeriod.to}
+            canEditPlan={["admin", "ceo", "opdir"].includes(role ?? "")} />
+        </>
+      )}
 
       {cat.manualForm && <ManualForm onClose={() => { setCatKey("money"); setMetricKey("avg_check"); }} isAdmin={role === "admin"} />}
 

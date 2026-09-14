@@ -273,6 +273,31 @@ CREATE TABLE IF NOT EXISTS ad_ga4_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_ad_ga4_daily_day ON ad_ga4_daily(day);
 
+-- 💰 МІСЯЧНИЙ ПЛАН ВИТРАТ НА РЕКЛАМУ — ручний, і це не тимчасово (рішення власника 09.09.2026).
+--
+-- 🔴 ЧОМУ РУЧНИЙ, ЯКЩО В НАС УМОВА «ВСЕ АВТОМАТИЧНО». Умова стосується того, що МОЖНА
+-- дістати з джерела. Факт витрат саме так і автоматизовано: GA4 тягне його з Google Ads
+-- щодня (звірка за 3 місяці: 69 днів із 70 збіглися з ручною таблицею до гривні). А план —
+-- це домовленість людей про майбутнє («узгоджуємо з рекламщиком», Сергій, 09.09.2026);
+-- його немає звідки взяти жодним API. Питання було не «руками чи ні», а ДЕ саме руками:
+-- у Google-таблиці, якої не видно з дашборду, чи тут, де видно хто і коли поставив.
+--
+-- 🔴 ЧОМУ МІСЯЦЬ, А НЕ ДЕНЬ. Заміряно на бойових даних: у `ad_budget_daily.budget_plan`
+-- у кожному місяці РІВНО ОДНЕ значення на всі дні (липень 4 839 × 30, серпень 4 333 × 31,
+-- вересень 5 167 × 30). Тобто денні числа плану — механічне ділення місячної суми, і
+-- жодної інформації в них немає. Зберігати їх означало б плодити 30 рядків заради одного.
+--
+-- ⚠️ ПЛАН БЕЗ ПДВ (Сергій, 09.09.2026). Факт із GA4 і факт із таблиці збігаються один в
+-- один, тобто вони в ОДНІЙ базі ПДВ — слідів коефіцієнта 1.2 у 70 днях немає жодного.
+-- Отже приведення не потрібне; якщо колись виявиться, що джерела різні, це буде видно
+-- саме як розбіжність, а не як тихо неправильний ROMI.
+CREATE TABLE IF NOT EXISTS ad_budget_manual (
+  month   DATE PRIMARY KEY,          -- перше число місяця, за Києвом
+  plan    NUMERIC NOT NULL CHECK (plan >= 0),
+  set_by  INTEGER REFERENCES users(id),
+  set_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Міграція наявної таблиці на трискладовий ключ. Ідемпотентна: на чистій базі
 -- умова не спрацьовує, бо ключ уже правильний.
 ALTER TABLE ad_ga4_daily ALTER COLUMN channel_group SET DEFAULT '';
@@ -548,13 +573,17 @@ CREATE TABLE IF NOT EXISTS loyalty_overrides (
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archive_reason TEXT;
 ALTER TABLE loyalty_overrides ADD COLUMN IF NOT EXISTS archived_by INTEGER REFERENCES users(id);
+-- 10.09.2026: словник розширено (carrier, one_off) — перевірка перебудовується щоразу,
+-- інакше `duplicate_object` нижче мовчки лишив би СТАРИЙ перелік (той самий клас, що
+-- «міграція пройшла ≠ зміна застосувалась»).
+ALTER TABLE loyalty_overrides DROP CONSTRAINT IF EXISTS loyalty_overrides_archive_reason_chk;
 DO $$ BEGIN
   ALTER TABLE loyalty_overrides ADD CONSTRAINT loyalty_overrides_archive_reason_chk
     -- ⚠️ NULL-ПАСТКА, спіймана гейтом #38: `NULL IN (...)` дає NULL, а CHECK на NULL
     -- ПРОХОДИТЬ. Без явного `IS NOT NULL` архівація без причини тихо вставлялась би —
     -- тобто CHECK стояв би для вигляду. Той самий клас, що `traf_type = 'cpc'` при NULL.
     CHECK (archived_at IS NULL OR (archive_reason IS NOT NULL AND archive_reason IN
-           ('price','competitor','own_transport','seasonality','closed_down','other')));
+           ('price','competitor','own_transport','seasonality','closed_down','carrier','one_off','other')));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- 🔁 ПЕРЕНЕСЕННЯ СТАРИХ `hidden` В АРХІВ. Разова, з умовою на ще не перенесені —
@@ -1306,6 +1335,25 @@ CREATE INDEX IF NOT EXISTS idx_absence_range ON team_calendar_absences(start_dat
 CREATE INDEX IF NOT EXISTS idx_absence_manager ON team_calendar_absences(manager_id, start_date);
 CREATE INDEX IF NOT EXISTS idx_absence_status ON team_calendar_absences(status);
 CREATE INDEX IF NOT EXISTS idx_absence_team ON team_calendar_absences(team_id, start_date);
+
+-- 🔑 ВІДСУТНІСТЬ НАЛЕЖИТЬ АКАУНТУ (09.09.2026, рішення власника; див. core/absences.ts).
+-- Було: manager_id NOT NULL → календар знав лише людей з CRM; Дарʼя Протас (акаунт «не з
+-- CRM») не могла поставити відпустку. Тепер: user_id поруч із manager_id, manager_id
+-- необовʼязковий, хоча б один із двох мусить бути. Бекфіл user_id з users.manager_id —
+-- одноразовий, з умовою на порожнє значення (постійний синк тут не потрібен: нові рядки
+-- пише роут одразу з обома ключами).
+ALTER TABLE team_calendar_absences ALTER COLUMN manager_id DROP NOT NULL;
+ALTER TABLE team_calendar_absences ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
+UPDATE team_calendar_absences a SET user_id = u.id
+  FROM users u WHERE u.manager_id = a.manager_id AND a.user_id IS NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'absence_has_owner') THEN
+    ALTER TABLE team_calendar_absences ADD CONSTRAINT absence_has_owner
+      CHECK (manager_id IS NOT NULL OR user_id IS NOT NULL);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_absence_user ON team_calendar_absences(user_id, start_date);
 
 -- Держсвята — фіксує ВРУЧНУ адмін (окремий тип неробочого дня, глобальний для всіх команд;
 -- автоматично НЕ тягнемо). Погодження не потребує (адмін — авторитет). Живить робочі дні

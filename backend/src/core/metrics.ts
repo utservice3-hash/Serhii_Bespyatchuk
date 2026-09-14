@@ -2080,7 +2080,15 @@ function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): st
            FROM deal_stage_events WHERE pipeline_id = ANY($2) AND status_id = ANY($1) GROUP BY kommo_id
        ),
        pop AS (
-         SELECT a.entered_at, w.won_at, d.manager_id, m.team_id, d.request_type
+         /* ⚠️ kommo_id, name, price, status_id додано 09.09.2026 для екрана «Реклама»:
+            розкриття дня показує САМІ УГОДИ, і склад мусить рахуватись тим самим
+            виразом, що й число в комірці (урок «розкриття пояснює число, а не
+            сперечається з ним»). Лічильники інших споживачів pop це не рухає — вони
+            рахують COUNT, а не вибирають усі колонки.
+            ⚠️ БЕЗ ЗВОРОТНИХ ЛАПОК: цей коментар живе ВСЕРЕДИНІ шаблонного літерала,
+            і будь-яка з них закрила б рядок (TS1005). */
+         SELECT a.entered_at, w.won_at, d.manager_id, m.team_id, d.request_type,
+                d.kommo_id, d.name, d.price, d.status_id
            FROM adzone a
            JOIN deals d ON d.kommo_id = a.kommo_id
            LEFT JOIN managers m ON m.id = d.manager_id
@@ -2322,7 +2330,42 @@ export async function conversionAdsByManager(s: MetricScope, adSources: string[]
   });
 }
 
-export interface AdsDayCohort { day: string; entered: number; won: number }
+/**
+ * 🔴 ЧОТИРИ ЧИСЛА ДНЯ, І ВОНИ НЕ СКЛАДАЮТЬСЯ В ОДНЕ ЦІЛЕ — ЦЕ НАВМИСНО.
+ *
+ * `won` (дійшли до грошової зони) і `inWork` (ще не закриті) ПЕРЕТИНАЮТЬСЯ: угода на
+ * «Виставленні рахунку» входить в обидва — вона вже в грошовій зоні, але ще в роботі.
+ * Тому «взято = в роботі + закрито» НЕПРАВИЛЬНО; істинний розклад когорти інший:
+ * `entered = inWork + paid + lost`, де кожна угода рівно в одному стані.
+ *
+ * ⚠️ Через це підписи на екрані мусять бути точні: `won` — «дійшли до грошей»,
+ * `paid` — «оплачено», `inWork` — «у роботі». Назвати `won` словом «закрито» означало б
+ * той самий клас помилки, що «сер.чек ÷ авто»: правдиве число під неправдивим підписом.
+ */
+export interface AdsDayCohort {
+  day: string;
+  /** Узято в роботу — вхід у ADZONE_TAKEN того дня. Знаменник усього іншого. */
+  entered: number;
+  /** Дійшли до ГРОШОВОЇ ЗОНИ (`MONEY_ZONE` — разом із «Виставленням рахунку»). */
+  won: number;
+  /** Оплачено — статус 142. Підмножина `won`. */
+  paid: number;
+  /** У роботі: не закрита ні виграною (142), ні програною (143) — означення власника 09.09.2026. */
+  inWork: number;
+  /** Програні — статус 143. Разом із `inWork` і `paid` дає рівно `entered`. */
+  lost: number;
+}
+
+/** Одна угода рекламної когорти — для розкриття дня на екрані «Реклама». */
+export interface AdsDayDeal {
+  kommoId: number;
+  name: string;
+  price: number;
+  /** `paid` | `lost` | `inWork` — той самий поділ, що в `AdsDayCohort`. */
+  state: "paid" | "lost" | "inWork";
+  /** Чи дійшла до грошової зони (може бути true і в стані `inWork`). */
+  reachedMoney: boolean;
+}
 
 /**
  * 📅 `conversion_ads` ПО ДНЯХ — знаменник платних лідів для екрана «Реклама» (08.09.2026).
@@ -2357,17 +2400,64 @@ export async function conversionAdsByDay(s: MetricScope, adSources: string[]): P
   const toRef = (params.push(s.to ?? null), `$${params.length}`);
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
-  const r = await pool.query<{ day: string; entered: string; won: string }>(
+  const r = await pool.query<{ day: string; entered: string; won: string;
+                              paid: string; lost: string; in_work: string }>(
     `WITH ${dealCohortCte("$3", "$4", scopeWhere)}
      SELECT to_char((pop.entered_at ${KYIV})::date, 'YYYY-MM-DD') AS day,
-            COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won
+            COUNT(*)::int AS entered,
+            COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won,
+            COUNT(*) FILTER (WHERE pop.status_id = 142)::int AS paid,
+            COUNT(*) FILTER (WHERE pop.status_id = 143)::int AS lost,
+            COUNT(*) FILTER (WHERE pop.status_id NOT IN (142, 143))::int AS in_work
        FROM pop
       WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
         AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
       GROUP BY 1 ORDER BY 1`,
     params
   );
-  return r.rows.map((x) => ({ day: x.day, entered: Number(x.entered), won: Number(x.won) }));
+  return r.rows.map((x) => ({
+    day: x.day, entered: Number(x.entered), won: Number(x.won),
+    paid: Number(x.paid), lost: Number(x.lost), inWork: Number(x.in_work),
+  }));
+}
+
+/**
+ * 📋 СКЛАД ОДНОГО ДНЯ — ті самі угоди, з яких зроблено число в комірці.
+ *
+ * 🔴 ЧОМУ НАД ТИМ САМИМ CTE, А НЕ СВОЇМ ЗАПИТОМ. Правило, куплене чипами «новий/
+ * постійний»: якщо екран дає число розкрити, склад розкриття мусить рахуватись ТИМ
+ * САМИМ виразом, а не «тим самим сенсом». Копія предиката розійшлася б із лічильником
+ * тихо — там це коштувало 12.6% угод серпня. Тут ліворуч стоїть той самий
+ * dealCohortCte, тож Σ рядків == комірці за побудовою, і гейт це стереже.
+ *
+ * ⚠️ Стан рахується ЗІ СТАТУСУ, а не з won_at: угода на «Виставленні рахунку» вже в
+ * грошовій зоні (won_at не порожній), але ще НЕ закрита — за означенням власника вона
+ * «в роботі». Тому reachedMoney і state — різні поля, і плутати їх не можна.
+ */
+export async function adDealsByDay(day: string, adSources: string[]): Promise<AdsDayDeal[]> {
+  // $1 MONEY_ZONE (won), $2 FC, $3 ADZONE (вхід), $4 adSources — контракт dealCohortCte.
+  const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources, day];
+  const r = await pool.query<{ kommo_id: string; name: string | null; price: string | null;
+                               status_id: string; reached: boolean }>(
+    `WITH ${dealCohortCte("$3", "$4", "")}
+     SELECT pop.kommo_id, pop.name, pop.price, pop.status_id,
+            (pop.won_at IS NOT NULL) AS reached
+       FROM pop
+      WHERE (pop.entered_at ${KYIV})::date = ($5)::date
+      ORDER BY pop.price DESC NULLS LAST, pop.kommo_id`,
+    params
+  );
+  return r.rows.map((x) => {
+    const st = Number(x.status_id);
+    return {
+      kommoId: Number(x.kommo_id),
+      // Порожня назва — це «не знаємо», а не «немає»: підписуємо словами (правило зони фронту).
+      name: x.name?.trim() || "без назви в CRM",
+      price: Number(x.price ?? 0),
+      state: st === 142 ? "paid" : st === 143 ? "lost" : "inWork",
+      reachedMoney: x.reached,
+    } as AdsDayDeal;
+  });
 }
 
 export interface TeamConversion { teamId: number | null; entered: number; won: number; cohortPct: number | null }

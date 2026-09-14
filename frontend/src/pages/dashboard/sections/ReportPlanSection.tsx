@@ -6,7 +6,11 @@ import {
   type DayItemKind, type DayItems, type DealSource, type DealKlass,
   type StuckGrouped, type StuckManagerGroup, type StuckGroupDeal,
 } from "../../../api";
-import { DatePicker } from "../../../components/DatePicker";
+import { PeriodNav, navBtn } from "../PeriodNav";
+import {
+  addDays, ddmm, dow, mondayOf, monthEnd, monthStart, sundayOf, todayKyiv,
+  periodOf, periodLabelOf, type PeriodMode, type PeriodState,
+} from "../periodRules";
 import { InfoHint } from "../widgets";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ReportTableSection } from "./ReportTableSection";
@@ -117,27 +121,15 @@ const fmt = (n: number) => (n === 0 ? "0" : Math.round(n).toLocaleString("uk-UA"
 const k = (n: number) => Math.round(n / 1000) + "к";
 const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 
-// ── дати (Пн–Нд, локально) ──
-const iso = (d: Date) => d.toISOString().slice(0, 10);
-const parse = (s: string) => new Date(s + "T00:00:00Z");
-const addDays = (s: string, n: number) => { const d = parse(s); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
-const dow = (s: string) => { const w = parse(s).getUTCDay(); return w === 0 ? 7 : w; }; // Пн=1..Нд=7
-const mondayOf = (s: string) => addDays(s, -(dow(s) - 1));
-const sundayOf = (s: string) => addDays(mondayOf(s), 6);
-/** Довжина діапазону в днях ВКЛЮЧНО (11–13 = 3). Крок навігації ←/→ у режимі «Період». */
-const spanDays = (a: string, b: string) => Math.round((parse(b).getTime() - parse(a).getTime()) / 86400000) + 1;
-const monthStart = (s: string) => s.slice(0, 7) + "-01";
-const monthEnd = (s: string) => { const [y, m] = s.split("-").map(Number); return iso(new Date(Date.UTC(y, m, 0))); };
-const addMonth = (s: string, n: number) => { const [y, m] = s.split("-").map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return iso(d); };
-const todayKyiv = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
-const ddmm = (s: string) => s.slice(8) + "." + s.slice(5, 7);
-const monLbl = (s: string) => { const M = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"]; return M[Number(s.slice(5, 7)) - 1] + " " + s.slice(0, 4); };
+// ── дати (Пн–Нд, локально) — ПЕРЕЇХАЛИ в `../periodRules`, бо їх просить і «Реклама».
+// Тіла не мінялись: переїзд, який «заодно покращує», неможливо прийняти.
 // Компактна розбивка авто за джерелом (пост/лід/рекл/невз), нулі приховані. «5пост · 3лід · 1рекл».
 const autoSplit = (repeat: number, leadgen: number, ad: number, undef: number): string =>
   ([[repeat, "пост"], [leadgen, "лід"], [ad, "рекл"], [undef, "невз"]] as [number, string][])
     .filter(([n]) => n > 0).map(([n, l]) => `${n}${l}`).join(" · ");
 
-type Mode = "day" | "week" | "month" | "range";
+/** Режими живуть у `../periodNav` — щоб «Реклама» й Звіт не мали двох переліків. */
+type Mode = PeriodMode;
 
 export function ReportPlanSection({ auth, teams }: {
   auth: { role: string; managerId: number | null; teamId: number | null };
@@ -197,15 +189,19 @@ export function ReportPlanSection({ auth, teams }: {
    * залежностях ефекту, тож режим «Період» не робив ЖОДНОГО запиту.
    * Тепер той самий вираз живить і тіло, і дрил — розійтись їм більше нема як.
    */
-  const selectedPeriod = useMemo(() => {
-    if (mode === "day") return { from: focusDay, to: focusDay };
-    if (mode === "week") return weekPeriod;
-    if (mode === "range") return { from: rangeFrom, to: rangeTo };
-    return monthPeriod;
-  }, [mode, focusDay, weekPeriod, monthPeriod, rangeFrom, rangeTo]);
-  const periodLabel = mode === "month" ? monLbl(anchor)
-    : mode === "day" ? ddmm(selectedPeriod.from)
-    : `${ddmm(selectedPeriod.from)}–${ddmm(selectedPeriod.to)}`;
+  const navState: PeriodState = { mode, anchor, focusDay, rangeFrom, rangeTo };
+  const selectedPeriod = useMemo(() => periodOf({ mode, anchor, focusDay, rangeFrom, rangeTo }),
+    [mode, anchor, focusDay, rangeFrom, rangeTo]);
+  const periodLabel = periodLabelOf(navState);
+  /** Патч від навігатора → сеттери. Розкладено поіменно: `mode` тут не «одне з полів»,
+      а окреме рішення, і зсув його разом із датами був би тихою зміною поведінки. */
+  const applyNav = (patch: Partial<PeriodState>) => {
+    if (patch.mode !== undefined) setMode(patch.mode);
+    if (patch.anchor !== undefined) setAnchor(patch.anchor);
+    if (patch.focusDay !== undefined) setFocusDay(patch.focusDay);
+    if (patch.rangeFrom !== undefined) setRangeFrom(patch.rangeFrom);
+    if (patch.rangeTo !== undefined) setRangeTo(patch.rangeTo);
+  };
 
   const weekOfFocus = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(mondayOf(focusDay), i)), [focusDay]);
   /**
@@ -324,21 +320,8 @@ export function ReportPlanSection({ auth, teams }: {
   const roleChip = auth.role === "admin" ? "усі команди" : "свою команду";
   const teamName = teamId ? teams.find((t) => t.id === Number(teamId))?.name : "";
 
-  // Навігація ←/→ за одиницею режиму; синхронізує anchor+focusDay.
-  // 🔴 ДІАПАЗОН ЗСУВАЄТЬСЯ НА ВЛАСНУ ДОВЖИНУ (18.08.2026). Гілка була порожня, а кнопки
-  // вимкнені — тобто «минулі 3 дні» подивитись було НЕМОЖЛИВО, доводилось клацати обидві
-  // дати в календарі. Крок = довжина діапазону включно, тож ← дає рівно попередній
-  // такий самий відрізок без дірки й без перекриття.
-  const nav = (dir: number) => {
-    if (mode === "month") setAnchor(addMonth(anchor, dir));
-    else if (mode === "range") {
-      const span = spanDays(rangeFrom, rangeTo);
-      if (span <= 0) return;                      // діапазон не заданий/зіпсований — не рухаємо
-      setRangeFrom(addDays(rangeFrom, dir * span));
-      setRangeTo(addDays(rangeTo, dir * span));
-    }
-    else { const step = mode === "day" ? dir : dir * 7; const nd = addDays(focusDay, step); setFocusDay(nd); setAnchor(nd); }
-  };
+  // Навігація ←/→ живе в `navBy` (../periodRules) — те саме правило кроку тепер
+  // виконує й «Реклама». Тіло не мінялось.
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto" }}>
@@ -369,30 +352,9 @@ export function ReportPlanSection({ auth, teams }: {
         </div>
       </div>
 
-      {/* Нав: режим (дрил) + період + календар + команда(admin) */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 4, background: "var(--bg)", padding: 4, borderRadius: 11 }}>
-          {(["day", "week", "month", "range"] as Mode[]).map((mo) => (
-            <button key={mo} onClick={() => setMode(mo)} style={{
-              padding: "7px 15px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13.5, fontWeight: 600,
-              background: mode === mo ? "var(--card-bg)" : "transparent", color: mode === mo ? "var(--text)" : MUTED,
-              boxShadow: mode === mo ? "0 1px 3px rgba(20,30,50,.1)" : "none",
-            }}>{mo === "day" ? "День" : mo === "week" ? "Тиждень" : mo === "month" ? "Місяць" : "Період"}</button>
-          ))}
-        </div>
-        <button onClick={() => nav(-1)} style={navBtn} title="попередній період тієї ж довжини">←</button>
-        <button onClick={() => { setAnchor(today); setFocusDay(today); }} style={navBtn}>Сьогодні</button>
-        {/* #15 — швидко на поточний тиждень */}
-        <button onClick={() => { setMode("week"); setAnchor(today); setFocusDay(today); }} style={navBtn}>Поточний тиждень</button>
-        <button onClick={() => nav(1)} style={navBtn} title="наступний період тієї ж довжини">→</button>
-        {mode === "range" ? (
-          <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 13, color: MUTED }}>
-            <DatePicker value={rangeFrom} onChange={(v) => v && setRangeFrom(v)} mode="day" minWidth={130} />–
-            <DatePicker value={rangeTo} onChange={(v) => v && setRangeTo(v)} mode="day" minWidth={130} />
-          </span>
-        ) : (
-          <DatePicker value={anchor} onChange={(v) => v && (setAnchor(v), setFocusDay(v))} mode="day" minWidth={140} />
-        )}
+      {/* Нав: режим (дрил) + період + календар + команда(admin).
+          Розмітка переїхала в `../PeriodNav` — той самий контрол тепер і на «Рекламі». */}
+      <PeriodNav state={navState} onPatch={applyNav} today={today}>
         {/* У табличному вигляді цей select замінює селектор «Обсяг» — два контроли
             з тим самим сенсом на одному екрані читались би як різні фільтри. */}
         {auth.role === "admin" && view === "cards" && (
@@ -401,7 +363,7 @@ export function ReportPlanSection({ auth, teams }: {
             {teams.filter((t) => !HIDE_TEAMS.has(t.id)).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         )}
-      </div>
+      </PeriodNav>
 
       {/* День-strip (тиждень фокус-дня, Пн–Нд) — вибір активного тижня/дня */}
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 16 }}>
@@ -549,7 +511,6 @@ function DismissedRows({ rows }: { rows: ReportPlanDismissed[] }) {
   );
 }
 
-const navBtn: React.CSSProperties = { border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 8, padding: "7px 12px", fontSize: 13, cursor: "pointer" };
 
 /**
  * 🔴 ПІДПИС ІДЕ ЗА ОБРАНИМ ПЕРІОДОМ, А НЕ КАЖЕ «ЗА МІСЯЦЬ» ЗАВЖДИ (20.08.2026).

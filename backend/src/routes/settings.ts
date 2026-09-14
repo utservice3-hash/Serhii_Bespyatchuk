@@ -3,6 +3,8 @@ import { parseDataScope, SCOPE_REQUIRED_CREATE, SCOPE_REQUIRED_UPDATE } from "..
 import { wireValue, DEFAULT_PLAN_MIN, PLAN_MIN_BOUNDS } from "../core/settingWire.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
+import { adPlanByMonth, setAdPlan } from "../core/adBudget.js";
+import { monthStartOf } from "../core/dates.js";
 import { requireAuth } from "../auth/middleware.js";
 import { provisionUsers, resetPassword, generatePassword } from "../db/userProvisioning.js";
 import { roleHasPerm, getRoleDef, refreshRoles, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
@@ -317,6 +319,41 @@ settingsRouter.post("/users/:id/reactivate", async (req, res) => {
  * `state: null` — зняти рішення (людина знову АКТИВНА). Це не третє значення в таблиці,
  * а видалення рядка: «активний» = відсутність відхилення.
  */
+/**
+ * 💰 МІСЯЧНИЙ ПЛАН ВИТРАТ НА РЕКЛАМУ — читання і запис.
+ *
+ * 🔴 ЧОМУ ЦЕ ВЗАГАЛІ РУЧНЕ, ЯКЩО В ПРОДУКТІ УМОВА «ВСЕ АВТОМАТИЧНО». Умова стосується
+ * того, що є в джерелі. Факт витрат саме так і автоматизовано — GA4 тягне його з Google
+ * Ads щодня, і звірка за три місяці дала 69 днів із 70 збігу з ручним аркушем. А план —
+ * домовленість людей про майбутнє («узгоджуємо з рекламщиком», Сергій 09.09.2026), і
+ * жодне API його не знає. Питання було лише ДЕ його вводять: у Google-аркуші, якого не
+ * видно з дашборду, чи тут, де видно хто і коли поставив.
+ *
+ * ⚠️ ПРАВА — ЯК У РОБОЧОГО СТАНУ (`manage_users`), а не «хто бачить екран». Екран
+ * «Реклама» відкритий керівникам і КВП, але міняти план компанії — інша дія, ніж
+ * дивитись на нього. Межі задекларовані в `accessMatrix`, інакше це було б «зелено
+ * там, куди ми не дивились» (DoD п.2).
+ */
+settingsRouter.get("/ad-plan", async (req, res) => {
+  const from = typeof req.query.from === "string" ? req.query.from : null;
+  const to = typeof req.query.to === "string" ? req.query.to : null;
+  const byMonth = await adPlanByMonth(from, to);
+  res.json({ months: [...byMonth.entries()].map(([month, plan]) => ({ month, plan })) });
+});
+
+settingsRouter.put("/ad-plan", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const day = typeof req.body?.month === "string" ? req.body.month : null;
+  const plan = Number(req.body?.plan);
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return res.status(400).json({ error: "month: YYYY-MM-DD (будь-який день місяця)" });
+  }
+  // Нуль дозволений (місяць без реклами — теж рішення), відʼємне — ні.
+  if (!Number.isFinite(plan) || plan < 0) return res.status(400).json({ error: "plan: число ≥ 0" });
+  await setAdPlan(day, plan, req.auth?.userId ?? null);
+  res.json({ ok: true, month: monthStartOf(day), plan });
+});
+
 settingsRouter.patch("/managers/:id/work-state", async (req, res) => {
   if (!requireManageUsers(req, res)) return;
   const id = Number(req.params.id);

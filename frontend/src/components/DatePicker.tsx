@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { clampPopoverLeft, POPOVER_EDGE_MARGIN } from "./popoverClamp";
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const MONTHS_SHORT = ["Січ", "Лют", "Бер", "Кві", "Тра", "Чер", "Лип", "Сер", "Вер", "Жов", "Лис", "Гру"];
@@ -7,6 +8,10 @@ const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 const pad = (n: number) => String(n).padStart(2, "0");
 const fmtDay = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 const fmtMonth = (y: number, m: number) => `${y}-${pad(m + 1)}`;
+
+/** Ширина поповера. ОДНЕ число на стиль і на арифметику зсуву — інакше вони розійдуться
+ *  тихо: стиль став би ширшим, а обрізання рахувало б за старим. */
+const POP_W = 268;
 
 /**
  * Modern, dependency-free date / month picker with a branded popover calendar.
@@ -23,6 +28,9 @@ export function DatePicker({
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  /* Горизонтальний зсув поповера. 0 = як було; інше — коли інакше він виліз би за екран
+     і РОЗТЯГНУВ БИ СТОРІНКУ (абсолютний елемент поза контейнером додається до scrollWidth). */
+  const [shift, setShift] = useState(0);
   const today = new Date();
 
   // View month/year the calendar is currently showing.
@@ -34,6 +42,21 @@ export function DatePicker({
   }, [value, mode]);
   const [view, setView] = useState(() => ({ y: parsed?.y ?? today.getFullYear(), m: parsed?.m ?? today.getMonth() }));
   useEffect(() => { if (parsed) setView({ y: parsed.y, m: parsed.m }); }, [parsed?.y, parsed?.m]); // eslint-disable-line
+
+  /* Міряємо ПІСЛЯ вставки в DOM, але ДО фарбування (useLayoutEffect) — інакше читач
+     побачив би кадр із вилізлим календарем. Перераховуємо й на зміні розміру вікна:
+     людина може звузити вікно, не закриваючи поповер. */
+  useLayoutEffect(() => {
+    if (!open) { setShift(0); return; }
+    const measure = () => {
+      const r = wrapRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setShift(clampPopoverLeft({ anchorLeft: r.left, popWidth: POP_W, viewportWidth: window.innerWidth }));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -77,7 +100,12 @@ export function DatePicker({
         <span style={{ opacity: 0.6 }}>📅</span>
       </button>
       {open && (
-        <div style={{ position: "absolute", zIndex: 50, top: "calc(100% + 6px)", left: 0, width: 268, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "0 12px 32px rgba(0,0,0,0.18)", padding: 12 }}>
+        <div style={{ position: "absolute", zIndex: 50, top: "calc(100% + 6px)", left: shift, width: POP_W,
+          // Остання лінія оборони: на екрані, вужчому за поповер, зсув не рятує — тоді
+          // він мусить стиснутись сам, а не висунути смугу прокрутки.
+          maxWidth: `calc(100vw - ${POPOVER_EDGE_MARGIN * 2}px)`, boxSizing: "border-box",
+          background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14,
+          boxShadow: "0 12px 32px rgba(0,0,0,0.18)", padding: 12 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <button type="button" onClick={() => (mode === "month" ? shiftYear(-1) : shiftMonth(-1))} style={{ ...cell, width: 32, fontSize: 18, lineHeight: 1 }}>‹</button>
             <div style={{ fontWeight: 700, fontSize: 14 }}>{mode === "month" ? view.y : `${MONTHS[view.m]} ${view.y}`}</div>

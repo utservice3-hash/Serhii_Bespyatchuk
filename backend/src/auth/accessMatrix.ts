@@ -262,6 +262,20 @@ export const ACCESS_MATRIX: AccessRow[] = [
      і винесли окремо: «11 клітинок пливли непоміченими шість днів». */
   { method: "GET", path: "/api/dashboard/ads", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
+  /* Склад дня — ТІ САМІ межі, що в самого екрана: список угод не може бути доступніший
+     за число, з якого він зроблений.
+     🔴 І ЦЯ МЕЖА НЕ ОБИРАЄТЬСЯ ОКРЕМО — ВОНА ВИМУШЕНА. Обидва роути ловить ОДИН
+     tab-гейт `pre("/api/dashboard/ads") → ["ads"]` (`routeTab.ts`), а обробник складу
+     дня відмовляє РІВНО менеджеру (`dashboard.ts`). Отже щойно вкладка `ads` відкрилась
+     ролі, сервер пускає її в ОБИДВА роути — і рядок, що казав би про них різне, був би
+     просто неправдою, тією самою, яку цей прохід прийшов прибрати.
+     📐 Тому `financier` їде сюди РАЗОМ із рішенням 09.09.2026 про екран: це не
+     розширення обсягу, а той самий дозвіл, записаний у другій клітинці. Поведінки
+     сервера прохід не змінює ЖОДНИМ рядком — лише перестає про неї брехати.
+     ⚠️ Хотіти склад дня ВУЖЧИМ за екран можна — але це вже зміна ПОВЕДІНКИ (явна
+     відмова в обробнику) з власним прийманням, а не вибір при резолюції мержу. */
+  { method: "GET", path: "/api/dashboard/ads/deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
@@ -631,6 +645,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "PUT", path: "/api/news/km-prices", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // Профіль ТОЙ САМИЙ, що в `/stats/scores`, і це не збіг: обидва стоять на `viewDenied`,
+  // тобто пускають наскрізного глядача або того, хто хоч один тип ПРОВОДИТЬ. Фінансист
+  // не проводить жодного й наскрізного не має — тому deny, як і на балах.
+  { method: "GET", path: "/api/one-on-ones/analytics", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["manager", "financier"] },
   { method: "GET", path: "/api/one-on-ones/conduct-types", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "GET", path: "/api/one-on-ones/enps", cls: "GET",
@@ -729,6 +748,22 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 👤 Стан менеджера (активний / завершує / звільнений) — та сама межа, що й решта
   //    керування людьми: ставить лише той, хто керує користувачами.
   { method: "PATCH", path: "/api/settings/managers/:id/work-state", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
+  // 💰 План реклами: ЧИТАТИ можуть усі, хто бачить екран «Реклама»; МІНЯТИ — лише ті,
+  // хто керує користувачами. Дивитись на план і ставити план — різні дії.
+  /* 🔴 ТІМЛІД ТУТ — 403, І ЦЕ НЕ ПОЛІТИКА, А ФАКТ, ЯКИЙ Я ЗАДЕКЛАРУВАВ НЕПРАВИЛЬНО.
+     Я написав «читати можуть усі, хто бачить екран «Реклама»» — тобто НАМІР. А межу
+     ставить `ROUTE_TAB`: весь префікс `/api/settings` належить вкладці `settings`, якої
+     в тімліда немає, тож сервер віддає 403 незалежно від того, що написано в зліпку.
+     `#11` упіймав саме це: «було ДОЗВОЛЕНО, стало 403» — зліпок обіцяв те, чого код не
+     робить. Декларація тепер описує ПОВЕДІНКУ; хотіти іншого — окреме рішення власника,
+     і коштувало б воно вкладки `settings` для тімліда, тобто доступу до всіх налаштувань.
+     ⚠️ Роут наразі БЕЗ СПОЖИВАЧІВ: план приходить на екран усередині `/dashboard/ads`
+     (поле `planMonth`), а фронт кличе лише `PUT`. Прибирати його — окрема зміна поведінки
+     зі своїм прийманням, тому цим проходом лише вирівняно декларацію. */
+  { method: "GET", path: "/api/settings/ad-plan", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["manager", "team_lead"] },
+  { method: "PUT", path: "/api/settings/ad-plan", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reactivate", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
