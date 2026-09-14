@@ -2429,6 +2429,15 @@ export interface Task {
   createdByRole?: "admin" | "team_lead" | "manager" | null;
   createdById?: number | null;
   assigneeTeamId?: number | null;
+  /** Виконавець-АКАУНТ (`users.id`) — для тих, кого немає в CRM. Разом з `assigneeId` неможливий. */
+  assigneeUserId?: number | null;
+  /** Особиста група-папка. `groupName` приходить ЛИШЕ для власних груп — чужі виглядають як «без групи». */
+  groupId?: number | null;
+  groupName?: string | null;
+  commentCount?: number;
+  fileCount?: number;
+  /** «Є нове»: доповнення або зміна статусу після мого останнього перегляду і НЕ мною. */
+  hasUnseen?: boolean;
   metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;
   checklistJson?: ChecklistItem[] | null;
   subtasksJson?: Subtask[] | null;
@@ -2550,6 +2559,8 @@ export async function createTask(payload: {
   priority?: TaskPriority;
   comments?: string | null;
   department?: string | null;
+  groupId?: number | null;
+  assigneeUserId?: number | null;
 }): Promise<{ id: number; ids?: number[] }> {
   const { data } = await api.post<{ id: number; ids?: number[] }>("/tasks", payload);
   return data;
@@ -2565,6 +2576,8 @@ export async function updateTask(
     priority: TaskPriority;
     comments: string | null;
     department: string | null;
+    groupId: number | null;
+    assigneeUserId: number | null;
     checklistJson: ChecklistItem[] | null;
     subtasksJson: Subtask[] | null;
   }>
@@ -2574,6 +2587,92 @@ export async function updateTask(
 
 export async function deleteTask(id: number): Promise<void> {
   await api.delete(`/tasks/${id}`);
+}
+
+// ── Спільна задача: групи · стрічка · історія · вкладення (14.09.2026) ──
+
+/** Особиста група-папка. Чужих не бачимо — сервер фільтрує по власнику. */
+export interface TaskGroup { id: number; name: string; parentId: number | null; createdAt: string; taskCount: number }
+export interface TaskComment { id: number; body: string; createdAt: string; authorId: number | null; authorName: string | null }
+export interface TaskFile {
+  id: number; name: string; mime: string | null; sizeBytes: number | string;
+  createdAt: string; createdById: number | null; author: string | null;
+}
+export interface TaskHistoryEntry {
+  id: number; fromStatus: TaskStatus | null; toStatus: TaskStatus;
+  changedAt: string; changedByName: string | null;
+}
+/** Кандидат у виконавці-акаунти. Сервер віддає імʼя без email — логін не їде на екран. */
+export interface TaskAssignee { id: number; name: string; nameIsLogin: boolean; managerId: number | null }
+
+/** 🔴 Ліміт файла 5 МБ — рішення Романа 14.09.2026. Дзеркалить `FILE_MAX_BYTES` сервера. */
+export const TASK_FILE_MAX_BYTES = 5 * 1024 * 1024;
+/** Ліміт кількості на задачу — дзеркалить `FILES_PER_TASK` сервера. */
+export const TASK_FILES_PER_TASK = 10;
+
+export async function fetchTaskGroups(): Promise<TaskGroup[]> {
+  const { data } = await api.get<{ groups: TaskGroup[] }>("/tasks/groups");
+  return data.groups;
+}
+export async function createTaskGroup(name: string): Promise<TaskGroup> {
+  const { data } = await api.post<TaskGroup>("/tasks/groups", { name });
+  return data;
+}
+export async function renameTaskGroup(id: number, name: string): Promise<void> {
+  await api.patch(`/tasks/groups/${id}`, { name });
+}
+export async function deleteTaskGroup(id: number): Promise<void> {
+  await api.delete(`/tasks/groups/${id}`);
+}
+
+export async function fetchTaskComments(taskId: number): Promise<TaskComment[]> {
+  const { data } = await api.get<{ comments: TaskComment[] }>(`/tasks/${taskId}/comments`);
+  return data.comments;
+}
+export async function createTaskComment(taskId: number, body: string): Promise<TaskComment> {
+  const { data } = await api.post<TaskComment>(`/tasks/${taskId}/comments`, { body });
+  return data;
+}
+
+export async function fetchTaskHistory(taskId: number): Promise<TaskHistoryEntry[]> {
+  const { data } = await api.get<{ history: TaskHistoryEntry[] }>(`/tasks/${taskId}/history`);
+  return data.history;
+}
+
+export async function fetchTaskFiles(taskId: number): Promise<TaskFile[]> {
+  const { data } = await api.get<{ files: TaskFile[] }>(`/tasks/${taskId}/files`);
+  return data.files;
+}
+/** Завантаження вкладення — base64 у тілі, як у регламентах (multipart у проєкті немає). */
+export async function uploadTaskFile(taskId: number, file: File): Promise<TaskFile> {
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const { data } = await api.post<TaskFile>(`/tasks/${taskId}/files`, {
+    filename: file.name, mime: file.type || null, dataBase64,
+  });
+  return data;
+}
+export async function deleteTaskFile(taskId: number, fileId: number): Promise<void> {
+  await api.delete(`/tasks/${taskId}/files/${fileId}`);
+}
+/** Тягне вкладення авторизованим стрімом як blob-URL (Bearer у інтерсепторі). */
+export async function fetchTaskFileBlobUrl(taskId: number, fileId: number): Promise<string> {
+  const { data } = await api.get(`/tasks/${taskId}/files/${fileId}`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
+}
+
+/** «Я це бачив» — гасить бейдж «є нове». Кличеться на ВІДКРИТТІ задачі, не на списку. */
+export async function markTaskSeen(taskId: number): Promise<void> {
+  await api.post(`/tasks/${taskId}/seen`, {});
+}
+
+export async function fetchTaskAssignees(): Promise<TaskAssignee[]> {
+  const { data } = await api.get<{ assignees: TaskAssignee[] }>("/tasks/assignees");
+  return data.assignees;
 }
 
 // ── Калькулятор ставок (Lardi, формат оригінального lardiweb) ──
