@@ -35,8 +35,8 @@ test("#400h ДИМ: усі роути спільної задачі викону
   await c.connect();
   try {
     await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
-    await c.query(`INSERT INTO teams (id,name) VALUES (7,'РПК-7')`);
-    await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (30,'Тімлід',7,true),(40,'Менеджер',7,true)`);
+    await c.query(`INSERT INTO teams (id,name) VALUES (7,'РПК-7'),(9,'РПК-9')`);
+    await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (30,'Тімлід',7,true),(40,'Менеджер',7,true),(50,'Чужа команда',9,true)`);
     await c.query(`INSERT INTO users (id,email,password_hash,role,manager_id,team_id,full_name) VALUES
         (1,'admin@uts.ua','x','admin',NULL,NULL,'Адмін'),
         (3,'lead@uts.ua','x','team_lead',30,7,'Тімлід'),
@@ -271,6 +271,32 @@ test("#400h ДИМ: усі роути спільної задачі викону
     assert.equal(viewerRow!.fileCount, null,
       `🔴 ЛІЧИЛЬНИК ВКЛАДЕНЬ У НАГЛЯДАЧА = ${viewerRow!.fileCount}, А МУСИТЬ БУТИ null. `
       + "Нуль читався б на екрані як «файлів немає» — пряма неправда про задачу, у якої файл є.");
+
+    // ── 9. ВСІ МОЖУТЬ СТАВИТИ ОДИН ОДНОМУ — РІШЕННЯ ВЛАСНИКА 14.09.2026, ДОСЛІВНО ──
+    /**
+     * Доти сервер відмовляв: менеджеру — «не може передавати задачі іншим», тімліду —
+     * «лише своя команда». Гейт стверджує НОВЕ правило по трьох гілках, які раніше
+     * давали 403, і по обидва боки: неіснуючий виконавець — 400, а не 500 (FK).
+     * Прибрати перевірку існування — і третій виклик упаде 500-ю; повернути стару
+     * заборону — і перший/другий дадуть 403.
+     */
+    const m2m = await call("POST", "/", { who: "mgr", body: { title: "Менеджер → тімліду", assigneeId: 30 } });
+    assert.equal(m2m.code, 201, `🔴 МЕНЕДЖЕР НЕ МОЖЕ ПОСТАВИТИ ЗАДАЧУ КОЛЕЗІ (код ${m2m.code}): ${JSON.stringify(m2m.payload)}`);
+    // 🪞 Код 201 замало: стара гілка «менеджер завжди сам» теж давала 201 — просто
+    // мовчки підмінювала виконавця. Тому звіряємо, КОМУ задача дісталась.
+    const m2mRow = ((await call("GET", "/", { who: "mgr" })).payload as unknown as { tasks: { title: string; assigneeId: number | null }[] })
+      .tasks.find((x) => x.title === "Менеджер → тімліду");
+    assert.equal(m2mRow?.assigneeId, 30, `🔴 ЗАДАЧУ ТИХО ПІДМІНЕНО СОБІ: виконавець ${m2mRow?.assigneeId}, а просили 30`);
+    const m2a = await call("POST", "/", { who: "mgr", body: { title: "Менеджер → акаунту", assigneeUserId: 3 } });
+    assert.equal(m2a.code, 201, `🔴 МЕНЕДЖЕР НЕ МОЖЕ ПОСТАВИТИ ЗАДАЧУ АКАУНТУ (код ${m2a.code}): ${JSON.stringify(m2a.payload)}`);
+    const l2x = await call("POST", "/", { who: "lead", body: { title: "Тімлід → чужій команді", assigneeId: 50 } });
+    assert.equal(l2x.code, 201, `🔴 ТІМЛІД НЕ МОЖЕ ПОСТАВИТИ ЗАДАЧУ ПОЗА СВОЄЮ КОМАНДОЮ (код ${l2x.code}): ${JSON.stringify(l2x.payload)}`);
+    const ghost = await call("POST", "/", { who: "mgr", body: { title: "Нікому", assigneeId: 999 } });
+    assert.equal(ghost.code, 400, `🔴 неіснуючий виконавець дав ${ghost.code}, а не 400 — далі FK і 500 у людини`);
+    // 🪞 Перепризначення теж відкрите: менеджер передає СВОЮ задачу колезі.
+    const own = await call("POST", "/", { who: "mgr", body: { title: "Передам" } });
+    const handed = await call("PATCH", "/:id", { who: "mgr", params: { id: String((own.payload as unknown as { id: number }).id) }, body: { assigneeId: 30 } });
+    assert.equal(handed.code, 204, `🔴 МЕНЕДЖЕР НЕ МОЖЕ ПЕРЕДАТИ ЗАДАЧУ (код ${handed.code}): ${JSON.stringify(handed.payload)}`);
 
     const { pool } = await import("../db/pool.js");
     await pool.end();
@@ -749,4 +775,32 @@ test("#400r ВКЛАДЕННЯ: одна зона з перетягування�
   // І вона стоїть у тій самій клітинці, що й перегляд (сусіди в одному контейнері).
   const cell = src.slice(src.indexOf("setFilesViewer(task.id)") - 600, src.indexOf("setFilesViewer(task.id)") + 900);
   assert.ok(cell.includes("pickFileFor(task.id)"), "🔴 кнопка «+» не в колонці «Файли» — файли знову розкидані по рядку");
+});
+
+/**
+ * #400s — СПІЛЬНУ ЗАДАЧУ МОЖНА ПОСТАВИТИ КОМУСЬ, І ФОРМА ЦЕ ПОКАЗУЄ.
+ *
+ * 🔴 ВІДГУК ВЛАСНИКА 14.09.2026: «чи є кнопка створення спільної задачі? коли
+ * переходиш в спільні задачі і починаєш робити — створюється звичайна задача».
+ * Заміряно: «+ Додати» підставляв виконавцем автора на БУДЬ-ЯКІЙ вкладці; менеджер
+ * бачив плашку «Ви (собі)» замість селекта; акаунта у формі не було взагалі.
+ * Рішення власника: «всі можуть ставити один одному задачі».
+ *
+ * 🧨 Червоніє, якщо: повернути плашку «Ви (собі)»; прибрати кнопку «Поставити
+ * задачу» або дати їй підставляти автора; прибрати селект акаунта з форми; дозволити
+ * «Створити» зі «Спільних» без виконавця.
+ */
+test("#400s СПІЛЬНА ЗАДАЧА: кнопка без підстановки себе, селект для всіх ролей, акаунт у формі, без виконавця не створити", () => {
+  const src = codeOf("pages", "dashboard", "sections", "TasksSection.tsx");
+  assert.doesNotMatch(src, /Ви \(собі\)/, "🔴 плашка «Ви (собі)» повернулась — менеджер знову не може поставити задачу нікому");
+  assert.match(src, /🤝 Поставити задачу/, "🔴 кнопки «Поставити задачу» на вкладці «Спільні» немає");
+  assert.match(src, /setSharedIntent\(true\); setTaskForm\(\{ \.\.\.emptyTaskForm \}\)/,
+    "🔴 «Поставити задачу» підставляє автора виконавцем — зі «Спільних» знову створюється задача собі");
+  assert.match(src, /Спільна задача — кому ставите\?/, "🔴 форма не каже, що зараз ставиш задачу комусь");
+  assert.match(src, /value=\{taskForm\.assigneeUserId\}/, "🔴 у формі створення немає селекта акаунта (HR, бухгалтерія)");
+  assert.match(src, /sharedIntent && taskForm\.assigneeId === "" && taskForm\.assigneeUserId === ""/,
+    "🔴 зі «Спільних» можна створити задачу без виконавця — тобто собі, мовчки");
+  // Форма справді шле акаунт — контейнер має гілку.
+  const cont = codeOf("pages", "Dashboard.tsx");
+  assert.match(cont, /assigneeUserId: Number\(taskForm\.assigneeUserId\)/, "🔴 обраний акаунт не доїжджає до POST /tasks");
 });

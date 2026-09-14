@@ -564,6 +564,8 @@ export function TasksSection({
   const [adminTab, setAdminTab] = useState<"mine" | "shared" | "all">("mine");
   // 👁 Яку задачу переглядаємо у вкладеннях (id) — модалка поверх списку.
   const [filesViewer, setFilesViewer] = useState<number | null>(null);
+  /** 🤝 Форму відкрито зі «Спільних» — виконавець не підставляється, і без нього не створити. */
+  const [sharedIntent, setSharedIntent] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
   const [sortBy, setSortBy] = useState<"created" | "deadline" | "priority" | "status" | "assignee" | "title">("created");
@@ -831,6 +833,7 @@ export function TasksSection({
             onClick={() => {
               // Default assignee = the creator themselves (still changeable).
               setCreateErr(null);
+              setSharedIntent(false);
               setTaskForm({ ...emptyTaskForm, assigneeId: currentManagerId ?? "" });
               setTaskModalOpen(true);
             }}
@@ -871,7 +874,16 @@ export function TasksSection({
           <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· {accountName}</span>
         )}
         {adminTab === "shared" && (
-          <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· поставили вам інші</span>
+          <>
+            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· поставили вам інші</span>
+            {/* 🤝 ПОСТАВИТИ ЗАДАЧУ КОМУСЬ — окрема кнопка, бо «+ Додати» підставляє
+                виконавцем ТЕБЕ, і зі «Спільних» це створювало звичайну задачу собі
+                (відгук власника 14.09.2026). Тут виконавець порожній і обовʼязковий. */}
+            <button
+              onClick={() => { setCreateErr(null); setSharedIntent(true); setTaskForm({ ...emptyTaskForm }); setTaskModalOpen(true); }}
+              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--brand)", background: "transparent", color: "var(--brand)", cursor: "pointer", fontWeight: 600 }}
+            >🤝 Поставити задачу</button>
+          </>
         )}
       </div>
 
@@ -1694,7 +1706,7 @@ export function TasksSection({
             style={{ width: "100%", maxWidth: 560, background: "var(--card-bg, #fff)" }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 18 }}>Нова задача</h2>
+              <h2 style={{ margin: 0, fontSize: 18 }}>{sharedIntent ? "Спільна задача — кому ставите?" : "Нова задача"}</h2>
               <button
                 onClick={() => setTaskModalOpen(false)}
                 style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)" }}
@@ -1909,16 +1921,13 @@ export function TasksSection({
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                   Виконавець{taskForm.taskType !== "simple" ? " (менеджер)" : ""}
-                  {role === "manager" ? (
-                    // Менеджер ставить план/задачу ЛИШЕ собі — виконавець зафіксований.
-                    <div style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-subtle, rgba(127,127,127,0.06))", color: "var(--text-muted)" }}>
-                      Ви (собі)
-                    </div>
-                  ) : (
+                  {/* 🔓 Рішення власника 14.09.2026: «всі можуть ставити один одному
+                      задачі» — селект однаковий для всіх ролей. Доти менеджер бачив
+                      плашку «Ви (собі)», тобто не міг поставити задачу нікому. */}
                     <select
                       value={taskForm.assigneeId}
                       onChange={(e) =>
-                        setTaskForm((f) => ({ ...f, assigneeId: e.target.value === "" ? "" : Number(e.target.value) }))
+                        setTaskForm((f) => ({ ...f, assigneeId: e.target.value === "" ? "" : Number(e.target.value), assigneeUserId: e.target.value === "" ? f.assigneeUserId : "" }))
                       }
                     >
                       <option value="">—</option>
@@ -1937,10 +1946,30 @@ export function TasksSection({
                         ));
                       })()}
                     </select>
-                  )}
                 </label>
-                {taskForm.taskType === "simple" && role !== "manager" && (
+                {taskForm.taskType === "simple" && (
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                    Або акаунт <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>(HR, бухгалтерія — кого немає в CRM)</span>
+                    <select
+                      value={taskForm.assigneeUserId}
+                      onChange={(e) => setTaskForm((f) => ({
+                        ...f,
+                        assigneeUserId: e.target.value === "" ? "" : Number(e.target.value),
+                        // Один виконавець на задачу (CHECK): обрав акаунт — менеджери знімаються.
+                        assigneeId: e.target.value === "" ? f.assigneeId : "",
+                        assigneeId2: e.target.value === "" ? f.assigneeId2 : "",
+                      }))}
+                    >
+                      <option value="">—</option>
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}{a.nameIsLogin ? " (логін)" : ""}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {/* 🔓 Другий виконавець тепер і менеджеру: «всі можуть ставити один одному» (14.09.2026). */}
+                {taskForm.taskType === "simple" && (
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                     2-й виконавець (необовʼязково)
                     <select
                       value={taskForm.assigneeId2}
@@ -2020,7 +2049,9 @@ export function TasksSection({
                 <button
                   className="btn-primary"
                   onClick={handleSubmitTaskModal}
-                  disabled={taskForm.taskType === "simple" && !taskForm.title.trim()}
+                  disabled={(taskForm.taskType === "simple" && !taskForm.title.trim())
+                    || (sharedIntent && taskForm.assigneeId === "" && taskForm.assigneeUserId === "")}
+                  title={sharedIntent && taskForm.assigneeId === "" && taskForm.assigneeUserId === "" ? "Оберіть, кому ставите задачу" : undefined}
                 >
                   {taskForm.taskType === "simple" ? "Створити задачу" : "Поставити план"}
                 </button>

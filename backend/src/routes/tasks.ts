@@ -443,18 +443,14 @@ tasksRouter.post("/", async (req, res) => {
   // це задача БЕЗ виконавця взагалі (`core/taskVisibility.ts`).
   const assigneeUserId = parsed.data.assigneeUserId ?? null;
   if (assigneeUserId != null) {
-    if (!isAdminScope(auth) && assigneeUserId !== auth.userId) {
-      if (auth.role === "manager") {
-        return res.status(403).json({ error: "Менеджер не може передавати задачі іншим" });
-      }
-      if (auth.role === "team_lead") {
-        const chk = await pool.query<{ ok: boolean }>(
-          `SELECT (m.team_id = $1) AS ok FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $2`,
-          [auth.teamId, assigneeUserId]
-        );
-        if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна призначати лише своїй команді" });
-      }
-    }
+    /**
+     * 🔓 РІШЕННЯ ВЛАСНИКА 14.09.2026, дослівно: «всі можуть ставити один одному
+     * задачі». Доти менеджер отримував 403 «не може передавати задачі іншим», а
+     * тімлід — «лише своїй команді». Обидві заборони зняті ЯВНО; лишається єдина
+     * перевірка — що акаунт існує й активний, інакше FK впав би 500-ю.
+     */
+    const acc = await pool.query(`SELECT 1 FROM users WHERE id = $1 AND is_active`, [assigneeUserId]);
+    if (!acc.rowCount) return res.status(400).json({ error: "Акаунт-виконавця не знайдено" });
     const one = await pool.query<{ id: number }>(
       `INSERT INTO tasks (title, status, deadline, assignee_user_id, priority, comments, department, created_by, group_id)
        VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9)
@@ -465,25 +461,24 @@ tasksRouter.post("/", async (req, res) => {
     return res.status(201).json({ id: one.rows[0].id, ids: [one.rows[0].id] });
   }
 
-  // Список виконавців: assigneeIds (кілька) або один assigneeId. Менеджер завжди сам.
+  /**
+   * Список виконавців: assigneeIds (кілька) або один assigneeId.
+   *
+   * 🔓 РІШЕННЯ ВЛАСНИКА 14.09.2026: «всі можуть ставити один одному задачі». Доти
+   * менеджер ЗАВЖДИ був виконавцем сам (ідентифікатори з тіла ігнорувались), а тімлід
+   * не міг вийти за свою команду. Тепер одна гілка на всі ролі. Дефолт БЕЗ виконавця
+   * лишається старий: справжній менеджер (managerId>0) → собі, решта → особиста
+   * задача (assignee NULL, created_by = я). Тримає `#400h`.
+   */
+  const wanted = parsed.data.assigneeIds?.length ? parsed.data.assigneeIds : (parsed.data.assigneeId != null ? [parsed.data.assigneeId] : []);
   let assignees: (number | null)[];
-  if (auth.role === "manager") {
-    // Справжній менеджер (managerId>0) → задача собі (як було). HR/own-scope БЕЗ валідного
-    // менеджера (scope-clamp дає managerId=-1) → ОСОБИСТА задача (assignee NULL, created_by=я),
-    // а не падіння на assignee_id=-1 (FK). Створення особистої гейтить екран `tasks`, не scope.
-    assignees = auth.managerId && auth.managerId > 0 ? [auth.managerId] : [null];
+  if (wanted.length) {
+    const chk = await pool.query<{ id: number }>(`SELECT id FROM managers WHERE id = ANY($1)`, [wanted]);
+    const okIds = new Set(chk.rows.map((r) => r.id));
+    if (wanted.some((id) => !okIds.has(id))) return res.status(400).json({ error: "Виконавця не знайдено" });
+    assignees = wanted;
   } else {
-    const ids = parsed.data.assigneeIds?.length ? parsed.data.assigneeIds : (parsed.data.assigneeId != null ? [parsed.data.assigneeId] : []);
-    if (auth.role === "team_lead") {
-      if (!ids.length) return res.status(400).json({ error: "Оберіть менеджера" });
-      const chk = await pool.query<{ id: number }>(
-        `SELECT id FROM managers WHERE id = ANY($1) AND team_id = $2`, [ids, auth.teamId]);
-      const okIds = new Set(chk.rows.map((r) => r.id));
-      if (ids.some((id) => !okIds.has(id))) return res.status(403).json({ error: "Можна ставити задачі лише своїй команді" });
-      assignees = ids;
-    } else {
-      assignees = ids.length ? ids : [null]; // admin: без виконавця = особиста задача
-    }
+    assignees = auth.role === "manager" && auth.managerId && auth.managerId > 0 ? [auth.managerId] : [null];
   }
   const uniqueAssignees = [...new Set(assignees)];
 
@@ -647,50 +642,24 @@ tasksRouter.patch("/:id", async (req, res) => {
       }
     }
   }
-  // Reassignment is scoped like task creation: a manager only to themselves, a
-  // team-lead only within their team.
-  if (parsed.data.assigneeId !== undefined && !isAdminScope(auth)) {
-    const newAssignee = parsed.data.assigneeId;
-    if (auth.role === "manager" && newAssignee !== auth.managerId && newAssignee !== null) {
-      return res.status(403).json({ error: "Менеджер не може передавати задачі іншим" });
-    }
-    if (auth.role === "team_lead" && newAssignee != null) {
-      const chk = await pool.query<{ ok: boolean }>(
-        `SELECT (team_id = $1) AS ok FROM managers WHERE id = $2`,
-        [auth.teamId, newAssignee]
-      );
-      if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна призначати лише своїй команді" });
-    }
+  // 🔓 Перепризначення — як і створення: рішення власника 14.09.2026 «всі можуть
+  // ставити один одному задачі». Заборони «менеджер лише собі» і «тімлід лише своїй
+  // команді» зняті явно; лишається перевірка, що менеджер існує (інакше FK → 500).
+  if (parsed.data.assigneeId != null) {
+    const chk = await pool.query(`SELECT 1 FROM managers WHERE id = $1`, [parsed.data.assigneeId]);
+    if (!chk.rowCount) return res.status(400).json({ error: "Виконавця не знайдено" });
   }
-  // 👤 Виконавець-АКАУНТ — та сама межа, що для менеджера: собі завжди; тімлід —
-  // у межах команди (акаунт → його менеджер → команда); наскрізний — будь-кому.
-  if (parsed.data.assigneeUserId != null && !isAdminScope(auth)) {
-    const target = parsed.data.assigneeUserId;
-    if (target !== auth.userId) {
-      if (auth.role === "manager") {
-        return res.status(403).json({ error: "Менеджер не може передавати задачі іншим" });
-      }
-      if (auth.role === "team_lead") {
-        const chk = await pool.query<{ ok: boolean }>(
-          `SELECT (m.team_id = $1) AS ok FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $2`,
-          [auth.teamId, target]
-        );
-        if (!chk.rows[0]?.ok) return res.status(403).json({ error: "Можна призначати лише своїй команді" });
-      }
-    }
+  // 🔴 ОДИН ВИКОНАВЕЦЬ НА ЗАДАЧУ — 400 ТУТ, а не 500 від CHECK `tasks_one_assignee`.
+  // Стан ПІСЛЯ патча: поле з тіла, якщо передане, інакше те, що в рядку.
+  const nextMgr = parsed.data.assigneeId !== undefined ? parsed.data.assigneeId : before.assigneeId;
+  const nextAcc = parsed.data.assigneeUserId !== undefined ? parsed.data.assigneeUserId : before.assigneeUserId;
+  if (nextMgr != null && nextAcc != null) {
+    return res.status(400).json({ error: "Один виконавець на задачу: спершу зніміть менеджера або акаунт" });
   }
-  // 🔴 ДВА ВИКОНАВЦІ РАЗОМ — ВІДМОВА, А НЕ 500 НА CHECK. Той самий інваріант,
-  // що в БД (`tasks_one_assignee`); тут він називає себе людською мовою.
-  const nextAssigneeId = parsed.data.assigneeId !== undefined ? parsed.data.assigneeId : before.assigneeId;
-  const nextAssigneeUser = parsed.data.assigneeUserId !== undefined ? parsed.data.assigneeUserId : before.assigneeUserId;
-  if (nextAssigneeId != null && nextAssigneeUser != null) {
-    return res.status(400).json({ error: "Виконавець один: або менеджер із CRM, або акаунт" });
-  }
-  // 📁 Група — ЛИШЕ ВЛАСНА. Інакше задачу можна було б покласти в чужу папку,
-  // і вона зникла б з екрана колеги в незрозумілий спосіб.
+  // 📁 Група — лише власна (та сама межа, що в POST): чужа папка означала б, що
+  // задача зникає з екрана колеги незрозумілим чином.
   if (parsed.data.groupId != null) {
-    const g = await pool.query<{ id: number }>(
-      `SELECT id FROM task_groups WHERE id = $1 AND owner_id = $2`, [parsed.data.groupId, auth.userId]);
+    const g = await pool.query(`SELECT 1 FROM task_groups WHERE id = $1 AND owner_id = $2`, [parsed.data.groupId, auth.userId]);
     if (!g.rowCount) return res.status(403).json({ error: "Групу не знайдено серед ваших" });
   }
 

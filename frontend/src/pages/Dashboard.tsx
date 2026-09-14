@@ -418,6 +418,7 @@ export function Dashboard() {
     title: string;
     deadline?: string | null;
     assigneeId?: number | null;
+    assigneeUserId?: number | null;
     priority?: TaskPriority;
     department?: string | null;
     comments?: string | null;
@@ -429,7 +430,8 @@ export function Dashboard() {
     const priority = payload.priority ?? "medium";
     const department = payload.department?.trim() || null;
     const comments = payload.comments?.trim() || null;
-    const { id } = await createTask({ title, deadline, assigneeId, priority, department, comments });
+    const assigneeUserId = payload.assigneeUserId ?? null;
+    const { id } = await createTask({ title, deadline, assigneeId, assigneeUserId, priority, department, comments });
     setTasks((prev) => [
       {
         id,
@@ -437,6 +439,8 @@ export function Dashboard() {
         status: "not_started",
         deadline,
         assigneeId,
+        assigneeUserId,
+        // Імʼя акаунта контейнер не знає — його підтягне рефетч після створення.
         assigneeName: managerOptions.find((m) => m.id === assigneeId)?.name ?? null,
         priority,
         comments,
@@ -519,7 +523,20 @@ export function Dashboard() {
       if (!taskForm.title.trim()) return;
       const ids = [taskForm.assigneeId, taskForm.assigneeId2]
         .filter((v) => v !== "").map(Number).filter((v, i, a) => a.indexOf(v) === i);
-      if (ids.length > 1) {
+      if (taskForm.assigneeUserId !== "") {
+        // 🧑‍💼 Виконавець-акаунт: одна задача, менеджер не задається (CHECK одного виконавця).
+        const newId = await addTask({
+          title: taskForm.title,
+          deadline: taskForm.deadline,
+          assigneeId: null,
+          assigneeUserId: Number(taskForm.assigneeUserId),
+          priority: taskForm.priority,
+          department: taskForm.department,
+          comments: taskForm.comments,
+        });
+        await attachPendingFile(newId != null ? [newId] : []);
+        setTasks(await fetchTasks());
+      } else if (ids.length > 1) {
         // Задача одразу на кількох менеджерів — створюємо копію кожному, refetch.
         const made = await createTask({
           title: taskForm.title,
