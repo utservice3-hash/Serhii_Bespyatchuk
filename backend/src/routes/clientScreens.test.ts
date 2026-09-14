@@ -360,7 +360,29 @@ test("#30k РЕАКТИВАЦІЯ: команда в кожному рядку, 
     "🔴 є дата розмови без коректної кількості днів");
 });
 
-test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втрачені = кваліфікована база, разові НАЗВАНІ", needsApi(), async () => {
+/**
+ * 🧮 #408 — ЖОРСТКИЙ ПОДІЛ, ЗІ ЗНАМЕННИКОМ ЗА ТИМ САМИМ ПРАВИЛОМ, ЩО Й ЕКРАН.
+ *
+ * 🔻 ЗАМІНЮЄ `#30n`, ЯКИЙ МІРЯВ ЦІЛЕ ІНШИМ ПРАВИЛОМ, НІЖ ЕКРАН. Той рахував базу з
+ * предикатом `COALESCE(lo.hidden,false)=false`, а екран перейшов на АРХІВ
+ * (`archivedSql`) ще 05.08.2026. Обидва предикати збігались, доки жоден клієнт не був
+ * заархівований — тобто гейт протух через 2 год 48 хв після народження і мовчав 40 діб.
+ *
+ * 📐 ЧЕРВОНИМ ЙОГО ЗРОБИЛИ ДАНІ, А НЕ КОД. Перша архівація — 10.09.2026; замір прода
+ * 14.09.2026: клієнтів із 2+ оплатами, що пройшли решту умов, — 1 225 за старим
+ * предикатом і 1 212 за новим, різниця рівно 13 (усі заархівовані 10.09 з причинами
+ * `carrier`/`closed_down`/`one_off`, і в ЖОДНОГО не стоїть `hidden`). Саме на ці 13
+ * інваріант «частини = ціле» і не сходився.
+ *
+ * 🔴 ЧОМУ НОВИЙ НОМЕР, А НЕ ПРАВКА НА МІСЦІ. «Кваліфікована база» в назві — тепер інша
+ * множина (на 13 клієнтів). Правило 13: змінилось твердження — новий номер, а старий
+ * іде в `RETIRED_GATES` із рядком «а де це тепер».
+ *
+ * 🔴 ЧОМУ ЗАПИТ ЛИШАЄТЬСЯ ВЛАСНИМ, А НЕ КЛИЧЕ `clientsListSql()`. Спільним береться
+ * ПРАВИЛО (`archivedSql`), а не його застосування: інакше інваріант порівнював би
+ * запит сам із собою й став би тавтологією. Це та сама межа, що в `#17c`.
+ */
+test("#408 ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втрачені = кваліфікована база, разові НАЗВАНІ", needsApi(), async () => {
   // 🔴 ПИТАННЯ, НА ЯКЕ ВІДПОВІДАЄ ЦЕЙ ГЕЙТ. Екран планів показує ~164 клієнти
   // замість 1 137 — і це ПРАВИЛЬНО: спрацювали дві різні зміни правил (жорсткий
   // поділ за станом + двошляхова кваліфікація). Але рівно так само виглядало б,
@@ -403,20 +425,28 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
   // Знаменник рахуємо НЕЗАЛЕЖНО від роуту — прямо з БД.
   const { pool } = await import("../db/pool.js");
   const metrics = await import("../core/metrics.js");
+  // 🗄 ПРАВИЛО АРХІВУ БЕРЕТЬСЯ СПІЛЬНЕ, ЗАСТОСУВАННЯ — ВЛАСНЕ (див. доккоментар вище).
+  const { LAST_PAID_CTE, LAST_PAID_JOIN, archivedSql } = await import("../core/clientArchive.js");
   const whole = Number((await pool.query<{ n: string }>(
-    `WITH paid AS (
-       SELECT d.client_key, d.manager_id FROM deals d
+    `WITH ${LAST_PAID_CTE},
+     paid AS (
+       SELECT d.client_key, d.manager_id, d.closed_at_kommo FROM deals d
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
         WHERE psm.funnel_stage = 'paid' AND d.client_key IS NOT NULL AND NOT (d.client_key = ANY($1))
      ),
      agg AS (SELECT client_key FROM paid GROUP BY client_key HAVING COUNT(*) >= 2),
-     per_cm AS (SELECT client_key, manager_id, COUNT(*) n FROM paid GROUP BY 1,2),
-     pm AS (SELECT DISTINCT ON (client_key) client_key, manager_id FROM per_cm ORDER BY client_key, n DESC)
+     -- Тайбрейк основного менеджера — ТОЧНО як у роуті (clientPlansList.ts): без
+     -- mx DESC два менеджери з однаковим числом оплат давали б РІЗНИЙ вибір тут і там,
+     -- і різниця сідала б на mm.is_active — тобто інваріант падав би без дефекту.
+     -- (зворотні лапки тут заборонені — це тіло шаблонного рядка)
+     per_cm AS (SELECT client_key, manager_id, COUNT(*) n, MAX(closed_at_kommo) mx FROM paid GROUP BY 1,2),
+     pm AS (SELECT DISTINCT ON (client_key) client_key, manager_id FROM per_cm ORDER BY client_key, n DESC, mx DESC)
      SELECT COUNT(*) AS n FROM agg a
        JOIN pm ON pm.client_key = a.client_key
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
+       ${LAST_PAID_JOIN}
        JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
-      WHERE COALESCE(lo.hidden, false) = false`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
+      WHERE NOT ${archivedSql("lo", "ap")}`, [metrics.GENERIC_CLIENT_KEYS])).rows[0].n);
   assert.equal(t.totalClients + t.inReactivation + t.oneOff + t.skippedGeneric, whole,
     `🔴 активні ${t.totalClients} + місток ${t.inReactivation} + разові ${t.oneOff}`
     + ` + дженерики ${t.skippedGeneric} ≠ база ${whole} — хтось зник між екранами, і без цієї`
@@ -424,6 +454,36 @@ test("#30n ЖОРСТКИЙ ПОДІЛ: активні + сплячі + втра
   console.log(`   ℹ активних ${t.totalClients} · сплячих ${t.inReactivationSleeping}`
     + ` · втрачених ${t.inReactivationLost} (з них архів ${t.longLapsedCount})`
     + ` · разових ${t.oneOff} · дженериків ${t.skippedGeneric} · разом ${whole}`);
+});
+
+/**
+ * 🪞 #408b — ПРАВИЛО АРХІВУ РОЗРІЗНЯЄ ОБИДВА БОКИ МЕЖІ.
+ *
+ * 🔴 ЧОМУ ЦЕ ОКРЕМИЙ ГЕЙТ І ЧОМУ ВІН БЕЗ API. `#408` живий: він мовчить, коли API
+ * недоступне, і — головне — він зеленів би ПОРОЖНЕЧЕЮ, якби архівованих не було
+ * ЖОДНОГО. Саме так стара редакція й прожила 40 діб: обидва предикати збігались,
+ * бо `archived_at` не мав жодного клієнта, і гейт був зелений «завдяки дірці»
+ * (правило 7). Тут — чисті фікстури по ОБИДВА боки межі (правило 11), і вони
+ * виконуються завжди.
+ *
+ * 📐 Дати взято з реального випадку, який зламав `#30n`: «театрорг» заархівовано
+ * 10.09.2026 08:51 при останній оплаті 28.08.2026.
+ *
+ * 🧨 САБОТАЖ: у `clientArchive.ts` замінити `lastPaidAt <= archivedAt` на `>=`
+ * → червоніє обома половинами.
+ */
+test("#408b 🪞 правило архіву розрізняє оплату ДО і ПІСЛЯ архівації", async () => {
+  const { isArchived } = await import("../core/clientArchive.js");
+  assert.equal(isArchived("2026-09-10T08:51:00Z", "2026-08-28T00:00:00Z"), true,
+    "🔴 клієнт із оплатою ДО архівації не вважається архівним — саме цей випадок "
+    + "(«театрорг») і розійшов екран зі знаменником гейта на 13 клієнтів");
+  assert.equal(isArchived("2026-09-10T08:51:00Z", "2026-09-11T00:00:00Z"), false,
+    "🔴 оплата ПІСЛЯ архівації не повертає клієнта — тоді архів став би вироком "
+    + "назавжди, і клієнт, що знову платить, не потрапив би на екран");
+  assert.equal(isArchived(null, "2026-08-28T00:00:00Z"), false,
+    "🔴 неархівований клієнт вважається архівним — з екрана зникли б усі");
+  assert.equal(isArchived("2026-09-10T08:51:00Z", null), true,
+    "🔴 архівований без жодної оплати не вважається архівним");
 });
 
 test("#30p МІСТОК == ВКЛАДЦІ: обіцяне число дорівнює тому, що в реактивації лежить", needsApi(), async () => {
