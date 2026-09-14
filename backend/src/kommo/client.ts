@@ -64,7 +64,7 @@ export function kommoCircuitState(): {
   return { paused: Date.now() < bannedUntil, bannedUntil, consecutive403, total429, last429At };
 }
 
-async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
+export async function kommoRequest<T>(path: string, attempt = 0): Promise<T> {
   if (Date.now() < bannedUntil) {
     const mins = Math.ceil((bannedUntil - Date.now()) / 60000);
     throw new Error(`Kommo circuit open: пауза ще ~${mins} хв після серії 403 (можлива блокування IP/акаунта)`);
@@ -184,7 +184,7 @@ export interface KommoDeal {
 
 // Kommo custom-field ids for lead-source attribution (leads/custom_fields).
 import {
-  CARRIER_PAY_FIELDS, carrierPaymentFrom, assertLeadIdsWithinLimit, LEADS_BY_IDS_MAX,
+  CARRIER_PAY_FIELDS, carrierPaymentFrom, CARRIER_PARTY_FIELDS, carrierNameFrom, assertLeadIdsWithinLimit, LEADS_BY_IDS_MAX,
   CLIENT_PAY_FIELD, CARRIER_OBLIGATION_FIELD,
   carrierObligationFrom, clientPaymentFrom,
 } from "../core/carrierPayment.js";
@@ -317,6 +317,16 @@ export function extractCarrierObligation(deal: KommoDeal): number | null {
 /** Тип виплати перевізнику — потрібен як ПІДПИС, а не лише як маркер суми. */
 export function extractCarrierPayType(deal: KommoDeal): string | null {
   return fieldText(deal, CARRIER_PAY_FIELDS.type);
+}
+
+/** Назва перевізника для реєстру заявок: «Назва перевізника» → «Компания перевозчик». */
+export function extractCarrierName(deal: KommoDeal): string | null {
+  return carrierNameFrom(fieldText(deal, CARRIER_PARTY_FIELDS.name), fieldText(deal, CARRIER_PARTY_FIELDS.company));
+}
+/** ЄДРПОУ перевізника; порожньо → null. */
+export function extractCarrierEdrpou(deal: KommoDeal): string | null {
+  const v = (fieldText(deal, CARRIER_PARTY_FIELDS.edrpou) ?? "").trim();
+  return v || null;
 }
 
 /** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */

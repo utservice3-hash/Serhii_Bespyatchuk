@@ -1816,6 +1816,28 @@ export async function fetchInvoiceRegistry(): Promise<ReceivableInvoicesResp> {
   return { invoices: data.invoices, oldestAliveDays: data.oldestAliveDays ?? null };
 }
 
+/**
+ * 📋 РЕЄСТР ЗАЯВОК НА ОПЛАТУ ПЕРЕВІЗНИКАМ — угоди воронки «Оплата перевозчикам».
+ * Скоуп по менеджеру, що подав (рішення власника 07.09.2026). Лише читання.
+ */
+export type PaymentRequestKind = "unsorted" | "pending" | "accepted" | "problem" | "paid" | "rejected" | "unknown";
+export interface PaymentRequestRow {
+  kommoId: number; submittedOn: string;
+  clientKey: string | null; clientName: string | null;
+  carrierName: string | null; carrierEdrpou: string | null;
+  payType: string | null; amount: number | null;
+  statusId: number; status: string; kind: PaymentRequestKind;
+  managerId: number | null; managerName: string | null; crmUrl: string;
+}
+export interface PaymentRequestsResp {
+  from: string; to: string; rows: PaymentRequestRow[];
+  summary: Record<PaymentRequestKind, { n: number; amount: number }>;
+}
+export async function fetchPaymentRequests(params: { from?: string; to?: string; status?: string }): Promise<PaymentRequestsResp> {
+  const { data } = await api.get<PaymentRequestsResp>("/dashboard/receivables/payment-requests", { params });
+  return data;
+}
+
 /** Дедлайн оплати + коментар до конкретного рахунку (менеджер — свої клієнти). */
 export async function saveReceivableInvoiceNote(payload: {
   clientKey: string; invoiceNo: string; dueDate?: string | null; comment?: string | null;

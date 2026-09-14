@@ -76,6 +76,7 @@ import * as paymentMatch from "../core/paymentMatch.js";
 import { marginCell } from "../core/receivablesMargin.js";
 import { clientFullyWrittenOff, WRITTEN_OFF_STILL_IN_ZONE } from "../core/writeoffScope.js";
 import { receivablesScope } from "../auth/receivablesScope.js";
+import { paymentRequestsSql, toPaymentRequestRows, summarize as summarizePaymentRequests, PAYMENT_REQUEST_STATUSES } from "../core/paymentRequests.js";
 import {
   fkErrorMessage, limitRequestTitle, amountLimitState, amountLimitLabel,
   LIMIT_REQUEST_TASK_TYPE,
@@ -3766,6 +3767,36 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
     );
   }
   res.json({ ok: true });
+});
+
+/**
+ * 📋 РЕЄСТР ЗАЯВОК НА ОПЛАТУ ПЕРЕВІЗНИКАМ (рішення власника 07.09.2026).
+ * Джерело — угоди воронки «Оплата перевозчикам» (`core/paymentRequests.ts`).
+ * 🔴 СКОУП — ПО МЕНЕДЖЕРУ, ЩО ПОДАВ (`d.manager_id`), а не по клієнту: власник
+ * сказав «бачить лише свої заявки, які він подав». Тімлід — команда, вище — усі.
+ * Період — дата подачі за Києвом, обидва кінці включно; дефолт — останні 30 днів.
+ * Межу тримає `ROUTE_TAB` (вкладка `receivables`).
+ */
+dashboardRouter.get("/receivables/payment-requests", async (req, res) => {
+  const auth = req.auth!;
+  const sc = receivablesScope(auth, req.query);
+  if (!sc.ok) return res.status(sc.status).json({ error: sc.error });
+  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from ?? "")) ? String(req.query.from) : new Date(Date.now() - 30 * 864e5).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to ?? "")) ? String(req.query.to) : today;
+  const params: unknown[] = [from, to];
+  const conds: string[] = [];
+  if (sc.managerId != null) { params.push(sc.managerId); conds.push(`AND d.manager_id = $${params.length}`); }
+  if (sc.teamId != null) { params.push(sc.teamId); conds.push(`AND m.team_id = $${params.length}`); }
+  const status = String(req.query.status ?? "").trim();
+  if (status) {
+    const ids = Object.entries(PAYMENT_REQUEST_STATUSES).filter(([, v]) => v.kind === status).map(([id]) => Number(id));
+    if (ids.length === 0) return res.status(400).json({ error: `Невідомий стан: ${status}` });
+    params.push(ids); conds.push(`AND d.status_id = ANY($${params.length})`);
+  }
+  const r = await pool.query(paymentRequestsSql(conds.join("\n       ")), params);
+  const rows = toPaymentRequestRows(r.rows, config.kommo.baseUrl);
+  res.json({ from, to, rows, summary: summarizePaymentRequests(rows) });
 });
 
 /**
