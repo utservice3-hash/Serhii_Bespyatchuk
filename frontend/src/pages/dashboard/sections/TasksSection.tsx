@@ -365,6 +365,42 @@ export function TasksSection({
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  /**
+   * 📎 ПРИКРІПЛЕННЯ ПРЯМО З РЯДКА СПИСКУ.
+   *
+   * 🔴 ПРИВІД — ВІДГУК ВЛАСНИКА: «не можна прикріпляти файли до задач». Заміряно в
+   * його ж браузері: кнопка в картці ПРАЦЮЄ (клік доходить до інпута), блок
+   * «Вкладення» рендериться — але лежить у самому НИЗУ прокручуваної картки, під
+   * стрічкою доповнень. Людина відкрила картку, не побачила вкладень і зробила
+   * правильний висновок: прикріпити не можна. Той самий клас, що груп: контрол є,
+   * але не там, де дивляться.
+   *
+   * ⚠️ ЦІЛЬ ТРИМАЄМО В `ref`, А НЕ В СТАНІ. `setState` асинхронний, а `input.click()`
+   * мусить статись у ТОМУ Ж оброблювачі, інакше браузер втрачає користувацький жест
+   * і діалог вибору файла не відкриється взагалі.
+   */
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadTargetRef = useRef<number | null>(null);
+  const pickFileFor = (taskId: number) => { uploadTargetRef.current = taskId; fileInputRef.current?.click(); };
+
+  async function attachPickedFile(file: File): Promise<void> {
+    const taskId = uploadTargetRef.current;
+    if (taskId == null) return;
+    if (file.size > TASK_FILE_MAX_BYTES) {
+      setDetailErr(`«${file.name}» — ${Math.round(file.size / 1024 / 1024 * 10) / 10} МБ, а межа 5 МБ`);
+      return;
+    }
+    setBusy(true); setDetailErr(null);
+    try {
+      const added = await uploadTaskFile(taskId, file);
+      // Якщо картка цієї задачі відкрита — показуємо новий файл одразу.
+      if (openTaskId === taskId) setFiles((cur) => [...(cur ?? []), added]);
+      refreshTasks?.();
+    } catch (err) {
+      setDetailErr(err instanceof Error ? err.message : `не вдалося прикріпити «${file.name}»`);
+    } finally { setBusy(false); }
+  }
+
   const reloadGroups = () => { void fetchTaskGroups().then(setGroups).catch(() => setGroups([])); };
   useEffect(() => { reloadGroups(); void fetchTaskAssignees().then(setAccounts).catch(() => setAccounts([])); }, []);
 
@@ -513,6 +549,19 @@ export function TasksSection({
           )}
         </div>
       )}
+
+      {/* 📎 ЄДИНИЙ схований інпут на всю секцію: його кличуть і рядок, і картка.
+          🔴 НЕ `display:none`: такий елемент у частині рушіїв не отримує кліку від
+          мітки, і кнопка виглядає живою, а діалог не відкривається. Тримаємо його
+          в розкладці, але невидимим — це той самий прийом, що для доступності. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachPickedFile(f); }}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+        tabIndex={-1}
+        aria-hidden
+      />
 
       {/* 📁 ПАНЕЛЬ ГРУП. Групи ОСОБИСТІ (рішення Романа 14.09): чужих не видно, і
           задача в чужій папці для мене просто «без групи» — доступу групи не міняють. */}
@@ -751,6 +800,22 @@ export function TasksSection({
                           <option value="">{groups.length ? "+ група" : "+ група (спершу створіть)"}</option>
                           {groups.map((g) => <option key={g.id} value={g.id}>📁 {g.name}</option>)}
                         </select>
+                        {/* 📎 Прикріпити файл ПРЯМО ЗІ СПИСКУ. Лічильник поруч —
+                            щоб було видно, що вкладення взагалі є, без відкриття картки. */}
+                        <button
+                          onClick={() => pickFileFor(task.id)}
+                          disabled={busy || (task.fileCount ?? 0) >= TASK_FILES_PER_TASK}
+                          title={(task.fileCount ?? 0) >= TASK_FILES_PER_TASK
+                            ? `Уже ${TASK_FILES_PER_TASK} файли — приберіть зайвий у картці`
+                            : "Прикріпити файл (до 5 МБ)"}
+                          style={{
+                            border: "1px dashed var(--border)", background: "transparent",
+                            color: "var(--text-muted)", borderRadius: "var(--r-pill)",
+                            fontSize: 10.5, padding: "1px var(--sp-3)",
+                            cursor: busy || (task.fileCount ?? 0) >= TASK_FILES_PER_TASK ? "default" : "pointer",
+                            opacity: busy ? 0.5 : 1,
+                          }}
+                        >📎{(task.fileCount ?? 0) > 0 ? ` ${task.fileCount}` : ""}</button>
                         <select
                           value={task.department ?? ""}
                           onChange={(e) => { const department = e.target.value || null; patchTaskLocal(task.id, { department }); commitTask(task.id, { department }); }}
@@ -1123,58 +1188,6 @@ export function TasksSection({
                           background: "var(--danger-bg)", borderRadius: "var(--r-md)", padding: "var(--sp-3) var(--sp-4)" }}>⚠️ {detailErr}</p>
             )}
 
-            {/* ── 💬 СТРІЧКА ДОПОВНЕНЬ ── */}
-            <div style={{ marginTop: 18 }}>
-              <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
-                💬 Стрічка доповнень{comments ? ` · ${comments.length}` : ""}
-              </h3>
-              {comments == null ? (
-                <p style={{ fontSize: 12, color: "var(--text-muted)" }}>{detailErr ? "—" : "Завантаження…"}</p>
-              ) : comments.length === 0 ? (
-                <p style={{ fontSize: 12, color: "var(--text-muted)" }}>Доповнень ще немає.</p>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-                  {comments.map((c) => (
-                    <div key={c.id} style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: "var(--sp-3) var(--sp-4)", background: "var(--card-bg)" }}>
-                      <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
-                        {c.authorName ?? "невідомий автор"} · {String(c.createdAt).slice(0, 16).replace("T", " ")}
-                      </div>
-                      <div style={{ fontSize: 13, whiteSpace: "pre-wrap", lineHeight: "var(--lh)" }}>{c.body}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
-                <textarea
-                  value={commentDraft}
-                  onChange={(e) => setCommentDraft(e.target.value)}
-                  placeholder="Дописати в стрічку…"
-                  rows={2}
-                  style={{ flex: 1, resize: "vertical", font: "inherit", padding: "var(--sp-3)", lineHeight: "var(--lh)", borderRadius: "var(--r-lg)", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
-                />
-                <button
-                  className="btn-primary"
-                  disabled={!commentDraft.trim() || busy}
-                  onClick={async () => {
-                    const body = commentDraft.trim();
-                    if (!body) return;
-                    setBusy(true); setDetailErr(null);
-                    try {
-                      const added = await createTaskComment(openTask.id, body);
-                      setComments((cur) => [...(cur ?? []), added]);
-                      setCommentDraft("");
-                      refreshTasks?.();
-                    } catch (err) {
-                      // 🔴 Текст НЕ прибираємо з поля: людина його набирала.
-                      setDetailErr(err instanceof Error ? err.message : "не вдалося дописати");
-                    } finally { setBusy(false); }
-                  }}
-                  style={{ flexShrink: 0, cursor: commentDraft.trim() && !busy ? "pointer" : "default",
-                           opacity: commentDraft.trim() && !busy ? 1 : 0.5 }}
-                >Дописати</button>
-              </div>
-            </div>
-
             {/* ── 📎 ВКЛАДЕННЯ ── */}
             <div style={{ marginTop: 18 }}>
               <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
@@ -1238,54 +1251,81 @@ export function TasksSection({
                   </tbody>
                 </table>
               )}
-              {/* 🔴 СИРИЙ `input[type=file]` МАЛЮЄТЬСЯ БРАУЗЕРОМ І В ДАШБОРД НЕ
-                  ВПИСУЄТЬСЯ. Тому input схований, а видимий елемент — звичайна
-                  кнопка в стилі решти картки. Межу «більше не можна» показуємо
-                  ТЕКСТОМ, а не мертвою кнопкою: вимкнений контрол без причини
-                  читається як поломка. */}
+              {/* 🔴 КНОПКА, А НЕ СИРИЙ `input[type=file]`: його малює БРАУЗЕР і в дашборд
+                  він не вписується. Інпут один на секцію (див. вище), і ця кнопка лише
+                  наводить його на цю задачу — так само, як кнопка в рядку списку.
+                  Межу «більше не можна» показуємо ТЕКСТОМ, а не мертвою кнопкою:
+                  вимкнений контрол без причини читається як поломка. */}
               {(files?.length ?? 0) >= TASK_FILES_PER_TASK ? (
                 <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: 0 }}>
                   Більше {TASK_FILES_PER_TASK} файлів на задачу не кладемо — приберіть зайвий, щоб додати новий.
                 </p>
               ) : (
-                <label
-                  style={{ display: "inline-block", padding: "var(--sp-2) var(--sp-6)", borderRadius: "var(--r-md)",
+                <button
+                  onClick={() => pickFileFor(openTask.id)}
+                  disabled={busy}
+                  style={{ padding: "var(--sp-2) var(--sp-6)", borderRadius: "var(--r-md)",
                            border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)",
                            cursor: busy ? "default" : "pointer", fontSize: "var(--fs-sm)",
                            fontWeight: "var(--fw-semibold)" as React.CSSProperties["fontWeight"], opacity: busy ? 0.5 : 1 }}
-                >
-                  {busy ? "Завантаження…" : "📎 Додати файл"}
-                  <input
-                    type="file"
-                    disabled={busy}
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = "";
-                      if (!file) return;
-                      // 🔴 Межу 5 МБ перевіряємо і ТУТ, і на сервері. Тут — щоб людина
-                      // побачила причину одразу, а не після хвилини завантаження;
-                      // там — бо межа не має триматись на екрані.
-                      if (file.size > TASK_FILE_MAX_BYTES) {
-                        setDetailErr(`«${file.name}» — ${Math.round(file.size / 1024 / 1024 * 10) / 10} МБ, а межа 5 МБ`);
-                        return;
-                      }
-                      setBusy(true); setDetailErr(null);
-                      try {
-                        const added = await uploadTaskFile(openTask.id, file);
-                        setFiles((cur) => [...(cur ?? []), added]);
-                        refreshTasks?.();
-                      } catch (err) {
-                        setDetailErr(err instanceof Error ? err.message : "не вдалося завантажити файл");
-                      } finally { setBusy(false); }
-                    }}
-                    style={{ display: "none" }}
-                  />
-                </label>
+                >{busy ? "Завантаження…" : "📎 Додати файл"}</button>
               )}
               <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: "var(--sp-2) 0 0" }}>
                 До 5 МБ, не більше {TASK_FILES_PER_TASK} файлів на задачу. Прибране вкладення
                 зникає зі списку, але зберігається — відновлюється вручну.
               </p>
+            </div>
+
+            {/* ── 💬 СТРІЧКА ДОПОВНЕНЬ ── */}
+            <div style={{ marginTop: 18 }}>
+              <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
+                💬 Стрічка доповнень{comments ? ` · ${comments.length}` : ""}
+              </h3>
+              {comments == null ? (
+                <p style={{ fontSize: 12, color: "var(--text-muted)" }}>{detailErr ? "—" : "Завантаження…"}</p>
+              ) : comments.length === 0 ? (
+                <p style={{ fontSize: 12, color: "var(--text-muted)" }}>Доповнень ще немає.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+                  {comments.map((c) => (
+                    <div key={c.id} style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: "var(--sp-3) var(--sp-4)", background: "var(--card-bg)" }}>
+                      <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
+                        {c.authorName ?? "невідомий автор"} · {String(c.createdAt).slice(0, 16).replace("T", " ")}
+                      </div>
+                      <div style={{ fontSize: 13, whiteSpace: "pre-wrap", lineHeight: "var(--lh)" }}>{c.body}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                <textarea
+                  value={commentDraft}
+                  onChange={(e) => setCommentDraft(e.target.value)}
+                  placeholder="Дописати в стрічку…"
+                  rows={2}
+                  style={{ flex: 1, resize: "vertical", font: "inherit", padding: "var(--sp-3)", lineHeight: "var(--lh)", borderRadius: "var(--r-lg)", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
+                />
+                <button
+                  className="btn-primary"
+                  disabled={!commentDraft.trim() || busy}
+                  onClick={async () => {
+                    const body = commentDraft.trim();
+                    if (!body) return;
+                    setBusy(true); setDetailErr(null);
+                    try {
+                      const added = await createTaskComment(openTask.id, body);
+                      setComments((cur) => [...(cur ?? []), added]);
+                      setCommentDraft("");
+                      refreshTasks?.();
+                    } catch (err) {
+                      // 🔴 Текст НЕ прибираємо з поля: людина його набирала.
+                      setDetailErr(err instanceof Error ? err.message : "не вдалося дописати");
+                    } finally { setBusy(false); }
+                  }}
+                  style={{ flexShrink: 0, cursor: commentDraft.trim() && !busy ? "pointer" : "default",
+                           opacity: commentDraft.trim() && !busy ? 1 : 0.5 }}
+                >Дописати</button>
+              </div>
             </div>
 
             {/* ── 📜 ІСТОРІЯ СТАТУСУ ── */}
