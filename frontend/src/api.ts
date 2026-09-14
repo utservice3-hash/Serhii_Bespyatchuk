@@ -2615,7 +2615,7 @@ export interface RateAnalysis {
     total_min: number | null; total_max: number | null; distance_km: number | null;
     short_haul?: boolean;
     margin?: number; client_min?: number | null; client_max?: number | null;
-    options: { tonnage: string; margin: number; per_km_min: number; per_km_max: number; total_min: number | null; total_max: number | null; client_min: number | null; client_max: number | null; selected: boolean }[];
+    options: { tonnage: string; kind?: "vehicle" | "partial"; margin: number | null; per_km_min: number; per_km_max: number; total_min: number | null; total_max: number | null; client_min: number | null; client_max: number | null; selected: boolean }[];
   } | null;
   /** Самонавчальна рекомендація з накопиченого архіву цін Ларді по маршруту. */
   learned_recommendation?: {
