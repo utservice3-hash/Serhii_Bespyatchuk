@@ -104,7 +104,7 @@ tasksRouter.get("/", async (req, res) => {
   // Тут лишається тільки підстановка параметрів. Доти умова стояла в цьому файлі
   // ДВІЧІ — тут і в `canTouchTask` — і копії розійшлись: автор-менеджер міг
   // ЗМІНИТИ задачу, яку створив колезі, але НЕ БАЧИВ її у списку. Інваріанту
-  // «хто змінює — той бачить» тримає `#398`.
+  // «хто змінює — той бачить» тримає `#399`.
   const me = push(auth.userId);
   const where = `WHERE ${visibilityCondSql(viewerOf(auth), push)}`;
 
@@ -531,7 +531,7 @@ async function loadTaskMeta(taskId: number): Promise<TaskMeta | null> {
  *
  * ⚠️ Дзеркальна функція `canSeeTask` там само, і вона ШИРША для ролі `company`
  * (HR, бухгалтерія: бачать усе призначене, змінюють лише своє). Тому «бачити»
- * й «змінювати» — дві функції, а не одна; інваріанту «touch ⊆ see» тримає `#398`.
+ * й «змінювати» — дві функції, а не одна; інваріанту «touch ⊆ see» тримає `#399`.
  */
 async function canTouchTask(
   auth: { role: string; roleKey: string; userId: number; managerId: number | null; teamId: number | null },
@@ -950,7 +950,7 @@ tasksRouter.get("/:id/files/:fileId", async (req, res) => {
  * НІКОЛИ. При 5 МБ × 10 файлів і 2,6 ТБ вільного (замір 14.09) це роками не
  * питання, але саме тому написано тут, а не «колись почистимо».
  * 🔴 І звідси вимога до КОЖНОГО читача: `deleted_at IS NULL`. Забути її означає
- * повернути видалені вкладення на екран — тримає `#398h`.
+ * повернути видалені вкладення на екран — тримає `#399h`.
  */
 tasksRouter.delete("/:id/files/:fileId", async (req, res) => {
   const t = await openTask(req, res, "see");
