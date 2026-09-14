@@ -51,6 +51,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/reactivateCycle.test.js",
   "routes/noPlanShare.test.js",
   "routes/tasksContract.test.js",
+  "routes/tasksShared.test.js",
   "routes/drillSmoke.test.js",
   "routes/avgCheckDay.test.js",
   "routes/dismissedOnScreen.test.js",
@@ -1333,6 +1334,7 @@ export const MANIFEST_TESTS: string[] = [
   "#398e ВЬЮ ai_tasks == визначенню «не особиста» з ядра",
   "#398f СУПУТНИКИ ЗАДАЧ: закриті і в схемі (REVOKE), і в переліку застосунку",
   "#398g ЧИТАЧІ task_files НЕСУТЬ deleted_at IS NULL — мʼяке видалення не протікає",
+  "#398h ДИМ: усі роути спільної задачі виконуються проти бази з нуля, межі віддають свої коди",
   "#398d 🪞 СХЕМА З НУЛЯ: SQL-скоуп == JS-правилу; CHECK одного виконавця; група не тягне задачі",
   "#397b СЛОВНИК ПРИЧИН == CHECK loyalty_overrides_archive_reason_chk, в обидва боки",
   // 🗑 РЕЄСТР ЗНЯТИХ ГЕЙТІВ (01.09.2026) — правило 13 вимагає нового номера, а крок 0
