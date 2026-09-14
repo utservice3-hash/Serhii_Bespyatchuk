@@ -80,7 +80,15 @@ export interface AccessRow {
   deny: string[];
 }
 
-export const ACCESS_ROLES = ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"] as const;
+/**
+ * 🎓 `candidate` доданий 14.09.2026 (ТЗ «Навчання»). Це ЛИШЕ дозвіл на імʼя у зліпку:
+ * скільки клітинок реально пробується, вирішують `allow`/`deny` кожного рядка, а не цей
+ * перелік. Тому кандидат зʼявляється тільки в девʼяти рядках `/api/training` — у решті
+ * роутів його немає навмисно: перебір усіх 222 рядків заради ролі з однією вкладкою
+ * коштував би ~222 зайвих проб, а те саме твердження («403 скрізь, крім навчання»)
+ * дешевше й точніше доводить окремий гейт через `ROUTE_TAB`.
+ */
+export const ACCESS_ROLES = ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"] as const;
 
 /**
  * 🔁 ЗРУШЕНІ КЛІТИНКИ ЗЛІПКА — УЗАКОНЕНІ ПОІМЕННО, А НЕ ПЕРЕЗНЯТІ МОВЧКИ.
@@ -788,24 +796,29 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "POST", path: "/api/tracker/logout", cls: "deny-only",
     allow: [], deny: [] },
+  /* 🎓 ЗАПИС У НАВЧАННЯ — право `manage_training` (ТЗ 14.09.2026), склад ролей —
+     рішення власника дослівно: «admin, ceo, opdir, kvp». `financier` ВТРАЧАЄ доступ,
+     який мав досі через `admin_scope`, і тому переїхав у `deny` явно: мовчазне зникнення
+     з `allow` на `deny-only` рядках ніхто б не побачив — там дозволених не пробують.
+     `candidate` у `deny` з народження: його єдиний екран — навчання, але лише читати. */
   { method: "POST", path: "/api/training/folder", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/training/folder/:id", cls: "DELETE-ghost",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/folder/:id", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/training/material", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/training/material/:id", cls: "DELETE-ghost",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/material/:id", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/material/:id/file", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/training/materials/:id/publish", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/tree", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/uploads", cls: "deny-only",
     allow: [], deny: [] },
 ];

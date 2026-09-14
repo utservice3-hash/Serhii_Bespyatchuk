@@ -47,6 +47,19 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   // може кожен, хто бачить екран «Реклама» (окремий GET), а СТАВИТИ його — керування
   // компанією, не аналітика. Тому 403 для kvp/financier тут по ПРАВУ, а не по рівню.
   "PUT /api/settings/ad-plan": "manage_users — те саме",
+  // 🎓 НАВЧАННЯ (ТЗ 14.09.2026). Сім роутів запису перейшли з `requireRole("admin")` на
+  // `requirePerm("manage_training")`. Право видано рівно чотирьом — рішення власника
+  // дослівно: «admin, ceo, opdir, kvp». Отже `financier` (роль адмінського рівня, бо має
+  // `admin_scope`) тепер відмовляється ПО ПРАВУ, а не по рівню — і мусить бути названий тут,
+  // інакше проба вважала б його дозволеним і виконала мутацію проти прода.
+  // ⚠️ Це ЗВУЖЕННЯ, а не фіксація статус-кво: до 14.09 фінансист редагування МАВ.
+  "POST /api/training/folder": "manage_training — фінансист його не має (рішення власника 14.09.2026)",
+  "PATCH /api/training/folder/:id": "manage_training — те саме",
+  "DELETE /api/training/folder/:id": "manage_training — те саме",
+  "POST /api/training/material": "manage_training — те саме",
+  "PATCH /api/training/material/:id": "manage_training — те саме",
+  "DELETE /api/training/material/:id": "manage_training — те саме",
+  "POST /api/training/materials/:id/publish": "manage_training — те саме",
   "POST /api/settings/users/:id/reset-password": "reset_passwords — окреме право, лише СЕО/ОД/адмін",
   "POST /api/settings/users/provision": "manage_users — те саме",
   // ФАЗА B. `merge_clients` мають КВП, ОД і admin (зміна політики 03.08.2026).

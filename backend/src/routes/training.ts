@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import path from "path";
 import { pool } from "../db/pool.js";
-import { requireAuth, requireRole } from "../auth/middleware.js";
+import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { UPLOAD_DIR } from "./uploads.js";
 
 /**
@@ -19,7 +19,23 @@ trainingRouter.use(requireAuth);
 
 const TRAIN_DIR = path.join(UPLOAD_DIR, "..", "training");
 const MAX_BYTES = 45 * 1024 * 1024; // 45 МБ на файл (великі відео — через embed)
-const onlyAdmin = requireRole("admin");
+/**
+ * ✍️ ХТО РЕДАГУЄ НАВЧАННЯ — ПРАВО, А НЕ РОЛЬ (ТЗ 14.09.2026).
+ *
+ * 🔴 ЩО ТУТ БУЛО НАСПРАВДІ. Змінна звалась «лише адмін» — а це НЕПРАВДА: `requireRole`
+ * порівнює scope-compat роль, і `scopeCompatRole` піднімає до "admin" будь-кого з правом
+ * `admin_scope`. Заміряно на проді 14.09: редагувати могли ШІСТЬ ролей — admin, ceo,
+ * opdir, kvp, financier і «Бухгалтерія». Назва брехала про власну межу, і саме тому межу
+ * винесено в іменоване право, яке видно в Налаштуваннях.
+ *
+ * Склад — рішення власника 14.09.2026 дослівно: «admin, ceo, opdir, kvp». Тобто фінансист
+ * і бухгалтерія редагування втрачають СВІДОМО; видача й зняття — явними рядками в
+ * `schema.sql`, а не наслідком місця вставки.
+ *
+ * ⚠️ Зліпок цього не спіймає: пʼять із семи роутів запису мають клас `deny-only`, тож
+ * `#11` дозволені ролі на них не пробує. Доказ звуження — жива проба в прийманні.
+ */
+const canEditTraining = requirePerm("manage_training");
 const KINDS = new Set(["video_embed", "file", "link", "text"]);
 
 /** Уся структура: пласкі списки папок і матеріалів (дерево будує фронт). */
@@ -47,7 +63,7 @@ trainingRouter.get("/tree", async (req, res) => {
  * Опублікувати чернетку — ЛИШЕ людина (admin). АІ створює матеріал зі status='draft' і
  * опублікувати сам НЕ може: інструмент create_training_material інших статусів не приймає.
  */
-trainingRouter.post("/materials/:id/publish", onlyAdmin, async (req, res) => {
+trainingRouter.post("/materials/:id/publish", canEditTraining, async (req, res) => {
   const id = Number(req.params.id);
   const r = await pool.query<{ title: string }>(
     `UPDATE training_materials SET status = 'published' WHERE id = $1 AND status = 'draft' RETURNING title`, [id]);
@@ -56,7 +72,7 @@ trainingRouter.post("/materials/:id/publish", onlyAdmin, async (req, res) => {
 });
 
 /** Створити папку. */
-trainingRouter.post("/folder", onlyAdmin, async (req, res) => {
+trainingRouter.post("/folder", canEditTraining, async (req, res) => {
   const name = String(req.body?.name ?? "").trim();
   const parentId = req.body?.parentId != null ? Number(req.body.parentId) : null;
   if (!name) return res.status(400).json({ error: "Назва папки обовʼязкова" });
@@ -73,7 +89,7 @@ trainingRouter.post("/folder", onlyAdmin, async (req, res) => {
 });
 
 /** Перейменувати / перемістити папку (name та/або parentId, position). */
-trainingRouter.patch("/folder/:id", onlyAdmin, async (req, res) => {
+trainingRouter.patch("/folder/:id", canEditTraining, async (req, res) => {
   const sets: string[] = [];
   const params: unknown[] = [];
   if (req.body?.name !== undefined) {
@@ -95,7 +111,7 @@ trainingRouter.patch("/folder/:id", onlyAdmin, async (req, res) => {
 });
 
 /** Видалити папку (каскадом підпапки+матеріали; фізичні файли чистимо вручну). */
-trainingRouter.delete("/folder/:id", onlyAdmin, async (req, res) => {
+trainingRouter.delete("/folder/:id", canEditTraining, async (req, res) => {
   const id = Number(req.params.id);
   const stored = await pool.query<{ stored_name: string }>(
     `WITH RECURSIVE sub AS (
@@ -118,7 +134,7 @@ trainingRouter.delete("/folder/:id", onlyAdmin, async (req, res) => {
  *  • text — content;
  *  • file — dataBase64 (+filename/mime) → зберігається на диск.
  */
-trainingRouter.post("/material", onlyAdmin, async (req, res) => {
+trainingRouter.post("/material", canEditTraining, async (req, res) => {
   const b = req.body ?? {};
   const title = String(b.title ?? "").trim();
   const kind = String(b.kind ?? "");
@@ -165,7 +181,7 @@ trainingRouter.post("/material", onlyAdmin, async (req, res) => {
 });
 
 /** Оновити матеріал: назва / опис / посилання / папка / позиція. */
-trainingRouter.patch("/material/:id", onlyAdmin, async (req, res) => {
+trainingRouter.patch("/material/:id", canEditTraining, async (req, res) => {
   const b = req.body ?? {};
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -186,7 +202,7 @@ trainingRouter.patch("/material/:id", onlyAdmin, async (req, res) => {
 });
 
 /** Видалити матеріал (+ файл з диска, якщо був). */
-trainingRouter.delete("/material/:id", onlyAdmin, async (req, res) => {
+trainingRouter.delete("/material/:id", canEditTraining, async (req, res) => {
   const r = await pool.query<{ stored_name: string | null }>(
     `DELETE FROM training_materials WHERE id = $1 RETURNING stored_name`,
     [Number(req.params.id)]
