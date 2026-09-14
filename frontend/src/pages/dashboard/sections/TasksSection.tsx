@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { parseTaskIdParam, deepLinkState } from "../taskDeepLink";
 import {
   createReactivationTask,
   fetchReactivationCandidates,
@@ -318,8 +319,33 @@ export function TasksSection({
   const [sortBy, setSortBy] = useState<"created" | "deadline" | "priority" | "status" | "assignee" | "title">("created");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [openTaskId, setOpenTaskId] = useState<number | null>(null);
+  // 🔗 Глибоке посилання: картка відкривається ОДРАЗУ, якщо в URL є `?id=`.
+  const [openTaskId, setOpenTaskId] = useState<number | null>(() => parseTaskIdParam(window.location.search));
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
+
+  // 🔴 «ОДНЕ ЗАВАНТАЖЕННЯ ВЖЕ ЗАВЕРШИЛОСЬ» — не те саме, що «зараз не вантажимо».
+  // `tasksLoading` стартує false і стає true лише коли ефект добіг до запиту, тож на
+  // першому кадрі маємо false+[] одночасно. Без цього прапорця банер «недоступна»
+  // блимав би на КОЖНОМУ глибокому посиланні, включно з валідним.
+  const [tasksSettled, setTasksSettled] = useState(false);
+  const wasLoading = useRef(false);
+  useEffect(() => {
+    if (tasksLoading) wasLoading.current = true;
+    else if (wasLoading.current) setTasksSettled(true);
+  }, [tasksLoading]);
+
+  // URL іде за станом картки В ОБИДВА боки: відкрили — параметр зʼявився, закрили —
+  // зник. `replaceState`, а не `pushState`, з тієї самої причини, що в «Клієнтах»:
+  // інакше кожне відкриття картки клало б запис в історію, і «назад» гортало б їх,
+  // а не вертало людину туди, звідки вона прийшла.
+  useEffect(() => {
+    const u = new URL(window.location.href);
+    if (openTaskId == null) u.searchParams.delete("id");
+    else u.searchParams.set("id", String(openTaskId));
+    window.history.replaceState({}, "", u);
+  }, [openTaskId]);
+
+  const deepLink = deepLinkState({ openTaskId, found: openTask != null, settled: tasksSettled });
   const [expandedKpi, setExpandedKpi] = useState<Set<string>>(new Set());
   const toggleKpi = (id: string) => setExpandedKpi((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -529,6 +555,23 @@ export function TasksSection({
           style={{ fontSize: "var(--fs-sm)", padding: "3px var(--sp-3)", borderRadius: "var(--r-pill)", border: "1px dashed var(--border)", background: "transparent", color: "var(--text)", width: 150 }}
         />
       </div>
+
+      {/* 🔗 ПОРОЖНЕЧА НАЗИВАЄ СЕБЕ. Посилання на чужу особисту, видалену або неіснуючу
+          задачу раніше давало порожній екран: три запити супутників тихо падали 404,
+          помилка лягала в стан і не малювалась. Тепер людина читає причину. */}
+      {deepLink === "missing" && (
+        <div className="chart-card" style={{ marginBottom: 12, borderLeft: "3px solid var(--danger, #c8102e)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Задача №{openTaskId} недоступна</div>
+          <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
+            Її або видалено, або вона особиста й належить іншій людині. Посилання правильне —
+            доступу до цієї задачі у вас немає.{" "}
+            <button
+              onClick={() => setOpenTaskId(null)}
+              style={{ background: "none", border: "none", padding: 0, color: "var(--link, #2f5d8a)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
+            >Показати список</button>
+          </div>
+        </div>
+      )}
 
       {tasksLoading ? (
         <p className="loading-text">Завантаження...</p>
