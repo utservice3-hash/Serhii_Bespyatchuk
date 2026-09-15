@@ -8,6 +8,7 @@ import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClien
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf } from "./dates.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
+import { dayBucketCase } from "./dayBuckets.js";
 
 /**
  * ЄДИНЕ місце в проєкті з SQL по НЕ-грошових бізнес-метриках (гроші — `core/money.ts`).
@@ -3198,7 +3199,9 @@ export async function responseTime(s: MetricScope): Promise<ResponseTimeResult> 
   const KY = "AT TIME ZONE 'Europe/Kyiv'";
   const { conds, params } = responseScope(s);
   const RESP_MIN = RESPONSE_MINUTES_SQL;
-  const bucketCase = `CASE WHEN dow IN (0,6) THEN 'weekend' WHEN hr >= 9 AND hr < 18 THEN 'work' WHEN hr >= 18 AND hr < 21 THEN 'evening' ELSE 'night' END`;
+  // Означення відер доби — спільне (`core/dayBuckets.ts`). Тут був його ЄДИНИЙ
+  // екземпляр; копія для другого екрана стала б другим означенням «вечора».
+  const bucketCase = dayBucketCase();
   const cte = `
      WITH quals AS (
        SELECT d.kommo_id, d.created_at_kommo, d.first_activity_at
