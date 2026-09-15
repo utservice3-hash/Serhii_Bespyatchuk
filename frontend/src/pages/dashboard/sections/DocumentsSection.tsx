@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
   uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, signDocFile, requestDocAccess,
@@ -67,14 +67,17 @@ const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
 });
 const errOf = (e: unknown, fb: string) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fb;
 
-const card: React.CSSProperties = { background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: 14 };
-const pill = (bg: string, color: string): React.CSSProperties => ({ display: "inline-block", fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 999, background: bg, color, whiteSpace: "nowrap" });
+/* Стиль — той самий, що в Задачнику/Навчанні: chart-card, data-table, kpi-card, orph-chip,
+   btn-primary; поля вводу — глобальні (index.css), без власних радіусів і тіней. */
+const pill = (bg: string, color: string): React.CSSProperties => ({ display: "inline-block", fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: "var(--r-pill)", background: bg, color, whiteSpace: "nowrap" });
 const btn = (kind: "primary" | "ghost" | "danger" = "ghost"): React.CSSProperties => ({
-  border: kind === "ghost" ? "1px solid var(--border-strong)" : "none", borderRadius: 10, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+  border: kind === "ghost" ? "1px solid var(--border)" : "none", borderRadius: "var(--r-lg)", padding: "var(--sp-3) var(--sp-6)", fontWeight: 600, cursor: "pointer",
   background: kind === "primary" ? "var(--brand)" : kind === "danger" ? "var(--danger-bg)" : "var(--card-bg)",
   color: kind === "primary" ? "#fff" : kind === "danger" ? "var(--danger)" : "var(--text)",
 });
-const inp: React.CSSProperties = { padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border-strong)", fontSize: 13, background: "var(--card-bg)", color: "var(--text)" };
+const inp: React.CSSProperties = {};
+const label: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 };
+const noteBox: React.CSSProperties = { fontSize: "var(--fs-sm)", color: "var(--text-muted)", background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "var(--sp-3) var(--sp-4)" };
 
 function SigBadge({ f }: { f: DocFile }) {
   const s = f.signature;
@@ -145,69 +148,68 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
 
   const canUploadHere = viewer.isManagement || viewer.canUploadRoot || viewer.uploadFolders.length > 0;
 
+  const pendingSig = sectionFiles.filter((f) => f.signature.kind === "pending" || f.signature.kind === "outdated").length;
+  const overdueSig = sectionFiles.filter((f) => f.signature.kind === "overdue").length;
+  const weekAgo = Date.now() - 7 * 864e5;
+  const fresh = sectionFiles.filter((f) => new Date(f.updatedAt ?? f.createdAt).getTime() >= weekAgo).length;
+  const sectionLabel = ({ general: "Загальні", personal: "Особисті", offer: "Офери", archive: "Архів" })[section];
+
   return (
     <div>
-      {toast && <div style={{ position: "fixed", top: 16, right: 16, zIndex: 80, ...card, background: "var(--ok-bg)", color: "var(--ok)", fontWeight: 600 }}>{toast}</div>}
+      {toast && <div className="chart-card" style={{ position: "fixed", top: 16, right: 16, zIndex: 80, background: "var(--ok-bg)", color: "var(--ok)", fontWeight: 600, padding: "10px 14px" }}>{toast}</div>}
       <div className="page-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-        <h2 className="page-title">📁 Регламенти та документи</h2>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <h1 className="page-title">📁 Регламенти та документи</h1>
+        <div className="page-filters">
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук за назвою, описом, адресатом" style={{ width: 260 }} />
+          <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)} title="Групування списку">
+            <option value="type">Групи: за типом</option>
+            <option value="folder">Групи: за папкою</option>
+            <option value="date">Групи: за місяцем</option>
+          </select>
           <TelegramChip onToast={setToast} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук за назвою, описом, адресатом" style={{ ...inp, minWidth: 260 }} />
           {viewer.isManagement && <button style={btn()} onClick={() => { const n = window.prompt("Назва нової папки:")?.trim(); if (n) void createDocFolder(n, null).then(load).catch((e) => setToast(errOf(e, "Не вдалося створити папку"))); }}>➕ Папка</button>}
-          {canUploadHere && <button style={btn("primary")} onClick={() => setUploadOpen(true)}>+ Завантажити</button>}
+          {canUploadHere && <button className="btn-primary" onClick={() => setUploadOpen(true)}>+ Завантажити</button>}
         </div>
       </div>
 
-      {/* Розділи */}
-      <div style={{ ...card, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <div style={{ display: "flex", gap: 4, background: "var(--bg, #f3f4f6)", borderRadius: 12, padding: 4 }}>
-          {([["general", "Загальні"], ["personal", "Особисті"], ["offer", "🔒 Офери"], ["archive", "Архів"]] as [Section, string][])
-            .filter(([k]) => tree.sections[k])
-            .map(([k, label]) => (
-              <button key={k} onClick={() => { setSection(k); setTypeFilter(null); setFolderFilter("all"); setSelected(null); }}
-                style={{ border: "none", borderRadius: 9, padding: "7px 14px", cursor: "pointer", fontWeight: section === k ? 700 : 500, fontSize: 14,
-                  background: section === k ? "var(--card-bg)" : "transparent", color: "var(--text)", boxShadow: section === k ? "0 1px 3px rgba(0,0,0,.12)" : "none", display: "flex", gap: 8, alignItems: "center" }}>
-                {label}
-                <span style={pill(section === k && k === "offer" ? "var(--danger)" : "var(--border)", section === k && k === "offer" ? "#fff" : "var(--text-muted)")}>{tree.counts[k]}</span>
-              </button>
-            ))}
-        </div>
-        <span style={{ fontSize: 13, color: "var(--text-muted)" }}><b style={{ color: "var(--text)" }}>{({ general: "Загальні", personal: "Особисті", offer: "Офери", archive: "Архів" })[section]}</b> — {SECTION_HINT[section]}</span>
+      {/* Розділи — чипи, як фільтри на екранах клієнтів */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+        {([["general", "Загальні"], ["personal", "Особисті"], ["offer", "🔒 Офери"], ["archive", "Архів"]] as [Section, string][])
+          .filter(([k]) => tree.sections[k])
+          .map(([k, l]) => (
+            <button key={k} className="orph-chip" aria-pressed={section === k} onClick={() => { setSection(k); setTypeFilter(null); setFolderFilter("all"); setSelected(null); }}>
+              {l} <span style={{ opacity: .7 }}>· {tree.counts[k]}</span>
+            </button>
+          ))}
+      </div>
+      <p className="loading-text" style={{ margin: "0 0 var(--sp-7)", fontSize: "var(--fs-13)" }}><b style={{ color: "var(--text)" }}>{sectionLabel}.</b> {SECTION_HINT[section]}</p>
+
+      <div className="kpi-grid">
+        <div className="kpi-card"><span className="kpi-label">Документів у розділі</span><span className="kpi-value">{sectionFiles.length}</span></div>
+        <div className="kpi-card"><span className="kpi-label">Чекають підпису</span><span className="kpi-value" style={{ color: pendingSig ? "var(--warn)" : undefined }}>{pendingSig}</span></div>
+        <div className="kpi-card"><span className="kpi-label">Прострочено підпис</span><span className="kpi-value" style={{ color: overdueSig ? "var(--danger)" : undefined }}>{overdueSig}</span></div>
+        <div className="kpi-card"><span className="kpi-label">Оновлено за 7 днів</span><span className="kpi-value">{fresh}</span></div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "230px minmax(0,1fr) 340px", gap: 12, alignItems: "start" }}>
-        {/* Рейка */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={card}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "var(--text-muted)", marginBottom: 8 }}>ТИПИ ДОКУМЕНТІВ</div>
-            {[...DOC_TYPES].filter((t) => typeCounts.has(t)).map((t) => (
-              <button key={t} onClick={() => setTypeFilter(typeFilter === t ? null : t)}
-                style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", border: "none", background: typeFilter === t ? "var(--bg, #f3f4f6)" : "transparent", borderRadius: 8, padding: "6px 6px", cursor: "pointer", textAlign: "left" }}>
-                <span style={{ width: 26, height: 26, borderRadius: 8, background: TYPE_META[t].color + "22", color: TYPE_META[t].color, display: "grid", placeItems: "center", fontWeight: 800 }}>{TYPE_META[t].icon}</span>
-                <span style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{t}</div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>{TYPE_META[t].action}</div></span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{typeCounts.get(t)}</span>
-              </button>
-            ))}
-            {typeCounts.size === 0 && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>у розділі поки нічого</div>}
-          </div>
+      <div style={{ display: "grid", gridTemplateColumns: "240px minmax(0,1fr) 360px", gap: "var(--sp-7)", alignItems: "start" }}>
+        {/* Папки і типи */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-7)" }}>
           {section !== "offer" && (
-            <div style={card}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "var(--text-muted)", marginBottom: 8 }}>
-                <span>ПАПКИ</span>{viewer.canManageAccess && section === "general" && <span style={{ color: "var(--brand)" }}>доступи ⚙</span>}
-              </div>
+            <div className="chart-card">
+              <div style={{ ...label, display: "flex", justifyContent: "space-between" }}><span>Папки</span>{viewer.canManageAccess && section === "general" && <span style={{ color: "var(--brand)", textTransform: "none", letterSpacing: 0 }}>⚙ доступи</span>}</div>
               {[...tree.folders.filter((f) => f.parentId == null), null].map((f) => {
                 const id = f?.id ?? null; const n = folderCounts.get(id) ?? 0;
                 if (!f && n === 0) return null;
                 const active = folderFilter === (f ? id : "none");
                 return (
-                  <div key={f?.id ?? "none"} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div key={f?.id ?? "none"} style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <button onClick={() => setFolderFilter(active ? "all" : (f ? id : "none"))}
-                      style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, border: "none", background: active ? "var(--bg, #f3f4f6)" : "transparent", borderRadius: 8, padding: "6px 6px", cursor: "pointer", textAlign: "left", fontSize: 13, color: "var(--text)" }}>
-                      <span>🗀</span><span style={{ flex: 1 }}>{f ? f.name : "Без папки"}</span><span style={{ fontSize: 12, color: "var(--text-muted)" }}>{n}</span>
+                      style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, border: "none", background: active ? "var(--surface-2)" : "transparent", borderRadius: "var(--r-md)", padding: "6px 8px", cursor: "pointer", textAlign: "left", fontSize: "var(--fs-13)", color: "var(--text)", fontWeight: active ? 600 : 400 }}>
+                      <span style={{ opacity: .7 }}>🗀</span><span style={{ flex: 1 }}>{f ? f.name : "Без папки"}</span><span className="orph-dim">{n}</span>
                     </button>
                     {f && viewer.canManageAccess && section === "general" && (
                       <>
-                        <button title="Доступи до папки" onClick={() => setAccessFolder(f)} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 14, color: "var(--text-muted)" }}>⚙</button>
+                        <button title="Доступи до папки" onClick={() => setAccessFolder(f)} style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)" }}>⚙</button>
                         <button title="Перейменувати" onClick={() => { const n = window.prompt("Нова назва папки:", f.name)?.trim(); if (n && n !== f.name) void renameDocFolder(f.id, n).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}
                           style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 12, color: "var(--text-muted)" }}>✎</button>
                         <button title="Прибрати папку (файли лишаються на диску)" onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }}
@@ -219,72 +221,76 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
               })}
             </div>
           )}
+          <div className="chart-card">
+            <div style={label}>Типи документів</div>
+            {[...DOC_TYPES].filter((t) => typeCounts.has(t)).map((t) => (
+              <button key={t} onClick={() => setTypeFilter(typeFilter === t ? null : t)}
+                style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", border: "none", background: typeFilter === t ? "var(--surface-2)" : "transparent", borderRadius: "var(--r-md)", padding: "6px 8px", cursor: "pointer", textAlign: "left", color: "var(--text)" }}>
+                <span className="task-status-dot" style={{ background: TYPE_META[t].color }} />
+                <span style={{ flex: 1 }}><div style={{ fontSize: "var(--fs-13)", fontWeight: typeFilter === t ? 600 : 400 }}>{t}</div><div className="orph-dim">{TYPE_META[t].action}</div></span>
+                <span className="orph-dim">{typeCounts.get(t)}</span>
+              </button>
+            ))}
+            {typeCounts.size === 0 && <p className="loading-text" style={{ margin: 0, fontSize: "var(--fs-sm)" }}>у розділі поки нічого</p>}
+          </div>
         </div>
 
         {/* Список */}
-        <div style={card}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-            <div style={{ fontWeight: 700, fontSize: 15 }}>Усі документи <span style={{ color: "var(--text-muted)", fontWeight: 500, fontSize: 13 }}>{files.length} {files.length === 1 ? "файл" : files.length < 5 ? "файли" : "файлів"}</span></div>
-            <div style={{ display: "flex", gap: 2, background: "var(--bg, #f3f4f6)", borderRadius: 10, padding: 3 }}>
-              {([["type", "за типом"], ["folder", "за папкою"], ["date", "за датою"]] as [GroupBy, string][]).map(([k, l]) => (
-                <button key={k} onClick={() => setGroupBy(k)} style={{ border: "none", borderRadius: 8, padding: "5px 10px", fontSize: 12, cursor: "pointer", fontWeight: groupBy === k ? 700 : 500, background: groupBy === k ? "var(--card-bg)" : "transparent", color: "var(--text)" }}>{l}</button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-            <Chip label="Усі" active={typeFilter === null} onClick={() => setTypeFilter(null)} />
-            {[...DOC_TYPES].filter((t) => typeCounts.has(t)).map((t) => <Chip key={t} label={t} active={typeFilter === t} onClick={() => setTypeFilter(typeFilter === t ? null : t)} />)}
-          </div>
-          {section === "offer" && (
-            <div style={{ fontSize: 13, background: "var(--bg, #f3f4f6)", borderRadius: 10, padding: "8px 12px", marginBottom: 10 }}>
-              🔒 <b>Закрита папка.</b> {viewer.isManagement ? "Ви бачите всі офери, бо ви керівництво. Менеджер бачить лише свій, керівник відділу — жодного." : "Вам видно тільки ваш власний офер. Чужі сюди не потрапляють навіть у пошук."}
-            </div>
-          )}
-          {section === "archive" && (
-            <div style={{ fontSize: 13, background: "var(--bg, #f3f4f6)", borderRadius: 10, padding: "8px 12px", marginBottom: 10 }}>
-              ⏳ <b>Архів формується при звільненні.</b> Офер і особисті документи людини переїжджають сюди; видалення недоступне нікому.
-            </div>
-          )}
+        <div className="chart-card">
+          <h2 className="chart-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>Документи <span className="orph-dim">{files.length} {files.length === 1 ? "файл" : files.length < 5 ? "файли" : "файлів"}</span></h2>
+          {section === "offer" && <p style={{ ...noteBox, marginTop: 0 }}>🔒 <b>Закрита папка.</b> {viewer.isManagement ? "Ви бачите всі офери, бо ви керівництво. Менеджер бачить лише свій, керівник відділу — жодного." : "Вам видно тільки ваш власний офер. Чужі сюди не потрапляють навіть у пошук."}</p>}
+          {section === "archive" && <p style={{ ...noteBox, marginTop: 0 }}>⏳ <b>Архів формується при звільненні.</b> Офер і особисті документи людини переїжджають сюди; видалення недоступне нікому.</p>}
           {files.length === 0 ? (
             sectionFiles.length === 0
               ? <StateBlock icon="🗀" title={section === "archive" ? "В архіві ще нічого немає" : "У папці ще нічого немає"} text={canUploadHere ? "Перетягніть файли сюди або натисніть «Завантажити»." : "Документи сюди викладає керівництво."}
                   action={canUploadHere ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
               : <p className="loading-text" style={{ margin: 0 }}>Нічого не знайдено за фільтром.</p>
-          ) : groups.map((g) => (
-            <div key={g.key} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".06em", color: groupBy === "type" ? TYPE_META[g.key]?.color ?? "var(--text)" : "var(--text)" }}>
-                  <span style={{ display: "inline-block", width: 18, height: 3, background: "currentColor", marginRight: 8, verticalAlign: "middle" }} />{g.key.toUpperCase()} · {g.items.length}
-                </span>
-                {groupBy === "type" && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{TYPE_META[g.key]?.action}</span>}
-              </div>
-              {g.items.map((f) => {
-                const t = TYPE_META[f.category ?? "Інше"] ?? TYPE_META["Інше"]; const sel = f.id === selected;
-                return (
-                  <div key={f.id} onClick={() => setSelected(f.id)}
-                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 8px", borderRadius: 10, cursor: "pointer", background: sel ? t.color + "12" : "transparent", borderLeft: sel ? `3px solid ${t.color}` : "3px solid transparent" }}>
-                    <span style={{ width: 42, height: 46, borderRadius: 8, border: `1px solid ${t.color}55`, background: t.color + "10", color: t.color, display: "grid", placeItems: "center", fontSize: 9, fontWeight: 800 }}>{extOf(f.name, f.mime)}</span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                        {section === "offer" ? "🔒 Офери" : section === "archive" ? "Архів" : folderName(f.folderId)} · v{f.version} · {fmtDate(f.updatedAt)} · {f.addressee ?? f.author ?? "автор невідомий"}
-                      </div>
-                    </span>
-                    {f.archivedAt && <span style={pill("var(--border)", "var(--text-muted)")}>звільнено {fmtDate(f.archivedAt)}</span>}
-                    <SigBadge f={f} />
-                    <span style={pill("var(--bg, #f3f4f6)", "var(--text-muted)")}>{fmtBytes(f.sizeBytes)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          ) : (
+            <table className="data-table" style={{ fontSize: "var(--fs-13)" }}>
+              <thead><tr><th>Документ</th><th>Папка</th><th>Версія</th><th>Оновлено</th><th>Хто</th><th>Статус</th><th style={{ textAlign: "right" }}>Розмір</th></tr></thead>
+              <tbody>
+                {groups.map((g) => (
+                  <React.Fragment key={g.key}>
+                    <tr className="orph-group" style={{ cursor: "default" }}>
+                      <td colSpan={7} style={{ padding: "9px 8px" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: "var(--fs-sm)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: groupBy === "type" ? TYPE_META[g.key]?.color ?? "var(--text)" : "var(--text)" }}>
+                          {groupBy === "type" && <span className="task-status-dot" style={{ background: TYPE_META[g.key]?.color }} />}{g.key} · {g.items.length}
+                        </span>
+                        {groupBy === "type" && <span className="orph-dim" style={{ marginLeft: 10 }}>{TYPE_META[g.key]?.action}</span>}
+                      </td>
+                    </tr>
+                    {g.items.map((f) => {
+                      const t = TYPE_META[f.category ?? "Інше"] ?? TYPE_META["Інше"]; const sel = f.id === selected;
+                      return (
+                        <tr key={f.id} className="recv-row" tabIndex={0} onClick={() => setSelected(f.id)} onKeyDown={(e) => { if (e.key === "Enter") setSelected(f.id); }}
+                          style={{ cursor: "pointer", background: sel ? "var(--surface-2)" : undefined, boxShadow: sel ? "inset 3px 0 0 var(--brand)" : undefined }}>
+                          <td style={{ paddingLeft: 8, maxWidth: 360 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: t.color, border: `1px solid ${t.color}55`, borderRadius: "var(--r-sm)", padding: "1px 5px", flex: "0 0 auto" }}>{extOf(f.name, f.mime)}</span>
+                              <span style={{ fontWeight: sel ? 700 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</span>
+                            </div>
+                          </td>
+                          <td className="orph-dim">{section === "offer" ? "🔒 Офери" : section === "archive" ? "Архів" : folderName(f.folderId)}</td>
+                          <td className="recv-num">v{f.version}</td>
+                          <td className="recv-num">{fmtDate(f.updatedAt)}</td>
+                          <td>{f.addressee ?? f.author ?? <span className="orph-dim">автор не вказаний</span>}</td>
+                          <td>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>звільнено {fmtDate(f.archivedAt)}</span> : <SigBadge f={f} />}</td>
+                          <td className="recv-num" style={{ textAlign: "right" }}>{fmtBytes(f.sizeBytes)}</td>
+                        </tr>
+                      );
+                    })}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
         {/* Картка */}
         <div>
           {selectedFile
             ? <DocCardPanel key={selectedFile.id} file={selectedFile} tree={tree} onChanged={load} onClose={() => setSelected(null)} onToast={setToast} folderName={folderName} />
-            : <div style={{ ...card, color: "var(--text-muted)", fontSize: 13 }}>Оберіть документ у списку, щоб побачити картку: прев'ю, версії, хто бачить, підпис.</div>}
+            : <div className="chart-card"><p className="loading-text" style={{ margin: 0, fontSize: "var(--fs-13)" }}>Оберіть документ у списку — тут зʼявиться картка: прев'ю, версії, хто бачить, підпис.</p></div>}
         </div>
       </div>
 
@@ -296,15 +302,15 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
 }
 
 function Chip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return <button onClick={onClick} style={{ border: `1px solid ${active ? "var(--text)" : "var(--border-strong)"}`, borderRadius: 999, background: active ? "var(--text)" : "transparent", color: active ? "var(--card-bg)" : "var(--text)", fontSize: 12, padding: "4px 12px", cursor: "pointer", fontWeight: active ? 700 : 500 }}>{label}</button>;
+  return <button type="button" className="orph-chip" aria-pressed={active} onClick={onClick} style={{ padding: "5px 12px", fontSize: 12 }}>{label}</button>;
 }
 
 function StateBlock({ icon, title, text, action, inline }: { icon: string; title: string; text: string; action?: React.ReactNode; inline?: boolean }) {
   return (
-    <div style={{ ...(inline ? {} : card), textAlign: "center", padding: inline ? "28px 12px" : 40 }}>
-      <div style={{ width: 52, height: 52, borderRadius: 14, background: "var(--bg, #f3f4f6)", display: "grid", placeItems: "center", margin: "0 auto 12px", fontSize: 22 }}>{icon}</div>
-      <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 13, color: "var(--text-muted)", maxWidth: 420, margin: "0 auto 14px" }}>{text}</div>
+    <div className={inline ? undefined : "chart-card"} style={{ textAlign: "center", padding: inline ? "28px 12px" : 40 }}>
+      <div style={{ width: 52, height: 52, borderRadius: "var(--r-2xl)", background: "var(--surface-2)", display: "grid", placeItems: "center", margin: "0 auto 12px", fontSize: 22 }}>{icon}</div>
+      <div style={{ fontWeight: 700, fontSize: "var(--fs-lg)", marginBottom: 6 }}>{title}</div>
+      <p className="loading-text" style={{ fontSize: "var(--fs-13)", maxWidth: 420, margin: "0 auto 14px" }}>{text}</p>
       {action}
     </div>
   );
@@ -366,20 +372,20 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const evAt = (k: string) => events.find((e) => e.kind === k)?.at ?? null;
 
   return (
-    <div style={{ ...card, position: "sticky", top: 12, display: "flex", flexDirection: "column", gap: 12, maxHeight: "calc(100vh - 40px)", overflowY: "auto" }}>
+    <div className="chart-card" style={{ position: "sticky", top: 12, display: "flex", flexDirection: "column", gap: 12, maxHeight: "calc(100vh - 40px)", overflowY: "auto" }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <span style={pill(t.color + "22", t.color)}>● {file.category ?? "Інше"}</span>
-        <span style={pill("var(--bg, #f3f4f6)", "var(--text-muted)")}>{extOf(file.name, file.mime)}</span>
-        <span style={pill("var(--bg, #f3f4f6)", "var(--text-muted)")}>v{file.version}</span>
-        {file.section === "offer" && !file.archivedAt && <span style={pill("#dbeafe", "#1d4ed8")}>🔒 закрита папка</span>}
-        {file.archivedAt && <span style={pill("var(--border)", "var(--text-muted)")}>архів · {file.archivedReason === "dismissed" ? "звільнено" : "прибрано"} {fmtDate(file.archivedAt)}</span>}
+        <span style={pill("var(--surface-2)", "var(--text-muted)")}>{extOf(file.name, file.mime)}</span>
+        <span style={pill("var(--surface-2)", "var(--text-muted)")}>v{file.version}</span>
+        {file.section === "offer" && !file.archivedAt && <span style={pill("var(--info-bg)", "var(--info)")}>🔒 закрита папка</span>}
+        {file.archivedAt && <span style={pill("var(--surface-2)", "var(--text-muted)")}>архів · {file.archivedReason === "dismissed" ? "звільнено" : "прибрано"} {fmtDate(file.archivedAt)}</span>}
         <button onClick={onClose} title="Закрити" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", fontSize: 16, color: "var(--text-muted)" }}>✕</button>
       </div>
-      <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.25 }}>{file.name}</div>
+      <h2 className="chart-title" style={{ marginBottom: 0, lineHeight: 1.3 }}>{file.name}</h2>
       {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
 
       {/* Прев'ю */}
-      <div style={{ border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg, #f3f4f6)", minHeight: 120, overflow: "hidden" }}>
+      <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", background: "var(--surface-2)", minHeight: 120, overflow: "hidden" }}>
         {kind === "none" ? (
           <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)", textAlign: "center" }}>{extOf(file.name, file.mime)} у дашборді не показується — відкривається завантаженням. PDF, зображення й HTML показуються тут.</div>
         ) : !preview ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження прев'ю…</div>
@@ -389,7 +395,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
 
       {file.description ? <div style={{ fontSize: 13 }}>{file.description}</div> : file.canEdit && <button onClick={editDescription} style={{ ...btn(), fontSize: 12, padding: "4px 10px", alignSelf: "flex-start" }}>+ опис</button>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", rowGap: 6, fontSize: 13 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", rowGap: 6, fontSize: "var(--fs-13)" }}>
         <span style={{ color: "var(--text-muted)" }}>Папка</span><span>{file.section === "offer" ? "🔒 Офери" : file.archivedAt ? "Архів" : folderName(file.folderId)}</span>
         <span style={{ color: "var(--text-muted)" }}>Виклав</span><span>{file.author ?? "невідомо"}</span>
         {file.addressee && <><span style={{ color: "var(--text-muted)" }}>Адресат</span><span>{file.addressee}</span></>}
@@ -397,13 +403,13 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         <span style={{ color: "var(--text-muted)" }}>Розмір</span><span>{fmtBytes(file.sizeBytes)}</span>
         <span style={{ color: "var(--text-muted)" }}>Хеш</span><span style={{ fontFamily: "ui-monospace, monospace", fontSize: 11, color: "var(--text-muted)" }} title={file.sha256 ?? ""}>{file.sha256 ? `sha256 · ${file.sha256.slice(0, 12)}…${file.sha256.slice(-6)}` : "хеша немає (старий файл)"}</span>
         {file.canEdit && <><span style={{ color: "var(--text-muted)" }}>Тип</span>
-          <select value={file.category ?? "Інше"} onChange={(e) => changeType(e.target.value)} style={{ ...inp, padding: "3px 6px", fontSize: 12 }}>{DOC_TYPES.map((c) => <option key={c}>{c}</option>)}</select></>}
+          <select value={file.category ?? "Інше"} onChange={(e) => changeType(e.target.value)} style={{ padding: "3px 6px", fontSize: 12 }}>{DOC_TYPES.map((c) => <option key={c}>{c}</option>)}</select></>}
       </div>
 
       {/* Підпис */}
       {file.section === "offer" && (
-        <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "var(--text-muted)", marginBottom: 8 }}>ПІДПИС</div>
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: 12 }}>
+          <div style={label}>Підпис</div>
           <Timeline steps={[
             { label: "Надіслано", at: evAt("sent") ?? file.createdAt, done: true, note: file.addressee ?? undefined },
             { label: "Відкрито", at: evAt("opened"), done: !!evAt("opened") },
@@ -421,10 +427,8 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
       )}
 
       {/* Хто бачить */}
-      <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "var(--text-muted)", marginBottom: 8 }}>
-          <span>ХТО БАЧИТЬ ЦЕЙ ДОКУМЕНТ</span>
-        </div>
+      <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: 12 }}>
+        <div style={label}>Хто бачить цей документ</div>
         {mgmt ? (viewers ? (
           <>
             {viewers.who.map((w, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0" }}><span>{w.label}</span><span style={{ color: "var(--text-muted)", fontSize: 12 }}>{w.note}</span></div>)}
@@ -464,7 +468,7 @@ function Timeline({ steps }: { steps: { label: string; at: string | null; done: 
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {steps.map((s, i) => (
         <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-          <span style={{ width: 20, height: 20, borderRadius: "50%", background: s.done ? "var(--ok)" : "var(--border)", color: "#fff", display: "grid", placeItems: "center", fontSize: 11, flex: "0 0 auto" }}>{s.done ? "✓" : ""}</span>
+          <span style={{ width: 20, height: 20, borderRadius: "50%", background: s.done ? "var(--ok)" : "var(--border-strong)", color: "#fff", display: "grid", placeItems: "center", fontSize: 11, flex: "0 0 auto" }}>{s.done ? "✓" : ""}</span>
           <span><div style={{ fontWeight: 700, fontSize: 13 }}>{s.label}</div><div style={{ fontSize: 12, color: "var(--text-muted)" }}>{s.at ? `${fmtDate(s.at)}${s.note ? ` · ${s.note}` : ""}` : "ще ні"}</div></span>
         </div>
       ))}
@@ -534,7 +538,7 @@ function UploadDialog({ tree, section: initial, defaultFolder, onClose, onDone }
         </Field>
         <Field label="Опис (необовʼязково)"><input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="одним реченням: про що документ" style={inp} /></Field>
         <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); setFiles(Array.from(e.dataTransfer.files)); }}
-          style={{ border: `2px dashed ${drag ? "var(--brand)" : "var(--border-strong)"}`, borderRadius: 12, padding: 18, textAlign: "center", fontSize: 13, color: "var(--text-muted)" }}>
+          style={{ border: `2px dashed ${drag ? "var(--brand)" : "var(--border-strong)"}`, borderRadius: "var(--r-lg)", padding: 18, textAlign: "center", fontSize: "var(--fs-13)", color: "var(--text-muted)" }}>
           {files.length ? files.map((f) => <div key={f.name} style={{ color: "var(--text)", fontWeight: 600 }}>{f.name} · {fmtBytes(f.size)}</div>) : "Перетягніть файли сюди або"}
           <div style={{ marginTop: 8 }}><label style={{ ...btn(), cursor: "pointer" }}>Обрати файл<input type="file" multiple={section === "general"} hidden onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></label></div>
           <div style={{ fontSize: 11, marginTop: 6 }}>до {MAX_MB} МБ · PDF, зображення і HTML відкриваються в дашборді, решта — завантаженням</div>
@@ -602,7 +606,7 @@ function SignDialog({ file, onClose, onDone }: { file: DocFile; onClose: () => v
           ["paper_photo", "Фото паперового варіанта", "Роздрукуй, підпиши, сфотографуй або відскануй і додай сюди.", true],
           ["diia", "Дія.Підпис (КЕП)", "Після підключення до Дії — договір, сертифікат, тест.", false],
         ] as [typeof method, string, string, boolean][]).map(([k, l, d, on]) => (
-          <label key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start", border: `1px solid ${method === k ? "var(--brand)" : "var(--border)"}`, borderRadius: 10, padding: 10, cursor: on ? "pointer" : "not-allowed", opacity: on ? 1 : .6 }}>
+          <label key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start", border: `1px solid ${method === k ? "var(--brand)" : "var(--border)"}`, borderRadius: "var(--r-lg)", padding: 10, cursor: on ? "pointer" : "not-allowed", opacity: on ? 1 : .6 }}>
             <input type="radio" checked={method === k} disabled={!on} onChange={() => { setMethod(k); setErr(null); }} />
             <span><div style={{ fontWeight: 700, fontSize: 13 }}>{l}</div><div style={{ fontSize: 12, color: "var(--text-muted)" }}>{d}</div></span>
           </label>
@@ -690,16 +694,16 @@ function AccessDialog({ folder, onClose, onSaved }: { folder: DocFolder; onClose
       {err && <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8 }}>{err}</div>}
       {!data ? <p className="loading-text">Завантаження…</p> : (
         <>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table className="data-table" style={{ fontSize: "var(--fs-13)" }}>
             <thead><tr>
-              <th style={{ textAlign: "left", fontSize: 11, color: "var(--text-muted)", padding: "6px 4px", letterSpacing: ".06em" }}>РОЛЬ</th>
-              {cols.map(([k, l]) => <th key={k} style={{ fontSize: 10, color: "var(--text-muted)", padding: "6px 4px", letterSpacing: ".06em", textAlign: "center" }}>{l}</th>)}
+              <th>Роль</th>
+              {cols.map(([k, l]) => <th key={k} style={{ textAlign: "center", fontSize: 11 }}>{l.charAt(0) + l.slice(1).toLowerCase()}</th>)}
             </tr></thead>
             <tbody>
               {data.roles.map((r) => (
-                <tr key={r.key} style={{ borderTop: "1px solid var(--border)" }}>
-                  <td style={{ padding: "8px 4px" }}>
-                    <div style={{ fontWeight: 700 }}>{r.name}{r.management && <span style={{ ...pill("#dbeafe", "#1d4ed8"), marginLeft: 8 }}>керівництво</span>}</div>
+                <tr key={r.key}>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{r.name}{r.management && <span style={{ ...pill("var(--info-bg)", "var(--info)"), marginLeft: 8 }}>керівництво</span>}</div>
                     <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{r.management ? "повний доступ, змінює права" : r.key === "team_lead" ? "тімлід своєї команди" : r.key === "manager" ? "лише свій документ в оферах" : ""}</div>
                   </td>
                   {cols.map(([k]) => (
@@ -711,9 +715,9 @@ function AccessDialog({ folder, onClose, onSaved }: { folder: DocFolder; onClose
               ))}
             </tbody>
           </table>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "var(--text-muted)", margin: "16px 0 8px" }}>ПЕРСОНАЛЬНІ ВИНЯТКИ</div>
+          <div className="section-heading">Персональні винятки</div>
           {data.grants.map((g, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px", marginBottom: 6, fontSize: 13 }}>
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: "8px 10px", marginBottom: 6, fontSize: "var(--fs-13)" }}>
               <b>{g.name}</b>
               <label style={{ fontSize: 12 }}><input type="checkbox" checked={g.canView} onChange={() => setData({ ...data, grants: data.grants.map((x, j) => j === i ? { ...x, canView: !x.canView } : x) })} /> бачить</label>
               <label style={{ fontSize: 12 }}><input type="checkbox" checked={g.canUpload} onChange={() => setData({ ...data, grants: data.grants.map((x, j) => j === i ? { ...x, canUpload: !x.canUpload } : x) })} /> завантажує</label>
@@ -737,20 +741,20 @@ function AccessDialog({ folder, onClose, onSaved }: { folder: DocFolder; onClose
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div><div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", marginBottom: 4 }}>{label}</div>{children}</div>;
+function Field({ label: l, children }: { label: string; children: React.ReactNode }) {
+  return <div><label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>{l}</label>{children}</div>;
 }
+/** Модалка — той самий вигляд, що вкладення в Задачнику: темна підкладка, картка з chart-title і ✕. */
 function Modal({ title, width, onClose, children }: { title: string; width: number; onClose: () => void; children: React.ReactNode }) {
   return (
-    <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 59, background: "rgba(0,0,0,0.45)" }} />
-      <div role="dialog" aria-label={title} style={{ position: "fixed", zIndex: 60, top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: `min(${width}px, 94vw)`, maxHeight: "90vh", overflowY: "auto", ...card, padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,.25)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ fontSize: 18, fontWeight: 800 }}>{title}</div>
-          <button onClick={onClose} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 18, color: "var(--text-muted)" }}>✕</button>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2700, padding: 20 }}>
+      <div role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: "var(--r-lg)", padding: "var(--sp-5)", width: "92vw", maxWidth: width, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--sp-4)", gap: 12 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>{title}</h2>
+          <button onClick={onClose} style={{ border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", borderRadius: "var(--r-md)", padding: "4px 12px", cursor: "pointer" }}>✕</button>
         </div>
         {children}
       </div>
-    </>
+    </div>
   );
 }
