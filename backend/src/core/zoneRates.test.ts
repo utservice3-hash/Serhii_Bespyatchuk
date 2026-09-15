@@ -40,3 +40,42 @@ test("#397b СЛОВНИК ПРИЧИН == CHECK loyalty_overrides_archive_reaso
   assert.deepEqual(inSchema, [...CLOSE_REASON_KEYS].sort(), "словник у коді й CHECK у схемі розійшлися");
   assert.ok(inSchema.includes("carrier") && inSchema.includes("one_off"), "нові причини 10.09 не доїхали до CHECK");
 });
+
+/**
+ * #397c — ДОВАНТАЖ == повідомлення Андрія Безпамʼятного 11.09.2026, число в число:
+ * «до 2 м 15-18-20, до 3 м 20-22-25 за км по зонах». 🪞 Чотири тоннажі при цьому не
+ * рухаються (той самий expected, що в #397). Червоніє на зміні будь-якого числа.
+ */
+test("#397c ДОВАНТАЖ == повідомлення КВП 11.09.2026 (2 м 15/18/20, 3 м 20/22/25), тоннажі на місці", async () => {
+  const { PARTIAL_RATES } = await import("./zoneRates.js");
+  assert.deepEqual(PARTIAL_RATES.map((b) => ({ label: b.label, ...b.rates })), [
+    { label: "Довантаж до 2 м", green: [15, 15], yellow: [18, 18], red: [20, 20] },
+    { label: "Довантаж до 3 м", green: [20, 20], yellow: [22, 22], red: [25, 25] },
+  ]);
+  assert.equal(ZONE_RATES.length, 4, "тоннажів має лишитись рівно чотири");
+  assert.deepEqual(ZONE_RATES[0].rates, { green: [30, 30], yellow: [35, 35], red: [35, 40] });
+});
+
+/**
+ * #397d — У ВІДПОВІДІ КАЛЬКУЛЯТОРА довантаж іде окремою групою: рівно 4 vehicle + 2 partial,
+ * partial ніколи не selected, «Клієнту» для нього null (маржі КВП не називав — не вигадуємо),
+ * а грн/км несе коротке плече ×1.5 так само, як авто. Червоніє, якщо довантаж зникне з
+ * options, стане selected, отримає вигадану маржу або втратить коефіцієнт.
+ */
+test("#397d ОПЦІЇ: 4 авто + 2 довантажі, довантаж не обирається і без вигаданої маржі", async () => {
+  const { zoneRecommendation } = await import("./zoneRates.js");
+  const r = zoneRecommendation("Київська область", "Львівська область", 3, 80)!;
+  assert.ok(r, "зона не розпізналась — перевірці нема що знаходити");
+  const vehicles = r.options.filter((o) => o.kind === "vehicle");
+  const partial = r.options.filter((o) => o.kind === "partial");
+  assert.equal(vehicles.length, 4); assert.equal(partial.length, 2);
+  assert.equal(vehicles.filter((o) => o.selected).length, 1, "рівно один тоннаж обраний");
+  assert.ok(partial.every((o) => !o.selected && o.client_min === null && o.margin === null));
+  const two = partial[0];
+  const perKm = { green: 15, yellow: 18, red: 20 }[r.zone as "green" | "yellow" | "red"];
+  assert.equal(two.per_km_min, Math.round(perKm * 1.5), "коротке плече ×1.5 не застосовано");
+  assert.equal(two.total_min, Math.round(perKm * 1.5 * 80));
+  // 🪞 На довгому плечі коефіцієнта немає.
+  const far = zoneRecommendation("Київська область", "Львівська область", 3, 500)!;
+  assert.equal(far.options.find((o) => o.kind === "partial")!.per_km_min, perKm);
+});

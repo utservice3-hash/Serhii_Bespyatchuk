@@ -256,15 +256,34 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/lead-quality", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
-  // 📊 Екран «Реклама». Ролі — рішення власника 08.09.2026 дослівно: «всі в кого є
-  // адмін, квп, всі керівники». Тобто дзеркало /lead-quality МІНУС financier
-  // (він не керівник) — свідома різниця, не копіпаста.
+  /* 📊 Екран «Реклама».
+     🟢 РІШЕННЯ ВЛАСНИКА 09.09.2026: **фінансист бачить**. Це ЗМІНА, а не дрейф — і
+     записана вона тут саме тому, що доти зліпок стверджував протилежне.
+     ⚠️ Було 08.09.2026: «всі в кого є адмін, квп, всі керівники», і `financier` свідомо
+     виключили як «не керівника». Рішення переглянуто: витрати на рекламу — фінансове
+     питання, і людина, що веде гроші, має їх бачити.
+     📐 ЯК ЦЕ ЗНАЙШЛОСЬ, і чому це аргумент за `acceptMatrix`. Доступ уже БУВ відкритий у
+     базі (`roles.screen_access.ads = true` у фінансиста — вкладка додалась ролі сама,
+     без чийогось рішення), а зліпок казав `deny`. Прохід, що вносив екран, свого
+     `acceptMatrix` не добіг — його ланцюг обірвався на `accept`. Тобто клітинка пливла
+     доти, доки чужий викат не дійшов до матриці. Це рівно той випадок, заради якого крок
+     і винесли окремо: «11 клітинок пливли непоміченими шість днів». */
   { method: "GET", path: "/api/dashboard/ads", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
-  // Склад дня — ТІ САМІ межі, що в самого екрана: список угод не може бути
-  // доступніший за число, з якого він зроблений.
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
+  /* Склад дня — ТІ САМІ межі, що в самого екрана: список угод не може бути доступніший
+     за число, з якого він зроблений.
+     🔴 І ЦЯ МЕЖА НЕ ОБИРАЄТЬСЯ ОКРЕМО — ВОНА ВИМУШЕНА. Обидва роути ловить ОДИН
+     tab-гейт `pre("/api/dashboard/ads") → ["ads"]` (`routeTab.ts`), а обробник складу
+     дня відмовляє РІВНО менеджеру (`dashboard.ts`). Отже щойно вкладка `ads` відкрилась
+     ролі, сервер пускає її в ОБИДВА роути — і рядок, що казав би про них різне, був би
+     просто неправдою, тією самою, яку цей прохід прийшов прибрати.
+     📐 Тому `financier` їде сюди РАЗОМ із рішенням 09.09.2026 про екран: це не
+     розширення обсягу, а той самий дозвіл, записаний у другій клітинці. Поведінки
+     сервера прохід не змінює ЖОДНИМ рядком — лише перестає про неї брехати.
+     ⚠️ Хотіти склад дня ВУЖЧИМ за екран можна — але це вже зміна ПОВЕДІНКИ (явна
+     відмова в обробнику) з власним прийманням, а не вибір при резолюції мержу. */
   { method: "GET", path: "/api/dashboard/ads/deals", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
@@ -405,8 +424,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager"] },
   { method: "PUT", path: "/api/dashboard/reactivation", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🔓 14.09.2026: кандидатів бачить кожен, хто ставить задачі (роут під вкладкою tasks,
+  // і GET /api/tasks дозволений усім вісьмом ролям).
   { method: "GET", path: "/api/dashboard/reactivation-candidates", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "DELETE", path: "/api/dashboard/reactivation/:clientKey", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/receivables", cls: "GET",
@@ -414,6 +435,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "PUT", path: "/api/dashboard/receivables/invoice-note", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/receivables/invoices", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/receivables/payment-requests", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "PUT", path: "/api/dashboard/receivables/note", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
@@ -766,10 +789,45 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "PATCH", path: "/api/tasks/:id", cls: "deny-only",
     allow: [], deny: [] },
+  // ─── Задачник 14.09.2026: спільна задача (стрічка, історія, вкладення) + групи ───
+  // Межу всім тримає та сама вкладка `tasks` (`pre("/api/tasks")` у routeTab.ts),
+  // тож склад ролей дзеркалить рядок `GET /api/tasks`. Проба підставляє `:id` → «0»
+  // (`fill()` у accessMatrix.test.ts), а такої задачі не існує → 400 «некоректний
+  // ідентифікатор». Для матриці 400 — це ПРОЙДЕНИЙ гейт, і саме тому клас `GET`
+  // тут безпечний: жодного рядка не читається й не пишеться.
+  { method: "GET", path: "/api/tasks/:id/comments", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "POST", path: "/api/tasks/:id/comments", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "GET", path: "/api/tasks/:id/files", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "POST", path: "/api/tasks/:id/files", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "GET", path: "/api/tasks/:id/files/:fileId", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "DELETE", path: "/api/tasks/:id/files/:fileId", cls: "DELETE-ghost",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "GET", path: "/api/tasks/:id/history", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "POST", path: "/api/tasks/:id/seen", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "GET", path: "/api/tasks/assignees", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "GET", path: "/api/tasks/groups", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "POST", path: "/api/tasks/groups", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "PATCH", path: "/api/tasks/groups/:id", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "DELETE", path: "/api/tasks/groups/:id", cls: "DELETE-ghost",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "POST", path: "/api/tasks/plan", cls: "deny-only",
     allow: [], deny: [] },
+  // 🔓 14.09.2026, рішення власника: реактиваційну задачу ставить будь-хто. Заміряно:
+  // POST /api/tasks не забороняє нікому, тож і тут deny порожній — інакше hr міг би
+  // створити звичайну задачу, але не реактиваційну, без жодної причини.
   { method: "POST", path: "/api/tasks/reactivation", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: [] },
   { method: "GET", path: "/api/teams", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/teams/managers", cls: "GET",

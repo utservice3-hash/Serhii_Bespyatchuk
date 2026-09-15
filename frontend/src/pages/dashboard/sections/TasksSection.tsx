@@ -1,13 +1,24 @@
 import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { parseTaskIdParam, deepLinkState } from "../taskDeepLink";
 import {
   createReactivationTask,
   fetchReactivationCandidates,
+  fetchTaskGroups, createTaskGroup, deleteTaskGroup,
+  fetchTaskComments, createTaskComment, fetchTaskHistory,
+  fetchTaskFiles, uploadTaskFile, deleteTaskFile, fetchTaskFileBlobUrl,
+  markTaskSeen, fetchTaskAssignees,
+  TASK_FILE_MAX_BYTES, TASK_FILES_PER_TASK,
   type ManagerOption,
   type ReactivationManager,
   type Task,
   type TaskPriority,
   type Team,
   type Subtask,
+  type TaskGroup,
+  type TaskComment,
+  type TaskFile,
+  type TaskHistoryEntry,
+  type TaskAssignee,
 } from "../../../api";
 import { PRIORITY_LABELS } from "../constants";
 import { CommentField } from "../../../components/CommentField";
@@ -251,6 +262,255 @@ function AssigneeCell({ value, name, options, onChange }: {
   );
 }
 
+/**
+ * 🗣 ТЕКСТ ВІДМОВИ БЕРЕТЬСЯ З СЕРВЕРА, А НЕ З AXIOS.
+ *
+ * `err.message` в axios — це «Request failed with status code 403», тобто рівно те
+ * повідомлення, яке людині нічого не каже. Причину сервер пише в тілі
+ * (`{ error: "…" }`), і саме вона мусить дійти до екрана: «Вкладення доступні лише
+ * автору та виконавцю задачі» — це відповідь, а код 403 — ні.
+ */
+function errText(e: unknown, fallback: string): string {
+  const body = (e as { response?: { data?: { error?: unknown } } })?.response?.data?.error;
+  if (typeof body === "string" && body.trim()) return body;
+  return e instanceof Error && e.message ? e.message : fallback;
+}
+
+/**
+ * 👁 ПЕРЕГЛЯДАЧ ВКЛАДЕНЬ ЗАДАЧІ — відкривається ЗІ СПИСКУ, колонкою праворуч від
+ * коментаря (вимога власника 14.09.2026: «немає перегляду файлів»).
+ *
+ * 🔴 ЧОМУ ЦЕ НЕ `window.open(blobUrl)`, ЯК БУЛО В КАРТЦІ. Стара кнопка відкривала
+ * файл окремою вкладкою браузера: людина виходила з дашборду, поверталась руками,
+ * а блокувальник попапів міг просто нічого не зробити — відмова, яку неможливо
+ * відрізнити від роботи. Тепер картинка, PDF і відео показуються НА МІСЦІ.
+ *
+ * 🔒 Байти йдуть ЗАГОЛОВКОМ авторизації (`api.get` → `responseType: "blob"`), тому
+ * `<img src="/api/…">` тут не годиться в принципі: токен у заголовку, а не в URL.
+ * Звідси blob-URL і обовʼязковий `revokeObjectURL` — інакше кожне відкриття
+ * лишало б копію файла в памʼяті вкладки.
+ *
+ * ⚠️ ВІДМОВА НАЗИВАЄ СЕБЕ. Сервер віддає 403 «Вкладення доступні лише автору та
+ * виконавцю задачі» — і цей текст показується як є. Порожня модалка на місці
+ * відмови читалась би як «файлів немає», тобто брехала б про дані.
+ */
+function TaskFilesViewer({ taskId, taskTitle, onClose }: {
+  taskId: number; taskTitle: string; onClose: () => void;
+}) {
+  const [list, setList] = useState<TaskFile[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [pick, setPick] = useState<number | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setErr(null);
+    fetchTaskFiles(taskId)
+      .then((fs) => { if (!alive) return; setList(fs); setPick(fs[0]?.id ?? null); })
+      .catch((e) => { if (alive) setErr(errText(e, "вкладення не відкрились")); });
+    return () => { alive = false; };
+  }, [taskId]);
+
+  /**
+   * 🔴 СТОРОЖ `alive` ТУТ ОБОВʼЯЗКОВИЙ, І ЙОГО ВІДСУТНІСТЬ ДАВАЛА ДВА БАГИ ОДНИМ
+   * РЯДКОМ (знайдено рецензією 14.09.2026):
+   *  ① БАЙТИ НЕ ТОГО ФАЙЛА. Прибирач попереднього ефекту виконується, коли `u` ще
+   *    `null` (запит не повернувся), тож нічого не відкликає — а коли повільний
+   *    перший файл нарешті приходить, він БЕЗУМОВНО робить `setBlobUrl`, затираючи
+   *    вже показаний другий. На екрані назва одного вкладення й байти іншого.
+   *  ② ВТРАЧЕНА КОПІЯ. Той самий `u === null` означає, що blob першого файла не
+   *    відкликається НІКОЛИ — до перезавантаження сторінки.
+   * Тому відкликаємо і в прибирачі, і одразу, якщо ефект уже не живий.
+   *
+   * `setErr(null)` на початку — щоб плашка попередньої невдачі не висіла над
+   * файлом, який відкрився нормально (правило: відмова мусить стосуватись того, що
+   * зараз на екрані).
+   */
+  useEffect(() => {
+    if (pick == null) { setBlobUrl(null); return; }
+    let alive = true;
+    let u: string | null = null;
+    setBlobUrl(null);
+    setErr(null);
+    fetchTaskFileBlobUrl(taskId, pick)
+      .then((url) => {
+        u = url;
+        if (alive) setBlobUrl(url);
+        else URL.revokeObjectURL(url);
+      })
+      .catch((e) => { if (alive) setErr(errText(e, "файл не відкрився")); });
+    return () => { alive = false; if (u) URL.revokeObjectURL(u); };
+  }, [taskId, pick]);
+
+  const cur = list?.find((f) => f.id === pick) ?? null;
+  const isImage = cur?.mime?.startsWith("image/") ?? false;
+  const isVideo = cur?.mime?.startsWith("video/") ?? false;
+  const isPdf = cur?.mime === "application/pdf";
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2700, padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)",
+        borderRadius: "var(--r-lg)", padding: "var(--sp-5)", width: "92vw", maxWidth: 920,
+        maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--sp-4)", gap: 12 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>📎 Вкладення · {taskTitle}</h2>
+          <button onClick={onClose} style={{ border: "1px solid var(--border)", background: "var(--card-bg)",
+            color: "var(--text)", borderRadius: "var(--r-md)", padding: "4px 12px", cursor: "pointer" }}>✕</button>
+        </div>
+
+        {err && (
+          <p style={{ fontSize: "var(--fs-sm)", color: "var(--danger)", background: "var(--danger-bg)",
+            borderRadius: "var(--r-md)", padding: "var(--sp-3) var(--sp-4)" }}>⚠️ {err}</p>
+        )}
+
+        {list == null && !err && <p className="loading-text">Завантаження…</p>}
+        {list != null && list.length === 0 && !err && (
+          <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>Файлів ще немає.</p>
+        )}
+
+        {/* Кілька вкладень — перемикач: на задачу їх не більше двох, тож смуга кнопок
+            зрозуміліша за список із прокруткою. */}
+        {list != null && list.length > 1 && (
+          <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", marginBottom: "var(--sp-4)" }}>
+            {list.map((f) => (
+              <button key={f.id} onClick={() => setPick(f.id)}
+                style={{ border: "1px solid var(--border)", borderRadius: "var(--r-pill)", cursor: "pointer",
+                  fontSize: "var(--fs-xs)", padding: "2px var(--sp-3)",
+                  background: f.id === pick ? "var(--brand)" : "var(--card-bg)",
+                  color: f.id === pick ? "#fff" : "var(--text)" }}
+              >{f.name}</button>
+            ))}
+          </div>
+        )}
+
+        {cur && (
+          <>
+            <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: "0 0 var(--sp-3)" }}>
+              {cur.name} · {Math.max(1, Math.round(Number(cur.sizeBytes) / 1024))} КБ · поклав {cur.author ?? "—"}
+            </p>
+            {!blobUrl && !err && <p className="loading-text">Завантаження файла…</p>}
+            {blobUrl && isImage && <img src={blobUrl} alt={cur.name} style={{ maxWidth: "100%", borderRadius: "var(--r-md)" }} />}
+            {blobUrl && isVideo && <video src={blobUrl} controls style={{ width: "100%", borderRadius: "var(--r-md)", background: "#000" }} />}
+            {blobUrl && isPdf && <iframe src={blobUrl} title={cur.name} style={{ width: "100%", height: "70vh", border: 0, borderRadius: "var(--r-md)" }} />}
+            {/* Решта типів (docx, xlsx, zip) у браузері не показуються — і це
+                називається словами, а не порожнім місцем. */}
+            {blobUrl && !isImage && !isVideo && !isPdf && (
+              <div style={{ padding: "var(--sp-5)", textAlign: "center" }}>
+                <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: "0 0 var(--sp-3)" }}>
+                  Цей тип файла браузер не показує — його можна завантажити.
+                </p>
+                <a href={blobUrl} download={cur.name} style={{ color: "var(--brand)", fontWeight: "var(--fw-semibold)" as CSSProperties["fontWeight"] }}>
+                  ⬇️ Завантажити «{cur.name}»
+                </a>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Іконка за типом — щоб файл упізнавався ще до назви. */
+const fileGlyph = (mime: string | null | undefined, name: string) => {
+  if (mime?.startsWith("image/")) return "🖼";
+  if (mime?.startsWith("video/")) return "🎞";
+  if (mime === "application/pdf" || /\.pdf$/i.test(name)) return "📄";
+  if (/\.(xlsx?|csv)$/i.test(name)) return "📊";
+  if (/\.(docx?|txt|rtf)$/i.test(name)) return "📝";
+  return "📎";
+};
+const fmtKb = (bytes: number | string) => `${Math.max(1, Math.round(Number(bytes) / 1024))} КБ`;
+
+type ZoneFile = { key: string | number; name: string; sizeBytes: number | string; mime?: string | null; author?: string | null; canRemove: boolean };
+
+/**
+ * 📎 ЗОНА ВКЛАДЕНЬ — ОДИН ВИГЛЯД НА ВСІ МІСЦЯ (картка задачі, форма створення).
+ *
+ * Зразок — drop-зона «Регламентів та документів» (`DocumentsSection.tsx`), тобто
+ * прийом, який у дашборді ВЖЕ Є: пунктирна рамка, підсвітка при перетягуванні,
+ * клік по всій зоні відкриває вибір файла. Власник 14.09.2026: «unclear file
+ * attaching — make it with the best practices, copy from somewhere». Доти
+ * вкладення жили як таблиця з кнопкою під нею, а в рядку списку скріпка стояла
+ * ТРИЧІ — ніщо з цього не казало «сюди можна кинути файл».
+ *
+ * Межі (розмір, кількість) показуються ТЕКСТОМ у самій зоні, а коли місця немає —
+ * зона зникає, лишається список: вимкнена рамка без причини читається як поломка.
+ */
+function AttachmentZone({ files, remaining, onPickClick, onFile, onOpen, onRemove, busy, note }: {
+  files: ZoneFile[];
+  remaining: number;
+  onPickClick: () => void;
+  onFile: (f: File) => void;
+  onOpen?: (f: ZoneFile) => void;
+  onRemove?: (f: ZoneFile) => void;
+  busy?: boolean;
+  note?: string | null;
+}) {
+  const [over, setOver] = useState(false);
+  const maxMb = Math.round(TASK_FILE_MAX_BYTES / 1024 / 1024);
+  return (
+    <div style={{ display: "grid", gap: "var(--sp-2)" }}>
+      {files.length > 0 && (
+        <div style={{ display: "grid", gap: 4 }}>
+          {files.map((f) => (
+            <div key={f.key} style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", padding: "6px var(--sp-3)",
+              border: "1px solid var(--border)", borderRadius: "var(--r-md)", background: "var(--card-bg)", fontSize: "var(--fs-sm)" }}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>{fileGlyph(f.mime, f.name)}</span>
+              {onOpen ? (
+                <button type="button" onClick={() => onOpen(f)} title="Подивитися"
+                  style={{ background: "none", border: "none", padding: 0, font: "inherit", color: "var(--text)", cursor: "pointer",
+                    textAlign: "left", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {f.name}
+                </button>
+              ) : (
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+              )}
+              <span className="recv-num" style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)", flexShrink: 0 }}>
+                {fmtKb(f.sizeBytes)}{f.author ? ` · ${f.author}` : ""}
+              </span>
+              {onRemove && f.canRemove && (
+                <button type="button" title="Прибрати" onClick={() => onRemove(f)}
+                  style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {remaining > 0 ? (
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => { if (!busy) onPickClick(); }}
+          onKeyDown={(e) => { if (!busy && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onPickClick(); } }}
+          onDragOver={(e) => { e.preventDefault(); if (!busy) setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files?.[0]; if (f && !busy) onFile(f); }}
+          style={{
+            border: `1.5px dashed ${over ? "var(--brand)" : "var(--border)"}`,
+            background: over ? "var(--danger-bg)" : "transparent",
+            borderRadius: "var(--r-md)", padding: "var(--sp-4)", textAlign: "center",
+            cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, transition: "border-color .15s, background .15s",
+          }}
+        >
+          <div style={{ fontSize: "var(--fs-sm)", color: "var(--text)", fontWeight: "var(--fw-semibold)" as React.CSSProperties["fontWeight"] }}>
+            {busy ? "Завантаження…" : "📎 Перетягніть файл сюди або натисніть, щоб обрати"}
+          </div>
+          <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 2 }}>
+            до {maxMb} МБ · ще {remaining} із {TASK_FILES_PER_TASK}
+          </div>
+        </div>
+      ) : (
+        <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: 0 }}>
+          Ліміт {TASK_FILES_PER_TASK} файли на задачу — приберіть зайвий, щоб додати новий.
+        </p>
+      )}
+      {note && <p style={{ fontSize: "var(--fs-sm)", color: "var(--danger)", margin: 0 }}>⚠️ {note}</p>}
+    </div>
+  );
+}
+
 export function TasksSection({
   taskSearch,
   setTaskSearch,
@@ -302,16 +562,169 @@ export function TasksSection({
   const accountName = managerOptions.find((m) => m.id === currentManagerId)?.name || accountEmail || "мій акаунт";
   // Department dropdown = fixed відділи + all team names, de-duplicated.
   const deptOptions = Array.from(new Set([...DEPARTMENTS, ...(teams ?? []).map((t) => t.name)]));
-  const [adminTab, setAdminTab] = useState<"mine" | "all">("mine");
+  const [adminTab, setAdminTab] = useState<"mine" | "shared" | "all">("mine");
+  // 👁 Яку задачу переглядаємо у вкладеннях (id) — модалка поверх списку.
+  const [filesViewer, setFilesViewer] = useState<number | null>(null);
+  /** 🤝 Форму відкрито зі «Спільних» — виконавець не підставляється, і без нього не створити. */
+  const [sharedIntent, setSharedIntent] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "done">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
   const [sortBy, setSortBy] = useState<"created" | "deadline" | "priority" | "status" | "assignee" | "title">("created");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [openTaskId, setOpenTaskId] = useState<number | null>(null);
+  // 🔗 Глибоке посилання: картка відкривається ОДРАЗУ, якщо в URL є `?id=`.
+  const [openTaskId, setOpenTaskId] = useState<number | null>(() => parseTaskIdParam(window.location.search));
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
+
+  // 🔴 «ОДНЕ ЗАВАНТАЖЕННЯ ВЖЕ ЗАВЕРШИЛОСЬ» — не те саме, що «зараз не вантажимо».
+  // `tasksLoading` стартує false і стає true лише коли ефект добіг до запиту, тож на
+  // першому кадрі маємо false+[] одночасно. Без цього прапорця банер «недоступна»
+  // блимав би на КОЖНОМУ глибокому посиланні, включно з валідним.
+  const [tasksSettled, setTasksSettled] = useState(false);
+  const wasLoading = useRef(false);
+  useEffect(() => {
+    if (tasksLoading) wasLoading.current = true;
+    else if (wasLoading.current) setTasksSettled(true);
+  }, [tasksLoading]);
+
+  // URL іде за станом картки В ОБИДВА боки: відкрили — параметр зʼявився, закрили —
+  // зник. `replaceState`, а не `pushState`, з тієї самої причини, що в «Клієнтах»:
+  // інакше кожне відкриття картки клало б запис в історію, і «назад» гортало б їх,
+  // а не вертало людину туди, звідки вона прийшла.
+  useEffect(() => {
+    const u = new URL(window.location.href);
+    if (openTaskId == null) u.searchParams.delete("id");
+    else u.searchParams.set("id", String(openTaskId));
+    window.history.replaceState({}, "", u);
+  }, [openTaskId]);
+
+  const deepLink = deepLinkState({ openTaskId, found: openTask != null, settled: tasksSettled });
   const [expandedKpi, setExpandedKpi] = useState<Set<string>>(new Set());
   const toggleKpi = (id: string) => setExpandedKpi((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  // ── 📁 ГРУПИ · 👥 АКАУНТИ · 💬 СУПУТНИКИ ВІДКРИТОЇ ЗАДАЧІ (14.09.2026) ──
+  //
+  // 🔴 Усе це тягнеться ОКРЕМО від поллера задач і НЕ додається в його колбек:
+  // `#139` вирізає тіло поллера вікном у 600 знаків, і дописане туди переповнило б
+  // вікно — гейт втратив би предмет і почервонів БЕЗ дефекту.
+  const [groups, setGroups] = useState<TaskGroup[]>([]);
+  const [groupFilter, setGroupFilter] = useState<number | "all" | "none">("all");
+  const [groupDraft, setGroupDraft] = useState("");
+  const [accounts, setAccounts] = useState<TaskAssignee[]>([]);
+  const [comments, setComments] = useState<TaskComment[] | null>(null);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [files, setFiles] = useState<TaskFile[] | null>(null);
+  const [history, setHistory] = useState<TaskHistoryEntry[] | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+  /** Окрема відмова саме вкладень: вона законна (не власник) і не має гасити картку. */
+  const [filesErr, setFilesErr] = useState<string | null>(null);
+  /** Відмова у формі СТВОРЕННЯ: `detailErr` рендериться лише в картці задачі. */
+  const [createErr, setCreateErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  /**
+   * 📎 ПРИКРІПЛЕННЯ ПРЯМО З РЯДКА СПИСКУ.
+   *
+   * 🔴 ПРИВІД — ВІДГУК ВЛАСНИКА: «не можна прикріпляти файли до задач». Заміряно в
+   * його ж браузері: кнопка в картці ПРАЦЮЄ (клік доходить до інпута), блок
+   * «Вкладення» рендериться — але лежить у самому НИЗУ прокручуваної картки, під
+   * стрічкою доповнень. Людина відкрила картку, не побачила вкладень і зробила
+   * правильний висновок: прикріпити не можна. Той самий клас, що груп: контрол є,
+   * але не там, де дивляться.
+   *
+   * ⚠️ ЦІЛЬ ТРИМАЄМО В `ref`, А НЕ В СТАНІ. `setState` асинхронний, а `input.click()`
+   * мусить статись у ТОМУ Ж оброблювачі, інакше браузер втрачає користувацький жест
+   * і діалог вибору файла не відкриється взагалі.
+   */
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  /**
+   * 📎 ДРУГИЙ інпут — саме для форми створення, і він потрібен окремо.
+   * Секційний `fileInputRef` вантажить файл НЕГАЙНО (`attachPickedFile` знає
+   * `task_id`), а у формі задачі ще не існує: файл треба лише ЗАПАМʼЯТАТИ.
+   * Один інпут на дві різні поведінки означав би прапорець «а зараз як?» —
+   * рівно той стан, що ми вичищаємо з цього файла.
+   */
+  const createFileRef = useRef<HTMLInputElement | null>(null);
+  /** Одна перевірка на обидва шляхи у формі — клік через інпут і перетягування в зону. */
+  const acceptCreateFile = (f: File) => {
+    if (f.size > TASK_FILE_MAX_BYTES) {
+      // 🔴 `setDetailErr` тут не годиться: він рендериться лише в картці задачі,
+      // а ми у формі створення — іншому оверлеї. Відмова летіла б у порожнечу.
+      setCreateErr(`Файл «${f.name}» завеликий: ${Math.round(f.size / 1024 / 1024)} МБ, межа ${Math.round(TASK_FILE_MAX_BYTES / 1024 / 1024)} МБ`);
+      return;
+    }
+    setCreateErr(null);
+    setTaskForm((cur) => ({ ...cur, pendingFile: f }));
+  };
+  const uploadTargetRef = useRef<number | null>(null);
+  const pickFileFor = (taskId: number) => { uploadTargetRef.current = taskId; fileInputRef.current?.click(); };
+
+  async function attachPickedFile(file: File): Promise<void> {
+    const taskId = uploadTargetRef.current;
+    if (taskId == null) return;
+    if (file.size > TASK_FILE_MAX_BYTES) {
+      setDetailErr(`«${file.name}» — ${Math.round(file.size / 1024 / 1024 * 10) / 10} МБ, а межа 5 МБ`);
+      return;
+    }
+    setBusy(true); setDetailErr(null);
+    try {
+      const added = await uploadTaskFile(taskId, file);
+      // Якщо картка цієї задачі відкрита — показуємо новий файл одразу.
+      if (openTaskId === taskId) setFiles((cur) => [...(cur ?? []), added]);
+      refreshTasks?.();
+    } catch (err) {
+      setDetailErr(err instanceof Error ? err.message : `не вдалося прикріпити «${file.name}»`);
+    } finally { setBusy(false); }
+  }
+
+  const reloadGroups = () => { void fetchTaskGroups().then(setGroups).catch(() => setGroups([])); };
+  useEffect(() => { reloadGroups(); void fetchTaskAssignees().then(setAccounts).catch(() => setAccounts([])); }, []);
+
+  // Відкрили задачу → тягнемо стрічку, історію, вкладення і ГАСИМО бейдж.
+  useEffect(() => {
+    if (openTaskId == null) { setComments(null); setFiles(null); setHistory(null); setDetailErr(null); setFilesErr(null); setCommentDraft(""); return; }
+    const id = openTaskId;
+    let alive = true;
+    setDetailErr(null);
+    setFilesErr(null);
+    /**
+     * 🔴 ТРИ НЕЗАЛЕЖНІ ЗАПИТИ — ТРИ НЕЗАЛЕЖНІ ВІДМОВИ. Купувалось аварією того ж
+     * дня, що й звуження доступу: доти всі три їхали одним `Promise.all`, а той
+     * відхиляється ПЕРШОЮ відмовою. Щойно вкладення стали приватними, `/files`
+     * почав віддавати 403 наглядачеві — і разом із ним із картки зникали СТРІЧКА
+     * ДОПОВНЕНЬ та ІСТОРІЯ СТАТУСУ, які сервер віддав зі статусом 200.
+     *
+     * Тобто одна легітимна відмова зносила два набори даних, на які людина має
+     * повне право. Рівно найдорожчий клас у цьому проєкті — зникнення з екрана, —
+     * і зроблений рядком, який сам не змінювався. Тримає `#400q`.
+     *
+     * ⚠️ Відмова вкладень має ОКРЕМИЙ стан (`filesErr`): вона стосується лише
+     * свого блоку, і виносити її в загальний банер означало б сказати «картка не
+     * завантажилась», коли насправді не завантажилась одна її третина.
+     */
+    void fetchTaskComments(id)
+      .then((c) => { if (alive) setComments(c); })
+      .catch((e) => { if (alive) setDetailErr(errText(e, "не вдалося завантажити обговорення")); });
+    void fetchTaskHistory(id)
+      .then((h) => { if (alive) setHistory(h); })
+      .catch((e) => { if (alive) setDetailErr(errText(e, "не вдалося завантажити історію")); });
+    void fetchTaskFiles(id)
+      .then((f) => { if (alive) setFiles(f); })
+      .catch((e) => { if (alive) { setFiles([]); setFilesErr(errText(e, "вкладення не відкрились")); } });
+    void markTaskSeen(id).then(() => refreshTasks?.()).catch(() => {});
+    return () => { alive = false; };
+  }, [openTaskId]);
+
+  const groupName = (id: number | null | undefined) => groups.find((g) => g.id === id)?.name ?? null;
+
+  /** Чип групи — токенами дизайн-системи, а не пікселями: `--brand` однаковий у
+   *  світлій і темній темі, а зашитий `#c5141c` у темній читався б інакше. */
+  const groupChip = (active: boolean): React.CSSProperties => ({
+    fontSize: "var(--fs-sm)", padding: "3px var(--sp-4)", borderRadius: "var(--r-pill)",
+    cursor: "pointer", fontWeight: "var(--fw-semibold)" as React.CSSProperties["fontWeight"],
+    border: "1px solid var(--border)",
+    background: active ? "var(--brand)" : "var(--card-bg)", color: active ? "#fff" : "var(--text)",
+  });
 
   const tabBtn = (active: boolean): React.CSSProperties => ({
     padding: "6px 14px", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer",
@@ -319,7 +732,40 @@ export function TasksSection({
   });
 
   // «Мої» для тімліда/адміна: assignee = свій акаунт АБО я створив без виконавця.
-  const isMine = (t: Task) => t.assigneeId === currentManagerId || (t.createdById === currentUserId && t.assigneeId == null);
+  // 🔴 ДОДАНО `assigneeUserId`: задача, призначена моєму АКАУНТУ (бухгалтерія, HR,
+  // рекрутер — ті, кого немає в CRM), раніше не потрапляла у «Свої» взагалі. Тобто
+  // виконавець-акаунт бачив задачу лише на вкладці «Усі», а тімлід — ніде.
+  // 🔴 `currentManagerId != null` ОБОВʼЯЗКОВО: у наскрізних ролей і в `company`
+  // (адмін, CEO, опдир, КВП, фінансист, HR, бухгалтерія) картки менеджера немає,
+  // тож `currentManagerId === null`. Задача, призначена АКАУНТУ, має
+  // `assignee_id = null` — і без цієї сторожі `null === null` робило б «своєю»
+  // кожну чужу задачу без менеджера-виконавця.
+  const isMine = (t: Task) => (currentManagerId != null && t.assigneeId === currentManagerId)
+    || (t.assigneeUserId != null && t.assigneeUserId === currentUserId)
+    || (t.createdById === currentUserId && t.assigneeId == null);
+
+  /**
+   * 🤝 СПІЛЬНА ЗАДАЧА — «мені ПОСТАВИВ ХТОСЬ ІНШИЙ» (вимога власника 14.09.2026,
+   * дослівно: «хочу щоб хтось міг назначити задачу для когось, наприклад директор
+   * для мене, і мені світилося в дашборді, що є задача»).
+   *
+   * Дві умови, і обидві обовʼязкові: задача НА МЕНІ (як на менеджері CRM або як на
+   * акаунті) І автор — НЕ Я. Без другої умови вкладка показувала б і те, що я сам
+   * собі поставив, тобто перестала б відповідати на питання «що мені прийшло».
+   *
+   * ⚠️ Вкладки НЕ взаємовиключні свідомо: задача від директора видна і у «Своїх»
+   * (вона на мені), і у «Спільних» (її поставив інший). «Спільні» — це не окрема
+   * шухляда, а зріз «що прийшло від інших»; ховати її зі «Своїх» означало б, що
+   * людина, яка дивиться свій список, не бачить частини своєї роботи.
+   */
+  const isSharedWithMe = (t: Task) =>
+    ((currentManagerId != null && t.assigneeId === currentManagerId)
+      || (t.assigneeUserId != null && t.assigneeUserId === currentUserId))
+    && t.createdById != null && t.createdById !== currentUserId;
+
+  // Лічильник для вкладки: скільки прийшло від інших і не закрито, і чи є НОВЕ.
+  const sharedOpen = tasks.filter((t) => isSharedWithMe(t) && t.status !== "done" && t.taskType !== "daily_kpi");
+  const sharedNew = sharedOpen.filter((t) => t.hasUnseen).length;
 
   type SynthU = { synthKey: string; assigneeId: number | null; assigneeName: string | null; weekStart: string; weekEnd: string; kids: Task[]; status: string; title: string; department: string | null };
   // Рядок СИНТЕТИЧНОЇ парасольки (згорнуті сироти-daily_kpi одного менеджера за тиждень).
@@ -345,6 +791,10 @@ export function TasksSection({
         </span>
       </td>
       <td style={{ color: "var(--text-muted)" }}>—</td>
+      <td style={{ color: "var(--text-muted)" }}>—</td>
+      {/* Файли: у синтетичної парасольки KPI своїх вкладень немає в принципі —
+          вона віртуальна, зібрана з дітей-днів. Колонка мусить бути, бо інакше
+          рядок поїде на одну клітинку вліво. */}
       <td style={{ color: "var(--text-muted)" }}>—</td>
       <td></td>
     </tr>
@@ -408,6 +858,8 @@ export function TasksSection({
             className="btn-primary"
             onClick={() => {
               // Default assignee = the creator themselves (still changeable).
+              setCreateErr(null);
+              setSharedIntent(false);
               setTaskForm({ ...emptyTaskForm, assigneeId: currentManagerId ?? "" });
               setTaskModalOpen(true);
             }}
@@ -423,13 +875,124 @@ export function TasksSection({
         </div>
       </div>
 
-      {(isAdmin || role === "team_lead" || role === "company") && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <button style={tabBtn(adminTab === "mine")} onClick={() => setAdminTab("mine")}>👤 Свої задачі</button>
-          <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>{isAdmin || role === "company" ? "🗂️ Усі задачі" : "👥 Командні задачі"}</button>
-          {adminTab === "mine" && (
-            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· {accountName}</span>
+      {/* 🤝 СМУГА ВКЛАДОК — ТЕПЕР ДЛЯ ВСІХ, А НЕ ЛИШЕ ДЛЯ КЕРІВНИКІВ.
+          Доти її бачили тільки адмін, тімлід і `company`, тобто менеджер не мав
+          жодного способу відокремити «що мені поставили» від «що я сам завів» —
+          саме про це попросив власник. «Усі / Командні» лишається за ролями. */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <button style={tabBtn(adminTab === "mine")} onClick={() => setAdminTab("mine")}>👤 Свої задачі</button>
+        {/* 🔔 ЛІЧИЛЬНИК НА ВКЛАДЦІ — ЦЕ Й Є «ЩОБ СВІТИЛОСЯ». Число — відкриті задачі
+            від інших; червона крапка — серед них є НЕПРОЧИТАНЕ (нове доповнення або
+            рух статусу після мого останнього перегляду). Порожній стан числа не
+            малюємо взагалі: «0» біля вкладки читалось би як несправність. */}
+        <button style={tabBtn(adminTab === "shared")} onClick={() => setAdminTab("shared")}
+          title="Задачі, які вам поставив хтось інший">
+          🤝 Спільні задачі{sharedOpen.length > 0 ? ` · ${sharedOpen.length}` : ""}
+          {sharedNew > 0 && (
+            <span title={`${sharedNew} із них з новим`} style={{ display: "inline-block", width: 8, height: 8,
+              borderRadius: "var(--r-pill)", background: adminTab === "shared" ? "#fff" : "var(--brand)", marginLeft: 6 }} />
           )}
+        </button>
+        {(isAdmin || role === "team_lead" || role === "company") && (
+          <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>{isAdmin || role === "company" ? "🗂️ Усі задачі" : "👥 Командні задачі"}</button>
+        )}
+        {adminTab === "mine" && (
+          <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· {accountName}</span>
+        )}
+        {adminTab === "shared" && (
+          <>
+            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· поставили вам інші</span>
+            {/* 🤝 ПОСТАВИТИ ЗАДАЧУ КОМУСЬ — окрема кнопка, бо «+ Додати» підставляє
+                виконавцем ТЕБЕ, і зі «Спільних» це створювало звичайну задачу собі
+                (відгук власника 14.09.2026). Тут виконавець порожній і обовʼязковий. */}
+            <button
+              onClick={() => { setCreateErr(null); setSharedIntent(true); setTaskForm({ ...emptyTaskForm }); setTaskModalOpen(true); }}
+              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--brand)", background: "transparent", color: "var(--brand)", cursor: "pointer", fontWeight: 600 }}
+            >🤝 Поставити задачу</button>
+          </>
+        )}
+      </div>
+
+      {/* 📎 ЄДИНИЙ схований інпут на всю секцію: його кличуть і рядок, і картка.
+          🔴 НЕ `display:none`: такий елемент у частині рушіїв не отримує кліку від
+          мітки, і кнопка виглядає живою, а діалог не відкривається. Тримаємо його
+          в розкладці, але невидимим — це той самий прийом, що для доступності. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachPickedFile(f); }}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+        tabIndex={-1}
+        aria-hidden
+      />
+      {/* 📎 Інпут ФОРМИ створення: лише запамʼятовує файл, не вантажить.
+          Межу розміру перевіряємо ТУТ, а не після створення задачі: інакше задача
+          вже існувала б, а файл відлітав би з 413 — «створилось, але не все». */}
+      <input
+        ref={createFileRef}
+        type="file"
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) acceptCreateFile(f); }}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+        tabIndex={-1}
+        aria-hidden
+      />
+
+      {/* 📁 ПАНЕЛЬ ГРУП. Групи ОСОБИСТІ (рішення Романа 14.09): чужих не видно, і
+          задача в чужій папці для мене просто «без групи» — доступу групи не міняють. */}
+      <div style={{ display: "flex", gap: "var(--sp-2)", marginBottom: "var(--sp-6)", alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>📁 Групи:</span>
+        <button style={groupChip(groupFilter === "all")} onClick={() => setGroupFilter("all")}>Усі</button>
+        <button style={groupChip(groupFilter === "none")} onClick={() => setGroupFilter("none")}>Без групи</button>
+        {groups.map((g) => (
+          <span key={g.id} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+            <button style={groupChip(groupFilter === g.id)} onClick={() => setGroupFilter(g.id)} title={`${g.taskCount} задач(і)`}>
+              {g.name}{g.taskCount > 0 ? ` · ${g.taskCount}` : ""}
+            </button>
+            <button
+              title="Прибрати групу (задачі лишаються, повертаються в «Без групи»)"
+              onClick={async () => {
+                if (!confirm(`Прибрати групу «${g.name}»? Задачі НЕ видаляються — повернуться в «Без групи».`)) return;
+                await deleteTaskGroup(g.id).catch(() => {});
+                if (groupFilter === g.id) setGroupFilter("all");
+                reloadGroups(); refreshTasks?.();
+              }}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "var(--fs-xs)", padding: "0 2px" }}
+            >✕</button>
+          </span>
+        ))}
+        <input
+          value={groupDraft}
+          onChange={(e) => setGroupDraft(e.target.value)}
+          onKeyDown={async (e) => {
+            if (e.key !== "Enter" || !groupDraft.trim()) return;
+            const name = groupDraft.trim();
+            setGroupDraft("");
+            // Відмову показуємо словами: повторна назва це помилка кліку (409), і
+            // тихе зникнення введеного читалось би як «нічого не сталось».
+            await createTaskGroup(name).then(reloadGroups).catch((err) => {
+              setDetailErr(err instanceof Error ? err.message : `не вдалося створити групу «${name}»`);
+              setGroupDraft(name);
+            });
+          }}
+          placeholder="+ нова група (Enter)"
+          style={{ fontSize: "var(--fs-sm)", padding: "3px var(--sp-3)", borderRadius: "var(--r-pill)", border: "1px dashed var(--border)", background: "transparent", color: "var(--text)", width: 150 }}
+        />
+      </div>
+
+      {/* 🔗 ПОРОЖНЕЧА НАЗИВАЄ СЕБЕ. Посилання на чужу особисту, видалену або неіснуючу
+          задачу раніше давало порожній екран: три запити супутників тихо падали 404,
+          помилка лягала в стан і не малювалась. Тепер людина читає причину. */}
+      {deepLink === "missing" && (
+        <div className="chart-card" style={{ marginBottom: 12, borderLeft: "3px solid var(--danger, #c8102e)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Задача №{openTaskId} недоступна</div>
+          <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
+            Її або видалено, або вона особиста й належить іншій людині. Посилання правильне —
+            доступу до цієї задачі у вас немає.{" "}
+            <button
+              onClick={() => setOpenTaskId(null)}
+              style={{ background: "none", border: "none", padding: 0, color: "var(--link, #2f5d8a)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
+            >Показати список</button>
+          </div>
         </div>
       )}
 
@@ -447,7 +1010,8 @@ export function TasksSection({
               <col style={{ width: "8%" }} />
               <col style={{ width: "12%" }} />
               <col style={{ width: "6%" }} />
-              <col style={{ width: "40%" }} />
+              <col style={{ width: "32%" }} />
+              <col style={{ width: "8%" }} />
               <col style={{ width: "2%" }} />
             </colgroup>
             <thead>
@@ -458,6 +1022,11 @@ export function TasksSection({
                 <th>Виконавець</th>
                 <th>Пріоритет</th>
                 <th>Коментар</th>
+                {/* 👁 ПЕРЕГЛЯД ВКЛАДЕНЬ — САМЕ ПРАВОРУЧ ВІД КОМЕНТАРЯ (вимога
+                    власника 14.09.2026, дослівно: «немає перегляду файлів, він має
+                    бути праворуч від коментаря»). Доти файл можна було відкрити
+                    ЛИШЕ з розгорнутої картки, і то в новій вкладці браузера. */}
+                <th>Файли</th>
                 <th></th>
               </tr>
             </thead>
@@ -483,9 +1052,24 @@ export function TasksSection({
                     weekStart: wk, weekEnd: tAddDays(wk, 6), kids, status: allDone ? "done" : "in_progress",
                     title: `План тижня ${tDdmm(wk)}–${tDdmm(tAddDays(wk, 6))}`, department: kids[0].department ?? null };
                 });
-                // Перемикач «Мої / Усі(admin) / Командні(team_lead)»: «Мої» = свій assignee.
-                if ((isAdmin || role === "team_lead" || role === "company") && adminTab === "mine") { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
+                /* Перемикач «Свої / Спільні / Усі».
+                   🔴 ГІЛКА ДЛЯ «shared» ОБОВʼЯЗКОВА, І ОСЬ ЧОМУ. Умова написана як
+                   «якщо mine — звузь», тож будь-яке ІНШЕ значення автоматично
+                   означає «показати все». Додати третю вкладку й не дописати їй
+                   гілку = кнопка виглядає активною й показує ВЕСЬ список — відмова,
+                   яку неможливо відрізнити від роботи. Тримає `#400m`.
+                   ⚠️ Для ролі `manager` вкладка «Свої» НЕ фільтрує нічого: його
+                   список і так лише свій (межа стоїть на сервері), а фільтр `isMine`
+                   прибрав би задачі, які він створив колезі, — тобто зробив би те
+                   саме зникнення, що ми лікували 14.09. */
+                const canSeeAllTab = isAdmin || role === "team_lead" || role === "company";
+                if (adminTab === "mine" && canSeeAllTab) { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
+                else if (adminTab === "shared") { base = base.filter(isSharedWithMe); synths = []; }
                 if (assigneeFilter !== "") { base = base.filter((t) => t.assigneeId === assigneeFilter); synths = synths.filter((s) => s.assigneeId === assigneeFilter); }
+                // 📁 Фільтр по групі. Синтетичні парасольки KPI груп не мають, тож
+                // будь-який вибір, крім «Усі», їх свідомо прибирає.
+                if (groupFilter === "none") { base = base.filter((t) => t.groupId == null || groupName(t.groupId) == null); }
+                else if (groupFilter !== "all") { base = base.filter((t) => t.groupId === groupFilter); synths = []; }
                 if (statusFilter === "active") { base = base.filter((t) => t.status !== "done"); synths = synths.filter((s) => s.status !== "done"); }
                 else if (statusFilter === "done") { base = base.filter((t) => t.status === "done"); synths = synths.filter((s) => s.status === "done"); }
                 if (q) {
@@ -521,7 +1105,7 @@ export function TasksSection({
                 if (visible.length === 0) {
                   return (
                     <tr>
-                      <td colSpan={7} className="loading-text">
+                      <td colSpan={8} className="loading-text">
                         {q ? "Нічого не знайдено." : "Задач немає."}
                       </td>
                     </tr>
@@ -544,7 +1128,26 @@ export function TasksSection({
                           onLocal={(v) => patchTaskLocal(task.id, { title: v })}
                           onCommit={(v) => commitTask(task.id, { title: v })}
                         />
+                        {/* 🔔 «Є нове» — доповнення або зміна статусу ПІСЛЯ мого
+                            останнього перегляду і НЕ мною (сервер, `task_views`). */}
+                        {task.hasUnseen && (
+                          <span title="Є нове: доповнення або зміна статусу після вашого останнього перегляду"
+                            style={{ flexShrink: 0, width: 8, height: 8, borderRadius: "var(--r-pill)", background: "var(--brand)", marginTop: 6 }} />
+                        )}
                       </div>
+                      {/* 📎 Що є в картці — числом, а не здогадом. Мітка групи видима
+                          лише власнику групи: сервер віддає `groupName` тільки йому. */}
+                      {(task.commentCount ?? 0) > 0 && (
+                        <div style={{ paddingLeft: 22, marginTop: 2, display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", alignItems: "center" }}>
+                          {/* Форма бейджа — та сама, що в сусідніх мітках 1×1 вище:
+                              pill, 10.5px, приглушений фон. Новий вигляд поруч зі
+                              старим читався б як інша сутність. */}
+                          {(task.commentCount ?? 0) > 0 && (
+                            <span title="доповнень у стрічці" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>💬 {task.commentCount}</span>
+                          )}
+
+                        </div>
+                      )}
                       {/* Задача з 1×1: бейдж + закріплення + замок. Видалення блокує сервер (403). */}
                       {task.taskType === "oneonone" && (
                         <div style={{ paddingLeft: 22, marginTop: 3, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -560,8 +1163,32 @@ export function TasksSection({
                           )}
                         </div>
                       )}
-                      {/* Команда/департамент — малий чіп ПІД назвою (не окрема колонка), редагований */}
-                      <div style={{ paddingLeft: 22, marginTop: 2 }}>
+                      {/* Команда/департамент + ГРУПА — малі чіпи ПІД назвою (не окремі
+                          колонки), обидва редаговані одним кліком.
+                          🔴 ГРУПА СТОЇТЬ САМЕ ТУТ, А НЕ ЛИШЕ В КАРТЦІ. Перша редакція
+                          дозволяла покласти задачу в папку тільки з відкритої картки —
+                          тобто розкласти двадцять задач означало двадцять відкриттів.
+                          Привʼязка мусить бути там, де людина дивиться на список, і
+                          виглядати так само, як сусідня «команда»: інакше фіча є, а
+                          способу нею скористатись немає. */}
+                      <div style={{ paddingLeft: 22, marginTop: 2, display: "flex", gap: "var(--sp-1)", flexWrap: "wrap", alignItems: "center" }}>
+                        <select
+                          value={task.groupId != null && groupName(task.groupId) ? String(task.groupId) : ""}
+                          onChange={(e) => {
+                            const groupId = e.target.value ? Number(e.target.value) : null;
+                            patchTaskLocal(task.id, { groupId });
+                            commitTask(task.id, { groupId });
+                          }}
+                          title={groups.length ? "Моя папка для цієї задачі" : "Спершу створіть групу смугою «📁 Групи» над списком"}
+                          style={task.groupId != null && groupName(task.groupId)
+                            ? { border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", borderRadius: "var(--r-pill)", fontSize: 10.5, padding: "1px var(--sp-3)", maxWidth: "100%" }
+                            : { border: "1px dashed var(--border)", background: "transparent", color: "var(--text-muted)", cursor: "pointer", borderRadius: "var(--r-pill)", fontSize: 10.5, padding: "1px var(--sp-3)", maxWidth: "100%" }}
+                        >
+                          {/* Порожній стан НАЗИВАЄ ПРИЧИНУ: «+ група» при нулі груп
+                              виглядало б як зламаний контрол. */}
+                          <option value="">{groups.length ? "+ група" : "+ група (спершу створіть)"}</option>
+                          {groups.map((g) => <option key={g.id} value={g.id}>📁 {g.name}</option>)}
+                        </select>
                         <select
                           value={task.department ?? ""}
                           onChange={(e) => { const department = e.target.value || null; patchTaskLocal(task.id, { department }); commitTask(task.id, { department }); }}
@@ -762,6 +1389,43 @@ export function TasksSection({
                         onCommit={(v) => commitTask(task.id, { comments: v })}
                       />
                     </td>
+                    {/* 👁 КЛІТИНКА ПЕРЕГЛЯДУ. Порожній стан НАЗИВАЄ СЕБЕ («—»), а не
+                        лишається порожнім: пусте місце читалось би як «колонка не
+                        працює». Число — скільки вкладень, і воно вже знає межу
+                        власника: сервер віддає 0 тому, кому файли не належать. */}
+                    <td style={{ verticalAlign: "top" }}>
+                      {task.fileCount == null ? (
+                        /* 🔒 «НЕ МОЄ» — не те саме, що «немає»: сервер не називає наглядачеві
+                           навіть кількості (рішення власника 14.09.2026). Прочерк збрехав би. */
+                        <span title="Вкладення доступні лише автору та виконавцю задачі"
+                          style={{ color: "var(--text-muted)", fontSize: 11 }}>🔒</span>
+                      ) : (
+                        /* ОДНЕ місце для файлів у рядку: чип відкриває перегляд, «+» додає.
+                           Доти скріпка стояла тричі (під назвою, кнопкою і тут) — і жодна
+                           не казала «сюди можна кинути файл». */
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          {task.fileCount > 0 && (
+                            <button
+                              onClick={() => setFilesViewer(task.id)}
+                              title="Подивитися вкладення"
+                              style={{ border: "1px solid var(--border)", background: "var(--card-bg)",
+                                color: "var(--text)", borderRadius: "var(--r-pill)", cursor: "pointer",
+                                fontSize: 11, padding: "2px var(--sp-3)", whiteSpace: "nowrap" }}
+                            >📎 {task.fileCount}</button>
+                          )}
+                          {task.fileCount < TASK_FILES_PER_TASK && (
+                            <button
+                              onClick={() => pickFileFor(task.id)}
+                              disabled={busy}
+                              title={`Прикріпити файл (до 5 МБ, ще ${TASK_FILES_PER_TASK - task.fileCount} із ${TASK_FILES_PER_TASK})`}
+                              style={{ border: "1px dashed var(--border)", background: "transparent",
+                                color: "var(--text-muted)", borderRadius: "var(--r-pill)", cursor: busy ? "default" : "pointer",
+                                fontSize: 11, padding: "2px var(--sp-3)", whiteSpace: "nowrap", opacity: busy ? 0.5 : 1 }}
+                            >{task.fileCount > 0 ? "+" : "+ файл"}</button>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td>
                       <button
                         onClick={() => handleDeleteTask(task.id)}
@@ -822,6 +1486,41 @@ export function TasksSection({
                       {managerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>
                   </F>
+                  {/* 👤 ВИКОНАВЕЦЬ-АКАУНТ. Показуємо ЛИШЕ коли менеджера з CRM не
+                      обрано: виконавець один (CHECK `tasks_one_assignee`), і два
+                      селекти одночасно обіцяли б неможливе. */}
+                  {openTask.assigneeId == null && (
+                    <F icon="🧑‍💼" label="Або акаунт">
+                      <select
+                        value={openTask.assigneeUserId ?? ""}
+                        onChange={(e) => {
+                          const assigneeUserId = e.target.value ? Number(e.target.value) : null;
+                          patchTaskLocal(openTask.id, { assigneeUserId });
+                          commitTask(openTask.id, { assigneeUserId });
+                        }}
+                        style={{ width: "100%" }}
+                      >
+                        <option value="">— (без виконавця-акаунта)</option>
+                        {accounts.map((a) => (
+                          <option key={a.id} value={a.id}>{a.name}{a.nameIsLogin ? " (логін)" : ""}</option>
+                        ))}
+                      </select>
+                    </F>
+                  )}
+                  <F icon="📁" label="Група">
+                    <select
+                      value={openTask.groupId != null && groupName(openTask.groupId) ? openTask.groupId : ""}
+                      onChange={(e) => {
+                        const groupId = e.target.value ? Number(e.target.value) : null;
+                        patchTaskLocal(openTask.id, { groupId });
+                        commitTask(openTask.id, { groupId });
+                      }}
+                      style={{ width: "100%" }}
+                    >
+                      <option value="">— (без групи)</option>
+                      {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                    </select>
+                  </F>
                   <F icon="📅" label="Дедлайн">
                     <input type="date" value={openTask.deadline ?? ""} onChange={(e) => { const deadline = e.target.value || null; patchTaskLocal(openTask.id, { deadline }); commitTask(openTask.id, { deadline }); }} />
                   </F>
@@ -873,16 +1572,147 @@ export function TasksSection({
             <SubtasksEditor task={openTask} patchTaskLocal={patchTaskLocal} commitTask={commitTask} />
 
             <div style={{ marginTop: 18 }}>
-              <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 6px" }}>💬 Коментарі</h3>
+              {/* 🔴 ДВА РІЗНІ ПОЛЯ, І ПІДПИСИ ЦЕ НАЗИВАЮТЬ. Верхнє — КОРОТКИЙ
+                  коментар у рядку таблиці, його перезаписують (так і було).
+                  Нижче — СТРІЧКА: історія з автором і часом, якої наступне
+                  збереження не затирає. Спільний підпис «Коментарі» на обох
+                  читався б як одне поле, і люди дивувались би, куди зник текст. */}
+              <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 6px" }}>📝 Короткий коментар <span style={{ fontWeight: 400, opacity: .8 }}>· видно в рядку списку, перезаписується</span></h3>
               <textarea
                 value={openTask.comments ?? ""}
-                placeholder="Додати коментар…"
+                placeholder="Одна фраза для списку…"
                 onChange={(e) => patchTaskLocal(openTask.id, { comments: e.target.value })}
                 onBlur={(e) => commitTask(openTask.id, { comments: e.target.value })}
-                rows={5}
+                rows={3}
                 style={{ width: "100%", resize: "vertical", font: "inherit", padding: 10, lineHeight: 1.5, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
               />
             </div>
+
+            {detailErr && (
+              // Помилка й порожнеча — РІЗНІ стани. Поки видно цей рядок, «немає
+              // доповнень» нижче не друкується: саме на змішуванні цих двох
+              // повідомлень вкладка документів казала водночас «помилка» і «порожньо».
+              // `--danger` у темній темі інший (#f87171 проти #b91c1c) — зашитий
+              // червоний там був би нечитним. Колір помилки бере тему.
+              <p style={{ marginTop: "var(--sp-6)", fontSize: "var(--fs-sm)", color: "var(--danger)",
+                          background: "var(--danger-bg)", borderRadius: "var(--r-md)", padding: "var(--sp-3) var(--sp-4)" }}>⚠️ {detailErr}</p>
+            )}
+
+            {/* ── 📎 ВКЛАДЕННЯ ── */}
+            <div style={{ marginTop: 18 }}>
+              <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
+                📎 Вкладення{files ? ` · ${files.length} із ${TASK_FILES_PER_TASK}` : ""}
+              </h3>
+              {filesErr ? (
+                /* 🔒 Законна відмова називає СЕБЕ і стоїть у СВОЄМУ блоці. Показати
+                   тут «Файлів ще немає» означало б збрехати: файли можуть бути, ми
+                   просто не маємо права їх бачити. */
+                <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: 0 }}>🔒 {filesErr}</p>
+              ) : files == null ? (
+                <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>{detailErr ? "—" : "Завантаження…"}</p>
+              ) : (
+                <AttachmentZone
+                  files={files.map((f) => ({ key: f.id, name: f.name, sizeBytes: f.sizeBytes, mime: f.mime, author: f.author,
+                    canRemove: f.createdById === currentUserId || isAdmin }))}
+                  remaining={TASK_FILES_PER_TASK - files.length}
+                  busy={busy}
+                  /* Клік — той самий схований інпут секції, що й у рядку списку:
+                     `pickFileFor(openTask.id)` наводить його на цю задачу. */
+                  onPickClick={() => pickFileFor(openTask.id)}
+                  /* Перетягування минає інпут — файл іде тим самим шляхом завантаження. */
+                  onFile={(f) => { uploadTargetRef.current = openTask.id; void attachPickedFile(f); }}
+                  onOpen={() => setFilesViewer(openTask.id)}
+                  onRemove={async (zf) => {
+                    if (!confirm(`Прибрати «${zf.name}»?`)) return;
+                    try {
+                      await deleteTaskFile(openTask.id, Number(zf.key));
+                      setFiles((cur) => (cur ?? []).filter((x) => x.id !== Number(zf.key)));
+                      refreshTasks?.();
+                    } catch (err) {
+                      setDetailErr(errText(err, "не вдалося прибрати файл"));
+                    }
+                  }}
+                />
+              )}
+              <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: "var(--sp-2) 0 0" }}>
+                Прибране вкладення зникає зі списку, але зберігається — відновлюється вручну.
+              </p>
+            </div>
+
+            {/* ── 💬 СТРІЧКА ДОПОВНЕНЬ ── */}
+            <div style={{ marginTop: 18 }}>
+              <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
+                💬 Стрічка доповнень{comments ? ` · ${comments.length}` : ""}
+              </h3>
+              {comments == null ? (
+                <p style={{ fontSize: 12, color: "var(--text-muted)" }}>{detailErr ? "—" : "Завантаження…"}</p>
+              ) : comments.length === 0 ? (
+                <p style={{ fontSize: 12, color: "var(--text-muted)" }}>Доповнень ще немає.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+                  {comments.map((c) => (
+                    <div key={c.id} style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: "var(--sp-3) var(--sp-4)", background: "var(--card-bg)" }}>
+                      <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
+                        {c.authorName ?? "невідомий автор"} · {String(c.createdAt).slice(0, 16).replace("T", " ")}
+                      </div>
+                      <div style={{ fontSize: 13, whiteSpace: "pre-wrap", lineHeight: "var(--lh)" }}>{c.body}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                <textarea
+                  value={commentDraft}
+                  onChange={(e) => setCommentDraft(e.target.value)}
+                  placeholder="Дописати в стрічку…"
+                  rows={2}
+                  style={{ flex: 1, resize: "vertical", font: "inherit", padding: "var(--sp-3)", lineHeight: "var(--lh)", borderRadius: "var(--r-lg)", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
+                />
+                <button
+                  className="btn-primary"
+                  disabled={!commentDraft.trim() || busy}
+                  onClick={async () => {
+                    const body = commentDraft.trim();
+                    if (!body) return;
+                    setBusy(true); setDetailErr(null);
+                    try {
+                      const added = await createTaskComment(openTask.id, body);
+                      setComments((cur) => [...(cur ?? []), added]);
+                      setCommentDraft("");
+                      refreshTasks?.();
+                    } catch (err) {
+                      // 🔴 Текст НЕ прибираємо з поля: людина його набирала.
+                      setDetailErr(err instanceof Error ? err.message : "не вдалося дописати");
+                    } finally { setBusy(false); }
+                  }}
+                  style={{ flexShrink: 0, cursor: commentDraft.trim() && !busy ? "pointer" : "default",
+                           opacity: commentDraft.trim() && !busy ? 1 : 0.5 }}
+                >Дописати</button>
+              </div>
+            </div>
+
+            {/* ── 📜 ІСТОРІЯ СТАТУСУ ── */}
+            {history != null && history.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
+                  📜 Історія статусу <span style={{ fontWeight: 400, opacity: .8 }}>· рухи через інтерфейс</span>
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {history.map((h) => (
+                    <div key={h.id} style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
+                      {String(h.changedAt).slice(0, 16).replace("T", " ")} · {h.fromStatus ?? "—"} → <b style={{ color: "var(--text)" }}>{h.toStatus}</b> · {h.changedByName ?? "невідомо"}
+                    </div>
+                  ))}
+                </div>
+                {/* ⚠️ ЧЕСНА МЕЖА, А НЕ ДРІБНИЦЯ: статус задачі пишуть ще шість місць
+                    поза цією карткою (оцінювач KPI, реактивація, 1×1, звіт), і вони в
+                    лог НЕ пишуть. Без цього рядка порожній лог читався б як «ніхто не
+                    рухав» там, де рухала джоба. */}
+                <p style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", margin: "var(--sp-2) 0 0" }}>
+                  Автоматичні зміни (оцінювач KPI, реактивація, 1×1) тут не показуються.
+                </p>
+              </div>
+            )}
 
             <div style={{ marginTop: 18, textAlign: "right" }}>
               {openTask.taskType === "oneonone" && openTask.createdById !== currentUserId ? (
@@ -919,7 +1749,7 @@ export function TasksSection({
             style={{ width: "100%", maxWidth: 560, background: "var(--card-bg, #fff)" }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 18 }}>Нова задача</h2>
+              <h2 style={{ margin: 0, fontSize: 18 }}>{sharedIntent ? "Спільна задача — кому ставите?" : "Нова задача"}</h2>
               <button
                 onClick={() => setTaskModalOpen(false)}
                 style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--text-muted)" }}
@@ -933,7 +1763,19 @@ export function TasksSection({
                 Тип задачі
                 <select
                   value={taskForm.taskType}
-                  onChange={(e) => setTaskForm((f) => ({ ...f, taskType: e.target.value as typeof f.taskType }))}
+                  onChange={(e) => setTaskForm((f) => {
+                    const taskType = e.target.value as typeof f.taskType;
+                    /**
+                     * 🔴 ФАЙЛ СКИДАЄТЬСЯ РАЗОМ ІЗ ТИПОМ, І ЦЕ НЕ ПРИБИРАННЯ СТАНУ.
+                     * Вкладення живе лише у простій задачі: план і реактивація йдуть
+                     * іншим роутом (`/tasks/plan`, `/tasks/reactivation`) і вкладень не
+                     * приймають. Лишивши файл у формі, ми отримали б стан «обрав файл,
+                     * натиснув «Поставити план», файла немає» — без жодного слова
+                     * людині, бо смуга вибору для цих типів навіть не малюється.
+                     */
+                    const pendingFile = taskType === "simple" ? f.pendingFile : null;
+                    return { ...f, taskType, pendingFile };
+                  })}
                 >
                   <option value="simple">Звичайна</option>
                   <option value="weekly_kpi">Тижневий план (KPI)</option>
@@ -944,7 +1786,7 @@ export function TasksSection({
               {taskForm.taskType === "reactivation" ? (
                 <ReactivationPlanner
                   teams={teams}
-                  canPickTeam={role === "admin"}
+                  canPickTeam={true} /* 🔓 14.09.2026: команду обирає будь-хто */
                   onDone={async () => { await refreshTasks?.(); setTaskForm(emptyTaskForm); setTaskModalOpen(false); }}
                 />
               ) : taskForm.taskType === "simple" ? (
@@ -1122,16 +1964,13 @@ export function TasksSection({
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                   Виконавець{taskForm.taskType !== "simple" ? " (менеджер)" : ""}
-                  {role === "manager" ? (
-                    // Менеджер ставить план/задачу ЛИШЕ собі — виконавець зафіксований.
-                    <div style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-subtle, rgba(127,127,127,0.06))", color: "var(--text-muted)" }}>
-                      Ви (собі)
-                    </div>
-                  ) : (
+                  {/* 🔓 Рішення власника 14.09.2026: «всі можуть ставити один одному
+                      задачі» — селект однаковий для всіх ролей. Доти менеджер бачив
+                      плашку «Ви (собі)», тобто не міг поставити задачу нікому. */}
                     <select
                       value={taskForm.assigneeId}
                       onChange={(e) =>
-                        setTaskForm((f) => ({ ...f, assigneeId: e.target.value === "" ? "" : Number(e.target.value) }))
+                        setTaskForm((f) => ({ ...f, assigneeId: e.target.value === "" ? "" : Number(e.target.value), assigneeUserId: e.target.value === "" ? f.assigneeUserId : "" }))
                       }
                     >
                       <option value="">—</option>
@@ -1150,10 +1989,30 @@ export function TasksSection({
                         ));
                       })()}
                     </select>
-                  )}
                 </label>
-                {taskForm.taskType === "simple" && role !== "manager" && (
+                {taskForm.taskType === "simple" && (
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                    Або акаунт <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>(HR, бухгалтерія — кого немає в CRM)</span>
+                    <select
+                      value={taskForm.assigneeUserId}
+                      onChange={(e) => setTaskForm((f) => ({
+                        ...f,
+                        assigneeUserId: e.target.value === "" ? "" : Number(e.target.value),
+                        // Один виконавець на задачу (CHECK): обрав акаунт — менеджери знімаються.
+                        assigneeId: e.target.value === "" ? f.assigneeId : "",
+                        assigneeId2: e.target.value === "" ? f.assigneeId2 : "",
+                      }))}
+                    >
+                      <option value="">—</option>
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}{a.nameIsLogin ? " (логін)" : ""}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {/* 🔓 Другий виконавець тепер і менеджеру: «всі можуть ставити один одному» (14.09.2026). */}
+                {taskForm.taskType === "simple" && (
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
                     2-й виконавець (необовʼязково)
                     <select
                       value={taskForm.assigneeId2}
@@ -1207,12 +2066,35 @@ export function TasksSection({
                 </label>
               )}
 
+              {/* 📎 ФАЙЛ ЩЕ НА ЕТАПІ СТВОРЕННЯ (вимога власника 14.09.2026).
+                  Доти вкладення можна було покласти лише до вже створеної задачі —
+                  тобто «створи, знайди в списку, потім прикріпи». Файл тримається у
+                  формі й їде окремим запитом ПІСЛЯ того, як сервер назвав id. */}
+              {taskForm.taskType === "simple" && (
+                <div style={{ display: "grid", gap: 4, fontSize: 13 }}>
+                  <span>Вкладення <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>· не обовʼязково</span></span>
+                  <AttachmentZone
+                    files={taskForm.pendingFile
+                      ? [{ key: "pending", name: taskForm.pendingFile.name, sizeBytes: taskForm.pendingFile.size, mime: taskForm.pendingFile.type, canRemove: true }]
+                      : []}
+                    /* У формі — один файл: другий докладається вже в картці. */
+                    remaining={taskForm.pendingFile ? 0 : 1}
+                    onPickClick={() => createFileRef.current?.click()}
+                    onFile={acceptCreateFile}
+                    onRemove={() => setTaskForm((cur) => ({ ...cur, pendingFile: null }))}
+                    note={createErr}
+                  />
+                </div>
+              )}
+
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
                 <button onClick={() => setTaskModalOpen(false)}>Скасувати</button>
                 <button
                   className="btn-primary"
                   onClick={handleSubmitTaskModal}
-                  disabled={taskForm.taskType === "simple" && !taskForm.title.trim()}
+                  disabled={(taskForm.taskType === "simple" && !taskForm.title.trim())
+                    || (sharedIntent && taskForm.assigneeId === "" && taskForm.assigneeUserId === "")}
+                  title={sharedIntent && taskForm.assigneeId === "" && taskForm.assigneeUserId === "" ? "Оберіть, кому ставите задачу" : undefined}
                 >
                   {taskForm.taskType === "simple" ? "Створити задачу" : "Поставити план"}
                 </button>
@@ -1221,6 +2103,17 @@ export function TasksSection({
             </div>
           </div>
         </div>
+      )}
+
+      {/* 👁 ПЕРЕГЛЯДАЧ ВКЛАДЕНЬ — поверх усього, включно з карткою задачі
+          (її шухляда має z-index 2500/2600, тож переглядач стоїть на 2700).
+          Назву задачі беремо зі списку: модалка мусить казати, ЧИЇ це файли. */}
+      {filesViewer != null && (
+        <TaskFilesViewer
+          taskId={filesViewer}
+          taskTitle={tasks.find((t) => t.id === filesViewer)?.title ?? `задача #${filesViewer}`}
+          onClose={() => setFilesViewer(null)}
+        />
       )}
     </>
   );

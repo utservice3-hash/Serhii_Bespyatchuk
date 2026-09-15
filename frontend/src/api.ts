@@ -1699,6 +1699,8 @@ export interface ReceivableInvoice {
   /** Юрособа КЛІЄНТА, з якої прийшов рахунок. Для обʼєднаного клієнта їх кілька. */
   entityName: string | null;
   entityKey: string | null;
+  /** 🔗 Клієнт має активні псевдоніми в реєстрі злиття (сервер, не склад рахунків). */
+  clientMerged?: boolean;
   /**
    * 👤 Менеджер САМОГО РАХУНКУ — не той, хто веде клієнта. Після override або
    * склейки це різні люди, і колонка існує саме щоб різницю було видно.
@@ -1814,6 +1816,28 @@ export async function fetchReceivableInvoices(clientKey: string): Promise<Receiv
 export async function fetchInvoiceRegistry(): Promise<ReceivableInvoicesResp> {
   const { data } = await api.get<ReceivableInvoicesResp>("/dashboard/receivables/invoices");
   return { invoices: data.invoices, oldestAliveDays: data.oldestAliveDays ?? null };
+}
+
+/**
+ * 📋 РЕЄСТР ЗАЯВОК НА ОПЛАТУ ПЕРЕВІЗНИКАМ — угоди воронки «Оплата перевозчикам».
+ * Скоуп по менеджеру, що подав (рішення власника 07.09.2026). Лише читання.
+ */
+export type PaymentRequestKind = "unsorted" | "pending" | "accepted" | "problem" | "paid" | "rejected" | "unknown";
+export interface PaymentRequestRow {
+  kommoId: number; submittedOn: string;
+  clientKey: string | null; clientName: string | null;
+  carrierName: string | null; carrierEdrpou: string | null;
+  payType: string | null; amount: number | null;
+  statusId: number; status: string; kind: PaymentRequestKind;
+  managerId: number | null; managerName: string | null; crmUrl: string;
+}
+export interface PaymentRequestsResp {
+  from: string; to: string; rows: PaymentRequestRow[];
+  summary: Record<PaymentRequestKind, { n: number; amount: number }>;
+}
+export async function fetchPaymentRequests(params: { from?: string; to?: string; status?: string }): Promise<PaymentRequestsResp> {
+  const { data } = await api.get<PaymentRequestsResp>("/dashboard/receivables/payment-requests", { params });
+  return data;
 }
 
 /** Дедлайн оплати + коментар до конкретного рахунку (менеджер — свої клієнти). */
@@ -2429,6 +2453,21 @@ export interface Task {
   createdByRole?: "admin" | "team_lead" | "manager" | null;
   createdById?: number | null;
   assigneeTeamId?: number | null;
+  /** Виконавець-АКАУНТ (`users.id`) — для тих, кого немає в CRM. Разом з `assigneeId` неможливий. */
+  assigneeUserId?: number | null;
+  /** Особиста група-папка. `groupName` приходить ЛИШЕ для власних груп — чужі виглядають як «без групи». */
+  groupId?: number | null;
+  groupName?: string | null;
+  commentCount?: number;
+  /**
+   * 📎 Скільки вкладень. `null` — НЕ «нуль», а «не моя задача»: вкладення бачать
+   * лише автор і виконавець (рішення власника 14.09.2026), і сервер свідомо не
+   * називає наглядачеві навіть кількість. Екран мусить показати це як невідоме
+   * (замок), а не як «файлів немає».
+   */
+  fileCount?: number | null;
+  /** «Є нове»: доповнення або зміна статусу після мого останнього перегляду і НЕ мною. */
+  hasUnseen?: boolean;
   metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;
   checklistJson?: ChecklistItem[] | null;
   subtasksJson?: Subtask[] | null;
@@ -2550,6 +2589,8 @@ export async function createTask(payload: {
   priority?: TaskPriority;
   comments?: string | null;
   department?: string | null;
+  groupId?: number | null;
+  assigneeUserId?: number | null;
 }): Promise<{ id: number; ids?: number[] }> {
   const { data } = await api.post<{ id: number; ids?: number[] }>("/tasks", payload);
   return data;
@@ -2565,6 +2606,8 @@ export async function updateTask(
     priority: TaskPriority;
     comments: string | null;
     department: string | null;
+    groupId: number | null;
+    assigneeUserId: number | null;
     checklistJson: ChecklistItem[] | null;
     subtasksJson: Subtask[] | null;
   }>
@@ -2574,6 +2617,92 @@ export async function updateTask(
 
 export async function deleteTask(id: number): Promise<void> {
   await api.delete(`/tasks/${id}`);
+}
+
+// ── Спільна задача: групи · стрічка · історія · вкладення (14.09.2026) ──
+
+/** Особиста група-папка. Чужих не бачимо — сервер фільтрує по власнику. */
+export interface TaskGroup { id: number; name: string; parentId: number | null; createdAt: string; taskCount: number }
+export interface TaskComment { id: number; body: string; createdAt: string; authorId: number | null; authorName: string | null }
+export interface TaskFile {
+  id: number; name: string; mime: string | null; sizeBytes: number | string;
+  createdAt: string; createdById: number | null; author: string | null;
+}
+export interface TaskHistoryEntry {
+  id: number; fromStatus: TaskStatus | null; toStatus: TaskStatus;
+  changedAt: string; changedByName: string | null;
+}
+/** Кандидат у виконавці-акаунти. Сервер віддає імʼя без email — логін не їде на екран. */
+export interface TaskAssignee { id: number; name: string; nameIsLogin: boolean; managerId: number | null }
+
+/** 🔴 Ліміт файла 5 МБ — рішення Романа 14.09.2026. Дзеркалить `FILE_MAX_BYTES` сервера. */
+export const TASK_FILE_MAX_BYTES = 5 * 1024 * 1024;
+/** Ліміт кількості на задачу — дзеркалить `FILES_PER_TASK` сервера (гейт `#399i`). */
+export const TASK_FILES_PER_TASK = 2;
+
+export async function fetchTaskGroups(): Promise<TaskGroup[]> {
+  const { data } = await api.get<{ groups: TaskGroup[] }>("/tasks/groups");
+  return data.groups;
+}
+export async function createTaskGroup(name: string): Promise<TaskGroup> {
+  const { data } = await api.post<TaskGroup>("/tasks/groups", { name });
+  return data;
+}
+export async function renameTaskGroup(id: number, name: string): Promise<void> {
+  await api.patch(`/tasks/groups/${id}`, { name });
+}
+export async function deleteTaskGroup(id: number): Promise<void> {
+  await api.delete(`/tasks/groups/${id}`);
+}
+
+export async function fetchTaskComments(taskId: number): Promise<TaskComment[]> {
+  const { data } = await api.get<{ comments: TaskComment[] }>(`/tasks/${taskId}/comments`);
+  return data.comments;
+}
+export async function createTaskComment(taskId: number, body: string): Promise<TaskComment> {
+  const { data } = await api.post<TaskComment>(`/tasks/${taskId}/comments`, { body });
+  return data;
+}
+
+export async function fetchTaskHistory(taskId: number): Promise<TaskHistoryEntry[]> {
+  const { data } = await api.get<{ history: TaskHistoryEntry[] }>(`/tasks/${taskId}/history`);
+  return data.history;
+}
+
+export async function fetchTaskFiles(taskId: number): Promise<TaskFile[]> {
+  const { data } = await api.get<{ files: TaskFile[] }>(`/tasks/${taskId}/files`);
+  return data.files;
+}
+/** Завантаження вкладення — base64 у тілі, як у регламентах (multipart у проєкті немає). */
+export async function uploadTaskFile(taskId: number, file: File): Promise<TaskFile> {
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const { data } = await api.post<TaskFile>(`/tasks/${taskId}/files`, {
+    filename: file.name, mime: file.type || null, dataBase64,
+  });
+  return data;
+}
+export async function deleteTaskFile(taskId: number, fileId: number): Promise<void> {
+  await api.delete(`/tasks/${taskId}/files/${fileId}`);
+}
+/** Тягне вкладення авторизованим стрімом як blob-URL (Bearer у інтерсепторі). */
+export async function fetchTaskFileBlobUrl(taskId: number, fileId: number): Promise<string> {
+  const { data } = await api.get(`/tasks/${taskId}/files/${fileId}`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
+}
+
+/** «Я це бачив» — гасить бейдж «є нове». Кличеться на ВІДКРИТТІ задачі, не на списку. */
+export async function markTaskSeen(taskId: number): Promise<void> {
+  await api.post(`/tasks/${taskId}/seen`, {});
+}
+
+export async function fetchTaskAssignees(): Promise<TaskAssignee[]> {
+  const { data } = await api.get<{ assignees: TaskAssignee[] }>("/tasks/assignees");
+  return data.assignees;
 }
 
 // ── Калькулятор ставок (Lardi, формат оригінального lardiweb) ──
@@ -2615,7 +2744,7 @@ export interface RateAnalysis {
     total_min: number | null; total_max: number | null; distance_km: number | null;
     short_haul?: boolean;
     margin?: number; client_min?: number | null; client_max?: number | null;
-    options: { tonnage: string; margin: number; per_km_min: number; per_km_max: number; total_min: number | null; total_max: number | null; client_min: number | null; client_max: number | null; selected: boolean }[];
+    options: { tonnage: string; kind?: "vehicle" | "partial"; margin: number | null; per_km_min: number; per_km_max: number; total_min: number | null; total_max: number | null; client_min: number | null; client_max: number | null; selected: boolean }[];
   } | null;
   /** Самонавчальна рекомендація з накопиченого архіву цін Ларді по маршруту. */
   learned_recommendation?: {

@@ -59,7 +59,38 @@ const stripComments = (s: string): string =>
 test("#211f чотири канали == створено по кожному менеджеру, і третій доїжджає в роут (жива БД)", needsDb(), async () => {
   const metrics = await import("./metrics.js");
   const { pool } = await import("../db/pool.js");
-  const FROM = "2026-08-01", TO = "2026-08-26";
+  const { kyivToday } = await import("./dates.js");
+
+  // 🔴 ВІКНО ОХОПЛЮЄ ДВА КАЛЕНДАРНІ МІСЯЦІ, І ЦЕ НЕ СТИЛЬ — ЦЕ ЄДИНЕ, ЩО РОБИТЬ
+  // ГЕЙТ БЕЗПЕЧНИМ ЗА ПОБУДОВОЮ.
+  //
+  // 📐 ЧОМУ ВІН ПАДАВ (заміряно 14.09.2026). Тут стояло заморожене ОДНОМІСЯЧНЕ вікно
+  // "2026-08-01".."2026-08-26". Одномісячність вмикає в роуті гілку тижневих блоків:
+  // `dashboard.ts` → `months.length === 1 ? fixedWeekBlocks(...) : []` → далі
+  // `effectiveWeekTargets` → `plans.weekPlansForMonth` БЕЗ `{freeze:false}` →
+  // `weekPlan.ts` → `if (toInsert.length) await freezeWeekPlans(...)` →
+  // `INSERT INTO weekly_plan_snapshots`. Під `test_readonly` це 42501, і файл падав.
+  // Це ЄДИНИЙ запис на шляху роуту — решта кандидатів перевірена поіменно.
+  //
+  // ⚠️ І падало воно МАЯТНИКОМ, а не завжди: `toInsert` порожній, поки в кожного
+  // менеджера ростера вже є знімок. Ростер же береться за СЬОГОДНІШНІМ станом
+  // (`hasPlanSql` → `stateSql(...) = 'active'`), тож кожен новоактивований менеджер
+  // народжував пару без знімка — і гейт червонів «сам по собі».
+  //
+  // ✅ Два місяці → `weekBlocks = []` → `effectiveWeekTargets` не кличеться ВЗАГАЛІ.
+  // Запис стає недосяжним за побудовою, а не за збігом стану ростера. Заразом зникає
+  // залежність від того, чи живі в базі дані конкретного серпня.
+  //
+  // 🔴 ОКРЕМО, І ЦЕ НЕ ПРО ГЕЙТ: те, що GET-роут ПИШЕ в базу за ІСТОРИЧНИЙ місяць, —
+  // справжній наслідок для даних і питання власника. Цей прохід його не закриває.
+  const today = kyivToday();
+  const d = new Date(`${today}T00:00:00Z`);
+  const prevYm = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1))
+    .toISOString().slice(0, 7);
+  const FROM = `${prevYm}-01`, TO = today;
+  assert.notEqual(FROM.slice(0, 7), TO.slice(0, 7),
+    "🔴 вікно гейта згорнулось в ОДИН календарний місяць — а саме одномісячність вмикає "
+    + "в роуті гілку заморожування тижневих планів, тобто ЗАПИС під read-only прогоном");
 
   const rows = await metrics.createdSplitByManager({ from: FROM, to: TO });
   assert.ok(rows.length > 0, "🔴 жодного менеджера — гейту нема що перевіряти");

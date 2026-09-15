@@ -1,6 +1,11 @@
 import { pool } from "../db/pool.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
+import { LEADGEN_CALL_MIN_SEC } from "./leadgenRules.js";
+// 📐 Правила лідогену живуть у ЧИСТОМУ `leadgenRules.ts` (нуль імпортів) — звідси
+// лише реекспорт, щоб зовнішній читач не помітив різниці, а гейти могли дістати
+// їх без `config`. Див. доккоментар того файла: там записано, ЧОМУ так.
+export { LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS, pct } from "./leadgenRules.js";
 
 /**
  * 📞 ЛІДОГЕНЕРАЦІЯ — сім показників таблиці лідгенів із подій CRM.
@@ -29,7 +34,6 @@ import { kommoLeadUrl } from "./kommoLinks.js";
  * ≥15 с → 4 828, ≥25 с → 2 574. Поки власник не назвав інше означення, тримаємо це,
  * і саме тут — щоб не розповзлось копіями.
  */
-export const LEADGEN_CALL_MIN_SEC = 20;
 
 export interface LeadgenPersonRow {
   managerId: number;
@@ -139,12 +143,7 @@ export async function leadgenStats(from: string, to: string): Promise<LeadgenSta
  * Цільові конверсії з таблиці лідгенів (ліди → ОПР 40 % → прорахунок 50 % → машини 10 %).
  * Тримаємо тут, бо це бізнес-правило власника, а не число на екрані.
  */
-export const LEADGEN_CONVERSION_TARGETS = { oprOfLeads: 40, quotesOfOpr: 50, machinesOfQuotes: 10 } as const;
 
-/** Конверсія у відсотках; `null`, коли знаменник нульовий — «—» на екрані, а не «0 %». */
-export function pct(part: number, whole: number): number | null {
-  return whole > 0 ? Math.round((part / whole) * 1000) / 10 : null;
-}
 
 /**
  * 🔒 ПРИЧИНИ ЗАКРИТТЯ — з поля `reject_reason`, яке лідген проставляє руками.

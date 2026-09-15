@@ -198,3 +198,23 @@ test("#254b 🪞 ДЗЕРКАЛО: у незлитого клієнта юрос
   assert.equal(V.invoiceEntityShown([{ entityKey: "к", entityName: "К" }]), false,
     "🔴 один рахунок дав підпис");
 });
+
+/**
+ * #402 — ОБʼЄДНАНИЙ КЛІЄНТ ПІДПИСУЄТЬСЯ ЗАВЖДИ (рішення власника 14.09.2026, випадок
+ * Автострада 07.09): прапорець `clientMerged` із сервера дає підпис і при ОДНІЙ відкритій
+ * юрособі. 🪞 Дзеркало: без прапорця правило #254b не змінилось — одна юрособа, підпису
+ * немає. Червоніє, якщо ігнорувати прапорець або показувати підпис усім підряд.
+ */
+test("#402 ЮРОСОБА: злитий клієнт з ОДНІЄЮ відкритою юрособою підписується; незлитий — ні", async () => {
+  const V = await import(FE_SPEC("pages/dashboard/receivablesView.ts"));
+  const one = [
+    { entityKey: "автострадавк", entityName: "АВТОСТРАДА ВК", clientMerged: true },
+    { entityKey: "автострадавк", entityName: "АВТОСТРАДА ВК", clientMerged: true },
+  ];
+  assert.equal(V.invoiceEntityShown(one), true, "🔴 злитий клієнт без підпису, щойно другу юрособу рознесли");
+  assert.equal(V.invoiceEntityLabel(one[0], V.invoiceEntityShown(one)), "АВТОСТРАДА ВК");
+  const plain = one.map((x) => ({ ...x, clientMerged: false }));
+  assert.equal(V.invoiceEntityShown(plain), false, "🔴 незлитий клієнт з однією юрособою отримав підпис — шпалери");
+  assert.equal(V.invoiceEntityShown(one.map((x) => ({ entityKey: x.entityKey, entityName: x.entityName }))), false,
+    "🔴 без прапорця з сервера правило мало лишитись старим");
+});

@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { isInsufficientPrivilege } from "../db/pgErrors.js";
 import { fixedWeekBlocks, workingDaysBetween, monthEndOf } from "./dates.js";
 import { weekPlanOf, weekWorkingDays } from "./weekPlanMath.js";
 import { receivedByMgr } from "./money.js";
@@ -165,7 +166,17 @@ export async function weekPlansForMonth(
       }
     }
   }
-  if (toInsert.length) await freezeWeekPlans(monthStart, toInsert, "live");
+  if (toInsert.length) {
+    try {
+      await freezeWeekPlans(monthStart, toInsert, "live");
+    } catch (e) {
+      // 🔴 ЗНІМОК — ІСТОРІЯ, А НЕ ВІДПОВІДЬ. Під read-only роллю (приймання) запис
+      // заборонений, і це не привід віддати 500 на GET: числа вже пораховані.
+      // Інші помилки — справжні, і вони летять далі (див. `db/pgErrors.ts`).
+      if (!isInsufficientPrivilege(e)) throw e;
+      console.warn(`weekPlansForMonth: знімки не збережено (недостатньо прав) — ${toInsert.length} рядк.`);
+    }
+  }
   return out;
 }
 
