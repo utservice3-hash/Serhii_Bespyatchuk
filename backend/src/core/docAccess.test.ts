@@ -71,3 +71,23 @@ test("#430e ДОКУМЕНТИ: підпис чинний лише для пот
   assert.equal(signatureState({ version: 1, sha256: "aaa", section: "offer" }, [], now, "2026-09-01T00:00:00Z").kind, "overdue");
   assert.equal(signatureState({ version: 1, sha256: "aaa", section: "general" }, [], now, null).kind, "not_required");
 });
+
+/**
+ * #430f — ТРИ СТАНИ ЕКРАНА НЕ ЗМІШУЮТЬСЯ (розділ 8 ТЗ). Читає джерело `DocumentsSection.tsx`:
+ * стан «помилка» рендериться ДО будь-якого «порожньо», а стан «немає доступу» береться з
+ * відповіді сервера (403), а не вигадується. Червоніє, якщо повернути «Порожньо» поруч із
+ * помилкою або прибрати гілку 403.
+ */
+test("#430f ДОКУМЕНТИ: «помилка», «порожньо» і «немає доступу» — три різні гілки, помилка раніше за порожнечу", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "DocumentsSection.tsx"), "utf8");
+  const errIdx = src.indexOf("Не вдалося завантажити список");
+  const emptyIdx = src.indexOf("ще нічого немає");
+  const noAccessIdx = src.indexOf("Документ не для вас");
+  assert.ok(errIdx > 0 && emptyIdx > 0 && noAccessIdx > 0, "одного з трьох станів немає в джерелі");
+  assert.ok(errIdx < emptyIdx, "стан «помилка» стоїть ПІСЛЯ «порожньо» — при 500 людина побачить порожню папку");
+  assert.match(src, /if \(loadErr && !tree\) return \(/, "гілка помилки не відрізає рендер списку");
+  assert.match(src, /r\?\.status === 403\) setNoAccess\(true\)/, "стан «немає доступу» не береться з 403 сервера");
+  assert.doesNotMatch(src, /Порожньо\. Створіть папку/, "старий рядок «Порожньо…» повернувся");
+});

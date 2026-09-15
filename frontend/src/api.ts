@@ -2816,46 +2816,90 @@ export async function fetchCarriers(city: string): Promise<{ carriers: CrmCarrie
   return data;
 }
 
-// ── Регламенти та документи (файлова база відділу) ──
-export interface DocFolder { id: number; parent_id: number | null; name: string; created_at: string; }
+// ── Регламенти та документи v2 (15.09.2026): розділи, типи, версії, доступи, підпис, архів ──
+export type DocSection = "general" | "personal" | "offer";
+export type DocSigKind = "not_required" | "signed" | "pending" | "overdue" | "outdated";
+export const DOC_TYPES = ["Регламент", "Інструкція", "Шаблон", "Офер", "Матеріал для клієнта", "Інше"] as const;
+export interface DocFolder { id: number; parentId: number | null; name: string; createdAt: string }
 export interface DocFile {
-  id: number; folder_id: number | null; name: string; category?: string | null;
-  mime: string | null; size_bytes: string | number | null; created_at: string; author?: string | null;
+  id: number; folderId: number | null; name: string; category: string | null; mime: string | null; sizeBytes: number | null;
+  createdAt: string; updatedAt: string; section: DocSection; addresseeUserId: number | null; addressee: string | null;
+  description: string | null; version: number; sha256: string | null; archivedAt: string | null; archivedReason: string | null;
+  author: string | null; createdBy: number | null;
+  signature: { kind: DocSigKind; days: number | null };
+  canEdit: boolean; canSign: boolean;
 }
-export const DOC_CATEGORIES = ["Регламент", "Шаблон", "Інструкція", "Інше"] as const;
-export async function fetchDocTree(): Promise<{ folders: DocFolder[]; files: DocFile[] }> {
-  const { data } = await api.get<{ folders: DocFolder[]; files: DocFile[] }>("/documents/tree");
-  return { folders: data?.folders ?? [], files: data?.files ?? [] };
+export interface DocTree {
+  folders: DocFolder[]; files: DocFile[];
+  counts: { general: number; personal: number; offer: number; archive: number };
+  sections: { general: boolean; personal: boolean; offer: boolean; archive: boolean };
+  viewer: { userId: number; roleKey: string; isManagement: boolean; canManageAccess: boolean; canUploadRoot: boolean; uploadFolders: number[] };
+  types: readonly string[];
 }
-export async function createDocFolder(name: string, parentId: number | null): Promise<DocFolder> {
-  const { data } = await api.post<DocFolder>("/documents/folder", { name, parentId });
+export async function fetchDocTree(): Promise<DocTree> {
+  const { data } = await api.get<DocTree>("/documents/tree");
   return data;
 }
-export async function renameDocFolder(id: number, name: string): Promise<void> {
-  await api.patch(`/documents/folder/${id}`, { name });
+export interface DocCard {
+  file: DocFile;
+  versions: { version: number; sha256: string; mime: string | null; size_bytes: string | null; created_at: string; author: string | null }[];
+  signatures: { version: number; sha256: string; signedAt: string; method: string; signer: string | null; hasEvidence: boolean; current: boolean }[];
+  events: { kind: string; at: string; details: Record<string, unknown> | null; actor: string | null }[];
 }
-export async function deleteDocFolder(id: number): Promise<void> {
-  await api.delete(`/documents/folder/${id}`);
+export async function fetchDocCard(id: number): Promise<DocCard> {
+  const { data } = await api.get<DocCard>(`/documents/file/${id}`);
+  return data;
 }
+export async function fetchDocViewers(id: number): Promise<{ who: { label: string; note: string }[]; exceptions: { name: string; until: string | null }[] }> {
+  const { data } = await api.get(`/documents/file/${id}/viewers`);
+  return data;
+}
+export async function fetchDocPeople(): Promise<{ userId: number; name: string; role: string; team: string | null }[]> {
+  const { data } = await api.get<{ people: { userId: number; name: string; role: string; team: string | null }[] }>("/documents/people");
+  return data.people;
+}
+export async function createDocFolder(name: string, parentId: number | null): Promise<void> { await api.post("/documents/folder", { name, parentId }); }
+export async function renameDocFolder(id: number, name: string): Promise<void> { await api.patch(`/documents/folder/${id}`, { name }); }
+export async function deleteDocFolder(id: number): Promise<void> { await api.delete(`/documents/folder/${id}`); }
 export async function uploadDocFile(body: {
   folderId: number | null; filename: string; mime: string | null; category?: string | null; dataBase64: string;
+  section: DocSection; addresseeUserId?: number | null; description?: string | null;
 }, onProgress?: (pct: number) => void): Promise<DocFile> {
   const { data } = await api.post<DocFile>("/documents/file", body, {
-    onUploadProgress: (e) => {
-      if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
-    },
+    onUploadProgress: (e) => { if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100)); },
   });
   return data;
 }
-export async function updateDocFile(id: number, patch: { name?: string; category?: string | null }): Promise<void> {
+export async function uploadDocVersion(id: number, body: { filename: string; mime: string | null; dataBase64: string }): Promise<{ version: number }> {
+  const { data } = await api.post<{ version: number }>(`/documents/file/${id}/version`, body);
+  return data;
+}
+export async function updateDocFile(id: number, patch: { name?: string; category?: string | null; description?: string | null; folderId?: number | null }): Promise<void> {
   await api.patch(`/documents/file/${id}`, patch);
 }
-export async function deleteDocFile(id: number): Promise<void> {
-  await api.delete(`/documents/file/${id}`);
+export async function archiveDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/archive`); }
+export async function restoreDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/restore`); }
+export async function signDocFile(id: number, body: { method: "paper_photo"; filename: string; dataBase64: string }): Promise<void> { await api.post(`/documents/file/${id}/sign`, body); }
+export async function requestDocAccess(id: number, note: string): Promise<{ message: string }> {
+  const { data } = await api.post<{ message: string }>(`/documents/file/${id}/request-access`, { note });
+  return data;
 }
-/** Тягне файл авторизованим стрімом (Bearer у інтерсепторі) як blob-URL. */
-export async function fetchDocFileBlobUrl(id: number): Promise<string> {
-  const { data } = await api.get(`/documents/file/${id}/download`, { responseType: "blob" });
+export interface DocFolderAccess {
+  roles: { key: string; name: string; management: boolean; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean; canManage: boolean }[];
+  grants: { id: number; userId: number; name: string; canView: boolean; canUpload: boolean; expiresAt: string | null }[];
+  log: { action: string; details: Record<string, unknown> | null; at: string; actor: string | null }[];
+}
+export async function fetchDocFolderAccess(folderId: number): Promise<DocFolderAccess> {
+  const { data } = await api.get<DocFolderAccess>(`/documents/access/${folderId}`);
+  return data;
+}
+export async function saveDocFolderAccess(folderId: number, body: {
+  roles: { key: string; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean }[];
+  grants: { userId: number; canView: boolean; canUpload: boolean; expiresAt: string | null }[];
+}): Promise<void> { await api.put(`/documents/access/${folderId}`, body); }
+/** Файл авторизованим стрімом як blob-URL; `inline` — для прев'ю в iframe/img. */
+export async function fetchDocFileBlobUrl(id: number, opts: { inline?: boolean; version?: number } = {}): Promise<string> {
+  const { data } = await api.get(`/documents/file/${id}/download`, { responseType: "blob", params: { inline: opts.inline ? 1 : undefined, version: opts.version } });
   return URL.createObjectURL(data as Blob);
 }
 
