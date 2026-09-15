@@ -1767,6 +1767,16 @@ UPDATE roles SET permissions = permissions ||
 UPDATE roles SET screen_access = screen_access || '{"ads":true}'::jsonb
   WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead') AND NOT (screen_access ? 'ads');
 
+-- 📵 ПРОПУЩЕНІ ДЗВІНКИ (ТЗ-1, 14.09.2026). Та сама причина, що в `ads` вище: без цього
+-- рядка вкладку не побачив би НІХТО, включно з адміном, — видимість пункту меню
+-- визначає `screen_access` у токені, а не список ролей у NAV_GROUPS.
+-- 🟢 `manager` У ПЕРЕЛІКУ СВІДОМО: екран показує менеджеру ВЛАСНІ пропущені (кламп у
+-- роуті), а не роботу колег. Саме тому він ширший за сусідній `ads`.
+-- ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+UPDATE roles SET screen_access = screen_access || '{"missed-calls":true}'::jsonb
+  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead', 'financier', 'manager')
+    AND NOT (screen_access ? 'missed-calls');
+
 -- Баланси рахунків: останній залишок з банк-API (mono client-info / privat closing-balance),
 -- оновлюється на циклі синку. Ідемпотентно; наявні рахунки не чіпаємо.
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance_amount     NUMERIC;

@@ -112,6 +112,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // 📊 Без цього рядка /ads лишився б БЕЗ tab-гейта — тобто в «відомій дірі»
     // нижче. DoD п.2 вимагає МЕЖУ, а не лише запис у матриці.
     { test: pre("/api/dashboard/ads"), tabs: ["ads"] },
+    // 📵 Пропущені дзвінки (ТЗ-1, 14.09.2026). Ключ `missed-calls`, а НЕ `calls`:
+    // останнє в продукті вже означає категорію графіків «☎️ Дзвінки» у Статистиках.
+    { test: pre("/api/dashboard/missed-calls"), tabs: ["missed-calls"] },
     { test: pre("/api/dashboard/regular-clients"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/manager-report"), tabs: ["manager-report"] },
     // ⚠️ РЕШТА /api/dashboard/* ЛИШАЄТЬСЯ БЕЗ TAB-ГЕЙТА — і це ВІДОМА ДІРА, а не задум.

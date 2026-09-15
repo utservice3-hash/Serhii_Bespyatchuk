@@ -40,6 +40,8 @@ import * as money from "../core/money.js";
 import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
+import * as missedCalls from "../core/missedCalls.js";
+import { missedPeriod } from "../core/missedCallsRules.js";
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
@@ -9891,4 +9893,38 @@ dashboardRouter.get("/manager-report", async (req, res) => {
     ...(managers ? { managers } : {}),
     compare,
   });
+});
+
+/**
+ * 📵 ПРОПУЩЕНІ ВХІДНІ — блоки A (підсумок) і B (по менеджерах). ТЗ-1 від 14.09.2026.
+ *
+ * 🔴 ШЛЯХ `missed-calls`, А НЕ `calls`, І ЦЕ ВІДХИЛЕННЯ ВІД ТЗ, ЗРОБЛЕНЕ СВІДОМО.
+ * Слово `calls` у продукті вже зайняте: у Статистиках так зветься КАТЕГОРІЯ ГРАФІКІВ
+ * «☎️ Дзвінки» (`StatisticsChartsSection.tsx:48`). Простір імен інший, тож технічного
+ * збігу немає — але два різні предмети під одним словом на сусідніх екранах це рівно
+ * та помилка, яку проєкт уже ловив на двох «очікуємо» і двох «прогнозах».
+ *
+ * ⚠️ МЕЖА — `pre("/api/dashboard/missed-calls") → ["missed-calls"]` у `routeTab.ts`.
+ * Без неї роут потрапив би у «відому діру» (решта `/api/dashboard/*` без tab-гейта),
+ * а DoD п.2 вимагає МЕЖУ, а не лише запис у матриці.
+ */
+dashboardRouter.get("/missed-calls", async (req, res) => {
+  const auth = req.auth!;
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+
+  // Кламп той самий, що в сусідніх екранах: менеджер бачить лише себе, тімлід — свою
+  // команду. ⚠️ Тімлідів кламп СВІДОМО ховає «без відповідального»: дзвінок, що не
+  // дійшов до людини, не належить жодній команді, і приписати його команді означало б
+  // вигадати відповідального. Тому підсумок команди МЕНШИЙ за загальний — і це чесно.
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  else if (auth.role === "team_lead") teamId = auth.teamId ?? -1;
+
+  const scope = { managerId, teamId };
+  const [summary, byManager] = await Promise.all([
+    missedCalls.missedSummary(from, to, scope),
+    missedCalls.missedByManager(from, to, scope),
+  ]);
+  res.json({ period: { from, to }, summary, managers: byManager.rows, total: byManager.total });
 });
