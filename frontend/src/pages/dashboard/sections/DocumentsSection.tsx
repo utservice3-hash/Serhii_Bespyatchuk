@@ -77,6 +77,13 @@ const btn = (kind: "primary" | "ghost" | "danger" = "ghost"): React.CSSPropertie
 });
 const inp: React.CSSProperties = {};
 const label: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 };
+/* Рядок рейки (папки/типи): одна висота, назва в один рядок з обрізанням, лічильник у своїй колонці,
+   іконки дій однакової ширини — щоб відстані навколо були рівні незалежно від довжини назви. */
+const railRow = (active: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 2, height: 32, borderRadius: "var(--r-md)", background: active ? "var(--surface-2)" : "transparent", paddingRight: 2 });
+const railMain = (active: boolean): React.CSSProperties => ({ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", padding: "0 8px", cursor: "pointer", textAlign: "left", fontSize: "var(--fs-13)", color: "var(--text)", fontWeight: active ? 600 : 400 });
+const railName: React.CSSProperties = { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const railCount: React.CSSProperties = { flex: "0 0 auto", minWidth: 22, textAlign: "right", color: "var(--text-muted)", fontSize: 12, fontVariantNumeric: "tabular-nums" };
+const railIcon: React.CSSProperties = { width: 24, height: 24, display: "grid", placeItems: "center", border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)", borderRadius: "var(--r-sm)", fontSize: 12, padding: 0 };
 const noteBox: React.CSSProperties = { fontSize: "var(--fs-sm)", color: "var(--text-muted)", background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "var(--sp-3) var(--sp-4)" };
 
 function SigBadge({ f }: { f: DocFile }) {
@@ -191,7 +198,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
         <div className="kpi-card"><span className="kpi-label">Оновлено за 7 днів</span><span className="kpi-value">{fresh}</span></div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "240px minmax(0,1fr) 360px", gap: "var(--sp-7)", alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "280px minmax(0,1fr) 360px", gap: "var(--sp-7)", alignItems: "start" }}>
         {/* Папки і типи */}
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-7)" }}>
           {section !== "offer" && (
@@ -201,20 +208,20 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                 const id = f?.id ?? null; const n = folderCounts.get(id) ?? 0;
                 if (!f && n === 0) return null;
                 const active = folderFilter === (f ? id : "none");
+                const canManage = !!f && viewer.canManageAccess && section === "general";
                 return (
-                  <div key={f?.id ?? "none"} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <button onClick={() => setFolderFilter(active ? "all" : (f ? id : "none"))}
-                      style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, border: "none", background: active ? "var(--surface-2)" : "transparent", borderRadius: "var(--r-md)", padding: "6px 8px", cursor: "pointer", textAlign: "left", fontSize: "var(--fs-13)", color: "var(--text)", fontWeight: active ? 600 : 400 }}>
-                      <span style={{ opacity: .7 }}>🗀</span><span style={{ flex: 1 }}>{f ? f.name : "Без папки"}</span><span className="orph-dim">{n}</span>
+                  <div key={f?.id ?? "none"} style={railRow(active)}>
+                    <button onClick={() => setFolderFilter(active ? "all" : (f ? id : "none"))} title={f ? f.name : "Без папки"} style={railMain(active)}>
+                      <span style={{ opacity: .6, flex: "0 0 auto" }}>📁</span>
+                      <span style={railName}>{f ? f.name : "Без папки"}</span>
+                      <span style={railCount}>{n}</span>
                     </button>
-                    {f && viewer.canManageAccess && section === "general" && (
-                      <>
-                        <button title="Доступи до папки" onClick={() => setAccessFolder(f)} style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)" }}>⚙</button>
-                        <button title="Перейменувати" onClick={() => { const n = window.prompt("Нова назва папки:", f.name)?.trim(); if (n && n !== f.name) void renameDocFolder(f.id, n).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}
-                          style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 12, color: "var(--text-muted)" }}>✎</button>
-                        <button title="Прибрати папку (файли лишаються на диску)" onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }}
-                          style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 12, color: "var(--text-muted)" }}>✕</button>
-                      </>
+                    {canManage && (
+                      <span style={{ display: "flex", gap: 2, flex: "0 0 auto" }}>
+                        <button title="Доступи до папки" onClick={() => setAccessFolder(f!)} style={railIcon}>⚙</button>
+                        <button title="Перейменувати" onClick={() => { const nn = window.prompt("Нова назва папки:", f!.name)?.trim(); if (nn && nn !== f!.name) void renameDocFolder(f!.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }} style={railIcon}>✎</button>
+                        <button title="Прибрати папку (файли лишаються на диску)" onClick={() => { if (window.confirm(`Прибрати папку «${f!.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f!.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }} style={railIcon}>✕</button>
+                      </span>
                     )}
                   </div>
                 );
@@ -224,12 +231,13 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
           <div className="chart-card">
             <div style={label}>Типи документів</div>
             {[...DOC_TYPES].filter((t) => typeCounts.has(t)).map((t) => (
-              <button key={t} onClick={() => setTypeFilter(typeFilter === t ? null : t)}
-                style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", border: "none", background: typeFilter === t ? "var(--surface-2)" : "transparent", borderRadius: "var(--r-md)", padding: "6px 8px", cursor: "pointer", textAlign: "left", color: "var(--text)" }}>
-                <span className="task-status-dot" style={{ background: TYPE_META[t].color }} />
-                <span style={{ flex: 1 }}><div style={{ fontSize: "var(--fs-13)", fontWeight: typeFilter === t ? 600 : 400 }}>{t}</div><div className="orph-dim">{TYPE_META[t].action}</div></span>
-                <span className="orph-dim">{typeCounts.get(t)}</span>
-              </button>
+              <div key={t} style={railRow(typeFilter === t)}>
+                <button onClick={() => setTypeFilter(typeFilter === t ? null : t)} title={`${t} — ${TYPE_META[t].action}`} style={railMain(typeFilter === t)}>
+                  <span className="task-status-dot" style={{ background: TYPE_META[t].color }} />
+                  <span style={railName}>{t}<span className="orph-dim" style={{ marginLeft: 6 }}>{TYPE_META[t].action}</span></span>
+                  <span style={railCount}>{typeCounts.get(t)}</span>
+                </button>
+              </div>
             ))}
             {typeCounts.size === 0 && <p className="loading-text" style={{ margin: 0, fontSize: "var(--fs-sm)" }}>у розділі поки нічого</p>}
           </div>
