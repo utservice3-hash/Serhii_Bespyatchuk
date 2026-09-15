@@ -3282,16 +3282,21 @@ export const BUILD_SHA: string = typeof __BUILD_SHA__ === "string" ? __BUILD_SHA
  * `null` = «невідомо» (немає вшитої sha, сервер без версії, мережа впала).
  * Невідоме НЕ є приводом показати плашку.
  */
-export async function fetchClientStale(): Promise<boolean | null> {
+/**
+ * Вердикт «застарів» + sha сервера, на якому він винесений. Друге поле потрібне
+ * банеру, щоб відрізнити «людина закрила плашку на ЦЬОМУ викаті» від «після
+ * закриття вийшов ЩЕ один викат» — булевого вердикту для цього замало.
+ */
+export async function fetchClientStale(): Promise<{ stale: boolean | null; serverSha: string | null }> {
   try {
-    const { data } = await api.get<{ clientStale?: boolean | null }>("/health", {
+    const { data } = await api.get<{ clientStale?: boolean | null; version?: { sha?: string; shortSha?: string } }>("/health", {
       params: { loaded: BUILD_SHA },
     });
-    return data?.clientStale ?? null;
+    return { stale: data?.clientStale ?? null, serverSha: data?.version?.sha ?? data?.version?.shortSha ?? null };
   } catch {
     // Мережа/челендж/500 — це «не знаю», а не «оновись». Плашка, що спалахує на
     // кожному моргані звʼязку, навчає її ігнорувати.
-    return null;
+    return { stale: null, serverSha: null };
   }
 }
 

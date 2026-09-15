@@ -52,22 +52,40 @@ const Z = 4000;
 
 export function VersionBanner() {
   const [stale, setStale] = useState(false);
-  const [closed, setClosed] = useState(false);
-  const open = stale && !closed;
+  const [serverSha, setServerSha] = useState<string | null>(null);
+  /**
+   * 🔴 ЗАКРИТТЯ ПРИВʼЯЗАНЕ ДО SHA СЕРВЕРА, А НЕ ДО БУЛЕВОГО «closed» — і опитування
+   * НЕ ЗУПИНЯЄТЬСЯ після першого «застарів».
+   *
+   * 📐 АВАРІЯ, ЯКА ЦЕ КУПИЛА (15.09.2026). Було: `if (stale) return;` спиняв
+   * опитування назавжди після першого вердикту, а `closed=true` після Escape/✕
+   * ніколи не скидалось. Одне рефлекторне закриття — і тиша ДО ПЕРЕЗАВАНТАЖЕННЯ,
+   * скільки б викатів не пройшло далі (14.09 їх було шість). Людина працювала на
+   * бандлі без «Спільних задач», а плашка мовчала — і всі три ланки (sha бандла,
+   * health, сервер) були справні: заміряно поіменно.
+   *
+   * Тепер: закрив на sha X — на X більше не турбуємо; сервер став Y ≠ X — показуємо
+   * знову. Тримає `#414`.
+   */
+  const [dismissedSha, setDismissedSha] = useState<string | null>(null);
+  const open = stale && serverSha != null && dismissedSha !== serverSha;
 
   useEffect(() => {
-    if (stale) return;   // ← показали один раз: більше не питаємо
     let alive = true;
     const load = async () => {
       const r = await fetchClientStale();
+      if (!alive) return;
+      if (r.serverSha) setServerSha(r.serverSha);
       // `null` (не знаю) НЕ гасить уже показане вікно: версія від «не знаю» назад
-      // не помолодшала. Гасить лише перезавантаження.
-      if (alive && r === true) setStale(true);
+      // не помолодшала. `false` гасить — це відповідь «ти вже на актуальній».
+      if (r.stale === true) setStale(true);
+      else if (r.stale === false) setStale(false);
     };
     void load();
     const t = setInterval(load, POLL_MS);
     return () => { alive = false; clearInterval(t); };
-  }, [stale]);
+  }, []);
+  const dismiss = () => setDismissedSha(serverSha);
 
   /**
    * Esc закриває — те саме, що «Закрити».
@@ -85,7 +103,7 @@ export function VersionBanner() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopImmediatePropagation();
-      setClosed(true);
+      dismiss();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -129,7 +147,7 @@ export function VersionBanner() {
         </div>
 
         <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end", flexWrap: "wrap" }}>
-          <button onClick={() => setClosed(true)} style={{
+          <button onClick={() => dismiss()} style={{
             border: "1px solid #d0d5dd", background: "#fff", color: "#344054",
             borderRadius: 9, padding: "9px 18px", cursor: "pointer", fontSize: 14,
           }}>
