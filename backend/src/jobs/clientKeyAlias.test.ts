@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { RECOMPUTE_SQL, CANONICAL_KEY_EXPR } from "./clientKeySql.js";
+import { RECOMPUTE_SQL, CANONICAL_KEY_EXPR, REVOKE_ALIAS_SQL } from "./clientKeySql.js";
 import { provisionScratch, skipReason, type Unavailable } from "../db/scratchDb.js";
 
 /**
@@ -115,4 +115,229 @@ test("#21c ДЖОБА І ТЕСТ БЕРУТЬ ОДИН SQL, а не схожи�
   assert.match(job, /RECOMPUTE_SQL/, "джоба не використовує спільну константу");
   assert.ok(!/UPDATE\s+deals\s+d\s+SET\s+client_key\s*=/i.test(job),
     "🔴 у джобі лишився ВЛАСНИЙ UPDATE — саме те розходження, від якого ця константа й рятує");
+});
+
+/**
+ * #422 — РОЗʼЄДНАННЯ ЗВІЛЬНЯЄ ПСЕВДОНІМ, А ІСТОРІЯ ЛИШАЄТЬСЯ ЦІЛОЮ.
+ *
+ * 🔴 ЩО БУЛО ЗЛАМАНО (заміряно на проді 15.09.2026). `alias_key` був PRIMARY KEY
+ * безумовно, а відкіт лише проставляє `revoked_at` — рядки тут не видаляються
+ * ніколи. Тож скасований рядок тримав ключ зайнятим НАЗАВЖДИ: повторне злиття
+ * падало на `duplicate key`, і роут віддавав 409. Спалених ключів було три, під
+ * ними 358 угод, і приєднати їх назад було неможливо жодним інтерфейсом.
+ *
+ * Гейт проходить ПОВНИЙ цикл на справжній схемі й перевіряє три речі, які разом
+ * і означають «полагоджено»: (1) третій крок узагалі проходить; (2) резолвер не
+ * захлинається, коли на псевдонім лежить два рядки — саме тут виліз би
+ * «more than one row returned by a subquery» на КОЖНОМУ синку, якби часткова
+ * унікальність не тримала рівно один активний; (3) `evidence` першого злиття не
+ * затерте — воно несе право на відкіт і невідновлюваний знімок лімітів.
+ *
+ * Червоніє, якщо повернути безумовний PK або оживляти рядок через UPDATE.
+ */
+test("#422 РОЗʼЄДНАННЯ ЗВІЛЬНЯЄ ПСЕВДОНІМ: злити → розʼєднати → злити знову, історія ціла", async (t) => {
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    await c.query(`INSERT INTO managers (id,name,is_active) VALUES (1,'М',true) ON CONFLICT DO NOTHING`);
+    await c.query(
+      `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw)
+       VALUES (1,'d',1,8921932,142,100,'смар','смар')`);
+
+    const merge = (canon: string, reason: string, ev: string) => c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason,evidence)
+       VALUES ('смар',$1,$2,$3::jsonb)`, [canon, reason, ev]);
+
+    // ── 1. злили
+    await merge("смартекс", "перше злиття", '{"source":"ui","limitsBefore":[{"clientKey":"смар"}]}');
+    await c.query(RECOMPUTE_SQL);
+    // ── 2. розʼєднали (рядок ЛИШАЄТЬСЯ — так задумано)
+    await c.query(`UPDATE client_key_alias SET revoked_at = now() WHERE alias_key='смар' AND revoked_at IS NULL`);
+    await c.query(RECOMPUTE_SQL);
+
+    // ── 3. ГОЛОВНЕ: злили ТОЙ САМИЙ ключ знову. До фікса тут був duplicate key.
+    await merge("смартекс", "друге злиття", '{"source":"ui"}');
+
+    const rows = (await c.query<{ reason: string; revoked: boolean; evidence: Record<string, unknown> }>(
+      `SELECT reason, (revoked_at IS NOT NULL) AS revoked, evidence
+         FROM client_key_alias WHERE alias_key='смар' ORDER BY created_at, id`)).rows;
+    assert.equal(rows.length, 2, "🔴 повторне злиття не створило власного рядка — історію оживили перезаписом");
+    assert.equal(rows.filter((r) => !r.revoked).length, 1, "🔴 активним мусить лишатись рівно один рядок");
+    assert.equal(rows[0].reason, "перше злиття", "🔴 причину першого злиття затерто — зник доказ, чому колись злили");
+    assert.ok(rows[0].evidence.limitsBefore,
+      "🔴 `limitsBefore` першого злиття зник. Це ЄДИНИЙ і невідновлюваний знімок лімітів до злиття "
+      + "(core/mergeLimits.ts) — заради нього писали #262/#264");
+
+    // Резолвер не захлинається на двох рядках і застосовує саме активний.
+    await c.query(RECOMPUTE_SQL);
+    const d = (await c.query<{ client_key: string; client_key_raw: string }>(
+      `SELECT client_key, client_key_raw FROM deals WHERE kommo_id=1`)).rows[0];
+    assert.equal(d.client_key, "смартекс", "🔴 повторне злиття не застосувалось до угод");
+    assert.equal(d.client_key_raw, "смар", "🔴 сирий ключ зрушив — зворотність тримається саме на ньому");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
+
+/**
+ * #422b 🪞 — АКТИВНИЙ ПСЕВДОНІМ І ДАЛІ КОНФЛІКТУЄ.
+ *
+ * Дзеркало до `#422`, і без нього «виправлення» можна було б виконати, просто
+ * знявши унікальність: тоді на один ключ лягло б двоє АКТИВНИХ рядків, і резолвер
+ * почав би падати «more than one row returned by a subquery» на кожному синку.
+ * Тобто цей гейт стереже не зручність, а те, що фікс не перетворився на зняту
+ * перевірку. Червоніє, якщо зробити індекс повним замість часткового.
+ */
+test("#422b 🪞 АКТИВНИЙ ПСЕВДОНІМ І ДАЛІ КОНФЛІКТУЄ — унікальність звузили, а не зняли", async (t) => {
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    const add = (canon: string) => c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason) VALUES ('смар',$1,'test')`, [canon]);
+    await add("смартекс");
+    await assert.rejects(() => add("смартекс"), /duplicate key|unique/i,
+      "🔴 той самий АКТИВНИЙ псевдонім вставився вдруге — унікальність зняли, а не звузили");
+    await assert.rejects(() => add("іншафірма"), /duplicate key|unique/i,
+      "🔴 активний псевдонім перецілився на іншого клієнта мовчки, без відмови");
+    const n = (await c.query<{ n: string }>(
+      `SELECT COUNT(*) n FROM client_key_alias WHERE alias_key='смар' AND revoked_at IS NULL`)).rows[0];
+    assert.equal(Number(n.n), 1, "🔴 активних рядків на один псевдонім більше ніж один");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
+
+/**
+ * #422e — ВІДКІТ ЗНІМАЄ САМЕ ТУ ПАРУ, ПРО ЯКУ ПИТАЛИ.
+ *
+ * 🔴 ЗНАЙДЕНО РЕЦЕНЗІЄЮ ВЛАСНОЇ ЗМІНИ, а не тестом: часткова унікальність (#422)
+ * прибрала інваріанту, на яку мовчки спирався `revoke`. Доки `alias_key` був
+ * PRIMARY KEY, пара (псевдонім → канонічний) була унікальною Й НЕЗМІННОЮ назавжди
+ * — жодного `DELETE`, жодного `UPDATE … SET canonical_key` у продакшн-коді немає.
+ * Тому «зняти активний за ключем» було однозначним ЗА ПОБУДОВОЮ.
+ *
+ * Після зміни на ключ лягає кілька рядків із РІЗНИМИ канонічними, і той самий
+ * запит почав означати «зняти той, що активний ЗАРАЗ». Сценарій: у журналі
+ * відкрито «смар → максимсмартекс», інший адмін тим часом перезливає «смар →
+ * автострада». Клік по застарілому рядку питав про одне, а відкочував інше —
+ * 342 угоди виходили з групи, якої ніхто не чіпав, і сервер віддавав 200.
+ *
+ * Це рівно клас «ПРИБИРАЄШ ІНВАРІАНТУ — ЗНАЙДИ ВСІХ, ХТО НА НЕЇ СПИРАВСЯ».
+ * Гейт виконує САМ `REVOKE_ALIAS_SQL` із роуту, а не свою копію поруч — інакше він
+ * доводив би рівність двох рядків, написаних поруч, і мовчав би про продакшн.
+ *
+ * Червоніє, якщо прибрати `AND canonical_key = $2`.
+ */
+test("#422e ВІДКІТ АДРЕСНИЙ: знімає названу пару, а чужу не чіпає", async (t) => {
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const { revokeMismatchText } = await import("../core/mergeConflict.js");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    await c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason)
+       VALUES ('смар','автострада','перезлито іншим адміном')`);
+
+    // Людина бачила застарілий журнал і просить зняти пару, якої вже немає.
+    const stale = await c.query(REVOKE_ALIAS_SQL, ["смар", "максимсмартекс"]);
+    assert.equal(stale.rowCount, 0,
+      "🔴 ВІДКІТ ЗНЯВ ЧУЖУ ПАРУ. Людина підтвердила «розʼєднати смар від максимсмартекс», "
+      + "а зняли «смар → автострада» — клієнт вийшов із групи, якої ніхто не чіпав");
+    const still = (await c.query<{ n: string }>(
+      `SELECT COUNT(*) n FROM client_key_alias WHERE alias_key='смар' AND revoked_at IS NULL`)).rows[0];
+    assert.equal(Number(still.n), 1, "🔴 активний рядок усе-таки зачепило");
+
+    // 🪞 ДЗЕРКАЛО: із правильним канонічним відкіт працює. Без нього гейт зеленів би
+    // і тоді, якби `revoke` зрізали повністю.
+    const ok = await c.query(REVOKE_ALIAS_SQL, ["смар", "автострада"]);
+    assert.equal(ok.rowCount, 1, "🔴 відкіт названої пари не спрацював — зрізали саму дію");
+
+    // Причина відмови мусить назвати ОБИДВІ сторони, інакше людина не зрозуміє,
+    // що саме застаріло на її екрані.
+    const why = revokeMismatchText({ aliasKey: "смар", canonicalKey: "автострада" }, "максимсмартекс");
+    assert.match(why, /автострада/, "🔴 відмова не каже, куди псевдонім веде НАСПРАВДІ");
+    assert.match(why, /максимсмартекс/, "🔴 відмова не каже, про що питала людина");
+    assert.notEqual(why, revokeMismatchText(null, "максимсмартекс"),
+      "🔴 «веде до іншого» і «активного немає» дали один текст — смітник повернувся");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
+
+/**
+ * #422f — МІГРАЦІЯ ПЕРЕЖИВАЄ НЕПОРОЖНЮ ТАБЛИЦЮ І ПОВТОРНИЙ ПРОГІН.
+ *
+ * 🔴 НАВІЩО ОКРЕМО ВІД `#422`. Там схема накочується на ПОРОЖНЮ базу — а на проді
+ * в `client_key_alias` лежить ~178 рядків, і саме там міграція вперше робить те,
+ * чого на порожній не робить ніколи: заповнює `id BIGSERIAL` наявним рядкам і
+ * перемикає PRIMARY KEY, коли дані вже є. Якщо `id` вийде неунікальним або NULL,
+ * `ADD CONSTRAINT … PRIMARY KEY (id)` впаде **на проді, під час викату**, а не тут.
+ *
+ * 🔴 І ДРУГЕ: `schema.sql` виконується ЦІЛКОМ на КОЖНОМУ `npm run migrate`. Тобто
+ * DO-блок і `ADD COLUMN` зобовʼязані бути ідемпотентними — інакше другий викат
+ * упаде там, де перший пройшов. Це рівно клас «міграція пройшла ≠ зміна
+ * застосувалась», лише в інший бік.
+ *
+ * Гейт: накотити схему → покласти дані (включно з ВІДКЛИКАНИМ рядком, як на проді)
+ * → накотити схему ЩЕ РАЗ → дані цілі, ключі унікальні, часткова унікальність жива.
+ * Червоніє, якщо зробити міграцію разовою або зламати умову DO-блоку.
+ */
+test("#422f МІГРАЦІЯ ІДЕМПОТЕНТНА І ПЕРЕЖИВАЄ ДАНІ: другий прогін не ламає нічого", async (t) => {
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    const schema = readFileSync(SCHEMA, "utf8");
+    await c.query(schema);
+    // Стан, як на проді: є і чинні злиття, і відкликані.
+    await c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason,revoked_at) VALUES
+         ('смар','смартекс','чинне',NULL),
+         ('максимсмартекс','смартекс','чинне',NULL),
+         ('0672765955','глобалбілдінжиніринг','відкликане',now())`);
+
+    // 🔁 ДРУГИЙ ПРОГІН УСІЄЇ СХЕМИ — те саме, що наступний `npm run migrate`.
+    await c.query(schema);
+
+    const after = (await c.query<{ n: string; ids: string; nulls: string }>(
+      `SELECT COUNT(*) n, COUNT(DISTINCT id) ids, COUNT(*) FILTER (WHERE id IS NULL) nulls
+         FROM client_key_alias`)).rows[0];
+    assert.equal(Number(after.n), 3, "🔴 повторна міграція втратила або подвоїла рядки");
+    assert.equal(Number(after.ids), 3, "🔴 `id` не унікальний — PRIMARY KEY (id) упав би на проді");
+    assert.equal(Number(after.nulls), 0, "🔴 у наявних рядків `id` лишився NULL — PK такого не прийме");
+
+    const pk = (await c.query<{ cols: string }>(
+      `SELECT string_agg(a.attname, ',' ORDER BY a.attnum) cols
+         FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+        WHERE c.conrelid = 'client_key_alias'::regclass AND c.contype = 'p'`)).rows[0];
+    assert.equal(pk.cols, "id", "🔴 первинний ключ не переїхав на `id` або переїхав назад");
+
+    // Часткова унікальність жива після повторного прогону: відкликаний ключ вільний,
+    // активний — ні. Саме це і є предмет усієї зміни.
+    await c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason)
+       VALUES ('0672765955','глобалбілдінжиніринг','повторне злиття після відкоту')`);
+    await assert.rejects(
+      () => c.query(`INSERT INTO client_key_alias (alias_key,canonical_key,reason) VALUES ('смар','інша','дубль')`),
+      /duplicate key|unique/i, "🔴 після повторної міграції активний псевдонім перестав конфліктувати");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
 });

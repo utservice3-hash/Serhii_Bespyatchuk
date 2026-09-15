@@ -92,7 +92,8 @@ import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
-import { RECOMPUTE_RECEIVABLES_SQL } from "../jobs/clientKeySql.js";
+import { RECOMPUTE_RECEIVABLES_SQL, RECOMPUTE_SQL, REVOKE_ALIAS_SQL } from "../jobs/clientKeySql.js";
+import { aliasConflictText, revokeMismatchText } from "../core/mergeConflict.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -4059,7 +4060,7 @@ dashboardRouter.post("/receivables/merge", async (req, res) => {
     await client.query("ROLLBACK");
     const msg = String((e as Error).message ?? e);
     if (/ланцюжок заборонено/.test(msg)) return res.status(409).json({ error: msg });
-    if (/duplicate key/.test(msg)) return res.status(409).json({ error: "Такий псевдонім уже є в реєстрі" });
+    if (/duplicate key/.test(msg)) return res.status(409).json({ error: await aliasConflictError(aliases, canonical) });
     if (/alias_key <> canonical_key/.test(msg)) return res.status(400).json({ error: "Не можна зливати ключ сам із собою" });
     throw e;
   } finally {
@@ -7036,6 +7037,18 @@ dashboardRouter.get("/client-merge/preview", async (req, res) => {
   });
 });
 
+/**
+ * Пошук активного рядка для тексту відмови. Стоїть у `catch`, ПІСЛЯ гейта права —
+ * `#248` червоніє від будь-якого походу в БД перед перевіркою доступу.
+ */
+async function aliasConflictError(aliases: string[], canonical: string): Promise<string> {
+  const r = await pool.query<{ alias_key: string; canonical_key: string }>(
+    `SELECT alias_key, canonical_key FROM client_key_alias
+      WHERE alias_key = ANY($1) AND revoked_at IS NULL ORDER BY alias_key LIMIT 1`, [aliases]);
+  const row = r.rows[0];
+  return aliasConflictText(row ? { aliasKey: row.alias_key, canonicalKey: row.canonical_key } : null, canonical);
+}
+
 dashboardRouter.post("/client-merge", async (req, res) => {
   const auth = req.auth!;
   const alias = String(req.body?.alias ?? "").trim();
@@ -7052,27 +7065,58 @@ dashboardRouter.post("/client-merge", async (req, res) => {
   if (!mergePairAllowed(scope)) return res.status(403).json({ error: mergeDenyReason(scope) });
   if (!alias || !canonical) return res.status(400).json({ error: "alias і canonical обовʼязкові" });
   if (!reason) return res.status(400).json({ error: "Причина обовʼязкова — реєстр без причини стає смітником" });
+  /**
+   * 🔴 ЗАПИС У РЕЄСТР І ПЕРЕРАХУНОК — В ОДНІЙ ТРАНЗАКЦІЇ (15.09.2026).
+   *
+   * Доти вони були двома окремими запитами, і падіння перерахунку лишало псевдонім
+   * у реєстрі при старих даних: дія ставала НЕЗАВЕРШЕНОЮ і НЕПОВТОРЮВАНОЮ одночасно
+   * — наступна спроба діставала те саме 409. Це рівно той дефект, який `#244` уже
+   * вилікував для дверей ДЕБІТОРКИ (`/receivables/merge` нижче), а для дверей
+   * «Клієнти» — ні. Тобто до цієї правки до 409 вело ДВА незалежні шляхи, і фікс
+   * лише в реєстрі лишив би другий відкритим. Стереже `#422c`.
+   */
+  const client = await pool.connect();
+  let applied = 0;
   try {
-    await pool.query(
+    await client.query("BEGIN");
+    await client.query(
       `INSERT INTO client_key_alias (alias_key, canonical_key, reason, evidence, approved_by)
        VALUES ($1,$2,$3,$4::jsonb,$5)`,
       [alias, canonical, reason.slice(0, 300),
        JSON.stringify({ source: "ui", approvedAt: new Date().toISOString().slice(0, 10) }), auth.userId]);
+    applied = (await client.query(RECOMPUTE_SQL)).rowCount ?? 0;
+    await client.query("COMMIT");
   } catch (e) {
+    await client.query("ROLLBACK");
     const msg = String((e as Error).message ?? e);
     if (/ланцюжок заборонено/.test(msg)) return res.status(409).json({ error: msg });
-    if (/duplicate key/.test(msg)) return res.status(409).json({ error: "Такий псевдонім уже є в реєстрі" });
+    if (/duplicate key/.test(msg)) return res.status(409).json({ error: await aliasConflictError([alias], canonical) });
     throw e;
+  } finally {
+    client.release();
   }
-  const r = await recomputeClientKeys();
-  res.json({ ok: true, recomputed: r.changed });
+  // Перерахунок уже застосований у транзакції; цей виклик лишається заради
+  // ІНВАРІАНТУ всередині джоби («під псевдонімами стільки ж, скільки розійшлось»)
+  // і за `#21` не чіпає жодного рядка вдруге.
+  await recomputeClientKeys();
+  res.json({ ok: true, recomputed: applied });
 });
 
 dashboardRouter.post("/client-merge/revoke", async (req, res) => {
   const alias = String(req.body?.alias ?? "").trim();
+  /**
+   * 🎯 КАНОНІЧНИЙ БІК ПРИХОДИТЬ ІЗ ТІЛА — АЛЕ ЛИШЕ ЯК АДРЕСА, НЕ ЯК ПРАВО.
+   *
+   * Право й далі рахується від РЕАЛЬНОГО рядка реєстру (`row.canonical_key`
+   * нижче) — інакше «своє» визначав би той, хто просить. А `wanted` каже, ЯКЕ
+   * САМЕ злиття людина бачила на екрані, коли тиснула кнопку: з 15.09.2026 на
+   * один псевдонім лягає кілька рядків, тож «зняти активний» більше не означає
+   * «зняти той, про який питали». Розбіжність = застарілий журнал, і це окрема
+   * названа відмова, а не тиха дія по чужій парі.
+   */
+  const wanted = String(req.body?.canonical ?? "").trim();
   // Роз'єднання — той самий кламп, що й злиття, і так само ПЕРШИМ оператором
-  // (див. коментар у /client-merge). Канонічний бік беремо з реєстру, бо в тілі
-  // запиту його немає — інакше «своє» визначав би той, хто просить.
+  // (див. коментар у /client-merge).
   const row = (await pool.query<{ canonical_key: string; evidence: unknown }>(
     `SELECT canonical_key, evidence FROM client_key_alias WHERE alias_key = $1 AND revoked_at IS NULL`, [alias])).rows[0];
   // 🔓 ПРАВО НА ВІДКІТ — ЗА ДЖЕРЕЛОМ ЗЛИТТЯ (рішення власника 27.08.2026).
@@ -7086,10 +7130,17 @@ dashboardRouter.post("/client-merge/revoke", async (req, res) => {
     hasMergeReceivables: roleHasPerm(req.auth!.roleKey, "merge_receivables"),
   };
   if (!revokeAllowed(revokeInput)) return res.status(403).json({ error: revokeDenyReason(revokeInput) });
+  // 🔴 ВАЛІДАЦІЯ ПІСЛЯ ГЕЙТА, як і було: інакше проба з порожнім тілом діставала б
+  // 400 замість 403 і ламала гарантію матриці (той самий урок, що в /client-merge).
   if (!alias) return res.status(400).json({ error: "alias обовʼязковий" });
-  const upd = await pool.query(
-    `UPDATE client_key_alias SET revoked_at = now() WHERE alias_key = $1 AND revoked_at IS NULL`, [alias]);
-  if (!upd.rowCount) return res.status(409).json({ error: "Активного псевдоніма з таким ключем немає" });
+  if (!wanted) return res.status(400).json({ error: "canonical обовʼязковий — відкіт адресується парою" });
+  const upd = await pool.query(REVOKE_ALIAS_SQL, [alias, wanted]);
+  if (!upd.rowCount) {
+    return res.status(409).json({
+      error: revokeMismatchText(
+        row ? { aliasKey: alias, canonicalKey: row.canonical_key } : null, wanted),
+    });
+  }
   const r = await recomputeClientKeys();
   res.json({ ok: true, recomputed: r.changed });
 });
