@@ -284,6 +284,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
      відмова в обробнику) з власним прийманням, а не вибір при резолюції мержу. */
   { method: "GET", path: "/api/dashboard/ads/deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier"], deny: ["hr", "manager"] },
+  /* 📵 ПРОПУЩЕНІ ДЗВІНКИ (ТЗ-1, 14.09.2026).
+     🟢 МЕНЕДЖЕР ТУТ ДОЗВОЛЕНИЙ — і це РОЗБІЖНІСТЬ із сусідніми екранами, зроблена
+     свідомо, а не недогляд. `/ads`, `/leadgen`, `/lead-quality` закриті менеджеру
+     тому, що показують розподіл між КОЛЕГАМИ. Цей екран показує менеджеру ВЛАСНІ
+     пропущені — його ж роботу, ту саму, про яку йому й прийде сигнал. Кламп у
+     роуті звужує його до `auth.managerId`, тож чужого рядка він не побачить.
+     ⚠️ HR лишається закритим: це операційний показник відділу продажів, не кадровий. */
+  { method: "GET", path: "/api/dashboard/missed-calls", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
