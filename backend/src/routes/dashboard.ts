@@ -3,7 +3,7 @@ import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
-import { mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
+import { assignAllowed, assignDenyReason, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
          type MergePairScope } from "../auth/mergeScope.js";
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
@@ -6618,7 +6618,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
     archived: isArchived(h?.archived_at ?? null, h?.last_paid ?? null),
     archiveReason: h?.archive_reason ?? null,
     archiveReasons: ARCHIVE_REASONS,
-    canAssign: roleHasPerm(auth.roleKey, "merge_clients"),
+    // 👤 Передача: `merge_clients` між командами; тімлід — у своїй (14.09.2026, кламп на сервері).
+    canAssign: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
     canMerge: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
     mergeScope: roleHasPerm(auth.roleKey, "merge_clients") ? "all" : "team",
   });
@@ -6765,7 +6766,8 @@ dashboardRouter.get("/reactivation-list", async (req, res) => {
     //   canAssign — передати клієнта іншому менеджеру (лишилось за merge_clients);
     //   canMerge  — обʼєднати клієнтів (тімліду відкрито В МЕЖАХ його команди,
     //               рішення власника 04.08.2026; сам кламп — на сервері).
-    canAssign: roleHasPerm(auth.roleKey, "merge_clients"),
+    // 👤 Передача: `merge_clients` між командами; тімлід — у своїй (14.09.2026, кламп на сервері).
+    canAssign: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
     canMerge: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
     mergeScope: roleHasPerm(auth.roleKey, "merge_clients") ? "all" : "team",
   });
@@ -7225,15 +7227,27 @@ dashboardRouter.get("/client-merge/journal", async (req, res) => {
  * ТРИ правила навколо нього: межа місяця, історія передач і бейдж розбіжності
  * з CRM (нижче, у списку клієнтів).
  */
-dashboardRouter.post("/client-manager", requirePerm("merge_clients"), async (req, res) => {
+dashboardRouter.post("/client-manager", async (req, res) => {
   const auth = req.auth!;
+  // 🔴 РОЛЬОВИЙ ГЕЙТ — ПЕРШИМ ОПЕРАТОРОМ (403 = спрацював гейт, як у архіві й злитті).
+  // З 14.09.2026 тімлід теж проходить, але лише в межах своєї команди — межу тримає
+  // `assignAllowed` нижче, ПІСЛЯ того, як відомі команди клієнта й нового менеджера.
+  const canAll = roleHasPerm(auth.roleKey, "merge_clients");
+  if (!canAll && auth.role !== "team_lead") return res.status(403).json({ error: "Немає права передавати клієнтів" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   const toManagerId = Number(req.body?.managerId);
   const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || null;
   if (!clientKey || !Number.isFinite(toManagerId)) return res.status(400).json({ error: "clientKey і managerId обовʼязкові" });
 
-  const chk = await pool.query<{ id: number }>(`SELECT id FROM managers WHERE id = $1 AND is_active`, [toManagerId]);
+  const chk = await pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers WHERE id = $1 AND is_active`, [toManagerId]);
   if (!chk.rowCount) return res.status(400).json({ error: "Менеджер не знайдений або деактивований" });
+  if (!canAll) {
+    const scope = {
+      canAll, leadTeamId: auth.teamId ?? null,
+      clientTeamId: await clientOwnerTeam(clientKey), targetTeamId: chk.rows[0].team_id,
+    };
+    if (!assignAllowed(scope)) return res.status(403).json({ error: assignDenyReason(scope) });
+  }
 
   const cur = await pool.query<{ pinned_manager_id: number | null }>(
     `SELECT pinned_manager_id FROM loyalty_overrides WHERE client_key = $1`, [clientKey]);

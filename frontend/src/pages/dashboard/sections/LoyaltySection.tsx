@@ -86,7 +86,8 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
                                           || auth.role === "team_lead");
   // Обʼєднання: КВП/ОД/адмін + тімлід (у межах своєї команди — межу тримає сервер).
   const canMerge = auth != null && auth.role !== "manager";
-  const canAssignClients = auth != null && (auth.role === "admin" || auth.role === "company");
+  // Передача: КВП/ОД/адмін + тімлід (у межах своєї команди — межу тримає сервер, 14.09.2026).
+  const canAssignClients = auth != null && (auth.role === "admin" || auth.role === "company" || auth.role === "team_lead");
   const visible = useMemo(
     () => TABS.filter((t) => (t.key !== "pool" || canSeePool)
                           && (t.key !== "archive" || canSeeArchive)
