@@ -1,3 +1,4 @@
+import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
@@ -3596,7 +3597,7 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
      -- До 05.09.2026 тут стояв ЛИШЕ основний із угод, тож клієнта з вручну закріпленим
      -- менеджером пропонували НЕ тому — і «менеджер біля клієнта» розходився з
      -- «виконавцем задачі», причому кожна відповідь окремо виглядала правильною.
-     SELECT COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
+     SELECT ${effectiveManagerSql("lo", "pm")} AS manager_id,
             mm.name AS manager_name, a.client_key, a.name, a.orders, a.revenue, a.last_paid,
             a.payment_type,
             (SELECT MAX(last_activity_at) FROM deals dd WHERE dd.client_key = a.client_key) AS last_activity,
@@ -3604,7 +3605,7 @@ dashboardRouter.get("/reactivation-candidates", async (req, res) => {
      FROM agg a
      JOIN primary_mgr pm ON pm.client_key = a.client_key
      LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
-     JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+     JOIN managers mm ON mm.id = ${effectiveManagerSql("lo", "pm")} AND mm.is_active
      -- ЛИШЕ компанії (ключ по назві). Фізосіб (ключ по телефону) не пропонуємо.
      WHERE a.client_key !~ '^\\d{9,}$'
        AND a.client_key NOT IN (SELECT client_key FROM receivables WHERE client_key IS NOT NULL)
@@ -5567,9 +5568,9 @@ async function canSeeClient(auth: NonNullable<typeof import("express")["request"
          SELECT manager_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(closed_at_kommo) DESC) rn
            FROM paid GROUP BY manager_id) z WHERE rn = 1
      )
-     SELECT COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id, m.team_id
+     SELECT ${effectiveManagerSql("lo", "pm")} AS manager_id, m.team_id
        FROM pm LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
-       JOIN managers m ON m.id = COALESCE(lo.pinned_manager_id, pm.manager_id)`, [clientKey]);
+       JOIN managers m ON m.id = ${effectiveManagerSql("lo", "pm")}`, [clientKey]);
   const row = r.rows[0];
   if (!row) return false;
   if (auth.role === "manager") return row.manager_id === auth.managerId;
@@ -5639,7 +5640,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // 🔴 УМОВА СКОУПУ — ЗОВНІ, ПО МАТЕРІАЛІЗОВАНІЙ БАЗІ (10.09.2026). Ті самі колонки, що й
   // були (`pm.manager_id` — основний за оплатами; `mm.team_id` — команда показаного
   // менеджера), але накладені ПІСЛЯ збирання списку. Причина — в `clientsListSql`.
-  if (managerId != null) { mgrParams.push(managerId); mgrCond = `AND b.primary_manager_id = $${mgrParams.length}`; }
+  // 👤 З 15.09.2026 скоуп менеджера — за ЕФЕКТИВНИМ менеджером місяця (`b.manager_id`), тим
+  // самим, що стоїть у рядку. Було `b.primary_manager_id` (основний за оплатами) — і переданий
+  // клієнт зникав для нового менеджера, лишаючись видимим тімліду під його імʼям.
+  if (managerId != null) { mgrParams.push(managerId); mgrCond = `AND b.manager_id = $${mgrParams.length}`; }
   else if (teamId != null) { mgrParams.push(teamId); mgrCond = `AND b.team_id = $${mgrParams.length}`; }
 
   // 🔴 Сегмент/стан — зі СПІЛЬНОГО джерела (`core/clientSegments.ts`), того самого,
@@ -5667,7 +5671,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     //
     // ⚠️ Урок ширший за цей роут: пісочниця на 18 тис. рядків НЕ доводить нічого
     // про 146 тис. Порядок даних — частина умов задачі, а не деталь.
-    clientsListSql(mgrCond),
+    clientsListSql(mgrCond, monthStr),
     mgrParams
   );
   const clientKeys = clientsRes.rows.map((c) => c.client_key);
@@ -6365,7 +6369,7 @@ dashboardRouter.get("/client-search", async (req, res) => {
        -- Архівність НЕ впливає на «хто відповідальний»: закріплення лишається,
        -- навіть коли клієнта прибрали з екранів (інакше пошук показав би не того).
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
-       LEFT JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id)
+       LEFT JOIN managers mm ON mm.id = ${effectiveManagerSql("lo", "pm")}
        LEFT JOIN LATERAL (
          SELECT d2.client_name FROM deals d2
           WHERE d2.client_key = a.client_key AND d2.client_name IS NOT NULL
@@ -6461,7 +6465,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
          FROM agg a
          LEFT JOIN pm ON true
          LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
-         LEFT JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id)
+         LEFT JOIN managers mm ON mm.id = ${effectiveManagerSql("lo", "pm")}
          LEFT JOIN teams t ON t.id = mm.team_id
          LEFT JOIN LATERAL (
            SELECT d2.client_name, d2.payment_type FROM deals d2
@@ -6803,7 +6807,7 @@ dashboardRouter.post("/reactivation-task", async (req, res) => {
        SELECT manager_id FROM (SELECT manager_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, MAX(closed_at_kommo) DESC) rn
                                  FROM paid GROUP BY manager_id) z WHERE rn = 1
      )
-     SELECT COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
+     SELECT ${effectiveManagerSql("lo", "pm")} AS manager_id,
             (SELECT client_name FROM paid WHERE client_name IS NOT NULL ORDER BY closed_at_kommo DESC LIMIT 1) AS client_name
        FROM pm LEFT JOIN loyalty_overrides lo ON lo.client_key = $1`, [clientKey]);
   const defaultAssignee = owner.rows[0]?.manager_id ?? null;
@@ -6953,7 +6957,7 @@ async function clientOwnerTeam(clientKey: string): Promise<number | null> {
      )
      SELECT m.team_id FROM pm
        LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
-       JOIN managers m ON m.id = COALESCE(lo.pinned_manager_id, pm.manager_id)`, [clientKey]);
+       JOIN managers m ON m.id = ${effectiveManagerSql("lo", "pm")}`, [clientKey]);
   return r.rows[0]?.team_id ?? null;
 }
 
@@ -7238,8 +7242,14 @@ dashboardRouter.post("/client-manager", async (req, res) => {
   if (!canAll && auth.role !== "team_lead") return res.status(403).json({ error: "Немає права передавати клієнтів" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   const toManagerId = Number(req.body?.managerId);
-  const reason = String(req.body?.reason ?? "").trim().slice(0, 300) || null;
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 300);
+  const kind = String(req.body?.kind ?? "transfer") as TransferKind;
   if (!clientKey || !Number.isFinite(toManagerId)) return res.status(400).json({ error: "clientKey і managerId обовʼязкові" });
+  // 👤 Вид зміни (15.09.2026): `fix` — виправлення привʼязки, діє з 1-го числа ПОТОЧНОГО місяця;
+  // `transfer` — передача, з наступного. Причина обовʼязкова для обох: без неї «стрибок»
+  // клієнта посеред місяця нічим не пояснити.
+  if (!TRANSFER_KINDS.includes(kind)) return res.status(400).json({ error: "kind: fix або transfer" });
+  if (!reason) return res.status(400).json({ error: "Причина обовʼязкова: вона лишається в історії клієнта" });
 
   const chk = await pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers WHERE id = $1 AND is_active`, [toManagerId]);
   if (!chk.rowCount) return res.status(400).json({ error: "Менеджер не знайдений або деактивований" });
@@ -7255,11 +7265,8 @@ dashboardRouter.post("/client-manager", async (req, res) => {
     `SELECT pinned_manager_id FROM loyalty_overrides WHERE client_key = $1`, [clientKey]);
   const from = cur.rows[0]?.pinned_manager_id ?? null;
 
-  // Наступний місяць по-київськи: передача НЕ рухає поточний.
-  const today = kyivToday();
-  const d = new Date(`${today.slice(0, 8)}01T00:00:00Z`);
-  d.setUTCMonth(d.getUTCMonth() + 1);
-  const effectiveFrom = d.toISOString().slice(0, 10);
+  // Дата дії — з одного правила з читачами (`core/effectiveManager.ts`).
+  const effectiveFrom = effectiveFromFor(kind, kyivToday());
 
   await pool.query(
     `INSERT INTO loyalty_overrides (client_key, pinned_manager_id, pinned_from_month, updated_by, updated_at)
@@ -7268,15 +7275,17 @@ dashboardRouter.post("/client-manager", async (req, res) => {
        pinned_from_month = EXCLUDED.pinned_from_month, updated_by = EXCLUDED.updated_by, updated_at = now()`,
     [clientKey, toManagerId, effectiveFrom, auth.userId]);
   await pool.query(
-    `INSERT INTO client_manager_history (client_key, from_manager_id, to_manager_id, effective_from, reason, changed_by)
-     VALUES ($1,$2,$3,$4,$5,$6)`, [clientKey, from, toManagerId, effectiveFrom, reason, auth.userId]);
+    `INSERT INTO client_manager_history (client_key, from_manager_id, to_manager_id, effective_from, reason, changed_by, kind)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`, [clientKey, from, toManagerId, effectiveFrom, reason, auth.userId, kind]);
   // 🔴 Два записи, і вони НЕ дублікати: `client_manager_history` — ДІЮЧИЙ стан передачі
   // (з якого місяця чий клієнт), його читає логіка ростерів. Журнал — слід дії, його не
   // читає ніхто, крім людини. Злиття зробило б із розрахункової таблиці смітник подій.
   await logClientAdmin("manager_change", clientKey, auth.userId,
-    { fromManagerId: from, toManagerId, effectiveFrom, reason });
+    { fromManagerId: from, toManagerId, effectiveFrom, reason, kind });
 
-  res.json({ ok: true, effectiveFrom, note: "Поточний місяць лишається за попереднім менеджером" });
+  res.json({ ok: true, effectiveFrom, kind,
+    note: kind === "fix" ? "Виправлення привʼязки: діє одразу, з початку поточного місяця"
+                         : "Передача: поточний місяць лишається за попереднім менеджером" });
 });
 
 dashboardRouter.get("/client-manager/history", async (req, res) => {
@@ -7284,9 +7293,9 @@ dashboardRouter.get("/client-manager/history", async (req, res) => {
   const clientKey = String(req.query.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
   if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
-  const r = await pool.query<{ from_name: string | null; to_name: string; effective_from: string; reason: string | null; who: string | null; created_at: string }>(
+  const r = await pool.query<{ from_name: string | null; to_name: string; effective_from: string; reason: string | null; kind: string; who: string | null; created_at: string }>(
     `SELECT fm.name AS from_name, tm.name AS to_name,
-            to_char(h.effective_from,'YYYY-MM-DD') AS effective_from, h.reason,
+            to_char(h.effective_from,'YYYY-MM-DD') AS effective_from, h.reason, h.kind,
             COALESCE(u.full_name, u.email) AS who,
             to_char(h.created_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS created_at
        FROM client_manager_history h
@@ -7296,7 +7305,7 @@ dashboardRouter.get("/client-manager/history", async (req, res) => {
       WHERE h.client_key = $1 ORDER BY h.created_at DESC LIMIT 50`, [clientKey]);
   res.json(r.rows.map((x) => ({
     fromManager: x.from_name, toManager: x.to_name, effectiveFrom: x.effective_from,
-    reason: x.reason, changedBy: x.who, createdAt: x.created_at,
+    reason: x.reason, kind: x.kind, changedBy: x.who, createdAt: x.created_at,
   })));
 });
 

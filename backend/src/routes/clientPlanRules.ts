@@ -1,3 +1,4 @@
+import { effectiveManagerSql } from "../core/effectiveManager.js";
 /**
  * 🧮 ПРАВИЛА ЦИКЛУ ЗАТВЕРДЖЕННЯ ПЛАНУ ПО КЛІЄНТУ — БЕЗ імпортів.
  *
@@ -158,7 +159,7 @@ export function planTotals(rows: PlanRow[]): PlanTotals {
  * на першій новій ролі, і мовчки.
  *
  * ⚠️ ВИРАЗ ПОВТОРЮЄ РОСТЕРНИЙ (`routes/dashboard.ts`, CTE `paid`→`per_cm`→`primary_mgr`,
- * далі `COALESCE(lo.pinned_manager_id, pm.manager_id)` + `managers … AND is_active`) —
+ * далі ефективний менеджер місяця (`core/effectiveManager.ts`) + `managers … AND is_active`) —
  * ДОСЛІВНО, включно з `HAVING COUNT(*) >= 2` і виключенням дженерик-ключів. Копія тут
  * свідома: витягувати ростерний запит у спільний хелпер означало б чіпати запит, який
  * уже одного разу коштував 21.4 с на проді. Рівність двох текстів на ЖИВИХ даних
@@ -198,7 +199,7 @@ export const OWNER_SQL = `
     FROM agg a
     JOIN primary_mgr pm ON pm.client_key = a.client_key
     LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
-    JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active`;
+    JOIN managers mm ON mm.id = ${effectiveManagerSql("lo", "pm")} AND mm.is_active`;
 
 /**
  * 🔴 ВІДМОВА МУСИТЬ НАЗИВАТИ СЕБЕ. Мовчазний `NULL` — це і був баг: рядок зберігався,

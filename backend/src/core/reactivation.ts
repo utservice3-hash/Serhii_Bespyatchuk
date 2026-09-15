@@ -11,6 +11,7 @@
  * (зерно, опалення, ремонти), тож це рішення людини.
  */
 import { pool } from "../db/pool.js";
+import { effectiveManagerSql } from "./effectiveManager.js";
 import { GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { normalizeClientName } from "../utils/clientName.js";
 import { RETURNED_CLOSE_REASON } from "./reactivationRules.js";
@@ -212,7 +213,7 @@ export async function clientStates(
      SELECT a.client_key, nm.client_name, a.orders, a.revenue,
             to_char(a.last_paid ${KYIV}, 'YYYY-MM-DD') AS last_paid,
             GREATEST(0, ${daysSinceOrderSql("a.last_paid")})::int AS days_since,
-            COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id, mm.name AS manager_name,
+            ${effectiveManagerSql("lo", "pm")} AS manager_id, mm.name AS manager_name,
             mm.team_id, tm.name AS team_name,
             lo.pinned_manager_id, lo.seasonal, lo.seasonal_note,
             (SELECT COALESCE(SUM(p2.price),0) FROM paid p2
@@ -234,7 +235,7 @@ export async function clientStates(
        -- Заміряно на живому сервері: hidden=true, а клієнт у видачі обох екранів.
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        ${LAST_PAID_JOIN}
-       JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+       JOIN managers mm ON mm.id = ${effectiveManagerSql("lo", "pm")} AND mm.is_active
        LEFT JOIN teams tm ON tm.id = mm.team_id
        LEFT JOIN tasks_in tk ON tk.client_key = a.client_key
        LEFT JOIN LATERAL (

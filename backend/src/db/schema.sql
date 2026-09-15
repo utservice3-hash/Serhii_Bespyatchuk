@@ -643,6 +643,11 @@ CREATE TABLE IF NOT EXISTS client_manager_history (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_cmh_client ON client_manager_history(client_key, effective_from DESC);
+-- 👤 Вид зміни відповідального (15.09.2026): `fix` — виправлення привʼязки (діє з початку
+-- поточного місяця), `transfer` — передача (з наступного). Старі записи — передачі.
+ALTER TABLE client_manager_history ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'transfer';
+ALTER TABLE client_manager_history DROP CONSTRAINT IF EXISTS client_manager_history_kind_chk;
+ALTER TABLE client_manager_history ADD CONSTRAINT client_manager_history_kind_chk CHECK (kind IN ('fix','transfer'));
 
 -- Задача реактивації прив'язана до КЛІЄНТА і НЕ закривається без причини.
 -- 🔴 Чому причина обов'язкова саме в БД, а не лише у формі: «закрив і забув» —

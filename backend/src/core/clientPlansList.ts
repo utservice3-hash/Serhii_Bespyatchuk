@@ -1,4 +1,5 @@
 import { LAST_PAID_CTE, LAST_PAID_JOIN, archivedSql } from "./clientArchive.js";
+import { effectiveManagerSql, monthLiteralSql, KYIV_MONTH_SQL } from "./effectiveManager.js";
 
 /**
  * 🧾 СПИСОК КЛІЄНТІВ ДЛЯ «ПЛАН МІСЯЦЯ» (`GET /dashboard/client-plans`) — один текст на роут і гейт.
@@ -18,7 +19,10 @@ import { LAST_PAID_CTE, LAST_PAID_JOIN, archivedSql } from "./clientArchive.js";
  *
  * `cond` — готова умова з `$n` по аліасу `b`, порожня для адмін-рівня.
  */
-export function clientsListSql(cond: string): string {
+export function clientsListSql(cond: string, month?: string): string {
+  // 👤 Хто веде клієнта САМЕ в місяці M (за замовчуванням — поточний по Києву): передача
+  // з наступного місяця не рухає поточний, виправлення привʼязки діє одразу.
+  const eff = effectiveManagerSql("lo", "pm", month ? monthLiteralSql(month) : KYIV_MONTH_SQL);
   return `WITH ${LAST_PAID_CTE},
      paid AS (
        SELECT d.client_key, d.manager_id, d.price, d.closed_at_kommo
@@ -44,7 +48,7 @@ export function clientsListSql(cond: string): string {
      SELECT a.client_key, a.orders, a.revenue, nm.client_name AS name, nm.payment_type,
             to_char(a.first_paid AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS first_paid,
             to_char(a.last_paid  AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS last_paid,
-            COALESCE(lo.pinned_manager_id, pm.manager_id) AS manager_id,
+            ${eff} AS manager_id,
             pm.manager_id AS primary_manager_id,
             mm.name AS manager_name, lo.pinned_manager_id,
             mm.team_id, tt.name AS team_name
@@ -58,7 +62,7 @@ export function clientsListSql(cond: string): string {
        -- Заміряно на живому сервері: hidden=true, а клієнт у видачі обох екранів.
        LEFT JOIN loyalty_overrides lo ON lo.client_key = a.client_key
        ${LAST_PAID_JOIN}
-       JOIN managers mm ON mm.id = COALESCE(lo.pinned_manager_id, pm.manager_id) AND mm.is_active
+       JOIN managers mm ON mm.id = ${eff} AND mm.is_active
        LEFT JOIN teams tt ON tt.id = mm.team_id
        LEFT JOIN LATERAL (
          SELECT d2.client_name, d2.payment_type FROM deals d2

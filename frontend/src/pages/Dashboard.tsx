@@ -348,12 +348,19 @@ export function Dashboard() {
 
   // Notify (sound + toast + browser notification) when MY task (created by me or
   // assigned to me) is taken into work or completed. Skips the first load.
+  //
+  // 🔔 «Призначена мені» — ДВОМА способами: як менеджеру з CRM (`assigneeId`) і як
+  // АКАУНТУ (`assigneeUserId` — HR, бухгалтерія, рекрутер). Доти умова знала лише
+  // перший, і людина, якій задачу поставили на акаунт, не отримувала сповіщення
+  // ніколи (рішення власника 15.09.2026: додати). Тримає `#415`.
   useEffect(() => {
     const prev = prevTaskStatus.current;
     if (notifInit.current) {
       for (const t of tasks) {
         const was = prev.get(t.id);
-        const mine = t.createdById === auth?.userId || (auth?.managerId != null && t.assigneeId === auth.managerId);
+        const mine = t.createdById === auth?.userId
+          || (auth?.managerId != null && t.assigneeId === auth.managerId)
+          || (t.assigneeUserId != null && t.assigneeUserId === auth?.userId);
         if (mine && was && was !== t.status && (t.status === "in_progress" || t.status === "done")) {
           const who = t.assigneeName ? ` — ${t.assigneeName}` : "";
           const text = `Задача ${t.status === "done" ? "виконана ✅" : "взята в роботу ▶️"}${who}: ${t.title.slice(0, 90)}`;

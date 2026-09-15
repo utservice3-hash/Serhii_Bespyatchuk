@@ -268,6 +268,13 @@ test("#400h ДИМ: усі роути спільної задачі викону
     const viewerRow = listAdmin.tasks.find((t) => String(t.id) === fid);
     assert.equal(ownerRow?.fileCount, 1, `🔴 власник не бачить кількості своїх вкладень: ${JSON.stringify(ownerRow)}`);
     assert.ok(viewerRow, "🔴 наглядач узагалі не бачить задачі — фікстура не про те");
+    // 👤 Автор і автори файлів доїжджають — і теж за межею власника.
+    assert.equal((ownerRow as unknown as { createdByName?: string }).createdByName, "Тімлід",
+      "🔴 імʼя автора не доїхало у список — на «Спільних» не видно, від кого задача");
+    assert.match(String((ownerRow as unknown as { fileAuthors?: string }).fileAuthors ?? ""), /Менеджер/,
+      "🔴 власник не бачить, хто поклав файл");
+    assert.equal((viewerRow as unknown as { fileAuthors?: string | null }).fileAuthors ?? null, null,
+      "🔴 імена авторів файлів протекли наглядачеві, якому файли не належать");
     assert.equal(viewerRow!.fileCount, null,
       `🔴 ЛІЧИЛЬНИК ВКЛАДЕНЬ У НАГЛЯДАЧА = ${viewerRow!.fileCount}, А МУСИТЬ БУТИ null. `
       + "Нуль читався б на екрані як «файлів немає» — пряма неправда про задачу, у якої файл є.");
@@ -815,4 +822,47 @@ test("#400s СПІЛЬНА ЗАДАЧА: кнопка без підстанов�
   // Форма справді шле акаунт — контейнер має гілку.
   const cont = codeOf("pages", "Dashboard.tsx");
   assert.match(cont, /assigneeUserId: Number\(taskForm\.assigneeUserId\)/, "🔴 обраний акаунт не доїжджає до POST /tasks");
+});
+
+/**
+ * #415 — СПОВІЩЕННЯ ПРО СТАТУС ОТРИМУЄ Й ВИКОНАВЕЦЬ-АКАУНТ.
+ *
+ * Тост «взята в роботу / виконана» живе у фронті (`Dashboard.tsx`) і показується
+ * тому, для кого задача «моя». Доти «моя» = автор або виконавець-МЕНЕДЖЕР; людина,
+ * якій задачу поставили на АКАУНТ (HR, бухгалтерія), не отримувала нічого. Рішення
+ * власника 15.09.2026 — додати. Гейт вимагає всі три гілки, бо дві з них уже були,
+ * і без третьої регресія тиха: сповіщення просто не приходить.
+ *
+ * 🧨 Червоніє, якщо прибрати гілку `assigneeUserId` з умови `mine`.
+ */
+test("#415 СПОВІЩЕННЯ ПРО СТАТУС: автор, виконавець-менеджер І виконавець-акаунт", () => {
+  const src = codeOf("pages", "Dashboard.tsx");
+  const i = src.indexOf("const mine = t.createdById === auth?.userId");
+  assert.ok(i > 0, "🔴 гейт втратив предмет: умови «моя задача» для сповіщень немає");
+  const cond = src.slice(i, i + 320);
+  assert.ok(/t\.assigneeId === auth\.managerId/.test(cond), "🔴 виконавець-менеджер випав з умови сповіщень");
+  assert.ok(/t\.assigneeUserId != null && t\.assigneeUserId === auth\?\.userId/.test(cond),
+    "🔴 ВИКОНАВЕЦЬ-АКАУНТ НЕ ОТРИМУЄ СПОВІЩЕНЬ: у умові «моя задача» немає гілки assigneeUserId");
+});
+
+/**
+ * #421 — НА «СПІЛЬНИХ» ВИДНО, ВІД КОГО ЗАДАЧА, І ХТО ПОКЛАВ ФАЙЛИ.
+ *
+ * Відгук власника 15.09.2026: «зʼявилася спільна задача з Юлею — чому я не бачу, хто
+ * мені її поставив». Заміряно: сервер джойнив автора, але віддавав лише id і роль;
+ * фронт імʼя не показував ніде. Тепер — підпис у рядку (лише коли автор не я), поле
+ * «Автор» у картці, автори вкладень у тултипі.
+ *
+ * 🧨 Червоніє, якщо прибрати підпис із рядка, поле з картки або імʼя з видачі.
+ */
+test("#421 ВІД КОГО ЗАДАЧА: імʼя автора у видачі, в рядку «Спільних» і в картці; автори файлів — у тултипі", () => {
+  const be = readFileSync(path.join(import.meta.dirname, "tasks.js"), "utf8");
+  assert.match(be, /AS "createdByName"/, "🔴 видача списку не несе імені автора");
+  assert.match(be, /THEN tf\.authors END AS "fileAuthors"/, "🔴 автори файлів не віддаються (або віддаються без межі власника)");
+  const src = codeOf("pages", "dashboard", "sections", "TasksSection.tsx");
+  assert.match(src, /task\.createdByName && task\.createdById !== currentUserId && \(/,
+    "🔴 у рядку немає підпису «від кого» (або він показується і на власних задачах — шум)");
+  assert.match(src, /👤 від: \{task\.createdByName\}/, "🔴 підпис автора в рядку зник");
+  assert.match(src, /label="Автор"/, "🔴 у картці немає поля «Автор»");
+  assert.match(src, /Вкладення поклав: \$\{task\.fileAuthors\}/, "🔴 тултип на 📎 не називає, хто поклав файли");
 });

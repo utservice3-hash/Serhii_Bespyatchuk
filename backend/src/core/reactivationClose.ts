@@ -1,5 +1,6 @@
 import { CLOSE_REASON_KEYS, RETURNED_CLOSE_REASON } from "./reactivationRules.js";
 import { MIGRATED_CLOSE_REASON } from "./reactivationPack.js";
+import { effectiveManagerSql } from "./effectiveManager.js";
 
 /**
  * 🏷 ЧОМУ ЗАДАЧУ ЗАКРИТО — І ХТО ЦЕ ВИРІШИВ: ЛЮДИНА ЧИ СИСТЕМА.
@@ -102,7 +103,7 @@ export const OWNER_TEAM_CTE = `
     SELECT pm.client_key, m.team_id
       FROM paid_mgr pm
       LEFT JOIN loyalty_overrides lo ON lo.client_key = pm.client_key
-      JOIN managers m ON m.id = COALESCE(lo.pinned_manager_id, pm.manager_id)
+      JOIN managers m ON m.id = ${effectiveManagerSql("lo", "pm")}
   )`;
 
 /**
