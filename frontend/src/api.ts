@@ -2466,6 +2466,10 @@ export interface Task {
    * (замок), а не як «файлів немає».
    */
   fileCount?: number | null;
+  /** Хто поклав файли (через кому) — лише власнику, як і лічильник. */
+  fileAuthors?: string | null;
+  /** Імʼя автора задачі — щоб на «Спільних» було видно, ВІД КОГО вона. */
+  createdByName?: string | null;
   /** «Є нове»: доповнення або зміна статусу після мого останнього перегляду і НЕ мною. */
   hasUnseen?: boolean;
   metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;
