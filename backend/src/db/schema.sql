@@ -2558,6 +2558,88 @@ SELECT u.id, u.email, 'role.update', 'role', 'kvp,admin', '1×1: наскріз�
 --   UPDATE roles SET permissions = permissions - 'view_all_1x1' WHERE key IN ('admin','kvp');
 --   UPDATE roles SET permissions = permissions - 'edit_1x1_forms' WHERE key = 'kvp';
 -- ══════════════════════════════════════════════════════════════════════════
+-- 🎓 НАВЧАННЯ, КРОК 2: курси, прогрес, події (ТЗ 15.09.2026)
+-- ══════════════════════════════════════════════════════════════════════════
+--
+-- 🔴 МОДУЛЬ = КОРЕНЕВА ПАПКА (рішення власника 15.09.2026). Вкладені папки лишаються
+-- групами матеріалів УСЕРЕДИНІ модуля. Тому `course_id` висить на папці, а не на
+-- матеріалі: інакше одна папка могла б розʼїхатись між двома курсами.
+CREATE TABLE IF NOT EXISTS training_courses (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  audience TEXT NOT NULL DEFAULT 'all' CHECK (audience IN ('candidate','manager','all')),
+  position INTEGER NOT NULL DEFAULT 0,
+  published BOOLEAN NOT NULL DEFAULT false,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 🔴 UNIQUE (user_id, material_id) — ОДИН РЯДОК НА ЛЮДИНУ Й МАТЕРІАЛ. Без нього
+-- повторне відкриття плодило б дублі, і відсоток рахувався б по рядках, а не по
+-- матеріалах: 3 із 4 легко стало б 5 із 4.
+-- CASCADE на матеріал — свідомо: видалення матеріалу мусить прибрати прогрес, інакше
+-- знаменник і чисельник розійдуться (ТЗ §6 п.9).
+CREATE TABLE IF NOT EXISTS training_progress (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  material_id INTEGER NOT NULL REFERENCES training_materials(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('opened','done')),
+  score NUMERIC,
+  passed BOOLEAN,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  answers_json JSONB,
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  UNIQUE (user_id, material_id)
+);
+CREATE INDEX IF NOT EXISTS idx_training_progress_user ON training_progress(user_id);
+
+-- 📜 Події — журнал, а не стан. `material_id` тут SET NULL, а не CASCADE: видалення
+-- матеріалу не має стирати СЛІД того, що людина його проходила (той самий принцип, що
+-- в `.deploy-lock.log` — журнал append-only, бо «хто що робив» потрібне саме потім).
+CREATE TABLE IF NOT EXISTS training_events (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  material_id INTEGER REFERENCES training_materials(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('open','done','quiz_attempt','exam_unlock','course_done','hired')),
+  payload_json JSONB,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_training_events_user ON training_events(user_id, at DESC);
+
+ALTER TABLE training_folders   ADD COLUMN IF NOT EXISTS course_id INTEGER REFERENCES training_courses(id) ON DELETE SET NULL;
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS required  BOOLEAN NOT NULL DEFAULT true;
+
+-- ── БЕКФІЛ (разовий) ──────────────────────────────────────────────────────
+-- 🔴 ОБИДВА ВСТАВЛЕННЯ ЗАХИЩЕНІ `NOT EXISTS`, І ЦЕ НЕ ПЕРЕСТРАХОВКА. Міграція біжить на
+-- КОЖНОМУ викаті. Без цієї умови рядок нижче позначав би `done` кожен НОВИЙ матеріал усім
+-- 46 людям на наступному ж деплої — тобто курс «проходив би себе сам», і замки перестали б
+-- означати будь-що. Разовість тут є частиною правила, а не оформленням.
+INSERT INTO training_courses (title, description, audience, position, published)
+SELECT 'Загальне навчання', 'Матеріали, що існували до появи курсів.', 'all', 0, true
+ WHERE NOT EXISTS (SELECT 1 FROM training_courses);
+
+-- Папка без курсу не видно в ЖОДНОМУ курсі, тож умова лишається безумовною: це страховка,
+-- а не бекфіл. Редактор, який створив папку й не обрав курс, отримає її в «Загальному
+-- навчанні», а не в порожнечі. ⚠️ Зворотний бік названий вголос: папка, задумана для
+-- іншого курсу й лишена без `course_id`, теж потрапить сюди — виправляється одним PATCH.
+UPDATE training_folders SET course_id = (SELECT id FROM training_courses ORDER BY id LIMIT 1)
+ WHERE course_id IS NULL;
+
+-- 🔴 «ХТО ВЖЕ ПРОХОДИВ» — ЦЕ `COALESCE(role_override, role)`, А НЕ `role_override`.
+-- Заміряно на проді 15.09.2026: `role_override` порожній у 35 із 46 активних людей, тож
+-- фільтр по одному полю лишив би їх без позначки — і замки закрили б менеджерам те, що
+-- вони читали роками. Рішення власника: позначити ВСІХ 46 активних.
+-- 📐 Масштаб заміряно, а не оцінено: 46 людей × 63 матеріали = 2 898 рядків.
+-- ⚠️ `revert` коду ці рядки НЕ забере — знімати окремим DELETE.
+INSERT INTO training_progress (user_id, material_id, status, finished_at)
+SELECT u.id, m.id, 'done', now()
+  FROM users u CROSS JOIN training_materials m
+ WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate'
+   AND NOT EXISTS (SELECT 1 FROM training_progress);
+
+-- ══════════════════════════════════════════════════════════════════════════
 -- 🎓 НАВЧАННЯ: роль «Кандидат» і право `manage_training` (ТЗ 14.09.2026)
 -- ══════════════════════════════════════════════════════════════════════════
 --

@@ -6,6 +6,7 @@ import path from "path";
 import { pool } from "../db/pool.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { UPLOAD_DIR } from "./uploads.js";
+import { orderedMaterials, materialStates, coursePercent } from "../core/trainingProgress.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
@@ -225,4 +226,212 @@ trainingRouter.get("/material/:id/file", async (req, res) => {
   res.sendFile(path.join(TRAIN_DIR, m.stored_name!), (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: "Файл відсутній на диску" });
   });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   🎓 КУРСИ Й ПРОГРЕС (крок 2 ТЗ, 15.09.2026)
+   ═══════════════════════════════════════════════════════════════════════════
+
+   🔴 ПОРЯДОК І ЗАМКИ РАХУЄ ЯДРО, А НЕ SQL. `core/trainingProgress.ts` — єдине місце,
+   де живе правило «наступний відкривається, коли попередній зроблено». Роути нижче
+   лише подають йому рядки. Інакше правило існувало б у трьох копіях (список, відкриття,
+   відсоток), і розійшлися б вони тихо.
+*/
+
+/**
+ * 🎯 ЯКІ КУРСИ БАЧИТЬ ЦЯ РОЛЬ.
+ *
+ * ⚠️ ВІДХИЛЕННЯ ВІД БУКВИ ТЗ, НАЗВАНЕ ВГОЛОС. §4 каже про кандидата «лише курси з
+ * аудиторією candidate». Виконане буквально, це дало б кандидату ПОРОЖНІЙ екран: єдиний
+ * наявний курс — «Загальне навчання» з аудиторією `all`, бо таким його робить бекфіл.
+ * Тобто буква ТЗ суперечить його ж меті («кандидат бачить лише вкладку Навчання і
+ * проходить курс»). Читаємо `all` як «для всіх», а `candidate` — як «додатково для
+ * кандидатів»; курси `manager` кандидату не показуємо.
+ * 🔴 Якщо власник мав на увазі саме буквальне — це зміна ОДНОГО рядка тут, і вона
+ * потребує його слова, а не мого здогаду.
+ */
+const audienceFor = (roleKey: string): string[] =>
+  roleKey === "candidate" ? ["candidate", "all"] : ["manager", "all"];
+
+/** Курси за аудиторією + мій відсоток по кожному. */
+trainingRouter.get("/courses", async (req, res) => {
+  const uid = req.auth!.userId;
+  const [courses, folders, materials, progress] = await Promise.all([
+    pool.query(
+      `SELECT id, title, description, audience, position, published
+         FROM training_courses
+        WHERE audience = ANY($1) AND (published OR $2::boolean)
+        ORDER BY position, id`,
+      [audienceFor(req.auth!.roleKey), isAdminScope(req.auth!)]
+    ),
+    pool.query(`SELECT id, parent_id, position, course_id FROM training_folders`),
+    pool.query(`SELECT id, folder_id, position, required FROM training_materials WHERE status = 'published'`),
+    pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
+  ]);
+
+  const done = new Map(progress.rows.map((p) => [p.material_id, p.status as "opened" | "done"]));
+  const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
+  const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
+
+  res.json({
+    courses: courses.rows.map((c) => {
+      // Модуль = КОРЕНЕВА папка курсу (рішення власника 15.09.2026).
+      const modules = folders.rows.filter((f) => f.course_id === c.id && f.parent_id === null);
+      const all = modules.flatMap((m) => orderedMaterials(m.id, fRows, mRows));
+      // 🔴 ПОЛЯ ЯВНО, БЕЗ СПРЕДУ (ворота `#17e2`): нова колонка в `training_courses`
+      // не має поїхати назовні сама лише тому, що її додали в таблицю.
+      return { id: c.id, title: c.title, description: c.description, audience: c.audience,
+               position: c.position, published: c.published,
+               percent: coursePercent(all, done), materialCount: all.length };
+    }),
+  });
+});
+
+/** Склад курсу: модулі, матеріали, стан кожного і ХТО тримає замок. */
+trainingRouter.get("/courses/:id", async (req, res) => {
+  const uid = req.auth!.userId;
+  const courseId = Number(req.params.id);
+  const c = await pool.query(
+    `SELECT id, title, description, audience, published FROM training_courses WHERE id = $1`, [courseId]);
+  if (!c.rowCount) return res.status(404).json({ error: "Курс не знайдено" });
+  if (!audienceFor(req.auth!.roleKey).includes(c.rows[0].audience)) {
+    return res.status(403).json({ error: "Курс не для вашої ролі" });
+  }
+
+  const [folders, materials, progress] = await Promise.all([
+    pool.query(`SELECT id, parent_id, name, position, course_id FROM training_folders`),
+    pool.query(
+      `SELECT id, folder_id, title, kind, position, required FROM training_materials
+        WHERE status = 'published'`),
+    pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
+  ]);
+  const done = new Map(progress.rows.map((p) => [p.material_id, p.status as "opened" | "done"]));
+  const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
+  const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
+  const titleOf = new Map(materials.rows.map((m) => [m.id, m.title as string]));
+
+  const modules = folders.rows
+    .filter((f) => f.course_id === courseId && f.parent_id === null)
+    .sort((a, b) => a.position - b.position || a.id - b.id);
+
+  const all = modules.flatMap((m) => orderedMaterials(m.id, fRows, mRows));
+  const stateById = new Map(materialStates(all, done).map((s) => [s.id, s]));
+
+  res.json({
+    course: c.rows[0],
+    percent: coursePercent(all, done),
+    modules: modules.map((mod, i) => {
+      const own = orderedMaterials(mod.id, fRows, mRows);
+      return {
+        id: mod.id, name: mod.name, index: i + 1,
+        percent: coursePercent(own, done),
+        // 🔴 ЗАКРИТІ ВІДДАЮТЬСЯ, А НЕ ХОВАЮТЬСЯ: людина мусить бачити, що попереду ще є,
+        // і чому воно закрите. Сховане читалось би як «курс скоротився».
+        materials: own.map((m) => {
+          const st = stateById.get(m.id)!;
+          const src = materials.rows.find((x) => x.id === m.id)!;
+          return {
+            id: m.id, title: src.title, kind: src.kind, required: m.required,
+            state: st.state,
+            blockedBy: st.blockedBy ? { materialId: st.blockedBy.materialId, title: titleOf.get(st.blockedBy.materialId) ?? "" } : null,
+          };
+        }),
+      };
+    }),
+  });
+});
+
+/** Спільна перевірка: чи можна ЗАРАЗ чіпати цей матеріал. `null` = можна. */
+async function lockedReason(uid: number, materialId: number): Promise<{ materialId: number; title: string } | null> {
+  const [folders, materials, progress] = await Promise.all([
+    pool.query(`SELECT id, parent_id, position, course_id FROM training_folders`),
+    pool.query(`SELECT id, folder_id, title, position, required FROM training_materials WHERE status = 'published'`),
+    pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
+  ]);
+  const me = materials.rows.find((m) => m.id === materialId);
+  if (!me) return null;                       // немає матеріалу — про замок не йдеться
+  const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
+  const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
+  const done = new Map(progress.rows.map((p) => [p.material_id, p.status as "opened" | "done"]));
+
+  // Модуль матеріалу: його папка, якщо коренева, інакше її батько.
+  const own = folders.rows.find((f) => f.id === me.folder_id);
+  const moduleId = own?.parent_id ?? own?.id;
+  if (moduleId == null) return null;
+
+  const st = materialStates(orderedMaterials(moduleId, fRows, mRows), done).find((s) => s.id === materialId);
+  if (!st || st.state !== "locked" || !st.blockedBy) return null;
+  const title = materials.rows.find((m) => m.id === st.blockedBy!.materialId)?.title ?? "";
+  return { materialId: st.blockedBy.materialId, title };
+}
+
+/** Відкриття матеріалу. 423 — якщо замкнено, із назвою того, хто тримає замок. */
+trainingRouter.post("/progress/:materialId/open", async (req, res) => {
+  const uid = req.auth!.userId;
+  const id = Number(req.params.materialId);
+  const blocked = await lockedReason(uid, id);
+  if (blocked) return res.status(423).json({ error: "Матеріал ще закритий", blockedBy: blocked });
+  await pool.query(
+    `INSERT INTO training_progress (user_id, material_id, status)
+     VALUES ($1, $2, 'opened') ON CONFLICT (user_id, material_id) DO NOTHING`, [uid, id]);
+  await pool.query(
+    `INSERT INTO training_events (user_id, material_id, kind) VALUES ($1, $2, 'open')`, [uid, id]);
+  res.json({ ok: true });
+});
+
+/**
+ * «Пройшов, далі». Для тестів тут 400 — їх закриває `POST /quiz/:id/submit` (крок 3).
+ * 🔴 `DO UPDATE`, а не `DO NOTHING`: людина спершу ВІДКРИВАЄ матеріал (рядок уже є зі
+ * станом `opened`), тож «нічого не роби при конфлікті» лишило б курс назавжди на 0%.
+ */
+trainingRouter.post("/progress/:materialId/done", async (req, res) => {
+  const uid = req.auth!.userId;
+  const id = Number(req.params.materialId);
+  const kind = await pool.query<{ kind: string }>(`SELECT kind FROM training_materials WHERE id = $1`, [id]);
+  if (!kind.rowCount) return res.status(404).json({ error: "Матеріал не знайдено" });
+  if (kind.rows[0].kind === "quiz") {
+    return res.status(400).json({ error: "Тест зараховується перевіркою відповідей, а не кнопкою" });
+  }
+  const blocked = await lockedReason(uid, id);
+  if (blocked) return res.status(423).json({ error: "Матеріал ще закритий", blockedBy: blocked });
+
+  await pool.query(
+    `INSERT INTO training_progress (user_id, material_id, status, finished_at)
+     VALUES ($1, $2, 'done', now())
+     ON CONFLICT (user_id, material_id) DO UPDATE SET status = 'done', finished_at = now()`, [uid, id]);
+  await pool.query(
+    `INSERT INTO training_events (user_id, material_id, kind) VALUES ($1, $2, 'done')`, [uid, id]);
+  res.json({ ok: true });
+});
+
+/** Курси — створення й правка (право `manage_training`). */
+trainingRouter.post("/courses", canEditTraining, async (req, res) => {
+  const { title, description, audience } = req.body ?? {};
+  if (typeof title !== "string" || !title.trim()) return res.status(400).json({ error: "Потрібна назва" });
+  if (!["candidate", "manager", "all"].includes(audience)) {
+    return res.status(400).json({ error: "audience: candidate | manager | all" });
+  }
+  const r = await pool.query<{ id: number }>(
+    `INSERT INTO training_courses (title, description, audience, position, created_by)
+     VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) + 1 FROM training_courses), 0), $4) RETURNING id`,
+    [title.trim(), description ?? null, audience, req.auth!.userId]);
+  res.json({ id: r.rows[0].id });
+});
+
+trainingRouter.patch("/courses/:id", canEditTraining, async (req, res) => {
+  const { title, description, audience, published } = req.body ?? {};
+  if (audience !== undefined && !["candidate", "manager", "all"].includes(audience)) {
+    return res.status(400).json({ error: "audience: candidate | manager | all" });
+  }
+  const r = await pool.query(
+    `UPDATE training_courses SET
+       title       = COALESCE($2, title),
+       description = COALESCE($3, description),
+       audience    = COALESCE($4, audience),
+       published   = COALESCE($5, published)
+     WHERE id = $1`,
+    [Number(req.params.id), title ?? null, description ?? null, audience ?? null,
+     typeof published === "boolean" ? published : null]);
+  if (!r.rowCount) return res.status(404).json({ error: "Курс не знайдено" });
+  res.json({ ok: true });
 });

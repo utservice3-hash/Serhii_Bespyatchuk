@@ -60,6 +60,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "PATCH /api/training/material/:id": "manage_training — те саме",
   "DELETE /api/training/material/:id": "manage_training — те саме",
   "POST /api/training/materials/:id/publish": "manage_training — те саме",
+  "POST /api/training/courses": "manage_training — те саме (крок 2, 15.09.2026)",
+  "PATCH /api/training/courses/:id": "manage_training — те саме",
   "POST /api/settings/users/:id/reset-password": "reset_passwords — окреме право, лише СЕО/ОД/адмін",
   "POST /api/settings/users/provision": "manage_users — те саме",
   // ФАЗА B. `merge_clients` мають КВП, ОД і admin (зміна політики 03.08.2026).
