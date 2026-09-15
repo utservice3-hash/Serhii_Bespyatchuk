@@ -50,11 +50,11 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
   { method: "GET", path: "/api/auth/gate", permanent: true,
     why: "Стан офер-гейта ВЛАСНОГО токена (чи обмежений двома вкладками). Скоуп — сам токен, "
        + "чужого не віддає; вкладки не має навмисно — інакше обмежений не міг би дізнатись, що обмежений. "
-       + "Правило стереже `#431b`." },
+       + "Правило стереже `#441b`." },
   { method: "GET", path: "/api/auth/telegram", permanent: true,
     why: "Стан привʼязки Telegram ВЛАСНОГО токена (чи привʼязано, імʼя бота). Чужого не віддає; вкладки немає — привʼязка потрібна будь-якій ролі." },
   { method: "POST", path: "/api/auth/telegram-link", permanent: true,
-    why: "Одноразовий токен привʼязки для ВЛАСНОГО акаунта (10 хв, #432b). Скоуп — сам токен." },
+    why: "Одноразовий токен привʼязки для ВЛАСНОГО акаунта (10 хв, #442b). Скоуп — сам токен." },
   { method: "POST", path: "/api/auth/telegram-unlink", permanent: true,
     why: "Відвʼязати ВЛАСНИЙ Telegram. Скоуп — сам токен." },
   { method: "POST", path: "/api/telegram/sign-webhook", permanent: true,

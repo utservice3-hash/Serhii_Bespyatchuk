@@ -7,11 +7,11 @@ const rec = (over: Partial<CodeRecord> = {}): CodeRecord => ({ code: "123456", f
 const exp = { fileId: 7, sha256: "abc", version: 2 };
 
 /**
- * #432 — КОД ПІДПИСУ ПРИВʼЯЗАНИЙ ДО ВЕРСІЇ, ОДНОРАЗОВИЙ, 5 ХВ, 3 СПРОБИ.
+ * #442 — КОД ПІДПИСУ ПРИВʼЯЗАНИЙ ДО ВЕРСІЇ, ОДНОРАЗОВИЙ, 5 ХВ, 3 СПРОБИ.
  * Червоніє, якщо прибрати звірку sha/версії (код на v1 підпише v2), не гасити код після
  * використання, ігнорувати строк або спроби.
  */
-test("#432 TG-ПІДПИС: код чинний лише для того файла/хеша/версії, на які надісланий; одноразовий; 5 хв; 3 спроби", () => {
+test("#442 TG-ПІДПИС: код чинний лише для того файла/хеша/версії, на які надісланий; одноразовий; 5 хв; 3 спроби", () => {
   assert.deepEqual(verifySignCode(rec(), "123456", exp, now), { ok: true });
   assert.equal(verifySignCode(rec(), "123456", { ...exp, sha256: "def" }, now).ok, false, "код на стару версію підписав нову");
   assert.equal((verifySignCode(rec(), "123456", { ...exp, sha256: "def" }, now) as { reason: string }).reason, "wrong_version");
@@ -29,8 +29,8 @@ test("#432 TG-ПІДПИС: код чинний лише для того фай�
   assert.ok(msg.includes("Офер — Іван") && msg.includes("версія 3"), "повідомлення без назви/версії — людина не знає, що підписує");
 });
 
-/** #432b — ТОКЕН ПРИВʼЯЗКИ: одноразовий і зі строком; deep-link ≤ 64 символів URL-безпечних. */
-test("#432b TG-ПРИВʼЯЗКА: токен /start одноразовий, 10 хв, придатний для deep-link", () => {
+/** #442b — ТОКЕН ПРИВʼЯЗКИ: одноразовий і зі строком; deep-link ≤ 64 символів URL-безпечних. */
+test("#442b TG-ПРИВʼЯЗКА: токен /start одноразовий, 10 хв, придатний для deep-link", () => {
   assert.equal(linkTokenState({ expiresAt: new Date(now.getTime() + 1000), usedAt: null }, now), "ok");
   assert.equal(linkTokenState({ expiresAt: new Date(now.getTime() + 1000), usedAt: now }, now), "used", "використаний токен привʼязав би другу людину");
   assert.equal(linkTokenState({ expiresAt: now, usedAt: null }, now), "expired");
@@ -38,8 +38,8 @@ test("#432b TG-ПРИВʼЯЗКА: токен /start одноразовий, 10 
   assert.ok(t.length > 20 && t.length <= 64 && /^[A-Za-z0-9_-]+$/.test(t), `токен непридатний для start=: ${t}`);
 });
 
-/** #432c — НАГАДУВАННЯ: лише офери, лише непідписані на поточній версії, лише неархівовані, не частіше разу на добу. */
-test("#432c TG-НАГАДУВАННЯ: лише непідписані неархівовані офери, не частіше разу на добу", () => {
+/** #442c — НАГАДУВАННЯ: лише офери, лише непідписані на поточній версії, лише неархівовані, не частіше разу на добу. */
+test("#442c TG-НАГАДУВАННЯ: лише непідписані неархівовані офери, не частіше разу на добу", () => {
   const base = { section: "offer", archivedAt: null, signedCurrent: false, remindedAt: null };
   assert.equal(reminderDue(base, now), true);
   assert.equal(reminderDue({ ...base, signedCurrent: true }, now), false, "нагадали про підписаний офер");

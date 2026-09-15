@@ -368,7 +368,7 @@ documentsRouter.delete("/file/:id", management, async (req, res) => {
 
 /**
  * ПІДПИС. Способи: `paper_photo` (фото підписаного паперу, рішення Сергія 15.09) і `telegram_code`
- * (код у бот «UTS Підпис», рівень 2 ТЗ; два кроки — send/verify; правило коду в core/signCode.ts, #432).
+ * (код у бот «UTS Підпис», рівень 2 ТЗ; два кроки — send/verify; правило коду в core/signCode.ts, #442).
  * `diia` — значення є, реалізація після підключення до Дії.
  */
 documentsRouter.post("/file/:id/sign", async (req, res) => {

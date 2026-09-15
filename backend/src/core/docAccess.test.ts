@@ -6,7 +6,7 @@ const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({ folderRight
 const doc = (over: Partial<DocLike> = {}): DocLike => ({ id: 1, folderId: 10, section: "general", addresseeUserId: null, createdBy: 5, archivedAt: null, ...over });
 
 /**
- * #431 — ГОЛОВНИЙ ГЕЙТ ПРОХОДУ: доступ до документів НЕ виводиться з обсягу ролі.
+ * #441 — ГОЛОВНИЙ ГЕЙТ ПРОХОДУ: доступ до документів НЕ виводиться з обсягу ролі.
  * Фінансист і бухгалтерія мають `data_scope='company'` і бачать усіх клієнтів — але чужий
  * особистий документ і чужий офер НЕ бачать, бо їх немає в `MANAGEMENT_ROLES`. КВП і HR
  * бачать ЛИШЕ тому, що власник 15.09.2026 вписав їх у керівництво поіменно. Червоніє,
@@ -14,7 +14,7 @@ const doc = (over: Partial<DocLike> = {}): DocLike => ({ id: 1, folderId: 10, se
  * змінити склад керівництва без рішення власника.
  * (Замінив #430: там КВП був поза керівництвом — твердження змінилось, номер новий.)
  */
-test("#431 ДОКУМЕНТИ: чужий офер/особистий недосяжний за обсягом ролі — фінансист (company) не бачить, КВП/HR/опдир бачать як керівництво", () => {
+test("#441 ДОКУМЕНТИ: чужий офер/особистий недосяжний за обсягом ролі — фінансист (company) не бачить, КВП/HR/опдир бачать як керівництво", () => {
   const offer = doc({ section: "offer", addresseeUserId: 77 });
   const personal = doc({ section: "personal", addresseeUserId: 77, createdBy: 3 });
   for (const r of ["financier", "____________"]) {
