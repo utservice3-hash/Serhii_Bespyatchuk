@@ -49,7 +49,7 @@ import {
   type Task,
   type TaskPriority,
   type Team,
-  fetchNewsUnread, markNewsSeen,
+  fetchNewsUnread, markNewsSeen, fetchAuthGate,
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { getDateRange } from "../components/DateRangeFilter";
@@ -268,6 +268,19 @@ export function Dashboard() {
   useEffect(() => {
     fetchNewsUnread(readNewsSeenId()).then((r) => setNewsUnread(r.unread)).catch(() => setNewsUnread(0));
   }, []);
+  // 🔏 Офер-гейт: новий менеджер без підписаного офера бачить лише Навчання й Документи
+  // (рішення власника 15.09.2026). Сервер гейтить незалежно; тут — сайдбар, банер і редірект.
+  // Перечитуємо після підпису (подія з DocumentsSection), щоб доступ відкрився без релогіну.
+  const [offerPending, setOfferPending] = useState(false);
+  useEffect(() => {
+    const load = () => { fetchAuthGate().then((r) => setOfferPending(r.offerPending)).catch(() => { /* сервер усе одно гейтить */ }); };
+    load();
+    window.addEventListener("uts:offer-signed", load);
+    return () => window.removeEventListener("uts:offer-signed", load);
+  }, []);
+  useEffect(() => {
+    if (offerPending && section !== "documents" && section !== "training") navigate("/documents", { replace: true });
+  }, [offerPending, section, navigate]);
   useEffect(() => {
     if (section !== "news") return;
     markNewsSeen().then((maxId) => {
@@ -918,7 +931,8 @@ export function Dashboard() {
       onSelect={navigateTo}
       onBack={canGoBack ? goBack : undefined}
       role={auth?.role}
-      screens={auth?.screens}
+      screens={offerPending ? ["training", "documents"] : auth?.screens}
+      offerPending={offerPending}
       trackerEnabled={auth?.trackerEnabled}
       messengerUnread={chatUnread}
       newsUnread={newsUnread}

@@ -6,21 +6,29 @@ const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({ folderRight
 const doc = (over: Partial<DocLike> = {}): DocLike => ({ id: 1, folderId: 10, section: "general", addresseeUserId: null, createdBy: 5, archivedAt: null, ...over });
 
 /**
- * #430 — ГОЛОВНИЙ ГЕЙТ ПРОХОДУ: доступ до документів НЕ виводиться з обсягу ролі.
- * Опдир має `data_scope='company'` і бачить усіх клієнтів — але чужий особистий документ
- * і чужий офер бачить ЛИШЕ тому, що він у `MANAGEMENT_ROLES`, а КВП (теж company-scope)
- * — не бачить. Червоніє, якщо зробити предикат похідним від обсягу ролі (КВП побачить
- * офер) або вписати КВП у керівництво.
+ * #431 — ГОЛОВНИЙ ГЕЙТ ПРОХОДУ: доступ до документів НЕ виводиться з обсягу ролі.
+ * Фінансист і бухгалтерія мають `data_scope='company'` і бачать усіх клієнтів — але чужий
+ * особистий документ і чужий офер НЕ бачать, бо їх немає в `MANAGEMENT_ROLES`. КВП і HR
+ * бачать ЛИШЕ тому, що власник 15.09.2026 вписав їх у керівництво поіменно. Червоніє,
+ * якщо зробити предикат похідним від обсягу ролі (фінансист побачить офер) або
+ * змінити склад керівництва без рішення власника.
+ * (Замінив #430: там КВП був поза керівництвом — твердження змінилось, номер новий.)
  */
-test("#430 ДОКУМЕНТИ: чужий офер/особистий недосяжний за обсягом ролі — КВП (company) не бачить, опдир бачить як керівництво", () => {
+test("#431 ДОКУМЕНТИ: чужий офер/особистий недосяжний за обсягом ролі — фінансист (company) не бачить, КВП/HR/опдир бачать як керівництво", () => {
   const offer = doc({ section: "offer", addresseeUserId: 77 });
   const personal = doc({ section: "personal", addresseeUserId: 77, createdBy: 3 });
-  assert.equal(canSeeDocument({ userId: 1, roleKey: "kvp" }, offer, ctx()), false, "КВП з company-scope побачив чужий офер");
-  assert.equal(canSeeDocument({ userId: 1, roleKey: "kvp" }, personal, ctx()), false, "КВП побачив чужий особистий");
-  assert.equal(canSeeDocument({ userId: 1, roleKey: "opdir" }, offer, ctx()), true, "опдир (керівництво) не бачить офер");
+  for (const r of ["financier", "____________"]) {
+    assert.equal(canSeeDocument({ userId: 1, roleKey: r }, offer, ctx()), false, `${r} з company-scope побачив чужий офер`);
+    assert.equal(canSeeDocument({ userId: 1, roleKey: r }, personal, ctx()), false, `${r} побачив чужий особистий`);
+  }
+  for (const r of ["admin", "opdir", "ceo", "kvp", "hr"]) {
+    assert.equal(canSeeDocument({ userId: 1, roleKey: r }, offer, ctx()), true, `${r} (керівництво) не бачить офер`);
+    assert.equal(canSeeDocument({ userId: 1, roleKey: r }, personal, ctx()), true, `${r} (керівництво) не бачить особистий`);
+  }
   assert.equal(canSeeDocument({ userId: 1, roleKey: "team_lead" }, offer, ctx()), false, "тімлід побачив чужий офер");
+  assert.equal(canSeeDocument({ userId: 1, roleKey: "team_lead" }, personal, ctx()), false, "тімлід побачив особистий документ своєї команди (рішення 15.09: не бачить)");
   assert.equal(canSeeDocument({ userId: 1, roleKey: "manager" }, offer, ctx()), false, "менеджер побачив чужий офер");
-  assert.deepEqual([...MANAGEMENT_ROLES].sort(), ["admin", "ceo", "opdir"], "склад керівництва змінився — це рішення власника");
+  assert.deepEqual([...MANAGEMENT_ROLES].sort(), ["admin", "ceo", "hr", "kvp", "opdir"], "склад керівництва змінився — це рішення власника (15.09.2026)");
 });
 
 /** #430b 🪞 ДЗЕРКАЛО: адресат бачить свій офер і свій особистий; автор бачить особистий, який виклав. */

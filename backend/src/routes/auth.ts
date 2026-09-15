@@ -6,6 +6,7 @@ import { pool } from "../db/pool.js";
 import { signToken } from "../auth/auth.js";
 import { effectiveRoleKey, getRoleDef, scopeCompatRole, tabsOfRole } from "../auth/rbac.js";
 import { requireAuth } from "../auth/middleware.js";
+import { offerPendingFor } from "../auth/offerGate.js";
 import { config } from "../config.js";
 import {
   ASSERTION_TTL_SECONDS,
@@ -91,6 +92,12 @@ authRouter.post("/login", async (req, res) => {
     trackerEnabled: user.tracker_enabled,
   });
   res.json({ token });
+});
+
+/** 🔏 Живий стан офер-гейта для сайдбара: чи обмежений користувач двома вкладками
+ *  (core/offerGate.ts). Роут поза мапою вкладок, тож проходить і для обмеженого. */
+authRouter.get("/gate", requireAuth, async (req, res) => {
+  res.json({ offerPending: await offerPendingFor(req.auth!.userId) });
 });
 
 // Time tracker SSO. The tracker is a separate system with its own server and user table; the

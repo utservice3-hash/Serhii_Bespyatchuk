@@ -15,8 +15,8 @@
  *   offer    — керівництво + менеджер-адресат СВОГО офера; тімлід — НЕ бачить навіть папки;
  *   archive  — стан (`archived_at`), читання лише керівництву, редагування нікому.
  *
- * «Керівництво» = ролі з `MANAGEMENT_ROLES`. Це не `isAdminScope` навмисно: КВП має
- * company-scope на клієнтах, але офери менеджерів — не його справа за рішенням ⑥.
+ * «Керівництво» = ролі з `MANAGEMENT_ROLES`. Це не `isAdminScope` навмисно: фінансист і
+ * бухгалтерія мають company-scope на клієнтах, але офери — не їхня справа (рішення 15.09).
  */
 
 export type DocSection = "general" | "personal" | "offer";
@@ -44,8 +44,13 @@ export interface Grant {
   canView: boolean; canUpload: boolean; expiresAt: string | null;
 }
 
-/** Ролі, що бачать усе (у тому числі офери й архів) і керують доступом. Рішення ⑤/⑥. */
-export const MANAGEMENT_ROLES: readonly string[] = ["admin", "opdir", "ceo"];
+/**
+ * Ролі, що бачать усе (у тому числі офери й архів) і керують доступом. Рішення ⑤/⑥,
+ * склад уточнено власником 15.09.2026 («усі з адміном, КВП, СЕО, HR», опдир лишається).
+ * ⚠️ Це список ЗА ІМЕНЕМ ролі, а не за `data_scope`: фінансист і бухгалтерія теж company-scope,
+ * але сюди не входять — і саме це стереже #431.
+ */
+export const MANAGEMENT_ROLES: readonly string[] = ["admin", "opdir", "ceo", "kvp", "hr"];
 
 export const isManagement = (roleKey: string): boolean => MANAGEMENT_ROLES.includes(roleKey);
 

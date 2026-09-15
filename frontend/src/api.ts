@@ -2836,6 +2836,11 @@ export interface DocTree {
   viewer: { userId: number; roleKey: string; isManagement: boolean; canManageAccess: boolean; canUploadRoot: boolean; uploadFolders: number[] };
   types: readonly string[];
 }
+/** 🔏 Офер-гейт: новий менеджер без підписаного офера бачить лише Навчання й Документи. */
+export async function fetchAuthGate(): Promise<{ offerPending: boolean }> {
+  const { data } = await api.get<{ offerPending: boolean }>("/auth/gate");
+  return data;
+}
 export async function fetchDocTree(): Promise<DocTree> {
   const { data } = await api.get<DocTree>("/documents/tree");
   return data;

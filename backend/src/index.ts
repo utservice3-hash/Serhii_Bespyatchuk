@@ -96,7 +96,8 @@ for (const level of ["log", "warn", "error"] as const) {
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "60mb" }));
+// 140mb: документи їдуть base64 у JSON, ліміт файла 100 МБ (routes/documents.ts MAX_BYTES).
+app.use(express.json({ limit: "140mb" }));
 
 // 🛡 Backstop проти «зависань»: Express 4 НЕ ловить кинуті проміси в async-хендлерах —
 // вони летять у process.on("unhandledRejection") (нижче), і відповідь НІКОЛИ не

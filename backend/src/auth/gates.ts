@@ -47,6 +47,10 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Вихід із сесії — доступний будь-кому автентифікованому, межа не потрібна." },
   { method: "GET", path: "/api/auth/me", permanent: true,
     why: "Профіль ВЛАСНОГО токена. Скоуп визначено самим токеном, чужого не віддає." },
+  { method: "GET", path: "/api/auth/gate", permanent: true,
+    why: "Стан офер-гейта ВЛАСНОГО токена (чи обмежений двома вкладками). Скоуп — сам токен, "
+       + "чужого не віддає; вкладки не має навмисно — інакше обмежений не міг би дізнатись, що обмежений. "
+       + "Правило стереже `#431b`." },
   { method: "GET", path: "/api/auth/tracker-sso", permanent: true,
     why: "Вкладки не має, тож ROUTE_TAB тут нікуди ставити — але межа Є і вона не в меню: "
        + "роут відмовляє 403, якщо `users.tracker_enabled` вимкнено (`trackerAllowed`, гейт `#312`). "

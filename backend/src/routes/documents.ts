@@ -4,6 +4,7 @@ import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
+import { invalidateOfferGate } from "../auth/offerGate.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { OWNER_NAME_SQL } from "../core/absences.js";
 import {
@@ -29,7 +30,9 @@ export const documentsRouter = Router();
 documentsRouter.use(requireAuth);
 
 const DOCS_DIR = path.join(UPLOAD_DIR, "..", "documents");
-const MAX_BYTES = 50 * 1024 * 1024;
+// 100 МБ — рішення власника 15.09.2026 («ліміт файлу 100 МБ має вистачити»). Файл їде
+// base64 у JSON, тож ліміт тіла в index.ts мусить бути ≥ 100 × 4/3 ≈ 134 МБ (стоїть 140).
+const MAX_BYTES = 100 * 1024 * 1024;
 export const DOC_TYPES = ["Регламент", "Інструкція", "Шаблон", "Офер", "Матеріал для клієнта", "Інше"] as const;
 const SECTIONS: DocSection[] = ["general", "personal", "offer"];
 
@@ -282,7 +285,7 @@ documentsRouter.post("/file", async (req, res) => {
   if (section !== "general" && !addressee) return res.status(400).json({ error: "Вкажіть адресата: особистий документ і офер належать людині" });
   const buffer = decodeBase64(req.body?.dataBase64);
   if (!buffer) return res.status(400).json({ error: "Файл відсутній" });
-  if (buffer.length > MAX_BYTES) return res.status(413).json({ error: "Файл завеликий (макс. 50 МБ)" });
+  if (buffer.length > MAX_BYTES) return res.status(413).json({ error: "Файл завеликий (макс. 100 МБ)" });
   const display = String(req.body?.filename ?? "файл").trim() || "файл";
   const category = DOC_TYPES.includes(req.body?.category) ? String(req.body.category) : section === "offer" ? "Офер" : "Інше";
   const { storedName, sha256 } = await storeBuffer(display, buffer);
@@ -308,7 +311,7 @@ documentsRouter.post("/file/:id/version", async (req, res) => {
   if (!canEditDocument(viewerOf(req), toDocLike(v.row), v.ctx)) return res.status(403).json({ error: v.row.archived_at ? "Документ в архіві: нову версію не можна нікому" : "Немає права редагувати" });
   const buffer = decodeBase64(req.body?.dataBase64);
   if (!buffer) return res.status(400).json({ error: "Файл відсутній" });
-  if (buffer.length > MAX_BYTES) return res.status(413).json({ error: "Файл завеликий (макс. 50 МБ)" });
+  if (buffer.length > MAX_BYTES) return res.status(413).json({ error: "Файл завеликий (макс. 100 МБ)" });
   const display = String(req.body?.filename ?? v.row.name).trim() || v.row.name;
   const { storedName, sha256 } = await storeBuffer(display, buffer);
   const next = v.row.version + 1;
@@ -379,6 +382,7 @@ documentsRouter.post("/file/:id/sign", async (req, res) => {
     `INSERT INTO doc_signatures (file_id, version, sha256, signed_by, method, evidence_stored_name, ip) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
     [v.row.id, v.row.version, v.row.sha256, req.auth!.userId, method, storedName, req.ip ?? null]);
   await logEvent(v.row.id, "signed", req.auth!.userId, { method, version: v.row.version, signatureId: r.rows[0].id });
+  invalidateOfferGate(req.auth!.userId); // офер-гейт: доступ відкривається одразу, не за хвилину
   res.json({ ok: true, signatureId: r.rows[0].id });
 });
 

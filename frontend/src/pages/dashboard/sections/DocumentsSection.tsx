@@ -23,7 +23,7 @@ import {
 type Section = DocSection | "archive";
 type GroupBy = "type" | "folder" | "date";
 
-const MAX_MB = 50;
+const MAX_MB = 100;
 const TYPE_META: Record<string, { color: string; action: string; icon: string }> = {
   "Регламент": { color: "#c5141c", action: "виконувати", icon: "§" },
   "Інструкція": { color: "#2f9e44", action: "робити за кроками", icon: "↳" },
@@ -453,7 +453,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
       </div>
 
-      {signOpen && <SignDialog file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); }} />}
+      {signOpen && <SignDialog file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); window.dispatchEvent(new Event("uts:offer-signed")); }} />}
     </div>
   );
 }
