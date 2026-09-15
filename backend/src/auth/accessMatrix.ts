@@ -875,6 +875,28 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/training/materials/:id/publish", cls: "deny-only",
     allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+  /* 🎓 КУРСИ Й ПРОГРЕС (крок 2, 15.09.2026). Читання відкрите всім, хто має вкладку
+     `training`, — включно з кандидатом: це його єдиний екран. */
+  { method: "GET", path: "/api/training/courses", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
+  { method: "GET", path: "/api/training/courses/:id", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
+  /* 🔴 ПРОГРЕС — `deny-only` З ПОРОЖНІМ `deny`, І ЦЕ НЕ НЕДОГЛЯД, А ЗАХИСТ ПРОДА.
+     Ці два роути ПИШУТЬ (`training_progress` + `training_events`), а `#11` ходить по
+     ЖИВОМУ проду. Заборонених ролей тут немає — проходити курс може кожен, хто бачить
+     вкладку, — отже позитивних проб не існує, а негативні були б записом під службовим
+     користувачем. Зразок той самий, що `POST /api/auth/login` вище.
+     ⚠️ Ціна названа вголос: зліпок про ці двері мовчить. Те, що замок справді тримає,
+     доводить не `#11`, а гейти `#416`-`#419` на чистому правилі. */
+  { method: "POST", path: "/api/training/progress/:materialId/open", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/training/progress/:materialId/done", cls: "deny-only",
+    allow: [], deny: [] },
+  /* Створення й правка курсу — те саме право, що решта редагування навчання. */
+  { method: "POST", path: "/api/training/courses", cls: "deny-only",
+    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+  { method: "PATCH", path: "/api/training/courses/:id", cls: "deny-only",
+    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/tree", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/uploads", cls: "deny-only",
