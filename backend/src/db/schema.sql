@@ -2370,7 +2370,7 @@ CREATE INDEX IF NOT EXISTS idx_client_key_alias_canon ON client_key_alias(canoni
 -- Тобто дешевший варіант відтворив би саме ту незворотність, яку ми лікуємо.
 --
 -- ⚠️ Активний псевдонім і далі дає `duplicate key` → 409, і це НАВМИСНО: виправлення
--- не має права перетворитись на зняту перевірку. Стереже дзеркало `#420b`.
+-- не має права перетворитись на зняту перевірку. Стереже дзеркало `#422b`.
 ALTER TABLE client_key_alias ADD COLUMN IF NOT EXISTS id BIGSERIAL;
 DO $cka_pk$
 DECLARE pk_cols TEXT;
