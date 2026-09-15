@@ -2847,7 +2847,7 @@ UPDATE roles SET permissions = permissions - 'manage_training'
 -- тумблери цій ролі в Налаштуваннях, сід не має відкочувати його правку щодеплою
 -- (той самий урок, що з `hr` і `data_scope` — постійний синк тихо затирає рішення людини).
 INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
-VALUES ('candidate', 'Кандидат', false, 'own', '{"training":true}'::jsonb, '{}'::jsonb)
+VALUES ('candidate', 'Кандидат', false, 'own', '{"training":true,"documents":true}'::jsonb, '{}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 -- (мертві права назад не повертаємо — їх ніхто не читає)
@@ -3204,5 +3204,9 @@ CREATE TABLE IF NOT EXISTS sign_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_sign_codes_user ON sign_codes(user_id, purpose, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sign_codes_link ON sign_codes(code) WHERE purpose = 'link' AND used_at IS NULL;
--- нагадування про непідписаний офер — не частіше разу на добу
+-- «повідомлено про офер» (рівно один раз на версію; нова версія скидає)
 ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
+-- Рішення власника 15.09.2026 (вечір): вкладку «Документи» бачать HR і КВП (вони керівництво в
+-- документах) та «Кандидат» (дві вкладки: Навчання + Документи, щоб підписати офер до підвищення).
+UPDATE roles SET screen_access = screen_access || '{"documents":true}'::jsonb
+ WHERE key IN ('hr','kvp','candidate') AND COALESCE((screen_access->>'documents')::boolean, false) IS DISTINCT FROM true;

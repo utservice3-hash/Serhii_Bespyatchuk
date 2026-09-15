@@ -4,8 +4,8 @@ import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
-import { invalidateOfferGate } from "../auth/offerGate.js";
 import { signBotConfigured, signBotSend } from "../bot/signBot.js";
+import { notifyOfferOnce } from "../jobs/offerReminders.js";
 import { generateSignCode, verifySignCode, signCodeMessage, SIGN_CODE_TTL_MS } from "../core/signCode.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { OWNER_NAME_SQL } from "../core/absences.js";
@@ -300,6 +300,7 @@ documentsRouter.post("/file", async (req, res) => {
   await pool.query(`INSERT INTO doc_file_versions (file_id, version, stored_name, sha256, mime, size_bytes, created_by) VALUES ($1, 1, $2, $3, $4, $5, $6)`,
     [id, storedName, sha256, req.body?.mime ?? null, buffer.length, viewer.userId]);
   await logEvent(id, section === "offer" ? "sent" : "uploaded", viewer.userId, { version: 1 });
+  if (section === "offer") void notifyOfferOnce(id);
   const row = await loadFile(id);
   res.json(shape(row!, [], section === "offer" ? new Date().toISOString() : null, viewer, ctx));
 });
@@ -322,7 +323,7 @@ documentsRouter.post("/file/:id/version", async (req, res) => {
   await pool.query(`UPDATE doc_files SET stored_name = $2, sha256 = $3, version = $4, mime = COALESCE($5, mime), size_bytes = $6, name = $7, updated_at = now() WHERE id = $1`,
     [v.row.id, storedName, sha256, next, req.body?.mime ?? null, buffer.length, display]);
   await logEvent(v.row.id, "version", req.auth!.userId, { version: next, sha256 });
-  if (v.row.section === "offer") await logEvent(v.row.id, "sent", req.auth!.userId, { version: next });
+  if (v.row.section === "offer") { await logEvent(v.row.id, "sent", req.auth!.userId, { version: next }); await pool.query(`UPDATE doc_files SET reminded_at = NULL WHERE id = $1`, [v.row.id]); void notifyOfferOnce(v.row.id); }
   res.json({ ok: true, version: next, sha256 });
 });
 
@@ -382,7 +383,6 @@ documentsRouter.post("/file/:id/sign", async (req, res) => {
       `INSERT INTO doc_signatures (file_id, version, sha256, signed_by, method, evidence_stored_name, ip) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
       [v.row.id, v.row.version, v.row.sha256, userId, method, evidence, req.ip ?? null]);
     await logEvent(v.row.id, "signed", userId, { method, version: v.row.version, signatureId: r.rows[0].id });
-    invalidateOfferGate(userId); // офер-гейт: доступ відкривається одразу, не за хвилину
     res.json({ ok: true, signatureId: r.rows[0].id });
   };
   if (method === "paper_photo") {
@@ -476,13 +476,4 @@ documentsRouter.put("/access/:folderId", management, async (req, res) => {
   }
   await logAccess(req.auth!.userId, "access_changed", { before, after: roles, grants }, folderId);
   res.json({ ok: true });
-});
-
-/** «Запитати доступ» — лист керівництву у журнал (без пошти: SMTP у системі немає). */
-documentsRouter.post("/file/:id/request-access", async (req, res) => {
-  const id = Number(req.params.id);
-  const exists = await pool.query(`SELECT 1 FROM doc_files WHERE id = $1`, [id]);
-  if (!exists.rowCount) return res.status(404).json({ error: "Документ не знайдено" });
-  await logAccess(req.auth!.userId, "access_requested", { note: String(req.body?.note ?? "").slice(0, 500) }, null, id);
-  res.json({ ok: true, message: "Запит записано. Керівництво побачить його в журналі доступів." });
 });

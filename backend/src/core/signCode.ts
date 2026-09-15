@@ -11,8 +11,6 @@
 export const SIGN_CODE_TTL_MS = 5 * 60_000;
 export const LINK_TOKEN_TTL_MS = 10 * 60_000;
 export const MAX_ATTEMPTS = 3;
-/** Нагадувати про непідписаний офер не частіше, ніж раз на добу (запас 20 год на дрейф крону). */
-export const REMIND_EVERY_MS = 20 * 3600_000;
 
 export interface CodeRecord {
   code: string;
@@ -64,14 +62,16 @@ export function linkTokenState(rec: { expiresAt: Date | string; usedAt: Date | s
   return "ok";
 }
 
-/** Чи пора нагадати про офер: лише неархівований, непідписаний (на поточній версії), і не частіше разу на добу. */
-export function reminderDue(
+/**
+ * Чи слати повідомлення про офер: РІВНО ОДИН РАЗ на версію (рішення власника 15.09.2026, вечір:
+ * «одне повідомлення без нагадування»). Лише неархівований і непідписаний на поточній версії;
+ * `remindedAt` скидається при новій версії, бо нова версія — новий підпис.
+ */
+export function notifyDue(
   f: { section: string; archivedAt: Date | string | null; signedCurrent: boolean; remindedAt: Date | string | null },
-  now: Date,
 ): boolean {
   if (f.section !== "offer" || f.archivedAt != null || f.signedCurrent) return false;
-  if (f.remindedAt == null) return true;
-  return now.getTime() - new Date(f.remindedAt).getTime() >= REMIND_EVERY_MS;
+  return f.remindedAt == null;
 }
 
 /** Текст повідомлення з кодом — тут, щоб тест бачив, що в ньому є код, назва й версія. */

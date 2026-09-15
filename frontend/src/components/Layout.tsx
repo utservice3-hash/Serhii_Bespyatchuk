@@ -142,7 +142,6 @@ export function Layout({
   onBack,
   role,
   screens,
-  offerPending = false,
   trackerEnabled,
   messengerUnread = 0,
   newsUnread = 0,
@@ -153,8 +152,6 @@ export function Layout({
   onBack?: () => void;
   role?: string;
   screens?: string[];
-  /** 🔏 Новий менеджер без підписаного офера: банер над контентом (сайдбар уже звужено через screens). */
-  offerPending?: boolean;
   trackerEnabled?: boolean;
   messengerUnread?: number;
   /** 🔔 Скільки новин зʼявилось після останнього візиту в розділ. */
@@ -325,11 +322,6 @@ export function Layout({
         </button>
       </aside>
       <main className="main-content">
-        {offerPending && (
-          <div role="status" style={{ background: "var(--warn-bg)", color: "var(--warn)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, fontWeight: 600 }}>
-            🔏 Підпишіть свій офер у розділі «Регламенти та документи» — після підпису відкриється весь дашборд. Поки що доступні лише Навчання й Документи.
-          </div>
-        )}
         <div
           style={{
             display: "flex",

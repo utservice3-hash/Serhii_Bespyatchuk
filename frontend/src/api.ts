@@ -2840,11 +2840,6 @@ export interface DocTree {
   viewer: { userId: number; roleKey: string; isManagement: boolean; canManageAccess: boolean; canUploadRoot: boolean; uploadFolders: number[] };
   types: readonly string[];
 }
-/** 🔏 Офер-гейт: новий менеджер без підписаного офера бачить лише Навчання й Документи. */
-export async function fetchAuthGate(): Promise<{ offerPending: boolean }> {
-  const { data } = await api.get<{ offerPending: boolean }>("/auth/gate");
-  return data;
-}
 export async function fetchDocTree(): Promise<DocTree> {
   const { data } = await api.get<DocTree>("/documents/tree");
   return data;
@@ -2901,10 +2896,6 @@ export interface TelegramStatus { configured: boolean; linked: boolean; linkedAt
 export async function fetchTelegramStatus(): Promise<TelegramStatus> { const { data } = await api.get<TelegramStatus>("/auth/telegram"); return data; }
 export async function createTelegramLink(): Promise<{ url: string; expiresInSec: number }> { const { data } = await api.post<{ url: string; expiresInSec: number }>("/auth/telegram-link"); return data; }
 export async function unlinkTelegram(): Promise<void> { await api.post("/auth/telegram-unlink"); }
-export async function requestDocAccess(id: number, note: string): Promise<{ message: string }> {
-  const { data } = await api.post<{ message: string }>(`/documents/file/${id}/request-access`, { note });
-  return data;
-}
 export interface DocFolderAccess {
   roles: { key: string; name: string; management: boolean; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean; canManage: boolean }[];
   grants: { id: number; userId: number; name: string; canView: boolean; canUpload: boolean; expiresAt: string | null }[];

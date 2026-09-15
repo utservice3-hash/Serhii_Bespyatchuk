@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
-  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, signDocFile, requestDocAccess,
+  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, signDocFile,
   fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
   type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type TelegramStatus,
 } from "../../../api";
@@ -371,8 +371,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const restore = () => void restoreDocFile(file.id).then(async () => { onToast("Повернуто з архіву"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося")));
 
   if (noAccess) return (
-    <StateBlock icon="🔒" title="Документ не для вас" text="Доступ мають адресат і керівництво. Запит піде керівнику, а не в порожнечу."
-      action={<button style={btn()} onClick={() => void requestDocAccess(file.id, "").then((r) => onToast(r.message)).catch((e) => setErr(errOf(e, "Запит не відправлено")))}>Запитати доступ</button>} />
+    <StateBlock icon="🔒" title="Документ не для вас" text="Доступ мають адресат і керівництво. Якщо документ потрібен вам по роботі — зверніться до керівника." />
   );
 
   const sig = file.signature;
@@ -466,7 +465,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
       </div>
 
-      {signOpen && <SignDialog file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); window.dispatchEvent(new Event("uts:offer-signed")); }} />}
+      {signOpen && <SignDialog file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); }} />}
     </div>
   );
 }

@@ -1,8 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken, type AuthPayload, type Role } from "./auth.js";
 import { tabsForPath, roleHasTab, roleHasPerm, getRoleDef, scopeCompatRole } from "./rbac.js";
-import { offerPendingFor } from "./offerGate.js";
-import { offerGateBlocks } from "../core/offerGate.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -31,26 +29,6 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (tabs && !tabs.some((t) => roleHasTab(req.auth!.roleKey, t))) {
     return res.status(403).json({ error: "Доступ до цього розділу вимкнено для вашої ролі" });
   }
-  // 🔏 ОФЕР-ГЕЙТ (рішення власника 15.09.2026): новий менеджер без підписаного офера бачить
-  // лише Навчання й Документи. Правило — core/offerGate.ts, стан — auth/offerGate.ts (кеш 60 с).
-  // Роути поза мапою вкладок проходять, як і в tab-гейті вище. Express 4 не ловить проміси,
-  // тому catch → next(err) руками.
-  if (tabs) {
-    offerPendingFor(req.auth.userId).then((pending) => {
-      if (offerGateBlocks(pending, tabs)) {
-        res.status(403).json({ error: "Підпишіть офер у розділі «Документи», щоб відкрити дашборд", reason: "offer_pending" });
-        return;
-      }
-      finishAuth(req, next);
-    }).catch(next);
-    return;
-  }
-  finishAuth(req, next);
-}
-
-/** Хвіст requireAuth після гейтів: scope-кламп за ефективною роллю. */
-function finishAuth(req: Request, next: NextFunction) {
-  if (!req.auth) return next();
   // 🔒 SCOPE-КЛАМП за ЕФЕКТИВНОЮ роллю (кастовної теж), а не лише за синковою users.role.
   // Наявна per-route логіка клампить по auth.{role,managerId,teamId}; тут вирівнюємо їх під
   // data_scope РОЛІ. Ключове: власний/командний обсяг БЕЗ менеджера/команди = ПОРОЖНЬО

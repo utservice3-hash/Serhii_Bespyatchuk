@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { verifySignCode, linkTokenState, reminderDue, generateSignCode, generateLinkToken, signCodeMessage, MAX_ATTEMPTS, REMIND_EVERY_MS, type CodeRecord } from "./signCode.js";
+import { verifySignCode, linkTokenState, notifyDue, generateSignCode, generateLinkToken, signCodeMessage, MAX_ATTEMPTS, type CodeRecord } from "./signCode.js";
 
 const now = new Date("2026-09-22T09:00:00Z");
 const rec = (over: Partial<CodeRecord> = {}): CodeRecord => ({ code: "123456", fileId: 7, sha256: "abc", version: 2, attempts: 0, expiresAt: new Date(now.getTime() + 60_000), usedAt: null, ...over });
@@ -38,13 +38,13 @@ test("#442b TG-ПРИВʼЯЗКА: токен /start одноразовий, 10 
   assert.ok(t.length > 20 && t.length <= 64 && /^[A-Za-z0-9_-]+$/.test(t), `токен непридатний для start=: ${t}`);
 });
 
-/** #442c — НАГАДУВАННЯ: лише офери, лише непідписані на поточній версії, лише неархівовані, не частіше разу на добу. */
-test("#442c TG-НАГАДУВАННЯ: лише непідписані неархівовані офери, не частіше разу на добу", () => {
+/** #442d — ПОВІДОМЛЕННЯ ПРО ОФЕР РІВНО ОДИН РАЗ: непідписаний неархівований офер без позначки → так; з позначкою → ні (повторний прогін мовчить); підписаний/архівний → ні. */
+test("#442d TG-ПОВІДОМЛЕННЯ: про офер пишемо рівно один раз — повторний прогін мовчить, підписаний і архівний не отримують", () => {
   const base = { section: "offer", archivedAt: null, signedCurrent: false, remindedAt: null };
-  assert.equal(reminderDue(base, now), true);
-  assert.equal(reminderDue({ ...base, signedCurrent: true }, now), false, "нагадали про підписаний офер");
-  assert.equal(reminderDue({ ...base, archivedAt: now }, now), false, "нагадали звільненому про архівний офер");
-  assert.equal(reminderDue({ ...base, section: "personal" }, now), false, "нагадали про не-офер");
-  assert.equal(reminderDue({ ...base, remindedAt: new Date(now.getTime() - 3600_000) }, now), false, "нагадали вдруге за годину");
-  assert.equal(reminderDue({ ...base, remindedAt: new Date(now.getTime() - REMIND_EVERY_MS) }, now), true, "через добу не нагадали");
+  assert.equal(notifyDue(base), true);
+  assert.equal(notifyDue({ ...base, remindedAt: now }), false, "написали вдруге — власник просив одне повідомлення");
+  assert.equal(notifyDue({ ...base, remindedAt: new Date(now.getTime() - 30 * 864e5) }), false, "через місяць написали знову — це вже нагадування");
+  assert.equal(notifyDue({ ...base, signedCurrent: true }), false, "написали про підписаний офер");
+  assert.equal(notifyDue({ ...base, archivedAt: now }), false, "написали звільненому про архівний офер");
+  assert.equal(notifyDue({ ...base, section: "personal" }), false, "написали про не-офер");
 });

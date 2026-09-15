@@ -47,10 +47,6 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Вихід із сесії — доступний будь-кому автентифікованому, межа не потрібна." },
   { method: "GET", path: "/api/auth/me", permanent: true,
     why: "Профіль ВЛАСНОГО токена. Скоуп визначено самим токеном, чужого не віддає." },
-  { method: "GET", path: "/api/auth/gate", permanent: true,
-    why: "Стан офер-гейта ВЛАСНОГО токена (чи обмежений двома вкладками). Скоуп — сам токен, "
-       + "чужого не віддає; вкладки не має навмисно — інакше обмежений не міг би дізнатись, що обмежений. "
-       + "Правило стереже `#441b`." },
   { method: "GET", path: "/api/auth/telegram", permanent: true,
     why: "Стан привʼязки Telegram ВЛАСНОГО токена (чи привʼязано, імʼя бота). Чужого не віддає; вкладки немає — привʼязка потрібна будь-якій ролі." },
   { method: "POST", path: "/api/auth/telegram-link", permanent: true,
