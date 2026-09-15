@@ -5,6 +5,8 @@ import path from "path";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { invalidateOfferGate } from "../auth/offerGate.js";
+import { signBotConfigured, signBotSend } from "../bot/signBot.js";
+import { generateSignCode, verifySignCode, signCodeMessage, SIGN_CODE_TTL_MS } from "../core/signCode.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { OWNER_NAME_SQL } from "../core/absences.js";
 import {
@@ -365,25 +367,67 @@ documentsRouter.delete("/file/:id", management, async (req, res) => {
 });
 
 /**
- * ПІДПИС. Способи в цьому проході: `paper_photo` (фото підписаного паперу, рішення Сергія 15.09).
- * `email_code`/`telegram_code`/`diia` — значення є, реалізація після SMTP / привʼязки / підключення.
+ * ПІДПИС. Способи: `paper_photo` (фото підписаного паперу, рішення Сергія 15.09) і `telegram_code`
+ * (код у бот «UTS Підпис», рівень 2 ТЗ; два кроки — send/verify; правило коду в core/signCode.ts, #432).
+ * `diia` — значення є, реалізація після підключення до Дії.
  */
 documentsRouter.post("/file/:id/sign", async (req, res) => {
   const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
   if (!canSignDocument(viewerOf(req), toDocLike(v.row))) return res.status(403).json({ error: "Підписує лише адресат документа" });
   if (!v.row.sha256) return res.status(400).json({ error: "У документа немає хеша — підпис не може привʼязатись до версії" });
   const method = String(req.body?.method ?? "");
-  if (method !== "paper_photo") return res.status(400).json({ error: "Поки доступний спосіб «фото паперового варіанта»; код на пошту/Telegram і Дія — після підключення" });
-  const buffer = decodeBase64(req.body?.dataBase64);
-  if (!buffer) return res.status(400).json({ error: "Додайте фото або скан підписаного документа" });
-  if (buffer.length > 20 * 1024 * 1024) return res.status(413).json({ error: "Фото завелике (макс. 20 МБ)" });
-  const { storedName } = await storeBuffer(String(req.body?.filename ?? "signature.jpg"), buffer);
-  const r = await pool.query<{ id: number }>(
-    `INSERT INTO doc_signatures (file_id, version, sha256, signed_by, method, evidence_stored_name, ip) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [v.row.id, v.row.version, v.row.sha256, req.auth!.userId, method, storedName, req.ip ?? null]);
-  await logEvent(v.row.id, "signed", req.auth!.userId, { method, version: v.row.version, signatureId: r.rows[0].id });
-  invalidateOfferGate(req.auth!.userId); // офер-гейт: доступ відкривається одразу, не за хвилину
-  res.json({ ok: true, signatureId: r.rows[0].id });
+  const userId = req.auth!.userId;
+  const finish = async (evidence: string | null) => {
+    const r = await pool.query<{ id: number }>(
+      `INSERT INTO doc_signatures (file_id, version, sha256, signed_by, method, evidence_stored_name, ip) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [v.row.id, v.row.version, v.row.sha256, userId, method, evidence, req.ip ?? null]);
+    await logEvent(v.row.id, "signed", userId, { method, version: v.row.version, signatureId: r.rows[0].id });
+    invalidateOfferGate(userId); // офер-гейт: доступ відкривається одразу, не за хвилину
+    res.json({ ok: true, signatureId: r.rows[0].id });
+  };
+  if (method === "paper_photo") {
+    const buffer = decodeBase64(req.body?.dataBase64);
+    if (!buffer) return res.status(400).json({ error: "Додайте фото або скан підписаного документа" });
+    if (buffer.length > 20 * 1024 * 1024) return res.status(413).json({ error: "Фото завелике (макс. 20 МБ)" });
+    const { storedName } = await storeBuffer(String(req.body?.filename ?? "signature.jpg"), buffer);
+    return finish(storedName);
+  }
+  if (method === "telegram_code") {
+    if (!signBotConfigured()) return res.status(503).json({ error: "Бот підпису ще не налаштований на сервері", reason: "not_configured" });
+    const u = await pool.query<{ telegram_chat_id: string | null }>(`SELECT telegram_chat_id FROM users WHERE id = $1`, [userId]);
+    const chatId = u.rows[0]?.telegram_chat_id;
+    if (!chatId) return res.status(409).json({ error: "Спершу привʼяжіть Telegram", reason: "not_linked" });
+    const step = String(req.body?.step ?? "");
+    if (step === "send") {
+      const code = generateSignCode();
+      await pool.query(`UPDATE sign_codes SET used_at = now() WHERE user_id = $1 AND purpose = 'sign' AND used_at IS NULL`, [userId]);
+      await pool.query(
+        `INSERT INTO sign_codes (user_id, purpose, code, file_id, sha256, version, expires_at) VALUES ($1, 'sign', $2, $3, $4, $5, now() + ($6 || ' milliseconds')::interval)`,
+        [userId, code, v.row.id, v.row.sha256, v.row.version, String(SIGN_CODE_TTL_MS)]);
+      const ok = await signBotSend(chatId, signCodeMessage(code, v.row.name, v.row.version));
+      if (!ok) return res.status(502).json({ error: "Не вдалося надіслати код у Telegram. Перевірте, що бот не заблокований" });
+      return res.json({ sent: true, expiresInSec: SIGN_CODE_TTL_MS / 1000 });
+    }
+    if (step === "verify") {
+      const c = await pool.query<{ id: number; code: string; file_id: number; sha256: string; version: number; attempts: number; expires_at: string; used_at: string | null }>(
+        `SELECT id, code, file_id, sha256, version, attempts, expires_at, used_at FROM sign_codes
+          WHERE user_id = $1 AND purpose = 'sign' ORDER BY created_at DESC LIMIT 1`, [userId]);
+      const rec = c.rows[0];
+      if (!rec) return res.status(400).json({ error: "Спершу надішліть код" });
+      const out = verifySignCode({ code: rec.code, fileId: rec.file_id, sha256: rec.sha256, version: rec.version, attempts: rec.attempts, expiresAt: rec.expires_at, usedAt: rec.used_at },
+        String(req.body?.code ?? ""), { fileId: v.row.id, sha256: v.row.sha256, version: v.row.version }, new Date());
+      if (!out.ok) {
+        if (out.reason === "mismatch") await pool.query(`UPDATE sign_codes SET attempts = attempts + 1 WHERE id = $1`, [rec.id]);
+        const text = { expired: "Код прострочений — надішліть новий", used: "Цей код уже використано — надішліть новий", attempts: "Вичерпано 3 спроби — надішліть новий код",
+          wrong_version: "Код надіслано на іншу версію документа — надішліть новий", mismatch: `Код не збігається${out.attemptsLeft > 0 ? `, лишилось спроб: ${out.attemptsLeft}` : " — надішліть новий"}` }[out.reason];
+        return res.status(400).json({ error: text, reason: out.reason, attemptsLeft: out.attemptsLeft });
+      }
+      await pool.query(`UPDATE sign_codes SET used_at = now() WHERE id = $1`, [rec.id]);
+      return finish(null);
+    }
+    return res.status(400).json({ error: "Крок має бути send або verify" });
+  }
+  return res.status(400).json({ error: "Доступні способи: фото паперового варіанта і код у Telegram; Дія — після підключення" });
 });
 
 /** ДОСТУПИ ПАПКИ: матриця ролей + персональні винятки. Читає й пише лише керівництво. */

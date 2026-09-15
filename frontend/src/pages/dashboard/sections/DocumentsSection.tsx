@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
   uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, signDocFile, requestDocAccess,
-  fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileBlobUrl, DOC_TYPES,
-  type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess,
+  fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
+  type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type TelegramStatus,
 } from "../../../api";
 
 /**
@@ -151,6 +151,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       <div className="page-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <h2 className="page-title">📁 Регламенти та документи</h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <TelegramChip onToast={setToast} />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук за назвою, описом, адресатом" style={{ ...inp, minWidth: 260 }} />
           {viewer.isManagement && <button style={btn()} onClick={() => { const n = window.prompt("Назва нової папки:")?.trim(); if (n) void createDocFolder(n, null).then(load).catch((e) => setToast(errOf(e, "Не вдалося створити папку"))); }}>➕ Папка</button>}
           {canUploadHere && <button style={btn("primary")} onClick={() => setUploadOpen(true)}>+ Завантажити</button>}
@@ -550,32 +551,77 @@ function UploadDialog({ tree, section: initial, defaultFolder, onClose, onDone }
 
 /* ── Підпис ─────────────────────────────────────────────────────────────── */
 function SignDialog({ file, onClose, onDone }: { file: DocFile; onClose: () => void; onDone: () => Promise<void> }) {
-  const [method, setMethod] = useState<"paper_photo" | "email_code" | "diia">("paper_photo");
+  const [tg, setTg] = useState<TelegramStatus | null>(null);
+  const [method, setMethod] = useState<"telegram_code" | "paper_photo" | "diia">("telegram_code");
   const [photo, setPhoto] = useState<File | null>(null);
+  const [code, setCode] = useState("");
+  const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const submit = async () => {
-    if (method !== "paper_photo") { setErr("Цей спосіб підключається окремо: код на пошту після налаштування SMTP, Дія — після договору з Дією."); return; }
-    if (!photo) { setErr("Додайте фото або скан підписаного документа"); return; }
-    setBusy(true); setErr(null);
-    try { await signDocFile(file.id, { method: "paper_photo", filename: photo.name, dataBase64: await readAsDataUrl(photo) }); await onDone(); }
-    catch (e) { setErr(errOf(e, "Підпис не збережено")); setBusy(false); }
+  useEffect(() => { fetchTelegramStatus().then((t) => { setTg(t); if (!t.configured) setMethod("paper_photo"); }).catch(() => setTg({ configured: false, linked: false, linkedAt: null, botUsername: null })); }, []);
+  // Поки діалог відкритий і Telegram не привʼязаний — опитуємо стан, щоб після «Старт» у боті
+  // кнопка «Надіслати код» зʼявилась сама, без перезавантаження.
+  useEffect(() => {
+    if (!tg || tg.linked || !tg.configured || method !== "telegram_code") return;
+    const t = setInterval(() => { fetchTelegramStatus().then(setTg).catch(() => { /* спробуємо наступного разу */ }); }, 3000);
+    return () => clearInterval(t);
+  }, [tg, method]);
+  const link = async () => {
+    setErr(null);
+    try { const { url } = await createTelegramLink(); window.open(url, "_blank", "noopener"); }
+    catch (e) { setErr(errOf(e, "Не вдалося створити посилання")); }
   };
+  const sendCode = async () => {
+    setBusy(true); setErr(null);
+    try { await signDocFile(file.id, { method: "telegram_code", step: "send" }); setSent(true); }
+    catch (e) { setErr(errOf(e, "Код не надіслано")); }
+    finally { setBusy(false); }
+  };
+  const submit = async () => {
+    setErr(null);
+    if (method === "diia") { setErr("Дія.Підпис підключається окремо: договір, сертифікат, тест."); return; }
+    setBusy(true);
+    try {
+      if (method === "paper_photo") {
+        if (!photo) { setErr("Додайте фото або скан підписаного документа"); setBusy(false); return; }
+        await signDocFile(file.id, { method: "paper_photo", filename: photo.name, dataBase64: await readAsDataUrl(photo) });
+      } else {
+        if (!/^\d{6}$/.test(code.trim())) { setErr("Введіть 6 цифр із повідомлення бота"); setBusy(false); return; }
+        await signDocFile(file.id, { method: "telegram_code", step: "verify", code: code.trim() });
+      }
+      await onDone();
+    } catch (e) { setErr(errOf(e, "Підпис не збережено")); setBusy(false); }
+  };
+  const tgHint = !tg ? "Перевіряю…" : !tg.configured ? "Бот ще не налаштований на сервері." : tg.linked ? "Код прийде в бот «UTS Підпис»." : "Спершу привʼяжіть Telegram — одна кнопка нижче.";
   return (
     <Modal title={`Підписати: ${file.name}`} onClose={onClose} width={520}>
-      <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 12 }}>Підпис привʼязується до версії v{file.version} і її відбитка. Якщо файл замінять, підпис доведеться поставити знову.</div>
+      <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 12 }}>Підпис привʼязується до версії v{file.version} і її відбитка. Якщо файл замінять, підписати доведеться знову.</div>
       <div style={{ display: "grid", gap: 8 }}>
         {([
-          ["paper_photo", "Фото паперового варіанта", "Роздрукуй, підпиши, сфотографуй або відскануй і додай сюди. Працює вже."],
-          ["email_code", "Одноразовий код на робочу пошту", "Буде доступно після налаштування відправки пошти."],
-          ["diia", "Дія.Підпис (КЕП)", "Після підключення до Дії — договір, сертифікат, тест. Строк 3–6 тижнів."],
-        ] as [typeof method, string, string][]).map(([k, l, d]) => (
-          <label key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start", border: `1px solid ${method === k ? "var(--brand)" : "var(--border)"}`, borderRadius: 10, padding: 10, cursor: "pointer", opacity: k === "paper_photo" ? 1 : .7 }}>
-            <input type="radio" checked={method === k} onChange={() => setMethod(k)} />
+          ["telegram_code", "Одноразовий код у Telegram", tgHint, !!tg?.configured],
+          ["paper_photo", "Фото паперового варіанта", "Роздрукуй, підпиши, сфотографуй або відскануй і додай сюди.", true],
+          ["diia", "Дія.Підпис (КЕП)", "Після підключення до Дії — договір, сертифікат, тест.", false],
+        ] as [typeof method, string, string, boolean][]).map(([k, l, d, on]) => (
+          <label key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start", border: `1px solid ${method === k ? "var(--brand)" : "var(--border)"}`, borderRadius: 10, padding: 10, cursor: on ? "pointer" : "not-allowed", opacity: on ? 1 : .6 }}>
+            <input type="radio" checked={method === k} disabled={!on} onChange={() => { setMethod(k); setErr(null); }} />
             <span><div style={{ fontWeight: 700, fontSize: 13 }}>{l}</div><div style={{ fontSize: 12, color: "var(--text-muted)" }}>{d}</div></span>
           </label>
         ))}
       </div>
+      {method === "telegram_code" && tg?.configured && (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          {!tg.linked && <button style={btn("primary")} onClick={() => void link()}>Привʼязати Telegram</button>}
+          {!tg.linked && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Відкриється бот @{tg.botUsername}. Натисніть у ньому «Старт» — і повертайтесь сюди, кнопка «Надіслати код» зʼявиться сама.</div>}
+          {tg.linked && !sent && <button style={btn("primary")} onClick={() => void sendCode()} disabled={busy}>{busy ? "Надсилаю…" : "Надіслати код у Telegram"}</button>}
+          {tg.linked && sent && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6 цифр із бота" inputMode="numeric" style={{ ...inp, width: 140, letterSpacing: 4, fontWeight: 700 }} autoFocus />
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Код діє 5 хвилин.</span>
+              <button style={{ ...btn(), fontSize: 12, padding: "4px 10px" }} onClick={() => void sendCode()} disabled={busy}>Надіслати ще раз</button>
+            </div>
+          )}
+        </div>
+      )}
       {method === "paper_photo" && (
         <div style={{ marginTop: 10 }}>
           <label style={{ ...btn(), cursor: "pointer" }}>{photo ? `📎 ${photo.name}` : "Додати фото / скан"}<input type="file" accept="image/*,application/pdf" hidden onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} /></label>
@@ -584,10 +630,32 @@ function SignDialog({ file, onClose, onDone }: { file: DocFile; onClose: () => v
       {err && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 8 }}>{err}</div>}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
         <button style={btn()} onClick={onClose} disabled={busy}>Скасувати</button>
-        <button style={btn("primary")} onClick={() => void submit()} disabled={busy}>{busy ? "Зберігаю…" : "Підписати"}</button>
+        <button style={btn("primary")} onClick={() => void submit()} disabled={busy || (method === "telegram_code" && (!tg?.linked || !sent))}>{busy ? "Зберігаю…" : "Підписати"}</button>
       </div>
     </Modal>
   );
+}
+
+/** 🤖 Чип у шапці: привʼязано / привʼязати Telegram. Потрібен усім, не лише підписантам — сюди йдуть нагадування. */
+function TelegramChip({ onToast }: { onToast: (t: string) => void }) {
+  const [tg, setTg] = useState<TelegramStatus | null>(null);
+  const [waiting, setWaiting] = useState(false);
+  const load = () => fetchTelegramStatus().then(setTg).catch(() => setTg(null));
+  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => { fetchTelegramStatus().then((s) => { setTg(s); if (s.linked) { setWaiting(false); onToast("Telegram привʼязано"); } }).catch(() => { /* ще раз через 3 с */ }); }, 3000);
+    const stop = setTimeout(() => setWaiting(false), 10 * 60_000);
+    return () => { clearInterval(t); clearTimeout(stop); };
+  }, [waiting, onToast]);
+  if (!tg || !tg.configured) return null;
+  if (tg.linked) {
+    return <button title="Telegram привʼязано. Натисніть, щоб відвʼязати" style={{ ...btn(), fontSize: 12, padding: "5px 10px", color: "var(--ok)" }}
+      onClick={() => { if (window.confirm("Відвʼязати Telegram? Коди підпису й нагадування перестануть приходити.")) void unlinkTelegram().then(load); }}>🤖 Telegram ✓</button>;
+  }
+  return <button title="Привʼязати Telegram для підпису й нагадувань" style={{ ...btn(), fontSize: 12, padding: "5px 10px" }}
+    onClick={() => { createTelegramLink().then(({ url }) => { window.open(url, "_blank", "noopener"); setWaiting(true); }).catch(() => onToast("Не вдалося створити посилання")); }}>
+    {waiting ? "🤖 чекаю «Старт» у боті…" : "🤖 Привʼязати Telegram"}</button>;
 }
 
 /* ── Матриця доступів ───────────────────────────────────────────────────── */

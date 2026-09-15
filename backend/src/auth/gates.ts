@@ -51,6 +51,15 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Стан офер-гейта ВЛАСНОГО токена (чи обмежений двома вкладками). Скоуп — сам токен, "
        + "чужого не віддає; вкладки не має навмисно — інакше обмежений не міг би дізнатись, що обмежений. "
        + "Правило стереже `#431b`." },
+  { method: "GET", path: "/api/auth/telegram", permanent: true,
+    why: "Стан привʼязки Telegram ВЛАСНОГО токена (чи привʼязано, імʼя бота). Чужого не віддає; вкладки немає — привʼязка потрібна будь-якій ролі." },
+  { method: "POST", path: "/api/auth/telegram-link", permanent: true,
+    why: "Одноразовий токен привʼязки для ВЛАСНОГО акаунта (10 хв, #432b). Скоуп — сам токен." },
+  { method: "POST", path: "/api/auth/telegram-unlink", permanent: true,
+    why: "Відвʼязати ВЛАСНИЙ Telegram. Скоуп — сам токен." },
+  { method: "POST", path: "/api/telegram/sign-webhook", permanent: true,
+    why: "Стукає сервер Telegram, не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
+       + "(виводиться з токена бота, bot/signBot.ts). Не збігся → 401 без жодної дії. Вкладки бути не може." },
   { method: "GET", path: "/api/auth/tracker-sso", permanent: true,
     why: "Вкладки не має, тож ROUTE_TAB тут нікуди ставити — але межа Є і вона не в меню: "
        + "роут відмовляє 403, якщо `users.tracker_enabled` вимкнено (`trackerAllowed`, гейт `#312`). "

@@ -3121,3 +3121,26 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO test_readonly;
 -- Жодних INSERT/UPDATE/DELETE/TRUNCATE — ні зараз, ні на майбутні таблиці.
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM test_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO test_readonly;
+
+-- ── 🤖 TELEGRAM-БОТ ПІДПИСУ (викат 3 документів v2, рішення власника 15.09.2026: «давай поки
+-- через ТГ», бот новий). Привʼязка — deep-link `/start <токен>`; код підпису — 6 цифр, 5 хв,
+-- привʼязаний до файла й хеша версії. Обидва — записи в `sign_codes`, одноразові.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_linked_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS sign_codes (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL CHECK (purpose IN ('link','sign')),
+  code TEXT NOT NULL,
+  file_id INTEGER REFERENCES doc_files(id) ON DELETE CASCADE,
+  sha256 TEXT,
+  version INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sign_codes_user ON sign_codes(user_id, purpose, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sign_codes_link ON sign_codes(code) WHERE purpose = 'link' AND used_at IS NULL;
+-- нагадування про непідписаний офер — не частіше разу на добу
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;

@@ -29,6 +29,9 @@ import { aiWorkRouter } from "./routes/aiWork.js";
 import { reportsRouter } from "./routes/reports.js";
 import { ratesRouter } from "./routes/rates.js";
 import { documentsRouter } from "./routes/documents.js";
+import { telegramRouter } from "./routes/telegram.js";
+import { sendOfferReminders } from "./jobs/offerReminders.js";
+import { signBotEnsureWebhook } from "./bot/signBot.js";
 import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { dutyRouter } from "./routes/duty.js";
@@ -135,6 +138,7 @@ app.use("/api/ai-work", aiWorkRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/rates", ratesRouter);
 app.use("/api/documents", documentsRouter);
+app.use("/api/telegram", telegramRouter); // вебхук бота підпису — без requireAuth, межа секретом (routes/telegram.ts)
 app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
 app.use("/api/training", trainingRouter);
@@ -495,6 +499,11 @@ cron.schedule("30 4 * * *", () => {
 // (Огляд 520к vs Звіт 2.0 694к). Таблиці monthly_carryover(_mgr) — легасі (дані не чіпаємо,
 // просто не пишемо/не читаємо). Крон і startup-виклик прибрано.
 
+// 🔏 Нагадування про непідписані офери — щодня 09:00 Києва (розділ 9.4 ТЗ документів).
+cron.schedule("0 9 * * *", () => {
+  void runJob("sendOfferReminders", () => sendOfferReminders());
+}, { timezone: "Europe/Kyiv" });
+
 // Ван-ту-ван нагадування: 1-го числа 06:00 + на старті (посіяти поточний місяць).
 cron.schedule("0 6 1 * *", () => {
   void runJob("createOneOnOneReminders", () => createOneOnOneReminders());
@@ -747,6 +756,7 @@ cron.schedule("*/5 * * * *", () => {
 const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["freshnessWatch", () => freshnessWatch()],
   ["catchUpAiChat", () => catchUpAiChat()],
+  ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],
   ["createDutyReminders", () => createDutyReminders()],
   ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],

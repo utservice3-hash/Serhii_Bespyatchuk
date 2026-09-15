@@ -865,6 +865,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // списки порожні — та сама форма, що в `/api/tracker/*` нижче.
   // Четвертий роут тієї ж родини (PR #tracker-user-sync): список людей для синхронізації.
   // Той самий ключ, та сама порожня обліковка — деталі в ROUTE_BOUNDARY_EXEMPTIONS.
+  { method: "GET", path: "/api/auth/telegram", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/auth/telegram-link", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/auth/telegram-unlink", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/telegram/sign-webhook", cls: "deny-only",
+    allow: [], deny: [] },
   { method: "GET", path: "/api/auth/gate", cls: "deny-only",
     allow: [], deny: [] },
   { method: "GET", path: "/api/auth/tracker-users", cls: "deny-only",

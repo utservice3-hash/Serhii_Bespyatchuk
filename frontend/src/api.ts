@@ -2888,7 +2888,19 @@ export async function updateDocFile(id: number, patch: { name?: string; category
 }
 export async function archiveDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/archive`); }
 export async function restoreDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/restore`); }
-export async function signDocFile(id: number, body: { method: "paper_photo"; filename: string; dataBase64: string }): Promise<void> { await api.post(`/documents/file/${id}/sign`, body); }
+export type SignBody =
+  | { method: "paper_photo"; filename: string; dataBase64: string }
+  | { method: "telegram_code"; step: "send" }
+  | { method: "telegram_code"; step: "verify"; code: string };
+export async function signDocFile(id: number, body: SignBody): Promise<{ ok?: boolean; sent?: boolean; expiresInSec?: number }> {
+  const { data } = await api.post<{ ok?: boolean; sent?: boolean; expiresInSec?: number }>(`/documents/file/${id}/sign`, body);
+  return data;
+}
+/** 🤖 Привʼязка Telegram до акаунта (бот «UTS Підпис»): для кодів підпису й нагадувань. */
+export interface TelegramStatus { configured: boolean; linked: boolean; linkedAt: string | null; botUsername: string | null }
+export async function fetchTelegramStatus(): Promise<TelegramStatus> { const { data } = await api.get<TelegramStatus>("/auth/telegram"); return data; }
+export async function createTelegramLink(): Promise<{ url: string; expiresInSec: number }> { const { data } = await api.post<{ url: string; expiresInSec: number }>("/auth/telegram-link"); return data; }
+export async function unlinkTelegram(): Promise<void> { await api.post("/auth/telegram-unlink"); }
 export async function requestDocAccess(id: number, note: string): Promise<{ message: string }> {
   const { data } = await api.post<{ message: string }>(`/documents/file/${id}/request-access`, { note });
   return data;

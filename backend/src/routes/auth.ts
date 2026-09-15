@@ -7,6 +7,9 @@ import { signToken } from "../auth/auth.js";
 import { effectiveRoleKey, getRoleDef, scopeCompatRole, tabsOfRole } from "../auth/rbac.js";
 import { requireAuth } from "../auth/middleware.js";
 import { offerPendingFor } from "../auth/offerGate.js";
+import { signBotConfigured, signBotUsername } from "../bot/signBot.js";
+import { generateLinkToken, LINK_TOKEN_TTL_MS } from "../core/signCode.js";
+import { randomBytes } from "crypto";
 import { config } from "../config.js";
 import {
   ASSERTION_TTL_SECONDS,
@@ -98,6 +101,28 @@ authRouter.post("/login", async (req, res) => {
  *  (core/offerGate.ts). Роут поза мапою вкладок, тож проходить і для обмеженого. */
 authRouter.get("/gate", requireAuth, async (req, res) => {
   res.json({ offerPending: await offerPendingFor(req.auth!.userId) });
+});
+
+/** 🤖 Привʼязка Telegram для підпису (бот «UTS Підпис»). Стан — ВЛАСНОГО токена. */
+authRouter.get("/telegram", requireAuth, async (req, res) => {
+  const r = await pool.query<{ telegram_linked_at: string | null }>(`SELECT telegram_linked_at FROM users WHERE id = $1`, [req.auth!.userId]);
+  const configured = signBotConfigured();
+  res.json({ configured, linked: r.rows[0]?.telegram_linked_at != null, linkedAt: r.rows[0]?.telegram_linked_at ?? null, botUsername: configured ? await signBotUsername() : null });
+});
+/** Одноразовий токен привʼязки (10 хв) → посилання t.me/<бот>?start=<токен>. Старі невикористані гасяться. */
+authRouter.post("/telegram-link", requireAuth, async (req, res) => {
+  if (!signBotConfigured()) return res.status(503).json({ error: "Бот підпису ще не налаштований на сервері" });
+  const username = await signBotUsername();
+  if (!username) return res.status(503).json({ error: "Telegram не відповідає — спробуйте пізніше" });
+  const token = generateLinkToken(randomBytes(36));
+  await pool.query(`UPDATE sign_codes SET used_at = now() WHERE user_id = $1 AND purpose = 'link' AND used_at IS NULL`, [req.auth!.userId]);
+  await pool.query(`INSERT INTO sign_codes (user_id, purpose, code, expires_at) VALUES ($1, 'link', $2, now() + ($3 || ' milliseconds')::interval)`,
+    [req.auth!.userId, token, String(LINK_TOKEN_TTL_MS)]);
+  res.json({ url: `https://t.me/${username}?start=${token}`, expiresInSec: LINK_TOKEN_TTL_MS / 1000 });
+});
+authRouter.post("/telegram-unlink", requireAuth, async (req, res) => {
+  await pool.query(`UPDATE users SET telegram_chat_id = NULL, telegram_linked_at = NULL WHERE id = $1`, [req.auth!.userId]);
+  res.json({ ok: true });
 });
 
 // Time tracker SSO. The tracker is a separate system with its own server and user table; the
