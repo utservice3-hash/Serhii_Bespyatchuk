@@ -30,9 +30,10 @@ const S = {
   td: { padding: "12px 10px", borderBottom: "1px solid #f1f5f9", fontSize: 13, verticalAlign: "top" } as const,
   chip: (bg: string, fg: string) => ({ display: "inline-block", padding: "2px 8px", borderRadius: 999,
         fontSize: 11, fontWeight: 700, background: bg, color: fg, whiteSpace: "nowrap" } as const),
-  btn: (primary?: boolean) => ({ fontSize: 12, fontWeight: primary ? 700 : 500, padding: "6px 12px",
-        borderRadius: 8, cursor: "pointer", border: primary ? "none" : "1px solid #d1d5db",
-        background: primary ? "#111827" : "#fff", color: primary ? "#fff" : "#374151" } as const),
+  btn: (primary?: boolean, off?: boolean) => ({ fontSize: 12, fontWeight: primary ? 700 : 500, padding: "6px 12px",
+        borderRadius: 8, cursor: off ? "not-allowed" : "pointer", border: primary ? "none" : "1px solid #d1d5db",
+        background: primary ? "#111827" : "#fff", color: primary ? "#fff" : "#374151",
+        opacity: off ? 0.45 : 1 } as const),
   input: { fontSize: 12, padding: "6px 9px", border: "1px solid #d1d5db", borderRadius: 8, width: "100%",
            boxSizing: "border-box" } as const,
 };
@@ -120,8 +121,12 @@ function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boole
       <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="одна юр. особа, замовляють з двох назв…" style={S.input} />
 
       <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
-        <button style={S.btn(true)} disabled={busy || !pre || !reason.trim() || (pre?.chainBlocked.length ?? 0) > 0} onClick={doMerge}>Обʼєднати</button>
+        {(() => { const off = busy || !pre || !reason.trim() || (pre?.chainBlocked.length ?? 0) > 0; return (
+          <button style={S.btn(true, off)} disabled={off} onClick={doMerge}>Обʼєднати</button>); })()}
         <button style={S.btn()} disabled={busy} onClick={() => { setAliasSel(null); setCanonSel(null); setReason(""); setPre(null); setErr(null); }}>Скасувати</button>
+        {/* 🔘 Вимкнена кнопка мусить казати ЧОМУ — 15.09.2026 тімлід прочитав її як «не працює» */}
+        {!busy && pre && !reason.trim() && <span style={{ fontSize: 11, color: "#9ca3af" }}>введіть причину</span>}
+        {!busy && !pre && <span style={{ fontSize: 11, color: "#9ca3af" }}>оберіть обох клієнтів</span>}
       </div>
 
       {teamOnly && (
@@ -182,7 +187,13 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
   const cur = clients.find((c) => c.clientKey === clientKey);
   const curManager = cur?.managerName ?? sel?.managerName ?? null;
 
-  const nextMonth = (() => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d.toLocaleDateString("uk-UA", { month: "long", year: "numeric" }); })();
+  // 👤 Вид зміни (рішення Романа 15.09.2026): виправлення привʼязки діє одразу, передача — з
+  // наступного місяця. Дефолт — виправлення: саме за цим найчастіше приходять тімліди.
+  const [kind, setKind] = useState<"fix" | "transfer">("fix");
+  const monthName = (shift: number) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + shift); return d.toLocaleDateString("uk-UA", { month: "long", year: "numeric" }); };
+  const thisMonth = monthName(0), nextMonth = monthName(1);
+  const newName = managers.find((m) => m.id === managerId)?.name ?? "новий менеджер";
+  const oldName = curManager ?? "попередній менеджер";
 
   return (
     <div style={{ ...S.card, flex: "1 1 460px", minWidth: 420 }}>
@@ -202,13 +213,31 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
         {managers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
       </select>
 
-      <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Причина передачі (не обовʼязково)" style={{ ...S.input, marginTop: 8 }} />
-
-      <div style={{ marginTop: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#1e3a8a", lineHeight: 1.55 }}>
-        <b>Правило передачі:</b> поточний місяць лишається за старим менеджером —
-        план і факт не рухаються посеред місяця. Новий планує з <b>{nextMonth}</b>.
-        Зміна лишається в історії клієнта.
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Що це за зміна</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        {([
+          ["fix", "Виправлення привʼязки", "Клієнт від початку висів не на тому менеджері. Діє одразу, історія місяця не рухається."],
+          ["transfer", "Передача", "Клієнта вів один, тепер вестиме інший. Поточний місяць за старим, новий з наступного."],
+        ] as const).map(([k, title, text]) => (
+          <label key={k} style={{ border: kind === k ? "2px solid #1d4ed8" : "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px", cursor: "pointer", fontSize: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, fontSize: 13 }}>
+              <input type="radio" name="transfer-kind" checked={kind === k} onChange={() => setKind(k)} disabled={busy} />{title}
+            </div>
+            <div style={{ color: "#4b5563", marginTop: 3, lineHeight: 1.45 }}>{text}</div>
+          </label>
+        ))}
       </div>
+
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Причина (обовʼязково)</div>
+      <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={kind === "fix" ? "помилково привʼязаний при синку, веде інший" : "перерозподіл навантаження між менеджерами"} style={S.input} />
+
+      {kind === "fix"
+        ? <div style={{ marginTop: 10, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#065f46", lineHeight: 1.55 }}>
+            <b>Діє одразу.</b> {newName} побачить клієнта у себе відразу, {oldName} перестане його бачити. {thisMonth} рахується за новим менеджером.
+          </div>
+        : <div style={{ marginTop: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#1e3a8a", lineHeight: 1.55 }}>
+            <b>Діє з {nextMonth}.</b> {thisMonth} лишається за {oldName}: план і факт не рухаються посеред місяця. {newName} побачить клієнта з 1-го числа наступного місяця.
+          </div>}
 
       <div style={{ marginTop: 8, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#78350f", lineHeight: 1.55 }}>
         ⚠️ Якщо нові угоди в CRM прийдуть з іншим відповідальним, ніж призначений тут, —
@@ -218,9 +247,9 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
       {msg && <div style={{ marginTop: 8, fontSize: 12, color: "#166534" }}>{msg}</div>}
 
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button style={S.btn(true)} disabled={busy || !clientKey || !managerId}
+        <button style={S.btn(true, busy || !clientKey || !managerId || !reason.trim())} disabled={busy || !clientKey || !managerId || !reason.trim()}
           onClick={async () => { setBusy(true);
-            try { const r = await assignClientManager({ clientKey, managerId: Number(managerId), reason: reason.trim() || undefined });
+            try { const r = await assignClientManager({ clientKey, managerId: Number(managerId), reason: reason.trim(), kind });
                   setMsg(`Передано. Діє з ${r.effectiveFrom}. ${r.note}`); setReason("");
                   setHistory(await fetchClientManagerHistory(clientKey)); onDone(); }
             catch (e) { /* 403 поза командою мусить бути ВИДИМИМ, а не мовчазним «нічого не сталось» */
@@ -228,6 +257,8 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
               setMsg(`Не передано: ${err.response?.data?.error ?? err.message ?? "помилка"}`); }
             finally { setBusy(false); } }}>Передати</button>
         <button style={S.btn()} disabled={busy} onClick={() => { setSel(null); setManagerId(""); setReason(""); setMsg(null); }}>Скасувати</button>
+        {(!clientKey || !managerId || !reason.trim()) && !busy && (
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>{!clientKey ? "оберіть клієнта" : !managerId ? "оберіть менеджера" : "введіть причину"}</span>)}
       </div>
 
       {history.length > 0 && (
@@ -235,7 +266,7 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
           <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "12px 0 4px" }}>Історія передач</div>
           {history.map((h, i) => (
             <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "1px dashed #e5e7eb" }}>
-              <span style={{ color: "#6b7280" }}>{h.effectiveFrom}</span> · {h.fromManager ?? "—"} → <b>{h.toManager}</b>
+              <span style={{ color: "#6b7280" }}>{h.effectiveFrom}{h.kind === "fix" ? " · виправлення" : ""}</span> · {h.fromManager ?? "—"} → <b>{h.toManager}</b>
               <span style={{ color: "#9ca3af" }}> · {h.changedBy ?? "—"}</span>
               {h.reason && <span style={{ color: "#6b7280" }}> · {h.reason}</span>}
             </div>

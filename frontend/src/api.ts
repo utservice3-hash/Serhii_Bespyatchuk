@@ -2466,6 +2466,10 @@ export interface Task {
    * (замок), а не як «файлів немає».
    */
   fileCount?: number | null;
+  /** Хто поклав файли (через кому) — лише власнику, як і лічильник. */
+  fileAuthors?: string | null;
+  /** Імʼя автора задачі — щоб на «Спільних» було видно, ВІД КОГО вона. */
+  createdByName?: string | null;
   /** «Є нове»: доповнення або зміна статусу після мого останнього перегляду і НЕ мною. */
   hasUnseen?: boolean;
   metricsJson?: { metric: string; target: number; actual: number | null; done: boolean }[] | null;
@@ -3331,16 +3335,21 @@ export const BUILD_SHA: string = typeof __BUILD_SHA__ === "string" ? __BUILD_SHA
  * `null` = «невідомо» (немає вшитої sha, сервер без версії, мережа впала).
  * Невідоме НЕ є приводом показати плашку.
  */
-export async function fetchClientStale(): Promise<boolean | null> {
+/**
+ * Вердикт «застарів» + sha сервера, на якому він винесений. Друге поле потрібне
+ * банеру, щоб відрізнити «людина закрила плашку на ЦЬОМУ викаті» від «після
+ * закриття вийшов ЩЕ один викат» — булевого вердикту для цього замало.
+ */
+export async function fetchClientStale(): Promise<{ stale: boolean | null; serverSha: string | null }> {
   try {
-    const { data } = await api.get<{ clientStale?: boolean | null }>("/health", {
+    const { data } = await api.get<{ clientStale?: boolean | null; version?: { sha?: string; shortSha?: string } }>("/health", {
       params: { loaded: BUILD_SHA },
     });
-    return data?.clientStale ?? null;
+    return { stale: data?.clientStale ?? null, serverSha: data?.version?.sha ?? data?.version?.shortSha ?? null };
   } catch {
     // Мережа/челендж/500 — це «не знаю», а не «оновись». Плашка, що спалахує на
     // кожному моргані звʼязку, навчає її ігнорувати.
-    return null;
+    return { stale: null, serverSha: null };
   }
 }
 
@@ -3614,13 +3623,13 @@ export async function fetchMergeJournal(): Promise<MergeJournalRow[]> {
   const { data } = await api.get<MergeJournalRow[]>("/dashboard/client-merge/journal");
   return data;
 }
-export async function assignClientManager(body: { clientKey: string; managerId: number; reason?: string }): Promise<{ effectiveFrom: string; note: string }> {
+export async function assignClientManager(body: { clientKey: string; managerId: number; reason: string; kind: "fix" | "transfer" }): Promise<{ effectiveFrom: string; kind: "fix" | "transfer"; note: string }> {
   const { data } = await api.post("/dashboard/client-manager", body);
   return data;
 }
 export interface ManagerHistoryRow {
   fromManager: string | null; toManager: string; effectiveFrom: string;
-  reason: string | null; changedBy: string | null; createdAt: string;
+  reason: string | null; kind?: "fix" | "transfer"; changedBy: string | null; createdAt: string;
 }
 export async function fetchClientManagerHistory(clientKey: string): Promise<ManagerHistoryRow[]> {
   const { data } = await api.get<ManagerHistoryRow[]>("/dashboard/client-manager/history", { params: { clientKey } });

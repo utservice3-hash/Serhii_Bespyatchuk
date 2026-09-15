@@ -139,6 +139,8 @@ tasksRouter.get("/", async (req, res) => {
             -- ⚠️ І БЕЗ БЕКТИКІВ: цей коментар живе ВСЕРЕДИНІ шаблонного літерала,
             -- тож бектик тут — синтаксична помилка, а не форматування.
             CASE WHEN ${ownerCondSql(viewerOf(auth), push)} THEN COALESCE(tf.n, 0) END AS "fileCount",
+            -- 📎 Хто поклав файли — теж лише власнику, тією самою межею.
+            CASE WHEN ${ownerCondSql(viewerOf(auth), push)} THEN tf.authors END AS "fileAuthors",
             -- 🔔 «Є НОВЕ» — це «зʼявилось ПІСЛЯ мого останнього перегляду і НЕ
             -- мною». Без task_views таке твердження було б здогадом, тому
             -- бейдж спирається на збережений момент перегляду, а не на
@@ -154,6 +156,9 @@ tasksRouter.get("/", async (req, res) => {
             t.actual_value AS "actualValue", to_char(t.plan_date, 'YYYY-MM-DD') AS "planDate",
             to_char(t.period_start, 'YYYY-MM-DD') AS "periodStart", to_char(t.period_end, 'YYYY-MM-DD') AS "periodEnd",
             t.parent_id AS "parentId", t.auto, u.role AS "createdByRole",
+            -- 👤 ІМʼЯ АВТОРА — доти віддавались лише id і роль, і на екрані «хто мені
+            -- це поставив» не було ніде (відгук власника 15.09.2026 на «Спільних»).
+            COALESCE(u.full_name, u.email) AS "createdByName",
             -- Команда виконавця — ОДИН вираз на проєкт (ASSIGNEE_TEAM_SQL), інакше
             -- фронт фільтрував би по m.team_id, а сервер міряв межу по COALESCE.
             t.created_by AS "createdById", ${ASSIGNEE_TEAM_SQL} AS "assigneeTeamId",
@@ -178,8 +183,10 @@ tasksRouter.get("/", async (req, res) => {
      LEFT JOIN task_views tv ON tv.task_id = t.id AND tv.user_id = $${me}
      LEFT JOIN (SELECT task_id, count(*)::int AS n FROM task_comments GROUP BY task_id) tc
             ON tc.task_id = t.id
-     LEFT JOIN (SELECT task_id, count(*)::int AS n FROM task_files
-                 WHERE deleted_at IS NULL GROUP BY task_id) tf
+     LEFT JOIN (SELECT f.task_id, count(*)::int AS n,
+                       string_agg(DISTINCT COALESCE(fu.full_name, fu.email), ', ') AS authors
+                  FROM task_files f LEFT JOIN users fu ON fu.id = f.created_by
+                 WHERE f.deleted_at IS NULL GROUP BY f.task_id) tf
             ON tf.task_id = t.id
      ${where}
      ORDER BY t.pinned DESC, t.created_at DESC`,

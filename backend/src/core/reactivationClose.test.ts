@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { effectiveManagerSql } from "./effectiveManager.js";
 import assert from "node:assert/strict";
 import { closeReasonClass, ownerTeamClamp, OWNER_TEAM_CTE, SERVICE_CLOSE_REASONS,
          CLOSE_CLASS_LABEL } from "./reactivationClose.js";
@@ -82,7 +83,11 @@ test("#349 кламп: тімліду умова додається, адмін-
     "🔴 тімліду не додалась умова по команді — у видачу поїде чужа команда");
   assert.ok(lead.trim().startsWith("AND "),
     "🔴 умова не дописується до WHERE — запит або зламається, або мовчки втратить кламп");
-  assert.match(OWNER_TEAM_CTE, /COALESCE\(lo\.pinned_manager_id, pm\.manager_id\)/,
+  // 15.09.2026: одне джерело правди тепер `core/effectiveManager.ts` (закріплений діє з
+  // `pinned_from_month`), і кламп мусить брати САМЕ його, а не власну копію формули.
+  assert.ok(OWNER_TEAM_CTE.includes(effectiveManagerSql("lo", "pm")),
     "🔴 формула «менеджер клієнта» розійшлась із рештою екранів — це ДРУГЕ джерело правди "
     + "про відповідального, а їх має бути одне");
+  assert.doesNotMatch(OWNER_TEAM_CTE, /COALESCE\(lo\.pinned_manager_id, pm\.manager_id\)/,
+    "🔴 стара формула без дати дії повернулась у кламп");
 });

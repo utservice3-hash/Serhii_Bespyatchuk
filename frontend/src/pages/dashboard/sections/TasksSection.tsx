@@ -1137,6 +1137,13 @@ export function TasksSection({
                       </div>
                       {/* 📎 Що є в картці — числом, а не здогадом. Мітка групи видима
                           лише власнику групи: сервер віддає `groupName` тільки йому. */}
+                      {/* 👤 ВІД КОГО — лише коли автор не я: у «Своїх» це був би шум, а на
+                          «Спільних» — відповідь на головне питання (відгук власника 15.09). */}
+                      {task.createdByName && task.createdById !== currentUserId && (
+                        <div style={{ paddingLeft: 22, marginTop: 2, fontSize: 10.5, color: "var(--text-muted)" }}>
+                          👤 від: {task.createdByName}
+                        </div>
+                      )}
                       {(task.commentCount ?? 0) > 0 && (
                         <div style={{ paddingLeft: 22, marginTop: 2, display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", alignItems: "center" }}>
                           {/* Форма бейджа — та сама, що в сусідніх мітках 1×1 вище:
@@ -1407,7 +1414,7 @@ export function TasksSection({
                           {task.fileCount > 0 && (
                             <button
                               onClick={() => setFilesViewer(task.id)}
-                              title="Подивитися вкладення"
+                              title={task.fileAuthors ? `Вкладення поклав: ${task.fileAuthors}` : "Подивитися вкладення"}
                               style={{ border: "1px solid var(--border)", background: "var(--card-bg)",
                                 color: "var(--text)", borderRadius: "var(--r-pill)", cursor: "pointer",
                                 fontSize: 11, padding: "2px var(--sp-3)", whiteSpace: "nowrap" }}
@@ -1480,6 +1487,9 @@ export function TasksSection({
               );
               return (
                 <>
+                  <F icon="✍️" label="Автор">
+                    <span style={{ fontSize: 13 }}>{openTask.createdByName ?? "—"}</span>
+                  </F>
                   <F icon="👤" label="Виконавець">
                     <select value={openTask.assigneeId ?? ""} onChange={(e) => { const assigneeId = e.target.value ? Number(e.target.value) : null; const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(openTask.id, { assigneeId, assigneeName }); commitTask(openTask.id, { assigneeId }); }} style={{ width: "100%" }}>
                       <option value="">— (моя / без виконавця)</option>
