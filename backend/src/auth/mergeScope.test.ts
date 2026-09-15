@@ -49,3 +49,54 @@ test("#31c ВІДМОВА НАЗИВАЄ, ЩО САМЕ ПОЗА МЕЖЕЮ", ()
   assert.match(mergeDenyReason({ canAll: false, leadTeamId: null, aliasTeamId: null, canonicalTeamId: null }),
     /КВП/, "ролі без команди не сказано, до кого йти");
 });
+
+/**
+ * #413 — ТІМЛІД ПЕРЕДАЄ КЛІЄНТА ЛИШЕ В МЕЖАХ СВОЄЇ КОМАНДИ: клієнт його команди →
+ * менеджеру його команди. Чужий клієнт або чужий менеджер — відмова з названою
+ * причиною; невідома команда (`null`) — теж відмова. Червоніє, якщо прибрати будь-яку
+ * з двох рівностей або трактувати `null` як «своя».
+ */
+test("#413 ТІМЛІД ПЕРЕДАЄ ЛИШЕ СВОЇХ СВОЇМ: клієнт і новий менеджер — його команда", async () => {
+  const { assignAllowed, assignDenyReason } = await import("./mergeScope.js");
+  const lead = { canAll: false, leadTeamId: 7 };
+  assert.equal(assignAllowed({ ...lead, clientTeamId: 7, targetTeamId: 7 }), true, "свій → своєму мусить проходити");
+  assert.equal(assignAllowed({ ...lead, clientTeamId: 7, targetTeamId: 9 }), false, "свій → чужому");
+  assert.equal(assignAllowed({ ...lead, clientTeamId: 9, targetTeamId: 7 }), false, "чужий → своєму");
+  assert.equal(assignAllowed({ ...lead, clientTeamId: null, targetTeamId: 7 }), false, "невідома команда клієнта = заборона");
+  assert.equal(assignAllowed({ ...lead, clientTeamId: 7, targetTeamId: null }), false, "невідома команда менеджера = заборона");
+  assert.match(assignDenyReason({ ...lead, clientTeamId: 9, targetTeamId: 7 }), /клієнт/);
+  assert.match(assignDenyReason({ ...lead, clientTeamId: 7, targetTeamId: 9 }), /новий менеджер/);
+  assert.doesNotMatch(assignDenyReason({ ...lead, clientTeamId: 9, targetTeamId: 7 }), /новий менеджер/, "причина називає лише те, що справді поза межею");
+});
+
+/**
+ * #413b 🪞 — ПРАВО `merge_clients` і далі передає МІЖ командами, а не-тімлід без права —
+ * ні. Без дзеркала правило «лише своїх» можна було б виконати, заборонивши всім.
+ */
+test("#413b ДЗЕРКАЛО: merge_clients передає між командами; без права й без команди — ні", async () => {
+  const { assignAllowed, assignDenyReason } = await import("./mergeScope.js");
+  assert.equal(assignAllowed({ canAll: true, leadTeamId: null, clientTeamId: 3, targetTeamId: 9 }), true);
+  assert.equal(assignAllowed({ canAll: true, leadTeamId: null, clientTeamId: null, targetTeamId: null }), true, "з правом команди не питаємо");
+  assert.equal(assignAllowed({ canAll: false, leadTeamId: null, clientTeamId: 7, targetTeamId: 7 }), false, "менеджер без команди тімліда — ні");
+  assert.match(assignDenyReason({ canAll: false, leadTeamId: null, clientTeamId: 7, targetTeamId: 7 }), /КВП/);
+});
+
+/**
+ * #413c — РОУТ СПРАВДІ КЛИЧЕ ПРЕДИКАТ, а не лише експортує його: у `POST /client-manager`
+ * немає `requirePerm("merge_clients")` (він відсік би тімліда до будь-якої перевірки),
+ * є виклик `assignAllowed(` і відповідь `assignDenyReason(`. Читає джерело, межа слова.
+ * Червоніє, якщо повернути `requirePerm` на роут або прибрати виклик предиката.
+ */
+test("#413c РОУТ /client-manager кличе assignAllowed і не сидить за requirePerm(merge_clients)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
+  const start = src.indexOf('dashboardRouter.post("/client-manager"');
+  assert.ok(start > 0, "роут не знайдено");
+  const end = src.indexOf("\n});", start);
+  const body = src.slice(start, end);
+  assert.doesNotMatch(body.split("\n")[0], /requirePerm\(/, "requirePerm на роуті відсікає тімліда до перевірки команди");
+  assert.match(body, /\bassignAllowed\(/, "предикат не викликається");
+  assert.match(body, /\bassignDenyReason\(/, "причина відмови не віддається");
+  assert.match(body, /\bclientOwnerTeam\(clientKey\)/, "команда клієнта рахується не по клієнту");
+});
