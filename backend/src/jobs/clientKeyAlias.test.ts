@@ -277,3 +277,67 @@ test("#422e ВІДКІТ АДРЕСНИЙ: знімає названу пару,
     scratch.dispose();
   }
 });
+
+/**
+ * #422f — МІГРАЦІЯ ПЕРЕЖИВАЄ НЕПОРОЖНЮ ТАБЛИЦЮ І ПОВТОРНИЙ ПРОГІН.
+ *
+ * 🔴 НАВІЩО ОКРЕМО ВІД `#422`. Там схема накочується на ПОРОЖНЮ базу — а на проді
+ * в `client_key_alias` лежить ~178 рядків, і саме там міграція вперше робить те,
+ * чого на порожній не робить ніколи: заповнює `id BIGSERIAL` наявним рядкам і
+ * перемикає PRIMARY KEY, коли дані вже є. Якщо `id` вийде неунікальним або NULL,
+ * `ADD CONSTRAINT … PRIMARY KEY (id)` впаде **на проді, під час викату**, а не тут.
+ *
+ * 🔴 І ДРУГЕ: `schema.sql` виконується ЦІЛКОМ на КОЖНОМУ `npm run migrate`. Тобто
+ * DO-блок і `ADD COLUMN` зобовʼязані бути ідемпотентними — інакше другий викат
+ * упаде там, де перший пройшов. Це рівно клас «міграція пройшла ≠ зміна
+ * застосувалась», лише в інший бік.
+ *
+ * Гейт: накотити схему → покласти дані (включно з ВІДКЛИКАНИМ рядком, як на проді)
+ * → накотити схему ЩЕ РАЗ → дані цілі, ключі унікальні, часткова унікальність жива.
+ * Червоніє, якщо зробити міграцію разовою або зламати умову DO-блоку.
+ */
+test("#422f МІГРАЦІЯ ІДЕМПОТЕНТНА І ПЕРЕЖИВАЄ ДАНІ: другий прогін не ламає нічого", async (t) => {
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    const schema = readFileSync(SCHEMA, "utf8");
+    await c.query(schema);
+    // Стан, як на проді: є і чинні злиття, і відкликані.
+    await c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason,revoked_at) VALUES
+         ('смар','смартекс','чинне',NULL),
+         ('максимсмартекс','смартекс','чинне',NULL),
+         ('0672765955','глобалбілдінжиніринг','відкликане',now())`);
+
+    // 🔁 ДРУГИЙ ПРОГІН УСІЄЇ СХЕМИ — те саме, що наступний `npm run migrate`.
+    await c.query(schema);
+
+    const after = (await c.query<{ n: string; ids: string; nulls: string }>(
+      `SELECT COUNT(*) n, COUNT(DISTINCT id) ids, COUNT(*) FILTER (WHERE id IS NULL) nulls
+         FROM client_key_alias`)).rows[0];
+    assert.equal(Number(after.n), 3, "🔴 повторна міграція втратила або подвоїла рядки");
+    assert.equal(Number(after.ids), 3, "🔴 `id` не унікальний — PRIMARY KEY (id) упав би на проді");
+    assert.equal(Number(after.nulls), 0, "🔴 у наявних рядків `id` лишився NULL — PK такого не прийме");
+
+    const pk = (await c.query<{ cols: string }>(
+      `SELECT string_agg(a.attname, ',' ORDER BY a.attnum) cols
+         FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+        WHERE c.conrelid = 'client_key_alias'::regclass AND c.contype = 'p'`)).rows[0];
+    assert.equal(pk.cols, "id", "🔴 первинний ключ не переїхав на `id` або переїхав назад");
+
+    // Часткова унікальність жива після повторного прогону: відкликаний ключ вільний,
+    // активний — ні. Саме це і є предмет усієї зміни.
+    await c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason)
+       VALUES ('0672765955','глобалбілдінжиніринг','повторне злиття після відкоту')`);
+    await assert.rejects(
+      () => c.query(`INSERT INTO client_key_alias (alias_key,canonical_key,reason) VALUES ('смар','інша','дубль')`),
+      /duplicate key|unique/i, "🔴 після повторної міграції активний псевдонім перестав конфліктувати");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
