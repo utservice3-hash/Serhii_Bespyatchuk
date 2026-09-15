@@ -2445,6 +2445,58 @@ CREATE TABLE IF NOT EXISTS client_key_alias (
 );
 CREATE INDEX IF NOT EXISTS idx_client_key_alias_canon ON client_key_alias(canonical_key) WHERE revoked_at IS NULL;
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 🔓 РОЗʼЄДНАННЯ МУСИТЬ ЗВІЛЬНЯТИ ПСЕВДОНІМ (15.09.2026)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 🔴 ЩО БУЛО ЗЛАМАНО. `alias_key` був PRIMARY KEY **безумовно**, а відкіт лише
+-- проставляє `revoked_at` (рядки тут не видаляються ніколи — див. вище). Отже
+-- скасований рядок ТРИМАВ КЛЮЧ ЗАЙНЯТИМ НАЗАВЖДИ: повторне злиття того самого
+-- псевдоніма падало на `duplicate key`, і роут віддавав 409 «Такий псевдонім уже
+-- є в реєстрі». Розʼєднання було дією одноразовою й безповоротною на рівні ключа.
+--
+-- 📐 Заміряно на проді 15.09.2026: спалених ключів рівно три, і під ними **358
+-- угод** — «смар» (342), «максимсмартекс» (15), «0672765955» (1). Вони стояли
+-- окремими клієнтами поза своїми групами, і приєднати їх назад було неможливо.
+--
+-- 🔴 І ПРИЧИНА ВІДКЛИКАНЬ ВИЯВИЛАСЬ НЕ ТОЮ, ЩО ЗДАВАЛАСЬ. Два з трьох — це не
+-- «передумав», а ОБХІД заборони ланцюжка: за 9 і за 0 секунд після відкоту йшло
+-- злиття колишнього канонічного в новий. Щоб понизити канонічний до ролі
+-- псевдоніма, тригер нижче вимагає спершу звільнити його від власних псевдонімів
+-- — і кожне таке ВИМУШЕНЕ відкликання спалювало свій ключ. Тобто пастка
+-- спрацьовувала без жодного наміру відкотити.
+--
+-- ✅ ЛІКУВАННЯ: унікальність стає ЧАСТКОВОЮ — `alias_key` унікальний лише серед
+-- АКТИВНИХ рядків. Історія при цьому не губиться: кожне злиття лишається власним
+-- рядком, тож журнал (`GET /client-merge/journal`, він читає всі рядки) показує
+-- «злили → розʼєднали → злили знову» сам, без окремої роботи.
+--
+-- 🔴 ЧОМУ НЕ `ON CONFLICT … DO UPDATE` (оживлення рядка, як у `receivable_writeoffs`).
+-- `evidence` тут несе ЧОТИРИ носії стану, і перезапис знищив би кожен:
+--   · `source`       — вирішує, ХТО має право розʼєднати (`mergeSourceOf`);
+--   · `limitsBefore` — ЄДИНИЙ і невідновлюваний знімок лімітів до злиття
+--                      (`core/mergeLimits.ts`), заради якого писали `#262`/`#264`;
+--   · `planMoved`, `secondOrder` — сліди, які читає відкіт.
+-- Тобто дешевший варіант відтворив би саме ту незворотність, яку ми лікуємо.
+--
+-- ⚠️ Активний псевдонім і далі дає `duplicate key` → 409, і це НАВМИСНО: виправлення
+-- не має права перетворитись на зняту перевірку. Стереже дзеркало `#422b`.
+ALTER TABLE client_key_alias ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+DO $cka_pk$
+DECLARE pk_cols TEXT;
+BEGIN
+  SELECT string_agg(a.attname, ',' ORDER BY a.attnum) INTO pk_cols
+    FROM pg_constraint c
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+   WHERE c.conrelid = 'client_key_alias'::regclass AND c.contype = 'p';
+  -- Спрацьовує РІВНО ОДИН раз: після перемикання pk_cols = 'id', і блок мовчить.
+  IF pk_cols = 'alias_key' THEN
+    ALTER TABLE client_key_alias DROP CONSTRAINT client_key_alias_pkey;
+    ALTER TABLE client_key_alias ADD CONSTRAINT client_key_alias_pkey PRIMARY KEY (id);
+  END IF;
+END $cka_pk$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_client_key_alias_active
+  ON client_key_alias(alias_key) WHERE revoked_at IS NULL;
+
 -- Блокування ланцюжків: A→B і B→C одночасно існувати не можуть НІ В ЯКОМУ порядку.
 CREATE OR REPLACE FUNCTION client_key_alias_no_chain() RETURNS trigger AS $cka$
 BEGIN
