@@ -1171,6 +1171,115 @@ CREATE TABLE IF NOT EXISTS doc_files (
 );
 CREATE INDEX IF NOT EXISTS idx_doc_files_folder ON doc_files(folder_id);
 
+-- ══════════════════════════════════════════════════════════════════════════════
+-- 📁 ДОКУМЕНТИ v2 (15.09.2026, ТЗ «Регламенти та документи» v2 + макети).
+-- Три незалежні осі: ТИП (category), РОЗДІЛ (section), ПРАВА (doc_folder_access).
+-- 🔴 Доступ до документа НЕ виводиться з `roles.data_scope` — свідомий виняток за
+-- рішенням власника 10.09 і 15.09: навіть роль з обсягом «вся компанія» не бачить чужий
+-- особистий документ і чужий офер. Правило — `core/docAccess.ts`, одна функція.
+-- ══════════════════════════════════════════════════════════════════════════════
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'general';
+ALTER TABLE doc_files DROP CONSTRAINT IF EXISTS doc_files_section_chk;
+ALTER TABLE doc_files ADD CONSTRAINT doc_files_section_chk CHECK (section IN ('general','personal','offer'));
+-- Адресат особистого документа / офера. Для загальних — NULL.
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS addressee_user_id INTEGER REFERENCES users(id);
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS description TEXT;
+-- Версія і хеш ПОТОЧНОЇ версії; історія — у doc_file_versions. Хеш обовʼязковий навіть без
+-- підпису: він відповідає на «це та сама версія, яку я читав місяць тому».
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS sha256 TEXT;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+-- Архів — СТАН документа, а не переміщення файла (рішення ⑦): читання лише керівництву,
+-- редагування нікому. `archived_reason`: 'dismissed' (звільнення) | 'manual'.
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS archived_reason TEXT;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS archived_by INTEGER REFERENCES users(id);
+CREATE INDEX IF NOT EXISTS idx_doc_files_addressee ON doc_files(addressee_user_id) WHERE addressee_user_id IS NOT NULL;
+
+-- Історія версій: кожна заміна файла — новий рядок, старий файл на диску лишається
+-- (фізично не видаляємо нічого, рішення розділу 12 ТЗ).
+CREATE TABLE IF NOT EXISTS doc_file_versions (
+  id SERIAL PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES doc_files(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  stored_name TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  mime TEXT,
+  size_bytes BIGINT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (file_id, version)
+);
+
+-- Права папки по ролях (вісь C). Відсутність рядка = ролі не дано нічого явно, і тоді
+-- діє дефолт розділу (`core/docAccess.ts`): загальні бачать усі, решта — за адресатом.
+-- `can_manage` є лише в керівництва і через інтерфейс не знімається.
+CREATE TABLE IF NOT EXISTS doc_folder_access (
+  folder_id INTEGER NOT NULL REFERENCES doc_folders(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  can_view BOOLEAN NOT NULL DEFAULT true,
+  can_upload BOOLEAN NOT NULL DEFAULT false,
+  can_edit BOOLEAN NOT NULL DEFAULT false,
+  can_publish BOOLEAN NOT NULL DEFAULT false,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (folder_id, role_key)
+);
+
+-- Персональні винятки: точковий доступ людині поверх ролі, зі строком або безстроково.
+-- Строк минув — доступу немає (перевіряє предикат, не джоба).
+CREATE TABLE IF NOT EXISTS doc_access_grants (
+  id SERIAL PRIMARY KEY,
+  folder_id INTEGER REFERENCES doc_folders(id) ON DELETE CASCADE,
+  file_id INTEGER REFERENCES doc_files(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  can_view BOOLEAN NOT NULL DEFAULT true,
+  can_upload BOOLEAN NOT NULL DEFAULT false,
+  expires_at TIMESTAMPTZ,
+  granted_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((folder_id IS NULL) <> (file_id IS NULL))
+);
+
+-- Журнал змін прав: хто, коли, що. Не редагується і не чиститься — умова, за якої
+-- «адмін бачить усе» прийнятне (розділ 3 ТЗ).
+CREATE TABLE IF NOT EXISTS doc_access_log (
+  id BIGSERIAL PRIMARY KEY,
+  actor_id INTEGER REFERENCES users(id),
+  folder_id INTEGER,
+  file_id INTEGER,
+  action TEXT NOT NULL,
+  details JSONB,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Підпис — ЗАПИС, привʼязаний до версії й хеша, а не властивість файла. Способи:
+-- email_code · telegram_code · paper_photo (фото підписаного паперу) · diia (після
+-- підключення). Нова версія файла підпис не переносить (розділ 9.3 ТЗ).
+CREATE TABLE IF NOT EXISTS doc_signatures (
+  id SERIAL PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES doc_files(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  signed_by INTEGER NOT NULL REFERENCES users(id),
+  method TEXT NOT NULL CHECK (method IN ('email_code','telegram_code','paper_photo','diia')),
+  evidence_stored_name TEXT,     -- фото паперового варіанта
+  ip TEXT,
+  signed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_signatures_file ON doc_signatures(file_id);
+
+-- Події документа для таймлайна картки: sent · opened · signed · version · archived · restored.
+CREATE TABLE IF NOT EXISTS doc_events (
+  id BIGSERIAL PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES doc_files(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  actor_id INTEGER REFERENCES users(id),
+  details JSONB,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_events_file ON doc_events(file_id);
+
 -- «Реєстр» лідоген-бота (Google Sheet): кожен рядок = вхід ліда в статус
 -- «Нова заявка від лідогенератора» (69716164). Джерело правди для «переданих
 -- заявок» (наш lead_transfer_events рахував зміни відповідального — завищував).
