@@ -96,3 +96,39 @@ export function revokeDenyReason(i: RevokeInput): string {
   }
   return mergeDenyReason(i.pair);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   👤 ПЕРЕДАЧА ВІДПОВІДАЛЬНОГО — ТІМЛІД У МЕЖАХ СВОЄЇ КОМАНДИ (14.09.2026)
+
+   Той самий принцип, що й злиття (рішення власника 04.08.2026), перенесений на
+   «Передати клієнта»: тімлід передає клієнта СВОЄЇ команди менеджеру СВОЄЇ команди;
+   міжкомандна передача лишається за `merge_clients` (КВП/ОД/адмін). Привід — Сергій
+   13.09.2026: «якщо просять зробити дію — роби функціонал, щоб люди робили самі;
+   тімліди мають повноваження над менеджерами». Замовник кроку — Роман, 14.09.2026.
+
+   🔴 `null` у команді клієнта або менеджера = ЗАБОРОНА для тімліда, не «мабуть своя».
+   ═══════════════════════════════════════════════════════════════════════════ */
+export interface AssignScope {
+  /** Роль має `merge_clients` — передає між командами. */
+  canAll: boolean;
+  /** Команда тімліда; `null` — не тімлід або без команди. */
+  leadTeamId: number | null;
+  /** Команда, якій клієнт належить ЗАРАЗ (за закріпленим або основним за оплатами). */
+  clientTeamId: number | null;
+  /** Команда менеджера, якому передають. */
+  targetTeamId: number | null;
+}
+
+export function assignAllowed(s: AssignScope): boolean {
+  if (s.canAll) return true;
+  if (s.leadTeamId == null) return false;
+  return s.clientTeamId === s.leadTeamId && s.targetTeamId === s.leadTeamId;
+}
+
+export function assignDenyReason(s: AssignScope): string {
+  if (s.leadTeamId == null) return "Передача доступна КВП, Опер. директору, адміну та тімліду у своїй команді";
+  const bad: string[] = [];
+  if (s.clientTeamId !== s.leadTeamId) bad.push("клієнт");
+  if (s.targetTeamId !== s.leadTeamId) bad.push("новий менеджер");
+  return `Поза вашою командою: ${bad.join(" і ")}. Міжкомандну передачу робить КВП або Опер. директор`;
+}

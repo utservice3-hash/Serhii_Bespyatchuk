@@ -188,7 +188,7 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
     <div style={{ ...S.card, flex: "1 1 460px", minWidth: 420 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
         <b style={{ fontSize: 14 }}>👤 Відповідальний менеджер</b>
-        <span style={{ fontSize: 11, color: "#6b7280" }}>за правом · КВП, Опер. директор, адмін</span>
+        <span style={{ fontSize: 11, color: "#6b7280" }}>КВП, Опер. директор, адмін · тімлід у своїй команді</span>
       </div>
 
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Клієнт</div>
@@ -223,6 +223,9 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
             try { const r = await assignClientManager({ clientKey, managerId: Number(managerId), reason: reason.trim() || undefined });
                   setMsg(`Передано. Діє з ${r.effectiveFrom}. ${r.note}`); setReason("");
                   setHistory(await fetchClientManagerHistory(clientKey)); onDone(); }
+            catch (e) { /* 403 поза командою мусить бути ВИДИМИМ, а не мовчазним «нічого не сталось» */
+              const err = e as { response?: { data?: { error?: string } }; message?: string };
+              setMsg(`Не передано: ${err.response?.data?.error ?? err.message ?? "помилка"}`); }
             finally { setBusy(false); } }}>Передати</button>
         <button style={S.btn()} disabled={busy} onClick={() => { setSel(null); setManagerId(""); setReason(""); setMsg(null); }}>Скасувати</button>
       </div>

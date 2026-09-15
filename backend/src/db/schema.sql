@@ -185,6 +185,19 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_pay_amount NUMERIC;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_pay_amount NUMERIC;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_obligation NUMERIC;
 
+-- 🚚 ХТО ПЕРЕВІЗНИК (14.09.2026) — для реєстру заявок на оплату у дебіторці.
+-- Заявка в Kommo = угода-«Автосделка» у воронці «Оплата перевозчикам» (7341740);
+-- сума й тип уже синкались, назви перевізника не було. Заповнюється щопрохід;
+-- історія добирається `tools/backfillCarrierParty.ts` (по угодах воронки за 90 днів).
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_name TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_edrpou TEXT;
+-- Хто ПОДАВ заявку: відповідальний за Автосделку — бухгалтерія, а власник просив
+-- «менеджер бачить свої заявки, які він подав». Джерело — поля самої заявки:
+-- «ID исходной сделки» (2097401) і «Исходный ответственный» (2098197, ПІБ).
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS source_deal_id BIGINT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS source_responsible TEXT;
+CREATE INDEX IF NOT EXISTS idx_deals_source_deal ON deals(source_deal_id) WHERE source_deal_id IS NOT NULL;
+
 -- 🗑 СПИСАННЯ БЕЗНАДІЙНОГО БОРГУ.
 --
 -- 🔴 ОКРЕМА ТАБЛИЦЯ, І ЦЕ НЕ СТИЛЬ. `syncReceivables` робить `TRUNCATE
@@ -2544,7 +2557,236 @@ SELECT u.id, u.email, 'role.update', 'role', 'kvp,admin', '1×1: наскріз�
 -- після повернення коду; revert коду НЕ відкочує дані. Щоб відкотити, виконати:
 --   UPDATE roles SET permissions = permissions - 'view_all_1x1' WHERE key IN ('admin','kvp');
 --   UPDATE roles SET permissions = permissions - 'edit_1x1_forms' WHERE key = 'kvp';
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🎓 НАВЧАННЯ, КРОК 2: курси, прогрес, події (ТЗ 15.09.2026)
+-- ══════════════════════════════════════════════════════════════════════════
+--
+-- 🔴 МОДУЛЬ = КОРЕНЕВА ПАПКА (рішення власника 15.09.2026). Вкладені папки лишаються
+-- групами матеріалів УСЕРЕДИНІ модуля. Тому `course_id` висить на папці, а не на
+-- матеріалі: інакше одна папка могла б розʼїхатись між двома курсами.
+CREATE TABLE IF NOT EXISTS training_courses (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  audience TEXT NOT NULL DEFAULT 'all' CHECK (audience IN ('candidate','manager','all')),
+  position INTEGER NOT NULL DEFAULT 0,
+  published BOOLEAN NOT NULL DEFAULT false,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 🔴 UNIQUE (user_id, material_id) — ОДИН РЯДОК НА ЛЮДИНУ Й МАТЕРІАЛ. Без нього
+-- повторне відкриття плодило б дублі, і відсоток рахувався б по рядках, а не по
+-- матеріалах: 3 із 4 легко стало б 5 із 4.
+-- CASCADE на матеріал — свідомо: видалення матеріалу мусить прибрати прогрес, інакше
+-- знаменник і чисельник розійдуться (ТЗ §6 п.9).
+CREATE TABLE IF NOT EXISTS training_progress (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  material_id INTEGER NOT NULL REFERENCES training_materials(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('opened','done')),
+  score NUMERIC,
+  passed BOOLEAN,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  answers_json JSONB,
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  UNIQUE (user_id, material_id)
+);
+CREATE INDEX IF NOT EXISTS idx_training_progress_user ON training_progress(user_id);
+
+-- 📜 Події — журнал, а не стан. `material_id` тут SET NULL, а не CASCADE: видалення
+-- матеріалу не має стирати СЛІД того, що людина його проходила (той самий принцип, що
+-- в `.deploy-lock.log` — журнал append-only, бо «хто що робив» потрібне саме потім).
+CREATE TABLE IF NOT EXISTS training_events (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  material_id INTEGER REFERENCES training_materials(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('open','done','quiz_attempt','exam_unlock','course_done','hired')),
+  payload_json JSONB,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_training_events_user ON training_events(user_id, at DESC);
+
+ALTER TABLE training_folders   ADD COLUMN IF NOT EXISTS course_id INTEGER REFERENCES training_courses(id) ON DELETE SET NULL;
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS required  BOOLEAN NOT NULL DEFAULT true;
+
+-- ── БЕКФІЛ (разовий) ──────────────────────────────────────────────────────
+-- 🔴 ОБИДВА ВСТАВЛЕННЯ ЗАХИЩЕНІ `NOT EXISTS`, І ЦЕ НЕ ПЕРЕСТРАХОВКА. Міграція біжить на
+-- КОЖНОМУ викаті. Без цієї умови рядок нижче позначав би `done` кожен НОВИЙ матеріал усім
+-- 46 людям на наступному ж деплої — тобто курс «проходив би себе сам», і замки перестали б
+-- означати будь-що. Разовість тут є частиною правила, а не оформленням.
+INSERT INTO training_courses (title, description, audience, position, published)
+SELECT 'Загальне навчання', 'Матеріали, що існували до появи курсів.', 'all', 0, true
+ WHERE NOT EXISTS (SELECT 1 FROM training_courses);
+
+-- Папка без курсу не видно в ЖОДНОМУ курсі, тож умова лишається безумовною: це страховка,
+-- а не бекфіл. Редактор, який створив папку й не обрав курс, отримає її в «Загальному
+-- навчанні», а не в порожнечі. ⚠️ Зворотний бік названий вголос: папка, задумана для
+-- іншого курсу й лишена без `course_id`, теж потрапить сюди — виправляється одним PATCH.
+UPDATE training_folders SET course_id = (SELECT id FROM training_courses ORDER BY id LIMIT 1)
+ WHERE course_id IS NULL;
+
+-- 🔴 «ХТО ВЖЕ ПРОХОДИВ» — ЦЕ `COALESCE(role_override, role)`, А НЕ `role_override`.
+-- Заміряно на проді 15.09.2026: `role_override` порожній у 35 із 46 активних людей, тож
+-- фільтр по одному полю лишив би їх без позначки — і замки закрили б менеджерам те, що
+-- вони читали роками. Рішення власника: позначити ВСІХ 46 активних.
+-- 📐 Масштаб заміряно, а не оцінено: 46 людей × 63 матеріали = 2 898 рядків.
+-- ⚠️ `revert` коду ці рядки НЕ забере — знімати окремим DELETE.
+INSERT INTO training_progress (user_id, material_id, status, finished_at)
+SELECT u.id, m.id, 'done', now()
+  FROM users u CROSS JOIN training_materials m
+ WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate'
+   AND NOT EXISTS (SELECT 1 FROM training_progress);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🎓 НАВЧАННЯ: роль «Кандидат» і право `manage_training` (ТЗ 14.09.2026)
+-- ══════════════════════════════════════════════════════════════════════════
+--
+-- 🔴 СТОЇТЬ ПІСЛЯ ВСІХ ТРЬОХ СИНКІВ РОЛЕЙ — з тієї самої причини, що `merge_clients`
+-- і `merge_receivables` вище: рядки синку копіюють `permissions` адміна ЦІЛКОМ, тож
+-- право, дане раніше, автоматично розтеклося б на фінансиста. Зняття нижче потрібне
+-- окремо: наступний прогін інакше знову скопіює його з admin.
+--
+-- 🔴 СКЛАД РОЛЕЙ — РІШЕННЯ ВЛАСНИКА 14.09.2026, ДОСЛІВНО: «admin, ceo, opdir, kvp».
+-- Це ЗВУЖЕННЯ проти сьогоднішнього стану, і воно свідоме. Заміряно на проді перед
+-- зміною: редагувати навчання могли ШІСТЬ ролей — admin, ceo, opdir, kvp, financier і
+-- `____________` (Бухгалтерія), — бо `onlyAdmin` у `routes/training.ts` це
+-- `requireRole("admin")`, а `scopeCompatRole` піднімає до "admin" будь-кого з
+-- `admin_scope`. Отже фінансист і бухгалтерія редагування ВТРАЧАЮТЬ; КВП лишається —
+-- саме він будує структуру папок (див. коментар біля `training_folders`).
+--
+-- ⚠️ ЧОМУ ЦЕ НЕ СПІЙМАВ БИ ЗЛІПОК. Пʼять із семи роутів запису мають клас `deny-only`,
+-- тобто `#11` дозволені ролі на них НЕ пробує (проба була б записом). Червоніли б лише
+-- два `DELETE`-роути. Тому звуження оформлене ЯВНИМ рядком тут, а не виведене з місця
+-- вставки, і перевіряється живою пробою в прийманні.
+UPDATE roles SET permissions = permissions || '{"manage_training": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp');
+UPDATE roles SET permissions = permissions - 'manage_training'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp');
+
+-- 🎓 Роль «Кандидат»: єдиний екран — навчання, жодного права, найвужчий обсяг.
+-- Оголошення-близнюк — у `db/roleDeclarations.ts`; розійтись їм не дасть `#15`.
+-- ⚠️ `ON CONFLICT DO NOTHING`, а не `DO UPDATE`: якщо власник колись переставить
+-- тумблери цій ролі в Налаштуваннях, сід не має відкочувати його правку щодеплою
+-- (той самий урок, що з `hr` і `data_scope` — постійний синк тихо затирає рішення людини).
+INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
+VALUES ('candidate', 'Кандидат', false, 'own', '{"training":true}'::jsonb, '{}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
 -- (мертві права назад не повертаємо — їх ніхто не читає)
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- ЗАДАЧНИК · 14.09.2026 · ГРУПИ · ФАЙЛИ · СПІЛЬНА ЗАДАЧА
+-- ТЗ: docs/TZ_TASKS_GROUPS_FILES_SHARED_2026-09-14.md (рішення Романа 14.09).
+--
+-- 🔴 ЧОМУ БЛОК СТОЇТЬ ТУТ, А НЕ ПОРУЧ ІЗ `tasks` (рядок 341). `tasks.group_id`
+-- посилається на `task_groups`, а `assignee_user_id` — на `users`; обидві
+-- таблиці мусять ІСНУВАТИ на момент ALTER. Поруч із `tasks` вони ще не
+-- створені, і на ПОРОЖНІЙ базі міграція впала б з «relation does not exist» —
+-- рівно те, що вже коштувало нам блоку `ai_readonly` з `tracker_devices` і
+-- сида `key_card`. Видно лише з нуля, тож саме тут.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- 📁 ГРУПИ — ОСОБИСТІ (рішення Романа 14.09.2026: «кожен акаунт створює свої
+-- групи без обмежень, чужих груп не бачить»). Група НЕ змінює доступ до задачі:
+-- вона розкладка на екрані власника. Задача, покладена в чужу групу, для іншого
+-- глядача виглядає як «без групи» — саме тому фільтр по групі завжди їде разом
+-- з `owner_id`, а не сам.
+CREATE TABLE IF NOT EXISTS task_groups (
+  id SERIAL PRIMARY KEY,
+  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- Вкладеність НЕ виводиться в інтерфейс (ТЗ §3.2) — поле є, щоб не мігрувати
+  -- таблицю вдруге, коли її попросять.
+  parent_id INTEGER REFERENCES task_groups(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_groups_owner ON task_groups(owner_id);
+-- Дві групи з однаковою назвою в одного власника — це помилка кліку, не задум.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_task_groups_owner_name ON task_groups(owner_id, lower(name));
+
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES task_groups(id) ON DELETE SET NULL;
+-- `SET NULL`, а не CASCADE: видалення ПАПКИ не має видаляти задачі — вони
+-- повертаються в «Без групи». Протилежне поводження втратило б роботу людини
+-- через прибирання на екрані.
+CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id) WHERE group_id IS NOT NULL;
+
+-- 👤 ВИКОНАВЕЦЬ-АКАУНТ. Старе поле `assignee_id → managers` НЕ чіпаємо: його
+-- читає Звіт (замок #56) і воно годує «одну цифру» на картці менеджера.
+-- Нове поле — для тих, кого в CRM немає: бухгалтерія, HR, рекрутер, власник.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_user_id INTEGER REFERENCES users(id);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee_user ON tasks(assignee_user_id) WHERE assignee_user_id IS NOT NULL;
+-- 🔴 ВИКОНАВЕЦЬ ОДИН. Два заповнені поля означали б два різні імені під одним
+-- підписом «Виконавець» — і екран мусив би вибирати, яке показати. Межа в БД,
+-- а не в акуратності роута.
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_one_assignee;
+ALTER TABLE tasks ADD CONSTRAINT tasks_one_assignee CHECK (
+  num_nonnulls(assignee_id, assignee_user_id) <= 1
+);
+
+-- 💬 СТРІЧКА ДОПОВНЕНЬ. Поле `tasks.comments` лишається як короткий коментар у
+-- рядку (його перезаписують, і це нормально для «однієї фрази»); стрічка — це
+-- ІСТОРІЯ з автором і часом, яку не можна затерти наступним збереженням.
+CREATE TABLE IF NOT EXISTS task_comments (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  author_id INTEGER REFERENCES users(id),
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id, created_at);
+
+-- 📜 ІСТОРІЯ СТАТУСУ. Питання «хто перевів задачу в done і коли» не мало
+-- відповіді в принципі: `tasks.status` — це ЗНІМОК, а знімок не має історії
+-- (той самий борг, що `job_runs` і невдала спроба збереження плану).
+CREATE TABLE IF NOT EXISTS task_status_log (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  changed_by INTEGER REFERENCES users(id),
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_status_log_task ON task_status_log(task_id, changed_at);
+
+-- 📎 ФАЙЛИ ЗАДАЧІ. Структура — за зразком `doc_files`; тека інша
+-- (`backend/task-files`), щоб публічний static `/api/files` не віддавав
+-- вкладення задач за прямим URL в обхід авторизації.
+--
+-- ⚠️ ЧЕСНА МЕЖА, ЗАМІРЯНА 14.09.2026: нічний бекап — ЛИШЕ БАЗА. `backupDb.ts`
+-- бере всі таблиці з `pg_tables` (90 із 90 у бекапі за 14.09), а файлових тек
+-- не бере ЖОДНА джоба й жоден крон — у теці бекапу нуль згадок `documents`,
+-- `uploads` і `tar`. Тобто рядок цієї таблиці в бекапі буде, а БАЙТИ файла —
+-- ні. Коментар у `routes/documents.ts` стверджував протилежне («потрапляє в
+-- нічний бекап») і був неправдою; його виправлено тим самим комітом.
+-- Наслідок прийнято свідомо, і саме тому віддача файла відповідає «файл
+-- відсутній на диску», а не порожнім 200: рядок без байтів мусить називати себе.
+CREATE TABLE IF NOT EXISTS task_files (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,          -- відображувана назва (оригінальне імʼя файла)
+  stored_name TEXT NOT NULL,   -- uuid-імʼя на диску
+  mime TEXT,
+  size_bytes BIGINT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Видалення задачі не зносить байти одразу (ТЗ §3.4): рядок помічається, а
+  -- чистка — окремим проходом. Поки джоби немає, поле лишається NULL завжди —
+  -- і це записано, щоб наступний не читав його як робочий механізм.
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_task_files_task ON task_files(task_id, created_at);
+
+-- 👁 ЩО ВЖЕ БАЧИВ ЦЕЙ АКАУНТ — для бейджа «є нове». Без цієї таблиці бейдж
+-- був би здогадом: «нове» означає «зʼявилось після мого останнього перегляду»,
+-- і без збереженого «останнього перегляду» відповіді не існує.
+CREATE TABLE IF NOT EXISTS task_views (
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (task_id, user_id)
+);
 
 -- ПРИВІЛЕЇ РОЛЕЙ — ЗАВЖДИ В КІНЦІ ФАЙЛА.
 --
@@ -2559,10 +2801,16 @@ SELECT u.id, u.email, 'role.update', 'role', 'kvp,admin', '1×1: наскріз�
 -- ═════════════════════════════════════════════════════════════════════════════
 -- Особисті задачі приховані НАВІТЬ ВІД АДМІНА (правило приватності) → модель бачить
 -- задачі лише через вью без них, а не базову таблицю.
+-- 🔴 УМОВА ВЬЮ = ВИЗНАЧЕННЯ «НЕ ОСОБИСТА» З `core/taskVisibility.ts`, і з
+-- 14.09.2026 вона ширша за `assignee_id IS NOT NULL`. Причина не косметична:
+-- задача, призначена АКАУНТУ (бухгалтеру, HR), має `assignee_id IS NULL` і
+-- особистою НЕ є. Лишивши стару умову, ми отримали б ДВА визначення приватності
+-- в одній системі — рівно той клас, що дав «чипи новий/постійний» і вічний
+-- банер джоби. Гейт `#400e` звіряє цей рядок із функцією `isPersonalTask`.
 CREATE OR REPLACE VIEW ai_tasks AS
   SELECT id, title, task_type, status, department, assignee_id, deadline,
          metric, target_value, actual_value, created_at
-    FROM tasks WHERE assignee_id IS NOT NULL;
+    FROM tasks WHERE assignee_id IS NOT NULL OR assignee_user_id IS NOT NULL;
 
 -- Спершу знімаємо все, потім видаємо на дозволене (ідемпотентно, щоразу на міграції).
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ai_readonly;
@@ -2570,8 +2818,16 @@ GRANT USAGE ON SCHEMA public TO ai_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;
 -- 🔴 ЗАБОРОНЕНІ: паролі, приватні 1×1, аудит доступу, налаштування (можуть містити
 -- ключі), env-імена банківських ключів, трекер часу, сира таблиця задач.
+--
+-- ⚠️ СУПУТНИКИ ЗАДАЧ (14.09.2026) — ТОЙ САМИЙ ЗАМОК, ІНАКШЕ ВІН ДЕКОРАТИВНИЙ.
+-- `GRANT SELECT ON ALL TABLES` вище накриває КОЖНУ нову таблицю, тож
+-- `task_comments`/`task_files` відкрились би моделі автоматично — а в них лежить
+-- ЗМІСТ обговорення й назви вкладень, у тому числі ОСОБИСТИХ задач, які вью
+-- `ai_tasks` спеціально ховає. Заборона на `tasks` без заборони на її супутників
+-- ховає заголовок і віддає розмову. Тримає `#400f`.
 REVOKE ALL ON users, access_audit, app_settings, bank_accounts,
-  one_on_ones, one_on_one_forms, tracker_devices, tracker_intervals, tasks
+  one_on_ones, one_on_one_forms, tracker_devices, tracker_intervals, tasks,
+  task_comments, task_files, task_status_log, task_views, task_groups
   FROM ai_readonly;
 GRANT SELECT ON ai_tasks TO ai_readonly;
 

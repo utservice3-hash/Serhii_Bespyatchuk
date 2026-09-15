@@ -9,8 +9,18 @@ import { UPLOAD_DIR } from "./uploads.js";
 /**
  * Регламенти та документи — файлова база відділу продажу (дерево папок + файли).
  * Читають усі автентифіковані; керує лише КВП (роль admin). Файли лежать у
- * `uploads/documents` (персистить між деплоями, потрапляє в нічний бекап) і
+ * `uploads/../documents` (персистить між деплоями — білд чіпає лише `dist`) і
  * віддаються авторизованим стрімом (не публічним static — регламенти внутрішні).
+ *
+ * 🔴 ПОПРАВКА 14.09.2026: ТУТ СТОЯЛО «потрапляє в нічний бекап» — І ЦЕ БУЛА НЕПРАВДА.
+ * Заміряно: `jobs/backupDb.ts` бере ВСІ таблиці з `pg_tables` (90 із 90 у бекапі за
+ * 14.09, `MANIFEST.txt` підтверджує), а файлових тек не бере ЖОДНА джоба й ЖОДЕН
+ * крон — у теці бекапу нуль згадок `documents`, `uploads`, `tar`; у коді нуль
+ * `tar`/`rsync`/`cpSync`. Тобто РЯДОК про файл бекапиться, а БАЙТИ — ні.
+ * Рядок прожив тут як факт і встиг переїхати в чуже ТЗ — саме той клас, що
+ * «неможливо за побудовою»: твердження пережило свою причину, бо ніхто не звіряв.
+ * 🧾 Борг: бекапу файлових тек немає. Рішення (додати `tar` у джобу чи прийняти
+ * ризик) — власника; поки його немає, втрата диска означає втрату регламентів.
  */
 export const documentsRouter = Router();
 documentsRouter.use(requireAuth);
@@ -22,16 +32,41 @@ const DOCS_DIR = path.join(UPLOAD_DIR, "..", "documents");
 const MAX_BYTES = 50 * 1024 * 1024; // 50 МБ на файл
 const onlyAdmin = requireRole("admin");
 
-/** Уся структура: пласкі списки папок і файлів (дерево будує фронт). */
+/**
+ * Уся структура: пласкі списки папок і файлів (дерево будує фронт).
+ *
+ * 🔴 ЦЕЙ РОУТ ВІДДАВАВ 500, І ЕКРАН ПРИ ЦЬОМУ КАЗАВ «ПОРОЖНЬО».
+ * Заміряно проти прода 14.09.2026: `column u.name does not exist`. У `users` немає
+ * колонки `name` — є `full_name` (перелік колонок: id, email, password_hash, role,
+ * manager_id, team_id, created_at, is_active, initial_password, last_seen,
+ * role_override, deactivated_at, deactivated_reason, full_name, tracker_enabled,
+ * news_seen_at). Сусідній роут задач увесь час стояв із `cu.full_name` — правильний
+ * зразок лежав поруч, як `AS day` у випадку 06.08.
+ *
+ * ⚠️ Чому це не спіймав жоден гейт: SQL у шаблонному рядку не типізується, а
+ * матриця доступу перевіряє КОД ВІДПОВІДІ на 403/не-403 — 500 для неї «пройдений
+ * гейт». Тримає тепер `#400j`.
+ */
 documentsRouter.get("/tree", async (_req, res) => {
   const [folders, files] = await Promise.all([
     pool.query(
       `SELECT id, parent_id, name, created_at FROM doc_folders ORDER BY name`
     ),
     pool.query(
+      // 👤 ІМʼЯ АВТОРА — КАНОНІЧНИЙ ТРИРІВНЕВИЙ ВИРАЗ (`core/absences.ts` → OWNER_NAME_SQL,
+      // той самий у `routes/auth.ts`, `routes/tracker.ts`, `routes/settings.ts`).
+      // 🔴 ДВОРІВНЕВИЙ ТУТ НЕ ПРАЦЮЄ, І ЦЕ ЗАМІРЯНО, А НЕ ЗДОГАД: `users.full_name` за
+      // побудовою заповнюють лише РУЧНИМ акаунтам — CRM-менеджерам ПІБ живе в
+      // `managers.name` (коментар до колонки в `schema.sql`). Замір прода 14.09.2026:
+      // 58 акаунтів привʼязані до CRM, і в УСІХ 58 `full_name` порожній. Тобто в
+      // колонці «автор» кожен такий завантажувач показувався б ПОШТОЮ.
+      // ⚠️ Сьогодні це ще не видно: у базі 2 файли одного не-CRM автора. Стане видно
+      // з першим же файлом, який заллє менеджер із CRM. Тримає #404.
       `SELECT f.id, f.folder_id, f.name, f.category, f.mime, f.size_bytes, f.created_at,
-              COALESCE(u.name, u.email) AS author
-         FROM doc_files f LEFT JOIN users u ON u.id = f.created_by
+              COALESCE(m.name, u.full_name, u.email) AS author
+         FROM doc_files f
+         LEFT JOIN users u ON u.id = f.created_by
+         LEFT JOIN managers m ON m.id = u.manager_id
         ORDER BY f.name`
     ),
   ]);

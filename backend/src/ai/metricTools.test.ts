@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { MANIFEST_SECURITY_TABLES } from "../testManifest.js";
 import assert from "node:assert/strict";
 import { needsDb, needsApi, API_BASE } from "../testMode.js";
 
@@ -75,8 +76,28 @@ const offendersFor = (trace: Map<string, string[]>, table: string): string[] => 
   return [...trace.entries()].filter(([, sqls]) => sqls.some((s) => rx.test(s))).map(([name]) => name);
 };
 
-for (const table of ["users", "access_audit", "bank_accounts", "one_on_ones",
-                     "one_on_one_forms", "tracker_devices", "tracker_intervals", "tasks"]) {
+/**
+ * 🔴 ЦИКЛ ІТЕРУЄ САМ `FORBIDDEN_TABLES`, А НЕ СВОЮ КОПІЮ ПЕРЕЛІКУ (14.09.2026).
+ *
+ * Тут стояв ЗАШИТИЙ масив із восьми назв — третя копія того самого переліку.
+ * Заміряно на прийманні викату `ed7f6be`: додавши 5 таблиць у `FORBIDDEN_TABLES`
+ * і в `MANIFEST_SECURITY_TABLES`, я отримав **недобір рівно на 5** — маніфест
+ * оголосив 13 динамічних тестів, а народилось 8. Гейт маніфесту був ЗЕЛЕНИЙ, бо
+ * звіряв ДВА списки з трьох, і вони збігались один з одним, а не з джерелом.
+ * Рівно та поломка, що дала «чипи новий/постійний»: правило існувало тричі.
+ *
+ * Тепер джерело одне, і ланцюг закритий із двох боків: цикл ітерує
+ * `MANIFEST_SECURITY_TABLES`, а гейт маніфесту вимагає, щоб той список був
+ * ТОЧНО РІВНИЙ `FORBIDDEN_TABLES` ядра. Додана таблиця САМА породжує свій тест.
+ *
+ * ⚠️ ЧОМУ НЕ ІМПОРТ САМОГО `FORBIDDEN_TABLES` — ПЕРША СПРОБА ТАК І ЗРОБИЛА, І ВБИЛА
+ * ФАЙЛ. `metricTools.js` тягне `config.js`, який КИДАЄ на відсутньому
+ * `DATABASE_URL` ще НА ІМПОРТІ — раніше, ніж спрацює `skip`. Заміряно: файл упав
+ * цілком (`test failed` на рядку 1), забравши з собою ВСІ свої тести, а не лише
+ * цикл. `testManifest.ts` навмисно зроблений без залежності від `config` саме для
+ * таких випадків — беремо джерело звідти.
+ */
+for (const table of MANIFEST_SECURITY_TABLES) {
   test(`#6 БЕЗПЕКА · «${table}» не читає ЖОДНА метрика`, needsDb(), async () => {
     const trace = await getTrace();
     assert.ok(trace.size > 0, "жодної метрики не протрасовано — тест нічого не довів");

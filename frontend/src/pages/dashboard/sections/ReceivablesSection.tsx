@@ -38,6 +38,7 @@ import { teamOptions } from "../teamColors";
 import { CommentField } from "../../../components/CommentField";
 import { AgreementEditor } from "./AgreementEditor";
 import { ReceivablesRegistry } from "./ReceivablesRegistry";
+import { ReceivablesPaymentRequests } from "./ReceivablesPaymentRequests";
 
 /**
  * 👤 ВІДПОВІДАЛЬНИЙ + ЧОМУ САМЕ ВІН.
@@ -191,7 +192,7 @@ export function ReceivablesSection({
   // 🗄 Вкладка. Архів — окремий екран, а не фільтр: списаний борг зникає з
   // активного списку ПОВНІСТЮ, тож змішувати їх в одній таблиці означало б
   // повернути те, що власник щойно скасував.
-  const [tab, setTab] = useState<"active" | "registry" | "archive">("active");
+  const [tab, setTab] = useState<"active" | "registry" | "requests" | "archive">("active");
   // 🗓 Один якір часу на весь рендер: інакше рядки, порахувані на різних
   // мілісекундах, могли б розійтись на самій межі понеділка.
   const now = new Date();
@@ -590,7 +591,7 @@ export function ReceivablesSection({
           Джерело те саме, що в розкритті клієнта, тож числа розійтись не можуть. */}
       <div role="tablist" aria-label="Розділи дебіторки"
         style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 16 }}>
-        {([["active", "Активна дебіторка"], ["registry", "Реєстр рахунків"], ["archive", "Архів"]] as const).map(([k, label]) => (
+        {([["active", "Активна дебіторка"], ["registry", "Реєстр рахунків"], ["requests", "Заявки на оплату"], ["archive", "Архів"]] as const).map(([k, label]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
             style={{ font: "inherit", fontSize: "var(--fs-base)", background: "none", border: "none",
                      borderBottom: `2px solid ${tab === k ? "var(--brand, #c5141c)" : "transparent"}`,
@@ -603,6 +604,8 @@ export function ReceivablesSection({
 
       {tab === "registry" ? (
         <ReceivablesRegistry />
+      ) : tab === "requests" ? (
+        <ReceivablesPaymentRequests />
       ) : tab === "archive" ? (
         <ReceivablesArchive onRestored={() => onRefresh?.()} />
       ) : receivablesLoading ? (

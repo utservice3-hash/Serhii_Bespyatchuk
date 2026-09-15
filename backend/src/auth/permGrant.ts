@@ -37,6 +37,7 @@ export const PERMISSION_CATALOG = [
   "manage_bank_hidden",
   "manage_credit_limits",
   "manage_goals",
+  "manage_training",
   "manage_users",
   "merge_clients",
   "merge_receivables",

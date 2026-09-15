@@ -2485,11 +2485,14 @@ export async function conversionAdsByTeam(s: MetricScope, adSources: string[]): 
 
 // 🔓 ЕКСПОРТОВАНІ 08.09.2026: їх читає ще й `core/leadgenStats.ts`. Копію в другому
 // модулі не заводимо — правило, що живе двічі, розходиться тихо (див. «чипи новий/постійний»).
-export const PRODZVIN_PIPELINES = [8921936, 7337048]; // холодний лідоген (NEW / old)
-export const PZ_TAKEN = 69693696;                     // Продзвін «ВЗЯТО В РОБОТУ» — entry-анкер
-export const PZ_OPR = 69716492;                       // Продзвін «ОТРИМАНО КОНТАКТИ ОПР»
-export const REACTIVATION_PIPELINES = [8921948];      // реактивація існуючих клієнтів
-export const REACT_WARMING = 69693740;                // Реактивація «Клієнт підігрівається» — entry-анкер
+// 🎬 Живуть у ЧИСТОМУ `leadgenStages.ts` (нуль імпортів), звідси лише реекспорт —
+// той самий візерунок, що для `dealFilters`/`cohortRule`/`stuckRule` нижче й вище.
+// Причина переїзду: дзеркальний гейт `#364b` мусить дістати ці id, не тягнучи
+// `pool` → `config`, інакше він гине разом із файлом у оточенні без `.env`.
+export { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./leadgenStages.js";
+// ⚠️ Реекспорт НЕ заводить імена у власний скоуп модуля — а `metrics.ts` вживає
+// частину з них у своїх запитах. Тому поруч звичайний імпорт для себе.
+import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./leadgenStages.js";
 export const STATUS_142 = 142;                        // handoff (Продзвін/Реактивація) + won (FC) «Успішна»
 
 export interface LeadgenConversionRow {
