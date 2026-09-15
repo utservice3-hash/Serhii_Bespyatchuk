@@ -38,6 +38,7 @@ export const MANIFEST_FILES: string[] = [
   "core/moneyBuckets.test.js",
   "core/absences.test.js",
   "core/clientPlansList.test.js",
+  "core/effectiveManager.test.js",
   "core/paymentRequests.test.js",
   "core/taskVisibility.test.js",
   "core/zoneRates.test.js",
@@ -733,6 +734,9 @@ export const MANIFEST_TESTS: string[] = [
   "#413 ТІМЛІД ПЕРЕДАЄ ЛИШЕ СВОЇХ СВОЇМ: клієнт і новий менеджер — його команда",
   "#413b ДЗЕРКАЛО: merge_clients передає між командами; без права й без команди — ні",
   "#413c РОУТ /client-manager кличе assignAllowed і не сидить за requirePerm(merge_clients)",
+  "#420 ЕФЕКТИВНИЙ МЕНЕДЖЕР: до pinned_from_month — основний, з нього — закріплений, без дати — одразу",
+  "#420b effectiveFromFor: fix — поточний місяць, transfer — наступний, 31-ше не перескакує",
+  "#420c СПИСОК і ЧИТАЧІ беруть ефективного менеджера; скоуп роуту — по ньому ж",
   "#31c ВІДМОВА НАЗИВАЄ, ЩО САМЕ ПОЗА МЕЖЕЮ",
   // core/moneyBuckets.test.ts — жоден статус із грішми не лишається без корзини
   "#45 кожен статус FC-воронок належить якійсь корзині",

@@ -3565,13 +3565,13 @@ export async function fetchMergeJournal(): Promise<MergeJournalRow[]> {
   const { data } = await api.get<MergeJournalRow[]>("/dashboard/client-merge/journal");
   return data;
 }
-export async function assignClientManager(body: { clientKey: string; managerId: number; reason?: string }): Promise<{ effectiveFrom: string; note: string }> {
+export async function assignClientManager(body: { clientKey: string; managerId: number; reason: string; kind: "fix" | "transfer" }): Promise<{ effectiveFrom: string; kind: "fix" | "transfer"; note: string }> {
   const { data } = await api.post("/dashboard/client-manager", body);
   return data;
 }
 export interface ManagerHistoryRow {
   fromManager: string | null; toManager: string; effectiveFrom: string;
-  reason: string | null; changedBy: string | null; createdAt: string;
+  reason: string | null; kind?: "fix" | "transfer"; changedBy: string | null; createdAt: string;
 }
 export async function fetchClientManagerHistory(clientKey: string): Promise<ManagerHistoryRow[]> {
   const { data } = await api.get<ManagerHistoryRow[]>("/dashboard/client-manager/history", { params: { clientKey } });
