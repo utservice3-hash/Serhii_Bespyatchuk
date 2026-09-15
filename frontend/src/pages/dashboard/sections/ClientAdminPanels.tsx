@@ -52,6 +52,16 @@ function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boole
   const [journal, setJournal] = useState<MergeJournalRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * 🔴 ОКРЕМИЙ СЛОТ ДЛЯ ВІДКОТУ, А НЕ СПІЛЬНИЙ `err`.
+   *
+   * Обʼєднання і розʼєднання — дві незалежні дії з різними межами прав, і живуть
+   * вони в різних кінцях панелі. Спільний слот давав дві поломки: 403 від відкоту
+   * зʼявлявся під пікером «Основний клієнт» і читався як «моє обʼєднання
+   * заборонено»; а `useEffect` на зміну пікерів гасив `err`, тобто причина відмови
+   * тихо зникала назавжди. Текст мусить стояти БІЛЯ тієї кнопки, що його викликала.
+   */
+  const [revokeErr, setRevokeErr] = useState<string | null>(null);
 
   const reloadJournal = useCallback(() => { fetchMergeJournal().then(setJournal).catch(() => setJournal([])); }, []);
   useEffect(reloadJournal, [reloadJournal]);
@@ -145,6 +155,7 @@ function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boole
 
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "12px 0 4px" }}>Журнал обʼєднань</div>
       <div style={{ maxHeight: 190, overflowY: "auto" }}>
+        {revokeErr && <div style={{ fontSize: 12, color: "#b91c1c", marginBottom: 6 }}>{revokeErr}</div>}
         {journal.length === 0 && <div style={{ fontSize: 12, color: "#9ca3af" }}>записів немає</div>}
         {/* 🔑 КЛЮЧ — НЕ `aliasKey`. З 15.09.2026 псевдонім може мати КІЛЬКА рядків
             (злили → розʼєднали → злили знову), і сам ключ більше не унікальний:
@@ -161,13 +172,13 @@ function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boole
               : <button style={{ border: "none", background: "transparent", color: "#2563eb", cursor: "pointer", fontSize: 12 }}
                   disabled={busy}
                   onClick={async () => { if (!confirm(`Роз'єднати ${j.aliasKey} від ${j.canonicalKey}?`)) return;
-                    setBusy(true); setErr(null);
-                    try { await revokeMerge(j.aliasKey); reloadJournal(); onDone(); }
+                    setBusy(true); setRevokeErr(null);
+                    try { await revokeMerge(j.aliasKey, j.canonicalKey); reloadJournal(); onDone(); }
                     /* 🔴 Без цього `catch` 403 «злиття зроблене в дебіторці» і 409
                        «активного псевдоніма немає» летіли в порожнечу, і `reloadJournal()`
                        теж не виконувався — на екрані не змінювалось НІЧОГО. Той самий
                        клас, що виправили в `ManagerPanel` 15.09.2026. */
-                    catch (e) { setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося розʼєднати"); }
+                    catch (e) { setRevokeErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося розʼєднати"); }
                     finally { setBusy(false); } }}>
                   ↺ роз'єднати
                 </button>}

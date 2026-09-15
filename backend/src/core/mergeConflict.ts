@@ -40,3 +40,18 @@ export function aliasConflictText(active: ActiveAlias | null, wantedCanonical: s
   if (active.canonicalKey === wantedCanonical) return "Ці клієнти вже обʼєднані";
   return `Псевдонім «${active.aliasKey}» уже веде до «${active.canonicalKey}» — спершу розʼєднайте його там`;
 }
+
+/**
+ * 🔓 ЧОМУ ВІДКІТ НІЧОГО НЕ ЗНЯВ — теж дві різні причини, не одна.
+ *
+ * Після переходу на адресний відкіт (`REVOKE_ALIAS_SQL`) нуль зачеплених рядків
+ * означає ДВА різні стани, і плутати їх не можна: або активного псевдоніма немає
+ * взагалі, або він є, але веде ІНШОГО клієнта — тобто журнал на екрані застарів,
+ * і людині треба його оновити, а не шукати поломку. Один текст на обидва став би
+ * третім значенням того самого смітника, який ми щойно розібрали вище.
+ */
+export function revokeMismatchText(active: ActiveAlias | null, wantedCanonical: string): string {
+  if (!active) return "Активного псевдоніма з таким ключем немає";
+  return `Псевдонім «${active.aliasKey}» зараз веде до «${active.canonicalKey}», а не до `
+    + `«${wantedCanonical}» — журнал застарів, оновіть сторінку`;
+}

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { RECOMPUTE_SQL, CANONICAL_KEY_EXPR } from "./clientKeySql.js";
+import { RECOMPUTE_SQL, CANONICAL_KEY_EXPR, REVOKE_ALIAS_SQL } from "./clientKeySql.js";
 import { provisionScratch, skipReason, type Unavailable } from "../db/scratchDb.js";
 
 /**
@@ -211,6 +211,67 @@ test("#422b 🪞 АКТИВНИЙ ПСЕВДОНІМ І ДАЛІ КОНФЛІК�
     const n = (await c.query<{ n: string }>(
       `SELECT COUNT(*) n FROM client_key_alias WHERE alias_key='смар' AND revoked_at IS NULL`)).rows[0];
     assert.equal(Number(n.n), 1, "🔴 активних рядків на один псевдонім більше ніж один");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
+
+/**
+ * #422e — ВІДКІТ ЗНІМАЄ САМЕ ТУ ПАРУ, ПРО ЯКУ ПИТАЛИ.
+ *
+ * 🔴 ЗНАЙДЕНО РЕЦЕНЗІЄЮ ВЛАСНОЇ ЗМІНИ, а не тестом: часткова унікальність (#422)
+ * прибрала інваріанту, на яку мовчки спирався `revoke`. Доки `alias_key` був
+ * PRIMARY KEY, пара (псевдонім → канонічний) була унікальною Й НЕЗМІННОЮ назавжди
+ * — жодного `DELETE`, жодного `UPDATE … SET canonical_key` у продакшн-коді немає.
+ * Тому «зняти активний за ключем» було однозначним ЗА ПОБУДОВОЮ.
+ *
+ * Після зміни на ключ лягає кілька рядків із РІЗНИМИ канонічними, і той самий
+ * запит почав означати «зняти той, що активний ЗАРАЗ». Сценарій: у журналі
+ * відкрито «смар → максимсмартекс», інший адмін тим часом перезливає «смар →
+ * автострада». Клік по застарілому рядку питав про одне, а відкочував інше —
+ * 342 угоди виходили з групи, якої ніхто не чіпав, і сервер віддавав 200.
+ *
+ * Це рівно клас «ПРИБИРАЄШ ІНВАРІАНТУ — ЗНАЙДИ ВСІХ, ХТО НА НЕЇ СПИРАВСЯ».
+ * Гейт виконує САМ `REVOKE_ALIAS_SQL` із роуту, а не свою копію поруч — інакше він
+ * доводив би рівність двох рядків, написаних поруч, і мовчав би про продакшн.
+ *
+ * Червоніє, якщо прибрати `AND canonical_key = $2`.
+ */
+test("#422e ВІДКІТ АДРЕСНИЙ: знімає названу пару, а чужу не чіпає", async (t) => {
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const { revokeMismatchText } = await import("../core/mergeConflict.js");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    await c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason)
+       VALUES ('смар','автострада','перезлито іншим адміном')`);
+
+    // Людина бачила застарілий журнал і просить зняти пару, якої вже немає.
+    const stale = await c.query(REVOKE_ALIAS_SQL, ["смар", "максимсмартекс"]);
+    assert.equal(stale.rowCount, 0,
+      "🔴 ВІДКІТ ЗНЯВ ЧУЖУ ПАРУ. Людина підтвердила «розʼєднати смар від максимсмартекс», "
+      + "а зняли «смар → автострада» — клієнт вийшов із групи, якої ніхто не чіпав");
+    const still = (await c.query<{ n: string }>(
+      `SELECT COUNT(*) n FROM client_key_alias WHERE alias_key='смар' AND revoked_at IS NULL`)).rows[0];
+    assert.equal(Number(still.n), 1, "🔴 активний рядок усе-таки зачепило");
+
+    // 🪞 ДЗЕРКАЛО: із правильним канонічним відкіт працює. Без нього гейт зеленів би
+    // і тоді, якби `revoke` зрізали повністю.
+    const ok = await c.query(REVOKE_ALIAS_SQL, ["смар", "автострада"]);
+    assert.equal(ok.rowCount, 1, "🔴 відкіт названої пари не спрацював — зрізали саму дію");
+
+    // Причина відмови мусить назвати ОБИДВІ сторони, інакше людина не зрозуміє,
+    // що саме застаріло на її екрані.
+    const why = revokeMismatchText({ aliasKey: "смар", canonicalKey: "автострада" }, "максимсмартекс");
+    assert.match(why, /автострада/, "🔴 відмова не каже, куди псевдонім веде НАСПРАВДІ");
+    assert.match(why, /максимсмартекс/, "🔴 відмова не каже, про що питала людина");
+    assert.notEqual(why, revokeMismatchText(null, "максимсмартекс"),
+      "🔴 «веде до іншого» і «активного немає» дали один текст — смітник повернувся");
   } finally {
     await c.end();
     scratch.dispose();

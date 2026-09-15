@@ -90,8 +90,8 @@ import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
-import { RECOMPUTE_RECEIVABLES_SQL, RECOMPUTE_SQL } from "../jobs/clientKeySql.js";
-import { aliasConflictText } from "../core/mergeConflict.js";
+import { RECOMPUTE_RECEIVABLES_SQL, RECOMPUTE_SQL, REVOKE_ALIAS_SQL } from "../jobs/clientKeySql.js";
+import { aliasConflictText, revokeMismatchText } from "../core/mergeConflict.js";
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -7102,9 +7102,19 @@ dashboardRouter.post("/client-merge", async (req, res) => {
 
 dashboardRouter.post("/client-merge/revoke", async (req, res) => {
   const alias = String(req.body?.alias ?? "").trim();
+  /**
+   * 🎯 КАНОНІЧНИЙ БІК ПРИХОДИТЬ ІЗ ТІЛА — АЛЕ ЛИШЕ ЯК АДРЕСА, НЕ ЯК ПРАВО.
+   *
+   * Право й далі рахується від РЕАЛЬНОГО рядка реєстру (`row.canonical_key`
+   * нижче) — інакше «своє» визначав би той, хто просить. А `wanted` каже, ЯКЕ
+   * САМЕ злиття людина бачила на екрані, коли тиснула кнопку: з 15.09.2026 на
+   * один псевдонім лягає кілька рядків, тож «зняти активний» більше не означає
+   * «зняти той, про який питали». Розбіжність = застарілий журнал, і це окрема
+   * названа відмова, а не тиха дія по чужій парі.
+   */
+  const wanted = String(req.body?.canonical ?? "").trim();
   // Роз'єднання — той самий кламп, що й злиття, і так само ПЕРШИМ оператором
-  // (див. коментар у /client-merge). Канонічний бік беремо з реєстру, бо в тілі
-  // запиту його немає — інакше «своє» визначав би той, хто просить.
+  // (див. коментар у /client-merge).
   const row = (await pool.query<{ canonical_key: string; evidence: unknown }>(
     `SELECT canonical_key, evidence FROM client_key_alias WHERE alias_key = $1 AND revoked_at IS NULL`, [alias])).rows[0];
   // 🔓 ПРАВО НА ВІДКІТ — ЗА ДЖЕРЕЛОМ ЗЛИТТЯ (рішення власника 27.08.2026).
@@ -7118,10 +7128,17 @@ dashboardRouter.post("/client-merge/revoke", async (req, res) => {
     hasMergeReceivables: roleHasPerm(req.auth!.roleKey, "merge_receivables"),
   };
   if (!revokeAllowed(revokeInput)) return res.status(403).json({ error: revokeDenyReason(revokeInput) });
+  // 🔴 ВАЛІДАЦІЯ ПІСЛЯ ГЕЙТА, як і було: інакше проба з порожнім тілом діставала б
+  // 400 замість 403 і ламала гарантію матриці (той самий урок, що в /client-merge).
   if (!alias) return res.status(400).json({ error: "alias обовʼязковий" });
-  const upd = await pool.query(
-    `UPDATE client_key_alias SET revoked_at = now() WHERE alias_key = $1 AND revoked_at IS NULL`, [alias]);
-  if (!upd.rowCount) return res.status(409).json({ error: "Активного псевдоніма з таким ключем немає" });
+  if (!wanted) return res.status(400).json({ error: "canonical обовʼязковий — відкіт адресується парою" });
+  const upd = await pool.query(REVOKE_ALIAS_SQL, [alias, wanted]);
+  if (!upd.rowCount) {
+    return res.status(409).json({
+      error: revokeMismatchText(
+        row ? { aliasKey: alias, canonicalKey: row.canonical_key } : null, wanted),
+    });
+  }
   const r = await recomputeClientKeys();
   res.json({ ok: true, recomputed: r.changed });
 });

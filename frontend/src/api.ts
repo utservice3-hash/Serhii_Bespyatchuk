@@ -3562,8 +3562,17 @@ export async function mergeClients(body: { alias: string; canonical: string; rea
   const { data } = await api.post("/dashboard/client-merge", body);
   return data;
 }
-export async function revokeMerge(alias: string): Promise<{ recomputed: number }> {
-  const { data } = await api.post("/dashboard/client-merge/revoke", { alias });
+/**
+ * 🎯 ВІДКІТ АДРЕСУЄТЬСЯ ПАРОЮ, А НЕ ОДНИМ КЛЮЧЕМ (15.09.2026).
+ *
+ * Доки псевдонім був унікальним безумовно, одного `alias` вистачало: активний
+ * рядок для ключа не міг змінити «особу». Відколи розʼєднання звільняє ключ,
+ * на нього лягає кілька рядків із різними канонічними — і клік по застарілому
+ * рядку журналу відкотив би ЧУЖУ пару, мовчки й з кодом 200. Тому канонічний бік
+ * їде з ТОГО САМОГО рядка, з якого взято текст підтвердження.
+ */
+export async function revokeMerge(alias: string, canonical: string): Promise<{ recomputed: number }> {
+  const { data } = await api.post("/dashboard/client-merge/revoke", { alias, canonical });
   return data;
 }
 export interface MergeJournalRow {

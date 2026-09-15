@@ -35,7 +35,8 @@ export function UnmergeDialog(
     setBusy(true);
     try {
       // Псевдоніми знімаються по одному — той самий `revoke`, що й на «Клієнтах».
-      for (const s of data.splitsInto.slice(1)) await revokeMerge(s.clientKey);
+      // Канонічний бік — із превʼю, тобто рівно той, наслідки якого показано вище.
+      for (const s of data.splitsInto.slice(1)) await revokeMerge(s.clientKey, data.canonicalKey);
       onDone();
       onClose();
     } catch (e) {
