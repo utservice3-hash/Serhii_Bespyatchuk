@@ -269,3 +269,31 @@ test("#429 ЖИВИЙ SQL: обидва запити виконуються на
       "🔴 рядок «без відповідального» не приїхав із бази — а це 48.5% предмета");
   } finally { await c.end(); scratch.dispose(); }
 });
+
+test("#430 РОЛІ В МАТРИЦІ Й У СИДІ — ОДИН І ТОЙ САМИЙ СПИСОК", () => {
+  /**
+   * 🔴 ДВА СПИСКИ, ЯКІ ЗОБОВʼЯЗАНІ ЗБІГАТИСЬ, І НІХТО ЇХ НЕ ЗВІРЯЄ. Матриця каже,
+   * кому роут МАЄ відповісти 200; сид у `schema.sql` вирішує, хто справді отримає
+   * ключ екрана, а `roleHasTab` — fail-closed. Розійдуться — роль, дописана лише в
+   * матрицю, дістане 403, і побачимо ми це аж на `acceptMatrix`, тобто після викату.
+   *
+   * ⚠️ Саме цей клас уже коштував проєкту: «UI дозволяє створити роль, а гейт вимагає
+   * коміт» (борг 18) і `#15` червоний на прийманні наступного ж викату.
+   */
+  const SRC = (rel: string): string =>
+    readFileSync(path.join(import.meta.dirname, "..", "..", "..", "backend", "src", rel), "utf8");
+
+  const row = /path: "\/api\/dashboard\/missed-calls", cls: "GET",\s*\n\s*allow: \[([^\]]*)\]/
+    .exec(SRC("auth/accessMatrix.ts"));
+  assert.ok(row, "🔴 рядок матриці для /missed-calls не знайдено");
+  const inMatrix = [...row[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+
+  const seed = /screen_access \|\| '\{"missed-calls":true\}'::jsonb\s*\n\s*WHERE key IN \(([^)]*)\)/
+    .exec(SRC("db/schema.sql"));
+  assert.ok(seed, "🔴 сид ключа екрана `missed-calls` не знайдено в schema.sql");
+  const inSeed = [...seed[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
+
+  assert.deepEqual(inMatrix, inSeed,
+    `🔴 списки розійшлись — матриця обіцяє 200 тим, кому сид не дає ключа (або навпаки).`
+    + ` Матриця: ${inMatrix.join(",")} · сид: ${inSeed.join(",")}`);
+});
