@@ -116,3 +116,103 @@ test("#21c ДЖОБА І ТЕСТ БЕРУТЬ ОДИН SQL, а не схожи�
   assert.ok(!/UPDATE\s+deals\s+d\s+SET\s+client_key\s*=/i.test(job),
     "🔴 у джобі лишився ВЛАСНИЙ UPDATE — саме те розходження, від якого ця константа й рятує");
 });
+
+/**
+ * #420 — РОЗʼЄДНАННЯ ЗВІЛЬНЯЄ ПСЕВДОНІМ, А ІСТОРІЯ ЛИШАЄТЬСЯ ЦІЛОЮ.
+ *
+ * 🔴 ЩО БУЛО ЗЛАМАНО (заміряно на проді 15.09.2026). `alias_key` був PRIMARY KEY
+ * безумовно, а відкіт лише проставляє `revoked_at` — рядки тут не видаляються
+ * ніколи. Тож скасований рядок тримав ключ зайнятим НАЗАВЖДИ: повторне злиття
+ * падало на `duplicate key`, і роут віддавав 409. Спалених ключів було три, під
+ * ними 358 угод, і приєднати їх назад було неможливо жодним інтерфейсом.
+ *
+ * Гейт проходить ПОВНИЙ цикл на справжній схемі й перевіряє три речі, які разом
+ * і означають «полагоджено»: (1) третій крок узагалі проходить; (2) резолвер не
+ * захлинається, коли на псевдонім лежить два рядки — саме тут виліз би
+ * «more than one row returned by a subquery» на КОЖНОМУ синку, якби часткова
+ * унікальність не тримала рівно один активний; (3) `evidence` першого злиття не
+ * затерте — воно несе право на відкіт і невідновлюваний знімок лімітів.
+ *
+ * Червоніє, якщо повернути безумовний PK або оживляти рядок через UPDATE.
+ */
+test("#420 РОЗʼЄДНАННЯ ЗВІЛЬНЯЄ ПСЕВДОНІМ: злити → розʼєднати → злити знову, історія ціла", async (t) => {
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    await c.query(`INSERT INTO managers (id,name,is_active) VALUES (1,'М',true) ON CONFLICT DO NOTHING`);
+    await c.query(
+      `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw)
+       VALUES (1,'d',1,8921932,142,100,'смар','смар')`);
+
+    const merge = (canon: string, reason: string, ev: string) => c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason,evidence)
+       VALUES ('смар',$1,$2,$3::jsonb)`, [canon, reason, ev]);
+
+    // ── 1. злили
+    await merge("смартекс", "перше злиття", '{"source":"ui","limitsBefore":[{"clientKey":"смар"}]}');
+    await c.query(RECOMPUTE_SQL);
+    // ── 2. розʼєднали (рядок ЛИШАЄТЬСЯ — так задумано)
+    await c.query(`UPDATE client_key_alias SET revoked_at = now() WHERE alias_key='смар' AND revoked_at IS NULL`);
+    await c.query(RECOMPUTE_SQL);
+
+    // ── 3. ГОЛОВНЕ: злили ТОЙ САМИЙ ключ знову. До фікса тут був duplicate key.
+    await merge("смартекс", "друге злиття", '{"source":"ui"}');
+
+    const rows = (await c.query<{ reason: string; revoked: boolean; evidence: Record<string, unknown> }>(
+      `SELECT reason, (revoked_at IS NOT NULL) AS revoked, evidence
+         FROM client_key_alias WHERE alias_key='смар' ORDER BY created_at, id`)).rows;
+    assert.equal(rows.length, 2, "🔴 повторне злиття не створило власного рядка — історію оживили перезаписом");
+    assert.equal(rows.filter((r) => !r.revoked).length, 1, "🔴 активним мусить лишатись рівно один рядок");
+    assert.equal(rows[0].reason, "перше злиття", "🔴 причину першого злиття затерто — зник доказ, чому колись злили");
+    assert.ok(rows[0].evidence.limitsBefore,
+      "🔴 `limitsBefore` першого злиття зник. Це ЄДИНИЙ і невідновлюваний знімок лімітів до злиття "
+      + "(core/mergeLimits.ts) — заради нього писали #262/#264");
+
+    // Резолвер не захлинається на двох рядках і застосовує саме активний.
+    await c.query(RECOMPUTE_SQL);
+    const d = (await c.query<{ client_key: string; client_key_raw: string }>(
+      `SELECT client_key, client_key_raw FROM deals WHERE kommo_id=1`)).rows[0];
+    assert.equal(d.client_key, "смартекс", "🔴 повторне злиття не застосувалось до угод");
+    assert.equal(d.client_key_raw, "смар", "🔴 сирий ключ зрушив — зворотність тримається саме на ньому");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
+
+/**
+ * #420b 🪞 — АКТИВНИЙ ПСЕВДОНІМ І ДАЛІ КОНФЛІКТУЄ.
+ *
+ * Дзеркало до `#420`, і без нього «виправлення» можна було б виконати, просто
+ * знявши унікальність: тоді на один ключ лягло б двоє АКТИВНИХ рядків, і резолвер
+ * почав би падати «more than one row returned by a subquery» на кожному синку.
+ * Тобто цей гейт стереже не зручність, а те, що фікс не перетворився на зняту
+ * перевірку. Червоніє, якщо зробити індекс повним замість часткового.
+ */
+test("#420b 🪞 АКТИВНИЙ ПСЕВДОНІМ І ДАЛІ КОНФЛІКТУЄ — унікальність звузили, а не зняли", async (t) => {
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(SCHEMA, "utf8"));
+    const add = (canon: string) => c.query(
+      `INSERT INTO client_key_alias (alias_key,canonical_key,reason) VALUES ('смар',$1,'test')`, [canon]);
+    await add("смартекс");
+    await assert.rejects(() => add("смартекс"), /duplicate key|unique/i,
+      "🔴 той самий АКТИВНИЙ псевдонім вставився вдруге — унікальність зняли, а не звузили");
+    await assert.rejects(() => add("іншафірма"), /duplicate key|unique/i,
+      "🔴 активний псевдонім перецілився на іншого клієнта мовчки, без відмови");
+    const n = (await c.query<{ n: string }>(
+      `SELECT COUNT(*) n FROM client_key_alias WHERE alias_key='смар' AND revoked_at IS NULL`)).rows[0];
+    assert.equal(Number(n.n), 1, "🔴 активних рядків на один псевдонім більше ніж один");
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
