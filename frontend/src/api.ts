@@ -2834,6 +2834,8 @@ export interface DocFile {
   author: string | null; createdBy: number | null;
   signature: { kind: DocSigKind; days: number | null };
   canEdit: boolean; canSign: boolean;
+  /** 📖 Ознайомлення (лише загальні регламенти): мій стан і прогрес аудиторії (done/total лише керівництву). */
+  ack: { required: boolean; mine: "not_required" | "acked" | "pending"; done: number | null; total: number | null };
 }
 export interface DocTree {
   folders: DocFolder[]; files: DocFile[];
@@ -2886,6 +2888,9 @@ export async function updateDocFile(id: number, patch: { name?: string; category
 export async function archiveDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/archive`); }
 export async function restoreDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/restore`); }
 export async function activateDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/activate`); }
+export async function ackDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/ack`); }
+export async function fetchDocAcks(id: number): Promise<{ people: { userId: number; name: string; ackedAt: string | null; hasTelegram: boolean }[]; done: number; total: number }> { const { data } = await api.get(`/documents/file/${id}/acks`); return data; }
+export async function remindDocAcks(id: number): Promise<{ sent: number; noTelegram: number; missing: number }> { const { data } = await api.post(`/documents/file/${id}/ack-remind`); return data; }
 export type SignBody =
   | { method: "paper_photo"; filename: string; dataBase64: string }
   | { method: "telegram_code"; step: "send" }

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
-  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, signDocFile,
+  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile,
   fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
   type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type TelegramStatus,
 } from "../../../api";
@@ -85,6 +85,13 @@ const railName: React.CSSProperties = { flex: 1, minWidth: 0, overflow: "hidden"
 const railCount: React.CSSProperties = { flex: "0 0 auto", minWidth: 22, textAlign: "right", color: "var(--text-muted)", fontSize: 12, fontVariantNumeric: "tabular-nums" };
 const railIcon: React.CSSProperties = { width: 24, height: 24, display: "grid", placeItems: "center", border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)", borderRadius: "var(--r-sm)", fontSize: 12, padding: 0 };
 const noteBox: React.CSSProperties = { fontSize: "var(--fs-sm)", color: "var(--text-muted)", background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "var(--sp-3) var(--sp-4)" };
+
+function AckBadge({ f }: { f: DocFile }) {
+  const a = f.ack;
+  if (a.total != null) return <span style={pill(a.done === a.total ? "var(--ok-bg)" : "var(--info-bg)", a.done === a.total ? "var(--ok)" : "var(--info)")}>ознайомились {a.done}/{a.total}</span>;
+  if (a.mine === "acked") return <span style={pill("var(--ok-bg)", "var(--ok)")}>✓ ознайомлений</span>;
+  return <span style={pill("var(--warn-bg)", "var(--warn)")}>● ознайомтесь</span>;
+}
 
 function SigBadge({ f }: { f: DocFile }) {
   const s = f.signature;
@@ -282,7 +289,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                           <td className="recv-num">v{f.version}</td>
                           <td className="recv-num">{fmtDate(f.updatedAt)}</td>
                           <td>{f.addressee ?? f.author ?? <span className="orph-dim">автор не вказаний</span>}</td>
-                          <td>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"} {fmtDate(f.archivedAt)}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : <SigBadge f={f} />}</td>
+                          <td>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"} {fmtDate(f.archivedAt)}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : f.ack.required ? <AckBadge f={f} /> : <SigBadge f={f} />}</td>
                           <td className="recv-num" style={{ textAlign: "right" }}>{fmtBytes(f.sizeBytes)}</td>
                         </tr>
                       );
@@ -436,6 +443,9 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         </div>
       )}
 
+      {/* Ознайомлення (лише загальні регламенти) */}
+      {file.ack.required && <AckBlock file={file} mgmt={mgmt} onChanged={onChanged} onToast={onToast} />}
+
       {/* Хто бачить */}
       <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: 12 }}>
         <div style={label}>Хто бачить цей документ</div>
@@ -470,6 +480,36 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
       </div>
 
       {signOpen && <SignDialog file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); }} />}
+    </div>
+  );
+}
+
+/** 📖 Блок ознайомлення: людині — кнопка «Ознайомився»; керівництву — хто прочитав, хто ні, «Нагадати в Telegram». */
+function AckBlock({ file, mgmt, onChanged, onToast }: { file: DocFile; mgmt: boolean; onChanged: () => Promise<void>; onToast: (s: string) => void }) {
+  const [list, setList] = useState<{ people: { userId: number; name: string; ackedAt: string | null; hasTelegram: boolean }[]; done: number; total: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (mgmt) fetchDocAcks(file.id).then(setList).catch(() => setList(null)); }, [mgmt, file.id, file.version, file.ack.done]);
+  const ack = async () => { setBusy(true); try { await ackDocFile(file.id); onToast("Ознайомлення зафіксовано для цієї версії"); await onChanged(); } finally { setBusy(false); } };
+  const remind = async () => { setBusy(true); try { const r = await remindDocAcks(file.id); onToast(`Нагадано в Telegram: ${r.sent}${r.noTelegram ? `, без Telegram: ${r.noTelegram}` : ""}`); } catch (e) { onToast(errOf(e, "Не вдалося нагадати")); } finally { setBusy(false); } };
+  const missing = list?.people.filter((p) => !p.ackedAt) ?? [];
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: 12 }}>
+      <div style={{ ...label, display: "flex", justifyContent: "space-between" }}><span>Ознайомлення</span>{list && <span style={{ textTransform: "none", letterSpacing: 0 }}>{list.done} із {list.total}</span>}</div>
+      {file.ack.mine === "acked"
+        ? <div style={{ fontSize: 13, color: "var(--ok)" }}>✓ Ви ознайомлені з версією v{file.version}.</div>
+        : <button style={btn("primary")} onClick={() => void ack()} disabled={busy}>Ознайомився</button>}
+      {mgmt && list && (
+        <div style={{ marginTop: 10 }}>
+          {list.total > 0 && <div style={{ height: 6, background: "var(--surface-2)", borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${Math.round((list.done / list.total) * 100)}%`, height: "100%", background: list.done === list.total ? "var(--ok)" : "var(--info)" }} /></div>}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+            <button style={{ ...btn(), fontSize: 12, padding: "4px 10px" }} onClick={() => setOpen((v) => !v)}>{open ? "Сховати" : `Не прочитали: ${missing.length}`}</button>
+            {missing.length > 0 && <button style={{ ...btn(), fontSize: 12, padding: "4px 10px" }} onClick={() => void remind()} disabled={busy}>🤖 Нагадати в Telegram</button>}
+          </div>
+          {open && <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-muted)" }}>{missing.length ? missing.map((p) => `${p.name}${p.hasTelegram ? "" : " (без Telegram)"}`).join(", ") : "усі прочитали"}</div>}
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>Нова версія регламенту — ознайомлення заново. Нічого не блокується.</div>
     </div>
   );
 }

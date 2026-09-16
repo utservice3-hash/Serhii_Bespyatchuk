@@ -6,6 +6,8 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { signBotConfigured, signBotSend } from "../bot/signBot.js";
 import { notifyOfferOnce } from "../jobs/offerReminders.js";
+import { ackRequired, ackMine, ackProgress, remindTargets, type AckRow } from "../core/docAck.js";
+import { tabsOfRole } from "../auth/rbac.js";
 import { generateSignCode, verifySignCode, signCodeMessage, SIGN_CODE_TTL_MS } from "../core/signCode.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { OWNER_NAME_SQL } from "../core/absences.js";
@@ -111,7 +113,8 @@ async function storeBuffer(display: string, buffer: Buffer): Promise<{ storedNam
   return { storedName, sha256: createHash("sha256").update(buffer).digest("hex") };
 }
 
-function shape(r: FileRow, sigs: { version: number; sha256: string; signed_at: string }[], sentAt: string | null, viewer: DocViewer, ctx: AccessContext) {
+type AckInfo = { required: boolean; mine: "not_required" | "acked" | "pending"; done: number | null; total: number | null };
+function shape(r: FileRow, sigs: { version: number; sha256: string; signed_at: string }[], sentAt: string | null, viewer: DocViewer, ctx: AccessContext, ack?: AckInfo) {
   const st = signatureState({ version: r.version, sha256: r.sha256, section: r.section }, sigs.map((s) => ({ version: s.version, sha256: s.sha256, signedAt: s.signed_at })), new Date(), sentAt);
   return {
     id: r.id, folderId: r.folder_id, name: r.name, category: r.category, mime: r.mime, sizeBytes: r.size_bytes == null ? null : Number(r.size_bytes),
@@ -121,7 +124,34 @@ function shape(r: FileRow, sigs: { version: number; sha256: string; signed_at: s
     signature: st,
     canEdit: canEditDocument(viewer, toDocLike(r), ctx),
     canSign: canSignDocument(viewer, toDocLike(r)) && st.kind !== "signed",
+    ack: ack ?? { required: false, mine: "not_required" as const, done: null, total: null },
   };
+}
+
+/** Аудиторія регламенту: активні користувачі з вкладкою «Документи», чия роль бачить папку (явне can_view=false закриває). */
+async function ackAudience(): Promise<{ users: { id: number; roleKey: string }[]; closed: Map<number, Set<string>> }> {
+  const [u, rights] = await Promise.all([
+    pool.query<{ id: number; role_key: string; is_active: boolean; override: string | null }>(
+      `SELECT u.id, COALESCE(u.role_override, u.role) AS role_key, u.is_active, mws.state AS override
+         FROM users u LEFT JOIN manager_work_state mws ON mws.manager_id = u.manager_id WHERE u.is_active`),
+    pool.query<{ folder_id: number; role_key: string; can_view: boolean }>(`SELECT folder_id, role_key, can_view FROM doc_folder_access WHERE can_view = false`),
+  ]);
+  const closed = new Map<number, Set<string>>();
+  for (const r of rights.rows) { const s = closed.get(r.folder_id) ?? new Set<string>(); s.add(r.role_key); closed.set(r.folder_id, s); }
+  const users = u.rows.filter((x) => x.override !== "dismissed" && tabsOfRole(x.role_key).includes("documents")).map((x) => ({ id: x.id, roleKey: x.role_key }));
+  return { users, closed };
+}
+function audienceFor(r: FileRow, aud: { users: { id: number; roleKey: string }[]; closed: Map<number, Set<string>> }): number[] {
+  const c = r.folder_id == null ? undefined : aud.closed.get(r.folder_id);
+  return aud.users.filter((x) => isManagement(x.roleKey) || !c?.has(x.roleKey)).map((x) => x.id);
+}
+async function ackInfoFor(r: FileRow, acks: AckRow[], viewer: DocViewer, aud: { users: { id: number; roleKey: string }[]; closed: Map<number, Set<string>> } | null): Promise<AckInfo> {
+  const d = { section: r.section, category: r.category, archivedAt: r.archived_at, version: r.version, sha256: r.sha256 };
+  const required = ackRequired(d);
+  const mine = ackMine(d, acks, viewer.userId);
+  if (!required || !aud) return { required, mine, done: null, total: null };
+  const p = ackProgress(d, audienceFor(r, aud), acks);
+  return { required, mine, done: p.done, total: p.total };
 }
 
 /**
@@ -131,12 +161,17 @@ function shape(r: FileRow, sigs: { version: number; sha256: string; signed_at: s
 documentsRouter.get("/tree", async (req, res) => {
   const viewer = viewerOf(req);
   const ctx = await accessContext(req);
-  const [folders, files, sigs, sent] = await Promise.all([
+  const mgmt0 = isManagement(viewer.roleKey);
+  const [folders, files, sigs, sent, acksQ, aud] = await Promise.all([
     pool.query<{ id: number; parent_id: number | null; name: string; created_at: string }>(`SELECT id, parent_id, name, created_at FROM doc_folders ORDER BY name`),
     pool.query<FileRow>(`${FILE_SELECT} ORDER BY f.updated_at DESC`),
     pool.query<{ file_id: number; version: number; sha256: string; signed_at: string }>(`SELECT file_id, version, sha256, signed_at FROM doc_signatures`),
     pool.query<{ file_id: number; at: string }>(`SELECT file_id, min(at) AS at FROM doc_events WHERE kind = 'sent' GROUP BY file_id`),
+    pool.query<{ file_id: number; user_id: number; version: number; sha256: string }>(`SELECT file_id, user_id, version, sha256 FROM doc_acks`),
+    mgmt0 ? ackAudience() : Promise.resolve(null),
   ]);
+  const ackBy = new Map<number, AckRow[]>();
+  for (const a of acksQ.rows) { const arr = ackBy.get(a.file_id) ?? []; arr.push({ userId: a.user_id, version: a.version, sha256: a.sha256 }); ackBy.set(a.file_id, arr); }
   const sigBy = new Map<number, { version: number; sha256: string; signed_at: string }[]>();
   for (const s of sigs.rows) { const a = sigBy.get(s.file_id) ?? []; a.push(s); sigBy.set(s.file_id, a); }
   const sentBy = new Map(sent.rows.map((r) => [r.file_id, r.at]));
@@ -151,7 +186,7 @@ documentsRouter.get("/tree", async (req, res) => {
   };
   res.json({
     folders: folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, name: f.name, createdAt: f.created_at })),
-    files: visible.map((r) => shape(r, sigBy.get(r.id) ?? [], sentBy.get(r.id) ?? null, viewer, ctx)),
+    files: await Promise.all(visible.map(async (r) => shape(r, sigBy.get(r.id) ?? [], sentBy.get(r.id) ?? null, viewer, ctx, await ackInfoFor(r, ackBy.get(r.id) ?? [], viewer, aud)))),
     counts,
     sections: { general: true, personal: true, offer: canSeeOffersSection(viewer, hasOwnOffer), archive: mgmt },
     viewer: { userId: viewer.userId, roleKey: viewer.roleKey, isManagement: mgmt, canManageAccess: canManageAccess(viewer),
@@ -191,8 +226,10 @@ documentsRouter.get("/file/:id", async (req, res) => {
   if (v.row.addressee_user_id === req.auth!.userId && !events.rows.some((e) => e.kind === "opened")) {
     await logEvent(id, "opened", req.auth!.userId);
   }
+  const acksRows = (await pool.query<{ user_id: number; version: number; sha256: string }>(`SELECT user_id, version, sha256 FROM doc_acks WHERE file_id = $1`, [id])).rows.map((a) => ({ userId: a.user_id, version: a.version, sha256: a.sha256 }));
+  const mgmtNow = isManagement(req.auth!.roleKey);
   res.json({
-    file: shape(v.row, sigs.rows, sentAt, viewerOf(req), v.ctx),
+    file: shape(v.row, sigs.rows, sentAt, viewerOf(req), v.ctx, await ackInfoFor(v.row, acksRows, viewerOf(req), mgmtNow ? await ackAudience() : null)),
     versions: versions.rows,
     signatures: sigs.rows.map((s) => ({ version: s.version, sha256: s.sha256, signedAt: s.signed_at, method: s.method, signer: s.signer, hasEvidence: !!s.evidence_stored_name,
       current: s.sha256 === v.row.sha256 && s.version === v.row.version })),
@@ -201,6 +238,41 @@ documentsRouter.get("/file/:id", async (req, res) => {
 });
 
 /** Хто бачить документ (для блоку «хто бачить») — керівництву. */
+/** 📖 «Ознайомився» — будь-хто, хто бачить регламент; позначка на поточну версію (#445). Без блокувань. */
+documentsRouter.post("/file/:id/ack", async (req, res) => {
+  const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
+  if (!ackRequired({ section: v.row.section, category: v.row.category, archivedAt: v.row.archived_at })) return res.status(400).json({ error: "Ознайомлення потрібне лише для загальних регламентів" });
+  if (!v.row.sha256) return res.status(400).json({ error: "У документа немає хеша — завантажте нову версію, тоді ознайомлення привʼяжеться до неї" });
+  await pool.query(`INSERT INTO doc_acks (file_id, user_id, version, sha256) VALUES ($1, $2, $3, $4) ON CONFLICT (file_id, user_id, version) DO NOTHING`, [v.row.id, req.auth!.userId, v.row.version, v.row.sha256]);
+  await logEvent(v.row.id, "acked", req.auth!.userId, { version: v.row.version });
+  res.json({ ok: true });
+});
+/** Хто прочитав, хто ні — керівництву. */
+documentsRouter.get("/file/:id/acks", management, async (req, res) => {
+  const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
+  const aud = await ackAudience();
+  const ids = audienceFor(v.row, aud);
+  const acks = (await pool.query<{ user_id: number; acked_at: string }>(`SELECT user_id, acked_at FROM doc_acks WHERE file_id = $1 AND version = $2 AND sha256 = $3`, [v.row.id, v.row.version, v.row.sha256])).rows;
+  const ackedAt = new Map(acks.map((a) => [a.user_id, a.acked_at]));
+  const names = ids.length ? (await pool.query<{ id: number; name: string; chat: string | null }>(`SELECT u.id, ${OWNER_NAME_SQL} AS name, u.telegram_chat_id AS chat FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = ANY($1::int[]) ORDER BY name`, [ids])).rows : [];
+  res.json({ people: names.map((p) => ({ userId: p.id, name: p.name, ackedAt: ackedAt.get(p.id) ?? null, hasTelegram: !!p.chat })), done: acks.filter((a) => ackedAt.has(a.user_id)).length, total: ids.length });
+});
+/** Нагадати в Telegram тим, хто не прочитав (#445b). Нічого не блокує. */
+documentsRouter.post("/file/:id/ack-remind", management, async (req, res) => {
+  const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
+  if (!signBotConfigured()) return res.status(503).json({ error: "Бот підпису не налаштований" });
+  const aud = await ackAudience();
+  const d = { version: v.row.version, sha256: v.row.sha256 };
+  const acks = (await pool.query<{ user_id: number; version: number; sha256: string }>(`SELECT user_id, version, sha256 FROM doc_acks WHERE file_id = $1`, [v.row.id])).rows.map((a) => ({ userId: a.user_id, version: a.version, sha256: a.sha256 }));
+  const { missing } = ackProgress(d, audienceFor(v.row, aud), acks);
+  const chats = missing.length ? (await pool.query<{ id: number; chat: string | null }>(`SELECT id, telegram_chat_id AS chat FROM users WHERE id = ANY($1::int[])`, [missing])).rows : [];
+  const { send, noTelegram } = remindTargets(missing, new Map(chats.map((c) => [c.id, c.chat])));
+  let sent = 0;
+  for (const t of send) { if (await signBotSend(t.chatId, `📖 Нагадування: ознайомтесь із регламентом «${v.row.name}» (версія ${v.row.version}) у дашборді → Регламенти та документи → Загальні, і натисніть «Ознайомився».`)) sent++; }
+  await logEvent(v.row.id, "ack_reminded", req.auth!.userId, { sent, noTelegram: noTelegram.length });
+  res.json({ sent, noTelegram: noTelegram.length, missing: missing.length });
+});
+
 documentsRouter.get("/file/:id/viewers", management, async (req, res) => {
   const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
   const r = v.row;

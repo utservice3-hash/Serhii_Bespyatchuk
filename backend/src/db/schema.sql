@@ -3214,3 +3214,14 @@ UPDATE roles SET screen_access = screen_access || '{"documents":true}'::jsonb
 -- 🗄 «Неактивний» — документ, що повернувся з архіву після повернення людини (рішення власника
 -- 15.09.2026 вечір): видно, але не підписати й не редагувати, поки керівництво не натисне «Активувати».
 ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS inactive_at TIMESTAMPTZ;
+
+-- 📖 ОЗНАЙОМЛЕННЯ З РЕГЛАМЕНТАМИ (розділ 8 ТЗ; рішення власника 15.09.2026: статус і нагадування,
+-- без блокування). Позначка привʼязана до версії й хеша, як підпис: нова версія — читати знову.
+CREATE TABLE IF NOT EXISTS doc_acks (
+  file_id INTEGER NOT NULL REFERENCES doc_files(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  acked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (file_id, user_id, version)
+);
