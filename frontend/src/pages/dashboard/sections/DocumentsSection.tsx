@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
@@ -22,7 +22,6 @@ import {
  */
 
 type Section = DocSection | "archive";
-type GroupBy = "type" | "folder" | "date";
 
 const MAX_MB = 100;
 const TYPE_META: Record<string, { color: string; action: string; icon: string }> = {
@@ -80,7 +79,6 @@ const inp: React.CSSProperties = {};
 const label: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 };
 /* Рядок рейки (папки/типи): одна висота, назва в один рядок з обрізанням, лічильник у своїй колонці,
    іконки дій однакової ширини — щоб відстані навколо були рівні незалежно від довжини назви. */
-const railIcon: React.CSSProperties = { width: 24, height: 24, display: "grid", placeItems: "center", border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)", borderRadius: "var(--r-sm)", fontSize: 12, padding: 0 };
 const noteBox: React.CSSProperties = { fontSize: "var(--fs-sm)", color: "var(--text-muted)", background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "var(--sp-3) var(--sp-4)" };
 
 function AckBadge({ f }: { f: DocFile }) {
@@ -105,9 +103,9 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [section, setSection] = useState<Section>("general");
+  const [shelfState, setShelfState] = useState<"reg" | "work">("reg");
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [folderFilter, setFolderFilter] = useState<number | null | "none" | "all">("all");
-  const [groupBy, setGroupBy] = useState<GroupBy>("type");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -124,29 +122,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); }, [toast]);
 
   const viewer = tree?.viewer;
-  const files = useMemo(() => {
-    if (!tree) return [];
-    const inSection = tree.files.filter((f) => section === "archive" ? !!f.archivedAt : (!f.archivedAt && f.section === section));
-    const qq = q.trim().toLowerCase();
-    return inSection
-      .filter((f) => !typeFilter || (f.category ?? "Інше") === typeFilter)
-      .filter((f) => folderFilter === "all" || (folderFilter === "none" ? f.folderId == null : f.folderId === folderFilter))
-      .filter((f) => !qq || f.name.toLowerCase().includes(qq) || (f.description ?? "").toLowerCase().includes(qq) || (f.addressee ?? "").toLowerCase().includes(qq));
-  }, [tree, section, typeFilter, folderFilter, q]);
-
-  const sectionFiles = useMemo(() => tree ? tree.files.filter((f) => section === "archive" ? !!f.archivedAt : (!f.archivedAt && f.section === section)) : [], [tree, section]);
-  const typeCounts = useMemo(() => { const m = new Map<string, number>(); for (const f of sectionFiles) m.set(f.category ?? "Інше", (m.get(f.category ?? "Інше") ?? 0) + 1); return m; }, [sectionFiles]);
-  const folderCounts = useMemo(() => { const m = new Map<number | null, number>(); for (const f of sectionFiles) m.set(f.folderId, (m.get(f.folderId) ?? 0) + 1); return m; }, [sectionFiles]);
   const folderName = (id: number | null) => id == null ? "Без папки" : (tree?.folders.find((x) => x.id === id)?.name ?? `Папка #${id}`);
-
-  const groups = useMemo(() => {
-    const g = new Map<string, DocFile[]>();
-    const keyOf = (f: DocFile) => groupBy === "type" ? (f.category ?? "Інше") : groupBy === "folder" ? folderName(f.folderId) : (f.updatedAt ?? f.createdAt).slice(0, 7);
-    for (const f of files) { const k = keyOf(f); g.set(k, [...(g.get(k) ?? []), f]); }
-    const order = groupBy === "type" ? [...DOC_TYPES] : [...g.keys()].sort((a, b) => groupBy === "date" ? b.localeCompare(a) : a.localeCompare(b));
-    return order.filter((k) => g.has(k)).map((k) => ({ key: k, items: g.get(k)! }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, groupBy, tree]);
 
   const selectedFile = tree?.files.find((f) => f.id === selected) ?? null;
 
@@ -160,11 +136,32 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
 
   const canUploadHere = viewer.isManagement || viewer.canUploadRoot || viewer.uploadFolders.length > 0;
 
-  const pendingSig = sectionFiles.filter((f) => f.signature.kind === "pending" || f.signature.kind === "outdated").length;
-  const overdueSig = sectionFiles.filter((f) => f.signature.kind === "overdue").length;
-  const weekAgo = Date.now() - 7 * 864e5;
-  const fresh = sectionFiles.filter((f) => new Date(f.updatedAt ?? f.createdAt).getTime() >= weekAgo).length;
-  const sectionLabel = ({ general: "Загальні", personal: "Особисті", offer: "Офери", archive: "Архів" })[section];
+  const REG_TYPES = new Set(["Регламент", "Інструкція"]);
+  // Розділи навігації (макет «Documents Split View», обраний власником 16.09.2026):
+  // регламенти окремо від робочих документів, мої документи, архів.
+  type Shelf = "reg" | "work" | "mine" | "archive";
+  const shelfOf = (f: DocFile): Shelf => f.archivedAt ? "archive" : f.section !== "general" ? "mine" : REG_TYPES.has(f.category ?? "Інше") ? "reg" : "work";
+  const visibleAll = tree.files;
+  const shelfCount = (k: Shelf) => visibleAll.filter((f) => shelfOf(f) === k).length;
+  const shelf: Shelf = section === "archive" ? "archive" : section !== "general" ? "mine" : (typeFilter && !REG_TYPES.has(typeFilter)) ? "work" : (typeFilter ? "reg" : (shelfState));
+  const setShelf = (k: Shelf) => { setShelfState(k === "mine" ? "reg" : k === "archive" ? "reg" : k); setSection(k === "archive" ? "archive" : k === "mine" ? (tree.sections.offer && visibleAll.some((f) => f.section === "offer" && !f.archivedAt) ? "offer" : "personal") : "general"); setTypeFilter(null); setFolderFilter("all"); setSelected(null); };
+  const shelfFiles = visibleAll.filter((f) => shelfOf(f) === shelf && (shelf !== "mine" || f.section === section || section === "general"));
+  const listFiles = shelfFiles
+    .filter((f) => !typeFilter || (f.category ?? "Інше") === typeFilter)
+    .filter((f) => folderFilter === "all" || (folderFilter === "none" ? f.folderId == null : f.folderId === folderFilter))
+    .filter((f) => { const qq = q.trim().toLowerCase(); return !qq || f.name.toLowerCase().includes(qq) || (f.description ?? "").toLowerCase().includes(qq) || (f.addressee ?? "").toLowerCase().includes(qq); });
+  const shelfFolderCounts = new Map<number | null, number>(); shelfFiles.forEach((f) => shelfFolderCounts.set(f.folderId, (shelfFolderCounts.get(f.folderId) ?? 0) + 1));
+  const shelfTypeCounts = new Map<string, number>(); shelfFiles.forEach((f) => shelfTypeCounts.set(f.category ?? "Інше", (shelfTypeCounts.get(f.category ?? "Інше") ?? 0) + 1));
+  const uidMine = viewer.userId;
+  const todo = {
+    offers: visibleAll.filter((f) => f.section === "offer" && !f.archivedAt && f.addresseeUserId === uidMine && f.signature.kind !== "signed" && f.signature.kind !== "not_required").length,
+    regs: visibleAll.filter((f) => f.ack.required && f.ack.mine === "pending").length,
+    review: visibleAll.filter((f) => f.signature.kind === "review").length,
+  };
+  const paneH = "calc(100vh - 150px)";
+  const navBtn = (on: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 8, width: "100%", border: "none", textAlign: "left", padding: "8px 10px", borderRadius: "var(--r-lg)", cursor: "pointer", fontSize: "var(--fs-base)", background: on ? "var(--brand)" : "transparent", color: on ? "#fff" : "var(--text)", fontWeight: on ? 600 : 400 });
+  const subBtn = (on: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", border: "none", textAlign: "left", padding: "6px 10px 6px 26px", borderRadius: "var(--r-md)", cursor: "pointer", fontSize: "var(--fs-13)", background: on ? "var(--surface-2)" : "transparent", color: "var(--text)", fontWeight: on ? 600 : 400 });
+  const cnt = (_n: number, on = false): React.CSSProperties => ({ marginLeft: "auto", fontSize: 12, opacity: on ? .85 : .7, fontVariantNumeric: "tabular-nums" });
 
   return (
     <div>
@@ -172,129 +169,79 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       <div className="page-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <h1 className="page-title">📁 Регламенти та документи</h1>
         <div className="page-filters">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук за назвою, описом, адресатом" style={{ width: 260 }} />
-          <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)} title="Групування списку">
-            <option value="type">Групи: за типом</option>
-            <option value="folder">Групи: за папкою</option>
-            <option value="date">Групи: за місяцем</option>
-          </select>
           <TelegramChip onToast={setToast} />
           {viewer.isManagement && <button style={btn()} onClick={() => { const n = window.prompt("Назва нової папки:")?.trim(); if (n) void createDocFolder(n, null).then(load).catch((e) => setToast(errOf(e, "Не вдалося створити папку"))); }}>➕ Папка</button>}
           {canUploadHere && <button className="btn-primary" onClick={() => setUploadOpen(true)}>+ Завантажити</button>}
         </div>
       </div>
 
-      {/* Розділи — чипи, як фільтри на екранах клієнтів */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-        {([["general", "Загальні"], ["personal", "Особисті"], ["offer", "🔒 Офери"], ["archive", "Архів"]] as [Section, string][])
-          .filter(([k]) => tree.sections[k])
-          .map(([k, l]) => (
-            <button key={k} className="orph-chip" aria-pressed={section === k} onClick={() => { setSection(k); setTypeFilter(null); setFolderFilter("all"); setSelected(null); }}>
-              {l} <span style={{ opacity: .7 }}>· {tree.counts[k]}</span>
-            </button>
-          ))}
-      </div>
-      <p className="loading-text" style={{ margin: "0 0 var(--sp-7)", fontSize: "var(--fs-13)" }}><b style={{ color: "var(--text)" }}>{sectionLabel}.</b> {SECTION_HINT[section]}</p>
+      {/* Три панелі: навігація · список · перегляд (макет Documents Split View) */}
+      <div className="chart-card" style={{ padding: 0, display: "grid", gridTemplateColumns: selectedFile ? "220px 380px minmax(0,1fr)" : "220px minmax(0,1fr)", minHeight: 420, height: paneH, overflow: "hidden" }}>
+        {/* Навігація */}
+        <div style={{ borderRight: "1px solid var(--border)", padding: 12, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={label}>Мої справи</div>
+          <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.offers ? "var(--warn)" : "var(--text-muted)" }} onClick={() => setShelf("mine")}>🔏 Офер чекає підпису<span style={cnt(todo.offers)}>{todo.offers}</span></button>
+          <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.regs ? "var(--warn)" : "var(--text-muted)" }} onClick={() => setShelf("reg")}>📖 Ознайомитись<span style={cnt(todo.regs)}>{todo.regs}</span></button>
+          {viewer.isManagement && <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.review ? "var(--info)" : "var(--text-muted)" }} onClick={() => setShelf("mine")}>📷 Фото на підтвердженні<span style={cnt(todo.review)}>{todo.review}</span></button>}
+          <div style={{ ...label, marginTop: 12 }}>Розділи</div>
+          <button style={navBtn(shelf === "reg")} onClick={() => setShelf("reg")}>📕 Регламенти<span style={cnt(shelfCount("reg"), shelf === "reg")}>{shelfCount("reg")}</span></button>
+          {shelf === "reg" && [...tree.folders.filter((f) => f.parentId == null), null].map((f) => { const id = f?.id ?? null; const n = shelfFolderCounts.get(id) ?? 0; if (!n) return null; const on = folderFilter === (f ? id : "none");
+            return <button key={f?.id ?? "none"} style={subBtn(on)} onClick={() => setFolderFilter(on ? "all" : (f ? id : "none"))} title={f ? f.name : "Без папки"}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span><span style={cnt(n)}>{n}</span></button>; })}
+          <button style={navBtn(shelf === "work")} onClick={() => setShelf("work")}>🗂 Робочі документи<span style={cnt(shelfCount("work"), shelf === "work")}>{shelfCount("work")}</span></button>
+          {shelf === "work" && [...tree.folders.filter((f) => f.parentId == null), null].map((f) => { const id = f?.id ?? null; const n = shelfFolderCounts.get(id) ?? 0; if (!n) return null; const on = folderFilter === (f ? id : "none");
+            return <button key={f?.id ?? "none"} style={subBtn(on)} onClick={() => setFolderFilter(on ? "all" : (f ? id : "none"))} title={f ? f.name : "Без папки"}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span><span style={cnt(n)}>{n}</span></button>; })}
+          <button style={navBtn(shelf === "mine")} onClick={() => setShelf("mine")}>🔒 {viewer.isManagement ? "Особисті та офери" : "Мої документи"}<span style={cnt(shelfCount("mine"), shelf === "mine")}>{shelfCount("mine")}</span></button>
+          {shelf === "mine" && tree.sections.offer && <button style={subBtn(section === "offer")} onClick={() => { setSection("offer"); setSelected(null); }}>🔒 Офери<span style={cnt(visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length)}>{visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length}</span></button>}
+          {shelf === "mine" && <button style={subBtn(section === "personal")} onClick={() => { setSection("personal"); setSelected(null); }}>Особисті<span style={cnt(visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length)}>{visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length}</span></button>}
+          {tree.sections.archive && <button style={navBtn(shelf === "archive")} onClick={() => setShelf("archive")}>🗄 Архів<span style={cnt(shelfCount("archive"), shelf === "archive")}>{shelfCount("archive")}</span></button>}
+          {viewer.canManageAccess && shelf !== "mine" && shelf !== "archive" && typeof folderFilter === "number" && (() => { const f = tree.folders.find((x) => x.id === folderFilter); if (!f) return null; return (
+            <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => setAccessFolder(f)}>⚙ Доступи</button>
+              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => { const nn = window.prompt("Нова назва папки:", f.name)?.trim(); if (nn && nn !== f.name) void renameDocFolder(f.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}>✎</button>
+              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }}>✕</button>
+            </div>); })()}
+          <p className="loading-text" style={{ marginTop: "auto", fontSize: 11.5, lineHeight: 1.4 }}>{shelf === "reg" ? "Регламенти виконують, інструкції роблять за кроками. У кожного регламенту є «Ознайомився»." : shelf === "work" ? "Шаблони беруть і заповнюють, матеріали надсилають клієнту." : shelf === "mine" ? SECTION_HINT[section] : SECTION_HINT.archive}</p>
+        </div>
 
-      <div className="kpi-grid">
-        <div className="kpi-card"><span className="kpi-label">Документів у розділі</span><span className="kpi-value">{sectionFiles.length}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Чекають підпису</span><span className="kpi-value" style={{ color: pendingSig ? "var(--warn)" : undefined }}>{pendingSig}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Прострочено підпис</span><span className="kpi-value" style={{ color: overdueSig ? "var(--danger)" : undefined }}>{overdueSig}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Оновлено за 7 днів</span><span className="kpi-value">{fresh}</span></div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: selectedFile ? "minmax(0,1fr) 360px" : "minmax(0,1fr)", gap: "var(--sp-7)", alignItems: "start" }}>
         {/* Список */}
-        <div className="chart-card" style={{ minWidth: 0 }}>
-          {/* Навігація ЗВЕРХУ (Сергій 16.09.2026): спершу папки, потім типи — а не рейка збоку, де папки опинялись унизу. */}
-          {section !== "offer" && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-              <span className="orph-dim" style={{ marginRight: 4 }}>Папки:</span>
-              <button className="orph-chip" aria-pressed={folderFilter === "all"} onClick={() => setFolderFilter("all")} style={{ padding: "5px 12px", fontSize: 12 }}>Усі · {sectionFiles.length}</button>
-              {[...tree.folders.filter((f) => f.parentId == null), null].map((f) => {
-                const id = f?.id ?? null; const n = folderCounts.get(id) ?? 0;
-                if (!f && n === 0) return null;
-                const active = folderFilter === (f ? id : "none");
-                return (
-                  <span key={f?.id ?? "none"} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
-                    <button className="orph-chip" aria-pressed={active} onClick={() => setFolderFilter(active ? "all" : (f ? id : "none"))} style={{ padding: "5px 12px", fontSize: 12 }} title={f ? f.name : "Без папки"}>
-                      📁 {f ? f.name : "Без папки"} · {n}
-                    </button>
-                    {f && active && viewer.canManageAccess && section === "general" && (
-                      <>
-                        <button title="Доступи до папки" onClick={() => setAccessFolder(f)} style={railIcon}>⚙</button>
-                        <button title="Перейменувати" onClick={() => { const nn = window.prompt("Нова назва папки:", f.name)?.trim(); if (nn && nn !== f.name) void renameDocFolder(f.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }} style={railIcon}>✎</button>
-                        <button title="Прибрати папку (файли лишаються на диску)" onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }} style={railIcon}>✕</button>
-                      </>
-                    )}
-                  </span>
-                );
-              })}
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-            <span className="orph-dim" style={{ marginRight: 4 }}>Типи:</span>
-            <button className="orph-chip" aria-pressed={typeFilter === null} onClick={() => setTypeFilter(null)} style={{ padding: "5px 12px", fontSize: 12 }}>Усі</button>
-            {[...DOC_TYPES].filter((t) => typeCounts.has(t)).map((t) => (
-              <button key={t} className="orph-chip" aria-pressed={typeFilter === t} onClick={() => setTypeFilter(typeFilter === t ? null : t)} style={{ padding: "5px 12px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }} title={TYPE_META[t].action}>
-                <span className="task-status-dot" style={{ background: TYPE_META[t].color }} />{t} · {typeCounts.get(t)}
-              </button>
-            ))}
+        <div style={{ borderRight: selectedFile ? "1px solid var(--border)" : "none", display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <div style={{ padding: "12px 12px 8px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><h2 className="chart-title" style={{ margin: 0 }}>{shelf === "reg" ? "Регламенти та інструкції" : shelf === "work" ? "Робочі документи" : shelf === "mine" ? (section === "offer" ? "🔒 Офери" : "Особисті") : "Архів"}</h2><span className="orph-dim">{listFiles.length} {listFiles.length === 1 ? "документ" : listFiles.length < 5 ? "документи" : "документів"}</span></div>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук за назвою, описом, адресатом" style={{ width: "100%" }} />
+            {shelfTypeCounts.size > 1 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button className="orph-chip" aria-pressed={typeFilter === null} onClick={() => setTypeFilter(null)} style={{ padding: "4px 10px", fontSize: 12 }}>Усі</button>
+                {[...DOC_TYPES].filter((t) => shelfTypeCounts.has(t)).map((t) => <button key={t} className="orph-chip" aria-pressed={typeFilter === t} onClick={() => setTypeFilter(typeFilter === t ? null : t)} style={{ padding: "4px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><span className="task-status-dot" style={{ background: TYPE_META[t].color }} />{t} · {shelfTypeCounts.get(t)}</button>)}
+              </div>
+            )}
           </div>
-          <h2 className="chart-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>Документи <span className="orph-dim">{files.length} {files.length === 1 ? "файл" : files.length < 5 ? "файли" : "файлів"}</span></h2>
-          {section === "offer" && <p style={{ ...noteBox, marginTop: 0 }}>🔒 <b>Закрита папка.</b> {viewer.isManagement ? "Ви бачите всі офери, бо ви керівництво. Менеджер бачить лише свій, керівник відділу — жодного." : "Вам видно тільки ваш власний офер. Чужі сюди не потрапляють навіть у пошук."}</p>}
-          {section === "archive" && <p style={{ ...noteBox, marginTop: 0 }}>⏳ <b>Архів формується при звільненні.</b> Офер і особисті документи людини переїжджають сюди; видалення недоступне нікому.</p>}
-          {files.length === 0 ? (
-            sectionFiles.length === 0
-              ? <StateBlock icon="🗀" title={section === "archive" ? "В архіві ще нічого немає" : "У папці ще нічого немає"} text={canUploadHere ? "Перетягніть файли сюди або натисніть «Завантажити»." : "Документи сюди викладає керівництво."}
-                  action={canUploadHere ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
-              : <p className="loading-text" style={{ margin: 0 }}>Нічого не знайдено за фільтром.</p>
-          ) : (
-            <div style={{ overflowX: "auto" }}><table className="data-table" style={{ fontSize: "var(--fs-13)", tableLayout: "fixed", minWidth: 940 }}>
-              <colgroup><col style={{ width: "34%" }} /><col style={{ width: "15%" }} /><col style={{ width: 54 }} /><col style={{ width: 96 }} /><col style={{ width: "15%" }} /><col style={{ width: "16%" }} /><col style={{ width: 70 }} /></colgroup>
-              <thead><tr><th style={{ paddingLeft: 8 }}>Документ</th><th style={{ paddingLeft: 8 }}>Папка</th><th>Версія</th><th>Оновлено</th><th style={{ paddingLeft: 8 }}>Хто</th><th style={{ paddingLeft: 8 }}>Статус</th><th style={{ textAlign: "right" }}>Розмір</th></tr></thead>
-              <tbody>
-                {groups.map((g) => (
-                  <React.Fragment key={g.key}>
-                    <tr className="orph-group" style={{ cursor: "default" }}>
-                      <td colSpan={7} style={{ padding: "9px 8px" }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: "var(--fs-sm)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: groupBy === "type" ? TYPE_META[g.key]?.color ?? "var(--text)" : "var(--text)" }}>
-                          {groupBy === "type" && <span className="task-status-dot" style={{ background: TYPE_META[g.key]?.color }} />}{g.key} · {g.items.length}
-                        </span>
-                        {groupBy === "type" && <span className="orph-dim" style={{ marginLeft: 10 }}>{TYPE_META[g.key]?.action}</span>}
-                      </td>
-                    </tr>
-                    {g.items.map((f) => {
-                      const t = TYPE_META[f.category ?? "Інше"] ?? TYPE_META["Інше"]; const sel = f.id === selected;
-                      return (
-                        <tr key={f.id} className="recv-row" tabIndex={0} onClick={() => setSelected(f.id)} onKeyDown={(e) => { if (e.key === "Enter") setSelected(f.id); }}
-                          style={{ cursor: "pointer", background: sel ? "var(--surface-2)" : undefined, boxShadow: sel ? "inset 3px 0 0 var(--brand)" : undefined }}>
-                          <td style={{ paddingLeft: 8, overflow: "hidden" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                              <span style={{ fontSize: 10, fontWeight: 700, color: t.color, border: `1px solid ${t.color}55`, borderRadius: "var(--r-sm)", padding: "1px 5px", flex: "0 0 auto" }}>{extOf(f.name, f.mime)}</span>
-                              <span style={{ fontWeight: sel ? 700 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</span>
-                            </div>
-                          </td>
-                          <td className="orph-dim" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", paddingLeft: 8 }} title={folderName(f.folderId)}>{section === "offer" ? "🔒 Офери" : section === "archive" ? "Архів" : folderName(f.folderId)}</td>
-                          <td className="recv-num">v{f.version}</td>
-                          <td className="recv-num" style={{ whiteSpace: "nowrap" }}>{fmtDate(f.updatedAt)}</td>
-                          <td style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", paddingLeft: 8 }} title={f.addressee ?? f.author ?? ""}>{f.addressee ?? f.author ?? <span className="orph-dim">автор не вказаний</span>}</td>
-                          <td style={{ paddingLeft: 8, overflow: "hidden" }}>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"} {fmtDate(f.archivedAt)}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : f.ack.required ? <AckBadge f={f} /> : <SigBadge f={f} />}</td>
-                          <td className="recv-num" style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtBytes(f.sizeBytes)}</td>
-                        </tr>
-                      );
-                    })}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table></div>
-          )}
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {listFiles.length === 0 ? (
+              shelfFiles.length === 0
+                ? <StateBlock icon="🗀" title={shelf === "archive" ? "В архіві ще нічого немає" : "Тут ще нічого немає"} text={canUploadHere ? "Натисніть «Завантажити»." : "Документи сюди викладає керівництво."} action={canUploadHere ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
+                : <p className="loading-text" style={{ margin: 12 }}>Нічого не знайдено за фільтром.</p>
+            ) : listFiles.map((f) => { const t = TYPE_META[f.category ?? "Інше"] ?? TYPE_META["Інше"]; const sel = f.id === selected; return (
+              <div key={f.id} onClick={() => setSelected(f.id)} tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") setSelected(f.id); }}
+                style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr)", gap: 10, padding: "10px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", background: sel ? "var(--surface-2)" : undefined, boxShadow: sel ? "inset 3px 0 0 var(--brand)" : undefined }}>
+                <span style={{ width: 40, height: 44, borderRadius: "var(--r-md)", border: `1px solid ${t.color}55`, background: t.color + "10", color: t.color, display: "grid", placeItems: "center", fontSize: 9, fontWeight: 800 }}>{extOf(f.name, f.mime)}</span>
+                <span style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: sel ? 700 : 600, fontSize: "var(--fs-base)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name.replace(/\.[a-z0-9]+$/i, "")}</div>
+                  <div className="orph-dim" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.description || `${f.category ?? "Інше"} · ${t.action}`}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                    <span className="orph-dim">{f.addressee ?? f.author ?? "автор не вказаний"} · {fmtDate(f.updatedAt)} · v{f.version}</span>
+                    {f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : f.ack.required ? <AckBadge f={f} /> : <SigBadge f={f} />}
+                  </div>
+                </span>
+              </div>); })}
+          </div>
         </div>
 
-        {/* Картка */}
-        <div>
-          {selectedFile && <DocCardPanel key={selectedFile.id} file={selectedFile} tree={tree} onChanged={load} onClose={() => setSelected(null)} onToast={setToast} folderName={folderName} />}
-        </div>
+        {/* Перегляд */}
+        {selectedFile && (
+          <div style={{ overflowY: "auto", minWidth: 0 }}>
+            <DocCardPanel key={selectedFile.id} file={selectedFile} tree={tree} onChanged={load} onClose={() => setSelected(null)} onToast={setToast} folderName={folderName} />
+          </div>
+        )}
       </div>
 
       {uploadOpen && <UploadDialog tree={tree} section={section === "archive" ? "general" : section} defaultFolder={typeof folderFilter === "number" ? folderFilter : null}
@@ -384,7 +331,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const openedAt = events.slice(lastSentIdx + 1).find((e) => e.kind === "opened")?.at ?? null;
 
   return (
-    <div className="chart-card" style={{ position: "sticky", top: 12, display: "flex", flexDirection: "column", gap: 12, maxHeight: "calc(100vh - 40px)", overflowY: "auto" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 16 }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <span style={pill(t.color + "22", t.color)}>● {file.category ?? "Інше"}</span>
         <span style={pill("var(--surface-2)", "var(--text-muted)")}>{extOf(file.name, file.mime)}</span>
@@ -404,7 +351,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
           <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)", textAlign: "center" }}>{extOf(file.name, file.mime)} у дашборді не показується — відкривається завантаженням. PDF, зображення й HTML показуються тут.</div>
         ) : !preview ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження прев'ю…</div>
           : kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", display: "block" }} />
-          : <iframe title={file.name} src={preview} style={{ width: "100%", height: 260, border: "none", background: "#fff" }} />}
+          : <iframe title={file.name} src={preview} style={{ width: "100%", height: "52vh", border: "none", background: "#fff" }} />}
       </div>
 
       {file.description ? <div style={{ fontSize: 13 }}>{file.description}</div> : file.canEdit && <button onClick={editDescription} style={{ ...btn(), fontSize: 12, padding: "4px 10px", alignSelf: "flex-start" }}>+ опис</button>}
