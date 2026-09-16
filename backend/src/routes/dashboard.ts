@@ -42,7 +42,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
-import { missedPeriod } from "../core/missedCallsRules.js";
+import { missedPeriod, missedScopeFor } from "../core/missedCallsRules.js";
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
@@ -9972,16 +9972,9 @@ dashboardRouter.get("/missed-calls", async (req, res) => {
   const auth = req.auth!;
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
 
-  // Кламп той самий, що в сусідніх екранах: менеджер бачить лише себе, тімлід — свою
-  // команду. ⚠️ Тімлідів кламп СВІДОМО ховає «без відповідального»: дзвінок, що не
-  // дійшов до людини, не належить жодній команді, і приписати його команді означало б
-  // вигадати відповідального. Тому підсумок команди МЕНШИЙ за загальний — і це чесно.
-  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
-  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
-  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
-  else if (auth.role === "team_lead") teamId = auth.teamId ?? -1;
-
-  const scope = { managerId, teamId };
+  // Кламп — одне місце на всі роути екрана (`missedScopeFor`); підсумок команди
+  // МЕНШИЙ за загальний, бо «без відповідального» не належить жодній команді.
+  const scope = missedScopeFor(auth, req.query);
   const [summary, byManager] = await Promise.all([
     missedCalls.missedSummary(from, to, scope),
     missedCalls.missedByManager(from, to, scope),
