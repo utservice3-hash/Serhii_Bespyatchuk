@@ -7,7 +7,7 @@ import {
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { missedDefaultPeriod, groupByTeam, clientCell } from "../missedCallsView";
+import { missedDefaultPeriod, groupByTeam, clientCell, clampListDay } from "../missedCallsView";
 import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
@@ -50,13 +50,20 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
   const [d, setD] = useState<MissedCallsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("missed");
+  // День списку живе ТУТ, а не в блоці C: блок перемонтовується на кожному запиті, і день
+  // скидався б на кінець періоду, зокрема на майбутній (рецензія 17.09.2026).
+  const [listDay, setListDay] = useState<string>(() => clampListDay(null, from, to, today));
+  useEffect(() => { setListDay((cur) => clampListDay(cur, from, to, today)); }, [from, to, today]);
 
   useEffect(() => {
     if (!from || !to) return;
+    // 🔴 ГОНКА: відповідь за СТАРИЙ період, що прийшла пізніше, не сміє перезаписати новий.
+    let alive = true;
     setD(null); setErr(null);
     fetchMissedCalls({ from, to })
-      .then(setD)
-      .catch((e) => setErr(e instanceof Error ? e.message : "Не вдалося завантажити"));
+      .then((x) => { if (alive) setD(x); })
+      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
+    return () => { alive = false; };
   }, [from, to]);
 
   /**
@@ -189,7 +196,7 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
         </div>
       </div>
 
-      <MissedListBlock from={d.period.from} to={d.period.to} canOpenClient={canOpenClient} />
+      <MissedListBlock from={d.period.from} to={d.period.to} day={listDay} setDay={setListDay} canOpenClient={canOpenClient} />
       <NoDealBlock from={d.period.from} to={d.period.to} />
     </>
   );
@@ -236,22 +243,22 @@ function nextLabel(kind: MissedNextStep, min: number | null): { text: string; ba
  * картка відкривається ТУТ ЖЕ, під рядком — той самий `ClientCardPanel`, що на екрані планів
  * клієнтів. Хто картку не отримає від сервера, бачить «є в CRM», а не кнопку.
  */
-function MissedListBlock({ from, to, canOpenClient }: { from: string; to: string; canOpenClient: boolean }) {
-  const [day, setDay] = useState(to);
+function MissedListBlock({ from, to, day, setDay, canOpenClient }: {
+  from: string; to: string; day: string; setDay: (d: string) => void; canOpenClient: boolean;
+}) {
   const [onlyNo, setOnlyNo] = useState(false);
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [d, setD] = useState<MissedListResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  // Змінився період — день за межами нового періоду повертаємо на його кінець.
-  useEffect(() => { if (day < from || day > to) setDay(to); }, [from, to, day]);
-
   useEffect(() => {
     if (!day) return;
+    let alive = true;
     setD(null); setErr(null);
     fetchMissedList({ day, ...(onlyNo ? { noCallback: "1" as const } : {}) })
-      .then(setD)
-      .catch((e) => setErr(e instanceof Error ? e.message : "Не вдалося завантажити"));
+      .then((x) => { if (alive) setD(x); })
+      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
+    return () => { alive = false; };
   }, [day, onlyNo]);
 
   const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "left", whiteSpace: "nowrap" };
@@ -367,18 +374,22 @@ function NoDealBlock({ from, to }: { from: string; to: string }) {
 
   useEffect(() => {
     if (!from || !to) return;
+    let alive = true;
     setC(null); setErr(null); setOpen(null); setList(null);
     fetchNoDeal({ from, to })
-      .then((r) => setC(r.counts))
-      .catch((e) => setErr(e instanceof Error ? e.message : "Не вдалося завантажити"));
+      .then((r) => { if (alive) setC(r.counts); })
+      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
+    return () => { alive = false; };
   }, [from, to]);
 
   useEffect(() => {
     if (!open) return;
+    let alive = true;
     setList(null); setListErr(null);
     fetchNoDealList({ from, to, state: open })
-      .then((r) => setList({ truncated: r.truncated, rows: r.rows }))
-      .catch((e) => setListErr(e instanceof Error ? e.message : "Не вдалося завантажити"));
+      .then((r) => { if (alive) setList({ truncated: r.truncated, rows: r.rows }); })
+      .catch((e) => { if (alive) setListErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
+    return () => { alive = false; };
   }, [open, from, to]);
 
   const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "left", whiteSpace: "nowrap" };

@@ -5,6 +5,7 @@ import path from "node:path";
 import { needsBackendEnv } from "../testMode.js";
 import {
   ftNameKey, ftNameKeySql, firstTouchCell, firstTouchPct, sumFirstTouch, firstTouchByCallerSql, firstTouchMetaSql, FT_NO_RECORD,
+  firstTouchOutsideRoster, glanceFirstTouch,
 } from "./firstTouchRules.js";
 
 /**
@@ -33,6 +34,28 @@ test("#467 ПЕРШИЙ ДОТИК · ПРАВИЛА: ключ імені, тр�
   assert.deepEqual(sumFirstTouch([{ analyzed: 1, voiced: 1, noRecord: 2 }, { analyzed: 40, voiced: 10, noRecord: 0 }]),
     { analyzed: 41, voiced: 11, noRecord: 2 });
   assert.equal(FT_NO_RECORD, "немає запису", "🔴 позначка «розмови не чули» розійшлась із тим, що пише бот (sheets.py)");
+
+  // Поза ростером: людина «завершує» / звільнена — її оцінки не зникають, але лише в межах скоупу.
+  const rows = [
+    { managerId: 1, teamId: 13, counts: { analyzed: 5, voiced: 2, noRecord: 0 } },   // у ростері
+    { managerId: 2, teamId: 13, counts: { analyzed: 18, voiced: 6, noRecord: 2 } },  // завершує, та сама команда
+    { managerId: 3, teamId: 15, counts: { analyzed: 4, voiced: 1, noRecord: 0 } },   // звільнений, інша команда
+  ];
+  const roster = new Set([1]);
+  assert.deepEqual(firstTouchOutsideRoster(rows, roster, {}), { analyzed: 22, voiced: 7, noRecord: 2 },
+    "🔴 у зрізі компанії оцінки людей поза ростером зникли");
+  assert.deepEqual(firstTouchOutsideRoster(rows, roster, { teamId: 13 }), { analyzed: 18, voiced: 6, noRecord: 2 },
+    "🔴 у зрізі команди «поза ростером» узяло чужу команду");
+  assert.deepEqual(firstTouchOutsideRoster(rows, roster, { managerId: 1 }), { analyzed: 0, voiced: 0, noRecord: 0 },
+    "🔴 у зрізі одного менеджера «поза ростером» узяло інших людей");
+
+  const nc = firstTouchCell(undefined, 2, new Set([13]));
+  assert.equal(glanceFirstTouch([nc, nc], { analyzed: 0, voiced: 0, noRecord: 0 }).state, "not_covered",
+    "🔴 підсумок команди, яку бот не слухає, скаже «—» і «число неповне», а не «не вимірюється»");
+  assert.equal(glanceFirstTouch([nc], { analyzed: 3, voiced: 1, noRecord: 0 }).state, "measured",
+    "🔴 оцінки людей поза ростером є, а підсумок каже «не вимірюється»");
+  assert.equal(glanceFirstTouch([firstTouchCell(undefined, 13, new Set([13]))], { analyzed: 0, voiced: 0, noRecord: 0 }).state, "measured",
+    "🔴 покрита команда без оцінок за період злилась із «не вимірюється»");
 });
 
 /**
@@ -66,8 +89,9 @@ test("#468 ПЕРШИЙ ДОТИК · ЖИВИЙ SQL: тому, хто дзво�
     await row(7, "2026-10-01", true, "так", "Безпамятний Андрій");                // день ПІСЛЯ
 
     const q = firstTouchByCallerSql("2026-09-01", "2026-09-30");
-    const by = new Map((await c.query<{ manager_id: number | null; analyzed: number; voiced: number; no_record: number }>(q.sql, q.params)).rows
-      .map((r) => [r.manager_id, [Number(r.analyzed), Number(r.voiced), Number(r.no_record)]]));
+    const raw = (await c.query<{ manager_id: number | null; team_id: number | null; analyzed: number; voiced: number; no_record: number }>(q.sql, q.params)).rows;
+    const by = new Map(raw.map((r) => [r.manager_id, [Number(r.analyzed), Number(r.voiced), Number(r.no_record)]]));
+    assert.equal(raw.find((r) => r.manager_id === 11)?.team_id, 1, "🔴 рядок не несе поточної команди — «поза ростером» у зрізі команди не порахувати");
     assert.deepEqual(by.get(11), [1, 1, 0], "🔴 дотик пішов не тому, хто дзвонив (угоду передали Чукіну), або однойменного неактивного обрано першим");
     assert.equal(by.get(12), undefined, "🔴 дотик приписано поточному відповідальному угоди, а не тому, хто говорив");
     assert.deepEqual(by.get(10), [2, 1, 1], "🔴 межі періоду або апострофи: у Безпамʼятного мало бути 2 оцінені (1 названо) і 1 без запису");
@@ -110,7 +134,8 @@ test("#470 ПЕРШИЙ ДОТИК · ЖИВА БД: Σ менеджерів + �
 test("#470b ПРОВОДКА: Звіт кладе клітинку менеджера, суму команди й метадані джерела", () => {
   const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
   assert.match(src, /firstTouch: firstTouchCell\(ft\.byManager\.get\(m\.id\), m\.team_id, ft\.coveredTeamIds\)/, "🔴 рядок менеджера без «першого дотику»");
-  assert.match(src, /firstTouch: sumFirstTouch\(managers\.map\(\(m\) => m\.firstTouch\)\)/, "🔴 рядок команди не з тих самих клітинок");
+  assert.match(src, /firstTouch: glanceFirstTouch\(managers\.map\(\(m\) => m\.firstTouch\),\s*firstTouchOutsideRoster\(ft\.rows, new Set\(managers\.map\(\(m\) => m\.managerId\)\), \{ managerId, teamId \}\)\)/,
+    "🔴 рядок команди не з тих самих клітинок, без стану покриття або без «поза ростером»");
   assert.match(src, /firstTouchMeta: \{ unmapped: ft\.unmapped, lastAnalyzedAt: ft\.lastAnalyzedAt, coveredTeams: ft\.coveredTeamIds\.size \}/,
     "🔴 екран не знає, коли бот мовчить і скільки оцінок не звʼязалось");
 });

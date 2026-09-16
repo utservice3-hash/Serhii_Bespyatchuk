@@ -69,7 +69,7 @@ import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
 import { firstTouchReport } from "../core/firstTouch.js";
-import { firstTouchCell, sumFirstTouch } from "../core/firstTouchRules.js";
+import { firstTouchCell, glanceFirstTouch, firstTouchOutsideRoster } from "../core/firstTouchRules.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
 import * as receivablesCounterparty from "../core/receivablesCounterparty.js";
 import * as receivableNotePick from "../core/receivableNotePick.js";
@@ -8739,8 +8739,10 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     dobir: managers.reduce((s2, m) => s2 + m.dobir, 0),
     byPace: managers.reduce((s2, m) => s2 + m.byPace, 0),
     talks: managers.reduce((s2, m) => s2 + m.talks, 0),
-    // Σ по ростеру, як дзвінки; «не прив'язано до менеджера» — окремо в `firstTouchMeta`, а не тут.
-    firstTouch: sumFirstTouch(managers.map((m) => m.firstTouch)),
+    // Σ по ростеру, як дзвінки, + стан покриття + «поза ростером» у межах скоупу (завершують,
+    // звільнені). «Не прив'язано до менеджера» — окремо в `firstTouchMeta`.
+    firstTouch: glanceFirstTouch(managers.map((m) => m.firstTouch),
+      firstTouchOutsideRoster(ft.rows, new Set(managers.map((m) => m.managerId)), { managerId, teamId })),
     attempts: managers.reduce((s2, m) => s2 + m.attempts, 0),
     /**
      * 🟢 ТРИ СТАНИ, І ВОНИ ПОКРИВАЮТЬ УСІХ ЛЮДЕЙ ДО ОДНОГО (рішення власника 07.08.2026).

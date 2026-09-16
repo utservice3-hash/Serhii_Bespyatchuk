@@ -53,12 +53,12 @@ export function firstTouchByCallerSql(from: string, to: string): { sql: string; 
   const sql = `
     WITH ${managerKeysCte()},
     f AS (
-      SELECT fta.price_voiced, ${noRecordSql("fta")} AS no_record, mk.id AS manager_id
+      SELECT fta.price_voiced, ${noRecordSql("fta")} AS no_record, mk.id AS manager_id, mk.team_id
         FROM first_touch_analysis fta
         LEFT JOIN mk ON mk.key = ${ftNameKeySql("fta.manager_name")}
        WHERE fta.analyzed_at BETWEEN $1::date AND $2::date
     )
-    SELECT manager_id,
+    SELECT manager_id, MAX(team_id) AS team_id,
            COUNT(*) FILTER (WHERE NOT no_record)::int AS analyzed,
            COUNT(*) FILTER (WHERE NOT no_record AND price_voiced)::int AS voiced,
            COUNT(*) FILTER (WHERE no_record)::int AS no_record
@@ -98,6 +98,36 @@ export function firstTouchCell(counts: FirstTouchCounts | undefined, teamId: num
 /** Відсоток «ціну названо» — від ОЦІНЕНИХ розмов; «немає запису» у знаменник не входить. `null` = нема з чого рахувати. */
 export const firstTouchPct = (voiced: number, analyzed: number): number | null =>
   analyzed > 0 ? Math.round((voiced / analyzed) * 1000) / 10 : null;
+
+/**
+ * 🔴 ОЦІНКИ ЛЮДЕЙ ПОЗА РОСТЕРОМ НЕ ЗНИКАЮТЬ (рецензія 17.09.2026). Ростер Звіту — ті, кому
+ * ставиться план; людина в стані «завершує» чи звільнена з нього випадає, але її розмови в
+ * періоді були. Звʼязка по імені її знаходить, тож у «не прив'язано» вона не потрапляє — і без
+ * цього числа її оцінки зникали б з екрана цілком. Рахуємо лише в межах того самого скоупу, що й
+ * ростер: команда — за ПОТОЧНОЮ командою людини, менеджер — лише він сам.
+ */
+export function firstTouchOutsideRoster(
+  rows: { managerId: number; teamId: number | null; counts: FirstTouchCounts }[],
+  rosterIds: ReadonlySet<number>,
+  scope: { managerId?: number | null; teamId?: number | null },
+): FirstTouchCounts {
+  return sumFirstTouch(rows
+    .filter((r) => !rosterIds.has(r.managerId))
+    .filter((r) => (scope.managerId ? r.managerId === scope.managerId : scope.teamId ? r.teamId === scope.teamId : true))
+    .map((r) => r.counts));
+}
+
+export interface GlanceFirstTouch extends FirstTouchCounts { state: FirstTouchState; outside: FirstTouchCounts }
+
+/**
+ * Підсумок команди: Σ клітинок ростеру + стан + окремо «поза ростером». Стан «не вимірюється» —
+ * лише коли жодна клітинка не виміряна І поза ростером оцінок немає: інакше підсумок команди
+ * РПК казав би «—» і «число неповне», хоча цю команду бот не слухає взагалі.
+ */
+export function glanceFirstTouch(cells: FirstTouchCell[], outside: FirstTouchCounts): GlanceFirstTouch {
+  const measured = cells.some((c) => c.state === "measured") || outside.analyzed + outside.noRecord > 0;
+  return { ...sumFirstTouch(cells), state: measured ? "measured" : "not_covered", outside };
+}
 
 /** Σ клітинок — підсумок команди. Відсоток ПОТІМ, із сум, а не середнім відсотків. */
 export function sumFirstTouch(cells: FirstTouchCounts[]): FirstTouchCounts {

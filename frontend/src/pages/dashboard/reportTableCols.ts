@@ -92,9 +92,12 @@ export function firstTouchLabel(c: FirstTouchCell | undefined): { main: string; 
  * «0 з 0» за тиждень читалось би як «менеджери не телефонували».
  */
 export const FIRST_TOUCH_STALE_DAYS = 3;
-export function firstTouchStale(lastAnalyzedAt: string | null, today: string): boolean {
+export function firstTouchStale(lastAnalyzedAt: string | null, today: string, periodTo: string): boolean {
   if (!lastAnalyzedAt) return true;
-  const days = (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${lastAnalyzedAt}T00:00:00Z`)) / 86_400_000;
+  // 🔴 ВІД КІНЦЯ ОБРАНОГО ПЕРІОДУ, а не від сьогодні (рецензія 17.09.2026): липень, що закінчився
+  // до останньої оцінки, повний — тиша бота після нього липневого числа не змінює.
+  const end = periodTo < today ? periodTo : today;
+  const days = (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${lastAnalyzedAt}T00:00:00Z`)) / 86_400_000;
   return days > FIRST_TOUCH_STALE_DAYS;
 }
 

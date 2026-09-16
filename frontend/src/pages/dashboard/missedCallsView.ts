@@ -17,6 +17,18 @@ export function missedDefaultPeriod(today: string): PeriodState {
   return { mode: "day", anchor: y, focusDay: y, rangeFrom: addDays(today, -7), rangeTo: y };
 }
 
+/**
+ * День списку дзвінків (блок C) після зміни періоду. Той, що вже обрано, лишається, якщо входить у
+ * новий період; інакше — кінець періоду, але НЕ майбутній день (рецензія 17.09.2026: «Поточний
+ * тиждень» відкривав список на неділю й казав «пропущених немає»). Період цілком у майбутньому —
+ * його початок.
+ */
+export function clampListDay(day: string | null, from: string, to: string, today: string): string {
+  if (day && day >= from && day <= to) return day;
+  if (to <= today) return to;
+  return today >= from ? today : from;
+}
+
 export interface TeamLike { teamId: number | null }
 export interface PersonLike { managerId: number | null; teamId: number | null }
 

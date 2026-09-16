@@ -582,6 +582,8 @@ function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPla
   const fg = focus?.glance;
   const st = g.statusCounts;
   const futureFocus = focusDay > today;
+  const ftGlance = firstTouchLabel(g.firstTouch);
+  const ftOutside = (g.firstTouch?.outside.analyzed ?? 0) + (g.firstTouch?.outside.noRecord ?? 0);
   return (
     <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 15, padding: "16px 18px", marginBottom: 16, display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 20, alignItems: "center" }}>
       <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
@@ -606,15 +608,16 @@ function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPla
         {g.expectPastMonths !== 0 && <div style={{ fontSize: 12, color: AMBER, marginTop: 2 }}>з минулих міс: {fmt(g.expectPastMonths)} ₴</div>}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто · {periodLabel}: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
         {/* 🎯 ТЗ-3 «перший дотик» по команді: відсоток із СУМ (Σ названих ÷ Σ оцінених), не середнє відсотків. */}
+        {/* Стан підсумку — з бекенду: «не вимірюється» (команду бот не слухає) ≠ «оцінок немає». */}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
-          ціну названо в 1-й дотик: <b>{firstTouchLabel(g.firstTouch ? { ...g.firstTouch, state: "measured" } : undefined).main}</b>
-          {g.firstTouch && g.firstTouch.analyzed > 0 ? ` · ${g.firstTouch.voiced} з ${g.firstTouch.analyzed}` : ""}
-          {g.firstTouch && g.firstTouch.noRecord > 0 ? ` · без запису ${g.firstTouch.noRecord}` : ""}
+          ціну названо в 1-й дотик: <b>{ftGlance.main}</b>{ftGlance.sub ? ` · ${ftGlance.sub}` : ""}
+          {ftOutside > 0 ? ` · ще ${ftOutside} оцінок у людей поза ростером (у відсоток не входять)` : ""}
           {" "}<InfoHint text={"Оцінки AI-бота перших розмов із рекламними лідами; розмова зараховується тому, хто дзвонив. "
+            + "Відсоток — по людях ростеру; «поза ростером» — ті, хто в періоді дзвонив, а зараз завершує роботу чи звільнений. "
             + `Бот оцінює команд: ${data.firstTouchMeta?.coveredTeams ?? 0}. Не прив'язано до жодного менеджера за період: `
             + `${(data.firstTouchMeta?.unmapped.analyzed ?? 0) + (data.firstTouchMeta?.unmapped.noRecord ?? 0)}.`} />
         </div>
-        {firstTouchStale(data.firstTouchMeta?.lastAnalyzedAt ?? null, today) && (
+        {g.firstTouch?.state === "measured" && firstTouchStale(data.firstTouchMeta?.lastAnalyzedAt ?? null, today, data.scope.to) && (
           <div style={{ fontSize: 11, color: AMBER, marginTop: 2 }}>
             ⚠ бот не присилав оцінок з {data.firstTouchMeta?.lastAnalyzedAt ? ddmm(data.firstTouchMeta.lastAnalyzedAt) : "—"} — число неповне
           </div>

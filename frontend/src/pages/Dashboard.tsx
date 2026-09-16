@@ -53,7 +53,7 @@ import {
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { getDateRange } from "../components/DateRangeFilter";
-import { isSignalAlert, signalAlertText } from "./dashboard/signalTaskNotify";
+import { isSignalAlert, signalAlertText, knownOf, type KnownTask } from "./dashboard/signalTaskNotify";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
@@ -180,8 +180,10 @@ export function Dashboard() {
   // completed. prevStatus tracks last-seen status; init guards the first load.
   const prevTaskStatus = useRef<Map<number, string>>(new Map());
   const notifInit = useRef(false);
-  /** Статуси задач із ПОПЕРЕДНЬОГО фонового опитування; `null` — базової лінії ще немає. */
-  const signalKnown = useRef<Map<number, string> | null>(null);
+  /** Стан задач із ПОПЕРЕДНЬОГО фонового опитування; `null` — першого опитування ще не було. */
+  const signalKnown = useRef<Map<number, KnownTask> | null>(null);
+  /** Момент відкриття сторінки: до першого опитування дзвонимо лише задачами, створеними ПІСЛЯ нього. */
+  const mountedAt = useRef(Date.now());
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
   const [taskSearch, setTaskSearch] = useState("");
@@ -336,17 +338,15 @@ export function Dashboard() {
   // старими задачами. Тут базова лінія — ПЕРШЕ опитування: воно лише запамʼятовує, що є.
   const notifySignalTasks = (fresh: Task[]) => {
     const known = signalKnown.current;
-    if (known) {
-      const text = signalAlertText(fresh.filter((t) => isSignalAlert(t, known, auth?.managerId)).map((t) => t.title));
-      if (text) {
-        setToasts((cur) => [...cur, { id: Date.now(), text }]);
-        beep(false);
-        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-          try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
-        }
+    const text = signalAlertText(fresh.filter((t) => isSignalAlert(t, known, auth?.managerId, mountedAt.current)).map((t) => t.title));
+    if (text) {
+      setToasts((cur) => [...cur, { id: Date.now(), text }]);
+      beep(false);
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
       }
     }
-    signalKnown.current = new Map(fresh.map((t) => [t.id, t.status]));
+    signalKnown.current = new Map(fresh.map((t) => [t.id, knownOf(t)]));
   };
   usePolling(() => {
     fetchTasks()

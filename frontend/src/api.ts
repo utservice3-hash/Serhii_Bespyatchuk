@@ -921,8 +921,11 @@ export interface ReportPlan {
   glance: { plan: number; fact: number; factSuccess: number; factPaid: number; expect: number; expectThisMonth: number; expectNextMonth: number; expectPastMonths: number;
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
-    /** Σ «першого дотику» по ростеру. Відсоток — з сум, не середнє відсотків. */
-    firstTouch: FirstTouchCounts;
+    /**
+     * Σ «першого дотику» по ростеру + стан покриття команди + оцінки людей ПОЗА ростером у межах
+     * скоупу (завершують, звільнені) — окремим числом, щоб не зникали. Відсоток — з сум ростеру.
+     */
+    firstTouch: FirstTouchCounts & { state: "measured" | "not_covered"; outside: FirstTouchCounts };
     /**
      * 🔴 Скільки з факту прийшло від менеджерів БЕЗ плану (і від звільнених — у них
      * плану немає за побудовою). План команди = Σ планів її менеджерів, тож ці гроші

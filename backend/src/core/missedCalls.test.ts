@@ -519,7 +519,8 @@ test("#459 КОМАНДИ: «Поза командами» названо й о�
   assert.equal(R.ownerlessInScope({ managerId: -1 }), false, "🔴 порожній кламп менеджера читається як «уся компанія»");
 
   const team = R.missedByTeamSql("2026-09-01", "2026-09-15", {}).sql;
-  assert.match(team, /\bJOIN managers mg ON mg\.id = w\.manager_id/, "🔴 рядки команд тягнуть «без відповідального» (LEFT JOIN)");
+  assert.match(team, /(?<!LEFT )JOIN managers mg ON mg\.id = w\.manager_id/, "🔴 рядки команд без звʼязки з менеджером");
+  assert.doesNotMatch(team, /LEFT JOIN managers mg ON mg\.id = w\.manager_id/, "🔴 рядки команд тягнуть «без відповідального» (LEFT JOIN)");
   assert.match(team, /PERCENTILE_CONT\(0\.5\)/, "🔴 медіана команди перестала бути медіаною");
 });
 
