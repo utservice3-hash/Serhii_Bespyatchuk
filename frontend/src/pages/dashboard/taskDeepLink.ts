@@ -30,7 +30,7 @@ export function parseTaskIdParam(search: string): number | null {
 }
 
 /** Що показати за станом глибокого посилання. */
-export type DeepLinkState = "idle" | "loading" | "open" | "missing";
+export type DeepLinkState = "idle" | "loading" | "open" | "missing" | "failed";
 
 /**
  * 🔴 `settled` — НЕ `!loading`, І ЦЕ НЕ ПРИДИРКА. `tasksLoading` стартує `false`
@@ -44,9 +44,18 @@ export function deepLinkState(a: {
   openTaskId: number | null;
   found: boolean;
   settled: boolean;
+  /**
+   * 🔴 СПИСОК НЕ ЗАВАНТАЖИВСЯ — ЦЕ ТРЕТЯ ВІДМОВА, І В НЕЇ СВІЙ ПІДПИС (звірка 16.09.2026).
+   * `fetchTasks().catch(() => setTasks([]))` дає ТОЙ САМИЙ порожній масив, що й «задачі
+   * немає», тож 500/503 на списку малювали «задача недоступна» — підпис, що стверджує
+   * причину, для відмови, у якої причина інша (правило 3). Необовʼязкове: без нього
+   * поведінка та сама, що й до.
+   */
+  failed?: boolean;
 }): DeepLinkState {
   if (a.openTaskId == null) return "idle";
   if (a.found) return "open";
+  if (a.failed) return "failed";
   if (!a.settled) return "loading";
   return "missing";
 }

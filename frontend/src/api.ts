@@ -199,9 +199,19 @@ export interface MissedManagerRow {
   /** `null` — рядок «Без відповідального»: дзвінок не дійшов до людини. */
   managerId: number | null;
   name: string;
+  /** ПОТОЧНА команда менеджера; `null` — поза командами або рядок «Без відповідального». */
+  teamId: number | null;
   missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
   noCallback: number;
   /** У підсумковому рядку ЗАВЖДИ `null`: медіани не додаються й не усереднюються. */
+  medianMin: number | null;
+}
+/** Рядок команди блоку B. `teamId: null` — «Поза командами». Медіана — по дзвінках команди. */
+export interface MissedTeamRow {
+  teamId: number | null;
+  name: string;
+  missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
+  noCallback: number;
   medianMin: number | null;
 }
 export interface MissedCallsResp {
@@ -210,6 +220,9 @@ export interface MissedCallsResp {
   summary: MissedSummary;
   managers: MissedManagerRow[];
   total: MissedManagerRow;
+  teams: MissedTeamRow[];
+  /** `false` у зрізі команди чи менеджера: «без відповідального» туди не входить за побудовою. */
+  ownerlessInScope: boolean;
 }
 export async function fetchMissedCalls(params: { from: string; to: string }): Promise<MissedCallsResp> {
   const { data } = await api.get<MissedCallsResp>("/dashboard/missed-calls", { params });

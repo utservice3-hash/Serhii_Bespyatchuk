@@ -211,7 +211,7 @@ export function missedByManagerSql(from: string, to: string, s: MissedScope): { 
   const { cte, params } = baseCte(from, to, s);
   const m = missedDispSql();
   const sql = `${cte}
-    SELECT w.manager_id, MAX(mg.name) AS name,
+    SELECT w.manager_id, MAX(mg.name) AS name, MAX(mg.team_id) AS team_id,
            COUNT(*)::int AS missed,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
@@ -224,11 +224,77 @@ export function missedByManagerSql(from: string, to: string, s: MissedScope): { 
   return { sql, params };
 }
 
+/**
+ * 👥 РЯДОК КОМАНДИ — блок B (ТЗ §1.4 B: «кожен менеджер + без відповідального + рядок
+ * команди + всього»). Хвіст, знайдений звіркою 16.09.2026: рядків команд не було.
+ *
+ * 🔴 ОКРЕМИЙ ЗАПИТ, А НЕ Σ МЕНЕДЖЕРІВ НА ФРОНТІ — через медіану. Штуки додаються, медіани
+ * ні: медіана команди — це медіана по ВСІХ пропущених команди, і порахувати її можна лише
+ * над рядками, а не над медіанами людей. Та сама причина, чому медіана «всього» береться з
+ * підсумку, а не з таблиці.
+ *
+ * ⚠️ КОМАНДА — ПОТОЧНА (`managers.team_id`), не на момент дзвінка. Це те саме правило, за
+ * яким скоуп тімліда відбирає дзвінки в `baseCte` (`m.team_id = $N`): інакше рядок команди
+ * в адміна і вся таблиця тімліда тієї ж команди розійшлися б на людях, що змінили команду.
+ *
+ * «Без відповідального» сюди НЕ входить — він не належить жодній команді (РІШЕННЯ 3) і
+ * лишається своїм рядком. Менеджер без команди — чесне «Поза командами», а не пропуск.
+ */
+export function missedByTeamSql(from: string, to: string, s: MissedScope): { sql: string; params: unknown[] } {
+  const { cte, params } = baseCte(from, to, s);
+  const m = missedDispSql();
+  const sql = `${cte}
+    SELECT mg.team_id, MAX(t.name) AS team_name,
+           COUNT(*)::int AS missed,
+           COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
+           COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
+           COUNT(*) FILTER (WHERE cs_at IS NOT NULL)::int AS client_self,
+           ${MEDIAN_MIN_SQL} AS median_min
+      FROM withNext w
+      JOIN managers mg ON mg.id = w.manager_id
+      LEFT JOIN teams t ON t.id = mg.team_id
+     WHERE ${m}
+     GROUP BY mg.team_id`;
+  return { sql, params };
+}
+
+/** Підпис групи менеджерів без команди. Невідоме називає себе словами (правило фронту). */
+export const NO_TEAM_LABEL = "Поза командами";
+
+export interface MissedTeamRaw {
+  teamId: number | null; name: string | null; missed: number;
+  callbackSelf: number; callbackColleague: number; clientSelf: number; medianMin: number | null;
+}
+export interface MissedTeamRow extends MissedTeamRaw { name: string; noCallback: number }
+
+/** Команди за спаданням пропущених; «Поза командами» — останньою, як «без відповідального». */
+export function foldTeamRows(raw: MissedTeamRaw[]): MissedTeamRow[] {
+  return raw
+    .map((r) => ({
+      ...r,
+      name: r.teamId === null ? NO_TEAM_LABEL : (r.name ?? `Команда #${String(r.teamId)}`),
+      noCallback: r.missed - r.callbackSelf - r.callbackColleague,
+    }))
+    .sort((a, b) =>
+      (a.teamId === null ? 1 : 0) - (b.teamId === null ? 1 : 0)
+      || b.missed - a.missed
+      || a.name.localeCompare(b.name, "uk"));
+}
+
+/**
+ * 🔴 ЧИ Є «БЕЗ ВІДПОВІДАЛЬНОГО» У ЦЬОМУ ЗРІЗІ ВЗАГАЛІ. Скоуп команди чи менеджера такі дзвінки
+ * відсікає (`baseCte`: `m.team_id = $N` на LEFT JOIN дає NULL), тож їхній лічильник там
+ * ЗАВЖДИ 0. Показати тімліду плитку «Без відповідального: 0» означало б сказати «у вас таких
+ * немає», хоча правда — «у зріз команди вони не входять». Правило 7 з CLAUDE.md: порожній
+ * скоуп не виражається нулем. Спіймано звіркою 16.09.2026.
+ */
+export const ownerlessInScope = (s: MissedScope): boolean => !s.managerId && !s.teamId;
+
 /** Підпис рядка «нічиїх». Слово одне на продукт — див. коментар у `foldManagerRows`. */
 export const OWNERLESS_LABEL = "Без відповідального";
 
 export interface MissedManagerRaw {
-  managerId: number | null; name: string | null; missed: number;
+  managerId: number | null; name: string | null; teamId: number | null; missed: number;
   callbackSelf: number; callbackColleague: number; clientSelf: number; medianMin: number | null;
 }
 export interface MissedManagerRow extends MissedManagerRaw { name: string; noCallback: number }
@@ -263,7 +329,7 @@ export function foldManagerRows(raw: MissedManagerRaw[]): { rows: MissedManagerR
   return {
     rows,
     total: {
-      managerId: null, name: "Всього", missed: sum((r) => r.missed),
+      managerId: null, name: "Всього", teamId: null, missed: sum((r) => r.missed),
       callbackSelf: sum((r) => r.callbackSelf), callbackColleague: sum((r) => r.callbackColleague),
       clientSelf: sum((r) => r.clientSelf), noCallback: sum((r) => r.noCallback), medianMin: null,
     },

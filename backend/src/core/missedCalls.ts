@@ -1,9 +1,9 @@
 import { pool } from "../db/pool.js";
 import { DAY_BUCKETS, type DayBucket } from "./dayBuckets.js";
 import {
-  missedSummarySql, missedByManagerSql, foldManagerRows,
+  missedSummarySql, missedByManagerSql, foldManagerRows, missedByTeamSql, foldTeamRows,
   missedListSql, noDealCountsSql, noDealListSql, nextStep, OWNERLESS_LABEL, capRows,
-  type MissedScope, type MissedManagerRaw, type MissedManagerRow, type NextStep, type NoDealState,
+  type MissedScope, type MissedManagerRaw, type MissedManagerRow, type MissedTeamRow, type NextStep, type NoDealState,
 } from "./missedCallsRules.js";
 
 /**
@@ -57,16 +57,31 @@ export async function missedByManager(from: string, to: string, s: MissedScope =
 Promise<{ rows: MissedManagerRow[]; total: MissedManagerRow }> {
   const { sql, params } = missedByManagerSql(from, to, s);
   const r = await pool.query<{
-    manager_id: number | null; name: string | null; missed: number;
+    manager_id: number | null; name: string | null; team_id: number | null; missed: number;
     callback_self: number; callback_colleague: number; client_self: number; median_min: string | null;
   }>(sql, params);
   const raw: MissedManagerRaw[] = r.rows.map((x) => ({
-    managerId: x.manager_id, name: x.name, missed: Number(x.missed),
+    managerId: x.manager_id, name: x.name, teamId: x.team_id, missed: Number(x.missed),
     callbackSelf: Number(x.callback_self), callbackColleague: Number(x.callback_colleague),
     clientSelf: Number(x.client_self),
     medianMin: x.median_min == null ? null : Math.round(Number(x.median_min)),
   }));
   return foldManagerRows(raw);
+}
+
+/** Рядки команд блоку B — окремим запитом, бо медіана команди не складається з медіан людей. */
+export async function missedByTeam(from: string, to: string, s: MissedScope = {}): Promise<MissedTeamRow[]> {
+  const { sql, params } = missedByTeamSql(from, to, s);
+  const r = await pool.query<{
+    team_id: number | null; team_name: string | null; missed: number;
+    callback_self: number; callback_colleague: number; client_self: number; median_min: string | null;
+  }>(sql, params);
+  return foldTeamRows(r.rows.map((x) => ({
+    teamId: x.team_id, name: x.team_name, missed: Number(x.missed),
+    callbackSelf: Number(x.callback_self), callbackColleague: Number(x.callback_colleague),
+    clientSelf: Number(x.client_self),
+    medianMin: x.median_min == null ? null : Math.round(Number(x.median_min)),
+  })));
 }
 
 export interface MissedListRow {
