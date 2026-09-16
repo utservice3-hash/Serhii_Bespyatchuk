@@ -620,10 +620,11 @@ function SignDialog({ file, onClose, onDone }: { file: DocFile; onClose: () => v
     const t = setInterval(() => { fetchTelegramStatus().then(setTg).catch(() => { /* спробуємо наступного разу */ }); }, 3000);
     return () => clearInterval(t);
   }, [tg, method]);
+  const [linkCode, setLinkCode] = useState<{ code: string; bot: string } | null>(null);
   const link = async () => {
     setErr(null);
-    try { const { url } = await createTelegramLink(); window.open(url, "_blank", "noopener"); }
-    catch (e) { setErr(errOf(e, "Не вдалося створити посилання")); }
+    try { const r = await createTelegramLink(); setLinkCode({ code: r.code, bot: r.botUsername }); window.open(r.url, "_blank", "noopener"); }
+    catch (e) { setErr(errOf(e, "Не вдалося створити код")); }
   };
   const sendCode = async () => {
     setBusy(true); setErr(null);
@@ -665,7 +666,9 @@ function SignDialog({ file, onClose, onDone }: { file: DocFile; onClose: () => v
       {method === "telegram_code" && tg?.configured && (
         <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
           {!tg.linked && <button style={btn("primary")} onClick={() => void link()}>Привʼязати Telegram</button>}
-          {!tg.linked && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Відкриється бот @{tg.botUsername}. Натисніть у ньому «Старт» — і повертайтесь сюди, кнопка «Надіслати код» зʼявиться сама.</div>}
+          {!tg.linked && (linkCode
+            ? <div style={{ fontSize: 13 }}>Відкрийте бота <b>@{linkCode.bot}</b> і надішліть йому код <b style={{ fontSize: 18, letterSpacing: 3 }}>{linkCode.code}</b> <span className="orph-dim">(діє 10 хв)</span>. Щойно бот відповість «Привʼязано», кнопка «Надіслати код» зʼявиться тут сама.</div>
+            : <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Натисніть кнопку: зʼявиться 6-значний код, який треба надіслати боту @{tg.botUsername}.</div>)}
           {tg.linked && !sent && <button style={btn("primary")} onClick={() => void sendCode()} disabled={busy}>{busy ? "Надсилаю…" : "Надіслати код у Telegram"}</button>}
           {tg.linked && sent && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -694,11 +697,12 @@ function SignDialog({ file, onClose, onDone }: { file: DocFile; onClose: () => v
 function TelegramChip({ onToast }: { onToast: (t: string) => void }) {
   const [tg, setTg] = useState<TelegramStatus | null>(null);
   const [waiting, setWaiting] = useState(false);
+  const [linkCode, setLinkCode] = useState<{ code: string; bot: string } | null>(null);
   const load = () => fetchTelegramStatus().then(setTg).catch(() => setTg(null));
   useEffect(() => { void load(); }, []);
   useEffect(() => {
     if (!waiting) return;
-    const t = setInterval(() => { fetchTelegramStatus().then((s) => { setTg(s); if (s.linked) { setWaiting(false); onToast("Telegram привʼязано"); } }).catch(() => { /* ще раз через 3 с */ }); }, 3000);
+    const t = setInterval(() => { fetchTelegramStatus().then((s) => { setTg(s); if (s.linked) { setWaiting(false); setLinkCode(null); onToast("Telegram привʼязано"); } }).catch(() => { /* ще раз через 3 с */ }); }, 3000);
     const stop = setTimeout(() => setWaiting(false), 10 * 60_000);
     return () => { clearInterval(t); clearTimeout(stop); };
   }, [waiting, onToast]);
@@ -707,9 +711,14 @@ function TelegramChip({ onToast }: { onToast: (t: string) => void }) {
     return <button title="Telegram привʼязано. Натисніть, щоб відвʼязати" style={{ ...btn(), fontSize: 12, padding: "5px 10px", color: "var(--ok)" }}
       onClick={() => { if (window.confirm("Відвʼязати Telegram? Коди підпису й нагадування перестануть приходити.")) void unlinkTelegram().then(load); }}>🤖 Telegram ✓</button>;
   }
-  return <button title="Привʼязати Telegram для підпису й нагадувань" style={{ ...btn(), fontSize: 12, padding: "5px 10px" }}
-    onClick={() => { createTelegramLink().then(({ url }) => { window.open(url, "_blank", "noopener"); setWaiting(true); }).catch(() => onToast("Не вдалося створити посилання")); }}>
-    {waiting ? "🤖 чекаю «Старт» у боті…" : "🤖 Привʼязати Telegram"}</button>;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <button title="Привʼязати Telegram для підпису й нагадувань" style={{ ...btn(), fontSize: 12, padding: "5px 10px" }}
+        onClick={() => { createTelegramLink().then((r) => { setLinkCode({ code: r.code, bot: r.botUsername }); window.open(r.url, "_blank", "noopener"); setWaiting(true); }).catch(() => onToast("Не вдалося створити код")); }}>
+        {waiting ? "🤖 чекаю код у боті…" : "🤖 Привʼязати Telegram"}</button>
+      {waiting && linkCode && <span style={{ fontSize: 12 }}>надішліть боту <b>@{linkCode.bot}</b> код <b style={{ fontSize: 15, letterSpacing: 2 }}>{linkCode.code}</b></span>}
+    </span>
+  );
 }
 
 /* ── Матриця доступів ───────────────────────────────────────────────────── */

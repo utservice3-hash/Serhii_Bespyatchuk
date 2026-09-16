@@ -2904,7 +2904,7 @@ export interface TelegramStatus { configured: boolean; linked: boolean; linkedAt
 /** 🗂 Живі вкладки ролі (сайдбар не довіряє знімку в токені). */
 export async function fetchLiveScreens(): Promise<{ roleKey: string; screens: string[] }> { const { data } = await api.get<{ roleKey: string; screens: string[] }>("/auth/screens"); return data; }
 export async function fetchTelegramStatus(): Promise<TelegramStatus> { const { data } = await api.get<TelegramStatus>("/auth/telegram"); return data; }
-export async function createTelegramLink(): Promise<{ url: string; expiresInSec: number }> { const { data } = await api.post<{ url: string; expiresInSec: number }>("/auth/telegram-link"); return data; }
+export async function createTelegramLink(): Promise<{ url: string; code: string; botUsername: string; expiresInSec: number }> { const { data } = await api.post<{ url: string; code: string; botUsername: string; expiresInSec: number }>("/auth/telegram-link"); return data; }
 export async function unlinkTelegram(): Promise<void> { await api.post("/auth/telegram-unlink"); }
 export interface DocFolderAccess {
   roles: { key: string; name: string; management: boolean; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean; canManage: boolean }[];

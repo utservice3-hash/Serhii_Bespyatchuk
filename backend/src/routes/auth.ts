@@ -7,8 +7,7 @@ import { signToken } from "../auth/auth.js";
 import { effectiveRoleKey, getRoleDef, scopeCompatRole, tabsOfRole } from "../auth/rbac.js";
 import { requireAuth } from "../auth/middleware.js";
 import { signBotConfigured, signBotUsername } from "../bot/signBot.js";
-import { generateLinkToken, LINK_TOKEN_TTL_MS } from "../core/signCode.js";
-import { randomBytes } from "crypto";
+import { generateSignCode, LINK_TOKEN_TTL_MS } from "../core/signCode.js";
 import { config } from "../config.js";
 import {
   ASSERTION_TTL_SECONDS,
@@ -113,12 +112,18 @@ authRouter.post("/telegram-link", requireAuth, async (req, res) => {
   if (!signBotConfigured()) return res.status(503).json({ error: "Бот підпису ще не налаштований на сервері" });
   const username = await signBotUsername();
   if (!username) return res.status(503).json({ error: "Telegram не відповідає — спробуйте пізніше" });
-  const token = generateLinkToken(randomBytes(36));
+  // Код привʼязки — 6 цифр (рішення власника 16.09.2026: «система коду»): його можна ввести в боті
+  // з будь-якого пристрою, deep-link лишається зручним шляхом. Унікальність серед ЖИВИХ кодів.
+  let token = generateSignCode();
+  for (let i = 0; i < 5; i++) {
+    const clash = await pool.query(`SELECT 1 FROM sign_codes WHERE purpose = 'link' AND code = $1 AND used_at IS NULL AND expires_at > now()`, [token]);
+    if (!clash.rowCount) break; token = generateSignCode();
+  }
   // Попередні посилання НЕ гасимо: людина часто тисне кнопку двічі й відкриває першу вкладку —
   // гасіння давало «посилання вже використане» (заміряно 16.09.2026). Кожне живе свої 10 хв.
   await pool.query(`INSERT INTO sign_codes (user_id, purpose, code, expires_at) VALUES ($1, 'link', $2, now() + ($3 || ' milliseconds')::interval)`,
     [req.auth!.userId, token, String(LINK_TOKEN_TTL_MS)]);
-  res.json({ url: `https://t.me/${username}?start=${token}`, expiresInSec: LINK_TOKEN_TTL_MS / 1000 });
+  res.json({ url: `https://t.me/${username}?start=${token}`, code: token, botUsername: username, expiresInSec: LINK_TOKEN_TTL_MS / 1000 });
 });
 authRouter.post("/telegram-unlink", requireAuth, async (req, res) => {
   await pool.query(`UPDATE users SET telegram_chat_id = NULL, telegram_linked_at = NULL WHERE id = $1`, [req.auth!.userId]);
