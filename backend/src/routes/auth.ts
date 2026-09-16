@@ -97,6 +97,12 @@ authRouter.post("/login", async (req, res) => {
 });
 
 /** 🤖 Привʼязка Telegram для підпису (бот «UTS Підпис»). Стан — ВЛАСНОГО токена. */
+/** 🗂 ЖИВІ ВКЛАДКИ ролі — для сайдбара. У токені лежить знімок на момент входу (TTL 12 год): після
+ *  зміни ролі або її вкладок людина бачила старе меню до перезаходу (заміряно 16.09.2026: кандидат
+ *  бачив «Виписку», якої в його ролі вже не було). Сервер гейтить незалежно — це лише косметика. */
+authRouter.get("/screens", requireAuth, (req, res) => {
+  res.json({ roleKey: req.auth!.roleKey, screens: tabsOfRole(req.auth!.roleKey) });
+});
 authRouter.get("/telegram", requireAuth, async (req, res) => {
   const r = await pool.query<{ telegram_linked_at: string | null }>(`SELECT telegram_linked_at FROM users WHERE id = $1`, [req.auth!.userId]);
   const configured = signBotConfigured();

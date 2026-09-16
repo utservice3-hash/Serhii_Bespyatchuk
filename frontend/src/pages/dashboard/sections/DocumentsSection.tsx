@@ -261,9 +261,9 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                   action={canUploadHere ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
               : <p className="loading-text" style={{ margin: 0 }}>Нічого не знайдено за фільтром.</p>
           ) : (
-            <div style={{ overflowX: "auto" }}><table className="data-table" style={{ fontSize: "var(--fs-13)", tableLayout: "fixed", minWidth: 640 }}>
-              <colgroup><col /><col style={{ width: 150 }} /><col style={{ width: 52 }} /><col style={{ width: 92 }} /><col style={{ width: 140 }} /><col style={{ width: 150 }} /><col style={{ width: 70 }} /></colgroup>
-              <thead><tr><th>Документ</th><th>Папка</th><th>Версія</th><th>Оновлено</th><th>Хто</th><th>Статус</th><th style={{ textAlign: "right" }}>Розмір</th></tr></thead>
+            <div style={{ overflowX: "auto" }}><table className="data-table" style={{ fontSize: "var(--fs-13)", tableLayout: "fixed", minWidth: 940 }}>
+              <colgroup><col style={{ width: "34%" }} /><col style={{ width: "15%" }} /><col style={{ width: 54 }} /><col style={{ width: 96 }} /><col style={{ width: "15%" }} /><col style={{ width: "16%" }} /><col style={{ width: 70 }} /></colgroup>
+              <thead><tr><th style={{ paddingLeft: 8 }}>Документ</th><th style={{ paddingLeft: 8 }}>Папка</th><th>Версія</th><th>Оновлено</th><th style={{ paddingLeft: 8 }}>Хто</th><th style={{ paddingLeft: 8 }}>Статус</th><th style={{ textAlign: "right" }}>Розмір</th></tr></thead>
               <tbody>
                 {groups.map((g) => (
                   <React.Fragment key={g.key}>
@@ -286,11 +286,11 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                               <span style={{ fontWeight: sel ? 700 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</span>
                             </div>
                           </td>
-                          <td className="orph-dim" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={folderName(f.folderId)}>{section === "offer" ? "🔒 Офери" : section === "archive" ? "Архів" : folderName(f.folderId)}</td>
+                          <td className="orph-dim" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", paddingLeft: 8 }} title={folderName(f.folderId)}>{section === "offer" ? "🔒 Офери" : section === "archive" ? "Архів" : folderName(f.folderId)}</td>
                           <td className="recv-num">v{f.version}</td>
                           <td className="recv-num" style={{ whiteSpace: "nowrap" }}>{fmtDate(f.updatedAt)}</td>
-                          <td style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={f.addressee ?? f.author ?? ""}>{f.addressee ?? f.author ?? <span className="orph-dim">автор не вказаний</span>}</td>
-                          <td>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"} {fmtDate(f.archivedAt)}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : f.ack.required ? <AckBadge f={f} /> : <SigBadge f={f} />}</td>
+                          <td style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", paddingLeft: 8 }} title={f.addressee ?? f.author ?? ""}>{f.addressee ?? f.author ?? <span className="orph-dim">автор не вказаний</span>}</td>
+                          <td style={{ paddingLeft: 8, overflow: "hidden" }}>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"} {fmtDate(f.archivedAt)}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : f.ack.required ? <AckBadge f={f} /> : <SigBadge f={f} />}</td>
                           <td className="recv-num" style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtBytes(f.sizeBytes)}</td>
                         </tr>
                       );

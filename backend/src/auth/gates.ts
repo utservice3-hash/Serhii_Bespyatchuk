@@ -47,6 +47,8 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Вихід із сесії — доступний будь-кому автентифікованому, межа не потрібна." },
   { method: "GET", path: "/api/auth/me", permanent: true,
     why: "Профіль ВЛАСНОГО токена. Скоуп визначено самим токеном, чужого не віддає." },
+  { method: "GET", path: "/api/auth/screens", permanent: true,
+    why: "Живий перелік вкладок ВЛАСНОЇ ролі для меню. Скоуп — сам токен; віддає лише те, що роль і так бачить у сайдбарі. Вкладки не має, бо потрібен будь-якій ролі." },
   { method: "GET", path: "/api/auth/telegram", permanent: true,
     why: "Стан привʼязки Telegram ВЛАСНОГО токена (чи привʼязано, імʼя бота). Чужого не віддає; вкладки немає — привʼязка потрібна будь-якій ролі." },
   { method: "POST", path: "/api/auth/telegram-link", permanent: true,
