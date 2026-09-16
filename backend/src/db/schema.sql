@@ -1861,7 +1861,11 @@ CREATE TABLE IF NOT EXISTS fx_rates_daily (
 
 -- RBAC-міграція (ідемпотентно): вкладку «bank» бачать УСІ ролі (built-in + кастомні, напр. hr).
 UPDATE roles SET screen_access = screen_access || '{"bank":true}'::jsonb
-  WHERE NOT (screen_access ? 'bank');
+  WHERE NOT (screen_access ? 'bank') AND key <> 'candidate';
+-- 🎓 Кандидат — рівно дві вкладки (#443): «bank» йому не належить, навіть якщо міграція вище
+-- колись його зачепила (заміряно на проді 16.09.2026 — кандидат бачив «Виписку»).
+UPDATE roles SET screen_access = screen_access - 'bank' - 'ads' - 'missed-calls'
+  WHERE key = 'candidate' AND (screen_access ?| array['bank','ads','missed-calls']);
 -- 3 банк-права — лише admin за замовчуванням (адмін може видати іншим тумблером у панелі).
 UPDATE roles SET permissions = permissions ||
   '{"view_hidden_payments":true,"manage_bank_hidden":true,"manage_bank_accounts":true}'::jsonb

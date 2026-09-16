@@ -69,7 +69,7 @@ const errOf = (e: unknown, fb: string) => (e as { response?: { data?: { error?: 
 
 /* Стиль — той самий, що в Задачнику/Навчанні: chart-card, data-table, kpi-card, orph-chip,
    btn-primary; поля вводу — глобальні (index.css), без власних радіусів і тіней. */
-const pill = (bg: string, color: string): React.CSSProperties => ({ display: "inline-block", fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: "var(--r-pill)", background: bg, color, whiteSpace: "nowrap" });
+const pill = (bg: string, color: string): React.CSSProperties => ({ display: "inline-block", fontSize: 11.5, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "middle", fontWeight: 700, padding: "3px 10px", borderRadius: "var(--r-pill)", background: bg, color, whiteSpace: "nowrap" });
 const btn = (kind: "primary" | "ghost" | "danger" = "ghost"): React.CSSProperties => ({
   border: kind === "ghost" ? "1px solid var(--border)" : "none", borderRadius: "var(--r-lg)", padding: "var(--sp-3) var(--sp-6)", fontWeight: 600, cursor: "pointer",
   background: kind === "primary" ? "var(--brand)" : kind === "danger" ? "var(--danger-bg)" : "var(--card-bg)",
@@ -205,7 +205,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
         <div className="kpi-card"><span className="kpi-label">Оновлено за 7 днів</span><span className="kpi-value">{fresh}</span></div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "280px minmax(0,1fr) 360px", gap: "var(--sp-7)", alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: selectedFile ? "260px minmax(0,1fr) 360px" : "260px minmax(0,1fr)", gap: "var(--sp-7)", alignItems: "start" }}>
         {/* Папки і типи */}
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-7)" }}>
           {section !== "offer" && (
@@ -251,7 +251,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
         </div>
 
         {/* Список */}
-        <div className="chart-card">
+        <div className="chart-card" style={{ minWidth: 0 }}>
           <h2 className="chart-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>Документи <span className="orph-dim">{files.length} {files.length === 1 ? "файл" : files.length < 5 ? "файли" : "файлів"}</span></h2>
           {section === "offer" && <p style={{ ...noteBox, marginTop: 0 }}>🔒 <b>Закрита папка.</b> {viewer.isManagement ? "Ви бачите всі офери, бо ви керівництво. Менеджер бачить лише свій, керівник відділу — жодного." : "Вам видно тільки ваш власний офер. Чужі сюди не потрапляють навіть у пошук."}</p>}
           {section === "archive" && <p style={{ ...noteBox, marginTop: 0 }}>⏳ <b>Архів формується при звільненні.</b> Офер і особисті документи людини переїжджають сюди; видалення недоступне нікому.</p>}
@@ -261,7 +261,8 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                   action={canUploadHere ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
               : <p className="loading-text" style={{ margin: 0 }}>Нічого не знайдено за фільтром.</p>
           ) : (
-            <table className="data-table" style={{ fontSize: "var(--fs-13)" }}>
+            <div style={{ overflowX: "auto" }}><table className="data-table" style={{ fontSize: "var(--fs-13)", tableLayout: "fixed", minWidth: 640 }}>
+              <colgroup><col /><col style={{ width: 150 }} /><col style={{ width: 52 }} /><col style={{ width: 92 }} /><col style={{ width: 140 }} /><col style={{ width: 150 }} /><col style={{ width: 70 }} /></colgroup>
               <thead><tr><th>Документ</th><th>Папка</th><th>Версія</th><th>Оновлено</th><th>Хто</th><th>Статус</th><th style={{ textAlign: "right" }}>Розмір</th></tr></thead>
               <tbody>
                 {groups.map((g) => (
@@ -279,33 +280,31 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                       return (
                         <tr key={f.id} className="recv-row" tabIndex={0} onClick={() => setSelected(f.id)} onKeyDown={(e) => { if (e.key === "Enter") setSelected(f.id); }}
                           style={{ cursor: "pointer", background: sel ? "var(--surface-2)" : undefined, boxShadow: sel ? "inset 3px 0 0 var(--brand)" : undefined }}>
-                          <td style={{ paddingLeft: 8, maxWidth: 360 }}>
+                          <td style={{ paddingLeft: 8, overflow: "hidden" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                               <span style={{ fontSize: 10, fontWeight: 700, color: t.color, border: `1px solid ${t.color}55`, borderRadius: "var(--r-sm)", padding: "1px 5px", flex: "0 0 auto" }}>{extOf(f.name, f.mime)}</span>
                               <span style={{ fontWeight: sel ? 700 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</span>
                             </div>
                           </td>
-                          <td className="orph-dim">{section === "offer" ? "🔒 Офери" : section === "archive" ? "Архів" : folderName(f.folderId)}</td>
+                          <td className="orph-dim" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={folderName(f.folderId)}>{section === "offer" ? "🔒 Офери" : section === "archive" ? "Архів" : folderName(f.folderId)}</td>
                           <td className="recv-num">v{f.version}</td>
-                          <td className="recv-num">{fmtDate(f.updatedAt)}</td>
-                          <td>{f.addressee ?? f.author ?? <span className="orph-dim">автор не вказаний</span>}</td>
+                          <td className="recv-num" style={{ whiteSpace: "nowrap" }}>{fmtDate(f.updatedAt)}</td>
+                          <td style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={f.addressee ?? f.author ?? ""}>{f.addressee ?? f.author ?? <span className="orph-dim">автор не вказаний</span>}</td>
                           <td>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"} {fmtDate(f.archivedAt)}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : f.ack.required ? <AckBadge f={f} /> : <SigBadge f={f} />}</td>
-                          <td className="recv-num" style={{ textAlign: "right" }}>{fmtBytes(f.sizeBytes)}</td>
+                          <td className="recv-num" style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtBytes(f.sizeBytes)}</td>
                         </tr>
                       );
                     })}
                   </React.Fragment>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           )}
         </div>
 
         {/* Картка */}
         <div>
-          {selectedFile
-            ? <DocCardPanel key={selectedFile.id} file={selectedFile} tree={tree} onChanged={load} onClose={() => setSelected(null)} onToast={setToast} folderName={folderName} />
-            : <div className="chart-card"><p className="loading-text" style={{ margin: 0, fontSize: "var(--fs-13)" }}>Оберіть документ у списку — тут зʼявиться картка: прев'ю, версії, хто бачить, підпис.</p></div>}
+          {selectedFile && <DocCardPanel key={selectedFile.id} file={selectedFile} tree={tree} onChanged={load} onClose={() => setSelected(null)} onToast={setToast} folderName={folderName} />}
         </div>
       </div>
 

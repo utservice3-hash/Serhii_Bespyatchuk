@@ -46,6 +46,11 @@ test("#443 КАНДИДАТ: рівно дві вкладки — навчанн
   assert.match(SCHEMA, /UPDATE roles SET screen_access = screen_access \|\| '\{"documents":true\}'::jsonb\s*\n?\s*WHERE key IN \('hr','kvp','candidate'\)/,
     "🔴 немає міграції вкладки `documents` для hr/kvp/candidate — на проді роль лишиться без екрана");
 
+  // Міграції «вкладка всім» не сміють зачіпати кандидата, а якщо зачепили — наступна знімає.
+  assert.match(SCHEMA, /'\{"bank":true\}'::jsonb\s*\n?\s*WHERE NOT \(screen_access \? 'bank'\) AND key <> 'candidate'/,
+    "🔴 міграція «bank усім» знову без винятку для кандидата — він побачить «Виписку»");
+  assert.match(SCHEMA, /UPDATE roles SET screen_access = screen_access - 'bank' - 'ads' - 'missed-calls'\s*\n?\s*WHERE key = 'candidate'/,
+    "🔴 немає зняття зайвих вкладок з уже заведеного кандидата");
   // 🪞 ДЗЕРКАЛО: обидві вкладки справді існують у мапі роутів. Без цієї половини гейт
   // зеленів би й тоді, коли ми дали кандидату вкладку, якої не знає жоден роут.
   assert.deepEqual(tabsForPath("/api/training/tree"), ["training"],
