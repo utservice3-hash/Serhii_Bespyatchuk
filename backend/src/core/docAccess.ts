@@ -33,6 +33,8 @@ export interface DocLike {
   addresseeUserId: number | null;
   createdBy: number | null;
   archivedAt: string | null;
+  /** «Неактивний» після повернення з архіву: видно, але не підписати й не редагувати до «Активувати». */
+  inactiveAt?: string | null;
 }
 
 export interface FolderRights {
@@ -108,7 +110,7 @@ export function canUploadTo(viewer: DocViewer, folderId: number | null, ctx: Acc
 
 /** Редагувати (перейменувати, нова версія, тип) — керівництво або право папки; архів — ніхто. */
 export function canEditDocument(viewer: DocViewer, doc: DocLike, ctx: AccessContext): boolean {
-  if (doc.archivedAt != null) return false;
+  if (doc.archivedAt != null || doc.inactiveAt != null) return false;
   if (isManagement(viewer.roleKey)) return true;
   if (doc.section !== "general" || doc.folderId == null) return false;
   return ctx.folderRights.get(doc.folderId)?.canEdit ?? DEFAULT_RIGHTS.canEdit;
@@ -117,9 +119,9 @@ export function canEditDocument(viewer: DocViewer, doc: DocLike, ctx: AccessCont
 /** Керувати доступом (матриця, винятки) — лише керівництво, і це не знімається. */
 export const canManageAccess = (viewer: DocViewer): boolean => isManagement(viewer.roleKey);
 
-/** Підписувати може лише адресат неархівованого документа. */
+/** Підписувати може лише адресат неархівованого й активного документа. */
 export function canSignDocument(viewer: DocViewer, doc: DocLike): boolean {
-  return doc.archivedAt == null && doc.addresseeUserId === viewer.userId;
+  return doc.archivedAt == null && doc.inactiveAt == null && doc.addresseeUserId === viewer.userId;
 }
 
 /** Стан підпису для картки: чинний лише той запис, чий хеш == хешу поточної версії. */

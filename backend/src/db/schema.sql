@@ -3210,3 +3210,7 @@ ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
 -- документах) та «Кандидат» (дві вкладки: Навчання + Документи, щоб підписати офер до підвищення).
 UPDATE roles SET screen_access = screen_access || '{"documents":true}'::jsonb
  WHERE key IN ('hr','kvp','candidate') AND COALESCE((screen_access->>'documents')::boolean, false) IS DISTINCT FROM true;
+
+-- 🗄 «Неактивний» — документ, що повернувся з архіву після повернення людини (рішення власника
+-- 15.09.2026 вечір): видно, але не підписати й не редагувати, поки керівництво не натисне «Активувати».
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS inactive_at TIMESTAMPTZ;

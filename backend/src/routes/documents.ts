@@ -45,7 +45,7 @@ const management = (req: Request, res: Response, next: NextFunction) =>
 const FILE_SELECT = `
   SELECT f.id, f.folder_id, f.name, f.category, f.mime, f.size_bytes, f.created_at, f.updated_at,
          f.section, f.addressee_user_id, f.description, f.version, f.sha256,
-         f.archived_at, f.archived_reason, f.created_by,
+         f.archived_at, f.archived_reason, f.created_by, f.inactive_at,
          COALESCE(am.name, au.full_name, au.email) AS author,
          COALESCE(dm.name, du.full_name, du.email) AS addressee
     FROM doc_files f
@@ -56,10 +56,10 @@ interface FileRow {
   id: number; folder_id: number | null; name: string; category: string | null; mime: string | null;
   size_bytes: string | null; created_at: string; updated_at: string; section: DocSection;
   addressee_user_id: number | null; description: string | null; version: number; sha256: string | null;
-  archived_at: string | null; archived_reason: string | null; created_by: number | null;
+  archived_at: string | null; archived_reason: string | null; created_by: number | null; inactive_at: string | null;
   author: string | null; addressee: string | null;
 }
-const toDocLike = (r: FileRow): DocLike => ({ id: r.id, folderId: r.folder_id, section: r.section, addresseeUserId: r.addressee_user_id, createdBy: r.created_by, archivedAt: r.archived_at });
+const toDocLike = (r: FileRow): DocLike => ({ id: r.id, folderId: r.folder_id, section: r.section, addresseeUserId: r.addressee_user_id, createdBy: r.created_by, archivedAt: r.archived_at, inactiveAt: r.inactive_at });
 
 /** Контекст доступу поточного глядача: явні права його ролі по папках + його винятки. */
 async function accessContext(req: Request): Promise<AccessContext> {
@@ -116,7 +116,7 @@ function shape(r: FileRow, sigs: { version: number; sha256: string; signed_at: s
   return {
     id: r.id, folderId: r.folder_id, name: r.name, category: r.category, mime: r.mime, sizeBytes: r.size_bytes == null ? null : Number(r.size_bytes),
     createdAt: r.created_at, updatedAt: r.updated_at, section: r.section, addresseeUserId: r.addressee_user_id, addressee: r.addressee,
-    description: r.description, version: r.version, sha256: r.sha256, archivedAt: r.archived_at, archivedReason: r.archived_reason,
+    description: r.description, version: r.version, sha256: r.sha256, archivedAt: r.archived_at, archivedReason: r.archived_reason, inactiveAt: r.inactive_at,
     author: r.author, createdBy: r.created_by,
     signature: st,
     canEdit: canEditDocument(viewer, toDocLike(r), ctx),
@@ -350,6 +350,14 @@ documentsRouter.post("/file/:id/archive", management, async (req, res) => {
   if (v.row.archived_at) return res.status(400).json({ error: "Уже в архіві" });
   await pool.query(`UPDATE doc_files SET archived_at = now(), archived_reason = 'manual', archived_by = $2, updated_at = now() WHERE id = $1`, [v.row.id, req.auth!.userId]);
   await logEvent(v.row.id, "archived", req.auth!.userId, { reason: "manual" });
+  res.json({ ok: true });
+});
+/** «Активувати» неактивний (повернутий після повернення людини) документ — лише керівництво. */
+documentsRouter.post("/file/:id/activate", management, async (req, res) => {
+  const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
+  if (!v.row.inactive_at) return res.status(400).json({ error: "Документ і так активний" });
+  await pool.query(`UPDATE doc_files SET inactive_at = NULL, updated_at = now() WHERE id = $1`, [v.row.id]);
+  await logEvent(v.row.id, "activated", req.auth!.userId);
   res.json({ ok: true });
 });
 documentsRouter.post("/file/:id/restore", management, async (req, res) => {

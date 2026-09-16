@@ -2829,6 +2829,8 @@ export interface DocFile {
   id: number; folderId: number | null; name: string; category: string | null; mime: string | null; sizeBytes: number | null;
   createdAt: string; updatedAt: string; section: DocSection; addresseeUserId: number | null; addressee: string | null;
   description: string | null; version: number; sha256: string | null; archivedAt: string | null; archivedReason: string | null;
+  /** «Неактивний»: повернутий з архіву після повернення людини; активує керівництво. */
+  inactiveAt: string | null;
   author: string | null; createdBy: number | null;
   signature: { kind: DocSigKind; days: number | null };
   canEdit: boolean; canSign: boolean;
@@ -2883,6 +2885,7 @@ export async function updateDocFile(id: number, patch: { name?: string; category
 }
 export async function archiveDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/archive`); }
 export async function restoreDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/restore`); }
+export async function activateDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/activate`); }
 export type SignBody =
   | { method: "paper_photo"; filename: string; dataBase64: string }
   | { method: "telegram_code"; step: "send" }

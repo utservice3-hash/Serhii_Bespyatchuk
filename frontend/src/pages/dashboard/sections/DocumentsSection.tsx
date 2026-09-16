@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
-  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, signDocFile,
+  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, signDocFile,
   fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
   type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type TelegramStatus,
 } from "../../../api";
@@ -282,7 +282,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                           <td className="recv-num">v{f.version}</td>
                           <td className="recv-num">{fmtDate(f.updatedAt)}</td>
                           <td>{f.addressee ?? f.author ?? <span className="orph-dim">автор не вказаний</span>}</td>
-                          <td>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>звільнено {fmtDate(f.archivedAt)}</span> : <SigBadge f={f} />}</td>
+                          <td>{f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"} {fmtDate(f.archivedAt)}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : <SigBadge f={f} />}</td>
                           <td className="recv-num" style={{ textAlign: "right" }}>{fmtBytes(f.sizeBytes)}</td>
                         </tr>
                       );
@@ -368,6 +368,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const changeType = (category: string) => void updateDocFile(file.id, { category }).then(onChanged).catch((e) => setErr(errOf(e, "Тип не змінено")));
   const editDescription = () => { const d = window.prompt("Опис документа:", file.description ?? ""); if (d != null) void updateDocFile(file.id, { description: d }).then(onChanged).catch((e) => setErr(errOf(e, "Опис не збережено"))); };
   const archive = () => { if (window.confirm(`Прибрати «${file.name}» з екрана в архів? Файл лишається, видалення не існує.`)) void archiveDocFile(file.id).then(async () => { onToast("Перенесено в архів"); await onChanged(); onClose(); }).catch((e) => setErr(errOf(e, "Не вдалося"))); };
+  const activate = () => void activateDocFile(file.id).then(async () => { onToast("Документ активовано"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося")));
   const restore = () => void restoreDocFile(file.id).then(async () => { onToast("Повернуто з архіву"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося")));
 
   if (noAccess) return (
@@ -386,10 +387,12 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         <span style={pill("var(--surface-2)", "var(--text-muted)")}>v{file.version}</span>
         {file.section === "offer" && !file.archivedAt && <span style={pill("var(--info-bg)", "var(--info)")}>🔒 закрита папка</span>}
         {file.archivedAt && <span style={pill("var(--surface-2)", "var(--text-muted)")}>архів · {file.archivedReason === "dismissed" ? "звільнено" : "прибрано"} {fmtDate(file.archivedAt)}</span>}
+        {file.inactiveAt && !file.archivedAt && <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний · повернуто з архіву {fmtDate(file.inactiveAt)}</span>}
         <button onClick={onClose} title="Закрити" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", fontSize: 16, color: "var(--text-muted)" }}>✕</button>
       </div>
       <h2 className="chart-title" style={{ marginBottom: 0, lineHeight: 1.3 }}>{file.name}</h2>
       {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
+      {file.inactiveAt && !file.archivedAt && <p style={noteBox}>Документ повернувся з архіву після повернення людини в команду. Поки він неактивний: підписати чи редагувати не можна.{mgmt ? " Натисніть «Активувати», якщо він знову потрібен." : ""}</p>}
 
       {/* Прев'ю */}
       <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", background: "var(--surface-2)", minHeight: 120, overflow: "hidden" }}>
@@ -463,6 +466,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         {file.canEdit && <button style={btn()} onClick={rename}>Перейменувати</button>}
         {mgmt && !file.archivedAt && <button style={btn("danger")} onClick={archive}>В архів</button>}
         {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
+        {mgmt && !file.archivedAt && file.inactiveAt && <button style={btn("primary")} onClick={activate}>Активувати</button>}
       </div>
 
       {signOpen && <SignDialog file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); }} />}

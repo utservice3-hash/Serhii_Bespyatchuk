@@ -31,6 +31,7 @@ import { ratesRouter } from "./routes/rates.js";
 import { documentsRouter } from "./routes/documents.js";
 import { telegramRouter } from "./routes/telegram.js";
 import { sendOfferReminders } from "./jobs/offerReminders.js";
+import { runDocLifecycle } from "./jobs/docLifecycle.js";
 import { signBotEnsureWebhook } from "./bot/signBot.js";
 import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
@@ -499,6 +500,12 @@ cron.schedule("30 4 * * *", () => {
 // (Огляд 520к vs Звіт 2.0 694к). Таблиці monthly_carryover(_mgr) — легасі (дані не чіпаємо,
 // просто не пишемо/не читаємо). Крон і startup-виклик прибрано.
 
+// 🗄 Життєвий цикл документів: звільнений → архів, повернувся → назад «неактивними». Кожні 30 хв,
+// зі зсувом від синку Kommo (:05/:35) і незалежно від його паузи — архів не має глухнути разом із CRM.
+cron.schedule("5,35 * * * *", () => {
+  void runJob("docLifecycle", () => runDocLifecycle());
+});
+
 // 🔏 Нагадування про непідписані офери — щодня 09:00 Києва (розділ 9.4 ТЗ документів).
 cron.schedule("0 9 * * *", () => {
   void runJob("sendOfferReminders", () => sendOfferReminders());
@@ -757,6 +764,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["freshnessWatch", () => freshnessWatch()],
   ["catchUpAiChat", () => catchUpAiChat()],
   ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
+  ["docLifecycle", () => runDocLifecycle()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],
   ["createDutyReminders", () => createDutyReminders()],
   ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],
