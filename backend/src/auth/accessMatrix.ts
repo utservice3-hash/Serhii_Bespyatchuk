@@ -301,6 +301,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
      ⚠️ HR лишається закритим: це операційний показник відділу продажів, не кадровий. */
   { method: "GET", path: "/api/dashboard/missed-calls", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  /* Список дзвінків і «угоди немає» — ТІ САМІ межі, що в екрана, і не обираються окремо:
+     усі три роути ловить ОДИН tab-гейт `pre("/api/dashboard/missed-calls")`, тож щойно
+     вкладка відкрилась ролі, сервер пускає її в усі. Рядок, що казав би про них різне,
+     був би неправдою. Звіряє #449. */
+  { method: "GET", path: "/api/dashboard/missed-calls/list", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/missed-calls/no-deal", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/missed-calls/no-deal/list", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.

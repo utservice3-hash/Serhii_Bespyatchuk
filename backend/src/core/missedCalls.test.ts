@@ -328,3 +328,148 @@ test("#448 КЛАМП: менеджер без manager_id бачить НІКО�
   assert.deepEqual(missedScopeFor({ role: "admin", managerId: null, teamId: null }, { managerId: "5" }),
     { managerId: 5, teamId: null });
 });
+
+test("#449 ПІДРОУТИ ЕКРАНА — ТІ САМІ МЕЖІ, ЩО В ГОЛОВНОГО", () => {
+  /**
+   * Усі `/api/dashboard/missed-calls*` ловить ОДИН tab-гейт, тож сервер пускає роль у всі
+   * одразу. Рядок матриці, що казав би про підроут інакше, був би неправдою — і першим же
+   * `acceptMatrix` після викату розійшовся б із живим продом.
+   */
+  const SRC = (rel: string): string =>
+    readFileSync(path.join(import.meta.dirname, "..", "..", "..", "backend", "src", rel), "utf8");
+  const src = SRC("auth/accessMatrix.ts");
+  const rows = [...src.matchAll(
+    /path: "(\/api\/dashboard\/missed-calls[^"]*)", cls: "GET",\s*\n\s*allow: \[([^\]]*)\], deny: \[([^\]]*)\]/g)];
+  const norm = (x: string) => [...x.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort().join(",");
+  // Порожній збіг — провал: без нього гейт зеленів би й тоді, коли рядків немає зовсім.
+  assert.ok(rows.length >= 4, `🔴 знайдено лише ${String(rows.length)} рядків missed-calls у матриці — очікувалось 4`);
+  const main = rows.find((r) => r[1] === "/api/dashboard/missed-calls");
+  assert.ok(main, "🔴 головного рядка /api/dashboard/missed-calls не знайдено");
+  for (const r of rows) {
+    assert.equal(norm(r[2]), norm(main[2]), `🔴 ${r[1]}: allow розійшовся з головним роутом`);
+    assert.equal(norm(r[3]), norm(main[3]), `🔴 ${r[1]}: deny розійшовся з головним роутом`);
+  }
+});
+
+test("#450 «ЩО СТАЛОСЬ ДАЛІ» — НАЙРАНІША ПОДІЯ, І ЧОТИРИ ВІДПОВІДІ, А НЕ ДВІ", async () => {
+  const { nextStep } = await import("./missedCallsRules.js");
+  assert.deepEqual(nextStep({ cbMin: 15, cbTalked: true, csMin: null }), { kind: "callback_talked", minutes: 15 });
+  assert.deepEqual(nextStep({ cbMin: 20, cbTalked: false, csMin: null }), { kind: "callback_no_answer", minutes: 20 },
+    "🔴 передзвін без розмови назвався «додзвонились»");
+  assert.deepEqual(nextStep({ cbMin: null, cbTalked: null, csMin: 40 }), { kind: "client_self", minutes: 40 });
+  assert.deepEqual(nextStep({ cbMin: null, cbTalked: null, csMin: null }), { kind: "nothing", minutes: null });
+  // 🔴 КЛІЄНТ БУВ ПЕРШИМ — це його швидкість, а не наша. Назвати це «ми передзвонили»
+  // означало б приписати відділу чужу реакцію.
+  assert.equal(nextStep({ cbMin: 40, cbTalked: true, csMin: 3 }).kind, "client_self",
+    "🔴 клієнт передзвонив сам через 3 хв, а рядок записав це як наш передзвін через 40");
+  // 🪞 І навпаки: ми були першими — наш передзвін, хоч клієнт теж потім набрав.
+  assert.equal(nextStep({ cbMin: 3, cbTalked: true, csMin: 40 }).kind, "callback_talked");
+  // Нічия — наш передзвін (ми діяли не пізніше).
+  assert.equal(nextStep({ cbMin: 10, cbTalked: false, csMin: 10 }).kind, "callback_no_answer");
+});
+
+test("#451 «УГОДИ НЕМАЄ» — ТРИ СТАНИ, І «НЕ ЗНАЄМО, ХТО ДЗВОНИВ» НЕ Є «ЗАЯВКУ НЕ ЗАВЕЛИ»", async () => {
+  const { noDealState, NO_DEAL_STATES, noDealCountsSql } = await import("./missedCallsRules.js");
+  assert.equal(noDealState(null, false), "unknown");
+  // 🔴 Сентинел: порожній і пробільний ключ — не ключ.
+  assert.equal(noDealState("", false), "unknown", "🔴 порожній client_key записався в «клієнт є, заявки немає»");
+  assert.equal(noDealState("   ", true), "unknown", "🔴 пробільний client_key прочитався як відомий клієнт");
+  assert.equal(noDealState("k1", true), "has_deal");
+  assert.equal(noDealState("k1", false), "no_deal");
+  assert.deepEqual([...NO_DEAL_STATES], ["unknown", "has_deal", "no_deal"]);
+  // Дзеркало в SQL: сентинел ловиться й там, а не лише в JS.
+  assert.match(noDealCountsSql("2026-09-01", "2026-09-15", {}).sql, /btrim\(a\.client_key\) = ''/,
+    "🔴 SQL-стан не бачить порожнього ключа — у базі він піде в «заявки немає»");
+});
+
+/**
+ * #452 — ЖИВИЙ SQL БЛОКІВ C і D. Два правила, які без виконання не довести:
+ *  ① розкриття = число: рядків у списку рівно стільки, скільки в числі поруч;
+ *  ② межі вікна угоди — з ОБОХ боків (−1 доба в, −2 доби поза; рівно +7 в, +8 поза).
+ * Кластер свій, через `pg.Client` напряму (не `db/pool.js` — його `end()` поклав би
+ * сусідів). На проді бінарів PostgreSQL немає → чесний skip, записаний у реєстр.
+ */
+test("#452 ЖИВИЙ SQL БЛОКІВ C і D: розкриття == число, межі вікна угоди з обох боків", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO teams(id,name) VALUES (1,'РПК') ON CONFLICT DO NOTHING");
+    await c.query("INSERT INTO managers(id,name,team_id,is_active) VALUES (1,'Яцик',1,true),(2,'Дмитрук',1,true) ON CONFLICT DO NOTHING");
+    const call = (id: string, at: string, type: string, disp: string | null, sec: number, mgr: number | null, phone: string, key: string | null) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone,client_key)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [id, at, type, disp, sec, mgr, phone, key]);
+    const deal = (id: number, key: string, at: string) =>
+      c.query("INSERT INTO deals(kommo_id, client_key, created_at_kommo) VALUES ($1,$2,$3)", [id, key, at]);
+
+    // ── БЛОК C: день 2026-09-10 ──
+    await call("m1", "2026-09-10 10:00:00+03", "in", "NO ANSWER", 0, 1, "P1", "k1");
+    await call("m1cb", "2026-09-10 10:15:00+03", "out", "ANSWERED", 60, 1, "P1", "k1");      // наш, +15, розмова
+    await call("m2", "2026-09-10 11:00:00+03", "in", "NO ANSWER", 0, 2, "P2", null);
+    await call("m2cs", "2026-09-10 11:05:00+03", "in", "ANSWERED", 30, 2, "P2", null);       // клієнт сам, +5 — ПЕРШИЙ
+    await call("m2cb", "2026-09-10 11:40:00+03", "out", "ANSWERED", 20, 2, "P2", null);      // наш, +40 — пізніше
+    await call("m3", "2026-09-10 12:00:00+03", "in", "NO ANSWER", 0, null, "P3", "k3");
+    await call("m4", "2026-09-10 12:00:40+03", "transitin", "NO ANSWER", 0, null, "P3", "k3"); // плече m3, без менеджера
+    await call("m5", "2026-09-10 13:00:00+03", "in", "BUSY", 0, 1, "P4", null);
+    await call("m5cb", "2026-09-10 13:20:00+03", "out", "NO ANSWER", 0, 1, "P4", null);      // наш, +20, без розмови
+    await call("x1", "2026-09-10 14:00:00+03", "in", "VOICEMAIL", 0, 1, "P5", null);         // виключений — не в списку
+    await deal(900, "k1", "2026-09-10 12:00:00+03");                                          // угода m1 у вікні
+
+    // ── БЛОК D: відповідані вхідні 2026-09-05 ──
+    await call("a1", "2026-09-05 10:00:00+03", "in", "ANSWERED", 50, 1, "Q1", null);        // unknown
+    await call("a2", "2026-09-05 11:00:00+03", "in", "ANSWERED", 50, 1, "Q2", "   ");       // unknown (сентинел)
+    await call("a3", "2026-09-05 12:00:00+03", "in", "ANSWERED", 50, 2, "Q3", "kd");
+    await deal(901, "kd", "2026-09-04 13:00:00+03");                                          // −23 год → В вікні
+    await call("a4", "2026-09-05 13:00:00+03", "in", "ANSWERED", 50, 2, "Q4", "ke");
+    await deal(902, "ke", "2026-09-13 14:00:00+03");                                          // +8 діб 1 год → ПОЗА
+    await call("a5", "2026-09-05 14:00:00+03", "in", "ANSWERED", 50, 1, "Q5", "kf");
+    await deal(903, "kf", "2026-09-03 13:00:00+03");                                          // −2 доби → ПОЗА
+    await call("a6", "2026-09-05 15:00:00+03", "in", "ANSWERED", 50, 1, "Q6", "kg");
+    await call("a7", "2026-09-05 15:00:30+03", "transitin", "ANSWERED", 40, 1, "Q6", "kg");  // плече a6
+    await deal(904, "kg", "2026-09-12 15:00:00+03");                                          // рівно +7 діб → В вікні
+
+    // ① РОЗКРИТТЯ = ЧИСЛО, блок C
+    const A = R.missedSummarySql("2026-09-10", "2026-09-10", {});
+    const missed = Number((await c.query(A.sql, A.params)).rows[0].missed);
+    const L = R.missedListSql("2026-09-10", {});
+    const list = (await c.query(L.sql, L.params)).rows as { uniqueid: string; cb_min: string | null; cb_talked: boolean | null; cs_min: string | null; deal_id: string | null }[];
+    assert.equal(missed, 4, "🔴 підсумок дня не той — склейка або означення зламані");
+    assert.equal(list.length, missed, `🔴 у списку ${String(list.length)} рядків, а поруч число ${String(missed)} — розкриття сперечається з числом`);
+    assert.ok(!list.some((r) => r.uniqueid === "m4"), "🔴 плече без менеджера не склеїлось і дало зайвий рядок");
+    assert.ok(!list.some((r) => r.uniqueid === "x1"), "🔴 голосова пошта потрапила в список пропущених");
+
+    const step = (id: string) => {
+      const r = list.find((x) => x.uniqueid === id)!;
+      return R.nextStep({ cbMin: r.cb_min == null ? null : Number(r.cb_min), cbTalked: r.cb_talked, csMin: r.cs_min == null ? null : Number(r.cs_min) });
+    };
+    assert.deepEqual(step("m1"), { kind: "callback_talked", minutes: 15 });
+    assert.deepEqual(step("m2"), { kind: "client_self", minutes: 5 }, "🔴 клієнт був першим, а рядок назвав наш передзвін");
+    assert.deepEqual(step("m3"), { kind: "nothing", minutes: null });
+    assert.deepEqual(step("m5"), { kind: "callback_no_answer", minutes: 20 });
+    assert.equal(list.find((x) => x.uniqueid === "m1")!.deal_id, "900", "🔴 угода клієнта у вікні не підтягнулась");
+
+    // ② БЛОК D: партиція + межі вікна
+    const D = R.noDealCountsSql("2026-09-01", "2026-09-15", {});
+    const d = (await c.query(D.sql, D.params)).rows[0] as Record<string, number>;
+    // m2cs теж відповіданий вхідний без ключа → unknown. a6+a7 — одне плече.
+    assert.equal(Number(d.answered), 7, "🔴 відповідані вхідні пораховано неправильно (або плечі не склеїлись)");
+    assert.equal(Number(d.unknown), 3, "🔴 невідомий номер (NULL або пробіли) не потрапив у «не знайдено в CRM»");
+    assert.equal(Number(d.has_deal), 2, "🔴 межа вікна: −23 год або рівно +7 діб мали бути ВСЕРЕДИНІ");
+    assert.equal(Number(d.no_deal), 2, "🔴 межа вікна: −2 доби або +8 діб мали бути ПОЗА");
+    assert.equal(Number(d.unknown) + Number(d.has_deal) + Number(d.no_deal), Number(d.answered),
+      "🔴 три стани не складаються в ціле — дзвінок провалився між станами");
+
+    // ① РОЗКРИТТЯ = ЧИСЛО, блок D — для КОЖНОГО стану
+    const key = { unknown: "unknown", has_deal: "has_deal", no_deal: "no_deal" } as const;
+    for (const st of R.NO_DEAL_STATES) {
+      const Q = R.noDealListSql("2026-09-01", "2026-09-15", {}, st);
+      const n = (await c.query(Q.sql, Q.params)).rowCount;
+      assert.equal(n, Number(d[key[st]]), `🔴 розкриття «${st}» дає ${String(n)} рядків, а число — ${String(d[key[st]])}`);
+    }
+  } finally { await c.end(); scratch.dispose(); }
+});

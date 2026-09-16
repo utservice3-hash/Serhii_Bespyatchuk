@@ -42,7 +42,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
-import { missedPeriod, missedScopeFor } from "../core/missedCallsRules.js";
+import { missedPeriod, missedScopeFor, NO_DEAL_STATES, type NoDealState } from "../core/missedCallsRules.js";
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
@@ -9980,4 +9980,49 @@ dashboardRouter.get("/missed-calls", async (req, res) => {
     missedCalls.missedByManager(from, to, scope),
   ]);
   res.json({ period: { from, to }, summary, managers: byManager.rows, total: byManager.total });
+});
+
+/**
+ * 📵 БЛОК C — пропущені за ОДИН день. Межу тримає той самий `pre("/api/dashboard/missed-calls")`
+ * (routeTab матчить підшляхи через слеш), кламп — той самий `missedScopeFor`.
+ *
+ * Чому день, а не період: за 30 днів це ~6 тис. рядків, а тімліду потрібно «що сталось
+ * учора». ТЗ §1.4 C прямо каже «за обраний день». Порожній день → сьогодні за Києвом,
+ * а не `BETWEEN NULL AND NULL`, який чесно віддав би нуль рядків.
+ */
+dashboardRouter.get("/missed-calls/list", async (req, res) => {
+  const day = dateParam(req.query.day) ?? kyivToday();
+  const scope = missedScopeFor(req.auth!, req.query);
+  const onlyNoCallback = req.query.noCallback === "1";
+  const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback);
+  res.json({
+    day, onlyNoCallback, truncated,
+    rows: rows.map((r) => ({ ...r, dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId) })),
+  });
+});
+
+/**
+ * 📵 БЛОК D — «дзвінок був, а угоди немає»: три стани й ціле одним запитом.
+ * Числа й розкриття (роут нижче) рахуються ОДНИМ `answeredCte` — розкриття пояснює
+ * число, а не сперечається з ним.
+ */
+dashboardRouter.get("/missed-calls/no-deal", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(req.auth!, req.query);
+  res.json({ period: { from, to }, counts: await missedCalls.noDealCounts(from, to, scope) });
+});
+
+/** Розкриття одного стану блоку D. Невідомий стан — 400, а не тихий порожній список. */
+dashboardRouter.get("/missed-calls/no-deal/list", async (req, res) => {
+  const state = String(req.query.state ?? "");
+  if (!(NO_DEAL_STATES as readonly string[]).includes(state)) {
+    return res.status(400).json({ error: `Невідомий стан: очікується один із ${NO_DEAL_STATES.join(", ")}` });
+  }
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(req.auth!, req.query);
+  const { rows, truncated } = await missedCalls.noDealList(from, to, scope, state as NoDealState);
+  res.json({
+    period: { from, to }, state, truncated,
+    rows: rows.map((r) => ({ ...r, dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId) })),
+  });
 });
