@@ -3229,3 +3229,12 @@ CREATE TABLE IF NOT EXISTS doc_acks (
   acked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (file_id, user_id, version)
 );
+
+-- ✅ ПІДТВЕРДЖЕННЯ ПІДПИСУ ФОТОГРАФІЄЮ (рішення власника 16.09.2026: «його має затвердити хтось»).
+-- Код у Telegram підтверджує себе сам (approved_at = signed_at); фото паперу чекає керівництва.
+ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCES users(id);
+ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ;
+ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_by INTEGER REFERENCES users(id);
+ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_reason TEXT;
+UPDATE doc_signatures SET approved_at = signed_at WHERE method IN ('telegram_code','email_code','diia') AND approved_at IS NULL AND rejected_at IS NULL;

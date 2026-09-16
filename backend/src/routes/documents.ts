@@ -114,8 +114,9 @@ async function storeBuffer(display: string, buffer: Buffer): Promise<{ storedNam
 }
 
 type AckInfo = { required: boolean; mine: "not_required" | "acked" | "pending"; done: number | null; total: number | null };
-function shape(r: FileRow, sigs: { version: number; sha256: string; signed_at: string }[], sentAt: string | null, viewer: DocViewer, ctx: AccessContext, ack?: AckInfo) {
-  const st = signatureState({ version: r.version, sha256: r.sha256, section: r.section }, sigs.map((s) => ({ version: s.version, sha256: s.sha256, signedAt: s.signed_at })), new Date(), sentAt);
+type SigRow = { version: number; sha256: string; signed_at: string; method?: string; approved_at?: string | null; rejected_at?: string | null };
+function shape(r: FileRow, sigs: SigRow[], sentAt: string | null, viewer: DocViewer, ctx: AccessContext, ack?: AckInfo) {
+  const st = signatureState({ version: r.version, sha256: r.sha256, section: r.section }, sigs.map((s) => ({ version: s.version, sha256: s.sha256, signedAt: s.signed_at, method: s.method, approvedAt: s.approved_at, rejectedAt: s.rejected_at })), new Date(), sentAt);
   return {
     id: r.id, folderId: r.folder_id, name: r.name, category: r.category, mime: r.mime, sizeBytes: r.size_bytes == null ? null : Number(r.size_bytes),
     createdAt: r.created_at, updatedAt: r.updated_at, section: r.section, addresseeUserId: r.addressee_user_id, addressee: r.addressee,
@@ -165,14 +166,14 @@ documentsRouter.get("/tree", async (req, res) => {
   const [folders, files, sigs, sent, acksQ, aud] = await Promise.all([
     pool.query<{ id: number; parent_id: number | null; name: string; created_at: string }>(`SELECT id, parent_id, name, created_at FROM doc_folders ORDER BY name`),
     pool.query<FileRow>(`${FILE_SELECT} ORDER BY f.updated_at DESC`),
-    pool.query<{ file_id: number; version: number; sha256: string; signed_at: string }>(`SELECT file_id, version, sha256, signed_at FROM doc_signatures`),
+    pool.query<{ file_id: number; version: number; sha256: string; signed_at: string; method: string; approved_at: string | null; rejected_at: string | null }>(`SELECT file_id, version, sha256, signed_at, method, approved_at, rejected_at FROM doc_signatures`),
     pool.query<{ file_id: number; at: string }>(`SELECT file_id, min(at) AS at FROM doc_events WHERE kind = 'sent' GROUP BY file_id`),
     pool.query<{ file_id: number; user_id: number; version: number; sha256: string }>(`SELECT file_id, user_id, version, sha256 FROM doc_acks`),
     mgmt0 ? ackAudience() : Promise.resolve(null),
   ]);
   const ackBy = new Map<number, AckRow[]>();
   for (const a of acksQ.rows) { const arr = ackBy.get(a.file_id) ?? []; arr.push({ userId: a.user_id, version: a.version, sha256: a.sha256 }); ackBy.set(a.file_id, arr); }
-  const sigBy = new Map<number, { version: number; sha256: string; signed_at: string }[]>();
+  const sigBy = new Map<number, SigRow[]>();
   for (const s of sigs.rows) { const a = sigBy.get(s.file_id) ?? []; a.push(s); sigBy.set(s.file_id, a); }
   const sentBy = new Map(sent.rows.map((r) => [r.file_id, r.at]));
   const visible = files.rows.filter((r) => canSeeDocument(viewer, toDocLike(r), ctx));
@@ -213,8 +214,8 @@ documentsRouter.get("/file/:id", async (req, res) => {
     pool.query(`SELECT v.version, v.sha256, v.mime, v.size_bytes, v.created_at, COALESCE(m.name, u.full_name, u.email) AS author
                   FROM doc_file_versions v LEFT JOIN users u ON u.id = v.created_by LEFT JOIN managers m ON m.id = u.manager_id
                  WHERE v.file_id = $1 ORDER BY v.version DESC`, [id]),
-    pool.query<{ version: number; sha256: string; signed_at: string; method: string; signer: string; evidence_stored_name: string | null }>(
-      `SELECT s.version, s.sha256, s.signed_at, s.method, s.evidence_stored_name, COALESCE(m.name, u.full_name, u.email) AS signer
+    pool.query<{ id: number; version: number; sha256: string; signed_at: string; method: string; signer: string; evidence_stored_name: string | null; approved_at: string | null; rejected_at: string | null; rejected_reason: string | null }>(
+      `SELECT s.id, s.version, s.sha256, s.signed_at, s.method, s.evidence_stored_name, s.approved_at, s.rejected_at, s.rejected_reason, COALESCE(m.name, u.full_name, u.email) AS signer
          FROM doc_signatures s LEFT JOIN users u ON u.id = s.signed_by LEFT JOIN managers m ON m.id = u.manager_id
         WHERE s.file_id = $1 ORDER BY s.signed_at DESC`, [id]),
     pool.query(`SELECT e.kind, e.at, e.details, COALESCE(m.name, u.full_name, u.email) AS actor
@@ -236,7 +237,7 @@ documentsRouter.get("/file/:id", async (req, res) => {
   res.json({
     file: shape(v.row, sigs.rows, sentAt, viewerOf(req), v.ctx, await ackInfoFor(v.row, acksRows, viewerOf(req), mgmtNow ? await ackAudience() : null)),
     versions: versions.rows,
-    signatures: sigs.rows.map((s) => ({ version: s.version, sha256: s.sha256, signedAt: s.signed_at, method: s.method, signer: s.signer, hasEvidence: !!s.evidence_stored_name,
+    signatures: sigs.rows.map((s) => ({ id: s.id, version: s.version, sha256: s.sha256, signedAt: s.signed_at, method: s.method, signer: s.signer, hasEvidence: !!s.evidence_stored_name, approvedAt: s.approved_at, rejectedAt: s.rejected_at, rejectedReason: s.rejected_reason,
       current: s.sha256 === v.row.sha256 && s.version === v.row.version })),
     events: events.rows,
   });
@@ -315,6 +316,32 @@ documentsRouter.get("/file/:id/download", async (req, res) => {
 });
 
 /** Фото паперового підпису — керівництву й самому підписанту. */
+/** ✅ Підтвердити / ❌ відхилити підпис фотографією — лише керівництво (#448). Адресату — одне повідомлення в Telegram. */
+async function decideSignature(req: Request, res: Response, approve: boolean) {
+  const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
+  const sigId = Number(req.params.sigId);
+  const s = await pool.query<{ id: number; method: string; approved_at: string | null; rejected_at: string | null; signed_by: number }>(
+    `SELECT id, method, approved_at, rejected_at, signed_by FROM doc_signatures WHERE id = $1 AND file_id = $2`, [sigId, v.row.id]);
+  const row = s.rows[0];
+  if (!row) return res.status(404).json({ error: "Підпис не знайдено" });
+  if (row.method !== "paper_photo") return res.status(400).json({ error: "Підтверджують лише підпис фотографією; код у Telegram чинний сам по собі" });
+  if (row.approved_at || row.rejected_at) return res.status(400).json({ error: "Рішення по цьому підпису вже ухвалено" });
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 500);
+  if (!approve && !reason) return res.status(400).json({ error: "Вкажіть причину відхилення — її побачить підписант" });
+  if (approve) await pool.query(`UPDATE doc_signatures SET approved_at = now(), approved_by = $2 WHERE id = $1`, [sigId, req.auth!.userId]);
+  else await pool.query(`UPDATE doc_signatures SET rejected_at = now(), rejected_by = $2, rejected_reason = $3 WHERE id = $1`, [sigId, req.auth!.userId, reason]);
+  await logEvent(v.row.id, approve ? "signature_approved" : "signature_rejected", req.auth!.userId, { signatureId: sigId, reason: approve ? undefined : reason });
+  if (signBotConfigured()) {
+    const u = await pool.query<{ chat: string | null }>(`SELECT telegram_chat_id AS chat FROM users WHERE id = $1`, [row.signed_by]);
+    if (u.rows[0]?.chat) void signBotSend(u.rows[0].chat, approve
+      ? `✅ Ваш підпис офера «${v.row.name}» (версія ${v.row.version}) підтверджено керівництвом.`
+      : `❌ Підпис офера «${v.row.name}» (версія ${v.row.version}) відхилено: ${reason}. Підпишіть ще раз у дашборді → Регламенти та документи → 🔒 Офери.`);
+  }
+  res.json({ ok: true });
+}
+documentsRouter.post("/file/:id/signature/:sigId/approve", management, (req, res) => decideSignature(req, res, true));
+documentsRouter.post("/file/:id/signature/:sigId/reject", management, (req, res) => decideSignature(req, res, false));
+
 documentsRouter.get("/file/:id/signature/:sigId/evidence", async (req, res) => {
   const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
   const s = await pool.query<{ evidence_stored_name: string | null; signed_by: number }>(`SELECT evidence_stored_name, signed_by FROM doc_signatures WHERE id = $1 AND file_id = $2`, [Number(req.params.sigId), v.row.id]);
@@ -465,7 +492,8 @@ documentsRouter.post("/file/:id/sign", async (req, res) => {
   const userId = req.auth!.userId;
   const finish = async (evidence: string | null) => {
     const r = await pool.query<{ id: number }>(
-      `INSERT INTO doc_signatures (file_id, version, sha256, signed_by, method, evidence_stored_name, ip) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      `INSERT INTO doc_signatures (file_id, version, sha256, signed_by, method, evidence_stored_name, ip, approved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $5 = 'paper_photo' THEN NULL ELSE now() END) RETURNING id`,
       [v.row.id, v.row.version, v.row.sha256, userId, method, evidence, req.ip ?? null]);
     await logEvent(v.row.id, "signed", userId, { method, version: v.row.version, signatureId: r.rows[0].id });
     res.json({ ok: true, signatureId: r.rows[0].id });
@@ -518,6 +546,7 @@ documentsRouter.post("/file/:id/sign", async (req, res) => {
 /** ДОСТУПИ ПАПКИ: матриця ролей + персональні винятки. Читає й пише лише керівництво. */
 documentsRouter.get("/access/:folderId", management, async (req, res) => {
   const folderId = Number(req.params.folderId);
+  if (!Number.isInteger(folderId)) return res.status(400).json({ error: "Невірний id папки" });
   const [roles, rights, grants, log] = await Promise.all([
     pool.query<{ key: string; name: string }>(`SELECT key, name FROM roles ORDER BY (key = ANY($1::text[])) DESC, name`, [MANAGEMENT_ROLES]),
     pool.query<{ role_key: string; can_view: boolean; can_upload: boolean; can_edit: boolean; can_publish: boolean }>(`SELECT role_key, can_view, can_upload, can_edit, can_publish FROM doc_folder_access WHERE folder_id = $1`, [folderId]),

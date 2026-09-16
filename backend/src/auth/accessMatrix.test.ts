@@ -43,6 +43,15 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   // 👤 Стан менеджера (активний / завершує / звільнений) — той самий guard
   // `requireManageUsers`, що й решта керування людьми, отже та сама відмова по праву.
   "PATCH /api/settings/managers/:id/work-state": "manage_users — те саме",
+  // 📁 Документи: «керівництво» — поіменний список MANAGEMENT_ROLES (admin, opdir, ceo, kvp, hr;
+  // рішення власника 15.09.2026), а не рівень ролі. Фінансист — company-scope, але не керівництво:
+  // 403 по СПИСКУ, і проба ним безпечна — middleware `management` відмовляє до будь-якого запису.
+  "POST /api/documents/folder": "MANAGEMENT_ROLES (core/docAccess) — financier поза керівництвом документів",
+  "PATCH /api/documents/folder/:id": "MANAGEMENT_ROLES — те саме",
+  "POST /api/documents/file/:id/archive": "MANAGEMENT_ROLES — те саме",
+  "POST /api/documents/file/:id/activate": "MANAGEMENT_ROLES — те саме",
+  "POST /api/documents/file/:id/restore": "MANAGEMENT_ROLES — те саме",
+  "PUT /api/documents/access/:folderId": "MANAGEMENT_ROLES — те саме",
   // 💰 План витрат на рекламу — той самий guard `requireManageUsers`. Дивитись на план
   // може кожен, хто бачить екран «Реклама» (окремий GET), а СТАВИТИ його — керування
   // компанією, не аналітика. Тому 403 для kvp/financier тут по ПРАВУ, а не по рівню.

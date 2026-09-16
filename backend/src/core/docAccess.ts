@@ -124,16 +124,22 @@ export function canSignDocument(viewer: DocViewer, doc: DocLike): boolean {
   return doc.archivedAt == null && doc.inactiveAt == null && doc.addresseeUserId === viewer.userId;
 }
 
-/** Стан підпису для картки: чинний лише той запис, чий хеш == хешу поточної версії. */
+export interface SignatureLike { version: number; sha256: string; signedAt: string; method?: string; approvedAt?: string | null; rejectedAt?: string | null }
+/**
+ * Стан підпису для картки: чинний лише той запис, чий хеш == хешу поточної версії І який не
+ * відхилено. Фото паперу (`paper_photo`) чинне лише ПІСЛЯ підтвердження керівництвом — до того
+ * стан `review` (рішення власника 16.09.2026); код у Telegram підтверджує себе сам (#448).
+ */
 export function signatureState(
   doc: { version: number; sha256: string | null; section: DocSection },
-  signatures: readonly { version: number; sha256: string; signedAt: string }[],
+  signatures: readonly SignatureLike[],
   now: Date, sentAt: string | null,
-): { kind: "not_required" | "signed" | "pending" | "overdue" | "outdated"; days: number | null } {
+): { kind: "not_required" | "signed" | "review" | "pending" | "overdue" | "outdated"; days: number | null } {
   if (doc.section !== "offer") return { kind: "not_required", days: null };
-  const current = signatures.find((s) => s.sha256 === doc.sha256 && s.version === doc.version);
-  if (current) return { kind: "signed", days: null };
-  const anyOld = signatures.length > 0;
+  const live = signatures.filter((s) => s.rejectedAt == null);
+  const current = live.find((s) => s.sha256 === doc.sha256 && s.version === doc.version);
+  if (current) return { kind: current.method === "paper_photo" && !current.approvedAt ? "review" : "signed", days: null };
+  const anyOld = live.length > 0;
   const since = sentAt ? new Date(sentAt) : null;
   const days = since ? Math.floor((now.getTime() - since.getTime()) / 864e5) : null;
   if (anyOld) return { kind: "outdated", days };
