@@ -49,7 +49,7 @@ import {
   type Task,
   type TaskPriority,
   type Team,
-  fetchNewsUnread, markNewsSeen,
+  fetchNewsUnread, markNewsSeen, fetchLiveScreens,
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { getDateRange } from "../components/DateRangeFilter";
@@ -265,6 +265,10 @@ export function Dashboard() {
   const readNewsSeenId = (): number => {
     try { return Number(localStorage.getItem(NEWS_SEEN_KEY)) || 0; } catch { return 0; }
   };
+  // 🗂 Живі вкладки: знімок у токені старіє (зміна ролі/вкладок до перезаходу), сервер усе одно гейтить.
+  const [liveScreens, setLiveScreens] = useState<string[] | undefined>(undefined);
+  useEffect(() => { fetchLiveScreens().then((r) => setLiveScreens(r.screens)).catch(() => { /* лишаємо знімок з токена */ }); }, []);
+  const screens = liveScreens ?? auth?.screens;
   const [newsUnread, setNewsUnread] = useState(0);
   useEffect(() => {
     fetchNewsUnread(readNewsSeenId()).then((r) => setNewsUnread(r.unread)).catch(() => setNewsUnread(0));
@@ -927,7 +931,7 @@ export function Dashboard() {
       onSelect={navigateTo}
       onBack={canGoBack ? goBack : undefined}
       role={auth?.role}
-      screens={auth?.screens}
+      screens={screens}
       trackerEnabled={auth?.trackerEnabled}
       messengerUnread={chatUnread}
       newsUnread={newsUnread}
@@ -991,7 +995,7 @@ export function Dashboard() {
            Огляді, він переживає перезавантаження в `localStorage`, і «Реклама»
            відкривалась із 14.07–14.07, привезеним із чужого екрана (заміряно на проді:
            у смузі днів був рівно один день). Видимість вкладки — ключ `ads` зі `screens`. */
-        <StatisticsChartsSection role={auth?.role} screens={auth?.screens} />
+        <StatisticsChartsSection role={auth?.role} screens={screens} />
       )}
       {section === "bank" && <BankSection />}
 

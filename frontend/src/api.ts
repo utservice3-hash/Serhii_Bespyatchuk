@@ -2937,6 +2937,8 @@ export async function signDocFile(id: number, body: SignBody): Promise<{ ok?: bo
 }
 /** 🤖 Привʼязка Telegram до акаунта (бот «UTS Підпис»): для кодів підпису й нагадувань. */
 export interface TelegramStatus { configured: boolean; linked: boolean; linkedAt: string | null; botUsername: string | null }
+/** 🗂 Живі вкладки ролі (сайдбар не довіряє знімку в токені). */
+export async function fetchLiveScreens(): Promise<{ roleKey: string; screens: string[] }> { const { data } = await api.get<{ roleKey: string; screens: string[] }>("/auth/screens"); return data; }
 export async function fetchTelegramStatus(): Promise<TelegramStatus> { const { data } = await api.get<TelegramStatus>("/auth/telegram"); return data; }
 export async function createTelegramLink(): Promise<{ url: string; expiresInSec: number }> { const { data } = await api.post<{ url: string; expiresInSec: number }>("/auth/telegram-link"); return data; }
 export async function unlinkTelegram(): Promise<void> { await api.post("/auth/telegram-unlink"); }
