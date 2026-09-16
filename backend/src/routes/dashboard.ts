@@ -9997,7 +9997,13 @@ dashboardRouter.get("/missed-calls/list", async (req, res) => {
   const { rows, truncated } = await missedCalls.missedList(day, scope, onlyNoCallback);
   res.json({
     day, onlyNoCallback, truncated,
-    rows: rows.map((r) => ({ ...r, dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId) })),
+    // Явний перелік полів, а не `...r`: нова властивість рядка не поїде назовні сама (#17e2).
+    rows: rows.map((r) => ({
+      uniqueid: r.uniqueid, at: r.at, phone: r.phone, clientKey: r.clientKey,
+      managerId: r.managerId, managerName: r.managerName, bucket: r.bucket,
+      next: r.next, nextMin: r.nextMin, dealId: r.dealId,
+      dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId),
+    })),
   });
 });
 
@@ -10023,6 +10029,11 @@ dashboardRouter.get("/missed-calls/no-deal/list", async (req, res) => {
   const { rows, truncated } = await missedCalls.noDealList(from, to, scope, state as NoDealState);
   res.json({
     period: { from, to }, state, truncated,
-    rows: rows.map((r) => ({ ...r, dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId) })),
+    // Явний перелік полів, а не `...r` (#17e2).
+    rows: rows.map((r) => ({
+      uniqueid: r.uniqueid, at: r.at, phone: r.phone, clientKey: r.clientKey,
+      managerId: r.managerId, managerName: r.managerName, talkSec: r.talkSec, dealId: r.dealId,
+      dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId),
+    })),
   });
 });
