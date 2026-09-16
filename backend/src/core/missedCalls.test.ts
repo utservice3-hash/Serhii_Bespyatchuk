@@ -297,3 +297,34 @@ test("#440 РОЛІ В МАТРИЦІ Й У СИДІ — ОДИН І ТОЙ СА
     `🔴 списки розійшлись — матриця обіцяє 200 тим, кому сид не дає ключа (або навпаки).`
     + ` Матриця: ${inMatrix.join(",")} · сид: ${inSeed.join(",")}`);
 });
+
+test("#448 КЛАМП: менеджер без manager_id бачить НІКОГО, а не всю компанію", async () => {
+  const { missedScopeFor, missedSummarySql } = await import("./missedCallsRules.js");
+  const mgr = (managerId: number | null) => ({ role: "manager", managerId, teamId: null });
+
+  // 🔴 ДІРА, ЗАРАДИ ЯКОЇ ГЕЙТ. Без фолбеку тут був би null — і ядро пропустило б фільтр.
+  assert.equal(missedScopeFor(mgr(null), {}).managerId, -1,
+    "🔴 менеджер без manager_id отримав порожній скоуп — побачить дзвінки ВСІЄЇ компанії");
+
+  // 🔴 І -1 МУСИТЬ СПРАВДІ ДАВАТИ ФІЛЬТР. Повернути -1 мало: якщо ядро вважає його
+  // «фільтра немає», діра лишається під іншим числом (правило 7).
+  const sql = missedSummarySql("2026-09-01", "2026-09-15", missedScopeFor(mgr(null), {})).sql;
+  assert.match(sql, /rc\.manager_id = \$3/, "🔴 -1 не поставив фільтра — ядро прочитало його як «без обмежень»");
+
+  // 🪞 ДЗЕРКАЛО: звичайний менеджер бачить себе, а не -1.
+  assert.deepEqual(missedScopeFor(mgr(7), {}), { managerId: 7, teamId: null },
+    "🔴 звичайний менеджер перестав бачити власні дзвінки");
+
+  // Менеджер не розширює доступ параметрами запиту.
+  assert.deepEqual(missedScopeFor(mgr(7), { managerId: "99", teamId: "3" }), { managerId: 7, teamId: null },
+    "🔴 менеджер підставив чужий managerId у запит і побачив чужі дзвінки");
+
+  // Тімлід без команди — теж «нікого», тімлід із командою — свою.
+  assert.equal(missedScopeFor({ role: "team_lead", managerId: null, teamId: null }, {}).teamId, -1);
+  assert.equal(missedScopeFor({ role: "team_lead", managerId: null, teamId: 3 }, { teamId: "9" }).teamId, 3,
+    "🔴 тімлід підставив чужу команду в запит");
+
+  // Адмін — те, що попросили.
+  assert.deepEqual(missedScopeFor({ role: "admin", managerId: null, teamId: null }, { managerId: "5" }),
+    { managerId: 5, teamId: null });
+});

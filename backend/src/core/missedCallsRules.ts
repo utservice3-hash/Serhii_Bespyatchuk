@@ -106,7 +106,14 @@ export function missedScopeFor(
 ): MissedScope {
   let managerId = query.managerId ? Number(query.managerId) : null;
   let teamId = query.teamId ? Number(query.teamId) : null;
-  if (auth.role === "manager") { managerId = auth.managerId; teamId = null; }
+  // 🔴 `?? -1`, а НЕ голий `auth.managerId`. Ядро фільтрує через `if (s.managerId)`, тобто
+  // null і 0 для нього — «фільтра немає», а не «нікого». Менеджер без привʼязаного
+  // manager_id бачив би дзвінки ВСІЄЇ компанії. Правило 7 з CLAUDE.md: порожній скоуп не
+  // можна виражати нулем. -1 truthy, фільтр ставиться й не збігається ні з ким.
+  // 📐 Заміряно 16.09.2026: сьогодні в цю діру не потрапляє жоден із 47 активних
+  // акаунтів — вада прихована, а не діюча. Але в тімліда фолбек `?? -1` стояв від
+  // початку, тобто асиметрія була випадковою, а не рішенням.
+  if (auth.role === "manager") { managerId = auth.managerId ?? -1; teamId = null; }
   else if (auth.role === "team_lead") teamId = auth.teamId ?? -1;
   return { managerId, teamId };
 }
