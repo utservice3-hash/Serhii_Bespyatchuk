@@ -598,6 +598,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "POST", path: "/api/documents/file/:id/archive", cls: "deny-only",
     allow: [], deny: ["financier", "team_lead", "manager"] },
+  { method: "POST", path: "/api/documents/file/:id/delete", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/documents/file/:id/activate", cls: "deny-only",
     allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "POST", path: "/api/documents/file/:id/signature/:sigId/approve", cls: "deny-only",

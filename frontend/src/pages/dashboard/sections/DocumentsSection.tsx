@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
-  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile, fetchSigEvidenceBlobUrl, approveDocSignature, rejectDocSignature,
+  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, deleteDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile, fetchSigEvidenceBlobUrl, approveDocSignature, rejectDocSignature,
   fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
   type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type TelegramStatus,
 } from "../../../api";
@@ -317,6 +317,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const editDescription = () => { const d = window.prompt("Опис документа:", file.description ?? ""); if (d != null) void updateDocFile(file.id, { description: d }).then(onChanged).catch((e) => setErr(errOf(e, "Опис не збережено"))); };
   const archive = () => { if (window.confirm(`Прибрати «${file.name}» з екрана в архів? Файл лишається, видалення не існує.`)) void archiveDocFile(file.id).then(async () => { onToast("Перенесено в архів"); await onChanged(); onClose(); }).catch((e) => setErr(errOf(e, "Не вдалося"))); };
   const activate = () => void activateDocFile(file.id).then(async () => { onToast("Документ активовано"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося")));
+  const remove = () => { if (window.confirm(`Видалити «${file.name}»? Документ зникне з усіх розділів, включно з архівом. Файл, версії й підписи в системі лишаються.`)) void deleteDocFile(file.id).then(async () => { onToast("Документ видалено"); await onChanged(); onClose(); }).catch((e) => setErr(errOf(e, "Не вдалося видалити"))); };
   const restore = () => void restoreDocFile(file.id).then(async () => { onToast("Повернуто з архіву"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося")));
 
   if (noAccess) return (
@@ -446,6 +447,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         {file.canEdit && <button style={btn()} onClick={rename}>Перейменувати</button>}
         {mgmt && !file.archivedAt && <button style={btn("danger")} onClick={archive}>В архів</button>}
         {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
+        {mgmt && <button style={btn("danger")} onClick={remove} title="Зникне звідусіль; файл і підписи лишаються в системі">Видалити</button>}
         {mgmt && !file.archivedAt && file.inactiveAt && <button style={btn("primary")} onClick={activate}>Активувати</button>}
       </div>
 

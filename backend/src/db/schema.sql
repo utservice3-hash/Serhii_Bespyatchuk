@@ -3238,3 +3238,9 @@ ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ;
 ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_by INTEGER REFERENCES users(id);
 ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_reason TEXT;
 UPDATE doc_signatures SET approved_at = signed_at WHERE method IN ('telegram_code','email_code','diia') AND approved_at IS NULL AND rejected_at IS NULL;
+
+-- 🗑 ВИДАЛЕННЯ (рішення власника 16.09.2026: «додай можливість видаляти»). Мʼяке: документ зникає з усіх
+-- екранів, включно з архівом; файл на диску, версії, підписи й журнал лишаються (розділ 12.4 ТЗ —
+-- фізично не видаляємо). Лише керівництво.
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);

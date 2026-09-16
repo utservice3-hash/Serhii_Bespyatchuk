@@ -13,7 +13,7 @@ const ROW_SQL = `
   SELECT f.id, f.name, f.version, f.archived_at, f.reminded_at, u.telegram_chat_id AS chat_id,
          EXISTS (SELECT 1 FROM doc_signatures s WHERE s.file_id = f.id AND s.version = f.version AND s.sha256 = f.sha256) AS signed_current
     FROM doc_files f JOIN users u ON u.id = f.addressee_user_id
-   WHERE f.section = 'offer' AND f.archived_at IS NULL AND u.is_active`;
+   WHERE f.section = 'offer' AND f.archived_at IS NULL AND f.deleted_at IS NULL AND u.is_active`;
 type Row = { id: number; name: string; version: number; archived_at: string | null; reminded_at: string | null; chat_id: string | null; signed_current: boolean };
 
 async function notifyRow(f: Row): Promise<"sent" | "skip" | "no_telegram" | "failed"> {

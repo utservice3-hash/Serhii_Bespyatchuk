@@ -52,7 +52,8 @@ const FILE_SELECT = `
          COALESCE(dm.name, du.full_name, du.email) AS addressee
     FROM doc_files f
     LEFT JOIN users au ON au.id = f.created_by LEFT JOIN managers am ON am.id = au.manager_id
-    LEFT JOIN users du ON du.id = f.addressee_user_id LEFT JOIN managers dm ON dm.id = du.manager_id`;
+    LEFT JOIN users du ON du.id = f.addressee_user_id LEFT JOIN managers dm ON dm.id = du.manager_id
+   WHERE f.deleted_at IS NULL`;
 
 interface FileRow {
   id: number; folder_id: number | null; name: string; category: string | null; mime: string | null;
@@ -88,7 +89,7 @@ async function logEvent(fileId: number, kind: string, actorId: number | null, de
 }
 
 async function loadFile(id: number): Promise<FileRow | null> {
-  const r = await pool.query<FileRow>(`${FILE_SELECT} WHERE f.id = $1`, [id]);
+  const r = await pool.query<FileRow>(`${FILE_SELECT} AND f.id = $1`, [id]);
   return r.rows[0] ?? null;
 }
 
@@ -472,6 +473,13 @@ documentsRouter.post("/file/:id/restore", management, async (req, res) => {
   res.json({ ok: true });
 });
 /** Видалення лишається для сумісності матриці, але фізично = архів (рішення 12.4). */
+/** 🗑 Видалити (мʼяко): зникає звідусіль, включно з архівом; файл, версії й підписи лишаються. Лише керівництво. */
+documentsRouter.post("/file/:id/delete", management, async (req, res) => {
+  const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
+  await pool.query(`UPDATE doc_files SET deleted_at = now(), deleted_by = $2, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, [v.row.id, req.auth!.userId]);
+  await logEvent(v.row.id, "deleted", req.auth!.userId, { name: v.row.name, version: v.row.version });
+  res.json({ ok: true });
+});
 documentsRouter.delete("/file/:id", management, async (req, res) => {
   const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
   await pool.query(`UPDATE doc_files SET archived_at = COALESCE(archived_at, now()), archived_reason = COALESCE(archived_reason, 'manual'), archived_by = $2 WHERE id = $1`, [v.row.id, req.auth!.userId]);

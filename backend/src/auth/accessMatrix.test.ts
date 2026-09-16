@@ -52,6 +52,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/documents/file/:id/activate": "MANAGEMENT_ROLES — те саме",
   "POST /api/documents/file/:id/restore": "MANAGEMENT_ROLES — те саме",
   "PUT /api/documents/access/:folderId": "MANAGEMENT_ROLES — те саме",
+  "POST /api/documents/file/:id/delete": "MANAGEMENT_ROLES — те саме",
   // 💰 План витрат на рекламу — той самий guard `requireManageUsers`. Дивитись на план
   // може кожен, хто бачить екран «Реклама» (окремий GET), а СТАВИТИ його — керування
   // компанією, не аналітика. Тому 403 для kvp/financier тут по ПРАВУ, а не по рівню.
