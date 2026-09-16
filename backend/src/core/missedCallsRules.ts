@@ -411,7 +411,7 @@ export function noDealState(clientKey: string | null, hasDeal: boolean): NoDealS
   return hasDeal ? "has_deal" : "no_deal";
 }
 
-/** Той самий вердикт у SQL — дзеркало `noDealState`, звіряється гейтом `#448`. */
+/** Той самий вердикт у SQL — дзеркало `noDealState`, звіряється гейтом `#451`. */
 const NO_DEAL_STATE_SQL = (a: string, deal: string): string =>
   `CASE WHEN ${a}.client_key IS NULL OR btrim(${a}.client_key) = '' THEN 'unknown'`
   + ` WHEN ${deal}.kommo_id IS NOT NULL THEN 'has_deal' ELSE 'no_deal' END`;

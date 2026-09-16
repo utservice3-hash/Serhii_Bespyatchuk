@@ -298,7 +298,7 @@ test("#440 РОЛІ В МАТРИЦІ Й У СИДІ — ОДИН І ТОЙ СА
     + ` Матриця: ${inMatrix.join(",")} · сид: ${inSeed.join(",")}`);
 });
 
-test("#448 КЛАМП: менеджер без manager_id бачить НІКОГО, а не всю компанію", async () => {
+test("#454 КЛАМП: менеджер без manager_id бачить НІКОГО, а не всю компанію", async () => {
   const { missedScopeFor, missedSummarySql } = await import("./missedCallsRules.js");
   const mgr = (managerId: number | null) => ({ role: "manager", managerId, teamId: null });
 
