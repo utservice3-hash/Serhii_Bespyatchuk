@@ -546,6 +546,7 @@ documentsRouter.post("/file/:id/sign", async (req, res) => {
 /** ДОСТУПИ ПАПКИ: матриця ролей + персональні винятки. Читає й пише лише керівництво. */
 documentsRouter.get("/access/:folderId", management, async (req, res) => {
   const folderId = Number(req.params.folderId);
+  if (!Number.isInteger(folderId)) return res.status(400).json({ error: "Невірний id папки" });
   const [roles, rights, grants, log] = await Promise.all([
     pool.query<{ key: string; name: string }>(`SELECT key, name FROM roles ORDER BY (key = ANY($1::text[])) DESC, name`, [MANAGEMENT_ROLES]),
     pool.query<{ role_key: string; can_view: boolean; can_upload: boolean; can_edit: boolean; can_publish: boolean }>(`SELECT role_key, can_view, can_upload, can_edit, can_publish FROM doc_folder_access WHERE folder_id = $1`, [folderId]),
