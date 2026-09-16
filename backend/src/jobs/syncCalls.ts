@@ -9,6 +9,7 @@
  * рядків означало б, що падіння покликового синку валить і цифру статистик.
  */
 import { linkByPhoneSql, linkByFioSql } from "./callLinkSql.js";
+import { createRunGuard, type GuardSkip } from "./runGuard.js";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { normalizePhone, clientPhoneOf } from "../utils/phone.js";
@@ -151,14 +152,28 @@ const kyivStamp = (d: Date): string =>
  * ШТАТНИЙ ПРОХІД: останні `hours` годин. Викликати через `runJob` — щоб банер
  * бачив джобу (урок: ручні шляхи повз обгортку невидимі для нагляду).
  */
-export async function syncCalls(hours = 3): Promise<{ fetched: number; written: number }> {
-  const to = new Date();
-  const from = new Date(to.getTime() - hours * 3600_000);
-  const calls = await fetchCalls(kyivStamp(from), kyivStamp(to));
-  const written = await upsertCalls(calls);
-  await linkCalls();
-  console.log(`syncCalls: отримано ${calls.length}, записано ${written}.`);
-  return { fetched: calls.length, written };
+/**
+ * Один охоронець на ВСІ виклики синку дзвінків — годинний і пʼятихвилинний ділять його,
+ * тож одночасно по `ringostat_calls` не пише більше одного проходу.
+ */
+const callsGuard = createRunGuard("syncCalls");
+
+/**
+ * @param hours      вікно запиту до Ringostat.
+ * @param boundLink  звʼязувати клієнта й менеджера ЛИШЕ в цьому вікні. Для частого синку
+ *                   обовʼязково: повний `linkCalls` — два проходи по всій таблиці.
+ */
+export async function syncCalls(hours = 3, opts: { boundLink?: boolean } = {}):
+Promise<{ fetched: number; written: number } | GuardSkip> {
+  return callsGuard(async () => {
+    const to = new Date();
+    const from = new Date(to.getTime() - hours * 3600_000);
+    const calls = await fetchCalls(kyivStamp(from), kyivStamp(to));
+    const written = await upsertCalls(calls);
+    await linkCalls(opts.boundLink ? from : undefined);
+    console.log(`syncCalls(${String(hours)} год${opts.boundLink ? ", свіже вікно" : ""}): отримано ${calls.length}, записано ${written}.`);
+    return { fetched: calls.length, written };
+  });
 }
 
 /**

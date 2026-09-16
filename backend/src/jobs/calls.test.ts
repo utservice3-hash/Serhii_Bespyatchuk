@@ -203,3 +203,36 @@ test("#29 ВІКНО ДЛЯ RINGOSTAT — КИЇВСЬКЕ, а не UTC", async 
   assert.equal(__kyivStampForTest(w), "2026-01-15 10:50:00",
     "🔴 зсув зашитий константою — на зимовий час вікно знову поїде");
 });
+
+/**
+ * #455b — ЧАСТИЙ СИНК ЗВʼЯЗУЄ ЛИШЕ СВОЄ ВІКНО. Повний `linkCalls` — два проходи по всій
+ * `ringostat_calls`; щопʼять хвилин це навантаження і ризик дедлоку. Межа мусить бути
+ * рівно там, де її просили, і ніде більше: годинний прохід лишається повним.
+ */
+test("#455b ЗВʼЯЗУВАННЯ: межа calldate — лише з since, і ТОЙ САМИЙ час, що вікно", async () => {
+  const { linkByPhoneSql, linkByFioSql } = await import("./callLinkSql.js");
+  const since = new Date("2026-09-16T10:00:00.000Z");
+  for (const [name, build] of [["phone", linkByPhoneSql], ["fio", linkByFioSql]] as const) {
+    const full = build();
+    const bounded = build(since);
+    assert.equal(/calldate\s*>=/.test(full.sql), false, `🔴 ${name}: годинний прохід отримав межу — старі дзвінки більше не звʼязуються`);
+    assert.deepEqual(full.params, [], `🔴 ${name}: повний запит несе параметри, яких SQL не чекає`);
+    assert.ok(bounded.sql.includes("rc.calldate >= $1"), `🔴 ${name}: частий прохід без межі — два повні UPDATE щопʼять хвилин`);
+    assert.deepEqual(bounded.params, [since], `🔴 ${name}: межа не той момент, що вікно синку`);
+  }
+});
+
+/**
+ * #455c — ПРОВОДКА: і годинний, і частий виклики йдуть через ОДНОГО охоронця, а межа
+ * звʼязування вмикається прапорцем. `#455` доводить охоронця; без цього гейта його можна
+ * тихо обійти, лишивши охоронця живим і невикористаним.
+ */
+test("#455c ПРОВОДКА: syncCalls загорнуто в охоронця, межа звʼязування = початок вікна", () => {
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "jobs", "syncCalls.ts"), "utf8");
+  const start = src.indexOf("export async function syncCalls(");
+  assert.ok(start >= 0, "🔴 функцію syncCalls не знайдено — гейт не має що перевіряти");
+  const body = src.slice(start, src.indexOf("\n}\n", start));
+  assert.equal((src.match(/createRunGuard\(/g) ?? []).length, 1, "🔴 охоронців має бути рівно ОДИН — два дають два незалежні замки на одну таблицю");
+  assert.match(body, /return\s+callsGuard\(/, "🔴 тіло syncCalls не йде через охоронця");
+  assert.match(body, /linkCalls\(opts\.boundLink \? from : undefined\)/, "🔴 межа звʼязування не привʼязана до вікна синку");
+});
